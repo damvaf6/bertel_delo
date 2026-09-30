@@ -21,7 +21,7 @@ test('код случайный, 6 цифр, в базе только хэш; п
   const c = client(S);
   const r = await c.req('POST', '/api/auth/code', { phone: '8 999 000-01-01' });
   assert.equal(r.status, 200);
-  assert.deepEqual(r.body, { sent: true, ttl_sec: 300 });
+  assert.deepEqual(r.body, { sent: true, ttl_sec: 300, channel: 'sms' });
   const code = lastCode(S, phone);
   assert.match(code, /^\d{6}$/);
   assert.ok(!JSON.stringify(r.body).includes(code), 'код не приходит в ответе');
@@ -152,4 +152,45 @@ test('СМС-поставщик медлит — вход всё равно пр
   } finally {
     S.providers.sms.script({ kind: 'ok' });
   }
+});
+
+test('звонок: робот называет тот же 6-значный код; СМС при этом не уходит', async () => {
+  const phone = '+79990000109';
+  const c = client(S);
+  const smsBefore = S.providers.sms.calls.length;
+  const r = await c.req('POST', '/api/auth/code', { phone, channel: 'call' });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.channel, 'call');
+  assert.equal(S.providers.sms.calls.length, smsBefore);
+  const code = S.providers.call.calls.filter((x) => x.args.phone === phone).at(-1).args.code;
+  assert.match(code, /^\d{6}$/);
+  const [row] = await S.sql`select channel from login_codes where phone = ${phone}`;
+  assert.equal(row.channel, 'call');
+  assert.equal((await c.req('POST', '/api/auth/verify', { phone, code })).status, 200);
+});
+
+test('звонок и СМС — общие лимиты: сразу после СМС позвонить нельзя, через минуту можно', async () => {
+  const phone = '+79990000110';
+  const c = client(S);
+  assert.equal((await c.req('POST', '/api/auth/code', { phone })).status, 200);
+  const soon = await c.req('POST', '/api/auth/code', { phone, channel: 'call' });
+  assert.equal(soon.status, 429);
+  assert.equal(soon.body.error, 'resend_too_soon');
+  await ageCodes(S, phone, 2);
+  assert.equal((await c.req('POST', '/api/auth/code', { phone, channel: 'call' })).status, 200);
+  assert.equal((await c.req('POST', '/api/auth/code', { phone: '+79990000111', channel: 'pigeon' })).status, 400);
+});
+
+test('звонок не удался — 503, код не остаётся действующим', async () => {
+  const phone = '+79990000112';
+  S.providers.call.script({ kind: 'fail', message: 'линия занята' });
+  try {
+    const r = await client(S).req('POST', '/api/auth/code', { phone, channel: 'call' });
+    assert.equal(r.status, 503);
+    assert.equal(r.body.error, 'call_unavailable');
+  } finally {
+    S.providers.call.script({ kind: 'ok' });
+  }
+  const [{ n }] = await S.sql`select count(*)::int as n from login_codes where phone = ${phone} and expires_at > now()`;
+  assert.equal(n, 0);
 });

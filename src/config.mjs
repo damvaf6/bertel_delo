@@ -23,6 +23,7 @@ export function loadConfig(env = process.env) {
     trustProxy: env.TRUST_PROXY === '1',
     providers: {
       sms: env.SMS_PROVIDER || 'fake',
+      call: env.CALL_PROVIDER || 'fake',
       storage: env.STORAGE_PROVIDER || 'memory',
       payments: env.PAYMENTS_PROVIDER || 'fake',
       ai: env.AI_PROVIDER || 'fake',
@@ -55,7 +56,7 @@ export function loadConfig(env = process.env) {
     if (!cfg.cookieSecure) throw new ConfigError('На stage/prod cookie только Secure');
     if (cfg.providers.storage !== 's3') throw new ConfigError('На stage/prod файлы только в S3 (Yandex Object Storage)');
   }
-  // На stage поддельные СМС/оплата/ИИ/почта допустимы (тестовые данные); на prod — нет.
+  // На stage поддельные СМС/звонок/оплата/ИИ/почта допустимы (тестовые данные); на prod — нет.
   if (appEnv === 'prod') {
     for (const [name, driver] of Object.entries(cfg.providers)) {
       if (driver === 'fake') throw new ConfigError(`На prod поставщик «${name}» не может быть поддельным`);

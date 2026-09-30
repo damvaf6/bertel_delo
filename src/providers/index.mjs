@@ -1,6 +1,7 @@
 // Реестр поставщиков внешних сервисов. Каждый — за своим интерфейсом, выбор — настройкой.
 // Настоящие поставщики (СМС/звонок, ЮKassa, YandexGPT/GigaChat, почта) подключаются после облака и договоров.
 //   sms.sendCode({ phone, code })                                  → { id }
+//   call.sendCode({ phone, code })  — звонок, робот называет код   → { id }
 //   payments.createPayment({ orderId, amountKop, description })    → { id, confirmationUrl }
 //   payments.getPayment({ id })                                    → { id, status }
 //   ai.complete({ purpose, messages })                             → { text, model }
@@ -14,6 +15,9 @@ const id = (prefix) => `${prefix}_${crypto.randomUUID()}`;
 const FAKES = {
   sms: () => makeFake('sms', {
     sendCode: async () => ({ id: id('sms') }),
+  }),
+  call: () => makeFake('call', {
+    sendCode: async () => ({ id: id('call') }),
   }),
   payments: () => makeFake('payments', {
     createPayment: async ({ orderId }) => { const pid = id('pay'); return { id: pid, confirmationUrl: `/fake-pay/${pid}?order=${orderId}` }; },

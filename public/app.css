@@ -30,7 +30,7 @@ main { max-width: 640px; margin: 0 auto; padding: 16px; }
 h1 { font-size: 22px; margin: 0 0 12px; }
 h2 { font-size: 18px; margin: 0 0 12px; }
 label { display: block; font-size: 14px; color: var(--muted); margin: 0 0 6px; }
-input[type=text], input[type=tel] {
+input[type=text], input[type=tel], select {
   width: 100%; font: inherit; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--text);
 }
 input:focus-visible, button:focus-visible, a:focus-visible { outline: 3px solid #8fb3e6; outline-offset: 1px; }
@@ -57,7 +57,25 @@ button:disabled { opacity: .6; cursor: default; }
 .doc { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .doc .name { overflow-wrap: anywhere; }
 .badge { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 99px; background: #eef2f8; color: var(--muted); }
+.row.gap { margin-top: 8px; }
+h2.gap { margin-top: 16px; }
+.row select { width: auto; flex: 1 1 140px; min-width: 0; }
+.tabs {
+  display: flex; justify-content: space-between; overflow-x: auto; padding: 0 8px; background: var(--card);
+  border-bottom: 1px solid var(--line); scrollbar-width: none;
+}
+.tabs a {
+  flex: 0 0 auto; padding: 12px 6px; color: var(--muted); text-decoration: none; font-weight: 600; font-size: 14px;
+  border-bottom: 3px solid transparent;
+}
+.tabs a[aria-current=page] { color: var(--accent); border-bottom-color: var(--accent); }
+.count {
+  display: inline-block; min-width: 20px; margin-left: 6px; padding: 0 6px; border-radius: 99px;
+  background: var(--danger); color: #fff; font-size: 12px; line-height: 20px; text-align: center;
+}
 .hidden { display: none !important; }
 .test-mark { background: #fff6d6; color: #6b5200; font-size: 12px; text-align: center; padding: 4px 16px; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); border: 0; }
 label.btn:has(+ input:focus-visible) { outline: 3px solid #8fb3e6; }
+.call-box { margin-top: 12px; }
+.call-box .muted { margin: 6px 0 0; }

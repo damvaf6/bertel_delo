@@ -1,29 +1,22 @@
-// Операции каркаса: проверка работы, вход, заявки (заготовка), документы.
+// Операции каркаса: проверка работы, вход, профиль, заявки (заготовка), документы.
 import crypto from 'node:crypto';
 import { HttpError, rateLimiter, sessionCookie } from '../http/core.mjs';
-import { memberOf, visibleOrdersFilter } from '../access/policy.mjs';
-import { normPhone, requestCode, verifyCode, endSession, SESSION_TTL_SEC } from '../auth/auth.mjs';
+import { memberOf, orderLevel, visibleOrdersFilter } from '../access/policy.mjs';
+import { requestCode, verifyCode, endSession, SESSION_TTL_SEC } from '../auth/auth.mjs';
+import { audit, phoneFrom, publicUser, text, uuidFrom } from './util.mjs';
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
+const LEVEL_NAME = ['none', 'read', 'write', 'manage'];
 
-const publicUser = (u) => ({ id: u.id, phone: u.phone, full_name: u.full_name, platform_role: u.platform_role });
 const publicDoc = (d) => ({ id: d.id, order_id: d.order_id, filename: d.filename, mime: d.mime, size_bytes: d.size_bytes, created_at: d.created_at });
 
-function text(value, field, max) {
-  const v = String(value ?? '').trim();
-  if (!v || v.length > max) throw new HttpError(400, 'bad_input', `Поле «${field}»: от 1 до ${max} символов`);
-  return v;
-}
-
-function phoneFrom(body) {
-  const phone = normPhone(body?.phone);
-  if (!phone) throw new HttpError(400, 'bad_phone', 'Введите номер мобильного телефона России');
-  return phone;
-}
-
-async function audit(sql, actor, action, subjectType, subjectId, details = {}) {
-  await sql`insert into audit_log (actor_id, action, subject_type, subject_id, details)
-            values (${actor.id}, ${action}, ${subjectType}, ${String(subjectId)}, ${JSON.stringify(details)})`;
+// Заявка наружу: с названием организации и тем, кто её ведёт (имя, без телефона).
+async function orderView(sql, order) {
+  const extra = await sql.one`
+    select o.name as org_name, u.full_name as responsible_name
+    from users u left join organizations o on o.id = ${order.org_id}
+    where u.id = ${order.owner_user_id}`;
+  return { ...order, org_name: extra?.org_name ?? null, responsible_name: extra?.responsible_name ?? '' };
 }
 
 export function coreOps() {
@@ -43,8 +36,8 @@ export function coreOps() {
       publicReason: 'запрос кода входа; лимиты по номеру и адресу',
       rateLimit: (ip) => authLimit(`code:${ip}`),
       async handler(ctx) {
-        const { ttlSec } = await requestCode(ctx, phoneFrom(ctx.body));
-        return { sent: true, ttl_sec: ttlSec };
+        const { ttlSec, channel } = await requestCode(ctx, phoneFrom(ctx.body?.phone), ctx.body?.channel ?? 'sms');
+        return { sent: true, ttl_sec: ttlSec, channel };
       },
     },
     {
@@ -52,7 +45,7 @@ export function coreOps() {
       publicReason: 'ввод кода входа; лимиты попыток по номеру и адресу',
       rateLimit: (ip) => authLimit(`verify:${ip}`),
       async handler(ctx) {
-        const { user, token } = await verifyCode(ctx, phoneFrom(ctx.body), String(ctx.body?.code ?? ''));
+        const { user, token } = await verifyCode(ctx, phoneFrom(ctx.body?.phone), String(ctx.body?.code ?? ''));
         ctx.res.setHeader('Set-Cookie', sessionCookie(ctx.cfg, token, SESSION_TTL_SEC));
         return { user: publicUser(user) };
       },
@@ -66,42 +59,80 @@ export function coreOps() {
     },
     {
       id: 'me', method: 'GET', path: '/api/me', auth: 'user', access: 'self',
-      async handler({ actor }) {
-        return { user: publicUser(actor), orgs: actor.orgs };
+      async handler({ sql, actor }) {
+        const orgs = await sql`
+          select m.org_id, m.role, o.name from org_members m join organizations o on o.id = m.org_id
+          where m.user_id = ${actor.id} order by o.name`;
+        const inv = await sql.one`
+          select count(*)::int as n from org_invites
+          where phone = ${actor.phone} and accepted_at is null and declined_at is null and revoked_at is null and expires_at > now()`;
+        return { user: publicUser(actor), orgs, pending_invites: inv.n };
+      },
+    },
+    {
+      id: 'me.update', method: 'PATCH', path: '/api/me', auth: 'user', access: 'self',
+      async handler({ sql, actor, body }) {
+        const fullName = text(body?.full_name, 'Имя', 200);
+        const user = await sql.tx(async (tx) => {
+          const u = await tx.one`update users set full_name = ${fullName} where id = ${actor.id} returning *`;
+          await audit(tx, actor, 'user.update', 'user', actor.id);
+          return u;
+        });
+        return { user: publicUser(user) };
       },
     },
     {
       id: 'orders.create', method: 'POST', path: '/api/orders', auth: 'user', access: 'self',
       async handler({ sql, actor, body, res }) {
         const title = text(body?.title, 'Название', 300);
-        const orgId = body?.org_id ?? null;
+        const orgId = body?.org_id == null ? null : uuidFrom(body.org_id, 'Организация не найдена');
         // Заявку от имени организации создаёт только её участник.
-        if (orgId !== null && !memberOf(actor, orgId)) throw new HttpError(404, 'org_not_found', 'Организация не найдена');
+        if (orgId !== null && !memberOf(actor, orgId)) throw new HttpError(404, 'not_found', 'Организация не найдена');
         const order = await sql.tx(async (tx) => {
           const o = await tx.one`insert into orders (owner_user_id, org_id, title) values (${actor.id}, ${orgId}, ${title}) returning *`;
           await audit(tx, actor, 'order.create', 'order', o.id);
           return o;
         });
         res.status(201);
-        return { order };
+        return { order: await orderView(sql, order) };
       },
     },
     {
       id: 'orders.list', method: 'GET', path: '/api/orders', auth: 'user', access: 'self',
       async handler({ sql, actor }) {
         const f = visibleOrdersFilter(actor);
-        const orders = f.all
-          ? await sql`select * from orders order by created_at desc limit 200`
-          : await sql`select * from orders where owner_user_id = ${f.userId} or org_id = any(${f.headOrgIds}::uuid[])
-                      order by created_at desc limit 200`;
+        // Личные — свои; от организации — свои, пока состоишь в ней; руководитель и старший — все дела организации.
+        const orders = await sql`
+          select r.*, o.name as org_name, u.full_name as responsible_name
+          from orders r left join organizations o on o.id = r.org_id join users u on u.id = r.owner_user_id
+          where ${!!f.all}
+             or (r.owner_user_id = ${f.userId ?? null} and (r.org_id is null or r.org_id = any(${f.memberOrgIds ?? []}::uuid[])))
+             or r.org_id = any(${f.allOrgIds ?? []}::uuid[])
+          order by r.created_at desc limit 200`;
         return { orders };
       },
     },
     {
       id: 'orders.get', method: 'GET', path: '/api/orders/:id', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
-      async handler({ order }) {
-        return { order };
+      async handler({ sql, actor, order }) {
+        return { order: await orderView(sql, order), access: LEVEL_NAME[orderLevel(actor, order)] };
+      },
+    },
+    {
+      // Руководитель или старший передаёт дело организации другому её участнику.
+      id: 'orders.transfer', method: 'PATCH', path: '/api/orders/:id/responsible', auth: 'user',
+      access: { resource: 'order', param: 'id', need: 'manage' },
+      async handler({ sql, actor, order, body }) {
+        const userId = uuidFrom(body?.user_id, 'Сотрудник не найден');
+        const updated = await sql.tx(async (tx) => {
+          const target = await tx.one`select 1 from org_members where org_id = ${order.org_id} and user_id = ${userId}`;
+          if (!target) throw new HttpError(404, 'not_found', 'Сотрудник не найден в этой организации');
+          const o = await tx.one`update orders set owner_user_id = ${userId} where id = ${order.id} returning *`;
+          await audit(tx, actor, 'order.transfer', 'order', order.id, { from: order.owner_user_id, to: userId });
+          return o;
+        });
+        return { order: await orderView(sql, updated) };
       },
     },
     {
