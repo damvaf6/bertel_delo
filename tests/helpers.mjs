@@ -44,13 +44,14 @@ export async function resetDatabase(url = DB_URL) {
   await c.end();
 }
 
-export async function startApp(extraEnv = {}) {
+// modules — описания модулей-профессий, если проверке нужен свой набор (по умолчанию — модули ядра).
+export async function startApp(extraEnv = {}, { modules } = {}) {
   await resetDatabase();
   const cfg = loadConfig(testEnv(extraEnv));
   const sql = createDb(cfg);
   await migrate(sql);
   const providers = createProviders(cfg);
-  const app = createApp({ cfg, sql, providers });
+  const app = createApp({ cfg, sql, providers, ...(modules ? { modules } : {}) });
   const server = await new Promise((res) => { const s = app.listen(0, '127.0.0.1', () => res(s)); });
   const base = `http://127.0.0.1:${server.address().port}`;
   return {

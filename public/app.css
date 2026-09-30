@@ -30,7 +30,7 @@ main { max-width: 640px; margin: 0 auto; padding: 16px; }
 h1 { font-size: 22px; margin: 0 0 12px; }
 h2 { font-size: 18px; margin: 0 0 12px; }
 label { display: block; font-size: 14px; color: var(--muted); margin: 0 0 6px; }
-input[type=text], input[type=tel], select {
+input[type=text], input[type=tel], input[type=date], select, textarea {
   width: 100%; font: inherit; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--text);
 }
 input:focus-visible, button:focus-visible, a:focus-visible { outline: 3px solid #8fb3e6; outline-offset: 1px; }
@@ -79,3 +79,22 @@ h2.gap { margin-top: 16px; }
 label.btn:has(+ input:focus-visible) { outline: 3px solid #8fb3e6; }
 .call-box { margin-top: 12px; }
 .call-box .muted { margin: 6px 0 0; }
+textarea { min-height: 96px; resize: vertical; }
+/* Заявка: статус, шаги, данные. */
+.badge.status { background: #e3ecf8; color: var(--accent); font-weight: 600; font-size: 13px; }
+.badge.status.cancelled { background: #f6e3e3; color: var(--danger); }
+.overdue { color: var(--danger); font-weight: 600; }
+.steps { list-style: none; padding: 0; margin: 0 0 12px; }
+.steps li { position: relative; padding: 4px 0 4px 28px; color: var(--muted); font-size: 15px; }
+.steps li::before {
+  content: ""; position: absolute; left: 4px; top: 9px; width: 12px; height: 12px; border-radius: 50%;
+  border: 2px solid var(--line); background: #fff;
+}
+.steps li.done { color: var(--text); }
+.steps li.done::before { background: var(--ok); border-color: var(--ok); }
+.steps li.current { color: var(--accent); font-weight: 700; }
+.steps li.current::before { background: var(--accent); border-color: var(--accent); }
+.facts { margin: 0; }
+.facts dt { font-size: 14px; color: var(--muted); margin-top: 8px; }
+.facts dt:first-child { margin-top: 0; }
+.facts dd { margin: 2px 0 0; overflow-wrap: anywhere; white-space: pre-line; }

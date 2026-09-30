@@ -60,7 +60,7 @@ test('S3 (MinIO): путь документа через ядро — загру
   await ensureBucket(S3stack.cfg.s3);
   const owner = await login(S3stack, '+79990000301');
   const stranger = await login(S3stack, '+79990000302');
-  const order = (await owner.req('POST', '/api/orders', { title: 'Заявка с файлом в S3' })).body.order;
+  const order = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Заявка с файлом в S3' })).body.order;
   const up = await owner.req('POST', `/api/orders/${order.id}/documents`, Buffer.from('PDF-заглушка'), {
     raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('заключение.pdf') },
   });

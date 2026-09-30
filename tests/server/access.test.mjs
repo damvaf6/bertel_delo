@@ -35,9 +35,9 @@ before(async () => {
   await setPlatformRole(S.sql, U.admin.user.id, 'admin');
   inviteA = (await U.headA.req('POST', `/api/orgs/${orgA.id}/invites`, { phone: phones.invitee, role: 'member' })).body.invite;
 
-  ownOrder = (await U.owner.req('POST', '/api/orders', { title: 'Личная заявка владельца' })).body.order;
-  orgOrder = (await U.memberA.req('POST', '/api/orders', { title: 'Заявка сотрудника А', org_id: orgA.id })).body.order;
-  colleagueOrder = (await U.memberA2.req('POST', '/api/orders', { title: 'Заявка коллеги', org_id: orgA.id })).body.order;
+  ownOrder = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Личная заявка владельца' })).body.order;
+  orgOrder = (await U.memberA.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Заявка сотрудника А', org_id: orgA.id })).body.order;
+  colleagueOrder = (await U.memberA2.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Заявка коллеги', org_id: orgA.id })).body.order;
   ownDoc = await upload(U.owner, ownOrder.id, 'владелец.txt');
   orgDoc = await upload(U.memberA, orgOrder.id, 'сотрудник.txt');
 });
@@ -68,7 +68,7 @@ test('без входа: все закрытые операции реестра
 });
 
 test('изменяющие запросы без признака нашей страницы отклоняются (подделка с чужого сайта)', async () => {
-  const r = await U.owner.req('POST', '/api/orders', { title: 'x' }, { csrf: false });
+  const r = await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'x' }, { csrf: false });
   assert.equal(r.status, 403);
   const d = await U.owner.req('DELETE', `/api/documents/${ownDoc.id}`, undefined, { csrf: false });
   assert.equal(d.status, 403);
@@ -98,11 +98,11 @@ test('me.update: меняется только своё имя', async () => {
 
 test('orders.create: от имени чужой организации нельзя', async () => {
   cover('orders.create');
-  assert.equal((await U.stranger.req('POST', '/api/orders', { org_id: orgA.id, title: 'Подлог' })).status, 404);
-  assert.equal((await U.headB.req('POST', '/api/orders', { org_id: orgA.id, title: 'Подлог' })).status, 404);
-  assert.equal((await U.owner.req('POST', '/api/orders', { org_id: 'не-uuid', title: 'x' })).status, 404);
-  assert.equal((await U.owner.req('POST', '/api/orders', { title: '' })).status, 400);
-  const own = await U.headA.req('POST', '/api/orders', { org_id: orgA.id, title: 'От руководителя' });
+  assert.equal((await U.stranger.req('POST', '/api/orders', { module: 'expertise', service: 'realty', org_id: orgA.id, title: 'Подлог' })).status, 404);
+  assert.equal((await U.headB.req('POST', '/api/orders', { module: 'expertise', service: 'realty', org_id: orgA.id, title: 'Подлог' })).status, 404);
+  assert.equal((await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', org_id: 'не-uuid', title: 'x' })).status, 404);
+  assert.equal((await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'нет-такой', title: 'x' })).status, 400);
+  const own = await U.headA.req('POST', '/api/orders', { module: 'expertise', service: 'realty', org_id: orgA.id, title: 'От руководителя' });
   assert.equal(own.status, 201);
   assert.equal(own.body.order.owner_user_id, U.headA.user.id);
 });
@@ -386,6 +386,72 @@ test('admin.*: только администратор; остальным — �
   assert.equal(found.body.user.id, U.memberA.user.id);
   const staff = (await U.admin.req('GET', '/api/admin/staff')).body.users.map((u) => u.id).sort();
   assert.deepEqual(staff, [U.dispatcher.user.id, U.admin.user.id].sort());
+});
+
+// Заполненная заявка, готовая к отправке (договор — файл основания не нужен).
+const READY = { deadline: '2099-01-01', fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 1' } };
+function soon() {
+  const d = new Date(Date.now() + 10 * 86400_000);
+  return d.toISOString().slice(0, 10);
+}
+
+test('catalog: перечень услуг и статусов — любому вошедшему, без данных заявок', async () => {
+  cover('catalog');
+  const r = await U.stranger.req('GET', '/api/catalog');
+  assert.equal(r.status, 200);
+  const exp = r.body.modules.find((m) => m.id === 'expertise');
+  assert.deepEqual(exp.services.map((s) => s.id), ['realty', 'land', 'vehicle', 'movable', 'goods']);
+  assert.ok(exp.checks.length > 0);
+  assert.equal(r.body.statuses[0].id, 'new');
+});
+
+test('orders.update: заполнять заявку может тот, кто её меняет; диспетчер только читает', async () => {
+  cover('orders.update');
+  const upd = (c, o, body) => c.req('PATCH', `/api/orders/${o.id}`, body);
+  const body = { ...READY, deadline: soon() };
+  assert.equal((await upd(U.stranger, ownOrder, body)).status, 404);
+  assert.equal((await upd(U.headA, ownOrder, body)).status, 404, 'руководитель чужой организации');
+  assert.equal((await upd(U.memberA2, orgOrder, body)).status, 404, 'коллега');
+  assert.equal((await upd(U.headB, orgOrder, body)).status, 404, 'чужая организация');
+  assert.equal((await upd(U.dispatcher, ownOrder, body)).status, 403);
+  assert.equal((await upd(U.admin, ownOrder, body)).status, 403);
+  const [before] = await S.sql`select fields from orders where id = ${ownOrder.id}`;
+  assert.deepEqual(before.fields, {}, 'чужие правки не сохранились');
+  assert.equal((await upd(U.owner, ownOrder, body)).status, 200);
+  assert.equal((await upd(U.memberA, orgOrder, body)).status, 200, 'сотрудник — своё дело');
+  assert.equal((await upd(U.seniorA, orgOrder, { title: 'Заявка сотрудника А' })).status, 200, 'старший — дело организации');
+});
+
+test('orders.status: шаги заказчика — только его стороне; шаги диспетчера — только диспетчеру; администратор только читает', async () => {
+  cover('orders.status');
+  const mk = async (c, extra = {}) => {
+    const o = (await c.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Статусы', ...extra })).body.order;
+    assert.equal((await c.req('PATCH', `/api/orders/${o.id}`, { ...READY, deadline: soon() })).status, 200);
+    return o;
+  };
+  const st = async (c, o, to, reason) => {
+    const [cur] = await S.sql`select status from orders where id = ${o.id}`;
+    return c.req('POST', `/api/orders/${o.id}/status`, { to, reason, from: cur.status });
+  };
+
+  const own = await mk(U.owner);
+  assert.equal((await st(U.stranger, own, 'matching')).status, 404);
+  assert.equal((await st(U.headA, own, 'matching')).status, 404);
+  assert.equal((await st(U.dispatcher, own, 'matching')).status, 403, 'диспетчер не отправляет за заказчика');
+  assert.equal((await st(U.admin, own, 'cancelled')).status, 403, 'администратор не отменяет');
+  assert.equal((await st(U.owner, own, 'matching')).status, 200);
+  assert.equal((await st(U.owner, own, 'awaiting_executor')).status, 403, 'шаг диспетчера заказчику недоступен');
+  assert.equal((await st(U.admin, own, 'awaiting_executor')).status, 403);
+  assert.equal((await st(U.dispatcher, own, 'awaiting_executor')).status, 200);
+
+  const org = await mk(U.memberA, { org_id: orgA.id });
+  assert.equal((await st(U.memberA2, org, 'matching')).status, 404, 'коллега');
+  assert.equal((await st(U.headB, org, 'matching')).status, 404, 'чужая организация');
+  assert.equal((await st(U.headA, org, 'matching')).status, 200, 'руководитель отправляет дело сотрудника');
+  assert.equal((await st(U.seniorA, org, 'cancelled')).status, 200, 'старший отменяет до начала работ');
+  const log = await S.sql`select to_status, side, actor_id from order_status_history where order_id = ${org.id} order by id`;
+  assert.deepEqual(log.map((x) => [x.to_status, x.side]), [['new', 'customer'], ['matching', 'customer'], ['cancelled', 'customer']]);
+  assert.equal(log[2].actor_id, U.seniorA.user.id);
 });
 
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {
