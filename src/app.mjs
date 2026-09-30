@@ -5,12 +5,14 @@ import { fileURLToPath } from 'node:url';
 import { securityHeaders } from './http/core.mjs';
 import { mountOps, errorHandler } from './http/router.mjs';
 import { coreOps } from './ops/core-ops.mjs';
+import { orgOps } from './ops/org-ops.mjs';
+import { adminOps } from './ops/admin-ops.mjs';
 import { memoryFileOps, testControlOps } from './ops/service-ops.mjs';
 
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
 export function listOps(cfg, providers) {
-  const ops = [...coreOps()];
+  const ops = [...coreOps(), ...orgOps(), ...adminOps()];
   if (providers.storage.kind === 'memory') ops.push(...memoryFileOps());
   if (cfg.appEnv === 'test' && cfg.testControlToken) ops.push(...testControlOps(cfg));
   return ops;

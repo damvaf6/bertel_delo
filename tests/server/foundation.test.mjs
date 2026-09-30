@@ -24,7 +24,7 @@ test('миграции: схема создаётся с нуля, повтор�
     assert.deepEqual(first, readMigrations().map((m) => m.file));
     assert.deepEqual(await migrate(sql), []);
     const tables = (await sql`select table_name from information_schema.tables where table_schema = 'public' order by 1`).map((r) => r.table_name);
-    for (const t of ['users', 'organizations', 'org_members', 'sessions', 'login_codes', 'orders', 'documents', 'audit_log', 'schema_migrations']) {
+    for (const t of ['users', 'organizations', 'org_members', 'org_invites', 'sessions', 'login_codes', 'orders', 'documents', 'audit_log', 'schema_migrations']) {
       assert.ok(tables.includes(t), t);
     }
   } finally { await sql.end(); }
@@ -41,9 +41,10 @@ test('миграции: изменённый после применения ф�
 
 test('настройки: на prod запрещены поддельные поставщики, база без сертификата, тестовые пути', () => {
   const prod = (extra) => loadConfig({ APP_ENV: 'prod', DATABASE_URL: 'postgres://x/y', APP_SECRET: 'x'.repeat(40),
-    STORAGE_PROVIDER: 's3', S3_BUCKET: 'b', SMS_PROVIDER: 'sms-real', PAYMENTS_PROVIDER: 'p', AI_PROVIDER: 'a', MAIL_PROVIDER: 'm', ...extra });
+    STORAGE_PROVIDER: 's3', S3_BUCKET: 'b', SMS_PROVIDER: 'sms-real', CALL_PROVIDER: 'call-real', PAYMENTS_PROVIDER: 'p', AI_PROVIDER: 'a', MAIL_PROVIDER: 'm', ...extra });
   assert.ok(prod({}).live);
   assert.throws(() => prod({ SMS_PROVIDER: 'fake' }), ConfigError);
+  assert.throws(() => prod({ CALL_PROVIDER: 'fake' }), ConfigError);
   assert.throws(() => prod({ DB_SSL: 'disable' }), ConfigError);
   assert.throws(() => prod({ STORAGE_PROVIDER: 'memory' }), ConfigError);
   assert.throws(() => prod({ COOKIE_SECURE: '0' }), ConfigError);
@@ -89,7 +90,12 @@ test('реестр: операция без описания доступа не
   assert.throws(() => validateOp({ id: 'x', method: 'GET', path: '/x', auth: 'public', handler: h }), /без объяснения/);
   assert.throws(() => validateOp({ id: 'x', method: 'GET', path: '/x', auth: 'user', access: { resource: 'order', param: 'id', need: 'read' }, handler: h }), /параметра/);
   assert.throws(() => validateOp({ id: 'x', method: 'GET', path: '/x/:id', auth: 'user', access: { resource: 'nope', param: 'id', need: 'read' }, handler: h }), /проверка доступа/);
+  assert.throws(() => validateOp({ id: 'x', method: 'GET', path: '/x/:id', auth: 'user', access: { resource: 'order', param: 'id', need: 'none' }, handler: h }), /проверка доступа/);
+  assert.throws(() => validateOp({ id: 'x', method: 'GET', path: '/x', auth: 'user', access: { platform: 'dispatcher' }, handler: h }), /проверка доступа/);
+  assert.throws(() => validateOp({ id: 'x', method: 'GET', path: '/x/:id', auth: 'user', access: { platform: 'admin', resource: 'order', param: 'id', need: 'read' }, handler: h }), /проверка доступа/);
   validateOp({ id: 'x', method: 'GET', path: '/x/:id', auth: 'user', access: { resource: 'order', param: 'id', need: 'read' }, handler: h });
+  validateOp({ id: 'x', method: 'GET', path: '/x/:id', auth: 'user', access: { resource: 'org', param: 'id', need: 'manage' }, handler: h });
+  validateOp({ id: 'x', method: 'GET', path: '/x', auth: 'user', access: { platform: 'admin' }, handler: h });
 });
 
 test('внутренняя ошибка: наружу только общий текст, подробности — в журнал (Б-11)', async () => {

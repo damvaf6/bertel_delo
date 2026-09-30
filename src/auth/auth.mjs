@@ -1,4 +1,4 @@
-// Вход по одноразовому коду. Образец — наследие (api.mjs:351-401) с исправлениями:
+// Вход по одноразовому коду (СМС или звонок, в котором робот называет код). Образец — наследие (api.mjs:351-401) с исправлениями:
 // код случайный и хранится только хэшем (Б-1), попытки не обнуляются новым кодом (Б-14),
 // отключённый пользователь не входит и теряет сессии (Б-15), ошибки — кодами 4xx (Б-11).
 import crypto from 'node:crypto';
@@ -29,7 +29,11 @@ function sameHex(a, b) {
   return a.length === b.length && crypto.timingSafeEqual(Buffer.from(a, 'hex'), Buffer.from(b, 'hex'));
 }
 
-export async function requestCode({ sql, cfg, providers }, phone) {
+// Канал доставки кода: СМС или звонок робота (решение Дамира 30.09.2026). Код и лимиты — одни на оба канала.
+export const CHANNELS = { sms: 'sms', call: 'call' };
+
+export async function requestCode({ sql, cfg, providers }, phone, channel = 'sms') {
+  if (!CHANNELS[channel]) throw new HttpError(400, 'bad_channel', 'Неизвестный способ доставки кода');
   const recent = await sql.one`
     select count(*)::int as n, max(created_at) as last from login_codes
     where phone = ${phone} and created_at > now() - interval '1 hour'`;
@@ -40,16 +44,17 @@ export async function requestCode({ sql, cfg, providers }, phone) {
 
   const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
   const row = await sql.one`
-    insert into login_codes (phone, code_hash, expires_at)
-    values (${phone}, ${hmac(cfg.appSecret, `${phone}:${code}`)}, now() + make_interval(secs => ${CODE_TTL_SEC}))
+    insert into login_codes (phone, code_hash, expires_at, channel)
+    values (${phone}, ${hmac(cfg.appSecret, `${phone}:${code}`)}, now() + make_interval(secs => ${CODE_TTL_SEC}), ${channel})
     returning id`;
   try {
-    await providers.sms.sendCode({ phone, code });
+    await providers[CHANNELS[channel]].sendCode({ phone, code });
   } catch {
     await sql`update login_codes set expires_at = now() where id = ${row.id}`;
+    if (channel === 'call') throw new HttpError(503, 'call_unavailable', 'Не удалось позвонить, попробуйте позже');
     throw new HttpError(503, 'sms_unavailable', 'Не удалось отправить код, попробуйте позже');
   }
-  return { ttlSec: CODE_TTL_SEC };
+  return { ttlSec: CODE_TTL_SEC, channel };
 }
 
 export async function verifyCode({ sql, cfg }, phone, code) {

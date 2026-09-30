@@ -1,11 +1,12 @@
 // Реестр операций. Каждая операция обязана объявить, кто её может вызвать:
 //   auth: 'public'  — только с объяснением publicReason (вход, проверка работы);
 //   auth: 'user' + access: 'self'          — действует только над данными самого вошедшего;
-//   auth: 'user' + access: { resource, param, need } — предмет загружается и проверяется до обработчика.
+//   auth: 'user' + access: { resource, param, need } — предмет загружается и проверяется до обработчика;
+//   auth: 'user' + access: { platform: 'admin' }     — только администратор платформы (остальным «не найдено»).
 // Операция без объявления не запускается вовсе (в наследии было наоборот — Б-2, Б-3).
 import express from 'express';
 import { HttpError, parseCookies } from './core.mjs';
-import { authorize, RESOURCES } from '../access/policy.mjs';
+import { authorize, authorizePlatform, LEVEL, RESOURCES } from '../access/policy.mjs';
 import { sessionUser } from '../auth/auth.mjs';
 
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
@@ -21,7 +22,11 @@ export function validateOp(op) {
   if (op.auth !== 'user') throw new Error(`${where}: auth должен быть 'public' или 'user'`);
   if (op.access === 'self') return;
   const a = op.access;
-  if (!a || !RESOURCES[a.resource] || !a.param || !['read', 'write'].includes(a.need)) throw new Error(`${where}: не описана проверка доступа`);
+  if (a?.platform !== undefined) {
+    if (a.platform !== 'admin' || Object.keys(a).length !== 1) throw new Error(`${where}: не описана проверка доступа`);
+    return;
+  }
+  if (!a || !RESOURCES[a.resource] || !a.param || !(a.need in LEVEL) || a.need === 'none') throw new Error(`${where}: не описана проверка доступа`);
   if (!op.path.includes(`:${a.param}`)) throw new Error(`${where}: параметра :${a.param} нет в пути`);
 }
 
@@ -46,7 +51,8 @@ export function mountOps(app, ops, deps) {
           const token = parseCookies(req.headers.cookie).delo_sid;
           ctx.actor = await sessionUser(deps.sql, token);
           if (!ctx.actor) throw new HttpError(401, 'unauthorized', 'Нужно войти');
-          if (op.access !== 'self') Object.assign(ctx, await authorize(deps.sql, ctx.actor, op.access, req.params));
+          if (op.access.platform) authorizePlatform(ctx.actor, op.access.platform);
+          else if (op.access !== 'self') Object.assign(ctx, await authorize(deps.sql, ctx.actor, op.access, req.params));
         }
         const out = await op.handler(ctx);
         if (res.headersSent) return;

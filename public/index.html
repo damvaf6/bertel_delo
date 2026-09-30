@@ -23,10 +23,14 @@
       <form id="code-form" class="hidden" novalidate>
         <p class="muted" id="code-hint"></p>
         <div class="field">
-          <label for="code">Код из СМС</label>
+          <label for="code" id="code-label">Код из СМС</label>
           <input id="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required>
         </div>
         <button type="submit" class="wide" id="sign-in">Войти</button>
+        <div class="call-box">
+          <button type="button" class="secondary wide" id="call" disabled>Позвонить с кодом</button>
+          <p class="muted" id="call-hint"></p>
+        </div>
         <button type="button" class="link" id="change-phone">Изменить номер</button>
       </form>
       <p class="msg" id="msg" role="status" aria-live="polite"></p>

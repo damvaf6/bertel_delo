@@ -47,3 +47,6 @@ export function formatSize(n) {
   if (n < 1024 * 1024) return `${Math.round(n / 1024)} КБ`;
   return `${(n / 1024 / 1024).toFixed(1)} МБ`;
 }
+
+export const ROLE_RU = { head: 'Руководитель', senior: 'Старший', member: 'Сотрудник' };
+export const PLATFORM_ROLE_RU = { dispatcher: 'Диспетчер', admin: 'Администратор' };

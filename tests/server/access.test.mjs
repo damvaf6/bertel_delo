@@ -9,17 +9,18 @@ const cover = (id) => covered.add(id);
 
 let S;
 const U = {};        // клиенты
-let orgA, orgB;
+let orgA, orgB, inviteA;
 let ownOrder, orgOrder, colleagueOrder;
 let ownDoc, orgDoc;
 
 before(async () => {
   S = await startApp();
-  // Роли: владелец, посторонний, руководитель и два сотрудника организации A, руководитель чужой организации B, диспетчер.
+  // Роли: владелец, посторонний, руководитель, старший и два сотрудника организации A, руководитель чужой организации B,
+  // диспетчер, администратор, приглашённый в A.
   const phones = {
     owner: '+79990000001', stranger: '+79990000002',
-    headA: '+79990000011', memberA: '+79990000012', memberA2: '+79990000013',
-    headB: '+79990000021', dispatcher: '+79990000031',
+    headA: '+79990000011', memberA: '+79990000012', memberA2: '+79990000013', seniorA: '+79990000014',
+    headB: '+79990000021', dispatcher: '+79990000031', admin: '+79990000032', invitee: '+79990000041',
   };
   for (const [k, p] of Object.entries(phones)) U[k] = await login(S, p);
 
@@ -28,8 +29,11 @@ before(async () => {
   await addMember(S.sql, orgA.id, U.headA.user.id, 'head');
   await addMember(S.sql, orgA.id, U.memberA.user.id, 'member');
   await addMember(S.sql, orgA.id, U.memberA2.user.id, 'member');
+  await addMember(S.sql, orgA.id, U.seniorA.user.id, 'senior');
   await addMember(S.sql, orgB.id, U.headB.user.id, 'head');
   await setPlatformRole(S.sql, U.dispatcher.user.id, 'dispatcher');
+  await setPlatformRole(S.sql, U.admin.user.id, 'admin');
+  inviteA = (await U.headA.req('POST', `/api/orgs/${orgA.id}/invites`, { phone: phones.invitee, role: 'member' })).body.invite;
 
   ownOrder = (await U.owner.req('POST', '/api/orders', { title: 'Личная заявка владельца' })).body.order;
   orgOrder = (await U.memberA.req('POST', '/api/orders', { title: 'Заявка сотрудника А', org_id: orgA.id })).body.order;
@@ -52,22 +56,14 @@ function expectRead(r, allowed, who) {
   else assert.equal(r.status, 404, `${who}: не должен видеть (${r.status})`);
 }
 
-test('без входа: все закрытые операции — 401', async () => {
+test('без входа: все закрытые операции реестра — 401', async () => {
   const anon = client(S);
-  const calls = [
-    ['auth.logout', 'POST', '/api/auth/logout'],
-    ['me', 'GET', '/api/me'],
-    ['orders.create', 'POST', '/api/orders', { title: 'x' }],
-    ['orders.list', 'GET', '/api/orders'],
-    ['orders.get', 'GET', `/api/orders/${ownOrder.id}`],
-    ['documents.list', 'GET', `/api/orders/${ownOrder.id}/documents`],
-    ['documents.upload', 'POST', `/api/orders/${ownOrder.id}/documents`, 'x'],
-    ['documents.link', 'GET', `/api/documents/${ownDoc.id}/link`],
-    ['documents.delete', 'DELETE', `/api/documents/${ownDoc.id}`],
-  ];
-  for (const [id, m, p, b] of calls) {
-    const r = await anon.req(m, p, b);
-    assert.equal(r.status, 401, `${id}: ${r.status}`);
+  const closed = S.app.locals.ops.filter((o) => o.auth === 'user');
+  assert.ok(closed.length > 20);
+  for (const op of closed) {
+    const p = op.path.replace(/:[a-zA-Z]+/g, ownOrder.id);
+    const r = await anon.req(op.method, p, op.method === 'GET' || op.method === 'DELETE' ? undefined : {});
+    assert.equal(r.status, 401, `${op.id}: ${r.status}`);
   }
 });
 
@@ -84,6 +80,20 @@ test('me: только о себе', async () => {
   assert.equal(r.status, 200);
   assert.equal(r.body.user.id, U.memberA.user.id);
   assert.deepEqual(r.body.orgs.map((o) => o.org_id), [orgA.id]);
+  assert.equal(r.body.orgs[0].name, orgA.name);
+  assert.equal((await U.invitee.req('GET', '/api/me')).body.pending_invites, 1);
+  assert.equal((await U.stranger.req('GET', '/api/me')).body.pending_invites, 0);
+});
+
+test('me.update: меняется только своё имя', async () => {
+  cover('me.update');
+  const r = await U.stranger.req('PATCH', '/api/me', { full_name: 'Тестовый Посторонний', id: U.owner.user.id, platform_role: 'admin' });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.user.id, U.stranger.user.id);
+  assert.equal(r.body.user.platform_role, null, 'служебную роль себе не назначить');
+  const [owner] = await S.sql`select full_name from users where id = ${U.owner.user.id}`;
+  assert.equal(owner.full_name, '');
+  assert.equal((await U.stranger.req('PATCH', '/api/me', { full_name: '' })).status, 400);
 });
 
 test('orders.create: от имени чужой организации нельзя', async () => {
@@ -115,6 +125,10 @@ test('orders.list: каждый видит только своё; руковод
   for (const id of [orgOrder.id, colleagueOrder.id]) assert.ok(head.includes(id), 'руководитель видит дела сотрудников');
   assert.ok(!head.includes(ownOrder.id));
 
+  const senior = await ids(U.seniorA);
+  for (const id of [orgOrder.id, colleagueOrder.id]) assert.ok(senior.includes(id), 'старший видит дела сотрудников');
+  assert.ok(!senior.includes(ownOrder.id));
+
   const disp = await ids(U.dispatcher);
   for (const id of [ownOrder.id, orgOrder.id, colleagueOrder.id]) assert.ok(disp.includes(id));
 });
@@ -130,7 +144,13 @@ test('orders.get: свой / руководитель / диспетчер — �
   expectRead(await get(U.memberA, orgOrder), true, 'сотрудник-автор');
   expectRead(await get(U.memberA2, orgOrder), false, 'коллега');
   expectRead(await get(U.headA, orgOrder), true, 'руководитель');
+  expectRead(await get(U.seniorA, orgOrder), true, 'старший');
   expectRead(await get(U.headB, orgOrder), false, 'руководитель чужой организации');
+  assert.equal((await get(U.memberA, orgOrder)).body.access, 'write');
+  assert.equal((await get(U.seniorA, orgOrder)).body.access, 'manage');
+  assert.equal((await get(U.dispatcher, orgOrder)).body.access, 'read');
+  assert.equal((await get(U.owner, ownOrder)).body.access, 'write');
+  assert.equal((await get(U.headA, orgOrder)).body.order.org_name, orgA.name);
   expectRead(await get(U.stranger, orgOrder), false, 'посторонний');
 
   assert.equal((await U.owner.req('GET', '/api/orders/не-uuid')).status, 404);
@@ -204,6 +224,168 @@ test('auth.logout: выход закрывает только свою сесс�
   assert.equal(r.status, 204);
   assert.equal((await second.req('GET', '/api/me')).status, 401);
   assert.equal((await U.owner.req('GET', '/api/me')).status, 200, 'чужие сессии живы');
+});
+
+test('orders.transfer: передать дело может только руководитель или старший его организации и только её участнику', async () => {
+  cover('orders.transfer');
+  const tr = (c, o, userId) => c.req('PATCH', `/api/orders/${o.id}/responsible`, { user_id: userId });
+  assert.equal((await tr(U.stranger, orgOrder, U.stranger.user.id)).status, 404);
+  assert.equal((await tr(U.memberA2, orgOrder, U.memberA2.user.id)).status, 404, 'коллега не видит');
+  assert.equal((await tr(U.headB, orgOrder, U.headB.user.id)).status, 404);
+  assert.equal((await tr(U.memberA, orgOrder, U.memberA2.user.id)).status, 403, 'сотрудник своё дело сам не передаёт');
+  assert.equal((await tr(U.dispatcher, orgOrder, U.memberA2.user.id)).status, 403);
+  assert.equal((await tr(U.owner, ownOrder, U.stranger.user.id)).status, 403, 'личное дело не передаётся');
+  assert.equal((await tr(U.headA, orgOrder, U.headB.user.id)).status, 404, 'не участнику организации — нельзя');
+  assert.equal((await tr(U.headA, orgOrder, 'не-uuid')).status, 404);
+
+  const r = await tr(U.seniorA, orgOrder, U.memberA2.user.id);
+  assert.equal(r.status, 200);
+  assert.equal(r.body.order.owner_user_id, U.memberA2.user.id);
+  expectRead(await U.memberA.req('GET', `/api/orders/${orgOrder.id}`), false, 'прежний ведущий больше не видит');
+  expectRead(await U.memberA2.req('GET', `/api/orders/${orgOrder.id}`), true, 'новый ведущий видит');
+  assert.equal((await tr(U.headA, orgOrder, U.memberA.user.id)).status, 200, 'вернули обратно');
+});
+
+test('orgs.create и orgs.list: создатель — руководитель; каждый видит только свои организации', async () => {
+  cover('orgs.create'); cover('orgs.list');
+  const r = await U.stranger.req('POST', '/api/orgs', { name: 'Тестовое бюро постороннего', inn: '7707083893' });
+  assert.equal(r.status, 201);
+  assert.equal(r.body.my_role, 'head');
+  const mine = (await U.stranger.req('GET', '/api/orgs')).body.orgs;
+  assert.deepEqual(mine.map((o) => o.id), [r.body.org.id]);
+  assert.deepEqual((await U.owner.req('GET', '/api/orgs')).body.orgs, []);
+  assert.deepEqual((await U.memberA.req('GET', '/api/orgs')).body.orgs.map((o) => [o.id, o.my_role]), [[orgA.id, 'member']]);
+  assert.equal((await U.stranger.req('POST', '/api/orgs', { name: 'x', inn: '123' })).status, 400);
+  assert.equal((await U.stranger.req('POST', '/api/orgs', { name: '' })).status, 400);
+});
+
+test('orgs.get: участники и диспетчер — да; посторонний и чужая организация — нет', async () => {
+  cover('orgs.get');
+  const get = (c) => c.req('GET', `/api/orgs/${orgA.id}`);
+  expectRead(await get(U.memberA), true, 'сотрудник');
+  expectRead(await get(U.dispatcher), true, 'диспетчер');
+  expectRead(await get(U.stranger), false, 'посторонний');
+  expectRead(await get(U.headB), false, 'руководитель чужой организации');
+  expectRead(await get(U.invitee), false, 'приглашённый, ещё не принявший');
+  assert.equal((await get(U.headA)).body.manage, true);
+  assert.equal((await get(U.seniorA)).body.manage, false);
+  assert.equal((await U.owner.req('GET', '/api/orgs/не-uuid')).status, 404);
+});
+
+test('orgs.update: только руководитель', async () => {
+  cover('orgs.update');
+  const upd = (c, name) => c.req('PATCH', `/api/orgs/${orgA.id}`, { name });
+  assert.equal((await upd(U.stranger, 'Захват')).status, 404);
+  assert.equal((await upd(U.headB, 'Захват')).status, 404);
+  assert.equal((await upd(U.memberA, 'Захват')).status, 403);
+  assert.equal((await upd(U.seniorA, 'Захват')).status, 403);
+  assert.equal((await upd(U.dispatcher, 'Захват')).status, 403);
+  const r = await upd(U.headA, orgA.name);
+  assert.equal(r.status, 200);
+  assert.equal(r.body.org.name, orgA.name);
+});
+
+test('orgs.members: состав видят участники; телефоны — руководитель; нагрузку — руководитель и старший', async () => {
+  cover('orgs.members');
+  const list = (c) => c.req('GET', `/api/orgs/${orgA.id}/members`);
+  expectRead(await list(U.stranger), false, 'посторонний');
+  expectRead(await list(U.headB), false, 'чужая организация');
+  const asMember = (await list(U.memberA)).body.members;
+  assert.equal(asMember.length, 4);
+  assert.ok(asMember.every((m) => m.phone === undefined && m.orders === undefined), 'сотруднику — без телефонов и нагрузки');
+  const asSenior = (await list(U.seniorA)).body.members;
+  assert.ok(asSenior.every((m) => m.phone === undefined && typeof m.orders === 'number'));
+  const asHead = (await list(U.headA)).body.members;
+  assert.ok(asHead.every((m) => /^\+7\d{10}$/.test(m.phone)));
+  assert.equal(asHead.find((m) => m.user_id === U.memberA.user.id).orders, 1);
+  assert.equal(asHead[0].role, 'head');
+});
+
+test('orgs.members.update: роль меняет только руководитель и только участнику своей организации', async () => {
+  cover('orgs.members.update');
+  const upd = (c, userId, role) => c.req('PATCH', `/api/orgs/${orgA.id}/members/${userId}`, { role });
+  assert.equal((await upd(U.stranger, U.memberA2.user.id, 'head')).status, 404);
+  assert.equal((await upd(U.headB, U.memberA2.user.id, 'head')).status, 404);
+  assert.equal((await upd(U.memberA, U.memberA.user.id, 'head')).status, 403, 'сотрудник не повышает себя');
+  assert.equal((await upd(U.seniorA, U.seniorA.user.id, 'head')).status, 403, 'старший не повышает себя');
+  assert.equal((await upd(U.dispatcher, U.memberA2.user.id, 'head')).status, 403);
+  assert.equal((await upd(U.headA, U.headB.user.id, 'member')).status, 404, 'не участник этой организации');
+  assert.equal((await upd(U.headA, U.memberA2.user.id, 'boss')).status, 400);
+  assert.equal((await upd(U.headA, U.memberA2.user.id, 'senior')).status, 200);
+  assert.equal((await upd(U.headA, U.memberA2.user.id, 'member')).status, 200);
+});
+
+test('orgs.members.remove: убрать может только руководитель', async () => {
+  cover('orgs.members.remove');
+  const rm = (c, userId) => c.req('DELETE', `/api/orgs/${orgA.id}/members/${userId}`);
+  assert.equal((await rm(U.stranger, U.memberA2.user.id)).status, 404);
+  assert.equal((await rm(U.headB, U.memberA2.user.id)).status, 404);
+  assert.equal((await rm(U.memberA, U.memberA2.user.id)).status, 403);
+  assert.equal((await rm(U.seniorA, U.memberA2.user.id)).status, 403);
+  assert.equal((await rm(U.dispatcher, U.memberA2.user.id)).status, 403);
+  assert.equal((await rm(U.headA, U.headB.user.id)).status, 404);
+  // Сам удаляемый — в отдельном тесте orgs.test.mjs (после удаления меняется видимость).
+});
+
+test('orgs.leave: выйти может только участник', async () => {
+  cover('orgs.leave');
+  const leave = (c) => c.req('POST', `/api/orgs/${orgA.id}/leave`);
+  assert.equal((await leave(U.stranger)).status, 404);
+  assert.equal((await leave(U.headB)).status, 404);
+  assert.equal((await leave(U.dispatcher)).status, 403, 'диспетчер не участник');
+  assert.equal((await leave(U.headA)).status, 409, 'единственный руководитель не уходит');
+});
+
+test('orgs.invites.list и orgs.invites.create: только руководитель', async () => {
+  cover('orgs.invites.list'); cover('orgs.invites.create');
+  for (const [c, code] of [[U.stranger, 404], [U.headB, 404], [U.memberA, 403], [U.seniorA, 403], [U.dispatcher, 403]]) {
+    assert.equal((await c.req('GET', `/api/orgs/${orgA.id}/invites`)).status, code);
+    assert.equal((await c.req('POST', `/api/orgs/${orgA.id}/invites`, { phone: '+79990000049' })).status, code);
+  }
+  const list = (await U.headA.req('GET', `/api/orgs/${orgA.id}/invites`)).body.invites;
+  assert.deepEqual(list.map((i) => i.id), [inviteA.id]);
+  assert.equal((await U.headB.req('GET', `/api/orgs/${orgB.id}/invites`)).body.invites.length, 0, 'чужие приглашения не видны');
+});
+
+test('invites.mine: только приглашения на свой номер', async () => {
+  cover('invites.mine');
+  assert.deepEqual((await U.invitee.req('GET', '/api/invites')).body.invites.map((i) => [i.id, i.org_name]), [[inviteA.id, orgA.name]]);
+  assert.deepEqual((await U.headA.req('GET', '/api/invites')).body.invites, []);
+  assert.deepEqual((await U.stranger.req('GET', '/api/invites')).body.invites, []);
+});
+
+test('invites.accept, invites.decline: только адресат; руководитель чужое приглашение не принимает', async () => {
+  cover('invites.accept'); cover('invites.decline');
+  for (const c of [U.headA, U.stranger, U.memberA, U.headB, U.dispatcher]) {
+    assert.equal((await c.req('POST', `/api/invites/${inviteA.id}/accept`)).status, 404);
+    assert.equal((await c.req('POST', `/api/invites/${inviteA.id}/decline`)).status, 404);
+  }
+  const [{ n }] = await S.sql`select count(*)::int as n from org_members where org_id = ${orgA.id}`;
+  assert.equal(n, 4, 'состав не изменился');
+});
+
+test('invites.revoke: только руководитель организации; адресат отозвать не может', async () => {
+  cover('invites.revoke');
+  const revoke = (c) => c.req('DELETE', `/api/invites/${inviteA.id}`);
+  for (const c of [U.invitee, U.stranger, U.memberA, U.seniorA, U.headB, U.dispatcher]) assert.equal((await revoke(c)).status, 404);
+  assert.equal((await revoke(U.headA)).status, 204);
+  assert.equal((await U.invitee.req('POST', `/api/invites/${inviteA.id}/accept`)).status, 404, 'отозванное не принять');
+});
+
+test('admin.*: только администратор; остальным — «не найдено»', async () => {
+  cover('admin.users.find'); cover('admin.staff'); cover('admin.users.update');
+  for (const c of [U.owner, U.headA, U.dispatcher]) {
+    assert.equal((await c.req('GET', `/api/admin/users?phone=${encodeURIComponent('+79990000001')}`)).status, 404);
+    assert.equal((await c.req('GET', '/api/admin/staff')).status, 404);
+    assert.equal((await c.req('PATCH', `/api/admin/users/${c.user.id}`, { platform_role: 'admin' })).status, 404);
+  }
+  const [me] = await S.sql`select platform_role from users where id = ${U.dispatcher.user.id}`;
+  assert.equal(me.platform_role, 'dispatcher', 'диспетчер себя не повысил');
+  const found = await U.admin.req('GET', `/api/admin/users?phone=${encodeURIComponent('8 999 000-00-12')}`);
+  assert.equal(found.status, 200);
+  assert.equal(found.body.user.id, U.memberA.user.id);
+  const staff = (await U.admin.req('GET', '/api/admin/staff')).body.users.map((u) => u.id).sort();
+  assert.deepEqual(staff, [U.dispatcher.user.id, U.admin.user.id].sort());
 });
 
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {

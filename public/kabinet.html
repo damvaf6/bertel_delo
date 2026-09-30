@@ -13,6 +13,12 @@
     <div class="brand">БЕРТЕЛ Дело<small id="who"></small></div>
     <button class="secondary" id="logout">Выйти</button>
   </header>
+  <nav class="tabs" aria-label="Разделы кабинета">
+    <a href="#" data-tab="orders">Заявки</a>
+    <a href="#orgs" data-tab="orgs">Организации<span class="count hidden" id="invites-count"></span></a>
+    <a href="#profile" data-tab="profile">Профиль</a>
+    <a href="#admin" data-tab="admin" class="hidden" id="admin-tab">Управление</a>
+  </nav>
   <main>
     <section id="list-view">
       <div class="card">
@@ -26,6 +32,10 @@
           <label for="title">Коротко: что нужно</label>
           <input id="title" type="text" maxlength="300" required placeholder="Например: оценка квартиры для суда">
         </div>
+        <div class="field hidden" id="order-org-box">
+          <label for="order-org">От чьего имени</label>
+          <select id="order-org"></select>
+        </div>
         <button type="submit" class="wide" id="create">Создать заявку</button>
         <p class="msg" id="new-msg" role="status" aria-live="polite"></p>
       </form>
@@ -36,7 +46,17 @@
       <div class="card">
         <h1 id="order-title"></h1>
         <p class="muted" id="order-meta"></p>
+        <p class="muted" id="order-org-line"></p>
       </div>
+      <form class="card hidden" id="transfer-box" novalidate>
+        <h2>Кто ведёт дело</h2>
+        <div class="field">
+          <label for="transfer-to">Передать сотруднику</label>
+          <select id="transfer-to"></select>
+        </div>
+        <button type="submit" class="secondary" id="transfer">Передать</button>
+        <p class="msg" id="transfer-msg" role="status" aria-live="polite"></p>
+      </form>
       <div class="card">
         <h2>Документы</h2>
         <ul class="list" id="docs"></ul>
@@ -51,9 +71,132 @@
     </section>
 
     <section id="missing-view" class="hidden card">
-      <h1>Заявка не найдена</h1>
+      <h1 id="missing-title">Заявка не найдена</h1>
       <p class="muted">Её нет или у Вас нет к ней доступа.</p>
-      <button class="secondary" id="back2">К моим заявкам</button>
+      <button class="secondary" id="back2">Назад</button>
+    </section>
+
+    <section id="orgs-view" class="hidden">
+      <div class="card hidden" id="invites-box">
+        <h1>Приглашения</h1>
+        <ul class="list" id="invites"></ul>
+        <p class="msg" id="invites-msg" role="status" aria-live="polite"></p>
+      </div>
+      <div class="card">
+        <h1>Мои организации</h1>
+        <ul class="list" id="orgs"></ul>
+        <p class="muted hidden" id="orgs-empty">Вы пока не состоите ни в одной организации.</p>
+      </div>
+      <form class="card" id="new-org" novalidate>
+        <h2>Новая организация</h2>
+        <p class="muted">Бюро, юрфирма, экспертная организация. Вы станете её руководителем и сможете пригласить сотрудников.</p>
+        <div class="field">
+          <label for="org-name">Название</label>
+          <input id="org-name" type="text" maxlength="300" required placeholder="Например: АНО «Центр экспертиз»">
+        </div>
+        <div class="field">
+          <label for="org-inn">ИНН (можно позже)</label>
+          <input id="org-inn" type="text" inputmode="numeric" maxlength="12">
+        </div>
+        <button type="submit" class="wide" id="create-org">Создать организацию</button>
+        <p class="msg" id="org-new-msg" role="status" aria-live="polite"></p>
+      </form>
+    </section>
+
+    <section id="org-view" class="hidden">
+      <button class="link" id="org-back">← Все организации</button>
+      <div class="card">
+        <h1 id="org-title"></h1>
+        <p class="muted" id="org-meta"></p>
+      </div>
+      <form class="card hidden" id="org-edit" novalidate>
+        <h2>Данные организации</h2>
+        <div class="field">
+          <label for="org-edit-name">Название организации</label>
+          <input id="org-edit-name" type="text" maxlength="300" required>
+        </div>
+        <div class="field">
+          <label for="org-edit-inn">ИНН организации</label>
+          <input id="org-edit-inn" type="text" inputmode="numeric" maxlength="12">
+        </div>
+        <button type="submit" class="secondary" id="org-save">Сохранить</button>
+        <p class="msg" id="org-edit-msg" role="status" aria-live="polite"></p>
+      </form>
+      <div class="card">
+        <h2>Сотрудники</h2>
+        <ul class="list" id="members"></ul>
+        <p class="msg" id="members-msg" role="status" aria-live="polite"></p>
+      </div>
+      <form class="card hidden" id="invite-box" novalidate>
+        <h2>Пригласить сотрудника</h2>
+        <p class="muted">Приглашение появится у человека после входа по этому номеру. Старший видит и распределяет все дела; руководитель ещё и управляет составом.</p>
+        <div class="field">
+          <label for="invite-phone">Номер телефона сотрудника</label>
+          <input id="invite-phone" type="tel" inputmode="tel" placeholder="+7 999 000-00-00" required>
+        </div>
+        <div class="field">
+          <label for="invite-role">Роль</label>
+          <select id="invite-role">
+            <option value="member">Сотрудник: свои дела</option>
+            <option value="senior">Старший: все дела</option>
+            <option value="head">Руководитель: всё и состав</option>
+          </select>
+        </div>
+        <button type="submit" class="wide" id="invite">Пригласить</button>
+        <p class="msg" id="invite-msg" role="status" aria-live="polite"></p>
+        <h2 class="gap hidden" id="pending-title">Ждут ответа</h2>
+        <ul class="list" id="org-invites"></ul>
+      </form>
+      <div class="card">
+        <button class="danger" id="leave-org">Выйти из организации</button>
+        <p class="msg" id="leave-msg" role="status" aria-live="polite"></p>
+      </div>
+    </section>
+
+    <section id="profile-view" class="hidden">
+      <form class="card" id="profile-form" novalidate>
+        <h1>Профиль</h1>
+        <p class="muted" id="profile-phone"></p>
+        <div class="field">
+          <label for="full-name">Как к Вам обращаться</label>
+          <input id="full-name" type="text" maxlength="200" autocomplete="name" placeholder="Фамилия, имя, отчество">
+        </div>
+        <button type="submit" class="wide" id="save-profile">Сохранить</button>
+        <p class="msg" id="profile-msg" role="status" aria-live="polite"></p>
+      </form>
+    </section>
+
+    <section id="admin-view" class="hidden">
+      <form class="card" id="admin-find" novalidate>
+        <h1>Управление</h1>
+        <div class="field">
+          <label for="admin-phone">Номер телефона пользователя</label>
+          <input id="admin-phone" type="tel" inputmode="tel" placeholder="+7 999 000-00-00" required>
+        </div>
+        <button type="submit" class="wide" id="admin-search">Найти</button>
+        <p class="msg" id="admin-msg" role="status" aria-live="polite"></p>
+      </form>
+      <div class="card hidden" id="admin-user">
+        <h2 id="admin-user-name"></h2>
+        <p class="muted" id="admin-user-meta"></p>
+        <div class="field">
+          <label for="admin-role">Служебная роль</label>
+          <select id="admin-role">
+            <option value="">Нет — обычный пользователь</option>
+            <option value="dispatcher">Диспетчер</option>
+            <option value="admin">Администратор</option>
+          </select>
+        </div>
+        <div class="row">
+          <button class="secondary" id="admin-save-role">Сохранить роль</button>
+          <button class="danger" id="admin-toggle"></button>
+        </div>
+        <p class="msg" id="admin-user-msg" role="status" aria-live="polite"></p>
+      </div>
+      <div class="card">
+        <h2>Служебные роли</h2>
+        <ul class="list" id="staff"></ul>
+      </div>
     </section>
   </main>
 </body>
