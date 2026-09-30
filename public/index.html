@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Вход · БЕРТЕЛ Дело</title>
+  <link rel="stylesheet" href="/app.css">
+  <script type="module" src="/login.js"></script>
+</head>
+<body>
+  <div class="test-mark hidden" id="test-mark">Проверочная версия · только тестовые данные</div>
+  <header class="top"><div class="brand">БЕРТЕЛ Дело<small>экспертиза, переводы, юристы</small></div></header>
+  <main>
+    <section class="card">
+      <h1>Вход</h1>
+      <form id="phone-form" novalidate>
+        <div class="field">
+          <label for="phone">Номер мобильного телефона</label>
+          <input id="phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+7 999 000-00-00" required>
+        </div>
+        <button type="submit" class="wide" id="get-code">Получить код</button>
+      </form>
+      <form id="code-form" class="hidden" novalidate>
+        <p class="muted" id="code-hint"></p>
+        <div class="field">
+          <label for="code">Код из СМС</label>
+          <input id="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required>
+        </div>
+        <button type="submit" class="wide" id="sign-in">Войти</button>
+        <button type="button" class="link" id="change-phone">Изменить номер</button>
+      </form>
+      <p class="msg" id="msg" role="status" aria-live="polite"></p>
+    </section>
+  </main>
+</body>
+</html>

@@ -1,0 +1,9 @@
+.git
+node_modules
+test-results
+tests
+infra
+.github
+*.md
+playwright.config.mjs
+.env

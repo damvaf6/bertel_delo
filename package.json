@@ -1,0 +1,23 @@
+{
+  "name": "bertel-delo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "migrate": "node src/migrate.mjs",
+    "test": "node --test --test-concurrency=1 \"tests/server/*.test.mjs\"",
+    "test:ui": "playwright test",
+    "test:all": "npm test && npm run test:ui"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1143.0",
+    "@aws-sdk/s3-request-presigner": "^3.1143.0",
+    "express": "^5.2.1",
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1"
+  }
+}

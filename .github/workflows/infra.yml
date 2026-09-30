@@ -1,0 +1,118 @@
+name: Infra (Yandex Cloud)
+
+# Контур БЕРТЕЛ Дело в Яндекс Облаке (база, файлы, копии, секреты).
+# PR: только проверка конфигурации, без доступа к облаку.
+# Ручной запуск: plan (показать, что изменится) или apply (создать/изменить). apply на prod — только по «да» Дамира.
+# Единственный секрет: YC_DELO_SA_KEY — ключ сервисного аккаунта с правами на облако (кладёт Дамир).
+# Остальные ключи создаются на время запуска и удаляются в конце.
+on:
+  pull_request:
+    paths: ['infra/**', '.github/workflows/infra.yml']
+  workflow_dispatch:
+    inputs:
+      env:
+        description: 'Контур'
+        type: choice
+        options: [stage, prod]
+        default: stage
+      action:
+        description: 'Действие'
+        type: choice
+        options: [plan, apply]
+        default: plan
+
+jobs:
+  validate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/terraform
+    steps:
+      - uses: actions/checkout@v5
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false
+      - run: terraform validate
+
+  deploy:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: delo-${{ inputs.env }}
+    concurrency: infra-${{ inputs.env }}
+    env:
+      ENV: ${{ inputs.env }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+
+      - name: yc CLI
+        run: |
+          curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -i /opt/yc -n
+          echo "/opt/yc/bin" >> $GITHUB_PATH
+
+      - name: Вход в облако
+        env:
+          SA_KEY: ${{ secrets.YC_DELO_SA_KEY }}
+        run: |
+          umask 077
+          printf '%s' "$SA_KEY" > "$RUNNER_TEMP/sa.json"
+          yc config set service-account-key "$RUNNER_TEMP/sa.json"
+          echo "YC_SERVICE_ACCOUNT_KEY_FILE=$RUNNER_TEMP/sa.json" >> $GITHUB_ENV
+          SA_ID=$(jq -r .service_account_id "$RUNNER_TEMP/sa.json")
+          FOLDER_OF_SA=$(yc iam service-account get --id "$SA_ID" --format json | jq -r .folder_id)
+          CLOUD_ID=$(yc resource-manager folder get --id "$FOLDER_OF_SA" --format json | jq -r .cloud_id)
+          echo "SA_ID=$SA_ID" >> $GITHUB_ENV
+          echo "CLOUD_ID=$CLOUD_ID" >> $GITHUB_ENV
+
+      - name: Каталог контура и бакет состояния (создаются один раз)
+        run: |
+          FOLDER="delo-$ENV"
+          FOLDER_ID=$(yc resource-manager folder get --name "$FOLDER" --cloud-id "$CLOUD_ID" --format json 2>/dev/null | jq -r .id || true)
+          if [ -z "$FOLDER_ID" ] || [ "$FOLDER_ID" = "null" ]; then
+            FOLDER_ID=$(yc resource-manager folder create --name "$FOLDER" --cloud-id "$CLOUD_ID" --description "БЕРТЕЛ Дело · $ENV" --format json | jq -r .id)
+          fi
+          yc config set folder-id "$FOLDER_ID"
+          echo "FOLDER_ID=$FOLDER_ID" >> $GITHUB_ENV
+          SUFFIX=$(echo -n "$FOLDER_ID" | sha256sum | cut -c1-6)
+          echo "SUFFIX=$SUFFIX" >> $GITHUB_ENV
+          STATE_BUCKET="delo-$ENV-tfstate-$SUFFIX"
+          echo "STATE_BUCKET=$STATE_BUCKET" >> $GITHUB_ENV
+          yc storage bucket get --name "$STATE_BUCKET" >/dev/null 2>&1 || \
+            yc storage bucket create --name "$STATE_BUCKET" --default-storage-class standard
+          yc storage bucket update --name "$STATE_BUCKET" --versioning versioning-enabled >/dev/null
+
+      - name: Временный ключ к бакету состояния
+        run: |
+          KEY=$(yc iam access-key create --service-account-id "$SA_ID" --description "infra run ${{ github.run_id }}" --format json)
+          echo "::add-mask::$(echo "$KEY" | jq -r .secret)"
+          echo "TMP_KEY_ID=$(echo "$KEY" | jq -r .access_key.id)" >> $GITHUB_ENV
+          echo "AWS_ACCESS_KEY_ID=$(echo "$KEY" | jq -r .access_key.key_id)" >> $GITHUB_ENV
+          echo "AWS_SECRET_ACCESS_KEY=$(echo "$KEY" | jq -r .secret)" >> $GITHUB_ENV
+
+      - name: terraform init
+        working-directory: infra/terraform
+        run: terraform init -input=false -backend-config="bucket=$STATE_BUCKET" -backend-config="key=delo-$ENV.tfstate"
+
+      - name: terraform ${{ inputs.action }}
+        working-directory: infra/terraform
+        run: |
+          cp "$ENV.tfvars.example" "$RUNNER_TEMP/run.tfvars"
+          sed -i "s/^name_suffix .*/name_suffix = \"$SUFFIX\"/" "$RUNNER_TEMP/run.tfvars"
+          ARGS="-input=false -var-file=$RUNNER_TEMP/run.tfvars -var cloud_id=$CLOUD_ID -var folder_id=$FOLDER_ID"
+          if [ "${{ inputs.action }}" = "apply" ]; then
+            terraform apply -auto-approve $ARGS
+            terraform output
+          else
+            terraform plan $ARGS
+          fi
+
+      - name: Удалить временный ключ
+        if: always()
+        run: |
+          [ -n "$TMP_KEY_ID" ] && yc iam access-key delete --id "$TMP_KEY_ID" || true
+          rm -f "$RUNNER_TEMP/sa.json" "$RUNNER_TEMP/run.tfvars"
