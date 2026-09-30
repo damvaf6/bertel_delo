@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Кабинет · БЕРТЕЛ Дело</title>
+  <link rel="stylesheet" href="/app.css">
+  <script type="module" src="/kabinet.js"></script>
+</head>
+<body>
+  <div class="test-mark hidden" id="test-mark">Проверочная версия · только тестовые данные</div>
+  <header class="top">
+    <div class="brand">БЕРТЕЛ Дело<small id="who"></small></div>
+    <button class="secondary" id="logout">Выйти</button>
+  </header>
+  <main>
+    <section id="list-view">
+      <div class="card">
+        <h1>Мои заявки</h1>
+        <ul class="list" id="orders"></ul>
+        <p class="muted hidden" id="orders-empty">Заявок пока нет.</p>
+      </div>
+      <form class="card" id="new-order" novalidate>
+        <h2>Новая заявка</h2>
+        <div class="field">
+          <label for="title">Коротко: что нужно</label>
+          <input id="title" type="text" maxlength="300" required placeholder="Например: оценка квартиры для суда">
+        </div>
+        <button type="submit" class="wide" id="create">Создать заявку</button>
+        <p class="msg" id="new-msg" role="status" aria-live="polite"></p>
+      </form>
+    </section>
+
+    <section id="order-view" class="hidden">
+      <button class="link" id="back">← Все заявки</button>
+      <div class="card">
+        <h1 id="order-title"></h1>
+        <p class="muted" id="order-meta"></p>
+      </div>
+      <div class="card">
+        <h2>Документы</h2>
+        <ul class="list" id="docs"></ul>
+        <p class="muted hidden" id="docs-empty">Документов пока нет.</p>
+        <div class="field" id="upload-box">
+          <p class="muted">Добавить файл (до 5 МБ)</p>
+          <label class="btn secondary" for="file">Выбрать файл</label>
+          <input id="file" type="file" class="visually-hidden" aria-label="Добавить файл (до 5 МБ)">
+        </div>
+        <p class="msg" id="doc-msg" role="status" aria-live="polite"></p>
+      </div>
+    </section>
+
+    <section id="missing-view" class="hidden card">
+      <h1>Заявка не найдена</h1>
+      <p class="muted">Её нет или у Вас нет к ней доступа.</p>
+      <button class="secondary" id="back2">К моим заявкам</button>
+    </section>
+  </main>
+</body>
+</html>

@@ -1,0 +1,6 @@
+env                   = "prod"
+name_suffix           = "xxxx"
+pg_preset             = "s3-c2-m8"    # 2 vCPU, 8 ГБ
+pg_disk_gb            = 20
+pg_backup_days        = 30
+files_noncurrent_days = 30

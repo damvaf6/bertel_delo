@@ -1,0 +1,7 @@
+# Пример для проверочного контура. Реальные ID каталога в репозиторий не кладём — они приходят из секретов выкладки.
+env                   = "stage"
+name_suffix           = "xxxx"
+pg_preset             = "b2.medium"   # 50% vCPU, 4 ГБ — экономичный
+pg_disk_gb            = 20
+pg_backup_days        = 14
+files_noncurrent_days = 30
