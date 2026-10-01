@@ -2,7 +2,7 @@
 // повторные уведомления ЮKassa — одна оплата и одна выплата на заявку (Б-16).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, login, client, setPlatformRole, makeSpecialist, ensurePrice } from '../helpers.mjs';
+import { startApp, login, client, setPlatformRole, makeSpecialist, ensurePaid } from '../helpers.mjs';
 import { splitAmount } from '../../src/money/money.mjs';
 
 let S, owner, dispatcher, spec;
@@ -24,7 +24,7 @@ async function doneOrder(price = 1_000_000) {
   const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty' })).body.order;
   await owner.req('PATCH', `/api/orders/${o.id}`, READY);
   await step(owner, o, 'matching', 'new');
-  await ensurePrice(S.sql, o.id, price);
+  await ensurePaid(S.sql, o.id, price);
   assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: spec.user.id, from: 'matching' })).status, 200);
   await step(spec, o, 'in_work', 'awaiting_executor');
   await spec.req('POST', `/api/orders/${o.id}/results`, Buffer.from('отчёт'), { raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': 'r.pdf' } });

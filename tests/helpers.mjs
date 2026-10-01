@@ -121,9 +121,15 @@ export async function setPlatformRole(sql, userId, role) {
   await sql`update users set platform_role = ${role} where id = ${userId}`;
 }
 
-// Цена заявки (без неё дело не предложить исполнителю, задача 1.6) — напрямую в базе, если ещё не назначена.
-export async function ensurePrice(sql, orderId, kop = 1_500_000) {
-  await sql`update orders set price_kop = coalesce(price_kop, ${kop}) where id = ${orderId}`;
+// Цена и оплата заявки (без них дело не предложить исполнителю, задачи 1.6 и 1.6а) — напрямую в базе, если ещё нет:
+// успешный платёж поддельной ЮKassa и отметка об оплате.
+export async function ensurePaid(sql, orderId, kop = 1_500_000) {
+  const [o] = await sql`update orders set price_kop = coalesce(price_kop, ${kop}) where id = ${orderId} returning *`;
+  if (o.paid_at) return;
+  const [u] = await sql`select owner_user_id from orders where id = ${orderId}`;
+  await sql`insert into payments (order_id, amount_kop, status, provider_id, created_by, paid_at)
+            values (${orderId}, ${o.price_kop}, 'succeeded', ${`pay_test_${orderId}`}, ${u.owner_user_id}, now())`;
+  await sql`update orders set paid_at = now() where id = ${orderId}`;
 }
 
 // Сделать человека специалистом с допусками (напрямую в базе — для проверок, не через кабинет администратора).

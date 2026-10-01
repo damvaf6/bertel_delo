@@ -182,6 +182,8 @@ export function matchOps() {
           if (!['matching', 'awaiting_executor'].includes(cur.status)) throw new HttpError(409, 'bad_transition', `Из статуса «${cur.status}» так нельзя`);
           // Исполнитель соглашается на известное вознаграждение: без цены дело не предлагается (1.6).
           if (!cur.price_kop) throw new HttpError(409, 'no_price', 'Сначала назначьте цену');
+          // Заказчик платит при заказе: неоплаченное дело исполнителю не предлагается (решение Дамира 01.10.2026).
+          if (!cur.paid_at) throw new HttpError(409, 'not_paid', 'Заявка ещё не оплачена заказчиком');
           const cand = (await candidatesFor(tx, cur)).find((c) => c.user_id === specialistId);
           if (!cand) throw new HttpError(409, 'not_eligible', 'Этому специалисту дело отдать нельзя: нет допуска, не принимает дела или это его дело');
           const reassign = cur.status === 'awaiting_executor';

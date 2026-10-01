@@ -7,6 +7,7 @@
 //                                                                  → { id, status, confirmationUrl }
 //   payments.getPayment({ id })                                    → { id, status: pending | succeeded | canceled }
 //   payments.createPayout({ idempotenceKey, executorId, amountKop, description }) → { id, status: succeeded | failed }
+//   payments.createRefund({ idempotenceKey, paymentId, amountKop, description })  → { id, status: succeeded | failed }
 //   ai.complete({ purpose, messages })                             → { text, model }
 //   mail.send({ to, subject, text })                               → { id }
 import crypto from 'node:crypto';
@@ -33,7 +34,8 @@ const FAKES = {
 };
 
 // Поддельная ЮKassa: «страница оплаты» сразу возвращает на returnUrl; при первой проверке незавершённый платёж
-// получает исход nextOutcome (по умолчанию «оплачен»). Автотесты могут задать «отменён» и неудачу выплаты (payoutOutcome).
+// получает исход nextOutcome (по умолчанию «оплачен»). Автотесты могут задать «отменён», неудачу выплаты (payoutOutcome)
+// и неудачу возврата (refundOutcome).
 function fakePayments() {
   const store = new Map();
   const fake = makeFake('payments', {
@@ -50,11 +52,17 @@ function fakePayments() {
     createPayout: async () => (fake.payoutOutcome === 'failed'
       ? { id: id('payout'), status: 'failed', failure: 'тестовый отказ выплаты' }
       : { id: id('payout'), status: 'succeeded' }),
+    createRefund: async () => (fake.refundOutcome === 'failed'
+      ? { id: id('refund'), status: 'failed', failure: 'тестовый отказ возврата' }
+      : { id: id('refund'), status: 'succeeded' }),
   });
   fake.nextOutcome = 'succeeded';
   fake.payoutOutcome = 'succeeded';
+  fake.refundOutcome = 'succeeded';
   const reset = fake.reset;
-  fake.reset = () => { reset(); store.clear(); fake.nextOutcome = 'succeeded'; fake.payoutOutcome = 'succeeded'; };
+  fake.reset = () => {
+    reset(); store.clear(); fake.nextOutcome = 'succeeded'; fake.payoutOutcome = 'succeeded'; fake.refundOutcome = 'succeeded';
+  };
   return fake;
 }
 

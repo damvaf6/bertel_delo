@@ -2,7 +2,7 @@
 // повторы неотправленных СМС, приглашение по номеру без учётной записи, проверка реестра.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, login, setPlatformRole, makeSpecialist, ensurePrice, makeOrg, addMember } from '../helpers.mjs';
+import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, addMember } from '../helpers.mjs';
 import { DELIVERY, deliverPending } from '../../src/notify/notify.mjs';
 import { EVENTS, TYPES, validateRegistry } from '../../src/notify/registry.mjs';
 
@@ -39,7 +39,7 @@ async function submitted() {
   const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: TITLE })).body.order;
   assert.equal((await owner.req('PATCH', `/api/orders/${o.id}`, READY)).status, 200);
   assert.equal((await step(owner, o, 'matching', 'new')).status, 200);
-  await ensurePrice(S.sql, o.id);
+  await ensurePaid(S.sql, o.id);
   return o;
 }
 const offer = (o, to, from = 'matching') => dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: to.user.id, from });

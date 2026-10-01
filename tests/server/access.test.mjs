@@ -2,7 +2,7 @@
 // Последняя проверка сверяет: в реестре нет операций, не покрытых этой таблицей.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, login, client, makeOrg, addMember, setPlatformRole, ensurePrice } from '../helpers.mjs';
+import { startApp, login, client, makeOrg, addMember, setPlatformRole, ensurePaid } from '../helpers.mjs';
 
 const covered = new Set();
 const cover = (id) => covered.add(id);
@@ -446,7 +446,7 @@ test('orders.status: шаги заказчика — только его сто�
   assert.equal((await st(U.dispatcher, own, 'awaiting_executor')).status, 409);
   await S.sql`insert into specialists (user_id) values (${U.spec.user.id})`;
   await S.sql`insert into specialist_permits (user_id, module, service) values (${U.spec.user.id}, 'expertise', 'realty')`;
-  await ensurePrice(S.sql, own.id);
+  await ensurePaid(S.sql, own.id);
   assert.equal((await U.dispatcher.req('POST', `/api/orders/${own.id}/offer`, { specialist_id: U.spec.user.id, from: 'matching' })).status, 200);
   assert.equal((await st(U.owner, own, 'in_work')).status, 403, 'принять дело может только исполнитель');
   assert.equal((await st(U.dispatcher, own, 'in_work')).status, 403);
@@ -511,7 +511,7 @@ test('специалисты и подбор: допуски — только а
   assert.ok(!cands.some((c) => c.user_id === U.owner.user.id), 'в подборе только допущенные');
   // Дело не видно исполнителю, пока ему не предложили; после предложения — видно только оно, но не чужие.
   assert.equal((await U.spec.req('GET', `/api/orders/${o.id}`)).status, 404);
-  await ensurePrice(S.sql, o.id);
+  await ensurePaid(S.sql, o.id);
   assert.equal((await offer(U.dispatcher)).status, 200);
   assert.equal((await U.spec.req('GET', `/api/orders/${o.id}`)).status, 200);
   assert.equal((await U.spec.req('GET', `/api/orders/${ownOrder.id}`)).status, 404);
@@ -527,7 +527,7 @@ test('работа по делу: результат — только испол
   const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Работа по делу' })).body.order;
   assert.equal((await U.owner.req('PATCH', `/api/orders/${o.id}`, { ...READY, deadline: soon() })).status, 200);
   assert.equal((await U.owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
-  await ensurePrice(S.sql, o.id);
+  await ensurePaid(S.sql, o.id);
   assert.equal((await U.dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: U.spec.user.id, from: 'matching' })).status, 200);
   const result = (c, name = 'отчёт.pdf') => c.req('POST', `/api/orders/${o.id}/results`, Buffer.from('тестовый отчёт'), {
     raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent(name) },

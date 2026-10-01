@@ -4,7 +4,8 @@
 import { HttpError } from '../http/core.mjs';
 import { LEVEL, isStaff, memberOf, orderLevel, orderSides, visibleOrdersFilter } from '../access/policy.mjs';
 import { BASIS_KINDS, cleanValues, missingRequired } from '../modules/index.mjs';
-import { STATUSES, STATUS_NAME, TRANSITIONS, addDays, availableActions, findTransition, isOverdue, todayMsk } from '../orders/workflow.mjs';
+import { STATUSES, STATUS_NAME, TRANSITIONS, WORK_STARTED, addDays, availableActions, findTransition, isOverdue, todayMsk } from '../orders/workflow.mjs';
+import { runSettlement, settleCancel, settleDone } from '../money/money.mjs';
 import { audit, oneOf, text, uuidFrom } from './util.mjs';
 import { reviewState } from './work-ops.mjs';
 import { notifyStatus } from '../notify/notify.mjs';
@@ -216,13 +217,15 @@ export function orderOps() {
       // Смена статуса: какой шаг и чьей стороне разрешён — src/orders/workflow.mjs; кто какая сторона — policy.mjs.
       id: 'orders.status', method: 'POST', path: '/api/orders/:id/status', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
-      async handler({ sql, actor, order, body, registry }) {
+      async handler({ sql, actor, order, body, registry, cfg, providers }) {
         const to = String(body?.to ?? '');
         // from — статус, который человек видел на экране: если его уже сменили, шаг не делается (иначе, например,
         // «отменить» могло бы сработать уже для другого этапа).
         const from = String(body?.from ?? '');
         if (!STATUS_NAME[to] || !STATUS_NAME[from]) throw new HttpError(400, 'bad_status', 'Неизвестный статус');
         const reason = optionalText(body?.reason, 'Причина', 1000);
+        const test = cfg.providers.payments === 'fake';
+        let settlement = {};
         const updated = await sql.tx(async (tx) => {
           // Строка заявки блокируется: два одновременных шага не пройдут оба.
           const cur = await tx.one`select * from orders where id = ${order.id} for update`;
@@ -240,7 +243,9 @@ export function orderOps() {
           }
           // Сдать на проверку можно только с результатом; «готово» — только если все правила проверки в порядке (1.5).
           if (cur.status === 'in_work' && to === 'review') {
-            const res = await tx.one`select 1 from documents where order_id = ${cur.id} and kind = 'result' and deleted_at is null limit 1`;
+            // Файл результата — именно этого исполнителя (после передачи дела файлы прежнего не в счёт).
+            const res = await tx.one`select 1 from documents where order_id = ${cur.id} and kind = 'result' and deleted_at is null
+                                     and uploaded_by = ${cur.executor_user_id} limit 1`;
             if (!res) throw new HttpError(400, 'no_result', 'Сначала добавьте файл результата');
           }
           if (cur.status === 'review' && to === 'done') {
@@ -250,8 +255,26 @@ export function orderOps() {
             const left = checks.filter((c) => !c.verdict);
             if (left.length) throw new HttpError(409, 'review_incomplete', `Не все правила проверены: ${left.map((c) => c.title).join('; ')}`);
           }
-          // Закрыть можно только оплаченную заявку (1.6): оплата — после проверки, затем выдача и выплата исполнителю.
+          // Закрыть можно только оплаченную заявку (оплата — при заказе, до предложения исполнителю; 1.6а).
           if (to === 'closed' && !cur.paid_at) throw new HttpError(409, 'not_paid', 'Заявка ещё не оплачена');
+          // Отмена после начала работ: диспетчер указывает, по чьей причине; при отказе заказчика — сделанную долю работы.
+          let fault = null;
+          let percent = null;
+          if (to === 'cancelled' && WORK_STARTED.includes(cur.status)) {
+            fault = String(body?.fault ?? '');
+            if (!['executor', 'customer'].includes(fault)) throw new HttpError(400, 'fault_required', 'Укажите, по чьей причине отмена: исполнителя или заказчика');
+            if (fault === 'customer') {
+              percent = Number(body?.done_percent);
+              if (body?.done_percent === '' || body?.done_percent == null || !Number.isInteger(percent) || percent < 0 || percent > 100) {
+                throw new HttpError(400, 'bad_percent', 'Укажите, какая часть работы сделана: целое число процентов от 0 до 100');
+              }
+            }
+          }
+          // Деньги: «готово» — выплата исполнителю и закрывающие документы; отмена оплаченной — возврат (и оплата сделанной части).
+          if (cur.status === 'review' && to === 'done') settlement = { payoutId: await settleDone(tx, cur, { test }) };
+          if (to === 'cancelled') settlement = await settleCancel(tx, cur, { fault, percent, reason, test });
+          // Исполнитель, получающий оплату за сделанную часть, сохраняет доступ к отменённому делу (видит отчёт агента).
+          const keepExecutor = to === 'cancelled' && !!settlement.payoutId;
           // Предложение исполнителю закрывается: принято, отказ исполнителя, либо снято (диспетчером или отменой).
           if (cur.executor_user_id && (to === 'in_work' || to === 'matching' || to === 'cancelled') && cur.status === 'awaiting_executor') {
             const outcome = to === 'in_work' ? 'accepted' : t.by === 'executor' ? 'declined' : 'withdrawn';
@@ -260,7 +283,10 @@ export function orderOps() {
           }
           const o = await tx.one`
             update orders set status = ${to}, updated_at = now(),
-                   executor_user_id = case when ${to} in ('matching', 'cancelled') then null else executor_user_id end,
+                   executor_user_id = case when ${to} = 'matching' or (${to} = 'cancelled' and not ${keepExecutor}) then null
+                                           else executor_user_id end,
+                   cancel_fault = case when ${to} = 'cancelled' then ${fault} else cancel_fault end,
+                   done_percent = case when ${to} = 'cancelled' then ${percent}::int else done_percent end,
                    submitted_at = case when ${to} = 'matching' then coalesce(submitted_at, now()) else submitted_at end,
                    review_round = case when ${to} = 'review' then review_round + 1 else review_round end
             where id = ${cur.id} returning *`;
@@ -270,6 +296,8 @@ export function orderOps() {
           await notifyStatus(tx, { actor, before: cur, to, by: t.by });
           return o;
         });
+        // Выплата и возврат — через поставщика, уже после транзакции; неудачу повторяет диспетчер.
+        await runSettlement(sql, providers, settlement);
         return { order: await orderView(sql, registry, updated) };
       },
     },

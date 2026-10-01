@@ -23,8 +23,11 @@ export const STATUS_NAME = Object.fromEntries(STATUSES.map((s) => [s.id, s.name]
 export const DEADLINE_OFF = ['done', 'closed', 'cancelled'];
 // Заявка завершена: файлы не добавляются и не удаляются.
 export const FINAL = ['closed', 'cancelled'];
+// Работа начата: отмена — только диспетчером и с указанием, по чьей причине (исполнитель / заказчик и сделанная доля).
+export const WORK_STARTED = ['in_work', 'review'];
 
 // Отмена заказчиком — только до начала работ; после — через диспетчера, с причиной (решение Дамира 30.09.2026).
+// Отмена диспетчером после начала работ — с указанием, по чьей причине (деньги — src/money/money.mjs, settleCancel).
 const CUSTOMER_CANCEL_FROM = ['new', 'matching', 'awaiting_executor'];
 const DISPATCHER_CANCEL_FROM = ['matching', 'awaiting_executor', 'in_work', 'review'];
 
@@ -36,6 +39,9 @@ export const TRANSITIONS = [
   { from: 'awaiting_executor', to: 'matching', by: 'dispatcher', name: 'Вернуть в подбор', reason: true },
   { from: 'in_work', to: 'review', by: 'executor', name: 'Сдать на проверку' },
   { from: 'review', to: 'in_work', by: 'dispatcher', name: 'Вернуть на доработку', reason: true },
+  // Исполнитель не справляется — дело другому; оплата заказчика остаётся в силе (решение Дамира 01.10.2026).
+  { from: 'in_work', to: 'matching', by: 'dispatcher', name: 'Передать другому исполнителю', reason: true },
+  { from: 'review', to: 'matching', by: 'dispatcher', name: 'Передать другому исполнителю', reason: true },
   { from: 'review', to: 'done', by: 'dispatcher', name: 'Проверено, готово' },
   { from: 'done', to: 'closed', by: 'customer', name: 'Принять и закрыть' },
   { from: 'done', to: 'closed', by: 'dispatcher', name: 'Закрыть заявку' },
