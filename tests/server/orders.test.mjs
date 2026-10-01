@@ -53,6 +53,14 @@ async function step(c, o, to, reason, from) {
 const upload = (c, o, kind = 'other', name = 'файл.pdf') => c.req('POST', `/api/orders/${o.id}/documents`, Buffer.from('тестовое определение'), {
   raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': kind },
 });
+// Исполнитель прикладывает результат; диспетчер отмечает все правила проверки «в порядке» (задача 1.5).
+const putResult = (o) => spec.req('POST', `/api/orders/${o.id}/results`, Buffer.from('тестовый отчёт'), {
+  raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('отчёт.pdf') },
+});
+async function passReview(o) {
+  const r = (await dispatcher.req('GET', `/api/orders/${o.id}/review`)).body;
+  for (const c of r.checks) assert.equal((await dispatcher.req('PUT', `/api/orders/${o.id}/review/${c.id}`, { verdict: 'ok', round: r.round })).status, 200);
+}
 async function ready(c = owner, extra = {}) {
   const o = await create(c, extra);
   const r = await patch(c, o, READY);
@@ -259,9 +267,13 @@ test('весь путь: новая → подбор → ждёт исполни
   assert.deepEqual((await owner.req('GET', `/api/orders/${o.id}`)).body.actions, []);
   assert.equal((await step(spec, o, 'done')).status, 409, 'через проверку не перепрыгнуть');
   assert.equal((await step(dispatcher, o, 'review')).status, 403, 'сдаёт исполнитель, не диспетчер');
+  assert.equal((await step(spec, o, 'review')).status, 400, 'без файла результата не сдать');
+  assert.equal((await putResult(o)).status, 201);
   assert.equal((await step(spec, o, 'review')).status, 200);
   assert.equal((await step(dispatcher, o, 'in_work', 'Нет расчёта аналогов')).status, 200);
   assert.equal((await step(spec, o, 'review')).status, 200);
+  assert.equal((await step(dispatcher, o, 'done')).status, 409, 'не все правила проверены');
+  await passReview(o);
   assert.equal((await step(dispatcher, o, 'done')).status, 200);
   assert.equal((await step(owner, o, 'closed')).status, 200, 'заказчик принимает результат');
   assert.equal((await step(dispatcher, o, 'cancelled', 'поздно')).status, 409);

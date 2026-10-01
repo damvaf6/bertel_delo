@@ -6,6 +6,7 @@ import { LEVEL, isStaff, memberOf, orderLevel, orderSides, visibleOrdersFilter }
 import { BASIS_KINDS, cleanValues, missingRequired } from '../modules/index.mjs';
 import { STATUSES, STATUS_NAME, TRANSITIONS, addDays, availableActions, findTransition, isOverdue, todayMsk } from '../orders/workflow.mjs';
 import { audit, oneOf, text, uuidFrom } from './util.mjs';
+import { reviewState } from './work-ops.mjs';
 
 const LEVEL_NAME = ['none', 'read', 'write', 'manage'];
 const DEADLINE_MAX_DAYS = 2 * 365;
@@ -234,6 +235,18 @@ export function orderOps() {
             const missing = await problemsForSubmit(tx, registry, cur);
             if (missing.length) throw new HttpError(400, 'incomplete', `Не хватает: ${missing.join(', ')}`);
           }
+          // Сдать на проверку можно только с результатом; «готово» — только если все правила проверки в порядке (1.5).
+          if (cur.status === 'in_work' && to === 'review') {
+            const res = await tx.one`select 1 from documents where order_id = ${cur.id} and kind = 'result' and deleted_at is null limit 1`;
+            if (!res) throw new HttpError(400, 'no_result', 'Сначала добавьте файл результата');
+          }
+          if (cur.status === 'review' && to === 'done') {
+            const { checks } = await reviewState(tx, registry, cur);
+            const issues = checks.filter((c) => c.verdict === 'issue');
+            if (issues.length) throw new HttpError(409, 'review_issues', `Есть замечания — верните результат на доработку: ${issues.map((c) => c.title).join('; ')}`);
+            const left = checks.filter((c) => !c.verdict);
+            if (left.length) throw new HttpError(409, 'review_incomplete', `Не все правила проверены: ${left.map((c) => c.title).join('; ')}`);
+          }
           // Предложение исполнителю закрывается: принято, отказ исполнителя, либо снято (диспетчером или отменой).
           if (cur.executor_user_id && (to === 'in_work' || to === 'matching' || to === 'cancelled') && cur.status === 'awaiting_executor') {
             const outcome = to === 'in_work' ? 'accepted' : t.by === 'executor' ? 'declined' : 'withdrawn';
@@ -243,7 +256,8 @@ export function orderOps() {
           const o = await tx.one`
             update orders set status = ${to}, updated_at = now(),
                    executor_user_id = case when ${to} in ('matching', 'cancelled') then null else executor_user_id end,
-                   submitted_at = case when ${to} = 'matching' then coalesce(submitted_at, now()) else submitted_at end
+                   submitted_at = case when ${to} = 'matching' then coalesce(submitted_at, now()) else submitted_at end,
+                   review_round = case when ${to} = 'review' then review_round + 1 else review_round end
             where id = ${cur.id} returning *`;
           await tx`insert into order_status_history (order_id, from_status, to_status, actor_id, side, reason)
                    values (${cur.id}, ${cur.status}, ${to}, ${actor.id}, ${t.by}, ${reason})`;

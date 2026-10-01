@@ -127,6 +127,12 @@ export function createRegistry(modules = DEFAULT_MODULES) {
       if (!s) return null;
       return { module: m, service: s, fields: [...(m.fields ?? []), ...(s.fields ?? [])] };
     },
+    // Правила проверки результата для услуги (общие для модуля и только для этой услуги).
+    checks(moduleId, serviceId) {
+      const m = modulesList.find((x) => x.id === moduleId);
+      if (!m?.services.some((x) => x.id === serviceId)) return [];
+      return m.checks.filter((c) => !c.services || c.services.includes(serviceId)).map((c) => ({ id: c.id, title: c.title }));
+    },
     catalog() {
       return modulesList.map((m) => ({
         id: m.id,

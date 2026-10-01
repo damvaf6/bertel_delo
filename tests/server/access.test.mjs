@@ -520,6 +520,99 @@ test('специалисты и подбор: допуски — только а
   assert.equal((await U.spec.req('GET', `/api/orders/${o.id}/candidates`)).status, 403);
 });
 
+test('работа по делу: результат — только исполнитель, заказчику — после проверки; переписка; отметки проверки — только диспетчер', async () => {
+  for (const id of ['results.upload', 'messages.list', 'messages.post', 'review.get', 'review.mark']) cover(id);
+  const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Работа по делу' })).body.order;
+  assert.equal((await U.owner.req('PATCH', `/api/orders/${o.id}`, { ...READY, deadline: soon() })).status, 200);
+  assert.equal((await U.owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
+  assert.equal((await U.dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: U.spec.user.id, from: 'matching' })).status, 200);
+  const result = (c, name = 'отчёт.pdf') => c.req('POST', `/api/orders/${o.id}/results`, Buffer.from('тестовый отчёт'), {
+    raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent(name) },
+  });
+
+  // Переписка: пишут заказчик, исполнитель, диспетчер; администратор только читает; посторонние не видят.
+  const post = (c, body) => c.req('POST', `/api/orders/${o.id}/messages`, { body });
+  for (const who of ['owner', 'spec', 'dispatcher']) assert.equal((await post(U[who], `Сообщение: ${who}`)).status, 201, who);
+  assert.equal((await post(U.admin, 'администратор')).status, 403);
+  for (const who of ['stranger', 'headB', 'memberA', 'headA']) {
+    assert.equal((await post(U[who], 'чужой')).status, 404, `${who}: писать`);
+    assert.equal((await U[who].req('GET', `/api/orders/${o.id}/messages`)).status, 404, `${who}: читать`);
+  }
+  assert.equal((await post(U.owner, '   ')).status, 400, 'пустое сообщение');
+  const seen = (await U.owner.req('GET', `/api/orders/${o.id}/messages`)).body;
+  assert.deepEqual(seen.messages.map((m) => [m.side, m.mine]), [['customer', true], ['executor', false], ['dispatcher', false]]);
+  assert.ok(seen.messages.every((m) => m.author_name === null), 'заказчик не видит имён (исполнителя в том числе)');
+  assert.equal(seen.can_write, true);
+  const adminView = (await U.admin.req('GET', `/api/orders/${o.id}/messages`)).body;
+  assert.equal(adminView.messages.length, 3);
+  assert.equal(adminView.can_write, false);
+
+  // Результат: пока дело не принято — нельзя; загружает только исполнитель.
+  assert.equal((await result(U.spec)).status, 409, 'дело ещё не принято');
+  assert.equal((await U.spec.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  for (const who of ['owner', 'dispatcher', 'admin']) assert.equal((await result(U[who])).status, 403, `${who}: результат`);
+  for (const who of ['stranger', 'headB']) assert.equal((await result(U[who])).status, 404, `${who}: результат`);
+  const up = await result(U.spec);
+  assert.equal(up.status, 201);
+  const doc = up.body.document;
+  assert.equal(doc.kind, 'result');
+  // Заказчик не видит результат до проверки: ни в списке, ни ссылкой, ни удалить.
+  const ownerDocs = (await U.owner.req('GET', `/api/orders/${o.id}/documents`)).body;
+  assert.ok(!ownerDocs.documents.some((d) => d.id === doc.id));
+  assert.equal(ownerDocs.results_hidden, true);
+  assert.equal((await U.owner.req('GET', `/api/documents/${doc.id}/link`)).status, 404);
+  assert.equal((await U.owner.req('DELETE', `/api/documents/${doc.id}`)).status, 404);
+  assert.ok((await U.dispatcher.req('GET', `/api/orders/${o.id}/documents`)).body.documents.some((d) => d.id === doc.id));
+  assert.equal((await U.dispatcher.req('GET', `/api/documents/${doc.id}/link`)).status, 200);
+  assert.equal((await U.dispatcher.req('DELETE', `/api/documents/${doc.id}`)).status, 403);
+  assert.equal((await U.stranger.req('GET', `/api/documents/${doc.id}/link`)).status, 404);
+  // Свой несданный результат исполнитель может убрать; документы заказчика — нет.
+  const extra = (await result(U.spec, 'лишний.pdf')).body.document;
+  assert.equal((await U.spec.req('DELETE', `/api/documents/${extra.id}`)).status, 204);
+  const custDoc = await upload(U.owner, o.id, 'заказчик.txt');
+  assert.equal((await U.spec.req('DELETE', `/api/documents/${custDoc.id}`)).status, 403);
+  assert.equal((await U.spec.req('GET', `/api/documents/${custDoc.id}/link`)).status, 200, 'документы заказчика исполнителю нужны для работы');
+
+  // Проверка: до сдачи отметки не ставятся; подробности — диспетчеру и исполнителю, заказчику — итог.
+  const mark = (c, check, body) => c.req('PUT', `/api/orders/${o.id}/review/${check}`, body);
+  assert.equal((await mark(U.dispatcher, 'calculation', { verdict: 'ok', round: 0 })).status, 409);
+  assert.equal((await U.spec.req('POST', `/api/orders/${o.id}/status`, { to: 'review', from: 'in_work' })).status, 200);
+  assert.equal((await U.spec.req('DELETE', `/api/documents/${doc.id}`)).status, 409, 'сданный результат не убрать');
+  assert.equal((await result(U.spec)).status, 409, 'после сдачи — только через доработку');
+  const rv = (await U.dispatcher.req('GET', `/api/orders/${o.id}/review`)).body;
+  assert.equal(rv.round, 1);
+  assert.equal(rv.can_mark, true);
+  assert.equal(rv.details, true);
+  assert.equal((await U.spec.req('GET', `/api/orders/${o.id}/review`)).body.can_mark, false);
+  const ov = (await U.owner.req('GET', `/api/orders/${o.id}/review`)).body;
+  assert.equal(ov.details, false);
+  assert.equal(ov.checks, undefined, 'заказчику — только итог');
+  for (const who of ['owner', 'spec', 'admin']) assert.equal((await mark(U[who], 'calculation', { verdict: 'ok', round: 1 })).status, 403, who);
+  for (const who of ['stranger', 'headB']) {
+    assert.equal((await mark(U[who], 'calculation', { verdict: 'ok', round: 1 })).status, 404, who);
+    assert.equal((await U[who].req('GET', `/api/orders/${o.id}/review`)).status, 404, who);
+  }
+  assert.equal((await mark(U.dispatcher, 'нет-такого', { verdict: 'ok', round: 1 })).status, 404);
+  assert.equal((await mark(U.dispatcher, 'calculation', { verdict: 'issue', round: 1 })).status, 400, 'замечание — с пояснением');
+  assert.equal((await mark(U.dispatcher, 'calculation', { verdict: 'ok', round: 2 })).status, 409, 'не тот круг');
+  for (const c of rv.checks) assert.equal((await mark(U.dispatcher, c.id, { verdict: 'ok', round: 1 })).status, 200);
+  assert.equal((await U.dispatcher.req('POST', `/api/orders/${o.id}/status`, { to: 'done', from: 'review' })).status, 200);
+
+  // После проверки заказчик видит результат и скачивает, но не удаляет; итог проверки — «всё в порядке».
+  const after = (await U.owner.req('GET', `/api/orders/${o.id}/documents`)).body;
+  assert.ok(after.documents.some((d) => d.id === doc.id && d.kind === 'result'));
+  assert.equal(after.results_hidden, false);
+  assert.equal((await U.owner.req('GET', `/api/documents/${doc.id}/link`)).status, 200);
+  assert.equal((await U.owner.req('DELETE', `/api/documents/${doc.id}`)).status, 403);
+  const sum = (await U.owner.req('GET', `/api/orders/${o.id}/review`)).body.summary;
+  assert.equal(sum.ok, sum.total);
+  assert.equal((await U.headA.req('GET', `/api/documents/${doc.id}/link`)).status, 404, 'чужая организация');
+  // Закрытая заявка: переписка закрыта.
+  assert.equal((await U.owner.req('POST', `/api/orders/${o.id}/status`, { to: 'closed', from: 'done' })).status, 200);
+  assert.equal((await post(U.owner, 'после закрытия')).status, 409);
+  assert.equal((await U.owner.req('GET', `/api/orders/${o.id}/messages`)).body.can_write, false);
+});
+
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {
   const PUBLIC = ['health', 'auth.code', 'auth.verify', 'files.memory', 'test.calls', 'test.script', 'test.reset'];
   const ops = S.app.locals.ops;
