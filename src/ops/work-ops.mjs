@@ -4,7 +4,8 @@
 // Проверка результата — по списку правил модуля (src/modules/): по каждому правилу проверяющий ставит «в порядке» или
 // «замечание» с пояснением. «Готово» — только когда все правила текущего круга в порядке (src/ops/order-ops.mjs).
 import { HttpError } from '../http/core.mjs';
-import { isStaff, messageSide, orderSides, seesReviewDetails } from '../access/policy.mjs';
+import { aiReviewSide, isStaff, messageSide, orderSides, seesReviewDetails } from '../access/policy.mjs';
+import { aiReviewView } from '../ai/ai.mjs';
 import { FINAL } from '../orders/workflow.mjs';
 import { audit, text } from './util.mjs';
 import { notifyMessage } from '../notify/notify.mjs';
@@ -75,14 +76,15 @@ export function workOps() {
       },
     },
     {
-      // Проверка результата: служебные и исполнитель видят отметки по правилам; заказчик — только итог.
+      // Проверка результата: служебные и исполнитель видят отметки по правилам и подсказки ИИ; заказчик — только итог.
       id: 'review.get', method: 'GET', path: '/api/orders/:id/review', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
       async handler({ sql, actor, order, registry }) {
         const st = await reviewState(sql, registry, order);
         const canMark = order.status === 'review' && orderSides(actor, order).includes('dispatcher');
         if (!seesReviewDetails(actor, order)) return { round: st.round, details: false, summary: st.summary, can_mark: false };
-        return { ...st, details: true, can_mark: canMark };
+        // Подсказки ИИ (1.8) — тем же, кто видит отметки; заказчику — нет.
+        return { ...st, details: true, can_mark: canMark, can_ai: !!aiReviewSide(actor, order), ai: await aiReviewView(sql, order) };
       },
     },
     {

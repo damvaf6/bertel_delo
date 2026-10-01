@@ -795,3 +795,124 @@ test('деньги при отмене: передача другому испо
   await sctx.close();
   await dctx.close();
 });
+
+test('помощник: человек описывает проблему, ИИ разъясняет и предлагает услугу, заявка-черновик; ассистент с личной и рабочей памятью; модель видна администратору', async ({ page }) => {
+  const me = await signIn(page, '+79990000581');
+  await db(async (c) => {
+    const { rows: [org] } = await c.query("insert into organizations (name) values ('Тестовое бюро помощника') returning id");
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head')", [org.id, me.id]);
+  });
+  await page.goto('/kabinet');
+  await page.getByRole('link', { name: 'Спросить помощника' }).click();
+  await expect(page.getByRole('heading', { name: 'Помощник' })).toBeVisible();
+  await page.getByRole('button', { name: 'Разобраться' }).click();
+  await expect(page.locator('#problem-msg')).toHaveText('Опишите, что случилось');
+  await shot(page, '49-pomoshnik');
+
+  await page.getByLabel('Что случилось').fill('Суд назначил оценку квартиры в Москве при разделе имущества. Что мне делать?');
+  await page.getByRole('button', { name: 'Разобраться' }).click();
+  await expect(page.locator('#pa-explanation')).toContainText('независимая оценка');
+  await expect(page.locator('#pa-steps li')).toHaveCount(2);
+  await expect(page.locator('#pa-specialist')).toContainText('Оценка недвижимости');
+  await expect(page.getByLabel('Услуга для заявки')).toHaveValue('expertise/realty');
+  await expect(page.locator('#pa-disclaimer')).toContainText('не юридическая услуга');
+  await shot(page, '50-pomoshnik-razbor');
+
+  await page.getByRole('button', { name: 'Создать заявку' }).click();
+  await expect(page).toHaveURL(/#order=/);
+  await expect(page.locator('#order-status')).toHaveText('Новая');
+  await expect(page.locator('#order-title')).toContainText('Оценка по описанию');
+  await expect(page.getByLabel('Что ещё важно знать')).toHaveValue(/Суд назначил оценку квартиры/);
+  await expect(page.getByLabel('Для чего нужна оценка')).toHaveValue('court');
+  await shot(page, '51-zayavka-iz-razbora');
+
+  // Ассистент: вопрос о заявке в личной памяти; в памяти организации разговор отдельный.
+  await page.goto('/kabinet#assistant');
+  await expect(page.getByText('Разговор пока пуст.')).toBeVisible();
+  await page.getByLabel('О какой заявке (можно не выбирать)').selectOption({ index: 1 });
+  await page.getByLabel('Вопрос').fill('Какие документы подготовить к осмотру?');
+  await page.getByRole('button', { name: 'Спросить' }).click();
+  await expect(page.locator('#as-messages li')).toHaveCount(2);
+  await expect(page.locator('#as-messages li.assistant')).toContainText('Какие документы подготовить к осмотру?');
+  await shot(page, '52-assistent');
+  await page.getByLabel('Раздел памяти').selectOption({ label: 'Тестовое бюро помощника' });
+  await expect(page.getByText('Разговор пока пуст.')).toBeVisible();
+  await expect(page.locator('#as-order option')).toHaveCount(1);
+  await page.getByLabel('Вопрос').fill('Как распределить дела между сотрудниками?');
+  await page.getByRole('button', { name: 'Спросить' }).click();
+  await expect(page.locator('#as-messages li')).toHaveCount(2);
+  await shot(page, '53-assistent-organizaciya');
+  page.on('dialog', (d) => d.accept());
+  await page.getByRole('button', { name: 'Очистить память' }).click();
+  await expect(page.locator('#as-msg')).toHaveText('Память очищена');
+  await page.getByLabel('Раздел памяти').selectOption({ label: 'Личное' });
+  await expect(page.locator('#as-messages li')).toHaveCount(2);
+
+  // Администратор видит, какая модель ИИ работает.
+  await db((c) => c.query("update users set platform_role = 'admin' where id = $1", [me.id]));
+  await page.goto('/kabinet#admin');
+  await page.reload(); // роль поменялась — кабинет перечитывает, кто вошёл
+  await expect(page.locator('#admin-ai')).toContainText('Поддельная модель (проверки)');
+  await expect(page.locator('#admin-ai')).toContainText('не задана');
+  await shot(page, '56-upravlenie-ii');
+});
+
+test('ИИ-проверка результата: специалист перед сдачей, диспетчер на проверке; отметки ставит человек', async ({ browser, baseURL }) => {
+  // Заявку здесь создаёт сам диспетчер (как заказчик), оплата — напрямую в базе.
+  const dctx = await phoneContext(browser, baseURL);
+  const dp = await dctx.newPage();
+  const disp = await signIn(dp, '+79990000592');
+  const created = await (await dp.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Оценка квартиры для ИИ-проверки' }, headers: H })).json();
+  const id = created.order.id;
+  expect((await dp.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(9), fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 9' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await dp.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  const sctx = await phoneContext(browser, baseURL);
+  const sp = await sctx.newPage();
+  const spec = await signIn(sp, '+79990000593');
+  await db(async (c) => {
+    await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [spec.id]);
+    // Оплата — как после успешного платежа поддельной ЮKassa (сама оплата проверяется в других сценариях).
+    await c.query('update orders set price_kop = 1500000, paid_at = now() where id = $1', [id]);
+    await c.query("insert into payments (order_id, amount_kop, status, provider_id, created_by, paid_at) values ($1, 1500000, 'succeeded', $2, $3, now())", [id, `pay_ui_${id}`, disp.id]);
+  });
+  expect((await dp.request.post(`/api/orders/${id}/offer`, { data: { specialist_id: spec.id, from: 'matching' }, headers: H })).status()).toBe(200);
+  expect((await sp.request.post(`/api/orders/${id}/status`, { data: { from: 'awaiting_executor', to: 'in_work' }, headers: H })).status()).toBe(200);
+  expect((await sp.request.post(`/api/orders/${id}/results`, {
+    data: Buffer.from('Отчёт об оценке квартиры. Итоговая стоимость 9 500 000 руб. В разделе 3 опечатка в адресе.'),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('отчёт.txt') },
+  })).status()).toBe(201);
+
+  // Специалист проверяет результат с помощью ИИ до сдачи.
+  await sp.goto(`/kabinet#order=${id}`);
+  await expect(sp.locator('#review-summary')).toContainText('Перед сдачей можно проверить результат с помощью ИИ');
+  await expect(sp.locator('#ai-review-state')).toHaveText('ИИ-проверка ещё не запускалась.');
+  await sp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  await expect(sp.locator('#ai-review-state')).toContainText('запускал исполнитель перед сдачей');
+  await expect(sp.locator('#review-checks li').filter({ hasText: 'Технические ошибки' }).locator('.ai-hint')).toContainText('посмотрите');
+  await expect(sp.locator('#review-checks li').filter({ hasText: 'Расчёт' }).locator('.ai-hint')).toHaveText('ИИ: Замечаний не найдено');
+  await expect(sp.locator('#review-checks .verdict')).toHaveCount(0);
+  await shot(sp, '54-specialist-ii-proverka');
+  await sp.getByRole('button', { name: 'Сдать на проверку' }).click();
+  await expect(sp.locator('#order-status')).toHaveText('Проверка результата');
+  await expect(sp.getByRole('button', { name: 'Проверить с помощью ИИ' })).toBeHidden();
+
+  // Диспетчер видит подсказки исполнителя, запускает свою проверку; отметки по-прежнему «не проверено».
+  await dp.goto(`/kabinet#order=${id}`);
+  await expect(dp.locator('#ai-review-state')).toContainText('запускал исполнитель перед сдачей');
+  await dp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(dp.locator('#ai-review-state')).toContainText('запускал диспетчер');
+  await expect(dp.locator('#review-summary')).toContainText('не проверено: 7');
+  await dp.locator('#review-checks li').filter({ hasText: 'Технические ошибки' }).getByRole('textbox').fill('Опечатка в адресе в разделе 3');
+  await dp.locator('#review-checks li').filter({ hasText: 'Технические ошибки' }).getByRole('button', { name: 'Замечание' }).click();
+  await expect(dp.locator('#review-checks li').filter({ hasText: 'Технические ошибки' }).locator('.verdict')).toHaveText('Замечание');
+  await shot(dp, '55-dispetcher-ii-proverka');
+
+  // Заказчик подсказок ИИ не видит — проверено автотестами сервера (tests/server/ai.test.mjs).
+  await sctx.close();
+  await dctx.close();
+});

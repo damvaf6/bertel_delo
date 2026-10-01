@@ -36,8 +36,9 @@ async function storeDocument({ sql, actor, order, req, body, providers, res }, k
 
 const publicDoc = (d) => ({ id: d.id, order_id: d.order_id, kind: d.kind, filename: d.filename, mime: d.mime, size_bytes: d.size_bytes, created_at: d.created_at });
 
-export function coreOps() {
-  const authLimit = rateLimiter({ windowMs: 10 * 60_000, max: 30 });
+// Лимит запросов входа с одного адреса — 30 за 10 минут; поднять можно только в автотестах (AUTH_RATE_MAX, config.mjs).
+export function coreOps(cfg) {
+  const authLimit = rateLimiter({ windowMs: 10 * 60_000, max: cfg?.authRateMax ?? 30 });
 
   return [
     {

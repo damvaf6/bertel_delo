@@ -9,22 +9,31 @@ let orderRef = null;
 
 // ——— Проверка результата ———
 
+const AI_SIDE_RU = { executor: 'исполнитель перед сдачей', dispatcher: 'диспетчер' };
+
 export async function loadReview(current) {
   const box = $('review-box');
   const { order } = current;
   say($('review-msg'), '');
   const r = await api('GET', `/api/orders/${order.id}/review`);
-  // Заказчику — только итог после выдачи; исполнителю и служебным — отметки по правилам, когда результат сдавали.
-  const on = r.round > 0 && (r.details || ['done', 'closed'].includes(order.status));
+  // Заказчику — только итог после выдачи; исполнителю и служебным — отметки по правилам, когда результат сдавали,
+  // и подсказки ИИ (исполнитель может проверить результат с помощью ИИ ещё до сдачи).
+  const on = (r.round > 0 && (r.details || ['done', 'closed'].includes(order.status))) || (r.details && (r.can_ai || !!r.ai));
   box.classList.toggle('hidden', !on);
   if (!on) return;
   const s = r.summary;
-  const summary = s.unchecked === 0 && s.issues === 0
-    ? `Результат проверен: все правила (${s.total}) в порядке.`
-    : `Круг проверки ${r.round}. В порядке: ${s.ok} из ${s.total}${s.issues ? `, замечаний: ${s.issues}` : ''}${s.unchecked ? `, не проверено: ${s.unchecked}` : ''}.`;
+  let summary;
+  if (r.round === 0) summary = 'Перед сдачей можно проверить результат с помощью ИИ по тем же правилам, что и при проверке.';
+  else if (s.unchecked === 0 && s.issues === 0) summary = `Результат проверен: все правила (${s.total}) в порядке.`;
+  else summary = `Круг проверки ${r.round}. В порядке: ${s.ok} из ${s.total}${s.issues ? `, замечаний: ${s.issues}` : ''}${s.unchecked ? `, не проверено: ${s.unchecked}` : ''}.`;
   $('review-summary').textContent = summary;
+  $('ai-review-box').classList.toggle('hidden', !r.details || (!r.can_ai && !r.ai));
+  $('ai-review-run').classList.toggle('hidden', !r.can_ai);
+  $('ai-review-run').onclick = () => runAi(order);
+  $('ai-review-state').textContent = r.ai ? aiState(r.ai) : 'ИИ-проверка ещё не запускалась.';
   if (!r.details) { $('review-checks').replaceChildren(); return; }
-  $('review-checks').replaceChildren(...r.checks.map((c) => checkItem(order, r, c)));
+  const hints = new Map((r.ai?.items ?? []).map((i) => [i.id, i]));
+  $('review-checks').replaceChildren(...r.checks.map((c) => checkItem(order, r, c, hints.get(c.id))));
   // Для возврата на доработку причина собирается из замечаний (диспетчер может её поправить).
   const issues = r.checks.filter((c) => c.verdict === 'issue');
   if (r.can_mark && issues.length && !$('reason').value.trim()) {
@@ -32,11 +41,33 @@ export async function loadReview(current) {
   }
 }
 
-function checkItem(order, r, c) {
+function aiState(ai) {
+  const unread = ai.files.filter((f) => !f.read).map((f) => f.name);
+  const attention = ai.items.filter((i) => i.hint === 'attention').length;
+  return [
+    `ИИ-проверка: запускал ${AI_SIDE_RU[ai.side]}, ${timeRu(ai.at)}.`,
+    attention ? `Стоит посмотреть: ${attention} из ${ai.items.length}.` : 'Замечаний ИИ не видит.',
+    unread.length ? `Не прочитаны (такие файлы ИИ пока не читает): ${unread.join(', ')}.` : null,
+    'Это подсказка: решение и отметки — за человеком.',
+  ].filter(Boolean).join(' ');
+}
+
+async function runAi(order) {
+  $('ai-review-run').disabled = true;
+  say($('review-msg'), 'ИИ проверяет результат…', 'ok');
+  try {
+    await api('POST', `/api/orders/${order.id}/review/ai`);
+    await loadReview({ order });
+    say($('review-msg'), 'ИИ-проверка готова', 'ok');
+  } catch (err) { say($('review-msg'), err.message); } finally { $('ai-review-run').disabled = false; }
+}
+
+function checkItem(order, r, c, hint) {
   const li = el('li', { 'data-check': c.id },
     el('div', { class: 'title', text: c.title }),
-    el('div', { class: `verdict ${c.verdict || 'none'}`, text: VERDICT_RU[c.verdict] || 'Не проверено' }),
-    ...(c.note ? [el('p', { class: 'check-note', text: c.note })] : []));
+    ...(r.round > 0 ? [el('div', { class: `verdict ${c.verdict || 'none'}`, text: VERDICT_RU[c.verdict] || 'Не проверено' })] : []),
+    ...(c.note ? [el('p', { class: 'check-note', text: c.note })] : []),
+    ...(hint ? [el('p', { class: `ai-hint ${hint.hint}`, text: hint.hint === 'ok' ? `ИИ: ${hint.note || 'замечаний не видно'}` : `ИИ: посмотрите — ${hint.note}` })] : []));
   if (!r.can_mark) return li;
   const note = el('input', { type: 'text', maxlength: '1000', 'aria-label': `Замечание: ${c.title}`, placeholder: 'Что не так (для замечания)' });
   note.value = c.verdict === 'issue' ? c.note || '' : '';

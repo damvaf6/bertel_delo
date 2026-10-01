@@ -41,7 +41,7 @@ test('миграции: изменённый после применения ф�
 
 test('настройки: на prod запрещены поддельные поставщики, база без сертификата, тестовые пути', () => {
   const prod = (extra) => loadConfig({ APP_ENV: 'prod', DATABASE_URL: 'postgres://x/y', APP_SECRET: 'x'.repeat(40),
-    STORAGE_PROVIDER: 's3', S3_BUCKET: 'b', SMS_PROVIDER: 'sms-real', CALL_PROVIDER: 'call-real', PAYMENTS_PROVIDER: 'p', AI_PROVIDER: 'a', MAIL_PROVIDER: 'm', PUBLIC_URL: 'https://delo.example/', ...extra });
+    STORAGE_PROVIDER: 's3', S3_BUCKET: 'b', SMS_PROVIDER: 'sms-real', CALL_PROVIDER: 'call-real', PAYMENTS_PROVIDER: 'p', AI_PROVIDER: 'yandexgpt', AI_YANDEX_API_KEY: 'k', AI_YANDEX_FOLDER: 'f', MAIL_PROVIDER: 'm', PUBLIC_URL: 'https://delo.example/', ...extra });
   assert.ok(prod({}).live);
   assert.throws(() => prod({ SMS_PROVIDER: 'fake' }), ConfigError);
   assert.throws(() => prod({ CALL_PROVIDER: 'fake' }), ConfigError);
@@ -55,6 +55,8 @@ test('настройки: на prod запрещены поддельные по
   assert.throws(() => prod({ PUBLIC_URL: '' }), ConfigError);
   assert.throws(() => prod({ PUBLIC_URL: 'http://delo.example' }), ConfigError);
   assert.throws(() => loadConfig({ APP_ENV: 'dev', DATABASE_URL: 'x', TEST_CONTROL_TOKEN: 't' }), ConfigError);
+  assert.throws(() => prod({ AUTH_RATE_MAX: '1000' }), ConfigError, 'лимит входов меняется только в автотестах');
+  assert.equal(loadConfig({ APP_ENV: 'test', DATABASE_URL: 'x', AUTH_RATE_MAX: '200' }).authRateMax, 200);
   assert.throws(() => loadConfig({ APP_ENV: 'nope', DATABASE_URL: 'x' }), ConfigError);
   assert.throws(() => loadConfig({ APP_ENV: 'dev' }), ConfigError);
   // stage — тестовые данные: поддельные СМС допустимы, но файлы только в S3 и база только с сертификатом.

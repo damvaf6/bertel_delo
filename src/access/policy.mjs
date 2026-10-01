@@ -22,6 +22,11 @@
 //               заказчик — только итог.
 // Статусы заявки: сторона «заказчик» — у кого write или manage; сторона «диспетчер» — диспетчер платформы
 //               (администратор только читает). Какие шаги доступны стороне — src/orders/workflow.mjs.
+// ИИ (1.8):    разбор проблемы видит и превращает в заявку только его автор. Память ассистента — своя у каждого и отдельно
+//               по каждой организации (личное и рабочее не смешиваются); заявку в разговор можно взять, только если её видишь,
+//               и только в «её» память: дело организации — в память этой организации, личное и дело исполнителя — в личную.
+//               ИИ-проверку результата запускает исполнитель перед сдачей и диспетчер на проверке; подсказки видят те же,
+//               кто видит отметки проверки; заказчик — нет.
 // Остальные не видят вовсе — ответ «не найдено», чтобы не раскрывать существование.
 import { HttpError, notFound, UUID_RE } from '../http/core.mjs';
 
@@ -112,6 +117,24 @@ export function messageSide(actor, order) {
 // Кто видит отметки проверки результата по каждому правилу (остальные — только итог).
 export const seesReviewDetails = (actor, order) => isStaff(actor) || (!!order.executor_user_id && order.executor_user_id === actor?.id);
 
+// В какой памяти ассистента вошедший может разговаривать: личной (null) или организации, где он состоит.
+export const assistantScopeAllowed = (actor, orgId) => orgId === null || memberOf(actor, orgId);
+
+// Можно ли взять заявку в разговор с ассистентом в этой памяти.
+export function assistantOrderAllowed(actor, order, orgId) {
+  if (orderLevel(actor, order) === LEVEL.none || !assistantScopeAllowed(actor, orgId)) return false;
+  if (orgId) return order.org_id === orgId;
+  return !order.org_id || order.executor_user_id === actor.id || isStaff(actor);
+}
+
+// Кто и когда запускает ИИ-проверку результата: исполнитель — пока дело в работе (перед сдачей), диспетчер — на проверке.
+export function aiReviewSide(actor, order) {
+  const sides = orderSides(actor, order);
+  if (order.status === 'in_work' && sides.includes('executor')) return 'executor';
+  if (order.status === 'review' && sides.includes('dispatcher')) return 'dispatcher';
+  return null;
+}
+
 export function orgLevel(actor, org) {
   if (!actor || !org) return LEVEL.none;
   const r = roleIn(actor, org.id);
@@ -161,6 +184,15 @@ export const RESOURCES = {
       return org && { subject: org, org };
     },
     level: (actor, found) => orgLevel(actor, found.org),
+  },
+  // Разбор проблемы ИИ: только автор.
+  consultation: {
+    async load(sql, id) {
+      if (!UUID_RE.test(id)) return null;
+      const c = await sql.one`select * from ai_consultations where id = ${id}`;
+      return c && { subject: c, consultation: c };
+    },
+    level: (actor, { consultation }) => (consultation.user_id === actor.id ? LEVEL.write : LEVEL.none),
   },
   // Приглашение глазами адресата: принять или отклонить.
   invite: {

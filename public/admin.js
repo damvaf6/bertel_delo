@@ -8,7 +8,17 @@ let found = null;
 
 export async function showAdmin() {
   show('admin-view', 'admin');
-  await loadStaff();
+  await Promise.all([loadStaff(), loadAi()]);
+}
+
+async function loadAi() {
+  const a = await api('GET', '/api/admin/ai');
+  const row = (k, v) => [el('dt', { text: k }), el('dd', { text: v })];
+  $('admin-ai').replaceChildren(
+    ...row('Основная модель', a.primary.name),
+    ...row('Запасная модель', a.fallback ? a.fallback.name : 'не задана'),
+    ...row('Обращений за сутки', `${a.day.total}${a.day.failed ? `, без ответа: ${a.day.failed}` : ''}`),
+    ...row('Лимит на человека в сутки', String(a.daily_limit)));
 }
 
 async function loadStaff() {

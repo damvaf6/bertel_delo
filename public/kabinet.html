@@ -15,6 +15,7 @@
   </header>
   <nav class="tabs" aria-label="Разделы кабинета">
     <a href="#" data-tab="orders">Заявки</a>
+    <a href="#assistant" data-tab="assistant">Помощник</a>
     <a href="#notifications" data-tab="notifications">Уведомления<span class="count hidden" id="notify-count"></span></a>
     <a href="#orgs" data-tab="orgs">Организации<span class="count hidden" id="invites-count"></span></a>
     <a href="#specialist" data-tab="specialist" class="hidden" id="specialist-tab">Специалист</a>
@@ -33,6 +34,11 @@
         </div>
         <ul class="list" id="orders"></ul>
         <p class="muted hidden" id="orders-empty">Заявок пока нет.</p>
+      </div>
+      <div class="card">
+        <h2>Не знаете, какая услуга нужна?</h2>
+        <p class="muted">Опишите проблему своими словами — помощник объяснит, что можно сделать самому и к какому специалисту обратиться.</p>
+        <a class="btn secondary" href="#assistant" id="to-assistant">Спросить помощника</a>
       </div>
       <form class="card" id="new-order" novalidate>
         <h2>Новая заявка</h2>
@@ -168,6 +174,10 @@
       <div class="card hidden" id="review-box">
         <h2>Проверка результата</h2>
         <p class="muted" id="review-summary"></p>
+        <div class="hidden" id="ai-review-box">
+          <button type="button" class="secondary" id="ai-review-run">Проверить с помощью ИИ</button>
+          <p class="muted" id="ai-review-state"></p>
+        </div>
         <ul class="list" id="review-checks"></ul>
         <p class="msg" id="review-msg" role="status" aria-live="polite"></p>
       </div>
@@ -320,6 +330,65 @@
       </div>
     </section>
 
+    <section id="assistant-view" class="hidden">
+      <form class="card" id="problem-form" novalidate>
+        <h1>Помощник</h1>
+        <p class="muted">Опишите своими словами, что случилось. Помощник объяснит ситуацию, подскажет, что можно сделать самому и к какому специалисту обратиться.</p>
+        <div class="field">
+          <label for="problem-text">Что случилось</label>
+          <textarea id="problem-text" maxlength="4000" placeholder="Например: суд назначил оценку квартиры при разделе имущества"></textarea>
+        </div>
+        <button type="submit" class="wide" id="problem-send">Разобраться</button>
+        <p class="msg" id="problem-msg" role="status" aria-live="polite"></p>
+      </form>
+      <div class="card hidden" id="problem-answer">
+        <h2>Что говорит помощник</h2>
+        <p class="answer" id="pa-explanation"></p>
+        <h2 class="gap" id="pa-steps-title">Что можно сделать самому</h2>
+        <ul class="plain" id="pa-steps"></ul>
+        <h2 class="gap">К кому обратиться</h2>
+        <p class="answer" id="pa-specialist"></p>
+        <div class="field">
+          <label for="pa-service">Услуга для заявки</label>
+          <select id="pa-service"></select>
+        </div>
+        <div class="field hidden" id="pa-org-box">
+          <label for="pa-org">Кто подаёт заявку</label>
+          <select id="pa-org"></select>
+        </div>
+        <button type="button" class="wide" id="pa-order">Создать заявку</button>
+        <p class="muted" id="pa-note">Заявка создаётся черновиком: Вы проверите её, дополните и отправите сами.</p>
+        <p class="muted" id="pa-disclaimer"></p>
+        <p class="msg" id="pa-msg" role="status" aria-live="polite"></p>
+      </div>
+      <div class="card" id="assistant-box">
+        <h2>Ассистент по делам</h2>
+        <p class="muted">Задайте вопрос о своих делах. Ассистент только подсказывает: ничего не отправляет и не подписывает сам. Память у каждого своя: личная и отдельно для каждой Вашей организации.</p>
+        <div class="field hidden" id="as-scope-box">
+          <label for="as-scope">Раздел памяти</label>
+          <select id="as-scope"></select>
+        </div>
+        <ul class="list chat" id="as-messages"></ul>
+        <p class="muted hidden" id="as-empty">Разговор пока пуст.</p>
+        <p class="muted hidden" id="as-hidden"></p>
+        <form id="as-form" novalidate>
+          <div class="field">
+            <label for="as-order">О какой заявке (можно не выбирать)</label>
+            <select id="as-order"></select>
+          </div>
+          <div class="field">
+            <label for="as-text">Вопрос</label>
+            <textarea id="as-text" maxlength="2000"></textarea>
+          </div>
+          <div class="row">
+            <button type="submit" class="secondary" id="as-send">Спросить</button>
+            <button type="button" class="danger" id="as-clear">Очистить память</button>
+          </div>
+        </form>
+        <p class="msg" id="as-msg" role="status" aria-live="polite"></p>
+      </div>
+    </section>
+
     <section id="profile-view" class="hidden">
       <form class="card" id="profile-form" novalidate>
         <h1>Профиль</h1>
@@ -411,6 +480,10 @@
         </div>
         <p class="msg" id="sp-msg" role="status" aria-live="polite"></p>
       </form>
+      <div class="card">
+        <h2>Искусственный интеллект</h2>
+        <dl class="facts" id="admin-ai"></dl>
+      </div>
       <div class="card">
         <h2>Служебные роли</h2>
         <ul class="list" id="staff"></ul>
