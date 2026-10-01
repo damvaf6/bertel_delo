@@ -2,7 +2,7 @@
 // Каждый видит и меняет только свои уведомления и настройки. Название заявки в ленте показывается, только пока у
 // человека есть доступ к заявке (ушёл из организации, снят с дела — остаётся лишь «заявка № …»).
 import { HttpError } from '../http/core.mjs';
-import { LEVEL, isStaff, orderLevel } from '../access/policy.mjs';
+import { LEVEL, orderLevel } from '../access/policy.mjs';
 import { EVENTS, TYPE, TYPES, orderRef } from '../notify/registry.mjs';
 
 const LIST_LIMIT = 100;
@@ -11,7 +11,7 @@ const READ_IDS_MAX = 200;
 // Какие виды уведомлений человеку показывать в настройках.
 async function typesFor(sql, actor) {
   const specialist = await sql.one`select 1 from specialists where user_id = ${actor.id}`;
-  return TYPES.filter((t) => t.for === 'all' || (t.for === 'specialist' && (specialist || isStaff(actor)))
+  return TYPES.filter((t) => t.for === 'all' || (t.for === 'specialist' && specialist)
     || (t.for === 'dispatcher' && actor.platform_role === 'dispatcher'));
 }
 

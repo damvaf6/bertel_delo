@@ -124,3 +124,9 @@ label.row { color: var(--text); font-size: 16px; margin: 0 0 8px; }
 .closing-doc p { margin: 0 0 6px; overflow-wrap: anywhere; }
 .closing-doc .doc-title { font-weight: 700; }
 .closing-doc .doc-test { color: var(--danger); font-size: 14px; }
+/* Уведомления. */
+.list li.unread .title::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; background: var(--accent); vertical-align: middle; }
+.notify-type { margin-bottom: 12px; }
+.notify-type label.row { margin-bottom: 2px; flex-wrap: nowrap; align-items: flex-start; }
+.notify-type label.row span { flex: 1 1 auto; min-width: 0; padding-top: 1px; }
+.notify-type .muted { margin: 0 0 0 30px; font-size: 14px; }

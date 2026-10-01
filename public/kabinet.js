@@ -1,12 +1,14 @@
-// Кабинет: разделы «Заявки», «Организации», «Профиль», «Управление» (только администратору). Заявка — order.js.
-// Разделы переключаются адресом после «#»: #order=…, #orgs, #org=…, #profile, #admin, #money (деньги — служебным и специалистам).
+// Кабинет: разделы «Заявки», «Уведомления», «Организации», «Профиль», «Управление» (только администратору). Заявка — order.js.
+// Разделы переключаются адресом после «#»: #order=…, #notifications, #orgs, #org=…, #profile, #admin, #money (деньги — служебным
+// и специалистам).
 import { api, el, say, formatPhone } from '/common.js';
-import { state, show, refreshMe } from '/shell.js';
+import { state, show, refreshMe, refreshCounts } from '/shell.js';
 import { openOrder, serviceOptions, dayRu } from '/order.js';
 import { showOrgs, showOrg } from '/orgs.js';
 import { showAdmin } from '/admin.js';
 import { showSpecialist, showSpecialists } from '/match.js';
 import { showMoney } from '/money.js';
+import { showNotifications } from '/notify.js';
 
 const $ = (id) => document.getElementById(id);
 const dateRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
@@ -26,6 +28,8 @@ async function start() {
 
 async function route() {
   const h = location.hash;
+  if (h === '#notifications') return showNotifications();
+  refreshCounts();
   let m;
   if ((m = h.match(/^#order=([0-9a-f-]{36})$/i))) return openOrder(m[1]);
   if ((m = h.match(/^#org=([0-9a-f-]{36})$/i))) return showOrg(m[1]);

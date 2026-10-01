@@ -621,3 +621,73 @@ test('администратор делает человека специали�
   await shot(page, '31-spisok-specialistov');
   await sctx.close();
 });
+
+test('уведомления: специалисту — о предложенном деле, заказчику — о принятии; переход в заявку; СМС можно выключить', async ({ page, browser, baseURL }) => {
+  const dctx = await phoneContext(browser, baseURL);
+  const dp = await dctx.newPage();
+  const disp = await signIn(dp, '+79990000563');
+  await db((c) => c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]));
+  const customer = await signIn(page, '+79990000561');
+  const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'land', title: 'Оценка участка в Подмосковье' }, headers: H })).json();
+  const id = created.order.id;
+  expect((await page.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(9), fields: { purpose: 'deal', region: 'mo', address: 'Московская обл., тестовый пос., уч. 1', area: 600 } }, headers: H,
+  })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  expect(customer.id).toBeTruthy();
+
+  const sctx = await phoneContext(browser, baseURL);
+  const sp = await sctx.newPage();
+  const spec = await signIn(sp, '+79990000562');
+  await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'land')", [spec.id]);
+    await c.query('update orders set price_kop = 2000000 where id = $1', [id]);
+  });
+  expect((await dp.request.post(`/api/orders/${id}/offer`, { data: { specialist_id: spec.id, from: 'matching' }, headers: H })).status()).toBe(200);
+
+  // Специалист: счётчик на вкладке, лента, переход в заявку.
+  await sp.goto('/kabinet');
+  await expect(sp.locator('#notify-count')).toHaveText('1');
+  await sp.getByRole('link', { name: /Уведомления/ }).click();
+  await expect(sp.getByRole('heading', { name: 'Уведомления', exact: true })).toBeVisible();
+  const item = sp.locator('#notifications li').first();
+  await expect(item).toContainText('Вам предложено новое дело');
+  await expect(item).toContainText('Оценка участка в Подмосковье');
+  await expect(item).toHaveClass(/unread/);
+  await expect(sp.locator('#notify-count')).toBeHidden();
+  await shot(sp, '40-uvedomleniya-specialist');
+  // СМС о предложениях можно выключить; в кабинете уведомления остаются.
+  await expect(sp.getByLabel('Предложения дел')).toBeChecked();
+  await sp.getByLabel('Предложения дел').uncheck();
+  await expect(sp.locator('#notify-msg')).toHaveText('СМС выключены — уведомления останутся в кабинете');
+  await shot(sp, '41-uvedomleniya-nastroyki');
+  const sms = await db(async (c) => (await c.query("select sms from notification_settings where user_id = $1 and type = 'offers'", [spec.id])).rows[0].sms);
+  expect(sms).toBe(false);
+  await item.getByRole('button').click();
+  await expect(sp.locator('#order-title')).toHaveText('Оценка участка в Подмосковье');
+  await expect(sp.getByRole('button', { name: 'Принять дело' })).toBeVisible();
+  await sp.getByRole('button', { name: 'Принять дело' }).click();
+  await expect(sp.locator('#order-status')).toHaveText('В работе');
+
+  // Заказчик: уведомление о принятии; в настройках нет видов для специалистов и диспетчеров.
+  await page.goto('/kabinet');
+  await expect(page.locator('#notify-count')).toHaveText('1');
+  await page.goto('/kabinet#notifications');
+  await expect(page.locator('#notifications li').first()).toContainText('Исполнитель принял заявку в работу');
+  await expect(page.getByLabel('Ход моих заявок')).toBeChecked();
+  await expect(page.getByLabel('Предложения дел')).toHaveCount(0);
+  await expect(page.getByLabel('Очередь диспетчера')).toHaveCount(0);
+  await shot(page, '42-uvedomleniya-zakazchik');
+  await page.locator('#notifications li').first().getByRole('button').click();
+  await expect(page.locator('#order-status')).toHaveText('В работе');
+
+  // Диспетчер видит «новую заявку» и вид «Очередь диспетчера» (СМС по нему по умолчанию выключены).
+  await dp.goto('/kabinet#notifications');
+  await expect(dp.locator('#notifications')).toContainText('Новая заявка ждёт подбора исполнителя');
+  await expect(dp.getByLabel('Очередь диспетчера')).not.toBeChecked();
+  await expect(dp.getByLabel('Предложения дел')).toHaveCount(0);
+  await shot(dp, '43-uvedomleniya-dispetcher');
+  await sctx.close();
+  await dctx.close();
+});
