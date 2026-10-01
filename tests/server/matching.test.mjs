@@ -1,7 +1,7 @@
 // Подбор исполнителя (задача 1.4): допуск обязателен, оценка по признакам, предложение, отказ, переназначение.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, login, setPlatformRole, makeSpecialist } from '../helpers.mjs';
+import { startApp, login, setPlatformRole, makeSpecialist, ensurePrice } from '../helpers.mjs';
 import { scoreSpecialist, WEIGHTS } from '../../src/matching/score.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 
@@ -33,7 +33,10 @@ async function submitted(region = 'mo', deadline = addDays(today, 20), by = owne
   return o;
 }
 const cands = async (o) => (await dispatcher.req('GET', `/api/orders/${o.id}/candidates`)).body.candidates;
-const offer = (o, who, from = 'matching') => dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: who.user.id, from });
+const offer = async (o, who, from = 'matching') => {
+  await ensurePrice(S.sql, o.id);
+  return dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: who.user.id, from });
+};
 
 test('оценка по признакам: веса дают сумму, район и загрузка меняют итог', () => {
   assert.equal(Object.values(WEIGHTS).reduce((x, y) => x + y, 0), 100);

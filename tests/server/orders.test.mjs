@@ -1,7 +1,7 @@
 // Единая «Заявка» (задача 1.3): описание модуля как данные, поля заявки, срок, основание, статусы и история.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, login, setPlatformRole, makeSpecialist } from '../helpers.mjs';
+import { startApp, login, setPlatformRole, makeSpecialist, ensurePrice } from '../helpers.mjs';
 import { DEFAULT_MODULES, createRegistry, validateModule } from '../../src/modules/index.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import expertise from '../../src/modules/expertise.mjs';
@@ -42,6 +42,7 @@ const create = async (c, body = {}) => {
 // Диспетчер предлагает дело специалисту (шаг «подбор → ждёт исполнителя»).
 async function offer(o, who = spec, from) {
   const [cur] = await S.sql`select status from orders where id = ${o.id}`;
+  await ensurePrice(S.sql, o.id);
   return dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: who.user.id, from: from ?? cur.status });
 }
 const patch = (c, o, body) => c.req('PATCH', `/api/orders/${o.id}`, body);
@@ -275,6 +276,9 @@ test('весь путь: новая → подбор → ждёт исполни
   assert.equal((await step(dispatcher, o, 'done')).status, 409, 'не все правила проверены');
   await passReview(o);
   assert.equal((await step(dispatcher, o, 'done')).status, 200);
+  assert.equal((await step(owner, o, 'closed')).status, 409, 'неоплаченную не закрыть (1.6)');
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/payments`)).status, 201);
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/payments/refresh`)).body.money.paid, true);
   assert.equal((await step(owner, o, 'closed')).status, 200, 'заказчик принимает результат');
   assert.equal((await step(dispatcher, o, 'cancelled', 'поздно')).status, 409);
   assert.equal((await step(owner, o, 'nope')).status, 400);

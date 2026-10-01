@@ -179,6 +179,8 @@ export function matchOps() {
           const cur = await tx.one`select * from orders where id = ${order.id} for update`;
           if (cur.status !== from) throw new HttpError(409, 'status_changed', 'Статус заявки уже изменился, обновите страницу');
           if (!['matching', 'awaiting_executor'].includes(cur.status)) throw new HttpError(409, 'bad_transition', `Из статуса «${cur.status}» так нельзя`);
+          // Исполнитель соглашается на известное вознаграждение: без цены дело не предлагается (1.6).
+          if (!cur.price_kop) throw new HttpError(409, 'no_price', 'Сначала назначьте цену');
           const cand = (await candidatesFor(tx, cur)).find((c) => c.user_id === specialistId);
           if (!cand) throw new HttpError(409, 'not_eligible', 'Этому специалисту дело отдать нельзя: нет допуска, не принимает дела или это его дело');
           const reassign = cur.status === 'awaiting_executor';
