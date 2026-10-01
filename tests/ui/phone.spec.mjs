@@ -6,9 +6,12 @@
 // На каждой странице: нет прокрутки вбок, нет ошибок JavaScript, нет запросов к чужим адресам.
 import { test as base, expect } from '@playwright/test';
 import pg from 'pg';
-import { DB_URL, TEST_TOKEN } from '../helpers.mjs';
+import { DB_URL, TEST_TOKEN, BRIDGE_SECRET } from '../helpers.mjs';
+import { signBridge } from '../../src/bridge/signature.mjs';
 
 const CONTROL = process.env.UI_TEST_CONTROL_TOKEN || TEST_TOKEN;
+// Ключ моста CRM → Платформа на проверяемом стенде (тестовый, не настоящий).
+const BRIDGE = process.env.UI_CRM_BRIDGE_SECRET || BRIDGE_SECRET;
 // Адрес хранилища для временных ссылок (MinIO в CI) — единственный разрешённый «чужой» адрес.
 const EXTRA_ORIGINS = (process.env.UI_ALLOWED_ORIGINS || '').split(',').filter(Boolean);
 
@@ -978,4 +981,69 @@ test('заявка по письму: почта подключается код
   await page.reload();
   await expect(page.locator('#order-status')).toHaveText('Подбор исполнителя');
   await shot(page, '59-zayavka-po-pismu-otpravlena');
+});
+
+// Сообщение моста CRM → Платформа, подписанное так, как это будет делать БЕРТЕЛ CRM.
+let bridgeSeq = 0;
+async function crmBridge(request, kind, data) {
+  const id = `ui-${Date.now()}-${++bridgeSeq}`;
+  const time = String(Math.floor(Date.now() / 1000));
+  const body = JSON.stringify(data);
+  const r = await request.post(`/api/bridge/crm/${kind}`, {
+    data: body,
+    headers: { 'content-type': 'application/json', 'x-bridge-id': id, 'x-bridge-time': time, 'x-bridge-signature': signBridge(BRIDGE, id, time, Buffer.from(body)) },
+  });
+  expect(r.status()).toBe(200);
+  return r.json();
+}
+
+test('мост CRM: профиль переводчика переносится с согласием; специалист видит предложения госзаказа и число дел в CRM; диспетчер — в списке', async ({ page, browser, baseURL }) => {
+  const phone = '+79990000611';
+  const deadline = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+  const consent = { platform: true, version: 'crm-test-1', given_at: '2026-09-20T10:00:00Z' };
+  const prof = await crmBridge(page.request, 'profiles', { profiles: [{
+    crm_id: 'ui-crm-611', phone, email: 'perevodchik-ui@example.test', full_name: 'Тестовый Переводчик Из CRM',
+    languages: ['китайский', 'английский'], qualification: 'Переводчик, диплом', consent,
+  }] });
+  expect(prof.results[0].outcome).toBe('created');
+  await crmBridge(page.request, 'load', { loads: [{ crm_id: 'ui-crm-611', open_cases: 2 }] });
+  await crmBridge(page.request, 'offers', { offers: [
+    { offer_id: 'ui-offer-1', crm_id: 'ui-crm-611', customer: 'ГСУ СК России по г. Москве', language: 'китайский → русский',
+      deadline, volume: { amount: 12, unit: 'pages' }, payment: 'pp1240', status: 'open' },
+    { offer_id: 'ui-offer-2', crm_id: 'ui-crm-611', customer: 'Мещанский районный суд', language: 'английский → русский',
+      deadline, volume: { amount: 3, unit: 'hours' }, payment: 'pp1240', status: 'open' },
+  ] });
+
+  // Переводчик входит по своему телефону — кабинет специалиста уже есть, госзаказ из CRM виден.
+  await signIn(page, phone);
+  await page.goto('/kabinet#notifications');
+  const n = page.locator('#notifications li').filter({ hasText: 'Новое предложение госзаказа' }).first();
+  await expect(n).toBeVisible();
+  await n.locator('button.open').click();
+  await expect(page.getByRole('heading', { name: 'Госзаказ — БЕРТЕЛ CRM' })).toBeVisible();
+  await expect(page.locator('#crm-facts')).toContainText('Дел в CRM сейчас: 2');
+  await expect(page.locator('#crm-facts')).toContainText('Языки: китайский, английский');
+  const first = page.locator('#crm-offers li[data-id="ui-offer-1"]');
+  await expect(first).toContainText('ГСУ СК России по г. Москве');
+  await expect(first).toContainText('китайский → русский · 12 стр.');
+  await expect(first).toContainText('Оплата по Положению (ПП РФ № 1240)');
+  await expect(first.getByRole('link', { name: 'Открыть в CRM' })).toHaveAttribute('href', /\/offers\/ui-offer-1$/);
+  await expect(page.locator('#crm-offers li')).toHaveCount(2);
+  await expect(page.locator('#specialist-permits-empty')).toBeVisible();
+  await shot(page, '60-specialist-goszakaz-crm');
+
+  // Предложение закрыто в CRM — пропадает из кабинета.
+  await crmBridge(page.request, 'offers', { offers: [{ offer_id: 'ui-offer-2', crm_id: 'ui-crm-611', status: 'closed' }] });
+  await page.reload();
+  await expect(page.locator('#crm-offers li')).toHaveCount(1);
+
+  // Диспетчер видит переводчика в списке специалистов с делами в CRM.
+  const ctx = await phoneContext(browser, baseURL);
+  const dp = await ctx.newPage();
+  const d = await signIn(dp, '+79990000612');
+  await db((c) => c.query("update users set platform_role = 'dispatcher' where id = $1", [d.id]));
+  await dp.goto('/kabinet#specialists');
+  await expect(dp.locator('#specialists li').filter({ hasText: 'Тестовый Переводчик Из CRM' })).toContainText('Из БЕРТЕЛ CRM · дел там: 2 · языки: китайский, английский');
+  await shot(dp, '61-spisok-specialistov-crm');
+  await ctx.close();
 });

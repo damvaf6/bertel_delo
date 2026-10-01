@@ -7,9 +7,12 @@ import { createDb } from '../src/db.mjs';
 import { migrate } from '../src/migrate.mjs';
 import { createProviders } from '../src/providers/index.mjs';
 import { createApp } from '../src/app.mjs';
+import { signBridge } from '../src/bridge/signature.mjs';
 
 export const DB_URL = process.env.TEST_DATABASE_URL || 'postgres://postgres:postgres@localhost:5432/delo_test';
 export const TEST_TOKEN = 'test-control-token-local';
+// Ключ моста CRM → Платформа для проверок (не настоящий; настоящий — только в Lockbox).
+export const BRIDGE_SECRET = 'test-crm-bridge-secret-local-0123456789';
 
 export function testEnv(extra = {}) {
   return {
@@ -18,6 +21,8 @@ export function testEnv(extra = {}) {
     DB_SSL: 'disable',
     COOKIE_SECURE: '0',
     TEST_CONTROL_TOKEN: TEST_TOKEN,
+    CRM_BRIDGE_SECRET: BRIDGE_SECRET,
+    CRM_URL: 'https://crm.example.test',
     ...extra,
   };
 }
@@ -87,6 +92,19 @@ export function client(stack) {
     },
   };
   return c;
+}
+
+// Сообщение моста CRM → Платформа, подписанное ключом моста (как это будет делать БЕРТЕЛ CRM).
+let bridgeSeq = 0;
+export async function bridge(stack, kind, data, { id = `msg-${process.pid}-${++bridgeSeq}`, time = Math.floor(Date.now() / 1000), secret = BRIDGE_SECRET, signature } = {}) {
+  const body = typeof data === 'string' ? data : JSON.stringify(data);
+  const h = { 'content-type': 'application/json', 'x-bridge-id': id, 'x-bridge-time': String(time) };
+  h['x-bridge-signature'] = signature ?? signBridge(secret, id, String(time), Buffer.from(body));
+  const r = await fetch(`${stack.base}/api/bridge/crm/${kind}`, { method: 'POST', headers: h, body });
+  const text = await r.text();
+  let json = null;
+  try { json = text ? JSON.parse(text) : null; } catch { json = text; }
+  return { status: r.status, body: json, id };
 }
 
 export function lastCode(stack, phone) {

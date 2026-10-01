@@ -29,9 +29,9 @@ function regionsFrom(value) {
 
 async function profileView(sql, userId) {
   const sp = await sql.one`
-    select s.*, u.full_name, u.is_active as user_active,
+    select s.*, u.full_name, u.is_active as user_active, c.languages as crm_languages, c.qualification as crm_qualification,
            (select count(*)::int from orders where executor_user_id = s.user_id and status = any(${OPEN_STATUSES}::text[])) as open_orders
-    from specialists s join users u on u.id = s.user_id where s.user_id = ${userId}`;
+    from specialists s join users u on u.id = s.user_id left join crm_profiles c on c.user_id = s.user_id where s.user_id = ${userId}`;
   if (!sp) return null;
   const permits = await sql`
     select module, service, valid_until from specialist_permits where user_id = ${userId} order by module, service`;
@@ -39,6 +39,8 @@ async function profileView(sql, userId) {
     user_id: sp.user_id, full_name: sp.full_name, active: sp.active, regions: sp.regions, capacity: sp.capacity,
     external_load: sp.external_load, open_orders: sp.open_orders, user_active: sp.user_active,
     permits: permits.map((p) => ({ ...p, valid_until: p.valid_until ?? null })),
+    // Профиль перенесён из БЕРТЕЛ CRM (1.10): языки и квалификация; дела вне платформы приходят из CRM.
+    crm: sp.crm_languages ? { languages: sp.crm_languages, qualification: sp.crm_qualification } : null,
   };
 }
 
