@@ -9,7 +9,7 @@ export const TYPES = [
   { id: 'messages', name: 'Сообщения в переписке', hint: 'новое сообщение по Вашей заявке или делу', for: 'all', sms: false },
   { id: 'money', name: 'Оплата и выплаты', hint: 'оплата получена, вознаграждение выплачено, деньги возвращены или перевод не прошёл', for: 'all', sms: true },
   { id: 'org_invites', name: 'Приглашения в организацию', hint: 'Вас пригласили стать сотрудником организации', for: 'all', sms: true },
-  { id: 'offers', name: 'Предложения дел', hint: 'Вам предложили новое дело', for: 'specialist', sms: true },
+  { id: 'offers', name: 'Предложения дел', hint: 'Вам предложили новое дело (и предложения госзаказа из БЕРТЕЛ CRM)', for: 'specialist', sms: true },
   { id: 'executor_work', name: 'Мои дела как исполнителя', hint: 'возврат на доработку, результат принят, дело снято, передано другому или отменено', for: 'specialist', sms: true },
   { id: 'dispatch', name: 'Очередь диспетчера', hint: 'новые и оплаченные заявки, отказы исполнителей, сдача на проверку, отмены, неудачные выплаты и возвраты', for: 'dispatcher', sms: false },
 ];
@@ -27,6 +27,7 @@ export const EVENTS = {
   refund_failed_staff: { type: 'dispatch', title: 'Возврат заказчику не прошёл — нужен повтор', order: true },
 
   offer: { type: 'offers', title: 'Вам предложено новое дело', order: true },
+  crm_offer: { type: 'offers', title: 'Новое предложение госзаказа — принять можно в БЕРТЕЛ CRM', order: false },
 
   offer_withdrawn: { type: 'executor_work', title: 'Предложение дела снято', order: true },
   rework: { type: 'executor_work', title: 'Результат возвращён на доработку', order: true },

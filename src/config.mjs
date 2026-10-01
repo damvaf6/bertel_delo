@@ -66,6 +66,11 @@ export function loadConfig(env = process.env) {
       inbox: (env.MAIL_INBOX_ADDRESS || 'zayavki@delo.test').trim().toLowerCase(),
       pollSec: Number(env.MAIL_POLL_SEC || 60),
     },
+    // Мост CRM → Платформа (1.10): общий ключ подписи сообщений (пусто — мост выключен) и адрес CRM для ссылок «Открыть в CRM».
+    crm: {
+      bridgeSecret: env.CRM_BRIDGE_SECRET || '',
+      url: (env.CRM_URL || '').replace(/\/+$/, ''),
+    },
     // Служебные пути для автотестов (чтение вызовов поддельных поставщиков). Только APP_ENV=test.
     testControlToken: env.TEST_CONTROL_TOKEN || '',
     // Лимит запросов входа с одного адреса за 10 минут. Менять — только APP_ENV=test (много входов в одном прогоне).
@@ -94,6 +99,8 @@ export function loadConfig(env = process.env) {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cfg.mail.inbox)) throw new ConfigError('MAIL_INBOX_ADDRESS: адрес почты');
   if (cfg.providers.mail !== 'fake' && !env.MAIL_INBOX_ADDRESS) throw new ConfigError('MAIL_INBOX_ADDRESS нужен для настоящей почты');
   if (!Number.isInteger(cfg.mail.pollSec) || cfg.mail.pollSec < 10) throw new ConfigError('MAIL_POLL_SEC: целое число от 10');
+  if (cfg.crm.bridgeSecret && cfg.crm.bridgeSecret.length < 32) throw new ConfigError('CRM_BRIDGE_SECRET: не короче 32 символов');
+  if (cfg.crm.url && !(live ? /^https:\/\/[^\s/]+/ : /^https?:\/\/[^\s/]+/).test(cfg.crm.url)) throw new ConfigError(`CRM_URL: адрес ${live ? 'https://…' : 'http(s)://…'}`);
   if (cfg.providers.payments !== 'fake' && !/^https:\/\//.test(cfg.publicUrl)) throw new ConfigError('PUBLIC_URL (https://…) нужен для настоящей оплаты');
   if (live) {
     if (cfg.dbSsl === 'disable') throw new ConfigError('На stage/prod база только с проверкой сертификата');

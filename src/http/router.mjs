@@ -5,6 +5,8 @@
 //   auth: 'user' + access: { platform: 'admin' | 'staff' | 'dispatcher' } — только администратор / служебный (диспетчер или
 //                                  администратор) / диспетчер платформы (остальным «не найдено»).
 // Операция без объявления не запускается вовсе (в наследии было наоборот — Б-2, Б-3).
+//   auth: 'bridge' — только для моста CRM → Платформа: сообщение подписано общим ключом моста (src/bridge/signature.mjs),
+//                    без подписи — «не найдено»; людям и страницам недоступно, cookie не читается.
 // csrf: false — только у открытой операции, которую зовёт внешний сервис (уведомление ЮKassa) и которая содержимому не верит.
 import express from 'express';
 import { HttpError, parseCookies } from './core.mjs';
@@ -12,6 +14,7 @@ import { authorize, authorizePlatform, LEVEL, RESOURCES } from '../access/policy
 import { sessionUser } from '../auth/auth.mjs';
 import { deliverPending } from '../notify/notify.mjs';
 import { deliverMail } from '../mail/outbox.mjs';
+import { verifyBridge } from '../bridge/signature.mjs';
 
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
 
@@ -24,7 +27,12 @@ export function validateOp(op) {
     if (op.csrf !== undefined && op.csrf !== false) throw new Error(`${where}: csrf — только false`);
     return;
   }
-  if (op.auth !== 'user') throw new Error(`${where}: auth должен быть 'public' или 'user'`);
+  if (op.auth === 'bridge') {
+    if (op.access || op.csrf !== undefined) throw new Error(`${where}: у операции моста нет проверки доступа людей и csrf`);
+    if (op.body !== 'raw' || !op.path.startsWith('/api/bridge/')) throw new Error(`${where}: мост — только /api/bridge/… с подписью исходного текста`);
+    return;
+  }
+  if (op.auth !== 'user') throw new Error(`${where}: auth должен быть 'public', 'user' или 'bridge'`);
   // Без признака нашей страницы можно звать только открытые операции (уведомления внешних сервисов).
   if (op.csrf !== undefined) throw new Error(`${where}: отключить защиту от подделки запроса можно только у открытой операции`);
   if (op.access === 'self') return;
@@ -51,9 +59,11 @@ export function mountOps(app, ops, deps) {
     app[op.method.toLowerCase()](op.path, ...parsers, async (req, res, next) => {
       try {
         // Защита от подделки запроса с чужого сайта: изменяющие запросы — только из наших страниц.
-        if (op.method !== 'GET' && op.csrf !== false && req.get('x-delo-request') !== '1') throw new HttpError(403, 'csrf', 'Запрос отклонён');
+        if (op.method !== 'GET' && op.csrf !== false && op.auth !== 'bridge' && req.get('x-delo-request') !== '1') throw new HttpError(403, 'csrf', 'Запрос отклонён');
         const ctx = { ...deps, req, res, params: req.params, query: req.query, body: req.body, op };
         if (op.rateLimit) op.rateLimit(req.ip);
+        // Мост: подпись проверяется до разбора содержимого; ctx.message — проверенное сообщение (id, разобранный JSON).
+        if (op.auth === 'bridge') ctx.message = verifyBridge(req, deps.cfg);
         if (op.auth === 'user') {
           const token = parseCookies(req.headers.cookie).delo_sid;
           ctx.actor = await sessionUser(deps.sql, token);

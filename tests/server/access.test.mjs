@@ -2,7 +2,7 @@
 // Последняя проверка сверяет: в реестре нет операций, не покрытых этой таблицей.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, login, client, makeOrg, addMember, setPlatformRole, ensurePaid, TEST_TOKEN } from '../helpers.mjs';
+import { startApp, login, client, makeOrg, addMember, setPlatformRole, ensurePaid, bridge, TEST_TOKEN } from '../helpers.mjs';
 
 const covered = new Set();
 const cover = (id) => covered.add(id);
@@ -820,6 +820,22 @@ test('почта для заявок (1.9): адрес — только свой
   assert.equal((await U.memberA.req('DELETE', '/api/me/mail')).status, 204);
 });
 
+test('мост CRM (1.10): только по подписи моста; исполнитель видит только свои предложения из CRM', async () => {
+  for (const id of ['specialist.crm', 'bridge.crm.profiles', 'bridge.crm.load', 'bridge.crm.offers']) cover(id);
+  // Люди — даже администратор и диспетчер, с cookie и признаком страницы — мост не вызывают.
+  for (const kind of ['profiles', 'load', 'offers']) {
+    for (const k of ['admin', 'dispatcher', 'owner']) assert.equal((await U[k].req('POST', `/api/bridge/crm/${kind}`, {})).status, 404, `${k} ${kind}`);
+    assert.equal((await client(S).req('POST', `/api/bridge/crm/${kind}`, {})).status, 404);
+  }
+  const consent = { platform: true, version: 'v1', given_at: '2026-09-01T00:00:00Z' };
+  const r = await bridge(S, 'profiles', { profiles: [{ crm_id: 'acc-spec', phone: '+79990000051', email: 'spec-acc@example.test', consent }] });
+  assert.equal(r.body.results[0].outcome, 'linked');
+  await bridge(S, 'offers', { offers: [{ offer_id: 'acc-1', crm_id: 'acc-spec', customer: 'ГСУ СК России по г. Москве', language: 'английский',
+    deadline: '2099-01-01', volume: { amount: 1, unit: 'pages' }, payment: 'pp1240', status: 'open' }] });
+  assert.equal((await U.spec.req('GET', '/api/specialist/crm')).body.crm.offers.length, 1);
+  for (const k of ['admin', 'dispatcher', 'owner', 'headA']) assert.deepEqual((await U[k].req('GET', '/api/specialist/crm')).body.crm, { linked: false, offers: [] }, k);
+});
+
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {
   const PUBLIC = ['health', 'auth.code', 'auth.verify', 'files.memory', 'test.calls', 'test.script', 'test.reset', 'test.mail.inbound', 'payments.notify'];
   const ops = S.app.locals.ops;
@@ -827,6 +843,8 @@ test('реестр: открытые операции — только из ут
   assert.deepEqual(extraPublic, [], `новые открытые операции: ${extraPublic.join(', ')}`);
   // Без защиты от подделки запроса — только уведомление ЮKassa (оно содержимому не верит).
   assert.deepEqual(ops.filter((o) => o.csrf === false).map((o) => o.id), ['payments.notify']);
+  // Операции моста — только три, все под /api/bridge/ (подпись ключом моста).
+  assert.deepEqual(ops.filter((o) => o.auth === 'bridge').map((o) => o.id), ['bridge.crm.profiles', 'bridge.crm.load', 'bridge.crm.offers']);
   const unchecked = ops.filter((o) => o.auth !== 'public' && !covered.has(o.id)).map((o) => o.id);
   assert.deepEqual(unchecked, [], `операции без проверки «свой/чужой» в этой таблице: ${unchecked.join(', ')}`);
 });
