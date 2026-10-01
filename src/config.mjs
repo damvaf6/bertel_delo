@@ -61,6 +61,11 @@ export function loadConfig(env = process.env) {
         model: env.GIGACHAT_MODEL || 'GigaChat-Pro',
       },
     },
+    // Заявка по письму (1.9): особый адрес, на который присылают письма-заявки и с которого уходят ответы.
+    mail: {
+      inbox: (env.MAIL_INBOX_ADDRESS || 'zayavki@delo.test').trim().toLowerCase(),
+      pollSec: Number(env.MAIL_POLL_SEC || 60),
+    },
     // Служебные пути для автотестов (чтение вызовов поддельных поставщиков). Только APP_ENV=test.
     testControlToken: env.TEST_CONTROL_TOKEN || '',
     // Лимит запросов входа с одного адреса за 10 минут. Менять — только APP_ENV=test (много входов в одном прогоне).
@@ -86,6 +91,9 @@ export function loadConfig(env = process.env) {
   }
   if (cfg.ai.fallback && cfg.ai.fallback === cfg.providers.ai) throw new ConfigError('AI_FALLBACK совпадает с AI_PROVIDER');
   if (!Number.isInteger(cfg.ai.dailyLimit) || cfg.ai.dailyLimit < 1) throw new ConfigError('AI_DAILY_LIMIT: целое число от 1');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cfg.mail.inbox)) throw new ConfigError('MAIL_INBOX_ADDRESS: адрес почты');
+  if (cfg.providers.mail !== 'fake' && !env.MAIL_INBOX_ADDRESS) throw new ConfigError('MAIL_INBOX_ADDRESS нужен для настоящей почты');
+  if (!Number.isInteger(cfg.mail.pollSec) || cfg.mail.pollSec < 10) throw new ConfigError('MAIL_POLL_SEC: целое число от 10');
   if (cfg.providers.payments !== 'fake' && !/^https:\/\//.test(cfg.publicUrl)) throw new ConfigError('PUBLIC_URL (https://…) нужен для настоящей оплаты');
   if (live) {
     if (cfg.dbSsl === 'disable') throw new ConfigError('На stage/prod база только с проверкой сертификата');

@@ -13,6 +13,7 @@ import { workOps } from './ops/work-ops.mjs';
 import { moneyOps } from './ops/money-ops.mjs';
 import { notifyOps } from './ops/notify-ops.mjs';
 import { aiOps } from './ops/ai-ops.mjs';
+import { mailOps } from './ops/mail-ops.mjs';
 import { validateRegistry } from './notify/registry.mjs';
 import { memoryFileOps, testControlOps } from './ops/service-ops.mjs';
 import { createRegistry, DEFAULT_MODULES } from './modules/index.mjs';
@@ -20,7 +21,7 @@ import { createRegistry, DEFAULT_MODULES } from './modules/index.mjs';
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
 export function listOps(cfg, providers) {
-  const ops = [...coreOps(cfg), ...orderOps(), ...orgOps(), ...adminOps(), ...matchOps(), ...workOps(), ...moneyOps(), ...notifyOps(), ...aiOps()];
+  const ops = [...coreOps(cfg), ...orderOps(), ...orgOps(), ...adminOps(), ...matchOps(), ...workOps(), ...moneyOps(), ...notifyOps(), ...aiOps(), ...mailOps()];
   if (providers.storage.kind === 'memory') ops.push(...memoryFileOps());
   if (cfg.appEnv === 'test' && cfg.testControlToken) ops.push(...testControlOps(cfg));
   return ops;
@@ -37,6 +38,7 @@ export function createApp({ cfg, sql, providers, modules = DEFAULT_MODULES }) {
 
   const ops = listOps(cfg, providers);
   mountOps(app, ops, { cfg, sql, providers, registry });
+  app.locals.registry = registry;
   app.locals.ops = ops.map(({ id, method, path, auth, access, csrf }) => ({ id, method, path, auth, access, csrf }));
 
   app.use('/api', (req, res) => res.status(404).json({ error: 'not_found', message: 'Не найдено' }));

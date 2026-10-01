@@ -9,7 +9,10 @@
 //   payments.createPayout({ idempotenceKey, executorId, amountKop, description }) → { id, status: succeeded | failed }
 //   payments.createRefund({ idempotenceKey, paymentId, amountKop, description })  → { id, status: succeeded | failed }
 //   ai.complete({ purpose, messages })                             → { text, model }   (основная и запасная — ai.mjs)
-//   mail.send({ to, subject, text })                               → { id }
+//   mail.send({ to, subject, text, messageId, inReplyTo, attachments: [{ filename, contentType, content }] }) → { id }
+//   mail.receive({ limit })  — новые письма на особый адрес (1.9) → [{ id, from, subject, text, messageId, inReplyTo: [],
+//                              authenticated (SPF/DKIM пройдены), autoReply, attachments: [{ filename, contentType, content }] }]
+//   mail.ack({ id })         — письмо сохранено у нас, у поставщика его можно убрать
 import crypto from 'node:crypto';
 import { makeFake } from './fake.mjs';
 import { createAi } from './ai.mjs';
@@ -26,10 +29,29 @@ const FAKES = {
     sendCode: async () => ({ id: id('call') }),
   }),
   payments: () => fakePayments(),
-  mail: () => makeFake('mail', {
-    send: async () => ({ id: id('mail') }),
-  }),
+  mail: () => fakeMail(),
 };
+
+// Поддельная почта: исходящие только записываются; входящие автотесты кладут в ящик (deliver), ядро забирает их receive.
+function fakeMail() {
+  const inbox = [];
+  const fake = makeFake('mail', {
+    send: async () => ({ id: id('mail') }),
+    receive: async ({ limit = 20 } = {}) => inbox.slice(0, limit),
+    ack: async ({ id: mid }) => {
+      const i = inbox.findIndex((x) => x.id === mid);
+      if (i >= 0) inbox.splice(i, 1);
+    },
+  });
+  fake.deliver = (letter) => {
+    const l = { id: id('in'), messageId: `<${crypto.randomUUID()}@test.mail>`, inReplyTo: [], authenticated: true, autoReply: false, attachments: [], ...letter };
+    inbox.push(l);
+    return l;
+  };
+  const reset = fake.reset;
+  fake.reset = () => { reset(); inbox.length = 0; };
+  return fake;
+}
 
 // Поддельная ЮKassa: «страница оплаты» сразу возвращает на returnUrl; при первой проверке незавершённый платёж
 // получает исход nextOutcome (по умолчанию «оплачен»). Автотесты могут задать «отменён», неудачу выплаты (payoutOutcome)

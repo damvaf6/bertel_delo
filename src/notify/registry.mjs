@@ -16,6 +16,7 @@ export const TYPES = [
 export const TYPE = Object.fromEntries(TYPES.map((t) => [t.id, t]));
 
 // title — строка в кабинете и в СМС. order: true — событие по заявке (в СМС добавляется её короткий номер).
+// mail: true — заказчику заявки, пришедшей по письму, уходит и письмо в ту же переписку (1.9, src/mail/mail.mjs).
 export const EVENTS = {
   submitted: { type: 'dispatch', title: 'Новая заявка ждёт подбора исполнителя', order: true },
   declined: { type: 'dispatch', title: 'Исполнитель отказался от дела — нужен новый подбор', order: true },
@@ -34,18 +35,18 @@ export const EVENTS = {
   executor_closed: { type: 'executor_work', title: 'Заявка закрыта', order: true },
   executor_reassigned: { type: 'executor_work', title: 'Дело передано другому исполнителю', order: true },
 
-  priced: { type: 'order_progress', title: 'Цена назначена — оплатите заявку, чтобы передать её исполнителю', order: true },
-  accepted: { type: 'order_progress', title: 'Исполнитель принял заявку в работу', order: true },
-  reassigned: { type: 'order_progress', title: 'Заявка передана другому исполнителю', order: true },
-  done: { type: 'order_progress', title: 'Результат проверен и доступен в кабинете', order: true },
-  cancelled_by_dispatcher: { type: 'order_progress', title: 'Диспетчер отменил заявку', order: true },
+  priced: { type: 'order_progress', title: 'Цена назначена — оплатите заявку, чтобы передать её исполнителю', order: true, mail: true },
+  accepted: { type: 'order_progress', title: 'Исполнитель принял заявку в работу', order: true, mail: true },
+  reassigned: { type: 'order_progress', title: 'Заявка передана другому исполнителю', order: true, mail: true },
+  done: { type: 'order_progress', title: 'Результат проверен и доступен в кабинете', order: true, mail: true },
+  cancelled_by_dispatcher: { type: 'order_progress', title: 'Диспетчер отменил заявку', order: true, mail: true },
 
   message: { type: 'messages', title: 'Новое сообщение по заявке', order: true },
 
-  paid: { type: 'money', title: 'Оплата получена — подбираем исполнителя', order: true },
+  paid: { type: 'money', title: 'Оплата получена — подбираем исполнителя', order: true, mail: true },
   payout_succeeded: { type: 'money', title: 'Вознаграждение выплачено', order: true },
   payout_failed: { type: 'money', title: 'Выплата вознаграждения не прошла — диспетчер повторит', order: true },
-  refund_succeeded: { type: 'money', title: 'Деньги по заявке возвращены', order: true },
+  refund_succeeded: { type: 'money', title: 'Деньги по заявке возвращены', order: true, mail: true },
   refund_failed: { type: 'money', title: 'Возврат денег не прошёл — диспетчер повторит', order: true },
 
   invite: { type: 'org_invites', title: 'Вас пригласили в организацию', order: false },
@@ -64,6 +65,7 @@ export function validateRegistry(types = TYPES, events = EVENTS) {
   for (const [id, e] of Object.entries(events)) {
     if (!ID_RE.test(id)) throw new Error(`уведомления: событие «${id}» — неверный код`);
     if (!ids.has(e.type)) throw new Error(`уведомления: у события «${id}» неизвестный вид «${e.type}»`);
+    if (e.mail !== undefined && (typeof e.mail !== 'boolean' || !e.order)) throw new Error(`уведомления: письмо — только у события по заявке («${id}»)`);
     if (!e.title || e.title.length > 120) throw new Error(`уведомления: у события «${id}» нет текста или он длиннее 120 знаков`);
   }
 }

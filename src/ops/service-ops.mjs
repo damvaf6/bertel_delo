@@ -2,6 +2,8 @@
 import crypto from 'node:crypto';
 import { HttpError } from '../http/core.mjs';
 import { contentDisposition } from '../providers/storage.mjs';
+import { processInbound, receiveMail } from '../mail/inbound.mjs';
+import { deliverMail } from '../mail/outbox.mjs';
 
 // Хранилище «в памяти»: выдача по подписанной временной ссылке (как у S3).
 export function memoryFileOps() {
@@ -39,6 +41,24 @@ export function testControlOps(cfg) {
     {
       id: 'test.script', method: 'POST', path: '/__test/fakes/:name/script', auth: 'public', publicReason: reason,
       async handler({ req, params, providers, body }) { guard(req); fakeOf(providers, params.name).script(body); },
+    },
+    {
+      // Письмо на особый адрес (заявка по письму, 1.9): кладётся в ящик поддельной почты и сразу разбирается.
+      id: 'test.mail.inbound', method: 'POST', path: '/__test/mail/inbound', auth: 'public', publicReason: reason,
+      async handler(ctx) {
+        guard(ctx.req);
+        const b = ctx.body ?? {};
+        const letter = ctx.providers.mail.deliver({
+          from: b.from, subject: b.subject ?? '', text: b.text ?? '', inReplyTo: b.in_reply_to ?? [],
+          ...(b.authenticated === false ? { authenticated: false } : {}), ...(b.auto_reply ? { autoReply: true } : {}),
+          attachments: (b.attachments ?? []).map((a) => ({ filename: a.filename, contentType: a.content_type, content: Buffer.from(a.base64 ?? '', 'base64') })),
+        });
+        await receiveMail(ctx);
+        await processInbound(ctx);
+        await deliverMail(ctx.sql, ctx.providers, ctx.cfg);
+        const [row] = await ctx.sql`select id, outcome, status, order_id, attempts from mail_inbound where provider_id = ${letter.id}`;
+        return { message_id: letter.messageId, inbound: row ?? null };
+      },
     },
     {
       id: 'test.reset', method: 'POST', path: '/__test/fakes/reset', auth: 'public', publicReason: reason,
