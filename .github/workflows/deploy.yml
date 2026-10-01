@@ -31,6 +31,7 @@ jobs:
           umask 077
           printf '%s' "$SA_KEY" > "$RUNNER_TEMP/sa.json"
           yc config set service-account-key "$RUNNER_TEMP/sa.json"
+          yc config set endpoint api.cloud.yandex.net:443
           SA_ID=$(jq -r .service_account_id "$RUNNER_TEMP/sa.json")
           FOLDER_ID=$(yc iam service-account get --id "$SA_ID" --format json | jq -r .folder_id)
           NAME=$(yc resource-manager folder get --id "$FOLDER_ID" --format json | jq -r .name)
