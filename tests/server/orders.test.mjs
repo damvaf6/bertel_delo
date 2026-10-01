@@ -1,7 +1,7 @@
 // Единая «Заявка» (задача 1.3): описание модуля как данные, поля заявки, срок, основание, статусы и история.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, login, setPlatformRole } from '../helpers.mjs';
+import { startApp, login, setPlatformRole, makeSpecialist } from '../helpers.mjs';
 import { DEFAULT_MODULES, createRegistry, validateModule } from '../../src/modules/index.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import expertise from '../../src/modules/expertise.mjs';
@@ -16,7 +16,7 @@ const TRANSLATION = {
   checks: [{ id: 'completeness', title: 'Переведено всё' }],
 };
 
-let S, owner, dispatcher, admin, stranger;
+let S, owner, dispatcher, admin, stranger, spec;
 const today = todayMsk();
 const soon = addDays(today, 10);
 const READY = { deadline: soon, fields: { purpose: 'court', region: 'mo', object_type: 'flat', address: 'Московская обл., тестовый пос., д. 1' } };
@@ -29,6 +29,8 @@ before(async () => {
   stranger = await login(S, '+79990000304');
   await setPlatformRole(S.sql, dispatcher.user.id, 'dispatcher');
   await setPlatformRole(S.sql, admin.user.id, 'admin');
+  spec = await login(S, '+79990000305');
+  await makeSpecialist(S.sql, spec.user.id, { capacity: 50 });
 });
 after(async () => { await S?.close(); });
 
@@ -37,6 +39,11 @@ const create = async (c, body = {}) => {
   assert.equal(r.status, 201, JSON.stringify(r.body));
   return r.body.order;
 };
+// Диспетчер предлагает дело специалисту (шаг «подбор → ждёт исполнителя»).
+async function offer(o, who = spec, from) {
+  const [cur] = await S.sql`select status from orders where id = ${o.id}`;
+  return dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: who.user.id, from: from ?? cur.status });
+}
 const patch = (c, o, body) => c.req('PATCH', `/api/orders/${o.id}`, body);
 // Шаг от статуса, который сейчас в базе (как будто человек только что открыл заявку); from можно задать явно.
 async function step(c, o, to, reason, from) {
@@ -236,20 +243,25 @@ test('весь путь: новая → подбор → ждёт исполни
 
   assert.equal((await step(owner, o, 'matching')).status, 200);
   g = (await dispatcher.req('GET', `/api/orders/${o.id}`)).body;
-  assert.deepEqual(g.actions.map((a) => a.to), ['awaiting_executor', 'cancelled']);
+  assert.deepEqual(g.actions.map((a) => a.to), ['cancelled'], 'предложить дело — отдельной операцией подбора, не шагом статуса');
   assert.equal(g.editable, false);
+  assert.equal((await step(dispatcher, o, 'awaiting_executor')).status, 409);
 
-  assert.equal((await step(dispatcher, o, 'awaiting_executor')).status, 200);
-  assert.equal((await step(dispatcher, o, 'matching')).status, 400, 'возврат в подбор — с причиной');
-  assert.equal((await step(dispatcher, o, 'matching', 'Исполнитель отказался')).status, 200);
-  assert.equal((await step(dispatcher, o, 'awaiting_executor')).status, 200);
-  assert.equal((await step(dispatcher, o, 'in_work')).status, 200);
+  assert.equal((await offer(o)).status, 200);
+  assert.deepEqual((await dispatcher.req('GET', `/api/orders/${o.id}`)).body.actions.map((a) => a.to), ['matching', 'cancelled']);
+  assert.deepEqual((await spec.req('GET', `/api/orders/${o.id}`)).body.actions.map((a) => a.to), ['in_work', 'matching']);
+  assert.equal((await step(spec, o, 'matching')).status, 400, 'отказ — с причиной');
+  assert.equal((await step(spec, o, 'matching', 'Занят до конца месяца')).status, 200);
+  assert.equal((await spec.req('GET', `/api/orders/${o.id}`)).status, 404, 'после отказа дело исполнителю не видно');
+  assert.equal((await offer(o)).status, 200);
+  assert.equal((await step(spec, o, 'in_work')).status, 200);
   assert.equal((await step(owner, o, 'cancelled')).status, 403, 'после начала работ заказчик сам не отменяет');
   assert.deepEqual((await owner.req('GET', `/api/orders/${o.id}`)).body.actions, []);
-  assert.equal((await step(dispatcher, o, 'done')).status, 409, 'через проверку не перепрыгнуть');
-  assert.equal((await step(dispatcher, o, 'review')).status, 200);
+  assert.equal((await step(spec, o, 'done')).status, 409, 'через проверку не перепрыгнуть');
+  assert.equal((await step(dispatcher, o, 'review')).status, 403, 'сдаёт исполнитель, не диспетчер');
+  assert.equal((await step(spec, o, 'review')).status, 200);
   assert.equal((await step(dispatcher, o, 'in_work', 'Нет расчёта аналогов')).status, 200);
-  assert.equal((await step(dispatcher, o, 'review')).status, 200);
+  assert.equal((await step(spec, o, 'review')).status, 200);
   assert.equal((await step(dispatcher, o, 'done')).status, 200);
   assert.equal((await step(owner, o, 'closed')).status, 200, 'заказчик принимает результат');
   assert.equal((await step(dispatcher, o, 'cancelled', 'поздно')).status, 409);
@@ -258,18 +270,18 @@ test('весь путь: новая → подбор → ждёт исполни
   g = (await owner.req('GET', `/api/orders/${o.id}`)).body;
   assert.equal(g.order.status_name, 'Закрыта');
   assert.deepEqual(g.history.map((h) => [h.to_status, h.side]), [
-    ['new', 'customer'], ['matching', 'customer'], ['awaiting_executor', 'dispatcher'], ['matching', 'dispatcher'],
-    ['awaiting_executor', 'dispatcher'], ['in_work', 'dispatcher'], ['review', 'dispatcher'], ['in_work', 'dispatcher'],
-    ['review', 'dispatcher'], ['done', 'dispatcher'], ['closed', 'customer'],
+    ['new', 'customer'], ['matching', 'customer'], ['awaiting_executor', 'dispatcher'], ['matching', 'executor'],
+    ['awaiting_executor', 'dispatcher'], ['in_work', 'executor'], ['review', 'executor'], ['in_work', 'dispatcher'],
+    ['review', 'executor'], ['done', 'dispatcher'], ['closed', 'customer'],
   ]);
-  assert.equal(g.history[3].reason, 'Исполнитель отказался');
+  assert.equal(g.history[3].reason, 'Занят до конца месяца');
   assert.equal(g.history[7].from_name, 'Проверка результата');
   assert.equal(g.history[0].actor_id, undefined, 'кто именно из диспетчеров — наружу не отдаётся');
 
   // Завершённая заявка: файлы не добавляются и не удаляются.
   assert.equal((await upload(owner, o)).status, 409);
   const [{ n }] = await S.sql`select count(*)::int as n from audit_log where subject_id = ${o.id} and action = 'order.status'`;
-  assert.equal(n, 10);
+  assert.equal(n, 8);
 });
 
 test('отмена: заказчик — до начала работ, без причины; диспетчер — с причиной; «новую» диспетчер не трогает', async () => {
@@ -280,13 +292,16 @@ test('отмена: заказчик — до начала работ, без п
 
   const b = await ready();
   await step(owner, b, 'matching');
-  await step(dispatcher, b, 'awaiting_executor');
+  await offer(b);
   assert.equal((await step(owner, b, 'cancelled')).status, 200, 'ждёт исполнителя — ещё можно');
+  const [bo] = await S.sql`select executor_user_id, (select outcome from order_offers where order_id = ${b.id}) as outcome from orders where id = ${b.id}`;
+  assert.equal(bo.executor_user_id, null, 'у отменённой заявки исполнителя нет');
+  assert.equal(bo.outcome, 'withdrawn');
 
   const c = await ready();
   await step(owner, c, 'matching');
-  await step(dispatcher, c, 'awaiting_executor');
-  await step(dispatcher, c, 'in_work');
+  await offer(c);
+  await step(spec, c, 'in_work');
   assert.equal((await step(dispatcher, c, 'cancelled')).status, 400, 'без причины');
   const r = await step(dispatcher, c, 'cancelled', 'Заказчик попросил по телефону');
   assert.equal(r.status, 200);
@@ -299,7 +314,7 @@ test('два одновременных шага по одной заявке: �
   await step(owner, o, 'matching');
   // Оба видели «подбор»: один предлагает исполнителю, другой отменяет. Отмена не должна сработать для нового этапа.
   const [a, b] = await Promise.all([
-    step(dispatcher, o, 'awaiting_executor', null, 'matching'),
+    offer(o, spec, 'matching'),
     step(dispatcher, o, 'cancelled', 'одновременно', 'matching'),
   ]);
   assert.deepEqual([a.status, b.status].sort(), [200, 409]);

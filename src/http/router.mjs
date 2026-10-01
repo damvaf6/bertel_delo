@@ -2,7 +2,8 @@
 //   auth: 'public'  — только с объяснением publicReason (вход, проверка работы);
 //   auth: 'user' + access: 'self'          — действует только над данными самого вошедшего;
 //   auth: 'user' + access: { resource, param, need } — предмет загружается и проверяется до обработчика;
-//   auth: 'user' + access: { platform: 'admin' }     — только администратор платформы (остальным «не найдено»).
+//   auth: 'user' + access: { platform: 'admin' | 'staff' | 'dispatcher' } — только администратор / служебный (диспетчер или
+//                                  администратор) / диспетчер платформы (остальным «не найдено»).
 // Операция без объявления не запускается вовсе (в наследии было наоборот — Б-2, Б-3).
 import express from 'express';
 import { HttpError, parseCookies } from './core.mjs';
@@ -23,7 +24,7 @@ export function validateOp(op) {
   if (op.access === 'self') return;
   const a = op.access;
   if (a?.platform !== undefined) {
-    if (a.platform !== 'admin' || Object.keys(a).length !== 1) throw new Error(`${where}: не описана проверка доступа`);
+    if (!['admin', 'staff', 'dispatcher'].includes(a.platform) || Object.keys(a).length !== 1) throw new Error(`${where}: не описана проверка доступа`);
     return;
   }
   if (!a || !RESOURCES[a.resource] || !a.param || !(a.need in LEVEL) || a.need === 'none') throw new Error(`${where}: не описана проверка доступа`);

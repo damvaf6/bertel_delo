@@ -20,7 +20,7 @@ before(async () => {
   const phones = {
     owner: '+79990000001', stranger: '+79990000002',
     headA: '+79990000011', memberA: '+79990000012', memberA2: '+79990000013', seniorA: '+79990000014',
-    headB: '+79990000021', dispatcher: '+79990000031', admin: '+79990000032', invitee: '+79990000041',
+    headB: '+79990000021', spec: '+79990000051', dispatcher: '+79990000031', admin: '+79990000032', invitee: '+79990000041',
   };
   for (const [k, p] of Object.entries(phones)) U[k] = await login(S, p);
 
@@ -440,9 +440,17 @@ test('orders.status: шаги заказчика — только его сто�
   assert.equal((await st(U.dispatcher, own, 'matching')).status, 403, 'диспетчер не отправляет за заказчика');
   assert.equal((await st(U.admin, own, 'cancelled')).status, 403, 'администратор не отменяет');
   assert.equal((await st(U.owner, own, 'matching')).status, 200);
-  assert.equal((await st(U.owner, own, 'awaiting_executor')).status, 403, 'шаг диспетчера заказчику недоступен');
-  assert.equal((await st(U.admin, own, 'awaiting_executor')).status, 403);
-  assert.equal((await st(U.dispatcher, own, 'awaiting_executor')).status, 200);
+  assert.equal((await st(U.owner, own, 'review')).status, 409, 'такого шага нет');
+  assert.equal((await st(U.owner, own, 'closed')).status, 409);
+  assert.equal((await st(U.admin, own, 'awaiting_executor')).status, 409, 'предложение — отдельная операция подбора');
+  assert.equal((await st(U.dispatcher, own, 'awaiting_executor')).status, 409);
+  await S.sql`insert into specialists (user_id) values (${U.spec.user.id})`;
+  await S.sql`insert into specialist_permits (user_id, module, service) values (${U.spec.user.id}, 'expertise', 'realty')`;
+  assert.equal((await U.dispatcher.req('POST', `/api/orders/${own.id}/offer`, { specialist_id: U.spec.user.id, from: 'matching' })).status, 200);
+  assert.equal((await st(U.owner, own, 'in_work')).status, 403, 'принять дело может только исполнитель');
+  assert.equal((await st(U.dispatcher, own, 'in_work')).status, 403);
+  assert.equal((await st(U.stranger, own, 'in_work')).status, 404);
+  assert.equal((await st(U.spec, own, 'in_work')).status, 200);
 
   const org = await mk(U.memberA, { org_id: orgA.id });
   assert.equal((await st(U.memberA2, org, 'matching')).status, 404, 'коллега');
@@ -452,6 +460,64 @@ test('orders.status: шаги заказчика — только его сто�
   const log = await S.sql`select to_status, side, actor_id from order_status_history where order_id = ${org.id} order by id`;
   assert.deepEqual(log.map((x) => [x.to_status, x.side]), [['new', 'customer'], ['matching', 'customer'], ['cancelled', 'customer']]);
   assert.equal(log[2].actor_id, U.seniorA.user.id);
+});
+
+test('специалисты и подбор: допуски — только администратор; подбор — только диспетчер; чужое дело исполнитель не видит', async () => {
+  for (const id of ['specialist.me', 'specialist.me.update', 'specialists.list', 'specialists.upsert',
+    'specialists.permit.add', 'specialists.permit.remove', 'orders.candidates', 'orders.offer']) cover(id);
+  const target = U.memberA2.user.id;
+  // Профиль и допуски выдаёт только администратор; диспетчер и обычный человек получают «не найдено».
+  for (const who of ['owner', 'dispatcher', 'spec']) {
+    assert.equal((await U[who].req('PUT', `/api/admin/specialists/${target}`, {})).status, 404, `${who}: профиль`);
+    assert.equal((await U[who].req('POST', `/api/admin/specialists/${target}/permits`, { module: 'expertise', service: 'land' })).status, 404, `${who}: допуск`);
+    assert.equal((await U[who].req('DELETE', `/api/admin/specialists/${target}/permits/expertise/realty`)).status, 404);
+  }
+  assert.equal((await U.admin.req('PUT', `/api/admin/specialists/${target}`, { regions: ['moscow'], capacity: 3 })).status, 200);
+  assert.equal((await U.admin.req('POST', `/api/admin/specialists/${target}/permits`, { module: 'expertise', service: 'land' })).status, 201);
+  assert.equal((await U.admin.req('POST', `/api/admin/specialists/${target}/permits`, { module: 'expertise', service: 'nope' })).status, 400);
+  assert.equal((await U.admin.req('DELETE', `/api/admin/specialists/${target}/permits/expertise/land`)).status, 200);
+  assert.equal((await U.admin.req('DELETE', `/api/admin/specialists/${target}/permits/expertise/land`)).status, 404);
+
+  // Список специалистов — служебным; остальным «не найдено».
+  assert.equal((await U.owner.req('GET', '/api/specialists')).status, 404);
+  assert.equal((await U.spec.req('GET', '/api/specialists')).status, 404);
+  assert.equal((await U.dispatcher.req('GET', '/api/specialists')).status, 200);
+  assert.equal((await U.admin.req('GET', '/api/specialists')).status, 200);
+
+  // Свой профиль: у специалиста он есть, у остальных пусто; менять приём дел может только сам специалист.
+  assert.equal((await U.spec.req('GET', '/api/specialist/me')).body.specialist.user_id, U.spec.user.id);
+  assert.equal((await U.owner.req('GET', '/api/specialist/me')).body.specialist, null);
+  assert.equal((await U.owner.req('PATCH', '/api/specialist/me', { active: false })).status, 404);
+  assert.equal((await U.spec.req('PATCH', '/api/specialist/me', { active: 'нет' })).status, 400);
+  assert.equal((await U.spec.req('PATCH', '/api/specialist/me', { active: false })).body.specialist.active, false);
+  assert.equal((await U.spec.req('PATCH', '/api/specialist/me', { active: true })).body.specialist.active, true);
+
+  // Подбор и предложение: только диспетчер; заказчик, администратор, исполнитель и посторонние — нет.
+  const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Подбор' })).body.order;
+  assert.equal((await U.owner.req('PATCH', `/api/orders/${o.id}`, { ...READY, deadline: soon() })).status, 200);
+  assert.equal((await U.owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
+  const offer = (c) => c.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: U.spec.user.id, from: 'matching' });
+  for (const who of ['owner', 'admin']) {
+    assert.equal((await U[who].req('GET', `/api/orders/${o.id}/candidates`)).status, 403, `${who}: список подбора`);
+    assert.equal((await offer(U[who])).status, 403, `${who}: предложение`);
+  }
+  for (const who of ['stranger', 'headB', 'spec', 'memberA']) {
+    assert.equal((await U[who].req('GET', `/api/orders/${o.id}/candidates`)).status, 404, `${who}: список подбора`);
+    assert.equal((await offer(U[who])).status, 404, `${who}: предложение`);
+  }
+  const cands = (await U.dispatcher.req('GET', `/api/orders/${o.id}/candidates`)).body.candidates;
+  assert.ok(cands.some((c) => c.user_id === U.spec.user.id));
+  assert.ok(!cands.some((c) => c.user_id === U.owner.user.id), 'в подборе только допущенные');
+  // Дело не видно исполнителю, пока ему не предложили; после предложения — видно только оно, но не чужие.
+  assert.equal((await U.spec.req('GET', `/api/orders/${o.id}`)).status, 404);
+  assert.equal((await offer(U.dispatcher)).status, 200);
+  assert.equal((await U.spec.req('GET', `/api/orders/${o.id}`)).status, 200);
+  assert.equal((await U.spec.req('GET', `/api/orders/${ownOrder.id}`)).status, 404);
+  assert.ok((await U.spec.req('GET', '/api/orders')).body.orders.some((x) => x.id === o.id));
+  // Исполнитель читает, но не правит и не загружает; документы заявки ему доступны только на чтение.
+  assert.equal((await U.spec.req('PATCH', `/api/orders/${o.id}`, { title: 'моё' })).status, 403);
+  assert.equal((await U.spec.req('PATCH', `/api/orders/${o.id}/responsible`, { user_id: U.spec.user.id })).status, 403);
+  assert.equal((await U.spec.req('GET', `/api/orders/${o.id}/candidates`)).status, 403);
 });
 
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {

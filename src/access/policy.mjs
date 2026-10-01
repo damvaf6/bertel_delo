@@ -12,6 +12,7 @@
 // Приглашение:  адресат (номер совпадает) — write, пока приглашение действует; руководитель организации —
 //               manage над приглашениями своей организации. Это два разных предмета: руководитель не может
 //               принять чужое приглашение, адресат не может его отозвать.
+// Исполнитель:  видит заявку, пока она числится за ним (предложена, в работе, сдана); отказ или отмена — доступ исчезает.
 // Статусы заявки: сторона «заказчик» — у кого write или manage; сторона «диспетчер» — диспетчер платформы
 //               (администратор только читает). Какие шаги доступны стороне — src/orders/workflow.mjs.
 // Остальные не видят вовсе — ответ «не найдено», чтобы не раскрывать существование.
@@ -52,6 +53,8 @@ export function orderLevel(actor, order) {
   } else if (order.owner_user_id === actor.id) {
     return LEVEL.write;
   }
+  // Исполнитель видит дело, которое ему предложено или которое он ведёт; сам дело заказчика не правит.
+  if (order.executor_user_id === actor.id) return LEVEL.read;
   if (isStaff(actor)) return LEVEL.read;
   return LEVEL.none;
 }
@@ -61,6 +64,7 @@ export function orderSides(actor, order) {
   const sides = [];
   if (orderLevel(actor, order) >= LEVEL.write) sides.push('customer');
   if (actor?.platform_role === 'dispatcher') sides.push('dispatcher');
+  if (order?.executor_user_id && order.executor_user_id === actor?.id) sides.push('executor');
   return sides;
 }
 
@@ -80,6 +84,7 @@ export function visibleOrdersFilter(actor) {
   if (isStaff(actor)) return { all: true };
   return {
     userId: actor.id,
+    executorId: actor.id,
     memberOrgIds: actor.orgs.map((m) => m.org_id),
     allOrgIds: actor.orgs.filter((m) => m.role === 'head' || m.role === 'senior').map((m) => m.org_id),
   };
@@ -136,6 +141,8 @@ export const RESOURCES = {
 // Операции уровня платформы (администрирование): не тот, кто нужен, — «не найдено».
 export function authorizePlatform(actor, role) {
   if (role === 'admin' && isAdmin(actor)) return;
+  if (role === 'staff' && isStaff(actor)) return;
+  if (role === 'dispatcher' && actor?.platform_role === 'dispatcher') return;
   throw notFound();
 }
 

@@ -143,6 +143,7 @@ export function orderOps() {
           where ${!!f.all}
              or (r.owner_user_id = ${f.userId ?? null} and (r.org_id is null or r.org_id = any(${f.memberOrgIds ?? []}::uuid[])))
              or r.org_id = any(${f.allOrgIds ?? []}::uuid[])
+             or r.executor_user_id = ${f.executorId ?? null}
           order by r.created_at desc limit 200`;
         const today = todayMsk();
         return { orders: rows.map((r) => describe(registry, r, today)) };
@@ -229,8 +230,15 @@ export function orderOps() {
             const missing = await problemsForSubmit(tx, registry, cur);
             if (missing.length) throw new HttpError(400, 'incomplete', `Не хватает: ${missing.join(', ')}`);
           }
+          // Предложение исполнителю закрывается: принято, отказ исполнителя, либо снято (диспетчером или отменой).
+          if (cur.executor_user_id && (to === 'in_work' || to === 'matching' || to === 'cancelled') && cur.status === 'awaiting_executor') {
+            const outcome = to === 'in_work' ? 'accepted' : t.by === 'executor' ? 'declined' : 'withdrawn';
+            await tx`update order_offers set outcome = ${outcome}, outcome_at = now(), reason = ${reason}
+                     where order_id = ${cur.id} and outcome is null`;
+          }
           const o = await tx.one`
             update orders set status = ${to}, updated_at = now(),
+                   executor_user_id = case when ${to} in ('matching', 'cancelled') then null else executor_user_id end,
                    submitted_at = case when ${to} = 'matching' then coalesce(submitted_at, now()) else submitted_at end
             where id = ${cur.id} returning *`;
           await tx`insert into order_status_history (order_id, from_status, to_status, actor_id, side, reason)
