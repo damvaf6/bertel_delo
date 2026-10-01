@@ -26,3 +26,8 @@ create table refunds (
 -- Закрывающие документы: добавляется документ о возврате заказчику.
 alter table closing_documents drop constraint closing_documents_kind_check;
 alter table closing_documents add constraint closing_documents_kind_check check (kind in ('act', 'agent_report', 'refund'));
+
+-- Исполнитель, которому платится за сделанную часть отменённой заявки, сохраняет к ней доступ (видит выплату и отчёт агента).
+alter table orders drop constraint orders_executor_stage;
+alter table orders add constraint orders_executor_stage
+  check (executor_user_id is null or status in ('awaiting_executor', 'in_work', 'review', 'done', 'closed', 'cancelled'));

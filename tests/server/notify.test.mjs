@@ -54,10 +54,21 @@ test('реестр: у каждого события — известный ви
 
 test('путь заявки: каждый шаг уведомляет нужных людей, но не того, кто сделал шаг', async () => {
   for (const c of [owner, dispatcher, dispatcher2, spec, spec2]) await fresh(c);
-  const o = await submitted();
+  const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: TITLE })).body.order;
+  assert.equal((await owner.req('PATCH', `/api/orders/${o.id}`, READY)).status, 200);
+  assert.equal((await step(owner, o, 'matching', 'new')).status, 200);
   assert.deepEqual(await fresh(dispatcher), ['Новая заявка ждёт подбора исполнителя']);
   assert.deepEqual(await fresh(dispatcher2), ['Новая заявка ждёт подбора исполнителя'], 'всем диспетчерам');
   assert.deepEqual(await fresh(owner), [], 'себе — нет');
+
+  // Цена назначена — заказчику «оплатите»; оплата — заказчику «получена», диспетчерам «можно предлагать» (1.6а).
+  assert.equal((await dispatcher.req('PUT', `/api/orders/${o.id}/price`, { price: '15000' })).status, 200);
+  assert.deepEqual(await fresh(owner), ['Цена назначена — оплатите заявку, чтобы передать её исполнителю']);
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/payments`)).status, 201);
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/payments/refresh`)).body.money.paid, true);
+  assert.deepEqual(await fresh(owner), ['Оплата получена — подбираем исполнителя']);
+  assert.deepEqual(await fresh(dispatcher), ['Заявка оплачена — можно предлагать исполнителю']);
+  assert.deepEqual(await fresh(dispatcher2), ['Заявка оплачена — можно предлагать исполнителю']);
 
   assert.equal((await offer(o, spec)).status, 200);
   assert.deepEqual(await fresh(spec), ['Вам предложено новое дело']);
@@ -95,15 +106,10 @@ test('путь заявки: каждый шаг уведомляет нужны
   assert.equal((await step(spec, o, 'review', 'in_work')).status, 200);
   const rv = (await dispatcher.req('GET', `/api/orders/${o.id}/review`)).body;
   for (const c of rv.checks) await dispatcher.req('PUT', `/api/orders/${o.id}/review/${c.id}`, { verdict: 'ok', round: rv.round });
+  // Результат проверен и выдан — заказчику «доступен», исполнителю «принят» и сразу «выплачено» (1.6а).
   assert.equal((await step(dispatcher, o, 'done', 'review')).status, 200);
-  assert.deepEqual(await fresh(owner), ['Результат проверен — заявку можно оплатить']);
-  assert.deepEqual(await fresh(spec), ['Результат принят проверкой']);
-
-  // Оплата: заказчику «получена», исполнителю «выплачено».
-  assert.equal((await owner.req('POST', `/api/orders/${o.id}/payments`)).status, 201);
-  assert.equal((await owner.req('POST', `/api/orders/${o.id}/payments/refresh`)).body.money.paid, true);
-  assert.deepEqual(await fresh(owner), ['Оплата получена — результат доступен']);
-  assert.deepEqual(await fresh(spec), ['Вознаграждение выплачено']);
+  assert.deepEqual(await fresh(owner), ['Результат проверен и доступен в кабинете']);
+  assert.deepEqual(await fresh(spec), ['Результат принят проверкой', 'Вознаграждение выплачено']);
   assert.equal((await step(owner, o, 'closed', 'done')).status, 200);
   assert.deepEqual(await fresh(spec), ['Заявка закрыта']);
 
@@ -123,7 +129,7 @@ test('отмены: диспетчер отменил — заказчику и 
   assert.equal((await offer(a, spec)).status, 200);
   await fresh(spec); await fresh(dispatcher);
   assert.equal((await step(dispatcher, a, 'cancelled', 'awaiting_executor', 'Заказчик передумал')).status, 200);
-  assert.deepEqual(await fresh(owner), ['Диспетчер отменил заявку']);
+  assert.deepEqual(await fresh(owner), ['Диспетчер отменил заявку', 'Деньги по заявке возвращены']);
   assert.deepEqual(await fresh(spec), ['Дело отменено']);
 
   const b = await submitted();
@@ -132,6 +138,27 @@ test('отмены: диспетчер отменил — заказчику и 
   assert.equal((await step(owner, b, 'cancelled', 'awaiting_executor')).status, 200);
   assert.deepEqual(await fresh(dispatcher), ['Заказчик отменил заявку']);
   assert.deepEqual(await fresh(spec), ['Дело отменено']);
+  assert.deepEqual(await fresh(owner), ['Деньги по заявке возвращены'], 'возврат приходит и тому, кто отменил сам');
+
+  // Передача другому исполнителю (1.6а): прежнему — «передано другому», заказчику — «передана другому исполнителю».
+  const d = await submitted();
+  assert.equal((await offer(d, spec)).status, 200);
+  assert.equal((await step(spec, d, 'in_work', 'awaiting_executor')).status, 200);
+  await fresh(spec); await fresh(owner);
+  assert.equal((await step(dispatcher, d, 'matching', 'in_work', 'Исполнитель не выходит на связь')).status, 200);
+  assert.deepEqual(await fresh(spec), ['Дело передано другому исполнителю']);
+  assert.deepEqual(await fresh(owner), ['Заявка передана другому исполнителю']);
+
+  // Возврат не прошёл — заказчику и диспетчерам; диспетчер повторяет.
+  await fresh(dispatcher);
+  S.providers.payments.refundOutcome = 'failed';
+  try {
+    assert.equal((await step(dispatcher, d, 'cancelled', 'matching', 'Заказчик не хочет ждать')).status, 200);
+  } finally { S.providers.payments.refundOutcome = 'succeeded'; }
+  assert.deepEqual(await fresh(owner), ['Диспетчер отменил заявку', 'Возврат денег не прошёл — диспетчер повторит']);
+  assert.deepEqual(await fresh(dispatcher), ['Возврат заказчику не прошёл — нужен повтор']);
+  assert.equal((await dispatcher.req('POST', `/api/orders/${d.id}/refund/retry`)).status, 200);
+  assert.deepEqual(await fresh(owner), ['Деньги по заявке возвращены']);
 
   // Отмена новой (не отправленной) заявки никого не беспокоит.
   const c = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty' })).body.order;
@@ -222,14 +249,12 @@ test('неудавшаяся выплата: исполнителю и дисп�
   for (const c of rv.checks) await dispatcher.req('PUT', `/api/orders/${o.id}/review/${c.id}`, { verdict: 'ok', round: rv.round });
   // Второй диспетчер отключён — ему ничего не пишется.
   await S.sql`update users set is_active = false where id = ${dispatcher2.user.id}`;
-  await step(dispatcher, o, 'done', 'review');
   await fresh(spec); await fresh(dispatcher);
   S.providers.payments.payoutOutcome = 'failed';
   try {
-    await owner.req('POST', `/api/orders/${o.id}/payments`);
-    await owner.req('POST', `/api/orders/${o.id}/payments/refresh`);
+    assert.equal((await step(dispatcher, o, 'done', 'review')).status, 200, 'сбой выплаты не мешает выдать результат');
   } finally { S.providers.payments.payoutOutcome = 'succeeded'; }
-  assert.deepEqual(await fresh(spec), ['Выплата вознаграждения не прошла — диспетчер повторит']);
+  assert.deepEqual(await fresh(spec), ['Результат принят проверкой', 'Выплата вознаграждения не прошла — диспетчер повторит']);
   assert.deepEqual(await fresh(dispatcher), ['Выплата исполнителю не прошла — нужен повтор']);
   const n = await S.sql`select event from notifications where user_id = ${dispatcher2.user.id} and order_id = ${o.id} order by id`;
   assert.deepEqual(n.map((x) => x.event), ['submitted', 'in_review'], 'после отключения — ничего');

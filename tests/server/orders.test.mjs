@@ -276,9 +276,7 @@ test('весь путь: новая → подбор → ждёт исполни
   assert.equal((await step(dispatcher, o, 'done')).status, 409, 'не все правила проверены');
   await passReview(o);
   assert.equal((await step(dispatcher, o, 'done')).status, 200);
-  assert.equal((await step(owner, o, 'closed')).status, 409, 'неоплаченную не закрыть (1.6)');
-  assert.equal((await owner.req('POST', `/api/orders/${o.id}/payments`)).status, 201);
-  assert.equal((await owner.req('POST', `/api/orders/${o.id}/payments/refresh`)).body.money.paid, true);
+  // Оплачено при заказе (1.6а) — заказчик принимает результат и закрывает заявку.
   assert.equal((await step(owner, o, 'closed')).status, 200, 'заказчик принимает результат');
   assert.equal((await step(dispatcher, o, 'cancelled', 'поздно')).status, 409);
   assert.equal((await step(owner, o, 'nope')).status, 400);
@@ -319,7 +317,8 @@ test('отмена: заказчик — до начала работ, без п
   await offer(c);
   await step(spec, c, 'in_work');
   assert.equal((await step(dispatcher, c, 'cancelled')).status, 400, 'без причины');
-  const r = await step(dispatcher, c, 'cancelled', 'Заказчик попросил по телефону');
+  assert.equal((await step(dispatcher, c, 'cancelled', 'Заказчик попросил по телефону')).status, 400, 'после начала работ — по чьей причине');
+  const r = await dispatcher.req('POST', `/api/orders/${c.id}/status`, { to: 'cancelled', from: 'in_work', reason: 'Заказчик попросил по телефону', fault: 'executor' });
   assert.equal(r.status, 200);
   assert.equal(r.body.order.status_name, 'Отменена');
   assert.equal((await step(admin, c, 'matching')).status, 409);

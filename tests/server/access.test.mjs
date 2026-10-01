@@ -600,13 +600,7 @@ test('работа по делу: результат — только испол
   assert.equal((await mark(U.dispatcher, 'calculation', { verdict: 'ok', round: 2 })).status, 409, 'не тот круг');
   for (const c of rv.checks) assert.equal((await mark(U.dispatcher, c.id, { verdict: 'ok', round: 1 })).status, 200);
   assert.equal((await U.dispatcher.req('POST', `/api/orders/${o.id}/status`, { to: 'done', from: 'review' })).status, 200);
-  // Проверено, но не оплачено — результат заказчику ещё не выдаётся (1.6).
-  assert.equal((await U.owner.req('GET', `/api/orders/${o.id}/documents`)).body.results_hidden, true);
-  assert.equal((await U.owner.req('GET', `/api/documents/${doc.id}/link`)).status, 404);
-  assert.equal((await U.owner.req('POST', `/api/orders/${o.id}/payments`)).status, 201);
-  assert.equal((await U.owner.req('POST', `/api/orders/${o.id}/payments/refresh`)).body.money.paid, true);
-
-  // После проверки и оплаты заказчик видит результат и скачивает, но не удаляет; итог проверки — «всё в порядке».
+  // Оплачено при заказе (1.6а): после проверки заказчик видит результат и скачивает, но не удаляет; итог — «всё в порядке».
   const after = (await U.owner.req('GET', `/api/orders/${o.id}/documents`)).body;
   assert.ok(after.documents.some((d) => d.id === doc.id && d.kind === 'result'));
   assert.equal(after.results_hidden, false);
@@ -621,8 +615,8 @@ test('работа по делу: результат — только испол
   assert.equal((await U.owner.req('GET', `/api/orders/${o.id}/messages`)).body.can_write, false);
 });
 
-test('деньги: цену — диспетчер; платит заказчик после проверки; суммы и документы — каждому свои; сводка — служебным', async () => {
-  for (const id of ['orders.money', 'orders.price', 'payments.create', 'payments.refresh', 'payouts.retry', 'money.summary', 'payouts.mine']) cover(id);
+test('деньги: цену — диспетчер; платит заказчик при заказе; суммы и документы — каждому свои; возвраты; сводка — служебным', async () => {
+  for (const id of ['orders.money', 'orders.price', 'payments.create', 'payments.refresh', 'payouts.retry', 'refunds.retry', 'money.summary', 'payouts.mine']) cover(id);
   const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Деньги' })).body.order;
   assert.equal((await U.owner.req('PATCH', `/api/orders/${o.id}`, { ...READY, deadline: soon() })).status, 200);
   assert.equal((await U.owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
@@ -631,6 +625,7 @@ test('деньги: цену — диспетчер; платит заказчи
   const pay = (c) => c.req('POST', `/api/orders/${o.id}/payments`);
   const refresh = (c) => c.req('POST', `/api/orders/${o.id}/payments/refresh`);
   const retry = (c) => c.req('POST', `/api/orders/${o.id}/payout/retry`);
+  const retryRefund = (c, id = o.id) => c.req('POST', `/api/orders/${id}/refund/retry`);
 
   // Цена: только диспетчер и только в подборе.
   for (const who of ['owner', 'admin']) assert.equal((await price(U[who], '15000')).status, 403, `${who}: цена`);
@@ -646,45 +641,47 @@ test('деньги: цену — диспетчер; платит заказчи
   assert.equal(priced.body.money.price_kop, 1500050);
   assert.equal(priced.body.money.commission_kop, 300010, '20% платформе');
   assert.equal(priced.body.money.fee_kop, 1200040, '80% исполнителю');
-  assert.equal((await U.dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: U.spec.user.id, from: 'matching' })).status, 200);
-  assert.equal((await price(U.dispatcher, '1')).status, 409, 'после предложения цена не меняется');
 
-  // Что видит каждый: заказчик — цену, исполнитель — своё вознаграждение, но не цену и не вознаграждение платформы.
-  const mo = (await money(U.owner)).body.money;
-  assert.deepEqual([mo.price_kop, mo.fee_kop, mo.commission_kop, mo.payout], [1500050, null, null, null]);
-  const ms = (await money(U.spec)).body.money;
-  assert.deepEqual([ms.price_kop, ms.fee_kop, ms.commission_kop, ms.payment], [null, 1200040, null, null]);
-  assert.equal((await money(U.admin)).body.money.commission_kop, 300010);
-
-  // Оплатить можно только после проверки результата.
-  assert.equal((await pay(U.owner)).status, 409, 'ещё не проверено');
-  assert.equal((await U.spec.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
-  assert.equal((await U.spec.req('POST', `/api/orders/${o.id}/results`, Buffer.from('отчёт'), { raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': 'r.pdf' } })).status, 201);
-  assert.equal((await U.spec.req('POST', `/api/orders/${o.id}/status`, { to: 'review', from: 'in_work' })).status, 200);
-  const rv = (await U.dispatcher.req('GET', `/api/orders/${o.id}/review`)).body;
-  for (const c of rv.checks) await U.dispatcher.req('PUT', `/api/orders/${o.id}/review/${c.id}`, { verdict: 'ok', round: rv.round });
-  assert.equal((await U.dispatcher.req('POST', `/api/orders/${o.id}/status`, { to: 'done', from: 'review' })).status, 200);
-
-  // Платит только сторона заказчика; закрыть неоплаченную нельзя — ни заказчику, ни диспетчеру.
-  for (const who of ['dispatcher', 'admin', 'spec']) assert.equal((await pay(U[who])).status, 403, `${who}: оплата`);
-  for (const who of ['stranger', 'headB', 'headA']) assert.equal((await pay(U[who])).status, 404, `${who}: оплата`);
-  assert.equal((await U.owner.req('POST', `/api/orders/${o.id}/status`, { to: 'closed', from: 'done' })).status, 409);
-  assert.equal((await U.dispatcher.req('POST', `/api/orders/${o.id}/status`, { to: 'closed', from: 'done' })).status, 409);
-  assert.ok(!(await U.owner.req('GET', `/api/orders/${o.id}`)).body.actions.some((a) => a.to === 'closed'));
+  // Платит только сторона заказчика — при заказе, до предложения исполнителю.
+  for (const who of ['dispatcher', 'admin']) assert.equal((await pay(U[who])).status, 403, `${who}: оплата`);
+  for (const who of ['stranger', 'headB', 'headA', 'spec']) assert.equal((await pay(U[who])).status, 404, `${who}: оплата`);
   assert.equal((await money(U.owner)).body.money.can_pay, true);
+  assert.equal((await money(U.dispatcher)).body.money.can_pay, false, 'кнопка оплаты — только заказчику');
   const p1 = await pay(U.owner);
   assert.equal(p1.status, 201);
   assert.ok(p1.body.confirmation_url.endsWith(`/kabinet.html#order=${o.id}`));
   const p2 = await pay(U.owner);
   assert.equal(p2.status, 200, 'незавершённый платёж не создаётся второй раз');
   assert.equal(p2.body.payment.id, p1.body.payment.id);
+  // Состояние оплаты узнаёт заказчик (или служебные); посторонние — нет.
+  for (const who of ['stranger', 'headB', 'spec']) assert.equal((await refresh(U[who])).status, 404, who);
+  const paid = (await refresh(U.owner)).body.money;
+  assert.equal(paid.paid, true);
+  assert.equal(paid.payment.status, 'succeeded');
+  assert.deepEqual(paid.documents, [], 'документы — при выдаче результата, не при оплате');
+  assert.equal((await pay(U.owner)).status, 409, 'уже оплачено');
 
-  // Состояние оплаты узнаёт заказчик (или служебные); исполнитель и посторонние — нет.
+  assert.equal((await U.dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: U.spec.user.id, from: 'matching' })).status, 200);
+  assert.equal((await price(U.dispatcher, '1')).status, 409, 'после предложения цена не меняется');
+  // Что видит каждый: заказчик — цену и оплату, исполнитель — своё вознаграждение, но не цену, не оплату и не вознаграждение платформы.
+  const mo = (await money(U.owner)).body.money;
+  assert.deepEqual([mo.price_kop, mo.fee_kop, mo.commission_kop, mo.payout], [1500050, null, null, null]);
+  const ms = (await money(U.spec)).body.money;
+  assert.deepEqual([ms.price_kop, ms.fee_kop, ms.commission_kop, ms.payment, ms.refund], [null, 1200040, null, null, null]);
   assert.equal((await refresh(U.spec)).status, 403);
-  for (const who of ['stranger', 'headB']) assert.equal((await refresh(U[who])).status, 404, who);
-  const done = (await refresh(U.owner)).body.money;
-  assert.equal(done.paid, true);
-  assert.equal(done.payment.status, 'succeeded');
+  assert.equal((await money(U.admin)).body.money.commission_kop, 300010);
+
+  assert.equal((await U.spec.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  assert.equal((await U.spec.req('POST', `/api/orders/${o.id}/results`, Buffer.from('отчёт'), { raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': 'r.pdf' } })).status, 201);
+  assert.equal((await U.spec.req('POST', `/api/orders/${o.id}/status`, { to: 'review', from: 'in_work' })).status, 200);
+  // Передать другому исполнителю — только диспетчер.
+  for (const who of ['owner', 'spec', 'admin']) assert.equal((await U[who].req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'review', reason: 'x' })).status, 403, who);
+  const rv = (await U.dispatcher.req('GET', `/api/orders/${o.id}/review`)).body;
+  for (const c of rv.checks) await U.dispatcher.req('PUT', `/api/orders/${o.id}/review/${c.id}`, { verdict: 'ok', round: rv.round });
+  assert.equal((await U.dispatcher.req('POST', `/api/orders/${o.id}/status`, { to: 'done', from: 'review' })).status, 200);
+
+  // Выдача результата: заказчику — акт, исполнителю — отчёт агента (без имени заказчика) и выплата.
+  const done = (await money(U.owner)).body.money;
   assert.deepEqual(done.documents.map((d) => d.kind), ['act'], 'заказчику — акт');
   assert.equal(done.documents[0].data.customer, (await S.sql`select full_name from users where id = ${U.owner.user.id}`)[0].full_name || 'Заказчик');
   const sp = (await money(U.spec)).body.money;
@@ -693,17 +690,34 @@ test('деньги: цену — диспетчер; платит заказчи
   assert.equal(sp.payout.status, 'succeeded');
   assert.equal(sp.payout.amount_kop, 1200040);
   assert.deepEqual((await money(U.admin)).body.money.documents.map((d) => d.kind), ['act', 'agent_report']);
-  assert.equal((await pay(U.owner)).status, 409, 'уже оплачено');
 
-  // Повтор выплаты — только диспетчер и только у неудавшейся.
+  // Повтор выплаты и возврата — только диспетчер и только у неудавшихся.
   assert.equal((await retry(U.dispatcher)).status, 409);
-  for (const who of ['owner', 'spec', 'admin']) assert.equal((await retry(U[who])).status, 403, who);
-  assert.equal((await retry(U.stranger)).status, 404);
+  assert.equal((await retryRefund(U.dispatcher)).status, 409);
+  for (const who of ['owner', 'spec', 'admin']) {
+    assert.equal((await retry(U[who])).status, 403, who);
+    assert.equal((await retryRefund(U[who])).status, 403, who);
+  }
+  for (const who of ['stranger', 'headB']) {
+    assert.equal((await retry(U[who])).status, 404, who);
+    assert.equal((await retryRefund(U[who])).status, 404, who);
+  }
+
+  // Возврат при отмене: документ о возврате — заказчику, не постороннему и не исполнителю.
+  const c = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Возврат' })).body.order;
+  await U.owner.req('PATCH', `/api/orders/${c.id}`, { ...READY, deadline: soon() });
+  await U.owner.req('POST', `/api/orders/${c.id}/status`, { to: 'matching', from: 'new' });
+  await ensurePaid(S.sql, c.id);
+  assert.equal((await U.owner.req('POST', `/api/orders/${c.id}/status`, { to: 'cancelled', from: 'matching' })).status, 200);
+  const mc = (await U.owner.req('GET', `/api/orders/${c.id}/money`)).body.money;
+  assert.deepEqual([mc.refund.status, mc.documents.map((d) => d.kind)], ['succeeded', ['refund']]);
+  for (const who of ['stranger', 'headB', 'spec']) assert.equal((await U[who].req('GET', `/api/orders/${c.id}/money`)).status, 404, who);
 
   // Сводка — служебным; свои выплаты — каждому только свои.
   for (const who of ['owner', 'spec', 'headA']) assert.equal((await U[who].req('GET', '/api/money')).status, 404, who);
   const sum = (await U.dispatcher.req('GET', '/api/money')).body;
   assert.ok(sum.totals.received_kop >= 1500050);
+  assert.ok(sum.totals.refunded_kop >= 1500000);
   assert.ok(sum.payouts.some((p) => p.order_id === o.id));
   assert.equal((await U.admin.req('GET', '/api/money')).status, 200);
   assert.ok((await U.spec.req('GET', '/api/payouts')).body.payouts.some((p) => p.order_id === o.id));
