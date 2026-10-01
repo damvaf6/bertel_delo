@@ -87,6 +87,7 @@
   для руководителя (`IDEAS.md`).
 
 ## Последние коммиты
+- `bertel_delo`, PR https://github.com/damvaf6/bertel_delo/pull/8 (ветка `claude/nifty-albattani-tib7pe`): задача 1.4, слит Работником Дело 01.10.2026 после зелёного CI (проверено без облака).
 - `bertel_delo`, PR №6 слит в `main` (слияние `8c3acfc`) по «да» Дамира 01.10.2026.
 - `bertel_delo`, PR https://github.com/damvaf6/bertel_delo/pull/6 (ветка `claude/funny-darwin-b1ukkv`): задача 1.3
   (единая «Заявка», статусы, модуль «Экспертиза» описанием). Локально: сервер 88/88, телефон 13/13; CI зелёный
