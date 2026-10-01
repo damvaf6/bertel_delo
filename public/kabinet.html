@@ -135,12 +135,38 @@
         <h2>Документы</h2>
         <ul class="list" id="docs"></ul>
         <p class="muted hidden" id="docs-empty">Документов пока нет.</p>
+        <p class="muted hidden" id="results-later">Результат работы появится здесь после проверки.</p>
         <div class="field" id="upload-box">
           <p class="muted">Добавить файл (до 5 МБ)</p>
           <label class="btn secondary" for="file">Выбрать файл</label>
           <input id="file" type="file" class="visually-hidden" aria-label="Добавить файл (до 5 МБ)">
         </div>
+        <div class="field hidden" id="result-upload-box">
+          <p class="muted">Результат работы (до 5 МБ): заказчик увидит его после проверки. Сдать на проверку можно, когда файл приложен.</p>
+          <label class="btn" for="result-file">Добавить файл результата</label>
+          <input id="result-file" type="file" class="visually-hidden" aria-label="Добавить файл результата (до 5 МБ)">
+        </div>
         <p class="msg" id="doc-msg" role="status" aria-live="polite"></p>
+      </div>
+      <div class="card hidden" id="review-box">
+        <h2>Проверка результата</h2>
+        <p class="muted" id="review-summary"></p>
+        <ul class="list" id="review-checks"></ul>
+        <p class="msg" id="review-msg" role="status" aria-live="polite"></p>
+      </div>
+      <div class="card" id="chat-box">
+        <h2>Переписка</h2>
+        <p class="muted">Видят заказчик, исполнитель и диспетчер платформы.</p>
+        <ul class="list chat" id="messages"></ul>
+        <p class="muted hidden" id="messages-empty">Сообщений пока нет.</p>
+        <form class="hidden" id="message-form" novalidate>
+          <div class="field">
+            <label for="message-text">Сообщение</label>
+            <textarea id="message-text" maxlength="4000"></textarea>
+          </div>
+          <button type="submit" class="secondary" id="message-send">Отправить сообщение</button>
+        </form>
+        <p class="msg" id="chat-msg" role="status" aria-live="polite"></p>
       </div>
     </section>
 
