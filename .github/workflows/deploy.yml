@@ -82,22 +82,27 @@ jobs:
           echo "URL=${URL%/}" >> $GITHUB_ENV
 
       - name: Проверка на адресе контура
+        timeout-minutes: 10
         run: |
+          echo "Адрес: $URL"
+          echo "### Контур stage: $URL" >> $GITHUB_STEP_SUMMARY
           # Контейнер отвечает только после обновления схемы и проверки базы и файлов (src/startup.mjs).
+          OK=0
           for i in $(seq 1 12); do
-            BODY=$(curl -fsS --max-time 30 "$URL/api/health" || true)
-            if echo "$BODY" | jq -e '.ok == true and .test_data == true' >/dev/null 2>&1; then
-              echo "Ядро работает: $URL — $BODY"; break
+            CODE=$(curl -sS --max-time 40 -o "$RUNNER_TEMP/health.json" -w '%{http_code}' "$URL/api/health" || echo "нет связи")
+            echo "попытка $i: $CODE $(head -c 300 "$RUNNER_TEMP/health.json" 2>/dev/null)"
+            if [ "$CODE" = 200 ] && jq -e '.ok == true and .test_data == true' "$RUNNER_TEMP/health.json" >/dev/null 2>&1; then
+              OK=1; break
             fi
-            [ "$i" = 12 ] && { echo "::error::Нет ответа от ядра: $BODY"; exit 1; }
             sleep 10
           done
-          curl -fsS --max-time 30 -o /dev/null "$URL/" && echo "Страница входа открывается"
-          echo "### Контур stage: $URL" >> $GITHUB_STEP_SUMMARY
           # Журнал запуска (схема, проверка базы и файлов) — для отчёта; данных людей в нём нет.
           CID=$(yc serverless container get --name "$CONTAINER" --format json | jq -r .id)
-          yc logging read --folder-id "$FOLDER_ID" --resource-ids "$CID" --since 15m --limit 50 --format json 2>/dev/null \
-            | jq -r '.[].message' | grep -E 'схема|проверка при старте|запуск остановлен|ядро' || echo "журнал пока пуст"
+          timeout 60 yc logging read --folder-id "$FOLDER_ID" --resource-ids "$CID" --since 20m --limit 100 --format json 2>&1 \
+            | jq -r '.[]? | .message' 2>/dev/null | tail -40 || echo "журнал не прочитан"
+          [ "$OK" = 1 ] || { echo "::error::Ядро на stage не отвечает"; exit 1; }
+          echo "Ядро работает"
+          CODE=$(curl -sS --max-time 40 -o /dev/null -w '%{http_code}' "$URL/") && echo "Страница входа: $CODE"
 
       - name: Убрать ключ
         if: always()
