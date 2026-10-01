@@ -54,7 +54,8 @@ jobs:
 
       - name: Образ
         run: |
-          yc container registry configure-docker
+          # Вход во временный токен (живёт до 12 ч), а не постоянным ключом.
+          yc iam create-token | docker login --username iam --password-stdin cr.yandex
           docker build -t "$IMAGE" .
           docker push "$IMAGE"
 
@@ -99,4 +100,6 @@ jobs:
 
       - name: Убрать ключ
         if: always()
-        run: rm -f "$RUNNER_TEMP/sa.json"
+        run: |
+          docker logout cr.yandex || true
+          rm -f "$RUNNER_TEMP/sa.json"
