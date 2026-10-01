@@ -15,6 +15,7 @@
   </header>
   <nav class="tabs" aria-label="Разделы кабинета">
     <a href="#" data-tab="orders">Заявки</a>
+    <a href="#notifications" data-tab="notifications">Уведомления<span class="count hidden" id="notify-count"></span></a>
     <a href="#orgs" data-tab="orgs">Организации<span class="count hidden" id="invites-count"></span></a>
     <a href="#specialist" data-tab="specialist" class="hidden" id="specialist-tab">Специалист</a>
     <a href="#specialists" data-tab="specialists" class="hidden" id="specialists-tab">Специалисты</a>
@@ -286,6 +287,20 @@
         <h2 id="money-payouts-title">Выплаты исполнителям</h2>
         <ul class="list" id="money-payouts"></ul>
         <p class="muted hidden" id="money-payouts-empty">Выплат пока нет.</p>
+      </div>
+    </section>
+
+    <section id="notifications-view" class="hidden">
+      <div class="card">
+        <h1>Уведомления</h1>
+        <ul class="list" id="notifications"></ul>
+        <p class="muted hidden" id="notifications-empty">Уведомлений пока нет.</p>
+      </div>
+      <div class="card" id="notify-settings">
+        <h2>СМС-уведомления</h2>
+        <p class="muted">В кабинете уведомления видны всегда. Отметьте, о чём ещё присылать СМС на номер, по которому Вы входите. В СМС нет имён и названий — только номер заявки.</p>
+        <div id="notify-types"></div>
+        <p class="msg" id="notify-msg" role="status" aria-live="polite"></p>
       </div>
     </section>
 

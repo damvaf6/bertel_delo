@@ -5,6 +5,7 @@ import { FINAL } from '../orders/workflow.mjs';
 import { orderSides, seesResults } from '../access/policy.mjs';
 import { requestCode, verifyCode, endSession, SESSION_TTL_SEC } from '../auth/auth.mjs';
 import { audit, oneOf, phoneFrom, publicUser, text } from './util.mjs';
+import { unreadCount } from './notify-ops.mjs';
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const DOC_KINDS = ['basis', 'other'];
@@ -82,7 +83,7 @@ export function coreOps() {
         const inv = await sql.one`
           select count(*)::int as n from org_invites
           where phone = ${actor.phone} and accepted_at is null and declined_at is null and revoked_at is null and expires_at > now()`;
-        return { user: publicUser(actor), orgs, pending_invites: inv.n };
+        return { user: publicUser(actor), orgs, pending_invites: inv.n, unread_notifications: await unreadCount(sql, actor.id) };
       },
     },
     {

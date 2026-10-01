@@ -7,6 +7,7 @@ import { HttpError } from '../http/core.mjs';
 import { isStaff, messageSide, orderSides, seesReviewDetails } from '../access/policy.mjs';
 import { FINAL } from '../orders/workflow.mjs';
 import { audit, text } from './util.mjs';
+import { notifyMessage } from '../notify/notify.mjs';
 
 const MESSAGE_MAX = 4000;
 const NOTE_MAX = 1000;
@@ -66,6 +67,7 @@ export function workOps() {
           const m = await tx.one`insert into order_messages (order_id, author_id, side, body)
                                  values (${order.id}, ${actor.id}, ${side}, ${msg}) returning *`;
           await audit(tx, actor, 'message.post', 'order', order.id, { message: String(m.id), side });
+          await notifyMessage(tx, { actor, order, side });
           return m;
         });
         res.status(201);

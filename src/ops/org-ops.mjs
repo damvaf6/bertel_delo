@@ -4,6 +4,7 @@
 import { HttpError } from '../http/core.mjs';
 import { LEVEL, ORG_ROLES, orgLevel } from '../access/policy.mjs';
 import { audit, oneOf, phoneFrom, text, uuidFrom } from './util.mjs';
+import { notifyPhone } from '../notify/notify.mjs';
 
 export const INVITE_TTL_DAYS = 14;
 export const LIMITS = {
@@ -189,6 +190,7 @@ export function orgOps() {
             values (${org.id}, ${phone}, ${role}, ${actor.id}, now() + make_interval(days => ${INVITE_TTL_DAYS}))
             returning *`;
           await audit(tx, actor, 'org.invite.create', 'org', org.id, { invite_id: i.id, role });
+          await notifyPhone(tx, 'invite', phone, { orgId: org.id, actor });
           return i;
         });
         res.status(201);

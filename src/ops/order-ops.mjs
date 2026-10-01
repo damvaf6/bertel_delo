@@ -7,6 +7,7 @@ import { BASIS_KINDS, cleanValues, missingRequired } from '../modules/index.mjs'
 import { STATUSES, STATUS_NAME, TRANSITIONS, addDays, availableActions, findTransition, isOverdue, todayMsk } from '../orders/workflow.mjs';
 import { audit, oneOf, text, uuidFrom } from './util.mjs';
 import { reviewState } from './work-ops.mjs';
+import { notifyStatus } from '../notify/notify.mjs';
 
 const LEVEL_NAME = ['none', 'read', 'write', 'manage'];
 const DEADLINE_MAX_DAYS = 2 * 365;
@@ -266,6 +267,7 @@ export function orderOps() {
           await tx`insert into order_status_history (order_id, from_status, to_status, actor_id, side, reason)
                    values (${cur.id}, ${cur.status}, ${to}, ${actor.id}, ${t.by}, ${reason})`;
           await audit(tx, actor, 'order.status', 'order', cur.id, { from: cur.status, to, side: t.by });
+          await notifyStatus(tx, { actor, before: cur, to, by: t.by });
           return o;
         });
         return { order: await orderView(sql, registry, updated) };

@@ -90,7 +90,7 @@ export function client(stack) {
 }
 
 export function lastCode(stack, phone) {
-  const calls = stack.providers.sms.calls.filter((x) => x.args.phone === phone);
+  const calls = stack.providers.sms.calls.filter((x) => x.method === 'sendCode' && x.args.phone === phone);
   return calls.at(-1)?.args.code;
 }
 
