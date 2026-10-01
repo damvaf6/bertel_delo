@@ -121,8 +121,8 @@ resource "yandex_mdb_postgresql_database" "app" {
   cluster_id = yandex_mdb_postgresql_cluster.main.id
   name       = "delo"
   owner      = yandex_mdb_postgresql_user.app.name
-  lc_collate = "C.UTF-8"
-  lc_type    = "C.UTF-8"
+  lc_collate = "C" # Yandex MDB принимает "C", "en_US.UTF-8", "ru_RU.UTF-8"
+  lc_type    = "C"
 
   extension { name = "pgcrypto" }
   extension { name = "citext" }
