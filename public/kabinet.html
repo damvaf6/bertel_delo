@@ -67,6 +67,7 @@
         <p class="row"><span class="badge status" id="order-status"></span><span class="muted" id="order-deadline"></span></p>
         <p class="muted" id="order-meta"></p>
         <p class="muted" id="order-org-line"></p>
+        <p class="muted hidden" id="order-mail-line"></p>
       </div>
       <form class="card hidden" id="details-form" novalidate>
         <h2>Данные заявки</h2>
@@ -400,6 +401,31 @@
         <button type="submit" class="wide" id="save-profile">Сохранить</button>
         <p class="msg" id="profile-msg" role="status" aria-live="polite"></p>
       </form>
+      <div class="card" id="mail-card">
+        <h2>Почта для заявок</h2>
+        <p class="muted">Заявку можно прислать письмом с вложениями на адрес <strong id="mail-inbox"></strong> — с подключённой здесь почты.
+          Помощник разберёт письмо, создаст заявку-черновик и ответит её номером. Отправить заявку — ответом «Отправить»;
+          ход заявки и готовый результат придут ответом в ту же переписку.</p>
+        <p id="mail-status"></p>
+        <div class="field">
+          <label for="mail-email">Ваш адрес почты</label>
+          <input id="mail-email" type="email" maxlength="254" autocomplete="email" placeholder="name@example.ru">
+        </div>
+        <button type="button" class="wide" id="mail-send">Получить код на почту</button>
+        <div class="hidden" id="mail-code-box">
+          <div class="field">
+            <label for="mail-code">Код из письма</label>
+            <input id="mail-code" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code">
+          </div>
+          <button type="button" class="wide" id="mail-confirm">Подтвердить</button>
+        </div>
+        <div class="field hidden" id="mail-org-box">
+          <label for="mail-org">Заявки по письмам — от имени</label>
+          <select id="mail-org"></select>
+        </div>
+        <button type="button" class="secondary wide hidden" id="mail-delete">Отключить почту</button>
+        <p class="msg" id="mail-msg" role="status" aria-live="polite"></p>
+      </div>
     </section>
 
     <section id="specialist-view" class="hidden">
