@@ -141,3 +141,4 @@ ul.plain li { margin: 4px 0; overflow-wrap: anywhere; }
 #ai-review-box { margin-bottom: 8px; }
 #mail-status { margin: 0 0 12px; }
 #mail-org-box, #mail-delete { margin-top: 16px; }
+a.btn { text-decoration: none; margin-top: 8px; }

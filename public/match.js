@@ -57,6 +57,22 @@ export async function showSpecialist() {
   $('specialist-permits').replaceChildren(...sp.permits.map((p) => el('li', { text: permitText(p) })));
   $('specialist-permits-empty').classList.toggle('hidden', sp.permits.length > 0);
   show('specialist-view', 'specialist');
+  await showCrm();
+}
+
+// Госзаказ из БЕРТЕЛ CRM (1.10): число дел там (учитывается в подборе) и короткие предложения; принимаются они в CRM.
+async function showCrm() {
+  const { crm } = await api('GET', '/api/specialist/crm');
+  $('crm-box').classList.toggle('hidden', !crm.linked);
+  if (!crm.linked) return;
+  $('crm-facts').textContent = [`Дел в CRM сейчас: ${crm.open_cases} — они учитываются, чтобы Вас не перегружали.`,
+    crm.languages.length ? `Языки: ${crm.languages.join(', ')}.` : null].filter(Boolean).join(' ');
+  $('crm-offers').replaceChildren(...crm.offers.map((o) => el('li', { 'data-id': o.offer_id },
+    el('div', { class: 'title', text: o.customer }),
+    el('div', { class: 'muted', text: `${o.language} · ${o.volume} · срок ${dayRu(o.deadline)}` }),
+    el('div', { class: 'muted', text: o.payment }),
+    ...(o.url ? [el('a', { class: 'btn secondary', href: o.url, target: '_blank', rel: 'noopener noreferrer', text: 'Открыть в CRM' })] : []))));
+  $('crm-offers-empty').classList.toggle('hidden', crm.offers.length > 0);
 }
 
 $('specialist-active').addEventListener('change', async (e) => {
@@ -77,5 +93,6 @@ export async function showSpecialists() {
     el('div', { class: 'title', text: s.full_name || 'Без имени' }),
     el('div', { class: 'muted', text: [s.active ? 'принимает дела' : 'не принимает дела', `дел ${s.open_orders} из ${s.capacity}`,
       s.regions.map((r) => (r === 'moscow' ? 'Москва' : 'область')).join(' и ')].join(' · ') }),
-    el('div', { class: 'muted', text: s.permits.length ? `Допуски: ${s.permits.map(permitText).join('; ')}` : 'Допусков нет' }))));
+    el('div', { class: 'muted', text: s.permits.length ? `Допуски: ${s.permits.map(permitText).join('; ')}` : 'Допусков нет' }),
+    ...(s.crm ? [el('div', { class: 'muted', text: `Из БЕРТЕЛ CRM · дел там: ${s.external_load}${s.crm.languages.length ? ` · языки: ${s.crm.languages.join(', ')}` : ''}` })] : []))));
 }
