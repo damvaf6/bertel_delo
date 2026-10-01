@@ -1,6 +1,8 @@
 // Настройки ядра — только из переменных окружения. Ключи и пароли в код не попадают.
 // На stage/prod недопустимы: поддельные поставщики, база без проверки сертификата, служебные тестовые пути.
 
+import { AI_DRIVERS } from './providers/ai.mjs';
+
 const ENVS = ['test', 'dev', 'stage', 'prod'];
 
 export class ConfigError extends Error {}
@@ -41,6 +43,24 @@ export function loadConfig(env = process.env) {
       secretAccessKey: env.S3_SECRET_KEY || '',
       forcePathStyle: env.S3_PATH_STYLE === '1',
     },
+    // ИИ: основная модель — AI_PROVIDER, запасная — AI_FALLBACK (пусто — без запасной). Ключи — из Lockbox через окружение.
+    ai: {
+      fallback: env.AI_FALLBACK || '',
+      dailyLimit: Number(env.AI_DAILY_LIMIT || 50),
+      yandex: {
+        url: (env.AI_YANDEX_URL || 'https://llm.api.cloud.yandex.net/v1').replace(/\/+$/, ''),
+        folder: env.AI_YANDEX_FOLDER || '',
+        apiKey: env.AI_YANDEX_API_KEY || '',
+        model: env.AI_YANDEX_MODEL || 'yandexgpt/latest',
+      },
+      gigachat: {
+        authUrl: env.GIGACHAT_AUTH_URL || 'https://ngw.devices.sberbank.ru:9443/api/v2/oauth',
+        url: (env.GIGACHAT_URL || 'https://gigachat.devices.sberbank.ru/api/v1').replace(/\/+$/, ''),
+        authKey: env.GIGACHAT_AUTH_KEY || '',
+        scope: env.GIGACHAT_SCOPE || 'GIGACHAT_API_PERS',
+        model: env.GIGACHAT_MODEL || 'GigaChat-Pro',
+      },
+    },
     // Служебные пути для автотестов (чтение вызовов поддельных поставщиков). Только APP_ENV=test.
     testControlToken: env.TEST_CONTROL_TOKEN || '',
   };
@@ -53,6 +73,15 @@ export function loadConfig(env = process.env) {
   if (cfg.testControlToken && appEnv !== 'test') throw new ConfigError('TEST_CONTROL_TOKEN допустим только при APP_ENV=test');
   if (cfg.providers.storage === 's3' && !cfg.s3.bucket) throw new ConfigError('S3_BUCKET не задан');
 
+  // Модели ИИ — только из списка (зарубежные в контуре с персональными данными запрещены уставом).
+  for (const [name, driver] of [['AI_PROVIDER', cfg.providers.ai], ['AI_FALLBACK', cfg.ai.fallback]]) {
+    if (name === 'AI_FALLBACK' && !driver) continue;
+    if (!AI_DRIVERS.includes(driver)) throw new ConfigError(`${name}: одно из ${AI_DRIVERS.join(', ')}`);
+    if (driver === 'yandexgpt' && (!cfg.ai.yandex.apiKey || !cfg.ai.yandex.folder)) throw new ConfigError('YandexGPT: нужны AI_YANDEX_API_KEY и AI_YANDEX_FOLDER');
+    if (driver === 'gigachat' && !cfg.ai.gigachat.authKey) throw new ConfigError('GigaChat: нужен GIGACHAT_AUTH_KEY');
+  }
+  if (cfg.ai.fallback && cfg.ai.fallback === cfg.providers.ai) throw new ConfigError('AI_FALLBACK совпадает с AI_PROVIDER');
+  if (!Number.isInteger(cfg.ai.dailyLimit) || cfg.ai.dailyLimit < 1) throw new ConfigError('AI_DAILY_LIMIT: целое число от 1');
   if (cfg.providers.payments !== 'fake' && !/^https:\/\//.test(cfg.publicUrl)) throw new ConfigError('PUBLIC_URL (https://…) нужен для настоящей оплаты');
   if (live) {
     if (cfg.dbSsl === 'disable') throw new ConfigError('На stage/prod база только с проверкой сертификата');
@@ -64,6 +93,7 @@ export function loadConfig(env = process.env) {
     for (const [name, driver] of Object.entries(cfg.providers)) {
       if (driver === 'fake') throw new ConfigError(`На prod поставщик «${name}» не может быть поддельным`);
     }
+    if (cfg.ai.fallback === 'fake') throw new ConfigError('На prod запасная модель ИИ не может быть поддельной');
   }
   return cfg;
 }

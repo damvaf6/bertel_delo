@@ -766,6 +766,32 @@ test('уведомления: каждый видит и меняет тольк
   await S.sql`insert into org_members (org_id, user_id, role) values (${orgA.id}, ${U.memberA2.user.id}, 'member')`;
 });
 
+test('ИИ (1.8): разбор проблемы, ассистент, ИИ-проверка, модель — только свои и только тем, кому положено', async () => {
+  for (const id of ['ai.problem', 'ai.consultation.order', 'assistant.get', 'assistant.ask', 'assistant.clear', 'review.ai', 'ai.status']) cover(id);
+  // Разбор проблемы — только автору.
+  const c = (await U.owner.req('POST', '/api/ai/problem', { text: 'Нужна оценка квартиры для нотариуса' })).body.consultation;
+  for (const k of ['stranger', 'headA', 'dispatcher', 'admin']) {
+    assert.equal((await U[k].req('POST', `/api/ai/consultations/${c.id}/order`, {})).status, 404, k);
+  }
+  assert.equal((await U.owner.req('POST', '/api/ai/consultations/not-a-uuid/order', {})).status, 404);
+  assert.equal((await U.owner.req('POST', `/api/ai/consultations/${c.id}/order`, {})).status, 201);
+  // Ассистент: память организации — только её участникам; заявку — только видимую и в «её» память.
+  assert.equal((await U.headB.req('GET', `/api/assistant?org=${orgA.id}`)).status, 404);
+  assert.equal((await U.dispatcher.req('GET', `/api/assistant?org=${orgA.id}`)).status, 404, 'служебные не читают чужую память');
+  assert.equal((await U.stranger.req('POST', '/api/assistant', { text: 'x', order_id: ownOrder.id })).status, 404);
+  assert.equal((await U.headB.req('POST', '/api/assistant', { text: 'x', order_id: orgOrder.id, org_id: orgB.id })).status, 404);
+  assert.equal((await U.seniorA.req('POST', '/api/assistant', { text: 'x', order_id: colleagueOrder.id, org_id: orgA.id })).status, 201);
+  assert.equal((await U.memberA.req('POST', '/api/assistant', { text: 'x', order_id: colleagueOrder.id, org_id: orgA.id })).status, 404, 'чужое дело коллеги');
+  assert.equal((await U.headB.req('DELETE', `/api/assistant?org=${orgA.id}`)).status, 404);
+  assert.equal((await U.seniorA.req('GET', `/api/assistant?org=${orgA.id}`)).body.messages.length, 2);
+  // ИИ-проверка результата: заявка не в работе и не на проверке — никто; посторонний — «не найдено».
+  for (const k of ['owner', 'dispatcher', 'admin']) assert.equal((await U[k].req('POST', `/api/orders/${ownOrder.id}/review/ai`)).status, 403, k);
+  assert.equal((await U.stranger.req('POST', `/api/orders/${ownOrder.id}/review/ai`)).status, 404);
+  // Сведения о модели — только администратору.
+  assert.equal((await U.admin.req('GET', '/api/admin/ai')).status, 200);
+  for (const k of ['owner', 'dispatcher', 'headA']) assert.equal((await U[k].req('GET', '/api/admin/ai')).status, 404, k);
+});
+
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {
   const PUBLIC = ['health', 'auth.code', 'auth.verify', 'files.memory', 'test.calls', 'test.script', 'test.reset', 'payments.notify'];
   const ops = S.app.locals.ops;

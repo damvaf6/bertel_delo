@@ -12,6 +12,7 @@ import { matchOps } from './ops/match-ops.mjs';
 import { workOps } from './ops/work-ops.mjs';
 import { moneyOps } from './ops/money-ops.mjs';
 import { notifyOps } from './ops/notify-ops.mjs';
+import { aiOps } from './ops/ai-ops.mjs';
 import { validateRegistry } from './notify/registry.mjs';
 import { memoryFileOps, testControlOps } from './ops/service-ops.mjs';
 import { createRegistry, DEFAULT_MODULES } from './modules/index.mjs';
@@ -19,7 +20,7 @@ import { createRegistry, DEFAULT_MODULES } from './modules/index.mjs';
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
 export function listOps(cfg, providers) {
-  const ops = [...coreOps(), ...orderOps(), ...orgOps(), ...adminOps(), ...matchOps(), ...workOps(), ...moneyOps(), ...notifyOps()];
+  const ops = [...coreOps(), ...orderOps(), ...orgOps(), ...adminOps(), ...matchOps(), ...workOps(), ...moneyOps(), ...notifyOps(), ...aiOps()];
   if (providers.storage.kind === 'memory') ops.push(...memoryFileOps());
   if (cfg.appEnv === 'test' && cfg.testControlToken) ops.push(...testControlOps(cfg));
   return ops;

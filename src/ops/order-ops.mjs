@@ -45,6 +45,31 @@ function optionalText(value, field, max) {
   return text(value, field, max);
 }
 
+// Заявки, которые видит вошедший (последние 200): та же логика, что orderLevel в policy.mjs.
+export async function listVisibleOrders(sql, actor) {
+  const f = visibleOrdersFilter(actor);
+  // Личные — свои; от организации — свои, пока состоишь в ней; руководитель и старший — все дела организации.
+  return sql`
+    select r.*, o.name as org_name, u.full_name as responsible_name
+    from orders r left join organizations o on o.id = r.org_id join users u on u.id = r.owner_user_id
+    where ${!!f.all}
+       or (r.owner_user_id = ${f.userId ?? null} and (r.org_id is null or r.org_id = any(${f.memberOrgIds ?? []}::uuid[])))
+       or r.org_id = any(${f.allOrgIds ?? []}::uuid[])
+       or r.executor_user_id = ${f.executorId ?? null}
+    order by r.created_at desc limit 200`;
+}
+
+// Новая заявка (статус «новая») от имени вошедшего: лично или от организации (участие проверяет вызывающий).
+export async function insertOrder(tx, actor, def, { title, orgId, fields = {}, via = null }) {
+  const o = await tx.one`
+    insert into orders (owner_user_id, org_id, title, module, service, basis_kind, fields)
+    values (${actor.id}, ${orgId}, ${title}, ${def.module.id}, ${def.service.id}, ${def.module.basis[0]}, ${JSON.stringify(fields)}) returning *`;
+  await tx`insert into order_status_history (order_id, from_status, to_status, actor_id, side)
+           values (${o.id}, null, 'new', ${actor.id}, 'customer')`;
+  await audit(tx, actor, 'order.create', 'order', o.id, { module: o.module, service: o.service, ...(via ? { via } : {}) });
+  return o;
+}
+
 export function orderOps() {
   // Заявка наружу: с названиями услуги и статуса, организацией и тем, кто её ведёт (имя, без телефона).
   async function orderView(sql, registry, order) {
@@ -122,16 +147,7 @@ export function orderOps() {
         const orgId = body?.org_id == null ? null : uuidFrom(body.org_id, 'Организация не найдена');
         // Заявку от имени организации создаёт только её участник.
         if (orgId !== null && !memberOf(actor, orgId)) throw new HttpError(404, 'not_found', 'Организация не найдена');
-        const basisKind = def.module.basis[0];
-        const order = await sql.tx(async (tx) => {
-          const o = await tx.one`
-            insert into orders (owner_user_id, org_id, title, module, service, basis_kind)
-            values (${actor.id}, ${orgId}, ${title}, ${def.module.id}, ${def.service.id}, ${basisKind}) returning *`;
-          await tx`insert into order_status_history (order_id, from_status, to_status, actor_id, side)
-                   values (${o.id}, null, 'new', ${actor.id}, 'customer')`;
-          await audit(tx, actor, 'order.create', 'order', o.id, { module: o.module, service: o.service });
-          return o;
-        });
+        const order = await sql.tx((tx) => insertOrder(tx, actor, def, { title, orgId }));
         res.status(201);
         return { order: await orderView(sql, registry, order) };
       },
@@ -139,16 +155,7 @@ export function orderOps() {
     {
       id: 'orders.list', method: 'GET', path: '/api/orders', auth: 'user', access: 'self',
       async handler({ sql, actor, registry }) {
-        const f = visibleOrdersFilter(actor);
-        // Личные — свои; от организации — свои, пока состоишь в ней; руководитель и старший — все дела организации.
-        const rows = await sql`
-          select r.*, o.name as org_name, u.full_name as responsible_name
-          from orders r left join organizations o on o.id = r.org_id join users u on u.id = r.owner_user_id
-          where ${!!f.all}
-             or (r.owner_user_id = ${f.userId ?? null} and (r.org_id is null or r.org_id = any(${f.memberOrgIds ?? []}::uuid[])))
-             or r.org_id = any(${f.allOrgIds ?? []}::uuid[])
-             or r.executor_user_id = ${f.executorId ?? null}
-          order by r.created_at desc limit 200`;
+        const rows = await listVisibleOrders(sql, actor);
         const today = todayMsk();
         return { orders: rows.map((r) => ({ ...describe(registry, r, today), as_executor: r.executor_user_id === actor.id })) };
       },
