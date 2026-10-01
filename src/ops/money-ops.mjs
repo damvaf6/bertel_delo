@@ -51,6 +51,7 @@ export function moneyOps() {
     const price = num(order.price_kop);
     const split = price ? splitAmount(price) : null;
     const out = {
+      sees: { customer: see.customer, executor: see.executor, staff: see.staff },
       price_kop: see.customer ? price : null,
       paid: !!order.paid_at,
       paid_at: order.paid_at,

@@ -1,10 +1,11 @@
 // Страница заявки: данные (заполнение, пока заявка «новая»), ход заявки и шаги, кто ведёт дело, документы и результат;
-// проверка результата и переписка — work.js.
+// проверка результата и переписка — work.js; цена, оплата, выплата и закрывающие документы — money.js.
 // Поля рисуются по описанию модуля из /api/catalog — у каждой профессии свои, код страницы один.
 import { api, el, say, formatPhone, formatSize, ROLE_RU } from '/common.js';
 import { state, show, notFoundView } from '/shell.js';
 import { loadMatch } from '/match.js';
 import { loadReview, loadChat } from '/work.js';
+import { loadMoney } from '/money.js';
 
 const $ = (id) => document.getElementById(id);
 const MAX_FILE = 5 * 1024 * 1024;
@@ -41,7 +42,7 @@ export async function openOrder(id) {
   $('reason').value = '';
   render();
   show('order-view', 'orders');
-  await Promise.all([loadDocs(), loadTransfer(), loadMatch(current, () => openOrder(id)), loadReview(current), loadChat(current)]);
+  await Promise.all([loadDocs(), loadTransfer(), loadMatch(current, () => openOrder(id)), loadReview(current), loadChat(current), loadMoney(current, () => openOrder(id))]);
 }
 
 function render() {
@@ -278,7 +279,8 @@ async function loadDocs() {
         ...(removable ? [el('button', { class: 'danger', 'data-action': 'delete', onclick: () => remove(d) }, 'Удалить')] : [])));
   }));
   $('docs-empty').classList.toggle('hidden', documents.length > 0);
-  $('results-later').classList.toggle('hidden', !(resultsHidden && ['in_work', 'review'].includes(order.status)));
+  $('results-later').textContent = order.status === 'done' ? 'Результат проверен — он откроется здесь после оплаты.' : 'Результат работы появится здесь после проверки и оплаты.';
+  $('results-later').classList.toggle('hidden', !(resultsHidden && ['in_work', 'review', 'done'].includes(order.status)));
   const basis = documents.filter((d) => d.kind === 'basis');
   $('basis-file-state').textContent = basis.length ? `Приложено: ${basis.map((d) => d.filename).join(', ')}` : 'Файл определения ещё не приложен';
 }

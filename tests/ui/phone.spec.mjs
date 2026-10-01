@@ -398,6 +398,16 @@ test('ход заявки: подбор диспетчером, принятие
   await expect(cand).toContainText('из 100');
   await expect(cand).toContainText('Загрузка');
   await shot(dp, '26-podbor');
+  // Без цены дело не предложить; диспетчер назначает цену (задача 1.6).
+  dp.once('dialog', (d) => d.accept());
+  await cand.getByRole('button', { name: 'Предложить дело' }).click();
+  await expect(dp.locator('#match-msg')).toHaveText('Сначала назначьте цену');
+  await dp.getByLabel('Цена, рублей').fill('25000');
+  await dp.getByRole('button', { name: 'Назначить цену' }).click();
+  await expect(dp.locator('#money-msg')).toHaveText('Цена назначена');
+  await expect(dp.locator('#money-facts')).toContainText(/Исполнителю \(80%\)\s*20\s000 ₽/);
+  await expect(dp.locator('#money-facts')).toContainText(/Платформе \(20%\)\s*5\s000 ₽/);
+  await shot(dp, '35-dispetcher-cena');
   dp.once('dialog', (d) => d.accept());
   await cand.getByRole('button', { name: 'Предложить дело' }).click();
   await expect(dp.locator('#order-status')).toHaveText('Ждёт исполнителя');
@@ -412,6 +422,9 @@ test('ход заявки: подбор диспетчером, принятие
   await expect(sp.locator('#order-status')).toHaveText('Ждёт исполнителя');
   await expect(sp.getByRole('button', { name: 'Принять дело' })).toBeVisible();
   await expect(sp.locator('#match-box')).toBeHidden();
+  // Исполнитель видит своё вознаграждение, но не цену заказчика.
+  await expect(sp.locator('#money-facts')).toContainText(/Ваше вознаграждение \(80% цены\)\s*20\s000 ₽/);
+  await expect(sp.locator('#money-facts')).not.toContainText('25');
   await shot(sp, '27-specialist-predlozhenie');
   await sp.getByRole('button', { name: 'Отказаться' }).click();
   await expect(sp.getByText('Укажите причину')).toBeVisible();
@@ -474,7 +487,6 @@ test('ход заявки: подбор диспетчером, принятие
   await shot(sp, '34-specialist-zamechaniya');
   await sp.getByRole('button', { name: 'Сдать на проверку' }).click();
   await expect(sp.locator('#order-status')).toHaveText('Проверка результата');
-  await sctx.close();
 
   // Новый круг: все правила в порядке → «Проверено, готово».
   await dp.reload();
@@ -490,14 +502,28 @@ test('ход заявки: подбор диспетчером, принятие
   await shot(dp, '21-dispetcher-hod');
   await dp.getByRole('button', { name: 'Проверено, готово' }).click();
   await expect(dp.locator('#order-status')).toHaveText('Готово');
-  await dctx.close();
 
   await page.goto(`/kabinet#order=${id}`);
   await expect(page.locator('#order-status')).toHaveText('Готово');
   await expect(page.locator('#history')).toContainText('Нет фото повреждений');
   await expect(page.locator('#history li')).toHaveCount(10);
   await expect(page.getByRole('button', { name: 'Отменить заявку' })).toHaveCount(0);
-  // Заказчик после проверки видит оба файла результата и итог проверки; удалить их не может; отвечает в переписке.
+  // Проверено, но не оплачено: результат закрыт, закрыть заявку нельзя; заказчик оплачивает (поддельная ЮKassa).
+  await expect(page.locator('#docs li').filter({ hasText: 'Результат работы' })).toHaveCount(0);
+  await expect(page.locator('#results-later')).toHaveText('Результат проверен — он откроется здесь после оплаты.');
+  await expect(page.getByRole('button', { name: 'Принять и закрыть' })).toHaveCount(0);
+  await expect(page.locator('#money-facts')).toContainText(/Цена\s*25\s000 ₽/);
+  await expect(page.locator('#money-facts')).not.toContainText('Исполнителю');
+  await shot(page, '36-zakazchik-oplata');
+  await page.getByRole('button', { name: /Оплатить 25\s000 ₽/ }).click();
+  await expect(page.locator('#money-facts')).toContainText('оплачено');
+  await expect(page.locator('#closing li')).toHaveCount(1);
+  await page.locator('#closing li').getByRole('button', { name: 'Открыть' }).click();
+  await expect(page.locator('#closing-doc')).toContainText('Акт об оказании услуг');
+  await expect(page.locator('#closing-doc')).toContainText('Проверочный документ');
+  await expect(page.locator('#closing-doc')).toContainText(/вознаграждение агента \(20%\): 5\s000 ₽/);
+  await shot(page, '37-zakazchik-akt');
+  // После проверки и оплаты заказчик видит оба файла результата и итог проверки; удалить их не может; отвечает в переписке.
   await expect(page.locator('#docs li').filter({ hasText: 'Результат работы' })).toHaveCount(2);
   await expect(page.locator('#docs li').filter({ hasText: 'Результат работы' }).getByRole('button', { name: 'Удалить' })).toHaveCount(0);
   await expect(page.locator('#review-summary')).toContainText('все правила');
@@ -512,6 +538,28 @@ test('ход заявки: подбор диспетчером, принятие
   await expect(page.locator('#steps li.done')).toHaveCount(6);
   await expect(page.locator('#upload-box')).toBeHidden();
   await expect(page.locator('#message-form')).toBeHidden();
+
+  // Выплата исполнителю прошла автоматически: специалист видит её в «Деньгах» и отчёт агента в деле.
+  const sp2 = sp;
+  await sp2.goto('/kabinet#money');
+  await expect(sp2.getByRole('heading', { name: 'Мои выплаты' })).toBeVisible();
+  await expect(sp2.locator('#money-totals')).toContainText(/Выплачено\s*20\s000 ₽/);
+  await expect(sp2.locator('#money-payouts li').filter({ hasText: 'Оценка автомобиля после ДТП' })).toContainText('выплачено');
+  await expect(sp2.locator('#money-payments-box')).toBeHidden();
+  await shot(sp2, '38-specialist-vyplaty');
+  await sp2.locator('#money-payouts li').filter({ hasText: 'Оценка автомобиля после ДТП' }).click();
+  await sp2.locator('#closing li').getByRole('button', { name: 'Открыть' }).click();
+  await expect(sp2.locator('#closing-doc')).toContainText(/К перечислению исполнителю: 20\s000 ₽/);
+  await expect(sp2.locator('#closing-doc')).not.toContainText('Заказчик:');
+  await sctx.close();
+
+  // Диспетчер: сводка «Деньги».
+  const dp2 = dp;
+  await dp2.goto('/kabinet#money');
+  await expect(dp2.getByRole('heading', { name: 'Деньги платформы' })).toBeVisible();
+  await expect(dp2.locator('#money-payments li').filter({ hasText: 'Оценка автомобиля после ДТП' })).toContainText(/25\s000 ₽/);
+  await shot(dp2, '39-dispetcher-dengi');
+  await dctx.close();
 });
 
 test('отмена заказчиком до начала работ; просроченный срок виден в списке', async ({ page }) => {
