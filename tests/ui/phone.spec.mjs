@@ -6,7 +6,7 @@
 // На каждой странице: нет прокрутки вбок, нет ошибок JavaScript, нет запросов к чужим адресам.
 import { test as base, expect } from '@playwright/test';
 import pg from 'pg';
-import { DB_URL, TEST_TOKEN, BRIDGE_SECRET } from '../helpers.mjs';
+import { DB_URL, TEST_TOKEN, BRIDGE_SECRET, testEnv } from '../helpers.mjs';
 import { signBridge } from '../../src/bridge/signature.mjs';
 
 const CONTROL = process.env.UI_TEST_CONTROL_TOKEN || TEST_TOKEN;
@@ -1046,4 +1046,187 @@ test('мост CRM: профиль переводчика переносится
   await expect(dp.locator('#specialists li').filter({ hasText: 'Тестовый Переводчик Из CRM' })).toContainText('Из БЕРТЕЛ CRM · дел там: 2 · языки: китайский, английский');
   await shot(dp, '61-spisok-specialistov-crm');
   await ctx.close();
+});
+
+// Задача 1.11: сквозной путь тестовой заявки на экспертизу — всё через экран телефона, без обходных путей в базе.
+// Первый администратор назначается командой (как в контуре); дальше роли, допуск, заявка, цена, оплата, подбор,
+// работа, ИИ-проверка, проверка по правилам, выдача результата, акт, закрытие, выплата — только кнопками.
+test('сквозной путь: заявка на оценку квартиры от входа заказчика до выплаты исполнителю', async ({ page, browser, baseURL }) => {
+  const A = '+79990001401', D = '+79990001402', S = '+79990001403', C = '+79990001404', X = '+79990001405';
+  const { grantRole } = await import('../../src/tools/grant-role.mjs');
+  const { createDb } = await import('../../src/db.mjs');
+  const { loadConfig } = await import('../../src/config.mjs');
+  const sql = createDb(loadConfig(testEnv()));
+  try { await grantRole(sql, A, 'admin'); } finally { await sql.end(); }
+  const title = 'Оценка квартиры для продажи — сквозной путь';
+
+  // Каждый входит со своего телефона через страницу входа.
+  async function enter(p, phone, name) {
+    await p.goto('/');
+    await p.getByLabel('Номер мобильного телефона').fill(phone);
+    await p.getByRole('button', { name: 'Получить код' }).click();
+    await expect(p.getByText(/^Код отправлен/)).toBeVisible();
+    await p.getByLabel('Код из СМС').fill(await smsCode(p.request, phone));
+    await p.getByRole('button', { name: 'Войти' }).click();
+    await expect(p).toHaveURL(/\/kabinet$/);
+    if (name) {
+      await p.goto('/kabinet#profile');
+      await p.getByLabel('Как к Вам обращаться').fill(name);
+      await p.getByRole('button', { name: 'Сохранить' }).click();
+      await expect(p.locator('#who')).toHaveText(name);
+    }
+  }
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ap = await ctx(), dp = await ctx(), sp = await ctx(), xp = await ctx();
+  await enter(dp, D, 'Тестовый Диспетчер');
+  await enter(sp, S, 'Тестов Оценщик Сквозной');
+  await enter(xp, X);
+  await enter(ap, A);
+
+  // 1. Администратор: диспетчер; специалист с допуском на оценку недвижимости.
+  await ap.getByRole('link', { name: 'Управление' }).click();
+  await ap.getByLabel('Номер телефона пользователя').fill(D);
+  await ap.getByRole('button', { name: 'Найти' }).click();
+  await ap.getByLabel('Служебная роль').selectOption('dispatcher');
+  await ap.getByRole('button', { name: 'Сохранить роль' }).click();
+  await expect(ap.getByText('Роль сохранена')).toBeVisible();
+  await ap.getByLabel('Номер телефона пользователя').fill(S);
+  await ap.getByRole('button', { name: 'Найти' }).click();
+  await expect(ap.locator('#admin-specialist-state')).toContainText('Пока не специалист');
+  await ap.getByRole('button', { name: 'Сохранить профиль специалиста' }).click();
+  await expect(ap.getByText('Профиль специалиста сохранён')).toBeVisible();
+  await ap.getByLabel('Дать допуск на услугу').selectOption('expertise/realty');
+  await ap.getByRole('button', { name: 'Дать допуск' }).click();
+  await expect(ap.locator('#sp-permits li')).toContainText('недвижимости');
+  await shot(ap, '70-skvoznoy-admin');
+
+  // 2. Заказчик входит сам, заполняет заявку по описанию услуги, прикладывает документ и отправляет.
+  await enter(page, C, 'Тестова Заказчица');
+  await page.goto('/kabinet');
+  await expect(page.getByText('Заявок пока нет.')).toBeVisible();
+  await page.locator('#new-order').getByLabel('Услуга').selectOption({ label: 'Оценка недвижимости' });
+  await page.getByLabel('Коротко: что нужно').fill(title);
+  await page.getByRole('button', { name: 'Создать заявку' }).click();
+  await expect(page.locator('#order-status')).toHaveText('Новая');
+  const id = new URL(page.url()).hash.match(/^#order=([0-9a-f-]{36})$/i)[1];
+  await page.getByLabel('Для чего нужна оценка').selectOption({ label: 'Купля-продажа' });
+  await page.getByLabel('Где находится объект').selectOption({ label: 'Москва' });
+  await page.getByLabel('Что оцениваем').selectOption({ label: 'Квартира' });
+  await page.getByLabel('Адрес объекта').fill('г. Москва, ул. Тестовая, д. 11, кв. 4');
+  await page.getByLabel('Площадь, кв. м').fill('42');
+  await page.getByLabel(/^Срок/).fill(inDays(10));
+  await page.getByLabel('Добавить файл (до 5 МБ)').setInputFiles({ name: 'Выписка ЕГРН.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 тестовая выписка') });
+  await expect(page.getByText('Файл добавлен')).toBeVisible();
+  await shot(page, '71-skvoznoy-zayavka');
+  await page.getByRole('button', { name: 'Отправить заявку' }).click();
+  await expect(page.getByText('Заявка отправлена')).toBeVisible();
+  await expect(page.locator('#order-status')).toHaveText('Подбор исполнителя');
+
+  // Посторонний не видит заявку ни в списке, ни по ссылке.
+  await xp.goto('/kabinet');
+  await expect(xp.getByRole('heading', { name: 'Мои заявки' })).toBeVisible();
+  await expect(xp.getByText(title)).toHaveCount(0);
+  await xp.goto(`/kabinet#order=${id}`);
+  await expect(xp.getByRole('heading', { name: 'Заявка не найдена' })).toBeVisible();
+
+  // 3. Диспетчер: уведомление о новой заявке, цена.
+  await dp.goto('/kabinet#notifications');
+  await expect(dp.locator('#notifications li').filter({ hasText: title })).toContainText('Новая заявка ждёт подбора исполнителя');
+  await dp.locator('#notifications li').filter({ hasText: title }).getByRole('button').click();
+  await expect(dp.locator('#order-title')).toHaveText(title);
+  await expect(dp.locator('#facts')).toContainText('г. Москва, ул. Тестовая, д. 11, кв. 4');
+  await dp.getByLabel('Цена, рублей').fill('18000');
+  await dp.getByRole('button', { name: 'Назначить цену' }).click();
+  await expect(dp.locator('#money-msg')).toHaveText('Цена назначена');
+  await expect(dp.locator('#money-facts')).toContainText(/Исполнителю \(80%\)\s*14\s400 ₽/);
+
+  // 4. Заказчик оплачивает (поддельная ЮKassa).
+  await page.reload();
+  await expect(page.locator('#money-facts')).toContainText(/Цена\s*18\s000 ₽/);
+  await page.getByRole('button', { name: /Оплатить 18\s000 ₽/ }).click();
+  await expect(page.locator('#money-facts')).toContainText('оплачено');
+  await shot(page, '72-skvoznoy-oplata');
+
+  // 5. Диспетчер предлагает дело лучшему по подбору.
+  await dp.reload();
+  await expect(dp.locator('#match-current')).toContainText('Заявка оплачена');
+  const cand = dp.locator('#candidates li').filter({ hasText: 'Тестов Оценщик Сквозной' });
+  await expect(cand).toContainText('из 100');
+  dp.once('dialog', (d) => d.accept());
+  await cand.getByRole('button', { name: 'Предложить дело' }).click();
+  await expect(dp.locator('#order-status')).toHaveText('Ждёт исполнителя');
+  await shot(dp, '73-skvoznoy-podbor');
+
+  // 6. Специалист: уведомление, принимает, прикладывает отчёт, ИИ-проверка, пишет заказчику, сдаёт.
+  await sp.goto('/kabinet');
+  await expect(sp.locator('#notify-count')).toHaveText('1');
+  await sp.getByRole('link', { name: /Уведомления/ }).click();
+  await sp.locator('#notifications li').filter({ hasText: 'Вам предложено новое дело' }).getByRole('button').click();
+  await expect(sp.locator('#order-title')).toHaveText(title);
+  await expect(sp.locator('#money-facts')).toContainText(/Ваше вознаграждение \(80% цены\)\s*14\s400 ₽/);
+  await sp.getByRole('button', { name: 'Принять дело' }).click();
+  await expect(sp.locator('#order-status')).toHaveText('В работе');
+  await sp.locator('#result-file').setInputFiles({ name: 'Отчёт об оценке.txt', mimeType: 'text/plain', buffer: Buffer.from('Отчёт об оценке квартиры. Итоговая стоимость 12 000 000 руб.') });
+  await expect(sp.locator('#doc-msg')).toHaveText('Файл добавлен');
+  await sp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  await expect(sp.locator('#review-checks .verdict')).toHaveCount(0);
+  await sp.getByLabel('Сообщение').fill('Осмотр проведён, отчёт приложен.');
+  await sp.getByRole('button', { name: 'Отправить сообщение' }).click();
+  await expect(sp.locator('#messages li')).toHaveCount(1);
+  await shot(sp, '74-skvoznoy-specialist');
+  await sp.getByRole('button', { name: 'Сдать на проверку' }).click();
+  await expect(sp.locator('#order-status')).toHaveText('Проверка результата');
+
+  // Пока результат не проверен, заказчик его не видит.
+  await page.reload();
+  await expect(page.locator('#order-status')).toHaveText('Проверка результата');
+  await expect(page.locator('#docs li').filter({ hasText: 'Результат работы' })).toHaveCount(0);
+
+  // 7. Диспетчер: ИИ-подсказки, отметки по всем правилам, «Проверено, готово».
+  await dp.reload();
+  await expect(dp.locator('#review-box')).toBeVisible();
+  await dp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(dp.locator('#ai-review-state')).toContainText('запускал диспетчер');
+  const rules = dp.locator('#review-checks li');
+  const n = await rules.count();
+  expect(n).toBeGreaterThan(3);
+  for (let i = 0; i < n; i += 1) {
+    await rules.nth(i).getByRole('button', { name: 'В порядке' }).click();
+    await expect(rules.nth(i).locator('.verdict')).toHaveText('В порядке');
+  }
+  await shot(dp, '75-skvoznoy-proverka');
+  await dp.getByRole('button', { name: 'Проверено, готово' }).click();
+  await expect(dp.locator('#order-status')).toHaveText('Готово');
+
+  // 8. Заказчик: уведомление, результат скачивается, акт, сообщение исполнителя, закрытие.
+  await page.goto('/kabinet#notifications');
+  await expect(page.locator('#notifications')).toContainText(title);
+  await page.goto(`/kabinet#order=${id}`);
+  await expect(page.locator('#order-status')).toHaveText('Готово');
+  await expect(page.locator('#messages li').first()).toContainText('Осмотр проведён');
+  const res = page.locator('#docs li').filter({ hasText: 'Отчёт об оценке.txt' });
+  await expect(res).toContainText('Результат работы');
+  const [download] = await Promise.all([page.waitForEvent('download'), res.getByRole('button', { name: 'Скачать' }).click()]);
+  expect(download.suggestedFilename()).toBe('Отчёт об оценке.txt');
+  const chunks = [];
+  for await (const ch of await download.createReadStream()) chunks.push(ch);
+  expect(Buffer.concat(chunks).toString()).toContain('Итоговая стоимость 12 000 000 руб.');
+  await page.locator('#closing li').getByRole('button', { name: 'Открыть' }).click();
+  await expect(page.locator('#closing-doc')).toContainText('Акт об оказании услуг');
+  await shot(page, '76-skvoznoy-gotovo');
+  await page.getByRole('button', { name: 'Принять и закрыть' }).click();
+  await expect(page.locator('#order-status')).toHaveText('Закрыта');
+  await shot(page, '77-skvoznoy-zakryta');
+
+  // 9. Исполнитель получил выплату; диспетчер видит оплату в сводке; посторонний по-прежнему ничего не видит.
+  await sp.goto('/kabinet#money');
+  await expect(sp.locator('#money-payouts li').filter({ hasText: title })).toContainText('выплачено');
+  await expect(sp.locator('#money-totals')).toContainText(/Выплачено\s*14\s400 ₽/);
+  await shot(sp, '78-skvoznoy-vyplata');
+  await dp.goto('/kabinet#money');
+  await expect(dp.locator('#money-payments li').filter({ hasText: title })).toContainText(/18\s000 ₽/);
+  await xp.goto(`/kabinet#order=${id}`);
+  await expect(xp.getByRole('heading', { name: 'Заявка не найдена' })).toBeVisible();
+  for (const p of [ap, dp, sp, xp]) await p.context().close();
 });
