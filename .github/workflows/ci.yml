@@ -97,6 +97,7 @@ jobs:
           COOKIE_SECURE=0
           APP_SECRET=ci-only-secret-0123456789abcdef0123456789
           TEST_CONTROL_TOKEN=ci-test-control-token-0123456789
+          AUTH_RATE_MAX=200
           STORAGE_PROVIDER=s3
           S3_ENDPOINT=http://127.0.0.1:9000
           S3_BUCKET=delo-ci-files

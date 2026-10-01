@@ -20,7 +20,7 @@ import { createRegistry, DEFAULT_MODULES } from './modules/index.mjs';
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
 export function listOps(cfg, providers) {
-  const ops = [...coreOps(), ...orderOps(), ...orgOps(), ...adminOps(), ...matchOps(), ...workOps(), ...moneyOps(), ...notifyOps(), ...aiOps()];
+  const ops = [...coreOps(cfg), ...orderOps(), ...orgOps(), ...adminOps(), ...matchOps(), ...workOps(), ...moneyOps(), ...notifyOps(), ...aiOps()];
   if (providers.storage.kind === 'memory') ops.push(...memoryFileOps());
   if (cfg.appEnv === 'test' && cfg.testControlToken) ops.push(...testControlOps(cfg));
   return ops;

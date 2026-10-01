@@ -63,6 +63,8 @@ export function loadConfig(env = process.env) {
     },
     // Служебные пути для автотестов (чтение вызовов поддельных поставщиков). Только APP_ENV=test.
     testControlToken: env.TEST_CONTROL_TOKEN || '',
+    // Лимит запросов входа с одного адреса за 10 минут. Менять — только APP_ENV=test (много входов в одном прогоне).
+    authRateMax: env.AUTH_RATE_MAX ? Number(env.AUTH_RATE_MAX) : 30,
   };
 
   if (!cfg.databaseUrl) throw new ConfigError('DATABASE_URL не задан');
@@ -70,6 +72,8 @@ export function loadConfig(env = process.env) {
     if (live) throw new ConfigError('APP_SECRET: не короче 32 символов');
     cfg.appSecret = 'local-only-secret-not-for-stage-or-prod-000';
   }
+  if (env.AUTH_RATE_MAX && appEnv !== 'test') throw new ConfigError('AUTH_RATE_MAX допустим только при APP_ENV=test');
+  if (!Number.isInteger(cfg.authRateMax) || cfg.authRateMax < 1) throw new ConfigError('AUTH_RATE_MAX: целое число от 1');
   if (cfg.testControlToken && appEnv !== 'test') throw new ConfigError('TEST_CONTROL_TOKEN допустим только при APP_ENV=test');
   if (cfg.providers.storage === 's3' && !cfg.s3.bucket) throw new ConfigError('S3_BUCKET не задан');
 
