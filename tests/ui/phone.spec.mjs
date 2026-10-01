@@ -360,7 +360,7 @@ test('заявка на оценку: поля услуги, срок, осно�
   await shot(page, '20-zayavka-otpravlena');
 });
 
-test('ход заявки: диспетчер ведёт по статусам, заказчик видит каждый шаг и закрывает', async ({ page, browser, baseURL }) => {
+test('ход заявки: подбор диспетчером, принятие и сдача специалистом, проверка, заказчик видит каждый шаг и закрывает', async ({ page, browser, baseURL }) => {
   const customer = await signIn(page, '+79990000542');
   const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'vehicle', title: 'Оценка автомобиля после ДТП' }, headers: H })).json();
   const id = created.order.id;
@@ -374,21 +374,79 @@ test('ход заявки: диспетчер ведёт по статусам, 
   const dp = await dctx.newPage();
   const disp = await signIn(dp, '+79990000543');
   await db((c) => c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]));
+  const sctx = await phoneContext(browser, baseURL);
+  const sp = await sctx.newPage();
+  const spec = await signIn(sp, '+79990000545');
+  await db(async (c) => {
+    await c.query("update users set full_name = 'Тестовый оценщик' where id = $1", [spec.id]);
+    await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'vehicle')", [spec.id]);
+  });
+
+  // Диспетчер: все заявки, подбор с оценкой по признакам, предложение.
+  await dp.goto('/kabinet');
+  await expect(dp.getByRole('heading', { name: 'Все заявки' })).toBeVisible();
+  await dp.getByLabel('Показать').selectOption('matching');
+  await expect(dp.locator('#orders li').filter({ hasText: 'Оценка автомобиля после ДТП' })).toBeVisible();
+  await shot(dp, '25-dispetcher-ochered');
   await dp.goto(`/kabinet#order=${id}`);
   await expect(dp.locator('#order-status')).toHaveText('Подбор исполнителя');
   await expect(dp.locator('#facts')).toContainText('XTA21099012345678');
   await expect(dp.getByRole('button', { name: 'Удалить' })).toHaveCount(0);
-  for (const [button, status] of [['Предложена исполнителю', 'Ждёт исполнителя'], ['Исполнитель принял', 'В работе'], ['Результат на проверку', 'Проверка результата']]) {
-    await dp.getByRole('button', { name: button }).click();
-    await expect(dp.locator('#order-status')).toHaveText(status);
-  }
+  await expect(dp.getByRole('button', { name: 'Отправить заявку' })).toHaveCount(0);
+  const cand = dp.locator('#candidates li').filter({ hasText: 'Тестовый оценщик' });
+  await expect(cand).toContainText('из 100');
+  await expect(cand).toContainText('Загрузка');
+  await shot(dp, '26-podbor');
+  dp.once('dialog', (d) => d.accept());
+  await cand.getByRole('button', { name: 'Предложить дело' }).click();
+  await expect(dp.locator('#order-status')).toHaveText('Ждёт исполнителя');
+  await expect(dp.locator('#match-current')).toContainText('Тестовый оценщик');
+
+  // Специалист: видит предложение в своём списке, отказывается с причиной, получает снова, принимает и сдаёт.
+  await sp.goto('/kabinet');
+  await expect(sp.getByRole('link', { name: 'Специалист' })).toBeVisible();
+  await expect(sp.getByRole('link', { name: 'Специалисты' })).toBeHidden();
+  await expect(sp.locator('#orders li').filter({ hasText: 'Оценка автомобиля после ДТП' })).toContainText('Вы исполнитель');
+  await sp.goto(`/kabinet#order=${id}`);
+  await expect(sp.locator('#order-status')).toHaveText('Ждёт исполнителя');
+  await expect(sp.getByRole('button', { name: 'Принять дело' })).toBeVisible();
+  await expect(sp.locator('#match-box')).toBeHidden();
+  await shot(sp, '27-specialist-predlozhenie');
+  await sp.getByRole('button', { name: 'Отказаться' }).click();
+  await expect(sp.getByText('Укажите причину')).toBeVisible();
+  await sp.getByLabel('Причина (для возврата или отмены)').fill('Занят до конца месяца');
+  await sp.getByRole('button', { name: 'Отказаться' }).click();
+  await expect(sp.getByRole('heading', { name: 'Заявка не найдена' })).toBeVisible();
+
+  await dp.reload();
+  await expect(dp.locator('#order-status')).toHaveText('Подбор исполнителя');
+  await expect(dp.locator('#history')).toContainText('Причина: Занят до конца месяца');
+  dp.once('dialog', (d) => d.accept());
+  await dp.locator('#candidates li').filter({ hasText: 'Тестовый оценщик' }).getByRole('button', { name: 'Предложить дело' }).click();
+  await expect(dp.locator('#order-status')).toHaveText('Ждёт исполнителя');
+
+  await sp.goto('/kabinet');
+  await sp.goto(`/kabinet#order=${id}`);
+  await sp.reload();
+  await sp.getByRole('button', { name: 'Принять дело' }).click();
+  await expect(sp.locator('#order-status')).toHaveText('В работе');
+  await expect(sp.locator('#order-org-line')).toContainText('Исполнитель: Вы');
+  await sp.getByRole('button', { name: 'Сдать на проверку' }).click();
+  await expect(sp.locator('#order-status')).toHaveText('Проверка результата');
+  await shot(sp, '28-specialist-sdal');
+
+  await dp.reload();
   await dp.getByRole('button', { name: 'Вернуть на доработку' }).click();
   await expect(dp.getByText('Укажите причину')).toBeVisible();
   await dp.getByLabel('Причина (для возврата или отмены)').fill('Нет фото повреждений');
   await dp.getByRole('button', { name: 'Вернуть на доработку' }).click();
   await expect(dp.locator('#order-status')).toHaveText('В работе');
-  await dp.getByRole('button', { name: 'Результат на проверку' }).click();
-  await expect(dp.locator('#order-status')).toHaveText('Проверка результата');
+  await sp.reload();
+  await sp.getByRole('button', { name: 'Сдать на проверку' }).click();
+  await expect(sp.locator('#order-status')).toHaveText('Проверка результата');
+  await sctx.close();
+  await dp.reload();
   await shot(dp, '21-dispetcher-hod');
   await dp.getByRole('button', { name: 'Проверено, готово' }).click();
   await expect(dp.locator('#order-status')).toHaveText('Готово');
@@ -397,7 +455,7 @@ test('ход заявки: диспетчер ведёт по статусам, 
   await page.goto(`/kabinet#order=${id}`);
   await expect(page.locator('#order-status')).toHaveText('Готово');
   await expect(page.locator('#history')).toContainText('Причина: Нет фото повреждений');
-  await expect(page.locator('#history li')).toHaveCount(8);
+  await expect(page.locator('#history li')).toHaveCount(10);
   await expect(page.getByRole('button', { name: 'Отменить заявку' })).toHaveCount(0);
   await shot(page, '22-zakazchik-gotovo');
   await page.getByRole('button', { name: 'Принять и закрыть' }).click();
@@ -426,4 +484,42 @@ test('отмена заказчиком до начала работ; проср
   await expect(page.locator('#orders li').filter({ hasText: 'Экспертиза телевизора' })).toContainText('просрочено');
   await expect(page.locator('#orders li').filter({ hasText: 'Экспертиза холодильника' })).toContainText('Отменена');
   await shot(page, '24-spisok-sroki');
+});
+
+test('администратор делает человека специалистом и выдаёт допуск; диспетчер видит список специалистов', async ({ page, browser, baseURL }) => {
+  const admin = await signIn(page, '+79990000551');
+  await db((c) => c.query("update users set platform_role = 'admin' where id = $1", [admin.id]));
+  const sctx = await phoneContext(browser, baseURL);
+  const sp = await sctx.newPage();
+  await signIn(sp, '+79990000552');
+  await sp.goto('/kabinet');
+  await expect(sp.getByRole('link', { name: 'Специалист' })).toBeHidden();
+
+  await page.goto('/kabinet#admin');
+  await page.getByLabel('Номер телефона пользователя').fill('8 999 000-05-52');
+  await page.getByRole('button', { name: 'Найти' }).click();
+  await expect(page.locator('#admin-specialist-state')).toContainText('Пока не специалист');
+  await page.getByLabel('Нормальная нагрузка: сколько дел одновременно').fill('3');
+  await page.getByRole('button', { name: 'Сохранить профиль специалиста' }).click();
+  await expect(page.getByText('Профиль специалиста сохранён')).toBeVisible();
+  await page.getByLabel('Дать допуск на услугу').selectOption('expertise/land');
+  await page.getByRole('button', { name: 'Дать допуск' }).click();
+  await expect(page.locator('#sp-permits li')).toContainText('земельного участка');
+  await shot(page, '29-upravlenie-specialist');
+
+  await sp.reload();
+  await sp.goto('/kabinet#specialist');
+  await expect(sp.getByRole('heading', { name: 'Мой профиль специалиста' })).toBeVisible();
+  await expect(sp.locator('#specialist-facts')).toContainText('Дел сейчас: 0 из 3');
+  await expect(sp.locator('#specialist-permits')).toContainText('земельного участка');
+  await sp.getByLabel('Принимаю новые дела').uncheck();
+  await expect(sp.getByText('Вам не будут предлагать новые дела')).toBeVisible();
+  await shot(sp, '30-specialist-profil');
+  const active = await db(async (c) => (await c.query("select s.active from specialists s join users u on u.id = s.user_id where u.phone = '+79990000552'")).rows[0].active);
+  expect(active).toBe(false);
+
+  await page.goto('/kabinet#specialists');
+  await expect(page.locator('#specialists li').filter({ hasText: 'не принимает дела' })).toContainText('земельного участка');
+  await shot(page, '31-spisok-specialistov');
+  await sctx.close();
 });

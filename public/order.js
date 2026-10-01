@@ -2,6 +2,7 @@
 // Поля рисуются по описанию модуля из /api/catalog — у каждой профессии свои, код страницы один.
 import { api, el, say, formatPhone, formatSize, ROLE_RU } from '/common.js';
 import { state, show, notFoundView } from '/shell.js';
+import { loadMatch } from '/match.js';
 
 const $ = (id) => document.getElementById(id);
 const MAX_FILE = 5 * 1024 * 1024;
@@ -37,7 +38,7 @@ export async function openOrder(id) {
   $('reason').value = '';
   render();
   show('order-view', 'orders');
-  await Promise.all([loadDocs(), loadTransfer()]);
+  await Promise.all([loadDocs(), loadTransfer(), loadMatch(current, () => openOrder(id))]);
 }
 
 function render() {
@@ -62,6 +63,7 @@ function renderOrgLine() {
   $('order-org-line').textContent = order.org_name
     ? `Организация: ${order.org_name} · Ведёт: ${order.responsible_name || 'сотрудник без имени'}`
     : 'Личная заявка';
+  if (current.executor) $('order-org-line').textContent += ` · Исполнитель: ${current.executor.is_me ? 'Вы' : current.executor.name || 'специалист без имени'}`;
 }
 
 // ——— Данные заявки: форма ———
@@ -201,7 +203,7 @@ function renderProgress() {
 
   $('history').replaceChildren(...history.slice().reverse().map((h) => el('li', {},
     el('div', { class: 'title', text: h.to_name }),
-    el('div', { class: 'muted', text: [dateTimeRu(h.at), h.side === 'dispatcher' ? 'диспетчер' : 'заказчик'].join(' · ') }),
+    el('div', { class: 'muted', text: [dateTimeRu(h.at), { dispatcher: 'диспетчер', executor: 'исполнитель' }[h.side] || 'заказчик'].join(' · ') }),
     ...(h.reason ? [el('div', { text: `Причина: ${h.reason}` })] : []))));
 }
 
