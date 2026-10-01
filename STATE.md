@@ -158,7 +158,7 @@
 - Задача 1.8: ИИ — вход через проблему, ассистент, переключаемая модель (с поддельной моделью до облака).
 
 ## Последние коммиты
-- `bertel_delo`, ветка `claude/peaceful-mendel-l65ni9`: задача 1.6а (запрос на слияние — после зелёного CI сливает Работник Дело).
+- `bertel_delo`, PR https://github.com/damvaf6/bertel_delo/pull/14 (ветка `claude/peaceful-mendel-l65ni9`): задача 1.6а, слит Работником Дело 01.10.2026 после зелёного CI (проверено без облака).
 - `bertel_delo`, PR https://github.com/damvaf6/bertel_delo/pull/11 (ветка `claude/peaceful-mendel-wxz36g`): задача 1.7, слит Работником Дело 01.10.2026 после зелёного CI (проверено без облака).
 - `bertel_delo`, PR https://github.com/damvaf6/bertel_delo/pull/10 (ветка `claude/peaceful-mendel-isse04`): задача 1.6, слит Работником Дело 01.10.2026 после зелёного CI (проверено без облака).
 - `bertel_delo`, PR https://github.com/damvaf6/bertel_delo/pull/9 (ветка `claude/peaceful-mendel-9e3jcj`): задача 1.5, слит Работником Дело 01.10.2026 после зелёного CI (проверено без облака).
