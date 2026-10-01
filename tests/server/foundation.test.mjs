@@ -41,7 +41,7 @@ test('миграции: изменённый после применения ф�
 
 test('настройки: на prod запрещены поддельные поставщики, база без сертификата, тестовые пути', () => {
   const prod = (extra) => loadConfig({ APP_ENV: 'prod', DATABASE_URL: 'postgres://x/y', APP_SECRET: 'x'.repeat(40),
-    STORAGE_PROVIDER: 's3', S3_BUCKET: 'b', SMS_PROVIDER: 'sms-real', CALL_PROVIDER: 'call-real', PAYMENTS_PROVIDER: 'p', AI_PROVIDER: 'yandexgpt', AI_YANDEX_API_KEY: 'k', AI_YANDEX_FOLDER: 'f', MAIL_PROVIDER: 'm', PUBLIC_URL: 'https://delo.example/', ...extra });
+    STORAGE_PROVIDER: 's3', S3_BUCKET: 'b', SMS_PROVIDER: 'sms-real', CALL_PROVIDER: 'call-real', PAYMENTS_PROVIDER: 'p', AI_PROVIDER: 'yandexgpt', AI_YANDEX_API_KEY: 'k', AI_YANDEX_FOLDER: 'f', MAIL_PROVIDER: 'm', MAIL_INBOX_ADDRESS: 'zayavki@delo.example', PUBLIC_URL: 'https://delo.example/', ...extra });
   assert.ok(prod({}).live);
   assert.throws(() => prod({ SMS_PROVIDER: 'fake' }), ConfigError);
   assert.throws(() => prod({ CALL_PROVIDER: 'fake' }), ConfigError);

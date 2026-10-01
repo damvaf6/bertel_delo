@@ -2,7 +2,7 @@
 // Последняя проверка сверяет: в реестре нет операций, не покрытых этой таблицей.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, login, client, makeOrg, addMember, setPlatformRole, ensurePaid } from '../helpers.mjs';
+import { startApp, login, client, makeOrg, addMember, setPlatformRole, ensurePaid, TEST_TOKEN } from '../helpers.mjs';
 
 const covered = new Set();
 const cover = (id) => covered.add(id);
@@ -792,8 +792,36 @@ test('ИИ (1.8): разбор проблемы, ассистент, ИИ-про
   for (const k of ['owner', 'dispatcher', 'headA']) assert.equal((await U[k].req('GET', '/api/admin/ai')).status, 404, k);
 });
 
+test('почта для заявок (1.9): адрес — только свой; организация — только своя; заявка по письму видна как обычная', async () => {
+  for (const id of ['mail.get', 'mail.code', 'mail.confirm', 'mail.org', 'mail.delete']) cover(id);
+  const sentTo = (to) => S.providers.mail.calls.filter((c) => c.method === 'send' && c.args.to === to).at(-1);
+  assert.equal((await U.memberA.req('POST', '/api/me/mail', { email: 'member-a-test@example.ru' })).status, 200);
+  const code = sentTo('member-a-test@example.ru').args.text.match(/\d{6}/)[0];
+  // Чужой код к своей учётной записи не подходит: код привязан к человеку и адресу.
+  assert.equal((await U.stranger.req('POST', '/api/me/mail/confirm', { code })).status, 400);
+  assert.equal((await U.memberA.req('POST', '/api/me/mail/confirm', { code })).status, 200);
+  assert.equal((await U.stranger.req('GET', '/api/me/mail')).body.address, null, 'чужой адрес не виден');
+  // От имени организации — только участник; чужая организация — «не найдено».
+  assert.equal((await U.memberA.req('PATCH', '/api/me/mail', { org_id: orgB.id })).status, 404);
+  assert.equal((await U.memberA.req('PATCH', '/api/me/mail', { org_id: orgA.id })).status, 200);
+  // Удаление — только своего: посторонний «удаляет» лишь своё (ничего), адрес сотрудника остаётся.
+  assert.equal((await U.stranger.req('DELETE', '/api/me/mail')).status, 204);
+  assert.equal((await U.memberA.req('GET', '/api/me/mail')).body.address.confirmed, true);
+  // Заявка по письму — дело организации: видят сотрудник и руководитель; адрес — только стороне заказчика.
+  const r = await fetch(`${S.base}/__test/mail/inbound`, {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-test-control': TEST_TOKEN, 'x-delo-request': '1' },
+    body: JSON.stringify({ from: 'member-a-test@example.ru', subject: 'Квартира', text: 'Оценка квартиры в Москве' }),
+  });
+  const id = (await r.json()).inbound.order_id;
+  expectRead(await U.headA.req('GET', `/api/orders/${id}`), true, 'руководитель');
+  for (const k of ['stranger', 'headB', 'memberA2']) expectRead(await U[k].req('GET', `/api/orders/${id}`), false, k);
+  assert.equal((await U.headA.req('GET', `/api/orders/${id}`)).body.mail.email, 'member-a-test@example.ru');
+  assert.equal((await U.dispatcher.req('GET', `/api/orders/${id}`)).body.mail.email, null, 'служебным адрес заказчика не нужен');
+  assert.equal((await U.memberA.req('DELETE', '/api/me/mail')).status, 204);
+});
+
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {
-  const PUBLIC = ['health', 'auth.code', 'auth.verify', 'files.memory', 'test.calls', 'test.script', 'test.reset', 'payments.notify'];
+  const PUBLIC = ['health', 'auth.code', 'auth.verify', 'files.memory', 'test.calls', 'test.script', 'test.reset', 'test.mail.inbound', 'payments.notify'];
   const ops = S.app.locals.ops;
   const extraPublic = ops.filter((o) => o.auth === 'public' && !PUBLIC.includes(o.id)).map((o) => o.id);
   assert.deepEqual(extraPublic, [], `новые открытые операции: ${extraPublic.join(', ')}`);

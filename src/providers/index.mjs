@@ -37,12 +37,13 @@ function fakeMail() {
   const inbox = [];
   const fake = makeFake('mail', {
     send: async () => ({ id: id('mail') }),
-    receive: async ({ limit = 20 } = {}) => inbox.slice(0, limit),
-    ack: async ({ id: mid }) => {
-      const i = inbox.findIndex((x) => x.id === mid);
-      if (i >= 0) inbox.splice(i, 1);
-    },
   });
+  // Приём не записывается в вызовы и не ломается сценарием отказа: отказ проверяется на отправке.
+  fake.receive = async ({ limit = 20 } = {}) => inbox.slice(0, limit);
+  fake.ack = async ({ id: mid }) => {
+    const i = inbox.findIndex((x) => x.id === mid);
+    if (i >= 0) inbox.splice(i, 1);
+  };
   fake.deliver = (letter) => {
     const l = { id: id('in'), messageId: `<${crypto.randomUUID()}@test.mail>`, inReplyTo: [], authenticated: true, autoReply: false, attachments: [], ...letter };
     inbox.push(l);

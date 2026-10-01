@@ -56,7 +56,8 @@ const dateRu = (v) => v.split('-').reverse().join('.');
 
 // ——— Разбор письма ИИ ———
 
-export function mailMessages(registry, { subject, body, files }) {
+// fixed — услуга уже выбрана (ответ в переписке черновика): модель извлекает только значения полей этой услуги.
+export function mailMessages(registry, { subject, body, files, fixed = null }) {
   const services = registry.catalog().flatMap((m) => m.services.map((s) => {
     const fields = s.fields.filter((f) => f.id !== 'comment').map((f) => (f.type === 'select'
       ? `${f.id} (${f.label}; один из: ${f.options.map((o) => o.id).join('|')})` : `${f.id} (${f.label}; ${f.type === 'number' ? 'число' : 'текст'})`)).join('; ');
@@ -70,20 +71,21 @@ export function mailMessages(registry, { subject, body, files }) {
         'Ничего не выдумывай: чего нет в письме — не указывай. Если ни одна услуга не подходит — service: null.',
         `Сегодня ${todayMsk()}. Даты — в виде ГГГГ-ММ-ДД.`,
         `Услуги платформы:\n${services}`,
+        fixed ? `Услуга уже выбрана: ${fixed.module.id}/${fixed.service.id} (${fixed.service.name}) — укажи её и извлеки поля для неё.` : null,
         'Основание: "contract" — договор (по умолчанию); "court" — определение суда о назначении экспертизы (тогда номер и дата).',
         'Ответь только JSON: {"service": {"module": "...", "service": "..."} | null, "title": "короткое название" | null,',
         '"fields": {"id поля": "значение"}, "deadline": "ГГГГ-ММ-ДД" | null, "basis": "contract" | "court",',
         '"basis_number": "..." | null, "basis_date": "ГГГГ-ММ-ДД" | null, "basis_file": "имя вложения с определением суда" | null}.',
-      ].join('\n'),
+      ].filter(Boolean).join('\n'),
     },
     { role: 'user', content: [`ТЕМА: ${subject}`, 'ТЕКСТ:', body, `ВЛОЖЕНИЯ: ${files.join(', ')}`].join('\n') },
   ];
 }
 
 // Ответ модели → значения заявки. Услуга, поля и даты — только допустимые; неверное отбрасывается, а не исправляется.
-export function cleanMailAnswer(registry, text, fileNames) {
+export function cleanMailAnswer(registry, text, fileNames, fixed = null) {
   const j = parseJsonAnswer(text) ?? {};
-  const def = j.service ? registry.service(String(j.service.module ?? ''), String(j.service.service ?? '')) : null;
+  const def = fixed ?? (j.service ? registry.service(String(j.service.module ?? ''), String(j.service.service ?? '')) : null);
   const fields = {};
   if (def && j.fields && typeof j.fields === 'object') {
     for (const [k, v] of Object.entries(j.fields)) {
@@ -256,9 +258,9 @@ async function handleLetter(deps, row) {
   return orderId ? handleReply(deps, row, actor, orderId) : handleNew(deps, row, actor);
 }
 
-const parse = (deps, actor, row, body) => askAi(deps, actor, 'mail', mailMessages(deps.registry, {
-  subject: row.subject, body, files: row.attachments.map((f) => f.filename),
-})).then((out) => cleanMailAnswer(deps.registry, out.text, savedFiles(row).map((f) => f.filename)));
+const parse = (deps, actor, row, body, fixed = null) => askAi(deps, actor, 'mail', mailMessages(deps.registry, {
+  subject: row.subject, body, files: row.attachments.map((f) => f.filename), fixed,
+})).then((out) => cleanMailAnswer(deps.registry, out.text, savedFiles(row).map((f) => f.filename), fixed));
 
 // Первое письмо: новая заявка-черновик.
 async function handleNew(deps, row, actor) {
@@ -318,7 +320,7 @@ async function handleReply(deps, row, actor, orderId) {
 
   const confirm = CONFIRM_RE.test(body.split('\n')[0] ?? '');
   const rest = (confirm ? body.split('\n').slice(1).join('\n') : body).trim();
-  const p = rest ? await parse(deps, actor, row, rest) : null;
+  const p = rest ? await parse(deps, actor, row, rest, deps.registry.service(order.module, order.service)) : null;
   await sql.tx(async (tx) => {
     let cur = await tx.one`select * from orders where id = ${order.id} for update`;
     await tx`update mail_threads set last_message_id = ${row.message_id} where order_id = ${cur.id}`;

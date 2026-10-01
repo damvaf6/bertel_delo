@@ -70,7 +70,7 @@ test('настройки ИИ: только российские модели и
   assert.equal(ok.ai.fallback, 'gigachat');
   assert.equal(ok.ai.yandex.model, 'yandexgpt/latest');
   const prod = (extra) => loadConfig({ APP_ENV: 'prod', DATABASE_URL: 'postgres://x/y', APP_SECRET: 'x'.repeat(40), STORAGE_PROVIDER: 's3', S3_BUCKET: 'b',
-    SMS_PROVIDER: 's', CALL_PROVIDER: 'c', PAYMENTS_PROVIDER: 'p', MAIL_PROVIDER: 'm', PUBLIC_URL: 'https://delo.example',
+    SMS_PROVIDER: 's', CALL_PROVIDER: 'c', PAYMENTS_PROVIDER: 'p', MAIL_PROVIDER: 'm', MAIL_INBOX_ADDRESS: 'zayavki@delo.example', PUBLIC_URL: 'https://delo.example',
     AI_PROVIDER: 'yandexgpt', AI_YANDEX_API_KEY: 'k', AI_YANDEX_FOLDER: 'f', ...extra });
   assert.ok(prod({}).live);
   assert.throws(() => prod({ AI_PROVIDER: 'fake' }), ConfigError);
