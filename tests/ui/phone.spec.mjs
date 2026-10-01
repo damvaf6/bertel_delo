@@ -84,6 +84,8 @@ test('неверный код — понятное сообщение', async ({
   await page.goto('/');
   await page.getByLabel('Номер мобильного телефона').fill('+79990000502');
   await page.getByRole('button', { name: 'Получить код' }).click();
+  // Код читается только после ответа сервера (иначе на медленном контейнере вызова СМС ещё нет).
+  await expect(page.getByText('Код отправлен на +7 999 000-05-02')).toBeVisible();
   const code = await smsCode(page.request, '+79990000502');
   await page.getByLabel('Код из СМС').fill(code === '000000' ? '111111' : '000000');
   await page.getByRole('button', { name: 'Войти' }).click();
