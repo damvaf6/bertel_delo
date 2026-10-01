@@ -1,5 +1,5 @@
 # Только идентификаторы — без паролей и ключей.
-output "network_id" { value = yandex_vpc_network.main.id }
+output "network_id" { value = local.network_id }
 output "pg_cluster_id" { value = yandex_mdb_postgresql_cluster.main.id }
 output "pg_host_rw" { value = "c-${yandex_mdb_postgresql_cluster.main.id}.rw.mdb.yandexcloud.net" }
 output "files_bucket" { value = yandex_storage_bucket.files.bucket }

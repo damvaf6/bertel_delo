@@ -40,3 +40,9 @@ variable "files_noncurrent_days" {
   type        = number
   default     = 30
 }
+
+variable "existing_network_id" {
+  description = "Сеть, уже существующая в каталоге контура (пусто — создать свою)"
+  type        = string
+  default     = ""
+}

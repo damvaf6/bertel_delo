@@ -115,8 +115,15 @@ jobs:
         working-directory: infra/terraform
         run: |
           cp "$ENV.tfvars.example" "$RUNNER_TEMP/run.tfvars"
+          # Сеть: своя delo-<env> (уже под управлением Terraform) или та, что уже есть в каталоге (лимит облака на сети).
+          NETS=$(yc vpc network list --folder-id "$FOLDER_ID" --format json)
+          echo "Сети в каталоге: $(echo "$NETS" | jq -r '[.[].name] | join(", ")')"
+          EXISTING_NET=""
+          if ! echo "$NETS" | jq -e --arg n "delo-$ENV" 'any(.[]; .name == $n)' >/dev/null; then
+            EXISTING_NET=$(echo "$NETS" | jq -r '.[0].id // ""')
+          fi
           sed -i "s/^name_suffix .*/name_suffix = \"$SUFFIX\"/" "$RUNNER_TEMP/run.tfvars"
-          ARGS="-input=false -var-file=$RUNNER_TEMP/run.tfvars -var cloud_id=$CLOUD_ID -var folder_id=$FOLDER_ID"
+          ARGS="-input=false -var-file=$RUNNER_TEMP/run.tfvars -var cloud_id=$CLOUD_ID -var folder_id=$FOLDER_ID -var existing_network_id=$EXISTING_NET"
           if [ "${{ inputs.action }}" = "apply" ]; then
             terraform apply -auto-approve $ARGS
             terraform output

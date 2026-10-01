@@ -3,14 +3,21 @@ locals {
 }
 
 # ---------------------------------------------------------------- сеть (только внутренняя)
+# Лимит облака на число сетей мал (их занимают остатки bertel.online в каталоге default), поэтому, если в каталоге
+# контура сеть уже есть, берём её (existing_network_id) и добавляем в неё свою подсеть; иначе создаём свою.
 resource "yandex_vpc_network" "main" {
-  name = local.name
+  count = var.existing_network_id == "" ? 1 : 0
+  name  = local.name
+}
+
+locals {
+  network_id = var.existing_network_id != "" ? var.existing_network_id : yandex_vpc_network.main[0].id
 }
 
 resource "yandex_vpc_subnet" "main" {
   name           = "${local.name}-a"
   zone           = var.zone
-  network_id     = yandex_vpc_network.main.id
+  network_id     = local.network_id
   v4_cidr_blocks = ["10.10.0.0/24"]
 }
 
@@ -68,7 +75,7 @@ resource "random_password" "pg_app" {
 resource "yandex_mdb_postgresql_cluster" "main" {
   name                = local.name
   environment         = "PRODUCTION"
-  network_id          = yandex_vpc_network.main.id
+  network_id          = local.network_id
   deletion_protection = true
 
   config {
@@ -213,7 +220,7 @@ resource "yandex_storage_bucket" "backups" {
   grant {
     id          = yandex_iam_service_account.app.id
     type        = "CanonicalUser"
-    permissions = ["WRITE"]
+    permissions = ["READ", "WRITE"] # хранилище не даёт WRITE без READ; удаление копий запрещает блокировка
   }
 
   depends_on = [yandex_resourcemanager_folder_iam_member.storage_admin, yandex_kms_symmetric_key_iam_binding.use]
