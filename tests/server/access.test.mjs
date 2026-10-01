@@ -715,6 +715,43 @@ test('деньги: цену — диспетчер; платит заказчи
   assert.equal((await U.owner.req('POST', `/api/orders/${o.id}/status`, { to: 'closed', from: 'done' })).status, 200);
 });
 
+test('уведомления: каждый видит и меняет только свои; название заявки — только пока заявка ему доступна', async () => {
+  for (const id of ['notifications.list', 'notifications.read', 'notifications.settings', 'notifications.settings.update']) cover(id);
+  // Приглашение в организацию A (в before) — уведомление приглашённому.
+  const inv = (await U.invitee.req('GET', '/api/notifications')).body;
+  assert.ok(inv.notifications.some((n) => n.title === 'Вас пригласили в организацию' && n.section === 'orgs'));
+  const mine = inv.notifications[0].id;
+  // Чужое уведомление не отметить: номер просто не находится; своё — отмечается.
+  assert.equal((await U.stranger.req('POST', '/api/notifications/read', { ids: [mine] })).status, 200);
+  assert.equal((await S.sql`select read_at from notifications where id = ${mine}`)[0].read_at, null, 'чужой не отметил');
+  assert.equal((await U.stranger.req('GET', '/api/notifications')).body.notifications.length, 0);
+  assert.equal((await U.invitee.req('POST', '/api/notifications/read', { ids: ['abc'] })).status, 400);
+  assert.equal((await U.invitee.req('POST', '/api/notifications/read', { ids: [mine] })).body.unread, 0);
+  // Настройки — свои; чужие не меняются.
+  assert.equal((await U.stranger.req('PUT', '/api/notifications/settings', { type: 'order_progress', sms: false, user_id: U.owner.user.id })).status, 200);
+  const ownerSet = (await U.owner.req('GET', '/api/notifications/settings')).body.settings;
+  assert.equal(ownerSet.find((t) => t.type === 'order_progress').sms, true);
+  assert.equal((await U.stranger.req('GET', '/api/notifications/settings')).body.settings.find((t) => t.type === 'order_progress').sms, false);
+  assert.equal((await U.stranger.req('PUT', '/api/notifications/settings', { type: 'нет', sms: true })).status, 400);
+  assert.equal((await U.stranger.req('PUT', '/api/notifications/settings', { type: 'money', sms: 'да' })).status, 400);
+  // Виды в настройках: очередь диспетчера — только диспетчеру; дела исполнителя — специалисту.
+  assert.ok(!ownerSet.some((t) => t.type === 'dispatch' || t.type === 'offers'));
+  assert.ok((await U.dispatcher.req('GET', '/api/notifications/settings')).body.settings.some((t) => t.type === 'dispatch'));
+  // Сотрудник ушёл из организации — в его старых уведомлениях по делам организации нет ни названия, ни ссылки.
+  const o = (await U.memberA2.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Секретное дело организации', org_id: orgA.id })).body.order;
+  assert.equal((await U.memberA2.req('PATCH', `/api/orders/${o.id}`, { ...READY, deadline: soon() })).status, 200);
+  assert.equal((await U.memberA2.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
+  assert.equal((await U.dispatcher.req('POST', `/api/orders/${o.id}/messages`, { body: 'Уточните адрес' })).status, 201);
+  const before = (await U.memberA2.req('GET', '/api/notifications')).body.notifications.find((n) => n.order_ref && n.title === 'Новое сообщение по заявке');
+  assert.equal(before.order_title, 'Секретное дело организации');
+  await S.sql`delete from org_members where org_id = ${orgA.id} and user_id = ${U.memberA2.user.id}`;
+  const after = (await U.memberA2.req('GET', '/api/notifications')).body.notifications.find((n) => n.id === before.id);
+  assert.equal(after.order_title, null);
+  assert.equal(after.order_id, null);
+  assert.equal(after.order_ref, before.order_ref);
+  await S.sql`insert into org_members (org_id, user_id, role) values (${orgA.id}, ${U.memberA2.user.id}, 'member')`;
+});
+
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {
   const PUBLIC = ['health', 'auth.code', 'auth.verify', 'files.memory', 'test.calls', 'test.script', 'test.reset', 'payments.notify'];
   const ops = S.app.locals.ops;

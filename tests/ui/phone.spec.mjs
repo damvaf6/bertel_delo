@@ -36,7 +36,7 @@ async function shot(page, name) {
 async function smsCode(request, phone, channel = 'sms') {
   const r = await request.get(`/__test/fakes/${channel}/calls`, { headers: { 'x-test-control': CONTROL } });
   expect(r.status()).toBe(200);
-  const calls = (await r.json()).calls.filter((c) => c.args.phone === phone);
+  const calls = (await r.json()).calls.filter((c) => c.method === 'sendCode' && c.args.phone === phone);
   return calls.at(-1).args.code;
 }
 

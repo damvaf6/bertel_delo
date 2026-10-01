@@ -10,6 +10,7 @@ import express from 'express';
 import { HttpError, parseCookies } from './core.mjs';
 import { authorize, authorizePlatform, LEVEL, RESOURCES } from '../access/policy.mjs';
 import { sessionUser } from '../auth/auth.mjs';
+import { deliverPending } from '../notify/notify.mjs';
 
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
 
@@ -60,6 +61,8 @@ export function mountOps(app, ops, deps) {
           else if (op.access !== 'self') Object.assign(ctx, await authorize(deps.sql, ctx.actor, op.access, req.params));
         }
         const out = await op.handler(ctx);
+        // Изменяющая операция могла записать уведомления — СМС уходят сразу; неудачные повторит обход в server.mjs.
+        if (op.method !== 'GET') await deliverPending(deps.sql, deps.providers).catch((e) => console.error('уведомления:', e?.message || e));
         if (res.headersSent) return;
         if (out === undefined) res.status(204).end();
         else res.json(out); // код ответа обработчик может задать сам: ctx.res.status(201)

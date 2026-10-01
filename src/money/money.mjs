@@ -2,6 +2,8 @@
 // вознаграждение агента (20%, устав) и перечисляет остальное исполнителю. Одна функция расчёта, одна выплата на заявку
 // (Б-16), смена состояния платежа — в транзакции. Поставщик оплаты не трогается внутри транзакции базы.
 import { audit } from '../ops/util.mjs';
+import { customersOf, dispatchers, notify } from '../notify/notify.mjs';
+import { orderRef } from '../notify/registry.mjs';
 
 export const COMMISSION_PERCENT = 20;
 
@@ -34,6 +36,7 @@ export async function applyPaymentStatus(sql, { paymentId, status, test }) {
     await audit(tx, null, 'payment.succeeded', 'order', order.id, { payment: p.id, amount_kop: String(p.amount_kop) });
     const split = splitAmount(Number(p.amount_kop));
     await makeClosingDocs(tx, order, split, test);
+    await notify(tx, 'paid', { users: await customersOf(tx, order), orderId: order.id });
     if (!order.executor_user_id) return null;
     const payout = await tx.one`
       insert into payouts (order_id, executor_user_id, amount_kop, commission_kop)
@@ -62,13 +65,18 @@ export async function runPayout(sql, providers, payoutId) {
     result = { status: 'failed', failure: String(e?.message || 'отказ поставщика').slice(0, 500) };
   }
   const ok = result.status === 'succeeded';
-  return sql.one`
-    update payouts set status = ${ok ? 'succeeded' : 'failed'}, provider_id = ${result.id ?? null},
-           failure = ${ok ? null : result.failure || 'выплата не прошла'}, paid_at = ${ok ? new Date() : null}, updated_at = now()
-    where id = ${p.id} returning *`;
+  return sql.tx(async (tx) => {
+    const row = await tx.one`
+      update payouts set status = ${ok ? 'succeeded' : 'failed'}, provider_id = ${result.id ?? null},
+             failure = ${ok ? null : result.failure || 'выплата не прошла'}, paid_at = ${ok ? new Date() : null}, updated_at = now()
+      where id = ${p.id} returning *`;
+    await notify(tx, ok ? 'payout_succeeded' : 'payout_failed', { users: [p.executor_user_id], orderId: p.order_id });
+    if (!ok) await notify(tx, 'payout_failed_staff', { users: await dispatchers(tx), orderId: p.order_id });
+    return row;
+  });
 }
 
-export const shortRef = (orderId) => `№ ${String(orderId).slice(0, 8).toUpperCase()}`;
+export const shortRef = orderRef;
 
 const PLATFORM = 'Платформа «БЕРТЕЛ Дело» (агент)';
 

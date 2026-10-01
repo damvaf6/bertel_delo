@@ -8,6 +8,7 @@ import { orderSides } from '../access/policy.mjs';
 import { scoreSpecialist } from '../matching/score.mjs';
 import { addDays, todayMsk } from '../orders/workflow.mjs';
 import { audit, text, uuidFrom } from './util.mjs';
+import { notify } from '../notify/notify.mjs';
 
 const REGIONS = { moscow: 'Москва', mo: 'Московская область' };
 const OPEN_STATUSES = ['awaiting_executor', 'in_work', 'review'];
@@ -196,6 +197,8 @@ export function matchOps() {
           await tx`insert into order_status_history (order_id, from_status, to_status, actor_id, side, reason)
                    values (${cur.id}, ${cur.status}, 'awaiting_executor', ${actor.id}, 'dispatcher', ${reassign ? 'Передано другому специалисту' : null})`;
           await audit(tx, actor, 'order.offer', 'order', cur.id, { specialist: specialistId, score: cand.score.total, reassign });
+          if (reassign && cur.executor_user_id !== specialistId) await notify(tx, 'offer_withdrawn', { users: [cur.executor_user_id], orderId: cur.id, actor });
+          await notify(tx, 'offer', { users: [specialistId], orderId: cur.id, actor });
           return o;
         });
         return { order: { id: updated.id, status: updated.status, executor_user_id: updated.executor_user_id } };
