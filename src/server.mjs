@@ -6,11 +6,20 @@ import { createApp } from './app.mjs';
 import { deliverPending } from './notify/notify.mjs';
 import { deliverMail } from './mail/outbox.mjs';
 import { processInbound, receiveMail } from './mail/inbound.mjs';
+import { startupSteps } from './startup.mjs';
 
 const cfg = loadConfig();
 const sql = createDb(cfg);
 const providers = createProviders(cfg);
 const app = createApp({ cfg, sql, providers });
+
+// Схема и проверка базы и файлов — до приёма запросов; ошибка — контейнер не стартует (видно в журнале облака).
+try {
+  await startupSteps({ cfg, sql, providers });
+} catch (e) {
+  console.error('запуск остановлен:', e?.message || e);
+  process.exit(1);
+}
 
 const server = app.listen(cfg.port, () => console.log(`БЕРТЕЛ Дело · ядро · ${cfg.appEnv} · порт ${cfg.port}`));
 

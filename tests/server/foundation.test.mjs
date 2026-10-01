@@ -192,3 +192,22 @@ test('неизвестный адрес API — 404 в JSON', async () => {
   assert.equal(r.status, 404);
   assert.equal(r.body.error, 'not_found');
 });
+
+test('запуск в облаке: схема обновляется и база с хранилищем проверяются до приёма запросов', async () => {
+  const { startupSteps } = await import('../../src/startup.mjs');
+  const { memoryStorage } = await import('../../src/providers/storage.mjs');
+  const storage = memoryStorage('x'.repeat(32));
+  const lines = [];
+  const cfg = loadConfig(testEnv({ MIGRATE_ON_START: '1', STARTUP_CHECK: '1' }));
+  assert.deepEqual(cfg.startup, { migrate: true, check: true });
+  await startupSteps({ cfg, sql: S.sql, providers: { storage }, log: (l) => lines.push(l) });
+  assert.ok(lines.includes('схема: актуальна'), lines.join('\n'));
+  assert.ok(lines.some((l) => /база — ок, файлы \(memory\) — ок/.test(l)), lines.join('\n'));
+  assert.equal(storage.objects.size, 0, 'пробный файл удалён');
+
+  // Хранилище отдаёт не то — запуск останавливается.
+  const broken = { ...storage, get: async () => Buffer.from('другое') };
+  await assert.rejects(startupSteps({ cfg, sql: S.sql, providers: { storage: broken }, log: () => {} }), /прочитано не то/);
+  // По умолчанию ничего не делается.
+  assert.deepEqual(loadConfig(testEnv()).startup, { migrate: false, check: false });
+});

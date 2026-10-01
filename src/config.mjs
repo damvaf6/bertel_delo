@@ -71,6 +71,11 @@ export function loadConfig(env = process.env) {
       bridgeSecret: env.CRM_BRIDGE_SECRET || '',
       url: (env.CRM_URL || '').replace(/\/+$/, ''),
     },
+    // При старте контейнера (src/startup.mjs): обновить схему базы и проверить базу и хранилище файлов.
+    startup: {
+      migrate: env.MIGRATE_ON_START === '1',
+      check: env.STARTUP_CHECK === '1',
+    },
     // Служебные пути для автотестов (чтение вызовов поддельных поставщиков). Только APP_ENV=test.
     testControlToken: env.TEST_CONTROL_TOKEN || '',
     // Лимит запросов входа с одного адреса за 10 минут. Менять — только APP_ENV=test (много входов в одном прогоне).
