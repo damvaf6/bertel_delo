@@ -1,6 +1,8 @@
 // Проверка на телефоне 412×915: вход по коду (СМС и звонок), заявка, документ (загрузка, скачивание, удаление),
 // чужой не видит, руководитель видит дела сотрудника, выход; профиль; организация — создание, приглашение,
-// роли, передача дела, уход сотрудника; управление ролями администратором. Скриншоты — test-results/screens/.
+// роли, передача дела, уход сотрудника; управление ролями администратором; заявка на оценку — заполнение по описанию
+// услуги, основание «определение суда», отправка, ход заявки у диспетчера и заказчика, отмена, просрочка.
+// Скриншоты — test-results/screens/.
 // На каждой странице: нет прокрутки вбок, нет ошибок JavaScript, нет запросов к чужим адресам.
 import { test as base, expect } from '@playwright/test';
 import pg from 'pg';
@@ -126,7 +128,7 @@ test('заявка и документ: создать, загрузить, ск
 
 test('чужой пользователь не видит заявку ни в списке, ни по прямой ссылке', async ({ page, browser, baseURL }) => {
   await signIn(page, '+79990000504');
-  const created = await page.request.post('/api/orders', { data: { title: 'Секретная заявка владельца' }, headers: { 'x-delo-request': '1' } });
+  const created = await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Секретная заявка владельца' }, headers: { 'x-delo-request': '1' } });
   const { order } = await created.json();
 
   const other = await browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true, locale: 'ru-RU' });
@@ -152,7 +154,7 @@ test('руководитель организации видит заявку с
     await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [o.id, head.id, member.id]);
     return o;
   });
-  const r = await p2.request.post('/api/orders', { data: { title: 'Заявка сотрудника: оценка автомобиля', org_id: org.id }, headers: { 'x-delo-request': '1' } });
+  const r = await p2.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Заявка сотрудника: оценка автомобиля', org_id: org.id }, headers: { 'x-delo-request': '1' } });
   expect(r.status()).toBe(201);
   await ctx.close();
 
@@ -309,4 +311,119 @@ test('администратор назначает диспетчера; ост
   const role = await db(async (c) => (await c.query('select platform_role from users where phone = $1', [D])).rows[0].platform_role);
   expect(role).toBe('dispatcher');
   await dctx.close();
+});
+
+const inDays = (n) => new Date(Date.now() + n * 86400_000).toISOString().slice(0, 10);
+const H = { 'x-delo-request': '1' };
+
+test('заявка на оценку: поля услуги, срок, основание «определение суда» с файлом, отправка', async ({ page }) => {
+  await signIn(page, '+79990000541');
+  await page.goto('/kabinet');
+  await page.locator('#new-order').getByLabel('Услуга').selectOption({ label: 'Оценка недвижимости' });
+  await page.getByRole('button', { name: 'Создать заявку' }).click();
+  await expect(page.getByRole('heading', { name: 'Оценка недвижимости' })).toBeVisible();
+  await expect(page.locator('#order-status')).toHaveText('Новая');
+
+  // Без данных отправить нельзя — понятный список, чего не хватает.
+  await page.getByRole('button', { name: 'Отправить заявку' }).click();
+  await expect(page.getByText(/^Не хватает: Для чего нужна оценка, Где находится объект, Что оцениваем, Адрес объекта, срок/)).toBeVisible();
+
+  await page.getByLabel('Для чего нужна оценка').selectOption({ label: 'Для суда' });
+  await page.getByLabel('Где находится объект').selectOption({ label: 'Московская область' });
+  await page.getByLabel('Что оцениваем').selectOption({ label: 'Квартира' });
+  await page.getByLabel('Адрес объекта').fill('Московская обл., г. Тестовск, ул. Проверочная, д. 1, кв. 2');
+  await page.getByLabel('Кадастровый номер').fill('50:01:0001001:123');
+  await page.getByLabel('Площадь, кв. м').fill('54,3');
+  await page.getByLabel(/^Срок/).fill(inDays(14));
+  await page.getByLabel('Основание').selectOption({ label: 'Определение суда' });
+  await page.getByLabel(/^Номер определения/).fill('2-1234/2026');
+  await page.getByLabel(/^Дата определения/).fill(inDays(-10));
+  await expect(page.getByText('Файл определения ещё не приложен')).toBeVisible();
+  await page.getByRole('button', { name: 'Отправить заявку' }).click();
+  await expect(page.getByText('Не хватает: файл определения суда')).toBeVisible();
+  await shot(page, '19-zayavka-zapolnenie');
+
+  await page.getByLabel('Приложить определение суда').setInputFiles({
+    name: 'Определение суда.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 тестовое определение'),
+  });
+  await expect(page.getByText('Приложено: Определение суда.pdf')).toBeVisible();
+  await expect(page.locator('#docs li').filter({ hasText: 'Определение суда.pdf' })).toContainText('Основание');
+  await page.getByRole('button', { name: 'Отправить заявку' }).click();
+  await expect(page.getByText('Заявка отправлена')).toBeVisible();
+  await expect(page.locator('#order-status')).toHaveText('Подбор исполнителя');
+  await expect(page.locator('#facts')).toContainText('Квартира');
+  await expect(page.locator('#facts')).toContainText('54.3');
+  await expect(page.locator('#facts')).toContainText('Определение суда, № 2-1234/2026');
+  await expect(page.locator('#details-form')).toBeHidden();
+  await expect(page.locator('#docs li').filter({ hasText: 'Определение суда.pdf' }).getByRole('button', { name: 'Удалить' })).toHaveCount(0);
+  await expect(page.locator('#steps li.done')).toHaveCount(1);
+  await shot(page, '20-zayavka-otpravlena');
+});
+
+test('ход заявки: диспетчер ведёт по статусам, заказчик видит каждый шаг и закрывает', async ({ page, browser, baseURL }) => {
+  const customer = await signIn(page, '+79990000542');
+  const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'vehicle', title: 'Оценка автомобиля после ДТП' }, headers: H })).json();
+  const id = created.order.id;
+  expect((await page.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(7), fields: { purpose: 'damage', region: 'moscow', vehicle_type: 'car', make_model: 'Тестовая марка', vin: 'xta21099012345678' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  expect(customer.id).toBeTruthy();
+
+  const dctx = await phoneContext(browser, baseURL);
+  const dp = await dctx.newPage();
+  const disp = await signIn(dp, '+79990000543');
+  await db((c) => c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]));
+  await dp.goto(`/kabinet#order=${id}`);
+  await expect(dp.locator('#order-status')).toHaveText('Подбор исполнителя');
+  await expect(dp.locator('#facts')).toContainText('XTA21099012345678');
+  await expect(dp.getByRole('button', { name: 'Удалить' })).toHaveCount(0);
+  for (const [button, status] of [['Предложена исполнителю', 'Ждёт исполнителя'], ['Исполнитель принял', 'В работе'], ['Результат на проверку', 'Проверка результата']]) {
+    await dp.getByRole('button', { name: button }).click();
+    await expect(dp.locator('#order-status')).toHaveText(status);
+  }
+  await dp.getByRole('button', { name: 'Вернуть на доработку' }).click();
+  await expect(dp.getByText('Укажите причину')).toBeVisible();
+  await dp.getByLabel('Причина (для возврата или отмены)').fill('Нет фото повреждений');
+  await dp.getByRole('button', { name: 'Вернуть на доработку' }).click();
+  await expect(dp.locator('#order-status')).toHaveText('В работе');
+  await dp.getByRole('button', { name: 'Результат на проверку' }).click();
+  await expect(dp.locator('#order-status')).toHaveText('Проверка результата');
+  await shot(dp, '21-dispetcher-hod');
+  await dp.getByRole('button', { name: 'Проверено, готово' }).click();
+  await expect(dp.locator('#order-status')).toHaveText('Готово');
+  await dctx.close();
+
+  await page.goto(`/kabinet#order=${id}`);
+  await expect(page.locator('#order-status')).toHaveText('Готово');
+  await expect(page.locator('#history')).toContainText('Причина: Нет фото повреждений');
+  await expect(page.locator('#history li')).toHaveCount(8);
+  await expect(page.getByRole('button', { name: 'Отменить заявку' })).toHaveCount(0);
+  await shot(page, '22-zakazchik-gotovo');
+  await page.getByRole('button', { name: 'Принять и закрыть' }).click();
+  await expect(page.locator('#order-status')).toHaveText('Закрыта');
+  await expect(page.locator('#steps li.done')).toHaveCount(6);
+  await expect(page.locator('#upload-box')).toBeHidden();
+});
+
+test('отмена заказчиком до начала работ; просроченный срок виден в списке', async ({ page }) => {
+  await signIn(page, '+79990000544');
+  const mk = async (title) => (await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'goods', title }, headers: H })).json()).order.id;
+  const late = await mk('Экспертиза телевизора');
+  const cancel = await mk('Экспертиза холодильника');
+  await db((c) => c.query("update orders set deadline = current_date - 2 where id = $1", [late]));
+
+  await page.goto(`/kabinet#order=${cancel}`);
+  page.once('dialog', (d) => d.accept());
+  await page.getByRole('button', { name: 'Отменить заявку' }).click();
+  await expect(page.locator('#order-status')).toHaveText('Отменена');
+  await expect(page.locator('#steps')).toHaveText('Заявка отменена');
+  await expect(page.getByRole('button', { name: 'Отправить заявку' })).toHaveCount(0);
+  await expect(page.locator('#upload-box')).toBeHidden();
+  await shot(page, '23-otmena');
+
+  await page.getByRole('button', { name: '← Все заявки' }).click();
+  await expect(page.locator('#orders li').filter({ hasText: 'Экспертиза телевизора' })).toContainText('просрочено');
+  await expect(page.locator('#orders li').filter({ hasText: 'Экспертиза холодильника' })).toContainText('Отменена');
+  await shot(page, '24-spisok-sroki');
 });

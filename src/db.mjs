@@ -5,6 +5,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+// Дата без времени (срок заявки) — строкой 'ГГГГ-ММ-ДД', как в базе. По умолчанию pg делает из неё момент
+// в часовом поясе сервера, и дата может съехать на день.
+pg.types.setTypeParser(pg.types.builtins.DATE, (v) => v);
+
 // Параметры SSL из строки подключения pg применяет поверх ssl-объекта — убираем их и задаём сами.
 const SSL_URL_PARAMS = ['sslmode', 'sslrootcert', 'sslcert', 'sslkey', 'ssl'];
 

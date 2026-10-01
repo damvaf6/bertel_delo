@@ -4,7 +4,7 @@ import { api, el, formatPhone } from '/common.js';
 const $ = (id) => document.getElementById(id);
 const views = ['list-view', 'order-view', 'missing-view', 'orgs-view', 'org-view', 'profile-view', 'admin-view'];
 
-export const state = { me: null };
+export const state = { me: null, catalog: null }; // catalog — услуги, поля и статусы из /api/catalog
 
 export function show(id, tab) {
   views.forEach((v) => $(v).classList.toggle('hidden', v !== id));

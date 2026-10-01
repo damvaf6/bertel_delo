@@ -91,8 +91,8 @@ test('ушедший сотрудник теряет доступ к делам 
   const worker = await join(head, org, '+79990001032');
   const other = await join(head, org, '+79990001033');
 
-  const orgOrder = (await worker.req('POST', '/api/orders', { title: 'Дело организации', org_id: org.id })).body.order;
-  const personal = (await worker.req('POST', '/api/orders', { title: 'Личное дело' })).body.order;
+  const orgOrder = (await worker.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Дело организации', org_id: org.id })).body.order;
+  const personal = (await worker.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Личное дело' })).body.order;
   const doc = (await worker.req('POST', `/api/orders/${orgOrder.id}/documents`, Buffer.from('отчёт'), {
     raw: true, headers: { 'x-file-name': 'otchet.txt' },
   })).body.document;
@@ -103,7 +103,7 @@ test('ушедший сотрудник теряет доступ к делам 
   assert.deepEqual(await ids(worker), [personal.id], 'осталось только личное');
   assert.equal((await worker.req('GET', `/api/orders/${orgOrder.id}`)).status, 404);
   assert.equal((await worker.req('GET', `/api/documents/${doc.id}/link`)).status, 404);
-  assert.equal((await worker.req('POST', '/api/orders', { title: 'x', org_id: org.id })).status, 404, 'от имени организации больше нельзя');
+  assert.equal((await worker.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'x', org_id: org.id })).status, 404, 'от имени организации больше нельзя');
   assert.equal((await worker.req('GET', `/api/orgs/${org.id}`)).status, 404);
 
   assert.ok((await ids(head)).includes(orgOrder.id), 'дело осталось у организации');
@@ -120,7 +120,7 @@ test('сотрудник уходит сам — то же самое; верн�
   const head = await login(S, '+79990001041');
   const org = await newOrg(head);
   const worker = await join(head, org, '+79990001042');
-  const order = (await worker.req('POST', '/api/orders', { title: 'Дело до ухода', org_id: org.id })).body.order;
+  const order = (await worker.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Дело до ухода', org_id: org.id })).body.order;
   assert.equal((await worker.req('POST', `/api/orgs/${org.id}/leave`)).status, 204);
   assert.deepEqual(await ids(worker), []);
   const inv = await invite(head, org, '+79990001042');
@@ -166,7 +166,7 @@ test('старший распределяет дела и видит нагру�
   const senior = await join(head, org, '+79990001072', 'senior');
   const w1 = await join(head, org, '+79990001073');
   const w2 = await join(head, org, '+79990001074');
-  const order = (await w1.req('POST', '/api/orders', { title: 'Оценка автомобиля', org_id: org.id })).body.order;
+  const order = (await w1.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Оценка автомобиля', org_id: org.id })).body.order;
 
   const members = (await senior.req('GET', `/api/orgs/${org.id}/members`)).body.members;
   assert.equal(members.find((m) => m.user_id === w1.user.id).orders, 1);

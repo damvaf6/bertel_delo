@@ -134,9 +134,9 @@ test('заголовки безопасности и запрет внешних
 
 test('размер запроса ограничен: JSON — 64 КБ, файл — 5 МБ', async () => {
   const c = await login(S, '+79990000201');
-  const big = await c.req('POST', '/api/orders', { title: 'x'.repeat(70 * 1024) });
+  const big = await c.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'x'.repeat(70 * 1024) });
   assert.equal(big.status, 413);
-  const order = (await c.req('POST', '/api/orders', { title: 'Размеры' })).body.order;
+  const order = (await c.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Размеры' })).body.order;
   const up = (buf) => c.req('POST', `/api/orders/${order.id}/documents`, buf, { raw: true, headers: { 'x-file-name': 'f.bin' } });
   assert.equal((await up(Buffer.alloc(5 * 1024 * 1024 + 1))).status, 413);
   assert.equal((await up(Buffer.alloc(0))).status, 400);
@@ -146,7 +146,7 @@ test('размер запроса ограничен: JSON — 64 КБ, файл
 
 test('имя файла: русские буквы сохраняются, пути и управляющие символы вычищаются', async () => {
   const c = await login(S, '+79990000202');
-  const order = (await c.req('POST', '/api/orders', { title: 'Имена' })).body.order;
+  const order = (await c.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Имена' })).body.order;
   const name = '../../Отчёт об оценке №1.pdf';
   const r = await c.req('POST', `/api/orders/${order.id}/documents`, Buffer.from('%PDF'), {
     raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent(name) },
@@ -170,7 +170,7 @@ test('служебные тестовые пути: без токена не в�
 
 test('подделанная или просроченная ссылка на файл не открывается', async () => {
   const c = await login(S, '+79990000203');
-  const order = (await c.req('POST', '/api/orders', { title: 'Ссылки' })).body.order;
+  const order = (await c.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Ссылки' })).body.order;
   const doc = (await c.req('POST', `/api/orders/${order.id}/documents`, Buffer.from('abc'), { raw: true, headers: { 'x-file-name': 'a.txt' } })).body.document;
   const url = (await c.req('GET', `/api/documents/${doc.id}/link`)).body.url;
   const [payload, sig] = url.slice('/files/'.length).split('.');

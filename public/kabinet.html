@@ -29,8 +29,12 @@
       <form class="card" id="new-order" novalidate>
         <h2>Новая заявка</h2>
         <div class="field">
-          <label for="title">Коротко: что нужно</label>
-          <input id="title" type="text" maxlength="300" required placeholder="Например: оценка квартиры для суда">
+          <label for="service">Услуга</label>
+          <select id="service"></select>
+        </div>
+        <div class="field">
+          <label for="title">Коротко: что нужно (можно не заполнять)</label>
+          <input id="title" type="text" maxlength="300" placeholder="Например: оценка квартиры для суда">
         </div>
         <div class="field hidden" id="order-org-box">
           <label for="order-org">От чьего имени</label>
@@ -45,8 +49,64 @@
       <button class="link" id="back">← Все заявки</button>
       <div class="card">
         <h1 id="order-title"></h1>
+        <p class="muted" id="order-service"></p>
+        <p class="row"><span class="badge status" id="order-status"></span><span class="muted" id="order-deadline"></span></p>
         <p class="muted" id="order-meta"></p>
         <p class="muted" id="order-org-line"></p>
+      </div>
+      <form class="card hidden" id="details-form" novalidate>
+        <h2>Данные заявки</h2>
+        <p class="muted">Поля со звёздочкой нужны, чтобы отправить заявку. Сохранять можно частями.</p>
+        <div class="field">
+          <label for="d-service">Услуга</label>
+          <select id="d-service"></select>
+        </div>
+        <div class="field">
+          <label for="d-title">Название заявки</label>
+          <input id="d-title" type="text" maxlength="300">
+        </div>
+        <div id="d-fields"></div>
+        <div class="field">
+          <label for="d-deadline">Срок: результат нужен к *</label>
+          <input id="d-deadline" type="date">
+        </div>
+        <div class="field">
+          <label for="d-basis">Основание</label>
+          <select id="d-basis"></select>
+        </div>
+        <div class="hidden" id="court-box">
+          <div class="field">
+            <label for="d-basis-number">Номер определения или дела *</label>
+            <input id="d-basis-number" type="text" maxlength="100">
+          </div>
+          <div class="field">
+            <label for="d-basis-date">Дата определения *</label>
+            <input id="d-basis-date" type="date">
+          </div>
+          <div class="field">
+            <p class="muted" id="basis-file-state"></p>
+            <label class="btn secondary" for="basis-file">Приложить определение суда</label>
+            <input id="basis-file" type="file" class="visually-hidden" aria-label="Приложить определение суда">
+          </div>
+        </div>
+        <button type="submit" class="secondary wide" id="save-details">Сохранить</button>
+        <p class="msg" id="details-msg" role="status" aria-live="polite"></p>
+      </form>
+      <div class="card hidden" id="details-view">
+        <h2>Данные заявки</h2>
+        <dl class="facts" id="facts"></dl>
+      </div>
+      <div class="card">
+        <h2>Ход заявки</h2>
+        <ol class="steps" id="steps"></ol>
+        <div class="field hidden" id="reason-box">
+          <label for="reason">Причина (для возврата или отмены)</label>
+          <input id="reason" type="text" maxlength="1000">
+        </div>
+        <div class="row" id="actions"></div>
+        <p class="msg" id="status-msg" role="status" aria-live="polite"></p>
+        <h2 class="gap">История</h2>
+        <ul class="list" id="history"></ul>
       </div>
       <form class="card hidden" id="transfer-box" novalidate>
         <h2>Кто ведёт дело</h2>

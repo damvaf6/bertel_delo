@@ -28,7 +28,7 @@ test('команда первого назначения: пользовател
 test('назначить диспетчера: права действуют сразу, без повторного входа; снять — пропадают', async () => {
   const d = await login(S, '+79990002002');
   const owner = await login(S, '+79990002003');
-  const order = (await owner.req('POST', '/api/orders', { title: 'Тестовая заявка клиента' })).body.order;
+  const order = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Тестовая заявка клиента' })).body.order;
   assert.equal((await d.req('GET', `/api/orders/${order.id}`)).status, 404);
 
   const r = await admin.req('PATCH', `/api/admin/users/${d.user.id}`, { platform_role: 'dispatcher' });

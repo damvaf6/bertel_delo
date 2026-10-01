@@ -12,6 +12,8 @@
 // Приглашение:  адресат (номер совпадает) — write, пока приглашение действует; руководитель организации —
 //               manage над приглашениями своей организации. Это два разных предмета: руководитель не может
 //               принять чужое приглашение, адресат не может его отозвать.
+// Статусы заявки: сторона «заказчик» — у кого write или manage; сторона «диспетчер» — диспетчер платформы
+//               (администратор только читает). Какие шаги доступны стороне — src/orders/workflow.mjs.
 // Остальные не видят вовсе — ответ «не найдено», чтобы не раскрывать существование.
 import { HttpError, notFound, UUID_RE } from '../http/core.mjs';
 
@@ -52,6 +54,14 @@ export function orderLevel(actor, order) {
   }
   if (isStaff(actor)) return LEVEL.read;
   return LEVEL.none;
+}
+
+// Чьими глазами вошедший действует над заявкой: 'customer' и/или 'dispatcher'.
+export function orderSides(actor, order) {
+  const sides = [];
+  if (orderLevel(actor, order) >= LEVEL.write) sides.push('customer');
+  if (actor?.platform_role === 'dispatcher') sides.push('dispatcher');
+  return sides;
 }
 
 export function orgLevel(actor, org) {
