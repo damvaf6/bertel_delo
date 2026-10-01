@@ -96,13 +96,32 @@ jobs:
             fi
             sleep 10
           done
-          # Журнал запуска (схема, проверка базы и файлов) — для отчёта; данных людей в нём нет.
-          CID=$(yc serverless container get --name "$CONTAINER" --format json | jq -r .id)
-          timeout 60 yc logging read --folder-id "$FOLDER_ID" --resource-ids "$CID" --since 20m --limit 100 --format json 2>&1 \
-            | jq -r '.[]? | .message' 2>/dev/null | tail -40 || echo "журнал не прочитан"
+          # Ответ приходит только после обновления схемы и проверки базы и файлов: при ошибке контейнер не стартует.
           [ "$OK" = 1 ] || { echo "::error::Ядро на stage не отвечает"; exit 1; }
           echo "Ядро работает"
           CODE=$(curl -sS --max-time 40 -o /dev/null -w '%{http_code}' "$URL/") && echo "Страница входа: $CODE"
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Телефон 412×915 на адресе контура
+        env:
+          UI_BASE_URL: ${{ env.URL }}
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          mkdir -p test-results/screens
+          npx playwright test --config playwright.stage.mjs
+
+      - name: Скриншоты
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage-screens
+          path: test-results/
+          if-no-files-found: ignore
 
       - name: Убрать ключ
         if: always()
