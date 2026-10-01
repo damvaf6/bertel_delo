@@ -3,7 +3,9 @@ name: Infra (Yandex Cloud)
 # Контур БЕРТЕЛ Дело в Яндекс Облаке (база, файлы, копии, секреты).
 # PR: только проверка конфигурации, без доступа к облаку.
 # Ручной запуск: plan (показать, что изменится) или apply (создать/изменить). apply на prod — только по «да» Дамира.
-# Единственный секрет: YC_DELO_SA_KEY — ключ сервисного аккаунта с правами на облако (кладёт Дамир).
+# Единственный секрет: YC_SA_KEY_JSON — ключ технического пользователя bertel-delo-worker (кладёт Дамир).
+# Каталоги: stage — bertel-delo-test (создан Дамиром, у пользователя роль admin на каталог), prod — delo-prod.
+# Каталог default (остатки bertel.online) workflow не трогает.
 # Остальные ключи создаются на время запуска и удаляются в конце.
 on:
   pull_request:
@@ -57,7 +59,7 @@ jobs:
 
       - name: Вход в облако
         env:
-          SA_KEY: ${{ secrets.YC_DELO_SA_KEY }}
+          SA_KEY: ${{ secrets.YC_SA_KEY_JSON }}
         run: |
           umask 077
           printf '%s' "$SA_KEY" > "$RUNNER_TEMP/sa.json"
@@ -68,14 +70,25 @@ jobs:
           CLOUD_ID=$(yc resource-manager folder get --id "$FOLDER_OF_SA" --format json | jq -r .cloud_id)
           echo "SA_ID=$SA_ID" >> $GITHUB_ENV
           echo "CLOUD_ID=$CLOUD_ID" >> $GITHUB_ENV
+          echo "FOLDER_OF_SA=$FOLDER_OF_SA" >> $GITHUB_ENV
 
-      - name: Каталог контура и бакет состояния (создаются один раз)
+      - name: Каталог контура и бакет состояния (бакет создаётся один раз)
         run: |
-          FOLDER="delo-$ENV"
-          FOLDER_ID=$(yc resource-manager folder get --name "$FOLDER" --cloud-id "$CLOUD_ID" --format json 2>/dev/null | jq -r .id || true)
+          if [ "$ENV" = "stage" ]; then FOLDER="bertel-delo-test"; else FOLDER="delo-$ENV"; fi
+          # Права у технического пользователя — на каталог, а не на всё облако: сначала смотрим каталог, где он заведён.
+          SA_FOLDER_NAME=$(yc resource-manager folder get --id "$FOLDER_OF_SA" --format json | jq -r .name)
+          if [ "$SA_FOLDER_NAME" = "$FOLDER" ]; then
+            FOLDER_ID="$FOLDER_OF_SA"
+          else
+            FOLDER_ID=$(yc resource-manager folder get --name "$FOLDER" --cloud-id "$CLOUD_ID" --format json 2>/dev/null | jq -r .id || true)
+          fi
           if [ -z "$FOLDER_ID" ] || [ "$FOLDER_ID" = "null" ]; then
+            if [ "$ENV" = "stage" ]; then
+              echo "::error::Каталог $FOLDER не найден или нет прав на него"; exit 1
+            fi
             FOLDER_ID=$(yc resource-manager folder create --name "$FOLDER" --cloud-id "$CLOUD_ID" --description "БЕРТЕЛ Дело · $ENV" --format json | jq -r .id)
           fi
+          echo "Каталог: $FOLDER"
           yc config set folder-id "$FOLDER_ID"
           echo "FOLDER_ID=$FOLDER_ID" >> $GITHUB_ENV
           SUFFIX=$(echo -n "$FOLDER_ID" | sha256sum | cut -c1-6)
