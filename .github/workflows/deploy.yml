@@ -1,0 +1,102 @@
+name: Deploy core (Yandex Cloud)
+
+# Выкладка ядра в контур stage: образ → реестр Яндекса → Serverless Container в каталоге bertel-delo-test.
+# Только ручной запуск. Боевой контур (prod) этим workflow не выкладывается — только по «да» Дамира, отдельно.
+# Секреты контейнер берёт сам из Lockbox (delo-stage-app); через GitHub проходят только их идентификаторы.
+# Схема базы обновляется самим контейнером при старте (база закрыта от интернета), там же — проверка базы и файлов.
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: delo-stage
+    concurrency: deploy-stage
+    env:
+      ENV: stage
+      FOLDER: bertel-delo-test
+      CONTAINER: delo-stage-core
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: yc CLI
+        run: |
+          curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -i /opt/yc -n
+          echo "/opt/yc/bin" >> $GITHUB_PATH
+
+      - name: Вход в облако
+        env:
+          SA_KEY: ${{ secrets.YC_SA_KEY_JSON }}
+        run: |
+          umask 077
+          printf '%s' "$SA_KEY" > "$RUNNER_TEMP/sa.json"
+          yc config set service-account-key "$RUNNER_TEMP/sa.json"
+          SA_ID=$(jq -r .service_account_id "$RUNNER_TEMP/sa.json")
+          FOLDER_ID=$(yc iam service-account get --id "$SA_ID" --format json | jq -r .folder_id)
+          NAME=$(yc resource-manager folder get --id "$FOLDER_ID" --format json | jq -r .name)
+          [ "$NAME" = "$FOLDER" ] || { echo "::error::Ключ не от каталога $FOLDER"; exit 1; }
+          yc config set folder-id "$FOLDER_ID"
+          echo "FOLDER_ID=$FOLDER_ID" >> $GITHUB_ENV
+
+      - name: Ресурсы контура (созданы workflow Infra)
+        run: |
+          SUFFIX=$(echo -n "$FOLDER_ID" | sha256sum | cut -c1-6)
+          REGISTRY_ID=$(yc container registry get --name "delo-$ENV" --format json | jq -r .id)
+          APP_SA_ID=$(yc iam service-account get --name "delo-$ENV-app" --format json | jq -r .id)
+          SECRET_ID=$(yc lockbox secret get --name "delo-$ENV-app" --format json | jq -r .id)
+          NETWORK_ID=$(yc vpc subnet get --name "delo-$ENV-a" --format json | jq -r .network_id)
+          for v in REGISTRY_ID APP_SA_ID SECRET_ID NETWORK_ID; do
+            [ -n "${!v}" ] && [ "${!v}" != "null" ] || { echo "::error::$v не найден — сначала Infra apply"; exit 1; }
+            echo "$v=${!v}" >> $GITHUB_ENV
+          done
+          echo "FILES_BUCKET=delo-$ENV-files-$SUFFIX" >> $GITHUB_ENV
+          echo "IMAGE=cr.yandex/$REGISTRY_ID/delo-core:${GITHUB_SHA::12}" >> $GITHUB_ENV
+
+      - name: Образ
+        run: |
+          yc container registry configure-docker
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+
+      - name: Контейнер
+        run: |
+          yc serverless container get --name "$CONTAINER" >/dev/null 2>&1 || \
+            yc serverless container create --name "$CONTAINER" --description "БЕРТЕЛ Дело · ядро · $ENV (тестовые данные)"
+          yc serverless container revision deploy \
+            --container-name "$CONTAINER" \
+            --image "$IMAGE" \
+            --service-account-id "$APP_SA_ID" \
+            --network-id "$NETWORK_ID" \
+            --cores 1 --core-fraction 100 --memory 512MB \
+            --concurrency 8 --execution-timeout 30s \
+            --environment "APP_ENV=$ENV,STORAGE_PROVIDER=s3,S3_BUCKET=$FILES_BUCKET,TRUST_PROXY=1,MIGRATE_ON_START=1,STARTUP_CHECK=1" \
+            --secret "environment-variable=DATABASE_URL,id=$SECRET_ID,key=DATABASE_URL" \
+            --secret "environment-variable=APP_SECRET,id=$SECRET_ID,key=APP_SECRET" \
+            --secret "environment-variable=S3_ACCESS_KEY,id=$SECRET_ID,key=S3_ACCESS_KEY" \
+            --secret "environment-variable=S3_SECRET_KEY,id=$SECRET_ID,key=S3_SECRET_KEY"
+          # Проверочный контур открыт по своему адресу (только тестовые данные); домен — отдельной задачей.
+          yc serverless container allow-unauthenticated-invoke --name "$CONTAINER"
+          URL=$(yc serverless container get --name "$CONTAINER" --format json | jq -r .url)
+          echo "URL=${URL%/}" >> $GITHUB_ENV
+
+      - name: Проверка на адресе контура
+        run: |
+          # Контейнер отвечает только после обновления схемы и проверки базы и файлов (src/startup.mjs).
+          for i in $(seq 1 12); do
+            BODY=$(curl -fsS --max-time 30 "$URL/api/health" || true)
+            if echo "$BODY" | jq -e '.ok == true and .test_data == true' >/dev/null 2>&1; then
+              echo "Ядро работает: $URL — $BODY"; break
+            fi
+            [ "$i" = 12 ] && { echo "::error::Нет ответа от ядра: $BODY"; exit 1; }
+            sleep 10
+          done
+          curl -fsS --max-time 30 -o /dev/null "$URL/" && echo "Страница входа открывается"
+          echo "### Контур stage: $URL" >> $GITHUB_STEP_SUMMARY
+          # Журнал запуска (схема, проверка базы и файлов) — для отчёта; данных людей в нём нет.
+          CID=$(yc serverless container get --name "$CONTAINER" --format json | jq -r .id)
+          yc logging read --folder-id "$FOLDER_ID" --resource-ids "$CID" --since 15m --limit 50 --format json 2>/dev/null \
+            | jq -r '.[].message' | grep -E 'схема|проверка при старте|запуск остановлен|ядро' || echo "журнал пока пуст"
+
+      - name: Убрать ключ
+        if: always()
+        run: rm -f "$RUNNER_TEMP/sa.json"

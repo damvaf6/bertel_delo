@@ -72,6 +72,12 @@ resource "random_password" "pg_app" {
   special = false
 }
 
+# Ключ подписи сессий и ссылок ядра (APP_SECRET) — генерируется здесь и сразу уходит в Lockbox.
+resource "random_password" "app_secret" {
+  length  = 48
+  special = false
+}
+
 resource "yandex_mdb_postgresql_cluster" "main" {
   name                = local.name
   environment         = "PRODUCTION"
@@ -241,6 +247,10 @@ resource "yandex_lockbox_secret_version" "app" {
     text_value = "postgres://${yandex_mdb_postgresql_user.app.name}:${random_password.pg_app.result}@c-${yandex_mdb_postgresql_cluster.main.id}.rw.mdb.yandexcloud.net:6432/${yandex_mdb_postgresql_database.app.name}?sslmode=verify-full"
   }
   entries {
+    key        = "APP_SECRET"
+    text_value = random_password.app_secret.result
+  }
+  entries {
     key        = "S3_ACCESS_KEY"
     text_value = yandex_iam_service_account_static_access_key.app.access_key
   }
@@ -259,4 +269,11 @@ resource "yandex_lockbox_secret_iam_binding" "app_read" {
 # ---------------------------------------------------------------- реестр образов
 resource "yandex_container_registry" "main" {
   name = local.name
+}
+
+# Контейнер ядра забирает образы из реестра от имени app.
+resource "yandex_container_registry_iam_binding" "puller" {
+  registry_id = yandex_container_registry.main.id
+  role        = "container-registry.images.puller"
+  members     = ["serviceAccount:${yandex_iam_service_account.app.id}"]
 }
