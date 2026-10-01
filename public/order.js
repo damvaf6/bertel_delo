@@ -10,6 +10,7 @@ import { loadMoney } from '/money.js';
 const $ = (id) => document.getElementById(id);
 const MAX_FILE = 5 * 1024 * 1024;
 const FINAL = ['closed', 'cancelled'];
+const WORK_STARTED = ['in_work', 'review'];
 const DOC_KIND_RU = { basis: 'Основание', result: 'Результат работы' };
 let current = null; // { order, access, editable, actions, history }
 
@@ -40,6 +41,8 @@ export async function openOrder(id) {
   }
   for (const m of ['doc-msg', 'transfer-msg', 'details-msg', 'status-msg']) say($(m), '');
   $('reason').value = '';
+  $('cancel-fault').value = '';
+  $('done-percent').value = '';
   render();
   show('order-view', 'orders');
   await Promise.all([loadDocs(), loadTransfer(), loadMatch(current, () => openOrder(id)), loadReview(current), loadChat(current), loadMoney(current, () => openOrder(id))]);
@@ -200,6 +203,10 @@ function renderProgress() {
     : flow.map((s, i) => el('li', { class: i < at ? 'done' : i === at ? 'current' : '', text: s.name }))));
 
   $('reason-box').classList.toggle('hidden', !actions.some((a) => a.reason));
+  // Отмена после начала работ (диспетчер): по чьей причине и какая часть работы сделана — от этого зависит возврат.
+  const lateCancel = WORK_STARTED.includes(order.status) && actions.some((a) => a.to === 'cancelled');
+  $('cancel-box').classList.toggle('hidden', !lateCancel);
+  if (lateCancel) syncCancelBox();
   $('actions').replaceChildren(...actions.map((a) => el('button', {
     class: a.to === 'cancelled' ? 'danger' : a.to === 'matching' && order.status === 'new' ? 'wide' : 'secondary',
     'data-to': a.to,
@@ -212,9 +219,24 @@ function renderProgress() {
     ...(h.reason ? [el('div', { text: `Причина: ${h.reason}` })] : []))));
 }
 
+function syncCancelBox() {
+  $('done-percent-box').classList.toggle('hidden', $('cancel-fault').value !== 'customer');
+}
+$('cancel-fault').addEventListener('change', syncCancelBox);
+
 async function doStep(a) {
   const reason = $('reason').value.trim();
   if (a.reason && !reason) return say($('status-msg'), 'Укажите причину');
+  const extra = {};
+  if (a.to === 'cancelled' && WORK_STARTED.includes(current.order.status)) {
+    extra.fault = $('cancel-fault').value;
+    if (!extra.fault) return say($('status-msg'), 'Укажите, по чьей причине отмена');
+    if (extra.fault === 'customer') {
+      const v = $('done-percent').value.trim();
+      if (!/^\d{1,3}$/.test(v) || Number(v) > 100) return say($('status-msg'), 'Укажите, какая часть работы сделана: от 0 до 100%');
+      extra.done_percent = Number(v);
+    }
+  }
   if (a.to === 'cancelled' && !confirm('Отменить заявку?')) return;
   const buttons = [...$('actions').querySelectorAll('button')];
   buttons.forEach((b) => { b.disabled = true; });
@@ -222,7 +244,7 @@ async function doStep(a) {
   try {
     // «Отправить» сначала сохраняет то, что заполнено на экране.
     if (a.to === 'matching' && current.editable) { await saveForm(); saved = true; }
-    await api('POST', `/api/orders/${current.order.id}/status`, { from: current.order.status, to: a.to, reason: reason || undefined });
+    await api('POST', `/api/orders/${current.order.id}/status`, { from: current.order.status, to: a.to, reason: reason || undefined, ...extra });
     await openOrder(current.order.id);
     say($('status-msg'), a.to === 'matching' && current.order.status === 'matching' ? 'Заявка отправлена' : 'Статус изменён', 'ok');
   } catch (err) {
@@ -279,8 +301,8 @@ async function loadDocs() {
         ...(removable ? [el('button', { class: 'danger', 'data-action': 'delete', onclick: () => remove(d) }, 'Удалить')] : [])));
   }));
   $('docs-empty').classList.toggle('hidden', documents.length > 0);
-  $('results-later').textContent = order.status === 'done' ? 'Результат проверен — он откроется здесь после оплаты.' : 'Результат работы появится здесь после проверки и оплаты.';
-  $('results-later').classList.toggle('hidden', !(resultsHidden && ['in_work', 'review', 'done'].includes(order.status)));
+  $('results-later').textContent = 'Результат работы появится здесь после проверки.';
+  $('results-later').classList.toggle('hidden', !(resultsHidden && ['in_work', 'review'].includes(order.status)));
   const basis = documents.filter((d) => d.kind === 'basis');
   $('basis-file-state').textContent = basis.length ? `Приложено: ${basis.map((d) => d.filename).join(', ')}` : 'Файл определения ещё не приложен';
 }

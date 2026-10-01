@@ -1,10 +1,12 @@
-// Деньги по заявке (задача 1.6): цена (назначает диспетчер в подборе), оплата заказчиком после проверки результата,
-// автоматическая выплата исполнителю после оплаты, закрывающие документы, сводка «Деньги» для служебных.
+// Деньги по заявке (задачи 1.6 и 1.6а): цена (назначает диспетчер в подборе), оплата заказчиком при заказе — до
+// предложения исполнителю; выплата исполнителю и закрывающие документы — при выдаче результата (order-ops.mjs, «готово»);
+// возврат при отмене; повтор неудавшейся выплаты и возврата; сводка «Деньги» для служебных.
 // Агентская схема ЮKassa, вознаграждение платформы 20% — src/money/money.mjs. Пока поставщик оплаты поддельный.
 import { HttpError } from '../http/core.mjs';
 import { moneyView, orderSides } from '../access/policy.mjs';
 import { ProviderError } from '../providers/fake.mjs';
-import { applyPaymentStatus, runPayout, shortRef, splitAmount } from '../money/money.mjs';
+import { applyPaymentStatus, runPayout, runRefund, runSettlement, shortRef, splitAmount } from '../money/money.mjs';
+import { customersOf, notify } from '../notify/notify.mjs';
 import { audit } from './util.mjs';
 
 const PRICE_RE = /^\d{1,8}([.,]\d{1,2})?$/;
@@ -25,9 +27,14 @@ const payoutView = (p) => p && ({
   status: p.status, amount_kop: num(p.amount_kop), commission_kop: num(p.commission_kop), failure: p.failure,
   attempts: p.attempts, paid_at: p.paid_at, created_at: p.created_at,
 });
-const docView = (d) => ({ id: d.id, kind: d.kind, number: `${d.kind === 'act' ? 'А' : 'О'}-${String(d.number).padStart(6, '0')}`, created_at: d.created_at, data: d.data });
+const refundView = (r) => r && ({
+  status: r.status, amount_kop: num(r.amount_kop), reason: r.reason, failure: r.failure, attempts: r.attempts,
+  refunded_at: r.refunded_at, created_at: r.created_at,
+});
+const DOC_PREFIX = { act: 'А', agent_report: 'О', refund: 'В' };
+const docView = (d) => ({ id: d.id, kind: d.kind, number: `${DOC_PREFIX[d.kind]}-${String(d.number).padStart(6, '0')}`, created_at: d.created_at, data: d.data });
 
-// Проверить у поставщика незавершённый платёж и применить исход; после оплаты — провести выплату исполнителю.
+// Проверить у поставщика незавершённый платёж и применить исход; если заявку уже отменили — провести возврат.
 async function syncPayment(sql, providers, cfg, payment) {
   if (!payment?.provider_id || payment.status !== 'pending') return;
   let remote;
@@ -37,8 +44,8 @@ async function syncPayment(sql, providers, cfg, payment) {
     if (e instanceof ProviderError) throw new HttpError(502, 'provider', 'Не удалось узнать состояние оплаты, попробуйте позже');
     throw e;
   }
-  const payoutId = await applyPaymentStatus(sql, { paymentId: payment.id, status: remote.status, test: cfg.providers.payments === 'fake' });
-  if (payoutId) await runPayout(sql, providers, payoutId);
+  const settlement = await applyPaymentStatus(sql, { paymentId: payment.id, status: remote.status, test: cfg.providers.payments === 'fake' });
+  await runSettlement(sql, providers, settlement);
 }
 
 export function moneyOps() {
@@ -50,29 +57,40 @@ export function moneyOps() {
     const sides = orderSides(actor, order);
     const price = num(order.price_kop);
     const split = price ? splitAmount(price) : null;
+    const pending = await sql.one`select 1 from payments where order_id = ${order.id} and status = 'pending'`;
     const out = {
       sees: { customer: see.customer, executor: see.executor, staff: see.staff },
       price_kop: see.customer ? price : null,
       paid: !!order.paid_at,
       paid_at: order.paid_at,
-      can_set_price: sides.includes('dispatcher') && order.status === 'matching',
-      can_pay: sides.includes('customer') && order.status === 'done' && !!price && !order.paid_at,
+      // Цена меняется только в подборе и только пока заказчик не начал платить.
+      can_set_price: sides.includes('dispatcher') && order.status === 'matching' && !order.paid_at && !pending,
+      // Заказчик платит при заказе: цена назначена, заявка в подборе (решение Дамира 01.10.2026).
+      can_pay: sides.includes('customer') && order.status === 'matching' && !!price && !order.paid_at,
       payment: null,
       fee_kop: see.executor && split ? split.payoutKop : null,
       commission_kop: see.staff && split ? split.commissionKop : null,
       payout: null,
       can_retry_payout: false,
+      refund: null,
+      can_retry_refund: false,
+      // Отмена после начала работ: по чьей причине и какая доля работы сделана.
+      cancel_fault: order.cancel_fault,
+      done_percent: order.done_percent,
       documents: [],
     };
     if (see.customer) {
       out.payment = payView(await sql.one`select * from payments where order_id = ${order.id} order by created_at desc limit 1`);
+      const r = await sql.one`select * from refunds where order_id = ${order.id}`;
+      out.refund = refundView(r);
+      out.can_retry_refund = !!r && r.status === 'failed' && sides.includes('dispatcher');
     }
     if (see.executor) {
       const p = await sql.one`select * from payouts where order_id = ${order.id}`;
       out.payout = payoutView(p);
       out.can_retry_payout = !!p && p.status === 'failed' && sides.includes('dispatcher');
     }
-    const kinds = [...(see.customer ? ['act'] : []), ...(see.executor ? ['agent_report'] : [])];
+    const kinds = [...(see.customer ? ['act', 'refund'] : []), ...(see.executor ? ['agent_report'] : [])];
     if (kinds.length) {
       const docs = await sql`select * from closing_documents where order_id = ${order.id} and kind = any(${kinds}) order by number`;
       out.documents = docs.map(docView);
@@ -94,16 +112,20 @@ export function moneyOps() {
         if (!orderSides(actor, order).includes('dispatcher')) throw new HttpError(403, 'forbidden', 'Недостаточно прав');
         const kop = priceFrom(body?.price);
         await sql.tx(async (tx) => {
-          const cur = await tx.one`select status from orders where id = ${order.id} for update`;
+          const cur = await tx.one`select * from orders where id = ${order.id} for update`;
           if (cur.status !== 'matching') throw new HttpError(409, 'price_locked', 'Цену можно менять только в подборе, до предложения исполнителю');
+          if (cur.paid_at) throw new HttpError(409, 'price_locked', 'Заявка уже оплачена — цену не изменить');
+          const pending = await tx.one`select 1 from payments where order_id = ${cur.id} and status = 'pending'`;
+          if (pending) throw new HttpError(409, 'price_locked', 'Заказчик уже начал оплату — цену сейчас не изменить');
           await tx`update orders set price_kop = ${kop}, updated_at = now() where id = ${order.id}`;
           await audit(tx, actor, 'order.price', 'order', order.id, { price_kop: kop });
+          await notify(tx, 'priced', { users: await customersOf(tx, cur), orderId: cur.id, actor });
         });
         return { money: await view(sql, actor, order.id) };
       },
     },
     {
-      // Оплата заказчиком — после проверки результата («готово»). Незавершённый платёж не создаётся второй раз.
+      // Оплата заказчиком — при заказе: цена назначена, заявка в подборе. Незавершённый платёж не создаётся второй раз.
       id: 'payments.create', method: 'POST', path: '/api/orders/:id/payments', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'write' },
       async handler({ sql, actor, order, cfg, providers, registry, res }) {
@@ -111,7 +133,7 @@ export function moneyOps() {
         const created = await sql.tx(async (tx) => {
           const cur = await tx.one`select * from orders where id = ${order.id} for update`;
           if (cur.paid_at) throw new HttpError(409, 'already_paid', 'Заявка уже оплачена');
-          if (cur.status !== 'done') throw new HttpError(409, 'not_payable', 'Оплатить можно, когда результат проверен');
+          if (cur.status !== 'matching') throw new HttpError(409, 'not_payable', 'Оплатить можно, когда диспетчер назначил цену, до передачи исполнителю');
           if (!cur.price_kop) throw new HttpError(409, 'no_price', 'Цена ещё не назначена');
           const open = await tx.one`select * from payments where order_id = ${cur.id} and status = 'pending'`;
           if (open) return { payment: open, fresh: false, order: cur };
@@ -179,14 +201,32 @@ export function moneyOps() {
       },
     },
     {
-      // Сводка для диспетчера и администратора: получено / к выплате / выплачено / вознаграждение платформы.
+      // Повтор неудавшегося возврата заказчику — диспетчер. Успешный возврат повторить нельзя.
+      id: 'refunds.retry', method: 'POST', path: '/api/orders/:id/refund/retry', auth: 'user',
+      access: { resource: 'order', param: 'id', need: 'read' },
+      async handler({ sql, actor, order, providers }) {
+        if (!orderSides(actor, order).includes('dispatcher')) throw new HttpError(403, 'forbidden', 'Недостаточно прав');
+        const r = await sql.one`select * from refunds where order_id = ${order.id}`;
+        if (!r || r.status !== 'failed') throw new HttpError(409, 'refund_not_failed', 'Повторять нечего: возврат не числится неудавшимся');
+        await audit(sql, actor, 'refund.retry', 'order', order.id, { refund: r.id });
+        await runRefund(sql, providers, r.id);
+        return { money: await view(sql, actor, order.id) };
+      },
+    },
+    {
+      // Сводка для диспетчера и администратора: получено / на счёте до выдачи результата / к выплате / выплачено /
+      // возвраты / вознаграждение платформы.
       id: 'money.summary', method: 'GET', path: '/api/money', auth: 'user', access: { platform: 'staff' },
       async handler({ sql }) {
         const t = await sql.one`
           select (select coalesce(sum(amount_kop), 0) from payments where status = 'succeeded') as received,
                  (select coalesce(sum(amount_kop), 0) from payouts where status <> 'succeeded') as to_pay,
                  (select coalesce(sum(amount_kop), 0) from payouts where status = 'succeeded') as paid_out,
-                 (select coalesce(sum(commission_kop), 0) from payouts) as commission`;
+                 (select coalesce(sum(commission_kop), 0) from payouts) as commission,
+                 (select coalesce(sum(amount_kop + commission_kop), 0) from payouts) as settled,
+                 (select coalesce(sum(amount_kop), 0) from refunds where status = 'succeeded') as refunded,
+                 (select coalesce(sum(amount_kop), 0) from refunds) as refunds_all,
+                 (select coalesce(sum(amount_kop), 0) from refunds where status <> 'succeeded') as to_refund`;
         const payments = await sql`
           select p.*, o.title from payments p join orders o on o.id = p.order_id
           where p.status = 'succeeded' order by p.paid_at desc limit 50`;
@@ -194,7 +234,12 @@ export function moneyOps() {
           select p.*, o.title, u.full_name from payouts p join orders o on o.id = p.order_id join users u on u.id = p.executor_user_id
           order by p.created_at desc limit 50`;
         return {
-          totals: { received_kop: num(t.received), to_pay_kop: num(t.to_pay), paid_out_kop: num(t.paid_out), commission_kop: num(t.commission) },
+          totals: {
+            received_kop: num(t.received), to_pay_kop: num(t.to_pay), paid_out_kop: num(t.paid_out), commission_kop: num(t.commission),
+            refunded_kop: num(t.refunded), to_refund_kop: num(t.to_refund),
+            // Оплачено, но результат ещё не выдан и заявка не отменена — деньги ждут у платформы.
+            held_kop: num(t.received) - num(t.settled) - num(t.refunds_all),
+          },
           payments: payments.map((p) => ({ ...payView(p), order_id: p.order_id, title: p.title })),
           payouts: payouts.map((p) => ({ ...payoutView(p), order_id: p.order_id, title: p.title, executor_name: p.full_name })),
         };

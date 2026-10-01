@@ -64,6 +64,10 @@ export async function notifyStatus(tx, { actor, before, to, by }) {
     if (by === 'executor') return notify(tx, 'declined', opts(await dispatchers(tx)));
     return notify(tx, 'offer_withdrawn', opts([executor]));
   }
+  if ((from === 'in_work' || from === 'review') && to === 'matching') {
+    await notify(tx, 'reassigned', opts(await customersOf(tx, before)));
+    return notify(tx, 'executor_reassigned', opts([executor]));
+  }
   if (from === 'in_work' && to === 'review') return notify(tx, 'in_review', opts(await dispatchers(tx)));
   if (from === 'review' && to === 'in_work') return notify(tx, 'rework', opts([executor]));
   if (from === 'review' && to === 'done') {

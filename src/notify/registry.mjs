@@ -5,13 +5,13 @@
 
 // for — кому вид показывается в настройках: всем, специалистам или диспетчерам.
 export const TYPES = [
-  { id: 'order_progress', name: 'Ход моих заявок', hint: 'исполнитель принял дело, результат проверен, заявку отменили', for: 'all', sms: true },
+  { id: 'order_progress', name: 'Ход моих заявок', hint: 'назначена цена, исполнитель принял дело, результат готов, заявку отменили или передали другому исполнителю', for: 'all', sms: true },
   { id: 'messages', name: 'Сообщения в переписке', hint: 'новое сообщение по Вашей заявке или делу', for: 'all', sms: false },
-  { id: 'money', name: 'Оплата и выплаты', hint: 'оплата получена, вознаграждение выплачено или выплата не прошла', for: 'all', sms: true },
+  { id: 'money', name: 'Оплата и выплаты', hint: 'оплата получена, вознаграждение выплачено, деньги возвращены или перевод не прошёл', for: 'all', sms: true },
   { id: 'org_invites', name: 'Приглашения в организацию', hint: 'Вас пригласили стать сотрудником организации', for: 'all', sms: true },
   { id: 'offers', name: 'Предложения дел', hint: 'Вам предложили новое дело', for: 'specialist', sms: true },
-  { id: 'executor_work', name: 'Мои дела как исполнителя', hint: 'возврат на доработку, результат принят, дело снято или отменено', for: 'specialist', sms: true },
-  { id: 'dispatch', name: 'Очередь диспетчера', hint: 'новые заявки, отказы исполнителей, сдача на проверку, отмены, неудачные выплаты', for: 'dispatcher', sms: false },
+  { id: 'executor_work', name: 'Мои дела как исполнителя', hint: 'возврат на доработку, результат принят, дело снято, передано другому или отменено', for: 'specialist', sms: true },
+  { id: 'dispatch', name: 'Очередь диспетчера', hint: 'новые и оплаченные заявки, отказы исполнителей, сдача на проверку, отмены, неудачные выплаты и возвраты', for: 'dispatcher', sms: false },
 ];
 export const TYPE = Object.fromEntries(TYPES.map((t) => [t.id, t]));
 
@@ -22,6 +22,8 @@ export const EVENTS = {
   in_review: { type: 'dispatch', title: 'Результат сдан на проверку', order: true },
   cancelled_by_customer: { type: 'dispatch', title: 'Заказчик отменил заявку', order: true },
   payout_failed_staff: { type: 'dispatch', title: 'Выплата исполнителю не прошла — нужен повтор', order: true },
+  paid_staff: { type: 'dispatch', title: 'Заявка оплачена — можно предлагать исполнителю', order: true },
+  refund_failed_staff: { type: 'dispatch', title: 'Возврат заказчику не прошёл — нужен повтор', order: true },
 
   offer: { type: 'offers', title: 'Вам предложено новое дело', order: true },
 
@@ -30,16 +32,21 @@ export const EVENTS = {
   result_accepted: { type: 'executor_work', title: 'Результат принят проверкой', order: true },
   executor_cancelled: { type: 'executor_work', title: 'Дело отменено', order: true },
   executor_closed: { type: 'executor_work', title: 'Заявка закрыта', order: true },
+  executor_reassigned: { type: 'executor_work', title: 'Дело передано другому исполнителю', order: true },
 
+  priced: { type: 'order_progress', title: 'Цена назначена — оплатите заявку, чтобы передать её исполнителю', order: true },
   accepted: { type: 'order_progress', title: 'Исполнитель принял заявку в работу', order: true },
-  done: { type: 'order_progress', title: 'Результат проверен — заявку можно оплатить', order: true },
+  reassigned: { type: 'order_progress', title: 'Заявка передана другому исполнителю', order: true },
+  done: { type: 'order_progress', title: 'Результат проверен и доступен в кабинете', order: true },
   cancelled_by_dispatcher: { type: 'order_progress', title: 'Диспетчер отменил заявку', order: true },
 
   message: { type: 'messages', title: 'Новое сообщение по заявке', order: true },
 
-  paid: { type: 'money', title: 'Оплата получена — результат доступен', order: true },
+  paid: { type: 'money', title: 'Оплата получена — подбираем исполнителя', order: true },
   payout_succeeded: { type: 'money', title: 'Вознаграждение выплачено', order: true },
   payout_failed: { type: 'money', title: 'Выплата вознаграждения не прошла — диспетчер повторит', order: true },
+  refund_succeeded: { type: 'money', title: 'Деньги по заявке возвращены', order: true },
+  refund_failed: { type: 'money', title: 'Возврат денег не прошёл — диспетчер повторит', order: true },
 
   invite: { type: 'org_invites', title: 'Вас пригласили в организацию', order: false },
 };
