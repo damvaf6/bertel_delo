@@ -5,6 +5,7 @@ import { state, show, refreshMe } from '/shell.js';
 import { openOrder, serviceOptions, dayRu } from '/order.js';
 import { showOrgs, showOrg } from '/orgs.js';
 import { showAdmin } from '/admin.js';
+import { showSpecialist, showSpecialists } from '/match.js';
 
 const $ = (id) => document.getElementById(id);
 const dateRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
@@ -29,13 +30,35 @@ async function route() {
   if ((m = h.match(/^#org=([0-9a-f-]{36})$/i))) return showOrg(m[1]);
   if (h === '#orgs') return showOrgs();
   if (h === '#profile') return showProfile();
+  if (h === '#specialist') return showSpecialist();
+  if (h === '#specialists' && ['dispatcher', 'admin'].includes(state.me.user.platform_role)) return showSpecialists();
   if (h === '#admin' && state.me.user.platform_role === 'admin') return showAdmin();
   show('list-view', 'orders');
   await loadOrders();
 }
 
+let allOrders = [];
+
+// Диспетчеру и администратору список — «все заявки» с отбором по статусу (очередь подбора — сверху по умолчанию).
+function setupFilter() {
+  const staff = ['dispatcher', 'admin'].includes(state.me.user.platform_role);
+  $('orders-title').textContent = staff ? 'Все заявки' : 'Мои заявки';
+  $('orders-filter-box').classList.toggle('hidden', !staff);
+  if (!staff || $('orders-filter').options.length) return;
+  $('orders-filter').replaceChildren(el('option', { value: '', text: 'Все' }),
+    ...state.catalog.statuses.map((s) => el('option', { value: s.id, text: s.name })));
+  $('orders-filter').addEventListener('change', renderOrders);
+}
+
 async function loadOrders() {
-  const { orders } = await api('GET', '/api/orders');
+  setupFilter();
+  ({ orders: allOrders } = await api('GET', '/api/orders'));
+  renderOrders();
+}
+
+function renderOrders() {
+  const status = $('orders-filter').value;
+  const orders = status ? allOrders.filter((o) => o.status === status) : allOrders;
   const ul = $('orders');
   ul.replaceChildren(...orders.map((o) => el('li', {},
     el('button', { class: 'open', 'data-id': o.id, onclick: () => { location.hash = `order=${o.id}`; } },
@@ -43,7 +66,7 @@ async function loadOrders() {
       el('div', { class: 'row' },
         el('span', { class: `badge status${o.status === 'cancelled' ? ' cancelled' : ''}`, text: o.status_name }),
         el('span', { class: `muted${o.overdue ? ' overdue' : ''}`, text: o.deadline ? `срок ${dayRu(o.deadline)}${o.overdue ? ' · просрочено' : ''}` : ['closed', 'cancelled'].includes(o.status) ? '' : 'срок не указан' })),
-      el('div', { class: 'muted', text: [o.service_name, dateRu(o.created_at), o.org_name ? `${o.org_name} · ведёт ${o.responsible_name || 'сотрудник'}` : null].filter(Boolean).join(' · ') })))));
+      el('div', { class: 'muted', text: [o.service_name, dateRu(o.created_at), o.org_name ? `${o.org_name} · ведёт ${o.responsible_name || 'сотрудник'}` : null, o.as_executor ? 'Вы исполнитель' : null].filter(Boolean).join(' · ') })))));
   $('orders-empty').classList.toggle('hidden', orders.length > 0);
 }
 

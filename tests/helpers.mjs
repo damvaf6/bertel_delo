@@ -120,3 +120,11 @@ export async function addMember(sql, orgId, userId, role) {
 export async function setPlatformRole(sql, userId, role) {
   await sql`update users set platform_role = ${role} where id = ${userId}`;
 }
+
+// Сделать человека специалистом с допусками (напрямую в базе — для проверок, не через кабинет администратора).
+export async function makeSpecialist(sql, userId, { permits = [['expertise', 'realty']], regions = ['moscow', 'mo'], capacity = 5, validUntil = null } = {}) {
+  await sql`insert into specialists (user_id, regions, capacity) values (${userId}, ${regions}, ${capacity})`;
+  for (const [module, service] of permits) {
+    await sql`insert into specialist_permits (user_id, module, service, valid_until) values (${userId}, ${module}, ${service}, ${validUntil})`;
+  }
+}

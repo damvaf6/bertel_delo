@@ -98,3 +98,11 @@ textarea { min-height: 96px; resize: vertical; }
 .facts dt { font-size: 14px; color: var(--muted); margin-top: 8px; }
 .facts dt:first-child { margin-top: 0; }
 .facts dd { margin: 2px 0 0; overflow-wrap: anywhere; white-space: pre-line; }
+/* Специалисты и подбор. */
+fieldset.field { border: none; padding: 0; margin: 0 0 12px; }
+input[type=checkbox] { width: 22px; height: 22px; flex: 0 0 auto; }
+label.row { color: var(--text); font-size: 16px; margin: 0 0 8px; }
+.score { font-weight: 700; color: var(--accent); }
+.features { margin: 6px 0 8px; padding: 0; list-style: none; font-size: 14px; color: var(--muted); }
+.features li { padding: 1px 0; border: none; }
+.list .features li { border: none; padding: 1px 0; }

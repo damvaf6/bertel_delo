@@ -2,7 +2,7 @@
 // Решения Дамира 30.09.2026: срок обязателен; основание — договор по умолчанию, определение суда — с номером, датой
 // и файлом; отмена заказчиком — только до начала работ; перечень услуг и поля меняются через разработку.
 import { HttpError } from '../http/core.mjs';
-import { LEVEL, memberOf, orderLevel, orderSides, visibleOrdersFilter } from '../access/policy.mjs';
+import { LEVEL, isStaff, memberOf, orderLevel, orderSides, visibleOrdersFilter } from '../access/policy.mjs';
 import { BASIS_KINDS, cleanValues, missingRequired } from '../modules/index.mjs';
 import { STATUSES, STATUS_NAME, TRANSITIONS, addDays, availableActions, findTransition, isOverdue, todayMsk } from '../orders/workflow.mjs';
 import { audit, oneOf, text, uuidFrom } from './util.mjs';
@@ -143,9 +143,10 @@ export function orderOps() {
           where ${!!f.all}
              or (r.owner_user_id = ${f.userId ?? null} and (r.org_id is null or r.org_id = any(${f.memberOrgIds ?? []}::uuid[])))
              or r.org_id = any(${f.allOrgIds ?? []}::uuid[])
+             or r.executor_user_id = ${f.executorId ?? null}
           order by r.created_at desc limit 200`;
         const today = todayMsk();
-        return { orders: rows.map((r) => describe(registry, r, today)) };
+        return { orders: rows.map((r) => ({ ...describe(registry, r, today), as_executor: r.executor_user_id === actor.id })) };
       },
     },
     {
@@ -155,8 +156,12 @@ export function orderOps() {
         const history = await sql`
           select from_status, to_status, side, reason, at from order_status_history where order_id = ${order.id} order by id`;
         const level = orderLevel(actor, order);
+        // Кто исполнитель — служебным и самому исполнителю; заказчику имя исполнителя пока не показывается.
+        const exec = order.executor_user_id && (isStaff(actor) || order.executor_user_id === actor.id)
+          ? await sql.one`select full_name from users where id = ${order.executor_user_id}` : null;
         return {
           order: await orderView(sql, registry, order),
+          executor: exec ? { user_id: order.executor_user_id, name: exec.full_name, is_me: order.executor_user_id === actor.id } : null,
           access: LEVEL_NAME[level],
           editable: order.status === 'new' && level >= LEVEL.write,
           actions: availableActions(order.status, orderSides(actor, order)),
@@ -229,8 +234,15 @@ export function orderOps() {
             const missing = await problemsForSubmit(tx, registry, cur);
             if (missing.length) throw new HttpError(400, 'incomplete', `Не хватает: ${missing.join(', ')}`);
           }
+          // Предложение исполнителю закрывается: принято, отказ исполнителя, либо снято (диспетчером или отменой).
+          if (cur.executor_user_id && (to === 'in_work' || to === 'matching' || to === 'cancelled') && cur.status === 'awaiting_executor') {
+            const outcome = to === 'in_work' ? 'accepted' : t.by === 'executor' ? 'declined' : 'withdrawn';
+            await tx`update order_offers set outcome = ${outcome}, outcome_at = now(), reason = ${reason}
+                     where order_id = ${cur.id} and outcome is null`;
+          }
           const o = await tx.one`
             update orders set status = ${to}, updated_at = now(),
+                   executor_user_id = case when ${to} in ('matching', 'cancelled') then null else executor_user_id end,
                    submitted_at = case when ${to} = 'matching' then coalesce(submitted_at, now()) else submitted_at end
             where id = ${cur.id} returning *`;
           await tx`insert into order_status_history (order_id, from_status, to_status, actor_id, side, reason)

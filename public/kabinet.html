@@ -16,13 +16,19 @@
   <nav class="tabs" aria-label="Разделы кабинета">
     <a href="#" data-tab="orders">Заявки</a>
     <a href="#orgs" data-tab="orgs">Организации<span class="count hidden" id="invites-count"></span></a>
+    <a href="#specialist" data-tab="specialist" class="hidden" id="specialist-tab">Специалист</a>
+    <a href="#specialists" data-tab="specialists" class="hidden" id="specialists-tab">Специалисты</a>
     <a href="#profile" data-tab="profile">Профиль</a>
     <a href="#admin" data-tab="admin" class="hidden" id="admin-tab">Управление</a>
   </nav>
   <main>
     <section id="list-view">
       <div class="card">
-        <h1>Мои заявки</h1>
+        <h1 id="orders-title">Мои заявки</h1>
+        <div class="field hidden" id="orders-filter-box">
+          <label for="orders-filter">Показать</label>
+          <select id="orders-filter"></select>
+        </div>
         <ul class="list" id="orders"></ul>
         <p class="muted hidden" id="orders-empty">Заявок пока нет.</p>
       </div>
@@ -107,6 +113,14 @@
         <p class="msg" id="status-msg" role="status" aria-live="polite"></p>
         <h2 class="gap">История</h2>
         <ul class="list" id="history"></ul>
+      </div>
+      <div class="card hidden" id="match-box">
+        <h2>Подбор исполнителя</h2>
+        <p class="muted" id="match-current"></p>
+        <p class="muted">Только специалисты с допуском на эту услугу. Оценка — по признакам; можно выбрать любого из списка.</p>
+        <ul class="list" id="candidates"></ul>
+        <p class="muted hidden" id="candidates-empty">Подходящих специалистов нет: ни у кого нет допуска на эту услугу или все не принимают дела.</p>
+        <p class="msg" id="match-msg" role="status" aria-live="polite"></p>
       </div>
       <form class="card hidden" id="transfer-box" novalidate>
         <h2>Кто ведёт дело</h2>
@@ -226,6 +240,29 @@
       </form>
     </section>
 
+    <section id="specialist-view" class="hidden">
+      <div class="card">
+        <h1>Мой профиль специалиста</h1>
+        <p class="muted" id="specialist-facts"></p>
+        <label class="row"><input type="checkbox" id="specialist-active"> Принимаю новые дела</label>
+        <p class="muted">Выключите, если сейчас не можете брать работу: Вам перестанут предлагать дела.</p>
+        <p class="msg" id="specialist-msg" role="status" aria-live="polite"></p>
+      </div>
+      <div class="card">
+        <h2>Мои допуски</h2>
+        <ul class="list" id="specialist-permits"></ul>
+        <p class="muted hidden" id="specialist-permits-empty">Допусков пока нет. Допуск выдаёт администратор платформы.</p>
+      </div>
+    </section>
+
+    <section id="specialists-view" class="hidden">
+      <div class="card">
+        <h1>Специалисты</h1>
+        <ul class="list" id="specialists"></ul>
+        <p class="muted hidden" id="specialists-empty">Специалистов пока нет. Сделать человека специалистом может администратор в разделе «Управление».</p>
+      </div>
+    </section>
+
     <section id="admin-view" class="hidden">
       <form class="card" id="admin-find" novalidate>
         <h1>Управление</h1>
@@ -253,6 +290,34 @@
         </div>
         <p class="msg" id="admin-user-msg" role="status" aria-live="polite"></p>
       </div>
+      <form class="card hidden" id="admin-specialist" novalidate>
+        <h2>Специалист</h2>
+        <p class="muted" id="admin-specialist-state"></p>
+        <fieldset class="field">
+          <legend class="muted">Где работает</legend>
+          <label class="row"><input type="checkbox" id="sp-moscow" checked> Москва</label>
+          <label class="row"><input type="checkbox" id="sp-mo" checked> Московская область</label>
+        </fieldset>
+        <div class="field">
+          <label for="sp-capacity">Нормальная нагрузка: сколько дел одновременно</label>
+          <input id="sp-capacity" type="text" inputmode="numeric" value="5">
+        </div>
+        <button type="submit" class="wide" id="sp-save">Сохранить профиль специалиста</button>
+        <div class="hidden" id="sp-permits-box">
+          <h2 class="gap">Допуски</h2>
+          <ul class="list" id="sp-permits"></ul>
+          <div class="field">
+            <label for="sp-service">Дать допуск на услугу</label>
+            <select id="sp-service"></select>
+          </div>
+          <div class="field">
+            <label for="sp-until">Действует до (можно не указывать)</label>
+            <input id="sp-until" type="date">
+          </div>
+          <button type="button" class="secondary wide" id="sp-add-permit">Дать допуск</button>
+        </div>
+        <p class="msg" id="sp-msg" role="status" aria-live="polite"></p>
+      </form>
       <div class="card">
         <h2>Служебные роли</h2>
         <ul class="list" id="staff"></ul>

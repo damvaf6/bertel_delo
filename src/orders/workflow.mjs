@@ -4,8 +4,8 @@
 // Переходы — данные: откуда, куда, чья сторона, нужна ли причина. Кто к какой стороне относится —
 // только src/access/policy.mjs (orderSides).
 //
-// До задач 1.4–1.6 (исполнитель, проверка результата, оплата) шаги исполнителя и проверки отмечает диспетчер вручную;
-// потом эти же переходы будут делать исполнитель и автоматика — таблица расширится, статусы не изменятся.
+// Шаги исполнителя (принять, отказаться, сдать) делает сам специалист (1.4); проверку результата пока отмечает
+// диспетчер вручную, потом — проверка и автоматика (1.5).
 
 export const STATUSES = [
   { id: 'new', name: 'Новая' },
@@ -30,10 +30,11 @@ const DISPATCHER_CANCEL_FROM = ['matching', 'awaiting_executor', 'in_work', 'rev
 
 export const TRANSITIONS = [
   { from: 'new', to: 'matching', by: 'customer', name: 'Отправить заявку' },
-  { from: 'matching', to: 'awaiting_executor', by: 'dispatcher', name: 'Предложена исполнителю' },
-  { from: 'awaiting_executor', to: 'in_work', by: 'dispatcher', name: 'Исполнитель принял' },
+  // «Подбор → ждёт исполнителя» — не шаг статуса, а предложение конкретному специалисту (orders.offer, src/ops/match-ops.mjs).
+  { from: 'awaiting_executor', to: 'in_work', by: 'executor', name: 'Принять дело' },
+  { from: 'awaiting_executor', to: 'matching', by: 'executor', name: 'Отказаться', reason: true },
   { from: 'awaiting_executor', to: 'matching', by: 'dispatcher', name: 'Вернуть в подбор', reason: true },
-  { from: 'in_work', to: 'review', by: 'dispatcher', name: 'Результат на проверку' },
+  { from: 'in_work', to: 'review', by: 'executor', name: 'Сдать на проверку' },
   { from: 'review', to: 'in_work', by: 'dispatcher', name: 'Вернуть на доработку', reason: true },
   { from: 'review', to: 'done', by: 'dispatcher', name: 'Проверено, готово' },
   { from: 'done', to: 'closed', by: 'customer', name: 'Принять и закрыть' },
@@ -45,7 +46,7 @@ export const TRANSITIONS = [
 // Переход из статуса from в to для вошедшего со сторонами sides. Если подходят обе стороны, берётся сторона заказчика
 // (у неё меньше требований — например, причина отмены не обязательна).
 export function findTransition(from, to, sides) {
-  for (const side of ['customer', 'dispatcher']) {
+  for (const side of ['customer', 'dispatcher', 'executor']) {
     if (!sides.includes(side)) continue;
     const t = TRANSITIONS.find((x) => x.from === from && x.to === to && x.by === side);
     if (t) return t;
@@ -57,7 +58,7 @@ export function findTransition(from, to, sides) {
 export function availableActions(status, sides) {
   const seen = new Set();
   const out = [];
-  for (const side of ['customer', 'dispatcher']) {
+  for (const side of ['customer', 'dispatcher', 'executor']) {
     if (!sides.includes(side)) continue;
     for (const t of TRANSITIONS) {
       if (t.from !== status || t.by !== side || seen.has(t.to)) continue;

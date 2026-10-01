@@ -91,7 +91,7 @@ test('реестр: операция без описания доступа не
   assert.throws(() => validateOp({ id: 'x', method: 'GET', path: '/x', auth: 'user', access: { resource: 'order', param: 'id', need: 'read' }, handler: h }), /параметра/);
   assert.throws(() => validateOp({ id: 'x', method: 'GET', path: '/x/:id', auth: 'user', access: { resource: 'nope', param: 'id', need: 'read' }, handler: h }), /проверка доступа/);
   assert.throws(() => validateOp({ id: 'x', method: 'GET', path: '/x/:id', auth: 'user', access: { resource: 'order', param: 'id', need: 'none' }, handler: h }), /проверка доступа/);
-  assert.throws(() => validateOp({ id: 'x', method: 'GET', path: '/x', auth: 'user', access: { platform: 'dispatcher' }, handler: h }), /проверка доступа/);
+  assert.throws(() => validateOp({ id: 'x', method: 'GET', path: '/x', auth: 'user', access: { platform: 'nope' }, handler: h }), /проверка доступа/);
   assert.throws(() => validateOp({ id: 'x', method: 'GET', path: '/x/:id', auth: 'user', access: { platform: 'admin', resource: 'order', param: 'id', need: 'read' }, handler: h }), /проверка доступа/);
   validateOp({ id: 'x', method: 'GET', path: '/x/:id', auth: 'user', access: { resource: 'order', param: 'id', need: 'read' }, handler: h });
   validateOp({ id: 'x', method: 'GET', path: '/x/:id', auth: 'user', access: { resource: 'org', param: 'id', need: 'manage' }, handler: h });
