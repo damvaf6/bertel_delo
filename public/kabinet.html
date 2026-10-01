@@ -111,6 +111,21 @@
           <label for="reason">Причина (для возврата или отмены)</label>
           <input id="reason" type="text" maxlength="1000">
         </div>
+        <div class="hidden" id="cancel-box">
+          <div class="field">
+            <label for="cancel-fault">Если отменить: по чьей причине</label>
+            <select id="cancel-fault">
+              <option value="">— выберите —</option>
+              <option value="executor">Исполнитель — вернуть всё</option>
+              <option value="customer">Заказчик — оплатить часть</option>
+            </select>
+          </div>
+          <div class="field hidden" id="done-percent-box">
+            <label for="done-percent">Сделано работы, %</label>
+            <input id="done-percent" type="text" inputmode="numeric" maxlength="3" placeholder="от 0 до 100">
+            <p class="muted">Исполнителю — 80% от стоимости сделанной части, остаток цены возвращается заказчику.</p>
+          </div>
+        </div>
         <div class="row" id="actions"></div>
         <p class="msg" id="status-msg" role="status" aria-live="polite"></p>
         <h2 class="gap">История</h2>
@@ -164,11 +179,12 @@
             <label for="price">Цена, рублей</label>
             <input id="price" type="text" inputmode="decimal" maxlength="14" placeholder="Например: 15 000">
           </div>
-          <p class="muted">Исполнителю — 80%, платформе — 20%. Цену можно менять, пока дело не предложено исполнителю.</p>
+          <p class="muted">Исполнителю — 80%, платформе — 20%. Цену можно менять, пока заказчик не оплатил заявку.</p>
           <button type="submit" class="secondary" id="price-save">Назначить цену</button>
         </form>
         <button class="wide hidden" id="pay">Оплатить</button>
         <button class="secondary hidden" id="payout-retry">Повторить выплату</button>
+        <button class="secondary hidden" id="refund-retry">Повторить возврат</button>
         <h2 class="gap hidden" id="closing-title">Закрывающие документы</h2>
         <ul class="list" id="closing"></ul>
         <div class="closing-doc hidden" id="closing-doc" aria-live="polite"></div>

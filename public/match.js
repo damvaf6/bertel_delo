@@ -23,7 +23,9 @@ export async function loadMatch(current, reopen) {
   box.classList.toggle('hidden', !on);
   if (!on) return;
   say($('match-msg'), '');
-  $('match-current').textContent = current.executor ? `Сейчас предложено: ${current.executor.name || 'специалист без имени'}. Можно передать другому, пока он не ответил.` : 'Дело ещё никому не предложено.';
+  // Заказчик платит при заказе: пока не оплачено, предложить дело нельзя (1.6а).
+  $('match-current').textContent = current.executor ? `Сейчас предложено: ${current.executor.name || 'специалист без имени'}. Можно передать другому, пока он не ответил.`
+    : order.paid ? 'Заявка оплачена — дело можно предложить специалисту.' : 'Дело можно предложить после оплаты заказчиком: назначьте цену и дождитесь оплаты.';
   const { candidates, current_executor_id: cur } = await api('GET', `/api/orders/${order.id}/candidates`);
   $('candidates-empty').classList.toggle('hidden', candidates.length > 0);
   $('candidates').replaceChildren(...candidates.map((c) => el('li', { 'data-id': c.user_id },

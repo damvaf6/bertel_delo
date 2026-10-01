@@ -408,8 +408,29 @@ test('ход заявки: подбор диспетчером, принятие
   await expect(dp.locator('#money-facts')).toContainText(/Исполнителю \(80%\)\s*20\s000 ₽/);
   await expect(dp.locator('#money-facts')).toContainText(/Платформе \(20%\)\s*5\s000 ₽/);
   await shot(dp, '35-dispetcher-cena');
+  // Заказчик платит при заказе (1.6а): пока не оплачено, дело не предложить.
+  await expect(dp.locator('#match-current')).toContainText('после оплаты заказчиком');
   dp.once('dialog', (d) => d.accept());
   await cand.getByRole('button', { name: 'Предложить дело' }).click();
+  await expect(dp.locator('#match-msg')).toHaveText('Заявка ещё не оплачена заказчиком');
+
+  // Заказчик видит цену и оплачивает (поддельная ЮKassa); деньги ждут у платформы до выдачи результата.
+  await page.goto(`/kabinet#order=${id}`);
+  await expect(page.locator('#money-facts')).toContainText(/Цена\s*25\s000 ₽/);
+  await expect(page.locator('#money-facts')).not.toContainText('Исполнителю');
+  await expect(page.locator('#money-facts')).toContainText('после неё заявку передадут исполнителю');
+  await shot(page, '36-zakazchik-oplata');
+  await page.getByRole('button', { name: /Оплатить 25\s000 ₽/ }).click();
+  await expect(page.locator('#money-facts')).toContainText('оплачено');
+  await expect(page.locator('#money-facts')).toContainText('уйдут исполнителю, только когда результат проверен');
+  await expect(page.getByRole('button', { name: /Оплатить/ })).toBeHidden();
+  await expect(page.locator('#closing li')).toHaveCount(0);
+
+  await dp.reload();
+  await expect(dp.locator('#match-current')).toContainText('Заявка оплачена');
+  await expect(dp.getByLabel('Цена, рублей')).toBeHidden();
+  dp.once('dialog', (d) => d.accept());
+  await dp.locator('#candidates li').filter({ hasText: 'Тестовый оценщик' }).getByRole('button', { name: 'Предложить дело' }).click();
   await expect(dp.locator('#order-status')).toHaveText('Ждёт исполнителя');
   await expect(dp.locator('#match-current')).toContainText('Тестовый оценщик');
 
@@ -508,14 +529,8 @@ test('ход заявки: подбор диспетчером, принятие
   await expect(page.locator('#history')).toContainText('Нет фото повреждений');
   await expect(page.locator('#history li')).toHaveCount(10);
   await expect(page.getByRole('button', { name: 'Отменить заявку' })).toHaveCount(0);
-  // Проверено, но не оплачено: результат закрыт, закрыть заявку нельзя; заказчик оплачивает (поддельная ЮKassa).
-  await expect(page.locator('#docs li').filter({ hasText: 'Результат работы' })).toHaveCount(0);
-  await expect(page.locator('#results-later')).toHaveText('Результат проверен — он откроется здесь после оплаты.');
-  await expect(page.getByRole('button', { name: 'Принять и закрыть' })).toHaveCount(0);
-  await expect(page.locator('#money-facts')).toContainText(/Цена\s*25\s000 ₽/);
-  await expect(page.locator('#money-facts')).not.toContainText('Исполнителю');
-  await shot(page, '36-zakazchik-oplata');
-  await page.getByRole('button', { name: /Оплатить 25\s000 ₽/ }).click();
+  // Результат проверен и выдан: заказчику — акт (оплачено при заказе), исполнителю — выплата.
+  await expect(page.locator('#results-later')).toBeHidden();
   await expect(page.locator('#money-facts')).toContainText('оплачено');
   await expect(page.locator('#closing li')).toHaveCount(1);
   await page.locator('#closing li').getByRole('button', { name: 'Открыть' }).click();
@@ -523,7 +538,7 @@ test('ход заявки: подбор диспетчером, принятие
   await expect(page.locator('#closing-doc')).toContainText('Проверочный документ');
   await expect(page.locator('#closing-doc')).toContainText(/вознаграждение агента \(20%\): 5\s000 ₽/);
   await shot(page, '37-zakazchik-akt');
-  // После проверки и оплаты заказчик видит оба файла результата и итог проверки; удалить их не может; отвечает в переписке.
+  // После проверки заказчик видит оба файла результата и итог проверки; удалить их не может; отвечает в переписке.
   await expect(page.locator('#docs li').filter({ hasText: 'Результат работы' })).toHaveCount(2);
   await expect(page.locator('#docs li').filter({ hasText: 'Результат работы' }).getByRole('button', { name: 'Удалить' })).toHaveCount(0);
   await expect(page.locator('#review-summary')).toContainText('все правила');
@@ -642,7 +657,7 @@ test('уведомления: специалисту — о предложенн
   await db(async (c) => {
     await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
     await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'land')", [spec.id]);
-    await c.query('update orders set price_kop = 2000000 where id = $1', [id]);
+    await c.query('update orders set price_kop = 2000000, paid_at = now() where id = $1', [id]);
   });
   expect((await dp.request.post(`/api/orders/${id}/offer`, { data: { specialist_id: spec.id, from: 'matching' }, headers: H })).status()).toBe(200);
 
@@ -688,6 +703,95 @@ test('уведомления: специалисту — о предложенн
   await expect(dp.getByLabel('Очередь диспетчера')).not.toBeChecked();
   await expect(dp.getByLabel('Предложения дел')).toHaveCount(0);
   await shot(dp, '43-uvedomleniya-dispetcher');
+  await sctx.close();
+  await dctx.close();
+});
+
+test('деньги при отмене: передача другому исполнителю; отказ заказчика после начала работ — оплата сделанной части и возврат', async ({ page, browser, baseURL }) => {
+  const customer = await signIn(page, '+79990000571');
+  const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'goods', title: 'Оценка мебели' }, headers: H })).json();
+  const id = created.order.id;
+  expect((await page.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(8), fields: { purpose: 'deal', region: 'moscow', subject: 'Тестовый шкаф, скол на дверце', questions: 'Есть ли производственный брак?' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  expect(customer.id).toBeTruthy();
+
+  const dctx = await phoneContext(browser, baseURL);
+  const dp = await dctx.newPage();
+  const disp = await signIn(dp, '+79990000572');
+  const sctx = await phoneContext(browser, baseURL);
+  const sp = await sctx.newPage();
+  const spec = await signIn(sp, '+79990000573');
+  await db(async (c) => {
+    await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'goods')", [spec.id]);
+  });
+  expect((await dp.request.put(`/api/orders/${id}/price`, { data: { price: '10000' }, headers: H })).status()).toBe(200);
+  await page.goto(`/kabinet#order=${id}`);
+  await page.getByRole('button', { name: /Оплатить 10\s000 ₽/ }).click();
+  await expect(page.locator('#money-facts')).toContainText('оплачено');
+  const offerAndAccept = async () => {
+    expect((await dp.request.post(`/api/orders/${id}/offer`, { data: { specialist_id: spec.id, from: 'matching' }, headers: H })).status()).toBe(200);
+    expect((await sp.request.post(`/api/orders/${id}/status`, { data: { from: 'awaiting_executor', to: 'in_work' }, headers: H })).status()).toBe(200);
+  };
+  await offerAndAccept();
+
+  // Исполнитель не справляется — диспетчер передаёт дело другому; оплата заказчика в силе.
+  await dp.goto(`/kabinet#order=${id}`);
+  await expect(dp.locator('#order-status')).toHaveText('В работе');
+  await dp.getByRole('button', { name: 'Передать другому исполнителю' }).click();
+  await expect(dp.locator('#status-msg')).toHaveText('Укажите причину');
+  await dp.getByLabel('Причина (для возврата или отмены)').fill('Исполнитель не выходит на связь');
+  await dp.getByRole('button', { name: 'Передать другому исполнителю' }).click();
+  await expect(dp.locator('#order-status')).toHaveText('Подбор исполнителя');
+  await expect(dp.locator('#match-current')).toContainText('Заявка оплачена');
+  await shot(dp, '44-dispetcher-peredat-drugomu');
+  await sp.goto(`/kabinet#order=${id}`);
+  await expect(sp.getByRole('heading', { name: 'Заявка не найдена' })).toBeVisible();
+
+  // Снова в работе; заказчик отказался — диспетчер указывает, что сделано 40%.
+  await offerAndAccept();
+  await dp.reload();
+  await expect(dp.locator('#order-status')).toHaveText('В работе');
+  await dp.getByLabel('Причина (для возврата или отмены)').fill('Заказчик отказался от оценки');
+  dp.on('dialog', (d) => d.accept());
+  await dp.getByRole('button', { name: 'Отменить заявку' }).click();
+  await expect(dp.locator('#status-msg')).toHaveText('Укажите, по чьей причине отмена');
+  await dp.getByLabel('Если отменить: по чьей причине').selectOption('customer');
+  await dp.getByLabel('Сделано работы, %').fill('40');
+  await shot(dp, '45-dispetcher-otmena-chast');
+  await dp.getByRole('button', { name: 'Отменить заявку' }).click();
+  await expect(dp.locator('#order-status')).toHaveText('Отменена');
+  await expect(dp.locator('#money-facts')).toContainText('заказчик отказался, сделано 40% работы');
+  await expect(dp.locator('#money-facts')).toContainText(/Возврат заказчику\s*6\s000 ₽ — возвращено/);
+  await expect(dp.locator('#money-facts')).toContainText(/Выплата исполнителю\s*3\s200 ₽ — выплачено/);
+
+  // Заказчик: возврат 6 000 ₽ и документ о возврате; акт — на сделанную часть.
+  await page.reload();
+  await expect(page.locator('#order-status')).toHaveText('Отменена');
+  await expect(page.locator('#money-facts')).toContainText(/Возврат заказчику\s*6\s000 ₽ — возвращено/);
+  await expect(page.locator('#money-facts')).not.toContainText('Выплата исполнителю');
+  await page.locator('#closing li').filter({ hasText: 'Возврат' }).getByRole('button', { name: 'Открыть' }).click();
+  await expect(page.locator('#closing-doc')).toContainText('Документ о возврате');
+  await expect(page.locator('#closing-doc')).toContainText(/Возвращается заказчику: 6\s000 ₽/);
+  await expect(page.locator('#closing-doc')).toContainText('Причина: Заказчик отказался от оценки');
+  await shot(page, '46-zakazchik-vozvrat');
+  await page.locator('#closing li').filter({ hasText: 'Акт' }).getByRole('button', { name: 'Открыть' }).click();
+  await expect(page.locator('#closing-doc')).toContainText('оказана часть услуги (40%)');
+
+  // Исполнитель видит выплату за сделанную часть в своём отменённом деле.
+  await sp.reload();
+  await expect(sp.locator('#order-status')).toHaveText('Отменена');
+  await expect(sp.locator('#money-facts')).toContainText(/Выплата\s*3\s200 ₽ — выплачено/);
+  await expect(sp.locator('#money-facts')).not.toContainText('Возврат');
+  await shot(sp, '47-specialist-vyplata-chast');
+
+  // Сводка «Деньги»: возвращено заказчикам.
+  await dp.goto('/kabinet#money');
+  await expect(dp.locator('#money-totals')).toContainText('Возвращено заказчикам');
+  await shot(dp, '48-dispetcher-dengi-vozvraty');
   await sctx.close();
   await dctx.close();
 });
