@@ -10,6 +10,7 @@ import { showSpecialist, showSpecialists } from '/match.js';
 import { showMoney } from '/money.js';
 import { showNotifications } from '/notify.js';
 import { showAssistant } from '/assistant.js';
+import { showMail } from '/mail.js';
 
 const $ = (id) => document.getElementById(id);
 const dateRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
@@ -83,6 +84,7 @@ function showProfile() {
   $('profile-phone').textContent = `Телефон для входа: ${formatPhone(state.me.user.phone)}`;
   say($('profile-msg'), '');
   show('profile-view', 'profile');
+  return showMail();
 }
 
 $('profile-form').addEventListener('submit', async (e) => {

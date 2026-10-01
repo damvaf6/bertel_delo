@@ -30,7 +30,7 @@ main { max-width: 640px; margin: 0 auto; padding: 16px; }
 h1 { font-size: 22px; margin: 0 0 12px; }
 h2 { font-size: 18px; margin: 0 0 12px; }
 label { display: block; font-size: 14px; color: var(--muted); margin: 0 0 6px; }
-input[type=text], input[type=tel], input[type=date], select, textarea {
+input[type=text], input[type=tel], input[type=email], input[type=date], select, textarea {
   width: 100%; font: inherit; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--text);
 }
 input:focus-visible, button:focus-visible, a:focus-visible { outline: 3px solid #8fb3e6; outline-offset: 1px; }
@@ -139,3 +139,5 @@ ul.plain li { margin: 4px 0; overflow-wrap: anywhere; }
 .ai-hint.ok { color: var(--ok); }
 .ai-hint.attention { color: #8a5a00; }
 #ai-review-box { margin-bottom: 8px; }
+#mail-status { margin: 0 0 12px; }
+#mail-org-box, #mail-delete { margin-top: 16px; }

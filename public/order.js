@@ -72,6 +72,10 @@ function renderOrgLine() {
     ? `Организация: ${order.org_name} · Ведёт: ${order.responsible_name || 'сотрудник без имени'}`
     : 'Личная заявка';
   if (current.executor) $('order-org-line').textContent += ` · Исполнитель: ${current.executor.is_me ? 'Вы' : current.executor.name || 'специалист без имени'}`;
+  // Заявка по письму (1.9): ход заявки и результат уходят письмами в ту же переписку.
+  $('order-mail-line').classList.toggle('hidden', !current.mail);
+  $('order-mail-line').textContent = !current.mail ? ''
+    : current.mail.email ? `Пришла по письму. Ход заявки и результат — письмами на ${current.mail.email}` : 'Заявка пришла по письму';
 }
 
 // ——— Данные заявки: форма ———

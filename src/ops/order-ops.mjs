@@ -70,6 +70,40 @@ export async function insertOrder(tx, actor, def, { title, orgId, fields = {}, v
   return o;
 }
 
+// Готова ли заявка к отправке: услуга, обязательные поля, срок, основание. Список того, чего не хватает.
+export async function problemsForSubmit(tx, registry, order) {
+  const out = [];
+  const def = order.module ? registry.service(order.module, order.service) : null;
+  if (!def) out.push('услуга');
+  else out.push(...missingRequired(def.fields, order.fields));
+  if (!order.deadline) out.push('срок');
+  else if (order.deadline < todayMsk()) out.push('срок (дата уже прошла)');
+  if (def && !def.module.basis.includes(order.basis_kind)) out.push('основание');
+  if (BASIS_KINDS[order.basis_kind]?.details) {
+    if (!order.basis_number) out.push('номер определения');
+    if (!order.basis_date) out.push('дата определения');
+    const file = await tx.one`select 1 from documents where order_id = ${order.id} and kind = 'basis' and deleted_at is null limit 1`;
+    if (!file) out.push('файл определения суда');
+  }
+  return out;
+}
+
+// Отправка заявки-черновика заказчиком («новая» → «подбор»): кабинетом (orders.status) или ответом «Отправить» на письмо (1.9).
+// cur — строка заявки, заблокированная вызывающим (select … for update).
+export async function submitDraft(tx, registry, actor, cur) {
+  const t = findTransition(cur.status, 'matching', orderSides(actor, cur));
+  if (cur.status !== 'new' || !t || t.by !== 'customer') throw new HttpError(409, 'bad_transition', 'Заявка уже отправлена');
+  const missing = await problemsForSubmit(tx, registry, cur);
+  if (missing.length) throw new HttpError(400, 'incomplete', `Не хватает: ${missing.join(', ')}`);
+  const o = await tx.one`update orders set status = 'matching', updated_at = now(), submitted_at = coalesce(submitted_at, now())
+                         where id = ${cur.id} returning *`;
+  await tx`insert into order_status_history (order_id, from_status, to_status, actor_id, side)
+           values (${cur.id}, 'new', 'matching', ${actor.id}, 'customer')`;
+  await audit(tx, actor, 'order.status', 'order', cur.id, { from: 'new', to: 'matching', side: 'customer' });
+  await notifyStatus(tx, { actor, before: cur, to: 'matching', by: 'customer' });
+  return o;
+}
+
 export function orderOps() {
   // Заявка наружу: с названиями услуги и статуса, организацией и тем, кто её ведёт (имя, без телефона).
   async function orderView(sql, registry, order) {
@@ -112,24 +146,6 @@ export function orderOps() {
     };
   }
 
-  // Готова ли заявка к отправке: услуга, обязательные поля, срок, основание. Список того, чего не хватает.
-  async function problemsForSubmit(tx, registry, order) {
-    const out = [];
-    const def = order.module ? registry.service(order.module, order.service) : null;
-    if (!def) out.push('услуга');
-    else out.push(...missingRequired(def.fields, order.fields));
-    if (!order.deadline) out.push('срок');
-    else if (order.deadline < todayMsk()) out.push('срок (дата уже прошла)');
-    if (def && !def.module.basis.includes(order.basis_kind)) out.push('основание');
-    if (BASIS_KINDS[order.basis_kind]?.details) {
-      if (!order.basis_number) out.push('номер определения');
-      if (!order.basis_date) out.push('дата определения');
-      const file = await tx.one`select 1 from documents where order_id = ${order.id} and kind = 'basis' and deleted_at is null limit 1`;
-      if (!file) out.push('файл определения суда');
-    }
-    return out;
-  }
-
   return [
     {
       // Перечень услуг, полей и ИИ-проверок всех модулей и список статусов. Общие данные, не чьи-то личные.
@@ -170,8 +186,11 @@ export function orderOps() {
         // Кто исполнитель — служебным и самому исполнителю; заказчику имя исполнителя пока не показывается.
         const exec = order.executor_user_id && (isStaff(actor) || order.executor_user_id === actor.id)
           ? await sql.one`select full_name from users where id = ${order.executor_user_id}` : null;
+        // Заявка по письму (1.9): ответы уходят в переписку на адрес заказчика; адрес — только стороне заказчика.
+        const thread = await sql.one`select email from mail_threads where order_id = ${order.id}`;
         return {
           order: await orderView(sql, registry, order),
+          mail: thread ? { email: level >= LEVEL.write ? thread.email : null } : null,
           executor: exec ? { user_id: order.executor_user_id, name: exec.full_name, is_me: order.executor_user_id === actor.id } : null,
           access: LEVEL_NAME[level],
           editable: order.status === 'new' && level >= LEVEL.write,

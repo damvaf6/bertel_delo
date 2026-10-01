@@ -4,6 +4,8 @@ import { createDb } from './db.mjs';
 import { createProviders } from './providers/index.mjs';
 import { createApp } from './app.mjs';
 import { deliverPending } from './notify/notify.mjs';
+import { deliverMail } from './mail/outbox.mjs';
+import { processInbound, receiveMail } from './mail/inbound.mjs';
 
 const cfg = loadConfig();
 const sql = createDb(cfg);
@@ -18,8 +20,23 @@ const sweep = setInterval(() => {
 }, 60_000);
 sweep.unref();
 
+// Заявки по письму (1.9): забрать новые письма, разобрать очередь, отправить ответы — раз в MAIL_POLL_SEC секунд.
+const deps = { cfg, sql, providers, registry: app.locals.registry };
+let mailBusy = false;
+const mailSweep = setInterval(async () => {
+  if (mailBusy) return;
+  mailBusy = true;
+  try {
+    await receiveMail(deps);
+    await processInbound(deps);
+    await deliverMail(sql, providers, cfg);
+  } catch (e) { console.error('письма:', e?.message || e); } finally { mailBusy = false; }
+}, cfg.mail.pollSec * 1000);
+mailSweep.unref();
+
 function stop() {
   clearInterval(sweep);
+  clearInterval(mailSweep);
   server.close(() => sql.end().finally(() => process.exit(0)));
   setTimeout(() => process.exit(0), 5000).unref();
 }

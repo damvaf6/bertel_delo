@@ -2,6 +2,7 @@
 // СМС — через очередь notification_deliveries, отправляется после транзакции (deliverPending), с повторами.
 // Сам себе человек уведомлений не получает; отключённые учётные записи — тоже.
 import { EVENTS, TYPE, smsText } from './registry.mjs';
+import { mailOnEvent } from '../mail/outbox.mjs';
 
 export const DELIVERY = {
   maxAttempts: 5,        // после пятой неудачи СМС больше не повторяется (строка остаётся с ошибкой)
@@ -13,6 +14,8 @@ export const DELIVERY = {
 export async function notify(tx, eventId, { users = [], orderId = null, orgId = null, actor = null } = {}) {
   const e = EVENTS[eventId];
   if (!e) throw new Error(`Неизвестное событие уведомления: ${eventId}`);
+  // Заявка пришла по письму — о событии пишем и в её переписку (1.9), кто бы ни сделал шаг.
+  await mailOnEvent(tx, eventId, orderId);
   const ids = [...new Set(users.filter(Boolean))].filter((id) => id !== actor?.id);
   if (!ids.length) return 0;
   const rows = await tx`

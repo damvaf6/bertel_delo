@@ -84,6 +84,8 @@ test('неверный код — понятное сообщение', async ({
   await page.goto('/');
   await page.getByLabel('Номер мобильного телефона').fill('+79990000502');
   await page.getByRole('button', { name: 'Получить код' }).click();
+  // Код читается только после ответа сервера (иначе на медленном контейнере вызова СМС ещё нет).
+  await expect(page.getByText('Код отправлен на +7 999 000-05-02')).toBeVisible();
   const code = await smsCode(page.request, '+79990000502');
   await page.getByLabel('Код из СМС').fill(code === '000000' ? '111111' : '000000');
   await page.getByRole('button', { name: 'Войти' }).click();
@@ -915,4 +917,65 @@ test('ИИ-проверка результата: специалист пере�
   // Заказчик подсказок ИИ не видит — проверено автотестами сервера (tests/server/ai.test.mjs).
   await sctx.close();
   await dctx.close();
+});
+
+test('заявка по письму: почта подключается кодом из письма; письмо с вложением — заявка-черновик; ответ «Отправить» — заявка в подборе', async ({ page }) => {
+  const me = await signIn(page, '+79990000591');
+  const email = 'pismo-test@example.ru';
+  const control = { 'x-test-control': CONTROL, 'x-delo-request': '1' };
+  await db(async (c) => {
+    const { rows: [org] } = await c.query("insert into organizations (name) values ('Тестовая юрфирма писем') returning id");
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head')", [org.id, me.id]);
+  });
+  const mailTo = async (to) => {
+    const r = await page.request.get('/__test/fakes/mail/calls', { headers: { 'x-test-control': CONTROL } });
+    return (await r.json()).calls.filter((c) => c.method === 'send' && c.args.to === to).at(-1).args;
+  };
+
+  await page.goto('/kabinet#profile');
+  await expect(page.getByRole('heading', { name: 'Почта для заявок' })).toBeVisible();
+  await expect(page.locator('#mail-inbox')).toHaveText(/@/);
+  await expect(page.locator('#mail-status')).toHaveText('Почта не подключена.');
+  await page.getByLabel('Ваш адрес почты').fill(email);
+  await page.getByRole('button', { name: 'Получить код на почту' }).click();
+  await expect(page.locator('#mail-msg')).toHaveText('Код отправлен — проверьте почту');
+  const code = (await mailTo(email)).text.match(/\d{6}/)[0];
+  await page.getByLabel('Код из письма').fill(code);
+  await page.getByRole('button', { name: 'Подтвердить' }).click();
+  await expect(page.locator('#mail-status')).toHaveText(`Подключена: ${email}. Письма с неё принимаются как заявки.`);
+  await expect(page.getByLabel('Заявки по письмам — от имени')).toHaveValue('');
+  await shot(page, '57-pochta-dlya-zayavok');
+
+  // Письмо с вложением на особый адрес — заявка-черновик и ответ номером.
+  const r = await page.request.post('/__test/mail/inbound', {
+    headers: control,
+    data: {
+      from: `Тестовый Юрист <${email}>`, subject: 'Оценка квартиры для суда',
+      text: 'Прошу оценить квартиру в Москве для суда.\nАдрес: г. Москва, тестовая ул., 15\nСрок до 30.12.2026',
+      attachments: [{ filename: 'выписка ЕГРН.txt', content_type: 'text/plain', base64: Buffer.from('тестовая выписка').toString('base64') }],
+    },
+  });
+  expect(r.status()).toBe(200);
+  const { inbound } = await r.json();
+  expect(inbound.outcome).toBe('created');
+  await page.goto('/kabinet');
+  await page.locator(`button.open[data-id="${inbound.order_id}"]`).click();
+  await expect(page.locator('#order-status')).toHaveText('Новая');
+  await expect(page.locator('#order-title')).toHaveText('Оценка квартиры для суда');
+  await expect(page.locator('#order-mail-line')).toHaveText(`Пришла по письму. Ход заявки и результат — письмами на ${email}`);
+  await expect(page.getByLabel('Адрес объекта')).toHaveValue('г. Москва, тестовая ул., 15');
+  await expect(page.getByLabel('Для чего нужна оценка')).toHaveValue('court');
+  await expect(page.getByText('выписка ЕГРН.txt')).toBeVisible();
+  await shot(page, '58-zayavka-po-pismu');
+
+  // Ответ «Отправить» на письмо с номером — заявка уходит в подбор.
+  const answer = await mailTo(email);
+  expect(answer.subject).toMatch(/^Заявка № /);
+  const s = await page.request.post('/__test/mail/inbound', {
+    headers: control, data: { from: email, text: 'Отправить\n\n> Заявка создана по Вашему письму', in_reply_to: [answer.messageId] },
+  });
+  expect((await s.json()).inbound.outcome).toBe('submitted');
+  await page.reload();
+  await expect(page.locator('#order-status')).toHaveText('Подбор исполнителя');
+  await shot(page, '59-zayavka-po-pismu-otpravlena');
 });

@@ -2,7 +2,8 @@
 // Если основная не ответила — тот же запрос уходит запасной. Зарубежные модели не подключаются вовсе: допустимы только
 // поставщики из списка AI_DRIVERS (данные заявок — персональные, только в России).
 //   complete({ purpose, messages: [{ role: 'system' | 'user' | 'assistant', content }] }) → { text, model }
-// purpose: 'problem' — вход через проблему; 'assistant' — ассистент; 'review' — проверка результата по правилам.
+// purpose: 'problem' — вход через проблему; 'assistant' — ассистент; 'review' — проверка результата по правилам;
+// 'mail' — разбор письма-заявки (1.9).
 import crypto from 'node:crypto';
 import { makeFake, ProviderError } from './fake.mjs';
 
@@ -137,6 +138,30 @@ function fakeProblem(text) {
   });
 }
 
+// Письмо-заявка (1.9): приходит строками «ТЕМА:», «ТЕКСТ:», «ВЛОЖЕНИЯ:». Даты — «ДД.ММ.ГГГГ».
+function fakeMail(text) {
+  const base = JSON.parse(fakeProblem(text));
+  const fields = { ...base.fields };
+  const address = text.match(/адрес[^:\n]*:\s*([^\n]+)/i)?.[1]?.trim();
+  if (address) fields.address = address;
+  if (/квартир/i.test(text)) fields.object_type = 'flat';
+  const area = text.match(/площад[^\d\n]*(\d+(?:[.,]\d+)?)/i)?.[1];
+  if (area) fields.area = area.replace(',', '.');
+  const court = text.match(/определени[^№\n]*№\s*([^\s,]+)[^\n]*?от\s*(\d{2})\.(\d{2})\.(\d{4})/i);
+  const deadline = text.match(/срок[^\d\n]*(\d{2})\.(\d{2})\.(\d{4})/i);
+  const files = (text.split('ВЛОЖЕНИЯ:')[1] ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+  return JSON.stringify({
+    service: base.service,
+    title: base.service ? (text.match(/ТЕМА:\s*([^\n]+)/)?.[1]?.trim() || null) : null,
+    fields,
+    deadline: deadline ? `${deadline[3]}-${deadline[2]}-${deadline[1]}` : null,
+    basis: court ? 'court' : 'contract',
+    basis_number: court?.[1] ?? null,
+    basis_date: court ? `${court[4]}-${court[3]}-${court[2]}` : null,
+    basis_file: files.find((f) => /определ/i.test(f)) ?? null,
+  });
+}
+
 // Правила проверки приходят строками «- id: описание»; текст файлов — после «ФАЙЛЫ:».
 function fakeReview(text) {
   const ids = [...text.matchAll(/^- ([a-z][a-z0-9_]*): /gm)].map((m) => m[1]);
@@ -158,6 +183,7 @@ function fakeAi() {
       const text = lastUser(messages);
       if (purpose === 'problem') return { text: fakeProblem(text), model: 'fake' };
       if (purpose === 'review') return { text: fakeReview(text), model: 'fake' };
+      if (purpose === 'mail') return { text: fakeMail(text), model: 'fake' };
       return { text: `[поддельный ответ ИИ] Вы спросили: «${text.slice(0, 200)}». Это подсказка, решение — за Вами.`, model: 'fake' };
     },
   });
