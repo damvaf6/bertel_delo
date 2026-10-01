@@ -21,6 +21,8 @@ export function loadConfig(env = process.env) {
     appSecret: env.APP_SECRET || '',
     cookieSecure: env.COOKIE_SECURE !== '0',
     trustProxy: env.TRUST_PROXY === '1',
+    // Адрес сайта для возврата со страницы оплаты ЮKassa (без «/» в конце). Пусто — относительный адрес (только поддельная оплата).
+    publicUrl: (env.PUBLIC_URL || '').replace(/\/+$/, ''),
     providers: {
       sms: env.SMS_PROVIDER || 'fake',
       call: env.CALL_PROVIDER || 'fake',
@@ -51,6 +53,7 @@ export function loadConfig(env = process.env) {
   if (cfg.testControlToken && appEnv !== 'test') throw new ConfigError('TEST_CONTROL_TOKEN допустим только при APP_ENV=test');
   if (cfg.providers.storage === 's3' && !cfg.s3.bucket) throw new ConfigError('S3_BUCKET не задан');
 
+  if (cfg.providers.payments !== 'fake' && !/^https:\/\//.test(cfg.publicUrl)) throw new ConfigError('PUBLIC_URL (https://…) нужен для настоящей оплаты');
   if (live) {
     if (cfg.dbSsl === 'disable') throw new ConfigError('На stage/prod база только с проверкой сертификата');
     if (!cfg.cookieSecure) throw new ConfigError('На stage/prod cookie только Secure');

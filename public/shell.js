@@ -2,7 +2,7 @@
 import { api, el, formatPhone } from '/common.js';
 
 const $ = (id) => document.getElementById(id);
-const views = ['list-view', 'order-view', 'missing-view', 'orgs-view', 'org-view', 'profile-view', 'admin-view', 'specialist-view', 'specialists-view'];
+const views = ['list-view', 'order-view', 'missing-view', 'orgs-view', 'org-view', 'profile-view', 'admin-view', 'specialist-view', 'specialists-view', 'money-view'];
 
 export const state = { me: null, catalog: null, specialist: null }; // catalog — услуги, поля и статусы из /api/catalog
 
@@ -31,6 +31,7 @@ export async function refreshMe() {
   $('specialists-tab').classList.toggle('hidden', !staff);
   state.specialist = (await api('GET', '/api/specialist/me')).specialist;
   $('specialist-tab').classList.toggle('hidden', !state.specialist);
+  $('money-tab').classList.toggle('hidden', !staff && !state.specialist);
   const cnt = $('invites-count');
   cnt.textContent = String(me.pending_invites);
   cnt.classList.toggle('hidden', !me.pending_invites);

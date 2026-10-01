@@ -1,7 +1,7 @@
 // Работа по делу (задача 1.5): результат, проверка по правилам с кругами, замечания исполнителю, переписка.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, login, setPlatformRole, makeSpecialist } from '../helpers.mjs';
+import { startApp, login, setPlatformRole, makeSpecialist, ensurePrice } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 
 let S, owner, dispatcher, spec;
@@ -34,6 +34,7 @@ async function inWork(service = 'realty') {
   const r = await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: READY.deadline, fields });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal((await step(owner, o, 'matching')).status, 200);
+  await ensurePrice(S.sql, o.id);
   assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: spec.user.id, from: 'matching' })).status, 200);
   assert.equal((await step(spec, o, 'in_work')).status, 200);
   return o;
@@ -81,7 +82,7 @@ test('проверка по кругам: замечание не пускает
   assert.equal((await step(dispatcher, o, 'done')).status, 200);
   const [{ n }] = await S.sql`select count(*)::int as n from result_checks where order_id = ${o.id}`;
   assert.equal(n, r.summary.total * 2, 'отметки обоих кругов сохранены');
-  const docs = (await owner.req('GET', `/api/orders/${o.id}/documents`)).body.documents.filter((d) => d.kind === 'result');
+  const docs = (await dispatcher.req('GET', `/api/orders/${o.id}/documents`)).body.documents.filter((d) => d.kind === 'result');
   assert.deepEqual(docs.map((d) => d.filename), ['отчёт.pdf', 'отчёт-исправленный.pdf']);
 });
 
@@ -104,6 +105,7 @@ test('отказ после переписки: прежний исполнит�
   const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty' })).body.order;
   await owner.req('PATCH', `/api/orders/${o.id}`, READY);
   await step(owner, o, 'matching');
+  await ensurePrice(S.sql, o.id);
   await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: spec.user.id, from: 'matching' });
   assert.equal((await spec.req('POST', `/api/orders/${o.id}/messages`, { body: 'Какой этаж?' })).status, 201);
   assert.equal((await step(spec, o, 'matching', 'Не успеваю к сроку')).status, 200);

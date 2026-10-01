@@ -5,6 +5,7 @@
 //   auth: 'user' + access: { platform: 'admin' | 'staff' | 'dispatcher' } — только администратор / служебный (диспетчер или
 //                                  администратор) / диспетчер платформы (остальным «не найдено»).
 // Операция без объявления не запускается вовсе (в наследии было наоборот — Б-2, Б-3).
+// csrf: false — только у открытой операции, которую зовёт внешний сервис (уведомление ЮKassa) и которая содержимому не верит.
 import express from 'express';
 import { HttpError, parseCookies } from './core.mjs';
 import { authorize, authorizePlatform, LEVEL, RESOURCES } from '../access/policy.mjs';
@@ -18,9 +19,12 @@ export function validateOp(op) {
   if (op.auth === 'public') {
     if (!op.publicReason) throw new Error(`${where}: открытая операция без объяснения`);
     if (op.access) throw new Error(`${where}: открытая операция с проверкой доступа — противоречие`);
+    if (op.csrf !== undefined && op.csrf !== false) throw new Error(`${where}: csrf — только false`);
     return;
   }
   if (op.auth !== 'user') throw new Error(`${where}: auth должен быть 'public' или 'user'`);
+  // Без признака нашей страницы можно звать только открытые операции (уведомления внешних сервисов).
+  if (op.csrf !== undefined) throw new Error(`${where}: отключить защиту от подделки запроса можно только у открытой операции`);
   if (op.access === 'self') return;
   const a = op.access;
   if (a?.platform !== undefined) {
@@ -45,7 +49,7 @@ export function mountOps(app, ops, deps) {
     app[op.method.toLowerCase()](op.path, ...parsers, async (req, res, next) => {
       try {
         // Защита от подделки запроса с чужого сайта: изменяющие запросы — только из наших страниц.
-        if (op.method !== 'GET' && req.get('x-delo-request') !== '1') throw new HttpError(403, 'csrf', 'Запрос отклонён');
+        if (op.method !== 'GET' && op.csrf !== false && req.get('x-delo-request') !== '1') throw new HttpError(403, 'csrf', 'Запрос отклонён');
         const ctx = { ...deps, req, res, params: req.params, query: req.query, body: req.body, op };
         if (op.rateLimit) op.rateLimit(req.ip);
         if (op.auth === 'user') {

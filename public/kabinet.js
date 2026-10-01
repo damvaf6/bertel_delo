@@ -1,11 +1,12 @@
 // Кабинет: разделы «Заявки», «Организации», «Профиль», «Управление» (только администратору). Заявка — order.js.
-// Разделы переключаются адресом после «#»: #order=…, #orgs, #org=…, #profile, #admin.
+// Разделы переключаются адресом после «#»: #order=…, #orgs, #org=…, #profile, #admin, #money (деньги — служебным и специалистам).
 import { api, el, say, formatPhone } from '/common.js';
 import { state, show, refreshMe } from '/shell.js';
 import { openOrder, serviceOptions, dayRu } from '/order.js';
 import { showOrgs, showOrg } from '/orgs.js';
 import { showAdmin } from '/admin.js';
 import { showSpecialist, showSpecialists } from '/match.js';
+import { showMoney } from '/money.js';
 
 const $ = (id) => document.getElementById(id);
 const dateRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
@@ -33,6 +34,7 @@ async function route() {
   if (h === '#specialist') return showSpecialist();
   if (h === '#specialists' && ['dispatcher', 'admin'].includes(state.me.user.platform_role)) return showSpecialists();
   if (h === '#admin' && state.me.user.platform_role === 'admin') return showAdmin();
+  if (h === '#money') return showMoney();
   show('list-view', 'orders');
   await loadOrders();
 }

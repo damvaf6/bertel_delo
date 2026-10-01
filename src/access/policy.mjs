@@ -16,6 +16,8 @@
 // Результат работы (документ вида «результат», задача 1.5): исполнитель загружает и убирает свой, пока дело в работе;
 //               диспетчер и администратор читают всегда; заказчик — только после проверки (статусы «готово», «закрыто»).
 // Переписка:    читает каждый, кто видит заявку; пишет тот, у кого есть сторона (заказчик, исполнитель, диспетчер).
+// Деньги (1.6): цену назначает диспетчер; платит сторона заказчика; заказчик видит цену, оплату и акт; исполнитель —
+//               своё вознаграждение, выплату и отчёт агента; служебные — всё. Результат заказчику — после проверки и оплаты.
 // Проверка результата: отметки ставит диспетчер; подробно видят диспетчер, администратор и исполнитель,
 //               заказчик — только итог.
 // Статусы заявки: сторона «заказчик» — у кого write или manage; сторона «диспетчер» — диспетчер платформы
@@ -73,13 +75,23 @@ export function orderSides(actor, order) {
   return sides;
 }
 
-// Когда заказчик видит результат работы: после проверки.
+// Когда заказчик видит результат работы: после проверки и оплаты (задача 1.6).
 export const RESULT_OPEN = ['done', 'closed'];
 
 export function seesResults(actor, order) {
   if (order.executor_user_id && order.executor_user_id === actor?.id) return true;
   if (isStaff(actor)) return true;
-  return RESULT_OPEN.includes(order.status) && orderLevel(actor, order) >= LEVEL.read;
+  return RESULT_OPEN.includes(order.status) && !!order.paid_at && orderLevel(actor, order) >= LEVEL.read;
+}
+
+// Какие деньги по заявке видит вошедший: заказчика (цена, оплата, акт), исполнителя (вознаграждение, выплата, отчёт агента).
+export function moneyView(actor, order) {
+  const staff = isStaff(actor);
+  return {
+    staff,
+    customer: staff || orderLevel(actor, order) >= LEVEL.write,
+    executor: staff || (!!order.executor_user_id && order.executor_user_id === actor?.id),
+  };
 }
 
 export function documentLevel(actor, doc, order) {

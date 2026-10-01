@@ -118,3 +118,9 @@ label.row { color: var(--text); font-size: 16px; margin: 0 0 8px; }
 .chat .who { font-size: 13px; color: var(--muted); }
 .chat .body { white-space: pre-line; overflow-wrap: anywhere; margin-top: 2px; }
 .chat li.mine .who { color: var(--accent); }
+/* Деньги: оплата, выплаты, закрывающие документы. */
+.money-sum { font-weight: 700; font-size: 18px; }
+.closing-doc { margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: #fbfbfc; }
+.closing-doc p { margin: 0 0 6px; overflow-wrap: anywhere; }
+.closing-doc .doc-title { font-weight: 700; }
+.closing-doc .doc-test { color: var(--danger); font-size: 14px; }

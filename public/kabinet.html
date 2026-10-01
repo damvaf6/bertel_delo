@@ -18,6 +18,7 @@
     <a href="#orgs" data-tab="orgs">Организации<span class="count hidden" id="invites-count"></span></a>
     <a href="#specialist" data-tab="specialist" class="hidden" id="specialist-tab">Специалист</a>
     <a href="#specialists" data-tab="specialists" class="hidden" id="specialists-tab">Специалисты</a>
+    <a href="#money" data-tab="money" class="hidden" id="money-tab">Деньги</a>
     <a href="#profile" data-tab="profile">Профиль</a>
     <a href="#admin" data-tab="admin" class="hidden" id="admin-tab">Управление</a>
   </nav>
@@ -154,6 +155,24 @@
         <ul class="list" id="review-checks"></ul>
         <p class="msg" id="review-msg" role="status" aria-live="polite"></p>
       </div>
+      <div class="card hidden" id="money-box">
+        <h2>Оплата</h2>
+        <dl class="facts" id="money-facts"></dl>
+        <form class="hidden" id="price-form" novalidate>
+          <div class="field">
+            <label for="price">Цена, рублей</label>
+            <input id="price" type="text" inputmode="decimal" maxlength="14" placeholder="Например: 15 000">
+          </div>
+          <p class="muted">Исполнителю — 80%, платформе — 20%. Цену можно менять, пока дело не предложено исполнителю.</p>
+          <button type="submit" class="secondary" id="price-save">Назначить цену</button>
+        </form>
+        <button class="wide hidden" id="pay">Оплатить</button>
+        <button class="secondary hidden" id="payout-retry">Повторить выплату</button>
+        <h2 class="gap hidden" id="closing-title">Закрывающие документы</h2>
+        <ul class="list" id="closing"></ul>
+        <div class="closing-doc hidden" id="closing-doc" aria-live="polite"></div>
+        <p class="msg" id="money-msg" role="status" aria-live="polite"></p>
+      </div>
       <div class="card" id="chat-box">
         <h2>Переписка</h2>
         <p class="muted">Видят заказчик, исполнитель и диспетчер платформы.</p>
@@ -250,6 +269,23 @@
       <div class="card">
         <button class="danger" id="leave-org">Выйти из организации</button>
         <p class="msg" id="leave-msg" role="status" aria-live="polite"></p>
+      </div>
+    </section>
+
+    <section id="money-view" class="hidden">
+      <div class="card">
+        <h1 id="money-title">Деньги</h1>
+        <dl class="facts" id="money-totals"></dl>
+      </div>
+      <div class="card" id="money-payments-box">
+        <h2>Оплаты заказчиков</h2>
+        <ul class="list" id="money-payments"></ul>
+        <p class="muted hidden" id="money-payments-empty">Оплат пока нет.</p>
+      </div>
+      <div class="card">
+        <h2 id="money-payouts-title">Выплаты исполнителям</h2>
+        <ul class="list" id="money-payouts"></ul>
+        <p class="muted hidden" id="money-payouts-empty">Выплат пока нет.</p>
       </div>
     </section>
 

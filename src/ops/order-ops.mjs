@@ -69,6 +69,7 @@ export function orderOps() {
       status: order.status,
       status_name: STATUS_NAME[order.status],
       deadline: order.deadline,
+      paid: !!order.paid_at,
       overdue: isOverdue(order, today),
       basis_kind: order.basis_kind,
       basis_name: BASIS_KINDS[order.basis_kind]?.name ?? null,
@@ -165,7 +166,8 @@ export function orderOps() {
           executor: exec ? { user_id: order.executor_user_id, name: exec.full_name, is_me: order.executor_user_id === actor.id } : null,
           access: LEVEL_NAME[level],
           editable: order.status === 'new' && level >= LEVEL.write,
-          actions: availableActions(order.status, orderSides(actor, order)),
+          // Закрыть неоплаченную заявку нельзя — такой кнопки и не показываем (1.6).
+          actions: availableActions(order.status, orderSides(actor, order)).filter((a) => a.to !== 'closed' || !!order.paid_at),
           history: history.map((h) => ({ ...h, from_name: STATUS_NAME[h.from_status] ?? null, to_name: STATUS_NAME[h.to_status] })),
         };
       },
@@ -247,6 +249,8 @@ export function orderOps() {
             const left = checks.filter((c) => !c.verdict);
             if (left.length) throw new HttpError(409, 'review_incomplete', `Не все правила проверены: ${left.map((c) => c.title).join('; ')}`);
           }
+          // Закрыть можно только оплаченную заявку (1.6): оплата — после проверки, затем выдача и выплата исполнителю.
+          if (to === 'closed' && !cur.paid_at) throw new HttpError(409, 'not_paid', 'Заявка ещё не оплачена');
           // Предложение исполнителю закрывается: принято, отказ исполнителя, либо снято (диспетчером или отменой).
           if (cur.executor_user_id && (to === 'in_work' || to === 'matching' || to === 'cancelled') && cur.status === 'awaiting_executor') {
             const outcome = to === 'in_work' ? 'accepted' : t.by === 'executor' ? 'declined' : 'withdrawn';

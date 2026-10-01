@@ -121,6 +121,11 @@ export async function setPlatformRole(sql, userId, role) {
   await sql`update users set platform_role = ${role} where id = ${userId}`;
 }
 
+// Цена заявки (без неё дело не предложить исполнителю, задача 1.6) — напрямую в базе, если ещё не назначена.
+export async function ensurePrice(sql, orderId, kop = 1_500_000) {
+  await sql`update orders set price_kop = coalesce(price_kop, ${kop}) where id = ${orderId}`;
+}
+
 // Сделать человека специалистом с допусками (напрямую в базе — для проверок, не через кабинет администратора).
 export async function makeSpecialist(sql, userId, { permits = [['expertise', 'realty']], regions = ['moscow', 'mo'], capacity = 5, validUntil = null } = {}) {
   await sql`insert into specialists (user_id, regions, capacity) values (${userId}, ${regions}, ${capacity})`;

@@ -2,8 +2,10 @@
 // Настоящие поставщики (СМС/звонок, ЮKassa, YandexGPT/GigaChat, почта) подключаются после облака и договоров.
 //   sms.sendCode({ phone, code })                                  → { id }
 //   call.sendCode({ phone, code })  — звонок, робот называет код   → { id }
-//   payments.createPayment({ orderId, amountKop, description })    → { id, confirmationUrl }
-//   payments.getPayment({ id })                                    → { id, status }
+//   payments.createPayment({ idempotenceKey, orderId, amountKop, description, returnUrl, receipt })
+//                                                                  → { id, status, confirmationUrl }
+//   payments.getPayment({ id })                                    → { id, status: pending | succeeded | canceled }
+//   payments.createPayout({ idempotenceKey, executorId, amountKop, description }) → { id, status: succeeded | failed }
 //   ai.complete({ purpose, messages })                             → { text, model }
 //   mail.send({ to, subject, text })                               → { id }
 import crypto from 'node:crypto';
@@ -19,10 +21,7 @@ const FAKES = {
   call: () => makeFake('call', {
     sendCode: async () => ({ id: id('call') }),
   }),
-  payments: () => makeFake('payments', {
-    createPayment: async ({ orderId }) => { const pid = id('pay'); return { id: pid, confirmationUrl: `/fake-pay/${pid}?order=${orderId}` }; },
-    getPayment: async ({ id: pid }) => ({ id: pid, status: 'succeeded' }),
-  }),
+  payments: () => fakePayments(),
   ai: () => makeFake('ai', {
     complete: async ({ purpose }) => ({ text: `[поддельный ответ ИИ: ${purpose}]`, model: 'fake' }),
   }),
@@ -30,6 +29,32 @@ const FAKES = {
     send: async () => ({ id: id('mail') }),
   }),
 };
+
+// Поддельная ЮKassa: «страница оплаты» сразу возвращает на returnUrl; при первой проверке незавершённый платёж
+// получает исход nextOutcome (по умолчанию «оплачен»). Автотесты могут задать «отменён» и неудачу выплаты (payoutOutcome).
+function fakePayments() {
+  const store = new Map();
+  const fake = makeFake('payments', {
+    createPayment: async ({ returnUrl }) => {
+      const pid = id('pay');
+      store.set(pid, 'pending');
+      return { id: pid, status: 'pending', confirmationUrl: returnUrl };
+    },
+    getPayment: async ({ id: pid }) => {
+      if (!store.has(pid)) return { id: pid, status: 'canceled' };
+      if (store.get(pid) === 'pending') store.set(pid, fake.nextOutcome);
+      return { id: pid, status: store.get(pid) };
+    },
+    createPayout: async () => (fake.payoutOutcome === 'failed'
+      ? { id: id('payout'), status: 'failed', failure: 'тестовый отказ выплаты' }
+      : { id: id('payout'), status: 'succeeded' }),
+  });
+  fake.nextOutcome = 'succeeded';
+  fake.payoutOutcome = 'succeeded';
+  const reset = fake.reset;
+  fake.reset = () => { reset(); store.clear(); fake.nextOutcome = 'succeeded'; fake.payoutOutcome = 'succeeded'; };
+  return fake;
+}
 
 export function createProviders(cfg) {
   const out = {};
