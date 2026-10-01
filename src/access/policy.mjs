@@ -13,6 +13,11 @@
 //               manage над приглашениями своей организации. Это два разных предмета: руководитель не может
 //               принять чужое приглашение, адресат не может его отозвать.
 // Исполнитель:  видит заявку, пока она числится за ним (предложена, в работе, сдана); отказ или отмена — доступ исчезает.
+// Результат работы (документ вида «результат», задача 1.5): исполнитель загружает и убирает свой, пока дело в работе;
+//               диспетчер и администратор читают всегда; заказчик — только после проверки (статусы «готово», «закрыто»).
+// Переписка:    читает каждый, кто видит заявку; пишет тот, у кого есть сторона (заказчик, исполнитель, диспетчер).
+// Проверка результата: отметки ставит диспетчер; подробно видят диспетчер, администратор и исполнитель,
+//               заказчик — только итог.
 // Статусы заявки: сторона «заказчик» — у кого write или manage; сторона «диспетчер» — диспетчер платформы
 //               (администратор только читает). Какие шаги доступны стороне — src/orders/workflow.mjs.
 // Остальные не видят вовсе — ответ «не найдено», чтобы не раскрывать существование.
@@ -68,6 +73,33 @@ export function orderSides(actor, order) {
   return sides;
 }
 
+// Когда заказчик видит результат работы: после проверки.
+export const RESULT_OPEN = ['done', 'closed'];
+
+export function seesResults(actor, order) {
+  if (order.executor_user_id && order.executor_user_id === actor?.id) return true;
+  if (isStaff(actor)) return true;
+  return RESULT_OPEN.includes(order.status) && orderLevel(actor, order) >= LEVEL.read;
+}
+
+export function documentLevel(actor, doc, order) {
+  const base = orderLevel(actor, order);
+  if (doc.kind !== 'result') return base;
+  // Свой результат исполнитель может убрать (пока не сдал — проверка в обработчике); чужой результат никто не меняет.
+  if (order.executor_user_id === actor?.id && doc.uploaded_by === actor.id) return LEVEL.write;
+  if (base === LEVEL.none || !seesResults(actor, order)) return LEVEL.none;
+  return LEVEL.read;
+}
+
+// От чьего имени вошедший пишет в переписке по заявке (null — только читает, например администратор).
+export function messageSide(actor, order) {
+  const sides = orderSides(actor, order);
+  return ['customer', 'executor', 'dispatcher'].find((s) => sides.includes(s)) ?? null;
+}
+
+// Кто видит отметки проверки результата по каждому правилу (остальные — только итог).
+export const seesReviewDetails = (actor, order) => isStaff(actor) || (!!order.executor_user_id && order.executor_user_id === actor?.id);
+
 export function orgLevel(actor, org) {
   if (!actor || !org) return LEVEL.none;
   const r = roleIn(actor, org.id);
@@ -108,7 +140,7 @@ export const RESOURCES = {
       const order = await sql.one`select * from orders where id = ${doc.order_id}`;
       return order && { subject: doc, order };
     },
-    level: (actor, found) => orderLevel(actor, found.order),
+    level: (actor, found) => documentLevel(actor, found.subject, found.order),
   },
   org: {
     async load(sql, id) {

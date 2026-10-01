@@ -106,3 +106,15 @@ label.row { color: var(--text); font-size: 16px; margin: 0 0 8px; }
 .features { margin: 6px 0 8px; padding: 0; list-style: none; font-size: 14px; color: var(--muted); }
 .features li { padding: 1px 0; border: none; }
 .list .features li { border: none; padding: 1px 0; }
+/* Работа по делу: проверка результата, переписка. */
+.verdict { font-weight: 600; font-size: 14px; }
+.verdict.ok { color: var(--ok); }
+.verdict.issue { color: var(--danger); }
+.verdict.none { color: var(--muted); font-weight: 400; }
+.check-note { margin: 4px 0 0; font-size: 14px; white-space: pre-line; overflow-wrap: anywhere; }
+.check-form { margin-top: 8px; }
+.check-form input[type=text] { margin-bottom: 8px; }
+.chat li { padding: 10px 0; }
+.chat .who { font-size: 13px; color: var(--muted); }
+.chat .body { white-space: pre-line; overflow-wrap: anywhere; margin-top: 2px; }
+.chat li.mine .who { color: var(--accent); }

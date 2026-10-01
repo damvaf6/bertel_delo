@@ -1,12 +1,15 @@
-// Страница заявки: данные (заполнение, пока заявка «новая»), ход заявки и шаги, кто ведёт дело, документы.
+// Страница заявки: данные (заполнение, пока заявка «новая»), ход заявки и шаги, кто ведёт дело, документы и результат;
+// проверка результата и переписка — work.js.
 // Поля рисуются по описанию модуля из /api/catalog — у каждой профессии свои, код страницы один.
 import { api, el, say, formatPhone, formatSize, ROLE_RU } from '/common.js';
 import { state, show, notFoundView } from '/shell.js';
 import { loadMatch } from '/match.js';
+import { loadReview, loadChat } from '/work.js';
 
 const $ = (id) => document.getElementById(id);
 const MAX_FILE = 5 * 1024 * 1024;
 const FINAL = ['closed', 'cancelled'];
+const DOC_KIND_RU = { basis: 'Основание', result: 'Результат работы' };
 let current = null; // { order, access, editable, actions, history }
 
 const dateTimeRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
@@ -38,7 +41,7 @@ export async function openOrder(id) {
   $('reason').value = '';
   render();
   show('order-view', 'orders');
-  await Promise.all([loadDocs(), loadTransfer(), loadMatch(current, () => openOrder(id))]);
+  await Promise.all([loadDocs(), loadTransfer(), loadMatch(current, () => openOrder(id)), loadReview(current), loadChat(current)]);
 }
 
 function render() {
@@ -56,6 +59,7 @@ function render() {
   if (current.editable) renderForm(); else renderFacts();
   renderProgress();
   $('upload-box').classList.toggle('hidden', current.access === 'read' || FINAL.includes(order.status));
+  $('result-upload-box').classList.toggle('hidden', !(current.executor?.is_me && order.status === 'in_work'));
 }
 
 function renderOrgLine() {
@@ -260,18 +264,21 @@ $('transfer-box').addEventListener('submit', async (e) => {
 async function loadDocs() {
   const { order, access } = current;
   const canChange = access !== 'read' && !FINAL.includes(order.status);
-  const { documents } = await api('GET', `/api/orders/${order.id}/documents`);
+  const { documents, results_hidden: resultsHidden } = await api('GET', `/api/orders/${order.id}/documents`);
+  const mineResults = current.executor?.is_me && order.status === 'in_work';
   $('docs').replaceChildren(...documents.map((d) => {
-    const removable = canChange && !(d.kind === 'basis' && order.status !== 'new');
+    // Результат убирает только исполнитель, пока не сдал; документы заказчика — заказчик (основание — до отправки).
+    const removable = d.kind === 'result' ? mineResults : canChange && !(d.kind === 'basis' && order.status !== 'new');
     return el('li', { class: 'doc' },
       el('div', {},
         el('div', { class: 'name', text: d.filename }),
-        el('div', { class: 'muted', text: [d.kind === 'basis' ? 'Основание' : null, formatSize(d.size_bytes)].filter(Boolean).join(' · ') })),
+        el('div', { class: 'muted', text: [DOC_KIND_RU[d.kind], formatSize(d.size_bytes)].filter(Boolean).join(' · ') })),
       el('div', { class: 'row' },
         el('button', { class: 'secondary', 'data-action': 'download', onclick: () => download(d) }, 'Скачать'),
         ...(removable ? [el('button', { class: 'danger', 'data-action': 'delete', onclick: () => remove(d) }, 'Удалить')] : [])));
   }));
   $('docs-empty').classList.toggle('hidden', documents.length > 0);
+  $('results-later').classList.toggle('hidden', !(resultsHidden && ['in_work', 'review'].includes(order.status)));
   const basis = documents.filter((d) => d.kind === 'basis');
   $('basis-file-state').textContent = basis.length ? `Приложено: ${basis.map((d) => d.filename).join(', ')}` : 'Файл определения ещё не приложен';
 }
@@ -297,7 +304,8 @@ async function uploadFile(file, kind, msg) {
   if (file.size > MAX_FILE) return say(msg, 'Файл больше 5 МБ');
   say(msg, 'Загружаем…', 'ok');
   try {
-    await api('POST', `/api/orders/${current.order.id}/documents`, file, {
+    // Результат работы — отдельной операцией исполнителя; остальные документы — заказчика.
+    await api('POST', `/api/orders/${current.order.id}/${kind === 'result' ? 'results' : 'documents'}`, file, {
       'content-type': file.type || 'application/octet-stream',
       'x-file-name': encodeURIComponent(file.name),
       'x-doc-kind': kind,
@@ -311,6 +319,12 @@ $('file').addEventListener('change', (e) => {
   const file = e.target.files[0];
   e.target.value = '';
   uploadFile(file, 'other', $('doc-msg'));
+});
+
+$('result-file').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  uploadFile(file, 'result', $('doc-msg'));
 });
 
 $('basis-file').addEventListener('change', (e) => {

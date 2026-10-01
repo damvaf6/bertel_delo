@@ -432,21 +432,61 @@ test('ход заявки: подбор диспетчером, принятие
   await sp.getByRole('button', { name: 'Принять дело' }).click();
   await expect(sp.locator('#order-status')).toHaveText('В работе');
   await expect(sp.locator('#order-org-line')).toContainText('Исполнитель: Вы');
+  // Без файла результата сдать нельзя; исполнитель прикладывает результат и пишет в переписку (задача 1.5).
+  await sp.getByRole('button', { name: 'Сдать на проверку' }).click();
+  await expect(sp.locator('#status-msg')).toHaveText('Сначала добавьте файл результата');
+  await sp.locator('#result-file').setInputFiles({ name: 'тестовый-отчёт.pdf', mimeType: 'application/pdf', buffer: Buffer.from('тестовый отчёт об оценке') });
+  await expect(sp.locator('#doc-msg')).toHaveText('Файл добавлен');
+  await expect(sp.locator('#docs li').filter({ hasText: 'тестовый-отчёт.pdf' })).toContainText('Результат работы');
+  await sp.getByLabel('Сообщение').fill('Осмотр проведён, отчёт приложен.');
+  await sp.getByRole('button', { name: 'Отправить сообщение' }).click();
+  await expect(sp.locator('#messages li')).toHaveCount(1);
+  await expect(sp.locator('#messages li').first()).toContainText('Вы');
+  await shot(sp, '32-specialist-rezultat');
   await sp.getByRole('button', { name: 'Сдать на проверку' }).click();
   await expect(sp.locator('#order-status')).toHaveText('Проверка результата');
+  await expect(sp.locator('#result-upload-box')).toBeHidden();
   await shot(sp, '28-specialist-sdal');
 
+  // Диспетчер проверяет по правилам: замечание по одному правилу → причина возврата собирается из замечаний.
   await dp.reload();
-  await dp.getByRole('button', { name: 'Вернуть на доработку' }).click();
-  await expect(dp.getByText('Укажите причину')).toBeVisible();
-  await dp.getByLabel('Причина (для возврата или отмены)').fill('Нет фото повреждений');
+  await expect(dp.locator('#review-box')).toBeVisible();
+  await expect(dp.locator('#messages li').first()).toContainText('Исполнитель');
+  const calc = dp.locator('#review-checks li').filter({ hasText: 'Расчёт' });
+  await calc.getByRole('button', { name: 'Замечание' }).click();
+  await expect(dp.locator('#review-msg')).toHaveText('Опишите замечание');
+  await dp.locator('#review-checks li').filter({ hasText: 'Расчёт' }).getByRole('textbox').fill('Нет фото повреждений');
+  await dp.locator('#review-checks li').filter({ hasText: 'Расчёт' }).getByRole('button', { name: 'Замечание' }).click();
+  await expect(dp.locator('#review-checks li').filter({ hasText: 'Расчёт' }).locator('.verdict')).toHaveText('Замечание');
+  await dp.getByRole('button', { name: 'Проверено, готово' }).click();
+  await expect(dp.locator('#status-msg')).toContainText('Есть замечания');
+  await expect(dp.getByLabel('Причина (для возврата или отмены)')).toHaveValue(/Нет фото повреждений/);
+  await shot(dp, '33-dispetcher-proverka');
   await dp.getByRole('button', { name: 'Вернуть на доработку' }).click();
   await expect(dp.locator('#order-status')).toHaveText('В работе');
+
+  // Исполнитель видит замечание, прикладывает исправленный файл и сдаёт снова.
   await sp.reload();
+  await expect(sp.locator('#review-checks li').filter({ hasText: 'Расчёт' })).toContainText('Нет фото повреждений');
+  await expect(sp.locator('#review-checks button')).toHaveCount(0);
+  await sp.locator('#result-file').setInputFiles({ name: 'отчёт-с-фото.pdf', mimeType: 'application/pdf', buffer: Buffer.from('исправленный тестовый отчёт') });
+  await expect(sp.locator('#docs li').filter({ hasText: 'отчёт-с-фото.pdf' })).toBeVisible();
+  await shot(sp, '34-specialist-zamechaniya');
   await sp.getByRole('button', { name: 'Сдать на проверку' }).click();
   await expect(sp.locator('#order-status')).toHaveText('Проверка результата');
   await sctx.close();
+
+  // Новый круг: все правила в порядке → «Проверено, готово».
   await dp.reload();
+  const rules = dp.locator('#review-checks li');
+  await expect(dp.locator('#review-summary')).toContainText('Круг проверки 2');
+  const n = await rules.count();
+  expect(n).toBeGreaterThan(3);
+  for (let i = 0; i < n; i += 1) {
+    await rules.nth(i).getByRole('button', { name: 'В порядке' }).click();
+    await expect(rules.nth(i).locator('.verdict')).toHaveText('В порядке');
+  }
+  await expect(dp.locator('#review-summary')).toContainText('все правила');
   await shot(dp, '21-dispetcher-hod');
   await dp.getByRole('button', { name: 'Проверено, готово' }).click();
   await expect(dp.locator('#order-status')).toHaveText('Готово');
@@ -454,14 +494,24 @@ test('ход заявки: подбор диспетчером, принятие
 
   await page.goto(`/kabinet#order=${id}`);
   await expect(page.locator('#order-status')).toHaveText('Готово');
-  await expect(page.locator('#history')).toContainText('Причина: Нет фото повреждений');
+  await expect(page.locator('#history')).toContainText('Нет фото повреждений');
   await expect(page.locator('#history li')).toHaveCount(10);
   await expect(page.getByRole('button', { name: 'Отменить заявку' })).toHaveCount(0);
+  // Заказчик после проверки видит оба файла результата и итог проверки; удалить их не может; отвечает в переписке.
+  await expect(page.locator('#docs li').filter({ hasText: 'Результат работы' })).toHaveCount(2);
+  await expect(page.locator('#docs li').filter({ hasText: 'Результат работы' }).getByRole('button', { name: 'Удалить' })).toHaveCount(0);
+  await expect(page.locator('#review-summary')).toContainText('все правила');
+  await expect(page.locator('#review-checks li')).toHaveCount(0);
+  await expect(page.locator('#messages li').first()).toContainText('Исполнитель');
+  await page.getByLabel('Сообщение').fill('Спасибо, результат получен.');
+  await page.getByRole('button', { name: 'Отправить сообщение' }).click();
+  await expect(page.locator('#messages li')).toHaveCount(2);
   await shot(page, '22-zakazchik-gotovo');
   await page.getByRole('button', { name: 'Принять и закрыть' }).click();
   await expect(page.locator('#order-status')).toHaveText('Закрыта');
   await expect(page.locator('#steps li.done')).toHaveCount(6);
   await expect(page.locator('#upload-box')).toBeHidden();
+  await expect(page.locator('#message-form')).toBeHidden();
 });
 
 test('отмена заказчиком до начала работ; просроченный срок виден в списке', async ({ page }) => {
