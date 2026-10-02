@@ -6,6 +6,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, login, client, setPlatformRole, makeSpecialist } from '../helpers.mjs';
 import { cancelSplit, splitAmount } from '../../src/money/money.mjs';
+import { createProviders } from '../../src/providers/index.mjs';
 
 let S, owner, dispatcher, spec, spec2;
 const READY = { deadline: new Date(Date.now() + 10 * 86400_000).toISOString().slice(0, 10), fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 1' } };
@@ -118,6 +119,17 @@ test('отменённый платёж: можно заплатить зано�
   assert.equal(p2.status, 201);
   assert.notEqual(p2.body.payment.id, p1.id);
   assert.equal((await owner.req('POST', `/api/orders/${o.id}/payments/refresh`)).body.money.paid, true);
+});
+
+test('поддельная оплата: платёж, созданный одной копией ядра, проверяется другой (площадка — несколько копий)', async () => {
+  const a = createProviders(S.cfg).payments, b = createProviders(S.cfg).payments;
+  const p = await a.createPayment({ idempotenceKey: 'k', orderId: 'o', amountKop: 100, description: 'd', returnUrl: 'http://x/', receipt: { items: [] } });
+  assert.deepEqual(await b.getPayment({ id: p.id }), { id: p.id, status: 'succeeded' });
+  assert.equal((await b.getPayment({ id: p.id })).status, 'succeeded');
+  b.nextOutcome = 'canceled';
+  const q = await a.createPayment({ idempotenceKey: 'k2', orderId: 'o', amountKop: 100, description: 'd', returnUrl: 'http://x/', receipt: { items: [] } });
+  assert.equal((await b.getPayment({ id: q.id })).status, 'canceled');
+  for (const pid of ['pay_x', 'yk_123', '']) assert.equal((await b.getPayment({ id: pid })).status, 'canceled', pid);
 });
 
 test('поставщик оплаты недоступен: понятная ошибка, платёж не висит, можно повторить', async () => {
