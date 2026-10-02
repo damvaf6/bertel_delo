@@ -809,6 +809,30 @@ test('черновик заключения (2.2): видят исполните
   }
 });
 
+test('дистанционный осмотр (2.3): в деле видят те, кто видит заявку; ссылку выдаёт и отзывает только исполнитель в работе', async () => {
+  for (const id of ['inspection.get', 'inspection.issue', 'inspection.revoke']) cover(id);
+  for (const k of ['owner', 'dispatcher', 'admin']) {
+    const r = await U[k].req('GET', `/api/orders/${ownOrder.id}/inspection`);
+    assert.equal(r.status, 200, k);
+    assert.equal(r.body.can_issue, false, k);
+  }
+  for (const k of ['memberA', 'headA', 'seniorA']) assert.equal((await U[k].req('GET', `/api/orders/${orgOrder.id}/inspection`)).status, 200, k);
+  for (const k of ['stranger', 'headB', 'spec']) assert.equal((await U[k].req('GET', `/api/orders/${ownOrder.id}/inspection`)).status, 404, k);
+  assert.equal((await U.memberA2.req('GET', `/api/orders/${orgOrder.id}/inspection`)).status, 404, 'коллега-сотрудник');
+  for (const [method, path, body] of [['POST', 'inspection', { days: 3 }], ['DELETE', 'inspection/1', undefined]]) {
+    for (const k of ['owner', 'dispatcher', 'admin']) assert.equal((await U[k].req(method, `/api/orders/${ownOrder.id}/${path}`, body)).status, 403, `${k} ${path}`);
+    for (const k of ['stranger', 'headB']) assert.equal((await U[k].req(method, `/api/orders/${ownOrder.id}/${path}`, body)).status, 404, `${k} ${path}`);
+  }
+  // Страница владельца без секрета или с выдуманным — «не найдено», даже со входом.
+  for (const token of [undefined, 'x', 'A'.repeat(43)]) {
+    const headers = token ? { 'x-inspect-token': token } : {};
+    assert.equal((await client(S).req('GET', '/api/inspect', undefined, { headers })).status, 404);
+    assert.equal((await U.admin.req('POST', '/api/inspect/finish', {}, { headers })).status, 404);
+    assert.equal((await client(S).req('POST', '/api/inspect/photos', Buffer.from([0xff, 0xd8, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0]), {
+      raw: true, headers: { ...headers, 'content-type': 'image/jpeg', 'x-step': 'facade' } })).status, 404);
+  }
+});
+
 test('почта для заявок (1.9): адрес — только свой; организация — только своя; заявка по письму видна как обычная', async () => {
   for (const id of ['mail.get', 'mail.code', 'mail.confirm', 'mail.org', 'mail.delete']) cover(id);
   const sentTo = (to) => S.providers.mail.calls.filter((c) => c.method === 'send' && c.args.to === to).at(-1);
@@ -854,7 +878,8 @@ test('мост CRM (1.10): только по подписи моста; испо
 });
 
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {
-  const PUBLIC = ['health', 'auth.code', 'auth.verify', 'files.memory', 'test.calls', 'test.script', 'test.reset', 'test.mail.inbound', 'stage.login', 'payments.notify'];
+  const PUBLIC = ['health', 'auth.code', 'auth.verify', 'files.memory', 'test.calls', 'test.script', 'test.reset', 'test.mail.inbound', 'stage.login', 'payments.notify',
+    'inspect.view', 'inspect.photo', 'inspect.finish'];
   const ops = S.app.locals.ops;
   const extraPublic = ops.filter((o) => o.auth === 'public' && !PUBLIC.includes(o.id)).map((o) => o.id);
   assert.deepEqual(extraPublic, [], `новые открытые операции: ${extraPublic.join(', ')}`);

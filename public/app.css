@@ -146,3 +146,10 @@ ul.plain li { margin: 4px 0; overflow-wrap: anywhere; }
 #mail-status { margin: 0 0 12px; }
 #mail-org-box, #mail-delete { margin-top: 16px; }
 a.btn { text-decoration: none; margin-top: 8px; }
+/* Дистанционный осмотр (2.3): шаги для владельца и фото по шагам у эксперта. */
+.steps { list-style: none; padding: 0; margin: 0; }
+.steps .step .btn { margin-top: 8px; }
+.badge.ok { background: #e3f3e8; color: var(--ok); }
+.photo-meta { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.photo-meta.warn { color: var(--danger); }
+.link-box { overflow-wrap: anywhere; font-family: ui-monospace, monospace; font-size: 13px; background: #eef2f8; padding: 8px; border-radius: 6px; }

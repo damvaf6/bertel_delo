@@ -30,7 +30,9 @@ export function securityHeaders(cfg) {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'no-referrer');
-    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    // Геометка нужна только странице дистанционного осмотра (2.3): там телефон по разрешению владельца сообщает место.
+    const inspect = req.path === '/osmotr' || req.path === '/osmotr.html';
+    res.setHeader('Permissions-Policy', `camera=(), microphone=(), geolocation=(${inspect ? 'self' : ''})`);
     res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
     if (cfg.live) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
     if (req.path.startsWith('/api/')) res.setHeader('Cache-Control', 'no-store');

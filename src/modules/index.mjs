@@ -4,7 +4,8 @@
 // Формат модуля:
 //   { id, name, basis: ['contract' | 'court', …], fields: [поле…], services: [{ id, name, fields: [поле…] }…],
 //     checks: [{ id, title, services?: [id услуги…] }…],
-//     draft?: [{ id, title, services?: [id услуги…] }…] }  — разделы черновика заключения от ИИ (задача 2.2)
+//     draft?: [{ id, title, services?: [id услуги…] }…],  — разделы черновика заключения от ИИ (задача 2.2)
+//     inspection?: [{ id, title, hint?, services?: [id услуги…], optional? }…] }  — шаги дистанционного осмотра (2.3)
 // Поле: { id, label, type: 'text' | 'longtext' | 'number' | 'select', required?, max?, min?, integer?,
 //         options?: [{ id, name }…] (для select), pattern?, hint?, upper? }
 //   Общие поля модуля идут в заявке перед полями услуги; id не должны совпадать.
@@ -74,7 +75,7 @@ function validateField(f, where) {
 }
 
 export function validateModule(m) {
-  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft'], 'модуль');
+  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection'], 'модуль');
   if (!ID_RE.test(m.id ?? '')) fail('модуль', `неверный id «${m.id}»`);
   const at = `модуль ${m.id}`;
   if (!nonEmpty(m.name)) fail(at, 'нет названия');
@@ -117,6 +118,20 @@ export function validateModule(m) {
       }
     }
   }
+  // Шаги дистанционного осмотра (2.3) — необязательно: без них ссылка владельцу для модуля не выдаётся.
+  if (m.inspection !== undefined) {
+    checkIds(m.inspection, `${at}, шаги осмотра`);
+    for (const st of m.inspection) {
+      const where = `${at}, шаг осмотра ${st.id}`;
+      onlyKeys(st, ['id', 'title', 'hint', 'services', 'optional'], where);
+      if (!nonEmpty(st.title) || st.title.length > 80) fail(where, 'нет названия или оно длиннее 80 знаков');
+      if (st.hint !== undefined && !nonEmpty(st.hint)) fail(where, 'пустая подсказка');
+      if (st.optional !== undefined && typeof st.optional !== 'boolean') fail(where, 'optional — да/нет');
+      if (st.services !== undefined && (!Array.isArray(st.services) || st.services.length === 0 || st.services.some((id) => !serviceIds.includes(id)))) {
+        fail(where, 'services — непустой список услуг этого модуля');
+      }
+    }
+  }
   return m;
 }
 
@@ -151,6 +166,13 @@ export function createRegistry(modules = DEFAULT_MODULES) {
       const m = modulesList.find((x) => x.id === moduleId);
       if (!m?.draft || !m.services.some((x) => x.id === serviceId)) return [];
       return m.draft.filter((d) => !d.services || d.services.includes(serviceId)).map((d) => ({ id: d.id, title: d.title }));
+    },
+    // Шаги дистанционного осмотра для услуги (2.3); пустой список — ссылка владельцу для услуги не выдаётся.
+    inspectionSteps(moduleId, serviceId) {
+      const m = modulesList.find((x) => x.id === moduleId);
+      if (!m?.inspection || !m.services.some((x) => x.id === serviceId)) return [];
+      return m.inspection.filter((st) => !st.services || st.services.includes(serviceId))
+        .map((st) => ({ id: st.id, title: st.title, hint: st.hint ?? null, optional: !!st.optional }));
     },
     catalog() {
       return modulesList.map((m) => ({
