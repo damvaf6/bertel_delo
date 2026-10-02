@@ -172,6 +172,21 @@
         </div>
         <p class="msg" id="doc-msg" role="status" aria-live="polite"></p>
       </div>
+      <div class="card hidden" id="draft-box">
+        <h2>Черновик заключения</h2>
+        <p class="muted" id="draft-state"></p>
+        <button type="button" class="secondary hidden" id="draft-ai">Подготовить черновик с помощью ИИ</button>
+        <div class="field hidden" id="draft-edit">
+          <label for="draft-text">Текст заключения</label>
+          <textarea id="draft-text" class="draft-text" maxlength="50000"></textarea>
+        </div>
+        <div class="hidden" id="draft-actions">
+          <button type="button" class="secondary" id="draft-save">Сохранить правку</button>
+          <label class="row gap"><input type="checkbox" id="draft-confirm"> Я проверил текст и отвечаю за него</label>
+          <button type="button" id="draft-attach">Приложить как файл результата</button>
+        </div>
+        <p class="msg" id="draft-msg" role="status" aria-live="polite"></p>
+      </div>
       <div class="card hidden" id="review-box">
         <h2>Проверка результата</h2>
         <p class="muted" id="review-summary"></p>

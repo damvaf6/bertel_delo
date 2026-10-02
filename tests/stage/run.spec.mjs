@@ -307,6 +307,17 @@ test('общий прогон: сквозной путь — администр�
   await expect(sp.locator('#money-facts')).toContainText(/Ваше вознаграждение \(80% цены\)\s*14\s400 ₽/);
   await sp.getByRole('button', { name: 'Принять дело' }).click();
   await expect(sp.locator('#order-status')).toHaveText('В работе');
+  // Черновик заключения от ИИ (задача 2.2): готовится по заявке, эксперт заполняет пометки и прикладывает Word.
+  await sp.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  await expect(sp.getByLabel('Текст заключения')).toHaveValue(/## /);
+  const draft = await sp.getByLabel('Текст заключения').inputValue();
+  await sp.getByLabel('Текст заключения').fill(draft.replace(/\[(?:заполнить|описать)[^\]]*\]/gi, 'заполнено экспертом'));
+  await sp.getByLabel('Я проверил текст и отвечаю за него').check();
+  await sp.getByRole('button', { name: 'Приложить как файл результата' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Файл «Заключение.docx» добавлен в результат работы');
+  await expect(sp.locator('#docs li').filter({ hasText: 'Заключение.docx' })).toHaveCount(1);
+  await shot(sp, '12a-chernovik');
   await sp.locator('#result-file').setInputFiles({ name: 'Отчёт об оценке.txt', mimeType: 'text/plain', buffer: Buffer.from(`Отчёт об оценке квартиры. Итоговая стоимость 12 000 000 руб. ${TAG}`) });
   await expect(sp.locator('#doc-msg')).toHaveText('Файл добавлен');
   // Отчёт в PDF (задача 2.1): ИИ читает его из хранилища Яндекса и показывает отмеченное место со страницей.
