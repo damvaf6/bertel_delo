@@ -2,7 +2,7 @@
 // Последняя проверка сверяет: в реестре нет операций, не покрытых этой таблицей.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, login, client, makeOrg, addMember, setPlatformRole, ensurePaid, bridge, TEST_TOKEN } from '../helpers.mjs';
+import { startApp, login, client, makeOrg, addMember, setPlatformRole, ensurePaid, bridge, TEST_TOKEN, signResults } from '../helpers.mjs';
 
 const covered = new Set();
 const cover = (id) => covered.add(id);
@@ -579,6 +579,26 @@ test('работа по делу: результат — только испол
   // Проверка: до сдачи отметки не ставятся; подробности — диспетчеру и исполнителю, заказчику — итог.
   const mark = (c, check, body) => c.req('PUT', `/api/orders/${o.id}/review/${check}`, body);
   assert.equal((await mark(U.dispatcher, 'calculation', { verdict: 'ok', round: 0 })).status, 409);
+  // Подпись УКЭП (2.5): подписывает только исполнитель свой результат; до выдачи заказчик подписи не видит.
+  for (const id of ['signature.sign', 'signature.verify', 'signature.link']) cover(id);
+  const sign = (c, d = doc) => c.req('POST', `/api/documents/${d.id}/sign`, { confirm: true });
+  const verify = (c) => c.req('POST', `/api/documents/${doc.id}/signature/verify`);
+  const sigLink = (c) => c.req('GET', `/api/documents/${doc.id}/signature/link`);
+  assert.equal((await U.spec.req('POST', `/api/orders/${o.id}/status`, { to: 'review', from: 'in_work' })).status, 400, 'без подписи не сдать');
+  for (const k of ['owner', 'stranger', 'headB']) assert.equal((await sign(U[k])).status, 404, k);
+  for (const k of ['dispatcher', 'admin']) assert.equal((await sign(U[k])).status, 403, k);
+  assert.equal((await sign(U.spec, custDoc)).status, 403, 'документ заказчика исполнитель не подписывает');
+  assert.equal((await verify(U.spec)).status, 404, 'ещё не подписан');
+  await signResults(S, U.spec, o.id);
+  assert.equal((await sign(U.spec)).status, 409, 'второй раз не подписать');
+  for (const k of ['spec', 'dispatcher', 'admin']) {
+    assert.equal((await verify(U[k])).body.valid, true, k);
+    assert.equal((await sigLink(U[k])).status, 200, k);
+  }
+  for (const k of ['owner', 'stranger', 'headB']) {
+    assert.equal((await verify(U[k])).status, 404, k);
+    assert.equal((await sigLink(U[k])).status, 404, k);
+  }
   assert.equal((await U.spec.req('POST', `/api/orders/${o.id}/status`, { to: 'review', from: 'in_work' })).status, 200);
   assert.equal((await U.spec.req('DELETE', `/api/documents/${doc.id}`)).status, 409, 'сданный результат не убрать');
   assert.equal((await result(U.spec)).status, 409, 'после сдачи — только через доработку');
@@ -606,6 +626,12 @@ test('работа по делу: результат — только испол
   assert.equal(after.results_hidden, false);
   assert.equal((await U.owner.req('GET', `/api/documents/${doc.id}/link`)).status, 200);
   assert.equal((await U.owner.req('DELETE', `/api/documents/${doc.id}`)).status, 403);
+  // Выдано: заказчик видит подпись, скачивает её и проверяет сам; подписать или переподписать не может.
+  assert.equal(after.documents.find((d) => d.id === doc.id).signature.checked_ok, true);
+  assert.equal((await verify(U.owner)).body.valid, true);
+  assert.equal((await sigLink(U.owner)).status, 200);
+  assert.equal((await sign(U.owner)).status, 403);
+  for (const k of ['stranger', 'headB']) assert.equal((await verify(U[k])).status, 404, k);
   const sum = (await U.owner.req('GET', `/api/orders/${o.id}/review`)).body.summary;
   assert.equal(sum.ok, sum.total);
   assert.equal((await U.headA.req('GET', `/api/documents/${doc.id}/link`)).status, 404, 'чужая организация');
@@ -673,6 +699,7 @@ test('деньги: цену — диспетчер; платит заказчи
 
   assert.equal((await U.spec.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
   assert.equal((await U.spec.req('POST', `/api/orders/${o.id}/results`, Buffer.from('отчёт'), { raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': 'r.pdf' } })).status, 201);
+  await signResults(S, U.spec, o.id);
   assert.equal((await U.spec.req('POST', `/api/orders/${o.id}/status`, { to: 'review', from: 'in_work' })).status, 200);
   // Передать другому исполнителю — только диспетчер.
   for (const who of ['owner', 'spec', 'admin']) assert.equal((await U[who].req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'review', reason: 'x' })).status, 403, who);

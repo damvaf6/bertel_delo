@@ -70,7 +70,7 @@ test('рабочий сайт (prod): служебного входа нет и 
   // 1. Настройка: ключ на prod (и на dev) — сервер не стартует.
   const prodEnv = { APP_ENV: 'prod', DATABASE_URL: 'postgres://x/y', APP_SECRET: 'x'.repeat(40), STORAGE_PROVIDER: 's3', S3_BUCKET: 'b',
     SMS_PROVIDER: 'sms-real', CALL_PROVIDER: 'call-real', PAYMENTS_PROVIDER: 'p', AI_PROVIDER: 'yandexgpt', AI_YANDEX_API_KEY: 'k',
-    AI_YANDEX_FOLDER: 'f', MAIL_PROVIDER: 'm', MAIL_INBOX_ADDRESS: 'zayavki@delo.example', PUBLIC_URL: 'https://delo.example/' };
+    AI_YANDEX_FOLDER: 'f', MAIL_PROVIDER: 'm', SIGN_PROVIDER: 'g', MAIL_INBOX_ADDRESS: 'zayavki@delo.example', PUBLIC_URL: 'https://delo.example/' };
   assert.equal(loadConfig(prodEnv).stageLoginKey, '');
   assert.throws(() => loadConfig({ ...prodEnv, STAGE_LOGIN_KEY: KEY }), ConfigError);
   assert.throws(() => loadConfig({ APP_ENV: 'dev', DATABASE_URL: 'x', STAGE_LOGIN_KEY: KEY }), ConfigError);

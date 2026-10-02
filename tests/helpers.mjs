@@ -157,3 +157,16 @@ export async function makeSpecialist(sql, userId, { permits = [['expertise', 're
     await sql`insert into specialist_permits (user_id, module, service, valid_until) values (${userId}, ${module}, ${service}, ${validUntil})`;
   }
 }
+
+// Подписать УКЭП (поддельной подписью) свои файлы результата перед сдачей на проверку (задача 2.5). Без имени в профиле
+// подписать нельзя — тестовому исполнителю без имени оно ставится.
+export async function signResults(stack, c, orderId) {
+  await stack.sql`update users set full_name = 'Тестовый Эксперт' where id = ${c.user.id} and coalesce(full_name, '') = ''`;
+  const docs = await stack.sql`select d.id from documents d left join document_signatures s on s.document_id = d.id
+                               where d.order_id = ${orderId} and d.kind = 'result' and d.deleted_at is null
+                                 and d.uploaded_by = ${c.user.id} and s.id is null`;
+  for (const d of docs) {
+    const r = await c.req('POST', `/api/documents/${d.id}/sign`, { confirm: true });
+    if (r.status !== 201) throw new Error(`подпись не поставлена: ${r.status} ${JSON.stringify(r.body)}`);
+  }
+}

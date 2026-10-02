@@ -3,7 +3,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { startApp, login, makeOrg, addMember, setPlatformRole, makeSpecialist, ensurePaid } from '../helpers.mjs';
+import { startApp, login, makeOrg, addMember, setPlatformRole, makeSpecialist, ensurePaid, signResults } from '../helpers.mjs';
 import { loadConfig, ConfigError } from '../../src/config.mjs';
 import { aiChain, createAi } from '../../src/providers/ai.mjs';
 import { makeFake } from '../../src/providers/fake.mjs';
@@ -71,7 +71,7 @@ test('настройки ИИ: только российские модели и
   assert.equal(ok.ai.fallback, 'gigachat');
   assert.equal(ok.ai.yandex.model, 'yandexgpt/latest');
   const prod = (extra) => loadConfig({ APP_ENV: 'prod', DATABASE_URL: 'postgres://x/y', APP_SECRET: 'x'.repeat(40), STORAGE_PROVIDER: 's3', S3_BUCKET: 'b',
-    SMS_PROVIDER: 's', CALL_PROVIDER: 'c', PAYMENTS_PROVIDER: 'p', MAIL_PROVIDER: 'm', MAIL_INBOX_ADDRESS: 'zayavki@delo.example', PUBLIC_URL: 'https://delo.example',
+    SMS_PROVIDER: 's', CALL_PROVIDER: 'c', PAYMENTS_PROVIDER: 'p', MAIL_PROVIDER: 'm', SIGN_PROVIDER: 'g', MAIL_INBOX_ADDRESS: 'zayavki@delo.example', PUBLIC_URL: 'https://delo.example',
     AI_PROVIDER: 'yandexgpt', AI_YANDEX_API_KEY: 'k', AI_YANDEX_FOLDER: 'f', ...extra });
   assert.ok(prod({}).live);
   assert.throws(() => prod({ AI_PROVIDER: 'fake' }), ConfigError);
@@ -362,6 +362,7 @@ test('ИИ-проверка: исполнитель перед сдачей, д�
   assert.equal(cust.details, false);
 
   // Сдал — диспетчер видит подсказку исполнителя для этого круга и запускает свою; отметки ИИ не ставит.
+  await signResults(S, spec, o.id);
   assert.equal((await step(spec, o, 'review')).status, 200);
   view = (await dispatcher.req('GET', `/api/orders/${o.id}/review`)).body;
   assert.equal(view.ai.side, 'executor');
@@ -413,6 +414,7 @@ test('ИИ-проверка отчёта в PDF и Word (2.1): текст по �
   assert.ok(ai.items.filter((i) => i.id !== 'technical').every((i) => Array.isArray(i.marks) && i.marks.length === 0));
   assert.equal(ai.items.find((i) => i.id === 'requisites').hint, 'ok', 'номер заключения в PDF найден');
   // Диспетчер после сдачи видит те же места.
+  await signResults(S, spec, o.id);
   assert.equal((await step(spec, o, 'review')).status, 200);
   const view = (await dispatcher.req('GET', `/api/orders/${o.id}/review`)).body;
   assert.deepEqual(view.ai.items.find((i) => i.id === 'technical').marks, tech.marks);

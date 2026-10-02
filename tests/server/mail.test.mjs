@@ -3,7 +3,7 @@
 // Чужие и поддельные письма не принимаются. Без облака — поддельная почта и поддельная модель.
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, login, makeOrg, addMember, setPlatformRole, makeSpecialist, TEST_TOKEN } from '../helpers.mjs';
+import { startApp, login, makeOrg, addMember, setPlatformRole, makeSpecialist, TEST_TOKEN, signResults } from '../helpers.mjs';
 import { loadConfig, ConfigError } from '../../src/config.mjs';
 import { freshText, normEmail, cleanMailAnswer } from '../../src/mail/inbound.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
@@ -281,6 +281,7 @@ test('ход заявки по письму: цена, оплата, приня�
   // Сдача, проверка, «готово» — результат уходит во вложении.
   await spec.req('POST', `/api/orders/${id}/results`, Buffer.from('Тестовое заключение: 100 руб.'), {
     raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('заключение.txt') } });
+  await signResults(S, spec, id);
   assert.equal((await spec.req('POST', `/api/orders/${id}/status`, { from: 'in_work', to: 'review' })).status, 200);
   const { checks, round } = (await dispatcher.req('GET', `/api/orders/${id}/review`)).body;
   for (const c of checks) assert.equal((await dispatcher.req('PUT', `/api/orders/${id}/review/${c.id}`, { verdict: 'ok', round })).status, 200);
@@ -290,7 +291,7 @@ test('ход заявки по письму: цена, оплата, приня�
   const done = sent().find((x) => /Результат проверен/.test(x.text));
   assert.ok(done, 'письмо с результатом');
   assert.equal(done.to, OWNER_MAIL);
-  assert.deepEqual(done.attachments.map((a) => a.filename), ['заключение.txt']);
+  assert.deepEqual(done.attachments.map((a) => a.filename), ['заключение.txt', 'заключение.txt.sig'], 'подпись УКЭП — рядом с файлом (2.5)');
   assert.match(done.subject, /Заявка №/);
 
   // Закрытая заявка: письма по ней больше не принимаются.

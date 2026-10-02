@@ -3,7 +3,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import { startApp, login, client, setPlatformRole, makeSpecialist, ensurePaid } from '../helpers.mjs';
+import { startApp, login, client, setPlatformRole, makeSpecialist, ensurePaid, signResults } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import { createRegistry, validateModule } from '../../src/modules/index.mjs';
 import expertise from '../../src/modules/expertise.mjs';
@@ -206,6 +206,7 @@ test('ссылка перестаёт действовать: новая ссы�
   assert.equal((await shoot(fourth.token, 'facade', { headers: GEO })).status, 201);
   const res = await spec.req('POST', `/api/orders/${o.id}/results`, Buffer.from('заключение'), { raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': 'z.txt' } });
   assert.equal(res.status, 201);
+  await signResults(S, spec, o.id);
   assert.equal((await step(spec, o, 'review')).status, 200, 'сдано на проверку');
   assert.equal((await view(fourth.token)).body.active, false);
   assert.equal((await spec.req('POST', `/api/orders/${o.id}/inspection`, {})).status, 403, 'на проверке ссылку не выдать');

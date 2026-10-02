@@ -2,7 +2,7 @@
 // его в кабинете и сам прикладывает итоговый файл результата. Заказчик черновика не видит; ИИ ничего не выдаёт сам.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid } from '../helpers.mjs';
+import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, signResults } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import { createRegistry } from '../../src/modules/index.mjs';
 import expertise from '../../src/modules/expertise.mjs';
@@ -158,6 +158,7 @@ test('эксперт правит черновик и прикладывает �
   assert.equal(ai.items.find((i) => i.id === 'requisites').hint, 'ok');
 
   // Сдал на проверку — черновик больше не правится, но виден исполнителю и диспетчеру.
+  await signResults(S, spec, o.id);
   assert.equal((await step(spec, o, 'review')).status, 200);
   assert.equal((await spec.req('PUT', `/api/orders/${o.id}/draft`, { body: 'поздно', from: d2.id })).status, 403);
   const view = (await spec.req('GET', `/api/orders/${o.id}/draft`)).body;

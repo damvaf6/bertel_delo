@@ -87,9 +87,13 @@ async function resultAttachments(sql, storage, order) {
   const total = docs.reduce((n, d) => n + Number(d.size_bytes), 0);
   if (total > OUTBOX.attachMaxBytes) return { files: [], note: 'Файлы результата слишком большие для письма — скачайте их в кабинете.' };
   const files = [];
+  // Подпись УКЭП (2.5) — отдельным файлом «имя.sig» рядом с файлом.
+  const signs = new Map((await sql`select document_id, storage_key from document_signatures where order_id = ${order.id}`).map((x) => [x.document_id, x]));
   for (const d of docs) {
     const content = await storage.get(d.storage_key);
     if (content) files.push({ filename: d.filename, contentType: d.mime, content });
+    const sig = signs.get(d.id) && await storage.get(signs.get(d.id).storage_key);
+    if (content && sig) files.push({ filename: `${d.filename}.sig`, contentType: 'application/pkcs7-signature', content: sig });
   }
   return { files, note: null };
 }
