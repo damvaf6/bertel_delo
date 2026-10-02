@@ -5,6 +5,7 @@
 // «Stage admin» (решение Дамира 02.10.2026, вопрос 10, вариант А); диспетчера и специалиста каждого прогона назначает он.
 // Скриншоты — test-results/screens/stage-run-*.png.
 import { test as base, expect } from '@playwright/test';
+import { makePdf } from '../tools/make-docs.mjs';
 
 const TOKEN = process.env.STAGE_INVOKE_TOKEN;
 const LOGIN_KEY = process.env.STAGE_LOGIN_KEY;
@@ -308,8 +309,12 @@ test('общий прогон: сквозной путь — администр�
   await expect(sp.locator('#order-status')).toHaveText('В работе');
   await sp.locator('#result-file').setInputFiles({ name: 'Отчёт об оценке.txt', mimeType: 'text/plain', buffer: Buffer.from(`Отчёт об оценке квартиры. Итоговая стоимость 12 000 000 руб. ${TAG}`) });
   await expect(sp.locator('#doc-msg')).toHaveText('Файл добавлен');
+  // Отчёт в PDF (задача 2.1): ИИ читает его из хранилища Яндекса и показывает отмеченное место со страницей.
+  await sp.locator('#result-file').setInputFiles({ name: 'Отчёт об оценке.pdf', mimeType: 'application/pdf', buffer: makePdf([[`Заключение № ${RUN}/2026`], ['Итоговая стоимость 12 000 000 руб.', 'В разделе 3 опечатка в адресе.']]) });
+  await expect(sp.locator('#docs li').filter({ hasText: 'Отчёт об оценке.pdf' })).toHaveCount(1);
   await sp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
   await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  await expect(sp.locator('#review-checks li').filter({ hasText: 'Технические ошибки' }).locator('.ai-marks li')).toHaveText(['Отчёт об оценке.pdf, стр. 2: В разделе 3 опечатка в адресе.']);
   await sp.getByLabel('Сообщение').fill('Осмотр проведён, отчёт приложен.');
   await sp.getByRole('button', { name: 'Отправить сообщение' }).click();
   await expect(sp.locator('#messages li')).toHaveCount(1);
@@ -327,7 +332,7 @@ test('общий прогон: сквозной путь — администр�
   await expect(dp.locator('#review-box')).toBeVisible();
   await dp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
   await expect(dp.locator('#ai-review-state')).toContainText('запускал диспетчер');
-  const rules = dp.locator('#review-checks li');
+  const rules = dp.locator('#review-checks > li');
   const n = await rules.count();
   expect(n).toBeGreaterThan(3);
   for (let i = 0; i < n; i += 1) {

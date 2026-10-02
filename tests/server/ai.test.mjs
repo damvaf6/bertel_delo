@@ -9,6 +9,7 @@ import { aiChain, createAi } from '../../src/providers/ai.mjs';
 import { makeFake } from '../../src/providers/fake.mjs';
 import { parseJsonAnswer } from '../../src/ai/ai.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
+import { makePdf, makeDocx } from '../tools/make-docs.mjs';
 
 let S, owner, other, head, member, dispatcher, spec, admin, org, orgB;
 const FIELDS = { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 7' };
@@ -386,6 +387,48 @@ test('ИИ-проверка: модель ответила не по всем п
     assert.equal(p.items.find((i) => i.id === 'requisites').hint, 'ok');
     assert.match(p.items.find((i) => i.id === 'calculation').note, /проверьте сами/);
   } finally { S.providers.ai.complete = orig; }
+});
+
+test('ИИ-проверка отчёта в PDF и Word (2.1): текст по страницам уходит в модель, отмеченные места — цитата, файл и страница', async () => {
+  const o = await inWork('Квартира: отчёт в PDF и Word');
+  const pdf = makePdf([
+    ['Заключение № 7/2026 от 01.10.2026', 'Эксперт: Тестов Т. Т.'],
+    ['Итоговая стоимость: 12 000 000 руб.', 'Здесь опечатка в слове «стоимасть».'],
+  ]);
+  const docx = makeDocx(['Приложение 1. Аналоги', 'Аналог 1: ул. Тестовая, 5 — 11 900 000 руб.', '\fПриложение 2. Фото объекта']);
+  assert.equal((await putResult(o, pdf, 'Отчёт об оценке.pdf', 'application/pdf')).status, 201);
+  assert.equal((await putResult(o, docx, 'Приложения.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')).status, 201);
+  S.providers.ai.reset();
+  const ai = (await spec.req('POST', `/api/orders/${o.id}/review/ai`)).body.ai;
+  assert.deepEqual(ai.files.map((f) => [f.name, f.read]), [['Отчёт об оценке.pdf', true], ['Приложения.docx', true]]);
+  const prompt = lastPrompt();
+  assert.match(prompt, /--- стр\. 2 ---\nИтоговая стоимость: 12 000 000 руб\./, 'PDF — по страницам');
+  assert.match(prompt, /Аналог 1: ул\. Тестовая, 5/, 'Word прочитан');
+  assert.match(prompt, /--- стр\. 2 ---\nПриложение 2\. Фото объекта/, 'разрыв страницы в Word');
+  assert.match(prompt, /точных цитат/);
+  const tech = ai.items.find((i) => i.id === 'technical');
+  assert.equal(tech.hint, 'attention');
+  // Модель привела две цитаты: настоящую и выдуманную — показывается только настоящая, с файлом и страницей.
+  assert.deepEqual(tech.marks, [{ file: 'Отчёт об оценке.pdf', where: 'стр. 2', quote: 'Здесь опечатка в слове «стоимасть».' }]);
+  assert.ok(ai.items.filter((i) => i.id !== 'technical').every((i) => Array.isArray(i.marks) && i.marks.length === 0));
+  assert.equal(ai.items.find((i) => i.id === 'requisites').hint, 'ok', 'номер заключения в PDF найден');
+  // Диспетчер после сдачи видит те же места.
+  assert.equal((await step(spec, o, 'review')).status, 200);
+  const view = (await dispatcher.req('GET', `/api/orders/${o.id}/review`)).body;
+  assert.deepEqual(view.ai.items.find((i) => i.id === 'technical').marks, tech.marks);
+});
+
+test('чтение отчёта (2.1): повреждённый PDF и Word, картинка, пустой файл — «не прочитан»; длинный текст обрезается с пометкой', async () => {
+  const o = await inWork('Квартира: нечитаемые файлы');
+  assert.equal((await putResult(o, '%PDF-1.7 сломан', 'битый.pdf', 'application/pdf')).status, 201);
+  assert.equal((await putResult(o, 'PK не архив', 'битый.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')).status, 201);
+  assert.equal((await putResult(o, Buffer.from([0xff, 0xd8, 0xff, 0xe0]), 'фото.jpg', 'image/jpeg')).status, 201);
+  assert.equal((await putResult(o, makePdf([['   ']]), 'пустой.pdf', 'application/pdf')).status, 201);
+  assert.equal((await putResult(o, 'Итог 1 000 руб. '.repeat(3000), 'длинный.txt', 'text/plain')).status, 201);
+  const ai = (await spec.req('POST', `/api/orders/${o.id}/review/ai`)).body.ai;
+  assert.deepEqual(ai.files.map((f) => [f.name, f.read]), [['битый.pdf', false], ['битый.docx', false], ['фото.jpg', false], ['пустой.pdf', false], ['длинный.txt', true]]);
+  assert.equal(ai.files.find((f) => f.name === 'длинный.txt').truncated, true);
+  assert.match(lastPrompt(), /дальше текст не поместился/);
 });
 
 test('модель ИИ — администратору видно, какая работает и сколько обращений; остальным — «не найдено»', async () => {

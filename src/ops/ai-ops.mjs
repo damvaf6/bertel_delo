@@ -7,14 +7,15 @@ import { AI_DRIVER_NAME } from '../providers/ai.mjs';
 import {
   DISCLAIMER, aiReviewView, askAi, assistantMessages, cleanProblemAnswer, cleanReviewAnswer, orderBrief, problemMessages, reviewMessages,
 } from '../ai/ai.mjs';
+import { READ_MAX_BYTES, extractPages, readableKind } from '../ai/extract.mjs';
 import { insertOrder, listVisibleOrders } from './order-ops.mjs';
 import { audit, text, uuidFrom } from './util.mjs';
 
 const PROBLEM_MAX = 4000;
 const QUESTION_MAX = 2000;
 const HISTORY = 20;
-const READ_MAX_BYTES = 200 * 1024;
 const READ_MAX_CHARS = 20_000;
+const TOTAL_MAX_CHARS = 40_000;
 const FILES_MAX = 5;
 
 const consultationView = (c) => ({ id: c.id, problem: c.problem, ...c.answer, order_id: c.order_id, disclaimer: DISCLAIMER, created_at: c.created_at });
@@ -41,19 +42,25 @@ async function scopeHistory(sql, actor, orgId, limit) {
   return { messages: visible, hidden: rows.length - visible.length };
 }
 
-// Текст файлов результата для ИИ-проверки. Пока читаются только текстовые файлы; PDF и Word — этап 2.
-async function resultTexts(sql, storage, order) {
+// Отчёт для ИИ-проверки (задача 2.1): текст, PDF и Word читаются по страницам; что не прочитано — text: null.
+// Модели уходит не больше READ_MAX_CHARS на файл и TOTAL_MAX_CHARS на все файлы.
+async function resultDocs(sql, storage, order) {
   const docs = await sql`select * from documents where order_id = ${order.id} and kind = 'result' and deleted_at is null
                          and uploaded_by = ${order.executor_user_id} order by created_at limit ${FILES_MAX}`;
   const out = [];
+  let left = TOTAL_MAX_CHARS;
   for (const d of docs) {
-    const textual = /^text\//.test(d.mime) || /\.(txt|md|csv)$/i.test(d.filename);
-    let body = null;
-    if (textual && d.size_bytes <= READ_MAX_BYTES) {
+    let got = null;
+    if (readableKind(d.filename, d.mime) && d.size_bytes <= READ_MAX_BYTES) {
       const buf = await storage.get(d.storage_key);
-      if (buf) body = buf.toString('utf8').slice(0, READ_MAX_CHARS);
+      if (buf) got = await extractPages(buf, d.filename, d.mime);
     }
-    out.push({ id: d.id, name: d.filename, text: body });
+    if (!got) { out.push({ id: d.id, name: d.filename, kind: null, pages: null, text: null, truncated: false }); continue; }
+    const marked = got.pages.map((p, i) => (got.pages.length > 1 ? `--- стр. ${i + 1} ---\n${p}` : p)).join('\n');
+    const limit = Math.min(READ_MAX_CHARS, left);
+    const text = marked.slice(0, limit);
+    left -= text.length;
+    out.push({ id: d.id, name: d.filename, kind: got.kind, pages: got.pages, text, truncated: marked.length > text.length });
   }
   return out;
 }
@@ -164,14 +171,14 @@ export function aiOps() {
         const side = aiReviewSide(actor, order);
         if (!side) throw new HttpError(403, 'forbidden', 'ИИ-проверку запускает исполнитель перед сдачей или диспетчер на проверке');
         const rules = registry.checks(order.module, order.service);
-        const files = await resultTexts(sql, providers.storage, order);
+        const files = await resultDocs(sql, providers.storage, order);
         if (!files.length) throw new HttpError(400, 'no_result', 'Сначала добавьте файл результата');
         const out = await askAi(ctx, actor, 'review', reviewMessages({ rules, brief: orderBrief(registry, order), files }));
-        const items = cleanReviewAnswer(rules, out.text);
+        const items = cleanReviewAnswer(rules, out.text, files);
         const round = side === 'executor' ? order.review_round + 1 : order.review_round;
         await sql`insert into ai_reviews (order_id, round, requested_by, side, model, items, files)
                   values (${order.id}, ${round}, ${actor.id}, ${side}, ${out.model}, ${JSON.stringify(items)},
-                          ${JSON.stringify(files.map((f) => ({ id: f.id, name: f.name, read: f.text !== null })))})`;
+                          ${JSON.stringify(files.map((f) => ({ id: f.id, name: f.name, read: f.text !== null, truncated: f.truncated })))})`;
         await audit(sql, actor, 'review.ai', 'order', order.id, { round, side });
         res.status(201);
         return { ai: await aiReviewView(sql, order) };
