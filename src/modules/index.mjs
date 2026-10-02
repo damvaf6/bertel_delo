@@ -5,7 +5,9 @@
 //   { id, name, basis: ['contract' | 'court', …], fields: [поле…], services: [{ id, name, fields: [поле…] }…],
 //     checks: [{ id, title, services?: [id услуги…] }…],
 //     draft?: [{ id, title, services?: [id услуги…] }…],  — разделы черновика заключения от ИИ (задача 2.2)
-//     inspection?: [{ id, title, hint?, services?: [id услуги…], optional? }…] }  — шаги дистанционного осмотра (2.3)
+//     inspection?: [{ id, title, hint?, services?: [id услуги…], optional? }…],  — шаги дистанционного осмотра (2.3)
+//     express?: { services: [id услуги…], show: [id поля заявки…], fields: [поле + services?…] } }  — экспресс-услуга (2.4):
+//       для каких услуг, какие поля заявки видит помощник на объекте и какие данные он заполняет (нужны шаги осмотра)
 // Поле: { id, label, type: 'text' | 'longtext' | 'number' | 'select', required?, max?, min?, integer?,
 //         options?: [{ id, name }…] (для select), pattern?, hint?, upper? }
 //   Общие поля модуля идут в заявке перед полями услуги; id не должны совпадать.
@@ -75,7 +77,7 @@ function validateField(f, where) {
 }
 
 export function validateModule(m) {
-  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection'], 'модуль');
+  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express'], 'модуль');
   if (!ID_RE.test(m.id ?? '')) fail('модуль', `неверный id «${m.id}»`);
   const at = `модуль ${m.id}`;
   if (!nonEmpty(m.name)) fail(at, 'нет названия');
@@ -132,6 +134,31 @@ export function validateModule(m) {
       }
     }
   }
+  // Экспресс-услуга (2.4) — необязательно: помощник снимает по шагам осмотра, поэтому без них экспресса нет.
+  if (m.express !== undefined) {
+    const where = `${at}, экспресс`;
+    onlyKeys(m.express, ['services', 'show', 'fields'], where);
+    const ex = m.express;
+    if (!Array.isArray(ex.services) || ex.services.length === 0 || ex.services.some((id) => !serviceIds.includes(id)) || new Set(ex.services).size !== ex.services.length) {
+      fail(where, 'services — непустой список услуг этого модуля');
+    }
+    const steps = (sid) => (m.inspection ?? []).filter((st) => !st.services || st.services.includes(sid));
+    const noSteps = ex.services.find((sid) => steps(sid).length === 0);
+    if (noSteps) fail(where, `у услуги ${noSteps} нет шагов осмотра`);
+    const orderFields = new Set([...common, ...m.services.flatMap((s) => s.fields ?? [])].map((f) => f.id));
+    if (!Array.isArray(ex.show) || ex.show.some((id) => !orderFields.has(id)) || new Set(ex.show).size !== ex.show.length) {
+      fail(where, 'show — список полей заявки этого модуля');
+    }
+    checkIds(ex.fields, `${where}, данные с объекта`);
+    for (const f of ex.fields) {
+      const fw = `${where}, поле ${f.id}`;
+      const { services, ...field } = f;
+      validateField(field, fw);
+      if (services !== undefined && (!Array.isArray(services) || services.length === 0 || services.some((id) => !ex.services.includes(id)))) {
+        fail(fw, 'services — непустой список услуг экспресса');
+      }
+    }
+  }
   return m;
 }
 
@@ -174,12 +201,23 @@ export function createRegistry(modules = DEFAULT_MODULES) {
       return m.inspection.filter((st) => !st.services || st.services.includes(serviceId))
         .map((st) => ({ id: st.id, title: st.title, hint: st.hint ?? null, optional: !!st.optional }));
     },
+    // Экспресс-услуга для услуги (2.4): поля заявки, которые видит помощник, и данные, которые он заполняет; null — экспресса нет.
+    express(moduleId, serviceId) {
+      const m = modulesList.find((x) => x.id === moduleId);
+      if (!m?.express?.services.includes(serviceId)) return null;
+      const s = m.services.find((x) => x.id === serviceId);
+      const own = [...(m.fields ?? []), ...(s.fields ?? [])];
+      return {
+        show: m.express.show.map((id) => own.find((f) => f.id === id)).filter(Boolean),
+        fields: m.express.fields.filter((f) => !f.services || f.services.includes(serviceId)).map(({ services, ...f }) => f),
+      };
+    },
     catalog() {
       return modulesList.map((m) => ({
         id: m.id,
         name: m.name,
         basis: m.basis.map((id) => ({ id, name: BASIS_KINDS[id].name, details: BASIS_KINDS[id].details })),
-        services: m.services.map((s) => ({ id: s.id, name: s.name, fields: [...(m.fields ?? []), ...(s.fields ?? [])] })),
+        services: m.services.map((s) => ({ id: s.id, name: s.name, fields: [...(m.fields ?? []), ...(s.fields ?? [])], express: !!m.express?.services.includes(s.id) })),
         checks: m.checks.map((c) => ({ id: c.id, title: c.title, services: c.services ?? m.services.map((s) => s.id) })),
       }));
     },

@@ -62,6 +62,20 @@ async function draftInputs(sql, storage, order) {
   return { photos, docs: texts };
 }
 
+// Данные с объекта от помощника (экспресс, 2.4): последний завершённый выезд — строками «подпись: значение».
+async function onsiteBrief(sql, registry, order) {
+  const ex = registry.express(order.module, order.service);
+  if (!ex) return null;
+  const v = await sql.one`select data, finished_at from onsite_visits where order_id = ${order.id} and finished_at is not null
+                          order by finished_at desc limit 1`;
+  if (!v) return null;
+  const lines = ex.fields.filter((f) => v.data?.[f.id] !== undefined).map((f) => {
+    const x = v.data[f.id];
+    return `${f.label}: ${f.type === 'select' ? f.options.find((o) => o.id === x)?.name ?? x : x}`;
+  });
+  return [`ДАННЫЕ С ОБЪЕКТА (выезд помощника ${dayRu(v.finished_at)}):`, ...lines].join('\n');
+}
+
 export function draftOps() {
   return [
     {
@@ -89,11 +103,14 @@ export function draftOps() {
         if (!sections.length) throw new HttpError(400, 'no_draft', 'Для этой услуги черновик от ИИ не готовится');
         sameBase(await latest(sql, order.id), body?.from);
         const inputs = await draftInputs(sql, providers.storage, order);
-        const out = await askAi(ctx, actor, 'draft', draftMessages({ brief: orderBrief(registry, order), sections, ...inputs }));
+        const onsite = await onsiteBrief(sql, registry, order);
+        const brief = [orderBrief(registry, order), onsite].filter(Boolean).join('\n');
+        const out = await askAi(ctx, actor, 'draft', draftMessages({ brief, sections, ...inputs }));
         const text = cleanDraftAnswer(sections, out.text);
         const seen = {
           photos: inputs.photos.map((p) => p.name),
           docs: inputs.docs.map((d) => ({ name: d.name, read: d.text !== null, truncated: d.truncated })),
+          onsite: !!onsite,
         };
         const d = await sql.tx(async (tx) => {
           await tx`select id from orders where id = ${order.id} for update`;

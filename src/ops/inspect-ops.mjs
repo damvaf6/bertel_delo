@@ -75,9 +75,46 @@ async function linkByToken(sql, req, { lock = false } = {}) {
   return { link, order, state: linkState(link, order) };
 }
 
-async function stepCounts(sql, linkId) {
-  const rows = await sql`select step, count(*)::int as n from inspection_photos where link_id = ${linkId} group by step`;
+// Сколько фото по каждому шагу: по ссылке владельца ({ link }) или по выезду помощника ({ visit }, задача 2.4).
+export async function stepCounts(sql, source) {
+  const rows = source.visit
+    ? await sql`select step, count(*)::int as n from inspection_photos where visit_id = ${source.visit} group by step`
+    : await sql`select step, count(*)::int as n from inspection_photos where link_id = ${source.link} group by step`;
   return Object.fromEntries(rows.map((r) => [r.step, r.n]));
+}
+
+// Принять фото осмотра (тело запроса — снимок; шаг, время и геометка — в заголовках): проверка, лимиты, файл в хранилище,
+// документ заявки вида «осмотр» и строка фото — одной записью. Общее для ссылки владельца (2.3) и выезда помощника (2.4).
+export async function storePhoto(ctx, { order, steps, uploadedBy, source, actor }) {
+  const { sql, req, body } = ctx;
+  const step = steps.find((s) => s.id === req.get('x-step'));
+  if (!step) throw new HttpError(400, 'bad_step', 'Неизвестный шаг осмотра');
+  if (!Buffer.isBuffer(body) || body.length === 0) throw new HttpError(400, 'empty_file', 'Файл пустой');
+  const mime = (req.get('content-type') || '').split(';')[0].trim().toLowerCase();
+  if (!IMAGE_MIME.includes(mime) || !looksLikeImage(body, mime)) throw new HttpError(400, 'not_image', 'Нужна фотография (JPEG, PNG, WebP или HEIC)');
+  const meta = shotMeta((h) => req.get(h));
+  const counts = await stepCounts(sql, source);
+  const total = Object.values(counts).reduce((a, b) => a + b, 0);
+  if (total >= INSPECT.photosMax) throw new HttpError(409, 'too_many', `За один осмотр — не больше ${INSPECT.photosMax} фото`);
+  if ((counts[step.id] ?? 0) >= INSPECT.perStepMax) throw new HttpError(409, 'too_many', `На один шаг — не больше ${INSPECT.perStepMax} фото`);
+  // Имя файла — шаг и номер: по нему эксперт и черновик заключения (2.2) понимают, что на снимке.
+  const filename = `Осмотр · ${step.title} · ${(counts[step.id] ?? 0) + 1}.${EXT[mime]}`;
+  const key = `orders/${order.id}/${crypto.randomUUID()}`;
+  await ctx.providers.storage.put(key, body, mime);
+  try {
+    await sql.tx(async (tx) => {
+      const d = await tx.one`insert into documents (order_id, uploaded_by, filename, mime, size_bytes, storage_key, kind)
+                             values (${order.id}, ${uploadedBy}, ${filename}, ${mime}, ${body.length}, ${key}, 'inspection') returning id`;
+      await tx`insert into inspection_photos (document_id, link_id, visit_id, step, shot_at, lat, lon, accuracy_m)
+               values (${d.id}, ${source.link ?? null}, ${source.visit ?? null}, ${step.id}, ${meta.shotAt}, ${meta.lat}, ${meta.lon}, ${meta.accuracy})`;
+      const where = source.visit ? { visit: String(source.visit) } : { link: String(source.link) };
+      await audit(tx, actor, source.visit ? 'onsite.photo' : 'inspect.photo', 'order', order.id, { ...where, document: d.id, step: step.id, geo: meta.lat !== null });
+    });
+  } catch (e) {
+    await ctx.providers.storage.delete(key).catch(() => {});
+    throw e;
+  }
+  return { step: step.id, photos: (counts[step.id] ?? 0) + 1, geo: meta.lat !== null };
 }
 
 const STATE_RU = {
@@ -109,7 +146,8 @@ export function inspectOps() {
           select p.*, d.filename, d.size_bytes from inspection_photos p join documents d on d.id = p.document_id
           where d.order_id = ${order.id} and d.deleted_at is null order by p.received_at, d.id`;
         const byStep = (id) => photos.filter((p) => p.step === id).map((p) => ({
-          document_id: p.document_id, filename: p.filename, size_bytes: p.size_bytes, link_id: String(p.link_id),
+          document_id: p.document_id, filename: p.filename, size_bytes: p.size_bytes,
+          link_id: p.link_id === null ? null : String(p.link_id), visit_id: p.visit_id === null ? null : String(p.visit_id),
           received_at: p.received_at, shot_at: p.shot_at,
           geo: p.lat === null ? null : { lat: p.lat, lon: p.lon, accuracy_m: p.accuracy_m === null ? null : Math.round(p.accuracy_m) },
         }));
@@ -168,7 +206,7 @@ export function inspectOps() {
         const { link, order, state } = await linkByToken(sql, req);
         if (state !== 'active') return { active: false, message: STATE_RU[state] };
         const def = registry.service(order.module, order.service);
-        const counts = await stepCounts(sql, link.id);
+        const counts = await stepCounts(sql, { link: link.id });
         return {
           active: true,
           service: def?.service.name ?? null,
@@ -184,39 +222,14 @@ export function inspectOps() {
       rateLimit: (ip) => ownerLimit(ip),
       body: 'raw', limit: INSPECT.fileMax,
       async handler(ctx) {
-        const { sql, req, body, registry, res } = ctx;
+        const { sql, req, registry, res } = ctx;
         const { link, order, state } = await linkByToken(sql, req);
         if (state !== 'active') throw new HttpError(410, 'link_inactive', STATE_RU[state]);
-        const steps = registry.inspectionSteps(order.module, order.service);
-        const step = steps.find((s) => s.id === req.get('x-step'));
-        if (!step) throw new HttpError(400, 'bad_step', 'Неизвестный шаг осмотра');
-        if (!Buffer.isBuffer(body) || body.length === 0) throw new HttpError(400, 'empty_file', 'Файл пустой');
-        const mime = (req.get('content-type') || '').split(';')[0].trim().toLowerCase();
-        if (!IMAGE_MIME.includes(mime) || !looksLikeImage(body, mime)) throw new HttpError(400, 'not_image', 'Нужна фотография (JPEG, PNG, WebP или HEIC)');
-        const meta = shotMeta((h) => req.get(h));
-        const counts = await stepCounts(sql, link.id);
-        const total = Object.values(counts).reduce((a, b) => a + b, 0);
-        if (total >= INSPECT.photosMax) throw new HttpError(409, 'too_many', `По одной ссылке — не больше ${INSPECT.photosMax} фото`);
-        if ((counts[step.id] ?? 0) >= INSPECT.perStepMax) throw new HttpError(409, 'too_many', `На один шаг — не больше ${INSPECT.perStepMax} фото`);
-        // Имя файла — шаг и номер: по нему эксперт и черновик заключения (2.2) понимают, что на снимке.
-        const filename = `Осмотр · ${step.title} · ${(counts[step.id] ?? 0) + 1}.${EXT[mime]}`;
-        // Файл — в хранилище; документ (от имени выдавшего ссылку исполнителя — в деле он его), фото и журнал — одной записью.
-        const key = `orders/${order.id}/${crypto.randomUUID()}`;
-        await ctx.providers.storage.put(key, body, mime);
-        try {
-          await sql.tx(async (tx) => {
-            const d = await tx.one`insert into documents (order_id, uploaded_by, filename, mime, size_bytes, storage_key, kind)
-                                   values (${order.id}, ${link.created_by}, ${filename}, ${mime}, ${body.length}, ${key}, 'inspection') returning id`;
-            await tx`insert into inspection_photos (document_id, link_id, step, shot_at, lat, lon, accuracy_m)
-                     values (${d.id}, ${link.id}, ${step.id}, ${meta.shotAt}, ${meta.lat}, ${meta.lon}, ${meta.accuracy})`;
-            await audit(tx, null, 'inspect.photo', 'order', order.id, { link: String(link.id), document: d.id, step: step.id, geo: meta.lat !== null });
-          });
-        } catch (e) {
-          await ctx.providers.storage.delete(key).catch(() => {});
-          throw e;
-        }
+        // Документ — от имени выдавшего ссылку исполнителя (в деле он его).
+        const out = await storePhoto(ctx, { order, steps: registry.inspectionSteps(order.module, order.service),
+          uploadedBy: link.created_by, source: { link: link.id }, actor: null });
         res.status(201);
-        return { step: step.id, photos: (counts[step.id] ?? 0) + 1, geo: meta.lat !== null };
+        return out;
       },
     },
     {
@@ -228,7 +241,7 @@ export function inspectOps() {
         return sql.tx(async (tx) => {
           const { link, order, state } = await linkByToken(tx, req, { lock: true });
           if (state !== 'active') throw new HttpError(410, 'link_inactive', STATE_RU[state]);
-          const n = Object.values(await stepCounts(tx, link.id)).reduce((a, b) => a + b, 0);
+          const n = Object.values(await stepCounts(tx, { link: link.id })).reduce((a, b) => a + b, 0);
           if (!n) throw new HttpError(409, 'no_photos', 'Сначала сделайте хотя бы одно фото');
           await tx`update inspection_links set finished_at = now() where id = ${link.id}`;
           await audit(tx, null, 'inspect.finish', 'order', order.id, { link: String(link.id), photos: n });

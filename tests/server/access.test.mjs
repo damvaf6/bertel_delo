@@ -877,6 +877,53 @@ test('мост CRM (1.10): только по подписи моста; испо
   for (const k of ['admin', 'dispatcher', 'owner', 'headA']) assert.deepEqual((await U[k].req('GET', '/api/specialist/crm')).body.crm, { linked: false, offers: [] }, k);
 });
 
+test('экспресс-выезд (2.4): ход выезда видят те, кто видит заявку; назначает исполнитель; помощник видит только свой выезд', async () => {
+  for (const id of ['onsite.get', 'onsite.assign', 'onsite.cancel', 'visits.mine', 'visits.get', 'visits.photo', 'visits.data', 'visits.finish']) cover(id);
+  const helper = await login(S, '+79990000052');
+  await S.sql`insert into specialists (user_id, onsite) values (${helper.user.id}, true)`;
+  const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Экспресс владельца' })).body.order;
+  const fields = { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, Выездная ул., 1' };
+  assert.equal((await U.owner.req('PATCH', `/api/orders/${o.id}`, { fields, deadline: new Date(Date.now() + 10 * 86400_000).toISOString().slice(0, 10), express: true })).status, 200);
+  assert.equal((await U.owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
+  await ensurePaid(S.sql, o.id);
+  assert.equal((await U.dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: U.spec.user.id, from: 'matching' })).status, 200);
+  assert.equal((await U.spec.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  const when = new Date(Date.now() + 86400_000).toISOString();
+  const assign = (c) => c.req('POST', `/api/orders/${o.id}/onsite`, { helper_id: helper.user.id, planned_at: when });
+  for (const k of ['owner', 'dispatcher', 'admin']) assert.equal((await assign(U[k])).status, 403, k);
+  for (const k of ['stranger', 'headB', 'memberA']) assert.equal((await assign(U[k])).status, 404, k);
+  assert.equal((await assign(helper)).status, 404, 'помощник заявку не видит');
+  const a = await assign(U.spec);
+  assert.equal(a.status, 201, JSON.stringify(a.body));
+  const vid = a.body.visit.id;
+  for (const k of ['owner', 'dispatcher', 'admin', 'spec']) {
+    const r = await U[k].req('GET', `/api/orders/${o.id}/onsite`);
+    assert.equal(r.status, 200, k);
+    assert.equal(r.body.visits[0].helper_name === null, k === 'owner', `${k}: имя помощника — только исполнителю и служебным`);
+  }
+  for (const k of ['stranger', 'headB']) assert.equal((await U[k].req('GET', `/api/orders/${o.id}/onsite`)).status, 404, k);
+  assert.equal((await helper.req('GET', `/api/orders/${o.id}/onsite`)).status, 404, 'помощник — не через заявку');
+  assert.equal((await helper.req('GET', `/api/orders/${o.id}`)).status, 404, 'помощник заявку не видит');
+  // Выезд — только сам помощник: даже исполнитель и служебные идут через заявку.
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(12)]);
+  for (const k of ['owner', 'spec', 'dispatcher', 'admin', 'stranger']) {
+    assert.equal((await U[k].req('GET', `/api/visits/${vid}`)).status, 404, k);
+    assert.equal((await U[k].req('PUT', `/api/visits/${vid}/data`, { data: { notes: 'x' } })).status, 404, k);
+    assert.equal((await U[k].req('POST', `/api/visits/${vid}/finish`, {})).status, 404, k);
+    assert.equal((await U[k].req('POST', `/api/visits/${vid}/photos`, jpeg, { raw: true, headers: { 'content-type': 'image/jpeg', 'x-step': 'facade' } })).status, 404, k);
+    assert.deepEqual((await U[k].req('GET', '/api/visits')).body.visits, [], `${k}: чужих выездов в списке нет`);
+  }
+  const hv = (await helper.req('GET', `/api/visits/${vid}`)).body.visit;
+  assert.deepEqual(hv.object.map((f) => f.id), ['object_type', 'address'], 'помощник видит только поля для поиска объекта');
+  assert.ok(!JSON.stringify(hv).includes('deal') && !JSON.stringify(hv).includes(U.owner.user.id), 'ни цели, ни заказчика');
+  assert.equal((await helper.req('GET', '/api/visits')).body.visits.length, 1);
+  // Отменить — только исполнитель.
+  for (const k of ['owner', 'dispatcher']) assert.equal((await U[k].req('DELETE', `/api/orders/${o.id}/onsite/${vid}`)).status, 403, k);
+  assert.equal((await U.stranger.req('DELETE', `/api/orders/${o.id}/onsite/${vid}`)).status, 404);
+  assert.equal((await U.spec.req('DELETE', `/api/orders/${o.id}/onsite/${vid}`)).status, 204);
+  assert.equal((await helper.req('PUT', `/api/visits/${vid}/data`, { data: { notes: 'x' } })).status, 410, 'отменённый выезд не правится');
+});
+
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {
   const PUBLIC = ['health', 'auth.code', 'auth.verify', 'files.memory', 'test.calls', 'test.script', 'test.reset', 'test.mail.inbound', 'stage.login', 'payments.notify',
     'inspect.view', 'inspect.photo', 'inspect.finish'];

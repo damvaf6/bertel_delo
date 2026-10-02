@@ -50,7 +50,7 @@ export function notifyOps() {
               order_id: order ? order.id : null,
               order_title: order ? order.title : null,
               // Приглашение открывается в разделе «Организации» (там видно, от кого оно, пока действует).
-              section: r.event === 'invite' ? 'orgs' : r.event === 'crm_offer' ? 'specialist' : null,
+              section: r.event === 'invite' ? 'orgs' : ['crm_offer', 'onsite_assigned', 'onsite_cancelled'].includes(r.event) ? 'specialist' : null,
             };
           }),
         };
