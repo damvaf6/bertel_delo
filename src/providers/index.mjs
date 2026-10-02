@@ -54,6 +54,8 @@ function fakeMail() {
   return fake;
 }
 
+const FAKE_PAY_ID = /^pay_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 // Поддельная ЮKassa: «страница оплаты» сразу возвращает на returnUrl; при первой проверке незавершённый платёж
 // получает исход nextOutcome (по умолчанию «оплачен»). Автотесты могут задать «отменён», неудачу выплаты (payoutOutcome)
 // и неудачу возврата (refundOutcome).
@@ -66,7 +68,12 @@ function fakePayments() {
       return { id: pid, status: 'pending', confirmationUrl: returnUrl };
     },
     getPayment: async ({ id: pid }) => {
-      if (!store.has(pid)) return { id: pid, status: 'canceled' };
+      // На площадке несколько копий ядра: платёж мог создать другая копия — свой номер поддельной оплаты считается
+      // незавершённым платежом, чужой — отменённым.
+      if (!store.has(pid)) {
+        if (!FAKE_PAY_ID.test(pid)) return { id: pid, status: 'canceled' };
+        store.set(pid, 'pending');
+      }
       if (store.get(pid) === 'pending') store.set(pid, fake.nextOutcome);
       return { id: pid, status: store.get(pid) };
     },
