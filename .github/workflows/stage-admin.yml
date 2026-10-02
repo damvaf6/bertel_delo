@@ -1,0 +1,106 @@
+name: Stage admin (Yandex Cloud)
+
+# Кнопка: назначить первого администратора на проверочной площадке (решение Дамира 02.10.2026, вопрос 10, вариант А).
+# База площадки закрыта от интернета, поэтому назначение делается изнутри облака: временный контейнер из образа ядра
+# в сети контура (вызов только с IAM-токеном) → POST /grant → тестовый номер STAGE_ADMIN_PHONE становится администратором
+# (запись в журнал действий) → контейнер удаляется. Только каталог bertel-delo-test и APP_ENV=stage; на рабочем сайте
+# первый администратор назначается отдельно и только с «да» Дамира. Повторное нажатие ничего не меняет.
+on:
+  workflow_dispatch:
+
+jobs:
+  grant:
+    runs-on: ubuntu-latest
+    environment: delo-stage
+    concurrency: stage-admin
+    env:
+      ENV: stage
+      FOLDER: bertel-delo-test
+      CONTAINER: delo-stage-grant-admin
+      STAGE_ADMIN_PHONE: '+79990009500'
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: yc CLI
+        run: |
+          curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -i /opt/yc -n
+          echo "/opt/yc/bin" >> $GITHUB_PATH
+
+      - name: Вход в облако
+        env:
+          SA_KEY: ${{ secrets.YC_SA_KEY_JSON }}
+        run: |
+          umask 077
+          printf '%s' "$SA_KEY" > "$RUNNER_TEMP/sa.json"
+          yc config set service-account-key "$RUNNER_TEMP/sa.json"
+          yc config set endpoint api.cloud.yandex.net:443
+          SA_ID=$(jq -r .service_account_id "$RUNNER_TEMP/sa.json")
+          FOLDER_ID=$(yc iam service-account get --id "$SA_ID" --format json | jq -r .folder_id)
+          NAME=$(yc resource-manager folder get --id "$FOLDER_ID" --format json | jq -r .name)
+          [ "$NAME" = "$FOLDER" ] || { echo "::error::Ключ не от каталога $FOLDER"; exit 1; }
+          yc config set folder-id "$FOLDER_ID"
+          echo "FOLDER_ID=$FOLDER_ID" >> $GITHUB_ENV
+
+      - name: Ресурсы контура (созданы workflow Infra)
+        run: |
+          SUFFIX=$(echo -n "$FOLDER_ID" | sha256sum | cut -c1-6)
+          REGISTRY_ID=$(yc container registry get --name "delo-$ENV" --format json | jq -r .id)
+          APP_SA_ID=$(yc iam service-account get --name "delo-$ENV-app" --format json | jq -r .id)
+          SECRET_ID=$(yc lockbox secret get --name "delo-$ENV-app" --format json | jq -r .id)
+          NETWORK_ID=$(yc vpc subnet get --name "delo-$ENV-a" --format json | jq -r .network_id)
+          for v in REGISTRY_ID APP_SA_ID SECRET_ID NETWORK_ID; do
+            [ -n "${!v}" ] && [ "${!v}" != "null" ] || { echo "::error::$v не найден — сначала Infra apply"; exit 1; }
+            echo "$v=${!v}" >> $GITHUB_ENV
+          done
+          echo "FILES_BUCKET=delo-$ENV-files-$SUFFIX" >> $GITHUB_ENV
+          echo "IMAGE=cr.yandex/$REGISTRY_ID/delo-core:${GITHUB_SHA::12}" >> $GITHUB_ENV
+
+      - name: Образ ядра
+        run: |
+          yc iam create-token | docker login --username iam --password-stdin cr.yandex
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+
+      - name: Временный контейнер (без открытого доступа)
+        run: |
+          [ "$ENV" = stage ] || { echo "::error::Кнопка — только на stage"; exit 1; }
+          yc serverless container get --name "$CONTAINER" >/dev/null 2>&1 || \
+            yc serverless container create --name "$CONTAINER" --description "БЕРТЕЛ Дело · назначение администратора · $ENV (тестовые данные)"
+          yc serverless container deny-unauthenticated-invoke --name "$CONTAINER"
+          yc serverless container revision deploy \
+            --container-name "$CONTAINER" \
+            --image "$IMAGE" \
+            --command node --args src/tools/grant-role.mjs --args serve \
+            --service-account-id "$APP_SA_ID" \
+            --network-id "$NETWORK_ID" \
+            --cores 1 --core-fraction 100 --memory 512MB \
+            --concurrency 1 --execution-timeout 30s \
+            --environment "APP_ENV=$ENV,STORAGE_PROVIDER=s3,S3_BUCKET=$FILES_BUCKET,STAGE_ADMIN_PHONE=$STAGE_ADMIN_PHONE" \
+            --secret "environment-variable=DATABASE_URL,id=$SECRET_ID,key=DATABASE_URL" \
+            --secret "environment-variable=APP_SECRET,id=$SECRET_ID,key=APP_SECRET"
+          URL=$(yc serverless container get --name "$CONTAINER" --format json | jq -r .url)
+          echo "URL=${URL%/}" >> $GITHUB_ENV
+
+      - name: Назначить администратора
+        timeout-minutes: 5
+        run: |
+          # Без токена контейнер не отвечает; с токеном технического пользователя — один вызов (повтор безопасен).
+          CODE=$(curl -sS --max-time 40 -o /dev/null -w '%{http_code}' -X POST "$URL/grant" || echo 000)
+          case "$CODE" in 401|403) echo "Без ключа: $CODE — закрыто";; *) echo "::error::Без ключа контейнер ответил $CODE"; exit 1;; esac
+          TOKEN=$(yc iam create-token); echo "::add-mask::$TOKEN"
+          OK=0
+          for i in $(seq 1 6); do
+            CODE=$(curl -sS --max-time 40 -X POST -H "Authorization: Bearer $TOKEN" -o "$RUNNER_TEMP/grant.json" -w '%{http_code}' "$URL/grant" || echo "нет связи")
+            echo "попытка $i: $CODE $(head -c 300 "$RUNNER_TEMP/grant.json" 2>/dev/null)"
+            if [ "$CODE" = 200 ] && jq -e '.ok == true and .role == "admin"' "$RUNNER_TEMP/grant.json" >/dev/null 2>&1; then OK=1; break; fi
+            sleep 10
+          done
+          [ "$OK" = 1 ] || { echo "::error::Назначить администратора не удалось"; exit 1; }
+          jq -r '"### Администратор площадки\n- номер: \(.phone)\n- \(if .changed then "назначен сейчас" else "уже был назначен" end)"' "$RUNNER_TEMP/grant.json" >> $GITHUB_STEP_SUMMARY
+
+      - name: Убрать временный контейнер и ключ
+        if: always()
+        run: |
+          yc serverless container delete --name "$CONTAINER" || true
+          docker logout cr.yandex || true
+          rm -f "$RUNNER_TEMP/sa.json" "$RUNNER_TEMP/grant.json"
