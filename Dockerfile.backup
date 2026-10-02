@@ -1,0 +1,25 @@
+# Контейнер еженедельной выгрузки базы (src/tools/backup.mjs): pg_dump и временный PostgreSQL 16 для учебного
+# восстановления + Node.js 22. Работает в сети контура в облаке, запускается таймером; наружу не открыт.
+FROM node:22-bookworm-slim AS deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+# Корневой сертификат Yandex Managed PostgreSQL (как в основном образе). Без доступа к storage.yandexcloud.net: --build-arg WITH_YC_CA=0.
+ARG WITH_YC_CA=1
+RUN mkdir -p /app/certs && if [ "$WITH_YC_CA" = "1" ]; then \
+      node -e "fetch('https://storage.yandexcloud.net/cloud-certs/CA.pem').then(r=>{if(!r.ok)throw new Error('CA '+r.status);return r.text()}).then(t=>require('fs').writeFileSync('/app/certs/yandex-ca.pem',t))"; \
+    fi
+
+FROM postgres:16-bookworm
+COPY --from=deps /usr/local/bin/node /usr/local/bin/node
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/certs ./certs
+COPY package.json ./
+COPY src ./src
+ENV NODE_ENV=production DB_CA_PATH=/app/certs/yandex-ca.pem PG_BIN=/usr/lib/postgresql/16/bin
+# Временный PostgreSQL не запускается от root.
+USER postgres
+ENTRYPOINT []
+EXPOSE 8080
+CMD ["node", "src/tools/backup.mjs", "serve"]
