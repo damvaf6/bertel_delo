@@ -10,12 +10,13 @@
 </head>
 <body>
   <div class="test-mark hidden" id="test-mark">Проверочная версия · только тестовые данные</div>
-  <header class="top"><div class="brand">БЕРТЕЛ Дело<small>дистанционный осмотр</small></div></header>
+  <header class="top"><div class="brand">БЕРТЕЛ Дело<small id="brand-sub">дистанционный осмотр</small></div></header>
   <main>
     <section class="card" id="intro">
-      <h1>Осмотр объекта</h1>
+      <h1 id="page-title">Осмотр объекта</h1>
       <p id="service" class="title"></p>
-      <p class="muted">Эксперт просит сфотографировать объект по шагам ниже. Вход не нужен. У каждого фото записываются время
+      <dl class="facts hidden" id="object"></dl>
+      <p class="muted" id="intro-text">Эксперт просит сфотографировать объект по шагам ниже. Вход не нужен. У каждого фото записываются время
         и место съёмки — так эксперт видит, что снимки сделаны у объекта.</p>
       <p class="muted" id="expires"></p>
       <button type="button" class="wide" id="start">Начать: разрешить определение места</button>
@@ -23,6 +24,12 @@
     </section>
     <section class="hidden" id="steps-box">
       <ol class="shoot-steps" id="steps"></ol>
+      <section class="card hidden" id="data-box">
+        <h2>Данные с объекта</h2>
+        <div id="data-fields"></div>
+        <button type="button" class="secondary wide" id="data-save">Сохранить данные</button>
+        <p class="msg" id="data-msg" role="status" aria-live="polite"></p>
+      </section>
       <section class="card">
         <p class="muted" id="done-hint">Когда все нужные фото сделаны, нажмите «Готово» — фото уйдут эксперту, ссылка закроется.</p>
         <button type="button" class="wide" id="finish">Готово</button>
