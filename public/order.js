@@ -356,8 +356,9 @@ async function signDoc(d) {
   say($('doc-msg'), 'Подписываем…', 'ok');
   try {
     await api('POST', `/api/documents/${d.id}/sign`, { confirm: true });
-    say($('doc-msg'), 'Файл подписан', 'ok');
+    // Сначала обновить список, потом сообщение: «подписан» появляется, когда кнопки «Подписать» у файла уже нет.
     await loadDocs();
+    say($('doc-msg'), 'Файл подписан', 'ok');
   } catch (err) { say($('doc-msg'), err.message); }
 }
 
