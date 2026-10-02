@@ -38,6 +38,8 @@ async function profileView(sql, userId) {
   return {
     user_id: sp.user_id, full_name: sp.full_name, active: sp.active, regions: sp.regions, capacity: sp.capacity,
     external_load: sp.external_load, open_orders: sp.open_orders, user_active: sp.user_active,
+    // Помощник на объекте (2.4): ему назначают выезды по экспресс-заявкам.
+    onsite: sp.onsite,
     permits: permits.map((p) => ({ ...p, valid_until: p.valid_until ?? null })),
     // Профиль перенесён из БЕРТЕЛ CRM (1.10): языки и квалификация; дела вне платформы приходят из CRM.
     crm: sp.crm_languages ? { languages: sp.crm_languages, qualification: sp.crm_qualification } : null,
@@ -99,7 +101,7 @@ export function matchOps() {
       },
     },
     {
-      // Сделать человека специалистом или поменять его профиль (район, нормальная нагрузка).
+      // Сделать человека специалистом или поменять его профиль (район, нормальная нагрузка, выезды на объект — 2.4).
       id: 'specialists.upsert', method: 'PUT', path: '/api/admin/specialists/:id', auth: 'user', access: { platform: 'admin' },
       async handler({ sql, actor, params, body }) {
         const userId = uuidFrom(params.id, 'Пользователь не найден');
@@ -110,11 +112,13 @@ export function matchOps() {
           const regions = body?.regions === undefined ? (cur?.regions ?? ['moscow', 'mo']) : regionsFrom(body.regions);
           const capacity = body?.capacity === undefined ? (cur?.capacity ?? 5) : intIn(body.capacity, 'Нормальная нагрузка', 1, 50);
           const external = body?.external_load === undefined ? (cur?.external_load ?? 0) : intIn(body.external_load, 'Дела вне платформы', 0, 500);
+          if (body?.onsite !== undefined && typeof body.onsite !== 'boolean') throw new HttpError(400, 'bad_input', 'Поле «Выезды на объект»: да или нет');
+          const onsite = body?.onsite ?? cur?.onsite ?? false;
           await tx`
-            insert into specialists (user_id, regions, capacity, external_load)
-            values (${userId}, ${regions}, ${capacity}, ${external})
-            on conflict (user_id) do update set regions = ${regions}, capacity = ${capacity}, external_load = ${external}`;
-          await audit(tx, actor, 'specialist.upsert', 'user', userId, { regions, capacity, external });
+            insert into specialists (user_id, regions, capacity, external_load, onsite)
+            values (${userId}, ${regions}, ${capacity}, ${external}, ${onsite})
+            on conflict (user_id) do update set regions = ${regions}, capacity = ${capacity}, external_load = ${external}, onsite = ${onsite}`;
+          await audit(tx, actor, 'specialist.upsert', 'user', userId, { regions, capacity, external, onsite });
           return profileView(tx, userId);
         });
         return { specialist: view };

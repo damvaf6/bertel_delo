@@ -137,6 +137,8 @@ export function orderOps() {
       basis_number: order.basis_number,
       basis_date: order.basis_date,
       fields: order.fields,
+      express: order.express,
+      express_available: !!def && !!registry.express(order.module, order.service),
       org_id: order.org_id,
       owner_user_id: order.owner_user_id,
       created_at: order.created_at,
@@ -225,12 +227,17 @@ export function orderOps() {
         const details = BASIS_KINDS[basisKind].details;
         const basisNumber = !details ? null : b.basis_number === undefined ? order.basis_number : optionalText(b.basis_number, 'Номер определения', 100);
         const basisDate = !details ? null : b.basis_date === undefined ? order.basis_date : basisDateFrom(b.basis_date);
+        // Экспресс (2.4): выезд помощника, эксперт работает дистанционно. При смене услуги без экспресса — снимается.
+        if (b.express !== undefined && typeof b.express !== 'boolean') throw new HttpError(400, 'bad_input', 'Поле «Экспресс»: да или нет');
+        const canExpress = !!registry.express(def.module.id, def.service.id);
+        if (b.express === true && !canExpress) throw new HttpError(400, 'no_express', 'Для этой услуги экспресса нет');
+        const express = canExpress && (b.express ?? order.express);
 
         const updated = await sql.tx(async (tx) => {
           const o = await tx.one`
             update orders set title = ${title}, module = ${def.module.id}, service = ${def.service.id}, fields = ${JSON.stringify(fields)},
                    deadline = ${deadline}, basis_kind = ${basisKind}, basis_number = ${basisNumber}, basis_date = ${basisDate},
-                   updated_at = now()
+                   express = ${express}, updated_at = now()
             where id = ${order.id} and status = 'new' returning *`;
           if (!o) throw new HttpError(409, 'not_editable', 'Заявка уже отправлена — изменить её нельзя');
           await audit(tx, actor, 'order.update', 'order', order.id);

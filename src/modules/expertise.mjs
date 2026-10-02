@@ -167,4 +167,34 @@ export default {
     { id: 'defects', title: 'Повреждения и недостатки крупно', services: ['realty', 'vehicle', 'movable'], optional: true },
     { id: 'papers', title: 'Документы и чеки', hint: 'Паспорт изделия, чек, гарантийный талон', services: ['movable', 'goods'], optional: true },
   ],
+
+  // Экспресс-услуга (задача 2.4): на объект выезжает помощник платформы, эксперт работает дистанционно. Помощник снимает
+  // по шагам осмотра (inspection) и заполняет данные с объекта (fields). show — какие поля заявки помощник видит, чтобы
+  // найти объект; имён, телефонов, цели оценки и комментария заказчика он не видит.
+  express: {
+    services: ['realty', 'land', 'vehicle', 'movable', 'goods'],
+    show: ['object_type', 'address', 'cadastral', 'area', 'land_use', 'vehicle_type', 'make_model', 'year', 'vin', 'items', 'location', 'subject'],
+    fields: [
+      {
+        id: 'condition', label: 'Общее состояние', type: 'select', required: true,
+        options: [
+          { id: 'good', name: 'Хорошее' },
+          { id: 'normal', name: 'Обычное, без явных недостатков' },
+          { id: 'needs_repair', name: 'Нужен ремонт' },
+          { id: 'bad', name: 'Плохое, есть серьёзные повреждения' },
+        ],
+      },
+      { id: 'area_measured', label: 'Площадь по замеру, кв. м', type: 'number', min: 1, max: 100000, services: ['realty'] },
+      { id: 'floor', label: 'Этаж и этажность дома', type: 'text', max: 40, hint: 'Например: 5 из 9', services: ['realty'] },
+      { id: 'renovation', label: 'Отделка', type: 'select', services: ['realty'],
+        options: [{ id: 'none', name: 'Без отделки' }, { id: 'basic', name: 'Простая' }, { id: 'good', name: 'Хорошая' }, { id: 'premium', name: 'Дорогая' }] },
+      { id: 'mileage', label: 'Пробег по прибору, км', type: 'number', integer: true, min: 0, max: 5000000, services: ['vehicle'] },
+      { id: 'vin_match', label: 'VIN на кузове совпадает с документами', type: 'select', services: ['vehicle'],
+        options: [{ id: 'yes', name: 'Да' }, { id: 'no', name: 'Нет' }, { id: 'no_docs', name: 'Документов нет на месте' }] },
+      { id: 'buildings', label: 'Постройки на участке', type: 'text', max: 300, services: ['land'] },
+      { id: 'match_order', label: 'Объект соответствует заявке', type: 'select', required: true,
+        options: [{ id: 'yes', name: 'Да' }, { id: 'partly', name: 'Частично — см. замечания' }, { id: 'no', name: 'Нет — см. замечания' }] },
+      { id: 'notes', label: 'Замечания помощника', type: 'longtext', max: 2000 },
+    ],
+  },
 };

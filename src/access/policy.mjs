@@ -32,6 +32,9 @@
 // Дистанционный осмотр (2.3): фото и ссылки в деле видит каждый, кто видит заявку; ссылку выдаёт и отзывает исполнитель,
 //               пока дело в работе (src/ops/inspect-ops.mjs). Владелец объекта входа не имеет — только секрет ссылки по одной
 //               заявке; фото осмотра не удаляет никто.
+// Экспресс-выезд (2.4): назначает и отменяет исполнитель, пока дело в работе; ход выезда и данные видит каждый, кто видит
+//               заявку, имя помощника — исполнитель и служебные. Помощник заявку не видит: только свой выезд — услугу,
+//               поля для поиска объекта из описания модуля и шаги; снимает и пишет данные, пока выезд действует.
 // Остальные не видят вовсе — ответ «не найдено», чтобы не раскрывать существование.
 import { HttpError, notFound, UUID_RE } from '../http/core.mjs';
 
@@ -194,6 +197,17 @@ export const RESOURCES = {
       return org && { subject: org, org };
     },
     level: (actor, found) => orgLevel(actor, found.org),
+  },
+  // Выезд помощника (2.4): только сам помощник; остальные смотрят выезд через заявку.
+  visit: {
+    async load(sql, id) {
+      if (!/^\d{1,18}$/.test(String(id))) return null;
+      const visit = await sql.one`select * from onsite_visits where id = ${id}`;
+      if (!visit) return null;
+      const order = await sql.one`select * from orders where id = ${visit.order_id}`;
+      return order && { subject: visit, visit, order };
+    },
+    level: (actor, { visit }) => (visit.helper_id === actor.id ? LEVEL.write : LEVEL.none),
   },
   // Разбор проблемы ИИ: только автор.
   consultation: {

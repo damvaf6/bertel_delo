@@ -57,7 +57,20 @@ export async function showSpecialist() {
   $('specialist-permits').replaceChildren(...sp.permits.map((p) => el('li', { text: permitText(p) })));
   $('specialist-permits-empty').classList.toggle('hidden', sp.permits.length > 0);
   show('specialist-view', 'specialist');
-  await showCrm();
+  await Promise.all([showCrm(), showVisits(sp)]);
+}
+
+// Выезды помощника на объект (экспресс, 2.4): открываются на странице осмотра — по шагам, с камерой и геометкой.
+const VISIT_STATE = { active: 'назначен', finished: 'завершён', cancelled: 'отменён экспертом', closed: 'закрыт' };
+async function showVisits(sp) {
+  const { visits } = await api('GET', '/api/visits');
+  $('visits-box').classList.toggle('hidden', !sp.onsite && !visits.length);
+  const when = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+  $('visits').replaceChildren(...visits.map((v) => el('li', { 'data-visit': v.id },
+    el('div', { class: 'title', text: `${v.service || 'Выезд'} · ${when(v.planned_at)}` }),
+    el('div', { class: 'muted', text: [v.place, VISIT_STATE[v.state]].filter(Boolean).join(' · ') }),
+    ...(v.state === 'active' ? [el('a', { class: 'btn secondary', href: `/osmotr?visit=${encodeURIComponent(v.id)}`, text: 'Открыть выезд' })] : []))));
+  $('visits-empty').classList.toggle('hidden', visits.length > 0);
 }
 
 // Госзаказ из БЕРТЕЛ CRM (1.10): число дел там (учитывается в подборе) и короткие предложения; принимаются они в CRM.

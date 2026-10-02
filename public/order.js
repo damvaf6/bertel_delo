@@ -8,6 +8,7 @@ import { loadReview, loadChat } from '/work.js';
 import { loadMoney } from '/money.js';
 import { loadDraft } from '/draft.js';
 import { loadInspection } from '/inspect.js';
+import { loadOnsite } from '/onsite.js';
 
 const $ = (id) => document.getElementById(id);
 const MAX_FILE = 5 * 1024 * 1024;
@@ -47,7 +48,7 @@ export async function openOrder(id) {
   $('done-percent').value = '';
   render();
   show('order-view', 'orders');
-  await Promise.all([loadDocs(), loadTransfer(), loadMatch(current, () => openOrder(id)), loadDraft(current, () => openOrder(id)), loadInspection(current), loadReview(current), loadChat(current), loadMoney(current, () => openOrder(id))]);
+  await Promise.all([loadDocs(), loadTransfer(), loadMatch(current, () => openOrder(id)), loadDraft(current, () => openOrder(id)), loadInspection(current), loadOnsite(current), loadReview(current), loadChat(current), loadMoney(current, () => openOrder(id))]);
 }
 
 function render() {
@@ -58,7 +59,7 @@ function render() {
   $('order-status').classList.toggle('cancelled', order.status === 'cancelled');
   $('order-deadline').textContent = order.deadline ? `Срок: ${dayRu(order.deadline)}${order.overdue ? ' · просрочено' : ''}` : 'Срок не указан';
   $('order-deadline').classList.toggle('overdue', order.overdue);
-  $('order-meta').textContent = `Создана ${dateTimeRu(order.created_at)}`;
+  $('order-meta').textContent = `Создана ${dateTimeRu(order.created_at)}${order.express ? ' · Экспресс: выезд помощника' : ''}`;
   renderOrgLine();
   $('details-form').classList.toggle('hidden', !current.editable);
   $('details-view').classList.toggle('hidden', current.editable);
@@ -90,6 +91,8 @@ function renderForm() {
   $('d-title').value = order.title;
   renderFields(order.fields);
   $('d-deadline').value = order.deadline || '';
+  $('d-express').checked = !!order.express;
+  toggleExpress();
   const def = selectedDef();
   const basis = def?.module.basis ?? state.catalog.modules[0].basis;
   $('d-basis').replaceChildren(...basis.map((b) => el('option', { value: b.id, text: b.name })));
@@ -137,6 +140,11 @@ function formValues() {
   return out;
 }
 
+// Экспресс (2.4) — только для услуг, где он есть в описании модуля.
+function toggleExpress() {
+  $('express-box').classList.toggle('hidden', !selectedDef()?.service.express);
+}
+
 function toggleCourt() {
   const def = selectedDef();
   const kind = (def?.module.basis ?? []).find((b) => b.id === $('d-basis').value);
@@ -151,6 +159,7 @@ async function saveForm() {
     fields: formValues(),
     deadline: $('d-deadline').value || null,
     basis_kind: $('d-basis').value,
+    express: !$('express-box').classList.contains('hidden') && $('d-express').checked,
   };
   if (!$('court-box').classList.contains('hidden')) {
     body.basis_number = $('d-basis-number').value;
@@ -163,6 +172,7 @@ async function saveForm() {
 
 $('d-service').addEventListener('change', () => {
   renderFields(formValues());
+  toggleExpress();
   const def = selectedDef();
   if (def) $('d-basis').replaceChildren(...def.module.basis.map((b) => el('option', { value: b.id, text: b.name })));
   toggleCourt();
@@ -191,6 +201,7 @@ function renderFacts() {
     pairs.push([f.label, f.type === 'select' ? (f.options.find((o) => o.id === v)?.name ?? v) : String(v)]);
   }
   pairs.push(['Срок', order.deadline ? dayRu(order.deadline) : '—']);
+  if (order.express) pairs.push(['Формат', 'Экспресс: выезд помощника, эксперт работает дистанционно']);
   let basis = order.basis_name || '—';
   if (order.basis_number) basis += `, № ${order.basis_number}`;
   if (order.basis_date) basis += ` от ${dayRu(order.basis_date)}`;

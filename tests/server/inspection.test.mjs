@@ -66,7 +66,7 @@ test('шаги осмотра — в описании модуля, у кажд�
   assert.ok(ids('goods').includes('goods_defect') && !ids('goods').includes('defects'));
   assert.equal(reg.inspectionSteps('expertise', 'realty').find((x) => x.id === 'meters').optional, true);
   assert.deepEqual(reg.inspectionSteps('expertise', 'nope'), []);
-  const { inspection, ...none } = structuredClone(expertise);
+  const { inspection, express, ...none } = structuredClone(expertise);
   assert.ok(inspection.length);
   assert.deepEqual(createRegistry([none]).inspectionSteps('expertise', 'realty'), [], 'без шагов — осмотра нет');
   const bad = (st) => assert.throws(() => validateModule({ ...structuredClone(expertise), inspection: [st] }), /шаг осмотра|шаги осмотра/);

@@ -79,7 +79,7 @@ async function shot(page, name) {
   await page.screenshot({ path: `test-results/screens/stage-run-${name}.png`, fullPage: true });
 }
 
-// Номера прогона: +7 999 000-NN-x0…x9, NN — от 20 до 89 (служебная проверка входа — 90-0x, администратор — 95-00).
+// Номера прогона: +7 999 000-NN-x0…x9, NN — от 20 до 89 (служебная проверка входа — 90-0x, администратор — 95-00, помощник экспресса — 96-00…99-99).
 const RUN = String(20 + Math.floor(Math.random() * 70)) + String(Math.floor(Math.random() * 10));
 const tel = (i) => `+7999000${RUN}${i}`;
 const TAG = `прогон ${RUN}-${Date.now().toString(36)}`;
@@ -483,4 +483,87 @@ test('общий прогон: деньги при отмене — переда
   await expect(sp.locator('#money-facts')).toContainText(/Выплата\s*3\s200 ₽ — выплачено/);
   await close(dp);
   await close(sp);
+});
+
+// Экспресс-услуга (задача 2.4): заказчик выбирает экспресс, эксперт назначает выезд помощнику, помощник на телефоне снимает
+// объект с геометкой (фото — в хранилище Яндекса) и пишет данные с места; эксперт видит всё в деле.
+// Помощник — свой номер +7 999 000-9x-xx из 96-00…99-99 (не пересекается с номерами прогона и администратором 95-00).
+test('общий прогон: экспресс — выезд помощника, фото с геометкой и данные с объекта у эксперта', async ({ page, browser, baseURL }) => {
+  const title = `Экспресс-оценка квартиры — ${TAG}`;
+  const HELPER = `+79990009${96 + Math.floor(Math.random() * 4)}${Math.floor(Math.random() * 10)}`;
+  const helperName = `Тестов Выездной ${RUN}`;
+  const ap = await phone(browser, baseURL), dp = await phone(browser, baseURL), sp = await phone(browser, baseURL);
+  const hp = await phone(browser, baseURL, { permissions: ['geolocation'], geolocation: { latitude: 55.7601, longitude: 37.6202, accuracy: 9 } });
+  await enter(dp, tel(5));
+  const spec = await enter(sp, tel(6));
+  await enter(hp, HELPER, helperName);
+  await enter(ap, ADMIN);
+  // Администратор отмечает помощника на объекте (Москва).
+  await ap.goto('/kabinet#admin');
+  await findUser(ap, HELPER);
+  await ap.getByLabel('Московская область').uncheck();
+  await ap.getByLabel('Помощник на объекте: выезды по экспресс-заявкам').check();
+  await ap.getByRole('button', { name: 'Сохранить профиль специалиста' }).click();
+  await expect(ap.getByText('Профиль специалиста сохранён')).toBeVisible();
+  await close(ap);
+
+  const h = { ...AUTH, ...H };
+  await enter(page, tel(7));
+  const id = (await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title }, headers: h })).json()).order.id;
+  expect((await page.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(6), fields: { purpose: 'bank', region: 'moscow', object_type: 'flat', address: 'г. Москва, ул. Экспрессная, д. 3', area: '39' } }, headers: h,
+  })).status()).toBe(200);
+  await page.goto(`/kabinet#order=${id}`);
+  await page.getByLabel('Экспресс: на объект приедет помощник').check();
+  await page.getByRole('button', { name: 'Сохранить' }).click();
+  await expect(page.locator('#order-meta')).toContainText('Экспресс: выезд помощника');
+  await page.getByRole('button', { name: 'Отправить заявку' }).click();
+  await expect(page.locator('#order-status')).toHaveText('Подбор исполнителя');
+  expect((await dp.request.put(`/api/orders/${id}/price`, { data: { price: '15000' }, headers: h })).status()).toBe(200);
+  await page.reload();
+  await page.getByRole('button', { name: /Оплатить 15\s000 ₽/ }).click();
+  await expect(page.locator('#money-facts')).toContainText('оплачено');
+  expect((await dp.request.post(`/api/orders/${id}/offer`, { data: { specialist_id: spec.id, from: 'matching' }, headers: h })).status()).toBe(200);
+  expect((await sp.request.post(`/api/orders/${id}/status`, { data: { from: 'awaiting_executor', to: 'in_work' }, headers: h })).status()).toBe(200);
+
+  // Эксперт назначает выезд.
+  await sp.goto(`/kabinet#order=${id}`);
+  await sp.getByLabel('Помощник на объекте', { exact: true }).selectOption({ label: helperName });
+  await sp.getByRole('button', { name: 'Назначить выезд' }).click();
+  await expect(sp.locator('#onsite-msg')).toHaveText('Выезд назначен — помощник получил уведомление');
+  await shot(sp, '14-express-vyezd');
+
+  // Помощник: выезд в разделе «Специалист», фото фасада с геометкой, данные, «Готово».
+  await hp.goto('/kabinet#specialist');
+  const visit = hp.locator('#visits li').filter({ hasText: 'г. Москва, ул. Экспрессная, д. 3' });
+  await visit.first().getByRole('link', { name: 'Открыть выезд' }).click();
+  await expect(hp.locator('#page-title')).toHaveText('Выезд на объект');
+  await hp.getByRole('button', { name: 'Начать: разрешить определение места' }).click();
+  await expect(hp.locator('#geo-state')).toContainText('Место определено');
+  const jpeg = Buffer.from((await hp.evaluate(() => {
+    const c = document.createElement('canvas');
+    c.width = 640; c.height = 480;
+    const g = c.getContext('2d');
+    g.fillStyle = '#c9d6c0'; g.fillRect(0, 0, 640, 480);
+    return c.toDataURL('image/jpeg', 0.8);
+  })).split(',')[1], 'base64');
+  await hp.locator('#steps li[data-step="facade"] input[type=file]').setInputFiles({ name: 'facade.jpg', mimeType: 'image/jpeg', buffer: jpeg });
+  await expect(hp.locator('#steps li[data-step="facade"] .msg')).toHaveText('Фото отправлено');
+  await hp.getByLabel('Общее состояние *').selectOption('normal');
+  await hp.getByLabel('Объект соответствует заявке *').selectOption('yes');
+  await hp.getByLabel('Площадь по замеру, кв. м').fill('38,7');
+  await shot(hp, '14p-express-pomoshnik');
+  hp.once('dialog', (d) => d.accept());
+  await hp.getByRole('button', { name: 'Готово' }).click();
+  await expect(hp.locator('#closed-text')).toContainText('Эксперт получил 1 фото и данные с объекта');
+  await close(hp);
+
+  // Эксперт: выезд завершён, данные и фото с местом.
+  await sp.reload();
+  await expect(sp.locator('#onsite-visits li').first()).toContainText('завершён');
+  await expect(sp.locator('#onsite-visits li dl').first()).toContainText('38.7');
+  await expect(sp.locator('#inspect-steps li[data-step="facade"]')).toContainText('место 55.76010, 37.62020');
+  await shot(sp, '14e-express-dannye');
+  await close(sp);
+  await close(dp);
 });

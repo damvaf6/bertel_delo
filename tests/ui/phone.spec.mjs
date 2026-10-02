@@ -1094,6 +1094,104 @@ test('дистанционный осмотр: специалист выдаёт
   await sctx.close();
 });
 
+test('экспресс: заказчик выбирает выезд помощника, эксперт назначает выезд, помощник снимает и пишет данные, всё в деле', async ({ page, browser, baseURL }) => {
+  await signIn(page, '+79990000620');
+  const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Экспресс-оценка квартиры' }, headers: H })).json();
+  const id = created.order.id;
+  expect((await page.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(7), fields: { purpose: 'bank', region: 'moscow', object_type: 'flat', address: 'г. Москва, Экспрессная ул., 9', area: '44', comment: 'Ключи у соседки' } }, headers: H,
+  })).status()).toBe(200);
+  // Заказчик отмечает экспресс в форме заявки.
+  await page.goto(`/kabinet#order=${id}`);
+  await expect(page.locator('#express-box')).toBeVisible();
+  await page.getByLabel('Экспресс: на объект приедет помощник').check();
+  await page.getByRole('button', { name: 'Сохранить' }).click();
+  await expect(page.locator('#details-msg')).not.toHaveText('');
+  await expect(page.locator('#order-meta')).toContainText('Экспресс: выезд помощника');
+  await shot(page, '86-zakazchik-express');
+  expect((await page.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+
+  const sctx = await phoneContext(browser, baseURL);
+  const sp = await sctx.newPage();
+  const spec = await signIn(sp, '+79990000621');
+  const hctx = await phoneContext(browser, baseURL, { permissions: ['geolocation'], geolocation: { latitude: 55.7601, longitude: 37.6202, accuracy: 8 } });
+  const hp = await hctx.newPage();
+  const helper = await signIn(hp, '+79990000622');
+  expect((await hp.request.patch('/api/me', { data: { full_name: 'Тестов Выездной' }, headers: H })).status()).toBe(200);
+  await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
+    await c.query("insert into specialists (user_id, onsite, regions) values ($1, true, '{moscow}')", [helper.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [spec.id]);
+    await c.query('update orders set price_kop = 1500000, paid_at = now(), status = $2, executor_user_id = $3 where id = $1', [id, 'in_work', spec.id]);
+    await c.query("insert into payments (order_id, amount_kop, status, provider_id, created_by, paid_at) values ($1, 1500000, 'succeeded', $2, $3, now())", [id, `pay_ui_${id}`, spec.id]);
+  });
+
+  // Эксперт назначает выезд помощнику.
+  await sp.goto(`/kabinet#order=${id}`);
+  await expect(sp.locator('#onsite-state')).toContainText('Согласуйте время с заказчиком');
+  await expect(sp.locator('#onsite-helper')).toContainText('Тестов Выездной');
+  await sp.getByRole('button', { name: 'Назначить выезд' }).click();
+  await expect(sp.locator('#onsite-msg')).toHaveText('Выезд назначен — помощник получил уведомление');
+  await expect(sp.locator('#onsite-visits li')).toContainText('назначен');
+  await expect(sp.locator('#onsite-visits li')).toContainText('помощник: Тестов Выездной');
+  await shot(sp, '87-specialist-express-vyezd');
+
+  // Помощник: уведомление и выезд в разделе «Специалист»; заявку и заказчика не видит.
+  await hp.goto('/kabinet#notifications');
+  await expect(hp.locator('#notifications')).toContainText('Вам назначен выезд на объект');
+  await hp.goto('/kabinet#specialist');
+  await expect(hp.locator('#visits li')).toContainText('г. Москва, Экспрессная ул., 9');
+  await shot(hp, '88-pomoshnik-vyezdy');
+  await hp.getByRole('link', { name: 'Открыть выезд' }).click();
+  await expect(hp.locator('#page-title')).toHaveText('Выезд на объект');
+  await expect(hp.locator('#object')).toContainText('г. Москва, Экспрессная ул., 9');
+  await expect(hp.locator('body')).not.toContainText('Ключи у соседки');
+  await hp.getByRole('button', { name: 'Начать: разрешить определение места' }).click();
+  await expect(hp.locator('#geo-state')).toContainText('Место определено');
+  const jpeg = Buffer.from((await hp.evaluate(() => {
+    const c = document.createElement('canvas');
+    c.width = 640; c.height = 480;
+    const g = c.getContext('2d');
+    g.fillStyle = '#c9d6c0'; g.fillRect(0, 0, 640, 480);
+    g.fillStyle = '#4a6b2f'; g.fillRect(180, 120, 260, 220);
+    return c.toDataURL('image/jpeg', 0.8);
+  })).split(',')[1], 'base64');
+  await hp.locator('#steps li[data-step="facade"] input[type=file]').setInputFiles({ name: 'facade.jpg', mimeType: 'image/jpeg', buffer: jpeg });
+  await expect(hp.locator('#steps li[data-step="facade"] .badge')).toHaveText('Фото: 1');
+  await hp.getByLabel('Общее состояние *').selectOption('needs_repair');
+  await hp.getByLabel('Площадь по замеру, кв. м').fill('43,8');
+  await hp.getByLabel('Замечания помощника').fill('Следы протечки на потолке кухни');
+  await hp.getByRole('button', { name: 'Сохранить данные' }).click();
+  await expect(hp.locator('#data-msg')).toHaveText('Данные сохранены');
+  await shot(hp, '89-pomoshnik-vyezd-shagi');
+  hp.once('dialog', (d) => d.accept());
+  await hp.getByRole('button', { name: 'Готово' }).click();
+  await expect(hp.locator('#finish-msg')).toContainText('Объект соответствует заявке');
+  await hp.getByLabel('Объект соответствует заявке *').selectOption('yes');
+  hp.once('dialog', (d) => d.accept());
+  await hp.getByRole('button', { name: 'Готово' }).click();
+  await expect(hp.locator('#closed-text')).toHaveText('Спасибо! Эксперт получил 1 фото и данные с объекта. Страницу можно закрыть.');
+  await shot(hp, '90-pomoshnik-vyezd-gotovo');
+  expect((await hp.request.get(`/api/orders/${id}`)).status()).toBe(404);
+
+  // Эксперт: выезд завершён, данные с объекта, фото по шагам с местом.
+  await sp.reload();
+  await expect(sp.locator('#onsite-visits li')).toContainText('завершён');
+  await expect(sp.locator('#onsite-visits li dl')).toContainText('Нужен ремонт');
+  await expect(sp.locator('#onsite-visits li dl')).toContainText('43.8');
+  await expect(sp.locator('#inspect-steps li[data-step="facade"] .photo-meta').first()).toContainText('место 55.76010, 37.62020 (±8 м)');
+  await shot(sp, '91-specialist-express-dannye');
+
+  // Заказчик видит ход выезда и данные — без имени помощника.
+  await page.reload();
+  await expect(page.locator('#onsite-visits li')).toContainText('завершён');
+  await expect(page.locator('#onsite-visits li')).not.toContainText('Тестов Выездной');
+  await expect(page.getByRole('button', { name: 'Назначить выезд' })).toBeHidden();
+  await shot(page, '92-zakazchik-express-dannye');
+  await hctx.close();
+  await sctx.close();
+});
+
 test('заявка по письму: почта подключается кодом из письма; письмо с вложением — заявка-черновик; ответ «Отправить» — заявка в подборе', async ({ page }) => {
   const me = await signIn(page, '+79990000591');
   const email = 'pismo-test@example.ru';

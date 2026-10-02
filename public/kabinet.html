@@ -85,6 +85,11 @@
           <label for="d-deadline">Срок: результат нужен к *</label>
           <input id="d-deadline" type="date">
         </div>
+        <div class="field hidden" id="express-box">
+          <label class="row"><input type="checkbox" id="d-express"> Экспресс: на объект приедет помощник</label>
+          <p class="muted">Помощник платформы сфотографирует объект и запишет данные с места, эксперт подготовит заключение
+            дистанционно. Время выезда с Вами согласует эксперт в переписке по заявке.</p>
+        </div>
         <div class="field">
           <label for="d-basis">Основание</label>
           <select id="d-basis"></select>
@@ -191,6 +196,23 @@
         <ul class="list" id="inspect-links"></ul>
         <ul class="list" id="inspect-steps"></ul>
         <p class="msg" id="inspect-msg" role="status" aria-live="polite"></p>
+      </div>
+      <div class="card hidden" id="onsite-box">
+        <h2>Выезд помощника</h2>
+        <p class="muted" id="onsite-state"></p>
+        <form class="hidden" id="onsite-assign" novalidate>
+          <div class="field">
+            <label for="onsite-helper">Помощник на объекте</label>
+            <select id="onsite-helper"></select>
+          </div>
+          <div class="field">
+            <label for="onsite-when">Когда выезд</label>
+            <input id="onsite-when" type="datetime-local">
+          </div>
+          <button type="submit" class="secondary" id="onsite-new">Назначить выезд</button>
+        </form>
+        <ul class="list" id="onsite-visits"></ul>
+        <p class="msg" id="onsite-msg" role="status" aria-live="polite"></p>
       </div>
       <div class="card hidden" id="draft-box">
         <h2>Черновик заключения</h2>
@@ -476,6 +498,13 @@
         <ul class="list" id="specialist-permits"></ul>
         <p class="muted hidden" id="specialist-permits-empty">Допусков пока нет. Допуск выдаёт администратор платформы.</p>
       </div>
+      <div class="card hidden" id="visits-box">
+        <h2>Мои выезды на объект</h2>
+        <p class="muted">Эксперт назначил Вам выезд: приезжайте к объекту в назначенное время, сфотографируйте его по шагам и
+          запишите данные с места. Заказчика и заявку Вы не видите — только то, что нужно, чтобы найти и осмотреть объект.</p>
+        <ul class="list" id="visits"></ul>
+        <p class="muted hidden" id="visits-empty">Выездов пока нет.</p>
+      </div>
       <div class="card hidden" id="crm-box">
         <h2>Госзаказ — БЕРТЕЛ CRM</h2>
         <p class="muted" id="crm-facts"></p>
@@ -533,6 +562,7 @@
           <label for="sp-capacity">Нормальная нагрузка: сколько дел одновременно</label>
           <input id="sp-capacity" type="text" inputmode="numeric" value="5">
         </div>
+        <label class="row"><input type="checkbox" id="sp-onsite"> Помощник на объекте: выезды по экспресс-заявкам</label>
         <button type="submit" class="wide" id="sp-save">Сохранить профиль специалиста</button>
         <div class="hidden" id="sp-permits-box">
           <h2 class="gap">Допуски</h2>

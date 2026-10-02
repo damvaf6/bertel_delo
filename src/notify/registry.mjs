@@ -10,7 +10,7 @@ export const TYPES = [
   { id: 'money', name: 'Оплата и выплаты', hint: 'оплата получена, вознаграждение выплачено, деньги возвращены или перевод не прошёл', for: 'all', sms: true },
   { id: 'org_invites', name: 'Приглашения в организацию', hint: 'Вас пригласили стать сотрудником организации', for: 'all', sms: true },
   { id: 'offers', name: 'Предложения дел', hint: 'Вам предложили новое дело (и предложения госзаказа из БЕРТЕЛ CRM)', for: 'specialist', sms: true },
-  { id: 'executor_work', name: 'Мои дела как исполнителя', hint: 'владелец прислал фото осмотра, возврат на доработку, результат принят, дело снято, передано другому или отменено', for: 'specialist', sms: true },
+  { id: 'executor_work', name: 'Мои дела как исполнителя', hint: 'владелец или помощник прислал фото осмотра, назначен или отменён выезд, возврат на доработку, результат принят, дело снято, передано другому или отменено', for: 'specialist', sms: true },
   { id: 'dispatch', name: 'Очередь диспетчера', hint: 'новые и оплаченные заявки, отказы исполнителей, сдача на проверку, отмены, неудачные выплаты и возвраты', for: 'dispatcher', sms: false },
 ];
 export const TYPE = Object.fromEntries(TYPES.map((t) => [t.id, t]));
@@ -31,6 +31,10 @@ export const EVENTS = {
 
   offer_withdrawn: { type: 'executor_work', title: 'Предложение дела снято', order: true },
   inspection_done: { type: 'executor_work', title: 'Владелец объекта прислал фото осмотра', order: true },
+  onsite_done: { type: 'executor_work', title: 'Помощник завершил выезд: фото и данные с объекта в деле', order: true },
+  // Помощнику на объекте (2.4) — без номера заявки: заявку он не видит, выезд — в разделе «Специалист».
+  onsite_assigned: { type: 'executor_work', title: 'Вам назначен выезд на объект', order: false },
+  onsite_cancelled: { type: 'executor_work', title: 'Выезд на объект отменён', order: false },
   rework: { type: 'executor_work', title: 'Результат возвращён на доработку', order: true },
   result_accepted: { type: 'executor_work', title: 'Результат принят проверкой', order: true },
   executor_cancelled: { type: 'executor_work', title: 'Дело отменено', order: true },

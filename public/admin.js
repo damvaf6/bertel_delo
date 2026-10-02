@@ -58,6 +58,7 @@ async function loadSpecialist(userId) {
   $('sp-moscow').checked = specialist ? specialist.regions.includes('moscow') : true;
   $('sp-mo').checked = specialist ? specialist.regions.includes('mo') : true;
   $('sp-capacity').value = specialist ? String(specialist.capacity) : '5';
+  $('sp-onsite').checked = !!specialist?.onsite;
   $('sp-permits-box').classList.toggle('hidden', !specialist);
   $('sp-service').replaceChildren(...state.catalog.modules.flatMap((m) => m.services.map((s) => el('option', { value: `${m.id}/${s.id}`, text: `${m.name} · ${s.name}` }))));
   $('sp-permits').replaceChildren(...(specialist?.permits ?? []).map((p) => el('li', { class: 'row' },
@@ -70,7 +71,7 @@ $('admin-specialist').addEventListener('submit', async (e) => {
   const regions = [['moscow', 'sp-moscow'], ['mo', 'sp-mo']].filter(([, id]) => $(id).checked).map(([r]) => r);
   if (!regions.length) return say($('sp-msg'), 'Выберите, где работает специалист');
   try {
-    await api('PUT', `/api/admin/specialists/${found.id}`, { regions, capacity: Number($('sp-capacity').value) });
+    await api('PUT', `/api/admin/specialists/${found.id}`, { regions, capacity: Number($('sp-capacity').value), onsite: $('sp-onsite').checked });
     await loadSpecialist(found.id);
     say($('sp-msg'), 'Профиль специалиста сохранён', 'ok');
   } catch (err) { say($('sp-msg'), err.message); }
