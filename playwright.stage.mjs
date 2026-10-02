@@ -6,6 +6,8 @@ if (!process.env.UI_BASE_URL) throw new Error('UI_BASE_URL — адрес кон
 export default defineConfig({
   testDir: 'tests/stage',
   timeout: 60_000,
+  // Облако отвечает медленнее локального стенда: ждём появления на экране до 15 с.
+  expect: { timeout: 15_000 },
   workers: 1,
   reporter: [['list']],
   outputDir: 'test-results/artifacts',
