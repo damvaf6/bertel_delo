@@ -16,6 +16,9 @@ export default defineConfig({
     isMobile: true,
     hasTouch: true,
     locale: 'ru-RU',
+    acceptDownloads: true,
+    // Без UTF-8 в окружении Chromium заменяет русские имена скачанных файлов на «download».
+    launchOptions: { env: { ...process.env, LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8' } },
     screenshot: 'only-on-failure',
   },
 });
