@@ -837,7 +837,7 @@ test('мост CRM (1.10): только по подписи моста; испо
 });
 
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {
-  const PUBLIC = ['health', 'auth.code', 'auth.verify', 'files.memory', 'test.calls', 'test.script', 'test.reset', 'test.mail.inbound', 'payments.notify'];
+  const PUBLIC = ['health', 'auth.code', 'auth.verify', 'files.memory', 'test.calls', 'test.script', 'test.reset', 'test.mail.inbound', 'stage.login', 'payments.notify'];
   const ops = S.app.locals.ops;
   const extraPublic = ops.filter((o) => o.auth === 'public' && !PUBLIC.includes(o.id)).map((o) => o.id);
   assert.deepEqual(extraPublic, [], `новые открытые операции: ${extraPublic.join(', ')}`);

@@ -266,6 +266,39 @@ resource "yandex_lockbox_secret_iam_binding" "app_read" {
   members   = ["serviceAccount:${yandex_iam_service_account.app.id}"]
 }
 
+# Ключ служебного входа тестовыми номерами — ТОЛЬКО на проверочной площадке (решение Дамира 02.10.2026, вариант А).
+# Отдельный секрет, а не строка в delo-<env>-app: на prod его нет вовсе (count = 0), а сервер с этим ключом на prod
+# не стартует (src/config.mjs). Проверка — tests/server/stage-login.test.mjs.
+resource "random_password" "stage_login" {
+  count   = var.env == "stage" ? 1 : 0
+  length  = 48
+  special = false
+}
+
+resource "yandex_lockbox_secret" "stage_login" {
+  count               = var.env == "stage" ? 1 : 0
+  name                = "${local.name}-stage-login"
+  description         = "Ключ служебного входа тестовыми номерами (только stage)."
+  kms_key_id          = yandex_kms_symmetric_key.main.id
+  deletion_protection = false
+}
+
+resource "yandex_lockbox_secret_version" "stage_login" {
+  count     = var.env == "stage" ? 1 : 0
+  secret_id = yandex_lockbox_secret.stage_login[0].id
+  entries {
+    key        = "STAGE_LOGIN_KEY"
+    text_value = random_password.stage_login[0].result
+  }
+}
+
+resource "yandex_lockbox_secret_iam_binding" "stage_login_read" {
+  count     = var.env == "stage" ? 1 : 0
+  secret_id = yandex_lockbox_secret.stage_login[0].id
+  role      = "lockbox.payloadViewer"
+  members   = ["serviceAccount:${yandex_iam_service_account.app.id}"]
+}
+
 # ---------------------------------------------------------------- реестр образов
 resource "yandex_container_registry" "main" {
   name = local.name

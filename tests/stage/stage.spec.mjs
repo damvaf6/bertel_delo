@@ -1,9 +1,24 @@
-// Проверка на адресе контура stage после выкладки (телефон 412×915): страница входа открывается, помечена как
-// проверочная, без прокрутки вбок, ошибок JavaScript и запросов к чужим адресам. Код входа здесь не запрашивается —
-// полный прогон на stage отдельной задачей. Скриншот — test-results/screens/stage-vhod.png.
-import { test, expect } from '@playwright/test';
+// Проверка на адресе контура stage после выкладки (телефон 412×915). Площадка закрыта от посторонних (решение Дамира
+// 02.10.2026, вариант А): браузер подставляет IAM-токен технического пользователя только для адреса площадки, служебный
+// вход тестовыми номерами — по ключу STAGE_LOGIN_KEY. Скриншоты — test-results/screens/stage-*.png.
+import { test as base, expect, request as pwRequest } from '@playwright/test';
 
-test('stage: страница входа на телефоне', async ({ page, baseURL }) => {
+const TOKEN = process.env.STAGE_INVOKE_TOKEN;
+const LOGIN_KEY = process.env.STAGE_LOGIN_KEY;
+if (!TOKEN || !LOGIN_KEY) throw new Error('STAGE_INVOKE_TOKEN и STAGE_LOGIN_KEY — ключи прогона (workflow Deploy core)');
+const AUTH = { authorization: `Bearer ${TOKEN}` };
+
+// Токен уходит только на адрес площадки (не в хранилище файлов и никуда больше).
+const test = base.extend({
+  context: async ({ context, baseURL }, use) => {
+    const origin = new URL(baseURL).origin;
+    await context.route((u) => u.origin === origin, async (route) => route.continue({ headers: { ...(await route.request().allHeaders()), ...AUTH } }));
+    await use(context);
+  },
+});
+
+// Ошибки JavaScript и запросы к чужим адресам на странице.
+function watch(page, baseURL) {
   const problems = [];
   const origin = new URL(baseURL).origin;
   page.on('pageerror', (e) => problems.push(`ошибка JS: ${e.message}`));
@@ -11,8 +26,21 @@ test('stage: страница входа на телефоне', async ({ page, 
     const u = new URL(r.url());
     if (!['data:', 'blob:'].includes(u.protocol) && u.origin !== origin) problems.push(`внешний запрос: ${r.url()}`);
   });
+  return problems;
+}
 
-  const health = await page.request.get('/api/health');
+test('stage: без ключа площадка закрыта', async ({ baseURL }) => {
+  const anon = await pwRequest.newContext({ baseURL });
+  for (const path of ['/', '/api/health', '/kabinet']) {
+    const r = await anon.get(path, { maxRedirects: 0 });
+    expect([401, 403], `${path}: ${r.status()}`).toContain(r.status());
+  }
+  await anon.dispose();
+});
+
+test('stage: страница входа на телефоне', async ({ page, baseURL }) => {
+  const problems = watch(page, baseURL);
+  const health = await page.request.get('/api/health', { headers: AUTH });
   expect(await health.json()).toEqual({ ok: true, test_data: true });
 
   await page.goto('/');
@@ -22,5 +50,24 @@ test('stage: страница входа на телефоне', async ({ page, 
   const width = await page.evaluate(() => document.documentElement.scrollWidth);
   expect(width, 'страница шире экрана').toBeLessThanOrEqual(412);
   await page.screenshot({ path: 'test-results/screens/stage-vhod.png', fullPage: true });
+  expect(problems, problems.join('\n')).toEqual([]);
+});
+
+test('stage: служебный вход — только тестовые номера и только с ключом', async ({ page, baseURL }) => {
+  const problems = watch(page, baseURL);
+  const post = (data, key = LOGIN_KEY) => page.request.post('/__stage/login', {
+    data, headers: { ...AUTH, 'x-delo-request': '1', ...(key ? { 'x-stage-login': key } : {}) },
+  });
+  expect((await post({ phone: '+79990009001' }, 'wrong-key-0123456789abcdef0123456789')).status()).toBe(404);
+  expect((await post({ phone: '+79161234567' })).status()).toBe(403);
+  const r = await post({ phone: '+79990009001' });
+  expect(r.status()).toBe(200);
+  expect((await r.json()).user.phone).toBe('+79990009001');
+
+  await page.goto('/kabinet');
+  await expect(page.getByRole('heading', { name: 'Мои заявки' })).toBeVisible();
+  const width = await page.evaluate(() => document.documentElement.scrollWidth);
+  expect(width, 'страница шире экрана').toBeLessThanOrEqual(412);
+  await page.screenshot({ path: 'test-results/screens/stage-kabinet.png', fullPage: true });
   expect(problems, problems.join('\n')).toEqual([]);
 });

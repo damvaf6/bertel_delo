@@ -77,7 +77,11 @@ export async function verifyCode({ sql, cfg }, phone, code) {
   }
   const used = await sql.one`update login_codes set used_at = now() where id = ${row.id} and used_at is null returning id`;
   if (!used) throw new HttpError(400, 'code_expired', 'Код устарел, запросите новый');
+  return openSession(sql, phone);
+}
 
+// Сессия для номера (новый номер — новая учётка). Вход по коду и служебный вход проверочной площадки (stage-ops.mjs).
+export async function openSession(sql, phone, action = 'auth.login') {
   return sql.tx(async (tx) => {
     let user = await tx.one`select * from users where phone = ${phone}`;
     if (!user) user = await tx.one`insert into users (phone) values (${phone}) returning *`;
@@ -85,7 +89,7 @@ export async function verifyCode({ sql, cfg }, phone, code) {
     const token = crypto.randomBytes(32).toString('base64url');
     await tx`insert into sessions (token_hash, user_id, expires_at)
              values (${sha256(token)}, ${user.id}, now() + make_interval(secs => ${SESSION_TTL_SEC}))`;
-    await tx`insert into audit_log (actor_id, action, subject_type, subject_id) values (${user.id}, 'auth.login', 'user', ${user.id})`;
+    await tx`insert into audit_log (actor_id, action, subject_type, subject_id) values (${user.id}, ${action}, 'user', ${user.id})`;
     return { user, token };
   });
 }

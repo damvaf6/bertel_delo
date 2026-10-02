@@ -1,6 +1,9 @@
 // Служебные операции, которые включаются только в определённых режимах.
 import crypto from 'node:crypto';
-import { HttpError } from '../http/core.mjs';
+import { HttpError, rateLimiter, sessionCookie } from '../http/core.mjs';
+import { STAGE_LOGIN_ENVS } from '../config.mjs';
+import { openSession, SESSION_TTL_SEC } from '../auth/auth.mjs';
+import { phoneFrom, publicUser } from './util.mjs';
 import { contentDisposition } from '../providers/storage.mjs';
 import { processInbound, receiveMail } from '../mail/inbound.mjs';
 import { deliverMail } from '../mail/outbox.mjs';
@@ -16,6 +19,33 @@ export function memoryFileOps() {
       res.setHeader('Content-Type', file.contentType || 'application/octet-stream');
       res.setHeader('Content-Disposition', contentDisposition(file.filename));
       res.end(file.body);
+    },
+  }];
+}
+
+// Тестовые номера: +7 999 000-xx-xx (устав: тестовые данные помечены).
+export const TEST_PHONE = /^\+7999000\d{4}$/;
+
+// Служебный вход тестовыми номерами на проверочной площадке (решение Дамира 02.10.2026, вариант А): сама площадка
+// закрыта от посторонних (вызов только с ключом технического пользователя облака), а вход — по отдельному ключу
+// из хранилища ключей. Без кода из СМС, только номера +7999000xxxx. На prod операции нет: ключ там запрещён
+// настройкой (config.mjs), а здесь — повторная проверка контура.
+export function stageLoginOps(cfg) {
+  if (!cfg.stageLoginKey || !STAGE_LOGIN_ENVS.includes(cfg.appEnv)) return [];
+  const expected = crypto.createHash('sha256').update(cfg.stageLoginKey).digest();
+  const limit = rateLimiter({ windowMs: 10 * 60_000, max: 60 });
+  return [{
+    id: 'stage.login', method: 'POST', path: '/__stage/login', auth: 'public',
+    publicReason: 'служебный вход тестовыми номерами — только на закрытой проверочной площадке, по ключу из хранилища ключей',
+    rateLimit: (ip) => limit(`stage-login:${ip}`),
+    async handler({ req, body, sql, res }) {
+      const got = crypto.createHash('sha256').update(req.get('x-stage-login') || '').digest();
+      if (!crypto.timingSafeEqual(got, expected)) throw new HttpError(404, 'not_found', 'Не найдено');
+      const phone = phoneFrom(body?.phone);
+      if (!TEST_PHONE.test(phone)) throw new HttpError(403, 'not_test_phone', 'Служебный вход — только для тестовых номеров +7 999 000-xx-xx');
+      const { user, token } = await openSession(sql, phone, 'auth.stage_login');
+      res.setHeader('Set-Cookie', sessionCookie(cfg, token, SESSION_TTL_SEC));
+      return { user: publicUser(user) };
     },
   }];
 }
