@@ -153,6 +153,8 @@ export function coreOps(cfg) {
         if (FINAL.includes(order.status)) throw new HttpError(409, 'order_final', 'Заявка завершена — файлы не удаляются');
         // Основание отправленной заявки остаётся: по нему заявку приняли в работу.
         if (doc.kind === 'basis' && order.status !== 'new') throw new HttpError(409, 'basis_locked', 'Основание отправленной заявки удалить нельзя');
+        // Фото дистанционного осмотра (2.3) — свидетельство осмотра со временем и геометкой: не удаляются.
+        if (doc.kind === 'inspection') throw new HttpError(409, 'inspection_locked', 'Фото осмотра удалить нельзя');
         // Сданный результат остаётся: по нему идёт проверка (убрать можно, пока дело в работе).
         if (doc.kind === 'result' && order.status !== 'in_work') throw new HttpError(409, 'result_locked', 'Сданный результат удалить нельзя');
         await sql.tx(async (tx) => {

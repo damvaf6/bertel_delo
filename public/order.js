@@ -7,12 +7,13 @@ import { loadMatch } from '/match.js';
 import { loadReview, loadChat } from '/work.js';
 import { loadMoney } from '/money.js';
 import { loadDraft } from '/draft.js';
+import { loadInspection } from '/inspect.js';
 
 const $ = (id) => document.getElementById(id);
 const MAX_FILE = 5 * 1024 * 1024;
 const FINAL = ['closed', 'cancelled'];
 const WORK_STARTED = ['in_work', 'review'];
-const DOC_KIND_RU = { basis: 'Основание', result: 'Результат работы' };
+const DOC_KIND_RU = { basis: 'Основание', result: 'Результат работы', inspection: 'Фото осмотра' };
 let current = null; // { order, access, editable, actions, history }
 
 const dateTimeRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
@@ -46,7 +47,7 @@ export async function openOrder(id) {
   $('done-percent').value = '';
   render();
   show('order-view', 'orders');
-  await Promise.all([loadDocs(), loadTransfer(), loadMatch(current, () => openOrder(id)), loadDraft(current, () => openOrder(id)), loadReview(current), loadChat(current), loadMoney(current, () => openOrder(id))]);
+  await Promise.all([loadDocs(), loadTransfer(), loadMatch(current, () => openOrder(id)), loadDraft(current, () => openOrder(id)), loadInspection(current), loadReview(current), loadChat(current), loadMoney(current, () => openOrder(id))]);
 }
 
 function render() {
@@ -296,7 +297,9 @@ async function loadDocs() {
   const mineResults = current.executor?.is_me && order.status === 'in_work';
   $('docs').replaceChildren(...documents.map((d) => {
     // Результат убирает только исполнитель, пока не сдал; документы заказчика — заказчик (основание — до отправки).
-    const removable = d.kind === 'result' ? mineResults : canChange && !(d.kind === 'basis' && order.status !== 'new');
+    // Фото дистанционного осмотра не удаляются никем: это свидетельство осмотра со временем и местом (2.3).
+    const removable = d.kind === 'inspection' ? false
+      : d.kind === 'result' ? mineResults : canChange && !(d.kind === 'basis' && order.status !== 'new');
     return el('li', { class: 'doc' },
       el('div', {},
         el('div', { class: 'name', text: d.filename }),

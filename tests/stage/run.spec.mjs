@@ -44,8 +44,8 @@ function watched(page, baseURL) {
 }
 
 // Второй телефон: свой контекст, тот же токен облака только для адреса площадки.
-async function phone(browser, baseURL) {
-  const ctx = await browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true, locale: 'ru-RU', acceptDownloads: true });
+async function phone(browser, baseURL, extra = {}) {
+  const ctx = await browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true, locale: 'ru-RU', acceptDownloads: true, ...extra });
   const origin = new URL(baseURL).origin;
   await ctx.route((u) => u.origin === origin, async (route) => route.continue({ headers: { ...(await route.request().allHeaders()), ...AUTH } }));
   return watched(await ctx.newPage(), baseURL);
@@ -307,6 +307,31 @@ test('общий прогон: сквозной путь — администр�
   await expect(sp.locator('#money-facts')).toContainText(/Ваше вознаграждение \(80% цены\)\s*14\s400 ₽/);
   await sp.getByRole('button', { name: 'Принять дело' }).click();
   await expect(sp.locator('#order-status')).toHaveText('В работе');
+  // Дистанционный осмотр (задача 2.3): ссылка владельцу; владелец без входа снимает фасад с геометкой и нажимает «Готово».
+  await sp.getByRole('button', { name: 'Выдать ссылку владельцу' }).click();
+  await expect(sp.locator('#inspect-msg')).toHaveText('Ссылка готова — отправьте её владельцу объекта');
+  const inspectUrl = await sp.locator('#inspect-url').textContent();
+  const jpeg = Buffer.from((await sp.evaluate(() => {
+    const c = document.createElement('canvas');
+    c.width = 640; c.height = 480;
+    const g = c.getContext('2d');
+    g.fillStyle = '#9db4d0'; g.fillRect(0, 0, 640, 480);
+    return c.toDataURL('image/jpeg', 0.8);
+  })).split(',')[1], 'base64');
+  const op = await phone(browser, baseURL, { permissions: ['geolocation'], geolocation: { latitude: 55.7512, longitude: 37.6184, accuracy: 12 } });
+  await op.goto(inspectUrl);
+  await op.getByRole('button', { name: 'Начать: разрешить определение места' }).click();
+  await expect(op.locator('#geo-state')).toContainText('Место определено');
+  await op.locator('#steps li[data-step="facade"] input[type=file]').setInputFiles({ name: 'facade.jpg', mimeType: 'image/jpeg', buffer: jpeg });
+  await expect(op.locator('#steps li[data-step="facade"] .msg')).toHaveText('Фото отправлено');
+  await shot(op, '12o-osmotr-vladelec');
+  op.once('dialog', (d) => d.accept());
+  await op.getByRole('button', { name: 'Готово' }).click();
+  await expect(op.locator('#closed-text')).toContainText('Эксперт получил 1 фото');
+  await close(op);
+  await sp.reload();
+  await expect(sp.locator('#inspect-steps li[data-step="facade"]')).toContainText('место 55.75120, 37.61840');
+  await shot(sp, '12p-osmotr-foto');
   // Черновик заключения от ИИ (задача 2.2): готовится по заявке, эксперт заполняет пометки и прикладывает Word.
   await sp.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
   await expect(sp.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');

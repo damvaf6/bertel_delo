@@ -172,6 +172,26 @@
         </div>
         <p class="msg" id="doc-msg" role="status" aria-live="polite"></p>
       </div>
+      <div class="card hidden" id="inspect-box">
+        <h2>Дистанционный осмотр</h2>
+        <p class="muted" id="inspect-state"></p>
+        <form class="hidden" id="inspect-issue" novalidate>
+          <div class="field">
+            <label for="inspect-days">Ссылка владельцу объекта действует</label>
+            <select id="inspect-days"></select>
+          </div>
+          <button type="submit" class="secondary" id="inspect-new">Выдать ссылку владельцу</button>
+        </form>
+        <div class="hidden" id="inspect-fresh">
+          <p class="muted">Отправьте ссылку владельцу объекта (например, в мессенджере). Она показывается один раз; потеряли —
+            выдайте новую, прежняя перестанет действовать.</p>
+          <p class="link-box" id="inspect-url"></p>
+          <button type="button" class="secondary" id="inspect-copy">Скопировать ссылку</button>
+        </div>
+        <ul class="list" id="inspect-links"></ul>
+        <ul class="list" id="inspect-steps"></ul>
+        <p class="msg" id="inspect-msg" role="status" aria-live="polite"></p>
+      </div>
       <div class="card hidden" id="draft-box">
         <h2>Черновик заключения</h2>
         <p class="muted" id="draft-state"></p>
