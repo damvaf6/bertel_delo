@@ -226,7 +226,8 @@ test('общий прогон: помощник разбирает пробле�
 });
 
 // Часть 2: шаги администратора и диспетчера (1.4, 1.5, 1.6, 1.11) — сквозной путь заявки до выплаты исполнителю.
-test('общий прогон: сквозной путь — администратор назначает диспетчера и специалиста, цена, оплата, подбор, работа, проверка, выплата', async ({ page, browser, baseURL }) => {
+// Сквозной путь экспертизы (задача 2.6): заявка → осмотр → черновик → ИИ-проверка → подпись → выдача → выплата — одним прогоном.
+test('общий прогон: сквозной путь экспертизы — заявка, цена, оплата, подбор, осмотр, черновик, ИИ-проверка, подпись, выдача, выплата', async ({ page, browser, baseURL }) => {
   const D = tel(5), S = tel(6), X = tel(8);
   const specName = `Тестов Оценщик ${RUN}`;
   const title = `Оценка квартиры для продажи — ${TAG}`;
@@ -329,6 +330,11 @@ test('общий прогон: сквозной путь — администр�
   await op.getByRole('button', { name: 'Готово' }).click();
   await expect(op.locator('#closed-text')).toContainText('Эксперт получил 1 фото');
   await close(op);
+  // После «Готово» ссылка больше не принимает фото.
+  const op2 = await phone(browser, baseURL);
+  await op2.goto(inspectUrl);
+  await expect(op2.locator('#closed-text')).toHaveText('Осмотр завершён — фото переданы эксперту');
+  await close(op2);
   await sp.reload();
   await expect(sp.locator('#inspect-steps li[data-step="facade"]')).toContainText('место 55.75120, 37.61840');
   await shot(sp, '12p-osmotr-foto');
@@ -374,6 +380,9 @@ test('общий прогон: сквозной путь — администр�
   await page.reload();
   await expect(page.locator('#order-status')).toHaveText('Проверка результата');
   await expect(page.locator('#docs li').filter({ hasText: 'Результат работы' })).toHaveCount(0);
+  // Черновик и подсказки ИИ — только эксперту и диспетчеру.
+  await expect(page.locator('#draft-box')).toBeHidden();
+  expect((await page.request.get(`/api/orders/${id}/draft`, { headers: { ...AUTH, ...H } })).status()).toBe(403);
 
   // 7. Диспетчер: ИИ-подсказки, отметки по всем правилам, «Проверено, готово».
   await dp.reload();
@@ -391,9 +400,12 @@ test('общий прогон: сквозной путь — администр�
   await dp.getByRole('button', { name: 'Проверено, готово' }).click();
   await expect(dp.locator('#order-status')).toHaveText('Готово');
 
-  // 8. Заказчик: результат из хранилища Яндекса скачивается и совпадает, акт, закрытие.
-  await page.goto(`/kabinet#order=${id}`);
-  await page.reload();
+  // 8. Заказчик: уведомление, результат из хранилища Яндекса скачивается и совпадает, акт, закрытие.
+  await page.goto('/kabinet#notifications');
+  const ready = page.locator('#notifications li').filter({ hasText: title }).filter({ hasText: 'Результат проверен и доступен в кабинете' });
+  await expect(ready).toHaveCount(1);
+  await ready.getByRole('button').click();
+  await expect(page.locator('#order-title')).toHaveText(title);
   await expect(page.locator('#order-status')).toHaveText('Готово');
   await expect(page.locator('#messages li').first()).toContainText('Осмотр проведён');
   const res = page.locator('#docs li').filter({ hasText: 'Отчёт об оценке.txt' });
@@ -408,6 +420,13 @@ test('общий прогон: сквозной путь — администр�
   await expect(page.locator('#doc-msg')).toHaveText(`Подпись верна: ${specName}`);
   const [sigFile] = await Promise.all([page.waitForEvent('download'), concl.getByRole('button', { name: 'Файл подписи' }).click()]);
   expect(sigFile.suggestedFilename()).toBe('Заключение.docx.sig');
+  // Заключение — настоящий файл Word из хранилища; подсказок ИИ заказчик не видит.
+  const [word] = await Promise.all([page.waitForEvent('download'), concl.getByRole('button', { name: 'Скачать' }).click()]);
+  const wchunks = [];
+  for await (const ch of await word.createReadStream()) wchunks.push(ch);
+  expect(Buffer.concat(wchunks).subarray(0, 2).toString()).toBe('PK');
+  await expect(page.locator('#draft-box')).toBeHidden();
+  await expect(page.locator('.ai-marks')).toHaveCount(0);
   await page.locator('#closing li').getByRole('button', { name: 'Открыть' }).click();
   await expect(page.locator('#closing-doc')).toContainText('Акт об оказании услуг');
   await shot(page, '15-gotovo');
