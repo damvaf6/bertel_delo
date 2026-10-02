@@ -54,8 +54,8 @@ async function signIn(page, phone) {
   return (await r.json()).user;
 }
 
-function phoneContext(browser, baseURL) {
-  return browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true, locale: 'ru-RU' });
+function phoneContext(browser, baseURL, extra = {}) {
+  return browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true, locale: 'ru-RU', ...extra });
 }
 
 async function db(fn) {
@@ -1000,6 +1000,98 @@ test('черновик заключения от ИИ: специалист го
   await shot(page, '58-zakazchik-bez-chernovika');
   await sctx.close();
   await dctx.close();
+});
+
+test('дистанционный осмотр: специалист выдаёт ссылку, владелец снимает по шагам без входа, фото с местом — в деле', async ({ page, browser, baseURL }) => {
+  // Заказчик — на экране page; оплата и допуск — напрямую в базе, как в сценарии черновика.
+  await signIn(page, '+79990000568');
+  const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира для дистанционного осмотра' }, headers: H })).json();
+  const id = created.order.id;
+  expect((await page.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(9), fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 23', area: '37' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  const sctx = await phoneContext(browser, baseURL);
+  const sp = await sctx.newPage();
+  const spec = await signIn(sp, '+79990000569');
+  await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [spec.id]);
+    await c.query('update orders set price_kop = 1500000, paid_at = now(), status = $2, executor_user_id = $3 where id = $1', [id, 'in_work', spec.id]);
+    await c.query("insert into payments (order_id, amount_kop, status, provider_id, created_by, paid_at) values ($1, 1500000, 'succeeded', $2, $3, now())", [id, `pay_ui_${id}`, spec.id]);
+  });
+
+  // Специалист выдаёт ссылку на 1 день; видит её один раз.
+  await sp.goto(`/kabinet#order=${id}`);
+  await expect(sp.locator('#inspect-state')).toContainText('Владелец объекта снимает его сам по ссылке');
+  await sp.getByLabel('Ссылка владельцу объекта действует').selectOption('1');
+  await sp.getByRole('button', { name: 'Выдать ссылку владельцу' }).click();
+  await expect(sp.locator('#inspect-msg')).toHaveText('Ссылка готова — отправьте её владельцу объекта');
+  const url = await sp.locator('#inspect-url').textContent();
+  expect(url).toMatch(/\/osmotr#[A-Za-z0-9_-]{43}$/);
+  await expect(sp.locator('#inspect-links li')).toHaveCount(1);
+  await expect(sp.locator('#inspect-links li')).toContainText('действует');
+  await shot(sp, '80-specialist-osmotr-ssylka');
+  // Настоящий снимок (JPEG) для загрузки — рисуется в браузере.
+  const jpeg = Buffer.from((await sp.evaluate(() => {
+    const c = document.createElement('canvas');
+    c.width = 640; c.height = 480;
+    const g = c.getContext('2d');
+    g.fillStyle = '#9db4d0'; g.fillRect(0, 0, 640, 480);
+    g.fillStyle = '#1f4e8c'; g.fillRect(200, 140, 240, 200);
+    return c.toDataURL('image/jpeg', 0.8);
+  })).split(',')[1], 'base64');
+
+  // Владелец — без входа, на своём телефоне; место разрешено.
+  const octx = await phoneContext(browser, baseURL, { permissions: ['geolocation'], geolocation: { latitude: 55.7512, longitude: 37.6184, accuracy: 12 } });
+  const op = await octx.newPage();
+  await op.goto(url);
+  await expect(op.locator('#service')).toHaveText('Оценка недвижимости');
+  await expect(op.locator('#expires')).toContainText('Ссылка действует до');
+  expect(op.url()).not.toContain('#'); // секрет убран из строки адреса
+  await expect(op.locator('body')).not.toContainText('тестовая ул.');
+  await shot(op, '81-vladelec-osmotr-nachalo');
+  await op.getByRole('button', { name: 'Начать: разрешить определение места' }).click();
+  await expect(op.locator('#geo-state')).toContainText('Место определено');
+  await expect(op.locator('#steps li')).toHaveCount(10);
+  await op.locator('#steps li[data-step="facade"] input[type=file]').setInputFiles({ name: 'facade.jpg', mimeType: 'image/jpeg', buffer: jpeg });
+  await expect(op.locator('#steps li[data-step="facade"] .msg')).toHaveText('Фото отправлено');
+  await expect(op.locator('#steps li[data-step="facade"] .badge')).toHaveText('Фото: 1');
+  await op.locator('#steps li[data-step="kitchen"] input[type=file]').setInputFiles({ name: 'kitchen.jpg', mimeType: 'image/jpeg', buffer: jpeg });
+  await expect(op.locator('#steps li[data-step="kitchen"] .badge')).toHaveText('Фото: 1');
+  await expect(op.locator('#steps li[data-step="facade"] label.btn')).toHaveText('Ещё фото');
+  await shot(op, '82-vladelec-osmotr-shagi');
+  op.once('dialog', (d) => d.accept());
+  await op.getByRole('button', { name: 'Готово' }).click();
+  await expect(op.locator('#closed-text')).toHaveText('Спасибо! Эксперт получил 2 фото. Страницу можно закрыть.');
+  await shot(op, '83-vladelec-osmotr-gotovo');
+  // Повторно по той же ссылке — уже закрыто.
+  const again = await octx.newPage();
+  await again.goto(url);
+  await expect(again.locator('#closed-text')).toHaveText('Осмотр завершён — фото переданы эксперту');
+
+  // У специалиста — фото по шагам с временем и местом; ссылка закрыта; уведомление.
+  await sp.reload();
+  await expect(sp.locator('#inspect-state')).toContainText('Фото осмотра: 2');
+  await expect(sp.locator('#inspect-links li')).toContainText('владелец нажал «Готово»');
+  const facade = sp.locator('#inspect-steps li[data-step="facade"]');
+  await expect(facade).toContainText('Осмотр · Дом снаружи · 1.jpg');
+  await expect(facade.locator('.photo-meta').first()).toContainText('место 55.75120, 37.61840 (±12 м)');
+  await expect(sp.locator('#inspect-steps li[data-step="rooms"] .badge')).toHaveText('нет фото');
+  await expect(sp.locator('#docs li').filter({ hasText: 'Осмотр · Кухня · 1.jpg' })).toContainText('Фото осмотра');
+  await shot(sp, '84-specialist-osmotr-foto');
+  const notes = await (await sp.request.get('/api/notifications')).json();
+  expect(JSON.stringify(notes)).toContain('Владелец объекта прислал фото осмотра');
+
+  // Заказчик видит фото в документах, удалить их не может.
+  await page.goto(`/kabinet#order=${id}`);
+  const photo = page.locator('#docs li').filter({ hasText: 'Осмотр · Дом снаружи · 1.jpg' });
+  await expect(photo).toContainText('Фото осмотра');
+  await expect(photo.getByRole('button', { name: 'Удалить' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Выдать ссылку владельцу' })).toBeHidden();
+  await shot(page, '85-zakazchik-foto-osmotra');
+  await octx.close();
+  await sctx.close();
 });
 
 test('заявка по письму: почта подключается кодом из письма; письмо с вложением — заявка-черновик; ответ «Отправить» — заявка в подборе', async ({ page }) => {

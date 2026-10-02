@@ -43,7 +43,7 @@ function renderSteps() {
     const status = el('p', { class: 'msg', role: 'status', 'aria-live': 'polite' });
     const count = el('span', { class: `badge${s.photos ? ' ok' : ''}`, text: s.photos ? `Фото: ${s.photos}` : s.optional ? 'если есть' : 'нужно фото' });
     input.addEventListener('change', () => upload(s, input, status, count));
-    return el('li', { class: 'card step', 'data-step': s.id },
+    return el('li', { class: 'card', 'data-step': s.id },
       el('div', { class: 'doc' }, el('span', { class: 'title', text: s.title }), count),
       s.hint ? el('p', { class: 'muted', text: s.hint }) : '',
       el('label', { class: 'btn secondary', for: `f-${s.id}`, text: s.photos ? 'Ещё фото' : 'Сфотографировать' }),
