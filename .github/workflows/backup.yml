@@ -1,0 +1,126 @@
+name: Backup (Yandex Cloud)
+
+# Еженедельная выгрузка базы stage в хранилище копий и учебное восстановление (src/tools/backup.mjs).
+# Ручной запуск: образ выгрузки → реестр → контейнер delo-stage-backup в сети контура (наружу не открыт) →
+# таймер раз в неделю (воскресенье 02:00 МСК) → сразу один запуск и проверка итога.
+# Копия и её восстановление — только внутри облака; через GitHub проходит лишь итог (число таблиц и строк, размер).
+# Боевой контур (prod) этим workflow не трогается — только по «да» Дамира.
+on:
+  workflow_dispatch:
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    environment: delo-stage
+    concurrency: backup-stage
+    env:
+      ENV: stage
+      FOLDER: bertel-delo-test
+      CONTAINER: delo-stage-backup
+      TRIGGER: delo-stage-backup-weekly
+      CRON: '0 23 ? * SAT *' # суббота 23:00 UTC = воскресенье 02:00 МСК (ночная копия базы — 04:00 МСК)
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: yc CLI
+        run: |
+          curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -i /opt/yc -n
+          echo "/opt/yc/bin" >> $GITHUB_PATH
+
+      - name: Вход в облако
+        env:
+          SA_KEY: ${{ secrets.YC_SA_KEY_JSON }}
+        run: |
+          umask 077
+          printf '%s' "$SA_KEY" > "$RUNNER_TEMP/sa.json"
+          yc config set service-account-key "$RUNNER_TEMP/sa.json"
+          yc config set endpoint api.cloud.yandex.net:443
+          SA_ID=$(jq -r .service_account_id "$RUNNER_TEMP/sa.json")
+          FOLDER_ID=$(yc iam service-account get --id "$SA_ID" --format json | jq -r .folder_id)
+          NAME=$(yc resource-manager folder get --id "$FOLDER_ID" --format json | jq -r .name)
+          [ "$NAME" = "$FOLDER" ] || { echo "::error::Ключ не от каталога $FOLDER"; exit 1; }
+          yc config set folder-id "$FOLDER_ID"
+          echo "FOLDER_ID=$FOLDER_ID" >> $GITHUB_ENV
+
+      - name: Ресурсы контура (созданы workflow Infra)
+        run: |
+          SUFFIX=$(echo -n "$FOLDER_ID" | sha256sum | cut -c1-6)
+          REGISTRY_ID=$(yc container registry get --name "delo-$ENV" --format json | jq -r .id)
+          APP_SA_ID=$(yc iam service-account get --name "delo-$ENV-app" --format json | jq -r .id)
+          SECRET_ID=$(yc lockbox secret get --name "delo-$ENV-app" --format json | jq -r .id)
+          NETWORK_ID=$(yc vpc subnet get --name "delo-$ENV-a" --format json | jq -r .network_id)
+          BACKUPS_BUCKET="delo-$ENV-backups-$SUFFIX"
+          yc storage bucket get --name "$BACKUPS_BUCKET" >/dev/null || { echo "::error::нет бакета копий — сначала Infra apply"; exit 1; }
+          for v in REGISTRY_ID APP_SA_ID SECRET_ID NETWORK_ID; do
+            [ -n "${!v}" ] && [ "${!v}" != "null" ] || { echo "::error::$v не найден — сначала Infra apply"; exit 1; }
+            echo "$v=${!v}" >> $GITHUB_ENV
+          done
+          echo "BACKUPS_BUCKET=$BACKUPS_BUCKET" >> $GITHUB_ENV
+          echo "IMAGE=cr.yandex/$REGISTRY_ID/delo-backup:${GITHUB_SHA::12}" >> $GITHUB_ENV
+
+      - name: Образ выгрузки
+        run: |
+          yc iam create-token | docker login --username iam --password-stdin cr.yandex
+          docker build -f Dockerfile.backup -t "$IMAGE" .
+          docker push "$IMAGE"
+
+      - name: Контейнер выгрузки (без открытого доступа)
+        run: |
+          yc serverless container get --name "$CONTAINER" >/dev/null 2>&1 || \
+            yc serverless container create --name "$CONTAINER" --description "БЕРТЕЛ Дело · выгрузка базы · $ENV (тестовые данные)"
+          yc serverless container revision deploy \
+            --container-name "$CONTAINER" \
+            --image "$IMAGE" \
+            --service-account-id "$APP_SA_ID" \
+            --network-id "$NETWORK_ID" \
+            --cores 1 --core-fraction 100 --memory 2GB \
+            --concurrency 1 --execution-timeout 900s \
+            --environment "S3_BUCKET=$BACKUPS_BUCKET,BACKUP_PREFIX=weekly/" \
+            --secret "environment-variable=DATABASE_URL,id=$SECRET_ID,key=DATABASE_URL" \
+            --secret "environment-variable=S3_ACCESS_KEY,id=$SECRET_ID,key=S3_ACCESS_KEY" \
+            --secret "environment-variable=S3_SECRET_KEY,id=$SECRET_ID,key=S3_SECRET_KEY"
+          C=$(yc serverless container get --name "$CONTAINER" --format json)
+          echo "CONTAINER_ID=$(echo "$C" | jq -r .id)" >> $GITHUB_ENV
+          URL=$(echo "$C" | jq -r .url)
+          echo "URL=${URL%/}" >> $GITHUB_ENV
+          # Вызывать контейнер может только таймер (от имени app), открытого адреса нет.
+          yc serverless container add-access-binding --name "$CONTAINER" \
+            --role serverless.containers.invoker --service-account-id "$APP_SA_ID" || echo "доступ таймеру уже выдан"
+
+      - name: Таймер раз в неделю
+        run: |
+          if yc serverless trigger get --name "$TRIGGER" >/dev/null 2>&1; then
+            echo "Таймер уже есть"
+          else
+            yc serverless trigger create timer --name "$TRIGGER" \
+              --description "Еженедельная выгрузка базы $ENV и учебное восстановление" \
+              --cron-expression "$CRON" \
+              --invoke-container-id "$CONTAINER_ID" \
+              --invoke-container-path /run \
+              --invoke-container-service-account-id "$APP_SA_ID"
+          fi
+          yc serverless trigger get --name "$TRIGGER" --format json | jq '{name, status, cron: .rule.timer.cron_expression}'
+
+      - name: Запуск сейчас и проверка итога
+        timeout-minutes: 20
+        run: |
+          OK=0
+          for i in 1 2 3; do
+            CODE=$(curl -sS --max-time 900 -X POST -H "Authorization: Bearer $(yc iam create-token)" \
+              -o "$RUNNER_TEMP/report.json" -w '%{http_code}' "$URL/run" || echo "нет связи")
+            # В журнал — только итог, без таблиц по отдельности.
+            echo "попытка $i: $CODE $(jq -c '{ok, key, bytes, tables, rows, restore, seconds, error}' "$RUNNER_TEMP/report.json" 2>/dev/null)"
+            if [ "$CODE" = 200 ] && jq -e '.ok == true and .restore.tables and .restore.rows and .tables > 0' "$RUNNER_TEMP/report.json" >/dev/null; then
+              OK=1; break
+            fi
+            sleep 20
+          done
+          [ "$OK" = 1 ] || { echo "::error::Выгрузка или учебное восстановление не удались"; exit 1; }
+          jq -r '"### Выгрузка базы stage\n- копия: `\(.key)` (\(.bytes) байт)\n- учебное восстановление: таблиц \(.tables), строк \(.rows) — совпало с базой\n- время: \(.seconds) с"' \
+            "$RUNNER_TEMP/report.json" >> $GITHUB_STEP_SUMMARY
+
+      - name: Убрать ключ
+        if: always()
+        run: |
+          docker logout cr.yandex || true
+          rm -f "$RUNNER_TEMP/sa.json" "$RUNNER_TEMP/report.json"
