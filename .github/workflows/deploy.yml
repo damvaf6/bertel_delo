@@ -132,6 +132,8 @@ jobs:
       - name: Телефон 412×915 на адресе контура
         env:
           UI_BASE_URL: ${{ env.URL }}
+          # Администратор площадки — назначен кнопкой «Stage admin» (решение Дамира 02.10.2026, вопрос 10).
+          STAGE_ADMIN_PHONE: '+79990009500'
         run: |
           # Ключи прогона: IAM-токен (браузер подставляет его только для адреса площадки) и ключ служебного входа.
           STAGE_INVOKE_TOKEN=$(yc iam create-token); echo "::add-mask::$STAGE_INVOKE_TOKEN"
