@@ -4,6 +4,9 @@ name: Deploy core (Yandex Cloud)
 # Только ручной запуск. Боевой контур (prod) этим workflow не выкладывается — только по «да» Дамира, отдельно.
 # Секреты контейнер берёт сам из Lockbox (delo-stage-app); через GitHub проходят только их идентификаторы.
 # Схема базы обновляется самим контейнером при старте (база закрыта от интернета), там же — проверка базы и файлов.
+# Площадка закрыта от посторонних (решение Дамира 02.10.2026, вариант А): контейнер вызывается только с IAM-токеном
+# технического пользователя; без токена — отказ облака. Сначала закрыть и проверить отказ, только потом — служебный вход
+# тестовыми номерами (ключ STAGE_LOGIN_KEY из отдельного секрета delo-stage-stage-login, которого на prod нет).
 on:
   workflow_dispatch:
 
@@ -46,7 +49,8 @@ jobs:
           APP_SA_ID=$(yc iam service-account get --name "delo-$ENV-app" --format json | jq -r .id)
           SECRET_ID=$(yc lockbox secret get --name "delo-$ENV-app" --format json | jq -r .id)
           NETWORK_ID=$(yc vpc subnet get --name "delo-$ENV-a" --format json | jq -r .network_id)
-          for v in REGISTRY_ID APP_SA_ID SECRET_ID NETWORK_ID; do
+          LOGIN_SECRET_ID=$(yc lockbox secret get --name "delo-$ENV-stage-login" --format json | jq -r .id)
+          for v in REGISTRY_ID APP_SA_ID SECRET_ID NETWORK_ID LOGIN_SECRET_ID; do
             [ -n "${!v}" ] && [ "${!v}" != "null" ] || { echo "::error::$v не найден — сначала Infra apply"; exit 1; }
             echo "$v=${!v}" >> $GITHUB_ENV
           done
@@ -60,10 +64,28 @@ jobs:
           docker build -t "$IMAGE" .
           docker push "$IMAGE"
 
-      - name: Контейнер
+      - name: Закрыть площадку от посторонних
         run: |
+          [ "$ENV" = stage ] || { echo "::error::Служебный вход — только на stage"; exit 1; }
           yc serverless container get --name "$CONTAINER" >/dev/null 2>&1 || \
             yc serverless container create --name "$CONTAINER" --description "БЕРТЕЛ Дело · ядро · $ENV (тестовые данные)"
+          yc serverless container deny-unauthenticated-invoke --name "$CONTAINER"
+          URL=$(yc serverless container get --name "$CONTAINER" --format json | jq -r .url)
+          echo "URL=${URL%/}" >> $GITHUB_ENV
+
+      - name: Проверка, что без ключа площадка не открывается
+        run: |
+          # Права в облаке применяются не мгновенно — ждём до 2 минут. Пока посторонний получает ответ, дальше не идём.
+          for i in $(seq 1 12); do
+            CODE=$(curl -sS --max-time 40 -o /dev/null -w '%{http_code}' "$URL/api/health" || echo 000)
+            echo "попытка $i без ключа: $CODE"
+            case "$CODE" in 401|403) echo "Закрыто"; exit 0;; esac
+            sleep 10
+          done
+          echo "::error::Площадка открыта без ключа — служебный вход не включаем"; exit 1
+
+      - name: Контейнер
+        run: |
           yc serverless container revision deploy \
             --container-name "$CONTAINER" \
             --image "$IMAGE" \
@@ -75,11 +97,8 @@ jobs:
             --secret "environment-variable=DATABASE_URL,id=$SECRET_ID,key=DATABASE_URL" \
             --secret "environment-variable=APP_SECRET,id=$SECRET_ID,key=APP_SECRET" \
             --secret "environment-variable=S3_ACCESS_KEY,id=$SECRET_ID,key=S3_ACCESS_KEY" \
-            --secret "environment-variable=S3_SECRET_KEY,id=$SECRET_ID,key=S3_SECRET_KEY"
-          # Проверочный контур открыт по своему адресу (только тестовые данные); домен — отдельной задачей.
-          yc serverless container allow-unauthenticated-invoke --name "$CONTAINER"
-          URL=$(yc serverless container get --name "$CONTAINER" --format json | jq -r .url)
-          echo "URL=${URL%/}" >> $GITHUB_ENV
+            --secret "environment-variable=S3_SECRET_KEY,id=$SECRET_ID,key=S3_SECRET_KEY" \
+            --secret "environment-variable=STAGE_LOGIN_KEY,id=$LOGIN_SECRET_ID,key=STAGE_LOGIN_KEY"
 
       - name: Проверка на адресе контура
         timeout-minutes: 10
@@ -87,9 +106,11 @@ jobs:
           echo "Адрес: $URL"
           echo "### Контур stage: $URL" >> $GITHUB_STEP_SUMMARY
           # Контейнер отвечает только после обновления схемы и проверки базы и файлов (src/startup.mjs).
+          # Вызов — с временным IAM-токеном технического пользователя (живёт до 12 ч, в журнал не попадает).
+          TOKEN=$(yc iam create-token); echo "::add-mask::$TOKEN"
           OK=0
           for i in $(seq 1 12); do
-            CODE=$(curl -sS --max-time 40 -o "$RUNNER_TEMP/health.json" -w '%{http_code}' "$URL/api/health" || echo "нет связи")
+            CODE=$(curl -sS --max-time 40 -H "Authorization: Bearer $TOKEN" -o "$RUNNER_TEMP/health.json" -w '%{http_code}' "$URL/api/health" || echo "нет связи")
             echo "попытка $i: $CODE $(head -c 300 "$RUNNER_TEMP/health.json" 2>/dev/null)"
             if [ "$CODE" = 200 ] && jq -e '.ok == true and .test_data == true' "$RUNNER_TEMP/health.json" >/dev/null 2>&1; then
               OK=1; break
@@ -99,7 +120,9 @@ jobs:
           # Ответ приходит только после обновления схемы и проверки базы и файлов: при ошибке контейнер не стартует.
           [ "$OK" = 1 ] || { echo "::error::Ядро на stage не отвечает"; exit 1; }
           echo "Ядро работает"
-          CODE=$(curl -sS --max-time 40 -o /dev/null -w '%{http_code}' "$URL/") && echo "Страница входа: $CODE"
+          CODE=$(curl -sS --max-time 40 -H "Authorization: Bearer $TOKEN" -o /dev/null -w '%{http_code}' "$URL/") && echo "Страница входа: $CODE"
+          CODE=$(curl -sS --max-time 40 -o /dev/null -w '%{http_code}' "$URL/api/health" || echo 000)
+          case "$CODE" in 401|403) echo "Без ключа: $CODE — закрыто";; *) echo "::error::Без ключа площадка ответила $CODE"; exit 1;; esac
 
       - uses: actions/setup-node@v5
         with:
@@ -110,6 +133,10 @@ jobs:
         env:
           UI_BASE_URL: ${{ env.URL }}
         run: |
+          # Ключи прогона: IAM-токен (браузер подставляет его только для адреса площадки) и ключ служебного входа.
+          STAGE_INVOKE_TOKEN=$(yc iam create-token); echo "::add-mask::$STAGE_INVOKE_TOKEN"
+          STAGE_LOGIN_KEY=$(yc lockbox payload get --id "$LOGIN_SECRET_ID" --key STAGE_LOGIN_KEY); echo "::add-mask::$STAGE_LOGIN_KEY"
+          export STAGE_INVOKE_TOKEN STAGE_LOGIN_KEY
           npm ci
           npx playwright install --with-deps chromium
           mkdir -p test-results/screens

@@ -5,6 +5,9 @@ import { AI_DRIVERS } from './providers/ai.mjs';
 
 const ENVS = ['test', 'dev', 'stage', 'prod'];
 
+// Где возможен служебный вход тестовыми номерами. prod здесь не бывает — это проверяет tests/server/stage-login.test.mjs.
+export const STAGE_LOGIN_ENVS = Object.freeze(['stage', 'test']);
+
 export class ConfigError extends Error {}
 
 export function loadConfig(env = process.env) {
@@ -78,6 +81,9 @@ export function loadConfig(env = process.env) {
     },
     // Служебные пути для автотестов (чтение вызовов поддельных поставщиков). Только APP_ENV=test.
     testControlToken: env.TEST_CONTROL_TOKEN || '',
+    // Служебный вход тестовыми номерами +7999000xxxx на закрытой проверочной площадке (решение Дамира 02.10.2026).
+    // Только APP_ENV=stage (и test — автотесты); на prod сервер с этим ключом не стартует.
+    stageLoginKey: env.STAGE_LOGIN_KEY || '',
     // Лимит запросов входа с одного адреса за 10 минут. Менять — только APP_ENV=test (много входов в одном прогоне).
     authRateMax: env.AUTH_RATE_MAX ? Number(env.AUTH_RATE_MAX) : 30,
   };
@@ -90,6 +96,8 @@ export function loadConfig(env = process.env) {
   if (env.AUTH_RATE_MAX && appEnv !== 'test') throw new ConfigError('AUTH_RATE_MAX допустим только при APP_ENV=test');
   if (!Number.isInteger(cfg.authRateMax) || cfg.authRateMax < 1) throw new ConfigError('AUTH_RATE_MAX: целое число от 1');
   if (cfg.testControlToken && appEnv !== 'test') throw new ConfigError('TEST_CONTROL_TOKEN допустим только при APP_ENV=test');
+  if (cfg.stageLoginKey && !STAGE_LOGIN_ENVS.includes(appEnv)) throw new ConfigError('STAGE_LOGIN_KEY допустим только на проверочной площадке (APP_ENV=stage)');
+  if (cfg.stageLoginKey && cfg.stageLoginKey.length < 32) throw new ConfigError('STAGE_LOGIN_KEY: не короче 32 символов');
   if (cfg.providers.storage === 's3' && !cfg.s3.bucket) throw new ConfigError('S3_BUCKET не задан');
 
   // Модели ИИ — только из списка (зарубежные в контуре с персональными данными запрещены уставом).
