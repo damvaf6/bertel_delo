@@ -56,6 +56,12 @@ button:disabled { opacity: .6; cursor: default; }
 .list button.open { text-align: left; width: 100%; background: none; border: none; color: var(--text); padding: 0; min-height: 0; font-weight: 400; }
 .doc { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .doc .name { overflow-wrap: anywhere; }
+.doc { flex-wrap: wrap; }
+.doc .sig { flex-basis: 100%; margin-top: 2px; display: grid; gap: 4px; }
+.doc .sig-state { font-weight: 600; }
+.doc .sig-state.ok { color: var(--ok); }
+.doc .sig-state.bad { color: var(--danger); }
+.doc .sig-test { color: var(--danger); font-size: 14px; }
 .badge { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 99px; background: #eef2f8; color: var(--muted); }
 .row.gap { margin-top: 8px; }
 h2.gap { margin-top: 16px; }

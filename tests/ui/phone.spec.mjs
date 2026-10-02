@@ -37,6 +37,16 @@ async function shot(page, name) {
   await page.screenshot({ path: `test-results/screens/${name}.png`, fullPage: true });
 }
 
+// Подписать УКЭП (поддельной подписью площадки) все свои неподписанные файлы результата (задача 2.5).
+async function signResults(sp) {
+  const btn = sp.locator('#docs li').getByRole('button', { name: 'Подписать' });
+  while (await btn.count()) {
+    sp.once('dialog', (d) => d.accept());
+    await btn.first().click();
+    await expect(sp.locator('#doc-msg')).toHaveText('Файл подписан');
+  }
+}
+
 async function smsCode(request, phone, channel = 'sms') {
   const r = await request.get(`/__test/fakes/${channel}/calls`, { headers: { 'x-test-control': CONTROL } });
   expect(r.status()).toBe(200);
@@ -483,6 +493,18 @@ test('ход заявки: подбор диспетчером, принятие
   await expect(sp.locator('#messages li')).toHaveCount(1);
   await expect(sp.locator('#messages li').first()).toContainText('Вы');
   await shot(sp, '32-specialist-rezultat');
+  // Заключение подписывается УКЭП эксперта (2.5): без подписи не сдать.
+  await expect(sp.locator('#result-sign-note')).toBeVisible();
+  const repDoc = sp.locator('#docs li').filter({ hasText: 'тестовый-отчёт.pdf' });
+  await expect(repDoc.locator('.sig-state')).toHaveText('Не подписан УКЭП — без подписи на проверку не сдать');
+  await sp.getByRole('button', { name: 'Сдать на проверку' }).click();
+  await expect(sp.locator('#status-msg')).toHaveText('Подпишите УКЭП файлы результата: тестовый-отчёт.pdf');
+  sp.once('dialog', (d) => d.accept());
+  await repDoc.getByRole('button', { name: 'Подписать' }).click();
+  await expect(sp.locator('#doc-msg')).toHaveText('Файл подписан');
+  await expect(repDoc.locator('.sig-state')).toContainText('Подписан УКЭП: Тестовый оценщик');
+  await expect(repDoc.locator('.sig-test')).toHaveText('Тестовая подпись площадки — юридической силы не имеет');
+  await shot(sp, '93-specialist-podpis');
   await sp.getByRole('button', { name: 'Сдать на проверку' }).click();
   await expect(sp.locator('#order-status')).toHaveText('Проверка результата');
   await expect(sp.locator('#result-upload-box')).toBeHidden();
@@ -512,6 +534,7 @@ test('ход заявки: подбор диспетчером, принятие
   await sp.locator('#result-file').setInputFiles({ name: 'отчёт-с-фото.pdf', mimeType: 'application/pdf', buffer: Buffer.from('исправленный тестовый отчёт') });
   await expect(sp.locator('#docs li').filter({ hasText: 'отчёт-с-фото.pdf' })).toBeVisible();
   await shot(sp, '34-specialist-zamechaniya');
+  await signResults(sp);
   await sp.getByRole('button', { name: 'Сдать на проверку' }).click();
   await expect(sp.locator('#order-status')).toHaveText('Проверка результата');
 
@@ -537,6 +560,15 @@ test('ход заявки: подбор диспетчером, принятие
   await expect(page.getByRole('button', { name: 'Отменить заявку' })).toHaveCount(0);
   // Результат проверен и выдан: заказчику — акт (оплачено при заказе), исполнителю — выплата.
   await expect(page.locator('#results-later')).toBeHidden();
+  // Заказчик получил подписанное заключение: видит подпись, проверяет её и скачивает файл подписи (2.5).
+  const signed = page.locator('#docs li').filter({ hasText: 'отчёт-с-фото.pdf' });
+  await expect(signed.locator('.sig-state')).toContainText('Подписан УКЭП: Тестовый оценщик');
+  await signed.getByRole('button', { name: 'Проверить подпись' }).click();
+  await expect(page.locator('#doc-msg')).toHaveText('Подпись верна: Тестовый оценщик');
+  await expect(signed.getByRole('button', { name: 'Подписать' })).toHaveCount(0);
+  const [sigFile] = await Promise.all([page.waitForEvent('download'), signed.getByRole('button', { name: 'Файл подписи' }).click()]);
+  expect(sigFile.suggestedFilename()).toBe('отчёт-с-фото.pdf.sig');
+  await shot(page, '94-zakazchik-podpis');
   await expect(page.locator('#money-facts')).toContainText('оплачено');
   await expect(page.locator('#closing li')).toHaveCount(1);
   await page.locator('#closing li').getByRole('button', { name: 'Открыть' }).click();
@@ -905,6 +937,8 @@ test('ИИ-проверка результата: специалист пере�
   await expect(sp.locator('#review-checks li').filter({ hasText: 'Расчёт' }).locator('.ai-hint')).toHaveText('ИИ: Замечаний не найдено');
   await expect(sp.locator('#review-checks .verdict')).toHaveCount(0);
   await shot(sp, '54-specialist-ii-proverka');
+  expect((await sp.request.patch('/api/me', { data: { full_name: 'Тестов Эксперт ИИ' }, headers: H })).status()).toBe(200);
+  await signResults(sp);
   await sp.getByRole('button', { name: 'Сдать на проверку' }).click();
   await expect(sp.locator('#order-status')).toHaveText('Проверка результата');
   await expect(sp.getByRole('button', { name: 'Проверить с помощью ИИ' })).toBeHidden();
@@ -1445,6 +1479,7 @@ test('сквозной путь: заявка на оценку квартиры
   await sp.getByRole('button', { name: 'Отправить сообщение' }).click();
   await expect(sp.locator('#messages li')).toHaveCount(1);
   await shot(sp, '74-skvoznoy-specialist');
+  await signResults(sp);
   await sp.getByRole('button', { name: 'Сдать на проверку' }).click();
   await expect(sp.locator('#order-status')).toHaveText('Проверка результата');
 

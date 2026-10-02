@@ -13,9 +13,11 @@
 //   mail.receive({ limit })  — новые письма на особый адрес (1.9) → [{ id, from, subject, text, messageId, inReplyTo: [],
 //                              authenticated (SPF/DKIM пройдены), autoReply, attachments: [{ filename, contentType, content }] }]
 //   mail.ack({ id })         — письмо сохранено у нас, у поставщика его можно убрать
+//   sign.sign / sign.verify  — электронная подпись заключения (2.5), интерфейс — sign.mjs
 import crypto from 'node:crypto';
 import { makeFake } from './fake.mjs';
 import { createAi } from './ai.mjs';
+import { fakeSign } from './sign.mjs';
 import { memoryStorage, s3Storage } from './storage.mjs';
 
 const id = (prefix) => `${prefix}_${crypto.randomUUID()}`;
@@ -102,6 +104,8 @@ export function createProviders(cfg) {
     out[name] = FAKES[name]();
   }
   out.ai = createAi(cfg);
+  if (cfg.providers.sign !== 'fake') throw new Error(`Поставщик «sign: ${cfg.providers.sign}» ещё не подключён`);
+  out.sign = fakeSign(cfg.appSecret);
   const storage = cfg.providers.storage;
   if (storage === 'memory') out.storage = memoryStorage(cfg.appSecret);
   else if (storage === 's3') out.storage = s3Storage(cfg.s3);

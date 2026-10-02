@@ -280,6 +280,13 @@ export function orderOps() {
             const res = await tx.one`select 1 from documents where order_id = ${cur.id} and kind = 'result' and deleted_at is null
                                      and uploaded_by = ${cur.executor_user_id} limit 1`;
             if (!res) throw new HttpError(400, 'no_result', 'Сначала добавьте файл результата');
+            // Заключение подписывается УКЭП исполнителя до сдачи, если так требует модуль (2.5, src/ops/sign-ops.mjs).
+            if (registry.signatureRequired(cur.module, cur.service)) {
+              const unsigned = await tx`select d.filename from documents d left join document_signatures s on s.document_id = d.id
+                                        where d.order_id = ${cur.id} and d.kind = 'result' and d.deleted_at is null
+                                          and d.uploaded_by = ${cur.executor_user_id} and s.id is null order by d.created_at`;
+              if (unsigned.length) throw new HttpError(400, 'not_signed', `Подпишите УКЭП файлы результата: ${unsigned.map((d) => d.filename).join(', ')}`);
+            }
           }
           if (cur.status === 'review' && to === 'done') {
             const { checks } = await reviewState(tx, registry, cur);

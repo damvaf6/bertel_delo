@@ -1,7 +1,7 @@
 // Работа по делу (задача 1.5): результат, проверка по правилам с кругами, замечания исполнителю, переписка.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid } from '../helpers.mjs';
+import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, signResults } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 
 let S, owner, dispatcher, spec;
@@ -52,6 +52,7 @@ test('правила проверки — по услуге: у товарове
 test('проверка по кругам: замечание не пускает в «готово», исполнитель видит замечания, новый круг начинается с чистого листа', async () => {
   const o = await inWork();
   assert.equal((await putResult(o)).status, 201);
+  await signResults(S, spec, o.id);
   assert.equal((await step(spec, o, 'review')).status, 200);
   let r = await review(dispatcher, o);
   assert.equal(r.round, 1);
@@ -71,6 +72,7 @@ test('проверка по кругам: замечание не пускает
   assert.equal(calc.note, 'Итог не сходится с таблицей расчёта');
   assert.equal((await mark(o, 'calculation', 'ok', 1)).status, 409, 'пока дело в работе, отметки не ставятся');
   assert.equal((await putResult(o, 'отчёт-исправленный.pdf')).status, 201);
+  await signResults(S, spec, o.id);
   assert.equal((await step(spec, o, 'review')).status, 200);
 
   r = await review(dispatcher, o);

@@ -4,7 +4,7 @@
 // повторные уведомления ЮKassa — одна оплата, одна выплата и один возврат на заявку (Б-16).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, login, client, setPlatformRole, makeSpecialist } from '../helpers.mjs';
+import { startApp, login, client, setPlatformRole, makeSpecialist, signResults } from '../helpers.mjs';
 import { cancelSplit, splitAmount } from '../../src/money/money.mjs';
 import { createProviders } from '../../src/providers/index.mjs';
 
@@ -47,6 +47,7 @@ async function inWork(o, who = spec) {
 }
 async function toDone(o, who = spec) {
   assert.equal((await pdf(who, o)).status, 201);
+  await signResults(S, who, o.id);
   assert.equal((await step(who, o, 'review', 'in_work')).status, 200);
   const rv = (await dispatcher.req('GET', `/api/orders/${o.id}/review`)).body;
   for (const c of rv.checks) await dispatcher.req('PUT', `/api/orders/${o.id}/review/${c.id}`, { verdict: 'ok', round: rv.round });
@@ -241,6 +242,7 @@ test('виноват исполнитель: дело передаётся др�
   await pay(o);
   await inWork(o, spec);
   assert.equal((await pdf(spec, o, 'плохой отчёт')).status, 201);
+  await signResults(S, spec, o.id);
   assert.equal((await step(spec, o, 'review', 'in_work')).status, 200);
   assert.deepEqual((await dispatcher.req('GET', `/api/orders/${o.id}`)).body.actions.map((a) => a.to), ['in_work', 'matching', 'done', 'cancelled']);
   assert.equal((await step(dispatcher, o, 'matching', 'review')).status, 400, 'передать — с причиной');
@@ -253,6 +255,7 @@ test('виноват исполнитель: дело передаётся др�
   assert.deepEqual(await refundsOf(o), []);
 
   await inWork(o, spec2);
+  await signResults(S, spec2, o.id);
   assert.equal((await step(spec2, o, 'review', 'in_work')).status, 400, 'файл прежнего исполнителя не в счёт');
   assert.equal((await toDone(o, spec2)).status, 200);
   const outs = await payoutsOf(o);

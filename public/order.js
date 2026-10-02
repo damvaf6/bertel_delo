@@ -304,8 +304,11 @@ $('transfer-box').addEventListener('submit', async (e) => {
 async function loadDocs() {
   const { order, access } = current;
   const canChange = access !== 'read' && !FINAL.includes(order.status);
-  const { documents, results_hidden: resultsHidden } = await api('GET', `/api/orders/${order.id}/documents`);
+  const documentsBody = await api('GET', `/api/orders/${order.id}/documents`);
+  const { documents, results_hidden: resultsHidden } = documentsBody;
   const mineResults = current.executor?.is_me && order.status === 'in_work';
+  const signRequired = !!documentsBody.signature_required;
+  $('result-sign-note').classList.toggle('hidden', !signRequired);
   $('docs').replaceChildren(...documents.map((d) => {
     // Результат убирает только исполнитель, пока не сдал; документы заказчика — заказчик (основание — до отправки).
     // Фото дистанционного осмотра не удаляются никем: это свидетельство осмотра со временем и местом (2.3).
@@ -317,13 +320,63 @@ async function loadDocs() {
         el('div', { class: 'muted', text: [DOC_KIND_RU[d.kind], formatSize(d.size_bytes)].filter(Boolean).join(' · ') })),
       el('div', { class: 'row' },
         el('button', { class: 'secondary', 'data-action': 'download', onclick: () => download(d) }, 'Скачать'),
-        ...(removable ? [el('button', { class: 'danger', 'data-action': 'delete', onclick: () => remove(d) }, 'Удалить')] : [])));
+        ...(removable ? [el('button', { class: 'danger', 'data-action': 'delete', onclick: () => remove(d) }, 'Удалить')] : [])),
+      ...(d.kind === 'result' ? signatureBlock(d, { canSign: mineResults && signRequired }) : []));
   }));
   $('docs-empty').classList.toggle('hidden', documents.length > 0);
   $('results-later').textContent = 'Результат работы появится здесь после проверки.';
   $('results-later').classList.toggle('hidden', !(resultsHidden && ['in_work', 'review'].includes(order.status)));
   const basis = documents.filter((d) => d.kind === 'basis');
   $('basis-file-state').textContent = basis.length ? `Приложено: ${basis.map((d) => d.filename).join(', ')}` : 'Файл определения ещё не приложен';
+}
+
+// Подпись УКЭП у файла результата (2.5): кто и когда подписал, проверка; исполнитель подписывает свой файл, пока дело в работе.
+function signatureBlock(d, { canSign }) {
+  const s = d.signature;
+  if (!s) {
+    if (!canSign) return [];
+    return [el('div', { class: 'sig' },
+      el('div', { class: 'sig-state', text: 'Не подписан УКЭП — без подписи на проверку не сдать' }),
+      el('div', { class: 'row' }, el('button', { 'data-action': 'sign', onclick: () => signDoc(d) }, 'Подписать')))];
+  }
+  return [el('div', { class: 'sig' },
+    el('div', { class: `sig-state ${s.checked_ok ? 'ok' : 'bad'}`, text: s.checked_ok
+      ? `Подписан УКЭП: ${s.signer} · ${dateTimeRu(s.signed_at)}`
+      : `Подпись не сходится с файлом (проверено ${dateTimeRu(s.checked_at)})` }),
+    el('div', { class: 'muted', text: `Сертификат № ${s.serial} · действует до ${dayRu(s.valid_to)}` }),
+    el('div', { class: 'muted', text: `Выдан: ${s.issuer}` }),
+    ...(s.test ? [el('div', { class: 'sig-test', text: 'Тестовая подпись площадки — юридической силы не имеет' })] : []),
+    el('div', { class: 'row' },
+      el('button', { class: 'secondary', 'data-action': 'signature', onclick: () => downloadSignature(d) }, 'Файл подписи'),
+      el('button', { class: 'secondary', 'data-action': 'verify', onclick: () => verifyDoc(d) }, 'Проверить подпись')))];
+}
+
+async function signDoc(d) {
+  if (!confirm(`Подписать «${d.filename}» Вашей УКЭП? Подтверждаю, что проверил документ и отвечаю за него.`)) return;
+  say($('doc-msg'), 'Подписываем…', 'ok');
+  try {
+    await api('POST', `/api/documents/${d.id}/sign`, { confirm: true });
+    // Сначала обновить список, потом сообщение: «подписан» появляется, когда кнопки «Подписать» у файла уже нет.
+    await loadDocs();
+    say($('doc-msg'), 'Файл подписан', 'ok');
+  } catch (err) { say($('doc-msg'), err.message); }
+}
+
+async function verifyDoc(d) {
+  say($('doc-msg'), 'Проверяем подпись…', 'ok');
+  try {
+    const r = await api('POST', `/api/documents/${d.id}/signature/verify`);
+    await loadDocs();
+    if (r.valid) say($('doc-msg'), `Подпись верна: ${r.signature.signer}`, 'ok');
+    else say($('doc-msg'), `Подпись неверна: ${r.reason}`);
+  } catch (err) { say($('doc-msg'), err.message); }
+}
+
+async function downloadSignature(d) {
+  try {
+    const { url } = await api('GET', `/api/documents/${d.id}/signature/link`);
+    location.assign(url);
+  } catch (err) { say($('doc-msg'), err.message); }
 }
 
 async function download(d) {

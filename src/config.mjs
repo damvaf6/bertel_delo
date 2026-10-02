@@ -35,6 +35,8 @@ export function loadConfig(env = process.env) {
       payments: env.PAYMENTS_PROVIDER || 'fake',
       ai: env.AI_PROVIDER || 'fake',
       mail: env.MAIL_PROVIDER || 'fake',
+      // Электронная подпись заключения УКЭП (2.5): до решения Дамира о поставщике — только поддельная.
+      sign: env.SIGN_PROVIDER || 'fake',
     },
     s3: {
       endpoint: env.S3_ENDPOINT || 'https://storage.yandexcloud.net',
@@ -120,7 +122,7 @@ export function loadConfig(env = process.env) {
     if (!cfg.cookieSecure) throw new ConfigError('На stage/prod cookie только Secure');
     if (cfg.providers.storage !== 's3') throw new ConfigError('На stage/prod файлы только в S3 (Yandex Object Storage)');
   }
-  // На stage поддельные СМС/звонок/оплата/ИИ/почта допустимы (тестовые данные); на prod — нет.
+  // На stage поддельные СМС/звонок/оплата/ИИ/почта/подпись допустимы (тестовые данные); на prod — нет.
   if (appEnv === 'prod') {
     for (const [name, driver] of Object.entries(cfg.providers)) {
       if (driver === 'fake') throw new ConfigError(`На prod поставщик «${name}» не может быть поддельным`);

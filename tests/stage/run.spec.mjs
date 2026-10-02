@@ -355,6 +355,18 @@ test('общий прогон: сквозной путь — администр�
   await sp.getByRole('button', { name: 'Отправить сообщение' }).click();
   await expect(sp.locator('#messages li')).toHaveCount(1);
   await shot(sp, '13-specialist');
+  // Подпись УКЭП (задача 2.5): без подписи не сдать; на площадке — поддельная подпись, в хранилище Яндекса рядом с файлом.
+  await sp.getByRole('button', { name: 'Сдать на проверку' }).click();
+  await expect(sp.locator('#status-msg')).toContainText('Подпишите УКЭП файлы результата');
+  const toSign = sp.locator('#docs li').getByRole('button', { name: 'Подписать' });
+  await expect(toSign).toHaveCount(3);
+  while (await toSign.count()) {
+    sp.once('dialog', (d) => d.accept());
+    await toSign.first().click();
+    await expect(sp.locator('#doc-msg')).toHaveText('Файл подписан');
+  }
+  await expect(sp.locator('#docs li').filter({ hasText: 'Заключение.docx' }).locator('.sig-state')).toContainText(`Подписан УКЭП: ${specName}`);
+  await shot(sp, '13s-podpis');
   await sp.getByRole('button', { name: 'Сдать на проверку' }).click();
   await expect(sp.locator('#order-status')).toHaveText('Проверка результата');
 
@@ -390,6 +402,12 @@ test('общий прогон: сквозной путь — администр�
   const chunks = [];
   for await (const ch of await download.createReadStream()) chunks.push(ch);
   expect(Buffer.concat(chunks).toString()).toContain(TAG);
+  // Заказчик получил подписанное заключение: подпись проверяется по файлу из хранилища.
+  const concl = page.locator('#docs li').filter({ hasText: 'Заключение.docx' });
+  await concl.getByRole('button', { name: 'Проверить подпись' }).click();
+  await expect(page.locator('#doc-msg')).toHaveText(`Подпись верна: ${specName}`);
+  const [sigFile] = await Promise.all([page.waitForEvent('download'), concl.getByRole('button', { name: 'Файл подписи' }).click()]);
+  expect(sigFile.suggestedFilename()).toBe('Заключение.docx.sig');
   await page.locator('#closing li').getByRole('button', { name: 'Открыть' }).click();
   await expect(page.locator('#closing-doc')).toContainText('Акт об оказании услуг');
   await shot(page, '15-gotovo');

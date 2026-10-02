@@ -8,6 +8,7 @@
 //     inspection?: [{ id, title, hint?, services?: [id услуги…], optional? }…],  — шаги дистанционного осмотра (2.3)
 //     express?: { services: [id услуги…], show: [id поля заявки…], fields: [поле + services?…] } }  — экспресс-услуга (2.4):
 //       для каких услуг, какие поля заявки видит помощник на объекте и какие данные он заполняет (нужны шаги осмотра)
+//     signature?: { services?: [id услуги…] }  — результат подписывается УКЭП исполнителя до сдачи (2.5); без services — все услуги
 // Поле: { id, label, type: 'text' | 'longtext' | 'number' | 'select', required?, max?, min?, integer?,
 //         options?: [{ id, name }…] (для select), pattern?, hint?, upper? }
 //   Общие поля модуля идут в заявке перед полями услуги; id не должны совпадать.
@@ -77,7 +78,7 @@ function validateField(f, where) {
 }
 
 export function validateModule(m) {
-  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express'], 'модуль');
+  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express', 'signature'], 'модуль');
   if (!ID_RE.test(m.id ?? '')) fail('модуль', `неверный id «${m.id}»`);
   const at = `модуль ${m.id}`;
   if (!nonEmpty(m.name)) fail(at, 'нет названия');
@@ -159,6 +160,15 @@ export function validateModule(m) {
       }
     }
   }
+  // Подпись результата УКЭП (2.5) — необязательно: без неё результат сдаётся без подписи.
+  if (m.signature !== undefined) {
+    const where = `${at}, подпись`;
+    onlyKeys(m.signature, ['services'], where);
+    const sv = m.signature.services;
+    if (sv !== undefined && (!Array.isArray(sv) || sv.length === 0 || sv.some((id) => !serviceIds.includes(id)) || new Set(sv).size !== sv.length)) {
+      fail(where, 'services — непустой список услуг этого модуля');
+    }
+  }
   return m;
 }
 
@@ -211,6 +221,12 @@ export function createRegistry(modules = DEFAULT_MODULES) {
         show: m.express.show.map((id) => own.find((f) => f.id === id)).filter(Boolean),
         fields: m.express.fields.filter((f) => !f.services || f.services.includes(serviceId)).map(({ services, ...f }) => f),
       };
+    },
+    // Нужна ли подпись результата УКЭП исполнителя до сдачи на проверку (2.5).
+    signatureRequired(moduleId, serviceId) {
+      const m = modulesList.find((x) => x.id === moduleId);
+      if (!m?.signature || !m.services.some((x) => x.id === serviceId)) return false;
+      return !m.signature.services || m.signature.services.includes(serviceId);
     },
     catalog() {
       return modulesList.map((m) => ({

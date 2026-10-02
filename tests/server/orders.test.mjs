@@ -1,7 +1,7 @@
 // Единая «Заявка» (задача 1.3): описание модуля как данные, поля заявки, срок, основание, статусы и история.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid } from '../helpers.mjs';
+import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, signResults } from '../helpers.mjs';
 import { DEFAULT_MODULES, createRegistry, validateModule } from '../../src/modules/index.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import expertise from '../../src/modules/expertise.mjs';
@@ -271,10 +271,13 @@ test('весь путь: новая → подбор → ждёт исполни
   assert.deepEqual((await owner.req('GET', `/api/orders/${o.id}`)).body.actions, []);
   assert.equal((await step(spec, o, 'done')).status, 409, 'через проверку не перепрыгнуть');
   assert.equal((await step(dispatcher, o, 'review')).status, 403, 'сдаёт исполнитель, не диспетчер');
+  await signResults(S, spec, o.id);
   assert.equal((await step(spec, o, 'review')).status, 400, 'без файла результата не сдать');
   assert.equal((await putResult(o)).status, 201);
+  await signResults(S, spec, o.id);
   assert.equal((await step(spec, o, 'review')).status, 200);
   assert.equal((await step(dispatcher, o, 'in_work', 'Нет расчёта аналогов')).status, 200);
+  await signResults(S, spec, o.id);
   assert.equal((await step(spec, o, 'review')).status, 200);
   assert.equal((await step(dispatcher, o, 'done')).status, 409, 'не все правила проверены');
   await passReview(o);

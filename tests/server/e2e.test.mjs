@@ -5,7 +5,7 @@
 // а СМС не содержат названия заявки и имён.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, login } from '../helpers.mjs';
+import { startApp, login, signResults } from '../helpers.mjs';
 import { grantRole } from '../../src/tools/grant-role.mjs';
 
 let S, admin, customer, dispatcher, spec, stranger;
@@ -92,6 +92,7 @@ test('сквозной путь заявки на оценку: от заявк�
   assert.equal(res.status, 201);
   assert.equal((await spec.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
   assert.equal((await spec.req('POST', `/api/orders/${o.id}/messages`, { body: 'Отчёт приложен.' })).status, 201);
+  await signResults(S, spec, o.id);
   assert.equal((await spec.req('POST', `/api/orders/${o.id}/status`, { from: 'in_work', to: 'review' })).status, 200);
   const seen = (await customer.req('GET', `/api/orders/${o.id}/documents`)).body.documents;
   assert.equal(seen.some((d) => d.kind === 'result'), false, 'результат до проверки скрыт от заказчика');

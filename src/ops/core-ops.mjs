@@ -6,6 +6,7 @@ import { orderSides, seesResults } from '../access/policy.mjs';
 import { requestCode, verifyCode, endSession, SESSION_TTL_SEC } from '../auth/auth.mjs';
 import { audit, oneOf, phoneFrom, publicUser, text } from './util.mjs';
 import { unreadCount } from './notify-ops.mjs';
+import { orderSignatures, signatureView } from './sign-ops.mjs';
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const DOC_KINDS = ['basis', 'other'];
@@ -108,11 +109,17 @@ export function coreOps(cfg) {
     {
       id: 'documents.list', method: 'GET', path: '/api/orders/:id/documents', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
-      async handler({ sql, actor, order }) {
+      async handler({ sql, actor, order, registry }) {
         const docs = await sql`select * from documents where order_id = ${order.id} and deleted_at is null order by created_at`;
-        // Результат работы заказчик видит только после проверки (src/access/policy.mjs).
+        // Результат работы заказчик видит только после проверки (src/access/policy.mjs); вместе с ним — подпись УКЭП (2.5).
         const results = seesResults(actor, order);
-        return { documents: docs.filter((d) => d.kind !== 'result' || results).map(publicDoc), results_hidden: !results };
+        const signs = results ? await orderSignatures(sql, order.id) : new Map();
+        return {
+          documents: docs.filter((d) => d.kind !== 'result' || results)
+            .map((d) => (d.kind === 'result' ? { ...publicDoc(d), signature: signatureView(signs.get(d.id)) ?? null } : publicDoc(d))),
+          results_hidden: !results,
+          signature_required: registry.signatureRequired(order.module, order.service),
+        };
       },
     },
     {
@@ -162,6 +169,9 @@ export function coreOps(cfg) {
           await audit(tx, actor, 'document.delete', 'document', doc.id);
         });
         await providers.storage.delete(doc.storage_key);
+        // Подпись удалённого файла (2.5) больше не нужна: запись остаётся в истории, файл подписи убирается.
+        const sig = await sql.one`select storage_key from document_signatures where document_id = ${doc.id}`;
+        if (sig) await providers.storage.delete(sig.storage_key);
       },
     },
   ];

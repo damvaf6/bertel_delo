@@ -2,7 +2,7 @@
 // повторы неотправленных СМС, приглашение по номеру без учётной записи, проверка реестра.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, addMember } from '../helpers.mjs';
+import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, addMember, signResults } from '../helpers.mjs';
 import { DELIVERY, deliverPending } from '../../src/notify/notify.mjs';
 import { EVENTS, TYPES, validateRegistry } from '../../src/notify/registry.mjs';
 
@@ -98,11 +98,13 @@ test('путь заявки: каждый шаг уведомляет нужны
   await fresh(owner);
 
   await spec.req('POST', `/api/orders/${o.id}/results`, Buffer.from('отчёт'), { raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': 'r.pdf' } });
+  await signResults(S, spec, o.id);
   assert.equal((await step(spec, o, 'review', 'in_work')).status, 200);
   assert.deepEqual(await fresh(dispatcher), ['Результат сдан на проверку']);
   assert.equal((await step(dispatcher, o, 'in_work', 'review', 'Нет расчёта')).status, 200);
   assert.deepEqual(await fresh(spec), ['Результат возвращён на доработку']);
   assert.deepEqual(await fresh(owner), [], 'доработка — дело исполнителя и диспетчера');
+  await signResults(S, spec, o.id);
   assert.equal((await step(spec, o, 'review', 'in_work')).status, 200);
   const rv = (await dispatcher.req('GET', `/api/orders/${o.id}/review`)).body;
   for (const c of rv.checks) await dispatcher.req('PUT', `/api/orders/${o.id}/review/${c.id}`, { verdict: 'ok', round: rv.round });
@@ -244,6 +246,7 @@ test('неудавшаяся выплата: исполнителю и дисп�
   assert.equal((await offer(o, spec)).status, 200);
   await step(spec, o, 'in_work', 'awaiting_executor');
   await spec.req('POST', `/api/orders/${o.id}/results`, Buffer.from('отчёт'), { raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': 'r.pdf' } });
+  await signResults(S, spec, o.id);
   await step(spec, o, 'review', 'in_work');
   const rv = (await dispatcher.req('GET', `/api/orders/${o.id}/review`)).body;
   for (const c of rv.checks) await dispatcher.req('PUT', `/api/orders/${o.id}/review/${c.id}`, { verdict: 'ok', round: rv.round });
