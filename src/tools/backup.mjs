@@ -46,9 +46,9 @@ export function backupConfig(env = process.env) {
   };
 }
 
-function run(cmd, args, { env = {}, input } = {}) {
+function run(cmd, args, { env = {}, input, as } = {}) {
   return new Promise((resolve, reject) => {
-    const p = spawn(cmd, args, { env: { ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'] });
+    const p = spawn(cmd, args, { env: { ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'], ...(as || {}) });
     let out = '';
     let err = '';
     p.stdout.on('data', (d) => { out += d; });
@@ -98,17 +98,32 @@ function s3Client(s) {
   });
 }
 
+// PostgreSQL не запускается от root, а Serverless Containers запускают образ от root, не глядя на USER в образе.
+// Тогда временный сервер и восстановление идут от пользователя postgres (он есть в образе), папка — его.
+async function unprivileged(dir) {
+  if (typeof process.getuid !== 'function' || process.getuid() !== 0) return null;
+  const uid = Number(await run('id', ['-u', 'postgres']));
+  const gid = Number(await run('id', ['-g', 'postgres']));
+  const chown = (p) => {
+    fs.chownSync(p, uid, gid);
+    if (fs.statSync(p).isDirectory()) for (const f of fs.readdirSync(p)) chown(path.join(p, f));
+  };
+  chown(dir);
+  return { uid, gid };
+}
+
 // Временный PostgreSQL внутри контейнера: только сокет в своей папке, без сети; удаляется после проверки.
-async function tempPostgres(dir) {
+async function tempPostgres(dir, as) {
   const data = path.join(dir, 'data');
   const sock = path.join(dir, 'sock');
   fs.mkdirSync(sock);
-  await run(pgBin('initdb'), ['-D', data, '-U', 'postgres', '--auth=trust', '--encoding=UTF8', '--locale=C', '-N']);
+  if (as) fs.chownSync(sock, as.uid, as.gid);
+  await run(pgBin('initdb'), ['-D', data, '-U', 'postgres', '--auth=trust', '--encoding=UTF8', '--locale=C', '-N'], { as });
   await run(pgBin('pg_ctl'), ['-D', data, '-w', '-l', path.join(dir, 'pg.log'),
-    '-o', `-c listen_addresses='' -k ${sock} -c fsync=off`, 'start']);
+    '-o', `-c listen_addresses='' -k ${sock} -c fsync=off`, 'start'], { as });
   return {
     url: `postgres://postgres@localhost/postgres?host=${encodeURIComponent(sock)}`,
-    stop: () => run(pgBin('pg_ctl'), ['-D', data, '-m', 'fast', '-w', 'stop']).catch(() => {}),
+    stop: () => run(pgBin('pg_ctl'), ['-D', data, '-m', 'fast', '-w', 'stop'], { as }).catch(() => {}),
   };
 }
 
@@ -121,9 +136,11 @@ function withDb(url, db) {
 // Восстановить копию во временную базу и вернуть таблицы с числом строк. Временная база удаляется в любом случае.
 export async function restoreCheck(file, { restoreAdminUrl = '', workDir }) {
   let server = null;
+  let as = null;
   let adminUrl = restoreAdminUrl;
   if (!adminUrl) {
-    server = await tempPostgres(workDir);
+    as = await unprivileged(workDir);
+    server = await tempPostgres(workDir, as);
     adminUrl = server.url;
   }
   const db = `delo_restore_${crypto.randomBytes(4).toString('hex')}`;
@@ -132,7 +149,7 @@ export async function restoreCheck(file, { restoreAdminUrl = '', workDir }) {
     try {
       const target = withDb(adminUrl, db);
       await run(pgBin('pg_restore'), ['--no-owner', '--no-privileges', '--exit-on-error', '--single-transaction',
-        '-d', target, file]);
+        '-d', target, file], { as });
       return await withClient(target, false, tableCounts);
     } finally {
       await withClient(adminUrl, false, (c) => c.query(`drop database if exists ${db} with (force)`));
