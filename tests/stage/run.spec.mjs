@@ -63,6 +63,15 @@ async function enter(page, phoneNo, name) {
   return user;
 }
 
+// Администратор открывает человека по номеру и ждёт, пока на экране именно он, а не предыдущий найденный: иначе на
+// медленной площадке профиль сохраняется предыдущему.
+const shown = (p) => p.replace(/^\+7(\d{3})(\d{3})(\d{2})(\d{2})$/, '+7 $1 $2-$3-$4');
+async function findUser(ap, phoneNo) {
+  await ap.getByLabel('Номер телефона пользователя').fill(phoneNo);
+  await ap.getByRole('button', { name: 'Найти' }).click();
+  await expect(ap.locator('#admin-user-meta')).toContainText(shown(phoneNo));
+}
+
 async function shot(page, name) {
   const width = await page.evaluate(() => document.documentElement.scrollWidth);
   expect(width, `${name}: страница шире экрана`).toBeLessThanOrEqual(412);
@@ -184,7 +193,7 @@ test('общий прогон: организация — приглашение
   await page.locator('#orgs').getByText(org).click();
   await expect(page.locator('#members li')).toHaveCount(2);
   page.once('dialog', (d) => d.accept());
-  await page.locator('#members li').filter({ hasText: tel(3).replace(/^\+7(\d{3})(\d{3})(\d{2})(\d{2})$/, '+7 $1 $2-$3-$4') }).getByRole('button', { name: 'Убрать' }).click();
+  await page.locator('#members li').filter({ hasText: shown(tel(3)) }).getByRole('button', { name: 'Убрать' }).click();
   await expect(page.getByText('Сотрудник убран')).toBeVisible();
   await mp.goto(orderUrl);
   await mp.reload();
@@ -229,13 +238,11 @@ test('общий прогон: сквозной путь — администр�
   // 1. Администратор: диспетчер; специалист с допуском на оценку недвижимости.
   await ap.goto('/kabinet');
   await ap.getByRole('link', { name: 'Управление' }).click();
-  await ap.getByLabel('Номер телефона пользователя').fill(D);
-  await ap.getByRole('button', { name: 'Найти' }).click();
+  await findUser(ap, D);
   await ap.getByLabel('Служебная роль').selectOption('dispatcher');
   await ap.getByRole('button', { name: 'Сохранить роль' }).click();
   await expect(ap.getByText('Роль сохранена')).toBeVisible();
-  await ap.getByLabel('Номер телефона пользователя').fill(S);
-  await ap.getByRole('button', { name: 'Найти' }).click();
+  await findUser(ap, S);
   await expect(ap.locator('#admin-specialist-state')).toContainText('Пока не специалист');
   await ap.getByRole('button', { name: 'Сохранить профиль специалиста' }).click();
   await expect(ap.getByText('Профиль специалиста сохранён')).toBeVisible();
@@ -370,13 +377,11 @@ test('общий прогон: деньги при отмене — переда
   const spec = await enter(sp, S);
   await enter(ap, ADMIN);
   await ap.goto('/kabinet#admin');
-  await ap.getByLabel('Номер телефона пользователя').fill(D);
-  await ap.getByRole('button', { name: 'Найти' }).click();
+  await findUser(ap, D);
   await ap.getByLabel('Служебная роль').selectOption('dispatcher');
   await ap.getByRole('button', { name: 'Сохранить роль' }).click();
   await expect(ap.getByText('Роль сохранена')).toBeVisible();
-  await ap.getByLabel('Номер телефона пользователя').fill(S);
-  await ap.getByRole('button', { name: 'Найти' }).click();
+  await findUser(ap, S);
   await ap.getByLabel('Дать допуск на услугу').selectOption('expertise/goods');
   await ap.getByRole('button', { name: 'Дать допуск' }).click();
   await expect(ap.locator('#sp-permits li').filter({ hasText: /товар/i })).toHaveCount(1);
