@@ -6,6 +6,7 @@ import { state, show, notFoundView } from '/shell.js';
 import { loadMatch } from '/match.js';
 import { loadReview, loadChat } from '/work.js';
 import { loadMoney } from '/money.js';
+import { loadDraft } from '/draft.js';
 
 const $ = (id) => document.getElementById(id);
 const MAX_FILE = 5 * 1024 * 1024;
@@ -45,7 +46,7 @@ export async function openOrder(id) {
   $('done-percent').value = '';
   render();
   show('order-view', 'orders');
-  await Promise.all([loadDocs(), loadTransfer(), loadMatch(current, () => openOrder(id)), loadReview(current), loadChat(current), loadMoney(current, () => openOrder(id))]);
+  await Promise.all([loadDocs(), loadTransfer(), loadMatch(current, () => openOrder(id)), loadDraft(current, () => openOrder(id)), loadReview(current), loadChat(current), loadMoney(current, () => openOrder(id))]);
 }
 
 function render() {

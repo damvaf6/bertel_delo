@@ -925,6 +925,83 @@ test('ИИ-проверка результата: специалист пере�
   await dctx.close();
 });
 
+test('черновик заключения от ИИ: специалист готовит, правит, прикладывает Word; диспетчер только читает; заказчику не виден', async ({ page, browser, baseURL }) => {
+  // Заказчик — на экране page; оплата — напрямую в базе, как в сценарии ИИ-проверки.
+  await signIn(page, '+79990000594');
+  const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира для черновика заключения' }, headers: H })).json();
+  const id = created.order.id;
+  expect((await page.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(9), fields: { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 11', area: '48' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${id}/documents`, {
+    data: Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]), headers: { ...H, 'content-type': 'image/jpeg', 'x-file-name': encodeURIComponent('фасад.jpg') },
+  })).status()).toBe(201);
+  expect((await page.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  const dctx = await phoneContext(browser, baseURL);
+  const dp = await dctx.newPage();
+  const disp = await signIn(dp, '+79990000595');
+  const sctx = await phoneContext(browser, baseURL);
+  const sp = await sctx.newPage();
+  const spec = await signIn(sp, '+79990000596');
+  await db(async (c) => {
+    await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [spec.id]);
+    await c.query('update orders set price_kop = 1500000, paid_at = now() where id = $1', [id]);
+    await c.query("insert into payments (order_id, amount_kop, status, provider_id, created_by, paid_at) values ($1, 1500000, 'succeeded', $2, $3, now())", [id, `pay_ui_${id}`, disp.id]);
+  });
+  expect((await dp.request.post(`/api/orders/${id}/offer`, { data: { specialist_id: spec.id, from: 'matching' }, headers: H })).status()).toBe(200);
+  expect((await sp.request.post(`/api/orders/${id}/status`, { data: { from: 'awaiting_executor', to: 'in_work' }, headers: H })).status()).toBe(200);
+
+  // Специалист готовит черновик: данные заявки, фото с пометкой «описать», места «заполнить».
+  await sp.goto(`/kabinet#order=${id}`);
+  await expect(sp.locator('#draft-state')).toContainText('заказчик черновик не увидит');
+  await sp.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const text = sp.getByLabel('Текст заключения');
+  await expect(text).toHaveValue(/Адрес объекта: г\. Москва, тестовая ул\., 11/);
+  await expect(text).toHaveValue(/Фото 1 \(фасад\.jpg\): \[описать по фото: фасад\.jpg\]/);
+  await expect(sp.locator('#draft-state')).toContainText('Черновик подготовил ИИ');
+  await expect(sp.locator('#draft-state')).toContainText('Осталось заполнить мест');
+  await shot(sp, '56-specialist-chernovik');
+
+  // Незаполненные места — файл не прикладывается; эксперт заполняет, подтверждает и прикладывает.
+  await sp.getByLabel('Я проверил текст и отвечаю за него').check();
+  await sp.getByRole('button', { name: 'Приложить как файл результата' }).click();
+  await expect(sp.locator('#draft-msg')).toContainText('остались незаполненные места');
+  const value = await text.inputValue();
+  await text.fill(`${value.replace(/\[(?:заполнить|описать)[^\]]*\]/g, 'заполнено экспертом')}\nИтоговая стоимость: 11 200 000 руб.`);
+  await sp.getByRole('button', { name: 'Сохранить правку' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Правка сохранена');
+  await expect(sp.locator('#draft-state')).toContainText('Последняя правка');
+  await sp.getByLabel('Я проверил текст и отвечаю за него').check();
+  await sp.getByRole('button', { name: 'Приложить как файл результата' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Файл «Заключение.docx» добавлен в результат работы');
+  await expect(sp.locator('#docs li').filter({ hasText: 'Заключение.docx' })).toContainText('Результат работы');
+  await shot(sp, '57-specialist-chernovik-prilozhen');
+  // ИИ-проверка читает приложенный Word.
+  await sp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  await expect(sp.locator('#ai-review-state')).not.toContainText('Не прочитаны');
+
+  // Диспетчер видит черновик только для чтения.
+  await dp.goto(`/kabinet#order=${id}`);
+  await expect(dp.getByLabel('Текст заключения')).toHaveValue(/Итоговая стоимость: 11 200 000 руб\./);
+  await expect(dp.getByLabel('Текст заключения')).not.toBeEditable();
+  await expect(dp.getByRole('button', { name: 'Приложить как файл результата' })).toBeHidden();
+  await expect(dp.getByRole('button', { name: /Подготовить/ })).toBeHidden();
+
+  // Заказчик: ни черновика, ни файла результата до проверки.
+  await page.goto(`/kabinet#order=${id}`);
+  await expect(page.locator('#order-title')).toHaveText('Квартира для черновика заключения');
+  await expect(page.locator('#draft-box')).toBeHidden();
+  await expect(page.locator('#results-later')).toBeVisible();
+  await expect(page.locator('#docs')).not.toContainText('Заключение.docx');
+  await shot(page, '58-zakazchik-bez-chernovika');
+  await sctx.close();
+  await dctx.close();
+});
+
 test('заявка по письму: почта подключается кодом из письма; письмо с вложением — заявка-черновик; ответ «Отправить» — заявка в подборе', async ({ page }) => {
   const me = await signIn(page, '+79990000591');
   const email = 'pismo-test@example.ru';

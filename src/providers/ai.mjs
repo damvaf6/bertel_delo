@@ -1,9 +1,9 @@
 // ИИ — модель как настройка (устав, раздел 2): основная (AI_PROVIDER) и запасная (AI_FALLBACK).
 // Если основная не ответила — тот же запрос уходит запасной. Зарубежные модели не подключаются вовсе: допустимы только
 // поставщики из списка AI_DRIVERS (данные заявок — персональные, только в России).
-//   complete({ purpose, messages: [{ role: 'system' | 'user' | 'assistant', content }] }) → { text, model }
+//   complete({ purpose, messages: [{ role: 'system' | 'user' | 'assistant', content }], maxTokens? }) → { text, model }
 // purpose: 'problem' — вход через проблему; 'assistant' — ассистент; 'review' — проверка результата по правилам;
-// 'mail' — разбор письма-заявки (1.9).
+// 'mail' — разбор письма-заявки (1.9); 'draft' — черновик заключения (2.2).
 import crypto from 'node:crypto';
 import { makeFake, ProviderError } from './fake.mjs';
 
@@ -66,10 +66,10 @@ const answerOf = (data) => data?.choices?.[0]?.message?.content;
 function yandexGpt(c) {
   const model = `gpt://${c.folder}/${c.model}`;
   return {
-    async complete({ messages }) {
+    async complete({ messages, maxTokens }) {
       const data = await postJson(`${c.url}/chat/completions`, {
         headers: { authorization: `Api-Key ${c.apiKey}`, 'x-folder-id': c.folder },
-        body: { model, messages, temperature: 0.3, max_tokens: 2000 },
+        body: { model, messages, temperature: 0.3, max_tokens: maxTokens ?? 2000 },
       });
       return { text: answerOf(data), model: `yandexgpt:${c.model}` };
     },
@@ -93,10 +93,10 @@ function gigaChat(c) {
     return token;
   }
   return {
-    async complete({ messages }) {
+    async complete({ messages, maxTokens }) {
       const data = await postJson(`${c.url}/chat/completions`, {
         headers: { authorization: `Bearer ${await access()}` },
-        body: { model: c.model, messages, temperature: 0.3, max_tokens: 2000 },
+        body: { model: c.model, messages, temperature: 0.3, max_tokens: maxTokens ?? 2000 },
       });
       return { text: answerOf(data), model: `gigachat:${c.model}` };
     },
@@ -182,6 +182,24 @@ function fakeReview(text) {
   });
 }
 
+// Черновик заключения (2.2): разделы приходят строками «- id: название», фото — после «ФОТО:». Поддельная модель, как
+// настоящая по подсказке, не выдумывает цифр: берёт данные заявки, а где данных нет — оставляет «[заполнить: …]».
+function fakeDraft(text) {
+  const sections = [...(text.split('РАЗДЕЛЫ:')[1] ?? '').split('ФОТО:')[0].matchAll(/^- [a-z][a-z0-9_]*: (.+)$/gm)].map((m) => m[1]);
+  const photos = [...(text.split('ФОТО:')[1] ?? '').split('ДОКУМЕНТЫ:')[0].matchAll(/^- (.+?) \(/gm)].map((m) => m[1]);
+  const brief = text.split('РАЗДЕЛЫ:')[0].trim().split('\n');
+  const docs = (text.split('ДОКУМЕНТЫ:')[1] ?? '').trim();
+  return sections.map((title) => {
+    let body = '[заполнить: эксперт]';
+    if (/^Вводная/.test(title)) body = `${brief.find((l) => l.startsWith('Основание')) ?? 'Основание: [заполнить]'}\n${brief.find((l) => l.startsWith('Для чего')) ?? ''}`.trim();
+    else if (/^Объект/.test(title)) body = brief.filter((l) => /^(Услуга|Что оцениваем|Адрес|Площадь|Кадастровый|Марка|VIN|Год)/.test(l)).join('\n') || '[заполнить: объект]';
+    else if (/^Осмотр/.test(title)) body = photos.length ? photos.map((p, i) => `Фото ${i + 1} (${p}): [описать по фото: ${p}]`).join('\n') : 'Фото к заявке не приложены. [заполнить: осмотр]';
+    else if (/^Вопросы/.test(title)) body = docs ? docs.split('\n').filter((l) => /\?/.test(l)).join('\n') || '[заполнить: вопросы]' : '[заполнить: вопросы]';
+    else if (/^Расчёт/.test(title)) body = '[заполнить: расчёт и итоговая величина]';
+    return `## ${title}\n${body}`;
+  }).join('\n\n');
+}
+
 function fakeAi() {
   return makeFake('ai', {
     complete: async ({ purpose, messages }) => {
@@ -189,6 +207,7 @@ function fakeAi() {
       if (purpose === 'problem') return { text: fakeProblem(text), model: 'fake' };
       if (purpose === 'review') return { text: fakeReview(text), model: 'fake' };
       if (purpose === 'mail') return { text: fakeMail(text), model: 'fake' };
+      if (purpose === 'draft') return { text: fakeDraft(text), model: 'fake' };
       return { text: `[поддельный ответ ИИ] Вы спросили: «${text.slice(0, 200)}». Это подсказка, решение — за Вами.`, model: 'fake' };
     },
   });

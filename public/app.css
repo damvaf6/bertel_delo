@@ -80,6 +80,7 @@ label.btn:has(+ input:focus-visible) { outline: 3px solid #8fb3e6; }
 .call-box { margin-top: 12px; }
 .call-box .muted { margin: 6px 0 0; }
 textarea { min-height: 96px; resize: vertical; }
+textarea.draft-text { min-height: 360px; font-size: 15px; line-height: 1.45; }
 /* Заявка: статус, шаги, данные. */
 .badge.status { background: #e3ecf8; color: var(--accent); font-weight: 600; font-size: 13px; }
 .badge.status.cancelled { background: #f6e3e3; color: var(--danger); }
