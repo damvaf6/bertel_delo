@@ -137,8 +137,9 @@ jobs:
           NOW=$(date -u +%s)
           # Ночные копии Яндекса: только время и размер.
           B=$(yc managed-postgresql cluster list-backups --name "delo-$ENV" --format json)
-          echo "$B" | jq -r 'sort_by(.created_at) | reverse | .[:5][] | "ночная копия: \(.created_at) размер \(.size // "?")"'
-          LAST=$(echo "$B" | jq -r 'map(.created_at) | sort | last // empty')
+          # Копия, которая ещё создаётся, — без created_at (только started_at).
+          echo "$B" | jq -r 'sort_by(.started_at // .created_at) | reverse | .[:5][] | "ночная копия: начата \(.started_at // "?"), готова \(.created_at // "ещё создаётся"), размер \(.size // "?")"'
+          LAST=$(echo "$B" | jq -r 'map(.created_at // empty) | sort | last // empty')
           [ -n "$LAST" ] || { echo "::error::Ночных копий базы нет"; exit 1; }
           AGE_H=$(( (NOW - $(date -u -d "$LAST" +%s)) / 3600 ))
           echo "последняя ночная копия: $LAST ($AGE_H ч назад), всего: $(echo "$B" | jq length)"
