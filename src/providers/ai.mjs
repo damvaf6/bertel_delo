@@ -170,7 +170,12 @@ function fakeReview(text) {
   return JSON.stringify({
     items: ids.map((id) => {
       if (unreadable) return { id, hint: 'attention', note: 'Текст результата прочитать не удалось — проверьте вручную' };
-      if (id === 'technical' && /опечатк/i.test(files)) return { id, hint: 'attention', note: 'В тексте есть слово «опечатка» — проверьте орфографию' };
+      if (id === 'technical' && /опечатк/i.test(files)) {
+        // Цитата — строка со словом «опечатка» (как настоящая модель: слово в слово из отчёта) и одна выдуманная.
+        const line = files.split('\n').find((l) => /опечатк/i.test(l)).trim().slice(0, 120);
+        return { id, hint: 'attention', note: 'В тексте есть слово «опечатка» — проверьте орфографию', quotes: [line, 'этой фразы в отчёте нет'] };
+      }
+      if (id === 'requisites' && !/№/.test(files)) return { id, hint: 'attention', note: 'Не видно номера заключения' };
       if (id === 'calculation' && !/\d/.test(files)) return { id, hint: 'attention', note: 'В тексте нет ни одного числа — где расчёт?' };
       return { id, hint: 'ok', note: 'Замечаний не найдено' };
     }),

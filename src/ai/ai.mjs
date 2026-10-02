@@ -4,6 +4,7 @@
 import { HttpError } from '../http/core.mjs';
 import { STATUS_NAME } from '../orders/workflow.mjs';
 import { BASIS_KINDS } from '../modules/index.mjs';
+import { locateQuote } from './extract.mjs';
 
 export const DISCLAIMER = 'Это разъяснение искусственного интеллекта, а не юридическая услуга. Решение принимаете Вы; '
   + 'за точной оценкой обращайтесь к специалисту.';
@@ -133,7 +134,9 @@ export function reviewMessages({ rules, brief, files }) {
         'Ты помощник проверяющего. Проверь результат работы специалиста по каждому правилу из списка.',
         'Ты только подсказываешь: «ok» — замечаний не видно, «attention» — человеку стоит посмотреть, с коротким пояснением.',
         'Если текст результата не прочитан — «attention» с пояснением. Решение и подпись — у человека.',
-        'Ответь только JSON: {"items": [{"id": "id правила", "hint": "ok" | "attention", "note": "пояснение"}]}.',
+        'К каждому «attention» приведи до трёх коротких точных цитат из файлов (слово в слово, 5–200 знаков) — места,',
+        'которые человеку стоит посмотреть. Не пересказывай и не придумывай цитаты: место без точной цитаты не покажут.',
+        'Ответь только JSON: {"items": [{"id": "id правила", "hint": "ok" | "attention", "note": "пояснение", "quotes": ["цитата"]}]}.',
       ].join('\n'),
     },
     {
@@ -143,21 +146,28 @@ export function reviewMessages({ rules, brief, files }) {
         'ПРАВИЛА:',
         ...rules.map((r) => `- ${r.id}: ${r.title}`),
         'ФАЙЛЫ:',
-        ...files.map((f) => `[${f.name}]\n${f.text ?? '(текст не прочитан: такой вид файла помощник пока не читает)'}`),
+        ...files.map((f) => `[${f.name}]\n${f.text === null ? '(текст не прочитан: файл не удалось прочитать или такой вид файла помощник не читает)' : f.text}${f.truncated ? '\n(дальше текст не поместился — его помощник не видел)' : ''}`),
       ].join('\n'),
     },
   ];
 }
 
-// Подсказки по каждому правилу; правило, о котором модель промолчала, — «посмотрите сами».
-export function cleanReviewAnswer(rules, text) {
+// Подсказки по каждому правилу; правило, о котором модель промолчала, — «посмотрите сами». Отмеченные места — только
+// цитаты, которые нашлись в тексте отчёта (с файлом и страницей); выдуманные модель цитаты отбрасываются.
+export function cleanReviewAnswer(rules, text, docs = []) {
   const j = parseJsonAnswer(text);
   const items = Array.isArray(j?.items) ? j.items : [];
   return rules.map((r) => {
     const it = items.find((x) => x?.id === r.id);
     const hint = it?.hint === 'ok' ? 'ok' : 'attention';
     const note = clip(it?.note, 1000) || (it ? '' : 'Помощник не дал ответа по этому правилу — проверьте сами');
-    return { id: r.id, hint, note };
+    const marks = [];
+    for (const q of (Array.isArray(it?.quotes) ? it.quotes : []).slice(0, 3)) {
+      if (typeof q !== 'string') continue;
+      const at = locateQuote(docs, q);
+      if (at) marks.push({ ...at, quote: clip(q.replace(/\s+/g, ' ').trim(), 200) });
+    }
+    return { id: r.id, hint, note, marks };
   });
 }
 

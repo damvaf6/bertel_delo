@@ -47,7 +47,8 @@ function aiState(ai) {
   return [
     `ИИ-проверка: запускал ${AI_SIDE_RU[ai.side]}, ${timeRu(ai.at)}.`,
     attention ? `Стоит посмотреть: ${attention} из ${ai.items.length}.` : 'Замечаний ИИ не видит.',
-    unread.length ? `Не прочитаны (такие файлы ИИ пока не читает): ${unread.join(', ')}.` : null,
+    unread.length ? `Не прочитаны (ИИ читает PDF, Word и текст; эти посмотрите сами): ${unread.join(', ')}.` : null,
+    ai.files.some((f) => f.truncated) ? `Прочитано не до конца (длинный текст): ${ai.files.filter((f) => f.truncated).map((f) => f.name).join(', ')}.` : null,
     'Это подсказка: решение и отметки — за человеком.',
   ].filter(Boolean).join(' ');
 }
@@ -67,7 +68,11 @@ function checkItem(order, r, c, hint) {
     el('div', { class: 'title', text: c.title }),
     ...(r.round > 0 ? [el('div', { class: `verdict ${c.verdict || 'none'}`, text: VERDICT_RU[c.verdict] || 'Не проверено' })] : []),
     ...(c.note ? [el('p', { class: 'check-note', text: c.note })] : []),
-    ...(hint ? [el('p', { class: `ai-hint ${hint.hint}`, text: hint.hint === 'ok' ? `ИИ: ${hint.note || 'замечаний не видно'}` : `ИИ: посмотрите — ${hint.note}` })] : []));
+    ...(hint ? [el('p', { class: `ai-hint ${hint.hint}`, text: hint.hint === 'ok' ? `ИИ: ${hint.note || 'замечаний не видно'}` : `ИИ: посмотрите — ${hint.note}` })] : []),
+    // Отмеченные места: цитата из отчёта, файл и страница — сервер показывает только найденные в тексте цитаты.
+    ...(hint?.marks?.length ? [el('ul', { class: 'ai-marks' }, ...hint.marks.map((m) => el('li', {},
+      el('span', { class: 'ai-mark-where', text: `${m.file}, ${m.where}: ` }),
+      el('q', { text: m.quote }))))] : []));
   if (!r.can_mark) return li;
   const note = el('input', { type: 'text', maxlength: '1000', 'aria-label': `Замечание: ${c.title}`, placeholder: 'Что не так (для замечания)' });
   note.value = c.verdict === 'issue' ? c.note || '' : '';

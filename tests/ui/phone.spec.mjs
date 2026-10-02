@@ -8,6 +8,7 @@ import { test as base, expect } from '@playwright/test';
 import pg from 'pg';
 import { DB_URL, TEST_TOKEN, BRIDGE_SECRET, testEnv } from '../helpers.mjs';
 import { signBridge } from '../../src/bridge/signature.mjs';
+import { makePdf } from '../tools/make-docs.mjs';
 
 const CONTROL = process.env.UI_TEST_CONTROL_TOKEN || TEST_TOKEN;
 // Ключ моста CRM → Платформа на проверяемом стенде (тестовый, не настоящий).
@@ -516,7 +517,7 @@ test('ход заявки: подбор диспетчером, принятие
 
   // Новый круг: все правила в порядке → «Проверено, готово».
   await dp.reload();
-  const rules = dp.locator('#review-checks li');
+  const rules = dp.locator('#review-checks > li');
   await expect(dp.locator('#review-summary')).toContainText('Круг проверки 2');
   const n = await rules.count();
   expect(n).toBeGreaterThan(3);
@@ -886,9 +887,10 @@ test('ИИ-проверка результата: специалист пере�
   });
   expect((await dp.request.post(`/api/orders/${id}/offer`, { data: { specialist_id: spec.id, from: 'matching' }, headers: H })).status()).toBe(200);
   expect((await sp.request.post(`/api/orders/${id}/status`, { data: { from: 'awaiting_executor', to: 'in_work' }, headers: H })).status()).toBe(200);
+  // Отчёт — PDF на две страницы (задача 2.1): ИИ читает его и показывает отмеченное место со страницей.
   expect((await sp.request.post(`/api/orders/${id}/results`, {
-    data: Buffer.from('Отчёт об оценке квартиры. Итоговая стоимость 9 500 000 руб. В разделе 3 опечатка в адресе.'),
-    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('отчёт.txt') },
+    data: makePdf([['Заключение № 3/2026 об оценке квартиры'], ['Итоговая стоимость 9 500 000 руб.', 'В разделе 3 опечатка в адресе.']]),
+    headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('отчёт.pdf') },
   })).status()).toBe(201);
 
   // Специалист проверяет результат с помощью ИИ до сдачи.
@@ -899,6 +901,7 @@ test('ИИ-проверка результата: специалист пере�
   await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова');
   await expect(sp.locator('#ai-review-state')).toContainText('запускал исполнитель перед сдачей');
   await expect(sp.locator('#review-checks li').filter({ hasText: 'Технические ошибки' }).locator('.ai-hint')).toContainText('посмотрите');
+  await expect(sp.locator('#review-checks li').filter({ hasText: 'Технические ошибки' }).locator('.ai-marks li')).toHaveText(['отчёт.pdf, стр. 2: В разделе 3 опечатка в адресе.']);
   await expect(sp.locator('#review-checks li').filter({ hasText: 'Расчёт' }).locator('.ai-hint')).toHaveText('ИИ: Замечаний не найдено');
   await expect(sp.locator('#review-checks .verdict')).toHaveCount(0);
   await shot(sp, '54-specialist-ii-proverka');
@@ -1188,7 +1191,7 @@ test('сквозной путь: заявка на оценку квартиры
   await expect(dp.locator('#review-box')).toBeVisible();
   await dp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
   await expect(dp.locator('#ai-review-state')).toContainText('запускал диспетчер');
-  const rules = dp.locator('#review-checks li');
+  const rules = dp.locator('#review-checks > li');
   const n = await rules.count();
   expect(n).toBeGreaterThan(3);
   for (let i = 0; i < n; i += 1) {
