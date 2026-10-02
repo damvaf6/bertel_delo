@@ -3,7 +3,8 @@
 //
 // Формат модуля:
 //   { id, name, basis: ['contract' | 'court', …], fields: [поле…], services: [{ id, name, fields: [поле…] }…],
-//     checks: [{ id, title, services?: [id услуги…] }…] }
+//     checks: [{ id, title, services?: [id услуги…] }…],
+//     draft?: [{ id, title, services?: [id услуги…] }…] }  — разделы черновика заключения от ИИ (задача 2.2)
 // Поле: { id, label, type: 'text' | 'longtext' | 'number' | 'select', required?, max?, min?, integer?,
 //         options?: [{ id, name }…] (для select), pattern?, hint?, upper? }
 //   Общие поля модуля идут в заявке перед полями услуги; id не должны совпадать.
@@ -73,7 +74,7 @@ function validateField(f, where) {
 }
 
 export function validateModule(m) {
-  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks'], 'модуль');
+  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft'], 'модуль');
   if (!ID_RE.test(m.id ?? '')) fail('модуль', `неверный id «${m.id}»`);
   const at = `модуль ${m.id}`;
   if (!nonEmpty(m.name)) fail(at, 'нет названия');
@@ -104,6 +105,18 @@ export function validateModule(m) {
       fail(where, 'services — непустой список услуг этого модуля');
     }
   }
+  // Разделы черновика заключения (2.2) — необязательно: без них черновик от ИИ для модуля не готовится.
+  if (m.draft !== undefined) {
+    checkIds(m.draft, `${at}, разделы черновика`);
+    for (const d of m.draft) {
+      const where = `${at}, раздел черновика ${d.id}`;
+      onlyKeys(d, ['id', 'title', 'services'], where);
+      if (!nonEmpty(d.title)) fail(where, 'нет описания');
+      if (d.services !== undefined && (!Array.isArray(d.services) || d.services.length === 0 || d.services.some((id) => !serviceIds.includes(id)))) {
+        fail(where, 'services — непустой список услуг этого модуля');
+      }
+    }
+  }
   return m;
 }
 
@@ -132,6 +145,12 @@ export function createRegistry(modules = DEFAULT_MODULES) {
       const m = modulesList.find((x) => x.id === moduleId);
       if (!m?.services.some((x) => x.id === serviceId)) return [];
       return m.checks.filter((c) => !c.services || c.services.includes(serviceId)).map((c) => ({ id: c.id, title: c.title }));
+    },
+    // Разделы черновика заключения для услуги (2.2); пустой список — черновик для услуги не готовится.
+    draftSections(moduleId, serviceId) {
+      const m = modulesList.find((x) => x.id === moduleId);
+      if (!m?.draft || !m.services.some((x) => x.id === serviceId)) return [];
+      return m.draft.filter((d) => !d.services || d.services.includes(serviceId)).map((d) => ({ id: d.id, title: d.title }));
     },
     catalog() {
       return modulesList.map((m) => ({

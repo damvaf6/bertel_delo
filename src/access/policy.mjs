@@ -119,6 +119,11 @@ export function messageSide(actor, order) {
 // Кто видит отметки проверки результата по каждому правилу (остальные — только итог).
 export const seesReviewDetails = (actor, order) => isStaff(actor) || (!!order.executor_user_id && order.executor_user_id === actor?.id);
 
+// Черновик заключения (2.2): видят исполнитель и служебные (заказчик — никогда); готовит с ИИ, правит и прикладывает
+// результатом только исполнитель, пока дело у него в работе.
+export const seesDraft = seesReviewDetails;
+export const editsDraft = (actor, order) => order.status === 'in_work' && orderSides(actor, order).includes('executor');
+
 // В какой памяти ассистента вошедший может разговаривать: личной (null) или организации, где он состоит.
 export const assistantScopeAllowed = (actor, orgId) => orgId === null || memberOf(actor, orgId);
 

@@ -13,6 +13,7 @@ import { workOps } from './ops/work-ops.mjs';
 import { moneyOps } from './ops/money-ops.mjs';
 import { notifyOps } from './ops/notify-ops.mjs';
 import { aiOps } from './ops/ai-ops.mjs';
+import { draftOps } from './ops/draft-ops.mjs';
 import { mailOps } from './ops/mail-ops.mjs';
 import { bridgeOps } from './ops/bridge-ops.mjs';
 import { validateRegistry } from './notify/registry.mjs';
@@ -22,7 +23,7 @@ import { createRegistry, DEFAULT_MODULES } from './modules/index.mjs';
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
 export function listOps(cfg, providers) {
-  const ops = [...coreOps(cfg), ...orderOps(), ...orgOps(), ...adminOps(), ...matchOps(), ...workOps(), ...moneyOps(), ...notifyOps(), ...aiOps(), ...mailOps(), ...bridgeOps(cfg)];
+  const ops = [...coreOps(cfg), ...orderOps(), ...orgOps(), ...adminOps(), ...matchOps(), ...workOps(), ...moneyOps(), ...notifyOps(), ...aiOps(), ...draftOps(), ...mailOps(), ...bridgeOps(cfg)];
   if (providers.storage.kind === 'memory') ops.push(...memoryFileOps());
   if (cfg.appEnv === 'test' && cfg.testControlToken) ops.push(...testControlOps(cfg));
   ops.push(...stageLoginOps(cfg));

@@ -11,30 +11,36 @@ const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const DOC_KINDS = ['basis', 'other'];
 
 // Сохранить присланный файл в хранилище и записать документ заявки (вид — основание, прочее или результат).
-async function storeDocument({ sql, actor, order, req, body, providers, res }, kind) {
+async function storeDocument(ctx, kind) {
+  const { req, body, res } = ctx;
   if (!Buffer.isBuffer(body) || body.length === 0) throw new HttpError(400, 'empty_file', 'Файл пустой');
   let filename;
   try { filename = decodeURIComponent(req.get('x-file-name') || ''); } catch { filename = ''; }
-  filename = text(filename.replace(/[\\/\u0000-\u001f]/g, '_'), 'Имя файла', 255);
   const mime = (req.get('content-type') || 'application/octet-stream').split(';')[0].trim().slice(0, 100);
+  const doc = await saveDocument(ctx, { filename, mime, buf: body, kind });
+  res.status(201);
+  return { document: publicDoc(doc) };
+}
+
+// Файл — в хранилище, документ — в базу (не вышло записать — файл из хранилища убирается). Также черновик → результат (2.2).
+export async function saveDocument({ sql, actor, order, providers }, { filename, mime, buf, kind }) {
+  const name = text(String(filename ?? '').replace(/[\\/\u0000-\u001f]/g, '_'), 'Имя файла', 255);
   const key = `orders/${order.id}/${crypto.randomUUID()}`;
-  await providers.storage.put(key, body, mime);
+  await providers.storage.put(key, buf, mime);
   try {
-    const doc = await sql.tx(async (tx) => {
+    return await sql.tx(async (tx) => {
       const d = await tx.one`insert into documents (order_id, uploaded_by, filename, mime, size_bytes, storage_key, kind)
-                             values (${order.id}, ${actor.id}, ${filename}, ${mime}, ${body.length}, ${key}, ${kind}) returning *`;
+                             values (${order.id}, ${actor.id}, ${name}, ${mime}, ${buf.length}, ${key}, ${kind}) returning *`;
       await audit(tx, actor, 'document.upload', 'document', d.id, { order_id: order.id, kind });
       return d;
     });
-    res.status(201);
-    return { document: publicDoc(doc) };
   } catch (e) {
     await providers.storage.delete(key).catch(() => {});
     throw e;
   }
 }
 
-const publicDoc = (d) => ({ id: d.id, order_id: d.order_id, kind: d.kind, filename: d.filename, mime: d.mime, size_bytes: d.size_bytes, created_at: d.created_at });
+export const publicDoc = (d) => ({ id: d.id, order_id: d.order_id, kind: d.kind, filename: d.filename, mime: d.mime, size_bytes: d.size_bytes, created_at: d.created_at });
 
 // Лимит запросов входа с одного адреса — 30 за 10 минут; поднять можно только в автотестах (AUTH_RATE_MAX, config.mjs).
 export function coreOps(cfg) {

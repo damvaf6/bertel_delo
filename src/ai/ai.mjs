@@ -179,3 +179,52 @@ export async function aiReviewView(sql, order) {
                           where order_id = ${order.id} and round = ${round} order by id desc limit 1`;
   return r && { round: r.round, side: r.side, model: r.model, items: r.items, files: r.files, at: r.at };
 }
+
+// ——— Черновик заключения (задача 2.2) ———
+
+export const DRAFT_MAX = 50_000;
+// Места, которые эксперт должен заполнить сам: пока они есть, черновик не становится файлом результата.
+export const DRAFT_GAP = /\[(?:заполнить|описать)[^\]]*\]/i;
+
+export function draftMessages({ brief, sections, photos, docs }) {
+  return [
+    {
+      role: 'system',
+      content: [
+        'Ты помощник эксперта. Подготовь ЧЕРНОВИК заключения по данным заявки, документам и списку фото.',
+        'Это только черновик: эксперт проверит и поправит каждое слово, сам сделает расчёт и выводы, подпишет и отвечает за текст.',
+        'Пиши только то, что следует из данных. Не придумывай цифры, стоимость, аналоги, даты, имена, номера и адреса.',
+        'Где данных нет или нужен расчёт и вывод эксперта — оставь пометку в квадратных скобках: [заполнить: что именно].',
+        'Фото ты не видишь — только их список. Для каждого фото оставь строку «Фото N (имя файла): [описать по фото: имя файла]».',
+        'Разделы — строго по списку и в том же порядке, каждый начинается строкой «## Название раздела».',
+        'Ответь только текстом черновика, без пояснений до и после.',
+      ].join('\n'),
+    },
+    {
+      role: 'user',
+      content: [
+        brief,
+        'РАЗДЕЛЫ:',
+        ...sections.map((s) => `- ${s.id}: ${s.title}`),
+        'ФОТО:',
+        ...(photos.length ? photos.map((p) => `- ${p.name} (загружено ${p.at})`) : ['(фото к заявке не приложены)']),
+        'ДОКУМЕНТЫ:',
+        ...(docs.length
+          ? docs.map((d) => `[${d.name}]\n${d.text === null ? '(текст не прочитан)' : d.text}${d.truncated ? '\n(дальше текст не поместился)' : ''}`)
+          : ['(документов с текстом нет)']),
+      ].join('\n'),
+    },
+  ];
+}
+
+const headKey = (s) => s.toLowerCase().replace(/ё/g, 'е').split(/[:,(]/)[0].replace(/\s+/g, ' ').trim();
+
+// Ответ модели → текст черновика: без обёрток ```, не длиннее DRAFT_MAX; раздел, который модель пропустила, — добавляется
+// пустым, с пометкой «заполнить», чтобы эксперт его не потерял.
+export function cleanDraftAnswer(sections, text) {
+  let body = String(text ?? '').replace(/^\s*```[a-z]*\s*\n?|\n?```\s*$/gi, '').replace(/\r\n?/g, '\n').trim();
+  const heads = new Set([...body.matchAll(/^#{1,3}\s*(.+)$/gm)].map((m) => headKey(m[1])));
+  const missing = sections.filter((s) => !heads.has(headKey(s.title)));
+  if (missing.length) body = [body, ...missing.map((s) => `## ${s.title}\n[заполнить: раздел не подготовлен]`)].filter(Boolean).join('\n\n');
+  return body.slice(0, DRAFT_MAX);
+}
