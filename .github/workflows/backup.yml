@@ -5,8 +5,16 @@ name: Backup (Yandex Cloud)
 # таймер раз в неделю (воскресенье 02:00 МСК) → сразу один запуск и проверка итога.
 # Копия и её восстановление — только внутри облака; через GitHub проходит лишь итог (число таблиц и строк, размер).
 # Боевой контур (prod) этим workflow не трогается — только по «да» Дамира.
+# Режим «check» — только проверка: ночные копии Яндекса и еженедельные копии в бакете (время и размер), состояние таймера.
+# Ничего не создаёт и не запускает.
 on:
   workflow_dispatch:
+    inputs:
+      action:
+        description: 'Действие'
+        type: choice
+        options: [run, check]
+        default: run
 
 jobs:
   backup:
@@ -59,12 +67,14 @@ jobs:
           echo "IMAGE=cr.yandex/$REGISTRY_ID/delo-backup:${GITHUB_SHA::12}" >> $GITHUB_ENV
 
       - name: Образ выгрузки
+        if: inputs.action != 'check'
         run: |
           yc iam create-token | docker login --username iam --password-stdin cr.yandex
           docker build -f Dockerfile.backup -t "$IMAGE" .
           docker push "$IMAGE"
 
       - name: Контейнер выгрузки (без открытого доступа)
+        if: inputs.action != 'check'
         run: |
           yc serverless container get --name "$CONTAINER" >/dev/null 2>&1 || \
             yc serverless container create --name "$CONTAINER" --description "БЕРТЕЛ Дело · выгрузка базы · $ENV (тестовые данные)"
@@ -88,6 +98,7 @@ jobs:
             --role serverless.containers.invoker --service-account-id "$APP_SA_ID" || echo "доступ таймеру уже выдан"
 
       - name: Таймер раз в неделю
+        if: inputs.action != 'check'
         run: |
           if yc serverless trigger get --name "$TRIGGER" >/dev/null 2>&1; then
             echo "Таймер уже есть"
@@ -102,6 +113,7 @@ jobs:
           yc serverless trigger get --name "$TRIGGER" --format json | jq '{name, status, cron: .rule.timer.cron_expression}'
 
       - name: Запуск сейчас и проверка итога
+        if: inputs.action != 'check'
         timeout-minutes: 20
         run: |
           OK=0
@@ -118,6 +130,29 @@ jobs:
           [ "$OK" = 1 ] || { echo "::error::Выгрузка или учебное восстановление не удались"; exit 1; }
           jq -r '"### Выгрузка базы stage\n- копия: `\(.key)` (\(.bytes) байт)\n- учебное восстановление: таблиц \(.tables), строк \(.rows) — совпало с базой\n- время: \(.seconds) с"' \
             "$RUNNER_TEMP/report.json" >> $GITHUB_STEP_SUMMARY
+
+      - name: Проверка копий (без запуска)
+        if: inputs.action == 'check'
+        run: |
+          NOW=$(date -u +%s)
+          # Ночные копии Яндекса: только время и размер.
+          B=$(yc managed-postgresql cluster list-backups --name "delo-$ENV" --format json)
+          echo "$B" | jq -r 'sort_by(.created_at) | reverse | .[:5][] | "ночная копия: \(.created_at) размер \(.size // "?")"'
+          LAST=$(echo "$B" | jq -r 'map(.created_at) | sort | last // empty')
+          [ -n "$LAST" ] || { echo "::error::Ночных копий базы нет"; exit 1; }
+          AGE_H=$(( (NOW - $(date -u -d "$LAST" +%s)) / 3600 ))
+          echo "последняя ночная копия: $LAST ($AGE_H ч назад), всего: $(echo "$B" | jq length)"
+          [ "$AGE_H" -le 26 ] || { echo "::error::Последней ночной копии больше суток"; exit 1; }
+          # Еженедельные копии в бакете: имя, время, размер.
+          W=$(yc storage s3api list-objects --bucket "$BACKUPS_BUCKET" --prefix weekly/ --format json 2>/dev/null || echo '{}')
+          echo "$W" | jq -r '(.contents // [])[] | "еженедельная копия: \(.key) \(.last_modified) \(.size) байт"'
+          # Таймер: состояние и расписание.
+          yc serverless trigger get --name "$TRIGGER" --format json | jq -c '{name, status, cron: .rule.timer.cron_expression}'
+          {
+            echo "### Копии базы $ENV"
+            echo "- ночных копий Яндекса: $(echo "$B" | jq length), последняя — $LAST ($AGE_H ч назад)"
+            echo "- еженедельных копий в бакете: $(echo "$W" | jq '(.contents // []) | length')"
+          } >> $GITHUB_STEP_SUMMARY
 
       - name: Убрать ключ
         if: always()
