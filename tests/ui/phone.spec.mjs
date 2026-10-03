@@ -1451,6 +1451,21 @@ test('две подписи (2.5а): эксперт от организации 
   await expect(item.locator('.sig-state').nth(1)).toContainText('Подпись организации: ООО «Тестовая оценочная компания» — руководитель Тестовый руководитель');
   await shot(hp, '97-rukovoditel-podpis');
 
+  // Дела экспертов (2.16): руководитель видит дело эксперта без заказчика и названия заявки, нагрузку и деньги.
+  const cases = hp.locator('#org-cases-box');
+  await expect(cases).toBeVisible();
+  const row = hp.locator('#org-cases > li').first();
+  await expect(row).toContainText('Оценка недвижимости');
+  await expect(row).toContainText('В работе · эксперт: Тестовый эксперт компании');
+  await expect(row).toContainText('вознаграждение 12 000 ₽');
+  await expect(cases).not.toContainText('две подписи');
+  await expect(cases).not.toContainText('тестовая ул.');
+  await expect(hp.locator('#org-cases-load li').first()).toContainText('в работе: 1');
+  await expect(hp.locator('#org-cases-money')).toContainText('Ждёт выдачи результата12 000 ₽');
+  await expect(hp.locator('#members li').filter({ hasText: 'Тестовый эксперт компании' })).toContainText('дел: 1');
+  await cases.scrollIntoViewIfNeeded();
+  await shot(hp, '97a-rukovoditel-dela-ekspertov');
+
   // Эксперт сдаёт; после проверки заказчик видит обе подписи, проверяет и скачивает подпись организации.
   await sp.reload();
   await expect(doc.locator('.sig-state')).toHaveCount(2);
@@ -1468,6 +1483,19 @@ test('две подписи (2.5а): эксперт от организации 
   const [orgSig] = await Promise.all([page.waitForEvent('download'), got.getByRole('button', { name: 'Подпись организации' }).click()]);
   expect(orgSig.suggestedFilename()).toBe('отчёт-компании.pdf.org.sig');
   await shot(page, '98-zakazchik-dve-podpisi');
+
+  // Просроченное дело эксперта руководитель видит крупно (2.16); завершённое — ниже, в «Завершённых».
+  await db((c) => c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at)
+    values ('expertise', 'vehicle', 'Просроченное дело', $1, $2, 'in_work', '2026-01-15', 900000, now())`, [created.order.owner_user_id, spec.id]));
+  await hp.reload();
+  const late = hp.locator('#org-cases > li').first();
+  await expect(late.locator('.title')).toContainText('Оценка транспортного средства');
+  await expect(late.locator('.overdue.big')).toHaveText('срок 15 января 2026 г. · ПРОСРОЧЕНО');
+  await expect(hp.locator('#org-cases-load li').first()).toContainText('в работе: 1 · просрочено: 1');
+  await expect(hp.locator('#org-cases li.group')).toHaveText('Завершённые · 1');
+  await expect(hp.locator('#org-cases-box')).not.toContainText('Просроченное дело');
+  await hp.locator('#org-cases-box').scrollIntoViewIfNeeded();
+  await shot(hp, '97b-rukovoditel-prosrocheno');
   await sctx.close();
   await hctx.close();
 });

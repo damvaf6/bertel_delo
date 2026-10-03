@@ -199,3 +199,37 @@ test('ограничение на число созданных организа
   const r = await c.req('POST', '/api/orgs', { name: 'Лишняя' });
   assert.equal(r.status, 429);
 });
+
+test('дела экспертов (2.16): просрочка, нагрузка, выплачено за месяц и ждёт выдачи', async () => {
+  const head = await login(S, '+79990001101');
+  const org = await newOrg(head, 'Тестовый центр экспертиз 2.16');
+  const expert = await join(head, org, '+79990001102');
+  const customer = await login(S, '+79990001103');
+  await S.sql`update users set full_name = 'Эксперт Тестов' where id = ${expert.user.id}`;
+  await S.sql`insert into specialists (user_id, org_id) values (${expert.user.id}, ${org.id})`;
+  const mk = async (status, deadline, extra = {}) => {
+    const [o] = await S.sql`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at)
+      values ('expertise', 'realty', 'Дело заказчика', ${customer.user.id}, ${expert.user.id}, ${status}, ${deadline}, 1000000, now()) returning *`;
+    if (extra.payout) {
+      await S.sql`insert into payouts (order_id, executor_user_id, amount_kop, commission_kop, status, paid_at)
+        values (${o.id}, ${expert.user.id}, 800000, 200000, ${extra.payout}, ${extra.payout === 'succeeded' ? new Date() : null})`;
+    }
+    return o;
+  };
+  await mk('in_work', '2020-01-01');                          // просрочено
+  await mk('awaiting_executor', '2099-01-01');                // предложено, ещё не принято
+  await mk('done', '2099-01-01', { payout: 'succeeded' });    // выплачено в этом месяце
+  await mk('done', '2099-01-01', { payout: 'failed' });       // выплата не прошла — ждёт
+  await mk('cancelled', '2099-01-01');                        // отменённое не показывается
+  const r = await head.req('GET', `/api/orgs/${org.id}/cases`);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const { cases, load, money } = r.body;
+  assert.deepEqual(cases.map((c) => c.status), ['in_work', 'awaiting_executor', 'done', 'done'], 'активные — сверху, отменённых нет');
+  assert.equal(cases[0].overdue, true);
+  assert.equal(cases[0].service, 'Оценка недвижимости');
+  assert.deepEqual(load, [{ user_id: expert.user.id, full_name: 'Эксперт Тестов', in_work: 1, offered: 1, overdue: 1 }]);
+  assert.equal(money.paid_kop, 800000);
+  assert.equal(money.waiting_kop, 800000 + 800000, 'не прошедшая выплата и оплаченное дело в работе');
+  const members = (await head.req('GET', `/api/orgs/${org.id}/members`)).body.members;
+  assert.equal(members.find((m) => m.user_id === expert.user.id).orders, 1, '«дел» — с учётом дела в работе');
+});

@@ -726,6 +726,15 @@ test('общий прогон: две подписи — эксперт от о�
   expect((await hp.request.get(`/api/orders/${id}`, { headers: h })).status()).toBe(404);
   await shot(hp, '32-rukovoditel-podpis');
 
+  // Дела экспертов (2.16): дело эксперта — без названия заявки и адреса; вознаграждение и «ждёт выдачи» — 80% цены.
+  const cases = hp.locator('#org-cases-box');
+  await expect(hp.locator('#org-cases > li').first()).toContainText(`В работе · эксперт: ${specName}`);
+  await expect(hp.locator('#org-cases > li').first()).toContainText('вознаграждение 12 800 ₽');
+  await expect(cases).not.toContainText(title);
+  await expect(cases).not.toContainText('Подписная');
+  await expect(hp.locator('#org-cases-money')).toContainText('Ждёт выдачи результата12 800 ₽');
+  await shot(hp, '32a-rukovoditel-dela-ekspertov');
+
   // Эксперт сдаёт; диспетчер проверяет по всем правилам; заказчик видит обе подписи и проверяет их.
   await sp.reload();
   await expect(doc.locator('.sig-state')).toHaveCount(2);
@@ -751,5 +760,9 @@ test('общий прогон: две подписи — эксперт от о�
   const [orgSig] = await Promise.all([page.waitForEvent('download'), got.getByRole('button', { name: 'Подпись организации' }).click()]);
   expect(orgSig.suggestedFilename()).toBe('Отчёт компании.pdf.org.sig');
   await shot(page, '33-zakazchik-dve-podpisi');
+  await hp.reload();
+  await expect(hp.locator('#org-cases li.group')).toHaveText('Завершённые · 1');
+  await expect(hp.locator('#org-cases-money')).toContainText('12 800 ₽');
+  await shot(hp, '33a-rukovoditel-vyplacheno');
   for (const p of [dp, sp, hp]) await close(p);
 });
