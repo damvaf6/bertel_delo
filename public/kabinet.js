@@ -65,17 +65,79 @@ async function loadOrders() {
   renderOrders();
 }
 
-function renderOrders() {
-  const status = $('orders-filter').value;
-  const orders = status ? allOrders.filter((o) => o.status === status) : allOrders;
-  const ul = $('orders');
-  ul.replaceChildren(...orders.map((o) => el('li', {},
+// Специалисту — дела по группам (разбор 03.10.2026, 2.11–2.12): предложения сверху с «Принять» и «Отказаться» прямо из
+// списка, дальше в работе, на проверке, готовые; внутри группы — по сроку; «осталось N дн.», вознаграждение в строке.
+// Заявки, где он заказчик, — отдельной группой. Служебным — все заявки с отбором по статусу.
+const EXEC_GROUPS = [
+  { id: 'offers', title: 'Предложены Вам', statuses: ['awaiting_executor'] },
+  { id: 'work', title: 'В работе', statuses: ['in_work'] },
+  { id: 'review', title: 'На проверке', statuses: ['review'] },
+  { id: 'done', title: 'Готовы и закрыты', statuses: ['done', 'closed', 'cancelled'] },
+];
+const rubShort = (kop) => `${Math.floor(kop / 100).toLocaleString('ru-RU')} ₽`;
+const daysLeft = (iso) => {
+  const [y, m, d] = String(iso).split('-').map(Number);
+  const msk = new Date(Date.now() + 3 * 3600_000);
+  const today = Date.UTC(msk.getUTCFullYear(), msk.getUTCMonth(), msk.getUTCDate());
+  return Math.round((Date.UTC(y, m - 1, d) - today) / 86400_000);
+};
+const byDeadline = (a, b) => (a.deadline || '9999').localeCompare(b.deadline || '9999');
+
+function deadlineText(o) {
+  if (!o.deadline) return ['closed', 'cancelled'].includes(o.status) ? '' : 'срок не указан';
+  if (['done', 'closed', 'cancelled'].includes(o.status)) return `срок ${dayRu(o.deadline)}`;
+  const n = daysLeft(o.deadline);
+  if (o.overdue || n < 0) return `срок ${dayRu(o.deadline)} · просрочено`;
+  return `срок ${dayRu(o.deadline)} · ${n === 0 ? 'сегодня' : `осталось ${n} дн.`}`;
+}
+
+function orderItem(o) {
+  const soon = o.deadline && !['done', 'closed', 'cancelled'].includes(o.status) && daysLeft(o.deadline) <= 2;
+  const li = el('li', {},
     el('button', { class: 'open', 'data-id': o.id, onclick: () => { location.hash = `order=${o.id}`; } },
       el('div', { class: 'title', text: o.title }),
       el('div', { class: 'row' },
         el('span', { class: `badge status${o.status === 'cancelled' ? ' cancelled' : ''}`, text: o.status_name }),
-        el('span', { class: `muted${o.overdue ? ' overdue' : ''}`, text: o.deadline ? `срок ${dayRu(o.deadline)}${o.overdue ? ' · просрочено' : ''}` : ['closed', 'cancelled'].includes(o.status) ? '' : 'срок не указан' })),
-      el('div', { class: 'muted', text: [o.service_name, dateRu(o.created_at), o.org_name ? `${o.org_name} · ведёт ${o.responsible_name || 'сотрудник'}` : null, o.as_executor ? 'Вы исполнитель' : null].filter(Boolean).join(' · ') })))));
+        el('span', { class: `muted${o.overdue || soon ? ' overdue' : ''}`, text: deadlineText(o) })),
+      el('div', { class: 'muted', text: [o.service_name, o.as_executor && o.fee_kop ? `Вам ${rubShort(o.fee_kop)}` : null, o.as_executor ? null : dateRu(o.created_at),
+        o.org_name ? `${o.org_name} · ведёт ${o.responsible_name || 'сотрудник'}` : null].filter(Boolean).join(' · ') })));
+  if (o.as_executor && o.status === 'awaiting_executor') {
+    li.append(el('div', { class: 'row offer-actions' },
+      el('button', { 'data-action': 'accept', onclick: () => answerOffer(o, 'in_work') }, 'Принять дело'),
+      el('button', { class: 'secondary', 'data-action': 'decline', onclick: () => answerOffer(o, 'matching') }, 'Отказаться')));
+  }
+  return li;
+}
+
+async function answerOffer(o, to) {
+  let reason;
+  if (to === 'matching') {
+    reason = prompt('Почему отказываетесь? Диспетчер увидит причину и предложит дело другому.');
+    if (reason === null) return;
+    if (!reason.trim()) return say($('orders-msg'), 'Укажите причину отказа');
+  } else if (!confirm(`Принять дело «${o.title}»?`)) return;
+  try {
+    await api('POST', `/api/orders/${o.id}/status`, { from: 'awaiting_executor', to, reason: reason?.trim() || undefined });
+    await loadOrders();
+    say($('orders-msg'), to === 'in_work' ? 'Дело принято — оно в разделе «В работе»' : 'Вы отказались от дела', 'ok');
+  } catch (err) { say($('orders-msg'), err.message); }
+}
+
+function renderOrders() {
+  const ul = $('orders');
+  const staff = ['dispatcher', 'admin'].includes(state.me.user.platform_role);
+  const status = $('orders-filter').value;
+  const orders = status ? allOrders.filter((o) => o.status === status) : allOrders;
+  const exec = !staff && orders.some((o) => o.as_executor);
+  if (!exec) {
+    ul.replaceChildren(...orders.map(orderItem));
+  } else {
+    const groups = EXEC_GROUPS.map((g) => ({ ...g, items: orders.filter((o) => o.as_executor && g.statuses.includes(o.status)).sort(byDeadline) }));
+    const own = orders.filter((o) => !o.as_executor);
+    ul.replaceChildren(
+      ...groups.filter((g) => g.items.length).flatMap((g) => [el('li', { class: 'group', 'data-group': g.id, text: `${g.title} · ${g.items.length}` }), ...g.items.map(orderItem)]),
+      ...(own.length ? [el('li', { class: 'group', 'data-group': 'own', text: `Мои заявки как заказчика · ${own.length}` }), ...own.map(orderItem)] : []));
+  }
   $('orders-empty').classList.toggle('hidden', orders.length > 0);
 }
 

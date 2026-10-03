@@ -456,7 +456,13 @@ test('ход заявки: подбор диспетчером, принятие
   await sp.goto('/kabinet');
   await expect(sp.getByRole('link', { name: 'Специалист' })).toBeVisible();
   await expect(sp.getByRole('link', { name: 'Специалисты' })).toBeHidden();
-  await expect(sp.locator('#orders li').filter({ hasText: 'Оценка автомобиля после ДТП' })).toContainText('Вы исполнитель');
+  // Дела специалиста — по группам (разбор 03.10.2026, 2.11–2.12): предложение сверху, со сроком и вознаграждением.
+  await expect(sp.locator('#orders li.group').first()).toHaveText('Предложены Вам · 1');
+  const offer = sp.locator('#orders li').filter({ hasText: 'Оценка автомобиля после ДТП' });
+  await expect(offer).toContainText(/осталось \d+ дн\./);
+  await expect(offer).toContainText(/Вам \d/);
+  await expect(offer.getByRole('button', { name: 'Принять дело' })).toBeVisible();
+  await shot(sp, '99-specialist-predlozheniya');
   await sp.goto(`/kabinet#order=${id}`);
   await expect(sp.locator('#order-status')).toHaveText('Ждёт исполнителя');
   await expect(sp.getByRole('button', { name: 'Принять дело' })).toBeVisible();
@@ -484,6 +490,16 @@ test('ход заявки: подбор диспетчером, принятие
   await sp.getByRole('button', { name: 'Принять дело' }).click();
   await expect(sp.locator('#order-status')).toHaveText('В работе');
   await expect(sp.locator('#order-org-line')).toContainText('Исполнитель: Вы');
+  // «Что дальше» (разбор 03.10.2026, 2.10): шаги до сдачи и одна главная кнопка — вверху и внизу экрана.
+  await expect(sp.locator('#next-box')).toBeVisible();
+  await expect(sp.locator('#next-steps li[data-step="result"]')).toContainText('○ Файл результата');
+  await expect(sp.locator('#next-main button')).toHaveText('Добавить файл результата');
+  await expect(sp.locator('#next-bar button')).toHaveText('Добавить файл результата');
+  await expect(sp.locator('#next-bar')).toBeHidden(); // карточка на экране — нижняя кнопка не дублирует
+  await sp.locator('#chat-box').scrollIntoViewIfNeeded();
+  await expect(sp.locator('#next-bar')).toBeVisible();
+  await sp.evaluate(() => window.scrollTo(0, 0));
+  await shot(sp, '99a-specialist-chto-dalshe');
   // Без файла результата сдать нельзя; исполнитель прикладывает результат и пишет в переписку (задача 1.5).
   await sp.getByRole('button', { name: 'Сдать на проверку' }).click();
   await expect(sp.locator('#status-msg')).toHaveText('Сначала добавьте файл результата');
@@ -499,6 +515,8 @@ test('ход заявки: подбор диспетчером, принятие
   await expect(sp.locator('#result-sign-note')).toBeVisible();
   const repDoc = sp.locator('#docs li').filter({ hasText: 'тестовый-отчёт.pdf' });
   await expect(repDoc.locator('.sig-state')).toHaveText('Не подписан УКЭП — без подписи на проверку не сдать');
+  await expect(sp.locator('#next-steps li[data-step="result"]')).toContainText('✓ Файл результата');
+  await expect(sp.locator('#next-main button')).toHaveText('Подписать файл');
   await sp.getByRole('button', { name: 'Сдать на проверку' }).click();
   await expect(sp.locator('#status-msg')).toHaveText('Подпишите УКЭП файлы результата: тестовый-отчёт.pdf');
   sp.once('dialog', (d) => d.accept());
@@ -507,6 +525,7 @@ test('ход заявки: подбор диспетчером, принятие
   await expect(repDoc.locator('.sig-state')).toContainText('Подпись эксперта: Тестовый оценщик');
   await expect(repDoc.locator('.sig-test')).toHaveText('Тестовая подпись площадки — юридической силы не имеет');
   await shot(sp, '93-specialist-podpis');
+  await expect(sp.locator('#next-main button')).toHaveText('Сдать на проверку');
   await sp.getByRole('button', { name: 'Сдать на проверку' }).click();
   await expect(sp.locator('#order-status')).toHaveText('Проверка результата');
   await expect(sp.locator('#result-upload-box')).toBeHidden();
@@ -950,7 +969,7 @@ test('ИИ-проверка результата: специалист пере�
   await expect(dp.locator('#ai-review-state')).toContainText('запускал исполнитель перед сдачей');
   await dp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
   await expect(dp.locator('#ai-review-state')).toContainText('запускал диспетчер');
-  await expect(dp.locator('#review-summary')).toContainText('не проверено: 7');
+  await expect(dp.locator('#review-summary')).toContainText('не проверено: 10'); // у оценки транспорта 10 правил (03.10.2026)
   await dp.locator('#review-checks li').filter({ hasText: 'Технические ошибки' }).getByRole('textbox').fill('Опечатка в адресе в разделе 3');
   await dp.locator('#review-checks li').filter({ hasText: 'Технические ошибки' }).getByRole('button', { name: 'Замечание' }).click();
   await expect(dp.locator('#review-checks li').filter({ hasText: 'Технические ошибки' }).locator('.verdict')).toHaveText('Замечание');

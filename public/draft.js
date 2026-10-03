@@ -25,9 +25,43 @@ export async function loadDraft(current, reload) {
   $('draft-actions').classList.toggle('hidden', !(r.draft && r.can_edit));
   $('draft-text').readOnly = !r.can_edit;
   $('draft-text').value = r.draft?.body ?? '';
+  // Несохранённая правка с этого телефона (ушли со страницы, не нажав «Сохранить») — восстанавливается (2.19).
+  const local = r.can_edit && r.draft ? readLocal(ctx.order.id) : null;
+  const restore = !!local && local.from === r.draft.id && local.body !== r.draft.body;
+  if (restore) $('draft-text').value = local.body;
+  else dropLocal(ctx.order.id);
+  $('draft-local').classList.toggle('hidden', !restore);
   $('draft-confirm').checked = false;
   $('draft-state').textContent = stateText(r);
+  countGaps();
 }
+
+// Пометки «[заполнить…]» в тексте: сколько осталось и переход к следующей (2.19).
+function countGaps() {
+  const n = ($('draft-text').value.match(GAP) ?? []).length;
+  $('draft-gaps').textContent = n ? `Осталось пометок: ${n}` : 'Пометок не осталось';
+  $('draft-next-gap').classList.toggle('hidden', !n || $('draft-text').readOnly);
+}
+$('draft-text').addEventListener('input', () => {
+  countGaps();
+  if (ctx?.draft) writeLocal(ctx.order.id, { from: ctx.draft.id, body: $('draft-text').value });
+});
+$('draft-next-gap').addEventListener('click', () => {
+  const t = $('draft-text');
+  const re = new RegExp(GAP.source, 'gi');
+  re.lastIndex = t.selectionEnd || 0;
+  let m = re.exec(t.value);
+  if (!m) { re.lastIndex = 0; m = re.exec(t.value); }
+  if (!m) return;
+  t.focus();
+  t.setSelectionRange(m.index, m.index + m[0].length);
+});
+
+// Только удобство на этом телефоне: хранилище браузера может быть недоступно — тогда просто без восстановления.
+const KEY = (id) => `delo-draft-${id}`;
+function readLocal(id) { try { return JSON.parse(localStorage.getItem(KEY(id)) || 'null'); } catch { return null; } }
+function writeLocal(id, v) { try { localStorage.setItem(KEY(id), JSON.stringify(v)); } catch { /* без восстановления */ } }
+function dropLocal(id) { try { localStorage.removeItem(KEY(id)); } catch { /* ничего */ } }
 
 function stateText(r) {
   const d = r.draft;
@@ -60,6 +94,8 @@ $('draft-ai').addEventListener('click', () => run($('draft-ai'), async () => {
 async function save() {
   const r = await api('PUT', `/api/orders/${ctx.order.id}/draft`, { body: $('draft-text').value, from: ctx.draft?.id ?? null });
   ctx.draft = r.draft;
+  dropLocal(ctx.order.id);
+  $('draft-local').classList.add('hidden');
   $('draft-state').textContent = stateText({ draft: r.draft, can_edit: true });
 }
 

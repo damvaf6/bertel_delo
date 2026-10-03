@@ -5,7 +5,7 @@ import { HttpError } from '../http/core.mjs';
 import { LEVEL, executorSignOrg, isStaff, memberOf, orderLevel, orderSides, visibleOrdersFilter } from '../access/policy.mjs';
 import { BASIS_KINDS, cleanValues, missingRequired } from '../modules/index.mjs';
 import { STATUSES, STATUS_NAME, TRANSITIONS, WORK_STARTED, addDays, availableActions, findTransition, isOverdue, todayMsk } from '../orders/workflow.mjs';
-import { runSettlement, settleCancel, settleDone } from '../money/money.mjs';
+import { runSettlement, settleCancel, settleDone, splitAmount } from '../money/money.mjs';
 import { audit, oneOf, text, uuidFrom } from './util.mjs';
 import { reviewState } from './work-ops.mjs';
 import { notifyStatus } from '../notify/notify.mjs';
@@ -175,7 +175,13 @@ export function orderOps() {
       async handler({ sql, actor, registry }) {
         const rows = await listVisibleOrders(sql, actor);
         const today = todayMsk();
-        return { orders: rows.map((r) => ({ ...describe(registry, r, today), as_executor: r.executor_user_id === actor.id })) };
+        // Исполнителю в списке — его вознаграждение (80% цены), чтобы не открывать каждое дело (разбор 03.10.2026, 2.12).
+        return {
+          orders: rows.map((r) => {
+            const mine = r.executor_user_id === actor.id;
+            return { ...describe(registry, r, today), as_executor: mine, ...(mine && r.price_kop ? { fee_kop: splitAmount(Number(r.price_kop)).payoutKop } : {}) };
+          }),
+        };
       },
     },
     {

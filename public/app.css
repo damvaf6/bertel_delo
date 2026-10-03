@@ -162,3 +162,16 @@ a.btn { text-decoration: none; margin-top: 8px; }
 .photo-meta { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
 .photo-meta.warn { color: var(--danger); }
 .link-box { overflow-wrap: anywhere; font-family: ui-monospace, monospace; font-size: 13px; background: #eef2f8; padding: 8px; border-radius: 6px; }
+
+/* Дела специалиста по группам (2.11–2.12) */
+.list li.group { font-weight: 700; color: var(--muted); font-size: 14px; padding: 14px 0 4px; border-bottom: none; }
+.offer-actions { margin: 6px 0 4px; }
+
+/* «Что дальше» в деле исполнителя (2.10) */
+.next-steps { margin: 8px 0 12px; padding-left: 0; list-style: none; }
+.next-steps li { margin: 2px 0; }
+.next-steps li button.link { text-align: left; padding: 6px 0; font-size: 15px; }
+.next-steps li.done button.link { color: var(--ok); }
+.next-bar { position: sticky; bottom: 0; z-index: 5; padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); background: var(--bg, #f4f6f9); border-top: 1px solid var(--line); }
+.next-bar button { width: 100%; }
+.next-bar.away { display: none; }
