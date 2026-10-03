@@ -181,3 +181,5 @@ a.btn { text-decoration: none; margin-top: 8px; }
 .return .comment { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 4px; }
 li.return.open { border-left: 3px solid var(--danger); padding-left: 8px; }
 details.returns { margin-top: 8px; }
+details.org-chat { margin-top: 8px; }
+details.org-chat summary { cursor: pointer; color: var(--accent); }

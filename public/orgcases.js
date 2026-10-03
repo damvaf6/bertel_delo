@@ -1,10 +1,12 @@
 // Дела экспертов (2.16, устав 1а): руководитель организации видит дела, которые ведут эксперты от неё, — услугу, номер,
 // срок (просрочено — крупно), состояние, эксперта и вознаграждение; нагрузку по экспертам и деньги за месяц.
-// Заказчика, поля заявки, документы и переписку — нет (их сервер и не присылает).
+// Заказчика, поля заявки, документы и переписку по заявке — нет (их сервер и не присылает); внутренняя переписка
+// с экспертом (2.28) — у каждого дела.
 // «Ждут назначения» (2.17): дела, предложенные диспетчером организации, — руководитель назначает эксперта или отказывается.
 import { api, el, say } from '/common.js';
 import { dayRu } from '/order.js';
 import { rub } from '/money.js';
+import { orgChat } from '/orgchat.js';
 
 const $ = (id) => document.getElementById(id);
 const MONTHS = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
@@ -40,7 +42,16 @@ function caseItem(c) {
     ...(c.overdue ? [el('div', { class: 'overdue big', text: deadline })] : []),
     el('div', { class: 'muted', text: [c.status_name, `эксперт: ${c.expert}`, c.overdue ? null : deadline].filter(Boolean).join(' · ') }),
     el('div', { class: 'muted', text: [c.fee_kop != null ? `вознаграждение ${rub(c.fee_kop)}` : 'цена ещё не назначена',
-      c.payout ? PAYOUT_RU[c.payout] : null].filter(Boolean).join(' · ') }));
+      c.payout ? PAYOUT_RU[c.payout] : null].filter(Boolean).join(' · ') }),
+    chatDetails(c));
+}
+
+// Внутренняя переписка с экспертом по делу (2.28): раскрывается по нажатию; заказчик и диспетчер её не видят.
+function chatDetails(c) {
+  const box = el('div');
+  const d = el('details', { class: 'org-chat', 'data-chat': c.order_ref }, el('summary', { text: 'Переписка с экспертом' }), box);
+  d.addEventListener('toggle', () => { if (d.open && !box.firstChild) orgChat(box, c.id); });
+  return d;
 }
 
 function pendingItem(org, p) {
