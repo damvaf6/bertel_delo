@@ -2,12 +2,14 @@
 // (устав, раздел 1а). Ядро не знает ничего о конкретной профессии — только этот формат.
 //
 // Формат модуля:
-//   { id, name, basis: ['contract' | 'court', …], fields: [поле…], services: [{ id, name, fields: [поле…] }…],
+//   { id, name, basis: ['contract' | 'court', …], fields: [поле…], services: [{ id, name, fields: [поле…], paper? }…],
+//       paper — как называется итоговый документ на титуле Word (2.29): «Отчёт об оценке», «Заключение эксперта»…
 //     checks: [{ id, title, services?: [id услуги…], ask?, auto?: [имя правила…] }…],
 //       ask — что именно проверить (подсказка модели ИИ, человеку не показывается); auto — автоматические правила по
 //       всему тексту отчёта (src/ai/report-checks.mjs, AUTO_CHECKS): их находки показываются под этой проверкой
-//     draft?: [{ id, title, services?: [id услуги…], ask?, dossier? }…],  — разделы черновика заключения от ИИ (задача 2.2);
+//     draft?: [{ id, title, services?: [id услуги…], ask?, dossier?, table? }…],  — разделы черновика заключения от ИИ (задача 2.2);
 //       dossier: 'info' — сюда подставляются сведения из досье эксперта, 'copies' — перечень копий документов (2.14);
+//       table: 'task' — таблица «задание» из полей заявки, 'approaches' — таблица «подход — стоимость — вес» (2.29);
 //       ask — что писать в разделе и что оставить эксперту в [квадратных скобках]
 //     inspection?: [{ id, title, hint?, services?: [id услуги…], optional? }…],  — шаги дистанционного осмотра (2.3)
 //     express?: { services: [id услуги…], show: [id поля заявки…], fields: [поле + services?…] } }  — экспресс-услуга (2.4):
@@ -29,6 +31,7 @@ export const BASIS_KINDS = {
   court: { name: 'Определение суда', details: true },
 };
 
+export const DRAFT_TABLES = ['task', 'approaches'];
 const ID_RE = /^[a-z][a-z0-9_]{1,31}$/;
 const FIELD_TYPES = ['text', 'longtext', 'number', 'select'];
 const FIELD_KEYS = ['id', 'label', 'type', 'required', 'max', 'min', 'integer', 'options', 'pattern', 'hint', 'upper'];
@@ -98,8 +101,9 @@ export function validateModule(m) {
   checkIds(m.services, `${at}, услуги`);
   for (const s of m.services) {
     const where = `${at}, услуга ${s.id}`;
-    onlyKeys(s, ['id', 'name', 'fields'], where);
+    onlyKeys(s, ['id', 'name', 'fields', 'paper'], where);
     if (!nonEmpty(s.name)) fail(where, 'нет названия');
+    if (s.paper !== undefined && !(nonEmpty(s.paper) && s.paper.length <= 80)) fail(where, 'paper — название документа до 80 знаков');
     const own = s.fields ?? [];
     if (own.length) checkIds(own, `${where}, поля`);
     own.forEach((f) => validateField(f, `${where}, поле ${f.id}`));
@@ -125,7 +129,8 @@ export function validateModule(m) {
     checkIds(m.draft, `${at}, разделы черновика`);
     for (const d of m.draft) {
       const where = `${at}, раздел черновика ${d.id}`;
-      onlyKeys(d, ['id', 'title', 'services', 'ask', 'dossier'], where);
+      onlyKeys(d, ['id', 'title', 'services', 'ask', 'dossier', 'table'], where);
+      if (d.table !== undefined && !DRAFT_TABLES.includes(d.table)) fail(where, "table — 'task' (задание из полей заявки) или 'approaches' (подходы и веса)");
       if (!nonEmpty(d.title)) fail(where, 'нет описания');
       if (d.dossier !== undefined && !['info', 'copies'].includes(d.dossier)) fail(where, "dossier — 'info' (сведения об эксперте) или 'copies' (копии документов в приложениях)");
       if (d.ask !== undefined && !askText(d.ask)) fail(where, 'ask — непустой текст до 600 знаков');
@@ -216,7 +221,7 @@ export function createRegistry(modules = DEFAULT_MODULES) {
     draftSections(moduleId, serviceId) {
       const m = modulesList.find((x) => x.id === moduleId);
       if (!m?.draft || !m.services.some((x) => x.id === serviceId)) return [];
-      return m.draft.filter((d) => !d.services || d.services.includes(serviceId)).map((d) => ({ id: d.id, title: d.title, ...(d.ask ? { ask: d.ask } : {}), ...(d.dossier ? { dossier: d.dossier } : {}) }));
+      return m.draft.filter((d) => !d.services || d.services.includes(serviceId)).map((d) => ({ id: d.id, title: d.title, ...(d.ask ? { ask: d.ask } : {}), ...(d.dossier ? { dossier: d.dossier } : {}), ...(d.table ? { table: d.table } : {}) }));
     },
     // Шаги дистанционного осмотра для услуги (2.3); пустой список — ссылка владельцу для услуги не выдаётся.
     inspectionSteps(moduleId, serviceId) {

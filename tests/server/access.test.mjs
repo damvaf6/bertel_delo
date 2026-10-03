@@ -823,7 +823,7 @@ test('ИИ (1.8): разбор проблемы, ассистент, ИИ-про
 });
 
 test('черновик заключения (2.2): видят исполнитель и служебные; готовит и правит только исполнитель в работе; заказчику — нет', async () => {
-  for (const id of ['draft.get', 'draft.ai', 'draft.save', 'draft.attach']) cover(id);
+  for (const id of ['draft.get', 'draft.ai', 'draft.save', 'draft.attach', 'draft.docx']) cover(id);
   // Заявка без исполнителя: заказчик и его организация черновика не видят, посторонние — «не найдено».
   for (const k of ['owner']) assert.equal((await U[k].req('GET', `/api/orders/${ownOrder.id}/draft`)).status, 403, k);
   for (const k of ['memberA', 'headA']) assert.equal((await U[k].req('GET', `/api/orders/${orgOrder.id}/draft`)).status, 403, k);
@@ -837,6 +837,30 @@ test('черновик заключения (2.2): видят исполните
     for (const k of ['owner', 'dispatcher', 'admin']) assert.equal((await U[k].req(method, `/api/orders/${ownOrder.id}/${path}`, body)).status, 403, `${k} ${path}`);
     for (const k of ['stranger', 'headB']) assert.equal((await U[k].req(method, `/api/orders/${ownOrder.id}/${path}`, body)).status, 404, `${k} ${path}`);
   }
+  // Файл Word черновика (2.29) — только исполнитель: заказчику и служебным — «нельзя», посторонним — «не найдено».
+  for (const k of ['owner', 'dispatcher', 'admin']) assert.equal((await U[k].req('GET', `/api/orders/${ownOrder.id}/draft/docx`)).status, 403, k);
+  for (const k of ['stranger', 'headB', 'spec']) assert.equal((await U[k].req('GET', `/api/orders/${ownOrder.id}/draft/docx`)).status, 404, k);
+});
+
+test('шаблон отчёта организации (2.29): меняет руководитель, видят сотрудники; служебные, посторонние, чужая организация — «не найдено»', async () => {
+  for (const id of ['orgs.template.get', 'orgs.template.put', 'orgs.template.delete', 'orgs.template.file']) cover(id);
+  const { makeDocx } = await import('../tools/make-docs.mjs');
+  const put = (c) => c.req('POST', `/api/orgs/${orgA.id}/template`, makeDocx(['Бланк А']), { raw: true, headers: { 'content-type': 'application/octet-stream', 'x-file-name': encodeURIComponent('Бланк.docx') } });
+  for (const k of ['memberA', 'seniorA']) assert.equal((await put(U[k])).status, 403, k);
+  for (const k of ['stranger', 'headB', 'dispatcher', 'admin', 'owner', 'invitee']) assert.equal((await put(U[k])).status, 404, k);
+  assert.equal((await put(U.headA)).status, 201);
+  for (const k of ['headA', 'seniorA', 'memberA', 'memberA2']) {
+    assert.equal((await U[k].req('GET', `/api/orgs/${orgA.id}/template`)).body.template.filename, 'Бланк.docx', k);
+    assert.equal((await U[k].req('GET', `/api/orgs/${orgA.id}/template/file`)).status, 200, k);
+  }
+  for (const k of ['stranger', 'headB', 'dispatcher', 'admin', 'owner']) {
+    for (const path of ['template', 'template/file']) assert.equal((await U[k].req('GET', `/api/orgs/${orgA.id}/${path}`)).status, 404, `${k} ${path}`);
+    assert.equal((await U[k].req('DELETE', `/api/orgs/${orgA.id}/template`)).status, 404, k);
+  }
+  assert.equal((await U.memberA.req('DELETE', `/api/orgs/${orgA.id}/template`)).status, 403);
+  assert.equal((await U.headA.req('GET', '/api/orgs/not-a-uuid/template')).status, 404);
+  assert.equal((await U.headA.req('DELETE', `/api/orgs/${orgA.id}/template`)).status, 204);
+  assert.equal((await U.headA.req('DELETE', `/api/orgs/${orgA.id}/template`)).status, 404, 'уже убран');
 });
 
 test('дистанционный осмотр (2.3): в деле видят те, кто видит заявку; ссылку выдаёт и отзывает только исполнитель в работе', async () => {

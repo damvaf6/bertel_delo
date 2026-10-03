@@ -51,7 +51,8 @@ export function makePdf(pages) {
 function chunks(a, n) { const out = []; for (let i = 0; i < a.length; i += n) out.push(a.slice(i, i + n)); return out; }
 
 // .docx: абзацы; '\f' в начале абзаца — разрыв страницы перед ним.
-export function makeDocx(paragraphs) {
+// extra — дополнительные части архива (например, макросы word/vbaProject.bin для проверки отказа).
+export function makeDocx(paragraphs, extra = {}) {
   const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const body = paragraphs.map((p) => {
     const brk = p.startsWith('\f') ? '<w:r><w:br w:type="page"/></w:r>' : '';
@@ -62,7 +63,7 @@ export function makeDocx(paragraphs) {
     '[Content_Types].xml': '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>',
     'word/document.xml': `<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}</w:body></w:document>`,
   };
-  return zip(files);
+  return zip({ ...files, ...extra });
 }
 
 function crc32(buf) {
