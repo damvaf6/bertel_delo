@@ -15,9 +15,15 @@ const MAX_TOKENS = { draft: 6000, review: 3000 };
 export async function askAi({ sql, providers, cfg }, actor, purpose, messages) {
   const used = await sql.one`select count(*)::int as n from ai_usage where user_id = ${actor.id} and at > now() - interval '1 day'`;
   if (used.n >= cfg.ai.dailyLimit) throw new HttpError(429, 'ai_limit', 'Лимит обращений к помощнику на сутки исчерпан, попробуйте завтра');
+  // Предел расхода за месяц (решение Дамира 03.10.2026): дошли — настоящая модель не вызывается до 1-го числа.
+  if (cfg.ai.budgetRub > 0 && (await monthSpentKop(sql)) >= cfg.ai.budgetRub * 100) {
+    throw new HttpError(503, 'ai_budget', 'Лимит расхода на помощника в этом месяце исчерпан — обратитесь к администратору платформы');
+  }
   try {
     const out = await providers.ai.complete({ purpose, messages, maxTokens: MAX_TOKENS[purpose] });
-    await sql`insert into ai_usage (user_id, purpose, model, ok) values (${actor.id}, ${purpose}, ${out.model}, true)`;
+    const tokens = (out.driver ?? out.model) === 'fake' ? 0 : out.tokens ?? estimateTokens(messages, out.text);
+    const cost = Math.ceil((tokens / 1000) * cfg.ai.priceRubPer1k * 100);
+    await sql`insert into ai_usage (user_id, purpose, model, ok, tokens, cost_kop) values (${actor.id}, ${purpose}, ${out.model}, true, ${tokens}, ${cost})`;
     return out;
   } catch (e) {
     await sql`insert into ai_usage (user_id, purpose, model, ok) values (${actor.id}, ${purpose}, null, false)`;
@@ -25,6 +31,22 @@ export async function askAi({ sql, providers, cfg }, actor, purpose, messages) {
     throw new HttpError(503, 'ai_unavailable', 'Помощник сейчас недоступен, попробуйте позже');
   }
 }
+
+// Начало текущего месяца по Москве.
+export async function monthSpentKop(sql) {
+  const r = await sql.one`select coalesce(sum(cost_kop), 0)::bigint as kop, coalesce(sum(tokens), 0)::bigint as tokens from ai_usage
+                          where at >= date_trunc('month', now() at time zone 'Europe/Moscow') at time zone 'Europe/Moscow'`;
+  return Number(r.kop);
+}
+
+export async function monthUsage(sql) {
+  const r = await sql.one`select coalesce(sum(cost_kop), 0)::bigint as kop, coalesce(sum(tokens), 0)::bigint as tokens, count(*)::int as calls
+                          from ai_usage where at >= date_trunc('month', now() at time zone 'Europe/Moscow') at time zone 'Europe/Moscow'`;
+  return { kop: Number(r.kop), tokens: Number(r.tokens), calls: r.calls };
+}
+
+// Поставщик не сообщил токены — считаем с запасом: знак ≈ треть токена для русского текста.
+const estimateTokens = (messages, answer) => Math.ceil((messages.reduce((n, m) => n + String(m.content).length, 0) + String(answer ?? '').length) / 3);
 
 // Модель могла обернуть JSON в пояснения или ``` — берём первый объект целиком. Не вышло — null.
 export function parseJsonAnswer(text) {

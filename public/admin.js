@@ -11,6 +11,8 @@ export async function showAdmin() {
   await Promise.all([loadStaff(), loadAi()]);
 }
 
+const rub = (n) => `${Number(n).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽`;
+
 async function loadAi() {
   const a = await api('GET', '/api/admin/ai');
   const row = (k, v) => [el('dt', { text: k }), el('dd', { text: v })];
@@ -18,7 +20,8 @@ async function loadAi() {
     ...row('Основная модель', a.primary.name),
     ...row('Запасная модель', a.fallback ? a.fallback.name : 'не задана'),
     ...row('Обращений за сутки', `${a.day.total}${a.day.failed ? `, без ответа: ${a.day.failed}` : ''}`),
-    ...row('Лимит на человека в сутки', String(a.daily_limit)));
+    ...row('Лимит на человека в сутки', String(a.daily_limit)),
+    ...row('Расход за месяц', `${rub(a.month.spent_rub)}${a.month.budget_rub ? ` из ${rub(a.month.budget_rub)}` : ''} · ${a.month.calls} обращ.`));
 }
 
 async function loadStaff() {

@@ -154,11 +154,15 @@ test('экскурсия по кабинетам: эксперт, руковод
   await page.getByRole('link', { name: 'Спросить помощника' }).click();
   await page.getByLabel('Что случилось').fill('Суд назначил оценку нашего грузового автомобиля (фургон) в Московской области по спору с лизинговой компанией. Что делать?');
   await page.getByRole('button', { name: 'Разобраться' }).click();
-  await expect(page.locator('#pa-specialist')).toContainText('транспорт');
+  const real = (await (await ap.request.get('/api/admin/ai', { headers: AUTH })).json()).primary.driver !== 'fake';
+  if (real) await expect(page.locator('#pa-specialist')).not.toBeEmpty();
+  else await expect(page.locator('#pa-specialist')).toContainText('транспорт');
   await snap(page, 'Заказчик', 'Помощник разбирает проблему', 'Человек пишет своими словами — помощник объясняет, что можно сделать самому, к кому идти, и предлагает заявку. Это разъяснение, не юридическая услуга.', '#problem-answer');
   await page.getByRole('button', { name: 'Создать заявку' }).click();
   await expect(page.locator('#order-status')).toHaveText('Новая');
   const id = new URL(page.url()).hash.match(/^#order=([0-9a-f-]{36})$/i)[1];
+  // Настоящая модель могла выбрать другую услугу — эксперт и экскурсия про оценку транспорта.
+  await page.locator('#d-service').selectOption({ label: 'Оценка транспортного средства' });
   await page.getByLabel('Название заявки').fill(title);
   await page.getByLabel('Вид транспорта').selectOption({ label: 'Грузовой автомобиль' });
   await page.getByLabel('Марка и модель').fill('Тестмаш 3000 (вымышленная)');

@@ -75,6 +75,20 @@ async function findUser(ap, phoneNo) {
   await expect(ap.locator('#admin-user-meta')).toContainText(shown(phoneNo));
 }
 
+// Какая модель ИИ на площадке: поддельная отвечает предсказуемо, настоящая (YandexGPT, решение Дамира 03.10.2026) — нет.
+// С настоящей проверяем то, что от её слов не зависит: ответ пришёл, находки по правилам, разделы черновика.
+let realAiCache = null;
+async function realAi(browser, baseURL) {
+  if (realAiCache !== null) return realAiCache;
+  const ap = await phone(browser, baseURL);
+  await enter(ap, ADMIN);
+  const r = await ap.request.get('/api/admin/ai', { headers: AUTH });
+  expect(r.status()).toBe(200);
+  realAiCache = (await r.json()).primary.driver !== 'fake';
+  await close(ap);
+  return realAiCache;
+}
+
 async function shot(page, name) {
   const width = await page.evaluate(() => document.documentElement.scrollWidth);
   expect(width, `${name}: страница шире экрана`).toBeLessThanOrEqual(412);
@@ -204,20 +218,22 @@ test('общий прогон: организация — приглашение
   await close(mp);
 });
 
-test('общий прогон: помощник разбирает проблему и готовит черновик заявки; ассистент отвечает', async ({ page }) => {
+test('общий прогон: помощник разбирает проблему и готовит черновик заявки; ассистент отвечает', async ({ page, browser, baseURL }) => {
+  const real = await realAi(browser, baseURL);
   await enter(page, tel(4));
   await page.goto('/kabinet');
   await page.getByRole('link', { name: 'Спросить помощника' }).click();
   await expect(page.getByRole('heading', { name: 'Помощник' })).toBeVisible();
   await page.getByLabel('Что случилось').fill('Суд назначил оценку квартиры в Москве при разделе имущества. Что мне делать?');
   await page.getByRole('button', { name: 'Разобраться' }).click();
-  await expect(page.locator('#pa-specialist')).toContainText('Оценка недвижимости');
+  if (real) await expect(page.locator('#pa-specialist')).not.toBeEmpty();
+  else await expect(page.locator('#pa-specialist')).toContainText('Оценка недвижимости');
   await expect(page.locator('#pa-disclaimer')).toContainText('не юридическая услуга');
   await shot(page, '08-pomoshnik');
   await page.getByRole('button', { name: 'Создать заявку' }).click();
   await expect(page).toHaveURL(/#order=/);
   await expect(page.locator('#order-status')).toHaveText('Новая');
-  await expect(page.getByLabel('Для чего нужна оценка')).toHaveValue('court');
+  if (!real) await expect(page.getByLabel('Для чего нужна оценка')).toHaveValue('court');
 
   await page.goto('/kabinet#assistant');
   await page.getByLabel('О какой заявке (можно не выбирать)').selectOption({ index: 1 });
@@ -354,11 +370,14 @@ test('общий прогон: сквозной путь экспертизы �
   await sp.locator('#result-file').setInputFiles({ name: 'Отчёт об оценке.txt', mimeType: 'text/plain', buffer: Buffer.from(`Отчёт об оценке квартиры. Итоговая стоимость 12 000 000 руб. ${TAG}`) });
   await expect(sp.locator('#doc-msg')).toHaveText('Файл добавлен');
   // Отчёт в PDF (задача 2.1): ИИ читает его из хранилища Яндекса и показывает отмеченное место со страницей.
-  await sp.locator('#result-file').setInputFiles({ name: 'Отчёт об оценке.pdf', mimeType: 'application/pdf', buffer: makePdf([[`Заключение № ${RUN}/2026`], ['Итоговая стоимость 12 000 000 руб.', 'В разделе 3 опечатка в адресе.']]) });
+  // На стр. 3 — служебная строка Word: её находит автоматическая проверка (2.8) при любой модели.
+  await sp.locator('#result-file').setInputFiles({ name: 'Отчёт об оценке.pdf', mimeType: 'application/pdf', buffer: makePdf([[`Заключение № ${RUN}/2026`], ['Итоговая стоимость 12 000 000 руб.', 'В разделе 3 опечатка в адресе.'], ['См. таблицу Ошибка! Закладка не определена.']]) });
   await expect(sp.locator('#docs li').filter({ hasText: 'Отчёт об оценке.pdf' })).toHaveCount(1);
   await sp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
   await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова');
-  await expect(sp.locator('#review-checks li').filter({ hasText: 'Технические ошибки' }).locator('.ai-marks li')).toHaveText(['Отчёт об оценке.pdf, стр. 2: В разделе 3 опечатка в адресе.']);
+  const tech = sp.locator('#review-checks > li').filter({ hasText: 'Технические ошибки' });
+  await expect(tech.locator('.ai-found li')).toContainText(['Отчёт об оценке.pdf, стр. 3: Служебная строка Word «Ошибка! Закладка не определена.»']);
+  if (!(await realAi(browser, baseURL))) await expect(tech.locator('.ai-marks:not(.ai-found) li')).toHaveText(['Отчёт об оценке.pdf, стр. 2: В разделе 3 опечатка в адресе.']);
   await sp.getByLabel('Сообщение').fill('Осмотр проведён, отчёт приложен.');
   await sp.getByRole('button', { name: 'Отправить сообщение' }).click();
   await expect(sp.locator('#messages li')).toHaveCount(1);

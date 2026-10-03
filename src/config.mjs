@@ -52,6 +52,10 @@ export function loadConfig(env = process.env) {
     ai: {
       fallback: env.AI_FALLBACK || '',
       dailyLimit: Number(env.AI_DAILY_LIMIT || 50),
+      // Предел расхода на модель за календарный месяц (по Москве), рублей; 0 — без предела. Цена — рублей за 1000 токенов
+      // (YandexGPT Pro в синхронном режиме — около 0,40 ₽ без НДС на 03.10.2026; по умолчанию с запасом).
+      budgetRub: Number(env.AI_BUDGET_RUB || 0),
+      priceRubPer1k: Number(env.AI_PRICE_RUB_PER_1K || 0.6),
       yandex: {
         url: (env.AI_YANDEX_URL || 'https://llm.api.cloud.yandex.net/v1').replace(/\/+$/, ''),
         folder: env.AI_YANDEX_FOLDER || '',
@@ -111,6 +115,8 @@ export function loadConfig(env = process.env) {
   }
   if (cfg.ai.fallback && cfg.ai.fallback === cfg.providers.ai) throw new ConfigError('AI_FALLBACK совпадает с AI_PROVIDER');
   if (!Number.isInteger(cfg.ai.dailyLimit) || cfg.ai.dailyLimit < 1) throw new ConfigError('AI_DAILY_LIMIT: целое число от 1');
+  if (!Number.isFinite(cfg.ai.budgetRub) || cfg.ai.budgetRub < 0) throw new ConfigError('AI_BUDGET_RUB: число рублей от 0');
+  if (!Number.isFinite(cfg.ai.priceRubPer1k) || cfg.ai.priceRubPer1k <= 0) throw new ConfigError('AI_PRICE_RUB_PER_1K: число больше 0');
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cfg.mail.inbox)) throw new ConfigError('MAIL_INBOX_ADDRESS: адрес почты');
   if (cfg.providers.mail !== 'fake' && !env.MAIL_INBOX_ADDRESS) throw new ConfigError('MAIL_INBOX_ADDRESS нужен для настоящей почты');
   if (!Number.isInteger(cfg.mail.pollSec) || cfg.mail.pollSec < 10) throw new ConfigError('MAIL_POLL_SEC: целое число от 10');

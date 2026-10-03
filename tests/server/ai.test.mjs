@@ -85,7 +85,7 @@ test('запасная модель: основная не ответила — 
   assert.equal((await chain.complete({ purpose: 'assistant', messages: [] })).text, 'основная');
   a.script({ kind: 'fail' });
   const out = await chain.complete({ purpose: 'assistant', messages: [] });
-  assert.deepEqual(out, { text: 'запасная', model: 'b' });
+  assert.deepEqual(out, { text: 'запасная', model: 'b', tokens: null, driver: 'b' });
   b.script({ kind: 'fail' });
   await assert.rejects(chain.complete({ purpose: 'assistant', messages: [] }));
   // Пустой ответ — тоже «не ответила».
@@ -113,12 +113,12 @@ async function stubServer(handler) {
 
 test('YandexGPT: запрос по OpenAI-совместимому API с ключом и папкой; сбой — понятная ошибка, без текста ответа', async () => {
   let fail = false;
-  const stub = await stubServer(() => (fail ? [500, { error: 'секрет' }] : [200, { choices: [{ message: { content: 'Ответ YandexGPT' } }] }]));
+  const stub = await stubServer(() => (fail ? [500, { error: 'секрет' }] : [200, { choices: [{ message: { content: 'Ответ YandexGPT' } }], usage: { prompt_tokens: 12, completion_tokens: 5, total_tokens: 17 } }]));
   try {
     const cfg = loadConfig({ APP_ENV: 'dev', DATABASE_URL: 'x', AI_PROVIDER: 'yandexgpt', AI_YANDEX_API_KEY: 'test-key', AI_YANDEX_FOLDER: 'b1test', AI_YANDEX_URL: `${stub.url}/v1/` });
     const ai = createAi(cfg);
     const out = await ai.complete({ purpose: 'assistant', messages: [{ role: 'user', content: 'Привет' }] });
-    assert.deepEqual(out, { text: 'Ответ YandexGPT', model: 'yandexgpt:yandexgpt/latest' });
+    assert.deepEqual(out, { text: 'Ответ YandexGPT', model: 'yandexgpt:yandexgpt/latest', tokens: 17, driver: 'yandexgpt' });
     const req = stub.seen[0];
     assert.equal(req.url, '/v1/chat/completions');
     assert.equal(req.headers.authorization, 'Api-Key test-key');
@@ -140,7 +140,7 @@ test('GigaChat: токен доступа берётся один раз и ис
     const cfg = loadConfig({ APP_ENV: 'dev', DATABASE_URL: 'x', AI_PROVIDER: 'yandexgpt', AI_YANDEX_API_KEY: 'k', AI_YANDEX_FOLDER: 'f', AI_YANDEX_URL: `${stub.url}/yandex`,
       AI_FALLBACK: 'gigachat', GIGACHAT_AUTH_KEY: 'basic-key', GIGACHAT_AUTH_URL: `${stub.url}/oauth`, GIGACHAT_URL: `${stub.url}/giga` });
     const ai = createAi(cfg);
-    assert.deepEqual(await ai.complete({ messages: [{ role: 'user', content: 'a' }] }), { text: 'Ответ GigaChat', model: 'gigachat:GigaChat-Pro' });
+    assert.deepEqual(await ai.complete({ messages: [{ role: 'user', content: 'a' }] }), { text: 'Ответ GigaChat', model: 'gigachat:GigaChat-Pro', tokens: null, driver: 'gigachat' });
     await ai.complete({ messages: [{ role: 'user', content: 'b' }] });
     const auth = stub.seen.filter((r) => r.url === '/oauth');
     assert.equal(auth.length, 1, 'токен — один раз');
@@ -444,5 +444,47 @@ test('модель ИИ — администратору видно, какая 
   assert.equal((await owner.req('GET', '/api/admin/ai')).status, 404);
   // В журнал обращений тексты не пишутся.
   const cols = (await S.sql`select column_name from information_schema.columns where table_name = 'ai_usage'`).map((c) => c.column_name);
-  assert.deepEqual(cols.sort(), ['at', 'id', 'model', 'ok', 'purpose', 'user_id']);
+  assert.deepEqual(cols.sort(), ['at', 'cost_kop', 'id', 'model', 'ok', 'purpose', 'tokens', 'user_id']);
+  assert.deepEqual(Object.keys(r.body.month).sort(), ['budget_rub', 'calls', 'price_rub_per_1k', 'spent_rub', 'tokens']);
+  assert.equal(r.body.month.spent_rub, 0, 'поддельная модель ничего не стоит');
+});
+
+test('предел расхода за месяц: дошли — модель не вызывается, понятный ответ; прошлый месяц не в счёт; находки ИИ-проверки — без модели', async () => {
+  const before = S.cfg.ai.budgetRub;
+  try {
+    S.cfg.ai.budgetRub = 900;
+    await S.sql`insert into ai_usage (user_id, purpose, model, ok, tokens, cost_kop, at)
+                values (${admin.user.id}, 'assistant', 'yandexgpt:test', true, 100000, 80000, now() - interval '40 days')`;
+    const ok = await owner.req('POST', '/api/assistant', { text: 'Вопрос в пределах расхода' });
+    assert.equal(ok.status, 201, 'расход прошлого месяца не в счёт');
+    await S.sql`insert into ai_usage (user_id, purpose, model, ok, tokens, cost_kop) values (${admin.user.id}, 'assistant', 'yandexgpt:test', true, 150000, 90000)`;
+    const calls = aiCalls().length;
+    const r = await owner.req('POST', '/api/assistant', { text: 'Ещё вопрос' });
+    assert.equal(r.status, 503);
+    assert.equal(r.body.error, 'ai_budget');
+    assert.match(r.body.message, /Лимит расхода/);
+    assert.equal(aiCalls().length, calls, 'модель не вызывалась');
+    const m = (await admin.req('GET', '/api/admin/ai')).body.month;
+    assert.equal(m.spent_rub, 900);
+    assert.equal(m.budget_rub, 900);
+  } finally {
+    S.cfg.ai.budgetRub = before;
+    await S.sql`delete from ai_usage where model = 'yandexgpt:test'`;
+  }
+});
+
+test('расход считается по токенам поставщика, а без них — с запасом по длине текста', async () => {
+  const before = S.providers.ai.complete;
+  try {
+    S.providers.ai.complete = async () => ({ text: 'ответ', model: 'yandexgpt:test2', tokens: 2500, driver: 'yandexgpt' });
+    assert.equal((await owner.req('POST', '/api/assistant', { text: 'Сколько стоит?' })).status, 201);
+    S.providers.ai.complete = async () => ({ text: 'ответ', model: 'yandexgpt:test2', tokens: null, driver: 'yandexgpt' });
+    assert.equal((await owner.req('POST', '/api/assistant', { text: 'Без токенов' })).status, 201);
+    const rows = await S.sql`select tokens, cost_kop from ai_usage where model = 'yandexgpt:test2' order by id`;
+    assert.deepEqual(rows[0], { tokens: 2500, cost_kop: 150 }, '2500 токенов по 0,60 ₽ за 1000 = 1,50 ₽');
+    assert.ok(rows[1].tokens > 50, 'оценка по длине запроса');
+  } finally {
+    S.providers.ai.complete = before;
+    await S.sql`delete from ai_usage where model = 'yandexgpt:test2'`;
+  }
 });

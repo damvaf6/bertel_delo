@@ -5,7 +5,7 @@ import { HttpError } from '../http/core.mjs';
 import { aiReviewSide, assistantOrderAllowed, assistantScopeAllowed } from '../access/policy.mjs';
 import { AI_DRIVER_NAME } from '../providers/ai.mjs';
 import {
-  DISCLAIMER, aiReviewView, askAi, assistantMessages, cleanProblemAnswer, cleanReviewAnswer, orderBrief, problemMessages, reviewMessages,
+  DISCLAIMER, aiReviewView, askAi, assistantMessages, monthUsage, cleanProblemAnswer, cleanReviewAnswer, orderBrief, problemMessages, reviewMessages,
 } from '../ai/ai.mjs';
 import { READ_MAX_BYTES, extractPages, readableKind } from '../ai/extract.mjs';
 import { runAutoChecks } from '../ai/report-checks.mjs';
@@ -231,7 +231,9 @@ export function aiOps() {
       async handler({ sql, cfg }) {
         const day = await sql.one`select count(*)::int as total, count(*) filter (where not ok)::int as failed
                                   from ai_usage where at > now() - interval '1 day'`;
+        const m = await monthUsage(sql);
         return {
+          month: { spent_rub: m.kop / 100, tokens: m.tokens, calls: m.calls, budget_rub: cfg.ai.budgetRub || null, price_rub_per_1k: cfg.ai.priceRubPer1k },
           primary: { driver: cfg.providers.ai, name: AI_DRIVER_NAME[cfg.providers.ai] },
           fallback: cfg.ai.fallback ? { driver: cfg.ai.fallback, name: AI_DRIVER_NAME[cfg.ai.fallback] } : null,
           daily_limit: cfg.ai.dailyLimit,
