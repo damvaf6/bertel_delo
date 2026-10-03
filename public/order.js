@@ -65,6 +65,7 @@ function render() {
   $('order-deadline').classList.toggle('overdue', order.overdue);
   $('order-meta').textContent = `Создана ${dateTimeRu(order.created_at)}${order.express ? ' · Экспресс: выезд помощника' : ''}`;
   renderOrgLine();
+  $('ask-assistant').href = `#assistant=${order.id}`;
   $('details-form').classList.toggle('hidden', !current.editable);
   $('details-view').classList.toggle('hidden', current.editable);
   if (current.editable) renderForm(); else renderFacts();

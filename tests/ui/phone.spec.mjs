@@ -500,6 +500,12 @@ test('ход заявки: подбор диспетчером, принятие
   await expect(sp.locator('#next-bar')).toBeVisible();
   await sp.evaluate(() => window.scrollTo(0, 0));
   await shot(sp, '99a-specialist-chto-dalshe');
+  // Ассистент из карточки дела (2.21): заявка уже выбрана.
+  await sp.getByRole('link', { name: 'Спросить ассистента об этом деле' }).click();
+  await expect(sp.getByRole('heading', { name: 'Ассистент по делам' })).toBeVisible();
+  await expect(sp.getByLabel('О какой заявке (можно не выбирать)')).toHaveValue(id);
+  await sp.goto(`/kabinet#order=${id}`);
+  await expect(sp.locator('#order-status')).toHaveText('В работе');
   // Без файла результата сдать нельзя; исполнитель прикладывает результат и пишет в переписку (задача 1.5).
   await sp.getByRole('button', { name: 'Сдать на проверку' }).click();
   await expect(sp.locator('#status-msg')).toHaveText('Сначала добавьте файл результата');

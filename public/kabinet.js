@@ -38,6 +38,7 @@ async function route() {
   if (h === '#orgs') return showOrgs();
   if (h === '#profile') return showProfile();
   if (h === '#assistant') return showAssistant();
+  if ((m = h.match(/^#assistant=([0-9a-f-]{36})$/i))) return showAssistant(m[1]);
   if (h === '#specialist') return showSpecialist();
   if (h === '#specialists' && ['dispatcher', 'admin'].includes(state.me.user.platform_role)) return showSpecialists();
   if (h === '#admin' && state.me.user.platform_role === 'admin') return showAdmin();
