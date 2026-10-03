@@ -121,12 +121,31 @@ test('напоминания: за 30 и 7 дней — эксперту, ист
   assert.equal(termState(addDays(today, 31), today), 'ok');
 });
 
-test('подбор: у эксперта с истёкшим аттестатом — предупреждение диспетчеру, с подбора не снимается; в списке специалистов — тоже', async () => {
+test('подбор (решение Дамира 03.10.2026): истёкший аттестат или полис снимает с подбора по оценке; по другим услугам — только предупреждение', async () => {
   await S.sql`update dossier_items set valid_until = ${addDays(todayMsk(), -1)}::date where user_id = ${other.user.id} and kind = 'certificate'`;
-  const { o } = await vehicleOrder(other);
+  const { o, offer } = await vehicleOrder(other);
   const cands = (await dispatcher.req('GET', `/api/orders/${o.id}/candidates`)).body.candidates;
-  assert.deepEqual(cands.find((c) => c.user_id === other.user.id).dossier_expired, ['Квалификационный аттестат']);
+  assert.ok(!cands.some((c) => c.user_id === other.user.id), 'оценка транспорта — эксперта с истёкшим аттестатом в подборе нет');
   assert.deepEqual(cands.find((c) => c.user_id === spec.user.id).dossier_expired, []);
+  const r = await offer();
+  assert.equal(r.status, 409);
+  assert.equal(r.body.error, 'not_eligible');
+
+  // Товароведческая экспертиза — не оценка: эксперт в подборе, с красной строкой.
+  await S.sql`insert into specialist_permits (user_id, module, service) values (${other.user.id}, 'expertise', 'goods')`;
+  const g = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'goods', title: 'Тест досье — товар' })).body.order;
+  const fields = { purpose: 'deal', region: 'moscow', subject: 'Тестовый товар с недостатком', questions: 'Есть ли недостаток?' };
+  assert.equal((await owner.req('PATCH', `/api/orders/${g.id}`, { deadline: addDays(todayMsk(), 10), fields })).status, 200);
+  assert.equal((await step(owner, g, 'matching')).status, 200);
+  await ensurePaid(S.sql, g.id);
+  const gc = (await dispatcher.req('GET', `/api/orders/${g.id}/candidates`)).body.candidates;
+  assert.deepEqual(gc.find((c) => c.user_id === other.user.id).dossier_expired, ['Квалификационный аттестат']);
+
+  // Обновил аттестат — снова в подборе по оценке.
+  await S.sql`update dossier_items set valid_until = ${addDays(todayMsk(), 100)}::date where user_id = ${other.user.id} and kind = 'certificate'`;
+  assert.ok((await dispatcher.req('GET', `/api/orders/${o.id}/candidates`)).body.candidates.some((c) => c.user_id === other.user.id));
+  await S.sql`update dossier_items set valid_until = ${addDays(todayMsk(), -1)}::date where user_id = ${other.user.id} and kind = 'certificate'`;
+
   const list = (await dispatcher.req('GET', '/api/specialists')).body.specialists;
   const al = list.find((s) => s.user_id === other.user.id).dossier_alerts;
   assert.equal(al[0].state, 'expired');

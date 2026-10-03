@@ -14,6 +14,13 @@ export const KINDS = {
 };
 export const KIND_ORDER = Object.keys(KINDS);
 
+// Решение Дамира 03.10.2026 (вопрос 17): истёкший аттестат или полис снимает эксперта с подбора по услугам оценки —
+// тем, где ИИ-проверка сверяет отчёт с досье (правило dossier_appraiser в описании модуля).
+export const BLOCKING_KINDS = ['certificate', 'policy', 'policy_org'];
+export function needsValidDossier(registry, order) {
+  return !!registry?.checks(order.module, order.service).some((c) => c.auto?.includes('dossier_appraiser'));
+}
+
 const headKey = (t) => t.toLowerCase().replace(/ё/g, 'е').split(/[:,(]/)[0].replace(/\s+/g, ' ').trim();
 const ru = (d) => (d ? d.split('-').reverse().join('.') : '');
 const rub = (kop) => `${(Number(kop) / 100).toLocaleString('ru-RU', { maximumFractionDigits: 2 }).replace(/\s/g, ' ')} руб.`;
@@ -81,7 +88,7 @@ export function fillDraft(body, sections, items, today = todayMsk()) {
 
 // Напоминания о сроках документов досье: за 30 и за 7 дней — эксперту; срок прошёл — эксперту и диспетчерам.
 // Каждое — один раз на документ, вид и срок (dossier_reminders); эксперт обновил срок — по новому придут снова.
-// Снимать ли эксперта с подбора при истёкшем документе — вопрос Дамиру (STATE.md); пока только предупреждение.
+// По услугам оценки истёкший аттестат или полис снимает эксперта с подбора (решение Дамира 03.10.2026, match-ops.mjs).
 export async function remindDossier(sql, { today = todayMsk() } = {}) {
   let sent = 0;
   const rows = await sql`select d.id, d.user_id, to_char(d.valid_until, 'YYYY-MM-DD') as until from dossier_items d
