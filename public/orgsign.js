@@ -33,7 +33,7 @@ export async function loadOrgSign(org) {
     ...(done.length ? [el('li', { class: 'group', text: `Подписано · ${done.length}` })] : []),
     ...done.map((it) => el('li', { class: 'signed', 'data-item': it.order_ref },
       el('details', {}, el('summary', { text: `${it.service} · ${it.order_ref} · подписано` }), ...head(it).slice(1),
-        el('ul', { class: 'list' }, ...it.documents.map(docItem)), ...returnsBlock(it.returns ?? []))))));
+        el('ul', { class: 'list' }, ...it.documents.map(docItem)), ...returnsBlock(it.returns ?? [])))));
 }
 
 // История возвратов эксперту (2.27): что и когда вернули, исправил ли эксперт (подписал заново).
