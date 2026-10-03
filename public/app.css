@@ -91,6 +91,7 @@ textarea.draft-text { min-height: 360px; font-size: 15px; line-height: 1.45; }
 .badge.status { background: #e3ecf8; color: var(--accent); font-weight: 600; font-size: 13px; }
 .badge.status.cancelled { background: #f6e3e3; color: var(--danger); }
 .overdue { color: var(--danger); font-weight: 600; }
+.overdue.big { font-size: 18px; font-weight: 700; margin: 4px 0; }
 .steps { list-style: none; padding: 0; margin: 0 0 12px; }
 .steps li { position: relative; padding: 4px 0 4px 28px; color: var(--muted); font-size: 15px; }
 .steps li::before {
