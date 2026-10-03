@@ -198,7 +198,7 @@ export function orgOps() {
           // Эксперт отказался — руководитель видит причину последнего отказа (только своих экспертов по этому делу).
           declined: (await sql.one`select reason from order_offers where order_id = ${o.id} and org_id = ${org.id}
                                    and specialist_id is not null and outcome = 'declined' order by id desc limit 1`)?.reason ?? null,
-          experts: (await orgExpertsFor(sql, o, org.id)).map((c) => ({
+          experts: (await orgExpertsFor(sql, o, org.id, registry)).map((c) => ({
             user_id: c.user_id, full_name: c.full_name || 'Без имени', score: c.score.total,
             in_work: loadOf.get(c.user_id)?.in_work ?? 0, overdue: loadOf.get(c.user_id)?.overdue ?? 0,
           })),
@@ -255,15 +255,15 @@ export function orgOps() {
       // отказывается как обычно; отказ возвращает дело руководителю (src/ops/order-ops.mjs, шаг статуса).
       id: 'orgs.cases.assign', method: 'POST', path: '/api/orgs/:id/cases/:orderId/assign', auth: 'user',
       access: { resource: 'org', param: 'id', need: 'manage' },
-      async handler({ sql, actor, org, params, body }) {
+      async handler({ sql, actor, org, params, body, registry }) {
         const orderId = uuidFrom(params.orderId, 'Дело не найдено');
         const specialistId = uuidFrom(body?.specialist_id, 'Эксперт не найден');
         await sql.tx(async (tx) => {
           const cur = await tx.one`select * from orders where id = ${orderId} and offer_org_id = ${org.id} for update`;
           if (!cur) throw new HttpError(404, 'not_found', 'Дело не найдено');
           if (cur.status !== 'awaiting_executor' || cur.executor_user_id) throw new HttpError(409, 'status_changed', 'Дело уже изменилось, обновите страницу');
-          const cand = (await orgExpertsFor(tx, cur, org.id)).find((c) => c.user_id === specialistId);
-          if (!cand) throw new HttpError(409, 'not_eligible', 'Этому эксперту дело отдать нельзя: нет допуска, не принимает дела или работает не от организации');
+          const cand = (await orgExpertsFor(tx, cur, org.id, registry)).find((c) => c.user_id === specialistId);
+          if (!cand) throw new HttpError(409, 'not_eligible', 'Этому эксперту дело отдать нельзя: нет допуска, не принимает дела, истёк аттестат или полис в досье или работает не от организации');
           await tx`update order_offers set outcome = 'accepted', outcome_at = now() where order_id = ${cur.id} and outcome is null`;
           await tx`insert into order_offers (order_id, specialist_id, org_id, score, offered_by)
                    values (${cur.id}, ${specialistId}, ${org.id}, ${JSON.stringify(cand.score)}, ${actor.id})`;

@@ -9,7 +9,7 @@ import { scoreSpecialist } from '../matching/score.mjs';
 import { addDays, todayMsk } from '../orders/workflow.mjs';
 import { audit, text, uuidFrom } from './util.mjs';
 import { notify, orgHeads } from '../notify/notify.mjs';
-import { dossierAlerts, loadDossier } from '../dossier/dossier.mjs';
+import { BLOCKING_KINDS, dossierAlerts, loadDossier, needsValidDossier } from '../dossier/dossier.mjs';
 
 const REGIONS = { moscow: 'Москва', mo: 'Московская область' };
 const OPEN_STATUSES = ['awaiting_executor', 'in_work', 'review'];
@@ -53,7 +53,9 @@ async function profileView(sql, userId) {
 }
 
 // Допущенные к услуге заявки специалисты с оценкой по признакам — по убыванию общей оценки.
-export async function candidatesFor(sql, order) {
+// Решение Дамира 03.10.2026 (2.14, вопрос 17): по услугам оценки (где ИИ-проверка сверяет отчёт с досье —
+// правило dossier_appraiser в описании модуля) эксперт с истёкшим аттестатом или полисом в подбор не попадает.
+export async function candidatesFor(sql, order, registry) {
   const today = todayMsk();
   const rows = await sql`
     select s.user_id, s.regions, s.capacity, s.external_load, u.full_name,
@@ -67,22 +69,24 @@ export async function candidatesFor(sql, order) {
     where s.active and s.user_id <> ${order.owner_user_id}
       and not exists (select 1 from org_members m where m.user_id = s.user_id and m.org_id = ${order.org_id})`;
   const daysLeft = order.deadline ? Math.round((new Date(order.deadline) - new Date(today)) / 86400000) : null;
-  // Истёкшие документы досье (2.14) — предупреждение диспетчеру; с подбора пока не снимают (вопрос Дамиру).
+  // Истёкшие документы досье (2.14): по услугам оценки аттестат и полисы снимают с подбора, остальное — предупреждение.
+  const blocking = needsValidDossier(registry, order);
   const expired = new Map();
-  for (const r of rows) expired.set(r.user_id, dossierAlerts(await loadDossier(sql, r.user_id)).filter((a) => a.state === 'expired').map((a) => a.kind_name));
+  for (const r of rows) expired.set(r.user_id, dossierAlerts(await loadDossier(sql, r.user_id)).filter((a) => a.state === 'expired'));
   return rows
+    .filter((r) => !blocking || !expired.get(r.user_id).some((a) => BLOCKING_KINDS.includes(a.kind)))
     .map((r) => ({
       user_id: r.user_id, full_name: r.full_name,
       score: scoreSpecialist(r, { open: r.open, offers: r.offers, accepted: r.accepted }, order, daysLeft),
-      dossier_expired: expired.get(r.user_id),
+      dossier_expired: expired.get(r.user_id).map((a) => a.kind_name),
     }))
     .sort((a, b) => b.score.total - a.score.total || a.full_name.localeCompare(b.full_name));
 }
 
 // Организации, где есть эксперты, которым можно отдать дело (2.17): эксперт выбрал организацию в профиле специалиста,
 // состоит в ней и сам проходит подбор (допуск, «принимаю дела», не его дело). Лучшая оценка эксперта — оценка организации.
-export async function orgCandidatesFor(sql, order) {
-  const cands = await candidatesFor(sql, order);
+export async function orgCandidatesFor(sql, order, registry) {
+  const cands = await candidatesFor(sql, order, registry);
   if (!cands.length) return [];
   const rows = await sql`
     select s.user_id, o.id as org_id, o.name from specialists s
@@ -100,8 +104,8 @@ export async function orgCandidatesFor(sql, order) {
 }
 
 // Эксперты организации, которых её руководитель может назначить на дело (2.17), — из общего подбора по этой заявке.
-export async function orgExpertsFor(sql, order, orgId) {
-  const cands = await candidatesFor(sql, order);
+export async function orgExpertsFor(sql, order, orgId, registry) {
+  const cands = await candidatesFor(sql, order, registry);
   if (!cands.length) return [];
   const mine = await sql`
     select s.user_id from specialists s join org_members m on m.org_id = s.org_id and m.user_id = s.user_id
@@ -224,13 +228,13 @@ export function matchOps() {
       // Диспетчер видит, кому можно отдать дело, и оценку по признакам.
       id: 'orders.candidates', method: 'GET', path: '/api/orders/:id/candidates', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
-      async handler({ sql, actor, order }) {
+      async handler({ sql, actor, order, registry }) {
         requireDispatcher(actor, order);
         if (!['matching', 'awaiting_executor'].includes(order.status)) throw new HttpError(409, 'bad_transition', 'Подбор идёт только для заявок в подборе');
         return {
-          candidates: await candidatesFor(sql, order), current_executor_id: order.executor_user_id,
+          candidates: await candidatesFor(sql, order, registry), current_executor_id: order.executor_user_id,
           // Организации с подходящими экспертами (2.17): дело можно предложить организации — эксперта назначит руководитель.
-          orgs: await orgCandidatesFor(sql, order), current_org_id: order.offer_org_id,
+          orgs: await orgCandidatesFor(sql, order, registry), current_org_id: order.offer_org_id,
         };
       },
     },
@@ -239,7 +243,7 @@ export function matchOps() {
       // другому — пока первый не ответил.
       id: 'orders.offer', method: 'POST', path: '/api/orders/:id/offer', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
-      async handler({ sql, actor, order, body }) {
+      async handler({ sql, actor, order, body, registry }) {
         requireDispatcher(actor, order);
         const toOrg = body?.org_id !== undefined && body?.org_id !== null;
         const specialistId = toOrg ? null : uuidFrom(body?.specialist_id, 'Специалист не найден');
@@ -255,13 +259,13 @@ export function matchOps() {
           if (!cur.paid_at) throw new HttpError(409, 'not_paid', 'Заявка ещё не оплачена заказчиком');
           let score;
           if (toOrg) {
-            const g = (await orgCandidatesFor(tx, cur)).find((c) => c.org_id === orgId);
+            const g = (await orgCandidatesFor(tx, cur, registry)).find((c) => c.org_id === orgId);
             if (!g) throw new HttpError(409, 'not_eligible', 'Этой организации дело отдать нельзя: у неё нет экспертов с допуском, которые принимают дела');
             if (cur.offer_org_id === orgId && !cur.executor_user_id) throw new HttpError(409, 'already_offered', 'Дело уже у этой организации');
             score = { org: true, experts: g.experts, total: g.best };
           } else {
-            const cand = (await candidatesFor(tx, cur)).find((c) => c.user_id === specialistId);
-            if (!cand) throw new HttpError(409, 'not_eligible', 'Этому специалисту дело отдать нельзя: нет допуска, не принимает дела или это его дело');
+            const cand = (await candidatesFor(tx, cur, registry)).find((c) => c.user_id === specialistId);
+            if (!cand) throw new HttpError(409, 'not_eligible', 'Этому специалисту дело отдать нельзя: нет допуска, не принимает дела, истёк аттестат или полис в досье или это его дело');
             score = cand.score;
           }
           const reassign = cur.status === 'awaiting_executor';

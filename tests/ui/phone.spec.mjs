@@ -1660,7 +1660,7 @@ test('распределение в организации (2.17): диспет�
   await sctx.close();
 });
 
-test('досье эксперта (2.14): эксперт заводит документы и копии; черновик берёт сведения, копии — в приложения; диспетчер видит истёкший срок', async ({ page, browser, baseURL }) => {
+test('досье эксперта (2.14): эксперт заводит документы и копии; черновик берёт сведения, копии — в приложения; с истёкшим аттестатом — не в подборе', async ({ page, browser, baseURL }) => {
   // Эксперт — на экране page; заказчик и диспетчер — через запросы и второй телефон.
   const spec = await signIn(page, '+79990001481');
   const cctx = await phoneContext(browser, baseURL);
@@ -1719,14 +1719,19 @@ test('досье эксперта (2.14): эксперт заводит доку
     // Аттестат истёк — диспетчер видит предупреждение в подборе.
     await c.query("update dossier_items set valid_until = current_date - 1 where user_id = $1 and kind = 'certificate'", [spec.id]);
   });
+  // Решение Дамира 03.10.2026: по оценке эксперта с истёкшим аттестатом в подборе нет.
   await dp.goto(`/kabinet#order=${id}`);
-  const cand = dp.locator('#candidates li').filter({ hasText: 'Тестовый Эксперт Досье' });
-  await expect(cand.locator('[data-role=dossier-expired]')).toHaveText('В досье истёк срок: Квалификационный аттестат');
+  await expect(dp.locator('#candidates li, #candidates-empty:not(.hidden)').first()).toBeVisible();
+  await expect(dp.locator('#candidates')).not.toContainText('Тестовый Эксперт Досье');
   await shot(dp, '99f-dispetcher-dossier');
+  // Эксперт обновил аттестат — снова в подборе.
+  await db((c) => c.query("update dossier_items set valid_until = current_date + 200 where user_id = $1 and kind = 'certificate'", [spec.id]));
+  await dp.reload();
+  const cand = dp.locator('#candidates li').filter({ hasText: 'Тестовый Эксперт Досье' });
+  await expect(cand.locator('[data-role=dossier-expired]')).toHaveCount(0);
   dp.once('dialog', (d) => d.accept());
   await cand.getByRole('button', { name: 'Предложить дело' }).click();
   await expect(dp.locator('#status-msg')).toHaveText('Дело предложено специалисту');
-  await db((c) => c.query("update dossier_items set valid_until = current_date + 200 where user_id = $1 and kind = 'certificate'", [spec.id]));
   expect((await page.request.post(`/api/orders/${id}/status`, { data: { from: 'awaiting_executor', to: 'in_work' }, headers: H })).status()).toBe(200);
 
   await page.goto(`/kabinet#order=${id}`);
