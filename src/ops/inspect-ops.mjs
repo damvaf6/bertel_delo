@@ -116,8 +116,11 @@ export async function storePhoto(ctx, { order, steps, uploadedBy, source, actor 
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   if (total >= INSPECT.photosMax) throw new HttpError(409, 'too_many', `За один осмотр — не больше ${INSPECT.photosMax} фото`);
   if ((counts[step.id] ?? 0) >= INSPECT.perStepMax) throw new HttpError(409, 'too_many', `На один шаг — не больше ${INSPECT.perStepMax} фото`);
-  // Имя файла — шаг и номер: по нему эксперт и черновик заключения (2.2) понимают, что на снимке.
-  const filename = `Осмотр · ${step.title} · ${(counts[step.id] ?? 0) + 1}.${EXT[mime]}`;
+  // Имя файла — шаг и номер: по нему эксперт и черновик заключения (2.2) понимают, что на снимке. Номер — по всей заявке:
+  // пересъёмка по новой ссылке (2.20) не повторяет имя прежнего фото.
+  const [prev] = await sql`select count(*)::int as n from inspection_photos p join documents d on d.id = p.document_id
+                           where d.order_id = ${order.id} and p.step = ${step.id}`;
+  const filename = `Осмотр · ${step.title} · ${prev.n + 1}.${EXT[mime]}`;
   const key = `orders/${order.id}/${crypto.randomUUID()}`;
   await ctx.providers.storage.put(key, body, mime);
   try {

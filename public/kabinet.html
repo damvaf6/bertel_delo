@@ -206,6 +206,10 @@
             <label for="inspect-days">Ссылка владельцу объекта действует</label>
             <select id="inspect-days"></select>
           </div>
+          <div class="field">
+            <label for="inspect-phone">Телефон владельца — пришлём ему ссылку СМС (необязательно)</label>
+            <input id="inspect-phone" type="tel" inputmode="tel" autocomplete="off" placeholder="+7 999 000-00-00">
+          </div>
           <button type="submit" class="secondary" id="inspect-new">Выдать ссылку владельцу</button>
         </form>
         <div class="hidden" id="inspect-fresh">
@@ -216,6 +220,17 @@
         </div>
         <ul class="list" id="inspect-links"></ul>
         <ul class="list" id="inspect-steps"></ul>
+        <form class="hidden" id="inspect-retake" novalidate>
+          <div class="field">
+            <label for="retake-step">Попросить переснять шаг</label>
+            <select id="retake-step"></select>
+          </div>
+          <div class="field">
+            <label for="retake-note">Что не так</label>
+            <input id="retake-note" type="text" placeholder="Например: размыто, снимите фасад целиком днём">
+          </div>
+          <button type="submit" class="secondary" id="retake-send">Попросить переснять</button>
+        </form>
         <p class="msg" id="inspect-msg" role="status" aria-live="polite"></p>
       </div>
       <div class="card hidden" id="onsite-box">

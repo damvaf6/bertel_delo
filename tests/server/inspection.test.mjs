@@ -331,6 +331,9 @@ test('2.20: попросить переснять шаг — владелец в
   assert.equal((await shoot(token, 'facade', { headers: GEO })).status, 201);
   v = (await view(token)).body;
   assert.equal(v.steps.find((s) => s.id === 'facade').retake, null, 'новое фото закрыло просьбу');
+  const names = await S.sql`select d.filename from inspection_photos p join documents d on d.id = p.document_id
+                            where d.order_id = ${o.id} and p.step = 'facade' order by d.created_at`;
+  assert.deepEqual(names.map((x) => x.filename), ['Осмотр · Дом снаружи · 1.jpg', 'Осмотр · Дом снаружи · 2.jpg'], 'номер — по всей заявке');
   assert.equal(v.steps.find((s) => s.id === 'rooms').retake, 'Нет кухни');
   const [closed] = await S.sql`select closed_reason from inspection_retakes where order_id = ${o.id} and step = 'facade'`;
   assert.equal(closed.closed_reason, 'photo');

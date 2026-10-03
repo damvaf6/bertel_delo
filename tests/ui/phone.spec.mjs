@@ -1146,6 +1146,37 @@ test('дистанционный осмотр: специалист выдаёт
   const notes = await (await sp.request.get('/api/notifications')).json();
   expect(JSON.stringify(notes)).toContain('Владелец объекта прислал фото осмотра');
 
+  // 2.20: специалист просит переснять фасад и отправляет владельцу новую ссылку СМС с платформы.
+  await sp.getByLabel('Попросить переснять шаг').selectOption('facade');
+  await sp.getByLabel('Что не так').fill('Размыто — снимите дом целиком, днём');
+  await sp.getByRole('button', { name: 'Попросить переснять' }).click();
+  await expect(sp.locator('#inspect-msg')).toContainText('Выдайте владельцу новую ссылку');
+  await expect(facade.locator('.badge').first()).toHaveText('переснять');
+  await expect(facade).toContainText('Попросили переснять: Размыто — снимите дом целиком, днём');
+  await sp.getByLabel('Телефон владельца — пришлём ему ссылку СМС (необязательно)').fill('+7 999 000-11-22');
+  await sp.getByRole('button', { name: 'Выдать ссылку владельцу' }).click();
+  await expect(sp.locator('#inspect-msg')).toHaveText('Ссылка отправлена СМС на +7 *** ***-11-22');
+  await expect(sp.locator('#inspect-links li').first()).toContainText('СМС на +7 *** ***-11-22');
+  await shot(sp, '84a-specialist-osmotr-peresnyat');
+  const url2 = await sp.locator('#inspect-url').textContent();
+  const op2 = await octx.newPage();
+  await op2.goto(url2);
+  await expect(op2.locator('#expires')).toContainText('Эксперт просит переснять шаги, отмеченные ниже.');
+  await op2.getByRole('button', { name: 'Начать: разрешить определение места' }).click();
+  const f2 = op2.locator('#steps li[data-step="facade"]');
+  await expect(f2).toContainText('Эксперт просит переснять: Размыто — снимите дом целиком, днём');
+  await expect(f2.locator('.badge')).toHaveText('переснять');
+  await expect(f2.locator('label.btn')).toHaveText('Переснять');
+  await shot(op2, '84b-vladelec-peresnyat');
+  await f2.locator('input[type=file]').setInputFiles({ name: 'facade2.jpg', mimeType: 'image/jpeg', buffer: jpeg });
+  await expect(f2.locator('.msg')).toHaveText('Фото отправлено');
+  await expect(f2.locator('.badge')).toHaveText('Фото: 1');
+  await expect(f2).not.toContainText('Эксперт просит переснять');
+  await sp.reload();
+  await expect(facade.locator('.badge').first()).toHaveText('фото: 2');
+  await expect(facade).not.toContainText('Попросили переснять');
+  await expect(facade).toContainText('Осмотр · Дом снаружи · 2.jpg');
+
   // Заказчик видит фото в документах, удалить их не может.
   await page.goto(`/kabinet#order=${id}`);
   const photo = page.locator('#docs li').filter({ hasText: 'Осмотр · Дом снаружи · 1.jpg' });
