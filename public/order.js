@@ -74,6 +74,8 @@ function render() {
   renderProgress();
   $('upload-box').classList.toggle('hidden', current.access === 'read' || FINAL.includes(order.status));
   $('result-upload-box').classList.toggle('hidden', !(current.executor?.is_me && order.status === 'in_work'));
+  // Копии из досье (2.14) — тем, у кого есть профиль специалиста.
+  for (const id of ['dossier-attach', 'dossier-attach-note']) $(id).classList.toggle('hidden', !state.specialist);
 }
 
 function renderOrgLine() {
@@ -486,6 +488,15 @@ $('file').addEventListener('change', (e) => {
   const file = e.target.files[0];
   e.target.value = '';
   uploadFile(file, 'other', $('doc-msg'));
+});
+
+$('dossier-attach').addEventListener('click', async () => {
+  say($('doc-msg'), 'Прикладываем…', 'ok');
+  try {
+    const r = await api('POST', `/api/orders/${current.order.id}/dossier`);
+    say($('doc-msg'), r.documents.length ? `Приложено копий: ${r.documents.length}. Подпишите их вместе с отчётом.` : 'Все копии из досье уже приложены', 'ok');
+    await loadDocs();
+  } catch (err) { say($('doc-msg'), err.message); }
 });
 
 $('result-file').addEventListener('change', (e) => {

@@ -1660,6 +1660,94 @@ test('распределение в организации (2.17): диспет�
   await sctx.close();
 });
 
+test('досье эксперта (2.14): эксперт заводит документы и копии; черновик берёт сведения, копии — в приложения; диспетчер видит истёкший срок', async ({ page, browser, baseURL }) => {
+  // Эксперт — на экране page; заказчик и диспетчер — через запросы и второй телефон.
+  const spec = await signIn(page, '+79990001481');
+  const cctx = await phoneContext(browser, baseURL);
+  const cp = await cctx.newPage();
+  await signIn(cp, '+79990001482');
+  const dctx = await phoneContext(browser, baseURL);
+  const dp = await dctx.newPage();
+  const disp = await signIn(dp, '+79990001483');
+  await db(async (c) => {
+    await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    await c.query("update users set full_name = 'Тестовый Эксперт Досье' where id = $1", [spec.id]);
+    await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'vehicle')", [spec.id]);
+  });
+
+  // Досье пустое — эксперт добавляет аттестат (поля зависят от вида документа) и загружает копию.
+  await page.goto('/kabinet#specialist');
+  await expect(page.locator('#dossier-empty')).toBeVisible();
+  await page.getByLabel('Документ', { exact: true }).selectOption({ label: 'Квалификационный аттестат' });
+  await expect(page.getByLabel('Страховая сумма, руб.', { exact: true })).toBeHidden();
+  await page.getByLabel('Направление', { exact: true }).fill('Оценка движимого имущества');
+  await page.getByLabel('Номер аттестата', { exact: true }).fill('000777-2');
+  await page.getByLabel('Действует до', { exact: true }).fill(inDays(20));
+  await page.getByRole('button', { name: 'Добавить' }).click();
+  await expect(page.locator('#dossier-msg')).toHaveText('Документ добавлен — загрузите копию');
+  const cert = page.locator('#dossier-items li').filter({ hasText: 'Квалификационный аттестат' });
+  await expect(cert).toContainText('№ 000777-2');
+  await expect(cert).toContainText('срок кончается');
+  await expect(page.locator('#dossier-alert')).toContainText('Скоро кончается срок: Квалификационный аттестат');
+  await cert.locator('input[type=file]').setInputFiles({ name: 'аттестат.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 тестовая копия') });
+  await expect(page.locator('#dossier-msg')).toHaveText('Копия сохранена');
+  await expect(cert).toContainText('Копия: аттестат.pdf');
+
+  // Полис: без суммы — понятный отказ; с суммой — в досье.
+  await page.getByLabel('Документ', { exact: true }).selectOption({ label: 'Полис страхования оценщика' });
+  await page.getByLabel('Страховщик', { exact: true }).fill('Тестовое страхование');
+  await page.getByLabel('Номер полиса', { exact: true }).fill('ТП-001');
+  await page.getByLabel('Действует до', { exact: true }).fill(inDays(300));
+  await page.getByRole('button', { name: 'Добавить' }).click();
+  await expect(page.locator('#dossier-msg')).toContainText('заполните: Страховая сумма');
+  await page.getByLabel('Страховая сумма, руб.', { exact: true }).fill('5000000');
+  await page.getByRole('button', { name: 'Добавить' }).click();
+  await expect(page.locator('#dossier-items li').filter({ hasText: 'Полис страхования оценщика' })).toContainText('сумма 5');
+  await shot(page, '99e-specialist-dossier');
+
+  // Дело: черновик берёт сведения из досье, кнопка прикладывает копии к результату.
+  const created = await (await cp.request.post('/api/orders', { data: { module: 'expertise', service: 'vehicle', title: 'Машина для досье' }, headers: H })).json();
+  const id = created.order.id;
+  expect((await cp.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(9), fields: { purpose: 'deal', region: 'moscow', vehicle_type: 'car', make_model: 'Тестовая модель' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await cp.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  await db(async (c) => {
+    await c.query('update orders set price_kop = 1500000, paid_at = now() where id = $1', [id]);
+    await c.query("insert into payments (order_id, amount_kop, status, provider_id, created_by, paid_at) values ($1, 1500000, 'succeeded', $2, $3, now())", [id, `pay_ui_${id}`, disp.id]);
+    // Аттестат истёк — диспетчер видит предупреждение в подборе.
+    await c.query("update dossier_items set valid_until = current_date - 1 where user_id = $1 and kind = 'certificate'", [spec.id]);
+  });
+  await dp.goto(`/kabinet#order=${id}`);
+  const cand = dp.locator('#candidates li').filter({ hasText: 'Тестовый Эксперт Досье' });
+  await expect(cand.locator('[data-role=dossier-expired]')).toHaveText('В досье истёк срок: Квалификационный аттестат');
+  await shot(dp, '99f-dispetcher-dossier');
+  dp.once('dialog', (d) => d.accept());
+  await cand.getByRole('button', { name: 'Предложить дело' }).click();
+  await expect(dp.locator('#status-msg')).toHaveText('Дело предложено специалисту');
+  await db((c) => c.query("update dossier_items set valid_until = current_date + 200 where user_id = $1 and kind = 'certificate'", [spec.id]));
+  expect((await page.request.post(`/api/orders/${id}/status`, { data: { from: 'awaiting_executor', to: 'in_work' }, headers: H })).status()).toBe(200);
+
+  await page.goto(`/kabinet#order=${id}`);
+  await page.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(page.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const text = page.getByLabel('Текст заключения');
+  await expect(text).toHaveValue(/Сведения об эксперте \(из досье\):\n- Квалификационный аттестат: Оценка движимого имущества, № 000777-2/);
+  await expect(text).toHaveValue(/Приложение 1\. Квалификационный аттестат № 000777-2/);
+  await page.getByRole('button', { name: 'Приложить копии из досье' }).click();
+  await expect(page.locator('#doc-msg')).toHaveText('Приложено копий: 1. Подпишите их вместе с отчётом.');
+  await expect(page.locator('#docs li').filter({ hasText: 'Приложение 1 — Квалификационный аттестат № 000777-2.pdf' })).toContainText('Результат работы');
+  await shot(page, '99g-specialist-kopii-iz-dossier');
+  // Заказчик досье не видит: ни сведений, ни копий до проверки.
+  await cp.goto(`/kabinet#order=${id}`);
+  await expect(cp.locator('#order-title')).toHaveText('Машина для досье');
+  await expect(cp.locator('#docs')).not.toContainText('Приложение 1');
+  await expect(cp.locator('body')).not.toContainText('000777-2');
+  await cctx.close();
+  await dctx.close();
+});
+
 test('сквозной путь: заявка на оценку квартиры от входа заказчика до выплаты исполнителю', async ({ page, browser, baseURL }) => {
   const A = '+79990001401', D = '+79990001402', S = '+79990001403', C = '+79990001404', X = '+79990001405';
   const { grantRole } = await import('../../src/tools/grant-role.mjs');

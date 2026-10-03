@@ -9,6 +9,7 @@ import { scoreSpecialist } from '../matching/score.mjs';
 import { addDays, todayMsk } from '../orders/workflow.mjs';
 import { audit, text, uuidFrom } from './util.mjs';
 import { notify, orgHeads } from '../notify/notify.mjs';
+import { dossierAlerts, loadDossier } from '../dossier/dossier.mjs';
 
 const REGIONS = { moscow: 'Москва', mo: 'Московская область' };
 const OPEN_STATUSES = ['awaiting_executor', 'in_work', 'review'];
@@ -46,6 +47,8 @@ async function profileView(sql, userId) {
     permits: permits.map((p) => ({ ...p, valid_until: p.valid_until ?? null })),
     // Профиль перенесён из БЕРТЕЛ CRM (1.10): языки и квалификация; дела вне платформы приходят из CRM.
     crm: sp.crm_languages ? { languages: sp.crm_languages, qualification: sp.crm_qualification } : null,
+    // Досье (2.14): только предупреждения о сроках — сами документы видит лишь эксперт.
+    dossier_alerts: dossierAlerts(await loadDossier(sql, userId)),
   };
 }
 
@@ -64,10 +67,14 @@ export async function candidatesFor(sql, order) {
     where s.active and s.user_id <> ${order.owner_user_id}
       and not exists (select 1 from org_members m where m.user_id = s.user_id and m.org_id = ${order.org_id})`;
   const daysLeft = order.deadline ? Math.round((new Date(order.deadline) - new Date(today)) / 86400000) : null;
+  // Истёкшие документы досье (2.14) — предупреждение диспетчеру; с подбора пока не снимают (вопрос Дамиру).
+  const expired = new Map();
+  for (const r of rows) expired.set(r.user_id, dossierAlerts(await loadDossier(sql, r.user_id)).filter((a) => a.state === 'expired').map((a) => a.kind_name));
   return rows
     .map((r) => ({
       user_id: r.user_id, full_name: r.full_name,
       score: scoreSpecialist(r, { open: r.open, offers: r.offers, accepted: r.accepted }, order, daysLeft),
+      dossier_expired: expired.get(r.user_id),
     }))
     .sort((a, b) => b.score.total - a.score.total || a.full_name.localeCompare(b.full_name));
 }

@@ -8,6 +8,7 @@ import { READ_MAX_BYTES, extractPages, readableKind } from '../ai/extract.mjs';
 import { DOCX_MIME, textToDocx } from '../docs/docx.mjs';
 import { publicDoc, saveDocument } from './core-ops.mjs';
 import { audit } from './util.mjs';
+import { fillDraft, itemLine, loadDossier } from '../dossier/dossier.mjs';
 
 const PHOTOS_MAX = 40;
 const DOCS_MAX = 5;
@@ -104,13 +105,19 @@ export function draftOps() {
         sameBase(await latest(sql, order.id), body?.from);
         const inputs = await draftInputs(sql, providers.storage, order);
         const onsite = await onsiteBrief(sql, registry, order);
-        const brief = [orderBrief(registry, order), onsite].filter(Boolean).join('\n');
+        // Досье эксперта (2.14): сведения подставляются в разделы с пометкой dossier сами — модели они даны для связности.
+        const dossier = sections.some((s) => s.dossier) ? await loadDossier(sql, actor.id) : [];
+        const dossierBrief = dossier.length
+          ? ['СВЕДЕНИЯ ОБ ЭКСПЕРТЕ (из досье; программа сама вставит их в нужные разделы — не повторяй и не ставь про них пометки):', ...dossier.map((i) => `- ${itemLine(i)}`)].join('\n')
+          : null;
+        const brief = [orderBrief(registry, order), onsite, dossierBrief].filter(Boolean).join('\n');
         const out = await askAi(ctx, actor, 'draft', draftMessages({ brief, sections, ...inputs }));
-        const text = cleanDraftAnswer(sections, out.text);
+        const text = fillDraft(cleanDraftAnswer(sections, out.text), sections, dossier).slice(0, DRAFT_MAX);
         const seen = {
           photos: inputs.photos.map((p) => p.name),
           docs: inputs.docs.map((d) => ({ name: d.name, read: d.text !== null, truncated: d.truncated })),
           onsite: !!onsite,
+          dossier: dossier.length,
         };
         const d = await sql.tx(async (tx) => {
           await tx`select id from orders where id = ${order.id} for update`;

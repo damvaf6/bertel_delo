@@ -9,6 +9,8 @@ import {
 } from '../ai/ai.mjs';
 import { READ_MAX_BYTES, extractPages, readableKind } from '../ai/extract.mjs';
 import { runAutoChecks } from '../ai/report-checks.mjs';
+import { loadDossier } from '../dossier/dossier.mjs';
+import { todayMsk } from '../orders/workflow.mjs';
 import { insertOrder, listVisibleOrders } from './order-ops.mjs';
 import { audit, text, uuidFrom } from './util.mjs';
 
@@ -205,7 +207,9 @@ export function aiOps() {
         const files = await resultDocs(sql, providers.storage, order);
         if (!files.length) throw new HttpError(400, 'no_result', 'Сначала добавьте файл результата');
         // Автоматические правила — по всему тексту, до модели: их находки модель видит и не повторяет.
-        const auto = runAutoChecks([...new Set(rules.flatMap((r) => r.auto ?? []))], files, { fields: order.fields ?? {} });
+        // Сверка с досье исполнителя (2.14): аттестат, СРО, полисы, диплом — номера, суммы и сроки на дату отчёта.
+        const dossier = { items: order.executor_user_id ? await loadDossier(sql, order.executor_user_id) : [], today: todayMsk() };
+        const auto = runAutoChecks([...new Set(rules.flatMap((r) => r.auto ?? []))], files, { fields: order.fields ?? {}, dossier });
         const found = Object.fromEntries(rules.map((r) => [r.id, (r.auto ?? []).flatMap((a) => auto[a] ?? [])]));
         // Модель недоступна или лимит исчерпан, но автоматические находки есть — показываем их, а не ошибку.
         let out;

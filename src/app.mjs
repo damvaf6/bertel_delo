@@ -17,6 +17,7 @@ import { draftOps } from './ops/draft-ops.mjs';
 import { inspectOps } from './ops/inspect-ops.mjs';
 import { onsiteOps } from './ops/onsite-ops.mjs';
 import { signOps } from './ops/sign-ops.mjs';
+import { dossierOps } from './ops/dossier-ops.mjs';
 import { mailOps } from './ops/mail-ops.mjs';
 import { bridgeOps } from './ops/bridge-ops.mjs';
 import { validateRegistry } from './notify/registry.mjs';
@@ -26,7 +27,7 @@ import { createRegistry, DEFAULT_MODULES } from './modules/index.mjs';
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
 export function listOps(cfg, providers) {
-  const ops = [...coreOps(cfg), ...orderOps(), ...orgOps(), ...adminOps(), ...matchOps(), ...workOps(), ...moneyOps(), ...notifyOps(), ...aiOps(), ...draftOps(), ...inspectOps(), ...onsiteOps(), ...signOps(), ...mailOps(), ...bridgeOps(cfg)];
+  const ops = [...coreOps(cfg), ...orderOps(), ...orgOps(), ...adminOps(), ...matchOps(), ...workOps(), ...moneyOps(), ...notifyOps(), ...aiOps(), ...draftOps(), ...inspectOps(), ...onsiteOps(), ...signOps(), ...dossierOps(), ...mailOps(), ...bridgeOps(cfg)];
   if (providers.storage.kind === 'memory') ops.push(...memoryFileOps());
   if (cfg.appEnv === 'test' && cfg.testControlToken) ops.push(...testControlOps(cfg));
   ops.push(...stageLoginOps(cfg));
