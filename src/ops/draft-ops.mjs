@@ -5,7 +5,8 @@ import { HttpError } from '../http/core.mjs';
 import { editsDraft, seesDraft } from '../access/policy.mjs';
 import { DRAFT_GAP, DRAFT_MAX, askAi, cleanDraftAnswer, draftMessages, orderBrief } from '../ai/ai.mjs';
 import { READ_MAX_BYTES, extractPages, readableKind } from '../ai/extract.mjs';
-import { DOCX_MIME, textToDocx } from '../docs/docx.mjs';
+import { DOCX_MIME } from '../docs/docx.mjs';
+import { fillTables, reportFor, tablesBrief } from '../docs/report.mjs';
 import { publicDoc, saveDocument } from './core-ops.mjs';
 import { audit } from './util.mjs';
 import { fillDraft, itemLine, loadDossier } from '../dossier/dossier.mjs';
@@ -110,9 +111,10 @@ export function draftOps() {
         const dossierBrief = dossier.length
           ? ['СВЕДЕНИЯ ОБ ЭКСПЕРТЕ (из досье; программа сама вставит их в нужные разделы — не повторяй и не ставь про них пометки):', ...dossier.map((i) => `- ${itemLine(i)}`)].join('\n')
           : null;
-        const brief = [orderBrief(registry, order), onsite, dossierBrief].filter(Boolean).join('\n');
+        const brief = [orderBrief(registry, order), onsite, dossierBrief, tablesBrief(sections)].filter(Boolean).join('\n');
         const out = await askAi(ctx, actor, 'draft', draftMessages({ brief, sections, ...inputs }));
-        const text = fillDraft(cleanDraftAnswer(sections, out.text), sections, dossier).slice(0, DRAFT_MAX);
+        // Таблицы (2.29) и сведения из досье (2.14) программа вставляет сама, под заголовками разделов.
+        const text = fillDraft(fillTables(cleanDraftAnswer(sections, out.text), sections, registry, order), sections, dossier).slice(0, DRAFT_MAX);
         const seen = {
           photos: inputs.photos.map((p) => p.name),
           docs: inputs.docs.map((d) => ({ name: d.name, read: d.text !== null, truncated: d.truncated })),
@@ -154,6 +156,28 @@ export function draftOps() {
       },
     },
     {
+      // Скачать черновик готовым файлом Word (2.29): титул, оглавление, разделы, таблицы, колонтитул; в шаблоне организации,
+      // если он есть. Только сам исполнитель — дальше он правит файл в Word и прикладывает как результат. Пометки
+      // «[заполнить …]» остаются в файле — их видно и в Word.
+      id: 'draft.docx', method: 'GET', path: '/api/orders/:id/draft/docx', auth: 'user',
+      access: { resource: 'order', param: 'id', need: 'read' },
+      async handler(ctx) {
+        const { sql, actor, order, res } = ctx;
+        guard(actor, order);
+        if (order.executor_user_id !== actor.id) throw new HttpError(403, 'forbidden', 'Файл Word черновика скачивает исполнитель');
+        const cur = await latest(sql, order.id);
+        if (!cur) throw new HttpError(404, 'no_draft', 'Черновика ещё нет');
+        const word = await reportFor(ctx, order, actor, cur.body);
+        await audit(sql, actor, 'draft.docx', 'order', order.id, { draft: String(cur.id), template: word.template });
+        res.set({
+          'content-type': DOCX_MIME,
+          'content-disposition': `attachment; filename="report.docx"; filename*=UTF-8''${encodeURIComponent(word.filename)}`,
+          'cache-control': 'no-store',
+        });
+        res.send(word.buf);
+      },
+    },
+    {
       // Приложить черновик файлом результата (Word). Только когда эксперт заполнил все пометки «[заполнить …]» и
       // подтвердил, что проверил текст и отвечает за него. Дальше — обычная сдача на проверку диспетчеру.
       id: 'draft.attach', method: 'POST', path: '/api/orders/:id/draft/result', auth: 'user',
@@ -167,8 +191,9 @@ export function draftOps() {
         const gap = cur.body.match(DRAFT_GAP);
         if (gap) throw new HttpError(409, 'draft_gaps', `В черновике остались незаполненные места, например: ${gap[0].slice(0, 120)}`);
         if (body?.confirm !== true) throw new HttpError(400, 'confirm_required', 'Подтвердите, что Вы проверили текст и отвечаете за него');
-        const doc = await saveDocument(ctx, { filename: 'Заключение.docx', mime: DOCX_MIME, buf: textToDocx(cur.body), kind: 'result' });
-        await audit(sql, actor, 'draft.attach', 'order', order.id, { draft: String(cur.id), document: doc.id });
+        const word = await reportFor(ctx, order, actor, cur.body);
+        const doc = await saveDocument(ctx, { filename: word.filename, mime: DOCX_MIME, buf: word.buf, kind: 'result' });
+        await audit(sql, actor, 'draft.attach', 'order', order.id, { draft: String(cur.id), document: doc.id, template: word.template });
         res.status(201);
         return { document: publicDoc(doc) };
       },

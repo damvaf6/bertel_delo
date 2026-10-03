@@ -248,6 +248,11 @@
           </div>
           <p class="muted hidden" id="draft-local">Есть несохранённая правка с этого телефона — она восстановлена. Нажмите «Сохранить правку».</p>
         </div>
+        <div class="hidden" id="draft-word-box">
+          <button type="button" class="secondary" id="draft-word">Скачать Word</button>
+          <p class="muted">Готовый файл: титул, оглавление, нумерованные разделы, таблицы, номер отчёта внизу страницы — в шаблоне
+            Вашей организации, если руководитель его загрузил. Правьте в Word и приложите как файл результата.</p>
+        </div>
         <div class="hidden" id="draft-actions">
           <button type="button" class="secondary" id="draft-save">Сохранить правку</button>
           <label class="row gap"><input type="checkbox" id="draft-confirm"> Я проверил текст и отвечаю за него</label>
@@ -387,6 +392,20 @@
         <ul class="list" id="org-sign"></ul>
         <p class="muted hidden" id="org-sign-empty">Сейчас подписывать нечего.</p>
         <p class="msg" id="org-sign-msg" role="status" aria-live="polite"></p>
+      </div>
+      <div class="card hidden" id="org-template-box">
+        <h2>Шаблон отчёта</h2>
+        <p class="muted" id="org-template-state"></p>
+        <p class="muted hidden" id="org-template-hint">Файл Word (.docx, до 5 МБ) со стилями, шапкой, логотипом и реквизитами. Черновики
+          экспертов организации собираются в нём. Куда поставить отчёт — отметьте абзацем {{ОТЧЁТ}}; без него отчёт пойдёт после
+          содержимого шаблона. Шаблон видят только сотрудники организации.</p>
+        <div class="row gap">
+          <label class="btn secondary hidden" for="org-template-file" id="org-template-pick">Загрузить шаблон</label>
+          <input id="org-template-file" type="file" class="visually-hidden" accept=".docx" aria-label="Загрузить шаблон отчёта (.docx)">
+          <button type="button" class="secondary hidden" id="org-template-get">Скачать шаблон</button>
+          <button type="button" class="danger hidden" id="org-template-remove">Убрать шаблон</button>
+        </div>
+        <p class="msg" id="org-template-msg" role="status" aria-live="polite"></p>
       </div>
       <div class="card">
         <h2>Сотрудники</h2>

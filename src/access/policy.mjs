@@ -253,6 +253,19 @@ export const RESOURCES = {
     },
     level: (actor, found) => orgLevel(actor, found.org),
   },
+  // Шаблон отчёта организации (2.29): загружает и убирает руководитель, видят и скачивают сотрудники. Служебным платформы,
+  // посторонним и бывшим сотрудникам — «не найдено».
+  orgTemplate: {
+    async load(sql, id) {
+      if (!UUID_RE.test(id)) return null;
+      const org = await sql.one`select * from organizations where id = ${id}`;
+      return org && { subject: org, org };
+    },
+    level: (actor, { org }) => {
+      const r = roleIn(actor, org.id);
+      return r === 'head' ? LEVEL.manage : r ? LEVEL.read : LEVEL.none;
+    },
+  },
   // Выезд помощника (2.4): только сам помощник; остальные смотрят выезд через заявку.
   visit: {
     async load(sql, id) {

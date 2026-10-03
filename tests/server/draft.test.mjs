@@ -8,7 +8,7 @@ import { createRegistry } from '../../src/modules/index.mjs';
 import expertise from '../../src/modules/expertise.mjs';
 import { cleanDraftAnswer } from '../../src/ai/ai.mjs';
 import { extractPages } from '../../src/ai/extract.mjs';
-import { textToDocx } from '../../src/docs/docx.mjs';
+import { buildReport, parseDraft, DOCX_MIME } from '../../src/docs/docx.mjs';
 import { makeDocx } from '../tools/make-docs.mjs';
 
 let S, owner, other, dispatcher, admin, spec;
@@ -144,7 +144,7 @@ test('эксперт правит черновик и прикладывает �
   r = await spec.req('POST', `/api/orders/${o.id}/draft/result`, { from: d2.id, confirm: true });
   assert.equal(r.status, 201, JSON.stringify(r.body));
   assert.equal(r.body.document.kind, 'result');
-  assert.equal(r.body.document.filename, 'Заключение.docx');
+  assert.equal(r.body.document.filename, 'Отчёт об оценке.docx', 'имя — по документу услуги (2.29)');
   const [doc] = await S.sql`select * from documents where id = ${r.body.document.id}`;
   assert.equal(doc.uploaded_by, spec.user.id);
   const read = await extractPages(await S.providers.storage.get(doc.storage_key), doc.filename, doc.mime);
@@ -154,7 +154,7 @@ test('эксперт правит черновик и прикладывает �
   // Заказчик результат до проверки не видит; ИИ-проверка читает приложенный Word.
   assert.equal((await owner.req('GET', `/api/orders/${o.id}/documents`)).body.results_hidden, true);
   const ai = (await spec.req('POST', `/api/orders/${o.id}/review/ai`)).body.ai;
-  assert.deepEqual(ai.files.map((f) => [f.name, f.read]), [['Заключение.docx', true]]);
+  assert.deepEqual(ai.files.map((f) => [f.name, f.read]), [['Отчёт об оценке.docx', true]]);
   assert.equal(ai.items.find((i) => i.id === 'requisites').hint, 'ok');
 
   // Сдал на проверку — черновик больше не правится, но виден исполнителю и диспетчеру.
@@ -176,7 +176,10 @@ test('модель пропустила разделы или обернула �
   try {
     const d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {})).body.draft;
     assert.doesNotMatch(d.body, /```/);
-    assert.match(d.body, /^## Вводная часть\nОснование: договор/);
+    // Под «Вводной частью» программа сама ставит таблицу «задание» из полей заявки (2.29), дальше — текст модели.
+    assert.match(d.body, /^## Вводная часть\n\| Сведение \| Значение \|\n\| Услуга \| Оценка недвижимости \|\n/);
+    assert.match(d.body, /\| Адрес объекта \| г\. Москва, тестовая ул\., 9 \|\n[^#]*Основание: договор/);
+    assert.match(d.body, /## Расчёт и итоговая величина\n\| Подход \| Стоимость, руб\. \| Вес \|\n\| Сравнительный \| \[заполнить\] \| \[заполнить\] \|/);
     assert.match(d.body, /## Выводы\n\[заполнить: раздел не подготовлен\]/);
     S.providers.ai.complete = async () => { throw new Error('нет связи'); };
     const r = await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id });
@@ -188,8 +191,115 @@ test('модель пропустила разделы или обернула �
 });
 
 test('Word из черновика: заголовки и абзацы, спецсимволы, лишние управляющие символы — файл читается', async () => {
-  const buf = textToDocx('## Раздел <1> & «2»\nСтрока\u0001 с символом\n\nИтог');
+  const buf = buildReport('## Раздел <1> & «2»\nСтрока\u0001 с символом\n\nИтог', { title: 'Заключение эксперта', number: '№ 1', date: '03.10.2026' });
   assert.equal(buf.readUInt32LE(0), 0x04034b50);
-  const got = await extractPages(buf, 'Заключение.docx');
-  assert.deepEqual(got.pages, ['Раздел <1> & «2»\nСтрока с символом\n\nИтог']);
+  const got = (await extractPages(buf, 'Заключение.docx')).pages.join('\n');
+  assert.match(got, /1\. Раздел <1> & «2»\nСтрока с символом\nИтог/);
+});
+
+test('отчёт Word (2.29): титул, оглавление, нумерованные разделы, таблицы, колонтитул с номером отчёта', async () => {
+  assert.deepEqual(parseDraft('## А\n| x | y |\n|---|---|\n| 1 | 2 |\n\nтекст'), [
+    { type: 'head', level: 1, text: 'А' }, { type: 'table', rows: [['x', 'y'], ['1', '2']] }, { type: 'para', text: 'текст' },
+  ]);
+  const text = '## Вводная часть\nОснование — договор.\n| Сведение | Значение |\n| Услуга | Оценка недвижимости |\n## 5. Расчёт\n### Подраздел\nАбзац';
+  const buf = buildReport(text, { title: 'Отчёт об оценке', number: '№ AB12CD34', subtitle: 'Оценка недвижимости', org: 'ООО «Тест»', executor: 'Тестовый Эксперт', date: '03.10.2026' });
+  const all = (await extractPages(buf, 'Отчёт.docx')).pages.join('\n');
+  assert.match(all, /ООО «Тест»[\s\S]*ОТЧЁТ ОБ ОЦЕНКЕ № AB12CD34\nОценка недвижимости[\s\S]*Исполнитель: Тестовый Эксперт\nДата составления: 03\.10\.2026[\s\S]*г\. Москва, 2026/);
+  assert.match(all, /Содержание\n1\. Вводная часть\n5\. Расчёт\n5\.1\. Подраздел\n/, 'оглавление — до разделов; номер из заголовка сохраняется');
+  assert.match(all, /\n1\. Вводная часть\nОснование — договор\.\nСведение\tЗначение|\n1\. Вводная часть\nОснование — договор\.\nСведение/);
+  const zipText = buf.toString('latin1');
+  for (const part of ['word/styles.xml', 'word/footer1.xml', 'word/_rels/document.xml.rels']) assert.ok(zipText.includes(part), part);
+  const xml = unzipPart(buf, 'word/document.xml');
+  assert.match(xml, /<w:tbl>.*Оценка недвижимости.*<\/w:tbl>/s, 'таблица — настоящая таблица Word');
+  assert.match(xml, /TOC \\o "1-2"/, 'оглавление — поле Word');
+  assert.match(xml, /w:pStyle w:val="Heading1"\/><\/w:pPr><w:r><w:t xml:space="preserve">5\.1\.|Heading2"\/><\/w:pPr><w:r><w:t xml:space="preserve">5\.1\. Подраздел/);
+  assert.match(unzipPart(buf, 'word/footer1.xml'), /Отчёт об оценке № AB12CD34 · стр\. .*PAGE/);
+});
+
+// Часть архива Word (для проверок): буфер без сжатия ищем через zlib.
+import zlib from 'node:zlib';
+function unzipPart(buf, name) {
+  let p = buf.length - 22;
+  while (buf.readUInt32LE(p) !== 0x06054b50) p -= 1;
+  const n = buf.readUInt16LE(p + 10);
+  let q = buf.readUInt32LE(p + 16);
+  for (let i = 0; i < n; i += 1) {
+    const method = buf.readUInt16LE(q + 10); const csize = buf.readUInt32LE(q + 20);
+    const nlen = buf.readUInt16LE(q + 28); const xlen = buf.readUInt16LE(q + 30); const clen = buf.readUInt16LE(q + 32);
+    const local = buf.readUInt32LE(q + 42);
+    if (buf.subarray(q + 46, q + 46 + nlen).toString('utf8') === name) {
+      const from = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
+      const data = buf.subarray(from, from + csize);
+      return (method === 8 ? zlib.inflateRawSync(data) : data).toString('utf8');
+    }
+    q += 46 + nlen + xlen + clen;
+  }
+  return null;
+}
+
+const download = async (c, path) => {
+  const r = await fetch(S.base + path, { headers: { cookie: c.cookie } });
+  return { status: r.status, type: r.headers.get('content-type'), disposition: r.headers.get('content-disposition'), buf: Buffer.from(await r.arrayBuffer()) };
+};
+
+test('черновик готовым файлом Word (2.29): скачивает исполнитель; заказчику и посторонним — нет; в шаблоне организации', async () => {
+  const o = await inWork('Квартира: Word черновика');
+  assert.equal((await download(spec, `/api/orders/${o.id}/draft/docx`)).status, 404, 'черновика ещё нет');
+  await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {});
+  const w = await download(spec, `/api/orders/${o.id}/draft/docx`);
+  assert.equal(w.status, 200);
+  assert.equal(w.type, DOCX_MIME);
+  assert.match(w.disposition, /filename\*=UTF-8''%D0%9E%D1%82%D1%87%D1%91%D1%82/);
+  const text = (await extractPages(w.buf, 'Отчёт.docx')).pages.join('\n');
+  assert.match(text, /ОТЧЁТ ОБ ОЦЕНКЕ № [0-9A-F]{8}\nОценка недвижимости/);
+  assert.match(text, /\n1\. Вводная часть[^\n]*\nСведение\s*Значение|\n1\. Вводная часть/);
+  assert.match(unzipPart(w.buf, 'word/document.xml'), /<w:tbl>[\s\S]*Адрес объекта[\s\S]*<\/w:tbl>/);
+  assert.match(text, /\[заполнить/, 'пометки остаются в файле');
+  for (const c of [owner, other, dispatcher]) {
+    const r = await download(c, `/api/orders/${o.id}/draft/docx`);
+    assert.equal(r.status, c === other ? 404 : 403);
+  }
+
+  // Шаблон организации: руководитель загружает, эксперт от этой организации получает черновик в нём.
+  const head = await login(S, '+79990000906');
+  const org = (await head.req('POST', '/api/orgs', { name: 'ООО «Шаблон-тест»' })).body.org;
+  const tpl = makeDocx(['Бланк ООО «Шаблон-тест», ИНН 7700000000', '{{ОТЧЁТ}}', 'Подпись руководителя']);
+  const up = (c, buf, name) => c.req('POST', `/api/orgs/${org.id}/template`, buf, { raw: true, headers: { 'content-type': 'application/octet-stream', 'x-file-name': encodeURIComponent(name) } });
+  let r = await up(head, tpl, 'Бланк.docx');
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.equal(r.body.template.marked, true);
+  // Эксперт без организации в профиле — стандартный Word; вступил и выбрал организацию — в шаблоне.
+  await S.sql`insert into org_members (org_id, user_id, role) values (${org.id}, ${spec.user.id}, 'member')`;
+  // Организацию в профиле меняют, когда нет дел в работе (2.5а) — здесь ставим напрямую.
+  await S.sql`update specialists set org_id = ${org.id} where user_id = ${spec.user.id}`;
+  const t = (await extractPages((await download(spec, `/api/orders/${o.id}/draft/docx`)).buf, 'Отчёт.docx')).pages.join('\n');
+  assert.match(t, /^Бланк ООО «Шаблон-тест», ИНН 7700000000\n[\s\S]*ОТЧЁТ ОБ ОЦЕНКЕ[\s\S]*Подпись руководителя\n?$/, 'отчёт — на месте {{ОТЧЁТ}}');
+  assert.doesNotMatch(t, /\{\{ОТЧЁТ\}\}/);
+  // Эксперт видит шаблон и скачивает его, но не меняет; руководитель меняет и убирает.
+  const g = (await spec.req('GET', `/api/orgs/${org.id}/template`)).body;
+  assert.deepEqual([g.template.filename, g.manage], ['Бланк.docx', false]);
+  assert.equal((await spec.req('GET', `/api/orgs/${org.id}/template/file`)).status, 200);
+  assert.equal((await up(spec, tpl, 'Мой.docx')).status, 403);
+  assert.equal((await spec.req('DELETE', `/api/orgs/${org.id}/template`)).status, 403);
+  // Плохие файлы — понятный отказ.
+  for (const [buf, name, re] of [
+    [tpl, 'Бланк.doc', /\.docx/], [tpl, 'Бланк.docm', /\.docx/], [Buffer.from('PK не архив'), 'Бланк.docx', /не читается/],
+    [makeDocx(['Бланк'], { 'word/vbaProject.bin': 'макрос' }), 'Бланк.docx', /макрос/],
+  ]) {
+    r = await up(head, buf, name);
+    assert.equal(r.status, 400, name);
+    assert.match(r.body.message, re);
+  }
+  assert.equal((await up(head, Buffer.alloc(6 * 1024 * 1024, 1), 'Большой.docx')).status, 413);
+  // Новый шаблон заменяет прежний; прежний файл уходит из хранилища.
+  const [before1] = await S.sql`select storage_key from org_templates where org_id = ${org.id}`;
+  r = await up(head, makeDocx(['Новый бланк']), 'Новый.docx');
+  assert.equal(r.body.template.marked, false);
+  assert.equal(await S.providers.storage.get(before1.storage_key), null);
+  const t2 = (await extractPages((await download(spec, `/api/orders/${o.id}/draft/docx`)).buf, 'Отчёт.docx')).pages.join('\n');
+  assert.match(t2, /^Новый бланк\n[\s\S]*ОТЧЁТ ОБ ОЦЕНКЕ/, 'без метки — отчёт после содержимого шаблона');
+  assert.equal((await head.req('DELETE', `/api/orgs/${org.id}/template`)).status, 204);
+  assert.equal((await spec.req('GET', `/api/orgs/${org.id}/template`)).body.template, null);
+  await S.sql`delete from org_members where org_id = ${org.id} and user_id = ${spec.user.id}`;
+  await S.sql`update specialists set org_id = null where user_id = ${spec.user.id}`;
 });

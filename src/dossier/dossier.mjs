@@ -21,7 +21,7 @@ export function needsValidDossier(registry, order) {
   return !!registry?.checks(order.module, order.service).some((c) => c.auto?.includes('dossier_appraiser'));
 }
 
-const headKey = (t) => t.toLowerCase().replace(/ё/g, 'е').split(/[:,(]/)[0].replace(/\s+/g, ' ').trim();
+export const headKey = (t) => t.toLowerCase().replace(/ё/g, 'е').split(/[:,(]/)[0].replace(/\s+/g, ' ').trim();
 const ru = (d) => (d ? d.split('-').reverse().join('.') : '');
 const rub = (kop) => `${(Number(kop) / 100).toLocaleString('ru-RU', { maximumFractionDigits: 2 }).replace(/\s/g, ' ')} руб.`;
 

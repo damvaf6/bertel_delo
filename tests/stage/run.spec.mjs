@@ -368,12 +368,19 @@ test('общий прогон: сквозной путь экспертизы �
   await sp.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
   await expect(sp.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте', { timeout: AI_WAIT });
   await expect(sp.getByLabel('Текст заключения')).toHaveValue(/## /);
+  // Готовый файл Word (2.29): таблица «задание» из заявки, файл скачивается с площадки.
+  await expect(sp.getByLabel('Текст заключения')).toHaveValue(/\| Сведение \| Значение \|/);
+  const [wordDraft] = await Promise.all([sp.waitForEvent('download'), sp.getByRole('button', { name: 'Скачать Word' }).click()]);
+  expect(wordDraft.suggestedFilename()).toBe('Отчёт об оценке.docx');
+  const dchunks = [];
+  for await (const ch of await wordDraft.createReadStream()) dchunks.push(ch);
+  expect(Buffer.concat(dchunks).subarray(0, 2).toString()).toBe('PK');
   const draft = await sp.getByLabel('Текст заключения').inputValue();
   await sp.getByLabel('Текст заключения').fill(draft.replace(/\[(?:заполнить|описать)[^\]]*\]/gi, 'заполнено экспертом'));
   await sp.getByLabel('Я проверил текст и отвечаю за него').check();
   await sp.getByRole('button', { name: 'Приложить как файл результата' }).click();
-  await expect(sp.locator('#draft-msg')).toHaveText('Файл «Заключение.docx» добавлен в результат работы');
-  await expect(sp.locator('#docs li').filter({ hasText: 'Заключение.docx' })).toHaveCount(1);
+  await expect(sp.locator('#draft-msg')).toHaveText('Файл «Отчёт об оценке.docx» добавлен в результат работы');
+  await expect(sp.locator('#docs li').filter({ hasText: 'Отчёт об оценке.docx' })).toHaveCount(1);
   await shot(sp, '12a-chernovik');
   await sp.locator('#result-file').setInputFiles({ name: 'Отчёт об оценке.txt', mimeType: 'text/plain', buffer: Buffer.from(`Отчёт об оценке квартиры. Итоговая стоимость 12 000 000 руб. ${TAG}`) });
   await expect(sp.locator('#doc-msg')).toHaveText('Файл добавлен');
@@ -400,7 +407,7 @@ test('общий прогон: сквозной путь экспертизы �
     await toSign.first().click();
     await expect(sp.locator('#doc-msg')).toHaveText('Файл подписан');
   }
-  await expect(sp.locator('#docs li').filter({ hasText: 'Заключение.docx' }).locator('.sig-state')).toContainText(`Подпись эксперта: ${specName}`);
+  await expect(sp.locator('#docs li').filter({ hasText: 'Отчёт об оценке.docx' }).locator('.sig-state')).toContainText(`Подпись эксперта: ${specName}`);
   await shot(sp, '13s-podpis');
   await sp.getByRole('button', { name: 'Сдать на проверку' }).click();
   await expect(sp.locator('#order-status')).toHaveText('Проверка результата');
@@ -444,11 +451,11 @@ test('общий прогон: сквозной путь экспертизы �
   for await (const ch of await download.createReadStream()) chunks.push(ch);
   expect(Buffer.concat(chunks).toString()).toContain(TAG);
   // Заказчик получил подписанное заключение: подпись проверяется по файлу из хранилища.
-  const concl = page.locator('#docs li').filter({ hasText: 'Заключение.docx' });
+  const concl = page.locator('#docs li').filter({ hasText: 'Отчёт об оценке.docx' });
   await concl.getByRole('button', { name: 'Проверить подпись' }).click();
   await expect(page.locator('#doc-msg')).toHaveText(`Подпись верна: ${specName}`);
   const [sigFile] = await Promise.all([page.waitForEvent('download'), concl.getByRole('button', { name: 'Файл подписи' }).click()]);
-  expect(sigFile.suggestedFilename()).toBe('Заключение.docx.sig');
+  expect(sigFile.suggestedFilename()).toBe('Отчёт об оценке.docx.sig');
   // Заключение — настоящий файл Word из хранилища; подсказок ИИ заказчик не видит.
   const [word] = await Promise.all([page.waitForEvent('download'), concl.getByRole('button', { name: 'Скачать' }).click()]);
   const wchunks = [];

@@ -257,7 +257,7 @@ test('экскурсия по кабинетам: эксперт, руковод
   await sp.getByLabel('Текст заключения').fill(draft.replace(/\[(?:заполнить|описать)[^\]]*\]/gi, 'заполнено экспертом'));
   await sp.getByLabel('Я проверил текст и отвечаю за него').check();
   await sp.getByRole('button', { name: 'Приложить как файл результата' }).click();
-  await expect(sp.locator('#draft-msg')).toHaveText('Файл «Заключение.docx» добавлен в результат работы');
+  await expect(sp.locator('#draft-msg')).toHaveText('Файл «Отчёт об оценке.docx» добавлен в результат работы');
 
   // Отчёт и ИИ-проверка.
   await sp.locator('#result-file').setInputFiles({ name: 'Отчёт об оценке (тест).pdf', mimeType: 'application/pdf', buffer: makePdf(REPORT) });
@@ -296,7 +296,7 @@ test('экскурсия по кабинетам: эксперт, руковод
   await snap(hp, 'Руководитель организации', 'Организация и сотрудники', 'Данные организации, сотрудники с ролями и числом дел, приглашения. Здесь же руководитель убирает ушедшего сотрудника.', ['#org-view .card >> nth=0', card(hp, '#org-view', 'Сотрудники')]);
   const item = hp.locator('#org-sign li.doc').filter({ hasText: 'Отчёт об оценке (тест).pdf' });
   await expect(item).toBeVisible();
-  for (const name of ['Отчёт об оценке (тест).pdf', 'Заключение.docx']) {
+  for (const name of ['Отчёт об оценке (тест).pdf', 'Отчёт об оценке.docx']) {
     const it = hp.locator('#org-sign li.doc').filter({ hasText: name });
     hp.once('dialog', (d) => d.accept());
     await it.getByRole('button', { name: 'Подписать от организации' }).click();
