@@ -27,12 +27,24 @@ export async function loadOrgSign(org) {
       const ready = it.documents.filter((d) => d.signatures.expert && !d.signatures.org);
       return el('li', { 'data-item': it.order_ref }, ...head(it),
         ...(waiting(it) && ready.length > 1 ? [el('button', { 'data-action': 'org-sign-all', onclick: () => signAll(ready) }, `Подписать все файлы дела (${ready.length})`)] : []),
-        el('ul', { class: 'list' }, ...it.documents.map(docItem)));
+        el('ul', { class: 'list' }, ...it.documents.map(docItem)),
+        ...returnsBlock(it.returns ?? []));
     }),
     ...(done.length ? [el('li', { class: 'group', text: `Подписано · ${done.length}` })] : []),
     ...done.map((it) => el('li', { class: 'signed', 'data-item': it.order_ref },
       el('details', {}, el('summary', { text: `${it.service} · ${it.order_ref} · подписано` }), ...head(it).slice(1),
-        el('ul', { class: 'list' }, ...it.documents.map(docItem))))));
+        el('ul', { class: 'list' }, ...it.documents.map(docItem)), ...returnsBlock(it.returns ?? []))))));
+}
+
+// История возвратов эксперту (2.27): что и когда вернули, исправил ли эксперт (подписал заново).
+function returnsBlock(list) {
+  if (!list.length) return [];
+  return [el('details', { class: 'returns', 'data-returns': String(list.length) },
+    el('summary', { text: `Возвраты эксперту · ${list.length}${list.some((r) => r.open) ? ' · ждём исправления' : ''}` }),
+    el('ul', { class: 'list' }, ...[...list].reverse().map((r) => el('li', { class: 'return' },
+      el('div', { class: 'title', text: `${r.filename} · ${r.open ? 'ждём исправления' : 'эксперт подписал заново'}` }),
+      el('div', { class: 'muted', text: [r.by, new Date(r.at).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })].filter(Boolean).join(' · ') }),
+      el('div', { class: 'comment', text: r.comment })))))];
 }
 
 async function signAll(docs) {
@@ -55,7 +67,8 @@ function docItem(d) {
     lines.push(el('div', { class: 'row' },
       el('button', { 'data-action': 'org-sign', onclick: () => sign(d) }, 'Подписать от организации'),
       ...uploadSignatureButton(d.filename, (file) => upload(d, file))),
-    el('div', { class: 'muted', text: `${UPLOAD_HINT} Нужен сертификат организации.` }));
+    el('div', { class: 'muted', text: `${UPLOAD_HINT} Нужен сертификат организации.` }),
+    returnForm(d));
   }
   return el('li', { class: 'doc', 'data-doc': d.id },
     el('div', {},
@@ -63,6 +76,27 @@ function docItem(d) {
       el('div', { class: 'muted', text: formatSize(d.size_bytes) })),
     el('div', { class: 'row' }, el('button', { class: 'secondary', 'data-action': 'download', onclick: () => download(d) }, 'Скачать')),
     el('div', { class: 'sig' }, ...lines));
+}
+
+// «Вернуть эксперту» (2.27): замечание обязательно; подпись эксперта снимается, эксперту — уведомление.
+function returnForm(d) {
+  const area = el('textarea', { id: `ret-${d.id}`, rows: '3', maxlength: '2000', 'aria-label': `Замечание эксперту по файлу ${d.filename}` });
+  const box = el('div', { class: 'field hidden', 'data-return-form': d.id },
+    el('label', { for: `ret-${d.id}`, text: 'Что исправить (эксперт увидит это в деле)' }), area,
+    el('div', { class: 'row' },
+      el('button', { class: 'danger', 'data-action': 'org-return-send', onclick: () => sendReturn(d, area.value) }, 'Вернуть с замечанием'),
+      el('button', { class: 'secondary', onclick: () => box.classList.add('hidden') }, 'Отмена')));
+  const open = el('button', { class: 'secondary', 'data-action': 'org-return', onclick: () => { box.classList.remove('hidden'); area.focus(); } }, 'Вернуть эксперту');
+  return el('div', {}, el('div', { class: 'row' }, open), box);
+}
+
+async function sendReturn(d, comment) {
+  if (!String(comment).trim()) return say($('org-sign-msg'), 'Напишите замечание — что эксперту исправить');
+  try {
+    await api('POST', `/api/org-documents/${d.id}/return`, { comment });
+    await loadOrgSign(current);
+    say($('org-sign-msg'), 'Файл возвращён эксперту с замечанием — его подпись снята', 'ok');
+  } catch (err) { say($('org-sign-msg'), err.message); }
 }
 
 async function sign(d) {

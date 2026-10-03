@@ -40,6 +40,8 @@ export const EVENTS = {
   onsite_cancelled: { type: 'executor_work', title: 'Выезд на объект отменён', order: false },
   // Руководителю организации исполнителя (2.5а): эксперт подписал результат — нужна подпись организации (раздел «Организации»).
   org_sign_needed: { type: 'executor_work', title: 'Эксперт подписал заключение — нужна подпись организации', order: false },
+  // Эксперту (2.27): руководитель организации вернул файл с замечанием до подписи организации — подпись эксперта снята.
+  org_returned: { type: 'executor_work', title: 'Руководитель вернул отчёт с замечанием — исправьте и подпишите заново', order: true },
   rework: { type: 'executor_work', title: 'Результат возвращён на доработку', order: true },
   // Напоминания о сроках (2.13): src/notify/reminders.mjs, раз в минуту вместе с повтором СМС.
   deadline_soon: { type: 'executor_work', title: 'До срока по делу осталось 3 дня', order: true },

@@ -50,6 +50,9 @@ function steps() {
   }
   if (visible('draft-box')) items.push({ id: 'draft', title: 'Черновик заключения от ИИ (по желанию)', done: results.some((d) => /^Заключение/.test(d.filename)), go: go('draft-box'), optional: true });
   items.push({ id: 'result', title: 'Файл результата', done: results.length > 0, go: go('result-upload-box') });
+  // Руководитель вернул файл с замечанием (2.27) — сначала исправить по замечанию.
+  const returnsOpen = (docs?.org_returns ?? []).filter((r) => r.open);
+  if (returnsOpen.length) items.push({ id: 'fix', title: 'Исправить по замечанию руководителя', done: false, go: go('org-returns-box') });
   if (visible('review-box')) items.push({ id: 'ai', title: aiFresh || !ai ? 'ИИ-проверка перед сдачей' : 'ИИ-проверка — файлы менялись, проверьте ещё раз', done: aiFresh && results.length > 0, go: go('review-box'), optional: true });
   if (signNeed) {
     items.push({ id: 'sign', title: 'Подпись УКЭП', done: results.length > 0 && !unsigned.length, go: go('docs') });
@@ -62,6 +65,7 @@ function steps() {
   const firstOpen = items.find((i) => !i.done && !i.optional && i.id !== 'submit');
   let main;
   if (!firstOpen && submit) main = { label: 'Сдать на проверку', run: () => ctx.step(submit) };
+  else if (firstOpen?.id === 'fix') main = { label: 'Исправить по замечанию руководителя', run: go('org-returns-box') };
   else if (firstOpen?.id === 'result') main = { label: 'Добавить файл результата', run: () => $('result-file')?.click() };
   else if (firstOpen?.id === 'sign') main = { label: unsigned.length > 1 ? `Подписать все файлы (${unsigned.length})` : 'Подписать файл', run: () => ctx.signAll?.() };
   else if (firstOpen?.id === 'org') main = { label: 'Ждём подпись руководителя', disabled: true };

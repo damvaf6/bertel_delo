@@ -336,9 +336,26 @@ async function loadDocs() {
   $('docs-empty').classList.toggle('hidden', documents.length > 0);
   $('results-later').textContent = 'Результат работы появится здесь после проверки.';
   $('results-later').classList.toggle('hidden', !(resultsHidden && ['in_work', 'review'].includes(order.status)));
+  renderOrgReturns(documentsBody.org_returns ?? []);
   setNext({ docs: documentsBody });
   const basis = documents.filter((d) => d.kind === 'basis');
   $('basis-file-state').textContent = basis.length ? `Приложено: ${basis.map((d) => d.filename).join(', ')}` : 'Файл определения ещё не приложен';
+}
+
+// Замечания руководителя организации (2.27): возвраты файла до подписи организации — видит только сам исполнитель.
+// Открытые — сверху; закрытые (файл подписан заново) — ниже, как история.
+function renderOrgReturns(list) {
+  $('org-returns-box').classList.toggle('hidden', !list.length);
+  if (!list.length) return;
+  const open = list.filter((r) => r.open);
+  $('org-returns-lead').textContent = open.length
+    ? 'Руководитель вернул файл с замечанием: исправьте файл (или загрузите новый) и подпишите заново — после этого руководитель подпишет от организации.'
+    : 'Все замечания учтены. История возвратов:';
+  const item = (r) => el('li', { class: r.open ? 'return open' : 'return', 'data-return': String(r.id) },
+    el('div', { class: 'title', text: `${r.filename} · ${r.open ? 'исправить' : 'исправлено'}` }),
+    el('div', { class: 'muted', text: [r.by, r.org, new Date(r.at).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })].filter(Boolean).join(' · ') }),
+    el('div', { class: 'comment', text: r.comment }));
+  $('org-returns').replaceChildren(...[...open].reverse().map(item), ...list.filter((r) => !r.open).reverse().map(item));
 }
 
 // Подписи УКЭП у файла результата (2.5, 2.5а): эксперт и, если он работает от организации, её руководитель. Исполнитель

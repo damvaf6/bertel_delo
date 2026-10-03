@@ -955,7 +955,7 @@ test('экспресс-выезд (2.4): ход выезда видят те, к
 });
 
 test('подпись организации (2.5а): файлы видит и подписывает только руководитель организации исполнителя; загрузка — только своё', async () => {
-  for (const id of ['signature.upload', 'orgsign.list', 'orgsign.link', 'orgsign.sign', 'orgsign.upload']) cover(id);
+  for (const id of ['signature.upload', 'orgsign.list', 'orgsign.link', 'orgsign.sign', 'orgsign.upload', 'orgsign.return']) cover(id);
   // Исполнитель работает от организации Б: подписывает он и руководитель Б (headB).
   const spec2 = expertB = await login(S, '+79990000053');
   const memberB = seniorB = await login(S, '+79990000022');
@@ -1007,6 +1007,20 @@ test('подпись организации (2.5а): файлы видит и п
   assert.equal(e.body.signature.signer, 'Эксперт Внешний');
   assert.equal((await spec2.req('POST', `/api/orders/${o.id}/status`, { to: 'review', from: 'in_work' })).body.error, 'not_signed_org', 'без подписи организации не сдать');
   assert.equal((await up(U.headB, `/api/org-documents/${doc.id}/signature/upload`, expertSig)).body.error, 'not_org_certificate');
+  // Вернуть эксперту с замечанием (2.27) — только руководитель Б; возвраты видит только сам эксперт.
+  const ret = (c, comment = 'Исправьте итог') => c.req('POST', `/api/org-documents/${doc.id}/return`, { comment });
+  for (const k of ['owner', 'stranger', 'headA', 'dispatcher', 'admin', 'spec']) assert.equal((await ret(U[k])).status, 404, k);
+  for (const c of [memberB, spec2]) assert.equal((await ret(c)).status, 404, 'не руководитель');
+  assert.equal((await ret(U.headB, '  ')).status, 400, 'без замечания нельзя');
+  assert.equal((await ret(U.headB)).status, 201);
+  assert.equal((await ret(U.headB)).body.error, 'not_signed', 'подпись уже снята');
+  for (const k of ['owner', 'dispatcher', 'admin']) {
+    const b = (await U[k].req('GET', `/api/orders/${o.id}/documents`)).body;
+    assert.equal(b.org_returns, undefined, `${k}: возвратов не видит`);
+    assert.ok(!JSON.stringify(b).includes('Исправьте итог'), k);
+  }
+  assert.equal((await spec2.req('GET', `/api/orders/${o.id}/documents`)).body.org_returns[0].comment, 'Исправьте итог');
+  assert.equal((await up(spec2, `/api/documents/${doc.id}/signature/upload`, expertSig)).status, 201, 'эксперт подписал заново');
   const g = await U.headB.req('POST', `/api/org-documents/${doc.id}/sign`, { confirm: true });
   assert.equal(g.status, 201, JSON.stringify(g.body));
   assert.equal(g.body.signature.org, orgB.name);
