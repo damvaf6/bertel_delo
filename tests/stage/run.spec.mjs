@@ -75,6 +75,8 @@ async function findUser(ap, phoneNo) {
   await ap.getByLabel('Номер телефона пользователя').fill(phoneNo);
   await ap.getByRole('button', { name: 'Найти' }).click();
   await expect(ap.locator('#admin-user-meta')).toContainText(shown(phoneNo));
+  // Профиль специалиста дорисовывается после — ждём, пока на экране профиль именно этого человека.
+  await expect(ap.locator('#admin-specialist')).toHaveAttribute('data-phone', phoneNo);
 }
 
 // Какая модель ИИ на площадке: поддельная отвечает предсказуемо, настоящая (YandexGPT, решение Дамира 03.10.2026) — нет.
@@ -415,7 +417,7 @@ test('общий прогон: сквозной путь экспертизы �
   await dp.reload();
   await expect(dp.locator('#review-box')).toBeVisible();
   await dp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
-  await expect(dp.locator('#ai-review-state')).toContainText('запускал диспетчер');
+  await expect(dp.locator('#ai-review-state')).toContainText('запускал диспетчер', { timeout: AI_WAIT });
   const rules = dp.locator('#review-checks > li');
   const n = await rules.count();
   expect(n).toBeGreaterThan(3);

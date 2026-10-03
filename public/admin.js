@@ -54,6 +54,7 @@ function render(u) {
 let specialist = null;
 
 async function loadSpecialist(userId) {
+  delete $('admin-specialist').dataset.phone;
   const { specialists } = await api('GET', '/api/specialists');
   specialist = specialists.find((s) => s.user_id === userId) ?? null;
   $('admin-specialist').classList.remove('hidden');
@@ -67,6 +68,8 @@ async function loadSpecialist(userId) {
   $('sp-permits').replaceChildren(...(specialist?.permits ?? []).map((p) => el('li', { class: 'row' },
     el('span', { text: `${serviceName(p.module, p.service)}${p.valid_until ? ` · до ${p.valid_until}` : ''}` }),
     el('button', { type: 'button', class: 'danger', 'data-action': 'remove-permit', onclick: () => removePermit(p) }, 'Убрать'))));
+  // Чей профиль на экране — чтобы правка не ушла предыдущему найденному (экран дорисовывается после поиска).
+  if (found?.id === userId) $('admin-specialist').dataset.phone = found.phone;
 }
 
 $('admin-specialist').addEventListener('submit', async (e) => {

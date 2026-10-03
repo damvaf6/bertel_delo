@@ -43,6 +43,8 @@ async function findUser(ap, phoneNo) {
   await ap.getByLabel('Номер телефона пользователя').fill(phoneNo);
   await ap.getByRole('button', { name: 'Найти' }).click();
   await expect(ap.locator('#admin-user-meta')).toContainText(shown(phoneNo));
+  // Профиль специалиста дорисовывается после — ждём, пока на экране профиль именно этого человека.
+  await expect(ap.locator('#admin-specialist')).toHaveAttribute('data-phone', phoneNo);
 }
 
 // Снимок раздела экрана с подписью. what — один или несколько разделов (снимаются вместе: от верха первого до низа
@@ -318,7 +320,7 @@ test('экскурсия по кабинетам: эксперт, руковод
   await dp.reload();
   await expect(dp.locator('#review-box')).toBeVisible();
   await dp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
-  await expect(dp.locator('#ai-review-state')).toContainText('запускал диспетчер');
+  await expect(dp.locator('#ai-review-state')).toContainText('запускал диспетчер', { timeout: AI_WAIT });
   const rules = dp.locator('#review-checks > li');
   const n = await rules.count();
   for (let i = 0; i < n; i += 1) {
