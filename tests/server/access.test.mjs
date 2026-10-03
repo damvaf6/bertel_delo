@@ -2,7 +2,9 @@
 // Последняя проверка сверяет: в реестре нет операций, не покрытых этой таблицей.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, login, client, makeOrg, addMember, setPlatformRole, ensurePaid, bridge, TEST_TOKEN, signResults } from '../helpers.mjs';
+import { startApp, login, client, makeOrg, addMember, setPlatformRole, ensurePaid, bridge, TEST_TOKEN, signResults, makeSpecialist } from '../helpers.mjs';
+import { testExternalSignature } from '../../src/providers/sign.mjs';
+import crypto from 'node:crypto';
 
 const covered = new Set();
 const cover = (id) => covered.add(id);
@@ -627,7 +629,7 @@ test('работа по делу: результат — только испол
   assert.equal((await U.owner.req('GET', `/api/documents/${doc.id}/link`)).status, 200);
   assert.equal((await U.owner.req('DELETE', `/api/documents/${doc.id}`)).status, 403);
   // Выдано: заказчик видит подпись, скачивает её и проверяет сам; подписать или переподписать не может.
-  assert.equal(after.documents.find((d) => d.id === doc.id).signature.checked_ok, true);
+  assert.equal(after.documents.find((d) => d.id === doc.id).signatures.expert.checked_ok, true);
   assert.equal((await verify(U.owner)).body.valid, true);
   assert.equal((await sigLink(U.owner)).status, 200);
   assert.equal((await sign(U.owner)).status, 403);
@@ -949,6 +951,74 @@ test('экспресс-выезд (2.4): ход выезда видят те, к
   assert.equal((await U.stranger.req('DELETE', `/api/orders/${o.id}/onsite/${vid}`)).status, 404);
   assert.equal((await U.spec.req('DELETE', `/api/orders/${o.id}/onsite/${vid}`)).status, 204);
   assert.equal((await helper.req('PUT', `/api/visits/${vid}/data`, { data: { notes: 'x' } })).status, 410, 'отменённый выезд не правится');
+});
+
+test('подпись организации (2.5а): файлы видит и подписывает только руководитель организации исполнителя; загрузка — только своё', async () => {
+  for (const id of ['signature.upload', 'orgsign.list', 'orgsign.link', 'orgsign.sign', 'orgsign.upload']) cover(id);
+  // Исполнитель работает от организации Б: подписывает он и руководитель Б (headB).
+  const spec2 = await login(S, '+79990000053');
+  const memberB = await login(S, '+79990000022');
+  await addMember(S.sql, orgB.id, spec2.user.id, 'member');
+  await addMember(S.sql, orgB.id, memberB.user.id, 'senior');
+  await makeSpecialist(S.sql, spec2.user.id);
+  assert.equal((await U.spec.req('PATCH', '/api/specialist/me', { org_id: orgB.id })).status, 404, 'чужую организацию не выбрать');
+  assert.equal((await spec2.req('PATCH', '/api/specialist/me', { org_id: orgB.id })).body.specialist.org.name, orgB.name);
+  await S.sql`update users set full_name = 'Руководитель Б' where id = ${U.headB.user.id}`;
+  const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Подпись двоих' })).body.order;
+  const fields = { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, Подписная ул., 2' };
+  assert.equal((await U.owner.req('PATCH', `/api/orders/${o.id}`, { fields, deadline: new Date(Date.now() + 10 * 86400_000).toISOString().slice(0, 10) })).status, 200);
+  assert.equal((await U.owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
+  await ensurePaid(S.sql, o.id);
+  assert.equal((await U.dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: spec2.user.id, from: 'matching' })).status, 200);
+  assert.equal((await spec2.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  assert.equal((await spec2.req('PATCH', '/api/specialist/me', { org_id: null })).status, 409, 'организацию не сменить посреди дела');
+  const body = Buffer.from('заключение двоих');
+  const doc = (await spec2.req('POST', `/api/orders/${o.id}/results`, body, { raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': 'z.pdf' } })).body.document;
+  const digest = crypto.createHash('sha256').update(body).digest('hex');
+  const up = (c, path, sig, confirm = '1') => c.req('POST', path, sig, { raw: true, headers: { 'content-type': 'application/octet-stream', 'x-confirm': confirm } });
+  const expertSig = testExternalSignature({ digest, subject: 'Эксперт Внешний' });
+  const orgSig = testExternalSignature({ digest, subject: 'Руководитель Б', org: orgB.name });
+  // Загрузка подписи эксперта — только исполнитель свой файл.
+  for (const k of ['owner', 'stranger', 'headB', 'headA']) assert.equal((await up(U[k], `/api/documents/${doc.id}/signature/upload`, expertSig)).status, 404, k);
+  for (const k of ['dispatcher', 'admin']) assert.equal((await up(U[k], `/api/documents/${doc.id}/signature/upload`, expertSig)).status, 403, k);
+  // Список и файлы на подпись организации — только руководитель Б; старший и сотрудник Б, чужие, служебные — нет.
+  assert.equal((await U.headB.req('GET', `/api/orgs/${orgB.id}/signing`)).body.items[0].documents[0].id, doc.id);
+  assert.equal((await memberB.req('GET', `/api/orgs/${orgB.id}/signing`)).status, 403, 'старший Б');
+  for (const k of ['dispatcher', 'admin']) assert.equal((await U[k].req('GET', `/api/orgs/${orgB.id}/signing`)).status, 403, k);
+  for (const k of ['stranger', 'headA', 'owner']) assert.equal((await U[k].req('GET', `/api/orgs/${orgB.id}/signing`)).status, 404, k);
+  assert.deepEqual((await U.headA.req('GET', `/api/orgs/${orgA.id}/signing`)).body.items, [], 'у организации А нечего подписывать');
+  for (const k of ['owner', 'stranger', 'headA', 'dispatcher', 'admin', 'spec']) {
+    assert.equal((await U[k].req('GET', `/api/org-documents/${doc.id}/link`)).status, 404, k);
+    assert.equal((await U[k].req('POST', `/api/org-documents/${doc.id}/sign`, { confirm: true })).status, 404, k);
+    assert.equal((await up(U[k], `/api/org-documents/${doc.id}/signature/upload`, orgSig)).status, 404, k);
+  }
+  for (const c of [memberB, spec2]) assert.equal((await c.req('GET', `/api/org-documents/${doc.id}/link`)).status, 404, 'не руководитель');
+  assert.equal((await U.headB.req('GET', `/api/org-documents/${doc.id}/link`)).status, 200);
+  assert.equal((await U.headB.req('GET', `/api/orders/${o.id}`)).status, 404, 'саму заявку руководитель не видит');
+  assert.equal((await U.headB.req('GET', `/api/documents/${doc.id}/link`)).status, 404, 'и файл — только через подпись');
+  // Организация подписывает после эксперта.
+  assert.equal((await U.headB.req('POST', `/api/org-documents/${doc.id}/sign`, { confirm: true })).body.error, 'expert_first');
+  assert.equal((await up(spec2, `/api/documents/${doc.id}/signature/upload`, expertSig, '0')).status, 400, 'без подтверждения');
+  assert.equal((await up(spec2, `/api/documents/${doc.id}/signature/upload`, testExternalSignature({ digest: 'ab'.repeat(32), subject: 'x' }))).body.error, 'bad_signature', 'чужой файл');
+  const e = await up(spec2, `/api/documents/${doc.id}/signature/upload`, expertSig);
+  assert.equal(e.status, 201, JSON.stringify(e.body));
+  assert.equal(e.body.signature.method, 'upload');
+  assert.equal(e.body.signature.signer, 'Эксперт Внешний');
+  assert.equal((await spec2.req('POST', `/api/orders/${o.id}/status`, { to: 'review', from: 'in_work' })).body.error, 'not_signed_org', 'без подписи организации не сдать');
+  assert.equal((await up(U.headB, `/api/org-documents/${doc.id}/signature/upload`, expertSig)).body.error, 'not_org_certificate');
+  const g = await U.headB.req('POST', `/api/org-documents/${doc.id}/sign`, { confirm: true });
+  assert.equal(g.status, 201, JSON.stringify(g.body));
+  assert.equal(g.body.signature.org, orgB.name);
+  assert.equal((await up(U.headB, `/api/org-documents/${doc.id}/signature/upload`, orgSig)).status, 409, 'второй раз не подписать');
+  assert.equal((await spec2.req('POST', `/api/orders/${o.id}/status`, { to: 'review', from: 'in_work' })).status, 200);
+  assert.equal((await U.headB.req('POST', `/api/org-documents/${doc.id}/sign`, { confirm: true })).status, 409, 'после сдачи не подписать');
+  assert.deepEqual((await U.headB.req('GET', `/api/orgs/${orgB.id}/signing`)).body.items, [], 'сданное ушло из списка');
+  const d = (await U.dispatcher.req('GET', `/api/orders/${o.id}/documents`)).body;
+  assert.equal(d.signature_org, orgB.name);
+  const sigs = d.documents.find((x) => x.id === doc.id).signatures;
+  assert.deepEqual([sigs.expert.method, sigs.org.method, sigs.org.title], ['upload', 'cabinet', 'Руководитель']);
+  assert.equal((await U.dispatcher.req('POST', `/api/documents/${doc.id}/signature/verify`)).body.valid, true);
+  assert.equal((await U.dispatcher.req('GET', `/api/documents/${doc.id}/signature/link?role=org`)).status, 200);
 });
 
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {

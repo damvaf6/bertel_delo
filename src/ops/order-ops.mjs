@@ -2,7 +2,7 @@
 // Решения Дамира 30.09.2026: срок обязателен; основание — договор по умолчанию, определение суда — с номером, датой
 // и файлом; отмена заказчиком — только до начала работ; перечень услуг и поля меняются через разработку.
 import { HttpError } from '../http/core.mjs';
-import { LEVEL, isStaff, memberOf, orderLevel, orderSides, visibleOrdersFilter } from '../access/policy.mjs';
+import { LEVEL, executorSignOrg, isStaff, memberOf, orderLevel, orderSides, visibleOrdersFilter } from '../access/policy.mjs';
 import { BASIS_KINDS, cleanValues, missingRequired } from '../modules/index.mjs';
 import { STATUSES, STATUS_NAME, TRANSITIONS, WORK_STARTED, addDays, availableActions, findTransition, isOverdue, todayMsk } from '../orders/workflow.mjs';
 import { runSettlement, settleCancel, settleDone } from '../money/money.mjs';
@@ -280,12 +280,22 @@ export function orderOps() {
             const res = await tx.one`select 1 from documents where order_id = ${cur.id} and kind = 'result' and deleted_at is null
                                      and uploaded_by = ${cur.executor_user_id} limit 1`;
             if (!res) throw new HttpError(400, 'no_result', 'Сначала добавьте файл результата');
-            // Заключение подписывается УКЭП исполнителя до сдачи, если так требует модуль (2.5, src/ops/sign-ops.mjs).
+            // Заключение подписывается УКЭП до сдачи, если так требует модуль (2.5, 2.5а, src/ops/sign-ops.mjs): эксперт и,
+            // если он работает от организации, — её руководитель.
             if (registry.signatureRequired(cur.module, cur.service)) {
-              const unsigned = await tx`select d.filename from documents d left join document_signatures s on s.document_id = d.id
+              const unsigned = await tx`select d.filename from documents d
+                                        left join document_signatures s on s.document_id = d.id and s.role = 'expert'
                                         where d.order_id = ${cur.id} and d.kind = 'result' and d.deleted_at is null
                                           and d.uploaded_by = ${cur.executor_user_id} and s.id is null order by d.created_at`;
               if (unsigned.length) throw new HttpError(400, 'not_signed', `Подпишите УКЭП файлы результата: ${unsigned.map((d) => d.filename).join(', ')}`);
+              const signOrg = await executorSignOrg(tx, cur.executor_user_id);
+              if (signOrg) {
+                const noOrg = await tx`select d.filename from documents d
+                                       left join document_signatures s on s.document_id = d.id and s.role = 'org' and s.org_id = ${signOrg.id}
+                                       where d.order_id = ${cur.id} and d.kind = 'result' and d.deleted_at is null
+                                         and d.uploaded_by = ${cur.executor_user_id} and s.id is null order by d.created_at`;
+                if (noOrg.length) throw new HttpError(400, 'not_signed_org', `Нужна подпись организации «${signOrg.name}» (руководитель): ${noOrg.map((d) => d.filename).join(', ')}`);
+              }
             }
           }
           if (cur.status === 'review' && to === 'done') {

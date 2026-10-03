@@ -371,7 +371,7 @@ test('общий прогон: сквозной путь экспертизы �
     await toSign.first().click();
     await expect(sp.locator('#doc-msg')).toHaveText('Файл подписан');
   }
-  await expect(sp.locator('#docs li').filter({ hasText: 'Заключение.docx' }).locator('.sig-state')).toContainText(`Подписан УКЭП: ${specName}`);
+  await expect(sp.locator('#docs li').filter({ hasText: 'Заключение.docx' }).locator('.sig-state')).toContainText(`Подпись эксперта: ${specName}`);
   await shot(sp, '13s-podpis');
   await sp.getByRole('button', { name: 'Сдать на проверку' }).click();
   await expect(sp.locator('#order-status')).toHaveText('Проверка результата');

@@ -162,7 +162,7 @@ export async function makeSpecialist(sql, userId, { permits = [['expertise', 're
 // подписать нельзя — тестовому исполнителю без имени оно ставится.
 export async function signResults(stack, c, orderId) {
   await stack.sql`update users set full_name = 'Тестовый Эксперт' where id = ${c.user.id} and coalesce(full_name, '') = ''`;
-  const docs = await stack.sql`select d.id from documents d left join document_signatures s on s.document_id = d.id
+  const docs = await stack.sql`select d.id from documents d left join document_signatures s on s.document_id = d.id and s.role = 'expert'
                                where d.order_id = ${orderId} and d.kind = 'result' and d.deleted_at is null
                                  and d.uploaded_by = ${c.user.id} and s.id is null`;
   for (const d of docs) {

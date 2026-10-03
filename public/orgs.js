@@ -1,6 +1,7 @@
 // Раздел «Организации»: мои организации, приглашения, создание; страница организации — состав, роли, приглашения.
 import { api, el, say, formatPhone, ROLE_RU } from '/common.js';
 import { state, show, notFoundView, refreshMe } from '/shell.js';
+import { loadOrgSign } from '/orgsign.js';
 
 const $ = (id) => document.getElementById(id);
 const dateRu = (s) => new Date(s).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
@@ -77,9 +78,10 @@ export async function showOrg(id) {
   $('leave-org').parentElement.classList.toggle('hidden', !org.my_role);
   $('org-edit-name').value = org.name;
   $('org-edit-inn').value = org.inn || '';
-  for (const m of ['org-edit-msg', 'members-msg', 'invite-msg', 'leave-msg']) say($(m), '');
+  for (const m of ['org-edit-msg', 'members-msg', 'invite-msg', 'leave-msg', 'org-sign-msg']) say($(m), '');
+  $('org-sign-box').classList.add('hidden');
   show('org-view', 'orgs');
-  await Promise.all([loadMembers(), org.manage ? loadOrgInvites() : null]);
+  await Promise.all([loadMembers(), org.manage ? loadOrgInvites() : null, org.manage ? loadOrgSign(org) : null]);
 }
 
 async function loadMembers() {

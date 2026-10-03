@@ -9,6 +9,8 @@ import pg from 'pg';
 import { DB_URL, TEST_TOKEN, BRIDGE_SECRET, testEnv } from '../helpers.mjs';
 import { signBridge } from '../../src/bridge/signature.mjs';
 import { makePdf } from '../tools/make-docs.mjs';
+import { testExternalSignature } from '../../src/providers/sign.mjs';
+import crypto from 'node:crypto';
 
 const CONTROL = process.env.UI_TEST_CONTROL_TOKEN || TEST_TOKEN;
 // Ключ моста CRM → Платформа на проверяемом стенде (тестовый, не настоящий).
@@ -502,7 +504,7 @@ test('ход заявки: подбор диспетчером, принятие
   sp.once('dialog', (d) => d.accept());
   await repDoc.getByRole('button', { name: 'Подписать' }).click();
   await expect(sp.locator('#doc-msg')).toHaveText('Файл подписан');
-  await expect(repDoc.locator('.sig-state')).toContainText('Подписан УКЭП: Тестовый оценщик');
+  await expect(repDoc.locator('.sig-state')).toContainText('Подпись эксперта: Тестовый оценщик');
   await expect(repDoc.locator('.sig-test')).toHaveText('Тестовая подпись площадки — юридической силы не имеет');
   await shot(sp, '93-specialist-podpis');
   await sp.getByRole('button', { name: 'Сдать на проверку' }).click();
@@ -562,7 +564,7 @@ test('ход заявки: подбор диспетчером, принятие
   await expect(page.locator('#results-later')).toBeHidden();
   // Заказчик получил подписанное заключение: видит подпись, проверяет её и скачивает файл подписи (2.5).
   const signed = page.locator('#docs li').filter({ hasText: 'отчёт-с-фото.pdf' });
-  await expect(signed.locator('.sig-state')).toContainText('Подписан УКЭП: Тестовый оценщик');
+  await expect(signed.locator('.sig-state')).toContainText('Подпись эксперта: Тестовый оценщик');
   await signed.getByRole('button', { name: 'Проверить подпись' }).click();
   await expect(page.locator('#doc-msg')).toHaveText('Подпись верна: Тестовый оценщик');
   await expect(signed.getByRole('button', { name: 'Подписать' })).toHaveCount(0);
@@ -1355,6 +1357,96 @@ test('мост CRM: профиль переводчика переносится
 // Задача 1.11: сквозной путь тестовой заявки на экспертизу — всё через экран телефона, без обходных путей в базе.
 // Первый администратор назначается командой (как в контуре); дальше роли, допуск, заявка, цена, оплата, подбор,
 // работа, ИИ-проверка, проверка по правилам, выдача результата, акт, закрытие, выплата — только кнопками.
+test('две подписи (2.5а): эксперт от организации загружает готовую подпись, руководитель подписывает от организации, заказчик видит обе', async ({ page, browser, baseURL }) => {
+  await signIn(page, '+79990000630');
+  const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира: две подписи' }, headers: H })).json();
+  const id = created.order.id;
+  expect((await page.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(9), fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 30', area: '40' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  const sctx = await phoneContext(browser, baseURL);
+  const sp = await sctx.newPage();
+  const spec = await signIn(sp, '+79990000631');
+  const hctx = await phoneContext(browser, baseURL);
+  const hp = await hctx.newPage();
+  const head = await signIn(hp, '+79990000632');
+  const orgId = await db(async (c) => {
+    const { rows: [org] } = await c.query("insert into organizations (name) values ('ООО «Тестовая оценочная компания»') returning id");
+    await c.query("update users set full_name = 'Тестовый эксперт компании' where id = $1", [spec.id]);
+    await c.query("update users set full_name = 'Тестовый руководитель' where id = $1", [head.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, spec.id]);
+    await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [spec.id]);
+    return org.id;
+  });
+
+  // Эксперт выбирает в профиле, что работает от организации.
+  await sp.goto('/kabinet#specialist');
+  await sp.getByLabel('Работаю от организации').selectOption({ label: 'ООО «Тестовая оценочная компания»' });
+  await expect(sp.locator('#specialist-msg')).toHaveText('Теперь заключение подписывает ещё руководитель организации');
+  await shot(sp, '95-specialist-organizaciya');
+  await db((c) => c.query('update orders set price_kop = 1500000, paid_at = now(), status = $2, executor_user_id = $3 where id = $1', [id, 'in_work', spec.id]));
+
+  // Эксперт прикладывает отчёт и загружает готовую подпись «из программы УЦ».
+  const report = Buffer.from('отчёт об оценке для двух подписей');
+  const digest = crypto.createHash('sha256').update(report).digest('hex');
+  await sp.goto(`/kabinet#order=${id}`);
+  await expect(sp.locator('#order-status')).toHaveText('В работе');
+  await sp.locator('#result-file').setInputFiles({ name: 'отчёт-компании.pdf', mimeType: 'application/pdf', buffer: report });
+  const doc = sp.locator('#docs li').filter({ hasText: 'отчёт-компании.pdf' });
+  await expect(doc.locator('[data-sig="org-wait"]')).toHaveText('После Вашей подписи файл подписывает руководитель организации «ООО «Тестовая оценочная компания»»');
+  await expect(doc.getByText('Загрузить готовую подпись')).toBeVisible();
+  sp.once('dialog', (d) => d.accept());
+  await doc.locator('input[type=file]').setInputFiles({ name: 'отчёт-компании.pdf.sig', mimeType: 'application/octet-stream',
+    buffer: testExternalSignature({ digest, subject: 'Тестовый эксперт компании' }) });
+  await expect(sp.locator('#doc-msg')).toHaveText('Подпись проверена и добавлена');
+  await expect(doc.locator('.sig-state').first()).toContainText('Подпись эксперта: Тестовый эксперт компании');
+  await expect(doc).toContainText('загружена готовым файлом');
+  await expect(doc.locator('[data-sig="org-wait"]')).toContainText('Ждёт подписи организации');
+  await sp.getByRole('button', { name: 'Сдать на проверку' }).click();
+  await expect(sp.locator('#status-msg')).toContainText('Нужна подпись организации «ООО «Тестовая оценочная компания»» (руководитель): отчёт-компании.pdf');
+  await shot(sp, '96-specialist-gotovaya-podpis');
+
+  // Руководитель: уведомление, раздел организации — подписать от организации.
+  await hp.goto('/kabinet#notifications');
+  await expect(hp.locator('#notifications li').first()).toContainText('нужна подпись организации');
+  await hp.goto(`/kabinet#org=${orgId}`);
+  await expect(hp.locator('#org-title')).toHaveText('ООО «Тестовая оценочная компания»');
+  const item = hp.locator('#org-sign li.doc').filter({ hasText: 'отчёт-компании.pdf' });
+  await expect(hp.locator('#org-sign > li').first()).toContainText('Оценка недвижимости');
+  await expect(hp.locator('#org-sign > li').first()).toContainText('Эксперт: Тестовый эксперт компании');
+  await expect(hp.locator('#org-sign')).not.toContainText('две подписи');
+  await expect(item.locator('.sig-state').first()).toContainText('Подпись эксперта: Тестовый эксперт компании');
+  const [file] = await Promise.all([hp.waitForEvent('download'), item.getByRole('button', { name: 'Скачать' }).click()]);
+  expect(file.suggestedFilename()).toBe('отчёт-компании.pdf');
+  hp.once('dialog', (d) => d.accept());
+  await item.getByRole('button', { name: 'Подписать от организации' }).click();
+  await expect(hp.locator('#org-sign-msg')).toHaveText('Файл подписан от организации');
+  await expect(item.locator('.sig-state').nth(1)).toContainText('Подпись организации: ООО «Тестовая оценочная компания» — руководитель Тестовый руководитель');
+  await shot(hp, '97-rukovoditel-podpis');
+
+  // Эксперт сдаёт; после проверки заказчик видит обе подписи, проверяет и скачивает подпись организации.
+  await sp.reload();
+  await expect(doc.locator('.sig-state')).toHaveCount(2);
+  await sp.getByRole('button', { name: 'Сдать на проверку' }).click();
+  await expect(sp.locator('#order-status')).toHaveText('Проверка результата');
+  await db(async (c) => {
+    await c.query("update orders set status = 'done' where id = $1", [id]);
+  });
+  await page.goto(`/kabinet#order=${id}`);
+  await expect(page.locator('#order-status')).toHaveText('Готово');
+  const got = page.locator('#docs li').filter({ hasText: 'отчёт-компании.pdf' });
+  await expect(got.locator('.sig-state')).toHaveCount(2);
+  await got.getByRole('button', { name: 'Проверить подпись' }).click();
+  await expect(page.locator('#doc-msg')).toHaveText('Подпись верна: Тестовый эксперт компании и ООО «Тестовая оценочная компания»');
+  const [orgSig] = await Promise.all([page.waitForEvent('download'), got.getByRole('button', { name: 'Подпись организации' }).click()]);
+  expect(orgSig.suggestedFilename()).toBe('отчёт-компании.pdf.org.sig');
+  await shot(page, '98-zakazchik-dve-podpisi');
+  await sctx.close();
+  await hctx.close();
+});
+
 test('сквозной путь: заявка на оценку квартиры от входа заказчика до выплаты исполнителю', async ({ page, browser, baseURL }) => {
   const A = '+79990001401', D = '+79990001402', S = '+79990001403', C = '+79990001404', X = '+79990001405';
   const { grantRole } = await import('../../src/tools/grant-role.mjs');

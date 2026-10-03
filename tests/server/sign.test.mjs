@@ -2,11 +2,12 @@
 // результат на проверку не сдаётся; подпись проверяется по файлу в хранилище; заказчик получает файл и подпись после проверки.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid } from '../helpers.mjs';
+import crypto from 'node:crypto';
+import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, addMember } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import { createRegistry } from '../../src/modules/index.mjs';
 import expertise from '../../src/modules/expertise.mjs';
-import { fakeSign } from '../../src/providers/sign.mjs';
+import { fakeSign, testExternalSignature } from '../../src/providers/sign.mjs';
 
 let S, owner, dispatcher, spec;
 const FIELDS = { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 15', area: '41' };
@@ -25,20 +26,20 @@ async function step(c, o, to) {
   const [cur] = await S.sql`select status from orders where id = ${o.id}`;
   return c.req('POST', `/api/orders/${o.id}/status`, { to, from: cur.status });
 }
-const result = (o, name = 'Заключение.pdf', body = 'тестовое заключение') => spec.req('POST', `/api/orders/${o.id}/results`, Buffer.from(body), {
+const result = (o, name = 'Заключение.pdf', body = 'тестовое заключение', who = spec) => who.req('POST', `/api/orders/${o.id}/results`, Buffer.from(body), {
   raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent(name) },
 });
-const sign = (d, body = { confirm: true }) => spec.req('POST', `/api/documents/${d.id}/sign`, body);
+const sign = (d, body = { confirm: true }, who = spec) => who.req('POST', `/api/documents/${d.id}/sign`, body);
 const verify = (c, d) => c.req('POST', `/api/documents/${d.id}/signature/verify`);
 const docsOf = async (c, o) => (await c.req('GET', `/api/orders/${o.id}/documents`)).body;
 
-async function inWork(title) {
+async function inWork(title, who = spec) {
   const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
   assert.equal((await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: addDays(todayMsk(), 10), fields: FIELDS })).status, 200);
   assert.equal((await step(owner, o, 'matching')).status, 200);
   await ensurePaid(S.sql, o.id);
-  assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: spec.user.id, from: 'matching' })).status, 200);
-  assert.equal((await step(spec, o, 'in_work')).status, 200);
+  assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: who.user.id, from: 'matching' })).status, 200);
+  assert.equal((await step(who, o, 'in_work')).status, 200);
   return o;
 }
 
@@ -74,7 +75,7 @@ test('эксперт подписывает свой результат; без 
   const o = await inWork('Квартира для подписи');
   const d = (await result(o)).body.document;
   assert.equal((await docsOf(spec, o)).signature_required, true);
-  assert.equal((await docsOf(spec, o)).documents.find((x) => x.id === d.id).signature, null);
+  assert.equal((await docsOf(spec, o)).documents.find((x) => x.id === d.id).signatures.expert, null);
   let r = await step(spec, o, 'review');
   assert.equal(r.status, 400);
   assert.equal(r.body.error, 'not_signed');
@@ -115,8 +116,8 @@ test('эксперт подписывает свой результат; без 
   assert.equal((await step(dispatcher, o, 'done')).status, 200);
 
   const got = (await docsOf(owner, o)).documents.find((x) => x.id === d.id);
-  assert.equal(got.signature.signer, 'Тестов Эксперт Экспертович');
-  assert.match(got.signature.issuer, /Тестовый/);
+  assert.equal(got.signatures.expert.signer, 'Тестов Эксперт Экспертович');
+  assert.match(got.signatures.expert.issuer, /Тестовый/);
   r = await verify(owner, d);
   assert.equal(r.status, 200);
   assert.equal(r.body.valid, true);
@@ -132,7 +133,7 @@ test('эксперт подписывает свой результат; без 
   r = await verify(owner, d);
   assert.equal(r.body.valid, false);
   assert.match(r.body.reason, /изменён/);
-  assert.equal((await docsOf(owner, o)).documents.find((x) => x.id === d.id).signature.checked_ok, false);
+  assert.equal((await docsOf(owner, o)).documents.find((x) => x.id === d.id).signatures.expert.checked_ok, false);
 });
 
 test('черновик заключения, приложенный файлом Word (2.2), подписывается так же', async () => {
@@ -143,4 +144,99 @@ test('черновик заключения, приложенный файлом
   assert.equal(att.status, 201);
   assert.equal((await sign(att.body.document)).status, 201);
   assert.equal((await step(spec, o, 'review')).status, 200);
+});
+
+test('готовая подпись «из программы УЦ» (2.5а): верна для своего файла; подделка, чужой файл, испорченная — неверна', async () => {
+  const a = fakeSign('a'.repeat(40));
+  const digest = 'ab'.repeat(32);
+  const ext = testExternalSignature({ digest, subject: 'Внешний В. В.', org: 'ООО «Тест»' });
+  const r = await a.verify({ digest, signature: ext });
+  assert.equal(r.valid, true);
+  assert.deepEqual([r.certificate.subject, r.certificate.org, r.certificate.title, r.test], ['Внешний В. В.', 'ООО «Тест»', 'Руководитель', true]);
+  assert.match(ext.toString(), /юридической силы не имеет/);
+  assert.match((await a.verify({ digest: 'cd'.repeat(32), signature: ext })).reason, /изменён/);
+  const forged = Buffer.from(ext.toString().replace('Внешний В. В.', 'Другой Д. Д.'));
+  assert.equal((await a.verify({ digest, signature: forged })).valid, false, 'подменили владельца');
+  // Своя подпись кабинета с меткой «внешней» не проходит по открытому ключу.
+  const own = JSON.parse((await a.sign({ digest, filename: 'x', signer: { id: 'u', name: 'Т' } })).signature.toString());
+  assert.equal((await fakeSign('b'.repeat(40)).verify({ digest, signature: Buffer.from(JSON.stringify({ ...own, mark: 'ТЕСТОВАЯ ВНЕШНЯЯ ПОДПИСЬ — юридической силы не имеет' })) })).valid, false);
+});
+
+test('две подписи (2.5а): эксперт работает от организации — подписывает ещё руководитель; заказчик видит и проверяет обе', async () => {
+  const org = await makeOrg(S.sql, 'ООО «Тестовая оценка»');
+  const head = await login(S, '+79990001504');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  const spec = await login(S, '+79990001506');
+  await makeSpecialist(S.sql, spec.user.id);
+  await addMember(S.sql, org.id, spec.user.id, 'member');
+  assert.equal((await head.req('PATCH', '/api/me', { full_name: 'Руководитель Тестовой Оценки' })).status, 200);
+  assert.equal((await spec.req('PATCH', '/api/me', { full_name: 'Тестов Эксперт Экспертович' })).status, 200);
+  assert.equal((await spec.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  {
+    const o = await inWork('Квартира: две подписи', spec);
+    const body = 'заключение для двух подписей';
+    const d = (await result(o, 'Отчёт.pdf', body, spec)).body.document;
+    const digest = crypto.createHash('sha256').update(body).digest('hex');
+    assert.equal((await docsOf(spec, o)).signature_org, org.name);
+    // Эксперт загружает готовую подпись — руководителю приходит уведомление.
+    const up = await spec.req('POST', `/api/documents/${d.id}/signature/upload`, testExternalSignature({ digest, subject: 'Тестов Эксперт Экспертович' }),
+      { raw: true, headers: { 'content-type': 'application/octet-stream', 'x-confirm': '1' } });
+    assert.equal(up.status, 201, JSON.stringify(up.body));
+    const n = (await head.req('GET', '/api/notifications')).body.notifications;
+    assert.ok(n.some((x) => /нужна подпись организации/.test(x.title)), 'руководитель получил уведомление');
+    let r = await step(spec, o, 'review');
+    assert.equal(r.body.error, 'not_signed_org');
+    assert.match(r.body.message, /Тестовая оценка.*Отчёт\.pdf/);
+    const list = (await head.req('GET', `/api/orgs/${org.id}/signing`)).body.items;
+    assert.equal(list.length, 1);
+    assert.equal(list[0].executor, 'Тестов Эксперт Экспертович');
+    assert.equal(list[0].service, 'Оценка недвижимости');
+    assert.ok(!JSON.stringify(list).includes('две подписи'), 'название заявки (текст заказчика) руководителю не показывается');
+    assert.equal(list[0].documents[0].signatures.expert.method, 'upload');
+    assert.equal((await head.req('POST', `/api/org-documents/${d.id}/sign`, {})).body.error, 'confirm_required');
+    assert.equal((await head.req('POST', `/api/org-documents/${d.id}/sign`, { confirm: true })).status, 201);
+    assert.equal((await step(spec, o, 'review')).status, 200);
+    const rv = (await dispatcher.req('GET', `/api/orders/${o.id}/review`)).body;
+    for (const c of rv.checks) await dispatcher.req('PUT', `/api/orders/${o.id}/review/${c.id}`, { verdict: 'ok', round: rv.round });
+    assert.equal((await step(dispatcher, o, 'done')).status, 200);
+    const got = (await docsOf(owner, o)).documents.find((x) => x.id === d.id).signatures;
+    assert.equal(got.expert.signer, 'Тестов Эксперт Экспертович');
+    assert.equal(got.org.signer, 'Руководитель Тестовой Оценки');
+    assert.equal(got.org.org, org.name);
+    r = await verify(owner, d);
+    assert.equal(r.body.valid, true);
+    assert.equal(r.body.signatures.org.checked_ok, true);
+    const link = (await owner.req('GET', `/api/documents/${d.id}/signature/link?role=org`)).body.url;
+    const file = await owner.req('GET', link);
+    assert.match(decodeURIComponent(file.headers.get('content-disposition')), /Отчёт\.pdf\.org\.sig/);
+    // Подмена файла — обе подписи «неверна».
+    const [doc] = await S.sql`select storage_key from documents where id = ${d.id}`;
+    await S.providers.storage.put(doc.storage_key, Buffer.from('подменённый'), 'application/pdf');
+    r = await verify(owner, d);
+    assert.equal(r.body.valid, false);
+    assert.equal(r.body.signatures.org.checked_ok, false);
+    assert.equal(r.body.signatures.expert.checked_ok, false);
+  }
+});
+
+test('ушёл из организации — подпись организации больше не нужна; руководитель её дел не видит', async () => {
+  const org = await makeOrg(S.sql, 'ООО «Бывшая оценка»');
+  const head = await login(S, '+79990001505');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  const spec = await login(S, '+79990001507');
+  await makeSpecialist(S.sql, spec.user.id);
+  await addMember(S.sql, org.id, spec.user.id, 'member');
+  assert.equal((await spec.req('PATCH', '/api/me', { full_name: 'Бывший Сотрудник' })).status, 200);
+  assert.equal((await spec.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  await S.sql`delete from org_members where org_id = ${org.id} and user_id = ${spec.user.id}`;
+  {
+    assert.equal((await spec.req('GET', '/api/specialist/me')).body.specialist.org, null);
+    const o = await inWork('Квартира: без организации', spec);
+    const d = (await result(o, 'Итог.pdf', undefined, spec)).body.document;
+    assert.equal((await docsOf(spec, o)).signature_org, null);
+    assert.equal((await sign(d, undefined, spec)).status, 201);
+    assert.deepEqual((await head.req('GET', `/api/orgs/${org.id}/signing`)).body.items, []);
+    assert.equal((await head.req('GET', `/api/org-documents/${d.id}/link`)).status, 404);
+    assert.equal((await step(spec, o, 'review')).status, 200, 'хватает подписи эксперта');
+  }
 });

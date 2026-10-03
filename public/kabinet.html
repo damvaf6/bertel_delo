@@ -172,7 +172,7 @@
         </div>
         <div class="field hidden" id="result-upload-box">
           <p class="muted">Результат работы (до 5 МБ): заказчик увидит его после проверки. Сдать на проверку можно, когда файл приложен.</p>
-          <p class="muted hidden" id="result-sign-note">Перед сдачей подпишите каждый файл результата Вашей УКЭП — кнопка «Подписать» у файла.</p>
+          <p class="muted hidden" id="result-sign-note">Перед сдачей подпишите каждый файл результата Вашей УКЭП — кнопка «Подписать» у файла или загрузите готовую подпись (программа удостоверяющего центра, «Госключ»). Если Вы работаете от организации, файл подписывает ещё её руководитель.</p>
           <label class="btn" for="result-file">Добавить файл результата</label>
           <input id="result-file" type="file" class="visually-hidden" aria-label="Добавить файл результата (до 5 МБ)">
         </div>
@@ -327,6 +327,14 @@
         <button type="submit" class="secondary" id="org-save">Сохранить</button>
         <p class="msg" id="org-edit-msg" role="status" aria-live="polite"></p>
       </form>
+      <div class="card hidden" id="org-sign-box">
+        <h2>Подпись организации</h2>
+        <p class="muted">Эксперты, которые работают от Вашей организации, подписали заключения — подпишите их от организации:
+          в кабинете или загрузите готовую подпись с сертификатом организации. Без подписи организации эксперт не сдаст работу.</p>
+        <ul class="list" id="org-sign"></ul>
+        <p class="muted hidden" id="org-sign-empty">Сейчас подписывать нечего.</p>
+        <p class="msg" id="org-sign-msg" role="status" aria-live="polite"></p>
+      </div>
       <div class="card">
         <h2>Сотрудники</h2>
         <ul class="list" id="members"></ul>
@@ -492,6 +500,11 @@
         <p class="muted" id="specialist-facts"></p>
         <label class="row"><input type="checkbox" id="specialist-active"> Принимаю новые дела</label>
         <p class="muted">Выключите, если сейчас не можете брать работу: Вам перестанут предлагать дела.</p>
+        <div class="field">
+          <label for="specialist-org">Работаю от организации</label>
+          <select id="specialist-org"></select>
+          <p class="muted">Если выбрана организация, заключение подписывает ещё её руководитель. Сменить можно, когда нет дел в работе.</p>
+        </div>
         <p class="msg" id="specialist-msg" role="status" aria-live="polite"></p>
       </div>
       <div class="card">
