@@ -46,6 +46,7 @@ function aiState(ai) {
   const attention = ai.items.filter((i) => i.hint === 'attention').length;
   return [
     `ИИ-проверка: запускал ${AI_SIDE_RU[ai.side]}, ${timeRu(ai.at)}.`,
+    ai.model === 'auto' ? 'Модель ИИ не ответила — показаны только автоматические находки, остальное посмотрите сами.' : null,
     attention ? `Стоит посмотреть: ${attention} из ${ai.items.length}.` : 'Замечаний ИИ не видит.',
     unread.length ? `Не прочитаны (ИИ читает PDF, Word и текст; эти посмотрите сами): ${unread.join(', ')}.` : null,
     ai.files.some((f) => f.truncated) ? `Прочитано не до конца (длинный текст): ${ai.files.filter((f) => f.truncated).map((f) => f.name).join(', ')}.` : null,
@@ -69,6 +70,11 @@ function checkItem(order, r, c, hint) {
     ...(r.round > 0 ? [el('div', { class: `verdict ${c.verdict || 'none'}`, text: VERDICT_RU[c.verdict] || 'Не проверено' })] : []),
     ...(c.note ? [el('p', { class: 'check-note', text: c.note })] : []),
     ...(hint ? [el('p', { class: `ai-hint ${hint.hint}`, text: hint.hint === 'ok' ? `ИИ: ${hint.note || 'замечаний не видно'}` : `ИИ: посмотрите — ${hint.note}` })] : []),
+    // Автоматические находки по всему тексту отчёта: что не так, файл, страница и строка из отчёта.
+    ...(hint?.found?.length ? [el('ul', { class: 'ai-marks ai-found' }, ...hint.found.map((f) => el('li', {},
+      el('span', { class: 'ai-mark-where', text: `${f.file}, ${f.where}: ` }),
+      el('span', { text: f.text }),
+      ...(f.quote ? [el('br'), el('q', { text: f.quote })] : []))))] : []),
     // Отмеченные места: цитата из отчёта, файл и страница — сервер показывает только найденные в тексте цитаты.
     ...(hint?.marks?.length ? [el('ul', { class: 'ai-marks' }, ...hint.marks.map((m) => el('li', {},
       el('span', { class: 'ai-mark-where', text: `${m.file}, ${m.where}: ` }),

@@ -9,11 +9,14 @@ import { locateQuote } from './extract.mjs';
 export const DISCLAIMER = 'Это разъяснение искусственного интеллекта, а не юридическая услуга. Решение принимаете Вы; '
   + 'за точной оценкой обращайтесь к специалисту.';
 
+// Длина ответа модели по назначению: черновик заключения длинный, проверка — список по правилам.
+const MAX_TOKENS = { draft: 6000, review: 3000 };
+
 export async function askAi({ sql, providers, cfg }, actor, purpose, messages) {
   const used = await sql.one`select count(*)::int as n from ai_usage where user_id = ${actor.id} and at > now() - interval '1 day'`;
   if (used.n >= cfg.ai.dailyLimit) throw new HttpError(429, 'ai_limit', 'Лимит обращений к помощнику на сутки исчерпан, попробуйте завтра');
   try {
-    const out = await providers.ai.complete({ purpose, messages });
+    const out = await providers.ai.complete({ purpose, messages, maxTokens: MAX_TOKENS[purpose] });
     await sql`insert into ai_usage (user_id, purpose, model, ok) values (${actor.id}, ${purpose}, ${out.model}, true)`;
     return out;
   } catch (e) {
@@ -126,7 +129,8 @@ export function assistantMessages({ scopeName, history, brief, question }) {
 
 // ——— ИИ-проверка результата ———
 
-export function reviewMessages({ rules, brief, files }) {
+export function reviewMessages({ rules, brief, files, found = {} }) {
+  const auto = rules.flatMap((r) => (found[r.id] ?? []).map((f) => `- ${r.id}: ${f.text} (${f.file}, ${f.where})`));
   return [
     {
       role: 'system',
@@ -134,6 +138,9 @@ export function reviewMessages({ rules, brief, files }) {
         'Ты помощник проверяющего. Проверь результат работы специалиста по каждому правилу из списка.',
         'Ты только подсказываешь: «ok» — замечаний не видно, «attention» — человеку стоит посмотреть, с коротким пояснением.',
         'Если текст результата не прочитан — «attention» с пояснением. Решение и подпись — у человека.',
+        'Сверяй части отчёта между собой: титул, выводы, задание на оценку, описание объекта, расчёт и итог должны говорить',
+        'одно и то же (год, VIN, номер, даты, собственник, суммы, подходы). Пересчитывай арифметику, которую видишь.',
+        'Ищи следы чужого шаблона: другой объект, другая дата, лишние разделы, противоречащие друг другу абзацы.',
         'К каждому «attention» приведи до трёх коротких точных цитат из файлов (слово в слово, 5–200 знаков) — места,',
         'которые человеку стоит посмотреть. Не пересказывай и не придумывай цитаты: место без точной цитаты не покажут.',
         'Ответь только JSON: {"items": [{"id": "id правила", "hint": "ok" | "attention", "note": "пояснение", "quotes": ["цитата"]}]}.',
@@ -144,9 +151,10 @@ export function reviewMessages({ rules, brief, files }) {
       content: [
         brief,
         'ПРАВИЛА:',
-        ...rules.map((r) => `- ${r.id}: ${r.title}`),
+        ...rules.map((r) => `- ${r.id}: ${r.title}${r.ask ? `. Что проверить: ${r.ask}` : ''}`),
+        ...(auto.length ? ['УЖЕ НАЙДЕНО АВТОМАТИЧЕСКИ (по всему тексту; не повторяй, ищи другое):', ...auto] : []),
         'ФАЙЛЫ:',
-        ...files.map((f) => `[${f.name}]\n${f.text === null ? '(текст не прочитан: файл не удалось прочитать или такой вид файла помощник не читает)' : f.text}${f.truncated ? '\n(дальше текст не поместился — его помощник не видел)' : ''}`),
+        ...files.map((f) => `[${f.name}]\n${f.text === null ? '(текст не прочитан: файл не удалось прочитать или такой вид файла помощник не читает)' : f.text}${f.truncated ? '\n(часть страниц не поместилась — их помощник не видел)' : ''}`),
       ].join('\n'),
     },
   ];
@@ -154,20 +162,25 @@ export function reviewMessages({ rules, brief, files }) {
 
 // Подсказки по каждому правилу; правило, о котором модель промолчала, — «посмотрите сами». Отмеченные места — только
 // цитаты, которые нашлись в тексте отчёта (с файлом и страницей); выдуманные модель цитаты отбрасываются.
-export function cleanReviewAnswer(rules, text, docs = []) {
+// found — автоматические находки (src/ai/report-checks.mjs) по правилу: они показываются всегда и делают правило
+// «посмотрите», даже если модель замечаний не увидела или не ответила.
+export function cleanReviewAnswer(rules, text, docs = [], found = {}) {
   const j = parseJsonAnswer(text);
   const items = Array.isArray(j?.items) ? j.items : [];
   return rules.map((r) => {
     const it = items.find((x) => x?.id === r.id);
-    const hint = it?.hint === 'ok' ? 'ok' : 'attention';
-    const note = clip(it?.note, 1000) || (it ? '' : 'Помощник не дал ответа по этому правилу — проверьте сами');
+    const auto = found[r.id] ?? [];
+    const hint = it?.hint === 'ok' && !auto.length ? 'ok' : 'attention';
+    let note = clip(it?.note, 1000);
+    if (!note) note = auto.length ? 'есть автоматические находки — см. ниже' : it ? '' : 'Помощник не дал ответа по этому правилу — проверьте сами';
+    else if (auto.length && it?.hint === 'ok') note = `модель замечаний не увидела, но есть автоматические находки — см. ниже. ${note}`;
     const marks = [];
     for (const q of (Array.isArray(it?.quotes) ? it.quotes : []).slice(0, 3)) {
       if (typeof q !== 'string') continue;
       const at = locateQuote(docs, q);
       if (at) marks.push({ ...at, quote: clip(q.replace(/\s+/g, ' ').trim(), 200) });
     }
-    return { id: r.id, hint, note, marks };
+    return { id: r.id, hint, note, marks, ...(auto.length ? { found: auto } : {}) };
   });
 }
 
@@ -196,7 +209,8 @@ export function draftMessages({ brief, sections, photos, docs }) {
         'Пиши только то, что следует из данных. Не придумывай цифры, стоимость, аналоги, даты, имена, номера и адреса.',
         'Где данных нет или нужен расчёт и вывод эксперта — оставь пометку в квадратных скобках: [заполнить: что именно].',
         'Фото ты не видишь — только их список. Для каждого фото оставь строку «Фото N (имя файла): [описать по фото: имя файла]».',
-        'Разделы — строго по списку и в том же порядке, каждый начинается строкой «## Название раздела».',
+        'Разделы — строго по списку и в том же порядке, каждый начинается строкой «## Название раздела» (с номером, если он есть).',
+        'Пиши только про этот вид объекта: никаких слов о другом виде имущества (недвижимость, земля — в отчёте о машине).',
         'Ответь только текстом черновика, без пояснений до и после.',
       ].join('\n'),
     },
@@ -205,7 +219,7 @@ export function draftMessages({ brief, sections, photos, docs }) {
       content: [
         brief,
         'РАЗДЕЛЫ:',
-        ...sections.map((s) => `- ${s.id}: ${s.title}`),
+        ...sections.map((s) => `- ${s.id}: ${s.title}${s.ask ? `. Что писать: ${s.ask}` : ''}`),
         'ФОТО:',
         ...(photos.length ? photos.map((p) => `- ${p.name} (загружено ${p.at})`) : ['(фото к заявке не приложены)']),
         'ДОКУМЕНТЫ:',

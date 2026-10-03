@@ -430,7 +430,7 @@ test('чтение отчёта (2.1): повреждённый PDF и Word, к�
   const ai = (await spec.req('POST', `/api/orders/${o.id}/review/ai`)).body.ai;
   assert.deepEqual(ai.files.map((f) => [f.name, f.read]), [['битый.pdf', false], ['битый.docx', false], ['фото.jpg', false], ['пустой.pdf', false], ['длинный.txt', true]]);
   assert.equal(ai.files.find((f) => f.name === 'длинный.txt').truncated, true);
-  assert.match(lastPrompt(), /дальше текст не поместился/);
+  assert.match(lastPrompt(), /не поместил/);
 });
 
 test('модель ИИ — администратору видно, какая работает и сколько обращений; остальным — «не найдено»', async () => {

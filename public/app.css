@@ -147,6 +147,9 @@ ul.plain li { margin: 4px 0; overflow-wrap: anywhere; }
 .ai-hint.attention { color: #8a5a00; }
 .ai-marks { margin: 4px 0 0; padding-left: 18px; font-size: 14px; overflow-wrap: anywhere; }
 .ai-marks li { margin: 2px 0; }
+.ai-found { border-left: 3px solid #d9a400; padding-left: 12px; list-style: none; }
+.ai-found li { margin: 6px 0; }
+.ai-found q { color: var(--muted, #5b6573); }
 .ai-mark-where { color: var(--muted, #5b6472); }
 #ai-review-box { margin-bottom: 8px; }
 #mail-status { margin: 0 0 12px; }
