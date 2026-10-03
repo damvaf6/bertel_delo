@@ -333,6 +333,48 @@ test('администратор назначает диспетчера; ост
   await dctx.close();
 });
 
+// Меню на телефоне (2.22): у служебного с ролью специалиста 9 разделов — все видны сразу, без прокрутки вбок.
+async function menuFits(page) {
+  const nav = page.locator('nav.tabs');
+  expect(await nav.evaluate((n) => n.scrollWidth <= n.clientWidth), 'меню прокручивается вбок').toBe(true);
+  const boxes = await nav.locator('a:visible').evaluateAll((as) => as.map((a) => {
+    const r = a.getBoundingClientRect();
+    return { name: a.textContent, left: r.left, right: r.right };
+  }));
+  for (const b of boxes) expect(b.left >= 0 && b.right <= 412, `«${b.name}» за краем экрана`).toBe(true);
+  const rows = await nav.locator('a:visible').evaluateAll((as) => new Set(as.map((a) => Math.round(a.getBoundingClientRect().top))).size);
+  return { tabs: boxes.length, rows };
+}
+
+test('меню на телефоне (2.22): у администратора-специалиста все 9 разделов видны без прокрутки вбок', async ({ page, browser, baseURL }) => {
+  const admin = await signIn(page, '+79990000597');
+  await db(async (c) => {
+    await c.query("update users set platform_role = 'admin' where id = $1", [admin.id]);
+    await c.query('insert into specialists (user_id) values ($1)', [admin.id]);
+  });
+  await page.goto('/kabinet');
+  await expect(page.getByRole('heading', { name: 'Все заявки' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Управление' })).toBeVisible();
+  expect(await menuFits(page)).toEqual({ tabs: 9, rows: 3 });
+  await shot(page, '99j-menu-sluzhebnyi');
+  await page.getByRole('link', { name: 'Деньги' }).click();
+  await expect(page.getByRole('heading', { name: 'Деньги платформы' })).toBeVisible();
+  await page.getByRole('link', { name: 'Профиль', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Профиль' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Профиль', exact: true })).toHaveAttribute('aria-current', 'page');
+  await shot(page, '99k-menu-profil');
+
+  // У заказчика пять разделов — две строки (одной на 412 точках не помещаются).
+  const cctx = await phoneContext(browser, baseURL);
+  const cp = await cctx.newPage();
+  await signIn(cp, '+79990000598');
+  await cp.goto('/kabinet');
+  await expect(cp.getByRole('heading', { name: 'Мои заявки' })).toBeVisible();
+  expect(await menuFits(cp)).toEqual({ tabs: 5, rows: 2 });
+  await shot(cp, '99l-menu-zakazchik');
+  await cctx.close();
+});
+
 const inDays = (n) => new Date(Date.now() + n * 86400_000).toISOString().slice(0, 10);
 const H = { 'x-delo-request': '1' };
 

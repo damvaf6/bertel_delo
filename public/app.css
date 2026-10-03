@@ -66,13 +66,13 @@ button:disabled { opacity: .6; cursor: default; }
 .row.gap { margin-top: 8px; }
 h2.gap { margin-top: 16px; }
 .row select { width: auto; flex: 1 1 140px; min-width: 0; }
+/* Разделы переносятся на следующую строку, а не уходят за край экрана (2.22): у служебных их до девяти. */
 .tabs {
-  display: flex; justify-content: space-between; overflow-x: auto; padding: 0 8px; background: var(--card);
-  border-bottom: 1px solid var(--line); scrollbar-width: none;
+  display: flex; flex-wrap: wrap; padding: 0 8px; background: var(--card); border-bottom: 1px solid var(--line);
 }
 .tabs a {
-  flex: 0 0 auto; padding: 12px 6px; color: var(--muted); text-decoration: none; font-weight: 600; font-size: 14px;
-  border-bottom: 3px solid transparent;
+  flex: 1 0 auto; padding: 10px 6px; color: var(--muted); text-decoration: none; font-weight: 600; font-size: 14px;
+  text-align: center; white-space: nowrap; border-bottom: 3px solid transparent;
 }
 .tabs a[aria-current=page] { color: var(--accent); border-bottom-color: var(--accent); }
 .count {
