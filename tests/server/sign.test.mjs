@@ -240,3 +240,68 @@ test('ушёл из организации — подпись организац
     assert.equal((await step(spec, o, 'review')).status, 200, 'хватает подписи эксперта');
   }
 });
+
+test('возврат эксперту (2.27): руководитель возвращает файл с замечанием до своей подписи — подпись эксперта снимается', async () => {
+  const org = await makeOrg(S.sql, 'ООО «Возвратная оценка»');
+  const head = await login(S, '+79990001508');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  const spec = await login(S, '+79990001509');
+  await makeSpecialist(S.sql, spec.user.id);
+  await addMember(S.sql, org.id, spec.user.id, 'member');
+  assert.equal((await head.req('PATCH', '/api/me', { full_name: 'Руководитель Возвратов' })).status, 200);
+  assert.equal((await spec.req('PATCH', '/api/me', { full_name: 'Эксперт Возвратов' })).status, 200);
+  assert.equal((await spec.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  const o = await inWork('Квартира: возврат', spec);
+  const d = (await result(o, 'Отчёт 7.pdf', 'первая версия', spec)).body.document;
+  const ret = (comment) => head.req('POST', `/api/org-documents/${d.id}/return`, { comment });
+  assert.equal((await ret('рано')).body.error, 'not_signed', 'неподписанный файл не возвращается');
+  assert.equal((await sign(d, undefined, spec)).status, 201);
+  assert.equal((await ret('')).status, 400);
+  assert.equal((await ret('x'.repeat(2001))).status, 400);
+  const r = await ret('Раздел 5: проверьте корректировку на торг.\nИтог не совпадает с таблицей.');
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  // Подпись эксперта снята, файл подписи остался в хранилище (для истории).
+  const docs = await docsOf(spec, o);
+  assert.equal(docs.documents.find((x) => x.id === d.id).signatures.expert, null);
+  const [row] = await S.sql`select signature_key from org_returns where id = ${r.body.return.id}`;
+  assert.ok(await S.providers.storage.get(row.signature_key), 'файл подписи не удалён');
+  assert.equal(docs.org_returns.length, 1);
+  assert.deepEqual([docs.org_returns[0].open, docs.org_returns[0].by, docs.org_returns[0].org, docs.org_returns[0].filename],
+    [true, 'Руководитель Возвратов', org.name, 'Отчёт 7.pdf']);
+  assert.match(docs.org_returns[0].comment, /Итог не совпадает/);
+  // Эксперту — уведомление по делу; заказчику и диспетчеру — ничего.
+  const n = (await spec.req('GET', '/api/notifications')).body.notifications;
+  assert.ok(n.some((x) => /вернул отчёт с замечанием/.test(x.title) && x.order_id === o.id), 'эксперт получил уведомление');
+  for (const c of [owner, dispatcher]) {
+    assert.ok(!(await c.req('GET', '/api/notifications')).body.notifications.some((x) => /вернул отчёт/.test(x.title)));
+    assert.equal((await docsOf(c, o)).org_returns, undefined);
+  }
+  const [{ n: audits }] = await S.sql`select count(*)::int as n from audit_log where action = 'document.org_return' and subject_id = ${d.id}`;
+  assert.equal(audits, 1);
+  // Без подписи эксперта не сдать и организации не подписать.
+  assert.equal((await step(spec, o, 'review')).body.error, 'not_signed');
+  assert.equal((await head.req('POST', `/api/org-documents/${d.id}/sign`, { confirm: true })).body.error, 'expert_first');
+  // История у руководителя: ждём исправления.
+  let item = (await head.req('GET', `/api/orgs/${org.id}/signing`)).body.items.find((x) => x.documents.some((y) => y.id === d.id));
+  assert.equal(item.returns.length, 1);
+  assert.equal(item.returns[0].open, true);
+  // Эксперт удаляет старый файл и кладёт новый — замечание закрыто; подписывает новый.
+  assert.equal((await spec.req('DELETE', `/api/documents/${d.id}`)).status, 204);
+  const d2 = (await result(o, 'Отчёт 7 (исправлен).pdf', 'вторая версия', spec)).body.document;
+  assert.equal((await docsOf(spec, o)).org_returns[0].open, false);
+  assert.equal((await sign(d2, undefined, spec)).status, 201);
+  // Второй возврат — уже нового файла; эксперт подписывает его заново, не меняя.
+  assert.equal((await head.req('POST', `/api/org-documents/${d2.id}/return`, { comment: 'Нет подписи на титуле' })).status, 201);
+  let rs = (await docsOf(spec, o)).org_returns;
+  assert.deepEqual(rs.map((x) => x.open), [false, true]);
+  assert.equal((await sign(d2, undefined, spec)).status, 201);
+  rs = (await docsOf(spec, o)).org_returns;
+  assert.deepEqual(rs.map((x) => x.open), [false, false]);
+  // После подписи организации вернуть нельзя; после сдачи — тоже.
+  assert.equal((await head.req('POST', `/api/org-documents/${d2.id}/sign`, { confirm: true })).status, 201);
+  assert.equal((await head.req('POST', `/api/org-documents/${d2.id}/return`, { comment: 'поздно' })).body.error, 'already_signed');
+  assert.equal((await step(spec, o, 'review')).status, 200);
+  assert.equal((await head.req('POST', `/api/org-documents/${d2.id}/return`, { comment: 'поздно' })).status, 409);
+  // Диспетчер на проверке возвратов не видит.
+  assert.ok(!JSON.stringify((await docsOf(dispatcher, o))).includes('титуле'));
+});

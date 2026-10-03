@@ -176,3 +176,8 @@ a.btn { text-decoration: none; margin-top: 8px; }
 .next-bar { position: sticky; bottom: 0; z-index: 5; padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); background: var(--bg, #f4f6f9); border-top: 1px solid var(--line); }
 .next-bar button { width: 100%; }
 .next-bar.away { display: none; }
+
+/* Замечания руководителя эксперту (2.27) */
+.return .comment { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 4px; }
+li.return.open { border-left: 3px solid var(--danger); padding-left: 8px; }
+details.returns { margin-top: 8px; }

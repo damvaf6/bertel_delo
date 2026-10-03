@@ -1445,6 +1445,43 @@ test('две подписи (2.5а): эксперт от организации 
   await expect(item.locator('.sig-state').first()).toContainText('Подпись эксперта: Тестовый эксперт компании');
   const [file] = await Promise.all([hp.waitForEvent('download'), item.getByRole('button', { name: 'Скачать' }).click()]);
   expect(file.suggestedFilename()).toBe('отчёт-компании.pdf');
+
+  // Возврат эксперту (2.27): руководитель пишет замечание — подпись эксперта снимается; эксперт видит замечание и подписывает заново.
+  await item.getByRole('button', { name: 'Вернуть эксперту' }).click();
+  await item.getByRole('button', { name: 'Вернуть с замечанием' }).click();
+  await expect(hp.locator('#org-sign-msg')).toHaveText('Напишите замечание — что эксперту исправить');
+  await item.getByLabel('Замечание эксперту по файлу отчёт-компании.pdf').fill('Раздел 5: корректировка на торг не обоснована.\nПроверьте итог.');
+  await shot(hp, '97c-rukovoditel-vozvrat');
+  await item.getByRole('button', { name: 'Вернуть с замечанием' }).click();
+  await expect(hp.locator('#org-sign-msg')).toHaveText('Файл возвращён эксперту с замечанием — его подпись снята');
+  await expect(hp.locator('#org-sign details.returns summary')).toHaveText('Возвраты эксперту · 1 · ждём исправления');
+  await expect(item.getByRole('button', { name: 'Подписать от организации' })).toHaveCount(0);
+  await sp.goto('/kabinet#notifications');
+  await expect(sp.locator('#notifications li').first()).toContainText('Руководитель вернул отчёт с замечанием');
+  await sp.goto(`/kabinet#order=${id}`);
+  await expect(sp.locator('#org-returns-box')).toBeVisible();
+  await expect(sp.locator('#org-returns li').first()).toContainText('отчёт-компании.pdf · исправить');
+  await expect(sp.locator('#org-returns li').first()).toContainText('Тестовый руководитель · ООО «Тестовая оценочная компания»');
+  await expect(sp.locator('#org-returns .comment').first()).toHaveText('Раздел 5: корректировка на торг не обоснована.\nПроверьте итог.');
+  await expect(sp.locator('#next-steps [data-step="fix"]')).toContainText('Исправить по замечанию руководителя');
+  await expect(sp.locator('#next-main button')).toHaveText('Исправить по замечанию руководителя');
+  await shot(sp, '96a-specialist-zamechanie');
+  await expect(doc.locator('.sig-state').first()).not.toContainText('Подпись эксперта');
+  sp.once('dialog', (d) => d.accept());
+  await doc.locator('input[type=file]').setInputFiles({ name: 'отчёт-компании.pdf.sig', mimeType: 'application/octet-stream',
+    buffer: testExternalSignature({ digest, subject: 'Тестовый эксперт компании' }) });
+  await expect(sp.locator('#doc-msg')).toHaveText('Подпись проверена и добавлена');
+  await expect(sp.locator('#org-returns li').first()).toContainText('отчёт-компании.pdf · исправлено');
+  await expect(sp.locator('#org-returns-lead')).toHaveText('Все замечания учтены. История возвратов:');
+  await expect(sp.locator('#next-steps [data-step="fix"]')).toHaveCount(0);
+  // Заказчик возвратов не видит.
+  await page.goto(`/kabinet#order=${id}`);
+  await expect(page.locator('#order-status')).toHaveText('В работе');
+  await expect(page.locator('#org-returns-box')).toBeHidden();
+  await page.goto('/kabinet');
+  await hp.reload();
+  await expect(hp.locator('#org-sign details.returns summary')).toHaveText('Возвраты эксперту · 1');
+
   hp.once('dialog', (d) => d.accept());
   await item.getByRole('button', { name: 'Подписать от организации' }).click();
   await expect(hp.locator('#org-sign-msg')).toHaveText('Файл подписан от организации');

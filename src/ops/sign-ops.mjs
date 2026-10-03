@@ -15,7 +15,7 @@ import { ProviderError } from '../providers/fake.mjs';
 import { notify } from '../notify/notify.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { signatureFilename } from '../providers/sign.mjs';
-import { audit } from './util.mjs';
+import { audit, text } from './util.mjs';
 
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 const MAX_SIGNATURE_BYTES = 256 * 1024;
@@ -138,6 +138,28 @@ function expertCheck(actor, doc, order) {
   if (order.status !== 'in_work') throw new HttpError(409, 'not_in_work', 'Подписать можно, пока дело в работе');
 }
 
+// Возвраты руководителя (2.27) по заявке: открытый — пока эксперт не подписал файл заново (или, если файл удалён, пока не
+// загрузил новый результат после возврата). Видят только исполнитель и руководитель — заказчику и диспетчеру не отдаются.
+export async function orgReturns(sql, orderId, { orgId = null } = {}) {
+  const rows = await sql`
+    select r.*, u.full_name as head_name, g.name as org_name,
+           exists (select 1 from documents d where d.id = r.document_id and d.deleted_at is null) as doc_alive,
+           exists (select 1 from document_signatures s where s.document_id = r.document_id and s.role = 'expert' and s.signed_at > r.created_at) as resigned,
+           exists (select 1 from documents d where d.order_id = r.order_id and d.kind = 'result' and d.deleted_at is null
+                   and d.created_at > r.created_at) as new_file
+    from org_returns r join users u on u.id = r.returned_by join organizations g on g.id = r.org_id
+    where r.order_id = ${orderId} and (${orgId}::uuid is null or r.org_id = ${orgId}::uuid) order by r.id`;
+  return rows.map((r) => ({
+    id: Number(r.id),
+    at: r.created_at,
+    filename: r.filename,
+    comment: r.comment,
+    org: r.org_name,
+    by: r.head_name,
+    open: r.doc_alive ? !r.resigned : !r.new_file,
+  }));
+}
+
 function orgCheck(order) {
   if (order.status !== 'in_work') throw new HttpError(409, 'not_in_work', 'Подписать можно, пока дело в работе');
 }
@@ -189,12 +211,15 @@ export function signOps() {
                                  and deleted_at is null and uploaded_by = (select executor_user_id from orders where id = ${o.id}) order by created_at`;
           if (!docs.length) continue;
           const signs = await orderSignatures(sql, o.id);
+          const returns = await orgReturns(sql, o.id, { orgId: org.id });
           items.push({
             order_ref: orderRef(o.id),
             service: registry.service(o.module, o.service)?.service.name ?? o.service,
             executor: o.executor_name,
             deadline: o.deadline,
             documents: docs.map((d) => ({ id: d.id, filename: d.filename, size_bytes: Number(d.size_bytes), signatures: signaturesView(signs.get(d.id)) })),
+            // История возвратов эксперту (2.27) — только этой организации.
+            returns: returns.map(({ id, at, filename, comment, by, open }) => ({ id, at, filename, comment, by, open })),
           });
         }
         return { items };
@@ -235,6 +260,40 @@ export function signOps() {
         const row = await addSignature(ctx, { doc, order, role: 'org', method: 'upload', org: signOrg, out });
         res.status(201);
         return { signature: signatureView(row) };
+      },
+    },
+    {
+      // Руководитель возвращает файл эксперту с замечанием до подписи организации (2.27): подпись эксперта снимается
+      // (поправить и подписать заново), эксперту — уведомление; замечание и история — у эксперта в деле и в «Подписи
+      // организации». Заказчик и диспетчер возвратов не видят.
+      id: 'orgsign.return', method: 'POST', path: '/api/org-documents/:id/return', auth: 'user',
+      access: { resource: 'orgDocument', param: 'id', need: 'write' },
+      async handler({ sql, actor, subject: doc, order, signOrg, body, res }) {
+        orgCheck(order);
+        const comment = text(body?.comment, 'Замечание', 2000);
+        const row = await sql.tx(async (tx) => {
+          const cur = await tx.one`select status, executor_user_id from orders where id = ${order.id} for update`;
+          if (cur.status !== 'in_work' || cur.executor_user_id !== order.executor_user_id) throw new HttpError(409, 'status_changed', 'Статус заявки уже изменился, обновите страницу');
+          const alive = await tx.one`select 1 from documents where id = ${doc.id} and deleted_at is null`;
+          if (!alive) throw new HttpError(404, 'not_found', 'Не найдено');
+          const now = await executorSignOrg(tx, cur.executor_user_id);
+          if (now?.id !== signOrg.id) throw new HttpError(409, 'org_changed', 'Исполнитель больше не работает от этой организации');
+          const signs = await tx`select * from document_signatures where document_id = ${doc.id} for update`;
+          if (signs.some((x) => x.role === 'org')) throw new HttpError(409, 'already_signed', 'Файл уже подписан от организации — вернуть нельзя');
+          const expert = signs.find((x) => x.role === 'expert');
+          if (!expert) throw new HttpError(409, 'not_signed', 'Эксперт ещё не подписал файл — возвращать нечего');
+          // Подпись эксперта снимается: строка удаляется, файл подписи остаётся в хранилище (ключ — в истории возврата).
+          await tx`delete from document_signatures where id = ${expert.id}`;
+          const r = await tx.one`
+            insert into org_returns (order_id, document_id, org_id, executor_user_id, returned_by, filename, comment, signature_key)
+            values (${order.id}, ${doc.id}, ${signOrg.id}, ${cur.executor_user_id}, ${actor.id}, ${doc.filename}, ${comment}, ${expert.storage_key})
+            returning *`;
+          await audit(tx, actor, 'document.org_return', 'document', doc.id, { order_id: order.id, org_id: signOrg.id, return_id: Number(r.id) });
+          await notify(tx, 'org_returned', { users: [cur.executor_user_id], orderId: order.id, actor });
+          return r;
+        });
+        res.status(201);
+        return { return: { id: Number(row.id), at: row.created_at, filename: row.filename, comment: row.comment } };
       },
     },
     {

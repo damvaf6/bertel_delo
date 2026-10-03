@@ -6,7 +6,7 @@ import { executorSignOrg, orderSides, seesResults } from '../access/policy.mjs';
 import { requestCode, verifyCode, endSession, SESSION_TTL_SEC } from '../auth/auth.mjs';
 import { audit, oneOf, phoneFrom, publicUser, text } from './util.mjs';
 import { unreadCount } from './notify-ops.mjs';
-import { orderSignatures, signaturesView } from './sign-ops.mjs';
+import { orderSignatures, orgReturns, signaturesView } from './sign-ops.mjs';
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const DOC_KINDS = ['basis', 'other'];
@@ -117,6 +117,8 @@ export function coreOps(cfg) {
         const signs = results ? await orderSignatures(sql, order.id) : new Map();
         const required = registry.signatureRequired(order.module, order.service);
         const signOrg = results && required ? await executorSignOrg(sql, order.executor_user_id) : null;
+        // Возвраты руководителя организации с замечаниями (2.27) — только самому исполнителю.
+        const mine = order.executor_user_id === actor.id && orderSides(actor, order).includes('executor');
         return {
           documents: docs.filter((d) => d.kind !== 'result' || results)
             .map((d) => (d.kind === 'result' ? { ...publicDoc(d), signatures: signaturesView(signs.get(d.id)) } : publicDoc(d))),
@@ -124,6 +126,7 @@ export function coreOps(cfg) {
           signature_required: required,
           // От какой организации нужна вторая подпись (null — только эксперт).
           signature_org: signOrg?.name ?? null,
+          ...(mine ? { org_returns: await orgReturns(sql, order.id) } : {}),
         };
       },
     },

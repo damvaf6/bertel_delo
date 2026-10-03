@@ -172,6 +172,11 @@
         <button type="submit" class="secondary" id="transfer">Передать</button>
         <p class="msg" id="transfer-msg" role="status" aria-live="polite"></p>
       </form>
+      <div class="card hidden" id="org-returns-box">
+        <h2>Замечания руководителя</h2>
+        <p class="muted" id="org-returns-lead"></p>
+        <ul class="list" id="org-returns"></ul>
+      </div>
       <div class="card">
         <h2>Документы</h2>
         <ul class="list" id="docs"></ul>
@@ -369,6 +374,8 @@
         <h2>Подпись организации</h2>
         <p class="muted">Эксперты, которые работают от Вашей организации, подписали заключения — подпишите их от организации:
           в кабинете или загрузите готовую подпись с сертификатом организации. Без подписи организации эксперт не сдаст работу.</p>
+        <p class="muted">Если в отчёте есть ошибки — «Вернуть эксперту» с замечанием: подпись эксперта снимется, он поправит файл и
+          подпишет заново. Заказчик и диспетчер возвратов не видят.</p>
         <ul class="list" id="org-sign"></ul>
         <p class="muted hidden" id="org-sign-empty">Сейчас подписывать нечего.</p>
         <p class="msg" id="org-sign-msg" role="status" aria-live="polite"></p>
