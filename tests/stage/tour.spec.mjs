@@ -13,6 +13,7 @@ const LOGIN_KEY = process.env.STAGE_LOGIN_KEY;
 const ADMIN = process.env.STAGE_ADMIN_PHONE;
 const AUTH = TOKEN ? { authorization: `Bearer ${TOKEN}` } : {};
 const H = { 'x-delo-request': '1' };
+const AI_WAIT = 150_000; // настоящая модель отвечает дольше
 
 const test = base.extend({
   context: async ({ context, baseURL }, use) => {
@@ -155,9 +156,12 @@ test('экскурсия по кабинетам: эксперт, руковод
   await page.getByLabel('Что случилось').fill('Суд назначил оценку нашего грузового автомобиля (фургон) в Московской области по спору с лизинговой компанией. Что делать?');
   await page.getByRole('button', { name: 'Разобраться' }).click();
   const real = (await (await ap.request.get('/api/admin/ai', { headers: AUTH })).json()).primary.driver !== 'fake';
-  if (real) await expect(page.locator('#pa-specialist')).not.toBeEmpty();
+  if (real) await expect(page.locator('#pa-specialist')).not.toBeEmpty({ timeout: AI_WAIT });
   else await expect(page.locator('#pa-specialist')).toContainText('транспорт');
   await snap(page, 'Заказчик', 'Помощник разбирает проблему', 'Человек пишет своими словами — помощник объясняет, что можно сделать самому, к кому идти, и предлагает заявку. Это разъяснение, не юридическая услуга.', '#problem-answer');
+  if (real && !(await page.getByLabel('Услуга для заявки').isHidden()) && !(await page.getByLabel('Услуга для заявки').inputValue())) {
+    await page.getByLabel('Услуга для заявки').selectOption({ label: 'Экспертиза и оценка · Оценка транспортного средства' });
+  }
   await page.getByRole('button', { name: 'Создать заявку' }).click();
   await expect(page.locator('#order-status')).toHaveText('Новая');
   const id = new URL(page.url()).hash.match(/^#order=([0-9a-f-]{36})$/i)[1];
@@ -245,7 +249,7 @@ test('экскурсия по кабинетам: эксперт, руковод
 
   // Черновик от ИИ.
   await sp.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
-  await expect(sp.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  await expect(sp.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте', { timeout: AI_WAIT });
   await snap(sp, 'Эксперт', 'Черновик заключения от ИИ', 'ИИ готовит черновик по заявке, документам и фото. Где нужен расчёт или вывод эксперта — пометка [заполнить]. Эксперт правит текст и сам отвечает за него.', '#draft-box');
   const draft = await sp.getByLabel('Текст заключения').inputValue();
   await sp.getByLabel('Текст заключения').fill(draft.replace(/\[(?:заполнить|описать)[^\]]*\]/gi, 'заполнено экспертом'));
@@ -257,7 +261,7 @@ test('экскурсия по кабинетам: эксперт, руковод
   await sp.locator('#result-file').setInputFiles({ name: 'Отчёт об оценке (тест).pdf', mimeType: 'application/pdf', buffer: makePdf(REPORT) });
   await expect(sp.locator('#docs li').filter({ hasText: 'Отчёт об оценке (тест).pdf' })).toHaveCount(1);
   await sp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
-  await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова', { timeout: AI_WAIT });
   await snap(sp, 'Эксперт', 'ИИ-проверка отчёта', 'Перед сдачей ИИ проверяет отчёт по правилам: реквизиты, данные объекта, расчёт, аналоги, технические ошибки — и показывает места со страницей. Решение — за экспертом.', '#review-box');
 
   // Подпись эксперта; без подписи организации сдать нельзя.
@@ -350,7 +354,7 @@ test('экскурсия по кабинетам: эксперт, руковод
   await sp.getByLabel('О какой заявке (можно не выбирать)').selectOption({ index: 1 });
   await sp.getByLabel('Вопрос').fill('Какие фото ещё нужны для оценки фургона?');
   await sp.getByRole('button', { name: 'Спросить' }).click();
-  await expect(sp.locator('#as-messages li')).toHaveCount(2);
+  await expect(sp.locator('#as-messages li')).toHaveCount(2, { timeout: AI_WAIT });
   await snap(sp, 'Эксперт', 'Ассистент по делам', 'Личный ИИ-ассистент: отвечает о конкретном деле, помнит разговор. Память личная и отдельно по каждой организации.', '#assistant-box');
   await sp.goto('/kabinet#specialist');
   await snap(sp, 'Эксперт', 'Профиль специалиста', 'Принимаю ли новые дела, от какой организации работаю, мои допуски на услуги.');

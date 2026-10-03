@@ -15,6 +15,8 @@ const ADMIN = process.env.STAGE_ADMIN_PHONE;
 if (!TOKEN || !LOGIN_KEY) throw new Error('STAGE_INVOKE_TOKEN и STAGE_LOGIN_KEY — ключи прогона (workflow Deploy core)');
 if (!/^\+7999000\d{4}$/.test(ADMIN || '')) throw new Error('STAGE_ADMIN_PHONE — тестовый номер администратора площадки (workflow Deploy core)');
 const AUTH = { authorization: `Bearer ${TOKEN}` };
+// Настоящая модель (YandexGPT) отвечает до минуты-двух — ждём её ответа дольше, чем обычного экрана.
+const AI_WAIT = 150_000;
 const H = { 'x-delo-request': '1' };
 
 // Хранилище файлов Яндекса — единственный «чужой» адрес (временные ссылки на скачивание).
@@ -101,7 +103,7 @@ const tel = (i) => `+7999000${RUN}${i}`;
 const TAG = `прогон ${RUN}-${Date.now().toString(36)}`;
 const inDays = (n) => new Date(Date.now() + n * 86400_000).toISOString().slice(0, 10);
 
-test.describe.configure({ mode: 'serial', timeout: 180_000 });
+test.describe.configure({ mode: 'serial', timeout: 600_000 }); // с настоящей моделью шаги ИИ дольше
 
 test('общий прогон: заявка на оценку с файлами в хранилище, отправка, чужой не видит, отмена', async ({ page, browser, baseURL }) => {
   const title = `Оценка квартиры — ${TAG}`;
@@ -226,10 +228,14 @@ test('общий прогон: помощник разбирает пробле�
   await expect(page.getByRole('heading', { name: 'Помощник' })).toBeVisible();
   await page.getByLabel('Что случилось').fill('Суд назначил оценку квартиры в Москве при разделе имущества. Что мне делать?');
   await page.getByRole('button', { name: 'Разобраться' }).click();
-  if (real) await expect(page.locator('#pa-specialist')).not.toBeEmpty();
+  if (real) await expect(page.locator('#pa-specialist')).not.toBeEmpty({ timeout: AI_WAIT });
   else await expect(page.locator('#pa-specialist')).toContainText('Оценка недвижимости');
   await expect(page.locator('#pa-disclaimer')).toContainText('не юридическая услуга');
   await shot(page, '08-pomoshnik');
+  // Настоящая модель могла не выбрать услугу — тогда человек выбирает её сам.
+  if (real && !(await page.getByLabel('Услуга для заявки').isHidden()) && !(await page.getByLabel('Услуга для заявки').inputValue())) {
+    await page.getByLabel('Услуга для заявки').selectOption({ label: 'Экспертиза и оценка · Оценка недвижимости' });
+  }
   await page.getByRole('button', { name: 'Создать заявку' }).click();
   await expect(page).toHaveURL(/#order=/);
   await expect(page.locator('#order-status')).toHaveText('Новая');
@@ -239,7 +245,7 @@ test('общий прогон: помощник разбирает пробле�
   await page.getByLabel('О какой заявке (можно не выбирать)').selectOption({ index: 1 });
   await page.getByLabel('Вопрос').fill('Какие документы подготовить к осмотру?');
   await page.getByRole('button', { name: 'Спросить' }).click();
-  await expect(page.locator('#as-messages li')).toHaveCount(2);
+  await expect(page.locator('#as-messages li')).toHaveCount(2, { timeout: AI_WAIT });
   await shot(page, '09-assistent');
 });
 
@@ -358,7 +364,7 @@ test('общий прогон: сквозной путь экспертизы �
   await shot(sp, '12p-osmotr-foto');
   // Черновик заключения от ИИ (задача 2.2): готовится по заявке, эксперт заполняет пометки и прикладывает Word.
   await sp.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
-  await expect(sp.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  await expect(sp.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте', { timeout: AI_WAIT });
   await expect(sp.getByLabel('Текст заключения')).toHaveValue(/## /);
   const draft = await sp.getByLabel('Текст заключения').inputValue();
   await sp.getByLabel('Текст заключения').fill(draft.replace(/\[(?:заполнить|описать)[^\]]*\]/gi, 'заполнено экспертом'));
@@ -374,7 +380,7 @@ test('общий прогон: сквозной путь экспертизы �
   await sp.locator('#result-file').setInputFiles({ name: 'Отчёт об оценке.pdf', mimeType: 'application/pdf', buffer: makePdf([[`Заключение № ${RUN}/2026`], ['Итоговая стоимость 12 000 000 руб.', 'В разделе 3 опечатка в адресе.'], ['См. таблицу Ошибка! Закладка не определена.']]) });
   await expect(sp.locator('#docs li').filter({ hasText: 'Отчёт об оценке.pdf' })).toHaveCount(1);
   await sp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
-  await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова', { timeout: AI_WAIT });
   const tech = sp.locator('#review-checks > li').filter({ hasText: 'Технические ошибки' });
   await expect(tech.locator('.ai-found li')).toContainText(['Отчёт об оценке.pdf, стр. 3: Служебная строка Word «Ошибка! Закладка не определена.»']);
   if (!(await realAi(browser, baseURL))) await expect(tech.locator('.ai-marks:not(.ai-found) li')).toHaveText(['Отчёт об оценке.pdf, стр. 2: В разделе 3 опечатка в адресе.']);

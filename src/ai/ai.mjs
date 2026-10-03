@@ -82,10 +82,28 @@ export function problemMessages(registry, problem) {
         'Ответь только JSON без пояснений: {"explanation": "...", "self_steps": ["..."], "specialist": "кто нужен" | null,',
         '"service": {"module": "...", "service": "..."} | null, "title": "короткое название заявки" | null,',
         '"fields": {"id поля": "вариант"}} — в fields только поля с выбором и только если это ясно из описания.',
+        'В service — коды из списка услуг (до и после «/»), а не названия. Пример: {"explanation": "Нужна оценка квартиры…",',
+        '"self_steps": ["Соберите документы на квартиру"], "specialist": "Оценщик недвижимости", "service": {"module": "expertise",',
+        '"service": "realty"}, "title": "Оценка квартиры для суда", "fields": {"purpose": "court", "region": "moscow"}}',
       ].join('\n'),
     },
     { role: 'user', content: problem },
   ];
+}
+
+// Услуга в ответе модели — в любом из видов, которые встречались у настоящих моделей: {"module", "service"},
+// «expertise/realty», просто «realty» или название услуги. Только из перечня; иначе — null.
+function serviceFromAnswer(registry, v) {
+  if (!v) return null;
+  const all = registry.catalog().flatMap((m) => m.services.map((s) => ({ m: m.id, s: s.id, name: s.name.toLowerCase() })));
+  let mod = '';
+  let svc = '';
+  if (typeof v === 'string') [mod, svc] = v.includes('/') ? v.split('/') : ['', v];
+  else if (typeof v === 'object') { mod = String(v.module ?? ''); svc = String(v.service ?? v.id ?? ''); }
+  svc = svc.trim();
+  const byId = all.filter((x) => x.s === svc && (!mod || x.m === mod.trim()));
+  const hit = byId.length === 1 ? byId[0] : all.find((x) => x.name === svc.toLowerCase());
+  return hit ? registry.service(hit.m, hit.s) : null;
 }
 
 // Ответ модели → то, что увидит человек. Услуга и поля — только из перечня модуля; остальное отбрасывается.
@@ -94,7 +112,7 @@ export function cleanProblemAnswer(registry, text) {
   if (!j) {
     return { explanation: clip(text, 3000) || 'Помощник не смог разобрать вопрос.', self_steps: [], specialist: null, service: null, title: null, fields: {} };
   }
-  const def = j.service ? registry.service(String(j.service.module ?? ''), String(j.service.service ?? '')) : null;
+  const def = serviceFromAnswer(registry, j.service);
   const fields = {};
   if (def && j.fields && typeof j.fields === 'object') {
     for (const [k, v] of Object.entries(j.fields)) {

@@ -205,6 +205,21 @@ test('вход через проблему: человек может выбра
   assert.deepEqual(Object.keys(o.fields), ['comment']);
 });
 
+test('вход через проблему: услугу настоящая модель пишет по-разному — код, «модуль/услуга», название; всё узнаётся', async () => {
+  const orig = S.providers.ai.complete;
+  try {
+    for (const service of [{ module: 'expertise', service: 'realty' }, 'expertise/realty', 'realty', 'Оценка недвижимости', { module: 'Экспертиза и оценка', service: 'Оценка недвижимости' }]) {
+      S.providers.ai.complete = async () => ({ text: JSON.stringify({ explanation: 'Нужна оценка квартиры', self_steps: ['Соберите документы'], specialist: 'оценщик', service, fields: { purpose: 'court' } }), model: 'fake' });
+      const r = await owner.req('POST', '/api/ai/problem', { text: 'Суд назначил оценку квартиры' });
+      assert.equal(r.status, 201, JSON.stringify(service));
+      assert.equal(r.body.consultation.service?.service, 'realty', JSON.stringify(service));
+      assert.deepEqual(r.body.consultation.fields, { purpose: 'court' });
+    }
+    S.providers.ai.complete = async () => ({ text: JSON.stringify({ explanation: 'x', service: 'Оценка луны' }), model: 'fake' });
+    assert.equal((await owner.req('POST', '/api/ai/problem', { text: 'Оцените луну' })).body.consultation.service, null);
+  } finally { S.providers.ai.complete = orig; }
+});
+
 test('вход через проблему: модель ответила не по форме — человек видит её текст, услугу и поля выдумать нельзя', async () => {
   S.providers.ai.reset();
   const fake = S.providers.ai;
