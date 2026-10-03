@@ -1392,6 +1392,7 @@ test('две подписи (2.5а): эксперт от организации 
   const report = Buffer.from('отчёт об оценке для двух подписей');
   const digest = crypto.createHash('sha256').update(report).digest('hex');
   await sp.goto(`/kabinet#order=${id}`);
+  await expect(sp.locator('#order-status')).toHaveText('В работе');
   await sp.locator('#result-file').setInputFiles({ name: 'отчёт-компании.pdf', mimeType: 'application/pdf', buffer: report });
   const doc = sp.locator('#docs li').filter({ hasText: 'отчёт-компании.pdf' });
   await expect(doc.locator('[data-sig="org-wait"]')).toHaveText('После Вашей подписи файл подписывает руководитель организации «ООО «Тестовая оценочная компания»»');
@@ -1411,6 +1412,7 @@ test('две подписи (2.5а): эксперт от организации 
   await hp.goto('/kabinet#notifications');
   await expect(hp.locator('#notifications li').first()).toContainText('нужна подпись организации');
   await hp.goto(`/kabinet#org=${orgId}`);
+  await expect(hp.locator('#org-title')).toHaveText('ООО «Тестовая оценочная компания»');
   const item = hp.locator('#org-sign li.doc').filter({ hasText: 'отчёт-компании.pdf' });
   await expect(hp.locator('#org-sign > li').first()).toContainText('Оценка недвижимости');
   await expect(hp.locator('#org-sign > li').first()).toContainText('Эксперт: Тестовый эксперт компании');
@@ -1433,6 +1435,7 @@ test('две подписи (2.5а): эксперт от организации 
     await c.query("update orders set status = 'done' where id = $1", [id]);
   });
   await page.goto(`/kabinet#order=${id}`);
+  await expect(page.locator('#order-status')).toHaveText('Готово');
   const got = page.locator('#docs li').filter({ hasText: 'отчёт-компании.pdf' });
   await expect(got.locator('.sig-state')).toHaveCount(2);
   await got.getByRole('button', { name: 'Проверить подпись' }).click();
