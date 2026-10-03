@@ -402,7 +402,7 @@ test('catalog: перечень услуг и статусов — любому 
   const r = await U.stranger.req('GET', '/api/catalog');
   assert.equal(r.status, 200);
   const exp = r.body.modules.find((m) => m.id === 'expertise');
-  assert.deepEqual(exp.services.map((s) => s.id), ['realty', 'land', 'vehicle', 'movable', 'goods']);
+  assert.deepEqual(exp.services.map((s) => s.id), ['realty', 'land', 'vehicle', 'movable', 'goods', 'construction', 'handwriting']);
   assert.ok(exp.checks.length > 0);
   assert.equal(r.body.statuses[0].id, 'new');
 });

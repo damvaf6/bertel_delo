@@ -201,3 +201,31 @@ test('ИИ-проверка оценки транспорта: автомати�
   assert.match(r2.body.ai.items.find((i) => i.id === 'requisites').note, /проверьте сами/);
   S.providers.ai.script();
 });
+
+// ——— Новые виды экспертиз (путь 2, пункт г): заявка, правила, черновик, осмотр — данными в модуле, код ядра не менялся ———
+test('строительно-техническая и почерковедческая: поля заявки обязательны, свои правила ИИ-проверки, разделы черновика и шаги осмотра', async () => {
+  const { createRegistry } = await import('../../src/modules/index.mjs');
+  const reg = createRegistry();
+  const ids = (list) => list.map((x) => x.id);
+  assert.deepEqual(ids(reg.checks('expertise', 'construction')).filter((id) => id.startsWith('st_')), ['st_norms', 'st_inspection', 'st_cost']);
+  assert.deepEqual(ids(reg.checks('expertise', 'handwriting')).filter((id) => id.startsWith('hw_')), ['hw_objects', 'hw_method']);
+  assert.ok(ids(reg.checks('expertise', 'handwriting')).includes('expert_info'));
+  assert.ok(!ids(reg.checks('expertise', 'handwriting')).includes('calculation'), 'у почерковедческой нет расчёта стоимости');
+  assert.ok(!ids(reg.checks('expertise', 'construction')).includes('vehicle_identity'));
+  assert.equal(reg.draftSections('expertise', 'construction').length, 8);
+  assert.match(reg.draftSections('expertise', 'handwriting').map((d) => d.title).join('\n'), /Объекты исследования и образцы/);
+  assert.ok(ids(reg.inspectionSteps('expertise', 'construction')).includes('st_defects'));
+  assert.ok(ids(reg.inspectionSteps('expertise', 'handwriting')).includes('hw_signature'));
+
+  for (const [service, fields] of [
+    ['construction', { purpose: 'court', region: 'moscow', object_kind: 'flat', task: 'defects', address: 'г. Москва, Тестовая ул., 1', questions: 'Есть ли недостатки ремонта и сколько стоит их устранить?' }],
+    ['handwriting', { purpose: 'court', region: 'mo', object_kind: 'signature', document: 'тестовая расписка от 01.02.2026', original: 'yes', samples: 'free', questions: 'Выполнена ли подпись тем, от чьего имени она значится?' }],
+  ]) {
+    const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service, title: `Тест: ${service}` })).body.order;
+    assert.equal((await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: addDays(todayMsk(), 15) })).status, 200);
+    const early = await owner.req('POST', `/api/orders/${o.id}/status`, { from: 'new', to: 'matching' });
+    assert.equal(early.status, 400, 'без обязательных полей не отправить');
+    assert.equal((await owner.req('PATCH', `/api/orders/${o.id}`, { fields })).status, 200);
+    assert.equal((await owner.req('POST', `/api/orders/${o.id}/status`, { from: 'new', to: 'matching' })).status, 200, service);
+  }
+});
