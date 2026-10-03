@@ -1,5 +1,6 @@
 // Работа по делу (задача 1.5): проверка результата по правилам и переписка по заявке. Тексты — только через textContent.
 import { api, el, say } from '/common.js';
+import { setNext } from '/next.js';
 
 const $ = (id) => document.getElementById(id);
 const SIDE_RU = { customer: 'Заказчик', executor: 'Исполнитель', dispatcher: 'Диспетчер' };
@@ -16,6 +17,7 @@ export async function loadReview(current) {
   const { order } = current;
   say($('review-msg'), '');
   const r = await api('GET', `/api/orders/${order.id}/review`);
+  setNext({ review: r });
   // Заказчику — только итог после выдачи; исполнителю и служебным — отметки по правилам, когда результат сдавали,
   // и подсказки ИИ (исполнитель может проверить результат с помощью ИИ ещё до сдачи).
   const on = (r.round > 0 && (r.details || ['done', 'closed'].includes(order.status))) || (r.details && (r.can_ai || !!r.ai));
@@ -31,9 +33,23 @@ export async function loadReview(current) {
   $('ai-review-run').classList.toggle('hidden', !r.can_ai);
   $('ai-review-run').onclick = () => runAi(order);
   $('ai-review-state').textContent = r.ai ? aiState(r.ai) : 'ИИ-проверка ещё не запускалась.';
-  if (!r.details) { $('review-checks').replaceChildren(); return; }
+  if (!r.details) { $('review-checks').replaceChildren(); $('review-rest-ok').classList.add('hidden'); return; }
   const hints = new Map((r.ai?.items ?? []).map((i) => [i.id, i]));
   $('review-checks').replaceChildren(...r.checks.map((c) => checkItem(order, r, c, hints.get(c.id))));
+  // «Остальное в порядке» (разбор 03.10.2026, 2.18): правила без отметки, где у ИИ нет замечаний и находок, — одной
+  // кнопкой. Правила с подсказкой «посмотрите» человек отмечает сам.
+  const rest = r.can_mark ? r.checks.filter((c) => !c.verdict && r.ai && hints.get(c.id)?.hint === 'ok') : [];
+  $('review-rest-ok').classList.toggle('hidden', rest.length === 0);
+  $('review-rest-ok').textContent = `Остальное в порядке (${rest.length}: где у ИИ нет замечаний)`;
+  $('review-rest-ok').onclick = async () => {
+    if (!confirm(`Отметить «В порядке» правила, где у ИИ нет замечаний: ${rest.length}? Вы проверили их сами.`)) return;
+    $('review-rest-ok').disabled = true;
+    try {
+      for (const c of rest) await api('PUT', `/api/orders/${order.id}/review/${c.id}`, { verdict: 'ok', round: r.round });
+      await loadReview({ order });
+      say($('review-msg'), `Отмечено «В порядке»: ${rest.length}`, 'ok');
+    } catch (err) { await loadReview({ order }); say($('review-msg'), err.message); } finally { $('review-rest-ok').disabled = false; }
+  };
   // Для возврата на доработку причина собирается из замечаний (диспетчер может её поправить).
   const issues = r.checks.filter((c) => c.verdict === 'issue');
   if (r.can_mark && issues.length && !$('reason').value.trim()) {
@@ -46,6 +62,7 @@ function aiState(ai) {
   const attention = ai.items.filter((i) => i.hint === 'attention').length;
   return [
     `ИИ-проверка: запускал ${AI_SIDE_RU[ai.side]}, ${timeRu(ai.at)}.`,
+    ai.model === 'auto' ? 'Модель ИИ не ответила — показаны только автоматические находки, остальное посмотрите сами.' : null,
     attention ? `Стоит посмотреть: ${attention} из ${ai.items.length}.` : 'Замечаний ИИ не видит.',
     unread.length ? `Не прочитаны (ИИ читает PDF, Word и текст; эти посмотрите сами): ${unread.join(', ')}.` : null,
     ai.files.some((f) => f.truncated) ? `Прочитано не до конца (длинный текст): ${ai.files.filter((f) => f.truncated).map((f) => f.name).join(', ')}.` : null,
@@ -69,6 +86,11 @@ function checkItem(order, r, c, hint) {
     ...(r.round > 0 ? [el('div', { class: `verdict ${c.verdict || 'none'}`, text: VERDICT_RU[c.verdict] || 'Не проверено' })] : []),
     ...(c.note ? [el('p', { class: 'check-note', text: c.note })] : []),
     ...(hint ? [el('p', { class: `ai-hint ${hint.hint}`, text: hint.hint === 'ok' ? `ИИ: ${hint.note || 'замечаний не видно'}` : `ИИ: посмотрите — ${hint.note}` })] : []),
+    // Автоматические находки по всему тексту отчёта: что не так, файл, страница и строка из отчёта.
+    ...(hint?.found?.length ? [el('ul', { class: 'ai-marks ai-found' }, ...hint.found.map((f) => el('li', {},
+      el('span', { class: 'ai-mark-where', text: `${f.file}, ${f.where}: ` }),
+      el('span', { text: f.text }),
+      ...(f.quote ? [el('br'), el('q', { text: f.quote })] : []))))] : []),
     // Отмеченные места: цитата из отчёта, файл и страница — сервер показывает только найденные в тексте цитаты.
     ...(hint?.marks?.length ? [el('ul', { class: 'ai-marks' }, ...hint.marks.map((m) => el('li', {},
       el('span', { class: 'ai-mark-where', text: `${m.file}, ${m.where}: ` }),

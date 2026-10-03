@@ -1,7 +1,8 @@
 // ИИ — модель как настройка (устав, раздел 2): основная (AI_PROVIDER) и запасная (AI_FALLBACK).
 // Если основная не ответила — тот же запрос уходит запасной. Зарубежные модели не подключаются вовсе: допустимы только
 // поставщики из списка AI_DRIVERS (данные заявок — персональные, только в России).
-//   complete({ purpose, messages: [{ role: 'system' | 'user' | 'assistant', content }], maxTokens? }) → { text, model }
+//   complete({ purpose, messages: [{ role: 'system' | 'user' | 'assistant', content }], maxTokens? }) → { text, model, tokens? }
+//   tokens — сколько токенов посчитал поставщик (запрос и ответ вместе); по ним считается расход (src/ai/ai.mjs).
 // purpose: 'problem' — вход через проблему; 'assistant' — ассистент; 'review' — проверка результата по правилам;
 // 'mail' — разбор письма-заявки (1.9); 'draft' — черновик заключения (2.2).
 import crypto from 'node:crypto';
@@ -9,7 +10,8 @@ import { makeFake, ProviderError } from './fake.mjs';
 
 export const AI_DRIVERS = ['fake', 'yandexgpt', 'gigachat'];
 export const AI_DRIVER_NAME = { fake: 'Поддельная модель (проверки)', yandexgpt: 'YandexGPT', gigachat: 'GigaChat' };
-const TIMEOUT_MS = 30_000;
+// Длинный черновик заключения модель пишет до минуты-двух; контейнер площадки ждёт до 180 с (workflow Deploy core).
+const TIMEOUT_MS = 150_000;
 
 // Основная и запасная модели одной цепочкой. Ответ помечается, какая модель ответила.
 export function aiChain(drivers) {
@@ -22,7 +24,7 @@ export function aiChain(drivers) {
         try {
           const out = await d.complete(args);
           if (!out?.text || !String(out.text).trim()) throw new ProviderError('ai', 'пустой ответ модели');
-          return { text: String(out.text), model: out.model || d.driver };
+          return { text: String(out.text), model: out.model || d.driver, tokens: Number.isFinite(out.tokens) ? out.tokens : null, driver: d.driver };
         } catch (e) {
           last = e;
           console.error(`ИИ (${d.driver}) не ответил:`, e?.message || e);
@@ -61,6 +63,11 @@ async function postJson(url, { headers, body, form }) {
 }
 
 const answerOf = (data) => data?.choices?.[0]?.message?.content;
+const tokensOf = (data) => {
+  const u = data?.usage;
+  const n = Number(u?.total_tokens ?? (Number(u?.prompt_tokens ?? 0) + Number(u?.completion_tokens ?? 0)));
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
 
 // YandexGPT через OpenAI-совместимый API Yandex Cloud AI Studio. Ключ — из Lockbox через окружение.
 function yandexGpt(c) {
@@ -71,7 +78,7 @@ function yandexGpt(c) {
         headers: { authorization: `Api-Key ${c.apiKey}`, 'x-folder-id': c.folder },
         body: { model, messages, temperature: 0.3, max_tokens: maxTokens ?? 2000 },
       });
-      return { text: answerOf(data), model: `yandexgpt:${c.model}` };
+      return { text: answerOf(data), model: `yandexgpt:${c.model}`, tokens: tokensOf(data) };
     },
   };
 }
@@ -98,7 +105,7 @@ function gigaChat(c) {
         headers: { authorization: `Bearer ${await access()}` },
         body: { model: c.model, messages, temperature: 0.3, max_tokens: maxTokens ?? 2000 },
       });
-      return { text: answerOf(data), model: `gigachat:${c.model}` };
+      return { text: answerOf(data), model: `gigachat:${c.model}`, tokens: tokensOf(data) };
     },
   };
 }
@@ -108,6 +115,8 @@ function gigaChat(c) {
 const lastUser = (messages) => [...messages].reverse().find((m) => m.role === 'user')?.content ?? '';
 
 const SERVICE_WORDS = [
+  ['handwriting', /подпис[ьи] (?:не )?(?:моя|подделан|чужая)|почерк|подделал[аи]? подпись|расписк/i],
+  ['construction', /строител|подрядчик|ремонт[а-я]* (?:сделан|выполн)|трещин|некачественн[а-я]* ремонт|кровл|фасад/i],
   ['land', /участ|земл|дач/i],
   ['vehicle', /машин|автомоб|транспорт|мотоцикл|грузовик|дтп/i],
   ['goods', /товар|брак|некачествен|магазин|покупк|телефон|ноутбук/i],

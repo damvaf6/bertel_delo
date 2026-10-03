@@ -34,6 +34,7 @@
         </div>
         <ul class="list" id="orders"></ul>
         <p class="muted hidden" id="orders-empty">Заявок пока нет.</p>
+        <p class="msg" id="orders-msg" role="status" aria-live="polite"></p>
       </div>
       <div class="card">
         <h2>Не знаете, какая услуга нужна?</h2>
@@ -68,6 +69,13 @@
         <p class="muted" id="order-meta"></p>
         <p class="muted" id="order-org-line"></p>
         <p class="muted hidden" id="order-mail-line"></p>
+        <a class="btn secondary" id="ask-assistant" href="#assistant">Спросить ассистента об этом деле</a>
+      </div>
+      <div class="card hidden" id="next-box">
+        <h2>Что дальше</h2>
+        <p class="muted" id="next-lead"></p>
+        <ol class="next-steps" id="next-steps"></ol>
+        <div id="next-main"></div>
       </div>
       <form class="card hidden" id="details-form" novalidate>
         <h2>Данные заявки</h2>
@@ -163,6 +171,7 @@
       <div class="card">
         <h2>Документы</h2>
         <ul class="list" id="docs"></ul>
+        <button type="button" class="hidden" id="sign-all">Подписать все файлы результата</button>
         <p class="muted hidden" id="docs-empty">Документов пока нет.</p>
         <p class="muted hidden" id="results-later">Результат работы появится здесь после проверки.</p>
         <div class="field" id="upload-box">
@@ -222,6 +231,11 @@
         <div class="field hidden" id="draft-edit">
           <label for="draft-text">Текст заключения</label>
           <textarea id="draft-text" class="draft-text" maxlength="50000"></textarea>
+          <div class="row">
+            <button type="button" class="secondary" id="draft-next-gap">К следующей пометке</button>
+            <span class="muted" id="draft-gaps"></span>
+          </div>
+          <p class="muted hidden" id="draft-local">Есть несохранённая правка с этого телефона — она восстановлена. Нажмите «Сохранить правку».</p>
         </div>
         <div class="hidden" id="draft-actions">
           <button type="button" class="secondary" id="draft-save">Сохранить правку</button>
@@ -238,6 +252,7 @@
           <p class="muted" id="ai-review-state"></p>
         </div>
         <ul class="list" id="review-checks"></ul>
+        <button type="button" class="secondary hidden" id="review-rest-ok">Остальное в порядке</button>
         <p class="msg" id="review-msg" role="status" aria-live="polite"></p>
       </div>
       <div class="card hidden" id="money-box">
@@ -273,6 +288,7 @@
         </form>
         <p class="msg" id="chat-msg" role="status" aria-live="polite"></p>
       </div>
+      <div class="next-bar hidden" id="next-bar" aria-label="Следующий шаг"></div>
     </section>
 
     <section id="missing-view" class="hidden card">

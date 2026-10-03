@@ -5,18 +5,22 @@ import { HttpError } from '../http/core.mjs';
 import { aiReviewSide, assistantOrderAllowed, assistantScopeAllowed } from '../access/policy.mjs';
 import { AI_DRIVER_NAME } from '../providers/ai.mjs';
 import {
-  DISCLAIMER, aiReviewView, askAi, assistantMessages, cleanProblemAnswer, cleanReviewAnswer, orderBrief, problemMessages, reviewMessages,
+  DISCLAIMER, aiReviewView, askAi, assistantMessages, monthUsage, cleanProblemAnswer, cleanReviewAnswer, orderBrief, problemMessages, reviewMessages,
 } from '../ai/ai.mjs';
 import { READ_MAX_BYTES, extractPages, readableKind } from '../ai/extract.mjs';
+import { runAutoChecks } from '../ai/report-checks.mjs';
 import { insertOrder, listVisibleOrders } from './order-ops.mjs';
 import { audit, text, uuidFrom } from './util.mjs';
 
 const PROBLEM_MAX = 4000;
 const QUESTION_MAX = 2000;
 const HISTORY = 20;
-const READ_MAX_CHARS = 20_000;
-const TOTAL_MAX_CHARS = 40_000;
+// Модели уходит не больше: на файл и на все файлы (окно YandexGPT Pro — 32 тыс. токенов вместе с ответом).
+const READ_MAX_CHARS = 40_000;
+const TOTAL_MAX_CHARS = 50_000;
 const FILES_MAX = 5;
+// Отметка в ai_reviews.model, когда модель не ответила и показаны только автоматические находки.
+export const AUTO_ONLY = 'auto';
 
 const consultationView = (c) => ({ id: c.id, problem: c.problem, ...c.answer, order_id: c.order_id, disclaimer: DISCLAIMER, created_at: c.created_at });
 
@@ -42,8 +46,37 @@ async function scopeHistory(sql, actor, orgId, limit) {
   return { messages: visible, hidden: rows.length - visible.length };
 }
 
+// Страницы, которые модель должна увидеть в первую очередь, если весь отчёт не помещается: начало (титул, оглавление,
+// выводы), задание, расчёт, согласование и итог. Остальные — по порядку, пока есть место.
+const KEY_PAGE = /(?:основные факты и выводы|задание на оценку|итогов\S* (?:величин|стоимост)|согласовани|обобщение результатов|расч[её]т\S* (?:рыночной )?стоимост|корректировк|рыночная стоимость[^.]{0,120}составляет|выводы|заключение эксперта)/iu;
+
+export function pagesForModel(pages, limit) {
+  const marked = pages.map((p, i) => (pages.length > 1 ? `--- стр. ${i + 1} ---\n${p}` : p));
+  const full = marked.join('\n');
+  if (full.length <= limit) return { text: full, truncated: false };
+  const order = [
+    ...marked.map((_, i) => i).filter((i) => i < 4),
+    ...marked.map((_, i) => i).filter((i) => i >= 4 && KEY_PAGE.test(pages[i])),
+    ...marked.map((_, i) => i),
+  ];
+  const take = new Set();
+  let used = 0;
+  for (const i of order) {
+    if (take.has(i)) continue;
+    const len = marked[i].length + 1;
+    if (used + len > limit) continue;
+    take.add(i);
+    used += len;
+  }
+  if (!take.size) return { text: marked[0].slice(0, limit), truncated: true };
+  const text = [...take].sort((a, b) => a - b).map((i) => marked[i]).join('\n');
+  const skipped = marked.length - take.size;
+  return { text: `${text}\n(страниц не передано: ${skipped} из ${marked.length})`, truncated: true };
+}
+
 // Отчёт для ИИ-проверки (задача 2.1): текст, PDF и Word читаются по страницам; что не прочитано — text: null.
-// Модели уходит не больше READ_MAX_CHARS на файл и TOTAL_MAX_CHARS на все файлы.
+// Автоматические правила (report-checks.mjs) смотрят все страницы; модели уходит не больше READ_MAX_CHARS на файл и
+// TOTAL_MAX_CHARS на все файлы — сначала главные страницы.
 async function resultDocs(sql, storage, order) {
   const docs = await sql`select * from documents where order_id = ${order.id} and kind = 'result' and deleted_at is null
                          and uploaded_by = ${order.executor_user_id} order by created_at limit ${FILES_MAX}`;
@@ -56,11 +89,9 @@ async function resultDocs(sql, storage, order) {
       if (buf) got = await extractPages(buf, d.filename, d.mime);
     }
     if (!got) { out.push({ id: d.id, name: d.filename, kind: null, pages: null, text: null, truncated: false }); continue; }
-    const marked = got.pages.map((p, i) => (got.pages.length > 1 ? `--- стр. ${i + 1} ---\n${p}` : p)).join('\n');
-    const limit = Math.min(READ_MAX_CHARS, left);
-    const text = marked.slice(0, limit);
+    const { text, truncated } = pagesForModel(got.pages, Math.max(0, Math.min(READ_MAX_CHARS, left)));
     left -= text.length;
-    out.push({ id: d.id, name: d.filename, kind: got.kind, pages: got.pages, text, truncated: marked.length > text.length });
+    out.push({ id: d.id, name: d.filename, kind: got.kind, pages: got.pages, text, truncated });
   }
   return out;
 }
@@ -173,8 +204,18 @@ export function aiOps() {
         const rules = registry.checks(order.module, order.service);
         const files = await resultDocs(sql, providers.storage, order);
         if (!files.length) throw new HttpError(400, 'no_result', 'Сначала добавьте файл результата');
-        const out = await askAi(ctx, actor, 'review', reviewMessages({ rules, brief: orderBrief(registry, order), files }));
-        const items = cleanReviewAnswer(rules, out.text, files);
+        // Автоматические правила — по всему тексту, до модели: их находки модель видит и не повторяет.
+        const auto = runAutoChecks([...new Set(rules.flatMap((r) => r.auto ?? []))], files, { fields: order.fields ?? {} });
+        const found = Object.fromEntries(rules.map((r) => [r.id, (r.auto ?? []).flatMap((a) => auto[a] ?? [])]));
+        // Модель недоступна или лимит исчерпан, но автоматические находки есть — показываем их, а не ошибку.
+        let out;
+        try {
+          out = await askAi(ctx, actor, 'review', reviewMessages({ rules, brief: orderBrief(registry, order), files, found }));
+        } catch (e) {
+          if (!Object.values(found).some((f) => f.length) || !['ai_unavailable', 'ai_limit', 'ai_budget'].includes(e.code)) throw e;
+          out = { text: '', model: AUTO_ONLY };
+        }
+        const items = cleanReviewAnswer(rules, out.text, files, found);
         const round = side === 'executor' ? order.review_round + 1 : order.review_round;
         await sql`insert into ai_reviews (order_id, round, requested_by, side, model, items, files)
                   values (${order.id}, ${round}, ${actor.id}, ${side}, ${out.model}, ${JSON.stringify(items)},
@@ -190,7 +231,9 @@ export function aiOps() {
       async handler({ sql, cfg }) {
         const day = await sql.one`select count(*)::int as total, count(*) filter (where not ok)::int as failed
                                   from ai_usage where at > now() - interval '1 day'`;
+        const m = await monthUsage(sql);
         return {
+          month: { spent_rub: m.kop / 100, tokens: m.tokens, calls: m.calls, budget_rub: cfg.ai.budgetRub || null, price_rub_per_1k: cfg.ai.priceRubPer1k },
           primary: { driver: cfg.providers.ai, name: AI_DRIVER_NAME[cfg.providers.ai] },
           fallback: cfg.ai.fallback ? { driver: cfg.ai.fallback, name: AI_DRIVER_NAME[cfg.ai.fallback] } : null,
           daily_limit: cfg.ai.dailyLimit,

@@ -299,6 +299,48 @@ resource "yandex_lockbox_secret_iam_binding" "stage_login_read" {
   members   = ["serviceAccount:${yandex_iam_service_account.app.id}"]
 }
 
+# Настоящая модель YandexGPT — ТОЛЬКО на проверочной площадке (решение Дамира 03.10.2026): только тестовые данные,
+# расход — не больше 1 000 ₽ в месяц (предел в программе: AI_BUDGET_RUB, задаёт workflow Deploy core). Ключ — у
+# сервисного аккаунта ядра, только на вызов моделей; лежит в отдельном секрете, которого на prod нет (count = 0).
+# На prod — отдельно и только с «да» Дамира.
+resource "yandex_resourcemanager_folder_iam_member" "app_ai" {
+  count     = var.env == "stage" ? 1 : 0
+  folder_id = var.folder_id
+  role      = "ai.languageModels.user"
+  member    = "serviceAccount:${yandex_iam_service_account.app.id}"
+}
+
+resource "yandex_iam_service_account_api_key" "app_ai" {
+  count              = var.env == "stage" ? 1 : 0
+  service_account_id = yandex_iam_service_account.app.id
+  description        = "YandexGPT для ядра (только stage, тестовые данные)"
+  scopes             = ["yc.ai.languageModels.execute"]
+}
+
+resource "yandex_lockbox_secret" "ai" {
+  count               = var.env == "stage" ? 1 : 0
+  name                = "${local.name}-ai"
+  description         = "Ключ к YandexGPT (только stage)."
+  kms_key_id          = yandex_kms_symmetric_key.main.id
+  deletion_protection = false
+}
+
+resource "yandex_lockbox_secret_version" "ai" {
+  count     = var.env == "stage" ? 1 : 0
+  secret_id = yandex_lockbox_secret.ai[0].id
+  entries {
+    key        = "AI_YANDEX_API_KEY"
+    text_value = yandex_iam_service_account_api_key.app_ai[0].secret_key
+  }
+}
+
+resource "yandex_lockbox_secret_iam_binding" "ai_read" {
+  count     = var.env == "stage" ? 1 : 0
+  secret_id = yandex_lockbox_secret.ai[0].id
+  role      = "lockbox.payloadViewer"
+  members   = ["serviceAccount:${yandex_iam_service_account.app.id}"]
+}
+
 # ---------------------------------------------------------------- реестр образов
 resource "yandex_container_registry" "main" {
   name = local.name

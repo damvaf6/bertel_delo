@@ -10,6 +10,7 @@ import { loadDraft } from '/draft.js';
 import { loadInspection } from '/inspect.js';
 import { loadOnsite } from '/onsite.js';
 import { signatureLines, uploadSignatureButton, SIGN_CONFIRM, UPLOAD_HINT } from '/sign.js';
+import { setNext } from '/next.js';
 
 const $ = (id) => document.getElementById(id);
 const MAX_FILE = 5 * 1024 * 1024;
@@ -49,7 +50,9 @@ export async function openOrder(id) {
   $('done-percent').value = '';
   render();
   show('order-view', 'orders');
+  setNext({ reset: true, current, step: doStep, signAll });
   await Promise.all([loadDocs(), loadTransfer(), loadMatch(current, () => openOrder(id)), loadDraft(current, () => openOrder(id)), loadInspection(current), loadOnsite(current), loadReview(current), loadChat(current), loadMoney(current, () => openOrder(id))]);
+  setNext({}); // разделы осмотра и черновика показаны — шаги пересчитываются
 }
 
 function render() {
@@ -62,6 +65,7 @@ function render() {
   $('order-deadline').classList.toggle('overdue', order.overdue);
   $('order-meta').textContent = `Создана ${dateTimeRu(order.created_at)}${order.express ? ' · Экспресс: выезд помощника' : ''}`;
   renderOrgLine();
+  $('ask-assistant').href = `#assistant=${order.id}`;
   $('details-form').classList.toggle('hidden', !current.editable);
   $('details-view').classList.toggle('hidden', current.editable);
   if (current.editable) renderForm(); else renderFacts();
@@ -310,6 +314,11 @@ async function loadDocs() {
   const mineResults = current.executor?.is_me && order.status === 'in_work';
   const signRequired = !!documentsBody.signature_required;
   $('result-sign-note').classList.toggle('hidden', !signRequired);
+  lastDocs = documentsBody;
+  // «Подписать все» (2.15): несколько неподписанных файлов результата — одним подтверждением.
+  const unsigned = mineResults && signRequired ? documents.filter((d) => d.kind === 'result' && !d.signatures?.expert) : [];
+  $('sign-all').classList.toggle('hidden', unsigned.length < 2);
+  $('sign-all').textContent = `Подписать все файлы результата (${unsigned.length})`;
   $('docs').replaceChildren(...documents.map((d) => {
     // Результат убирает только исполнитель, пока не сдал; документы заказчика — заказчик (основание — до отправки).
     // Фото дистанционного осмотра не удаляются никем: это свидетельство осмотра со временем и местом (2.3).
@@ -327,6 +336,7 @@ async function loadDocs() {
   $('docs-empty').classList.toggle('hidden', documents.length > 0);
   $('results-later').textContent = 'Результат работы появится здесь после проверки.';
   $('results-later').classList.toggle('hidden', !(resultsHidden && ['in_work', 'review'].includes(order.status)));
+  setNext({ docs: documentsBody });
   const basis = documents.filter((d) => d.kind === 'basis');
   $('basis-file-state').textContent = basis.length ? `Приложено: ${basis.map((d) => d.filename).join(', ')}` : 'Файл определения ещё не приложен';
 }
@@ -357,6 +367,21 @@ function signatureBlock(d, { canSign, signOrg }) {
   }
   return [el('div', { class: 'sig' }, ...lines)];
 }
+
+let lastDocs = null;
+
+async function signAll() {
+  const docs = (lastDocs?.documents ?? []).filter((d) => d.kind === 'result' && !d.signatures?.expert);
+  if (!docs.length) return;
+  if (!confirm(`${SIGN_CONFIRM(docs.map((d) => d.filename).join(', '))}\n\nФайлов: ${docs.length}.`)) return;
+  say($('doc-msg'), 'Подписываем…', 'ok');
+  try {
+    for (const d of docs) await api('POST', `/api/documents/${d.id}/sign`, { confirm: true });
+    await loadDocs();
+    say($('doc-msg'), docs.length > 1 ? `Подписано файлов: ${docs.length}` : 'Файл подписан', 'ok');
+  } catch (err) { await loadDocs(); say($('doc-msg'), err.message); }
+}
+$('sign-all').addEventListener('click', signAll);
 
 async function signDoc(d) {
   if (!confirm(SIGN_CONFIRM(d.filename))) return;

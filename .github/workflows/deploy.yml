@@ -9,6 +9,11 @@ name: Deploy core (Yandex Cloud)
 # тестовыми номерами (ключ STAGE_LOGIN_KEY из отдельного секрета delo-stage-stage-login, которого на prod нет).
 on:
   workflow_dispatch:
+    inputs:
+      tour:
+        description: 'Экскурсия по кабинетам: снимки и PDF (tests/stage/tour.spec.mjs)'
+        type: boolean
+        default: false
 
 jobs:
   deploy:
@@ -54,6 +59,9 @@ jobs:
             [ -n "${!v}" ] && [ "${!v}" != "null" ] || { echo "::error::$v не найден — сначала Infra apply"; exit 1; }
             echo "$v=${!v}" >> $GITHUB_ENV
           done
+          # Настоящий YandexGPT (решение Дамира 03.10.2026): только если Infra создал ключ (на stage); иначе — поддельная модель.
+          AI_SECRET_ID=$(yc lockbox secret get --name "delo-$ENV-ai" --format json 2>/dev/null | jq -r '.id // empty' || true)
+          echo "AI_SECRET_ID=$AI_SECRET_ID" >> $GITHUB_ENV
           echo "FILES_BUCKET=delo-$ENV-files-$SUFFIX" >> $GITHUB_ENV
           echo "IMAGE=cr.yandex/$REGISTRY_ID/delo-core:${GITHUB_SHA::12}" >> $GITHUB_ENV
 
@@ -86,19 +94,27 @@ jobs:
 
       - name: Контейнер
         run: |
+          # Модель ИИ: настоящий YandexGPT с пределом расхода 900 ₽ в месяц (запас 10% до 1 000 ₽), если есть ключ.
+          AI_ENV="" AI_SECRET=""
+          if [ -n "$AI_SECRET_ID" ]; then
+            AI_ENV=",AI_PROVIDER=yandexgpt,AI_YANDEX_FOLDER=$FOLDER_ID,AI_BUDGET_RUB=900"
+            AI_SECRET="environment-variable=AI_YANDEX_API_KEY,id=$AI_SECRET_ID,key=AI_YANDEX_API_KEY"
+            echo "Модель ИИ: YandexGPT, предел 900 ₽ в месяц" >> $GITHUB_STEP_SUMMARY
+          fi
           yc serverless container revision deploy \
             --container-name "$CONTAINER" \
             --image "$IMAGE" \
             --service-account-id "$APP_SA_ID" \
             --network-id "$NETWORK_ID" \
             --cores 1 --core-fraction 100 --memory 512MB \
-            --concurrency 8 --execution-timeout 30s \
-            --environment "APP_ENV=$ENV,STORAGE_PROVIDER=s3,S3_BUCKET=$FILES_BUCKET,TRUST_PROXY=1,MIGRATE_ON_START=1,STARTUP_CHECK=1" \
+            --concurrency 8 --execution-timeout 180s \
+            --environment "APP_ENV=$ENV,STORAGE_PROVIDER=s3,S3_BUCKET=$FILES_BUCKET,TRUST_PROXY=1,MIGRATE_ON_START=1,STARTUP_CHECK=1$AI_ENV" \
             --secret "environment-variable=DATABASE_URL,id=$SECRET_ID,key=DATABASE_URL" \
             --secret "environment-variable=APP_SECRET,id=$SECRET_ID,key=APP_SECRET" \
             --secret "environment-variable=S3_ACCESS_KEY,id=$SECRET_ID,key=S3_ACCESS_KEY" \
             --secret "environment-variable=S3_SECRET_KEY,id=$SECRET_ID,key=S3_SECRET_KEY" \
-            --secret "environment-variable=STAGE_LOGIN_KEY,id=$LOGIN_SECRET_ID,key=STAGE_LOGIN_KEY"
+            --secret "environment-variable=STAGE_LOGIN_KEY,id=$LOGIN_SECRET_ID,key=STAGE_LOGIN_KEY" \
+            ${AI_SECRET:+--secret "$AI_SECRET"}
 
       - name: Проверка на адресе контура
         timeout-minutes: 10
@@ -134,6 +150,7 @@ jobs:
           UI_BASE_URL: ${{ env.URL }}
           # Администратор площадки — назначен кнопкой «Stage admin» (решение Дамира 02.10.2026, вопрос 10).
           STAGE_ADMIN_PHONE: '+79990009500'
+          TOUR: ${{ inputs.tour && '1' || '' }}
         run: |
           # Ключи прогона: IAM-токен (браузер подставляет его только для адреса площадки) и ключ служебного входа.
           STAGE_INVOKE_TOKEN=$(yc iam create-token); echo "::add-mask::$STAGE_INVOKE_TOKEN"
@@ -143,6 +160,7 @@ jobs:
           npx playwright install --with-deps chromium
           mkdir -p test-results/screens
           npx playwright test --config playwright.stage.mjs
+          if [ "$TOUR" = 1 ]; then node tests/tools/tour-pdf.mjs test-results "test-results/Экскурсия по кабинетам.pdf"; fi
 
       - name: Скриншоты
         if: always()

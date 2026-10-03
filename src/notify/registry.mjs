@@ -10,8 +10,8 @@ export const TYPES = [
   { id: 'money', name: 'Оплата и выплаты', hint: 'оплата получена, вознаграждение выплачено, деньги возвращены или перевод не прошёл', for: 'all', sms: true },
   { id: 'org_invites', name: 'Приглашения в организацию', hint: 'Вас пригласили стать сотрудником организации', for: 'all', sms: true },
   { id: 'offers', name: 'Предложения дел', hint: 'Вам предложили новое дело (и предложения госзаказа из БЕРТЕЛ CRM)', for: 'specialist', sms: true },
-  { id: 'executor_work', name: 'Мои дела как исполнителя', hint: 'владелец или помощник прислал фото осмотра, назначен или отменён выезд, возврат на доработку, результат принят, дело снято, передано другому или отменено', for: 'specialist', sms: true },
-  { id: 'dispatch', name: 'Очередь диспетчера', hint: 'новые и оплаченные заявки, отказы исполнителей, сдача на проверку, отмены, неудачные выплаты и возвраты', for: 'dispatcher', sms: false },
+  { id: 'executor_work', name: 'Мои дела как исполнителя', hint: 'напоминания о сроке, владелец или помощник прислал фото осмотра, назначен или отменён выезд, возврат на доработку, результат принят, дело снято, передано другому или отменено', for: 'specialist', sms: true },
+  { id: 'dispatch', name: 'Очередь диспетчера', hint: 'новые и оплаченные заявки, отказы исполнителей, сдача на проверку, просроченные сроки, отмены, неудачные выплаты и возвраты', for: 'dispatcher', sms: false },
 ];
 export const TYPE = Object.fromEntries(TYPES.map((t) => [t.id, t]));
 
@@ -24,6 +24,7 @@ export const EVENTS = {
   cancelled_by_customer: { type: 'dispatch', title: 'Заказчик отменил заявку', order: true },
   payout_failed_staff: { type: 'dispatch', title: 'Выплата исполнителю не прошла — нужен повтор', order: true },
   paid_staff: { type: 'dispatch', title: 'Заявка оплачена — можно предлагать исполнителю', order: true },
+  deadline_overdue_staff: { type: 'dispatch', title: 'Срок по заявке прошёл, результат не выдан', order: true },
   refund_failed_staff: { type: 'dispatch', title: 'Возврат заказчику не прошёл — нужен повтор', order: true },
 
   offer: { type: 'offers', title: 'Вам предложено новое дело', order: true },
@@ -38,6 +39,10 @@ export const EVENTS = {
   // Руководителю организации исполнителя (2.5а): эксперт подписал результат — нужна подпись организации (раздел «Организации»).
   org_sign_needed: { type: 'executor_work', title: 'Эксперт подписал заключение — нужна подпись организации', order: false },
   rework: { type: 'executor_work', title: 'Результат возвращён на доработку', order: true },
+  // Напоминания о сроках (2.13): src/notify/reminders.mjs, раз в минуту вместе с повтором СМС.
+  deadline_soon: { type: 'executor_work', title: 'До срока по делу осталось 3 дня', order: true },
+  deadline_tomorrow: { type: 'executor_work', title: 'Срок по делу — завтра', order: true },
+  deadline_overdue: { type: 'executor_work', title: 'Срок по делу прошёл — сдайте результат или напишите диспетчеру', order: true },
   result_accepted: { type: 'executor_work', title: 'Результат принят проверкой', order: true },
   executor_cancelled: { type: 'executor_work', title: 'Дело отменено', order: true },
   executor_closed: { type: 'executor_work', title: 'Заявка закрыта', order: true },

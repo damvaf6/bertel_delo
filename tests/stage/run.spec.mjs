@@ -15,6 +15,8 @@ const ADMIN = process.env.STAGE_ADMIN_PHONE;
 if (!TOKEN || !LOGIN_KEY) throw new Error('STAGE_INVOKE_TOKEN и STAGE_LOGIN_KEY — ключи прогона (workflow Deploy core)');
 if (!/^\+7999000\d{4}$/.test(ADMIN || '')) throw new Error('STAGE_ADMIN_PHONE — тестовый номер администратора площадки (workflow Deploy core)');
 const AUTH = { authorization: `Bearer ${TOKEN}` };
+// Настоящая модель (YandexGPT) отвечает до минуты-двух — ждём её ответа дольше, чем обычного экрана.
+const AI_WAIT = 150_000;
 const H = { 'x-delo-request': '1' };
 
 // Хранилище файлов Яндекса — единственный «чужой» адрес (временные ссылки на скачивание).
@@ -73,6 +75,22 @@ async function findUser(ap, phoneNo) {
   await ap.getByLabel('Номер телефона пользователя').fill(phoneNo);
   await ap.getByRole('button', { name: 'Найти' }).click();
   await expect(ap.locator('#admin-user-meta')).toContainText(shown(phoneNo));
+  // Профиль специалиста дорисовывается после — ждём, пока на экране профиль именно этого человека.
+  await expect(ap.locator('#admin-specialist')).toHaveAttribute('data-phone', phoneNo);
+}
+
+// Какая модель ИИ на площадке: поддельная отвечает предсказуемо, настоящая (YandexGPT, решение Дамира 03.10.2026) — нет.
+// С настоящей проверяем то, что от её слов не зависит: ответ пришёл, находки по правилам, разделы черновика.
+let realAiCache = null;
+async function realAi(browser, baseURL) {
+  if (realAiCache !== null) return realAiCache;
+  const ap = await phone(browser, baseURL);
+  await enter(ap, ADMIN);
+  const r = await ap.request.get('/api/admin/ai', { headers: AUTH });
+  expect(r.status()).toBe(200);
+  realAiCache = (await r.json()).primary.driver !== 'fake';
+  await close(ap);
+  return realAiCache;
 }
 
 async function shot(page, name) {
@@ -87,7 +105,7 @@ const tel = (i) => `+7999000${RUN}${i}`;
 const TAG = `прогон ${RUN}-${Date.now().toString(36)}`;
 const inDays = (n) => new Date(Date.now() + n * 86400_000).toISOString().slice(0, 10);
 
-test.describe.configure({ mode: 'serial', timeout: 180_000 });
+test.describe.configure({ mode: 'serial', timeout: 600_000 }); // с настоящей моделью шаги ИИ дольше
 
 test('общий прогон: заявка на оценку с файлами в хранилище, отправка, чужой не видит, отмена', async ({ page, browser, baseURL }) => {
   const title = `Оценка квартиры — ${TAG}`;
@@ -204,26 +222,32 @@ test('общий прогон: организация — приглашение
   await close(mp);
 });
 
-test('общий прогон: помощник разбирает проблему и готовит черновик заявки; ассистент отвечает', async ({ page }) => {
+test('общий прогон: помощник разбирает проблему и готовит черновик заявки; ассистент отвечает', async ({ page, browser, baseURL }) => {
+  const real = await realAi(browser, baseURL);
   await enter(page, tel(4));
   await page.goto('/kabinet');
   await page.getByRole('link', { name: 'Спросить помощника' }).click();
   await expect(page.getByRole('heading', { name: 'Помощник' })).toBeVisible();
   await page.getByLabel('Что случилось').fill('Суд назначил оценку квартиры в Москве при разделе имущества. Что мне делать?');
   await page.getByRole('button', { name: 'Разобраться' }).click();
-  await expect(page.locator('#pa-specialist')).toContainText('Оценка недвижимости');
+  if (real) await expect(page.locator('#pa-specialist')).not.toBeEmpty({ timeout: AI_WAIT });
+  else await expect(page.locator('#pa-specialist')).toContainText('Оценка недвижимости');
   await expect(page.locator('#pa-disclaimer')).toContainText('не юридическая услуга');
   await shot(page, '08-pomoshnik');
+  // Настоящая модель могла не выбрать услугу — тогда человек выбирает её сам.
+  if (real && !(await page.getByLabel('Услуга для заявки').isHidden()) && !(await page.getByLabel('Услуга для заявки').inputValue())) {
+    await page.getByLabel('Услуга для заявки').selectOption({ label: 'Экспертиза и оценка · Оценка недвижимости' });
+  }
   await page.getByRole('button', { name: 'Создать заявку' }).click();
   await expect(page).toHaveURL(/#order=/);
   await expect(page.locator('#order-status')).toHaveText('Новая');
-  await expect(page.getByLabel('Для чего нужна оценка')).toHaveValue('court');
+  if (!real) await expect(page.getByLabel('Для чего нужна оценка')).toHaveValue('court');
 
   await page.goto('/kabinet#assistant');
   await page.getByLabel('О какой заявке (можно не выбирать)').selectOption({ index: 1 });
   await page.getByLabel('Вопрос').fill('Какие документы подготовить к осмотру?');
   await page.getByRole('button', { name: 'Спросить' }).click();
-  await expect(page.locator('#as-messages li')).toHaveCount(2);
+  await expect(page.locator('#as-messages li')).toHaveCount(2, { timeout: AI_WAIT });
   await shot(page, '09-assistent');
 });
 
@@ -342,7 +366,7 @@ test('общий прогон: сквозной путь экспертизы �
   await shot(sp, '12p-osmotr-foto');
   // Черновик заключения от ИИ (задача 2.2): готовится по заявке, эксперт заполняет пометки и прикладывает Word.
   await sp.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
-  await expect(sp.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  await expect(sp.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте', { timeout: AI_WAIT });
   await expect(sp.getByLabel('Текст заключения')).toHaveValue(/## /);
   const draft = await sp.getByLabel('Текст заключения').inputValue();
   await sp.getByLabel('Текст заключения').fill(draft.replace(/\[(?:заполнить|описать)[^\]]*\]/gi, 'заполнено экспертом'));
@@ -354,11 +378,14 @@ test('общий прогон: сквозной путь экспертизы �
   await sp.locator('#result-file').setInputFiles({ name: 'Отчёт об оценке.txt', mimeType: 'text/plain', buffer: Buffer.from(`Отчёт об оценке квартиры. Итоговая стоимость 12 000 000 руб. ${TAG}`) });
   await expect(sp.locator('#doc-msg')).toHaveText('Файл добавлен');
   // Отчёт в PDF (задача 2.1): ИИ читает его из хранилища Яндекса и показывает отмеченное место со страницей.
-  await sp.locator('#result-file').setInputFiles({ name: 'Отчёт об оценке.pdf', mimeType: 'application/pdf', buffer: makePdf([[`Заключение № ${RUN}/2026`], ['Итоговая стоимость 12 000 000 руб.', 'В разделе 3 опечатка в адресе.']]) });
+  // На стр. 3 — служебная строка Word: её находит автоматическая проверка (2.8) при любой модели.
+  await sp.locator('#result-file').setInputFiles({ name: 'Отчёт об оценке.pdf', mimeType: 'application/pdf', buffer: makePdf([[`Заключение № ${RUN}/2026`], ['Итоговая стоимость 12 000 000 руб.', 'В разделе 3 опечатка в адресе.'], ['См. таблицу Ошибка! Закладка не определена.']]) });
   await expect(sp.locator('#docs li').filter({ hasText: 'Отчёт об оценке.pdf' })).toHaveCount(1);
   await sp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
-  await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова');
-  await expect(sp.locator('#review-checks li').filter({ hasText: 'Технические ошибки' }).locator('.ai-marks li')).toHaveText(['Отчёт об оценке.pdf, стр. 2: В разделе 3 опечатка в адресе.']);
+  await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова', { timeout: AI_WAIT });
+  const tech = sp.locator('#review-checks > li').filter({ hasText: 'Технические ошибки' });
+  await expect(tech.locator('.ai-found li')).toContainText(['Отчёт об оценке.pdf, стр. 3: Служебная строка Word «Ошибка! Закладка не определена.»']);
+  if (!(await realAi(browser, baseURL))) await expect(tech.locator('.ai-marks:not(.ai-found) li')).toHaveText(['Отчёт об оценке.pdf, стр. 2: В разделе 3 опечатка в адресе.']);
   await sp.getByLabel('Сообщение').fill('Осмотр проведён, отчёт приложен.');
   await sp.getByRole('button', { name: 'Отправить сообщение' }).click();
   await expect(sp.locator('#messages li')).toHaveCount(1);
@@ -390,7 +417,7 @@ test('общий прогон: сквозной путь экспертизы �
   await dp.reload();
   await expect(dp.locator('#review-box')).toBeVisible();
   await dp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
-  await expect(dp.locator('#ai-review-state')).toContainText('запускал диспетчер');
+  await expect(dp.locator('#ai-review-state')).toContainText('запускал диспетчер', { timeout: AI_WAIT });
   const rules = dp.locator('#review-checks > li');
   const n = await rules.count();
   expect(n).toBeGreaterThan(3);

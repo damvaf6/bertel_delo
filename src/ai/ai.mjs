@@ -9,12 +9,21 @@ import { locateQuote } from './extract.mjs';
 export const DISCLAIMER = 'Это разъяснение искусственного интеллекта, а не юридическая услуга. Решение принимаете Вы; '
   + 'за точной оценкой обращайтесь к специалисту.';
 
+// Длина ответа модели по назначению: черновик заключения длинный, проверка — список по правилам.
+const MAX_TOKENS = { draft: 6000, review: 3000 };
+
 export async function askAi({ sql, providers, cfg }, actor, purpose, messages) {
   const used = await sql.one`select count(*)::int as n from ai_usage where user_id = ${actor.id} and at > now() - interval '1 day'`;
   if (used.n >= cfg.ai.dailyLimit) throw new HttpError(429, 'ai_limit', 'Лимит обращений к помощнику на сутки исчерпан, попробуйте завтра');
+  // Предел расхода за месяц (решение Дамира 03.10.2026): дошли — настоящая модель не вызывается до 1-го числа.
+  if (cfg.ai.budgetRub > 0 && (await monthSpentKop(sql)) >= cfg.ai.budgetRub * 100) {
+    throw new HttpError(503, 'ai_budget', 'Лимит расхода на помощника в этом месяце исчерпан — обратитесь к администратору платформы');
+  }
   try {
-    const out = await providers.ai.complete({ purpose, messages });
-    await sql`insert into ai_usage (user_id, purpose, model, ok) values (${actor.id}, ${purpose}, ${out.model}, true)`;
+    const out = await providers.ai.complete({ purpose, messages, maxTokens: MAX_TOKENS[purpose] });
+    const tokens = (out.driver ?? out.model) === 'fake' ? 0 : out.tokens ?? estimateTokens(messages, out.text);
+    const cost = Math.ceil((tokens / 1000) * cfg.ai.priceRubPer1k * 100);
+    await sql`insert into ai_usage (user_id, purpose, model, ok, tokens, cost_kop) values (${actor.id}, ${purpose}, ${out.model}, true, ${tokens}, ${cost})`;
     return out;
   } catch (e) {
     await sql`insert into ai_usage (user_id, purpose, model, ok) values (${actor.id}, ${purpose}, null, false)`;
@@ -22,6 +31,22 @@ export async function askAi({ sql, providers, cfg }, actor, purpose, messages) {
     throw new HttpError(503, 'ai_unavailable', 'Помощник сейчас недоступен, попробуйте позже');
   }
 }
+
+// Начало текущего месяца по Москве.
+export async function monthSpentKop(sql) {
+  const r = await sql.one`select coalesce(sum(cost_kop), 0)::bigint as kop, coalesce(sum(tokens), 0)::bigint as tokens from ai_usage
+                          where at >= date_trunc('month', now() at time zone 'Europe/Moscow') at time zone 'Europe/Moscow'`;
+  return Number(r.kop);
+}
+
+export async function monthUsage(sql) {
+  const r = await sql.one`select coalesce(sum(cost_kop), 0)::bigint as kop, coalesce(sum(tokens), 0)::bigint as tokens, count(*)::int as calls
+                          from ai_usage where at >= date_trunc('month', now() at time zone 'Europe/Moscow') at time zone 'Europe/Moscow'`;
+  return { kop: Number(r.kop), tokens: Number(r.tokens), calls: r.calls };
+}
+
+// Поставщик не сообщил токены — считаем с запасом: знак ≈ треть токена для русского текста.
+const estimateTokens = (messages, answer) => Math.ceil((messages.reduce((n, m) => n + String(m.content).length, 0) + String(answer ?? '').length) / 3);
 
 // Модель могла обернуть JSON в пояснения или ``` — берём первый объект целиком. Не вышло — null.
 export function parseJsonAnswer(text) {
@@ -57,10 +82,28 @@ export function problemMessages(registry, problem) {
         'Ответь только JSON без пояснений: {"explanation": "...", "self_steps": ["..."], "specialist": "кто нужен" | null,',
         '"service": {"module": "...", "service": "..."} | null, "title": "короткое название заявки" | null,',
         '"fields": {"id поля": "вариант"}} — в fields только поля с выбором и только если это ясно из описания.',
+        'В service — коды из списка услуг (до и после «/»), а не названия. Пример: {"explanation": "Нужна оценка квартиры…",',
+        '"self_steps": ["Соберите документы на квартиру"], "specialist": "Оценщик недвижимости", "service": {"module": "expertise",',
+        '"service": "realty"}, "title": "Оценка квартиры для суда", "fields": {"purpose": "court", "region": "moscow"}}',
       ].join('\n'),
     },
     { role: 'user', content: problem },
   ];
+}
+
+// Услуга в ответе модели — в любом из видов, которые встречались у настоящих моделей: {"module", "service"},
+// «expertise/realty», просто «realty» или название услуги. Только из перечня; иначе — null.
+function serviceFromAnswer(registry, v) {
+  if (!v) return null;
+  const all = registry.catalog().flatMap((m) => m.services.map((s) => ({ m: m.id, s: s.id, name: s.name.toLowerCase() })));
+  let mod = '';
+  let svc = '';
+  if (typeof v === 'string') [mod, svc] = v.includes('/') ? v.split('/') : ['', v];
+  else if (typeof v === 'object') { mod = String(v.module ?? ''); svc = String(v.service ?? v.id ?? ''); }
+  svc = svc.trim();
+  const byId = all.filter((x) => x.s === svc && (!mod || x.m === mod.trim()));
+  const hit = byId.length === 1 ? byId[0] : all.find((x) => x.name === svc.toLowerCase());
+  return hit ? registry.service(hit.m, hit.s) : null;
 }
 
 // Ответ модели → то, что увидит человек. Услуга и поля — только из перечня модуля; остальное отбрасывается.
@@ -69,7 +112,7 @@ export function cleanProblemAnswer(registry, text) {
   if (!j) {
     return { explanation: clip(text, 3000) || 'Помощник не смог разобрать вопрос.', self_steps: [], specialist: null, service: null, title: null, fields: {} };
   }
-  const def = j.service ? registry.service(String(j.service.module ?? ''), String(j.service.service ?? '')) : null;
+  const def = serviceFromAnswer(registry, j.service);
   const fields = {};
   if (def && j.fields && typeof j.fields === 'object') {
     for (const [k, v] of Object.entries(j.fields)) {
@@ -126,7 +169,8 @@ export function assistantMessages({ scopeName, history, brief, question }) {
 
 // ——— ИИ-проверка результата ———
 
-export function reviewMessages({ rules, brief, files }) {
+export function reviewMessages({ rules, brief, files, found = {} }) {
+  const auto = rules.flatMap((r) => (found[r.id] ?? []).map((f) => `- ${r.id}: ${f.text} (${f.file}, ${f.where})`));
   return [
     {
       role: 'system',
@@ -134,6 +178,9 @@ export function reviewMessages({ rules, brief, files }) {
         'Ты помощник проверяющего. Проверь результат работы специалиста по каждому правилу из списка.',
         'Ты только подсказываешь: «ok» — замечаний не видно, «attention» — человеку стоит посмотреть, с коротким пояснением.',
         'Если текст результата не прочитан — «attention» с пояснением. Решение и подпись — у человека.',
+        'Сверяй части отчёта между собой: титул, выводы, задание на оценку, описание объекта, расчёт и итог должны говорить',
+        'одно и то же (год, VIN, номер, даты, собственник, суммы, подходы). Пересчитывай арифметику, которую видишь.',
+        'Ищи следы чужого шаблона: другой объект, другая дата, лишние разделы, противоречащие друг другу абзацы.',
         'К каждому «attention» приведи до трёх коротких точных цитат из файлов (слово в слово, 5–200 знаков) — места,',
         'которые человеку стоит посмотреть. Не пересказывай и не придумывай цитаты: место без точной цитаты не покажут.',
         'Ответь только JSON: {"items": [{"id": "id правила", "hint": "ok" | "attention", "note": "пояснение", "quotes": ["цитата"]}]}.',
@@ -144,9 +191,10 @@ export function reviewMessages({ rules, brief, files }) {
       content: [
         brief,
         'ПРАВИЛА:',
-        ...rules.map((r) => `- ${r.id}: ${r.title}`),
+        ...rules.map((r) => `- ${r.id}: ${r.title}${r.ask ? `. Что проверить: ${r.ask}` : ''}`),
+        ...(auto.length ? ['УЖЕ НАЙДЕНО АВТОМАТИЧЕСКИ (по всему тексту; не повторяй, ищи другое):', ...auto] : []),
         'ФАЙЛЫ:',
-        ...files.map((f) => `[${f.name}]\n${f.text === null ? '(текст не прочитан: файл не удалось прочитать или такой вид файла помощник не читает)' : f.text}${f.truncated ? '\n(дальше текст не поместился — его помощник не видел)' : ''}`),
+        ...files.map((f) => `[${f.name}]\n${f.text === null ? '(текст не прочитан: файл не удалось прочитать или такой вид файла помощник не читает)' : f.text}${f.truncated ? '\n(часть страниц не поместилась — их помощник не видел)' : ''}`),
       ].join('\n'),
     },
   ];
@@ -154,20 +202,25 @@ export function reviewMessages({ rules, brief, files }) {
 
 // Подсказки по каждому правилу; правило, о котором модель промолчала, — «посмотрите сами». Отмеченные места — только
 // цитаты, которые нашлись в тексте отчёта (с файлом и страницей); выдуманные модель цитаты отбрасываются.
-export function cleanReviewAnswer(rules, text, docs = []) {
+// found — автоматические находки (src/ai/report-checks.mjs) по правилу: они показываются всегда и делают правило
+// «посмотрите», даже если модель замечаний не увидела или не ответила.
+export function cleanReviewAnswer(rules, text, docs = [], found = {}) {
   const j = parseJsonAnswer(text);
   const items = Array.isArray(j?.items) ? j.items : [];
   return rules.map((r) => {
     const it = items.find((x) => x?.id === r.id);
-    const hint = it?.hint === 'ok' ? 'ok' : 'attention';
-    const note = clip(it?.note, 1000) || (it ? '' : 'Помощник не дал ответа по этому правилу — проверьте сами');
+    const auto = found[r.id] ?? [];
+    const hint = it?.hint === 'ok' && !auto.length ? 'ok' : 'attention';
+    let note = clip(it?.note, 1000);
+    if (!note) note = auto.length ? 'есть автоматические находки — см. ниже' : it ? '' : 'Помощник не дал ответа по этому правилу — проверьте сами';
+    else if (auto.length && it?.hint === 'ok') note = `модель замечаний не увидела, но есть автоматические находки — см. ниже. ${note}`;
     const marks = [];
     for (const q of (Array.isArray(it?.quotes) ? it.quotes : []).slice(0, 3)) {
       if (typeof q !== 'string') continue;
       const at = locateQuote(docs, q);
       if (at) marks.push({ ...at, quote: clip(q.replace(/\s+/g, ' ').trim(), 200) });
     }
-    return { id: r.id, hint, note, marks };
+    return { id: r.id, hint, note, marks, ...(auto.length ? { found: auto } : {}) };
   });
 }
 
@@ -196,7 +249,8 @@ export function draftMessages({ brief, sections, photos, docs }) {
         'Пиши только то, что следует из данных. Не придумывай цифры, стоимость, аналоги, даты, имена, номера и адреса.',
         'Где данных нет или нужен расчёт и вывод эксперта — оставь пометку в квадратных скобках: [заполнить: что именно].',
         'Фото ты не видишь — только их список. Для каждого фото оставь строку «Фото N (имя файла): [описать по фото: имя файла]».',
-        'Разделы — строго по списку и в том же порядке, каждый начинается строкой «## Название раздела».',
+        'Разделы — строго по списку и в том же порядке, каждый начинается строкой «## Название раздела» (с номером, если он есть).',
+        'Пиши только про этот вид объекта: никаких слов о другом виде имущества (недвижимость, земля — в отчёте о машине).',
         'Ответь только текстом черновика, без пояснений до и после.',
       ].join('\n'),
     },
@@ -205,7 +259,7 @@ export function draftMessages({ brief, sections, photos, docs }) {
       content: [
         brief,
         'РАЗДЕЛЫ:',
-        ...sections.map((s) => `- ${s.id}: ${s.title}`),
+        ...sections.map((s) => `- ${s.id}: ${s.title}${s.ask ? `. Что писать: ${s.ask}` : ''}`),
         'ФОТО:',
         ...(photos.length ? photos.map((p) => `- ${p.name} (загружено ${p.at})`) : ['(фото к заявке не приложены)']),
         'ДОКУМЕНТЫ:',

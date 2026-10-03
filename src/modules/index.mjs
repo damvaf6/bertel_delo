@@ -3,8 +3,11 @@
 //
 // Формат модуля:
 //   { id, name, basis: ['contract' | 'court', …], fields: [поле…], services: [{ id, name, fields: [поле…] }…],
-//     checks: [{ id, title, services?: [id услуги…] }…],
-//     draft?: [{ id, title, services?: [id услуги…] }…],  — разделы черновика заключения от ИИ (задача 2.2)
+//     checks: [{ id, title, services?: [id услуги…], ask?, auto?: [имя правила…] }…],
+//       ask — что именно проверить (подсказка модели ИИ, человеку не показывается); auto — автоматические правила по
+//       всему тексту отчёта (src/ai/report-checks.mjs, AUTO_CHECKS): их находки показываются под этой проверкой
+//     draft?: [{ id, title, services?: [id услуги…], ask? }…],  — разделы черновика заключения от ИИ (задача 2.2);
+//       ask — что писать в разделе и что оставить эксперту в [квадратных скобках]
 //     inspection?: [{ id, title, hint?, services?: [id услуги…], optional? }…],  — шаги дистанционного осмотра (2.3)
 //     express?: { services: [id услуги…], show: [id поля заявки…], fields: [поле + services?…] } }  — экспресс-услуга (2.4):
 //       для каких услуг, какие поля заявки видит помощник на объекте и какие данные он заполняет (нужны шаги осмотра)
@@ -14,6 +17,7 @@
 //   Общие поля модуля идут в заявке перед полями услуги; id не должны совпадать.
 // Описание проверяется при запуске: ошибка в описании — сервер не стартует.
 import { HttpError } from '../http/core.mjs';
+import { AUTO_CHECKS } from '../ai/report-checks.mjs';
 import expertise from './expertise.mjs';
 
 export const DEFAULT_MODULES = [expertise];
@@ -40,6 +44,8 @@ function onlyKeys(obj, keys, where) {
 }
 
 const nonEmpty = (s) => typeof s === 'string' && s.trim().length > 0 && s.length <= 300;
+// Подсказка модели (ask) длиннее названия, но тоже ограничена: она уходит в каждый запрос к модели.
+const askText = (s) => typeof s === 'string' && s.trim().length > 0 && s.length <= 600;
 
 function checkIds(list, where) {
   if (!Array.isArray(list) || list.length === 0) fail(where, 'пустой список');
@@ -103,8 +109,12 @@ export function validateModule(m) {
   const serviceIds = m.services.map((s) => s.id);
   for (const c of m.checks) {
     const where = `${at}, проверка ${c.id}`;
-    onlyKeys(c, ['id', 'title', 'services'], where);
+    onlyKeys(c, ['id', 'title', 'services', 'ask', 'auto'], where);
     if (!nonEmpty(c.title)) fail(where, 'нет описания');
+    if (c.ask !== undefined && !askText(c.ask)) fail(where, 'ask — непустой текст до 600 знаков');
+    if (c.auto !== undefined && (!Array.isArray(c.auto) || c.auto.length === 0 || c.auto.some((a) => !Object.hasOwn(AUTO_CHECKS, a)))) {
+      fail(where, `auto — непустой список из: ${Object.keys(AUTO_CHECKS).join(', ')}`);
+    }
     if (c.services !== undefined && (!Array.isArray(c.services) || c.services.length === 0 || c.services.some((id) => !serviceIds.includes(id)))) {
       fail(where, 'services — непустой список услуг этого модуля');
     }
@@ -114,8 +124,9 @@ export function validateModule(m) {
     checkIds(m.draft, `${at}, разделы черновика`);
     for (const d of m.draft) {
       const where = `${at}, раздел черновика ${d.id}`;
-      onlyKeys(d, ['id', 'title', 'services'], where);
+      onlyKeys(d, ['id', 'title', 'services', 'ask'], where);
       if (!nonEmpty(d.title)) fail(where, 'нет описания');
+      if (d.ask !== undefined && !askText(d.ask)) fail(where, 'ask — непустой текст до 600 знаков');
       if (d.services !== undefined && (!Array.isArray(d.services) || d.services.length === 0 || d.services.some((id) => !serviceIds.includes(id)))) {
         fail(where, 'services — непустой список услуг этого модуля');
       }
@@ -196,13 +207,14 @@ export function createRegistry(modules = DEFAULT_MODULES) {
     checks(moduleId, serviceId) {
       const m = modulesList.find((x) => x.id === moduleId);
       if (!m?.services.some((x) => x.id === serviceId)) return [];
-      return m.checks.filter((c) => !c.services || c.services.includes(serviceId)).map((c) => ({ id: c.id, title: c.title }));
+      return m.checks.filter((c) => !c.services || c.services.includes(serviceId))
+        .map((c) => ({ id: c.id, title: c.title, ...(c.ask ? { ask: c.ask } : {}), ...(c.auto ? { auto: c.auto } : {}) }));
     },
     // Разделы черновика заключения для услуги (2.2); пустой список — черновик для услуги не готовится.
     draftSections(moduleId, serviceId) {
       const m = modulesList.find((x) => x.id === moduleId);
       if (!m?.draft || !m.services.some((x) => x.id === serviceId)) return [];
-      return m.draft.filter((d) => !d.services || d.services.includes(serviceId)).map((d) => ({ id: d.id, title: d.title }));
+      return m.draft.filter((d) => !d.services || d.services.includes(serviceId)).map((d) => ({ id: d.id, title: d.title, ...(d.ask ? { ask: d.ask } : {}) }));
     },
     // Шаги дистанционного осмотра для услуги (2.3); пустой список — ссылка владельцу для услуги не выдаётся.
     inspectionSteps(moduleId, serviceId) {

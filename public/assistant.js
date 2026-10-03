@@ -8,11 +8,17 @@ const timeRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', mont
 let consultation = null;
 let scope = '';
 
-export async function showAssistant() {
+// orderId — пришли из карточки дела (2.21): заявка сразу выбрана, курсор — в поле вопроса.
+export async function showAssistant(orderId) {
   show('assistant-view', 'assistant');
   say($('problem-msg'), '');
   say($('as-msg'), '');
   await loadAssistant();
+  if (orderId && [...$('as-order').options].some((o) => o.value === orderId)) {
+    $('as-order').value = orderId;
+    $('assistant-box').scrollIntoView({ block: 'start' });
+    $('as-text').focus();
+  }
 }
 
 // ——— Вход через проблему ———
