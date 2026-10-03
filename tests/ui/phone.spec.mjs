@@ -1500,6 +1500,93 @@ test('две подписи (2.5а): эксперт от организации 
   await hctx.close();
 });
 
+test('распределение в организации (2.17): диспетчер предлагает дело организации, руководитель назначает эксперта, отказ эксперта — снова руководителю', async ({ page, browser, baseURL }) => {
+  await signIn(page, '+79990000640');
+  const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира: распределение' }, headers: H })).json();
+  const id = created.order.id;
+  expect((await page.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(8), fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, Распределительная ул., 4', area: '52' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  const dctx = await phoneContext(browser, baseURL);
+  const dp = await dctx.newPage();
+  const disp = await signIn(dp, '+79990000641');
+  const hctx = await phoneContext(browser, baseURL);
+  const hp = await hctx.newPage();
+  const head = await signIn(hp, '+79990000642');
+  const sctx = await phoneContext(browser, baseURL);
+  const sp = await sctx.newPage();
+  const spec = await signIn(sp, '+79990000643');
+  const orgId = await db(async (c) => {
+    await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    await c.query('update orders set price_kop = 2000000, paid_at = now() where id = $1', [id]);
+    const { rows: [org] } = await c.query("insert into organizations (name) values ('ООО «Тестовое бюро распределения»') returning id");
+    await c.query("update users set full_name = 'Тестовый эксперт бюро' where id = $1", [spec.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, spec.id]);
+    await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [spec.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [spec.id]);
+    return org.id;
+  });
+
+  // Диспетчер в подборе видит организацию с экспертом и предлагает дело ей.
+  await dp.goto(`/kabinet#order=${id}`);
+  await expect(dp.locator('#order-status')).toHaveText('Подбор исполнителя');
+  const og = dp.locator('#org-candidates li').filter({ hasText: 'ООО «Тестовое бюро распределения»' });
+  await expect(og).toContainText('Экспертов с допуском: 1');
+  dp.once('dialog', (d) => d.accept());
+  await og.getByRole('button', { name: 'Предложить организации' }).click();
+  await expect(dp.locator('#order-status')).toHaveText('Ждёт исполнителя');
+  await expect(dp.locator('#match-current')).toHaveText('Сейчас дело у организации «ООО «Тестовое бюро распределения»»: её руководитель назначает эксперта. Можно передать другому.');
+  await expect(og.locator('.badge')).toHaveText('Предложено сейчас');
+  await og.scrollIntoViewIfNeeded();
+  await shot(dp, '99a-dispetcher-organizacii');
+
+  // Руководитель: уведомление и «Ждут назначения» — без заказчика и названия заявки; назначает эксперта.
+  await hp.goto('/kabinet#notifications');
+  await expect(hp.locator('#notifications li').first()).toContainText('Организации предложено дело');
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const pend = hp.locator('#org-pending > li').first();
+  await expect(pend).toContainText('Оценка недвижимости');
+  await expect(pend).toContainText('вознаграждение 16 000 ₽');
+  await expect(hp.locator('#org-pending-box')).not.toContainText('распределение');
+  await expect(hp.locator('#org-pending-box')).not.toContainText('Распределительная');
+  await expect(pend.locator('select option')).toHaveText(['Тестовый эксперт бюро · в работе 0']);
+  await hp.locator('#org-pending-box').scrollIntoViewIfNeeded();
+  await shot(hp, '99b-rukovoditel-zhdut-naznacheniya');
+  await pend.getByRole('button', { name: 'Назначить' }).click();
+  await expect(hp.locator('#org-pending-msg')).toHaveText('Дело предложено эксперту — он примет его или откажется');
+  await expect(hp.locator('#org-pending-box')).toBeHidden();
+  await expect(hp.locator('#org-cases > li').first()).toContainText('Ждёт исполнителя · эксперт: Тестовый эксперт бюро');
+
+  // Эксперт отказывается — дело снова у руководителя, с причиной.
+  await sp.goto('/kabinet');
+  const offer = sp.locator('#orders li').filter({ hasText: 'Квартира: распределение' });
+  await expect(offer.getByRole('button', { name: 'Принять дело' })).toBeVisible();
+  sp.once('dialog', (d) => d.accept('Занят до конца месяца'));
+  await offer.getByRole('button', { name: 'Отказаться' }).click();
+  await expect(sp.locator('#orders-msg')).toHaveText('Вы отказались от дела');
+  await hp.reload();
+  const back = hp.locator('#org-pending > li').first();
+  await expect(back).toContainText('Эксперт отказался: Занят до конца месяца');
+  await hp.locator('#org-pending-box').scrollIntoViewIfNeeded();
+  await shot(hp, '99c-rukovoditel-otkaz-eksperta');
+
+  // Руководитель отказывается от дела — оно возвращается диспетчеру в подбор.
+  hp.once('dialog', (d) => d.accept('Все эксперты заняты'));
+  await back.getByRole('button', { name: 'Отказаться от дела' }).click();
+  await expect(hp.locator('#org-pending-msg')).toHaveText('Вы отказались от дела — оно вернулось диспетчеру');
+  await expect(hp.locator('#org-pending-box')).toBeHidden();
+  await dp.goto('/kabinet#notifications');
+  await expect(dp.locator('#notifications li').first()).toContainText('Организация отказалась от дела');
+  await dp.goto(`/kabinet#order=${id}`);
+  await expect(dp.locator('#order-status')).toHaveText('Подбор исполнителя');
+  await expect(dp.locator('#history')).toContainText('Все эксперты заняты');
+  await shot(dp, '99d-dispetcher-otkaz-organizacii');
+  await dctx.close();
+  await hctx.close();
+  await sctx.close();
+});
+
 test('сквозной путь: заявка на оценку квартиры от входа заказчика до выплаты исполнителю', async ({ page, browser, baseURL }) => {
   const A = '+79990001401', D = '+79990001402', S = '+79990001403', C = '+79990001404', X = '+79990001405';
   const { grantRole } = await import('../../src/tools/grant-role.mjs');

@@ -24,9 +24,19 @@ export async function loadMatch(current, reopen) {
   if (!on) return;
   say($('match-msg'), '');
   // Заказчик платит при заказе: пока не оплачено, предложить дело нельзя (1.6а).
-  $('match-current').textContent = current.executor ? `Сейчас предложено: ${current.executor.name || 'специалист без имени'}. Можно передать другому, пока он не ответил.`
+  $('match-current').textContent = current.offer_org && !current.executor ? `Сейчас дело у организации «${current.offer_org.name}»: её руководитель назначает эксперта. Можно передать другому.`
+    : current.executor ? `Сейчас предложено: ${current.executor.name || 'специалист без имени'}. Можно передать другому, пока он не ответил.`
     : order.paid ? 'Заявка оплачена — дело можно предложить специалисту.' : 'Дело можно предложить после оплаты заказчиком: назначьте цену и дождитесь оплаты.';
-  const { candidates, current_executor_id: cur } = await api('GET', `/api/orders/${order.id}/candidates`);
+  const { candidates, current_executor_id: cur, orgs, current_org_id: curOrg } = await api('GET', `/api/orders/${order.id}/candidates`);
+  // Организации с экспертами, у которых есть допуск (2.17): эксперта назначит руководитель.
+  $('org-candidates-empty').classList.toggle('hidden', orgs.length > 0);
+  $('org-candidates').replaceChildren(...orgs.map((g) => el('li', { 'data-org': g.org_id },
+    el('div', { class: 'row' },
+      el('span', { class: 'title', text: g.name }),
+      el('span', { class: 'score', text: `до ${g.best} из 100` })),
+    el('div', { class: 'muted', text: `Экспертов с допуском: ${g.experts}` }),
+    g.org_id === curOrg && !cur ? el('span', { class: 'badge', text: 'Предложено сейчас' })
+      : el('button', { class: 'secondary', 'data-action': 'offer-org', onclick: () => offerOrg(order, g, reopen) }, 'Предложить организации'))));
   $('candidates-empty').classList.toggle('hidden', candidates.length > 0);
   $('candidates').replaceChildren(...candidates.map((c) => el('li', { 'data-id': c.user_id },
     el('div', { class: 'row' },
@@ -43,6 +53,15 @@ async function offer(order, c, reopen) {
     await api('POST', `/api/orders/${order.id}/offer`, { specialist_id: c.user_id, from: order.status });
     await reopen();
     say($('status-msg'), 'Дело предложено специалисту', 'ok');
+  } catch (err) { say($('match-msg'), err.message); }
+}
+
+async function offerOrg(order, g, reopen) {
+  if (!confirm(`Предложить дело организации «${g.name}»? Эксперта назначит её руководитель.`)) return;
+  try {
+    await api('POST', `/api/orders/${order.id}/offer`, { org_id: g.org_id, from: order.status });
+    await reopen();
+    say($('status-msg'), 'Дело предложено организации', 'ok');
   } catch (err) { say($('match-msg'), err.message); }
 }
 

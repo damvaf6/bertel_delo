@@ -1086,7 +1086,7 @@ test('распределение в организации (2.17): дело ор
   const view = (await U.headB.req('GET', `/api/orgs/${orgB.id}/cases`)).body;
   assert.equal(view.pending.length, 1);
   const p = view.pending[0];
-  assert.deepEqual(Object.keys(p).sort(), ['deadline', 'experts', 'fee_kop', 'id', 'order_ref', 'overdue', 'service']);
+  assert.deepEqual(Object.keys(p).sort(), ['deadline', 'declined', 'experts', 'fee_kop', 'id', 'order_ref', 'overdue', 'service']);
   assert.equal(p.fee_kop, 1_200_000);
   assert.deepEqual(p.experts.map((x) => [x.user_id, x.in_work]), [[spec2.user.id, 1]]);
   const owner = (await S.sql`select phone from users where id = ${U.owner.user.id}`)[0];
@@ -1117,7 +1117,7 @@ test('распределение в организации (2.17): дело ор
   assert.equal((await spec2.req('GET', `/api/orders/${o.id}`)).status, 404);
   assert.equal(await events(U.headB.user.id, 'org_expert_declined'), 1);
   assert.equal(await events(U.dispatcher.user.id, 'declined'), 0, 'диспетчеру — нет: дело у организации');
-  assert.equal((await U.headB.req('GET', `/api/orgs/${orgB.id}/cases`)).body.pending.length, 1);
+  assert.equal((await U.headB.req('GET', `/api/orgs/${orgB.id}/cases`)).body.pending[0].declined, 'Занят', 'причина отказа эксперта');
   // Руководитель отказывается — дело диспетчеру в подбор; причина обязательна.
   assert.equal((await decline(U.headB, orgB.id, '')).body.error, 'reason_required');
   assert.equal((await decline(U.headB, orgB.id)).status, 200);

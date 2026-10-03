@@ -113,7 +113,7 @@ function orderItem(o) {
 async function answerOffer(o, to) {
   let reason;
   if (to === 'matching') {
-    reason = prompt('Почему отказываетесь? Диспетчер увидит причину и предложит дело другому.');
+    reason = prompt('Почему отказываетесь? Причину увидит тот, кто предложил дело, и предложит его другому.');
     if (reason === null) return;
     if (!reason.trim()) return say($('orders-msg'), 'Укажите причину отказа');
   } else if (!confirm(`Принять дело «${o.title}»?`)) return;

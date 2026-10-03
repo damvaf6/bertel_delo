@@ -190,6 +190,9 @@ export function orgOps() {
           deadline: o.deadline,
           overdue: isOverdue(o, today),
           fee_kop: o.price_kop ? splitAmount(Number(o.price_kop)).payoutKop : null,
+          // Эксперт отказался — руководитель видит причину последнего отказа (только своих экспертов по этому делу).
+          declined: (await sql.one`select reason from order_offers where order_id = ${o.id} and org_id = ${org.id}
+                                   and specialist_id is not null and outcome = 'declined' order by id desc limit 1`)?.reason ?? null,
           experts: (await orgExpertsFor(sql, o, org.id)).map((c) => ({
             user_id: c.user_id, full_name: c.full_name || 'Без имени', score: c.score.total,
             in_work: loadOf.get(c.user_id)?.in_work ?? 0, overdue: loadOf.get(c.user_id)?.overdue ?? 0,
