@@ -9,6 +9,11 @@ name: Deploy core (Yandex Cloud)
 # тестовыми номерами (ключ STAGE_LOGIN_KEY из отдельного секрета delo-stage-stage-login, которого на prod нет).
 on:
   workflow_dispatch:
+    inputs:
+      tour:
+        description: 'Экскурсия по кабинетам: снимки и PDF (tests/stage/tour.spec.mjs)'
+        type: boolean
+        default: false
 
 jobs:
   deploy:
@@ -134,6 +139,7 @@ jobs:
           UI_BASE_URL: ${{ env.URL }}
           # Администратор площадки — назначен кнопкой «Stage admin» (решение Дамира 02.10.2026, вопрос 10).
           STAGE_ADMIN_PHONE: '+79990009500'
+          TOUR: ${{ inputs.tour && '1' || '' }}
         run: |
           # Ключи прогона: IAM-токен (браузер подставляет его только для адреса площадки) и ключ служебного входа.
           STAGE_INVOKE_TOKEN=$(yc iam create-token); echo "::add-mask::$STAGE_INVOKE_TOKEN"
@@ -143,6 +149,7 @@ jobs:
           npx playwright install --with-deps chromium
           mkdir -p test-results/screens
           npx playwright test --config playwright.stage.mjs
+          if [ "$TOUR" = 1 ]; then node tests/tools/tour-pdf.mjs test-results "test-results/Экскурсия по кабинетам.pdf"; fi
 
       - name: Скриншоты
         if: always()

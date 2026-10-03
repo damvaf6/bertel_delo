@@ -23,7 +23,7 @@ const test = base.extend({
 });
 
 async function phone(browser, baseURL, extra = {}) {
-  const ctx = await browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, locale: 'ru-RU', acceptDownloads: true, ...extra });
+  const ctx = await browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, locale: 'ru-RU', timezoneId: 'Europe/Moscow', acceptDownloads: true, ...extra });
   const origin = new URL(baseURL).origin;
   await ctx.route((u) => u.origin === origin, async (route) => route.continue({ headers: { ...(await route.request().allHeaders()), ...AUTH } }));
   return ctx.newPage();
@@ -70,7 +70,8 @@ async function snap(page, cabinet, title, caption, what) {
   fs.writeFileSync('test-results/tour.json', JSON.stringify({ at: new Date().toISOString(), base: 'stage', shots }, null, 2));
 }
 
-const RUN = String(20 + Math.floor(Math.random() * 70)) + String(Math.floor(Math.random() * 10));
+// Номера экскурсии: +7 999 000-9N-Dx, N — 1…4 (не пересекаются с общим прогоном 20…89, администратором 95-00 и помощником 96…99).
+const RUN = `9${1 + Math.floor(Math.random() * 4)}${Math.floor(Math.random() * 10)}`;
 const tel = (i) => `+7999000${RUN}${i}`;
 const inDays = (n) => new Date(Date.now() + n * 86400_000).toISOString().slice(0, 10);
 
@@ -85,6 +86,7 @@ const REPORT = [
 ];
 
 test.describe.configure({ mode: 'serial', timeout: 900_000 });
+test.use({ actionTimeout: 30_000, timezoneId: 'Europe/Moscow' });
 
 test('экскурсия по кабинетам: эксперт, руководитель организации, заказчик, диспетчер', async ({ page, browser, baseURL }) => {
   test.skip(!TOUR, 'экскурсия — только по просьбе (TOUR=1)');
@@ -140,12 +142,15 @@ test('экскурсия по кабинетам: эксперт, руковод
   await expect(sp.locator('#specialist-msg')).toHaveText('Теперь заключение подписывает ещё руководитель организации');
 
   // ——— Заказчик ———
+  const lp = await phone(browser, baseURL);
+  await lp.goto('/');
+  await expect(lp.getByRole('button').first()).toBeVisible();
+  await snap(lp, 'Заказчик', 'Вход', 'Вход по номеру телефона: робот звонит и называет код. Пароль не нужен.');
+  await lp.context().close();
   await enter(page, C, 'Тестова Заказчица');
-  await page.goto('/');
-  await snap(page, 'Заказчик', 'Вход', 'Вход по номеру телефона: робот звонит и называет код. Пароль не нужен.');
   await page.goto('/kabinet');
   await expect(page.locator('#who')).toHaveText('Тестова Заказчица');
-  await snap(page, 'Заказчик', 'Главная: мои заявки', 'Список своих заявок, кнопка «Спросить помощника» и новая заявка. Внизу — меню разделов.');
+  await snap(page, 'Заказчик', 'Главная: мои заявки', 'Список своих заявок, кнопка «Спросить помощника» и новая заявка. Вверху — разделы кабинета: Заявки, Помощник, Уведомления, Организации и другие (строка прокручивается вбок).');
   await page.getByRole('link', { name: 'Спросить помощника' }).click();
   await page.getByLabel('Что случилось').fill('Суд назначил оценку нашего грузового автомобиля (фургон) в Московской области по спору с лизинговой компанией. Что делать?');
   await page.getByRole('button', { name: 'Разобраться' }).click();
@@ -293,7 +298,7 @@ test('экскурсия по кабинетам: эксперт, руковод
   await snap(hp, 'Руководитель организации', 'Дела сотрудников', 'Руководитель видит заявки, которые сотрудники заказали от организации. Дела, которые эксперты организации выполняют для заказчиков, здесь не видны.', '#list-view .card >> nth=0');
   await hp.locator('#orders li').filter({ hasText: `Оценка служебного автомобиля — тест ${RUN}` }).getByRole('button').first().click();
   await expect(hp.getByRole('heading', { name: 'Кто ведёт дело' })).toBeVisible();
-  await snap(hp, 'Руководитель организации', 'Распределение: кто ведёт дело', 'Руководитель передаёт заявку организации другому сотруднику. Сроков и нагрузки по сотрудникам одним экраном пока нет.', ['#order-view .card >> nth=0', '#transfer-box']);
+  await snap(hp, 'Руководитель организации', 'Распределение: кто ведёт дело', 'Руководитель передаёт заявку организации другому сотруднику. Сроков и нагрузки по сотрудникам одним экраном пока нет.', '#transfer-box');
   await hp.goto('/kabinet#money');
   await snap(hp, 'Руководитель организации', 'Деньги', 'Раздел «Деньги» у руководителя сейчас показывает только его собственные оплаты — денег по организации пока нет.');
 
@@ -326,12 +331,12 @@ test('экскурсия по кабинетам: эксперт, руковод
   await page.locator('#closing li').getByRole('button', { name: 'Открыть' }).first().click();
   await expect(page.locator('#closing-doc')).toContainText('Акт');
   await snap(page, 'Заказчик', 'Акт и закрытие', 'Закрывающие документы (акт) и кнопка «Принять и закрыть».', '#money-box');
-  await page.getByRole('button', { name: 'Принять и закрыть' }).click();
-  await expect(page.locator('#order-status')).toHaveText('Закрыта');
   await page.getByLabel('Сообщение').fill('Спасибо, отчёт получили.');
   await page.getByRole('button', { name: 'Отправить сообщение' }).click();
   await expect(page.locator('#messages li')).toHaveCount(1);
   await snap(page, 'Заказчик', 'Переписка по заявке', 'Одна переписка на заявку: заказчик, исполнитель и диспетчер. Имя исполнителя заказчику не показывается.', '#chat-box');
+  await page.getByRole('button', { name: 'Принять и закрыть' }).click();
+  await expect(page.locator('#order-status')).toHaveText('Закрыта');
 
   // ——— Эксперт: выплата, ассистент ———
   await sp.goto('/kabinet#money');
