@@ -4,6 +4,7 @@ import { createDb } from './db.mjs';
 import { createProviders } from './providers/index.mjs';
 import { createApp } from './app.mjs';
 import { deliverPending } from './notify/notify.mjs';
+import { remindDeadlines } from './notify/reminders.mjs';
 import { deliverMail } from './mail/outbox.mjs';
 import { processInbound, receiveMail } from './mail/inbound.mjs';
 import { startupSteps } from './startup.mjs';
@@ -23,9 +24,13 @@ try {
 
 const server = app.listen(cfg.port, () => console.log(`БЕРТЕЛ Дело · ядро · ${cfg.appEnv} · порт ${cfg.port}`));
 
-// Повтор неотправленных СМС-уведомлений раз в минуту (первая попытка — сразу после операции, src/http/router.mjs).
+// Повтор неотправленных СМС-уведомлений раз в минуту (первая попытка — сразу после операции, src/http/router.mjs);
+// там же — напоминания о сроках (2.13), каждое один раз.
 const sweep = setInterval(() => {
-  deliverPending(sql, providers).catch((e) => console.error('уведомления:', e?.message || e));
+  remindDeadlines(sql)
+    .catch((e) => console.error('напоминания о сроках:', e?.message || e))
+    .then(() => deliverPending(sql, providers))
+    .catch((e) => console.error('уведомления:', e?.message || e));
 }, 60_000);
 sweep.unref();
 
