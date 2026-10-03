@@ -2,6 +2,7 @@
 import { api, el, say, ROLE_RU } from '/common.js';
 import { state, show, refreshMe } from '/shell.js';
 import { dayRu } from '/order.js';
+import { showDossier } from '/dossier.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -43,6 +44,8 @@ export async function loadMatch(current, reopen) {
       el('span', { class: 'title', text: c.full_name || 'Без имени' }),
       el('span', { class: 'score', text: `${c.score.total} из 100` })),
     el('ul', { class: 'features' }, ...Object.values(c.score.features).map((f) => el('li', { text: `${f.name}: ${f.score} — ${f.note}` }))),
+    // Досье (2.14): истёкший аттестат или полис — предупреждение; предложить дело всё равно можно.
+    ...(c.dossier_expired?.length ? [el('div', { class: 'overdue', 'data-role': 'dossier-expired', text: `В досье истёк срок: ${c.dossier_expired.join(', ')}` })] : []),
     c.user_id === cur ? el('span', { class: 'badge', text: 'Предложено сейчас' })
       : el('button', { class: 'secondary', 'data-action': 'offer', onclick: () => offer(order, c, reopen) }, 'Предложить дело'))));
 }
@@ -81,7 +84,7 @@ export async function showSpecialist() {
   $('specialist-permits').replaceChildren(...sp.permits.map((p) => el('li', { text: permitText(p) })));
   $('specialist-permits-empty').classList.toggle('hidden', sp.permits.length > 0);
   show('specialist-view', 'specialist');
-  await Promise.all([showCrm(), showVisits(sp)]);
+  await Promise.all([showCrm(), showVisits(sp), showDossier()]);
 }
 
 // Выезды помощника на объект (экспресс, 2.4): открываются на странице осмотра — по шагам, с камерой и геометкой.
@@ -140,5 +143,6 @@ export async function showSpecialists() {
     el('div', { class: 'muted', text: [s.active ? 'принимает дела' : 'не принимает дела', `дел ${s.open_orders} из ${s.capacity}`,
       s.regions.map((r) => (r === 'moscow' ? 'Москва' : 'область')).join(' и ')].join(' · ') }),
     el('div', { class: 'muted', text: s.permits.length ? `Допуски: ${s.permits.map(permitText).join('; ')}` : 'Допусков нет' }),
+    ...(s.dossier_alerts?.length ? [el('div', { class: 'overdue', text: s.dossier_alerts.map((a) => `${a.kind_name}: ${a.state === 'expired' ? 'срок истёк' : `срок до ${dayRu(a.valid_until)}`}`).join('; ') })] : []),
     ...(s.crm ? [el('div', { class: 'muted', text: `Из БЕРТЕЛ CRM · дел там: ${s.external_load}${s.crm.languages.length ? ` · языки: ${s.crm.languages.join(', ')}` : ''}` })] : []))));
 }

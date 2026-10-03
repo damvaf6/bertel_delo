@@ -193,6 +193,8 @@
           <p class="muted hidden" id="result-sign-note">Перед сдачей подпишите каждый файл результата Вашей УКЭП — кнопка «Подписать» у файла или загрузите готовую подпись (программа удостоверяющего центра, «Госключ»). Если Вы работаете от организации, файл подписывает ещё её руководитель.</p>
           <label class="btn" for="result-file">Добавить файл результата</label>
           <input id="result-file" type="file" class="visually-hidden" aria-label="Добавить файл результата (до 5 МБ)">
+          <button type="button" class="secondary hidden" id="dossier-attach">Приложить копии из досье</button>
+          <p class="muted hidden" id="dossier-attach-note">Копии диплома, аттестата, полисов из Вашего досье станут приложениями к отчёту — их подписываете вместе с отчётом.</p>
         </div>
         <p class="msg" id="doc-msg" role="status" aria-live="polite"></p>
       </div>
@@ -562,6 +564,47 @@
         <h2>Мои допуски</h2>
         <ul class="list" id="specialist-permits"></ul>
         <p class="muted hidden" id="specialist-permits-empty">Допусков пока нет. Допуск выдаёт администратор платформы.</p>
+      </div>
+      <div class="card" id="dossier-box">
+        <h2>Моё досье</h2>
+        <p class="muted">Диплом, квалификационный аттестат, СРО, полисы. Заполните один раз: сведения сами попадут в черновик
+          отчёта, копии — в приложения кнопкой в деле, а ИИ-проверка сверит отчёт с досье. О конце срока напомним за 30 и за 7 дней.
+          Досье видите только Вы.</p>
+        <p class="msg hidden" id="dossier-alert" role="alert"></p>
+        <ul class="list" id="dossier-items"></ul>
+        <p class="muted hidden" id="dossier-empty">В досье пока пусто.</p>
+        <form id="dossier-form" novalidate>
+          <h3 id="dossier-form-title">Добавить документ</h3>
+          <div class="field">
+            <label for="dossier-kind">Документ</label>
+            <select id="dossier-kind"></select>
+          </div>
+          <div class="field">
+            <label for="dossier-title" id="dossier-title-label">Учебное заведение и специальность</label>
+            <input id="dossier-title" type="text" maxlength="300">
+          </div>
+          <div class="field" data-dossier-field="number">
+            <label for="dossier-number" id="dossier-number-label">Номер</label>
+            <input id="dossier-number" type="text" maxlength="100">
+          </div>
+          <div class="field" data-dossier-field="issued_on">
+            <label for="dossier-issued">Дата выдачи</label>
+            <input id="dossier-issued" type="date">
+          </div>
+          <div class="field" data-dossier-field="valid_until">
+            <label for="dossier-until">Действует до</label>
+            <input id="dossier-until" type="date">
+          </div>
+          <div class="field" data-dossier-field="amount_kop">
+            <label for="dossier-amount">Страховая сумма, руб.</label>
+            <input id="dossier-amount" type="number" min="1" step="1" inputmode="numeric">
+          </div>
+          <div class="row">
+            <button type="submit" id="dossier-save">Добавить</button>
+            <button type="button" class="secondary hidden" id="dossier-cancel">Отмена</button>
+          </div>
+        </form>
+        <p class="msg" id="dossier-msg" role="status" aria-live="polite"></p>
       </div>
       <div class="card hidden" id="visits-box">
         <h2>Мои выезды на объект</h2>
