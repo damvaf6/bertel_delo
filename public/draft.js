@@ -23,6 +23,7 @@ export async function loadDraft(current, reload) {
   $('draft-ai').textContent = r.draft ? 'Подготовить заново с помощью ИИ' : 'Подготовить черновик с помощью ИИ';
   $('draft-edit').classList.toggle('hidden', !r.draft);
   $('draft-actions').classList.toggle('hidden', !(r.draft && r.can_edit));
+  $('draft-word-box').classList.toggle('hidden', !(r.draft && mine));
   $('draft-text').readOnly = !r.can_edit;
   $('draft-text').value = r.draft?.body ?? '';
   // Несохранённая правка с этого телефона (ушли со страницы, не нажав «Сохранить») — восстанавливается (2.19).
@@ -104,10 +105,17 @@ $('draft-save').addEventListener('click', () => run($('draft-save'), async () =>
   say($('draft-msg'), 'Правка сохранена', 'ok');
 }));
 
+// Файл Word черновика (2.29): несохранённая правка сначала сохраняется — в файл идёт то, что на экране.
+$('draft-word').addEventListener('click', () => run($('draft-word'), async () => {
+  if (!$('draft-text').readOnly && $('draft-text').value.trim() !== ctx.draft.body) await save();
+  location.href = `/api/orders/${ctx.order.id}/draft/docx`;
+  say($('draft-msg'), 'Файл Word скачивается', 'ok');
+}));
+
 $('draft-attach').addEventListener('click', () => run($('draft-attach'), async () => {
   if (!$('draft-confirm').checked) return say($('draft-msg'), 'Отметьте, что Вы проверили текст и отвечаете за него');
   if ($('draft-text').value.trim() !== ctx.draft.body) await save();
-  await api('POST', `/api/orders/${ctx.order.id}/draft/result`, { from: ctx.draft.id, confirm: true });
+  const { document: doc } = await api('POST', `/api/orders/${ctx.order.id}/draft/result`, { from: ctx.draft.id, confirm: true });
   await ctx.reload();
-  say($('draft-msg'), 'Файл «Заключение.docx» добавлен в результат работы', 'ok');
+  say($('draft-msg'), `Файл «${doc.filename}» добавлен в результат работы`, 'ok');
 }));

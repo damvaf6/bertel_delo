@@ -8,7 +8,9 @@ import { test as base, expect } from '@playwright/test';
 import pg from 'pg';
 import { DB_URL, TEST_TOKEN, BRIDGE_SECRET, testEnv } from '../helpers.mjs';
 import { signBridge } from '../../src/bridge/signature.mjs';
-import { makePdf } from '../tools/make-docs.mjs';
+import { makePdf, makeDocx } from '../tools/make-docs.mjs';
+import { extractPages } from '../../src/ai/extract.mjs';
+import fs from 'node:fs';
 import { testExternalSignature } from '../../src/providers/sign.mjs';
 import crypto from 'node:crypto';
 
@@ -1037,8 +1039,8 @@ test('черновик заключения от ИИ: специалист го
   await expect(sp.locator('#draft-state')).toContainText('Последняя правка');
   await sp.getByLabel('Я проверил текст и отвечаю за него').check();
   await sp.getByRole('button', { name: 'Приложить как файл результата' }).click();
-  await expect(sp.locator('#draft-msg')).toHaveText('Файл «Заключение.docx» добавлен в результат работы');
-  await expect(sp.locator('#docs li').filter({ hasText: 'Заключение.docx' })).toContainText('Результат работы');
+  await expect(sp.locator('#draft-msg')).toHaveText('Файл «Отчёт об оценке.docx» добавлен в результат работы');
+  await expect(sp.locator('#docs li').filter({ hasText: 'Отчёт об оценке.docx' })).toContainText('Результат работы');
   await shot(sp, '57-specialist-chernovik-prilozhen');
   // ИИ-проверка читает приложенный Word.
   await sp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
@@ -1057,7 +1059,7 @@ test('черновик заключения от ИИ: специалист го
   await expect(page.locator('#order-title')).toHaveText('Квартира для черновика заключения');
   await expect(page.locator('#draft-box')).toBeHidden();
   await expect(page.locator('#results-later')).toBeVisible();
-  await expect(page.locator('#docs')).not.toContainText('Заключение.docx');
+  await expect(page.locator('#docs')).not.toContainText('Отчёт об оценке.docx');
   await shot(page, '58-zakazchik-bez-chernovika');
   await sctx.close();
   await dctx.close();
@@ -1932,4 +1934,80 @@ test('сквозной путь: заявка на оценку квартиры
   await xp.goto(`/kabinet#order=${id}`);
   await expect(xp.getByRole('heading', { name: 'Заявка не найдена' })).toBeVisible();
   for (const p of [ap, dp, sp, xp]) await p.context().close();
+});
+
+test('черновик готовым файлом Word (2.29): руководитель загружает шаблон, эксперт скачивает отчёт в нём', async ({ page, browser, baseURL }) => {
+  await signIn(page, '+79990000650');
+  const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира: отчёт в шаблоне' }, headers: H })).json();
+  const id = created.order.id;
+  expect((await page.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(9), fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 50', area: '61' } }, headers: H,
+  })).status()).toBe(200);
+  const sctx = await phoneContext(browser, baseURL, { acceptDownloads: true });
+  const sp = await sctx.newPage();
+  const spec = await signIn(sp, '+79990000651');
+  const hctx = await phoneContext(browser, baseURL);
+  const hp = await hctx.newPage();
+  const head = await signIn(hp, '+79990000652');
+  const orgId = await db(async (c) => {
+    const { rows: [org] } = await c.query("insert into organizations (name) values ('ООО «Тестовый бланк»') returning id");
+    await c.query("update users set full_name = 'Тестовый эксперт бланка' where id = $1", [spec.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, spec.id]);
+    await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [spec.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [spec.id]);
+    await c.query("update orders set status = 'in_work', executor_user_id = $2, price_kop = 1500000, paid_at = now() where id = $1", [id, spec.id]);
+    return org.id;
+  });
+
+  // Руководитель загружает шаблон: сначала не тот файл, потом .docx с шапкой и местом для отчёта.
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const box = hp.locator('#org-template-box');
+  await expect(box).toContainText('Шаблон не загружен');
+  await hp.locator('#org-template-file').setInputFiles({ name: 'бланк.doc', mimeType: 'application/msword', buffer: Buffer.from('старый Word') });
+  await expect(hp.locator('#org-template-msg')).toHaveText('Шаблон — файл Word .docx (не .doc, не .docm)');
+  await hp.locator('#org-template-file').setInputFiles({ name: 'Бланк компании.docx', mimeType: 'application/octet-stream',
+    buffer: makeDocx(['ООО «Тестовый бланк» · ИНН 7700000000 · г. Москва', '{{ОТЧЁТ}}', 'Руководитель ____________']) });
+  await expect(hp.locator('#org-template-msg')).toHaveText('Шаблон сохранён');
+  await expect(hp.locator('#org-template-state')).toContainText('Загружен «Бланк компании.docx»');
+  await expect(hp.locator('#org-template-state')).toContainText('Отчёт встаёт на место абзаца {{ОТЧЁТ}}');
+  await expect(hp.getByRole('button', { name: 'Убрать шаблон' })).toBeVisible();
+  await box.scrollIntoViewIfNeeded();
+  await shot(hp, '99h-rukovoditel-shablon-otcheta');
+
+  // Эксперт видит шаблон в организации, но не меняет его.
+  await sp.goto(`/kabinet#org=${orgId}`);
+  await expect(sp.locator('#org-template-state')).toContainText('Загружен «Бланк компании.docx»');
+  await expect(sp.locator('#org-template-pick')).toBeHidden();
+  await expect(sp.getByRole('button', { name: 'Убрать шаблон' })).toBeHidden();
+  await expect(sp.getByRole('button', { name: 'Скачать шаблон' })).toBeVisible();
+
+  // Черновик: таблица «задание» из заявки и таблица подходов; «Скачать Word» — готовый отчёт в шаблоне организации.
+  await sp.goto(`/kabinet#order=${id}`);
+  await sp.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const text = sp.getByLabel('Текст заключения');
+  await expect(text).toHaveValue(/\| Адрес объекта \| г\. Москва, тестовая ул\., 50 \|/);
+  await expect(text).toHaveValue(/\| Подход \| Стоимость, руб\. \| Вес \|/);
+  await expect(sp.getByRole('button', { name: 'Скачать Word' })).toBeVisible();
+  await sp.locator('#draft-word-box').scrollIntoViewIfNeeded();
+  await shot(sp, '99i-specialist-skachat-word');
+  // Несохранённая правка уходит в файл: сначала сохраняется.
+  await text.fill(`${await text.inputValue()}\nПравка эксперта перед скачиванием.`);
+  const [download] = await Promise.all([sp.waitForEvent('download'), sp.getByRole('button', { name: 'Скачать Word' }).click()]);
+  expect(download.suggestedFilename()).toBe('Отчёт об оценке.docx');
+  const buf = fs.readFileSync(await download.path());
+  const word = (await extractPages(buf, 'Отчёт.docx')).pages.join('\n');
+  expect(word).toMatch(/^ООО «Тестовый бланк» · ИНН 7700000000 · г\. Москва\n[\s\S]*ОТЧЁТ ОБ ОЦЕНКЕ № [0-9A-F]{8}\nОценка недвижимости/);
+  expect(word).toContain('Исполнитель: Тестовый эксперт бланка');
+  expect(word).toMatch(/Содержание\n1\. Вводная часть/);
+  expect(word).toContain('Правка эксперта перед скачиванием.');
+  expect(word).toMatch(/Руководитель ____________\n?$/);
+  await expect(sp.locator('#draft-state')).toContainText('Последняя правка');
+
+  // Заказчик кнопки не видит, файла не получает.
+  await page.goto(`/kabinet#order=${id}`);
+  await expect(page.locator('#draft-box')).toBeHidden();
+  expect((await page.request.get(`/api/orders/${id}/draft/docx`)).status()).toBe(403);
+  await sctx.close();
+  await hctx.close();
 });
