@@ -4,7 +4,7 @@
 // Находка — подсказка человеку (место и страница), не вердикт: отметки ставит человек.
 // Какие правила к какой проверке относятся — данными в модуле (`checks[].auto`); здесь — только сами правила.
 //   runAutoChecks(names, docs, ctx) → { [имя правила]: [{ text, file, where, quote }] }
-// docs — [{ name, kind, pages }] (src/ai/extract.mjs); ctx — { fields } заявки.
+// docs — [{ name, kind, pages }] (src/ai/extract.mjs); ctx — { fields } заявки и { dossier: { items, today } } исполнителя (2.14).
 
 const MAX_PER_RULE = 5;
 
@@ -270,6 +270,71 @@ function courtPurpose(doc, ctx) {
   return out;
 }
 
+// ——— Сверка с досье эксперта (2.14): сроки на дату отчёта, номера, страховые суммы ———
+// ctx.dossier — { items, today } (src/dossier/dossier.mjs). Дата отчёта — «дата составления (отчёта)» в тексте, иначе сегодня.
+const REPORT_DATE = /дата\s+(?:составления|подписания)(?:\s+(?:отч[её]та|заключения))?[^\d\n]{0,40}(\d{1,2})\.(\d{1,2})\.(\d{4})/iu;
+const MONEY = /\d{1,3}(?:[  .]\d{3})+|\d{4,}/g;
+const KIND_WORD = { education: /диплом/iu, certificate: /аттестат/iu, sro: /\bСРО\b|саморегулируем/iu, policy: /полис|страхован/iu, policy_org: /полис|страхован/iu };
+const squash = (v) => String(v ?? '').toLowerCase().replace(/[^0-9a-zа-яё]/giu, '');
+const ruDate = (d) => d.split('-').reverse().join('.');
+
+function reportDate(docs, today) {
+  for (const doc of docs) for (const page of doc.pages ?? []) {
+    const m = page.match(REPORT_DATE);
+    if (m) {
+      const d = `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+      if (!Number.isNaN(new Date(`${d}T00:00:00Z`).getTime())) return { date: d, stated: true };
+    }
+  }
+  return { date: today, stated: false };
+}
+
+// Где в отчёте говорится о документе: страница с его номером, иначе — со словом «аттестат», «полис»…; иначе первая.
+function placeOf(docs, item) {
+  const num = squash(item.number);
+  for (const doc of docs) {
+    for (const [i, page] of (doc.pages ?? []).entries()) {
+      if (num.length >= 3 && squash(page).includes(num)) return { doc, page: i, quote: lineAround(page, Math.max(0, page.search(KIND_WORD[item.kind]))), found: true };
+    }
+  }
+  for (const doc of docs) {
+    for (const [i, page] of (doc.pages ?? []).entries()) {
+      const at = page.search(KIND_WORD[item.kind]);
+      if (at >= 0) return { doc, page: i, quote: lineAround(page, at), found: false };
+    }
+  }
+  return { doc: docs[0], page: 0, quote: '', found: false };
+}
+
+function dossierFindings(kinds) {
+  return (docs, ctx) => {
+    const items = (ctx.dossier?.items ?? []).filter((i) => kinds.includes(i.kind));
+    if (!items.length || !docs.length) return [];
+    const { date, stated } = reportDate(docs, ctx.dossier.today);
+    const sums = new Set(docs.flatMap((d) => (d.pages ?? []).flatMap((p) => [...p.matchAll(MONEY)].map((m) => Number(m[0].replace(/[  .]/g, ''))))));
+    const out = [];
+    for (const it of items) {
+      const where = placeOf(docs, it);
+      const name = `${it.kind_name}${it.number ? ` № ${it.number}` : ''}`;
+      if (it.number && squash(it.number).length >= 3 && !where.found) {
+        out.push({ ...where, text: `${name} из досье в отчёте не найден${it.kind === 'sro' ? ' (номер в реестре СРО)' : ''} — проверьте сведения об эксперте` });
+      }
+      if (it.valid_until && it.valid_until < date) {
+        out.push({ ...where, text: `${name} действует до ${ruDate(it.valid_until)}, а ${stated ? `отчёт составлен ${ruDate(date)}` : `сегодня ${ruDate(date)}`} — на дату отчёта срок истёк` });
+      }
+      if (it.amount_kop && where.found && !sums.has(Math.round(it.amount_kop / 100))) {
+        out.push({ ...where, text: `Страховая сумма по полису ${it.number ? `№ ${it.number} ` : ''}в досье — ${fmt(Math.round(it.amount_kop / 100))} руб., в отчёте такой суммы нет` });
+      }
+    }
+    return out;
+  };
+}
+
+const WHOLE = {
+  dossier_appraiser: dossierFindings(['certificate', 'sro', 'policy', 'policy_org']),
+  dossier_education: dossierFindings(['education']),
+};
+
 const PER_DOC = {
   word_fields: wordFields,
   section_gaps: sectionGaps,
@@ -293,6 +358,8 @@ export const AUTO_CHECKS = Object.freeze({
   template_leftovers: 'нет остатков шаблона про недвижимость и землю',
   inspection: '«без осмотра» и дата осмотра одновременно',
   court_purpose: 'цель «для суда» и отказ являться в суд',
+  dossier_appraiser: 'аттестат, СРО и полисы сходятся с досье эксперта: номера, суммы, срок на дату отчёта',
+  dossier_education: 'диплом эксперта сходится с досье',
 });
 
 export function runAutoChecks(names, docs, ctx = {}) {
@@ -305,6 +372,7 @@ export function runAutoChecks(names, docs, ctx = {}) {
     if (wanted.has('vehicle_year')) res.vehicle_year = v.vehicle_year;
     if (wanted.has('vin_year')) res.vin_year = v.vin_year;
   }
+  for (const name of wanted) if (WHOLE[name]) res[name] = WHOLE[name](readable, ctx);
   for (const doc of readable) {
     for (const name of wanted) {
       const fn = PER_DOC[name];

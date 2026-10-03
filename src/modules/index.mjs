@@ -6,7 +6,8 @@
 //     checks: [{ id, title, services?: [id услуги…], ask?, auto?: [имя правила…] }…],
 //       ask — что именно проверить (подсказка модели ИИ, человеку не показывается); auto — автоматические правила по
 //       всему тексту отчёта (src/ai/report-checks.mjs, AUTO_CHECKS): их находки показываются под этой проверкой
-//     draft?: [{ id, title, services?: [id услуги…], ask? }…],  — разделы черновика заключения от ИИ (задача 2.2);
+//     draft?: [{ id, title, services?: [id услуги…], ask?, dossier? }…],  — разделы черновика заключения от ИИ (задача 2.2);
+//       dossier: 'info' — сюда подставляются сведения из досье эксперта, 'copies' — перечень копий документов (2.14);
 //       ask — что писать в разделе и что оставить эксперту в [квадратных скобках]
 //     inspection?: [{ id, title, hint?, services?: [id услуги…], optional? }…],  — шаги дистанционного осмотра (2.3)
 //     express?: { services: [id услуги…], show: [id поля заявки…], fields: [поле + services?…] } }  — экспресс-услуга (2.4):
@@ -124,8 +125,9 @@ export function validateModule(m) {
     checkIds(m.draft, `${at}, разделы черновика`);
     for (const d of m.draft) {
       const where = `${at}, раздел черновика ${d.id}`;
-      onlyKeys(d, ['id', 'title', 'services', 'ask'], where);
+      onlyKeys(d, ['id', 'title', 'services', 'ask', 'dossier'], where);
       if (!nonEmpty(d.title)) fail(where, 'нет описания');
+      if (d.dossier !== undefined && !['info', 'copies'].includes(d.dossier)) fail(where, "dossier — 'info' (сведения об эксперте) или 'copies' (копии документов в приложениях)");
       if (d.ask !== undefined && !askText(d.ask)) fail(where, 'ask — непустой текст до 600 знаков');
       if (d.services !== undefined && (!Array.isArray(d.services) || d.services.length === 0 || d.services.some((id) => !serviceIds.includes(id)))) {
         fail(where, 'services — непустой список услуг этого модуля');
@@ -214,7 +216,7 @@ export function createRegistry(modules = DEFAULT_MODULES) {
     draftSections(moduleId, serviceId) {
       const m = modulesList.find((x) => x.id === moduleId);
       if (!m?.draft || !m.services.some((x) => x.id === serviceId)) return [];
-      return m.draft.filter((d) => !d.services || d.services.includes(serviceId)).map((d) => ({ id: d.id, title: d.title, ...(d.ask ? { ask: d.ask } : {}) }));
+      return m.draft.filter((d) => !d.services || d.services.includes(serviceId)).map((d) => ({ id: d.id, title: d.title, ...(d.ask ? { ask: d.ask } : {}), ...(d.dossier ? { dossier: d.dossier } : {}) }));
     },
     // Шаги дистанционного осмотра для услуги (2.3); пустой список — ссылка владельцу для услуги не выдаётся.
     inspectionSteps(moduleId, serviceId) {

@@ -1220,6 +1220,35 @@ test('внутренняя переписка организации (2.28): т�
   await S.sql`update orders set status = 'in_work' where id = ${o.id}`;
 });
 
+test('досье эксперта (2.14): только сам эксперт; копии в дело — только исполнитель своего дела в работе', async () => {
+  for (const id of ['dossier.get', 'dossier.add', 'dossier.update', 'dossier.remove', 'dossier.file', 'dossier.file.link', 'dossier.attach']) cover(id);
+  const exp = await login(S, '+79990001491');
+  await makeSpecialist(S.sql, exp.user.id);
+  const it = await exp.req('POST', '/api/specialist/me/dossier', { kind: 'sro', title: 'Тестовая СРО', number: '777' });
+  assert.equal(it.status, 201);
+  const upl = (c) => c.req('POST', `/api/specialist/me/dossier/${it.body.id}/file`, Buffer.from('копия'), { raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': 'sro.pdf' } });
+  assert.equal((await upl(exp)).status, 200);
+  // Не специалист — досье нет; другой специалист, диспетчер, администратор — чужую запись не видят и не трогают.
+  assert.equal((await U.owner.req('GET', '/api/specialist/me/dossier')).status, 404);
+  assert.equal((await U.owner.req('POST', '/api/specialist/me/dossier', { kind: 'sro', title: 'x', number: '1' })).status, 404);
+  for (const k of ['spec', 'dispatcher', 'admin', 'headA', 'stranger']) {
+    const c = U[k];
+    assert.equal((await c.req('PUT', `/api/specialist/me/dossier/${it.body.id}`, { title: 'Подлог', number: '1' })).status, 404, k);
+    assert.equal((await c.req('DELETE', `/api/specialist/me/dossier/${it.body.id}`)).status, 404, k);
+    assert.equal((await c.req('GET', `/api/specialist/me/dossier/${it.body.id}/file`)).status, 404, k);
+    assert.equal((await upl(c)).status, 404, k);
+    const own = (await c.req('GET', '/api/specialist/me/dossier')).body;
+    assert.ok(!JSON.stringify(own ?? {}).includes('Тестовая СРО'), k);
+  }
+  assert.equal((await exp.req('GET', `/api/specialist/me/dossier/${it.body.id}/file`)).status, 200);
+  // Копии в дело: чужое дело — «не найдено»; заказчик и диспетчер — не исполнители.
+  assert.equal((await exp.req('POST', `/api/orders/${ownOrder.id}/dossier`)).status, 404);
+  assert.equal((await U.owner.req('POST', `/api/orders/${ownOrder.id}/dossier`)).status, 403);
+  assert.equal((await U.dispatcher.req('POST', `/api/orders/${ownOrder.id}/dossier`)).status, 403);
+  assert.equal((await U.stranger.req('POST', `/api/orders/${ownOrder.id}/dossier`)).status, 404);
+  assert.equal((await exp.req('DELETE', `/api/specialist/me/dossier/${it.body.id}`)).status, 200);
+});
+
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {
   const PUBLIC = ['health', 'auth.code', 'auth.verify', 'files.memory', 'test.calls', 'test.script', 'test.reset', 'test.mail.inbound', 'stage.login', 'payments.notify',
     'inspect.view', 'inspect.photo', 'inspect.finish'];
