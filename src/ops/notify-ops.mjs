@@ -49,8 +49,9 @@ export function notifyOps() {
               // Ссылка и название — только если заявка сейчас доступна.
               order_id: order ? order.id : null,
               order_title: order ? order.title : null,
-              // Приглашение открывается в разделе «Организации» (там видно, от кого оно, пока действует).
-              section: r.event === 'invite' ? 'orgs' : ['crm_offer', 'onsite_assigned', 'onsite_cancelled'].includes(r.event) ? 'specialist' : null,
+              // Приглашение открывается в разделе «Организации» (там видно, от кого оно, пока действует); сообщение эксперта
+              // руководителю (2.28) — там же, в «Делах экспертов».
+              section: ['invite', 'org_chat_head'].includes(r.event) ? 'orgs' : ['crm_offer', 'onsite_assigned', 'onsite_cancelled'].includes(r.event) ? 'specialist' : null,
             };
           }),
         };

@@ -190,6 +190,15 @@ export async function executorSignOrg(sql, executorId) {
   return r ?? null;
 }
 
+// Чьими глазами вошедший пишет во внутренней переписке организации по делу (2.28): 'expert' — сам исполнитель,
+// 'head' — руководитель организации, от которой он ведёт дело; иначе null.
+export function orgCaseSide(actor, { order, signOrg }) {
+  if (!actor || !signOrg) return null;
+  if (order.executor_user_id === actor.id && memberOf(actor, signOrg.id)) return 'expert';
+  if (roleIn(actor, signOrg.id) === 'head') return 'head';
+  return null;
+}
+
 // Предметы доступа: загрузка по параметру пути и уровень доступа вошедшего к ним.
 export const RESOURCES = {
   order: {
@@ -222,6 +231,19 @@ export const RESOURCES = {
       return signOrg && { subject: doc, order, signOrg };
     },
     level: (actor, { signOrg }) => (roleIn(actor, signOrg.id) === 'head' ? LEVEL.write : LEVEL.none),
+  },
+  // Дело глазами организации эксперта (2.28): внутренняя переписка руководителя и эксперта. Видят только сам исполнитель
+  // и руководитель организации, от которой он ведёт дело (выбрана в профиле специалиста, он в ней состоит). Заказчик,
+  // диспетчер, посторонний, бывший сотрудник, руководитель прежней организации — «не найдено».
+  orgCase: {
+    async load(sql, id) {
+      if (!UUID_RE.test(id)) return null;
+      const order = await sql.one`select * from orders where id = ${id}`;
+      if (!order?.executor_user_id) return null;
+      const signOrg = await executorSignOrg(sql, order.executor_user_id);
+      return signOrg && { subject: order, order, signOrg };
+    },
+    level: (actor, found) => (orgCaseSide(actor, found) ? LEVEL.write : LEVEL.none),
   },
   org: {
     async load(sql, id) {

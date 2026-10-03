@@ -2,9 +2,9 @@
 // Решения Дамира 30.09.2026: организацию заводит любой пользователь сам и становится руководителем;
 // роли — руководитель / старший / сотрудник; ушедший сотрудник теряет доступ к делам организации, дела остаются у неё.
 import { HttpError } from '../http/core.mjs';
-import { LEVEL, ORG_ROLES, orgLevel } from '../access/policy.mjs';
+import { LEVEL, ORG_ROLES, orgCaseSide, orgLevel } from '../access/policy.mjs';
 import { audit, oneOf, phoneFrom, text, uuidFrom } from './util.mjs';
-import { dispatchers, notify, notifyPhone } from '../notify/notify.mjs';
+import { dispatchers, notify, notifyPhone, orgHeads } from '../notify/notify.mjs';
 import { orgExpertsFor } from './match-ops.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { splitAmount } from '../money/money.mjs';
@@ -20,6 +20,9 @@ export const LIMITS = {
 export const CASES_ACTIVE = ['awaiting_executor', 'in_work', 'review'];
 const CASES_DONE = ['done', 'closed'];
 const CASES_LIMIT = 200;
+// Внутренняя переписка руководителя и эксперта (2.28): пишут, пока дело не завершено; читать можно и потом.
+const ORG_CHAT_MAX = 4000;
+const ORG_CHAT_OPEN = [...CASES_ACTIVE, 'done'];
 
 const ROLE_RU = { head: 'руководитель', senior: 'старший', member: 'сотрудник' };
 
@@ -147,6 +150,8 @@ export function orgOps() {
         const byId = new Map(experts.map((e) => [e.user_id, e]));
         const feeOf = (o) => (o.payout_kop != null ? Number(o.payout_kop) : o.price_kop ? splitAmount(Number(o.price_kop)).payoutKop : null);
         const cases = rows.map((o) => ({
+          // Номер дела — для внутренней переписки с экспертом (2.28); саму заявку руководитель по нему не откроет.
+          id: o.id,
           order_ref: orderRef(o.id),
           service: registry.service(o.module, o.service)?.service.name ?? o.service,
           status: o.status,
@@ -204,6 +209,45 @@ export function orgOps() {
           load,
           money: { month: today.slice(0, 7), paid_kop: Number(month.paid), waiting_kop: waiting },
         };
+      },
+    },
+    {
+      // Внутренняя переписка руководителя организации и эксперта по делу (2.28): отдельная лента, не переписка по заявке.
+      // Заказчик и диспетчер её не видят, в письма по заявке (1.9) она не уходит. Лента — той организации, от которой
+      // эксперт ведёт дело сейчас.
+      id: 'orgchat.list', method: 'GET', path: '/api/orders/:id/org-chat', auth: 'user',
+      access: { resource: 'orgCase', param: 'id', need: 'read' },
+      async handler({ sql, actor, order, signOrg }) {
+        const rows = await sql`
+          select m.id, m.author_id, m.side, m.body, m.at, u.full_name
+          from org_messages m join users u on u.id = m.author_id
+          where m.order_id = ${order.id} and m.org_id = ${signOrg.id} order by m.id limit 500`;
+        return {
+          org: signOrg.name,
+          side: orgCaseSide(actor, { order, signOrg }),
+          messages: rows.map((m) => ({ id: String(m.id), side: m.side, body: m.body, at: m.at, mine: m.author_id === actor.id, author_name: m.full_name })),
+          can_write: ORG_CHAT_OPEN.includes(order.status),
+        };
+      },
+    },
+    {
+      id: 'orgchat.post', method: 'POST', path: '/api/orders/:id/org-chat', auth: 'user',
+      access: { resource: 'orgCase', param: 'id', need: 'write' },
+      async handler({ sql, actor, order, signOrg, body, res }) {
+        const side = orgCaseSide(actor, { order, signOrg });
+        if (!ORG_CHAT_OPEN.includes(order.status)) throw new HttpError(409, 'order_final', 'Дело завершено — переписка закрыта');
+        const msg = text(body?.body, 'Сообщение', ORG_CHAT_MAX);
+        const row = await sql.tx(async (tx) => {
+          const m = await tx.one`insert into org_messages (order_id, org_id, author_id, side, body)
+                                 values (${order.id}, ${signOrg.id}, ${actor.id}, ${side}, ${msg}) returning *`;
+          await audit(tx, actor, 'org_chat.post', 'order', order.id, { org_id: signOrg.id, message: String(m.id), side });
+          // Уведомления — по виду «Мои дела как исполнителя»: эксперту — по делу, руководителям — без номера в СМС.
+          if (side === 'head') await notify(tx, 'org_chat_expert', { users: [order.executor_user_id], orderId: order.id, actor });
+          else await notify(tx, 'org_chat_head', { users: await orgHeads(tx, signOrg.id), orderId: order.id, orgId: signOrg.id, actor });
+          return m;
+        });
+        res.status(201);
+        return { message: { id: String(row.id), side, body: row.body, at: row.at, mine: true, author_name: actor.full_name ?? null } };
       },
     },
     {
