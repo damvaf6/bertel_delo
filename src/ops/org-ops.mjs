@@ -5,12 +5,20 @@ import { HttpError } from '../http/core.mjs';
 import { LEVEL, ORG_ROLES, orgLevel } from '../access/policy.mjs';
 import { audit, oneOf, phoneFrom, text, uuidFrom } from './util.mjs';
 import { notifyPhone } from '../notify/notify.mjs';
+import { orderRef } from '../notify/registry.mjs';
+import { splitAmount } from '../money/money.mjs';
+import { STATUS_NAME, isOverdue, todayMsk } from '../orders/workflow.mjs';
 
 export const INVITE_TTL_DAYS = 14;
 export const LIMITS = {
   orgsCreatedPerUser: 10,     // защита от засорения; настоящим организациям хватит с запасом
   pendingInvitesPerOrg: 50,
 };
+
+// Дела экспертов организации (2.16): активные — сверху; завершённые — за 90 дней, для сверки денег за месяц.
+export const CASES_ACTIVE = ['awaiting_executor', 'in_work', 'review'];
+const CASES_DONE = ['done', 'closed'];
+const CASES_LIMIT = 200;
 
 const ROLE_RU = { head: 'руководитель', senior: 'старший', member: 'сотрудник' };
 
@@ -86,6 +94,7 @@ export function orgOps() {
     },
     {
       // Состав: имена и роли видят все участники; телефоны — руководитель; число дел (нагрузку) — руководитель и старший.
+      // «Дел» — заявки сотрудника от имени организации и дела в работе, которые он ведёт экспертом от неё (2.16).
       id: 'orgs.members', method: 'GET', path: '/api/orgs/:id/members', auth: 'user',
       access: { resource: 'org', param: 'id', need: 'read' },
       async handler({ sql, actor, org }) {
@@ -94,7 +103,9 @@ export function orgOps() {
         const seesLoad = myRole === 'head' || myRole === 'senior';
         const rows = await sql`
           select m.user_id, m.role, m.created_at, u.full_name, u.phone,
-                 (select count(*)::int from orders r where r.org_id = m.org_id and r.owner_user_id = m.user_id) as orders
+                 (select count(*)::int from orders r where r.org_id = m.org_id and r.owner_user_id = m.user_id)
+                 + (select count(*)::int from orders r join specialists s on s.user_id = r.executor_user_id
+                    where r.executor_user_id = m.user_id and s.org_id = m.org_id and r.status in ('in_work', 'review')) as orders
           from org_members m join users u on u.id = m.user_id
           where m.org_id = ${org.id}
           order by case m.role when 'head' then 0 when 'senior' then 1 else 2 end, u.full_name, m.created_at`;
@@ -107,6 +118,68 @@ export function orgOps() {
             ...(level === LEVEL.manage ? { phone: m.phone } : {}),
             ...(seesLoad ? { orders: m.orders } : {}),
           })),
+        };
+      },
+    },
+    {
+      // Дела экспертов (2.16, устав 1а): дела, где исполнитель — эксперт, работающий от этой организации (выбрал её в профиле
+      // специалиста и состоит в ней). Только руководитель. Без заказчика, полей заявки, документов и переписки: услуга,
+      // номер, срок, состояние, эксперт, вознаграждение; нагрузка по экспертам и деньги организации за месяц.
+      id: 'orgs.cases', method: 'GET', path: '/api/orgs/:id/cases', auth: 'user',
+      access: { resource: 'org', param: 'id', need: 'manage' },
+      async handler({ sql, org, registry }) {
+        const today = todayMsk();
+        const experts = await sql`
+          select s.user_id, u.full_name from specialists s
+          join org_members m on m.org_id = s.org_id and m.user_id = s.user_id join users u on u.id = s.user_id
+          where s.org_id = ${org.id} order by u.full_name nulls last, s.user_id`;
+        const ids = experts.map((e) => e.user_id);
+        const rows = ids.length ? await sql`
+          select o.id, o.module, o.service, o.status, o.deadline, o.price_kop, o.paid_at, o.executor_user_id, o.updated_at,
+                 p.status as payout_status, p.amount_kop as payout_kop, p.paid_at as payout_paid_at
+          from orders o left join payouts p on p.order_id = o.id
+          where o.executor_user_id = any(${ids}::uuid[]) and (o.status = any(${CASES_ACTIVE}::text[])
+            or (o.status = any(${CASES_DONE}::text[]) and o.updated_at > now() - interval '90 days'))
+          order by (o.status = any(${CASES_ACTIVE}::text[])) desc, o.deadline nulls last, o.updated_at desc
+          limit ${CASES_LIMIT}` : [];
+        const name = (e) => e?.full_name || 'Без имени';
+        const byId = new Map(experts.map((e) => [e.user_id, e]));
+        const feeOf = (o) => (o.payout_kop != null ? Number(o.payout_kop) : o.price_kop ? splitAmount(Number(o.price_kop)).payoutKop : null);
+        const cases = rows.map((o) => ({
+          order_ref: orderRef(o.id),
+          service: registry.service(o.module, o.service)?.service.name ?? o.service,
+          status: o.status,
+          status_name: STATUS_NAME[o.status],
+          active: CASES_ACTIVE.includes(o.status),
+          deadline: o.deadline,
+          overdue: isOverdue(o, today),
+          expert: name(byId.get(o.executor_user_id)),
+          expert_id: o.executor_user_id,
+          fee_kop: feeOf(o),
+          payout: o.payout_status ?? null,
+        }));
+        const load = experts.map((e) => ({
+          user_id: e.user_id,
+          full_name: name(e),
+          in_work: rows.filter((o) => o.executor_user_id === e.user_id && ['in_work', 'review'].includes(o.status)).length,
+          offered: rows.filter((o) => o.executor_user_id === e.user_id && o.status === 'awaiting_executor').length,
+          overdue: cases.filter((c) => c.expert_id === e.user_id && c.overdue).length,
+        }));
+        // Деньги за текущий месяц (по Москве): выплачено экспертам организации; ждёт выдачи — оплаченные дела в работе и
+        // на проверке, а также выплаты, которые ещё проводятся.
+        const month = ids.length ? await sql.one`
+          select coalesce(sum(amount_kop) filter (where status = 'succeeded'
+                   and paid_at >= (date_trunc('month', now() at time zone 'Europe/Moscow') at time zone 'Europe/Moscow')), 0)::bigint as paid,
+                 coalesce(sum(amount_kop) filter (where status <> 'succeeded'), 0)::bigint as pending
+          from payouts where executor_user_id = any(${ids}::uuid[])` : { paid: 0, pending: 0 };
+        const working = ids.length ? await sql`
+          select price_kop from orders where executor_user_id = any(${ids}::uuid[]) and status in ('in_work', 'review')
+            and price_kop is not null and paid_at is not null` : [];
+        const waiting = Number(month.pending) + working.reduce((s, o) => s + splitAmount(Number(o.price_kop)).payoutKop, 0);
+        return {
+          cases: cases.map(({ expert_id, ...c }) => c),
+          load,
+          money: { month: today.slice(0, 7), paid_kop: Number(month.paid), waiting_kop: waiting },
         };
       },
     },

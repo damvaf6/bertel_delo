@@ -14,6 +14,7 @@ const U = {};        // клиенты
 let orgA, orgB, inviteA;
 let ownOrder, orgOrder, colleagueOrder;
 let ownDoc, orgDoc;
+let expertB, seniorB; // эксперт и старший организации Б (подпись организации, дела экспертов)
 
 before(async () => {
   S = await startApp();
@@ -956,8 +957,8 @@ test('экспресс-выезд (2.4): ход выезда видят те, к
 test('подпись организации (2.5а): файлы видит и подписывает только руководитель организации исполнителя; загрузка — только своё', async () => {
   for (const id of ['signature.upload', 'orgsign.list', 'orgsign.link', 'orgsign.sign', 'orgsign.upload']) cover(id);
   // Исполнитель работает от организации Б: подписывает он и руководитель Б (headB).
-  const spec2 = await login(S, '+79990000053');
-  const memberB = await login(S, '+79990000022');
+  const spec2 = expertB = await login(S, '+79990000053');
+  const memberB = seniorB = await login(S, '+79990000022');
   await addMember(S.sql, orgB.id, spec2.user.id, 'member');
   await addMember(S.sql, orgB.id, memberB.user.id, 'senior');
   await makeSpecialist(S.sql, spec2.user.id);
@@ -1019,6 +1020,41 @@ test('подпись организации (2.5а): файлы видит и п
   assert.deepEqual([sigs.expert.method, sigs.org.method, sigs.org.title], ['upload', 'cabinet', 'Руководитель']);
   assert.equal((await U.dispatcher.req('POST', `/api/documents/${doc.id}/signature/verify`)).body.valid, true);
   assert.equal((await U.dispatcher.req('GET', `/api/documents/${doc.id}/signature/link?role=org`)).status, 200);
+});
+
+test('дела экспертов (2.16): видит только руководитель организации эксперта; без заказчика, полей, документов и переписки', async () => {
+  cover('orgs.cases');
+  // Продолжение проверки подписи организации: эксперт (+79990000053) работает от организации Б, его дело — на проверке.
+  const spec2 = expertB;
+  await S.sql`update users set full_name = 'Эксперт Б' where id = ${spec2.user.id}`;
+  const r = await U.headB.req('GET', `/api/orgs/${orgB.id}/cases`);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.cases.length, 1);
+  const c = r.body.cases[0];
+  assert.deepEqual(Object.keys(c).sort(), ['active', 'deadline', 'expert', 'fee_kop', 'order_ref', 'overdue', 'payout', 'service', 'status', 'status_name']);
+  assert.equal(c.status, 'review');
+  assert.equal(c.expert, 'Эксперт Б');
+  assert.equal(c.fee_kop, 1_200_000, 'вознаграждение — 80% цены');
+  const o = (await S.sql`select * from orders where executor_user_id = ${spec2.user.id}`)[0];
+  const owner = (await S.sql`select phone from users where id = ${o.owner_user_id}`)[0];
+  const raw = JSON.stringify(r.body);
+  for (const secret of [o.id, o.owner_user_id, owner.phone, o.title, 'Подписная', 'deal', 'z.pdf']) assert.ok(!raw.includes(secret), `не раскрывает: ${secret}`);
+  assert.deepEqual(r.body.load.map((l) => [l.full_name, l.in_work]), [['Эксперт Б', 1]]);
+  assert.equal(r.body.money.waiting_kop, 1_200_000, 'ждёт выдачи — оплаченное дело на проверке');
+  assert.equal(r.body.money.paid_kop, 0);
+  // Нагрузка в составе: «дел» у эксперта — с делом в работе.
+  assert.equal((await U.headB.req('GET', `/api/orgs/${orgB.id}/members`)).body.members.find((m) => m.user_id === spec2.user.id).orders, 1);
+  // Старший и сотрудник (сам эксперт) — не руководитель; служебные — тоже нет.
+  for (const c2 of [seniorB, spec2, U.dispatcher, U.admin]) assert.equal((await c2.req('GET', `/api/orgs/${orgB.id}/cases`)).status, 403);
+  // Посторонний, руководитель чужой организации, заказчик — «не найдено».
+  for (const k of ['stranger', 'headA', 'owner', 'spec']) assert.equal((await U[k].req('GET', `/api/orgs/${orgB.id}/cases`)).status, 404, k);
+  // У организации А своих экспертов нет — пусто; дел Б там нет.
+  const a = (await U.headA.req('GET', `/api/orgs/${orgA.id}/cases`)).body;
+  assert.deepEqual([a.cases, a.load], [[], []]);
+  // Эксперт ушёл из организации — его дела руководитель больше не видит.
+  await S.sql`delete from org_members where org_id = ${orgB.id} and user_id = ${spec2.user.id}`;
+  assert.deepEqual((await U.headB.req('GET', `/api/orgs/${orgB.id}/cases`)).body.cases, [], 'бывший сотрудник');
+  await addMember(S.sql, orgB.id, spec2.user.id, 'member');
 });
 
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {
