@@ -4,7 +4,8 @@
 import { HttpError } from '../http/core.mjs';
 import { LEVEL, ORG_ROLES, orgLevel } from '../access/policy.mjs';
 import { audit, oneOf, phoneFrom, text, uuidFrom } from './util.mjs';
-import { notifyPhone } from '../notify/notify.mjs';
+import { dispatchers, notify, notifyPhone } from '../notify/notify.mjs';
+import { orgExpertsFor } from './match-ops.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { splitAmount } from '../money/money.mjs';
 import { STATUS_NAME, isOverdue, todayMsk } from '../orders/workflow.mjs';
@@ -176,11 +177,77 @@ export function orgOps() {
           select price_kop from orders where executor_user_id = any(${ids}::uuid[]) and status in ('in_work', 'review')
             and price_kop is not null and paid_at is not null` : [];
         const waiting = Number(month.pending) + working.reduce((s, o) => s + splitAmount(Number(o.price_kop)).payoutKop, 0);
+        // Ждут назначения (2.17): дела, которые диспетчер предложил организации, — те же сведения, что в «Делах экспертов»,
+        // и эксперты, которых можно назначить (допуск, «принимаю дела»), с нагрузкой.
+        const offered = await sql`
+          select * from orders where offer_org_id = ${org.id} and status = 'awaiting_executor' and executor_user_id is null
+          order by deadline nulls last, updated_at limit ${CASES_LIMIT}`;
+        const loadOf = new Map(load.map((l) => [l.user_id, l]));
+        const pending = await Promise.all(offered.map(async (o) => ({
+          id: o.id,
+          order_ref: orderRef(o.id),
+          service: registry.service(o.module, o.service)?.service.name ?? o.service,
+          deadline: o.deadline,
+          overdue: isOverdue(o, today),
+          fee_kop: o.price_kop ? splitAmount(Number(o.price_kop)).payoutKop : null,
+          experts: (await orgExpertsFor(sql, o, org.id)).map((c) => ({
+            user_id: c.user_id, full_name: c.full_name || 'Без имени', score: c.score.total,
+            in_work: loadOf.get(c.user_id)?.in_work ?? 0, overdue: loadOf.get(c.user_id)?.overdue ?? 0,
+          })),
+        })));
         return {
+          pending,
           cases: cases.map(({ expert_id, ...c }) => c),
           load,
           money: { month: today.slice(0, 7), paid_kop: Number(month.paid), waiting_kop: waiting },
         };
+      },
+    },
+    {
+      // Руководитель назначает эксперта из своих на дело, предложенное организации (2.17). Эксперт принимает или
+      // отказывается как обычно; отказ возвращает дело руководителю (src/ops/order-ops.mjs, шаг статуса).
+      id: 'orgs.cases.assign', method: 'POST', path: '/api/orgs/:id/cases/:orderId/assign', auth: 'user',
+      access: { resource: 'org', param: 'id', need: 'manage' },
+      async handler({ sql, actor, org, params, body }) {
+        const orderId = uuidFrom(params.orderId, 'Дело не найдено');
+        const specialistId = uuidFrom(body?.specialist_id, 'Эксперт не найден');
+        await sql.tx(async (tx) => {
+          const cur = await tx.one`select * from orders where id = ${orderId} and offer_org_id = ${org.id} for update`;
+          if (!cur) throw new HttpError(404, 'not_found', 'Дело не найдено');
+          if (cur.status !== 'awaiting_executor' || cur.executor_user_id) throw new HttpError(409, 'status_changed', 'Дело уже изменилось, обновите страницу');
+          const cand = (await orgExpertsFor(tx, cur, org.id)).find((c) => c.user_id === specialistId);
+          if (!cand) throw new HttpError(409, 'not_eligible', 'Этому эксперту дело отдать нельзя: нет допуска, не принимает дела или работает не от организации');
+          await tx`update order_offers set outcome = 'accepted', outcome_at = now() where order_id = ${cur.id} and outcome is null`;
+          await tx`insert into order_offers (order_id, specialist_id, org_id, score, offered_by)
+                   values (${cur.id}, ${specialistId}, ${org.id}, ${JSON.stringify(cand.score)}, ${actor.id})`;
+          await tx`update orders set executor_user_id = ${specialistId}, updated_at = now() where id = ${cur.id}`;
+          await audit(tx, actor, 'org.case.assign', 'order', cur.id, { org: org.id, specialist: specialistId });
+          await notify(tx, 'offer', { users: [specialistId], orderId: cur.id, actor });
+        });
+        return { ok: true };
+      },
+    },
+    {
+      // Руководитель отказывается от дела организации (2.17): дело возвращается диспетчеру в подбор.
+      id: 'orgs.cases.decline', method: 'POST', path: '/api/orgs/:id/cases/:orderId/decline', auth: 'user',
+      access: { resource: 'org', param: 'id', need: 'manage' },
+      async handler({ sql, actor, org, params, body }) {
+        const orderId = uuidFrom(params.orderId, 'Дело не найдено');
+        if (!String(body?.reason ?? '').trim()) throw new HttpError(400, 'reason_required', 'Укажите причину');
+        const reason = text(body.reason, 'Причина', 1000);
+        await sql.tx(async (tx) => {
+          const cur = await tx.one`select * from orders where id = ${orderId} and offer_org_id = ${org.id} for update`;
+          if (!cur) throw new HttpError(404, 'not_found', 'Дело не найдено');
+          if (cur.status !== 'awaiting_executor' || cur.executor_user_id) throw new HttpError(409, 'status_changed', 'Дело уже изменилось, обновите страницу');
+          await tx`update order_offers set outcome = 'declined', outcome_at = now(), reason = ${reason}
+                   where order_id = ${cur.id} and outcome is null`;
+          await tx`update orders set status = 'matching', offer_org_id = null, updated_at = now() where id = ${cur.id}`;
+          await tx`insert into order_status_history (order_id, from_status, to_status, actor_id, side, reason)
+                   values (${cur.id}, 'awaiting_executor', 'matching', ${actor.id}, 'executor', ${reason})`;
+          await audit(tx, actor, 'org.case.decline', 'order', cur.id, { org: org.id });
+          await notify(tx, 'org_declined', { users: await dispatchers(tx), orderId: cur.id, actor });
+        });
+        return { ok: true };
       },
     },
     {

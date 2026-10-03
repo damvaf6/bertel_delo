@@ -11,6 +11,7 @@ export const TYPES = [
   { id: 'org_invites', name: 'Приглашения в организацию', hint: 'Вас пригласили стать сотрудником организации', for: 'all', sms: true },
   { id: 'offers', name: 'Предложения дел', hint: 'Вам предложили новое дело (и предложения госзаказа из БЕРТЕЛ CRM)', for: 'specialist', sms: true },
   { id: 'executor_work', name: 'Мои дела как исполнителя', hint: 'напоминания о сроке, владелец или помощник прислал фото осмотра, назначен или отменён выезд, возврат на доработку, результат принят, дело снято, передано другому или отменено', for: 'specialist', sms: true },
+  { id: 'org_cases', name: 'Дела организации', hint: 'организации предложено дело — назначьте эксперта; эксперт отказался; предложение снято (для руководителя)', for: 'all', sms: true },
   { id: 'dispatch', name: 'Очередь диспетчера', hint: 'новые и оплаченные заявки, отказы исполнителей, сдача на проверку, просроченные сроки, отмены, неудачные выплаты и возвраты', for: 'dispatcher', sms: false },
 ];
 export const TYPE = Object.fromEntries(TYPES.map((t) => [t.id, t]));
@@ -20,6 +21,7 @@ export const TYPE = Object.fromEntries(TYPES.map((t) => [t.id, t]));
 export const EVENTS = {
   submitted: { type: 'dispatch', title: 'Новая заявка ждёт подбора исполнителя', order: true },
   declined: { type: 'dispatch', title: 'Исполнитель отказался от дела — нужен новый подбор', order: true },
+  org_declined: { type: 'dispatch', title: 'Организация отказалась от дела — нужен новый подбор', order: true },
   in_review: { type: 'dispatch', title: 'Результат сдан на проверку', order: true },
   cancelled_by_customer: { type: 'dispatch', title: 'Заказчик отменил заявку', order: true },
   payout_failed_staff: { type: 'dispatch', title: 'Выплата исполнителю не прошла — нужен повтор', order: true },
@@ -61,6 +63,11 @@ export const EVENTS = {
   payout_failed: { type: 'money', title: 'Выплата вознаграждения не прошла — диспетчер повторит', order: true },
   refund_succeeded: { type: 'money', title: 'Деньги по заявке возвращены', order: true, mail: true },
   refund_failed: { type: 'money', title: 'Возврат денег не прошёл — диспетчер повторит', order: true },
+
+  // Руководителю организации (2.17) — без номера заявки: заявку он не видит, дело — в «Делах экспертов» раздела «Организации».
+  org_offer: { type: 'org_cases', title: 'Организации предложено дело — назначьте эксперта в разделе «Организации»', order: false },
+  org_expert_declined: { type: 'org_cases', title: 'Эксперт отказался от дела — назначьте другого или откажитесь', order: false },
+  org_offer_withdrawn: { type: 'org_cases', title: 'Предложение дела организации снято', order: false },
 
   invite: { type: 'org_invites', title: 'Вас пригласили в организацию', order: false },
 };

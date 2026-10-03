@@ -1057,6 +1057,93 @@ test('дела экспертов (2.16): видит только руковод
   await addMember(S.sql, orgB.id, spec2.user.id, 'member');
 });
 
+test('распределение в организации (2.17): дело организации; назначает и отказывается только её руководитель, заявку он не видит', async () => {
+  for (const id of ['orgs.cases.assign', 'orgs.cases.decline']) cover(id);
+  const spec2 = expertB;
+  const events = async (userId, event) => (await S.sql`select count(*)::int as n from notifications where user_id = ${userId} and event = ${event}`)[0].n;
+  const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Дело организации Б' })).body.order;
+  const fields = { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, Распределительная ул., 7' };
+  assert.equal((await U.owner.req('PATCH', `/api/orders/${o.id}`, { fields, deadline: new Date(Date.now() + 9 * 86400_000).toISOString().slice(0, 10) })).status, 200);
+  assert.equal((await U.owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
+  await ensurePaid(S.sql, o.id);
+  // В подборе диспетчер видит организацию Б (в ней эксперт с допуском) и предлагает дело ей.
+  const cands = (await U.dispatcher.req('GET', `/api/orders/${o.id}/candidates`)).body;
+  const g = cands.orgs.find((x) => x.org_id === orgB.id);
+  assert.ok(g, JSON.stringify(cands.orgs));
+  assert.equal(g.experts, 1);
+  assert.ok(!cands.orgs.some((x) => x.org_id === orgA.id), 'в организации А экспертов нет');
+  assert.equal((await U.owner.req('POST', `/api/orders/${o.id}/offer`, { org_id: orgB.id, from: 'matching' })).status, 403, 'заказчик не предлагает');
+  assert.equal((await U.stranger.req('POST', `/api/orders/${o.id}/offer`, { org_id: orgB.id, from: 'matching' })).status, 404);
+  assert.equal((await U.dispatcher.req('POST', `/api/orders/${o.id}/offer`, { org_id: orgA.id, from: 'matching' })).body.error, 'not_eligible');
+  const off = await U.dispatcher.req('POST', `/api/orders/${o.id}/offer`, { org_id: orgB.id, from: 'matching' });
+  assert.equal(off.status, 200, JSON.stringify(off.body));
+  assert.deepEqual([off.body.order.status, off.body.order.executor_user_id, off.body.order.offer_org_id], ['awaiting_executor', null, orgB.id]);
+  assert.equal((await U.dispatcher.req('GET', `/api/orders/${o.id}`)).body.offer_org.name, orgB.name);
+  assert.equal((await U.owner.req('GET', `/api/orders/${o.id}`)).body.offer_org, null, 'заказчику — не показываем');
+  assert.equal(await events(U.headB.user.id, 'org_offer'), 1);
+  assert.equal((await U.headB.req('GET', `/api/orders/${o.id}`)).status, 404, 'саму заявку руководитель не видит');
+  // Руководитель Б видит дело в «Ждут назначения» — без заказчика и полей заявки — и своих экспертов с нагрузкой.
+  const view = (await U.headB.req('GET', `/api/orgs/${orgB.id}/cases`)).body;
+  assert.equal(view.pending.length, 1);
+  const p = view.pending[0];
+  assert.deepEqual(Object.keys(p).sort(), ['deadline', 'experts', 'fee_kop', 'id', 'order_ref', 'overdue', 'service']);
+  assert.equal(p.fee_kop, 1_200_000);
+  assert.deepEqual(p.experts.map((x) => [x.user_id, x.in_work]), [[spec2.user.id, 1]]);
+  const owner = (await S.sql`select phone from users where id = ${U.owner.user.id}`)[0];
+  for (const secret of [U.owner.user.id, owner.phone, 'Дело организации Б', 'Распределительная', 'deal']) assert.ok(!JSON.stringify(view).includes(secret), `не раскрывает: ${secret}`);
+  assert.deepEqual((await U.headA.req('GET', `/api/orgs/${orgA.id}/cases`)).body.pending, [], 'у организации А предложений нет');
+  // Назначить и отказаться — только руководитель Б: чужие — «не найдено», старший, эксперт и служебные — «недостаточно прав».
+  const assign = (c, orgId, sid = spec2.user.id) => c.req('POST', `/api/orgs/${orgId}/cases/${o.id}/assign`, { specialist_id: sid });
+  const decline = (c, orgId, reason = 'Нет свободных экспертов') => c.req('POST', `/api/orgs/${orgId}/cases/${o.id}/decline`, { reason });
+  for (const k of ['stranger', 'headA', 'owner', 'spec']) {
+    assert.equal((await assign(U[k], orgB.id)).status, 404, k);
+    assert.equal((await decline(U[k], orgB.id)).status, 404, k);
+  }
+  for (const c of [seniorB, spec2, U.dispatcher, U.admin]) {
+    assert.equal((await assign(c, orgB.id)).status, 403);
+    assert.equal((await decline(c, orgB.id)).status, 403);
+  }
+  assert.equal((await assign(U.headA, orgA.id)).status, 404, 'своей организацией чужое дело не взять');
+  assert.equal((await decline(U.headA, orgA.id)).status, 404);
+  assert.equal((await assign(U.headB, orgB.id, U.spec.user.id)).body.error, 'not_eligible', 'эксперт не из организации');
+  assert.equal((await assign(U.headB, orgB.id)).status, 200);
+  assert.equal((await assign(U.headB, orgB.id)).body.error, 'status_changed', 'дважды не назначить');
+  assert.equal(await events(spec2.user.id, 'offer'), 2);
+  assert.deepEqual((await U.headB.req('GET', `/api/orgs/${orgB.id}/cases`)).body.pending, [], 'назначенное ушло из «Ждут назначения»');
+  // Эксперт отказывается — дело снова у руководителя, статус не меняется, эксперт дело больше не видит.
+  const st = await spec2.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'awaiting_executor', reason: 'Занят' });
+  assert.equal(st.status, 200, JSON.stringify(st.body));
+  assert.equal(st.body.order.status, 'awaiting_executor');
+  assert.equal((await spec2.req('GET', `/api/orders/${o.id}`)).status, 404);
+  assert.equal(await events(U.headB.user.id, 'org_expert_declined'), 1);
+  assert.equal(await events(U.dispatcher.user.id, 'declined'), 0, 'диспетчеру — нет: дело у организации');
+  assert.equal((await U.headB.req('GET', `/api/orgs/${orgB.id}/cases`)).body.pending.length, 1);
+  // Руководитель отказывается — дело диспетчеру в подбор; причина обязательна.
+  assert.equal((await decline(U.headB, orgB.id, '')).body.error, 'reason_required');
+  assert.equal((await decline(U.headB, orgB.id)).status, 200);
+  assert.equal((await decline(U.headB, orgB.id)).status, 404, 'дело уже не у организации');
+  const after1 = (await S.sql`select status, offer_org_id, executor_user_id from orders where id = ${o.id}`)[0];
+  assert.deepEqual(after1, { status: 'matching', offer_org_id: null, executor_user_id: null });
+  assert.equal(await events(U.dispatcher.user.id, 'org_declined'), 1);
+  // Снова организации; диспетчер возвращает в подбор — руководителю сообщение, «Ждут назначения» пусто.
+  assert.equal((await U.dispatcher.req('POST', `/api/orders/${o.id}/offer`, { org_id: orgB.id, from: 'matching' })).status, 200);
+  assert.equal((await U.dispatcher.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'awaiting_executor', reason: 'Иначе' })).status, 200);
+  assert.equal(await events(U.headB.user.id, 'org_offer_withdrawn'), 1);
+  assert.deepEqual((await U.headB.req('GET', `/api/orgs/${orgB.id}/cases`)).body.pending, []);
+  // Ещё раз: руководитель назначает, эксперт принимает — дело в «Делах экспертов» как обычное.
+  assert.equal((await U.dispatcher.req('POST', `/api/orders/${o.id}/offer`, { org_id: orgB.id, from: 'matching' })).status, 200);
+  assert.equal((await assign(U.headB, orgB.id)).status, 200);
+  assert.equal((await spec2.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  const fin = (await U.headB.req('GET', `/api/orgs/${orgB.id}/cases`)).body;
+  assert.equal(fin.cases.filter((c) => c.status === 'in_work').length, 1);
+  const offers = await S.sql`select specialist_id, org_id, outcome from order_offers where order_id = ${o.id} order by id`;
+  assert.deepEqual(offers.map((x) => [x.specialist_id ? 'эксперт' : 'организация', x.outcome]), [
+    ['организация', 'accepted'], ['эксперт', 'declined'], ['организация', 'declined'], ['организация', 'withdrawn'],
+    ['организация', 'accepted'], ['эксперт', 'accepted']]);
+  // Дело в работе — назначить больше нельзя.
+  assert.equal((await assign(U.headB, orgB.id)).body.error, 'status_changed');
+});
+
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {
   const PUBLIC = ['health', 'auth.code', 'auth.verify', 'files.memory', 'test.calls', 'test.script', 'test.reset', 'test.mail.inbound', 'stage.login', 'payments.notify',
     'inspect.view', 'inspect.photo', 'inspect.finish'];
