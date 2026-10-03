@@ -2,11 +2,11 @@
 import crypto from 'node:crypto';
 import { HttpError, rateLimiter, sessionCookie } from '../http/core.mjs';
 import { FINAL } from '../orders/workflow.mjs';
-import { orderSides, seesResults } from '../access/policy.mjs';
+import { executorSignOrg, orderSides, seesResults } from '../access/policy.mjs';
 import { requestCode, verifyCode, endSession, SESSION_TTL_SEC } from '../auth/auth.mjs';
 import { audit, oneOf, phoneFrom, publicUser, text } from './util.mjs';
 import { unreadCount } from './notify-ops.mjs';
-import { orderSignatures, signatureView } from './sign-ops.mjs';
+import { orderSignatures, signaturesView } from './sign-ops.mjs';
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const DOC_KINDS = ['basis', 'other'];
@@ -111,14 +111,19 @@ export function coreOps(cfg) {
       access: { resource: 'order', param: 'id', need: 'read' },
       async handler({ sql, actor, order, registry }) {
         const docs = await sql`select * from documents where order_id = ${order.id} and deleted_at is null order by created_at`;
-        // Результат работы заказчик видит только после проверки (src/access/policy.mjs); вместе с ним — подпись УКЭП (2.5).
+        // Результат работы заказчик видит только после проверки (src/access/policy.mjs); вместе с ним — подписи УКЭП эксперта
+        // и организации (2.5, 2.5а).
         const results = seesResults(actor, order);
         const signs = results ? await orderSignatures(sql, order.id) : new Map();
+        const required = registry.signatureRequired(order.module, order.service);
+        const signOrg = results && required ? await executorSignOrg(sql, order.executor_user_id) : null;
         return {
           documents: docs.filter((d) => d.kind !== 'result' || results)
-            .map((d) => (d.kind === 'result' ? { ...publicDoc(d), signature: signatureView(signs.get(d.id)) ?? null } : publicDoc(d))),
+            .map((d) => (d.kind === 'result' ? { ...publicDoc(d), signatures: signaturesView(signs.get(d.id)) } : publicDoc(d))),
           results_hidden: !results,
-          signature_required: registry.signatureRequired(order.module, order.service),
+          signature_required: required,
+          // От какой организации нужна вторая подпись (null — только эксперт).
+          signature_org: signOrg?.name ?? null,
         };
       },
     },
@@ -169,9 +174,8 @@ export function coreOps(cfg) {
           await audit(tx, actor, 'document.delete', 'document', doc.id);
         });
         await providers.storage.delete(doc.storage_key);
-        // Подпись удалённого файла (2.5) больше не нужна: запись остаётся в истории, файл подписи убирается.
-        const sig = await sql.one`select storage_key from document_signatures where document_id = ${doc.id}`;
-        if (sig) await providers.storage.delete(sig.storage_key);
+        // Подписи удалённого файла (2.5, 2.5а) больше не нужны: записи остаются в истории, файлы подписей убираются.
+        for (const sig of await sql`select storage_key from document_signatures where document_id = ${doc.id}`) await providers.storage.delete(sig.storage_key);
       },
     },
   ];

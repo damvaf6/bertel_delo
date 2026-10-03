@@ -5,6 +5,7 @@
 import crypto from 'node:crypto';
 import { EVENTS, orderRef } from '../notify/registry.mjs';
 import { LEVEL, orderLevel, seesResults } from '../access/policy.mjs';
+import { signatureFilename } from '../providers/sign.mjs';
 
 export const OUTBOX = {
   maxAttempts: 5,                      // после пятой неудачи письмо больше не повторяется
@@ -87,13 +88,16 @@ async function resultAttachments(sql, storage, order) {
   const total = docs.reduce((n, d) => n + Number(d.size_bytes), 0);
   if (total > OUTBOX.attachMaxBytes) return { files: [], note: 'Файлы результата слишком большие для письма — скачайте их в кабинете.' };
   const files = [];
-  // Подпись УКЭП (2.5) — отдельным файлом «имя.sig» рядом с файлом.
-  const signs = new Map((await sql`select document_id, storage_key from document_signatures where order_id = ${order.id}`).map((x) => [x.document_id, x]));
+  // Подписи УКЭП (2.5, 2.5а) — отдельными файлами рядом с файлом: «имя.sig» (эксперт), «имя.org.sig» (организация).
+  const signs = await sql`select document_id, role, storage_key from document_signatures where order_id = ${order.id} order by role`;
   for (const d of docs) {
     const content = await storage.get(d.storage_key);
-    if (content) files.push({ filename: d.filename, contentType: d.mime, content });
-    const sig = signs.get(d.id) && await storage.get(signs.get(d.id).storage_key);
-    if (content && sig) files.push({ filename: `${d.filename}.sig`, contentType: 'application/pkcs7-signature', content: sig });
+    if (!content) continue;
+    files.push({ filename: d.filename, contentType: d.mime, content });
+    for (const s of signs.filter((x) => x.document_id === d.id)) {
+      const sig = await storage.get(s.storage_key);
+      if (sig) files.push({ filename: signatureFilename(d.filename, s.role), contentType: 'application/pkcs7-signature', content: sig });
+    }
   }
   return { files, note: null };
 }

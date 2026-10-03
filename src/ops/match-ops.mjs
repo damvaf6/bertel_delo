@@ -30,6 +30,7 @@ function regionsFrom(value) {
 async function profileView(sql, userId) {
   const sp = await sql.one`
     select s.*, u.full_name, u.is_active as user_active, c.languages as crm_languages, c.qualification as crm_qualification,
+           (select o.name from organizations o join org_members m on m.org_id = o.id and m.user_id = s.user_id where o.id = s.org_id) as org_name,
            (select count(*)::int from orders where executor_user_id = s.user_id and status = any(${OPEN_STATUSES}::text[])) as open_orders
     from specialists s join users u on u.id = s.user_id left join crm_profiles c on c.user_id = s.user_id where s.user_id = ${userId}`;
   if (!sp) return null;
@@ -40,6 +41,8 @@ async function profileView(sql, userId) {
     external_load: sp.external_load, open_orders: sp.open_orders, user_active: sp.user_active,
     // Помощник на объекте (2.4): ему назначают выезды по экспресс-заявкам.
     onsite: sp.onsite,
+    // Организация, от которой работает (2.5а): результат подписывает ещё и её руководитель. null — частная практика.
+    org: sp.org_name ? { id: sp.org_id, name: sp.org_name } : null,
     permits: permits.map((p) => ({ ...p, valid_until: p.valid_until ?? null })),
     // Профиль перенесён из БЕРТЕЛ CRM (1.10): языки и квалификация; дела вне платформы приходят из CRM.
     crm: sp.crm_languages ? { languages: sp.crm_languages, qualification: sp.crm_qualification } : null,
@@ -83,12 +86,27 @@ export function matchOps() {
       },
     },
     {
-      // Специалист сам включает и выключает приём предложений (на отпуск, болезнь).
+      // Специалист сам включает и выключает приём предложений (на отпуск, болезнь) и выбирает, от какой своей организации
+      // работает (2.5а) — пока нет дел в работе и на проверке, чтобы подпись организации не менялась посреди дела.
       id: 'specialist.me.update', method: 'PATCH', path: '/api/specialist/me', auth: 'user', access: 'self',
       async handler({ sql, actor, body }) {
-        if (typeof body?.active !== 'boolean') throw new HttpError(400, 'bad_input', 'Поле «Принимаю дела»: да или нет');
-        const done = await sql`update specialists set active = ${body.active} where user_id = ${actor.id} returning 1`;
-        if (!done.length) throw new HttpError(404, 'not_found', 'Вы не специалист');
+        const hasActive = body?.active !== undefined;
+        const hasOrg = body?.org_id !== undefined;
+        if (!hasActive && !hasOrg) throw new HttpError(400, 'bad_input', 'Нечего менять');
+        if (hasActive && typeof body.active !== 'boolean') throw new HttpError(400, 'bad_input', 'Поле «Принимаю дела»: да или нет');
+        const orgId = !hasOrg || body.org_id === null ? null : uuidFrom(body.org_id, 'Организация не найдена');
+        if (orgId && !actor.orgs.some((m) => m.org_id === orgId)) throw new HttpError(404, 'not_found', 'Организация не найдена');
+        await sql.tx(async (tx) => {
+          const sp = await tx.one`select * from specialists where user_id = ${actor.id} for update`;
+          if (!sp) throw new HttpError(404, 'not_found', 'Вы не специалист');
+          if (hasActive) await tx`update specialists set active = ${body.active} where user_id = ${actor.id}`;
+          if (hasOrg && orgId !== sp.org_id) {
+            const busy = await tx.one`select 1 from orders where executor_user_id = ${actor.id} and status in ('in_work', 'review') limit 1`;
+            if (busy) throw new HttpError(409, 'orders_in_work', 'Организацию можно сменить, когда нет дел в работе и на проверке');
+            await tx`update specialists set org_id = ${orgId} where user_id = ${actor.id}`;
+            await audit(tx, actor, 'specialist.org', 'user', actor.id, { org_id: orgId });
+          }
+        });
         return { specialist: await profileView(sql, actor.id) };
       },
     },

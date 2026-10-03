@@ -9,6 +9,7 @@ import { loadMoney } from '/money.js';
 import { loadDraft } from '/draft.js';
 import { loadInspection } from '/inspect.js';
 import { loadOnsite } from '/onsite.js';
+import { signatureLines, uploadSignatureButton, SIGN_CONFIRM, UPLOAD_HINT } from '/sign.js';
 
 const $ = (id) => document.getElementById(id);
 const MAX_FILE = 5 * 1024 * 1024;
@@ -321,7 +322,7 @@ async function loadDocs() {
       el('div', { class: 'row' },
         el('button', { class: 'secondary', 'data-action': 'download', onclick: () => download(d) }, 'Скачать'),
         ...(removable ? [el('button', { class: 'danger', 'data-action': 'delete', onclick: () => remove(d) }, 'Удалить')] : [])),
-      ...(d.kind === 'result' ? signatureBlock(d, { canSign: mineResults && signRequired }) : []));
+      ...(d.kind === 'result' ? signatureBlock(d, { canSign: mineResults && signRequired, signOrg: documentsBody.signature_org }) : []));
   }));
   $('docs-empty').classList.toggle('hidden', documents.length > 0);
   $('results-later').textContent = 'Результат работы появится здесь после проверки.';
@@ -330,29 +331,35 @@ async function loadDocs() {
   $('basis-file-state').textContent = basis.length ? `Приложено: ${basis.map((d) => d.filename).join(', ')}` : 'Файл определения ещё не приложен';
 }
 
-// Подпись УКЭП у файла результата (2.5): кто и когда подписал, проверка; исполнитель подписывает свой файл, пока дело в работе.
-function signatureBlock(d, { canSign }) {
-  const s = d.signature;
-  if (!s) {
-    if (!canSign) return [];
-    return [el('div', { class: 'sig' },
-      el('div', { class: 'sig-state', text: 'Не подписан УКЭП — без подписи на проверку не сдать' }),
-      el('div', { class: 'row' }, el('button', { 'data-action': 'sign', onclick: () => signDoc(d) }, 'Подписать')))];
+// Подписи УКЭП у файла результата (2.5, 2.5а): эксперт и, если он работает от организации, её руководитель. Исполнитель
+// подписывает свой файл, пока дело в работе, — в кабинете или загрузив готовую подпись (программа УЦ, «Госключ»).
+function signatureBlock(d, { canSign, signOrg }) {
+  const { expert, org } = d.signatures ?? {};
+  if (!expert && !org && !canSign) return [];
+  const lines = [];
+  if (expert) lines.push(...signatureLines(expert));
+  else if (canSign) {
+    lines.push(el('div', { class: 'sig-state', text: 'Не подписан УКЭП — без подписи на проверку не сдать' }),
+      el('div', { class: 'row' },
+        el('button', { 'data-action': 'sign', onclick: () => signDoc(d) }, 'Подписать'),
+        ...uploadSignatureButton(d.filename, (file) => uploadSignature(d, file))),
+      el('div', { class: 'muted', text: UPLOAD_HINT }));
   }
-  return [el('div', { class: 'sig' },
-    el('div', { class: `sig-state ${s.checked_ok ? 'ok' : 'bad'}`, text: s.checked_ok
-      ? `Подписан УКЭП: ${s.signer} · ${dateTimeRu(s.signed_at)}`
-      : `Подпись не сходится с файлом (проверено ${dateTimeRu(s.checked_at)})` }),
-    el('div', { class: 'muted', text: `Сертификат № ${s.serial} · действует до ${dayRu(s.valid_to)}` }),
-    el('div', { class: 'muted', text: `Выдан: ${s.issuer}` }),
-    ...(s.test ? [el('div', { class: 'sig-test', text: 'Тестовая подпись площадки — юридической силы не имеет' })] : []),
-    el('div', { class: 'row' },
-      el('button', { class: 'secondary', 'data-action': 'signature', onclick: () => downloadSignature(d) }, 'Файл подписи'),
-      el('button', { class: 'secondary', 'data-action': 'verify', onclick: () => verifyDoc(d) }, 'Проверить подпись')))];
+  if (org) lines.push(...signatureLines(org));
+  else if (signOrg && canSign) lines.push(el('div', { class: 'sig-state', 'data-sig': 'org-wait', text: expert
+    ? `Ждёт подписи организации «${signOrg}» — подписывает руководитель в разделе «Организации»`
+    : `После Вашей подписи файл подписывает руководитель организации «${signOrg}»` }));
+  if (expert || org) {
+    lines.push(el('div', { class: 'row' },
+      el('button', { class: 'secondary', 'data-action': 'signature', onclick: () => downloadSignature(d, 'expert') }, 'Файл подписи'),
+      ...(org ? [el('button', { class: 'secondary', 'data-action': 'signature-org', onclick: () => downloadSignature(d, 'org') }, 'Подпись организации')] : []),
+      el('button', { class: 'secondary', 'data-action': 'verify', onclick: () => verifyDoc(d) }, 'Проверить подпись')));
+  }
+  return [el('div', { class: 'sig' }, ...lines)];
 }
 
 async function signDoc(d) {
-  if (!confirm(`Подписать «${d.filename}» Вашей УКЭП? Подтверждаю, что проверил документ и отвечаю за него.`)) return;
+  if (!confirm(SIGN_CONFIRM(d.filename))) return;
   say($('doc-msg'), 'Подписываем…', 'ok');
   try {
     await api('POST', `/api/documents/${d.id}/sign`, { confirm: true });
@@ -362,19 +369,30 @@ async function signDoc(d) {
   } catch (err) { say($('doc-msg'), err.message); }
 }
 
+async function uploadSignature(d, file) {
+  if (!confirm(SIGN_CONFIRM(d.filename))) return;
+  say($('doc-msg'), 'Проверяем подпись…', 'ok');
+  try {
+    await api('POST', `/api/documents/${d.id}/signature/upload`, file, { 'content-type': 'application/octet-stream', 'x-confirm': '1' });
+    await loadDocs();
+    say($('doc-msg'), 'Подпись проверена и добавлена', 'ok');
+  } catch (err) { say($('doc-msg'), err.message); }
+}
+
 async function verifyDoc(d) {
   say($('doc-msg'), 'Проверяем подпись…', 'ok');
   try {
     const r = await api('POST', `/api/documents/${d.id}/signature/verify`);
     await loadDocs();
-    if (r.valid) say($('doc-msg'), `Подпись верна: ${r.signature.signer}`, 'ok');
-    else say($('doc-msg'), `Подпись неверна: ${r.reason}`);
+    const who = [r.signatures.expert?.signer, r.signatures.org?.org].filter(Boolean).join(' и ');
+    if (r.valid) say($('doc-msg'), `Подпись верна: ${who}`, 'ok');
+    else say($('doc-msg'), `Подпись неверна — ${r.reason}`);
   } catch (err) { say($('doc-msg'), err.message); }
 }
 
-async function downloadSignature(d) {
+async function downloadSignature(d, role) {
   try {
-    const { url } = await api('GET', `/api/documents/${d.id}/signature/link`);
+    const { url } = await api('GET', `/api/documents/${d.id}/signature/link${role === 'org' ? '?role=org' : ''}`);
     location.assign(url);
   } catch (err) { say($('doc-msg'), err.message); }
 }

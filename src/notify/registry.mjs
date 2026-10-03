@@ -35,6 +35,8 @@ export const EVENTS = {
   // Помощнику на объекте (2.4) — без номера заявки: заявку он не видит, выезд — в разделе «Специалист».
   onsite_assigned: { type: 'executor_work', title: 'Вам назначен выезд на объект', order: false },
   onsite_cancelled: { type: 'executor_work', title: 'Выезд на объект отменён', order: false },
+  // Руководителю организации исполнителя (2.5а): эксперт подписал результат — нужна подпись организации (раздел «Организации»).
+  org_sign_needed: { type: 'executor_work', title: 'Эксперт подписал заключение — нужна подпись организации', order: false },
   rework: { type: 'executor_work', title: 'Результат возвращён на доработку', order: true },
   result_accepted: { type: 'executor_work', title: 'Результат принят проверкой', order: true },
   executor_cancelled: { type: 'executor_work', title: 'Дело отменено', order: true },

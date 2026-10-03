@@ -53,6 +53,11 @@ export async function showSpecialist() {
   if (!sp) { location.hash = ''; return; }
   say($('specialist-msg'), '');
   $('specialist-active').checked = sp.active;
+  // От какой организации работает (2.5а): из своих организаций; «частная практика» — без подписи организации.
+  const orgs = state.me.orgs;
+  $('specialist-org').replaceChildren(el('option', { value: '', text: 'Ни от какой — частная практика' }),
+    ...orgs.map((o) => el('option', { value: o.org_id, text: o.name })));
+  $('specialist-org').value = sp.org?.id ?? '';
   $('specialist-facts').textContent = `Дел сейчас: ${sp.open_orders} из ${sp.capacity}. Район: ${sp.regions.map((r) => (r === 'moscow' ? 'Москва' : 'Московская область')).join(', ')}.`;
   $('specialist-permits').replaceChildren(...sp.permits.map((p) => el('li', { text: permitText(p) })));
   $('specialist-permits-empty').classList.toggle('hidden', sp.permits.length > 0);
@@ -94,6 +99,15 @@ $('specialist-active').addEventListener('change', async (e) => {
     await refreshMe();
     say($('specialist-msg'), e.target.checked ? 'Теперь Вам снова предлагают дела' : 'Вам не будут предлагать новые дела', 'ok');
   } catch (err) { e.target.checked = !e.target.checked; say($('specialist-msg'), err.message); }
+});
+
+$('specialist-org').addEventListener('change', async (e) => {
+  const before = state.specialist.org?.id ?? '';
+  try {
+    await api('PATCH', '/api/specialist/me', { org_id: e.target.value || null });
+    await refreshMe();
+    say($('specialist-msg'), e.target.value ? 'Теперь заключение подписывает ещё руководитель организации' : 'Подпись организации больше не нужна', 'ok');
+  } catch (err) { e.target.value = before; say($('specialist-msg'), err.message); }
 });
 
 // ——— Список специалистов (диспетчер, администратор) ———

@@ -35,6 +35,9 @@
 // Экспресс-выезд (2.4): назначает и отменяет исполнитель, пока дело в работе; ход выезда и данные видит каждый, кто видит
 //               заявку, имя помощника — исполнитель и служебные. Помощник заявку не видит: только свой выезд — услугу,
 //               поля для поиска объекта из описания модуля и шаги; снимает и пишет данные, пока выезд действует.
+// Подпись организации (2.5а): если исполнитель работает от организации (выбрал её в профиле специалиста и состоит в ней),
+//               её руководитель видит файлы результата этого дела и подписывает их от организации, пока дело в работе;
+//               саму заявку, переписку и заказчика он не видит. Заказчик видит подписи вместе с результатом.
 // Остальные не видят вовсе — ответ «не найдено», чтобы не раскрывать существование.
 import { HttpError, notFound, UUID_RE } from '../http/core.mjs';
 
@@ -170,6 +173,15 @@ export function visibleOrdersFilter(actor) {
   };
 }
 
+// Организация, от имени которой исполнитель сдаёт результат (2.5а): выбрана в его профиле специалиста и он в ней состоит.
+// Нет организации (частная практика) — null: подпись организации не нужна.
+export async function executorSignOrg(sql, executorId) {
+  if (!executorId) return null;
+  const r = await sql.one`select o.id, o.name from specialists s join org_members m on m.org_id = s.org_id and m.user_id = s.user_id
+                          join organizations o on o.id = s.org_id where s.user_id = ${executorId}`;
+  return r ?? null;
+}
+
 // Предметы доступа: загрузка по параметру пути и уровень доступа вошедшего к ним.
 export const RESOURCES = {
   order: {
@@ -189,6 +201,19 @@ export const RESOURCES = {
       return order && { subject: doc, order };
     },
     level: (actor, found) => documentLevel(actor, found.subject, found.order),
+  },
+  // Файл результата глазами организации исполнителя (2.5а): только руководитель этой организации — подписать от организации.
+  orgDocument: {
+    async load(sql, id) {
+      if (!UUID_RE.test(id)) return null;
+      const doc = await sql.one`select * from documents where id = ${id} and deleted_at is null and kind = 'result'`;
+      if (!doc) return null;
+      const order = await sql.one`select * from orders where id = ${doc.order_id}`;
+      if (!order || doc.uploaded_by !== order.executor_user_id) return null;
+      const signOrg = await executorSignOrg(sql, order.executor_user_id);
+      return signOrg && { subject: doc, order, signOrg };
+    },
+    level: (actor, { signOrg }) => (roleIn(actor, signOrg.id) === 'head' ? LEVEL.write : LEVEL.none),
   },
   org: {
     async load(sql, id) {
