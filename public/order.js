@@ -11,6 +11,7 @@ import { loadInspection } from '/inspect.js';
 import { loadOnsite } from '/onsite.js';
 import { signatureLines, uploadSignatureButton, SIGN_CONFIRM, UPLOAD_HINT } from '/sign.js';
 import { setNext } from '/next.js';
+import { orgChat } from '/orgchat.js';
 
 const $ = (id) => document.getElementById(id);
 const MAX_FILE = 5 * 1024 * 1024;
@@ -51,6 +52,7 @@ export async function openOrder(id) {
   render();
   show('order-view', 'orders');
   setNext({ reset: true, current, step: doStep, signAll });
+  loadOrgChat();
   await Promise.all([loadDocs(), loadTransfer(), loadMatch(current, () => openOrder(id)), loadDraft(current, () => openOrder(id)), loadInspection(current), loadOnsite(current), loadReview(current), loadChat(current), loadMoney(current, () => openOrder(id))]);
   setNext({}); // разделы осмотра и черновика показаны — шаги пересчитываются
 }
@@ -340,6 +342,15 @@ async function loadDocs() {
   setNext({ docs: documentsBody });
   const basis = documents.filter((d) => d.kind === 'basis');
   $('basis-file-state').textContent = basis.length ? `Приложено: ${basis.map((d) => d.filename).join(', ')}` : 'Файл определения ещё не приложен';
+}
+
+// Внутренняя переписка с руководителем организации (2.28) — только самому исполнителю, если он работает от организации.
+function loadOrgChat() {
+  const org = current.org_chat;
+  $('org-chat-box').classList.toggle('hidden', !org);
+  if (!org) return $('org-chat').replaceChildren();
+  $('org-chat-lead').textContent = `Видите только Вы и руководитель организации «${org}». Заказчик и диспетчер эту переписку не видят.`;
+  orgChat($('org-chat'), current.order.id);
 }
 
 // Замечания руководителя организации (2.27): возвраты файла до подписи организации — видит только сам исполнитель.

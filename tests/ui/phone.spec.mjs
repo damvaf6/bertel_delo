@@ -1503,6 +1503,42 @@ test('две подписи (2.5а): эксперт от организации 
   await cases.scrollIntoViewIfNeeded();
   await shot(hp, '97a-rukovoditel-dela-ekspertov');
 
+  // Внутренняя переписка (2.28): руководитель пишет эксперту из «Дел экспертов»; эксперт отвечает в деле; заказчик не видит.
+  await row.locator('details.org-chat summary').click();
+  const hchat = row.locator('details.org-chat');
+  await expect(hchat).toContainText('Сообщений пока нет.');
+  await hchat.getByLabel('Сообщение во внутренней переписке').fill('Посмотрите, пожалуйста, аналоги в разделе 6 до сдачи.');
+  await hchat.getByRole('button', { name: 'Отправить' }).click();
+  await expect(hchat.locator('.msg')).toHaveText('Сообщение отправлено');
+  await expect(hchat.locator('.chat li').first()).toContainText('Вы ·');
+  await sp.goto('/kabinet#notifications');
+  await expect(sp.locator('#notifications li').first()).toContainText('Руководитель организации написал Вам по делу');
+  await sp.goto(`/kabinet#order=${id}`);
+  const echat = sp.locator('#org-chat-box');
+  await expect(echat).toBeVisible();
+  await expect(sp.locator('#org-chat-lead')).toContainText('Заказчик и диспетчер эту переписку не видят');
+  await expect(echat.locator('.chat li').first()).toContainText('Руководитель · Тестовый руководитель');
+  await expect(echat.locator('.chat li .body').first()).toHaveText('Посмотрите, пожалуйста, аналоги в разделе 6 до сдачи.');
+  await echat.getByLabel('Сообщение во внутренней переписке').fill('Поправил аналоги, сдаю.');
+  await echat.getByRole('button', { name: 'Отправить' }).click();
+  await expect(echat.locator('.chat li')).toHaveCount(2);
+  await echat.scrollIntoViewIfNeeded();
+  await shot(sp, '96b-specialist-perepiska-rukovoditel');
+  await hp.goto('/kabinet#notifications');
+  await expect(hp.locator('#notifications li').first()).toContainText('Эксперт написал Вам по делу');
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const hrow = hp.locator('#org-cases > li').first();
+  await hrow.locator('details.org-chat summary').click();
+  await expect(hrow.locator('details.org-chat .chat li').nth(1)).toContainText('Эксперт · Тестовый эксперт компании');
+  await expect(hrow.locator('details.org-chat .chat li .body').nth(1)).toHaveText('Поправил аналоги, сдаю.');
+  await hrow.scrollIntoViewIfNeeded();
+  await shot(hp, '97d-rukovoditel-perepiska');
+  await page.goto(`/kabinet#order=${id}`);
+  await expect(page.locator('#order-status')).toHaveText('В работе');
+  await expect(page.locator('#org-chat-box')).toBeHidden();
+  await expect(page.locator('#order-view')).not.toContainText('Поправил аналоги');
+  await page.goto('/kabinet');
+
   // Эксперт сдаёт; после проверки заказчик видит обе подписи, проверяет и скачивает подпись организации.
   await sp.reload();
   await expect(doc.locator('.sig-state')).toHaveCount(2);

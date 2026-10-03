@@ -203,6 +203,8 @@ export function orderOps() {
           // Дело у организации (2.17): эксперта назначает её руководитель; видят только служебные.
           offer_org: order.offer_org_id && order.status === 'awaiting_executor' && isStaff(actor)
             ? await sql.one`select id, name from organizations where id = ${order.offer_org_id}` : null,
+          // Внутренняя переписка с руководителем организации (2.28): только самому исполнителю, если он работает от организации.
+          org_chat: order.executor_user_id === actor.id ? (await executorSignOrg(sql, actor.id))?.name ?? null : null,
           access: LEVEL_NAME[level],
           editable: order.status === 'new' && level >= LEVEL.write,
           // Закрыть неоплаченную заявку нельзя — такой кнопки и не показываем (1.6).

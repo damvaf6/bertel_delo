@@ -1045,14 +1045,17 @@ test('дела экспертов (2.16): видит только руковод
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.cases.length, 1);
   const c = r.body.cases[0];
-  assert.deepEqual(Object.keys(c).sort(), ['active', 'deadline', 'expert', 'fee_kop', 'order_ref', 'overdue', 'payout', 'service', 'status', 'status_name']);
+  assert.deepEqual(Object.keys(c).sort(), ['active', 'deadline', 'expert', 'fee_kop', 'id', 'order_ref', 'overdue', 'payout', 'service', 'status', 'status_name']);
   assert.equal(c.status, 'review');
   assert.equal(c.expert, 'Эксперт Б');
   assert.equal(c.fee_kop, 1_200_000, 'вознаграждение — 80% цены');
   const o = (await S.sql`select * from orders where executor_user_id = ${spec2.user.id}`)[0];
   const owner = (await S.sql`select phone from users where id = ${o.owner_user_id}`)[0];
+  // Номер дела — для внутренней переписки с экспертом (2.28); саму заявку руководитель по нему не открывает.
+  assert.equal(c.id, o.id);
+  assert.equal((await U.headB.req('GET', `/api/orders/${o.id}`)).status, 404);
   const raw = JSON.stringify(r.body);
-  for (const secret of [o.id, o.owner_user_id, owner.phone, o.title, 'Подписная', 'deal', 'z.pdf']) assert.ok(!raw.includes(secret), `не раскрывает: ${secret}`);
+  for (const secret of [o.owner_user_id, owner.phone, o.title, 'Подписная', 'deal', 'z.pdf']) assert.ok(!raw.includes(secret), `не раскрывает: ${secret}`);
   assert.deepEqual(r.body.load.map((l) => [l.full_name, l.in_work]), [['Эксперт Б', 1]]);
   assert.equal(r.body.money.waiting_kop, 1_200_000, 'ждёт выдачи — оплаченное дело на проверке');
   assert.equal(r.body.money.paid_kop, 0);
@@ -1156,6 +1159,65 @@ test('распределение в организации (2.17): дело ор
     ['организация', 'accepted'], ['эксперт', 'accepted']]);
   // Дело в работе — назначить больше нельзя.
   assert.equal((await assign(U.headB, orgB.id)).body.error, 'status_changed');
+});
+
+test('внутренняя переписка организации (2.28): только эксперт и руководитель его организации; заказчик, диспетчер, бывший сотрудник — «не найдено»', async () => {
+  for (const id of ['orgchat.list', 'orgchat.post']) cover(id);
+  const spec2 = expertB;
+  const events = async (userId, event) => (await S.sql`select count(*)::int as n from notifications where user_id = ${userId} and event = ${event}`)[0].n;
+  const o = (await S.sql`select * from orders where executor_user_id = ${spec2.user.id} and status = 'in_work' order by created_at desc limit 1`)[0];
+  assert.ok(o, 'дело эксперта Б в работе (из проверки 2.17)');
+  const list = (c) => c.req('GET', `/api/orders/${o.id}/org-chat`);
+  const post = (c, body = 'Проверьте аналоги, пожалуйста') => c.req('POST', `/api/orders/${o.id}/org-chat`, { body });
+  // Эксперту в деле — с какой организацией переписка; заказчику и служебным — нет.
+  assert.equal((await spec2.req('GET', `/api/orders/${o.id}`)).body.org_chat, orgB.name);
+  for (const k of ['owner', 'dispatcher', 'admin']) assert.equal((await U[k].req('GET', `/api/orders/${o.id}`)).body.org_chat, null, k);
+  // Руководитель пишет — эксперт видит и получает уведомление (вид «Мои дела как исполнителя»).
+  const h = await post(U.headB);
+  assert.equal(h.status, 201, JSON.stringify(h.body));
+  assert.equal(h.body.message.side, 'head');
+  assert.equal(await events(spec2.user.id, 'org_chat_expert'), 1);
+  const e = await post(spec2, 'Исправил, посмотрите');
+  assert.equal(e.status, 201);
+  assert.equal(e.body.message.side, 'expert');
+  assert.equal(await events(U.headB.user.id, 'org_chat_head'), 1);
+  assert.equal((await S.sql`select type from notifications where event = 'org_chat_head' limit 1`)[0].type, 'executor_work');
+  const seen = (await list(spec2)).body;
+  assert.deepEqual(seen.messages.map((m) => [m.side, m.mine]), [['head', false], ['expert', true]]);
+  assert.equal(seen.org, orgB.name);
+  assert.equal(seen.can_write, true);
+  assert.deepEqual((await list(U.headB)).body.messages.map((m) => m.body), ['Проверьте аналоги, пожалуйста', 'Исправил, посмотрите']);
+  assert.equal((await post(U.headB, '   ')).status, 400, 'пустое не отправить');
+  // Заказчик, диспетчер, администратор, посторонний, руководитель чужой организации, старший и другой специалист — «не найдено».
+  for (const k of ['owner', 'dispatcher', 'admin', 'stranger', 'headA', 'spec']) {
+    assert.equal((await list(U[k])).status, 404, k);
+    assert.equal((await post(U[k])).status, 404, k);
+  }
+  for (const c of [seniorB]) {
+    assert.equal((await list(c)).status, 404, 'старший — не руководитель');
+    assert.equal((await post(c)).status, 404);
+  }
+  // В переписку по заявке и в письма по заявке (1.9) не попадает; заказчик и диспетчер текста не видят.
+  for (const k of ['owner', 'dispatcher']) {
+    const m = (await U[k].req('GET', `/api/orders/${o.id}/messages`)).body;
+    assert.ok(!JSON.stringify(m).includes('Проверьте аналоги'), k);
+  }
+  assert.equal((await S.sql`select count(*)::int as n from order_messages where body like 'Проверьте аналоги%'`)[0].n, 0);
+  assert.equal((await S.sql`select count(*)::int as n from mail_outbox where body like '%Проверьте аналоги%' or body like '%Исправил, посмотрите%'`)[0].n, 0);
+  // Бывший сотрудник: эксперт ушёл из организации — переписки нет ни у него, ни у руководителя.
+  await S.sql`delete from org_members where org_id = ${orgB.id} and user_id = ${spec2.user.id}`;
+  for (const c of [spec2, U.headB]) {
+    assert.equal((await list(c)).status, 404, 'бывший сотрудник');
+    assert.equal((await post(c)).status, 404);
+  }
+  assert.equal((await spec2.req('GET', `/api/orders/${o.id}`)).body.org_chat, null);
+  await addMember(S.sql, orgB.id, spec2.user.id, 'member');
+  assert.equal((await list(spec2)).body.messages.length, 2, 'вернулся — лента та же');
+  // Дело отменено — читать можно, писать нельзя.
+  await S.sql`update orders set status = 'cancelled' where id = ${o.id}`;
+  assert.equal((await list(U.headB)).body.can_write, false);
+  assert.equal((await post(U.headB)).body.error, 'order_final');
+  await S.sql`update orders set status = 'in_work' where id = ${o.id}`;
 });
 
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {
