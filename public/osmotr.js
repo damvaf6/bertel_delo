@@ -3,6 +3,7 @@
 // прикладывает время съёмки и место (если владелец разрешил). Тексты — только через textContent.
 // Та же страница — для выезда помощника по экспресс-заявке (задача 2.4): /osmotr?visit=номер, со входом в кабинет; помощник
 // ещё видит, где объект (поля из описания модуля), и заполняет данные с объекта.
+// Задача 2.20: если эксперт попросил переснять шаг — просьба видна у шага, новое фото этого шага её закрывает.
 import { api, el, say } from '/common.js';
 
 const $ = (id) => document.getElementById(id);
@@ -44,6 +45,7 @@ async function load() {
     $('expires').textContent = `Выезд назначен на ${dateRu(info.planned_at)}.`;
     renderVisit();
   } else $('expires').textContent = `Ссылка действует до ${dateRu(info.expires_at)}.`;
+  if (info.steps.some((s) => s.retake)) $('expires').textContent += ' Эксперт просит переснять шаги, отмеченные ниже.';
   renderSteps();
 }
 
@@ -96,12 +98,14 @@ function renderSteps() {
   $('steps').replaceChildren(...info.steps.map((s) => {
     const input = el('input', { type: 'file', accept: 'image/*', capture: 'environment', class: 'visually-hidden', id: `f-${s.id}`, 'aria-label': `Фото: ${s.title}` });
     const status = el('p', { class: 'msg', role: 'status', 'aria-live': 'polite' });
-    const count = el('span', { class: `badge${s.photos ? ' ok' : ''}`, text: s.photos ? `Фото: ${s.photos}` : s.optional ? 'если есть' : 'нужно фото' });
+    const count = el('span', { class: `badge${s.photos && !s.retake ? ' ok' : ''}`, text: s.retake ? 'переснять' : s.photos ? `Фото: ${s.photos}` : s.optional ? 'если есть' : 'нужно фото' });
+    const retake = s.retake ? el('p', { class: 'photo-meta warn', 'data-retake': '', text: `Эксперт просит переснять: ${s.retake}` }) : '';
     input.addEventListener('change', () => upload(s, input, status, count));
     return el('li', { class: 'card', 'data-step': s.id },
       el('div', { class: 'doc' }, el('span', { class: 'title', text: s.title }), count),
+      retake,
       s.hint ? el('p', { class: 'muted', text: s.hint }) : '',
-      el('label', { class: 'btn secondary', for: `f-${s.id}`, text: s.photos ? 'Ещё фото' : 'Сфотографировать' }),
+      el('label', { class: 'btn secondary', for: `f-${s.id}`, text: s.retake ? 'Переснять' : s.photos ? 'Ещё фото' : 'Сфотографировать' }),
       input, status);
   }));
 }
@@ -152,6 +156,7 @@ async function upload(s, input, status, count) {
     if (pos) Object.assign(h, { 'x-lat': String(pos.coords.latitude), 'x-lon': String(pos.coords.longitude), 'x-accuracy': String(pos.coords.accuracy) });
     const r = await api('POST', API.photos, new Blob([blob], { type: blob.type || file.type || 'image/jpeg' }), h);
     s.photos = r.photos;
+    if (s.retake) { s.retake = null; input.closest('li').querySelector('[data-retake]')?.remove(); }
     count.textContent = `Фото: ${r.photos}`;
     count.classList.add('ok');
     input.previousElementSibling.textContent = 'Ещё фото';

@@ -7,7 +7,7 @@ import { HttpError, notFound } from '../http/core.mjs';
 import { isStaff, orderSides } from '../access/policy.mjs';
 import { cleanValues, missingRequired } from '../modules/index.mjs';
 import { notify } from '../notify/notify.mjs';
-import { INSPECT, stepCounts, storePhoto } from './inspect-ops.mjs';
+import { INSPECT, openRetakes, stepCounts, storePhoto } from './inspect-ops.mjs';
 import { audit, uuidFrom } from './util.mjs';
 
 const PLAN_MAX_DAYS = 60;
@@ -67,6 +67,7 @@ export function onsiteOps() {
     const def = registry.service(order.module, order.service);
     const ex = registry.express(order.module, order.service);
     const counts = await stepCounts(sql, { visit: visit.id });
+    const retakes = await openRetakes(sql, order.id);
     const state = visitState(visit, order);
     return {
       id: String(visit.id),
@@ -76,7 +77,8 @@ export function onsiteOps() {
       planned_at: visit.planned_at,
       finished_at: visit.finished_at,
       object: dataView(ex?.show ?? [], order.fields),
-      steps: registry.inspectionSteps(order.module, order.service).map((s) => ({ ...s, photos: counts[s.id] ?? 0 })),
+      steps: registry.inspectionSteps(order.module, order.service)
+        .map((s) => ({ ...s, photos: counts[s.id] ?? 0, retake: retakes[s.id]?.note ?? null })),
       fields: ex?.fields ?? [],
       data: visit.data,
       limits: { photos: INSPECT.photosMax, per_step: INSPECT.perStepMax, file_bytes: INSPECT.fileMax },

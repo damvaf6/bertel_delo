@@ -864,7 +864,7 @@ test('шаблон отчёта организации (2.29): меняет ру
 });
 
 test('дистанционный осмотр (2.3): в деле видят те, кто видит заявку; ссылку выдаёт и отзывает только исполнитель в работе', async () => {
-  for (const id of ['inspection.get', 'inspection.issue', 'inspection.revoke']) cover(id);
+  for (const id of ['inspection.get', 'inspection.issue', 'inspection.revoke', 'inspection.retake', 'inspection.retake_cancel']) cover(id);
   for (const k of ['owner', 'dispatcher', 'admin']) {
     const r = await U[k].req('GET', `/api/orders/${ownOrder.id}/inspection`);
     assert.equal(r.status, 200, k);
@@ -873,7 +873,8 @@ test('дистанционный осмотр (2.3): в деле видят те
   for (const k of ['memberA', 'headA', 'seniorA']) assert.equal((await U[k].req('GET', `/api/orders/${orgOrder.id}/inspection`)).status, 200, k);
   for (const k of ['stranger', 'headB', 'spec']) assert.equal((await U[k].req('GET', `/api/orders/${ownOrder.id}/inspection`)).status, 404, k);
   assert.equal((await U.memberA2.req('GET', `/api/orders/${orgOrder.id}/inspection`)).status, 404, 'коллега-сотрудник');
-  for (const [method, path, body] of [['POST', 'inspection', { days: 3 }], ['DELETE', 'inspection/1', undefined]]) {
+  for (const [method, path, body] of [['POST', 'inspection', { days: 3, phone: '+79990009999' }], ['DELETE', 'inspection/1', undefined],
+    ['POST', 'inspection/retakes', { step: 'facade', note: 'Тёмно' }], ['DELETE', 'inspection/retakes/1', undefined]]) {
     for (const k of ['owner', 'dispatcher', 'admin']) assert.equal((await U[k].req(method, `/api/orders/${ownOrder.id}/${path}`, body)).status, 403, `${k} ${path}`);
     for (const k of ['stranger', 'headB']) assert.equal((await U[k].req(method, `/api/orders/${ownOrder.id}/${path}`, body)).status, 404, `${k} ${path}`);
   }

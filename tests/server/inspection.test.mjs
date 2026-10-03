@@ -247,3 +247,105 @@ test('геометка разрешена только странице осмо
   const home = await fetch(`${S.base}/`);
   assert.equal(home.headers.get('permissions-policy'), 'camera=(), microphone=(), geolocation=()');
 });
+
+test('2.20: ссылка владельцу СМС с платформы — номер не хранится, секрета нет в базе; не ушла — ссылка всё равно выдана', async () => {
+  const o = await inWork('Осмотр — СМС владельцу');
+  const sms = S.providers.sms;
+  const before = sms.calls.length;
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/inspection`, { phone: '12345' })).status, 400, 'неверный номер');
+  const r = await spec.req('POST', `/api/orders/${o.id}/inspection`, { days: 1, phone: '8 (999) 000-23-99' });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.equal(r.body.sms, 'sent');
+  assert.equal(r.body.link.sms_to, '+7 *** ***-23-99');
+  const call = sms.calls.at(-1);
+  assert.equal(sms.calls.length, before + 1);
+  assert.equal(call.method, 'send');
+  assert.equal(call.args.phone, '+79990002399');
+  const token = tokenOf(r.body.path);
+  assert.ok(call.args.text.endsWith(`/osmotr#${token}`), call.args.text);
+  assert.ok(!call.args.text.includes('СМС владельцу'), 'в СМС нет названия заявки');
+  // Ни номера, ни секрета — ни в ссылке, ни в очереди СМС, ни в журнале.
+  const dump = JSON.stringify([
+    await S.sql`select * from inspection_links where order_id = ${o.id}`,
+    await S.sql`select * from notification_deliveries where body like ${'%' + token + '%'} or phone = '+79990002399'`,
+    await S.sql`select * from audit_log where subject_id = ${o.id}`,
+  ]);
+  assert.ok(!dump.includes(token) && !dump.includes('9990002399'), 'номер и секрет не сохранены');
+  const g = (await spec.req('GET', `/api/orders/${o.id}/inspection`)).body;
+  assert.equal(g.links[0].sms_to, '+7 *** ***-23-99');
+  assert.ok(g.links[0].sms_sent_at);
+  for (const u of [owner, dispatcher]) {
+    const v = (await u.req('GET', `/api/orders/${o.id}/inspection`)).body;
+    assert.equal(v.links[0].sms_to, '+7 *** ***-23-99', 'остальные видят только скрытый номер');
+  }
+
+  sms.script({ kind: 'fail', message: 'нет связи' });
+  try {
+    const f = await spec.req('POST', `/api/orders/${o.id}/inspection`, { phone: '+79990002399' });
+    assert.equal(f.status, 201);
+    assert.equal(f.body.sms, 'failed');
+    assert.equal(f.body.link.sms_to, null);
+    assert.equal((await view(tokenOf(f.body.path))).body.active, true, 'ссылка выдана — эксперт отправит сам');
+  } finally { sms.script({ kind: 'ok' }); }
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/inspection`, {})).body.sms, null, 'без номера СМС не шлётся');
+});
+
+test('2.20: не больше 5 СМС со ссылкой по заявке в сутки; без номера ссылку выдать можно', async () => {
+  const o = await inWork('Осмотр — лимит СМС');
+  for (let i = 0; i < 5; i += 1) assert.equal((await spec.req('POST', `/api/orders/${o.id}/inspection`, { phone: '+79990002398' })).body.sms, 'sent');
+  const r = await spec.req('POST', `/api/orders/${o.id}/inspection`, { phone: '+79990002398' });
+  assert.equal(r.status, 429);
+  assert.equal(r.body.error, 'sms_limit');
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/inspection`, {})).status, 201);
+});
+
+test('2.20: попросить переснять шаг — владелец видит просьбу у шага; новое фото шага её закрывает; отменить может эксперт', async () => {
+  const o = await inWork('Осмотр — переснять');
+  const first = await issue(o);
+  assert.equal((await shoot(first.token, 'facade', { headers: GEO })).status, 201);
+  assert.equal((await finish(first.token)).status, 200);
+  const ask = (body, who = spec) => who.req('POST', `/api/orders/${o.id}/inspection/retakes`, body);
+  assert.equal((await ask({ step: 'nope', note: 'x' })).status, 400);
+  assert.equal((await ask({ step: 'facade', note: '' })).status, 400);
+  assert.equal((await ask({ step: 'facade', note: 'x'.repeat(301) })).status, 400);
+  for (const u of [owner, dispatcher]) assert.equal((await ask({ step: 'facade', note: 'Размыто' }, u)).status, 403);
+  assert.equal((await ask({ step: 'facade', note: 'Размыто' }, spec2)).status, 404, 'посторонний эксперт');
+  let r = await ask({ step: 'facade', note: 'Размыто' });
+  assert.equal(r.status, 201);
+  assert.equal(r.body.active_link, false, 'прежняя ссылка завершена — нужна новая');
+  r = await ask({ step: 'facade', note: 'Фасад целиком, днём' });
+  assert.equal(r.body.retake.note, 'Фасад целиком, днём', 'повторная просьба заменяет текст');
+  assert.equal((await S.sql`select count(*)::int as n from inspection_retakes where order_id = ${o.id}`)[0].n, 1);
+  const g = (await owner.req('GET', `/api/orders/${o.id}/inspection`)).body;
+  assert.equal(g.steps.find((s) => s.id === 'facade').retake.note, 'Фасад целиком, днём', 'видит каждый, кто видит заявку');
+  assert.equal(g.steps.find((s) => s.id === 'rooms').retake, null);
+
+  // Новая ссылка с СМС: текст — про пересъёмку; владелец видит просьбу у шага.
+  const n = await spec.req('POST', `/api/orders/${o.id}/inspection`, { phone: '+79990002397' });
+  assert.match(S.providers.sms.calls.at(-1).args.text, /переснять/);
+  const token = tokenOf(n.body.path);
+  let v = (await view(token)).body;
+  assert.equal(v.steps.find((s) => s.id === 'facade').retake, 'Фасад целиком, днём');
+  assert.equal(v.steps.find((s) => s.id === 'rooms').retake, null);
+  assert.equal((await ask({ step: 'rooms', note: 'Нет кухни' })).body.active_link, true);
+  assert.equal((await shoot(token, 'facade', { headers: GEO })).status, 201);
+  v = (await view(token)).body;
+  assert.equal(v.steps.find((s) => s.id === 'facade').retake, null, 'новое фото закрыло просьбу');
+  const names = await S.sql`select d.filename from inspection_photos p join documents d on d.id = p.document_id
+                            where d.order_id = ${o.id} and p.step = 'facade' order by d.created_at`;
+  assert.deepEqual(names.map((x) => x.filename), ['Осмотр · Дом снаружи · 1.jpg', 'Осмотр · Дом снаружи · 2.jpg'], 'номер — по всей заявке');
+  assert.equal(v.steps.find((s) => s.id === 'rooms').retake, 'Нет кухни');
+  const [closed] = await S.sql`select closed_reason from inspection_retakes where order_id = ${o.id} and step = 'facade'`;
+  assert.equal(closed.closed_reason, 'photo');
+
+  const id = (await spec.req('GET', `/api/orders/${o.id}/inspection`)).body.steps.find((s) => s.id === 'rooms').retake.id;
+  assert.equal((await owner.req('DELETE', `/api/orders/${o.id}/inspection/retakes/${id}`)).status, 403);
+  assert.equal((await spec.req('DELETE', `/api/orders/${o.id}/inspection/retakes/x`)).status, 404);
+  assert.equal((await spec.req('DELETE', `/api/orders/${o.id}/inspection/retakes/${id}`)).status, 204);
+  assert.equal((await spec.req('DELETE', `/api/orders/${o.id}/inspection/retakes/${id}`)).status, 404, 'уже отменена');
+  assert.equal((await view(token)).body.steps.find((s) => s.id === 'rooms').retake, null);
+  // Чужая заявка: просьбу по номеру из другой заявки не отменить.
+  const other = await inWork('Осмотр — чужая просьба');
+  const x = (await spec.req('POST', `/api/orders/${other.id}/inspection/retakes`, { step: 'facade', note: 'Тёмно' })).body.retake.id;
+  assert.equal((await spec.req('DELETE', `/api/orders/${o.id}/inspection/retakes/${x}`)).status, 404);
+});
