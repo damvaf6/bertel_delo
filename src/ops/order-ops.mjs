@@ -8,7 +8,7 @@ import { STATUSES, STATUS_NAME, TRANSITIONS, WORK_STARTED, addDays, availableAct
 import { runSettlement, settleCancel, settleDone, splitAmount } from '../money/money.mjs';
 import { audit, oneOf, text, uuidFrom } from './util.mjs';
 import { reviewState } from './work-ops.mjs';
-import { notifyStatus } from '../notify/notify.mjs';
+import { notify, notifyStatus, orgHeads } from '../notify/notify.mjs';
 
 const LEVEL_NAME = ['none', 'read', 'write', 'manage'];
 const DEADLINE_MAX_DAYS = 2 * 365;
@@ -200,6 +200,9 @@ export function orderOps() {
           order: await orderView(sql, registry, order),
           mail: thread ? { email: level >= LEVEL.write ? thread.email : null } : null,
           executor: exec ? { user_id: order.executor_user_id, name: exec.full_name, is_me: order.executor_user_id === actor.id } : null,
+          // Дело у организации (2.17): эксперта назначает её руководитель; видят только служебные.
+          offer_org: order.offer_org_id && order.status === 'awaiting_executor' && isStaff(actor)
+            ? await sql.one`select id, name from organizations where id = ${order.offer_org_id}` : null,
           access: LEVEL_NAME[level],
           editable: order.status === 'new' && level >= LEVEL.write,
           // Закрыть неоплаченную заявку нельзя — такой кнопки и не показываем (1.6).
@@ -276,6 +279,17 @@ export function orderOps() {
             throw new HttpError(409, 'bad_transition', `Из статуса «${STATUS_NAME[cur.status]}» так нельзя`);
           }
           if (t.reason && !reason) throw new HttpError(400, 'reason_required', 'Укажите причину');
+          // Дело организации (2.17): отказ эксперта возвращает его руководителю — статус не меняется, эксперта назначат другого.
+          if (t.by === 'executor' && to === 'matching' && cur.offer_org_id) {
+            await tx`update order_offers set outcome = 'declined', outcome_at = now(), reason = ${reason}
+                     where order_id = ${cur.id} and outcome is null`;
+            await tx`insert into order_offers (order_id, org_id, score, offered_by)
+                     values (${cur.id}, ${cur.offer_org_id}, ${JSON.stringify({ org: true, returned: true })}, null)`;
+            const back = await tx.one`update orders set executor_user_id = null, updated_at = now() where id = ${cur.id} returning *`;
+            await audit(tx, actor, 'order.org_returned', 'order', cur.id, { org: cur.offer_org_id });
+            await notify(tx, 'org_expert_declined', { users: await orgHeads(tx, cur.offer_org_id), orgId: cur.offer_org_id, actor });
+            return back;
+          }
           if (cur.status === 'new' && to === 'matching') {
             const missing = await problemsForSubmit(tx, registry, cur);
             if (missing.length) throw new HttpError(400, 'incomplete', `Не хватает: ${missing.join(', ')}`);
@@ -332,7 +346,7 @@ export function orderOps() {
           // Исполнитель, получающий оплату за сделанную часть, сохраняет доступ к отменённому делу (видит отчёт агента).
           const keepExecutor = to === 'cancelled' && !!settlement.payoutId;
           // Предложение исполнителю закрывается: принято, отказ исполнителя, либо снято (диспетчером или отменой).
-          if (cur.executor_user_id && (to === 'in_work' || to === 'matching' || to === 'cancelled') && cur.status === 'awaiting_executor') {
+          if ((cur.executor_user_id || cur.offer_org_id) && (to === 'in_work' || to === 'matching' || to === 'cancelled') && cur.status === 'awaiting_executor') {
             const outcome = to === 'in_work' ? 'accepted' : t.by === 'executor' ? 'declined' : 'withdrawn';
             await tx`update order_offers set outcome = ${outcome}, outcome_at = now(), reason = ${reason}
                      where order_id = ${cur.id} and outcome is null`;
@@ -341,6 +355,7 @@ export function orderOps() {
             update orders set status = ${to}, updated_at = now(),
                    executor_user_id = case when ${to} = 'matching' or (${to} = 'cancelled' and not ${keepExecutor}) then null
                                            else executor_user_id end,
+                   offer_org_id = case when ${to} = 'matching' then null else offer_org_id end,
                    cancel_fault = case when ${to} = 'cancelled' then ${fault} else cancel_fault end,
                    done_percent = case when ${to} = 'cancelled' then ${percent}::int else done_percent end,
                    submitted_at = case when ${to} = 'matching' then coalesce(submitted_at, now()) else submitted_at end,
@@ -350,6 +365,10 @@ export function orderOps() {
                    values (${cur.id}, ${cur.status}, ${to}, ${actor.id}, ${t.by}, ${reason})`;
           await audit(tx, actor, 'order.status', 'order', cur.id, { from: cur.status, to, side: t.by });
           await notifyStatus(tx, { actor, before: cur, to, by: t.by });
+          // Дело было у организации и снято (возврат в подбор, отмена) — её руководителю тоже сообщаем (2.17).
+          if (cur.offer_org_id && cur.status === 'awaiting_executor' && to !== 'in_work') {
+            await notify(tx, 'org_offer_withdrawn', { users: await orgHeads(tx, cur.offer_org_id), orgId: cur.offer_org_id, actor });
+          }
           return o;
         });
         // Выплата и возврат — через поставщика, уже после транзакции; неудачу повторяет диспетчер.

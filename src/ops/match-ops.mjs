@@ -8,7 +8,7 @@ import { orderSides } from '../access/policy.mjs';
 import { scoreSpecialist } from '../matching/score.mjs';
 import { addDays, todayMsk } from '../orders/workflow.mjs';
 import { audit, text, uuidFrom } from './util.mjs';
-import { notify } from '../notify/notify.mjs';
+import { notify, orgHeads } from '../notify/notify.mjs';
 
 const REGIONS = { moscow: 'Москва', mo: 'Московская область' };
 const OPEN_STATUSES = ['awaiting_executor', 'in_work', 'review'];
@@ -70,6 +70,37 @@ export async function candidatesFor(sql, order) {
       score: scoreSpecialist(r, { open: r.open, offers: r.offers, accepted: r.accepted }, order, daysLeft),
     }))
     .sort((a, b) => b.score.total - a.score.total || a.full_name.localeCompare(b.full_name));
+}
+
+// Организации, где есть эксперты, которым можно отдать дело (2.17): эксперт выбрал организацию в профиле специалиста,
+// состоит в ней и сам проходит подбор (допуск, «принимаю дела», не его дело). Лучшая оценка эксперта — оценка организации.
+export async function orgCandidatesFor(sql, order) {
+  const cands = await candidatesFor(sql, order);
+  if (!cands.length) return [];
+  const rows = await sql`
+    select s.user_id, o.id as org_id, o.name from specialists s
+    join org_members m on m.org_id = s.org_id and m.user_id = s.user_id join organizations o on o.id = s.org_id
+    where s.user_id = any(${cands.map((c) => c.user_id)}::uuid[])`;
+  const byOrg = new Map();
+  for (const r of rows) {
+    const c = cands.find((x) => x.user_id === r.user_id);
+    const g = byOrg.get(r.org_id) ?? { org_id: r.org_id, name: r.name, experts: 0, best: 0 };
+    g.experts += 1;
+    g.best = Math.max(g.best, c.score.total);
+    byOrg.set(r.org_id, g);
+  }
+  return [...byOrg.values()].sort((a, b) => b.best - a.best || a.name.localeCompare(b.name));
+}
+
+// Эксперты организации, которых её руководитель может назначить на дело (2.17), — из общего подбора по этой заявке.
+export async function orgExpertsFor(sql, order, orgId) {
+  const cands = await candidatesFor(sql, order);
+  if (!cands.length) return [];
+  const mine = await sql`
+    select s.user_id from specialists s join org_members m on m.org_id = s.org_id and m.user_id = s.user_id
+    where s.org_id = ${orgId} and s.user_id = any(${cands.map((c) => c.user_id)}::uuid[])`;
+  const ids = new Set(mine.map((r) => r.user_id));
+  return cands.filter((c) => ids.has(c.user_id));
 }
 
 function requireDispatcher(actor, order) {
@@ -189,16 +220,23 @@ export function matchOps() {
       async handler({ sql, actor, order }) {
         requireDispatcher(actor, order);
         if (!['matching', 'awaiting_executor'].includes(order.status)) throw new HttpError(409, 'bad_transition', 'Подбор идёт только для заявок в подборе');
-        return { candidates: await candidatesFor(sql, order), current_executor_id: order.executor_user_id };
+        return {
+          candidates: await candidatesFor(sql, order), current_executor_id: order.executor_user_id,
+          // Организации с подходящими экспертами (2.17): дело можно предложить организации — эксперта назначит руководитель.
+          orgs: await orgCandidatesFor(sql, order), current_org_id: order.offer_org_id,
+        };
       },
     },
     {
-      // Предложить дело специалисту (из подбора) или передать другому (пока первый не ответил).
+      // Предложить дело специалисту (из подбора) или организации (2.17: эксперта назначит её руководитель); передать
+      // другому — пока первый не ответил.
       id: 'orders.offer', method: 'POST', path: '/api/orders/:id/offer', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
       async handler({ sql, actor, order, body }) {
         requireDispatcher(actor, order);
-        const specialistId = uuidFrom(body?.specialist_id, 'Специалист не найден');
+        const toOrg = body?.org_id !== undefined && body?.org_id !== null;
+        const specialistId = toOrg ? null : uuidFrom(body?.specialist_id, 'Специалист не найден');
+        const orgId = toOrg ? uuidFrom(body.org_id, 'Организация не найдена') : null;
         const from = String(body?.from ?? '');
         const updated = await sql.tx(async (tx) => {
           const cur = await tx.one`select * from orders where id = ${order.id} for update`;
@@ -208,26 +246,39 @@ export function matchOps() {
           if (!cur.price_kop) throw new HttpError(409, 'no_price', 'Сначала назначьте цену');
           // Заказчик платит при заказе: неоплаченное дело исполнителю не предлагается (решение Дамира 01.10.2026).
           if (!cur.paid_at) throw new HttpError(409, 'not_paid', 'Заявка ещё не оплачена заказчиком');
-          const cand = (await candidatesFor(tx, cur)).find((c) => c.user_id === specialistId);
-          if (!cand) throw new HttpError(409, 'not_eligible', 'Этому специалисту дело отдать нельзя: нет допуска, не принимает дела или это его дело');
+          let score;
+          if (toOrg) {
+            const g = (await orgCandidatesFor(tx, cur)).find((c) => c.org_id === orgId);
+            if (!g) throw new HttpError(409, 'not_eligible', 'Этой организации дело отдать нельзя: у неё нет экспертов с допуском, которые принимают дела');
+            if (cur.offer_org_id === orgId && !cur.executor_user_id) throw new HttpError(409, 'already_offered', 'Дело уже у этой организации');
+            score = { org: true, experts: g.experts, total: g.best };
+          } else {
+            const cand = (await candidatesFor(tx, cur)).find((c) => c.user_id === specialistId);
+            if (!cand) throw new HttpError(409, 'not_eligible', 'Этому специалисту дело отдать нельзя: нет допуска, не принимает дела или это его дело');
+            score = cand.score;
+          }
           const reassign = cur.status === 'awaiting_executor';
           if (reassign) {
-            await tx`update order_offers set outcome = 'withdrawn', outcome_at = now(), reason = 'Передано другому специалисту'
+            await tx`update order_offers set outcome = 'withdrawn', outcome_at = now(), reason = 'Передано другому исполнителю'
                      where order_id = ${cur.id} and outcome is null`;
           }
-          await tx`insert into order_offers (order_id, specialist_id, score, offered_by)
-                   values (${cur.id}, ${specialistId}, ${JSON.stringify(cand.score)}, ${actor.id})`;
+          await tx`insert into order_offers (order_id, specialist_id, org_id, score, offered_by)
+                   values (${cur.id}, ${specialistId}, ${orgId}, ${JSON.stringify(score)}, ${actor.id})`;
           const o = await tx.one`
-            update orders set status = 'awaiting_executor', executor_user_id = ${specialistId}, updated_at = now()
+            update orders set status = 'awaiting_executor', executor_user_id = ${specialistId}, offer_org_id = ${orgId}, updated_at = now()
             where id = ${cur.id} returning *`;
           await tx`insert into order_status_history (order_id, from_status, to_status, actor_id, side, reason)
-                   values (${cur.id}, ${cur.status}, 'awaiting_executor', ${actor.id}, 'dispatcher', ${reassign ? 'Передано другому специалисту' : null})`;
-          await audit(tx, actor, 'order.offer', 'order', cur.id, { specialist: specialistId, score: cand.score.total, reassign });
-          if (reassign && cur.executor_user_id !== specialistId) await notify(tx, 'offer_withdrawn', { users: [cur.executor_user_id], orderId: cur.id, actor });
-          await notify(tx, 'offer', { users: [specialistId], orderId: cur.id, actor });
+                   values (${cur.id}, ${cur.status}, 'awaiting_executor', ${actor.id}, 'dispatcher', ${reassign ? 'Передано другому исполнителю' : null})`;
+          await audit(tx, actor, 'order.offer', 'order', cur.id, { specialist: specialistId, org: orgId, score: score.total, reassign });
+          if (reassign) {
+            if (cur.executor_user_id && cur.executor_user_id !== specialistId) await notify(tx, 'offer_withdrawn', { users: [cur.executor_user_id], orderId: cur.id, actor });
+            if (cur.offer_org_id && cur.offer_org_id !== orgId) await notify(tx, 'org_offer_withdrawn', { users: await orgHeads(tx, cur.offer_org_id), orgId: cur.offer_org_id, actor });
+          }
+          if (toOrg) await notify(tx, 'org_offer', { users: await orgHeads(tx, orgId), orgId, actor });
+          else await notify(tx, 'offer', { users: [specialistId], orderId: cur.id, actor });
           return o;
         });
-        return { order: { id: updated.id, status: updated.status, executor_user_id: updated.executor_user_id } };
+        return { order: { id: updated.id, status: updated.status, executor_user_id: updated.executor_user_id, offer_org_id: updated.offer_org_id } };
       },
     },
   ];

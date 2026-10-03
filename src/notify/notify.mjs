@@ -51,6 +51,11 @@ export async function customersOf(tx, order) {
   return rows.map((r) => r.user_id);
 }
 
+// Руководители организации: им — предложения дел организации и подпись от неё (2.5а, 2.17).
+export async function orgHeads(tx, orgId) {
+  return (await tx`select user_id from org_members where org_id = ${orgId} and role = 'head'`).map((r) => r.user_id);
+}
+
 export async function dispatchers(tx) {
   return (await tx`select id from users where platform_role = 'dispatcher' and is_active`).map((r) => r.id);
 }

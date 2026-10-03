@@ -157,6 +157,10 @@
         <p class="muted">Только специалисты с допуском на эту услугу. Оценка — по признакам; можно выбрать любого из списка.</p>
         <ul class="list" id="candidates"></ul>
         <p class="muted hidden" id="candidates-empty">Подходящих специалистов нет: ни у кого нет допуска на эту услугу или все не принимают дела.</p>
+        <h2 class="gap">Организации</h2>
+        <p class="muted">Организации, где есть эксперты с допуском. Дело получит руководитель и сам назначит эксперта из своих.</p>
+        <ul class="list" id="org-candidates"></ul>
+        <p class="muted hidden" id="org-candidates-empty">Подходящих организаций нет.</p>
         <p class="msg" id="match-msg" role="status" aria-live="polite"></p>
       </div>
       <form class="card hidden" id="transfer-box" novalidate>
@@ -347,6 +351,13 @@
         <h2>Дела экспертов</h2>
         <p class="muted">Дела, которые ведут эксперты от Вашей организации. Заказчика, его данные, документы и переписку по делу
           видят только стороны заявки.</p>
+        <div class="hidden" id="org-pending-box">
+          <h2 class="gap">Ждут назначения</h2>
+          <p class="muted">Диспетчер предложил эти дела организации. Назначьте эксперта — он примет дело или откажется; отказ
+            вернётся к Вам. Если взять дело некому — откажитесь, оно вернётся диспетчеру.</p>
+          <ul class="list" id="org-pending"></ul>
+          <p class="msg" id="org-pending-msg" role="status" aria-live="polite"></p>
+        </div>
         <dl class="facts" id="org-cases-money"></dl>
         <h2 class="gap">Нагрузка</h2>
         <ul class="list" id="org-cases-load"></ul>
