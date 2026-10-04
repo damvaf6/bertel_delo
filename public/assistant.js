@@ -45,6 +45,9 @@ function renderAnswer() {
   $('pa-specialist').textContent = c.specialist
     ? `${c.specialist}${c.service ? ` — услуга «${c.service.name}» есть на платформе.` : '.'}`
     : 'Подходящей услуги на платформе помощник не нашёл. Если всё же нужна оценка или экспертиза — выберите услугу сами.';
+  // Правовой вопрос (2.41): помощник не консультирует — прямо говорит, что это к юристу.
+  $('pa-legal').textContent = c.legal_note || '';
+  $('pa-legal').classList.toggle('hidden', !c.legal_note);
   const options = state.catalog.modules.flatMap((m) => m.services.map((s) => el('option', { value: `${m.id}/${s.id}`, text: `${m.name} · ${s.name}` })));
   $('pa-service').replaceChildren(el('option', { value: '', text: 'Выберите услугу' }), ...options);
   $('pa-service').value = c.service ? `${c.service.module}/${c.service.service}` : '';

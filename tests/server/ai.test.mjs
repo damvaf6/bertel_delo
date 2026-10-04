@@ -8,7 +8,8 @@ import { loadConfig, ConfigError } from '../../src/config.mjs';
 import { aiChain, createAi } from '../../src/providers/ai.mjs';
 import { createOcr } from '../../src/providers/ocr.mjs';
 import { makeFake } from '../../src/providers/fake.mjs';
-import { parseJsonAnswer } from '../../src/ai/ai.mjs';
+import { parseJsonAnswer, LEGAL_NOTE } from '../../src/ai/ai.mjs';
+import { PROBLEM_QUESTIONS } from '../tools/problem-questions.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import { makePdf, makeDocx } from '../tools/make-docs.mjs';
 
@@ -271,6 +272,56 @@ test('вход через проблему: модель ответила не �
   } finally { S.providers.ai.complete = orig; fake.reset(); }
   assert.equal((await owner.req('POST', '/api/ai/problem', { text: '' })).status, 400);
   assert.equal((await owner.req('POST', '/api/ai/problem', { text: 'x'.repeat(4001) })).status, 400);
+});
+
+// Признаки юридической консультации в ответе: совет судиться, статья закона, прогноз исхода (2.41).
+const LEGAL_ADVICE_RE = /подайте[^.]*иск|стать[яиеюё]й?\s*\d|ст\.\s*\d|(?:ГК|ГПК|УК|КоАП)\s*РФ|шанс\w*[^.]{0,20}выигр|выиграете|исков\w* давност/i;
+
+test('вход через проблему (2.41): 20 типичных вопросов по оценке — понятный ответ, без юридической консультации, всегда «что сделать самому» и «к кому»', async () => {
+  const u = await login(S, '+79990000809');
+  for (const q of PROBLEM_QUESTIONS) {
+    const r = await u.req('POST', '/api/ai/problem', { text: q.text });
+    assert.equal(r.status, 201, q.text);
+    const c = r.body.consultation;
+    assert.ok(c.explanation.length > 20 && c.explanation.length <= 3000, q.text);
+    assert.ok(c.self_steps.length >= 1, `нет шагов «что сделать самому»: ${q.text}`);
+    assert.ok(c.specialist, `нет «к кому обратиться»: ${q.text}`);
+    assert.equal(c.service?.service, q.service, q.text);
+    assert.match(c.disclaimer, /не юридическая услуга/);
+    for (const x of [c.explanation, ...c.self_steps, c.specialist]) assert.doesNotMatch(x, LEGAL_ADVICE_RE, q.text);
+    assert.equal(c.legal_note, q.legal ? LEGAL_NOTE : null, q.text);
+  }
+  assert.match(lastPrompt(), /Юридических консультаций не давай/);
+});
+
+test('вход через проблему (2.41): модель дала юридический совет — он убирается, человеку — «это к юристу»; пустой ответ — всё равно с шагом', async () => {
+  const orig = S.providers.ai.complete;
+  const u = await login(S, '+79990000810');
+  try {
+    S.providers.ai.complete = async () => ({ text: JSON.stringify({
+      explanation: 'Нужна независимая оценка ущерба. Подайте иск к страховой по ст. 15 ГК РФ — шансы выиграть высокие. Отчёт оценщика суд примет как доказательство.',
+      self_steps: ['Соберите документы о ДТП', 'Обжалуйте решение страховой через претензию', 'Сфотографируйте повреждения'],
+      specialist: 'Эксперт-оценщик', service: 'expertise/vehicle', fields: {},
+    }), model: 'fake' });
+    const c = (await u.req('POST', '/api/ai/problem', { text: 'Страховая заплатила мало за ДТП' })).body.consultation;
+    assert.equal(c.explanation, 'Нужна независимая оценка ущерба. Отчёт оценщика суд примет как доказательство.');
+    assert.deepEqual(c.self_steps, ['Соберите документы о ДТП', 'Сфотографируйте повреждения']);
+    assert.equal(c.legal_note, LEGAL_NOTE);
+    assert.equal(c.service.service, 'vehicle');
+
+    S.providers.ai.complete = async () => ({ text: JSON.stringify({ explanation: 'По ст. 1064 ГК РФ виновник обязан возместить вред.', self_steps: [], specialist: null, service: null }), model: 'fake' });
+    const e = (await u.req('POST', '/api/ai/problem', { text: 'Имею ли я право требовать деньги с соседа?' })).body.consultation;
+    assert.match(e.explanation, /не нашёл подходящей услуги/);
+    assert.equal(e.self_steps.length, 1, 'всегда хотя бы один шаг «что сделать самому»');
+    assert.equal(e.specialist, 'Юрист');
+    assert.equal(e.legal_note, LEGAL_NOTE);
+
+    S.providers.ai.complete = async () => ({ text: JSON.stringify({ explanation: 'Нужна оценка квартиры.', self_steps: [], specialist: '', service: 'expertise/realty' }), model: 'fake' });
+    const f = (await u.req('POST', '/api/ai/problem', { text: 'Оценка квартиры для банка' })).body.consultation;
+    assert.equal(f.self_steps.length, 1);
+    assert.equal(f.specialist, 'Оценка недвижимости');
+    assert.equal(f.legal_note, null);
+  } finally { S.providers.ai.complete = orig; }
 });
 
 test('модель недоступна — понятный ответ, действие не ломается; дневной лимит обращений', async () => {

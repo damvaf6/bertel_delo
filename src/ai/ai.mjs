@@ -78,6 +78,9 @@ export function problemMessages(registry, problem) {
         'Обязательно скажи, что человек может сделать сам, и к какому специалисту обратиться.',
         'Если подходит одна из услуг платформы — укажи её; если ни одна не подходит — service: null.',
         'Ничего не выдумывай про закон и сроки; не обещай результат.',
+        'Юридических консультаций не давай: не советуй, подавать ли иск или жалобу и как их составить, не называй статьи',
+        'законов, не оценивай шансы выиграть суд. Если вопрос правовой — скажи, что это вопрос к юристу.',
+        'Объясняй коротко — до пяти предложений, простыми словами. В self_steps — от одного до пяти конкретных действий.',
         `Услуги платформы:\n${services}`,
         'Ответь только JSON без пояснений: {"explanation": "...", "self_steps": ["..."], "specialist": "кто нужен" | null,',
         '"service": {"module": "...", "service": "..."} | null, "title": "короткое название заявки" | null,',
@@ -106,11 +109,50 @@ function serviceFromAnswer(registry, v) {
   return hit ? registry.service(hit.m, hit.s) : null;
 }
 
+// Юридическая консультация — не услуга помощника (устав: «разъяснение, не юридическая услуга»). Фразы с советом судиться,
+// ссылками на статьи законов или прогнозом исхода дела убираются из ответа; вместо них — «это вопрос к юристу».
+const LEGAL_ADVICE = [
+  /(?:подайте|подавайте|подать|составьте|обжалуйте|обжаловать)[^.!?]{0,40}(?:иск|претензи|жалоб|апелляц|кассац|заявлени[ея] в суд)/i,
+  /(?:^|[\s(«])(?:ст\.|стать[яиеюё]й?)\s*\d+/i,
+  /(?:ГК|ГПК|АПК|УК|УПК|КоАП|ЖК|СК|НК|ЗК)\s*РФ/,
+  /(?:закон|кодекс)\w*\s+(?:об?|о защите|N|№)\s*[^.!?]{0,40}(?:вы\s+)?(?:вправе|имеете право)/i,
+  /шанс\w*[^.!?]{0,20}(?:выигр|успех|побед|проигр)/i,
+  /(?:выиграете|проиграете|суд\s+(?:скорее всего|наверняка|точно|обязательно)\s+\w+)/i,
+  /(?:исков\w*\s+давност|срок\w*\s+давност)/i,
+  /(?:по закону|законом)\s+вы\s+(?:имеете право|вправе|можете требовать|обязаны)/i,
+];
+// Вопрос сам по себе правовой: стоит ли судиться, как составить иск, выиграю ли.
+const LEGAL_QUESTION = /(?:выиграю|шанс|подавать ли|стоит ли (?:судиться|подавать|обращаться в суд)|как (?:составить|написать|подать) (?:иск|претензи|жалоб)|как[ауюя]{1,2} стать|по какой статье|в иске|в исковом|законно ли|имею ли (?:я )?право)/i;
+export const LEGAL_NOTE = 'Правовую сторону — подавать ли в суд, какие сроки и шансы — помощник не оценивает: это вопрос к юристу.';
+const legalAdvice = (s) => LEGAL_ADVICE.some((re) => re.test(s));
+// Предложение кончается точкой и пробелом перед заглавной буквой («ст. 15» — не конец предложения).
+const sentences = (s) => s.split(/(?<=[.!?…])\s+(?=[A-ZА-ЯЁ«"(])/).filter(Boolean);
+// Ответ без шагов «что сделать самому» не отдаём (устав): тогда — общий первый шаг.
+const DEFAULT_STEP = 'Запишите, что случилось и когда, и соберите документы, которые у Вас есть: договоры, фото, переписку';
+
 // Ответ модели → то, что увидит человек. Услуга и поля — только из перечня модуля; остальное отбрасывается.
-export function cleanProblemAnswer(registry, text) {
+// Ответ всегда заканчивается «что сделать самому» (хотя бы один шаг) и «к кому обратиться»; советы юриста — убираются.
+export function cleanProblemAnswer(registry, text, problem = '') {
+  const a = cleanProblemJson(registry, text);
+  let legal = LEGAL_QUESTION.test(problem);
+  const kept = sentences(a.explanation).filter((x) => !legalAdvice(x));
+  if (kept.join(' ') !== sentences(a.explanation).join(' ')) legal = true;
+  const steps = a.self_steps.filter((x) => !legalAdvice(x));
+  if (steps.length !== a.self_steps.length) legal = true;
+  if (legalAdvice(a.specialist ?? '')) { a.specialist = null; legal = true; }
+  a.explanation = kept.join(' ') || (a.service
+    ? `Похоже, Вам нужна услуга «${a.service.name}». Специалист разберётся в деталях.`
+    : 'Помощник не нашёл подходящей услуги по Вашему описанию. Опишите подробнее, что случилось и что нужно получить.');
+  a.self_steps = steps.length ? steps : [DEFAULT_STEP];
+  if (!a.specialist) a.specialist = a.service ? a.service.name : legal ? 'Юрист' : null;
+  a.legal_note = legal ? LEGAL_NOTE : null;
+  return a;
+}
+
+function cleanProblemJson(registry, text) {
   const j = parseJsonAnswer(text);
   if (!j) {
-    return { explanation: clip(text, 3000) || 'Помощник не смог разобрать вопрос.', self_steps: [], specialist: null, service: null, title: null, fields: {} };
+    return { explanation: clip(text, 3000), self_steps: [], specialist: null, service: null, title: null, fields: {} };
   }
   const def = serviceFromAnswer(registry, j.service);
   const fields = {};

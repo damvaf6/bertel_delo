@@ -107,7 +107,7 @@ export function aiOps() {
         const { sql, actor, body, registry, res } = ctx;
         const problem = text(body?.text, 'Опишите, что случилось', PROBLEM_MAX);
         const out = await askAi(ctx, actor, 'problem', problemMessages(registry, problem));
-        const answer = cleanProblemAnswer(registry, out.text);
+        const answer = cleanProblemAnswer(registry, out.text, problem);
         const c = await sql.one`insert into ai_consultations (user_id, problem, answer, model)
                                 values (${actor.id}, ${problem}, ${JSON.stringify(answer)}, ${out.model}) returning *`;
         res.status(201);
