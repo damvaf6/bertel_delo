@@ -4,7 +4,8 @@
 // Находка — подсказка человеку (место и страница), не вердикт: отметки ставит человек.
 // Какие правила к какой проверке относятся — данными в модуле (`checks[].auto`); здесь — только сами правила.
 //   runAutoChecks(names, docs, ctx) → { [имя правила]: [{ text, file, where, quote }] }
-// docs — [{ name, kind, pages }] (src/ai/extract.mjs); ctx — { fields } заявки и { dossier: { items, today } } исполнителя (2.14).
+// docs — [{ name, kind, pages }] (src/ai/extract.mjs); ctx — { fields } заявки, { basis: { kind, number } } (2.38) и
+// { dossier: { items, today } } исполнителя (2.14).
 
 const MAX_PER_RULE = 5;
 
@@ -274,7 +275,7 @@ function courtPurpose(doc, ctx) {
 // ctx.dossier — { items, today } (src/dossier/dossier.mjs). Дата отчёта — «дата составления (отчёта)» в тексте, иначе сегодня.
 const REPORT_DATE = /дата\s+(?:составления|подписания)(?:\s+(?:отч[её]та|заключения))?[^\d\n]{0,40}(\d{1,2})\.(\d{1,2})\.(\d{4})/iu;
 const MONEY = /\d{1,3}(?:[  .]\d{3})+|\d{4,}/g;
-const KIND_WORD = { education: /диплом/iu, certificate: /аттестат/iu, sro: /\bСРО\b|саморегулируем/iu, policy: /полис|страхован/iu, policy_org: /полис|страхован/iu };
+const KIND_WORD = { education: /диплом/iu, certificate: /аттестат/iu, sro: /(?<![а-яё])СРО(?![а-яё])|саморегулируем/iu, policy: /полис|страхован/iu, policy_org: /полис|страхован/iu };
 const squash = (v) => String(v ?? '').toLowerCase().replace(/[^0-9a-zа-яё]/giu, '');
 const ruDate = (d) => d.split('-').reverse().join('.');
 
@@ -330,9 +331,104 @@ function dossierFindings(kinds) {
   };
 }
 
+
+// ——— 2.38: обязательные сведения отчёта, требования суда, VIN из заявки, порядок дат ———
+// Основной отчёт среди файлов результата — самый длинный текст, где в начале есть «отчёт» или «заключение» (подписи,
+// копии документов и приложения отдельными файлами не проверяются на «обязательное»).
+function mainReport(docs) {
+  const len = (d) => (d.pages ?? []).reduce((n, p) => n + p.length, 0);
+  return [...docs].filter((d) => /отч[её]т|заключени/iu.test((d.pages ?? []).slice(0, 2).join('\n'))).sort((a, b) => len(b) - len(a))[0] ?? null;
+}
+
+// Что суды и ФСО ждут в любом отчёте об оценке (ст. 11 закона № 135-ФЗ, ФСО VI «Отчёт об оценке»).
+const REQUIRED = [
+  ['дата оценки', /дат[аы]\s+оценки|дат[аы]\s+определения\s+стоимости|по\s+состоянию\s+на/iu],
+  ['дата составления отчёта', /дат[аы]\s+(?:составления|подписания)/iu],
+  ['цель оценки', /цел[ьи]\s+(?:проведения\s+)?оценки/iu],
+  ['вид стоимости', /вид\s+(?:определяемой\s+)?стоимости|рыночн[а-яё]*\s+стоимост/iu],
+  ['допущения и ограничительные условия', /допущени/iu],
+  ['применённые стандарты оценки', /стандарт[а-яё]*\s+оценк|(?<![а-яё])ФСО(?![а-яё])/iu],
+  ['членство оценщика в СРО', /саморегулируем|(?<![а-яё])СРО(?![а-яё])/iu],
+  ['страхование ответственности', /страхов/iu],
+  ['подходы к оценке', /подход/iu],
+  ['основание (договор или определение суда)', /договор|определени[а-яё]*\s+суда/iu],
+];
+
+function requiredItems(docs) {
+  const d = mainReport(docs);
+  if (!d) return [];
+  const text = d.pages.join('\n');
+  const missing = REQUIRED.filter(([, re]) => !re.test(text)).map(([name]) => name);
+  return missing.length
+    ? [{ doc: d, page: 0, quote: '', text: `В отчёте не найдено: ${missing.join(', ')} — по закону об оценке (ст. 11) и ФСО это обязательно, суд проверяет первым` }]
+    : [];
+}
+
+// Экспертиза по определению суда: номер определения и предупреждение об уголовной ответственности (ст. 307 УК РФ).
+function courtOrder(docs, ctx) {
+  if (ctx.basis?.kind !== 'court') return [];
+  const d = mainReport(docs);
+  if (!d) return [];
+  const text = d.pages.join('\n');
+  const out = [];
+  const num = squash(ctx.basis.number);
+  if (num.length >= 3 && !squash(text).includes(num)) {
+    out.push({ doc: d, page: 0, quote: '', text: `Номер определения суда ${ctx.basis.number} в отчёте не найден — укажите основание с номером и датой` });
+  }
+  if (!/307\s*(?:УК|Уголовного)|уголовн[а-яё]*\s+ответственност[а-яё]*\s+за\s+(?:дачу\s+)?заведомо\s+ложн/iu.test(text)) {
+    out.push({ doc: d, page: 0, quote: '', text: 'Экспертиза по определению суда, а предупреждения об ответственности по ст. 307 УК РФ в отчёте нет' });
+  }
+  return out;
+}
+
+// VIN в отчёте — как в заявке (машины из «остальных машин» заявки тоже свои).
+const VIN_RE = /\b[A-HJ-NPR-Z0-9]{17}\b/g;
+function vinMatch(doc, ctx) {
+  const mine = String(ctx.fields?.vin ?? '').toUpperCase();
+  if (mine.length !== 17) return [];
+  const known = new Set([mine, ...(String(ctx.fields?.more_vehicles ?? '').toUpperCase().match(VIN_RE) ?? [])]);
+  const out = [];
+  const seen = new Set();
+  eachPage(doc, (page, i) => {
+    for (const m of page.toUpperCase().matchAll(VIN_RE)) {
+      const v = m[0];
+      if (known.has(v) || seen.has(v) || !/\d/.test(v) || !/[A-Z]/.test(v)) continue;
+      // Похожий на VIN номер рядом со словом VIN, не совпадающий с заявкой, — скорее всего, чужая машина из старого отчёта.
+      if (!/VIN|идентификацион/iu.test(page.slice(Math.max(0, m.index - 40), m.index))) continue;
+      seen.add(v);
+      out.push({ page: i, quote: lineAround(page, m.index), text: `VIN ${v} не совпадает с VIN из заявки (${mine}) — проверьте, нет ли данных другой машины` });
+    }
+  });
+  return out;
+}
+
+// Дата составления отчёта не раньше даты оценки.
+const MONTHS = ['январ', 'феврал', 'март', 'апрел', 'ма', 'июн', 'июл', 'август', 'сентябр', 'октябр', 'ноябр', 'декабр'];
+function dateAfter(text, label) {
+  const num = text.match(new RegExp(`${label}[^\\d\\n]{0,40}(\\d{1,2})\\.(\\d{1,2})\\.(\\d{4})`, 'iu'));
+  if (num) return `${num[3]}-${num[2].padStart(2, '0')}-${num[1].padStart(2, '0')}`;
+  const word = text.match(new RegExp(`${label}[^\\d\\n]{0,40}(\\d{1,2})\\s+([а-яё]+)\\s+(\\d{4})`, 'iu'));
+  if (word) {
+    const mi = MONTHS.findIndex((x, i) => (i === 4 ? /^ма[яй]$/iu.test(word[2]) : word[2].toLowerCase().startsWith(x)));
+    if (mi >= 0) return `${word[3]}-${String(mi + 1).padStart(2, '0')}-${word[1].padStart(2, '0')}`;
+  }
+  return null;
+}
+function dateOrder(doc) {
+  const text = (doc.pages ?? []).join('\n');
+  const val = dateAfter(text, 'дата\\s+оценки');
+  const made = dateAfter(text, 'дата\\s+(?:составления|подписания)(?:\\s+(?:отч[её]та|заключения))?');
+  if (!val || !made || made >= val) return [];
+  const at = (doc.pages ?? []).findIndex((p) => /дата\s+(?:составления|подписания)/iu.test(p));
+  return [{ page: Math.max(0, at), quote: lineAround(doc.pages[Math.max(0, at)], Math.max(0, doc.pages[Math.max(0, at)].search(/дата\s+(?:составления|подписания)/iu))),
+    text: `Дата составления отчёта (${ruDate(made)}) раньше даты оценки (${ruDate(val)}) — так быть не может` }];
+}
+
 const WHOLE = {
   dossier_appraiser: dossierFindings(['certificate', 'sro', 'policy', 'policy_org']),
   dossier_education: dossierFindings(['education']),
+  required_items: requiredItems,
+  court_order: courtOrder,
 };
 
 const PER_DOC = {
@@ -344,6 +440,8 @@ const PER_DOC = {
   template_leftovers: templateLeftovers,
   inspection,
   court_purpose: courtPurpose,
+  vin_match: vinMatch,
+  date_order: dateOrder,
 };
 
 // Все правила: имя → короткое описание (для проверки описаний модулей и для журнала).
@@ -360,6 +458,10 @@ export const AUTO_CHECKS = Object.freeze({
   court_purpose: 'цель «для суда» и отказ являться в суд',
   dossier_appraiser: 'аттестат, СРО и полисы сходятся с досье эксперта: номера, суммы, срок на дату отчёта',
   dossier_education: 'диплом эксперта сходится с досье',
+  required_items: 'обязательные сведения отчёта по ст. 11 закона об оценке и ФСО',
+  court_order: 'по определению суда — номер определения и ст. 307 УК РФ',
+  vin_match: 'VIN в отчёте — как в заявке',
+  date_order: 'дата составления отчёта не раньше даты оценки',
 });
 
 export function runAutoChecks(names, docs, ctx = {}) {

@@ -87,7 +87,49 @@ test('тот же отчёт без ошибок — находок нет', () 
     .replace('объекта недвижимости', 'объекта оценки')
     .replace(/От оценщика не требуется[^\n]*/, ''));
   const res = runAutoChecks(ALL, [doc(fixed)], { fields: { purpose: 'court' } });
-  for (const rule of ALL) assert.deepEqual(res[rule], [], rule);
+  // Выдержка — не весь отчёт: обязательных сведений (2.38) в ней и не должно быть полностью.
+  for (const rule of ALL.filter((r) => r !== 'required_items')) assert.deepEqual(res[rule], [], rule);
+});
+
+// 2.38: то, что суды проверяют первым, — обязательные сведения отчёта (ст. 11 закона № 135-ФЗ, ФСО VI); экспертиза по
+// определению суда — номер определения и ст. 307 УК РФ; VIN как в заявке; дата составления не раньше даты оценки.
+const FULL = [
+  'ОТЧЕТ ОБ ОЦЕНКЕ № 300/2026\nДата составления отчёта: 20.09.2026\nОснование: договор № 7 от 01.09.2026',
+  'Цель оценки — для суда. Вид стоимости — рыночная стоимость. Дата оценки: 15.09.2026.\nДопущения и ограничительные условия.',
+  'Применены стандарты оценки ФСО I–VI. Оценщик — член СРО «Тест», ответственность застрахована.\nСравнительный подход. VIN: XXX000000R0000000',
+].map((p) => p.replace(/\\n/g, '\n'));
+
+test('обязательные сведения отчёта (2.38): полный отчёт — молчим; чего нет — одной находкой со списком', () => {
+  assert.deepEqual(runAutoChecks(['required_items'], [doc(FULL)]).required_items, []);
+  const cut = FULL.map((p) => p.replace(/Дата оценки: 15\.09\.2026\./, '').replace(/член СРО «Тест», /, ''));
+  const r = runAutoChecks(['required_items'], [doc(cut), doc(['Копия диплома'], 'Диплом.pdf')]).required_items;
+  assert.equal(r.length, 1);
+  assert.equal(r[0].file, 'Отчёт.pdf', 'проверяется основной отчёт, а не копии документов');
+  assert.match(r[0].text, /не найдено: дата оценки, членство оценщика в СРО — по закону об оценке/);
+});
+
+test('по определению суда (2.38): номер определения и ст. 307 УК РФ; по договору — не требуется', () => {
+  const basis = { kind: 'court', number: '2-1234/2026' };
+  let r = runAutoChecks(['court_order'], [doc(FULL)], { basis }).court_order.map((f) => f.text);
+  assert.deepEqual(r, ['Номер определения суда 2-1234/2026 в отчёте не найден — укажите основание с номером и датой',
+    'Экспертиза по определению суда, а предупреждения об ответственности по ст. 307 УК РФ в отчёте нет']);
+  const ok = [...FULL, 'Определение суда по делу № 2-1234/2026. Об уголовной ответственности по ст. 307 УК РФ предупреждён.'];
+  assert.deepEqual(runAutoChecks(['court_order'], [doc(ok)], { basis }).court_order, []);
+  assert.deepEqual(runAutoChecks(['court_order'], [doc(FULL)], { basis: { kind: 'contract' } }).court_order, []);
+});
+
+test('VIN как в заявке и порядок дат (2.38): чужой VIN рядом со словом VIN; составлен раньше даты оценки', () => {
+  const fields = { vin: 'XXX000000R0000000', more_vehicles: 'Второй автобус, VIN XXX000000R0000002' };
+  assert.deepEqual(runAutoChecks(['vin_match'], [doc(FULL)], { fields }).vin_match, []);
+  const other = [...FULL, 'Аналог: VIN XXX000000R0000002 — из заявки, свой.\nVIN: WDB0000000A123456 — от старого отчёта.'.replace('\\n', '\n')];
+  const r = runAutoChecks(['vin_match'], [doc(other)], { fields }).vin_match;
+  assert.deepEqual(r.map((f) => f.text), ['VIN WDB0000000A123456 не совпадает с VIN из заявки (XXX000000R0000000) — проверьте, нет ли данных другой машины']);
+  assert.deepEqual(runAutoChecks(['vin_match'], [doc(other)], {}).vin_match, [], 'без VIN в заявке — молчим');
+  assert.deepEqual(runAutoChecks(['date_order'], [doc(FULL)]).date_order, []);
+  const early = FULL.map((p) => p.replace('20.09.2026', '10.09.2026'));
+  assert.deepEqual(runAutoChecks(['date_order'], [doc(early)]).date_order.map((f) => f.text), ['Дата составления отчёта (10.09.2026) раньше даты оценки (15.09.2026) — так быть не может']);
+  const words = ['Дата оценки — 26 марта 2025 года', 'Дата составления отчёта — 4 марта 2025 года'];
+  assert.equal(runAutoChecks(['date_order'], [doc(words)]).date_order.length, 1, 'даты словами');
 });
 
 test('отчёт как «241»: несколько машин — год сверяется по каждому VIN, округление на 4,7%, модельный год по VIN', () => {
