@@ -275,14 +275,14 @@ test('экскурсия по кабинетам: эксперт, руковод
     await expect(sp.locator('#doc-msg')).toHaveText('Файл подписан');
   }
   await sp.getByRole('button', { name: 'Сдать на проверку' }).click();
-  await expect(sp.locator('#status-msg')).toContainText(`Нужна подпись организации «${org}»`);
+  await expect(sp.locator('#status-msg')).toContainText(`Нужна подпись организации ${org}`);
   await snap(sp, 'Эксперт', 'Подпись УКЭП и сдача', 'Эксперт подписывает файлы своей подписью (в кабинете или загрузкой готовой). Сдать нельзя, пока не подписал и руководитель организации.', [card(sp, '#order-view', 'Документы')]);
 
   // ——— Сотрудник организации заказывает от организации — руководитель видит его дело ———
   await ep.goto('/kabinet');
   await ep.locator('#new-order').getByLabel('Услуга').selectOption({ label: 'Оценка транспортного средства' });
   await ep.getByLabel('Коротко: что нужно').fill(`Оценка служебного автомобиля — тест ${RUN}`);
-  await ep.getByLabel('От чьего имени').selectOption({ label: `От организации «${org}»` });
+  await ep.getByLabel('От чьего имени').selectOption({ label: `От организации ${org}` });
   await ep.getByRole('button', { name: 'Создать заявку' }).click();
   await expect(ep.locator('#order-status')).toHaveText('Новая');
 

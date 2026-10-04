@@ -233,7 +233,7 @@ test('общий прогон: организация — приглашение
   await expect(mp.getByText('Ваша роль: Сотрудник')).toBeVisible();
   await mp.getByRole('link', { name: 'Заявки' }).click();
   await mp.getByLabel('Коротко: что нужно').fill(title);
-  await mp.getByLabel('От чьего имени').selectOption({ label: `От организации «${org}»` });
+  await mp.getByLabel('От чьего имени').selectOption({ label: `От организации ${org}` }); // название уже в кавычках (2.41)
   await mp.getByRole('button', { name: 'Создать заявку' }).click();
   await expect(mp.getByText(new RegExp(`^Организация: ${org.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} · Ведёт:`))).toBeVisible();
   const orderUrl = mp.url();
@@ -829,14 +829,14 @@ test('общий прогон: две подписи — эксперт от о�
   await expect(sp.locator('#order-status')).toHaveText('В работе');
   await sp.locator('#result-file').setInputFiles({ name: 'Отчёт компании.pdf', mimeType: 'application/pdf', buffer: report });
   const doc = sp.locator('#docs li').filter({ hasText: 'Отчёт компании.pdf' });
-  await expect(doc.locator('[data-sig="org-wait"]')).toContainText(`подписывает руководитель организации «${org}»`);
+  await expect(doc.locator('[data-sig="org-wait"]')).toContainText(`подписывает руководитель организации ${org}`);
   sp.once('dialog', (d) => d.accept());
   await doc.locator('input[type=file]').setInputFiles({ name: 'Отчёт компании.pdf.sig', mimeType: 'application/octet-stream', buffer: testExternalSignature({ digest, subject: specName }) });
   await expect(sp.locator('#doc-msg')).toHaveText('Подпись проверена и добавлена');
   await expect(doc.locator('.sig-state').first()).toContainText(`Подпись эксперта: ${specName}`);
   await expect(doc).toContainText('загружена готовым файлом');
   await sp.getByRole('button', { name: 'Сдать на проверку' }).click();
-  await expect(sp.locator('#status-msg')).toContainText(`Нужна подпись организации «${org}» (руководитель): Отчёт компании.pdf`);
+  await expect(sp.locator('#status-msg')).toContainText(`Нужна подпись организации ${org} (руководитель): Отчёт компании.pdf`);
   await shot(sp, '31-specialist-gotovaya-podpis');
 
   // Руководитель: уведомление; в организации видит только файл (не заявку), скачивает его и подписывает от организации.
