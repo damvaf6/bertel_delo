@@ -25,7 +25,7 @@ before(async () => {
   spec = await login(S, '+79990000905');
   await setPlatformRole(S.sql, dispatcher.user.id, 'dispatcher');
   await setPlatformRole(S.sql, admin.user.id, 'admin');
-  await makeSpecialist(S.sql, spec.user.id, { permits: [['expertise', 'realty'], ['expertise', 'vehicle']] });
+  await makeSpecialist(S.sql, spec.user.id, { permits: [['expertise', 'realty'], ['expertise', 'vehicle'], ['expertise', 'land'], ['expertise', 'movable'], ['expertise', 'goods']] });
   await owner.req('PATCH', '/api/me', { full_name: 'Тестова Заказчица' });
 });
 after(async () => { await S?.close(); });
@@ -58,9 +58,9 @@ async function inWork(title) {
 test('разделы черновика — в описании модуля; у услуги свои (аналоги — не у товароведческой)', () => {
   const reg = createRegistry();
   const realty = reg.draftSections('expertise', 'realty').map((s) => s.id);
-  assert.ok(realty.includes('analogs') && !realty.includes('questions'));
+  assert.ok(realty.includes('r_compare') && !realty.includes('g_questions'));
   const goods = reg.draftSections('expertise', 'goods').map((s) => s.id);
-  assert.ok(goods.includes('questions') && !goods.includes('analogs'));
+  assert.ok(goods.includes('g_questions') && !goods.includes('r_compare'));
   assert.deepEqual(reg.draftSections('expertise', 'nope'), []);
   const { draft, ...noDraft } = structuredClone(expertise);
   assert.ok(draft.length);
@@ -73,7 +73,7 @@ test('черновик от ИИ: по данным заявки, докумен
   assert.equal(r.status, 200);
   assert.equal(r.body.draft, null);
   assert.equal(r.body.can_ai, true);
-  assert.ok(r.body.sections.some((s) => s.id === 'analogs'));
+  assert.ok(r.body.sections.some((s) => s.id === 'r_compare'));
 
   S.providers.ai.reset();
   r = await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: null });
@@ -84,7 +84,7 @@ test('черновик от ИИ: по данным заявки, докумен
   assert.equal(d.versions, 1);
   assert.deepEqual(d.inputs.photos, ['фасад.jpg', 'кухня.png']);
   assert.deepEqual(d.inputs.docs, [{ name: 'Сведения.docx', read: true, truncated: false }]);
-  assert.match(d.body, /^## Вводная часть/);
+  assert.match(d.body, /^## 1\. Основные факты и выводы/);
   assert.match(d.body, /Адрес объекта: г\. Москва, тестовая ул\., 9/, 'данные заявки');
   assert.match(d.body, /Фото 1 \(фасад\.jpg\): \[описать по фото: фасад\.jpg\]/);
   assert.match(d.body, /\[заполнить: расчёт и итоговая величина\]/);
@@ -175,15 +175,15 @@ test('эксперт правит черновик и прикладывает �
 test('модель пропустила разделы или обернула ответ — разделы добавлены с пометкой; модель недоступна — черновик не меняется', async () => {
   const o = await inWork('Квартира: модель капризничает');
   const orig = S.providers.ai.complete;
-  S.providers.ai.complete = async () => ({ text: '```\n## Вводная часть\nОснование: договор\n```', model: 'fake' });
+  S.providers.ai.complete = async () => ({ text: '```\n## 2. Задание на оценку\nОснование: договор\n```', model: 'fake' });
   try {
     const d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {})).body.draft;
     assert.doesNotMatch(d.body, /```/);
-    // Под «Вводной частью» программа сама ставит таблицу «задание» из полей заявки (2.29), дальше — текст модели.
-    assert.match(d.body, /^## Вводная часть\n\| Сведение \| Значение \|\n\| Услуга \| Оценка недвижимости \|\n/);
+    // Под «Заданием на оценку» программа сама ставит таблицу «задание» из полей заявки (2.29), дальше — текст модели.
+    assert.match(d.body, /## 2\. Задание на оценку\n\| Сведение \| Значение \|\n\| Услуга \| Оценка недвижимости \|\n/);
     assert.match(d.body, /\| Адрес объекта \| г\. Москва, тестовая ул\., 9 \|\n[^#]*Основание: договор/);
-    assert.match(d.body, /## Расчёт и итоговая величина\n\| Подход \| Стоимость, руб\. \| Вес \|\n\| Сравнительный \| \[заполнить\] \| \[заполнить\] \|/);
-    assert.match(d.body, /## Выводы\n\[заполнить: раздел не подготовлен\]/);
+    assert.match(d.body, /## 14\. Согласование результатов и итоговая величина\n\| Подход \| Стоимость, руб\. \| Вес \|\n\| Сравнительный \| \[заполнить\] \| \[заполнить\] \|/);
+    assert.match(d.body, /## 9\. Наиболее эффективное использование\n\[заполнить: раздел не подготовлен\]/);
     S.providers.ai.complete = async () => { throw new Error('нет связи'); };
     const r = await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id });
     assert.equal(r.status, 503);
@@ -255,7 +255,7 @@ test('черновик готовым файлом Word (2.29): скачивае
   assert.match(w.disposition, /filename\*=UTF-8''%D0%9E%D1%82%D1%87%D1%91%D1%82/);
   const text = (await extractPages(w.buf, 'Отчёт.docx')).pages.join('\n');
   assert.match(text, /ОТЧЁТ ОБ ОЦЕНКЕ № [0-9A-F]{8}\nОценка недвижимости/);
-  assert.match(text, /\n1\. Вводная часть[^\n]*\nСведение\s*Значение|\n1\. Вводная часть/);
+  assert.match(text, /\n2\. Задание на оценку\nСведение\s*Значение|\n2\. Задание на оценку/);
   assert.match(unzipPart(w.buf, 'word/document.xml'), /<w:tbl>[\s\S]*Адрес объекта[\s\S]*<\/w:tbl>/);
   assert.match(text, /\[заполнить/, 'пометки остаются в файле');
   for (const c of [owner, other, dispatcher]) {
@@ -359,3 +359,48 @@ test('подходы к оценке (2.33): черновик без разде�
   assert.equal((await spec.req('PUT', `/api/orders/${o.id}/approaches`, { approaches: ['comparative', 'cost'] })).status, 200);
   assert.equal((await spec.req('GET', `/api/orders/${o.id}/analogs`)).body.needed, true);
 });
+
+// Остальные виды оценки (2.43) — как транспорт: поля заявки, разделы отчёта по порядку, подходы, Word.
+const OTHER = {
+  realty: { title: 'Доля в квартире', fields: { purpose: 'court', region: 'moscow', object_type: 'share', address: 'г. Москва, ул. Долевая, 3, кв. 8', cadastral: '77:01:0001001:1234', area: '64.8', floor: '5 / 9', rooms: '3', year_built: '1975', share_size: '1/3' },
+    facts: [/Этаж \/ этажей в доме: 5 \/ 9/, /Год постройки дома: 1975/, /Размер доли \(если оценивается доля\): 1\/3/], last: '14. Литература и приложения', approaches: ['comparative', 'cost'] },
+  land: { title: 'Участок ИЖС', fields: { purpose: 'deal', region: 'mo', address: 'МО, д. Тестово, уч. 5', cadastral: '50:20:0010101:77', area: '1200', land_use: 'izhs', land_category: 'settlement', buildings: 'баня' },
+    facts: [/Категория земель: Земли населённых пунктов/, /Постройки на участке \(если есть\): баня/], last: '13. Литература и приложения', approaches: ['comparative'] },
+  movable: { title: 'Станки цеха', fields: { purpose: 'bank', region: 'mo', items: 'Токарный станок 16К20, 1985 г., 2 шт.', location: 'МО, г. Тестовск, цех 1' },
+    facts: [/Что оценить \(перечень\): Токарный станок 16К20/], last: '13. Литература и приложения', approaches: ['comparative', 'cost'] },
+  goods: { title: 'Ноутбук сломался', fields: { purpose: 'court', region: 'moscow', subject: 'Ноутбук перестал включаться через месяц', questions: 'Есть ли недостаток? Производственный или эксплуатационный?', purchase: '12.03.2026, магазин, 54 990 ₽' },
+    facts: [/Когда и где куплен, цена по чеку: 12\.03\.2026/], last: '8. Приложения', approaches: null },
+};
+
+for (const [svc, c] of Object.entries(OTHER)) {
+  test(`остальные виды (2.43): ${svc} — поля заявки, разделы по порядку без пропусков, подходы, Word`, async () => {
+    const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: svc, title: c.title })).body.order;
+    const r0 = await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: addDays(todayMsk(), 10), fields: c.fields });
+    assert.equal(r0.status, 200, JSON.stringify(r0.body));
+    assert.equal((await put(owner, o, JPEG, 'общий вид.jpg', 'image/jpeg')).status, 201);
+    assert.equal((await step(owner, o, 'matching')).status, 200);
+    await ensurePaid(S.sql, o.id);
+    assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: spec.user.id, from: 'matching' })).status, 200);
+    assert.equal((await step(spec, o, 'in_work')).status, 200);
+    if (c.approaches) assert.equal((await spec.req('PUT', `/api/orders/${o.id}/approaches`, { approaches: c.approaches })).status, 200);
+    const d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {})).body.draft;
+    const titles = [...d.body.matchAll(/^## (.+)$/gm)].map((m) => m[1]);
+    titles.forEach((t, i) => assert.ok(t.startsWith(`${i + 1}. `), `${svc}: раздел ${i + 1} — «${t}»`));
+    assert.equal(titles.at(-1), c.last);
+    // Новые поля заявки уходят в модель и попадают в таблицу «Задание» в черновике.
+    for (const re of c.facts) {
+      assert.match(lastPrompt(), re, `${svc}: поле заявки — в подсказке модели`);
+      assert.match(d.body, new RegExp(`\\| ${re.source.replace(/: /, ' \\| ')}`), `${svc}: поле заявки — в таблице «Задание»`);
+    }
+    assert.match(d.body, /Фото 1 \(общий вид\.jpg\)/, `${svc}: фото — в описании или осмотре`);
+    if (c.approaches && !c.approaches.includes('income')) assert.doesNotMatch(d.body, /Доходный подход/, `${svc}: неприменённый подход не пишется`);
+    if (svc === 'goods') assert.match(d.body, /## 2\. Вопросы эксперту/);
+    const filled = d.body.replace(/\[(?:заполнить|описать)[^\]]*\]/g, 'заполнено экспертом');
+    assert.equal((await spec.req('PUT', `/api/orders/${o.id}/draft`, { body: filled, from: d.id })).status, 200);
+    const w = await download(spec, `/api/orders/${o.id}/draft/docx`);
+    assert.equal(w.status, 200);
+    const text = (await extractPages(w.buf, 'Отчёт.docx')).pages.join('\n');
+    assert.match(text, svc === 'goods' ? /ЗАКЛЮЧЕНИЕ ЭКСПЕРТА/ : /ОТЧЁТ ОБ ОЦЕНКЕ/);
+    assert.match(text, new RegExp(c.last.replace(/[.()]/g, '\\$&')));
+  });
+}

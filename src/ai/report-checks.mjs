@@ -237,10 +237,38 @@ function approachesToc(doc) {
 // ——— Остатки чужого шаблона: недвижимость и земля в отчёте о транспорте или вещах ———
 const LEFTOVER = /(?:объект\S*\s+недвижим\S*|недвижим\S*\s+имуществ\S*|земельн\S*\s+участ\S*|Земельн\S*\s+кодекс\S*)/giu;
 
-function templateLeftovers(doc) {
+// В отчёте о недвижимости и земле (2.43) — наоборот: машина, VIN, пробег, ПТС — остаток отчёта о транспорте.
+const LEFTOVER_VEHICLE = /(?:(?<![A-Za-z])VIN(?![A-Za-z])|пробег\S*|транспортн\S*\s+средств\S*|автомобил\S*|(?<![А-ЯЁа-яё])ПТС(?![А-ЯЁа-яё])|госномер\S*)/giu;
+const REALTY_SERVICES = ['realty', 'land'];
+
+function templateLeftovers(doc, ctx = {}) {
+  const realty = REALTY_SERVICES.includes(ctx.service);
+  const re = realty ? LEFTOVER_VEHICLE : LEFTOVER;
+  const what = realty ? (ctx.service === 'land' ? 'земельного участка' : 'недвижимости') : 'движимом имуществе';
   const out = [];
   eachPage(doc, (page, i) => {
-    for (const m of page.matchAll(LEFTOVER)) out.push({ page: i, quote: lineAround(page, m.index), text: `«${clean(m[0])}» в отчёте о движимом имуществе — возможно, остаток шаблона другого отчёта` });
+    for (const m of page.matchAll(re)) out.push({ page: i, quote: lineAround(page, m.index), text: `«${clean(m[0])}» в отчёте ${realty ? 'об оценке' : 'о'} ${what} — возможно, остаток шаблона другого отчёта` });
+  });
+  return out;
+}
+
+// Кадастровый номер в отчёте — как в заявке (2.43): другой номер рядом со словом «кадастровый» — данные другого объекта.
+const CADASTRAL_RE = /\b\d{2}:\d{2}:\d{6,7}:\d{1,7}\b/g;
+function cadastralMatch(doc, ctx) {
+  const mine = String(ctx.fields?.cadastral ?? '').trim();
+  if (!/^\d{2}:\d{2}:\d{6,7}:\d+$/.test(mine)) return [];
+  const out = [];
+  const seen = new Set();
+  eachPage(doc, (page, i) => {
+    for (const m of page.matchAll(CADASTRAL_RE)) {
+      const v = m[0];
+      if (v === mine || seen.has(v)) continue;
+      // Номера аналогов и кадастрового квартала стоят без слов «кадастровый номер объекта» — их не трогаем.
+      if (!/кадастров\S*\s+(?:номер|№)/iu.test(page.slice(Math.max(0, m.index - 60), m.index))) continue;
+      if (/аналог/iu.test(lineAround(page, m.index))) continue;
+      seen.add(v);
+      out.push({ page: i, quote: lineAround(page, m.index), text: `Кадастровый номер ${v} не совпадает с номером из заявки (${mine}) — проверьте, нет ли данных другого объекта` });
+    }
   });
   return out;
 }
@@ -441,6 +469,7 @@ const PER_DOC = {
   inspection,
   court_purpose: courtPurpose,
   vin_match: vinMatch,
+  cadastral_match: cadastralMatch,
   date_order: dateOrder,
 };
 
@@ -453,7 +482,8 @@ export const AUTO_CHECKS = Object.freeze({
   sum_words: 'сумма цифрами совпадает с суммой прописью',
   rounding: 'итог не дальше 2% от расчёта',
   approaches_toc: 'подход из оглавления не отвергнут в тексте',
-  template_leftovers: 'нет остатков шаблона про недвижимость и землю',
+  template_leftovers: 'нет остатков шаблона другого вида: недвижимость в отчёте о машине, машина в отчёте о квартире',
+  cadastral_match: 'кадастровый номер в отчёте — как в заявке',
   inspection: '«без осмотра» и дата осмотра одновременно',
   court_purpose: 'цель «для суда» и отказ являться в суд',
   dossier_appraiser: 'аттестат, СРО и полисы сходятся с досье эксперта: номера, суммы, срок на дату отчёта',
