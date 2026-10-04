@@ -2297,6 +2297,14 @@ test('как настоящий эксперт (2.33): автобус для с�
   expect(body).toMatch(/^## 11\. Затратный подход/m);
   expect(body).toContain('| Сравнительный | Не применялся | — |');
   await expect(sp.locator('#next-steps li[data-step="draft"]')).toContainText('✓');
+  // 2.37: в Word — фото осмотра приложением, по шагам, с местом съёмки.
+  const [word] = await Promise.all([sp.waitForEvent('download'), sp.getByRole('button', { name: 'Скачать Word' }).click()]);
+  const wchunks = [];
+  for await (const ch of await word.createReadStream()) wchunks.push(ch);
+  const wtext = (await extractPages(Buffer.concat(wchunks), 'r.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')).pages.join('\n');
+  expect(wtext).toContain('Приложение. Фотоматериалы осмотра');
+  expect(wtext).toContain('Фото 1 — Спереди');
+  expect(wtext).toContain('Место съёмки: 55.75000, 37.61000');
   await text.fill(body.replace(/\[(?:заполнить|описать)[^\]]*\]/gi, 'заполнено экспертом'));
   await sp.getByRole('button', { name: 'Сохранить правку' }).click();
   await expect(sp.locator('#draft-msg')).toHaveText('Правка сохранена');

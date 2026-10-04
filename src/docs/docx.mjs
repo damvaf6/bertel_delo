@@ -162,7 +162,9 @@ export function imageSize(buf) {
 
 // Приложение к отчёту (2.32): { title, items: [{ title, lines: [строки], image: Buffer | null }] } → блоки для отчёта и
 // картинки, которые надо положить в файл (media). Картинка неизвестного вида не вставляется — остаётся подпись.
+// Можно передать список приложений (2.37: фото осмотра, затем скриншоты объявлений) — идут по порядку.
 function appendixBlocks(appendix, media) {
+  if (Array.isArray(appendix)) return appendix.flatMap((a) => appendixBlocks(a, media));
   if (!appendix?.items?.length) return [];
   const out = [{ type: 'break' }, { type: 'head', level: 1, text: appendix.title, plain: true }];
   for (const it of appendix.items) {
@@ -256,7 +258,7 @@ const STYLES_REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relati
 
 // meta: { title: 'Отчёт об оценке', number: '№ …', subtitle, org, executor, date: 'дд.мм.гггг', city }.
 // template — Buffer шаблона организации (.docx, уже проверенный checkTemplate) или null.
-// appendix — приложение после разделов (скриншоты объявлений, 2.32): см. appendixBlocks.
+// appendix — приложение после разделов (скриншоты объявлений, 2.32; фото осмотра, 2.37) или список приложений: см. appendixBlocks.
 export function buildReport(text, meta, template = null, { appendix = null } = {}) {
   const m = { city: 'г. Москва', ...meta };
   if (template) return intoTemplate(text, m, template, appendix);
