@@ -57,6 +57,8 @@ function setupFilter() {
   const staff = ['dispatcher', 'admin'].includes(state.me.user.platform_role);
   $('orders-title').textContent = staff ? 'Все заявки' : 'Мои заявки';
   $('orders-filter-box').classList.toggle('hidden', !staff);
+  // Диспетчеру (2.42) подсказка «не знаете, какая услуга» ни к чему — он сам подбирает услугу и исполнителя.
+  $('problem-card').classList.toggle('hidden', staff);
   if (!staff || $('orders-filter').options.length) return;
   $('orders-filter').replaceChildren(el('option', { value: '', text: 'Все' }),
     ...state.catalog.statuses.map((s) => el('option', { value: s.id, text: s.name })));

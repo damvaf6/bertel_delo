@@ -222,8 +222,9 @@ export function orderOps() {
           org_chat: order.executor_user_id === actor.id ? (await executorSignOrg(sql, actor.id))?.name ?? null : null,
           access: LEVEL_NAME[level],
           editable: order.status === 'new' && level >= LEVEL.write,
-          // «Что дальше» заказчику (2.41): он ли сторона заказчика и чего не хватает для отправки черновика.
+          // «Что дальше» заказчику (2.41) и диспетчеру (2.42): чья сторона и чего не хватает для отправки черновика.
           customer: orderSides(actor, order).includes('customer'),
+          dispatcher: orderSides(actor, order).includes('dispatcher'),
           submit_missing: order.status === 'new' && level >= LEVEL.write ? await problemsForSubmit(sql, registry, order) : [],
           // Закрыть неоплаченную заявку нельзя — такой кнопки и не показываем (1.6).
           actions: availableActions(order.status, orderSides(actor, order)).filter((a) => a.to !== 'closed' || !!order.paid_at),

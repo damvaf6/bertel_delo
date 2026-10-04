@@ -1,6 +1,7 @@
 // «Сегодня» (2.34): над списком дел — что требует внимания сейчас. Эксперту: горит по срокам, вернули на доработку, новые
 // предложения, ждут проверки диспетчера. Руководителю экспертной организации — по делам его экспертов: горит срок, ждут
-// подписи организации, вернул эксперту, ждут назначения (без данных заказчика). Нажатие — в дело или в раздел организации.
+// подписи организации, вернул эксперту, ждут назначения (без данных заказчика). Диспетчеру (2.42) — деньги, проверка,
+// цена, подбор, молчащие исполнители, горящие сроки. Нажатие — в дело или в раздел организации.
 // Тексты — только через textContent.
 import { api, el } from '/common.js';
 
@@ -41,6 +42,19 @@ export async function loadToday() {
       ...group('review', 'Ждут проверки диспетчера', e.review, (x) => [x.title, `${x.service} · ${deadline(x, t.today)}`], toOrder),
     );
   }
+  const d = t.dispatcher;
+  if (d) {
+    const MONEY = { payout: 'Выплата исполнителю не прошла', refund: 'Возврат заказчику не прошёл', payment: 'Оплата висит больше суток' };
+    const since = (iso) => new Date(iso).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+    rows.push(
+      ...group('d-money', 'Деньги', d.money, (x) => [x.title, [MONEY[x.what], x.failure].filter(Boolean).join(': ')], toOrder),
+      ...group('d-review', 'Ждут проверки результата', d.review, (x) => [x.title, `${x.service} · ${deadline(x, t.today)}`], toOrder),
+      ...group('d-price', 'Назначить цену', d.price, (x) => [x.title, `${x.service} · ${deadline(x, t.today)}`], toOrder),
+      ...group('d-match', 'Подобрать исполнителя (оплачено)', d.to_match, (x) => [x.title, x.reason !== undefined ? `Снова в подборе: ${x.reason || 'без причины'}` : x.service, deadline(x, t.today)], toOrder),
+      ...group('d-slow', 'Исполнитель не ответил больше суток', d.slow_offers, (x) => [x.title, `предложено ${since(x.offered_at)} · ${deadline(x, t.today)}`], toOrder),
+      ...group('d-hot', 'Горит срок', d.hot, (x) => [x.title, `${x.status_name} · ${deadline(x, t.today)}`], toOrder),
+    );
+  }
   for (const g of t.orgs) {
     const toOrg = () => { location.hash = `org=${g.id}`; };
     const caseLine = (x) => [`${x.service} · ${x.order_ref}`, [x.expert, deadline(x, t.today)].filter(Boolean).join(' · ')];
@@ -53,7 +67,7 @@ export async function loadToday() {
     if (part.length) rows.push(el('li', { class: 'group org', text: `Организация: ${g.name}` }), ...part);
   }
   // Эксперт или руководитель без срочного — короткая строка «срочного нет»; заказчику карточка не нужна.
-  box.classList.toggle('hidden', !e && !t.orgs.length);
+  box.classList.toggle('hidden', !e && !d && !t.orgs.length);
   $('today-list').replaceChildren(...rows);
   $('today-empty').classList.toggle('hidden', rows.length > 0);
 }

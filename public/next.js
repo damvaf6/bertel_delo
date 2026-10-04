@@ -117,12 +117,39 @@ function customerSteps() {
   return null;
 }
 
+// Диспетчеру (2.42): цена → оплата заказчика → предложить дело → ответ исполнителя → работа → проверка → выдача.
+function dispatcherSteps() {
+  const { current, money, review } = ctx;
+  const { order, actions = [] } = current;
+  const act = (to) => actions.find((a) => a.to === to);
+  if (order.status === 'new') return { lead: 'Заказчик ещё заполняет заявку.', items: [] };
+  if (order.status === 'matching') {
+    if (money?.can_set_price && !money.price_kop) {
+      return { lead: 'Назначьте цену — после неё заказчик оплатит заявку.', items: [], main: { label: 'Назначить цену', run: () => { go('money-box')(); $('price')?.focus({ preventScroll: true }); } } };
+    }
+    if (!money?.paid) return { lead: 'Цена назначена — ждём оплаты заказчика. Пока не оплачено, цену можно изменить.', items: [] };
+    return { lead: 'Оплачено. Выберите исполнителя или организацию и предложите дело.', items: [], main: { label: 'К подбору исполнителя', run: go('match-box') } };
+  }
+  if (order.status === 'awaiting_executor') return { lead: current.offer_org ? `Дело у организации ${quoted(current.offer_org.name)}: эксперта назначает её руководитель.` : 'Дело предложено — ждём ответа исполнителя. Если молчит, верните в подбор с причиной.', items: [] };
+  if (order.status === 'in_work') return { lead: 'Исполнитель работает. Если не справляется — «Передать другому исполнителю» с причиной; оплата заказчика остаётся в силе.', items: [] };
+  if (order.status === 'review') {
+    const s = review?.summary;
+    const left = s ? s.unchecked : null;
+    const done = act('done');
+    if (left) return { lead: `Проверьте результат: отметьте каждое правило (осталось ${left} из ${s.total}). ИИ-проверка подскажет, где смотреть.`, items: [], main: { label: 'К проверке результата', run: go('review-box') } };
+    if (s?.issues) return { lead: `Замечаний: ${s.issues}. Верните на доработку — причина уже собрана из замечаний.`, items: [], main: { label: 'К возврату на доработку', run: go('actions') } };
+    return { lead: 'Все правила в порядке — выдайте результат заказчику. Выплата исполнителю уйдёт сама.', items: [], main: done && { label: 'Проверено, готово', run: () => ctx.step(done) } };
+  }
+  if (order.status === 'done') return { lead: 'Результат выдан, выплата исполнителю — автоматически. Заявку закрывает заказчик (или Вы).', items: [] };
+  return null;
+}
+
 function render() {
   const box = $('next-box');
   const bar = $('next-bar');
   if (!box || !ctx.current) return;
   const me = ctx.current.executor?.is_me;
-  const s = me ? steps() : ctx.current.customer ? customerSteps() : null;
+  const s = me ? steps() : ctx.current.customer ? customerSteps() : ctx.current.dispatcher ? dispatcherSteps() : null;
   box.classList.toggle('hidden', !s);
   bar.classList.toggle('hidden', !s?.main);
   if (!s) return;
