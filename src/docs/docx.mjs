@@ -14,6 +14,13 @@ export const TEMPLATE_MARK = '{{ОТЧЁТ}}';
 
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+const WP = 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing';
+const A = 'http://schemas.openxmlformats.org/drawingml/2006/main';
+const PIC = 'http://schemas.openxmlformats.org/drawingml/2006/picture';
+const IMAGE_REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image';
+const IMAGE_CT = { png: 'image/png', jpeg: 'image/jpeg' };
+const mediaRels = (media) => media.map((m) => `<Relationship Id="${m.rid}" Type="${IMAGE_REL}" Target="media/delo${m.n}.${m.ext}"/>`).join('');
+const mediaTypes = (media) => [...new Set(media.map((m) => m.ext))].map((e) => `<Default Extension="${e}" ContentType="${IMAGE_CT[e]}"/>`).join('');
 const XML_HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
 const MAIN_CT = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml';
 
@@ -51,7 +58,7 @@ function numbered(blocks) {
   let n = 0;
   let sub = 0;
   return blocks.map((b) => {
-    if (b.type !== 'head') return b;
+    if (b.type !== 'head' || b.plain) return b;
     const own = b.text.match(/^(\d+)(?:\.(\d+))?\.?\s+/);
     if (b.level === 1) {
       n = own ? Number(own[1]) : n + 1;
@@ -112,12 +119,73 @@ function titlePage(meta, st) {
   ].join('');
 }
 
-function reportBody(text, meta, st) {
-  const blocks = numbered(parseDraft(text));
+// Картинка в тексте (приложение со скриншотами, 2.32): по ширине страницы, высота — не больше страницы, пропорции свои.
+const EMU_PX = 9525;
+const MAX_W = 5900000;   // ≈ 16,4 см — ширина текста на A4 с нашими полями
+const MAX_H = 7900000;   // ≈ 22 см
+function drawing(img, n) {
+  let w = img.w * EMU_PX;
+  let h = img.h * EMU_PX;
+  const k = Math.min(1, MAX_W / w, MAX_H / h);
+  w = Math.round(w * k);
+  h = Math.round(h * k);
+  return '<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0">'
+    + `<wp:extent cx="${w}" cy="${h}"/><wp:docPr id="${n}" name="Рисунок ${n}"/>`
+    + `<a:graphic xmlns:a="${A}"><a:graphicData uri="${PIC}"><pic:pic xmlns:pic="${PIC}">`
+    + `<pic:nvPicPr><pic:cNvPr id="${n}" name="image${n}.${img.ext}"/><pic:cNvPicPr/></pic:nvPicPr>`
+    + `<pic:blipFill><a:blip r:embed="${img.rid}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>`
+    + `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${w}" cy="${h}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>`
+    + '</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>';
+}
+
+// Размер картинки в точках по заголовку файла: PNG (IHDR) и JPEG (кадр SOF). Не узнали — null (картинка не вставляется).
+export function imageSize(buf) {
+  if (!Buffer.isBuffer(buf)) return null;
+  if (buf.length > 24 && buf.readUInt32BE(0) === 0x89504e47 && buf.subarray(12, 16).toString('latin1') === 'IHDR') {
+    return { ext: 'png', w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
+  }
+  if (buf.length > 4 && buf[0] === 0xff && buf[1] === 0xd8) {
+    let i = 2;
+    while (i + 9 < buf.length) {
+      if (buf[i] !== 0xff) { i += 1; continue; }
+      const marker = buf[i + 1];
+      if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { i += 2; continue; }
+      const len = buf.readUInt16BE(i + 2);
+      if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+        return { ext: 'jpeg', w: buf.readUInt16BE(i + 7), h: buf.readUInt16BE(i + 5) };
+      }
+      i += 2 + len;
+    }
+  }
+  return null;
+}
+
+// Приложение к отчёту (2.32): { title, items: [{ title, lines: [строки], image: Buffer | null }] } → блоки для отчёта и
+// картинки, которые надо положить в файл (media). Картинка неизвестного вида не вставляется — остаётся подпись.
+function appendixBlocks(appendix, media) {
+  if (!appendix?.items?.length) return [];
+  const out = [{ type: 'break' }, { type: 'head', level: 1, text: appendix.title, plain: true }];
+  for (const it of appendix.items) {
+    out.push({ type: 'head', level: 2, text: it.title, plain: true });
+    for (const l of it.lines) out.push({ type: 'para', text: l });
+    const size = it.image ? imageSize(it.image) : null;
+    if (size && size.w > 0 && size.h > 0) {
+      const img = { ...size, buf: it.image, n: media.length + 1, rid: `rIdDeloImg${media.length + 1}` };
+      media.push(img);
+      out.push({ type: 'image', img });
+    }
+  }
+  return out;
+}
+
+function reportBody(text, meta, st, appendix = null, media = []) {
+  const blocks = [...numbered(parseDraft(text)), ...appendixBlocks(appendix, media)];
   const heads = blocks.filter((b) => b.type === 'head');
   const content = blocks.map((b) => {
     if (b.type === 'head') return para(run(b.text), pStyle(b.level === 1 ? st.h1 : st.h2));
     if (b.type === 'table') return table(b.rows, st);
+    if (b.type === 'break') return PAGE_BREAK;
+    if (b.type === 'image') return para(drawing(b.img, b.img.n), '<w:jc w:val="center"/><w:keepNext/>');
     return para(run(b.text));
   }).join('');
   return titlePage(meta, st) + para(run('Содержание'), `${pStyle(st.title)}<w:jc w:val="center"/>`) + toc(heads, st) + PAGE_BREAK + content;
@@ -188,20 +256,23 @@ const STYLES_REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relati
 
 // meta: { title: 'Отчёт об оценке', number: '№ …', subtitle, org, executor, date: 'дд.мм.гггг', city }.
 // template — Buffer шаблона организации (.docx, уже проверенный checkTemplate) или null.
-export function buildReport(text, meta, template = null) {
+// appendix — приложение после разделов (скриншоты объявлений, 2.32): см. appendixBlocks.
+export function buildReport(text, meta, template = null, { appendix = null } = {}) {
   const m = { city: 'г. Москва', ...meta };
-  if (template) return intoTemplate(text, m, template);
+  if (template) return intoTemplate(text, m, template, appendix);
   const { st, xml: styles } = ownStyles();
-  const body = reportBody(text, m, st);
+  const media = [];
+  const body = reportBody(text, m, st, appendix, media);
   const sect = `<w:sectPr><w:footerReference w:type="default" r:id="rId2"/>${PAGE_A4}<w:titlePg/></w:sectPr>`;
   return zip([
-    ['[Content_Types].xml', contentTypes([['word/styles.xml', STYLES_CT], ['word/footer1.xml', FOOTER_CT]])],
+    ['[Content_Types].xml', contentTypes([['word/styles.xml', STYLES_CT], ['word/footer1.xml', FOOTER_CT]]).replace('<Default Extension="xml"', `${mediaTypes(media)}<Default Extension="xml"`)],
     ['_rels/.rels', ROOT_RELS],
     ['word/_rels/document.xml.rels', `${XML_HEAD}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`
-      + `<Relationship Id="rId1" Type="${STYLES_REL}" Target="styles.xml"/><Relationship Id="rId2" Type="${FOOTER_REL}" Target="footer1.xml"/></Relationships>`],
+      + `<Relationship Id="rId1" Type="${STYLES_REL}" Target="styles.xml"/><Relationship Id="rId2" Type="${FOOTER_REL}" Target="footer1.xml"/>${mediaRels(media)}</Relationships>`],
     ['word/styles.xml', styles],
     ['word/footer1.xml', footerXml(m)],
-    ['word/document.xml', `${XML_HEAD}<w:document xmlns:w="${W}" xmlns:r="${R}"><w:body>${body}${sect}</w:body></w:document>`],
+    ['word/document.xml', `${XML_HEAD}<w:document xmlns:w="${W}" xmlns:r="${R}" xmlns:wp="${WP}"><w:body>${body}${sect}</w:body></w:document>`],
+    ...media.map((x) => [`word/media/delo${x.n}.${x.ext}`, x.buf]),
   ]);
 }
 
@@ -209,7 +280,7 @@ const paraText = (p) => [...p.matchAll(/<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g)].map(
 
 // Отчёт в шаблоне: стили, колонтитулы, логотип и поля страницы — из шаблона; содержимое шаблона (шапка, реквизиты) остаётся,
 // отчёт встаёт на место абзаца «{{ОТЧЁТ}}» или после содержимого. Нет своего нижнего колонтитула — добавляется наш.
-function intoTemplate(text, meta, template) {
+function intoTemplate(text, meta, template, appendix = null) {
   const files = unzip(template);
   const get = (name) => files.find((f) => f.name === name);
   const docPath = mainPart(files);
@@ -247,7 +318,14 @@ function intoTemplate(text, meta, template) {
   let sect = sectAt >= 0 ? inner.slice(sectAt) : `<w:sectPr>${PAGE_A4}</w:sectPr>`;
   if (sectAt >= 0) inner = inner.slice(0, sectAt);
 
-  const report = reportBody(text, meta, st);
+  const media = [];
+  const report = reportBody(text, meta, st, appendix, media);
+  if (media.length) {
+    rels = rels.replace('</Relationships>', `${mediaRels(media)}</Relationships>`);
+    const missing = [...new Set(media.map((x) => x.ext))].filter((e) => !new RegExp(`<Default\\b[^>]*Extension="${e}"`, 'i').test(types));
+    types = types.replace(/(<Types\b[^>]*>)/, `$1${mediaTypes(media.filter((x) => missing.includes(x.ext)))}`);
+    for (const x of media) files.push({ name: `${dir}media/delo${x.n}.${x.ext}`, data: x.buf });
+  }
   const mark = [...inner.matchAll(/<w:p\b(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g)].find((p) => paraText(p[0]).includes(TEMPLATE_MARK));
   inner = mark ? inner.slice(0, mark.index) + report + inner.slice(mark.index + mark[0].length) : inner + report;
 
@@ -262,6 +340,7 @@ function intoTemplate(text, meta, template) {
   }
   let head = doc.slice(0, start);
   if (!/xmlns:r=/.test(head.match(/<w:document\b[^>]*>/)?.[0] ?? '')) head = head.replace(/<w:document\b/, `<w:document xmlns:r="${R}"`);
+  if (media.length && !/xmlns:wp=/.test(head.match(/<w:document\b[^>]*>/)?.[0] ?? '')) head = head.replace(/<w:document\b/, `<w:document xmlns:wp="${WP}"`);
 
   const out = files.filter((f) => f.name !== docPath && f.name !== relsPath && f.name !== '[Content_Types].xml');
   return zip([

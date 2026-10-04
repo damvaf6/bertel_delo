@@ -7,6 +7,7 @@ import { loadMatch } from '/match.js';
 import { loadReview, loadChat } from '/work.js';
 import { loadMoney } from '/money.js';
 import { loadDraft } from '/draft.js';
+import { loadAnalogs } from '/analogs.js';
 import { loadInspection } from '/inspect.js';
 import { loadOnsite } from '/onsite.js';
 import { signatureLines, uploadSignatureButton, SIGN_CONFIRM, UPLOAD_HINT } from '/sign.js';
@@ -53,7 +54,7 @@ export async function openOrder(id) {
   show('order-view', 'orders');
   setNext({ reset: true, current, step: doStep, signAll });
   loadOrgChat();
-  await Promise.all([loadDocs(), loadTransfer(), loadMatch(current, () => openOrder(id)), loadDraft(current, () => openOrder(id)), loadInspection(current), loadOnsite(current), loadReview(current), loadChat(current), loadMoney(current, () => openOrder(id))]);
+  await Promise.all([loadDocs(), loadTransfer(), loadMatch(current, () => openOrder(id)), loadDraft(current, () => openOrder(id)), loadAnalogs(current), loadInspection(current), loadOnsite(current), loadReview(current), loadChat(current), loadMoney(current, () => openOrder(id))]);
   setNext({}); // разделы осмотра и черновика показаны — шаги пересчитываются
 }
 

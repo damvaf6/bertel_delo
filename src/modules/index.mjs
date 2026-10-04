@@ -15,6 +15,9 @@
 //     express?: { services: [id услуги…], show: [id поля заявки…], fields: [поле + services?…] } }  — экспресс-услуга (2.4):
 //       для каких услуг, какие поля заявки видит помощник на объекте и какие данные он заполняет (нужны шаги осмотра)
 //     signature?: { services?: [id услуги…] }  — результат подписывается УКЭП исполнителя до сдачи (2.5); без services — все услуги
+//     analogs?: { services: [id услуги…], min, fields: [поле + services? + near?…] }  — раздел «Аналоги» в деле (2.32): признаки
+//       аналога по виду объекта (цена, дата объявления и регион — у всех, в ядре: src/analogs/analogs.mjs); min — сколько
+//       нужно подтверждённых; near: { field: id числового поля заявки, within?: разница, pct?: разница в % } — предупреждение
 // Поле: { id, label, type: 'text' | 'longtext' | 'number' | 'select', required?, max?, min?, integer?,
 //         options?: [{ id, name }…] (для select), pattern?, hint?, upper? }
 //   Общие поля модуля идут в заявке перед полями услуги; id не должны совпадать.
@@ -31,7 +34,7 @@ export const BASIS_KINDS = {
   court: { name: 'Определение суда', details: true },
 };
 
-export const DRAFT_TABLES = ['task', 'approaches'];
+export const DRAFT_TABLES = ['task', 'approaches', 'analogs'];
 const ID_RE = /^[a-z][a-z0-9_]{1,31}$/;
 const FIELD_TYPES = ['text', 'longtext', 'number', 'select'];
 const FIELD_KEYS = ['id', 'label', 'type', 'required', 'max', 'min', 'integer', 'options', 'pattern', 'hint', 'upper'];
@@ -88,7 +91,7 @@ function validateField(f, where) {
 }
 
 export function validateModule(m) {
-  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express', 'signature'], 'модуль');
+  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express', 'signature', 'analogs'], 'модуль');
   if (!ID_RE.test(m.id ?? '')) fail('модуль', `неверный id «${m.id}»`);
   const at = `модуль ${m.id}`;
   if (!nonEmpty(m.name)) fail(at, 'нет названия');
@@ -130,7 +133,7 @@ export function validateModule(m) {
     for (const d of m.draft) {
       const where = `${at}, раздел черновика ${d.id}`;
       onlyKeys(d, ['id', 'title', 'services', 'ask', 'dossier', 'table'], where);
-      if (d.table !== undefined && !DRAFT_TABLES.includes(d.table)) fail(where, "table — 'task' (задание из полей заявки) или 'approaches' (подходы и веса)");
+      if (d.table !== undefined && !DRAFT_TABLES.includes(d.table)) fail(where, "table — 'task' (задание из полей заявки), 'approaches' (подходы и веса) или 'analogs' (аналоги из дела)");
       if (!nonEmpty(d.title)) fail(where, 'нет описания');
       if (d.dossier !== undefined && !['info', 'copies'].includes(d.dossier)) fail(where, "dossier — 'info' (сведения об эксперте) или 'copies' (копии документов в приложениях)");
       if (d.ask !== undefined && !askText(d.ask)) fail(where, 'ask — непустой текст до 600 знаков');
@@ -187,8 +190,44 @@ export function validateModule(m) {
       fail(where, 'services — непустой список услуг этого модуля');
     }
   }
+  // Аналоги в деле (2.32) — необязательно: без них раздела «Аналоги» у услуги нет.
+  if (m.analogs !== undefined) {
+    const where = `${at}, аналоги`;
+    const an = m.analogs;
+    onlyKeys(an, ['services', 'min', 'fields'], where);
+    if (!Array.isArray(an.services) || an.services.length === 0 || an.services.some((id) => !serviceIds.includes(id)) || new Set(an.services).size !== an.services.length) {
+      fail(where, 'services — непустой список услуг этого модуля');
+    }
+    if (!Number.isInteger(an.min) || an.min < 1 || an.min > 10) fail(where, 'min — целое от 1 до 10');
+    checkIds(an.fields, `${where}, признаки`);
+    for (const f of an.fields) {
+      const fw = `${where}, признак ${f.id}`;
+      const { services, near, ...field } = f;
+      if (ANALOG_CORE.includes(f.id)) fail(fw, `id «${f.id}» занят признаком ядра`);
+      validateField(field, fw);
+      if (field.type === 'longtext') fail(fw, 'признак — одной строкой (text), не longtext');
+      if (services !== undefined && (!Array.isArray(services) || services.length === 0 || services.some((id) => !an.services.includes(id)))) {
+        fail(fw, 'services — непустой список услуг раздела «Аналоги»');
+      }
+      if (near !== undefined) {
+        onlyKeys(near, ['field', 'within', 'pct'], `${fw}, near`);
+        if (field.type !== 'number') fail(fw, 'near — только у числового признака');
+        if ((near.within === undefined) === (near.pct === undefined)) fail(fw, 'near — within или pct (одно из двух)');
+        if (near.within !== undefined && !(Number.isFinite(near.within) && near.within >= 0)) fail(fw, 'near.within — число от 0');
+        if (near.pct !== undefined && !(Number.isFinite(near.pct) && near.pct > 0 && near.pct <= 100)) fail(fw, 'near.pct — от 0 до 100');
+        for (const sid of services ?? an.services) {
+          const s = m.services.find((x) => x.id === sid);
+          const of = [...common, ...(s.fields ?? [])].find((x) => x.id === near.field);
+          if (!of || of.type !== 'number') fail(fw, `near.field — числовое поле заявки услуги ${sid}`);
+        }
+      }
+    }
+  }
   return m;
 }
+
+// Признаки аналога, которые есть у всех (ядро, src/analogs/analogs.mjs): модуль не может объявить их сам.
+export const ANALOG_CORE = ['price_rub', 'listed_on', 'region'];
 
 // Реестр модулей: проверяет описания и отвечает, какие поля у услуги и как её назвать.
 export function createRegistry(modules = DEFAULT_MODULES) {
@@ -246,6 +285,15 @@ export function createRegistry(modules = DEFAULT_MODULES) {
       const m = modulesList.find((x) => x.id === moduleId);
       if (!m?.signature || !m.services.some((x) => x.id === serviceId)) return false;
       return !m.signature.services || m.signature.services.includes(serviceId);
+    },
+    // Раздел «Аналоги» для услуги (2.32): сколько нужно и признаки этой услуги (без ядра); null — раздела нет.
+    analogs(moduleId, serviceId) {
+      const m = modulesList.find((x) => x.id === moduleId);
+      if (!m?.analogs?.services.includes(serviceId)) return null;
+      return {
+        min: m.analogs.min,
+        fields: m.analogs.fields.filter((f) => !f.services || f.services.includes(serviceId)).map(({ services, ...f }) => f),
+      };
     },
     catalog() {
       return modulesList.map((m) => ({

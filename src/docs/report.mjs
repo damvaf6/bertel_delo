@@ -5,6 +5,7 @@ import { executorSignOrg } from '../access/policy.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { todayMsk } from '../orders/workflow.mjs';
 import { buildReport } from './docx.mjs';
+import { analogTable, hostOf, timeMsk } from '../analogs/analogs.mjs';
 
 const GAP = '[заполнить]';
 const ru = (d) => {
@@ -46,15 +47,59 @@ export function fillTables(body, sections, registry, order) {
   for (const s of sections.filter((x) => x.table)) {
     const m = [...out.matchAll(/^#{1,3}\s*(.+)$/gm)].find((h) => headKey(h[1]) === headKey(s.title));
     if (!m) continue;
-    const lines = s.table === 'task' ? taskTable(registry, order) : approachesTable();
+    const lines = s.table === 'task' ? taskTable(registry, order) : s.table === 'analogs' ? [ANALOGS_MARK] : approachesTable();
     const at = m.index + m[0].length;
     out = `${out.slice(0, at)}\n${lines.join('\n')}${out.slice(at)}`;
   }
   return out;
 }
 
+// Таблица аналогов (2.32) в тексте черновика — строкой-меткой: сама таблица и скриншоты собираются при сборке Word из
+// подтверждённых аналогов дела, поэтому всегда свежие (аналог добавили после черновика — он всё равно попадёт в файл).
+export const ANALOGS_MARK = 'Таблица аналогов — из раздела «Аналоги» в деле: программа вставит её в файл Word, скриншоты объявлений — в приложение.';
+
+function placeAnalogs(text, sections, table) {
+  const s = sections.find((x) => x.table === 'analogs');
+  if (!s) return text;
+  const lines = table.join('\n');
+  if (text.includes(ANALOGS_MARK)) return text.split(ANALOGS_MARK).join(lines);
+  const m = [...text.matchAll(/^#{1,3}\s*(.+)$/gm)].find((h) => headKey(h[1]) === headKey(s.title));
+  if (!m) return text;
+  const at = m.index + m[0].length;
+  return `${text.slice(0, at)}\n${lines}${text.slice(at)}`;
+}
+
+// Подтверждённые аналоги дела → таблица под разделом и приложение со скриншотами (дата получения платформой, ссылка, отпечаток).
+async function analogsPart({ sql, providers, registry }, order, text) {
+  const spec = registry.analogs(order.module, order.service);
+  if (!spec) return { text, appendix: null };
+  const sections = registry.draftSections(order.module, order.service);
+  const list = (await sql`select * from order_analogs where order_id = ${order.id} and deleted_at is null and confirmed_at is not null order by id`);
+  // Подтверждённых аналогов нет — метка просто не попадает в файл (таблицу эксперт мог написать сам; нехватку аналогов
+  // показывает раздел «Аналоги» и ИИ-проверка по правилу analogs).
+  if (!list.length) return { text: text.split(ANALOGS_MARK).join(''), appendix: null };
+  const items = [];
+  for (const [i, a] of list.entries()) {
+    const image = a.file_key && /^image\/(png|jpeg)$/.test(a.file_mime) ? await providers.storage.get(a.file_key) : null;
+    items.push({
+      title: `Аналог ${i + 1} — ${hostOf(a.url)}`,
+      lines: [
+        `Ссылка: ${a.url}`,
+        a.received_at ? `Скриншот получен платформой «БЕРТЕЛ Дело»: ${timeMsk(a.received_at)} (МСК)` : 'Скриншот не приложен',
+        a.file_sha256 ? `Отпечаток файла (SHA-256): ${a.file_sha256}` : null,
+        a.file_key && !image ? `Файл «${a.file_name}» хранится в деле на платформе (в Word не вставляется).` : null,
+      ].filter(Boolean),
+      image,
+    });
+  }
+  return {
+    text: placeAnalogs(text, sections, analogTable(spec, list)),
+    appendix: { title: 'Приложение. Скриншоты объявлений (аналоги)', items },
+  };
+}
+
 export const tablesBrief = (sections) => {
-  const t = sections.filter((s) => s.table);
+  const t = sections.filter((s) => s.table && s.table !== 'analogs');
   return t.length
     ? `ТАБЛИЦЫ: программа сама вставит таблицы в разделы ${t.map((s) => `«${s.title}»`).join(', ')} — сам их не рисуй.`
     : null;
@@ -62,7 +107,9 @@ export const tablesBrief = (sections) => {
 
 // Отчёт эксперта: титул и колонтитул — по заявке и услуге; шаблон — организации, от которой эксперт работает (профиль
 // специалиста, 2.5а). Шаблон пропал из хранилища — собирается стандартный.
-export async function reportFor({ sql, providers, registry }, order, actor, text) {
+export async function reportFor(ctx, order, actor, draftText) {
+  const { sql, providers, registry } = ctx;
+  const { text, appendix } = await analogsPart(ctx, order, draftText);
   const def = registry.service(order.module, order.service);
   const org = await executorSignOrg(sql, actor.id);
   const tpl = org ? await sql.one`select storage_key from org_templates where org_id = ${org.id}` : null;
@@ -76,5 +123,5 @@ export async function reportFor({ sql, providers, registry }, order, actor, text
     executor: actor.full_name || null,
     date: ru(todayMsk()),
   };
-  return { buf: buildReport(text, meta, template), filename: `${title}.docx`, template: !!template };
+  return { buf: buildReport(text, meta, template, { appendix }), filename: `${title}.docx`, template: !!template, analogs: appendix?.items.length ?? 0 };
 }

@@ -4,7 +4,7 @@
 //   complete({ purpose, messages: [{ role: 'system' | 'user' | 'assistant', content }], maxTokens? }) → { text, model, tokens? }
 //   tokens — сколько токенов посчитал поставщик (запрос и ответ вместе); по ним считается расход (src/ai/ai.mjs).
 // purpose: 'problem' — вход через проблему; 'assistant' — ассистент; 'review' — проверка результата по правилам;
-// 'mail' — разбор письма-заявки (1.9); 'draft' — черновик заключения (2.2).
+// 'mail' — разбор письма-заявки (1.9); 'draft' — черновик заключения (2.2); 'analog' — признаки аналога со скриншота (2.32).
 import crypto from 'node:crypto';
 import { makeFake, ProviderError } from './fake.mjs';
 
@@ -209,6 +209,26 @@ function fakeDraft(text) {
   }).join('\n\n');
 }
 
+// Аналог со скриншота (2.32): признаки из строк «ПРИЗНАКИ:», значения — простыми правилами по тексту объявления.
+function fakeAnalog(text) {
+  const ids = [...(text.split('ПРИЗНАКИ:')[1] ?? '').split('ОБЪЯВЛЕНИЕ:')[0].matchAll(/^- ([a-z][a-z0-9_]*): /gm)].map((m) => m[1]);
+  const ad = text.split('ТЕКСТ:')[1] ?? '';
+  const num = (s) => s?.replace(/[\s\u00a0]/g, '');
+  const got = {
+    price_rub: num(ad.match(/(\d[\d\s\u00a0]{2,}\d)\s*(?:₽|руб)/i)?.[1]),
+    listed_on: ad.match(/(\d{2})\.(\d{2})\.(\d{4})/)?.slice(1).reverse().join('-'),
+    region: /московская обл|подмосков/i.test(ad) ? 'mo' : /москв/i.test(ad) ? 'moscow' : undefined,
+    year: ad.match(/\b((?:19|20)\d{2})\s*(?:г\.|год)/i)?.[1],
+    mileage_km: num(ad.match(/пробег[^\d]{0,10}(\d[\d\s\u00a0]*\d)\s*км/i)?.[1]),
+    area: ad.match(/(\d+(?:[.,]\d+)?)\s*(?:м²|кв\.?\s*м)/i)?.[1]?.replace(',', '.'),
+    make_model: ad.match(/^\s*([A-ZА-Я][\w-]+ [A-ZА-Я0-9][\w-]*)/m)?.[1],
+    address: ad.match(/адрес:\s*([^\n]+)/i)?.[1]?.trim(),
+    name: ad.match(/^\s*([^\n]{3,80})/m)?.[1]?.trim(),
+    floor: ad.match(/этаж:?\s*(\d+\s*(?:из|\/)\s*\d+)/i)?.[1],
+  };
+  return JSON.stringify({ fields: Object.fromEntries(ids.filter((id) => got[id] !== undefined).map((id) => [id, got[id]])) });
+}
+
 function fakeAi() {
   return makeFake('ai', {
     complete: async ({ purpose, messages }) => {
@@ -217,6 +237,7 @@ function fakeAi() {
       if (purpose === 'review') return { text: fakeReview(text), model: 'fake' };
       if (purpose === 'mail') return { text: fakeMail(text), model: 'fake' };
       if (purpose === 'draft') return { text: fakeDraft(text), model: 'fake' };
+      if (purpose === 'analog') return { text: fakeAnalog(text), model: 'fake' };
       return { text: `[поддельный ответ ИИ] Вы спросили: «${text.slice(0, 200)}». Это подсказка, решение — за Вами.`, model: 'fake' };
     },
   });

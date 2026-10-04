@@ -2084,3 +2084,79 @@ test('черновик готовым файлом Word (2.29): руководи
   await sctx.close();
   await hctx.close();
 });
+
+test('аналоги в деле (2.32): ссылка и скриншот — ИИ заполняет признаки, эксперт подтверждает; заказчик раздела не видит', async ({ page, browser, baseURL }) => {
+  await signIn(page, '+79990001591');
+  const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'vehicle', title: 'Машина: аналоги на телефоне' }, headers: H })).json();
+  const id = created.order.id;
+  expect((await page.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(9), fields: { purpose: 'court', region: 'moscow', vehicle_type: 'car', make_model: 'Toyota Camry', year: 2019 } }, headers: H,
+  })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  const sctx = await phoneContext(browser, baseURL);
+  const sp = await sctx.newPage();
+  const spec = await signIn(sp, '+79990001592');
+  await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'vehicle')", [spec.id]);
+    await c.query('update orders set price_kop = 1500000, paid_at = now(), status = $2, executor_user_id = $3 where id = $1', [id, 'in_work', spec.id]);
+    await c.query("insert into payments (order_id, amount_kop, status, provider_id, created_by, paid_at) values ($1, 1500000, 'succeeded', $2, $3, now())", [id, `pay_ui_${id}`, spec.id]);
+  });
+
+  await sp.goto(`/kabinet#order=${id}`);
+  const box = sp.locator('#analogs-box');
+  await expect(box).toBeVisible();
+  await expect(sp.locator('#analogs-hints')).toContainText('Нужно не меньше 3 аналогов — подтверждено 0');
+  await sp.locator('#analogs-search-box summary').click();
+  await expect(sp.locator('#analogs-criteria')).toContainText('Toyota Camry, 2017–2021 г.');
+  await expect(sp.locator('#analogs-links a').first()).toHaveAttribute('rel', 'noopener noreferrer');
+  // Скриншот объявления — настоящая картинка (рисуется в браузере); текст для поддельного распознавания — после картинки.
+  const png = Buffer.from((await sp.evaluate(() => {
+    const c = document.createElement('canvas');
+    c.width = 540; c.height = 1170;
+    const g = c.getContext('2d');
+    g.fillStyle = '#ffffff'; g.fillRect(0, 0, 540, 1170);
+    g.fillStyle = '#1f4e8c'; g.fillRect(20, 20, 500, 300);
+    g.fillStyle = '#222'; g.font = '28px sans-serif'; g.fillText('Toyota Camry, 2018 — 2 150 000 ₽', 20, 380);
+    return c.toDataURL('image/png');
+  })).split(',')[1], 'base64');
+  const ad = 'Toyota Camry 2.5 AT, 2018 г.\nЦена 2 150 000 ₽\nПробег 85 000 км\nМосква\nРазмещено 20.09.2026';
+  await box.getByLabel('Ссылка на объявление').fill('https://www.avito.ru/moskva/avtomobili/toyota_camry_2018_1');
+  await sp.locator('#analogs-file').setInputFiles({ name: 'Screenshot_avito.png', mimeType: 'image/png', buffer: Buffer.concat([png, Buffer.from(`OCR:${ad}`)]) });
+  await expect(sp.locator('#analogs-file-name')).toHaveText('Screenshot_avito.png');
+  await shot(sp, '90-specialist-analogi-dobavit');
+  await box.getByRole('button', { name: 'Добавить аналог' }).click();
+  await expect(sp.locator('#analogs-msg')).toContainText('ИИ заполнил признаков');
+  const card = sp.locator('#analogs-list li.analog').first();
+  await expect(card).toContainText('Аналог 1 · avito.ru');
+  await expect(card).toContainText('Скриншот получен платформой');
+  await expect(card.getByLabel(/Цена, руб/)).toHaveValue('2150000');
+  await expect(card.getByLabel(/Пробег, км/)).toHaveValue('85000');
+  await expect(card.locator('.ai-tag').first()).toHaveText('ИИ');
+  await expect(card.locator('.analog-warn')).toContainText('Признаки предложил ИИ — проверьте и подтвердите');
+  await shot(sp, '91-specialist-analog-ot-ii');
+  // Эксперт поправил комплектацию и подтвердил.
+  await card.getByLabel('Двигатель, коробка, комплектация').fill('2.5 AT');
+  await card.getByRole('button', { name: 'Подтвердить' }).click();
+  await expect(sp.locator('#analogs-msg')).toHaveText('Аналог подтверждён');
+  await expect(sp.locator('#analogs-list li.analog').first().locator('.badge')).toHaveText('подтверждён');
+  await expect(sp.locator('#analogs-state')).toContainText('Подтверждено аналогов: 1 из 3');
+
+  // Второй — без скриншота, по вставленному тексту; предупреждение «нет скриншота».
+  await box.getByLabel('Ссылка на объявление').fill('https://auto.drom.ru/moscow/toyota/camry/2.html');
+  await sp.locator('#analogs-form details summary').click();
+  await sp.locator('#analogs-text').fill('Toyota Camry, 2014 г.\nЦена 1 650 000 руб.\nПробег 160 000 км\nМосковская область');
+  await box.getByRole('button', { name: 'Добавить аналог' }).click();
+  await expect(sp.locator('#analogs-msg')).toContainText('ИИ заполнил признаков');
+  const second = sp.locator('#analogs-list li.analog').nth(1);
+  await expect(second.locator('.analog-warn')).toContainText('Нет скриншота объявления');
+  await expect(second.locator('.analog-warn')).toContainText('Год выпуска: 2014 у аналога, 2019 у объекта — нужна корректировка');
+  await expect(second.locator('.analog-warn')).toContainText('Другой регион');
+  await shot(sp, '92-specialist-analogi-preduprezhdeniya');
+
+  // Заказчик раздела аналогов не видит.
+  await page.goto(`/kabinet#order=${id}`);
+  await expect(page.locator('#order-view')).toBeVisible();
+  await expect(page.locator('#analogs-box')).toBeHidden();
+  await sctx.close();
+});

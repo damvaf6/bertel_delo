@@ -13,10 +13,12 @@
 //   mail.receive({ limit })  — новые письма на особый адрес (1.9) → [{ id, from, subject, text, messageId, inReplyTo: [],
 //                              authenticated (SPF/DKIM пройдены), autoReply, attachments: [{ filename, contentType, content }] }]
 //   mail.ack({ id })         — письмо сохранено у нас, у поставщика его можно убрать
+//   ocr.recognize({ buf, mime }) — текст со скриншота аналога (2.32), интерфейс — ocr.mjs; null — выключено
 //   sign.sign / sign.verify  — электронная подпись заключения (2.5), интерфейс — sign.mjs
 import crypto from 'node:crypto';
 import { makeFake } from './fake.mjs';
 import { createAi } from './ai.mjs';
+import { createOcr } from './ocr.mjs';
 import { fakeSign } from './sign.mjs';
 import { memoryStorage, s3Storage } from './storage.mjs';
 
@@ -104,6 +106,7 @@ export function createProviders(cfg) {
     out[name] = FAKES[name]();
   }
   out.ai = createAi(cfg);
+  out.ocr = createOcr(cfg);
   if (cfg.providers.sign !== 'fake') throw new Error(`Поставщик «sign: ${cfg.providers.sign}» ещё не подключён`);
   out.sign = fakeSign(cfg.appSecret);
   const storage = cfg.providers.storage;
