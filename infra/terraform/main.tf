@@ -310,11 +310,24 @@ resource "yandex_resourcemanager_folder_iam_member" "app_ai" {
   member    = "serviceAccount:${yandex_iam_service_account.app.id}"
 }
 
+# Распознавание скриншотов аналогов (Yandex Vision OCR, 2.32) — тоже только stage. Отдельного ключа нет: контейнер берёт
+# временный IAM-токен своего сервисного аккаунта из сервиса метаданных (OCR_YANDEX_AUTH=metadata, задаёт Deploy core).
+resource "yandex_resourcemanager_folder_iam_member" "app_ocr" {
+  count     = var.env == "stage" ? 1 : 0
+  folder_id = var.folder_id
+  role      = "ai.vision.user"
+  member    = "serviceAccount:${yandex_iam_service_account.app.id}"
+}
+
 resource "yandex_iam_service_account_api_key" "app_ai" {
   count              = var.env == "stage" ? 1 : 0
   service_account_id = yandex_iam_service_account.app.id
   description        = "YandexGPT для ядра (только stage, тестовые данные)"
   scopes             = ["yc.ai.languageModels.execute"]
+  # Облако возвращает и старое поле scope — без этого каждый plan «меняет» ключ на месте. Ключ не трогаем.
+  lifecycle {
+    ignore_changes = [scope]
+  }
 }
 
 resource "yandex_lockbox_secret" "ai" {

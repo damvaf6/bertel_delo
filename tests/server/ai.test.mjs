@@ -6,6 +6,7 @@ import http from 'node:http';
 import { startApp, login, makeOrg, addMember, setPlatformRole, makeSpecialist, ensurePaid, signResults } from '../helpers.mjs';
 import { loadConfig, ConfigError } from '../../src/config.mjs';
 import { aiChain, createAi } from '../../src/providers/ai.mjs';
+import { createOcr } from '../../src/providers/ocr.mjs';
 import { makeFake } from '../../src/providers/fake.mjs';
 import { parseJsonAnswer } from '../../src/ai/ai.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
@@ -127,6 +128,39 @@ test('YandexGPT: запрос по OpenAI-совместимому API с клю
     assert.deepEqual(body.messages, [{ role: 'user', content: 'Привет' }]);
     fail = true;
     await assert.rejects(ai.complete({ messages: [] }), (e) => !/секрет/.test(e.message));
+  } finally { await stub.close(); }
+});
+
+test('Yandex Vision OCR: по ключу или временным токеном из сервиса метаданных (без ключа); токен — один раз, в ошибках нет текста', async () => {
+  let fail = false;
+  const stub = await stubServer((req) => {
+    if (req.url === '/meta') return [200, { access_token: 'iam-tok', expires_in: 43200, token_type: 'Bearer' }];
+    return fail ? [403, { message: 'секрет' }] : [200, { result: { textAnnotation: { fullText: 'Цена 11 500 000 ₽' } } }];
+  });
+  try {
+    const base = { APP_ENV: 'dev', DATABASE_URL: 'x', OCR_PROVIDER: 'yandex', AI_YANDEX_FOLDER: 'b1test', OCR_YANDEX_URL: `${stub.url}/ocr` };
+    // По ключу.
+    const byKey = createOcr(loadConfig({ ...base, AI_YANDEX_API_KEY: 'test-key' }));
+    assert.deepEqual(await byKey.recognize({ buf: Buffer.from('png'), mime: 'image/png' }), { text: 'Цена 11 500 000 ₽' });
+    const r1 = stub.seen.at(-1);
+    assert.equal(r1.headers.authorization, 'Api-Key test-key');
+    assert.equal(r1.headers['x-folder-id'], 'b1test');
+    assert.equal(r1.headers['x-data-logging-enabled'], 'false');
+    assert.equal(JSON.parse(r1.body).mimeType, 'PNG');
+    // Без ключа и без способа входа — сервер не стартует; со способом «metadata» ключ не нужен.
+    assert.throws(() => loadConfig(base), ConfigError);
+    assert.throws(() => loadConfig({ ...base, OCR_YANDEX_AUTH: 'magic' }), ConfigError);
+    const byMeta = createOcr(loadConfig({ ...base, OCR_YANDEX_AUTH: 'metadata', OCR_YANDEX_METADATA_URL: `${stub.url}/meta` }));
+    await byMeta.recognize({ buf: Buffer.from('jpg'), mime: 'image/jpeg' });
+    await byMeta.recognize({ buf: Buffer.from('jpg'), mime: 'image/jpeg' });
+    const meta = stub.seen.filter((r) => r.url === '/meta');
+    assert.equal(meta.length, 1, 'токен — один раз');
+    assert.equal(meta[0].headers['metadata-flavor'], 'Google');
+    const ocrs = stub.seen.filter((r) => r.url === '/ocr');
+    assert.equal(ocrs.at(-1).headers.authorization, 'Bearer iam-tok');
+    assert.equal(JSON.parse(ocrs.at(-1).body).mimeType, 'JPEG');
+    fail = true;
+    await assert.rejects(byMeta.recognize({ buf: Buffer.from('x'), mime: 'image/png' }), (e) => /403/.test(e.message) && !/секрет/.test(e.message));
   } finally { await stub.close(); }
 });
 
