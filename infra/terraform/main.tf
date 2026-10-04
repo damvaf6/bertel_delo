@@ -324,6 +324,10 @@ resource "yandex_iam_service_account_api_key" "app_ai" {
   service_account_id = yandex_iam_service_account.app.id
   description        = "YandexGPT для ядра (только stage, тестовые данные)"
   scopes             = ["yc.ai.languageModels.execute"]
+  # Облако возвращает и старое поле scope — без этого каждый plan «меняет» ключ на месте. Ключ не трогаем.
+  lifecycle {
+    ignore_changes = [scope]
+  }
 }
 
 resource "yandex_lockbox_secret" "ai" {
