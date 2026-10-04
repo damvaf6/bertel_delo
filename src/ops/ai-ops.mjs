@@ -210,7 +210,7 @@ export function aiOps() {
         // Сверка с досье исполнителя (2.14): аттестат, СРО, полисы, диплом — номера, суммы и сроки на дату отчёта.
         const dossier = { items: order.executor_user_id ? await loadDossier(sql, order.executor_user_id) : [], today: todayMsk() };
         const basis = { kind: order.basis_kind, number: order.basis_number };
-        const auto = runAutoChecks([...new Set(rules.flatMap((r) => r.auto ?? []))], files, { fields: order.fields ?? {}, dossier, basis });
+        const auto = runAutoChecks([...new Set(rules.flatMap((r) => r.auto ?? []))], files, { fields: order.fields ?? {}, dossier, basis, service: order.service });
         const found = Object.fromEntries(rules.map((r) => [r.id, (r.auto ?? []).flatMap((a) => auto[a] ?? [])]));
         // Модель недоступна или лимит исчерпан, но автоматические находки есть — показываем их, а не ошибку.
         let out;

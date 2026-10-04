@@ -271,3 +271,39 @@ test('строительно-техническая и почерковедче�
     assert.equal((await owner.req('POST', `/api/orders/${o.id}/status`, { from: 'new', to: 'matching' })).status, 200, service);
   }
 });
+
+test('недвижимость и земля (2.43): чужой кадастровый номер и остатки отчёта о машине; номера аналогов и квартала — не находка', () => {
+  const page = [
+    'ОТЧЁТ ОБ ОЦЕНКЕ № 12 квартиры',
+    'Объект оценки: квартира, кадастровый номер 77:01:0001001:1234, площадь 54,3 кв. м',
+    'Кадастровый номер объекта 77:05:0007003:999 (по выписке ЕГРН)',
+    'Кадастровый квартал 77:01:0001001',
+    'Аналог 2: кадастровый номер 77:01:0001001:555',
+    'Пробег объекта оценки не определялся. VIN отсутствует.',
+  ].join('\n');
+  const res = runAutoChecks(['cadastral_match', 'template_leftovers'], [doc([page])], { fields: { cadastral: '77:01:0001001:1234' }, service: 'realty' });
+  assert.deepEqual(texts(res, 'cadastral_match'), ['Кадастровый номер 77:05:0007003:999 не совпадает с номером из заявки (77:01:0001001:1234) — проверьте, нет ли данных другого объекта']);
+  assert.deepEqual(res.template_leftovers.map((f) => f.text), [
+    '«Пробег» в отчёте об оценке недвижимости — возможно, остаток шаблона другого отчёта',
+    '«VIN» в отчёте об оценке недвижимости — возможно, остаток шаблона другого отчёта',
+  ]);
+  // В отчёте о квартире слова «земельный участок» — не остаток шаблона; в отчёте о машине — остаток.
+  const flat = runAutoChecks(['template_leftovers'], [doc(['Дом расположен на земельном участке площадью 1200 кв. м'])], { service: 'realty' });
+  assert.deepEqual(flat.template_leftovers, []);
+  const car = runAutoChecks(['template_leftovers'], [doc(['Дом расположен на земельном участке'])], { service: 'vehicle' });
+  assert.equal(car.template_leftovers.length, 1);
+  assert.match(runAutoChecks(['template_leftovers'], [doc(['Автомобиль на участке'])], { service: 'land' }).template_leftovers[0].text, /земельного участка/);
+  assert.deepEqual(runAutoChecks(['cadastral_match'], [doc([page])], { fields: {} }).cadastral_match, [], 'без номера в заявке — не сверяем');
+});
+
+test('остальные виды оценки (2.43): правила проверки как у транспорта — сверка объекта, шаблон, обязательные сведения', async () => {
+  const { createRegistry } = await import('../../src/modules/index.mjs');
+  const reg = createRegistry();
+  const of = (svc) => reg.checks('expertise', svc).map((c) => c.id);
+  for (const svc of ['realty', 'land']) {
+    for (const id of ['realty_identity', 'rights', 'calculation', 'approaches', 'analogs', 'appraiser', 'template', 'technical']) assert.ok(of(svc).includes(id), `${svc}: ${id}`);
+  }
+  for (const id of ['rights', 'calculation', 'approaches', 'analogs', 'appraiser', 'template']) assert.ok(of('movable').includes(id), `movable: ${id}`);
+  for (const id of ['expert_info', 'conclusions', 'questions_answered', 'calculation']) assert.ok(of('goods').includes(id), `goods: ${id}`);
+  assert.ok(!of('vehicle').includes('realty_identity'));
+});

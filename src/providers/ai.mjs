@@ -194,17 +194,21 @@ function fakeReview(text) {
 // Черновик заключения (2.2): разделы приходят строками «- id: название», фото — после «ФОТО:». Поддельная модель, как
 // настоящая по подсказке, не выдумывает цифр: берёт данные заявки, а где данных нет — оставляет «[заполнить: …]».
 function fakeDraft(text) {
-  const sections = [...(text.split('РАЗДЕЛЫ:')[1] ?? '').split('ФОТО:')[0].matchAll(/^- [a-z][a-z0-9_]*: (.+)$/gm)].map((m) => m[1]);
+  const sections = [...(text.split('РАЗДЕЛЫ:')[1] ?? '').split('ФОТО:')[0].matchAll(/^- [a-z][a-z0-9_]*: (.+)$/gm)].map((m) => m[1].replace(/\. Что писать:.*$/, ''));
   const photos = [...(text.split('ФОТО:')[1] ?? '').split('ДОКУМЕНТЫ:')[0].matchAll(/^- (.+?) \(/gm)].map((m) => m[1]);
   const brief = text.split('РАЗДЕЛЫ:')[0].trim().split('\n');
   const docs = (text.split('ДОКУМЕНТЫ:')[1] ?? '').trim();
+  const photoLines = () => (photos.length ? photos.map((p, i) => `Фото ${i + 1} (${p}): [описать по фото: ${p}]`).join('\n') : 'Фото к заявке не приложены. [заполнить: осмотр]');
   return sections.map((title) => {
+    const t = title.replace(/^\d+\.\s*/, ''); // «7. Описание объекта оценки» — по смыслу, без номера
     let body = '[заполнить: эксперт]';
-    if (/^Вводная/.test(title)) body = `${brief.find((l) => l.startsWith('Основание')) ?? 'Основание: [заполнить]'}\n${brief.find((l) => l.startsWith('Для чего')) ?? ''}`.trim();
-    else if (/^Объект/.test(title)) body = brief.filter((l) => /^(Услуга|Что оцениваем|Адрес|Площадь|Кадастровый|Марка|VIN|Год)/.test(l)).join('\n') || '[заполнить: объект]';
-    else if (/^Осмотр/.test(title)) body = photos.length ? photos.map((p, i) => `Фото ${i + 1} (${p}): [описать по фото: ${p}]`).join('\n') : 'Фото к заявке не приложены. [заполнить: осмотр]';
-    else if (/^Вопросы/.test(title)) body = docs ? docs.split('\n').filter((l) => /\?/.test(l)).join('\n') || '[заполнить: вопросы]' : '[заполнить: вопросы]';
-    else if (/^Расчёт/.test(title)) body = '[заполнить: расчёт и итоговая величина]';
+    if (/^(?:Вводная|Задание)/.test(t)) body = `${brief.find((l) => l.startsWith('Основание')) ?? 'Основание: [заполнить]'}\n${brief.find((l) => l.startsWith('Для чего')) ?? ''}`.trim();
+    else if (/^(?:Объект|Описание)/.test(t)) {
+      const facts = brief.filter((l) => /^(Услуга|Что оцениваем|Адрес|Площадь|Кадастровый|Этаж|Комнат|Год|Категория|Марка|VIN|Какой товар|Что оценить)/.test(l)).join('\n') || '[заполнить: объект]';
+      body = /^Описание/.test(t) ? `${facts}\n${photoLines()}` : facts;
+    } else if (/^Осмотр/.test(t)) body = photoLines();
+    else if (/^Вопросы/.test(t)) body = docs ? docs.split('\n').filter((l) => /\?/.test(l)).join('\n') || '[заполнить: вопросы]' : '[заполнить: вопросы]';
+    else if (/^(?:Расчёт|Согласование)/.test(t)) body = '[заполнить: расчёт и итоговая величина]';
     return `## ${title}\n${body}`;
   }).join('\n\n');
 }

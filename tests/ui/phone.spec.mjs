@@ -1019,7 +1019,7 @@ test('ИИ-проверка результата: специалист пере�
   await expect(dp.locator('#ai-review-state')).toContainText('запускал исполнитель перед сдачей');
   await dp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
   await expect(dp.locator('#ai-review-state')).toContainText('запускал диспетчер');
-  await expect(dp.locator('#review-summary')).toContainText('не проверено: 10'); // у оценки транспорта 10 правил (03.10.2026)
+  await expect(dp.locator('#review-summary')).toContainText('не проверено: 12'); // у оценки недвижимости 12 правил (2.43: сверка объекта и шаблона)
   await dp.locator('#review-checks li').filter({ hasText: 'Технические ошибки' }).getByRole('textbox').fill('Опечатка в адресе в разделе 3');
   await dp.locator('#review-checks li').filter({ hasText: 'Технические ошибки' }).getByRole('button', { name: 'Замечание' }).click();
   await expect(dp.locator('#review-checks li').filter({ hasText: 'Технические ошибки' }).locator('.verdict')).toHaveText('Замечание');
@@ -2080,7 +2080,7 @@ test('черновик готовым файлом Word (2.29): руководи
   const word = (await extractPages(buf, 'Отчёт.docx')).pages.join('\n');
   expect(word).toMatch(/^ООО «Тестовый бланк» · ИНН 7700000000 · г\. Москва\n[\s\S]*ОТЧЁТ ОБ ОЦЕНКЕ № [0-9A-F]{8}\nОценка недвижимости/);
   expect(word).toContain('Исполнитель: Тестовый эксперт бланка');
-  expect(word).toMatch(/Содержание\n1\. Вводная часть/);
+  expect(word).toMatch(/Содержание\n1\. Основные факты и выводы/);
   expect(word).toContain('Правка эксперта перед скачиванием.');
   expect(word).toMatch(/Руководитель ____________\n?$/);
   await expect(sp.locator('#draft-state')).toContainText('Последняя правка');
@@ -2728,4 +2728,86 @@ test('как диспетчер (2.42): «Сегодня», цена, подбо
   await expect(today.locator('#today-list')).toBeVisible();
   await expect(today.locator('li[data-today-item="d-money"]').filter({ hasText: 'Квартира на Диспетчерской' })).toHaveCount(0);
   for (const x of [cu, s1, sB]) await x.ctx.close();
+});
+
+// Остальные виды оценки (2.43) — тот же прогон «как настоящий эксперт», что для транспорта в 2.33: по предложению видно,
+// что за объект; подходы; черновик с разделами по порядку; Word; ИИ-проверка находит чужой кадастровый номер и остатки
+// отчёта о машине. Заказчик и диспетчер — через API.
+const OTHER_KINDS = [
+  { svc: 'realty', name: 'Оценка недвижимости', title: 'Доля в квартире для суда', fields: { purpose: 'court', region: 'moscow', object_type: 'share', address: 'г. Москва, ул. Долевая, 3, кв. 8', cadastral: '77:01:0001001:1234', area: '64.8', floor: '5 / 9', rooms: '3', year_built: '1975', share_size: '1/3' },
+    brief: 'Для суда · Москва · Доля в квартире или доме · г. Москва, ул. Долевая, 3, кв. 8 · 77:01:0001001:1234 · 64,8', approach: ['Сравнительный', 'Затратный'], sections: ['11. Сравнительный подход: аналоги и корректировки', '12. Затратный подход', '13. Согласование результатов и итоговая величина'],
+    report: 'Отчёт об оценке доли в квартире. Кадастровый номер объекта 77:05:0007003:999. Пробег не определялся.', finds: ['Кадастровый номер 77:05:0007003:999 не совпадает', '«Пробег» в отчёте об оценке недвижимости'] },
+  { svc: 'land', name: 'Оценка земельного участка', title: 'Участок ИЖС для продажи', fields: { purpose: 'deal', region: 'mo', address: 'МО, д. Тестово, уч. 5', cadastral: '50:20:0010101:77', area: '1200', land_use: 'izhs', land_category: 'settlement' },
+    brief: 'Купля-продажа · Московская область · МО, д. Тестово, уч. 5 · 50:20:0010101:77 · 1200 · Под жилой дом (ИЖС)', approach: null, sections: ['11. Сравнительный подход: аналоги и корректировки', '12. Доходный подход', '13. Затратный подход (метод выделения или распределения)'],
+    report: 'Отчёт об оценке земельного участка. Кадастровый номер участка 50:20:0010101:88. Автомобиль на фото.', finds: ['Кадастровый номер 50:20:0010101:88 не совпадает', '«Автомобиль» в отчёте об оценке земельного участка'] },
+  { svc: 'movable', name: 'Оценка движимого имущества', title: 'Станки для залога', fields: { purpose: 'bank', region: 'mo', items: 'Токарный станок 16К20, 1985 г., 2 шт.; фрезерный 6Р82', location: 'МО, г. Тестовск, цех 1' },
+    brief: 'Ипотека, залог, банк · Московская область · Токарный станок 16К20, 1985 г., 2 шт.; фрезерный 6Р82 · МО, г. Тестовск, цех 1', approach: ['Сравнительный', 'Затратный'], sections: ['10. Сравнительный подход: аналоги и корректировки', '11. Затратный подход', '12. Согласование результатов и итоговая величина'],
+    report: 'Отчёт об оценке оборудования. Объект недвижимости расположен по адресу.', finds: ['«Объект недвижимости» в отчёте о движимом имуществе'] },
+  { svc: 'goods', name: 'Товароведческая экспертиза', title: 'Ноутбук не включается', fields: { purpose: 'court', region: 'moscow', subject: 'Ноутбук перестал включаться через месяц после покупки', questions: 'Есть ли недостаток? Производственный или эксплуатационный?', purchase: '12.03.2026, магазин, 54 990 ₽' },
+    brief: 'Для суда · Москва · Ноутбук перестал включаться через месяц после покупки · Есть ли недостаток? Производственный или эксплуатационный? · 12.03.2026, магазин, 54 990 ₽', approach: undefined, sections: ['1. Вводная часть: основание, эксперт, предупреждение об ответственности', '2. Вопросы эксперту', '5. Исследование', '7. Выводы'],
+    report: null, finds: [] },
+];
+
+test('остальные виды оценки (2.43): недвижимость, земля, движимое, товароведческая — как транспорт у эксперта', async ({ page, browser, baseURL }) => {
+  test.setTimeout(180_000);
+  const C = '+79990004501', D = '+79990004502', S = '+79990004503';
+  await signIn(page, C);
+  const dctx = await phoneContext(browser, baseURL), sctx = await phoneContext(browser, baseURL);
+  const dp = await dctx.newPage(), sp = await sctx.newPage();
+  const disp = await signIn(dp, D), spec = await signIn(sp, S);
+  await sp.request.patch('/api/me', { data: { full_name: 'Эксперт Всех Видов' }, headers: H });
+  await db(async (c) => {
+    await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
+    for (const k of OTHER_KINDS) await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', $2)", [spec.id, k.svc]);
+  });
+  let n = 111;
+  for (const k of OTHER_KINDS) {
+    const o = (await (await page.request.post('/api/orders', { data: { module: 'expertise', service: k.svc, title: k.title }, headers: H })).json()).order;
+    expect((await page.request.patch(`/api/orders/${o.id}`, { data: { deadline: inDays(10), fields: k.fields }, headers: H })).status()).toBe(200);
+    expect((await page.request.post(`/api/orders/${o.id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+    expect((await dp.request.put(`/api/orders/${o.id}/price`, { data: { price: '15000' }, headers: H })).status()).toBe(200);
+    await page.request.post(`/api/orders/${o.id}/payments`, { headers: H });
+    expect((await page.request.post(`/api/orders/${o.id}/payments/refresh`, { headers: H })).status()).toBe(200);
+    expect((await dp.request.post(`/api/orders/${o.id}/offer`, { data: { specialist_id: spec.id, from: 'matching' }, headers: H })).status()).toBe(200);
+
+    // По предложению видно, что за объект — и для перечня имущества и товара тоже.
+    await sp.goto('/kabinet');
+    const offer = sp.locator('#orders li').filter({ hasText: k.title });
+    await expect(offer.locator('.brief')).toHaveText(k.brief);
+    if (k.svc === 'realty') await shot(sp, `${n++}-vidy-predlozhenie`);
+    sp.once('dialog', (d) => d.accept());
+    await offer.getByRole('button', { name: 'Принять дело' }).click();
+    await expect(sp.locator('#order-status')).toHaveText('В работе');
+
+    if (k.approach !== undefined) {
+      await expect(sp.locator('#draft-approaches')).toBeVisible();
+      for (const a of k.approach ?? []) {
+        await sp.locator('#draft-approaches').getByLabel(a).check();
+        await expect(sp.locator('#draft-msg')).toHaveText('Подходы сохранены');
+      }
+    } else {
+      await expect(sp.locator('#draft-approaches')).toBeHidden();
+    }
+    await sp.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+    await expect(sp.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+    const body = await sp.getByLabel('Текст заключения').inputValue();
+    const titles = [...body.matchAll(/^## (.+)$/gm)].map((m) => m[1]);
+    titles.forEach((t, i) => expect(t.startsWith(`${i + 1}. `), `${k.svc}: «${t}»`).toBe(true));
+    for (const s of k.sections) expect(titles).toContain(s);
+    await shot(sp, `${n++}-vidy-${k.svc}-chernovik`);
+    const [word] = await Promise.all([sp.waitForEvent('download'), sp.getByRole('button', { name: 'Скачать Word' }).click()]);
+    expect(word.suggestedFilename()).toMatch(k.svc === 'goods' ? /^Заключение/ : /^Отчёт об оценке/);
+
+    if (k.report) {
+      await sp.locator('#result-file').setInputFiles({ name: 'Отчёт.txt', mimeType: 'text/plain', buffer: Buffer.from(k.report) });
+      await expect(sp.locator('#doc-msg')).toHaveText('Файл добавлен');
+      await sp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+      await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+      for (const f of k.finds) await expect(sp.locator('#review-box')).toContainText(f);
+      await shot(sp, `${n++}-vidy-${k.svc}-proverka`);
+    }
+  }
+  await dctx.close();
+  await sctx.close();
 });
