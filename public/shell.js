@@ -2,7 +2,7 @@
 import { api, el, formatPhone } from '/common.js';
 
 const $ = (id) => document.getElementById(id);
-const views = ['list-view', 'order-view', 'missing-view', 'orgs-view', 'org-view', 'profile-view', 'admin-view', 'specialist-view', 'specialists-view', 'money-view', 'notifications-view', 'assistant-view'];
+const views = ['list-view', 'order-view', 'missing-view', 'orgs-view', 'org-view', 'profile-view', 'admin-view', 'specialist-view', 'specialists-view', 'money-view', 'notifications-view', 'assistant-view', 'expert-view'];
 
 export const state = { me: null, catalog: null, specialist: null }; // catalog — услуги, поля и статусы из /api/catalog
 

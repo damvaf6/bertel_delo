@@ -6,7 +6,9 @@
 import { HttpError } from '../http/core.mjs';
 import { orderSides } from '../access/policy.mjs';
 import { scoreSpecialist } from '../matching/score.mjs';
-import { addDays, todayMsk } from '../orders/workflow.mjs';
+import { workStats } from '../matching/stats.mjs';
+import { STATUS_NAME, addDays, todayMsk } from '../orders/workflow.mjs';
+import { orderRef } from '../notify/registry.mjs';
 import { audit, text, uuidFrom } from './util.mjs';
 import { notify, orgHeads } from '../notify/notify.mjs';
 import { BLOCKING_KINDS, dossierAlerts, loadDossier, needsValidDossier } from '../dossier/dossier.mjs';
@@ -71,13 +73,15 @@ export async function candidatesFor(sql, order, registry) {
   const daysLeft = order.deadline ? Math.round((new Date(order.deadline) - new Date(today)) / 86400000) : null;
   // Истёкшие документы досье (2.14): по услугам оценки аттестат и полисы снимают с подбора, остальное — предупреждение.
   const blocking = needsValidDossier(registry, order);
+  // Сдано в срок и возвраты (2.35) — в оценку «качество».
+  const work = await workStats(sql, rows.map((r) => r.user_id));
   const expired = new Map();
   for (const r of rows) expired.set(r.user_id, dossierAlerts(await loadDossier(sql, r.user_id)).filter((a) => a.state === 'expired'));
   return rows
     .filter((r) => !blocking || !expired.get(r.user_id).some((a) => BLOCKING_KINDS.includes(a.kind)))
     .map((r) => ({
       user_id: r.user_id, full_name: r.full_name,
-      score: scoreSpecialist(r, { open: r.open, offers: r.offers, accepted: r.accepted }, order, daysLeft),
+      score: scoreSpecialist(r, { open: r.open, offers: r.offers, accepted: r.accepted, ...work.get(r.user_id) }, order, daysLeft),
       dossier_expired: expired.get(r.user_id).map((a) => a.kind_name),
     }))
     .sort((a, b) => b.score.total - a.score.total || a.full_name.localeCompare(b.full_name));
@@ -150,6 +154,50 @@ export function matchOps() {
           }
         });
         return { specialist: await profileView(sql, actor.id) };
+      },
+    },
+    {
+      // Карточка эксперта (2.35): то, по чему диспетчер и руководитель выбирают, кому отдать дело. Досье — без копий
+      // документов (копии видит только сам эксперт); история — без заказчика, названий заявок и полей.
+      id: 'specialists.card', method: 'GET', path: '/api/specialists/:id/card', auth: 'user',
+      access: { resource: 'specialistCard', param: 'id', need: 'read' },
+      async handler({ sql, specialist, registry }) {
+        const id = specialist.user_id;
+        const profile = await profileView(sql, id);
+        const dossier = (await loadDossier(sql, id)).map((i) => ({
+          kind: i.kind, kind_name: i.kind_name, title: i.title, number: i.number, issued_on: i.issued_on,
+          valid_until: i.valid_until, amount_kop: i.amount_kop, state: i.state, has_copy: !!i.file,
+        }));
+        const offers = await sql.one`
+          select count(*) filter (where outcome in ('accepted', 'declined'))::int as offers, count(*) filter (where outcome = 'accepted')::int as accepted
+          from order_offers where specialist_id = ${id}`;
+        const work = (await workStats(sql, [id])).get(id);
+        const stats = { ...offers, ...work };
+        const quality = scoreSpecialist({ ...profile, external_load: profile.external_load ?? 0 }, { open: 0, ...stats }, { fields: {} }, null).features.quality;
+        const rows = await sql`
+          select o.id, o.module, o.service, o.status, o.deadline,
+            (select (max(h.at) at time zone 'Europe/Moscow')::date from order_status_history h where h.order_id = o.id and h.to_status = 'review') as submitted,
+            (select count(*)::int from order_status_history h where h.order_id = o.id and h.from_status = 'review' and h.to_status = 'in_work')
+              + (select count(*)::int from org_returns r where r.order_id = o.id) as returns
+          from orders o where o.executor_user_id = ${id} and o.status <> 'cancelled'
+          order by o.updated_at desc limit 30`;
+        const day = (d) => (d ? (d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10)) : null);
+        return {
+          specialist: profile,
+          dossier,
+          stats,
+          quality: { score: quality.score, note: quality.note },
+          history: rows.map((o) => ({
+            order_ref: orderRef(o.id),
+            service: registry.service(o.module, o.service)?.service.name ?? o.service,
+            status: o.status,
+            status_name: STATUS_NAME[o.status],
+            deadline: o.deadline,
+            submitted: day(o.submitted),
+            on_time: ['done', 'closed'].includes(o.status) ? (!o.deadline || (o.submitted && day(o.submitted) <= o.deadline)) : null,
+            returns: o.returns,
+          })),
+        };
       },
     },
     {
