@@ -407,19 +407,6 @@
         <h1 id="org-title"></h1>
         <p class="muted" id="org-meta"></p>
       </div>
-      <form class="card hidden" id="org-edit" novalidate>
-        <h2>Данные организации</h2>
-        <div class="field">
-          <label for="org-edit-name">Название организации</label>
-          <input id="org-edit-name" type="text" maxlength="300" required>
-        </div>
-        <div class="field">
-          <label for="org-edit-inn">ИНН организации</label>
-          <input id="org-edit-inn" type="text" inputmode="numeric" maxlength="12">
-        </div>
-        <button type="submit" class="secondary" id="org-save">Сохранить</button>
-        <p class="msg" id="org-edit-msg" role="status" aria-live="polite"></p>
-      </form>
       <div class="card hidden" id="org-cases-box">
         <h2>Дела экспертов</h2>
         <p class="muted">Дела, которые ведут эксперты от Вашей организации. Заказчика, его данные, документы и переписку по делу
@@ -463,6 +450,19 @@
         </div>
         <p class="msg" id="org-template-msg" role="status" aria-live="polite"></p>
       </div>
+      <form class="card hidden" id="org-edit" novalidate>
+        <h2>Данные организации</h2>
+        <div class="field">
+          <label for="org-edit-name">Название организации</label>
+          <input id="org-edit-name" type="text" maxlength="300" required>
+        </div>
+        <div class="field">
+          <label for="org-edit-inn">ИНН организации</label>
+          <input id="org-edit-inn" type="text" inputmode="numeric" maxlength="12">
+        </div>
+        <button type="submit" class="secondary" id="org-save">Сохранить</button>
+        <p class="msg" id="org-edit-msg" role="status" aria-live="polite"></p>
+      </form>
       <div class="card">
         <h2>Сотрудники</h2>
         <ul class="list" id="members"></ul>

@@ -187,6 +187,9 @@ test('две подписи (2.5а): эксперт работает от орг
     let r = await step(spec, o, 'review');
     assert.equal(r.body.error, 'not_signed_org');
     assert.match(r.body.message, /Тестовая оценка.*Отчёт\.pdf/);
+    // 2.36: в «Делах экспертов» у дела видно, что файл ждёт подписи организации.
+    const cs = (await head.req('GET', `/api/orgs/${org.id}/cases`)).body.cases;
+    assert.deepEqual(cs.map((c) => [c.sign_wait, c.returned_open]), [[1, false]]);
     const list = (await head.req('GET', `/api/orgs/${org.id}/signing`)).body.items;
     assert.equal(list.length, 1);
     assert.equal(list[0].executor, 'Тестов Эксперт Экспертович');
