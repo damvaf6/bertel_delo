@@ -4,9 +4,12 @@
 import { api, el, say, formatSize } from '/common.js';
 import { signatureLines, uploadSignatureButton, SIGN_CONFIRM, UPLOAD_HINT } from '/sign.js';
 import { dayRu } from '/order.js';
+import { loadOrgCases } from '/orgcases.js';
 
 const $ = (id) => document.getElementById(id);
 let current = null;
+// После подписи или возврата меняются и «Дела экспертов» (что ждёт подписи — 2.36).
+const refresh = () => Promise.all([loadOrgSign(current), loadOrgCases(current)]);
 
 export async function loadOrgSign(org) {
   current = org;
@@ -52,9 +55,9 @@ async function signAll(docs) {
   say($('org-sign-msg'), 'Подписываем…', 'ok');
   try {
     for (const d of docs) await api('POST', `/api/org-documents/${d.id}/sign`, { confirm: true });
-    await loadOrgSign(current);
+    await refresh();
     say($('org-sign-msg'), `Подписано от организации файлов: ${docs.length}`, 'ok');
-  } catch (err) { await loadOrgSign(current); say($('org-sign-msg'), err.message); }
+  } catch (err) { await refresh(); say($('org-sign-msg'), err.message); }
 }
 
 function docItem(d) {
@@ -94,7 +97,7 @@ async function sendReturn(d, comment) {
   if (!String(comment).trim()) return say($('org-sign-msg'), 'Напишите замечание — что эксперту исправить');
   try {
     await api('POST', `/api/org-documents/${d.id}/return`, { comment });
-    await loadOrgSign(current);
+    await refresh();
     say($('org-sign-msg'), 'Файл возвращён эксперту с замечанием — его подпись снята', 'ok');
   } catch (err) { say($('org-sign-msg'), err.message); }
 }
@@ -104,7 +107,7 @@ async function sign(d) {
   say($('org-sign-msg'), 'Подписываем…', 'ok');
   try {
     await api('POST', `/api/org-documents/${d.id}/sign`, { confirm: true });
-    await loadOrgSign(current);
+    await refresh();
     say($('org-sign-msg'), 'Файл подписан от организации', 'ok');
   } catch (err) { say($('org-sign-msg'), err.message); }
 }
@@ -114,7 +117,7 @@ async function upload(d, file) {
   say($('org-sign-msg'), 'Проверяем подпись…', 'ok');
   try {
     await api('POST', `/api/org-documents/${d.id}/signature/upload`, file, { 'content-type': 'application/octet-stream', 'x-confirm': '1' });
-    await loadOrgSign(current);
+    await refresh();
     say($('org-sign-msg'), 'Подпись организации проверена и добавлена', 'ok');
   } catch (err) { say($('org-sign-msg'), err.message); }
 }

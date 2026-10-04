@@ -1513,6 +1513,11 @@ test('две подписи (2.5а): эксперт от организации 
   await expect(hp.locator('#notifications li').first()).toContainText('нужна подпись организации');
   await hp.goto(`/kabinet#org=${orgId}`);
   await expect(hp.locator('#org-title')).toHaveText('ООО «Тестовая оценочная компания»');
+  // 2.36: в «Делах экспертов» у дела — «Ждёт Вашей подписи» и переход к подписи.
+  const caseRow = hp.locator('#org-cases li[data-case]').first();
+  await expect(caseRow.locator('[data-role="sign-wait"]')).toContainText('Ждёт Вашей подписи: 1');
+  await caseRow.getByRole('button', { name: 'К подписи' }).click();
+  await expect(hp.locator('#org-sign > li.flash')).toHaveCount(1);
   const item = hp.locator('#org-sign li.doc').filter({ hasText: 'отчёт-компании.pdf' });
   await expect(hp.locator('#org-sign > li').first()).toContainText('Оценка недвижимости');
   await expect(hp.locator('#org-sign > li').first()).toContainText('Эксперт: Тестовый эксперт компании');
@@ -1529,6 +1534,8 @@ test('две подписи (2.5а): эксперт от организации 
   await shot(hp, '97c-rukovoditel-vozvrat');
   await item.getByRole('button', { name: 'Вернуть с замечанием' }).click();
   await expect(hp.locator('#org-sign-msg')).toHaveText('Файл возвращён эксперту с замечанием — его подпись снята');
+  await expect(hp.locator('#org-cases li[data-case]').first().locator('[data-role="returned"]')).toHaveText('Вы вернули отчёт эксперту — ждём исправления');
+  await expect(hp.locator('#org-cases [data-role="sign-wait"]')).toHaveCount(0);
   await expect(hp.locator('#org-sign details.returns summary')).toHaveText('Возвраты эксперту · 1 · ждём исправления');
   await expect(item.getByRole('button', { name: 'Подписать от организации' })).toHaveCount(0);
   await sp.goto('/kabinet#notifications');
@@ -1576,6 +1583,7 @@ test('две подписи (2.5а): эксперт от организации 
   await expect(hp.locator('#org-cases-money')).toContainText('Ждёт выдачи результата12 000 ₽');
   await expect(hp.locator('#members li').filter({ hasText: 'Тестовый эксперт компании' })).toContainText('дел: 1');
   await cases.scrollIntoViewIfNeeded();
+  await expect(hp.locator('#org-cases [data-role="sign-wait"]')).toHaveCount(0);   // подписано — в делах больше не ждёт
   await shot(hp, '97a-rukovoditel-dela-ekspertov');
 
   // Внутренняя переписка (2.28): руководитель пишет эксперту из «Дел экспертов»; эксперт отвечает в деле; заказчик не видит.

@@ -45,7 +45,20 @@ function caseItem(c) {
     el('div', { class: 'muted', text: [c.status_name, `эксперт: ${c.expert}`, c.overdue ? null : deadline].filter(Boolean).join(' · ') }),
     el('div', { class: 'muted', text: [c.fee_kop != null ? `вознаграждение ${rub(c.fee_kop)}` : 'цена ещё не назначена',
       c.payout ? PAYOUT_RU[c.payout] : null].filter(Boolean).join(' · ') }),
+    // Что ждёт руководителя по делу (2.36) — прямо в списке дел, с переходом к подписи.
+    ...(c.sign_wait ? [el('div', { class: 'row', 'data-role': 'sign-wait' },
+      el('span', { class: 'badge warn', text: `Ждёт Вашей подписи: ${c.sign_wait}` }),
+      el('button', { class: 'secondary', 'data-action': 'go-sign', onclick: () => goSign(c.order_ref) }, 'К подписи'))] : []),
+    ...(c.returned_open ? [el('div', { class: 'muted', 'data-role': 'returned', text: 'Вы вернули отчёт эксперту — ждём исправления' })] : []),
     chatDetails(c));
+}
+
+// Перейти к делу в «Подписи организации» и выделить его.
+function goSign(ref) {
+  const li = document.querySelector(`#org-sign li[data-item="${CSS.escape(ref)}"]`) ?? $('org-sign-box');
+  li.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  li.classList.add('flash');
+  setTimeout(() => li.classList.remove('flash'), 2000);
 }
 
 // Внутренняя переписка с экспертом по делу (2.28): раскрывается по нажатию; заказчик и диспетчер её не видят.

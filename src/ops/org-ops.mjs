@@ -6,6 +6,7 @@ import { LEVEL, ORG_ROLES, orgCaseSide, orgLevel } from '../access/policy.mjs';
 import { audit, oneOf, phoneFrom, text, uuidFrom } from './util.mjs';
 import { dispatchers, notify, notifyPhone, orgHeads } from '../notify/notify.mjs';
 import { orgExpertsFor } from './match-ops.mjs';
+import { orderSignatures, orgReturns } from './sign-ops.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { splitAmount } from '../money/money.mjs';
 import { STATUS_NAME, isOverdue, todayMsk } from '../orders/workflow.mjs';
@@ -149,7 +150,20 @@ export function orgOps() {
         const name = (e) => e?.full_name || 'Без имени';
         const byId = new Map(experts.map((e) => [e.user_id, e]));
         const feeOf = (o) => (o.payout_kop != null ? Number(o.payout_kop) : o.price_kop ? splitAmount(Number(o.price_kop)).payoutKop : null);
+        // Что ждёт руководителя по делу (2.36): файлы, подписанные экспертом, ждут подписи организации; возврат эксперту
+        // ещё не исправлен. Только по делам в работе.
+        const waits = new Map();
+        for (const o of rows.filter((x) => x.status === 'in_work')) {
+          const signs = await orderSignatures(sql, o.id);
+          const docs = await sql`select id from documents where order_id = ${o.id} and kind = 'result' and deleted_at is null
+                                 and uploaded_by = ${o.executor_user_id}`;
+          waits.set(o.id, {
+            sign_wait: docs.filter((d) => signs.get(d.id)?.expert && !signs.get(d.id)?.org).length,
+            returned_open: (await orgReturns(sql, o.id, { orgId: org.id })).some((r) => r.open),
+          });
+        }
         const cases = rows.map((o) => ({
+          ...(waits.get(o.id) ?? { sign_wait: 0, returned_open: false }),
           // Номер дела — для внутренней переписки с экспертом (2.28); саму заявку руководитель по нему не откроет.
           id: o.id,
           order_ref: orderRef(o.id),
