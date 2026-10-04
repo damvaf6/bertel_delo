@@ -52,7 +52,8 @@ const rub = (kop) => `${(Number(kop) / 100).toLocaleString('ru-RU', { minimumFra
 // Текст письма о событии заявки; по умолчанию — строка события из реестра уведомлений.
 const EVENT_TEXT = {
   priced: (o) => `Цена заявки — ${rub(o.price_kop)}. Оплатите её в кабинете: после оплаты заявку передадим исполнителю.`,
-  done: () => 'Результат проверен. Файлы результата — во вложении к этому письму; они же доступны в кабинете.',
+  done: () => 'Результат проверен. Файлы результата — во вложении к этому письму; они же доступны в кабинете. '
+    + 'Акт об оказании услуг — в кабинете, в разделе «Оплата» заявки.',
 };
 
 // Событие из реестра уведомлений (notify.mjs): если у события есть письмо и заявка пришла по письму — письмо в её переписку.
@@ -67,12 +68,14 @@ export async function mailOnEvent(tx, eventId, orderId) {
 
 function letterText(row, order, cfg) {
   const link = cfg.publicUrl && order ? `${cfg.publicUrl}/kabinet#order=${order.id}` : null;
+  // Номер заявки — первой строкой (2.44): тема письма остаётся темой заказчика, чтобы переписка не распалась.
   return [
+    order ? `Заявка ${orderRef(order.id)}: «${order.title}».` : null,
+    order ? '' : null,
     'Здравствуйте!',
     '',
     row.body,
     '',
-    order ? `Заявка ${orderRef(order.id)}: «${order.title}».` : null,
     link ? `Открыть в кабинете: ${link}` : 'Кабинет — на сайте БЕРТЕЛ Дело, вход по номеру телефона.',
     '',
     '— БЕРТЕЛ Дело. Письмо отправлено автоматически; ответить можно прямо на него.',
@@ -122,9 +125,12 @@ export async function deliverMail(sql, providers, cfg, { limit = OUTBOX.batch } 
         attachments = r.files;
         if (r.note) body = `${body}\n${r.note}`;
       }
+      // References — первое письмо заказчика и то, на которое отвечаем: по ним почта собирает одну цепочку (2.44).
+      const root = order ? (await sql.one`select message_id from mail_inbound where order_id = ${order.id} order by id limit 1`)?.message_id : null;
+      const references = [...new Set([root, m.in_reply_to].filter(Boolean))];
       const out = await providers.mail.send({
         to: m.to_email, subject: m.subject, text: letterText({ body }, order, cfg),
-        messageId: m.message_id, inReplyTo: m.in_reply_to, attachments,
+        messageId: m.message_id, inReplyTo: m.in_reply_to, references, attachments,
       });
       await sql`update mail_outbox set status = 'sent', sent_at = now(), error = null, provider_id = ${out?.id ?? null} where id = ${m.id}`;
       sent += 1;

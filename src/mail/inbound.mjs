@@ -17,6 +17,9 @@ import { insertOrder, problemsForSubmit, submitDraft } from '../ops/order-ops.mj
 import { audit } from '../ops/util.mjs';
 import { actorOf, enqueueMail, mailToThread } from './outbox.mjs';
 
+// «Re: Fwd: Ответ:» в начале темы письма.
+export const stripReplyPrefix = (t) => t.replace(/^\s*(?:(?:re|fwd?|ответ|отв|пересл)\s*(?:\[\d+\])?\s*:\s*)+/iu, '').trim();
+
 export const INBOUND = {
   batch: 10,
   maxAttempts: 5,                  // ИИ не ответил пять раз — письмо «не разобрано», человеку ответ
@@ -98,7 +101,8 @@ export function cleanMailAnswer(registry, text, fileNames, fixed = null) {
   const court = def && j.basis === 'court' && def.module.basis.includes('court');
   return {
     def,
-    title: def ? clip(j.title, 300) || def.service.name : null,
+    // «Re:», «Fwd:» из темы письма в название заявки не переносятся (2.44).
+    title: def ? clip(stripReplyPrefix(String(j.title ?? '')), 300) || def.service.name : null,
     fields,
     deadline,
     basis_kind: court ? 'court' : null,
@@ -294,7 +298,10 @@ async function handleNew(deps, row, actor) {
                                 basis_number = ${p.basis_number}, basis_date = ${p.basis_date}
                          where id = ${order.id} returning *`;
     await attachFiles(tx, actor, order, row, p.basis_file);
-    const subject = clip(`Заявка ${orderRef(order.id)}: ${order.title}`, 300);
+    // Тема — как у письма заказчика с «Re:» (2.44): почтовые программы (Gmail) держат переписку одной цепочкой, только
+    // пока тема не меняется; номер заявки — первой строкой каждого нашего письма.
+    const original = stripReplyPrefix(String(row.subject ?? ''));
+    const subject = clip(original ? `Re: ${original}` : `Заявка ${orderRef(order.id)}: ${order.title}`, 300);
     await tx`insert into mail_threads (order_id, user_id, email, subject, last_message_id)
              values (${order.id}, ${actor.id}, ${row.from_email}, ${subject}, ${row.message_id})`;
     await done(tx, row, 'created', order.id);

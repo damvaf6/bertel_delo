@@ -1379,7 +1379,8 @@ test('заявка по письму: почта подключается код
 
   // Ответ «Отправить» на письмо с номером — заявка уходит в подбор.
   const answer = await mailTo(email);
-  expect(answer.subject).toMatch(/^Заявка № /);
+  expect(answer.subject).toBe('Re: Оценка квартиры для суда'); // тема заказчика — переписка не распадается (2.44)
+  expect(answer.text).toMatch(/^Заявка № /);
   const s = await page.request.post('/__test/mail/inbound', {
     headers: control, data: { from: email, text: 'Отправить\n\n> Заявка создана по Вашему письму', in_reply_to: [answer.messageId] },
   });
@@ -2810,4 +2811,79 @@ test('остальные виды оценки (2.43): недвижимость,
   }
   await dctx.close();
   await sctx.close();
+});
+
+// Все виды уведомлений на телефоне (2.45): каждое событие реестра показывается понятной строкой и ведёт туда, где
+// действовать; настройки СМС работают (включил СМС о сообщениях — пришла СМС; выключил — нет).
+test('уведомления (2.45): все события на экране и все ведут в нужное место; настройки СМС работают', async ({ page, browser, baseURL }) => {
+  const { EVENTS } = await import('../../src/notify/registry.mjs');
+  const U = '+79990004601', C = '+79990004602';
+  const me = await signIn(page, U);
+  const cctx = await phoneContext(browser, baseURL);
+  const cp = await cctx.newPage();
+  await signIn(cp, C);
+  let orgId, orderId;
+  await db(async (c) => {
+    await c.query("update users set platform_role = 'dispatcher', full_name = 'Все Уведомления' where id = $1", [me.id]);
+    await c.query('insert into specialists (user_id) values ($1)', [me.id]);
+    orgId = (await c.query("insert into organizations (name) values ('ООО «Тестовые уведомления»') returning id")).rows[0].id;
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head')", [orgId, me.id]);
+  });
+  const o = (await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Заявка для уведомлений' }, headers: H })).json()).order;
+  orderId = o.id;
+  await db(async (c) => {
+    for (const [id, e] of Object.entries(EVENTS)) {
+      await c.query('insert into notifications (user_id, type, event, order_id, org_id) values ($1, $2, $3, $4, $5)',
+        [me.id, e.type, id, e.order ? orderId : null, e.section === 'orgs' ? orgId : null]);
+    }
+  });
+  await page.goto('/kabinet#notifications');
+  const items = page.locator('#notifications li');
+  await expect(items).toHaveCount(Object.keys(EVENTS).length);
+  for (const e of Object.values(EVENTS)) await expect(page.locator('#notifications')).toContainText(e.title);
+  // Каждая строка — кнопка перехода: никакое уведомление не оставляет человека без ответа «где это».
+  await expect(page.locator('#notifications li > button.open')).toHaveCount(Object.keys(EVENTS).length);
+  await expect(page.locator('#notifications li').filter({ hasText: EVENTS.org_offer.title })).toContainText('Организация ООО «Тестовые уведомления»');
+  await shot(page, '119-uvedomleniya-vse');
+
+  const open = async (title) => {
+    await page.goto('/kabinet#notifications');
+    await page.locator('#notifications li').filter({ hasText: title }).first().getByRole('button').click();
+  };
+  await open(EVENTS.dossier_week.title);
+  await expect(page).toHaveURL(/#specialist$/);
+  await open(EVENTS.org_sign_needed.title);
+  await expect(page).toHaveURL(new RegExp(`#org=${orgId}$`));
+  await open(EVENTS.dossier_expired_staff.title);
+  await expect(page).toHaveURL(/#specialists$/);
+  await open(EVENTS.accepted.title);
+  await expect(page.locator('#order-title')).toHaveText('Заявка для уведомлений');
+
+  // Настройки: у этого человека — все виды (он и заказчик, и специалист, и диспетчер); СМС о сообщениях по умолчанию нет.
+  await page.goto('/kabinet#notifications');
+  await expect(page.locator('#notify-types input[type=checkbox]')).toHaveCount(8);
+  const msgBox = page.getByLabel('Сообщения в переписке');
+  await expect(msgBox).not.toBeChecked();
+  const smsCount = async () => (await (await page.request.get('/__test/fakes/sms/calls', { headers: { 'x-test-control': CONTROL } })).json())
+    .calls.filter((x) => x.method === 'send' && x.args.phone === U).length;
+  // Заказчик пишет — СМС нет (выключено); включили — следующее сообщение приходит СМС; выключили — снова нет.
+  const sendFrom = async (p, oid, body) => expect((await p.request.post(`/api/orders/${oid}/messages`, { data: { body }, headers: H })).status()).toBe(201);
+  // Сообщение по заявке, где я — исполнитель: заявка заказчика C.
+  const co = (await (await cp.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Заявка заказчика' }, headers: H })).json()).order;
+  await db((c) => c.query("update orders set status = 'in_work', deadline = current_date + 5, executor_user_id = $2, price_kop = 1000000, paid_at = now() where id = $1", [co.id, me.id]));
+  const before = await smsCount();
+  await sendFrom(cp, co.id, 'Первое сообщение');
+  await page.waitForTimeout(300);
+  expect(await smsCount()).toBe(before);
+  await msgBox.check();
+  await expect(page.locator('#notify-msg')).toHaveText('СМС включены');
+  await sendFrom(cp, co.id, 'Второе сообщение');
+  await expect.poll(smsCount, { timeout: 10_000 }).toBe(before + 1);
+  await msgBox.uncheck();
+  await expect(page.locator('#notify-msg')).toHaveText('СМС выключены — уведомления останутся в кабинете');
+  await sendFrom(cp, co.id, 'Третье сообщение');
+  await page.waitForTimeout(1500);
+  expect(await smsCount()).toBe(before + 1);
+  await shot(page, '120-uvedomleniya-nastroyki');
+  await cctx.close();
 });

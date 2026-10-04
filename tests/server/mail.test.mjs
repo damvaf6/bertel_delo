@@ -144,7 +144,10 @@ test('письмо с вложением → заявка-черновик с п
   const ans = lastSent();
   assert.equal(ans.to, OWNER_MAIL);
   assert.equal(ans.inReplyTo, r.message_id, 'ответ в ту же переписку');
-  assert.match(ans.subject, new RegExp(`Заявка № ${id.slice(0, 8).toUpperCase()}`));
+  // Тема — тема заказчика с «Re:» (иначе Gmail разрывает переписку); номер — первой строкой письма (2.44).
+  assert.equal(ans.subject, 'Re: Оценка квартиры для продажи');
+  assert.match(ans.text, new RegExp(`^Заявка № ${id.slice(0, 8).toUpperCase()}`));
+  assert.deepEqual(ans.references, [r.message_id]);
   assert.match(ans.text, /черновиком/);
   assert.match(ans.text, /Всё нужное для отправки есть/);
   assert.match(ans.text, /«Отправить»/);
@@ -292,7 +295,8 @@ test('ход заявки по письму: цена, оплата, приня�
   assert.ok(done, 'письмо с результатом');
   assert.equal(done.to, OWNER_MAIL);
   assert.deepEqual(done.attachments.map((a) => a.filename), ['заключение.txt', 'заключение.txt.sig'], 'подпись УКЭП — рядом с файлом (2.5)');
-  assert.match(done.subject, /Заявка №/);
+  assert.equal(done.subject, 'Re: Оценка квартиры для продажи');
+  assert.match(done.text, /^Заявка № /);
 
   // Закрытая заявка: письма по ней больше не принимаются.
   assert.equal((await owner.req('POST', `/api/orders/${id}/status`, { from: 'done', to: 'closed' })).status, 200);
@@ -344,4 +348,51 @@ test('письмо не ушло — повтор позже; само дейс�
   await S.sql`update mail_outbox set next_at = now() where order_id = ${r.inbound.order_id}`;
   const { deliverMail } = await import('../../src/mail/outbox.mjs');
   assert.equal((await deliverMail(S.sql, S.providers, S.cfg)).sent, 1);
+});
+
+test('сквозная заявка по письму (2.44): письмо с вложениями → заявка → номер в ответ → готовый отчёт в ту же цепочку писем', async () => {
+  const pdf = { filename: 'Выписка ЕГРН.pdf', content_type: 'application/pdf', base64: Buffer.from('%PDF-1.4 выписка').toString('base64') };
+  const jpg = { filename: 'фото дома.jpg', content_type: 'image/jpeg', base64: Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]).toString('base64') };
+  S.providers.mail.calls.length = 0;
+  const r = await letter(flatLetter({ subject: 'Fwd: Re: Оценка квартиры на Тестовой', attachments: [pdf, jpg] }));
+  assert.equal(r.inbound.outcome, 'created');
+  const id = r.inbound.order_id;
+  const ref = id.slice(0, 8).toUpperCase();
+  assert.equal((await owner.req('GET', `/api/orders/${id}`)).body.order.title, 'Оценка квартиры на Тестовой', 'без «Fwd: Re:» в названии');
+  const docs = (await owner.req('GET', `/api/orders/${id}/documents`)).body.documents;
+  assert.deepEqual(docs.map((d) => d.filename).sort(), ['Выписка ЕГРН.pdf', 'фото дома.jpg'], 'все вложения — в заявке');
+
+  // Ответ — номером в той же цепочке; «Отправить» ответом на него.
+  const created = lastSent();
+  assert.equal(created.subject, 'Re: Оценка квартиры на Тестовой');
+  assert.match(created.text, new RegExp(`^Заявка № ${ref}`));
+  assert.equal(created.inReplyTo, r.message_id);
+  const sub = await letter({ from: OWNER_MAIL, subject: `Re: ${created.subject}`, text: 'Отправить', in_reply_to: [created.messageId] });
+  assert.equal((await owner.req('GET', `/api/orders/${id}`)).body.order.status, 'matching', `${sub.inbound.outcome}: ${lastSent().text}`);
+
+  // Дальше без кабинета у заказчика (кроме оплаты): цена, оплата, исполнитель, проверка, результат.
+  assert.equal((await dispatcher.req('PUT', `/api/orders/${id}/price`, { price: '12000' })).status, 200);
+  await owner.req('POST', `/api/orders/${id}/payments`);
+  assert.equal((await owner.req('POST', `/api/orders/${id}/payments/refresh`)).status, 200);
+  assert.equal((await dispatcher.req('POST', `/api/orders/${id}/offer`, { specialist_id: spec.user.id, from: 'matching' })).status, 200);
+  assert.equal((await spec.req('POST', `/api/orders/${id}/status`, { from: 'awaiting_executor', to: 'in_work' })).status, 200);
+  await spec.req('POST', `/api/orders/${id}/results`, Buffer.from('%PDF-1.4 Отчёт об оценке'), {
+    raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Отчёт об оценке.pdf') } });
+  await signResults(S, spec, id);
+  assert.equal((await spec.req('POST', `/api/orders/${id}/status`, { from: 'in_work', to: 'review' })).status, 200);
+  const { checks, round } = (await dispatcher.req('GET', `/api/orders/${id}/review`)).body;
+  for (const c of checks) await dispatcher.req('PUT', `/api/orders/${id}/review/${c.id}`, { verdict: 'ok', round });
+  assert.equal((await dispatcher.req('POST', `/api/orders/${id}/status`, { from: 'review', to: 'done' })).status, 200);
+
+  // Все наши письма по заявке — одна цепочка: та же тема, ссылка на первое письмо заказчика, номер первой строкой.
+  const thread = sent().filter((x) => x.to === OWNER_MAIL);
+  assert.ok(thread.length >= 6, `писем по заявке: ${thread.length}`);
+  for (const x of thread) {
+    assert.equal(x.subject, 'Re: Оценка квартиры на Тестовой');
+    assert.equal(x.references[0], r.message_id, 'References начинается с первого письма заказчика');
+    assert.match(x.text, new RegExp(`^Заявка № ${ref}`));
+  }
+  const done = thread.find((x) => /Результат проверен/.test(x.text));
+  assert.deepEqual(done.attachments.map((a) => a.filename), ['Отчёт об оценке.pdf', 'Отчёт об оценке.pdf.sig']);
+  assert.ok(done.attachments[0].content.toString().startsWith('%PDF'), 'во вложении — сам файл отчёта');
 });

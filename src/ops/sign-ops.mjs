@@ -106,7 +106,7 @@ async function addSignature({ sql, actor, providers }, { doc, order, role, metho
         const signOrg = await executorSignOrg(tx, cur.executor_user_id);
         if (signOrg) {
           const heads = (await tx`select user_id from org_members where org_id = ${signOrg.id} and role = 'head'`).map((h) => h.user_id);
-          if (heads.length) await notify(tx, 'org_sign_needed', { users: heads, actor });
+          if (heads.length) await notify(tx, 'org_sign_needed', { users: heads, orgId: signOrg.id, actor });
         }
       }
       return s;
