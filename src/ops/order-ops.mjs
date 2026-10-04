@@ -118,6 +118,16 @@ export function orderOps() {
     };
   }
 
+  // Главное о деле одной строкой: значения коротких полей заявки по порядку (без длинных текстов), не больше шести.
+  function fieldsBrief(registry, order) {
+    const def = order.module ? registry.service(order.module, order.service) : null;
+    if (!def) return null;
+    const parts = def.fields.filter((f) => f.type !== 'longtext' && order.fields?.[f.id] !== undefined && order.fields[f.id] !== '')
+      .map((f) => (f.type === 'select' ? f.options.find((o) => o.id === order.fields[f.id])?.name ?? order.fields[f.id] : String(order.fields[f.id])))
+      .slice(0, 6);
+    return parts.length ? parts.join(' · ').slice(0, 300) : null;
+  }
+
   function describe(registry, order, today = todayMsk()) {
     const def = order.module ? registry.service(order.module, order.service) : null;
     return {
@@ -179,7 +189,12 @@ export function orderOps() {
         return {
           orders: rows.map((r) => {
             const mine = r.executor_user_id === actor.id;
-            return { ...describe(registry, r, today), as_executor: mine, ...(mine && r.price_kop ? { fee_kop: splitAmount(Number(r.price_kop)).payoutKop } : {}) };
+            return {
+              ...describe(registry, r, today), as_executor: mine,
+              ...(mine && r.price_kop ? { fee_kop: splitAmount(Number(r.price_kop)).payoutKop } : {}),
+              // Исполнителю — главное о деле одной строкой (2.33): решить по предложению, не открывая каждое.
+              ...(mine ? { brief: fieldsBrief(registry, r) } : {}),
+            };
           }),
         };
       },

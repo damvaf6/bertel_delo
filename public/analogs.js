@@ -3,6 +3,7 @@
 // Тексты — только через textContent; ссылки на объявления открываются в новой вкладке без доступа к нашей странице.
 import { api, el, say } from '/common.js';
 import { state } from '/shell.js';
+import { setNext } from '/next.js';
 
 const $ = (id) => document.getElementById(id);
 const MAX_FILE = 10 * 1024 * 1024;
@@ -27,7 +28,8 @@ export async function loadAnalogs(current) {
 
 function render(data) {
   ctx.data = data;
-  $('analogs-state').textContent = `Подтверждено аналогов: ${data.confirmed} из ${data.min} нужных. `
+  setNext({ analogs: data.can_edit ? { needed: data.needed !== false, confirmed: data.confirmed, min: data.min } : null });
+  $('analogs-state').textContent = (data.needed === false ? `Подтверждено аналогов: ${data.confirmed}. ` : `Подтверждено аналогов: ${data.confirmed} из ${data.min} нужных. `)
     + (data.can_edit ? 'В Word они попадут таблицей, скриншоты — в приложение с датой получения и ссылкой.' : 'Аналоги меняет исполнитель.');
   $('analogs-hints').replaceChildren(...data.hints.map((h) => el('li', { text: h })));
   $('analogs-criteria').textContent = data.search.criteria;

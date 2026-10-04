@@ -101,7 +101,8 @@ function orderItem(o) {
         el('span', { class: `badge status${o.status === 'cancelled' ? ' cancelled' : ''}`, text: o.status_name }),
         el('span', { class: `muted${o.overdue || soon ? ' overdue' : ''}`, text: deadlineText(o) })),
       el('div', { class: 'muted', text: [o.service_name, o.as_executor && o.fee_kop ? `Вам ${rubShort(o.fee_kop)}` : null, o.as_executor ? null : dateRu(o.created_at),
-        o.org_name ? `${o.org_name} · ведёт ${o.responsible_name || 'сотрудник'}` : null].filter(Boolean).join(' · ') })));
+        o.org_name ? `${o.org_name} · ведёт ${o.responsible_name || 'сотрудник'}` : null].filter(Boolean).join(' · ') }),
+      ...(o.as_executor && o.brief ? [el('div', { class: 'brief', text: o.brief })] : [])));
   if (o.as_executor && o.status === 'awaiting_executor') {
     li.append(el('div', { class: 'row offer-actions' },
       el('button', { 'data-action': 'accept', onclick: () => answerOffer(o, 'in_work') }, 'Принять дело'),
@@ -119,6 +120,8 @@ async function answerOffer(o, to) {
   } else if (!confirm(`Принять дело «${o.title}»?`)) return;
   try {
     await api('POST', `/api/orders/${o.id}/status`, { from: 'awaiting_executor', to, reason: reason?.trim() || undefined });
+    // Принял — сразу в дело (2.33): дальше работа там, «Что дальше» подскажет первый шаг.
+    if (to === 'in_work') { location.hash = `order=${o.id}`; return; }
     await loadOrders();
     say($('orders-msg'), to === 'in_work' ? 'Дело принято — оно в разделе «В работе»' : 'Вы отказались от дела', 'ok');
   } catch (err) { say($('orders-msg'), err.message); }

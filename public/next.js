@@ -5,7 +5,7 @@
 import { el } from '/common.js';
 
 const $ = (id) => document.getElementById(id);
-let ctx = {}; // { current, docs, review, step(action) }
+let ctx = {}; // { current, docs, review, draft, analogs, step(action) }
 
 export function setNext(part) {
   ctx = part.reset ? { ...part } : { ...ctx, ...part };
@@ -48,7 +48,13 @@ function steps() {
   if (visible('inspect-box') || visible('onsite-box')) {
     items.push({ id: 'inspect', title: 'Осмотр объекта (по желанию)', done: list.some((d) => d.kind === 'inspection'), go: go(visible('inspect-box') ? 'inspect-box' : 'onsite-box'), optional: true });
   }
-  if (visible('draft-box')) items.push({ id: 'draft', title: 'Черновик заключения от ИИ (по желанию)', done: results.some((d) => /^Заключение/.test(d.filename)), go: go('draft-box'), optional: true });
+  // Подходы к оценке (2.33): от них зависят разделы черновика и нужны ли аналоги. Не обязательны — эксперту со своим
+  // готовым отчётом лишнее действие ни к чему, поэтому главная кнопка к ним не ведёт.
+  if (ctx.draft?.approaches) items.push({ id: 'approaches', title: 'Подходы к оценке (для черновика и аналогов)', done: !!ctx.draft.approaches.chosen?.length, go: go('draft-approaches'), optional: true });
+  const an = ctx.analogs;
+  if (an?.needed && visible('analogs-box')) items.push({ id: 'analogs', title: `Аналоги (подтверждено ${an.confirmed} из ${an.min})`, done: an.confirmed >= an.min, go: go('analogs-box'), optional: true });
+  // Черновик сделан, когда он есть (файл из черновика называется по виду документа: «Отчёт об оценке», «Заключение…»).
+  if (visible('draft-box')) items.push({ id: 'draft', title: 'Черновик заключения от ИИ (по желанию)', done: !!ctx.draft?.exists, go: go('draft-box'), optional: true });
   items.push({ id: 'result', title: 'Файл результата', done: results.length > 0, go: go('result-upload-box') });
   // Руководитель вернул файл с замечанием (2.27) — сначала исправить по замечанию.
   const returnsOpen = (docs?.org_returns ?? []).filter((r) => r.open);

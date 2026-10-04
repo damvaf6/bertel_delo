@@ -54,6 +54,7 @@ button:disabled { opacity: .6; cursor: default; }
 .list li:first-child { border-top: none; }
 .list .title { font-weight: 600; overflow-wrap: anywhere; }
 .list button.open { text-align: left; width: 100%; background: none; border: none; color: var(--text); padding: 0; min-height: 0; font-weight: 400; }
+.list button.open .brief { margin-top: 4px; font-size: 15px; overflow-wrap: anywhere; }
 .doc { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .doc .name { overflow-wrap: anywhere; }
 .doc { flex-wrap: wrap; }

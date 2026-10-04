@@ -10,7 +10,10 @@
 //     draft?: [{ id, title, services?: [id услуги…], ask?, dossier?, table? }…],  — разделы черновика заключения от ИИ (задача 2.2);
 //       dossier: 'info' — сюда подставляются сведения из досье эксперта, 'copies' — перечень копий документов (2.14);
 //       table: 'task' — таблица «задание» из полей заявки, 'approaches' — таблица «подход — стоимость — вес» (2.29);
-//       ask — что писать в разделе и что оставить эксперту в [квадратных скобках]
+//       ask — что писать в разделе и что оставить эксперту в [квадратных скобках];
+//       approach — раздел только для подхода 'comparative' | 'cost' | 'income': если исполнитель его не применяет (2.33),
+//       раздела в черновике нет, а разделы с номером в начале названия («7. …») нумеруются заново подряд
+//     approaches?: { services: [id услуги…] }  — исполнитель отмечает, какие подходы к оценке применяет (2.33)
 //     inspection?: [{ id, title, hint?, services?: [id услуги…], optional? }…],  — шаги дистанционного осмотра (2.3)
 //     express?: { services: [id услуги…], show: [id поля заявки…], fields: [поле + services?…] } }  — экспресс-услуга (2.4):
 //       для каких услуг, какие поля заявки видит помощник на объекте и какие данные он заполняет (нужны шаги осмотра)
@@ -35,6 +38,8 @@ export const BASIS_KINDS = {
 };
 
 export const DRAFT_TABLES = ['task', 'approaches', 'analogs'];
+// Подходы к оценке (2.33): общие для всех модулей, где исполнитель их выбирает.
+export const APPROACHES = Object.freeze({ comparative: 'Сравнительный', cost: 'Затратный', income: 'Доходный' });
 const ID_RE = /^[a-z][a-z0-9_]{1,31}$/;
 const FIELD_TYPES = ['text', 'longtext', 'number', 'select'];
 const FIELD_KEYS = ['id', 'label', 'type', 'required', 'max', 'min', 'integer', 'options', 'pattern', 'hint', 'upper'];
@@ -91,7 +96,7 @@ function validateField(f, where) {
 }
 
 export function validateModule(m) {
-  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express', 'signature', 'analogs'], 'модуль');
+  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express', 'signature', 'analogs', 'approaches'], 'модуль');
   if (!ID_RE.test(m.id ?? '')) fail('модуль', `неверный id «${m.id}»`);
   const at = `модуль ${m.id}`;
   if (!nonEmpty(m.name)) fail(at, 'нет названия');
@@ -132,7 +137,8 @@ export function validateModule(m) {
     checkIds(m.draft, `${at}, разделы черновика`);
     for (const d of m.draft) {
       const where = `${at}, раздел черновика ${d.id}`;
-      onlyKeys(d, ['id', 'title', 'services', 'ask', 'dossier', 'table'], where);
+      onlyKeys(d, ['id', 'title', 'services', 'ask', 'dossier', 'table', 'approach'], where);
+      if (d.approach !== undefined && !Object.hasOwn(APPROACHES, d.approach)) fail(where, `approach — одно из: ${Object.keys(APPROACHES).join(', ')}`);
       if (d.table !== undefined && !DRAFT_TABLES.includes(d.table)) fail(where, "table — 'task' (задание из полей заявки), 'approaches' (подходы и веса) или 'analogs' (аналоги из дела)");
       if (!nonEmpty(d.title)) fail(where, 'нет описания');
       if (d.dossier !== undefined && !['info', 'copies'].includes(d.dossier)) fail(where, "dossier — 'info' (сведения об эксперте) или 'copies' (копии документов в приложениях)");
@@ -187,6 +193,15 @@ export function validateModule(m) {
     onlyKeys(m.signature, ['services'], where);
     const sv = m.signature.services;
     if (sv !== undefined && (!Array.isArray(sv) || sv.length === 0 || sv.some((id) => !serviceIds.includes(id)) || new Set(sv).size !== sv.length)) {
+      fail(where, 'services — непустой список услуг этого модуля');
+    }
+  }
+  // Выбор подходов к оценке (2.33) — необязательно: без него черновик пишется со всеми разделами.
+  if (m.approaches !== undefined) {
+    const where = `${at}, подходы`;
+    onlyKeys(m.approaches, ['services'], where);
+    const sv = m.approaches.services;
+    if (!Array.isArray(sv) || sv.length === 0 || sv.some((id) => !serviceIds.includes(id)) || new Set(sv).size !== sv.length) {
       fail(where, 'services — непустой список услуг этого модуля');
     }
   }
@@ -257,10 +272,23 @@ export function createRegistry(modules = DEFAULT_MODULES) {
         .map((c) => ({ id: c.id, title: c.title, ...(c.ask ? { ask: c.ask } : {}), ...(c.auto ? { auto: c.auto } : {}) }));
     },
     // Разделы черновика заключения для услуги (2.2); пустой список — черновик для услуги не готовится.
-    draftSections(moduleId, serviceId) {
+    // approaches — подходы, которые исполнитель применяет (2.33; null — не выбраны): разделов других подходов нет,
+    // нумерация в названиях — подряд, без пропусков (иначе в отчёте «после раздела 13 сразу 15»).
+    draftSections(moduleId, serviceId, approaches = null) {
       const m = modulesList.find((x) => x.id === moduleId);
       if (!m?.draft || !m.services.some((x) => x.id === serviceId)) return [];
-      return m.draft.filter((d) => !d.services || d.services.includes(serviceId)).map((d) => ({ id: d.id, title: d.title, ...(d.ask ? { ask: d.ask } : {}), ...(d.dossier ? { dossier: d.dossier } : {}), ...(d.table ? { table: d.table } : {}) }));
+      const chosen = m.approaches?.services.includes(serviceId) && approaches?.length ? approaches : null;
+      let n = 0;
+      return m.draft.filter((d) => (!d.services || d.services.includes(serviceId)) && (!chosen || !d.approach || chosen.includes(d.approach)))
+        .map((d) => {
+          const title = chosen && /^\d+\.\s/.test(d.title) ? d.title.replace(/^\d+/, String(++n)) : d.title;
+          return { id: d.id, title, ...(d.ask ? { ask: d.ask } : {}), ...(d.dossier ? { dossier: d.dossier } : {}), ...(d.table ? { table: d.table } : {}), ...(d.approach ? { approach: d.approach } : {}) };
+        });
+    },
+    // Выбирает ли исполнитель подходы к оценке для услуги (2.33).
+    approachesFor(moduleId, serviceId) {
+      const m = modulesList.find((x) => x.id === moduleId);
+      return !!m?.approaches?.services.includes(serviceId);
     },
     // Шаги дистанционного осмотра для услуги (2.3); пустой список — ссылка владельцу для услуги не выдаётся.
     inspectionSteps(moduleId, serviceId) {
