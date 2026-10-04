@@ -9,7 +9,7 @@
 //   payments.createPayout({ idempotenceKey, executorId, amountKop, description }) → { id, status: succeeded | failed }
 //   payments.createRefund({ idempotenceKey, paymentId, amountKop, description })  → { id, status: succeeded | failed }
 //   ai.complete({ purpose, messages })                             → { text, model }   (основная и запасная — ai.mjs)
-//   mail.send({ to, subject, text, messageId, inReplyTo, attachments: [{ filename, contentType, content }] }) → { id }
+//   mail.send({ to, subject, text, messageId, inReplyTo, references: [messageId…], attachments: [{ filename, contentType, content }] }) → { id }
 //   mail.receive({ limit })  — новые письма на особый адрес (1.9) → [{ id, from, subject, text, messageId, inReplyTo: [],
 //                              authenticated (SPF/DKIM пройдены), autoReply, attachments: [{ filename, contentType, content }] }]
 //   mail.ack({ id })         — письмо сохранено у нас, у поставщика его можно убрать

@@ -17,6 +17,7 @@ export const TYPES = [
 export const TYPE = Object.fromEntries(TYPES.map((t) => [t.id, t]));
 
 // title — строка в кабинете и в СМС. order: true — событие по заявке (в СМС добавляется её короткий номер).
+// section — куда ведёт уведомление без заявки (2.45): 'orgs' (с организацией — сразу в неё), 'specialist', 'specialists'.
 // mail: true — заказчику заявки, пришедшей по письму, уходит и письмо в ту же переписку (1.9, src/mail/mail.mjs).
 export const EVENTS = {
   submitted: { type: 'dispatch', title: 'Новая заявка ждёт подбора исполнителя', order: true },
@@ -27,35 +28,35 @@ export const EVENTS = {
   payout_failed_staff: { type: 'dispatch', title: 'Выплата исполнителю не прошла — нужен повтор', order: true },
   paid_staff: { type: 'dispatch', title: 'Заявка оплачена — можно предлагать исполнителю', order: true },
   // Досье эксперта (2.14): у эксперта истёк аттестат или полис — список специалистов показывает, у кого.
-  dossier_expired_staff: { type: 'dispatch', title: 'У эксперта истёк документ в досье — он отмечен в подборе и в списке специалистов', order: false },
+  dossier_expired_staff: { type: 'dispatch', title: 'У эксперта истёк документ в досье — он отмечен в подборе и в списке специалистов', order: false, section: 'specialists' },
   deadline_overdue_staff: { type: 'dispatch', title: 'Срок по заявке прошёл, результат не выдан', order: true },
   refund_failed_staff: { type: 'dispatch', title: 'Возврат заказчику не прошёл — нужен повтор', order: true },
 
   offer: { type: 'offers', title: 'Вам предложено новое дело', order: true },
-  crm_offer: { type: 'offers', title: 'Новое предложение госзаказа — принять можно в БЕРТЕЛ CRM', order: false },
+  crm_offer: { type: 'offers', title: 'Новое предложение госзаказа — принять можно в БЕРТЕЛ CRM', order: false, section: 'specialist' },
 
   offer_withdrawn: { type: 'executor_work', title: 'Предложение дела снято', order: true },
   inspection_done: { type: 'executor_work', title: 'Владелец объекта прислал фото осмотра', order: true },
   onsite_done: { type: 'executor_work', title: 'Помощник завершил выезд: фото и данные с объекта в деле', order: true },
   // Помощнику на объекте (2.4) — без номера заявки: заявку он не видит, выезд — в разделе «Специалист».
-  onsite_assigned: { type: 'executor_work', title: 'Вам назначен выезд на объект', order: false },
-  onsite_cancelled: { type: 'executor_work', title: 'Выезд на объект отменён', order: false },
+  onsite_assigned: { type: 'executor_work', title: 'Вам назначен выезд на объект', order: false, section: 'specialist' },
+  onsite_cancelled: { type: 'executor_work', title: 'Выезд на объект отменён', order: false, section: 'specialist' },
   // Руководителю организации исполнителя (2.5а): эксперт подписал результат — нужна подпись организации (раздел «Организации»).
-  org_sign_needed: { type: 'executor_work', title: 'Эксперт подписал заключение — нужна подпись организации', order: false },
+  org_sign_needed: { type: 'executor_work', title: 'Эксперт подписал заключение — нужна подпись организации', order: false, section: 'orgs' },
   // Эксперту (2.27): руководитель организации вернул файл с замечанием до подписи организации — подпись эксперта снята.
   org_returned: { type: 'executor_work', title: 'Руководитель вернул отчёт с замечанием — исправьте и подпишите заново', order: true },
   // Внутренняя переписка организации по делу (2.28): эксперту — от руководителя; руководителю — от эксперта («Дела экспертов»).
   org_chat_expert: { type: 'executor_work', title: 'Руководитель организации написал Вам по делу', order: true },
-  org_chat_head: { type: 'executor_work', title: 'Эксперт написал Вам по делу — «Дела экспертов» в разделе «Организации»', order: false },
+  org_chat_head: { type: 'executor_work', title: 'Эксперт написал Вам по делу — «Дела экспертов» в разделе «Организации»', order: false, section: 'orgs' },
   rework: { type: 'executor_work', title: 'Результат возвращён на доработку', order: true },
   // Напоминания о сроках (2.13): src/notify/reminders.mjs, раз в минуту вместе с повтором СМС.
   deadline_soon: { type: 'executor_work', title: 'До срока по делу осталось 3 дня', order: true },
   deadline_tomorrow: { type: 'executor_work', title: 'Срок по делу — завтра', order: true },
   deadline_overdue: { type: 'executor_work', title: 'Срок по делу прошёл — сдайте результат или напишите диспетчеру', order: true },
   // Досье эксперта (2.14): src/dossier/dossier.mjs, раз в минуту вместе с напоминаниями о сроках дел.
-  dossier_month: { type: 'executor_work', title: 'Через 30 дней кончается срок документа в досье — обновите его в разделе «Специалист»', order: false },
-  dossier_week: { type: 'executor_work', title: 'Через 7 дней кончается срок документа в досье — обновите его в разделе «Специалист»', order: false },
-  dossier_expired: { type: 'executor_work', title: 'Истёк срок документа в досье — обновите его в разделе «Специалист»', order: false },
+  dossier_month: { type: 'executor_work', title: 'Через 30 дней кончается срок документа в досье — обновите его в разделе «Специалист»', order: false, section: 'specialist' },
+  dossier_week: { type: 'executor_work', title: 'Через 7 дней кончается срок документа в досье — обновите его в разделе «Специалист»', order: false, section: 'specialist' },
+  dossier_expired: { type: 'executor_work', title: 'Истёк срок документа в досье — обновите его в разделе «Специалист»', order: false, section: 'specialist' },
   result_accepted: { type: 'executor_work', title: 'Результат принят проверкой', order: true },
   executor_cancelled: { type: 'executor_work', title: 'Дело отменено', order: true },
   executor_closed: { type: 'executor_work', title: 'Заявка закрыта', order: true },
@@ -76,14 +77,15 @@ export const EVENTS = {
   refund_failed: { type: 'money', title: 'Возврат денег не прошёл — диспетчер повторит', order: true },
 
   // Руководителю организации (2.17) — без номера заявки: заявку он не видит, дело — в «Делах экспертов» раздела «Организации».
-  org_offer: { type: 'org_cases', title: 'Организации предложено дело — назначьте эксперта в разделе «Организации»', order: false },
-  org_expert_declined: { type: 'org_cases', title: 'Эксперт отказался от дела — назначьте другого или откажитесь', order: false },
-  org_offer_withdrawn: { type: 'org_cases', title: 'Предложение дела организации снято', order: false },
+  org_offer: { type: 'org_cases', title: 'Организации предложено дело — назначьте эксперта в разделе «Организации»', order: false, section: 'orgs' },
+  org_expert_declined: { type: 'org_cases', title: 'Эксперт отказался от дела — назначьте другого или откажитесь', order: false, section: 'orgs' },
+  org_offer_withdrawn: { type: 'org_cases', title: 'Предложение дела организации снято', order: false, section: 'orgs' },
 
-  invite: { type: 'org_invites', title: 'Вас пригласили в организацию', order: false },
+  invite: { type: 'org_invites', title: 'Вас пригласили в организацию', order: false, section: 'orgs' },
 };
 
 const ID_RE = /^[a-z_]{1,40}$/;
+export const SECTIONS = ['orgs', 'specialist', 'specialists'];
 
 // Проверка реестра при запуске: ошибка в описании — сервер не стартует (как у модулей-профессий).
 export function validateRegistry(types = TYPES, events = EVENTS) {
@@ -98,6 +100,9 @@ export function validateRegistry(types = TYPES, events = EVENTS) {
     if (!ids.has(e.type)) throw new Error(`уведомления: у события «${id}» неизвестный вид «${e.type}»`);
     if (e.mail !== undefined && (typeof e.mail !== 'boolean' || !e.order)) throw new Error(`уведомления: письмо — только у события по заявке («${id}»)`);
     if (!e.title || e.title.length > 120) throw new Error(`уведомления: у события «${id}» нет текста или он длиннее 120 знаков`);
+    // Уведомление без заявки должно куда-то вести (2.45): иначе человек видит строку и не знает, где действовать.
+    if (e.section !== undefined && !SECTIONS.includes(e.section)) throw new Error(`уведомления: у события «${id}» неизвестный раздел «${e.section}»`);
+    if (!e.order && !e.section) throw new Error(`уведомления: событие «${id}» без заявки — укажите раздел (section)`);
   }
 }
 

@@ -25,13 +25,20 @@ export async function unreadCount(sql, userId) {
   return (await sql.one`select count(*)::int as n from notifications where user_id = ${userId} and read_at is null`).n;
 }
 
+function sectionOf(actor, r) {
+  const sec = EVENTS[r.event]?.section ?? null;
+  if (sec === 'orgs' && r.org_id && actor.orgs.some((m) => m.org_id === r.org_id)) return `org=${r.org_id}`;
+  return sec;
+}
+
 export function notifyOps() {
   return [
     {
       id: 'notifications.list', method: 'GET', path: '/api/notifications', auth: 'user', access: 'self',
       async handler({ sql, actor }) {
         const rows = await sql`
-          select n.id, n.event, n.order_id, n.created_at, n.read_at from notifications n
+          select n.id, n.event, n.order_id, n.org_id, g.name as org_name, n.created_at, n.read_at from notifications n
+          left join organizations g on g.id = n.org_id
           where n.user_id = ${actor.id} order by n.id desc limit ${LIST_LIMIT}`;
         const orderIds = [...new Set(rows.map((r) => r.order_id).filter(Boolean))];
         const orders = orderIds.length ? await sql`select * from orders where id = any(${orderIds}::uuid[])` : [];
@@ -49,9 +56,11 @@ export function notifyOps() {
               // Ссылка и название — только если заявка сейчас доступна.
               order_id: order ? order.id : null,
               order_title: order ? order.title : null,
-              // Приглашение открывается в разделе «Организации» (там видно, от кого оно, пока действует); сообщение эксперта
-              // руководителю (2.28) — там же, в «Делах экспертов».
-              section: ['invite', 'org_chat_head'].includes(r.event) ? 'orgs' : ['crm_offer', 'onsite_assigned', 'onsite_cancelled'].includes(r.event) ? 'specialist' : null,
+              // Куда ведёт уведомление без заявки (2.45) — раздел из реестра; по организации — сразу в неё (если человек
+              // в ней состоит: иначе — общий раздел «Организации», где видно приглашение).
+              section: sectionOf(actor, r),
+              // Какая организация (2.45): у руководителя их может быть несколько.
+              org_name: r.org_id && actor.orgs.some((m) => m.org_id === r.org_id) ? r.org_name : null,
             };
           }),
         };

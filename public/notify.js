@@ -1,13 +1,14 @@
 // Раздел «Уведомления» (задача 1.7): лента (непрочитанные отмечены точкой; при открытии раздела отмечаются прочитанными)
 // и настройки СМС по видам. Тексты — только через textContent.
-import { api, el, say } from '/common.js';
+import { api, el, say, quoted } from '/common.js';
 import { show, setUnread } from '/shell.js';
 
 const $ = (id) => document.getElementById(id);
 const dateRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
 
 function item(n) {
-  const where = n.order_ref ? [n.order_title, `заявка ${n.order_ref.replace(' ', '\u00a0')}`].filter(Boolean).join(' · ') : null;
+  const where = n.order_ref ? [n.order_title, `заявка ${n.order_ref.replace(' ', '\u00a0')}`].filter(Boolean).join(' · ')
+    : n.org_name ? `Организация ${quoted(n.org_name)}` : null;
   const body = [
     el('div', { class: 'title', text: n.title }),
     ...(where ? [el('div', { class: 'muted', text: where })] : []),

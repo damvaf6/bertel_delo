@@ -282,3 +282,50 @@ test('приглашение в организацию: с учётной зап
   assert.deepEqual(unknown, [text]);
   assert.equal((await S.sql`select count(*)::int as n from users where phone = '+79990000713'`)[0].n, 0, 'учётная запись не заводится');
 });
+
+test('все виды уведомлений (2.45): каждое событие где-то наступает, у каждого вида есть события, без заявки — ведёт в раздел', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const files = [];
+  const walk = (d) => { for (const f of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, f.name); if (f.isDirectory()) walk(p); else if (p.endsWith('.mjs') && !p.endsWith('registry.mjs')) files.push(fs.readFileSync(p, 'utf8')); } };
+  walk('src');
+  const code = files.join('\n');
+  for (const id of Object.keys(EVENTS)) assert.match(code, new RegExp(`['"\`]${id}['"\`]`), `событие «${id}» нигде не наступает`);
+  for (const t of TYPES) assert.ok(Object.values(EVENTS).some((e) => e.type === t.id), `у вида «${t.id}» нет событий`);
+  for (const [id, e] of Object.entries(EVENTS)) if (!e.order) assert.ok(e.section, `«${id}»: без заявки и без раздела`);
+  assert.throws(() => validateRegistry(TYPES, { ...EVENTS, x_test: { type: 'money', title: 'Без заявки и раздела' } }), /укажите раздел/);
+
+  // Ссылка из уведомления без заявки: по организации — сразу в неё; досье — «Специалист»; истёкший документ эксперта у
+  // диспетчера — «Специалисты».
+  const head = await login(S, '+79990000731');
+  const org = await makeOrg(S.sql, 'Тестовое бюро уведомлений');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  await S.sql`insert into notifications (user_id, type, event, org_id) values (${head.user.id}, 'executor_work', 'org_sign_needed', ${org.id}),
+              (${head.user.id}, 'org_cases', 'org_offer', ${org.id}), (${head.user.id}, 'executor_work', 'dossier_week', null)`;
+  const list = (await head.req('GET', '/api/notifications')).body.notifications;
+  assert.deepEqual(list.map((n) => n.section), ['specialist', `org=${org.id}`, `org=${org.id}`]);
+  // Ушёл из организации — ссылка на неё не даётся.
+  await S.sql`delete from org_members where org_id = ${org.id} and user_id = ${head.user.id}`;
+  assert.deepEqual((await head.req('GET', '/api/notifications')).body.notifications.map((n) => n.section), ['specialist', 'orgs', 'orgs']);
+  await S.sql`insert into notifications (user_id, type, event) values (${dispatcher.user.id}, 'dispatch', 'dossier_expired_staff')`;
+  assert.equal((await dispatcher.req('GET', '/api/notifications')).body.notifications[0].section, 'specialists');
+});
+
+test('лишних уведомлений нет (2.45): один человек — одна строка на событие, даже если он подходит по двум признакам', async () => {
+  // Руководитель организации-заказчика, который сам создал заявку и одновременно диспетчер, получает «цена назначена»
+  // один раз, а своё же действие — не получает.
+  const both = await login(S, '+79990000732');
+  await setPlatformRole(S.sql, both.user.id, 'dispatcher');
+  const org = await makeOrg(S.sql, 'Тестовая фирма уведомлений');
+  await addMember(S.sql, org.id, both.user.id, 'head');
+  const o = (await both.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Своя заявка диспетчера', org_id: org.id })).body.order;
+  assert.equal((await both.req('PATCH', `/api/orders/${o.id}`, READY)).status, 200);
+  assert.equal((await step(both, o, 'matching', 'new')).status, 200);
+  assert.equal((await dispatcher.req('PUT', `/api/orders/${o.id}/price`, { price: '9000' })).status, 200);
+  const rows = await S.sql`select event, count(*)::int as n from notifications where user_id = ${both.user.id} and order_id = ${o.id} group by event order by event`;
+  assert.deepEqual(rows.map((r) => [r.event, r.n]), [['priced', 1]], 'своя отправка — без уведомления, цена — одна строка');
+  // Во всех заявках этого файла: одно действие (одна транзакция — одно время now()) не даёт человеку две одинаковые строки.
+  const dup = await S.sql`select user_id, event, order_id, count(*)::int as n from notifications
+                          group by user_id, event, order_id, created_at having count(*) > 1`;
+  assert.deepEqual(dup, [], 'нет двойных уведомлений от одного действия');
+});
