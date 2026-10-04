@@ -418,6 +418,33 @@ test('общий прогон: сквозной путь экспертизы �
   await expect(sp.locator('#analogs-list li.analog').first().locator('.badge')).toHaveText('подтверждён');
   await expect(sp.locator('#analogs-state')).toContainText('Подтверждено аналогов: 1 из 3');
   await shot(sp, '12r-analog-podtverzhden');
+  // Распознавание скриншота (Yandex Vision): только скриншот, без текста — ИИ сам читает цену и признаки с картинки.
+  await expect(sp.locator('#analogs-ai-note')).toHaveText(/ИИ прочитает скриншот/);
+  const ocrPng = Buffer.from((await sp.evaluate(() => {
+    const lines = ['Продаётся 2-комнатная квартира', 'Площадь 42 м², этаж 3 из 9', 'Москва, ул. Тестовая, д. 21', 'Цена 12 300 000 ₽'];
+    const c = document.createElement('canvas');
+    c.width = 1080; c.height = 700;
+    const g = c.getContext('2d');
+    g.fillStyle = '#ffffff'; g.fillRect(0, 0, 1080, 700);
+    g.fillStyle = '#111'; g.font = 'bold 56px sans-serif';
+    lines.forEach((t, i) => g.fillText(t, 40, 120 + i * 140));
+    return c.toDataURL('image/png');
+  })).split(',')[1], 'base64');
+  // После конца картинки — тот же текст для поддельного распознавания на локальном стенде (Yandex Vision его не читает).
+  const ocrShot = Buffer.concat([ocrPng, Buffer.from('OCR:Продаётся 2-комнатная квартира, 42 м², этаж 3 из 9. Москва, ул. Тестовая, д. 21. Цена 12 300 000 ₽', 'utf8')]);
+  await abox.getByLabel('Ссылка на объявление').fill(`https://www.cian.ru/sale/flat/${RUN}0002/`);
+  await sp.locator('#analogs-file').setInputFiles({ name: 'Screenshot_cian_2.png', mimeType: 'image/png', buffer: ocrShot });
+  await abox.getByRole('button', { name: 'Добавить аналог' }).click();
+  await expect(sp.locator('#analogs-msg')).toContainText(/ИИ заполнил признаков: \d+/, { timeout: AI_WAIT });
+  const ocard = sp.locator('#analogs-list li.analog').nth(1);
+  await expect(ocard).toContainText('Аналог 2 · cian.ru');
+  await expect(ocard.getByLabel(/Цена, руб/)).toHaveValue('12300000');
+  await shot(sp, '12r2-analog-so-skrinshota');
+  // Учебный аналог убираем — дальше в деле один подтверждённый, как раньше.
+  sp.once('dialog', (d) => d.accept());
+  await ocard.getByRole('button', { name: 'Убрать' }).click();
+  await expect(sp.locator('#analogs-msg')).toHaveText('Аналог убран');
+  await expect(sp.locator('#analogs-list li.analog')).toHaveCount(1);
   // Черновик заключения от ИИ (задача 2.2): готовится по заявке, эксперт заполняет пометки и прикладывает Word.
   await sp.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
   await expect(sp.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте', { timeout: AI_WAIT });

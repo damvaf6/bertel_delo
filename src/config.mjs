@@ -46,6 +46,10 @@ export function loadConfig(env = process.env) {
       yandex: {
         url: env.OCR_YANDEX_URL || 'https://ocr.api.cloud.yandex.net/ocr/v1/recognizeText',
         folder: env.AI_YANDEX_FOLDER || '',
+        // Как входить: 'api-key' — ключ сервисного аккаунта; 'metadata' — временный IAM-токен сервисного аккаунта
+        // контейнера из сервиса метаданных облака (ключ не нужен, право ai.vision.user выдаёт Terraform; stage).
+        auth: env.OCR_YANDEX_AUTH || 'api-key',
+        metadataUrl: env.OCR_YANDEX_METADATA_URL || 'http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token',
         apiKey: env.OCR_YANDEX_API_KEY || env.AI_YANDEX_API_KEY || '',
       },
     },
@@ -125,7 +129,9 @@ export function loadConfig(env = process.env) {
     if (driver === 'gigachat' && !cfg.ai.gigachat.authKey) throw new ConfigError('GigaChat: нужен GIGACHAT_AUTH_KEY');
   }
   if (!OCR_DRIVERS.includes(cfg.providers.ocr)) throw new ConfigError(`OCR_PROVIDER: одно из ${OCR_DRIVERS.filter(Boolean).join(', ')} или пусто`);
-  if (cfg.providers.ocr === 'yandex' && (!cfg.ocr.yandex.apiKey || !cfg.ocr.yandex.folder)) throw new ConfigError('Распознавание Yandex: нужны AI_YANDEX_FOLDER и ключ (OCR_YANDEX_API_KEY или AI_YANDEX_API_KEY)');
+  if (!['api-key', 'metadata'].includes(cfg.ocr.yandex.auth)) throw new ConfigError('OCR_YANDEX_AUTH: api-key или metadata');
+  if (cfg.providers.ocr === 'yandex' && !cfg.ocr.yandex.folder) throw new ConfigError('Распознавание Yandex: нужен AI_YANDEX_FOLDER');
+  if (cfg.providers.ocr === 'yandex' && cfg.ocr.yandex.auth === 'api-key' && !cfg.ocr.yandex.apiKey) throw new ConfigError('Распознавание Yandex: нужен ключ (OCR_YANDEX_API_KEY или AI_YANDEX_API_KEY) или OCR_YANDEX_AUTH=metadata');
   if (cfg.ai.fallback && cfg.ai.fallback === cfg.providers.ai) throw new ConfigError('AI_FALLBACK совпадает с AI_PROVIDER');
   if (!Number.isInteger(cfg.ai.dailyLimit) || cfg.ai.dailyLimit < 1) throw new ConfigError('AI_DAILY_LIMIT: целое число от 1');
   if (!Number.isFinite(cfg.ai.budgetRub) || cfg.ai.budgetRub < 0) throw new ConfigError('AI_BUDGET_RUB: число рублей от 0');

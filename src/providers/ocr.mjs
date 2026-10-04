@@ -1,7 +1,8 @@
 // Распознавание текста на скриншоте (2.32: ИИ читает скриншот объявления и предлагает признаки аналога).
 //   ocr.recognize({ buf, mime }) → { text }   — только картинки (jpeg, png); PDF читается без распознавания (src/ai/extract.mjs)
 // Поставщик — настройка OCR_PROVIDER: '' (выключено: эксперт вставляет текст объявления сам), 'fake' (проверки),
-// 'yandex' (Yandex Vision OCR, данные в России; ключ — тот же сервисный аккаунт, что у YandexGPT, с правом ai.vision.user).
+// 'yandex' (Yandex Vision OCR, данные в России; сервисный аккаунт ядра с правом ai.vision.user — по ключу или, на stage,
+// временным IAM-токеном из сервиса метаданных облака: OCR_YANDEX_AUTH=metadata, отдельный ключ не нужен).
 import { makeFake, ProviderError } from './fake.mjs';
 
 export const OCR_DRIVERS = ['', 'fake', 'yandex'];
@@ -16,13 +17,32 @@ export function createOcr(cfg) {
   throw new Error(`Распознавание «${d}» не подключено`);
 }
 
+// Временный IAM-токен сервисного аккаунта контейнера (живёт ~12 ч); берём заново за 5 минут до конца. Токен нигде не пишем.
+function metadataToken(url) {
+  let token = '', until = 0;
+  return async () => {
+    if (token && Date.now() < until) return token;
+    const r = await fetch(url, { headers: { 'Metadata-Flavor': 'Google' }, signal: AbortSignal.timeout(5_000) });
+    if (!r.ok) throw new ProviderError('ocr', `сервис метаданных: ответ ${r.status}`);
+    let data;
+    try { data = JSON.parse(await r.text()); } catch { throw new ProviderError('ocr', 'сервис метаданных: неверный формат ответа'); }
+    if (!data?.access_token) throw new ProviderError('ocr', 'сервис метаданных: нет токена');
+    token = String(data.access_token);
+    until = Date.now() + Math.max(0, (Number(data.expires_in) || 0) - 300) * 1000;
+    return token;
+  };
+}
+
 function yandexOcr(c) {
+  const auth = c.auth === 'metadata'
+    ? ((get) => async () => `Bearer ${await get()}`)(metadataToken(c.metadataUrl))
+    : async () => `Api-Key ${c.apiKey}`;
   return {
     driver: 'yandex',
     async recognize({ buf, mime }) {
       const r = await fetch(c.url, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Api-Key ${c.apiKey}`, 'x-folder-id': c.folder, 'x-data-logging-enabled': 'false' },
+        headers: { 'content-type': 'application/json', authorization: await auth(), 'x-folder-id': c.folder, 'x-data-logging-enabled': 'false' },
         body: JSON.stringify({ mimeType: mime === 'image/png' ? 'PNG' : 'JPEG', languageCodes: ['ru', 'en'], model: 'page', content: buf.toString('base64') }),
         signal: AbortSignal.timeout(TIMEOUT_MS),
       });
