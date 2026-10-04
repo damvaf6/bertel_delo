@@ -41,6 +41,7 @@ button, .btn {
 }
 button.secondary, .btn.secondary { background: #fff; color: var(--accent); }
 button.link { background: none; border: none; color: var(--accent); padding: 8px 0; min-height: 0; font-weight: 500; }
+a.link { display: inline-block; color: var(--accent); padding: 8px 0; font-weight: 500; }
 button.danger { background: #fff; color: var(--danger); border-color: var(--danger); }
 button:disabled { opacity: .6; cursor: default; }
 .wide { width: 100%; }

@@ -277,6 +277,21 @@ export const RESOURCES = {
     },
     level: (actor, { visit }) => (visit.helper_id === actor.id ? LEVEL.write : LEVEL.none),
   },
+  // Карточка эксперта (2.35): квалификация, допуски, досье без копий, итоги работы, загрузка, история дел. Видят диспетчер
+  // и администратор, руководитель организации, от которой эксперт работает (выбрана в профиле, он в ней состоит), и сам
+  // эксперт. Руководитель другой организации, заказчик, посторонний — «не найдено».
+  specialistCard: {
+    async load(sql, id) {
+      if (!UUID_RE.test(id)) return null;
+      const sp = await sql.one`select * from specialists where user_id = ${id}`;
+      if (!sp) return null;
+      return { subject: sp, specialist: sp, signOrg: await executorSignOrg(sql, sp.user_id) };
+    },
+    level: (actor, { specialist, signOrg }) => {
+      if (isStaff(actor) || specialist.user_id === actor.id) return LEVEL.read;
+      return signOrg && roleIn(actor, signOrg.id) === 'head' ? LEVEL.read : LEVEL.none;
+    },
+  },
   // Разбор проблемы ИИ: только автор.
   consultation: {
     async load(sql, id) {

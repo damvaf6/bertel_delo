@@ -4,6 +4,7 @@
 // с экспертом (2.28) — у каждого дела.
 // «Ждут назначения» (2.17): дела, предложенные диспетчером организации, — руководитель назначает эксперта или отказывается.
 import { api, el, say } from '/common.js';
+import { expertLink } from '/expertcard.js';
 import { dayRu } from '/order.js';
 import { rub } from '/money.js';
 import { orgChat } from '/orgchat.js';
@@ -25,7 +26,8 @@ export async function loadOrgCases(org) {
   $('org-cases-load').replaceChildren(...load.map((l) => el('li', { 'data-expert': l.user_id },
     el('div', { class: 'title', text: l.full_name }),
     el('div', { class: `muted${l.overdue ? ' overdue' : ''}`, text: [`в работе: ${l.in_work}`, l.offered ? `предложено: ${l.offered}` : null,
-      l.overdue ? `просрочено: ${l.overdue}` : null].filter(Boolean).join(' · ') }))));
+      l.overdue ? `просрочено: ${l.overdue}` : null].filter(Boolean).join(' · ') }),
+    expertLink(l.user_id))));
   const active = cases.filter((c) => c.active);
   const done = cases.filter((c) => !c.active);
   $('org-cases-empty').classList.toggle('hidden', cases.length > 0);

@@ -3,6 +3,7 @@ import { api, el, say, ROLE_RU } from '/common.js';
 import { state, show, refreshMe } from '/shell.js';
 import { dayRu } from '/order.js';
 import { showDossier } from '/dossier.js';
+import { expertLink } from '/expertcard.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -46,6 +47,7 @@ export async function loadMatch(current, reopen) {
     el('ul', { class: 'features' }, ...Object.values(c.score.features).map((f) => el('li', { text: `${f.name}: ${f.score} — ${f.note}` }))),
     // Досье (2.14): истёкший аттестат или полис — предупреждение; предложить дело всё равно можно.
     ...(c.dossier_expired?.length ? [el('div', { class: 'overdue', 'data-role': 'dossier-expired', text: `В досье истёк срок: ${c.dossier_expired.join(', ')}` })] : []),
+    expertLink(c.user_id),
     c.user_id === cur ? el('span', { class: 'badge', text: 'Предложено сейчас' })
       : el('button', { class: 'secondary', 'data-action': 'offer', onclick: () => offer(order, c, reopen) }, 'Предложить дело'))));
 }
@@ -144,5 +146,6 @@ export async function showSpecialists() {
       s.regions.map((r) => (r === 'moscow' ? 'Москва' : 'область')).join(' и ')].join(' · ') }),
     el('div', { class: 'muted', text: s.permits.length ? `Допуски: ${s.permits.map(permitText).join('; ')}` : 'Допусков нет' }),
     ...(s.dossier_alerts?.length ? [el('div', { class: 'overdue', text: s.dossier_alerts.map((a) => `${a.kind_name}: ${a.state === 'expired' ? 'срок истёк' : `срок до ${dayRu(a.valid_until)}`}`).join('; ') })] : []),
-    ...(s.crm ? [el('div', { class: 'muted', text: `Из БЕРТЕЛ CRM · дел там: ${s.external_load}${s.crm.languages.length ? ` · языки: ${s.crm.languages.join(', ')}` : ''}` })] : []))));
+    ...(s.crm ? [el('div', { class: 'muted', text: `Из БЕРТЕЛ CRM · дел там: ${s.external_load}${s.crm.languages.length ? ` · языки: ${s.crm.languages.join(', ')}` : ''}` })] : []),
+    expertLink(s.user_id))));
 }

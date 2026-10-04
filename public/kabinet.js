@@ -12,6 +12,7 @@ import { showNotifications } from '/notify.js';
 import { showAssistant } from '/assistant.js';
 import { showMail } from '/mail.js';
 import { loadToday } from '/today.js';
+import { showExpertCard } from '/expertcard.js';
 
 const $ = (id) => document.getElementById(id);
 const dateRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
@@ -37,6 +38,7 @@ async function route() {
   if ((m = h.match(/^#order=([0-9a-f-]{36})$/i))) return openOrder(m[1]);
   if ((m = h.match(/^#org=([0-9a-f-]{36})$/i))) return showOrg(m[1]);
   if (h === '#orgs') return showOrgs();
+  if ((m = h.match(/^#expert=([0-9a-f-]{36})$/i))) return showExpertCard(m[1]);
   if (h === '#profile') return showProfile();
   if (h === '#assistant') return showAssistant();
   if ((m = h.match(/^#assistant=([0-9a-f-]{36})$/i))) return showAssistant(m[1]);

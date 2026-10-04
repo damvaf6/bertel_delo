@@ -2371,3 +2371,51 @@ test('«Сегодня» (2.34): эксперт — горит, вернули, 
   void customer;
   for (const c of [dctx, sctx, hctx]) await c.close();
 });
+
+// Карточка эксперта (2.35): диспетчер открывает её из подбора, руководитель — из «Дел экспертов»; досье без копий,
+// допуски, итоги работы и оценка «качество», история дел без данных заказчика.
+test('карточка эксперта (2.35): из подбора у диспетчера и из «Дел экспертов» у руководителя', async ({ page, browser, baseURL }) => {
+  const D = '+79990003701', S = '+79990003702', HD = '+79990003703', C = '+79990003704';
+  await signIn(page, C);
+  const dctx = await phoneContext(browser, baseURL), sctx = await phoneContext(browser, baseURL), hctx = await phoneContext(browser, baseURL);
+  const dp = await dctx.newPage(), sp = await sctx.newPage(), hp = await hctx.newPage();
+  const disp = await signIn(dp, D), spec = await signIn(sp, S), head = await signIn(hp, HD);
+  await sp.request.patch('/api/me', { data: { full_name: 'Эксперт Карточный' }, headers: H });
+  let orgId;
+  await db(async (c) => {
+    await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    orgId = (await c.query("insert into organizations (name) values ('ООО «Карточки»') returning id")).rows[0].id;
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [orgId, head.id, spec.id]);
+    await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [spec.id, orgId]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [spec.id]);
+  });
+  expect((await sp.request.post('/api/specialist/me/dossier', { data: { kind: 'certificate', title: 'Оценка недвижимости', number: '055555-1', valid_until: inDays(300) }, headers: H })).status()).toBe(201);
+  const o = (await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира для карточки' }, headers: H })).json()).order;
+  await page.request.patch(`/api/orders/${o.id}`, { data: { deadline: inDays(8), fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, ул. Карточная, 5' } }, headers: H });
+  await page.request.post(`/api/orders/${o.id}/status`, { data: { from: 'new', to: 'matching' }, headers: H });
+  await db((c) => c.query('update orders set price_kop = 1500000, paid_at = now() where id = $1', [o.id]));
+
+  // Диспетчер: в подборе у эксперта — «Карточка эксперта».
+  await dp.goto(`/kabinet#order=${o.id}`);
+  await dp.locator('#candidates li').filter({ hasText: 'Эксперт Карточный' }).getByRole('link', { name: 'Карточка эксперта' }).click();
+  await expect(dp.locator('#expert-name')).toHaveText('Эксперт Карточный');
+  await expect(dp.locator('#expert-facts')).toContainText('ООО «Карточки»');
+  await expect(dp.locator('#expert-facts')).toContainText('Качество в подборе');
+  await expect(dp.locator('#expert-dossier li[data-kind="certificate"]')).toContainText('№ 055555-1');
+  await expect(dp.locator('#expert-dossier')).toContainText('копии нет');
+  await expect(dp.locator('#expert-permits')).toContainText('Оценка недвижимости');
+  await shot(dp, '99-kartochka-eksperta');
+  await dp.getByRole('link', { name: '← Назад' }).click();
+  await expect(dp.locator('#order-title')).toHaveText('Квартира для карточки');
+
+  // Руководитель: из «Дел экспертов».
+  await hp.goto(`/kabinet#org=${orgId}`);
+  await hp.locator('#org-cases-load li').filter({ hasText: 'Эксперт Карточный' }).getByRole('link', { name: 'Карточка эксперта' }).click();
+  await expect(hp.locator('#expert-name')).toHaveText('Эксперт Карточный');
+  await expect(hp.locator('#expert-view')).not.toContainText('Карточная');
+
+  // Заказчик по прямой ссылке — «не найдено».
+  await page.goto(`/kabinet#expert=${spec.id}`);
+  await expect(page.getByRole('heading', { name: 'Эксперт не найден' })).toBeVisible();
+  for (const c of [dctx, sctx, hctx]) await c.close();
+});

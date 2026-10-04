@@ -1342,6 +1342,14 @@ test('«Сегодня» (2.34): только свои дела и свои ор
   assert.ok(!JSON.stringify((await U.headB.req('GET', '/api/today')).body).includes(orgA.id));
 });
 
+test('карточка эксперта (2.35): диспетчер, администратор, сам эксперт; заказчик, посторонний, чужой руководитель — «не найдено»', async () => {
+  cover('specialists.card');
+  for (const k of ['dispatcher', 'admin', 'spec']) assert.equal((await U[k].req('GET', `/api/specialists/${U.spec.user.id}/card`)).status, 200, k);
+  for (const k of ['owner', 'stranger', 'headA', 'headB', 'memberA']) assert.equal((await U[k].req('GET', `/api/specialists/${U.spec.user.id}/card`)).status, 404, k);
+  // Не специалист — «не найдено» даже диспетчеру.
+  assert.equal((await U.dispatcher.req('GET', `/api/specialists/${U.owner.user.id}/card`)).status, 404);
+});
+
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {
   const PUBLIC = ['health', 'auth.code', 'auth.verify', 'files.memory', 'test.calls', 'test.script', 'test.reset', 'test.mail.inbound', 'stage.login', 'payments.notify',
     'inspect.view', 'inspect.photo', 'inspect.finish'];

@@ -16,7 +16,8 @@ export const FEATURE_NAMES = {
 
 const clamp = (n) => Math.max(0, Math.min(100, Math.round(n)));
 
-// spec: { regions, capacity, external_load }; stats: { open (дел сейчас), offers, accepted }; order: { fields, deadline };
+// spec: { regions, capacity, external_load }; stats: { open (дел сейчас), offers, accepted, done?, on_time?, returned? };
+// order: { fields, deadline };
 // daysLeft — дней до срока (null, если срока нет).
 export function scoreSpecialist(spec, stats, order, daysLeft) {
   const load = stats.open + spec.external_load;
@@ -26,14 +27,28 @@ export function scoreSpecialist(spec, stats, order, daysLeft) {
   // Срочное дело лучше отдать тому, у кого свободнее; не срочное — срок не ограничивает.
   const urgent = daysLeft !== null && daysLeft <= URGENT_DAYS;
   const deadlineScore = urgent ? loadScore : 100;
-  const enough = stats.offers >= QUALITY_MIN_OFFERS;
-  const qualityScore = enough ? clamp((100 * stats.accepted) / stats.offers) : 70;
+  // Качество (2.35): доля принятых предложений, сдано в срок и без возвратов на доработку — среднее из тех, по которым
+  // набралось данных (не меньше трёх предложений или трёх сданных дел); данных нет — нейтральная оценка.
+  const parts = [];
+  const notes = [];
+  if (stats.offers >= QUALITY_MIN_OFFERS) {
+    parts.push((100 * stats.accepted) / stats.offers);
+    notes.push(`приняты ${stats.accepted} из ${stats.offers} предложений`);
+  }
+  const done = stats.done ?? 0;
+  if (done >= QUALITY_MIN_OFFERS) {
+    parts.push((100 * (stats.on_time ?? 0)) / done);
+    parts.push(100 * (1 - Math.min(1, (stats.returned ?? 0) / done)));
+    notes.push(`в срок ${stats.on_time ?? 0} из ${done}`, `возвратов на доработку: ${stats.returned ?? 0}`);
+  }
+  const enough = parts.length > 0;
+  const qualityScore = enough ? clamp(parts.reduce((a, b) => a + b, 0) / parts.length) : 70;
 
   const features = {
     region: { score: regionScore, note: !region ? 'район не указан' : regionScore ? 'работает в этом районе' : 'вне района работы' },
     load: { score: loadScore, note: `дел сейчас: ${load} из ${spec.capacity}` },
     deadline: { score: deadlineScore, note: urgent ? `срочно (дней: ${Math.max(daysLeft, 0)})` : 'срок не жмёт' },
-    quality: { score: qualityScore, note: enough ? `приняты ${stats.accepted} из ${stats.offers} предложений` : 'пока мало данных' },
+    quality: { score: qualityScore, note: enough ? notes.join('; ') : 'пока мало данных' },
   };
   const sum = Object.values(WEIGHTS).reduce((a, b) => a + b, 0);
   const total = Math.round(Object.entries(WEIGHTS).reduce((a, [k, w]) => a + features[k].score * w, 0) / sum);
