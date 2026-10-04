@@ -1330,6 +1330,18 @@ test('аналоги в деле (2.32): видят исполнитель и с
   assert.equal((await U.spec.req('GET', `/api/orders/${o1.id}/analogs`)).body.can_edit, false);
 });
 
+test('«Сегодня» (2.34): только свои дела и свои организации; посторонний — пусто', async () => {
+  cover('today.get');
+  for (const k of ['stranger', 'owner']) {
+    const r = await U[k].req('GET', '/api/today');
+    assert.equal(r.status, 200, k);
+    assert.ok(!JSON.stringify(r.body).includes(ownOrder.id) || k === 'owner', k);
+    assert.equal(r.body.expert, null, k);
+  }
+  // Руководитель чужой организации не видит организацию A.
+  assert.ok(!JSON.stringify((await U.headB.req('GET', '/api/today')).body).includes(orgA.id));
+});
+
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {
   const PUBLIC = ['health', 'auth.code', 'auth.verify', 'files.memory', 'test.calls', 'test.script', 'test.reset', 'test.mail.inbound', 'stage.login', 'payments.notify',
     'inspect.view', 'inspect.photo', 'inspect.finish'];
