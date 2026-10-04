@@ -7,13 +7,15 @@ name: Backup (Yandex Cloud)
 # Боевой контур (prod) этим workflow не трогается — только по «да» Дамира.
 # Режим «check» — только проверка: ночные копии Яндекса и еженедельные копии в бакете (время и размер), состояние таймера.
 # Ничего не создаёт и не запускает.
+# Режим «restore» (2.40) — учебное восстановление последней еженедельной копии, которая уже лежит в бакете (её сделал
+# таймер), во временную базу внутри контейнера: новой копии не делает, рабочую базу не трогает.
 on:
   workflow_dispatch:
     inputs:
       action:
         description: 'Действие'
         type: choice
-        options: [run, check]
+        options: [run, check, restore]
         default: run
 
 jobs:
@@ -113,7 +115,7 @@ jobs:
           yc serverless trigger get --name "$TRIGGER" --format json | jq '{name, status, cron: .rule.timer.cron_expression}'
 
       - name: Запуск сейчас и проверка итога
-        if: inputs.action != 'check'
+        if: inputs.action == 'run'
         timeout-minutes: 20
         run: |
           OK=0
@@ -129,6 +131,25 @@ jobs:
           done
           [ "$OK" = 1 ] || { echo "::error::Выгрузка или учебное восстановление не удались"; exit 1; }
           jq -r '"### Выгрузка базы stage\n- копия: `\(.key)` (\(.bytes) байт)\n- учебное восстановление: таблиц \(.tables), строк \(.rows) — совпало с базой\n- время: \(.seconds) с"' \
+            "$RUNNER_TEMP/report.json" >> $GITHUB_STEP_SUMMARY
+
+      - name: Учебное восстановление последней копии из бакета
+        if: inputs.action == 'restore'
+        timeout-minutes: 20
+        run: |
+          OK=0
+          for i in 1 2 3; do
+            CODE=$(curl -sS --max-time 900 -X POST -H "Authorization: Bearer $(yc iam create-token)" \
+              -o "$RUNNER_TEMP/report.json" -w '%{http_code}' "$URL/restore-latest" || echo "нет связи")
+            # В журнал — только итог, без таблиц по отдельности.
+            echo "попытка $i: $CODE $(jq -c '{ok, key, copies, age_hours, bytes, tables, rows, migrations, missing, seconds, error}' "$RUNNER_TEMP/report.json" 2>/dev/null)"
+            if [ "$CODE" = 200 ] && jq -e '.ok == true and .tables > 0 and .migrations > 0' "$RUNNER_TEMP/report.json" >/dev/null; then
+              OK=1; break
+            fi
+            sleep 20
+          done
+          [ "$OK" = 1 ] || { echo "::error::Последняя копия из бакета не восстановилась"; exit 1; }
+          jq -r '"### Учебное восстановление копии stage\n- копия: `\(.key)` (\(.bytes) байт, \(.age_hours) ч назад; копий в бакете: \(.copies))\n- восстановлено целиком: таблиц \(.tables), строк \(.rows), миграций \(.migrations)\n- время: \(.seconds) с"' \
             "$RUNNER_TEMP/report.json" >> $GITHUB_STEP_SUMMARY
 
       - name: Проверка копий (без запуска)
