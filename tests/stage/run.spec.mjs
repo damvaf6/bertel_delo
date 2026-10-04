@@ -167,6 +167,16 @@ test('общий прогон: заявка на оценку с файлами 
   const chunks = [];
   for await (const ch of await download.createReadStream()) chunks.push(ch);
   expect(Buffer.concat(chunks).toString()).toBe(body);
+  // Большой файл (6 МБ > 3,5 МБ — предел запроса к контейнеру облака, 2.49): идёт прямо в хранилище по ссылке.
+  const big = Buffer.concat([Buffer.from(`%PDF-1.4 большой ${TAG}\n`), Buffer.alloc(6 * 1024 * 1024, 32)]);
+  await page.getByLabel('Добавить файл (до 100 МБ)').setInputFiles({ name: 'Техпаспорт большой.pdf', mimeType: 'application/pdf', buffer: big });
+  await expect(page.locator('#doc-msg')).toHaveText('Файл добавлен', { timeout: 120_000 });
+  const bigDoc = page.locator('#docs li').filter({ hasText: 'Техпаспорт большой.pdf' });
+  await expect(bigDoc).toContainText('6,0 МБ');
+  const [bigDl] = await Promise.all([page.waitForEvent('download'), bigDoc.getByRole('button', { name: 'Скачать' }).click()]);
+  const bigChunks = [];
+  for await (const ch of await bigDl.createReadStream()) bigChunks.push(ch);
+  expect(Buffer.concat(bigChunks).length).toBe(big.length);
   await shot(page, '01-zayavka');
 
   await page.getByRole('button', { name: 'Отправить заявку' }).click();
