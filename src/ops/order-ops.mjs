@@ -119,11 +119,16 @@ export function orderOps() {
   }
 
   // Главное о деле одной строкой: значения коротких полей заявки по порядку (без длинных текстов), не больше шести.
+  const clipText = (t, n) => { const x = t.replace(/\s+/g, ' ').trim(); return x.length > n ? `${x.slice(0, n - 1)}…` : x; };
   function fieldsBrief(registry, order) {
     const def = order.module ? registry.service(order.module, order.service) : null;
     if (!def) return null;
-    const parts = def.fields.filter((f) => f.type !== 'longtext' && order.fields?.[f.id] !== undefined && order.fields[f.id] !== '')
-      .map((f) => (f.type === 'select' ? f.options.find((o) => o.id === order.fields[f.id])?.name ?? order.fields[f.id] : String(order.fields[f.id])))
+    // Длинный текст — только главный (перечень имущества, что с товаром, 2.43) и коротко; «Что ещё важно знать» — нет.
+    const parts = def.fields.filter((f) => f.id !== 'comment' && order.fields?.[f.id] !== undefined && order.fields[f.id] !== '' && (f.type !== 'longtext' || f.required))
+      .map((f) => (f.type === 'select' ? f.options.find((o) => o.id === order.fields[f.id])?.name ?? order.fields[f.id]
+        : f.type === 'longtext' ? clipText(String(order.fields[f.id]), 80)
+          : f.type === 'number' ? Number(order.fields[f.id]).toLocaleString('ru-RU', { useGrouping: Math.abs(Number(order.fields[f.id])) >= 10000 })
+            : String(order.fields[f.id])))
       .slice(0, 6);
     return parts.length ? parts.join(' · ').slice(0, 300) : null;
   }
