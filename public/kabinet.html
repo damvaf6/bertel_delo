@@ -340,6 +340,7 @@
           <button type="submit" class="secondary" id="price-save">Назначить цену</button>
         </form>
         <button class="wide hidden" id="pay">Оплатить</button>
+        <button class="secondary hidden" id="invoice">Счёт для бухгалтерии (Word)</button>
         <button class="secondary hidden" id="payout-retry">Повторить выплату</button>
         <button class="secondary hidden" id="refund-retry">Повторить возврат</button>
         <h2 class="gap hidden" id="closing-title">Закрывающие документы</h2>
@@ -460,6 +461,15 @@
         <div class="field">
           <label for="org-edit-inn">ИНН организации</label>
           <input id="org-edit-inn" type="text" inputmode="numeric" maxlength="12">
+        </div>
+        <p class="muted">КПП и адрес нужны, чтобы счёт и акт по заявкам организации были на её реквизиты.</p>
+        <div class="field">
+          <label for="org-edit-kpp">КПП (если есть)</label>
+          <input id="org-edit-kpp" type="text" inputmode="numeric" maxlength="9">
+        </div>
+        <div class="field">
+          <label for="org-edit-address">Юридический адрес</label>
+          <input id="org-edit-address" type="text" maxlength="500">
         </div>
         <button type="submit" class="secondary" id="org-save">Сохранить</button>
         <p class="msg" id="org-edit-msg" role="status" aria-live="polite"></p>

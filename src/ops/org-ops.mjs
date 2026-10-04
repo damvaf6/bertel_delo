@@ -34,7 +34,19 @@ function innFrom(value) {
   return v;
 }
 
-const publicOrg = (o) => ({ id: o.id, name: o.name, inn: o.inn, created_at: o.created_at });
+function kppFrom(value) {
+  if (value == null || value === '') return null;
+  const v = String(value).replace(/\s/g, '');
+  if (!/^\d{9}$/.test(v)) throw new HttpError(400, 'bad_kpp', 'КПП: 9 цифр');
+  return v;
+}
+function addressFrom(value) {
+  if (value == null || String(value).trim() === '') return null;
+  return text(value, 'Юридический адрес', 500);
+}
+
+// Реквизиты (2.46) — для счёта и акта, когда организация заказывает экспертизу.
+const publicOrg = (o) => ({ id: o.id, name: o.name, inn: o.inn, kpp: o.kpp ?? null, legal_address: o.legal_address ?? null, created_at: o.created_at });
 const publicInvite = (i) => ({ id: i.id, org_id: i.org_id, phone: i.phone, role: i.role, created_at: i.created_at, expires_at: i.expires_at });
 
 // В организации всегда остаётся хотя бы один руководитель. Вызывать внутри транзакции:
@@ -89,8 +101,11 @@ export function orgOps() {
       async handler({ sql, actor, org, body }) {
         const name = body?.name === undefined ? org.name : text(body.name, 'Название', 300);
         const inn = body?.inn === undefined ? org.inn : innFrom(body.inn);
+        const kpp = body?.kpp === undefined ? org.kpp : kppFrom(body.kpp);
+        const address = body?.legal_address === undefined ? org.legal_address : addressFrom(body.legal_address);
         const updated = await sql.tx(async (tx) => {
-          const o = await tx.one`update organizations set name = ${name}, inn = ${inn} where id = ${org.id} returning *`;
+          const o = await tx.one`update organizations set name = ${name}, inn = ${inn}, kpp = ${kpp}, legal_address = ${address}
+                                 where id = ${org.id} returning *`;
           await audit(tx, actor, 'org.update', 'org', org.id);
           return o;
         });

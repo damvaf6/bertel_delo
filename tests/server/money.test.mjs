@@ -344,3 +344,73 @@ test('неудавшийся возврат: виден заказчику, по
   const [{ n }] = await S.sql`select count(*)::int as n from refunds where order_id = ${o.id}`;
   assert.equal(n, 1, 'один возврат на заявку');
 });
+
+test('деньги для юрлица (2.46): реквизиты организации → счёт → оплата → акт на организацию, отчёт агента, выплата — файлами Word', async () => {
+  const { extractPages } = await import('../../src/ai/extract.mjs');
+  const { makeOrg, addMember } = await import('../helpers.mjs');
+  const lawyer = await login(S, '+79990000611');
+  const org = await makeOrg(S.sql, 'ООО «Тестовая юрфирма»');
+  await addMember(S.sql, org.id, lawyer.user.id, 'head');
+  // Реквизиты организации: ИНН, КПП, адрес; неверный КПП — понятный отказ.
+  assert.equal((await lawyer.req('PATCH', `/api/orgs/${org.id}`, { kpp: '12345' })).status, 400);
+  const upd = await lawyer.req('PATCH', `/api/orgs/${org.id}`, { inn: '7700000000', kpp: '770001001', legal_address: 'г. Москва, ул. Юридическая, 1' });
+  assert.equal(upd.status, 200, JSON.stringify(upd.body));
+  assert.deepEqual([upd.body.org.kpp, upd.body.org.legal_address], ['770001001', 'г. Москва, ул. Юридическая, 1']);
+
+  const o = (await lawyer.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Оценка для арбитража', org_id: org.id })).body.order;
+  await lawyer.req('PATCH', `/api/orders/${o.id}`, READY);
+  assert.equal((await step(lawyer, o, 'matching', 'new')).status, 200);
+  const docx = async (c, path) => {
+    const r = await fetch(`${S.base}/api/orders/${o.id}/${path}`, { headers: { cookie: c.cookie } });
+    return { status: r.status, name: decodeURIComponent((r.headers.get('content-disposition') ?? '').split("UTF-8''")[1] ?? ''), buf: Buffer.from(await r.arrayBuffer()) };
+  };
+  const text = async (d) => (await extractPages(d.buf, d.name)).pages.join('\n');
+  assert.equal((await docx(lawyer, 'invoice')).status, 409, 'без цены счёта нет');
+  assert.equal((await dispatcher.req('PUT', `/api/orders/${o.id}/price`, { price: '25000' })).status, 200);
+
+  // Счёт — до оплаты: агент — оператор платформы, покупатель — организация с реквизитами, сумма, назначение платежа.
+  const inv = await docx(lawyer, 'invoice');
+  assert.equal(inv.status, 200);
+  assert.match(inv.name, /^Счёт СЧ-[0-9A-F]{8}\.docx$/);
+  const it = await text(inv);
+  assert.match(it, /Счёт на оплату № СЧ-[0-9A-F]{8} от \d+ [а-я]+ \d{4}/);
+  assert.match(it, /Проверочный документ/);
+  assert.match(it, /Агент: ООО «АИС Переводчик»/);
+  assert.match(it, /Заказчик: ООО «Тестовая юрфирма»\nИНН 7700000000, КПП 770001001\nАдрес: г\. Москва, ул\. Юридическая, 1/);
+  assert.match(it, /Итого к оплате: 25\s000,00 ₽/);
+  assert.match(it, /Назначение платежа: оплата по заявке № [0-9A-F]{8}/);
+
+  // Оплата через ЮKassa (поддельная), работа, выдача — выплата исполнителю, акт и отчёт агента.
+  assert.equal((await lawyer.req('POST', `/api/orders/${o.id}/payments`)).status, 201);
+  assert.equal((await lawyer.req('POST', `/api/orders/${o.id}/payments/refresh`)).body.money.paid, true);
+  await inWork(o);
+  await pdf(spec, o);
+  await signResults(S, spec, o.id);
+  assert.equal((await step(spec, o, 'review', 'in_work')).status, 200);
+  const rv = (await dispatcher.req('GET', `/api/orders/${o.id}/review`)).body;
+  for (const c of rv.checks) await dispatcher.req('PUT', `/api/orders/${o.id}/review/${c.id}`, { verdict: 'ok', round: rv.round });
+  assert.equal((await step(dispatcher, o, 'done', 'review')).status, 200);
+
+  const mine = await money(lawyer, o);
+  const [act] = mine.documents;
+  assert.equal(act.kind, 'act');
+  const a = await docx(lawyer, `closing/${act.id}`);
+  assert.equal(a.status, 200);
+  assert.match(a.name, /^Акт А-\d{6}\.docx$/);
+  const at = await text(a);
+  assert.match(at, /Акт об оказании услуг № А-\d{6}/);
+  assert.match(at, /Заказчик: Организация ООО «Тестовая юрфирма»\nИНН 7700000000, КПП 770001001/);
+  assert.match(at, /25\s000,00 ₽/);
+  assert.match(at, /вознаграждение агента \(20%\): 5\s000,00 ₽/);
+  assert.match(at, /Заказчик _+/);
+
+  const sm = await money(spec, o);
+  assert.equal(sm.payout.status, 'succeeded');
+  assert.equal(sm.payout.amount_kop, 2000000);
+  const rep = await docx(spec, `closing/${sm.documents[0].id}`);
+  const rt = await text(rep);
+  assert.match(rt, /Отчёт агента № О-\d{6}/);
+  assert.match(rt, /25\s000,00 ₽[\s\S]*5\s000,00 ₽ \(20%\)[\s\S]*20\s000,00 ₽/);
+  assert.doesNotMatch(rt, /Юрфирма/, 'имени заказчика в отчёте исполнителю нет');
+  assert.equal((await docx(spec, `closing/${act.id}`)).status, 404, 'акт исполнителю не отдаётся');
+});
