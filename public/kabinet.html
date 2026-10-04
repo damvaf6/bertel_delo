@@ -250,6 +250,37 @@
         <ul class="list" id="onsite-visits"></ul>
         <p class="msg" id="onsite-msg" role="status" aria-live="polite"></p>
       </div>
+      <div class="card hidden" id="analogs-box">
+        <h2>Аналоги</h2>
+        <p class="muted" id="analogs-state"></p>
+        <ul class="ai-marks" id="analogs-hints"></ul>
+        <details class="field" id="analogs-search-box">
+          <summary>Где искать</summary>
+          <p class="muted" id="analogs-criteria"></p>
+          <div class="row" id="analogs-links"></div>
+          <p class="muted">Объявления находите сами в своём браузере — платформа с сайтов ничего не собирает. Имя и телефон продавца на
+            скриншоте лучше закрыть: в таблицу они не попадают.</p>
+        </details>
+        <form class="hidden" id="analogs-form" novalidate>
+          <div class="field">
+            <label for="analogs-url">Ссылка на объявление</label>
+            <input id="analogs-url" type="url" inputmode="url" autocomplete="off" placeholder="https://…" maxlength="2000">
+          </div>
+          <div class="field">
+            <label class="btn secondary" for="analogs-file" id="analogs-file-label">Скриншот или PDF страницы</label>
+            <input id="analogs-file" type="file" class="visually-hidden" accept="image/png,image/jpeg,image/webp,image/heic,application/pdf">
+            <span class="muted" id="analogs-file-name">Файл не выбран</span>
+          </div>
+          <details class="field">
+            <summary>Вставить текст объявления (необязательно)</summary>
+            <textarea id="analogs-text" maxlength="8000" placeholder="На странице объявления: выделить всё → скопировать → вставить сюда"></textarea>
+          </details>
+          <button type="submit" id="analogs-add">Добавить аналог</button>
+          <p class="muted" id="analogs-ai-note">ИИ прочитает скриншот и сам заполнит цену и признаки — Вам останется проверить и подтвердить.</p>
+        </form>
+        <ol class="list" id="analogs-list"></ol>
+        <p class="msg" id="analogs-msg" role="status" aria-live="polite"></p>
+      </div>
       <div class="card hidden" id="draft-box">
         <h2>Черновик заключения</h2>
         <p class="muted" id="draft-state"></p>

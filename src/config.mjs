@@ -2,6 +2,7 @@
 // На stage/prod недопустимы: поддельные поставщики, база без проверки сертификата, служебные тестовые пути.
 
 import { AI_DRIVERS } from './providers/ai.mjs';
+import { OCR_DRIVERS } from './providers/ocr.mjs';
 
 const ENVS = ['test', 'dev', 'stage', 'prod'];
 
@@ -37,6 +38,16 @@ export function loadConfig(env = process.env) {
       mail: env.MAIL_PROVIDER || 'fake',
       // Электронная подпись заключения УКЭП (2.5): до решения Дамира о поставщике — только поддельная.
       sign: env.SIGN_PROVIDER || 'fake',
+      // Распознавание текста на скриншотах аналогов (2.32): '' — выключено (на prod по умолчанию), 'fake', 'yandex'
+      // (Yandex Vision OCR). Выключено — эксперт вставляет текст объявления сам или прикладывает PDF страницы.
+      ocr: env.OCR_PROVIDER ?? (appEnv === 'prod' ? '' : 'fake'),
+    },
+    ocr: {
+      yandex: {
+        url: env.OCR_YANDEX_URL || 'https://ocr.api.cloud.yandex.net/ocr/v1/recognizeText',
+        folder: env.AI_YANDEX_FOLDER || '',
+        apiKey: env.OCR_YANDEX_API_KEY || env.AI_YANDEX_API_KEY || '',
+      },
     },
     s3: {
       endpoint: env.S3_ENDPOINT || 'https://storage.yandexcloud.net',
@@ -113,6 +124,8 @@ export function loadConfig(env = process.env) {
     if (driver === 'yandexgpt' && (!cfg.ai.yandex.apiKey || !cfg.ai.yandex.folder)) throw new ConfigError('YandexGPT: нужны AI_YANDEX_API_KEY и AI_YANDEX_FOLDER');
     if (driver === 'gigachat' && !cfg.ai.gigachat.authKey) throw new ConfigError('GigaChat: нужен GIGACHAT_AUTH_KEY');
   }
+  if (!OCR_DRIVERS.includes(cfg.providers.ocr)) throw new ConfigError(`OCR_PROVIDER: одно из ${OCR_DRIVERS.filter(Boolean).join(', ')} или пусто`);
+  if (cfg.providers.ocr === 'yandex' && (!cfg.ocr.yandex.apiKey || !cfg.ocr.yandex.folder)) throw new ConfigError('Распознавание Yandex: нужны AI_YANDEX_FOLDER и ключ (OCR_YANDEX_API_KEY или AI_YANDEX_API_KEY)');
   if (cfg.ai.fallback && cfg.ai.fallback === cfg.providers.ai) throw new ConfigError('AI_FALLBACK совпадает с AI_PROVIDER');
   if (!Number.isInteger(cfg.ai.dailyLimit) || cfg.ai.dailyLimit < 1) throw new ConfigError('AI_DAILY_LIMIT: целое число от 1');
   if (!Number.isFinite(cfg.ai.budgetRub) || cfg.ai.budgetRub < 0) throw new ConfigError('AI_BUDGET_RUB: число рублей от 0');

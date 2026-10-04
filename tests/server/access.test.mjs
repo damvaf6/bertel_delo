@@ -1274,6 +1274,62 @@ test('досье эксперта (2.14): только сам эксперт; к
   assert.equal((await exp.req('DELETE', `/api/specialist/me/dossier/${it.body.id}`)).status, 200);
 });
 
+test('аналоги в деле (2.32): видят исполнитель и служебные; меняет только исполнитель в работе; заказчику и посторонним — нет', async () => {
+  for (const id of ['analogs.list', 'analogs.add', 'analogs.file', 'analogs.file.link', 'analogs.ai', 'analogs.update', 'analogs.remove']) cover(id);
+  // Заявка без исполнителя: заказчик и его организация аналогов не видят, посторонние — «не найдено».
+  assert.equal((await U.owner.req('GET', `/api/orders/${ownOrder.id}/analogs`)).status, 403);
+  for (const k of ['memberA', 'headA']) assert.equal((await U[k].req('GET', `/api/orders/${orgOrder.id}/analogs`)).status, 403, k);
+  for (const k of ['stranger', 'headB', 'spec']) assert.equal((await U[k].req('GET', `/api/orders/${ownOrder.id}/analogs`)).status, 404, k);
+  for (const k of ['dispatcher', 'admin']) {
+    const r = await U[k].req('GET', `/api/orders/${ownOrder.id}/analogs`);
+    assert.equal(r.status, 200, k);
+    assert.equal(r.body.can_edit, false, k);
+  }
+  for (const k of ['owner', 'dispatcher', 'admin']) assert.equal((await U[k].req('POST', `/api/orders/${ownOrder.id}/analogs`, { url: 'https://www.avito.ru/moskva/kvartiry/1' })).status, 403, k);
+  for (const k of ['stranger', 'headB']) assert.equal((await U[k].req('POST', `/api/orders/${ownOrder.id}/analogs`, { url: 'https://www.avito.ru/moskva/kvartiry/1' })).status, 404, k);
+  // Дело в работе у исполнителя: он добавляет; заказчик, диспетчер — не меняют; аналог чужого дела — «не найдено».
+  const mk = async (title) => {
+    const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
+    await S.sql`update orders set executor_user_id = ${U.spec.user.id}, status = 'in_work', deadline = current_date + 10,
+                 fields = ${JSON.stringify({ region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 1', area: 50 })} where id = ${o.id}`;
+    return o;
+  };
+  const o1 = await mk('Аналоги: дело 1');
+  const o2 = await mk('Аналоги: дело 2');
+  const a1 = (await U.spec.req('POST', `/api/orders/${o1.id}/analogs`, { url: 'https://www.avito.ru/moskva/kvartiry/111' })).body.id;
+  const a2 = (await U.spec.req('POST', `/api/orders/${o2.id}/analogs`, { url: 'https://www.cian.ru/sale/flat/222/' })).body.id;
+  assert.ok(a1 && a2);
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('OCR: Цена 9 000 000 ₽')]);
+  const file = (c, o, a) => c.req('POST', `/api/orders/${o.id}/analogs/${a}/file`, png, { raw: true, headers: { 'content-type': 'image/png', 'x-file-name': encodeURIComponent('s.png') } });
+  for (const k of ['owner', 'dispatcher']) {
+    const c = U[k];
+    assert.equal((await c.req('PUT', `/api/orders/${o1.id}/analogs/${a1}`, { fields: { price_rub: 1 } })).status, 403, k);
+    assert.equal((await c.req('DELETE', `/api/orders/${o1.id}/analogs/${a1}`)).status, 403, k);
+    assert.equal((await c.req('POST', `/api/orders/${o1.id}/analogs/${a1}/ai`, {})).status, 403, k);
+    assert.equal((await file(c, o1, a1)).status, 403, k);
+  }
+  for (const k of ['stranger', 'headB', 'memberA']) {
+    const c = U[k];
+    assert.equal((await c.req('GET', `/api/orders/${o1.id}/analogs`)).status, 404, k);
+    assert.equal((await c.req('GET', `/api/orders/${o1.id}/analogs/${a1}/file`)).status, 404, k);
+    assert.equal((await file(c, o1, a1)).status, 404, k);
+  }
+  // Аналог другого дела по адресу этого дела — «не найдено», даже у того же исполнителя.
+  assert.equal((await U.spec.req('PUT', `/api/orders/${o1.id}/analogs/${a2}`, { fields: { price_rub: 1 } })).status, 404);
+  assert.equal((await U.spec.req('DELETE', `/api/orders/${o1.id}/analogs/${a2}`)).status, 404);
+  assert.equal((await file(U.spec, o1, a2)).status, 404);
+  assert.equal((await U.spec.req('GET', `/api/orders/${o1.id}/analogs/${a2}/file`)).status, 404);
+  assert.equal((await U.spec.req('POST', `/api/orders/${o1.id}/analogs/${a2}/ai`, {})).status, 404);
+  assert.equal((await U.spec.req('PUT', `/api/orders/${o1.id}/analogs/abc`, { fields: {} })).status, 404);
+  assert.equal((await file(U.spec, o1, a1)).status, 200);
+  assert.equal((await U.dispatcher.req('GET', `/api/orders/${o1.id}/analogs/${a1}/file`)).status, 200, 'диспетчер смотрит скриншот');
+  assert.equal((await U.owner.req('GET', `/api/orders/${o1.id}/analogs/${a1}/file`)).status, 403, 'заказчик — только в составе отчёта');
+  // Дело сдано — исполнитель больше не меняет аналоги, но видит их.
+  await S.sql`update orders set status = 'review' where id = ${o1.id}`;
+  assert.equal((await U.spec.req('PUT', `/api/orders/${o1.id}/analogs/${a1}`, { fields: { price_rub: 1 } })).status, 403);
+  assert.equal((await U.spec.req('GET', `/api/orders/${o1.id}/analogs`)).body.can_edit, false);
+});
+
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {
   const PUBLIC = ['health', 'auth.code', 'auth.verify', 'files.memory', 'test.calls', 'test.script', 'test.reset', 'test.mail.inbound', 'stage.login', 'payments.notify',
     'inspect.view', 'inspect.photo', 'inspect.finish'];

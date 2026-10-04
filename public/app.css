@@ -30,7 +30,7 @@ main { max-width: 640px; margin: 0 auto; padding: 16px; }
 h1 { font-size: 22px; margin: 0 0 12px; }
 h2 { font-size: 18px; margin: 0 0 12px; }
 label { display: block; font-size: 14px; color: var(--muted); margin: 0 0 6px; }
-input[type=text], input[type=tel], input[type=email], input[type=date], select, textarea {
+input[type=text], input[type=tel], input[type=email], input[type=date], input[type=url], select, textarea {
   width: 100%; font: inherit; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--text);
 }
 input:focus-visible, button:focus-visible, a:focus-visible { outline: 3px solid #8fb3e6; outline-offset: 1px; }
@@ -183,3 +183,15 @@ li.return.open { border-left: 3px solid var(--danger); padding-left: 8px; }
 details.returns { margin-top: 8px; }
 details.org-chat { margin-top: 8px; }
 details.org-chat summary { cursor: pointer; color: var(--accent); }
+
+/* Аналоги (2.32): карточка аналога, признаки от ИИ отмечены, предупреждения — списком. */
+.analog { border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+.analog .head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; align-items: baseline; }
+.analog a { overflow-wrap: anywhere; }
+.analog-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; margin-top: 8px; }
+.analog-fields .field { margin-bottom: 8px; min-width: 0; }
+.analog-fields .field.full { grid-column: 1 / -1; }
+.analog-fields input, .analog-fields select { width: 100%; }
+.analog-fields .from-ai { background: #fff8e0; }
+.ai-tag { font-size: 12px; color: #6b5200; margin-left: 4px; }
+.analog-warn { margin: 6px 0 0; padding-left: 18px; font-size: 14px; color: #8a4b00; overflow-wrap: anywhere; }

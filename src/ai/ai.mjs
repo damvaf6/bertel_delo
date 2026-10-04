@@ -10,7 +10,7 @@ export const DISCLAIMER = 'Это разъяснение искусственн�
   + 'за точной оценкой обращайтесь к специалисту.';
 
 // Длина ответа модели по назначению: черновик заключения длинный, проверка — список по правилам.
-const MAX_TOKENS = { draft: 6000, review: 3000 };
+const MAX_TOKENS = { draft: 6000, review: 3000, analog: 800 };
 
 export async function askAi({ sql, providers, cfg }, actor, purpose, messages) {
   const used = await sql.one`select count(*)::int as n from ai_usage where user_id = ${actor.id} and at > now() - interval '1 day'`;
@@ -281,4 +281,25 @@ export function cleanDraftAnswer(sections, text) {
   const missing = sections.filter((s) => !heads.has(headKey(s.title)));
   if (missing.length) body = [body, ...missing.map((s) => `## ${s.title}\n[заполнить: раздел не подготовлен]`)].filter(Boolean).join('\n\n');
   return body.slice(0, DRAFT_MAX);
+}
+
+// ——— Аналог со скриншота (2.32) ———
+// Модель получает ссылку и текст объявления (распознанный со скриншота, из PDF страницы или вставленный экспертом) и
+// возвращает только признаки из списка. Имя и телефон продавца не просим и не берём: среди признаков их нет.
+export const ANALOG_TEXT_MAX = 8000;
+
+export function analogMessages({ fields, url, text }) {
+  const list = fields.map((f) => `- ${f.id}: ${f.label}${f.type === 'number' ? ' (число без пробелов и единиц)' : ''}${f.type === 'select' ? ` (одно из: ${f.options.map((o) => o.id).join(' | ')})` : ''}${f.id === 'listed_on' ? ' (ГГГГ-ММ-ДД)' : ''}`);
+  return [
+    {
+      role: 'system',
+      content: [
+        'Ты помощник эксперта-оценщика. По тексту объявления заполни признаки аналога.',
+        'Бери только то, что прямо написано в объявлении. Чего нет — не пиши этот признак вовсе, ничего не выдумывай.',
+        'Не пиши имя, телефон, почту продавца и любые другие сведения о людях.',
+        'Ответь только JSON: {"fields": {"id признака": значение, …}}.',
+      ].join('\n'),
+    },
+    { role: 'user', content: ['ПРИЗНАКИ:', ...list, 'ОБЪЯВЛЕНИЕ:', `Ссылка: ${url}`, 'ТЕКСТ:', text ? text.slice(0, ANALOG_TEXT_MAX) : '(текста нет — признаки только по ссылке)'].join('\n') },
+  ];
 }

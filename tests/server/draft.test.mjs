@@ -10,6 +10,7 @@ import { cleanDraftAnswer } from '../../src/ai/ai.mjs';
 import { extractPages } from '../../src/ai/extract.mjs';
 import { buildReport, parseDraft, DOCX_MIME } from '../../src/docs/docx.mjs';
 import { makeDocx } from '../tools/make-docs.mjs';
+import { ANALOGS_MARK } from '../../src/docs/report.mjs';
 
 let S, owner, other, dispatcher, admin, spec;
 const FIELDS = { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 9', area: '54.3' };
@@ -129,7 +130,9 @@ test('эксперт правит черновик и прикладывает �
   assert.equal(r.body.error, 'draft_gaps');
   assert.match(r.body.message, /\[заполнить|\[описать/);
 
-  const final = d1.body.replace(/\[(?:заполнить|описать)[^\]]*\]/g, 'Эксперт: заполнено вручную') + '\nИтоговая стоимость: 15 000 000 руб. Заключение № 9/2026.';
+  // Метка таблицы аналогов (2.32): эксперт без аналогов в деле написал таблицу сам — метку убирает.
+  assert.ok(d1.body.includes(ANALOGS_MARK), 'в разделе аналогов — метка таблицы');
+  const final = d1.body.replace(ANALOGS_MARK, '| № | Аналог |\n| 1 | эксперт вписал сам |').replace(/\[(?:заполнить|описать)[^\]]*\]/g, 'Эксперт: заполнено вручную') + '\nИтоговая стоимость: 15 000 000 руб. Заключение № 9/2026.';
   r = await spec.req('PUT', `/api/orders/${o.id}/draft`, { body: final, from: d1.id });
   assert.equal(r.status, 200);
   const d2 = r.body.draft;
