@@ -18,6 +18,7 @@ const $ = (id) => document.getElementById(id);
 // До 3 МБ — обычной загрузкой через ядро; больше — прямо в хранилище (облако: запрос не больше 3,5 МБ, 2.49).
 const MAX_FILE = 3 * 1024 * 1024;
 const MAX_DIRECT = 100 * 1024 * 1024;
+const PHOTOS_UNFOLDED = 6;
 const FINAL = ['closed', 'cancelled'];
 const WORK_STARTED = ['in_work', 'review'];
 const DOC_KIND_RU = { basis: 'Основание', result: 'Результат работы', inspection: 'Фото осмотра' };
@@ -338,7 +339,7 @@ async function loadDocs(initial = false) {
   const unsigned = mineResults && signRequired ? documents.filter((d) => d.kind === 'result' && !d.signatures?.expert) : [];
   $('sign-all').classList.toggle('hidden', unsigned.length < 2);
   $('sign-all').textContent = `Подписать все файлы результата (${unsigned.length})`;
-  $('docs').replaceChildren(...documents.map((d) => {
+  const docLi = (d) => {
     // Результат убирает только исполнитель, пока не сдал; документы заказчика — заказчик (основание — до отправки).
     // Фото дистанционного осмотра не удаляются никем: это свидетельство осмотра со временем и местом (2.3).
     const removable = d.kind === 'inspection' ? false
@@ -351,7 +352,15 @@ async function loadDocs(initial = false) {
         el('button', { class: 'secondary', 'data-action': 'download', onclick: () => download(d) }, 'Скачать'),
         ...(removable ? [el('button', { class: 'danger', 'data-action': 'delete', onclick: () => remove(d) }, 'Удалить')] : [])),
       ...(d.kind === 'result' ? signatureBlock(d, { canSign: mineResults && signRequired, signOrg: documentsBody.signature_org }) : []));
-  }));
+  };
+  // Много фото осмотра (2.49: бывает 100) — одной свёрнутой строкой, чтобы документы и результат не терялись внизу.
+  const photos = documents.filter((d) => d.kind === 'inspection');
+  const fold = photos.length > PHOTOS_UNFOLDED;
+  $('docs').replaceChildren(...documents.filter((d) => !fold || d.kind !== 'inspection').map(docLi),
+    ...(fold ? [el('li', { class: 'doc-group', 'data-group': 'inspection' },
+      el('details', {},
+        el('summary', { text: `Фото осмотра: ${photos.length} — показать` }),
+        el('ul', { class: 'list' }, ...photos.map(docLi))))] : []));
   $('docs-empty').classList.toggle('hidden', documents.length > 0);
   $('results-later').textContent = 'Результат работы появится здесь после проверки.';
   $('results-later').classList.toggle('hidden', !(resultsHidden && ['in_work', 'review'].includes(order.status)));

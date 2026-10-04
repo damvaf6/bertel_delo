@@ -61,12 +61,23 @@ function renderSteps(r, photos) {
     ...(s.retake ? [el('div', { class: 'doc retake' },
       el('div', { class: 'photo-meta warn', text: `Попросили переснять: ${s.retake.note}` }),
       ...(r.can_issue ? [el('button', { class: 'secondary', 'data-action': 'retake-cancel', onclick: () => cancelRetake(s.retake) }, 'Отменить')] : []))] : []),
-    ...s.photos.map((p) => el('div', { class: 'doc' },
-      el('div', {},
-        el('div', { class: 'name', text: p.filename }),
-        el('div', { class: 'photo-meta', text: photoLine(p) }),
-        ...(p.geo ? [] : [el('div', { class: 'photo-meta warn', text: 'без геометки' })])),
-      el('button', { class: 'secondary', 'data-action': 'open-photo', onclick: () => open(p) }, 'Открыть'))))));
+    ...stepPhotos(s.photos))));
+}
+
+// Фото шага: до трёх — сразу, больше — свёрнуто (2.49: при 100 фото страница дела уходила на десятки экранов).
+const PHOTOS_OPEN = 3;
+function stepPhotos(photos) {
+  const row = (p) => el('div', { class: 'doc' },
+    el('div', {},
+      el('div', { class: 'name', text: p.filename }),
+      el('div', { class: 'photo-meta', text: photoLine(p) }),
+      ...(p.geo ? [] : [el('div', { class: 'photo-meta warn', text: 'без геометки' })])),
+    el('button', { class: 'secondary', 'data-action': 'open-photo', onclick: () => open(p) }, 'Открыть'));
+  if (photos.length <= PHOTOS_OPEN) return photos.map(row);
+  const noGeo = photos.filter((p) => !p.geo).length;
+  return [el('details', { class: 'step-photos' },
+    el('summary', { text: `Показать фото: ${photos.length}${noGeo ? ` (без геометки: ${noGeo})` : ''}` }),
+    ...photos.map(row))];
 }
 
 async function open(p) {
