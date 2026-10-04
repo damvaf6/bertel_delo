@@ -25,6 +25,10 @@ export function s3Storage(s3cfg) {
     endpoint: s3cfg.endpoint,
     forcePathStyle: s3cfg.forcePathStyle,
     credentials: s3cfg.accessKeyId ? { accessKeyId: s3cfg.accessKeyId, secretAccessKey: s3cfg.secretAccessKey } : undefined,
+    // Без контрольной суммы по умолчанию: иначе ссылка на загрузку подписывается с суммой пустого файла и хранилище
+    // Яндекса отвергает настоящий файл (2.49, найдено на площадке).
+    requestChecksumCalculation: 'WHEN_REQUIRED',
+    responseChecksumValidation: 'WHEN_REQUIRED',
   };
   const client = new S3Client(opts);
   // Ссылки подписываются на адрес, по которому хранилище видит пользователь.
