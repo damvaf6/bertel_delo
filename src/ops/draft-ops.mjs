@@ -6,7 +6,7 @@ import { editsDraft, seesDraft } from '../access/policy.mjs';
 import { DRAFT_GAP, DRAFT_MAX, askAi, cleanDraftAnswer, draftMessages, orderBrief } from '../ai/ai.mjs';
 import { READ_MAX_BYTES, extractPages, readableKind } from '../ai/extract.mjs';
 import { DOCX_MIME } from '../docs/docx.mjs';
-import { ANALOGS_MARK, fillTables, reportFor, tablesBrief } from '../docs/report.mjs';
+import { fillTables, reportFor, tablesBrief } from '../docs/report.mjs';
 import { analogsBrief } from '../analogs/analogs.mjs';
 import { publicDoc, saveDocument } from './core-ops.mjs';
 import { audit } from './util.mjs';
@@ -197,12 +197,8 @@ export function draftOps() {
         if (gap) throw new HttpError(409, 'draft_gaps', `В черновике остались незаполненные места, например: ${gap[0].slice(0, 120)}`);
         if (body?.confirm !== true) throw new HttpError(400, 'confirm_required', 'Подтвердите, что Вы проверили текст и отвечаете за него');
         const word = await reportFor(ctx, order, actor, cur.body);
-        // Таблица аналогов собирается из дела (2.32): метка в тексте есть, а подтверждённых аналогов нет — файл был бы с пробелом.
-        if (cur.body.includes(ANALOGS_MARK) && !word.analogs) {
-          throw new HttpError(409, 'draft_gaps', 'Таблица аналогов пустая — подтвердите аналоги в разделе «Аналоги» или уберите строку о таблице из черновика');
-        }
         const doc = await saveDocument(ctx, { filename: word.filename, mime: DOCX_MIME, buf: word.buf, kind: 'result' });
-        await audit(sql, actor, 'draft.attach', 'order', order.id, { draft: String(cur.id), document: doc.id, template: word.template });
+        await audit(sql, actor, 'draft.attach', 'order', order.id, { draft: String(cur.id), document: doc.id, template: word.template, analogs: word.analogs });
         res.status(201);
         return { document: publicDoc(doc) };
       },

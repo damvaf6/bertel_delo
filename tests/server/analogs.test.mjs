@@ -223,15 +223,21 @@ test('ИИ без скриншота: по вставленному тексту
   assert.equal(byId(r, id2).fields.price_rub, 13900000);
 });
 
-test('Word: таблица аналогов под разделом и приложение со скриншотами; без подтверждённых — файл результата не приложить', async () => {
+test('Word: таблица аналогов под разделом и приложение со скриншотами; без подтверждённых — метки в файле нет', async () => {
   const o = await inWork('realty', FLAT, 'Квартира: аналоги в Word');
   let d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {})).body.draft;
   assert.ok(d.body.includes(ANALOGS_MARK), 'метка в разделе «Аналоги и корректировки»');
   const fill = (t) => t.replace(/\[(?:заполнить|описать)[^\]]*\]/g, 'заполнено экспертом');
   d = (await spec.req('PUT', `/api/orders/${o.id}/draft`, { body: fill(d.body), from: d.id })).body.draft;
-  let r = await spec.req('POST', `/api/orders/${o.id}/draft/result`, { from: d.id, confirm: true });
-  assert.equal(r.status, 409);
-  assert.match(r.body.message, /Таблица аналогов пустая/);
+  const docText = async () => {
+    const w = await fetch(`${S.base}/api/orders/${o.id}/draft/docx`, { headers: { cookie: spec.cookie } });
+    assert.equal(w.status, 200);
+    const buf = Buffer.from(await w.arrayBuffer());
+    return { buf, text: (await extractPages(buf, 'r.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')).pages.join('\n') };
+  };
+  const empty = await docText();
+  assert.ok(!empty.text.includes(ANALOGS_MARK) && !/Скриншоты объявлений/.test(empty.text), 'без аналогов — ни метки, ни приложения');
+  let r;
 
   for (const [i, price] of [14000000, 14500000, 15000000].entries()) {
     const id = (await add(o, `https://www.cian.ru/sale/flat/40${i}/`)).body.id;
@@ -246,10 +252,7 @@ test('Word: таблица аналогов под разделом и прил�
   assert.equal(d.inputs.analogs, 3);
   assert.match(S.providers.ai.calls.at(-1).args.messages.at(-1).content, /Аналог 2: Цена, руб\. — 14 500 000/);
 
-  const w = await fetch(`${S.base}/api/orders/${o.id}/draft/docx`, { headers: { cookie: spec.cookie } });
-  assert.equal(w.status, 200);
-  const buf = Buffer.from(await w.arrayBuffer());
-  const text = (await extractPages(buf, 'r.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')).pages.join('\n');
+  const { buf, text } = await docText();
   assert.match(text, /14 500 000/);
   assert.match(text, /г\. Москва, ул\. Аналогов, 3/);
   assert.match(text, /Приложение\. Скриншоты объявлений/);
@@ -261,6 +264,8 @@ test('Word: таблица аналогов под разделом и прил�
   d = (await spec.req('PUT', `/api/orders/${o.id}/draft`, { body: fill(d.body), from: d.id })).body.draft;
   r = await spec.req('POST', `/api/orders/${o.id}/draft/result`, { from: d.id, confirm: true });
   assert.equal(r.status, 201, JSON.stringify(r.body));
+  const [doc] = await S.sql`select * from documents where id = ${r.body.document.id}`;
+  assert.match((await extractPages(await S.providers.storage.get(doc.storage_key), doc.filename, doc.mime)).pages.join('\n'), /Аналог 3 — cian\.ru/);
 });
 
 test('Word: картинки — PNG и JPEG по размеру из файла, по ширине страницы; в шаблоне организации тоже', () => {

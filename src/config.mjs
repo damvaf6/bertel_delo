@@ -38,9 +38,9 @@ export function loadConfig(env = process.env) {
       mail: env.MAIL_PROVIDER || 'fake',
       // Электронная подпись заключения УКЭП (2.5): до решения Дамира о поставщике — только поддельная.
       sign: env.SIGN_PROVIDER || 'fake',
-      // Распознавание текста на скриншотах аналогов (2.32): '' — выключено (на prod по умолчанию), 'fake', 'yandex'
-      // (Yandex Vision OCR). Выключено — эксперт вставляет текст объявления сам или прикладывает PDF страницы.
-      ocr: env.OCR_PROVIDER ?? (appEnv === 'prod' ? '' : 'fake'),
+      // Распознавание текста на скриншотах аналогов (2.32): '' — выключено (на stage и prod по умолчанию), 'fake' (проверки),
+      // 'yandex' (Yandex Vision OCR). Выключено — ИИ читает PDF страницы или вставленный экспертом текст объявления.
+      ocr: env.OCR_PROVIDER ?? (live ? '' : 'fake'),
     },
     ocr: {
       yandex: {

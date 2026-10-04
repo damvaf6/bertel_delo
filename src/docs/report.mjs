@@ -58,8 +58,6 @@ export function fillTables(body, sections, registry, order) {
 // подтверждённых аналогов дела, поэтому всегда свежие (аналог добавили после черновика — он всё равно попадёт в файл).
 export const ANALOGS_MARK = 'Таблица аналогов — из раздела «Аналоги» в деле: программа вставит её в файл Word, скриншоты объявлений — в приложение.';
 
-export const analogsGap = (spec) => `[заполнить: таблица аналогов — подтвердите не меньше ${spec.min} аналогов в разделе «Аналоги» дела]`;
-
 function placeAnalogs(text, sections, table) {
   const s = sections.find((x) => x.table === 'analogs');
   if (!s) return text;
@@ -77,8 +75,9 @@ async function analogsPart({ sql, providers, registry }, order, text) {
   if (!spec) return { text, appendix: null };
   const sections = registry.draftSections(order.module, order.service);
   const list = (await sql`select * from order_analogs where order_id = ${order.id} and deleted_at is null and confirmed_at is not null order by id`);
-  // Аналогов нет: метка становится пометкой «заполнить»; убрал метку (свою таблицу написал сам) — текст как есть.
-  if (!list.length) return { text: text.split(ANALOGS_MARK).join(analogsGap(spec)), appendix: null };
+  // Подтверждённых аналогов нет — метка просто не попадает в файл (таблицу эксперт мог написать сам; нехватку аналогов
+  // показывает раздел «Аналоги» и ИИ-проверка по правилу analogs).
+  if (!list.length) return { text: text.split(ANALOGS_MARK).join(''), appendix: null };
   const items = [];
   for (const [i, a] of list.entries()) {
     const image = a.file_key && /^image\/(png|jpeg)$/.test(a.file_mime) ? await providers.storage.get(a.file_key) : null;

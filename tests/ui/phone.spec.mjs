@@ -2086,7 +2086,7 @@ test('черновик готовым файлом Word (2.29): руководи
 });
 
 test('аналоги в деле (2.32): ссылка и скриншот — ИИ заполняет признаки, эксперт подтверждает; заказчик раздела не видит', async ({ page, browser, baseURL }) => {
-  await signIn(page, '+79990000591');
+  await signIn(page, '+79990001591');
   const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'vehicle', title: 'Машина: аналоги на телефоне' }, headers: H })).json();
   const id = created.order.id;
   expect((await page.request.patch(`/api/orders/${id}`, {
@@ -2095,7 +2095,7 @@ test('аналоги в деле (2.32): ссылка и скриншот — И
   expect((await page.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
   const sctx = await phoneContext(browser, baseURL);
   const sp = await sctx.newPage();
-  const spec = await signIn(sp, '+79990000592');
+  const spec = await signIn(sp, '+79990001592');
   await db(async (c) => {
     await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
     await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'vehicle')", [spec.id]);
