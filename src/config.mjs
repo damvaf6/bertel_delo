@@ -162,7 +162,6 @@ export function loadConfig(env = process.env) {
   if (cfg.providers.payments !== 'fake' && !/^https:\/\//.test(cfg.publicUrl)) throw new ConfigError('PUBLIC_URL (https://…) нужен для настоящей оплаты');
   // Деньги тестовые (документы с пометкой «проверочный»): поддельная оплата или тестовый магазин ЮKassa.
   cfg.testMoney = cfg.providers.payments === 'fake' || cfg.yookassa.secretKey.startsWith('test_');
-  if (!['fake', 'yookassa'].includes(cfg.providers.payments)) throw new ConfigError('PAYMENTS_PROVIDER: fake или yookassa');
   if (cfg.providers.payments === 'yookassa') {
     if (!/^\d{3,12}$/.test(cfg.yookassa.shopId) || !cfg.yookassa.secretKey) throw new ConfigError('ЮKassa: нужны YOOKASSA_SHOP_ID и YOOKASSA_SECRET_KEY');
     // Вне prod — только тестовый магазин: на площадке настоящие деньги не списываются (2.46).

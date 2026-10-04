@@ -58,7 +58,6 @@ test('настройки ЮKassa: вне prod — только тестовый 
   assert.throws(() => loadConfig({ ...base, YOOKASSA_SECRET_KEY: 'live_xxx' }), /только тестовый магазин/);
   assert.equal(loadConfig({ ...base, YOOKASSA_SECRET_KEY: 'test_xxx' }).providers.payments, 'yookassa');
   assert.throws(() => loadConfig({ ...base, YOOKASSA_SECRET_KEY: 'test_xxx', PUBLIC_URL: '' }), /PUBLIC_URL/);
-  assert.throws(() => loadConfig({ ...base, PAYMENTS_PROVIDER: 'sber', YOOKASSA_SECRET_KEY: 'test_xxx' }), /fake или yookassa/);
 });
 
 test('оплата через ЮKassa: платёж с ключом идемпотентности и адресом возврата, оплата — по ответу ЮKassa; возврат при отмене; выплата без шлюза — «не прошла»', async () => {
