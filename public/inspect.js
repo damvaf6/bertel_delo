@@ -24,8 +24,12 @@ export async function loadInspection(current) {
   $('inspect-retake').classList.toggle('hidden', !(r.can_issue && photos));
   $('retake-step').replaceChildren(...r.steps.map((s) => el('option', { value: s.id, text: s.title })));
   $('retake-note').maxLength = r.note_max;
+  // Чего не хватает (2.33): владелец мог нажать «Готово», не сняв обязательные шаги, — видно сразу, без пролистывания.
+  const missing = r.steps.filter((s) => !s.optional && !s.photos.length);
+  if (missing.length) $('retake-step').value = missing[0].id;
   $('inspect-state').textContent = photos
     ? `Фото осмотра: ${photos}. У каждого — время и место съёмки; «без геометки» — владелец не разрешил определять место.`
+      + (missing.length ? ` Не снято: ${missing.map((s) => s.title).join(', ')} — попросите доснять ниже.` : '')
     : r.can_issue ? 'Владелец объекта снимает его сам по ссылке — без входа, по шагам для этого вида объекта. Фото появятся здесь.'
       : 'Фото осмотра пока нет.';
   renderLinks(r);

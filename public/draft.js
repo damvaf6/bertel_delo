@@ -1,7 +1,9 @@
 // Черновик заключения от ИИ (задача 2.2): исполнитель готовит черновик, правит его и прикладывает файлом результата;
 // диспетчер только читает; заказчику блок не показывается (и сервер ему черновик не отдаёт). Тексты — через textContent.
-import { api, say } from '/common.js';
+import { api, el, say } from '/common.js';
 import { state } from '/shell.js';
+import { setNext } from '/next.js';
+import { loadAnalogs } from '/analogs.js';
 
 const $ = (id) => document.getElementById(id);
 const timeRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
@@ -16,6 +18,8 @@ export async function loadDraft(current, reload) {
   say($('draft-msg'), '');
   const r = await api('GET', `/api/orders/${current.order.id}/draft`);
   ctx = { order: current.order, draft: r.draft, reload };
+  setNext({ draft: { exists: !!r.draft, approaches: r.approaches && r.can_edit ? r.approaches : null } });
+  renderApproaches(r);
   // Исполнителю — пока дело в работе или черновик есть; служебным — только когда черновик есть.
   box.classList.toggle('hidden', !(r.can_ai || r.draft));
   if (box.classList.contains('hidden')) return;
@@ -35,6 +39,33 @@ export async function loadDraft(current, reload) {
   $('draft-confirm').checked = false;
   $('draft-state').textContent = stateText(r);
   countGaps();
+}
+
+// Подходы к оценке (2.33): отметка сохраняется сразу; черновик после смены подходов лучше подготовить заново.
+function renderApproaches(r) {
+  const box = $('draft-approaches');
+  const a = r.approaches;
+  box.classList.toggle('hidden', !a || !(r.can_edit || a.chosen));
+  if (!a) return;
+  $('draft-approaches-list').replaceChildren(...a.list.map((x) => {
+    const id = `draft-approach-${x.id}`;
+    return el('label', { class: 'row gap', for: id },
+      el('input', { type: 'checkbox', id, value: x.id, ...(a.chosen?.includes(x.id) ? { checked: '' } : {}), ...(r.can_edit ? {} : { disabled: '' }), onchange: saveApproaches }),
+      ` ${x.name}`);
+  }));
+}
+
+async function saveApproaches() {
+  const chosen = [...document.querySelectorAll('#draft-approaches-list input:checked')].map((i) => i.value);
+  try {
+    await api('PUT', `/api/orders/${ctx.order.id}/approaches`, { approaches: chosen });
+    // Без перезагрузки страницы (эксперт остаётся на месте): черновик, аналоги и «Что дальше» пересчитываются.
+    const current = { order: ctx.order, executor: { is_me: true } };
+    await Promise.all([loadDraft(current, ctx.reload), loadAnalogs(current)]);
+    say($('draft-msg'), ctx.draft ? 'Подходы сохранены — подготовьте черновик заново, чтобы разделы совпали' : 'Подходы сохранены', 'ok');
+  } catch (e) {
+    say($('draft-msg'), e.message, 'error');
+  }
 }
 
 // Пометки «[заполнить…]» в тексте: сколько осталось и переход к следующей (2.19).

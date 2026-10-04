@@ -69,12 +69,15 @@ async function view({ sql, actor, order, registry, providers }) {
   const spec = registry.analogs(order.module, order.service);
   const list = await loadAnalogs(sql, order.id);
   const { per, hints, confirmed } = analogWarnings(spec, order, list);
+  // Исполнитель отметил, что сравнительный подход не применяется (2.33), — аналоги не нужны, не напоминаем о них.
+  const needed = !(order.approaches?.length && !order.approaches.includes('comparative'));
   return {
     analogs: list.map((a) => publicAnalog(a, per.get(a.id))),
     fields: analogFields(spec),
-    min: spec.min,
+    min: needed ? spec.min : 0,
+    needed,
     confirmed,
-    hints,
+    hints: needed ? hints : ['Сравнительный подход не применяется — аналоги не нужны (подходы отмечены в черновике)', ...hints.filter((h) => !h.startsWith('Нужно не меньше'))],
     search: searchHints(registry, order),
     can_edit: editsDraft(actor, order),
     ocr: !!providers.ocr,

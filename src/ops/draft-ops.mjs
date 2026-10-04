@@ -6,7 +6,8 @@ import { editsDraft, seesDraft } from '../access/policy.mjs';
 import { DRAFT_GAP, DRAFT_MAX, askAi, cleanDraftAnswer, draftMessages, orderBrief } from '../ai/ai.mjs';
 import { READ_MAX_BYTES, extractPages, readableKind } from '../ai/extract.mjs';
 import { DOCX_MIME } from '../docs/docx.mjs';
-import { fillTables, reportFor, tablesBrief } from '../docs/report.mjs';
+import { fillTables, orderSections, reportFor, tablesBrief } from '../docs/report.mjs';
+import { APPROACHES } from '../modules/index.mjs';
 import { analogsBrief } from '../analogs/analogs.mjs';
 import { publicDoc, saveDocument } from './core-ops.mjs';
 import { audit } from './util.mjs';
@@ -86,12 +87,16 @@ export function draftOps() {
       access: { resource: 'order', param: 'id', need: 'read' },
       async handler({ sql, actor, order, registry }) {
         guard(actor, order);
-        const sections = registry.draftSections(order.module, order.service);
+        const sections = orderSections(registry, order);
         return {
           draft: draftView(await latest(sql, order.id), actor),
           sections,
           can_edit: editsDraft(actor, order),
           can_ai: editsDraft(actor, order) && sections.length > 0,
+          // Подходы к оценке (2.33): список — если исполнитель их выбирает для этой услуги; chosen — что отмечено.
+          approaches: registry.approachesFor(order.module, order.service)
+            ? { list: Object.entries(APPROACHES).map(([id, name]) => ({ id, name })), chosen: order.approaches ?? null }
+            : null,
         };
       },
     },
@@ -102,7 +107,7 @@ export function draftOps() {
       async handler(ctx) {
         const { sql, actor, order, registry, providers, body, res } = ctx;
         guardEdit(actor, order);
-        const sections = registry.draftSections(order.module, order.service);
+        const sections = orderSections(registry, order);
         if (!sections.length) throw new HttpError(400, 'no_draft', 'Для этой услуги черновик от ИИ не готовится');
         sameBase(await latest(sql, order.id), body?.from);
         const inputs = await draftInputs(sql, providers.storage, order);
@@ -136,6 +141,24 @@ export function draftOps() {
         });
         res.status(201);
         return { draft: draftView(d, actor) };
+      },
+    },
+    {
+      // Подходы к оценке, которые применяет исполнитель (2.33): от них зависят разделы черновика, таблица подходов и
+      // нужны ли аналоги. Меняет только исполнитель, пока дело в работе; уже готовый черновик не переписывается.
+      id: 'draft.approaches', method: 'PUT', path: '/api/orders/:id/approaches', auth: 'user',
+      access: { resource: 'order', param: 'id', need: 'read' },
+      async handler({ sql, actor, order, registry, body }) {
+        guardEdit(actor, order);
+        if (!registry.approachesFor(order.module, order.service)) throw new HttpError(400, 'no_approaches', 'Для этой услуги подходы не выбираются');
+        const list = Array.isArray(body?.approaches) ? [...new Set(body.approaches)] : null;
+        if (!list?.length || list.some((a) => !Object.hasOwn(APPROACHES, a))) {
+          throw new HttpError(400, 'bad_input', 'Отметьте хотя бы один подход: сравнительный, затратный или доходный');
+        }
+        const chosen = Object.keys(APPROACHES).filter((a) => list.includes(a));
+        await sql`update orders set approaches = ${chosen} where id = ${order.id}`;
+        await audit(sql, actor, 'draft.approaches', 'order', order.id, { approaches: chosen });
+        return { approaches: chosen, sections: orderSections(registry, { ...order, approaches: chosen }) };
       },
     },
     {

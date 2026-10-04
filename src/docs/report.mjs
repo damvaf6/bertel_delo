@@ -1,5 +1,5 @@
 // Отчёт Word из черновика (2.29): таблицы в черновике, сведения для титула и колонтитула, шаблон организации эксперта.
-import { BASIS_KINDS } from '../modules/index.mjs';
+import { APPROACHES, BASIS_KINDS } from '../modules/index.mjs';
 import { headKey } from '../dossier/dossier.mjs';
 import { executorSignOrg } from '../access/policy.mjs';
 import { orderRef } from '../notify/registry.mjs';
@@ -34,12 +34,15 @@ function taskTable(registry, order) {
   return rows.map(row);
 }
 
-const APPROACHES = ['Сравнительный', 'Затратный', 'Доходный'];
-const approachesTable = () => [
+// Неприменённые подходы (2.33) — строкой «Не применялся», как в настоящих отчётах; не выбраны — все с пометками.
+const approachesTable = (chosen) => [
   row(['Подход', 'Стоимость, руб.', 'Вес']),
-  ...APPROACHES.map((a) => row([a, GAP, GAP])),
+  ...Object.entries(APPROACHES).map(([id, a]) => (!chosen?.length || chosen.includes(id) ? row([a, GAP, GAP]) : row([a, 'Не применялся', '—']))),
   row(['Итоговая величина', GAP, '1']),
 ];
+
+// Разделы черновика дела — с учётом подходов, которые выбрал исполнитель (2.33).
+export const orderSections = (registry, order) => registry.draftSections(order.module, order.service, order.approaches ?? null);
 
 // Разделы с пометкой table получают таблицу сразу под заголовком; эксперт правит её в черновике как строки «| … |».
 export function fillTables(body, sections, registry, order) {
@@ -47,7 +50,7 @@ export function fillTables(body, sections, registry, order) {
   for (const s of sections.filter((x) => x.table)) {
     const m = [...out.matchAll(/^#{1,3}\s*(.+)$/gm)].find((h) => headKey(h[1]) === headKey(s.title));
     if (!m) continue;
-    const lines = s.table === 'task' ? taskTable(registry, order) : s.table === 'analogs' ? [ANALOGS_MARK] : approachesTable();
+    const lines = s.table === 'task' ? taskTable(registry, order) : s.table === 'analogs' ? [ANALOGS_MARK] : approachesTable(order.approaches);
     const at = m.index + m[0].length;
     out = `${out.slice(0, at)}\n${lines.join('\n')}${out.slice(at)}`;
   }
@@ -73,7 +76,7 @@ function placeAnalogs(text, sections, table) {
 async function analogsPart({ sql, providers, registry }, order, text) {
   const spec = registry.analogs(order.module, order.service);
   if (!spec) return { text, appendix: null };
-  const sections = registry.draftSections(order.module, order.service);
+  const sections = orderSections(registry, order);
   const list = (await sql`select * from order_analogs where order_id = ${order.id} and deleted_at is null and confirmed_at is not null order by id`);
   // Подтверждённых аналогов нет — метка просто не попадает в файл (таблицу эксперт мог написать сам; нехватку аналогов
   // показывает раздел «Аналоги» и ИИ-проверка по правилу analogs).

@@ -3,7 +3,7 @@
 // «вот специалист»; ИИ ничего не подаёт и не отправляет сам; проверка — помощь, подпись и ответственность у человека.
 import { HttpError } from '../http/core.mjs';
 import { STATUS_NAME } from '../orders/workflow.mjs';
-import { BASIS_KINDS } from '../modules/index.mjs';
+import { APPROACHES, BASIS_KINDS } from '../modules/index.mjs';
 import { locateQuote } from './extract.mjs';
 
 export const DISCLAIMER = 'Это разъяснение искусственного интеллекта, а не юридическая услуга. Решение принимаете Вы; '
@@ -147,6 +147,10 @@ export function orderBrief(registry, order) {
     order.deadline ? `Срок: ${order.deadline}` : 'Срок не указан',
     `Основание: ${BASIS_KINDS[order.basis_kind]?.name ?? '—'}`,
     ...fields,
+    // Подходы, которые выбрал исполнитель (2.33): черновик и проверка опираются на них.
+    order.approaches?.length
+      ? `Подходы к оценке: применяются — ${order.approaches.map((a) => APPROACHES[a]).join(', ')}; не применяются — ${Object.keys(APPROACHES).filter((a) => !order.approaches.includes(a)).map((a) => APPROACHES[a]).join(', ') || 'нет'}`
+      : null,
   ].filter(Boolean).join('\n');
 }
 

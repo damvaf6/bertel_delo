@@ -25,7 +25,7 @@ before(async () => {
   spec = await login(S, '+79990000905');
   await setPlatformRole(S.sql, dispatcher.user.id, 'dispatcher');
   await setPlatformRole(S.sql, admin.user.id, 'admin');
-  await makeSpecialist(S.sql, spec.user.id);
+  await makeSpecialist(S.sql, spec.user.id, { permits: [['expertise', 'realty'], ['expertise', 'vehicle']] });
   await owner.req('PATCH', '/api/me', { full_name: 'Тестова Заказчица' });
 });
 after(async () => { await S?.close(); });
@@ -305,4 +305,57 @@ test('черновик готовым файлом Word (2.29): скачивае
   assert.equal((await spec.req('GET', `/api/orgs/${org.id}/template`)).body.template, null);
   await S.sql`delete from org_members where org_id = ${org.id} and user_id = ${spec.user.id}`;
   await S.sql`update specialists set org_id = null where user_id = ${spec.user.id}`;
+});
+
+// Прогон «как настоящий эксперт» (2.33), отчёт «221»: автобус для суда, применён только затратный подход. Раньше черновик
+// всё равно писал раздел «11. Сравнительный подход», эксперт его удалял — и в отчёте после раздела 10 сразу 12.
+test('подходы к оценке (2.33): черновик без разделов неприменённых подходов, нумерация подряд; аналоги не нужны', async () => {
+  const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'vehicle', title: 'Автобус для суда' })).body.order;
+  const fields = { purpose: 'court', region: 'moscow', vehicle_type: 'bus', make_model: 'Авто-Бус 1000-01', year: '2024', vin: 'xxx000000r0000000', reg_number: 'а001аа799', mileage: '12000' };
+  const patched = await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: addDays(todayMsk(), 10), fields });
+  assert.equal(patched.status, 200);
+  assert.equal(patched.body.order.fields.reg_number, 'А001АА799');
+  assert.equal((await step(owner, o, 'matching')).status, 200);
+  await ensurePaid(S.sql, o.id);
+  assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: spec.user.id, from: 'matching' })).status, 200);
+  // В списке у исполнителя — главное о деле одной строкой; у заказчика этой строки нет.
+  const offered = (await spec.req('GET', '/api/orders')).body.orders.find((x) => x.id === o.id);
+  assert.equal(offered.brief, 'Для суда · Москва · Автобус · Авто-Бус 1000-01 · 2024 · XXX000000R0000000');
+  assert.equal((await owner.req('GET', '/api/orders')).body.orders.find((x) => x.id === o.id).brief, undefined);
+  assert.equal((await step(spec, o, 'in_work')).status, 200);
+
+  const before = (await spec.req('GET', `/api/orders/${o.id}/draft`)).body;
+  assert.deepEqual(before.approaches.list.map((a) => a.id), ['comparative', 'cost', 'income']);
+  assert.equal(before.approaches.chosen, null);
+  assert.ok(before.sections.some((x) => x.title.startsWith('11. Сравнительный')));
+  // Пустой выбор и чужие подходы — нельзя; диспетчер не выбирает.
+  assert.equal((await spec.req('PUT', `/api/orders/${o.id}/approaches`, { approaches: [] })).status, 400);
+  assert.equal((await spec.req('PUT', `/api/orders/${o.id}/approaches`, { approaches: ['magic'] })).status, 400);
+  assert.equal((await dispatcher.req('PUT', `/api/orders/${o.id}/approaches`, { approaches: ['cost'] })).status, 403);
+  const r = await spec.req('PUT', `/api/orders/${o.id}/approaches`, { approaches: ['cost', 'cost'] });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.approaches, ['cost']);
+  const titles = r.body.sections.map((x) => x.title);
+  assert.ok(!titles.some((t) => /Сравнительный подход/.test(t)), 'раздела неприменённого подхода нет');
+  const nums = titles.map((t) => Number(t.match(/^(\d+)\./)?.[1])).filter(Boolean);
+  assert.deepEqual(nums, nums.map((_, i) => i + 1), 'нумерация подряд, без пропусков');
+  assert.ok(titles.includes('11. Затратный подход (если применяется)'));
+
+  // Черновик: разделы — по выбранным подходам, в таблице подходов сравнительный «Не применялся»; модель знает о выборе.
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {})).status, 201);
+  assert.match(lastPrompt(), /Подходы к оценке: применяются — Затратный; не применяются — Сравнительный, Доходный/);
+  const body = (await spec.req('GET', `/api/orders/${o.id}/draft`)).body.draft.body;
+  assert.ok(!/## 1[12]\. Сравнительный/.test(body));
+  assert.match(body, /\| Сравнительный \| Не применялся \| — \|/);
+  assert.match(body, /\| Затратный \| \[заполнить\] \| \[заполнить\] \|/);
+  assert.ok(!body.includes(ANALOGS_MARK));
+
+  // Аналоги не нужны — раздел не напоминает о трёх аналогах.
+  const an = (await spec.req('GET', `/api/orders/${o.id}/analogs`)).body;
+  assert.equal(an.needed, false);
+  assert.equal(an.min, 0);
+  assert.ok(!an.hints.some((h) => h.startsWith('Нужно не меньше')));
+  // Вернул сравнительный — снова нужны.
+  assert.equal((await spec.req('PUT', `/api/orders/${o.id}/approaches`, { approaches: ['comparative', 'cost'] })).status, 200);
+  assert.equal((await spec.req('GET', `/api/orders/${o.id}/analogs`)).body.needed, true);
 });

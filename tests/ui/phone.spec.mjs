@@ -2160,3 +2160,152 @@ test('аналоги в деле (2.32): ссылка и скриншот — И
   await expect(page.locator('#analogs-box')).toBeHidden();
   await sctx.close();
 });
+
+// Прогон «как настоящий эксперт» (2.33) по сценарию отчёта «221»: автобус для суда, только затратный подход, осмотр по
+// ссылке владельцу. Проверяется то, что мешало живому эксперту: в заявке нет «Автобуса» и госномера; в предложении не
+// видно, что за объект; черновик писал раздел неприменённого подхода (в отчёте пропадал номер раздела); «Что дальше» не
+// отмечал черновик сделанным; владелец нажал «Готово», не сняв нужные шаги, — эксперт не видел, чего не хватает.
+test('как настоящий эксперт (2.33): автобус для суда — от заявки до сдачи, подходы, осмотр, черновик без лишних разделов', async ({ page, browser, baseURL }) => {
+  const A = '+79990003301', D = '+79990003302', S = '+79990003303', C = '+79990003304';
+  const { grantRole } = await import('../../src/tools/grant-role.mjs');
+  const { createDb } = await import('../../src/db.mjs');
+  const { loadConfig } = await import('../../src/config.mjs');
+  const sql = createDb(loadConfig(testEnv()));
+  try { await grantRole(sql, A, 'admin'); } finally { await sql.end(); }
+  const ctx = async (extra) => (await phoneContext(browser, baseURL, extra)).newPage();
+  const ap = await ctx(), dp = await ctx(), sp = await ctx();
+  await signIn(dp, D);
+  const spec = await signIn(sp, S);
+  await signIn(ap, A);
+  await sp.request.patch('/api/me', { data: { full_name: 'Иванов Иван Иванович' }, headers: H });
+  await ap.goto('/kabinet#admin');
+  await ap.getByLabel('Номер телефона пользователя').fill(D);
+  await ap.getByRole('button', { name: 'Найти' }).click();
+  await ap.getByLabel('Служебная роль').selectOption('dispatcher');
+  await ap.getByRole('button', { name: 'Сохранить роль' }).click();
+  await expect(ap.getByText('Роль сохранена')).toBeVisible();
+  await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'vehicle')", [spec.id]);
+  });
+
+  // 1. Заказчик: «Автобус», госномер и пробег есть в заявке.
+  await signIn(page, C);
+  await page.goto('/kabinet');
+  await page.locator('#new-order').getByLabel('Услуга').selectOption({ label: 'Оценка транспортного средства' });
+  await page.getByLabel('Коротко: что нужно').fill('Оценка автобуса для суда');
+  await page.getByRole('button', { name: 'Создать заявку' }).click();
+  await expect(page.locator('#order-status')).toHaveText('Новая');
+  const id = new URL(page.url()).hash.split('=')[1];
+  await page.getByLabel('Для чего нужна оценка').selectOption({ label: 'Для суда' });
+  await page.getByLabel('Где находится объект').selectOption({ label: 'Москва' });
+  await page.getByLabel('Вид транспорта').selectOption({ label: 'Автобус' });
+  await page.getByLabel('Марка и модель').fill('Авто-Бус 1000-01');
+  await page.getByLabel('Год выпуска').fill('2024');
+  await page.getByLabel('VIN', { exact: true }).fill('XXX000000R0000000');
+  await page.getByLabel('Госномер').fill('а001аа799');
+  await page.getByLabel('Пробег, км').fill('12000');
+  await page.getByLabel(/^Срок/).fill(inDays(10));
+  await page.getByLabel('Основание').selectOption({ label: 'Определение суда' });
+  await page.getByLabel(/^Номер определения/).fill('2-1234/2026');
+  await page.getByLabel(/^Дата определения/).fill(inDays(-10));
+  await page.getByLabel('Приложить определение суда').setInputFiles({ name: 'Определение суда.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 тестовое определение') });
+  await expect(page.getByText('Приложено: Определение суда.pdf')).toBeVisible();
+  await shot(page, '90-ekspert-zayavka-avtobus');
+  await page.getByRole('button', { name: 'Отправить заявку' }).click();
+  await expect(page.locator('#order-status')).toHaveText('Подбор исполнителя');
+  await expect(page.locator('#facts')).toContainText('А001АА799');
+
+  // 2. Диспетчер: цена; заказчик платит; диспетчер предлагает дело эксперту.
+  await dp.goto(`/kabinet#order=${id}`);
+  await dp.getByLabel('Цена, рублей').fill('15000');
+  await dp.getByRole('button', { name: 'Назначить цену' }).click();
+  await expect(dp.locator('#money-msg')).toHaveText('Цена назначена');
+  await page.reload();
+  await page.getByRole('button', { name: /Оплатить/ }).click();
+  await expect(page.locator('#money-facts')).toContainText('оплачено');
+  await dp.reload();
+  dp.once('dialog', (d) => d.accept());
+  await dp.locator('#candidates li').filter({ hasText: 'Иванов' }).getByRole('button', { name: 'Предложить дело' }).click();
+  await expect(dp.locator('#order-status')).toHaveText('Ждёт исполнителя');
+
+  // 3. Эксперт: в списке видно, что за объект и для чего, — принимает прямо из списка.
+  await sp.goto('/kabinet');
+  const offer = sp.locator('#orders li').filter({ hasText: 'Оценка автобуса для суда' });
+  await expect(offer.locator('.brief')).toHaveText('Для суда · Москва · Автобус · Авто-Бус 1000-01 · 2024 · XXX000000R0000000');
+  await shot(sp, '91-ekspert-predlozhenie');
+  sp.once('dialog', (d) => d.accept());
+  await offer.getByRole('button', { name: 'Принять дело' }).click();
+  // Принял — сразу в деле, без поиска его в списке.
+  await expect(sp.locator('#order-status')).toHaveText('В работе');
+  expect(sp.url()).toContain(`#order=${id}`);
+
+  // 4. В «Что дальше» — подходы к оценке и аналоги; выбран только затратный — аналоги не нужны, шага «Аналоги» нет.
+  await expect(sp.locator('#next-steps li[data-step="approaches"]')).toContainText('○ Подходы к оценке');
+  await expect(sp.locator('#next-steps li[data-step="analogs"]')).toContainText('Аналоги (подтверждено 0 из 3)');
+  await shot(sp, '92-ekspert-chto-dalshe');
+  await sp.locator('#next-steps li[data-step="approaches"] button').click();
+  await sp.locator('#draft-approaches').getByLabel('Затратный').check();
+  await expect(sp.locator('#draft-msg')).toHaveText('Подходы сохранены');
+  await expect(sp.locator('#next-steps li[data-step="approaches"]')).toContainText('✓ Подходы к оценке');
+  await expect(sp.locator('#next-steps li[data-step="analogs"]')).toHaveCount(0);
+  await expect(sp.locator('#analogs-hints')).toContainText('Сравнительный подход не применяется — аналоги не нужны');
+  await expect(sp.locator('#next-main button')).toHaveText('Добавить файл результата');
+  await shot(sp, '93-ekspert-podhody');
+
+  // 5. Осмотр по ссылке: владелец снял три шага из семи и нажал «Готово» — эксперт сразу видит, чего не хватает.
+  await sp.getByLabel('Телефон владельца — пришлём ему ссылку СМС (необязательно)').fill('+7 999 000-33-05');
+  await sp.getByRole('button', { name: 'Выдать ссылку владельцу' }).click();
+  await expect(sp.locator('#inspect-msg')).toContainText('Ссылка отправлена СМС');
+  const url = await sp.locator('#inspect-url').textContent();
+  const jpeg = Buffer.from((await sp.evaluate(() => {
+    const c = document.createElement('canvas'); c.width = 640; c.height = 480;
+    const g = c.getContext('2d'); g.fillStyle = '#9db4d0'; g.fillRect(0, 0, 640, 480);
+    return c.toDataURL('image/jpeg', 0.8);
+  })).split(',')[1], 'base64');
+  const op = await ctx({ permissions: ['geolocation'], geolocation: { latitude: 55.75, longitude: 37.61, accuracy: 10 } });
+  await op.goto(url);
+  await op.getByRole('button', { name: 'Начать: разрешить определение места' }).click();
+  await expect(op.locator('#geo-state')).toContainText('Место определено');
+  for (const st of ['car_front', 'car_vin', 'car_odometer']) {
+    await op.locator(`#steps li[data-step="${st}"] input[type=file]`).setInputFiles({ name: `${st}.jpg`, mimeType: 'image/jpeg', buffer: jpeg });
+    await expect(op.locator(`#steps li[data-step="${st}"] .badge`)).toHaveText('Фото: 1');
+  }
+  op.once('dialog', (d) => d.accept());
+  await op.getByRole('button', { name: 'Готово' }).click();
+  await expect(op.locator('#closed-text')).toContainText('Эксперт получил 3 фото');
+  await sp.reload();
+  await expect(sp.locator('#inspect-state')).toContainText('Не снято: Сзади, Слева, Справа, Салон — попросите доснять ниже.');
+  await expect(sp.getByLabel('Попросить переснять шаг')).toHaveValue('car_rear');
+  await expect(sp.locator('#next-steps li[data-step="inspect"]')).toContainText('✓');
+  await shot(sp, '94-ekspert-osmotr-ne-snyato');
+
+  // 6. Черновик: разделы подряд, без «Сравнительного подхода»; в таблице подходов он «Не применялся».
+  await sp.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const text = sp.getByLabel('Текст заключения');
+  const body = await text.inputValue();
+  expect(body).not.toMatch(/^## \d+\. Сравнительный подход/m);
+  expect(body).toMatch(/^## 11\. Затратный подход/m);
+  expect(body).toContain('| Сравнительный | Не применялся | — |');
+  await expect(sp.locator('#next-steps li[data-step="draft"]')).toContainText('✓');
+  await text.fill(body.replace(/\[(?:заполнить|описать)[^\]]*\]/gi, 'заполнено экспертом'));
+  await sp.getByRole('button', { name: 'Сохранить правку' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Правка сохранена');
+  await sp.getByLabel('Я проверил текст и отвечаю за него').check();
+  await sp.getByRole('button', { name: 'Приложить как файл результата' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Файл «Отчёт об оценке.docx» добавлен в результат работы');
+
+  // 7. ИИ-проверка, подпись, сдача — «Что дальше» ведёт кнопкой до конца.
+  await sp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  await expect(sp.locator('#next-main button')).toHaveText('Подписать файл');
+  sp.once('dialog', (d) => d.accept());
+  await sp.locator('#next-main button').click();
+  await expect(sp.locator('#next-main button')).toHaveText('Сдать на проверку');
+  await shot(sp, '95-ekspert-gotov-sdat');
+  await sp.locator('#next-main button').click();
+  await expect(sp.locator('#order-status')).toHaveText('Проверка результата');
+  await shot(sp, '96-ekspert-sdano');
+  for (const p of [ap, dp, sp, op]) await p.context().close();
+});
