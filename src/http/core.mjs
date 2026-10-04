@@ -24,10 +24,18 @@ const CSP = [
   "frame-ancestors 'none'",
 ].join('; ');
 
+// Адреса хранилища, куда браузер кладёт файл: Яндекс подписывает ссылку на адрес с именем бакета
+// (https://<бакет>.storage.yandexcloud.net), MinIO в CI — на общий адрес с бакетом в пути (2.49, проверено на площадке).
+export function storageOrigins(s3) {
+  const u = new URL(s3.publicEndpoint || s3.endpoint);
+  const out = [u.origin];
+  if (!s3.forcePathStyle && s3.bucket) out.push(`${u.protocol}//${s3.bucket}.${u.host}`);
+  return out;
+}
+
 export function securityHeaders(cfg) {
   // Прямая загрузка в хранилище (2.49): браузеру разрешено отправлять файлы ещё и на адрес хранилища.
-  const storage = cfg?.providers?.storage === 's3' ? new URL(cfg.s3.publicEndpoint || cfg.s3.endpoint).origin : null;
-  const csp = storage ? CSP.replace("connect-src 'self'", `connect-src 'self' ${storage}`) : CSP;
+  const csp = cfg?.providers?.storage === 's3' ? CSP.replace("connect-src 'self'", `connect-src 'self' ${storageOrigins(cfg.s3).join(' ')}`) : CSP;
   return (req, res, next) => {
     res.setHeader('Content-Security-Policy', csp);
     res.setHeader('X-Content-Type-Options', 'nosniff');

@@ -93,3 +93,14 @@ test('Word больше 3 МБ отдаётся временной ссылко�
   await sendFile(res, S.providers, { buf: Buffer.alloc(100), filename: 'a.docx', mime: 'x' });
   assert.deepEqual(calls[1], ['send']);
 });
+
+test('политика страницы разрешает загрузку на адрес хранилища с именем бакета (Яндекс) и на общий (MinIO)', async () => {
+  const { storageOrigins } = await import('../../src/http/core.mjs');
+  assert.deepEqual(storageOrigins({ endpoint: 'https://storage.yandexcloud.net', bucket: 'delo-stage-files-x', forcePathStyle: false }),
+    ['https://storage.yandexcloud.net', 'https://delo-stage-files-x.storage.yandexcloud.net']);
+  assert.deepEqual(storageOrigins({ endpoint: 'http://127.0.0.1:9000', publicEndpoint: 'http://localhost:9000', bucket: 'b', forcePathStyle: true }), ['http://localhost:9000']);
+  // Ссылка на загрузку — без контрольной суммы пустого файла (иначе Яндекс отвергает настоящий файл).
+  const { s3Storage } = await import('../../src/providers/storage.mjs');
+  const url = await s3Storage({ region: 'ru-central1', endpoint: 'https://storage.yandexcloud.net', bucket: 'delo-test-files', accessKeyId: 'a', secretAccessKey: 's' }).uploadUrl('k', { contentType: 'application/pdf' });
+  assert.doesNotMatch(url, /x-amz-checksum|x-amz-sdk-checksum/i);
+});

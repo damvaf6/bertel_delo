@@ -167,6 +167,16 @@ test('общий прогон: заявка на оценку с файлами 
   const chunks = [];
   for await (const ch of await download.createReadStream()) chunks.push(ch);
   expect(Buffer.concat(chunks).toString()).toBe(body);
+  // Большой файл (6 МБ > 3,5 МБ — предел запроса к контейнеру облака, 2.49): идёт прямо в хранилище по ссылке.
+  const big = Buffer.concat([Buffer.from(`%PDF-1.4 большой ${TAG}\n`), Buffer.alloc(6 * 1024 * 1024, 32)]);
+  await page.getByLabel('Добавить файл (до 100 МБ)').setInputFiles({ name: 'Техпаспорт большой.pdf', mimeType: 'application/pdf', buffer: big });
+  await expect(page.locator('#doc-msg')).toHaveText('Файл добавлен', { timeout: 120_000 });
+  const bigDoc = page.locator('#docs li').filter({ hasText: 'Техпаспорт большой.pdf' });
+  await expect(bigDoc).toContainText('6,0 МБ');
+  const [bigDl] = await Promise.all([page.waitForEvent('download'), bigDoc.getByRole('button', { name: 'Скачать' }).click()]);
+  const bigChunks = [];
+  for await (const ch of await bigDl.createReadStream()) bigChunks.push(ch);
+  expect(Buffer.concat(bigChunks).length).toBe(big.length);
   await shot(page, '01-zayavka');
 
   await page.getByRole('button', { name: 'Отправить заявку' }).click();
@@ -223,7 +233,7 @@ test('общий прогон: организация — приглашение
   await expect(mp.getByText('Ваша роль: Сотрудник')).toBeVisible();
   await mp.getByRole('link', { name: 'Заявки' }).click();
   await mp.getByLabel('Коротко: что нужно').fill(title);
-  await mp.getByLabel('От чьего имени').selectOption({ label: `От организации «${org}»` });
+  await mp.getByLabel('От чьего имени').selectOption({ label: `От организации ${org}` }); // название уже в кавычках (2.41)
   await mp.getByRole('button', { name: 'Создать заявку' }).click();
   await expect(mp.getByText(new RegExp(`^Организация: ${org.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} · Ведёт:`))).toBeVisible();
   const orderUrl = mp.url();
@@ -819,14 +829,14 @@ test('общий прогон: две подписи — эксперт от о�
   await expect(sp.locator('#order-status')).toHaveText('В работе');
   await sp.locator('#result-file').setInputFiles({ name: 'Отчёт компании.pdf', mimeType: 'application/pdf', buffer: report });
   const doc = sp.locator('#docs li').filter({ hasText: 'Отчёт компании.pdf' });
-  await expect(doc.locator('[data-sig="org-wait"]')).toContainText(`подписывает руководитель организации «${org}»`);
+  await expect(doc.locator('[data-sig="org-wait"]')).toContainText(`подписывает руководитель организации ${org}`);
   sp.once('dialog', (d) => d.accept());
   await doc.locator('input[type=file]').setInputFiles({ name: 'Отчёт компании.pdf.sig', mimeType: 'application/octet-stream', buffer: testExternalSignature({ digest, subject: specName }) });
   await expect(sp.locator('#doc-msg')).toHaveText('Подпись проверена и добавлена');
   await expect(doc.locator('.sig-state').first()).toContainText(`Подпись эксперта: ${specName}`);
   await expect(doc).toContainText('загружена готовым файлом');
   await sp.getByRole('button', { name: 'Сдать на проверку' }).click();
-  await expect(sp.locator('#status-msg')).toContainText(`Нужна подпись организации «${org}» (руководитель): Отчёт компании.pdf`);
+  await expect(sp.locator('#status-msg')).toContainText(`Нужна подпись организации ${org} (руководитель): Отчёт компании.pdf`);
   await shot(sp, '31-specialist-gotovaya-podpis');
 
   // Руководитель: уведомление; в организации видит только файл (не заявку), скачивает его и подписывает от организации.
