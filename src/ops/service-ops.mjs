@@ -7,6 +7,7 @@ import { phoneFrom, publicUser } from './util.mjs';
 import { contentDisposition } from '../providers/storage.mjs';
 import { processInbound, receiveMail } from '../mail/inbound.mjs';
 import { deliverMail } from '../mail/outbox.mjs';
+import { DIRECT_UPLOAD_MAX } from './upload-ops.mjs';
 
 // Хранилище «в памяти»: выдача по подписанной временной ссылке (как у S3).
 export function memoryFileOps() {
@@ -19,6 +20,17 @@ export function memoryFileOps() {
       res.setHeader('Content-Type', file.contentType || 'application/octet-stream');
       res.setHeader('Content-Disposition', contentDisposition(file.filename));
       res.end(file.body);
+    },
+  }, {
+    // Загрузка по подписанной ссылке (2.49) — как PUT в хранилище S3; размер — до предела прямой загрузки.
+    id: 'files.memory.upload', method: 'PUT', path: '/files/up/:token', auth: 'public', csrf: false,
+    publicReason: 'загрузка по подписанной ссылке со сроком — только при хранилище «в памяти» (тесты)',
+    body: 'raw', limit: DIRECT_UPLOAD_MAX + 1024,
+    async handler({ params, providers, body, req, res }) {
+      const t = providers.storage.openUpload(params.token);
+      if (!t) throw new HttpError(403, 'forbidden', 'Ссылка на загрузку устарела');
+      await providers.storage.put(t.key, Buffer.isBuffer(body) ? body : Buffer.alloc(0), req.get('content-type') || t.contentType);
+      res.status(200).end();
     },
   }];
 }

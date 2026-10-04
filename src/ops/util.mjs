@@ -1,4 +1,5 @@
 // Общие части операций: проверка ввода, журнал действий, что отдаётся наружу.
+import crypto from 'node:crypto';
 import { HttpError, UUID_RE } from '../http/core.mjs';
 import { normPhone } from '../auth/auth.mjs';
 
@@ -34,3 +35,21 @@ export async function audit(sql, actor, action, subjectType, subjectId, details 
 
 // Название в кавычках: «Бюро», но ООО «Бюро» — как записано, без второй пары кавычек (2.41).
 export const quoted = (name) => (/[«"]/.test(String(name)) ? String(name) : `«${name}»`);
+
+// Ответ контейнера облака — не больше 3,5 МБ (2.49): большой файл (Word черновика с фото) кладётся во временную папку
+// хранилища (tmp/, срок жизни — сутки, правило бакета) и отдаётся временной ссылкой; маленький — сразу.
+export const DIRECT_RESPONSE_MAX = 3 * 1024 * 1024;
+export async function sendFile(res, providers, { buf, filename, mime }) {
+  if (buf.length > DIRECT_RESPONSE_MAX) {
+    const key = `tmp/${crypto.randomUUID()}`;
+    await providers.storage.put(key, buf, mime);
+    res.set('cache-control', 'no-store');
+    return res.redirect(303, await providers.storage.link(key, { filename }));
+  }
+  res.set({
+    'content-type': mime,
+    'content-disposition': `attachment; filename="file"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+    'cache-control': 'no-store',
+  });
+  return res.send(buf);
+}

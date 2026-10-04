@@ -1364,14 +1364,28 @@ test('карточка эксперта (2.35): диспетчер, админи
   assert.equal((await U.dispatcher.req('GET', `/api/specialists/${U.owner.user.id}/card`)).status, 404);
 });
 
+test('прямая загрузка (2.49): ссылку и «готово» — только тем, кто может положить файл; чужим — «не найдено»', async () => {
+  for (const id of ['documents.upload_url', 'results.upload_url', 'uploads.complete']) cover(id);
+  const meta = { filename: 'большой.pdf', mime: 'application/pdf', size: 4 * 1024 * 1024, kind: 'other' };
+  const url = (c, o, what = 'documents') => c.req('POST', `/api/orders/${o.id}/${what}/upload-url`, meta);
+  for (const [who, o, code] of [['owner', ownOrder, 201], ['memberA', orgOrder, 201], ['headA', orgOrder, 201], ['stranger', ownOrder, 404], ['headB', orgOrder, 404], ['memberA2', orgOrder, 404], ['spec', ownOrder, 404], ['dispatcher', ownOrder, 403]]) {
+    assert.equal((await url(U[who], o)).status, code, `${who}`);
+  }
+  for (const who of ['owner', 'stranger', 'dispatcher']) assert.notEqual((await url(U[who], ownOrder, 'results')).status, 201, `${who}: результат`);
+  const r = (await url(U.owner, ownOrder)).body;
+  for (const who of ['stranger', 'headB', 'spec']) assert.equal((await U[who].req('POST', `/api/orders/${ownOrder.id}/uploads/complete`, { pass: r.pass })).status, 404, who);
+  assert.equal((await U.dispatcher.req('POST', `/api/orders/${ownOrder.id}/uploads/complete`, { pass: r.pass })).status, 403, 'пропуск другого человека');
+});
+
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {
-  const PUBLIC = ['health', 'auth.code', 'auth.verify', 'files.memory', 'test.calls', 'test.script', 'test.reset', 'test.mail.inbound', 'stage.login', 'payments.notify',
+  const PUBLIC = ['health', 'auth.code', 'auth.verify', 'files.memory', 'files.memory.upload', 'test.calls', 'test.script', 'test.reset', 'test.mail.inbound', 'stage.login', 'payments.notify',
     'inspect.view', 'inspect.photo', 'inspect.finish'];
   const ops = S.app.locals.ops;
   const extraPublic = ops.filter((o) => o.auth === 'public' && !PUBLIC.includes(o.id)).map((o) => o.id);
   assert.deepEqual(extraPublic, [], `новые открытые операции: ${extraPublic.join(', ')}`);
-  // Без защиты от подделки запроса — только уведомление ЮKassa (оно содержимому не верит).
-  assert.deepEqual(ops.filter((o) => o.csrf === false).map((o) => o.id), ['payments.notify']);
+  // Без защиты от подделки запроса — только уведомление ЮKassa (оно содержимому не верит) и загрузка «в память» по
+  // подписанной ссылке (тесты; как PUT в хранилище, 2.49).
+  assert.deepEqual(ops.filter((o) => o.csrf === false).map((o) => o.id).sort(), ['files.memory.upload', 'payments.notify']);
   // Операции моста — только три, все под /api/bridge/ (подпись ключом моста).
   assert.deepEqual(ops.filter((o) => o.auth === 'bridge').map((o) => o.id), ['bridge.crm.profiles', 'bridge.crm.load', 'bridge.crm.offers']);
   const unchecked = ops.filter((o) => o.auth !== 'public' && !covered.has(o.id)).map((o) => o.id);

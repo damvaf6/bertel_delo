@@ -189,15 +189,15 @@
         <p class="muted hidden" id="docs-empty">Документов пока нет.</p>
         <p class="muted hidden" id="results-later">Результат работы появится здесь после проверки.</p>
         <div class="field" id="upload-box">
-          <p class="muted">Добавить файл (до 5 МБ)</p>
+          <p class="muted">Добавить файл (до 100 МБ)</p>
           <label class="btn secondary" for="file">Выбрать файл</label>
-          <input id="file" type="file" class="visually-hidden" aria-label="Добавить файл (до 5 МБ)">
+          <input id="file" type="file" class="visually-hidden" aria-label="Добавить файл (до 100 МБ)">
         </div>
         <div class="field hidden" id="result-upload-box">
-          <p class="muted">Результат работы (до 5 МБ): заказчик увидит его после проверки. Сдать на проверку можно, когда файл приложен.</p>
+          <p class="muted">Результат работы (до 100 МБ): заказчик увидит его после проверки. Сдать на проверку можно, когда файл приложен.</p>
           <p class="muted hidden" id="result-sign-note">Перед сдачей подпишите каждый файл результата Вашей УКЭП — кнопка «Подписать» у файла или загрузите готовую подпись (программа удостоверяющего центра, «Госключ»). Если Вы работаете от организации, файл подписывает ещё её руководитель.</p>
           <label class="btn" for="result-file">Добавить файл результата</label>
-          <input id="result-file" type="file" class="visually-hidden" aria-label="Добавить файл результата (до 5 МБ)">
+          <input id="result-file" type="file" class="visually-hidden" aria-label="Добавить файл результата (до 100 МБ)">
           <button type="button" class="secondary hidden" id="dossier-attach">Приложить копии из досье</button>
           <p class="muted hidden" id="dossier-attach-note">Копии диплома, аттестата, полисов из Вашего досье станут приложениями к отчёту — их подписываете вместе с отчётом.</p>
         </div>
@@ -441,7 +441,7 @@
       <div class="card hidden" id="org-template-box">
         <h2>Шаблон отчёта</h2>
         <p class="muted" id="org-template-state"></p>
-        <p class="muted hidden" id="org-template-hint">Файл Word (.docx, до 5 МБ) со стилями, шапкой, логотипом и реквизитами. Черновики
+        <p class="muted hidden" id="org-template-hint">Файл Word (.docx, до 3 МБ) со стилями, шапкой, логотипом и реквизитами. Черновики
           экспертов организации собираются в нём. Куда поставить отчёт — отметьте абзацем {{ОТЧЁТ}}; без него отчёт пойдёт после
           содержимого шаблона. Шаблон видят только сотрудники организации.</p>
         <div class="row gap">

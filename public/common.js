@@ -45,7 +45,7 @@ export function formatPhone(p) {
 export function formatSize(n) {
   if (n < 1024) return `${n} Б`;
   if (n < 1024 * 1024) return `${Math.round(n / 1024)} КБ`;
-  return `${(n / 1024 / 1024).toFixed(1)} МБ`;
+  return `${(n / 1024 / 1024).toFixed(1).replace(".", ",")} МБ`; // по-русски: «50,0 МБ»
 }
 
 // Название в кавычках: «Бюро», но ООО «Бюро» — как записано, без второй пары кавычек (2.41).

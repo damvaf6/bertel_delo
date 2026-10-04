@@ -15,7 +15,10 @@ import { setNext } from '/next.js';
 import { orgChat } from '/orgchat.js';
 
 const $ = (id) => document.getElementById(id);
-const MAX_FILE = 5 * 1024 * 1024;
+// До 3 МБ — обычной загрузкой через ядро; больше — прямо в хранилище (облако: запрос не больше 3,5 МБ, 2.49).
+const MAX_FILE = 3 * 1024 * 1024;
+const MAX_DIRECT = 100 * 1024 * 1024;
+const PHOTOS_UNFOLDED = 6;
 const FINAL = ['closed', 'cancelled'];
 const WORK_STARTED = ['in_work', 'review'];
 const DOC_KIND_RU = { basis: 'Основание', result: 'Результат работы', inspection: 'Фото осмотра' };
@@ -336,7 +339,7 @@ async function loadDocs(initial = false) {
   const unsigned = mineResults && signRequired ? documents.filter((d) => d.kind === 'result' && !d.signatures?.expert) : [];
   $('sign-all').classList.toggle('hidden', unsigned.length < 2);
   $('sign-all').textContent = `Подписать все файлы результата (${unsigned.length})`;
-  $('docs').replaceChildren(...documents.map((d) => {
+  const docLi = (d) => {
     // Результат убирает только исполнитель, пока не сдал; документы заказчика — заказчик (основание — до отправки).
     // Фото дистанционного осмотра не удаляются никем: это свидетельство осмотра со временем и местом (2.3).
     const removable = d.kind === 'inspection' ? false
@@ -349,7 +352,15 @@ async function loadDocs(initial = false) {
         el('button', { class: 'secondary', 'data-action': 'download', onclick: () => download(d) }, 'Скачать'),
         ...(removable ? [el('button', { class: 'danger', 'data-action': 'delete', onclick: () => remove(d) }, 'Удалить')] : [])),
       ...(d.kind === 'result' ? signatureBlock(d, { canSign: mineResults && signRequired, signOrg: documentsBody.signature_org }) : []));
-  }));
+  };
+  // Много фото осмотра (2.49: бывает 100) — одной свёрнутой строкой, чтобы документы и результат не терялись внизу.
+  const photos = documents.filter((d) => d.kind === 'inspection');
+  const fold = photos.length > PHOTOS_UNFOLDED;
+  $('docs').replaceChildren(...documents.filter((d) => !fold || d.kind !== 'inspection').map(docLi),
+    ...(fold ? [el('li', { class: 'doc-group', 'data-group': 'inspection' },
+      el('details', {},
+        el('summary', { text: `Фото осмотра: ${photos.length} — показать` }),
+        el('ul', { class: 'list' }, ...photos.map(docLi))))] : []));
   $('docs-empty').classList.toggle('hidden', documents.length > 0);
   $('results-later').textContent = 'Результат работы появится здесь после проверки.';
   $('results-later').classList.toggle('hidden', !(resultsHidden && ['in_work', 'review'].includes(order.status)));
@@ -482,17 +493,40 @@ async function remove(d) {
   } catch (err) { say($('doc-msg'), err.message); }
 }
 
+// Прямая загрузка (2.49): облако не пропускает через ядро запрос больше 3,5 МБ — большой файл идёт прямо в
+// хранилище по ссылке, ядро только выдаёт ссылку и записывает документ. С ходом загрузки в процентах.
+function putWithProgress(url, file, type, onProgress) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    x.open('PUT', url);
+    x.setRequestHeader('content-type', type);
+    x.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(Math.floor((e.loaded / e.total) * 100)); };
+    x.onload = () => (x.status >= 200 && x.status < 300 ? resolve() : reject(new Error('Хранилище не приняло файл — попробуйте ещё раз')));
+    x.onerror = () => reject(new Error('Связь прервалась — загрузите файл ещё раз'));
+    x.send(file);
+  });
+}
+
 async function uploadFile(file, kind, msg) {
   if (!file) return;
-  if (file.size > MAX_FILE) return say(msg, 'Файл больше 5 МБ');
+  if (file.size > MAX_DIRECT) return say(msg, 'Файл больше 100 МБ');
   say(msg, 'Загружаем…', 'ok');
+  const base = `/api/orders/${current.order.id}`;
   try {
-    // Результат работы — отдельной операцией исполнителя; остальные документы — заказчика.
-    await api('POST', `/api/orders/${current.order.id}/${kind === 'result' ? 'results' : 'documents'}`, file, {
-      'content-type': file.type || 'application/octet-stream',
-      'x-file-name': encodeURIComponent(file.name),
-      'x-doc-kind': kind,
-    });
+    if (file.size > MAX_FILE) {
+      const type = file.type || 'application/octet-stream';
+      const meta = { filename: file.name, mime: type, size: file.size, kind };
+      const got = await api('POST', `${base}/${kind === 'result' ? 'results' : 'documents'}/upload-url`, meta);
+      await putWithProgress(got.upload_url, file, got.content_type, (pct) => say(msg, `Загружаем… ${pct}%`, 'ok'));
+      await api('POST', `${base}/uploads/complete`, { pass: got.pass });
+    } else {
+      // Результат работы — отдельной операцией исполнителя; остальные документы — заказчика.
+      await api('POST', `${base}/${kind === 'result' ? 'results' : 'documents'}`, file, {
+        'content-type': file.type || 'application/octet-stream',
+        'x-file-name': encodeURIComponent(file.name),
+        'x-doc-kind': kind,
+      });
+    }
     say(msg, 'Файл добавлен', 'ok');
     await loadDocs();
   } catch (err) { say(msg, err.message); }

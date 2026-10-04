@@ -120,7 +120,7 @@ test('заявка и документ: создать, загрузить, ск
   await expect(page.getByText('Документов пока нет.')).toBeVisible();
   await shot(page, '05-zayavka');
 
-  await page.getByLabel('Добавить файл (до 5 МБ)').setInputFiles({
+  await page.getByLabel('Добавить файл (до 100 МБ)').setInputFiles({
     name: 'Выписка ЕГРН.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 тестовый файл'),
   });
   await expect(page.getByText('Файл добавлен')).toBeVisible();
@@ -1901,7 +1901,7 @@ test('сквозной путь: заявка на оценку квартиры
   await page.getByLabel('Адрес объекта').fill('г. Москва, ул. Тестовая, д. 11, кв. 4');
   await page.getByLabel('Площадь, кв. м').fill('42');
   await page.getByLabel(/^Срок/).fill(inDays(10));
-  await page.getByLabel('Добавить файл (до 5 МБ)').setInputFiles({ name: 'Выписка ЕГРН.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 тестовая выписка') });
+  await page.getByLabel('Добавить файл (до 100 МБ)').setInputFiles({ name: 'Выписка ЕГРН.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 тестовая выписка') });
   await expect(page.getByText('Файл добавлен')).toBeVisible();
   await shot(page, '71-skvoznoy-zayavka');
   await page.getByRole('button', { name: 'Отправить заявку' }).click();
@@ -2939,5 +2939,75 @@ test('деньги для юрлица (2.46): реквизиты, счёт до
   const rt = await read(rep);
   expect(rt).toContain('Отчёт агента');
   expect(rt).not.toContain('Юрфирма');
+  await staff.close();
+});
+
+// Скорость на телефоне (2.49): открытие экранов, отчёт на 50 МБ (прямо в хранилище, с ходом загрузки), 100 фото осмотра.
+// Замеры — в test-results/speed.json; пороги — для локального стенда (на площадке — сеть и облако, см. STATE.md).
+test('скорость (2.49): экраны, отчёт на 50 МБ, 100 фото осмотра', async ({ page, browser, baseURL }) => {
+  test.setTimeout(180_000);
+  const C = '+79990005101', D = '+79990005102', S = '+79990005103';
+  const speed = {};
+  const ms = async (name, fn) => { const t = Date.now(); await fn(); speed[name] = Date.now() - t; };
+  await signIn(page, C);
+  const staff = await staffFor(browser, baseURL, D, S, 'realty');
+  // 30 заявок у заказчика — список не должен тормозить.
+  const ids = [];
+  for (let i = 0; i < 30; i += 1) {
+    const o = (await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: `Квартира №${i + 1}` }, headers: H })).json()).order;
+    ids.push(o.id);
+  }
+  const main = ids[0];
+  expect((await page.request.patch(`/api/orders/${main}`, { data: { deadline: inDays(9), fields: { purpose: 'deal', region: 'moscow', object_type: 'house', address: 'МО, д. Скоростная, 1' } }, headers: H })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${main}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  await db((c) => c.query('update orders set price_kop = 1500000, paid_at = now() where id = $1', [main]));
+  expect((await staff.dp.request.post(`/api/orders/${main}/offer`, { data: { specialist_id: staff.specId, from: 'matching' }, headers: H })).status()).toBe(200);
+  expect((await staff.sp.request.post(`/api/orders/${main}/status`, { data: { from: 'awaiting_executor', to: 'in_work' }, headers: H })).status()).toBe(200);
+
+  await ms('список 30 заявок', async () => { await page.goto('/kabinet'); await expect(page.locator('#orders li')).toHaveCount(30); });
+  await ms('открыть заявку', async () => { await page.locator('#orders li').filter({ hasText: 'Квартира №1' }).first().locator('button').first().click(); await expect(page.locator('#order-status')).toBeVisible(); await expect(page.locator('#next-box')).toBeVisible(); });
+
+  // 100 фото осмотра владельцем по ссылке (через открытые операции осмотра).
+  const link = await (await staff.sp.request.post(`/api/orders/${main}/inspection`, { data: { days: 1 }, headers: H })).json();
+  const token = link.path.split('#')[1];
+  const steps = (await (await staff.sp.request.get('/api/inspect', { headers: { 'x-inspect-token': token } })).json()).steps.map((s) => s.id);
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, ...Buffer.alloc(200 * 1024, 7)]);
+  await ms('100 фото осмотра загрузить', async () => {
+    for (let i = 0; i < 100; i += 1) {
+      const r = await staff.sp.request.post('/api/inspect/photos', { data: jpeg, headers: { ...H, 'content-type': 'image/jpeg', 'x-inspect-token': token, 'x-step': steps[i % steps.length], 'x-shot-at': new Date().toISOString() } });
+      expect(r.status(), `фото ${i + 1}`).toBe(201);
+    }
+  });
+  await ms('дело эксперта со 100 фото', async () => {
+    await staff.sp.goto(`/kabinet#order=${main}`);
+    await expect(staff.sp.locator('#order-status')).toHaveText('В работе');
+    const group = staff.sp.locator('#docs li[data-group="inspection"]');
+    await expect(group.locator('summary')).toHaveText('Фото осмотра: 100 — показать');
+    await expect(group.locator('li.doc')).toHaveCount(100);
+  });
+  await shot(staff.sp, '124-skorost-100-foto');
+  const h = await staff.sp.evaluate(() => document.documentElement.scrollHeight);
+  expect(h, 'страница дела со 100 фото не уходит на десятки экранов').toBeLessThan(915 * 12);
+
+  // Отчёт на 50 МБ — прямо в хранилище, на экране — ход загрузки в процентах.
+  // Playwright передаёт в браузер больше 50 МБ только файлом с диска.
+  const bigPath = 'test-results/Отчёт об оценке.pdf';
+  fs.writeFileSync(bigPath, Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.alloc(50 * 1024 * 1024, 32)]));
+  await ms('отчёт 50 МБ загрузить', async () => {
+    await staff.sp.locator('#result-file').setInputFiles(bigPath);
+    await expect(staff.sp.locator('#doc-msg')).toHaveText('Файл добавлен', { timeout: 60_000 });
+  });
+  await expect(staff.sp.locator('#docs li').filter({ hasText: 'Отчёт об оценке.pdf' })).toContainText('50,0 МБ');
+  await ms('Word черновика с фото', async () => {
+    await staff.sp.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+    await expect(staff.sp.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+    const [w] = await Promise.all([staff.sp.waitForEvent('download'), staff.sp.getByRole('button', { name: 'Скачать Word' }).click()]);
+    expect(w.suggestedFilename()).toMatch(/\.docx$/);
+  });
+  fs.writeFileSync('test-results/speed.json', JSON.stringify(speed, null, 2));
+  console.log('Скорость, мс:', JSON.stringify(speed));
+  expect(speed['список 30 заявок']).toBeLessThan(3000);
+  expect(speed['открыть заявку']).toBeLessThan(3000);
+  expect(speed['дело эксперта со 100 фото']).toBeLessThan(5000);
   await staff.close();
 });

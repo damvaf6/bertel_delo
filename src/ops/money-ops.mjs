@@ -7,7 +7,7 @@ import { moneyView, orderSides } from '../access/policy.mjs';
 import { ProviderError } from '../providers/fake.mjs';
 import { applyPaymentStatus, runPayout, runRefund, runSettlement, shortRef, splitAmount } from '../money/money.mjs';
 import { customersOf, notify } from '../notify/notify.mjs';
-import { audit } from './util.mjs';
+import { audit, sendFile } from './util.mjs';
 import { closingDoc, invoiceDoc } from '../money/papers.mjs';
 import { DOCX_MIME } from '../docs/docx.mjs';
 
@@ -50,14 +50,6 @@ async function syncPayment(sql, providers, cfg, payment) {
   await runSettlement(sql, providers, settlement);
 }
 
-function sendDocx(res, { buf, filename }) {
-  res.set({
-    'content-type': DOCX_MIME,
-    'content-disposition': `attachment; filename="document.docx"; filename*=UTF-8''${encodeURIComponent(filename)}`,
-    'cache-control': 'no-store',
-  });
-  res.send(buf);
-}
 
 export function moneyOps() {
   // Деньги по заявке глазами вошедшего: заказчик — цена, оплата, акт; исполнитель — своё вознаграждение, выплата,
@@ -120,7 +112,7 @@ export function moneyOps() {
       // служебным; когда цена назначена и заявка не отменена.
       id: 'orders.invoice', method: 'GET', path: '/api/orders/:id/invoice', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
-      async handler({ sql, actor, order, registry, cfg, res }) {
+      async handler({ sql, actor, order, registry, cfg, res, providers }) {
         if (!moneyView(actor, order).customer) throw new HttpError(403, 'forbidden', 'Счёт видит сторона заказчика');
         if (!order.price_kop) throw new HttpError(409, 'no_price', 'Цена ещё не назначена — счёт будет после неё');
         if (order.status === 'cancelled') throw new HttpError(409, 'order_cancelled', 'Заявка отменена');
@@ -129,7 +121,7 @@ export function moneyOps() {
         const customer = org ? { name: org.name, inn: org.inn, kpp: org.kpp, address: org.legal_address } : { name: owner?.full_name || 'Заказчик' };
         const doc = invoiceDoc({ order, customer, registry, op: cfg.operator, test: cfg.testMoney });
         await audit(sql, actor, 'invoice.download', 'order', order.id, {});
-        sendDocx(res, doc);
+        await sendFile(res, providers, { ...doc, mime: DOCX_MIME });
       },
     },
     {
@@ -137,7 +129,7 @@ export function moneyOps() {
       // служебным — все. Чужой документ или документ другой заявки — «не найден».
       id: 'orders.closing.docx', method: 'GET', path: '/api/orders/:id/closing/:doc', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
-      async handler({ sql, actor, order, params, registry, cfg, res }) {
+      async handler({ sql, actor, order, params, registry, cfg, res, providers }) {
         const see = moneyView(actor, order);
         const kinds = [...(see.customer ? ['act', 'refund'] : []), ...(see.executor ? ['agent_report'] : [])];
         const id = /^[0-9a-f-]{36}$/i.test(String(params.doc)) ? params.doc : null;
@@ -145,7 +137,7 @@ export function moneyOps() {
         if (!d) throw new HttpError(404, 'not_found', 'Документ не найден');
         const doc = closingDoc({ doc: d, number: docView(d).number, registry, op: cfg.operator });
         await audit(sql, actor, 'closing.download', 'order', order.id, { doc: d.id, kind: d.kind });
-        sendDocx(res, doc);
+        await sendFile(res, providers, { ...doc, mime: DOCX_MIME });
       },
     },
     {

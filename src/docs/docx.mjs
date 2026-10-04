@@ -6,7 +6,7 @@ import zlib from 'node:zlib';
 import { HttpError } from '../http/core.mjs';
 
 export const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-export const TEMPLATE_MAX_BYTES = 5 * 1024 * 1024;
+export const TEMPLATE_MAX_BYTES = 3 * 1024 * 1024; // облако: запрос не больше 3,5 МБ (2.49)
 const UNZIP_MAX_BYTES = 40 * 1024 * 1024;   // всё содержимое шаблона в распакованном виде (защита от «архивной бомбы»)
 const UNZIP_MAX_ENTRIES = 500;
 // Место для отчёта в шаблоне: абзац с этим текстом заменяется отчётом; нет его — отчёт идёт после содержимого шаблона.

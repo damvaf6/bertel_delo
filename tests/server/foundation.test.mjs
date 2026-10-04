@@ -145,9 +145,9 @@ test('размер запроса ограничен: JSON — 64 КБ, файл
   assert.equal(big.status, 413);
   const order = (await c.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Размеры' })).body.order;
   const up = (buf) => c.req('POST', `/api/orders/${order.id}/documents`, buf, { raw: true, headers: { 'x-file-name': 'f.bin' } });
-  assert.equal((await up(Buffer.alloc(5 * 1024 * 1024 + 1))).status, 413);
+  assert.equal((await up(Buffer.alloc(3 * 1024 * 1024 + 1))).status, 413);
   assert.equal((await up(Buffer.alloc(0))).status, 400);
-  assert.equal((await up(Buffer.alloc(5 * 1024 * 1024))).status, 201);
+  assert.equal((await up(Buffer.alloc(3 * 1024 * 1024))).status, 201);
   assert.equal((await c.req('POST', '/api/orders', '{плохой', { raw: true, headers: { 'content-type': 'application/json' } })).status, 400);
 });
 

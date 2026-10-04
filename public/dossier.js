@@ -3,7 +3,7 @@ import { api, el, say, formatSize } from '/common.js';
 import { dayRu } from '/order.js';
 
 const $ = (id) => document.getElementById(id);
-const MAX_FILE = 5 * 1024 * 1024;
+const MAX_FILE = 3 * 1024 * 1024; // облако: запрос не больше 3,5 МБ (2.49)
 let kinds = [];
 let editing = null; // запись, которую сейчас правим (null — добавляем новую)
 
@@ -99,7 +99,7 @@ async function upload(i, e) {
   const file = e.target.files[0];
   e.target.value = '';
   if (!file) return;
-  if (file.size > MAX_FILE) return say($('dossier-msg'), 'Файл больше 5 МБ');
+  if (file.size > MAX_FILE) return say($('dossier-msg'), 'Файл больше 3 МБ — сохраните скан с меньшим разрешением');
   say($('dossier-msg'), 'Загружаем…', 'ok');
   try {
     render(await api('POST', `/api/specialist/me/dossier/${i.id}/file`, file, {

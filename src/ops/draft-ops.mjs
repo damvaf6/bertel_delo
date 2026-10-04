@@ -10,7 +10,7 @@ import { fillTables, orderSections, reportFor, tablesBrief } from '../docs/repor
 import { APPROACHES } from '../modules/index.mjs';
 import { analogsBrief } from '../analogs/analogs.mjs';
 import { publicDoc, saveDocument } from './core-ops.mjs';
-import { audit } from './util.mjs';
+import { audit, sendFile } from './util.mjs';
 import { fillDraft, itemLine, loadDossier } from '../dossier/dossier.mjs';
 
 const PHOTOS_MAX = 40;
@@ -197,12 +197,8 @@ export function draftOps() {
         if (!cur) throw new HttpError(404, 'no_draft', 'Черновика ещё нет');
         const word = await reportFor(ctx, order, actor, cur.body);
         await audit(sql, actor, 'draft.docx', 'order', order.id, { draft: String(cur.id), template: word.template });
-        res.set({
-          'content-type': DOCX_MIME,
-          'content-disposition': `attachment; filename="report.docx"; filename*=UTF-8''${encodeURIComponent(word.filename)}`,
-          'cache-control': 'no-store',
-        });
-        res.send(word.buf);
+        // Word с фото осмотра и скриншотами бывает больше 3,5 МБ — тогда временной ссылкой из хранилища (2.49).
+        await sendFile(res, ctx.providers, { buf: word.buf, filename: word.filename, mime: DOCX_MIME });
       },
     },
     {
