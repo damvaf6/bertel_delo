@@ -2,7 +2,7 @@
 // переход к каждому разделу и одна главная кнопка для следующего шага; внизу экрана — та же кнопка, пока листаете.
 // Шаги считаются по тому, что уже загружено на странице (заявка, документы, проверка) — отдельного запроса нет.
 // Текст — только через textContent.
-import { el } from '/common.js';
+import { el, quoted } from '/common.js';
 
 const $ = (id) => document.getElementById(id);
 let ctx = {}; // { current, docs, review, draft, analogs, money, step(action) }
@@ -62,7 +62,7 @@ function steps() {
   if (visible('review-box')) items.push({ id: 'ai', title: aiFresh || !ai ? 'ИИ-проверка перед сдачей' : 'ИИ-проверка — файлы менялись, проверьте ещё раз', done: aiFresh && results.length > 0, go: go('review-box'), optional: true });
   if (signNeed) {
     items.push({ id: 'sign', title: 'Подпись УКЭП', done: results.length > 0 && !unsigned.length, go: go('docs') });
-    if (orgNeed) items.push({ id: 'org', title: `Подпись организации «${docs.signature_org}»`, done: results.length > 0 && !unsigned.length && !orgWait.length, go: go('docs'), wait: true });
+    if (orgNeed) items.push({ id: 'org', title: `Подпись организации ${quoted(docs.signature_org)}`, done: results.length > 0 && !unsigned.length && !orgWait.length, go: go('docs'), wait: true });
   }
   const submit = act('review');
   items.push({ id: 'submit', title: 'Сдача на проверку', done: false, go: go('actions') });
@@ -99,7 +99,7 @@ function customerSteps() {
   if (order.status === 'matching') {
     if (money?.can_pay) return { lead: 'Цена назначена. После оплаты заявку передадут исполнителю; деньги хранятся у платформы до выдачи Вам результата.', items: [], main: { label: $('pay')?.textContent || 'Оплатить', run: () => $('pay')?.click() } };
     if (money?.paid) return { lead: 'Оплачено. Платформа подбирает исполнителя — придёт уведомление.', items: [] };
-    return { lead: 'Заявка отправлена. Платформа назначит цену — придёт уведомление, после этого заявку можно оплатить.', items: [] };
+    return { lead: 'Платформа назначит цену — придёт уведомление, после этого заявку можно оплатить.', items: [] };
   }
   if (order.status === 'awaiting_executor') return { lead: 'Исполнитель подобран и смотрит заявку. Как только примет — придёт уведомление.', items: [] };
   if (order.status === 'in_work') return { lead: `Исполнитель работает.${deadline} Вопросы и уточнения — в переписке ниже.`, items: [] };

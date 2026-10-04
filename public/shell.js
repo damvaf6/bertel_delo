@@ -1,5 +1,5 @@
 // Общее для разделов кабинета: кто вошёл, переключение разделов, «не найдено».
-import { api, el, formatPhone } from '/common.js';
+import { api, el, formatPhone, quoted } from '/common.js';
 
 const $ = (id) => document.getElementById(id);
 const views = ['list-view', 'order-view', 'missing-view', 'orgs-view', 'org-view', 'profile-view', 'admin-view', 'specialist-view', 'specialists-view', 'money-view', 'notifications-view', 'assistant-view', 'expert-view'];
@@ -35,7 +35,7 @@ export async function refreshMe() {
   setCounts(me);
   const sel = $('order-org');
   sel.replaceChildren(el('option', { value: '', text: 'Лично от себя' }),
-    ...me.orgs.map((o) => el('option', { value: o.org_id, text: `От организации «${o.name}»` })));
+    ...me.orgs.map((o) => el('option', { value: o.org_id, text: `От организации ${quoted(o.name)}` })));
   $('order-org-box').classList.toggle('hidden', me.orgs.length === 0);
   return me;
 }

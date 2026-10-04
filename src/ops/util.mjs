@@ -31,3 +31,6 @@ export async function audit(sql, actor, action, subjectType, subjectId, details 
   await sql`insert into audit_log (actor_id, action, subject_type, subject_id, details)
             values (${actor?.id ?? null}, ${action}, ${subjectType}, ${String(subjectId)}, ${JSON.stringify(details)})`;
 }
+
+// Название в кавычках: «Бюро», но ООО «Бюро» — как записано, без второй пары кавычек (2.41).
+export const quoted = (name) => (/[«"]/.test(String(name)) ? String(name) : `«${name}»`);

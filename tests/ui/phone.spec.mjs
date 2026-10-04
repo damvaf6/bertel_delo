@@ -264,7 +264,7 @@ test('организация: создать, пригласить, сотруд
   await expect(mp.getByRole('button', { name: 'Пригласить' })).toHaveCount(0);
   await mp.getByRole('link', { name: 'Заявки' }).click();
   await mp.getByLabel('Коротко: что нужно').fill('Оценка автомобиля для страховой');
-  await mp.getByLabel('От чьего имени').selectOption({ label: 'От организации «АНО «Тестовый центр экспертиз»»' });
+  await mp.getByLabel('От чьего имени').selectOption({ label: 'От организации АНО «Тестовый центр экспертиз»' });
   await mp.getByRole('button', { name: 'Создать заявку' }).click();
   await expect(mp.getByText(/^Организация: АНО «Тестовый центр экспертиз» · Ведёт:/)).toBeVisible();
   const orderUrl = mp.url();
@@ -414,7 +414,7 @@ test('заявка на оценку: поля услуги, срок, осно�
   await expect(page.getByText('Заявка отправлена')).toBeVisible();
   await expect(page.locator('#order-status')).toHaveText('Подбор исполнителя');
   await expect(page.locator('#facts')).toContainText('Квартира');
-  await expect(page.locator('#facts')).toContainText('54.3');
+  await expect(page.locator('#facts')).toContainText('54,3');
   await expect(page.locator('#facts')).toContainText('Определение суда, № 2-1234/2026');
   await expect(page.locator('#details-form')).toBeHidden();
   await expect(page.locator('#docs li').filter({ hasText: 'Определение суда.pdf' }).getByRole('button', { name: 'Удалить' })).toHaveCount(0);
@@ -1495,7 +1495,7 @@ test('две подписи (2.5а): эксперт от организации 
   await expect(sp.locator('#order-status')).toHaveText('В работе');
   await sp.locator('#result-file').setInputFiles({ name: 'отчёт-компании.pdf', mimeType: 'application/pdf', buffer: report });
   const doc = sp.locator('#docs li').filter({ hasText: 'отчёт-компании.pdf' });
-  await expect(doc.locator('[data-sig="org-wait"]')).toHaveText('После Вашей подписи файл подписывает руководитель организации «ООО «Тестовая оценочная компания»»');
+  await expect(doc.locator('[data-sig="org-wait"]')).toHaveText('После Вашей подписи файл подписывает руководитель организации ООО «Тестовая оценочная компания»');
   await expect(doc.getByText('Загрузить готовую подпись')).toBeVisible();
   sp.once('dialog', (d) => d.accept());
   await doc.locator('input[type=file]').setInputFiles({ name: 'отчёт-компании.pdf.sig', mimeType: 'application/octet-stream',
@@ -1505,7 +1505,7 @@ test('две подписи (2.5а): эксперт от организации 
   await expect(doc).toContainText('загружена готовым файлом');
   await expect(doc.locator('[data-sig="org-wait"]')).toContainText('Ждёт подписи организации');
   await sp.getByRole('button', { name: 'Сдать на проверку' }).click();
-  await expect(sp.locator('#status-msg')).toContainText('Нужна подпись организации «ООО «Тестовая оценочная компания»» (руководитель): отчёт-компании.pdf');
+  await expect(sp.locator('#status-msg')).toContainText('Нужна подпись организации ООО «Тестовая оценочная компания» (руководитель): отчёт-компании.pdf');
   await shot(sp, '96-specialist-gotovaya-podpis');
 
   // Руководитель: уведомление, раздел организации — подписать от организации.
@@ -1692,7 +1692,7 @@ test('распределение в организации (2.17): диспет�
   dp.once('dialog', (d) => d.accept());
   await og.getByRole('button', { name: 'Предложить организации' }).click();
   await expect(dp.locator('#order-status')).toHaveText('Ждёт исполнителя');
-  await expect(dp.locator('#match-current')).toHaveText('Сейчас дело у организации «ООО «Тестовое бюро распределения»»: её руководитель назначает эксперта. Можно передать другому.');
+  await expect(dp.locator('#match-current')).toHaveText('Сейчас дело у организации ООО «Тестовое бюро распределения»: её руководитель назначает эксперта. Можно передать другому.');
   await expect(og.locator('.badge')).toHaveText('Предложено сейчас');
   await og.scrollIntoViewIfNeeded();
   await shot(dp, '99a-dispetcher-organizacii');
@@ -2434,4 +2434,170 @@ test('карточка эксперта (2.35): из подбора у дисп�
   await page.goto(`/kabinet#expert=${spec.id}`);
   await expect(page.getByRole('heading', { name: 'Эксперт не найден' })).toBeVisible();
   for (const c of [dctx, sctx, hctx]) await c.close();
+});
+
+// Как настоящий заказчик (2.41): исполнитель и диспетчер — через API (их путь проверен в других проверках); заказчик —
+// только на экране телефона: от проблемы своими словами до результата и акта.
+async function staffFinish({ dp, sp, orderId, specId, price = '15000' }) {
+  expect((await dp.request.put(`/api/orders/${orderId}/price`, { data: { price }, headers: H })).status()).toBe(200);
+  return async function afterPay() {
+    expect((await dp.request.post(`/api/orders/${orderId}/offer`, { data: { specialist_id: specId, from: 'matching' }, headers: H })).status()).toBe(200);
+    expect((await sp.request.post(`/api/orders/${orderId}/status`, { data: { from: 'awaiting_executor', to: 'in_work' }, headers: H })).status()).toBe(200);
+    const up = await sp.request.post(`/api/orders/${orderId}/results`, { data: Buffer.from('%PDF-1.4 Отчёт об оценке. Итоговая стоимость 1 250 000 руб.'), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Отчёт об оценке.pdf') } });
+    expect(up.status()).toBe(201);
+    expect((await sp.request.post(`/api/documents/${(await up.json()).document.id}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+    expect((await sp.request.post(`/api/orders/${orderId}/messages`, { data: { body: 'Отчёт готов, оригинал с подписью — в файле.' }, headers: H })).status()).toBe(201);
+    expect((await sp.request.post(`/api/orders/${orderId}/status`, { data: { from: 'in_work', to: 'review' }, headers: H })).status()).toBe(200);
+    const rv = await (await dp.request.get(`/api/orders/${orderId}/review`)).json();
+    for (const c of rv.checks) expect((await dp.request.put(`/api/orders/${orderId}/review/${c.id}`, { data: { verdict: 'ok', round: rv.round }, headers: H })).status()).toBe(200);
+    expect((await dp.request.post(`/api/orders/${orderId}/status`, { data: { from: 'review', to: 'done' }, headers: H })).status()).toBe(200);
+  };
+}
+
+async function staffFor(browser, baseURL, D, S, service) {
+  const dctx = await phoneContext(browser, baseURL), sctx = await phoneContext(browser, baseURL);
+  const dp = await dctx.newPage(), sp = await sctx.newPage();
+  const disp = await signIn(dp, D), spec = await signIn(sp, S);
+  await sp.request.patch('/api/me', { data: { full_name: 'Эксперт Заказчиков' }, headers: H });
+  await db(async (c) => {
+    await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', $2)", [spec.id, service]);
+  });
+  return { dp, sp, specId: spec.id, close: async () => { await dctx.close(); await sctx.close(); } };
+}
+
+// Заказчик открывает результат, акт и закрывает заявку — общий конец обоих сценариев.
+async function customerReceives(page, prefix, customerName) {
+  const next = page.locator('#next-box');
+  await expect(page.locator('#order-status')).toHaveText('Готово');
+  await expect(next).toContainText('Результат готов');
+  await expect(next.locator('#next-steps li[data-step="result"]')).toContainText('Скачать результат (1)');
+  await next.locator('#next-steps li[data-step="act"] button').click();
+  const res = page.locator('#docs li').filter({ hasText: 'Отчёт об оценке.pdf' });
+  await expect(res).toContainText('Результат работы');
+  const [download] = await Promise.all([page.waitForEvent('download'), res.getByRole('button', { name: 'Скачать' }).click()]);
+  expect(download.suggestedFilename()).toBe('Отчёт об оценке.pdf');
+  await expect(page.locator('#messages li').first()).toContainText('Отчёт готов');
+  await page.locator('#closing li').filter({ hasText: 'Акт' }).getByRole('button', { name: 'Открыть' }).click();
+  await expect(page.locator('#closing-doc')).toContainText('Акт об оказании услуг');
+  await expect(page.locator('#closing-doc')).toContainText(`Заказчик: ${customerName}`);
+  await expect(page.locator('#closing-doc')).toContainText(/Стоимость: 15\s000 ₽/);
+  await shot(page, `${prefix}-gotovo`);
+  await page.locator('#next-main button', { hasText: 'Принять и закрыть' }).click();
+  await expect(page.locator('#order-status')).toHaveText('Закрыта');
+  await expect(next).toContainText('Заявка закрыта');
+  await expect(page.locator('#closing li')).toHaveCount(1);
+  await shot(page, `${prefix}-zakryta`);
+}
+
+test('как настоящий заказчик (2.41): частное лицо — ДТП своими словами, помощник, заявка, оплата, отчёт и акт', async ({ page, browser, baseURL }) => {
+  const C = '+79990004101', D = '+79990004102', S = '+79990004103';
+  const staff = await staffFor(browser, baseURL, D, S, 'vehicle');
+  await signIn(page, C);
+  await page.request.patch('/api/me', { data: { full_name: 'Тестов Иван Петрович' }, headers: H });
+  await page.goto('/kabinet');
+  await page.getByRole('link', { name: 'Спросить помощника' }).click();
+  await page.getByLabel('Что случилось').fill('Попал в ДТП в Москве, страховая заплатила мало. Хочу доказать, что ремонт машины дороже. Выиграю ли я суд?');
+  await page.getByRole('button', { name: 'Разобраться' }).click();
+  await expect(page.locator('#pa-steps li').first()).toBeVisible();
+  await expect(page.locator('#pa-specialist')).toContainText('Оценка транспортного средства');
+  await expect(page.locator('#pa-legal')).toContainText('это вопрос к юристу');
+  await expect(page.locator('#pa-disclaimer')).toContainText('не юридическая услуга');
+  await shot(page, '102-zakazchik-razbor');
+  await page.getByRole('button', { name: 'Создать заявку' }).click();
+  await expect(page.locator('#order-status')).toHaveText('Новая');
+  const id = new URL(page.url()).hash.match(/^#order=([0-9a-f-]{36})$/i)[1];
+
+  // «Что дальше» говорит, чего не хватает; главная кнопка ведёт к заполнению.
+  const next = page.locator('#next-box');
+  await expect(next).toContainText('Чтобы отправить заявку, заполните: Вид транспорта, Марка и модель, срок');
+  await expect(page.getByLabel('Для чего нужна оценка')).toHaveValue('court');
+  await expect(page.getByLabel('Где находится объект')).toHaveValue('moscow');
+  await shot(page, '103-zakazchik-chto-dalshe');
+  await page.locator('#next-main button', { hasText: 'Заполнить заявку' }).click();
+  await page.getByLabel('Вид транспорта').selectOption({ label: 'Легковой автомобиль' });
+  await page.getByLabel('Марка и модель').fill('Лада Веста');
+  await page.getByLabel('Год выпуска').fill('2019');
+  await page.getByLabel('Пробег, км').fill('84500');
+  await page.getByLabel(/^Срок/).fill(inDays(10));
+  await page.getByRole('button', { name: 'Сохранить' }).click();
+  await expect(page.locator('#details-msg')).toHaveText('Сохранено');
+  await expect(next).toContainText('Всё нужное заполнено');
+  await page.locator('#next-main button', { hasText: 'Отправить заявку' }).click();
+  await expect(page.locator('#order-status')).toHaveText('Подбор исполнителя');
+  await expect(next).toContainText('Платформа назначит цену');
+  await expect(page.locator('#facts')).toContainText('84 500');
+  await expect(page.locator('#facts')).toContainText('2019');
+
+  // Цена назначена — главная кнопка «Оплатить».
+  const afterPay = await staffFinish({ ...staff, orderId: id });
+  await page.reload();
+  await expect(next).toContainText('Цена назначена');
+  await shot(page, '104-zakazchik-oplata');
+  await page.locator('#next-main button', { hasText: /Оплатить 15\s000 ₽/ }).click();
+  await expect(page.locator('#money-facts')).toContainText('оплачено');
+  await expect(next).toContainText('Оплачено. Платформа подбирает исполнителя');
+
+  await afterPay();
+  await page.reload();
+  await customerReceives(page, '105-zakazchik', 'Тестов Иван Петрович');
+  await staff.close();
+});
+
+test('как настоящий заказчик (2.41): юрист фирмы — заявка от организации по определению суда, руководитель видит, акт на фирму', async ({ page, browser, baseURL }) => {
+  const L = '+79990004201', HD = '+79990004202', D = '+79990004203', S = '+79990004204';
+  const staff = await staffFor(browser, baseURL, D, S, 'realty');
+  const lawyer = await signIn(page, L);
+  const hctx = await phoneContext(browser, baseURL);
+  const hp = await hctx.newPage();
+  const head = await signIn(hp, HD);
+  await db(async (c) => {
+    const org = (await c.query("insert into organizations (name) values ('ООО «Юрфирма Тест»') returning id")).rows[0].id;
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org, head.id, lawyer.id]);
+  });
+  await page.goto('/kabinet');
+  await page.reload(); // организация появилась — кабинет перечитывает, кто вошёл
+  await page.locator('#new-order').getByLabel('Услуга').selectOption({ label: 'Оценка недвижимости' });
+  await page.getByLabel('Коротко: что нужно').fill('Оценка доли в квартире — дело 2-777/2026');
+  await page.getByLabel('От чьего имени').selectOption({ label: 'От организации ООО «Юрфирма Тест»' });
+  await page.getByRole('button', { name: 'Создать заявку' }).click();
+  await expect(page.locator('#order-status')).toHaveText('Новая');
+  await expect(page.locator('#order-org-line')).toContainText('Организация: ООО «Юрфирма Тест»');
+  const id = new URL(page.url()).hash.match(/^#order=([0-9a-f-]{36})$/i)[1];
+  const next = page.locator('#next-box');
+
+  await page.getByLabel('Для чего нужна оценка').selectOption({ label: 'Для суда' });
+  await page.getByLabel('Где находится объект').selectOption({ label: 'Москва' });
+  await page.getByLabel('Что оцениваем').selectOption({ label: 'Доля в квартире или доме' });
+  await page.getByLabel('Адрес объекта').fill('г. Москва, ул. Судебная, д. 3, кв. 12');
+  await page.getByLabel('Площадь, кв. м').fill('64,8');
+  await page.getByLabel(/^Срок/).fill(inDays(12));
+  await page.getByLabel('Основание').selectOption({ label: 'Определение суда' });
+  await page.getByLabel(/^Номер определения/).fill('2-777/2026');
+  await page.getByLabel(/^Дата определения/).fill(inDays(-5));
+  await page.getByRole('button', { name: 'Сохранить' }).click();
+  await expect(next).toContainText('заполните: файл определения суда');
+  await page.getByLabel('Приложить определение суда').setInputFiles({ name: 'Определение 2-777.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 тестовое определение') });
+  await expect(page.getByText('Приложено: Определение 2-777.pdf')).toBeVisible();
+  await expect(next).toContainText('Всё нужное заполнено');
+  await shot(page, '106-yurist-zayavka');
+  await page.locator('#next-main button', { hasText: 'Отправить заявку' }).click();
+  await expect(page.locator('#order-status')).toHaveText('Подбор исполнителя');
+  await expect(page.locator('#facts')).toContainText('Определение суда, № 2-777/2026');
+  await expect(page.locator('#facts')).toContainText('64,8');
+
+  // Руководитель фирмы видит заявку юриста.
+  await hp.goto(`/kabinet#order=${id}`);
+  await expect(hp.locator('#order-title')).toHaveText('Оценка доли в квартире — дело 2-777/2026');
+
+  const afterPay = await staffFinish({ ...staff, orderId: id });
+  await page.reload();
+  await page.locator('#next-main button', { hasText: /Оплатить 15\s000 ₽/ }).click();
+  await expect(next).toContainText('Оплачено');
+  await afterPay();
+  await page.reload();
+  await customerReceives(page, '107-yurist', 'Организация ООО «Юрфирма Тест»');
+  await hctx.close();
+  await staff.close();
 });

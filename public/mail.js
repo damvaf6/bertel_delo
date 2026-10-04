@@ -1,5 +1,5 @@
 // Профиль → «Почта для заявок» (1.9): подключить адрес кодом из письма, выбрать, от чьего имени заявки по письмам, отключить.
-import { api, el, say } from '/common.js';
+import { api, el, say, quoted } from '/common.js';
 import { state } from '/shell.js';
 
 const $ = (id) => document.getElementById(id);
@@ -24,7 +24,7 @@ function render() {
   const orgs = state.me.orgs;
   $('mail-org-box').classList.toggle('hidden', !a?.confirmed || (!orgs.length && !a.org_id));
   $('mail-org').replaceChildren(el('option', { value: '', text: 'Лично' }),
-    ...orgs.map((o) => el('option', { value: o.org_id, text: `Организация «${o.name}»` })));
+    ...orgs.map((o) => el('option', { value: o.org_id, text: `Организация ${quoted(o.name)}` })));
   $('mail-org').value = a?.org_lost ? '' : a?.org_id ?? '';
   if (a?.org_lost) say($('mail-msg'), 'Вы больше не состоите в организации, от имени которой принимались заявки. Выберите заново.');
   $('mail-delete').classList.toggle('hidden', !a);

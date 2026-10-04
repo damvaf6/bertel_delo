@@ -6,7 +6,7 @@ import { LEVEL, executorSignOrg, isStaff, memberOf, orderLevel, orderSides, visi
 import { BASIS_KINDS, cleanValues, missingRequired } from '../modules/index.mjs';
 import { STATUSES, STATUS_NAME, TRANSITIONS, WORK_STARTED, addDays, availableActions, findTransition, isOverdue, todayMsk } from '../orders/workflow.mjs';
 import { runSettlement, settleCancel, settleDone, splitAmount } from '../money/money.mjs';
-import { audit, oneOf, text, uuidFrom } from './util.mjs';
+import { audit, oneOf, quoted, text, uuidFrom } from './util.mjs';
 import { reviewState } from './work-ops.mjs';
 import { notify, notifyStatus, orgHeads } from '../notify/notify.mjs';
 
@@ -334,7 +334,7 @@ export function orderOps() {
                                        left join document_signatures s on s.document_id = d.id and s.role = 'org' and s.org_id = ${signOrg.id}
                                        where d.order_id = ${cur.id} and d.kind = 'result' and d.deleted_at is null
                                          and d.uploaded_by = ${cur.executor_user_id} and s.id is null order by d.created_at`;
-                if (noOrg.length) throw new HttpError(400, 'not_signed_org', `Нужна подпись организации «${signOrg.name}» (руководитель): ${noOrg.map((d) => d.filename).join(', ')}`);
+                if (noOrg.length) throw new HttpError(400, 'not_signed_org', `Нужна подпись организации ${quoted(signOrg.name)} (руководитель): ${noOrg.map((d) => d.filename).join(', ')}`);
               }
             }
           }

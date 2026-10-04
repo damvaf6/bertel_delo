@@ -1,6 +1,6 @@
 // Раздел «Помощник» (задача 1.8): вход через проблему (ИИ разъясняет и предлагает услугу, заявка — черновиком) и ассистент
 // по делам с раздельной памятью: личной и по каждой организации. Тексты — только через textContent.
-import { api, el, say } from '/common.js';
+import { api, el, say, quoted } from '/common.js';
 import { state, show } from '/shell.js';
 
 const $ = (id) => document.getElementById(id);
@@ -52,7 +52,7 @@ function renderAnswer() {
   $('pa-service').replaceChildren(el('option', { value: '', text: 'Выберите услугу' }), ...options);
   $('pa-service').value = c.service ? `${c.service.module}/${c.service.service}` : '';
   $('pa-org').replaceChildren(el('option', { value: '', text: 'Лично от себя' }),
-    ...state.me.orgs.map((o) => el('option', { value: o.org_id, text: `От организации «${o.name}»` })));
+    ...state.me.orgs.map((o) => el('option', { value: o.org_id, text: `От организации ${quoted(o.name)}` })));
   $('pa-org-box').classList.toggle('hidden', state.me.orgs.length === 0);
   $('pa-disclaimer').textContent = c.disclaimer;
   $('pa-order').disabled = !!c.order_id;

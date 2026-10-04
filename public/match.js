@@ -1,5 +1,5 @@
 // Подбор исполнителя (диспетчер), кабинет специалиста и список специалистов. Тексты — только через textContent.
-import { api, el, say, ROLE_RU } from '/common.js';
+import { api, el, say, ROLE_RU, quoted } from '/common.js';
 import { state, show, refreshMe } from '/shell.js';
 import { dayRu } from '/order.js';
 import { showDossier } from '/dossier.js';
@@ -26,7 +26,7 @@ export async function loadMatch(current, reopen) {
   if (!on) return;
   say($('match-msg'), '');
   // Заказчик платит при заказе: пока не оплачено, предложить дело нельзя (1.6а).
-  $('match-current').textContent = current.offer_org && !current.executor ? `Сейчас дело у организации «${current.offer_org.name}»: её руководитель назначает эксперта. Можно передать другому.`
+  $('match-current').textContent = current.offer_org && !current.executor ? `Сейчас дело у организации ${quoted(current.offer_org.name)}: её руководитель назначает эксперта. Можно передать другому.`
     : current.executor ? `Сейчас предложено: ${current.executor.name || 'специалист без имени'}. Можно передать другому, пока он не ответил.`
     : order.paid ? 'Заявка оплачена — дело можно предложить специалисту.' : 'Дело можно предложить после оплаты заказчиком: назначьте цену и дождитесь оплаты.';
   const { candidates, current_executor_id: cur, orgs, current_org_id: curOrg } = await api('GET', `/api/orders/${order.id}/candidates`);
@@ -62,7 +62,7 @@ async function offer(order, c, reopen) {
 }
 
 async function offerOrg(order, g, reopen) {
-  if (!confirm(`Предложить дело организации «${g.name}»? Эксперта назначит её руководитель.`)) return;
+  if (!confirm(`Предложить дело организации ${quoted(g.name)}? Эксперта назначит её руководитель.`)) return;
   try {
     await api('POST', `/api/orders/${order.id}/offer`, { org_id: g.org_id, from: order.status });
     await reopen();
