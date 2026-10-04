@@ -8,7 +8,8 @@ import { audit, oneOf, phoneFrom, publicUser, text } from './util.mjs';
 import { unreadCount } from './notify-ops.mjs';
 import { orderSignatures, orgReturns, signaturesView } from './sign-ops.mjs';
 
-const MAX_FILE_BYTES = 5 * 1024 * 1024;
+// Облако принимает запрос не больше 3,5 МБ (Yandex Serverless Containers) — через ядро только до 3 МБ (2.49).
+const MAX_FILE_BYTES = 3 * 1024 * 1024;
 const DOC_KINDS = ['basis', 'other'];
 
 // Сохранить присланный файл в хранилище и записать документ заявки (вид — основание, прочее или результат).
@@ -28,10 +29,15 @@ export async function saveDocument({ sql, actor, order, providers }, { filename,
   const name = text(String(filename ?? '').replace(/[\\/\u0000-\u001f]/g, '_'), 'Имя файла', 255);
   const key = `orders/${order.id}/${crypto.randomUUID()}`;
   await providers.storage.put(key, buf, mime);
+  return registerDocument({ sql, actor, order, providers }, { filename: name, mime, size: buf.length, key, kind });
+}
+
+// Файл уже в хранилище (обычная загрузка или прямая, 2.49) — записать документ; не вышло — файл убирается.
+export async function registerDocument({ sql, actor, order, providers }, { filename, mime, size, key, kind }) {
   try {
     return await sql.tx(async (tx) => {
       const d = await tx.one`insert into documents (order_id, uploaded_by, filename, mime, size_bytes, storage_key, kind)
-                             values (${order.id}, ${actor.id}, ${name}, ${mime}, ${buf.length}, ${key}, ${kind}) returning *`;
+                             values (${order.id}, ${actor.id}, ${filename}, ${mime}, ${size}, ${key}, ${kind}) returning *`;
       await audit(tx, actor, 'document.upload', 'document', d.id, { order_id: order.id, kind });
       return d;
     });

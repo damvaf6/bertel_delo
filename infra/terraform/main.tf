@@ -168,6 +168,26 @@ resource "yandex_storage_bucket" "files" {
     }
   }
 
+  # Большие файлы Word (черновик с фото) отдаются временной ссылкой из tmp/ (2.49) — сутки, потом удаляются.
+  lifecycle_rule {
+    id      = "tmp-day"
+    enabled = true
+    prefix  = "tmp/"
+    expiration {
+      days = 1
+    }
+  }
+
+  # Прямая загрузка больших файлов из браузера по подписанной ссылке (2.49): контейнер принимает не больше 3,5 МБ.
+  # Подпись ссылки — сама по себе пропуск; адреса страниц — только площадки и сайта.
+  cors_rule {
+    allowed_methods = ["PUT", "GET"]
+    allowed_origins = var.files_cors_origins
+    allowed_headers = ["*"]
+    expose_headers  = ["ETag"]
+    max_age_seconds = 3600
+  }
+
   grant {
     id          = yandex_iam_service_account.app.id
     type        = "CanonicalUser"

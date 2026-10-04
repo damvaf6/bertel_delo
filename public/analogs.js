@@ -6,7 +6,7 @@ import { state } from '/shell.js';
 import { setNext } from '/next.js';
 
 const $ = (id) => document.getElementById(id);
-const MAX_FILE = 10 * 1024 * 1024;
+const MAX_FILE = 3 * 1024 * 1024; // облако: запрос не больше 3,5 МБ (2.49)
 const timeRu = (s) => `${new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })} МСК`;
 let ctx = null;   // { order, data }
 
@@ -103,7 +103,7 @@ const upload = (id, file) => api('POST', `${base()}/${id}/file`, file, { 'conten
 function pickedFile(input) {
   const file = input.files[0];
   if (!file) return null;
-  if (file.size > MAX_FILE) throw new Error('Файл больше 10 МБ — сделайте скриншот поменьше или PDF одной страницы');
+  if (file.size > MAX_FILE) throw new Error('Файл больше 3 МБ — сделайте скриншот поменьше или PDF одной страницы');
   return file;
 }
 

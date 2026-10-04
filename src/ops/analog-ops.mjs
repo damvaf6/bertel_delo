@@ -12,7 +12,8 @@ import { OCR_MIME } from '../providers/ocr.mjs';
 import { analogFields, analogWarnings, cleanAnalogValues, cleanUrl, hostOf, missingAnalog, searchHints, suggestionValues } from '../analogs/analogs.mjs';
 import { audit, text as textFrom } from './util.mjs';
 
-export const ANALOG_FILE_MAX = 10 * 1024 * 1024;
+// Облако принимает запрос не больше 3,5 МБ (Yandex Serverless Containers) — через ядро только до 3 МБ (2.49).
+export const ANALOG_FILE_MAX = 3 * 1024 * 1024;
 const MAX_ANALOGS = 20;
 
 // Вид файла — по его содержимому, а не по имени: скриншот (png, jpeg, webp, heic) или PDF страницы.

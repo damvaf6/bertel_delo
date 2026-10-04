@@ -25,8 +25,11 @@ const CSP = [
 ].join('; ');
 
 export function securityHeaders(cfg) {
+  // Прямая загрузка в хранилище (2.49): браузеру разрешено отправлять файлы ещё и на адрес хранилища.
+  const storage = cfg?.providers?.storage === 's3' ? new URL(cfg.s3.publicEndpoint || cfg.s3.endpoint).origin : null;
+  const csp = storage ? CSP.replace("connect-src 'self'", `connect-src 'self' ${storage}`) : CSP;
   return (req, res, next) => {
-    res.setHeader('Content-Security-Policy', CSP);
+    res.setHeader('Content-Security-Policy', csp);
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'no-referrer');

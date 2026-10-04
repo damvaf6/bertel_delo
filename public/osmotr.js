@@ -133,7 +133,7 @@ async function prepare(file) {
   try {
     const bmp = await createImageBitmap(file);
     const k = Math.min(1, MAX_SIDE / Math.max(bmp.width, bmp.height));
-    if (k === 1 && file.type === 'image/jpeg' && file.size <= info.limits.file_bytes) return file;
+    if (k === 1 && file.type === 'image/jpeg' && file.size <= info.limits.file_bytes * 0.9) return file;
     const canvas = document.createElement('canvas');
     canvas.width = Math.round(bmp.width * k);
     canvas.height = Math.round(bmp.height * k);
@@ -151,7 +151,7 @@ async function upload(s, input, status, count) {
   say(status, 'Отправляем…', 'ok');
   try {
     const [pos, blob] = await Promise.all([position(), prepare(file)]);
-    if (blob.size > info.limits.file_bytes) throw new Error('Фото больше 5 МБ — снимите ещё раз или уменьшите размер');
+    if (blob.size > info.limits.file_bytes) throw new Error('Фото больше 3 МБ — снимите ещё раз или уменьшите размер');
     const h = { ...headers, 'x-step': s.id, 'x-shot-at': new Date().toISOString() };
     if (pos) Object.assign(h, { 'x-lat': String(pos.coords.latitude), 'x-lon': String(pos.coords.longitude), 'x-accuracy': String(pos.coords.accuracy) });
     const r = await api('POST', API.photos, new Blob([blob], { type: blob.type || file.type || 'image/jpeg' }), h);

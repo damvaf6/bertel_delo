@@ -11,7 +11,8 @@ import { KINDS, dossierAlerts, loadDossier } from '../dossier/dossier.mjs';
 import { publicDoc, saveDocument } from './core-ops.mjs';
 import { audit, text } from './util.mjs';
 
-const MAX_FILE_BYTES = 5 * 1024 * 1024;
+// Облако принимает запрос не больше 3,5 МБ (Yandex Serverless Containers) — через ядро только до 3 МБ (2.49).
+const MAX_FILE_BYTES = 3 * 1024 * 1024;
 const MAX_ITEMS = 30;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const AMOUNT_MAX_RUB = 100_000_000_000;

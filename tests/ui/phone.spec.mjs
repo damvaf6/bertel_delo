@@ -120,7 +120,7 @@ test('заявка и документ: создать, загрузить, ск
   await expect(page.getByText('Документов пока нет.')).toBeVisible();
   await shot(page, '05-zayavka');
 
-  await page.getByLabel('Добавить файл (до 5 МБ)').setInputFiles({
+  await page.getByLabel('Добавить файл (до 100 МБ)').setInputFiles({
     name: 'Выписка ЕГРН.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 тестовый файл'),
   });
   await expect(page.getByText('Файл добавлен')).toBeVisible();
@@ -1901,7 +1901,7 @@ test('сквозной путь: заявка на оценку квартиры
   await page.getByLabel('Адрес объекта').fill('г. Москва, ул. Тестовая, д. 11, кв. 4');
   await page.getByLabel('Площадь, кв. м').fill('42');
   await page.getByLabel(/^Срок/).fill(inDays(10));
-  await page.getByLabel('Добавить файл (до 5 МБ)').setInputFiles({ name: 'Выписка ЕГРН.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 тестовая выписка') });
+  await page.getByLabel('Добавить файл (до 100 МБ)').setInputFiles({ name: 'Выписка ЕГРН.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 тестовая выписка') });
   await expect(page.getByText('Файл добавлен')).toBeVisible();
   await shot(page, '71-skvoznoy-zayavka');
   await page.getByRole('button', { name: 'Отправить заявку' }).click();

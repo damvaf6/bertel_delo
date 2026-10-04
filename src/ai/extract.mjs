@@ -3,7 +3,9 @@
 // из настроек (в контуре РФ). Что прочитать не удалось — null: проверяющий смотрит такой файл сам.
 import zlib from 'node:zlib';
 
-export const READ_MAX_BYTES = 10 * 1024 * 1024;
+// Отчёт с фото бывает 50 МБ и больше (2.49): читаем до 100 МБ — PDF на 27 МБ читается за десятые доли секунды.
+export const READ_MAX_BYTES = 100 * 1024 * 1024;
+const UNZIP_TEXT_MAX = 50 * 1024 * 1024; // текст Word в распакованном виде (защита от «архивной бомбы»)
 const PDF_MAX_PAGES = 300;
 
 export function readableKind(filename, mime) {
@@ -64,12 +66,12 @@ function unzipEntry(buf, wanted) {
     const local = buf.readUInt32LE(p + 42);
     const name = buf.subarray(p + 46, p + 46 + nlen).toString('utf8');
     if (name === wanted) {
-      if (usize > READ_MAX_BYTES * 5) return null;
+      if (usize > UNZIP_TEXT_MAX) return null;
       const lnlen = buf.readUInt16LE(local + 26);
       const lxlen = buf.readUInt16LE(local + 28);
       const data = buf.subarray(local + 30 + lnlen + lxlen, local + 30 + lnlen + lxlen + csize);
       if (method === 0) return data;
-      if (method === 8) return zlib.inflateRawSync(data, { maxOutputLength: READ_MAX_BYTES * 5 });
+      if (method === 8) return zlib.inflateRawSync(data, { maxOutputLength: UNZIP_TEXT_MAX });
       return null;
     }
     p += 46 + nlen + xlen + clen;

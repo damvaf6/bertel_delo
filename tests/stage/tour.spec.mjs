@@ -175,7 +175,7 @@ test('экскурсия по кабинетам: эксперт, руковод
   await page.getByLabel('Год выпуска').fill('2024');
   await page.getByLabel('VIN').fill('XTA000000R0000001');
   await page.getByLabel(/^Срок/).fill(inDays(10));
-  await page.getByLabel('Добавить файл (до 5 МБ)').setInputFiles({ name: 'ПТС (тест).pdf', mimeType: 'application/pdf', buffer: makePdf([['Тестовый ПТС: Тестмаш 3000, 2024 г.в.']]) });
+  await page.getByLabel('Добавить файл (до 100 МБ)').setInputFiles({ name: 'ПТС (тест).pdf', mimeType: 'application/pdf', buffer: makePdf([['Тестовый ПТС: Тестмаш 3000, 2024 г.в.']]) });
   await expect(page.getByText('Файл добавлен')).toBeVisible();
   await snap(page, 'Заказчик', 'Заявка: данные', 'Поля заявки на оценку транспорта: вид, марка, год, VIN, срок, основание. Помощник уже заполнил цель и регион.', '#details-form');
   await page.getByRole('button', { name: 'Отправить заявку' }).click();

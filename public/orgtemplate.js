@@ -4,7 +4,7 @@ import { api, say } from '/common.js';
 const $ = (id) => document.getElementById(id);
 const dateRu = (s) => new Date(s).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
 let org = null;
-let maxBytes = 5 * 1024 * 1024;
+let maxBytes = 3 * 1024 * 1024;
 
 export async function loadOrgTemplate(current) {
   org = current;
@@ -33,7 +33,7 @@ $('org-template-file').addEventListener('change', async (e) => {
   e.target.value = '';
   if (!file) return;
   if (!/\.docx$/i.test(file.name)) return say($('org-template-msg'), 'Шаблон — файл Word .docx (не .doc, не .docm)');
-  if (file.size > maxBytes) return say($('org-template-msg'), 'Файл больше 5 МБ');
+  if (file.size > maxBytes) return say($('org-template-msg'), 'Файл больше 3 МБ');
   say($('org-template-msg'), 'Загружаем…', 'ok');
   try {
     await api('POST', `/api/orgs/${org.id}/template`, file, { 'content-type': 'application/octet-stream', 'x-file-name': encodeURIComponent(file.name) });

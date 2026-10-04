@@ -46,3 +46,9 @@ variable "existing_network_id" {
   type        = string
   default     = ""
 }
+
+# Страницы, с которых браузер кладёт большие файлы прямо в хранилище (2.49): адрес контейнера и будущий сайт.
+variable "files_cors_origins" {
+  type    = list(string)
+  default = ["https://*.containers.yandexcloud.net"]
+}

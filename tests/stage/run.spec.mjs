@@ -159,7 +159,7 @@ test('общий прогон: заявка на оценку с файлами 
 
   // Файл в хранилище Яндекса: загрузка, скачивание по временной ссылке, содержимое совпадает.
   const body = `%PDF-1.4 тестовая выписка ${TAG}`;
-  await page.getByLabel('Добавить файл (до 5 МБ)').setInputFiles({ name: 'Выписка ЕГРН.pdf', mimeType: 'application/pdf', buffer: Buffer.from(body) });
+  await page.getByLabel('Добавить файл (до 100 МБ)').setInputFiles({ name: 'Выписка ЕГРН.pdf', mimeType: 'application/pdf', buffer: Buffer.from(body) });
   await expect(page.getByText('Файл добавлен')).toBeVisible();
   const doc = page.locator('#docs li').filter({ hasText: 'Выписка ЕГРН.pdf' });
   const [download] = await Promise.all([page.waitForEvent('download'), doc.getByRole('button', { name: 'Скачать' }).click()]);
@@ -342,7 +342,7 @@ test('общий прогон: сквозной путь экспертизы �
   await page.getByLabel('Адрес объекта').fill('г. Москва, ул. Тестовая, д. 11, кв. 4');
   await page.getByLabel('Площадь, кв. м').fill('42');
   await page.getByLabel(/^Срок/).fill(inDays(10));
-  await page.getByLabel('Добавить файл (до 5 МБ)').setInputFiles({ name: 'Выписка ЕГРН.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 тестовая выписка') });
+  await page.getByLabel('Добавить файл (до 100 МБ)').setInputFiles({ name: 'Выписка ЕГРН.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 тестовая выписка') });
   await expect(page.getByText('Файл добавлен')).toBeVisible();
   await page.getByRole('button', { name: 'Отправить заявку' }).click();
   await expect(page.getByText('Заявка отправлена')).toBeVisible();
