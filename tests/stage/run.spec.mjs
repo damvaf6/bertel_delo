@@ -6,6 +6,7 @@
 // Скриншоты — test-results/screens/stage-run-*.png.
 import { test as base, expect } from '@playwright/test';
 import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 import { makePdf } from '../tools/make-docs.mjs';
 import { testExternalSignature } from '../../src/providers/sign.mjs';
 
@@ -97,6 +98,26 @@ async function shot(page, name) {
   const width = await page.evaluate(() => document.documentElement.scrollWidth);
   expect(width, `${name}: страница шире экрана`).toBeLessThanOrEqual(412);
   await page.screenshot({ path: `test-results/screens/stage-run-${name}.png`, fullPage: true });
+}
+
+// Часть файла Word (zip) по имени — без сторонних библиотек.
+function unzipPart(buf, name) {
+  let p = buf.length - 22;
+  while (buf.readUInt32LE(p) !== 0x06054b50) p -= 1;
+  const n = buf.readUInt16LE(p + 10);
+  let q = buf.readUInt32LE(p + 16);
+  for (let i = 0; i < n; i += 1) {
+    const method = buf.readUInt16LE(q + 10); const csize = buf.readUInt32LE(q + 20);
+    const nlen = buf.readUInt16LE(q + 28); const xlen = buf.readUInt16LE(q + 30); const clen = buf.readUInt16LE(q + 32);
+    const local = buf.readUInt32LE(q + 42);
+    if (buf.subarray(q + 46, q + 46 + nlen).toString('utf8') === name) {
+      const from = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
+      const data = buf.subarray(from, from + csize);
+      return (method === 8 ? zlib.inflateRawSync(data) : data).toString('utf8');
+    }
+    q += 46 + nlen + xlen + clen;
+  }
+  return null;
 }
 
 // Номера прогона: +7 999 000-NN-x0…x9, NN — от 20 до 89 (служебная проверка входа — 90-0x, администратор — 95-00, помощник экспресса — 96-00…99-99).
@@ -364,6 +385,39 @@ test('общий прогон: сквозной путь экспертизы �
   await sp.reload();
   await expect(sp.locator('#inspect-steps li[data-step="facade"]')).toContainText('место 55.75120, 37.61840');
   await shot(sp, '12p-osmotr-foto');
+  // Аналоги в деле (задача 2.32): ссылка, скриншот в хранилище Яндекса со временем платформы, текст объявления читает ИИ;
+  // эксперт проверяет признаки и подтверждает. Подтверждённый аналог попадает в Word таблицей и приложением со скриншотом.
+  const abox = sp.locator('#analogs-box');
+  await expect(abox).toBeVisible();
+  await expect(sp.locator('#analogs-hints')).toContainText('Нужно не меньше 3 аналогов — подтверждено 0');
+  const adPng = Buffer.from((await sp.evaluate(() => {
+    const c = document.createElement('canvas');
+    c.width = 540; c.height = 1170;
+    const g = c.getContext('2d');
+    g.fillStyle = '#ffffff'; g.fillRect(0, 0, 540, 1170);
+    g.fillStyle = '#1f4e8c'; g.fillRect(20, 20, 500, 300);
+    g.fillStyle = '#222'; g.font = '28px sans-serif'; g.fillText('2-комн. квартира, 40 м² — 11 500 000 ₽', 20, 380);
+    return c.toDataURL('image/png');
+  })).split(',')[1], 'base64');
+  await abox.getByLabel('Ссылка на объявление').fill(`https://www.cian.ru/sale/flat/${RUN}0001/`);
+  await sp.locator('#analogs-file').setInputFiles({ name: 'Screenshot_cian.png', mimeType: 'image/png', buffer: adPng });
+  await sp.locator('#analogs-form details summary').click();
+  await sp.locator('#analogs-text').fill(`Продаётся 2-комнатная квартира, 40 м², этаж 5 из 9, панельный дом.\nМосква, ул. Тестовая, д. 15.\nЦена 11 500 000 ₽\nРазмещено ${inDays(-5)}`);
+  await abox.getByRole('button', { name: 'Добавить аналог' }).click();
+  await expect(sp.locator('#analogs-msg')).toContainText(/ИИ заполнил признаков: \d+/, { timeout: AI_WAIT });
+  const acard = sp.locator('#analogs-list li.analog').first();
+  await expect(acard).toContainText('Аналог 1 · cian.ru');
+  await expect(acard).toContainText('Скриншот получен платформой');
+  await expect(acard.getByLabel(/Цена, руб/)).toHaveValue('11500000');
+  await shot(sp, '12q-analog-ot-ii');
+  // Эксперт проверяет: адрес и площадь — как в объявлении, и подтверждает.
+  await acard.getByLabel('Адрес или район').fill('Москва, ул. Тестовая, д. 15');
+  await acard.getByLabel('Площадь, кв. м').fill('40');
+  await acard.getByRole('button', { name: 'Подтвердить' }).click();
+  await expect(sp.locator('#analogs-msg')).toHaveText('Аналог подтверждён');
+  await expect(sp.locator('#analogs-list li.analog').first().locator('.badge')).toHaveText('подтверждён');
+  await expect(sp.locator('#analogs-state')).toContainText('Подтверждено аналогов: 1 из 3');
+  await shot(sp, '12r-analog-podtverzhden');
   // Черновик заключения от ИИ (задача 2.2): готовится по заявке, эксперт заполняет пометки и прикладывает Word.
   await sp.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
   await expect(sp.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте', { timeout: AI_WAIT });
@@ -375,6 +429,11 @@ test('общий прогон: сквозной путь экспертизы �
   const dchunks = [];
   for await (const ch of await wordDraft.createReadStream()) dchunks.push(ch);
   expect(Buffer.concat(dchunks).subarray(0, 2).toString()).toBe('PK');
+  // Аналог из дела — в Word таблицей, скриншот из хранилища Яндекса — в приложении.
+  const dxml = unzipPart(Buffer.concat(dchunks), 'word/document.xml');
+  expect(dxml).toContain('Скриншоты объявлений');
+  expect(dxml).toContain('cian.ru');
+  expect(dxml).toMatch(/11\s500\s000/);
   const draft = await sp.getByLabel('Текст заключения').inputValue();
   await sp.getByLabel('Текст заключения').fill(draft.replace(/\[(?:заполнить|описать)[^\]]*\]/gi, 'заполнено экспертом'));
   await sp.getByLabel('Я проверил текст и отвечаю за него').check();
@@ -462,7 +521,9 @@ test('общий прогон: сквозной путь экспертизы �
   for await (const ch of await word.createReadStream()) wchunks.push(ch);
   expect(Buffer.concat(wchunks).subarray(0, 2).toString()).toBe('PK');
   await expect(page.locator('#draft-box')).toBeHidden();
-  await expect(page.locator('.ai-marks')).toHaveCount(0);
+  // Подсказок ИИ у заказчика на экране нет (скрытый раздел «Аналоги» с пустым списком подсказок — не в счёт).
+  await expect(page.locator('.ai-marks:visible')).toHaveCount(0);
+  await expect(page.locator('#analogs-box')).toBeHidden();
   await page.locator('#closing li').getByRole('button', { name: 'Открыть' }).click();
   await expect(page.locator('#closing-doc')).toContainText('Акт об оказании услуг');
   await shot(page, '15-gotovo');
