@@ -1,4 +1,4 @@
-// «Сегодня» (2.34): одним экраном — что требует внимания эксперта и руководителя экспертной организации. Эксперту: что
+// «Сегодня» (2.34, 2.42): одним экраном — что требует внимания эксперта, руководителя экспертной организации и диспетчера. Эксперту: что
 // горит по срокам, что вернули на доработку (диспетчер или руководитель), что ждёт проверки диспетчера, новые предложения.
 // Руководителю — по каждой своей организации: дела экспертов, у которых горит срок, ждут подписи организации, возвращены
 // эксперту и ждут исправления, дела, которые диспетчер предложил организации. Руководителю — те же сведения, что в «Делах
@@ -78,6 +78,52 @@ async function orgPart(sql, org, registry, today) {
   };
 }
 
+// Диспетчеру (2.42) — по всем заявкам платформы: что ждёт его хода. Назначить цену; подобрать исполнителя (оплачено, а
+// предложения нет — в том числе после отказа); предложение без ответа дольше суток; результат ждёт проверки; горит срок
+// у исполнителя; деньги — выплата или возврат не прошли, оплата висит дольше суток.
+const SLOW_OFFER_HOURS = 24;
+
+async function dispatcherPart(sql, actor, registry, today) {
+  if (actor.platform_role !== 'dispatcher') return null;
+  const soon = addDays(today, HOT_DAYS);
+  const service = (o) => registry.service(o.module, o.service)?.service.name ?? o.service ?? 'Услуга не выбрана';
+  const item = (o, extra = {}) => ({
+    id: o.id, title: o.title, service: service(o), deadline: o.deadline, overdue: isOverdue(o, today), status_name: STATUS_NAME[o.status], ...extra,
+  });
+  const matching = await sql`select * from orders where status = 'matching' order by deadline nulls last, updated_at limit ${LIMIT}`;
+  // Почему заявка снова в подборе: отказ исполнителя или передача другому — причина из истории.
+  const back = async (o) => {
+    const h = await sql.one`select from_status, reason from order_status_history where order_id = ${o.id} and to_status = 'matching'
+                            order by id desc limit 1`;
+    return h && h.from_status !== 'new' ? { reason: h.reason ?? '' } : {};
+  };
+  const toMatch = [];
+  for (const o of matching.filter((x) => x.paid_at)) toMatch.push(item(o, await back(o)));
+  const slow = await sql`
+    select o.*, f.offered_at from orders o join order_offers f on f.order_id = o.id and f.outcome is null
+    where o.status = 'awaiting_executor' and f.offered_at < now() - make_interval(hours => ${SLOW_OFFER_HOURS})
+    order by f.offered_at limit ${LIMIT}`;
+  const review = await sql`select * from orders where status = 'review' order by deadline nulls last, updated_at limit ${LIMIT}`;
+  const hot = await sql`select * from orders where status in ('awaiting_executor', 'in_work') and deadline <= ${soon}
+                        order by deadline, updated_at limit ${LIMIT}`;
+  const money = await sql`
+    select o.*, 'payout' as what, p.failure from payouts p join orders o on o.id = p.order_id where p.status = 'failed'
+    union all
+    select o.*, 'refund' as what, r.failure from refunds r join orders o on o.id = r.order_id where r.status = 'failed'
+    union all
+    select o.*, 'payment' as what, null as failure from payments p join orders o on o.id = p.order_id
+      where p.status = 'pending' and p.created_at < now() - interval '1 day' and o.paid_at is null
+    order by updated_at limit ${LIMIT}`;
+  return {
+    price: matching.filter((x) => !x.price_kop && !x.paid_at).map((o) => item(o)),
+    to_match: toMatch,
+    slow_offers: slow.map((o) => item(o, { offered_at: o.offered_at })),
+    review: review.map((o) => item(o)),
+    hot: hot.map((o) => item(o)),
+    money: money.map((o) => item(o, { what: o.what, failure: o.failure ?? null })),
+  };
+}
+
 export function todayOps() {
   return [
     {
@@ -89,6 +135,7 @@ export function todayOps() {
         return {
           today,
           expert: await expertPart(sql, actor, registry, today),
+          dispatcher: await dispatcherPart(sql, actor, registry, today),
           orgs: await Promise.all(orgs.map((o) => orgPart(sql, o, registry, today))),
         };
       },

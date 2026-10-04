@@ -108,7 +108,40 @@ test('«Сегодня»: чужие дела и чужие организаци
   assert.deepEqual(ids(mine.expert.hot), [o.id]);
   assert.deepEqual(mine.orgs, []);
   const c = (await owner.req('GET', '/api/today')).body;
-  assert.deepEqual([c.expert, c.orgs], [null, []]);
+  assert.deepEqual([c.expert, c.orgs, c.dispatcher], [null, [], null]);
+  assert.equal((await spec.req('GET', '/api/today')).body.dispatcher, null, 'раздел диспетчера — только диспетчеру');
   // Сотрудник организации (не руководитель) не получает раздела организации.
   assert.deepEqual((await spec.req('GET', '/api/today')).body.orgs, []);
+});
+
+test('«Сегодня» у диспетчера (2.42): назначить цену, подобрать после отказа, молчащий исполнитель, проверка, горит срок, деньги', async () => {
+  const draft = async (title, days) => {
+    const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
+    assert.equal((await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: addDays(todayMsk(), days), fields: FIELDS })).status, 200);
+    assert.equal((await step(owner, o, 'matching')).status, 200);
+    return o;
+  };
+  const noPrice = await draft('Без цены', 10);
+  const declined = await offered('Отказ эксперта', 8);
+  assert.equal((await step(spec, declined, 'matching', 'Нет времени')).status, 200);
+  const silent = await offered('Молчит', 7);
+  await S.sql`update order_offers set offered_at = now() - interval '25 hours' where order_id = ${silent.id}`;
+  const hot = await offered('Горит у диспетчера', 1);
+  assert.equal((await step(spec, hot, 'in_work')).status, 200);
+  const rev = await offered('На проверке', 5);
+  assert.equal((await step(spec, rev, 'in_work')).status, 200);
+  await S.sql`update orders set status = 'review' where id = ${rev.id}`;
+  await S.sql`insert into payouts (order_id, executor_user_id, amount_kop, commission_kop, status, failure) values (${rev.id}, ${spec.user.id}, 100, 0, 'failed', 'тест: отклонено')`;
+
+  const d = (await dispatcher.req('GET', '/api/today')).body.dispatcher;
+  assert.ok(ids(d.price).includes(noPrice.id));
+  const m = d.to_match.find((x) => x.id === declined.id);
+  assert.equal(m.reason, 'Нет времени');
+  assert.ok(ids(d.slow_offers).includes(silent.id));
+  assert.ok(!ids(d.slow_offers).includes(hot.id), 'принятое дело не «молчит»');
+  assert.ok(ids(d.hot).includes(hot.id));
+  assert.ok(ids(d.review).includes(rev.id));
+  const money = d.money.find((x) => x.id === rev.id);
+  assert.deepEqual([money.what, money.failure], ['payout', 'тест: отклонено']);
+  await S.sql`delete from payouts where order_id = ${rev.id}`;
 });

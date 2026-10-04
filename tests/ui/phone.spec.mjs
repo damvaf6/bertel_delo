@@ -2601,3 +2601,131 @@ test('как настоящий заказчик (2.41): юрист фирмы �
   await hctx.close();
   await staff.close();
 });
+
+// Как диспетчер (2.42): «Сегодня» диспетчера ведёт по делам — цена, подбор после отказа, молчащий исполнитель, проверка,
+// деньги; «Что дальше» в деле — следующий шаг диспетчера. Заказчик и исполнители — через API.
+test('как диспетчер (2.42): «Сегодня», цена, подбор после отказа, переназначение, проверка, выплата и её повтор', async ({ page, browser, baseURL }) => {
+  const D = '+79990004401', C = '+79990004402', S1 = '+79990004403', S2 = '+79990004404';
+  const disp = await signIn(page, D);
+  const mk = async (phone, name) => {
+    const ctx = await phoneContext(browser, baseURL);
+    const p = await ctx.newPage();
+    const u = await signIn(p, phone);
+    if (name) await p.request.patch('/api/me', { data: { full_name: name }, headers: H });
+    return { ctx, p, u };
+  };
+  const cu = await mk(C), s1 = await mk(S1, 'Эксперт Отказной'), sB = await mk(S2, 'Эксперт Надёжный');
+  await db(async (c) => {
+    await c.query("update users set platform_role = 'dispatcher', full_name = 'Диспетчер Сегодня' where id = $1", [disp.id]);
+    for (const s of [s1, sB]) {
+      await c.query('insert into specialists (user_id) values ($1)', [s.u.id]);
+      await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [s.u.id]);
+    }
+  });
+  const make = async (title, days) => {
+    const o = (await (await cu.p.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title }, headers: H })).json()).order;
+    await cu.p.request.patch(`/api/orders/${o.id}`, { data: { deadline: inDays(days), fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, ул. Диспетчерская, 5' } }, headers: H });
+    expect((await cu.p.request.post(`/api/orders/${o.id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+    return o;
+  };
+  const main = await make('Квартира на Диспетчерской', 6);
+  // Второе дело: предложено больше суток назад, исполнитель молчит.
+  const silent = await make('Квартира — исполнитель молчит', 9);
+  await db(async (c) => {
+    await c.query("update orders set price_kop = 1200000, paid_at = now(), status = 'awaiting_executor', executor_user_id = $2 where id = $1", [silent.id, sB.u.id]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, offered_by, offered_at) values ($1, $2, '{}', $3, now() - interval '30 hours')", [silent.id, sB.u.id, disp.id]);
+  });
+
+  // 1. «Сегодня»: назначить цену; молчащий исполнитель.
+  await page.goto('/kabinet');
+  const today = page.locator('#today-box');
+  await expect(today.locator('li[data-today-item="d-price"]').filter({ hasText: 'Квартира на Диспетчерской' })).toBeVisible();
+  await expect(today.locator('li[data-today-item="d-slow"]').filter({ hasText: 'Квартира — исполнитель молчит' })).toBeVisible();
+  await shot(page, '108-dispetcher-segodnya');
+  await today.locator('li[data-today-item="d-price"]').filter({ hasText: 'Квартира на Диспетчерской' }).locator('button').click();
+  await expect(page.locator('#order-title')).toHaveText('Квартира на Диспетчерской');
+  const next = page.locator('#next-box');
+  const mainBtn = page.locator('#next-main button');
+  await expect(next).toContainText('Назначьте цену');
+  await mainBtn.click();
+  await expect(page.getByLabel('Цена, рублей')).toBeFocused();
+  await page.getByLabel('Цена, рублей').fill('15000');
+  await page.getByRole('button', { name: 'Назначить цену' }).click();
+  await expect(page.locator('#money-msg')).toHaveText('Цена назначена');
+  await expect(next).toContainText('ждём оплаты заказчика');
+
+  // 2. Заказчик оплатил — «К подбору»; первый эксперт отказался — дело снова в «Сегодня» с причиной.
+  const pay = await cu.p.request.post(`/api/orders/${main.id}/payments`, { headers: H });
+  expect(pay.status()).toBe(201);
+  expect((await cu.p.request.post(`/api/orders/${main.id}/payments/refresh`, { headers: H })).status()).toBe(200);
+  await page.reload();
+  await expect(next).toContainText('Оплачено. Выберите исполнителя');
+  await mainBtn.click();
+  page.once('dialog', (d) => d.accept());
+  await page.locator('#candidates li').filter({ hasText: 'Эксперт Отказной' }).getByRole('button', { name: 'Предложить дело' }).click();
+  await expect(page.locator('#order-status')).toHaveText('Ждёт исполнителя');
+  await expect(next).toContainText('ждём ответа исполнителя');
+  expect((await s1.p.request.post(`/api/orders/${main.id}/status`, { data: { from: 'awaiting_executor', to: 'matching', reason: 'Уезжаю в отпуск' }, headers: H })).status()).toBe(200);
+  await page.goto('/kabinet');
+  const again = today.locator('li[data-today-item="d-match"]').filter({ hasText: 'Квартира на Диспетчерской' });
+  await expect(again).toContainText('Снова в подборе: Уезжаю в отпуск');
+  await again.locator('button').click();
+  page.once('dialog', (d) => d.accept());
+  await page.locator('#candidates li').filter({ hasText: 'Эксперт Надёжный' }).getByRole('button', { name: 'Предложить дело' }).click();
+  await expect(page.locator('#order-status')).toHaveText('Ждёт исполнителя');
+
+  // 3. Принял, но не справляется — диспетчер передаёт дело другому с причиной; оплата остаётся, дело снова в подборе.
+  expect((await sB.p.request.post(`/api/orders/${main.id}/status`, { data: { from: 'awaiting_executor', to: 'in_work' }, headers: H })).status()).toBe(200);
+  await page.reload();
+  await expect(next).toContainText('Исполнитель работает');
+  await page.getByLabel('Причина (для возврата или отмены)').fill('Эксперт заболел');
+  await page.getByRole('button', { name: 'Передать другому исполнителю' }).click();
+  await expect(page.locator('#order-status')).toHaveText('Подбор исполнителя');
+  await expect(next).toContainText('Оплачено. Выберите исполнителя');
+  await page.goto('/kabinet');
+  const moved = today.locator('li[data-today-item="d-match"]').filter({ hasText: 'Квартира на Диспетчерской' });
+  await expect(moved).toContainText('Снова в подборе: Эксперт заболел');
+  await moved.locator('button').click();
+  page.once('dialog', (d) => d.accept());
+  await page.locator('#candidates li').filter({ hasText: 'Эксперт Отказной' }).getByRole('button', { name: 'Предложить дело' }).click();
+  await expect(page.locator('#order-status')).toHaveText('Ждёт исполнителя');
+
+  // 4. Второй принял и сдал — «Сегодня»: ждёт проверки; «Что дальше» ведёт по правилам, затем «Проверено, готово».
+  const s2 = s1;
+  expect((await s2.p.request.post(`/api/orders/${main.id}/status`, { data: { from: 'awaiting_executor', to: 'in_work' }, headers: H })).status()).toBe(200);
+  const up = await s2.p.request.post(`/api/orders/${main.id}/results`, { data: Buffer.from('%PDF-1.4 Отчёт'), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Отчёт об оценке.pdf') } });
+  expect((await s2.p.request.post(`/api/documents/${(await up.json()).document.id}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  expect((await s2.p.request.post(`/api/orders/${main.id}/status`, { data: { from: 'in_work', to: 'review' }, headers: H })).status()).toBe(200);
+  await page.goto('/kabinet');
+  const rv = today.locator('li[data-today-item="d-review"]').filter({ hasText: 'Квартира на Диспетчерской' });
+  await expect(rv).toBeVisible();
+  await rv.locator('button').click();
+  await expect(next).toContainText(/Проверьте результат: отметьте каждое правило \(осталось \d+ из \d+\)/);
+  await shot(page, '109-dispetcher-proverka');
+  const rules = page.locator('#review-checks > li');
+  const n = await rules.count();
+  for (let i = 0; i < n; i += 1) {
+    await rules.nth(i).getByRole('button', { name: 'В порядке' }).click();
+    await expect(rules.nth(i).locator('.verdict')).toHaveText('В порядке');
+  }
+  await expect(next).toContainText('Все правила в порядке');
+  await mainBtn.click();
+  await expect(page.locator('#order-status')).toHaveText('Готово');
+  await expect(next).toContainText('Результат выдан');
+
+  // 5. Выплата не прошла — «Сегодня» → «Деньги» → повтор выплаты.
+  await db((c) => c.query("update payouts set status = 'failed', failure = 'тест: банк отклонил' where order_id = $1", [main.id]));
+  await page.goto('/kabinet');
+  const failed = today.locator('li[data-today-item="d-money"]').filter({ hasText: 'Квартира на Диспетчерской' });
+  await expect(failed).toContainText('Выплата исполнителю не прошла: тест: банк отклонил');
+  await failed.locator('button').click();
+  await page.getByRole('button', { name: 'Повторить выплату' }).click();
+  await expect(page.locator('#money-facts')).toContainText(/Выплата исполнителю\s*12\s000 ₽ — выплачено/);
+  await page.goto('/kabinet#money');
+  await expect(page.locator('#money-payments li').filter({ hasText: 'Квартира на Диспетчерской' })).toContainText(/15\s000 ₽/);
+  await shot(page, '110-dispetcher-dengi');
+  await page.goto('/kabinet');
+  await expect(today.locator('#today-list')).toBeVisible();
+  await expect(today.locator('li[data-today-item="d-money"]').filter({ hasText: 'Квартира на Диспетчерской' })).toHaveCount(0);
+  for (const x of [cu, s1, sB]) await x.ctx.close();
+});
