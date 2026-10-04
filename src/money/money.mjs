@@ -6,7 +6,7 @@
 // Одна функция расчёта, одна выплата и один возврат на заявку (Б-16), смена состояния — в транзакции.
 // Поставщик оплаты не трогается внутри транзакции базы: функции settle* возвращают id выплаты и возврата, а провести
 // их (runPayout, runRefund) вызывающий должен после транзакции.
-import { audit } from '../ops/util.mjs';
+import { audit, quoted } from '../ops/util.mjs';
 import { customersOf, dispatchers, notify } from '../notify/notify.mjs';
 import { orderRef } from '../notify/registry.mjs';
 
@@ -200,7 +200,8 @@ async function makeClosingDocs(tx, order, split, { test, partial = null }) {
     ...docBase(order, { test }), price_kop: split.priceKop, commission_kop: split.commissionKop, payout_kop: split.payoutKop,
     ...(partial ? { partial_percent: partial.percent, paid_kop: partial.paid_kop } : {}),
   };
-  const customer = who?.org_name ? `Организация «${who.org_name}»` : who?.full_name || 'Заказчик';
+  // Название организации — как его записали: «ООО «Юрфирма»» без второй пары кавычек (2.41).
+  const customer = who?.org_name ? `Организация ${quoted(who.org_name)}` : who?.full_name || 'Заказчик';
   await tx`insert into closing_documents (order_id, kind, data) values (${order.id}, 'act', ${JSON.stringify({ ...base, customer })})
            on conflict (order_id, kind) do nothing`;
   await tx`insert into closing_documents (order_id, kind, data) values (${order.id}, 'agent_report', ${JSON.stringify(base)})

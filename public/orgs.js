@@ -1,5 +1,5 @@
 // Раздел «Организации»: мои организации, приглашения, создание; страница организации — состав, роли, приглашения.
-import { api, el, say, formatPhone, ROLE_RU } from '/common.js';
+import { api, el, say, formatPhone, ROLE_RU, quoted } from '/common.js';
 import { state, show, notFoundView, refreshMe } from '/shell.js';
 import { loadOrgSign } from '/orgsign.js';
 import { loadOrgCases } from '/orgcases.js';
@@ -175,7 +175,7 @@ $('org-edit').addEventListener('submit', async (e) => {
 });
 
 $('leave-org').addEventListener('click', async () => {
-  if (!confirm(`Выйти из организации «${org.name}»? Дела организации останутся у неё, Вы перестанете их видеть.`)) return;
+  if (!confirm(`Выйти из организации ${quoted(org.name)}? Дела организации останутся у неё, Вы перестанете их видеть.`)) return;
   try {
     await api('POST', `/api/orgs/${org.id}/leave`);
     await refreshMe();

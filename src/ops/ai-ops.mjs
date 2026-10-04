@@ -12,7 +12,7 @@ import { runAutoChecks } from '../ai/report-checks.mjs';
 import { loadDossier } from '../dossier/dossier.mjs';
 import { todayMsk } from '../orders/workflow.mjs';
 import { insertOrder, listVisibleOrders } from './order-ops.mjs';
-import { audit, text, uuidFrom } from './util.mjs';
+import { audit, quoted, text, uuidFrom } from './util.mjs';
 
 const PROBLEM_MAX = 4000;
 const QUESTION_MAX = 2000;
@@ -107,7 +107,7 @@ export function aiOps() {
         const { sql, actor, body, registry, res } = ctx;
         const problem = text(body?.text, 'Опишите, что случилось', PROBLEM_MAX);
         const out = await askAi(ctx, actor, 'problem', problemMessages(registry, problem));
-        const answer = cleanProblemAnswer(registry, out.text);
+        const answer = cleanProblemAnswer(registry, out.text, problem);
         const c = await sql.one`insert into ai_consultations (user_id, problem, answer, model)
                                 values (${actor.id}, ${problem}, ${JSON.stringify(answer)}, ${out.model}) returning *`;
         res.status(201);
@@ -172,7 +172,7 @@ export function aiOps() {
         const { messages: history } = await scopeHistory(sql, actor, orgId, HISTORY);
         const org = orgId ? (await myOrgs(sql, actor)).find((o) => o.id === orgId) : null;
         const out = await askAi(ctx, actor, 'assistant', assistantMessages({
-          scopeName: org ? `организация «${org.name}»` : 'личное', history, brief: order ? orderBrief(registry, order) : null, question,
+          scopeName: org ? `организация ${quoted(org.name)}` : 'личное', history, brief: order ? orderBrief(registry, order) : null, question,
         }));
         const answer = out.text.trim().slice(0, 8000);
         const [q, a] = await sql.tx(async (tx) => [

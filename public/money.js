@@ -3,6 +3,7 @@
 // служебным и выплаты специалисту. Тексты — только через textContent.
 import { api, el, say } from '/common.js';
 import { state, show } from '/shell.js';
+import { setNext } from '/next.js';
 
 const $ = (id) => document.getElementById(id);
 const dayRu = (s) => new Date(s).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
@@ -80,6 +81,7 @@ export async function loadMoney(current, reload) {
       el('div', { class: 'name', text: `${DOC_RU[d.kind]} № ${d.number}` }),
       el('div', { class: 'muted', text: dayRu(d.created_at) })),
     el('button', { class: 'secondary', 'data-action': 'open-doc', onclick: () => openDoc(d) }, 'Открыть'))));
+  setNext({ money }); // «Что дальше» заказчику: оплатить, акт (2.41)
 }
 
 // Закрывающий документ — текстом на странице (содержимое зафиксировано при выдаче результата или отмене).

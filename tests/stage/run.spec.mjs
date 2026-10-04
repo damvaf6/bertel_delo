@@ -9,6 +9,8 @@ import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 import { makePdf } from '../tools/make-docs.mjs';
 import { testExternalSignature } from '../../src/providers/sign.mjs';
+import { PROBLEM_QUESTIONS } from '../tools/problem-questions.mjs';
+import fs from 'node:fs';
 
 const TOKEN = process.env.STAGE_INVOKE_TOKEN;
 const LOGIN_KEY = process.env.STAGE_LOGIN_KEY;
@@ -270,6 +272,32 @@ test('общий прогон: помощник разбирает пробле�
   await page.getByRole('button', { name: 'Спросить' }).click();
   await expect(page.locator('#as-messages li')).toHaveCount(2, { timeout: AI_WAIT });
   await shot(page, '09-assistent');
+});
+
+// Вход через проблему на 20 типичных вопросах по оценке (2.41) — с настоящей моделью площадки. Только по запросу
+// (входной параметр «problems» в Deploy core): 20 обращений к модели стоят денег. Ответы — в test-results/problem-answers.json
+// (вопросы тестовые, персональных данных нет): по ним видно, понятно ли объясняет модель.
+test('вход через проблему: 20 типичных вопросов — ответ понятен, без юридической консультации, всегда «что сделать самому» и «к кому»', async ({ page }) => {
+  test.skip(process.env.PROBLEMS !== '1', 'по запросу: Deploy core, параметр problems');
+  test.setTimeout(1_800_000);
+  await enter(page, tel(4));
+  const answers = [];
+  const legalAdvice = /подайте[^.]*иск|стать[яиеюё]й?\s*\d|ст\.\s*\d|(?:ГК|ГПК|УК|КоАП)\s*РФ|шанс\w*[^.]{0,20}выигр|выиграете|исков\w* давност/i;
+  for (const q of PROBLEM_QUESTIONS) {
+    const r = await page.request.post('/api/ai/problem', { data: { text: q.text }, headers: { ...AUTH, ...H }, timeout: AI_WAIT });
+    expect(r.status(), q.text).toBe(201);
+    const c = (await r.json()).consultation;
+    answers.push({ question: q.text, expected: q.service, got: c.service?.service ?? null, explanation: c.explanation, self_steps: c.self_steps, specialist: c.specialist, legal_note: c.legal_note, model: c.model });
+    expect(c.explanation.length, q.text).toBeGreaterThan(20);
+    expect(c.self_steps.length, `нет «что сделать самому»: ${q.text}`).toBeGreaterThan(0);
+    expect(c.specialist || c.service, `нет «к кому обратиться»: ${q.text}`).toBeTruthy();
+    for (const x of [c.explanation, ...c.self_steps, c.specialist ?? '']) expect(x, q.text).not.toMatch(legalAdvice);
+    if (q.legal) expect(c.legal_note, q.text).toBeTruthy();
+  }
+  fs.writeFileSync('test-results/problem-answers.json', JSON.stringify(answers, null, 2));
+  const matched = answers.filter((a) => a.got === a.expected).length;
+  console.log(`Вход через проблему: услуга совпала в ${matched} из ${answers.length}`);
+  expect(matched, 'услуга угадана слишком редко').toBeGreaterThanOrEqual(14);
 });
 
 // Часть 2: шаги администратора и диспетчера (1.4, 1.5, 1.6, 1.11) — сквозной путь заявки до выплаты исполнителю.

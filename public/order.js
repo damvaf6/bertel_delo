@@ -1,7 +1,7 @@
 // Страница заявки: данные (заполнение, пока заявка «новая»), ход заявки и шаги, кто ведёт дело, документы и результат;
 // проверка результата и переписка — work.js; цена, оплата, выплата и закрывающие документы — money.js.
 // Поля рисуются по описанию модуля из /api/catalog — у каждой профессии свои, код страницы один.
-import { api, el, say, formatPhone, formatSize, ROLE_RU } from '/common.js';
+import { api, el, say, formatPhone, formatSize, ROLE_RU, quoted } from '/common.js';
 import { state, show, notFoundView } from '/shell.js';
 import { loadMatch } from '/match.js';
 import { loadReview, loadChat } from '/work.js';
@@ -54,7 +54,7 @@ export async function openOrder(id) {
   show('order-view', 'orders');
   setNext({ reset: true, current, step: doStep, signAll });
   loadOrgChat();
-  await Promise.all([loadDocs(), loadTransfer(), loadMatch(current, () => openOrder(id)), loadDraft(current, () => openOrder(id)), loadAnalogs(current), loadInspection(current), loadOnsite(current), loadReview(current), loadChat(current), loadMoney(current, () => openOrder(id))]);
+  await Promise.all([loadDocs(true), loadTransfer(), loadMatch(current, () => openOrder(id)), loadDraft(current, () => openOrder(id)), loadAnalogs(current), loadInspection(current), loadOnsite(current), loadReview(current), loadChat(current), loadMoney(current, () => openOrder(id))]);
   setNext({}); // разделы осмотра и черновика показаны — шаги пересчитываются
 }
 
@@ -180,6 +180,14 @@ async function saveForm() {
   return order;
 }
 
+// Чего не хватает для отправки черновика (2.41) — после сохранения и после файлов: «Что дальше» у заказчика.
+async function refreshMissing() {
+  if (!current?.editable) return;
+  const fresh = await api('GET', `/api/orders/${current.order.id}`);
+  current.submit_missing = fresh.submit_missing;
+  setNext({});
+}
+
 $('d-service').addEventListener('change', () => {
   renderFields(formValues());
   toggleExpress();
@@ -195,6 +203,7 @@ $('details-form').addEventListener('submit', async (e) => {
   try {
     await saveForm();
     render();
+    await refreshMissing();
     say($('details-msg'), 'Сохранено', 'ok');
   } catch (err) { say($('details-msg'), err.message); } finally { $('save-details').disabled = false; }
 });
@@ -208,7 +217,10 @@ function renderFacts() {
   for (const f of def?.service.fields ?? []) {
     const v = order.fields?.[f.id];
     if (v === undefined || v === null || v === '') continue;
-    pairs.push([f.label, f.type === 'select' ? (f.options.find((o) => o.id === v)?.name ?? v) : String(v)]);
+    // Числа — по-русски: «54,3», «120 000»; год — без пробела (2.41).
+    const shown = f.type === 'select' ? (f.options.find((o) => o.id === v)?.name ?? v)
+      : f.type === 'number' && Number.isFinite(Number(v)) ? Number(v).toLocaleString('ru-RU', { useGrouping: Math.abs(Number(v)) >= 10000 }) : String(v);
+    pairs.push([f.label, shown]);
   }
   pairs.push(['Срок', order.deadline ? dayRu(order.deadline) : '—']);
   if (order.express) pairs.push(['Формат', 'Экспресс: выезд помощника, эксперт работает дистанционно']);
@@ -311,7 +323,7 @@ $('transfer-box').addEventListener('submit', async (e) => {
 
 // ——— Документы ———
 
-async function loadDocs() {
+async function loadDocs(initial = false) {
   const { order, access } = current;
   const canChange = access !== 'read' && !FINAL.includes(order.status);
   const documentsBody = await api('GET', `/api/orders/${order.id}/documents`);
@@ -343,6 +355,7 @@ async function loadDocs() {
   $('results-later').classList.toggle('hidden', !(resultsHidden && ['in_work', 'review'].includes(order.status)));
   renderOrgReturns(documentsBody.org_returns ?? []);
   setNext({ docs: documentsBody });
+  if (!initial) await refreshMissing(); // приложили определение суда — «Что дальше» знает сразу
   const basis = documents.filter((d) => d.kind === 'basis');
   $('basis-file-state').textContent = basis.length ? `Приложено: ${basis.map((d) => d.filename).join(', ')}` : 'Файл определения ещё не приложен';
 }
@@ -352,7 +365,7 @@ function loadOrgChat() {
   const org = current.org_chat;
   $('org-chat-box').classList.toggle('hidden', !org);
   if (!org) return $('org-chat').replaceChildren();
-  $('org-chat-lead').textContent = `Видите только Вы и руководитель организации «${org}». Заказчик и диспетчер эту переписку не видят.`;
+  $('org-chat-lead').textContent = `Видите только Вы и руководитель организации ${quoted(org)}. Заказчик и диспетчер эту переписку не видят.`;
   orgChat($('org-chat'), current.order.id);
 }
 
@@ -388,8 +401,8 @@ function signatureBlock(d, { canSign, signOrg }) {
   }
   if (org) lines.push(...signatureLines(org));
   else if (signOrg && canSign) lines.push(el('div', { class: 'sig-state', 'data-sig': 'org-wait', text: expert
-    ? `Ждёт подписи организации «${signOrg}» — подписывает руководитель в разделе «Организации»`
-    : `После Вашей подписи файл подписывает руководитель организации «${signOrg}»` }));
+    ? `Ждёт подписи организации ${quoted(signOrg)} — подписывает руководитель в разделе «Организации»`
+    : `После Вашей подписи файл подписывает руководитель организации ${quoted(signOrg)}` }));
   if (expert || org) {
     lines.push(el('div', { class: 'row' },
       el('button', { class: 'secondary', 'data-action': 'signature', onclick: () => downloadSignature(d, 'expert') }, 'Файл подписи'),

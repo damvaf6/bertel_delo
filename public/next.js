@@ -2,10 +2,10 @@
 // переход к каждому разделу и одна главная кнопка для следующего шага; внизу экрана — та же кнопка, пока листаете.
 // Шаги считаются по тому, что уже загружено на странице (заявка, документы, проверка) — отдельного запроса нет.
 // Текст — только через textContent.
-import { el } from '/common.js';
+import { el, quoted } from '/common.js';
 
 const $ = (id) => document.getElementById(id);
-let ctx = {}; // { current, docs, review, draft, analogs, step(action) }
+let ctx = {}; // { current, docs, review, draft, analogs, money, step(action) }
 
 export function setNext(part) {
   ctx = part.reset ? { ...part } : { ...ctx, ...part };
@@ -62,7 +62,7 @@ function steps() {
   if (visible('review-box')) items.push({ id: 'ai', title: aiFresh || !ai ? 'ИИ-проверка перед сдачей' : 'ИИ-проверка — файлы менялись, проверьте ещё раз', done: aiFresh && results.length > 0, go: go('review-box'), optional: true });
   if (signNeed) {
     items.push({ id: 'sign', title: 'Подпись УКЭП', done: results.length > 0 && !unsigned.length, go: go('docs') });
-    if (orgNeed) items.push({ id: 'org', title: `Подпись организации «${docs.signature_org}»`, done: results.length > 0 && !unsigned.length && !orgWait.length, go: go('docs'), wait: true });
+    if (orgNeed) items.push({ id: 'org', title: `Подпись организации ${quoted(docs.signature_org)}`, done: results.length > 0 && !unsigned.length && !orgWait.length, go: go('docs'), wait: true });
   }
   const submit = act('review');
   items.push({ id: 'submit', title: 'Сдача на проверку', done: false, go: go('actions') });
@@ -79,12 +79,50 @@ function steps() {
   return { lead: `Сделано ${done} из ${items.length - 1} шагов до сдачи. Нажмите на шаг — откроется его раздел.`, items, main };
 }
 
+// Заказчику (2.41): по статусу — что происходит и что сделать ему; одна главная кнопка там, где ход за ним.
+function customerSteps() {
+  const { current, docs, money } = ctx;
+  const { order, actions = [] } = current;
+  const act = (to) => actions.find((a) => a.to === to);
+  const deadline = order.deadline ? ` Срок — ${new Date(`${order.deadline}T00:00`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })}.` : '';
+  if (order.status === 'new') {
+    const missing = current.submit_missing ?? [];
+    const send = act('matching');
+    return {
+      lead: missing.length
+        ? `Чтобы отправить заявку, заполните: ${missing.join(', ')}. Сохранять можно частями.`
+        : 'Всё нужное заполнено — отправьте заявку. Платформа назначит цену и подберёт исполнителя.',
+      items: [],
+      main: missing.length ? { label: 'Заполнить заявку', run: go('details-form') } : send && { label: 'Отправить заявку', run: () => ctx.step(send) },
+    };
+  }
+  if (order.status === 'matching') {
+    if (money?.can_pay) return { lead: 'Цена назначена. После оплаты заявку передадут исполнителю; деньги хранятся у платформы до выдачи Вам результата.', items: [], main: { label: $('pay')?.textContent || 'Оплатить', run: () => $('pay')?.click() } };
+    if (money?.paid) return { lead: 'Оплачено. Платформа подбирает исполнителя — придёт уведомление.', items: [] };
+    return { lead: 'Платформа назначит цену — придёт уведомление, после этого заявку можно оплатить.', items: [] };
+  }
+  if (order.status === 'awaiting_executor') return { lead: 'Исполнитель подобран и смотрит заявку. Как только примет — придёт уведомление.', items: [] };
+  if (order.status === 'in_work') return { lead: `Исполнитель работает.${deadline} Вопросы и уточнения — в переписке ниже.`, items: [] };
+  if (order.status === 'review') return { lead: 'Работа сдана — платформа проверяет результат, потом он появится здесь.', items: [] };
+  if (order.status === 'done') {
+    const results = (docs?.documents ?? []).filter((d) => d.kind === 'result');
+    const close = act('closed');
+    const items = [
+      { id: 'result', title: results.length ? `Скачать результат (${results.length})` : 'Результат', done: false, go: go('docs') },
+      ...(money?.documents?.length ? [{ id: 'act', title: 'Акт об оказании услуг', done: false, go: go('closing') }] : []),
+    ];
+    return { lead: 'Результат готов. Скачайте его и проверьте; если всё в порядке — примите работу.', items, main: close && { label: 'Принять и закрыть', run: () => ctx.step(close) } };
+  }
+  if (order.status === 'closed') return { lead: 'Заявка закрыта. Результат и закрывающие документы остаются здесь — их можно скачать в любое время.', items: [] };
+  return null;
+}
+
 function render() {
   const box = $('next-box');
   const bar = $('next-bar');
   if (!box || !ctx.current) return;
   const me = ctx.current.executor?.is_me;
-  const s = me ? steps() : null;
+  const s = me ? steps() : ctx.current.customer ? customerSteps() : null;
   box.classList.toggle('hidden', !s);
   bar.classList.toggle('hidden', !s?.main);
   if (!s) return;

@@ -14,6 +14,10 @@ on:
         description: 'Экскурсия по кабинетам: снимки и PDF (tests/stage/tour.spec.mjs)'
         type: boolean
         default: false
+      problems:
+        description: 'Вход через проблему: 20 типичных вопросов настоящей модели (tests/stage/run.spec.mjs)'
+        type: boolean
+        default: false
 
 jobs:
   deploy:
@@ -152,6 +156,7 @@ jobs:
           # Администратор площадки — назначен кнопкой «Stage admin» (решение Дамира 02.10.2026, вопрос 10).
           STAGE_ADMIN_PHONE: '+79990009500'
           TOUR: ${{ inputs.tour && '1' || '' }}
+          PROBLEMS: ${{ inputs.problems && '1' || '' }}
         run: |
           # Ключи прогона: IAM-токен (браузер подставляет его только для адреса площадки) и ключ служебного входа.
           STAGE_INVOKE_TOKEN=$(yc iam create-token); echo "::add-mask::$STAGE_INVOKE_TOKEN"

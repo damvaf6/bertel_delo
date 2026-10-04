@@ -6,7 +6,7 @@ import { LEVEL, executorSignOrg, isStaff, memberOf, orderLevel, orderSides, visi
 import { BASIS_KINDS, cleanValues, missingRequired } from '../modules/index.mjs';
 import { STATUSES, STATUS_NAME, TRANSITIONS, WORK_STARTED, addDays, availableActions, findTransition, isOverdue, todayMsk } from '../orders/workflow.mjs';
 import { runSettlement, settleCancel, settleDone, splitAmount } from '../money/money.mjs';
-import { audit, oneOf, text, uuidFrom } from './util.mjs';
+import { audit, oneOf, quoted, text, uuidFrom } from './util.mjs';
 import { reviewState } from './work-ops.mjs';
 import { notify, notifyStatus, orgHeads } from '../notify/notify.mjs';
 
@@ -222,6 +222,9 @@ export function orderOps() {
           org_chat: order.executor_user_id === actor.id ? (await executorSignOrg(sql, actor.id))?.name ?? null : null,
           access: LEVEL_NAME[level],
           editable: order.status === 'new' && level >= LEVEL.write,
+          // «Что дальше» заказчику (2.41): он ли сторона заказчика и чего не хватает для отправки черновика.
+          customer: orderSides(actor, order).includes('customer'),
+          submit_missing: order.status === 'new' && level >= LEVEL.write ? await problemsForSubmit(sql, registry, order) : [],
           // Закрыть неоплаченную заявку нельзя — такой кнопки и не показываем (1.6).
           actions: availableActions(order.status, orderSides(actor, order)).filter((a) => a.to !== 'closed' || !!order.paid_at),
           history: history.map((h) => ({ ...h, from_name: STATUS_NAME[h.from_status] ?? null, to_name: STATUS_NAME[h.to_status] })),
@@ -331,7 +334,7 @@ export function orderOps() {
                                        left join document_signatures s on s.document_id = d.id and s.role = 'org' and s.org_id = ${signOrg.id}
                                        where d.order_id = ${cur.id} and d.kind = 'result' and d.deleted_at is null
                                          and d.uploaded_by = ${cur.executor_user_id} and s.id is null order by d.created_at`;
-                if (noOrg.length) throw new HttpError(400, 'not_signed_org', `Нужна подпись организации «${signOrg.name}» (руководитель): ${noOrg.map((d) => d.filename).join(', ')}`);
+                if (noOrg.length) throw new HttpError(400, 'not_signed_org', `Нужна подпись организации ${quoted(signOrg.name)} (руководитель): ${noOrg.map((d) => d.filename).join(', ')}`);
               }
             }
           }

@@ -48,5 +48,8 @@ export function formatSize(n) {
   return `${(n / 1024 / 1024).toFixed(1)} МБ`;
 }
 
+// Название в кавычках: «Бюро», но ООО «Бюро» — как записано, без второй пары кавычек (2.41).
+export const quoted = (name) => (/[«"]/.test(String(name)) ? String(name) : `«${name}»`);
+
 export const ROLE_RU = { head: 'Руководитель', senior: 'Старший', member: 'Сотрудник' };
 export const PLATFORM_ROLE_RU = { dispatcher: 'Диспетчер', admin: 'Администратор' };
