@@ -353,6 +353,28 @@ function intoTemplate(text, meta, template, appendix = null) {
   ]);
 }
 
+// Простой документ (2.46): счёт, акт, отчёт агента, документ о возврате — заголовок, строки, таблица, подписи.
+// blocks: [{ type: 'title' | 'para' | 'bold' | 'note', text } | { type: 'table', rows: [[…]] } | { type: 'sign', text }].
+export function buildSimpleDoc(blocks) {
+  const { st, xml: styles } = ownStyles();
+  const body = blocks.map((b) => {
+    if (b.type === 'table') return table(b.rows, st);
+    if (b.type === 'title') return para(run(b.text, '<w:b/><w:sz w:val="28"/>'), '<w:jc w:val="center"/><w:spacing w:after="240"/>');
+    if (b.type === 'bold') return para(run(b.text, '<w:b/>'));
+    if (b.type === 'note') return para(run(b.text, '<w:i/><w:color w:val="9B1C1C"/>'));
+    if (b.type === 'sign') return para(run(b.text), '<w:spacing w:before="480"/>');
+    return para(run(b.text));
+  }).join('');
+  return zip([
+    ['[Content_Types].xml', contentTypes([['word/styles.xml', STYLES_CT]])],
+    ['_rels/.rels', ROOT_RELS],
+    ['word/_rels/document.xml.rels', `${XML_HEAD}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`
+      + `<Relationship Id="rId1" Type="${STYLES_REL}" Target="styles.xml"/></Relationships>`],
+    ['word/styles.xml', styles],
+    ['word/document.xml', `${XML_HEAD}<w:document xmlns:w="${W}" xmlns:r="${R}"><w:body>${body}<w:sectPr>${PAGE_A4}</w:sectPr></w:body></w:document>`],
+  ]);
+}
+
 // Главная часть документа — по _rels/.rels (обычно word/document.xml).
 function mainPart(files) {
   const rels = files.find((f) => f.name === '_rels/.rels')?.data.toString('utf8') ?? '';

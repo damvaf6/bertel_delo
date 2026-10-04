@@ -8,6 +8,8 @@ import { ProviderError } from '../providers/fake.mjs';
 import { applyPaymentStatus, runPayout, runRefund, runSettlement, shortRef, splitAmount } from '../money/money.mjs';
 import { customersOf, notify } from '../notify/notify.mjs';
 import { audit } from './util.mjs';
+import { closingDoc, invoiceDoc } from '../money/papers.mjs';
+import { DOCX_MIME } from '../docs/docx.mjs';
 
 const PRICE_RE = /^\d{1,8}([.,]\d{1,2})?$/;
 const num = (v) => (v == null ? null : Number(v));
@@ -44,8 +46,17 @@ async function syncPayment(sql, providers, cfg, payment) {
     if (e instanceof ProviderError) throw new HttpError(502, 'provider', 'Не удалось узнать состояние оплаты, попробуйте позже');
     throw e;
   }
-  const settlement = await applyPaymentStatus(sql, { paymentId: payment.id, status: remote.status, test: cfg.providers.payments === 'fake' });
+  const settlement = await applyPaymentStatus(sql, { paymentId: payment.id, status: remote.status, test: cfg.testMoney });
   await runSettlement(sql, providers, settlement);
+}
+
+function sendDocx(res, { buf, filename }) {
+  res.set({
+    'content-type': DOCX_MIME,
+    'content-disposition': `attachment; filename="document.docx"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+    'cache-control': 'no-store',
+  });
+  res.send(buf);
 }
 
 export function moneyOps() {
@@ -103,6 +114,39 @@ export function moneyOps() {
       id: 'orders.money', method: 'GET', path: '/api/orders/:id/money', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
       async handler({ sql, actor, order }) { return { money: await view(sql, actor, order.id) }; },
+    },
+    {
+      // Счёт на оплату файлом Word (2.46): бухгалтерии организации-заказчика нужен счёт до оплаты. Стороне заказчика и
+      // служебным; когда цена назначена и заявка не отменена.
+      id: 'orders.invoice', method: 'GET', path: '/api/orders/:id/invoice', auth: 'user',
+      access: { resource: 'order', param: 'id', need: 'read' },
+      async handler({ sql, actor, order, registry, cfg, res }) {
+        if (!moneyView(actor, order).customer) throw new HttpError(403, 'forbidden', 'Счёт видит сторона заказчика');
+        if (!order.price_kop) throw new HttpError(409, 'no_price', 'Цена ещё не назначена — счёт будет после неё');
+        if (order.status === 'cancelled') throw new HttpError(409, 'order_cancelled', 'Заявка отменена');
+        const org = order.org_id ? await sql.one`select name, inn, kpp, legal_address from organizations where id = ${order.org_id}` : null;
+        const owner = await sql.one`select full_name from users where id = ${order.owner_user_id}`;
+        const customer = org ? { name: org.name, inn: org.inn, kpp: org.kpp, address: org.legal_address } : { name: owner?.full_name || 'Заказчик' };
+        const doc = invoiceDoc({ order, customer, registry, op: cfg.operator, test: cfg.testMoney });
+        await audit(sql, actor, 'invoice.download', 'order', order.id, {});
+        sendDocx(res, doc);
+      },
+    },
+    {
+      // Закрывающий документ файлом Word (2.46): акт и документ о возврате — стороне заказчика, отчёт агента — исполнителю;
+      // служебным — все. Чужой документ или документ другой заявки — «не найден».
+      id: 'orders.closing.docx', method: 'GET', path: '/api/orders/:id/closing/:doc', auth: 'user',
+      access: { resource: 'order', param: 'id', need: 'read' },
+      async handler({ sql, actor, order, params, registry, cfg, res }) {
+        const see = moneyView(actor, order);
+        const kinds = [...(see.customer ? ['act', 'refund'] : []), ...(see.executor ? ['agent_report'] : [])];
+        const id = /^[0-9a-f-]{36}$/i.test(String(params.doc)) ? params.doc : null;
+        const d = id && kinds.length ? await sql.one`select * from closing_documents where id = ${id} and order_id = ${order.id} and kind = any(${kinds})` : null;
+        if (!d) throw new HttpError(404, 'not_found', 'Документ не найден');
+        const doc = closingDoc({ doc: d, number: docView(d).number, registry, op: cfg.operator });
+        await audit(sql, actor, 'closing.download', 'order', order.id, { doc: d.id, kind: d.kind });
+        sendDocx(res, doc);
+      },
     },
     {
       // Цену назначает диспетчер, пока заявка в подборе: исполнитель соглашается уже на известное вознаграждение.

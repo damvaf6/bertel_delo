@@ -20,6 +20,7 @@ import { makeFake } from './fake.mjs';
 import { createAi } from './ai.mjs';
 import { createOcr } from './ocr.mjs';
 import { fakeSign } from './sign.mjs';
+import { yookassa } from './yookassa.mjs';
 import { memoryStorage, s3Storage } from './storage.mjs';
 
 const id = (prefix) => `${prefix}_${crypto.randomUUID()}`;
@@ -102,6 +103,7 @@ export function createProviders(cfg) {
   const out = {};
   for (const name of Object.keys(FAKES)) {
     const driver = cfg.providers[name];
+    if (name === 'payments' && driver === 'yookassa') { out.payments = yookassa(cfg.yookassa); continue; }
     if (driver !== 'fake') throw new Error(`Поставщик «${name}: ${driver}» ещё не подключён`);
     out[name] = FAKES[name]();
   }

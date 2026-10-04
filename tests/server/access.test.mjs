@@ -645,7 +645,7 @@ test('работа по делу: результат — только испол
 });
 
 test('деньги: цену — диспетчер; платит заказчик при заказе; суммы и документы — каждому свои; возвраты; сводка — служебным', async () => {
-  for (const id of ['orders.money', 'orders.price', 'payments.create', 'payments.refresh', 'payouts.retry', 'refunds.retry', 'money.summary', 'payouts.mine']) cover(id);
+  for (const id of ['orders.money', 'orders.price', 'payments.create', 'payments.refresh', 'payouts.retry', 'refunds.retry', 'money.summary', 'payouts.mine', 'orders.invoice', 'orders.closing.docx']) cover(id);
   const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Деньги' })).body.order;
   assert.equal((await U.owner.req('PATCH', `/api/orders/${o.id}`, { ...READY, deadline: soon() })).status, 200);
   assert.equal((await U.owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
@@ -720,6 +720,20 @@ test('деньги: цену — диспетчер; платит заказчи
   assert.equal(sp.payout.status, 'succeeded');
   assert.equal(sp.payout.amount_kop, 1200040);
   assert.deepEqual((await money(U.admin)).body.money.documents.map((d) => d.kind), ['act', 'agent_report']);
+  // Файлы Word (2.46): акт — заказчику и служебным, отчёт агента — исполнителю и служебным; счёт — стороне заказчика.
+  const word = (c, path) => c.req('GET', `/api/orders/${o.id}/${path}`);
+  const [act] = done.documents;
+  const [report] = sp.documents;
+  for (const [who, code] of [['owner', 200], ['admin', 200], ['dispatcher', 200], ['spec', 404], ['stranger', 404], ['headB', 404]]) {
+    assert.equal((await word(U[who], `closing/${act.id}`)).status, code, `акт: ${who}`);
+  }
+  for (const [who, code] of [['spec', 200], ['dispatcher', 200], ['owner', 404], ['stranger', 404]]) {
+    assert.equal((await word(U[who], `closing/${report.id}`)).status, code, `отчёт агента: ${who}`);
+  }
+  assert.equal((await word(U.owner, 'closing/не-номер')).status, 404);
+  for (const [who, code] of [['owner', 200], ['dispatcher', 200], ['spec', 403], ['stranger', 404], ['headB', 404]]) {
+    assert.equal((await word(U[who], 'invoice')).status, code, `счёт: ${who}`);
+  }
 
   // Повтор выплаты и возврата — только диспетчер и только у неудавшихся.
   assert.equal((await retry(U.dispatcher)).status, 409);

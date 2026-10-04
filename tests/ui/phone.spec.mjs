@@ -2887,3 +2887,57 @@ test('уведомления (2.45): все события на экране и 
   await shot(page, '120-uvedomleniya-nastroyki');
   await cctx.close();
 });
+
+// Деньги для юрлица (2.46): руководитель фирмы вносит реквизиты; по заявке организации — «Счёт для бухгалтерии (Word)»
+// до оплаты; после выдачи — акт файлом Word на организацию; исполнителю — отчёт агента файлом Word.
+test('деньги для юрлица (2.46): реквизиты, счёт до оплаты, акт и отчёт агента файлами Word', async ({ page, browser, baseURL }) => {
+  const L = '+79990004701', D = '+79990004702', S = '+79990004703';
+  const lawyer = await signIn(page, L);
+  const staff = await staffFor(browser, baseURL, D, S, 'realty');
+  let orgId;
+  await db(async (c) => {
+    orgId = (await c.query("insert into organizations (name) values ('ООО «Юрфирма Деньги»') returning id")).rows[0].id;
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head')", [orgId, lawyer.id]);
+  });
+  await page.goto(`/kabinet#org=${orgId}`);
+  await page.getByLabel('ИНН организации').fill('7700000000');
+  await page.getByLabel('КПП (если есть)').fill('770001001');
+  await page.getByLabel('Юридический адрес').fill('г. Москва, ул. Бухгалтерская, 2');
+  await page.locator('#org-edit').getByRole('button', { name: 'Сохранить' }).click();
+  await expect(page.locator('#org-edit-msg')).toHaveText('Сохранено');
+  await shot(page, '121-yurlico-rekvizity');
+
+  const o = (await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Оценка для арбитража', org_id: orgId }, headers: H })).json()).order;
+  expect((await page.request.patch(`/api/orders/${o.id}`, { data: { deadline: inDays(9), fields: { purpose: 'court', region: 'moscow', object_type: 'commercial', address: 'г. Москва, ул. Складская, 4' } }, headers: H })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${o.id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  const afterPay = await staffFinish({ ...staff, orderId: o.id });
+  await page.goto(`/kabinet#order=${o.id}`);
+  const inv = page.getByRole('button', { name: 'Счёт для бухгалтерии (Word)' });
+  await expect(inv).toBeVisible();
+  const [invoice] = await Promise.all([page.waitForEvent('download'), inv.click()]);
+  expect(invoice.suggestedFilename()).toMatch(/^Счёт СЧ-[0-9A-F]{8}\.docx$/);
+  const read = async (dl) => {
+    const chunks = [];
+    for await (const ch of await dl.createReadStream()) chunks.push(ch);
+    return (await extractPages(Buffer.concat(chunks), 'x.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')).pages.join('\n');
+  };
+  expect(await read(invoice)).toMatch(/Заказчик: ООО «Юрфирма Деньги»\nИНН 7700000000, КПП 770001001/);
+  await shot(page, '122-yurlico-schet');
+  await page.locator('#next-main button', { hasText: /Оплатить/ }).click();
+  await expect(page.locator('#money-facts')).toContainText('оплачено');
+  await afterPay();
+  await page.reload();
+  const actRow = page.locator('#closing li').filter({ hasText: 'Акт' });
+  const [act] = await Promise.all([page.waitForEvent('download'), actRow.getByRole('button', { name: 'Word' }).click()]);
+  expect(act.suggestedFilename()).toMatch(/^Акт А-\d{6}\.docx$/);
+  expect(await read(act)).toMatch(/Заказчик: Организация ООО «Юрфирма Деньги»\nИНН 7700000000, КПП 770001001\nАдрес: г\. Москва, ул\. Бухгалтерская, 2/);
+  await shot(page, '123-yurlico-akt');
+
+  // Исполнитель: отчёт агента файлом Word, без имени заказчика.
+  await staff.sp.goto(`/kabinet#order=${o.id}`);
+  const [rep] = await Promise.all([staff.sp.waitForEvent('download'), staff.sp.locator('#closing li').filter({ hasText: 'Отчёт агента' }).getByRole('button', { name: 'Word' }).click()]);
+  const rt = await read(rep);
+  expect(rt).toContain('Отчёт агента');
+  expect(rt).not.toContain('Юрфирма');
+  await staff.close();
+});

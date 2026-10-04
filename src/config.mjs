@@ -63,6 +63,24 @@ export function loadConfig(env = process.env) {
       secretAccessKey: env.S3_SECRET_KEY || '',
       forcePathStyle: env.S3_PATH_STYLE === '1',
     },
+    // ЮKassa (2.46): PAYMENTS_PROVIDER=yookassa. Ключ — из Lockbox. Чеки 54-ФЗ — только по решению Дамира (YOOKASSA_RECEIPTS=1).
+    yookassa: {
+      url: (env.YOOKASSA_URL || 'https://api.yookassa.ru/v3').replace(/\/+$/, ''),
+      shopId: env.YOOKASSA_SHOP_ID || '',
+      secretKey: env.YOOKASSA_SECRET_KEY || '',
+      receipts: env.YOOKASSA_RECEIPTS === '1',
+      vatCode: Number(env.YOOKASSA_VAT_CODE || 1),
+    },
+    // Оператор платформы — агент в счетах и актах (2.46; решение Дамира 03.10.2026 — ООО «АИС Переводчик»). Реквизиты не
+    // секрет, но пока не получены (ОГРН, банк — «Решить Дамиру», пункт 7): пусто — в документе «будут указаны».
+    operator: {
+      name: env.OPERATOR_NAME || 'ООО «АИС Переводчик»',
+      inn: env.OPERATOR_INN || '',
+      kpp: env.OPERATOR_KPP || '',
+      ogrn: env.OPERATOR_OGRN || '',
+      address: env.OPERATOR_ADDRESS || '',
+      bank: env.OPERATOR_BANK || '',             // «р/с …, банк …, БИК …, к/с …» одной строкой
+    },
     // ИИ: основная модель — AI_PROVIDER, запасная — AI_FALLBACK (пусто — без запасной). Ключи — из Lockbox через окружение.
     ai: {
       fallback: env.AI_FALLBACK || '',
@@ -142,6 +160,14 @@ export function loadConfig(env = process.env) {
   if (cfg.crm.bridgeSecret && cfg.crm.bridgeSecret.length < 32) throw new ConfigError('CRM_BRIDGE_SECRET: не короче 32 символов');
   if (cfg.crm.url && !(live ? /^https:\/\/[^\s/]+/ : /^https?:\/\/[^\s/]+/).test(cfg.crm.url)) throw new ConfigError(`CRM_URL: адрес ${live ? 'https://…' : 'http(s)://…'}`);
   if (cfg.providers.payments !== 'fake' && !/^https:\/\//.test(cfg.publicUrl)) throw new ConfigError('PUBLIC_URL (https://…) нужен для настоящей оплаты');
+  // Деньги тестовые (документы с пометкой «проверочный»): поддельная оплата или тестовый магазин ЮKassa.
+  cfg.testMoney = cfg.providers.payments === 'fake' || cfg.yookassa.secretKey.startsWith('test_');
+  if (cfg.providers.payments === 'yookassa') {
+    if (!/^\d{3,12}$/.test(cfg.yookassa.shopId) || !cfg.yookassa.secretKey) throw new ConfigError('ЮKassa: нужны YOOKASSA_SHOP_ID и YOOKASSA_SECRET_KEY');
+    // Вне prod — только тестовый магазин: на площадке настоящие деньги не списываются (2.46).
+    if (cfg.appEnv !== 'prod' && !cfg.yookassa.secretKey.startsWith('test_')) throw new ConfigError('ЮKassa вне prod — только тестовый магазин (ключ test_…)');
+    if (cfg.appEnv === 'prod' && cfg.yookassa.secretKey.startsWith('test_')) throw new ConfigError('ЮKassa на prod — не тестовый ключ');
+  }
   if (live) {
     if (cfg.dbSsl === 'disable') throw new ConfigError('На stage/prod база только с проверкой сертификата');
     if (!cfg.cookieSecure) throw new ConfigError('На stage/prod cookie только Secure');

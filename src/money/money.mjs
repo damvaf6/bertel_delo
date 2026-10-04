@@ -194,7 +194,7 @@ const docBase = (order, { test }) => ({
 // оплатой — partial); имя заказчика исполнителю не попадает.
 async function makeClosingDocs(tx, order, split, { test, partial = null }) {
   const who = await tx.one`
-    select u.full_name, o.name as org_name from users u left join organizations o on o.id = ${order.org_id}
+    select u.full_name, o.name as org_name, o.inn, o.kpp, o.legal_address from users u left join organizations o on o.id = ${order.org_id}
     where u.id = ${order.owner_user_id}`;
   const base = {
     ...docBase(order, { test }), price_kop: split.priceKop, commission_kop: split.commissionKop, payout_kop: split.payoutKop,
@@ -202,7 +202,9 @@ async function makeClosingDocs(tx, order, split, { test, partial = null }) {
   };
   // Название организации — как его записали: «ООО «Юрфирма»» без второй пары кавычек (2.41).
   const customer = who?.org_name ? `Организация ${quoted(who.org_name)}` : who?.full_name || 'Заказчик';
-  await tx`insert into closing_documents (order_id, kind, data) values (${order.id}, 'act', ${JSON.stringify({ ...base, customer })})
+  // Реквизиты организации-заказчика (2.46) — в акт на дату выдачи; у частного лица — только имя.
+  const customerDetails = who?.org_name ? { name: customer, inn: who.inn, kpp: who.kpp, address: who.legal_address } : { name: customer };
+  await tx`insert into closing_documents (order_id, kind, data) values (${order.id}, 'act', ${JSON.stringify({ ...base, customer, customer_details: customerDetails })})
            on conflict (order_id, kind) do nothing`;
   await tx`insert into closing_documents (order_id, kind, data) values (${order.id}, 'agent_report', ${JSON.stringify(base)})
            on conflict (order_id, kind) do nothing`;

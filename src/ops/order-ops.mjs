@@ -292,7 +292,7 @@ export function orderOps() {
         const from = String(body?.from ?? '');
         if (!STATUS_NAME[to] || !STATUS_NAME[from]) throw new HttpError(400, 'bad_status', 'Неизвестный статус');
         const reason = optionalText(body?.reason, 'Причина', 1000);
-        const test = cfg.providers.payments === 'fake';
+        const test = cfg.testMoney;
         let settlement = {};
         const updated = await sql.tx(async (tx) => {
           // Строка заявки блокируется: два одновременных шага не пройдут оба.

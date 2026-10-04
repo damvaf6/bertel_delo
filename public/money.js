@@ -80,7 +80,14 @@ export async function loadMoney(current, reload) {
     el('div', {},
       el('div', { class: 'name', text: `${DOC_RU[d.kind]} № ${d.number}` }),
       el('div', { class: 'muted', text: dayRu(d.created_at) })),
-    el('button', { class: 'secondary', 'data-action': 'open-doc', onclick: () => openDoc(d) }, 'Открыть'))));
+    el('div', { class: 'row' },
+      el('button', { class: 'secondary', 'data-action': 'open-doc', onclick: () => openDoc(d) }, 'Открыть'),
+      // Файлом Word (2.46) — для бухгалтерии и архива.
+      el('button', { class: 'secondary', 'data-action': 'doc-word', onclick: () => { location.href = `/api/orders/${order.id}/closing/${d.id}`; } }, 'Word')))));
+  // Счёт для бухгалтерии (2.46) — заявке организации, когда цена назначена.
+  const invoice = money.sees.customer && !!money.price_kop && !!order.org_id && order.status !== 'cancelled';
+  $('invoice').classList.toggle('hidden', !invoice);
+  $('invoice').onclick = () => { location.href = `/api/orders/${order.id}/invoice`; };
   setNext({ money }); // «Что дальше» заказчику: оплатить, акт (2.41)
 }
 

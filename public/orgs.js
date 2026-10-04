@@ -80,6 +80,8 @@ export async function showOrg(id) {
   $('leave-org').parentElement.classList.toggle('hidden', !org.my_role);
   $('org-edit-name').value = org.name;
   $('org-edit-inn').value = org.inn || '';
+  $('org-edit-kpp').value = org.kpp || '';
+  $('org-edit-address').value = org.legal_address || '';
   for (const m of ['org-edit-msg', 'members-msg', 'invite-msg', 'leave-msg', 'org-sign-msg']) say($(m), '');
   $('org-sign-box').classList.add('hidden');
   $('org-cases-box').classList.add('hidden');
@@ -166,7 +168,9 @@ $('org-edit').addEventListener('submit', async (e) => {
   if (!name) return say($('org-edit-msg'), 'Укажите название');
   $('org-save').disabled = true;
   try {
-    const r = await api('PATCH', `/api/orgs/${org.id}`, { name, inn: $('org-edit-inn').value.trim() || null });
+    const r = await api('PATCH', `/api/orgs/${org.id}`, {
+      name, inn: $('org-edit-inn').value.trim() || null, kpp: $('org-edit-kpp').value.trim() || null, legal_address: $('org-edit-address').value.trim() || null,
+    });
     org = { ...org, ...r.org };
     $('org-title').textContent = org.name;
     await refreshMe();
