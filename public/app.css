@@ -167,6 +167,7 @@ a.btn { text-decoration: none; margin-top: 8px; }
 
 /* Дела специалиста по группам (2.11–2.12) */
 .list li.group { font-weight: 700; color: var(--muted); font-size: 14px; padding: 14px 0 4px; border-bottom: none; }
+.list li.group.org { color: var(--text); font-size: 16px; padding-top: 18px; }
 .offer-actions { margin: 6px 0 4px; }
 
 /* «Что дальше» в деле исполнителя (2.10) */

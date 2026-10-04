@@ -2309,3 +2309,65 @@ test('как настоящий эксперт (2.33): автобус для с�
   await shot(sp, '96-ekspert-sdano');
   for (const p of [ap, dp, sp, op]) await p.context().close();
 });
+
+// «Сегодня» (2.34): эксперт сразу видит, что горит, что вернули и что предложено; руководитель — дела своих экспертов и
+// подписи организации, без данных заказчика. Нажатие ведёт в дело или в раздел организации.
+test('«Сегодня» (2.34): эксперт — горит, вернули, предложено; руководитель — подписи и сроки экспертов; заказчику не показывается', async ({ page, browser, baseURL }) => {
+  const C = '+79990003501', D = '+79990003502', S = '+79990003503', HD = '+79990003504';
+  const customer = await signIn(page, C);
+  const dctx = await phoneContext(browser, baseURL), sctx = await phoneContext(browser, baseURL), hctx = await phoneContext(browser, baseURL);
+  const dp = await dctx.newPage(), sp = await sctx.newPage(), hp = await hctx.newPage();
+  const disp = await signIn(dp, D), spec = await signIn(sp, S), head = await signIn(hp, HD);
+  await sp.request.patch('/api/me', { data: { full_name: 'Эксперт Сегодня' }, headers: H });
+  let orgId;
+  await db(async (c) => {
+    await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    orgId = (await c.query("insert into organizations (name) values ('ООО «Оценка Сегодня»') returning id")).rows[0].id;
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [orgId, head.id, spec.id]);
+    await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [spec.id, orgId]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [spec.id]);
+  });
+  // Три дела: горящее в работе, вернутое диспетчером, новое предложение.
+  async function make(title, days, status) {
+    const o = (await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title }, headers: H })).json()).order;
+    await page.request.patch(`/api/orders/${o.id}`, { data: { deadline: inDays(days), fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, ул. Сегодняшняя, 1' } }, headers: H });
+    await db((c) => c.query('update orders set status = $2, price_kop = 1500000, paid_at = now(), executor_user_id = $3, submitted_at = now() where id = $1', [o.id, status, spec.id]));
+    return o;
+  }
+  const fire = await make('Квартира — срок завтра', 1, 'in_work');
+  const back = await make('Квартира — вернули', 6, 'review');
+  await make('Квартира — новое предложение', 9, 'awaiting_executor');
+  expect((await dp.request.post(`/api/orders/${back.id}/status`, { data: { from: 'review', to: 'in_work', reason: 'Нет даты осмотра в разделе 3' }, headers: H })).status()).toBe(200);
+  // Эксперт подписал отчёт — руководителю нужна подпись организации.
+  const up = await sp.request.post(`/api/orders/${fire.id}/results`, { data: Buffer.from('%PDF-1.4 отчёт'), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Отчёт.pdf') } });
+  expect(up.status()).toBe(201);
+  expect((await sp.request.post(`/api/documents/${(await up.json()).document.id}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+
+  await sp.goto('/kabinet');
+  const box = sp.locator('#today-box');
+  await expect(box).toBeVisible();
+  await expect(box.locator('li[data-today="returned"]')).toHaveText('Вернули на доработку · 1');
+  await expect(box.locator('li[data-today-item="returned"]')).toContainText('Диспетчер: Нет даты осмотра в разделе 3');
+  await expect(box.locator('li[data-today-item="hot"]')).toContainText('срок завтра');
+  await expect(box.locator('li[data-today-item="offers"]')).toContainText('Вам 12 000 ₽');
+  await shot(sp, '97-segodnya-ekspert');
+  await box.locator('li[data-today-item="returned"] button').click();
+  await expect(sp.locator('#order-title')).toHaveText('Квартира — вернули');
+
+  await hp.goto('/kabinet');
+  const hb = hp.locator('#today-box');
+  await expect(hb.locator('li.group.org')).toHaveText('Организация: ООО «Оценка Сегодня»');
+  await expect(hb.locator(`li[data-today="org-sign-${orgId}"]`)).toHaveText('Ждут подписи организации · 1');
+  await expect(hb.locator(`li[data-today-item="org-hot-${orgId}"]`).first()).toContainText('Эксперт Сегодня');
+  await expect(hb).not.toContainText('Квартира');   // названия заявок (текст заказчика) руководителю не показываются
+  await shot(hp, '98-segodnya-rukovoditel');
+  await hb.locator(`li[data-today-item="org-sign-${orgId}"] button`).click();
+  await expect(hp).toHaveURL(new RegExp(`#org=${orgId}$`));
+
+  // Заказчику карточка не показывается.
+  await page.goto('/kabinet');
+  await expect(page.locator('#orders li').first()).toBeVisible();
+  await expect(page.locator('#today-box')).toBeHidden();
+  void customer;
+  for (const c of [dctx, sctx, hctx]) await c.close();
+});

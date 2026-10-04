@@ -11,6 +11,7 @@ import { showMoney } from '/money.js';
 import { showNotifications } from '/notify.js';
 import { showAssistant } from '/assistant.js';
 import { showMail } from '/mail.js';
+import { loadToday } from '/today.js';
 
 const $ = (id) => document.getElementById(id);
 const dateRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
@@ -44,7 +45,7 @@ async function route() {
   if (h === '#admin' && state.me.user.platform_role === 'admin') return showAdmin();
   if (h === '#money') return showMoney();
   show('list-view', 'orders');
-  await loadOrders();
+  await Promise.all([loadOrders(), loadToday()]);
 }
 
 let allOrders = [];
