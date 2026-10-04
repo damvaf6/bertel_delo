@@ -101,6 +101,39 @@ async function analogsPart({ sql, providers, registry }, order, text) {
   };
 }
 
+// Фото осмотра (2.37) → приложение «Фотоматериалы осмотра»: по шагам осмотра, у каждого — время получения платформой,
+// время съёмки и место (если владелец разрешил); снимки JPEG/PNG вставляются картинкой, остальные — строкой «хранится в деле».
+const PHOTOS_MAX = 40;
+const PHOTOS_BYTES = 25 * 1024 * 1024;
+async function photosPart({ sql, providers, registry }, order) {
+  const rows = await sql`
+    select d.id, d.filename, d.mime, d.size_bytes, d.storage_key, d.created_at, p.step, p.received_at, p.shot_at, p.lat, p.lon, p.accuracy_m
+    from documents d left join inspection_photos p on p.document_id = d.id
+    where d.order_id = ${order.id} and d.kind = 'inspection' and d.deleted_at is null order by d.created_at limit ${PHOTOS_MAX}`;
+  if (!rows.length) return null;
+  const steps = registry.inspectionSteps(order.module, order.service);
+  const pos = (id) => { const i = steps.findIndex((x) => x.id === id); return i < 0 ? steps.length : i; };
+  rows.sort((a, b) => pos(a.step) - pos(b.step) || a.created_at - b.created_at);
+  let left = PHOTOS_BYTES;
+  const items = [];
+  for (const [i, r] of rows.entries()) {
+    const fits = /^image\/(png|jpeg)$/.test(r.mime) && Number(r.size_bytes) <= left;
+    const image = fits ? await providers.storage.get(r.storage_key) : null;
+    if (image) left -= image.length;
+    items.push({
+      title: `Фото ${i + 1} — ${steps.find((x) => x.id === r.step)?.title ?? r.filename}`,
+      lines: [
+        `Получено платформой «БЕРТЕЛ Дело»: ${timeMsk(r.received_at ?? r.created_at)} (МСК)`,
+        r.shot_at ? `Снято (по часам телефона): ${timeMsk(r.shot_at)} (МСК)` : null,
+        r.lat != null ? `Место съёмки: ${Number(r.lat).toFixed(5)}, ${Number(r.lon).toFixed(5)}${r.accuracy_m != null ? ` (±${Math.round(r.accuracy_m)} м)` : ''}` : 'Место съёмки не определено',
+        image ? null : `Файл «${r.filename}» хранится в деле на платформе (в Word не вставляется).`,
+      ].filter(Boolean),
+      image,
+    });
+  }
+  return { title: 'Приложение. Фотоматериалы осмотра', items };
+}
+
 export const tablesBrief = (sections) => {
   const t = sections.filter((s) => s.table && s.table !== 'analogs');
   return t.length
@@ -113,6 +146,7 @@ export const tablesBrief = (sections) => {
 export async function reportFor(ctx, order, actor, draftText) {
   const { sql, providers, registry } = ctx;
   const { text, appendix } = await analogsPart(ctx, order, draftText);
+  const photos = await photosPart(ctx, order);
   const def = registry.service(order.module, order.service);
   const org = await executorSignOrg(sql, actor.id);
   const tpl = org ? await sql.one`select storage_key from org_templates where org_id = ${org.id}` : null;
@@ -126,5 +160,9 @@ export async function reportFor(ctx, order, actor, draftText) {
     executor: actor.full_name || null,
     date: ru(todayMsk()),
   };
-  return { buf: buildReport(text, meta, template, { appendix }), filename: `${title}.docx`, template: !!template, analogs: appendix?.items.length ?? 0 };
+  const appendices = [photos, appendix].filter(Boolean);
+  return {
+    buf: buildReport(text, meta, template, { appendix: appendices }), filename: `${title}.docx`, template: !!template,
+    analogs: appendix?.items.length ?? 0, photos: photos?.items.length ?? 0,
+  };
 }

@@ -282,3 +282,29 @@ test('Word: картинки — PNG и JPEG по размеру из файла
     assert.ok(!s.includes('word/media/delo2'), 'неизвестная картинка не вставляется');
   }
 });
+
+// 2.37: в Word — ещё и фото осмотра приложением: по шагам, с временем получения и местом; картинки — в файле.
+test('Word: фото осмотра — приложение «Фотоматериалы осмотра» по шагам, со временем и местом; потом скриншоты аналогов', async () => {
+  const o = await inWork('vehicle', CAR, 'Машина: фото осмотра в Word');
+  const r = await spec.req('POST', `/api/orders/${o.id}/inspection`, {});
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  const token = r.body.path.split('#')[1];
+  const anon = (await import('../helpers.mjs')).client(S);
+  for (const [step, geo] of [['car_rear', {}], ['car_front', { 'x-lat': '55.7512', 'x-lon': '37.6184', 'x-accuracy': '12' }]]) {
+    const up = await anon.req('POST', '/api/inspect/photos', png(640, 480), { raw: true, headers: { 'x-inspect-token': token, 'content-type': 'image/png', 'x-step': step, ...geo } });
+    assert.equal(up.status, 201, JSON.stringify(up.body));
+  }
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {})).status, 201);
+  const w = await fetch(`${S.base}/api/orders/${o.id}/draft/docx`, { headers: { cookie: spec.cookie } });
+  assert.equal(w.status, 200);
+  const buf = Buffer.from(await w.arrayBuffer());
+  const text = (await extractPages(buf, 'r.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')).pages.join('\n');
+  assert.match(text, /Приложение\. Фотоматериалы осмотра/);
+  // По порядку шагов осмотра: сначала «Спереди», потом «Сзади», хотя сняты наоборот.
+  assert.ok(text.indexOf('Фото 1 — Спереди') >= 0 && text.indexOf('Фото 1 — Спереди') < text.indexOf('Фото 2 — Сзади'), text.slice(-800));
+  assert.match(text, /Получено платформой «БЕРТЕЛ Дело»: \d\d\.\d\d\.\d{4}/);
+  assert.match(text, /Место съёмки: 55\.75120, 37\.61840 \(±12 м\)/);
+  assert.match(text, /Место съёмки не определено/);
+  const s = buf.toString('latin1');
+  assert.ok(s.includes('word/media/delo1.png') && s.includes('word/media/delo2.png'), 'обе картинки в файле');
+});
