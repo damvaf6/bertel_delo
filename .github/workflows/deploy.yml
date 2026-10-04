@@ -97,10 +97,9 @@ jobs:
           # Модель ИИ: настоящий YandexGPT с пределом расхода 900 ₽ в месяц (запас 10% до 1 000 ₽), если есть ключ.
           AI_ENV="" AI_SECRET=""
           if [ -n "$AI_SECRET_ID" ]; then
-            # Распознавание скриншотов аналогов — Yandex Vision OCR по временному токену сервисного аккаунта (без ключа).
-            AI_ENV=",AI_PROVIDER=yandexgpt,AI_YANDEX_FOLDER=$FOLDER_ID,AI_BUDGET_RUB=900,OCR_PROVIDER=yandex,OCR_YANDEX_AUTH=metadata"
+            AI_ENV=",AI_PROVIDER=yandexgpt,AI_YANDEX_FOLDER=$FOLDER_ID,AI_BUDGET_RUB=900"
             AI_SECRET="environment-variable=AI_YANDEX_API_KEY,id=$AI_SECRET_ID,key=AI_YANDEX_API_KEY"
-            echo "Модель ИИ: YandexGPT, предел 900 ₽ в месяц; распознавание скриншотов — Yandex Vision" >> $GITHUB_STEP_SUMMARY
+            echo "Модель ИИ: YandexGPT, предел 900 ₽ в месяц" >> $GITHUB_STEP_SUMMARY
           fi
           yc serverless container revision deploy \
             --container-name "$CONTAINER" \
