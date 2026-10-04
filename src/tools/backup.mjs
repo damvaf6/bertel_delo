@@ -6,7 +6,9 @@
 //   3) копия скачивается обратно из хранилища, сверяется контрольная сумма;
 //   4) учебное восстановление скачанной копии во временную базу и сверка таблиц и числа строк с исходной.
 // Запуск: node src/tools/backup.mjs        — один раз, итог в журнал (JSON);
-//         node src/tools/backup.mjs serve  — контейнер: POST /run → тот же итог ответом (вызывает таймер облака).
+//         node src/tools/backup.mjs serve  — контейнер: POST /run → тот же итог ответом (вызывает таймер облака);
+//                                            POST /restore-latest — учебное восстановление последней уже лежащей
+//                                            в хранилище копии, без новой выгрузки (2.40).
 // Настройки: DATABASE_URL, DB_SSL, DB_CA_PATH; S3_ENDPOINT, S3_REGION, S3_BUCKET (бакет копий), S3_ACCESS_KEY,
 // S3_SECRET_KEY, S3_PATH_STYLE; BACKUP_PREFIX (по умолчанию weekly/); RESTORE_ADMIN_URL — восстанавливать во временную
 // базу на этом сервере (проверки), иначе — во временный PostgreSQL внутри контейнера (initdb, только не от root).
@@ -18,7 +20,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
-import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, GetObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import { sslOptions, stripSslParams } from '../db.mjs';
 
 const PG_BIN_DEFAULT = '/usr/lib/postgresql/16/bin';
@@ -219,6 +221,49 @@ export async function runBackup(cfg, { now = new Date(), log = () => {}, s3 = s3
   }
 }
 
+// Учебное восстановление последней еженедельной копии из хранилища (2.40): та самая копия, что сделал таймер, — без новой
+// выгрузки. Сравнить с базой нельзя (база с тех пор менялась), поэтому проверяется, что копия восстанавливается целиком
+// (pg_restore без ошибок, в одной транзакции) и в ней есть основные таблицы и записи о схеме. В итоге — только имена
+// таблиц и числа строк.
+const CORE_TABLES = ['schema_migrations', 'users', 'orders', 'documents'];
+export async function restoreLatest(cfg, { s3 = s3Client(cfg.s3), now = new Date() } = {}) {
+  const started = Date.now();
+  const list = [];
+  let token;
+  do {
+    const r = await s3.send(new ListObjectsV2Command({ Bucket: cfg.s3.bucket, Prefix: cfg.prefix, ContinuationToken: token }));
+    list.push(...(r.Contents ?? []).filter((o) => o.Key.endsWith('.dump')));
+    token = r.IsTruncated ? r.NextContinuationToken : undefined;
+  } while (token);
+  if (!list.length) throw new Error(`в хранилище нет копий (${cfg.prefix})`);
+  const last = list.sort((a, b) => new Date(b.LastModified) - new Date(a.LastModified))[0];
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'delo-restore-'));
+  try {
+    const got = await s3.send(new GetObjectCommand({ Bucket: cfg.s3.bucket, Key: last.Key }));
+    const body = Buffer.from(await got.Body.transformToByteArray());
+    const file = path.join(workDir, 'latest.dump');
+    fs.writeFileSync(file, body);
+    const restored = await restoreCheck(file, { restoreAdminUrl: cfg.restoreAdminUrl, workDir });
+    const missing = CORE_TABLES.filter((t) => !(t in restored));
+    const ok = !missing.length && restored.schema_migrations > 0;
+    return {
+      ok,
+      key: last.Key,
+      copies: list.length,
+      age_hours: Math.round((now - new Date(last.LastModified)) / 3_600_000),
+      bytes: body.length,
+      tables: Object.keys(restored).length,
+      rows: Object.values(restored).reduce((a, b) => a + b, 0),
+      migrations: restored.schema_migrations ?? 0,
+      ...(missing.length ? { missing } : {}),
+      counts: restored,
+      seconds: Math.round((Date.now() - started) / 1000),
+    };
+  } finally {
+    fs.rmSync(workDir, { recursive: true, force: true });
+  }
+}
+
 // Контейнер в облаке: таймер вызывает POST /run; один запуск за раз.
 export function serve(cfg, port = Number(process.env.PORT || 8080)) {
   let busy = false;
@@ -228,7 +273,7 @@ export function serve(cfg, port = Number(process.env.PORT || 8080)) {
     if (busy) return send(409, { ok: false, error: 'выгрузка уже идёт' });
     busy = true;
     try {
-      const report = await runBackup(cfg, { log: (m) => console.log(m) });
+      const report = req.url === '/restore-latest' ? await restoreLatest(cfg) : await runBackup(cfg, { log: (m) => console.log(m) });
       console.log(JSON.stringify({ ...report, counts: undefined, restored: undefined }));
       send(report.ok ? 200 : 500, report);
     } catch (e) {

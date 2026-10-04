@@ -4,13 +4,15 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import { PutObjectCommand, GetObjectCommand, S3Client, CreateBucketCommand, HeadBucketCommand } from '@aws-sdk/client-s3';
+import { PutObjectCommand, GetObjectCommand, ListObjectsV2Command, S3Client, CreateBucketCommand, HeadBucketCommand } from '@aws-sdk/client-s3';
 import { startApp, login, DB_URL } from '../helpers.mjs';
-import { backupConfig, runBackup } from '../../src/tools/backup.mjs';
+import { backupConfig, runBackup, restoreLatest } from '../../src/tools/backup.mjs';
 
 // Подмена хранилища: Content-MD5 обязателен, как в бакете копий с блокировкой от удаления.
 function memoryS3() {
   const objects = new Map();
+  const times = new Map();
+  let tick = Date.parse('2026-10-01T00:00:00Z');
   return {
     objects,
     async send(cmd) {
@@ -19,12 +21,16 @@ function memoryS3() {
         assert.ok(ContentMD5, 'без Content-MD5 бакет копий не примет загрузку');
         assert.equal(crypto.createHash('md5').update(Body).digest('base64'), ContentMD5);
         objects.set(Key, Buffer.from(Body));
+        times.set(Key, new Date((tick += 3_600_000)));
         return {};
       }
       if (cmd instanceof GetObjectCommand) {
         const b = objects.get(Key);
         if (!b) throw Object.assign(new Error('NoSuchKey'), { name: 'NoSuchKey' });
         return { Body: { transformToByteArray: async () => new Uint8Array(b) } };
+      }
+      if (cmd instanceof ListObjectsV2Command) {
+        return { Contents: [...objects.keys()].filter((k) => k.startsWith(cmd.input.Prefix)).map((k) => ({ Key: k, LastModified: times.get(k), Size: objects.get(k).length })), IsTruncated: false };
       }
       throw new Error(`неожиданная команда ${cmd.constructor.name}`);
     },
@@ -91,4 +97,25 @@ test('выгрузка в S3-совместимое хранилище (MinIO)',
   assert.equal(r.ok, true, JSON.stringify(r));
   const got = await c.send(new GetObjectCommand({ Bucket: cfg.s3.bucket, Key: r.key }));
   assert.equal(Number(got.ContentLength), r.bytes);
+});
+
+// 2.40: учебное восстановление последней копии, которая уже лежит в хранилище (её сделал таймер), — без новой выгрузки.
+test('восстановление последней копии из хранилища: та самая копия, целиком; пусто или испорчено — ошибка', async () => {
+  const s3 = memoryS3();
+  const cfg = backupConfig(env());
+  await assert.rejects(restoreLatest(cfg, { s3 }), /в хранилище нет копий/);
+  const first = await runBackup(cfg, { s3, now: new Date('2026-09-27T23:00:00Z') });
+  const second = await runBackup(cfg, { s3, now: new Date('2026-10-04T23:00:00Z') });
+  assert.ok(first.ok && second.ok);
+  // После копии база поменялась — восстановленная копия остаётся снимком на свою дату.
+  await login(S, '+79990001003');
+  const r = await restoreLatest(cfg, { s3, now: new Date('2026-10-02T00:00:00Z') });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.key, second.key);
+  assert.equal(r.copies, 2);
+  assert.equal(r.counts.users, 2, 'снимок на дату копии, без нового пользователя');
+  assert.ok(r.migrations > 0 && r.tables === second.tables);
+  // Испорченная последняя копия — ошибка восстановления, а не «готово».
+  s3.objects.set(second.key, Buffer.from('не копия'));
+  await assert.rejects(restoreLatest(cfg, { s3 }), /pg_restore/);
 });
