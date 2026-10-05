@@ -97,3 +97,17 @@ test('stage: первый вход — «С чего начать» и «Как 
   await page.screenshot({ path: 'test-results/screens/stage-kak-rabotat.png', fullPage: true });
   expect(problems, problems.join('\n')).toEqual([]);
 });
+
+test('stage: витрина «Дело: Экспертиза» (2.53)', async ({ page, baseURL }) => {
+  const problems = watch(page, baseURL);
+  await page.goto('/ekspertiza');
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('Оценка и экспертиза');
+  await expect(page.getByRole('heading', { name: 'Юрфирмам и банкам' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Экспертам и экспертным организациям' })).toBeVisible();
+  const width = await page.evaluate(() => document.documentElement.scrollWidth);
+  expect(width, 'страница шире экрана').toBeLessThanOrEqual(412);
+  await page.screenshot({ path: 'test-results/screens/stage-vitrina.png', fullPage: true });
+  await page.locator('#cta-order').click();
+  await expect(page).toHaveURL(/\/(kabinet)?(\?.*)?$/);
+  expect(problems, problems.join('\n')).toEqual([]);
+});
