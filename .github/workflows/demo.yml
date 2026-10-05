@@ -156,10 +156,13 @@ jobs:
       - name: Снимки
         if: always() && env.ACTION == 'deploy'
         uses: actions/upload-artifact@v4
+        # Место у GitHub ограничено: снимки — 7 дней; нехватка места выкладку не валит.
+        continue-on-error: true
         with:
           name: demo-screens
           path: test-results/
           if-no-files-found: ignore
+          retention-days: 7
 
       - name: Убрать ключ
         if: always()

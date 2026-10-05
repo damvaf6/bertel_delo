@@ -126,10 +126,23 @@ jobs:
       - name: Скриншоты и отчёт
         if: always()
         uses: actions/upload-artifact@v4
+        # Место для снимков у GitHub ограничено: снимки — 5 дней, следы и отчёт — только при падении; нехватка места
+        # проверки не валит (сами проверки уже прошли или упали выше).
+        continue-on-error: true
         with:
           name: phone-screens
-          path: test-results/
-          retention-days: 14
+          path: |
+            test-results/screens/
+            test-results/demo/
+          retention-days: 5
+      - name: Следы упавших проверок
+        if: failure()
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: phone-failures
+          path: test-results/artifacts/
+          retention-days: 5
 
   backup:
     name: Выгрузка копий · образ + учебное восстановление
