@@ -296,6 +296,66 @@ test('недвижимость и земля (2.43): чужой кадастро
   assert.deepEqual(runAutoChecks(['cadastral_match'], [doc([page])], { fields: {} }).cadastral_match, [], 'без номера в заявке — не сверяем');
 });
 
+test('недвижимость и земля (2.59): площадь, этаж и этажность, доля — как в заявке; аналоги, кухня, дом и участок — не находка', () => {
+  const flat = [
+    'ОТЧЁТ ОБ ОЦЕНКЕ № 15 доли в квартире',
+    'Объект оценки: 1/3 доли в праве общей долевой собственности на квартиру общей площадью 54,3 кв. м',
+    'Квартира расположена на 5 этаже 9-этажного жилого дома.',
+    'Описание объекта: общая площадь 45,1 кв. м, жилая площадь 30,2 кв. м, площадь кухни 8,4 кв. м',
+    'Этаж / этажность: 7 / 12',
+    'Рыночная стоимость доли 1/4 в праве собственности составляет 3 100 000 рублей',
+    'Дом расположен на земельном участке площадью 1 200 кв. м; площадь дома 3 400 кв. м',
+    'Аналог 1: квартира площадью 52 кв. м на 3 этаже 5-этажного дома, доля 1/2',
+  ].join('\n');
+  const fields = { area: 54.3, floor: '5 / 9', share_size: '1/3', object_type: 'share' };
+  const res = runAutoChecks(['area_match', 'floor_match', 'share_match'], [doc([flat])], { fields, service: 'realty' });
+  assert.deepEqual(texts(res, 'area_match'), ['Площадь 45,1 кв. м не совпадает с площадью из заявки (54,3 кв. м) — проверьте, нет ли данных другого объекта']);
+  assert.deepEqual(texts(res, 'floor_match'), [
+    'Этаж 7 не совпадает с этажом из заявки (5) — проверьте, нет ли данных другого объекта',
+    'Этажей в доме 12, а в заявке 9 — проверьте, нет ли данных другого дома',
+  ]);
+  assert.deepEqual(texts(res, 'share_match'), ['Доля 1/4 не совпадает с долей из заявки (1/3) — проверьте расчёт и описание объекта']);
+  assert.equal(res.area_match[0].where, 'стр. 1');
+  // Всё как в заявке — находок нет; без полей в заявке — не сверяем; 2/6 = 1/3.
+  const ok = flat.split('\n').filter((l) => !/45,1|7 \/ 12|1\/4/.test(l)).join('\n') + '\nДоля 2/6 в праве';
+  const clean = runAutoChecks(['area_match', 'floor_match', 'share_match'], [doc([ok])], { fields, service: 'realty' });
+  assert.deepEqual([clean.area_match, clean.floor_match, clean.share_match], [[], [], []]);
+  const none = runAutoChecks(['area_match', 'floor_match', 'share_match'], [doc([flat])], { fields: {}, service: 'realty' });
+  assert.deepEqual([none.area_match, none.floor_match, none.share_match], [[], [], []]);
+  // Только этаж в заявке («5») — этажность не сверяем.
+  assert.deepEqual(texts(runAutoChecks(['floor_match'], [doc([flat])], { fields: { floor: '5' }, service: 'realty' }), 'floor_match'),
+    ['Этаж 7 не совпадает с этажом из заявки (5) — проверьте, нет ли данных другого объекта']);
+});
+
+test('земля (2.59): площадь в сотках и гектарах, категория земель и вид разрешённого использования — как в заявке', () => {
+  const land = [
+    'Объект оценки: земельный участок площадью 12 соток, кадастровый номер 50:20:0010101:77',
+    'Площадь участка по выписке ЕГРН: 1 200 кв. м',
+    'Площадь земельного участка 0,15 га',
+    'Категория земель: земли сельскохозяйственного назначения',
+    'Вид разрешённого использования: для ведения личного подсобного хозяйства',
+    'Вид разрешенного использования — для размещения объектов торговли',
+    'На участке жилой дом площадью 120 кв. м',
+    'Аналог 2: категория земель — земли населённых пунктов, ИЖС, площадь 10 соток',
+  ].join('\n');
+  const res = runAutoChecks(['area_match', 'land_match'], [doc([land])], { fields: { area: 1200, land_category: 'settlement', land_use: 'izhs' }, service: 'land' });
+  assert.deepEqual(texts(res, 'area_match'), ['Площадь 1 500 кв. м не совпадает с площадью из заявки (1 200 кв. м) — проверьте, нет ли данных другого объекта']);
+  assert.deepEqual(texts(res, 'land_match'), [
+    'Категория земель «земли сельскохозяйственного назначения» не совпадает с заявкой («земли населённых пунктов») — сверьте с выпиской ЕГРН',
+    'Вид разрешённого использования «для размещения объектов торговли» не похож на назначение из заявки («под жилой дом (ИЖС)») — сверьте с выпиской ЕГРН',
+  ]);
+  // «Другая или не знаю» и «Другое» — не сверяем.
+  const other = runAutoChecks(['land_match'], [doc([land])], { fields: { land_category: 'other', land_use: 'other' }, service: 'land' });
+  assert.deepEqual(other.land_match, []);
+});
+
+test('недвижимость и земля (2.59): новые правила подключены к проверке «Адрес, кадастровый номер, площадь»', async () => {
+  const { DEFAULT_MODULES } = await import('../../src/modules/index.mjs');
+  const exp = DEFAULT_MODULES.find((m) => m.id === 'expertise');
+  const rule = exp.checks.find((c) => c.id === 'realty_identity');
+  assert.deepEqual(rule.auto, ['cadastral_match', 'area_match', 'floor_match', 'share_match', 'land_match']);
+});
+
 test('остальные виды оценки (2.43): правила проверки как у транспорта — сверка объекта, шаблон, обязательные сведения', async () => {
   const { createRegistry } = await import('../../src/modules/index.mjs');
   const reg = createRegistry();

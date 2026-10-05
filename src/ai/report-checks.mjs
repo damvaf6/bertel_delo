@@ -273,6 +273,139 @@ function cadastralMatch(doc, ctx) {
   return out;
 }
 
+// ——— Недвижимость и земля (2.59): площадь, этаж и этажность, доля, категория земель и назначение — как в заявке ———
+// Строки про аналоги, жилую площадь, кухню, балкон, застройку не трогаем; в отчёте о квартире — площадь участка и дома,
+// в отчёте об участке — площадь построек.
+const AREA_NUM = /(\d{1,3}(?:[  ]\d{3})+|\d+)(?:[,.](\d{1,2}))?\s*(кв\.?\s*м\.?|м2|м²|квадратн\S*\s+метр\S*|га(?![а-яё])|гектар\S*|сот(?:ок|ки|ка|ых)?(?![а-яё]))/giu;
+const AREA_SKIP = /жил\S*\s+площад|кухн|балкон|лодж|застройк/iu;
+const lineBefore = (page, index, len = 80) => { const b = page.slice(Math.max(0, index - len), index); return b.slice(b.lastIndexOf('\n') + 1); };
+function areaMatch(doc, ctx) {
+  const mine = Number(String(ctx.fields?.area ?? '').replace(',', '.'));
+  if (!(mine > 0)) return [];
+  const land = ctx.service === 'land';
+  const other = land ? /(?<![а-яё])дом|здани|строени|постройк|помещени/iu
+    : ctx.fields?.object_type === 'house' ? /участ/iu : /участ|(?<![а-яё])дом(?:а|у|е)?(?![а-яё])|здани/iu;
+  const out = [];
+  const seen = new Set();
+  eachPage(doc, (page, i) => {
+    for (const m of page.matchAll(AREA_NUM)) {
+      const before = lineBefore(page, m.index);
+      const at = before.search(/площад(?!.*площад)/iu);
+      // Ближайшая «площадь» перед числом: смотрим 30 знаков перед ней (чья это площадь) и всё до числа.
+      const near = at < 0 ? '' : before.slice(Math.max(0, at - 30));
+      if (!near || other.test(near) || AREA_SKIP.test(near) || /аналог/iu.test(lineAround(page, m.index))) continue;
+      const unit = m[3].toLowerCase();
+      const mult = /^га|^гектар/.test(unit) ? 10000 : /^сот/.test(unit) ? 100 : 1;
+      const v = Math.round(Number(`${m[1].replace(/[  ]/g, '')}.${m[2] ?? 0}`) * mult * 100) / 100;
+      if (Math.abs(v - mine) < 0.05 || seen.has(v)) continue;
+      seen.add(v);
+      out.push({ page: i, quote: lineAround(page, m.index), text: `Площадь ${fmt(v)} кв. м не совпадает с площадью из заявки (${fmt(mine)} кв. м) — проверьте, нет ли данных другого объекта` });
+    }
+  });
+  return out;
+}
+
+const FLOOR_AT = [
+  /этаж\s*\/\s*этажност\S*[^\d\n]{0,10}(\d{1,3})\s*\/\s*(\d{1,3})/giu,
+  /(?<![\d/])(\d{1,3})(?:-?(?:м|ом|й))?\s+этаж(?:е|у)?(?![а-яё])/giu,
+  /(?<![а-яё])этаж(?:\s+расположения)?\s*[:\-–—]\s*(\d{1,3})(?![\d/])/giu,
+];
+const FLOORS_AT = [
+  /(?<![\d/])(\d{1,3})(?:-?(?:ти|х|ми))?[-\s]?этажн/giu,
+  /(?<!этаж\s*\/\s*)этажност\S*(?:\s+(?:дома|здания))?\s*[:\-–—]?\s*(\d{1,3})(?![\d/])/giu,
+  /(?:всего\s+)?этажей(?:\s+в\s+(?:доме|здании))?\s*[:\-–—]\s*(\d{1,3})/giu,
+  /(?<![\d/])(\d{1,3})\s+этаж(?:а|ей)(?![а-яё])/giu,
+];
+function floorMatch(doc, ctx) {
+  const f = String(ctx.fields?.floor ?? '').match(/^\s*(-?\d{1,3})\s*(?:\/\s*(\d{1,3}))?/);
+  if (!f) return [];
+  const [mineFloor, mineFloors] = [Number(f[1]), f[2] ? Number(f[2]) : null];
+  const out = [];
+  const seen = new Set();
+  const add = (i, page, idx, key, text) => { if (seen.has(key)) return; seen.add(key); out.push({ page: i, quote: lineAround(page, idx), text }); };
+  eachPage(doc, (page, i) => {
+    FLOOR_AT.forEach((re, n) => {
+      for (const m of page.matchAll(re)) {
+        if (/аналог/iu.test(lineAround(page, m.index))) continue;
+        const v = Number(m[1]);
+        if (v !== mineFloor) add(i, page, m.index, `f${v}`, `Этаж ${v} не совпадает с этажом из заявки (${mineFloor}) — проверьте, нет ли данных другого объекта`);
+        if (n === 0 && mineFloors && Number(m[2]) !== mineFloors) add(i, page, m.index, `n${m[2]}`, `Этажей в доме ${m[2]}, а в заявке ${mineFloors} — проверьте, нет ли данных другого дома`);
+      }
+    });
+    if (!mineFloors) return;
+    for (const re of FLOORS_AT) {
+      for (const m of page.matchAll(re)) {
+        if (/аналог/iu.test(lineAround(page, m.index))) continue;
+        const v = Number(m[1]);
+        if (v !== mineFloors) add(i, page, m.index, `n${v}`, `Этажей в доме ${v}, а в заявке ${mineFloors} — проверьте, нет ли данных другого дома`);
+      }
+    }
+  });
+  return out;
+}
+
+const SHARE_AT = [
+  /(?<![а-яё])дол(?:я|и|е|ю|ей)(?![а-яё])[^\d\n]{0,60}?(\d{1,3})\s*\/\s*(\d{1,4})(?![\d/])/giu,
+  /(?<![\d/])(\d{1,3})\s*\/\s*(\d{1,4})\s+(?:доли|долю|доля|доле)(?![а-яё])/giu,
+];
+function shareMatch(doc, ctx) {
+  const s = String(ctx.fields?.share_size ?? '').match(/^\s*(\d{1,3})\s*\/\s*(\d{1,4})\s*$/);
+  if (!s || Number(s[2]) === 0) return [];
+  const [a, b] = [Number(s[1]), Number(s[2])];
+  const out = [];
+  const seen = new Set();
+  eachPage(doc, (page, i) => {
+    for (const re of SHARE_AT) {
+      for (const m of page.matchAll(re)) {
+        const [c, d] = [Number(m[1]), Number(m[2])];
+        if (!d || a * d === b * c || seen.has(`${c}/${d}`) || /аналог|этаж/iu.test(lineAround(page, m.index))) continue;
+        seen.add(`${c}/${d}`);
+        out.push({ page: i, quote: lineAround(page, m.index), text: `Доля ${c}/${d} не совпадает с долей из заявки (${a}/${b}) — проверьте расчёт и описание объекта` });
+      }
+    }
+  });
+  return out;
+}
+
+const LAND_CATEGORY = {
+  settlement: ['земли населённых пунктов', /населённ|населенн/iu],
+  agricultural: ['земли сельхозназначения', /сельскохоз|сельхоз/iu],
+  industrial: ['земли промышленности', /промышленн/iu],
+  forest: [null, /лесного\s+фонда|особо\s+охраняем|водного\s+фонда|(?<![а-яё])запаса/iu],
+};
+const LAND_USE = {
+  izhs: ['под жилой дом (ИЖС)', /индивидуальн\S*\s+жил|(?<![А-ЯЁ])ИЖС(?![А-ЯЁ])/u],
+  garden: ['садоводство, дача', /садовод|дачн|огороднич/iu],
+  agri: ['сельхозназначение', /сельскохозяйственн\S*\s+(?:производств|использован)|растениеводств|животноводств/iu],
+  commercial: ['под коммерцию или производство', /предпринимательств|торгов|коммерч|производственн|склад|офис|обслуживан/iu],
+};
+const classify = (value, table) => Object.entries(table).filter(([, [, re]]) => re.test(value)).map(([id]) => id);
+function landMatch(doc, ctx) {
+  const cat = ctx.fields?.land_category;
+  const use = ctx.fields?.land_use;
+  const out = [];
+  const seen = new Set();
+  eachPage(doc, (page, i) => {
+    if (LAND_CATEGORY[cat]?.[0]) {
+      for (const m of page.matchAll(/категори\S*\s+земел\S*\s*[:\-–—]?\s*([^\n.;]{5,80})/giu)) {
+        const ids = classify(m[1], LAND_CATEGORY);
+        if (!ids.length || ids.includes(cat) || /аналог/iu.test(lineAround(page, m.index)) || seen.has(`c${ids[0]}`)) continue;
+        seen.add(`c${ids[0]}`);
+        out.push({ page: i, quote: lineAround(page, m.index), text: `Категория земель «${clean(m[1])}» не совпадает с заявкой («${LAND_CATEGORY[cat][0]}») — сверьте с выпиской ЕГРН` });
+      }
+    }
+    if (LAND_USE[use]) {
+      for (const m of page.matchAll(/разреш[её]нн\S*\s+использовани\S*\s*[:\-–—]?\s*([^\n]{5,120})/giu)) {
+        const ids = classify(m[1], LAND_USE);
+        if (!ids.length || ids.includes(use) || /аналог/iu.test(lineAround(page, m.index)) || seen.has(`u${ids[0]}`)) continue;
+        seen.add(`u${ids[0]}`);
+        out.push({ page: i, quote: lineAround(page, m.index), text: `Вид разрешённого использования «${clean(m[1]).slice(0, 80)}» не похож на назначение из заявки («${LAND_USE[use][0]}») — сверьте с выпиской ЕГРН` });
+      }
+    }
+  });
+  return out;
+}
+
 // ——— Осмотр: «без осмотра», а дата осмотра указана ———
 function inspection(doc) {
   const text = (doc.pages ?? []).join('\n');
@@ -470,6 +603,10 @@ const PER_DOC = {
   court_purpose: courtPurpose,
   vin_match: vinMatch,
   cadastral_match: cadastralMatch,
+  area_match: areaMatch,
+  floor_match: floorMatch,
+  share_match: shareMatch,
+  land_match: landMatch,
   date_order: dateOrder,
 };
 
@@ -484,6 +621,10 @@ export const AUTO_CHECKS = Object.freeze({
   approaches_toc: 'подход из оглавления не отвергнут в тексте',
   template_leftovers: 'нет остатков шаблона другого вида: недвижимость в отчёте о машине, машина в отчёте о квартире',
   cadastral_match: 'кадастровый номер в отчёте — как в заявке',
+  area_match: 'площадь объекта в отчёте — как в заявке',
+  floor_match: 'этаж и этажность дома в отчёте — как в заявке',
+  share_match: 'размер доли в отчёте — как в заявке',
+  land_match: 'категория земель и вид разрешённого использования — как в заявке',
   inspection: '«без осмотра» и дата осмотра одновременно',
   court_purpose: 'цель «для суда» и отказ являться в суд',
   dossier_appraiser: 'аттестат, СРО и полисы сходятся с досье эксперта: номера, суммы, срок на дату отчёта',
