@@ -22,6 +22,12 @@ on:
         description: 'Вход через проблему: 20 типичных вопросов настоящей модели (tests/stage/run.spec.mjs)'
         type: boolean
         default: false
+  # Ночной прогон (2.56, workflow «Nightly stage run»): та же выкладка основной версии и все сценарии площадки.
+  workflow_call:
+    inputs:
+      tour: { type: boolean, default: false }
+      demo: { type: boolean, default: false }
+      problems: { type: boolean, default: false }
 
 jobs:
   deploy:
