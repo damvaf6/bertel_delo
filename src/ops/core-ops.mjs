@@ -62,7 +62,7 @@ export function coreOps(cfg) {
       publicReason: 'проверка работы для облака и автотестов; данных не отдаёт',
       async handler({ sql, cfg }) {
         await sql`select 1`;
-        return { ok: true, test_data: cfg.appEnv !== 'prod' };
+        return { ok: true, test_data: cfg.appEnv !== 'prod', ...(cfg.appEnv === 'demo' ? { demo: true } : {}) };
       },
     },
     {

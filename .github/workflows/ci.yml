@@ -118,6 +118,8 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Телефон 412×915 против контейнера
         run: npm run test:ui
+      - name: Демо-площадка на телефоне 412×915 (режим демо на локальном стенде)
+        run: npx playwright test --config playwright.demo.mjs
       - name: Журнал контейнера
         if: failure()
         run: docker logs delo-app

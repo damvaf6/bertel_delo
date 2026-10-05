@@ -6,7 +6,43 @@ const RESEND_SEC = 60; // как на сервере: новый код не ч�
 let phone = '';
 let timer = null;
 
-api('GET', '/api/health').then((h) => { if (h?.test_data) $('test-mark').classList.remove('hidden'); }).catch(() => {});
+api('GET', '/api/health').then((h) => {
+  if (h?.test_data) $('test-mark').classList.remove('hidden');
+  if (h?.demo) showDemo();
+}).catch(() => {});
+
+// Демо-площадка (решение Дамира 05.10.2026): вместо входа по телефону — кнопки «Войти как …» за вымышленных людей.
+async function showDemo() {
+  $('test-mark').textContent = 'Демо-площадка · всё вымышленное · данные сбрасываются каждую ночь';
+  $('login-box').classList.add('hidden');
+  $('demo-box').classList.remove('hidden');
+  const { roles } = await api('GET', '/api/demo/roles');
+  $('demo-roles').replaceChildren(...roles.map((r) => {
+    const b = document.createElement('button');
+    b.className = 'secondary wide';
+    b.dataset.as = r.as;
+    const t = document.createElement('span');
+    t.className = 'title';
+    t.textContent = r.title;
+    const hint = document.createElement('span');
+    hint.className = 'muted';
+    hint.textContent = r.hint;
+    b.append(t, hint);
+    b.addEventListener('click', async () => {
+      b.disabled = true;
+      try {
+        await api('POST', '/api/demo/login', { as: r.as });
+        location.replace(target);
+      } catch (err) {
+        say($('demo-msg'), err.message);
+        b.disabled = false;
+      }
+    });
+    const li = document.createElement('li');
+    li.append(b);
+    return li;
+  }));
+}
 // Куда после входа: раздел кабинета, с которого пришли (витрина, ссылка из уведомления), — только свои разделы.
 const next = new URLSearchParams(location.search).get('next') || '';
 const target = `/kabinet${/^#[a-z]+(=[0-9a-f-]{36})?$/i.test(next) ? next : ''}`;

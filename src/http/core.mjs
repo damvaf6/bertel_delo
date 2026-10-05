@@ -46,6 +46,8 @@ export function securityHeaders(cfg) {
     res.setHeader('Permissions-Policy', `camera=(), microphone=(), geolocation=(${inspect ? 'self' : ''})`);
     res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
     if (cfg.live) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    // Демо-площадка — не для поисковиков (решение Дамира 05.10.2026).
+    if (cfg.appEnv === 'demo') res.setHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
     if (req.path.startsWith('/api/')) res.setHeader('Cache-Control', 'no-store');
     next();
   };

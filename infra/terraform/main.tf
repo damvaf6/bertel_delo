@@ -385,3 +385,132 @@ resource "yandex_container_registry_iam_binding" "puller" {
   role        = "container-registry.images.puller"
   members     = ["serviceAccount:${yandex_iam_service_account.app.id}"]
 }
+
+# ---------------------------------------------------------------- демо-площадка (только stage)
+# Открытая демо-площадка для показа (решение Дамира 05.10.2026, вопрос 21, вариант Б): отдельная база delo_demo в том же
+# кластере, отдельный бакет файлов и отдельный секрет. Только вымышленные данные; каждую ночь данные стираются и
+# наполняются заново (workflow «Demo (Yandex Cloud)»), файлы в бакете живут не дольше 2 суток. На prod — нет (count = 0).
+resource "random_password" "pg_demo" {
+  count   = var.env == "stage" ? 1 : 0
+  length  = 32
+  special = false
+}
+
+resource "random_password" "demo_secret" {
+  count   = var.env == "stage" ? 1 : 0
+  length  = 48
+  special = false
+}
+
+resource "random_password" "demo_reset" {
+  count   = var.env == "stage" ? 1 : 0
+  length  = 48
+  special = false
+}
+
+resource "yandex_mdb_postgresql_user" "demo" {
+  count      = var.env == "stage" ? 1 : 0
+  cluster_id = yandex_mdb_postgresql_cluster.main.id
+  name       = "delo_demo"
+  password   = random_password.pg_demo[0].result
+  conn_limit = 20
+}
+
+resource "yandex_mdb_postgresql_database" "demo" {
+  count      = var.env == "stage" ? 1 : 0
+  cluster_id = yandex_mdb_postgresql_cluster.main.id
+  name       = "delo_demo"
+  owner      = yandex_mdb_postgresql_user.demo[0].name
+  lc_collate = "C"
+  lc_type    = "C"
+
+  extension { name = "pgcrypto" }
+  extension { name = "citext" }
+}
+
+resource "yandex_storage_bucket" "demo" {
+  count      = var.env == "stage" ? 1 : 0
+  bucket     = "${local.name}-demo-${var.name_suffix}"
+  access_key = yandex_iam_service_account_static_access_key.storage_admin.access_key
+  secret_key = yandex_iam_service_account_static_access_key.storage_admin.secret_key
+
+  anonymous_access_flags {
+    read        = false
+    list        = false
+    config_read = false
+  }
+
+  server_side_encryption_configuration {
+    rule {
+      apply_server_side_encryption_by_default {
+        kms_master_key_id = yandex_kms_symmetric_key.main.id
+        sse_algorithm     = "aws:kms"
+      }
+    }
+  }
+
+  # Данные демо сбрасываются каждую ночь — файлы старше 2 суток удаляются сами.
+  lifecycle_rule {
+    id      = "demo-2-days"
+    enabled = true
+    expiration {
+      days = 2
+    }
+  }
+
+  cors_rule {
+    allowed_methods = ["PUT", "GET"]
+    allowed_origins = var.files_cors_origins
+    allowed_headers = ["*"]
+    expose_headers  = ["ETag"]
+    max_age_seconds = 3600
+  }
+
+  grant {
+    id          = yandex_iam_service_account.app.id
+    type        = "CanonicalUser"
+    permissions = ["READ", "WRITE"]
+  }
+
+  depends_on = [yandex_resourcemanager_folder_iam_member.storage_admin, yandex_kms_symmetric_key_iam_binding.use]
+}
+
+resource "yandex_lockbox_secret" "demo" {
+  count               = var.env == "stage" ? 1 : 0
+  name                = "${local.name}-demo"
+  description         = "Секреты открытой демо-площадки (только stage, только вымышленные данные)."
+  kms_key_id          = yandex_kms_symmetric_key.main.id
+  deletion_protection = false
+}
+
+resource "yandex_lockbox_secret_version" "demo" {
+  count     = var.env == "stage" ? 1 : 0
+  secret_id = yandex_lockbox_secret.demo[0].id
+  entries {
+    key        = "DATABASE_URL"
+    text_value = "postgres://${yandex_mdb_postgresql_user.demo[0].name}:${random_password.pg_demo[0].result}@c-${yandex_mdb_postgresql_cluster.main.id}.rw.mdb.yandexcloud.net:6432/${yandex_mdb_postgresql_database.demo[0].name}?sslmode=verify-full"
+  }
+  entries {
+    key        = "APP_SECRET"
+    text_value = random_password.demo_secret[0].result
+  }
+  entries {
+    key        = "S3_ACCESS_KEY"
+    text_value = yandex_iam_service_account_static_access_key.app.access_key
+  }
+  entries {
+    key        = "S3_SECRET_KEY"
+    text_value = yandex_iam_service_account_static_access_key.app.secret_key
+  }
+  entries {
+    key        = "DEMO_RESET_KEY"
+    text_value = random_password.demo_reset[0].result
+  }
+}
+
+resource "yandex_lockbox_secret_iam_binding" "demo_read" {
+  count     = var.env == "stage" ? 1 : 0
+  secret_id = yandex_lockbox_secret.demo[0].id
+  role      = "lockbox.payloadViewer"
+  members   = ["serviceAccount:${yandex_iam_service_account.app.id}"]
+}

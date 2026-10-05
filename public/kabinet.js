@@ -20,7 +20,10 @@ const $ = (id) => document.getElementById(id);
 const dateRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
 
 async function start() {
-  api('GET', '/api/health').then((h) => { if (h?.test_data) $('test-mark').classList.remove('hidden'); }).catch(() => {});
+  api('GET', '/api/health').then((h) => {
+    if (h?.test_data) $('test-mark').classList.remove('hidden');
+    if (h?.demo) $('test-mark').textContent = 'Демо-площадка · всё вымышленное · данные сбрасываются каждую ночь';
+  }).catch(() => {});
   try {
     [, state.catalog] = await Promise.all([refreshMe(), api('GET', '/api/catalog')]);
   } catch (err) {

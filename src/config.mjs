@@ -4,7 +4,10 @@
 import { AI_DRIVERS } from './providers/ai.mjs';
 import { OCR_DRIVERS } from './providers/ocr.mjs';
 
-const ENVS = ['test', 'dev', 'stage', 'prod'];
+// demo — открытая демо-площадка для показа (решение Дамира 05.10.2026, вопрос 21, вариант Б): только вымышленные данные,
+// вход кнопками «Войти как …», без входа по телефону и без настоящих поставщиков (оплата, СМС, почта, подпись, ИИ —
+// только поддельные), закрыта от поисковиков, данные сбрасываются каждую ночь (src/demo/demo.mjs).
+const ENVS = ['test', 'dev', 'stage', 'prod', 'demo'];
 
 // Где возможен служебный вход тестовыми номерами. prod здесь не бывает — это проверяет tests/server/stage-login.test.mjs.
 export const STAGE_LOGIN_ENVS = Object.freeze(['stage', 'test']);
@@ -14,7 +17,7 @@ export class ConfigError extends Error {}
 export function loadConfig(env = process.env) {
   const appEnv = env.APP_ENV || 'dev';
   if (!ENVS.includes(appEnv)) throw new ConfigError(`APP_ENV: одно из ${ENVS.join(', ')}`);
-  const live = appEnv === 'stage' || appEnv === 'prod';
+  const live = appEnv === 'stage' || appEnv === 'prod' || appEnv === 'demo';
 
   const cfg = {
     appEnv,
@@ -123,6 +126,8 @@ export function loadConfig(env = process.env) {
     // Служебный вход тестовыми номерами +7999000xxxx на закрытой проверочной площадке (решение Дамира 02.10.2026).
     // Только APP_ENV=stage (и test — автотесты); на prod сервер с этим ключом не стартует.
     stageLoginKey: env.STAGE_LOGIN_KEY || '',
+    // Ключ ночного сброса демо-площадки (только APP_ENV=demo; из Lockbox delo-stage-demo).
+    demoResetKey: env.DEMO_RESET_KEY || '',
     // Лимит запросов входа с одного адреса за 10 минут. Менять — только APP_ENV=test (много входов в одном прогоне).
     authRateMax: env.AUTH_RATE_MAX ? Number(env.AUTH_RATE_MAX) : 30,
   };
@@ -138,6 +143,17 @@ export function loadConfig(env = process.env) {
   if (cfg.stageLoginKey && !STAGE_LOGIN_ENVS.includes(appEnv)) throw new ConfigError('STAGE_LOGIN_KEY допустим только на проверочной площадке (APP_ENV=stage)');
   if (cfg.stageLoginKey && cfg.stageLoginKey.length < 32) throw new ConfigError('STAGE_LOGIN_KEY: не короче 32 символов');
   if (cfg.providers.storage === 's3' && !cfg.s3.bucket) throw new ConfigError('S3_BUCKET не задан');
+  if (cfg.demoResetKey && appEnv !== 'demo') throw new ConfigError('DEMO_RESET_KEY допустим только на демо-площадке (APP_ENV=demo)');
+  if (appEnv === 'demo') {
+    if (cfg.demoResetKey.length < 32) throw new ConfigError('DEMO_RESET_KEY: не короче 32 символов');
+    // Демо-площадка открыта всем: ни денег, ни СМС, ни писем, ни настоящей подписи и модели — только поддельные.
+    for (const name of ['sms', 'call', 'payments', 'mail', 'sign', 'ai']) {
+      if (cfg.providers[name] !== 'fake') throw new ConfigError(`На демо-площадке поставщик «${name}» — только поддельный`);
+    }
+    if (cfg.ai.fallback) throw new ConfigError('На демо-площадке запасной модели нет');
+    if (cfg.providers.ocr) throw new ConfigError('На демо-площадке распознавание скриншотов выключено');
+    if (cfg.crm.bridgeSecret) throw new ConfigError('На демо-площадке мост CRM выключен');
+  }
 
   // Модели ИИ — только из списка (зарубежные в контуре с персональными данными запрещены уставом).
   for (const [name, driver] of [['AI_PROVIDER', cfg.providers.ai], ['AI_FALLBACK', cfg.ai.fallback]]) {
