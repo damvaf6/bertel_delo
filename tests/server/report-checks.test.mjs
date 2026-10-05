@@ -296,6 +296,66 @@ test('недвижимость и земля (2.43): чужой кадастро
   assert.deepEqual(runAutoChecks(['cadastral_match'], [doc([page])], { fields: {} }).cadastral_match, [], 'без номера в заявке — не сверяем');
 });
 
+test('недвижимость и земля (2.59): площадь, этаж и этажность, доля — как в заявке; аналоги, кухня, дом и участок — не находка', () => {
+  const flat = [
+    'ОТЧЁТ ОБ ОЦЕНКЕ № 15 доли в квартире',
+    'Объект оценки: 1/3 доли в праве общей долевой собственности на квартиру общей площадью 54,3 кв. м',
+    'Квартира расположена на 5 этаже 9-этажного жилого дома.',
+    'Описание объекта: общая площадь 45,1 кв. м, жилая площадь 30,2 кв. м, площадь кухни 8,4 кв. м',
+    'Этаж / этажность: 7 / 12',
+    'Рыночная стоимость доли 1/4 в праве собственности составляет 3 100 000 рублей',
+    'Дом расположен на земельном участке площадью 1 200 кв. м; площадь дома 3 400 кв. м',
+    'Аналог 1: квартира площадью 52 кв. м на 3 этаже 5-этажного дома, доля 1/2',
+  ].join('\n');
+  const fields = { area: 54.3, floor: '5 / 9', share_size: '1/3', object_type: 'share' };
+  const res = runAutoChecks(['area_match', 'floor_match', 'share_match'], [doc([flat])], { fields, service: 'realty' });
+  assert.deepEqual(texts(res, 'area_match'), ['Площадь 45,1 кв. м не совпадает с площадью из заявки (54,3 кв. м) — проверьте, нет ли данных другого объекта']);
+  assert.deepEqual(texts(res, 'floor_match'), [
+    'Этаж 7 не совпадает с этажом из заявки (5) — проверьте, нет ли данных другого объекта',
+    'Этажей в доме 12, а в заявке 9 — проверьте, нет ли данных другого дома',
+  ]);
+  assert.deepEqual(texts(res, 'share_match'), ['Доля 1/4 не совпадает с долей из заявки (1/3) — проверьте расчёт и описание объекта']);
+  assert.equal(res.area_match[0].where, 'стр. 1');
+  // Всё как в заявке — находок нет; без полей в заявке — не сверяем; 2/6 = 1/3.
+  const ok = flat.split('\n').filter((l) => !/45,1|7 \/ 12|1\/4/.test(l)).join('\n') + '\nДоля 2/6 в праве';
+  const clean = runAutoChecks(['area_match', 'floor_match', 'share_match'], [doc([ok])], { fields, service: 'realty' });
+  assert.deepEqual([clean.area_match, clean.floor_match, clean.share_match], [[], [], []]);
+  const none = runAutoChecks(['area_match', 'floor_match', 'share_match'], [doc([flat])], { fields: {}, service: 'realty' });
+  assert.deepEqual([none.area_match, none.floor_match, none.share_match], [[], [], []]);
+  // Только этаж в заявке («5») — этажность не сверяем.
+  assert.deepEqual(texts(runAutoChecks(['floor_match'], [doc([flat])], { fields: { floor: '5' }, service: 'realty' }), 'floor_match'),
+    ['Этаж 7 не совпадает с этажом из заявки (5) — проверьте, нет ли данных другого объекта']);
+});
+
+test('земля (2.59): площадь в сотках и гектарах, категория земель и вид разрешённого использования — как в заявке', () => {
+  const land = [
+    'Объект оценки: земельный участок площадью 12 соток, кадастровый номер 50:20:0010101:77',
+    'Площадь участка по выписке ЕГРН: 1 200 кв. м',
+    'Площадь земельного участка 0,15 га',
+    'Категория земель: земли сельскохозяйственного назначения',
+    'Вид разрешённого использования: для ведения личного подсобного хозяйства',
+    'Вид разрешенного использования — для размещения объектов торговли',
+    'На участке жилой дом площадью 120 кв. м',
+    'Аналог 2: категория земель — земли населённых пунктов, ИЖС, площадь 10 соток',
+  ].join('\n');
+  const res = runAutoChecks(['area_match', 'land_match'], [doc([land])], { fields: { area: 1200, land_category: 'settlement', land_use: 'izhs' }, service: 'land' });
+  assert.deepEqual(texts(res, 'area_match'), ['Площадь 1 500 кв. м не совпадает с площадью из заявки (1 200 кв. м) — проверьте, нет ли данных другого объекта']);
+  assert.deepEqual(texts(res, 'land_match'), [
+    'Категория земель «земли сельскохозяйственного назначения» не совпадает с заявкой («земли населённых пунктов») — сверьте с выпиской ЕГРН',
+    'Вид разрешённого использования «для размещения объектов торговли» не похож на назначение из заявки («под жилой дом (ИЖС)») — сверьте с выпиской ЕГРН',
+  ]);
+  // «Другая или не знаю» и «Другое» — не сверяем.
+  const other = runAutoChecks(['land_match'], [doc([land])], { fields: { land_category: 'other', land_use: 'other' }, service: 'land' });
+  assert.deepEqual(other.land_match, []);
+});
+
+test('недвижимость и земля (2.59): новые правила подключены к проверке «Адрес, кадастровый номер, площадь»', async () => {
+  const { DEFAULT_MODULES } = await import('../../src/modules/index.mjs');
+  const exp = DEFAULT_MODULES.find((m) => m.id === 'expertise');
+  const rule = exp.checks.find((c) => c.id === 'realty_identity');
+  assert.deepEqual(rule.auto, ['cadastral_match', 'area_match', 'floor_match', 'share_match', 'land_match']);
+});
+
 test('остальные виды оценки (2.43): правила проверки как у транспорта — сверка объекта, шаблон, обязательные сведения', async () => {
   const { createRegistry } = await import('../../src/modules/index.mjs');
   const reg = createRegistry();
@@ -306,4 +366,65 @@ test('остальные виды оценки (2.43): правила прове
   for (const id of ['rights', 'calculation', 'approaches', 'analogs', 'appraiser', 'template']) assert.ok(of('movable').includes(id), `movable: ${id}`);
   for (const id of ['expert_info', 'conclusions', 'questions_answered', 'calculation']) assert.ok(of('goods').includes(id), `goods: ${id}`);
   assert.ok(!of('vehicle').includes('realty_identity'));
+});
+
+test('транспорт (2.60): госномер и пробег — как в заявке; номера аналогов, среднегодовой пробег и рост пробега до 10% — не находка', () => {
+  const fields = { vin: 'XXX000000R0000000', reg_number: 'А001АА799', mileage: 120000 };
+  const page = [
+    'Объект оценки: автобус Авто-Бус 1000-01, VIN: XXX000000R0000000, гос. рег. знак A001AA799 (латиницей — тот же номер).',
+    'Пробег по показаниям одометра: 125 000 км.',
+    'Среднегодовой пробег для автобусов — 60 000 км в год.',
+    'Аналог №1: Авто-Бус 1000-01, г/н В002ВВ799, пробег 300 000 км.',
+  ].join('\n');
+  const ok = runAutoChecks(['reg_match', 'mileage_match'], [doc([page])], { fields });
+  assert.deepEqual(ok.reg_match, []);
+  assert.deepEqual(ok.mileage_match, [], 'пробег вырос на 4% — так бывает');
+  const bad = runAutoChecks(['reg_match', 'mileage_match'], [doc([page, 'Госномер В777ОР77. Пробег объекта — 48 тыс. км.'])], { fields });
+  assert.deepEqual(texts(bad, 'reg_match'), ['Госномер В777ОР77 не совпадает с госномером из заявки (А001АА799) — проверьте, нет ли данных другой машины']);
+  assert.equal(bad.reg_match[0].where, 'стр. 2');
+  assert.deepEqual(texts(bad, 'mileage_match'), ['Пробег 48 000 км не совпадает с пробегом из заявки (120 000 км) — проверьте, нет ли данных другой машины']);
+  assert.deepEqual(runAutoChecks(['reg_match', 'mileage_match'], [doc([page])], { fields: {} }), { reg_match: [], mileage_match: [] }, 'в заявке нет — не сверяем');
+});
+
+test('все виды оценки (2.60): веса подходов в сумме 1 — строка на подход и столбцы «Вес» у нескольких машин', () => {
+  const good = ['СОГЛАСОВАНИЕ РЕЗУЛЬТАТОВ', 'Подход Стоимость, руб. Вес', 'Затратный подход 1 200 000 0,4', 'Сравнительный подход 1 300 000 0,6', 'Доходный подход не применялся -'].join('\n');
+  assert.deepEqual(runAutoChecks(['approach_weights'], [doc([good])]).approach_weights, []);
+  const bad = good.replace('0,6', '0,5');
+  assert.deepEqual(texts(runAutoChecks(['approach_weights'], [doc([bad])]), 'approach_weights'), ['Веса подходов в согласовании в сумме 0,9, а должно быть 1']);
+  const pct = ['Обобщение результатов, вес подхода', 'Затратный подход — 30%', 'Сравнительный подход — 50%'].join('\n');
+  assert.deepEqual(texts(runAutoChecks(['approach_weights'], [doc([pct])]), 'approach_weights'), ['Веса подходов в согласовании в сумме 0,8, а должно быть 1']);
+  const table = [
+    'Итоговая рыночная стоимость',
+    'Наименование Стоимость затратным Вес Стоимость доходным Вес Стоимость сравнительным Вес Итог',
+    'Автомобиль Нортон Сириус V8 Не применялся - Не применялся - 3 148 760,14 1,0 3 100 000,00',
+    'Автомобиль Нортон Аврора 2 000 000,00 0,5 Не применялся - 5 589 752,10 0,3 5 600 000,00',
+  ].join('\n');
+  assert.deepEqual(texts(runAutoChecks(['approach_weights'], [doc([table])]), 'approach_weights'), ['Веса подходов в строке в сумме 0,8, а должно быть 1']);
+});
+
+test('аналоги (2.60): не меньше трёх; одна ссылка у разных аналогов — находка; сравнительный не применялся — молчим', () => {
+  const three = [
+    'Сравнительный подход',
+    'Аналог №1 — https://auto.example.ru/cars/1 — 3 100 000 руб.',
+    'Аналог №2 — https://auto.example.ru/cars/2 — 3 250 000 руб.',
+    'Аналог №3 — https://www.auto.example.ru/cars/3/ — 3 000 000 руб.',
+  ].join('\n');
+  assert.deepEqual(runAutoChecks(['analog_list'], [doc([three])]).analog_list, []);
+  const two = three.split('\n').slice(0, 3).join('\n');
+  assert.deepEqual(texts(runAutoChecks(['analog_list'], [doc([two])]), 'analog_list'), ['В сравнительном подходе два аналога — нужно не меньше трёх']);
+  const dup = three.replace('cars/3/', 'cars/1/');
+  assert.deepEqual(texts(runAutoChecks(['analog_list'], [doc([dup])]), 'analog_list'), ['Одна и та же ссылка у аналогов № 1 и № 3 — у каждого аналога должно быть своё объявление']);
+  const refused = 'Сравнительный подход не применялся: аналог №1 найден один, предложений недостаточно.';
+  assert.deepEqual(runAutoChecks(['analog_list'], [doc([refused])]).analog_list, []);
+});
+
+test('2.60: правила подключены — госномер и пробег к транспорту, веса к подходам, аналоги к аналогам', async () => {
+  const { createRegistry } = await import('../../src/modules/index.mjs');
+  const reg = createRegistry();
+  const auto = (svc, id) => reg.checks('expertise', svc).find((c) => c.id === id)?.auto ?? [];
+  assert.ok(auto('vehicle', 'vehicle_identity').includes('reg_match') && auto('vehicle', 'vehicle_identity').includes('mileage_match'));
+  for (const svc of ['vehicle', 'movable', 'realty', 'land']) {
+    assert.ok(auto(svc, 'approaches').includes('approach_weights'), svc);
+    assert.ok(auto(svc, 'analogs').includes('analog_list'), svc);
+  }
 });
