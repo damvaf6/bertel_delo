@@ -14,6 +14,10 @@ on:
         description: 'Экскурсия по кабинетам: снимки и PDF (tests/stage/tour.spec.mjs)'
         type: boolean
         default: false
+      demo:
+        description: 'Демо-площадка: наполнить делами для показа и снять экскурсию на 10 минут (tests/stage/demo.spec.mjs)'
+        type: boolean
+        default: false
       problems:
         description: 'Вход через проблему: 20 типичных вопросов настоящей модели (tests/stage/run.spec.mjs)'
         type: boolean
@@ -157,6 +161,7 @@ jobs:
           STAGE_ADMIN_PHONE: '+79990009500'
           TOUR: ${{ inputs.tour && '1' || '' }}
           PROBLEMS: ${{ inputs.problems && '1' || '' }}
+          DEMO: ${{ inputs.demo && '1' || '' }}
         run: |
           # Ключи прогона: IAM-токен (браузер подставляет его только для адреса площадки) и ключ служебного входа.
           STAGE_INVOKE_TOKEN=$(yc iam create-token); echo "::add-mask::$STAGE_INVOKE_TOKEN"
@@ -167,6 +172,7 @@ jobs:
           mkdir -p test-results/screens
           npx playwright test --config playwright.stage.mjs
           if [ "$TOUR" = 1 ]; then node tests/tools/tour-pdf.mjs test-results "test-results/Экскурсия по кабинетам.pdf"; fi
+          if [ "$DEMO" = 1 ]; then node tests/tools/tour-pdf.mjs test-results/demo "test-results/Демо-экскурсия.pdf"; fi
 
       - name: Скриншоты
         if: always()

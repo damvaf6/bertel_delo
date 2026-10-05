@@ -71,3 +71,29 @@ test('stage: служебный вход — только тестовые но�
   await page.screenshot({ path: 'test-results/screens/stage-kabinet.png', fullPage: true });
   expect(problems, problems.join('\n')).toEqual([]);
 });
+
+test('stage: первый вход — «С чего начать» и «Как работать» (2.52)', async ({ page, baseURL }) => {
+  const problems = watch(page, baseURL);
+  // Новый человек каждый прогон: +7 999 000-90-10…99 (9001 — проверка входа выше).
+  const phone = `+799900090${10 + Math.floor(Math.random() * 90)}`;
+  const r = await page.request.post('/__stage/login', { data: { phone }, headers: { ...AUTH, 'x-delo-request': '1', 'x-stage-login': LOGIN_KEY } });
+  expect(r.status()).toBe(200);
+  await page.goto('/kabinet');
+  await expect(page.getByRole('heading', { name: 'Мои заявки' })).toBeVisible();
+  const box = page.locator('#hint-box');
+  // Номер мог уже встречаться в прошлых прогонах — тогда подсказка закрыта раньше.
+  const seen = (await (await page.request.get('/api/me', { headers: AUTH })).json()).hints_seen;
+  if (!seen.includes('customer')) {
+    await expect(page.locator('#hint-title')).toHaveText('С чего начать: заказчик');
+    await page.screenshot({ path: 'test-results/screens/stage-podskazka.png', fullPage: true });
+    await page.getByRole('button', { name: 'Понятно' }).click();
+    await expect(box).toBeHidden();
+  }
+  await page.getByRole('link', { name: 'Как работать' }).first().click();
+  await expect(page.getByRole('heading', { name: 'Как работать', level: 1 })).toBeVisible();
+  await expect(page.locator('details[data-role="customer"]')).toHaveAttribute('open', '');
+  const width = await page.evaluate(() => document.documentElement.scrollWidth);
+  expect(width, 'страница шире экрана').toBeLessThanOrEqual(412);
+  await page.screenshot({ path: 'test-results/screens/stage-kak-rabotat.png', fullPage: true });
+  expect(problems, problems.join('\n')).toEqual([]);
+});

@@ -1,5 +1,5 @@
 // Кабинет: разделы «Заявки», «Помощник» (ИИ), «Уведомления», «Организации», «Профиль», «Управление» (только администратору). Заявка — order.js.
-// Разделы переключаются адресом после «#»: #order=…, #assistant, #notifications, #orgs, #org=…, #profile, #admin, #money (деньги — служебным
+// Разделы переключаются адресом после «#»: #order=…, #assistant, #notifications, #orgs, #org=…, #profile, #help, #admin, #money (деньги — служебным
 // и специалистам).
 import { api, el, say, formatPhone } from '/common.js';
 import { state, show, refreshMe, refreshCounts } from '/shell.js';
@@ -13,6 +13,7 @@ import { showAssistant } from '/assistant.js';
 import { showMail } from '/mail.js';
 import { loadToday } from '/today.js';
 import { showExpertCard } from '/expertcard.js';
+import { showFirstHint, showHelp } from '/help.js';
 
 const $ = (id) => document.getElementById(id);
 const dateRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
@@ -40,6 +41,7 @@ async function route() {
   if (h === '#orgs') return showOrgs();
   if ((m = h.match(/^#expert=([0-9a-f-]{36})$/i))) return showExpertCard(m[1]);
   if (h === '#profile') return showProfile();
+  if (h === '#help') return showHelp();
   if (h === '#assistant') return showAssistant();
   if ((m = h.match(/^#assistant=([0-9a-f-]{36})$/i))) return showAssistant(m[1]);
   if (h === '#specialist') return showSpecialist();
@@ -47,6 +49,7 @@ async function route() {
   if (h === '#admin' && state.me.user.platform_role === 'admin') return showAdmin();
   if (h === '#money') return showMoney();
   show('list-view', 'orders');
+  showFirstHint();
   await Promise.all([loadOrders(), loadToday()]);
 }
 

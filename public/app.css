@@ -200,3 +200,11 @@ details.org-chat summary { cursor: pointer; color: var(--accent); }
 .analog-fields .from-ai { background: #fff8e0; }
 .ai-tag { font-size: 12px; color: #6b5200; margin-left: 4px; }
 .analog-warn { margin: 6px 0 0; padding-left: 18px; font-size: 14px; color: #8a4b00; overflow-wrap: anywhere; }
+
+/* Подсказки и справка (2.52) */
+.card.hint { border: 2px solid var(--accent); }
+ol.howto { margin: 0 0 12px; padding-left: 22px; }
+ol.howto li { margin: 6px 0; line-height: 1.45; }
+details.help-role summary { cursor: pointer; list-style-position: outside; }
+details.help-role summary h2 { display: inline; }
+details.help-role h3 { font-size: 16px; margin: 16px 0 6px; }

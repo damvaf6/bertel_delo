@@ -346,7 +346,7 @@ async function menuFits(page) {
   return { tabs: boxes.length, rows };
 }
 
-test('меню на телефоне (2.22): у администратора-специалиста все 9 разделов видны без прокрутки вбок', async ({ page, browser, baseURL }) => {
+test('меню на телефоне (2.22): у администратора-специалиста все 10 разделов видны без прокрутки вбок', async ({ page, browser, baseURL }) => {
   const admin = await signIn(page, '+79990000597');
   await db(async (c) => {
     await c.query("update users set platform_role = 'admin' where id = $1", [admin.id]);
@@ -355,7 +355,7 @@ test('меню на телефоне (2.22): у администратора-с�
   await page.goto('/kabinet');
   await expect(page.getByRole('heading', { name: 'Все заявки' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Управление' })).toBeVisible();
-  expect(await menuFits(page)).toEqual({ tabs: 9, rows: 3 });
+  expect(await menuFits(page)).toEqual({ tabs: 10, rows: 3 });
   await shot(page, '99j-menu-sluzhebnyi');
   await page.getByRole('link', { name: 'Деньги' }).click();
   await expect(page.getByRole('heading', { name: 'Деньги платформы' })).toBeVisible();
@@ -364,13 +364,13 @@ test('меню на телефоне (2.22): у администратора-с�
   await expect(page.getByRole('link', { name: 'Профиль', exact: true })).toHaveAttribute('aria-current', 'page');
   await shot(page, '99k-menu-profil');
 
-  // У заказчика пять разделов — две строки (одной на 412 точках не помещаются).
+  // У заказчика шесть разделов (с «Как работать», 2.52) — две строки (одной на 412 точках не помещаются).
   const cctx = await phoneContext(browser, baseURL);
   const cp = await cctx.newPage();
   await signIn(cp, '+79990000598');
   await cp.goto('/kabinet');
   await expect(cp.getByRole('heading', { name: 'Мои заявки' })).toBeVisible();
-  expect(await menuFits(cp)).toEqual({ tabs: 5, rows: 2 });
+  expect(await menuFits(cp)).toEqual({ tabs: 6, rows: 2 });
   await shot(cp, '99l-menu-zakazchik');
   await cctx.close();
 });

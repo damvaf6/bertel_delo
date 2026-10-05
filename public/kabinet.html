@@ -22,10 +22,19 @@
     <a href="#specialists" data-tab="specialists" class="hidden" id="specialists-tab">Специалисты</a>
     <a href="#money" data-tab="money" class="hidden" id="money-tab">Деньги</a>
     <a href="#profile" data-tab="profile">Профиль</a>
+    <a href="#help" data-tab="help">Как работать</a>
     <a href="#admin" data-tab="admin" class="hidden" id="admin-tab">Управление</a>
   </nav>
   <main>
     <section id="list-view">
+      <div class="card hint hidden" id="hint-box">
+        <h2 id="hint-title">С чего начать</h2>
+        <ol class="howto" id="hint-steps"></ol>
+        <div class="row">
+          <button id="hint-ok">Понятно</button>
+          <a class="btn secondary" href="#help">Как работать</a>
+        </div>
+      </div>
       <div class="card hidden" id="today-box">
         <h2>Сегодня</h2>
         <ul class="list" id="today-list"></ul>
@@ -803,6 +812,22 @@
       <div class="card">
         <h2>Служебные роли</h2>
         <ul class="list" id="staff"></ul>
+      </div>
+    </section>
+    <section id="help-view" class="hidden">
+      <div class="card">
+        <h1>Как работать</h1>
+        <p class="muted">Коротко о каждом разделе. Сначала — то, что нужно Вам; остальное — ниже, свёрнуто.</p>
+      </div>
+      <div id="help-roles"></div>
+      <div class="card">
+        <h2>Частые вопросы</h2>
+        <ul class="plain">
+          <li>Где хранятся данные? Только в России, в Яндекс Облаке.</li>
+          <li>ИИ пишет отчёт за эксперта? Нет. ИИ готовит черновик и подсказывает, что проверить; подпись и ответственность — у эксперта.</li>
+          <li>Видят ли посторонние мои дела? Нет. Дело видят только его стороны и платформа.</li>
+          <li>Как войти? По номеру телефона: робот звонит или присылает СМС с кодом. Пароль не нужен.</li>
+        </ul>
       </div>
     </section>
   </main>

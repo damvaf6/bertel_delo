@@ -35,6 +35,8 @@ async function enter(page, phoneNo, name) {
   expect(r.status(), await r.text()).toBe(200);
   const { user } = await r.json();
   if (name) expect((await page.request.patch('/api/me', { data: { full_name: name }, headers: { ...AUTH, ...H } })).status()).toBe(200);
+  // Подсказки первого входа (2.52) на экскурсии закрыты — снимки показывают сами разделы.
+  for (const hint of ['customer', 'expert', 'head', 'dispatcher']) await page.request.post('/api/me/hints', { data: { hint }, headers: { ...AUTH, ...H } });
   return user;
 }
 
