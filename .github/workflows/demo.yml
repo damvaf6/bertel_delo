@@ -1,0 +1,171 @@
+name: Demo (Yandex Cloud)
+
+# Открытая демо-площадка для показа (решение Дамира 05.10.2026, вопрос 21, вариант Б): отдельный контейнер delo-demo в
+# каталоге проверочной площадки, своя база delo_demo, свой бакет, свой секрет (Terraform, только stage). Только
+# вымышленные данные; вход кнопками «Войти как …» (вход по телефону выключен); оплата, СМС, почта, подпись, модель —
+# только поддельные (сервер с другими не стартует, src/config.mjs); закрыта от поисковиков.
+# Действия: deploy — выложить основную версию и наполнить делами; reset — стереть и наполнить заново (каждую ночь в
+# 03:00 МСК сам); off — закрыть адрес для всех одним действием; on — открыть снова. Боевой сайт не трогается.
+on:
+  schedule:
+    - cron: '0 0 * * *'   # 03:00 МСК — ночной сброс данных
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'deploy — выложить и наполнить; reset — сбросить данные; off — выключить; on — включить'
+        type: choice
+        options: [deploy, reset, off, on]
+        default: deploy
+
+jobs:
+  demo:
+    runs-on: ubuntu-latest
+    environment: delo-stage
+    concurrency: demo-stage
+    env:
+      ENV: stage
+      FOLDER: bertel-delo-test
+      CONTAINER: delo-demo
+      ACTION: ${{ github.event_name == 'schedule' && 'reset' || inputs.action }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: yc CLI
+        run: |
+          curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -i /opt/yc -n
+          echo "/opt/yc/bin" >> $GITHUB_PATH
+
+      - name: Вход в облако
+        env:
+          SA_KEY: ${{ secrets.YC_SA_KEY_JSON }}
+        run: |
+          umask 077
+          printf '%s' "$SA_KEY" > "$RUNNER_TEMP/sa.json"
+          yc config set service-account-key "$RUNNER_TEMP/sa.json"
+          yc config set endpoint api.cloud.yandex.net:443
+          SA_ID=$(jq -r .service_account_id "$RUNNER_TEMP/sa.json")
+          FOLDER_ID=$(yc iam service-account get --id "$SA_ID" --format json | jq -r .folder_id)
+          NAME=$(yc resource-manager folder get --id "$FOLDER_ID" --format json | jq -r .name)
+          [ "$NAME" = "$FOLDER" ] || { echo "::error::Ключ не от каталога $FOLDER"; exit 1; }
+          yc config set folder-id "$FOLDER_ID"
+          echo "FOLDER_ID=$FOLDER_ID" >> $GITHUB_ENV
+
+      - name: Ресурсы демо (созданы workflow Infra)
+        run: |
+          SUFFIX=$(echo -n "$FOLDER_ID" | sha256sum | cut -c1-6)
+          REGISTRY_ID=$(yc container registry get --name "delo-$ENV" --format json | jq -r .id)
+          APP_SA_ID=$(yc iam service-account get --name "delo-$ENV-app" --format json | jq -r .id)
+          DEMO_SECRET_ID=$(yc lockbox secret get --name "delo-$ENV-demo" --format json | jq -r .id)
+          NETWORK_ID=$(yc vpc subnet get --name "delo-$ENV-a" --format json | jq -r .network_id)
+          for v in REGISTRY_ID APP_SA_ID DEMO_SECRET_ID NETWORK_ID; do
+            [ -n "${!v}" ] && [ "${!v}" != "null" ] || { echo "::error::$v не найден — сначала Infra apply (stage)"; exit 1; }
+            echo "$v=${!v}" >> $GITHUB_ENV
+          done
+          echo "DEMO_BUCKET=delo-$ENV-demo-$SUFFIX" >> $GITHUB_ENV
+          echo "IMAGE=cr.yandex/$REGISTRY_ID/delo-core:${GITHUB_SHA::12}" >> $GITHUB_ENV
+          if yc serverless container get --name "$CONTAINER" >/dev/null 2>&1; then
+            URL=$(yc serverless container get --name "$CONTAINER" --format json | jq -r .url); echo "URL=${URL%/}" >> $GITHUB_ENV
+          fi
+
+      - name: Образ
+        if: env.ACTION == 'deploy'
+        run: |
+          yc iam create-token | docker login --username iam --password-stdin cr.yandex
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+
+      - name: Контейнер демо
+        if: env.ACTION == 'deploy'
+        run: |
+          yc serverless container get --name "$CONTAINER" >/dev/null 2>&1 || \
+            yc serverless container create --name "$CONTAINER" --description "БЕРТЕЛ Дело · открытая демо-площадка (только вымышленные данные)"
+          # Демо: только поддельные поставщики (по умолчанию), своя база и бакет; ключ сброса — из своего секрета.
+          yc serverless container revision deploy \
+            --container-name "$CONTAINER" \
+            --image "$IMAGE" \
+            --service-account-id "$APP_SA_ID" \
+            --network-id "$NETWORK_ID" \
+            --cores 1 --core-fraction 100 --memory 512MB \
+            --concurrency 8 --execution-timeout 300s \
+            --environment "APP_ENV=demo,STORAGE_PROVIDER=s3,S3_BUCKET=$DEMO_BUCKET,TRUST_PROXY=1,MIGRATE_ON_START=1,STARTUP_CHECK=1" \
+            --secret "environment-variable=DATABASE_URL,id=$DEMO_SECRET_ID,key=DATABASE_URL" \
+            --secret "environment-variable=APP_SECRET,id=$DEMO_SECRET_ID,key=APP_SECRET" \
+            --secret "environment-variable=S3_ACCESS_KEY,id=$DEMO_SECRET_ID,key=S3_ACCESS_KEY" \
+            --secret "environment-variable=S3_SECRET_KEY,id=$DEMO_SECRET_ID,key=S3_SECRET_KEY" \
+            --secret "environment-variable=DEMO_RESET_KEY,id=$DEMO_SECRET_ID,key=DEMO_RESET_KEY"
+          URL=$(yc serverless container get --name "$CONTAINER" --format json | jq -r .url)
+          echo "URL=${URL%/}" >> $GITHUB_ENV
+
+      - name: Сброс и наполнение демо-данными
+        if: env.ACTION == 'deploy' || env.ACTION == 'reset'
+        timeout-minutes: 10
+        run: |
+          [ -n "$URL" ] || { echo "Демо-площадки ещё нет — сначала deploy"; exit 0; }
+          # Вызов — с IAM-токеном: сброс работает и когда площадка выключена.
+          TOKEN=$(yc iam create-token); echo "::add-mask::$TOKEN"
+          KEY=$(yc lockbox payload get --id "$DEMO_SECRET_ID" --key DEMO_RESET_KEY); echo "::add-mask::$KEY"
+          OK=0
+          for i in $(seq 1 6); do
+            CODE=$(curl -sS --max-time 280 -X POST -H "Authorization: Bearer $TOKEN" -H "x-delo-request: 1" -H "x-demo-reset: $KEY" \
+              -o "$RUNNER_TEMP/reset.json" -w '%{http_code}' "$URL/__demo/reset" || echo "нет связи")
+            echo "попытка $i: $CODE $(head -c 300 "$RUNNER_TEMP/reset.json" 2>/dev/null)"
+            if [ "$CODE" = 200 ] && jq -e '.ok == true and .cases > 10' "$RUNNER_TEMP/reset.json" >/dev/null 2>&1; then OK=1; break; fi
+            sleep 15
+          done
+          [ "$OK" = 1 ] || { echo "::error::Сброс демо-данных не удался"; exit 1; }
+          jq -r '"Демо-данные: дел \(.cases), организаций \(.orgs)"' "$RUNNER_TEMP/reset.json" >> $GITHUB_STEP_SUMMARY
+
+      - name: Открыть для всех
+        if: env.ACTION == 'deploy' || env.ACTION == 'on'
+        run: |
+          [ -n "$URL" ] || { echo "::error::Демо-площадки ещё нет — сначала deploy"; exit 1; }
+          yc serverless container allow-unauthenticated-invoke --name "$CONTAINER"
+          for i in $(seq 1 12); do
+            CODE=$(curl -sS --max-time 40 -o /dev/null -w '%{http_code}' "$URL/api/health" || echo 000)
+            echo "попытка $i: $CODE"; [ "$CODE" = 200 ] && break; sleep 10
+          done
+          [ "$CODE" = 200 ] || { echo "::error::Демо-площадка не открылась"; exit 1; }
+          echo "### Демо-площадка открыта: $URL" >> $GITHUB_STEP_SUMMARY
+
+      - name: Выключить одним действием
+        if: env.ACTION == 'off'
+        run: |
+          [ -n "$URL" ] || { echo "Демо-площадки нет — выключать нечего"; exit 0; }
+          yc serverless container deny-unauthenticated-invoke --name "$CONTAINER"
+          for i in $(seq 1 12); do
+            CODE=$(curl -sS --max-time 40 -o /dev/null -w '%{http_code}' "$URL/api/health" || echo 000)
+            echo "попытка $i: $CODE"; case "$CODE" in 401|403) break;; esac; sleep 10
+          done
+          case "$CODE" in 401|403) echo "### Демо-площадка выключена (адрес закрыт для всех)" >> $GITHUB_STEP_SUMMARY;; *) echo "::error::Адрес всё ещё открыт: $CODE"; exit 1;; esac
+
+      - uses: actions/setup-node@v5
+        if: env.ACTION == 'deploy'
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Телефон 412×915 на демо-площадке
+        if: env.ACTION == 'deploy'
+        env:
+          DEMO_BASE_URL: ${{ env.URL }}
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npx playwright test --config playwright.demo.mjs
+
+      - name: Снимки
+        if: always() && env.ACTION == 'deploy'
+        uses: actions/upload-artifact@v4
+        # Место у GitHub ограничено: снимки — 7 дней; нехватка места выкладку не валит.
+        continue-on-error: true
+        with:
+          name: demo-screens
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Убрать ключ
+        if: always()
+        run: |
+          docker logout cr.yandex || true
+          rm -f "$RUNNER_TEMP/sa.json" "$RUNNER_TEMP/reset.json"

@@ -7,3 +7,4 @@ output "backups_bucket" { value = yandex_storage_bucket.backups.bucket }
 output "lockbox_secret_id" { value = yandex_lockbox_secret.app.id }
 output "app_service_account_id" { value = yandex_iam_service_account.app.id }
 output "registry_id" { value = yandex_container_registry.main.id }
+output "demo_bucket" { value = var.env == "stage" ? yandex_storage_bucket.demo[0].bucket : "" }

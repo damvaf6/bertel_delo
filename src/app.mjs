@@ -25,6 +25,7 @@ import { bridgeOps } from './ops/bridge-ops.mjs';
 import { todayOps } from './ops/today-ops.mjs';
 import { problemOps } from './ops/problem-ops.mjs';
 import { caseOps } from './ops/case-ops.mjs';
+import { demoOps } from './ops/demo-ops.mjs';
 import { validateRegistry } from './notify/registry.mjs';
 import { memoryFileOps, testControlOps, stageLoginOps } from './ops/service-ops.mjs';
 import { uploadOps } from './ops/upload-ops.mjs';
@@ -37,7 +38,13 @@ export function listOps(cfg, providers) {
   if (providers.storage.kind === 'memory') ops.push(...memoryFileOps());
   if (cfg.appEnv === 'test' && cfg.testControlToken) ops.push(...testControlOps(cfg));
   ops.push(...stageLoginOps(cfg));
+  // Демо-площадка: вход только кнопками за вымышленных людей — вход по телефону и коду выключен.
+  if (cfg.appEnv === 'demo') {
+    for (const id of ['auth.code', 'auth.verify']) ops.splice(ops.findIndex((o) => o.id === id), 1);
+    ops.push(...demoOps(cfg));
+  }
   if (cfg.appEnv === 'prod' && ops.some((o) => o.id === 'stage.login')) throw new Error('служебный вход на prod запрещён');
+  if (cfg.appEnv !== 'demo' && ops.some((o) => o.id.startsWith('demo.'))) throw new Error('вход кнопками — только на демо-площадке');
   return ops;
 }
 
@@ -56,6 +63,8 @@ export function createApp({ cfg, sql, providers, modules = DEFAULT_MODULES }) {
   app.locals.ops = ops.map(({ id, method, path, auth, access, csrf }) => ({ id, method, path, auth, access, csrf }));
 
   app.use('/api', (req, res) => res.status(404).json({ error: 'not_found', message: 'Не найдено' }));
+  // Демо-площадка закрыта от поисковиков: robots.txt и заголовок X-Robots-Tag на каждом ответе (securityHeaders).
+  if (cfg.appEnv === 'demo') app.get('/robots.txt', (req, res) => res.type('text/plain; charset=utf-8').send('User-agent: *\nDisallow: /\n'));
   app.use(express.static(PUBLIC_DIR, { index: 'index.html', extensions: ['html'], dotfiles: 'ignore' }));
   app.use((req, res) => res.status(404).type('text/plain; charset=utf-8').send('Страница не найдена'));
   app.use(errorHandler());

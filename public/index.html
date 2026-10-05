@@ -11,7 +11,16 @@
   <div class="test-mark hidden" id="test-mark">Проверочная версия · только тестовые данные</div>
   <header class="top"><div class="brand">БЕРТЕЛ Дело<small>экспертиза, переводы, юристы</small></div></header>
   <main>
-    <section class="card">
+    <section class="card hidden" id="demo-box">
+      <h1>Демо-площадка</h1>
+      <p>Посмотрите «БЕРТЕЛ Дело» глазами любого участника. Все люди, организации, дела и документы здесь вымышленные;
+        оплата и подпись — тестовые. Каждую ночь данные возвращаются к исходным.</p>
+      <p class="muted">Пожалуйста, не загружайте настоящие документы и не пишите настоящие имена и телефоны.</p>
+      <h2>Войти как…</h2>
+      <ul class="list demo-roles" id="demo-roles"></ul>
+      <p class="msg" id="demo-msg" role="status" aria-live="polite"></p>
+    </section>
+    <section class="card" id="login-box">
       <h1>Вход</h1>
       <form id="phone-form" novalidate>
         <div class="field">
