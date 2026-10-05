@@ -218,3 +218,8 @@ details.help-role h3 { font-size: 16px; margin: 16px 0 6px; }
 .vitrina ul.services li { margin: 8px 0; }
 .vitrina .card > .btn { margin-top: 8px; }
 .center { text-align: center; }
+
+/* «Сообщить о проблеме» (2.54) */
+.report { text-align: center; margin-top: 8px; }
+.report form { text-align: left; }
+.small { font-size: 12px; overflow-wrap: anywhere; }

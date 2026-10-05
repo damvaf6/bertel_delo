@@ -346,7 +346,7 @@ async function menuFits(page) {
   return { tabs: boxes.length, rows };
 }
 
-test('меню на телефоне (2.22): у администратора-специалиста все 10 разделов видны без прокрутки вбок', async ({ page, browser, baseURL }) => {
+test('меню на телефоне (2.22): у администратора-специалиста все 11 разделов видны без прокрутки вбок', async ({ page, browser, baseURL }) => {
   const admin = await signIn(page, '+79990000597');
   await db(async (c) => {
     await c.query("update users set platform_role = 'admin' where id = $1", [admin.id]);
@@ -355,7 +355,7 @@ test('меню на телефоне (2.22): у администратора-с�
   await page.goto('/kabinet');
   await expect(page.getByRole('heading', { name: 'Все заявки' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Управление' })).toBeVisible();
-  expect(await menuFits(page)).toEqual({ tabs: 10, rows: 3 });
+  expect(await menuFits(page)).toEqual({ tabs: 11, rows: 4 });
   await shot(page, '99j-menu-sluzhebnyi');
   await page.getByRole('link', { name: 'Деньги' }).click();
   await expect(page.getByRole('heading', { name: 'Деньги платформы' })).toBeVisible();

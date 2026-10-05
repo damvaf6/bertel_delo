@@ -12,12 +12,12 @@ export const TYPES = [
   { id: 'offers', name: 'Предложения дел', hint: 'Вам предложили новое дело (и предложения госзаказа из БЕРТЕЛ CRM)', for: 'specialist', sms: true },
   { id: 'executor_work', name: 'Мои дела как исполнителя', hint: 'напоминания о сроке дела и документов досье, владелец или помощник прислал фото осмотра, назначен или отменён выезд, возврат на доработку, сообщение руководителя организации или эксперта по делу, результат принят, дело снято, передано другому или отменено', for: 'specialist', sms: true },
   { id: 'org_cases', name: 'Дела организации', hint: 'организации предложено дело — назначьте эксперта; эксперт отказался; предложение снято (для руководителя)', for: 'all', sms: true },
-  { id: 'dispatch', name: 'Очередь диспетчера', hint: 'новые и оплаченные заявки, отказы исполнителей, сдача на проверку, просроченные сроки, истёкшие документы экспертов, отмены, неудачные выплаты и возвраты', for: 'dispatcher', sms: false },
+  { id: 'dispatch', name: 'Очередь диспетчера', hint: 'новые и оплаченные заявки, отказы исполнителей, сдача на проверку, просроченные сроки, истёкшие документы экспертов, отмены, неудачные выплаты и возвраты, сообщения о проблемах', for: 'dispatcher', sms: false },
 ];
 export const TYPE = Object.fromEntries(TYPES.map((t) => [t.id, t]));
 
 // title — строка в кабинете и в СМС. order: true — событие по заявке (в СМС добавляется её короткий номер).
-// section — куда ведёт уведомление без заявки (2.45): 'orgs' (с организацией — сразу в неё), 'specialist', 'specialists'.
+// section — куда ведёт уведомление без заявки (2.45): 'orgs' (с организацией — сразу в неё), 'specialist', 'specialists', 'problems'.
 // mail: true — заказчику заявки, пришедшей по письму, уходит и письмо в ту же переписку (1.9, src/mail/mail.mjs).
 export const EVENTS = {
   submitted: { type: 'dispatch', title: 'Новая заявка ждёт подбора исполнителя', order: true },
@@ -31,6 +31,8 @@ export const EVENTS = {
   dossier_expired_staff: { type: 'dispatch', title: 'У эксперта истёк документ в досье — он отмечен в подборе и в списке специалистов', order: false, section: 'specialists' },
   deadline_overdue_staff: { type: 'dispatch', title: 'Срок по заявке прошёл, результат не выдан', order: true },
   refund_failed_staff: { type: 'dispatch', title: 'Возврат заказчику не прошёл — нужен повтор', order: true },
+  // Закрытый запуск (2.54): человек нажал «Сообщить о проблеме» — сообщение в журнале «Проблемы».
+  problem_report: { type: 'dispatch', title: 'Новое сообщение о проблеме — раздел «Проблемы»', order: false, section: 'problems' },
 
   offer: { type: 'offers', title: 'Вам предложено новое дело', order: true },
   crm_offer: { type: 'offers', title: 'Новое предложение госзаказа — принять можно в БЕРТЕЛ CRM', order: false, section: 'specialist' },
@@ -85,7 +87,7 @@ export const EVENTS = {
 };
 
 const ID_RE = /^[a-z_]{1,40}$/;
-export const SECTIONS = ['orgs', 'specialist', 'specialists'];
+export const SECTIONS = ['orgs', 'specialist', 'specialists', 'problems'];
 
 // Проверка реестра при запуске: ошибка в описании — сервер не стартует (как у модулей-профессий).
 export function validateRegistry(types = TYPES, events = EVENTS) {

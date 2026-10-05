@@ -2,7 +2,7 @@
 import { api, el, formatPhone, quoted } from '/common.js';
 
 const $ = (id) => document.getElementById(id);
-const views = ['list-view', 'order-view', 'missing-view', 'orgs-view', 'org-view', 'profile-view', 'admin-view', 'specialist-view', 'specialists-view', 'money-view', 'notifications-view', 'assistant-view', 'expert-view', 'help-view'];
+const views = ['list-view', 'order-view', 'missing-view', 'orgs-view', 'org-view', 'profile-view', 'admin-view', 'specialist-view', 'specialists-view', 'money-view', 'notifications-view', 'assistant-view', 'expert-view', 'help-view', 'problems-view'];
 
 export const state = { me: null, catalog: null, specialist: null }; // catalog — услуги, поля и статусы из /api/catalog
 
@@ -29,6 +29,7 @@ export async function refreshMe() {
   $('admin-tab').classList.toggle('hidden', me.user.platform_role !== 'admin');
   const staff = ['dispatcher', 'admin'].includes(me.user.platform_role);
   $('specialists-tab').classList.toggle('hidden', !staff);
+  $('problems-tab').classList.toggle('hidden', !staff);
   state.specialist = (await api('GET', '/api/specialist/me')).specialist;
   $('specialist-tab').classList.toggle('hidden', !state.specialist);
   $('money-tab').classList.toggle('hidden', !staff && !state.specialist);
