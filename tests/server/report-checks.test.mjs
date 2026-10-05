@@ -367,3 +367,64 @@ test('остальные виды оценки (2.43): правила прове
   for (const id of ['expert_info', 'conclusions', 'questions_answered', 'calculation']) assert.ok(of('goods').includes(id), `goods: ${id}`);
   assert.ok(!of('vehicle').includes('realty_identity'));
 });
+
+test('транспорт (2.60): госномер и пробег — как в заявке; номера аналогов, среднегодовой пробег и рост пробега до 10% — не находка', () => {
+  const fields = { vin: 'XXX000000R0000000', reg_number: 'А001АА799', mileage: 120000 };
+  const page = [
+    'Объект оценки: автобус Авто-Бус 1000-01, VIN: XXX000000R0000000, гос. рег. знак A001AA799 (латиницей — тот же номер).',
+    'Пробег по показаниям одометра: 125 000 км.',
+    'Среднегодовой пробег для автобусов — 60 000 км в год.',
+    'Аналог №1: Авто-Бус 1000-01, г/н В002ВВ799, пробег 300 000 км.',
+  ].join('\n');
+  const ok = runAutoChecks(['reg_match', 'mileage_match'], [doc([page])], { fields });
+  assert.deepEqual(ok.reg_match, []);
+  assert.deepEqual(ok.mileage_match, [], 'пробег вырос на 4% — так бывает');
+  const bad = runAutoChecks(['reg_match', 'mileage_match'], [doc([page, 'Госномер В777ОР77. Пробег объекта — 48 тыс. км.'])], { fields });
+  assert.deepEqual(texts(bad, 'reg_match'), ['Госномер В777ОР77 не совпадает с госномером из заявки (А001АА799) — проверьте, нет ли данных другой машины']);
+  assert.equal(bad.reg_match[0].where, 'стр. 2');
+  assert.deepEqual(texts(bad, 'mileage_match'), ['Пробег 48 000 км не совпадает с пробегом из заявки (120 000 км) — проверьте, нет ли данных другой машины']);
+  assert.deepEqual(runAutoChecks(['reg_match', 'mileage_match'], [doc([page])], { fields: {} }), { reg_match: [], mileage_match: [] }, 'в заявке нет — не сверяем');
+});
+
+test('все виды оценки (2.60): веса подходов в сумме 1 — строка на подход и столбцы «Вес» у нескольких машин', () => {
+  const good = ['СОГЛАСОВАНИЕ РЕЗУЛЬТАТОВ', 'Подход Стоимость, руб. Вес', 'Затратный подход 1 200 000 0,4', 'Сравнительный подход 1 300 000 0,6', 'Доходный подход не применялся -'].join('\n');
+  assert.deepEqual(runAutoChecks(['approach_weights'], [doc([good])]).approach_weights, []);
+  const bad = good.replace('0,6', '0,5');
+  assert.deepEqual(texts(runAutoChecks(['approach_weights'], [doc([bad])]), 'approach_weights'), ['Веса подходов в согласовании в сумме 0,9, а должно быть 1']);
+  const pct = ['Обобщение результатов, вес подхода', 'Затратный подход — 30%', 'Сравнительный подход — 50%'].join('\n');
+  assert.deepEqual(texts(runAutoChecks(['approach_weights'], [doc([pct])]), 'approach_weights'), ['Веса подходов в согласовании в сумме 0,8, а должно быть 1']);
+  const table = [
+    'Итоговая рыночная стоимость',
+    'Наименование Стоимость затратным Вес Стоимость доходным Вес Стоимость сравнительным Вес Итог',
+    'Автомобиль Нортон Сириус V8 Не применялся - Не применялся - 3 148 760,14 1,0 3 100 000,00',
+    'Автомобиль Нортон Аврора 2 000 000,00 0,5 Не применялся - 5 589 752,10 0,3 5 600 000,00',
+  ].join('\n');
+  assert.deepEqual(texts(runAutoChecks(['approach_weights'], [doc([table])]), 'approach_weights'), ['Веса подходов в строке в сумме 0,8, а должно быть 1']);
+});
+
+test('аналоги (2.60): не меньше трёх; одна ссылка у разных аналогов — находка; сравнительный не применялся — молчим', () => {
+  const three = [
+    'Сравнительный подход',
+    'Аналог №1 — https://auto.example.ru/cars/1 — 3 100 000 руб.',
+    'Аналог №2 — https://auto.example.ru/cars/2 — 3 250 000 руб.',
+    'Аналог №3 — https://www.auto.example.ru/cars/3/ — 3 000 000 руб.',
+  ].join('\n');
+  assert.deepEqual(runAutoChecks(['analog_list'], [doc([three])]).analog_list, []);
+  const two = three.split('\n').slice(0, 3).join('\n');
+  assert.deepEqual(texts(runAutoChecks(['analog_list'], [doc([two])]), 'analog_list'), ['В сравнительном подходе два аналога — нужно не меньше трёх']);
+  const dup = three.replace('cars/3/', 'cars/1/');
+  assert.deepEqual(texts(runAutoChecks(['analog_list'], [doc([dup])]), 'analog_list'), ['Одна и та же ссылка у аналогов № 1 и № 3 — у каждого аналога должно быть своё объявление']);
+  const refused = 'Сравнительный подход не применялся: аналог №1 найден один, предложений недостаточно.';
+  assert.deepEqual(runAutoChecks(['analog_list'], [doc([refused])]).analog_list, []);
+});
+
+test('2.60: правила подключены — госномер и пробег к транспорту, веса к подходам, аналоги к аналогам', async () => {
+  const { createRegistry } = await import('../../src/modules/index.mjs');
+  const reg = createRegistry();
+  const auto = (svc, id) => reg.checks('expertise', svc).find((c) => c.id === id)?.auto ?? [];
+  assert.ok(auto('vehicle', 'vehicle_identity').includes('reg_match') && auto('vehicle', 'vehicle_identity').includes('mileage_match'));
+  for (const svc of ['vehicle', 'movable', 'realty', 'land']) {
+    assert.ok(auto(svc, 'approaches').includes('approach_weights'), svc);
+    assert.ok(auto(svc, 'analogs').includes('analog_list'), svc);
+  }
+});

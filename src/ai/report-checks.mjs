@@ -585,6 +585,135 @@ function dateOrder(doc) {
     text: `Дата составления отчёта (${ruDate(made)}) раньше даты оценки (${ruDate(val)}) — так быть не может` }];
 }
 
+// ——— 2.60: госномер и пробег — как в заявке (транспорт) ———
+// Латинские буквы, похожие на русские, в госномере приводим к русским: в отчётах пишут и так, и так.
+const LAT_CYR = { A: 'А', B: 'В', E: 'Е', K: 'К', M: 'М', H: 'Н', O: 'О', P: 'Р', C: 'С', T: 'Т', Y: 'У', X: 'Х' };
+const PLATE_RE = /(?<![\p{L}\d])([АВЕКМНОРСТУХABEKMHOPCTYX])\s?(\d{3})\s?([АВЕКМНОРСТУХABEKMHOPCTYX]{2})\s?(\d{2,3})(?![\p{L}\d])/gu;
+const plateKey = (s) => String(s ?? '').toUpperCase().replace(/[A-Z]/g, (c) => LAT_CYR[c] ?? c).replace(/[\s-]/g, '');
+
+function regMatch(doc, ctx) {
+  const mine = plateKey(ctx.fields?.reg_number);
+  if (!/^[АВЕКМНОРСТУХ]\d{3}[АВЕКМНОРСТУХ]{2}\d{2,3}$/u.test(mine)) return [];
+  const known = new Set([mine, ...[...String(ctx.fields?.more_vehicles ?? '').toUpperCase().matchAll(PLATE_RE)].map((m) => plateKey(m[0]))]);
+  const out = [];
+  const seen = new Set();
+  eachPage(doc, (page, i) => {
+    for (const m of page.toUpperCase().matchAll(PLATE_RE)) {
+      const v = plateKey(m[0]);
+      if (known.has(v) || seen.has(v)) continue;
+      // Чужой номер рядом со словами «госномер», «регистрационный знак», «г/н» и не в строке аналога.
+      if (!/гос\.?\s*(?:рег\.?\s*)?(?:номер|знак)|регистрационн\S*\s+(?:номер|знак)|г\/н|грз/iu.test(page.slice(Math.max(0, m.index - 50), m.index))) continue;
+      if (/аналог/iu.test(lineAround(page, m.index))) continue;
+      seen.add(v);
+      out.push({ page: i, quote: lineAround(page, m.index), text: `Госномер ${v} не совпадает с госномером из заявки (${mine}) — проверьте, нет ли данных другой машины` });
+    }
+  });
+  return out;
+}
+
+// Пробег по прибору мог вырасти между заявкой и осмотром — находка, только если разница больше 10% и больше 1000 км.
+const MILEAGE_RE = /пробег\S*(?:[^\n\d]{0,40}?)(\d{1,3}(?:[  ]\d{3})+|\d{1,7})\s*(тыс\.?\s*)?км/giu;
+function mileageMatch(doc, ctx) {
+  const mine = Number(ctx.fields?.mileage);
+  if (!Number.isFinite(mine) || mine <= 0 || ctx.fields?.more_vehicles) return [];
+  const out = [];
+  const seen = new Set();
+  eachPage(doc, (page, i) => {
+    for (const m of page.matchAll(MILEAGE_RE)) {
+      const line = lineAround(page, m.index);
+      // Аналоги, среднегодовой пробег и нормы — не пробег объекта.
+      if (/аналог|средн|годов|в\s+год|норматив|коэффициент|корректировк/iu.test(line)) continue;
+      const km = Number(m[1].replace(/[  ]/g, '')) * (m[2] ? 1000 : 1);
+      if (!km || seen.has(km) || Math.abs(km - mine) <= Math.max(1000, mine * 0.1)) continue;
+      seen.add(km);
+      out.push({ page: i, quote: line, text: `Пробег ${fmt(km)} км не совпадает с пробегом из заявки (${fmt(mine)} км) — проверьте, нет ли данных другой машины` });
+    }
+  });
+  return out;
+}
+
+// ——— 2.60: веса подходов в согласовании в сумме 1 (все виды оценки) ———
+// Два вида таблиц: строка на каждый подход («Сравнительный подход … 0,6») и строка на объект со столбцами «Вес»
+// (несколько машин в одном отчёте — «Не применялся - … 1,0»). Неприменённый подход — прочерк, вес 0.
+const WEIGHT_TOKEN = /^(?:0[.,]\d{1,3}|1(?:[.,]0{1,3})?|\d{1,3}(?:[.,]\d{1,2})?%)$/;
+const DASH_TOKEN = /^[-–—]$/;
+function weightValue(t) { return t.endsWith('%') ? Number(t.slice(0, -1).replace(',', '.')) / 100 : Number(t.replace(',', '.')); }
+function lineWeights(line) {
+  const toks = line.split(/\s+/).filter(Boolean);
+  const out = [];
+  toks.forEach((t, k) => {
+    if (DASH_TOKEN.test(t)) out.push(0);
+    else if (WEIGHT_TOKEN.test(t) && !/^\d{3}/.test(toks[k + 1] ?? '')) out.push(weightValue(t));
+  });
+  return out;
+}
+const near1 = (x) => Math.abs(x - 1) <= 0.011;
+function approachWeights(doc) {
+  const out = [];
+  eachPage(doc, (page, i) => {
+    if (!/вес/iu.test(page) || !/согласован|обобщени|итогов|рыночн/iu.test(page)) return;
+    const lines = page.split('\n');
+    const head = lines.findIndex((l) => (l.match(/(?<!\p{L})вес(?!\p{L})/giu) ?? []).length >= 2);
+    if (head >= 0) {
+      const n = (lines[head].match(/(?<!\p{L})вес(?!\p{L})/giu) ?? []).length;
+      for (const line of lines.slice(head + 1)) {
+        const w = lineWeights(line);
+        if (w.length !== n || !w.some((x) => x > 0)) continue;
+        const sum = w.reduce((a, b) => a + b, 0);
+        if (!near1(sum)) out.push({ page: i, quote: clean(line), text: `Веса подходов в строке в сумме ${fmtW(sum)}, а должно быть 1` });
+      }
+      return;
+    }
+    const per = new Map();
+    for (const line of lines) {
+      const m = line.match(/(сравнительн|затратн|доходн)\S*\s+подход/iu);
+      if (!m || per.has(m[1].toLowerCase())) continue;
+      if (/не\s+применял|не\s+использовал/iu.test(line)) { per.set(m[1].toLowerCase(), { w: 0, line }); continue; }
+      const w = lineWeights(line.slice(m.index + m[0].length)).filter((x) => x > 0 && x <= 1);
+      if (w.length) per.set(m[1].toLowerCase(), { w: w[w.length - 1], line });
+    }
+    const vals = [...per.values()];
+    if (vals.length < 2 || !vals.some((v) => v.w > 0)) return;
+    const sum = vals.reduce((a, v) => a + v.w, 0);
+    if (!near1(sum)) out.push({ page: i, quote: clean(vals[0].line), text: `Веса подходов в согласовании в сумме ${fmtW(sum)}, а должно быть 1` });
+  });
+  return out;
+}
+function fmtW(x) { return String(Math.round(x * 1000) / 1000).replace('.', ','); }
+
+// ——— 2.60: аналогов не меньше трёх, ссылки у разных аналогов не повторяются ———
+const ANALOG_NO = /аналог\S*\s*(?:№\s*)?(\d{1,2})(?![\d.,])/giu;
+const URL_RE = /https?:\/\/[^\s<>"«»)]+/giu;
+const normUrl = (u) => u.replace(/[.,;:]+$/, '').replace(/\/+$/, '').replace(/^https?:\/\/(www\.)?/i, '').toLowerCase();
+function analogFindings(doc) {
+  const text = (doc.pages ?? []).join('\n');
+  const refusedCompare = REFUSED.some((re) => [...text.matchAll(re)].some((m) => /сравнительн/iu.test(m[1])));
+  const out = [];
+  const nums = new Set();
+  const urls = new Map();
+  eachPage(doc, (page, i) => {
+    const marks = [...page.matchAll(ANALOG_NO)].map((m) => ({ at: m.index, n: Number(m[1]) })).filter((x) => x.n >= 1 && x.n <= 30);
+    for (const x of marks) nums.add(x.n);
+    if (!marks.length) return;
+    for (const m of page.matchAll(URL_RE)) {
+      const before = marks.filter((x) => x.at < m.index).pop();
+      if (!before) continue;
+      const u = normUrl(m[0]);
+      if (!urls.has(u)) urls.set(u, { set: new Set(), page: i, quote: lineAround(page, m.index), url: m[0] });
+      urls.get(u).set.add(before.n);
+    }
+  });
+  if (!refusedCompare && nums.size >= 1 && nums.size < 3 && /сравнительн\S*\s+подход/iu.test(text)) {
+    const at = (doc.pages ?? []).findIndex((p) => /аналог\S*\s*(?:№\s*)?\d/iu.test(p));
+    out.push({ page: Math.max(0, at), quote: '', text: `В сравнительном подходе ${nums.size === 1 ? 'один аналог' : 'два аналога'} — нужно не меньше трёх` });
+  }
+  for (const v of urls.values()) {
+    if (v.set.size < 2) continue;
+    out.push({ page: v.page, quote: v.quote, text: `Одна и та же ссылка у аналогов № ${[...v.set].sort((a, b) => a - b).join(' и № ')} — у каждого аналога должно быть своё объявление` });
+  }
+  return out;
+}
+
 const WHOLE = {
   dossier_appraiser: dossierFindings(['certificate', 'sro', 'policy', 'policy_org']),
   dossier_education: dossierFindings(['education']),
@@ -608,6 +737,10 @@ const PER_DOC = {
   share_match: shareMatch,
   land_match: landMatch,
   date_order: dateOrder,
+  reg_match: regMatch,
+  mileage_match: mileageMatch,
+  approach_weights: approachWeights,
+  analog_list: analogFindings,
 };
 
 // Все правила: имя → короткое описание (для проверки описаний модулей и для журнала).
@@ -633,6 +766,10 @@ export const AUTO_CHECKS = Object.freeze({
   court_order: 'по определению суда — номер определения и ст. 307 УК РФ',
   vin_match: 'VIN в отчёте — как в заявке',
   date_order: 'дата составления отчёта не раньше даты оценки',
+  reg_match: 'госномер в отчёте — как в заявке',
+  mileage_match: 'пробег в отчёте — как в заявке (с запасом 10%)',
+  approach_weights: 'веса подходов в согласовании в сумме 1',
+  analog_list: 'аналогов не меньше трёх, ссылки у разных аналогов не повторяются',
 });
 
 export function runAutoChecks(names, docs, ctx = {}) {
