@@ -133,6 +133,20 @@ test('problems.*: сообщить может каждый; журнал вид�
   assert.equal((await U.admin.req('POST', '/api/problems/не-число/close', {})).status, 404);
 });
 
+test('case.*: журнал — стороны и служебные; архив — заказчик и служебные; посторонним — «не найдено»', async () => {
+  cover('case.journal'); cover('case.export');
+  assert.equal((await U.owner.req('GET', `/api/orders/${ownOrder.id}/journal`)).status, 200);
+  assert.equal((await U.dispatcher.req('GET', `/api/orders/${ownOrder.id}/journal`)).body.full, true);
+  assert.equal((await U.headA.req('GET', `/api/orders/${orgOrder.id}/journal`)).status, 200);
+  for (const c of [U.stranger, U.headB, U.memberA]) {
+    assert.equal((await c.req('GET', `/api/orders/${ownOrder.id}/journal`)).status, 404);
+    assert.equal((await c.req('GET', `/api/orders/${ownOrder.id}/export`)).status, 404);
+  }
+  assert.equal((await U.memberA2.req('GET', `/api/orders/${orgOrder.id}/export`)).status, 404, 'коллега — не его заявка');
+  assert.equal((await U.owner.req('GET', `/api/orders/${ownOrder.id}/export`)).status, 200);
+  assert.equal((await U.admin.req('GET', `/api/orders/${orgOrder.id}/export`)).status, 200);
+});
+
 test('orders.create: от имени чужой организации нельзя', async () => {
   cover('orders.create');
   assert.equal((await U.stranger.req('POST', '/api/orders', { module: 'expertise', service: 'realty', org_id: orgA.id, title: 'Подлог' })).status, 404);

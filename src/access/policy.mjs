@@ -134,6 +134,17 @@ export function messageSide(actor, order) {
 }
 
 // Кто видит отметки проверки результата по каждому правилу (остальные — только итог).
+// Журнал действий по делу (2.55): служебные — полностью, с именами; стороны дела (заказчик, его организация,
+// исполнитель) — только шаги, которые им и так видны, и вместо имён — кто это по делу («Платформа», «Исполнитель»).
+export function journalView(actor, order) {
+  if (isStaff(actor)) return 'full';
+  return orderLevel(actor, order) >= LEVEL.read ? 'party' : null;
+}
+
+// Выгрузка дела архивом (2.55) — для суда или заказчика: сторона заказчика и служебные. Исполнителю — нет: архив
+// содержит документы и переписку заказчика.
+export const exportsCase = (actor, order) => isStaff(actor) || orderLevel(actor, order) >= LEVEL.write;
+
 export const seesReviewDetails = (actor, order) => isStaff(actor) || (!!order.executor_user_id && order.executor_user_id === actor?.id);
 
 // Черновик заключения (2.2): видят исполнитель и служебные (заказчик — никогда); готовит с ИИ, правит и прикладывает

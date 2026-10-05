@@ -34,7 +34,7 @@ const refundView = (r) => r && ({
   refunded_at: r.refunded_at, created_at: r.created_at,
 });
 const DOC_PREFIX = { act: 'А', agent_report: 'О', refund: 'В' };
-const docView = (d) => ({ id: d.id, kind: d.kind, number: `${DOC_PREFIX[d.kind]}-${String(d.number).padStart(6, '0')}`, created_at: d.created_at, data: d.data });
+export const docView = (d) => ({ id: d.id, kind: d.kind, number: `${DOC_PREFIX[d.kind]}-${String(d.number).padStart(6, '0')}`, created_at: d.created_at, data: d.data });
 
 // Проверить у поставщика незавершённый платёж и применить исход; если заявку уже отменили — провести возврат.
 async function syncPayment(sql, providers, cfg, payment) {

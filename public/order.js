@@ -13,6 +13,7 @@ import { loadOnsite } from '/onsite.js';
 import { signatureLines, uploadSignatureButton, SIGN_CONFIRM, UPLOAD_HINT } from '/sign.js';
 import { setNext } from '/next.js';
 import { orgChat } from '/orgchat.js';
+import { loadJournal } from '/journal.js';
 
 const $ = (id) => document.getElementById(id);
 // До 3 МБ — обычной загрузкой через ядро; больше — прямо в хранилище (облако: запрос не больше 3,5 МБ, 2.49).
@@ -57,6 +58,7 @@ export async function openOrder(id) {
   show('order-view', 'orders');
   setNext({ reset: true, current, step: doStep, signAll });
   loadOrgChat();
+  loadJournal(current.order, current.access);
   await Promise.all([loadDocs(true), loadTransfer(), loadMatch(current, () => openOrder(id)), loadDraft(current, () => openOrder(id)), loadAnalogs(current), loadInspection(current), loadOnsite(current), loadReview(current), loadChat(current), loadMoney(current, () => openOrder(id))]);
   setNext({}); // разделы осмотра и черновика показаны — шаги пересчитываются
 }
