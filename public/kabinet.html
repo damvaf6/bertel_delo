@@ -23,6 +23,7 @@
     <a href="#money" data-tab="money" class="hidden" id="money-tab">Деньги</a>
     <a href="#profile" data-tab="profile">Профиль</a>
     <a href="#help" data-tab="help">Как работать</a>
+    <a href="#problems" data-tab="problems" class="hidden" id="problems-tab">Проблемы</a>
     <a href="#admin" data-tab="admin" class="hidden" id="admin-tab">Управление</a>
   </nav>
   <main>
@@ -814,6 +815,16 @@
         <ul class="list" id="staff"></ul>
       </div>
     </section>
+    <section id="problems-view" class="hidden">
+      <div class="card">
+        <h1>Сообщения о проблемах</h1>
+        <p class="muted">Что люди отправили кнопкой «Сообщить о проблеме»: своими словами, с разделом кабинета и экраном.
+          Новые — сверху. Разобрали — отметьте и коротко напишите, что сделано.</p>
+        <p class="muted" id="problems-count"></p>
+        <ul class="list" id="problems"></ul>
+        <p class="muted hidden" id="problems-empty">Сообщений пока нет.</p>
+      </div>
+    </section>
     <section id="help-view" class="hidden">
       <div class="card">
         <h1>Как работать</h1>
@@ -830,6 +841,23 @@
         </ul>
       </div>
     </section>
+    <div class="report">
+      <button type="button" class="link" id="report-open">Сообщить о проблеме</button>
+      <p class="msg" id="report-done" role="status" aria-live="polite"></p>
+      <form class="card hidden" id="report-form" novalidate>
+        <h2>Сообщить о проблеме</h2>
+        <div class="field">
+          <label for="report-text">Опишите проблему</label>
+          <textarea id="report-text" maxlength="2000" placeholder="Например: нажимаю «Оплатить», и ничего не происходит"></textarea>
+        </div>
+        <p class="muted">Мы увидим и раздел кабинета, где Вы сейчас, — описывать его не нужно.</p>
+        <div class="row">
+          <button type="submit" id="report-send">Отправить</button>
+          <button type="button" class="secondary" id="report-cancel">Отмена</button>
+        </div>
+        <p class="msg" id="report-msg" role="status" aria-live="polite"></p>
+      </form>
+    </div>
   </main>
 </body>
 </html>

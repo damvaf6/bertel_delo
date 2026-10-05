@@ -110,6 +110,29 @@ test('me.hints: закрытая подсказка — только своя и
   assert.deepEqual((await U.owner.req('GET', '/api/me')).body.hints_seen, [], 'у другого человека не изменилось');
 });
 
+test('problems.*: сообщить может каждый; журнал видят и разбирают только служебные', async () => {
+  cover('problems.report'); cover('problems.list'); cover('problems.close');
+  const r = await U.owner.req('POST', '/api/problems', { text: 'Не открывается заявка', place: `#order=${ownOrder.id}`, client: '412×915' });
+  assert.equal(r.status, 201);
+  // Подставить чужой адрес вместо раздела нельзя — место остаётся пустым.
+  assert.equal((await U.stranger.req('POST', '/api/problems', { text: 'x', place: 'https://example.com' })).status, 201);
+  assert.equal((await U.stranger.req('POST', '/api/problems', { text: '' })).status, 400);
+  for (const c of [U.owner, U.stranger, U.headA, U.memberA, U.spec]) {
+    assert.equal((await c.req('GET', '/api/problems')).status, 404);
+    assert.equal((await c.req('POST', `/api/problems/${r.body.id}/close`, {})).status, 404);
+  }
+  for (const c of [U.dispatcher, U.admin]) {
+    const list = (await c.req('GET', '/api/problems')).body;
+    const mine = list.problems.find((p) => p.id === r.body.id);
+    assert.equal(mine.text, 'Не открывается заявка');
+    assert.equal(mine.place, `#order=${ownOrder.id}`);
+    assert.ok(list.problems.some((p) => p.text === 'x' && p.place === ''));
+  }
+  assert.equal((await U.dispatcher.req('POST', `/api/problems/${r.body.id}/close`, { note: 'Исправлено' })).status, 200);
+  assert.equal((await U.admin.req('POST', `/api/problems/${r.body.id}/close`, {})).status, 404, 'уже разобрано');
+  assert.equal((await U.admin.req('POST', '/api/problems/не-число/close', {})).status, 404);
+});
+
 test('orders.create: от имени чужой организации нельзя', async () => {
   cover('orders.create');
   assert.equal((await U.stranger.req('POST', '/api/orders', { module: 'expertise', service: 'realty', org_id: orgA.id, title: 'Подлог' })).status, 404);
