@@ -2,7 +2,7 @@
 // Решения Дамира 30.09.2026: организацию заводит любой пользователь сам и становится руководителем;
 // роли — руководитель / старший / сотрудник; ушедший сотрудник теряет доступ к делам организации, дела остаются у неё.
 import { HttpError } from '../http/core.mjs';
-import { LEVEL, ORG_ROLES, orgCaseSide, orgLevel } from '../access/policy.mjs';
+import { LEVEL, ORG_ROLES, executorSignOrg, orgCaseSide, orgLevel } from '../access/policy.mjs';
 import { audit, oneOf, phoneFrom, text, uuidFrom } from './util.mjs';
 import { dispatchers, notify, notifyPhone, orgHeads } from '../notify/notify.mjs';
 import { orgExpertsFor } from './match-ops.mjs';
@@ -24,6 +24,14 @@ const CASES_LIMIT = 200;
 // Внутренняя переписка руководителя и эксперта (2.28): пишут, пока дело не завершено; читать можно и потом.
 const ORG_CHAT_MAX = 4000;
 const ORG_CHAT_OPEN = [...CASES_ACTIVE, 'done'];
+
+// Кому руководитель может передать дело в работе (2.62): эксперты организации, которым дело можно отдать (допуск, «принимаю
+// дела», досье в порядке, работают от организации), кроме нынешнего исполнителя; с нагрузкой.
+async function transferTargets(sql, order, orgId, registry) {
+  return (await orgExpertsFor(sql, order, orgId, registry))
+    .filter((c) => c.user_id !== order.executor_user_id)
+    .map((c) => ({ user_id: c.user_id, full_name: c.full_name || 'Без имени' }));
+}
 
 const ROLE_RU = { head: 'руководитель', senior: 'старший', member: 'сотрудник' };
 
@@ -156,6 +164,7 @@ export function orgOps() {
         const ids = experts.map((e) => e.user_id);
         const rows = ids.length ? await sql`
           select o.id, o.module, o.service, o.status, o.deadline, o.price_kop, o.paid_at, o.executor_user_id, o.updated_at,
+                 o.owner_user_id, o.org_id,
                  p.status as payout_status, p.amount_kop as payout_kop, p.paid_at as payout_paid_at
           from orders o left join payouts p on p.order_id = o.id
           where o.executor_user_id = any(${ids}::uuid[]) and (o.status = any(${CASES_ACTIVE}::text[])
@@ -177,8 +186,12 @@ export function orgOps() {
             returned_open: (await orgReturns(sql, o.id, { orgId: org.id })).some((r) => r.open),
           });
         }
+        // Кому можно передать дело в работе (2.62): эксперты организации с допуском на услугу, кроме нынешнего.
+        const transfer = new Map();
+        for (const o of rows.filter((x) => x.status === 'in_work')) transfer.set(o.id, await transferTargets(sql, o, org.id, registry));
         const cases = rows.map((o) => ({
           ...(waits.get(o.id) ?? { sign_wait: 0, returned_open: false }),
+          transfer_to: transfer.get(o.id) ?? [],
           // Номер дела — для внутренней переписки с экспертом (2.28); саму заявку руководитель по нему не откроет.
           id: o.id,
           order_ref: orderRef(o.id),
@@ -322,6 +335,44 @@ export function orgOps() {
                    values (${cur.id}, 'awaiting_executor', 'matching', ${actor.id}, 'executor', ${reason})`;
           await audit(tx, actor, 'org.case.decline', 'order', cur.id, { org: org.id });
           await notify(tx, 'org_declined', { users: await dispatchers(tx), orderId: cur.id, actor });
+        });
+        return { ok: true };
+      },
+    },
+    {
+      // Руководитель передаёт дело в работе другому эксперту своей организации (2.62: заболел, ушёл). Причина обязательна.
+      // Файлы, черновик, фото осмотра, аналоги и обе переписки остаются в деле; прежний эксперт теряет доступ сразу (доступ
+      // к делу — по исполнителю). Статус не меняется, заказчику имя не показывается (как и раньше); в журнале дела — только
+      // служебным.
+      id: 'orgs.cases.transfer', method: 'POST', path: '/api/orgs/:id/cases/:orderId/transfer', auth: 'user',
+      access: { resource: 'org', param: 'id', need: 'manage' },
+      async handler({ sql, actor, org, params, body, registry }) {
+        const orderId = uuidFrom(params.orderId, 'Дело не найдено');
+        const specialistId = uuidFrom(body?.specialist_id, 'Эксперт не найден');
+        if (!String(body?.reason ?? '').trim()) throw new HttpError(400, 'reason_required', 'Укажите причину');
+        const reason = text(body.reason, 'Причина', 1000);
+        await sql.tx(async (tx) => {
+          const cur = await tx.one`select * from orders where id = ${orderId} for update`;
+          // Дело чужой организации (или без эксперта от этой) — «не найдено», как и в «Делах экспертов».
+          if (!cur?.executor_user_id || (await executorSignOrg(tx, cur.executor_user_id))?.id !== org.id) throw new HttpError(404, 'not_found', 'Дело не найдено');
+          if (cur.status !== 'in_work') throw new HttpError(409, 'status_changed', 'Передать можно только дело в работе — обновите страницу');
+          if (specialistId === cur.executor_user_id) throw new HttpError(409, 'same_expert', 'Дело уже у этого эксперта');
+          if (!(await transferTargets(tx, cur, org.id, registry)).some((c) => c.user_id === specialistId)) {
+            throw new HttpError(409, 'not_eligible', 'Этому эксперту дело отдать нельзя: нет допуска, не принимает дела, истёк аттестат или полис в досье или работает не от организации');
+          }
+          const prev = cur.executor_user_id;
+          await tx`update orders set executor_user_id = ${specialistId}, updated_at = now() where id = ${cur.id}`;
+          // Ссылка на осмотр и выезд помощника, выданные прежним экспертом, перестают действовать (их состояние — по
+          // исполнителю); закрываем их явно, чтобы владелец и помощник не ждали. Снятые фото и данные остаются в деле.
+          const links = await tx`update inspection_links set revoked_at = now()
+                                 where order_id = ${cur.id} and revoked_at is null and finished_at is null and expires_at > now() returning id`;
+          const visits = await tx`update onsite_visits set cancelled_at = now()
+                                  where order_id = ${cur.id} and finished_at is null and cancelled_at is null returning helper_id`;
+          await audit(tx, actor, 'org.case.transfer', 'order', cur.id, { org: org.id, from: prev, to: specialistId, reason,
+            links_closed: links.length, visits_cancelled: visits.length });
+          if (visits.length) await notify(tx, 'onsite_cancelled', { users: visits.map((v) => v.helper_id), actor });
+          await notify(tx, 'org_case_given', { users: [specialistId], orderId: cur.id, actor });
+          await notify(tx, 'org_case_taken', { users: [prev], actor });
         });
         return { ok: true };
       },

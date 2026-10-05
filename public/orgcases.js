@@ -2,6 +2,7 @@
 // срок (просрочено — крупно), состояние, эксперта и вознаграждение; нагрузку по экспертам и деньги за месяц.
 // Заказчика, поля заявки, документы и переписку по заявке — нет (их сервер и не присылает); внутренняя переписка
 // с экспертом (2.28) — у каждого дела.
+// Дело в работе руководитель передаёт другому эксперту организации (2.62).
 // «Ждут назначения» (2.17): дела, предложенные диспетчером организации, — руководитель назначает эксперта или отказывается.
 import { api, el, say } from '/common.js';
 import { expertLink } from '/expertcard.js';
@@ -32,12 +33,12 @@ export async function loadOrgCases(org) {
   const done = cases.filter((c) => !c.active);
   $('org-cases-empty').classList.toggle('hidden', cases.length > 0);
   $('org-cases').replaceChildren(
-    ...active.map(caseItem),
+    ...active.map((c) => caseItem(org, c)),
     ...(done.length ? [el('li', { class: 'group', text: `Завершённые · ${done.length}` })] : []),
-    ...done.map(caseItem));
+    ...done.map((c) => caseItem(org, c)));
 }
 
-function caseItem(c) {
+function caseItem(org, c) {
   const deadline = c.deadline ? `срок ${dayRu(c.deadline)}${c.overdue ? ' · ПРОСРОЧЕНО' : ''}` : 'срок не указан';
   return el('li', { 'data-case': c.order_ref },
     el('div', { class: 'title', text: `${c.service} · ${c.order_ref}` }),
@@ -50,7 +51,33 @@ function caseItem(c) {
       el('span', { class: 'badge warn', text: `Ждёт Вашей подписи: ${c.sign_wait}` }),
       el('button', { class: 'secondary', 'data-action': 'go-sign', onclick: () => goSign(c.order_ref) }, 'К подписи'))] : []),
     ...(c.returned_open ? [el('div', { class: 'muted', 'data-role': 'returned', text: 'Вы вернули отчёт эксперту — ждём исправления' })] : []),
+    ...(c.status === 'in_work' ? [transferDetails(org, c)] : []),
     chatDetails(c));
+}
+
+// Передать дело в работе другому эксперту организации (2.62): заболел, ушёл. Файлы, черновик, осмотр и переписка
+// остаются в деле; прежний эксперт дело больше не видит; заказчик имени эксперта не видит.
+function transferDetails(org, c) {
+  const msg = el('p', { class: 'msg', role: 'status', 'aria-live': 'polite' });
+  const body = c.transfer_to.length ? (() => {
+    const pick = el('select', { 'aria-label': `Кому передать дело ${c.order_ref}`, 'data-transfer-pick': c.order_ref },
+      ...c.transfer_to.map((x) => el('option', { value: x.user_id, text: x.full_name })));
+    const reason = el('input', { type: 'text', maxlength: '1000', placeholder: 'Причина: заболел, ушёл из организации…',
+      'aria-label': `Причина передачи дела ${c.order_ref}`, 'data-transfer-reason': c.order_ref });
+    const go = async () => {
+      if (!reason.value.trim()) return say(msg, 'Укажите причину');
+      try {
+        await api('POST', `/api/orgs/${org.id}/cases/${c.id}/transfer`, { specialist_id: pick.value, reason: reason.value.trim() });
+        await loadOrgCases(org);
+        say($('org-cases-msg'), 'Дело передано — новый эксперт получил уведомление', 'ok');
+      } catch (err) { say(msg, err.message); }
+    };
+    return [el('label', { text: 'Кому' }), pick, el('label', { text: 'Причина' }), reason,
+      el('p', { class: 'muted', text: 'Файлы, черновик, фото осмотра и переписка останутся в деле. Прежний эксперт дело больше не увидит; его ссылка на осмотр и выезд помощника закроются — новый эксперт выдаст новые.' }),
+      el('button', { 'data-action': 'transfer', onclick: go }, 'Передать дело')];
+  })() : [el('p', { class: 'muted', text: 'Передать некому: в организации нет другого эксперта с допуском на эту услугу, который принимает дела.' })];
+  return el('details', { class: 'org-transfer', 'data-transfer': c.order_ref },
+    el('summary', { text: 'Передать другому эксперту' }), ...body, msg);
 }
 
 // Перейти к делу в «Подписи организации» и выделить его.

@@ -186,8 +186,8 @@ a.btn { text-decoration: none; margin-top: 8px; }
 .return .comment { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 4px; }
 li.return.open { border-left: 3px solid var(--danger); padding-left: 8px; }
 details.returns { margin-top: 8px; }
-details.org-chat { margin-top: 8px; }
-details.org-chat summary { cursor: pointer; color: var(--accent); }
+details.org-chat, details.org-transfer { margin-top: 8px; }
+details.org-chat summary, details.org-transfer summary { cursor: pointer; color: var(--accent); }
 
 /* Аналоги (2.32): карточка аналога, признаки от ИИ отмечены, предупреждения — списком. */
 .analog { border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin-bottom: 12px; }
