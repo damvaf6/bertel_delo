@@ -23,7 +23,7 @@ async function start() {
   try {
     [, state.catalog] = await Promise.all([refreshMe(), api('GET', '/api/catalog')]);
   } catch (err) {
-    if (err.status === 401) return location.replace('/');
+    if (err.status === 401) return location.replace(location.hash ? `/?next=${encodeURIComponent(location.hash)}` : '/');
     throw err;
   }
   serviceOptions($('service'));

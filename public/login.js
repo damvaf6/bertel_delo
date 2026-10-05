@@ -7,8 +7,11 @@ let phone = '';
 let timer = null;
 
 api('GET', '/api/health').then((h) => { if (h?.test_data) $('test-mark').classList.remove('hidden'); }).catch(() => {});
+// Куда после входа: раздел кабинета, с которого пришли (витрина, ссылка из уведомления), — только свои разделы.
+const next = new URLSearchParams(location.search).get('next') || '';
+const target = `/kabinet${/^#[a-z]+(=[0-9a-f-]{36})?$/i.test(next) ? next : ''}`;
 // Уже вошли — сразу в кабинет.
-api('GET', '/api/me').then(() => location.replace('/kabinet')).catch(() => {});
+api('GET', '/api/me').then(() => location.replace(target)).catch(() => {});
 
 // Звонок с кодом можно заказать через минуту после предыдущего кода (СМС или звонка).
 // Остаток считается по часам, а не по числу срабатываний таймера: в фоне телефон таймеры придерживает.
@@ -79,7 +82,7 @@ $('code-form').addEventListener('submit', async (e) => {
   $('sign-in').disabled = true;
   try {
     await api('POST', '/api/auth/verify', { phone, code: $('code').value.trim() });
-    location.replace('/kabinet');
+    location.replace(target);
   } catch (err) {
     say(msg, err.message);
     $('sign-in').disabled = false;
