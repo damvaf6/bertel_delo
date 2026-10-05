@@ -116,4 +116,7 @@ npm test                                   # сервер; с MinIO: S3_TEST_END
 npm run test:ui                            # телефон 412×915 на локальном стенде, скриншоты — test-results/screens/
 ```
 CI (`.github/workflows/ci.yml`): сервер + MinIO; сборка контейнера → миграции → запуск с базой и MinIO →
-Playwright против контейнера. Скриншоты — артефакт `phone-screens` прогона.
+Playwright против контейнера. С 05.10.2026 все workflow идут на своей машине `delo-ci-runner` в bertel-delo-test
+(`runs-on: [self-hosted, delo-ci]`; создаёт её `.github/workflows/runner.yml`, цена ≈ 3 800 ₽/мес при пределе 5 000 ₽).
+Запрос-черновик — только быстрые проверки сервера; полный набор на телефоне — когда запрос готов к слиянию, в main и
+ночью. Снимки — `tests/tools/ci-screens.mjs` в бакет `delo-ci-screens-…` (7 дней), не в GitHub.

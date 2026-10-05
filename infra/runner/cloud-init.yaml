@@ -1,0 +1,62 @@
+#cloud-config
+# Машина проверок GitHub для bertel_delo (решение Дамира 05.10.2026, вопрос 22): каталог bertel-delo-test, только
+# тестовые данные. Создаёт и пересоздаёт её workflow «Runner (Yandex Cloud)» (.github/workflows/runner.yml); значения
+# __…__ он подставляет при создании (ключ регистрации живёт 1 час; ключ S3 — только к бакету снимков).
+# Входящих подключений нет: машина сама ходит в GitHub за заданиями.
+package_update: true
+packages: [docker.io, jq, git, curl, unzip, zip, ca-certificates, postgresql-client, python3, psmisc]
+
+users:
+  - default
+  - name: runner
+    groups: [docker]
+    shell: /bin/bash
+    sudo: 'ALL=(ALL) NOPASSWD:ALL'
+
+write_files:
+  - path: /etc/delo-ci/s3.env
+    permissions: '0640'
+    content: |
+      CI_S3_ENDPOINT=https://storage.yandexcloud.net
+      CI_S3_BUCKET=__S3_BUCKET__
+      CI_S3_ACCESS_KEY=__S3_ACCESS_KEY__
+      CI_S3_SECRET_KEY=__S3_SECRET_KEY__
+  # Перед каждым заданием — убрать то, что могло остаться от прошлого (одна машина, задания идут по очереди).
+  - path: /opt/delo-ci/job-started.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      docker rm -f minio delo-app backup backup-root >/dev/null 2>&1 || true
+      for p in 8080 8081 8082 8788 9000; do fuser -k "$p/tcp" >/dev/null 2>&1 || true; done
+      exit 0
+  # После каждого задания — ни ключа облака, ни входа в реестр на диске не остаётся.
+  - path: /opt/delo-ci/job-completed.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      rm -rf "$HOME/.config/yandex-cloud" "$HOME/.docker/config.json"
+      docker rm -f minio delo-app backup backup-root >/dev/null 2>&1 || true
+      exit 0
+  - path: /etc/cron.daily/delo-ci-docker-prune
+    permissions: '0755'
+    content: |
+      #!/bin/sh
+      docker system prune -af --filter until=48h >/dev/null 2>&1 || true
+
+runcmd:
+  - chgrp runner /etc/delo-ci/s3.env
+  - fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile && echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  - systemctl enable --now docker
+  - install -d -o runner -g runner /opt/yc /home/runner/actions-runner
+  - |
+    set -e
+    cd /home/runner/actions-runner
+    V=$(curl -fsSL https://api.github.com/repos/actions/runner/releases/latest | jq -r .tag_name | sed 's/^v//')
+    curl -fsSL -o runner.tgz "https://github.com/actions/runner/releases/download/v$V/actions-runner-linux-x64-$V.tar.gz"
+    tar xzf runner.tgz && rm runner.tgz && chown -R runner:runner .
+    ./bin/installdependencies.sh
+    sudo -u runner ./config.sh --unattended --url __REPO_URL__ --token __REG_TOKEN__ --name delo-ci-runner --labels delo-ci --work _work --replace
+    printf 'ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/delo-ci/job-started.sh\nACTIONS_RUNNER_HOOK_JOB_COMPLETED=/opt/delo-ci/job-completed.sh\n' >> .env
+    chown runner:runner .env
+    ./svc.sh install runner
+    ./svc.sh start

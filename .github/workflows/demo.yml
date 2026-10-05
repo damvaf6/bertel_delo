@@ -19,7 +19,7 @@ on:
 
 jobs:
   demo:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, delo-ci]
     environment: delo-stage
     concurrency: demo-stage
     env:
@@ -155,14 +155,12 @@ jobs:
 
       - name: Снимки
         if: always() && env.ACTION == 'deploy'
-        uses: actions/upload-artifact@v4
-        # Место у GitHub ограничено: снимки — 7 дней; нехватка места выкладку не валит.
+        # Снимки — в Object Storage каталога bertel-delo-test на 7 дней (решение Дамира 05.10.2026, вопрос 22).
         continue-on-error: true
-        with:
-          name: demo-screens
-          path: test-results/
-          if-no-files-found: ignore
-          retention-days: 7
+        run: |
+          set -a; . /etc/delo-ci/s3.env; set +a
+          node tests/tools/ci-screens.mjs upload "runs/${{ github.run_id }}/demo-screens" test-results
+          echo "Снимки: s3://$CI_S3_BUCKET/runs/${{ github.run_id }}/demo-screens/ (7 дней)" >> $GITHUB_STEP_SUMMARY
 
       - name: Убрать ключ
         if: always()

@@ -24,17 +24,21 @@ jobs:
   report:
     needs: run
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, delo-ci]
     permissions:
       contents: write
       actions: read
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v4
+      - uses: actions/setup-node@v5
         with:
-          name: stage-screens
-          path: test-results
-        continue-on-error: true
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Итог проверок из хранилища снимков
+        run: |
+          set -a; . /etc/delo-ci/s3.env; set +a
+          node tests/tools/ci-screens.mjs download "runs/${{ github.run_id }}/stage-screens" test-results/stage-report.json test-results/stage-report.json
       - name: Итог прогона
         env:
           RESULT: ${{ needs.run.result }}

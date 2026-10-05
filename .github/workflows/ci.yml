@@ -5,10 +5,19 @@ name: CI
 #   2) контейнер: собирается тот же образ, что пойдёт в облако, запускается с базой и MinIO,
 #      против него — Playwright на телефоне 412×915; скриншоты сохраняются к прогону.
 # Все значения ниже — тестовые, не секреты. В облако и к боевым данным CI не ходит.
+# С 05.10.2026 (решение Дамира, вопрос 22) — на своей машине в Яндекс Облаке (.github/workflows/runner.yml).
+# Промежуточные отправки (запрос на слияние — черновик) — только быстрые проверки сервера; полный набор на телефоне и
+# выгрузка копий — перед слиянием (запрос готов к слиянию), в main и по кнопке. Ночью — полный прогон площадки (nightly).
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 env:
   # Официальные образы MinIO больше не публикуются на Docker Hub; pgsty/minio — сборка того же сервера MinIO.
@@ -17,7 +26,7 @@ env:
 jobs:
   server:
     name: Сервер · PostgreSQL 16 + MinIO
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, delo-ci]
     services:
       postgres:
         image: postgres:16
@@ -49,7 +58,8 @@ jobs:
 
   container:
     name: Контейнер · телефон 412×915
-    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: [self-hosted, delo-ci]
     services:
       postgres:
         image: postgres:16
@@ -125,28 +135,25 @@ jobs:
         run: docker logs delo-app
       - name: Скриншоты и отчёт
         if: always()
-        uses: actions/upload-artifact@v4
-        # Место для снимков у GitHub ограничено: снимки — 5 дней, следы и отчёт — только при падении; нехватка места
-        # проверки не валит (сами проверки уже прошли или упали выше).
+        # Снимки — в Object Storage каталога bertel-delo-test на 7 дней (решение Дамира 05.10.2026, вопрос 22).
         continue-on-error: true
-        with:
-          name: phone-screens
-          path: |
-            test-results/screens/
-            test-results/demo/
-          retention-days: 5
+        run: |
+          set -a; . /etc/delo-ci/s3.env; set +a
+          node tests/tools/ci-screens.mjs upload "runs/${{ github.run_id }}/${{ github.job }}" test-results/screens test-results/demo
+          echo "Снимки: s3://$CI_S3_BUCKET/runs/${{ github.run_id }}/${{ github.job }}/ (7 дней)" >> $GITHUB_STEP_SUMMARY
       - name: Следы упавших проверок
         if: failure()
-        uses: actions/upload-artifact@v4
+        # Снимки — в Object Storage каталога bertel-delo-test на 7 дней (решение Дамира 05.10.2026, вопрос 22).
         continue-on-error: true
-        with:
-          name: phone-failures
-          path: test-results/artifacts/
-          retention-days: 5
+        run: |
+          set -a; . /etc/delo-ci/s3.env; set +a
+          node tests/tools/ci-screens.mjs upload "runs/${{ github.run_id }}/${{ github.job }}" test-results/artifacts
+          echo "Снимки: s3://$CI_S3_BUCKET/runs/${{ github.run_id }}/${{ github.job }}/ (7 дней)" >> $GITHUB_STEP_SUMMARY
 
   backup:
     name: Выгрузка копий · образ + учебное восстановление
-    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: [self-hosted, delo-ci]
     services:
       postgres:
         image: postgres:16

@@ -20,7 +20,7 @@ on:
 
 jobs:
   backup:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, delo-ci]
     environment: delo-stage
     concurrency: backup-stage
     env:
