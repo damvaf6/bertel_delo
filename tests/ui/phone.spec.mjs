@@ -3020,3 +3020,76 @@ test('скорость (2.49): экраны, отчёт на 50 МБ, 100 фот
   expect(speed['дело эксперта со 100 фото']).toBeLessThan(5000);
   await staff.close();
 });
+
+test('передача дела (2.62): руководитель передаёт дело в работе другому эксперту, прежний теряет доступ, новый видит переписку', async ({ page, browser, baseURL }) => {
+  await signIn(page, '+79990000770');
+  const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира: передача дела' }, headers: H })).json();
+  const id = created.order.id;
+  expect((await page.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(7), fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, Передаточная ул., 5', area: '44' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  const hctx = await phoneContext(browser, baseURL);
+  const hp = await hctx.newPage();
+  const head = await signIn(hp, '+79990000771');
+  const actx = await phoneContext(browser, baseURL);
+  const ap = await actx.newPage();
+  const first = await signIn(ap, '+79990000772');
+  const bctx = await phoneContext(browser, baseURL);
+  const bp = await bctx.newPage();
+  const second = await signIn(bp, '+79990000773');
+  const orgId = await db(async (c) => {
+    const { rows: [org] } = await c.query("insert into organizations (name) values ('ООО «Тестовое бюро передачи»') returning id");
+    await c.query("update users set full_name = 'Эксперт Заболевший' where id = $1", [first.id]);
+    await c.query("update users set full_name = 'Эксперт Сменщик' where id = $1", [second.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member'), ($1, $4, 'member')", [org.id, head.id, first.id, second.id]);
+    for (const u of [first.id, second.id]) {
+      await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [u, org.id]);
+      await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [u]);
+    }
+    await c.query('update orders set price_kop = 1500000, paid_at = now(), status = $2, executor_user_id = $3 where id = $1', [id, 'in_work', first.id]);
+    return org.id;
+  });
+  // Прежний эксперт успел написать заказчику.
+  expect((await ap.request.post(`/api/orders/${id}/messages`, { data: { body: 'Осмотр назначен на пятницу' }, headers: H })).status()).toBe(201);
+
+  // Руководитель: у дела в работе — «Передать другому эксперту»; без причины не передать.
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const row = hp.locator('#org-cases > li').first();
+  await expect(row).toContainText('В работе · эксперт: Эксперт Заболевший');
+  await row.locator('[data-transfer] summary').click();
+  await expect(row.locator('[data-transfer] select option')).toHaveText(['Эксперт Сменщик']);
+  await row.getByRole('button', { name: 'Передать дело' }).click();
+  await expect(row.locator('[data-transfer] .msg')).toHaveText('Укажите причину');
+  await row.getByLabel(/Причина передачи дела/).fill('Эксперт заболел на две недели');
+  await row.locator('[data-transfer]').scrollIntoViewIfNeeded();
+  await shot(hp, '99e-rukovoditel-peredacha-dela');
+  await row.getByRole('button', { name: 'Передать дело' }).click();
+  await expect(hp.locator('#org-cases-msg')).toHaveText('Дело передано — новый эксперт получил уведомление');
+  await expect(hp.locator('#org-cases > li').first()).toContainText('В работе · эксперт: Эксперт Сменщик');
+
+  // Новый эксперт: уведомление ведёт в дело; переписка прежнего эксперта на месте.
+  await bp.goto('/kabinet#notifications');
+  const note = bp.locator('#notifications li').filter({ hasText: 'Руководитель организации передал Вам дело в работе' });
+  await expect(note).toHaveCount(1);
+  await bp.goto(`/kabinet#order=${id}`);
+  await expect(bp.locator('#order-status')).toHaveText('В работе');
+  await expect(bp.locator('#chat-box')).toContainText('Осмотр назначен на пятницу');
+  await shot(bp, '99f-novyj-ekspert-delo');
+
+  // Прежний эксперт: уведомление без перехода в дело; само дело — «не найдено».
+  await ap.goto('/kabinet#notifications');
+  await expect(ap.locator('#notifications li').filter({ hasText: 'передал Ваше дело другому эксперту' })).toHaveCount(1);
+  await shot(ap, '99g-prezhnij-ekspert-uvedomlenie');
+  await ap.goto(`/kabinet#order=${id}`);
+  await expect(ap.getByRole('heading', { name: 'Заявка не найдена' })).toBeVisible();
+
+  // Заказчик: имени эксперта и передачи не видит, дело в работе.
+  await page.goto(`/kabinet#order=${id}`);
+  await expect(page.locator('#order-status')).toHaveText('В работе');
+  await expect(page.locator('#order-view')).not.toContainText('Сменщик');
+  await expect(page.locator('#order-view')).not.toContainText('заболел');
+  await hctx.close();
+  await actx.close();
+  await bctx.close();
+});
