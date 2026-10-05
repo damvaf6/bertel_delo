@@ -99,6 +99,17 @@ test('me.update: меняется только своё имя', async () => {
   assert.equal((await U.stranger.req('PATCH', '/api/me', { full_name: '' })).status, 400);
 });
 
+test('me.hints: закрытая подсказка — только своя и только из списка', async () => {
+  cover('me.hints');
+  const r = await U.stranger.req('POST', '/api/me/hints', { hint: 'expert', user_id: U.owner.user.id });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.hints_seen, ['expert']);
+  assert.deepEqual((await U.stranger.req('POST', '/api/me/hints', { hint: 'expert' })).body.hints_seen, ['expert'], 'повтор не дублирует');
+  assert.equal((await U.stranger.req('POST', '/api/me/hints', { hint: 'чужое' })).status, 400);
+  assert.deepEqual((await U.stranger.req('GET', '/api/me')).body.hints_seen, ['expert']);
+  assert.deepEqual((await U.owner.req('GET', '/api/me')).body.hints_seen, [], 'у другого человека не изменилось');
+});
+
 test('orders.create: от имени чужой организации нельзя', async () => {
   cover('orders.create');
   assert.equal((await U.stranger.req('POST', '/api/orders', { module: 'expertise', service: 'realty', org_id: orgA.id, title: 'Подлог' })).status, 404);

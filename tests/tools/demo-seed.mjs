@@ -202,6 +202,8 @@ export async function seedDemo({ base, headers = {}, login, adminPhone, log = ()
   const enter = makeClient(base, headers, login);
   const P = {};
   for (const [k, p] of Object.entries(DEMO_PEOPLE)) P[k] = await enter(p.phone, p.name);
+  // На показе подсказки первого входа не нужны (2.52): демо-люди «уже работали» на платформе.
+  for (const c of Object.values(P)) for (const hint of ['customer', 'expert', 'head', 'dispatcher']) await c.must('POST', '/api/me/hints', { hint });
 
   // Уже наполнено — ничего не делаем (повторный запуск безопасен).
   const already = (await P.petrov.must('GET', '/api/orders')).orders;

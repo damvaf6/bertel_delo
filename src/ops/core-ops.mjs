@@ -6,6 +6,9 @@ import { executorSignOrg, orderSides, seesResults } from '../access/policy.mjs';
 import { requestCode, verifyCode, endSession, SESSION_TTL_SEC } from '../auth/auth.mjs';
 import { audit, oneOf, phoneFrom, publicUser, text } from './util.mjs';
 import { unreadCount } from './notify-ops.mjs';
+
+// Подсказки первого входа по ролям (2.52; тексты — public/help.js).
+export const HINTS = ['customer', 'expert', 'head', 'dispatcher'];
 import { orderSignatures, orgReturns, signaturesView } from './sign-ops.mjs';
 
 // Облако принимает запрос не больше 3,5 МБ (Yandex Serverless Containers) — через ядро только до 3 МБ (2.49).
@@ -97,7 +100,19 @@ export function coreOps(cfg) {
         const inv = await sql.one`
           select count(*)::int as n from org_invites
           where phone = ${actor.phone} and accepted_at is null and declined_at is null and revoked_at is null and expires_at > now()`;
-        return { user: publicUser(actor), orgs, pending_invites: inv.n, unread_notifications: await unreadCount(sql, actor.id) };
+        const seen = await sql.one`select hints_seen from users where id = ${actor.id}`;
+        return { user: publicUser(actor), orgs, pending_invites: inv.n, unread_notifications: await unreadCount(sql, actor.id), hints_seen: seen.hints_seen };
+      },
+    },
+    {
+      // Подсказка «С чего начать» закрыта (2.52): больше не показывается этому человеку ни на одном устройстве.
+      id: 'me.hints', method: 'POST', path: '/api/me/hints', auth: 'user', access: 'self',
+      async handler({ sql, actor, body }) {
+        const hint = oneOf(body?.hint, HINTS, 'Подсказка');
+        const row = (await sql.one`update users set hints_seen = array_append(hints_seen, ${hint})
+                                   where id = ${actor.id} and not (${hint} = any(hints_seen)) returning hints_seen`)
+          || (await sql.one`select hints_seen from users where id = ${actor.id}`);
+        return { hints_seen: row.hints_seen };
       },
     },
     {
