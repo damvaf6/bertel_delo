@@ -714,7 +714,111 @@ function analogFindings(doc) {
   return out;
 }
 
+// ——— 2.61: товароведческая — дата и цена покупки как в заявке ———
+// В заявке одна строка «Когда и где куплен, цена по чеку» («12.03.2026, М.Видео, 54 990 ₽»): дата — первая дата,
+// цена — сумма с «₽» или «руб.» (иначе самое большое число от 100). В заключении сверяются только строки о покупке.
+const DATE_RE = /(?<!\d)(\d{1,2})\.(\d{1,2})\.(\d{4}|\d{2})(?![\d.]\d)/g;
+const PRICE_RE = /(?<![\d,.])(\d{1,3}(?:[  ]\d{3})+|\d{3,9})(?:[,.](\d{2}))?\s*(?:₽|руб|р\.)/giu;
+const BUY_WORDS = /куп(?:л|и)|покупк|приобр[её]т|(?<![а-яё])чек/iu;
+const isoDate = (d, m, y) => `${y.length === 2 ? `20${y}` : y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+const money = (whole, kop) => Number(whole.replace(/[  ]/g, '')) + (kop ? Number(kop) / 100 : 0);
+
+export function purchaseOf(text) {
+  const s = String(text ?? '');
+  const d = [...s.matchAll(DATE_RE)].find((m) => Number(m[1]) <= 31 && Number(m[2]) <= 12);
+  const priced = [...s.matchAll(PRICE_RE)].map((m) => money(m[1], m[2]));
+  const date = d ? isoDate(d[1], d[2], d[3]) : null;
+  // Без «₽» берём самое большое число от 100, кроме чисел внутри даты.
+  const bare = s.replace(DATE_RE, ' ').match(/\d{1,3}(?:[  ]\d{3})+(?:[,.]\d{2})?|\d{3,9}(?:[,.]\d{2})?/g) ?? [];
+  const nums = bare.map((x) => { const [w, k] = x.split(/[,.]/); return money(w, k); }).filter((x) => x >= 100);
+  const price = priced.length ? priced[0] : nums.length ? Math.max(...nums) : null;
+  return { date, price };
+}
+
+function purchaseMatch(doc, ctx) {
+  const mine = purchaseOf(ctx.fields?.purchase);
+  if (!mine.date && !mine.price) return [];
+  const out = [];
+  const seen = new Set();
+  eachPage(doc, (page, i) => {
+    for (const line of page.split('\n')) {
+      if (!BUY_WORDS.test(line) || /аналог|ремонт|устранени|замен/iu.test(line)) continue;
+      if (mine.date) {
+        for (const m of line.matchAll(DATE_RE)) {
+          if (Number(m[1]) > 31 || Number(m[2]) > 12) continue;
+          const v = isoDate(m[1], m[2], m[3]);
+          // Дата покупки — дата рядом со словом о покупке, а не дата осмотра или заключения в той же строке.
+          const near = line.slice(Math.max(0, m.index - 40), m.index);
+          if (v === mine.date || seen.has(`d${v}`) || !BUY_WORDS.test(near)) continue;
+          seen.add(`d${v}`);
+          out.push({ page: i, quote: line, text: `Дата покупки ${ruDate(v)} не совпадает с датой из заявки (${ruDate(mine.date)}) — проверьте чек` });
+        }
+      }
+      if (mine.price && /цен|стоимост|сумм|оплач|чек/iu.test(line)) {
+        for (const m of line.matchAll(PRICE_RE)) {
+          const v = money(m[1], m[2]);
+          if (Math.abs(v - mine.price) < 1 || seen.has(`p${v}`)) continue;
+          seen.add(`p${v}`);
+          out.push({ page: i, quote: line, text: `Цена покупки ${fmt(v)} ₽ не совпадает с ценой по чеку из заявки (${fmt(mine.price)} ₽) — проверьте чек` });
+        }
+      }
+    }
+  });
+  return out;
+}
+
+// ——— 2.61: каждый вопрос заявки найден в выводах (все виды) ———
+// Вопросы — из поля заявки «Какие вопросы поставить эксперту» (нумерованные или по одному в строке). Вопрос считается
+// отвеченным, если в выводах есть «по вопросу № N» / «ответ на вопрос N» или больше половины его значимых слов.
+const STOP = new Set(['каков', 'какая', 'какой', 'какие', 'каково', 'является', 'являет', 'имеется', 'имеет', 'имеют', 'ли', 'если', 'данный', 'данного', 'указанн', 'представ', 'эксперт', 'вопрос', 'определ', 'установ']);
+const stem = (w) => w.toLowerCase().replace(/ё/g, 'е').slice(0, 6);
+function stemsOf(q) {
+  return [...new Set((q.match(/[А-Яа-яЁё]{5,}/gu) ?? []).map(stem).filter((s) => ![...STOP].some((x) => s.startsWith(x.slice(0, 6)))))];
+}
+export function questionsOf(text) {
+  const s = String(text ?? '').replace(/\r/g, '').trim();
+  if (!s) return [];
+  const numbered = s.split(/(?:^|\n|\s)(?=\d{1,2}\s*[.)]\s+\S)/u).map((x) => x.replace(/^\d{1,2}\s*[.)]\s*/u, '').trim()).filter(Boolean);
+  const parts = numbered.length > 1 ? numbered : s.split(/\n+|(?<=\?)\s+/u).map((x) => x.trim()).filter(Boolean);
+  return parts.map((x) => clean(x)).filter((x) => stemsOf(x).length >= 1);
+}
+const CONCLUSIONS = /^\s*(?:\d{1,2}\.?\s*)?(?:(?:основные\s+факты\s+и\s+)?выводы?(?:\s+эксперта)?|ответы\s+на\s+(?:поставленные\s+)?вопросы|итоговое\s+заключение)(?![А-Яа-яЁё])[^\n]{0,60}$/imu;
+function conclusionsText(doc) {
+  const pages = doc.pages ?? [];
+  // Последний заголовок «Выводы» в тексте (в оглавлении он тоже есть — берём последний).
+  let at = null;
+  pages.forEach((p, i) => {
+    const re = new RegExp(CONCLUSIONS.source, 'gimu');
+    for (const m of p.matchAll(re)) if (!TOC_END.test(m[0])) at = { page: i, index: m.index };
+  });
+  if (!at) return null;
+  return { page: at.page, text: [pages[at.page].slice(at.index), ...pages.slice(at.page + 1)].join('\n') };
+}
+function questionsAnswered(docs, ctx) {
+  const qs = questionsOf(ctx.fields?.questions);
+  if (!qs.length) return [];
+  const d = mainReport(docs);
+  if (!d) return [];
+  const c = conclusionsText(d);
+  if (!c) {
+    return [{ doc: d, page: Math.max(0, d.pages.length - 1), quote: '', text: `В заключении не найден раздел «Выводы» — в заявке ${qs.length === 1 ? 'один вопрос' : `вопросов: ${qs.length}`}, на каждый нужен ответ` }];
+  }
+  const words = new Set((c.text.match(/[А-Яа-яЁё]{5,}/gu) ?? []).map(stem));
+  const out = [];
+  qs.forEach((q, k) => {
+    const n = k + 1;
+    const byNumber = new RegExp(`(?:по|на)\\s+(?:${n}-?(?:му|й|ому)?\\s+)?вопрос\\S*\\s*(?:№\\s*)?${n}(?!\\d)|вопрос\\S*\\s*№\\s*${n}(?!\\d)|(?:по|на)\\s+${n}-?(?:му|ому|й)\\s+вопрос`, 'iu');
+    if (byNumber.test(c.text)) return;
+    const st = stemsOf(q);
+    const hit = st.filter((s) => words.has(s)).length;
+    if (hit * 2 > st.length) return;
+    out.push({ doc: d, page: c.page, quote: q, text: `Вопрос ${n} из заявки не найден в выводах: «${q.slice(0, 120)}» — дайте ответ или укажите, почему ответить нельзя` });
+  });
+  return out;
+}
+
 const WHOLE = {
+  questions_answered: questionsAnswered,
   dossier_appraiser: dossierFindings(['certificate', 'sro', 'policy', 'policy_org']),
   dossier_education: dossierFindings(['education']),
   required_items: requiredItems,
@@ -741,6 +845,7 @@ const PER_DOC = {
   mileage_match: mileageMatch,
   approach_weights: approachWeights,
   analog_list: analogFindings,
+  purchase_match: purchaseMatch,
 };
 
 // Все правила: имя → короткое описание (для проверки описаний модулей и для журнала).
@@ -770,6 +875,8 @@ export const AUTO_CHECKS = Object.freeze({
   mileage_match: 'пробег в отчёте — как в заявке (с запасом 10%)',
   approach_weights: 'веса подходов в согласовании в сумме 1',
   analog_list: 'аналогов не меньше трёх, ссылки у разных аналогов не повторяются',
+  purchase_match: 'дата и цена покупки товара — как в заявке',
+  questions_answered: 'каждый вопрос заявки найден в выводах',
 });
 
 export function runAutoChecks(names, docs, ctx = {}) {

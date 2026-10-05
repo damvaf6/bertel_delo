@@ -3,7 +3,7 @@
 // (10-й знак VIN сохранён там, где по нему сверяется год). Настоящие отчёты в репозиторий не попадают.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { runAutoChecks, vinYears, wordsToNumber, tocEntries, AUTO_CHECKS } from '../../src/ai/report-checks.mjs';
+import { runAutoChecks, vinYears, wordsToNumber, tocEntries, AUTO_CHECKS, purchaseOf, questionsOf } from '../../src/ai/report-checks.mjs';
 import { pagesForModel } from '../../src/ops/ai-ops.mjs';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
@@ -426,5 +426,60 @@ test('2.60: правила подключены — госномер и проб
   for (const svc of ['vehicle', 'movable', 'realty', 'land']) {
     assert.ok(auto(svc, 'approaches').includes('approach_weights'), svc);
     assert.ok(auto(svc, 'analogs').includes('analog_list'), svc);
+  }
+});
+
+test('товароведческая (2.61): дата и цена покупки — как в заявке; стоимость ремонта и дата осмотра — не находка', () => {
+  assert.deepEqual(purchaseOf('12.03.2026, М.Видео, 54 990 ₽'), { date: '2026-03-12', price: 54990 });
+  assert.deepEqual(purchaseOf('куплен 5.1.26 в магазине «Техника-1» за 129990'), { date: '2026-01-05', price: 129990 });
+  const fields = { purchase: '12.03.2026, М.Видео, 54 990 ₽' };
+  const page = [
+    'Объект исследования: холодильник Север-100, серийный номер 0000-0001.',
+    'Товар приобретён 12.03.2026 в магазине «Магазин-1», цена по чеку 54 990,00 руб.',
+    'Осмотр проведён 01.10.2026. Стоимость устранения недостатка (замена компрессора) — 18 500 руб.',
+  ].join('\n');
+  assert.deepEqual(runAutoChecks(['purchase_match'], [doc([page])], { fields }).purchase_match, []);
+  const bad = page.replace('приобретён 12.03.2026', 'приобретён 21.03.2025').replace('54 990,00 руб', '45 990 руб');
+  assert.deepEqual(texts(runAutoChecks(['purchase_match'], [doc([bad])], { fields }), 'purchase_match'), [
+    'Дата покупки 21.03.2025 не совпадает с датой из заявки (12.03.2026) — проверьте чек',
+    'Цена покупки 45 990 ₽ не совпадает с ценой по чеку из заявки (54 990 ₽) — проверьте чек',
+  ]);
+  assert.deepEqual(runAutoChecks(['purchase_match'], [doc([bad])], { fields: {} }).purchase_match, [], 'в заявке нет — не сверяем');
+});
+
+test('все виды (2.61): каждый вопрос заявки найден в выводах — по номеру или по словам вопроса', () => {
+  const q = '1. Имеются ли в холодильнике недостатки?\n2) Каков характер недостатков — производственный или эксплуатационный?\n3. Какова стоимость устранения недостатков?';
+  assert.equal(questionsOf(q).length, 3);
+  assert.equal(questionsOf('Есть ли трещина в стене дома? Когда она образовалась по времени?').length, 2);
+  const fields = { questions: q };
+  const body = [
+    'ЗАКЛЮЧЕНИЕ ЭКСПЕРТА № 10/2026',
+    'СОДЕРЖАНИЕ',
+    '7. ВЫВОДЫ ........................................ 12',
+    'Исследование: компрессор холодильника не запускается.',
+  ].join('\n');
+  const good = [
+    '7. ВЫВОДЫ',
+    'По вопросу № 1: в холодильнике имеется недостаток — компрессор не запускается.',
+    'Характер недостатка производственный, следов неправильной эксплуатации нет.',
+    'По третьему: стоимость устранения недостатка — 18 500 руб.',
+  ].join('\n');
+  assert.deepEqual(runAutoChecks(['questions_answered'], [doc([body, good])], { fields }).questions_answered, []);
+  const partial = good.split('\n').slice(0, 3).join('\n');
+  const res = runAutoChecks(['questions_answered'], [doc([body, partial])], { fields });
+  assert.deepEqual(texts(res, 'questions_answered'), ['Вопрос 3 из заявки не найден в выводах: «Какова стоимость устранения недостатков?» — дайте ответ или укажите, почему ответить нельзя']);
+  assert.equal(res.questions_answered[0].where, 'стр. 2');
+  assert.deepEqual(texts(runAutoChecks(['questions_answered'], [doc([body])], { fields }), 'questions_answered'),
+    ['В заключении не найден раздел «Выводы» — в заявке вопросов: 3, на каждый нужен ответ'], 'в оглавлении «Выводы» есть, а раздела нет');
+  assert.deepEqual(runAutoChecks(['questions_answered'], [doc([body, partial])], { fields: {} }).questions_answered, [], 'вопросов в заявке нет — молчим');
+});
+
+test('2.61: правила подключены — покупка к «Данные объекта», вопросы к «Даны ответы на все вопросы» у всех видов', async () => {
+  const { createRegistry } = await import('../../src/modules/index.mjs');
+  const reg = createRegistry();
+  const auto = (svc, id) => reg.checks('expertise', svc).find((c) => c.id === id)?.auto ?? [];
+  assert.ok(auto('goods', 'object_match').includes('purchase_match'));
+  for (const svc of ['goods', 'construction', 'handwriting', 'vehicle', 'realty', 'land', 'movable']) {
+    assert.ok(auto(svc, 'questions_answered').includes('questions_answered'), svc);
   }
 });
