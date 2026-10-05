@@ -223,3 +223,9 @@ details.help-role h3 { font-size: 16px; margin: 16px 0 6px; }
 .report { text-align: center; margin-top: 8px; }
 .report form { text-align: left; }
 .small { font-size: 12px; overflow-wrap: anywhere; }
+
+/* Журнал действий по делу (2.55) */
+#journal-box summary { cursor: pointer; }
+h2.inline { display: inline; }
+.list.journal li { padding: 8px 0; }
+#export-case { margin-top: 12px; }

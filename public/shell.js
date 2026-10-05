@@ -6,7 +6,23 @@ const views = ['list-view', 'order-view', 'missing-view', 'orgs-view', 'org-view
 
 export const state = { me: null, catalog: null, specialist: null }; // catalog — услуги, поля и статусы из /api/catalog
 
+// Какой раздел соответствует адресу (#order=…, #org=… и т. д.). Раздел, который догрузился, когда человек уже ушёл
+// по другому адресу, не показывается поверх нового (быстрые переходы на медленной связи).
+const VIEW_OF = [
+  [/^#order=/, 'order-view'], [/^#org=/, 'org-view'], [/^#orgs$/, 'orgs-view'], [/^#expert=/, 'expert-view'],
+  [/^#profile$/, 'profile-view'], [/^#assistant(=|$)/, 'assistant-view'], [/^#specialist$/, 'specialist-view'],
+  [/^#specialists$/, 'specialists-view'], [/^#admin$/, 'admin-view'], [/^#money$/, 'money-view'],
+  [/^#notifications$/, 'notifications-view'], [/^#help$/, 'help-view'], [/^#problems$/, 'problems-view'],
+];
+function stale(id) {
+  if (id === 'list-view') return false;
+  if (id === 'missing-view') return !/^#(order|org|expert)=/.test(location.hash);
+  const want = VIEW_OF.find(([re]) => re.test(location.hash))?.[1];
+  return want !== undefined ? want !== id : false;
+}
+
 export function show(id, tab) {
+  if (stale(id)) return;
   views.forEach((v) => $(v).classList.toggle('hidden', v !== id));
   document.querySelectorAll('.tabs a').forEach((a) => {
     if (a.dataset.tab === tab) a.setAttribute('aria-current', 'page');

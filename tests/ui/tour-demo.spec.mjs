@@ -16,10 +16,13 @@ test('демо-площадка: наполнение и экскурсия на
   const login = codeLogin(baseURL, CONTROL);
   const c = new pg.Client({ connectionString: DB_URL });
   await c.connect();
-  try { await c.query("insert into users (phone, platform_role) values ($1, 'admin') on conflict (phone) do update set platform_role = 'admin'", [ADMIN]); } finally { await c.end(); }
+  try { await c.query("insert into users (phone, platform_role) values ($1, 'admin') on conflict (phone) do update set platform_role = 'admin'", [ADMIN]);
+    // Демо-люди могли входить в другой проверке минуту назад — новый код без ожидания.
+    await c.query("update login_codes set created_at = created_at - interval '2 minutes' where phone like '+79990001%'");
+  } finally { await c.end(); }
 
   const r = await seedDemo({ base: baseURL, login, adminPhone: ADMIN });
-  expect(r.created).toBe(true);
+  // Демо могла уже наполнить другая проверка (case.spec.mjs) — повтор ничего не дублирует.
   expect(Object.keys(r.cases)).toHaveLength(DEMO_CASES.length);
   const shots = await demoTour({ browser, baseURL, sessions: r.sessions, cases: r.cases, orgs: r.orgs, base: 'local' });
   expect(shots).toHaveLength(DEMO_TOUR.length);

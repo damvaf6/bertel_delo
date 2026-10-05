@@ -22,6 +22,14 @@ async function db(fn) {
   try { return await fn(c); } finally { await c.end(); }
 }
 
+// «Понятно» — и дождаться, пока сервер запомнит закрытую подсказку (иначе перезагрузка успевает раньше).
+async function gotIt(page) {
+  await Promise.all([
+    page.waitForResponse((r) => r.url().endsWith('/api/me/hints') && r.request().method() === 'POST' && r.ok()),
+    page.getByRole('button', { name: 'Понятно' }).click(),
+  ]);
+}
+
 async function shot(page, name) {
   const width = await page.evaluate(() => document.documentElement.scrollWidth);
   expect(width, `${name}: страница шире экрана`).toBeLessThanOrEqual(412);
@@ -36,7 +44,7 @@ test('первый вход заказчика: «С чего начать» о�
   await expect(page.locator('#hint-title')).toHaveText('С чего начать: заказчик');
   await expect(page.locator('#hint-steps li')).toHaveCount(4);
   await shot(page, 'help-01-pervyj-vhod-zakazchik');
-  await page.getByRole('button', { name: 'Понятно' }).click();
+  await gotIt(page);
   await expect(box).toBeHidden();
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Мои заявки' })).toBeVisible();
@@ -63,13 +71,13 @@ test('эксперт и руководитель: подсказки по каж
   await page.goto('/kabinet');
   await expect(page.locator('#hint-title')).toHaveText('С чего начать: руководитель организации');
   await shot(page, 'help-03-pervyj-vhod-rukovoditel');
-  await page.getByRole('button', { name: 'Понятно' }).click();
+  await gotIt(page);
   await expect(page.locator('#hint-title')).toHaveText('С чего начать: эксперт');
   await expect(page.locator('#hint-steps')).toContainText('Моё досье');
   await shot(page, 'help-04-pervyj-vhod-ekspert');
-  await page.getByRole('button', { name: 'Понятно' }).click();
+  await gotIt(page);
   await expect(page.locator('#hint-title')).toHaveText('С чего начать: заказчик');
-  await page.getByRole('button', { name: 'Понятно' }).click();
+  await gotIt(page);
   await expect(page.locator('#hint-box')).toBeHidden();
   // На другом устройстве (новый вход) подсказки уже закрыты.
   const ctx = await browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, isMobile: true, hasTouch: true, locale: 'ru-RU' });
@@ -91,4 +99,31 @@ test('эксперт и руководитель: подсказки по каж
   await expect(dp.locator('#hint-title')).toHaveText('С чего начать: диспетчер');
   await shot(dp, 'help-05-pervyj-vhod-dispetcher');
   await d.close();
+});
+
+test('быстрый переход: догрузившийся раздел не закрывает новый (организация → «Как работать»)', async ({ page }) => {
+  const u = await signIn(page, '+79990000704');
+  let orgId;
+  await db(async (c) => {
+    orgId = (await c.query("insert into organizations (name) values ('ООО «Медленная связь»') returning id")).rows[0].id;
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head')", [orgId, u.id]);
+  });
+  await page.goto('/kabinet');
+  await gotIt(page);
+  await gotIt(page);
+  // Организация отвечает медленно (2 с); человек за это время уходит в «Как работать».
+  await page.route(`**/api/orgs/${orgId}`, async (route) => { await new Promise((r) => setTimeout(r, 2000)); await route.continue(); });
+  await page.evaluate((id) => { location.hash = `org=${id}`; }, orgId);
+  await page.evaluate(() => { location.hash = 'help'; });
+  await expect(page.locator('#help-view')).toBeVisible();
+  await page.waitForTimeout(2500);
+  await expect(page.locator('#help-view')).toBeVisible();
+  await expect(page.locator('#org-view')).toBeHidden();
+  // Чужая или удалённая заявка, догрузившись, тоже не закрывает новый раздел экраном «не найдено».
+  await page.route('**/api/orders/00000000-0000-4000-8000-000000000000', async (route) => { await new Promise((r) => setTimeout(r, 1500)); await route.continue(); });
+  await page.evaluate(() => { location.hash = 'order=00000000-0000-4000-8000-000000000000'; });
+  await page.evaluate(() => { location.hash = 'help'; });
+  await page.waitForTimeout(2000);
+  await expect(page.locator('#help-view')).toBeVisible();
+  await expect(page.locator('#missing-view')).toBeHidden();
 });

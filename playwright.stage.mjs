@@ -9,7 +9,8 @@ export default defineConfig({
   // Облако отвечает медленнее локального стенда: ждём появления на экране до 15 с.
   expect: { timeout: 15_000 },
   workers: 1,
-  reporter: [['list']],
+  // stage-report.json — итог прогона для ночного отчёта (2.56, tests/tools/nightly-report.mjs).
+  reporter: [['list'], ['json', { outputFile: 'test-results/stage-report.json' }]],
   outputDir: 'test-results/artifacts',
   use: {
     baseURL: process.env.UI_BASE_URL,

@@ -444,8 +444,9 @@ function unzip(buf) {
   return out;
 }
 
-// ZIP: XML сжимается (метод 8), остальное — как есть, если сжатие не помогает.
-function zip(entries) {
+// ZIP: XML сжимается (метод 8), остальное — как есть, если сжатие не помогает. store — не сжимать файлы больше 1 МБ
+// (PDF, фото — уже сжаты; архив дела, 2.55).
+export function zip(entries, { store = false } = {}) {
   const local = [];
   const central = [];
   let offset = 0;
@@ -453,7 +454,7 @@ function zip(entries) {
     const data = Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8');
     const nameBuf = Buffer.from(name, 'utf8');
     const crc = zlib.crc32(data);
-    const packed = zlib.deflateRawSync(data);
+    const packed = store && data.length > 1024 * 1024 ? data : zlib.deflateRawSync(data);
     const method = packed.length < data.length ? 8 : 0;
     const body = method === 8 ? packed : data;
     const head = Buffer.alloc(30);

@@ -1,0 +1,54 @@
+name: Nightly stage run
+
+# Ночной полный прогон площадки (задача 2.56): каждую ночь в 02:00 по Москве основная версия выкладывается на
+# проверочную площадку (stage) и проходит все сценарии на телефоне 412×915 — общий прогон, демо-площадка с экскурсией,
+# служебный вход, витрина. Вход через проблему (20 вопросов настоящей модели) — по воскресеньям: расходует бюджет модели.
+# Итог — в ветку nightly-report (файл NIGHTLY.md), оттуда «Работник Дело» переносит его в STATE.md. Красный прогон —
+# письмо GitHub владельцу репозитория. Только stage; боевой сайт не трогается.
+on:
+  schedule:
+    - cron: '0 23 * * 0-5'   # 02:00 МСК, понедельник–суббота
+    - cron: '0 23 * * 6'     # 02:00 МСК, воскресенье — ещё и 20 вопросов настоящей модели
+  workflow_dispatch:
+
+concurrency: nightly-stage
+
+jobs:
+  run:
+    uses: ./.github/workflows/deploy.yml
+    secrets: inherit
+    with:
+      demo: true
+      problems: ${{ github.event.schedule == '0 23 * * 6' }}
+
+  report:
+    needs: run
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: stage-screens
+          path: test-results
+        continue-on-error: true
+      - name: Итог прогона
+        env:
+          RESULT: ${{ needs.run.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          node tests/tools/nightly-report.mjs test-results/stage-report.json "$RESULT" "$RUN_URL" "${GITHUB_SHA::7}" > "$RUNNER_TEMP/NIGHTLY.md"
+          cat "$RUNNER_TEMP/NIGHTLY.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Отчёт в ветку nightly-report
+        run: |
+          git config user.name "nightly-stage"
+          git config user.email "nightly-stage@users.noreply.github.com"
+          git fetch origin nightly-report || true
+          if git rev-parse --verify origin/nightly-report >/dev/null 2>&1; then git checkout -B nightly-report origin/nightly-report; else git checkout --orphan nightly-report && git rm -rfq .; fi
+          cp "$RUNNER_TEMP/NIGHTLY.md" NIGHTLY.md
+          git add NIGHTLY.md
+          git commit -qm "Ночной прогон площадки: $(date -u +%Y-%m-%d)" || exit 0
+          git push origin nightly-report
