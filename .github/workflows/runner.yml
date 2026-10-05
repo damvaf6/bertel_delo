@@ -8,9 +8,9 @@ name: Runner (Yandex Cloud)
 # «Administration: read and write» (нужен, чтобы получить ключ регистрации машины; кладёт Дамир).
 # Действия: create — создать, если нет или не на связи; recreate — пересоздать; status — только показать;
 # clean — только удалить старые снимки на GitHub.
+# Пока хранилище открытое (решение Дамира 05.10.2026, вопрос 22) — своя машина не подключается: запуск только по кнопке
+# и останавливается, если хранилище открыто. Подключать — перед закрытием хранилища (DECISIONS.md, 05.10.2026).
 on:
-  push:
-    paths: ['.github/workflows/runner.yml', 'infra/runner/**']
   workflow_dispatch:
     inputs:
       action:
@@ -38,6 +38,11 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       RUNNER_PAT: ${{ secrets.RUNNER_PAT }}
     steps:
+      - name: Хранилище закрытое
+        if: env.ACTION == 'create' || env.ACTION == 'recreate'
+        run: |
+          [ "${{ github.event.repository.private }}" = true ] || { echo "::error::Хранилище открыто — своя машина проверок не подключается (решение Дамира 05.10.2026)"; exit 1; }
+
       - uses: actions/checkout@v5
 
       - name: Старые снимки проверок на GitHub — удалить (разрешено Дамиром; другие данные не трогаем)

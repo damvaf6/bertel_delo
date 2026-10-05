@@ -26,7 +26,7 @@ on:
 jobs:
   validate:
     if: github.event_name == 'pull_request'
-    runs-on: [self-hosted, delo-ci]
+    runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: infra/terraform
@@ -41,7 +41,7 @@ jobs:
 
   deploy:
     if: github.event_name == 'workflow_dispatch'
-    runs-on: [self-hosted, delo-ci]
+    runs-on: ubuntu-latest
     environment: delo-${{ inputs.env }}
     concurrency: infra-${{ inputs.env }}
     env:
