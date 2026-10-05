@@ -22,6 +22,14 @@ async function db(fn) {
   try { return await fn(c); } finally { await c.end(); }
 }
 
+// «Понятно» — и дождаться, пока сервер запомнит закрытую подсказку (иначе перезагрузка успевает раньше).
+async function gotIt(page) {
+  await Promise.all([
+    page.waitForResponse((r) => r.url().endsWith('/api/me/hints') && r.request().method() === 'POST' && r.ok()),
+    page.getByRole('button', { name: 'Понятно' }).click(),
+  ]);
+}
+
 async function shot(page, name) {
   const width = await page.evaluate(() => document.documentElement.scrollWidth);
   expect(width, `${name}: страница шире экрана`).toBeLessThanOrEqual(412);
@@ -36,7 +44,7 @@ test('первый вход заказчика: «С чего начать» о�
   await expect(page.locator('#hint-title')).toHaveText('С чего начать: заказчик');
   await expect(page.locator('#hint-steps li')).toHaveCount(4);
   await shot(page, 'help-01-pervyj-vhod-zakazchik');
-  await page.getByRole('button', { name: 'Понятно' }).click();
+  await gotIt(page);
   await expect(box).toBeHidden();
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Мои заявки' })).toBeVisible();
@@ -63,13 +71,13 @@ test('эксперт и руководитель: подсказки по каж
   await page.goto('/kabinet');
   await expect(page.locator('#hint-title')).toHaveText('С чего начать: руководитель организации');
   await shot(page, 'help-03-pervyj-vhod-rukovoditel');
-  await page.getByRole('button', { name: 'Понятно' }).click();
+  await gotIt(page);
   await expect(page.locator('#hint-title')).toHaveText('С чего начать: эксперт');
   await expect(page.locator('#hint-steps')).toContainText('Моё досье');
   await shot(page, 'help-04-pervyj-vhod-ekspert');
-  await page.getByRole('button', { name: 'Понятно' }).click();
+  await gotIt(page);
   await expect(page.locator('#hint-title')).toHaveText('С чего начать: заказчик');
-  await page.getByRole('button', { name: 'Понятно' }).click();
+  await gotIt(page);
   await expect(page.locator('#hint-box')).toBeHidden();
   // На другом устройстве (новый вход) подсказки уже закрыты.
   const ctx = await browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, isMobile: true, hasTouch: true, locale: 'ru-RU' });
