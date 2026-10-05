@@ -2784,7 +2784,10 @@ test('остальные виды оценки (2.43): недвижимость,
     if (k.approach !== undefined) {
       await expect(sp.locator('#draft-approaches')).toBeVisible();
       for (const a of k.approach ?? []) {
+        // Ждём сохранения именно этой отметки: надпись «Подходы сохранены» уже стоит от предыдущей.
+        const saved = sp.waitForResponse((r) => r.url().endsWith(`/api/orders/${o.id}/approaches`) && r.request().method() === 'PUT');
         await sp.locator('#draft-approaches').getByLabel(a).check();
+        expect((await saved).status()).toBe(200);
         await expect(sp.locator('#draft-msg')).toHaveText('Подходы сохранены');
       }
     } else {
