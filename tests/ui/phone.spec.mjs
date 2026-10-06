@@ -2393,7 +2393,7 @@ test('«Сегодня» (2.34, 2.63): эксперт — горит, верну
   await dl.first().scrollIntoViewIfNeeded();
   await shot(hp, '98a-segodnya-dosje-ekspertov');
   await hb.locator(`li[data-today-item="org-sign-${orgId}"] button`).click();
-  await expect(hp).toHaveURL(new RegExp(`#org=${orgId}$`));
+  await expect(hp).toHaveURL(new RegExp(`#org=${orgId}&case=[0-9A-F]{8}&to=sign$`));
 
   // Заказчику карточка не показывается.
   await page.goto('/kabinet');
@@ -3389,4 +3389,153 @@ test('как эксперт (2.66): квартира для сделки — д�
   await shot(sp, '99q-kvartira-sdano');
   await sctx.close();
   await dctx.close();
+});
+
+test('как руководитель (2.67): организация, приглашение, назначение, переписка, возврат, подпись, передача дела', async ({ page, browser, baseURL }) => {
+  test.setTimeout(180_000);
+  const C = '+79990006701', D = '+79990006702', HD = '+79990006703', S1 = '+79990006704', S2 = '+79990006705';
+  await signIn(page, C);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const dp = await ctx(), hp = await ctx(), sp = await ctx(), bp = await ctx();
+  const disp = await signIn(dp, D), spec = await signIn(sp, S1), spec2 = await signIn(bp, S2);
+  await signIn(hp, HD);
+  await hp.request.patch('/api/me', { data: { full_name: 'Руководов Роман Романович' }, headers: H });
+  await sp.request.patch('/api/me', { data: { full_name: 'Экспертова Елена Евгеньевна' }, headers: H });
+  await bp.request.patch('/api/me', { data: { full_name: 'Сменщиков Семён Сергеевич' }, headers: H });
+  await db(async (c) => {
+    await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    for (const u of [spec.id, spec2.id]) {
+      await c.query('insert into specialists (user_id) values ($1)', [u]);
+      await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [u]);
+    }
+  });
+  const orgName = `ООО «Бюро руководителя ${Date.now()}»`;
+
+  // 1. Новая организация: вместо пустой «Нагрузки» — подсказка и переход к приглашению.
+  await hp.goto('/kabinet#orgs');
+  await hp.locator('#org-name').fill(orgName);
+  await hp.locator('#org-inn').fill('7707083893');
+  await hp.locator('#create-org').click();
+  await expect(hp.locator('#org-title')).toHaveText(orgName);
+  await expect(hp.locator('#org-no-experts')).toBeVisible();
+  await expect(hp.locator('#org-cases-load-title')).toBeHidden();
+  await expect(hp.locator('#org-cases-empty')).toBeHidden();
+  await shot(hp, '99r-rukovoditel-novaya-organizaciya');
+  await hp.getByRole('button', { name: 'К приглашению экспертов' }).click();
+  await expect(hp.locator('#invite-phone')).toBeFocused();
+  for (const ph of ['+7 999 000-67-04', '+79990006705']) {
+    await hp.locator('#invite-phone').fill(ph);
+    await hp.locator('#invite').click();
+    await expect(hp.locator('#invite-msg')).toHaveText('Приглашение отправлено');
+  }
+  await expect(hp.locator('#org-invites li')).toHaveCount(2);
+
+  // 2. Эксперты принимают приглашение и одной кнопкой начинают работать от организации.
+  for (const p of [sp, bp]) {
+    await p.goto('/kabinet#orgs');
+    await p.getByRole('button', { name: 'Принять' }).click();
+    await expect(p.locator('#org-title')).toHaveText(orgName);
+    await expect(p.locator('#org-work-lead')).toContainText('Вы специалист, но работаете от себя');
+    if (p === sp) await shot(p, '99s-ekspert-rabotat-ot-organizacii');
+    await p.getByRole('button', { name: 'Работать от этой организации' }).click();
+    await expect(p.locator('#org-work-msg')).toHaveText(`Теперь Вы работаете от ${orgName}: руководитель может назначать Вам её дела`);
+    await p.reload();
+    await expect(p.locator('#org-work-box')).toBeHidden();
+  }
+  await hp.reload();
+  await expect(hp.locator('#org-cases-load > li')).toHaveCount(2);
+  await expect(hp.locator('#org-no-experts')).toBeHidden();
+  await expect(hp.locator('#org-cases-empty')).toHaveText('Пока дел нет.');
+
+  // 3. Диспетчер предлагает дело организации; уведомление ведёт прямо к делу, имена в списке не обрезаны.
+  const title = `Квартира руководителю ${Date.now()}`;
+  const o = (await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title }, headers: H })).json()).order;
+  await page.request.patch(`/api/orders/${o.id}`, { data: { deadline: inDays(7), fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, ул. Руководящая, 3', area: '48' } }, headers: H });
+  await page.request.post(`/api/orders/${o.id}/status`, { data: { from: 'new', to: 'matching' }, headers: H });
+  await dp.request.put(`/api/orders/${o.id}/price`, { data: { price: '15000' }, headers: H });
+  await page.request.post(`/api/orders/${o.id}/payments`, { headers: H });
+  expect((await page.request.post(`/api/orders/${o.id}/payments/refresh`, { headers: H })).status()).toBe(200);
+  const orgId = (await db((c) => c.query('select id from organizations where name = $1', [orgName]))).rows[0].id;
+  expect((await dp.request.post(`/api/orders/${o.id}/offer`, { data: { org_id: orgId, from: 'matching' }, headers: H })).status()).toBe(200);
+  const ref = o.id.slice(0, 8).toUpperCase();
+  await hp.goto('/kabinet#notifications');
+  const offerNote = hp.locator('#notifications li').filter({ hasText: 'Организации предложено дело' });
+  await expect(offerNote).toContainText(`Организация ${orgName} · заявка № ${ref}`);
+  await offerNote.getByRole('button').click();
+  await expect(hp).toHaveURL(new RegExp(`#org=${orgId}&case=${ref}&to=pending$`));
+  const pend = hp.locator('#org-pending > li').first();
+  await expect(pend).toHaveClass(/flash/);
+  await expect(hp.locator('#org-cases-empty')).toBeHidden();
+  const pick = pend.locator('select');
+  await pick.selectOption({ label: 'Экспертова Елена Евгеньевна · в работе 0' });
+  // Список экспертов — во всю ширину карточки: имя не обрезано.
+  const [pw, lw] = await Promise.all([pick.evaluate((x) => x.getBoundingClientRect().width), pend.evaluate((x) => x.getBoundingClientRect().width)]);
+  expect(pw).toBeGreaterThan(lw - 2);
+  await shot(hp, '99t-rukovoditel-naznachenie');
+  await pend.getByRole('button', { name: 'Назначить' }).click();
+  // Подтверждение видно и после того, как список «Ждут назначения» опустел.
+  await expect(hp.locator('#org-pending-msg')).toBeVisible();
+  await expect(hp.locator('#org-pending-msg')).toHaveText('Дело предложено эксперту — он примет его или откажется');
+  await expect(hp.locator('#org-pending-box')).toBeHidden();
+  await sp.goto('/kabinet');
+  sp.once('dialog', (d) => d.accept());
+  await sp.locator('#orders li').filter({ hasText: title }).getByRole('button', { name: 'Принять дело' }).click();
+  await expect(sp.locator('#order-status')).toHaveText('В работе');
+
+  // 4. Переписка: руководитель пишет, эксперт отвечает; уведомление открывает переписку этого дела, видно «ждёт ответа».
+  await hp.reload();
+  const row = hp.locator(`#org-cases > li[data-case="№ ${ref}"]`);
+  await row.locator('[data-chat] summary').click();
+  await row.getByLabel('Сообщение во внутренней переписке').fill('Елена, срок жёсткий — сдайте до четверга.');
+  await row.getByRole('button', { name: 'Отправить' }).click();
+  await expect(row.locator('[data-chat] .msg')).toHaveText('Сообщение отправлено');
+  await sp.reload();
+  await sp.locator('#org-chat textarea').fill('Хорошо, сдам в среду.');
+  await sp.locator('#org-chat button[type=submit]').click();
+  await expect(sp.locator('#org-chat')).toContainText('Хорошо, сдам в среду.');
+  await hp.goto('/kabinet#notifications');
+  await hp.locator('#notifications li').filter({ hasText: 'Эксперт написал Вам по делу' }).getByRole('button').click();
+  await expect(hp).toHaveURL(new RegExp(`#org=${orgId}&case=${ref}&to=chat$`));
+  await expect(row.locator('[data-chat] summary')).toHaveText('Переписка с экспертом · сообщений: 2 · ждёт Вашего ответа');
+  await expect(row.locator('[data-chat]')).toHaveAttribute('open', '');
+  await expect(row.locator('[data-chat] .chat')).toContainText('Хорошо, сдам в среду.');
+  await shot(hp, '99u-rukovoditel-perepiska');
+
+  // 5. Эксперт подписал — уведомление с номером дела ведёт к подписи; возврат с замечанием; повторная подпись; подпись организации.
+  await sp.locator('#result-file').setInputFiles({ name: 'Отчёт.pdf', mimeType: 'application/pdf', buffer: makePdf([['Отчёт об оценке (тест)']]) });
+  await expect(sp.locator('#docs li').getByRole('button', { name: 'Подписать' })).toHaveCount(1);
+  await signResults(sp);
+  await hp.goto('/kabinet#notifications');
+  const signNote = hp.locator('#notifications li').filter({ hasText: 'нужна подпись организации' });
+  await expect(signNote).toContainText(`заявка № ${ref}`);
+  await signNote.getByRole('button').click();
+  await expect(hp).toHaveURL(new RegExp(`#org=${orgId}&case=${ref}&to=sign$`));
+  await expect(hp.locator(`#org-sign > li[data-item="№ ${ref}"]`)).toHaveClass(/flash/);
+  const item = hp.locator('#org-sign li.doc').first();
+  await item.getByRole('button', { name: 'Вернуть эксперту' }).click();
+  await item.locator('textarea').fill('Раздел 4: нет корректировки на этаж.');
+  await item.getByRole('button', { name: 'Вернуть с замечанием' }).click();
+  await expect(hp.locator('#org-sign-msg')).toHaveText('Файл возвращён эксперту с замечанием — его подпись снята');
+  await sp.reload();
+  await expect(sp.locator('#org-returns .comment').first()).toHaveText('Раздел 4: нет корректировки на этаж.');
+  await expect(sp.locator('#docs li').getByRole('button', { name: 'Подписать' })).toHaveCount(1);
+  await signResults(sp);
+  // «Сегодня» тоже ведёт прямо к подписи этого дела.
+  await hp.goto('/kabinet');
+  await hp.locator(`#today-box li[data-today-item="org-sign-${orgId}"] button`).click();
+  await expect(hp).toHaveURL(new RegExp(`#org=${orgId}&case=${ref}&to=sign$`));
+  hp.once('dialog', (d) => d.accept());
+  await hp.locator('#org-sign li.doc').first().getByRole('button', { name: 'Подписать от организации' }).click();
+  await expect(hp.locator('#org-sign-msg')).toHaveText('Файл подписан от организации');
+
+  // 6. Передача дела другому эксперту.
+  await hp.reload();
+  await row.locator('[data-transfer] summary').click();
+  await expect(row.locator('[data-transfer] select option')).toHaveText(['Сменщиков Семён Сергеевич']);
+  await row.getByLabel(/Причина передачи дела/).fill('Уходит в отпуск');
+  await row.getByRole('button', { name: 'Передать дело' }).click();
+  await expect(hp.locator('#org-cases-msg')).toHaveText('Дело передано — новый эксперт получил уведомление');
+  await expect(hp.locator(`#org-cases > li[data-case="№ ${ref}"]`)).toContainText('эксперт: Сменщиков Семён Сергеевич');
+  await shot(hp, '99v-rukovoditel-peredal');
+  for (const p of [dp, hp, sp, bp]) await p.context().close();
 });

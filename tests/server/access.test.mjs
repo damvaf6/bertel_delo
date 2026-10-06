@@ -1132,7 +1132,8 @@ test('дела экспертов (2.16): видит только руковод
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.cases.length, 1);
   const c = r.body.cases[0];
-  assert.deepEqual(Object.keys(c).sort(), ['active', 'deadline', 'expert', 'fee_kop', 'id', 'order_ref', 'overdue', 'payout', 'returned_open', 'service', 'sign_wait', 'status', 'status_name', 'transfer_to']);
+  assert.deepEqual(Object.keys(c).sort(), ['active', 'chat', 'deadline', 'expert', 'fee_kop', 'id', 'order_ref', 'overdue', 'payout', 'returned_open', 'service', 'sign_wait', 'status', 'status_name', 'transfer_to']);
+  assert.deepEqual(Object.keys(c.chat).sort(), ['expert_last', 'messages']);   // переписка (2.67): только число и чьё последнее, без текста
   assert.equal(c.status, 'review');
   assert.equal(c.expert, 'Эксперт Б');
   assert.equal(c.fee_kop, 1_200_000, 'вознаграждение — 80% цены');

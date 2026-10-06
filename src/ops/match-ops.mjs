@@ -333,7 +333,7 @@ export function matchOps() {
             if (cur.executor_user_id && cur.executor_user_id !== specialistId) await notify(tx, 'offer_withdrawn', { users: [cur.executor_user_id], orderId: cur.id, actor });
             if (cur.offer_org_id && cur.offer_org_id !== orgId) await notify(tx, 'org_offer_withdrawn', { users: await orgHeads(tx, cur.offer_org_id), orgId: cur.offer_org_id, actor });
           }
-          if (toOrg) await notify(tx, 'org_offer', { users: await orgHeads(tx, orgId), orgId, actor });
+          if (toOrg) await notify(tx, 'org_offer', { users: await orgHeads(tx, orgId), orderId: cur.id, orgId, actor });
           else await notify(tx, 'offer', { users: [specialistId], orderId: cur.id, actor });
           return o;
         });

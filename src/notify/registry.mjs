@@ -18,6 +18,8 @@ export const TYPE = Object.fromEntries(TYPES.map((t) => [t.id, t]));
 
 // title — строка в кабинете и в СМС. order: true — событие по заявке (в СМС добавляется её короткий номер).
 // section — куда ведёт уведомление без заявки (2.45): 'orgs' (с организацией — сразу в неё), 'specialist', 'specialists', 'problems'.
+// focus (2.67) — уведомление руководителю по делу организации ведёт прямо к делу в «Организации»: 'pending' (назначить),
+// 'sign' (подписать), 'chat' (переписка с экспертом); номер дела передаётся в notify() как orderId.
 // mail: true — заказчику заявки, пришедшей по письму, уходит и письмо в ту же переписку (1.9, src/mail/mail.mjs).
 export const EVENTS = {
   submitted: { type: 'dispatch', title: 'Новая заявка ждёт подбора исполнителя', order: true },
@@ -44,12 +46,12 @@ export const EVENTS = {
   onsite_assigned: { type: 'executor_work', title: 'Вам назначен выезд на объект', order: false, section: 'specialist' },
   onsite_cancelled: { type: 'executor_work', title: 'Выезд на объект отменён', order: false, section: 'specialist' },
   // Руководителю организации исполнителя (2.5а): эксперт подписал результат — нужна подпись организации (раздел «Организации»).
-  org_sign_needed: { type: 'executor_work', title: 'Эксперт подписал заключение — нужна подпись организации', order: false, section: 'orgs' },
+  org_sign_needed: { type: 'executor_work', title: 'Эксперт подписал заключение — нужна подпись организации', order: false, section: 'orgs', focus: 'sign' },
   // Эксперту (2.27): руководитель организации вернул файл с замечанием до подписи организации — подпись эксперта снята.
   org_returned: { type: 'executor_work', title: 'Руководитель вернул отчёт с замечанием — исправьте и подпишите заново', order: true },
   // Внутренняя переписка организации по делу (2.28): эксперту — от руководителя; руководителю — от эксперта («Дела экспертов»).
   org_chat_expert: { type: 'executor_work', title: 'Руководитель организации написал Вам по делу', order: true },
-  org_chat_head: { type: 'executor_work', title: 'Эксперт написал Вам по делу — «Дела экспертов» в разделе «Организации»', order: false, section: 'orgs' },
+  org_chat_head: { type: 'executor_work', title: 'Эксперт написал Вам по делу — «Дела экспертов» в разделе «Организации»', order: false, section: 'orgs', focus: 'chat' },
   rework: { type: 'executor_work', title: 'Результат возвращён на доработку', order: true },
   // Напоминания о сроках (2.13): src/notify/reminders.mjs, раз в минуту вместе с повтором СМС.
   deadline_soon: { type: 'executor_work', title: 'До срока по делу осталось 3 дня', order: true },
@@ -89,8 +91,8 @@ export const EVENTS = {
   refund_failed: { type: 'money', title: 'Возврат денег не прошёл — диспетчер повторит', order: true },
 
   // Руководителю организации (2.17) — без номера заявки: заявку он не видит, дело — в «Делах экспертов» раздела «Организации».
-  org_offer: { type: 'org_cases', title: 'Организации предложено дело — назначьте эксперта в разделе «Организации»', order: false, section: 'orgs' },
-  org_expert_declined: { type: 'org_cases', title: 'Эксперт отказался от дела — назначьте другого или откажитесь', order: false, section: 'orgs' },
+  org_offer: { type: 'org_cases', title: 'Организации предложено дело — назначьте эксперта в разделе «Организации»', order: false, section: 'orgs', focus: 'pending' },
+  org_expert_declined: { type: 'org_cases', title: 'Эксперт отказался от дела — назначьте другого или откажитесь', order: false, section: 'orgs', focus: 'pending' },
   org_offer_withdrawn: { type: 'org_cases', title: 'Предложение дела организации снято', order: false, section: 'orgs' },
 
   invite: { type: 'org_invites', title: 'Вас пригласили в организацию', order: false, section: 'orgs' },
@@ -98,6 +100,7 @@ export const EVENTS = {
 
 const ID_RE = /^[a-z_]{1,40}$/;
 export const SECTIONS = ['orgs', 'specialist', 'specialists', 'problems'];
+export const FOCUS = ['pending', 'sign', 'chat'];
 
 // Проверка реестра при запуске: ошибка в описании — сервер не стартует (как у модулей-профессий).
 export function validateRegistry(types = TYPES, events = EVENTS) {
@@ -114,6 +117,7 @@ export function validateRegistry(types = TYPES, events = EVENTS) {
     if (!e.title || e.title.length > 120) throw new Error(`уведомления: у события «${id}» нет текста или он длиннее 120 знаков`);
     // Уведомление без заявки должно куда-то вести (2.45): иначе человек видит строку и не знает, где действовать.
     if (e.section !== undefined && !SECTIONS.includes(e.section)) throw new Error(`уведомления: у события «${id}» неизвестный раздел «${e.section}»`);
+    if (e.focus !== undefined && (e.section !== 'orgs' || !FOCUS.includes(e.focus))) throw new Error(`уведомления: у события «${id}» неверный focus`);
     if (!e.order && !e.section) throw new Error(`уведомления: событие «${id}» без заявки — укажите раздел (section)`);
   }
 }

@@ -24,6 +24,9 @@ export async function loadOrgCases(org) {
   $('org-cases-money').replaceChildren(
     ...fact(`Выплачено экспертам · ${month}`, rub(money.paid_kop), 'money-sum'),
     ...fact('Ждёт выдачи результата', rub(money.waiting_kop)));
+  // Экспертов, работающих от организации, ещё нет (2.67) — вместо пустой «Нагрузки» подсказка и переход к приглашению.
+  $('org-cases-load-title').classList.toggle('hidden', load.length === 0);
+  $('org-no-experts').classList.toggle('hidden', load.length > 0);
   $('org-cases-load').replaceChildren(...load.map((l) => el('li', { 'data-expert': l.user_id },
     el('div', { class: 'title', text: l.full_name }),
     el('div', { class: `muted${l.overdue ? ' overdue' : ''}`, text: [`в работе: ${l.in_work}`, l.offered ? `предложено: ${l.offered}` : null,
@@ -31,7 +34,7 @@ export async function loadOrgCases(org) {
     expertLink(l.user_id))));
   const active = cases.filter((c) => c.active);
   const done = cases.filter((c) => !c.active);
-  $('org-cases-empty').classList.toggle('hidden', cases.length > 0);
+  $('org-cases-empty').classList.toggle('hidden', cases.length > 0 || pending.length > 0 || load.length === 0);
   $('org-cases').replaceChildren(
     ...active.map((c) => caseItem(org, c)),
     ...(done.length ? [el('li', { class: 'group', text: `Завершённые · ${done.length}` })] : []),
@@ -53,6 +56,19 @@ function caseItem(org, c) {
     ...(c.returned_open ? [el('div', { class: 'muted', 'data-role': 'returned', text: 'Вы вернули отчёт эксперту — ждём исправления' })] : []),
     ...(c.status === 'in_work' ? [transferDetails(org, c)] : []),
     chatDetails(c));
+}
+
+// Открыть организацию сразу на нужном деле (2.67): из уведомления или «Сегодня» — назначить, подписать, ответить эксперту.
+export function focusOrgCase({ ref, to }) {
+  const r = CSS.escape(ref);
+  if (to === 'sign' && document.querySelector(`#org-sign li[data-item="${r}"]`)) return goSign(ref);
+  const li = (to === 'pending' && document.querySelector(`#org-pending li[data-pending="${r}"]`))
+    || document.querySelector(`#org-cases li[data-case="${r}"]`);
+  if (!li) return;
+  if (to === 'chat') li.querySelector('details[data-chat]')?.setAttribute('open', '');
+  li.scrollIntoView({ block: 'start' });
+  li.classList.add('flash');
+  setTimeout(() => li.classList.remove('flash'), 2000);
 }
 
 // Передать дело в работе другому эксперту организации (2.62): заболел, ушёл. Файлы, черновик, осмотр и переписка
@@ -82,6 +98,7 @@ function transferDetails(org, c) {
 
 // Перейти к делу в «Подписи организации» и выделить его.
 function goSign(ref) {
+  document.querySelector(`#org-sign li.signed[data-item="${CSS.escape(ref)}"] details`)?.setAttribute('open', '');
   const li = document.querySelector(`#org-sign li[data-item="${CSS.escape(ref)}"]`) ?? $('org-sign-box');
   li.scrollIntoView({ behavior: 'smooth', block: 'start' });
   li.classList.add('flash');
@@ -91,7 +108,10 @@ function goSign(ref) {
 // Внутренняя переписка с экспертом по делу (2.28): раскрывается по нажатию; заказчик и диспетчер её не видят.
 function chatDetails(c) {
   const box = el('div');
-  const d = el('details', { class: 'org-chat', 'data-chat': c.order_ref }, el('summary', { text: 'Переписка с экспертом' }), box);
+  // Сколько сообщений и ждёт ли эксперт ответа — видно, не раскрывая (2.67).
+  const n = c.chat?.messages ?? 0;
+  const title = ['Переписка с экспертом', n ? `сообщений: ${n}` : null, c.chat?.expert_last ? 'ждёт Вашего ответа' : null].filter(Boolean).join(' · ');
+  const d = el('details', { class: 'org-chat', 'data-chat': c.order_ref }, el('summary', { text: title }), box);
   d.addEventListener('toggle', () => { if (d.open && !box.firstChild) orgChat(box, c.id); });
   return d;
 }
@@ -106,10 +126,11 @@ function pendingItem(org, p) {
     el('div', { class: p.overdue ? 'overdue big' : 'muted', text: deadline }),
     el('div', { class: 'muted', text: p.fee_kop != null ? `вознаграждение ${rub(p.fee_kop)}` : 'цена ещё не назначена' }),
     ...(p.declined ? [el('div', { class: 'muted', text: `Эксперт отказался: ${p.declined}` })] : []),
-    ...(p.experts.length ? [el('div', { class: 'row' }, pick,
-      el('button', { 'data-action': 'assign', onclick: () => assign(org, p, pick.value) }, 'Назначить'))]
-      : [el('div', { class: 'muted', text: 'Свободных экспертов с допуском на эту услугу нет.' })]),
-    el('button', { class: 'secondary', 'data-action': 'org-decline', onclick: () => decline(org, p) }, 'Отказаться от дела'));
+    // Список экспертов — во всю ширину: имя и нагрузка не обрезаются на телефоне (2.67).
+    ...(p.experts.length ? [pick] : [el('div', { class: 'muted', text: 'Свободных экспертов с допуском на эту услугу нет.' })]),
+    el('div', { class: 'row gap' },
+      ...(p.experts.length ? [el('button', { 'data-action': 'assign', onclick: () => assign(org, p, pick.value) }, 'Назначить')] : []),
+      el('button', { class: 'secondary', 'data-action': 'org-decline', onclick: () => decline(org, p) }, 'Отказаться от дела')));
 }
 
 async function assign(org, p, specialistId) {

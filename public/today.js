@@ -57,16 +57,19 @@ export async function loadToday() {
     );
   }
   for (const g of t.orgs) {
-    const toOrg = () => { location.hash = `org=${g.id}`; };
+    // Сразу к делу в разделе организации (2.67): назначить, подписать или само дело в «Делах экспертов».
+    const toOrg = (to) => (x) => {
+      location.hash = x?.order_ref ? `org=${g.id}&case=${x.order_ref.slice(2)}&to=${to}` : `org=${g.id}`;
+    };
     const caseLine = (x) => [`${x.service} · ${x.order_ref}`, [x.expert, deadline(x, t.today)].filter(Boolean).join(' · ')];
     const part = [
-      ...group(`org-sign-${g.id}`, 'Ждут подписи организации', g.to_sign, (x) => [...caseLine(x), `файлов: ${x.files}`], toOrg),
-      ...group(`org-pending-${g.id}`, 'Ждут назначения эксперта', g.pending, caseLine, toOrg),
-      ...group(`org-hot-${g.id}`, 'Горит срок у экспертов', g.hot, caseLine, toOrg),
-      ...group(`org-returned-${g.id}`, 'Вернули эксперту — ждём исправления', g.returned, (x) => [...caseLine(x), `замечание: ${x.comment}`], toOrg),
+      ...group(`org-sign-${g.id}`, 'Ждут подписи организации', g.to_sign, (x) => [...caseLine(x), `файлов: ${x.files}`], toOrg('sign')),
+      ...group(`org-pending-${g.id}`, 'Ждут назначения эксперта', g.pending, caseLine, toOrg('pending')),
+      ...group(`org-hot-${g.id}`, 'Горит срок у экспертов', g.hot, caseLine, toOrg('case')),
+      ...group(`org-returned-${g.id}`, 'Вернули эксперту — ждём исправления', g.returned, (x) => [...caseLine(x), `замечание: ${x.comment}`], toOrg('case')),
       // Досье экспертов (2.63): только вид документа и срок; копии руководитель не видит.
       ...group(`org-dossier-${g.id}`, 'Документы экспертов: срок', g.dossier ?? [], (x) => [`${x.expert} · ${x.kind_name}`,
-        x.state === 'expired' ? `срок истёк ${dayRu(x.valid_until)} — по оценке эксперт снят с подбора` : `действует до ${dayRu(x.valid_until)} · осталось ${daysLeft(x.valid_until, t.today)} дн.`], toOrg),
+        x.state === 'expired' ? `срок истёк ${dayRu(x.valid_until)} — по оценке эксперт снят с подбора` : `действует до ${dayRu(x.valid_until)} · осталось ${daysLeft(x.valid_until, t.today)} дн.`], toOrg()),
     ];
     if (part.length) rows.push(el('li', { class: 'group org', text: `Организация: ${g.name}` }), ...part);
   }

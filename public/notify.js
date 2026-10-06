@@ -7,8 +7,9 @@ const $ = (id) => document.getElementById(id);
 const dateRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
 
 function item(n) {
-  const where = n.order_ref ? [n.order_title, `заявка ${n.order_ref.replace(' ', '\u00a0')}`].filter(Boolean).join(' · ')
-    : n.org_name ? `Организация ${quoted(n.org_name)}` : null;
+  // По делу организации (2.67) — и организация, и номер дела: у руководителя организаций может быть несколько.
+  const where = [n.order_title, n.org_name ? `Организация ${quoted(n.org_name)}` : null,
+    n.order_ref ? `заявка ${n.order_ref.replace(' ', '\u00a0')}` : null].filter(Boolean).join(' · ') || null;
   const body = [
     el('div', { class: 'title', text: n.title }),
     ...(where ? [el('div', { class: 'muted', text: where })] : []),
