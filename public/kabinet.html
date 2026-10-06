@@ -353,6 +353,36 @@
             <span class="muted" id="draft-gaps"></span>
           </div>
           <p class="muted hidden" id="draft-local">Есть несохранённая правка с этого телефона — она восстановлена. Нажмите «Сохранить правку».</p>
+          <details class="hidden" id="snip-box">
+            <summary>Мои заготовки абзацев</summary>
+            <p class="muted">Свои допущения, оговорки, формулировки выводов: сохраните один раз — вставляйте в любое своё дело туда,
+              где стоит курсор. Заготовки видите только Вы.</p>
+            <div class="hidden" id="snip-use">
+              <label for="snip-pick">Заготовка</label>
+              <select id="snip-pick"></select>
+              <p class="muted snip-preview" id="snip-preview"></p>
+              <div class="row gap">
+                <button type="button" id="snip-insert">Вставить в текст</button>
+                <button type="button" class="secondary" id="snip-edit">Изменить</button>
+                <button type="button" class="secondary" id="snip-remove">Убрать</button>
+              </div>
+            </div>
+            <form id="snip-form" novalidate>
+              <h3 id="snip-form-title">Новая заготовка</h3>
+              <label for="snip-kind">Вид</label>
+              <select id="snip-kind"></select>
+              <label for="snip-title">Название (видите только Вы)</label>
+              <input id="snip-title" maxlength="120" placeholder="Например: допущение о скрытых дефектах">
+              <label for="snip-body">Текст</label>
+              <textarea id="snip-body" maxlength="5000"></textarea>
+              <div class="row gap">
+                <button type="button" class="secondary" id="snip-from-selection">Взять выделенное в черновике</button>
+                <button type="submit" class="secondary" id="snip-save">Сохранить заготовку</button>
+                <button type="button" class="secondary hidden" id="snip-cancel">Отменить правку</button>
+              </div>
+            </form>
+            <p class="msg" id="snip-msg" role="status" aria-live="polite"></p>
+          </details>
         </div>
         <div class="hidden" id="draft-word-box">
           <button type="button" class="secondary" id="draft-word">Скачать Word</button>

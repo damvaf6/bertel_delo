@@ -1706,6 +1706,35 @@ test('сводка за месяц по экспертам (2.78): только 
   assert.equal((await report(ex.e1, '?format=csv')).status, 403);
 });
 
+test('свои заготовки абзацев (2.87): видит и меняет только сам эксперт; не специалист — «не найдено»', async () => {
+  for (const id of ['snippets.list', 'snippets.add', 'snippets.update', 'snippets.remove']) cover(id);
+  const exp = await login(S, '+79990001492');
+  await makeSpecialist(S.sql, exp.user.id);
+  const add = await exp.req('POST', '/api/specialist/me/snippets', { kind: 'assumption', title: 'Скрытые дефекты', body: 'Тестовая заготовка: скрытые дефекты не учитывались.' });
+  assert.equal(add.status, 201);
+  assert.equal(add.body.snippets.length, 1);
+  assert.equal(add.body.snippets[0].kind_name, 'Допущения');
+  // Неверный вид и пустой текст — отказ.
+  assert.equal((await exp.req('POST', '/api/specialist/me/snippets', { kind: 'x', title: 'a', body: 'b' })).status, 400);
+  assert.equal((await exp.req('POST', '/api/specialist/me/snippets', { kind: 'other', title: 'a', body: '  ' })).status, 400);
+  assert.equal((await U.owner.req('GET', '/api/specialist/me/snippets')).status, 404, 'не специалист');
+  assert.equal((await U.owner.req('POST', '/api/specialist/me/snippets', { kind: 'other', title: 'a', body: 'b' })).status, 404);
+  for (const k of ['spec', 'dispatcher', 'admin', 'headA', 'stranger']) {
+    const c = U[k];
+    assert.equal((await c.req('PUT', `/api/specialist/me/snippets/${add.body.id}`, { kind: 'other', title: 'Подлог', body: 'x' })).status, 404, k);
+    assert.equal((await c.req('DELETE', `/api/specialist/me/snippets/${add.body.id}`)).status, 404, k);
+    const own = (await c.req('GET', '/api/specialist/me/snippets')).body;
+    assert.ok(!JSON.stringify(own ?? {}).includes('Тестовая заготовка'), k);
+  }
+  const upd = await exp.req('PUT', `/api/specialist/me/snippets/${add.body.id}`, { kind: 'reservation', title: 'Оговорка', body: 'Тестовая заготовка: новая редакция.' });
+  assert.equal(upd.status, 200);
+  assert.deepEqual(upd.body.snippets.map((s) => [s.kind, s.title, s.body]), [['reservation', 'Оговорка', 'Тестовая заготовка: новая редакция.']]);
+  const del = await exp.req('DELETE', `/api/specialist/me/snippets/${add.body.id}`);
+  assert.equal(del.status, 200);
+  assert.equal(del.body.snippets.length, 0);
+  assert.equal((await exp.req('DELETE', `/api/specialist/me/snippets/${add.body.id}`)).status, 404, 'убранная — больше не найти');
+});
+
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {
   const PUBLIC = ['health', 'auth.code', 'auth.verify', 'files.memory', 'files.memory.upload', 'test.calls', 'test.script', 'test.reset', 'test.mail.inbound', 'stage.login', 'payments.notify',
     'inspect.view', 'inspect.photo', 'inspect.finish'];
