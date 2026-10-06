@@ -187,7 +187,8 @@ export function orderBrief(registry, order) {
     def ? `Услуга: ${def.module.name} — ${def.service.name}` : null,
     `Статус: ${STATUS_NAME[order.status]}`,
     order.deadline ? `Срок: ${order.deadline}` : 'Срок не указан',
-    `Основание: ${BASIS_KINDS[order.basis_kind]?.name ?? '—'}`,
+    // Номер и дата определения (2.79) — чтобы модель писала основание целиком, а не «Определение суда» без реквизитов.
+    `Основание: ${[BASIS_KINDS[order.basis_kind]?.name ?? '—', order.basis_number ? `№ ${order.basis_number}` : '', order.basis_date ? `от ${String(order.basis_date instanceof Date ? order.basis_date.toISOString() : order.basis_date).slice(0, 10).split('-').reverse().join('.')}` : ''].filter(Boolean).join(' ')}`,
     ...fields,
     // Подходы, которые выбрал исполнитель (2.33): черновик и проверка опираются на них.
     order.approaches?.length

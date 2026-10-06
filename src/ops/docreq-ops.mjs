@@ -38,13 +38,16 @@ async function view(sql, actor, order, registry) {
     document: r.document_id && r.filename ? { id: r.document_id, filename: r.filename } : null,
   }));
   const canRequest = isExecutor(actor, order) && order.status === 'in_work';
+  // Документ основания (определение суда) заказчик уже приложил к заявке — просить его снова незачем (2.79).
+  const basisAttached = canRequest && catalog.some((c) => c.basis)
+    && !!(await sql`select 1 from documents where order_id = ${order.id} and kind = 'basis' and deleted_at is null limit 1`).length;
   const open = new Set(requests.filter((r) => !r.done && r.item_id).map((r) => r.item_id));
   return {
     requests,
     can_request: canRequest,
     can_upload: orderLevel(actor, order) >= LEVEL.write && !FINAL.includes(order.status),
     // Список услуги — исполнителю: уже запрошенные и ещё не полученные отмечены.
-    catalog: canRequest ? catalog.map((c) => ({ ...c, open: open.has(c.id) })) : [],
+    catalog: canRequest ? catalog.filter((c) => !(c.basis && basisAttached)).map(({ basis, ...c }) => ({ ...c, open: open.has(c.id) })) : [],
   };
 }
 

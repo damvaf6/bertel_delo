@@ -111,7 +111,7 @@ function titlePage(meta, st) {
     para(run(`${meta.title.toUpperCase()} ${meta.number}`), `${pStyle(st.title)}${center}`),
     meta.subtitle ? para(run(meta.subtitle, '<w:sz w:val="28"/>'), center) : '',
     para('', '<w:spacing w:before="1200"/>'),
-    meta.executor ? para(run(`Исполнитель: ${meta.executor}`), '<w:jc w:val="right"/>') : '',
+    meta.executor ? para(run(`${meta.executor_role ?? 'Исполнитель'}: ${meta.executor}`), '<w:jc w:val="right"/>') : '',
     para(run(`Дата составления: ${meta.date}`), '<w:jc w:val="right"/>'),
     para('', '<w:spacing w:before="2400"/>'),
     para(run(`${meta.city}, ${meta.date.slice(-4)}`), center),
@@ -256,7 +256,7 @@ const FOOTER_CT = 'application/vnd.openxmlformats-officedocument.wordprocessingm
 const FOOTER_REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer';
 const STYLES_REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles';
 
-// meta: { title: 'Отчёт об оценке', number: '№ …', subtitle, org, executor, date: 'дд.мм.гггг', city }.
+// meta: { title: 'Отчёт об оценке', number: '№ …', subtitle, org, executor, executor_role?, date: 'дд.мм.гггг', city }.
 // template — Buffer шаблона организации (.docx, уже проверенный checkTemplate) или null.
 // appendix — приложение после разделов (скриншоты объявлений, 2.32; фото осмотра, 2.37) или список приложений: см. appendixBlocks.
 export function buildReport(text, meta, template = null, { appendix = null } = {}) {

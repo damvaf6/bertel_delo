@@ -198,6 +198,8 @@ function fakeDraft(text) {
   const photos = [...(text.split('ФОТО:')[1] ?? '').split('ДОКУМЕНТЫ:')[0].matchAll(/^- (.+?) \(/gm)].map((m) => m[1]);
   const brief = text.split('РАЗДЕЛЫ:')[0].trim().split('\n');
   const docs = (text.split('ДОКУМЕНТЫ:')[1] ?? '').trim();
+  // Разделы, куда программа сама вставит таблицу или вопросы из заявки (2.79), — модель их не повторяет.
+  const byProgram = (title) => (text.match(/^(?:ТАБЛИЦЫ|ВОПРОСЫ):.*$/gm) ?? []).some((l) => l.includes(`«${title}»`));
   const photoLines = () => (photos.length ? photos.map((p, i) => `Фото ${i + 1} (${p}): [описать по фото: ${p}]`).join('\n') : 'Фото к заявке не приложены. [заполнить: осмотр]');
   return sections.map((title) => {
     const t = title.replace(/^\d+\.\s*/, ''); // «7. Описание объекта оценки» — по смыслу, без номера
@@ -205,11 +207,12 @@ function fakeDraft(text) {
     if (/^(?:Вводная|Задание)/.test(t)) body = `${brief.find((l) => l.startsWith('Основание')) ?? 'Основание: [заполнить]'}\n${brief.find((l) => l.startsWith('Для чего')) ?? ''}`.trim();
     else if (/^(?:Объект|Описание)/.test(t)) {
       const facts = brief.filter((l) => /^(Услуга|Что оцениваем|Адрес|Площадь|Кадастровый|Этаж|Комнат|Год|Категория|Марка|VIN|Какой товар|Что оценить)/.test(l)).join('\n') || '[заполнить: объект]';
-      body = /^Описание/.test(t) ? `${facts}\n${photoLines()}` : facts;
+      body = /^Описание/.test(t) ? `${facts}\n${photoLines()}` : byProgram(title) ? '' : facts;
     } else if (/^Осмотр/.test(t)) body = photoLines();
+    else if (/^Вопросы/.test(t) && byProgram(title)) body = '';
     else if (/^Вопросы/.test(t)) body = docs ? docs.split('\n').filter((l) => /\?/.test(l)).join('\n') || '[заполнить: вопросы]' : '[заполнить: вопросы]';
     else if (/^(?:Расчёт|Согласование)/.test(t)) body = '[заполнить: расчёт и итоговая величина]';
-    return `## ${title}\n${body}`;
+    return body ? `## ${title}\n${body}` : `## ${title}`;
   }).join('\n\n');
 }
 
