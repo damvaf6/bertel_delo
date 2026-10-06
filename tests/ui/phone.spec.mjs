@@ -3107,3 +3107,74 @@ test('передача дела (2.62): руководитель передаё�
   await actx.close();
   await bctx.close();
 });
+
+test('запрос документов (2.64): эксперт отмечает недостающие, заказчик загружает к каждому, эксперт видит отметки', async ({ page, browser, baseURL }) => {
+  await signIn(page, '+79990000780');
+  const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира: нужны документы' }, headers: H })).json();
+  const id = created.order.id;
+  expect((await page.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(7), fields: { purpose: 'bank', region: 'moscow', object_type: 'flat', address: 'г. Москва, Документная ул., 9', area: '48' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  const ectx = await phoneContext(browser, baseURL);
+  const ep = await ectx.newPage();
+  const expert = await signIn(ep, '+79990000781');
+  await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    await c.query("update orders set price_kop = 1500000, paid_at = now(), status = 'in_work', executor_user_id = $2 where id = $1", [id, expert.id]);
+  });
+
+  // Эксперт: список документов по оценке квартиры, свой документ строкой и пояснение — одной кнопкой.
+  await ep.goto(`/kabinet#order=${id}`);
+  const box = ep.locator('#docreq-box');
+  await expect(box).toBeVisible();
+  await expect(box.locator('#docreq-items')).toContainText('Выписка из ЕГРН');
+  await expect(box.locator('#docreq-items')).not.toContainText('ПТС');
+  await box.getByRole('button', { name: 'Запросить у заказчика' }).click();
+  await expect(ep.locator('#docreq-msg')).toHaveText('Отметьте документы или напишите, какой нужен');
+  await box.getByLabel('Выписка из ЕГРН').check();
+  await box.getByLabel('Технический паспорт БТИ или поэтажный план').check();
+  await box.getByLabel(/Другие документы/).fill('Справка об отсутствии долгов за квартиру');
+  await box.getByLabel(/Пояснение для заказчика/).fill('Выписку — не старше месяца');
+  await box.locator('#docreq-form').scrollIntoViewIfNeeded();
+  await shot(ep, '99h-ekspert-zapros-dokumentov');
+  await box.getByRole('button', { name: 'Запросить у заказчика' }).click();
+  await expect(ep.locator('#docreq-msg')).toHaveText('Запрошено документов: 3. Заказчику отправлено уведомление.');
+  await expect(box.locator('#docreq-list li')).toHaveCount(3);
+  await expect(box.getByLabel('Выписка из ЕГРН')).toBeDisabled();
+  // Справка больше не нужна — снимает.
+  await box.locator('#docreq-list li').filter({ hasText: 'Справка об отсутствии долгов' }).getByRole('button', { name: 'Не нужен' }).click();
+  await expect(box.locator('#docreq-list li')).toHaveCount(2);
+
+  // Заказчик: уведомление ведёт в заявку; список с отметками «нужен», загрузка файла к выписке.
+  await page.goto('/kabinet#notifications');
+  await page.locator('#notifications li').filter({ hasText: 'Исполнитель просит документы' }).first().getByRole('button').click();
+  await expect(page.locator('#order-title')).toHaveText('Квартира: нужны документы');
+  const cbox = page.locator('#docreq-box');
+  await expect(cbox.locator('#docreq-lead')).toHaveText('Исполнитель просит документы: осталось загрузить 2. Нажмите «Загрузить файл» у каждого.');
+  await expect(cbox.locator('#docreq-form')).toBeHidden();
+  const egrn = cbox.locator('#docreq-list li').filter({ hasText: 'Выписка из ЕГРН' });
+  await expect(egrn).toContainText('Пояснение: Выписку — не старше месяца');
+  await expect(egrn.locator('.badge')).toHaveText('нужен');
+  await cbox.scrollIntoViewIfNeeded();
+  await shot(page, '99i-zakazchik-zaproshennye-dokumenty');
+  await egrn.locator('input[type=file]').setInputFiles({ name: 'Выписка ЕГРН.pdf', mimeType: 'application/pdf', buffer: makePdf([['Выписка из ЕГРН (тест)']]) });
+  await expect(page.locator('#docreq-msg')).toHaveText('«Выписка из ЕГРН»: файл получен, исполнитель увидит его в деле');
+  await expect(egrn.locator('.badge')).toHaveText('получен');
+  await expect(egrn).toContainText('Получено: Выписка ЕГРН.pdf');
+  await expect(page.locator('#docs')).toContainText('Выписка ЕГРН.pdf');
+  await expect(cbox.locator('#docreq-lead')).toHaveText('Исполнитель просит документы: осталось загрузить 1. Нажмите «Загрузить файл» у каждого.');
+  await shot(page, '99j-zakazchik-dokument-zagruzhen');
+
+  // Эксперт: уведомление и отметка «получен», файл в документах дела.
+  await ep.goto('/kabinet#notifications');
+  await expect(ep.locator('#notifications li').filter({ hasText: 'Заказчик загрузил запрошенный документ' })).toHaveCount(1);
+  await ep.goto(`/kabinet#order=${id}`);
+  await expect(ep.locator('#docreq-lead')).toHaveText('Получено 1 из 2. Заказчику пришло уведомление; файлы появятся и в «Документах».');
+  await expect(ep.locator('#docreq-list li').filter({ hasText: 'Выписка из ЕГРН' }).locator('.badge')).toHaveText('получен');
+  await expect(ep.locator('#docs')).toContainText('Выписка ЕГРН.pdf');
+  await ep.locator('#docreq-box').scrollIntoViewIfNeeded();
+  await shot(ep, '99k-ekspert-dokumenty-polucheny');
+  await ectx.close();
+});

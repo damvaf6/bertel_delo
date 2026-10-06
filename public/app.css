@@ -141,6 +141,8 @@ label.row { color: var(--text); font-size: 16px; margin: 0 0 8px; }
 .notify-type { margin-bottom: 12px; }
 .notify-type label.row { margin-bottom: 2px; flex-wrap: nowrap; align-items: flex-start; }
 .notify-type label.row span { flex: 1 1 auto; min-width: 0; padding-top: 1px; }
+#docreq-items label.row { flex-wrap: nowrap; align-items: flex-start; }
+#docreq-items label.row > span { flex: 1 1 auto; min-width: 0; padding-top: 1px; }
 .notify-type .muted { margin: 0 0 0 30px; font-size: 14px; }
 /* Помощник (ИИ): разбор проблемы, ассистент, подсказки проверки. */
 .answer { margin: 0 0 8px; white-space: pre-line; overflow-wrap: anywhere; }

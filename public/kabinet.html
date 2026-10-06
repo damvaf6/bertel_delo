@@ -192,6 +192,27 @@
         <p class="muted" id="org-returns-lead"></p>
         <ul class="list" id="org-returns"></ul>
       </div>
+      <div class="card hidden" id="docreq-box">
+        <h2>Запрошенные документы</h2>
+        <p class="muted" id="docreq-lead"></p>
+        <ul class="list" id="docreq-list"></ul>
+        <form class="hidden" id="docreq-form" novalidate>
+          <fieldset class="field">
+            <legend>Что запросить у заказчика</legend>
+            <div id="docreq-items"></div>
+          </fieldset>
+          <div class="field">
+            <label for="docreq-custom">Другие документы — каждый с новой строки (необязательно)</label>
+            <textarea id="docreq-custom" maxlength="1000" rows="2"></textarea>
+          </div>
+          <div class="field">
+            <label for="docreq-note">Пояснение для заказчика (необязательно)</label>
+            <input id="docreq-note" type="text" maxlength="1000" autocomplete="off">
+          </div>
+          <button type="submit" class="secondary" id="docreq-send">Запросить у заказчика</button>
+        </form>
+        <p class="msg" id="docreq-msg" role="status" aria-live="polite"></p>
+      </div>
       <div class="card">
         <h2>Документы</h2>
         <ul class="list" id="docs"></ul>
