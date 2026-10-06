@@ -3316,6 +3316,60 @@ test('«не принимаю новые дела до …» (2.77): экспе�
   await hctx.close();
 });
 
+test('сводка за месяц (2.78): руководитель видит по экспертам принято, сдано, позже срока, возвраты, деньги; скачивает таблицу', async ({ page, browser, baseURL }) => {
+  await signIn(page, '+79990000788');
+  const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира: для сводки' }, headers: H })).json();
+  const id = created.order.id;
+  const ectx = await phoneContext(browser, baseURL);
+  const ep = await ectx.newPage();
+  const expert = await signIn(ep, '+79990000789');
+  const hctx = await phoneContext(browser, baseURL, { acceptDownloads: true });
+  const hp = await hctx.newPage();
+  const head = await signIn(hp, '+79990000792');
+  const orgId = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Бюро сводки ${Date.now()}»') returning id`);
+    await c.query("update users set full_name = 'Эксперт Сводкин' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now()), ($1, $3, 'member', now() - interval '1 minute')", [org.id, head.id, expert.id]);
+    await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [expert.id, org.id]);
+    // Дело принято и сдано позже срока; диспетчер раз возвращал на доработку; выплата прошла.
+    await c.query("update orders set price_kop = 1500000, paid_at = now(), status = 'done', executor_user_id = $2, deadline = current_date - 3 where id = $1", [id, expert.id]);
+    await c.query(`insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())`, [id, expert.id]);
+    await c.query(`insert into order_status_history (order_id, from_status, to_status, side) values ($1, 'review', 'in_work', 'dispatcher'), ($1, 'review', 'done', 'dispatcher')`, [id]);
+    await c.query(`insert into payouts (order_id, executor_user_id, amount_kop, commission_kop, status, paid_at) values ($1, $2, 1200000, 300000, 'succeeded', now())`, [id, expert.id]);
+    return org.id;
+  });
+
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const box = hp.locator('#org-report-box');
+  await expect(box).toBeVisible();
+  await expect(hp.locator('#org-report-month option')).toHaveCount(13);
+  await expect(hp.locator('#org-report-month option').first()).toContainText('(текущий)');
+  await expect(hp.locator('#org-report-total')).toContainText('принято дел: 1 · сдано: 1 (позже срока: 1)');
+  await expect(hp.locator('#org-report-total')).toContainText('12 000 ₽');
+  const row = hp.locator('#org-report > li').filter({ hasText: 'Эксперт Сводкин' });
+  await expect(row).toContainText('принял: 1 · сдано: 1');
+  await expect(row.locator('.overdue')).toHaveText('позже срока: 1');
+  await expect(row).toContainText('возвращено: на доработку — 1');
+  await expect(row).toContainText('вознаграждение за сданные: 12 000 ₽ · выплачено: 12 000 ₽');
+  await box.scrollIntoViewIfNeeded();
+  await shot(hp, 'a7-rukovoditel-svodka-mesyac');
+  // Таблица для Excel скачивается файлом.
+  const [download] = await Promise.all([hp.waitForEvent('download'), hp.locator('#org-report-csv').click()]);
+  expect(download.suggestedFilename()).toMatch(/^Сводка по экспертам \d{4}-\d{2}\.csv$/);
+  const csv = fs.readFileSync(await download.path());
+  expect([...csv.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+  expect(csv.toString('utf8')).toContain('Эксперт Сводкин;1;1;1;0;0;1;12000,00;12000,00');
+  // Прошлый месяц — пусто.
+  await hp.locator('#org-report-month').selectOption({ index: 1 });
+  await expect(hp.locator('#org-report-total')).toContainText('принято дел: 0 · сдано: 0');
+  await expect(row).toContainText('вознаграждение за сданные: 0 ₽ · выплачено: 0 ₽');
+  await shot(hp, 'a8-rukovoditel-svodka-proshlyj');
+  // Эксперт сводку не открывает.
+  expect((await ep.request.get(`/api/orgs/${orgId}/report`)).status()).toBe(403);
+  await ectx.close();
+  await hctx.close();
+});
+
 test('запрос документов (2.64): эксперт отмечает недостающие, заказчик загружает к каждому, эксперт видит отметки', async ({ page, browser, baseURL }) => {
   await signIn(page, '+79990000780');
   const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира: нужны документы' }, headers: H })).json();
