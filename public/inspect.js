@@ -14,8 +14,9 @@ export async function loadInspection(current) {
   $('inspect-fresh').classList.add('hidden');
   if (!current.order.module) { box.classList.add('hidden'); return; }
   ctx = { order: current.order };
-  // Почерковедческая (2.81): по ссылке снимают документ, а не объект.
-  $('inspect-head').textContent = current.order.subject === 'document' ? 'Съёмка документа по ссылке' : 'Дистанционный осмотр';
+  // Почерковедческая (2.81): по ссылке снимают документ, а не объект; товароведческая (2.82) — товар.
+  const subject = current.order.subject;
+  $('inspect-head').textContent = subject === 'document' ? 'Съёмка документа по ссылке' : subject === 'goods' ? 'Осмотр товара по ссылке' : 'Дистанционный осмотр';
   const r = await api('GET', `/api/orders/${current.order.id}/inspection`);
   const photos = r.steps.reduce((n, s) => n + s.photos.length, 0);
   box.classList.toggle('hidden', !(r.can_issue || r.links.length || photos));
@@ -32,7 +33,8 @@ export async function loadInspection(current) {
   $('inspect-state').textContent = photos
     ? `Фото осмотра: ${photos}. У каждого — время и место съёмки; «без геометки» — владелец не разрешил определять место.`
       + (missing.length ? ` Не снято: ${missing.map((s) => s.title).join(', ')} — попросите доснять ниже.` : '')
-    : r.can_issue ? 'Владелец объекта снимает его сам по ссылке — без входа, по шагам для этого вида объекта. Фото появятся здесь.'
+    : r.can_issue ? (subject === 'goods' ? 'Тот, у кого товар, снимает его сам по ссылке — без входа, по шагам: товар целиком, маркировка, недостаток крупно. Фото появятся здесь.'
+      : 'Владелец объекта снимает его сам по ссылке — без входа, по шагам для этого вида объекта. Фото появятся здесь.')
       : 'Фото осмотра пока нет.';
   renderLinks(r);
   renderSteps(r, photos);
