@@ -138,6 +138,8 @@ function offerWait(org, c) {
     try {
       await api('POST', `/api/orgs/${org.id}/cases/${c.id}/reassign`, { from: w.from, specialist_id: specialistId });
       await loadOrgCases(org);
+      // Сообщение — там, куда ушло дело; прежнее из другого списка убираем, чтобы не путало.
+      say(specialistId ? $('org-pending-msg') : $('org-cases-msg'), '');
       say(specialistId ? $('org-cases-msg') : $('org-pending-msg'), done, 'ok');
     } catch (err) { say(msg, err.message); }
   };

@@ -3177,6 +3177,77 @@ test('передача дела (2.62): руководитель передаё�
   await bctx.close();
 });
 
+test('переназначение до ответа (2.76): эксперт молчит — руководитель предлагает дело другому или забирает назад', async ({ page, browser, baseURL }) => {
+  await signIn(page, '+79990000774');
+  const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира: эксперт молчит' }, headers: H })).json();
+  const id = created.order.id;
+  expect((await page.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(7), fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, Тихая ул., 2', area: '38' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  const hctx = await phoneContext(browser, baseURL);
+  const hp = await hctx.newPage();
+  const head = await signIn(hp, '+79990000775');
+  const actx = await phoneContext(browser, baseURL);
+  const ap = await actx.newPage();
+  const silent = await signIn(ap, '+79990000776');
+  const bctx = await phoneContext(browser, baseURL);
+  const bp = await bctx.newPage();
+  const quick = await signIn(bp, '+79990000777');
+  const orgId = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Бюро без ожидания ${Date.now()}»') returning id`);
+    await c.query("update users set full_name = 'Эксперт Молчащий' where id = $1", [silent.id]);
+    await c.query("update users set full_name = 'Эксперт Быстрый' where id = $1", [quick.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member'), ($1, $4, 'member')", [org.id, head.id, silent.id, quick.id]);
+    for (const u of [silent.id, quick.id]) {
+      await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [u, org.id]);
+      await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [u]);
+    }
+    // Диспетчер предложил дело организации, руководитель назначил эксперта — тот не отвечает уже сутки.
+    await c.query('update orders set price_kop = 1500000, paid_at = now(), status = $2, offer_org_id = $3, executor_user_id = $4 where id = $1', [id, 'awaiting_executor', org.id, silent.id]);
+    await c.query(`insert into order_offers (order_id, org_id, score, outcome, outcome_at) values ($1, $2, '{"org":true}', 'accepted', now())`, [id, org.id]);
+    await c.query(`insert into order_offers (order_id, specialist_id, org_id, score, offered_by, offered_at) values ($1, $2, $3, '{}', $4, now() - interval '26 hours')`, [id, silent.id, org.id, head.id]);
+    return org.id;
+  });
+
+  // Руководитель: у дела видно, что эксперт молчит больше суток; «Не ждать ответа — переназначить».
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const row = hp.locator('#org-cases > li').filter({ hasText: 'эксперт: Эксперт Молчащий' });
+  await expect(row.locator('[data-role="offer-wait"]')).toContainText('Эксперт ещё не ответил · предложено');
+  await expect(row.locator('[data-role="offer-wait"]')).toContainText('(1 дн.)');
+  await row.locator('[data-reassign] summary').click();
+  await expect(row.locator('[data-reassign] select option')).toHaveText(['Эксперт Быстрый']);
+  await row.locator('[data-reassign]').scrollIntoViewIfNeeded();
+  await shot(hp, 'a1-rukovoditel-pereznachit-do-otveta');
+  await row.getByRole('button', { name: 'Предложить другому' }).click();
+  await expect(hp.locator('#org-cases-msg')).toHaveText('Дело предложено другому эксперту — прежний получил уведомление, что отвечать не нужно');
+  const row2 = hp.locator('#org-cases > li').filter({ hasText: 'эксперт: Эксперт Быстрый' });
+  await expect(row2.locator('[data-role="offer-wait"]')).toContainText('(меньше часа)');
+
+  // Прежний эксперт: уведомление «отвечать не нужно», дела больше нет.
+  await ap.goto('/kabinet#notifications');
+  await expect(ap.locator('#notifications li').filter({ hasText: 'снял предложенное Вам дело — отвечать не нужно' })).toHaveCount(1);
+  await shot(ap, 'a2-prezhnij-ekspert-otvechat-ne-nuzhno');
+  await ap.goto(`/kabinet#order=${id}`);
+  await expect(ap.getByRole('heading', { name: 'Заявка не найдена' })).toBeVisible();
+  // Новый эксперт: предложение по делу пришло.
+  await bp.goto('/kabinet#notifications');
+  await expect(bp.locator('#notifications li').filter({ hasText: 'Вам предложено новое дело' })).toHaveCount(1);
+
+  // Руководитель передумал — забирает назад: дело снова в «Ждут назначения».
+  await row2.locator('[data-reassign] summary').click();
+  await row2.getByRole('button', { name: 'Забрать назад' }).click();
+  await expect(hp.locator('#org-pending-msg')).toHaveText('Дело снова в «Ждут назначения» — эксперту сообщили, что отвечать не нужно');
+  await expect(hp.locator('#org-pending > li')).toHaveCount(1);
+  await expect(hp.locator('#org-cases-msg')).toHaveText('');
+  await expect(hp.locator('#org-cases > li').filter({ hasText: 'Квартира' })).toHaveCount(0);
+  await hp.locator('#org-pending-box').scrollIntoViewIfNeeded();
+  await shot(hp, 'a3-rukovoditel-zabral-nazad');
+  await hctx.close();
+  await actx.close();
+  await bctx.close();
+});
+
 test('запрос документов (2.64): эксперт отмечает недостающие, заказчик загружает к каждому, эксперт видит отметки', async ({ page, browser, baseURL }) => {
   await signIn(page, '+79990000780');
   const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира: нужны документы' }, headers: H })).json();
