@@ -230,6 +230,8 @@ async function pump() {
   } finally {
     sending = false;
     $('retry').classList.add('hidden');
+    // Очередь ушла — просьба подождать с «Готово» больше не нужна.
+    if (!queue.length && $('finish-msg').dataset.wait) { say($('finish-msg'), 'Все фото отправлены — можно нажать «Готово».', 'ok'); delete $('finish-msg').dataset.wait; }
     paintQueue();
   }
 }
@@ -278,7 +280,10 @@ $('start').addEventListener('click', () => {
 });
 
 $('finish').addEventListener('click', async () => {
-  if (queue.length) return say($('finish-msg'), `Подождите — ещё не отправлено фото: ${queue.length}. «Готово» сработает, когда они уйдут.`);
+  if (queue.length) {
+    $('finish-msg').dataset.wait = '1';
+    return say($('finish-msg'), `Подождите — ещё не отправлено фото: ${queue.length}. «Готово» сработает, когда они уйдут.`);
+  }
   say($('finish-msg'), '');
   const missing = info.steps.filter((s) => (!s.optional && !s.photos) || s.retake).map((s) => s.title);
   if (missing.length && !confirm(`Не снято: ${missing.join(', ')}. Всё равно завершить?`)) return;

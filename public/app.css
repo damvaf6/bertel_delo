@@ -238,3 +238,4 @@ h2.inline { display: inline; }
 .demo-roles button { text-align: left; display: flex; flex-direction: column; gap: 2px; }
 .demo-roles .muted { font-weight: 400; }
 #draft-past { margin-top: 20px; }
+#progress { margin: 4px 4px 10px; font-weight: 600; }
