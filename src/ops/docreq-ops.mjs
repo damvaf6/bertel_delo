@@ -27,7 +27,7 @@ async function requestOf(sql, order, raw) {
 }
 
 async function view(sql, actor, order, registry) {
-  const catalog = registry.requestDocs(order.module, order.service);
+  const catalog = registry.requestDocs(order.module, order.service, order.basis_kind);
   const hints = new Map(catalog.map((c) => [c.id, c.hint]));
   const rows = await sql`
     select r.*, d.filename from doc_requests r left join documents d on d.id = r.document_id and d.deleted_at is null
@@ -61,7 +61,7 @@ export function docRequestOps() {
       access: { resource: 'order', param: 'id', need: 'read' },
       async handler({ sql, actor, order, registry, body, res }) {
         executorOnly(actor, order);
-        const catalog = registry.requestDocs(order.module, order.service);
+        const catalog = registry.requestDocs(order.module, order.service, order.basis_kind);
         const ids = Array.isArray(body?.items) ? [...new Set(body.items.map(String))] : [];
         const custom = Array.isArray(body?.custom) ? body.custom.map((c) => String(c ?? '').trim()).filter(Boolean) : [];
         if (custom.length > MAX_CUSTOM) throw new HttpError(400, 'bad_input', `Своими словами — не больше ${MAX_CUSTOM} документов за раз`);

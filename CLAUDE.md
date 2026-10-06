@@ -90,7 +90,7 @@
   подстановка в черновик — `src/dossier/dossier.mjs`; сверка отчёта — правила `dossier_*` в `src/ai/report-checks.mjs`), `analog-ops.mjs` (аналоги в деле: ссылка и
   скриншот со временем платформы и отпечатком, ИИ предлагает признаки — эксперт подтверждает; признаки ядра, предупреждения, «где искать»,
   таблица для Word — `src/analogs/analogs.mjs`; признаки по виду объекта — `analogs` в модуле; распознавание скриншота — `src/providers/ocr.mjs`,
-  `OCR_PROVIDER`; таблица и приложение со скриншотами собираются при сборке Word — `src/docs/report.mjs`), `docreq-ops.mjs` (запрос недостающих документов у заказчика: список — `request_docs` в модуле, заказчик прикладывает файл к пункту; страница — `public/docreq.js`), `mail-ops.mjs` (почта для заявок в профиле; приём и разбор писем — `src/mail/inbound.mjs`,
+  `OCR_PROVIDER`; таблица и приложение со скриншотами собираются при сборке Word — `src/docs/report.mjs`), `docreq-ops.mjs` (запрос недостающих документов у заказчика: список — `request_docs` в модуле (`basis` — только при таком основании), заказчик прикладывает файл к пункту; страница — `public/docreq.js`), `mail-ops.mjs` (почта для заявок в профиле; приём и разбор писем — `src/mail/inbound.mjs`,
   письма в переписку заявки — `src/mail/outbox.mjs`), `bridge-ops.mjs` (мост CRM → Платформа: `auth: 'bridge'`, подпись — `src/bridge/signature.mjs`,
   профили, предложения госзаказа, загрузка — `src/bridge/crm.mjs`; ключ `CRM_BRIDGE_SECRET`, без него мост выключен). Первый администратор —
   `node src/tools/grant-role.mjs <телефон> admin` в контуре; на площадке stage — кнопка `Stage admin (Yandex Cloud)`

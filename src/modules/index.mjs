@@ -17,8 +17,9 @@
 //       из своего прошлого дела той же услуги (2.65), данные прошлого заказчика и объекта программа вычищает
 //     approaches?: { services: [id услуги…] }  — исполнитель отмечает, какие подходы к оценке применяет (2.33)
 //     inspection?: [{ id, title, hint?, services?: [id услуги…], optional? }…],  — шаги дистанционного осмотра (2.3)
-//     request_docs?: [{ id, title, hint?, services?: [id услуги…] }…],  — документы, которые исполнитель может одной кнопкой
-//       запросить у заказчика (2.64): выписка ЕГРН, ПТС, чек…; заказчик загружает файл к каждому
+//     request_docs?: [{ id, title, hint?, services?: [id услуги…], basis?: [вид основания…] }…],  — документы, которые
+//       исполнитель может одной кнопкой запросить у заказчика (2.64): выписка ЕГРН, ПТС, чек…; заказчик загружает файл к
+//       каждому; basis — только для заявок с таким основанием (определение суда — когда экспертизу назначил суд, 2.66)
 //     express?: { services: [id услуги…], show: [id поля заявки…], fields: [поле + services?…] } }  — экспресс-услуга (2.4):
 //       для каких услуг, какие поля заявки видит помощник на объекте и какие данные он заполняет (нужны шаги осмотра)
 //     signature?: { services?: [id услуги…] }  — результат подписывается УКЭП исполнителя до сдачи (2.5); без services — все услуги
@@ -173,7 +174,10 @@ export function validateModule(m) {
     checkIds(m.request_docs, `${at}, запрашиваемые документы`);
     for (const d of m.request_docs) {
       const where = `${at}, документ ${d.id}`;
-      onlyKeys(d, ['id', 'title', 'hint', 'services'], where);
+      onlyKeys(d, ['id', 'title', 'hint', 'services', 'basis'], where);
+      if (d.basis !== undefined && (!Array.isArray(d.basis) || d.basis.length === 0 || d.basis.some((b) => !m.basis.includes(b)))) {
+        fail(where, 'basis — непустой список оснований этого модуля');
+      }
       if (!nonEmpty(d.title) || d.title.length > 120) fail(where, 'нет названия или оно длиннее 120 знаков');
       if (d.hint !== undefined && !nonEmpty(d.hint)) fail(where, 'пустая подсказка');
       if (d.services !== undefined && (!Array.isArray(d.services) || d.services.length === 0 || d.services.some((id) => !serviceIds.includes(id)))) {
@@ -317,10 +321,10 @@ export function createRegistry(modules = DEFAULT_MODULES) {
         .map((st) => ({ id: st.id, title: st.title, hint: st.hint ?? null, optional: !!st.optional }));
     },
     // Документы, которые исполнитель может запросить у заказчика по этой услуге (2.64).
-    requestDocs(moduleId, serviceId) {
+    requestDocs(moduleId, serviceId, basisKind) {
       const m = modulesList.find((x) => x.id === moduleId);
       if (!m?.request_docs || !m.services.some((x) => x.id === serviceId)) return [];
-      return m.request_docs.filter((d) => !d.services || d.services.includes(serviceId))
+      return m.request_docs.filter((d) => (!d.services || d.services.includes(serviceId)) && (!d.basis || d.basis.includes(basisKind)))
         .map((d) => ({ id: d.id, title: d.title, hint: d.hint ?? null }));
     },
     // Экспресс-услуга для услуги (2.4): поля заявки, которые видит помощник, и данные, которые он заполняет; null — экспресса нет.

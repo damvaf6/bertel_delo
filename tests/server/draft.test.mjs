@@ -347,7 +347,8 @@ test('подходы к оценке (2.33): черновик без разде�
   const body = (await spec.req('GET', `/api/orders/${o.id}/draft`)).body.draft.body;
   assert.ok(!/## 1[12]\. Сравнительный/.test(body));
   assert.match(body, /\| Сравнительный \| Не применялся \| — \|/);
-  assert.match(body, /\| Затратный \| \[заполнить\] \| \[заполнить\] \|/);
+  // Применён один подход (2.66) — его вес сразу 1.
+  assert.match(body, /\| Затратный \| \[заполнить\] \| 1 \|/);
   assert.ok(!body.includes(ANALOGS_MARK));
 
   // Аналоги не нужны — раздел не напоминает о трёх аналогах.

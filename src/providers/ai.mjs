@@ -226,9 +226,11 @@ function fakeAnalog(text) {
     mileage_km: num(ad.match(/пробег[^\d]{0,10}(\d[\d\s\u00a0]*\d)\s*км/i)?.[1]),
     area: ad.match(/(\d+(?:[.,]\d+)?)\s*(?:м²|кв\.?\s*м)/i)?.[1]?.replace(',', '.'),
     make_model: ad.match(/^\s*([A-ZА-Я][\w-]+ [A-ZА-Я0-9][\w-]*)/m)?.[1],
-    address: ad.match(/адрес:\s*([^\n]+)/i)?.[1]?.trim(),
+    // Адрес — строкой «Адрес: …» или строкой, которая начинается с города («г. Москва, ул. …», «МО, …»).
+    address: (ad.match(/адрес:\s*([^\n]+)/i)?.[1] ?? ad.match(/^\s*((?:г\.|МО,|Московская обл)[^\n]{3,})$/m)?.[1])?.trim(),
     name: ad.match(/^\s*([^\n]{3,80})/m)?.[1]?.trim(),
-    floor: ad.match(/этаж:?\s*(\d+\s*(?:из|\/)\s*\d+)/i)?.[1],
+    floor: (ad.match(/этаж:?\s*(\d+\s*(?:из|\/)\s*\d+)/i) ?? ad.match(/(\d+\s*\/\s*\d+)\s*эт/i))?.[1],
+    house_type: ad.match(/((?:панельн|кирпичн|монолитн|блочн)\S*(?:[-‑]\S+)?\s+дом)/i)?.[1],
   };
   return JSON.stringify({ fields: Object.fromEntries(ids.filter((id) => got[id] !== undefined).map((id) => [id, got[id]])) });
 }

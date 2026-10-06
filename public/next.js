@@ -5,7 +5,7 @@
 import { el, quoted } from '/common.js';
 
 const $ = (id) => document.getElementById(id);
-let ctx = {}; // { current, docs, review, draft, analogs, money, step(action) }
+let ctx = {}; // { current, docs, review, draft, analogs, docreq, money, step(action) }
 
 export function setNext(part) {
   ctx = part.reset ? { ...part } : { ...ctx, ...part };
@@ -48,6 +48,11 @@ function steps() {
   if (visible('inspect-box') || visible('onsite-box')) {
     items.push({ id: 'inspect', title: 'Осмотр объекта (по желанию)', done: list.some((d) => d.kind === 'inspection'), go: go(visible('inspect-box') ? 'inspect-box' : 'onsite-box'), optional: true });
   }
+  // Документы от заказчика (2.66): выписка ЕГРН, ПТС… — эксперт видит, что запрошено и что уже пришло, не листая дело.
+  const dr = ctx.docreq;
+  if (dr && visible('docreq-box')) {
+    items.push({ id: 'docs', title: dr.total ? `Документы от заказчика (получено ${dr.got} из ${dr.total})` : 'Документы от заказчика (по желанию)', done: dr.total > 0 && dr.got === dr.total, go: go('docreq-box'), optional: true });
+  }
   // Подходы к оценке (2.33): от них зависят разделы черновика и нужны ли аналоги. Не обязательны — эксперту со своим
   // готовым отчётом лишнее действие ни к чему, поэтому главная кнопка к ним не ведёт.
   if (ctx.draft?.approaches) items.push({ id: 'approaches', title: 'Подходы к оценке (для черновика и аналогов)', done: !!ctx.draft.approaches.chosen?.length, go: go('draft-approaches'), optional: true });
@@ -72,6 +77,8 @@ function steps() {
   let main;
   if (!firstOpen && submit) main = { label: 'Сдать на проверку', run: () => ctx.step(submit) };
   else if (firstOpen?.id === 'fix') main = { label: 'Исправить по замечанию руководителя', run: go('org-returns-box') };
+  // Черновик уже есть (2.66) — файл результата обычно из него: кнопка ведёт к «Приложить как файл результата».
+  else if (firstOpen?.id === 'result' && ctx.draft?.exists) main = { label: 'Приложить черновик как файл результата', run: () => { go('draft-confirm')(); $('draft-confirm')?.focus({ preventScroll: true }); } };
   else if (firstOpen?.id === 'result') main = { label: 'Добавить файл результата', run: () => $('result-file')?.click() };
   else if (firstOpen?.id === 'sign') main = { label: unsigned.length > 1 ? `Подписать все файлы (${unsigned.length})` : 'Подписать файл', run: () => ctx.signAll?.() };
   else if (firstOpen?.id === 'org') main = { label: 'Ждём подпись руководителя', disabled: true };

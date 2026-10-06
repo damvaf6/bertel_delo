@@ -5,7 +5,7 @@ import { executorSignOrg } from '../access/policy.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { todayMsk } from '../orders/workflow.mjs';
 import { buildReport } from './docx.mjs';
-import { analogTable, hostOf, timeMsk } from '../analogs/analogs.mjs';
+import { analogTable, hostOf, timeMsk, valueText } from '../analogs/analogs.mjs';
 
 const GAP = '[заполнить]';
 const ru = (d) => {
@@ -25,19 +25,18 @@ function taskTable(registry, order) {
     ['Сведение', 'Значение'],
     ['Услуга', def ? def.service.name : order.title],
     ['Основание', basis ? [basis.name, order.basis_number ? `№ ${order.basis_number}` : '', order.basis_date ? `от ${ru(order.basis_date)}` : ''].filter(Boolean).join(' ') : GAP],
-    ...(def?.fields ?? []).filter((f) => order.fields?.[f.id] !== undefined && order.fields[f.id] !== '').map((f) => {
-      const v = order.fields[f.id];
-      return [f.label, f.type === 'select' ? f.options.find((o) => o.id === v)?.name ?? v : v];
-    }),
+    // Числа — по-русски (2.66): «54,3», а не «54.3», как в отчёте.
+    ...(def?.fields ?? []).filter((f) => order.fields?.[f.id] !== undefined && order.fields[f.id] !== '').map((f) => [f.label, valueText(f, order.fields[f.id])]),
     ['Срок', order.deadline ? ru(order.deadline) : GAP],
   ];
   return rows.map(row);
 }
 
 // Неприменённые подходы (2.33) — строкой «Не применялся», как в настоящих отчётах; не выбраны — все с пометками.
+// Применён один подход (2.66, обычно для квартиры — сравнительный) — его вес сразу 1: эксперту нечего распределять.
 const approachesTable = (chosen) => [
   row(['Подход', 'Стоимость, руб.', 'Вес']),
-  ...Object.entries(APPROACHES).map(([id, a]) => (!chosen?.length || chosen.includes(id) ? row([a, GAP, GAP]) : row([a, 'Не применялся', '—']))),
+  ...Object.entries(APPROACHES).map(([id, a]) => (!chosen?.length || chosen.includes(id) ? row([a, GAP, chosen?.length === 1 ? '1' : GAP]) : row([a, 'Не применялся', '—']))),
   row(['Итоговая величина', GAP, '1']),
 ];
 

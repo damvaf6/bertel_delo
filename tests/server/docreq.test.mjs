@@ -40,13 +40,16 @@ test('список документов — в описании модуля, п
   assert.ok(realty.includes('egrn') && realty.includes('tech_plan') && !realty.includes('pts'), realty.join());
   const vehicle = reg.requestDocs('expertise', 'vehicle').map((d) => d.id);
   assert.ok(vehicle.includes('pts') && vehicle.includes('sts') && !vehicle.includes('egrn'), vehicle.join());
-  // Без services — для всех услуг (определение суда).
-  for (const s of expertise.services) assert.ok(reg.requestDocs('expertise', s.id).some((d) => d.id === 'court_order'), s.id);
+  // Без services — для всех услуг; определение суда (2.66) — только когда экспертизу назначил суд.
+  for (const s of expertise.services) assert.ok(reg.requestDocs('expertise', s.id, 'court').some((d) => d.id === 'court_order'), s.id);
+  assert.ok(!reg.requestDocs('expertise', 'realty', 'contract').some((d) => d.id === 'court_order'));
   assert.deepEqual(reg.requestDocs('expertise', 'нет'), []);
   const bad = (request_docs) => assert.throws(() => validateModule({ ...expertise, request_docs }));
   bad([{ id: 'x', title: '' }]);
   bad([{ id: 'x', title: 'Документ', services: ['нет-такой'] }]);
   bad([{ id: 'x', title: 'Документ', extra: 1 }]);
+  bad([{ id: 'x', title: 'Документ', basis: ['нет-такого'] }]);
+  bad([{ id: 'x', title: 'Документ', basis: [] }]);
   bad([{ id: 'x', title: 'А' }, { id: 'x', title: 'Б' }]);
 });
 
