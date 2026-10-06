@@ -4096,6 +4096,137 @@ test('как эксперт (2.81): почерковедческая по опр
   await dctx.close();
 });
 
+// Прогон «как эксперт» по товароведческой экспертизе (2.82): смартфон по иску о защите прав потребителей, определение суда.
+// Заказчик и диспетчер — через API, эксперт и истец со смартфоном — на экране телефона. Проверяется то, что мешало: в деле
+// рядом стояли «Где находится объект: Москва» и «Где находится товар: у истца»; страница по ссылке звала снимать «объект»
+// «у объекта»; у эксперта — «Осмотр объекта»; для товара предлагались «Документы о повреждении» (протокол ДТП, акт о
+// заливе), а акта проверки качества не было; ИИ-проверка принимала дату получения чека из списка документов заказчика за
+// дату покупки и ругалась «Дата покупки 06.10.2026 не совпадает».
+test('как эксперт (2.82): товароведческая по определению суда — документы, осмотр товара, черновик, сдача', async ({ page, browser, baseURL }) => {
+  test.setTimeout(180_000);
+  const C = '+79990008201', D = '+79990008202', S = '+79990008203';
+  await signIn(page, C);
+  const dctx = await phoneContext(browser, baseURL), sctx = await phoneContext(browser, baseURL);
+  const dp = await dctx.newPage(), sp = await sctx.newPage();
+  const disp = await signIn(dp, D), spec = await signIn(sp, S);
+  await sp.request.patch('/api/me', { data: { full_name: 'Товаров Тимофей Тарасович' }, headers: H });
+  await db(async (c) => {
+    await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'goods')", [spec.id]);
+  });
+  const title = `Смартфон по иску ${Date.now()}`;
+  const o = (await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'goods', title }, headers: H })).json()).order;
+  const r = await page.request.patch(`/api/orders/${o.id}`, { data: { deadline: inDays(21), basis_kind: 'court', basis_number: '2-4410/2026', basis_date: inDays(-5),
+    fields: { purpose: 'court', region: 'moscow', subject: 'Смартфон Samsung Galaxy A55, серийный номер R58X12345, через 4 месяца перестал заряжаться; продавец отказал, сославшись на попадание влаги',
+      questions: '1. Имеются ли в смартфоне Samsung Galaxy A55 недостатки?\n2. Если имеются, каков их характер: производственный или эксплуатационный?\n3. Какова стоимость устранения недостатков?',
+      location: 'у истца, г. Москва', purchase: '12.05.2026, М.Видео, 38 990 ₽' } }, headers: H });
+  expect(r.status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${o.id}/documents`, { data: makePdf([['Определение суда (тест)']]),
+    headers: { ...H, 'x-doc-kind': 'basis', 'x-file-name': encodeURIComponent('Определение.pdf'), 'content-type': 'application/pdf' } })).status()).toBe(201);
+  expect((await page.request.post(`/api/orders/${o.id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  expect((await dp.request.put(`/api/orders/${o.id}/price`, { data: { price: '25000' }, headers: H })).status()).toBe(200);
+  await page.request.post(`/api/orders/${o.id}/payments`, { headers: H });
+  expect((await page.request.post(`/api/orders/${o.id}/payments/refresh`, { headers: H })).status()).toBe(200);
+  expect((await dp.request.post(`/api/orders/${o.id}/offer`, { data: { specialist_id: spec.id, from: 'matching' }, headers: H })).status()).toBe(200);
+
+  await sp.goto('/kabinet');
+  const offer = sp.locator('#orders li').filter({ hasText: title });
+  // 1. Предложение и дело: «Где находится товар» — одной строкой, шаг и блок — «Осмотр товара».
+  await expect(offer.locator('.brief')).toContainText('Для суда · Москва · Смартфон Samsung Galaxy A55');
+  sp.once('dialog', (d) => d.accept());
+  await offer.getByRole('button', { name: 'Принять дело' }).click();
+  await expect(sp.locator('#order-status')).toHaveText('В работе');
+  const data = sp.locator('#facts');
+  await expect(data).toContainText('Где находится товар');
+  await expect(data).toContainText('Адрес или у кого находится товар');
+  await expect(sp.locator('body')).not.toContainText('Где находится объект');
+  await expect(sp.locator('#next-steps li[data-step="inspect"]')).toContainText('Осмотр товара (по желанию)');
+  await expect(sp.locator('#inspect-head')).toHaveText('Осмотр товара по ссылке');
+  await expect(sp.locator('#inspect-state')).toContainText('товар целиком, маркировка, недостаток крупно');
+  await shot(sp, 'c6-tovar-delo');
+
+  // 2. Документы: для товара — чек, гарантия и претензия, акт проверки качества; протокола ДТП и акта о заливе нет.
+  await sp.locator('#next-steps li[data-step="docs"] button').click();
+  const items = sp.locator('#docreq-items');
+  await expect(items).toContainText('Акт проверки качества или заключение сервисного центра');
+  await expect(items).not.toContainText('Документы о повреждении');
+  await expect(items).not.toContainText('Определение суда');
+  for (const t of ['Чек или договор покупки', 'Гарантийный талон, претензия и ответ продавца']) await sp.locator('#docreq-box').getByLabel(t).check();
+  await sp.locator('#docreq-box').getByRole('button', { name: 'Запросить у заказчика' }).click();
+  await expect(sp.locator('#docreq-msg')).toHaveText('Запрошено документов: 2. Заказчику отправлено уведомление.');
+  await shot(sp, 'c7-tovar-zapros');
+  const reqs = (await (await page.request.get(`/api/orders/${o.id}/doc-requests`)).json()).requests;
+  for (const [t, name] of [['Чек или договор покупки', 'Чек.pdf'], ['Гарантийный талон, претензия и ответ продавца', 'Претензия.pdf']]) {
+    const doc = (await (await page.request.post(`/api/orders/${o.id}/documents`, { data: makePdf([[`${t} (тест)`]]),
+      headers: { ...H, 'x-file-name': encodeURIComponent(name), 'content-type': 'application/pdf' } })).json()).document;
+    expect((await page.request.post(`/api/orders/${o.id}/doc-requests/${reqs.find((x) => x.title === t).id}/attach`, { data: { document_id: doc.id }, headers: H })).status()).toBe(200);
+  }
+
+  // 3. Осмотр товара по ссылке: страница говорит о товаре, а не об объекте.
+  await sp.reload();
+  await sp.getByRole('button', { name: 'Выдать ссылку владельцу' }).click();
+  await expect(sp.locator('#inspect-url')).toContainText('http');
+  const url = await sp.locator('#inspect-url').textContent();
+  const octx = await phoneContext(browser, baseURL, { permissions: ['geolocation'], geolocation: { latitude: 55.75, longitude: 37.61, accuracy: 10 } });
+  const op = await octx.newPage();
+  await op.goto(url);
+  await expect(op.locator('#page-title')).toHaveText('Осмотр товара');
+  await expect(op.locator('#intro-text')).toContainText('сфотографировать товар и недостаток');
+  await expect(op.locator('#intro-text')).toContainText('Не ремонтируйте и не разбирайте товар');
+  await expect(op.locator('#intro-text')).not.toContainText('объект');
+  await expect(op).toHaveTitle('Осмотр товара · БЕРТЕЛ Дело');
+  const jpeg = Buffer.from((await op.evaluate(() => { const c = document.createElement('canvas'); c.width = 640; c.height = 480; const g = c.getContext('2d'); g.fillStyle = '#ddd'; g.fillRect(0, 0, 640, 480); return c.toDataURL('image/jpeg', 0.8); })).split(',')[1], 'base64');
+  await op.getByRole('button', { name: 'Начать: разрешить определение места' }).click();
+  for (const st of ['goods_overview', 'goods_label', 'goods_defect']) {
+    await op.locator(`#steps li[data-step="${st}"] input[type=file]`).setInputFiles({ name: `${st}.jpg`, mimeType: 'image/jpeg', buffer: jpeg });
+    await expect(op.locator(`#steps li[data-step="${st}"] .badge`)).toHaveText('Фото: 1');
+  }
+  await shot(op, 'c8-tovar-osmotr');
+  op.once('dialog', (d) => d.accept());
+  await op.getByRole('button', { name: 'Готово' }).click();
+  await expect(op.locator('#closed-text')).toContainText('Эксперт получил 3 фото');
+  await octx.close();
+
+  // 4. Черновик: вопросы суда — в разделе 2; в таблице «Где находится товар» и адрес; документы заказчика — списком.
+  await sp.reload();
+  await expect(sp.locator('#inspect-state')).toContainText('Фото осмотра: 3');
+  await sp.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const text = sp.getByLabel('Текст заключения');
+  const body = await text.inputValue();
+  expect(body).toContain('3. Какова стоимость устранения недостатков?');
+  expect(body).toContain('| Где находится товар | Москва |');
+  expect(body).toContain('| Адрес или у кого находится товар | у истца, г. Москва |');
+  expect(body).toMatch(/2\. Чек или договор покупки — файл «Чек\.pdf», получен \d\d\.\d\d\.\d{4}/);
+  expect(body).toContain('по статье 307 Уголовного кодекса Российской Федерации эксперт предупреждён');
+  await shot(sp, 'c9-tovar-chernovik');
+
+  // 5. Эксперт дописывает исследование и выводы; ИИ-проверка без ложной «даты покупки», подпись, сдача.
+  const done = body.replace(/\[(?:заполнить|описать)[^\]]*\]/gi, 'заполнено экспертом')
+    .replace(/## 7\. Выводы\n[^#]*/, '## 7. Выводы\nПо вопросу 1: в смартфоне имеется недостаток — не заряжается.\nПо вопросу 2: недостаток производственный.\nПо вопросу 3: стоимость устранения 12 400 (двенадцать тысяч четыреста) рублей.\n\n');
+  await text.fill(done);
+  await sp.getByRole('button', { name: 'Сохранить правку' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Правка сохранена');
+  await sp.locator('#next-main button').click();
+  await sp.locator('#draft-confirm').check();
+  await sp.getByRole('button', { name: 'Приложить как файл результата' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Файл «Заключение эксперта.docx» добавлен в результат работы');
+  await sp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  await expect(sp.locator('#review-box')).not.toContainText('Дата покупки');
+  await expect(sp.locator('#review-box')).not.toContainText('не найден в выводах');
+  await shot(sp, 'c10-tovar-proverka');
+  await expect(sp.locator('#next-main button')).toHaveText('Подписать файл');
+  sp.once('dialog', (d) => d.accept());
+  await sp.locator('#next-main button').click();
+  await expect(sp.locator('#next-main button')).toHaveText('Сдать на проверку');
+  await sp.locator('#next-main button').click();
+  await expect(sp.locator('#order-status')).toHaveText('Проверка результата');
+  await sctx.close();
+  await dctx.close();
+});
+
 test('как руководитель (2.67): организация, приглашение, назначение, переписка, возврат, подпись, передача дела', async ({ page, browser, baseURL }) => {
   test.setTimeout(180_000);
   const C = '+79990006701', D = '+79990006702', HD = '+79990006703', S1 = '+79990006704', S2 = '+79990006705';

@@ -482,7 +482,7 @@ export default {
     { id: 'item_overview', title: 'Каждый предмет целиком', services: ['movable'] },
     { id: 'item_marking', title: 'Маркировка и серийный номер', hint: 'Бирка, табличка, наклейка производителя', services: ['movable'] },
     { id: 'goods_overview', title: 'Товар целиком', hint: 'С нескольких сторон', services: ['goods'] },
-    { id: 'goods_label', title: 'Этикетка и маркировка', hint: 'Название, артикул, размер, состав', services: ['goods'] },
+    { id: 'goods_label', title: 'Этикетка и маркировка', hint: 'Название, модель, артикул или серийный номер (IMEI), размер, состав', services: ['goods'] },
     { id: 'goods_defect', title: 'Недостаток крупно', hint: '2–3 снимка с разных сторон, рядом — линейка или монета для масштаба', services: ['goods'] },
     { id: 'goods_package', title: 'Упаковка', services: ['goods'], optional: true },
     { id: 'defects', title: 'Повреждения и недостатки крупно', services: ['realty', 'vehicle', 'movable'], optional: true },
