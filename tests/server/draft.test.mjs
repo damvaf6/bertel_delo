@@ -590,5 +590,11 @@ test('почерковедческая (2.81): документы заказчи
   assert.equal(reg.service('expertise', 'realty').service.subject, undefined);
   assert.equal(reg.service('expertise', 'handwriting').fields.find((f) => f.id === 'region').label, 'Где находится документ');
   const svc = (patch) => ({ ...expertise, services: expertise.services.map((s) => (s.id === 'handwriting' ? { ...s, ...patch } : s)) });
-  assert.throws(() => validateModule(svc({ subject: 'paper' })), /subject — только 'document'/);
+  assert.throws(() => validateModule(svc({ subject: 'paper' })), /subject — 'document' или 'goods'/);
+  // Товароведческая (2.82): снимают товар; «где находится» — товар, адрес — отдельной строкой без повтора подписи.
+  const goods = reg.service('expertise', 'goods');
+  assert.equal(goods.service.subject, 'goods');
+  assert.equal(goods.fields.find((f) => f.id === 'region').label, 'Где находится товар');
+  assert.equal(goods.fields.filter((f) => f.label === 'Где находится товар').length, 1);
+  assert.ok(!expertise.request_docs.find((d) => d.id === 'damage_docs').services.includes('goods'), 'протокол ДТП и акт о заливе — не для товара');
 });

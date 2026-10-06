@@ -6,7 +6,7 @@
 //       paper — как называется итоговый документ на титуле Word (2.29): «Отчёт об оценке», «Заключение эксперта»…;
 //       labels — своя подпись общего поля модуля у этой услуги (2.79): { purpose: 'Для чего нужна экспертиза' };
 //       subject: 'document' — по ссылке осмотра снимают не объект, а документ (почерковедческая, 2.81): страница владельца так и
-//       называется — «Съёмка документа»
+//       называется — «Съёмка документа»; 'goods' — снимают товар (товароведческая, 2.82): «Осмотр товара»
 //     checks: [{ id, title, services?: [id услуги…], ask?, auto?: [имя правила…] }…],
 //       ask — что именно проверить (подсказка модели ИИ, человеку не показывается); auto — автоматические правила по
 //       всему тексту отчёта (src/ai/report-checks.mjs, AUTO_CHECKS): их находки показываются под этой проверкой
@@ -121,7 +121,7 @@ export function validateModule(m) {
   for (const s of m.services) {
     const where = `${at}, услуга ${s.id}`;
     onlyKeys(s, ['id', 'name', 'fields', 'paper', 'labels', 'subject'], where);
-    if (s.subject !== undefined && s.subject !== 'document') fail(where, "subject — только 'document' (снимают документ, а не объект)");
+    if (s.subject !== undefined && !['document', 'goods'].includes(s.subject)) fail(where, "subject — 'document' или 'goods' (снимают документ или товар, а не объект)");
     if (s.labels !== undefined) {
       if (!s.labels || typeof s.labels !== 'object' || Array.isArray(s.labels)) fail(where, 'labels — { id общего поля: подпись }');
       for (const [id, label] of Object.entries(s.labels)) {

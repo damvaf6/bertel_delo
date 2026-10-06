@@ -818,6 +818,9 @@ function purchaseMatch(doc, ctx) {
   eachPage(doc, (page, i) => {
     for (const line of page.split('\n')) {
       if (!BUY_WORDS.test(line) || /аналог|ремонт|устранени|замен/iu.test(line)) continue;
+      // Строка списка «Документы, представленные заказчиком» (2.81): «Чек … — файл «…», получен 06.10.2026» — дата получения
+      // файла, а не покупки (прогон 2.82).
+      if (/файл «[^»]*»,\s*получен/iu.test(line)) continue;
       if (mine.date) {
         for (const m of line.matchAll(DATE_RE)) {
           if (Number(m[1]) > 31 || Number(m[2]) > 12) continue;
