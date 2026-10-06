@@ -9,6 +9,7 @@ import { aiReviewView } from '../ai/ai.mjs';
 import { FINAL } from '../orders/workflow.mjs';
 import { audit, text } from './util.mjs';
 import { notifyMessage } from '../notify/notify.mjs';
+import { messagePhrases } from '../orders/phrases.mjs';
 
 const MESSAGE_MAX = 4000;
 const NOTE_MAX = 1000;
@@ -41,18 +42,29 @@ export function workOps() {
     {
       id: 'messages.list', method: 'GET', path: '/api/orders/:id/messages', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
-      async handler({ sql, actor, order }) {
+      async handler({ sql, actor, order, registry }) {
         const staff = isStaff(actor);
         const rows = await sql`
           select m.id, m.author_id, m.side, m.body, m.at, u.full_name
           from order_messages m join users u on u.id = m.author_id
           where m.order_id = ${order.id} order by m.id limit 500`;
+        const side = messageSide(actor, order);
+        const canWrite = !!side && !FINAL.includes(order.status);
         return {
           messages: rows.map((m) => ({
             id: String(m.id), side: m.side, body: m.body, at: m.at, mine: m.author_id === actor.id,
             author_name: staff ? m.full_name : null,
           })),
-          can_write: !!messageSide(actor, order) && !FINAL.includes(order.status),
+          can_write: canWrite,
+          // Готовые фразы (2.84) — только исполнителю, пока переписка открыта.
+          phrases: canWrite && side === 'executor' ? messagePhrases({
+            def: registry.service(order.module, order.service), fields: order.fields ?? {},
+            // Ещё не получены — как в списке запроса (src/ops/docreq-ops.mjs): нет файла или файл удалён.
+            openDocs: (await sql`select r.title from doc_requests r
+                                 left join documents d on d.id = r.document_id and d.deleted_at is null
+                                 where r.order_id = ${order.id} and r.cancelled_at is null and d.id is null
+                                 order by r.id`).map((d) => d.title),
+          }) : [],
         };
       },
     },

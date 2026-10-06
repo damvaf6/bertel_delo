@@ -3441,6 +3441,50 @@ test('запрос документов (2.64): эксперт отмечает 
   await ectx.close();
 });
 
+test('готовые фразы (2.84): эксперт одним нажатием подставляет вопрос заказчику, правит и отправляет', async ({ page, browser, baseURL }) => {
+  await signIn(page, '+79990000960');
+  const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира: готовые фразы' }, headers: H })).json();
+  const id = created.order.id;
+  expect((await page.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(7), fields: { purpose: 'bank', region: 'moscow', object_type: 'flat', address: 'г. Москва, Фразовая ул., 3', area: '41' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  const ectx = await phoneContext(browser, baseURL);
+  const ep = await ectx.newPage();
+  const expert = await signIn(ep, '+79990000961');
+  await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    await c.query("update orders set price_kop = 1500000, paid_at = now(), status = 'in_work', executor_user_id = $2 where id = $1", [id, expert.id]);
+  });
+  await ep.goto(`/kabinet#order=${id}`);
+  await ep.locator('#docreq-box').getByLabel('Выписка из ЕГРН').check();
+  await ep.locator('#docreq-box').getByRole('button', { name: 'Запросить у заказчика' }).click();
+  await expect(ep.locator('#docreq-list li')).toHaveCount(1);
+
+  // Эксперт: три фразы над полем сообщения; нажатие — текст в поле, ничего не отправлено.
+  const chat = ep.locator('#chat-box');
+  await expect(chat.locator('#message-phrase-list button')).toHaveText(['Доступ на осмотр', 'Уточнить адрес', 'Срок документов']);
+  await chat.getByRole('button', { name: 'Уточнить адрес' }).click();
+  await expect(chat.locator('#message-text')).toHaveValue(/в заявке указано: «г\. Москва, Фразовая ул\., 3»/);
+  await chat.getByRole('button', { name: 'Срок документов' }).click();
+  await expect(chat.locator('#message-text')).toHaveValue(/подъезд, этаж[\s\S]*\n\nДля работы ещё нужны документы: Выписка из ЕГРН\./);
+  await expect(chat.locator('#messages li')).toHaveCount(0);
+  await chat.locator('#message-form').scrollIntoViewIfNeeded();
+  await shot(ep, '99m-ekspert-gotovye-frazy');
+  // Правит текст и отправляет сам.
+  await chat.locator('#message-text').fill('Здравствуйте! Уточните, пожалуйста, код домофона. Выписку из ЕГРН — до пятницы.');
+  await chat.getByRole('button', { name: 'Отправить сообщение' }).click();
+  await expect(ep.locator('#chat-msg')).toHaveText('Сообщение отправлено');
+  await expect(chat.locator('#messages li')).toHaveCount(1);
+
+  // Заказчик: видит сообщение, готовых фраз у него нет.
+  await page.goto(`/kabinet#order=${id}`);
+  await expect(page.locator('#messages li')).toContainText('код домофона');
+  await expect(page.locator('#message-phrases')).toBeHidden();
+  await ectx.close();
+});
+
 test('черновик по своему прошлому делу (2.65): эксперт берёт методические разделы, данные прошлого дела — пометками', async ({ page, browser, baseURL }) => {
   await signIn(page, '+79990000790');
   const make = async (title, address) => {
