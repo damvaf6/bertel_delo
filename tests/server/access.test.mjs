@@ -926,7 +926,10 @@ test('шаблон отчёта организации (2.29): меняет ру
 });
 
 test('дистанционный осмотр (2.3): в деле видят те, кто видит заявку; ссылку выдаёт и отзывает только исполнитель в работе', async () => {
-  for (const id of ['inspection.get', 'inspection.issue', 'inspection.revoke', 'inspection.retake', 'inspection.retake_cancel']) cover(id);
+  for (const id of ['inspection.get', 'inspection.issue', 'inspection.revoke', 'inspection.retake', 'inspection.retake_cancel', 'inspection.thumb']) cover(id);
+  // Картинка снимка (2.71): документ не фото осмотра — «не найдено» даже тем, кто его видит; чужим — тоже «не найдено».
+  for (const k of ['owner', 'spec', 'dispatcher']) assert.equal((await U[k].req('GET', `/api/documents/${ownDoc.id}/thumb`)).status, 404, k);
+  for (const k of ['stranger', 'headB']) assert.equal((await U[k].req('GET', `/api/documents/${ownDoc.id}/thumb`)).status, 404, k);
   for (const k of ['owner', 'dispatcher', 'admin']) {
     const r = await U[k].req('GET', `/api/orders/${ownOrder.id}/inspection`);
     assert.equal(r.status, 200, k);

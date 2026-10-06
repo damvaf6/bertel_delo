@@ -14,6 +14,8 @@ const API = visitId
   ? { view: `/api/visits/${encodeURIComponent(visitId)}`, photos: `/api/visits/${encodeURIComponent(visitId)}/photos`, finish: `/api/visits/${encodeURIComponent(visitId)}/finish` }
   : { view: '/api/inspect', photos: '/api/inspect/photos', finish: '/api/inspect/finish' };
 const MAX_SIDE = 2560;        // крупные снимки уменьшаются до 2560 точек по длинной стороне — быстрее по мобильной сети
+const THUMB_SIDE = 320;       // картинка для дела (2.71): эксперт видит снимки сразу, не открывая каждый
+const THUMB_MAX = 64 * 1024;
 const GEO_FRESH_MS = 2 * 60_000;
 let info = null;
 let lastPos = null;
@@ -158,9 +160,11 @@ const retryable = (err) => err.network || err.status === 408 || err.status === 4
 async function enqueue(s, file) {
   const shotAt = new Date().toISOString();
   say(stepUi[s.id].status, 'Готовим фото…', 'ok');
-  const [pos, blob] = await Promise.all([position(), prepare(file)]);
+  const [pos, { blob, thumb }] = await Promise.all([position(), prepare(file)]);
   if (blob.size > info.limits.file_bytes) return say(stepUi[s.id].status, 'Фото больше 3 МБ — снимите ещё раз или уменьшите размер');
-  queue.push({ id: photoId(), s, blob: new Blob([blob], { type: blob.type || file.type || 'image/jpeg' }), shotAt, pos });
+  // Картинка для дела едет впереди снимка тем же запросом: при повторе по плохой связи они не разойдутся.
+  const type = blob.type || file.type || 'image/jpeg';
+  queue.push({ id: photoId(), s, blob: new Blob(thumb ? [thumb, blob] : [blob], { type }), thumbBytes: thumb ? thumb.size : 0, shotAt, pos });
   paintQueue();
   pump();
 }
@@ -186,6 +190,7 @@ function pause(ms) {
 
 async function send(q) {
   const h = { ...headers, 'x-step': q.s.id, 'x-shot-at': q.shotAt, 'x-photo-id': q.id };
+  if (q.thumbBytes) h['x-thumb-bytes'] = String(q.thumbBytes);
   if (q.pos) Object.assign(h, { 'x-lat': String(q.pos.coords.latitude), 'x-lon': String(q.pos.coords.longitude), 'x-accuracy': String(q.pos.coords.accuracy) });
   return api('POST', API.photos, q.blob, h, { timeoutMs: UPLOAD_TIMEOUT_MS });
 }
@@ -257,20 +262,28 @@ function position() {
   return new Promise((resolve) => navigator.geolocation.getCurrentPosition(resolve, () => resolve(null), { enableHighAccuracy: true, timeout: 8000, maximumAge: GEO_FRESH_MS }));
 }
 
-// Уменьшить снимок (JPEG); не вышло (например, HEIC в этом браузере) — уходит исходный файл, если он не больше лимита.
+// Уменьшить снимок (JPEG) и сделать картинку для дела; не вышло (например, HEIC в этом браузере) — уходит исходный файл,
+// если он не больше лимита, без картинки (эксперт откроет его кнопкой).
 async function prepare(file) {
   try {
     const bmp = await createImageBitmap(file);
+    const thumb = await shrink(bmp, THUMB_SIDE, 0.7).catch(() => null);
     const k = Math.min(1, MAX_SIDE / Math.max(bmp.width, bmp.height));
-    if (k === 1 && file.type === 'image/jpeg' && file.size <= info.limits.file_bytes * 0.9) return file;
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.round(bmp.width * k);
-    canvas.height = Math.round(bmp.height * k);
-    canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
-    const blob = await new Promise((r) => canvas.toBlob(r, 'image/jpeg', 0.85));
-    if (blob) return blob;
+    const ok = thumb && thumb.size <= THUMB_MAX ? thumb : null;
+    if (k === 1 && file.type === 'image/jpeg' && file.size <= info.limits.file_bytes * 0.9) return { blob: file, thumb: ok };
+    const blob = await shrink(bmp, MAX_SIDE, 0.85);
+    if (blob) return { blob, thumb: ok };
   } catch { /* остаётся исходный файл */ }
-  return file;
+  return { blob: file, thumb: null };
+}
+
+function shrink(bmp, side, quality) {
+  const k = Math.min(1, side / Math.max(bmp.width, bmp.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(bmp.width * k));
+  canvas.height = Math.max(1, Math.round(bmp.height * k));
+  canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
+  return new Promise((r) => canvas.toBlob(r, 'image/jpeg', quality));
 }
 
 $('start').addEventListener('click', () => {
