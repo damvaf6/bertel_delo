@@ -17,7 +17,7 @@ import { orderRef } from '../notify/registry.mjs';
 import { signatureFilename } from '../providers/sign.mjs';
 import { audit, text } from './util.mjs';
 
-const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
+export const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 const MAX_SIGNATURE_BYTES = 256 * 1024;
 const ROLE_RU = { expert: 'эксперта', org: 'организации' };
 
@@ -28,6 +28,8 @@ export const signatureView = (s) => s && {
   org: s.certificate?.org ?? null,
   title: s.certificate?.title ?? null,
   issuer: s.certificate?.issuer ?? null,
+  // Программа подписи, если узнана по сертификату («Госключ», 2.69).
+  app: s.certificate?.app ?? null,
   serial: s.certificate?.serial ?? null,
   valid_to: s.certificate?.valid_to ?? null,
   signed_at: s.signed_at,
@@ -76,7 +78,9 @@ async function addSignature({ sql, actor, providers }, { doc, order, role, metho
       : new HttpError(502, 'sign_failed', `Подпись не прошла проверку: ${check.reason ?? 'причина неизвестна'}`);
   }
   // Подпись организации — сертификатом организации (в нём её название).
-  if (role === 'org' && !check.certificate?.org) throw new HttpError(400, 'not_org_certificate', 'Это подпись физического лица — для подписи организации нужен сертификат организации (руководителя)');
+  if (role === 'org' && !check.certificate?.org) {
+    throw new HttpError(400, 'not_org_certificate', `${check.certificate?.app ? `Подпись из приложения «${check.certificate.app}» — это подпись физического лица` : 'Это подпись физического лица'} — для подписи организации нужен сертификат организации (руководителя)`);
+  }
   const key = `orders/${order.id}/${crypto.randomUUID()}.sig`;
   await providers.storage.put(key, signature, 'application/pkcs7-signature');
   try {

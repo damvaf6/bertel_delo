@@ -1,7 +1,8 @@
 // Электронная подпись заключения (задачи 2.5, 2.5а). Открепленная подпись: файл не меняется, подпись — отдельный файл.
 //   sign.sign({ digest, filename, signer: { id, name }, org? }) → { signature: Buffer, filename, mime, certificate, test }
 //   sign.verify({ digest, signature })                          → { valid, reason?, certificate?, signedAt?, test? }
-// digest — SHA-256 файла (hex). certificate — { subject, issuer, serial, valid_to, org?, title? }; org — { id, name }:
+// digest — SHA-256 файла (hex). certificate — { subject, issuer, serial, valid_to, org?, title?, app? }; app — программа
+// подписи, если узнана по сертификату («Госключ», 2.69); org — { id, name }:
 // подпись организации (руководитель), в сертификате — название организации и должность.
 // verify проверяет и подпись из кабинета, и готовый файл подписи, который человек загрузил сам (программа любого УЦ,
 // «Госключ»); настоящий поставщик проверяет открепленную подпись CMS и квалифицированность сертификата.
@@ -27,6 +28,17 @@ const sameHex = (a, b) => a.length === b.length && crypto.timingSafeEqual(Buffer
 // Готовый файл подписи «из программы УЦ» — для автотестов и прогона площадки. subject — владелец, org — название организации.
 export function testExternalSignature({ digest, subject, org = null, title = null }) {
   const certificate = { subject, issuer: EXTERNAL_ISSUER, serial: crypto.createHash('sha256').update(`ext:${subject}:${org}`).digest('hex').slice(0, 20).toUpperCase(), valid_to: '2027-12-31', ...(org ? { org, title: title ?? 'Руководитель' } : {}) };
+  const fields = { digest, certificate, signed_at: new Date().toISOString() };
+  return Buffer.from(`${JSON.stringify({ mark: EXTERNAL_MARK, ...fields, mac: hmac(EXTERNAL_KEY, fields) }, null, 2)}\n`, 'utf8');
+}
+
+// Готовый файл подписи «из «Госключа»» (2.69) — для автотестов и прогона площадки: как внешняя тестовая подпись, но
+// сертификат выдан «Госключом» (certificate.app). «Госключ» выдаёт сертификат физическому лицу — подписи организации
+// в нём нет. Настоящий поставщик узнаёт «Госключ» по издателю сертификата.
+export const GOSKEY_APP = 'Госключ';
+const GOSKEY_ISSUER = 'Тестовый удостоверяющий центр «Госключа» (только площадка)';
+export function testGoskeySignature({ digest, subject }) {
+  const certificate = { subject, issuer: GOSKEY_ISSUER, app: GOSKEY_APP, serial: crypto.createHash('sha256').update(`goskey:${subject}`).digest('hex').slice(0, 20).toUpperCase(), valid_to: '2027-12-31' };
   const fields = { digest, certificate, signed_at: new Date().toISOString() };
   return Buffer.from(`${JSON.stringify({ mark: EXTERNAL_MARK, ...fields, mac: hmac(EXTERNAL_KEY, fields) }, null, 2)}\n`, 'utf8');
 }

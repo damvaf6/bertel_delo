@@ -11,7 +11,7 @@ import { signBridge } from '../../src/bridge/signature.mjs';
 import { makePdf, makeDocx } from '../tools/make-docs.mjs';
 import { extractPages } from '../../src/ai/extract.mjs';
 import fs from 'node:fs';
-import { testExternalSignature } from '../../src/providers/sign.mjs';
+import { testExternalSignature, testGoskeySignature } from '../../src/providers/sign.mjs';
 import crypto from 'node:crypto';
 
 const CONTROL = process.env.UI_TEST_CONTROL_TOKEN || TEST_TOKEN;
@@ -635,7 +635,7 @@ test('ход заявки: подбор диспетчером, принятие
   const signed = page.locator('#docs li').filter({ hasText: 'отчёт-с-фото.pdf' });
   await expect(signed.locator('.sig-state')).toContainText('Подпись эксперта: Тестовый оценщик');
   await signed.getByRole('button', { name: 'Проверить подпись' }).click();
-  await expect(page.locator('#doc-msg')).toHaveText('Подпись верна: Тестовый оценщик');
+  await expect(page.locator('#doc-msg')).toHaveText('«отчёт-с-фото.pdf»: подпись верна — Тестовый оценщик');
   await expect(signed.getByRole('button', { name: 'Подписать' })).toHaveCount(0);
   const [sigFile] = await Promise.all([page.waitForEvent('download'), signed.getByRole('button', { name: 'Файл подписи' }).click()]);
   expect(sigFile.suggestedFilename()).toBe('отчёт-с-фото.pdf.sig');
@@ -1551,9 +1551,11 @@ test('две подписи (2.5а): эксперт от организации 
   await shot(sp, '96a-specialist-zamechanie');
   await expect(doc.locator('.sig-state').first()).not.toContainText('Подпись эксперта');
   sp.once('dialog', (d) => d.accept());
+  // Заново — подписью из «Госключа» (2.69): в деле видно, откуда подпись.
   await doc.locator('input[type=file]').setInputFiles({ name: 'отчёт-компании.pdf.sig', mimeType: 'application/octet-stream',
-    buffer: testExternalSignature({ digest, subject: 'Тестовый эксперт компании' }) });
+    buffer: testGoskeySignature({ digest, subject: 'Тестовый эксперт компании' }) });
   await expect(sp.locator('#doc-msg')).toHaveText('Подпись проверена и добавлена');
+  await expect(doc.locator('[data-sig="method"]').first()).toContainText('загружена готовым файлом из приложения «Госключ»');
   await expect(sp.locator('#org-returns li').first()).toContainText('отчёт-компании.pdf · исправлено');
   await expect(sp.locator('#org-returns-lead')).toHaveText('Все замечания учтены. История возвратов:');
   await expect(sp.locator('#next-steps [data-step="fix"]')).toHaveCount(0);
@@ -1636,7 +1638,14 @@ test('две подписи (2.5а): эксперт от организации 
   const got = page.locator('#docs li').filter({ hasText: 'отчёт-компании.pdf' });
   await expect(got.locator('.sig-state')).toHaveCount(2);
   await got.getByRole('button', { name: 'Проверить подпись' }).click();
-  await expect(page.locator('#doc-msg')).toHaveText('Подпись верна: Тестовый эксперт компании и ООО «Тестовая оценочная компания»');
+  await expect(page.locator('#doc-msg')).toHaveText('«отчёт-компании.pdf»: подписи верны — Тестовый эксперт компании и ООО «Тестовая оценочная компания»');
+  await expect(got.locator('[data-sig="method"]').first()).toContainText('из приложения «Госключ»');
+  await expect(got.locator('[data-sig="method"]').nth(1)).toContainText('подпись в кабинете');
+  // Архив дела — с протоколом проверки подписей (2.69).
+  const [zipDl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Выгрузить дело архивом' }).click()]);
+  const zipBuf = fs.readFileSync(await zipDl.path());
+  expect(zipBuf.includes(Buffer.from('Протокол проверки подписей № '))).toBe(true);
+  expect(zipBuf.includes(Buffer.from('Документы/отчёт-компании.pdf.org.sig'))).toBe(true);
   const [orgSig] = await Promise.all([page.waitForEvent('download'), got.getByRole('button', { name: 'Подпись организации' }).click()]);
   expect(orgSig.suggestedFilename()).toBe('отчёт-компании.pdf.org.sig');
   await shot(page, '98-zakazchik-dve-podpisi');

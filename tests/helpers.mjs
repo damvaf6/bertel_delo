@@ -70,7 +70,8 @@ export function client(stack) {
   let cookie = '';
   const c = {
     get cookie() { return cookie; },
-    async req(method, path, body, { headers = {}, raw = false, csrf = true } = {}) {
+    // binary — ответ файлом: body — Buffer.
+    async req(method, path, body, { headers = {}, raw = false, csrf = true, binary = false } = {}) {
       const h = { ...headers };
       if (cookie) h.cookie = cookie;
       if (method !== 'GET' && csrf) h['x-delo-request'] = '1';
@@ -85,6 +86,7 @@ export function client(stack) {
         const v = set.split(';')[0];
         cookie = v.endsWith('=') ? '' : v;
       }
+      if (binary) return { status: r.status, body: Buffer.from(await r.arrayBuffer()), headers: r.headers };
       let json = null;
       const text = await r.text();
       try { json = text ? JSON.parse(text) : null; } catch { json = text; }

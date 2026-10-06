@@ -468,8 +468,10 @@ async function verifyDoc(d) {
     const r = await api('POST', `/api/documents/${d.id}/signature/verify`);
     await loadDocs();
     const who = [r.signatures.expert?.signer, r.signatures.org?.org].filter(Boolean).join(' и ');
-    if (r.valid) say($('doc-msg'), `Подпись верна: ${who}`, 'ok');
-    else say($('doc-msg'), `Подпись неверна — ${r.reason}`);
+    // 2.69: файлов с подписями бывает несколько — в ответе видно, какой проверен.
+    const two = r.signatures.expert && r.signatures.org;
+    if (r.valid) say($('doc-msg'), `«${d.filename}»: ${two ? 'подписи верны' : 'подпись верна'} — ${who}`, 'ok');
+    else say($('doc-msg'), `«${d.filename}»: подпись неверна — ${r.reason}`);
   } catch (err) { say($('doc-msg'), err.message); }
 }
 
