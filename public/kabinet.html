@@ -326,6 +326,12 @@
           <div id="draft-approaches-list"></div>
         </fieldset>
         <button type="button" class="secondary hidden" id="draft-ai">Подготовить черновик с помощью ИИ</button>
+        <div class="field hidden" id="draft-past">
+          <label for="draft-past-case">Методические разделы — из своего прошлого дела</label>
+          <p class="muted" id="draft-past-hint"></p>
+          <select id="draft-past-case"></select>
+          <button type="button" class="secondary" id="draft-past-take">Взять разделы из этого дела</button>
+        </div>
         <div class="field hidden" id="draft-edit">
           <label for="draft-text">Текст заключения</label>
           <textarea id="draft-text" class="draft-text" maxlength="50000"></textarea>

@@ -71,6 +71,7 @@ function what(a, doc) {
     case 'order.transfer': return 'Заявка передана другому сотруднику';
     case 'draft.ai': return 'ИИ подготовил черновик заключения';
     case 'draft.save': return 'Черновик сохранён';
+    case 'draft.past': return 'В черновик взяты методические разделы из своего прошлого дела';
     case 'draft.attach': return 'Черновик приложен как результат';
     case 'draft.docx': return 'Черновик скачан файлом Word';
     case 'draft.approaches': return 'Выбраны подходы к оценке';

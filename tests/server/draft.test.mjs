@@ -404,3 +404,89 @@ for (const [svc, c] of Object.entries(OTHER)) {
     assert.match(text, new RegExp(c.last.replace(/[.()]/g, '\\$&')));
   });
 }
+
+test('черновик по своему прошлому делу (2.65): методические разделы — из своего черновика той же услуги, без данных прошлого заказчика и объекта', async () => {
+  const sec = (id) => createRegistry().draftSections('expertise', 'realty').find((s) => s.id === id).title;
+  const past = await inWork('Прошлая квартира');
+  await S.sql`update orders set fields = fields || ${JSON.stringify({ address: 'г. Москва, прошлая ул., 7', area: '61.2' })}::jsonb where id = ${past.id}`;
+  const pastBody = [
+    `## ${sec('r_standards')}`, 'Оценка выполнена по 135-ФЗ и ФСО I–VI. Заказчик Тестова Заказчица, тел. +7 999 000-09-01, почта zakaz@example.test.',
+    `## ${sec('r_assumptions')}`, 'Объект по адресу г. Москва, прошлая ул., 7 площадью 61.2 кв. м оценён по фото; кадастровый номер 77:01:0001001:999.',
+    'Стоимость 7 500 000 руб. не учитывает обременения. ИНН заказчика 7700000000.',
+    `## ${sec('r_approaches')}`, 'Сравнительный подход применён: рынок квартир в г. Москва развит. Затратный — не применён для квартир.',
+    `## ${sec('r_object')}`, 'Квартира по адресу г. Москва, тестовая ул., 9 — прошлый объект, переноситься не должен.',
+  ].join('\n');
+  assert.equal((await spec.req('PUT', `/api/orders/${past.id}/draft`, { body: pastBody })).status, 200);
+
+  // Чужое прошлое дело той же услуги: исполнитель другой — его черновик эксперту не предлагается и не берётся.
+  const spec2 = await login(S, '+79990000907');
+  await makeSpecialist(S.sql, spec2.user.id, { permits: [['expertise', 'realty']] });
+  const foreign = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Чужое дело' })).body.order;
+  await owner.req('PATCH', `/api/orders/${foreign.id}`, { deadline: addDays(todayMsk(), 10), fields: FIELDS });
+  assert.equal((await step(owner, foreign, 'matching')).status, 200);
+  await ensurePaid(S.sql, foreign.id);
+  assert.equal((await dispatcher.req('POST', `/api/orders/${foreign.id}/offer`, { specialist_id: spec2.user.id, from: 'matching' })).status, 200);
+  assert.equal((await step(spec2, foreign, 'in_work')).status, 200);
+  assert.equal((await spec2.req('PUT', `/api/orders/${foreign.id}/draft`, { body: pastBody.replace('135-ФЗ', 'ЧУЖОЙ ТЕКСТ') })).status, 200);
+
+  const o = await inWork('Новая квартира');
+  const list = (await spec.req('GET', `/api/orders/${o.id}/draft/past`)).body;
+  assert.deepEqual(list.sections, [sec('r_standards'), sec('r_assumptions'), sec('r_approaches')]);
+  const mine = list.cases.find((c) => c.id === past.id);
+  assert.ok(mine, 'своё прошлое дело в списке');
+  assert.equal(mine.sections, 3);
+  assert.match(mine.ref, /^№ [0-9A-F]{8}$/);
+  assert.ok(!list.cases.some((c) => c.id === foreign.id), 'чужое дело не предлагается');
+  assert.ok(!list.cases.some((c) => c.id === o.id), 'само дело не предлагается');
+  assert.ok(!JSON.stringify(list).includes('Прошлая квартира'), 'без названия и данных прошлого дела');
+  // Чужое, несуществующее, само дело — «не найдено»; без черновика — нечего брать.
+  for (const id of [foreign.id, o.id, '00000000-0000-0000-0000-000000000000', 'x']) {
+    assert.equal((await spec.req('POST', `/api/orders/${o.id}/draft/past`, { past_id: id })).status, 404, id);
+  }
+  // Черновика нет: заготовка со всеми разделами, таблицами и пометками; методические — из прошлого дела.
+  const r = await spec.req('POST', `/api/orders/${o.id}/draft/past`, { past_id: past.id, from: null });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  const b = r.body.draft.body;
+  assert.equal(r.body.draft.source, 'past');
+  assert.deepEqual(r.body.draft.inputs.past.sections, list.sections);
+  assert.ok(r.body.draft.inputs.past.marks >= 7);
+  assert.match(b, /Оценка выполнена по 135-ФЗ и ФСО I–VI\./);
+  assert.match(b, /Сравнительный подход применён: рынок квартир в г\. Москва развит\./);
+  // Взятые разделы — без данных прошлого дела; совпадающее с этим делом (город) остаётся.
+  const taken = list.sections.map((t) => b.split(`## ${t}`)[1].split('\n## ')[0]).join('\n');
+  assert.match(taken, /по адресу \[заполнить: данные этого дела\] площадью/);
+  assert.match(taken, /рынок квартир в г\. Москва развит/, 'город этого же дела остаётся');
+  for (const leak of ['+7 999', 'zakaz@', 'прошлая ул', '61.2', '77:01:0001001:999', '7 500 000', '7700000000']) {
+    assert.ok(!taken.includes(leak), `данные прошлого дела не перенесены: ${leak}`);
+  }
+  assert.ok(!b.includes('прошлый объект'), 'разделы без пометки reuse не переносятся');
+  assert.match(b, /\[заполнить: данные этого дела\]/);
+  assert.match(b, new RegExp(`## ${sec('r_object').replace(/[.()]/g, '\\$&')}\\n\\[заполнить: раздел по этому делу\\]`));
+  assert.match(b, /\| Услуга \| /, 'таблица «Задание» — по этому делу');
+  const titles = [...b.matchAll(/^## (.+)$/gm)].map((m) => m[1]);
+  assert.deepEqual(titles, createRegistry().draftSections('expertise', 'realty').map((s) => s.title));
+  // «Уже изменился»: брать в устаревший черновик нельзя.
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/draft/past`, { past_id: past.id, from: null })).status, 409);
+  // Есть черновик ИИ: меняются только методические разделы, остальное — как было.
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: r.body.draft.id })).status, 201);
+  const ai = (await spec.req('GET', `/api/orders/${o.id}/draft`)).body.draft;
+  const objAi = ai.body.split(`## ${sec('r_object')}`)[1].split('\n## ')[0];
+  const r2 = await spec.req('POST', `/api/orders/${o.id}/draft/past`, { past_id: past.id, from: ai.id });
+  assert.equal(r2.status, 201);
+  assert.equal(r2.body.draft.body.split(`## ${sec('r_object')}`)[1].split('\n## ')[0].trim(), objAi.trim());
+  assert.match(r2.body.draft.body, /Оценка выполнена по 135-ФЗ/);
+  assert.equal(r2.body.draft.versions, 3);
+  // Журнал дела — без номера прошлого дела; заказчику черновика нет.
+  const [a] = await S.sql`select details from audit_log where action = 'draft.past' and subject_id = ${o.id} order by id desc limit 1`;
+  assert.ok(!JSON.stringify(a.details).includes(past.id));
+  assert.equal((await owner.req('GET', `/api/orders/${o.id}/draft/past`)).status, 403);
+  // Услуга без методических разделов (товароведческая) — пустой список и «нельзя».
+  const g = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'goods', title: 'Товар' })).body.order;
+  await owner.req('PATCH', `/api/orders/${g.id}`, { deadline: addDays(todayMsk(), 10), fields: OTHER.goods.fields });
+  assert.equal((await step(owner, g, 'matching')).status, 200);
+  await ensurePaid(S.sql, g.id);
+  assert.equal((await dispatcher.req('POST', `/api/orders/${g.id}/offer`, { specialist_id: spec.user.id, from: 'matching' })).status, 200);
+  assert.equal((await step(spec, g, 'in_work')).status, 200);
+  assert.deepEqual((await spec.req('GET', `/api/orders/${g.id}/draft/past`)).body, { sections: [], cases: [] });
+  assert.equal((await spec.req('POST', `/api/orders/${g.id}/draft/past`, { past_id: past.id })).status, 400);
+});
