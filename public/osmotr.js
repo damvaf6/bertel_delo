@@ -43,6 +43,14 @@ async function load() {
   }
   if (!info.active) return closed(info.message);
   $('service').textContent = info.service || '';
+  // Почерковедческая (2.81): снимают документ и образцы подписи, а не объект на месте.
+  if (info.subject === 'document') {
+    document.title = 'Съёмка документа · БЕРТЕЛ Дело';
+    $('brand-sub').textContent = 'съёмка документа';
+    $('page-title').textContent = 'Съёмка документа';
+    $('intro-text').textContent = 'Эксперт просит сфотографировать документ и образцы подписи по шагам ниже. Вход не нужен. '
+      + 'У каждого фото записываются время и место съёмки. Фото не заменяют оригинал: его передают эксперту отдельно.';
+  }
   if (visitId) {
     $('expires').textContent = `Выезд назначен на ${dateRu(info.planned_at)}.`;
     renderVisit();

@@ -172,7 +172,9 @@ export default {
       id: 'handwriting',
       name: 'Почерковедческая экспертиза',
       paper: 'Заключение эксперта',
-      labels: { purpose: 'Для чего нужна экспертиза' },
+      // Исследуют документ, а не объект на месте (2.81): «где находится» — документ, по ссылке осмотра снимают документ.
+      labels: { purpose: 'Для чего нужна экспертиза', region: 'Где находится документ' },
+      subject: 'document',
       fields: [
         {
           id: 'object_kind', label: 'Что исследуем', type: 'select', required: true,

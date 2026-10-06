@@ -14,6 +14,8 @@ export async function loadInspection(current) {
   $('inspect-fresh').classList.add('hidden');
   if (!current.order.module) { box.classList.add('hidden'); return; }
   ctx = { order: current.order };
+  // Почерковедческая (2.81): по ссылке снимают документ, а не объект.
+  $('inspect-head').textContent = current.order.subject === 'document' ? 'Съёмка документа по ссылке' : 'Дистанционный осмотр';
   const r = await api('GET', `/api/orders/${current.order.id}/inspection`);
   const photos = r.steps.reduce((n, s) => n + s.photos.length, 0);
   box.classList.toggle('hidden', !(r.can_issue || r.links.length || photos));

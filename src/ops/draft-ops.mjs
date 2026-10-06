@@ -6,7 +6,7 @@ import { editsDraft, seesDraft } from '../access/policy.mjs';
 import { DRAFT_GAP, DRAFT_MAX, askAi, cleanDraftAnswer, draftMessages, orderBrief } from '../ai/ai.mjs';
 import { READ_MAX_BYTES, extractPages, readableKind } from '../ai/extract.mjs';
 import { DOCX_MIME } from '../docs/docx.mjs';
-import { fillTables, orderSections, reportFor, tablesBrief } from '../docs/report.mjs';
+import { fillTables, orderMaterials, orderSections, reportFor, tablesBrief } from '../docs/report.mjs';
 import { APPROACHES } from '../modules/index.mjs';
 import { analogsBrief } from '../analogs/analogs.mjs';
 import { publicDoc, saveDocument } from './core-ops.mjs';
@@ -141,7 +141,8 @@ export function draftOps() {
         const brief = [orderBrief(registry, order), onsite, dossierBrief, spec ? analogsBrief(spec, analogs) : null, tablesBrief(sections)].filter(Boolean).join('\n');
         const out = await askAi(ctx, actor, 'draft', draftMessages({ brief, sections, ...inputs }));
         // Таблицы (2.29) и сведения из досье (2.14) программа вставляет сама, под заголовками разделов.
-        const text = fillDraft(fillTables(cleanDraftAnswer(sections, out.text), sections, registry, order), sections, dossier).slice(0, DRAFT_MAX);
+        const materials = await orderMaterials(sql, order);
+        const text = fillDraft(fillTables(cleanDraftAnswer(sections, out.text), sections, registry, order, { materials }), sections, dossier).slice(0, DRAFT_MAX);
         const seen = {
           photos: inputs.photos.map((p) => p.name),
           docs: inputs.docs.map((d) => ({ name: d.name, read: d.text !== null, truncated: d.truncated })),
@@ -199,11 +200,12 @@ export function draftOps() {
         const own = new Set(pastValues(registry, order, []).map((v) => v.toLowerCase()));
         const values = pastValues(registry, past, [names?.owner, names?.org]).filter((v) => !own.has(v.toLowerCase()));
         const dossier = sections.some((s) => s.dossier) ? await loadDossier(sql, actor.id) : [];
+        const materials = await orderMaterials(sql, order);
         const d = await sql.tx(async (tx) => {
           await tx`select id from orders where id = ${order.id} for update`;
           const cur = await latest(tx, order.id);
           sameBase(cur, body?.from);
-          const base = cur?.body ?? fillDraft(fillTables(skeleton(sections), sections, registry, order), sections, dossier);
+          const base = cur?.body ?? fillDraft(fillTables(skeleton(sections), sections, registry, order, { materials }), sections, dossier);
           const got = reuseSections(base, sections, past.body, values);
           if (!got.used.length) throw new HttpError(409, 'no_reuse', 'В том деле нет методических разделов — выберите другое');
           const text = got.body.slice(0, DRAFT_MAX);

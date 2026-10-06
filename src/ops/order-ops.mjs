@@ -143,6 +143,8 @@ export function orderOps() {
       service: order.service,
       module_name: def?.module.name ?? null,
       service_name: def?.service.name ?? null,
+      // Что снимают по ссылке осмотра (2.81): объект или документ (почерковедческая).
+      subject: def?.service.subject ?? 'object',
       status: order.status,
       status_name: STATUS_NAME[order.status],
       deadline: order.deadline,
