@@ -746,8 +746,8 @@ function analogMatch(docs, ctx) {
   const firstPage = Math.max(0, (d.pages ?? []).findIndex((p) => /аналог/iu.test(p)));
   const at = (text, quote = '') => ({ doc: d, page: firstPage, quote, text });
   const n = list.length;
-  const many = n === 1 ? '1 аналог' : `${n} ${n < 5 ? 'аналога' : 'аналогов'}`;
-  if (!/аналог/iu.test(all)) return [at(`В деле подтверждено ${many}, а в отчёте аналогов нет — вставьте таблицу аналогов (кнопка «Отчёт Word» соберёт её сама)`)];
+  const many = n === 1 ? 'подтверждён 1 аналог' : `подтверждено ${n} ${n < 5 ? 'аналога' : 'аналогов'}`;
+  if (!/аналог/iu.test(all)) return [at(`В деле ${many}, а в отчёте аналогов нет — вставьте таблицу аналогов (кнопка «Отчёт Word» соберёт её сама)`)];
   const squashed = all.replace(/\s+/g, '').toLowerCase().replace(/\/\/(www|m)\./g, '//');
   const nums = numbersIn(all);
   const has = (v, tol) => nums.some((x) => Math.abs(x - v) <= tol);
@@ -785,7 +785,7 @@ function analogMatch(docs, ctx) {
       }
     });
   }
-  if (maxNo > n) out.unshift(at(`В отчёте есть аналог № ${maxNo}, а в деле подтверждено ${many} — добавьте недостающие в раздел «Аналоги» или проверьте нумерацию`));
+  if (maxNo > n) out.unshift(at(`В отчёте есть аналог № ${maxNo}, а в деле ${many} — добавьте недостающие в раздел «Аналоги» или проверьте нумерацию`));
   return out;
 }
 
