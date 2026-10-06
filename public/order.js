@@ -44,7 +44,8 @@ export function serviceOptions(select) {
     ...m.services.map((s) => el('option', { value: `${m.id}/${s.id}`, text: s.name })))));
 }
 
-export async function openOrder(id) {
+// to — сразу к разделу дела (2.85: «Сегодня» → осмотр без фото).
+export async function openOrder(id, { to } = {}) {
   try {
     current = await api('GET', `/api/orders/${id}`);
   } catch (err) {
@@ -62,6 +63,7 @@ export async function openOrder(id) {
   loadJournal(current.order, current.access);
   await Promise.all([loadDocs(true), loadTransfer(), loadMatch(current, () => openOrder(id)), loadDraft(current, () => openOrder(id)), loadAnalogs(current), loadInspection(current), loadOnsite(current), loadDocRequests(current, (file, msg) => uploadFile(file, 'other', msg)), loadReview(current), loadChat(current), loadMoney(current, () => openOrder(id))]);
   setNext({}); // разделы осмотра и черновика показаны — шаги пересчитываются
+  if (to === 'inspect' && !$('inspect-box').classList.contains('hidden')) $('inspect-box').scrollIntoView({ block: 'start' });
 }
 
 function render() {

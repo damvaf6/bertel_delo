@@ -7,7 +7,7 @@ import { startApp, login, client, setPlatformRole, makeSpecialist, ensurePaid, s
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import { createRegistry, validateModule } from '../../src/modules/index.mjs';
 import expertise from '../../src/modules/expertise.mjs';
-import { shotMeta, looksLikeImage } from '../../src/ops/inspect-ops.mjs';
+import { shotMeta, looksLikeImage, remindSilentInspections } from '../../src/ops/inspect-ops.mjs';
 
 let S, owner, dispatcher, spec, spec2;
 const FIELDS = { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, Осмотровая ул., 7', area: '41' };
@@ -415,4 +415,82 @@ test('2.71: картинка снимка для дела — впереди ф�
   const up = await owner.req('POST', `/api/orders/${o.id}/documents`, JPEG, { raw: true, headers: { 'content-type': 'image/jpeg', 'x-file-name': 'scan.jpg' } });
   assert.equal(up.status, 201, JSON.stringify(up.body));
   assert.equal((await owner.req('GET', `/api/documents/${up.body.document.id}/thumb`)).status, 404);
+});
+
+// 2.85: ссылку выдали, а фото нет 2 дня — эксперту одно напоминание в ленте и строка в «Сегодня»; в деле — «Отправить снова».
+const silentEvents = async (orderId) => (await S.sql`select user_id, event from notifications where order_id = ${orderId} and event = 'inspection_silent'`);
+const ago = (linkId, hours) => S.sql`update inspection_links set created_at = now() - make_interval(hours => ${hours}) where id = ${linkId}`;
+const todaySilent = async (c) => (await c.req('GET', '/api/today')).body.expert.inspect_silent;
+
+test('2.85: ссылка 2 дня без фото — эксперту одно напоминание, строка в «Сегодня» и в деле; новая ссылка — по ней снова', async () => {
+  const o = await inWork('Осмотр — молчит');
+  const first = await issue(o, { days: 1 });
+  await ago(first.link.id, 47);
+  await remindSilentInspections(S.sql);
+  assert.deepEqual(await silentEvents(o.id), [], 'меньше 2 дней — рано');
+  assert.equal((await spec.req('GET', `/api/orders/${o.id}/inspection`)).body.silent, null);
+  assert.ok(!(await todaySilent(spec)).some((x) => x.id === o.id));
+
+  // 2 дня, срок ссылки (1 день) уже истёк — владелец так и не снял: напоминание один раз.
+  await ago(first.link.id, 49);
+  await S.sql`update inspection_links set expires_at = now() - interval '1 day' where id = ${first.link.id}`;
+  await remindSilentInspections(S.sql);
+  await remindSilentInspections(S.sql);
+  assert.deepEqual((await silentEvents(o.id)).map((r) => [r.user_id, r.event]), [[spec.user.id, 'inspection_silent']], 'один раз и только эксперту');
+  const g = (await spec.req('GET', `/api/orders/${o.id}/inspection`)).body;
+  assert.equal(g.silent.link_id, first.link.id);
+  assert.equal(g.silent.expired, true);
+  const t = (await todaySilent(spec)).find((x) => x.id === o.id);
+  assert.ok(t && t.expired && t.link_at, JSON.stringify(t));
+  // Заказчик дела и чужой эксперт этого не видят.
+  assert.equal((await owner.req('GET', `/api/orders/${o.id}/inspection`)).body.silent, null);
+  assert.ok(!((await todaySilent(spec2)) ?? []).some((x) => x.id === o.id));
+  // СМС-текст напоминания — без названия заявки.
+  const [sms] = await S.sql`select d.body from notification_deliveries d join notifications n on n.id = d.notification_id
+                            where n.order_id = ${o.id} and n.event = 'inspection_silent'`;
+  assert.ok(!sms || !/молчит/.test(sms.body), sms?.body);
+
+  // «Отправить снова» = новая ссылка: строка уходит; через 2 дня молчания по новой — новое напоминание.
+  const second = await issue(o, { days: 3 });
+  assert.equal((await spec.req('GET', `/api/orders/${o.id}/inspection`)).body.silent, null);
+  assert.ok(!(await todaySilent(spec)).some((x) => x.id === o.id));
+  await ago(second.link.id, 50);
+  await remindSilentInspections(S.sql);
+  assert.equal((await silentEvents(o.id)).length, 2);
+  assert.equal((await spec.req('GET', `/api/orders/${o.id}/inspection`)).body.silent.expired, false);
+
+  // Пришло фото — молчания нет; новых напоминаний тоже.
+  assert.equal((await shoot(second.token, 'facade', { headers: GEO })).status, 201);
+  assert.equal((await spec.req('GET', `/api/orders/${o.id}/inspection`)).body.silent, null);
+  assert.ok(!(await todaySilent(spec)).some((x) => x.id === o.id));
+});
+
+test('2.85: без напоминания — отозванная ссылка, «Готово», дело не в работе, фото с выезда помощника после ссылки', async () => {
+  const revoked = await inWork('Осмотр — отозвана');
+  const a = await issue(revoked);
+  assert.equal((await spec.req('DELETE', `/api/orders/${revoked.id}/inspection/${a.link.id}`)).status, 204);
+  await ago(a.link.id, 72);
+
+  const finished = await inWork('Осмотр — готово');
+  const b = await issue(finished);
+  assert.equal((await shoot(b.token, 'facade')).status, 201);
+  assert.equal((await finish(b.token)).status, 200);
+  await ago(b.link.id, 72);
+
+  const done = await inWork('Осмотр — не в работе');
+  const c = await issue(done);
+  await ago(c.link.id, 72);
+  await S.sql`update orders set status = 'review' where id = ${done.id}`;
+
+  // Фото пришло иначе (например, с выезда помощника) после выдачи ссылки — осмотр есть, напоминать не о чем.
+  const other = await inWork('Осмотр — фото есть');
+  const d = await issue(other);
+  assert.equal((await shoot(d.token, 'facade')).status, 201);
+  await S.sql`update inspection_links set revoked_at = null where order_id = ${other.id}`;
+  const e = await issue(other);
+  await S.sql`update inspection_photos set received_at = now() where link_id = ${d.link.id}`;
+  await ago(e.link.id, 72);
+
+  await remindSilentInspections(S.sql);
+  for (const o of [revoked, finished, done, other]) assert.deepEqual(await silentEvents(o.id), [], o.title);
 });

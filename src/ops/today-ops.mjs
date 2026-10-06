@@ -1,5 +1,6 @@
 // «Сегодня» (2.34, 2.42): одним экраном — что требует внимания эксперта, руководителя экспертной организации и диспетчера. Эксперту: что
-// горит по срокам, что вернули на доработку (диспетчер или руководитель), что ждёт проверки диспетчера, новые предложения.
+// горит по срокам, что вернули на доработку (диспетчер или руководитель), что ждёт проверки диспетчера, новые предложения,
+// осмотр по ссылке 2 дня без фото (2.85).
 // Руководителю — по каждой своей организации: дела экспертов, у которых горит срок, ждут подписи организации, возвращены
 // эксперту и ждут исправления, дела, которые диспетчер предложил организации, сроки документов досье экспертов (2.63).
 // Руководителю — те же сведения, что в «Делах экспертов» (2.16): без заказчика, полей заявки, документов и переписки.
@@ -9,6 +10,7 @@ import { splitAmount } from '../money/money.mjs';
 import { STATUS_NAME, addDays, isOverdue, todayMsk } from '../orders/workflow.mjs';
 import { orderSignatures, orgReturns } from './sign-ops.mjs';
 import { dossierAlerts, loadDossier } from '../dossier/dossier.mjs';
+import { silentLinks } from './inspect-ops.mjs';
 
 // «Горит» — просрочено или до срока не больше двух дней (как подсветка в списке дел).
 const HOT_DAYS = 2;
@@ -34,7 +36,14 @@ async function expertPart(sql, actor, registry, today) {
       returned.push(item(o, { by: `Руководитель${r.by ? ` (${r.by})` : ''}`, comment: r.comment }));
     }
   }
+  // Осмотр по ссылке молчит 2 дня (2.85): владелец не прислал ни одного фото — отправить ссылку снова.
+  const silent = [];
+  for (const l of await silentLinks(sql, { executor: actor.id })) {
+    const o = rows.find((x) => x.id === l.order_id);
+    if (o) silent.push(item(o, { link_at: l.created_at, expired: new Date(l.expires_at) <= new Date(), sms_to: l.sms_to ?? null }));
+  }
   return {
+    inspect_silent: silent,
     hot: rows.filter((o) => o.status === 'in_work' && o.deadline && o.deadline <= soon).map((o) => item(o)),
     returned,
     review: rows.filter((o) => o.status === 'review').map((o) => item(o)),

@@ -6,7 +6,7 @@ import { api, el, say } from '/common.js';
 const $ = (id) => document.getElementById(id);
 const timeRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
 const STATE_RU = { active: 'действует', finished: 'владелец нажал «Готово»', revoked: 'отозвана', expired: 'срок истёк', closed: 'закрыта' };
-let ctx = null;   // { order }
+let ctx = null;   // { order, silent }
 
 export async function loadInspection(current) {
   const box = $('inspect-box');
@@ -36,9 +36,35 @@ export async function loadInspection(current) {
     : r.can_issue ? (subject === 'goods' ? 'Тот, у кого товар, снимает его сам по ссылке — без входа, по шагам: товар целиком, маркировка, недостаток крупно. Фото появятся здесь.'
       : 'Владелец объекта снимает его сам по ссылке — без входа, по шагам для этого вида объекта. Фото появятся здесь.')
       : 'Фото осмотра пока нет.';
+  renderSilent(r);
   renderLinks(r);
   renderSteps(r, photos);
 }
+
+// Ссылка молчит 2 дня (2.85): владелец не прислал ни одного фото. «Отправить ссылку снова» выдаёт новую (прежняя отзывается;
+// секрет прежней не хранится) — с тем сроком и телефоном, что в форме ниже; номер для СМС мы не храним — вписать снова.
+function renderSilent(r) {
+  const s = r.silent;
+  ctx.silent = s;
+  askedPhone = false;
+  $('inspect-silent').classList.toggle('hidden', !(s && r.can_issue));
+  if (!s || !r.can_issue) return;
+  $('inspect-silent-text').textContent = `${s.expired ? 'Срок ссылки истёк, а' : 'Уже 2 дня'} владелец не прислал ни одного фото (ссылка от ${timeRu(s.since)}${s.sms_to ? `, СМС на ${s.sms_to}` : ''}). `
+    + 'Отправьте ссылку снова — новая заменит прежнюю. Чтобы ушла СМС, впишите телефон ниже: номер мы не храним.';
+}
+
+// Прежняя ушла СМС, а телефон не вписан — сначала просим вписать; второе нажатие — ссылка без СМС (скопировать и отправить самому).
+let askedPhone = false;
+$('inspect-resend').addEventListener('click', () => {
+  if (ctx.silent?.sms_to && !$('inspect-phone').value.trim() && !askedPhone) {
+    askedPhone = true;
+    $('inspect-phone').focus();
+    say($('inspect-msg'), 'Впишите телефон владельца — пришлём СМС. Без телефона нажмите ещё раз: ссылку скопируете и отправите сами');
+    return;
+  }
+  askedPhone = false;
+  $('inspect-issue').requestSubmit();
+});
 
 function renderLinks(r) {
   $('inspect-links').replaceChildren(...r.links.map((l) => el('li', { class: 'doc', 'data-link': l.id },

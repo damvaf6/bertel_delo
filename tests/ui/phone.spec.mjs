@@ -3485,6 +3485,61 @@ test('готовые фразы (2.84): эксперт одним нажатие
   await ectx.close();
 });
 
+test('осмотр без фото (2.85): ссылка молчит 2 дня — строка в «Сегодня», в деле «Отправить ссылку снова»', async ({ page, browser, baseURL }) => {
+  await signIn(page, '+79990000962');
+  const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира: осмотр молчит' }, headers: H })).json();
+  const id = created.order.id;
+  expect((await page.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(9), fields: { purpose: 'bank', region: 'moscow', object_type: 'flat', address: 'г. Москва, Тихая ул., 5', area: '38' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  const ectx = await phoneContext(browser, baseURL);
+  const ep = await ectx.newPage();
+  const expert = await signIn(ep, '+79990000963');
+  await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    await c.query("update orders set price_kop = 1500000, paid_at = now(), status = 'in_work', executor_user_id = $2 where id = $1", [id, expert.id]);
+  });
+  // Ссылку выдали СМС три дня назад; владелец так ничего и не снял.
+  const issued = await ep.request.post(`/api/orders/${id}/inspection`, { data: { days: 3, phone: '+79990000964' }, headers: H });
+  expect(issued.status()).toBe(201);
+  await db((c) => c.query("update inspection_links set created_at = now() - interval '3 days', expires_at = now() + interval '2 hours' where order_id = $1", [id]));
+
+  await ep.goto('/kabinet');
+  const row = ep.locator('[data-today-item="inspect-silent"]');
+  await expect(ep.locator('[data-today="inspect-silent"]')).toHaveText('Осмотр: 2 дня нет фото · 1');
+  await expect(row).toContainText('Квартира: осмотр молчит');
+  await expect(row).toContainText('СМС на +7 *** ***-09-64');
+  await shot(ep, '99n-ekspert-segodnya-osmotr-molchit');
+  await row.getByRole('button').click();
+  const box = ep.locator('#inspect-box');
+  await expect(box.locator('#inspect-silent')).toBeVisible();
+  await expect(box.locator('#inspect-silent-text')).toContainText('Уже 2 дня владелец не прислал ни одного фото');
+  await expect(box.locator('#inspect-silent-text')).toContainText('СМС на +7 *** ***-09-64');
+  await expect(box.locator('#inspect-silent')).toBeInViewport();
+  await shot(ep, '99o-ekspert-osmotr-otpravit-snova');
+  // Прежняя ушла СМС — сначала просим вписать телефон (номер не хранится); вписал — новая ссылка уходит СМС.
+  await box.getByRole('button', { name: 'Отправить ссылку снова' }).click();
+  await expect(ep.locator('#inspect-phone')).toBeFocused();
+  await expect(ep.locator('#inspect-msg')).toContainText('Впишите телефон владельца');
+  await ep.locator('#inspect-phone').fill('+7 999 000-09-64');
+  await box.getByRole('button', { name: 'Отправить ссылку снова' }).click();
+  await expect(ep.locator('#inspect-msg')).toHaveText('Ссылка отправлена СМС на +7 *** ***-09-64');
+  await expect(box.locator('#inspect-silent')).toBeHidden();
+  await expect(box.locator('#inspect-links li')).toHaveCount(2);
+  await expect(box.locator('#inspect-links li').first()).toContainText('действует');
+  await expect(box.locator('#inspect-links li').nth(1)).toContainText('отозвана');
+  // В «Сегодня» строки больше нет.
+  await ep.goto('/kabinet');
+  await expect(ep.locator('#today-box')).toBeVisible();
+  await expect(ep.locator('[data-today="inspect-silent"]')).toHaveCount(0);
+  // Заказчик напоминания не видит.
+  await page.goto(`/kabinet#order=${id}`);
+  await expect(page.locator('#inspect-silent')).toBeHidden();
+  await ectx.close();
+});
+
 test('черновик по своему прошлому делу (2.65): эксперт берёт методические разделы, данные прошлого дела — пометками', async ({ page, browser, baseURL }) => {
   await signIn(page, '+79990000790');
   const make = async (title, address) => {

@@ -256,3 +256,6 @@ h2.inline { display: inline; }
 .demo-roles .muted { font-weight: 400; }
 #draft-past { margin-top: 20px; }
 #progress { margin: 4px 4px 10px; font-weight: 600; }
+/* Осмотр по ссылке 2 дня без фото (2.85) — заметно над формой выдачи ссылки. */
+.notice-warn { margin: 8px 0; padding: 10px 12px; border-radius: 8px; background: #fff3d6; color: #5c3900; }
+.notice-warn p { margin: 0 0 8px; overflow-wrap: anywhere; }
