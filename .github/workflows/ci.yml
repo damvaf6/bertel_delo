@@ -100,7 +100,7 @@ jobs:
           TEST_CONTROL_TOKEN=ci-test-control-token-0123456789
           CRM_BRIDGE_SECRET=ci-crm-bridge-secret-0123456789abcdef
           CRM_URL=https://crm.example.test
-          AUTH_RATE_MAX=200
+          AUTH_RATE_MAX=400
           STORAGE_PROVIDER=s3
           S3_ENDPOINT=http://127.0.0.1:9000
           S3_BUCKET=delo-ci-files
