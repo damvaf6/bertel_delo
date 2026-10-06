@@ -125,8 +125,9 @@ export function adjusted(a) {
   const price = a.fields?.price_rub;
   if (!list.length || !Number.isFinite(price)) return null;
   const k = list.reduce((m, x) => m * (1 + x.pct / 100), 1);
-  // toFixed — чтобы 0,5 рубля не терялись на погрешности дробей.
-  const out = { pct: Math.round(Number(((k - 1) * 100).toFixed(6)) * 100) / 100, price: Math.round(Number((price * k).toFixed(6))) };
+  // toFixed — чтобы половинки не терялись на погрешности дробей; половина — от нуля (−3,575 % → −3,58 %).
+  const half = (x, d = 0) => Math.sign(x) * Math.round(Number(Math.abs(x).toFixed(6)) * 10 ** d) / 10 ** d;
+  const out = { pct: half((k - 1) * 100, 2), price: half(price * k) };
   if (Number.isFinite(a.fields.area) && a.fields.area > 0) out.per_sqm = Math.round(out.price / a.fields.area);
   return out;
 }

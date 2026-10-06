@@ -66,15 +66,73 @@ function input(f, a, disabled) {
   return el('div', { class: `field${wide ? ' full' : ''}` }, label, node);
 }
 
+// Корректировки к аналогу (2.74): вид, значение в процентах, источник — справочник, год, таблица. Сохраняются вместе с
+// признаками кнопкой «Подтвердить» / «Сохранить»; итог (всего и цена после корректировок) считает сервер.
+const pctRu = (p) => `${p > 0 ? '+' : p < 0 ? '−' : ''}${Math.abs(p).toLocaleString('ru-RU', { maximumFractionDigits: 2 })} %`;
+const rub = (n) => Number(n).toLocaleString('ru-RU').replace(/\u00a0/g, ' ');
+let adjSeq = 0;
+
+function adjRow(x, kinds, ro) {
+  const n = ++adjSeq;
+  const id = (k) => `adj-${n}-${k}`;
+  const kind = el('select', { id: id('kind'), 'data-adj': 'kind' }, el('option', { value: '', text: 'Выберите вид' }), ...kinds.map((k) => el('option', { value: k.id, text: k.name })));
+  kind.value = x.kind ?? '';
+  const text = (key, label, attrs, cls = '') => {
+    const node = el('input', { id: id(key), 'data-adj': key, type: 'text', autocomplete: 'off', ...attrs });
+    node.value = x[key] === undefined || x[key] === null ? '' : String(x[key]);
+    node.disabled = ro;
+    return el('div', { class: `field ${cls}`.trim() }, el('label', { for: id(key), text: label }), node);
+  };
+  kind.disabled = ro;
+  const name = text('name', 'Название корректировки', { maxlength: '60' }, 'full');
+  const showName = () => name.classList.toggle('hidden', kind.value !== 'other');
+  kind.addEventListener('change', showName);
+  showName();
+  const row = el('li', { class: 'analog-adj-row' },
+    el('div', { class: 'field full' }, el('label', { for: id('kind'), text: 'Корректировка' }), kind),
+    name,
+    text('pct', 'Значение, %', { inputmode: 'decimal', placeholder: '−5 или 3,5', maxlength: '10' }),
+    text('year', 'Год справочника', { inputmode: 'numeric', maxlength: '4' }),
+    text('book', 'Справочник или источник', { maxlength: '200' }, 'full'),
+    text('table', 'Таблица', { maxlength: '40', placeholder: 'например, 12' }));
+  if (!ro) row.append(el('button', { type: 'button', class: 'link', 'data-action': 'adj-remove', onclick: () => row.remove() }, 'Убрать корректировку'));
+  return row;
+}
+
+function adjBlock(a, data, ro) {
+  const kinds = data.adjust_kinds ?? [];
+  const list = el('ol', { class: 'analog-adj-list' }, ...a.adjustments.map((x) => adjRow(x, kinds, ro)));
+  const sum = a.adjusted
+    ? `всего ${pctRu(a.adjusted.pct)} · цена после — ${rub(a.adjusted.price)} руб.${a.adjusted.per_sqm ? ` (${rub(a.adjusted.per_sqm)} за кв. м)` : ''}`
+    : 'нет';
+  const box = el('details', { class: 'analog-adj' },
+    el('summary', { text: `Корректировки: ${a.adjustments.length ? `${a.adjustments.length} · ${sum}` : 'нет'}` }),
+    ...(ro ? [] : [el('p', { class: 'muted', text: 'Применяются по порядку, одна за другой. Источник — справочник, год издания и номер таблицы. Сохраните кнопкой ниже.' })]),
+    list);
+  if (!ro) box.append(el('button', { type: 'button', class: 'secondary', 'data-action': 'adj-add', onclick: () => { list.append(adjRow({}, kinds, false)); list.lastChild.querySelector('select').focus(); } }, 'Добавить корректировку'));
+  if (a.adjustments.length) box.open = true;
+  return box;
+}
+
+function adjValues(box) {
+  return [...box.querySelectorAll('.analog-adj-row')].map((r) => {
+    const out = {};
+    for (const n of r.querySelectorAll('[data-adj]')) out[n.getAttribute('data-adj')] = n.value.trim();
+    if (out.kind !== 'other') delete out.name;
+    return out;
+  }).filter((x) => x.kind || x.pct || x.book || x.table || x.year);
+}
+
 function card(a, i, data) {
   const ro = !data.can_edit;
   const fieldsBox = el('div', { class: 'analog-fields' }, ...data.fields.map((f) => input(f, a, ro)));
+  const adjBox = adjBlock(a, data, ro);
   const fileId = `analog-file-${a.id}`;
   const meta = a.file
     ? `Скриншот получен платформой ${timeRu(a.file.received_at)} · отпечаток ${a.file.sha256.slice(0, 12)}…`
     : 'Скриншот не приложен';
   const actions = ro ? [] : [
-    el('button', { type: 'button', 'data-action': 'analog-confirm', onclick: (e) => save(a, fieldsBox, true, e.target) }, a.confirmed ? 'Сохранить' : 'Подтвердить'),
+    el('button', { type: 'button', 'data-action': 'analog-confirm', onclick: (e) => save(a, fieldsBox, adjBox, true, e.target) }, a.confirmed ? 'Сохранить' : 'Подтвердить'),
     el('button', { type: 'button', class: 'secondary', 'data-action': 'analog-ai', onclick: (e) => readAi(a, e.target) }, 'Заполнить с помощью ИИ'),
     el('label', { class: 'btn secondary', for: fileId, text: a.file ? 'Заменить скриншот' : 'Приложить скриншот' }),
     el('input', { id: fileId, type: 'file', class: 'visually-hidden', accept: 'image/png,image/jpeg,image/webp,image/heic,application/pdf', onchange: (e) => replaceFile(a, e) }),
@@ -89,6 +147,7 @@ function card(a, i, data) {
     ...(a.file ? [el('button', { type: 'button', class: 'link', onclick: () => openFile(a) }, 'Открыть скриншот')] : []),
     ...(a.warnings.length ? [el('ul', { class: 'analog-warn' }, ...a.warnings.map((w) => el('li', { text: w })))] : []),
     fieldsBox,
+    adjBox,
     el('div', { class: 'row' }, ...actions));
 }
 
@@ -146,8 +205,8 @@ function values(box) {
   return out;
 }
 
-const save = (a, box, confirm, button) => run(button, async () => {
-  render(await api('PUT', `${base()}/${a.id}`, { fields: values(box), confirm }));
+const save = (a, box, adjBox, confirm, button) => run(button, async () => {
+  render(await api('PUT', `${base()}/${a.id}`, { fields: values(box), adjustments: adjValues(adjBox), confirm }));
   say($('analogs-msg'), confirm ? 'Аналог подтверждён' : 'Сохранено', 'ok');
 });
 
