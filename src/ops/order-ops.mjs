@@ -127,7 +127,8 @@ export function orderOps() {
     const parts = def.fields.filter((f) => f.id !== 'comment' && order.fields?.[f.id] !== undefined && order.fields[f.id] !== '' && (f.type !== 'longtext' || f.required))
       .map((f) => (f.type === 'select' ? f.options.find((o) => o.id === order.fields[f.id])?.name ?? order.fields[f.id]
         : f.type === 'longtext' ? clipText(String(order.fields[f.id]), 80)
-          : f.type === 'number' ? Number(order.fields[f.id]).toLocaleString('ru-RU', { useGrouping: Math.abs(Number(order.fields[f.id])) >= 10000 })
+          // Число — с единицей из подписи поля (2.66): «54,3 кв. м», «12 000 км», а не голое «54,3».
+          : f.type === 'number' ? [Number(order.fields[f.id]).toLocaleString('ru-RU', { useGrouping: Math.abs(Number(order.fields[f.id])) >= 10000 }), f.label.match(/,\s*([^,]{1,6})$/)?.[1]].filter(Boolean).join(' ')
             : String(order.fields[f.id])))
       .slice(0, 6);
     return parts.length ? parts.join(' · ').slice(0, 300) : null;

@@ -119,7 +119,8 @@ export function analogWarnings(spec, order, list) {
   return { per, hints, confirmed };
 }
 
-const fmtNum = (n) => Number(n).toLocaleString('ru-RU').replace(/ /g, ' ');
+// Четырёхзначные числа — без пробела (2.66): год «1975», а не «1 975»; с 10 000 — по разрядам.
+const fmtNum = (n) => Number(n).toLocaleString('ru-RU', { useGrouping: Math.abs(Number(n)) >= 10000 }).replace(/ /g, ' ');
 const ruDate = (iso) => (iso ? String(iso).slice(0, 10).split('-').reverse().join('.') : '');
 export const timeMsk = (t) => new Date(t).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 

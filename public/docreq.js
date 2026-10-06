@@ -1,6 +1,7 @@
 // Запрос недостающих документов (задача 2.64). Исполнитель отмечает документы из списка услуги (или пишет свои) и одной
 // кнопкой просит их у заказчика; заказчик видит список с отметками и загружает файл к каждому. Текст — через textContent.
 import { api, el, say } from '/common.js';
+import { setNext } from '/next.js';
 
 const $ = (id) => document.getElementById(id);
 let ctx = null; // { order, upload(file, msg) → документ или null }
@@ -16,8 +17,10 @@ export async function loadDocRequests(current, upload) {
 function render(r) {
   const box = $('docreq-box');
   box.classList.toggle('hidden', !(r.can_request || r.requests.length));
-  if (box.classList.contains('hidden')) return;
   const waiting = r.requests.filter((x) => !x.done).length;
+  // Шаг «Документы от заказчика» в «Что дальше» (2.66) — только исполнителю.
+  setNext({ docreq: r.can_request ? { total: r.requests.length, got: r.requests.length - waiting } : null });
+  if (box.classList.contains('hidden')) return;
   $('docreq-lead').textContent = r.can_request
     ? (r.requests.length ? `Получено ${r.requests.length - waiting} из ${r.requests.length}. Заказчику пришло уведомление; файлы появятся и в «Документах».`
       : 'Чего не хватает для работы — отметьте ниже: заказчик получит уведомление и загрузит файлы к каждому пункту.')

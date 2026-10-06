@@ -2750,13 +2750,13 @@ test('как диспетчер (2.42): «Сегодня», цена, подбо
 // отчёта о машине, с 2.59 — чужие площадь, этаж, долю и категорию земель, с 2.60 — веса подходов и аналоги, с 2.61 — покупка и вопросы в выводах товароведческой. Заказчик и диспетчер — через API.
 const OTHER_KINDS = [
   { svc: 'realty', name: 'Оценка недвижимости', title: 'Доля в квартире для суда', fields: { purpose: 'court', region: 'moscow', object_type: 'share', address: 'г. Москва, ул. Долевая, 3, кв. 8', cadastral: '77:01:0001001:1234', area: '64.8', floor: '5 / 9', rooms: '3', year_built: '1975', share_size: '1/3' },
-    brief: 'Для суда · Москва · Доля в квартире или доме · г. Москва, ул. Долевая, 3, кв. 8 · 77:01:0001001:1234 · 64,8', approach: ['Сравнительный', 'Затратный'], sections: ['11. Сравнительный подход: аналоги и корректировки', '12. Затратный подход', '13. Согласование результатов и итоговая величина'],
+    brief: 'Для суда · Москва · Доля в квартире или доме · г. Москва, ул. Долевая, 3, кв. 8 · 77:01:0001001:1234 · 64,8 кв. м', approach: ['Сравнительный', 'Затратный'], sections: ['11. Сравнительный подход: аналоги и корректировки', '12. Затратный подход', '13. Согласование результатов и итоговая величина'],
     report: 'Отчёт об оценке доли в квартире. Кадастровый номер объекта 77:05:0007003:999. Пробег не определялся.\nОбщая площадь 45,1 кв. м\nКвартира на 7 этаже\nДоля 1/4 в праве собственности\nАналог №1 https://ads.example.ru/kv/1\nАналог №2 https://ads.example.ru/kv/1\nСогласование результатов, вес подхода\nСравнительный подход 0,5\nЗатратный подход 0,3',
     finds: ['Кадастровый номер 77:05:0007003:999 не совпадает', '«Пробег» в отчёте об оценке недвижимости', 'Площадь 45,1 кв. м не совпадает с площадью из заявки (64,8 кв. м)', 'Этаж 7 не совпадает с этажом из заявки (5)', 'Доля 1/4 не совпадает с долей из заявки (1/3)',
       // 2.60: веса подходов, аналогов меньше трёх, одна ссылка у двух аналогов.
       'Веса подходов в согласовании в сумме 0,8, а должно быть 1', 'В сравнительном подходе два аналога — нужно не меньше трёх', 'Одна и та же ссылка у аналогов № 1 и № 2'] },
   { svc: 'land', name: 'Оценка земельного участка', title: 'Участок ИЖС для продажи', fields: { purpose: 'deal', region: 'mo', address: 'МО, д. Тестово, уч. 5', cadastral: '50:20:0010101:77', area: '1200', land_use: 'izhs', land_category: 'settlement' },
-    brief: 'Купля-продажа · Московская область · МО, д. Тестово, уч. 5 · 50:20:0010101:77 · 1200 · Под жилой дом (ИЖС)', approach: null, sections: ['11. Сравнительный подход: аналоги и корректировки', '12. Доходный подход', '13. Затратный подход (метод выделения или распределения)'],
+    brief: 'Купля-продажа · Московская область · МО, д. Тестово, уч. 5 · 50:20:0010101:77 · 1200 кв. м · Под жилой дом (ИЖС)', approach: null, sections: ['11. Сравнительный подход: аналоги и корректировки', '12. Доходный подход', '13. Затратный подход (метод выделения или распределения)'],
     report: 'Отчёт об оценке земельного участка. Кадастровый номер участка 50:20:0010101:88. Автомобиль на фото.\nКатегория земель: земли сельскохозяйственного назначения',
     finds: ['Кадастровый номер 50:20:0010101:88 не совпадает', '«Автомобиль» в отчёте об оценке земельного участка', 'Категория земель «земли сельскохозяйственного назначения» не совпадает с заявкой'] },
   { svc: 'movable', name: 'Оценка движимого имущества', title: 'Станки для залога', fields: { purpose: 'bank', region: 'mo', items: 'Токарный станок 16К20, 1985 г., 2 шт.; фрезерный 6Р82', location: 'МО, г. Тестовск, цех 1' },
@@ -3232,4 +3232,161 @@ test('черновик по своему прошлому делу (2.65): эк�
   await expect(page.locator('#order-status')).toHaveText('В работе');
   await expect(page.locator('#draft-box')).toBeHidden();
   await ectx.close();
+});
+
+// Прогон «как эксперт» по оценке квартиры (2.66) — как 2.33 для транспорта: заказчик и диспетчер — через API, эксперт —
+// только на экране телефона. Проверяется то, что мешало: в предложении площадь без единиц; в списке документов для
+// сделки — «Определение суда»; запрошенные документы не видны в «Что дальше»; ИИ не брал из объявления адрес, этаж и
+// тип дома; с одним подходом эксперт сам вписывал вес 1; в таблице задания «54.3»; после черновика главная кнопка звала
+// загружать файл, хотя файл — из черновика.
+test('как эксперт (2.66): квартира для сделки — документы, осмотр, аналоги, черновик, сдача', async ({ page, browser, baseURL }) => {
+  test.setTimeout(180_000);
+  const C = '+79990006601', D = '+79990006602', S = '+79990006603';
+  await signIn(page, C);
+  const dctx = await phoneContext(browser, baseURL), sctx = await phoneContext(browser, baseURL);
+  const dp = await dctx.newPage(), sp = await sctx.newPage();
+  const disp = await signIn(dp, D), spec = await signIn(sp, S);
+  await sp.request.patch('/api/me', { data: { full_name: 'Оценщиков Олег Олегович' }, headers: H });
+  await db(async (c) => {
+    await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [spec.id]);
+  });
+  const title = `Квартира для продажи ${Date.now()}`;
+  const o = (await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title }, headers: H })).json()).order;
+  expect((await page.request.patch(`/api/orders/${o.id}`, { data: { deadline: inDays(7), fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, ул. Тестовая, 12, кв. 45', cadastral: '77:02:0004005:6789', area: '54.3', floor: '7 / 12', rooms: '2', year_built: '1986' } }, headers: H })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${o.id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  expect((await dp.request.put(`/api/orders/${o.id}/price`, { data: { price: '12000' }, headers: H })).status()).toBe(200);
+  await page.request.post(`/api/orders/${o.id}/payments`, { headers: H });
+  expect((await page.request.post(`/api/orders/${o.id}/payments/refresh`, { headers: H })).status()).toBe(200);
+  expect((await dp.request.post(`/api/orders/${o.id}/offer`, { data: { specialist_id: spec.id, from: 'matching' }, headers: H })).status()).toBe(200);
+
+  // 1. Предложение: площадь — с единицами.
+  await sp.goto('/kabinet');
+  const offer = sp.locator('#orders li').filter({ hasText: title });
+  await expect(offer.locator('.brief')).toHaveText('Купля-продажа · Москва · Квартира · г. Москва, ул. Тестовая, 12, кв. 45 · 77:02:0004005:6789 · 54,3 кв. м');
+  sp.once('dialog', (d) => d.accept());
+  await offer.getByRole('button', { name: 'Принять дело' }).click();
+  await expect(sp.locator('#order-status')).toHaveText('В работе');
+
+  // 2. «Что дальше» — шаг «Документы от заказчика»; в списке для сделки нет определения суда.
+  const docsStep = sp.locator('#next-steps li[data-step="docs"]');
+  await expect(docsStep).toContainText('○ Документы от заказчика (по желанию)');
+  await shot(sp, '99n-kvartira-chto-dalshe');
+  await docsStep.locator('button').click();
+  const box = sp.locator('#docreq-box');
+  await expect(box.locator('#docreq-items')).toContainText('Выписка из ЕГРН');
+  await expect(box.locator('#docreq-items')).not.toContainText('Определение суда');
+  await box.getByLabel('Выписка из ЕГРН').check();
+  await box.getByLabel('Технический паспорт БТИ или поэтажный план').check();
+  await box.getByRole('button', { name: 'Запросить у заказчика' }).click();
+  await expect(sp.locator('#docreq-msg')).toHaveText('Запрошено документов: 2. Заказчику отправлено уведомление.');
+  await expect(docsStep).toContainText('○ Документы от заказчика (получено 0 из 2)');
+  // Заказчик загружает выписку; техпаспорта нет — эксперт снимает просьбу; шаг закрыт.
+  await page.goto(`/kabinet#order=${o.id}`);
+  const egrn = page.locator('#docreq-list li').filter({ hasText: 'Выписка из ЕГРН' });
+  await egrn.locator('input[type=file]').setInputFiles({ name: 'Выписка ЕГРН.pdf', mimeType: 'application/pdf', buffer: makePdf([['Выписка из ЕГРН (тест)']]) });
+  await expect(egrn.locator('.badge')).toHaveText('получен');
+  await sp.reload();
+  await expect(docsStep).toContainText('○ Документы от заказчика (получено 1 из 2)');
+  await box.locator('#docreq-list li').filter({ hasText: 'Технический паспорт' }).getByRole('button', { name: 'Не нужен' }).click();
+  await expect(docsStep).toContainText('✓ Документы от заказчика (получено 1 из 1)');
+
+  // 3. Подходы — только сравнительный.
+  await sp.locator('#next-steps li[data-step="approaches"] button').click();
+  await sp.locator('#draft-approaches').getByLabel('Сравнительный').check();
+  await expect(sp.locator('#draft-msg')).toHaveText('Подходы сохранены');
+
+  // 4. Осмотр по ссылке: владелец снимает квартиру.
+  await sp.getByRole('button', { name: 'Выдать ссылку владельцу' }).click();
+  await expect(sp.locator('#inspect-url')).toContainText('http');
+  const url = await sp.locator('#inspect-url').textContent();
+  const jpeg = Buffer.from((await sp.evaluate(() => {
+    const c = document.createElement('canvas'); c.width = 640; c.height = 480;
+    const g = c.getContext('2d'); g.fillStyle = '#c9b48a'; g.fillRect(0, 0, 640, 480);
+    return c.toDataURL('image/jpeg', 0.8);
+  })).split(',')[1], 'base64');
+  const octx = await phoneContext(browser, baseURL, { permissions: ['geolocation'], geolocation: { latitude: 55.75, longitude: 37.61, accuracy: 10 } });
+  const op = await octx.newPage();
+  await op.goto(url);
+  await op.getByRole('button', { name: 'Начать: разрешить определение места' }).click();
+  await expect(op.locator('#geo-state')).toContainText('Место определено');
+  for (const st of ['facade', 'entrance', 'door', 'rooms', 'kitchen', 'bathroom', 'window_view', 'surroundings']) {
+    await op.locator(`#steps li[data-step="${st}"] input[type=file]`).setInputFiles({ name: `${st}.jpg`, mimeType: 'image/jpeg', buffer: jpeg });
+    await expect(op.locator(`#steps li[data-step="${st}"] .badge`)).toHaveText('Фото: 1');
+  }
+  op.once('dialog', (d) => d.accept());
+  await op.getByRole('button', { name: 'Готово' }).click();
+  await expect(op.locator('#closed-text')).toContainText('Эксперт получил 8 фото');
+  await octx.close();
+
+  // 5. Аналоги: ИИ берёт со скриншота цену, площадь, адрес, этаж и тип дома — эксперту остаётся проверить.
+  await sp.reload();
+  const abox = sp.locator('#analogs-box');
+  await expect(sp.locator('#analogs-state')).toContainText('Подтверждено аналогов: 0 из 3');
+  await expect(sp.locator('#inspect-state')).toContainText('Фото осмотра: 8');
+  const ads = [
+    ['https://www.cian.ru/sale/flat/1001/', '2-комн. квартира, 52,0 м², 5/9 этаж\nЦена 15 900 000 ₽\nг. Москва, ул. Тестовая, 8\nПанельный дом\nРазмещено 01.10.2026'],
+    ['https://www.cian.ru/sale/flat/1002/', '2-комн. квартира, 56,5 м², 9/12 этаж\nЦена 16 700 000 ₽\nг. Москва, ул. Тестовая, 20\nПанельный дом\nРазмещено 28.09.2026'],
+    ['https://www.avito.ru/moskva/kvartiry/2k_1003', '2-к. квартира, 49,8 м², 3/12 эт.\nЦена 14 990 000 ₽\nг. Москва, Тестовый пр., 4\nКирпичный дом\nРазмещено 30.09.2026'],
+  ];
+  for (const [n, [link, ad]] of ads.entries()) {
+    await abox.getByLabel('Ссылка на объявление').fill(link);
+    await sp.locator('#analogs-file').setInputFiles({ name: 'Screenshot.png', mimeType: 'image/png', buffer: Buffer.concat([jpeg, Buffer.from(`OCR:${ad}`)]) });
+    await abox.getByRole('button', { name: 'Добавить аналог' }).click();
+    // Ждём именно этот аналог: надпись «ИИ заполнил» уже стоит от предыдущего.
+    await expect(sp.locator('#analogs-list li.analog')).toHaveCount(n + 1);
+    await expect(sp.locator('#analogs-msg')).toContainText('ИИ заполнил');
+  }
+  const first = sp.locator('#analogs-list li.analog').first();
+  await expect(first.getByLabel(/Адрес или район/)).toHaveValue('г. Москва, ул. Тестовая, 8');
+  await expect(first.getByLabel('Этаж / этажей в доме')).toHaveValue('5/9');
+  await expect(first.getByLabel('Тип дома')).toHaveValue('Панельный дом');
+  await expect(first.locator('.analog-warn')).not.toContainText('Не заполнено');
+  await first.scrollIntoViewIfNeeded();
+  await shot(sp, '99o-kvartira-analog-ot-ii');
+  for (let i = 0; i < 3; i++) {
+    await sp.locator('#analogs-list li.analog').nth(i).getByRole('button', { name: 'Подтвердить' }).click();
+    await expect(sp.locator('#analogs-msg')).toHaveText('Аналог подтверждён');
+  }
+  await expect(sp.locator('#next-steps li[data-step="analogs"]')).toContainText('✓ Аналоги (подтверждено 3 из 3)');
+
+  // 6. Черновик: в задании «54,3», у единственного подхода вес 1; Word — с таблицей аналогов.
+  await sp.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const text = sp.getByLabel('Текст заключения');
+  const body = await text.inputValue();
+  expect(body).toContain('| Площадь, кв. м | 54,3 |');
+  expect(body).toContain('| Сравнительный | [заполнить] | 1 |');
+  expect(body).not.toMatch(/^## \d+\. Затратный подход/m);
+  const [word] = await Promise.all([sp.waitForEvent('download'), sp.getByRole('button', { name: 'Скачать Word' }).click()]);
+  const wchunks = [];
+  for await (const ch of await word.createReadStream()) wchunks.push(ch);
+  const wtext = (await extractPages(Buffer.concat(wchunks), 'r.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')).pages.join('\n');
+  expect(wtext).toContain('г. Москва, ул. Тестовая, 20');
+  expect(wtext).toContain('Фотоматериалы осмотра');
+  // Черновик есть — главная кнопка ведёт к «Приложить как файл результата», а не к загрузке файла с телефона.
+  await expect(sp.locator('#next-main button')).toHaveText('Приложить черновик как файл результата');
+  await shot(sp, '99p-kvartira-chernovik-gotov');
+  await text.fill(body.replace(/\[(?:заполнить|описать)[^\]]*\]/gi, 'заполнено экспертом'));
+  await sp.getByRole('button', { name: 'Сохранить правку' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Правка сохранена');
+  await sp.locator('#next-main button').click();
+  await expect(sp.locator('#draft-confirm')).toBeFocused();
+  await sp.locator('#draft-confirm').check();
+  await sp.getByRole('button', { name: 'Приложить как файл результата' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Файл «Отчёт об оценке.docx» добавлен в результат работы');
+
+  // 7. ИИ-проверка, подпись, сдача.
+  await sp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  await expect(sp.locator('#next-main button')).toHaveText('Подписать файл');
+  sp.once('dialog', (d) => d.accept());
+  await sp.locator('#next-main button').click();
+  await expect(sp.locator('#next-main button')).toHaveText('Сдать на проверку');
+  await sp.locator('#next-main button').click();
+  await expect(sp.locator('#order-status')).toHaveText('Проверка результата');
+  await shot(sp, '99q-kvartira-sdano');
+  await sctx.close();
+  await dctx.close();
 });
