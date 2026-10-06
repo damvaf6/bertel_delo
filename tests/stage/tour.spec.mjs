@@ -78,6 +78,8 @@ async function snap(page, cabinet, title, caption, what) {
 // Номера экскурсии: +7 999 000-9N-Dx, N — 1…4 (не пересекаются с общим прогоном 20…89, администратором 95-00 и помощником 96…99).
 const RUN = `9${1 + Math.floor(Math.random() * 4)}${Math.floor(Math.random() * 10)}`;
 const tel = (i) => `+7999000${RUN}${i}`;
+// Номеров всего 40 и база площадки не чистится — названия организации и заявок с отметкой времени, чтобы не совпасть с прошлой экскурсией.
+const STAMP = Date.now().toString(36);
 const inDays = (n) => new Date(Date.now() + n * 86400_000).toISOString().slice(0, 10);
 
 // Обезличенный тестовый отчёт об оценке транспорта: вымышленные марка, VIN и организации; в нём ошибки, похожие на найденные
@@ -98,11 +100,11 @@ test('экскурсия по кабинетам: эксперт, руковод
   if (!TOKEN || !LOGIN_KEY || !/^\+7999000\d{4}$/.test(ADMIN || '')) throw new Error('нужны STAGE_INVOKE_TOKEN, STAGE_LOGIN_KEY, STAGE_ADMIN_PHONE');
   fs.mkdirSync('test-results/screens', { recursive: true });
   const C = tel(0), D = tel(1), S = tel(2), HEAD = tel(3), E = tel(4);
-  const org = `ООО «Тестовая оценка ${RUN}»`;
+  const org = `ООО «Тестовая оценка ${RUN}-${STAMP}»`;
   const specName = `Тестов Эксперт ${RUN}`;
   const headName = `Тестова Руководитель ${RUN}`;
   const empName = `Тестов Сотрудник ${RUN}`;
-  const title = `Оценка фургона для суда — тест ${RUN}`;
+  const title = `Оценка фургона для суда — тест ${RUN}-${STAMP}`;
   const h = { ...AUTH, ...H };
 
   const ap = await phone(browser, baseURL), dp = await phone(browser, baseURL), sp = await phone(browser, baseURL);
@@ -283,7 +285,7 @@ test('экскурсия по кабинетам: эксперт, руковод
   // ——— Сотрудник организации заказывает от организации — руководитель видит его дело ———
   await ep.goto('/kabinet');
   await ep.locator('#new-order').getByLabel('Услуга').selectOption({ label: 'Оценка транспортного средства' });
-  await ep.getByLabel('Коротко: что нужно').fill(`Оценка служебного автомобиля — тест ${RUN}`);
+  await ep.getByLabel('Коротко: что нужно').fill(`Оценка служебного автомобиля — тест ${RUN}-${STAMP}`);
   await ep.getByLabel('От чьего имени').selectOption({ label: `От организации ${org}` });
   await ep.getByRole('button', { name: 'Создать заявку' }).click();
   await expect(ep.locator('#order-status')).toHaveText('Новая');
@@ -306,9 +308,9 @@ test('экскурсия по кабинетам: эксперт, руковод
   }
   await snap(hp, 'Руководитель организации', 'Подпись от организации', 'Руководитель подписывает файлы от организации после эксперта. Саму заявку и заказчика он не видит — только файлы, эксперта и срок.', '#org-sign-box');
   await hp.goto('/kabinet');
-  await expect(hp.locator('#orders li').filter({ hasText: `Оценка служебного автомобиля — тест ${RUN}` })).toHaveCount(1);
+  await expect(hp.locator('#orders li').filter({ hasText: `Оценка служебного автомобиля — тест ${RUN}-${STAMP}` })).toHaveCount(1);
   await snap(hp, 'Руководитель организации', 'Дела сотрудников', 'Руководитель видит заявки, которые сотрудники заказали от организации. Дела, которые эксперты организации выполняют для заказчиков, здесь не видны.', '#list-view .card >> nth=0');
-  await hp.locator('#orders li').filter({ hasText: `Оценка служебного автомобиля — тест ${RUN}` }).getByRole('button').first().click();
+  await hp.locator('#orders li').filter({ hasText: `Оценка служебного автомобиля — тест ${RUN}-${STAMP}` }).getByRole('button').first().click();
   await expect(hp.getByRole('heading', { name: 'Кто ведёт дело' })).toBeVisible();
   await snap(hp, 'Руководитель организации', 'Распределение: кто ведёт дело', 'Руководитель передаёт заявку организации другому сотруднику. Сроков и нагрузки по сотрудникам одним экраном пока нет.', '#transfer-box');
   await hp.goto('/kabinet#money');
