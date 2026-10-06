@@ -146,3 +146,47 @@ test('определение суда уже приложено заказчик
   assert.ok(!after.includes('court_order') && after.includes('egrn'), after.join());
   assert.ok((await spec.req('GET', `/api/orders/${o.id}/doc-requests`)).body.catalog.every((c) => !('basis' in c)));
 });
+
+test('готовые фразы заказчику (2.84): только исполнителю, адрес и запрошенные документы из дела, по виду услуги', async () => {
+  const o = await inWork('Квартира: готовые фразы');
+  const msgs = (c) => c.req('GET', `/api/orders/${o.id}/messages`);
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  let p = (await msgs(spec)).body.phrases;
+  assert.deepEqual(p.map((x) => x.id), ['access', 'address', 'docs']);
+  assert.equal(p[0].title, 'Доступ на осмотр');
+  assert.match(p[1].text, /в заявке указано: «г\. Москва, Документная ул\., 7»/);
+  assert.match(p[2].text, /\[какие\]/, 'пока ничего не запрошено — исполнитель пишет сам');
+  // Заказчик, диспетчер и посторонний фраз не получают.
+  assert.deepEqual((await msgs(owner)).body.phrases, []);
+  assert.deepEqual((await msgs(dispatcher)).body.phrases, []);
+  assert.equal((await msgs(stranger)).status, 404);
+  // Запрошенные и ещё не присланные документы — в тексте по названию; присланный — уходит из фразы.
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { items: ['egrn', 'tech_plan'] })).status, 201);
+  const reqs = (await owner.req('GET', `/api/orders/${o.id}/doc-requests`)).body.requests;
+  const egrn = reqs.find((x) => x.item_id === 'egrn');
+  const tech = reqs.find((x) => x.item_id === 'tech_plan');
+  p = (await msgs(spec)).body.phrases;
+  assert.ok(p[2].text.includes(egrn.title) && p[2].text.includes(tech.title), p[2].text);
+  const d = await upload(owner, o, 'egrn.pdf');
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/doc-requests/${egrn.id}/attach`, { document_id: d.id })).status, 200);
+  p = (await msgs(spec)).body.phrases;
+  assert.ok(!p[2].text.includes(egrn.title) && p[2].text.includes(tech.title), p[2].text);
+  // Фраза — только текст в поле: в переписке ничего не появилось, пока исполнитель не отправил сам.
+  assert.equal((await msgs(spec)).body.messages.length, 0);
+});
+
+test('готовые фразы (2.84): у товара и документа — свои слова', async () => {
+  const { messagePhrases } = await import('../../src/orders/phrases.mjs');
+  const reg = createRegistry([expertise]);
+  const goods = messagePhrases({ def: reg.service('expertise', 'goods'), fields: { location: 'у истца, г. Москва' } });
+  assert.match(goods[0].text, /осмотр товара/);
+  assert.match(goods[0].text, /не ремонтируйте и не разбирайте/);
+  assert.match(goods[1].text, /где сейчас находится товар \(в заявке указано: «у истца, г\. Москва»\)/);
+  const docSvc = expertise.services.find((s) => s.subject === 'document').id;
+  const doc = messagePhrases({ def: reg.service('expertise', docSvc), fields: {} });
+  assert.equal(doc[0].title, 'Передать оригинал');
+  assert.match(doc[1].text, /где сейчас находится документ и у кого/);
+  assert.ok(!doc.some((x) => /осмотр/.test(x.text)));
+  const due = messagePhrases({ def: reg.service('expertise', 'realty'), now: new Date('2026-10-06T21:30:00Z') })[2].text;
+  assert.match(due, /до 10 октября/, 'через 3 дня по Москве');
+});

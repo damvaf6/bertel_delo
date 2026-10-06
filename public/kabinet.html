@@ -405,6 +405,10 @@
         <ul class="list chat" id="messages"></ul>
         <p class="muted hidden" id="messages-empty">Сообщений пока нет.</p>
         <form class="hidden" id="message-form" novalidate>
+          <div class="hidden" id="message-phrases">
+            <p class="muted">Готовые фразы — нажмите, текст появится в поле, его можно поправить перед отправкой:</p>
+            <div class="row" id="message-phrase-list"></div>
+          </div>
           <div class="field">
             <label for="message-text">Сообщение</label>
             <textarea id="message-text" maxlength="4000"></textarea>
