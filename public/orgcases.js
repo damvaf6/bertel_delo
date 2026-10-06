@@ -21,6 +21,11 @@ function waited(s) {
   const h = Math.floor((Date.now() - new Date(s).getTime()) / 3_600_000);
   return h < 1 ? 'меньше часа' : h < 24 ? `${h} ч` : `${Math.floor(h / 24)} дн.`;
 }
+// Эксперт сам не принимает новые дела (2.77): до какого дня и почему, или выключил приём совсем.
+const awayText = (a) => (a.away || a.until
+  ? `не принимает новые дела до ${dayRu(a.away?.until ?? a.until)}${(a.away?.note ?? a.note) ? ` (${a.away?.note ?? a.note})` : ''}`
+  : 'не принимает новые дела — выключил приём');
+const upper = (t) => t[0].toUpperCase() + t.slice(1);
 const fact = (dt, dd, cls) => [el('dt', { text: dt }), el('dd', { text: dd, ...(cls ? { class: cls } : {}) })];
 
 // Последний список дел — для поиска (2.73) без нового запроса.
@@ -46,6 +51,7 @@ export async function loadOrgCases(org) {
     el('div', { class: 'title', text: l.full_name }),
     el('div', { class: `muted${l.overdue ? ' overdue' : ''}`, text: [`в работе: ${l.in_work}`, l.offered ? `предложено: ${l.offered}` : null,
       l.overdue ? `просрочено: ${l.overdue}` : null].filter(Boolean).join(' · ') }),
+    ...(l.away || l.paused ? [el('div', { class: 'muted', 'data-away': '', text: upper(awayText(l)) })] : []),
     expertLink(l.user_id))));
   $('org-cases-empty').classList.toggle('hidden', cases.length > 0 || pending.length > 0 || load.length === 0);
   renderCases();
@@ -190,6 +196,7 @@ function pendingItem(org, p) {
     ...(p.declined ? [el('div', { class: 'muted', text: `Эксперт отказался: ${p.declined}` })] : []),
     // Список экспертов — во всю ширину: имя и нагрузка не обрезаются на телефоне (2.67).
     ...(p.experts.length ? [pick] : [el('div', { class: 'muted', text: 'Свободных экспертов с допуском на эту услугу нет.' })]),
+    ...(p.away.length ? [el('div', { class: 'muted', 'data-away': '', text: `${p.away.map((a) => `${a.full_name} ${awayText(a)}`).join('; ')}.` })] : []),
     el('div', { class: 'row gap' },
       ...(p.experts.length ? [el('button', { 'data-action': 'assign', onclick: () => assign(org, p, pick.value) }, 'Назначить')] : []),
       el('button', { class: 'secondary', 'data-action': 'org-decline', onclick: () => decline(org, p) }, 'Отказаться от дела')));

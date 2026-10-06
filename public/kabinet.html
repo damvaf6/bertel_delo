@@ -713,6 +713,18 @@
         <p class="muted" id="specialist-facts"></p>
         <label class="row"><input type="checkbox" id="specialist-active"> Принимаю новые дела</label>
         <p class="muted">Выключите, если сейчас не можете брать работу: Вам перестанут предлагать дела.</p>
+        <div class="field" id="specialist-away-box">
+          <p class="muted" id="specialist-away-now"></p>
+          <div id="specialist-away-form">
+            <label for="specialist-away-until">Уезжаю или загружен — предлагать мне дела снова с</label>
+            <input type="date" id="specialist-away-until">
+            <label for="specialist-away-note">Почему (по желанию)</label>
+            <input type="text" id="specialist-away-note" maxlength="80" placeholder="Например: отпуск">
+            <button type="button" class="secondary wide" id="specialist-away-set">Не принимать новые дела до этого дня</button>
+          </div>
+          <button type="button" class="secondary wide hidden" id="specialist-away-clear">Снова принимать дела сейчас</button>
+          <p class="muted">Дела, которые уже у Вас, остаются. Новые не предлагают до этого дня; руководитель организации видит, до какого.</p>
+        </div>
         <div class="field">
           <label for="specialist-org">Работаю от организации</label>
           <select id="specialist-org"></select>

@@ -1194,7 +1194,7 @@ test('распределение в организации (2.17): дело ор
   const view = (await U.headB.req('GET', `/api/orgs/${orgB.id}/cases`)).body;
   assert.equal(view.pending.length, 1);
   const p = view.pending[0];
-  assert.deepEqual(Object.keys(p).sort(), ['deadline', 'declined', 'experts', 'fee_kop', 'id', 'order_ref', 'overdue', 'service']);
+  assert.deepEqual(Object.keys(p).sort(), ['away', 'deadline', 'declined', 'experts', 'fee_kop', 'id', 'order_ref', 'overdue', 'service']);
   assert.equal(p.fee_kop, 1_200_000);
   assert.deepEqual(p.experts.map((x) => [x.user_id, x.in_work]), [[spec2.user.id, 1]]);
   const owner = (await S.sql`select phone from users where id = ${U.owner.user.id}`)[0];
@@ -1579,6 +1579,52 @@ test('переназначение до ответа эксперта (2.76): т
   const offers = await S.sql`select specialist_id, outcome from order_offers where order_id = ${o.id} order by id`;
   assert.deepEqual(offers.map((x) => [x.specialist_id === expertB.user.id ? 'Б' : x.specialist_id === expertD.user.id ? 'Г' : 'организация', x.outcome]), [
     ['организация', 'accepted'], ['Б', 'withdrawn'], ['Г', 'withdrawn'], ['организация', 'accepted'], ['Г', 'accepted']]);
+});
+
+test('«не принимаю новые дела до …» (2.77): подбор эксперта не предлагает, руководитель видит до какого дня; день наступил — снова в подборе', async () => {
+  const day = (n) => new Date(Date.now() + 3 * 3_600_000 + n * 86400_000).toISOString().slice(0, 10);
+  const away = (body) => expertB.req('PATCH', '/api/specialist/me', { away: body });
+  for (const [body, why] of [[{ until: day(0) }, 'сегодня'], [{ until: day(-3) }, 'в прошлом'], [{ until: day(400) }, 'дальше года'],
+    [{ until: '2026-02-30' }, 'нет такого дня'], [{}, 'без дня'], [{ until: day(5), note: 'я'.repeat(81) }, 'длинная причина']]) {
+    assert.equal((await away(body)).status, 400, why);
+  }
+  assert.equal((await U.owner.req('PATCH', '/api/specialist/me', { away: { until: day(5) } })).status, 404, 'не специалист');
+  const before = (await S.sql`select count(*)::int as n from notifications where user_id = ${U.headB.user.id} and event = 'expert_away_head'`)[0].n;
+  const r = await away({ until: day(10), note: '  отпуск ' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual(r.body.specialist.away, { until: day(10), note: 'отпуск' });
+  assert.equal(r.body.specialist.active, true, 'выключатель «принимаю дела» не трогается');
+  const after = (await S.sql`select count(*)::int as n, bool_and(org_id = ${orgB.id}) as org from notifications where user_id = ${U.headB.user.id} and event = 'expert_away_head'`)[0];
+  assert.equal(after.n, before + 1, 'руководителю — уведомление');
+  assert.equal(after.org, true);
+  // Новое дело организации Б: эксперта Б нет ни в подборе диспетчера, ни в назначении у руководителя; руководитель видит почему.
+  const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Эксперт в отпуске' })).body.order;
+  assert.equal((await U.owner.req('PATCH', `/api/orders/${o.id}`, { fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, Отпускная ул., 1' }, deadline: day(12) })).status, 200);
+  assert.equal((await U.owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
+  await ensurePaid(S.sql, o.id);
+  const cands = async () => (await U.dispatcher.req('GET', `/api/orders/${o.id}/candidates`)).body.candidates.map((c) => c.user_id);
+  assert.ok(!(await cands()).includes(expertB.user.id), 'подбор не предлагает');
+  assert.equal((await U.dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: expertB.user.id, from: 'matching' })).body.error, 'not_eligible');
+  const list = (await U.dispatcher.req('GET', '/api/specialists')).body.specialists.find((s) => s.user_id === expertB.user.id);
+  assert.deepEqual(list.away, { until: day(10), note: 'отпуск' }, 'диспетчер видит в списке специалистов');
+  assert.equal((await U.dispatcher.req('POST', `/api/orders/${o.id}/offer`, { org_id: orgB.id, from: 'matching' })).status, 200);
+  const v = (await U.headB.req('GET', `/api/orgs/${orgB.id}/cases`)).body;
+  const p = v.pending.find((x) => x.id === o.id);
+  assert.ok(!p.experts.some((x) => x.user_id === expertB.user.id), 'назначить нельзя');
+  assert.ok(p.away.some((a) => a.until === day(10) && a.note === 'отпуск'), JSON.stringify(p.away));
+  assert.deepEqual(v.load.find((l) => l.user_id === expertB.user.id).away, { until: day(10), note: 'отпуск' });
+  assert.equal((await U.headB.req('POST', `/api/orgs/${orgB.id}/cases/${o.id}/assign`, { specialist_id: expertB.user.id })).status, 409);
+  // День возвращения наступил — отметка перестала действовать сама.
+  await S.sql`update specialists set away_until = ${day(0)} where user_id = ${expertB.user.id}`;
+  assert.equal((await expertB.req('GET', '/api/specialist/me')).body.specialist.away, null);
+  assert.equal((await U.headB.req('GET', `/api/orgs/${orgB.id}/cases`)).body.load.find((l) => l.user_id === expertB.user.id).away, null);
+  assert.ok((await U.headB.req('GET', `/api/orgs/${orgB.id}/cases`)).body.pending.find((x) => x.id === o.id).experts.some((x) => x.user_id === expertB.user.id));
+  // Снять отметку раньше — снова принимает дела; руководителю при снятии не пишем.
+  assert.equal((await away({ until: day(3) })).status, 200);
+  const cleared = await away(null);
+  assert.equal(cleared.body.specialist.away, null);
+  assert.equal((await S.sql`select count(*)::int as n from notifications where user_id = ${U.headB.user.id} and event = 'expert_away_head'`)[0].n, before + 2);
+  assert.equal((await U.headB.req('POST', `/api/orgs/${orgB.id}/cases/${o.id}/decline`, { reason: 'проверка 2.77' })).status, 200);
 });
 
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {

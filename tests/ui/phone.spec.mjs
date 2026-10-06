@@ -3248,6 +3248,74 @@ test('переназначение до ответа (2.76): эксперт мо
   await bctx.close();
 });
 
+test('«не принимаю новые дела до …» (2.77): эксперт ставит отметку — руководитель видит до какого дня, назначить нельзя', async ({ page, browser, baseURL }) => {
+  await signIn(page, '+79990000785');
+  const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира: эксперт в отпуске' }, headers: H })).json();
+  const id = created.order.id;
+  expect((await page.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(9), fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, Отпускная ул., 3', area: '41' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  const ectx = await phoneContext(browser, baseURL);
+  const ep = await ectx.newPage();
+  const expert = await signIn(ep, '+79990000786');
+  const hctx = await phoneContext(browser, baseURL);
+  const hp = await hctx.newPage();
+  const head = await signIn(hp, '+79990000787');
+  const orgId = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Бюро в отпуске ${Date.now()}»') returning id`);
+    await c.query("update users set full_name = 'Эксперт Отпускной' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    // Диспетчер предложил дело организации — эксперта назначит руководитель.
+    await c.query('update orders set price_kop = 1500000, paid_at = now(), status = $2, offer_org_id = $3 where id = $1', [id, 'awaiting_executor', org.id]);
+    await c.query(`insert into order_offers (order_id, org_id, score) values ($1, $2, '{"org":true}')`, [id, org.id]);
+    return org.id;
+  });
+
+  // Эксперт: отпуск до дня через 10 дней.
+  const back = inDays(10);
+  await ep.goto('/kabinet#specialist');
+  await expect(ep.locator('#specialist-away-form')).toBeVisible();
+  await ep.locator('#specialist-away-set').click();
+  await expect(ep.locator('#specialist-msg')).toHaveText('Укажите день, с которого снова принимаете дела');
+  await ep.locator('#specialist-away-until').fill(back);
+  await ep.locator('#specialist-away-note').fill('отпуск');
+  await ep.locator('#specialist-away-box').scrollIntoViewIfNeeded();
+  await shot(ep, 'a4-ekspert-ne-prinimayu-do');
+  await ep.locator('#specialist-away-set').click();
+  await expect(ep.locator('#specialist-msg')).toContainText('Новые дела не будут предлагать до');
+  await expect(ep.locator('#specialist-away-now')).toContainText('Вы не принимаете новые дела до');
+  await expect(ep.locator('#specialist-away-now')).toContainText('(отпуск)');
+  await expect(ep.locator('#specialist-away-form')).toBeHidden();
+  await expect(ep.locator('#specialist-away-clear')).toBeVisible();
+  await shot(ep, 'a5-ekspert-otmetka-stoit');
+
+  // Руководитель: уведомление; в «Ждут назначения» назначить некого и видно почему; в нагрузке — до какого дня.
+  await hp.goto('/kabinet#notifications');
+  await expect(hp.locator('#notifications li').filter({ hasText: 'не принимает новые дела до указанного дня' })).toHaveCount(1);
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const pending = hp.locator('#org-pending > li');
+  await expect(pending).toHaveCount(1);
+  await expect(pending.getByText('Свободных экспертов с допуском на эту услугу нет.')).toBeVisible();
+  await expect(pending.locator('[data-away]')).toContainText('Эксперт Отпускной не принимает новые дела до');
+  await expect(pending.locator('[data-away]')).toContainText('(отпуск)');
+  await expect(hp.locator('#org-cases-load li [data-away]')).toContainText('Не принимает новые дела до');
+  await hp.locator('#org-pending-box').scrollIntoViewIfNeeded();
+  await shot(hp, 'a6-rukovoditel-vidit-otpusk');
+
+  // Эксперт вернулся раньше — снимает отметку; руководитель снова может назначить.
+  await ep.locator('#specialist-away-clear').click();
+  await expect(ep.locator('#specialist-msg')).toHaveText('Теперь Вам снова предлагают дела');
+  await expect(ep.locator('#specialist-away-form')).toBeVisible();
+  await hp.reload();
+  await expect(hp.locator('#org-pending > li [data-pick] option')).toHaveCount(1);
+  await expect(hp.locator('#org-pending > li [data-away]')).toHaveCount(0);
+  await ectx.close();
+  await hctx.close();
+});
+
 test('запрос документов (2.64): эксперт отмечает недостающие, заказчик загружает к каждому, эксперт видит отметки', async ({ page, browser, baseURL }) => {
   await signIn(page, '+79990000780');
   const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира: нужны документы' }, headers: H })).json();
