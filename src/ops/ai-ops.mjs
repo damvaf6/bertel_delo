@@ -210,7 +210,12 @@ export function aiOps() {
         // Сверка с досье исполнителя (2.14): аттестат, СРО, полисы, диплом — номера, суммы и сроки на дату отчёта.
         const dossier = { items: order.executor_user_id ? await loadDossier(sql, order.executor_user_id) : [], today: todayMsk() };
         const basis = { kind: order.basis_kind, number: order.basis_number };
-        const auto = runAutoChecks([...new Set(rules.flatMap((r) => r.auto ?? []))], files, { fields: order.fields ?? {}, dossier, basis, service: order.service });
+        const names = [...new Set(rules.flatMap((r) => r.auto ?? []))];
+        // Сверка таблицы аналогов в отчёте (2.75) — с подтверждёнными экспертом аналогами дела, по порядку.
+        const analogs = names.includes('analog_match')
+          ? await sql`select url, fields, adjustments from order_analogs where order_id = ${order.id} and deleted_at is null and confirmed_at is not null order by id`
+          : [];
+        const auto = runAutoChecks(names, files, { fields: order.fields ?? {}, dossier, basis, service: order.service, analogs });
         const found = Object.fromEntries(rules.map((r) => [r.id, (r.auto ?? []).flatMap((a) => auto[a] ?? [])]));
         // Модель недоступна или лимит исчерпан, но автоматические находки есть — показываем их, а не ошибку.
         let out;

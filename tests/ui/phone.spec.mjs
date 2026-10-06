@@ -2216,6 +2216,22 @@ test('аналоги в деле (2.32): ссылка и скриншот — И
   await expect(second.locator('.analog-warn')).toContainText('Другой регион');
   await shot(sp, '92-specialist-analogi-preduprezhdeniya');
 
+  // 2.75: ИИ-проверка сверяет аналоги в отчёте с делом. В отчёте цена первого аналога другая, а второй (не подтверждён в
+  // деле) — со своей ссылкой: эксперт видит это под правилом «Аналоги» с файлом и страницей.
+  await sp.locator('#result-file').setInputFiles({ name: 'Отчёт с аналогами.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    buffer: makeDocx(['ОТЧЁТ ОБ ОЦЕНКЕ', 'Сравнительный подход',
+      'Аналог № 1 — https://www.avito.ru/moskva/avtomobili/toyota_camry_2018_1 — 2 100 000 руб.',
+      'Аналог № 2 — https://auto.drom.ru/moscow/toyota/camry/2.html — 1 650 000 руб.']) });
+  await expect(sp.locator('#doc-msg')).toHaveText('Файл добавлен');
+  await sp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  const found = sp.locator('li[data-check="analogs"] .ai-found');
+  await expect(found).toContainText('Аналог 1 из дела (avito.ru): цена 2 150 000 руб. в отчёте не найдена');
+  await expect(found).toContainText('В отчёте есть аналог № 2, а в деле подтверждён 1 аналог');
+  await expect(found).toContainText('Ссылка у аналога № 2 в отчёте — не из аналогов дела');
+  await found.scrollIntoViewIfNeeded();
+  await shot(sp, '95-specialist-ii-analogi-v-otchete');
+
   // Заказчик раздела аналогов не видит.
   await page.goto(`/kabinet#order=${id}`);
   await expect(page.locator('#order-view')).toBeVisible();
