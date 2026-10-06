@@ -60,6 +60,38 @@ export const linkState = (link, order) => {
   return 'active';
 };
 
+// Ссылка молчит (2.85): последняя ссылка дела, выданная исполнителем (дело у него в работе), не отозвана, «Готово» не нажато,
+// выдана не меньше 2 дней назад, а фото по делу после неё нет (ни по ссылке, ни с выезда помощника). Истёкшая — тоже: владелец
+// так и не снял, нужна новая ссылка. Только своё: { executor } — дела исполнителя, { order } — одно дело.
+export const SILENT_DAYS = 2;
+export async function silentLinks(sql, { executor = null, order = null } = {}) {
+  return sql`
+    select l.id, l.order_id, l.created_by, l.created_at, l.expires_at, l.sms_to, l.silent_reminded_at
+    from inspection_links l join orders o on o.id = l.order_id
+    where o.status = 'in_work' and o.executor_user_id = l.created_by
+      and (${executor}::uuid is null or l.created_by = ${executor}::uuid)
+      and (${order}::uuid is null or l.order_id = ${order}::uuid)
+      and l.revoked_at is null and l.finished_at is null
+      and l.created_at <= now() - make_interval(days => ${SILENT_DAYS})
+      and not exists (select 1 from inspection_links n where n.order_id = l.order_id and n.id > l.id)
+      and not exists (select 1 from inspection_photos p join documents d on d.id = p.document_id
+                      where d.order_id = l.order_id and p.received_at >= l.created_at)
+    order by l.created_at, l.id`;
+}
+
+// Напомнить эксперту (раз в минуту вместе с напоминаниями о сроках, src/server.mjs) — один раз на ссылку.
+export async function remindSilentInspections(sql) {
+  let sent = 0;
+  for (const l of await silentLinks(sql)) {
+    if (l.silent_reminded_at) continue;
+    sent += await sql.tx(async (tx) => {
+      const fresh = await tx.one`update inspection_links set silent_reminded_at = now() where id = ${l.id} and silent_reminded_at is null returning id`;
+      return fresh ? notify(tx, 'inspection_silent', { users: [l.created_by], orderId: l.order_id }) : 0;
+    });
+  }
+  return sent;
+}
+
 const canIssue = (actor, order) => order.status === 'in_work' && orderSides(actor, order).includes('executor');
 
 function numberOrNull(v, min, max) {
@@ -205,7 +237,10 @@ export function inspectOps() {
           geo: p.lat === null ? null : { lat: p.lat, lon: p.lon, accuracy_m: p.accuracy_m === null ? null : Math.round(p.accuracy_m) },
         }));
         const retakes = await openRetakes(sql, order.id);
+        // Ссылка молчит 2 дня (2.85) — исполнителю над формой «Отправить ссылку снова».
+        const [silent] = canIssue(actor, order) ? await silentLinks(sql, { order: order.id }) : [];
         return {
+          silent: silent ? { link_id: String(silent.id), since: silent.created_at, expired: new Date(silent.expires_at) <= new Date(), sms_to: silent.sms_to ?? null } : null,
           steps: steps.map((s) => ({ ...s, photos: byStep(s.id), retake: retakes[s.id] ?? null })),
           links: links.map((l) => linkView(l, order, l.photos)),
           can_issue: canIssue(actor, order) && steps.length > 0,

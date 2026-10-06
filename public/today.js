@@ -8,6 +8,7 @@ import { api, el } from '/common.js';
 
 const $ = (id) => document.getElementById(id);
 const dayRu = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+const since = (iso) => new Date(iso).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
 const rub = (kop) => `${Math.floor(kop / 100).toLocaleString('ru-RU')} ₽`;
 
 function daysLeft(iso, today) {
@@ -38,6 +39,10 @@ export async function loadToday() {
   if (e) {
     rows.push(
       ...group('returned', 'Вернули на доработку', e.returned, (x) => [x.title, `${x.by}: ${x.comment || 'без пояснения'}`, deadline(x, t.today)], toOrder),
+      // Осмотр по ссылке 2 дня без фото (2.85) — сразу к осмотру в деле, там «Отправить ссылку снова».
+      ...group('inspect-silent', 'Осмотр: 2 дня нет фото', e.inspect_silent ?? [], (x) => [x.title,
+        `ссылка от ${since(x.link_at)}${x.expired ? ' — срок истёк' : ''}${x.sms_to ? ` · СМС на ${x.sms_to}` : ''} · отправьте снова`],
+      (x) => { location.hash = `order=${x.id}&to=inspect`; }),
       ...group('hot', 'Горит срок', e.hot, (x) => [x.title, `${x.service} · ${deadline(x, t.today)}`], toOrder),
       ...group('offers', 'Новые предложения', e.offers, (x) => [x.title, [x.service, x.fee_kop ? `Вам ${rub(x.fee_kop)}` : null, deadline(x, t.today)].filter(Boolean).join(' · ')], toOrder),
       ...group('review', 'Ждут проверки диспетчера', e.review, (x) => [x.title, `${x.service} · ${deadline(x, t.today)}`], toOrder),
@@ -46,7 +51,6 @@ export async function loadToday() {
   const d = t.dispatcher;
   if (d) {
     const MONEY = { payout: 'Выплата исполнителю не прошла', refund: 'Возврат заказчику не прошёл', payment: 'Оплата висит больше суток' };
-    const since = (iso) => new Date(iso).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
     rows.push(
       ...group('d-money', 'Деньги', d.money, (x) => [x.title, [MONEY[x.what], x.failure].filter(Boolean).join(': ')], toOrder),
       ...group('d-review', 'Ждут проверки результата', d.review, (x) => [x.title, `${x.service} · ${deadline(x, t.today)}`], toOrder),
