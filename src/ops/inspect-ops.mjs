@@ -342,6 +342,7 @@ export function inspectOps() {
         return {
           active: true,
           service: def?.service.name ?? null,
+          subject: def?.service.subject ?? 'object',
           expires_at: link.expires_at,
           steps: registry.inspectionSteps(order.module, order.service)
             .map((s) => ({ ...s, photos: counts[s.id] ?? 0, retake: retakes[s.id]?.note ?? null })),

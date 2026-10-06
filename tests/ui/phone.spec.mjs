@@ -3954,6 +3954,148 @@ test('как эксперт (2.80): станки по перечню для ра
   await dctx.close();
 });
 
+// Прогон «как эксперт» по почерковедческой экспертизе (2.81): подпись в расписке по определению суда. Заказчик и диспетчер —
+// через API, эксперт и владелец документа на съёмке — на экране телефона. Проверяется то, что мешало: «Где находится объект»
+// у документа; страница по ссылке звала снимать «объект» и обещала, что видно, «что снимки сделаны у объекта»; у эксперта —
+// «Осмотр объекта»; вопросы суда повторялись строкой в таблице задания; документ и образцы, которые прислал заказчик,
+// эксперт переписывал в раздел «Объекты исследования и образцы» сам.
+test('как эксперт (2.81): почерковедческая по определению суда — образцы, съёмка документа, черновик, сдача', async ({ page, browser, baseURL }) => {
+  test.setTimeout(180_000);
+  const C = '+79990008101', D = '+79990008102', S = '+79990008103';
+  await signIn(page, C);
+  const dctx = await phoneContext(browser, baseURL), sctx = await phoneContext(browser, baseURL);
+  const dp = await dctx.newPage(), sp = await sctx.newPage();
+  const disp = await signIn(dp, D), spec = await signIn(sp, S);
+  await sp.request.patch('/api/me', { data: { full_name: 'Почерков Павел Петрович' }, headers: H });
+  await db(async (c) => {
+    await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'handwriting')", [spec.id]);
+  });
+  const title = `Подпись в расписке ${Date.now()}`;
+  const o = (await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'handwriting', title }, headers: H })).json()).order;
+  expect((await page.request.patch(`/api/orders/${o.id}`, { data: { deadline: inDays(21), basis_kind: 'court', basis_number: '2-8811/2026', basis_date: inDays(-4),
+    fields: { purpose: 'court', region: 'moscow', object_kind: 'signature', document: 'расписка от 12.03.2025', original: 'yes', samples: 'free',
+      questions: '1. Кем, Ивановым Иваном Ивановичем или другим лицом, выполнена подпись в расписке от 12.03.2025?' } }, headers: H })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${o.id}/documents`, { data: makePdf([['Определение суда (тест)']]),
+    headers: { ...H, 'x-doc-kind': 'basis', 'x-file-name': encodeURIComponent('Определение.pdf'), 'content-type': 'application/pdf' } })).status()).toBe(201);
+  expect((await page.request.post(`/api/orders/${o.id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  expect((await dp.request.put(`/api/orders/${o.id}/price`, { data: { price: '30000' }, headers: H })).status()).toBe(200);
+  await page.request.post(`/api/orders/${o.id}/payments`, { headers: H });
+  expect((await page.request.post(`/api/orders/${o.id}/payments/refresh`, { headers: H })).status()).toBe(200);
+  expect((await dp.request.post(`/api/orders/${o.id}/offer`, { data: { specialist_id: spec.id, from: 'matching' }, headers: H })).status()).toBe(200);
+
+  // 1. Предложение и дело: «где находится документ», шаг «Съёмка документа».
+  await sp.goto('/kabinet');
+  const offer = sp.locator('#orders li').filter({ hasText: title });
+  await expect(offer.locator('.brief')).toContainText('Для суда · Москва · Подпись · расписка от 12.03.2025');
+  sp.once('dialog', (d) => d.accept());
+  await offer.getByRole('button', { name: 'Принять дело' }).click();
+  await expect(sp.locator('#order-status')).toHaveText('В работе');
+  await expect(sp.locator('body')).toContainText('Где находится документ');
+  await expect(sp.locator('body')).not.toContainText('Где находится объект');
+  await expect(sp.locator('#next-steps li[data-step="inspect"]')).toContainText('Съёмка документа (по желанию)');
+  await expect(sp.locator('#inspect-head')).toHaveText('Съёмка документа по ссылке');
+
+  // 2. Документы: копию расписки и свободные образцы запрашивает у заказчика; определение суда уже приложено.
+  await sp.locator('#next-steps li[data-step="docs"] button').click();
+  const items = sp.locator('#docreq-items');
+  await expect(items).toContainText('Копия исследуемого документа');
+  await expect(items).not.toContainText('Определение суда');
+  await sp.locator('#docreq-box').getByLabel('Копия исследуемого документа').check();
+  await sp.locator('#docreq-box').getByLabel('Свободные образцы подписи или почерка').check();
+  await sp.locator('#docreq-box').getByRole('button', { name: 'Запросить у заказчика' }).click();
+  await expect(sp.locator('#docreq-msg')).toHaveText('Запрошено документов: 2. Заказчику отправлено уведомление.');
+  await shot(sp, 'c1-pocherk-zapros-obrazcov');
+  // Заказчик прикладывает файлы к обоим пунктам.
+  const reqs = (await (await page.request.get(`/api/orders/${o.id}/doc-requests`)).json()).requests;
+  for (const [t, name] of [['Копия исследуемого документа', 'Расписка.pdf'], ['Свободные образцы подписи или почерка', 'Образцы подписи.pdf']]) {
+    const doc = (await (await page.request.post(`/api/orders/${o.id}/documents`, { data: makePdf([[`${t} (тест)`]]),
+      headers: { ...H, 'x-file-name': encodeURIComponent(name), 'content-type': 'application/pdf' } })).json()).document;
+    expect((await page.request.post(`/api/orders/${o.id}/doc-requests/${reqs.find((r) => r.title === t).id}/attach`, { data: { document_id: doc.id }, headers: H })).status()).toBe(200);
+  }
+
+  // 3. Съёмка документа по ссылке: страница говорит о документе, а не об объекте.
+  await sp.reload();
+  await sp.getByRole('button', { name: 'Выдать ссылку владельцу' }).click();
+  await expect(sp.locator('#inspect-url')).toContainText('http');
+  const url = await sp.locator('#inspect-url').textContent();
+  const octx = await phoneContext(browser, baseURL, { permissions: ['geolocation'], geolocation: { latitude: 55.75, longitude: 37.61, accuracy: 10 } });
+  const op = await octx.newPage();
+  await op.goto(url);
+  await expect(op.locator('#page-title')).toHaveText('Съёмка документа');
+  await expect(op.locator('#intro-text')).toContainText('сфотографировать документ и образцы подписи');
+  await expect(op.locator('#intro-text')).toContainText('Фото не заменяют оригинал');
+  await expect(op.locator('#intro-text')).not.toContainText('объект');
+  await expect(op).toHaveTitle('Съёмка документа · БЕРТЕЛ Дело');
+  const jpeg = Buffer.from((await op.evaluate(() => {
+    const c = document.createElement('canvas'); c.width = 640; c.height = 480;
+    const g = c.getContext('2d'); g.fillStyle = '#f4f1e8'; g.fillRect(0, 0, 640, 480);
+    return c.toDataURL('image/jpeg', 0.8);
+  })).split(',')[1], 'base64');
+  await op.getByRole('button', { name: 'Начать: разрешить определение места' }).click();
+  await expect(op.locator('#geo-state')).toContainText('Место определено');
+  for (const st of ['hw_document', 'hw_signature']) {
+    await op.locator(`#steps li[data-step="${st}"] input[type=file]`).setInputFiles({ name: `${st}.jpg`, mimeType: 'image/jpeg', buffer: jpeg });
+    await expect(op.locator(`#steps li[data-step="${st}"] .badge`)).toHaveText('Фото: 1');
+  }
+  await shot(op, 'c2-pocherk-semka-dokumenta');
+  op.once('dialog', (d) => d.accept());
+  await op.getByRole('button', { name: 'Готово' }).click();
+  await expect(op.locator('#closed-text')).toContainText('Эксперт получил 2 фото');
+  await octx.close();
+
+  // 4. Черновик: вопрос суда — один раз (в разделе 2, не строкой таблицы); под таблицей — что прислал заказчик.
+  await sp.reload();
+  await expect(sp.locator('#inspect-state')).toContainText('Фото осмотра: 2');
+  await sp.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const text = sp.getByLabel('Текст заключения');
+  const body = await text.inputValue();
+  expect(body).toContain('1. Кем, Ивановым Иваном Ивановичем или другим лицом, выполнена подпись в расписке от 12.03.2025?');
+  expect(body.split('выполнена подпись в расписке').length - 1).toBe(1);
+  expect(body).not.toContain('| Какие вопросы поставить эксперту |');
+  expect(body).toContain('| Где находится документ | Москва |');
+  expect(body).toContain('| Есть ли оригинал документа | Да, оригинал будет передан эксперту |');
+  expect(body).toMatch(/Документы, представленные заказчиком:\n1\. Документ-основание — файл «Определение\.pdf», получен \d\d\.\d\d\.\d{4}\n2\. Копия исследуемого документа — файл «Расписка\.pdf», получен \d\d\.\d\d\.\d{4}\n3\. Свободные образцы подписи или почерка — файл «Образцы подписи\.pdf», получен /);
+  expect(body).toContain('по статье 307 Уголовного кодекса Российской Федерации эксперт предупреждён');
+  await text.evaluate((el) => { el.scrollTop = el.value.indexOf('## 3.') > 0 ? 400 : 0; });
+  await shot(sp, 'c3-pocherk-chernovik');
+  const [word] = await Promise.all([sp.waitForEvent('download'), sp.getByRole('button', { name: 'Скачать Word' }).click()]);
+  expect(word.suggestedFilename()).toBe('Заключение эксперта.docx');
+  const wchunks = [];
+  for await (const ch of await word.createReadStream()) wchunks.push(ch);
+  const wtext = (await extractPages(Buffer.concat(wchunks), 'r.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')).pages.join('\n');
+  expect(wtext).toContain('Эксперт: Почерков Павел Петрович');
+  expect(wtext).toContain('Документы, представленные заказчиком:');
+  expect(wtext).toContain('Копия исследуемого документа — файл «Расписка.pdf»');
+
+  // 5. Эксперт дописывает исследование и вывод; ИИ-проверка, подпись, сдача.
+  const done = body.replace(/\[(?:заполнить|описать)[^\]]*\]/gi, 'заполнено экспертом')
+    .replace(/## 7\. Выводы\n[^#]*/, '## 7. Выводы\nПо вопросу 1: подпись в расписке от 12.03.2025 выполнена не Ивановым Иваном Ивановичем, а другим лицом.\n\n');
+  await text.fill(done);
+  await sp.getByRole('button', { name: 'Сохранить правку' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Правка сохранена');
+  await sp.locator('#next-main button').click();
+  await sp.locator('#draft-confirm').check();
+  await sp.getByRole('button', { name: 'Приложить как файл результата' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Файл «Заключение эксперта.docx» добавлен в результат работы');
+  await sp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  await expect(sp.locator('#review-box')).not.toContainText('307 УК РФ в отчёте нет');
+  await expect(sp.locator('#review-box')).not.toContainText('не найден в выводах');
+  await shot(sp, 'c4-pocherk-proverka');
+  await expect(sp.locator('#next-main button')).toHaveText('Подписать файл');
+  sp.once('dialog', (d) => d.accept());
+  await sp.locator('#next-main button').click();
+  await expect(sp.locator('#next-main button')).toHaveText('Сдать на проверку');
+  await sp.locator('#next-main button').click();
+  await expect(sp.locator('#order-status')).toHaveText('Проверка результата');
+  await shot(sp, 'c5-pocherk-sdano');
+  await sctx.close();
+  await dctx.close();
+});
+
 test('как руководитель (2.67): организация, приглашение, назначение, переписка, возврат, подпись, передача дела', async ({ page, browser, baseURL }) => {
   test.setTimeout(180_000);
   const C = '+79990006701', D = '+79990006702', HD = '+79990006703', S1 = '+79990006704', S2 = '+79990006705';

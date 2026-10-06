@@ -46,7 +46,7 @@ function steps() {
   const aiFresh = !!ai && (!lastResultAt || ai.at >= lastResultAt);
   const items = [];
   if (visible('inspect-box') || visible('onsite-box')) {
-    items.push({ id: 'inspect', title: 'Осмотр объекта (по желанию)', done: list.some((d) => d.kind === 'inspection'), go: go(visible('inspect-box') ? 'inspect-box' : 'onsite-box'), optional: true });
+    items.push({ id: 'inspect', title: order.subject === 'document' ? 'Съёмка документа (по желанию)' : 'Осмотр объекта (по желанию)', done: list.some((d) => d.kind === 'inspection'), go: go(visible('inspect-box') ? 'inspect-box' : 'onsite-box'), optional: true });
   }
   // Документы от заказчика (2.66): выписка ЕГРН, ПТС… — эксперт видит, что запрошено и что уже пришло, не листая дело.
   const dr = ctx.docreq;

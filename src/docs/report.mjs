@@ -17,8 +17,10 @@ const ru = (d) => {
 const cell = (v) => String(v ?? '').replace(/\s*\n\s*/g, '; ').replace(/\|/g, '/').trim() || GAP;
 const row = (cells) => `| ${cells.map(cell).join(' | ')} |`;
 
-// Таблица «задание»: услуга, основание, срок и поля заявки — как их заполнил заказчик.
-function taskTable(registry, order) {
+// Таблица «задание»: услуга, основание, срок и поля заявки — как их заполнил заказчик. Вопросы, если для них есть свой
+// раздел (2.81), в таблице не повторяются. Под таблицей — документы, которые представил заказчик (2.81): эксперт не
+// переписывает их в раздел об объектах и образцах сам.
+function taskTable(registry, order, { skip = [], materials = [] } = {}) {
   const def = registry.service(order.module, order.service);
   const basis = BASIS_KINDS[order.basis_kind];
   const rows = [
@@ -26,10 +28,30 @@ function taskTable(registry, order) {
     ['Услуга', def ? def.service.name : order.title],
     ['Основание', basis ? [basis.name, order.basis_number ? `№ ${order.basis_number}` : '', order.basis_date ? `от ${ru(order.basis_date)}` : ''].filter(Boolean).join(' ') : GAP],
     // Числа — по-русски (2.66): «54,3», а не «54.3», как в отчёте.
-    ...(def?.fields ?? []).filter((f) => order.fields?.[f.id] !== undefined && order.fields[f.id] !== '').map((f) => [f.label, valueText(f, order.fields[f.id])]),
+    ...(def?.fields ?? []).filter((f) => !skip.includes(f.id) && order.fields?.[f.id] !== undefined && order.fields[f.id] !== '')
+      .map((f) => [f.label, valueText(f, order.fields[f.id])]),
     ['Срок', order.deadline ? ru(order.deadline) : GAP],
   ];
-  return rows.map(row);
+  const got = materials.length
+    ? ['', 'Документы, представленные заказчиком:', ...materials.map((m, i) => `${i + 1}. ${m.title} — файл «${m.filename}», получен ${m.day}`)]
+    : [];
+  return [...rows.map(row), ...got];
+}
+
+// Документы дела от заказчика (2.81): основание и всё, что он приложил сам или по запросу эксперта (тогда — название
+// пункта запроса). Файлы эксперта, результат и фото осмотра — не сюда.
+export async function orderMaterials(sql, order) {
+  const rows = await sql`select d.filename, d.kind, d.created_at,
+                                (select r.title from doc_requests r where r.document_id = d.id order by r.id limit 1) as asked
+                           from documents d
+                          where d.order_id = ${order.id} and d.deleted_at is null and d.kind in ('basis', 'other')
+                            and d.uploaded_by is distinct from ${order.executor_user_id ?? null}
+                          order by d.created_at, d.id`;
+  return rows.map((r) => ({
+    title: r.asked ?? (r.kind === 'basis' ? 'Документ-основание' : 'Документ'),
+    filename: r.filename,
+    day: ru(new Date(new Date(r.created_at).getTime() + 3 * 3600_000)),
+  }));
 }
 
 // Неприменённые подходы (2.33) — строкой «Не применялся», как в настоящих отчётах; не выбраны — все с пометками.
@@ -63,12 +85,13 @@ function questionsList(order) {
 export const orderSections = (registry, order) => registry.draftSections(order.module, order.service, order.approaches ?? null);
 
 // Разделы с пометкой table получают таблицу сразу под заголовком; эксперт правит её в черновике как строки «| … |».
-export function fillTables(body, sections, registry, order) {
+export function fillTables(body, sections, registry, order, { materials = [] } = {}) {
   let out = body;
+  const skip = sections.some((x) => x.table === 'questions') ? ['questions'] : [];
   for (const s of sections.filter((x) => x.table)) {
     const m = [...out.matchAll(/^#{1,3}\s*(.+)$/gm)].find((h) => headKey(h[1]) === headKey(s.title));
     if (!m) continue;
-    const lines = s.table === 'task' ? taskTable(registry, order) : s.table === 'analogs' ? [ANALOGS_MARK]
+    const lines = s.table === 'task' ? taskTable(registry, order, { skip, materials }) : s.table === 'analogs' ? [ANALOGS_MARK]
       : s.table === 'questions' ? questionsList(order) : approachesTable(order.approaches);
     const at = m.index + m[0].length;
     out = `${out.slice(0, at)}\n${lines.join('\n')}${out.slice(at)}`;
@@ -171,7 +194,7 @@ export const tablesBrief = (sections) => {
   const t = sections.filter((s) => s.table && s.table !== 'analogs' && s.table !== 'questions');
   const q = sections.filter((s) => s.table === 'questions');
   return [
-    t.length ? `ТАБЛИЦЫ: программа сама вставит таблицы в разделы ${t.map((s) => `«${s.title}»`).join(', ')} — сам их не рисуй.` : null,
+    t.length ? `ТАБЛИЦЫ: программа сама вставит таблицы в разделы ${t.map((s) => `«${s.title}»`).join(', ')} — сам их не рисуй${t.some((s) => s.table === 'task') ? '; список документов заказчика под таблицей задания программа тоже вставит сама' : ''}.` : null,
     q.length ? `ВОПРОСЫ: программа сама вставит вопросы из заявки дословно в раздел ${q.map((s) => `«${s.title}»`).join(', ')} — не переписывай их.` : null,
   ].filter(Boolean).join('\n') || null;
 };

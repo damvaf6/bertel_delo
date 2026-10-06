@@ -26,7 +26,7 @@ before(async () => {
   spec = await login(S, '+79990000905');
   await setPlatformRole(S.sql, dispatcher.user.id, 'dispatcher');
   await setPlatformRole(S.sql, admin.user.id, 'admin');
-  await makeSpecialist(S.sql, spec.user.id, { permits: [['expertise', 'realty'], ['expertise', 'vehicle'], ['expertise', 'land'], ['expertise', 'movable'], ['expertise', 'goods'], ['expertise', 'construction']] });
+  await makeSpecialist(S.sql, spec.user.id, { permits: [['expertise', 'realty'], ['expertise', 'vehicle'], ['expertise', 'land'], ['expertise', 'movable'], ['expertise', 'goods'], ['expertise', 'construction'], ['expertise', 'handwriting']] });
   await owner.req('PATCH', '/api/me', { full_name: 'Тестова Заказчица' });
 });
 after(async () => { await S?.close(); });
@@ -552,4 +552,43 @@ test('вопросы из заявки (2.79): нумерация заказчи
   assert.equal(reg.service('expertise', 'construction').fields.find((f) => f.id === 'purpose').label, 'Для чего нужна экспертиза');
   assert.equal(reg.service('expertise', 'realty').fields.find((f) => f.id === 'purpose').label, 'Для чего нужна оценка');
   assert.equal(reg.catalog()[0].services.find((s) => s.id === 'goods').fields.find((f) => f.id === 'purpose').label, 'Для чего нужна экспертиза');
+});
+
+// Прогон «как эксперт» по почерковедческой (2.81): документы, которые представил заказчик (основание и присланные по
+// запросу эксперта), — списком под таблицей задания; вопросы суда — только в своём разделе, не строкой таблицы; «где
+// находится документ»; по ссылке снимают документ. Фото осмотра и результат в список не попадают.
+test('почерковедческая (2.81): документы заказчика под таблицей задания, вопросы без повтора, съёмка документа', async () => {
+  const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'handwriting', title: 'Подпись в расписке' })).body.order;
+  const fields = { purpose: 'court', region: 'moscow', object_kind: 'signature', document: 'расписка от 12.03.2025', original: 'yes', samples: 'free',
+    questions: 'Кем выполнена подпись в расписке от 12.03.2025?' };
+  assert.equal((await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: addDays(todayMsk(), 21), basis_kind: 'court', basis_number: '2-8811/2026', basis_date: '2026-10-02', fields })).status, 200);
+  const up = (c, name, kind) => c.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(`%PDF-1.4 ${name}`), {
+    raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent(name), ...(kind ? { 'x-doc-kind': kind } : {}) } });
+  assert.equal((await up(owner, 'Определение.pdf', 'basis')).status, 201);
+  assert.equal((await step(owner, o, 'matching')).status, 200);
+  await ensurePaid(S.sql, o.id);
+  assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: spec.user.id, from: 'matching' })).status, 200);
+  assert.equal((await step(spec, o, 'in_work')).status, 200);
+  const view = (await spec.req('GET', `/api/orders/${o.id}`)).body.order;
+  assert.equal(view.subject, 'document');
+  assert.equal((await owner.req('GET', `/api/orders/${o.id}`)).body.order.subject, 'document');
+
+  const asked = (await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { items: ['disputed_doc', 'free_samples'] })).body.requests;
+  const doc = (await up(owner, 'Расписка.pdf')).body.document;
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/doc-requests/${asked.find((r) => r.item_id === 'disputed_doc').id}/attach`, { document_id: doc.id })).status, 200);
+
+  const d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {})).body.draft;
+  const day = todayMsk().split('-').reverse().join('.');
+  assert.ok(d.body.includes(`Документы, представленные заказчиком:\n1. Документ-основание — файл «Определение.pdf», получен ${day}\n2. Копия исследуемого документа — файл «Расписка.pdf», получен ${day}`), d.body);
+  assert.doesNotMatch(d.body, /\| Какие вопросы поставить эксперту \|/);
+  assert.equal(d.body.split('Кем выполнена подпись').length, 2, 'вопрос — один раз, в своём разделе');
+  assert.match(d.body, /\| Где находится документ \| Москва \|/);
+  assert.match(lastPrompt(), /список документов заказчика под таблицей задания программа тоже вставит сама/);
+
+  // Оценка квартиры: вопросов-раздела нет — строка «вопросы» в таблице не пропадает; ссылка осмотра — про объект.
+  const reg = createRegistry([expertise]);
+  assert.equal(reg.service('expertise', 'realty').service.subject, undefined);
+  assert.equal(reg.service('expertise', 'handwriting').fields.find((f) => f.id === 'region').label, 'Где находится документ');
+  const svc = (patch) => ({ ...expertise, services: expertise.services.map((s) => (s.id === 'handwriting' ? { ...s, ...patch } : s)) });
+  assert.throws(() => validateModule(svc({ subject: 'paper' })), /subject — только 'document'/);
 });
