@@ -2,7 +2,7 @@
 // сверка отчёта с досье в ИИ-проверке, предупреждение диспетчеру в подборе.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid } from '../helpers.mjs';
+import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, addMember } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import { remindDossier, fillDraft, termState } from '../../src/dossier/dossier.mjs';
 import { runAutoChecks } from '../../src/ai/report-checks.mjs';
@@ -234,4 +234,49 @@ test('ИИ-проверка дела: находки по досье — под 
   assert.equal(r.status, 201);
   const item = r.body.ai.items.find((i) => i.id === 'appraiser');
   assert.ok(item.found?.some((f) => /в отчёте такой суммы нет/.test(f.text)), JSON.stringify(item));
+});
+
+test('руководитель (2.63): напоминания о сроках досье своих экспертов и строка в «Сегодня» — без номеров и копий; чужому — ничего', async () => {
+  const today = todayMsk();
+  const expert = await login(S, '+79990001405');
+  const head = await login(S, '+79990001406');
+  const stranger = await login(S, '+79990001407');
+  await makeSpecialist(S.sql, expert.user.id, { permits: [['expertise', 'vehicle']] });
+  const org = await makeOrg(S.sql, 'ООО «Досье руководителя»');
+  const alien = await makeOrg(S.sql, 'ООО «Чужая оценка»');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  await addMember(S.sql, org.id, expert.user.id, 'member');
+  await addMember(S.sql, alien.id, stranger.user.id, 'head');
+  await expert.req('PATCH', '/api/me', { full_name: 'Эксперт Досьевый' });
+  assert.equal((await expert.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  const c = await expert.req('POST', '/api/specialist/me/dossier', { kind: 'policy', title: 'Тестовое страхование', number: 'ПОЛ-777',
+    valid_until: addDays(today, 20), amount_rub: 300000 });
+  assert.equal(c.status, 201, JSON.stringify(c.body));
+  assert.equal((await file(expert, c.body.id, PDF, 'полис.pdf')).status, 200);
+
+  const ev = async (u) => (await S.sql`select event, org_id from notifications where user_id = ${u} and event like 'dossier%' order by id`)
+    .map((r) => `${r.event}${r.org_id ? `@${r.org_id === org.id ? 'org' : 'other'}` : ''}`);
+  await remindDossier(S.sql, { today });
+  await remindDossier(S.sql, { today });
+  assert.deepEqual(await ev(head.user.id), ['dossier_month_head@org'], 'один раз и с организацией');
+  assert.deepEqual(await ev(expert.user.id), ['dossier_month']);
+  await remindDossier(S.sql, { today: addDays(today, 14) });
+  await remindDossier(S.sql, { today: addDays(today, 21) });
+  assert.deepEqual(await ev(head.user.id), ['dossier_month_head@org', 'dossier_week_head@org', 'dossier_expired_head@org']);
+  assert.deepEqual(await ev(stranger.user.id), [], 'руководителю чужой организации — ничего');
+  const sms = await S.sql`select d.body from notification_deliveries d join notifications n on n.id = d.notification_id
+                          where n.user_id = ${head.user.id} and n.event like 'dossier%'`;
+  assert.ok(sms.length && sms.every((x) => !/ПОЛ-777|Досьевый/.test(x.body)), 'в СМС нет номера и имени');
+
+  // «Сегодня»: вид документа и срок; ни номера, ни файла.
+  const t = (await head.req('GET', '/api/today')).body;
+  const g = t.orgs.find((x) => x.id === org.id);
+  assert.deepEqual(g.dossier, [{ expert: 'Эксперт Досьевый', kind_name: 'Полис страхования оценщика', valid_until: addDays(today, 20), state: 'soon' }]);
+  assert.ok(!JSON.stringify(t).includes('ПОЛ-777') && !JSON.stringify(t).includes('полис.pdf'));
+  await S.sql`update dossier_items set valid_until = ${addDays(today, -2)}::date where id = ${c.body.id}`;
+  assert.equal((await head.req('GET', '/api/today')).body.orgs.find((x) => x.id === org.id).dossier[0].state, 'expired');
+  assert.deepEqual((await stranger.req('GET', '/api/today')).body.orgs.find((x) => x.id === alien.id).dossier, []);
+  // Эксперт ушёл из организации — руководитель его документов больше не видит.
+  await S.sql`delete from org_members where org_id = ${org.id} and user_id = ${expert.user.id}`;
+  assert.deepEqual((await head.req('GET', '/api/today')).body.orgs.find((x) => x.id === org.id).dossier, []);
 });

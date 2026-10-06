@@ -1,12 +1,14 @@
 // «Сегодня» (2.34, 2.42): одним экраном — что требует внимания эксперта, руководителя экспертной организации и диспетчера. Эксперту: что
 // горит по срокам, что вернули на доработку (диспетчер или руководитель), что ждёт проверки диспетчера, новые предложения.
 // Руководителю — по каждой своей организации: дела экспертов, у которых горит срок, ждут подписи организации, возвращены
-// эксперту и ждут исправления, дела, которые диспетчер предложил организации. Руководителю — те же сведения, что в «Делах
-// экспертов» (2.16): без заказчика, полей заявки, документов и переписки. Только свои дела и свои организации.
+// эксперту и ждут исправления, дела, которые диспетчер предложил организации, сроки документов досье экспертов (2.63).
+// Руководителю — те же сведения, что в «Делах экспертов» (2.16): без заказчика, полей заявки, документов и переписки.
+// Только свои дела и свои организации.
 import { orderRef } from '../notify/registry.mjs';
 import { splitAmount } from '../money/money.mjs';
 import { STATUS_NAME, addDays, isOverdue, todayMsk } from '../orders/workflow.mjs';
 import { orderSignatures, orgReturns } from './sign-ops.mjs';
+import { dossierAlerts, loadDossier } from '../dossier/dossier.mjs';
 
 // «Горит» — просрочено или до срока не больше двух дней (как подсветка в списке дел).
 const HOT_DAYS = 2;
@@ -68,7 +70,19 @@ async function orgPart(sql, org, registry, today) {
   const offered = await sql`
     select id, module, service, status, deadline from orders where offer_org_id = ${org.id} and status = 'awaiting_executor'
       and executor_user_id is null order by deadline nulls last, updated_at limit ${LIMIT}`;
+  // Документы досье экспертов организации (2.63): истёк или кончается в 30 дней — только вид и срок, без номеров и копий.
+  const experts = await sql`
+    select s.user_id, u.full_name from specialists s join org_members m on m.org_id = s.org_id and m.user_id = s.user_id
+    join users u on u.id = s.user_id and u.is_active where s.org_id = ${org.id} order by u.full_name nulls last, s.user_id`;
+  const dossier = [];
+  for (const x of experts) {
+    for (const a of dossierAlerts(await loadDossier(sql, x.user_id))) {
+      dossier.push({ expert: x.full_name || 'Без имени', kind_name: a.kind_name, valid_until: a.valid_until, state: a.state });
+    }
+  }
+  dossier.sort((a, b) => a.valid_until.localeCompare(b.valid_until));
   return {
+    dossier,
     id: org.id,
     name: org.name,
     hot: cases.filter((o) => ['in_work', 'review'].includes(o.status) && o.deadline && o.deadline <= soon).map((o) => view(o)),

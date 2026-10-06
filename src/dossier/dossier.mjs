@@ -2,7 +2,7 @@
 // сведения для черновика и напоминания. Операции — src/ops/dossier-ops.mjs; сверка отчёта с досье —
 // правила dossier_* в src/ai/report-checks.mjs.
 import { addDays, todayMsk } from '../orders/workflow.mjs';
-import { dispatchers, notify } from '../notify/notify.mjs';
+import { dispatchers, notify, orgHeads } from '../notify/notify.mjs';
 
 // has — какие поля у вида есть (остальные не принимаются); need — обязательные; term — у документа есть срок.
 export const KINDS = {
@@ -86,13 +86,18 @@ export function fillDraft(body, sections, items, today = todayMsk()) {
   return out;
 }
 
-// Напоминания о сроках документов досье: за 30 и за 7 дней — эксперту; срок прошёл — эксперту и диспетчерам.
-// Каждое — один раз на документ, вид и срок (dossier_reminders); эксперт обновил срок — по новому придут снова.
-// По услугам оценки истёкший аттестат или полис снимает эксперта с подбора (решение Дамира 03.10.2026, match-ops.mjs).
+// Напоминания о сроках документов досье: за 30 и за 7 дней — эксперту и руководителям его организации (2.63); срок
+// прошёл — им же и диспетчерам. Организация эксперта — та, от которой он работает (профиль специалиста) и в которой
+// состоит, как в «Делах экспертов». Каждое — один раз на документ, вид и срок (dossier_reminders); эксперт обновил
+// срок — по новому придут снова. По услугам оценки истёкший аттестат или полис снимает эксперта с подбора (решение
+// Дамира 03.10.2026, match-ops.mjs).
+const HEAD_EVENT = { d30: 'dossier_month_head', d7: 'dossier_week_head', expired: 'dossier_expired_head' };
 export async function remindDossier(sql, { today = todayMsk() } = {}) {
   let sent = 0;
-  const rows = await sql`select d.id, d.user_id, to_char(d.valid_until, 'YYYY-MM-DD') as until from dossier_items d
+  const rows = await sql`select d.id, d.user_id, to_char(d.valid_until, 'YYYY-MM-DD') as until, m.org_id from dossier_items d
                          join users u on u.id = d.user_id and u.is_active
+                         left join specialists s on s.user_id = d.user_id
+                         left join org_members m on m.org_id = s.org_id and m.user_id = d.user_id
                          where d.deleted_at is null and d.valid_until is not null and d.valid_until <= ${addDays(today, 30)}::date`;
   for (const r of rows) {
     const kind = r.until < today ? 'expired' : r.until <= addDays(today, 7) ? 'd7' : 'd30';
@@ -100,9 +105,11 @@ export async function remindDossier(sql, { today = todayMsk() } = {}) {
       const fresh = await tx`insert into dossier_reminders (item_id, kind, valid_until) values (${r.id}, ${kind}, ${r.until})
                              on conflict do nothing returning item_id`;
       if (!fresh.length) return 0;
-      if (kind !== 'expired') return notify(tx, kind === 'd30' ? 'dossier_month' : 'dossier_week', { users: [r.user_id] });
-      return (await notify(tx, 'dossier_expired', { users: [r.user_id] }))
-        + (await notify(tx, 'dossier_expired_staff', { users: await dispatchers(tx) }));
+      let n = await notify(tx, kind === 'd30' ? 'dossier_month' : kind === 'd7' ? 'dossier_week' : 'dossier_expired', { users: [r.user_id] });
+      // Руководитель сам себе эксперт — ему хватит своего напоминания.
+      if (r.org_id) n += await notify(tx, HEAD_EVENT[kind], { users: (await orgHeads(tx, r.org_id)).filter((id) => id !== r.user_id), orgId: r.org_id });
+      if (kind === 'expired') n += await notify(tx, 'dossier_expired_staff', { users: await dispatchers(tx) });
+      return n;
     });
   }
   return sent;

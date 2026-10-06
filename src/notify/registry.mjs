@@ -11,7 +11,7 @@ export const TYPES = [
   { id: 'org_invites', name: 'Приглашения в организацию', hint: 'Вас пригласили стать сотрудником организации', for: 'all', sms: true },
   { id: 'offers', name: 'Предложения дел', hint: 'Вам предложили новое дело (и предложения госзаказа из БЕРТЕЛ CRM)', for: 'specialist', sms: true },
   { id: 'executor_work', name: 'Мои дела как исполнителя', hint: 'напоминания о сроке дела и документов досье, владелец или помощник прислал фото осмотра, назначен или отменён выезд, возврат на доработку, сообщение руководителя организации или эксперта по делу, результат принят, дело снято, передано другому (или руководитель передал дело Вам) или отменено', for: 'specialist', sms: true },
-  { id: 'org_cases', name: 'Дела организации', hint: 'организации предложено дело — назначьте эксперта; эксперт отказался; предложение снято (для руководителя)', for: 'all', sms: true },
+  { id: 'org_cases', name: 'Дела организации', hint: 'организации предложено дело — назначьте эксперта; эксперт отказался; предложение снято; у эксперта кончается или истёк документ досье (для руководителя)', for: 'all', sms: true },
   { id: 'dispatch', name: 'Очередь диспетчера', hint: 'новые и оплаченные заявки, отказы исполнителей, сдача на проверку, просроченные сроки, истёкшие документы экспертов, отмены, неудачные выплаты и возвраты, сообщения о проблемах', for: 'dispatcher', sms: false },
 ];
 export const TYPE = Object.fromEntries(TYPES.map((t) => [t.id, t]));
@@ -59,6 +59,10 @@ export const EVENTS = {
   dossier_month: { type: 'executor_work', title: 'Через 30 дней кончается срок документа в досье — обновите его в разделе «Специалист»', order: false, section: 'specialist' },
   dossier_week: { type: 'executor_work', title: 'Через 7 дней кончается срок документа в досье — обновите его в разделе «Специалист»', order: false, section: 'specialist' },
   dossier_expired: { type: 'executor_work', title: 'Истёк срок документа в досье — обновите его в разделе «Специалист»', order: false, section: 'specialist' },
+  // Руководителю организации эксперта (2.63): сроки документов досье его экспертов; сами копии руководитель не видит.
+  dossier_month_head: { type: 'org_cases', title: 'У эксперта Вашей организации через 30 дней кончается срок документа в досье', order: false, section: 'orgs' },
+  dossier_week_head: { type: 'org_cases', title: 'У эксперта Вашей организации через 7 дней кончается срок документа в досье', order: false, section: 'orgs' },
+  dossier_expired_head: { type: 'org_cases', title: 'У эксперта Вашей организации истёк документ в досье — по оценке он снят с подбора', order: false, section: 'orgs' },
   result_accepted: { type: 'executor_work', title: 'Результат принят проверкой', order: true },
   executor_cancelled: { type: 'executor_work', title: 'Дело отменено', order: true },
   executor_closed: { type: 'executor_work', title: 'Заявка закрыта', order: true },
