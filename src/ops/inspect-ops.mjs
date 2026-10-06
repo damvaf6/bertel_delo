@@ -16,6 +16,7 @@ export const INSPECT = {
   photosMax: 120,        // фото по одной ссылке (2.49: дом с участком — до 100 снимков)
   perStepMax: 12,        // фото на один шаг
   fileMax: 3 * 1024 * 1024,   // облако: запрос не больше 3,5 МБ (2.49); фото уменьшаются на телефоне
+  thumbMax: 64 * 1024,   // уменьшенная копия снимка для дела (2.71) — впереди тела запроса, длина в x-thumb-bytes
   smsPerDay: 5,          // СМС со ссылкой по одной заявке за сутки — от рассылки по чужим номерам
   noteMax: 300,          // просьба переснять: что не так
 };
@@ -103,12 +104,24 @@ export async function stepCounts(sql, source) {
   return Object.fromEntries(rows.map((r) => [r.step, r.n]));
 }
 
+// Уменьшенная копия снимка (2.71): страница кладёт её JPEG впереди снимка одним запросом (повтор при плохой связи — тоже
+// одним), длина — в x-thumb-bytes. Нет заголовка — снимок без картинки (старая страница, браузер не смог уменьшить).
+export function splitThumb(header, body) {
+  if (header === undefined) return { thumb: null, body };
+  const n = /^[1-9]\d{0,5}$/.test(header) ? Number(header) : 0;
+  if (!n || n > INSPECT.thumbMax || !Buffer.isBuffer(body) || n >= body.length) throw new HttpError(400, 'bad_thumb', 'Неверная копия снимка');
+  const thumb = body.subarray(0, n);
+  if (!looksLikeImage(thumb, 'image/jpeg')) throw new HttpError(400, 'bad_thumb', 'Неверная копия снимка');
+  return { thumb: Buffer.from(thumb), body: body.subarray(n) };
+}
+
 // Принять фото осмотра (тело запроса — снимок; шаг, время и геометка — в заголовках): проверка, лимиты, файл в хранилище,
 // документ заявки вида «осмотр» и строка фото — одной записью. Общее для ссылки владельца (2.3) и выезда помощника (2.4).
 export async function storePhoto(ctx, { order, steps, uploadedBy, source, actor }) {
-  const { sql, req, body } = ctx;
+  const { sql, req } = ctx;
   const step = steps.find((s) => s.id === req.get('x-step'));
   if (!step) throw new HttpError(400, 'bad_step', 'Неизвестный шаг осмотра');
+  const { thumb, body } = splitThumb(req.get('x-thumb-bytes'), ctx.body);
   if (!Buffer.isBuffer(body) || body.length === 0) throw new HttpError(400, 'empty_file', 'Файл пустой');
   const mime = (req.get('content-type') || '').split(';')[0].trim().toLowerCase();
   if (!IMAGE_MIME.includes(mime) || !looksLikeImage(body, mime)) throw new HttpError(400, 'not_image', 'Нужна фотография (JPEG, PNG, WebP или HEIC)');
@@ -136,8 +149,8 @@ export async function storePhoto(ctx, { order, steps, uploadedBy, source, actor 
     await sql.tx(async (tx) => {
       const d = await tx.one`insert into documents (order_id, uploaded_by, filename, mime, size_bytes, storage_key, kind)
                              values (${order.id}, ${uploadedBy}, ${filename}, ${mime}, ${body.length}, ${key}, 'inspection') returning id`;
-      await tx`insert into inspection_photos (document_id, link_id, visit_id, step, shot_at, lat, lon, accuracy_m, client_id)
-               values (${d.id}, ${source.link ?? null}, ${source.visit ?? null}, ${step.id}, ${meta.shotAt}, ${meta.lat}, ${meta.lon}, ${meta.accuracy}, ${clientId})`;
+      await tx`insert into inspection_photos (document_id, link_id, visit_id, step, shot_at, lat, lon, accuracy_m, client_id, thumb)
+               values (${d.id}, ${source.link ?? null}, ${source.visit ?? null}, ${step.id}, ${meta.shotAt}, ${meta.lat}, ${meta.lon}, ${meta.accuracy}, ${clientId}, ${thumb})`;
       const where = source.visit ? { visit: String(source.visit) } : { link: String(source.link) };
       await audit(tx, actor, source.visit ? 'onsite.photo' : 'inspect.photo', 'order', order.id, { ...where, document: d.id, step: step.id, geo: meta.lat !== null });
       // Новое фото шага закрывает просьбу переснять его (2.20).
@@ -182,12 +195,13 @@ export function inspectOps() {
         const links = await sql`select l.*, (select count(*)::int from inspection_photos p where p.link_id = l.id) as photos
                                 from inspection_links l where l.order_id = ${order.id} order by l.id desc`;
         const photos = await sql`
-          select p.*, d.filename, d.size_bytes from inspection_photos p join documents d on d.id = p.document_id
+          select p.document_id, p.link_id, p.visit_id, p.step, p.received_at, p.shot_at, p.lat, p.lon, p.accuracy_m,
+                 p.thumb is not null as has_thumb, d.filename, d.size_bytes from inspection_photos p join documents d on d.id = p.document_id
           where d.order_id = ${order.id} and d.deleted_at is null order by p.received_at, d.id`;
         const byStep = (id) => photos.filter((p) => p.step === id).map((p) => ({
           document_id: p.document_id, filename: p.filename, size_bytes: p.size_bytes,
           link_id: p.link_id === null ? null : String(p.link_id), visit_id: p.visit_id === null ? null : String(p.visit_id),
-          received_at: p.received_at, shot_at: p.shot_at,
+          received_at: p.received_at, shot_at: p.shot_at, thumb: p.has_thumb,
           geo: p.lat === null ? null : { lat: p.lat, lon: p.lon, accuracy_m: p.accuracy_m === null ? null : Math.round(p.accuracy_m) },
         }));
         const retakes = await openRetakes(sql, order.id);
@@ -198,6 +212,18 @@ export function inspectOps() {
           days: INSPECT.days,
           note_max: INSPECT.noteMax,
         };
+      },
+    },
+    {
+      // Картинка фото осмотра в деле (2.71) — уменьшенная копия со страницы владельца или помощника. Видит каждый, кто
+      // видит заявку; с этого же адреса (в отличие от ссылки на хранилище), в журнал не пишется — это просмотр списка.
+      id: 'inspection.thumb', method: 'GET', path: '/api/documents/:id/thumb', auth: 'user',
+      access: { resource: 'document', param: 'id', need: 'read' },
+      async handler({ sql, subject: doc, res }) {
+        const p = doc.kind === 'inspection' ? await sql.one`select thumb from inspection_photos where document_id = ${doc.id}` : null;
+        if (!p?.thumb) throw notFound();
+        res.set({ 'content-type': 'image/jpeg', 'cache-control': 'private, max-age=86400' });
+        res.send(p.thumb);
       },
     },
     {
@@ -327,7 +353,7 @@ export function inspectOps() {
       id: 'inspect.photo', method: 'POST', path: '/api/inspect/photos', auth: 'public',
       publicReason: 'владелец объекта присылает фото осмотра по секрету ссылки; только снимки, лимиты по числу и размеру',
       rateLimit: (ip) => ownerLimit(ip),
-      body: 'raw', limit: INSPECT.fileMax,
+      body: 'raw', limit: INSPECT.fileMax + INSPECT.thumbMax,
       async handler(ctx) {
         const { sql, req, registry, res } = ctx;
         const { link, order, state } = await linkByToken(sql, req);

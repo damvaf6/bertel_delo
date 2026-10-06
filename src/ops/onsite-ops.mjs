@@ -191,7 +191,7 @@ export function onsiteOps() {
     {
       id: 'visits.photo', method: 'POST', path: '/api/visits/:id/photos', auth: 'user',
       access: { resource: 'visit', param: 'id', need: 'write' },
-      body: 'raw', limit: INSPECT.fileMax,
+      body: 'raw', limit: INSPECT.fileMax + INSPECT.thumbMax,
       async handler(ctx) {
         const { actor, registry, visit, order, res } = ctx;
         requireActive(visit, order);

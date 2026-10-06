@@ -377,3 +377,42 @@ test('2.68: повтор отправки того же снимка (ответ
   const { token: t2 } = await issue(o, { days: 1 });
   assert.equal((await shoot(t2, 'facade', { headers: { 'x-photo-id': id } })).body.photos, 1);
 });
+
+test('2.71: картинка снимка для дела — впереди фото тем же запросом; видят те, кто видит заявку; без картинки — «не найдено»', async () => {
+  const o = await inWork('Осмотр — картинки в деле');
+  const { token } = await issue(o, { days: 1 });
+  const THUMB = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]), Buffer.from('маленькая-копия')]);
+  let r = await shoot(token, 'facade', { buf: Buffer.concat([THUMB, PNG]), type: 'image/png', headers: { 'x-thumb-bytes': String(THUMB.length) } });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.equal((await shoot(token, 'kitchen')).status, 201, 'без картинки — как раньше');
+  // Неверная длина или не JPEG впереди — снимок не принимается (иначе фото легло бы обрезанным).
+  for (const [h, buf] of [['0', JPEG], ['abc', JPEG], [String(JPEG.length), JPEG], ['70000', Buffer.concat([Buffer.alloc(70000, 1), JPEG])],
+    ['12', Buffer.concat([PNG.subarray(0, 12), JPEG])]]) {
+    assert.equal((await shoot(token, 'rooms', { buf, headers: { 'x-thumb-bytes': h } })).body.error, 'bad_thumb', h);
+  }
+  const steps = (await spec.req('GET', `/api/orders/${o.id}/inspection`)).body.steps;
+  const facade = steps.find((s) => s.id === 'facade').photos[0];
+  const kitchen = steps.find((s) => s.id === 'kitchen').photos[0];
+  assert.equal(facade.thumb, true);
+  assert.equal(kitchen.thumb, false);
+  assert.equal(steps.find((s) => s.id === 'rooms').photos.length, 0);
+  // Само фото — без картинки впереди: целиком тот PNG, что сняли.
+  const [doc] = await S.sql`select storage_key, size_bytes, mime from documents where id = ${facade.document_id}`;
+  assert.equal(doc.mime, 'image/png');
+  assert.equal(doc.size_bytes, PNG.length);
+  assert.ok((await S.providers.storage.get(doc.storage_key)).equals(PNG));
+  for (const c of [spec, owner, dispatcher]) {
+    const t = await c.req('GET', `/api/documents/${facade.document_id}/thumb`, undefined, { binary: true });
+    assert.equal(t.status, 200);
+    assert.ok(t.body.equals(THUMB));
+    assert.equal(t.headers.get('content-type'), 'image/jpeg');
+    assert.match(t.headers.get('cache-control'), /private/);
+  }
+  assert.equal((await spec2.req('GET', `/api/documents/${facade.document_id}/thumb`)).status, 404, 'посторонний эксперт');
+  assert.equal((await anon().req('GET', `/api/documents/${facade.document_id}/thumb`)).status, 401);
+  assert.equal((await spec.req('GET', `/api/documents/${kitchen.document_id}/thumb`)).status, 404, 'снимок без картинки');
+  // Не фото осмотра — картинки нет.
+  const up = await owner.req('POST', `/api/orders/${o.id}/documents`, JPEG, { raw: true, headers: { 'content-type': 'image/jpeg', 'x-file-name': 'scan.jpg' } });
+  assert.equal(up.status, 201, JSON.stringify(up.body));
+  assert.equal((await owner.req('GET', `/api/documents/${up.body.document.id}/thumb`)).status, 404);
+});

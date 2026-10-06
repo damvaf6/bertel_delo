@@ -68,7 +68,8 @@ function renderSteps(r, photos) {
 const PHOTOS_OPEN = 3;
 function stepPhotos(photos) {
   const row = (p) => el('div', { class: 'doc' },
-    el('div', {},
+    ...(p.thumb ? [thumbImg(p)] : []),
+    el('div', { class: 'photo-text' },
       el('div', { class: 'name', text: p.filename }),
       el('div', { class: 'photo-meta', text: photoLine(p) }),
       ...(p.geo ? [] : [el('div', { class: 'photo-meta warn', text: 'без геометки' })])),
@@ -78,6 +79,14 @@ function stepPhotos(photos) {
   return [el('details', { class: 'step-photos' },
     el('summary', { text: `Показать фото: ${photos.length}${noGeo ? ` (без геометки: ${noGeo})` : ''}` }),
     ...photos.map(row))];
+}
+
+// Картинка снимка (2.71): грузится, когда видна на экране; нажал — фото целиком. Не загрузилась — остаётся «Открыть».
+function thumbImg(p) {
+  const img = el('img', { class: 'photo-thumb', src: `/api/documents/${p.document_id}/thumb`, alt: p.filename, loading: 'lazy',
+    width: '96', height: '72', 'data-action': 'photo-thumb', onclick: () => open(p) });
+  img.addEventListener('error', () => img.remove());
+  return img;
 }
 
 async function open(p) {

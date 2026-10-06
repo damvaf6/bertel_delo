@@ -1184,7 +1184,18 @@ test('дистанционный осмотр: специалист выдаёт
   await expect(facade.locator('.photo-meta').first()).toContainText('место 55.75120, 37.61840 (±12 м)');
   await expect(sp.locator('#inspect-steps li[data-step="rooms"] .badge')).toHaveText('нет фото');
   await expect(sp.locator('#docs li').filter({ hasText: 'Осмотр · Кухня · 1.jpg' })).toContainText('Фото осмотра');
+  // 2.71: у каждого фото — картинка сразу (уменьшенная копия со страницы владельца); нажал — фото целиком.
+  const thumb = facade.locator('img.photo-thumb').first();
+  await thumb.scrollIntoViewIfNeeded();
+  await expect.poll(() => thumb.evaluate((i) => i.complete && i.naturalWidth)).toBe(320);
+  await expect(sp.locator('#inspect-steps li[data-step="kitchen"] img.photo-thumb')).toHaveCount(1);
+  const thumbSize = await (await sp.request.get(await thumb.getAttribute('src'))).body();
+  expect(thumbSize.length).toBeLessThan(jpeg.length);
   await shot(sp, '84-specialist-osmotr-foto');
+  const [full] = await Promise.all([sp.waitForRequest((r) => r.url().includes('/link')), thumb.click()]);
+  expect(full.url()).toContain('/api/documents/');
+  await sp.goto(`/kabinet#order=${id}`);
+  await expect(sp.locator('#inspect-state')).toContainText('Фото осмотра: 2');
   const notes = await (await sp.request.get('/api/notifications')).json();
   expect(JSON.stringify(notes)).toContain('Владелец объекта прислал фото осмотра');
 
