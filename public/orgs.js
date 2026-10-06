@@ -3,6 +3,7 @@ import { api, el, say, formatPhone, ROLE_RU, quoted } from '/common.js';
 import { state, show, notFoundView, refreshMe } from '/shell.js';
 import { loadOrgSign } from '/orgsign.js';
 import { loadOrgCases, focusOrgCase } from '/orgcases.js';
+import { loadOrgReport } from '/orgreport.js';
 import { loadOrgTemplate } from '/orgtemplate.js';
 
 const $ = (id) => document.getElementById(id);
@@ -86,9 +87,10 @@ export async function showOrg(id, focus = null) {
   for (const m of ['org-edit-msg', 'members-msg', 'invite-msg', 'leave-msg', 'org-sign-msg', 'org-pending-msg', 'org-cases-msg', 'org-work-msg']) say($(m), '');
   $('org-sign-box').classList.add('hidden');
   $('org-cases-box').classList.add('hidden');
+  $('org-report-box').classList.add('hidden');
   show('org-view', 'orgs');
   workBox();
-  await Promise.all([loadMembers(), org.manage ? loadOrgInvites() : null, org.manage ? loadOrgSign(org) : null, org.manage ? loadOrgCases(org) : null, loadOrgTemplate(org)]);
+  await Promise.all([loadMembers(), org.manage ? loadOrgInvites() : null, org.manage ? loadOrgSign(org) : null, org.manage ? loadOrgCases(org) : null, org.manage ? loadOrgReport(org) : null, loadOrgTemplate(org)]);
   if (focus && org.manage) focusOrgCase(focus);
 }
 

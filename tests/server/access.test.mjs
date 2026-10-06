@@ -1627,6 +1627,85 @@ test('«не принимаю новые дела до …» (2.77): подбо�
   assert.equal((await U.headB.req('POST', `/api/orgs/${orgB.id}/cases/${o.id}/decline`, { reason: 'проверка 2.77' })).status, 200);
 });
 
+test('сводка за месяц по экспертам (2.78): только руководитель; считает с вступления в организацию; таблица для Excel', async () => {
+  cover('orgs.report');
+  const orgC = await makeOrg(S.sql, 'Тестовая организация В');
+  const headC = await login(S, '+79990000061');
+  await addMember(S.sql, orgC.id, headC.user.id, 'head');
+  const ex = {};
+  for (const [k, phone, name] of [['e1', '+79990000062', '=Сидоров «Эксперт»'], ['e2', '+79990000063', 'Петрова; Эксперт']]) {
+    ex[k] = await login(S, phone);
+    await addMember(S.sql, orgC.id, ex[k].user.id, 'member');
+    await makeSpecialist(S.sql, ex[k].user.id);
+    await S.sql`update users set full_name = ${name} where id = ${ex[k].user.id}`;
+    assert.equal((await ex[k].req('PATCH', '/api/specialist/me', { org_id: orgC.id })).status, 200);
+  }
+  const report = (c, q = '', orgId = orgC.id) => c.req('GET', `/api/orgs/${orgId}/report${q}`);
+  for (const c of [ex.e1, U.dispatcher, U.admin]) assert.equal((await report(c)).status, 403);
+  for (const k of ['stranger', 'headA', 'headB', 'owner']) assert.equal((await report(U[k])).status, 404, k);
+  // Пустая организация — нули; месяц — текущий по Москве.
+  const empty = (await report(headC)).body.report;
+  const month = new Date(Date.now() + 3 * 3_600_000).toISOString().slice(0, 7);
+  assert.equal(empty.month, month);
+  assert.equal(empty.current, true);
+  assert.equal(empty.months.length, 13);
+  assert.deepEqual(empty.total, { accepted: 0, done: 0, done_late: 0, overdue_now: 0, returned_head: 0, returned_dispatcher: 0, fee_kop: 0, paid_kop: 0 });
+  for (const q of ['?month=2020-01', '?month=2099-01', '?month=13', '?month=2026-13']) assert.equal((await report(headC, q)).body.error, 'bad_month', q);
+  // Дела: e1 принял 2 дела, одно сдал вовремя, другое позже срока; одно в работе просрочено; руководитель вернул раз,
+  // диспетчер — раз; выплачено за одно. До вступления (прошлое частное дело) — не считается.
+  await S.sql`update org_members set created_at = now() - interval '1 minute' where org_id = ${orgC.id}`;
+  const order = async (title, status, deadline, priceKop, executor = ex.e1.user.id) => {
+    const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
+    await S.sql`update orders set status = ${status}, deadline = ${deadline}, price_kop = ${priceKop}, executor_user_id = ${executor} where id = ${o.id}`;
+    return o;
+  };
+  const day = (n) => new Date(Date.now() + 3 * 3_600_000 + n * 86400_000).toISOString().slice(0, 10);
+  const onTime = await order('Сводка: вовремя', 'done', day(5), 1_000_000);
+  const late = await order('Сводка: позже срока', 'closed', day(-1), 2_000_000);
+  const overdue = await order('Сводка: просрочено', 'in_work', day(-2), 500_000);
+  const before = await order('Сводка: до вступления', 'done', day(5), 3_000_000);
+  const accept = (o, minsAgo = 0) => S.sql`insert into order_offers (order_id, specialist_id, score, outcome, outcome_at)
+    values (${o.id}, ${ex.e1.user.id}, '{}', 'accepted', now() - make_interval(mins => ${minsAgo}::int))`;
+  await accept(onTime); await accept(late); await accept(before, 2);
+  const hist = (o, from, to, minsAgo = 0) => S.sql`insert into order_status_history (order_id, from_status, to_status, side, at)
+    values (${o.id}, ${from}, ${to}, 'dispatcher', now() - make_interval(mins => ${minsAgo}::int))`;
+  await hist(onTime, 'review', 'done');
+  await hist(late, 'review', 'in_work'); await hist(late, 'review', 'done'); await hist(late, 'done', 'closed');
+  await hist(before, 'review', 'done', 2);
+  await S.sql`insert into payouts (order_id, executor_user_id, amount_kop, commission_kop, status, paid_at)
+              values (${onTime.id}, ${ex.e1.user.id}, 800000, 200000, 'succeeded', now()),
+                     (${before.id}, ${ex.e1.user.id}, 2400000, 600000, 'succeeded', now() - interval '2 minutes')`;
+  const doc = await upload(U.owner, overdue.id, 'отчёт.pdf');
+  await S.sql`insert into org_returns (order_id, document_id, org_id, executor_user_id, returned_by, filename, comment)
+              values (${overdue.id}, ${doc.id}, ${orgC.id}, ${ex.e1.user.id}, ${headC.user.id}, 'отчёт.pdf', 'Поправьте')`;
+  const r = (await report(headC)).body.report;
+  const e1 = r.experts.find((e) => e.user_id === ex.e1.user.id);
+  assert.deepEqual({ ...e1, user_id: undefined, full_name: undefined }, { user_id: undefined, full_name: undefined,
+    accepted: 2, done: 2, done_late: 1, overdue_now: 1, returned_head: 1, returned_dispatcher: 1, fee_kop: 800_000 + 1_600_000, paid_kop: 800_000 });
+  assert.equal(r.experts.find((e) => e.user_id === ex.e2.user.id).done, 0);
+  assert.equal(r.total.done, 2);
+  assert.equal(r.total.fee_kop, 2_400_000);
+  // Без заказчика и названий заявок.
+  for (const secret of ['Сводка:', U.owner.user.id]) assert.ok(!JSON.stringify(r).includes(secret), secret);
+  // Прошлый месяц — пусто, «просрочено сейчас» не считается.
+  const prev = (await report(headC, `?month=${r.months[1]}`)).body.report;
+  assert.equal(prev.current, false);
+  assert.equal(prev.total.done, 0);
+  assert.equal(prev.total.overdue_now, null);
+  // Таблица для Excel: BOM, точка с запятой, суммы с запятой, имя с «=» — не формула, «;» — в кавычках.
+  const csv = await headC.req('GET', `/api/orgs/${orgC.id}/report?format=csv`, undefined, { binary: true });
+  assert.equal(csv.status, 200);
+  assert.match(csv.headers.get('content-type'), /text\/csv/);
+  assert.match(csv.headers.get('content-disposition'), /attachment/);
+  assert.deepEqual([...csv.body.subarray(0, 3)], [0xef, 0xbb, 0xbf], 'BOM');
+  const text = csv.body.toString('utf8');
+  assert.ok(text.includes('Тестовая организация В'));
+  assert.ok(text.includes("'=Сидоров «Эксперт»;2;2;1;1;1;1;24000,00;8000,00"), text);
+  assert.ok(text.includes('"Петрова; Эксперт";0;0;0;0;0;0;0,00;0,00'), text);
+  assert.ok(text.includes('Итого;2;2;1;1;1;1;24000,00;8000,00'), text);
+  assert.equal((await report(ex.e1, '?format=csv')).status, 403);
+});
+
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {
   const PUBLIC = ['health', 'auth.code', 'auth.verify', 'files.memory', 'files.memory.upload', 'test.calls', 'test.script', 'test.reset', 'test.mail.inbound', 'stage.login', 'payments.notify',
     'inspect.view', 'inspect.photo', 'inspect.finish'];

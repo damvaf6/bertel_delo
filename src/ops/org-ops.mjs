@@ -10,6 +10,7 @@ import { orderSignatures, orgReturns } from './sign-ops.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { splitAmount } from '../money/money.mjs';
 import { STATUS_NAME, isOverdue, todayMsk } from '../orders/workflow.mjs';
+import { orgMonthReport, reportCsv, reportMonth } from '../orgs/report.mjs';
 
 export const INVITE_TTL_DAYS = 14;
 export const LIMITS = {
@@ -270,6 +271,22 @@ export function orgOps() {
           load,
           money: { month: today.slice(0, 7), paid_kop: Number(month.paid), waiting_kop: waiting },
         };
+      },
+    },
+    {
+      // Сводка за месяц по экспертам (2.78): принято, сдано, позже срока, возвращено, вознаграждение и выплачено; только
+      // руководитель. ?format=csv — та же сводка таблицей для Excel.
+      id: 'orgs.report', method: 'GET', path: '/api/orgs/:id/report', auth: 'user',
+      access: { resource: 'org', param: 'id', need: 'manage' },
+      async handler({ sql, org, query, res }) {
+        const report = await orgMonthReport(sql, org.id, reportMonth(query.month));
+        if (query.format !== 'csv') return { report };
+        res.set({
+          'content-type': 'text/csv; charset=utf-8',
+          'content-disposition': `attachment; filename="report.csv"; filename*=UTF-8''${encodeURIComponent(`Сводка по экспертам ${report.month}.csv`)}`,
+          'cache-control': 'no-store',
+        });
+        return res.send(reportCsv(org.name, report));
       },
     },
     {
