@@ -3539,3 +3539,114 @@ test('как руководитель (2.67): организация, пригл
   await shot(hp, '99v-rukovoditel-peredal');
   for (const p of [dp, hp, sp, bp]) await p.context().close();
 });
+
+// Прогон «владелец по ссылке осмотра» и «помощник на выезде» (2.68): плохая связь — фото не теряется и уходит само (или по
+// «Повторить сейчас»), ответ потерялся — фото не удваивается; «Готово» ждёт отправки; видно, сколько шагов снято.
+test('осмотр при плохой связи (2.68): владелец по ссылке и помощник на выезде — повтор, без двойных фото, «Готово» ждёт', async ({ page, browser, baseURL }) => {
+  test.setTimeout(120_000);
+  await signIn(page, '+79990006801');
+  const mk = async (title, express) => {
+    const o = (await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title }, headers: H })).json()).order;
+    expect((await page.request.patch(`/api/orders/${o.id}`, {
+      data: { deadline: inDays(9), express, fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, Связная ул., 3', area: '40' } }, headers: H,
+    })).status()).toBe(200);
+    expect((await page.request.post(`/api/orders/${o.id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+    return o.id;
+  };
+  const id = await mk('Осмотр при плохой связи', false);
+  const vid0 = await mk('Выезд при плохой связи', true);
+  const sctx = await phoneContext(browser, baseURL);
+  const sp = await sctx.newPage();
+  const spec = await signIn(sp, '+79990006802');
+  const geo = { permissions: ['geolocation'], geolocation: { latitude: 55.7512, longitude: 37.6184, accuracy: 10 } };
+  const hctx = await phoneContext(browser, baseURL, geo);
+  const hp = await hctx.newPage();
+  const helper = await signIn(hp, '+79990006803');
+  await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
+    await c.query("insert into specialists (user_id, onsite, regions) values ($1, true, '{moscow}')", [helper.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [spec.id]);
+    for (const o of [id, vid0]) {
+      await c.query('update orders set price_kop = 1500000, paid_at = now(), status = $2, executor_user_id = $3 where id = $1', [o, 'in_work', spec.id]);
+      await c.query("insert into payments (order_id, amount_kop, status, provider_id, created_by, paid_at) values ($1, 1500000, 'succeeded', $2, $3, now())", [o, `pay_ui_${o}`, spec.id]);
+    }
+  });
+  const issued = await (await sp.request.post(`/api/orders/${id}/inspection`, { data: { days: 1 }, headers: H })).json();
+  const jpeg = Buffer.from((await sp.evaluate(() => {
+    const c = document.createElement('canvas');
+    c.width = 640; c.height = 480;
+    const g = c.getContext('2d');
+    g.fillStyle = '#d0c49d'; g.fillRect(0, 0, 640, 480);
+    g.fillStyle = '#8c5a1f'; g.fillRect(160, 120, 300, 220);
+    return c.toDataURL('image/jpeg', 0.8);
+  })).split(',')[1], 'base64');
+
+  // Владелец: связь пропала при первой отправке; при второй фото дошло, а ответ потерялся; третья — успешно.
+  const octx = await phoneContext(browser, baseURL, geo);
+  const op = await octx.newPage();
+  let tries = 0;
+  await op.route('**/api/inspect/photos', async (route) => {
+    tries += 1;
+    if (tries === 1) return route.abort('internetdisconnected');
+    if (tries === 2) { await route.fetch(); return route.abort('connectionreset'); }
+    return route.continue();
+  });
+  await op.goto(issued.path);
+  await op.getByRole('button', { name: 'Начать: разрешить определение места' }).click();
+  await expect(op.locator('#progress')).toHaveText(/^Снято 0 из \d+ нужных шагов\.$/);
+  const facade = op.locator('#steps li[data-step="facade"]');
+  await facade.locator('input[type=file]').setInputFiles({ name: 'facade.jpg', mimeType: 'image/jpeg', buffer: jpeg });
+  await expect(facade.locator('.msg')).toContainText('Нет связи — фото не потеряно, отправим снова');
+  await expect(op.locator('#pending')).toHaveText('Ещё не отправлено фото: 1. Не закрывайте страницу — отправим, как только будет связь.');
+  await expect(op.getByRole('button', { name: 'Повторить сейчас' })).toBeVisible();
+  await op.getByRole('button', { name: 'Готово' }).click();
+  await expect(op.locator('#finish-msg')).toHaveText('Подождите — ещё не отправлено фото: 1. «Готово» сработает, когда они уйдут.');
+  await shot(op, '99w-vladelec-net-svyazi');
+  await op.getByRole('button', { name: 'Повторить сейчас' }).click();
+  await expect.poll(() => tries).toBe(2);
+  await expect(facade.locator('.msg')).toContainText('Нет связи');
+  await op.getByRole('button', { name: 'Повторить сейчас' }).click();
+  await expect(facade.locator('.msg')).toHaveText('Фото отправлено');
+  await expect(facade.locator('.badge')).toHaveText('Фото: 1');
+  await expect(op.locator('#pending')).toBeHidden();
+  await expect(op.locator('#finish-msg')).toHaveText('Все фото отправлены — можно нажать «Готово».');
+  await expect(op.getByRole('button', { name: 'Повторить сейчас' })).toBeHidden();
+  await expect(op.locator('#progress')).toHaveText(/^Снято 1 из \d+ нужных шагов\.$/);
+  expect(tries).toBe(3);
+  const n = await db(async (c) => (await c.query("select count(*)::int as n from documents where order_id = $1 and kind = 'inspection'", [id])).rows[0].n);
+  expect(n, 'фото дошло один раз, хотя отправлялось трижды').toBe(1);
+  await shot(op, '99x-vladelec-otpravleno');
+  // «Готово» с несделанными шагами — названия в вопросе.
+  let asked = '';
+  op.once('dialog', (d) => { asked = d.message(); d.accept(); });
+  await op.getByRole('button', { name: 'Готово' }).click();
+  await expect(op.locator('#closed-text')).toHaveText('Спасибо! Эксперт получил 1 фото. Страницу можно закрыть.');
+  expect(asked).toMatch(/^Не снято: .*Кухня.*Всё равно завершить\?$/);
+
+  // Помощник: выезд, без связи данные не сохраняются — понятное сообщение по-русски; фото уходит после восстановления связи.
+  expect((await sp.request.post(`/api/orders/${vid0}/onsite`, { data: { helper_id: helper.id, planned_at: new Date(Date.now() + 2 * 86400_000).toISOString() }, headers: H })).status()).toBe(201);
+  await hp.goto('/kabinet#specialist');
+  await hp.locator('#visits li').filter({ hasText: 'Связная ул., 3' }).getByRole('link', { name: 'Открыть выезд' }).click();
+  await expect(hp.locator('#page-title')).toHaveText('Выезд на объект');
+  await hp.getByRole('button', { name: 'Начать: разрешить определение места' }).click();
+  await hctx.setOffline(true);
+  await hp.getByLabel('Замечания помощника').fill('Подъезд закрыт, ждали консьержа');
+  await hp.getByRole('button', { name: 'Сохранить данные' }).click();
+  await expect(hp.locator('#data-msg')).toHaveText('Нет связи с сервером — проверьте интернет и повторите');
+  const kitchen = hp.locator('#steps li[data-step="kitchen"]');
+  await kitchen.locator('input[type=file]').setInputFiles({ name: 'kitchen.jpg', mimeType: 'image/jpeg', buffer: jpeg });
+  await expect(kitchen.locator('.msg')).toContainText('Нет связи — фото не потеряно');
+  await expect(hp.locator('#pending')).toContainText('Ещё не отправлено фото: 1');
+  await shot(hp, '99y-pomoshnik-net-svyazi');
+  await hctx.setOffline(false);
+  await hp.evaluate(() => window.dispatchEvent(new Event('online')));
+  await expect(kitchen.locator('.badge')).toHaveText('Фото: 1');
+  await expect(kitchen.locator('.msg')).toHaveText('Фото отправлено');
+  await expect(hp.locator('#pending')).toBeHidden();
+  await hp.getByRole('button', { name: 'Сохранить данные' }).click();
+  await expect(hp.locator('#data-msg')).toHaveText('Данные сохранены');
+  await shot(hp, '99z-pomoshnik-otpravleno');
+  await octx.close();
+  await hctx.close();
+  await sctx.close();
+});

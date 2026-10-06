@@ -22,6 +22,7 @@ export const INSPECT = {
 const IMAGE_MIME = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
 const EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/heic': 'heic', 'image/heif': 'heif' };
 const TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
+const CLIENT_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 
 const hashToken = (t) => crypto.createHash('sha256').update(t).digest('hex');
 
@@ -112,7 +113,15 @@ export async function storePhoto(ctx, { order, steps, uploadedBy, source, actor 
   const mime = (req.get('content-type') || '').split(';')[0].trim().toLowerCase();
   if (!IMAGE_MIME.includes(mime) || !looksLikeImage(body, mime)) throw new HttpError(400, 'not_image', 'Нужна фотография (JPEG, PNG, WebP или HEIC)');
   const meta = shotMeta((h) => req.get(h));
+  // Номер снимка со страницы (2.68): повтор после потерянного ответа не создаёт второе фото.
+  const clientId = req.get('x-photo-id') || null;
+  if (clientId !== null && !CLIENT_ID_RE.test(clientId)) throw new HttpError(400, 'bad_photo_id', 'Неверный номер снимка');
   const counts = await stepCounts(sql, source);
+  const sameShot = async (db) => (clientId === null ? null : source.visit
+    ? db.one`select step from inspection_photos where visit_id = ${source.visit} and client_id = ${clientId}`
+    : db.one`select step from inspection_photos where link_id = ${source.link} and client_id = ${clientId}`);
+  const already = await sameShot(sql);
+  if (already) return { step: already.step, photos: counts[already.step] ?? 0, geo: meta.lat !== null, repeated: true };
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   if (total >= INSPECT.photosMax) throw new HttpError(409, 'too_many', `За один осмотр — не больше ${INSPECT.photosMax} фото`);
   if ((counts[step.id] ?? 0) >= INSPECT.perStepMax) throw new HttpError(409, 'too_many', `На один шаг — не больше ${INSPECT.perStepMax} фото`);
@@ -127,8 +136,8 @@ export async function storePhoto(ctx, { order, steps, uploadedBy, source, actor 
     await sql.tx(async (tx) => {
       const d = await tx.one`insert into documents (order_id, uploaded_by, filename, mime, size_bytes, storage_key, kind)
                              values (${order.id}, ${uploadedBy}, ${filename}, ${mime}, ${body.length}, ${key}, 'inspection') returning id`;
-      await tx`insert into inspection_photos (document_id, link_id, visit_id, step, shot_at, lat, lon, accuracy_m)
-               values (${d.id}, ${source.link ?? null}, ${source.visit ?? null}, ${step.id}, ${meta.shotAt}, ${meta.lat}, ${meta.lon}, ${meta.accuracy})`;
+      await tx`insert into inspection_photos (document_id, link_id, visit_id, step, shot_at, lat, lon, accuracy_m, client_id)
+               values (${d.id}, ${source.link ?? null}, ${source.visit ?? null}, ${step.id}, ${meta.shotAt}, ${meta.lat}, ${meta.lon}, ${meta.accuracy}, ${clientId})`;
       const where = source.visit ? { visit: String(source.visit) } : { link: String(source.link) };
       await audit(tx, actor, source.visit ? 'onsite.photo' : 'inspect.photo', 'order', order.id, { ...where, document: d.id, step: step.id, geo: meta.lat !== null });
       // Новое фото шага закрывает просьбу переснять его (2.20).
@@ -137,6 +146,11 @@ export async function storePhoto(ctx, { order, steps, uploadedBy, source, actor 
     });
   } catch (e) {
     await ctx.providers.storage.delete(key).catch(() => {});
+    // Два повтора одного снимка пришли одновременно: второй — не ошибка, фото уже есть.
+    if (e.code === '23505' && clientId !== null) {
+      const now = await stepCounts(sql, source);
+      return { step: step.id, photos: now[step.id] ?? 0, geo: meta.lat !== null, repeated: true };
+    }
     throw e;
   }
   return { step: step.id, photos: (counts[step.id] ?? 0) + 1, geo: meta.lat !== null };

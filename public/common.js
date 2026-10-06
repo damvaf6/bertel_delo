@@ -1,14 +1,23 @@
 // Общее для страниц: запросы к ядру и безопасный вывод текста.
 // Пользовательский текст выводится только через textContent, разметка строкой не собирается (исправление Б-7).
 
-export async function api(method, path, body, headers = {}) {
+// Нет связи или сервер не ответил за timeoutMs — понятная ошибка с network: true (а не «Failed to fetch»; задача 2.68).
+export async function api(method, path, body, headers = {}, { timeoutMs } = {}) {
   const opts = { method, headers: { ...headers }, credentials: 'same-origin' };
+  if (timeoutMs) opts.signal = AbortSignal.timeout(timeoutMs);
   if (method !== 'GET') opts.headers['x-delo-request'] = '1';
   if (body !== undefined) {
     if (body instanceof Blob) opts.body = body;
     else { opts.body = JSON.stringify(body); opts.headers['content-type'] = 'application/json'; }
   }
-  const r = await fetch(path, opts);
+  let r;
+  try {
+    r = await fetch(path, opts);
+  } catch {
+    const err = new Error('Нет связи с сервером — проверьте интернет и повторите');
+    err.network = true;
+    throw err;
+  }
   let data = null;
   if (r.status !== 204) { try { data = await r.json(); } catch { data = null; } }
   if (!r.ok) {

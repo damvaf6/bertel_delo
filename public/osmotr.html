@@ -23,6 +23,7 @@
       <p class="muted" id="geo-state" role="status" aria-live="polite"></p>
     </section>
     <section class="hidden" id="steps-box">
+      <p class="msg" id="progress" role="status" aria-live="polite"></p>
       <ol class="shoot-steps" id="steps"></ol>
       <section class="card hidden" id="data-box">
         <h2>Данные с объекта</h2>
@@ -32,6 +33,8 @@
       </section>
       <section class="card">
         <p class="muted" id="done-hint">Когда все нужные фото сделаны, нажмите «Готово» — фото уйдут эксперту, ссылка закроется.</p>
+        <p class="msg warn hidden" id="pending" role="status" aria-live="polite"></p>
+        <button type="button" class="secondary wide hidden" id="retry">Повторить сейчас</button>
         <button type="button" class="wide" id="finish">Готово</button>
         <p class="msg" id="finish-msg" role="status" aria-live="polite"></p>
       </section>

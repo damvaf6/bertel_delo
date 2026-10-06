@@ -50,6 +50,7 @@ button:disabled { opacity: .6; cursor: default; }
 .msg { margin: 8px 0 0; font-size: 14px; min-height: 20px; }
 .msg.error { color: var(--danger); }
 .msg.ok { color: var(--ok); }
+.msg.warn { color: #7a4b00; }
 .list { list-style: none; padding: 0; margin: 0; }
 .list li { border-top: 1px solid var(--line); padding: 12px 0; }
 .list li:first-child { border-top: none; }
@@ -237,3 +238,4 @@ h2.inline { display: inline; }
 .demo-roles button { text-align: left; display: flex; flex-direction: column; gap: 2px; }
 .demo-roles .muted { font-weight: 400; }
 #draft-past { margin-top: 20px; }
+#progress { margin: 4px 4px 10px; font-weight: 600; }
