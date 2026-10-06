@@ -3780,6 +3780,180 @@ test('как эксперт (2.79): строительно-техническа�
   await dctx.close();
 });
 
+// Прогон «как эксперт» по оценке земельного участка и движимого имущества (2.80). Заказчик и диспетчер — через API,
+// эксперт и владелец на осмотре — на экране телефона. Проверяется то, что мешало: в объявлениях об участках площадь — в
+// сотках и гектарах, ИИ её не брал; «Где искать» для участка — без диапазона в сотках; в перечне из нескольких вещей
+// аналоги считались общим числом («3 из 3», а к фрезерному станку — один), поиск — только по первой вещи, года выпуска
+// у аналога вещи не было.
+async function expertRun({ page, browser, baseURL, phones, svc, fields, steps, approaches, ads, title }) {
+  const [C, D, S] = phones;
+  await signIn(page, C);
+  const dctx = await phoneContext(browser, baseURL), sctx = await phoneContext(browser, baseURL);
+  const dp = await dctx.newPage(), sp = await sctx.newPage();
+  const disp = await signIn(dp, D), spec = await signIn(sp, S);
+  await sp.request.patch('/api/me', { data: { full_name: 'Оценщикова Ольга Олеговна' }, headers: H });
+  await db(async (c) => {
+    await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', $2)", [spec.id, svc]);
+  });
+  const o = (await (await page.request.post('/api/orders', { data: { module: 'expertise', service: svc, title }, headers: H })).json()).order;
+  expect((await page.request.patch(`/api/orders/${o.id}`, { data: { deadline: inDays(10), fields }, headers: H })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${o.id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  expect((await dp.request.put(`/api/orders/${o.id}/price`, { data: { price: '15000' }, headers: H })).status()).toBe(200);
+  await page.request.post(`/api/orders/${o.id}/payments`, { headers: H });
+  expect((await page.request.post(`/api/orders/${o.id}/payments/refresh`, { headers: H })).status()).toBe(200);
+  expect((await dp.request.post(`/api/orders/${o.id}/offer`, { data: { specialist_id: spec.id, from: 'matching' }, headers: H })).status()).toBe(200);
+  await sp.goto('/kabinet');
+  sp.once('dialog', (d) => d.accept());
+  await sp.locator('#orders li').filter({ hasText: title }).getByRole('button', { name: 'Принять дело' }).click();
+  await expect(sp.locator('#order-status')).toHaveText('В работе');
+  for (const a of approaches) {
+    const saved = sp.waitForResponse((r) => r.url().endsWith(`/api/orders/${o.id}/approaches`) && r.request().method() === 'PUT');
+    await sp.locator('#draft-approaches').getByLabel(a).check();
+    expect((await saved).status()).toBe(200);
+  }
+  // Осмотр по ссылке.
+  await sp.getByRole('button', { name: 'Выдать ссылку владельцу' }).click();
+  await expect(sp.locator('#inspect-url')).toContainText('http');
+  const url = await sp.locator('#inspect-url').textContent();
+  const octx = await phoneContext(browser, baseURL, { permissions: ['geolocation'], geolocation: { latitude: 55.6, longitude: 37.3, accuracy: 10 } });
+  const op = await octx.newPage();
+  await op.goto(url);
+  const jpeg = Buffer.from((await op.evaluate(() => {
+    const c = document.createElement('canvas'); c.width = 640; c.height = 480;
+    const g = c.getContext('2d'); g.fillStyle = '#7a9a5a'; g.fillRect(0, 0, 640, 480);
+    return c.toDataURL('image/jpeg', 0.8);
+  })).split(',')[1], 'base64');
+  await op.getByRole('button', { name: 'Начать: разрешить определение места' }).click();
+  await expect(op.locator('#geo-state')).toContainText('Место определено');
+  for (const st of steps) {
+    await op.locator(`#steps li[data-step="${st}"] input[type=file]`).setInputFiles({ name: `${st}.jpg`, mimeType: 'image/jpeg', buffer: jpeg });
+    await expect(op.locator(`#steps li[data-step="${st}"] .badge`)).toHaveText('Фото: 1');
+  }
+  op.once('dialog', (d) => d.accept());
+  await op.getByRole('button', { name: 'Готово' }).click();
+  await expect(op.locator('#closed-text')).toContainText(`Эксперт получил ${steps.length} фото`);
+  await octx.close();
+  // Аналоги: ИИ заполняет признаки со скриншота.
+  await sp.reload();
+  await expect(sp.locator('#inspect-state')).toContainText(`Фото осмотра: ${steps.length}`);
+  const abox = sp.locator('#analogs-box');
+  for (const [n, [link, ad]] of ads.entries()) {
+    await abox.getByLabel('Ссылка на объявление').fill(link);
+    await sp.locator('#analogs-file').setInputFiles({ name: 'Screenshot.png', mimeType: 'image/png', buffer: Buffer.concat([jpeg, Buffer.from(`OCR:${ad}`)]) });
+    await abox.getByRole('button', { name: 'Добавить аналог' }).click();
+    await expect(sp.locator('#analogs-list li.analog')).toHaveCount(n + 1);
+    await expect(sp.locator('#analogs-msg')).toContainText('ИИ заполнил');
+  }
+  return { o, sp, dctx, sctx, abox };
+}
+
+async function confirmAll(sp, n) {
+  for (let i = 0; i < n; i++) {
+    await sp.locator('#analogs-list li.analog').nth(i).getByRole('button', { name: 'Подтвердить' }).click();
+    await expect(sp.locator('#analogs-msg')).toHaveText('Аналог подтверждён');
+  }
+}
+
+async function finishRun(sp, file, prefix) {
+  await sp.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const text = sp.getByLabel('Текст заключения');
+  const body = await text.inputValue();
+  const [word] = await Promise.all([sp.waitForEvent('download'), sp.getByRole('button', { name: 'Скачать Word' }).click()]);
+  expect(word.suggestedFilename()).toBe(file);
+  const wchunks = [];
+  for await (const ch of await word.createReadStream()) wchunks.push(ch);
+  const wtext = (await extractPages(Buffer.concat(wchunks), 'r.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')).pages.join('\n');
+  await text.fill(body.replace(/\[(?:заполнить|описать)[^\]]*\]/gi, 'заполнено экспертом'));
+  await sp.getByRole('button', { name: 'Сохранить правку' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Правка сохранена');
+  await sp.locator('#next-main button').click();
+  await sp.locator('#draft-confirm').check();
+  await sp.getByRole('button', { name: 'Приложить как файл результата' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText(`Файл «${file}» добавлен в результат работы`);
+  await sp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  // Площадь аналогов (из соток) в таблице отчёта сходится с делом — правило analog_match (2.75) молчит.
+  await expect(sp.locator('#review-box')).not.toContainText('в отчёте не найдена');
+  await expect(sp.locator('#review-box')).not.toContainText('не совпадает с площадью');
+  await expect(sp.locator('#next-main button')).toHaveText('Подписать файл');
+  sp.once('dialog', (d) => d.accept());
+  await sp.locator('#next-main button').click();
+  await expect(sp.locator('#next-main button')).toHaveText('Сдать на проверку');
+  await sp.locator('#next-main button').click();
+  await expect(sp.locator('#order-status')).toHaveText('Проверка результата');
+  await shot(sp, `${prefix}-sdano`);
+  return { body, wtext };
+}
+
+test('как эксперт (2.80): земельный участок для наследства — осмотр, аналоги в сотках, черновик, сдача', async ({ page, browser, baseURL }) => {
+  test.setTimeout(180_000);
+  const title = `Участок ИЖС для наследства ${Date.now()}`;
+  const { sp, dctx, sctx, abox } = await expertRun({ page, browser, baseURL, phones: ['+79990008001', '+79990008002', '+79990008003'], svc: 'land', title,
+    fields: { purpose: 'inheritance', region: 'mo', address: 'МО, Тестовский р-н, д. Тестово, ул. Садовая, уч. 14', cadastral: '50:20:0010101:77', area: '1200', land_use: 'izhs', land_category: 'settlement', buildings: 'Деревянный дом 1990 г., баня' },
+    steps: ['land_overview', 'land_borders', 'land_access', 'surroundings'], approaches: ['Сравнительный'],
+    ads: [['https://www.avito.ru/moskovskaya_oblast/zemelnye_uchastki/uchastok_12_sot_1', 'Участок 12 сот. (ИЖС)\nЦена 3 400 000 ₽\nМО, Тестовский р-н, д. Тестово\nРазмещено 01.10.2026'],
+      ['https://www.cian.ru/sale/suburban/2002/', 'Участок, 10 сот., ИЖС\nЦена 2 900 000 ₽\nМосковская обл., д. Соседово\nРазмещено 29.09.2026'],
+      ['https://www.avito.ru/moskovskaya_oblast/zemelnye_uchastki/uchastok_15_sot_3', 'Участок 0,15 га (ИЖС)\nЦена 4 100 000 ₽\nМО, Тестовский р-н, с. Дальнее\nРазмещено 30.09.2026']] });
+  // Заказчик, заполняя новую заявку на участок, видит подсказку про сотки.
+  const draft = (await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'land', title: `Ещё участок ${Date.now()}` }, headers: H })).json()).order;
+  await page.goto(`/kabinet#order=${draft.id}`);
+  await expect(page.locator('body')).toContainText('1 сотка = 100 кв. м: 12 соток — 1200');
+  await shot(page, 'b5a-zakazchik-uchastok-sotki');
+  // «Где искать» — диапазон в сотках и кв. м; площадь аналогов — из соток и гектаров.
+  await expect(sp.locator('#analogs-criteria')).toHaveText('Участок: под жилой дом (ИЖС); земли населённых пунктов; 8,4–15,6 сот. (840–1560 кв. м); рядом с «МО, Тестовский р-н, д. Тестово, ул. Садовая, уч. 14»; объявления не старше полугода');
+  const lis = sp.locator('#analogs-list li.analog');
+  for (const [i, area] of ['1200', '1000', '1500'].entries()) {
+    await expect(lis.nth(i).getByLabel(/Площадь, кв\. м/)).toHaveValue(area);
+    await expect(lis.nth(i).getByLabel(/Назначение участка/)).toHaveValue('ИЖС');
+    await expect(lis.nth(i).getByLabel(/Регион/)).toHaveValue('mo');
+  }
+  await abox.scrollIntoViewIfNeeded();
+  await shot(sp, 'b6-uchastok-analogi-sotki');
+  await confirmAll(sp, 3);
+  await expect(sp.locator('#next-steps li[data-step="analogs"]')).toContainText('✓ Аналоги (подтверждено 3 из 3)');
+  const { body, wtext } = await finishRun(sp, 'Отчёт об оценке.docx', 'b7-uchastok');
+  expect(body).toContain('| Назначение участка | Под жилой дом (ИЖС) |');
+  expect(body).not.toMatch(/^## \d+\. Доходный подход/m);
+  expect(wtext).toContain('МО, Тестовский р-н, с. Дальнее');
+  expect(wtext).toContain('1500');
+  await sctx.close();
+  await dctx.close();
+});
+
+test('как эксперт (2.80): станки по перечню для раздела имущества — аналоги к каждой позиции, год выпуска, сдача', async ({ page, browser, baseURL }) => {
+  test.setTimeout(180_000);
+  const title = `Станки для раздела ${Date.now()}`;
+  const { sp, dctx, sctx, abox } = await expertRun({ page, browser, baseURL, phones: ['+79990008011', '+79990008012', '+79990008013'], svc: 'movable', title,
+    fields: { purpose: 'division', region: 'mo', items: 'Токарный станок 16К20, 1987 г., 1 шт.; фрезерный станок 6Р82, 1990 г., 1 шт.', location: 'МО, г. Тестовск, ул. Заводская, 3, цех 1' },
+    steps: ['item_overview', 'item_marking'], approaches: ['Сравнительный', 'Затратный'],
+    ads: [['https://www.avito.ru/moskovskaya_oblast/oborudovanie/tokarnyy_16k20_1', 'Токарный станок 16К20, 1988 г.\nЦена 450 000 ₽\nМосковская обл., г. Подольск\nРазмещено 01.10.2026'],
+      ['https://www.avito.ru/moskovskaya_oblast/oborudovanie/tokarnyy_16k20_2', 'Станок токарный 16К20 РМЦ 1000, 1985 год\nЦена 390 000 руб.\nМосковская обл., г. Химки\nРазмещено 27.09.2026'],
+      ['https://www.avito.ru/moskovskaya_oblast/oborudovanie/tokarnyy_16k20_3', 'Токарный 16К20, 1990 г.\nЦена 470 000 ₽\nМосковская обл., г. Люберцы\nРазмещено 28.09.2026'],
+      ['https://www.avito.ru/moskovskaya_oblast/oborudovanie/frezernyy_6r82_4', 'Фрезерный станок 6Р82, 1991 г.\nЦена 520 000 ₽\nМосковская обл., г. Химки\nРазмещено 30.09.2026']] });
+  // «Где искать» — по каждой позиции перечня.
+  await expect(sp.locator('#analogs-links a')).toHaveText(['Авито: 1. Токарный станок 16К20', 'Авито: 2. фрезерный станок 6Р82']);
+  const lis = sp.locator('#analogs-list li.analog');
+  for (const [i, [no, year]] of [['1', '1988'], ['1', '1985'], ['1', '1990'], ['2', '1991']].entries()) {
+    await expect(lis.nth(i).getByLabel(/Позиция перечня/)).toHaveValue(no);
+    await expect(lis.nth(i).getByLabel(/Год выпуска/)).toHaveValue(year);
+  }
+  await confirmAll(sp, 4);
+  // Четыре подтверждены, но к фрезерному — один: шаг не закрыт, подсказка называет позицию.
+  await expect(sp.locator('#next-steps li[data-step="analogs"]')).toContainText('○ Аналоги (подтверждено 4 из 6)');
+  await expect(sp.locator('#analogs-hints')).toContainText('Нужно не меньше 3 аналогов к позиции 2 «фрезерный станок 6Р82, 1990 г., 1 шт.» — подтверждено 1');
+  await abox.scrollIntoViewIfNeeded();
+  await shot(sp, 'b8-stanki-analogi-po-poziciyam');
+  const { body, wtext } = await finishRun(sp, 'Отчёт об оценке.docx', 'b9-stanki');
+  expect(body).toContain('Токарный станок 16К20, 1987 г., 1 шт.; фрезерный станок 6Р82, 1990 г., 1 шт.');
+  expect(wtext).toContain('Позиция перечня, №');
+  expect(wtext).toContain('Фрезерный станок 6Р82, 1991 г.');
+  await sctx.close();
+  await dctx.close();
+});
+
 test('как руководитель (2.67): организация, приглашение, назначение, переписка, возврат, подпись, передача дела', async ({ page, browser, baseURL }) => {
   test.setTimeout(180_000);
   const C = '+79990006701', D = '+79990006702', HD = '+79990006703', S1 = '+79990006704', S2 = '+79990006705';

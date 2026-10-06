@@ -18,6 +18,15 @@ const PRICE_SPREAD = 0.35;
 
 export const analogFields = (spec) => [...CORE_FIELDS, ...spec.fields];
 
+// Перечень движимого имущества (2.80): позиции — через «;» или с новой строки, номера «1.» не в счёт. Если у аналогов
+// есть признак «Позиция перечня» (item_no) и позиций больше одной, аналоги нужны к каждой позиции отдельно.
+export const ITEM_FIELD = 'item_no';
+export function listPositions(spec, order) {
+  if (!spec?.fields.some((f) => f.id === ITEM_FIELD)) return [];
+  const items = String(order.fields?.items ?? '').split(/[;\n]+/).map((x) => x.trim().replace(/^\d{1,2}[.)]\s*/, '')).filter(Boolean);
+  return items.length > 1 ? items.slice(0, 100) : [];
+}
+
 // Ссылка на объявление: только http(s), без пробелов; ключ для поиска повторов — без меток рекламы и якоря.
 export function cleanUrl(raw) {
   const s = typeof raw === 'string' ? raw.trim() : '';
@@ -146,6 +155,7 @@ export function analogWarnings(spec, order, list) {
   const byKey = new Map();
   for (const a of list) byKey.set(a.url_key, (byKey.get(a.url_key) ?? 0) + 1);
   const per = new Map();
+  const positions = listPositions(spec, order);
   for (const a of list) {
     const w = [];
     const adj = a.adjustments ?? [];
@@ -178,16 +188,32 @@ export function analogWarnings(spec, order, list) {
     }
     const sum = adjusted(a);
     if (sum && Math.abs(sum.pct) > ADJ_SPREAD) w.push(`Корректировки всего ${pctText(sum.pct)} — больше ${ADJ_SPREAD} %: аналог сильно отличается от объекта, проверьте или поясните в отчёте`);
+    const no = a.fields[ITEM_FIELD];
+    if (positions.length && no === undefined) w.push(`Укажите позицию перечня (1–${positions.length}): аналоги нужны к каждой позиции`);
+    else if (positions.length && no > positions.length) w.push(`Позиций в перечне: ${positions.length} — проверьте номер позиции`);
     if (!a.confirmed_at) w.push(a.suggested ? 'Признаки предложил ИИ — проверьте и подтвердите' : 'Не подтверждён экспертом');
     per.set(a.id, w);
   }
-  const confirmed = list.filter((a) => a.confirmed_at).length;
+  const done = list.filter((a) => a.confirmed_at);
   const hints = [];
-  if (confirmed < spec.min) hints.push(`Нужно не меньше ${spec.min} аналогов — подтверждено ${confirmed}`);
-  const dup = [...byKey.values()].some((n) => n > 1);
-  if (dup) hints.push('Есть повторяющиеся ссылки');
-  if (list.some((a) => !a.file_key)) hints.push('Не у всех аналогов есть скриншот');
-  return { per, hints, confirmed };
+  if (!positions.length) {
+    if (done.length < spec.min) hints.push(`Нужно не меньше ${spec.min} аналогов — подтверждено ${done.length}`);
+    return { per, hints: withCommon(hints), confirmed: done.length, min: spec.min };
+  }
+  // По позициям: в зачёт — не больше нужного числа к каждой, чтобы «6 из 6» не набиралось аналогами одной позиции.
+  let counted = 0;
+  positions.forEach((name, i) => {
+    const n = done.filter((a) => a.fields[ITEM_FIELD] === i + 1).length;
+    counted += Math.min(n, spec.min);
+    if (n < spec.min) hints.push(`Нужно не меньше ${spec.min} аналогов к позиции ${i + 1} «${name.length > 60 ? `${name.slice(0, 59)}…` : name}» — подтверждено ${n}`);
+  });
+  return { per, hints: withCommon(hints), confirmed: counted, min: spec.min * positions.length };
+
+  function withCommon(h) {
+    if ([...byKey.values()].some((n) => n > 1)) h.push('Есть повторяющиеся ссылки');
+    if (list.some((a) => !a.file_key)) h.push('Не у всех аналогов есть скриншот');
+    return h;
+  }
 }
 
 // Четырёхзначные числа — без пробела (2.66): год «1975», а не «1 975»; с 10 000 — по разрядам.
@@ -280,8 +306,13 @@ export function searchHints(registry, order) {
     };
   }
   if (order.service === 'land') {
+    // На сайтах участки — в сотках (2.80): диапазон площади ±30 % и в сотках, и в кв. м.
+    const area = Number(f.area);
+    const sot = (m) => String(Math.round(m / 10) / 10).replace('.', ',');
+    const size = Number.isFinite(area) && area > 0 ? `${sot(area * 0.7)}–${sot(area * 1.3)} сот. (${fmtNum(Math.round(area * 0.7))}–${fmtNum(Math.round(area * 1.3))} кв. м)` : null;
+    const low = (x) => (x ? `${x[0].toLowerCase()}${x.slice(1)}` : null);
     return {
-      criteria: `Участок ${sel('land_use') ? `(${sel('land_use')})` : ''} рядом с «${f.address || where}», площадь близкая к ${f.area || '…'} кв. м`,
+      criteria: [`Участок${sel('land_use') ? `: ${low(sel('land_use'))}` : ''}`, low(sel('land_category')), size, `рядом с «${f.address || where}»`, 'объявления не старше полугода'].filter(Boolean).join('; '),
       links: [
         { name: 'Авито', url: `https://www.avito.ru/${avitoCity}/zemelnye_uchastki` },
         { name: 'ЦИАН', url: `https://www.cian.ru/cat.php?deal_type=sale&engine_version=2&offer_type=suburban&object_type%5B0%5D=3&region=${f.region === 'mo' ? 4593 : 1}` },
@@ -289,9 +320,11 @@ export function searchHints(registry, order) {
       ],
     };
   }
-  const first = String(f.items ?? '').split(/[\n,;]/)[0].trim().slice(0, 80);
+  // Движимое (2.80): поиск — по каждой позиции перечня, без года и количества («Токарный станок 16К20»).
+  const items = String(f.items ?? '').split(/[;\n]+/).map((x) => x.trim().replace(/^\d{1,2}[.)]\s*/, '').split(',')[0].trim().slice(0, 80)).filter(Boolean);
+  const many = items.length > 1;
   return {
-    criteria: `${first || 'То же имущество'}; близкий год и состояние; ${where}`,
-    links: [{ name: 'Авито', url: `https://www.avito.ru/${avitoCity}?q=${enc(first)}` }],
+    criteria: `${many ? 'К каждой позиции перечня — свои аналоги' : items[0] || 'То же имущество'}; близкий год выпуска, состояние и комплектация; ${where}; объявления не старше полугода`,
+    links: (items.length ? items : ['']).slice(0, 5).map((q, i) => ({ name: many ? `Авито: ${i + 1}. ${q}` : 'Авито', url: `https://www.avito.ru/${avitoCity}?q=${enc(q)}` })),
   };
 }

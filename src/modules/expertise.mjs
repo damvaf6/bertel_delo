@@ -63,7 +63,7 @@ export default {
       fields: [
         { id: 'address', label: 'Адрес или ориентир участка', type: 'text', required: true, max: 300 },
         { id: 'cadastral', label: 'Кадастровый номер', type: 'text', max: 40, ...CADASTRAL },
-        { id: 'area', label: 'Площадь, кв. м', type: 'number', min: 1, max: 100000000 },
+        { id: 'area', label: 'Площадь, кв. м', type: 'number', min: 1, max: 100000000, hint: '1 сотка = 100 кв. м: 12 соток — 1200' },
         {
           id: 'land_use', label: 'Назначение участка', type: 'select',
           options: [
@@ -540,6 +540,9 @@ export default {
       { id: 'mileage_km', label: 'Пробег, км', type: 'number', integer: true, min: 0, max: 5000000, services: ['vehicle'] },
       { id: 'modification', label: 'Двигатель, коробка, комплектация', type: 'text', max: 200, services: ['vehicle'] },
       { id: 'name', label: 'Что продаётся', type: 'text', required: true, max: 300, services: ['movable'] },
+      // Прогон 2.80: в перечне несколько позиций — аналоги нужны к каждой; год выпуска — для корректировки на возраст.
+      { id: 'item_no', label: 'Позиция перечня, №', type: 'number', integer: true, min: 1, max: 100, services: ['movable'] },
+      { id: 'made_year', label: 'Год выпуска', type: 'number', integer: true, min: 1900, max: 2100, services: ['movable'] },
       { id: 'address', label: 'Адрес или район', type: 'text', required: true, max: 300, services: ['realty', 'land'] },
       { id: 'area', label: 'Площадь, кв. м', type: 'number', min: 1, max: 100000000, services: ['realty', 'land'], near: { field: 'area', pct: 30 } },
       { id: 'floor', label: 'Этаж / этажей в доме', type: 'text', max: 20, services: ['realty'] },

@@ -335,8 +335,11 @@ export function cleanDraftAnswer(sections, text) {
 // возвращает только признаки из списка. Имя и телефон продавца не просим и не берём: среди признаков их нет.
 export const ANALOG_TEXT_MAX = 8000;
 
-export function analogMessages({ fields, url, text }) {
-  const list = fields.map((f) => `- ${f.id}: ${f.label}${f.type === 'number' ? ' (число без пробелов и единиц)' : ''}${f.type === 'select' ? ` (одно из: ${f.options.map((o) => o.id).join(' | ')})` : ''}${f.id === 'listed_on' ? ' (ГГГГ-ММ-ДД)' : ''}`);
+// Площадь участков в объявлениях — в сотках и гектарах (2.80): модель переводит в кв. м. Перечень из нескольких позиций —
+// модель называет номер позиции, к которой подходит объявление (item_no).
+export function analogMessages({ fields, url, text, positions = [] }) {
+  const list = fields.map((f) => `- ${f.id}: ${f.label}${f.type === 'number' ? ' (число без пробелов и единиц)' : ''}${f.type === 'select' ? ` (одно из: ${f.options.map((o) => o.id).join(' | ')})` : ''}${f.id === 'listed_on' ? ' (ГГГГ-ММ-ДД)' : ''}${f.id === 'area' ? ' (в кв. м; сотки умножь на 100, гектары — на 10000)' : ''}${f.id === 'item_no' ? ' (номер позиции из ПЕРЕЧНЯ ОБЪЕКТА, на которую похоже объявление)' : ''}`);
+  const items = positions.length ? ['ПЕРЕЧЕНЬ ОБЪЕКТА:', ...positions.map((x, i) => `${i + 1}. ${x}`)] : [];
   return [
     {
       role: 'system',
@@ -347,6 +350,6 @@ export function analogMessages({ fields, url, text }) {
         'Ответь только JSON: {"fields": {"id признака": значение, …}}.',
       ].join('\n'),
     },
-    { role: 'user', content: ['ПРИЗНАКИ:', ...list, 'ОБЪЯВЛЕНИЕ:', `Ссылка: ${url}`, 'ТЕКСТ:', text ? text.slice(0, ANALOG_TEXT_MAX) : '(текста нет — признаки только по ссылке)'].join('\n') },
+    { role: 'user', content: ['ПРИЗНАКИ:', ...list, ...items, 'ОБЪЯВЛЕНИЕ:', `Ссылка: ${url}`, 'ТЕКСТ:', text ? text.slice(0, ANALOG_TEXT_MAX) : '(текста нет — признаки только по ссылке)'].join('\n') },
   ];
 }
