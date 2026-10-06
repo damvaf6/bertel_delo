@@ -2329,7 +2329,7 @@ test('как настоящий эксперт (2.33): автобус для с�
 
 // «Сегодня» (2.34): эксперт сразу видит, что горит, что вернули и что предложено; руководитель — дела своих экспертов и
 // подписи организации, без данных заказчика. Нажатие ведёт в дело или в раздел организации.
-test('«Сегодня» (2.34): эксперт — горит, вернули, предложено; руководитель — подписи и сроки экспертов; заказчику не показывается', async ({ page, browser, baseURL }) => {
+test('«Сегодня» (2.34, 2.63): эксперт — горит, вернули, предложено; руководитель — подписи, сроки и досье экспертов; заказчику не показывается', async ({ page, browser, baseURL }) => {
   const C = '+79990003501', D = '+79990003502', S = '+79990003503', HD = '+79990003504';
   const customer = await signIn(page, C);
   const dctx = await phoneContext(browser, baseURL), sctx = await phoneContext(browser, baseURL), hctx = await phoneContext(browser, baseURL);
@@ -2371,13 +2371,27 @@ test('«Сегодня» (2.34): эксперт — горит, вернули, 
   await box.locator('li[data-today-item="returned"] button').click();
   await expect(sp.locator('#order-title')).toHaveText('Квартира — вернули');
 
+  // Досье эксперта (2.63): полис кончается через 10 дней, аттестат истёк — руководитель видит вид и срок, без номеров.
+  await db((c) => c.query(`insert into dossier_items (user_id, kind, title, number, valid_until, amount_kop) values
+    ($1, 'policy', 'Тестовое страхование', 'ПОЛ-2063', $2, 30000000), ($1, 'certificate', 'Оценка недвижимости', 'АТТ-2063', $3, null)`,
+  [spec.id, inDays(10), inDays(-3)]));
+
   await hp.goto('/kabinet');
   const hb = hp.locator('#today-box');
   await expect(hb.locator('li.group.org')).toHaveText('Организация: ООО «Оценка Сегодня»');
+  await expect(hb.locator(`li[data-today="org-dossier-${orgId}"]`)).toHaveText('Документы экспертов: срок · 2');
+  const dl = hb.locator(`li[data-today-item="org-dossier-${orgId}"]`);
+  await expect(dl.first()).toContainText('Эксперт Сегодня · Квалификационный аттестат');
+  await expect(dl.first()).toContainText('по оценке эксперт снят с подбора');
+  await expect(dl.nth(1)).toContainText('Полис страхования оценщика');
+  await expect(dl.nth(1)).toContainText(/осталось (9|10) дн\./);   // дата теста — по UTC, «Сегодня» — по Москве
+  await expect(hb).not.toContainText('2063');   // номера документов руководителю не показываются
   await expect(hb.locator(`li[data-today="org-sign-${orgId}"]`)).toHaveText('Ждут подписи организации · 1');
   await expect(hb.locator(`li[data-today-item="org-hot-${orgId}"]`).first()).toContainText('Эксперт Сегодня');
   await expect(hb).not.toContainText('Квартира');   // названия заявок (текст заказчика) руководителю не показываются
   await shot(hp, '98-segodnya-rukovoditel');
+  await dl.first().scrollIntoViewIfNeeded();
+  await shot(hp, '98a-segodnya-dosje-ekspertov');
   await hb.locator(`li[data-today-item="org-sign-${orgId}"] button`).click();
   await expect(hp).toHaveURL(new RegExp(`#org=${orgId}$`));
 
