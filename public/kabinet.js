@@ -15,6 +15,7 @@ import { loadToday } from '/today.js';
 import { showExpertCard } from '/expertcard.js';
 import { showFirstHint, showHelp } from '/help.js';
 import { showProblems } from '/problems.js';
+import { matcher, wireSearch } from '/search.js';
 
 const $ = (id) => document.getElementById(id);
 const dateRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
@@ -74,6 +75,20 @@ function setupFilter() {
   $('orders-filter').addEventListener('change', renderOrders);
 }
 
+// Поиск по своим делам (2.73): номер, адрес и другие поля заявки, вид услуги, заказчик (организация и кто ведёт),
+// номер дела суда, состояние. Варианты выбора — названиями, как на экране, а не внутренними кодами.
+const orderRef = (o) => `№ ${o.id.slice(0, 8).toUpperCase()}`;
+function searchText(o) {
+  const fields = state.catalog.modules.find((m) => m.id === o.module)?.services.find((s) => s.id === o.service)?.fields ?? [];
+  const values = Object.entries(o.fields ?? {}).map(([k, v]) => {
+    const f = fields.find((x) => x.id === k);
+    return f?.type === 'select' ? f.options?.find((x) => x.id === v)?.name ?? v : v;
+  });
+  return [orderRef(o), o.id.slice(0, 8), o.title, o.service_name, o.module_name, o.status_name, o.org_name, o.responsible_name,
+    o.basis_name, o.basis_number, ...values].filter((x) => x != null && x !== '').join(' \n ');
+}
+wireSearch($('orders-search'), () => renderOrders());
+
 async function loadOrders() {
   setupFilter();
   ({ orders: allOrders } = await api('GET', '/api/orders'));
@@ -114,7 +129,7 @@ function orderItem(o) {
       el('div', { class: 'row' },
         el('span', { class: `badge status${o.status === 'cancelled' ? ' cancelled' : ''}`, text: o.status_name }),
         el('span', { class: `muted${o.overdue || soon ? ' overdue' : ''}`, text: deadlineText(o) })),
-      el('div', { class: 'muted', text: [o.service_name, o.as_executor && o.fee_kop ? `Вам ${rubShort(o.fee_kop)}` : null, o.as_executor ? null : dateRu(o.created_at),
+      el('div', { class: 'muted', text: [o.service_name, orderRef(o), o.as_executor && o.fee_kop ? `Вам ${rubShort(o.fee_kop)}` : null, o.as_executor ? null : dateRu(o.created_at),
         o.org_name ? `${o.org_name} · ведёт ${o.responsible_name || 'сотрудник'}` : null].filter(Boolean).join(' · ') }),
       ...(o.as_executor && o.brief ? [el('div', { class: 'brief', text: o.brief })] : [])));
   if (o.as_executor && o.status === 'awaiting_executor') {
@@ -145,7 +160,11 @@ function renderOrders() {
   const ul = $('orders');
   const staff = ['dispatcher', 'admin'].includes(state.me.user.platform_role);
   const status = $('orders-filter').value;
-  const orders = status ? allOrders.filter((o) => o.status === status) : allOrders;
+  // Строка поиска — когда дел больше одного; запрос остаётся при обновлении списка (принял дело, отказался).
+  $('orders-search-box').classList.toggle('hidden', allOrders.length < 2);
+  const q = allOrders.length < 2 ? '' : $('orders-search').value;
+  const hit = matcher(q);
+  const orders = allOrders.filter((o) => (!status || o.status === status) && hit(searchText(o)));
   const exec = !staff && orders.some((o) => o.as_executor);
   if (!exec) {
     ul.replaceChildren(...orders.map(orderItem));
@@ -156,7 +175,10 @@ function renderOrders() {
       ...groups.filter((g) => g.items.length).flatMap((g) => [el('li', { class: 'group', 'data-group': g.id, text: `${g.title} · ${g.items.length}` }), ...g.items.map(orderItem)]),
       ...(own.length ? [el('li', { class: 'group', 'data-group': 'own', text: `Мои заявки как заказчика · ${own.length}` }), ...own.map(orderItem)] : []));
   }
-  $('orders-empty').classList.toggle('hidden', orders.length > 0);
+  const none = !orders.length && allOrders.length > 0 && q.trim() !== '';
+  $('orders-empty').classList.toggle('hidden', orders.length > 0 || none);
+  $('orders-none').classList.toggle('hidden', !none);
+  $('orders-none').textContent = none ? `Ничего не найдено по «${q.trim()}». Ищите по номеру дела, адресу, виду услуги или заказчику.` : '';
 }
 
 function showProfile() {

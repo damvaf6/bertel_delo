@@ -9,14 +9,22 @@ import { expertLink } from '/expertcard.js';
 import { dayRu } from '/order.js';
 import { rub } from '/money.js';
 import { orgChat } from '/orgchat.js';
+import { matcher, wireSearch } from '/search.js';
 
 const $ = (id) => document.getElementById(id);
 const MONTHS = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
 const PAYOUT_RU = { pending: 'выплата проводится', succeeded: 'выплачено', failed: 'выплата не прошла' };
 const fact = (dt, dd, cls) => [el('dt', { text: dt }), el('dd', { text: dd, ...(cls ? { class: cls } : {}) })];
 
+// Последний список дел — для поиска (2.73) без нового запроса.
+let shown = { org: null, orgObj: null, cases: [] };
+wireSearch($('org-cases-search'), () => renderCases());
+
 export async function loadOrgCases(org) {
   const { pending, cases, load, money } = await api('GET', `/api/orgs/${org.id}/cases`);
+  // Другая организация — поиск с чистого листа; та же (передали дело, подписали) — запрос остаётся.
+  if (shown.org !== org.id) $('org-cases-search').value = '';
+  shown = { org: org.id, orgObj: org, cases };
   $('org-cases-box').classList.remove('hidden');
   $('org-pending-box').classList.toggle('hidden', pending.length === 0);
   $('org-pending').replaceChildren(...pending.map((p) => pendingItem(org, p)));
@@ -32,9 +40,24 @@ export async function loadOrgCases(org) {
     el('div', { class: `muted${l.overdue ? ' overdue' : ''}`, text: [`в работе: ${l.in_work}`, l.offered ? `предложено: ${l.offered}` : null,
       l.overdue ? `просрочено: ${l.overdue}` : null].filter(Boolean).join(' · ') }),
     expertLink(l.user_id))));
-  const active = cases.filter((c) => c.active);
-  const done = cases.filter((c) => !c.active);
   $('org-cases-empty').classList.toggle('hidden', cases.length > 0 || pending.length > 0 || load.length === 0);
+  renderCases();
+}
+
+// Поиск по делам экспертов (2.73): номер, вид услуги, эксперт, состояние. Адреса и заказчика руководитель не видит (2.16) —
+// по ним и не ищется. Строка поиска — когда дел больше одного.
+function renderCases() {
+  const { orgObj: org, cases } = shown;
+  if (!org) return;
+  $('org-cases-search-box').classList.toggle('hidden', cases.length < 2);
+  const q = cases.length < 2 ? '' : $('org-cases-search').value;
+  const hit = matcher(q);
+  const found = cases.filter((c) => hit([c.order_ref, c.service, c.expert, c.status_name].join(' ')));
+  const active = found.filter((c) => c.active);
+  const done = found.filter((c) => !c.active);
+  const none = cases.length > 0 && !found.length;
+  $('org-cases-none').classList.toggle('hidden', !none);
+  $('org-cases-none').textContent = none ? `Ничего не найдено по «${q.trim()}». Ищите по номеру дела, виду услуги или эксперту.` : '';
   $('org-cases').replaceChildren(
     ...active.map((c) => caseItem(org, c)),
     ...(done.length ? [el('li', { class: 'group', text: `Завершённые · ${done.length}` })] : []),
@@ -60,6 +83,8 @@ function caseItem(org, c) {
 
 // Открыть организацию сразу на нужном деле (2.67): из уведомления или «Сегодня» — назначить, подписать, ответить эксперту.
 export function focusOrgCase({ ref, to }) {
+  // Поиск мог спрятать нужное дело — переход из уведомления важнее.
+  if ($('org-cases-search').value) { $('org-cases-search').value = ''; renderCases(); }
   const r = CSS.escape(ref);
   if (to === 'sign' && document.querySelector(`#org-sign li[data-item="${r}"]`)) return goSign(ref);
   const li = (to === 'pending' && document.querySelector(`#org-pending li[data-pending="${r}"]`))

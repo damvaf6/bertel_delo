@@ -47,8 +47,12 @@
           <label for="orders-filter">Показать</label>
           <select id="orders-filter"></select>
         </div>
+        <div class="field hidden" id="orders-search-box">
+          <input type="search" id="orders-search" placeholder="Поиск: номер, адрес, услуга, заказчик" aria-label="Поиск по делам: номер, адрес, услуга, заказчик" autocomplete="off" enterkeyhint="search">
+        </div>
         <ul class="list" id="orders"></ul>
         <p class="muted hidden" id="orders-empty">Заявок пока нет.</p>
+        <p class="muted hidden" id="orders-none" role="status"></p>
         <p class="msg" id="orders-msg" role="status" aria-live="polite"></p>
       </div>
       <div class="card" id="problem-card">
@@ -484,7 +488,11 @@
         <h2 class="gap" id="org-cases-load-title">Нагрузка</h2>
         <ul class="list" id="org-cases-load"></ul>
         <h2 class="gap">Дела</h2>
+        <div class="field hidden" id="org-cases-search-box">
+          <input type="search" id="org-cases-search" placeholder="Поиск: номер, услуга, эксперт" aria-label="Поиск по делам экспертов: номер, услуга, эксперт" autocomplete="off" enterkeyhint="search">
+        </div>
         <ul class="list" id="org-cases"></ul>
+        <p class="muted hidden" id="org-cases-none" role="status"></p>
         <p class="msg" id="org-cases-msg" role="status" aria-live="polite"></p>
         <p class="muted hidden" id="org-cases-empty">Пока дел нет.</p>
         <div class="hidden" id="org-no-experts">
