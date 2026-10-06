@@ -55,3 +55,43 @@ test('журнал действий и архив дела: заказчик и 
   await expect(ep.getByRole('button', { name: 'Выгрузить дело архивом' })).toBeHidden();
   await ep.context().close();
 });
+
+// Задача 2.72: страница дела короче — шаги и история свёрнуты в одну строку, раскрываются по нажатию.
+test('страница дела: ход и история свёрнуты, раскрываются по нажатию', async ({ browser, baseURL }) => {
+  test.setTimeout(180_000);
+  const c = new pg.Client({ connectionString: DB_URL });
+  await c.connect();
+  try { await c.query("insert into users (phone, platform_role) values ($1, 'admin') on conflict (phone) do update set platform_role = 'admin'", [ADMIN]);
+    await c.query("update login_codes set created_at = created_at - interval '2 minutes' where phone like '+79990001%'");
+  } finally { await c.end(); }
+  const r = await seedDemo({ base: baseURL, login: codeLogin(baseURL, CONTROL), adminPhone: ADMIN });
+
+  const page = await phoneAs(browser, baseURL, r.sessions.petrov);
+  await page.goto(`/kabinet#order=${r.cases.flat}`);
+  await expect(page.locator('#order-status')).toHaveText('Закрыта');
+  const steps = page.locator('#steps-details');
+  const history = page.locator('#history-details');
+  await expect(page.locator('#steps-summary')).toHaveText(/^Шаг \d+ из \d+: Закрыта · все шаги$/);
+  await expect(page.locator('#steps li').first()).toBeHidden();
+  await expect(page.locator('#history-summary')).toHaveText(/^История: \d+ · последнее — Закрыта, /);
+  await expect(page.locator('#history li').first()).toBeHidden();
+  await expect(page.locator('#journal li')).toHaveCount(0);
+  await page.locator('#steps-details').scrollIntoViewIfNeeded();
+  await page.locator('#steps-details').locator('..').screenshot({ path: 'test-results/screens/case-03-hod-svernut.png' });
+
+  await page.locator('#steps-summary').click();
+  await expect(steps).toHaveJSProperty('open', true);
+  await expect(page.locator('#steps li.current')).toHaveText('Закрыта');
+  await page.locator('#history-summary').click();
+  await expect(history).toHaveJSProperty('open', true);
+  await expect(page.locator('#history li').first()).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await page.locator('#steps-details').locator('..').screenshot({ path: 'test-results/screens/case-04-hod-raskryt.png' });
+
+  // Другое дело — снова свёрнуто.
+  await page.goto(`/kabinet#order=${r.cases.goods}`);
+  await expect(page.locator('#steps-summary')).not.toHaveText(/Закрыта/);
+  await expect(steps).toHaveJSProperty('open', false);
+  await expect(history).toHaveJSProperty('open', false);
+  await page.context().close();
+});

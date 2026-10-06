@@ -239,10 +239,20 @@ function renderFacts() {
 
 // ——— Ход заявки ———
 
+// Шаги и история свёрнуты в одну строку (2.72); раскрытые остаются раскрытыми, пока открыто то же дело.
+let foldedFor = null;
+
 function renderProgress() {
   const { order, actions, history } = current;
   const flow = state.catalog.statuses.filter((s) => s.id !== 'cancelled');
   const at = flow.findIndex((s) => s.id === order.status);
+  if (foldedFor !== order.id) {
+    foldedFor = order.id;
+    $('steps-details').open = false;
+    $('history-details').open = false;
+  }
+  $('steps-summary').textContent = order.status === 'cancelled' ? 'Заявка отменена · все шаги'
+    : `Шаг ${at + 1} из ${flow.length}: ${flow[at]?.name || order.status} · все шаги`;
   $('steps').replaceChildren(...(order.status === 'cancelled'
     ? [el('li', { class: 'current', text: 'Заявка отменена' })]
     : flow.map((s, i) => el('li', { class: i < at ? 'done' : i === at ? 'current' : '', text: s.name }))));
@@ -258,6 +268,10 @@ function renderProgress() {
     onclick: () => doStep(a),
   }, a.name)));
 
+  const last = history[history.length - 1];
+  $('history-details').classList.toggle('hidden', !last);
+  $('history-summary').textContent = last
+    ? `История: ${history.length} · последнее — ${last.to_name}, ${new Date(last.at).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}` : '';
   $('history').replaceChildren(...history.slice().reverse().map((h) => el('li', {},
     el('div', { class: 'title', text: h.to_name }),
     el('div', { class: 'muted', text: [dateTimeRu(h.at), { dispatcher: 'диспетчер', executor: 'исполнитель' }[h.side] || 'заказчик'].join(' · ') }),
