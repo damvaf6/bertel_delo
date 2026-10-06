@@ -474,3 +474,57 @@ test('корректировки: по порядку одна за другой
     assert.ok(text.includes(s), `в Word нет «${s}»`);
   }
 });
+
+test('Перечень по позициям (2.83): в Word — таблица у каждой позиции и средняя цена, номера сквозные; в черновике — итог по позициям', async () => {
+  const items = 'Токарный станок 16К20, 1987 г.;\nФрезерный станок 6Р82, 1990 г.';
+  const o = await inWork('movable', { purpose: 'division', region: 'mo', items, location: 'МО, г. Тестовск, цех 2' }, 'Станки: по позициям в Word');
+  // Аналоги добавлены вперемешку: сначала к позиции 2, потом к 1.
+  const plan = [[2, 520000], [1, 450000], [2, 500000], [1, 390000], [2, 540000], [1, 470000]];
+  const urls = [];
+  let r;
+  for (const [i, [no, price]] of plan.entries()) {
+    const url = `https://www.avito.ru/moskovskaya_oblast/oborudovanie/pos${i}`;
+    const id = (await add(o, url)).body.id;
+    await put(o, id, png(10 + i, 10));
+    r = await spec.req('PUT', `/api/orders/${o.id}/analogs/${id}`, {
+      fields: { price_rub: price, name: no === 1 ? 'Токарный станок 16К20' : 'Фрезерный станок 6Р82', item_no: no, made_year: 1988, listed_on: addDays(todayMsk(), -3), region: 'mo' },
+      confirm: true,
+    });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    urls.push({ no, url });
+  }
+  assert.equal(r.body.confirmed, 6);
+
+  S.providers.ai.reset();
+  let d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {})).body.draft;
+  const brief = S.providers.ai.calls.at(-1).args.messages.at(-1).content;
+  assert.match(brief, /АНАЛОГИ ПО ПОЗИЦИЯМ ПЕРЕЧНЯ/);
+  assert.match(brief, /Позиция 1 «Токарный станок 16К20, 1987 г\.»:\n- Аналог 1: [^\n]*450 000[^\n]*\n- Аналог 2: [^\n]*390 000[^\n]*\n- Аналог 3: [^\n]*470 000[^\n]*\n- средняя цена аналогов позиции — 436 667 руб\./);
+  assert.match(brief, /Позиция 2 «Фрезерный станок 6Р82, 1990 г\.»:\n- Аналог 4: [^\n]*520 000/);
+  assert.match(d.body, /Итог по позициям перечня:\n\| Позиция \| Наименование \| Стоимость, руб\. \|\n\| 1 \| Токарный станок 16К20, 1987 г\. \| \[заполнить\] \|\n\| 2 \| Фрезерный станок 6Р82, 1990 г\. \| \[заполнить\] \|\n\| Итого по перечню \| — \| \[заполнить\] \|/);
+
+  const fill = (t) => t.replace(/\[(?:заполнить|описать)[^\]]*\]/g, 'заполнено экспертом');
+  d = (await spec.req('PUT', `/api/orders/${o.id}/draft`, { body: fill(d.body), from: d.id })).body.draft;
+  const w = await fetch(`${S.base}/api/orders/${o.id}/draft/docx`, { headers: { cookie: spec.cookie } });
+  const text = (await extractPages(Buffer.from(await w.arrayBuffer()), 'r.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')).pages.join('\n');
+  const p1 = text.indexOf('Позиция 1. Токарный станок 16К20');
+  const p2 = text.indexOf('Позиция 2. Фрезерный станок 6Р82');
+  assert.ok(p1 > 0 && p2 > p1, 'таблица позиции 1, затем позиции 2');
+  assert.ok(text.indexOf('Средняя цена аналогов позиции 1 — 436 667 руб.') > p1);
+  assert.ok(text.includes('Средняя цена аналогов позиции 2 — 520 000 руб.'));
+  assert.ok(text.indexOf('390 000') < p2 && text.indexOf('540 000') > p2, 'аналоги — в таблице своей позиции');
+  assert.match(text, /Цены аналогов по позициям перечня/);
+  assert.ok(!text.includes('Позиция перечня, №'), 'номер позиции не повторяется столбцом');
+  // Приложение со скриншотами (последнее вхождение — не оглавление) — в том же порядке: «Аналог 1» — первый аналог
+  // позиции 1, «Аналог 4» — первый позиции 2.
+  const shot = (n) => text.slice(text.lastIndexOf(`Аналог ${n} — avito.ru`)).match(/Ссылка: (\S+)/)[1];
+  assert.equal(shot(1), urls[1].url);
+  assert.equal(shot(4), urls[0].url);
+
+  // Отчёт собран программой — ИИ-проверка аналогов сходится.
+  r = await spec.req('POST', `/api/orders/${o.id}/draft/result`, { from: d.id, confirm: true });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  r = await spec.req('POST', `/api/orders/${o.id}/review/ai`);
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.deepEqual((r.body.ai.items.find((i) => i.id === 'analogs').found ?? []).map((f) => f.text).filter((t) => /из дела|не из аналогов/.test(t)), []);
+});

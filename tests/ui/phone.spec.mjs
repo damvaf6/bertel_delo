@@ -3856,11 +3856,17 @@ async function confirmAll(sp, n) {
   }
 }
 
-async function finishRun(sp, file, prefix) {
+async function finishRun(sp, file, prefix, { showDraft } = {}) {
   await sp.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
   await expect(sp.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
   const text = sp.getByLabel('Текст заключения');
   const body = await text.inputValue();
+  // Снимок нужного места черновика: курсор ставится на строку — поле прокручивается к ней.
+  if (showDraft) {
+    await text.evaluate((el, s) => { const at = el.value.indexOf(s); el.focus(); el.setSelectionRange(at, at); el.blur(); el.focus(); }, showDraft);
+    await text.scrollIntoViewIfNeeded();
+    await shot(sp, `${prefix}-chernovik`);
+  }
   const [word] = await Promise.all([sp.waitForEvent('download'), sp.getByRole('button', { name: 'Скачать Word' }).click()]);
   expect(word.suggestedFilename()).toBe(file);
   const wchunks = [];
@@ -3946,9 +3952,17 @@ test('как эксперт (2.80): станки по перечню для ра
   await expect(sp.locator('#analogs-hints')).toContainText('Нужно не меньше 3 аналогов к позиции 2 «фрезерный станок 6Р82, 1990 г., 1 шт.» — подтверждено 1');
   await abox.scrollIntoViewIfNeeded();
   await shot(sp, 'b8-stanki-analogi-po-poziciyam');
-  const { body, wtext } = await finishRun(sp, 'Отчёт об оценке.docx', 'b9-stanki');
+  const { body, wtext } = await finishRun(sp, 'Отчёт об оценке.docx', 'b9-stanki', { showDraft: 'Итог по позициям перечня' });
   expect(body).toContain('Токарный станок 16К20, 1987 г., 1 шт.; фрезерный станок 6Р82, 1990 г., 1 шт.');
-  expect(wtext).toContain('Позиция перечня, №');
+  // 2.83: в черновике — итог по каждой позиции; в Word — таблица аналогов у каждой позиции со средней ценой, номера сквозные.
+  expect(body).toContain('| 2 | фрезерный станок 6Р82, 1990 г., 1 шт. | [заполнить] |');
+  expect(body).toContain('| Итого по перечню | — | [заполнить] |');
+  expect(wtext).toContain('Позиция 1. Токарный станок 16К20, 1987 г., 1 шт.');
+  expect(wtext).toContain('Средняя цена аналогов позиции 1 — 436 667 руб.');
+  expect(wtext.indexOf('Позиция 2. фрезерный станок 6Р82')).toBeGreaterThan(wtext.indexOf('Средняя цена аналогов позиции 1'));
+  expect(wtext).toContain('Средняя цена аналогов позиции 2 — 520 000 руб.');
+  expect(wtext).toContain('Цены аналогов по позициям перечня');
+  expect(wtext).not.toContain('Позиция перечня, №');
   expect(wtext).toContain('Фрезерный станок 6Р82, 1991 г.');
   await sctx.close();
   await dctx.close();

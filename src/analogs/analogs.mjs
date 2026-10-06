@@ -229,20 +229,51 @@ export function valueText(f, v) {
   return String(v);
 }
 
+// Перечень из нескольких позиций (2.83): аналоги по позициям — 1, 2, …, без позиции (или с номером больше числа позиций) —
+// в конце; внутри позиции — как добавлены. Один порядок для таблицы Word, приложения со скриншотами, черновика и ИИ-проверки:
+// «Аналог 4» везде один и тот же. Одна позиция или не перечень — порядок не меняется.
+const positionOf = (a, n) => { const no = a.fields?.[ITEM_FIELD]; return Number.isInteger(no) && no >= 1 && no <= n ? no : null; };
+export function inItemOrder(spec, order, list) {
+  const n = listPositions(spec, order).length;
+  if (!n) return list;
+  const key = (a) => positionOf(a, n) ?? n + 1;
+  return list.map((a, i) => ({ a, i })).sort((x, y) => key(x.a) - key(y.a) || x.i - y.i).map((x) => x.a);
+}
+
+// Группы по позициям: { no, name, items: [{ a, n }] } (n — сквозной номер аналога), средняя цена аналогов (после
+// корректировок, если они есть). Аналоги без позиции — отдельной группой с no = null.
+export function itemGroups(spec, order, list) {
+  const positions = listPositions(spec, order);
+  if (!positions.length) return null;
+  const sorted = inItemOrder(spec, order, list).map((a, i) => ({ a, n: i + 1 }));
+  const groups = positions.map((name, i) => ({ no: i + 1, name, items: sorted.filter((x) => positionOf(x.a, positions.length) === i + 1) }));
+  const rest = sorted.filter((x) => positionOf(x.a, positions.length) === null);
+  if (rest.length) groups.push({ no: null, name: 'Позиция не указана', items: rest });
+  for (const g of groups) {
+    const prices = g.items.map(({ a }) => adjusted(a)?.price ?? a.fields?.price_rub).filter(Number.isFinite);
+    g.mean = prices.length ? Math.round(prices.reduce((s, x) => s + x, 0) / prices.length) : null;
+  }
+  return groups;
+}
+
 // Таблица аналогов для Word (строки «| … |»): № — номер приложения со скриншотом, источник — сайт и дата. Есть
 // корректировки (2.74) — ещё столбцы «всего» и «цена после корректировок», а под таблицей — таблица самих корректировок.
-export function analogTable(spec, list) {
-  const own = spec.fields;
-  const any = list.some((a) => a.adjustments?.length);
-  const perSqm = any && own.some((f) => f.id === 'area') && list.some((a) => adjusted(a)?.per_sqm);
+// Перечень из нескольких позиций (2.83) — своя таблица у каждой позиции, под ней средняя цена её аналогов, в конце —
+// сводка по позициям; номера аналогов сквозные.
+export function analogTable(spec, list, order = null) {
+  const groups = order ? itemGroups(spec, order, list) : null;
+  const sorted = groups ? groups.flatMap((g) => g.items.map((x) => x.a)) : list;
+  const own = spec.fields.filter((f) => !(groups && f.id === ITEM_FIELD));
+  const any = sorted.some((a) => a.adjustments?.length);
+  const perSqm = any && own.some((f) => f.id === 'area') && sorted.some((a) => adjusted(a)?.per_sqm);
   const head = ['№', 'Источник', 'Цена, руб.', ...own.map((f) => f.label), 'Регион',
     ...(any ? ['Корректировки, всего', 'Цена после корректировок, руб.'] : []), ...(perSqm ? ['За кв. м после корректировок, руб.'] : [])];
   const cell = (s) => String(s ?? '').replace(/\s*\n\s*/g, '; ').replace(/\|/g, '/').trim() || '—';
   const line = (r) => `| ${r.map(cell).join(' | ')} |`;
-  const rows = list.map((a, i) => {
+  const rowOf = (a, n) => {
     const sum = adjusted(a);
     return [
-      String(i + 1),
+      String(n),
       [hostOf(a.url), a.fields.listed_on ? `от ${ruDate(a.fields.listed_on)}` : ''].filter(Boolean).join(', '),
       valueText(CORE_FIELDS[0], a.fields.price_rub),
       ...own.map((f) => valueText(f, a.fields[f.id])),
@@ -250,26 +281,44 @@ export function analogTable(spec, list) {
       ...(any ? [sum ? pctText(sum.pct) : 'нет', sum ? fmtNum(sum.price) : valueText(CORE_FIELDS[0], a.fields.price_rub)] : []),
       ...(perSqm ? [sum?.per_sqm ? fmtNum(sum.per_sqm) : ''] : []),
     ];
-  });
-  const out = [head, ...rows].map(line);
-  if (!any) return out;
-  const adj = list.flatMap((a, i) => (a.adjustments ?? []).map((x) => [String(i + 1), adjustName(spec, x), pctText(x.pct), adjustSource(x)]));
-  return [...out, 'Корректировки к аналогам (применяются по порядку, одна за другой):',
-    ...[['Аналог', 'Корректировка', 'Значение', 'Источник (справочник, год, таблица)'], ...adj].map(line)];
+  };
+  const after = any ? 'после корректировок ' : '';
+  const out = groups
+    ? groups.flatMap((g) => [
+      g.no ? `Позиция ${g.no}. ${g.name}` : 'Аналоги без позиции перечня (укажите позицию в разделе «Аналоги» дела)',
+      ...(g.items.length ? [head, ...g.items.map(({ a, n }) => rowOf(a, n))].map(line) : ['Подтверждённых аналогов к этой позиции нет.']),
+      ...(g.no && g.mean !== null ? [`Средняя цена аналогов позиции ${g.no} ${after}— ${fmtNum(g.mean)} руб.`] : []),
+    ])
+    : [head, ...sorted.map((a, i) => rowOf(a, i + 1))].map(line);
+  const adj = any ? sorted.flatMap((a, i) => (a.adjustments ?? []).map((x) => [String(i + 1), adjustName(spec, x), pctText(x.pct), adjustSource(x)])) : [];
+  const adjPart = any ? ['Корректировки к аналогам (применяются по порядку, одна за другой):',
+    ...[['Аналог', 'Корректировка', 'Значение', 'Источник (справочник, год, таблица)'], ...adj].map(line)] : [];
+  const summary = groups ? [`Цены аналогов по позициям перечня (средняя ${after}— справочно, стоимость позиции определяет оценщик):`,
+    ...[['Позиция', 'Наименование', 'Аналоги', `Средняя цена ${after}, руб.`.replace(' ,', ',')],
+      ...groups.filter((g) => g.no).map((g) => [String(g.no), g.name, g.items.length ? g.items.map((x) => x.n).join(', ') : 'нет', g.mean !== null ? fmtNum(g.mean) : '—'])].map(line)] : [];
+  return [...out, ...adjPart, ...summary];
 }
 
-// Для черновика от ИИ: подтверждённые аналоги строками (без ссылок — модели они не нужны).
-export function analogsBrief(spec, list) {
+// Для черновика от ИИ: подтверждённые аналоги строками (без ссылок — модели они не нужны). Перечень (2.83) — по позициям,
+// с той же сквозной нумерацией, что в Word.
+export function analogsBrief(spec, list, order = null) {
   if (!list.length) return null;
   const fields = analogFields(spec);
-  return ['АНАЛОГИ (подтверждены экспертом; таблицу программа вставит сама — не рисуй её):',
-    ...list.map((a, i) => {
-      const own = fields.filter((f) => a.fields[f.id] !== undefined).map((f) => `${f.label} — ${valueText(f, a.fields[f.id])}`);
-      const sum = adjusted(a);
-      const adj = sum ? [`корректировки — ${a.adjustments.map((x) => `${adjustName(spec, x)} ${pctText(x.pct)}${adjustSource(x) ? ` (${adjustSource(x)})` : ''}`).join(', ')}`,
-        `цена после корректировок — ${fmtNum(sum.price)} руб.`] : [];
-      return `- Аналог ${i + 1}: ${[...own, ...adj].join('; ')}`;
-    })].join('\n');
+  const lineOf = (a, n) => {
+    const own = fields.filter((f) => a.fields[f.id] !== undefined).map((f) => `${f.label} — ${valueText(f, a.fields[f.id])}`);
+    const sum = adjusted(a);
+    const adj = sum ? [`корректировки — ${a.adjustments.map((x) => `${adjustName(spec, x)} ${pctText(x.pct)}${adjustSource(x) ? ` (${adjustSource(x)})` : ''}`).join(', ')}`,
+      `цена после корректировок — ${fmtNum(sum.price)} руб.`] : [];
+    return `- Аналог ${n}: ${[...own, ...adj].join('; ')}`;
+  };
+  const groups = order ? itemGroups(spec, order, list) : null;
+  if (!groups) return ['АНАЛОГИ (подтверждены экспертом; таблицу программа вставит сама — не рисуй её):', ...list.map((a, i) => lineOf(a, i + 1))].join('\n');
+  return ['АНАЛОГИ ПО ПОЗИЦИЯМ ПЕРЕЧНЯ (подтверждены экспертом; таблицы программа вставит сама — не рисуй их; корректировки и итог пиши по каждой позиции отдельно, стоимость позиции — [заполнить]):',
+    ...groups.flatMap((g) => [
+      g.no ? `Позиция ${g.no} «${g.name}»:` : 'Без позиции перечня:',
+      ...(g.items.length ? g.items.map(({ a, n }) => lineOf(a, n)) : ['- аналогов нет']),
+      ...(g.no && g.mean !== null ? [`- средняя цена аналогов позиции — ${fmtNum(g.mean)} руб.`] : []),
+    ])].join('\n');
 }
 
 // Где искать (программа строит ссылки на поиск — открывает их сам эксперт в своём браузере; с сайтов мы ничего не берём).

@@ -13,6 +13,7 @@ import { loadDossier } from '../dossier/dossier.mjs';
 import { todayMsk } from '../orders/workflow.mjs';
 import { insertOrder, listVisibleOrders } from './order-ops.mjs';
 import { audit, quoted, text, uuidFrom } from './util.mjs';
+import { inItemOrder } from '../analogs/analogs.mjs';
 
 const PROBLEM_MAX = 4000;
 const QUESTION_MAX = 2000;
@@ -212,8 +213,9 @@ export function aiOps() {
         const basis = { kind: order.basis_kind, number: order.basis_number };
         const names = [...new Set(rules.flatMap((r) => r.auto ?? []))];
         // Сверка таблицы аналогов в отчёте (2.75) — с подтверждёнными экспертом аналогами дела, по порядку.
+        // Перечень из нескольких позиций (2.83) — в порядке позиций, как в таблице Word.
         const analogs = names.includes('analog_match')
-          ? await sql`select url, fields, adjustments from order_analogs where order_id = ${order.id} and deleted_at is null and confirmed_at is not null order by id`
+          ? inItemOrder(registry.analogs(order.module, order.service), order, await sql`select url, fields, adjustments from order_analogs where order_id = ${order.id} and deleted_at is null and confirmed_at is not null order by id`)
           : [];
         const auto = runAutoChecks(names, files, { fields: order.fields ?? {}, dossier, basis, service: order.service, analogs });
         const found = Object.fromEntries(rules.map((r) => [r.id, (r.auto ?? []).flatMap((a) => auto[a] ?? [])]));
