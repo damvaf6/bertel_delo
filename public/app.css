@@ -50,6 +50,7 @@ button:disabled { opacity: .6; cursor: default; }
 .msg { margin: 8px 0 0; font-size: 14px; min-height: 20px; }
 .msg.error { color: var(--danger); }
 .msg.ok { color: var(--ok); }
+.msg.warn { color: #7a4b00; }
 .list { list-style: none; padding: 0; margin: 0; }
 .list li { border-top: 1px solid var(--line); padding: 12px 0; }
 .list li:first-child { border-top: none; }

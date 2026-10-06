@@ -349,3 +349,31 @@ test('2.20: попросить переснять шаг — владелец в
   const x = (await spec.req('POST', `/api/orders/${other.id}/inspection/retakes`, { step: 'facade', note: 'Тёмно' })).body.retake.id;
   assert.equal((await spec.req('DELETE', `/api/orders/${o.id}/inspection/retakes/${x}`)).status, 404);
 });
+
+test('2.68: повтор отправки того же снимка (ответ потерялся) не создаёт второе фото; номер снимка — только своего вида', async () => {
+  const o = await inWork('Осмотр — повтор при плохой связи');
+  const { token } = await issue(o, { days: 1 });
+  const id = crypto.randomBytes(16).toString('hex');
+  let r = await shoot(token, 'facade', { headers: { ...GEO, 'x-photo-id': id } });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.deepEqual(r.body, { step: 'facade', photos: 1, geo: true });
+  // Тот же снимок ещё раз — и ещё два одновременно: фото по-прежнему одно.
+  r = await shoot(token, 'facade', { headers: { ...GEO, 'x-photo-id': id } });
+  assert.equal(r.status, 201);
+  assert.deepEqual(r.body, { step: 'facade', photos: 1, geo: true, repeated: true });
+  const both = await Promise.all([1, 2].map(() => shoot(token, 'kitchen', { headers: { 'x-photo-id': 'same-kitchen-shot' } })));
+  assert.deepEqual(both.map((x) => x.status), [201, 201]);
+  assert.deepEqual(both.map((x) => x.body.photos), [1, 1]);
+  // Другой снимок того же шага — второе фото; без номера — как раньше.
+  assert.equal((await shoot(token, 'facade', { headers: { 'x-photo-id': crypto.randomBytes(16).toString('hex') } })).body.photos, 2);
+  assert.equal((await shoot(token, 'facade')).body.photos, 3);
+  assert.equal((await shoot(token, 'facade', { headers: { 'x-photo-id': 'bad id!' } })).status, 400);
+  assert.equal((await shoot(token, 'facade', { headers: { 'x-photo-id': 'x' } })).status, 400);
+  const docs = (await spec.req('GET', `/api/orders/${o.id}/documents`)).body.documents.filter((d) => d.kind === 'inspection');
+  assert.equal(docs.length, 4);
+  const [{ n }] = await S.sql`select count(*)::int as n from audit_log where action = 'inspect.photo' and subject_id = ${o.id}`;
+  assert.equal(n, 4, 'повтор не пишется в журнал вторым фото');
+  // Номер снимка привязан к ссылке: по новой ссылке тот же номер — новое фото (это уже другой осмотр).
+  const { token: t2 } = await issue(o, { days: 1 });
+  assert.equal((await shoot(t2, 'facade', { headers: { 'x-photo-id': id } })).body.photos, 1);
+});

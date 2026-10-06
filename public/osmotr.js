@@ -94,21 +94,148 @@ $('data-save').addEventListener('click', async () => {
   } finally { $('data-save').disabled = false; }
 });
 
+// Шаги и их строки на странице: число фото, просьба переснять, состояние отправки.
+const stepUi = {};
+
 function renderSteps() {
   $('steps').replaceChildren(...info.steps.map((s) => {
     const input = el('input', { type: 'file', accept: 'image/*', capture: 'environment', class: 'visually-hidden', id: `f-${s.id}`, 'aria-label': `Фото: ${s.title}` });
     const status = el('p', { class: 'msg', role: 'status', 'aria-live': 'polite' });
-    const count = el('span', { class: `badge${s.photos && !s.retake ? ' ok' : ''}`, text: s.retake ? 'переснять' : s.photos ? `Фото: ${s.photos}` : s.optional ? 'если есть' : 'нужно фото' });
+    const count = el('span', { class: 'badge' });
+    const button = el('label', { class: 'btn secondary', for: `f-${s.id}` });
     const retake = s.retake ? el('p', { class: 'photo-meta warn', 'data-retake': '', text: `Эксперт просит переснять: ${s.retake}` }) : '';
-    input.addEventListener('change', () => upload(s, input, status, count));
-    return el('li', { class: 'card', 'data-step': s.id },
+    input.addEventListener('change', () => { const file = input.files[0]; input.value = ''; if (file) enqueue(s, file); });
+    const li = el('li', { class: 'card', 'data-step': s.id },
       el('div', { class: 'doc' }, el('span', { class: 'title', text: s.title }), count),
       retake,
       s.hint ? el('p', { class: 'muted', text: s.hint }) : '',
-      el('label', { class: 'btn secondary', for: `f-${s.id}`, text: s.retake ? 'Переснять' : s.photos ? 'Ещё фото' : 'Сфотографировать' }),
-      input, status);
+      button, input, status);
+    stepUi[s.id] = { li, status, count, button };
+    paintStep(s);
+    return li;
   }));
+  paintProgress();
 }
+
+function paintStep(s) {
+  const { count, button } = stepUi[s.id];
+  count.textContent = s.retake ? 'переснять' : s.photos ? `Фото: ${s.photos}` : s.optional ? 'если есть' : 'нужно фото';
+  count.className = `badge${s.photos && !s.retake ? ' ok' : ''}`;
+  button.textContent = s.retake ? 'Переснять' : s.photos ? 'Ещё фото' : 'Сфотографировать';
+}
+
+// Шаг не снят: нет фото или эксперт просит переснять (2.68: пересъёмка тоже считается несделанной).
+const notDone = (s) => !s.photos || Boolean(s.retake);
+
+function paintProgress() {
+  const need = info.steps.filter((s) => !s.optional);
+  const done = need.filter((s) => !notDone(s)).length;
+  $('progress').textContent = done === need.length
+    ? `Все нужные шаги сняты (${need.length}). Можно нажать «Готово» внизу страницы.`
+    : `Снято ${done} из ${need.length} нужных шагов.`;
+  $('progress').className = `msg ${done === need.length ? 'ok' : ''}`;
+}
+
+// ——— Отправка фото с повтором при плохой связи (2.68) ———
+// Каждый снимок сразу встаёт в очередь со своим номером, временем и местом съёмки. Нет связи — фото остаётся в очереди
+// и уходит само, когда связь появится (или по кнопке «Повторить сейчас»); повтор с тем же номером не создаёт второе фото.
+// Пока очередь не пуста, «Готово» ждёт, а закрыть страницу браузер не даст без вопроса.
+
+const queue = [];
+let sending = false;
+let wake = null;
+const RETRY_MS = [2000, 4000, 8000, 15000, 30000];
+const UPLOAD_TIMEOUT_MS = 90_000;
+
+function photoId() {
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+}
+
+// Снимок можно повторить: нет связи, сервер не ответил или временно занят.
+const retryable = (err) => err.network || err.status === 408 || err.status === 429 || err.status >= 500;
+
+async function enqueue(s, file) {
+  const shotAt = new Date().toISOString();
+  say(stepUi[s.id].status, 'Готовим фото…', 'ok');
+  const [pos, blob] = await Promise.all([position(), prepare(file)]);
+  if (blob.size > info.limits.file_bytes) return say(stepUi[s.id].status, 'Фото больше 3 МБ — снимите ещё раз или уменьшите размер');
+  queue.push({ id: photoId(), s, blob: new Blob([blob], { type: blob.type || file.type || 'image/jpeg' }), shotAt, pos });
+  paintQueue();
+  pump();
+}
+
+function paintQueue() {
+  const n = queue.length;
+  $('pending').textContent = n ? `Ещё не отправлено фото: ${n}. Не закрывайте страницу — отправим, как только будет связь.` : '';
+  $('pending').classList.toggle('hidden', !n);
+  for (const s of info.steps) {
+    const mine = queue.filter((q) => q.s === s).length;
+    if (mine && !stepUi[s.id].status.dataset.wait) say(stepUi[s.id].status, mine > 1 ? `Отправляем… (фото в очереди: ${mine})` : 'Отправляем…', 'ok');
+  }
+}
+
+function pause(ms) {
+  return new Promise((resolve) => {
+    const t = setTimeout(done, ms);
+    function done() { clearTimeout(t); window.removeEventListener('online', done); wake = null; resolve(); }
+    window.addEventListener('online', done);
+    wake = done;
+  });
+}
+
+async function send(q) {
+  const h = { ...headers, 'x-step': q.s.id, 'x-shot-at': q.shotAt, 'x-photo-id': q.id };
+  if (q.pos) Object.assign(h, { 'x-lat': String(q.pos.coords.latitude), 'x-lon': String(q.pos.coords.longitude), 'x-accuracy': String(q.pos.coords.accuracy) });
+  return api('POST', API.photos, q.blob, h, { timeoutMs: UPLOAD_TIMEOUT_MS });
+}
+
+async function pump() {
+  if (sending) return;
+  sending = true;
+  let fails = 0;
+  try {
+    while (queue.length) {
+      const q = queue[0];
+      const { status } = stepUi[q.s.id];
+      try {
+        const r = await send(q);
+        queue.shift();
+        fails = 0;
+        delete status.dataset.wait;
+        q.s.photos = r.photos;
+        if (q.s.retake) { q.s.retake = null; stepUi[q.s.id].li.querySelector('[data-retake]')?.remove(); }
+        paintStep(q.s);
+        paintProgress();
+        say(status, r.geo ? 'Фото отправлено' : 'Фото отправлено без геометки', 'ok');
+      } catch (err) {
+        if (err.status === 410) { queue.length = 0; return closed(err.message); }
+        if (!retryable(err)) {
+          queue.shift();
+          delete status.dataset.wait;
+          say(status, err.message);
+        } else {
+          const ms = RETRY_MS[Math.min(fails, RETRY_MS.length - 1)];
+          fails += 1;
+          status.dataset.wait = '1';
+          say(status, `Нет связи — фото не потеряно, отправим снова через ${Math.round(ms / 1000)} с.`, 'warn');
+          $('retry').classList.remove('hidden');
+          paintQueue();
+          await pause(ms);
+          delete status.dataset.wait;
+        }
+      }
+      paintQueue();
+    }
+  } finally {
+    sending = false;
+    $('retry').classList.add('hidden');
+    paintQueue();
+  }
+}
+
+$('retry').addEventListener('click', () => { if (wake) wake(); });
+window.addEventListener('beforeunload', (e) => { if (queue.length) e.preventDefault(); });
 
 function startGeo() {
   if (!navigator.geolocation) { geoDenied = true; $('geo-state').textContent = 'Телефон не сообщает место — фото уйдут без геометки.'; return; }
@@ -144,29 +271,6 @@ async function prepare(file) {
   return file;
 }
 
-async function upload(s, input, status, count) {
-  const file = input.files[0];
-  input.value = '';
-  if (!file) return;
-  say(status, 'Отправляем…', 'ok');
-  try {
-    const [pos, blob] = await Promise.all([position(), prepare(file)]);
-    if (blob.size > info.limits.file_bytes) throw new Error('Фото больше 3 МБ — снимите ещё раз или уменьшите размер');
-    const h = { ...headers, 'x-step': s.id, 'x-shot-at': new Date().toISOString() };
-    if (pos) Object.assign(h, { 'x-lat': String(pos.coords.latitude), 'x-lon': String(pos.coords.longitude), 'x-accuracy': String(pos.coords.accuracy) });
-    const r = await api('POST', API.photos, new Blob([blob], { type: blob.type || file.type || 'image/jpeg' }), h);
-    s.photos = r.photos;
-    if (s.retake) { s.retake = null; input.closest('li').querySelector('[data-retake]')?.remove(); }
-    count.textContent = `Фото: ${r.photos}`;
-    count.classList.add('ok');
-    input.previousElementSibling.textContent = 'Ещё фото';
-    say(status, r.geo ? 'Фото отправлено' : 'Фото отправлено без геометки', 'ok');
-  } catch (err) {
-    if (err.status === 410) return closed(err.message);
-    say(status, err.message);
-  }
-}
-
 $('start').addEventListener('click', () => {
   $('start').classList.add('hidden');
   $('steps-box').classList.remove('hidden');
@@ -174,8 +278,10 @@ $('start').addEventListener('click', () => {
 });
 
 $('finish').addEventListener('click', async () => {
-  const missing = info.steps.filter((s) => !s.optional && !s.photos).map((s) => s.title);
-  if (missing.length && !confirm(`Нет фото: ${missing.join(', ')}. Всё равно завершить?`)) return;
+  if (queue.length) return say($('finish-msg'), `Подождите — ещё не отправлено фото: ${queue.length}. «Готово» сработает, когда они уйдут.`);
+  say($('finish-msg'), '');
+  const missing = info.steps.filter((s) => (!s.optional && !s.photos) || s.retake).map((s) => s.title);
+  if (missing.length && !confirm(`Не снято: ${missing.join(', ')}. Всё равно завершить?`)) return;
   $('finish').disabled = true;
   try {
     if (visitId) {

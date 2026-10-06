@@ -183,3 +183,13 @@ test('дело ушло у исполнителя — выезд закрыва�
   const cands = (await dispatcher.req('GET', `/api/orders/${o.id}/candidates`)).body.candidates;
   assert.ok(!cands.some((c) => c.user_id === helper.user.id));
 });
+
+test('2.68: помощник при плохой связи — повтор того же снимка не удваивает фото', async () => {
+  const o = await inWork('Экспресс: повтор фото');
+  const vid = (await assign(o)).body.visit.id;
+  const again = await Promise.all([1, 2].map(() => shoot(vid, 'kitchen', { ...GEO, 'x-photo-id': 'kitchen-retry-01' })));
+  assert.deepEqual(again.map((x) => [x.status, x.body.photos]), [[201, 1], [201, 1]]);
+  const r = await shoot(vid, 'kitchen', { 'x-photo-id': 'kitchen-retry-01' });
+  assert.deepEqual([r.status, r.body.photos, r.body.repeated], [201, 1, true]);
+  assert.equal((await shoot(vid, 'kitchen', { 'x-photo-id': 'kitchen-retry-02' })).body.photos, 2);
+});
