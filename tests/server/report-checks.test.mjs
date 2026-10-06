@@ -418,6 +418,50 @@ test('аналоги (2.60): не меньше трёх; одна ссылка �
   assert.deepEqual(runAutoChecks(['analog_list'], [doc([refused])]).analog_list, []);
 });
 
+test('2.75: аналоги в отчёте — как подтверждённые в деле: ссылка, цена, цена после корректировок, площадь, лишние номера', () => {
+  const analogs = [
+    { url: 'https://www.cian.ru/sale/flat/401/?utm_source=x', fields: { price_rub: 14000000, area: 50.5 }, adjustments: [] },
+    { url: 'https://m.avito.ru/moskva/kvartiry/402', fields: { price_rub: 14500000, area: 51 }, adjustments: [{ kind: 'bargain', pct: -5 }] },
+    { url: 'https://domclick.ru/card/sale__flat__403', fields: { price_rub: 15000000, area: 52 }, adjustments: [] },
+  ];
+  const ok = [
+    'ОТЧЁТ ОБ ОЦЕНКЕ № 7/2026',
+    'Сравнительный подход',
+    '| № | Источник | Цена, руб. | Площадь, кв. м | Корректировки, всего | Цена после корректировок, руб. |',
+    '| 1 | cian.ru | 14 000 000 | 50,5 | нет | 14 000 000 |',
+    '| 2 | avito.ru | 14 500 000 | 51 | −5 % | 13 775 000 |',
+    '| 3 | domclick.ru | 15 000 000 | 52 | нет | 15 000 000 |',
+    'Приложение. Скриншоты объявлений (аналоги)',
+    'Аналог 1 — cian.ru', 'Ссылка: https://www.cian.ru/sale/flat/401/',
+    'Аналог 2 — avito.ru', 'Ссылка: https://www.avito.ru/moskva/kvar', 'tiry/402',
+    'Аналог 3 — domclick.ru', 'Ссылка: https://domclick.ru/card/sale__flat__403',
+  ].join('\n');
+  const run = (text, list = analogs) => texts(runAutoChecks(['analog_match'], [doc([text])], { analogs: list }), 'analog_match');
+  assert.deepEqual(run(ok), [], 'всё сходится; перенос ссылки в PDF и «www»/«m.» не мешают');
+  assert.deepEqual(run(ok, []), [], 'в деле аналогов нет — молчим');
+  assert.deepEqual(run(ok.replace('14 500 000', '14 600 000')), [], 'цена до корректировок не найдена, но после — есть: молчим');
+  assert.deepEqual(run(ok.replace('15 000 000 | 52 | нет | 15 000 000', '15 300 000 | 52 | нет | 15 300 000')),
+    ['Аналог 3 из дела (domclick.ru): цена 15 000 000 руб. в отчёте не найдена — проверьте цену в таблице аналогов']);
+  assert.deepEqual(run(ok.replace('13 775 000', '13 800 000')),
+    ['Аналог 2 из дела (avito.ru): цена после корректировок 13 775 000 руб. в отчёте не найдена — проверьте расчёт в таблице']);
+  assert.deepEqual(run(ok.replace('| 50,5 |', '| 55,5 |')),
+    ['Аналог 1 из дела (cian.ru): площадь 50,5 кв. м в отчёте не найдена — проверьте площадь в таблице аналогов']);
+  assert.deepEqual(run(ok.replace('sale__flat__403', 'sale__flat__999')), [
+    'Аналог 3 из дела (domclick.ru): ссылки на объявление в отчёте нет — добавьте его в таблицу аналогов или уберите из дела',
+    'Ссылка у аналога № 3 в отчёте — не из аналогов дела: добавьте объявление в раздел «Аналоги» (ссылка и скриншот со временем) или проверьте ссылку',
+  ]);
+  assert.deepEqual(run(`${ok}\nАналог 4 — https://www.cian.ru/sale/flat/404/ — 14 800 000 руб.`), [
+    'В отчёте есть аналог № 4, а в деле подтверждено 3 аналога — добавьте недостающие в раздел «Аналоги» или проверьте нумерацию',
+    'Ссылка у аналога № 4 в отчёте — не из аналогов дела: добавьте объявление в раздел «Аналоги» (ссылка и скриншот со временем) или проверьте ссылку',
+  ]);
+  assert.deepEqual(run('ОТЧЁТ ОБ ОЦЕНКЕ\nЗатратный подход. Рыночная стоимость 14 000 000 руб.'),
+    ['В деле подтверждено 3 аналога, а в отчёте аналогов нет — вставьте таблицу аналогов (кнопка «Отчёт Word» соберёт её сама)']);
+  assert.deepEqual(run('ОТЧЁТ\nСравнительный подход не применялся: аналог №1 найден один, предложений недостаточно.'), [], 'сравнительный отвергнут — молчим');
+  // Ссылка на закон далеко от «Аналог № N» — не находка; цена «14,5 млн» считается.
+  const far = ok.replace('14 500 000 | 51', '14,5 млн | 51') + `\n${'Текст раздела. '.repeat(30)}\nСм. https://www.consultant.ru/document/cons_doc_LAW_19586/`;
+  assert.deepEqual(run(far), []);
+});
+
 test('2.60: правила подключены — госномер и пробег к транспорту, веса к подходам, аналоги к аналогам', async () => {
   const { createRegistry } = await import('../../src/modules/index.mjs');
   const reg = createRegistry();
@@ -425,7 +469,7 @@ test('2.60: правила подключены — госномер и проб
   assert.ok(auto('vehicle', 'vehicle_identity').includes('reg_match') && auto('vehicle', 'vehicle_identity').includes('mileage_match'));
   for (const svc of ['vehicle', 'movable', 'realty', 'land']) {
     assert.ok(auto(svc, 'approaches').includes('approach_weights'), svc);
-    assert.ok(auto(svc, 'analogs').includes('analog_list'), svc);
+    assert.ok(auto(svc, 'analogs').includes('analog_list') && auto(svc, 'analogs').includes('analog_match'), svc);
   }
 });
 

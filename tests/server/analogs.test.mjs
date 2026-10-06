@@ -273,6 +273,27 @@ test('Word: таблица аналогов под разделом и прил�
   assert.equal(r.status, 201, JSON.stringify(r.body));
   const [doc] = await S.sql`select * from documents where id = ${r.body.document.id}`;
   assert.match((await extractPages(await S.providers.storage.get(doc.storage_key), doc.filename, doc.mime)).pages.join('\n'), /Аналог 3 — cian\.ru/);
+
+  // 2.75: ИИ-проверка сверяет таблицу аналогов в отчёте с аналогами дела. Собранный программой отчёт — сходится.
+  const found = async () => {
+    const res = await spec.req('POST', `/api/orders/${o.id}/review/ai`);
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    return (res.body.ai.items.find((i) => i.id === 'analogs').found ?? []).map((f) => f.text);
+  };
+  assert.deepEqual((await found()).filter((t) => /из дела|не из аналогов/.test(t)), [], 'отчёт из Word программы сходится с делом');
+  // Эксперт поправил цену аналога в деле, а отчёт не пересобрал; добавил четвёртый аналог — в отчёте его нет.
+  const list = (await spec.req('GET', `/api/orders/${o.id}/analogs`)).body.analogs;
+  r = await spec.req('PUT', `/api/orders/${o.id}/analogs/${list[1].id}`, { fields: { ...list[1].fields, price_rub: 14700000 }, confirm: true });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const id4 = (await add(o, 'https://www.cian.ru/sale/flat/409/')).body.id;
+  await put(o, id4, png(40, 60));
+  assert.equal((await spec.req('PUT', `/api/orders/${o.id}/analogs/${id4}`, { fields: { price_rub: 14900000, area: 53.5, listed_on: addDays(todayMsk(), -3), region: 'moscow', address: 'г. Москва, ул. Аналогов, 9' }, confirm: true })).status, 200);
+  assert.deepEqual((await found()).filter((t) => /из дела|в деле подтверждено/.test(t)), [
+    'Аналог 2 из дела (cian.ru): цена 14 700 000 руб. в отчёте не найдена — проверьте цену в таблице аналогов',
+    'Аналог 4 из дела (cian.ru): ссылки на объявление в отчёте нет — добавьте его в таблицу аналогов или уберите из дела',
+    'Аналог 4 из дела (cian.ru): цена 14 900 000 руб. в отчёте не найдена — проверьте цену в таблице аналогов',
+    'Аналог 4 из дела (cian.ru): площадь 53,5 кв. м в отчёте не найдена — проверьте площадь в таблице аналогов',
+  ]);
 });
 
 test('Word: картинки — PNG и JPEG по размеру из файла, по ширине страницы; в шаблоне организации тоже', () => {

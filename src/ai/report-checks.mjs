@@ -4,8 +4,10 @@
 // Находка — подсказка человеку (место и страница), не вердикт: отметки ставит человек.
 // Какие правила к какой проверке относятся — данными в модуле (`checks[].auto`); здесь — только сами правила.
 //   runAutoChecks(names, docs, ctx) → { [имя правила]: [{ text, file, where, quote }] }
-// docs — [{ name, kind, pages }] (src/ai/extract.mjs); ctx — { fields } заявки, { basis: { kind, number } } (2.38) и
+// docs — [{ name, kind, pages }] (src/ai/extract.mjs); ctx — { fields } заявки, { basis: { kind, number } } (2.38), { analogs } — подтверждённые аналоги дела (2.75) и
 // { dossier: { items, today } } исполнителя (2.14).
+
+import { adjusted, cleanUrl } from '../analogs/analogs.mjs';
 
 const MAX_PER_RULE = 5;
 
@@ -714,6 +716,79 @@ function analogFindings(doc) {
   return out;
 }
 
+// ——— 2.75: таблица аналогов в отчёте — как подтверждённые аналоги дела ———
+// ctx.analogs — подтверждённые экспертом аналоги дела по порядку: { url, fields: { price_rub, area }, adjustments }.
+// Аналогов в деле нет — молчим (эксперт мог не вести раздел «Аналоги»). Сверяем: ссылка каждого аналога дела есть в отчёте
+// (переносы строк в PDF не мешают), его цена (и цена после корректировок) и площадь есть среди чисел отчёта; ссылка под
+// «Аналог № N» в отчёте — из аналогов дела; номеров аналогов в отчёте не больше, чем в деле. Находка — «не найдено», а не
+// «неверно»: число могло совпасть где-то ещё, поэтому правило ловит пропуск и чужое значение, но не доказывает верность.
+const NUM_RE = /(\d{1,3}(?:[   .]\d{3})+|\d+)(?:,(\d{1,3})|\.(\d{1,2})(?!\d))?(\s*(?:млн|тыс))?/giu;
+function numbersIn(text) {
+  const out = [];
+  for (const m of text.matchAll(NUM_RE)) {
+    const v = Number(`${m[1].replace(/[   .]/g, '')}.${m[2] ?? m[3] ?? '0'}`);
+    const mul = !m[4] ? 1 : /млн/iu.test(m[4]) ? 1e6 : 1e3;
+    out.push(v * mul);
+  }
+  return out;
+}
+const hostPath = (raw) => {
+  try { return cleanUrl(raw).key.split('?')[0].replace(/\/+$/, ''); } catch { return null; }
+};
+const siteOf = (url) => hostPath(url)?.split('/')[0] ?? '';
+function analogMatch(docs, ctx) {
+  const list = ctx.analogs ?? [];
+  if (!list.length) return [];
+  const d = mainReport(docs) ?? docs[0];
+  if (!d) return [];
+  const all = docs.map((x) => (x.pages ?? []).join('\n')).join('\n');
+  if (REFUSED.some((re) => [...all.matchAll(re)].some((m) => /сравнительн/iu.test(m[1])))) return [];
+  const firstPage = Math.max(0, (d.pages ?? []).findIndex((p) => /аналог/iu.test(p)));
+  const at = (text, quote = '') => ({ doc: d, page: firstPage, quote, text });
+  const n = list.length;
+  const many = n === 1 ? '1 аналог' : `${n} ${n < 5 ? 'аналога' : 'аналогов'}`;
+  if (!/аналог/iu.test(all)) return [at(`В деле подтверждено ${many}, а в отчёте аналогов нет — вставьте таблицу аналогов (кнопка «Отчёт Word» соберёт её сама)`)];
+  const squashed = all.replace(/\s+/g, '').toLowerCase().replace(/\/\/(www|m)\./g, '//');
+  const nums = numbersIn(all);
+  const has = (v, tol) => nums.some((x) => Math.abs(x - v) <= tol);
+  const out = [];
+  const mine = new Set();
+  list.forEach((a, i) => {
+    const name = `Аналог ${i + 1} из дела (${siteOf(a.url)})`;
+    const hp = hostPath(a.url);
+    if (hp) mine.add(hp);
+    if (hp && !squashed.includes(hp)) out.push(at(`${name}: ссылки на объявление в отчёте нет — добавьте его в таблицу аналогов или уберите из дела`, a.url));
+    const price = a.fields?.price_rub;
+    const sum = adjusted(a);
+    if (Number.isFinite(price) && !has(price, 1) && !(sum && has(sum.price, 1))) {
+      out.push(at(`${name}: цена ${fmt(price)} руб. в отчёте не найдена — проверьте цену в таблице аналогов`));
+    } else if (sum && !has(sum.price, 1)) {
+      out.push(at(`${name}: цена после корректировок ${fmt(sum.price)} руб. в отчёте не найдена — проверьте расчёт в таблице`));
+    }
+    const area = a.fields?.area;
+    if (Number.isFinite(area) && area > 0 && !has(area, 0.051)) out.push(at(`${name}: площадь ${String(area).replace('.', ',')} кв. м в отчёте не найдена — проверьте площадь в таблице аналогов`));
+  });
+  // Ссылки под «Аналог № N» в отчёте, которых нет в деле (без скриншота и времени получения платформой).
+  let maxNo = 0;
+  const seen = new Set();
+  for (const doc of docs) {
+    eachPage(doc, (page, p) => {
+      const marks = [...page.matchAll(ANALOG_NO)].map((m) => ({ at: m.index, n: Number(m[1]) })).filter((x) => x.n >= 1 && x.n <= 30);
+      for (const x of marks) maxNo = Math.max(maxNo, x.n);
+      for (const m of page.matchAll(URL_RE)) {
+        const before = marks.filter((x) => x.at < m.index && m.index - x.at <= 300).pop();
+        const hp = hostPath(m[0].replace(/[.,;:]+$/, ''));
+        // Ссылка, перенесённая в PDF на следующую строку, читается обрезанной — своя, если с неё начинается ссылка дела.
+        if (!before || !hp || [...mine].some((x) => x.startsWith(hp)) || seen.has(hp)) continue;
+        seen.add(hp);
+        out.push({ doc, page: p, quote: lineAround(page, m.index), text: `Ссылка у аналога № ${before.n} в отчёте — не из аналогов дела: добавьте объявление в раздел «Аналоги» (ссылка и скриншот со временем) или проверьте ссылку` });
+      }
+    });
+  }
+  if (maxNo > n) out.unshift(at(`В отчёте есть аналог № ${maxNo}, а в деле подтверждено ${many} — добавьте недостающие в раздел «Аналоги» или проверьте нумерацию`));
+  return out;
+}
+
 // ——— 2.61: товароведческая — дата и цена покупки как в заявке ———
 // В заявке одна строка «Когда и где куплен, цена по чеку» («12.03.2026, М.Видео, 54 990 ₽»): дата — первая дата,
 // цена — сумма с «₽» или «руб.» (иначе самое большое число от 100). В заключении сверяются только строки о покупке.
@@ -823,6 +898,7 @@ const WHOLE = {
   dossier_education: dossierFindings(['education']),
   required_items: requiredItems,
   court_order: courtOrder,
+  analog_match: analogMatch,
 };
 
 const PER_DOC = {
@@ -875,6 +951,7 @@ export const AUTO_CHECKS = Object.freeze({
   mileage_match: 'пробег в отчёте — как в заявке (с запасом 10%)',
   approach_weights: 'веса подходов в согласовании в сумме 1',
   analog_list: 'аналогов не меньше трёх, ссылки у разных аналогов не повторяются',
+  analog_match: 'аналоги в отчёте — как подтверждённые в деле: ссылка, цена, площадь, число аналогов',
   purchase_match: 'дата и цена покупки товара — как в заявке',
   questions_answered: 'каждый вопрос заявки найден в выводах',
 });
