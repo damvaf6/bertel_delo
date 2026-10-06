@@ -9,7 +9,7 @@ import { editsDraft, seesDraft } from '../access/policy.mjs';
 import { ANALOG_TEXT_MAX, analogMessages, askAi, parseJsonAnswer } from '../ai/ai.mjs';
 import { extractPages } from '../ai/extract.mjs';
 import { OCR_MIME } from '../providers/ocr.mjs';
-import { adjusted, adjustKinds, analogFields, analogWarnings, cleanAdjustments, cleanAnalogValues, cleanUrl, hostOf, missingAnalog, searchHints, suggestionValues } from '../analogs/analogs.mjs';
+import { adjusted, adjustKinds, analogFields, analogWarnings, cleanAdjustments, cleanAnalogValues, cleanUrl, hostOf, listPositions, missingAnalog, searchHints, suggestionValues } from '../analogs/analogs.mjs';
 import { audit, text as textFrom } from './util.mjs';
 
 // Облако принимает запрос не больше 3,5 МБ (Yandex Serverless Containers) — через ядро только до 3 МБ (2.49).
@@ -71,14 +71,14 @@ const publicAnalog = (a, warnings) => ({
 async function view({ sql, actor, order, registry, providers }) {
   const spec = registry.analogs(order.module, order.service);
   const list = await loadAnalogs(sql, order.id);
-  const { per, hints, confirmed } = analogWarnings(spec, order, list);
+  const { per, hints, confirmed, min } = analogWarnings(spec, order, list);
   // Исполнитель отметил, что сравнительный подход не применяется (2.33), — аналоги не нужны, не напоминаем о них.
   const needed = !(order.approaches?.length && !order.approaches.includes('comparative'));
   return {
     analogs: list.map((a) => publicAnalog(a, per.get(a.id))),
     fields: analogFields(spec),
     adjust_kinds: adjustKinds(spec).map(({ id, name }) => ({ id, name })),
-    min: needed ? spec.min : 0,
+    min: needed ? min : 0,
     needed,
     confirmed,
     hints: needed ? hints : ['Сравнительный подход не применяется — аналоги не нужны (подходы отмечены в черновике)', ...hints.filter((h) => !h.startsWith('Нужно не меньше'))],
@@ -198,7 +198,7 @@ export function analogOps() {
             ? 'На файле не удалось прочитать текст — вставьте текст объявления (выделить всё → скопировать) или заполните признаки сами'
             : 'Вставьте текст объявления (выделить всё → скопировать) или приложите скриншот или PDF страницы — по ним ИИ предложит признаки');
         }
-        const out = await askAi(ctx, actor, 'analog', analogMessages({ fields: analogFields(spec), url: a.url, text: ad }));
+        const out = await askAi(ctx, actor, 'analog', analogMessages({ fields: analogFields(spec), url: a.url, text: ad, positions: listPositions(spec, order) }));
         const got = suggestionValues(spec, parseJsonAnswer(out.text)?.fields);
         await sql.tx(async (tx) => {
           const row = await ownAnalog(tx, order, a.id, { lock: true });

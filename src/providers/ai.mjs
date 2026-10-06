@@ -217,6 +217,21 @@ function fakeDraft(text) {
 }
 
 // Аналог со скриншота (2.32): признаки из строк «ПРИЗНАКИ:», значения — простыми правилами по тексту объявления.
+// Участок «12 сот.», «0,15 га» — в кв. м, как просит подсказка (2.80).
+function landArea(ad) {
+  const m = ad.match(/(\d+(?:[.,]\d+)?)\s*(сот|га)/i);
+  return m ? String(Math.round(Number(m[1].replace(',', '.')) * (/сот/i.test(m[2]) ? 100 : 10000))) : undefined;
+}
+
+// Номер позиции перечня — та, с которой у объявления больше общих слов («16К20», «фрезерный»).
+function itemNo(text, ad) {
+  const items = [...(text.split('ПЕРЕЧЕНЬ ОБЪЕКТА:')[1] ?? '').split('ОБЪЯВЛЕНИЕ:')[0].matchAll(/^(\d+)\. (.+)$/gm)];
+  const words = (s) => new Set(s.toLowerCase().match(/[a-zа-яё0-9]{3,}/gi) ?? []);
+  const have = words(ad);
+  const best = items.map((m) => [m[1], [...words(m[2])].filter((w) => have.has(w)).length]).sort((a, b) => b[1] - a[1])[0];
+  return best?.[1] ? best[0] : undefined;
+}
+
 function fakeAnalog(text) {
   const ids = [...(text.split('ПРИЗНАКИ:')[1] ?? '').split('ОБЪЯВЛЕНИЕ:')[0].matchAll(/^- ([a-z][a-z0-9_]*): /gm)].map((m) => m[1]);
   const ad = text.split('ТЕКСТ:')[1] ?? '';
@@ -224,10 +239,13 @@ function fakeAnalog(text) {
   const got = {
     price_rub: num(ad.match(/(\d[\d\s\u00a0]{2,}\d)\s*(?:₽|руб)/i)?.[1]),
     listed_on: ad.match(/(\d{2})\.(\d{2})\.(\d{4})/)?.slice(1).reverse().join('-'),
-    region: /московская обл|подмосков/i.test(ad) ? 'mo' : /москв/i.test(ad) ? 'moscow' : undefined,
+    region: /московская обл|подмосков|^\s*МО,/im.test(ad) ? 'mo' : /москв/i.test(ad) ? 'moscow' : undefined,
     year: ad.match(/\b((?:19|20)\d{2})\s*(?:г\.|год)/i)?.[1],
+    made_year: ad.match(/\b((?:19|20)\d{2})\s*(?:г\.|год)/i)?.[1],
     mileage_km: num(ad.match(/пробег[^\d]{0,10}(\d[\d\s\u00a0]*\d)\s*км/i)?.[1]),
-    area: ad.match(/(\d+(?:[.,]\d+)?)\s*(?:м²|кв\.?\s*м)/i)?.[1]?.replace(',', '.'),
+    area: ad.match(/(\d+(?:[.,]\d+)?)\s*(?:м²|кв\.?\s*м)/i)?.[1]?.replace(',', '.') ?? landArea(ad),
+    land_use: ad.match(/(ИЖС|ЛПХ|СНТ|ДНП)/)?.[1],
+    item_no: itemNo(text, ad),
     make_model: ad.match(/^\s*([A-ZА-Я][\w-]+ [A-ZА-Я0-9][\w-]*)/m)?.[1],
     // Адрес — строкой «Адрес: …» или строкой, которая начинается с города («г. Москва, ул. …», «МО, …»).
     address: (ad.match(/адрес:\s*([^\n]+)/i)?.[1] ?? ad.match(/^\s*((?:г\.|МО,|Московская обл)[^\n]{3,})$/m)?.[1])?.trim(),

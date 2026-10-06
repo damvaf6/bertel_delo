@@ -8,7 +8,8 @@ import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid } from '..
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import { createRegistry, validateModule } from '../../src/modules/index.mjs';
 import expertise from '../../src/modules/expertise.mjs';
-import { cleanUrl } from '../../src/analogs/analogs.mjs';
+import { cleanUrl, searchHints } from '../../src/analogs/analogs.mjs';
+import { analogMessages } from '../../src/ai/ai.mjs';
 import { buildReport, imageSize } from '../../src/docs/docx.mjs';
 import { ANALOGS_MARK } from '../../src/docs/report.mjs';
 import { extractPages } from '../../src/ai/extract.mjs';
@@ -40,7 +41,7 @@ before(async () => {
   dispatcher = await login(S, '+79990003202');
   spec = await login(S, '+79990003203');
   await setPlatformRole(S.sql, dispatcher.user.id, 'dispatcher');
-  await makeSpecialist(S.sql, spec.user.id, { permits: [['expertise', 'realty'], ['expertise', 'vehicle'], ['expertise', 'goods']] });
+  await makeSpecialist(S.sql, spec.user.id, { permits: [['expertise', 'realty'], ['expertise', 'vehicle'], ['expertise', 'goods'], ['expertise', 'land'], ['expertise', 'movable']] });
   await spec.req('PATCH', '/api/me', { full_name: 'Тестов Эксперт' });
 });
 after(async () => { await S?.close(); });
@@ -207,6 +208,65 @@ test('предупреждения: повтор ссылки, старое об
   assert.equal(r.status, 200);
   assert.ok(!byId(r, a1).warnings.some((w) => /уже есть/.test(w)));
   assert.equal((await S.sql`select count(*)::int as n from order_analogs where id = ${a2} and deleted_at is not null`)[0].n, 1);
+});
+
+// Прогон «как эксперт» по земле и движимому (2.80): участки в объявлениях — в сотках и гектарах; перечень из нескольких
+// позиций — аналоги к каждой, ИИ называет позицию, «Где искать» — по каждой позиции.
+test('земля и движимое (2.80): сотки и гектары → кв. м; аналоги к каждой позиции перечня; где искать', async () => {
+  const land = await inWork('land', { purpose: 'inheritance', region: 'mo', address: 'МО, д. Тестово, уч. 14', area: 1200, land_use: 'izhs', land_category: 'settlement' }, 'Участок: сотки');
+  const ids = [];
+  for (const [n, t] of [['1', 'Участок 12 сот. (ИЖС)\nЦена 3 400 000 ₽\nМО, д. Тестово'], ['2', 'Участок 0,15 га, ИЖС\nЦена 4 100 000 ₽\nМО, с. Дальнее']]) {
+    const id = (await add(land, `https://www.avito.ru/moskovskaya_oblast/zemelnye_uchastki/${n}`)).body.id;
+    const r = await spec.req('POST', `/api/orders/${land.id}/analogs/${id}/ai`, { text: t });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    ids.push(id);
+    if (n === '2') {
+      assert.equal(byId(r, ids[0]).fields.area, 1200);
+      assert.equal(byId(r, ids[1]).fields.area, 1500);
+      assert.equal(byId(r, ids[1]).fields.land_use, 'ИЖС');
+      assert.equal(byId(r, ids[1]).fields.region, 'mo');
+      assert.match(r.body.search.criteria, /8,4–15,6 сот\. \(840–1560 кв\. м\)/);
+      assert.match(r.body.search.criteria, /^Участок: под жилой дом \(ИЖС\); земли населённых пунктов;/);
+    }
+  }
+  const msg = analogMessages({ fields: [{ id: 'area', label: 'Площадь, кв. м', type: 'number' }], url: 'https://x.ru/1', text: 'т' })[1].content;
+  assert.match(msg, /сотки умножь на 100, гектары — на 10000/);
+
+  const items = 'Токарный станок 16К20, 1987 г., 1 шт.;\nфрезерный станок 6Р82, 1990 г., 1 шт.';
+  const mov = await inWork('movable', { purpose: 'division', region: 'mo', items, location: 'МО, г. Тестовск, цех 1' }, 'Станки: позиции');
+  let r = await spec.req('GET', `/api/orders/${mov.id}/analogs`);
+  assert.equal(r.body.min, 6, 'по 3 аналога к каждой из двух позиций');
+  assert.deepEqual(r.body.search.links.map((l) => l.name), ['Авито: 1. Токарный станок 16К20', 'Авито: 2. фрезерный станок 6Р82']);
+  assert.match(r.body.search.criteria, /^К каждой позиции перечня — свои аналоги/);
+  assert.ok(r.body.hints.some((h) => h === 'Нужно не меньше 3 аналогов к позиции 2 «фрезерный станок 6Р82, 1990 г., 1 шт.» — подтверждено 0'));
+  const mid = [];
+  const ads = ['Токарный станок 16К20, 1988 г.\nЦена 450 000 ₽', 'Станок токарный 16К20 РМЦ 1000, 1985 год\nЦена 390 000 руб.', 'Токарный 16К20, 1990 г.\nЦена 470 000 ₽', 'Фрезерный станок 6Р82, 1991 г.\nЦена 520 000 ₽'];
+  for (const [i, t] of ads.entries()) {
+    const id = (await add(mov, `https://www.avito.ru/moskovskaya_oblast/oborudovanie/${i}`)).body.id;
+    assert.equal((await put(mov, id, png(2, 2))).status, 200);
+    r = await spec.req('POST', `/api/orders/${mov.id}/analogs/${id}/ai`, { text: t });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    mid.push(id);
+  }
+  assert.deepEqual(mid.map((id) => byId(r, id).fields.item_no), [1, 1, 1, 2], 'ИИ назвал позицию по словам объявления');
+  assert.deepEqual(mid.map((id) => byId(r, id).fields.made_year), [1988, 1985, 1990, 1991]);
+  for (const id of mid) {
+    r = await spec.req('PUT', `/api/orders/${mov.id}/analogs/${id}`, { fields: byId(r, id).fields, confirm: true });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+  }
+  // Четыре подтверждены, но к позиции 2 — один: в зачёт 3 + 1 из 6.
+  assert.equal(r.body.confirmed, 4);
+  assert.equal(r.body.min, 6);
+  assert.ok(r.body.hints.some((h) => /к позиции 2 .* подтверждено 1$/.test(h)));
+  assert.ok(!r.body.hints.some((h) => /к позиции 1/.test(h)));
+  // Позиция не указана или больше числа позиций — предупреждение у аналога.
+  r = await spec.req('PUT', `/api/orders/${mov.id}/analogs/${mid[3]}`, { fields: { ...byId(r, mid[3]).fields, item_no: undefined } });
+  assert.ok(byId(r, mid[3]).warnings.includes('Укажите позицию перечня (1–2): аналоги нужны к каждой позиции'));
+  r = await spec.req('PUT', `/api/orders/${mov.id}/analogs/${mid[3]}`, { fields: { ...byId(r, mid[3]).fields, item_no: 3 } });
+  assert.ok(byId(r, mid[3]).warnings.includes('Позиций в перечне: 2 — проверьте номер позиции'));
+  // Одна позиция — как раньше: просто три аналога.
+  const registry = createRegistry([expertise]);
+  assert.equal(searchHints(registry, { module: 'expertise', service: 'movable', fields: { region: 'moscow', items: 'Диван угловой' } }).links[0].name, 'Авито');
 });
 
 test('ИИ без скриншота: по вставленному тексту и по PDF страницы; нечего читать — понятная подсказка', async () => {
