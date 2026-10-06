@@ -52,7 +52,7 @@ async function loadPast(r) {
   $('draft-past-hint').textContent = `Возьмутся: ${p.sections.map((t) => `«${t.replace(/^\d+\.\s*/, '')}»`).join(', ')}. `
     + 'Остальные разделы не изменятся. Имена, адреса, номера и суммы прошлого дела заменятся пометками «заполнить».';
   $('draft-past-case').replaceChildren(...p.cases.map((c) => el('option', { value: c.id },
-    `Дело ${c.ref}, черновик от ${new Date(c.at).toLocaleDateString('ru-RU')}`)));
+    `${c.ref} от ${new Date(c.at).toLocaleDateString('ru-RU')}`)));
 }
 
 $('draft-past-take').addEventListener('click', () => run($('draft-past-take'), async () => {
