@@ -25,6 +25,7 @@ export async function loadDraft(current, reload) {
   if (box.classList.contains('hidden')) return;
   $('draft-ai').classList.toggle('hidden', !r.can_ai);
   $('draft-ai').textContent = r.draft ? 'Подготовить заново с помощью ИИ' : 'Подготовить черновик с помощью ИИ';
+  await loadPast(r);
   $('draft-edit').classList.toggle('hidden', !r.draft);
   $('draft-actions').classList.toggle('hidden', !(r.draft && r.can_edit));
   $('draft-word-box').classList.toggle('hidden', !(r.draft && mine));
@@ -40,6 +41,28 @@ export async function loadDraft(current, reload) {
   $('draft-state').textContent = stateText(r);
   countGaps();
 }
+
+// Методические разделы из своего прошлого дела той же услуги (2.65): стандарты, допущения, выбор подходов, методика.
+// Остальные разделы не меняются; данные прошлого заказчика и объекта сервер вычищает — на их месте пометки «заполнить».
+async function loadPast(r) {
+  const box = $('draft-past');
+  const p = r.can_edit && r.sections.some((s) => s.reuse) ? await api('GET', `/api/orders/${ctx.order.id}/draft/past`) : null;
+  box.classList.toggle('hidden', !p?.cases.length);
+  if (!p?.cases.length) return;
+  $('draft-past-hint').textContent = `Возьмутся: ${p.sections.map((t) => `«${t.replace(/^\d+\.\s*/, '')}»`).join(', ')}. `
+    + 'Остальные разделы не изменятся. Имена, адреса, номера и суммы прошлого дела заменятся пометками «заполнить».';
+  $('draft-past-case').replaceChildren(...p.cases.map((c) => el('option', { value: c.id },
+    `Дело ${c.ref}, черновик от ${new Date(c.at).toLocaleDateString('ru-RU')}`)));
+}
+
+$('draft-past-take').addEventListener('click', () => run($('draft-past-take'), async () => {
+  if (ctx.draft && !confirm('Заменить методические разделы черновика текстом из прошлого дела? Текущий текст останется в истории.')) return;
+  if (ctx.draft && $('draft-text').value.trim() !== ctx.draft.body) await save();
+  const r = await api('POST', `/api/orders/${ctx.order.id}/draft/past`, { past_id: $('draft-past-case').value, from: ctx.draft?.id ?? null });
+  await loadDraft({ order: ctx.order, executor: { is_me: true } }, ctx.reload);
+  const p = r.draft.inputs.past;
+  say($('draft-msg'), `Взято разделов: ${p.sections.length}${p.marks ? `; данных прошлого дела убрано: ${p.marks} — заполните пометки` : ''}`, 'ok');
+}));
 
 // Подходы к оценке (2.33): отметка сохраняется сразу; черновик после смены подходов лучше подготовить заново.
 function renderApproaches(r) {
@@ -103,7 +126,9 @@ function stateText(r) {
   }
   const gaps = (d.body.match(GAP) ?? []).length;
   return [
-    d.source === 'ai' ? `Черновик подготовил ИИ ${timeRu(d.at)} — проверьте каждое слово и число.` : `Последняя правка — ${timeRu(d.at)}.`,
+    d.source === 'ai' ? `Черновик подготовил ИИ ${timeRu(d.at)} — проверьте каждое слово и число.`
+      : d.source === 'past' ? `Методические разделы взяты из Вашего прошлого дела ${timeRu(d.at)} — проверьте, что они подходят к этому делу.`
+        : `Последняя правка — ${timeRu(d.at)}.`,
     d.inputs?.photos?.length ? `Фото в черновике: ${d.inputs.photos.length} (сами снимки ИИ не видит — опишите их).` : null,
     gaps ? `Осталось заполнить мест: ${gaps} (в квадратных скобках).` : null,
     r.can_edit ? 'Итоговый файл приложите, когда текст готов: он уйдёт на проверку вместе с результатом.' : 'Черновик видят только исполнитель и диспетчер.',

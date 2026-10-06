@@ -12,6 +12,8 @@ import { analogsBrief } from '../analogs/analogs.mjs';
 import { publicDoc, saveDocument } from './core-ops.mjs';
 import { audit, sendFile } from './util.mjs';
 import { fillDraft, itemLine, loadDossier } from '../dossier/dossier.mjs';
+import { pastValues, reuseSections, skeleton } from '../docs/reuse.mjs';
+import { orderRef } from '../notify/registry.mjs';
 
 const PHOTOS_MAX = 40;
 const DOCS_MAX = 5;
@@ -21,10 +23,26 @@ const DOCS_CHARS = 20_000;
 const isPhoto = (d) => /^image\//.test(d.mime) || /\.(jpe?g|png|heic|heif|webp)$/i.test(d.filename);
 const dayRu = (t) => new Date(t).toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow' });
 
+const PAST_MAX = 10;
+
+// Свои прошлые дела той же услуги (2.65): исполнитель — этот эксперт, есть его собственная версия черновика (не написанная
+// прежним экспертом до передачи дела). Последние сначала.
+const pastCases = (sql, actor, order, pastId = null) => sql`
+  select o.id, o.title, o.module, o.service, o.fields, o.basis_number, o.basis_date, o.deadline, o.created_at, o.status,
+         o.owner_user_id, o.org_id, d.id as draft_id, d.body, d.at
+  from orders o
+  join lateral (select x.id, x.body, x.at from result_drafts x where x.order_id = o.id and x.author_id = ${actor.id}
+                order by x.id desc limit 1) d on true
+  where o.executor_user_id = ${actor.id} and o.module = ${order.module} and o.service = ${order.service} and o.id <> ${order.id}
+    and (${pastId}::uuid is null or o.id = ${pastId}::uuid)
+  order by d.at desc limit ${PAST_MAX}`;
+
 async function latest(sql, orderId) {
   return sql.one`select d.*, (select count(*)::int from result_drafts x where x.order_id = d.order_id) as versions
                  from result_drafts d where d.order_id = ${orderId} order by d.id desc limit 1`;
 }
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const draftView = (d, actor) => d && {
   id: String(d.id), source: d.source, body: d.body, model: d.model, inputs: d.inputs, at: d.at, versions: d.versions,
@@ -137,6 +155,62 @@ export function draftOps() {
           const row = await tx.one`insert into result_drafts (order_id, author_id, source, body, model, inputs)
                                    values (${order.id}, ${actor.id}, 'ai', ${text}, ${out.model}, ${JSON.stringify(seen)}) returning id`;
           await audit(tx, actor, 'draft.ai', 'order', order.id, { draft: String(row.id) });
+          return latest(tx, order.id);
+        });
+        res.status(201);
+        return { draft: draftView(d, actor) };
+      },
+    },
+    {
+      // Свои прошлые дела той же услуги, из которых можно взять методические разделы (2.65). Без данных заказчика: номер
+      // дела, дата черновика и какие методические разделы в нём есть.
+      id: 'draft.past.list', method: 'GET', path: '/api/orders/:id/draft/past', auth: 'user',
+      access: { resource: 'order', param: 'id', need: 'read' },
+      async handler({ sql, actor, order, registry }) {
+        guardEdit(actor, order);
+        const reuse = orderSections(registry, order).filter((s) => s.reuse);
+        if (!reuse.length) return { sections: [], cases: [] };
+        const rows = await pastCases(sql, actor, order);
+        return {
+          sections: reuse.map((s) => s.title),
+          cases: rows.map((r) => {
+            const has = reuseSections('', reuse, r.body, []).used;
+            return { id: r.id, ref: orderRef(r.id), at: r.at, sections: has.length };
+          }).filter((c) => c.sections > 0),
+        };
+      },
+    },
+    {
+      // Взять методические разделы из своего прошлого дела (2.65) — новой версией черновика: остальные разделы остаются как
+      // были (или пустыми с пометками, если черновика ещё нет), данные прошлого заказчика и объекта вычищены.
+      id: 'draft.past', method: 'POST', path: '/api/orders/:id/draft/past', auth: 'user',
+      access: { resource: 'order', param: 'id', need: 'read' },
+      async handler({ sql, actor, order, registry, body, res }) {
+        guardEdit(actor, order);
+        const sections = orderSections(registry, order);
+        if (!sections.some((s) => s.reuse)) throw new HttpError(400, 'no_reuse', 'Для этой услуги методических разделов нет');
+        const pastId = typeof body?.past_id === 'string' && UUID.test(body.past_id) ? body.past_id : null;
+        // Не своё дело, другая услуга или нет своего черновика — для эксперта «не найдено», как чужое.
+        const [past] = pastId ? await pastCases(sql, actor, order, pastId) : [];
+        if (!past) throw new HttpError(404, 'not_found', 'Прошлое дело не найдено');
+        const [names] = await sql`select (select full_name from users where id = ${past.owner_user_id}) as owner,
+                                         (select name from organizations where id = ${past.org_id}) as org`;
+        // То, что совпадает с этим делом (тот же город, тот же заказчик), — не чужие данные: остаётся как есть.
+        const own = new Set(pastValues(registry, order, []).map((v) => v.toLowerCase()));
+        const values = pastValues(registry, past, [names?.owner, names?.org]).filter((v) => !own.has(v.toLowerCase()));
+        const dossier = sections.some((s) => s.dossier) ? await loadDossier(sql, actor.id) : [];
+        const d = await sql.tx(async (tx) => {
+          await tx`select id from orders where id = ${order.id} for update`;
+          const cur = await latest(tx, order.id);
+          sameBase(cur, body?.from);
+          const base = cur?.body ?? fillDraft(fillTables(skeleton(sections), sections, registry, order), sections, dossier);
+          const got = reuseSections(base, sections, past.body, values);
+          if (!got.used.length) throw new HttpError(409, 'no_reuse', 'В том деле нет методических разделов — выберите другое');
+          const text = got.body.slice(0, DRAFT_MAX);
+          const row = await tx.one`insert into result_drafts (order_id, author_id, source, body, inputs)
+                                   values (${order.id}, ${actor.id}, 'past', ${text},
+                                           ${JSON.stringify({ ...(cur?.inputs ?? {}), past: { sections: got.used, marks: got.marks } })}) returning id`;
+          await audit(tx, actor, 'draft.past', 'order', order.id, { draft: String(row.id), sections: got.used.length });
           return latest(tx, order.id);
         });
         res.status(201);

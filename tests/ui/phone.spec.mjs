@@ -3178,3 +3178,58 @@ test('запрос документов (2.64): эксперт отмечает 
   await shot(ep, '99k-ekspert-dokumenty-polucheny');
   await ectx.close();
 });
+
+test('черновик по своему прошлому делу (2.65): эксперт берёт методические разделы, данные прошлого дела — пометками', async ({ page, browser, baseURL }) => {
+  await signIn(page, '+79990000790');
+  const make = async (title, address) => {
+    const o = (await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title }, headers: H })).json()).order;
+    expect((await page.request.patch(`/api/orders/${o.id}`, {
+      data: { deadline: inDays(7), fields: { purpose: 'bank', region: 'moscow', object_type: 'flat', address, area: '48' } }, headers: H,
+    })).status()).toBe(200);
+    expect((await page.request.post(`/api/orders/${o.id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+    return o.id;
+  };
+  const pastId = await make('Прошлая квартира', 'г. Москва, Прошлая ул., 1');
+  const id = await make('Новая квартира', 'г. Москва, Новая ул., 2');
+  const ectx = await phoneContext(browser, baseURL);
+  const ep = await ectx.newPage();
+  const expert = await signIn(ep, '+79990000791');
+  await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    await c.query("update orders set price_kop = 1500000, paid_at = now(), status = 'in_work', executor_user_id = $2 where id = any($1)", [[pastId, id], expert.id]);
+  });
+  // Прошлое дело: свой черновик с методикой и данными того заказчика.
+  const past = [
+    '## 4. Стандарты оценки и заявление о соответствии', 'Оценка по 135-ФЗ, ФСО I–VI и ФСО № 7; стандарты СРО «Тестовая СРО».',
+    '## 5. Допущения и ограничительные условия', 'Квартира по адресу г. Москва, Прошлая ул., 1 осмотрена по фото; стоимость 9 100 000 руб. без обременений.',
+    '## 10. Выбор подходов к оценке', 'Применён сравнительный подход: рынок квартир развит.',
+  ].join('\n');
+  expect((await ep.request.put(`/api/orders/${pastId}/draft`, { data: { body: past }, headers: H })).status()).toBe(200);
+
+  await ep.goto(`/kabinet#order=${id}`);
+  const box = ep.locator('#draft-past');
+  await expect(box).toBeVisible();
+  await expect(ep.locator('#draft-past-hint')).toContainText('«Стандарты оценки и заявление о соответствии»');
+  await expect(ep.locator('#draft-past-case option')).toHaveCount(1);
+  await expect(ep.locator('#draft-past-case')).not.toContainText('Прошлая');
+  await box.scrollIntoViewIfNeeded();
+  await shot(ep, '99l-ekspert-razdely-iz-proshlogo-dela');
+  await box.getByRole('button', { name: 'Взять разделы из этого дела' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText(/^Взято разделов: 3; данных прошлого дела убрано: \d+ — заполните пометки$/);
+  await expect(ep.locator('#draft-state')).toContainText('Методические разделы взяты из Вашего прошлого дела');
+  const text = await ep.getByLabel('Текст заключения').inputValue();
+  expect(text).toContain('Оценка по 135-ФЗ, ФСО I–VI и ФСО № 7');
+  expect(text).toContain('Применён сравнительный подход');
+  expect(text).not.toContain('Прошлая ул');
+  expect(text).not.toContain('9 100 000');
+  expect(text).toContain('[заполнить: данные этого дела]');
+  expect(text).toContain('## 7. Описание объекта оценки\n[заполнить: раздел по этому делу]');
+  await ep.locator('#draft-edit').scrollIntoViewIfNeeded();
+  await shot(ep, '99m-ekspert-chernovik-iz-proshlogo-dela');
+  // Заказчик черновика и прошлого дела не видит.
+  await page.goto(`/kabinet#order=${id}`);
+  await expect(page.locator('#order-status')).toHaveText('В работе');
+  await expect(page.locator('#draft-box')).toBeHidden();
+  await ectx.close();
+});
