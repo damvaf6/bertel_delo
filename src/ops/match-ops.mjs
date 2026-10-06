@@ -16,6 +16,17 @@ import { BLOCKING_KINDS, dossierAlerts, loadDossier, needsValidDossier } from '.
 const REGIONS = { moscow: 'Москва', mo: 'Московская область' };
 const OPEN_STATUSES = ['awaiting_executor', 'in_work', 'review'];
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+// «Не принимаю новые дела до …» (2.77): не дальше года вперёд, причина — коротко.
+const AWAY_MAX_DAYS = 365;
+const AWAY_NOTE_MAX = 80;
+const isoDay = (d) => (d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10));
+
+// Отметка «не принимаю до …» действует, пока день возвращения не наступил; прошла — как будто её нет.
+export function awayOf(sp, today = todayMsk()) {
+  if (!sp?.away_until) return null;
+  const until = isoDay(sp.away_until);
+  return until > today ? { until, note: sp.away_note ?? null } : null;
+}
 
 function intIn(value, field, min, max) {
   const n = Number(value);
@@ -44,6 +55,8 @@ async function profileView(sql, userId) {
     external_load: sp.external_load, open_orders: sp.open_orders, user_active: sp.user_active,
     // Помощник на объекте (2.4): ему назначают выезды по экспресс-заявкам.
     onsite: sp.onsite,
+    // Не принимает новые дела до дня until (2.77) — отпуск, загрузка; null — отметки нет или она прошла.
+    away: awayOf(sp),
     // Организация, от которой работает (2.5а): результат подписывает ещё и её руководитель. null — частная практика.
     org: sp.org_name ? { id: sp.org_id, name: sp.org_name } : null,
     permits: permits.map((p) => ({ ...p, valid_until: p.valid_until ?? null })),
@@ -68,7 +81,7 @@ export async function candidatesFor(sql, order, registry) {
     join users u on u.id = s.user_id and u.is_active
     join specialist_permits p on p.user_id = s.user_id and p.module = ${order.module} and p.service = ${order.service}
          and (p.valid_until is null or p.valid_until >= ${today})
-    where s.active and s.user_id <> ${order.owner_user_id}
+    where s.active and (s.away_until is null or s.away_until <= ${today}) and s.user_id <> ${order.owner_user_id}
       and not exists (select 1 from org_members m where m.user_id = s.user_id and m.org_id = ${order.org_id})`;
   const daysLeft = order.deadline ? Math.round((new Date(order.deadline) - new Date(today)) / 86400000) : null;
   // Истёкшие документы досье (2.14): по услугам оценки аттестат и полисы снимают с подбора, остальное — предупреждение.
@@ -118,6 +131,22 @@ export async function orgExpertsFor(sql, order, orgId, registry) {
   return cands.filter((c) => ids.has(c.user_id));
 }
 
+// Разбор отметки «не принимаю до …» (2.77): день — завтра или позже, но не дальше года; причина — по желанию.
+function awayFrom(value) {
+  if (value === null) return null;
+  const until = String(value?.until ?? '');
+  const d = new Date(`${until}T00:00:00Z`);
+  if (!DATE_RE.test(until) || Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== until) {
+    throw new HttpError(400, 'bad_date', 'Укажите день, с которого снова принимаете дела');
+  }
+  const today = todayMsk();
+  if (until <= today) throw new HttpError(400, 'bad_date', 'День, с которого снова принимаете дела, — не раньше завтра');
+  if (until > addDays(today, AWAY_MAX_DAYS)) throw new HttpError(400, 'bad_date', 'Не дальше чем на год вперёд');
+  const raw = value?.note == null ? '' : String(value.note).trim();
+  if (raw.length > AWAY_NOTE_MAX) throw new HttpError(400, 'bad_input', `Поле «Почему»: не длиннее ${AWAY_NOTE_MAX} знаков`);
+  return { until, note: raw || null };
+}
+
 function requireDispatcher(actor, order) {
   if (!orderSides(actor, order).includes('dispatcher')) throw new HttpError(403, 'forbidden', 'Недостаточно прав');
 }
@@ -134,18 +163,29 @@ export function matchOps() {
     {
       // Специалист сам включает и выключает приём предложений (на отпуск, болезнь) и выбирает, от какой своей организации
       // работает (2.5а) — пока нет дел в работе и на проверке, чтобы подпись организации не менялась посреди дела.
+      // «Не принимаю новые дела до …» (2.77): away — { until: день, с которого снова принимает, note: почему } или null —
+      // снять отметку. Дела, которые уже у эксперта, остаются; новые подбор не предлагает, руководитель видит до какого дня.
       id: 'specialist.me.update', method: 'PATCH', path: '/api/specialist/me', auth: 'user', access: 'self',
       async handler({ sql, actor, body }) {
         const hasActive = body?.active !== undefined;
         const hasOrg = body?.org_id !== undefined;
-        if (!hasActive && !hasOrg) throw new HttpError(400, 'bad_input', 'Нечего менять');
+        const hasAway = body?.away !== undefined;
+        if (!hasActive && !hasOrg && !hasAway) throw new HttpError(400, 'bad_input', 'Нечего менять');
         if (hasActive && typeof body.active !== 'boolean') throw new HttpError(400, 'bad_input', 'Поле «Принимаю дела»: да или нет');
         const orgId = !hasOrg || body.org_id === null ? null : uuidFrom(body.org_id, 'Организация не найдена');
         if (orgId && !actor.orgs.some((m) => m.org_id === orgId)) throw new HttpError(404, 'not_found', 'Организация не найдена');
+        const away = hasAway ? awayFrom(body.away) : null;
         await sql.tx(async (tx) => {
           const sp = await tx.one`select * from specialists where user_id = ${actor.id} for update`;
           if (!sp) throw new HttpError(404, 'not_found', 'Вы не специалист');
           if (hasActive) await tx`update specialists set active = ${body.active} where user_id = ${actor.id}`;
+          if (hasAway) {
+            await tx`update specialists set away_until = ${away?.until ?? null}, away_note = ${away?.note ?? null} where user_id = ${actor.id}`;
+            await audit(tx, actor, 'specialist.away', 'user', actor.id, { until: away?.until ?? null });
+            // Руководителю организации, от которой эксперт работает, — чтобы не ждал от него ответа на новые дела.
+            const org = (hasOrg ? orgId : sp.org_id);
+            if (away && org) await notify(tx, 'expert_away_head', { users: await orgHeads(tx, org), orgId: org, actor });
+          }
           if (hasOrg && orgId !== sp.org_id) {
             const busy = await tx.one`select 1 from orders where executor_user_id = ${actor.id} and status in ('in_work', 'review') limit 1`;
             if (busy) throw new HttpError(409, 'orders_in_work', 'Организацию можно сменить, когда нет дел в работе и на проверке');

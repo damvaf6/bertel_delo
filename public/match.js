@@ -77,6 +77,7 @@ export async function showSpecialist() {
   if (!sp) { location.hash = ''; return; }
   say($('specialist-msg'), '');
   $('specialist-active').checked = sp.active;
+  showAway(sp);
   // От какой организации работает (2.5а): из своих организаций; «частная практика» — без подписи организации.
   const orgs = state.me.orgs;
   $('specialist-org').replaceChildren(el('option', { value: '', text: 'Ни от какой — частная практика' }),
@@ -125,6 +126,34 @@ $('specialist-active').addEventListener('change', async (e) => {
   } catch (err) { e.target.checked = !e.target.checked; say($('specialist-msg'), err.message); }
 });
 
+// «Не принимаю новые дела до …» (2.77): отпуск, загрузка. Отметка прошла — сервер её уже не присылает.
+const tomorrow = () => new Date(Date.now() + 3 * 3_600_000 + 86_400_000).toISOString().slice(0, 10);
+function showAway(sp) {
+  const a = sp.away;
+  $('specialist-away-now').textContent = a ? `Вы не принимаете новые дела до ${dayRu(a.until)}${a.note ? ` (${a.note})` : ''}.` : '';
+  $('specialist-away-now').classList.toggle('hidden', !a);
+  $('specialist-away-form').classList.toggle('hidden', !!a);
+  $('specialist-away-clear').classList.toggle('hidden', !a);
+  $('specialist-away-until').min = tomorrow();
+  if (!a) { $('specialist-away-until').value = ''; $('specialist-away-note').value = ''; }
+}
+
+async function setAway(away, done) {
+  try {
+    await api('PATCH', '/api/specialist/me', { away });
+    await refreshMe();
+    showAway(state.specialist);
+    say($('specialist-msg'), done, 'ok');
+  } catch (err) { say($('specialist-msg'), err.message); }
+}
+
+$('specialist-away-set').addEventListener('click', () => {
+  const until = $('specialist-away-until').value;
+  if (!until) return say($('specialist-msg'), 'Укажите день, с которого снова принимаете дела');
+  setAway({ until, note: $('specialist-away-note').value }, `Новые дела не будут предлагать до ${dayRu(until)}`);
+});
+$('specialist-away-clear').addEventListener('click', () => setAway(null, 'Теперь Вам снова предлагают дела'));
+
 $('specialist-org').addEventListener('change', async (e) => {
   const before = state.specialist.org?.id ?? '';
   try {
@@ -142,7 +171,7 @@ export async function showSpecialists() {
   $('specialists-empty').classList.toggle('hidden', specialists.length > 0);
   $('specialists').replaceChildren(...specialists.map((s) => el('li', {},
     el('div', { class: 'title', text: s.full_name || 'Без имени' }),
-    el('div', { class: 'muted', text: [s.active ? 'принимает дела' : 'не принимает дела', `дел ${s.open_orders} из ${s.capacity}`,
+    el('div', { class: 'muted', text: [!s.active ? 'не принимает дела' : s.away ? `не принимает новые дела до ${dayRu(s.away.until)}${s.away.note ? ` (${s.away.note})` : ''}` : 'принимает дела', `дел ${s.open_orders} из ${s.capacity}`,
       s.regions.map((r) => (r === 'moscow' ? 'Москва' : 'область')).join(' и ')].join(' · ') }),
     el('div', { class: 'muted', text: s.permits.length ? `Допуски: ${s.permits.map(permitText).join('; ')}` : 'Допусков нет' }),
     ...(s.dossier_alerts?.length ? [el('div', { class: 'overdue', text: s.dossier_alerts.map((a) => `${a.kind_name}: ${a.state === 'expired' ? 'срок истёк' : `срок до ${dayRu(a.valid_until)}`}`).join('; ') })] : []),

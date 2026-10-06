@@ -5,7 +5,7 @@ import { HttpError } from '../http/core.mjs';
 import { LEVEL, ORG_ROLES, executorSignOrg, orgCaseSide, orgLevel } from '../access/policy.mjs';
 import { audit, oneOf, phoneFrom, text, uuidFrom } from './util.mjs';
 import { dispatchers, notify, notifyPhone, orgHeads } from '../notify/notify.mjs';
-import { orgExpertsFor } from './match-ops.mjs';
+import { awayOf, orgExpertsFor } from './match-ops.mjs';
 import { orderSignatures, orgReturns } from './sign-ops.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { splitAmount } from '../money/money.mjs';
@@ -158,7 +158,7 @@ export function orgOps() {
       async handler({ sql, org, registry }) {
         const today = todayMsk();
         const experts = await sql`
-          select s.user_id, u.full_name from specialists s
+          select s.user_id, s.active, s.away_until, s.away_note, u.full_name from specialists s
           join org_members m on m.org_id = s.org_id and m.user_id = s.user_id join users u on u.id = s.user_id
           where s.org_id = ${org.id} order by u.full_name nulls last, s.user_id`;
         const ids = experts.map((e) => e.user_id);
@@ -226,6 +226,9 @@ export function orgOps() {
           in_work: rows.filter((o) => o.executor_user_id === e.user_id && ['in_work', 'review'].includes(o.status)).length,
           offered: rows.filter((o) => o.executor_user_id === e.user_id && o.status === 'awaiting_executor').length,
           overdue: cases.filter((c) => c.expert_id === e.user_id && c.overdue).length,
+          // Не принимает новые дела (2.77): до какого дня и почему — или выключил приём совсем.
+          away: awayOf(e, today),
+          paused: !e.active,
         }));
         // Деньги за текущий месяц (по Москве): выплачено экспертам организации; ждёт выдачи — оплаченные дела в работе и
         // на проверке, а также выплаты, которые ещё проводятся.
@@ -259,8 +262,10 @@ export function orgOps() {
             in_work: loadOf.get(c.user_id)?.in_work ?? 0, overdue: loadOf.get(c.user_id)?.overdue ?? 0,
           })),
         })));
+        // Кого нет в списке назначения, потому что эксперт сам не принимает новые дела (2.77), — чтобы руководитель не искал.
+        const away = load.filter((l) => l.away || l.paused).map((l) => ({ full_name: l.full_name, until: l.away?.until ?? null, note: l.away?.note ?? null }));
         return {
-          pending,
+          pending: pending.map((p) => ({ ...p, away })),
           cases: cases.map(({ expert_id, ...c }) => c),
           load,
           money: { month: today.slice(0, 7), paid_kop: Number(month.paid), waiting_kop: waiting },

@@ -227,7 +227,7 @@ test('дела экспертов (2.16): просрочка, нагрузка, 
   assert.deepEqual(cases.map((c) => c.status), ['in_work', 'awaiting_executor', 'done', 'done'], 'активные — сверху, отменённых нет');
   assert.equal(cases[0].overdue, true);
   assert.equal(cases[0].service, 'Оценка недвижимости');
-  assert.deepEqual(load, [{ user_id: expert.user.id, full_name: 'Эксперт Тестов', in_work: 1, offered: 1, overdue: 1 }]);
+  assert.deepEqual(load, [{ user_id: expert.user.id, full_name: 'Эксперт Тестов', in_work: 1, offered: 1, overdue: 1, away: null, paused: false }]);
   assert.equal(money.paid_kop, 800000);
   assert.equal(money.waiting_kop, 800000 + 800000, 'не прошедшая выплата и оплаченное дело в работе');
   const members = (await head.req('GET', `/api/orgs/${org.id}/members`)).body.members;
