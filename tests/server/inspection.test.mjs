@@ -494,3 +494,57 @@ test('2.85: без напоминания — отозванная ссылка,
   await remindSilentInspections(S.sql);
   for (const o of [revoked, finished, done, other]) assert.deepEqual(await silentEvents(o.id), [], o.title);
 });
+
+// 2.86: «Можно продолжать» — что пришло по делу после того, как эксперт его последний раз открывал.
+const todayReady = async (c) => (await c.req('GET', '/api/today')).body.expert?.ready ?? [];
+const readyOf = async (c, o) => (await todayReady(c)).find((x) => x.id === o.id);
+
+test('2.86: «Можно продолжать» — документы по запросу, осмотр, сообщение; открыл дело — строка ушла; чужим не видно', async () => {
+  const o = await inWork('Можно продолжать');
+  assert.equal((await spec.req('GET', `/api/orders/${o.id}`)).status, 200);
+  assert.equal(await readyOf(spec, o), undefined, 'ничего нового');
+
+  // Заказчик прислал запрошенный документ и написал сообщение.
+  const asked = await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { custom: ['Выписка ЕГРН'] });
+  assert.equal(asked.status, 201, JSON.stringify(asked.body));
+  const rid = asked.body.requests.find((r) => r.title === 'Выписка ЕГРН').id;
+  const doc = (await owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from('скан'), {
+    raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('egrn.pdf') } })).body.document;
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/doc-requests/${rid}/attach`, { document_id: doc.id })).status, 200);
+  let r = await readyOf(spec, o);
+  assert.deepEqual(r.what, ['документы: получено 1'], JSON.stringify(r));
+  assert.equal(r.to, 'docs');
+  assert.ok(r.at && r.deadline);
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/messages`, { body: 'Ключи у консьержа' })).status, 201);
+  r = await readyOf(spec, o);
+  assert.deepEqual(r.what, ['документы: получено 1', 'сообщений: 1']);
+  assert.equal(r.to, 'chat');
+  // Своё сообщение эксперта — не «новое».
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/messages`, { body: 'Спасибо' })).status, 201);
+  assert.deepEqual((await readyOf(spec, o)).what, ['документы: получено 1', 'сообщений: 1']);
+  // Заказчик, второй эксперт и диспетчер этой строки не видят.
+  assert.equal((await owner.req('GET', '/api/today')).body.expert, null);
+  assert.equal(await readyOf(spec2, o), undefined);
+
+  // Открыл дело — строка ушла.
+  assert.equal((await spec.req('GET', `/api/orders/${o.id}`)).status, 200);
+  assert.equal(await readyOf(spec, o), undefined);
+  // Заказчик открыл дело — эксперту это ничего не меняет.
+  assert.equal((await owner.req('GET', `/api/orders/${o.id}`)).status, 200);
+
+  // Владелец снял фото по ссылке — «новые фото», нажал «Готово» — «осмотр закончен».
+  const l = await issue(o);
+  assert.equal((await shoot(l.token, 'facade')).status, 201);
+  r = await readyOf(spec, o);
+  assert.deepEqual(r.what, ['новые фото осмотра: 1']);
+  assert.equal(r.to, 'inspect');
+  assert.equal((await finish(l.token)).status, 200);
+  assert.deepEqual((await readyOf(spec, o)).what, ['осмотр закончен (фото: 1)']);
+  assert.equal((await spec.req('GET', `/api/orders/${o.id}`)).status, 200);
+  assert.equal(await readyOf(spec, o), undefined);
+
+  // Дело ушло на проверку — в «Можно продолжать» его нет, даже если пишет диспетчер.
+  await S.sql`update orders set status = 'review' where id = ${o.id}`;
+  await S.sql`insert into order_messages (order_id, author_id, side, body) values (${o.id}, ${dispatcher.user.id}, 'dispatcher', 'Проверяю')`;
+  assert.equal(await readyOf(spec, o), undefined);
+});

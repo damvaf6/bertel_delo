@@ -44,7 +44,7 @@ export function serviceOptions(select) {
     ...m.services.map((s) => el('option', { value: `${m.id}/${s.id}`, text: s.name })))));
 }
 
-// to — сразу к разделу дела (2.85: «Сегодня» → осмотр без фото).
+// to — сразу к разделу дела (2.85: «Сегодня» → осмотр без фото; 2.86: «можно продолжать» → переписка, документы, осмотр).
 export async function openOrder(id, { to } = {}) {
   try {
     current = await api('GET', `/api/orders/${id}`);
@@ -63,7 +63,8 @@ export async function openOrder(id, { to } = {}) {
   loadJournal(current.order, current.access);
   await Promise.all([loadDocs(true), loadTransfer(), loadMatch(current, () => openOrder(id)), loadDraft(current, () => openOrder(id)), loadAnalogs(current), loadInspection(current), loadOnsite(current), loadDocRequests(current, (file, msg) => uploadFile(file, 'other', msg)), loadReview(current), loadChat(current), loadMoney(current, () => openOrder(id))]);
   setNext({}); // разделы осмотра и черновика показаны — шаги пересчитываются
-  if (to === 'inspect' && !$('inspect-box').classList.contains('hidden')) $('inspect-box').scrollIntoView({ block: 'start' });
+  const box = { inspect: 'inspect-box', chat: 'chat-box', docs: 'docreq-box' }[to];
+  if (box && !$(box).classList.contains('hidden')) $(box).scrollIntoView({ block: 'start' });
 }
 
 function render() {

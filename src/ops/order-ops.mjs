@@ -219,6 +219,11 @@ export function orderOps() {
           ? await sql.one`select full_name from users where id = ${order.executor_user_id}` : null;
         // Заявка по письму (1.9): ответы уходят в переписку на адрес заказчика; адрес — только стороне заказчика.
         const thread = await sql.one`select email from mail_threads where order_id = ${order.id}`;
+        // «Можно продолжать» (2.86): исполнитель открыл своё дело — новое до этой минуты он увидел.
+        if (order.executor_user_id === actor.id) {
+          await sql`insert into order_seen (order_id, user_id) values (${order.id}, ${actor.id})
+                    on conflict (order_id, user_id) do update set seen_at = now()`;
+        }
         return {
           order: await orderView(sql, registry, order),
           mail: thread ? { email: level >= LEVEL.write ? thread.email : null } : null,
