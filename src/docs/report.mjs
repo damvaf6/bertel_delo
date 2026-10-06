@@ -73,8 +73,22 @@ export function fillTables(body, sections, registry, order) {
     const at = m.index + m[0].length;
     out = `${out.slice(0, at)}\n${lines.join('\n')}${out.slice(at)}`;
   }
+  // Экспертиза по определению суда (2.79): строка о предупреждении по ст. 307 УК РФ — в раздел сведений об эксперте,
+  // как в каждом судебном заключении; подписку эксперт подписывает сам. Уже есть в тексте — второй раз не вставляется.
+  const info = sections.find((x) => x.dossier === 'info');
+  if (order.basis_kind === 'court' && info && !COURT_WARNING_RE.test(out)) {
+    const m = [...out.matchAll(/^#{1,3}\s*(.+)$/gm)].find((h) => headKey(h[1]) === headKey(info.title));
+    if (m) {
+      const end = out.indexOf('\n#', m.index + m[0].length);
+      const at = end < 0 ? out.length : end;
+      out = `${out.slice(0, at).replace(/\s*$/, '')}\n${COURT_WARNING}${end < 0 ? '' : '\n'}${out.slice(at)}`;
+    }
+  }
   return out;
 }
+
+export const COURT_WARNING = 'Об уголовной ответственности за дачу заведомо ложного заключения по статье 307 Уголовного кодекса Российской Федерации эксперт предупреждён. Подписка эксперта: [заполнить: подпись или подписка отдельным листом]';
+const COURT_WARNING_RE = /307\s*(?:УК|Уголовного)/u;
 
 // Таблица аналогов (2.32) в тексте черновика — строкой-меткой: сама таблица и скриншоты собираются при сборке Word из
 // подтверждённых аналогов дела, поэтому всегда свежие (аналог добавили после черновика — он всё равно попадёт в файл).
