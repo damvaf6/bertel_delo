@@ -3,7 +3,7 @@
 // и с именами; стороны дела — только то, что им и так видно (без черновика, проверки, аналогов, внутренней переписки
 // организации, выплат), а вместо имён — кто это по делу. Правила — journalView и exportsCase в src/access/policy.mjs.
 // Архив (ZIP) — для суда или заказчика: «Карточка дела.docx» (данные, ход, журнал, переписка, перечень файлов с
-// контрольными суммами SHA-256), файлы дела, подписи УКЭП, закрывающие документы. Большой архив отдаётся временной
+// контрольными суммами SHA-256), файлы дела, подписи УКЭП с протоколом их проверки (2.69), закрывающие документы. Большой архив отдаётся временной
 // ссылкой из хранилища (src/ops/util.mjs, sendFile).
 import crypto from 'node:crypto';
 import { HttpError } from '../http/core.mjs';
@@ -13,6 +13,7 @@ import { orderRef } from '../notify/registry.mjs';
 import { buildSimpleDoc, zip, DOCX_MIME } from '../docs/docx.mjs';
 import { closingDoc } from '../money/papers.mjs';
 import { signatureFilename } from '../providers/sign.mjs';
+import { sha256 } from './sign-ops.mjs';
 import { docView } from './money-ops.mjs';
 import { audit, sendFile } from './util.mjs';
 
@@ -144,6 +145,51 @@ const safeName = (s) => String(s).replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').sli
 // Сколько файлов кладём в архив: облаку хватает памяти на ~120 МБ; остальное — перечнем в карточке.
 export const EXPORT_MAX_BYTES = 120 * 1024 * 1024;
 
+// Протокол проверки подписей (2.69): каждая подпись в архиве заново проверяется у поставщика подписи по файлу из
+// хранилища в момент выгрузки — кто, чем, когда и как подписал, верна ли подпись сейчас. Записи о проверке в деле не
+// меняет (это делает только «Проверить подпись» в кабинете).
+async function checkSignature(providers, buf, sig) {
+  try {
+    const r = await providers.sign.verify({ digest: sha256(buf), signature: sig });
+    return r.valid ? { valid: true } : { valid: false, reason: r.reason ?? 'Подпись неверна' };
+  } catch {
+    return { valid: false, reason: 'Сервис подписи не ответил — проверьте подпись в кабинете позже' };
+  }
+}
+
+const SIGN_METHOD_RU = (s) => (s.method === 'cabinet' ? 'в кабинете «БЕРТЕЛ Дело»'
+  : s.certificate?.app ? `готовым файлом из приложения «${s.certificate.app}»` : 'готовым файлом из программы удостоверяющего центра');
+
+function signatureProtocol({ ref, actor, checks }) {
+  const ok = checks.filter((c) => c.r.valid).length;
+  const test = checks.some((c) => c.s.test);
+  return buildSimpleDoc([
+    { type: 'title', text: `Протокол проверки подписей · дело № ${ref}` },
+    { type: 'para', text: `Проверено ${dt(new Date())} (время московское) при выгрузке дела архивом. Выгрузил(а): ${actor.full_name || actor.phone}.` },
+    { type: 'para', text: 'Каждая подпись — открепленный файл рядом с подписанным файлом в папке «Документы». Подпись проверена по файлу в том виде, в каком он лежит в архиве: если файл изменить хотя бы на один знак, подпись перестанет сходиться.' },
+    { type: 'bold', text: `Подписей: ${checks.length}; верны: ${ok}${ok < checks.length ? `; не прошли проверку: ${checks.length - ok}` : ''}.` },
+    ...(test ? [{ type: 'note', text: 'Тестовые подписи площадки — юридической силы не имеют.' }] : []),
+    ...checks.flatMap((c) => {
+      const cert = c.s.certificate ?? {};
+      return [
+        { type: 'bold', text: `${c.file.replace(/^Документы\//, '')} — подпись ${c.s.role === 'org' ? 'организации' : 'эксперта'}` },
+        { type: 'table', rows: [
+          ['Результат проверки', c.r.valid ? 'Подпись верна' : `Не прошла: ${c.r.reason}`],
+          ['Подписал(а)', cert.org ? `${cert.org} — ${String(cert.title ?? 'руководитель').toLowerCase()} ${cert.subject}` : String(cert.subject ?? '—')],
+          ['Когда подписано', c.s.signed_at ? dt(c.s.signed_at) : '—'],
+          ['Как подписано', SIGN_METHOD_RU(c.s)],
+          ['Сертификат', `№ ${cert.serial ?? '—'}, действует до ${day(cert.valid_to)}`],
+          ['Выдан', String(cert.issuer ?? '—')],
+          ['Файл подписи', c.sigFile.replace(/^Документы\//, '')],
+          ['SHA-256 подписанного файла', c.digest],
+          ['Последняя проверка в кабинете', c.s.checked_at ? `${dt(c.s.checked_at)} — ${c.s.checked_ok ? 'верна' : 'не прошла'}` : '—'],
+          ...(c.s.test ? [['Отметка', 'тестовая подпись площадки']] : []),
+        ] },
+      ];
+    }),
+  ]);
+}
+
 async function buildArchive({ sql, actor, order, registry, providers, cfg }) {
   const ref = orderRef(order.id).replace('№ ', '');
   const def = registry.service(order.module, order.service);
@@ -160,6 +206,7 @@ async function buildArchive({ sql, actor, order, registry, providers, cfg }) {
   };
   const files = [];
   const listed = [];
+  const checks = [];
   let total = 0;
   for (const d of docs) {
     const size = Number(d.size_bytes);
@@ -175,7 +222,8 @@ async function buildArchive({ sql, actor, order, registry, providers, cfg }) {
       if (!sb) continue;
       const sn = place('Документы', signatureFilename(d.filename, s.role));
       files.push([sn, sb]);
-      listed.push([sn, s.role === 'org' ? 'подпись организации' : 'подпись эксперта', sizeRu(sb.length), crypto.createHash('sha256').update(sb).digest('hex')]);
+      listed.push([sn, s.role === 'org' ? 'подпись организации' : 'подпись эксперта', sizeRu(sb.length), sha256(sb)]);
+      checks.push({ file: name, sigFile: sn, digest: sha256(buf), s, r: await checkSignature(providers, buf, sb) });
     }
   }
   // Закрывающие документы: заказчику — акт и документ о возврате; служебным — и отчёт агента.
@@ -218,8 +266,10 @@ async function buildArchive({ sql, actor, order, registry, providers, cfg }) {
     { type: 'bold', text: 'Файлы в архиве' },
     { type: 'para', text: 'Контрольная сумма SHA-256 подтверждает, что файл не менялся после выгрузки: её можно посчитать заново любой программой и сравнить.' },
     { type: 'table', rows: [['Файл', 'Что это', 'Размер', 'SHA-256 или примечание'], ...listed] },
+    ...(checks.length ? [{ type: 'para', text: `Подписи проверены при выгрузке — «Протокол проверки подписей № ${ref}.docx» в этом архиве.` }] : []),
   ]);
-  const archive = zip([[`Карточка дела № ${ref}.docx`, card], ...files], { store: true });
+  const protocol = checks.length ? [[`Протокол проверки подписей № ${ref}.docx`, signatureProtocol({ ref, actor, checks })]] : [];
+  const archive = zip([[`Карточка дела № ${ref}.docx`, card], ...protocol, ...files], { store: true });
   return { buf: archive, filename: `Дело № ${ref} (${new Date().toISOString().slice(0, 10)}).zip`, files: files.length };
 }
 

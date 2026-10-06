@@ -3,11 +3,12 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, addMember } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import { createRegistry } from '../../src/modules/index.mjs';
 import expertise from '../../src/modules/expertise.mjs';
-import { fakeSign, testExternalSignature } from '../../src/providers/sign.mjs';
+import { fakeSign, testExternalSignature, testGoskeySignature } from '../../src/providers/sign.mjs';
 
 let S, owner, dispatcher, spec;
 const FIELDS = { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 15', area: '41' };
@@ -307,4 +308,107 @@ test('возврат эксперту (2.27): руководитель возв�
   assert.equal((await head.req('POST', `/api/org-documents/${d2.id}/return`, { comment: 'поздно' })).status, 409);
   // Диспетчер на проверке возвратов не видит.
   assert.ok(!JSON.stringify((await docsOf(dispatcher, o))).includes('титуле'));
+});
+
+// Распаковка ZIP (архив дела, документ Word) и текст документа Word.
+function unzip(buf) {
+  const out = new Map();
+  for (let p = 0; buf.readUInt32LE(p) === 0x04034b50;) {
+    const method = buf.readUInt16LE(p + 8);
+    const csize = buf.readUInt32LE(p + 18);
+    const nlen = buf.readUInt16LE(p + 26);
+    const xlen = buf.readUInt16LE(p + 28);
+    const body = buf.subarray(p + 30 + nlen + xlen, p + 30 + nlen + xlen + csize);
+    out.set(buf.subarray(p + 30, p + 30 + nlen).toString('utf8'), method === 8 ? zlib.inflateRawSync(body) : Buffer.from(body));
+    p += 30 + nlen + xlen + csize;
+  }
+  return out;
+}
+const docText = (docx) => unzip(docx).get('word/document.xml').toString('utf8').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+
+test('все способы подписи одним прогоном (2.69): эксперт и руководитель — в кабинете, готовым файлом, «Госключ»; заказчик проверяет каждую; протокол в архиве', async () => {
+  const org = await makeOrg(S.sql, 'ООО «Все способы»');
+  const head = await login(S, '+79990001510');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  const spec = await login(S, '+79990001511');
+  await makeSpecialist(S.sql, spec.user.id);
+  await addMember(S.sql, org.id, spec.user.id, 'member');
+  assert.equal((await head.req('PATCH', '/api/me', { full_name: 'Руководитель Всех Способов' })).status, 200);
+  assert.equal((await spec.req('PATCH', '/api/me', { full_name: 'Эксперт Всех Способов' })).status, 200);
+  assert.equal((await spec.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  const o = await inWork('Квартира: все способы подписи', spec);
+  const raw = { raw: true, headers: { 'content-type': 'application/octet-stream', 'x-confirm': '1' } };
+  const bodies = { 'Отчёт.pdf': 'отчёт — подпись в кабинете', 'Приложение 1.pdf': 'приложение — готовая подпись УЦ', 'Приложение 2.pdf': 'приложение — «Госключ»' };
+  const d = {};
+  for (const [name, body] of Object.entries(bodies)) d[name] = (await result(o, name, body, spec)).body.document;
+  const digest = (name) => crypto.createHash('sha256').update(bodies[name]).digest('hex');
+
+  // Эксперт: три способа.
+  assert.equal((await sign(d['Отчёт.pdf'], undefined, spec)).status, 201);
+  let r = await spec.req('POST', `/api/documents/${d['Приложение 1.pdf'].id}/signature/upload`, testExternalSignature({ digest: digest('Приложение 1.pdf'), subject: 'Эксперт Всех Способов' }), raw);
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.equal(r.body.signature.app, null);
+  // «Госключ» для чужого файла — отказ; для своего — принят, видно, что из «Госключа».
+  r = await spec.req('POST', `/api/documents/${d['Приложение 2.pdf'].id}/signature/upload`, testGoskeySignature({ digest: digest('Отчёт.pdf'), subject: 'Эксперт Всех Способов' }), raw);
+  assert.equal(r.body.error, 'bad_signature');
+  assert.match(r.body.message, /Файл изменён после подписи/);
+  r = await spec.req('POST', `/api/documents/${d['Приложение 2.pdf'].id}/signature/upload`, testGoskeySignature({ digest: digest('Приложение 2.pdf'), subject: 'Эксперт Всех Способов' }), raw);
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.deepEqual([r.body.signature.method, r.body.signature.app, r.body.signature.test], ['upload', 'Госключ', true]);
+  assert.match(r.body.signature.issuer, /Госключ/);
+
+  // Руководитель: в кабинете, готовым файлом с сертификатом организации; «Госключ» (сертификат физлица) — понятный отказ.
+  assert.equal((await head.req('POST', `/api/org-documents/${d['Отчёт.pdf'].id}/sign`, { confirm: true })).status, 201);
+  r = await head.req('POST', `/api/org-documents/${d['Приложение 1.pdf'].id}/signature/upload`,
+    testExternalSignature({ digest: digest('Приложение 1.pdf'), subject: 'Руководитель Всех Способов', org: org.name }), raw);
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  r = await head.req('POST', `/api/org-documents/${d['Приложение 2.pdf'].id}/signature/upload`,
+    testGoskeySignature({ digest: digest('Приложение 2.pdf'), subject: 'Руководитель Всех Способов' }), raw);
+  assert.equal(r.body.error, 'not_org_certificate');
+  assert.match(r.body.message, /из приложения «Госключ» — это подпись физического лица — для подписи организации нужен сертификат организации/);
+  assert.equal((await head.req('POST', `/api/org-documents/${d['Приложение 2.pdf'].id}/sign`, { confirm: true })).status, 201);
+
+  // Сдача, проверка, выдача.
+  assert.equal((await step(spec, o, 'review')).status, 200);
+  const rv = (await dispatcher.req('GET', `/api/orders/${o.id}/review`)).body;
+  for (const c of rv.checks) await dispatcher.req('PUT', `/api/orders/${o.id}/review/${c.id}`, { verdict: 'ok', round: rv.round });
+  assert.equal((await step(dispatcher, o, 'done')).status, 200);
+
+  // Заказчик видит, как подписан каждый файл, и проверяет каждый.
+  const got = new Map((await docsOf(owner, o)).documents.filter((x) => x.kind === 'result').map((x) => [x.filename, x.signatures]));
+  assert.deepEqual([...got.keys()].sort(), Object.keys(bodies).sort());
+  assert.deepEqual(Object.keys(bodies).map((n) => [got.get(n).expert.method, got.get(n).expert.app, got.get(n).org.method]),
+    [['cabinet', null, 'cabinet'], ['upload', null, 'upload'], ['upload', 'Госключ', 'cabinet']]);
+  for (const name of Object.keys(bodies)) {
+    r = await verify(owner, d[name]);
+    assert.equal(r.body.valid, true, name);
+    assert.equal(r.body.signatures.expert.signer, 'Эксперт Всех Способов');
+    assert.equal(r.body.signatures.org.org, org.name);
+  }
+
+  // Архив дела: подписи и протокол их проверки — все шесть верны.
+  let files = unzip((await owner.req('GET', `/api/orders/${o.id}/export`, undefined, { binary: true })).body);
+  const pname = [...files.keys()].find((n) => /^Протокол проверки подписей № [0-9A-F]{8}\.docx$/.test(n));
+  assert.ok(pname, [...files.keys()].join(', '));
+  for (const n of Object.keys(bodies)) for (const s of ['.sig', '.org.sig']) assert.ok(files.has(`Документы/${n}${s}`), n + s);
+  let t = docText(files.get(pname));
+  assert.match(t, /Подписей: 6; верны: 6\./);
+  assert.equal(t.match(/Подпись верна/g).length, 6);
+  assert.match(t, /Приложение 2\.pdf — подпись эксперта .*готовым файлом из приложения «Госключ»/);
+  assert.match(t, /Приложение 1\.pdf — подпись организации .*ООО «Все способы» — руководитель Руководитель Всех Способов .*готовым файлом из программы удостоверяющего центра/);
+  assert.match(t, /Отчёт\.pdf — подпись эксперта .*в кабинете «БЕРТЕЛ Дело»/);
+  assert.match(t, new RegExp(digest('Приложение 2.pdf')));
+  assert.match(t, /Тестовые подписи площадки — юридической силы не имеют/);
+  assert.match(docText([...files].find(([n]) => n.startsWith('Карточка дела'))[1]), /Протокол проверки подписей № [0-9A-F]{8}\.docx/);
+
+  // Файл подменили в хранилище — протокол честно пишет, что обе его подписи не прошли.
+  const [doc] = await S.sql`select storage_key from documents where id = ${d['Приложение 1.pdf'].id}`;
+  await S.providers.storage.put(doc.storage_key, Buffer.from('подменённое приложение'), 'application/pdf');
+  files = unzip((await owner.req('GET', `/api/orders/${o.id}/export`, undefined, { binary: true })).body);
+  t = docText(files.get([...files.keys()].find((n) => n.startsWith('Протокол'))));
+  assert.match(t, /Подписей: 6; верны: 4; не прошли проверку: 2\./);
+  assert.equal(t.match(/Не прошла: Файл изменён после подписи/g).length, 2);
+
+  // Выгружает дело заказчик или платформа — исполнитель нет.
+  assert.equal((await spec.req('GET', `/api/orders/${o.id}/export`)).status, 403);
 });

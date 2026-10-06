@@ -580,7 +580,7 @@ test('общий прогон: сквозной путь экспертизы �
   // Заказчик получил подписанное заключение: подпись проверяется по файлу из хранилища.
   const concl = page.locator('#docs li').filter({ hasText: 'Отчёт об оценке.docx' });
   await concl.getByRole('button', { name: 'Проверить подпись' }).click();
-  await expect(page.locator('#doc-msg')).toHaveText(`Подпись верна: ${specName}`);
+  await expect(page.locator('#doc-msg')).toHaveText(`«Отчёт об оценке.docx»: подпись верна — ${specName}`);
   const [sigFile] = await Promise.all([page.waitForEvent('download'), concl.getByRole('button', { name: 'Файл подписи' }).click()]);
   expect(sigFile.suggestedFilename()).toBe('Отчёт об оценке.docx.sig');
   // Заключение — настоящий файл Word из хранилища; подсказок ИИ заказчик не видит.
@@ -892,7 +892,7 @@ test('общий прогон: две подписи — эксперт от о�
   const got = page.locator('#docs li').filter({ hasText: 'Отчёт компании.pdf' });
   await expect(got.locator('.sig-state')).toHaveCount(2);
   await got.getByRole('button', { name: 'Проверить подпись' }).click();
-  await expect(page.locator('#doc-msg')).toHaveText(`Подпись верна: ${specName} и ${org}`);
+  await expect(page.locator('#doc-msg')).toHaveText(`«Отчёт компании.pdf»: подписи верны — ${specName} и ${org}`);
   const [orgSig] = await Promise.all([page.waitForEvent('download'), got.getByRole('button', { name: 'Подпись организации' }).click()]);
   expect(orgSig.suggestedFilename()).toBe('Отчёт компании.pdf.org.sig');
   await shot(page, '33-zakazchik-dve-podpisi');

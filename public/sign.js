@@ -18,7 +18,7 @@ export function signatureLines(s) {
     el('div', { class: `sig-state ${s.checked_ok ? 'ok' : 'bad'}`, text: s.checked_ok
       ? `Подпись ${SIGN_WHO[s.role]}: ${who} · ${dateTimeRu(s.signed_at)}`
       : `Подпись ${SIGN_WHO[s.role]} не сходится с файлом (проверено ${dateTimeRu(s.checked_at)})` }),
-    el('div', { class: 'muted', text: `Сертификат № ${s.serial} · действует до ${dayRu(s.valid_to)} · подпись ${METHOD_RU[s.method] ?? ''}` }),
+    el('div', { class: 'muted', 'data-sig': 'method', text: `Сертификат № ${s.serial} · действует до ${dayRu(s.valid_to)} · подпись ${METHOD_RU[s.method] ?? ''}${s.method === 'upload' && s.app ? ` из приложения «${s.app}»` : ''}` }),
     el('div', { class: 'muted', text: `Выдан: ${s.issuer}` }),
     ...(s.test ? [el('div', { class: 'sig-test', text: 'Тестовая подпись площадки — юридической силы не имеет' })] : []),
   ];

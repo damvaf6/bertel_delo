@@ -635,7 +635,7 @@ test('ход заявки: подбор диспетчером, принятие
   const signed = page.locator('#docs li').filter({ hasText: 'отчёт-с-фото.pdf' });
   await expect(signed.locator('.sig-state')).toContainText('Подпись эксперта: Тестовый оценщик');
   await signed.getByRole('button', { name: 'Проверить подпись' }).click();
-  await expect(page.locator('#doc-msg')).toHaveText('Подпись верна: Тестовый оценщик');
+  await expect(page.locator('#doc-msg')).toHaveText('«отчёт-с-фото.pdf»: подпись верна — Тестовый оценщик');
   await expect(signed.getByRole('button', { name: 'Подписать' })).toHaveCount(0);
   const [sigFile] = await Promise.all([page.waitForEvent('download'), signed.getByRole('button', { name: 'Файл подписи' }).click()]);
   expect(sigFile.suggestedFilename()).toBe('отчёт-с-фото.pdf.sig');
@@ -1636,7 +1636,7 @@ test('две подписи (2.5а): эксперт от организации 
   const got = page.locator('#docs li').filter({ hasText: 'отчёт-компании.pdf' });
   await expect(got.locator('.sig-state')).toHaveCount(2);
   await got.getByRole('button', { name: 'Проверить подпись' }).click();
-  await expect(page.locator('#doc-msg')).toHaveText('Подпись верна: Тестовый эксперт компании и ООО «Тестовая оценочная компания»');
+  await expect(page.locator('#doc-msg')).toHaveText('«отчёт-компании.pdf»: подписи верны — Тестовый эксперт компании и ООО «Тестовая оценочная компания»');
   const [orgSig] = await Promise.all([page.waitForEvent('download'), got.getByRole('button', { name: 'Подпись организации' }).click()]);
   expect(orgSig.suggestedFilename()).toBe('отчёт-компании.pdf.org.sig');
   await shot(page, '98-zakazchik-dve-podpisi');

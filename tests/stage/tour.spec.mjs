@@ -340,7 +340,7 @@ test('экскурсия по кабинетам: эксперт, руковод
   await expect(page.locator('#order-status')).toHaveText('Готово');
   const got = page.locator('#docs li').filter({ hasText: 'Отчёт об оценке (тест).pdf' });
   await got.getByRole('button', { name: 'Проверить подпись' }).click();
-  await expect(page.locator('#doc-msg')).toContainText('Подпись верна');
+  await expect(page.locator('#doc-msg')).toContainText('верн');
   await snap(page, 'Заказчик', 'Результат и подписи', 'Заказчик скачивает отчёт и заключение, проверяет обе подписи (эксперта и организации) одной кнопкой.', card(page, '#order-view', 'Документы'));
   await page.locator('#closing li').getByRole('button', { name: 'Открыть' }).first().click();
   await expect(page.locator('#closing-doc')).toContainText('Акт');
