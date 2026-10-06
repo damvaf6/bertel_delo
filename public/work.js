@@ -123,14 +123,18 @@ export async function loadChat(current) {
     el('div', { class: 'body', text: m.body }))));
   $('messages-empty').classList.toggle('hidden', messages.length > 0);
   $('message-form').classList.toggle('hidden', !canWrite);
-  // Готовые фразы (2.84): нажатие подставляет текст в поле (к уже написанному — с новой строки); отправляет человек.
+  // Готовые фразы (2.84): нажатие подставляет текст в поле (к уже написанному — с новой строки, без второго
+  // «Здравствуйте!»); отправляет человек. Текст берётся свежим: документы могли запросить или прислать после открытия дела.
   $('message-phrases').classList.toggle('hidden', phrases.length === 0);
   $('message-phrase-list').replaceChildren(...phrases.map((p) => el('button', {
     class: 'secondary', type: 'button', 'data-phrase': p.id,
-    onclick: () => {
+    onclick: async () => {
+      let t = p.text;
+      try { t = (await api('GET', `/api/orders/${orderRef.id}/messages`)).phrases?.find((x) => x.id === p.id)?.text ?? t; } catch { /* остаётся прежний текст */ }
       const box = $('message-text');
       const had = box.value.trim();
-      box.value = had ? `${had}\n\n${p.text}` : p.text;
+      box.value = had ? `${had}\n\n${t.replace(/^Здравствуйте! /, '')}` : t;
+      box.rows = 8; // весь текст на виду — его поправляют перед отправкой
       box.focus();
       say($('chat-msg'), 'Текст в поле сообщения — поправьте его и отправьте', 'ok');
     },
