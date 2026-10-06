@@ -1496,6 +1496,23 @@ test('передача дела в работе (2.62): только руков�
   assert.equal((await transfer(U.headB, orgB.id, expertB.user.id)).body.error, 'status_changed');
 });
 
+test('запрос документов (2.64): видят те, кто видит заявку; просит только исполнитель, прикладывает заказчик', async () => {
+  for (const id of ['doc_requests.list', 'doc_requests.create', 'doc_requests.attach', 'doc_requests.cancel']) cover(id);
+  const base = `/api/orders/${ownOrder.id}/doc-requests`;
+  for (const [who, ok] of [['owner', true], ['dispatcher', true], ['admin', true], ['stranger', false], ['headA', false], ['headB', false], ['spec', false]]) {
+    expectRead(await U[who].req('GET', base), ok, who);
+  }
+  for (const who of ['stranger', 'headA', 'headB', 'spec']) {
+    assert.equal((await U[who].req('POST', base, { items: ['egrn'] })).status, 404, `${who}: запрос`);
+    assert.equal((await U[who].req('POST', `${base}/1/attach`, { document_id: ownDoc.id })).status, 404, `${who}: приложить`);
+    assert.equal((await U[who].req('DELETE', `${base}/1`)).status, 404, `${who}: снять`);
+  }
+  // Заказчик и диспетчер — не исполнители: запросить и снять нельзя; приложить диспетчер не может (только чтение).
+  for (const who of ['owner', 'dispatcher']) assert.equal((await U[who].req('POST', base, { items: ['egrn'] })).status, 403, who);
+  assert.equal((await U.dispatcher.req('POST', `${base}/1/attach`, { document_id: ownDoc.id })).status, 403);
+  assert.equal((await U.owner.req('DELETE', `${base}/1`)).status, 403);
+});
+
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {
   const PUBLIC = ['health', 'auth.code', 'auth.verify', 'files.memory', 'files.memory.upload', 'test.calls', 'test.script', 'test.reset', 'test.mail.inbound', 'stage.login', 'payments.notify',
     'inspect.view', 'inspect.photo', 'inspect.finish'];

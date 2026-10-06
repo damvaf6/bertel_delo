@@ -20,7 +20,8 @@ import { audit, sendFile } from './util.mjs';
 const PARTY_ACTIONS = new Set(['order.create', 'order.update', 'order.status', 'order.price', 'payment.create', 'payment.succeeded',
   'payment.canceled', 'order.offer', 'message.post', 'document.upload', 'document.direct_upload', 'document.delete', 'document.sign',
   'document.sign_org', 'document.verify', 'refund.create', 'inspection.issue', 'inspection.sms', 'inspection.retake', 'inspect.finish',
-  'onsite.assign', 'onsite.finish', 'order.transfer', 'closing.download', 'invoice.download', 'case.export']);
+  'onsite.assign', 'onsite.finish', 'order.transfer', 'closing.download', 'invoice.download', 'case.export',
+  'doc_request.create', 'doc_request.attach', 'doc_request.cancel']);
 
 const SIDE_RU = { customer: 'заказчик', dispatcher: 'диспетчер', executor: 'исполнитель' };
 const rub = (kop) => `${(Number(kop) / 100).toLocaleString('ru-RU', { maximumFractionDigits: 2 })} ₽`;
@@ -81,6 +82,9 @@ function what(a, doc) {
     case 'analogs.file': return 'Скриншот аналога';
     case 'analogs.ai': return 'ИИ предложил признаки аналога';
     case 'dossier.attach': return 'Приложены копии из досье эксперта';
+    case 'doc_request.create': return `Исполнитель запросил документы: ${(d.titles ?? []).join('; ')}`;
+    case 'doc_request.attach': return `Заказчик приложил запрошенный документ: ${d.title ?? ''}`;
+    case 'doc_request.cancel': return `Исполнитель снял просьбу о документе: ${d.title ?? ''}`;
     case 'case.export': return 'Дело выгружено архивом';
     default: return a.action;
   }

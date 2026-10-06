@@ -15,6 +15,8 @@
 //       раздела в черновике нет, а разделы с номером в начале названия («7. …») нумеруются заново подряд
 //     approaches?: { services: [id услуги…] }  — исполнитель отмечает, какие подходы к оценке применяет (2.33)
 //     inspection?: [{ id, title, hint?, services?: [id услуги…], optional? }…],  — шаги дистанционного осмотра (2.3)
+//     request_docs?: [{ id, title, hint?, services?: [id услуги…] }…],  — документы, которые исполнитель может одной кнопкой
+//       запросить у заказчика (2.64): выписка ЕГРН, ПТС, чек…; заказчик загружает файл к каждому
 //     express?: { services: [id услуги…], show: [id поля заявки…], fields: [поле + services?…] } }  — экспресс-услуга (2.4):
 //       для каких услуг, какие поля заявки видит помощник на объекте и какие данные он заполняет (нужны шаги осмотра)
 //     signature?: { services?: [id услуги…] }  — результат подписывается УКЭП исполнителя до сдачи (2.5); без services — все услуги
@@ -96,7 +98,7 @@ function validateField(f, where) {
 }
 
 export function validateModule(m) {
-  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express', 'signature', 'analogs', 'approaches'], 'модуль');
+  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express', 'signature', 'analogs', 'approaches', 'request_docs'], 'модуль');
   if (!ID_RE.test(m.id ?? '')) fail('модуль', `неверный id «${m.id}»`);
   const at = `модуль ${m.id}`;
   if (!nonEmpty(m.name)) fail(at, 'нет названия');
@@ -158,6 +160,19 @@ export function validateModule(m) {
       if (st.hint !== undefined && !nonEmpty(st.hint)) fail(where, 'пустая подсказка');
       if (st.optional !== undefined && typeof st.optional !== 'boolean') fail(where, 'optional — да/нет');
       if (st.services !== undefined && (!Array.isArray(st.services) || st.services.length === 0 || st.services.some((id) => !serviceIds.includes(id)))) {
+        fail(where, 'services — непустой список услуг этого модуля');
+      }
+    }
+  }
+  // Запрос документов у заказчика (2.64) — необязательно: без списка исполнитель просит документы своими словами.
+  if (m.request_docs !== undefined) {
+    checkIds(m.request_docs, `${at}, запрашиваемые документы`);
+    for (const d of m.request_docs) {
+      const where = `${at}, документ ${d.id}`;
+      onlyKeys(d, ['id', 'title', 'hint', 'services'], where);
+      if (!nonEmpty(d.title) || d.title.length > 120) fail(where, 'нет названия или оно длиннее 120 знаков');
+      if (d.hint !== undefined && !nonEmpty(d.hint)) fail(where, 'пустая подсказка');
+      if (d.services !== undefined && (!Array.isArray(d.services) || d.services.length === 0 || d.services.some((id) => !serviceIds.includes(id)))) {
         fail(where, 'services — непустой список услуг этого модуля');
       }
     }
@@ -296,6 +311,13 @@ export function createRegistry(modules = DEFAULT_MODULES) {
       if (!m?.inspection || !m.services.some((x) => x.id === serviceId)) return [];
       return m.inspection.filter((st) => !st.services || st.services.includes(serviceId))
         .map((st) => ({ id: st.id, title: st.title, hint: st.hint ?? null, optional: !!st.optional }));
+    },
+    // Документы, которые исполнитель может запросить у заказчика по этой услуге (2.64).
+    requestDocs(moduleId, serviceId) {
+      const m = modulesList.find((x) => x.id === moduleId);
+      if (!m?.request_docs || !m.services.some((x) => x.id === serviceId)) return [];
+      return m.request_docs.filter((d) => !d.services || d.services.includes(serviceId))
+        .map((d) => ({ id: d.id, title: d.title, hint: d.hint ?? null }));
     },
     // Экспресс-услуга для услуги (2.4): поля заявки, которые видит помощник, и данные, которые он заполняет; null — экспресса нет.
     express(moduleId, serviceId) {

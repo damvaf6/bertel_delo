@@ -195,6 +195,8 @@ export function coreOps(cfg) {
         if (doc.kind === 'result' && order.status !== 'in_work') throw new HttpError(409, 'result_locked', 'Сданный результат удалить нельзя');
         await sql.tx(async (tx) => {
           await tx`update documents set deleted_at = now() where id = ${doc.id}`;
+          // Файл к запрошенному исполнителем документу (2.64) удалён — просьба снова ждёт заказчика.
+          await tx`update doc_requests set document_id = null, fulfilled_at = null where document_id = ${doc.id}`;
           await audit(tx, actor, 'document.delete', 'document', doc.id);
         });
         await providers.storage.delete(doc.storage_key);

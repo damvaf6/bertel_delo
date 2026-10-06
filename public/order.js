@@ -14,6 +14,7 @@ import { signatureLines, uploadSignatureButton, SIGN_CONFIRM, UPLOAD_HINT } from
 import { setNext } from '/next.js';
 import { orgChat } from '/orgchat.js';
 import { loadJournal } from '/journal.js';
+import { loadDocRequests } from '/docreq.js';
 
 const $ = (id) => document.getElementById(id);
 // До 3 МБ — обычной загрузкой через ядро; больше — прямо в хранилище (облако: запрос не больше 3,5 МБ, 2.49).
@@ -59,7 +60,7 @@ export async function openOrder(id) {
   setNext({ reset: true, current, step: doStep, signAll });
   loadOrgChat();
   loadJournal(current.order, current.access);
-  await Promise.all([loadDocs(true), loadTransfer(), loadMatch(current, () => openOrder(id)), loadDraft(current, () => openOrder(id)), loadAnalogs(current), loadInspection(current), loadOnsite(current), loadReview(current), loadChat(current), loadMoney(current, () => openOrder(id))]);
+  await Promise.all([loadDocs(true), loadTransfer(), loadMatch(current, () => openOrder(id)), loadDraft(current, () => openOrder(id)), loadAnalogs(current), loadInspection(current), loadOnsite(current), loadDocRequests(current, (file, msg) => uploadFile(file, 'other', msg)), loadReview(current), loadChat(current), loadMoney(current, () => openOrder(id))]);
   setNext({}); // разделы осмотра и черновика показаны — шаги пересчитываются
 }
 
@@ -514,24 +515,26 @@ async function uploadFile(file, kind, msg) {
   if (file.size > MAX_DIRECT) return say(msg, 'Файл больше 100 МБ');
   say(msg, 'Загружаем…', 'ok');
   const base = `/api/orders/${current.order.id}`;
+  let doc = null;
   try {
     if (file.size > MAX_FILE) {
       const type = file.type || 'application/octet-stream';
       const meta = { filename: file.name, mime: type, size: file.size, kind };
       const got = await api('POST', `${base}/${kind === 'result' ? 'results' : 'documents'}/upload-url`, meta);
       await putWithProgress(got.upload_url, file, got.content_type, (pct) => say(msg, `Загружаем… ${pct}%`, 'ok'));
-      await api('POST', `${base}/uploads/complete`, { pass: got.pass });
+      doc = (await api('POST', `${base}/uploads/complete`, { pass: got.pass })).document;
     } else {
       // Результат работы — отдельной операцией исполнителя; остальные документы — заказчика.
-      await api('POST', `${base}/${kind === 'result' ? 'results' : 'documents'}`, file, {
+      doc = (await api('POST', `${base}/${kind === 'result' ? 'results' : 'documents'}`, file, {
         'content-type': file.type || 'application/octet-stream',
         'x-file-name': encodeURIComponent(file.name),
         'x-doc-kind': kind,
-      });
+      })).document;
     }
     say(msg, 'Файл добавлен', 'ok');
     await loadDocs();
-  } catch (err) { say(msg, err.message); }
+    return doc;
+  } catch (err) { say(msg, err.message); return null; }
 }
 
 $('file').addEventListener('change', (e) => {
