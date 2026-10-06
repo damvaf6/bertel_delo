@@ -2,14 +2,16 @@
 // (устав, раздел 1а). Ядро не знает ничего о конкретной профессии — только этот формат.
 //
 // Формат модуля:
-//   { id, name, basis: ['contract' | 'court', …], fields: [поле…], services: [{ id, name, fields: [поле…], paper? }…],
-//       paper — как называется итоговый документ на титуле Word (2.29): «Отчёт об оценке», «Заключение эксперта»…
+//   { id, name, basis: ['contract' | 'court', …], fields: [поле…], services: [{ id, name, fields: [поле…], paper?, labels? }…],
+//       paper — как называется итоговый документ на титуле Word (2.29): «Отчёт об оценке», «Заключение эксперта»…;
+//       labels — своя подпись общего поля модуля у этой услуги (2.79): { purpose: 'Для чего нужна экспертиза' }
 //     checks: [{ id, title, services?: [id услуги…], ask?, auto?: [имя правила…] }…],
 //       ask — что именно проверить (подсказка модели ИИ, человеку не показывается); auto — автоматические правила по
 //       всему тексту отчёта (src/ai/report-checks.mjs, AUTO_CHECKS): их находки показываются под этой проверкой
 //     draft?: [{ id, title, services?: [id услуги…], ask?, dossier?, table? }…],  — разделы черновика заключения от ИИ (задача 2.2);
 //       dossier: 'info' — сюда подставляются сведения из досье эксперта, 'copies' — перечень копий документов (2.14);
 //       table: 'task' — таблица «задание» из полей заявки, 'approaches' — таблица «подход — стоимость — вес» (2.29);
+//       'questions' — вопросы из поля заявки questions дословно, нумерованным списком, с тем, кто их поставил (2.79);
 //       ask — что писать в разделе и что оставить эксперту в [квадратных скобках];
 //       approach — раздел только для подхода 'comparative' | 'cost' | 'income': если исполнитель его не применяет (2.33),
 //       раздела в черновике нет, а разделы с номером в начале названия («7. …») нумеруются заново подряд;
@@ -44,7 +46,7 @@ export const BASIS_KINDS = {
   court: { name: 'Определение суда', details: true },
 };
 
-export const DRAFT_TABLES = ['task', 'approaches', 'analogs'];
+export const DRAFT_TABLES = ['task', 'approaches', 'analogs', 'questions'];
 // Подходы к оценке (2.33): общие для всех модулей, где исполнитель их выбирает.
 export const APPROACHES = Object.freeze({ comparative: 'Сравнительный', cost: 'Затратный', income: 'Доходный' });
 const ID_RE = /^[a-z][a-z0-9_]{1,31}$/;
@@ -116,7 +118,14 @@ export function validateModule(m) {
   checkIds(m.services, `${at}, услуги`);
   for (const s of m.services) {
     const where = `${at}, услуга ${s.id}`;
-    onlyKeys(s, ['id', 'name', 'fields', 'paper'], where);
+    onlyKeys(s, ['id', 'name', 'fields', 'paper', 'labels'], where);
+    if (s.labels !== undefined) {
+      if (!s.labels || typeof s.labels !== 'object' || Array.isArray(s.labels)) fail(where, 'labels — { id общего поля: подпись }');
+      for (const [id, label] of Object.entries(s.labels)) {
+        if (!common.some((c) => c.id === id)) fail(where, `labels: «${id}» — не общее поле модуля`);
+        if (!(nonEmpty(label) && label.length <= 120)) fail(where, `labels: подпись поля ${id} — текст до 120 знаков`);
+      }
+    }
     if (!nonEmpty(s.name)) fail(where, 'нет названия');
     if (s.paper !== undefined && !(nonEmpty(s.paper) && s.paper.length <= 80)) fail(where, 'paper — название документа до 80 знаков');
     const own = s.fields ?? [];
@@ -148,7 +157,11 @@ export function validateModule(m) {
       if (d.reuse !== undefined && d.reuse !== true) fail(where, 'reuse — только true (методический раздел)');
       if (d.reuse && (d.table || d.dossier)) fail(where, 'reuse — не у раздела с таблицей или досье: их программа заполняет сама');
       if (d.approach !== undefined && !Object.hasOwn(APPROACHES, d.approach)) fail(where, `approach — одно из: ${Object.keys(APPROACHES).join(', ')}`);
-      if (d.table !== undefined && !DRAFT_TABLES.includes(d.table)) fail(where, "table — 'task' (задание из полей заявки), 'approaches' (подходы и веса) или 'analogs' (аналоги из дела)");
+      if (d.table !== undefined && !DRAFT_TABLES.includes(d.table)) fail(where, "table — 'task' (задание из полей заявки), 'approaches' (подходы и веса), 'analogs' (аналоги из дела) или 'questions' (вопросы из заявки)");
+      if (d.table === 'questions') {
+        const without = m.services.filter((x) => (!d.services || d.services.includes(x.id)) && !serviceFields(m, x).some((f) => f.id === 'questions'));
+        if (without.length) fail(where, `table 'questions' — у услуги ${without[0].id} нет поля questions`);
+      }
       if (!nonEmpty(d.title)) fail(where, 'нет описания');
       if (d.dossier !== undefined && !['info', 'copies'].includes(d.dossier)) fail(where, "dossier — 'info' (сведения об эксперте) или 'copies' (копии документов в приложениях)");
       if (d.ask !== undefined && !askText(d.ask)) fail(where, 'ask — непустой текст до 600 знаков');
@@ -305,7 +318,7 @@ export function createRegistry(modules = DEFAULT_MODULES) {
       const m = modulesList.find((x) => x.id === moduleId);
       const s = m?.services.find((x) => x.id === serviceId);
       if (!s) return null;
-      return { module: m, service: s, fields: [...(m.fields ?? []), ...(s.fields ?? [])] };
+      return { module: m, service: s, fields: serviceFields(m, s) };
     },
     // Правила проверки результата для услуги (общие для модуля и только для этой услуги).
     checks(moduleId, serviceId) {
@@ -345,14 +358,14 @@ export function createRegistry(modules = DEFAULT_MODULES) {
       const m = modulesList.find((x) => x.id === moduleId);
       if (!m?.request_docs || !m.services.some((x) => x.id === serviceId)) return [];
       return m.request_docs.filter((d) => (!d.services || d.services.includes(serviceId)) && (!d.basis || d.basis.includes(basisKind)))
-        .map((d) => ({ id: d.id, title: d.title, hint: d.hint ?? null }));
+        .map((d) => ({ id: d.id, title: d.title, hint: d.hint ?? null, ...(d.basis ? { basis: true } : {}) }));
     },
     // Экспресс-услуга для услуги (2.4): поля заявки, которые видит помощник, и данные, которые он заполняет; null — экспресса нет.
     express(moduleId, serviceId) {
       const m = modulesList.find((x) => x.id === moduleId);
       if (!m?.express?.services.includes(serviceId)) return null;
       const s = m.services.find((x) => x.id === serviceId);
-      const own = [...(m.fields ?? []), ...(s.fields ?? [])];
+      const own = serviceFields(m, s);
       return {
         show: m.express.show.map((id) => own.find((f) => f.id === id)).filter(Boolean),
         fields: m.express.fields.filter((f) => !f.services || f.services.includes(serviceId)).map(({ services, ...f }) => f),
@@ -380,11 +393,17 @@ export function createRegistry(modules = DEFAULT_MODULES) {
         id: m.id,
         name: m.name,
         basis: m.basis.map((id) => ({ id, name: BASIS_KINDS[id].name, details: BASIS_KINDS[id].details })),
-        services: m.services.map((s) => ({ id: s.id, name: s.name, fields: [...(m.fields ?? []), ...(s.fields ?? [])], express: !!m.express?.services.includes(s.id) })),
+        services: m.services.map((s) => ({ id: s.id, name: s.name, fields: serviceFields(m, s), express: !!m.express?.services.includes(s.id) })),
         checks: m.checks.map((c) => ({ id: c.id, title: c.title, services: c.services ?? m.services.map((s) => s.id) })),
       }));
     },
   };
+}
+
+// Поля заявки услуги: общие поля модуля (с подписью этой услуги, если она своя — labels) и поля самой услуги.
+function serviceFields(m, s) {
+  const common = (m.fields ?? []).map((f) => (s.labels?.[f.id] ? { ...f, label: s.labels[f.id] } : f));
+  return [...common, ...(s.fields ?? [])];
 }
 
 const bad = (message) => new HttpError(400, 'bad_input', message);

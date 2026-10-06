@@ -40,6 +40,25 @@ const approachesTable = (chosen) => [
   row(['Итоговая величина', GAP, '1']),
 ];
 
+// Вопросы эксперту (2.79) — из заявки дословно: эксперт не перепечатывает их, а модель не переформулирует. Кто поставил —
+// суд (с номером и датой определения) или заказчик. Нумерация заказчика («1. …», «2) …») заменяется своей, подряд.
+export function splitQuestions(text) {
+  const raw = String(text ?? '').replace(/\r/g, '').trim();
+  if (!raw) return [];
+  const lines = raw.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+  const parts = lines.length > 1 ? lines : raw.split(/\s+(?=\d{1,2}[.)]\s)/);
+  return parts.map((q) => q.replace(/^\d{1,2}[.)]\s*/, '').trim()).filter(Boolean);
+}
+
+function questionsList(order) {
+  const list = splitQuestions(order.fields?.questions);
+  if (!list.length) return ['[заполнить: вопросы]'];
+  const by = order.basis_kind === 'court'
+    ? `На разрешение эксперта судом (определение${order.basis_number ? ` № ${order.basis_number}` : ''}${order.basis_date ? ` от ${ru(order.basis_date)}` : ''}) поставлены вопросы:`
+    : 'На разрешение эксперта заказчиком поставлены вопросы:';
+  return [by, ...list.map((q, i) => `${i + 1}. ${q}`)];
+}
+
 // Разделы черновика дела — с учётом подходов, которые выбрал исполнитель (2.33).
 export const orderSections = (registry, order) => registry.draftSections(order.module, order.service, order.approaches ?? null);
 
@@ -49,12 +68,27 @@ export function fillTables(body, sections, registry, order) {
   for (const s of sections.filter((x) => x.table)) {
     const m = [...out.matchAll(/^#{1,3}\s*(.+)$/gm)].find((h) => headKey(h[1]) === headKey(s.title));
     if (!m) continue;
-    const lines = s.table === 'task' ? taskTable(registry, order) : s.table === 'analogs' ? [ANALOGS_MARK] : approachesTable(order.approaches);
+    const lines = s.table === 'task' ? taskTable(registry, order) : s.table === 'analogs' ? [ANALOGS_MARK]
+      : s.table === 'questions' ? questionsList(order) : approachesTable(order.approaches);
     const at = m.index + m[0].length;
     out = `${out.slice(0, at)}\n${lines.join('\n')}${out.slice(at)}`;
   }
+  // Экспертиза по определению суда (2.79): строка о предупреждении по ст. 307 УК РФ — в раздел сведений об эксперте,
+  // как в каждом судебном заключении; подписку эксперт подписывает сам. Уже есть в тексте — второй раз не вставляется.
+  const info = sections.find((x) => x.dossier === 'info');
+  if (order.basis_kind === 'court' && info && !COURT_WARNING_RE.test(out)) {
+    const m = [...out.matchAll(/^#{1,3}\s*(.+)$/gm)].find((h) => headKey(h[1]) === headKey(info.title));
+    if (m) {
+      const end = out.indexOf('\n#', m.index + m[0].length);
+      const at = end < 0 ? out.length : end;
+      out = `${out.slice(0, at).replace(/\s*$/, '')}\n${COURT_WARNING}${end < 0 ? '' : '\n'}${out.slice(at)}`;
+    }
+  }
   return out;
 }
+
+export const COURT_WARNING = 'Об уголовной ответственности за дачу заведомо ложного заключения по статье 307 Уголовного кодекса Российской Федерации эксперт предупреждён. Подписка эксперта: [заполнить: подпись или подписка отдельным листом]';
+const COURT_WARNING_RE = /307\s*(?:УК|Уголовного)/u;
 
 // Таблица аналогов (2.32) в тексте черновика — строкой-меткой: сама таблица и скриншоты собираются при сборке Word из
 // подтверждённых аналогов дела, поэтому всегда свежие (аналог добавили после черновика — он всё равно попадёт в файл).
@@ -134,10 +168,12 @@ async function photosPart({ sql, providers, registry }, order) {
 }
 
 export const tablesBrief = (sections) => {
-  const t = sections.filter((s) => s.table && s.table !== 'analogs');
-  return t.length
-    ? `ТАБЛИЦЫ: программа сама вставит таблицы в разделы ${t.map((s) => `«${s.title}»`).join(', ')} — сам их не рисуй.`
-    : null;
+  const t = sections.filter((s) => s.table && s.table !== 'analogs' && s.table !== 'questions');
+  const q = sections.filter((s) => s.table === 'questions');
+  return [
+    t.length ? `ТАБЛИЦЫ: программа сама вставит таблицы в разделы ${t.map((s) => `«${s.title}»`).join(', ')} — сам их не рисуй.` : null,
+    q.length ? `ВОПРОСЫ: программа сама вставит вопросы из заявки дословно в раздел ${q.map((s) => `«${s.title}»`).join(', ')} — не переписывай их.` : null,
+  ].filter(Boolean).join('\n') || null;
 };
 
 // Отчёт эксперта: титул и колонтитул — по заявке и услуге; шаблон — организации, от которой эксперт работает (профиль
@@ -157,6 +193,8 @@ export async function reportFor(ctx, order, actor, draftText) {
     subtitle: def ? def.service.name : order.title,
     org: template ? null : org?.name ?? null,   // в шаблоне шапка своя
     executor: actor.full_name || null,
+    // На титуле заключения эксперта — «Эксперт» (2.79), у остальных документов — «Исполнитель».
+    executor_role: /^Заключение эксперта/.test(title) ? 'Эксперт' : 'Исполнитель',
     date: ru(todayMsk()),
   };
   const appendices = [photos, appendix].filter(Boolean);

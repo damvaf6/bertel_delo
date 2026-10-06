@@ -10,7 +10,8 @@ import { cleanDraftAnswer } from '../../src/ai/ai.mjs';
 import { extractPages } from '../../src/ai/extract.mjs';
 import { buildReport, parseDraft, DOCX_MIME } from '../../src/docs/docx.mjs';
 import { makeDocx } from '../tools/make-docs.mjs';
-import { ANALOGS_MARK } from '../../src/docs/report.mjs';
+import { ANALOGS_MARK, COURT_WARNING, splitQuestions } from '../../src/docs/report.mjs';
+import { validateModule } from '../../src/modules/index.mjs';
 
 let S, owner, other, dispatcher, admin, spec;
 const FIELDS = { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 9', area: '54.3' };
@@ -25,7 +26,7 @@ before(async () => {
   spec = await login(S, '+79990000905');
   await setPlatformRole(S.sql, dispatcher.user.id, 'dispatcher');
   await setPlatformRole(S.sql, admin.user.id, 'admin');
-  await makeSpecialist(S.sql, spec.user.id, { permits: [['expertise', 'realty'], ['expertise', 'vehicle'], ['expertise', 'land'], ['expertise', 'movable'], ['expertise', 'goods']] });
+  await makeSpecialist(S.sql, spec.user.id, { permits: [['expertise', 'realty'], ['expertise', 'vehicle'], ['expertise', 'land'], ['expertise', 'movable'], ['expertise', 'goods'], ['expertise', 'construction']] });
   await owner.req('PATCH', '/api/me', { full_name: 'Тестова Заказчица' });
 });
 after(async () => { await S?.close(); });
@@ -490,4 +491,65 @@ test('черновик по своему прошлому делу (2.65): ме�
   assert.equal((await step(spec, g, 'in_work')).status, 200);
   assert.deepEqual((await spec.req('GET', `/api/orders/${g.id}/draft/past`)).body, { sections: [], cases: [] });
   assert.equal((await spec.req('POST', `/api/orders/${g.id}/draft/past`, { past_id: past.id })).status, 400);
+});
+
+// Прогон «как эксперт» по строительно-технической (2.79): вопросы суда — в черновик дословно и по номерам, не руками;
+// основание с номером и датой; строка о ст. 307 УК РФ; «экспертиза», а не «оценка»; на титуле — «Эксперт».
+test('строительно-техническая (2.79): вопросы из заявки дословно, основание суда, ст. 307, «Эксперт» на титуле', async () => {
+  const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'construction', title: 'Недостатки ремонта' })).body.order;
+  const fields = { purpose: 'court', region: 'moscow', object_kind: 'flat', task: 'defects', address: 'г. Москва, ул. Строителей, 30, кв. 12',
+    questions: '1. Имеются ли недостатки ремонтных работ в квартире? 2) Какова стоимость их устранения?', area: '62.5' };
+  const r0 = await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: addDays(todayMsk(), 14), basis_kind: 'court', basis_number: '2-4567/2026', basis_date: '2026-10-01', fields });
+  assert.equal(r0.status, 200, JSON.stringify(r0.body));
+  const b = await owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from('%PDF-1.4 определение'), {
+    raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Определение.pdf'), 'x-doc-kind': 'basis' } });
+  assert.equal(b.status, 201, JSON.stringify(b.body));
+  assert.equal((await step(owner, o, 'matching')).status, 200);
+  await ensurePaid(S.sql, o.id);
+  assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: spec.user.id, from: 'matching' })).status, 200);
+  assert.equal((await step(spec, o, 'in_work')).status, 200);
+  await spec.req('PATCH', '/api/me', { full_name: 'Строителев Степан' });
+
+  const d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {})).body.draft;
+  const prompt = lastPrompt();
+  assert.match(prompt, /Основание: Определение суда № 2-4567\/2026 от 01\.10\.2026/);
+  assert.match(prompt, /Для чего нужна экспертиза: Для суда/);
+  assert.doesNotMatch(prompt, /Для чего нужна оценка/);
+  assert.match(prompt, /ВОПРОСЫ: программа сама вставит вопросы из заявки дословно в раздел «2\. Вопросы эксперту»/);
+  assert.match(d.body, /## 2\. Вопросы эксперту\nНа разрешение эксперта судом \(определение № 2-4567\/2026 от 01\.10\.2026\) поставлены вопросы:\n1\. Имеются ли недостатки ремонтных работ в квартире\?\n2\. Какова стоимость их устранения\?\n\n## 3\./);
+  assert.doesNotMatch(d.body, /\[заполнить: вопросы\]/);
+  assert.equal(d.body.split(COURT_WARNING).length, 2, 'строка о ст. 307 — один раз');
+  assert.ok(d.body.indexOf(COURT_WARNING) < d.body.indexOf('## 2.'), 'ст. 307 — во вводной части');
+  assert.match(d.body, /\| Для чего нужна экспертиза \| Для суда \|/);
+  assert.match(d.body, /^## 6\. Стоимость устранения недостатков$/m);
+  assert.doesNotMatch(d.body, /если спрашивается/);
+  // Таблица задания — одна: модель не повторяет её строками «Площадь, кв. м: 62.5».
+  assert.doesNotMatch(d.body, /Площадь, кв\. м: 62\.5/);
+
+  // Заготовка без ИИ — те же вопросы и строка о ст. 307; эксперт правит — второй раз не вставляется.
+  const filled = d.body.replace(/\[(?:заполнить|описать)[^\]]*\]/g, 'заполнено экспертом');
+  assert.equal((await spec.req('PUT', `/api/orders/${o.id}/draft`, { body: filled, from: d.id })).status, 200);
+  const w = await download(spec, `/api/orders/${o.id}/draft/docx`);
+  const text = (await extractPages(w.buf, 'Заключение.docx')).pages.join('\n');
+  assert.match(text, /ЗАКЛЮЧЕНИЕ ЭКСПЕРТА/);
+  assert.match(text, /Эксперт: Строителев Степан/);
+  assert.doesNotMatch(text, /Исполнитель: /);
+  assert.match(text, /2\. Какова стоимость их устранения\?/);
+  assert.equal(text.split('статье 307 Уголовного кодекса').length, 2);
+});
+
+test('вопросы из заявки (2.79): нумерация заказчика заменяется своей; строки и «1. … 2) …» в одну строку', () => {
+  assert.deepEqual(splitQuestions('1. Есть ли трещины? 2. Какова причина? 3) Сколько стоит?'), ['Есть ли трещины?', 'Какова причина?', 'Сколько стоит?']);
+  assert.deepEqual(splitQuestions('Есть ли трещины?\n\n2. Какова причина?'), ['Есть ли трещины?', 'Какова причина?']);
+  assert.deepEqual(splitQuestions('Есть ли недостаток? Производственный или эксплуатационный?'), ['Есть ли недостаток? Производственный или эксплуатационный?']);
+  assert.deepEqual(splitQuestions('  '), []);
+  // Описание модуля: своя подпись — только у общего поля; таблица вопросов — только где есть поле questions.
+  const svc = (patch) => ({ ...expertise, services: expertise.services.map((s) => (s.id === 'construction' ? { ...s, ...patch } : s)) });
+  assert.throws(() => validateModule(svc({ labels: { address: 'Адрес' } })), /не общее поле/);
+  assert.throws(() => validateModule(svc({ labels: { purpose: '' } })), /подпись поля purpose/);
+  assert.throws(() => validateModule({ ...expertise, draft: [...expertise.draft, { id: 'x_q', title: 'Вопросы', services: ['realty'], table: 'questions' }] }), /нет поля questions/);
+  const reg = createRegistry([expertise]);
+  assert.equal(reg.service('expertise', 'construction').fields.find((f) => f.id === 'purpose').label, 'Для чего нужна экспертиза');
+  assert.equal(reg.service('expertise', 'realty').fields.find((f) => f.id === 'purpose').label, 'Для чего нужна оценка');
+  assert.equal(reg.catalog()[0].services.find((s) => s.id === 'goods').fields.find((f) => f.id === 'purpose').label, 'Для чего нужна экспертиза');
 });

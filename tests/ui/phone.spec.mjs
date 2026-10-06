@@ -3653,6 +3653,133 @@ test('как эксперт (2.66): квартира для сделки — д�
   await dctx.close();
 });
 
+// Прогон «как эксперт» по строительно-технической экспертизе (2.79): недостатки ремонта квартиры по определению суда.
+// Заказчик и диспетчер — через API, эксперт и владелец на осмотре — на экране телефона. Проверяется то, что мешало:
+// «Для чего нужна оценка» у экспертизы; определение суда, уже приложенное заказчиком, снова предлагалось запросить;
+// вопросы суда эксперт перепечатывал сам («[заполнить: вопросы]»); основание без номера и даты; нет строки о ст. 307 УК РФ
+// (ИИ-проверка находила это сама); в заголовке раздела — «(если спрашивается)»; на титуле — «Исполнитель», а не «Эксперт».
+test('как эксперт (2.79): строительно-техническая по определению суда — осмотр, вопросы суда, черновик, сдача', async ({ page, browser, baseURL }) => {
+  test.setTimeout(180_000);
+  const C = '+79990007901', D = '+79990007902', S = '+79990007903';
+  await signIn(page, C);
+  const dctx = await phoneContext(browser, baseURL), sctx = await phoneContext(browser, baseURL);
+  const dp = await dctx.newPage(), sp = await sctx.newPage();
+  const disp = await signIn(dp, D), spec = await signIn(sp, S);
+  await sp.request.patch('/api/me', { data: { full_name: 'Строителев Степан Петрович' }, headers: H });
+  await db(async (c) => {
+    await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'construction')", [spec.id]);
+  });
+  const title = `Недостатки ремонта ${Date.now()}`;
+  const o = (await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'construction', title }, headers: H })).json()).order;
+  expect((await page.request.patch(`/api/orders/${o.id}`, { data: { deadline: inDays(14), basis_kind: 'court', basis_number: '2-4567/2026', basis_date: inDays(-5),
+    fields: { purpose: 'court', region: 'moscow', object_kind: 'flat', task: 'defects', address: 'г. Москва, ул. Тестовая, 30, кв. 12',
+      questions: '1. Имеются ли недостатки ремонтных работ в квартире? 2. Какова стоимость их устранения?', docs: 'Договор подряда, смета, акт приёмки', area: '62.5' } }, headers: H })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${o.id}/documents`, { data: makePdf([['Определение суда (тест)']]),
+    headers: { ...H, 'x-doc-kind': 'basis', 'x-file-name': encodeURIComponent('Определение.pdf'), 'content-type': 'application/pdf' } })).status()).toBe(201);
+  expect((await page.request.post(`/api/orders/${o.id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  expect((await dp.request.put(`/api/orders/${o.id}/price`, { data: { price: '40000' }, headers: H })).status()).toBe(200);
+  await page.request.post(`/api/orders/${o.id}/payments`, { headers: H });
+  expect((await page.request.post(`/api/orders/${o.id}/payments/refresh`, { headers: H })).status()).toBe(200);
+  expect((await dp.request.post(`/api/orders/${o.id}/offer`, { data: { specialist_id: spec.id, from: 'matching' }, headers: H })).status()).toBe(200);
+
+  // 1. Предложение и дело: «экспертиза», а не «оценка».
+  await sp.goto('/kabinet');
+  const offer = sp.locator('#orders li').filter({ hasText: title });
+  await expect(offer.locator('.brief')).toContainText('Для суда · Москва · Квартира или помещение · Недостатки работ и стоимость их устранения · г. Москва, ул. Тестовая, 30, кв. 12');
+  sp.once('dialog', (d) => d.accept());
+  await offer.getByRole('button', { name: 'Принять дело' }).click();
+  await expect(sp.locator('#order-status')).toHaveText('В работе');
+  await expect(sp.locator('body')).toContainText('Для чего нужна экспертиза');
+  await expect(sp.locator('body')).not.toContainText('Для чего нужна оценка');
+
+  // 2. Документы: договор подряда и проект можно запросить; определение суда заказчик уже приложил — его в списке нет.
+  await sp.locator('#next-steps li[data-step="docs"] button').click();
+  const items = sp.locator('#docreq-items');
+  await expect(items).toContainText('Договор подряда, смета и акты выполненных работ');
+  await expect(items).not.toContainText('Определение суда');
+  await sp.locator('#docreq-box').getByLabel('Договор подряда, смета и акты выполненных работ').check();
+  await sp.locator('#docreq-box').getByRole('button', { name: 'Запросить у заказчика' }).click();
+  await expect(sp.locator('#docreq-msg')).toHaveText('Запрошено документов: 1. Заказчику отправлено уведомление.');
+  await shot(sp, 'b1-stroitelnaya-zapros-dogovora');
+
+  // 3. Осмотр: эксперт выдаёт ссылку и снимает на объекте по шагам строительно-технической.
+  await sp.getByRole('button', { name: 'Выдать ссылку владельцу' }).click();
+  await expect(sp.locator('#inspect-url')).toContainText('http');
+  const url = await sp.locator('#inspect-url').textContent();
+  const octx = await phoneContext(browser, baseURL, { permissions: ['geolocation'], geolocation: { latitude: 55.75, longitude: 37.61, accuracy: 10 } });
+  const op = await octx.newPage();
+  await op.goto(url);
+  const jpeg = Buffer.from((await op.evaluate(() => {
+    const c = document.createElement('canvas'); c.width = 640; c.height = 480;
+    const g = c.getContext('2d'); g.fillStyle = '#b9a58a'; g.fillRect(0, 0, 640, 480);
+    return c.toDataURL('image/jpeg', 0.8);
+  })).split(',')[1], 'base64');
+  await op.getByRole('button', { name: 'Начать: разрешить определение места' }).click();
+  await expect(op.locator('#geo-state')).toContainText('Место определено');
+  for (const st of ['st_overview', 'st_rooms', 'st_defects']) {
+    await op.locator(`#steps li[data-step="${st}"] input[type=file]`).setInputFiles({ name: `${st}.jpg`, mimeType: 'image/jpeg', buffer: jpeg });
+    await expect(op.locator(`#steps li[data-step="${st}"] .badge`)).toHaveText('Фото: 1');
+  }
+  await expect(op.locator('#steps li[data-step="st_marking"]')).toContainText('если есть');
+  await shot(op, 'b2-stroitelnaya-osmotr');
+  op.once('dialog', (d) => d.accept());
+  await op.getByRole('button', { name: 'Готово' }).click();
+  await expect(op.locator('#closed-text')).toContainText('Эксперт получил 3 фото');
+  await octx.close();
+
+  // 4. Черновик: вопросы суда — дословно и по номерам; основание с номером и датой; ст. 307; раздел 6 без «(если спрашивается)».
+  await sp.reload();
+  await expect(sp.locator('#inspect-state')).toContainText('Фото осмотра: 3');
+  await sp.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const text = sp.getByLabel('Текст заключения');
+  const body = await text.inputValue();
+  expect(body).toContain('## 2. Вопросы эксперту\nНа разрешение эксперта судом (определение № 2-4567/2026 от ');
+  expect(body).toContain('1. Имеются ли недостатки ремонтных работ в квартире?\n2. Какова стоимость их устранения?');
+  expect(body).not.toContain('[заполнить: вопросы]');
+  expect(body).toContain('Основание: Определение суда № 2-4567/2026 от ');
+  expect(body).toContain('по статье 307 Уголовного кодекса Российской Федерации эксперт предупреждён');
+  expect(body).toContain('| Для чего нужна экспертиза | Для суда |');
+  expect(body).toMatch(/^## 6\. Стоимость устранения недостатков$/m);
+  expect(body).toContain('Фото 3 (Осмотр · Каждый недостаток крупно');
+  await text.evaluate((el) => { el.scrollTop = 0; });
+  await shot(sp, 'b3-stroitelnaya-chernovik');
+  const [word] = await Promise.all([sp.waitForEvent('download'), sp.getByRole('button', { name: 'Скачать Word' }).click()]);
+  expect(word.suggestedFilename()).toBe('Заключение эксперта.docx');
+  const wchunks = [];
+  for await (const ch of await word.createReadStream()) wchunks.push(ch);
+  const wtext = (await extractPages(Buffer.concat(wchunks), 'r.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')).pages.join('\n');
+  expect(wtext).toContain('Эксперт: Строителев Степан Петрович');
+  expect(wtext).toContain('Фотоматериалы осмотра');
+
+  // 5. Эксперт дописывает исследование и выводы по обоим вопросам; ИИ-проверка без находок по ст. 307 и вопросам.
+  const done = body.replace(/\[(?:заполнить|описать)[^\]]*\]/gi, 'заполнено экспертом')
+    .replace(/## 7\. Выводы\n[^#]*/, '## 7. Выводы\nПо вопросу 1: недостатки ремонтных работ имеются.\nПо вопросу 2: стоимость их устранения составляет 184 300 рублей.\n\n');
+  await text.fill(done);
+  await sp.getByRole('button', { name: 'Сохранить правку' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Правка сохранена');
+  await sp.locator('#next-main button').click();
+  await sp.locator('#draft-confirm').check();
+  await sp.getByRole('button', { name: 'Приложить как файл результата' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Файл «Заключение эксперта.docx» добавлен в результат работы');
+  await sp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  await expect(sp.locator('#review-box')).not.toContainText('307 УК РФ в отчёте нет');
+  await expect(sp.locator('#review-box')).not.toContainText('не найден в выводах');
+  await shot(sp, 'b4-stroitelnaya-proverka');
+  await expect(sp.locator('#next-main button')).toHaveText('Подписать файл');
+  sp.once('dialog', (d) => d.accept());
+  await sp.locator('#next-main button').click();
+  await expect(sp.locator('#next-main button')).toHaveText('Сдать на проверку');
+  await sp.locator('#next-main button').click();
+  await expect(sp.locator('#order-status')).toHaveText('Проверка результата');
+  await shot(sp, 'b5-stroitelnaya-sdano');
+  await sctx.close();
+  await dctx.close();
+});
+
 test('как руководитель (2.67): организация, приглашение, назначение, переписка, возврат, подпись, передача дела', async ({ page, browser, baseURL }) => {
   test.setTimeout(180_000);
   const C = '+79990006701', D = '+79990006702', HD = '+79990006703', S1 = '+79990006704', S2 = '+79990006705';

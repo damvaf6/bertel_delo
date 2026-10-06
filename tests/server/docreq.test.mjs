@@ -131,3 +131,18 @@ test('транспорт — свой список; завершённая за�
   assert.equal((await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { items: ['sts'] })).body.error, 'not_in_work');
   assert.equal((await owner.req('POST', `/api/orders/${o.id}/doc-requests/${r.requests[0].id}/attach`, { document_id: crypto.randomUUID() })).body.error, 'order_final');
 });
+
+test('определение суда уже приложено заказчиком — в списке для запроса его нет (2.79)', async () => {
+  const o = await inWork('Квартира для суда: документы');
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  await S.sql`update orders set basis_kind = 'court' where id = ${o.id}`;
+  const ids = async () => (await spec.req('GET', `/api/orders/${o.id}/doc-requests`)).body.catalog.map((c) => c.id);
+  const before = await ids();
+  assert.ok(before.includes('court_order') && before.includes('egrn'), before.join());
+  const r = await owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from('скан'), {
+    raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Определение.pdf'), 'x-doc-kind': 'basis' } });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  const after = await ids();
+  assert.ok(!after.includes('court_order') && after.includes('egrn'), after.join());
+  assert.ok((await spec.req('GET', `/api/orders/${o.id}/doc-requests`)).body.catalog.every((c) => !('basis' in c)));
+});
