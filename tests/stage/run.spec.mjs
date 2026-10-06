@@ -125,7 +125,10 @@ function unzipPart(buf, name) {
 // Номера прогона: +7 999 000-NN-x0…x9, NN — от 20 до 89 (служебная проверка входа — 90-0x, администратор — 95-00, помощник экспресса — 96-00…99-99).
 const RUN = String(20 + Math.floor(Math.random() * 70)) + String(Math.floor(Math.random() * 10));
 const tel = (i) => `+7999000${RUN}${i}`;
-const TAG = `прогон ${RUN}-${Date.now().toString(36)}`;
+// Номера из 700 повторяются между прогонами (база площадки не чистится), поэтому названия организаций и заявок — с отметкой
+// времени: иначе при повторе номера у руководителя две организации с одним названием, и сотрудник попадает не в ту.
+const STAMP = Date.now().toString(36);
+const TAG = `прогон ${RUN}-${STAMP}`;
 const inDays = (n) => new Date(Date.now() + n * 86400_000).toISOString().slice(0, 10);
 
 test.describe.configure({ mode: 'serial', timeout: 600_000 }); // с настоящей моделью шаги ИИ дольше
@@ -209,7 +212,7 @@ test('общий прогон: заявка на оценку с файлами 
 });
 
 test('общий прогон: организация — приглашение, дело сотрудника у руководителя, ушедший теряет доступ; уведомления', async ({ page, browser, baseURL }) => {
-  const org = `АНО «Тестовый центр ${RUN}»`;
+  const org = `АНО «Тестовый центр ${RUN}-${STAMP}»`;
   const title = `Оценка автомобиля — ${TAG}`;
   const mp = await phone(browser, baseURL);
   await enter(mp, tel(3), 'Тестовый Сотрудник');
@@ -773,7 +776,7 @@ test('общий прогон: экспресс — выезд помощник�
 // первой проверки, у него нет дел): сменить организацию можно только без дел в работе.
 test('общий прогон: две подписи — эксперт от организации загружает готовую подпись, руководитель подписывает от организации', async ({ page, browser, baseURL }) => {
   const title = `Оценка квартиры, две подписи — ${TAG}`;
-  const org = `ООО «Тестовая оценочная компания ${RUN}»`;
+  const org = `ООО «Тестовая оценочная компания ${RUN}-${STAMP}»`;
   const specName = `Тестов Эксперт Компании ${RUN}`;
   const headName = `Тестовый Руководитель ${RUN}`;
   const ap = await phone(browser, baseURL), dp = await phone(browser, baseURL), sp = await phone(browser, baseURL), hp = await phone(browser, baseURL);
