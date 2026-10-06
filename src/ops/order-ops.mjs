@@ -314,7 +314,7 @@ export function orderOps() {
                      values (${cur.id}, ${cur.offer_org_id}, ${JSON.stringify({ org: true, returned: true })}, null)`;
             const back = await tx.one`update orders set executor_user_id = null, updated_at = now() where id = ${cur.id} returning *`;
             await audit(tx, actor, 'order.org_returned', 'order', cur.id, { org: cur.offer_org_id });
-            await notify(tx, 'org_expert_declined', { users: await orgHeads(tx, cur.offer_org_id), orgId: cur.offer_org_id, actor });
+            await notify(tx, 'org_expert_declined', { users: await orgHeads(tx, cur.offer_org_id), orderId: cur.id, orgId: cur.offer_org_id, actor });
             return back;
           }
           if (cur.status === 'new' && to === 'matching') {

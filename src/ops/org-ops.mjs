@@ -189,9 +189,14 @@ export function orgOps() {
         // Кому можно передать дело в работе (2.62): эксперты организации с допуском на услугу, кроме нынешнего.
         const transfer = new Map();
         for (const o of rows.filter((x) => x.status === 'in_work')) transfer.set(o.id, await transferTargets(sql, o, org.id, registry));
+        // Внутренняя переписка (2.67): сколько сообщений и чьё последнее — чтобы руководитель видел, где ждут его ответа.
+        const chats = new Map(rows.length ? (await sql`
+          select order_id, count(*)::int as n, (array_agg(side order by id desc))[1] as last_side from org_messages
+          where org_id = ${org.id} and order_id = any(${rows.map((o) => o.id)}::uuid[]) group by order_id`).map((c) => [c.order_id, c]) : []);
         const cases = rows.map((o) => ({
           ...(waits.get(o.id) ?? { sign_wait: 0, returned_open: false }),
           transfer_to: transfer.get(o.id) ?? [],
+          chat: { messages: chats.get(o.id)?.n ?? 0, expert_last: chats.get(o.id)?.last_side === 'expert' },
           // Номер дела — для внутренней переписки с экспертом (2.28); саму заявку руководитель по нему не откроет.
           id: o.id,
           order_ref: orderRef(o.id),

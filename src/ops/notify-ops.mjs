@@ -27,7 +27,11 @@ export async function unreadCount(sql, userId) {
 
 function sectionOf(actor, r) {
   const sec = EVENTS[r.event]?.section ?? null;
-  if (sec === 'orgs' && r.org_id && actor.orgs.some((m) => m.org_id === r.org_id)) return `org=${r.org_id}`;
+  if (sec === 'orgs' && r.org_id && actor.orgs.some((m) => m.org_id === r.org_id)) {
+    // По делу организации (2.67) — сразу к делу: номер дела (как в «Делах экспертов») и что сделать.
+    const focus = EVENTS[r.event]?.focus;
+    return focus && r.order_id ? `org=${r.org_id}&case=${orderRef(r.order_id).slice(2)}&to=${focus}` : `org=${r.org_id}`;
+  }
   return sec;
 }
 

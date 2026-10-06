@@ -2,7 +2,7 @@
 import { api, el, say, formatPhone, ROLE_RU, quoted } from '/common.js';
 import { state, show, notFoundView, refreshMe } from '/shell.js';
 import { loadOrgSign } from '/orgsign.js';
-import { loadOrgCases } from '/orgcases.js';
+import { loadOrgCases, focusOrgCase } from '/orgcases.js';
 import { loadOrgTemplate } from '/orgtemplate.js';
 
 const $ = (id) => document.getElementById(id);
@@ -64,7 +64,8 @@ $('new-org').addEventListener('submit', async (e) => {
   } catch (err) { say($('org-new-msg'), err.message); } finally { $('create-org').disabled = false; }
 });
 
-export async function showOrg(id) {
+// focus — сразу к делу (2.67): { ref: '№ XXXXXXXX', to: 'pending' | 'sign' | 'chat' | 'case' }.
+export async function showOrg(id, focus = null) {
   try {
     const r = await api('GET', `/api/orgs/${id}`);
     org = { ...r.org, my_role: r.my_role, manage: r.manage };
@@ -82,12 +83,43 @@ export async function showOrg(id) {
   $('org-edit-inn').value = org.inn || '';
   $('org-edit-kpp').value = org.kpp || '';
   $('org-edit-address').value = org.legal_address || '';
-  for (const m of ['org-edit-msg', 'members-msg', 'invite-msg', 'leave-msg', 'org-sign-msg']) say($(m), '');
+  for (const m of ['org-edit-msg', 'members-msg', 'invite-msg', 'leave-msg', 'org-sign-msg', 'org-pending-msg', 'org-cases-msg', 'org-work-msg']) say($(m), '');
   $('org-sign-box').classList.add('hidden');
   $('org-cases-box').classList.add('hidden');
   show('org-view', 'orgs');
+  workBox();
   await Promise.all([loadMembers(), org.manage ? loadOrgInvites() : null, org.manage ? loadOrgSign(org) : null, org.manage ? loadOrgCases(org) : null, loadOrgTemplate(org)]);
+  if (focus && org.manage) focusOrgCase(focus);
 }
+
+// Специалист вступил в организацию, но работает не от неё (2.67): без этого дела организации ему не назначить, а его
+// заключения она не подписывает. Одна кнопка вместо поиска поля в разделе «Специалист».
+function workBox() {
+  const sp = state.specialist;
+  const show = !!(sp && org.my_role && sp.org?.id !== org.id);
+  $('org-work-box').classList.toggle('hidden', !show);
+  $('org-work').classList.remove('hidden');
+  if (!show) return;
+  $('org-work-lead').textContent = sp.org
+    ? `Сейчас Вы работаете от ${quoted(sp.org.name)}. Перейдите, чтобы получать дела этой организации; Ваши заключения будет подписывать её руководитель.`
+    : 'Вы специалист, но работаете от себя. Нажмите, чтобы получать дела этой организации; Ваши заключения будет подписывать её руководитель.';
+}
+
+$('org-work').addEventListener('click', async () => {
+  $('org-work').disabled = true;
+  try {
+    await api('PATCH', '/api/specialist/me', { org_id: org.id });
+    await refreshMe();
+    $('org-work').classList.add('hidden');
+    $('org-work-lead').textContent = '';
+    say($('org-work-msg'), `Теперь Вы работаете от ${quoted(org.name)}: руководитель может назначать Вам её дела`, 'ok');
+  } catch (err) { say($('org-work-msg'), err.message); } finally { $('org-work').disabled = false; }
+});
+
+$('org-go-invite').addEventListener('click', () => {
+  $('invite-box').scrollIntoView({ block: 'start' });
+  $('invite-phone').focus();
+});
 
 async function loadMembers() {
   const { members } = await api('GET', `/api/orgs/${org.id}/members`);

@@ -304,6 +304,17 @@ test('все виды уведомлений (2.45): каждое событие
               (${head.user.id}, 'org_cases', 'org_offer', ${org.id}), (${head.user.id}, 'executor_work', 'dossier_week', null)`;
   const list = (await head.req('GET', '/api/notifications')).body.notifications;
   assert.deepEqual(list.map((n) => n.section), ['specialist', `org=${org.id}`, `org=${org.id}`]);
+  // По делу организации (2.67) — сразу к делу: номер и что сделать; саму заявку руководитель не открывает, название не видит.
+  const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: TITLE })).body.order;
+  const short = o.id.slice(0, 8).toUpperCase();
+  await S.sql`insert into notifications (user_id, type, event, order_id, org_id) values
+              (${head.user.id}, 'executor_work', 'org_chat_head', ${o.id}, ${org.id}), (${head.user.id}, 'org_cases', 'org_offer', ${o.id}, ${org.id}),
+              (${head.user.id}, 'executor_work', 'org_sign_needed', ${o.id}, ${org.id})`;
+  const byCase = (await head.req('GET', '/api/notifications')).body.notifications.slice(0, 3);
+  assert.deepEqual(byCase.map((n) => n.section), [`org=${org.id}&case=${short}&to=sign`, `org=${org.id}&case=${short}&to=pending`, `org=${org.id}&case=${short}&to=chat`]);
+  assert.ok(byCase.every((n) => n.order_id === null && n.order_title === null && n.order_ref === `№ ${short}`));
+  await S.sql`delete from notifications where order_id = ${o.id}`;
+  assert.throws(() => validateRegistry(TYPES, { ...EVENTS, x_test: { type: 'money', title: 'Не туда', order: true, focus: 'chat' } }), /неверный focus/);
   // Ушёл из организации — ссылка на неё не даётся.
   await S.sql`delete from org_members where org_id = ${org.id} and user_id = ${head.user.id}`;
   assert.deepEqual((await head.req('GET', '/api/notifications')).body.notifications.map((n) => n.section), ['specialist', 'orgs', 'orgs']);
