@@ -2,7 +2,8 @@
 // срок (просрочено — крупно), состояние, эксперта и вознаграждение; нагрузку по экспертам и деньги за месяц.
 // Заказчика, поля заявки, документы и переписку по заявке — нет (их сервер и не присылает); внутренняя переписка
 // с экспертом (2.28) — у каждого дела.
-// Дело в работе руководитель передаёт другому эксперту организации (2.62).
+// Дело в работе руководитель передаёт другому эксперту организации (2.62); предложенное и ещё не принятое — отдаёт другому
+// или забирает назад, не дожидаясь отказа (2.76).
 // «Ждут назначения» (2.17): дела, предложенные диспетчером организации, — руководитель назначает эксперта или отказывается.
 import { api, el, say } from '/common.js';
 import { expertLink } from '/expertcard.js';
@@ -14,6 +15,12 @@ import { matcher, wireSearch } from '/search.js';
 const $ = (id) => document.getElementById(id);
 const MONTHS = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
 const PAYOUT_RU = { pending: 'выплата проводится', succeeded: 'выплачено', failed: 'выплата не прошла' };
+const timeRu = (s) => new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+// Сколько эксперт молчит: «3 ч», «2 дн.» — руководителю видно, пора ли переназначать.
+function waited(s) {
+  const h = Math.floor((Date.now() - new Date(s).getTime()) / 3_600_000);
+  return h < 1 ? 'меньше часа' : h < 24 ? `${h} ч` : `${Math.floor(h / 24)} дн.`;
+}
 const fact = (dt, dd, cls) => [el('dt', { text: dt }), el('dd', { text: dd, ...(cls ? { class: cls } : {}) })];
 
 // Последний список дел — для поиска (2.73) без нового запроса.
@@ -78,6 +85,7 @@ function caseItem(org, c) {
       el('button', { class: 'secondary', 'data-action': 'go-sign', onclick: () => goSign(c.order_ref) }, 'К подписи'))] : []),
     ...(c.returned_open ? [el('div', { class: 'muted', 'data-role': 'returned', text: 'Вы вернули отчёт эксперту — ждём исправления' })] : []),
     ...(c.status === 'in_work' ? [transferDetails(org, c)] : []),
+    ...(c.offer_wait ? offerWait(org, c) : []),
     chatDetails(c));
 }
 
@@ -119,6 +127,33 @@ function transferDetails(org, c) {
   })() : [el('p', { class: 'muted', text: 'Передать некому: в организации нет другого эксперта с допуском на эту услугу, который принимает дела.' })];
   return el('details', { class: 'org-transfer', 'data-transfer': c.order_ref },
     el('summary', { text: 'Передать другому эксперту' }), ...body, msg);
+}
+
+// Эксперт ещё не ответил на предложенное дело (2.76): сколько ждём; отдать другому эксперту или забрать назад в «Ждут
+// назначения» — не дожидаясь отказа. Прежний эксперт получит уведомление, что отвечать не нужно.
+function offerWait(org, c) {
+  const w = c.offer_wait;
+  const msg = el('p', { class: 'msg', role: 'status', 'aria-live': 'polite' });
+  const send = async (specialistId, done) => {
+    try {
+      await api('POST', `/api/orgs/${org.id}/cases/${c.id}/reassign`, { from: w.from, specialist_id: specialistId });
+      await loadOrgCases(org);
+      say(specialistId ? $('org-cases-msg') : $('org-pending-msg'), done, 'ok');
+    } catch (err) { say(msg, err.message); }
+  };
+  const pick = w.reassign_to.length ? el('select', { 'aria-label': `Кому предложить дело ${c.order_ref}`, 'data-reassign-pick': c.order_ref },
+    ...w.reassign_to.map((x) => el('option', { value: x.user_id, text: x.full_name }))) : null;
+  return [
+    el('div', { class: 'muted', 'data-role': 'offer-wait', text: w.offered_at
+      ? `Эксперт ещё не ответил · предложено ${timeRu(w.offered_at)} (${waited(w.offered_at)})` : 'Эксперт ещё не ответил на предложение' }),
+    el('details', { class: 'org-transfer', 'data-reassign': c.order_ref },
+      el('summary', { text: 'Не ждать ответа — переназначить' }),
+      ...(pick ? [el('label', { text: 'Кому предложить' }), pick,
+        el('button', { 'data-action': 'reassign', onclick: () => send(pick.value, 'Дело предложено другому эксперту — прежний получил уведомление, что отвечать не нужно') }, 'Предложить другому')]
+        : [el('p', { class: 'muted', text: 'Другого эксперта с допуском на эту услугу, который принимает дела, нет — дело можно забрать назад.' })]),
+      el('button', { class: 'secondary', 'data-action': 'take-back',
+        onclick: () => send(null, 'Дело снова в «Ждут назначения» — эксперту сообщили, что отвечать не нужно') }, 'Забрать назад'),
+      msg)];
 }
 
 // Перейти к делу в «Подписи организации» и выделить его.

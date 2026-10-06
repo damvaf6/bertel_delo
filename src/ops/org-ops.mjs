@@ -164,7 +164,7 @@ export function orgOps() {
         const ids = experts.map((e) => e.user_id);
         const rows = ids.length ? await sql`
           select o.id, o.module, o.service, o.status, o.deadline, o.price_kop, o.paid_at, o.executor_user_id, o.updated_at,
-                 o.owner_user_id, o.org_id,
+                 o.owner_user_id, o.org_id, o.offer_org_id,
                  p.status as payout_status, p.amount_kop as payout_kop, p.paid_at as payout_paid_at
           from orders o left join payouts p on p.order_id = o.id
           where o.executor_user_id = any(${ids}::uuid[]) and (o.status = any(${CASES_ACTIVE}::text[])
@@ -189,6 +189,14 @@ export function orgOps() {
         // Кому можно передать дело в работе (2.62): эксперты организации с допуском на услугу, кроме нынешнего.
         const transfer = new Map();
         for (const o of rows.filter((x) => x.status === 'in_work')) transfer.set(o.id, await transferTargets(sql, o, org.id, registry));
+        // Предложено эксперту, он ещё не ответил (2.76): руководитель отдаёт дело другому или забирает назад в «Ждут
+        // назначения». Только дела, которые назначила сама организация; когда предложено — чтобы видеть, сколько ждём.
+        const waitingAnswer = new Map();
+        for (const o of rows.filter((x) => x.status === 'awaiting_executor' && x.offer_org_id === org.id)) {
+          const offer = await sql.one`select offered_at from order_offers where order_id = ${o.id} and outcome is null
+                                      and specialist_id = ${o.executor_user_id} order by id desc limit 1`;
+          waitingAnswer.set(o.id, { from: o.executor_user_id, offered_at: offer?.offered_at ?? null, reassign_to: await transferTargets(sql, o, org.id, registry) });
+        }
         // Внутренняя переписка (2.67): сколько сообщений и чьё последнее — чтобы руководитель видел, где ждут его ответа.
         const chats = new Map(rows.length ? (await sql`
           select order_id, count(*)::int as n, (array_agg(side order by id desc))[1] as last_side from org_messages
@@ -196,6 +204,7 @@ export function orgOps() {
         const cases = rows.map((o) => ({
           ...(waits.get(o.id) ?? { sign_wait: 0, returned_open: false }),
           transfer_to: transfer.get(o.id) ?? [],
+          offer_wait: waitingAnswer.get(o.id) ?? null,
           chat: { messages: chats.get(o.id)?.n ?? 0, expert_last: chats.get(o.id)?.last_side === 'expert' },
           // Номер дела — для внутренней переписки с экспертом (2.28); саму заявку руководитель по нему не откроет.
           id: o.id,
@@ -317,6 +326,47 @@ export function orgOps() {
           await tx`update orders set executor_user_id = ${specialistId}, updated_at = now() where id = ${cur.id}`;
           await audit(tx, actor, 'org.case.assign', 'order', cur.id, { org: org.id, specialist: specialistId });
           await notify(tx, 'offer', { users: [specialistId], orderId: cur.id, actor });
+        });
+        return { ok: true };
+      },
+    },
+    {
+      // Руководитель переназначает дело, которое эксперт ещё не принял (2.76): не ждать отказа — отдать другому эксперту
+      // организации или забрать назад в «Ждут назначения» (specialist_id: null). from — эксперт, которого руководитель видел:
+      // если тот уже принял или отказался, — «уже изменилось». Прежний эксперт сразу теряет предложение и получает
+      // уведомление без номера дела (дело он больше не видит).
+      id: 'orgs.cases.reassign', method: 'POST', path: '/api/orgs/:id/cases/:orderId/reassign', auth: 'user',
+      access: { resource: 'org', param: 'id', need: 'manage' },
+      async handler({ sql, actor, org, params, body, registry }) {
+        const orderId = uuidFrom(params.orderId, 'Дело не найдено');
+        const from = uuidFrom(body?.from, 'Эксперт не найден');
+        const specialistId = body?.specialist_id == null || body.specialist_id === '' ? null : uuidFrom(body.specialist_id, 'Эксперт не найден');
+        const reason = body?.reason == null || String(body.reason).trim() === '' ? null : text(body.reason, 'Причина', 1000);
+        await sql.tx(async (tx) => {
+          const cur = await tx.one`select * from orders where id = ${orderId} and offer_org_id = ${org.id} for update`;
+          if (!cur) throw new HttpError(404, 'not_found', 'Дело не найдено');
+          if (cur.status !== 'awaiting_executor' || cur.executor_user_id !== from) {
+            throw new HttpError(409, 'status_changed', 'Эксперт уже ответил на предложение или дело изменилось — обновите страницу');
+          }
+          if (specialistId === from) throw new HttpError(409, 'same_expert', 'Дело уже предложено этому эксперту');
+          let cand = null;
+          if (specialistId) {
+            cand = (await orgExpertsFor(tx, cur, org.id, registry)).find((c) => c.user_id === specialistId);
+            if (!cand) throw new HttpError(409, 'not_eligible', 'Этому эксперту дело отдать нельзя: нет допуска, не принимает дела, истёк аттестат или полис в досье или работает не от организации');
+          }
+          await tx`update order_offers set outcome = 'withdrawn', outcome_at = now(), reason = ${reason}
+                   where order_id = ${cur.id} and outcome is null`;
+          if (cand) {
+            await tx`insert into order_offers (order_id, specialist_id, org_id, score, offered_by)
+                     values (${cur.id}, ${specialistId}, ${org.id}, ${JSON.stringify(cand.score)}, ${actor.id})`;
+          } else {
+            await tx`insert into order_offers (order_id, org_id, score, offered_by)
+                     values (${cur.id}, ${org.id}, ${JSON.stringify({ org: true, returned: true })}, ${actor.id})`;
+          }
+          await tx`update orders set executor_user_id = ${specialistId}, updated_at = now() where id = ${cur.id}`;
+          await audit(tx, actor, 'org.case.reassign', 'order', cur.id, { org: org.id, from, to: specialistId, reason });
+          await notify(tx, 'org_offer_taken', { users: [from], actor });
+          if (specialistId) await notify(tx, 'offer', { users: [specialistId], orderId: cur.id, actor });
         });
         return { ok: true };
       },
