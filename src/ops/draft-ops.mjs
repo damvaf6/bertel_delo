@@ -138,7 +138,7 @@ export function draftOps() {
         // Подтверждённые аналоги (2.32) — модели для текста о корректировках; таблицу программа вставит в Word сама.
         const spec = registry.analogs(order.module, order.service);
         const analogs = spec ? await sql`select * from order_analogs where order_id = ${order.id} and deleted_at is null and confirmed_at is not null order by id` : [];
-        const brief = [orderBrief(registry, order), onsite, dossierBrief, spec ? analogsBrief(spec, analogs) : null, tablesBrief(sections)].filter(Boolean).join('\n');
+        const brief = [orderBrief(registry, order), onsite, dossierBrief, spec ? analogsBrief(spec, analogs, order) : null, tablesBrief(sections)].filter(Boolean).join('\n');
         const out = await askAi(ctx, actor, 'draft', draftMessages({ brief, sections, ...inputs }));
         // Таблицы (2.29) и сведения из досье (2.14) программа вставляет сама, под заголовками разделов.
         const materials = await orderMaterials(sql, order);

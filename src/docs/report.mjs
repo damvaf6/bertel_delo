@@ -5,7 +5,7 @@ import { executorSignOrg } from '../access/policy.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { todayMsk } from '../orders/workflow.mjs';
 import { buildReport } from './docx.mjs';
-import { analogTable, hostOf, timeMsk, valueText } from '../analogs/analogs.mjs';
+import { analogTable, hostOf, inItemOrder, listPositions, timeMsk, valueText } from '../analogs/analogs.mjs';
 
 const GAP = '[заполнить]';
 const ru = (d) => {
@@ -62,6 +62,15 @@ const approachesTable = (chosen) => [
   row(['Итоговая величина', GAP, '1']),
 ];
 
+// Перечень движимого из нескольких позиций (2.83): итог — по каждой позиции и общий, его эксперт пишет в черновике сам
+// (средние цены аналогов по позициям — в таблице аналогов Word, справочно).
+const itemsTable = (positions) => [
+  '', 'Итог по позициям перечня:',
+  row(['Позиция', 'Наименование', 'Стоимость, руб.']),
+  ...positions.map((name, i) => row([String(i + 1), name, GAP])),
+  row(['Итого по перечню', '—', GAP]),
+];
+
 // Вопросы эксперту (2.79) — из заявки дословно: эксперт не перепечатывает их, а модель не переформулирует. Кто поставил —
 // суд (с номером и датой определения) или заказчик. Нумерация заказчика («1. …», «2) …») заменяется своей, подряд.
 export function splitQuestions(text) {
@@ -92,7 +101,8 @@ export function fillTables(body, sections, registry, order, { materials = [] } =
     const m = [...out.matchAll(/^#{1,3}\s*(.+)$/gm)].find((h) => headKey(h[1]) === headKey(s.title));
     if (!m) continue;
     const lines = s.table === 'task' ? taskTable(registry, order, { skip, materials }) : s.table === 'analogs' ? [ANALOGS_MARK]
-      : s.table === 'questions' ? questionsList(order) : approachesTable(order.approaches);
+      : s.table === 'questions' ? questionsList(order)
+        : [...approachesTable(order.approaches), ...itemsTableFor(registry, order)];
     const at = m.index + m[0].length;
     out = `${out.slice(0, at)}\n${lines.join('\n')}${out.slice(at)}`;
   }
@@ -108,6 +118,11 @@ export function fillTables(body, sections, registry, order, { materials = [] } =
     }
   }
   return out;
+}
+
+function itemsTableFor(registry, order) {
+  const positions = listPositions(registry.analogs(order.module, order.service), order);
+  return positions.length ? itemsTable(positions) : [];
 }
 
 export const COURT_WARNING = 'Об уголовной ответственности за дачу заведомо ложного заключения по статье 307 Уголовного кодекса Российской Федерации эксперт предупреждён. Подписка эксперта: [заполнить: подпись или подписка отдельным листом]';
@@ -133,7 +148,8 @@ async function analogsPart({ sql, providers, registry }, order, text) {
   const spec = registry.analogs(order.module, order.service);
   if (!spec) return { text, appendix: null };
   const sections = orderSections(registry, order);
-  const list = (await sql`select * from order_analogs where order_id = ${order.id} and deleted_at is null and confirmed_at is not null order by id`);
+  // Перечень (2.83) — по позициям: приложение со скриншотами в том же порядке и с теми же номерами, что таблица.
+  const list = inItemOrder(spec, order, await sql`select * from order_analogs where order_id = ${order.id} and deleted_at is null and confirmed_at is not null order by id`);
   // Подтверждённых аналогов нет — метка просто не попадает в файл (таблицу эксперт мог написать сам; нехватку аналогов
   // показывает раздел «Аналоги» и ИИ-проверка по правилу analogs).
   if (!list.length) return { text: text.split(ANALOGS_MARK).join(''), appendix: null };
@@ -152,7 +168,7 @@ async function analogsPart({ sql, providers, registry }, order, text) {
     });
   }
   return {
-    text: placeAnalogs(text, sections, analogTable(spec, list)),
+    text: placeAnalogs(text, sections, analogTable(spec, list, order)),
     appendix: { title: 'Приложение. Скриншоты объявлений (аналоги)', items },
   };
 }
