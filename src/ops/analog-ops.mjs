@@ -9,7 +9,7 @@ import { editsDraft, seesDraft } from '../access/policy.mjs';
 import { ANALOG_TEXT_MAX, analogMessages, askAi, parseJsonAnswer } from '../ai/ai.mjs';
 import { extractPages } from '../ai/extract.mjs';
 import { OCR_MIME } from '../providers/ocr.mjs';
-import { analogFields, analogWarnings, cleanAnalogValues, cleanUrl, hostOf, missingAnalog, searchHints, suggestionValues } from '../analogs/analogs.mjs';
+import { adjusted, adjustKinds, analogFields, analogWarnings, cleanAdjustments, cleanAnalogValues, cleanUrl, hostOf, missingAnalog, searchHints, suggestionValues } from '../analogs/analogs.mjs';
 import { audit, text as textFrom } from './util.mjs';
 
 // Облако принимает запрос не больше 3,5 МБ (Yandex Serverless Containers) — через ядро только до 3 МБ (2.49).
@@ -58,6 +58,8 @@ const publicAnalog = (a, warnings) => ({
   url: a.url,
   host: hostOf(a.url),
   fields: a.fields,
+  adjustments: a.adjustments ?? [],
+  adjusted: adjusted(a),
   suggested: a.suggested,
   ai_model: a.ai_model,
   confirmed: !!a.confirmed_at,
@@ -75,6 +77,7 @@ async function view({ sql, actor, order, registry, providers }) {
   return {
     analogs: list.map((a) => publicAnalog(a, per.get(a.id))),
     fields: analogFields(spec),
+    adjust_kinds: adjustKinds(spec).map(({ id, name }) => ({ id, name })),
     min: needed ? spec.min : 0,
     needed,
     confirmed,
@@ -210,6 +213,7 @@ export function analogOps() {
     },
     {
       // Признаки от эксперта (целиком, как на экране). confirm: true — «Подтверждаю»: обязательные признаки должны быть.
+      // adjustments — корректировки к аналогу (2.74), тоже целиком; не переданы — остаются прежние.
       id: 'analogs.update', method: 'PUT', path: '/api/orders/:id/analogs/:analog', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
       async handler(ctx) {
@@ -217,6 +221,7 @@ export function analogOps() {
         const spec = registry.analogs(order.module, order.service);
         guardEdit(actor, order, spec);
         const fields = cleanAnalogValues(spec, body?.fields);
+        const adjustments = body?.adjustments === undefined ? null : cleanAdjustments(spec, body.adjustments);
         const confirm = body?.confirm === true;
         if (confirm) {
           const miss = missingAnalog(spec, fields);
@@ -226,8 +231,8 @@ export function analogOps() {
           const row = await ownAnalog(tx, order, params.analog, { lock: true });
           if (confirm && !row.file_key) throw new HttpError(409, 'no_file', 'Сначала приложите скриншот объявления');
           await tx`update order_analogs set fields = ${JSON.stringify(fields)}, confirmed_at = ${confirm ? new Date() : null},
-                     updated_at = now() where id = ${row.id}`;
-          await audit(tx, actor, 'analogs.update', 'order', order.id, { analog: String(row.id), confirm });
+                     adjustments = ${JSON.stringify(adjustments ?? row.adjustments)}, updated_at = now() where id = ${row.id}`;
+          await audit(tx, actor, 'analogs.update', 'order', order.id, { analog: String(row.id), confirm, adjustments: (adjustments ?? row.adjustments).length });
         });
         return view(ctx);
       },

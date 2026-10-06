@@ -69,6 +69,69 @@ export function suggestionValues(spec, input) {
 
 export const missingAnalog = (spec, values) => missingRequired(analogFields(spec), values);
 
+// Корректировки к аналогу (2.74): вид (из описания модуля или «Другая» со своим названием), значение в процентах и источник —
+// справочник, год издания, таблица. Применяются по порядку, одна за другой: цена × (1 + п1/100) × (1 + п2/100)…
+export const OTHER_ADJ = { id: 'other', name: 'Другая', covers: [] };
+export const adjustKinds = (spec) => [...(spec.adjustments ?? []), OTHER_ADJ];
+export const ADJ_MAX = 15;
+// Общая корректировка больше этой доли — аналог сильно отличается от объекта («проверьте или поясните»).
+const ADJ_SPREAD = 30;
+
+export function cleanAdjustments(spec, input) {
+  if (input === undefined || input === null) return [];
+  if (!Array.isArray(input)) throw new HttpError(400, 'bad_input', 'Корректировки — списком');
+  if (input.length > ADJ_MAX) throw new HttpError(400, 'bad_input', `К аналогу — не больше ${ADJ_MAX} корректировок`);
+  const kinds = adjustKinds(spec);
+  const year = Number(todayMsk().slice(0, 4));
+  const str = (v, max, label) => {
+    const t = typeof v === 'string' || typeof v === 'number' ? String(v).trim() : '';
+    if (t.length > max) throw new HttpError(400, 'bad_input', `Корректировка: «${label}» — не длиннее ${max} знаков`);
+    return t;
+  };
+  return input.map((x, i) => {
+    const src = x && typeof x === 'object' && !Array.isArray(x) ? x : {};
+    const kind = kinds.find((k) => k.id === src.kind);
+    const n = `Корректировка ${i + 1}`;
+    if (!kind) throw new HttpError(400, 'bad_input', `${n}: выберите вид`);
+    const out = { kind: kind.id };
+    if (kind.id === OTHER_ADJ.id) {
+      out.name = str(src.name, 60, 'Название');
+      if (!out.name) throw new HttpError(400, 'bad_input', `${n}: напишите, что это за корректировка`);
+    }
+    const raw = typeof src.pct === 'string' ? src.pct.replace(/[\s  %]/g, '').replace(',', '.').replace(/^[−–]/, '-') : src.pct;
+    const pct = raw === '' || raw === undefined || raw === null ? NaN : Number(raw);
+    if (!Number.isFinite(pct) || pct < -90 || pct > 300) throw new HttpError(400, 'bad_input', `${n}: значение — число процентов от −90 до 300 (например, −5 или 3,5)`);
+    out.pct = Math.round(pct * 100) / 100;
+    const book = str(src.book, 200, 'Справочник');
+    if (book) out.book = book;
+    if (src.year !== undefined && src.year !== null && String(src.year).trim() !== '') {
+      const y = Number(String(src.year).trim());
+      if (!Number.isInteger(y) || y < 1990 || y > year + 1) throw new HttpError(400, 'bad_input', `${n}: год справочника — например, ${year}`);
+      out.year = y;
+    }
+    const table = str(src.table, 40, 'Таблица');
+    if (table) out.table = table;
+    return out;
+  });
+}
+
+export const adjustName = (spec, x) => (x.kind === OTHER_ADJ.id ? x.name : adjustKinds(spec).find((k) => k.id === x.kind)?.name ?? x.kind);
+const pctText = (p) => `${p > 0 ? '+' : p < 0 ? '−' : ''}${Math.abs(p).toLocaleString('ru-RU', { maximumFractionDigits: 2 })} %`;
+export const adjustSource = (x) => [x.book, x.year ? `${x.year} г.` : '', x.table ? `табл. ${x.table.replace(/^(табл(ица)?\.?\s*)/iu, '')}` : ''].filter(Boolean).join(', ');
+
+// Итог корректировок: общий процент и цена после них (рубли; за кв. м — когда у аналога есть площадь). Без корректировок — null.
+export function adjusted(a) {
+  const list = a.adjustments ?? [];
+  const price = a.fields?.price_rub;
+  if (!list.length || !Number.isFinite(price)) return null;
+  const k = list.reduce((m, x) => m * (1 + x.pct / 100), 1);
+  // toFixed — чтобы половинки не терялись на погрешности дробей; половина — от нуля (−3,575 % → −3,58 %).
+  const half = (x, d = 0) => Math.sign(x) * Math.round(Number(Math.abs(x).toFixed(6)) * 10 ** d) / 10 ** d;
+  const out = { pct: half((k - 1) * 100, 2), price: half(price * k) };
+  if (Number.isFinite(a.fields.area) && a.fields.area > 0) out.per_sqm = Math.round(out.price / a.fields.area);
+  return out;
+}
+
 const median = (xs) => {
   const s = [...xs].sort((a, b) => a - b);
   const m = Math.floor(s.length / 2);
@@ -85,20 +148,22 @@ export function analogWarnings(spec, order, list) {
   const per = new Map();
   for (const a of list) {
     const w = [];
+    const adj = a.adjustments ?? [];
+    const covered = new Set(adj.flatMap((x) => adjustKinds(spec).find((k) => k.id === x.kind)?.covers ?? []));
     if (byKey.get(a.url_key) > 1) w.push('Эта ссылка уже есть в деле — аналоги не должны повторяться');
     if (!a.file_key) w.push('Нет скриншота объявления — приложите снимок экрана или PDF страницы');
     const miss = missingAnalog(spec, a.fields);
     if (miss.length) w.push(`Не заполнено: ${miss.join(', ')}`);
     if (!a.fields.listed_on) w.push('Нет даты объявления');
-    else if (a.fields.listed_on < old) w.push('Объявление старше полугода — нужна корректировка на дату или другой аналог');
+    else if (a.fields.listed_on < old && !covered.has('date')) w.push('Объявление старше полугода — нужна корректировка на дату или другой аналог');
     const region = order.fields?.region;
-    if (a.fields.region && region && a.fields.region !== region) {
+    if (a.fields.region && region && a.fields.region !== region && !covered.has('region')) {
       w.push(`Другой регион (объект — ${REGIONS.find((r) => r.id === region)?.name ?? region}) — нужна корректировка`);
     }
     for (const f of spec.fields.filter((x) => x.near)) {
       const mine = Number(order.fields?.[f.near.field]);
       const v = a.fields[f.id];
-      if (!Number.isFinite(mine) || !Number.isFinite(v)) continue;
+      if (!Number.isFinite(mine) || !Number.isFinite(v) || covered.has(f.id)) continue;
       const far = f.near.within !== undefined ? Math.abs(v - mine) > f.near.within : Math.abs(v - mine) > (mine * f.near.pct) / 100;
       if (far) w.push(`${f.label}: ${v} у аналога, ${mine} у объекта — нужна корректировка`);
     }
@@ -107,6 +172,12 @@ export function analogWarnings(spec, order, list) {
       const mid = median(others);
       if (mid > 0 && Math.abs(a.fields.price_rub - mid) / mid > PRICE_SPREAD) w.push('Цена сильно отличается от остальных аналогов — проверьте или поясните в отчёте');
     }
+    for (const x of adj) {
+      const miss = [!x.book && 'справочник', !x.year && 'год', !x.table && 'таблицу'].filter(Boolean);
+      if (miss.length) w.push(`Корректировка «${adjustName(spec, x)}»: укажите ${miss.join(', ')} — откуда взято значение`);
+    }
+    const sum = adjusted(a);
+    if (sum && Math.abs(sum.pct) > ADJ_SPREAD) w.push(`Корректировки всего ${pctText(sum.pct)} — больше ${ADJ_SPREAD} %: аналог сильно отличается от объекта, проверьте или поясните в отчёте`);
     if (!a.confirmed_at) w.push(a.suggested ? 'Признаки предложил ИИ — проверьте и подтвердите' : 'Не подтверждён экспертом');
     per.set(a.id, w);
   }
@@ -132,19 +203,33 @@ export function valueText(f, v) {
   return String(v);
 }
 
-// Таблица аналогов для Word (строки «| … |»): № — номер приложения со скриншотом, источник — сайт и дата.
+// Таблица аналогов для Word (строки «| … |»): № — номер приложения со скриншотом, источник — сайт и дата. Есть
+// корректировки (2.74) — ещё столбцы «всего» и «цена после корректировок», а под таблицей — таблица самих корректировок.
 export function analogTable(spec, list) {
   const own = spec.fields;
-  const head = ['№', 'Источник', 'Цена, руб.', ...own.map((f) => f.label), 'Регион'];
+  const any = list.some((a) => a.adjustments?.length);
+  const perSqm = any && own.some((f) => f.id === 'area') && list.some((a) => adjusted(a)?.per_sqm);
+  const head = ['№', 'Источник', 'Цена, руб.', ...own.map((f) => f.label), 'Регион',
+    ...(any ? ['Корректировки, всего', 'Цена после корректировок, руб.'] : []), ...(perSqm ? ['За кв. м после корректировок, руб.'] : [])];
   const cell = (s) => String(s ?? '').replace(/\s*\n\s*/g, '; ').replace(/\|/g, '/').trim() || '—';
-  const rows = list.map((a, i) => [
-    String(i + 1),
-    [hostOf(a.url), a.fields.listed_on ? `от ${ruDate(a.fields.listed_on)}` : ''].filter(Boolean).join(', '),
-    valueText(CORE_FIELDS[0], a.fields.price_rub),
-    ...own.map((f) => valueText(f, a.fields[f.id])),
-    valueText(CORE_FIELDS[2], a.fields.region),
-  ]);
-  return [head, ...rows].map((r) => `| ${r.map(cell).join(' | ')} |`);
+  const line = (r) => `| ${r.map(cell).join(' | ')} |`;
+  const rows = list.map((a, i) => {
+    const sum = adjusted(a);
+    return [
+      String(i + 1),
+      [hostOf(a.url), a.fields.listed_on ? `от ${ruDate(a.fields.listed_on)}` : ''].filter(Boolean).join(', '),
+      valueText(CORE_FIELDS[0], a.fields.price_rub),
+      ...own.map((f) => valueText(f, a.fields[f.id])),
+      valueText(CORE_FIELDS[2], a.fields.region),
+      ...(any ? [sum ? pctText(sum.pct) : 'нет', sum ? fmtNum(sum.price) : valueText(CORE_FIELDS[0], a.fields.price_rub)] : []),
+      ...(perSqm ? [sum?.per_sqm ? fmtNum(sum.per_sqm) : ''] : []),
+    ];
+  });
+  const out = [head, ...rows].map(line);
+  if (!any) return out;
+  const adj = list.flatMap((a, i) => (a.adjustments ?? []).map((x) => [String(i + 1), adjustName(spec, x), pctText(x.pct), adjustSource(x)]));
+  return [...out, 'Корректировки к аналогам (применяются по порядку, одна за другой):',
+    ...[['Аналог', 'Корректировка', 'Значение', 'Источник (справочник, год, таблица)'], ...adj].map(line)];
 }
 
 // Для черновика от ИИ: подтверждённые аналоги строками (без ссылок — модели они не нужны).
@@ -152,7 +237,13 @@ export function analogsBrief(spec, list) {
   if (!list.length) return null;
   const fields = analogFields(spec);
   return ['АНАЛОГИ (подтверждены экспертом; таблицу программа вставит сама — не рисуй её):',
-    ...list.map((a, i) => `- Аналог ${i + 1}: ${fields.filter((f) => a.fields[f.id] !== undefined).map((f) => `${f.label} — ${valueText(f, a.fields[f.id])}`).join('; ')}`)].join('\n');
+    ...list.map((a, i) => {
+      const own = fields.filter((f) => a.fields[f.id] !== undefined).map((f) => `${f.label} — ${valueText(f, a.fields[f.id])}`);
+      const sum = adjusted(a);
+      const adj = sum ? [`корректировки — ${a.adjustments.map((x) => `${adjustName(spec, x)} ${pctText(x.pct)}${adjustSource(x) ? ` (${adjustSource(x)})` : ''}`).join(', ')}`,
+        `цена после корректировок — ${fmtNum(sum.price)} руб.`] : [];
+      return `- Аналог ${i + 1}: ${[...own, ...adj].join('; ')}`;
+    })].join('\n');
 }
 
 // Где искать (программа строит ссылки на поиск — открывает их сам эксперт в своём браузере; с сайтов мы ничего не берём).

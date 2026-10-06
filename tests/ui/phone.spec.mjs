@@ -2171,6 +2171,39 @@ test('аналоги в деле (2.32): ссылка и скриншот — И
   await expect(sp.locator('#analogs-list li.analog').first().locator('.badge')).toHaveText('подтверждён');
   await expect(sp.locator('#analogs-state')).toContainText('Подтверждено аналогов: 1 из 3');
 
+  // Корректировки (2.74): торг из справочника и своя «Цвет» без таблицы — итог и цена после корректировок, предупреждение.
+  const c1 = sp.locator('#analogs-list li.analog').first();
+  await expect(c1.locator('.analog-adj summary')).toHaveText('Корректировки: нет');
+  await c1.locator('.analog-adj summary').click();
+  await c1.getByRole('button', { name: 'Добавить корректировку' }).click();
+  let row = c1.locator('.analog-adj-row').last();
+  await row.getByLabel('Корректировка', { exact: true }).selectOption({ label: 'Торг' });
+  await expect(row.getByLabel('Название корректировки')).toBeHidden();
+  await row.getByLabel('Значение, %').fill('−5');
+  await row.getByLabel('Справочник или источник').fill('Справочник оценщика (Лейфер)');
+  await row.getByLabel('Год справочника').fill('2025');
+  await row.getByLabel('Таблица').fill('12');
+  await c1.getByRole('button', { name: 'Добавить корректировку' }).click();
+  row = c1.locator('.analog-adj-row').last();
+  await row.getByLabel('Корректировка', { exact: true }).selectOption({ label: 'Другая' });
+  await row.getByLabel('Название корректировки').fill('Цвет кузова');
+  await row.getByLabel('Значение, %').fill('1,5');
+  await row.getByLabel('Справочник или источник').fill('Анализ рынка');
+  await row.getByLabel('Год справочника').fill('2026');
+  await shot(sp, '93-specialist-analog-korrektirovki');
+  await c1.getByRole('button', { name: 'Сохранить' }).click();
+  await expect(sp.locator('#analogs-msg')).toHaveText('Аналог подтверждён');
+  const c1s = sp.locator('#analogs-list li.analog').first();
+  await expect(c1s.locator('.analog-adj summary')).toHaveText('Корректировки: 2 · всего −3,58 % · цена после — 2 073 138 руб.');
+  await expect(c1s.locator('.analog-adj-row')).toHaveCount(2);
+  await expect(c1s.locator('.analog-warn')).toContainText('Корректировка «Цвет кузова»: укажите таблицу');
+  await c1s.locator('.analog-adj').scrollIntoViewIfNeeded();
+  await shot(sp, '94-specialist-analog-korrektirovki-itog');
+  // Убрали вторую — осталась одна.
+  await c1s.getByRole('button', { name: 'Убрать корректировку' }).last().click();
+  await c1s.getByRole('button', { name: 'Сохранить' }).click();
+  await expect(sp.locator('#analogs-list li.analog').first().locator('.analog-adj summary')).toHaveText('Корректировки: 1 · всего −5 % · цена после — 2 042 500 руб.');
+
   // Второй — без скриншота, по вставленному тексту; предупреждение «нет скриншота».
   await box.getByLabel('Ссылка на объявление').fill('https://auto.drom.ru/moscow/toyota/camry/2.html');
   await sp.locator('#analogs-form details summary').click();

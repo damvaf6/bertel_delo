@@ -25,7 +25,9 @@
 //     signature?: { services?: [id услуги…] }  — результат подписывается УКЭП исполнителя до сдачи (2.5); без services — все услуги
 //     analogs?: { services: [id услуги…], min, fields: [поле + services? + near?…] }  — раздел «Аналоги» в деле (2.32): признаки
 //       аналога по виду объекта (цена, дата объявления и регион — у всех, в ядре: src/analogs/analogs.mjs); min — сколько
-//       нужно подтверждённых; near: { field: id числового поля заявки, within?: разница, pct?: разница в % } — предупреждение
+//       нужно подтверждённых; near: { field: id числового поля заявки, within?: разница, pct?: разница в % } — предупреждение;
+//       adjustments?: [{ id, name, services?, covers?: ['date' | 'region' | id признака с near…] }…] — виды корректировок (2.74),
+//       covers — какие предупреждения «нужна корректировка» снимает такая корректировка; «Другая» (other) — в ядре, у всех
 // Поле: { id, label, type: 'text' | 'longtext' | 'number' | 'select', required?, max?, min?, integer?,
 //         options?: [{ id, name }…] (для select), pattern?, hint?, upper? }
 //   Общие поля модуля идут в заявке перед полями услуги; id не должны совпадать.
@@ -232,7 +234,7 @@ export function validateModule(m) {
   if (m.analogs !== undefined) {
     const where = `${at}, аналоги`;
     const an = m.analogs;
-    onlyKeys(an, ['services', 'min', 'fields'], where);
+    onlyKeys(an, ['services', 'min', 'fields', 'adjustments'], where);
     if (!Array.isArray(an.services) || an.services.length === 0 || an.services.some((id) => !serviceIds.includes(id)) || new Set(an.services).size !== an.services.length) {
       fail(where, 'services — непустой список услуг этого модуля');
     }
@@ -257,6 +259,24 @@ export function validateModule(m) {
           const s = m.services.find((x) => x.id === sid);
           const of = [...common, ...(s.fields ?? [])].find((x) => x.id === near.field);
           if (!of || of.type !== 'number') fail(fw, `near.field — числовое поле заявки услуги ${sid}`);
+        }
+      }
+    }
+    if (an.adjustments !== undefined) {
+      const aw = `${where}, корректировки`;
+      if (!Array.isArray(an.adjustments) || an.adjustments.length === 0) fail(aw, 'adjustments — непустой список');
+      checkIds(an.adjustments, aw);
+      const nearIds = an.fields.filter((f) => f.near).map((f) => f.id);
+      for (const k of an.adjustments) {
+        const kw = `${aw}, ${k.id}`;
+        onlyKeys(k, ['id', 'name', 'services', 'covers'], kw);
+        if (k.id === 'other') fail(kw, 'id «other» занят корректировкой ядра «Другая»');
+        if (typeof k.name !== 'string' || !k.name.trim() || k.name.length > 60) fail(kw, 'name — название до 60 знаков');
+        if (k.services !== undefined && (!Array.isArray(k.services) || k.services.length === 0 || k.services.some((id) => !an.services.includes(id)))) {
+          fail(kw, 'services — непустой список услуг раздела «Аналоги»');
+        }
+        if (k.covers !== undefined && (!Array.isArray(k.covers) || k.covers.some((c) => !['date', 'region', ...nearIds].includes(c)))) {
+          fail(kw, "covers — 'date', 'region' или id признака с near");
         }
       }
     }
@@ -348,9 +368,11 @@ export function createRegistry(modules = DEFAULT_MODULES) {
     analogs(moduleId, serviceId) {
       const m = modulesList.find((x) => x.id === moduleId);
       if (!m?.analogs?.services.includes(serviceId)) return null;
+      const own = (x) => !x.services || x.services.includes(serviceId);
       return {
         min: m.analogs.min,
-        fields: m.analogs.fields.filter((f) => !f.services || f.services.includes(serviceId)).map(({ services, ...f }) => f),
+        fields: m.analogs.fields.filter(own).map(({ services, ...f }) => f),
+        adjustments: (m.analogs.adjustments ?? []).filter(own).map(({ services, ...k }) => ({ covers: [], ...k })),
       };
     },
     catalog() {
