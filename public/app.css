@@ -98,6 +98,12 @@ textarea.draft-text { min-height: 360px; font-size: 15px; line-height: 1.45; }
 .overdue { color: var(--danger); font-weight: 600; }
 .overdue.big { font-size: 18px; font-weight: 700; margin: 4px 0; }
 .steps { list-style: none; padding: 0; margin: 0 0 12px; }
+/* Страница дела короче (2.72): шаги, история и журнал — одной строкой, раскрываются по нажатию */
+details.fold { margin: 0 0 12px; }
+details.fold summary { cursor: pointer; padding: 6px 0; overflow-wrap: anywhere; }
+details.fold[open] summary { margin-bottom: 6px; }
+#history-details { margin: 12px 0 0; }
+#actions:empty, #status-msg:empty { display: none; }
 .steps li { position: relative; padding: 4px 0 4px 28px; color: var(--muted); font-size: 15px; }
 .steps li::before {
   content: ""; position: absolute; left: 4px; top: 9px; width: 12px; height: 12px; border-radius: 50%;

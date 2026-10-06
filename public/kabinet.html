@@ -141,7 +141,10 @@
       </div>
       <div class="card">
         <h2>Ход заявки</h2>
-        <ol class="steps" id="steps"></ol>
+        <details class="fold" id="steps-details">
+          <summary id="steps-summary"></summary>
+          <ol class="steps" id="steps"></ol>
+        </details>
         <div class="field hidden" id="reason-box">
           <label for="reason">Причина (для возврата или отмены)</label>
           <input id="reason" type="text" maxlength="1000">
@@ -163,8 +166,10 @@
         </div>
         <div class="row" id="actions"></div>
         <p class="msg" id="status-msg" role="status" aria-live="polite"></p>
-        <h2 class="gap">История</h2>
-        <ul class="list" id="history"></ul>
+        <details class="fold hidden" id="history-details">
+          <summary id="history-summary"></summary>
+          <ul class="list" id="history"></ul>
+        </details>
       </div>
       <div class="card hidden" id="match-box">
         <h2>Подбор исполнителя</h2>
@@ -406,7 +411,7 @@
       </div>
       <div class="card" id="journal-box">
         <details id="journal-details">
-          <summary><h2 class="inline">Журнал действий</h2></summary>
+          <summary><h2 class="inline">Журнал действий</h2> <span class="muted">— кто что сделал и когда</span></summary>
           <p class="muted" id="journal-lead"></p>
           <ul class="list journal" id="journal"></ul>
           <p class="muted hidden" id="journal-empty">Действий пока нет.</p>
