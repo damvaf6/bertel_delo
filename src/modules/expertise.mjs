@@ -544,6 +544,25 @@ export default {
       { id: 'land_use', label: 'Назначение участка', type: 'text', max: 200, services: ['land'] },
       { id: 'condition', label: 'Состояние', type: 'text', max: 200 },
     ],
+    // Виды корректировок (2.74): эксперт выбирает вид, пишет значение в процентах и источник — справочник, год, таблицу.
+    // covers — какое предупреждение «нужна корректировка» снимает корректировка этого вида.
+    adjustments: [
+      { id: 'bargain', name: 'Торг' },
+      { id: 'date', name: 'На дату оценки', covers: ['date'] },
+      { id: 'location', name: 'Местоположение', covers: ['region'] },
+      { id: 'area', name: 'Площадь (масштаб)', services: ['realty', 'land'], covers: ['area'] },
+      { id: 'floor', name: 'Этаж', services: ['realty'] },
+      { id: 'house_type', name: 'Тип дома, материал стен', services: ['realty'] },
+      { id: 'finish', name: 'Состояние и отделка', services: ['realty'] },
+      { id: 'land_use', name: 'Назначение участка (ВРИ)', services: ['land'] },
+      { id: 'utilities', name: 'Коммуникации', services: ['land'] },
+      { id: 'access', name: 'Подъезд, удалённость', services: ['land'] },
+      { id: 'age', name: 'Год выпуска (возраст)', services: ['vehicle', 'movable'], covers: ['year'] },
+      { id: 'mileage', name: 'Пробег', services: ['vehicle'] },
+      { id: 'condition', name: 'Техническое состояние', services: ['vehicle', 'movable'] },
+      { id: 'equipment', name: 'Комплектация', services: ['vehicle', 'movable'] },
+      { id: 'region', name: 'Регион', services: ['vehicle', 'movable'], covers: ['region'] },
+    ],
   },
 
   // Заключение эксперта подписывается его УКЭП (задача 2.5): без подписи результат не сдаётся на проверку.

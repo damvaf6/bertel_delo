@@ -84,6 +84,13 @@ test('описание модуля: аналоги — у оценки, не у
   assert.throws(bad((a) => { a.min = 0; }), /min/);
   assert.throws(bad((a) => { a.services = ['nope']; }), /services/);
   assert.throws(bad((a) => { a.fields.push({ id: 'notes', label: 'Заметки', type: 'longtext' }); }), /одной строкой/);
+  // Корректировки (2.74): виды — по услуге, «Другая» — у всех; ошибки описания не пропускаются.
+  assert.deepEqual(reg.analogs('expertise', 'vehicle').adjustments.map((k) => k.id), ['bargain', 'date', 'location', 'age', 'mileage', 'condition', 'equipment', 'region']);
+  assert.ok(reg.analogs('expertise', 'realty').adjustments.some((k) => k.id === 'floor' && k.covers.length === 0));
+  assert.throws(bad((a) => { a.adjustments.push({ id: 'other', name: 'Своя' }); }), /занят корректировкой ядра/);
+  assert.throws(bad((a) => { a.adjustments.push({ id: 'x1', name: 'X', covers: ['floor'] }); }), /covers/);
+  assert.throws(bad((a) => { a.adjustments.push({ id: 'x2', name: 'X', services: ['goods'] }); }), /services/);
+  assert.throws(bad((a) => { a.adjustments.push({ id: 'x3', name: '' }); }), /name/);
 });
 
 test('ссылка: только http(s); ключ для повторов — без меток рекламы, якоря, «www» и «/» в конце', () => {
@@ -307,4 +314,82 @@ test('Word: фото осмотра — приложение «Фотомате�
   assert.match(text, /Место съёмки не определено/);
   const s = buf.toString('latin1');
   assert.ok(s.includes('word/media/delo1.png') && s.includes('word/media/delo2.png'), 'обе картинки в файле');
+});
+
+// 2.74: корректировки к аналогу — вид, значение в процентах, источник; цена после корректировок; предупреждения; Word.
+test('корректировки: по порядку одна за другой, источник обязателен для спокойствия, снимают «нужна корректировка»; в Word — таблицей', async () => {
+  const o = await inWork('realty', FLAT, 'Квартира: корректировки');
+  const old = addDays(todayMsk(), -200);
+  const ids = [];
+  for (const [i, price] of [14000000, 14500000, 15000000].entries()) {
+    const id = (await add(o, `https://www.cian.ru/sale/flat/74${i}/`)).body.id;
+    await put(o, id, png(10, 10));
+    const r = await spec.req('PUT', `/api/orders/${o.id}/analogs/${id}`, { fields: { price_rub: price, address: `г. Москва, ул. Поправок, ${i + 1}`, area: i === 0 ? 80 : 50, listed_on: i === 0 ? old : addDays(todayMsk(), -5), region: 'moscow' }, confirm: true });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    ids.push(id);
+  }
+  let r = await spec.req('GET', `/api/orders/${o.id}/analogs`);
+  assert.ok(r.body.adjust_kinds.some((k) => k.id === 'floor') && r.body.adjust_kinds.at(-1).id === 'other');
+  let w = byId(r, ids[0]).warnings.join('\n');
+  assert.match(w, /старше полугода/);
+  assert.match(w, /Площадь, кв\. м: 80 у аналога/);
+  assert.equal(byId(r, ids[0]).adjusted, null);
+
+  // Неверные корректировки не принимаются, прежнее не меняется.
+  const fields0 = byId(r, ids[0]).fields;
+  for (const [adj, msg] of [
+    [[{ kind: 'nope', pct: 1 }], /выберите вид/],
+    [[{ kind: 'bargain', pct: 'много' }], /число процентов/],
+    [[{ kind: 'bargain', pct: -95 }], /от −90 до 300/],
+    [[{ kind: 'other', pct: 2 }], /что это за корректировка/],
+    [[{ kind: 'bargain', pct: 1, year: 1900 }], /год справочника/],
+    [Array.from({ length: 16 }, () => ({ kind: 'bargain', pct: 1 })), /не больше 15/],
+    ['торг', /списком/],
+  ]) {
+    const bad = await spec.req('PUT', `/api/orders/${o.id}/analogs/${ids[0]}`, { fields: fields0, adjustments: adj, confirm: true });
+    assert.equal(bad.status, 400, JSON.stringify(adj));
+    assert.match(bad.body.message, msg);
+  }
+  // Торг −5 %, на дату +2,5 %, площадь +10 % (без таблицы), своя «Вид из окна» −1 %.
+  const adj = [
+    { kind: 'bargain', pct: '−5', book: 'Справочник оценщика недвижимости (Лейфер)', year: 2025, table: 'Табл. 12' },
+    { kind: 'date', pct: '2,5', book: 'Индекс цен Росстата', year: '2026', table: '3' },
+    { kind: 'area', pct: 10, book: 'Справочник оценщика недвижимости (Лейфер)', year: 2025 },
+    { kind: 'other', name: 'Вид из окна', pct: '-1 %', book: 'Анализ рынка эксперта', year: 2026, table: '—' },
+  ];
+  r = await spec.req('PUT', `/api/orders/${o.id}/analogs/${ids[0]}`, { fields: fields0, adjustments: adj, confirm: true });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const a0 = byId(r, ids[0]);
+  assert.deepEqual(a0.adjustments.map((x) => x.pct), [-5, 2.5, 10, -1]);
+  assert.equal(a0.adjustments[0].table, 'Табл. 12');
+  assert.equal(a0.adjustments[3].name, 'Вид из окна');
+  // 14 000 000 × 0,95 × 1,025 × 1,10 × 0,99 = 14 845 792,5 → 14 845 793; всего +6,04 %; за кв. м — 185 572.
+  assert.deepEqual(a0.adjusted, { pct: 6.04, price: 14845793, per_sqm: 185572 });
+  assert.ok(a0.confirmed);
+  w = a0.warnings.join('\n');
+  assert.doesNotMatch(w, /старше полугода|Площадь, кв\. м: 80/, 'корректировки на дату и площадь сняли предупреждения');
+  assert.match(w, /Корректировка «Площадь \(масштаб\)»: укажите таблицу/);
+  assert.doesNotMatch(w, /«Торг»|«На дату/);
+  // Сохранили признаки без adjustments — корректировки остаются.
+  r = await spec.req('PUT', `/api/orders/${o.id}/analogs/${ids[0]}`, { fields: fields0, confirm: true });
+  assert.equal(byId(r, ids[0]).adjustments.length, 4);
+  // Слишком большая общая корректировка — предупреждение.
+  r = await spec.req('PUT', `/api/orders/${o.id}/analogs/${ids[1]}`, { fields: byId(r, ids[1]).fields, adjustments: [{ kind: 'finish', pct: 40, book: 'Лейфер', year: 2025, table: '20' }], confirm: true });
+  assert.match(byId(r, ids[1]).warnings.join('\n'), /Корректировки всего \+40 % — больше 30 %/);
+  // Диспетчер видит, но не меняет.
+  assert.equal((await dispatcher.req('GET', `/api/orders/${o.id}/analogs`)).body.analogs.length, 3);
+  assert.equal((await dispatcher.req('PUT', `/api/orders/${o.id}/analogs/${ids[2]}`, { fields: {}, adjustments: [] })).status, 403);
+
+  // Черновик: модель получает корректировки и цену после них. Word: столбцы итога и таблица корректировок.
+  S.providers.ai.reset();
+  const d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {})).body.draft;
+  assert.match(S.providers.ai.calls.at(-1).args.messages.at(-1).content, /Аналог 1: .*корректировки — Торг −5 % \(Справочник оценщика недвижимости \(Лейфер\), 2025 г\., табл\. 12\).*цена после корректировок — 14 845 793 руб\./);
+  const fill = (t) => t.replace(/\[(?:заполнить|описать)[^\]]*\]/g, 'заполнено экспертом');
+  await spec.req('PUT', `/api/orders/${o.id}/draft`, { body: fill(d.body), from: d.id });
+  const res = await fetch(`${S.base}/api/orders/${o.id}/draft/docx`, { headers: { cookie: spec.cookie } });
+  const text = (await extractPages(Buffer.from(await res.arrayBuffer()), 'r.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')).pages.join('\n');
+  for (const s of ['Цена после корректировок, руб.', 'За кв. м после корректировок, руб.', '14 845 793', '185 572', '+6,04 %',
+    'Корректировки к аналогам (применяются по порядку, одна за другой):', 'Вид из окна', 'Индекс цен Росстата, 2026 г., табл. 3', '+40 %']) {
+    assert.ok(text.includes(s), `в Word нет «${s}»`);
+  }
 });
