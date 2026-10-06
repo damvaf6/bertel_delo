@@ -1,6 +1,8 @@
 // «Сегодня» (2.34, 2.42): одним экраном — что требует внимания эксперта, руководителя экспертной организации и диспетчера. Эксперту: что
 // горит по срокам, что вернули на доработку (диспетчер или руководитель), что ждёт проверки диспетчера, новые предложения,
-// осмотр по ссылке 2 дня без фото (2.85).
+// осмотр по ссылке 2 дня без фото (2.85), «можно продолжать» — после того как эксперт последний раз открывал дело, заказчик
+// прислал запрошенные документы, пришли фото осмотра или владелец нажал «Готово», помощник завершил выезд, написали заказчик
+// или диспетчер (2.86).
 // Руководителю — по каждой своей организации: дела экспертов, у которых горит срок, ждут подписи организации, возвращены
 // эксперту и ждут исправления, дела, которые диспетчер предложил организации, сроки документов досье экспертов (2.63).
 // Руководителю — те же сведения, что в «Делах экспертов» (2.16): без заказчика, полей заявки, документов и переписки.
@@ -42,7 +44,35 @@ async function expertPart(sql, actor, registry, today) {
     const o = rows.find((x) => x.id === l.order_id);
     if (o) silent.push(item(o, { link_at: l.created_at, expired: new Date(l.expires_at) <= new Date(), sms_to: l.sms_to ?? null }));
   }
+  // Можно продолжать (2.86): что пришло по делу в работе после того, как эксперт его последний раз открыл (order_seen).
+  const ready = [];
+  for (const o of rows.filter((x) => x.status === 'in_work')) {
+    const n = await sql.one`
+      with s as (select coalesce((select seen_at from order_seen where order_id = ${o.id} and user_id = ${actor.id}), '-infinity') as seen)
+      select (select count(*)::int from doc_requests, s where order_id = ${o.id} and cancelled_at is null and fulfilled_at > s.seen) as docs,
+             (select count(*)::int from inspection_photos p join inspection_links l on l.id = p.link_id, s
+               where l.order_id = ${o.id} and p.received_at > s.seen) as photos,
+             (select count(*)::int from inspection_links, s where order_id = ${o.id} and finished_at > s.seen) as finished,
+             (select count(*)::int from onsite_visits, s where order_id = ${o.id} and finished_at > s.seen and cancelled_at is null) as onsite,
+             (select count(*)::int from order_messages, s where order_id = ${o.id} and side <> 'executor' and at > s.seen) as messages,
+             greatest((select max(fulfilled_at) from doc_requests, s where order_id = ${o.id} and cancelled_at is null and fulfilled_at > s.seen),
+                      (select max(p.received_at) from inspection_photos p join inspection_links l on l.id = p.link_id, s
+                        where l.order_id = ${o.id} and p.received_at > s.seen),
+                      (select max(finished_at) from inspection_links, s where order_id = ${o.id} and finished_at > s.seen),
+                      (select max(finished_at) from onsite_visits, s where order_id = ${o.id} and finished_at > s.seen and cancelled_at is null),
+                      (select max(at) from order_messages, s where order_id = ${o.id} and side <> 'executor' and at > s.seen)) as last_at`;
+    const what = [];
+    if (n.docs) what.push(`документы: получено ${n.docs}`);
+    if (n.finished) what.push(`осмотр закончен${n.photos ? ` (фото: ${n.photos})` : ''}`);
+    else if (n.photos) what.push(`новые фото осмотра: ${n.photos}`);
+    if (n.onsite) what.push('выезд помощника завершён');
+    if (n.messages) what.push(`сообщений: ${n.messages}`);
+    // Куда вести: к переписке, к запрошенным документам или к осмотру.
+    if (what.length) ready.push(item(o, { what, at: n.last_at, to: n.messages ? 'chat' : n.docs ? 'docs' : 'inspect' }));
+  }
+  ready.sort((a, b) => new Date(b.at) - new Date(a.at));
   return {
+    ready,
     inspect_silent: silent,
     hot: rows.filter((o) => o.status === 'in_work' && o.deadline && o.deadline <= soon).map((o) => item(o)),
     returned,

@@ -3540,6 +3540,57 @@ test('осмотр без фото (2.85): ссылка молчит 2 дня �
   await ectx.close();
 });
 
+test('можно продолжать (2.86): заказчик прислал документ и написал — строка в «Сегодня», нажатие ведёт к переписке', async ({ page, browser, baseURL }) => {
+  await signIn(page, '+79990000965');
+  const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира: можно продолжать' }, headers: H })).json();
+  const id = created.order.id;
+  expect((await page.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(6), fields: { purpose: 'bank', region: 'moscow', object_type: 'flat', address: 'г. Москва, Дальняя ул., 8', area: '52' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  const ectx = await phoneContext(browser, baseURL);
+  const ep = await ectx.newPage();
+  const expert = await signIn(ep, '+79990000966');
+  await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    await c.query("update orders set price_kop = 1500000, paid_at = now(), status = 'in_work', executor_user_id = $2 where id = $1", [id, expert.id]);
+  });
+  // Эксперт открыл дело и запросил выписку; пока ничего нового — строки нет.
+  await ep.goto(`/kabinet#order=${id}`);
+  await ep.locator('#docreq-box').getByLabel('Выписка из ЕГРН').check();
+  await ep.locator('#docreq-box').getByRole('button', { name: 'Запросить у заказчика' }).click();
+  await expect(ep.locator('#docreq-list li')).toHaveCount(1);
+  await ep.goto('/kabinet');
+  await expect(ep.locator('#today-box')).toBeVisible();
+  await expect(ep.locator('[data-today="ready"]')).toHaveCount(0);
+
+  // Заказчик приложил выписку и написал.
+  const rid = (await (await page.request.get(`/api/orders/${id}/doc-requests`)).json()).requests[0].id;
+  const up = await page.request.post(`/api/orders/${id}/documents`, {
+    data: Buffer.from('%PDF-1.4 выписка'), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('egrn.pdf') },
+  });
+  expect(up.status()).toBe(201);
+  expect((await page.request.post(`/api/orders/${id}/doc-requests/${rid}/attach`, { data: { document_id: (await up.json()).document.id }, headers: H })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${id}/messages`, { data: { body: 'Выписку приложила, ключи у консьержа.' }, headers: H })).status()).toBe(201);
+
+  await ep.reload();
+  await expect(ep.locator('[data-today="ready"]')).toHaveText('Можно продолжать · 1');
+  const row = ep.locator('[data-today-item="ready"]');
+  await expect(row).toContainText('Квартира: можно продолжать');
+  await expect(row).toContainText('документы: получено 1 · сообщений: 1');
+  await shot(ep, '99p-ekspert-segodnya-mozhno-prodolzhat');
+  await row.getByRole('button').click();
+  await expect(ep.locator('#chat-box')).toBeInViewport();
+  await expect(ep.locator('#messages li')).toContainText('ключи у консьержа');
+  await shot(ep, '99q-ekspert-mozhno-prodolzhat-perepiska');
+  // Дело открыто — в «Сегодня» строки больше нет.
+  await ep.goto('/kabinet');
+  await expect(ep.locator('#today-box')).toBeVisible();
+  await expect(ep.locator('[data-today="ready"]')).toHaveCount(0);
+  await ectx.close();
+});
+
 test('черновик по своему прошлому делу (2.65): эксперт берёт методические разделы, данные прошлого дела — пометками', async ({ page, browser, baseURL }) => {
   await signIn(page, '+79990000790');
   const make = async (title, address) => {
