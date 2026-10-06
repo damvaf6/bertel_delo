@@ -72,6 +72,8 @@ export const EVENTS = {
   // Запрос документов (2.64): заказчик загрузил файл к документу, который просил исполнитель.
   docs_received: { type: 'executor_work', title: 'Заказчик загрузил запрошенный документ', order: true },
   org_case_given: { type: 'executor_work', title: 'Руководитель организации передал Вам дело в работе', order: true },
+  // Эксперту (2.76): руководитель отдал предложенное ему дело другому (или забрал назад) до его ответа — без номера.
+  org_offer_taken: { type: 'executor_work', title: 'Руководитель организации снял предложенное Вам дело — отвечать не нужно', order: false, section: 'specialist' },
   org_case_taken: { type: 'executor_work', title: 'Руководитель организации передал Ваше дело другому эксперту', order: false, section: 'specialist' },
 
   priced: { type: 'order_progress', title: 'Цена назначена — оплатите заявку, чтобы передать её исполнителю', order: true, mail: true },

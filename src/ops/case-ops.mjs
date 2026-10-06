@@ -41,6 +41,7 @@ function what(a, doc) {
     case 'payment.canceled': return 'Оплата не прошла';
     case 'order.offer': return d.org ? 'Дело предложено экспертной организации' : 'Дело предложено исполнителю';
     case 'org.case.assign': return 'Руководитель организации назначил эксперта';
+    case 'org.case.reassign': return `${d.to ? 'Руководитель организации предложил дело другому эксперту' : 'Руководитель организации забрал дело у эксперта до ответа'}${d.reason ? `: ${d.reason}` : ''}`;
     case 'org.case.decline': return 'Организация отказалась от дела';
     case 'org.case.transfer': return `Руководитель организации передал дело другому эксперту${d.reason ? `: ${d.reason}` : ''}`;
     case 'message.post': return 'Сообщение в переписке';

@@ -1135,7 +1135,7 @@ test('дела экспертов (2.16): видит только руковод
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.cases.length, 1);
   const c = r.body.cases[0];
-  assert.deepEqual(Object.keys(c).sort(), ['active', 'chat', 'deadline', 'expert', 'fee_kop', 'id', 'order_ref', 'overdue', 'payout', 'returned_open', 'service', 'sign_wait', 'status', 'status_name', 'transfer_to']);
+  assert.deepEqual(Object.keys(c).sort(), ['active', 'chat', 'deadline', 'expert', 'fee_kop', 'id', 'offer_wait', 'order_ref', 'overdue', 'payout', 'returned_open', 'service', 'sign_wait', 'status', 'status_name', 'transfer_to']);
   assert.deepEqual(Object.keys(c.chat).sort(), ['expert_last', 'messages']);   // переписка (2.67): только число и чьё последнее, без текста
   assert.equal(c.status, 'review');
   assert.equal(c.expert, 'Эксперт Б');
@@ -1515,6 +1515,70 @@ test('запрос документов (2.64): видят те, кто види
   for (const who of ['owner', 'dispatcher']) assert.equal((await U[who].req('POST', base, { items: ['egrn'] })).status, 403, who);
   assert.equal((await U.dispatcher.req('POST', `${base}/1/attach`, { document_id: ownDoc.id })).status, 403);
   assert.equal((await U.owner.req('DELETE', `${base}/1`)).status, 403);
+});
+
+test('переназначение до ответа эксперта (2.76): только руководитель организации; прежний эксперт теряет предложение, «уже изменилось» после ответа', async () => {
+  cover('orgs.cases.reassign');
+  const events = async (userId, event) => (await S.sql`select count(*)::int as n from notifications where user_id = ${userId} and event = ${event}`)[0].n;
+  const expertD = await login(S, '+79990000055');
+  await addMember(S.sql, orgB.id, expertD.user.id, 'member');
+  await makeSpecialist(S.sql, expertD.user.id);
+  await S.sql`update users set full_name = 'Эксперт Г' where id = ${expertD.user.id}`;
+  assert.equal((await expertD.req('PATCH', '/api/specialist/me', { org_id: orgB.id })).status, 200);
+  const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Переназначение до ответа' })).body.order;
+  const fields = { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, Ждущая ул., 5' };
+  assert.equal((await U.owner.req('PATCH', `/api/orders/${o.id}`, { fields, deadline: new Date(Date.now() + 9 * 86400_000).toISOString().slice(0, 10) })).status, 200);
+  assert.equal((await U.owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
+  await ensurePaid(S.sql, o.id);
+  assert.equal((await U.dispatcher.req('POST', `/api/orders/${o.id}/offer`, { org_id: orgB.id, from: 'matching' })).status, 200);
+  assert.equal((await U.headB.req('POST', `/api/orgs/${orgB.id}/cases/${o.id}/assign`, { specialist_id: expertB.user.id })).status, 200);
+  // Руководитель видит: эксперт Б ещё не ответил, когда предложено, кому можно отдать (без Б).
+  const view = (await U.headB.req('GET', `/api/orgs/${orgB.id}/cases`)).body.cases.find((c) => c.id === o.id);
+  assert.equal(view.status, 'awaiting_executor');
+  assert.equal(view.offer_wait.from, expertB.user.id);
+  assert.ok(Date.now() - new Date(view.offer_wait.offered_at).getTime() < 60_000, 'когда предложено');
+  assert.ok(view.offer_wait.reassign_to.some((x) => x.full_name === 'Эксперт Г'));
+  assert.ok(!view.offer_wait.reassign_to.some((x) => x.user_id === expertB.user.id), 'без нынешнего');
+  const reassign = (c, orgId, sid = expertD.user.id, from = expertB.user.id) => c.req('POST', `/api/orgs/${orgId}/cases/${o.id}/reassign`, { from, specialist_id: sid });
+  for (const k of ['stranger', 'headA', 'owner', 'spec']) assert.equal((await reassign(U[k], orgB.id)).status, 404, k);
+  for (const c of [seniorB, expertB, expertD, U.dispatcher, U.admin]) assert.equal((await reassign(c, orgB.id)).status, 403);
+  assert.equal((await reassign(U.headA, orgA.id)).status, 404, 'своей организацией чужое дело не взять');
+  assert.equal((await reassign(U.headB, orgB.id, U.spec.user.id)).body.error, 'not_eligible', 'эксперт не из организации');
+  assert.equal((await reassign(U.headB, orgB.id, expertB.user.id)).body.error, 'same_expert');
+  assert.equal((await reassign(U.headB, orgB.id, expertD.user.id, expertD.user.id)).body.error, 'status_changed', 'видел другого эксперта');
+  // Отдал эксперту Г: Б дело больше не видит и принять не может; Г — предложение; Б — уведомление без номера дела.
+  const r = await reassign(U.headB, orgB.id);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual((await S.sql`select status, executor_user_id, offer_org_id from orders where id = ${o.id}`)[0],
+    { status: 'awaiting_executor', executor_user_id: expertD.user.id, offer_org_id: orgB.id });
+  assert.equal((await expertB.req('GET', `/api/orders/${o.id}`)).status, 404);
+  assert.notEqual((await expertB.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200, 'прежний не принимает');
+  assert.equal(await events(expertD.user.id, 'offer'), 1);
+  assert.equal(await events(expertB.user.id, 'org_offer_taken'), 1);
+  assert.equal((await S.sql`select order_id from notifications where user_id = ${expertB.user.id} and event = 'org_offer_taken'`)[0].order_id, null);
+  // Второй раз с тем же «from» — уже изменилось.
+  assert.equal((await reassign(U.headB, orgB.id)).body.error, 'status_changed');
+  // Забрал назад: дело снова в «Ждут назначения», эксперт Г — уведомление.
+  const back = await reassign(U.headB, orgB.id, null, expertD.user.id);
+  assert.equal(back.status, 200, JSON.stringify(back.body));
+  const v2 = (await U.headB.req('GET', `/api/orgs/${orgB.id}/cases`)).body;
+  assert.ok(v2.pending.some((p) => p.id === o.id), 'в «Ждут назначения»');
+  assert.ok(!v2.cases.some((c) => c.id === o.id));
+  assert.equal(await events(expertD.user.id, 'org_offer_taken'), 1);
+  assert.equal((await expertD.req('GET', `/api/orders/${o.id}`)).status, 404);
+  // Заказчику — ни имени, ни переназначения в журнале; служебным — видно.
+  assert.ok(!JSON.stringify((await U.owner.req('GET', `/api/orders/${o.id}/journal`)).body).includes('Руководитель организации'));
+  const dj = (await U.dispatcher.req('GET', `/api/orders/${o.id}/journal`)).body.journal.map((j) => j.what);
+  assert.ok(dj.includes('Руководитель организации предложил дело другому эксперту'), JSON.stringify(dj));
+  assert.ok(dj.includes('Руководитель организации забрал дело у эксперта до ответа'), JSON.stringify(dj));
+  // Эксперт принял — переназначать нельзя (только передача дела в работе).
+  assert.equal((await U.headB.req('POST', `/api/orgs/${orgB.id}/cases/${o.id}/assign`, { specialist_id: expertD.user.id })).status, 200);
+  assert.equal((await expertD.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  assert.equal((await reassign(U.headB, orgB.id, expertB.user.id, expertD.user.id)).body.error, 'status_changed');
+  assert.equal((await U.headB.req('GET', `/api/orgs/${orgB.id}/cases`)).body.cases.find((c) => c.id === o.id).offer_wait, null);
+  const offers = await S.sql`select specialist_id, outcome from order_offers where order_id = ${o.id} order by id`;
+  assert.deepEqual(offers.map((x) => [x.specialist_id === expertB.user.id ? 'Б' : x.specialist_id === expertD.user.id ? 'Г' : 'организация', x.outcome]), [
+    ['организация', 'accepted'], ['Б', 'withdrawn'], ['Г', 'withdrawn'], ['организация', 'accepted'], ['Г', 'accepted']]);
 });
 
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {
