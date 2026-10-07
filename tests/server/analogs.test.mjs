@@ -371,6 +371,23 @@ test('Word: картинки — PNG и JPEG по размеру из файла
   }
 });
 
+function docPart(buf, name) {
+  let p = buf.length - 22;
+  while (buf.readUInt32LE(p) !== 0x06054b50) p -= 1;
+  let q = buf.readUInt32LE(p + 16);
+  for (let i = 0; i < buf.readUInt16LE(p + 10); i += 1) {
+    const nlen = buf.readUInt16LE(q + 28);
+    const local = buf.readUInt32LE(q + 42);
+    if (buf.subarray(q + 46, q + 46 + nlen).toString('utf8') === name) {
+      const from = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
+      const data = buf.subarray(from, from + buf.readUInt32LE(q + 20));
+      return (buf.readUInt16LE(q + 10) === 8 ? zlib.inflateRawSync(data) : data).toString('utf8');
+    }
+    q += 46 + nlen + buf.readUInt16LE(q + 30) + buf.readUInt16LE(q + 32);
+  }
+  return null;
+}
+
 // 2.37: в Word — ещё и фото осмотра приложением: по шагам, с временем получения и местом; картинки — в файле.
 test('Word: фото осмотра — приложение «Фотоматериалы осмотра» по шагам, со временем и местом; потом скриншоты аналогов', async () => {
   const o = await inWork('vehicle', CAR, 'Машина: фото осмотра в Word');
@@ -378,7 +395,7 @@ test('Word: фото осмотра — приложение «Фотомате�
   assert.equal(r.status, 201, JSON.stringify(r.body));
   const token = r.body.path.split('#')[1];
   const anon = (await import('../helpers.mjs')).client(S);
-  for (const [step, geo] of [['car_rear', {}], ['car_front', { 'x-lat': '55.7512', 'x-lon': '37.6184', 'x-accuracy': '12' }]]) {
+  for (const [step, geo] of [['car_rear', {}], ['car_front', { 'x-lat': '55.7512', 'x-lon': '37.6184', 'x-accuracy': '12', 'x-shot-at': new Date(Date.now() - 60_000).toISOString() }]]) {
     const up = await anon.req('POST', '/api/inspect/photos', png(640, 480), { raw: true, headers: { 'x-inspect-token': token, 'content-type': 'image/png', 'x-step': step, ...geo } });
     assert.equal(up.status, 201, JSON.stringify(up.body));
   }
@@ -389,10 +406,19 @@ test('Word: фото осмотра — приложение «Фотомате�
   const text = (await extractPages(buf, 'r.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')).pages.join('\n');
   assert.match(text, /Приложение\. Фотоматериалы осмотра/);
   // По порядку шагов осмотра: сначала «Спереди», потом «Сзади», хотя сняты наоборот.
-  assert.ok(text.indexOf('Фото 1 — Спереди') >= 0 && text.indexOf('Фото 1 — Спереди') < text.indexOf('Фото 2 — Сзади'), text.slice(-800));
+  assert.ok(text.indexOf('Фото 1. Спереди') >= 0 && text.indexOf('Фото 1. Спереди') < text.indexOf('Фото 2. Сзади'), text.slice(-800));
   assert.match(text, /Получено платформой «БЕРТЕЛ Дело»: \d\d\.\d\d\.\d{4}/);
   assert.match(text, /Место съёмки: 55\.75120, 37\.61840 \(±12 м\)/);
   assert.match(text, /Место съёмки не определено/);
+  // 2.96: номер в Word — тот же, что в деле; подпись — под картинкой; снимки в оглавление не идут.
+  const g = (await spec.req('GET', `/api/orders/${o.id}/inspection`)).body;
+  assert.deepEqual(g.steps.filter((x) => x.photos.length).map((x) => [x.id, x.photos.map((p) => p.no)]), [['car_front', [1]], ['car_rear', [2]]]);
+  assert.equal(text.split('Фото 1. Спереди').length, 2, 'подпись снимка — один раз, не в оглавлении');
+  const xml = docPart(buf, 'word/document.xml');
+  const at = xml.indexOf('Фото 1. Спереди');
+  assert.ok(xml.lastIndexOf('<w:drawing>', at) > xml.lastIndexOf('Приложение. Фотоматериалы осмотра', at), 'картинка — над подписью');
+  assert.match(xml.slice(at, xml.indexOf('Фото 2. Сзади')), /Снято: \d\d\.\d\d\.\d{4}, \d\d:\d\d \(МСК, по часам телефона\) · Место съёмки: 55\.75120/);
+  assert.match(xml.slice(xml.indexOf('Фото 2. Сзади')), /Время съёмки телефон не передал · Место съёмки не определено/);
   const s = buf.toString('latin1');
   assert.ok(s.includes('word/media/delo1.png') && s.includes('word/media/delo2.png'), 'обе картинки в файле');
 });

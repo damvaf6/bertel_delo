@@ -2387,6 +2387,11 @@ test('как настоящий эксперт (2.33): автобус для с�
   await expect(op.locator('#closed-text')).toContainText('Эксперт получил 3 фото');
   await sp.reload();
   await expect(sp.locator('#inspect-state')).toContainText('Не снято: Сзади, Слева, Справа, Салон — попросите доснять ниже.');
+  // 2.96: у фото в деле — сквозной номер по шагам осмотра, тот же, что в Word.
+  await expect(sp.locator('#inspect-steps li[data-step="car_front"] .name')).toHaveText('Фото 1 · Осмотр · Спереди · 1.jpg');
+  await expect(sp.locator('#inspect-steps li[data-step="car_odometer"] .name')).toHaveText('Фото 3 · Осмотр · Пробег · 1.jpg');
+  await sp.locator('#inspect-steps li[data-step="car_front"]').scrollIntoViewIfNeeded();
+  await shot(sp, '115-ekspert-foto-osmotra-nomera');
   await expect(sp.getByLabel('Попросить переснять шаг')).toHaveValue('car_rear');
   await expect(sp.locator('#next-steps li[data-step="inspect"]')).toContainText('✓');
   await shot(sp, '94-ekspert-osmotr-ne-snyato');
@@ -2406,8 +2411,10 @@ test('как настоящий эксперт (2.33): автобус для с�
   for await (const ch of await word.createReadStream()) wchunks.push(ch);
   const wtext = (await extractPages(Buffer.concat(wchunks), 'r.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')).pages.join('\n');
   expect(wtext).toContain('Приложение. Фотоматериалы осмотра');
-  expect(wtext).toContain('Фото 1 — Спереди');
+  expect(wtext).toContain('Фото 1. Спереди');
   expect(wtext).toContain('Место съёмки: 55.75000, 37.61000');
+  expect(wtext).toContain('Фото 3. Пробег');
+  expect(wtext).toMatch(/Снято: \d\d\.\d\d\.\d{4}, \d\d:\d\d \(МСК, по часам телефона\) · Место съёмки: 55\.75000/);
   await text.fill(body.replace(/\[(?:заполнить|описать)[^\]]*\]/gi, 'заполнено экспертом'));
   await sp.getByRole('button', { name: 'Сохранить правку' }).click();
   await expect(sp.locator('#draft-msg')).toHaveText('Правка сохранена');

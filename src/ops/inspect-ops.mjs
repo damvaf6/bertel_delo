@@ -10,6 +10,7 @@ import { HttpError, notFound, rateLimiter } from '../http/core.mjs';
 import { orderSides } from '../access/policy.mjs';
 import { notify } from '../notify/notify.mjs';
 import { audit, phoneFrom, text } from './util.mjs';
+import { inspectionPhotos } from '../docs/photos.mjs';
 
 export const INSPECT = {
   days: [1, 3, 7],       // на сколько дней выдаётся ссылка (по умолчанию — 3)
@@ -226,12 +227,9 @@ export function inspectOps() {
         const steps = registry.inspectionSteps(order.module, order.service);
         const links = await sql`select l.*, (select count(*)::int from inspection_photos p where p.link_id = l.id) as photos
                                 from inspection_links l where l.order_id = ${order.id} order by l.id desc`;
-        const photos = await sql`
-          select p.document_id, p.link_id, p.visit_id, p.step, p.received_at, p.shot_at, p.lat, p.lon, p.accuracy_m,
-                 p.thumb is not null as has_thumb, d.filename, d.size_bytes from inspection_photos p join documents d on d.id = p.document_id
-          where d.order_id = ${order.id} and d.deleted_at is null order by p.received_at, d.id`;
+        const photos = await inspectionPhotos(sql, order, steps);
         const byStep = (id) => photos.filter((p) => p.step === id).map((p) => ({
-          document_id: p.document_id, filename: p.filename, size_bytes: p.size_bytes,
+          no: p.no, document_id: p.document_id, filename: p.filename, size_bytes: p.size_bytes,
           link_id: p.link_id === null ? null : String(p.link_id), visit_id: p.visit_id === null ? null : String(p.visit_id),
           received_at: p.received_at, shot_at: p.shot_at, thumb: p.has_thumb,
           geo: p.lat === null ? null : { lat: p.lat, lon: p.lon, accuracy_m: p.accuracy_m === null ? null : Math.round(p.accuracy_m) },
