@@ -5,6 +5,7 @@ import { state } from '/shell.js';
 import { setNext } from '/next.js';
 import { loadAnalogs } from '/analogs.js';
 import { loadSnippets } from '/snippets.js';
+import { loadDraftDiff } from '/draftdiff.js';
 
 const $ = (id) => document.getElementById(id);
 const timeRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
@@ -42,6 +43,8 @@ export async function loadDraft(current, reload) {
   $('draft-confirm').checked = false;
   $('draft-state').textContent = stateText(r);
   countGaps();
+  // Что изменилось между версиями (2.104).
+  loadDraftDiff(ctx.order, r.draft);
   // Свои заготовки абзацев (2.87): вставка считается правкой — пометки пересчитываются, правка помнится на телефоне.
   await loadSnippets(!!(r.draft && r.can_edit), () => $('draft-text').dispatchEvent(new Event('input')));
 }
@@ -158,6 +161,7 @@ async function save() {
   dropLocal(ctx.order.id);
   $('draft-local').classList.add('hidden');
   $('draft-state').textContent = stateText({ draft: r.draft, can_edit: true });
+  loadDraftDiff(ctx.order, r.draft);
 }
 
 // Перечень использованных документов (2.95): собирается заново из дела; несохранённая правка сначала сохраняется.
