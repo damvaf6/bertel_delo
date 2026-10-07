@@ -4,7 +4,8 @@
 // Находка — подсказка человеку (место и страница), не вердикт: отметки ставит человек.
 // Какие правила к какой проверке относятся — данными в модуле (`checks[].auto`); здесь — только сами правила.
 //   runAutoChecks(names, docs, ctx) → { [имя правила]: [{ text, file, where, quote }] }
-// docs — [{ name, kind, pages }] (src/ai/extract.mjs); ctx — { fields } заявки, { basis: { kind, number } } (2.38), { analogs } — подтверждённые аналоги дела (2.75) и
+// docs — [{ name, kind, pages }] (src/ai/extract.mjs); ctx — { fields } заявки, { basis: { kind, number } } (2.38), { analogs } — подтверждённые аналоги дела (2.75),
+// { inspectionDays } — дни получения фото осмотра (2.88) и
 // { dossier: { items, today } } исполнителя (2.14).
 
 import { adjusted, cleanUrl } from '../analogs/analogs.mjs';
@@ -443,12 +444,10 @@ const squash = (v) => String(v ?? '').toLowerCase().replace(/[^0-9a-zа-яё]/gi
 const ruDate = (d) => d.split('-').reverse().join('.');
 
 function reportDate(docs, today) {
+  // 2.88: дата составления — и цифрами, и словами («12 сентября 2026 г.»).
   for (const doc of docs) for (const page of doc.pages ?? []) {
-    const m = page.match(REPORT_DATE);
-    if (m) {
-      const d = `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
-      if (!Number.isNaN(new Date(`${d}T00:00:00Z`).getTime())) return { date: d, stated: true };
-    }
+    const d = dateAfter(page, MADE_LABEL);
+    if (d) return { date: d, stated: true };
   }
   return { date: today, stated: false };
 }
@@ -567,24 +566,83 @@ function vinMatch(doc, ctx) {
 
 // Дата составления отчёта не раньше даты оценки.
 const MONTHS = ['январ', 'феврал', 'март', 'апрел', 'ма', 'июн', 'июл', 'август', 'сентябр', 'октябр', 'ноябр', 'декабр'];
+function ymd(y, m, d) {
+  const v = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  const t = new Date(`${v}T00:00:00Z`);
+  return !Number.isNaN(t.getTime()) && t.toISOString().slice(0, 10) === v ? v : null;
+}
 function dateAfter(text, label) {
   const num = text.match(new RegExp(`${label}[^\\d\\n]{0,40}(\\d{1,2})\\.(\\d{1,2})\\.(\\d{4})`, 'iu'));
-  if (num) return `${num[3]}-${num[2].padStart(2, '0')}-${num[1].padStart(2, '0')}`;
+  if (num) return ymd(num[3], num[2], num[1]);
   const word = text.match(new RegExp(`${label}[^\\d\\n]{0,40}(\\d{1,2})\\s+([а-яё]+)\\s+(\\d{4})`, 'iu'));
   if (word) {
     const mi = MONTHS.findIndex((x, i) => (i === 4 ? /^ма[яй]$/iu.test(word[2]) : word[2].toLowerCase().startsWith(x)));
-    if (mi >= 0) return `${word[3]}-${String(mi + 1).padStart(2, '0')}-${word[1].padStart(2, '0')}`;
+    if (mi >= 0) return ymd(word[3], mi + 1, word[1]);
   }
   return null;
 }
+const MADE_LABEL = 'дата\\s+(?:составления|подписания)(?:\\s+(?:отч[её]та|заключения))?';
+const VALUE_LABEL = 'дата\\s+(?:оценки|определения\\s+(?:рыночной\\s+)?стоимости)';
 function dateOrder(doc) {
   const text = (doc.pages ?? []).join('\n');
-  const val = dateAfter(text, 'дата\\s+оценки');
-  const made = dateAfter(text, 'дата\\s+(?:составления|подписания)(?:\\s+(?:отч[её]та|заключения))?');
+  const val = dateAfter(text, VALUE_LABEL);
+  const made = dateAfter(text, MADE_LABEL);
   if (!val || !made || made >= val) return [];
   const at = (doc.pages ?? []).findIndex((p) => /дата\s+(?:составления|подписания)/iu.test(p));
   return [{ page: Math.max(0, at), quote: lineAround(doc.pages[Math.max(0, at)], Math.max(0, doc.pages[Math.max(0, at)].search(/дата\s+(?:составления|подписания)/iu))),
     text: `Дата составления отчёта (${ruDate(made)}) раньше даты оценки (${ruDate(val)}) — так быть не может` }];
+}
+
+// ——— 2.88: даты по всему отчёту ———
+// Осмотр не позже составления отчёта и в те дни, когда в деле получены фото осмотра; объявления аналогов (из дела и из
+// таблицы в отчёте) — не позже даты оценки: объявления, которого на дату оценки ещё не было, в аналоги брать нельзя.
+// ctx.inspectionDays — дни (по Москве), когда платформа получила фото осмотра по ссылке или с выезда помощника.
+const INSPECT_LABELS = [
+  'дата\\s+(?:проведения\\s+)?(?:визуального\\s+|натурного\\s+)?осмотра(?:\\s+объекта(?:\\s+(?:оценки|экспертизы))?)?',
+  'осмотр\\S*\\s+(?:объекта\\s+(?:оценки\\s+|экспертизы\\s+)?)?(?:был\\s+)?(?:проведен|произведен|проведён|произведён)\\S*',
+];
+const AD_DATE = /(?:([a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:ru|рф|com|net|org|su|pro|online))\S*[^\n\d]{0,30}?(?<![а-яё])от\s+|дата\s+(?:объявления|публикации|размещения|предложения)[^\d\n]{0,30}?)(\d{1,2})\.(\d{1,2})\.(\d{4})/giu;
+const pageWith = (doc, label) => {
+  const re = new RegExp(label, 'iu');
+  const i = Math.max(0, (doc.pages ?? []).findIndex((p) => re.test(p)));
+  const page = doc.pages?.[i] ?? '';
+  return { doc, page: i, quote: lineAround(page, Math.max(0, page.search(re))) };
+};
+function reportDates(docs, ctx) {
+  const d = mainReport(docs) ?? docs[0];
+  if (!d) return [];
+  const text = (d.pages ?? []).join('\n');
+  const made = dateAfter(text, MADE_LABEL);
+  const val = dateAfter(text, VALUE_LABEL);
+  const label = INSPECT_LABELS.find((l) => dateAfter(text, l));
+  const insp = label ? dateAfter(text, label) : null;
+  const out = [];
+  if (insp && made && insp > made) {
+    out.push({ ...pageWith(d, label), text: `Дата осмотра (${ruDate(insp)}) позже даты составления отчёта (${ruDate(made)}) — осмотр не может быть после того, как отчёт составлен` });
+  }
+  const days = [...new Set(ctx.inspectionDays ?? [])].sort();
+  if (insp && days.length && !days.includes(insp) && !/без\s+(?:проведения\s+)?осмотра/iu.test(text)) {
+    out.push({ ...pageWith(d, label), text: `Дата осмотра в отчёте — ${ruDate(insp)}, а фото осмотра в деле получены ${days.map(ruDate).join(', ')} — проверьте дату осмотра` });
+  }
+  if (!val) return out;
+  const told = new Set();
+  (ctx.analogs ?? []).forEach((a, i) => {
+    const on = a.fields?.listed_on;
+    if (typeof on !== 'string' || on <= val) return;
+    told.add(on);
+    out.push({ ...pageWith(d, 'аналог'), text: `Аналог ${i + 1} из дела (${siteOf(a.url)}): объявление от ${ruDate(on)} — позже даты оценки (${ruDate(val)}); на дату оценки его ещё не было — возьмите другой аналог или проверьте дату` });
+  });
+  for (const doc of docs) {
+    eachPage(doc, (page, p) => {
+      for (const m of page.matchAll(AD_DATE)) {
+        const on = ymd(m[4], m[3], m[2]);
+        if (!on || on <= val || told.has(on)) continue;
+        told.add(on);
+        out.push({ doc, page: p, quote: lineAround(page, m.index), text: `Объявление аналога от ${ruDate(on)} — позже даты оценки (${ruDate(val)}); на дату оценки его ещё не было — возьмите другой аналог или проверьте дату` });
+      }
+    });
+  }
+  return out;
 }
 
 // ——— 2.60: госномер и пробег — как в заявке (транспорт) ———
@@ -902,6 +960,7 @@ const WHOLE = {
   required_items: requiredItems,
   court_order: courtOrder,
   analog_match: analogMatch,
+  report_dates: reportDates,
 };
 
 const PER_DOC = {
@@ -950,6 +1009,7 @@ export const AUTO_CHECKS = Object.freeze({
   court_order: 'по определению суда — номер определения и ст. 307 УК РФ',
   vin_match: 'VIN в отчёте — как в заявке',
   date_order: 'дата составления отчёта не раньше даты оценки',
+  report_dates: 'даты по всему отчёту: осмотр не позже составления и в дни фото осмотра в деле, объявления аналогов не позже даты оценки',
   reg_match: 'госномер в отчёте — как в заявке',
   mileage_match: 'пробег в отчёте — как в заявке (с запасом 10%)',
   approach_weights: 'веса подходов в согласовании в сумме 1',
