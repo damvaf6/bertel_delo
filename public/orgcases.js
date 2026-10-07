@@ -4,6 +4,8 @@
 // с экспертом (2.28) — у каждого дела.
 // Дело в работе руководитель передаёт другому эксперту организации (2.62); предложенное и ещё не принятое — отдаёт другому
 // или забирает назад, не дожидаясь отказа (2.76).
+// Отбор одной кнопкой (2.102): горит, ждёт моей подписи, вернул эксперту, просят перенести срок, предложено и молчит —
+// с числом дел; работает вместе с поиском.
 // «Ждут назначения» (2.17): дела, предложенные диспетчером организации, — руководитель назначает эксперта или отказывается.
 import { api, el, say } from '/common.js';
 import { expertLink } from '/expertcard.js';
@@ -32,10 +34,20 @@ const fact = (dt, dd, cls) => [el('dt', { text: dt }), el('dd', { text: dd, ...(
 let shown = { org: null, orgObj: null, cases: [] };
 wireSearch($('org-cases-search'), () => renderCases());
 
+// Отборы (2.102): только среди активных дел; кнопка видна, когда есть хоть одно такое дело.
+const FILTERS = [
+  { id: 'hot', text: 'Горит', test: (c) => c.hot },
+  { id: 'sign', text: 'Ждёт моей подписи', test: (c) => c.sign_wait > 0 },
+  { id: 'returned', text: 'Вернул эксперту', test: (c) => c.returned_open },
+  { id: 'extend', text: 'Просят перенести срок', test: (c) => !!c.extend },
+  { id: 'silent', text: 'Предложено, молчит', test: (c) => c.status === 'awaiting_executor' },
+];
+let filter = null;
+
 export async function loadOrgCases(org) {
   const { pending, cases, load, money } = await api('GET', `/api/orgs/${org.id}/cases`);
   // Другая организация — поиск с чистого листа; та же (передали дело, подписали) — запрос остаётся.
-  if (shown.org !== org.id) $('org-cases-search').value = '';
+  if (shown.org !== org.id) { $('org-cases-search').value = ''; filter = null; }
   shown = { org: org.id, orgObj: org, cases };
   $('org-cases-box').classList.remove('hidden');
   $('org-pending-box').classList.toggle('hidden', pending.length === 0);
@@ -67,16 +79,34 @@ function renderCases() {
   $('org-cases-search-box').classList.toggle('hidden', cases.length < 2);
   const q = cases.length < 2 ? '' : $('org-cases-search').value;
   const hit = matcher(q);
-  const found = cases.filter((c) => hit([c.order_ref, c.service, c.expert, c.status_name].join(' ')));
+  // Отбор, по которому дел не осталось (подписали, эксперт ответил), снимается сам.
+  const counts = new Map(FILTERS.map((f) => [f.id, cases.filter((c) => c.active && f.test(c)).length]));
+  if (filter && !counts.get(filter)) filter = null;
+  const chosen = FILTERS.find((f) => f.id === filter);
+  renderFilters(counts);
+  const found = cases.filter((c) => hit([c.order_ref, c.service, c.expert, c.status_name].join(' '))
+    && (!chosen || (c.active && chosen.test(c))));
   const active = found.filter((c) => c.active);
   const done = found.filter((c) => !c.active);
   const none = cases.length > 0 && !found.length;
   $('org-cases-none').classList.toggle('hidden', !none);
-  $('org-cases-none').textContent = none ? `Ничего не найдено по «${q.trim()}». Ищите по номеру дела, виду услуги или эксперту.` : '';
+  $('org-cases-none').textContent = !none ? '' : chosen
+    ? `По отбору «${chosen.text}» ничего не найдено по «${q.trim()}». Нажмите «Все», чтобы искать по всем делам.`
+    : `Ничего не найдено по «${q.trim()}». Ищите по номеру дела, виду услуги или эксперту.`;
   $('org-cases').replaceChildren(
     ...active.map((c) => caseItem(org, c)),
     ...(done.length ? [el('li', { class: 'group', text: `Завершённые · ${done.length}` })] : []),
     ...done.map((c) => caseItem(org, c)));
+}
+
+// Кнопки отбора: «Все» и те, по которым есть дела, с числом. Ни одного отбора — строки нет.
+function renderFilters(counts) {
+  const box = $('org-cases-filter');
+  const used = FILTERS.filter((f) => counts.get(f.id));
+  box.classList.toggle('hidden', used.length === 0);
+  const chip = (id, text) => el('button', { type: 'button', class: 'secondary', 'data-filter': id ?? 'all',
+    'aria-pressed': String(filter === id), onclick: () => { filter = id; renderCases(); } }, text);
+  box.replaceChildren(...(used.length ? [chip(null, 'Все'), ...used.map((f) => chip(f.id, `${f.text} · ${counts.get(f.id)}`))] : []));
 }
 
 function caseItem(org, c) {
@@ -109,7 +139,7 @@ function caseItem(org, c) {
 // Открыть организацию сразу на нужном деле (2.67): из уведомления или «Сегодня» — назначить, подписать, ответить эксперту.
 export function focusOrgCase({ ref, to }) {
   // Поиск мог спрятать нужное дело — переход из уведомления важнее.
-  if ($('org-cases-search').value) { $('org-cases-search').value = ''; renderCases(); }
+  if ($('org-cases-search').value || filter) { $('org-cases-search').value = ''; filter = null; renderCases(); }
   const r = CSS.escape(ref);
   if (to === 'sign' && document.querySelector(`#org-sign li[data-item="${r}"]`)) return goSign(ref);
   const li = (to === 'pending' && document.querySelector(`#org-pending li[data-pending="${r}"]`))

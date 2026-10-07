@@ -5296,3 +5296,72 @@ test('как эксперт и руководитель (2.100): перенос 
   await shot(ep, 'b7-ekspert-itogi-posle-perenosa');
   for (const p of [ep, hp, dp]) await p.context().close();
 });
+
+// Отбор дел у руководителя одной кнопкой (2.102): горит, ждёт подписи, просят перенести срок, предложено и молчит.
+test('дела экспертов (2.102): руководитель отбирает дела одной кнопкой — горит, ждёт подписи, перенос, молчит', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), ep = await ctx(), hp = await ctx();
+  const customer = await signIn(cp, '+79990010111');
+  const expert = await signIn(ep, '+79990010112'), head = await signIn(hp, '+79990010113');
+  const { orgId, ids } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Отбор ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Отборова Нина' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const add = async (title, status, days) => (await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', $1, $2, $3, $4, current_date + $5::int, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Отборная ул., 1","area":"40"}') returning id`,
+      [title, customer.id, expert.id, status, days])).rows[0].id;
+    const ids = { fire: await add('Отбор: горит', 'in_work', 1), sign: await add('Отбор: подпись', 'in_work', 10),
+      silent: await add('Отбор: молчит', 'awaiting_executor', 12), calm: await add('Отбор: спокойно', 'in_work', 20) };
+    for (const k of ['fire', 'sign', 'calm']) await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [ids[k], expert.id]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, offered_at) values ($1, $2, '{}', now() - interval '30 hours')", [ids.silent, expert.id]);
+    return { orgId: org.id, ids };
+  });
+  // Эксперт просит перенести горящее дело и подписывает отчёт по другому.
+  expect((await ep.request.post(`/api/orders/${ids.fire}/deadline-requests`, { data: { new_deadline: inDays(7), reason: 'Нет доступа' }, headers: H })).status()).toBe(201);
+  const up = await ep.request.post(`/api/orders/${ids.sign}/results`, { data: Buffer.from('%PDF-1.4 отбор'), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Отчёт.pdf') } });
+  const docId = (await up.json()).document.id;
+  expect((await ep.request.post(`/api/documents/${docId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const chips = hp.locator('#org-cases-filter button');
+  const rows = hp.locator('#org-cases > li[data-case]');
+  await expect(rows).toHaveCount(4);
+  await expect(chips).toHaveText(['Все', 'Горит · 1', 'Ждёт моей подписи · 1', 'Просят перенести срок · 1', 'Предложено, молчит · 1']);
+  await expect(chips.first()).toHaveAttribute('aria-pressed', 'true');
+  // Кнопки не уходят за край экрана.
+  const box = await hp.locator('#org-cases-filter').boundingBox();
+  for (const b of await chips.all()) { const r = await b.boundingBox(); expect(r.x + r.width).toBeLessThanOrEqual(box.x + box.width + 1); }
+  await hp.locator('#org-cases-filter').scrollIntoViewIfNeeded();
+  await shot(hp, 'c1-rukovoditel-otbor-vse');
+
+  await hp.locator('[data-filter="hot"]').click();
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first().locator('[data-role="extend"]')).toBeVisible();
+  await expect(hp.locator('[data-filter="hot"]')).toHaveAttribute('aria-pressed', 'true');
+  await shot(hp, 'c2-rukovoditel-otbor-gorit');
+  await hp.locator('[data-filter="sign"]').click();
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first().locator('[data-role="sign-wait"]')).toBeVisible();
+  await hp.locator('[data-filter="silent"]').click();
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first()).toContainText('Предложено эксперту');
+  await shot(hp, 'c3-rukovoditel-otbor-molchit');
+  // Поиск работает внутри отбора; ничего не нашлось — подсказка про «Все».
+  await hp.locator('#org-cases-search').fill('нет такого');
+  await expect(hp.locator('#org-cases-none')).toContainText('Нажмите «Все»');
+  await hp.locator('#org-cases-search').fill('');
+  await hp.locator('[data-filter="all"]').click();
+  await expect(rows).toHaveCount(4);
+  // Руководитель вернул отчёт — появляется «Вернул эксперту», «Ждёт моей подписи» пропадает.
+  expect((await hp.request.post(`/api/org-documents/${docId}/return`, { data: { comment: 'Нет даты осмотра' }, headers: H })).status()).toBe(201);
+  await hp.reload();
+  await expect(chips).toHaveText(['Все', 'Горит · 1', 'Вернул эксперту · 1', 'Просят перенести срок · 1', 'Предложено, молчит · 1']);
+  await hp.locator('[data-filter="returned"]').click();
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first().locator('[data-role="returned"]')).toBeVisible();
+  await shot(hp, 'c4-rukovoditel-otbor-vernul');
+  for (const p of [cp, ep, hp]) await p.context().close();
+});
