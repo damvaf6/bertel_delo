@@ -196,6 +196,35 @@
         <button type="submit" class="secondary" id="transfer">Передать</button>
         <p class="msg" id="transfer-msg" role="status" aria-live="polite"></p>
       </form>
+      <div class="card hidden" id="deadline-box">
+        <h2>Срок</h2>
+        <p class="muted" id="deadline-lead"></p>
+        <div class="hidden" id="deadline-open">
+          <p id="deadline-open-text"></p>
+          <div class="field hidden" id="deadline-answer-field">
+            <label for="deadline-answer">Пояснение исполнителю (необязательно)</label>
+            <input id="deadline-answer" type="text" maxlength="1000" autocomplete="off">
+          </div>
+          <div class="row">
+            <button type="button" class="hidden" id="deadline-approve">Согласиться</button>
+            <button type="button" class="danger hidden" id="deadline-decline">Отказать</button>
+            <button type="button" class="secondary hidden" id="deadline-withdraw">Отозвать просьбу</button>
+          </div>
+        </div>
+        <form class="hidden" id="deadline-form" novalidate>
+          <div class="field">
+            <label for="deadline-new">Новый срок</label>
+            <input id="deadline-new" type="date">
+          </div>
+          <div class="field">
+            <label for="deadline-reason">Причина — увидят диспетчер и заказчик</label>
+            <textarea id="deadline-reason" maxlength="1000" rows="2"></textarea>
+          </div>
+          <button type="submit" class="secondary" id="deadline-send">Попросить перенести срок</button>
+        </form>
+        <ul class="list" id="deadline-history"></ul>
+        <p class="msg" id="deadline-msg" role="status" aria-live="polite"></p>
+      </div>
       <div class="card hidden" id="org-returns-box">
         <h2>Замечания руководителя</h2>
         <p class="muted" id="org-returns-lead"></p>

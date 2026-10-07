@@ -22,10 +22,12 @@ const PARTY_ACTIONS = new Set(['order.create', 'order.update', 'order.status', '
   'payment.canceled', 'order.offer', 'message.post', 'document.upload', 'document.direct_upload', 'document.delete', 'document.sign',
   'document.sign_org', 'document.verify', 'refund.create', 'inspection.issue', 'inspection.sms', 'inspection.retake', 'inspect.finish',
   'onsite.assign', 'onsite.finish', 'order.transfer', 'closing.download', 'invoice.download', 'case.export',
-  'doc_request.create', 'doc_request.attach', 'doc_request.cancel']);
+  'doc_request.create', 'doc_request.attach', 'doc_request.cancel',
+  'deadline.request', 'deadline.withdraw', 'deadline.approve', 'deadline.decline']);
 
 const SIDE_RU = { customer: 'заказчик', dispatcher: 'диспетчер', executor: 'исполнитель' };
 const rub = (kop) => `${(Number(kop) / 100).toLocaleString('ru-RU', { maximumFractionDigits: 2 })} ₽`;
+const ruDay = (iso) => (/^\d{4}-\d{2}-\d{2}$/.test(iso ?? '') ? iso.split('-').reverse().join('.') : '—');
 const KIND_RU = { result: 'результат', basis: 'основание', other: 'документ' };
 
 function what(a, doc) {
@@ -88,6 +90,10 @@ function what(a, doc) {
     case 'doc_request.create': return `Исполнитель запросил документы: ${(d.titles ?? []).join('; ')}`;
     case 'doc_request.attach': return `Заказчик приложил запрошенный документ: ${d.title ?? ''}`;
     case 'doc_request.cancel': return `Исполнитель снял просьбу о документе: ${d.title ?? ''}`;
+    case 'deadline.request': return `Исполнитель попросил перенести срок с ${ruDay(d.from)} на ${ruDay(d.to)}: ${d.reason ?? ''}`;
+    case 'deadline.withdraw': return 'Исполнитель отозвал просьбу о переносе срока';
+    case 'deadline.approve': return `Срок перенесён с ${ruDay(d.from)} на ${ruDay(d.to)}${d.answer ? `: ${d.answer}` : ''}`;
+    case 'deadline.decline': return `В переносе срока на ${ruDay(d.to)} отказано${d.answer ? `: ${d.answer}` : ''}`;
     case 'case.export': return 'Дело выгружено архивом';
     default: return a.action;
   }

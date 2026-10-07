@@ -15,6 +15,7 @@ import { setNext } from '/next.js';
 import { orgChat } from '/orgchat.js';
 import { loadJournal } from '/journal.js';
 import { loadDocRequests } from '/docreq.js';
+import { loadDeadline } from '/deadline.js';
 
 const $ = (id) => document.getElementById(id);
 // До 3 МБ — обычной загрузкой через ядро; больше — прямо в хранилище (облако: запрос не больше 3,5 МБ, 2.49).
@@ -61,9 +62,9 @@ export async function openOrder(id, { to } = {}) {
   setNext({ reset: true, current, step: doStep, signAll });
   loadOrgChat();
   loadJournal(current.order, current.access);
-  await Promise.all([loadDocs(true), loadTransfer(), loadMatch(current, () => openOrder(id)), loadDraft(current, () => openOrder(id)), loadAnalogs(current), loadInspection(current), loadOnsite(current), loadDocRequests(current, (file, msg) => uploadFile(file, 'other', msg)), loadReview(current), loadChat(current), loadMoney(current, () => openOrder(id))]);
+  await Promise.all([loadDocs(true), loadTransfer(), loadMatch(current, () => openOrder(id)), loadDraft(current, () => openOrder(id)), loadAnalogs(current), loadInspection(current), loadOnsite(current), loadDocRequests(current, (file, msg) => uploadFile(file, 'other', msg)), loadDeadline(current, () => openOrder(id)), loadReview(current), loadChat(current), loadMoney(current, () => openOrder(id))]);
   setNext({}); // разделы осмотра и черновика показаны — шаги пересчитываются
-  const box = { inspect: 'inspect-box', chat: 'chat-box', docs: 'docreq-box' }[to];
+  const box = { inspect: 'inspect-box', chat: 'chat-box', docs: 'docreq-box', deadline: 'deadline-box' }[to];
   if (box && !$(box).classList.contains('hidden')) $(box).scrollIntoView({ block: 'start' });
 }
 

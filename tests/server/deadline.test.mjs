@@ -1,0 +1,137 @@
+// Перенос срока дела (задача 2.91): исполнитель просит новую дату с причиной; диспетчер соглашается или отказывает;
+// заказчик видит; новый срок — в заявке, «Сегодня» и напоминаниях; история переносов и журнал.
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid } from '../helpers.mjs';
+import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
+import { remindDeadlines } from '../../src/notify/reminders.mjs';
+
+let S, owner, dispatcher, spec, stranger, other;
+const FIELDS = { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, Сроковая ул., 3' };
+const today = todayMsk();
+
+before(async () => {
+  S = await startApp();
+  owner = await login(S, '+79990002911');
+  dispatcher = await login(S, '+79990002912');
+  spec = await login(S, '+79990002913');
+  stranger = await login(S, '+79990002914');
+  other = await login(S, '+79990002915');
+  await setPlatformRole(S.sql, dispatcher.user.id, 'dispatcher');
+  await makeSpecialist(S.sql, spec.user.id);
+  await makeSpecialist(S.sql, other.user.id);
+});
+after(async () => { await S?.close(); });
+
+async function inWork(title, days = 3) {
+  const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
+  assert.equal((await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: addDays(today, days), fields: FIELDS })).status, 200);
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
+  await ensurePaid(S.sql, o.id);
+  assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: spec.user.id, from: 'matching' })).status, 200);
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  return o;
+}
+const events = async (u, event) => (await S.sql`select count(*)::int as n from notifications where user_id = ${u.user.id} and event = ${event}`)[0].n;
+const list = (c, o) => c.req('GET', `/api/orders/${o.id}/deadline-requests`);
+const ask = (c, o, body) => c.req('POST', `/api/orders/${o.id}/deadline-requests`, body);
+const decide = (c, o, rid, body) => c.req('POST', `/api/orders/${o.id}/deadline-requests/${rid}/decide`, body);
+
+test('исполнитель просит перенести срок — диспетчер соглашается: новый срок в заявке, «Сегодня», напоминаниях, журнале', async () => {
+  const o = await inWork('Квартира: перенос срока', 3);
+  const old = addDays(today, 3);
+  const want = addDays(today, 10);
+  // Видят все стороны; просит только исполнитель.
+  assert.equal((await list(stranger, o)).status, 404);
+  assert.equal((await list(owner, o)).body.can_request, false);
+  assert.equal((await list(dispatcher, o)).body.can_request, false);
+  assert.equal((await list(spec, o)).body.can_request, true);
+  assert.equal((await ask(owner, o, { new_deadline: want, reason: 'хочу' })).status, 403);
+  assert.equal((await ask(dispatcher, o, { new_deadline: want, reason: 'хочу' })).status, 403);
+  assert.equal((await ask(stranger, o, { new_deadline: want, reason: 'хочу' })).status, 404);
+  // Проверки ввода: дата позже нынешней, причина обязательна, не дальше двух лет.
+  assert.equal((await ask(spec, o, { new_deadline: old, reason: 'x' })).body.error, 'not_later');
+  assert.equal((await ask(spec, o, { new_deadline: '2026-02-30', reason: 'x' })).body.error, 'bad_date');
+  assert.equal((await ask(spec, o, { new_deadline: addDays(today, 800), reason: 'x' })).body.error, 'deadline_far');
+  assert.equal((await ask(spec, o, { new_deadline: want, reason: '  ' })).status, 400);
+  assert.equal((await ask(spec, o, { new_deadline: want, reason: 'x', from: addDays(today, 1) })).body.error, 'status_changed');
+  const r = await ask(spec, o, { new_deadline: want, reason: 'Росреестр не выдал выписку ЕГРН', from: old });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.equal(r.body.open.new_deadline, want);
+  assert.equal(r.body.can_request, false, 'вторую просьбу не подать, пока нет ответа');
+  assert.equal(r.body.can_withdraw, true);
+  assert.equal((await ask(spec, o, { new_deadline: addDays(today, 12), reason: 'ещё' })).body.error, 'already_requested');
+  assert.equal(await events(dispatcher, 'deadline_ext_requested'), 1);
+  // Заказчик видит просьбу, но не решает.
+  const seen = (await list(owner, o)).body;
+  assert.equal(seen.open.reason, 'Росреестр не выдал выписку ЕГРН');
+  assert.equal(seen.can_decide, false);
+  const rid = seen.open.id;
+  assert.equal((await decide(owner, o, rid, { approve: true })).status, 403);
+  assert.equal((await decide(spec, o, rid, { approve: true })).status, 403);
+  assert.equal((await decide(stranger, o, rid, { approve: true })).status, 404);
+  assert.equal((await decide(dispatcher, o, rid, {})).status, 400);
+  // «Сегодня» диспетчера: строка «Просят перенести срок».
+  const t = (await dispatcher.req('GET', '/api/today')).body.dispatcher;
+  const line = t.extend.find((x) => x.id === o.id);
+  assert.equal(line.new_deadline, want);
+  assert.equal(line.reason, 'Росреестр не выдал выписку ЕГРН');
+  // Согласие: срок заявки — новый; исполнителю и заказчику — уведомление.
+  const d = await decide(dispatcher, o, rid, { approve: true, answer: 'Согласовано с заказчиком' });
+  assert.equal(d.status, 200, JSON.stringify(d.body));
+  assert.equal(d.body.open, null);
+  assert.equal(d.body.deadline, want);
+  assert.equal(d.body.requests[0].outcome, 'approved');
+  assert.equal((await decide(dispatcher, o, rid, { approve: false })).body.error, 'already_decided');
+  assert.equal((await owner.req('GET', `/api/orders/${o.id}`)).body.order.deadline, want);
+  assert.equal(await events(spec, 'deadline_ext_approved'), 1);
+  assert.equal(await events(owner, 'deadline_moved'), 1);
+  assert.ok(!(await dispatcher.req('GET', '/api/today')).body.dispatcher.extend.some((x) => x.id === o.id));
+  // «Горит срок» у эксперта — уже нет (до нового срока 10 дней); напоминание «через 3 дня» — по новому сроку.
+  assert.ok(!(await spec.req('GET', '/api/today')).body.expert.hot.some((x) => x.id === o.id));
+  await remindDeadlines(S.sql, { today });
+  assert.equal(await events(spec, 'deadline_soon'), 0, 'по старому сроку напоминания нет');
+  await remindDeadlines(S.sql, { today: addDays(today, 7) });
+  assert.equal(await events(spec, 'deadline_soon'), 1, 'по новому — есть');
+  // Журнал — заказчику видна история переносов.
+  const journal = (await owner.req('GET', `/api/orders/${o.id}/journal`)).body.journal.map((j) => j.what);
+  const ru = (iso) => iso.split('-').reverse().join('.');
+  assert.ok(journal.includes(`Исполнитель попросил перенести срок с ${ru(old)} на ${ru(want)}: Росреестр не выдал выписку ЕГРН`), journal.join('\n'));
+  assert.ok(journal.includes(`Срок перенесён с ${ru(old)} на ${ru(want)}: Согласовано с заказчиком`), journal.join('\n'));
+  // После ответа можно попросить снова.
+  assert.equal((await list(spec, o)).body.can_request, true);
+});
+
+test('отказ и отзыв просьбы: срок прежний; по завершённому делу не решается; чужой исполнитель не просит', async () => {
+  const o = await inWork('Квартира: отказ в переносе', 5);
+  const old = addDays(today, 5);
+  // Другой специалист (не исполнитель этого дела) — дела не видит.
+  assert.equal((await ask(other, o, { new_deadline: addDays(today, 9), reason: 'x' })).status, 404);
+  let r = (await ask(spec, o, { new_deadline: addDays(today, 9), reason: 'Заказчик не пускает на осмотр' })).body;
+  const d = await decide(dispatcher, o, r.open.id, { approve: false, answer: 'Суд не продлит срок' });
+  assert.equal(d.status, 200);
+  assert.equal(d.body.deadline, old);
+  assert.equal((await owner.req('GET', `/api/orders/${o.id}`)).body.order.deadline, old);
+  assert.equal(await events(spec, 'deadline_ext_declined'), 1);
+  const hist = (await list(owner, o)).body.requests;
+  assert.equal(hist[0].outcome, 'declined');
+  assert.equal(hist[0].answer, 'Суд не продлит срок');
+  // Отзыв: только исполнитель; потом решать нечего.
+  r = (await ask(spec, o, { new_deadline: addDays(today, 8), reason: 'Ещё раз' })).body;
+  assert.equal((await owner.req('DELETE', `/api/orders/${o.id}/deadline-requests/${r.open.id}`)).status, 403);
+  const w = await spec.req('DELETE', `/api/orders/${o.id}/deadline-requests/${r.open.id}`);
+  assert.equal(w.status, 200);
+  assert.equal(w.body.requests[0].outcome, 'withdrawn');
+  assert.equal((await decide(dispatcher, o, r.open.id, { approve: true })).body.error, 'already_decided');
+  // Срок заявки изменился иначе (диспетчер правил) — согласие на старую просьбу не проходит.
+  r = (await ask(spec, o, { new_deadline: addDays(today, 8), reason: 'Третий раз' })).body;
+  await S.sql`update orders set deadline = ${addDays(today, 6)} where id = ${o.id}`;
+  assert.equal((await decide(dispatcher, o, r.open.id, { approve: true })).body.error, 'status_changed');
+  // Дело отменено — решать нельзя, просить нельзя.
+  await S.sql`update orders set status = 'cancelled' where id = ${o.id}`;
+  assert.equal((await decide(dispatcher, o, r.open.id, { approve: true })).body.error, 'order_final');
+  const after = (await list(spec, o)).body;
+  assert.equal(after.can_request, false);
+  assert.equal(after.can_decide, false);
+  assert.equal((await ask(spec, o, { new_deadline: addDays(today, 9), reason: 'x' })).body.error, 'not_in_work');
+});

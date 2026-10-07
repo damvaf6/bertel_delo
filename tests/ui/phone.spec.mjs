@@ -4815,3 +4815,87 @@ test('свои заготовки абзацев (2.87): сохранить вы
   await expect(page.locator('#snip-pick option')).toHaveCount(1);
   expect((await (await page.request.get(`/api/orders/${ids[1]}/draft`)).json()).draft.body).toContain(PARA);
 });
+
+test('перенос срока (2.91): эксперт просит новую дату с причиной, диспетчер соглашается из «Сегодня», заказчик видит историю', async ({ page, browser, baseURL }) => {
+  await signIn(page, '+79990000795');
+  const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира: перенос срока' }, headers: H })).json();
+  const id = created.order.id;
+  expect((await page.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(2), fields: { purpose: 'bank', region: 'moscow', object_type: 'flat', address: 'г. Москва, Сроковая ул., 5', area: '44' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  const ectx = await phoneContext(browser, baseURL);
+  const ep = await ectx.newPage();
+  const expert = await signIn(ep, '+79990000796');
+  const dctx = await phoneContext(browser, baseURL);
+  const dp = await dctx.newPage();
+  const disp = await signIn(dp, '+79990000797');
+  await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    await c.query("update orders set price_kop = 1500000, paid_at = now(), status = 'in_work', executor_user_id = $2 where id = $1", [id, expert.id]);
+    await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+  });
+  const want = inDays(9);
+  const ru = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+
+  // Эксперт: блок «Срок» в деле — новая дата и причина, одна кнопка.
+  await ep.goto(`/kabinet#order=${id}`);
+  const box = ep.locator('#deadline-box');
+  await expect(box).toBeVisible();
+  await expect(box.locator('#deadline-lead')).toContainText(`Сейчас срок — ${ru(inDays(2))}`);
+  await box.getByRole('button', { name: 'Попросить перенести срок' }).click();
+  await expect(ep.locator('#deadline-msg')).toHaveText('Укажите новую дату срока');
+  await box.getByLabel('Новый срок').fill(want);
+  await box.getByLabel(/Причина/).fill('Росреестр задерживает выписку ЕГРН, без неё отчёт не закончить');
+  await box.scrollIntoViewIfNeeded();
+  await shot(ep, '99p-ekspert-perenos-sroka');
+  await box.getByRole('button', { name: 'Попросить перенести срок' }).click();
+  await expect(ep.locator('#deadline-msg')).toHaveText('Просьба отправлена диспетчеру. Пока нет ответа, действует прежний срок.');
+  await expect(box.locator('#deadline-open-text')).toContainText(`перенести на ${ru(want)}`);
+  await expect(box.locator('#deadline-form')).toBeHidden();
+  await expect(box.getByRole('button', { name: 'Отозвать просьбу' })).toBeVisible();
+
+  // Заказчик видит просьбу, кнопок решения нет.
+  await page.goto(`/kabinet#order=${id}`);
+  const cbox = page.locator('#deadline-box');
+  await expect(cbox.locator('#deadline-open-text')).toContainText('Причина: Росреестр задерживает выписку ЕГРН');
+  await expect(cbox.getByRole('button', { name: 'Согласиться' })).toBeHidden();
+
+  // Диспетчер: «Сегодня» → «Просят перенести срок» → сразу к блоку «Срок»; соглашается с пояснением.
+  await dp.goto('/kabinet');
+  const line = dp.locator('[data-today-item="d-extend"]').filter({ hasText: 'Квартира: перенос срока' });
+  await expect(line).toContainText(`просят ${new Date(`${want}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })}`);
+  await expect(line).toContainText('причина: Росреестр задерживает выписку ЕГРН');
+  await shot(dp, '99q-dispetcher-segodnya-perenos');
+  await line.getByRole('button').click();
+  const dbox = dp.locator('#deadline-box');
+  await expect(dbox.getByRole('button', { name: 'Согласиться' })).toBeVisible();
+  await dbox.getByLabel(/Пояснение исполнителю/).fill('Согласовано с заказчиком по телефону');
+  await shot(dp, '99r-dispetcher-perenos-reshenie');
+  await dbox.getByRole('button', { name: 'Согласиться' }).click();
+  await expect(dp.locator('#deadline-msg')).toHaveText('Срок перенесён. Исполнителю и заказчику пришло уведомление.');
+  await expect(dp.locator('#order-deadline')).toHaveText(`Срок: ${ru(want)}`);
+  await expect(dbox.locator('#deadline-history li')).toHaveCount(1);
+
+  // Эксперт: уведомление, новый срок, история; можно попросить снова.
+  await ep.goto('/kabinet#notifications');
+  await expect(ep.locator('#notifications li').filter({ hasText: 'Диспетчер согласился перенести срок' })).toHaveCount(1);
+  await ep.goto(`/kabinet#order=${id}`);
+  await expect(ep.locator('#order-deadline')).toHaveText(`Срок: ${ru(want)}`);
+  const hist = ep.locator('#deadline-history li');
+  await expect(hist).toContainText(`${ru(inDays(2))} → ${ru(want)}`);
+  await expect(hist.locator('.badge')).toHaveText('перенесён');
+  await expect(hist).toContainText('ответ: Согласовано с заказчиком по телефону');
+  await expect(ep.locator('#deadline-form')).toBeVisible();
+
+  // Заказчик: уведомление о новом сроке и история в заявке и журнале.
+  await page.goto('/kabinet#notifications');
+  await page.locator('#notifications li').filter({ hasText: 'Срок по заявке перенесён' }).first().getByRole('button').click();
+  await expect(page.locator('#order-deadline')).toHaveText(`Срок: ${ru(want)}`);
+  await expect(page.locator('#deadline-history li .badge')).toHaveText('перенесён');
+  await page.locator('#deadline-box').scrollIntoViewIfNeeded();
+  await shot(page, '99s-zakazchik-srok-perenesen');
+  await ectx.close();
+  await dctx.close();
+});

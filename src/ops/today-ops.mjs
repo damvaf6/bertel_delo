@@ -159,6 +159,11 @@ async function dispatcherPart(sql, actor, registry, today) {
   const review = await sql`select * from orders where status = 'review' order by deadline nulls last, updated_at limit ${LIMIT}`;
   const hot = await sql`select * from orders where status in ('awaiting_executor', 'in_work') and deadline <= ${soon}
                         order by deadline, updated_at limit ${LIMIT}`;
+  // Перенос срока (2.91): исполнитель просит новую дату — ответить.
+  const extend = await sql`
+    select o.*, r.id as request_id, to_char(r.new_deadline, 'YYYY-MM-DD') as new_deadline, r.reason, r.requested_at
+    from deadline_requests r join orders o on o.id = r.order_id
+    where r.outcome is null and o.status in ('in_work', 'review') order by r.requested_at limit ${LIMIT}`;
   const money = await sql`
     select o.*, 'payout' as what, p.failure from payouts p join orders o on o.id = p.order_id where p.status = 'failed'
     union all
@@ -172,6 +177,7 @@ async function dispatcherPart(sql, actor, registry, today) {
     to_match: toMatch,
     slow_offers: slow.map((o) => item(o, { offered_at: o.offered_at })),
     review: review.map((o) => item(o)),
+    extend: extend.map((o) => item(o, { new_deadline: o.new_deadline, reason: o.reason, requested_at: o.requested_at })),
     hot: hot.map((o) => item(o)),
     money: money.map((o) => item(o, { what: o.what, failure: o.failure ?? null })),
   };

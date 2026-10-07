@@ -56,6 +56,9 @@ export async function loadToday() {
     const MONEY = { payout: 'Выплата исполнителю не прошла', refund: 'Возврат заказчику не прошёл', payment: 'Оплата висит больше суток' };
     rows.push(
       ...group('d-money', 'Деньги', d.money, (x) => [x.title, [MONEY[x.what], x.failure].filter(Boolean).join(': ')], toOrder),
+      // Перенос срока (2.91) — сразу к блоку «Срок» в деле: согласиться или отказать.
+      ...group('d-extend', 'Просят перенести срок', d.extend ?? [], (x) => [x.title, `${deadline(x, t.today)} → просят ${dayRu(x.new_deadline)}`, `причина: ${x.reason}`],
+        (x) => { location.hash = `order=${x.id}&to=deadline`; }),
       ...group('d-review', 'Ждут проверки результата', d.review, (x) => [x.title, `${x.service} · ${deadline(x, t.today)}`], toOrder),
       ...group('d-price', 'Назначить цену', d.price, (x) => [x.title, `${x.service} · ${deadline(x, t.today)}`], toOrder),
       ...group('d-match', 'Подобрать исполнителя (оплачено)', d.to_match, (x) => [x.title, x.reason !== undefined ? `Снова в подборе: ${x.reason || 'без причины'}` : x.service, deadline(x, t.today)], toOrder),
