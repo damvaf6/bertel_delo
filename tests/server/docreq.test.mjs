@@ -182,6 +182,10 @@ test('готовые фразы (2.84): у товара и документа �
   assert.match(goods[0].text, /осмотр товара/);
   assert.match(goods[0].text, /не ремонтируйте и не разбирайте/);
   assert.match(goods[1].text, /где сейчас находится товар \(в заявке указано: «у истца, г\. Москва»\)/);
+  // Ущерб после ДТП (2.97): осмотр автомобиля, до осмотра не ремонтировать.
+  const car = messagePhrases({ def: reg.service('expertise', 'car_damage'), fields: {} });
+  assert.match(car[0].text, /осмотр автомобиля/);
+  assert.match(car[0].text, /не ремонтируйте автомобиль/);
   const docSvc = expertise.services.find((s) => s.subject === 'document').id;
   const doc = messagePhrases({ def: reg.service('expertise', docSvc), fields: {} });
   assert.equal(doc[0].title, 'Передать оригинал');

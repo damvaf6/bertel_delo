@@ -22,7 +22,7 @@ test('витрина: что это, как заказать, юрфирмам �
   for (const h of ['Что можно заказать', 'Как заказать', 'Юрфирмам и банкам', 'Экспертам и экспертным организациям', 'Частые вопросы']) {
     await expect(page.getByRole('heading', { name: h })).toBeVisible();
   }
-  await expect(page.locator('#what li')).toHaveCount(7);
+  await expect(page.locator('#what li')).toHaveCount(8);
   await expect(page.getByText('Проверочная версия · только тестовые данные')).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
   await page.screenshot({ path: 'test-results/screens/vitrina-01.png', fullPage: true });
