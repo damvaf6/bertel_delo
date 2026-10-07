@@ -153,15 +153,35 @@ export async function orgReturns(sql, orderId, { orgId = null } = {}) {
                    and d.created_at > r.created_at) as new_file
     from org_returns r join users u on u.id = r.returned_by join organizations g on g.id = r.org_id
     where r.order_id = ${orderId} and (${orgId}::uuid is null or r.org_id = ${orgId}::uuid) order by r.id`;
-  return rows.map((r) => ({
-    id: Number(r.id),
-    at: r.created_at,
-    filename: r.filename,
-    comment: r.comment,
-    org: r.org_name,
-    by: r.head_name,
-    open: r.doc_alive ? !r.resigned : !r.new_file,
-  }));
+  const items = rows.length
+    ? await sql`select return_id, n, text, fixed_at from org_return_items where return_id = any(${rows.map((r) => r.id)}::bigint[]) order by return_id, n`
+    : [];
+  return rows.map((r) => {
+    const points = items.filter((i) => String(i.return_id) === String(r.id)).map((i) => ({ n: i.n, text: i.text, fixed: !!i.fixed_at, fixed_at: i.fixed_at }));
+    return {
+      id: Number(r.id),
+      at: r.created_at,
+      document_id: r.document_id,
+      filename: r.filename,
+      comment: r.comment,
+      org: r.org_name,
+      by: r.head_name,
+      open: r.doc_alive ? !r.resigned : !r.new_file,
+      // Пункты замечания (2.93): эксперт отмечает исправленные; left — сколько ещё не отмечено.
+      items: points,
+      left: points.filter((i) => !i.fixed).length,
+    };
+  });
+}
+
+// Замечание руководителя по пунктам (2.93): каждая непустая строка — пункт; нумерация «1.», «2)», «-», «•» в начале снимается.
+export const MAX_RETURN_ITEMS = 30;
+export function returnPoints(comment) {
+  const lines = String(comment).split(/\r?\n/)
+    .map((l) => l.replace(/^\s*(?:\d{1,2}\s*[.)]|[-–—•*])\s*/, '').trim())
+    .filter(Boolean);
+  if (lines.length > MAX_RETURN_ITEMS) throw new HttpError(400, 'too_many_items', `Не больше ${MAX_RETURN_ITEMS} пунктов в одном возврате`);
+  return lines;
 }
 
 function orgCheck(order) {
@@ -223,7 +243,7 @@ export function signOps() {
             deadline: o.deadline,
             documents: docs.map((d) => ({ id: d.id, filename: d.filename, size_bytes: Number(d.size_bytes), signatures: signaturesView(signs.get(d.id)) })),
             // История возвратов эксперту (2.27) — только этой организации.
-            returns: returns.map(({ id, at, filename, comment, by, open }) => ({ id, at, filename, comment, by, open })),
+            returns: returns.map(({ id, at, document_id, filename, comment, by, open, items, left }) => ({ id, at, document_id, filename, comment, by, open, items, left })),
           });
         }
         return { items };
@@ -275,6 +295,7 @@ export function signOps() {
       async handler({ sql, actor, subject: doc, order, signOrg, body, res }) {
         orgCheck(order);
         const comment = text(body?.comment, 'Замечание', 2000);
+        const points = returnPoints(comment);
         const row = await sql.tx(async (tx) => {
           const cur = await tx.one`select status, executor_user_id from orders where id = ${order.id} for update`;
           if (cur.status !== 'in_work' || cur.executor_user_id !== order.executor_user_id) throw new HttpError(409, 'status_changed', 'Статус заявки уже изменился, обновите страницу');
@@ -292,12 +313,38 @@ export function signOps() {
             insert into org_returns (order_id, document_id, org_id, executor_user_id, returned_by, filename, comment, signature_key)
             values (${order.id}, ${doc.id}, ${signOrg.id}, ${cur.executor_user_id}, ${actor.id}, ${doc.filename}, ${comment}, ${expert.storage_key})
             returning *`;
+          for (const [i, t] of points.entries()) await tx`insert into org_return_items (return_id, n, text) values (${r.id}, ${i + 1}, ${t})`;
           await audit(tx, actor, 'document.org_return', 'document', doc.id, { order_id: order.id, org_id: signOrg.id, return_id: Number(r.id) });
           await notify(tx, 'org_returned', { users: [cur.executor_user_id], orderId: order.id, actor });
           return r;
         });
         res.status(201);
-        return { return: { id: Number(row.id), at: row.created_at, filename: row.filename, comment: row.comment } };
+        return { return: { id: Number(row.id), at: row.created_at, filename: row.filename, comment: row.comment,
+          items: points.map((t, i) => ({ n: i + 1, text: t, fixed: false, fixed_at: null })) } };
+      },
+    },
+    {
+      // Эксперт отмечает пункт замечания руководителя исправленным (или снимает отметку) — пока возврат открыт, то есть
+      // до новой подписи эксперта (2.93). Руководитель в «Подписи организации» видит, что осталось.
+      id: 'orgreturn.item', method: 'PUT', path: '/api/orders/:id/org-returns/:rid/items/:n', auth: 'user',
+      access: { resource: 'order', param: 'id', need: 'read' },
+      async handler({ sql, actor, order, params, body }) {
+        if (order.executor_user_id !== actor.id || !orderSides(actor, order).includes('executor')) {
+          throw new HttpError(403, 'forbidden', 'Отмечает исполнитель дела');
+        }
+        if (typeof body?.fixed !== 'boolean') throw new HttpError(400, 'bad_fixed', 'Укажите, исправлен ли пункт');
+        const rid = String(params.rid ?? '');
+        const n = String(params.n ?? '');
+        const ret = /^\d{1,18}$/.test(rid) ? (await orgReturns(sql, order.id)).find((r) => String(r.id) === rid) : null;
+        const item = ret && /^\d{1,3}$/.test(n) ? ret.items.find((i) => i.n === Number(n)) : null;
+        if (!item) throw new HttpError(404, 'not_found', 'Пункт замечания не найден');
+        if (order.status !== 'in_work') throw new HttpError(409, 'not_in_work', 'Отмечать можно, пока дело в работе');
+        if (!ret.open) throw new HttpError(409, 'return_closed', 'Файл уже подписан заново — отметки по этому возврату закрыты');
+        await sql`update org_return_items set fixed_at = ${body.fixed ? new Date() : null}, fixed_by = ${body.fixed ? actor.id : null}
+                  where return_id = ${rid} and n = ${item.n}`;
+        await audit(sql, actor, body.fixed ? 'org_return.item_fixed' : 'org_return.item_unfixed', 'order', order.id, { return_id: Number(rid), n: item.n });
+        const fresh = (await orgReturns(sql, order.id)).find((r) => String(r.id) === rid);
+        return { return: fresh };
       },
     },
     {

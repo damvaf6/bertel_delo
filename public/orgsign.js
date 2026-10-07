@@ -30,24 +30,41 @@ export async function loadOrgSign(org) {
       const ready = it.documents.filter((d) => d.signatures.expert && !d.signatures.org);
       return el('li', { 'data-item': it.order_ref }, ...head(it),
         ...(waiting(it) && ready.length > 1 ? [el('button', { 'data-action': 'org-sign-all', onclick: () => signAll(ready) }, `Подписать все файлы дела (${ready.length})`)] : []),
-        el('ul', { class: 'list' }, ...it.documents.map(docItem)),
+        el('ul', { class: 'list' }, ...it.documents.map((d) => docItem(d, it.returns ?? []))),
         ...returnsBlock(it.returns ?? []));
     }),
     ...(done.length ? [el('li', { class: 'group', text: `Подписано · ${done.length}` })] : []),
     ...done.map((it) => el('li', { class: 'signed', 'data-item': it.order_ref },
       el('details', {}, el('summary', { text: `${it.service} · ${it.order_ref} · подписано` }), ...head(it).slice(1),
-        el('ul', { class: 'list' }, ...it.documents.map(docItem)), ...returnsBlock(it.returns ?? [])))));
+        el('ul', { class: 'list' }, ...it.documents.map((d) => docItem(d, []))), ...returnsBlock(it.returns ?? [])))));
 }
 
-// История возвратов эксперту (2.27): что и когда вернули, исправил ли эксперт (подписал заново).
+// История возвратов эксперту (2.27): что и когда вернули, исправил ли эксперт (подписал заново); по пунктам (2.93) — что
+// эксперт отметил исправленным.
 function returnsBlock(list) {
   if (!list.length) return [];
+  const opened = list.filter((r) => r.open);
+  const progress = opened.filter((r) => r.items?.length).map((r) => `исправлено ${r.items.length - r.left} из ${r.items.length}`);
   return [el('details', { class: 'returns', 'data-returns': String(list.length) },
-    el('summary', { text: `Возвраты эксперту · ${list.length}${list.some((r) => r.open) ? ' · ждём исправления' : ''}` }),
-    el('ul', { class: 'list' }, ...[...list].reverse().map((r) => el('li', { class: 'return' },
+    el('summary', { text: `Возвраты эксперту · ${list.length}${opened.length ? ` · ждём исправления${progress.length ? ` (${progress.join(', ')})` : ''}` : ''}` }),
+    el('ul', { class: 'list' }, ...[...list].reverse().map((r) => el('li', { class: 'return', 'data-return': String(r.id) },
       el('div', { class: 'title', text: `${r.filename} · ${r.open ? 'ждём исправления' : 'эксперт подписал заново'}` }),
       el('div', { class: 'muted', text: [r.by, new Date(r.at).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })].filter(Boolean).join(' · ') }),
-      el('div', { class: 'comment', text: r.comment })))))];
+      ...(r.items?.length ? [pointsList(r.items)] : [el('div', { class: 'comment', text: r.comment })])))))];
+}
+
+const pointsList = (items) => el('ul', { class: 'points' }, ...items.map((p) => el('li', { class: p.fixed ? 'point fixed' : 'point', 'data-point': String(p.n) },
+  el('span', { text: `${p.n}. ${p.text}` }), el('span', { class: 'muted', text: p.fixed ? ' — исправлено' : ' — не отмечено' }))));
+
+// До подписи от организации (2.93): по последнему возврату этого файла — что эксперт отметил исправленным, что осталось.
+function lastReturnState(d, returns) {
+  const r = [...returns].reverse().find((x) => x.document_id === d.id && x.items?.length);
+  if (!r) return [];
+  const done = r.items.length - r.left;
+  const left = r.items.filter((p) => !p.fixed);
+  return [el('div', { class: left.length ? 'sig-state warn' : 'sig-state', 'data-role': 'points-state',
+    text: `По Вашему замечанию от ${new Date(r.at).toLocaleDateString('ru-RU')}: эксперт отметил исправленными ${done} из ${r.items.length}${left.length ? ', осталось:' : ''}` }),
+  ...(left.length ? [pointsList(left)] : [])];
 }
 
 async function signAll(docs) {
@@ -60,14 +77,14 @@ async function signAll(docs) {
   } catch (err) { await refresh(); say($('org-sign-msg'), err.message); }
 }
 
-function docItem(d) {
+function docItem(d, returns) {
   const { expert, org } = d.signatures;
   const lines = [];
   if (expert) lines.push(...signatureLines(expert));
   else lines.push(el('div', { class: 'sig-state', text: 'Эксперт ещё не подписал — подпись организации после него' }));
   if (org) lines.push(...signatureLines(org));
   else if (expert) {
-    lines.push(el('div', { class: 'row' },
+    lines.push(...lastReturnState(d, returns), el('div', { class: 'row' },
       el('button', { 'data-action': 'org-sign', onclick: () => sign(d) }, 'Подписать от организации'),
       ...uploadSignatureButton(d.filename, (file) => upload(d, file))),
     el('div', { class: 'muted', text: `${UPLOAD_HINT} Нужен сертификат организации.` }),
@@ -85,7 +102,7 @@ function docItem(d) {
 function returnForm(d) {
   const area = el('textarea', { id: `ret-${d.id}`, rows: '3', maxlength: '2000', 'aria-label': `Замечание эксперту по файлу ${d.filename}` });
   const box = el('div', { class: 'field hidden', 'data-return-form': d.id },
-    el('label', { for: `ret-${d.id}`, text: 'Что исправить (эксперт увидит это в деле)' }), area,
+    el('label', { for: `ret-${d.id}`, text: 'Что исправить — каждый пункт с новой строки (эксперт отметит исправленные)' }), area,
     el('div', { class: 'row' },
       el('button', { class: 'danger', 'data-action': 'org-return-send', onclick: () => sendReturn(d, area.value) }, 'Вернуть с замечанием'),
       el('button', { class: 'secondary', onclick: () => box.classList.add('hidden') }, 'Отмена')));
