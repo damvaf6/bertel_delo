@@ -77,6 +77,8 @@ export async function orgMonthReport(sql, orgId, month, today = todayMsk()) {
   const experts = await orgExperts(sql, orgId);
   const ids = experts.map((e) => e.user_id);
   const { start, end } = await monthBounds(sql, month);
+  const since = (await sql`select to_char(created_at at time zone 'Europe/Moscow', 'YYYY-MM') as m from organizations
+                           where id = ${orgId}`)[0]?.m ?? '';
   const none = { accepted: [], done: [], headReturns: [], dispReturns: [], paid: [], active: [] };
   const q = !ids.length ? none : {
     accepted: await sql`
@@ -136,7 +138,8 @@ export async function orgMonthReport(sql, orgId, month, today = todayMsk()) {
     month,
     month_name: monthRu(month),
     current,
-    months: reportMonths(today),
+    // Месяцы до создания организации — заведомо пустые (2.90): в выборе только с месяца создания.
+    months: reportMonths(today).filter((m) => m >= since || m === month),
     experts: rows,
     total: Object.fromEntries(keys.map((k) => [k, sum(k)])),
   };

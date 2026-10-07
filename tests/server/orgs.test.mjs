@@ -227,9 +227,14 @@ test('дела экспертов (2.16): просрочка, нагрузка, 
   assert.deepEqual(cases.map((c) => c.status), ['in_work', 'awaiting_executor', 'done', 'done'], 'активные — сверху, отменённых нет');
   assert.equal(cases[0].overdue, true);
   assert.equal(cases[0].service, 'Оценка недвижимости');
-  assert.deepEqual(load, [{ user_id: expert.user.id, full_name: 'Эксперт Тестов', in_work: 1, offered: 1, overdue: 1, away: null, paused: false }]);
+  assert.deepEqual(load, [{ user_id: expert.user.id, full_name: 'Эксперт Тестов', in_work: 1, offered: 1, overdue: 1, next_deadline: '2020-01-01', away: null, paused: false }]);
+  // Предложено, но не организацией (2.90): переназначать нечего, видно лишь, что ждём ответа эксперта.
+  assert.equal(cases[1].offer_wait, null);
+  assert.equal(cases[1].offered_at, null);
   assert.equal(money.paid_kop, 800000);
   assert.equal(money.waiting_kop, 800000 + 800000, 'не прошедшая выплата и оплаченное дело в работе');
   const members = (await head.req('GET', `/api/orgs/${org.id}/members`)).body.members;
-  assert.equal(members.find((m) => m.user_id === expert.user.id).orders, 1, '«дел» — с учётом дела в работе');
+  const em = members.find((m) => m.user_id === expert.user.id);
+  assert.equal(em.orders, 1, '«дел» — с учётом дела в работе');
+  assert.deepEqual([em.in_work, em.own_orders], [1, 0], 'раздельно: в работе и заявки от организации (2.90)');
 });

@@ -133,9 +133,9 @@ export function orgOps() {
         const seesLoad = myRole === 'head' || myRole === 'senior';
         const rows = await sql`
           select m.user_id, m.role, m.created_at, u.full_name, u.phone,
-                 (select count(*)::int from orders r where r.org_id = m.org_id and r.owner_user_id = m.user_id)
-                 + (select count(*)::int from orders r join specialists s on s.user_id = r.executor_user_id
-                    where r.executor_user_id = m.user_id and s.org_id = m.org_id and r.status in ('in_work', 'review')) as orders
+                 (select count(*)::int from orders r where r.org_id = m.org_id and r.owner_user_id = m.user_id) as own_orders,
+                 (select count(*)::int from orders r join specialists s on s.user_id = r.executor_user_id
+                    where r.executor_user_id = m.user_id and s.org_id = m.org_id and r.status in ('in_work', 'review')) as in_work
           from org_members m join users u on u.id = m.user_id
           where m.org_id = ${org.id}
           order by case m.role when 'head' then 0 when 'senior' then 1 else 2 end, u.full_name, m.created_at`;
@@ -146,7 +146,8 @@ export function orgOps() {
             role: m.role,
             since: m.created_at,
             ...(level === LEVEL.manage ? { phone: m.phone } : {}),
-            ...(seesLoad ? { orders: m.orders } : {}),
+            // Раздельно (2.90): «дел: 0» у эксперта со сданными делами путало — заявки от организации и дела в работе.
+            ...(seesLoad ? { orders: m.own_orders + m.in_work, own_orders: m.own_orders, in_work: m.in_work } : {}),
           })),
         };
       },
@@ -193,10 +194,14 @@ export function orgOps() {
         for (const o of rows.filter((x) => x.status === 'in_work')) transfer.set(o.id, await transferTargets(sql, o, org.id, registry));
         // Предложено эксперту, он ещё не ответил (2.76): руководитель отдаёт дело другому или забирает назад в «Ждут
         // назначения». Только дела, которые назначила сама организация; когда предложено — чтобы видеть, сколько ждём.
+        // Предложил сам диспетчер (2.90) — переназначать руководителю нечего, но видно, когда предложено.
         const waitingAnswer = new Map();
-        for (const o of rows.filter((x) => x.status === 'awaiting_executor' && x.offer_org_id === org.id)) {
+        const offeredAt = new Map();
+        for (const o of rows.filter((x) => x.status === 'awaiting_executor')) {
           const offer = await sql.one`select offered_at from order_offers where order_id = ${o.id} and outcome is null
                                       and specialist_id = ${o.executor_user_id} order by id desc limit 1`;
+          offeredAt.set(o.id, offer?.offered_at ?? null);
+          if (o.offer_org_id !== org.id) continue;
           waitingAnswer.set(o.id, { from: o.executor_user_id, offered_at: offer?.offered_at ?? null, reassign_to: await transferTargets(sql, o, org.id, registry) });
         }
         // Внутренняя переписка (2.67): сколько сообщений и чьё последнее — чтобы руководитель видел, где ждут его ответа.
@@ -207,6 +212,7 @@ export function orgOps() {
           ...(waits.get(o.id) ?? { sign_wait: 0, returned_open: false }),
           transfer_to: transfer.get(o.id) ?? [],
           offer_wait: waitingAnswer.get(o.id) ?? null,
+          offered_at: offeredAt.get(o.id) ?? null,
           chat: { messages: chats.get(o.id)?.n ?? 0, expert_last: chats.get(o.id)?.last_side === 'expert' },
           // Номер дела — для внутренней переписки с экспертом (2.28); саму заявку руководитель по нему не откроет.
           id: o.id,
@@ -228,6 +234,9 @@ export function orgOps() {
           in_work: rows.filter((o) => o.executor_user_id === e.user_id && ['in_work', 'review'].includes(o.status)).length,
           offered: rows.filter((o) => o.executor_user_id === e.user_id && o.status === 'awaiting_executor').length,
           overdue: cases.filter((c) => c.expert_id === e.user_id && c.overdue).length,
+          // Ближайший срок по делам в работе (2.90) — кому можно дать ещё дело, видно без пролистывания списка дел.
+          next_deadline: rows.filter((o) => o.executor_user_id === e.user_id && ['in_work', 'review'].includes(o.status) && o.deadline)
+            .map((o) => o.deadline).sort()[0] ?? null,
           // Не принимает новые дела (2.77): до какого дня и почему — или выключил приём совсем.
           away: awayOf(e, today),
           paused: !e.active,

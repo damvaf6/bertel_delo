@@ -129,7 +129,10 @@ async function loadMembers() {
   $('members').replaceChildren(...members.map((m) => {
     const name = m.full_name || (m.phone ? formatPhone(m.phone) : 'Без имени');
     const facts = [ROLE_RU[m.role], m.full_name && m.phone ? formatPhone(m.phone) : null,
-      m.orders !== undefined ? `дел: ${m.orders}` : null, m.user_id === meId ? 'это Вы' : null].filter(Boolean);
+      // Раздельно (2.90): дела в работе экспертом и заявки, которые сотрудник подал от организации.
+      ...(m.in_work === undefined ? [] : m.in_work || m.own_orders ? [m.in_work ? `дел в работе: ${m.in_work}` : null,
+        m.own_orders ? `заявок от организации: ${m.own_orders}` : null] : ['сейчас дел нет']),
+      m.user_id === meId ? 'это Вы' : null].filter(Boolean);
     const li = el('li', { 'data-user': m.user_id },
       el('div', { class: 'title', text: name }),
       el('div', { class: 'muted', text: facts.join(' · ') }));
