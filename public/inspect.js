@@ -2,6 +2,7 @@
 // со временем и геометкой; остальные, кто видит заявку, — только фото. Тексты — через textContent.
 // Задача 2.20: ссылку платформа может отправить владельцу СМС; эксперт просит переснять шаг — владелец видит просьбу у шага.
 import { api, el, say } from '/common.js';
+import { setNext } from '/next.js';
 
 const $ = (id) => document.getElementById(id);
 const timeRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
@@ -29,6 +30,7 @@ export async function loadInspection(current) {
   $('retake-note').maxLength = r.note_max;
   // Чего не хватает (2.33): владелец мог нажать «Готово», не сняв обязательные шаги, — видно сразу, без пролистывания.
   const missing = r.steps.filter((s) => !s.optional && !s.photos.length);
+  setNext({ inspect: { photos, missing: photos ? missing.length : 0, issued: r.links.some((l) => l.state === 'active') } });
   if (missing.length) $('retake-step').value = missing[0].id;
   $('inspect-state').textContent = photos
     ? `Фото осмотра: ${photos}. У каждого — время и место съёмки; «без геометки» — владелец не разрешил определять место.`

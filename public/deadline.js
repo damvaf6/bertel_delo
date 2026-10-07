@@ -1,6 +1,7 @@
 // Перенос срока дела (задача 2.91). Исполнитель просит новую дату с причиной; диспетчер соглашается или отказывает одной
 // кнопкой; заказчик видит просьбу и ответ. Ниже — история переносов. Текст — через textContent.
 import { api, el, say } from '/common.js';
+import { setNext } from '/next.js';
 
 const $ = (id) => document.getElementById(id);
 const dayRu = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
@@ -11,13 +12,14 @@ let ctx = null; // { order, reload, open }
 export async function loadDeadline(current, reload) {
   const box = $('deadline-box');
   say($('deadline-msg'), '');
-  if (!current.order.module || !current.order.deadline) { box.classList.add('hidden'); return; }
+  if (!current.order.module || !current.order.deadline) { box.classList.add('hidden'); setNext({ deadline: null }); return; }
   ctx = { order: current.order, reload };
   render(await api('GET', `/api/orders/${current.order.id}/deadline-requests`));
 }
 
 function render(r) {
   ctx.open = r.open;
+  setNext({ deadline: { deadline: r.deadline, open: !!r.open } });
   const box = $('deadline-box');
   box.classList.toggle('hidden', !(r.can_request || r.requests.length));
   if (box.classList.contains('hidden')) return;

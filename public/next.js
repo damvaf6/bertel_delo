@@ -3,9 +3,10 @@
 // Шаги считаются по тому, что уже загружено на странице (заявка, документы, проверка) — отдельного запроса нет.
 // Текст — только через textContent.
 import { el, quoted } from '/common.js';
+import { applyFolds, reveal } from '/fold.js';
 
 const $ = (id) => document.getElementById(id);
-let ctx = {}; // { current, docs, review, draft, analogs, docreq, money, step(action) }
+let ctx = {}; // { current, docs, review, draft, analogs, docreq, money, deadline, inspect, onsite, chat, loaded, step(action) }
 
 export function setNext(part) {
   ctx = part.reset ? { ...part } : { ...ctx, ...part };
@@ -22,7 +23,7 @@ if ('IntersectionObserver' in window) {
 }
 
 const visible = (id) => !!$(id) && !$(id).classList.contains('hidden');
-const go = (id) => () => { $(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+const go = (id) => () => { reveal(id); $(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
 
 function steps() {
   const { current, docs, review } = ctx;
@@ -79,8 +80,8 @@ function steps() {
   else if (firstOpen?.id === 'fix') main = { label: 'Исправить по замечанию руководителя', run: go('org-returns-box') };
   // Черновик уже есть (2.66) — файл результата обычно из него: кнопка ведёт к «Приложить как файл результата».
   else if (firstOpen?.id === 'result' && ctx.draft?.exists) main = { label: 'Приложить черновик как файл результата', run: () => { go('draft-confirm')(); $('draft-confirm')?.focus({ preventScroll: true }); } };
-  else if (firstOpen?.id === 'result') main = { label: 'Добавить файл результата', run: () => $('result-file')?.click() };
-  else if (firstOpen?.id === 'sign') main = { label: unsigned.length > 1 ? `Подписать все файлы (${unsigned.length})` : 'Подписать файл', run: () => ctx.signAll?.() };
+  else if (firstOpen?.id === 'result') main = { label: 'Добавить файл результата', run: () => { reveal('result-upload-box'); $('result-file')?.click(); } };
+  else if (firstOpen?.id === 'sign') main = { label: unsigned.length > 1 ? `Подписать все файлы (${unsigned.length})` : 'Подписать файл', run: () => { reveal('docs'); ctx.signAll?.(); } };
   else if (firstOpen?.id === 'org') main = { label: 'Ждём подпись руководителя', disabled: true };
   const done = items.filter((i) => i.done).length;
   return { lead: `Сделано ${done} из ${items.length - 1} шагов до сдачи. Нажмите на шаг — откроется его раздел.`, items, main };
@@ -157,6 +158,8 @@ function render() {
   if (!box || !ctx.current) return;
   const me = ctx.current.executor?.is_me;
   const s = me ? steps() : ctx.current.customer ? customerSteps() : ctx.current.dispatcher ? dispatcherSteps() : null;
+  const enabled = !!me && FOLD_STATUSES.includes(ctx.current.order.status);
+  applyFolds({ enabled, order: ctx.current.order.id, now: enabled && ctx.loaded ? nowBox(s) : null, notes: enabled ? foldNotes() : {} });
   box.classList.toggle('hidden', !s);
   bar.classList.toggle('hidden', !s?.main);
   if (!s) return;
@@ -167,4 +170,62 @@ function render() {
   const mk = () => el('button', { class: 'wide', 'data-next': 'main', 'aria-label': 'Следующий шаг', title: s.main.label, ...(s.main.disabled ? { disabled: '' } : {}), onclick: s.main.run }, s.main.label);
   $('next-main').replaceChildren(...(s.main ? [mk()] : []));
   $('next-bar').replaceChildren(...(s.main ? [mk()] : []));
+}
+
+// ——— Свёрнутые блоки дела у исполнителя (2.101) ———
+
+const FOLD_STATUSES = ['in_work', 'review', 'done', 'closed'];
+const dayRu = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+
+// Нужен сейчас — блок первого несделанного шага (необязательные — по порядку, как в «Что дальше»); запрошенные документы —
+// только если что-то запрошено и ещё не пришло. Сдано на проверку — раскрывать нечего.
+function nowBox(s) {
+  if (ctx.current.order.status !== 'in_work' || !s?.items) return null;
+  const open = s.items.find((i) => !i.done && !(i.id === 'docs' && !ctx.docreq?.total));
+  const box = {
+    inspect: visible('inspect-box') ? 'inspect-box' : 'onsite-box',
+    docs: 'docreq-box',
+    approaches: 'draft-box',
+    analogs: 'analogs-box',
+    draft: 'draft-box',
+    result: ctx.draft?.exists && visible('draft-box') ? 'draft-box' : 'docs-box',
+    ai: 'review-box',
+    sign: 'docs-box',
+    org: 'docs-box',
+  }[open?.id];
+  return box ?? null;
+}
+
+const count = (n, one, few, many) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? one : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? few : many}`;
+
+function foldNotes() {
+  const { docs, review, draft, analogs, docreqAll, deadline, inspect, onsite, chat } = ctx;
+  const notes = {};
+  if (deadline) notes['deadline-box'] = `до ${dayRu(deadline.deadline)}${deadline.open ? ' · просьба о переносе ждёт ответа' : ''}`;
+  if (docreqAll) notes['docreq-box'] = docreqAll.total ? `получено ${docreqAll.got} из ${docreqAll.total}` : 'ничего не запрошено';
+  if (docs) {
+    const list = docs.documents ?? [];
+    const results = list.filter((d) => d.kind === 'result');
+    const unsigned = results.filter((d) => !d.signatures?.expert).length;
+    const orgWait = docs.signature_org ? results.filter((d) => d.signatures?.expert && !d.signatures?.org).length : 0;
+    notes['docs-box'] = [
+      list.length ? `файлов: ${list.length}` : 'файлов нет',
+      results.length ? `результат: ${results.length}` : 'результата нет',
+      docs.signature_required && results.length ? (unsigned ? `не подписано: ${unsigned}` : orgWait ? 'ждёт подписи организации' : 'подписано') : null,
+    ].filter(Boolean).join(' · ');
+  }
+  if (inspect) notes['inspect-box'] = inspect.photos ? `фото: ${inspect.photos}${inspect.missing ? ` · не снято: ${count(inspect.missing, 'шаг', 'шага', 'шагов')}` : ''}` : inspect.issued ? 'ссылка выдана, фото пока нет' : 'фото нет';
+  if (onsite) notes['onsite-box'] = onsite;
+  if (analogs) notes['analogs-box'] = analogs.needed ? `подтверждено ${analogs.confirmed} из ${analogs.min}` : `подтверждено: ${analogs.confirmed}`;
+  if (draft) notes['draft-box'] = draft.exists ? 'черновик есть' : 'черновика нет';
+  if (review) {
+    const results = (docs?.documents ?? []).filter((d) => d.kind === 'result');
+    const last = results.reduce((m, d) => (d.created_at > m ? d.created_at : m), '');
+    const ai = review.ai;
+    const aiNote = !ai ? 'ИИ-проверка не запускалась' : !last || ai.at >= last ? 'ИИ-проверка сделана' : 'файлы менялись — проверьте ИИ ещё раз';
+    const s = review.summary;
+    notes['review-box'] = review.round > 0 && s ? `круг ${review.round}: в порядке ${s.ok} из ${s.total}${s.issues ? `, замечаний: ${s.issues}` : ''}` : aiNote;
+  }
+  if (chat) notes['chat-box'] = chat.count ? `сообщений: ${chat.count}` : 'сообщений нет';
+  return notes;
 }

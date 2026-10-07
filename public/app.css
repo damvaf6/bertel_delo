@@ -268,3 +268,11 @@ h2.inline { display: inline; }
 /* Осмотр по ссылке 2 дня без фото (2.85) — заметно над формой выдачи ссылки. */
 .notice-warn { margin: 8px 0; padding: 10px 12px; border-radius: 8px; background: #fff3d6; color: #5c3900; }
 .notice-warn p { margin: 0 0 8px; overflow-wrap: anywhere; }
+/* Блоки дела у исполнителя свёрнуты в строку-заголовок с состоянием (2.101) */
+.card.foldable > h2:first-child { cursor: pointer; margin-bottom: 4px; }
+.fold-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 8px; }
+.fold-bar .fold-note { overflow-wrap: anywhere; }
+.fold-bar .fold-toggle { flex: none; padding: 4px 0; }
+.card.folded { padding-bottom: 8px; }
+.card.folded > .fold-bar { margin-bottom: 0; }
+.card.folded > :not(h2:first-child):not(.fold-bar) { display: none !important; }

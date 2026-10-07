@@ -12,6 +12,7 @@ import { loadInspection } from '/inspect.js';
 import { loadOnsite } from '/onsite.js';
 import { signatureLines, uploadSignatureButton, SIGN_CONFIRM, UPLOAD_HINT } from '/sign.js';
 import { setNext } from '/next.js';
+import { reveal } from '/fold.js';
 import { orgChat } from '/orgchat.js';
 import { loadJournal } from '/journal.js';
 import { loadDocRequests } from '/docreq.js';
@@ -63,9 +64,9 @@ export async function openOrder(id, { to } = {}) {
   loadOrgChat();
   loadJournal(current.order, current.access);
   await Promise.all([loadDocs(true), loadTransfer(), loadMatch(current, () => openOrder(id)), loadDraft(current, () => openOrder(id)), loadAnalogs(current), loadInspection(current), loadOnsite(current), loadDocRequests(current, (file, msg) => uploadFile(file, 'other', msg)), loadDeadline(current, () => openOrder(id)), loadReview(current), loadChat(current), loadMoney(current, () => openOrder(id))]);
-  setNext({}); // разделы осмотра и черновика показаны — шаги пересчитываются
+  setNext({ loaded: true }); // разделы осмотра и черновика показаны — шаги пересчитываются, нужный сейчас блок раскрыт
   const box = { inspect: 'inspect-box', chat: 'chat-box', docs: 'docreq-box', deadline: 'deadline-box', sign: 'sign-wait-box' }[to];
-  if (box && !$(box).classList.contains('hidden')) $(box).scrollIntoView({ block: 'start' });
+  if (box && !$(box).classList.contains('hidden')) { reveal(box); $(box).scrollIntoView({ block: 'start' }); }
 }
 
 function render() {

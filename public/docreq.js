@@ -19,7 +19,8 @@ function render(r) {
   box.classList.toggle('hidden', !(r.can_request || r.requests.length));
   const waiting = r.requests.filter((x) => !x.done).length;
   // Шаг «Документы от заказчика» в «Что дальше» (2.66) — только исполнителю.
-  setNext({ docreq: r.can_request ? { total: r.requests.length, got: r.requests.length - waiting } : null });
+  setNext({ docreq: r.can_request ? { total: r.requests.length, got: r.requests.length - waiting } : null,
+    docreqAll: { total: r.requests.length, got: r.requests.length - waiting } });
   if (box.classList.contains('hidden')) return;
   $('docreq-lead').textContent = r.can_request
     ? (r.requests.length ? `Получено ${r.requests.length - waiting} из ${r.requests.length}. Заказчику пришло уведомление; файлы появятся и в «Документах».`
