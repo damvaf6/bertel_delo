@@ -214,10 +214,15 @@ export function aiOps() {
         const names = [...new Set(rules.flatMap((r) => r.auto ?? []))];
         // Сверка таблицы аналогов в отчёте (2.75) — с подтверждёнными экспертом аналогами дела, по порядку.
         // Перечень из нескольких позиций (2.83) — в порядке позиций, как в таблице Word.
-        const analogs = names.includes('analog_match')
+        // Даты по всему отчёту (2.88): даты объявлений аналогов дела и дни, когда получены фото осмотра.
+        const analogs = names.includes('analog_match') || names.includes('report_dates')
           ? inItemOrder(registry.analogs(order.module, order.service), order, await sql`select url, fields, adjustments from order_analogs where order_id = ${order.id} and deleted_at is null and confirmed_at is not null order by id`)
           : [];
-        const auto = runAutoChecks(names, files, { fields: order.fields ?? {}, dossier, basis, service: order.service, analogs });
+        const inspectionDays = names.includes('report_dates')
+          ? (await sql`select distinct to_char(p.received_at at time zone 'Europe/Moscow', 'YYYY-MM-DD') as day from inspection_photos p
+              join documents d on d.id = p.document_id where d.order_id = ${order.id} and d.deleted_at is null`).map((r) => r.day)
+          : [];
+        const auto = runAutoChecks(names, files, { fields: order.fields ?? {}, dossier, basis, service: order.service, analogs, inspectionDays });
         const found = Object.fromEntries(rules.map((r) => [r.id, (r.auto ?? []).flatMap((a) => auto[a] ?? [])]));
         // Модель недоступна или лимит исчерпан, но автоматические находки есть — показываем их, а не ошибку.
         let out;

@@ -2232,6 +2232,20 @@ test('аналоги в деле (2.32): ссылка и скриншот — И
   await found.scrollIntoViewIfNeeded();
   await shot(sp, '95-specialist-ii-analogi-v-otchete');
 
+  // 2.88: даты по всему отчёту — осмотр позже составления отчёта, объявление аналога позже даты оценки.
+  await sp.locator('#result-file').setInputFiles({ name: 'Отчёт с датами.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    buffer: makeDocx(['ОТЧЁТ ОБ ОЦЕНКЕ', 'Дата оценки: 12.01.2026', 'Дата составления отчёта: 14.01.2026', 'Дата осмотра: 20.01.2026',
+      'Сравнительный подход. Таблица аналогов с датами объявлений; цены и площади — в расчётной части отчёта.',
+      'Аналог № 1 — https://www.avito.ru/moskva/avtomobili/toyota_camry_2018_1, от 13.01.2026 — 2 150 000 руб.']) });
+  await expect(sp.locator('#doc-msg')).toHaveText('Файл добавлен');
+  await sp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  const dates = sp.locator('li[data-check="requisites"] .ai-found');
+  await expect(dates).toContainText('Дата осмотра (20.01.2026) позже даты составления отчёта (14.01.2026)');
+  await expect(dates).toContainText('Объявление аналога от 13.01.2026 — позже даты оценки (12.01.2026)');
+  await dates.scrollIntoViewIfNeeded();
+  await shot(sp, '95a-specialist-ii-daty-v-otchete');
+
   // Заказчик раздела аналогов не видит.
   await page.goto(`/kabinet#order=${id}`);
   await expect(page.locator('#order-view')).toBeVisible();

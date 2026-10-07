@@ -548,3 +548,18 @@ test('2.86: «Можно продолжать» — документы по за
   await S.sql`insert into order_messages (order_id, author_id, side, body) values (${o.id}, ${dispatcher.user.id}, 'dispatcher', 'Проверяю')`;
   assert.equal(await readyOf(spec, o), undefined);
 });
+
+test('2.88: ИИ-проверка сверяет дату осмотра в отчёте с днями, когда в деле получены фото осмотра', async () => {
+  const o = await inWork('Осмотр — дата в отчёте');
+  const { token } = await issue(o, { days: 1 });
+  assert.equal((await shoot(token, 'facade', { headers: GEO })).status, 201);
+  const today = todayMsk();
+  const put = (text) => spec.req('POST', `/api/orders/${o.id}/results`, Buffer.from(text), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('отчёт.txt') },
+  });
+  assert.equal((await put(`Отчёт об оценке\nДата осмотра: 01.02.2026\nДата составления отчёта: ${today.split('-').reverse().join('.')}`)).status, 201);
+  const r = await spec.req('POST', `/api/orders/${o.id}/review/ai`);
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  const found = r.body.ai.items.find((i) => i.id === 'requisites').found ?? [];
+  assert.deepEqual(found.map((f) => f.text), [`Дата осмотра в отчёте — 01.02.2026, а фото осмотра в деле получены ${today.split('-').reverse().join('.')} — проверьте дату осмотра`]);
+});
