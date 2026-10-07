@@ -8,12 +8,19 @@ import { loadOrgCases } from '/orgcases.js';
 
 const $ = (id) => document.getElementById(id);
 let current = null;
+let remarks = [];           // свои заготовки замечаний руководителя (2.103)
+let remarkOrg = null;       // организация, для которой они загружены
+const remarkViews = new Set(); // открытые формы возврата — перерисовать после изменения заготовок
 // После подписи или возврата меняются и «Дела экспертов» (что ждёт подписи — 2.36).
 const refresh = () => Promise.all([loadOrgSign(current), loadOrgCases(current)]);
 
 export async function loadOrgSign(org) {
   current = org;
   const { items } = await api('GET', `/api/orgs/${org.id}/signing`);
+  if (remarkOrg !== org.id) {
+    try { remarks = (await api('GET', `/api/orgs/${org.id}/remarks`)).remarks; remarkOrg = org.id; } catch { remarks = []; }
+  }
+  remarkViews.clear();
   $('org-sign-box').classList.remove('hidden');
   $('org-sign-empty').classList.toggle('hidden', items.length > 0);
   // Сначала — что ждёт подписи; подписанное — ниже, свёрнутым (разбор 03.10.2026, 2.23). «Подписать все файлы дела» — одной
@@ -105,11 +112,68 @@ function returnForm(d) {
   const area = el('textarea', { id: `ret-${d.id}`, rows: '3', maxlength: '2000', 'aria-label': `Замечание эксперту по файлу ${d.filename}` });
   const box = el('div', { class: 'field hidden', 'data-return-form': d.id },
     el('label', { for: `ret-${d.id}`, text: 'Что исправить — каждый пункт с новой строки (эксперт отметит исправленные)' }), area,
+    ...remarkTools(d, area),
     el('div', { class: 'row' },
       el('button', { class: 'danger', 'data-action': 'org-return-send', onclick: () => sendReturn(d, area.value) }, 'Вернуть с замечанием'),
       el('button', { class: 'secondary', onclick: () => box.classList.add('hidden') }, 'Отмена')));
   const open = el('button', { class: 'secondary', 'data-action': 'org-return', onclick: () => { box.classList.remove('hidden'); area.focus(); } }, 'Вернуть эксперту');
   return el('div', {}, el('div', { class: 'row' }, open), box);
+}
+
+// Свои заготовки замечаний (2.103): частый пункт — одной кнопкой в замечание; пункты из замечания — «Запомнить» один раз.
+function remarkTools(d, area) {
+  const chips = el('div', { class: 'chips remarks', 'data-remarks': d.id });
+  const list = el('ul', { class: 'list' });
+  const sum = el('summary');
+  const hint = el('div', { class: 'muted' });
+  const draw = () => {
+    chips.replaceChildren(...remarks.map((r) => el('button', { type: 'button', 'data-remark': r.id, onclick: () => addLine(area, r.text) }, `+ ${r.text}`)));
+    hint.textContent = remarks.length ? 'Нажмите заготовку — она добавится в замечание новой строкой.'
+      : 'Частые пункты можно запомнить кнопкой ниже — потом вставлять одной кнопкой.';
+    sum.textContent = `Мои заготовки замечаний · ${remarks.length}`;
+    list.replaceChildren(...remarks.map((r) => el('li', { 'data-remark-item': r.id }, el('span', { text: r.text }),
+      el('button', { type: 'button', class: 'secondary', 'data-action': 'org-remark-remove', onclick: () => removeRemark(r) }, 'Убрать'))));
+  };
+  remarkViews.add(draw);
+  draw();
+  return [hint, chips,
+    el('div', { class: 'row' }, el('button', { type: 'button', class: 'secondary', 'data-action': 'org-remark-save', onclick: () => saveRemarks(area.value) }, 'Запомнить пункты как заготовки')),
+    el('details', { class: 'remarks-own' }, sum, list)];
+}
+
+function addLine(area, line) {
+  const lines = area.value.split(/\r?\n/).map((l) => l.trim());
+  if (lines.includes(line)) return say($('org-sign-msg'), 'Этот пункт уже есть в замечании');
+  area.value = area.value.replace(/\s+$/, '') + (area.value.trim() ? '\n' : '') + line;
+  area.focus();
+  area.setSelectionRange(area.value.length, area.value.length);
+  say($('org-sign-msg'), '');
+}
+
+const redraw = () => remarkViews.forEach((draw) => draw());
+
+async function saveRemarks(value) {
+  const lines = String(value).split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (!lines.length) return say($('org-sign-msg'), 'Напишите пункты замечания — каждый с новой строки, потом нажмите «Запомнить»');
+  try {
+    let added = 0;
+    for (const t of lines) {
+      const r = await api('POST', `/api/orgs/${current.id}/remarks`, { text: t });
+      remarks = r.remarks;
+      if (r.added) added += 1;
+    }
+    redraw();
+    say($('org-sign-msg'), added ? `Запомнено заготовок: ${added}` : 'Эти пункты уже есть в заготовках', 'ok');
+  } catch (err) { redraw(); say($('org-sign-msg'), err.message); }
+}
+
+async function removeRemark(r) {
+  if (!confirm(`Убрать заготовку «${r.text}»? В уже отправленных замечаниях текст останется.`)) return;
+  try {
+    remarks = (await api('DELETE', `/api/orgs/${current.id}/remarks/${r.id}`)).remarks;
+    redraw();
+    say($('org-sign-msg'), 'Заготовка убрана', 'ok');
+  } catch (err) { say($('org-sign-msg'), err.message); }
 }
 
 async function sendReturn(d, comment) {

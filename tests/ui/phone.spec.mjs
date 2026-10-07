@@ -5365,3 +5365,77 @@ test('дела экспертов (2.102): руководитель отбира
   await shot(hp, 'c4-rukovoditel-otbor-vernul');
   for (const p of [cp, ep, hp]) await p.context().close();
 });
+
+test('заготовки замечаний руководителя (2.103): запомнить пункты один раз, вставить в следующее замечание одной кнопкой', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), ep = await ctx(), hp = await ctx();
+  const customer = await signIn(cp, '+79990010121');
+  const expert = await signIn(ep, '+79990010122'), head = await signIn(hp, '+79990010123');
+  const { orgId, id } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Заготовки ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Пунктова Анна' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Квартира: заготовки замечаний', $1, $2, 'in_work', current_date + 5, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Пунктовая ул., 3","area":"40"}') returning id`, [customer.id, expert.id]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [o.id, expert.id]);
+    return { orgId: org.id, id: o.id };
+  });
+  const up = await ep.request.post(`/api/orders/${id}/results`, { data: Buffer.from('%PDF-1.4 отчёт заготовки'), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Отчёт Пунктовой.pdf') } });
+  expect(up.status()).toBe(201);
+  const docId = (await up.json()).document.id;
+  const expertSigns = async () => expect((await ep.request.post(`/api/documents/${docId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  await expertSigns();
+
+  // Первый возврат: заготовок ещё нет — руководитель пишет пункты и запоминает их.
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const doc = hp.locator(`#org-sign li.doc[data-doc="${docId}"]`);
+  await doc.locator('[data-action="org-return"]').click();
+  const area = doc.locator('textarea');
+  await expect(doc.locator('.chips.remarks button')).toHaveCount(0);
+  await area.fill('1. Нет даты осмотра в разделе 1\n2. Не указан этаж квартиры');
+  await doc.locator('[data-action="org-remark-save"]').click();
+  await expect(hp.locator('#org-sign-msg')).toHaveText('Запомнено заготовок: 2');
+  await expect(doc.locator('.chips.remarks button')).toHaveText(['+ Нет даты осмотра в разделе 1', '+ Не указан этаж квартиры']);
+  await doc.locator('[data-action="org-remark-save"]').click();
+  await expect(hp.locator('#org-sign-msg')).toHaveText('Эти пункты уже есть в заготовках');
+  await shot(hp, 'd1-rukovoditel-zagotovki-zapomnil');
+  await doc.locator('[data-action="org-return-send"]').click();
+  await expect(hp.locator('#org-sign-msg')).toHaveText('Файл возвращён эксперту с замечанием — его подпись снята');
+
+  // Эксперт поправил и подписал заново — руководитель возвращает снова, пункты берёт одной кнопкой.
+  await expertSigns();
+  await hp.reload();
+  await doc.locator('[data-action="org-return"]').click();
+  await expect(doc.locator('.chips.remarks button')).toHaveCount(2);
+  await doc.locator('.chips.remarks button').nth(1).click();
+  await expect(area).toHaveValue('Не указан этаж квартиры');
+  await area.press('End');
+  await area.pressSequentially('\nНет фото подъезда');
+  await doc.locator('.chips.remarks button').nth(0).click();
+  await expect(area).toHaveValue('Не указан этаж квартиры\nНет фото подъезда\nНет даты осмотра в разделе 1');
+  await doc.locator('.chips.remarks button').nth(0).click();
+  await expect(hp.locator('#org-sign-msg')).toHaveText('Этот пункт уже есть в замечании');
+  await doc.locator('.chips.remarks').scrollIntoViewIfNeeded();
+  await shot(hp, 'd2-rukovoditel-zagotovki-vstavil');
+  await doc.locator('[data-action="org-return-send"]').click();
+  await expect(hp.locator('#org-sign-msg')).toHaveText('Файл возвращён эксперту с замечанием — его подпись снята');
+  const sign = await (await hp.request.get(`/api/orgs/${orgId}/signing`)).json();
+  const ret = sign.items.flatMap((x) => x.returns).filter((r) => r.document_id === docId).at(-1);
+  expect(ret.items.map((p) => p.text)).toEqual(['Не указан этаж квартиры', 'Нет фото подъезда', 'Нет даты осмотра в разделе 1']);
+
+  // Лишнюю заготовку руководитель убирает; эксперт заготовок руководителя не видит.
+  await expertSigns();
+  await hp.reload();
+  await doc.locator('[data-action="org-return"]').click();
+  await doc.locator('details.remarks-own summary').click();
+  await expect(doc.locator('details.remarks-own summary')).toHaveText('Мои заготовки замечаний · 2');
+  hp.once('dialog', (d) => d.accept());
+  await doc.locator('details.remarks-own [data-action="org-remark-remove"]').first().click();
+  await expect(hp.locator('#org-sign-msg')).toHaveText('Заготовка убрана');
+  await expect(doc.locator('.chips.remarks button')).toHaveText(['+ Не указан этаж квартиры']);
+  await shot(hp, 'd3-rukovoditel-zagotovka-ubrana');
+  expect((await ep.request.get(`/api/orgs/${orgId}/remarks`)).status()).toBe(403);
+});
