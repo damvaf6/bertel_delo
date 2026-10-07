@@ -25,7 +25,7 @@ export async function loadMyReport(month = '') {
   sel.value = report.month;
   const t = report.total;
   $('my-report-total').replaceChildren(
-    ...fact(`Сдано · ${report.month_name}`, t.done ? `${t.done}: в срок — ${t.done_on_time}${t.done_late ? `, позже срока — ${t.done_late}` : ''}` : '0'),
+    ...fact(`Сдано · ${report.month_name}`, t.done ? `${t.done} (в срок — ${t.done_on_time}${t.done_late ? `, позже срока — ${t.done_late}` : ''})` : '0'),
     ...fact('Принято новых дел', String(t.accepted)),
     ...(report.current && t.overdue_now ? fact('Просрочено сейчас', String(t.overdue_now), 'overdue') : []),
     ...(t.returned_head || t.returned_dispatcher ? fact('Возвращали', [
