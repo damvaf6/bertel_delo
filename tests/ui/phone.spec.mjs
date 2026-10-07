@@ -5439,3 +5439,56 @@ test('заготовки замечаний руководителя (2.103): з
   await shot(hp, 'd3-rukovoditel-zagotovka-ubrana');
   expect((await ep.request.get(`/api/orgs/${orgId}/remarks`)).status()).toBe(403);
 });
+
+test('что изменилось между версиями черновика (2.104): эксперт выбирает прошлую версию — по разделам добавлено и убрано', async ({ page }) => {
+  const expert = await signIn(page, '+79990000968');
+  const o = await db(async (c) => (await c.query(
+    `insert into orders (owner_user_id, title, module, service, fields, status, executor_user_id, price_kop, paid_at, deadline)
+     values ($1, 'Квартира: версии черновика', 'expertise', 'realty', $2, 'in_work', $1, 1500000, now(), now() + interval '6 days') returning id`,
+    [expert.id, { purpose: 'bank', region: 'moscow', object_type: 'flat', address: 'г. Москва, Версий ул., 4', area: '51' }])).rows[0]);
+  await page.goto(`/kabinet#order=${o.id}`);
+  await page.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(page.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  // Одна версия — сравнивать не с чем, блока нет.
+  await expect(page.locator('#diff-box')).toBeHidden();
+
+  // Правка: в первом разделе добавлен абзац, пометка в нём заменена текстом.
+  const text = page.getByLabel('Текст заключения');
+  const before = await text.inputValue();
+  const head = before.match(/^## .+$/m)[0];
+  const gap = before.match(/\[(?:заполнить|описать)[^\]]*\]/)[0];
+  await text.fill(before.replace(head, `${head}\nКвартира осмотрена 5 октября 2026 года.`).replace(gap, 'кирпичный дом 1975 года'));
+  await page.getByRole('button', { name: 'Сохранить правку' }).click();
+  await expect(page.locator('#draft-msg')).toHaveText('Правка сохранена');
+  await expect(page.locator('#diff-box')).toBeVisible();
+
+  await page.locator('#diff-box summary').click();
+  await expect(page.locator('#diff-from option')).toHaveCount(1);
+  await expect(page.locator('#diff-from option').first()).toContainText('Предыдущая:');
+  await expect(page.locator('#diff-from option').first()).toContainText('ИИ');
+  await expect(page.locator('#diff-cur')).toContainText('правка');
+  await page.getByRole('button', { name: 'Показать, что изменилось' }).click();
+  await expect(page.locator('#diff-msg')).toContainText('добавлено абзацев — 2, убрано — 1');
+  const out = page.locator('#diff-out');
+  await expect(out.locator('.diff-section h4').first()).toHaveText(head.replace(/^##\s*/, ''));
+  await expect(out.locator('.diff-add')).toContainText(['Квартира осмотрена 5 октября 2026 года.']);
+  await expect(out.locator('.diff-add').filter({ hasText: 'кирпичный дом 1975 года' })).toHaveCount(1);
+  await expect(out.locator('.diff-del').filter({ hasText: gap })).toHaveCount(1);
+  await page.locator('#diff-box').scrollIntoViewIfNeeded();
+  await shot(page, 'e1-ekspert-versii-chto-izmenilos');
+
+  // Ещё правка: к первой версии (ИИ) — обе правки сразу; к предыдущей — только последняя. Старый итог стирается.
+  await text.fill((await text.inputValue()).replace('Квартира осмотрена 5 октября 2026 года.', 'Квартира осмотрена 6 октября 2026 года.'));
+  await page.getByRole('button', { name: 'Сохранить правку' }).click();
+  await expect(page.locator('#draft-msg')).toHaveText('Правка сохранена');
+  await expect(page.locator('#diff-out')).toBeEmpty();
+  await expect(page.locator('#diff-from option')).toHaveCount(2);
+  await page.getByRole('button', { name: 'Показать, что изменилось' }).click();
+  await expect(page.locator('#diff-msg')).toContainText('добавлено абзацев — 1, убрано — 1; разделов с изменениями — 1');
+  await expect(out.locator('.diff-del')).toHaveText(['убрано Квартира осмотрена 5 октября 2026 года.']);
+  await expect(out.locator('.diff-add')).toHaveText(['добавлено Квартира осмотрена 6 октября 2026 года.']);
+  await page.locator('#diff-from').selectOption({ index: 1 });
+  await page.getByRole('button', { name: 'Показать, что изменилось' }).click();
+  await expect(page.locator('#diff-msg')).toContainText('добавлено абзацев — 2, убрано — 1');
+  await shot(page, 'e2-ekspert-versii-k-pervoy');
+});

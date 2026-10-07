@@ -284,3 +284,10 @@ h2.inline { display: inline; }
 .card.folded { padding-bottom: 8px; }
 .card.folded > .fold-bar { margin-bottom: 0; }
 .card.folded > :not(h2:first-child):not(.fold-bar) { display: none !important; }
+/* Что изменилось между версиями черновика (2.104) */
+.diff-section { border-top: 1px solid var(--line, #ddd); padding-top: 6px; margin-top: 8px; }
+.diff-section h4 { margin: 4px 0; }
+.diff-add, .diff-del { margin: 4px 0; padding: 4px 8px; border-radius: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.diff-add { background: #e6f4ea; }
+.diff-del { background: #fdecea; text-decoration: line-through; text-decoration-color: #b3261e; }
+.diff-mark { font-size: 12px; font-weight: 600; text-decoration: none; display: inline-block; margin-right: 4px; color: #555; }

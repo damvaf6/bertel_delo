@@ -424,6 +424,17 @@
             </form>
             <p class="msg" id="snip-msg" role="status" aria-live="polite"></p>
           </details>
+          <details class="hidden" id="diff-box">
+            <summary>Что изменилось между версиями</summary>
+            <p class="muted">Каждое сохранение, черновик от ИИ и разделы из прошлого дела — отдельная версия. Выберите прошлую — будет
+              видно по разделам, какие абзацы с тех пор добавлены и какие убраны. Сравнивается сохранённый текст.</p>
+            <p class="muted" id="diff-cur"></p>
+            <label for="diff-from">Сравнить с версией</label>
+            <select id="diff-from"></select>
+            <button type="button" class="secondary" id="diff-show">Показать, что изменилось</button>
+            <p class="msg" id="diff-msg" role="status" aria-live="polite"></p>
+            <div id="diff-out"></div>
+          </details>
         </div>
         <div class="hidden" id="draft-word-box">
           <button type="button" class="secondary" id="draft-word">Скачать Word</button>
