@@ -1,8 +1,13 @@
 // Сводка за месяц по экспертам (2.78): руководитель выбирает месяц и видит по каждому эксперту — принял, сдал, позже срока,
 // возвращено, вознаграждение и выплачено; ниже итог. «Скачать таблицу» — та же сводка файлом для Excel. «Скачать сданные
 // заключения» (2.89) — файлы результата с подписями и опись одним архивом; кнопка есть, только если за месяц что-то сдано.
+// Частые замечания (2.105) — пункты, с которыми руководитель чаще всего возвращал отчёты: по организации и у каждого эксперта.
 import { api, el, say } from '/common.js';
 import { rub } from '/money.js';
+
+// Частые пункты замечаний (2.105): «Нет даты осмотра» — 3 раза, у 2 экспертов.
+const times = (n) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? 'раз' : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? 'раза' : 'раз'}`;
+const experts = (n) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? 'эксперта' : 'экспертов'}`;
 
 const $ = (id) => document.getElementById(id);
 const MONTHS = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
@@ -49,6 +54,11 @@ async function load(month) {
     ...(report.current && t.overdue_now ? fact('Просрочено сейчас', String(t.overdue_now), 'overdue') : []),
     ...fact('Вознаграждение за сданные', rub(t.fee_kop), 'money-sum'),
     ...fact('Выплачено экспертам', rub(t.paid_kop)));
+  const top = report.top_remarks ?? [];
+  $('org-report-remarks-box').classList.toggle('hidden', !top.length);
+  $('org-report-remarks').replaceChildren(...top.map((x) => el('li', { 'data-remark': '' },
+    el('span', { text: x.text }),
+    el('span', { class: 'muted', text: ` — ${times(x.n)}${x.experts > 1 ? `, у ${experts(x.experts)}` : ''}` }))));
   $('org-report').replaceChildren(...report.experts.map((x) => el('li', { 'data-report-expert': x.user_id },
     el('div', { class: 'title', text: x.full_name }),
     el('div', { class: 'muted', text: `принял: ${x.accepted} · сдано: ${x.done}` }),
@@ -57,5 +67,7 @@ async function load(month) {
     ...(x.returned_head || x.returned_dispatcher ? [el('div', { class: 'muted', text: `возвращено: ${[
       x.returned_head ? `Вами — ${x.returned_head}` : null, x.returned_dispatcher ? `на доработку — ${x.returned_dispatcher}` : null,
     ].filter(Boolean).join(', ')}` })] : []),
+    ...(x.remarks?.length ? [el('div', { class: 'muted', 'data-expert-remarks': '', text: `частые замечания: ${
+      x.remarks.map((m) => `«${m.text}»${m.n > 1 ? ` ×${m.n}` : ''}`).join(', ')}` })] : []),
     el('div', { class: 'muted', text: `вознаграждение за сданные: ${rub(x.fee_kop)} · выплачено: ${rub(x.paid_kop)}` }))));
 }

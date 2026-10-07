@@ -3415,8 +3415,17 @@ test('сводка за месяц (2.78): руководитель видит �
   // Эксперт приложил и подписал отчёт (2.89 — попадёт в архив сданных за месяц); дело сдано.
   const up = await ep.request.post(`/api/orders/${id}/results`, { data: Buffer.from('%PDF-1.4 отчёт для архива'), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Отчёт Сводкина.pdf') } });
   expect(up.status()).toBe(201);
-  expect((await ep.request.post(`/api/documents/${(await up.json()).document.id}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
-  await db((c) => c.query("update orders set status = 'done' where id = $1", [id]));
+  const docId = (await up.json()).document.id;
+  expect((await ep.request.post(`/api/documents/${docId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  await db(async (c) => {
+    await c.query("update orders set status = 'done' where id = $1", [id]);
+    // Руководитель дважды возвращал отчёт (2.105): «Нет даты осмотра» — оба раза.
+    for (const items of [['Нет даты осмотра', 'Не указан этаж'], ['нет даты осмотра.']]) {
+      const { rows: [r] } = await c.query(`insert into org_returns (order_id, document_id, org_id, executor_user_id, returned_by, filename, comment)
+        values ($1, $2, $3, $4, $5, 'Отчёт Сводкина.pdf', $6) returning id`, [id, docId, orgId, expert.id, head.id, items.join('\n')]);
+      for (const [i, text] of items.entries()) await c.query('insert into org_return_items (return_id, n, text) values ($1, $2, $3)', [r.id, i + 1, text]);
+    }
+  });
 
   await hp.goto(`/kabinet#org=${orgId}`);
   const box = hp.locator('#org-report-box');
@@ -3428,16 +3437,21 @@ test('сводка за месяц (2.78): руководитель видит �
   const row = hp.locator('#org-report > li').filter({ hasText: 'Эксперт Сводкин' });
   await expect(row).toContainText('принял: 1 · сдано: 1');
   await expect(row.locator('.overdue')).toHaveText('позже срока: 1');
-  await expect(row).toContainText('возвращено: на доработку — 1');
+  await expect(row).toContainText('возвращено: Вами — 2, на доработку — 1');
+  await expect(row.locator('[data-expert-remarks]')).toHaveText('частые замечания: «нет даты осмотра.» ×2, «Не указан этаж»');
+  await expect(hp.locator('#org-report-remarks > li')).toHaveText(['нет даты осмотра. — 2 раза', 'Не указан этаж — 1 раз']);
   await expect(row).toContainText('вознаграждение за сданные: 12 000 ₽ · выплачено: 12 000 ₽');
   await box.scrollIntoViewIfNeeded();
   await shot(hp, 'a7-rukovoditel-svodka-mesyac');
+  await hp.locator('#org-report-remarks-box').scrollIntoViewIfNeeded();
+  await shot(hp, 'a7a-rukovoditel-chastye-zamechaniya');
   // Таблица для Excel скачивается файлом.
   const [download] = await Promise.all([hp.waitForEvent('download'), hp.locator('#org-report-csv').click()]);
   expect(download.suggestedFilename()).toMatch(/^Сводка по экспертам \d{4}-\d{2}\.csv$/);
   const csv = fs.readFileSync(await download.path());
   expect([...csv.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
-  expect(csv.toString('utf8')).toContain('Эксперт Сводкин;1;1;1;0;0;1;12000,00;12000,00');
+  expect(csv.toString('utf8')).toContain('Эксперт Сводкин;1;1;1;0;2;1;12000,00;12000,00');
+  expect(csv.toString('utf8')).toContain('нет даты осмотра.;2;1');
   // Сданные заключения одним архивом (2.89): отчёт эксперта с подписью и опись.
   const zipBtn = hp.locator('#org-report-zip');
   await expect(zipBtn).toHaveText('Заключения архивом (1)');
@@ -3456,6 +3470,8 @@ test('сводка за месяц (2.78): руководитель видит �
   await expect(hp.locator('#org-report-total')).toContainText('принято дел: 0 · сдано: 0');
   await expect(row).toContainText('вознаграждение за сданные: 0 ₽ · выплачено: 0 ₽');
   await expect(zipBtn).toBeHidden();
+  await expect(hp.locator('#org-report-remarks-box')).toBeHidden();
+  await expect(row.locator('[data-expert-remarks]')).toHaveCount(0);
   await shot(hp, 'a8-rukovoditel-svodka-proshlyj');
   // Эксперт сводку не открывает.
   expect((await ep.request.get(`/api/orgs/${orgId}/report`)).status()).toBe(403);
