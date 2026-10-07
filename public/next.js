@@ -158,6 +158,7 @@ function render() {
   if (!box || !ctx.current) return;
   const me = ctx.current.executor?.is_me;
   const s = me ? steps() : ctx.current.customer ? customerSteps() : ctx.current.dispatcher ? dispatcherSteps() : null;
+  renderReady();
   const enabled = !!me && FOLD_STATUSES.includes(ctx.current.order.status);
   applyFolds({ enabled, order: ctx.current.order.id, now: enabled && ctx.loaded ? nowBox(s) : null, notes: enabled ? foldNotes() : {} });
   box.classList.toggle('hidden', !s);
@@ -170,6 +171,94 @@ function render() {
   const mk = () => el('button', { class: 'wide', 'data-next': 'main', 'aria-label': 'Следующий шаг', title: s.main.label, ...(s.main.disabled ? { disabled: '' } : {}), onclick: s.main.run }, s.main.label);
   $('next-main').replaceChildren(...(s.main ? [mk()] : []));
   $('next-bar').replaceChildren(...(s.main ? [mk()] : []));
+}
+
+// ——— «Готово к сдаче?» (2.106) ———
+// Над кнопкой «Сдать на проверку» у исполнителя: файл, подписи, ИИ-проверка, замечания руководителя и диспетчера,
+// документы от заказчика, срок — у каждой строки состояние и переход к разделу. «Нет» — без этого сдать нельзя (то же
+// проверяет сервер); «стоит посмотреть» — сдать можно. Считается по уже загруженному на странице, отдельного запроса нет.
+
+const DAY = 86_400_000;
+const daysLeft = (iso) => {
+  const t = new Date();
+  return Math.round((new Date(`${iso}T00:00`) - new Date(t.getFullYear(), t.getMonth(), t.getDate())) / DAY);
+};
+
+export function readyRows() {
+  const { current, docs, review, deadline } = ctx;
+  const order = current.order;
+  const list = docs?.documents ?? [];
+  const results = list.filter((d) => d.kind === 'result');
+  const lastResultAt = results.reduce((m, d) => (d.created_at > m ? d.created_at : m), '');
+  const rows = [];
+  const row = (id, state, title, note, to) => rows.push({ id, state, title, note, to });
+  row('result', results.length ? 'ok' : 'no', 'Файл результата',
+    results.length ? results.map((d) => d.filename).join(', ') : 'не приложен, без него сдать нельзя',
+    ctx.draft?.exists && visible('draft-box') ? 'draft-box' : 'docs-box');
+  if (docs?.signature_required) {
+    const unsigned = results.filter((d) => !d.signatures?.expert).length;
+    row('sign', results.length && !unsigned ? 'ok' : 'no', 'Подпись УКЭП',
+      !results.length ? 'подписывается файл результата' : unsigned ? `не подписано файлов: ${unsigned}` : 'все файлы результата подписаны', 'docs-box');
+    if (docs.signature_org) {
+      const wait = results.filter((d) => !d.signatures?.org).length;
+      row('org', results.length && !wait ? 'ok' : 'no', `Подпись организации ${quoted(docs.signature_org)}`,
+        !results.length || unsigned ? 'после Вашей подписи' : wait ? 'ждём подпись руководителя' : 'подписано', 'docs-box');
+    }
+  }
+  const returns = (docs?.org_returns ?? []).filter((r) => r.open);
+  if (returns.length) {
+    const left = returns.reduce((n, r) => n + (r.items?.length ? r.left : 1), 0);
+    row('fix', 'warn', 'Замечания руководителя', left ? `не отмечено исправленными: ${left}` : 'все пункты отмечены, подпишите файл заново', 'org-returns-box');
+  }
+  if (review?.round > 0 && order.status === 'in_work') {
+    const issues = (review.checks ?? []).filter((c) => c.verdict === 'issue');
+    if (issues.length) row('remarks', 'warn', `Замечания диспетчера (круг ${review.round})`, `проверьте, что исправлено: ${issues.map((c) => c.title).join('; ')}`, 'review-box');
+  }
+  if (visible('review-box') && (review?.can_ai || review?.ai)) {
+    const ai = review.ai;
+    const titles = new Map((review.checks ?? []).map((c) => [c.id, c.title]));
+    const look = (ai?.items ?? []).filter((i) => i.hint === 'attention');
+    if (!ai) row('ai', 'warn', 'ИИ-проверка', 'не запускалась, проверьте результат перед сдачей', 'review-box');
+    else if (lastResultAt && ai.at < lastResultAt) row('ai', 'warn', 'ИИ-проверка', 'файлы менялись после проверки, проверьте ещё раз', 'review-box');
+    else if (look.length) row('ai', 'warn', 'ИИ-проверка', `стоит посмотреть: ${look.map((i) => titles.get(i.id) || i.id).join('; ')}`, 'review-box');
+    else row('ai', 'ok', 'ИИ-проверка', 'замечаний ИИ не видит', 'review-box');
+  }
+  const dr = ctx.docreq;
+  if (dr?.total && visible('docreq-box')) {
+    row('docs', dr.got === dr.total ? 'ok' : 'warn', 'Документы от заказчика',
+      dr.got === dr.total ? `получены все: ${dr.total}` : `получено ${dr.got} из ${dr.total}`, 'docreq-box');
+  }
+  if (deadline?.deadline) {
+    const d = daysLeft(deadline.deadline);
+    const when = d < 0 ? `срок прошёл ${dayRu(deadline.deadline)}` : d === 0 ? 'срок сегодня' : d === 1 ? 'срок завтра' : `до ${dayRu(deadline.deadline)}`;
+    row('deadline', d < 0 || deadline.open ? 'warn' : 'ok', 'Срок',
+      deadline.open ? `${when} · просьба о переносе ждёт ответа` : when, 'deadline-box');
+  }
+  return rows;
+}
+
+const MARK = { ok: '✓', warn: '!', no: '✕' };
+const STATE_RU = { ok: 'готово', warn: 'стоит посмотреть', no: 'нет' };
+
+function renderReady() {
+  const box = $('ready-box');
+  if (!box) return;
+  const on = !!ctx.current?.executor?.is_me && ctx.current.order.status === 'in_work' && !!ctx.docs;
+  box.classList.toggle('hidden', !on);
+  if (!on) return box.querySelector('ul').replaceChildren();
+  const rows = readyRows();
+  const no = rows.filter((r) => r.state === 'no').length;
+  const warn = rows.filter((r) => r.state === 'warn').length;
+  $('ready-lead').textContent = no
+    ? `Пока сдать нельзя: не готово ${count(no, 'пункт', 'пункта', 'пунктов')}. Нажмите на строку — откроется нужный раздел.`
+    : warn
+      ? `Сдать можно. Стоит посмотреть: ${count(warn, 'пункт', 'пункта', 'пунктов')} — нажмите на строку, чтобы перейти.`
+      : 'Всё готово — можно сдавать на проверку.';
+  box.dataset.state = no ? 'no' : warn ? 'warn' : 'ok';
+  box.querySelector('ul').replaceChildren(...rows.map((r) => el('li', { class: `ready ${r.state}`, 'data-ready': r.id },
+    el('button', { type: 'button', class: 'link', 'aria-label': `${r.title}: ${STATE_RU[r.state]}. ${r.note}`, onclick: () => { reveal(r.to); $(r.to)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); } },
+      el('span', { class: 'ready-mark', 'aria-hidden': 'true', text: MARK[r.state] }),
+      el('span', {}, el('span', { class: 'title', text: r.title }), el('span', { class: 'muted', text: ` — ${r.note}` }))))));
 }
 
 // ——— Свёрнутые блоки дела у исполнителя (2.101) ———
