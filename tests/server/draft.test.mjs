@@ -26,7 +26,7 @@ before(async () => {
   spec = await login(S, '+79990000905');
   await setPlatformRole(S.sql, dispatcher.user.id, 'dispatcher');
   await setPlatformRole(S.sql, admin.user.id, 'admin');
-  await makeSpecialist(S.sql, spec.user.id, { permits: [['expertise', 'realty'], ['expertise', 'vehicle'], ['expertise', 'land'], ['expertise', 'movable'], ['expertise', 'goods'], ['expertise', 'construction'], ['expertise', 'handwriting']] });
+  await makeSpecialist(S.sql, spec.user.id, { permits: [['expertise', 'realty'], ['expertise', 'vehicle'], ['expertise', 'land'], ['expertise', 'movable'], ['expertise', 'goods'], ['expertise', 'construction'], ['expertise', 'handwriting'], ['expertise', 'car_damage']] });
   await owner.req('PATCH', '/api/me', { full_name: 'Тестова Заказчица' });
 });
 after(async () => { await S?.close(); });
@@ -372,6 +372,9 @@ const OTHER = {
     facts: [/Что оценить \(перечень\): Токарный станок 16К20/], last: '13. Литература и приложения', approaches: ['comparative', 'cost'] },
   goods: { title: 'Ноутбук сломался', fields: { purpose: 'court', region: 'moscow', subject: 'Ноутбук перестал включаться через месяц', questions: 'Есть ли недостаток? Производственный или эксплуатационный?', purchase: '12.03.2026, магазин, 54 990 ₽' },
     facts: [/Когда и где куплен, цена по чеку: 12\.03\.2026/], last: '8. Приложения', approaches: null },
+  // Ущерб после ДТП (2.97): заключение о стоимости ремонта — без подходов к оценке и аналогов.
+  car_damage: { title: 'Ущерб после ДТП', fields: { purpose: 'damage', region: 'moscow', vehicle_type: 'car', make_model: 'Тестовая Модель', year: 2021, accident_date: '14.09.2026', damage: 'Задний бампер, крышка багажника', method: 'osago', insurer: 'Тест-Страх, убыток 123, выплачено 41 000 ₽' },
+    facts: [/Дата ДТП: 14\.09\.2026/, /Что повреждено: Задний бампер/, /Как считать ремонт: По Единой методике/], last: '10. Приложения', approaches: null },
 };
 
 for (const [svc, c] of Object.entries(OTHER)) {
@@ -396,13 +399,14 @@ for (const [svc, c] of Object.entries(OTHER)) {
     }
     assert.match(d.body, /Фото 1 \(общий вид\.jpg\)/, `${svc}: фото — в описании или осмотре`);
     if (c.approaches && !c.approaches.includes('income')) assert.doesNotMatch(d.body, /Доходный подход/, `${svc}: неприменённый подход не пишется`);
-    if (svc === 'goods') assert.match(d.body, /## 2\. Вопросы эксперту/);
+    if (svc === 'goods' || svc === 'car_damage') assert.match(d.body, /## 2\. Вопросы эксперту/);
+    if (svc === 'car_damage') assert.doesNotMatch(d.body, /Сравнительный подход|аналог/i, 'ущерб после ДТП — без подходов и аналогов');
     const filled = d.body.replace(/\[(?:заполнить|описать)[^\]]*\]/g, 'заполнено экспертом');
     assert.equal((await spec.req('PUT', `/api/orders/${o.id}/draft`, { body: filled, from: d.id })).status, 200);
     const w = await download(spec, `/api/orders/${o.id}/draft/docx`);
     assert.equal(w.status, 200);
     const text = (await extractPages(w.buf, 'Отчёт.docx')).pages.join('\n');
-    assert.match(text, svc === 'goods' ? /ЗАКЛЮЧЕНИЕ ЭКСПЕРТА/ : /ОТЧЁТ ОБ ОЦЕНКЕ/);
+    assert.match(text, ['goods', 'car_damage'].includes(svc) ? /ЗАКЛЮЧЕНИЕ ЭКСПЕРТА/ : /ОТЧЁТ ОБ ОЦЕНКЕ/);
     assert.match(text, new RegExp(c.last.replace(/[.()]/g, '\\$&')));
   });
 }
@@ -590,13 +594,29 @@ test('почерковедческая (2.81): документы заказчи
   assert.equal(reg.service('expertise', 'realty').service.subject, undefined);
   assert.equal(reg.service('expertise', 'handwriting').fields.find((f) => f.id === 'region').label, 'Где находится документ');
   const svc = (patch) => ({ ...expertise, services: expertise.services.map((s) => (s.id === 'handwriting' ? { ...s, ...patch } : s)) });
-  assert.throws(() => validateModule(svc({ subject: 'paper' })), /subject — 'document' или 'goods'/);
+  assert.throws(() => validateModule(svc({ subject: 'paper' })), /subject — 'document', 'goods' или 'car'/);
   // Товароведческая (2.82): снимают товар; «где находится» — товар, адрес — отдельной строкой без повтора подписи.
   const goods = reg.service('expertise', 'goods');
   assert.equal(goods.service.subject, 'goods');
   assert.equal(goods.fields.find((f) => f.id === 'region').label, 'Где находится товар');
   assert.equal(goods.fields.filter((f) => f.label === 'Где находится товар').length, 1);
   assert.ok(!expertise.request_docs.find((d) => d.id === 'damage_docs').services.includes('goods'), 'протокол ДТП и акт о заливе — не для товара');
+  // Ущерб после ДТП (2.97): своя услуга — заключение о ремонте, а не рыночная стоимость машины.
+  const crash = reg.service('expertise', 'car_damage');
+  assert.equal(crash.service.paper, 'Заключение эксперта');
+  assert.equal(crash.fields.find((f) => f.id === 'purpose').label, 'Для чего нужна экспертиза');
+  assert.equal(crash.fields.find((f) => f.id === 'region').label, 'Где находится автомобиль');
+  assert.equal(reg.analogs('expertise', 'car_damage'), null, 'аналоги не нужны');
+  assert.ok(!reg.approachesFor('expertise', 'car_damage'), 'подходы к оценке не выбираются');
+  const docs = reg.requestDocs('expertise', 'car_damage').map((d) => d.id);
+  for (const id of ['sts', 'pts', 'accident_docs', 'insurer_docs', 'repair_docs']) assert.ok(docs.includes(id), id);
+  assert.ok(!docs.includes('damage_docs') && !docs.includes('encumbrance'), 'акт о заливе и залог — не для ущерба после ДТП');
+  const steps = reg.inspectionSteps('expertise', 'car_damage');
+  assert.ok(steps.find((x) => x.id === 'car_damage_close' && !x.optional), 'повреждения крупно — обязательный шаг');
+  assert.ok(steps.some((x) => x.id === 'car_vin') && !steps.some((x) => x.id === 'defects'));
+  const checks = reg.checks('expertise', 'car_damage').map((c) => c.id);
+  for (const id of ['vehicle_identity', 'cd_damage', 'cd_cost', 'expert_info', 'conclusions', 'questions_answered']) assert.ok(checks.includes(id), id);
+  assert.ok(!checks.includes('analogs') && !checks.includes('approaches') && !checks.includes('appraiser'));
 });
 
 // Перечень использованных документов (2.95): программа собирает его из дела — документы заказчика (и присланные по запросу),
@@ -605,7 +625,7 @@ test('перечень использованных документов (2.95):
   const o = await inWork('Квартира с перечнем');
   const appendix = createRegistry().draftSections('expertise', 'realty').find((s) => s.sources);
   assert.equal(appendix.id, 'r_appendix');
-  for (const svc of ['realty', 'land', 'movable', 'vehicle', 'goods', 'construction', 'handwriting']) {
+  for (const svc of ['realty', 'land', 'movable', 'vehicle', 'car_damage', 'goods', 'construction', 'handwriting']) {
     assert.equal(createRegistry().draftSections('expertise', svc).filter((s) => s.sources).length, 1, svc);
   }
   assert.equal((await spec.req('POST', '/api/specialist/me/dossier', { kind: 'sro', title: 'СРО «Тестовые оценщики»', number: '7777' })).status, 201);

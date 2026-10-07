@@ -2617,7 +2617,7 @@ async function customerReceives(page, prefix, customerName) {
 
 test('как настоящий заказчик (2.41): частное лицо — ДТП своими словами, помощник, заявка, оплата, отчёт и акт', async ({ page, browser, baseURL }) => {
   const C = '+79990004101', D = '+79990004102', S = '+79990004103';
-  const staff = await staffFor(browser, baseURL, D, S, 'vehicle');
+  const staff = await staffFor(browser, baseURL, D, S, 'car_damage');
   await signIn(page, C);
   await page.request.patch('/api/me', { data: { full_name: 'Тестов Иван Петрович' }, headers: H });
   await page.goto('/kabinet');
@@ -2625,7 +2625,7 @@ test('как настоящий заказчик (2.41): частное лицо
   await page.getByLabel('Что случилось').fill('Попал в ДТП в Москве, страховая заплатила мало. Хочу доказать, что ремонт машины дороже. Выиграю ли я суд?');
   await page.getByRole('button', { name: 'Разобраться' }).click();
   await expect(page.locator('#pa-steps li').first()).toBeVisible();
-  await expect(page.locator('#pa-specialist')).toContainText('Оценка транспортного средства');
+  await expect(page.locator('#pa-specialist')).toContainText('Ущерб автомобилю после ДТП');
   await expect(page.locator('#pa-legal')).toContainText('это вопрос к юристу');
   await expect(page.locator('#pa-disclaimer')).toContainText('не юридическая услуга');
   await shot(page, '102-zakazchik-razbor');
@@ -2635,15 +2635,18 @@ test('как настоящий заказчик (2.41): частное лицо
 
   // «Что дальше» говорит, чего не хватает; главная кнопка ведёт к заполнению.
   const next = page.locator('#next-box');
-  await expect(next).toContainText('Чтобы отправить заявку, заполните: Вид транспорта, Марка и модель, срок');
-  await expect(page.getByLabel('Для чего нужна оценка')).toHaveValue('court');
-  await expect(page.getByLabel('Где находится объект')).toHaveValue('moscow');
+  await expect(next).toContainText('Чтобы отправить заявку, заполните: Вид транспорта, Марка и модель, Дата ДТП, Что повреждено, Как считать ремонт, срок');
+  await expect(page.getByLabel('Для чего нужна экспертиза')).toHaveValue('court');
+  await expect(page.getByLabel('Где находится автомобиль')).toHaveValue('moscow');
   await shot(page, '103-zakazchik-chto-dalshe');
   await page.locator('#next-main button', { hasText: 'Заполнить заявку' }).click();
   await page.getByLabel('Вид транспорта').selectOption({ label: 'Легковой автомобиль' });
   await page.getByLabel('Марка и модель').fill('Лада Веста');
   await page.getByLabel('Год выпуска').fill('2019');
   await page.getByLabel('Пробег, км').fill('84500');
+  await page.getByLabel('Дата ДТП').fill('14.09.2026');
+  await page.getByLabel('Что повреждено').fill('Задний бампер, крышка багажника, левый фонарь');
+  await page.getByLabel('Как считать ремонт').selectOption({ label: 'По рыночным ценам — для суда или к виновнику' });
   await page.getByLabel(/^Срок/).fill(inDays(10));
   await page.getByRole('button', { name: 'Сохранить' }).click();
   await expect(page.locator('#details-msg')).toHaveText('Сохранено');
@@ -4497,6 +4500,147 @@ test('как эксперт (2.82): товароведческая по опре
   await expect(sp.locator('#next-main button')).toHaveText('Сдать на проверку');
   await sp.locator('#next-main button').click();
   await expect(sp.locator('#order-status')).toHaveText('Проверка результата');
+  await sctx.close();
+  await dctx.close();
+});
+
+// Прогон «как эксперт» по ущербу автомобилю после ДТП (2.97): иск к виновнику, определение суда. Заказчик и диспетчер —
+// через API, эксперт и владелец машины — на экране телефона. Было: ущерб после ДТП оформлялся услугой «Оценка транспортного
+// средства» — черновик рыночной стоимости с аналогами и подходами, в заявке не было даты ДТП, повреждений и методики
+// расчёта, осмотр не просил снять повреждения крупно, у документов не было извещения о ДТП и расчёта страховой.
+test('как эксперт (2.97): ущерб автомобилю после ДТП по определению суда — документы, осмотр повреждений, черновик, сдача', async ({ page, browser, baseURL }) => {
+  test.setTimeout(180_000);
+  const C = '+79990009701', D = '+79990009702', S = '+79990009703';
+  await signIn(page, C);
+  const dctx = await phoneContext(browser, baseURL), sctx = await phoneContext(browser, baseURL);
+  const dp = await dctx.newPage(), sp = await sctx.newPage();
+  const disp = await signIn(dp, D), spec = await signIn(sp, S);
+  await sp.request.patch('/api/me', { data: { full_name: 'Ремонтов Денис Аркадьевич' }, headers: H });
+  await db(async (c) => {
+    await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'car_damage')", [spec.id]);
+  });
+  const title = `Ущерб после ДТП по иску ${Date.now()}`;
+  const o = (await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'car_damage', title }, headers: H })).json()).order;
+  const r = await page.request.patch(`/api/orders/${o.id}`, { data: { deadline: inDays(21), basis_kind: 'court', basis_number: '2-5120/2026', basis_date: inDays(-5),
+    fields: { purpose: 'court', region: 'moscow', vehicle_type: 'car', make_model: 'Kia Rio', year: 2021, vin: 'Z94C251BBMR123456', reg_number: 'А123ВС777', mileage: 48200,
+      accident_date: '14.09.2026', accident_place: 'г. Москва, Ленинский проспект, д. 90', damage: 'Задний бампер, крышка багажника, левый задний фонарь',
+      method: 'market', insurer: 'Тест-Страх, убыток 0012345, выплачено 41 000 ₽',
+      questions: '1. Какова стоимость восстановительного ремонта автомобиля Kia Rio на дату ДТП без учёта износа?\n2. Какова величина утраты товарной стоимости автомобиля?' } }, headers: H });
+  expect(r.status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${o.id}/documents`, { data: makePdf([['Определение суда (тест)']]),
+    headers: { ...H, 'x-doc-kind': 'basis', 'x-file-name': encodeURIComponent('Определение.pdf'), 'content-type': 'application/pdf' } })).status()).toBe(201);
+  expect((await page.request.post(`/api/orders/${o.id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  expect((await dp.request.put(`/api/orders/${o.id}/price`, { data: { price: '18000' }, headers: H })).status()).toBe(200);
+  await page.request.post(`/api/orders/${o.id}/payments`, { headers: H });
+  expect((await page.request.post(`/api/orders/${o.id}/payments/refresh`, { headers: H })).status()).toBe(200);
+  expect((await dp.request.post(`/api/orders/${o.id}/offer`, { data: { specialist_id: spec.id, from: 'matching' }, headers: H })).status()).toBe(200);
+
+  await sp.goto('/kabinet');
+  const offer = sp.locator('#orders li').filter({ hasText: title });
+  // 1. Предложение и дело: в деле — дата и место ДТП, повреждения, методика; аналогов и подходов к оценке нет.
+  await shot(sp, 'd1-dtp-predlozhenie');
+  sp.once('dialog', (d) => d.accept());
+  await offer.getByRole('button', { name: 'Принять дело' }).click();
+  await expect(sp.locator('#order-status')).toHaveText('В работе');
+  const data = sp.locator('#facts');
+  await expect(data).toContainText('Ущерб автомобилю после ДТП');
+  await expect(data).toContainText('14.09.2026');
+  await expect(data).toContainText('Задний бампер, крышка багажника');
+  await expect(data).toContainText('По рыночным ценам');
+  await expect(data).toContainText('Где находится автомобиль');
+  await expect(sp.locator('#analogs-box')).toBeHidden();
+  await expect(sp.locator('#draft-approaches')).toBeHidden();
+  await expect(sp.locator('#next-steps li[data-step="inspect"]')).toContainText('Осмотр автомобиля (по желанию)');
+  await expect(sp.locator('#inspect-head')).toHaveText('Осмотр автомобиля по ссылке');
+  await expect(sp.locator('#inspect-state')).toContainText('каждое повреждение крупно');
+  await shot(sp, 'd2-dtp-delo');
+
+  // 2. Документы: извещение о ДТП, расчёт страховой, СТС; акта о заливе и залога нет.
+  await sp.locator('#next-steps li[data-step="docs"] button').click();
+  const items = sp.locator('#docreq-items');
+  await expect(items).toContainText('Документы о ДТП');
+  await expect(items).toContainText('Акт осмотра и расчёт страховой');
+  await expect(items).not.toContainText('акт о заливе');
+  await expect(items).not.toContainText('ипотеке');
+  for (const t of ['Документы о ДТП', 'Акт осмотра и расчёт страховой', 'Свидетельство о регистрации (СТС)']) await sp.locator('#docreq-box').getByLabel(t).check();
+  await sp.locator('#docreq-box').getByRole('button', { name: 'Запросить у заказчика' }).click();
+  await expect(sp.locator('#docreq-msg')).toHaveText('Запрошено документов: 3. Заказчику отправлено уведомление.');
+  await shot(sp, 'd3-dtp-zapros');
+  const reqs = (await (await page.request.get(`/api/orders/${o.id}/doc-requests`)).json()).requests;
+  for (const [t, name] of [['Документы о ДТП', 'Извещение о ДТП.pdf'], ['Акт осмотра и расчёт страховой', 'Расчёт страховой.pdf'], ['Свидетельство о регистрации (СТС)', 'СТС.pdf']]) {
+    const doc = (await (await page.request.post(`/api/orders/${o.id}/documents`, { data: makePdf([[`${t} (тест)`]]),
+      headers: { ...H, 'x-file-name': encodeURIComponent(name), 'content-type': 'application/pdf' } })).json()).document;
+    expect((await page.request.post(`/api/orders/${o.id}/doc-requests/${reqs.find((x) => x.title === t).id}/attach`, { data: { document_id: doc.id }, headers: H })).status()).toBe(200);
+  }
+
+  // 3. Осмотр по ссылке: владелец снимает машину и каждое повреждение крупно.
+  await sp.reload();
+  await sp.getByRole('button', { name: 'Выдать ссылку владельцу' }).click();
+  await expect(sp.locator('#inspect-url')).toContainText('http');
+  const url = await sp.locator('#inspect-url').textContent();
+  const octx = await phoneContext(browser, baseURL, { permissions: ['geolocation'], geolocation: { latitude: 55.75, longitude: 37.61, accuracy: 10 } });
+  const op = await octx.newPage();
+  await op.goto(url);
+  await expect(op.locator('#page-title')).toHaveText('Осмотр автомобиля');
+  await expect(op.locator('#intro-text')).toContainText('Не ремонтируйте автомобиль до осмотра');
+  await expect(op.locator('#intro-text')).not.toContainText('объект');
+  await expect(op).toHaveTitle('Осмотр автомобиля · БЕРТЕЛ Дело');
+  await shot(op, 'd4-dtp-osmotr-nachalo');
+  const jpeg = Buffer.from((await op.evaluate(() => { const c = document.createElement('canvas'); c.width = 640; c.height = 480; const g = c.getContext('2d'); g.fillStyle = '#ddd'; g.fillRect(0, 0, 640, 480); return c.toDataURL('image/jpeg', 0.8); })).split(',')[1], 'base64');
+  await op.getByRole('button', { name: 'Начать: разрешить определение места' }).click();
+  await expect(op.locator('#steps li[data-step="car_damage_close"]')).toContainText('Каждое повреждение крупно');
+  const steps = ['car_front', 'car_rear', 'car_left', 'car_right', 'car_vin', 'car_odometer', 'car_interior', 'car_damage_whole', 'car_damage_close'];
+  for (const st of steps) {
+    await op.locator(`#steps li[data-step="${st}"] input[type=file]`).setInputFiles({ name: `${st}.jpg`, mimeType: 'image/jpeg', buffer: jpeg });
+    await expect(op.locator(`#steps li[data-step="${st}"] .badge`)).toHaveText('Фото: 1');
+  }
+  await shot(op, 'd5-dtp-osmotr');
+  op.once('dialog', (d) => d.accept());
+  await op.getByRole('button', { name: 'Готово' }).click();
+  await expect(op.locator('#closed-text')).toContainText(`Эксперт получил ${steps.length} фото`);
+  await octx.close();
+
+  // 4. Черновик: заключение о ремонте — вопросы суда, обстоятельства ДТП, методика; без аналогов и подходов к оценке.
+  await sp.reload();
+  await expect(sp.locator('#inspect-state')).toContainText(`Фото осмотра: ${steps.length}`);
+  await sp.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const text = sp.getByLabel('Текст заключения');
+  const body = await text.inputValue();
+  expect(body).toContain('## 2. Вопросы эксперту');
+  expect(body).toContain('2. Какова величина утраты товарной стоимости автомобиля?');
+  expect(body).toContain('| Дата ДТП | 14.09.2026 |');
+  expect(body).toContain('## 7. Расчёт стоимости восстановительного ремонта');
+  expect(body).toContain('## 8. Утрата товарной стоимости');
+  expect(body).toMatch(/Документы о ДТП — файл «Извещение о ДТП\.pdf», получен \d\d\.\d\d\.\d{4}/);
+  expect(body).toContain('по статье 307 Уголовного кодекса Российской Федерации эксперт предупреждён');
+  expect(body).not.toMatch(/Сравнительный подход|Затратный подход|аналог/i);
+  await shot(sp, 'd6-dtp-chernovik');
+
+  // 5. Эксперт дописывает расчёт и выводы; ИИ-проверка, подпись, сдача.
+  const done = body.replace(/\[(?:заполнить|описать)[^\]]*\]/gi, 'заполнено экспертом')
+    .replace(/## 9\. Выводы\n[^#]*/, '## 9. Выводы\nПо вопросу 1: стоимость восстановительного ремонта без учёта износа — 112 300 (сто двенадцать тысяч триста) рублей.\nПо вопросу 2: утрата товарной стоимости — 18 600 (восемнадцать тысяч шестьсот) рублей.\n\n');
+  await text.fill(done);
+  await sp.getByRole('button', { name: 'Сохранить правку' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Правка сохранена');
+  await sp.locator('#next-main button').click();
+  await sp.locator('#draft-confirm').check();
+  await sp.getByRole('button', { name: 'Приложить как файл результата' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Файл «Заключение эксперта.docx» добавлен в результат работы');
+  await sp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  await expect(sp.locator('#review-box')).toContainText('Стоимость ремонта: методика');
+  await expect(sp.locator('#review-box')).not.toContainText('Аналоги подобраны');
+  await shot(sp, 'd7-dtp-proverka');
+  await expect(sp.locator('#next-main button')).toHaveText('Подписать файл');
+  sp.once('dialog', (d) => d.accept());
+  await sp.locator('#next-main button').click();
+  await expect(sp.locator('#next-main button')).toHaveText('Сдать на проверку');
+  await sp.locator('#next-main button').click();
+  await expect(sp.locator('#order-status')).toHaveText('Проверка результата');
+  await shot(sp, 'd8-dtp-sdano');
   await sctx.close();
   await dctx.close();
 });

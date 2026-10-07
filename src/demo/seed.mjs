@@ -19,7 +19,7 @@ export const DEMO_PEOPLE = {
   grishin: { phone: tel(13), name: 'Гришин Павел Олегович', org: 'A', permits: ['construction'] },
   headB: { phone: tel(20), name: 'Лебедев Игорь Викторович', org: 'B' },
   zakharova: { phone: tel(21), name: 'Захарова Елена Павловна', org: 'B', permits: ['goods', 'handwriting'] },
-  tikhonov: { phone: tel(22), name: 'Тихонов Артём Николаевич', org: 'B', permits: ['realty', 'vehicle'] },
+  tikhonov: { phone: tel(22), name: 'Тихонов Артём Николаевич', org: 'B', permits: ['realty', 'vehicle', 'car_damage'] },
   morozova: { phone: tel(30), name: 'Морозова Светлана Юрьевна', permits: ['realty', 'land', 'movable'] },
   petrov: { phone: tel(40), name: 'Петров Алексей Викторович' },
   sidorova: { phone: tel(41), name: 'Сидорова Ирина Михайловна' },
@@ -117,9 +117,10 @@ export const DEMO_CASES = [
     report: 'Отчёт об оценке участка.pdf', value: '1 150 000',
   },
   {
-    key: 'crash', who: 'petrov', service: 'vehicle', stage: 'offered', expert: 'tikhonov', price: 7000, days: 5,
+    key: 'crash', who: 'petrov', service: 'car_damage', stage: 'offered', expert: 'tikhonov', price: 7000, days: 5,
     title: 'Оценка ущерба автомобилю после ДТП',
-    fields: { purpose: 'damage', region: 'moscow', vehicle_type: 'car', make_model: 'Демомобиль Хэтчбек (вымышленный)', year: 2019, mileage: 91000 },
+    fields: { purpose: 'damage', region: 'moscow', vehicle_type: 'car', make_model: 'Демомобиль Хэтчбек (вымышленный)', year: 2019, mileage: 91000,
+      accident_date: '14.09.2026', damage: 'Передний бампер, левая фара, капот', method: 'unknown' },
   },
 ];
 
