@@ -93,6 +93,7 @@ label.btn:has(+ input:focus-visible) { outline: 3px solid #8fb3e6; }
 textarea { min-height: 96px; resize: vertical; }
 #message-phrase-list { margin-bottom: 12px; }
 textarea.draft-text { min-height: 360px; font-size: 15px; line-height: 1.45; }
+#snip-box summary { cursor: pointer; padding: 8px 0; font-weight: 600; }
 .snip-preview { white-space: pre-wrap; max-height: 9em; overflow: hidden; }
 /* Заявка: статус, шаги, данные. */
 .badge.status { background: #e3ecf8; color: var(--accent); font-weight: 600; font-size: 13px; }
