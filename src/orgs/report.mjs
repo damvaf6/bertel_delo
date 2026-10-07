@@ -145,6 +145,63 @@ export async function orgMonthReport(sql, orgId, month, today = todayMsk()) {
   };
 }
 
+// «Мои итоги за месяц» эксперта (2.92): то же, что строка эксперта в сводке руководителя, но по всем его делам — и частным,
+// и от организации; плюс список сданных за месяц дел (своих — с названием), в срок ли и выплачено ли. Месяцы — с того,
+// когда человек стал специалистом.
+export async function expertMonthReport(sql, userId, month, today = todayMsk()) {
+  const { start, end } = await monthBounds(sql, month);
+  const since = (await sql`select to_char(created_at at time zone 'Europe/Moscow', 'YYYY-MM') as m from specialists
+                           where user_id = ${userId}`)[0]?.m ?? '';
+  const current = month === today.slice(0, 7);
+  const [{ n: accepted }] = await sql`
+    select count(distinct order_id)::int as n from order_offers
+    where specialist_id = ${userId} and outcome = 'accepted' and outcome_at >= ${start} and outcome_at < ${end}`;
+  const done = await sql`
+    select distinct on (o.id) o.id, o.title, o.deadline, o.price_kop, p.amount_kop as payout_kop, p.status as payout_status, h.at
+    from order_status_history h join orders o on o.id = h.order_id left join payouts p on p.order_id = o.id
+    where o.executor_user_id = ${userId} and h.to_status = 'done' and h.at >= ${start} and h.at < ${end}
+    order by o.id, h.at`;
+  const [{ n: headReturns }] = await sql`
+    select count(*)::int as n from org_returns where executor_user_id = ${userId} and created_at >= ${start} and created_at < ${end}`;
+  const [{ n: dispReturns }] = await sql`
+    select count(*)::int as n from order_status_history h join orders o on o.id = h.order_id
+    where o.executor_user_id = ${userId} and h.from_status = 'review' and h.to_status = 'in_work' and h.at >= ${start} and h.at < ${end}`;
+  const [{ kop: paid }] = await sql`
+    select coalesce(sum(amount_kop), 0)::bigint as kop from payouts
+    where executor_user_id = ${userId} and status = 'succeeded' and paid_at >= ${start} and paid_at < ${end}`;
+  const active = current ? await sql`
+    select status, deadline from orders
+    where executor_user_id = ${userId} and status in ('awaiting_executor', 'in_work', 'review') and deadline is not null` : [];
+  const cases = done.sort((a, b) => new Date(a.at) - new Date(b.at)).map((o) => ({
+    id: o.id,
+    title: o.title,
+    deadline: o.deadline,
+    done_on: dayMsk(o.at),
+    late: !!(o.deadline && dayMsk(o.at) > o.deadline),
+    fee_kop: feeOf(o),
+    paid: o.payout_status === 'succeeded',
+  }));
+  const late = cases.filter((c) => c.late).length;
+  return {
+    month,
+    month_name: monthRu(month),
+    current,
+    months: reportMonths(today).filter((m) => m >= since || m === month),
+    total: {
+      accepted,
+      done: cases.length,
+      done_on_time: cases.length - late,
+      done_late: late,
+      overdue_now: current ? active.filter((o) => isOverdue(o, today)).length : null,
+      returned_head: headReturns,
+      returned_dispatcher: dispReturns,
+      fee_kop: cases.reduce((s, c) => s + c.fee_kop, 0),
+      paid_kop: Number(paid),
+    },
+    cases,
+  };
+}
+
 // Таблица для Excel: точка с запятой, BOM (иначе Excel путает кодировку), суммы — рубли с запятой. Ячейка, начинающаяся
 // с «= + - @», — с апострофом, чтобы Excel не принял имя за формулу.
 const rubCell = (kop) => `${Math.floor(kop / 100)},${String(kop % 100).padStart(2, '0')}`;

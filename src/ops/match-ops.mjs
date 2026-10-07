@@ -12,6 +12,7 @@ import { orderRef } from '../notify/registry.mjs';
 import { audit, text, uuidFrom } from './util.mjs';
 import { notify, orgHeads } from '../notify/notify.mjs';
 import { BLOCKING_KINDS, dossierAlerts, loadDossier, needsValidDossier } from '../dossier/dossier.mjs';
+import { expertMonthReport, reportMonth } from '../orgs/report.mjs';
 
 const REGIONS = { moscow: 'Москва', mo: 'Московская область' };
 const OPEN_STATUSES = ['awaiting_executor', 'in_work', 'review'];
@@ -194,6 +195,15 @@ export function matchOps() {
           }
         });
         return { specialist: await profileView(sql, actor.id) };
+      },
+    },
+    {
+      // «Мои итоги за месяц» (2.92): сдано, из них в срок, возвраты, вознаграждение и выплачено — только свои дела.
+      // Месяц — как в сводке руководителя (текущий и 12 прошлых).
+      id: 'specialist.me.report', method: 'GET', path: '/api/specialist/me/report', auth: 'user', access: 'self',
+      async handler({ sql, actor, query }) {
+        if (!(await sql.one`select 1 from specialists where user_id = ${actor.id}`)) throw new HttpError(404, 'not_found', 'Вы не специалист');
+        return { report: await expertMonthReport(sql, actor.id, reportMonth(query.month)) };
       },
     },
     {
