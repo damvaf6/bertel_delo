@@ -3,14 +3,15 @@
 // роли — руководитель / старший / сотрудник; ушедший сотрудник теряет доступ к делам организации, дела остаются у неё.
 import { HttpError } from '../http/core.mjs';
 import { LEVEL, ORG_ROLES, executorSignOrg, orgCaseSide, orgLevel } from '../access/policy.mjs';
-import { audit, oneOf, phoneFrom, text, uuidFrom } from './util.mjs';
+import { audit, oneOf, phoneFrom, sendFile, text, uuidFrom } from './util.mjs';
 import { dispatchers, notify, notifyPhone, orgHeads } from '../notify/notify.mjs';
 import { awayOf, orgExpertsFor } from './match-ops.mjs';
 import { orderSignatures, orgReturns } from './sign-ops.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { splitAmount } from '../money/money.mjs';
 import { STATUS_NAME, isOverdue, todayMsk } from '../orders/workflow.mjs';
-import { orgMonthReport, reportCsv, reportMonth } from '../orgs/report.mjs';
+import { monthRu, orgMonthDoneCases, orgMonthReport, reportCsv, reportMonth } from '../orgs/report.mjs';
+import { buildOrgMonthArchive } from './case-ops.mjs';
 
 export const INVITE_TTL_DAYS = 14;
 export const LIMITS = {
@@ -287,6 +288,21 @@ export function orgOps() {
           'cache-control': 'no-store',
         });
         return res.send(reportCsv(org.name, report));
+      },
+    },
+    {
+      // Сданные за месяц заключения одним архивом (2.89): файлы результата экспертов организации с подписями и опись; только
+      // руководитель. Месяц — как в сводке (текущий и 12 прошлых).
+      id: 'orgs.report.archive', method: 'GET', path: '/api/orgs/:id/report/archive', auth: 'user',
+      access: { resource: 'org', param: 'id', need: 'manage' },
+      async handler(ctx) {
+        const { sql, actor, org, query, res, providers } = ctx;
+        const month = reportMonth(query.month);
+        const cases = await orgMonthDoneCases(sql, org.id, month);
+        if (!cases.length) throw new HttpError(409, 'no_cases', `За ${monthRu(month)} сданных заключений нет`);
+        const a = await buildOrgMonthArchive(ctx, cases, monthRu(month));
+        await audit(sql, actor, 'org.archive', 'org', org.id, { month, cases: cases.length, files: a.files, bytes: a.buf.length });
+        await sendFile(res, providers, { buf: a.buf, filename: a.filename, mime: 'application/zip' });
       },
     },
     {

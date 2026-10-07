@@ -8,7 +8,7 @@
 import crypto from 'node:crypto';
 import { HttpError } from '../http/core.mjs';
 import { exportsCase, journalView, moneyView, seesResults } from '../access/policy.mjs';
-import { STATUS_NAME } from '../orders/workflow.mjs';
+import { STATUS_NAME, todayMsk } from '../orders/workflow.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { buildSimpleDoc, zip, DOCX_MIME } from '../docs/docx.mjs';
 import { closingDoc } from '../money/papers.mjs';
@@ -295,4 +295,72 @@ export function caseOps() {
       },
     },
   ];
+}
+
+// Архив сданных за месяц заключений организации (2.89) — руководителю, по образцу выгрузки дела. Только дела экспертов,
+// которые сейчас работают от организации, сданные с тех пор, как они в ней (та же выборка, что в сводке 2.78). В архиве —
+// файлы результата эксперта с подписями УКЭП (эксперта и организации), разложенные по экспертам и делам, и «Опись» —
+// перечень дел с датой сдачи и сроком, файлы с SHA-256 и проверка подписей в момент выгрузки. Заказчик, название заявки,
+// её данные и переписка в архив не попадают: руководитель видит только работу своих экспертов.
+export async function buildOrgMonthArchive({ sql, actor, org, registry, providers }, cases, monthName) {
+  const used = new Set();
+  const place = (dir, name) => {
+    let n = `${dir}/${safeName(name)}`;
+    for (let i = 2; used.has(n); i += 1) n = `${dir}/${safeName(name).replace(/(\.[^.]*)?$/, ` (${i})$1`)}`;
+    used.add(n);
+    return n;
+  };
+  const SIGN_RU = (r) => (!r ? 'нет' : r.valid ? 'верна' : 'не прошла проверку');
+  const files = [];
+  const listed = [];
+  const rows = [];
+  let total = 0;
+  let test = false;
+  for (const o of cases) {
+    const ref = orderRef(o.id).replace('№ ', '');
+    const dir = `${safeName(o.expert_name)}/Дело № ${ref}`;
+    const docs = await sql`select * from documents where order_id = ${o.id} and kind = 'result' and deleted_at is null
+                           and uploaded_by = ${o.user_id} order by created_at`;
+    const signs = await sql`select * from document_signatures where order_id = ${o.id} order by id`;
+    const service = registry.service(o.module, o.service)?.service.name ?? o.service;
+    if (!docs.length) rows.push([ref, service, o.expert_name, dt(o.at), day(o.deadline), 'файла результата нет', '—', '—']);
+    for (const d of docs) {
+      const size = Number(d.size_bytes);
+      const buf = total + size > EXPORT_MAX_BYTES ? null : await providers.storage.get(d.storage_key);
+      if (!buf) {
+        const why = total + size > EXPORT_MAX_BYTES ? 'не вошёл в архив — скачайте в «Подписи организации»' : 'файл не найден в хранилище';
+        rows.push([ref, service, o.expert_name, dt(o.at), day(o.deadline), `${d.filename} (${why})`, '—', '—']);
+        continue;
+      }
+      total += buf.length;
+      const name = place(dir, d.filename);
+      files.push([name, buf]);
+      listed.push([name, sizeRu(buf.length), sha256(buf)]);
+      const by = {};
+      for (const s of signs.filter((x) => x.document_id === d.id)) {
+        const sb = await providers.storage.get(s.storage_key);
+        if (!sb) continue;
+        test ||= Boolean(s.test);
+        const sn = place(dir, signatureFilename(d.filename, s.role));
+        files.push([sn, sb]);
+        listed.push([sn, sizeRu(sb.length), sha256(sb)]);
+        by[s.role === 'org' ? 'org' : 'expert'] = await checkSignature(providers, buf, sb);
+      }
+      rows.push([ref, service, o.expert_name, dt(o.at), day(o.deadline), d.filename, SIGN_RU(by.expert), SIGN_RU(by.org)]);
+    }
+  }
+  const late = cases.filter((o) => o.deadline && todayMsk(new Date(o.at)) > o.deadline).length;
+  const inventory = buildSimpleDoc([
+    { type: 'title', text: `Сданные заключения · ${monthName}` },
+    { type: 'para', text: `${org.name}. Выгрузка из «БЕРТЕЛ Дело» ${dt(new Date())} (время московское). Сделал(а): ${actor.full_name || actor.phone}.` },
+    { type: 'bold', text: `Сдано дел: ${cases.length}${late ? `; из них позже срока: ${late}` : ''}.` },
+    { type: 'para', text: 'Дела экспертов, которые работают от организации, сданные в этом месяце с тех пор, как эксперт вступил в организацию. Файлы — в папках «Эксперт / Дело №»; подпись — открепленный файл рядом с подписанным. Подписи проверены при выгрузке.' },
+    ...(test ? [{ type: 'note', text: 'Тестовые подписи площадки — юридической силы не имеют.' }] : []),
+    { type: 'table', rows: [['Дело', 'Услуга', 'Эксперт', 'Сдано', 'Срок', 'Файл', 'Подпись эксперта', 'Подпись организации'], ...rows] },
+    { type: 'bold', text: 'Файлы в архиве' },
+    { type: 'para', text: 'Контрольная сумма SHA-256 подтверждает, что файл не менялся после выгрузки: её можно посчитать заново любой программой и сравнить.' },
+    { type: 'table', rows: [['Файл', 'Размер', 'SHA-256'], ...listed] },
+  ]);
+  const archive = zip([[`Опись · ${safeName(monthName)}.docx`, inventory], ...files], { store: true });
+  return { buf: archive, filename: `Заключения за ${monthName}.zip`, files: files.length };
 }

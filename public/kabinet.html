@@ -543,7 +543,7 @@
         <h2>Сводка за месяц</h2>
         <p class="muted">По каждому эксперту: сколько дел принял и сдал, сколько сдано позже срока, сколько раз работу возвращали
           и сколько ему причитается. Считается с того дня, как эксперт вступил в организацию. Таблицу можно скачать и открыть
-          в Excel.</p>
+          в Excel, а сданные за месяц заключения с подписями — одним архивом.</p>
         <div class="field">
           <label for="org-report-month">Месяц</label>
           <select id="org-report-month"></select>
@@ -551,6 +551,7 @@
         <dl class="facts" id="org-report-total"></dl>
         <ul class="list" id="org-report"></ul>
         <button type="button" class="secondary" id="org-report-csv">Скачать таблицу (Excel)</button>
+        <button type="button" class="secondary hidden" id="org-report-zip">Скачать сданные заключения (архив)</button>
         <p class="msg" id="org-report-msg" role="status" aria-live="polite"></p>
       </div>
       <div class="card hidden" id="org-sign-box">

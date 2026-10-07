@@ -1704,6 +1704,18 @@ test('сводка за месяц по экспертам (2.78): только 
   assert.ok(text.includes('"Петрова; Эксперт";0;0;0;0;0;0;0,00;0,00'), text);
   assert.ok(text.includes('Итого;2;2;1;1;1;1;24000,00;8000,00'), text);
   assert.equal((await report(ex.e1, '?format=csv')).status, 403);
+
+  // Архив сданных за месяц заключений (2.89): только руководитель; без сданных дел — «нечего выгружать».
+  cover('orgs.report.archive');
+  const archive = (c, q = '', orgId = orgC.id) => c.req('GET', `/api/orgs/${orgId}/report/archive${q}`, undefined, { binary: true });
+  for (const c of [ex.e1, U.dispatcher, U.admin]) assert.equal((await archive(c)).status, 403);
+  for (const k of ['stranger', 'headA', 'headB', 'owner']) assert.equal((await archive(U[k])).status, 404, k);
+  const zipped = await archive(headC);
+  assert.equal(zipped.status, 200);
+  assert.equal(zipped.headers.get('content-type'), 'application/zip');
+  assert.match(decodeURIComponent(zipped.headers.get('content-disposition')), /Заключения за .+ \d{4}\.zip/);
+  assert.equal((await archive(headC, `?month=${r.months[1]}`)).status, 409);
+  assert.equal((await archive(headC, '?month=2020-01')).status, 400);
 });
 
 test('свои заготовки абзацев (2.87): видит и меняет только сам эксперт; не специалист — «не найдено»', async () => {

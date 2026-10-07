@@ -34,16 +34,49 @@ export function reportMonth(value, today = todayMsk()) {
 const dayMsk = (t) => todayMsk(new Date(t));
 const feeOf = (o) => (o.payout_kop != null ? Number(o.payout_kop) : o.price_kop ? splitAmount(Number(o.price_kop)).payoutKop : 0);
 
-export async function orgMonthReport(sql, orgId, month, today = todayMsk()) {
-  const experts = await sql`
-    select s.user_id, m.created_at as joined_at, u.full_name from specialists s
-    join org_members m on m.org_id = s.org_id and m.user_id = s.user_id join users u on u.id = s.user_id
-    where s.org_id = ${orgId} order by u.full_name nulls last, s.user_id`;
-  const ids = experts.map((e) => e.user_id);
-  // Границы месяца по Москве: [начало, начало следующего).
+// Границы месяца по Москве: [начало, начало следующего).
+async function monthBounds(sql, month) {
   const [{ start, end }] = await sql`
     select (${`${month}-01`}::date::timestamp at time zone 'Europe/Moscow') as start,
            ((${`${month}-01`}::date + interval '1 month')::timestamp at time zone 'Europe/Moscow') as "end"`;
+  return { start, end };
+}
+
+// Сданные за месяц (дело впервые перешло в «готово» в этом месяце) экспертами организации — с тех пор, как они в ней.
+// Та же выборка — в сводке (2.78) и в архиве заключений за месяц (2.89).
+async function orgMonthDone(sql, orgId, ids, { start, end }) {
+  if (!ids.length) return [];
+  return sql`
+      select distinct on (o.id) o.id, o.module, o.service, o.executor_user_id as user_id, o.deadline, o.price_kop,
+             p.amount_kop as payout_kop, h.at
+      from order_status_history h join orders o on o.id = h.order_id
+      join org_members m on m.org_id = ${orgId} and m.user_id = o.executor_user_id
+      left join payouts p on p.order_id = o.id
+      where o.executor_user_id = any(${ids}::uuid[]) and h.to_status = 'done'
+        and h.at >= ${start} and h.at < ${end} and h.at >= m.created_at
+      order by o.id, h.at`;
+}
+
+// Эксперты, которые сейчас работают от организации (выбрана в профиле специалиста и состоят в ней).
+async function orgExperts(sql, orgId) {
+  return sql`
+    select s.user_id, m.created_at as joined_at, u.full_name from specialists s
+    join org_members m on m.org_id = s.org_id and m.user_id = s.user_id join users u on u.id = s.user_id
+    where s.org_id = ${orgId} order by u.full_name nulls last, s.user_id`;
+}
+
+// Дела, сданные экспертами организации за месяц (2.89), — по времени сдачи; с именем эксперта.
+export async function orgMonthDoneCases(sql, orgId, month) {
+  const experts = await orgExperts(sql, orgId);
+  const names = new Map(experts.map((e) => [e.user_id, e.full_name || 'Без имени']));
+  const rows = await orgMonthDone(sql, orgId, experts.map((e) => e.user_id), await monthBounds(sql, month));
+  return rows.map((o) => ({ ...o, expert_name: names.get(o.user_id) })).sort((a, b) => new Date(a.at) - new Date(b.at));
+}
+
+export async function orgMonthReport(sql, orgId, month, today = todayMsk()) {
+  const experts = await orgExperts(sql, orgId);
+  const ids = experts.map((e) => e.user_id);
+  const { start, end } = await monthBounds(sql, month);
   const none = { accepted: [], done: [], headReturns: [], dispReturns: [], paid: [], active: [] };
   const q = !ids.length ? none : {
     accepted: await sql`
@@ -52,14 +85,7 @@ export async function orgMonthReport(sql, orgId, month, today = todayMsk()) {
       where f.specialist_id = any(${ids}::uuid[]) and f.outcome = 'accepted'
         and f.outcome_at >= ${start} and f.outcome_at < ${end} and f.outcome_at >= m.created_at
       group by f.specialist_id`,
-    done: await sql`
-      select distinct on (o.id) o.id, o.executor_user_id as user_id, o.deadline, o.price_kop, p.amount_kop as payout_kop, h.at
-      from order_status_history h join orders o on o.id = h.order_id
-      join org_members m on m.org_id = ${orgId} and m.user_id = o.executor_user_id
-      left join payouts p on p.order_id = o.id
-      where o.executor_user_id = any(${ids}::uuid[]) and h.to_status = 'done'
-        and h.at >= ${start} and h.at < ${end} and h.at >= m.created_at
-      order by o.id, h.at`,
+    done: await orgMonthDone(sql, orgId, ids, { start, end }),
     headReturns: await sql`
       select executor_user_id as user_id, count(*)::int as n from org_returns
       where org_id = ${orgId} and executor_user_id = any(${ids}::uuid[]) and created_at >= ${start} and created_at < ${end}

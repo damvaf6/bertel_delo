@@ -120,3 +120,33 @@ test('выгрузка дела архивом: карточка, файлы, п
   const dp = unzip(Buffer.from(await (await withSession('dispatcher').req('GET', `/api/orders/${R.cases.car_court}/export`)).arrayBuffer()));
   assert.ok([...dp.keys()].some((n) => n.includes('Заключение об оценке автомобиля')));
 });
+
+test('архив сданных за месяц заключений (2.89): руководитель — файлы своих экспертов с подписями и опись, без данных заказчика', async () => {
+  const org = R.orgs.A;
+  const r = await withSession('headA').req('GET', `/api/orgs/${org}/report/archive`);
+  assert.equal(r.status, 200);
+  assert.equal(r.headers.get('content-type'), 'application/zip');
+  const files = unzip(Buffer.from(await r.arrayBuffer()));
+  const names = [...files.keys()];
+  const inv = names.find((n) => n.startsWith('Опись'));
+  assert.ok(inv, names.join(', '));
+  const report = names.find((n) => n.startsWith(`${DEMO_PEOPLE.orlov.name}/Дело № `) && n.endsWith('/Отчёт об оценке квартиры.pdf'));
+  assert.ok(report, names.join(', '));
+  const dir = report.slice(0, report.lastIndexOf('/'));
+  assert.ok(names.filter((n) => n.startsWith(`${dir}/Отчёт об оценке квартиры`) && n !== report).length >= 2, 'подписи эксперта и организации');
+  assert.ok(!names.some((n) => n.includes('Выписка ЕГРН')), 'документы заказчика — нет');
+  assert.ok(!names.some((n) => n.startsWith('Закрывающие')), 'деньги заказчика — нет');
+  const text = docText(files.get(inv));
+  assert.ok(text.includes('Центр оценки «Пример»'));
+  assert.ok(text.includes(DEMO_PEOPLE.orlov.name));
+  assert.ok(text.includes('верна'), 'подписи проверены');
+  assert.ok(text.includes(crypto.createHash('sha256').update(files.get(report)).digest('hex')), 'SHA-256 файла в описи');
+  for (const secret of ['Оценка квартиры для нотариуса', 'Примерная', DEMO_PEOPLE.petrov.name, 'Нотариус просит']) assert.ok(!text.includes(secret), secret);
+  // Дела чужой организации — нет.
+  assert.ok(!names.some((n) => n.includes('Заключение об оценке автомобиля')));
+  // Эксперт, диспетчер — нельзя; руководитель другой организации и заказчик — «не найдено».
+  for (const k of ['orlov', 'dispatcher']) assert.equal((await withSession(k).req('GET', `/api/orgs/${org}/report/archive`)).status, 403, k);
+  for (const k of ['headB', 'petrov']) assert.equal((await withSession(k).req('GET', `/api/orgs/${org}/report/archive`)).status, 404, k);
+  // Выгрузка записана в журнал платформы.
+  assert.equal((await S.sql`select count(*)::int as n from audit_log where action = 'org.archive' and subject_id = ${org}`)[0].n, 1);
+});
