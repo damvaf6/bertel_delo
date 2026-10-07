@@ -204,7 +204,8 @@ details.returns { margin-top: 8px; }
 /* Пункты замечания руководителя (2.93). */
 ul.points { list-style: none; margin: 6px 0 0; padding: 0; }
 ul.points li { border: none; padding: 2px 0; overflow-wrap: anywhere; }
-ul.points label.row { margin: 0; align-items: flex-start; }
+ul.points label.row { margin: 0; align-items: flex-start; flex-wrap: nowrap; }
+ul.points label.row > span { flex: 1 1 auto; min-width: 0; }
 ul.points li.fixed span:not(.muted) { color: var(--muted); text-decoration: line-through; }
 details.org-chat, details.org-transfer { margin-top: 8px; }
 details.org-chat summary, details.org-transfer summary { cursor: pointer; color: var(--accent); }

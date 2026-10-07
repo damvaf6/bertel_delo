@@ -1548,7 +1548,7 @@ test('две подписи (2.5а): эксперт от организации 
   await expect(hp.locator('#org-sign-msg')).toHaveText('Файл возвращён эксперту с замечанием — его подпись снята');
   await expect(hp.locator('#org-cases li[data-case]').first().locator('[data-role="returned"]')).toHaveText('Вы вернули отчёт эксперту — ждём исправления');
   await expect(hp.locator('#org-cases [data-role="sign-wait"]')).toHaveCount(0);
-  await expect(hp.locator('#org-sign details.returns summary')).toHaveText('Возвраты эксперту · 1 · ждём исправления');
+  await expect(hp.locator('#org-sign details.returns summary')).toHaveText('Возвраты эксперту · 1 · ждём исправления (исправлено 0 из 2)');
   await expect(item.getByRole('button', { name: 'Подписать от организации' })).toHaveCount(0);
   await sp.goto('/kabinet#notifications');
   await expect(sp.locator('#notifications li').first()).toContainText('Руководитель вернул отчёт с замечанием');
@@ -1556,17 +1556,32 @@ test('две подписи (2.5а): эксперт от организации 
   await expect(sp.locator('#org-returns-box')).toBeVisible();
   await expect(sp.locator('#org-returns li').first()).toContainText('отчёт-компании.pdf · исправить');
   await expect(sp.locator('#org-returns li').first()).toContainText('Тестовый руководитель · ООО «Тестовая оценочная компания»');
-  await expect(sp.locator('#org-returns .comment').first()).toHaveText('Раздел 5: корректировка на торг не обоснована.\nПроверьте итог.');
+  // Замечание по пунктам (2.93): каждая строка — пункт; эксперт отмечает исправленные.
+  const points = sp.locator('#org-returns li.return.open ul.points > li');
+  await expect(points).toHaveText(['1. Раздел 5: корректировка на торг не обоснована.', '2. Проверьте итог.']);
+  await expect(sp.locator('#org-returns [data-role="points-left"]').first()).toHaveText('Исправлено 0 из 2');
   await expect(sp.locator('#next-steps [data-step="fix"]')).toContainText('Исправить по замечанию руководителя');
   await expect(sp.locator('#next-main button')).toHaveText('Исправить по замечанию руководителя');
   await shot(sp, '96a-specialist-zamechanie');
+  await points.nth(0).getByRole('checkbox').check();
+  await expect(sp.locator('#doc-msg')).toHaveText('Пункт 1 отмечен исправленным');
+  await expect(sp.locator('#org-returns [data-role="points-left"]').first()).toHaveText('Исправлено 1 из 2');
+  await expect(points.nth(0)).toHaveClass(/fixed/);
+  await expect(points.nth(0).getByRole('checkbox')).toBeChecked();
+  await shot(sp, '96aa-specialist-punkty-zamechaniya');
+  // Руководитель до новой подписи видит, что отмечено.
+  await hp.reload();
+  await expect(hp.locator('#org-sign details.returns summary')).toHaveText('Возвраты эксперту · 1 · ждём исправления (исправлено 1 из 2)');
   await expect(doc.locator('.sig-state').first()).not.toContainText('Подпись эксперта');
-  sp.once('dialog', (d) => d.accept());
+  // Перед подписью — предупреждение: пункт 2 не отмечен, руководитель это увидит.
+  let warned = '';
+  sp.once('dialog', (d) => { warned = d.message(); d.accept(); });
   // Заново — подписью из «Госключа» (2.69): в деле видно, откуда подпись.
   await doc.locator('input[type=file]').setInputFiles({ name: 'отчёт-компании.pdf.sig', mimeType: 'application/octet-stream',
     buffer: testGoskeySignature({ digest, subject: 'Тестовый эксперт компании' }) });
   await expect(sp.locator('#doc-msg')).toHaveText('Подпись проверена и добавлена');
   await expect(doc.locator('[data-sig="method"]').first()).toContainText('загружена готовым файлом из приложения «Госключ»');
+  expect(warned).toContain('Не отмечено исправленными пунктов замечания руководителя: 1. Руководитель это увидит.');
   await expect(sp.locator('#org-returns li').first()).toContainText('отчёт-компании.pdf · исправлено');
   await expect(sp.locator('#org-returns-lead')).toHaveText('Все замечания учтены. История возвратов:');
   await expect(sp.locator('#next-steps [data-step="fix"]')).toHaveCount(0);
@@ -1577,6 +1592,10 @@ test('две подписи (2.5а): эксперт от организации 
   await page.goto('/kabinet');
   await hp.reload();
   await expect(hp.locator('#org-sign details.returns summary')).toHaveText('Возвраты эксперту · 1');
+  // 2.93: у файла перед подписью от организации — что эксперт отметил и что осталось.
+  await expect(item.locator('[data-role="points-state"]')).toHaveText(/^По Вашему замечанию от \d{2}\.\d{2}\.\d{4}: эксперт отметил исправленными 1 из 2, осталось:$/);
+  await expect(item.locator('ul.points > li')).toHaveText(['2. Проверьте итог. — не отмечено']);
+  await shot(hp, '97d-rukovoditel-ostalos-po-punktam');
 
   hp.once('dialog', (d) => d.accept());
   await item.getByRole('button', { name: 'Подписать от организации' }).click();
@@ -4599,7 +4618,7 @@ test('как руководитель (2.67): организация, пригл
   await item.getByRole('button', { name: 'Вернуть с замечанием' }).click();
   await expect(hp.locator('#org-sign-msg')).toHaveText('Файл возвращён эксперту с замечанием — его подпись снята');
   await sp.reload();
-  await expect(sp.locator('#org-returns .comment').first()).toHaveText('Раздел 4: нет корректировки на этаж.');
+  await expect(sp.locator('#org-returns ul.points > li').first()).toHaveText('1. Раздел 4: нет корректировки на этаж.');
   await expect(sp.locator('#docs li').getByRole('button', { name: 'Подписать' })).toHaveCount(1);
   await signResults(sp);
   // «Сегодня» тоже ведёт прямо к подписи этого дела.
