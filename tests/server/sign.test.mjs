@@ -310,6 +310,58 @@ test('возврат эксперту (2.27): руководитель возв�
   assert.ok(!JSON.stringify((await docsOf(dispatcher, o))).includes('титуле'));
 });
 
+test('замечания по пунктам (2.93): эксперт отмечает исправленные, руководитель до новой подписи видит, что осталось', async () => {
+  const org = await makeOrg(S.sql, 'ООО «Пункты оценки»');
+  const head = await login(S, '+79990001512');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  const spec = await login(S, '+79990001513');
+  await makeSpecialist(S.sql, spec.user.id);
+  await addMember(S.sql, org.id, spec.user.id, 'member');
+  assert.equal((await head.req('PATCH', '/api/me', { full_name: 'Руководитель Пунктов' })).status, 200);
+  assert.equal((await spec.req('PATCH', '/api/me', { full_name: 'Эксперт Пунктов' })).status, 200);
+  assert.equal((await spec.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  const o = await inWork('Квартира: пункты', spec);
+  const d = (await result(o, 'Отчёт 8.pdf', 'первая версия', spec)).body.document;
+  assert.equal((await sign(d, undefined, spec)).status, 201);
+  const r = await head.req('POST', `/api/org-documents/${d.id}/return`, { comment: '1. Раздел 5: корректировка на торг.\n\n2) Итог не совпадает с таблицей\n- Нет подписи на титуле' });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.deepEqual(r.body.return.items.map((x) => x.text), ['Раздел 5: корректировка на торг.', 'Итог не совпадает с таблицей', 'Нет подписи на титуле']);
+  const rid = r.body.return.id;
+  let mine = (await docsOf(spec, o)).org_returns[0];
+  assert.deepEqual([mine.items.length, mine.left, mine.document_id], [3, 3, d.id]);
+  const mark = (c, n, fixed, id = rid) => c.req('PUT', `/api/orders/${o.id}/org-returns/${id}/items/${n}`, { fixed });
+  // Отмечает только исполнитель; номер пункта и возврата — только свои.
+  assert.equal((await mark(owner, 1, true)).status, 403);
+  assert.equal((await mark(dispatcher, 1, true)).status, 403);
+  assert.equal((await mark(head, 1, true)).status, 404, 'руководитель заявку не видит');
+  assert.equal((await mark(spec, 4, true)).status, 404);
+  assert.equal((await mark(spec, 'x', true)).status, 404);
+  assert.equal((await mark(spec, 1, true, 999999)).status, 404);
+  assert.equal((await mark(spec, 1, 'да')).status, 400);
+  const m = await mark(spec, 1, true);
+  assert.equal(m.status, 200, JSON.stringify(m.body));
+  assert.equal(m.body.return.left, 2);
+  assert.equal((await mark(spec, 3, true)).body.return.left, 1);
+  assert.equal((await mark(spec, 3, false)).body.return.left, 2, 'отметку можно снять');
+  assert.equal((await mark(spec, 3, true)).body.return.left, 1);
+  const [{ n: audits }] = await S.sql`select count(*)::int as n from audit_log where action like 'org_return.item_%' and subject_id = ${o.id}`;
+  assert.equal(audits, 4);
+  // Руководитель видит отметки, пока эксперт не подписал заново.
+  let item = (await head.req('GET', `/api/orgs/${org.id}/signing`)).body.items.find((x) => x.documents.some((y) => y.id === d.id));
+  assert.deepEqual(item.returns[0].items.map((x) => x.fixed), [true, false, true]);
+  assert.deepEqual([item.returns[0].left, item.returns[0].document_id, item.returns[0].open], [1, d.id, true]);
+  // Эксперт подписал заново, не отметив пункт 2: возврат закрыт, отметки больше не меняются; руководитель видит, что осталось.
+  assert.equal((await sign(d, undefined, spec)).status, 201);
+  assert.equal((await mark(spec, 2, true)).body.error, 'return_closed');
+  item = (await head.req('GET', `/api/orgs/${org.id}/signing`)).body.items.find((x) => x.documents.some((y) => y.id === d.id));
+  assert.deepEqual([item.returns[0].open, item.returns[0].left], [false, 1]);
+  assert.equal(item.returns[0].items.find((x) => !x.fixed).text, 'Итог не совпадает с таблицей');
+  // Заказчик и диспетчер пунктов не видят.
+  for (const c of [owner, dispatcher]) assert.ok(!JSON.stringify(await docsOf(c, o)).includes('титуле'));
+  // Больше 30 пунктов в одном возврате нельзя.
+  assert.equal((await head.req('POST', `/api/org-documents/${d.id}/return`, { comment: Array.from({ length: 31 }, (_, i) => `п${i}`).join('\n') })).body.error, 'too_many_items');
+});
+
 // Распаковка ZIP (архив дела, документ Word) и текст документа Word.
 function unzip(buf) {
   const out = new Map();

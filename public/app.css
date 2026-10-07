@@ -64,6 +64,7 @@ button:disabled { opacity: .6; cursor: default; }
 .doc .sig-state { font-weight: 600; }
 .doc .sig-state.ok { color: var(--ok); }
 .doc .sig-state.bad { color: var(--danger); }
+.doc .sig-state.warn { color: #7a4b00; }
 .doc .sig-test { color: var(--danger); font-size: 14px; }
 .badge { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 99px; background: #eef2f8; color: var(--muted); }
 .badge.warn { background: #fff3d6; color: #7a4b00; font-weight: 600; }
@@ -200,6 +201,11 @@ a.btn { text-decoration: none; margin-top: 8px; }
 .return .comment { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 4px; }
 li.return.open { border-left: 3px solid var(--danger); padding-left: 8px; }
 details.returns { margin-top: 8px; }
+/* Пункты замечания руководителя (2.93). */
+ul.points { list-style: none; margin: 6px 0 0; padding: 0; }
+ul.points li { border: none; padding: 2px 0; overflow-wrap: anywhere; }
+ul.points label.row { margin: 0; align-items: flex-start; }
+ul.points li.fixed span:not(.muted) { color: var(--muted); text-decoration: line-through; }
 details.org-chat, details.org-transfer { margin-top: 8px; }
 details.org-chat summary, details.org-transfer summary { cursor: pointer; color: var(--accent); }
 

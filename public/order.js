@@ -402,19 +402,55 @@ function loadOrgChat() {
 }
 
 // Замечания руководителя организации (2.27): возвраты файла до подписи организации — видит только сам исполнитель.
-// Открытые — сверху; закрытые (файл подписан заново) — ниже, как история.
+// Открытые — сверху; закрытые (файл подписан заново) — ниже, как история. Замечание по пунктам (2.93): эксперт отмечает
+// исправленные, руководитель видит, что осталось.
+let orgReturnsNow = [];
 function renderOrgReturns(list) {
+  orgReturnsNow = list;
   $('org-returns-box').classList.toggle('hidden', !list.length);
   if (!list.length) return;
   const open = list.filter((r) => r.open);
   $('org-returns-lead').textContent = open.length
-    ? 'Руководитель вернул файл с замечанием: исправьте файл (или загрузите новый) и подпишите заново — после этого руководитель подпишет от организации.'
+    ? 'Руководитель вернул файл с замечанием: исправьте файл (или загрузите новый), отметьте исправленные пункты и подпишите заново — руководитель увидит, что осталось, и подпишет от организации.'
     : 'Все замечания учтены. История возвратов:';
   const item = (r) => el('li', { class: r.open ? 'return open' : 'return', 'data-return': String(r.id) },
     el('div', { class: 'title', text: `${r.filename} · ${r.open ? 'исправить' : 'исправлено'}` }),
     el('div', { class: 'muted', text: [r.by, r.org, new Date(r.at).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })].filter(Boolean).join(' · ') }),
-    el('div', { class: 'comment', text: r.comment }));
+    ...(r.items?.length ? returnPoints(r) : [el('div', { class: 'comment', text: r.comment })]));
   $('org-returns').replaceChildren(...[...open].reverse().map(item), ...list.filter((r) => !r.open).reverse().map(item));
+}
+
+function returnPoints(r) {
+  const done = r.items.length - r.left;
+  const point = (p) => {
+    const id = `ret-${r.id}-${p.n}`;
+    if (!r.open) {
+      return el('li', { class: p.fixed ? 'point fixed' : 'point', 'data-point': String(p.n) },
+        el('span', { text: `${p.n}. ${p.text}` }), el('span', { class: 'muted', text: p.fixed ? ' — исправлено' : ' — не отмечено' }));
+    }
+    const box = el('input', { type: 'checkbox', id, 'data-action': 'point-fixed' });
+    box.checked = p.fixed;
+    box.addEventListener('change', () => markPoint(r, p, box));
+    return el('li', { class: p.fixed ? 'point fixed' : 'point', 'data-point': String(p.n) },
+      el('label', { for: id, class: 'row gap' }, box, el('span', { text: `${p.n}. ${p.text}` })));
+  };
+  return [el('div', { class: 'muted', 'data-role': 'points-left', text: `Исправлено ${done} из ${r.items.length}` }),
+    el('ul', { class: 'points' }, ...r.items.map(point))];
+}
+
+async function markPoint(r, p, box) {
+  box.disabled = true;
+  try {
+    await api('PUT', `/api/orders/${current.order.id}/org-returns/${r.id}/items/${p.n}`, { fixed: box.checked });
+    await loadDocs();
+    say($('doc-msg'), box.checked ? `Пункт ${p.n} отмечен исправленным` : `Отметка с пункта ${p.n} снята`, 'ok');
+  } catch (err) { box.checked = !box.checked; box.disabled = false; say($('doc-msg'), err.message); }
+}
+
+// Перед новой подписью: если в открытом возврате по этому файлу остались неотмеченные пункты — предупредить.
+function signConfirmText(d) {
+  const left = orgReturnsNow.filter((r) => r.open && r.document_id === d.id).reduce((n, r) => n + (r.left ?? 0), 0);
+  return (left ? `Не отмечено исправленными пунктов замечания руководителя: ${left}. Руководитель это увидит.\n\n` : '') + SIGN_CONFIRM(d.filename);
 }
 
 // Подписи УКЭП у файла результата (2.5, 2.5а): эксперт и, если он работает от организации, её руководитель. Исполнитель
@@ -460,7 +496,7 @@ async function signAll() {
 $('sign-all').addEventListener('click', signAll);
 
 async function signDoc(d) {
-  if (!confirm(SIGN_CONFIRM(d.filename))) return;
+  if (!confirm(signConfirmText(d))) return;
   say($('doc-msg'), 'Подписываем…', 'ok');
   try {
     await api('POST', `/api/documents/${d.id}/sign`, { confirm: true });
@@ -471,7 +507,7 @@ async function signDoc(d) {
 }
 
 async function uploadSignature(d, file) {
-  if (!confirm(SIGN_CONFIRM(d.filename))) return;
+  if (!confirm(signConfirmText(d))) return;
   say($('doc-msg'), 'Проверяем подпись…', 'ok');
   try {
     await api('POST', `/api/documents/${d.id}/signature/upload`, file, { 'content-type': 'application/octet-stream', 'x-confirm': '1' });

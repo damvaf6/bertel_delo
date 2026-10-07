@@ -1045,7 +1045,7 @@ test('экспресс-выезд (2.4): ход выезда видят те, к
 });
 
 test('подпись организации (2.5а): файлы видит и подписывает только руководитель организации исполнителя; загрузка — только своё', async () => {
-  for (const id of ['signature.upload', 'orgsign.list', 'orgsign.link', 'orgsign.sign', 'orgsign.upload', 'orgsign.return']) cover(id);
+  for (const id of ['signature.upload', 'orgsign.list', 'orgsign.link', 'orgsign.sign', 'orgsign.upload', 'orgsign.return', 'orgreturn.item']) cover(id);
   // Исполнитель работает от организации Б: подписывает он и руководитель Б (headB).
   const spec2 = expertB = await login(S, '+79990000053');
   const memberB = seniorB = await login(S, '+79990000022');
@@ -1110,6 +1110,13 @@ test('подпись организации (2.5а): файлы видит и п
     assert.ok(!JSON.stringify(b).includes('Исправьте итог'), k);
   }
   assert.equal((await spec2.req('GET', `/api/orders/${o.id}/documents`)).body.org_returns[0].comment, 'Исправьте итог');
+  // Пункт замечания (2.93) отмечает только сам эксперт-исполнитель.
+  const rid = (await spec2.req('GET', `/api/orders/${o.id}/documents`)).body.org_returns[0].id;
+  const mark = (c) => c.req('PUT', `/api/orders/${o.id}/org-returns/${rid}/items/1`, { fixed: true });
+  for (const k of ['stranger', 'headA', 'spec']) assert.equal((await mark(U[k])).status, 404, k);
+  for (const c of [U.headB, memberB]) assert.equal((await mark(c)).status, 404, 'руководитель и сотрудники заявку не видят');
+  for (const k of ['owner', 'dispatcher', 'admin']) assert.equal((await mark(U[k])).status, 403, k);
+  assert.equal((await mark(spec2)).body.return.left, 0);
   assert.equal((await up(spec2, `/api/documents/${doc.id}/signature/upload`, expertSig)).status, 201, 'эксперт подписал заново');
   const g = await U.headB.req('POST', `/api/org-documents/${doc.id}/sign`, { confirm: true });
   assert.equal(g.status, 201, JSON.stringify(g.body));
