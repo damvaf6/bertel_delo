@@ -43,7 +43,7 @@ async function load(month) {
   sel.value = report.month;
   const t = report.total;
   $('org-report-zip').classList.toggle('hidden', !t.done);
-  $('org-report-zip').textContent = `Скачать сданные заключения (${t.done}, архив)`;
+  $('org-report-zip').textContent = `Заключения архивом (${t.done})`;
   $('org-report-total').replaceChildren(
     ...fact(`Итого · ${report.month_name}`, `принято дел: ${t.accepted} · сдано: ${t.done}${t.done_late ? ` (позже срока: ${t.done_late})` : ''}`),
     ...(report.current && t.overdue_now ? fact('Просрочено сейчас', String(t.overdue_now), 'overdue') : []),
