@@ -1,5 +1,6 @@
 // Сводка за месяц по экспертам (2.78): руководитель выбирает месяц и видит по каждому эксперту — принял, сдал, позже срока,
-// возвращено, вознаграждение и выплачено; ниже итог. «Скачать таблицу» — та же сводка файлом для Excel.
+// возвращено, вознаграждение и выплачено; ниже итог. «Скачать таблицу» — та же сводка файлом для Excel. «Скачать сданные
+// заключения» (2.89) — файлы результата с подписями и опись одним архивом; кнопка есть, только если за месяц что-то сдано.
 import { api, el, say } from '/common.js';
 import { rub } from '/money.js';
 
@@ -15,6 +16,11 @@ $('org-report-csv').addEventListener('click', () => {
   if (!org) return;
   // Файл отдаёт сервер по той же учётке (вход — по cookie); страница остаётся на месте.
   location.assign(`/api/orgs/${org.id}/report?format=csv&month=${encodeURIComponent($('org-report-month').value)}`);
+});
+
+$('org-report-zip').addEventListener('click', () => {
+  if (!org) return;
+  location.assign(`/api/orgs/${org.id}/report/archive?month=${encodeURIComponent($('org-report-month').value)}`);
 });
 
 export async function loadOrgReport(o) {
@@ -36,6 +42,8 @@ async function load(month) {
   sel.replaceChildren(...report.months.map((m, i) => el('option', { value: m, text: i === 0 ? `${monthRu(m)} (текущий)` : monthRu(m) })));
   sel.value = report.month;
   const t = report.total;
+  $('org-report-zip').classList.toggle('hidden', !t.done);
+  $('org-report-zip').textContent = `Заключения архивом (${t.done})`;
   $('org-report-total').replaceChildren(
     ...fact(`Итого · ${report.month_name}`, `принято дел: ${t.accepted} · сдано: ${t.done}${t.done_late ? ` (позже срока: ${t.done_late})` : ''}`),
     ...(report.current && t.overdue_now ? fact('Просрочено сейчас', String(t.overdue_now), 'overdue') : []),

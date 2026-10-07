@@ -3346,12 +3346,17 @@ test('сводка за месяц (2.78): руководитель видит �
     await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now()), ($1, $3, 'member', now() - interval '1 minute')", [org.id, head.id, expert.id]);
     await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [expert.id, org.id]);
     // Дело принято и сдано позже срока; диспетчер раз возвращал на доработку; выплата прошла.
-    await c.query("update orders set price_kop = 1500000, paid_at = now(), status = 'done', executor_user_id = $2, deadline = current_date - 3 where id = $1", [id, expert.id]);
+    await c.query("update orders set price_kop = 1500000, paid_at = now(), status = 'in_work', executor_user_id = $2, deadline = current_date - 3 where id = $1", [id, expert.id]);
     await c.query(`insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())`, [id, expert.id]);
     await c.query(`insert into order_status_history (order_id, from_status, to_status, side) values ($1, 'review', 'in_work', 'dispatcher'), ($1, 'review', 'done', 'dispatcher')`, [id]);
     await c.query(`insert into payouts (order_id, executor_user_id, amount_kop, commission_kop, status, paid_at) values ($1, $2, 1200000, 300000, 'succeeded', now())`, [id, expert.id]);
     return org.id;
   });
+  // Эксперт приложил и подписал отчёт (2.89 — попадёт в архив сданных за месяц); дело сдано.
+  const up = await ep.request.post(`/api/orders/${id}/results`, { data: Buffer.from('%PDF-1.4 отчёт для архива'), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Отчёт Сводкина.pdf') } });
+  expect(up.status()).toBe(201);
+  expect((await ep.request.post(`/api/documents/${(await up.json()).document.id}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  await db((c) => c.query("update orders set status = 'done' where id = $1", [id]));
 
   await hp.goto(`/kabinet#org=${orgId}`);
   const box = hp.locator('#org-report-box');
@@ -3373,10 +3378,24 @@ test('сводка за месяц (2.78): руководитель видит �
   const csv = fs.readFileSync(await download.path());
   expect([...csv.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
   expect(csv.toString('utf8')).toContain('Эксперт Сводкин;1;1;1;0;0;1;12000,00;12000,00');
+  // Сданные заключения одним архивом (2.89): отчёт эксперта с подписью и опись.
+  const zipBtn = hp.locator('#org-report-zip');
+  await expect(zipBtn).toHaveText('Заключения архивом (1)');
+  await zipBtn.scrollIntoViewIfNeeded();
+  await shot(hp, 'a7b-rukovoditel-arhiv-zaklyuchenij');
+  const [zipped] = await Promise.all([hp.waitForEvent('download'), zipBtn.click()]);
+  expect(zipped.suggestedFilename()).toMatch(/^Заключения за .+ \d{4}\.zip$/);
+  const zipText = fs.readFileSync(await zipped.path()).toString('utf8');
+  expect(zipText.startsWith('PK')).toBe(true);
+  expect(zipText).toContain('Эксперт Сводкин/Дело № ');
+  expect(zipText).toContain('/Отчёт Сводкина.pdf');
+  expect(zipText).toContain('%PDF-1.4 отчёт для архива');
+  expect(zipText).toContain('Опись');
   // Прошлый месяц — пусто.
   await hp.locator('#org-report-month').selectOption({ index: 1 });
   await expect(hp.locator('#org-report-total')).toContainText('принято дел: 0 · сдано: 0');
   await expect(row).toContainText('вознаграждение за сданные: 0 ₽ · выплачено: 0 ₽');
+  await expect(zipBtn).toBeHidden();
   await shot(hp, 'a8-rukovoditel-svodka-proshlyj');
   // Эксперт сводку не открывает.
   expect((await ep.request.get(`/api/orgs/${orgId}/report`)).status()).toBe(403);
