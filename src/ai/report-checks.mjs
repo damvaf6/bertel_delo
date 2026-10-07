@@ -994,6 +994,105 @@ function purchaseMatch(doc, ctx) {
   return out;
 }
 
+// ——— 2.108: итоговая стоимость одна во всём отчёте и в сопроводительном письме ———
+// После фразы «итоговая величина рыночной стоимости», «рыночная стоимость объекта …», «стоимость ремонта без учёта
+// износа / с учётом износа», «утрата товарной стоимости», «стоимость устранения недостатков» берётся первая сумма в
+// рублях (цифрами, «тыс. руб.», «руб.: 3 000 000» в таблице). Стоимость по отдельному подходу, аналога, за 1 кв. м,
+// кадастровая, ликвидационная не сверяются; доля, с НДС и без НДС — каждая сама с собой. Больше двух разных сумм одного
+// вида или обе суммы на одной странице — в отчёте, видимо, несколько объектов: такие не сверяем.
+const VALUE_KINDS = [
+  ['repair', /стоимост\S*\s+(?:восстановительн\S*\s+)?ремонт\S*/giu],
+  ['fix', /стоимост\S*\s+(?:\S+\s+){0,4}?устранени\S*\s+(?:\S+\s+){0,2}?(?:недостатк|дефект)\S*/giu],
+  // «… без учёта износа 412 300 руб., с учётом износа — 301 900 руб.»: вторая сумма — без слова «ремонт» (только в деле о ремонте).
+  ['wear', /(?:без\s+уч[её]та|с\s+уч[её]том)\s+износа/giu],
+  ['uts', /утрат\S*\s+товарн\S*\s+стоимост\S*|(?<![А-ЯЁа-яё])УТС(?![А-ЯЁа-яё])/gu],
+  ['market', /итогов\S*\s+(?:величин|значени)\S*\s+(?:рыночн\S*\s+)?стоимост\S*|рыночн\S*\s+стоимост\S*/giu],
+];
+const REPAIR = /стоимост\S*\s+(?:восстановительн\S*\s+)?ремонт/iu;
+const VALUE_NAMES = {
+  'repair:nowear': 'Стоимость ремонта без учёта износа', 'repair:wear': 'Стоимость ремонта с учётом износа',
+  fix: 'Стоимость устранения недостатков', uts: 'Утрата товарной стоимости',
+  market: 'Итоговая стоимость', 'market:share': 'Стоимость доли', 'market:vat': 'Стоимость с НДС', 'market:novat': 'Стоимость без НДС',
+};
+const MONEY_AFTER = /(\d{1,3}(?:[   ]\d{3})+|\d+)(?:[,.](\d{1,2}))?\s*(тыс\S*|млн\S*)?\s*(?:\([^()]{3,200}\)\s*)?(?:руб|₽)/u;
+const MONEY_BEFORE = /руб\S*\s*[:|)]?\s*(\d{1,3}(?:[   ]\d{3})+|\d{4,})(?:,(\d{2}))?(?!\d)/u;
+const VALUE_SKIP = /аналог|кв\.?\s*м|м2|м²|за\s+(?:1|одн|единиц)|кадастров|ликвидац|инвестиц|арендн|залогов|годн\S*\s+остат|сред\S*\s+рыночн|диапазон|интервал|границ|предложени|объявлени/iu;
+const APPROACH_ONLY = /(?:сравнительн|затратн|доходн)\S*\s+подход|подход\S*\s+(?:сравнительн|затратн|доходн)|метод\S*\s+(?:сравнени|прям|дисконт)/iu;
+const NOVAT = /без\s+(?:уч[её]та\s+)?НДС/iu;
+const VAT = /(?:с\s+уч[её]том|включая|в\s+т\.\s*ч\.?|в\s+том\s+числе)\s+НДС/iu;
+
+function moneyIn(text) {
+  const a = text.match(MONEY_AFTER);
+  const b = text.match(MONEY_BEFORE);
+  const m = a && (!b || a.index <= b.index) ? a : b;
+  if (!m) return null;
+  const mult = m === a && m[3] ? (/^млн/iu.test(m[3]) ? 1e6 : 1e3) : 1;
+  const value = Math.round((Number(m[1].replace(/[   ]/g, '')) + (m[2] ? Number(m[2].padEnd(2, '0')) / 100 : 0)) * mult);
+  return value >= 1000 ? { value, index: m.index, end: m.index + m[0].length } : null;
+}
+
+function valueKey(kind, said, after) {
+  if (kind === 'repair' || kind === 'wear') return /без\s+(?:уч[её]та\s+)?износа/iu.test(said) ? 'repair:nowear' : /с\s+уч[её]том\s+износа/iu.test(said) ? 'repair:wear' : null;
+  if (kind !== 'market') return kind;
+  if (/(?<![а-яё])дол(?:и|ю|я|ей)(?![а-яё])|\d\s*\/\s*\d/iu.test(said)) return 'market:share';
+  if (NOVAT.test(said) || NOVAT.test(after)) return 'market:novat';
+  if (VAT.test(said) || VAT.test(after)) return 'market:vat';
+  return 'market';
+}
+
+function finalValues(docs) {
+  const main = mainReport(docs);
+  const ordered = main ? [main, ...docs.filter((d) => d !== main)] : docs;
+  const byKey = new Map();
+  for (const doc of ordered) {
+    const repairDoc = (doc.pages ?? []).some((p) => REPAIR.test(p));
+    eachPage(doc, (raw, i) => {
+      const page = raw.replace(/\n/g, ' ');
+      const hits = [];
+      for (const [kind, re] of VALUE_KINDS) {
+        if (kind === 'wear' && !repairDoc) continue;
+        for (const m of page.matchAll(re)) {
+          const end = m.index + m[0].length;
+          if (hits.some((h) => m.index < h.end && end > h.index)) continue; // «рыночная стоимость ремонта» — это ремонт
+          hits.push({ kind, index: m.index, end });
+        }
+      }
+      hits.sort((x, y) => x.index - y.index);
+      hits.forEach((h, n) => {
+        const stop = Math.min(h.end + 220, hits[n + 1]?.index ?? page.length);
+        const money = moneyIn(page.slice(h.end, stop));
+        if (!money) return;
+        const said = page.slice(Math.max(lineStart(raw, h.index), h.index - 60), h.end + money.index);
+        if (VALUE_SKIP.test(said)) return;
+        if (APPROACH_ONLY.test(said) && !/согласовани|итогов/iu.test(said)) return;
+        const key = valueKey(h.kind, page.slice(h.index, h.end + money.index), page.slice(h.end + money.end, h.end + money.end + 40));
+        if (!key) return;
+        if (!byKey.has(key)) byKey.set(key, []);
+        byKey.get(key).push({ doc, page: i, value: money.value, quote: lineAround(raw, h.index) });
+      });
+    });
+  }
+  const out = [];
+  for (const [key, list] of byKey) {
+    const counts = new Map();
+    for (const e of list) counts.set(e.value, (counts.get(e.value) ?? 0) + 1);
+    if (counts.size !== 2) continue;
+    const [a, b] = [...counts.keys()];
+    if (list.some((x) => x.value === a && list.some((y) => y.value === b && y.doc === x.doc && y.page === x.page))) continue;
+    const ref = counts.get(b) > counts.get(a) ? b : a;
+    const first = list.find((e) => e.value === ref);
+    const where = (e) => `${first.doc === e.doc ? '' : `в «${first.doc.name}» `}на стр. ${first.page + 1}${counts.get(ref) > 1 ? ` (и ещё в ${counts.get(ref) - 1} ${counts.get(ref) === 2 ? 'месте' : 'местах'})` : ''}`;
+    const seen = new Set();
+    for (const e of list) {
+      if (e.value === ref || seen.has(`${e.doc.name}|${e.page}`)) continue;
+      seen.add(`${e.doc.name}|${e.page}`);
+      out.push({ doc: e.doc, page: e.page, quote: e.quote,
+        text: `${VALUE_NAMES[key]} ${fmt(e.value)} руб. не совпадает с ${fmt(ref)} руб. ${where(e)} — сумма должна быть одна во всём отчёте и в письме` });
+    }
+  }
+  return out;
+}
+
 // ——— 2.61: каждый вопрос заявки найден в выводах (все виды) ———
 // Вопросы — из поля заявки «Какие вопросы поставить эксперту» (нумерованные или по одному в строке). Вопрос считается
 // отвеченным, если в выводах есть «по вопросу № N» / «ответ на вопрос N» или больше половины его значимых слов.
@@ -1052,6 +1151,7 @@ const WHOLE = {
   court_order: courtOrder,
   analog_match: analogMatch,
   report_dates: reportDates,
+  final_value: finalValues,
 };
 
 const PER_DOC = {
@@ -1110,6 +1210,7 @@ export const AUTO_CHECKS = Object.freeze({
   analog_match: 'аналоги в отчёте — как подтверждённые в деле: ссылка, цена, площадь, число аналогов',
   purchase_match: 'дата и цена покупки товара — как в заявке',
   questions_answered: 'каждый вопрос заявки найден в выводах',
+  final_value: 'итоговая стоимость одна на титуле, в задании, выводах, итоговой таблице и в сопроводительном письме',
 });
 
 export function runAutoChecks(names, docs, ctx = {}) {
@@ -1144,6 +1245,7 @@ export function runAutoChecks(names, docs, ctx = {}) {
 function eachPage(doc, fn) { (doc.pages ?? []).forEach((p, i) => fn(p, i)); }
 function clean(s) { return String(s ?? '').replace(/\s+/g, ' ').trim(); }
 function fmt(n) { return Number(n).toLocaleString('ru-RU').replace(/ /g, ' '); }
+function lineStart(page, index) { return page.lastIndexOf('\n', index) + 1; }
 function lineAround(page, index) {
   const start = page.lastIndexOf('\n', index) + 1;
   const end = page.indexOf('\n', index);
