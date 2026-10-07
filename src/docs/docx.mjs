@@ -160,14 +160,30 @@ export function imageSize(buf) {
   return null;
 }
 
-// Приложение к отчёту (2.32): { title, items: [{ title, lines: [строки], image: Buffer | null }] } → блоки для отчёта и
+// Приложение к отчёту (2.32): { title, items: [{ title, lines: [строки], image: Buffer | null }], caption? } → блоки для отчёта и
 // картинки, которые надо положить в файл (media). Картинка неизвестного вида не вставляется — остаётся подпись.
 // Можно передать список приложений (2.37: фото осмотра, затем скриншоты объявлений) — идут по порядку.
+// Снимок с подписью под ним (2.96, фото осмотра): картинка, затем «Фото N. Шаг» и строки — по центру, не отрываясь от
+// картинки; в оглавление не идёт.
+function captioned(it, media) {
+  const out = [];
+  const size = it.image ? imageSize(it.image) : null;
+  if (size && size.w > 0 && size.h > 0) {
+    const img = { ...size, buf: it.image, n: media.length + 1, rid: `rIdDeloImg${media.length + 1}` };
+    media.push(img);
+    out.push({ type: 'image', img });
+  }
+  out.push({ type: 'caption', text: it.title, bold: true, next: it.lines.length > 0 });
+  it.lines.forEach((l, i) => out.push({ type: 'caption', text: l, next: i < it.lines.length - 1 }));
+  return out;
+}
+
 function appendixBlocks(appendix, media) {
   if (Array.isArray(appendix)) return appendix.flatMap((a) => appendixBlocks(a, media));
   if (!appendix?.items?.length) return [];
   const out = [{ type: 'break' }, { type: 'head', level: 1, text: appendix.title, plain: true }];
   for (const it of appendix.items) {
+    if (appendix.caption) { out.push(...captioned(it, media)); continue; }
     out.push({ type: 'head', level: 2, text: it.title, plain: true });
     for (const l of it.lines) out.push({ type: 'para', text: l });
     const size = it.image ? imageSize(it.image) : null;
@@ -187,7 +203,8 @@ function reportBody(text, meta, st, appendix = null, media = []) {
     if (b.type === 'head') return para(run(b.text), pStyle(b.level === 1 ? st.h1 : st.h2));
     if (b.type === 'table') return table(b.rows, st);
     if (b.type === 'break') return PAGE_BREAK;
-    if (b.type === 'image') return para(drawing(b.img, b.img.n), '<w:jc w:val="center"/><w:keepNext/>');
+    if (b.type === 'image') return para(drawing(b.img, b.img.n), '<w:keepNext/><w:jc w:val="center"/>');
+    if (b.type === 'caption') return para(run(b.text, `${b.bold ? '<w:b/>' : ''}<w:sz w:val="20"/><w:szCs w:val="20"/>`), `${b.next ? '<w:keepNext/>' : ''}<w:spacing w:after="${b.next ? 0 : 240}"/><w:jc w:val="center"/>`);
     return para(run(b.text));
   }).join('');
   return titlePage(meta, st) + para(run('Содержание'), `${pStyle(st.title)}<w:jc w:val="center"/>`) + toc(heads, st) + PAGE_BREAK + content;

@@ -5,6 +5,7 @@ import { executorSignOrg } from '../access/policy.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { todayMsk } from '../orders/workflow.mjs';
 import { buildReport } from './docx.mjs';
+import { inspectionPhotos } from './photos.mjs';
 import { analogTable, hostOf, inItemOrder, listPositions, timeMsk, valueText } from '../analogs/analogs.mjs';
 
 const GAP = '[заполнить]';
@@ -173,37 +174,34 @@ async function analogsPart({ sql, providers, registry }, order, text) {
   };
 }
 
-// Фото осмотра (2.37) → приложение «Фотоматериалы осмотра»: по шагам осмотра, у каждого — время получения платформой,
-// время съёмки и место (если владелец разрешил); снимки JPEG/PNG вставляются картинкой, остальные — строкой «хранится в деле».
-const PHOTOS_MAX = 40;
+// Фото осмотра (2.37) → приложение «Фотоматериалы осмотра». С 2.96 у каждого снимка подпись под картинкой: номер — тот же,
+// что в деле, шаг осмотра, когда снято (по часам телефона) и где, когда получено платформой. В оглавление снимки не идут.
+// JPEG/PNG вставляются картинкой, пока хватает места; остальные — подписью и строкой «хранится в деле».
+const PHOTOS_MAX = 60;
 const PHOTOS_BYTES = 25 * 1024 * 1024;
+export const photoCaption = (r, steps) => [
+  `Фото ${r.no}. ${steps.find((x) => x.id === r.step)?.title ?? r.filename}`,
+  [
+    r.shot_at ? `Снято: ${timeMsk(r.shot_at)} (МСК, по часам телефона)` : 'Время съёмки телефон не передал',
+    r.lat != null ? `Место съёмки: ${Number(r.lat).toFixed(5)}, ${Number(r.lon).toFixed(5)}${r.accuracy_m != null ? ` (±${Math.round(r.accuracy_m)} м)` : ''}` : 'Место съёмки не определено',
+  ].join(' · '),
+  `Получено платформой «БЕРТЕЛ Дело»: ${timeMsk(r.received_at)} (МСК)`,
+];
 async function photosPart({ sql, providers, registry }, order) {
-  const rows = await sql`
-    select d.id, d.filename, d.mime, d.size_bytes, d.storage_key, d.created_at, p.step, p.received_at, p.shot_at, p.lat, p.lon, p.accuracy_m
-    from documents d left join inspection_photos p on p.document_id = d.id
-    where d.order_id = ${order.id} and d.kind = 'inspection' and d.deleted_at is null order by d.created_at limit ${PHOTOS_MAX}`;
-  if (!rows.length) return null;
   const steps = registry.inspectionSteps(order.module, order.service);
-  const pos = (id) => { const i = steps.findIndex((x) => x.id === id); return i < 0 ? steps.length : i; };
-  rows.sort((a, b) => pos(a.step) - pos(b.step) || a.created_at - b.created_at);
+  const rows = await inspectionPhotos(sql, order, steps);
+  if (!rows.length) return null;
   let left = PHOTOS_BYTES;
+  let count = 0;
   const items = [];
-  for (const [i, r] of rows.entries()) {
-    const fits = /^image\/(png|jpeg)$/.test(r.mime) && Number(r.size_bytes) <= left;
+  for (const r of rows) {
+    const fits = /^image\/(png|jpeg)$/.test(r.mime) && Number(r.size_bytes) <= left && count < PHOTOS_MAX;
     const image = fits ? await providers.storage.get(r.storage_key) : null;
-    if (image) left -= image.length;
-    items.push({
-      title: `Фото ${i + 1} — ${steps.find((x) => x.id === r.step)?.title ?? r.filename}`,
-      lines: [
-        `Получено платформой «БЕРТЕЛ Дело»: ${timeMsk(r.received_at ?? r.created_at)} (МСК)`,
-        r.shot_at ? `Снято (по часам телефона): ${timeMsk(r.shot_at)} (МСК)` : null,
-        r.lat != null ? `Место съёмки: ${Number(r.lat).toFixed(5)}, ${Number(r.lon).toFixed(5)}${r.accuracy_m != null ? ` (±${Math.round(r.accuracy_m)} м)` : ''}` : 'Место съёмки не определено',
-        image ? null : `Файл «${r.filename}» хранится в деле на платформе (в Word не вставляется).`,
-      ].filter(Boolean),
-      image,
-    });
+    if (image) { left -= image.length; count += 1; }
+    const [title, ...lines] = photoCaption(r, steps);
+    items.push({ title, lines: image ? lines : [...lines, `Файл «${r.filename}» хранится в деле на платформе (в Word не вставлен).`], image });
   }
-  return { title: 'Приложение. Фотоматериалы осмотра', items };
+  return { title: 'Приложение. Фотоматериалы осмотра', items, caption: true };
 }
 
 export const tablesBrief = (sections) => {

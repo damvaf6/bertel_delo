@@ -94,13 +94,13 @@ function renderSteps(r, photos) {
     ...stepPhotos(s.photos))));
 }
 
-// Фото шага: до трёх — сразу, больше — свёрнуто (2.49: при 100 фото страница дела уходила на десятки экранов).
+// Фото шага: «Фото N» — тот же номер, что в отчёте Word (2.96). До трёх — сразу, больше — свёрнуто (2.49: при 100 фото страница дела уходила на десятки экранов).
 const PHOTOS_OPEN = 3;
 function stepPhotos(photos) {
   const row = (p) => el('div', { class: 'doc' },
     ...(p.thumb ? [thumbImg(p)] : []),
     el('div', { class: 'photo-text' },
-      el('div', { class: 'name', text: p.filename }),
+      el('div', { class: 'name', text: `Фото ${p.no} · ${p.filename}` }),
       el('div', { class: 'photo-meta', text: photoLine(p) }),
       ...(p.geo ? [] : [el('div', { class: 'photo-meta warn', text: 'без геометки' })])),
     el('button', { class: 'secondary', 'data-action': 'open-photo', onclick: () => open(p) }, 'Открыть'));
