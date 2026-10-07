@@ -46,6 +46,9 @@ function what(a, doc) {
     case 'org.case.reassign': return `${d.to ? 'Руководитель организации предложил дело другому эксперту' : 'Руководитель организации забрал дело у эксперта до ответа'}${d.reason ? `: ${d.reason}` : ''}`;
     case 'org.case.decline': return 'Организация отказалась от дела';
     case 'org.case.transfer': return `Руководитель организации передал дело другому эксперту${d.reason ? `: ${d.reason}` : ''}`;
+    case 'handover.request': return `Эксперт попросил руководителя передать дело коллеге: ${d.reason ?? ''}`;
+    case 'handover.withdraw': return 'Эксперт отозвал просьбу передать дело коллеге';
+    case 'handover.decline': return `Руководитель организации не стал передавать дело${d.answer ? `: ${d.answer}` : ''}`;
     case 'message.post': return 'Сообщение в переписке';
     case 'org_chat.post': return 'Сообщение во внутренней переписке организации';
     case 'document.upload': case 'document.direct_upload':

@@ -5532,3 +5532,84 @@ test('что изменилось между версиями черновика
   await expect(page.locator('#diff-msg')).toContainText('добавлено абзацев — 2, убрано — 1');
   await shot(page, 'e2-ekspert-versii-k-pervoy');
 });
+
+test('просьба передать дело коллеге (2.107): эксперт просит с причиной, руководитель из «Сегодня» передаёт одной кнопкой или отказывает', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), ep = await ctx(), hp = await ctx(), kp = await ctx();
+  const customer = await signIn(cp, '+79990010141');
+  const expert = await signIn(ep, '+79990010142'), head = await signIn(hp, '+79990010143'), colleague = await signIn(kp, '+79990010144');
+  const { orgId, ids } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Передача ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Отпускова Ирина' where id = $1", [expert.id]);
+    await c.query("update users set full_name = 'Коллегин Пётр' where id = $1", [colleague.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member'), ($1, $4, 'member')", [org.id, head.id, expert.id, colleague.id]);
+    for (const u of [expert.id, colleague.id]) {
+      await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [u, org.id]);
+      await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [u]);
+    }
+    const add = async (title) => (await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', $1, $2, $3, 'in_work', current_date + 9, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Отпускная ул., 2","area":"40"}') returning id`,
+      [title, customer.id, expert.id])).rows[0].id;
+    const ids = { give: await add('Передача: отпуск'), keep: await add('Передача: остаётся') };
+    for (const k of ['give', 'keep']) await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [ids[k], expert.id]);
+    return { orgId: org.id, ids };
+  });
+
+  // Эксперт в деле: блок «Передать дело коллеге» — причина и кнопка.
+  await ep.goto(`/kabinet#order=${ids.give}`);
+  await expect(ep.locator('#handover-box')).toBeVisible();
+  await expect(ep.locator('#handover-lead')).toContainText('Попросите руководителя организации');
+  await ep.locator('#handover-send').click();
+  await expect(ep.locator('#handover-msg')).toHaveText('Укажите причину');
+  await ep.locator('#handover-reason').fill('Отпуск с 12 октября на две недели');
+  await ep.locator('#handover-send').click();
+  await expect(ep.locator('#handover-msg')).toContainText('Просьба отправлена руководителю');
+  await expect(ep.locator('#handover-open-text')).toContainText('Причина: Отпуск с 12 октября на две недели');
+  await expect(ep.locator('#handover-form')).toBeHidden();
+  await ep.locator('#handover-box').scrollIntoViewIfNeeded();
+  await shot(ep, 'f1-ekspert-prosit-peredat');
+  // Заказчик блока не видит.
+  await cp.goto(`/kabinet#order=${ids.give}`);
+  await expect(cp.locator('#order-title')).toHaveText('Передача: отпуск');
+  await expect(cp.locator('#handover-box')).toBeHidden();
+
+  // Руководитель: в «Сегодня» — просьба с причиной; нажал — дело в «Делах экспертов», «Передать» одной кнопкой.
+  await hp.goto('/kabinet');
+  const t = hp.locator(`li[data-today-item="org-handover-${orgId}"]`);
+  await expect(t).toHaveCount(1);
+  await expect(t).toContainText('Отпускова Ирина');
+  await expect(t).toContainText('причина: Отпуск с 12 октября на две недели');
+  await expect(hp.locator('#today-box')).not.toContainText('Передача: отпуск');
+  await shot(hp, 'f2-rukovoditel-segodnya-prosyat-peredat');
+  await t.locator('button').click();
+  const row = hp.locator('#org-cases > li[data-case]').filter({ has: hp.locator('[data-handover]') });
+  await expect(row).toHaveCount(1);
+  await expect(row.locator('[data-handover]')).toContainText('Причина: Отпуск с 12 октября на две недели');
+  await expect(row.locator('select[data-handover-pick] option')).toHaveText(['Коллегин Пётр']);
+  await expect(row.locator('details[data-transfer]')).toHaveCount(0);
+  await expect(hp.locator('[data-filter="handover"]')).toHaveText('Просят передать · 1');
+  await row.locator('[data-handover]').scrollIntoViewIfNeeded();
+  await shot(hp, 'f3-rukovoditel-peredat-odnoy-knopkoy');
+  await row.locator('[data-action="handover-give"]').click();
+  await expect(hp.locator('#org-cases-msg')).toContainText('Дело передано');
+  await expect(hp.locator('#org-cases [data-handover]')).toHaveCount(0);
+  // Дело у коллеги; ему — блок с возможностью попросить, просьбы нет.
+  await kp.goto(`/kabinet#order=${ids.give}`);
+  await expect(kp.locator('#order-title')).toHaveText('Передача: отпуск');
+  await expect(kp.locator('#handover-open')).toBeHidden();
+
+  // Вторая просьба — руководитель отказывает с пояснением, эксперт видит отказ и может попросить снова.
+  expect((await ep.request.post(`/api/orders/${ids.keep}/handover`, { data: { reason: 'Болею' }, headers: H })).status()).toBe(201);
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const keep = hp.locator('#org-cases > li[data-case]').filter({ has: hp.locator('[data-handover]') });
+  await keep.locator('[data-handover-answer]').fill('Осталось только подписать — доделайте, пожалуйста');
+  await keep.locator('[data-action="handover-decline"]').click();
+  await expect(hp.locator('#org-cases-msg')).toContainText('Отказано');
+  await ep.goto(`/kabinet#order=${ids.keep}`);
+  await expect(ep.locator('#handover-declined')).toContainText('Осталось только подписать — доделайте, пожалуйста');
+  await expect(ep.locator('#handover-form')).toBeVisible();
+  await ep.locator('#handover-box').scrollIntoViewIfNeeded();
+  await shot(ep, 'f4-ekspert-otkazano');
+  for (const p of [cp, ep, hp, kp]) await p.context().close();
+});

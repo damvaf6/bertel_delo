@@ -231,6 +231,23 @@
         <ul class="list" id="deadline-history"></ul>
         <p class="msg" id="deadline-msg" role="status" aria-live="polite"></p>
       </div>
+      <div class="card hidden" id="handover-box" data-handover>
+        <h2>Передать дело коллеге</h2>
+        <p class="muted" id="handover-lead"></p>
+        <div class="hidden notice-warn" id="handover-open">
+          <p id="handover-open-text"></p>
+          <button type="button" class="secondary" id="handover-withdraw">Отозвать просьбу</button>
+        </div>
+        <p class="hidden" id="handover-declined"></p>
+        <form class="hidden" id="handover-form" novalidate>
+          <div class="field">
+            <label for="handover-reason">Причина — увидит только руководитель</label>
+            <textarea id="handover-reason" maxlength="1000" rows="2" placeholder="Отпуск с 12 октября, болезнь…"></textarea>
+          </div>
+          <button type="submit" class="secondary" id="handover-send">Попросить передать дело</button>
+        </form>
+        <p class="msg" id="handover-msg" role="status" aria-live="polite"></p>
+      </div>
       <div class="card hidden" id="org-returns-box">
         <h2>Замечания руководителя</h2>
         <p class="muted" id="org-returns-lead"></p>

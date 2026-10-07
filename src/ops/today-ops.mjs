@@ -7,6 +7,7 @@
 // эксперту и ждут исправления, дела, которые диспетчер предложил организации, сроки документов досье экспертов (2.63),
 // «горящие» (2.98): срок через 1–2 дня или прошёл, а у эксперта нет ни черновика, ни файла результата или нет фото осмотра.
 // Эксперту — очередь подписи (2.99): он подписал, организация ещё нет; руководителю в «Ждут подписи» — когда эксперт напоминал.
+// Руководителю — просьбы экспертов передать дело коллеге (2.107).
 // Руководителю — те же сведения, что в «Делах экспертов» (2.16): без заказчика, полей заявки, документов и переписки.
 // Только свои дела и свои организации.
 import { orderRef } from '../notify/registry.mjs';
@@ -17,6 +18,7 @@ import { executorSignOrg } from '../access/policy.mjs';
 import { dossierAlerts, loadDossier } from '../dossier/dossier.mjs';
 import { silentLinks } from './inspect-ops.mjs';
 import { openExtends } from './deadline-ops.mjs';
+import { openHandovers } from './handover-ops.mjs';
 
 // «Горит» — просрочено или до срока не больше двух дней (как подсветка в списке дел).
 const HOT_DAYS = 2;
@@ -114,6 +116,10 @@ async function orgPart(sql, org, registry, today) {
     order_ref: orderRef(o.id), service: service(o), deadline: o.deadline, overdue: isOverdue(o, today),
     status_name: STATUS_NAME[o.status], ...(o.expert !== undefined ? { expert: o.expert || 'Без имени' } : {}), ...extra,
   });
+  // Эксперт просит передать дело коллеге (2.107): с причиной — первой строкой, ответить одной кнопкой в «Делах экспертов».
+  const handovers = await openHandovers(sql, cases);
+  const handover = cases.filter((o) => handovers.has(o.id))
+    .map((o) => view(o, { reason: handovers.get(o.id).reason, requested_at: handovers.get(o.id).requested_at }));
   const toSign = [];
   const returned = [];
   const atRisk = [];
@@ -162,6 +168,7 @@ async function orgPart(sql, org, registry, today) {
     hot: cases.filter((o) => ['in_work', 'review'].includes(o.status) && o.deadline && o.deadline <= soon)
       .map((o) => view(o, { extend: ext.get(o.id) ?? null })),
     at_risk: atRisk,
+    handover,
     to_sign: toSign,
     returned,
     pending: offered.map((o) => view(o)),

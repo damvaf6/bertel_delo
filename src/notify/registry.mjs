@@ -19,7 +19,7 @@ export const TYPE = Object.fromEntries(TYPES.map((t) => [t.id, t]));
 // title — строка в кабинете и в СМС. order: true — событие по заявке (в СМС добавляется её короткий номер).
 // section — куда ведёт уведомление без заявки (2.45): 'orgs' (с организацией — сразу в неё), 'specialist', 'specialists', 'problems'.
 // focus (2.67) — уведомление руководителю по делу организации ведёт прямо к делу в «Организации»: 'pending' (назначить),
-// 'sign' (подписать), 'chat' (переписка с экспертом); номер дела передаётся в notify() как orderId.
+// 'sign' (подписать), 'chat' (переписка с экспертом), 'handover' (эксперт просит передать дело, 2.107); номер дела передаётся в notify() как orderId.
 // mail: true — заказчику заявки, пришедшей по письму, уходит и письмо в ту же переписку (1.9, src/mail/mail.mjs).
 export const EVENTS = {
   submitted: { type: 'dispatch', title: 'Новая заявка ждёт подбора исполнителя', order: true },
@@ -81,6 +81,9 @@ export const EVENTS = {
   executor_reassigned: { type: 'executor_work', title: 'Дело передано другому исполнителю', order: true },
   // Запрос документов (2.64): заказчик загрузил файл к документу, который просил исполнитель.
   docs_received: { type: 'executor_work', title: 'Заказчик загрузил запрошенный документ', order: true },
+  // Просьба передать дело коллеге (2.107): руководителю — к делу в «Делах экспертов»; эксперту — отказ.
+  org_handover_requested: { type: 'executor_work', title: 'Эксперт просит передать дело коллеге — ответьте в «Делах экспертов»', order: false, section: 'orgs', focus: 'handover' },
+  org_handover_declined: { type: 'executor_work', title: 'Руководитель организации не стал передавать дело — оно остаётся у Вас', order: true },
   org_case_given: { type: 'executor_work', title: 'Руководитель организации передал Вам дело в работе', order: true },
   // Эксперту (2.76): руководитель отдал предложенное ему дело другому (или забрал назад) до его ответа — без номера.
   org_offer_taken: { type: 'executor_work', title: 'Руководитель организации снял предложенное Вам дело — отвечать не нужно', order: false, section: 'specialist' },
@@ -113,7 +116,7 @@ export const EVENTS = {
 
 const ID_RE = /^[a-z_]{1,40}$/;
 export const SECTIONS = ['orgs', 'specialist', 'specialists', 'problems'];
-export const FOCUS = ['pending', 'sign', 'chat'];
+export const FOCUS = ['pending', 'sign', 'chat', 'handover'];
 
 // Проверка реестра при запуске: ошибка в описании — сервер не стартует (как у модулей-профессий).
 export function validateRegistry(types = TYPES, events = EVENTS) {
