@@ -4899,3 +4899,50 @@ test('перенос срока (2.91): эксперт просит новую �
   await ectx.close();
   await dctx.close();
 });
+
+test('мои итоги за месяц (2.92): эксперт в профиле видит сдано, в срок, возвраты, вознаграждение и выплачено; прошлый месяц', async ({ page }) => {
+  const expert = await signIn(page, '+79990009351');
+  const ids = await db(async (c) => {
+    await c.query("insert into specialists (user_id, created_at) values ($1, now() - interval '2 years')", [expert.id]);
+    const mk = async (title, status, days) => (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, price_kop, paid_at, deadline)
+      values ($1, $2, 'expertise', 'realty', $3, $1, 1500000, now(), current_date + $4::int) returning id`, [expert.id, title, status, days])).rows[0].id;
+    const onTime = await mk('Квартира на Тихой: итоги в срок', 'done', 4);
+    const late = await mk('Гараж в Химках: итоги позже срока', 'done', -2);
+    await mk('Дача: итоги в работе', 'in_work', -1);
+    await c.query(`insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $3, '{}', 'accepted', now()), ($2, $3, '{}', 'accepted', now())`, [onTime, late, expert.id]);
+    await c.query(`insert into order_status_history (order_id, from_status, to_status, side, at) values ($1, 'review', 'done', 'dispatcher', now() - interval '1 minute'),
+      ($2, 'review', 'in_work', 'dispatcher', now()), ($2, 'review', 'done', 'dispatcher', now())`, [onTime, late]);
+    await c.query(`insert into payouts (order_id, executor_user_id, amount_kop, commission_kop, status, paid_at) values ($1, $2, 1200000, 300000, 'succeeded', now())`, [onTime, expert.id]);
+    return { onTime, late };
+  });
+  await page.goto('/kabinet#specialist');
+  const box = page.locator('#my-report-box');
+  await expect(box.getByRole('heading', { name: 'Мои итоги за месяц' })).toBeVisible();
+  await expect(page.locator('#my-report-month option')).toHaveCount(13);
+  await expect(page.locator('#my-report-month option').first()).toContainText('(текущий)');
+  const total = page.locator('#my-report-total');
+  await expect(total).toContainText('2 (в срок — 1, позже срока — 1)');
+  await expect(total).toContainText('Просрочено сейчас1');
+  await expect(total).toContainText('на доработку — 1');
+  await expect(total).toContainText('24 000 ₽');
+  await expect(total).toContainText('Выплачено за месяц12 000 ₽');
+  const rows = page.locator('#my-report-cases > li');
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0)).toContainText('Квартира на Тихой: итоги в срок');
+  await expect(rows.nth(0)).toContainText('в срок');
+  await expect(rows.nth(0)).toContainText('12 000 ₽ · выплачено');
+  await expect(rows.nth(1).locator('.overdue')).toContainText('позже срока');
+  await expect(rows.nth(1)).toContainText('ждёт выплаты');
+  await box.scrollIntoViewIfNeeded();
+  await shot(page, 'a10-ekspert-moi-itogi-mesyac');
+  // Прошлый месяц — пусто.
+  await page.locator('#my-report-month').selectOption({ index: 1 });
+  await expect(total).toContainText('Принято новых дел0');
+  await expect(page.locator('#my-report-empty')).toBeVisible();
+  await expect(rows).toHaveCount(0);
+  await shot(page, 'a10b-ekspert-moi-itogi-proshlyj');
+  // Строка дела ведёт в само дело.
+  await page.locator('#my-report-month').selectOption({ index: 0 });
+  await rows.nth(1).getByRole('link').click();
+  await expect(page).toHaveURL(new RegExp(`#order=${ids.late}`));
+});

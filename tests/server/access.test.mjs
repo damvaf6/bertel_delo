@@ -1769,6 +1769,63 @@ test('свои заготовки абзацев (2.87): видит и меня�
   assert.equal((await exp.req('DELETE', `/api/specialist/me/snippets/${add.body.id}`)).status, 404, 'убранная — больше не найти');
 });
 
+test('мои итоги за месяц (2.92): только свои дела — частные и от организации; в срок, возвраты, деньги; не специалист — 404', async () => {
+  cover('specialist.me.report');
+  const exp = await login(S, '+79990001493');
+  const other = await login(S, '+79990001494');
+  await makeSpecialist(S.sql, exp.user.id);
+  await makeSpecialist(S.sql, other.user.id);
+  const report = (c, q = '') => c.req('GET', `/api/specialist/me/report${q}`);
+  assert.equal((await report(U.owner)).status, 404, 'не специалист');
+  const empty = (await report(exp)).body.report;
+  const month = new Date(Date.now() + 3 * 3_600_000).toISOString().slice(0, 7);
+  assert.equal(empty.month, month);
+  assert.deepEqual(empty.months, [month], 'только что стал специалистом — только текущий месяц');
+  assert.deepEqual(empty.total, { accepted: 0, done: 0, done_on_time: 0, done_late: 0, overdue_now: 0, returned_head: 0, returned_dispatcher: 0, fee_kop: 0, paid_kop: 0 });
+  assert.deepEqual(empty.cases, []);
+  for (const q of ['?month=2020-01', '?month=2099-01', '?month=13']) assert.equal((await report(exp, q)).body.error, 'bad_month', q);
+  await S.sql`update specialists set created_at = now() - interval '2 years' where user_id = ${exp.user.id}`;
+  // Частное дело сдано в срок и выплачено; дело от организации — позже срока, руководитель и диспетчер возвращали;
+  // одно в работе просрочено; дело другого эксперта — не считается.
+  const order = async (title, status, days, priceKop, executor = exp.user.id) => {
+    const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
+    await S.sql`update orders set status = ${status}, deadline = current_date + ${days}::int, price_kop = ${priceKop}, executor_user_id = ${executor} where id = ${o.id}`;
+    return o;
+  };
+  const onTime = await order('Итоги: частное в срок', 'done', 5, 1_000_000);
+  const late = await order('Итоги: от организации позже срока', 'closed', -1, 2_000_000);
+  const overdue = await order('Итоги: просрочено', 'in_work', -2, 500_000);
+  const foreign = await order('Итоги: чужое', 'done', 5, 3_000_000, other.user.id);
+  for (const o of [onTime, late]) {
+    await S.sql`insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values (${o.id}, ${exp.user.id}, '{}', 'accepted', now())`;
+  }
+  const hist = (o, from, to) => S.sql`insert into order_status_history (order_id, from_status, to_status, side) values (${o.id}, ${from}, ${to}, 'dispatcher')`;
+  await hist(onTime, 'review', 'done');
+  await hist(late, 'review', 'in_work'); await hist(late, 'review', 'done'); await hist(late, 'done', 'closed');
+  await hist(foreign, 'review', 'done');
+  await S.sql`insert into payouts (order_id, executor_user_id, amount_kop, commission_kop, status, paid_at)
+              values (${onTime.id}, ${exp.user.id}, 800000, 200000, 'succeeded', now()),
+                     (${foreign.id}, ${other.user.id}, 2400000, 600000, 'succeeded', now())`;
+  const doc = await upload(U.owner, overdue.id, 'отчёт.pdf');
+  await S.sql`insert into org_returns (order_id, document_id, org_id, executor_user_id, returned_by, filename, comment)
+              values (${overdue.id}, ${doc.id}, ${orgA.id}, ${exp.user.id}, ${U.headA.user.id}, 'отчёт.pdf', 'Поправьте')`;
+  const r = (await report(exp)).body.report;
+  assert.equal(r.months.length, 13);
+  assert.deepEqual(r.total, { accepted: 2, done: 2, done_on_time: 1, done_late: 1, overdue_now: 1, returned_head: 1, returned_dispatcher: 1,
+    fee_kop: 800_000 + 1_600_000, paid_kop: 800_000 });
+  assert.deepEqual(r.cases.map((c) => [c.id, c.late, c.fee_kop, c.paid]), [[onTime.id, false, 800_000, true], [late.id, true, 1_600_000, false]]);
+  assert.ok(!JSON.stringify(r).includes('Итоги: чужое'));
+  assert.ok(!JSON.stringify(r).includes('Итоги: просрочено'), 'в списке — только сданные');
+  // Другой эксперт видит только своё; прошлый месяц — пусто, «просрочено сейчас» не считается.
+  const o2 = (await report(other)).body.report;
+  assert.deepEqual(o2.cases.map((c) => c.id), [foreign.id]);
+  assert.equal(o2.total.paid_kop, 2_400_000);
+  const prev = (await report(exp, `?month=${r.months[1]}`)).body.report;
+  assert.equal(prev.current, false);
+  assert.equal(prev.total.done, 0);
+  assert.equal(prev.total.overdue_now, null);
+});
+
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {
   const PUBLIC = ['health', 'auth.code', 'auth.verify', 'files.memory', 'files.memory.upload', 'test.calls', 'test.script', 'test.reset', 'test.mail.inbound', 'stage.login', 'payments.notify',
     'inspect.view', 'inspect.photo', 'inspect.finish'];
