@@ -122,6 +122,7 @@ export async function loadChat(current) {
     el('div', { class: 'who', text: [m.mine ? 'Вы' : SIDE_RU[m.side], m.author_name && !m.mine ? m.author_name : null, timeRu(m.at)].filter(Boolean).join(' · ') }),
     el('div', { class: 'body', text: m.body }))));
   $('messages-empty').classList.toggle('hidden', messages.length > 0);
+  setNext({ chat: { count: messages.length } });
   $('message-form').classList.toggle('hidden', !canWrite);
   // Готовые фразы (2.84): нажатие подставляет текст в поле (к уже написанному — с новой строки, без второго
   // «Здравствуйте!»); отправляет человек. Текст берётся свежим: документы могли запросить или прислать после открытия дела.

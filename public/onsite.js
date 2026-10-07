@@ -3,6 +3,7 @@
 // помощника. Тексты — через textContent.
 import { api, el, say } from '/common.js';
 import { loadInspection } from '/inspect.js';
+import { setNext } from '/next.js';
 
 const $ = (id) => document.getElementById(id);
 const timeRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
@@ -25,6 +26,7 @@ export async function loadOnsite(current) {
   const r = await api('GET', `/api/orders/${current.order.id}/onsite`);
   box.classList.remove('hidden');
   const open = r.visits.find((v) => v.state === 'active');
+  setNext({ onsite: open ? 'выезд назначен' : r.visits.some((v) => v.state === 'finished') ? 'выезд завершён' : 'выезд не назначен' });
   $('onsite-assign').classList.toggle('hidden', !r.can_assign);
   if (r.can_assign) {
     $('onsite-helper').replaceChildren(...(r.helpers.length

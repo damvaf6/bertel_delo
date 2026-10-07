@@ -8,8 +8,8 @@ import { seedDemo, codeLogin, DEMO_PEOPLE } from '../tools/demo-seed.mjs';
 const CONTROL = process.env.UI_TEST_CONTROL_TOKEN || TEST_TOKEN;
 const ADMIN = '+79990009510';
 
-async function phoneAs(browser, baseURL, cookie) {
-  const ctx = await browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, isMobile: true, hasTouch: true, locale: 'ru-RU', acceptDownloads: true });
+async function phoneAs(browser, baseURL, cookie, { clean = false } = {}) {
+  const ctx = await browser.newContext({ baseURL, ...(clean ? { storageState: { cookies: [], origins: [] } } : {}), viewport: { width: 412, height: 915 }, isMobile: true, hasTouch: true, locale: 'ru-RU', acceptDownloads: true });
   const [name, ...rest] = cookie.split('=');
   await ctx.addCookies([{ name, value: rest.join('='), url: new URL(baseURL).origin }]);
   return ctx.newPage();
@@ -94,4 +94,84 @@ test('страница дела: ход и история свёрнуты, ра
   await expect(steps).toHaveJSProperty('open', false);
   await expect(history).toHaveJSProperty('open', false);
   await page.context().close();
+});
+
+// Задача 2.101: страница дела у эксперта короче — блоки свёрнуты в строку с состоянием, раскрыт нужный сейчас;
+// переход «к разделу» раскрывает свой блок. Заказчику страница прежняя.
+test('дело у эксперта: блоки свёрнуты в строку с состоянием, раскрыт нужный сейчас', async ({ browser, baseURL }) => {
+  test.setTimeout(180_000);
+  const c = new pg.Client({ connectionString: DB_URL });
+  await c.connect();
+  try { await c.query("insert into users (phone, platform_role) values ($1, 'admin') on conflict (phone) do update set platform_role = 'admin'", [ADMIN]);
+    await c.query("update login_codes set created_at = created_at - interval '2 minutes' where phone like '+79990001%'");
+  } finally { await c.end(); }
+  const r = await seedDemo({ base: baseURL, login: codeLogin(baseURL, CONTROL), adminPhone: ADMIN });
+
+  const ep = await phoneAs(browser, baseURL, r.sessions.morozova, { clean: true });
+  await ep.goto(`/kabinet#order=${r.cases.land}`);
+  await expect(ep.locator('#order-status')).toHaveText('В работе');
+  // Нужен сейчас — осмотр (фото ещё нет): он раскрыт, остальные свёрнуты в строку с состоянием.
+  await expect(ep.locator('#inspect-box')).not.toHaveClass(/folded/);
+  await expect(ep.locator('#inspect-new')).toBeVisible();
+  await expect(ep.locator('#inspect-box .fold-note')).toHaveText('фото нет');
+  for (const id of ['docs-box', 'chat-box', 'deadline-box', 'draft-box', 'docreq-box']) await expect(ep.locator(`#${id}`)).toHaveClass(/folded/);
+  await expect(ep.locator('#docs-box .fold-note')).toHaveText('файлов: 1 · результата нет');
+  await expect(ep.locator('#chat-box .fold-note')).toHaveText('сообщений: 2');
+  await expect(ep.locator('#deadline-box .fold-note')).toHaveText(/^до \d+ [а-я]+$/);
+  await expect(ep.locator('#draft-box .fold-note')).toHaveText('черновика нет');
+  await expect(ep.locator('#docreq-box .fold-note')).toHaveText('ничего не запрошено');
+  await expect(ep.locator('#messages li').first()).toBeHidden();
+  await expect(ep.locator('#chat-box h2')).toBeVisible();
+  expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await ep.screenshot({ path: 'test-results/screens/case-05-ekspert-bloki-svernuty.png', fullPage: true });
+
+  // Раскрыть и свернуть — нажатием на заголовок или «Развернуть»; выбор не сбрасывается при обновлении дела.
+  await ep.locator('#chat-box .fold-toggle').click();
+  await expect(ep.locator('#chat-box')).not.toHaveClass(/folded/);
+  await expect(ep.locator('#chat-box .fold-toggle')).toHaveAttribute('aria-expanded', 'true');
+  await expect(ep.locator('#messages li').first()).toBeVisible();
+  await ep.locator('#message-text').fill('Фото получила, спасибо.');
+  await ep.locator('#message-send').click();
+  await expect(ep.locator('#chat-box .fold-note')).toHaveText('сообщений: 3');
+  await expect(ep.locator('#chat-box')).not.toHaveClass(/folded/);
+  await ep.locator('#inspect-box h2').click();
+  await expect(ep.locator('#inspect-box')).toHaveClass(/folded/);
+  await expect(ep.locator('#inspect-new')).toBeHidden();
+
+  // «Что дальше» → шаг раскрывает свой блок.
+  await ep.locator('#next-steps [data-step="draft"] button').click();
+  await expect(ep.locator('#draft-box')).not.toHaveClass(/folded/);
+  await expect(ep.locator('#draft-ai')).toBeVisible();
+
+  // Переход «к разделу» (из «Сегодня», уведомления) раскрывает свой блок.
+  await ep.goto(`/kabinet#order=${r.cases.garden}`); // своё закрытое дело: всё свёрнуто, раскрывать нечего
+  await expect(ep.locator('#order-status')).toHaveText('Закрыта');
+  await expect(ep.locator('#docs-box')).toHaveClass(/folded/);
+  await expect(ep.locator('#docs-box .fold-note')).toContainText('результат: 1');
+  await ep.goto(`/kabinet#order=${r.cases.land}&to=deadline`);
+  await expect(ep.locator('#deadline-box')).not.toHaveClass(/folded/);
+  await expect(ep.locator('#deadline-send')).toBeVisible();
+  await expect(ep.locator('#chat-box')).toHaveClass(/folded/);
+  await ep.locator('#deadline-box').screenshot({ path: 'test-results/screens/case-06-ekspert-srok-raskryt.png' });
+
+  // «Развернуть все блоки» — помнится на телефоне; «Свернуть блоки» возвращает как было.
+  await ep.locator('#fold-all').click();
+  await expect(ep.locator('#fold-all')).toHaveText('Свернуть блоки');
+  for (const id of ['docs-box', 'chat-box', 'inspect-box']) await expect(ep.locator(`#${id}`)).not.toHaveClass(/folded/);
+  await ep.reload();
+  await expect(ep.locator('#chat-box .fold-note')).toHaveText('сообщений: 3');
+  await expect(ep.locator('#chat-box')).not.toHaveClass(/folded/);
+  await ep.locator('#fold-all').click();
+  await expect(ep.locator('#fold-all')).toHaveText('Развернуть все блоки');
+  await expect(ep.locator('#chat-box')).toHaveClass(/folded/);
+  await ep.context().close();
+
+  // Заказчику страница прежняя: блоки не сворачиваются.
+  const cp = await phoneAs(browser, baseURL, r.sessions.sidorova, { clean: true });
+  await cp.goto(`/kabinet#order=${r.cases.land}`);
+  await expect(cp.locator('#messages li').first()).toBeVisible();
+  await expect(cp.locator('#chat-box')).not.toHaveClass(/folded/);
+  await expect(cp.locator('.fold-bar:visible')).toHaveCount(0);
+  await expect(cp.locator('#fold-all')).toBeHidden();
+  await cp.context().close();
 });
