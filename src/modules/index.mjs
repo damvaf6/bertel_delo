@@ -18,7 +18,8 @@
 //       approach — раздел только для подхода 'comparative' | 'cost' | 'income': если исполнитель его не применяет (2.33),
 //       раздела в черновике нет, а разделы с номером в начале названия («7. …») нумеруются заново подряд;
 //       reuse: true — методический раздел (стандарты, допущения, выбор подходов, методика): эксперт может взять его текст
-//       из своего прошлого дела той же услуги (2.65), данные прошлого заказчика и объекта программа вычищает
+//       из своего прошлого дела той же услуги (2.65), данные прошлого заказчика и объекта программа вычищает;
+//       sources: true — сюда программа вставляет перечень использованных документов дела (2.95, src/docs/sources.mjs)
 //     approaches?: { services: [id услуги…] }  — исполнитель отмечает, какие подходы к оценке применяет (2.33)
 //     inspection?: [{ id, title, hint?, services?: [id услуги…], optional? }…],  — шаги дистанционного осмотра (2.3)
 //     request_docs?: [{ id, title, hint?, services?: [id услуги…], basis?: [вид основания…] }…],  — документы, которые
@@ -156,9 +157,10 @@ export function validateModule(m) {
     checkIds(m.draft, `${at}, разделы черновика`);
     for (const d of m.draft) {
       const where = `${at}, раздел черновика ${d.id}`;
-      onlyKeys(d, ['id', 'title', 'services', 'ask', 'dossier', 'table', 'approach', 'reuse'], where);
+      onlyKeys(d, ['id', 'title', 'services', 'ask', 'dossier', 'table', 'approach', 'reuse', 'sources'], where);
       if (d.reuse !== undefined && d.reuse !== true) fail(where, 'reuse — только true (методический раздел)');
-      if (d.reuse && (d.table || d.dossier)) fail(where, 'reuse — не у раздела с таблицей или досье: их программа заполняет сама');
+      if (d.sources !== undefined && d.sources !== true) fail(where, 'sources — только true (перечень использованных документов)');
+      if (d.reuse && (d.table || d.dossier || d.sources)) fail(where, 'reuse — не у раздела с таблицей, досье или перечнем: их программа заполняет сама');
       if (d.approach !== undefined && !Object.hasOwn(APPROACHES, d.approach)) fail(where, `approach — одно из: ${Object.keys(APPROACHES).join(', ')}`);
       if (d.table !== undefined && !DRAFT_TABLES.includes(d.table)) fail(where, "table — 'task' (задание из полей заявки), 'approaches' (подходы и веса), 'analogs' (аналоги из дела) или 'questions' (вопросы из заявки)");
       if (d.table === 'questions') {
@@ -341,7 +343,7 @@ export function createRegistry(modules = DEFAULT_MODULES) {
       return m.draft.filter((d) => (!d.services || d.services.includes(serviceId)) && (!chosen || !d.approach || chosen.includes(d.approach)))
         .map((d) => {
           const title = chosen && /^\d+\.\s/.test(d.title) ? d.title.replace(/^\d+/, String(++n)) : d.title;
-          return { id: d.id, title, ...(d.ask ? { ask: d.ask } : {}), ...(d.dossier ? { dossier: d.dossier } : {}), ...(d.table ? { table: d.table } : {}), ...(d.approach ? { approach: d.approach } : {}), ...(d.reuse ? { reuse: true } : {}) };
+          return { id: d.id, title, ...(d.ask ? { ask: d.ask } : {}), ...(d.dossier ? { dossier: d.dossier } : {}), ...(d.table ? { table: d.table } : {}), ...(d.approach ? { approach: d.approach } : {}), ...(d.reuse ? { reuse: true } : {}), ...(d.sources ? { sources: true } : {}) };
         });
     },
     // Выбирает ли исполнитель подходы к оценке для услуги (2.33).

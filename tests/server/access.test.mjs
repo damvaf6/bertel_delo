@@ -885,7 +885,7 @@ test('ИИ (1.8): разбор проблемы, ассистент, ИИ-про
 });
 
 test('черновик заключения (2.2): видят исполнитель и служебные; готовит и правит только исполнитель в работе; заказчику — нет', async () => {
-  for (const id of ['draft.get', 'draft.ai', 'draft.save', 'draft.attach', 'draft.docx', 'draft.approaches', 'draft.past.list', 'draft.past']) cover(id);
+  for (const id of ['draft.get', 'draft.ai', 'draft.save', 'draft.attach', 'draft.docx', 'draft.approaches', 'draft.past.list', 'draft.past', 'draft.sources']) cover(id);
   // Заявка без исполнителя: заказчик и его организация черновика не видят, посторонние — «не найдено».
   for (const k of ['owner']) assert.equal((await U[k].req('GET', `/api/orders/${ownOrder.id}/draft`)).status, 403, k);
   for (const k of ['memberA', 'headA']) assert.equal((await U[k].req('GET', `/api/orders/${orgOrder.id}/draft`)).status, 403, k);
@@ -895,7 +895,7 @@ test('черновик заключения (2.2): видят исполните
     assert.equal(r.status, 200, k);
     assert.equal(r.body.can_edit, false, k);
   }
-  for (const [method, path, body] of [['POST', 'draft/ai', {}], ['PUT', 'draft', { body: 'x' }], ['POST', 'draft/result', { confirm: true }], ['PUT', 'approaches', { approaches: ['cost'] }], ['GET', 'draft/past'], ['POST', 'draft/past', { past_id: ownOrder.id }]]) {
+  for (const [method, path, body] of [['POST', 'draft/ai', {}], ['PUT', 'draft', { body: 'x' }], ['POST', 'draft/result', { confirm: true }], ['PUT', 'approaches', { approaches: ['cost'] }], ['GET', 'draft/past'], ['POST', 'draft/past', { past_id: ownOrder.id }], ['POST', 'draft/sources', {}]]) {
     for (const k of ['owner', 'dispatcher', 'admin']) assert.equal((await U[k].req(method, `/api/orders/${ownOrder.id}/${path}`, body)).status, 403, `${k} ${path}`);
     for (const k of ['stranger', 'headB']) assert.equal((await U[k].req(method, `/api/orders/${ownOrder.id}/${path}`, body)).status, 404, `${k} ${path}`);
   }
