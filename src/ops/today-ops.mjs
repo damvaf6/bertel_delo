@@ -4,7 +4,8 @@
 // прислал запрошенные документы, пришли фото осмотра или владелец нажал «Готово», помощник завершил выезд, написали заказчик
 // или диспетчер (2.86).
 // Руководителю — по каждой своей организации: дела экспертов, у которых горит срок, ждут подписи организации, возвращены
-// эксперту и ждут исправления, дела, которые диспетчер предложил организации, сроки документов досье экспертов (2.63).
+// эксперту и ждут исправления, дела, которые диспетчер предложил организации, сроки документов досье экспертов (2.63),
+// «горящие» (2.98): срок через 1–2 дня или прошёл, а у эксперта нет ни черновика, ни файла результата или нет фото осмотра.
 // Руководителю — те же сведения, что в «Делах экспертов» (2.16): без заказчика, полей заявки, документов и переписки.
 // Только свои дела и свои организации.
 import { orderRef } from '../notify/registry.mjs';
@@ -97,7 +98,19 @@ async function orgPart(sql, org, registry, today) {
   });
   const toSign = [];
   const returned = [];
+  const atRisk = [];
   for (const o of cases.filter((x) => x.status === 'in_work')) {
+    // «Горящее» (2.98): срок близко, а работа не начата — нет черновика и результата, нет фото осмотра (если у услуги есть осмотр).
+    if (o.deadline && o.deadline <= soon) {
+      const n = await sql.one`
+        select (select count(*)::int from result_drafts where order_id = ${o.id}) as drafts,
+               (select count(*)::int from documents where order_id = ${o.id} and kind = 'result' and deleted_at is null) as results,
+               (select count(*)::int from documents where order_id = ${o.id} and kind = 'inspection' and deleted_at is null) as photos`;
+      const missing = [];
+      if (!n.drafts && !n.results) missing.push('нет черновика');
+      if (!n.photos && registry.inspectionSteps(o.module, o.service).length) missing.push('нет фото осмотра');
+      if (missing.length) atRisk.push(view(o, { missing }));
+    }
     const signs = await orderSignatures(sql, o.id);
     const docs = await sql`select id from documents where order_id = ${o.id} and kind = 'result' and deleted_at is null
                            and uploaded_by = (select executor_user_id from orders where id = ${o.id})`;
@@ -125,6 +138,7 @@ async function orgPart(sql, org, registry, today) {
     id: org.id,
     name: org.name,
     hot: cases.filter((o) => ['in_work', 'review'].includes(o.status) && o.deadline && o.deadline <= soon).map((o) => view(o)),
+    at_risk: atRisk,
     to_sign: toSign,
     returned,
     pending: offered.map((o) => view(o)),
