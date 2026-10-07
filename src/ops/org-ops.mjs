@@ -13,6 +13,7 @@ import { STATUS_NAME, addDays, isOverdue, todayMsk } from '../orders/workflow.mj
 import { monthRu, orgMonthDoneCases, orgMonthReport, reportCsv, reportMonth } from '../orgs/report.mjs';
 import { buildOrgMonthArchive } from './case-ops.mjs';
 import { openExtends } from './deadline-ops.mjs';
+import { openHandovers } from './handover-ops.mjs';
 
 export const INVITE_TTL_DAYS = 14;
 export const LIMITS = {
@@ -211,9 +212,12 @@ export function orgOps() {
           where org_id = ${org.id} and order_id = any(${rows.map((o) => o.id)}::uuid[]) group by order_id`).map((c) => [c.order_id, c]) : []);
         // Эксперт попросил перенести срок (2.100): на какую дату — пока диспетчер не ответил; причину руководитель не видит.
         const ext = await openExtends(sql, rows.filter((o) => CASES_ACTIVE.includes(o.status)).map((o) => o.id));
+        // Эксперт просит передать дело коллеге (2.107): причина — руководителю, передать или отказать.
+        const handovers = await openHandovers(sql, rows);
         const cases = rows.map((o) => ({
           ...(waits.get(o.id) ?? { sign_wait: 0, returned_open: false }),
           extend: ext.get(o.id) ?? null,
+          handover: handovers.get(o.id) ?? null,
           transfer_to: transfer.get(o.id) ?? [],
           offer_wait: waitingAnswer.get(o.id) ?? null,
           offered_at: offeredAt.get(o.id) ?? null,
@@ -476,6 +480,9 @@ export function orgOps() {
                                  where order_id = ${cur.id} and revoked_at is null and finished_at is null and expires_at > now() returning id`;
           const visits = await tx`update onsite_visits set cancelled_at = now()
                                   where order_id = ${cur.id} and finished_at is null and cancelled_at is null returning helper_id`;
+          // Просьба эксперта передать дело (2.107) выполнена.
+          await tx`update handover_requests set outcome = 'transferred', decided_by = ${actor.id}, decided_at = now(), to_user = ${specialistId}
+                   where order_id = ${cur.id} and outcome is null`;
           await audit(tx, actor, 'org.case.transfer', 'order', cur.id, { org: org.id, from: prev, to: specialistId, reason,
             links_closed: links.length, visits_cancelled: visits.length });
           if (visits.length) await notify(tx, 'onsite_cancelled', { users: visits.map((v) => v.helper_id), actor });

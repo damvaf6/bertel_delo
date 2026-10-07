@@ -84,9 +84,12 @@ export async function loadToday() {
       location.hash = x?.order_ref ? `org=${g.id}&case=${x.order_ref.slice(2)}&to=${to}` : `org=${g.id}`;
     };
     const caseLine = (x) => [`${x.service} · ${x.order_ref}`, [x.expert, deadline({ ...x, who: 'эксперт просит' }, t.today)].filter(Boolean).join(' · ')];
-    // «Горящие» (2.98) — первой строкой; в «Горит срок у экспертов» они не повторяются.
+    // «Горящие» (2.98) — сразу после просьб передать дело; в «Горит срок у экспертов» они не повторяются.
     const risky = new Set((g.at_risk ?? []).map((x) => x.order_ref));
     const part = [
+      // Эксперт просит передать дело коллеге (2.107) — к делу в «Делах экспертов»: «Передать» или «Отказать».
+      ...group(`org-handover-${g.id}`, 'Эксперт просит передать дело коллеге', g.handover ?? [], (x) => [...caseLine(x),
+        `${since(x.requested_at)} · причина: ${x.reason}`], toOrg('handover')),
       ...group(`org-risk-${g.id}`, 'Горит: нет черновика или фото осмотра', g.at_risk ?? [], (x) => [...caseLine(x), x.missing.join(' · ')], toOrg('case')),
       ...group(`org-sign-${g.id}`, 'Ждут подписи организации', g.to_sign, (x) => [...caseLine(x),
         `файлов: ${x.files}${x.reminded_at ? ` · эксперт напомнил ${since(x.reminded_at)}` : ''}`], toOrg('sign')),

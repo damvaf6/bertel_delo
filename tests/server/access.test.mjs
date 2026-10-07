@@ -1156,7 +1156,7 @@ test('дела экспертов (2.16): видит только руковод
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.cases.length, 1);
   const c = r.body.cases[0];
-  assert.deepEqual(Object.keys(c).sort(), ['active', 'chat', 'deadline', 'expert', 'extend', 'fee_kop', 'hot', 'id', 'offer_wait', 'offered_at', 'order_ref', 'overdue', 'payout', 'returned_open', 'service', 'sign_wait', 'status', 'status_name', 'transfer_to']);
+  assert.deepEqual(Object.keys(c).sort(), ['active', 'chat', 'deadline', 'expert', 'extend', 'fee_kop', 'handover', 'hot', 'id', 'offer_wait', 'offered_at', 'order_ref', 'overdue', 'payout', 'returned_open', 'service', 'sign_wait', 'status', 'status_name', 'transfer_to']);
   assert.deepEqual(Object.keys(c.chat).sort(), ['expert_last', 'messages']);   // переписка (2.67): только число и чьё последнее, без текста
   assert.equal(c.status, 'review');
   assert.equal(c.expert, 'Эксперт Б');
@@ -1519,6 +1519,25 @@ test('передача дела в работе (2.62): только руков�
   assert.equal((await result(expertC, 'отчёт.txt')).status, 201);
   await S.sql`update orders set status = 'review' where id = ${o.id}`;
   assert.equal((await transfer(U.headB, orgB.id, expertB.user.id)).body.error, 'status_changed');
+});
+
+test('просьба передать дело коллеге (2.107): видит и просит только исполнитель; отказывает только руководитель организации эксперта', async () => {
+  for (const id of ['handover.get', 'handover.create', 'handover.withdraw', 'orgs.cases.handover_decline']) cover(id);
+  // Подробно — tests/server/handover.test.mjs; здесь — чужие и стороны заявки без исполнителя.
+  const base = `/api/orders/${ownOrder.id}/handover`;
+  for (const who of ['stranger', 'headA', 'headB', 'spec']) {
+    assert.equal((await U[who].req('GET', base)).status, 404, `${who}: смотреть`);
+    assert.equal((await U[who].req('POST', base, { reason: 'Отпуск' })).status, 404, `${who}: просить`);
+    assert.equal((await U[who].req('DELETE', `${base}/1`)).status, 404, `${who}: отозвать`);
+  }
+  for (const who of ['owner', 'dispatcher', 'admin']) {
+    assert.equal((await U[who].req('GET', base)).body.available, false, who);
+    assert.equal((await U[who].req('POST', base, { reason: 'Отпуск' })).status, 403, who);
+  }
+  const decline = (c, orgId) => c.req('POST', `/api/orgs/${orgId}/cases/${ownOrder.id}/handover/decline`, {});
+  for (const who of ['stranger', 'owner']) assert.equal((await decline(U[who], orgA.id)).status, 404, who);
+  for (const who of ['memberA', 'seniorA', 'dispatcher', 'admin']) assert.equal((await decline(U[who], orgA.id)).status, 403, who);
+  assert.equal((await decline(U.headA, orgA.id)).status, 404, 'дело не эксперта организации — «не найдено»');
 });
 
 test('запрос документов (2.64): видят те, кто видит заявку; просит только исполнитель, прикладывает заказчик', async () => {

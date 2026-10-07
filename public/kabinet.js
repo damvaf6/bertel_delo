@@ -41,9 +41,9 @@ async function route() {
   if (h === '#notifications') return showNotifications();
   refreshCounts();
   let m;
-  if ((m = h.match(/^#order=([0-9a-f-]{36})(?:&to=(inspect|chat|docs|deadline|sign))?$/i))) return openOrder(m[1], { to: m[2] });
-  // #org=…&case=XXXXXXXX&to=pending|sign|chat|case — сразу к делу организации (2.67: из уведомления или «Сегодня»).
-  if ((m = h.match(/^#org=([0-9a-f-]{36})(?:&case=([0-9A-F]{8})(?:&to=(pending|sign|chat|case))?)?$/i))) return showOrg(m[1], m[2] ? { ref: `№ ${m[2].toUpperCase()}`, to: m[3] } : null);
+  if ((m = h.match(/^#order=([0-9a-f-]{36})(?:&to=(inspect|chat|docs|deadline|sign|handover))?$/i))) return openOrder(m[1], { to: m[2] });
+  // #org=…&case=XXXXXXXX&to=pending|sign|chat|case|handover — сразу к делу организации (2.67: из уведомления или «Сегодня»).
+  if ((m = h.match(/^#org=([0-9a-f-]{36})(?:&case=([0-9A-F]{8})(?:&to=(pending|sign|chat|case|handover))?)?$/i))) return showOrg(m[1], m[2] ? { ref: `№ ${m[2].toUpperCase()}`, to: m[3] } : null);
   if (h === '#orgs') return showOrgs();
   if ((m = h.match(/^#expert=([0-9a-f-]{36})$/i))) return showExpertCard(m[1]);
   if (h === '#profile') return showProfile();

@@ -6,6 +6,7 @@
 // или забирает назад, не дожидаясь отказа (2.76).
 // Отбор одной кнопкой (2.102): горит, ждёт моей подписи, вернул эксперту, просят перенести срок, предложено и молчит —
 // с числом дел; работает вместе с поиском.
+// Эксперт просит передать дело коллеге (2.107): причина и выбор, кому, — «Передать» одной кнопкой или «Отказать».
 // «Ждут назначения» (2.17): дела, предложенные диспетчером организации, — руководитель назначает эксперта или отказывается.
 import { api, el, say } from '/common.js';
 import { expertLink } from '/expertcard.js';
@@ -36,6 +37,7 @@ wireSearch($('org-cases-search'), () => renderCases());
 
 // Отборы (2.102): только среди активных дел; кнопка видна, когда есть хоть одно такое дело.
 const FILTERS = [
+  { id: 'handover', text: 'Просят передать', test: (c) => !!c.handover },
   { id: 'hot', text: 'Горит', test: (c) => c.hot },
   { id: 'sign', text: 'Ждёт моей подписи', test: (c) => c.sign_wait > 0 },
   { id: 'returned', text: 'Вернул эксперту', test: (c) => c.returned_open },
@@ -127,7 +129,8 @@ function caseItem(org, c) {
     // Эксперт попросил перенести срок (2.100): решает диспетчер, руководитель видит новую дату.
     ...(c.extend ? [el('div', { class: 'muted', 'data-role': 'extend',
       text: `Эксперт просит перенести срок на ${dayRu(c.extend.new_deadline)} — ждёт ответа диспетчера` })] : []),
-    ...(c.status === 'in_work' ? [transferDetails(org, c)] : []),
+    ...(c.handover && c.status === 'in_work' ? [handoverBlock(org, c)] : []),
+    ...(c.status === 'in_work' && !c.handover ? [transferDetails(org, c)] : []),
     ...(c.offer_wait ? offerWait(org, c) : []),
     // Предложил диспетчер — переназначает тоже он; руководитель видит, сколько эксперт молчит.
     ...(c.status === 'awaiting_executor' && !c.offer_wait ? [el('div', { class: 'muted', 'data-role': 'offer-wait',
@@ -146,6 +149,7 @@ export function focusOrgCase({ ref, to }) {
     || document.querySelector(`#org-cases li[data-case="${r}"]`);
   if (!li) return;
   if (to === 'chat') li.querySelector('details[data-chat]')?.setAttribute('open', '');
+  if (to === 'handover') li.querySelector('[data-handover]')?.querySelector('select, button')?.focus({ preventScroll: true });
   li.scrollIntoView({ block: 'start' });
   li.classList.add('flash');
   setTimeout(() => li.classList.remove('flash'), 2000);
@@ -174,6 +178,36 @@ function transferDetails(org, c) {
   })() : [el('p', { class: 'muted', text: 'Передать некому: в организации нет другого эксперта с допуском на эту услугу, который принимает дела.' })];
   return el('details', { class: 'org-transfer', 'data-transfer': c.order_ref },
     el('summary', { text: 'Передать другому эксперту' }), ...body, msg);
+}
+
+// Эксперт просит передать дело коллеге (2.107): причина, когда попросил; выбрать, кому, и передать одной кнопкой (та же
+// передача, что 2.62, причина — из просьбы) или отказать с пояснением по желанию — эксперт получит уведомление.
+function handoverBlock(org, c) {
+  const h = c.handover;
+  const msg = el('p', { class: 'msg', role: 'status', 'aria-live': 'polite' });
+  const pick = c.transfer_to.length ? el('select', { 'aria-label': `Кому передать дело ${c.order_ref}`, 'data-handover-pick': c.order_ref },
+    ...c.transfer_to.map((x) => el('option', { value: x.user_id, text: x.full_name }))) : null;
+  const answer = el('input', { type: 'text', maxlength: '1000', placeholder: 'Пояснение эксперту, если отказываете (необязательно)',
+    'aria-label': `Пояснение эксперту по делу ${c.order_ref}`, 'data-handover-answer': c.order_ref });
+  const run = async (fn, done) => {
+    try {
+      await fn();
+      await loadOrgCases(org);
+      say($('org-cases-msg'), done, 'ok');
+    } catch (err) { say(msg, err.message); }
+  };
+  const give = () => run(() => api('POST', `/api/orgs/${org.id}/cases/${c.id}/transfer`, { specialist_id: pick.value, reason: `По просьбе эксперта: ${h.reason}`.slice(0, 1000) }),
+    'Дело передано — новый эксперт получил уведомление');
+  const refuse = () => run(() => api('POST', `/api/orgs/${org.id}/cases/${c.id}/handover/decline`, { answer: answer.value.trim() }),
+    'Отказано — дело остаётся у эксперта, ему пришло уведомление');
+  return el('div', { class: 'notice-warn', 'data-handover': c.order_ref },
+    el('p', { text: `Эксперт просит передать дело коллеге (${timeRu(h.requested_at)}). Причина: ${h.reason}` }),
+    ...(pick ? [el('label', { text: 'Кому передать' }), pick]
+      : [el('p', { class: 'muted', text: 'Передать некому: в организации нет другого эксперта с допуском на эту услугу, который принимает дела.' })]),
+    el('div', { class: 'row gap' },
+      ...(pick ? [el('button', { 'data-action': 'handover-give', onclick: give }, 'Передать')] : []),
+      el('button', { class: 'secondary', 'data-action': 'handover-decline', onclick: refuse }, 'Отказать')),
+    answer, msg);
 }
 
 // Эксперт ещё не ответил на предложенное дело (2.76): сколько ждём; отдать другому эксперту или забрать назад в «Ждут
