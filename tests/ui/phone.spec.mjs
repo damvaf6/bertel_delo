@@ -2388,8 +2388,8 @@ test('как настоящий эксперт (2.33): автобус для с�
   await sp.reload();
   await expect(sp.locator('#inspect-state')).toContainText('Не снято: Сзади, Слева, Справа, Салон — попросите доснять ниже.');
   // 2.96: у фото в деле — сквозной номер по шагам осмотра, тот же, что в Word.
-  await expect(sp.locator('#inspect-steps li[data-step="car_front"] .name')).toHaveText('Фото 1 · car_front.jpg');
-  await expect(sp.locator('#inspect-steps li[data-step="car_odometer"] .name')).toHaveText('Фото 3 · car_odometer.jpg');
+  await expect(sp.locator('#inspect-steps li[data-step="car_front"] .name')).toHaveText('Фото 1 · Осмотр · Спереди · 1.jpg');
+  await expect(sp.locator('#inspect-steps li[data-step="car_odometer"] .name')).toHaveText('Фото 3 · Осмотр · Пробег · 1.jpg');
   await sp.locator('#inspect-steps li[data-step="car_front"]').scrollIntoViewIfNeeded();
   await shot(sp, '115-ekspert-foto-osmotra-nomera');
   await expect(sp.getByLabel('Попросить переснять шаг')).toHaveValue('car_rear');
