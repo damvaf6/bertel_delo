@@ -3,6 +3,7 @@
 import { defineConfig } from '@playwright/test';
 
 const STAND = 'http://127.0.0.1:8788';
+const BASE = process.env.UI_BASE_URL || STAND;
 
 export default defineConfig({
   testDir: 'tests/ui',
@@ -12,7 +13,10 @@ export default defineConfig({
   outputDir: 'test-results/artifacts',
   globalSetup: './tests/ui/global-setup.mjs',
   use: {
-    baseURL: process.env.UI_BASE_URL || STAND,
+    baseURL: BASE,
+    // Блоки дела у эксперта по умолчанию свёрнуты (2.101); проверки сценариев идут с «Развернуть все блоки»,
+    // само сворачивание проверяет tests/ui/case.spec.mjs с чистым хранилищем.
+    storageState: { cookies: [], origins: [{ origin: new URL(BASE).origin, localStorage: [{ name: 'delo.folds', value: 'open' }] }] },
     viewport: { width: 412, height: 915 },
     deviceScaleFactor: 2.625,
     isMobile: true,
