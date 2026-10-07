@@ -3,6 +3,7 @@
 // свои у каждого руководителя в каждой организации: другой руководитель, сотрудник, эксперт и посторонний их не видят.
 import { HttpError } from '../http/core.mjs';
 import { audit, text } from './util.mjs';
+import { returnPoints } from './sign-ops.mjs';
 
 const MAX_REMARKS = 100;
 const TEXT_MAX = 500;
@@ -21,10 +22,10 @@ export function remarkOps() {
       handler: ({ sql, actor, org }) => view(sql, org.id, actor.id),
     },
     {
-      // Пункт — одна строка замечания. Такой же уже есть — повторно не сохраняется (кнопка «Запомнить пункты» безопасна).
+      // Пункт — одна строка замечания (нумерация в начале снимается, как в самом замечании — 2.93). Такой же уже есть — повторно не сохраняется (кнопка «Запомнить пункты» безопасна).
       id: 'orgs.remarks.add', method: 'POST', path: '/api/orgs/:id/remarks', auth: 'user', access,
       async handler({ sql, actor, org, body, res }) {
-        const t = text(String(body?.text ?? '').replace(/\s+/g, ' '), 'Пункт замечания', TEXT_MAX);
+        const t = text(returnPoints(String(body?.text ?? '').replace(/\s+/g, ' '))[0], 'Пункт замечания', TEXT_MAX);
         const added = await sql.tx(async (tx) => {
           await tx`select 1 from org_members where org_id = ${org.id} and user_id = ${actor.id} for update`;
           const same = await tx.one`select id from org_remarks where org_id = ${org.id} and user_id = ${actor.id} and deleted_at is null

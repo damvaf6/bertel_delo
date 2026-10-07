@@ -1791,7 +1791,7 @@ test('заготовки замечаний руководителя (2.103): с
   assert.equal(add.body.added, true);
   assert.deepEqual(add.body.remarks.map((r) => r.text), ['Нет даты осмотра в разделе 1.']);
   // Тот же пункт ещё раз — не дублируется.
-  const again = await U.headA.req('POST', base, { text: 'нет даты осмотра в разделе 1.' });
+  const again = await U.headA.req('POST', base, { text: '2. нет даты осмотра в разделе 1.' });
   assert.equal(again.status, 200);
   assert.equal(again.body.added, false);
   assert.equal(again.body.remarks.length, 1);

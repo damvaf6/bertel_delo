@@ -74,6 +74,10 @@ button:disabled { opacity: .6; cursor: default; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
 .chips button { min-height: 36px; padding: 6px 12px; border-radius: 99px; font-size: 14px; background: #fff; color: var(--accent); }
 .chips button[aria-pressed=true] { background: var(--accent); color: #fff; }
+.chips.remarks button { border-radius: 12px; text-align: left; white-space: normal; overflow-wrap: anywhere; max-width: 100%; }
+details.remarks-own { margin: 4px 0 10px; }
+details.remarks-own li { display: flex; gap: 8px; align-items: center; justify-content: space-between; overflow-wrap: anywhere; }
+details.remarks-own li > span { flex: 1 1 auto; min-width: 0; }
 h2.gap { margin-top: 16px; }
 .row select { width: auto; flex: 1 1 140px; min-width: 0; }
 /* Разделы переносятся на следующую строку, а не уходят за край экрана (2.22): у служебных их до девяти. */
