@@ -22,6 +22,7 @@ import { analogOps } from './ops/analog-ops.mjs';
 import { templateOps } from './ops/template-ops.mjs';
 import { mailOps } from './ops/mail-ops.mjs';
 import { snippetOps } from './ops/snippet-ops.mjs';
+import { remarkOps } from './ops/remark-ops.mjs';
 import { bridgeOps } from './ops/bridge-ops.mjs';
 import { todayOps } from './ops/today-ops.mjs';
 import { problemOps } from './ops/problem-ops.mjs';
@@ -37,7 +38,7 @@ import { createRegistry, DEFAULT_MODULES } from './modules/index.mjs';
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
 export function listOps(cfg, providers) {
-  const ops = [...coreOps(cfg), ...orderOps(), ...orgOps(), ...adminOps(), ...matchOps(), ...workOps(), ...moneyOps(), ...notifyOps(), ...aiOps(), ...draftOps(), ...inspectOps(), ...onsiteOps(), ...signOps(), ...dossierOps(), ...snippetOps(), ...analogOps(), ...templateOps(), ...mailOps(), ...todayOps(), ...problemOps(), ...caseOps(), ...uploadOps(), ...docRequestOps(), ...deadlineOps(), ...bridgeOps(cfg)];
+  const ops = [...coreOps(cfg), ...orderOps(), ...orgOps(), ...adminOps(), ...matchOps(), ...workOps(), ...moneyOps(), ...notifyOps(), ...aiOps(), ...draftOps(), ...inspectOps(), ...onsiteOps(), ...signOps(), ...dossierOps(), ...snippetOps(), ...remarkOps(), ...analogOps(), ...templateOps(), ...mailOps(), ...todayOps(), ...problemOps(), ...caseOps(), ...uploadOps(), ...docRequestOps(), ...deadlineOps(), ...bridgeOps(cfg)];
   if (providers.storage.kind === 'memory') ops.push(...memoryFileOps());
   if (cfg.appEnv === 'test' && cfg.testControlToken) ops.push(...testControlOps(cfg));
   ops.push(...stageLoginOps(cfg));

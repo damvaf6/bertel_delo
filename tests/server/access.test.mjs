@@ -1783,6 +1783,40 @@ test('свои заготовки абзацев (2.87): видит и меня�
   assert.equal((await exp.req('DELETE', `/api/specialist/me/snippets/${add.body.id}`)).status, 404, 'убранная — больше не найти');
 });
 
+test('заготовки замечаний руководителя (2.103): свои у руководителя в своей организации; остальным — «не найдено» или «нет прав»', async () => {
+  for (const id of ['orgs.remarks.list', 'orgs.remarks.add', 'orgs.remarks.remove']) cover(id);
+  const base = `/api/orgs/${orgA.id}/remarks`;
+  const add = await U.headA.req('POST', base, { text: '  Нет даты   осмотра в разделе 1. ' });
+  assert.equal(add.status, 201);
+  assert.equal(add.body.added, true);
+  assert.deepEqual(add.body.remarks.map((r) => r.text), ['Нет даты осмотра в разделе 1.']);
+  // Тот же пункт ещё раз — не дублируется.
+  const again = await U.headA.req('POST', base, { text: 'нет даты осмотра в разделе 1.' });
+  assert.equal(again.status, 200);
+  assert.equal(again.body.added, false);
+  assert.equal(again.body.remarks.length, 1);
+  assert.equal((await U.headA.req('POST', base, { text: '   ' })).status, 400);
+  assert.equal((await U.headA.req('POST', base, { text: 'x'.repeat(501) })).status, 400);
+  const id = add.body.remarks[0].id;
+  // Сотрудник и старший своей организации — «нет прав»; чужой руководитель и посторонние — не видят.
+  for (const k of ['memberA', 'seniorA', 'headB', 'stranger', 'spec', 'dispatcher', 'owner']) {
+    const c = U[k];
+    const list = await c.req('GET', base);
+    assert.ok([403, 404].includes(list.status), `${k}: ${list.status}`);
+    assert.ok(!JSON.stringify(list.body ?? {}).includes('Нет даты'), k);
+    assert.ok([403, 404].includes((await c.req('POST', base, { text: 'Подлог' })).status), k);
+    assert.ok([403, 404].includes((await c.req('DELETE', `${base}/${id}`)).status), k);
+  }
+  // Руководитель другой организации у себя этой заготовки не видит и не может убрать её по номеру.
+  assert.equal((await U.headB.req('GET', `/api/orgs/${orgB.id}/remarks`)).body.remarks.length, 0);
+  assert.equal((await U.headB.req('DELETE', `/api/orgs/${orgB.id}/remarks/${id}`)).status, 404);
+  assert.equal((await U.headA.req('DELETE', `${base}/abc`)).status, 404);
+  const del = await U.headA.req('DELETE', `${base}/${id}`);
+  assert.equal(del.status, 200);
+  assert.equal(del.body.remarks.length, 0);
+  assert.equal((await U.headA.req('DELETE', `${base}/${id}`)).status, 404, 'убранная — больше не найти');
+});
+
 test('мои итоги за месяц (2.92): только свои дела — частные и от организации; в срок, возвраты, деньги; не специалист — 404', async () => {
   cover('specialist.me.report');
   const exp = await login(S, '+79990001493');
