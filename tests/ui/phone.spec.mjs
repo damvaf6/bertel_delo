@@ -5187,3 +5187,112 @@ test('перечень использованных документов (2.95):
   await page.locator('#draft-sources-box').scrollIntoViewIfNeeded();
   await shot(page, '114-ekspert-perechen-dokumentov');
 });
+
+// Прогон «как эксперт и руководитель» по пачке 2.91–2.99 (2.100): стыки — горящее дело, просьба о переносе срока,
+// подпись, напоминание, возврат по пунктам, новая подпись, сдача, итоги месяца.
+test('как эксперт и руководитель (2.100): перенос срока виден руководителю, напоминание после возврата не тянется, итоги', async ({ page, browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), hp = await ctx(), dp = await ctx();
+  const customer = await signIn(page, '+79990010101');
+  const expert = await signIn(ep, '+79990010102'), head = await signIn(hp, '+79990010103'), disp = await signIn(dp, '+79990010104');
+  const { orgId, id } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Стыки ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Стыкова Вера' where id = $1", [expert.id]);
+    await c.query("update users set full_name = 'Главный Стыков' where id = $1", [head.id]);
+    await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Квартира: стыки пачки', $1, $2, 'in_work', current_date + 1, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Стыковая ул., 7","area":"52"}') returning id`, [customer.id, expert.id]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [o.id, expert.id]);
+    return { orgId: org.id, id: o.id };
+  });
+  const ru = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+  const want = inDays(8);
+
+  // Эксперт: срок завтра, ничего не готово — просит перенести срок.
+  expect((await ep.request.post(`/api/orders/${id}/deadline-requests`, { data: { new_deadline: want, reason: 'Заказчик не открыл доступ в квартиру' }, headers: H })).status()).toBe(201);
+  await ep.goto('/kabinet');
+  const hot = ep.locator('#today-box li[data-today-item="hot"]').filter({ hasText: 'Квартира: стыки пачки' });
+  await expect(hot).toContainText(`Вы попросили перенести на ${ru(want)}, ждёт ответа диспетчера`);
+  await shot(ep, 'b1-ekspert-gorit-prosil-perenos');
+
+  // Руководитель: «горящее» дело — видно, что эксперт уже попросил перенести срок (причину — нет).
+  await hp.goto('/kabinet');
+  const risk = hp.locator(`li[data-today-item="org-risk-${orgId}"]`);
+  await expect(risk).toContainText('Стыкова Вера');
+  await expect(risk).toContainText(`эксперт просит перенести на ${ru(want)}, ждёт ответа диспетчера`);
+  await expect(risk).toContainText('нет черновика · нет фото осмотра');
+  await expect(hp.locator('#today-box')).not.toContainText('доступ в квартиру');
+  await shot(hp, 'b2-rukovoditel-gorit-perenos');
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const row = hp.locator('#org-cases > li').filter({ hasText: 'Стыкова Вера' });
+  await expect(row.locator('[data-role="extend"]')).toHaveText(`Эксперт просит перенести срок на ${ru(want)} ${want.slice(0, 4)} г. — ждёт ответа диспетчера`);
+  await row.scrollIntoViewIfNeeded();
+  await shot(hp, 'b3-rukovoditel-dela-perenos');
+
+  // Диспетчер соглашается — у руководителя дело больше не горит, строки о просьбе нет.
+  const reqs = await (await dp.request.get(`/api/orders/${id}/deadline-requests`)).json();
+  expect((await dp.request.post(`/api/orders/${id}/deadline-requests/${reqs.open.id}/decide`, { data: { approve: true }, headers: H })).status()).toBe(200);
+  await hp.goto('/kabinet');
+  await expect(hp.locator(`li[data-today-item="org-risk-${orgId}"]`)).toHaveCount(0);
+  await hp.goto(`/kabinet#org=${orgId}`);
+  await expect(row.locator('[data-role="extend"]')).toHaveCount(0);
+  await expect(row).toContainText(`срок ${new Date(`${want}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })}`);
+
+  // Эксперт подписал отчёт и напомнил руководителю.
+  const up = await ep.request.post(`/api/orders/${id}/results`, { data: Buffer.from('%PDF-1.4 отчёт стыки'), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Отчёт Стыковой.pdf') } });
+  expect(up.status()).toBe(201);
+  const docId = (await up.json()).document.id;
+  expect((await ep.request.post(`/api/documents/${docId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  expect((await ep.request.post(`/api/orders/${id}/sign-reminder`, { headers: H })).status()).toBe(201);
+  await hp.goto('/kabinet');
+  await expect(hp.locator(`li[data-today-item="org-sign-${orgId}"]`)).toContainText('эксперт напомнил');
+
+  // Руководитель возвращает по пунктам: в «Подписи организации» старое «эксперт напомнил» больше не висит.
+  expect((await hp.request.post(`/api/org-documents/${docId}/return`, { data: { comment: '1. Нет даты осмотра\n2. Не указан этаж' }, headers: H })).status()).toBe(201);
+  const signing = await (await hp.request.get(`/api/orgs/${orgId}/signing`)).json();
+  expect(signing.items.find((x) => x.documents.some((d) => d.id === docId)).reminded_at).toBeNull();
+  await hp.goto('/kabinet');
+  await expect(hp.locator(`li[data-today-item="org-returned-${orgId}"]`)).toContainText('замечание: 1. Нет даты осмотра');
+  await expect(hp.locator(`li[data-today-item="org-sign-${orgId}"]`)).toHaveCount(0);
+
+  // Эксперт: в «Сегодня» — вернули, очереди подписи нет; отмечает пункты и подписывает заново.
+  await ep.goto('/kabinet');
+  await expect(ep.locator('#today-box li[data-today-item="returned"]')).toContainText('Нет даты осмотра');
+  await expect(ep.locator('#today-box li[data-today-item="sign-wait"]')).toHaveCount(0);
+  await shot(ep, 'b4-ekspert-vernuli-po-punktam');
+  const rid = signing.items.find((x) => x.documents.some((d) => d.id === docId)).returns[0].id;
+  for (const n of [1, 2]) expect((await ep.request.put(`/api/orders/${id}/org-returns/${rid}/items/${n}`, { data: { fixed: true }, headers: H })).status()).toBe(200);
+  expect((await ep.request.post(`/api/documents/${docId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  // Новая подпись — новое ожидание: прежнее напоминание не в счёт, можно напомнить сразу.
+  await ep.goto('/kabinet');
+  const sw = ep.locator('#today-box li[data-today-item="sign-wait"]');
+  await expect(sw).toContainText('можно напомнить руководителю');
+  await sw.locator('button').click();
+  await expect(ep.locator('#sign-remind')).toBeEnabled();
+  await ep.locator('#sign-wait-box').scrollIntoViewIfNeeded();
+  await shot(ep, 'b5-ekspert-novaya-podpis-napomnit');
+  await hp.goto('/kabinet');
+  const hs = hp.locator(`li[data-today-item="org-sign-${orgId}"]`);
+  await expect(hs).toContainText('файлов: 1');
+  await expect(hs).not.toContainText('эксперт напомнил');
+  await shot(hp, 'b6-rukovoditel-podpis-bez-starogo-napominaniya');
+
+  // Руководитель подписывает, эксперт сдаёт, диспетчер принимает — в «Моих итогах» дело сдано в срок (по новому сроку).
+  expect((await hp.request.post(`/api/org-documents/${docId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  expect((await ep.request.post(`/api/orders/${id}/status`, { data: { from: 'in_work', to: 'review' }, headers: H })).status()).toBe(200);
+  const rv = await (await dp.request.get(`/api/orders/${id}/review`)).json();
+  for (const c of rv.checks) expect((await dp.request.put(`/api/orders/${id}/review/${c.id}`, { data: { verdict: 'ok', round: rv.round }, headers: H })).status()).toBe(200);
+  expect((await dp.request.post(`/api/orders/${id}/status`, { data: { from: 'review', to: 'done' }, headers: H })).status()).toBe(200);
+  await ep.goto('/kabinet#specialist');
+  const total = ep.locator('#my-report-total');
+  await expect(total).toContainText('Сдано · ');
+  await expect(total).toContainText('1 (в срок — 1)');
+  await expect(total).toContainText('руководитель — 1');
+  await ep.locator('#my-report-box').scrollIntoViewIfNeeded();
+  await shot(ep, 'b7-ekspert-itogi-posle-perenosa');
+  for (const p of [ep, hp, dp]) await p.context().close();
+});

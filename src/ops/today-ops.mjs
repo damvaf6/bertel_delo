@@ -16,6 +16,7 @@ import { orderSignatures, orgReturns, signWait } from './sign-ops.mjs';
 import { executorSignOrg } from '../access/policy.mjs';
 import { dossierAlerts, loadDossier } from '../dossier/dossier.mjs';
 import { silentLinks } from './inspect-ops.mjs';
+import { openExtends } from './deadline-ops.mjs';
 
 // «Горит» — просрочено или до срока не больше двух дней (как подсветка в списке дел).
 const HOT_DAYS = 2;
@@ -74,6 +75,7 @@ async function expertPart(sql, actor, registry, today) {
     if (what.length) ready.push(item(o, { what, at: n.last_at, to: n.messages ? 'chat' : n.docs ? 'docs' : 'inspect' }));
   }
   ready.sort((a, b) => new Date(b.at) - new Date(a.at));
+  const ext = await openExtends(sql, rows.map((o) => o.id));
   // Очередь подписи (2.99): эксперт подписал, организация ещё нет — сколько ждёт, можно ли напомнить руководителю.
   const signWaits = [];
   const signOrg = await executorSignOrg(sql, actor.id);
@@ -88,7 +90,8 @@ async function expertPart(sql, actor, registry, today) {
     ready,
     sign_wait: signWaits,
     inspect_silent: silent,
-    hot: rows.filter((o) => o.status === 'in_work' && o.deadline && o.deadline <= soon).map((o) => item(o)),
+    // Уже попросил перенести срок (2.100) — в строке видно, на какую дату и что ответа ещё нет.
+    hot: rows.filter((o) => o.status === 'in_work' && o.deadline && o.deadline <= soon).map((o) => item(o, { extend: ext.get(o.id) ?? null })),
     returned,
     review: rows.filter((o) => o.status === 'review').map((o) => item(o)),
     offers: rows.filter((o) => o.status === 'awaiting_executor')
@@ -101,10 +104,12 @@ async function orgPart(sql, org, registry, today) {
   const service = (o) => registry.service(o.module, o.service)?.service.name ?? o.service;
   // Дела экспертов организации (выбрали её в профиле специалиста и состоят в ней) — как в «Делах экспертов».
   const cases = await sql`
-    select o.id, o.module, o.service, o.status, o.deadline, u.full_name as expert
+    select o.id, o.module, o.service, o.status, o.deadline, o.executor_user_id, u.full_name as expert
     from orders o join specialists s on s.user_id = o.executor_user_id and s.org_id = ${org.id}
     join org_members m on m.org_id = s.org_id and m.user_id = s.user_id join users u on u.id = o.executor_user_id
     where o.status in ('awaiting_executor', 'in_work', 'review') order by o.deadline nulls last, o.id limit ${LIMIT}`;
+  // Эксперт уже попросил перенести срок (2.100) — у «горящих» видно новую дату, пока диспетчер не ответил.
+  const ext = await openExtends(sql, cases.map((o) => o.id));
   const view = (o, extra = {}) => ({
     order_ref: orderRef(o.id), service: service(o), deadline: o.deadline, overdue: isOverdue(o, today),
     status_name: STATUS_NAME[o.status], ...(o.expert !== undefined ? { expert: o.expert || 'Без имени' } : {}), ...extra,
@@ -122,16 +127,16 @@ async function orgPart(sql, org, registry, today) {
       const missing = [];
       if (!n.drafts && !n.results) missing.push('нет черновика');
       if (!n.photos && registry.inspectionSteps(o.module, o.service).length) missing.push('нет фото осмотра');
-      if (missing.length) atRisk.push(view(o, { missing }));
+      if (missing.length) atRisk.push(view(o, { missing, extend: ext.get(o.id) ?? null }));
     }
     const signs = await orderSignatures(sql, o.id);
     const docs = await sql`select id from documents where order_id = ${o.id} and kind = 'result' and deleted_at is null
                            and uploaded_by = (select executor_user_id from orders where id = ${o.id})`;
     const waiting = docs.filter((d) => signs.get(d.id)?.expert && !signs.get(d.id)?.org).length;
     if (waiting) {
-      // Эксперт напоминал о подписи (2.99) — когда последний раз.
-      const r = await sql.one`select max(created_at) as at from sign_reminders where order_id = ${o.id} and org_id = ${org.id}`;
-      toSign.push(view(o, { files: waiting, reminded_at: r?.at ?? null }));
+      // Эксперт напоминал о подписи (2.99) — когда последний раз, пока файл ждёт (2.100).
+      const w = await signWait(sql, o);
+      toSign.push(view(o, { files: waiting, reminded_at: w?.reminded_at ?? null }));
     }
     const open = (await orgReturns(sql, o.id, { orgId: org.id })).filter((r) => r.open);
     if (open.length) returned.push(view(o, { comment: open.at(-1).comment }));
@@ -154,7 +159,8 @@ async function orgPart(sql, org, registry, today) {
     dossier,
     id: org.id,
     name: org.name,
-    hot: cases.filter((o) => ['in_work', 'review'].includes(o.status) && o.deadline && o.deadline <= soon).map((o) => view(o)),
+    hot: cases.filter((o) => ['in_work', 'review'].includes(o.status) && o.deadline && o.deadline <= soon)
+      .map((o) => view(o, { extend: ext.get(o.id) ?? null })),
     at_risk: atRisk,
     to_sign: toSign,
     returned,

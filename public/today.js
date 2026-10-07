@@ -22,8 +22,10 @@ function daysLeft(iso, today) {
 function deadline(x, today) {
   if (!x.deadline) return 'срок не указан';
   const n = daysLeft(x.deadline, today);
-  if (x.overdue || n < 0) return `просрочено — срок был ${dayRu(x.deadline)}`;
-  return n === 0 ? 'срок сегодня' : n === 1 ? 'срок завтра' : `срок ${dayRu(x.deadline)} · осталось ${n} дн.`;
+  // Уже попросили перенести срок (2.100) — на какую дату, пока диспетчер не ответил.
+  const ext = x.extend ? ` · ${x.who ?? 'просят'} перенести на ${dayRu(x.extend.new_deadline)}, ждёт ответа диспетчера` : '';
+  if (x.overdue || n < 0) return `просрочено — срок был ${dayRu(x.deadline)}${ext}`;
+  return `${n === 0 ? 'срок сегодня' : n === 1 ? 'срок завтра' : `срок ${dayRu(x.deadline)} · осталось ${n} дн.`}${ext}`;
 }
 
 // Группа строк: заголовок с числом и строки-кнопки.
@@ -56,7 +58,7 @@ export async function loadToday() {
       ...group('inspect-silent', 'Осмотр: 2 дня нет фото', e.inspect_silent ?? [], (x) => [x.title,
         `ссылка от ${since(x.link_at)}${x.expired ? ' — срок истёк' : ''}${x.sms_to ? ` · СМС на ${x.sms_to}` : ''} · отправьте снова`],
       (x) => { location.hash = `order=${x.id}&to=inspect`; }),
-      ...group('hot', 'Горит срок', e.hot, (x) => [x.title, `${x.service} · ${deadline(x, t.today)}`], toOrder),
+      ...group('hot', 'Горит срок', e.hot, (x) => [x.title, `${x.service} · ${deadline({ ...x, who: 'Вы попросили' }, t.today)}`], toOrder),
       ...group('offers', 'Новые предложения', e.offers, (x) => [x.title, [x.service, x.fee_kop ? `Вам ${rub(x.fee_kop)}` : null, deadline(x, t.today)].filter(Boolean).join(' · ')], toOrder),
       ...group('review', 'Ждут проверки диспетчера', e.review, (x) => [x.title, `${x.service} · ${deadline(x, t.today)}`], toOrder),
     );
@@ -81,7 +83,7 @@ export async function loadToday() {
     const toOrg = (to) => (x) => {
       location.hash = x?.order_ref ? `org=${g.id}&case=${x.order_ref.slice(2)}&to=${to}` : `org=${g.id}`;
     };
-    const caseLine = (x) => [`${x.service} · ${x.order_ref}`, [x.expert, deadline(x, t.today)].filter(Boolean).join(' · ')];
+    const caseLine = (x) => [`${x.service} · ${x.order_ref}`, [x.expert, deadline({ ...x, who: 'эксперт просит' }, t.today)].filter(Boolean).join(' · ')];
     // «Горящие» (2.98) — первой строкой; в «Горит срок у экспертов» они не повторяются.
     const risky = new Set((g.at_risk ?? []).map((x) => x.order_ref));
     const part = [
