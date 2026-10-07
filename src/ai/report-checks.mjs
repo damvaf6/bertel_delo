@@ -276,6 +276,97 @@ function cadastralMatch(doc, ctx) {
   return out;
 }
 
+// ——— 2.94: адрес объекта — как в заявке и одинаков по всему отчёту (титул, задание, описание, выводы) ———
+// Адрес берём только после слов «адрес объекта», «местоположение», «по адресу» и не в строках про аналоги, оценщика,
+// организацию, заказчика, регистрацию. Сверяем по частям: населённый пункт, улица, дом, корпус, строение, квартира,
+// помещение, участок. Части, которой нет в одном из адресов, не сверяем. Нет части в заявке — сверяем с первым
+// адресом в отчёте.
+const ADDR_AT = /(?:адрес\S*\s*(?:\([^)\n]{0,30}\)\s*)?(?:объект\S*|местонахожд\S*|местоположен\S*|квартир\S*|помещени\S*|участк\S*|(?<![а-яё])дом\S*|здани\S*|имуществ\S*|оцениваем\S*|исследуем\S*)(?:\s+(?:оценки|экспертизы|исследования|недвижимости))?|(?:местоположени\S*|местонахождени\S*)\s*(?:\([^)\n]{0,20}\)\s*)?(?:(?:объект|участк|квартир|помещени|здани|имуществ)\S*(?:\s+(?:оценки|экспертизы|исследования))?)?|(?<![а-яё])по\s+адресу)\s*[:\-–—]?\s*/giu;
+const ADDR_OTHER = /зарегистр|прожива|юридическ|почтов|организац|обществ|(?<![А-ЯЁ])ООО(?![А-ЯЁ])|оценщик|заказчик|исполнител|офис|(?<![а-яё])СРО(?![а-яё])|суд/iu;
+const ADDR_OBJECT = /объект|квартир|комнат|помещени|участ|здани|строени|имуществ|недвижим|(?<![а-яё])дом/iu;
+// Конец адреса: дальше идут кадастровый номер, площадь, этаж, собственник или новое предложение.
+const ADDR_END = /\s(?:с|со)\s+(?=кадастр|общ|площ)|кадастр|площад|общей|этаж|принадлеж|собственн|[;()]|\s[—–]\s|(?<=[а-яё]{4}|\d)\.\s+(?=[А-ЯЁA-Z])/iu;
+const ADDR_PART = {
+  house: /(?<![а-я])(?:д|дом|вл|владение)\.?\s*№?\s*(\d+[а-я]?(?:\/\d+[а-я]?)?)(?![\d])/u,
+  korpus: /(?<![а-я])(?:корп|корпус|к)\.?\s*(\d+[а-я]?)(?!\d)/u,
+  str: /(?<![а-я])(?:стр|строение)\.?\s*(\d+[а-я]?)(?!\d)/u,
+  flat: /(?<![а-я])(?:кв|квартира)\.?\s*№?\s*(\d+[а-я]?)(?![\d,.]\d)/u,
+  room: /(?<![а-я])(?:пом|помещение)\.?\s*№?\s*(\d+[а-я]?)(?!\d)/u,
+  plot: /(?<![а-я])(?:уч|участок)\.?\s*№?\s*(\d+[а-я]?)(?!\d)/u,
+};
+const SETTLEMENT = /(?<![а-я])(?:(?:г|д|с|п)\.|(?:город|дер|деревня|село|пос|поселок|рп|пгт|снт|днп|кп|станица|хутор)(?![а-я])\.?)\s*([а-я][а-я-]+(?:\s+[а-я][а-я-]+)?)/u;
+const STREET_TYPE = /(?<![а-я])(?:улица|ул|проспект|пр-кт|пр-т|просп|переулок|пер|шоссе|ш|бульвар|б-р|бул|набережная|наб|проезд|пр-д|площадь|пл|тупик|туп|аллея|линия|мкр|микрорайон)(?![а-я-])\.?/u;
+const ADDR_NAMES = { settlement: 'другой населённый пункт', street: 'другая улица', house: 'дом', korpus: 'корпус', str: 'строение', flat: 'квартира', room: 'помещение', plot: 'участок' };
+const stems = (s) => (s.match(/[а-я]{3,}/gu) ?? []).map((w) => w.slice(0, 5));
+export function parseAddress(text) {
+  const t = String(text ?? '').toLowerCase().replace(/ё/g, 'е');
+  const out = {};
+  for (const [k, re] of Object.entries(ADDR_PART)) { const m = t.match(re); if (m) out[k] = m[1]; }
+  const town = t.match(SETTLEMENT);
+  if (town) out.settlement = stems(town[1].split(/\s+(?:ул|улица|д|дом|пер|пр|ш|уч)(?![а-я])/u)[0]);
+  const segs = t.split(',').map((s) => s.trim());
+  const at = segs.findIndex((s) => STREET_TYPE.test(s));
+  if (at >= 0) {
+    // Из части с улицей убираем тип улицы и номера дома, корпуса и квартиры, если они без запятой.
+    let seg = segs[at].replace(STREET_TYPE, ' ');
+    for (const re of Object.values(ADDR_PART)) seg = seg.replace(re, ' ');
+    const tail = seg.match(/\s(\d+[а-я]?(?:\/\d+[а-я]?)?)\s*$/u);
+    if (tail && !out.house) out.house = tail[1];
+    if (!out.house && /^№?\s*\d+[а-я]?(?:\/\d+[а-я]?)?$/u.test(segs[at + 1] ?? '')) out.house = segs[at + 1].replace(/[№\s]/g, '');
+    const st = stems(seg.replace(/\s\d+[а-я]?(?:\/\d+[а-я]?)?\s*$/u, ''));
+    if (st.length) out.street = st;
+  }
+  return out;
+}
+const sameWords = (a, b) => a.every((w) => b.includes(w)) || b.every((w) => a.includes(w));
+function addressMatch(doc, ctx) {
+  const mineText = clean(ctx.fields?.address);
+  const mine = parseAddress(mineText);
+  if (!mineText) return [];
+  const first = {}; // часть, которой нет в заявке, → { value, page }
+  const out = [];
+  const seen = new Set();
+  eachPage(doc, (page, i) => {
+    for (const m of page.matchAll(ADDR_AT)) {
+      const start = page.lastIndexOf('\n', m.index) + 1;
+      const before = page.slice(Math.max(start, m.index - 60), m.index);
+      if (ADDR_OTHER.test(before) && !ADDR_OBJECT.test(before)) continue;
+      if (/аналог/iu.test(lineAround(page, m.index))) continue;
+      const from = m.index + m[0].length;
+      let end = page.indexOf('\n', from);
+      if (end < 0) end = page.length;
+      // Адрес, перенесённый на следующую строку после запятой или дефиса.
+      if (/[,-]\s*$/.test(page.slice(from, end))) { const e2 = page.indexOf('\n', end + 1); end = e2 < 0 ? page.length : e2; }
+      let text = page.slice(from, end).replace(/\n/g, ' ');
+      const cut = text.search(ADDR_END);
+      if (cut >= 0) text = text.slice(0, cut);
+      text = clean(text).replace(/[,.\s]+$/, '').slice(0, 200);
+      const got = parseAddress(text);
+      if (!got.house && !got.flat && !got.plot && !got.room) continue;
+      const key = JSON.stringify(got);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const diff = [];
+      let againstMine = false;
+      for (const k of Object.keys(ADDR_NAMES)) {
+        if (got[k] === undefined) continue;
+        const ref = mine[k] !== undefined ? { value: mine[k], mine: true } : first[k];
+        if (!ref) { first[k] = { value: got[k], page: i }; continue; }
+        const same = Array.isArray(got[k]) ? sameWords(got[k], ref.value) : got[k] === ref.value;
+        if (same) continue;
+        if (ref.mine) againstMine = true;
+        diff.push({ k, ref });
+      }
+      if (!diff.length) continue;
+      const parts = diff.map(({ k, ref }) => (Array.isArray(got[k]) ? ADDR_NAMES[k]
+        : `${ADDR_NAMES[k]} ${got[k]}, а ${ref.mine ? 'в заявке' : `на стр. ${ref.page + 1}`} ${ref.value}`)).join('; ');
+      const where = againstMine ? `с адресом из заявки (${mineText})` : `с адресом объекта на стр. ${diff[0].ref.page + 1}`;
+      out.push({ page: i, quote: lineAround(page, m.index), text: `Адрес «${text}» не совпадает ${where}: ${parts} — проверьте, нет ли данных другого объекта` });
+    }
+  });
+  return out;
+}
+
 // ——— Недвижимость и земля (2.59): площадь, этаж и этажность, доля, категория земель и назначение — как в заявке ———
 // Строки про аналоги, жилую площадь, кухню, балкон, застройку не трогаем; в отчёте о квартире — площадь участка и дома,
 // в отчёте об участке — площадь построек.
@@ -974,6 +1065,7 @@ const PER_DOC = {
   court_purpose: courtPurpose,
   vin_match: vinMatch,
   cadastral_match: cadastralMatch,
+  address_match: addressMatch,
   area_match: areaMatch,
   floor_match: floorMatch,
   share_match: shareMatch,
@@ -997,6 +1089,7 @@ export const AUTO_CHECKS = Object.freeze({
   approaches_toc: 'подход из оглавления не отвергнут в тексте',
   template_leftovers: 'нет остатков шаблона другого вида: недвижимость в отчёте о машине, машина в отчёте о квартире',
   cadastral_match: 'кадастровый номер в отчёте — как в заявке',
+  address_match: 'адрес объекта одинаков по всему отчёту и как в заявке: населённый пункт, улица, дом, корпус, квартира, участок',
   area_match: 'площадь объекта в отчёте — как в заявке',
   floor_match: 'этаж и этажность дома в отчёте — как в заявке',
   share_match: 'размер доли в отчёте — как в заявке',
