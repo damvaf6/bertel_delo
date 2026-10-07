@@ -210,6 +210,19 @@ a.btn { text-decoration: none; margin-top: 8px; }
 li.return.open { border-left: 3px solid var(--danger); padding-left: 8px; }
 details.returns { margin-top: 8px; }
 /* Пункты замечания руководителя (2.93). */
+.ready-box { margin: 8px 0 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; }
+.ready-box[data-state="no"] { border-color: var(--danger); }
+.ready-box[data-state="ok"] { border-color: var(--ok); }
+.ready-box[data-state="warn"] { border-color: #8a5a00; }
+.ready-box h3 { margin: 0 0 4px; font-size: 16px; }
+ul.ready-list { list-style: none; margin: 6px 0 0; padding: 0; }
+ul.ready-list li { border: none; padding: 0; }
+ul.ready-list button.link { display: flex; gap: 8px; align-items: flex-start; width: 100%; text-align: left; padding: 6px 0; font-size: 15px; color: inherit; text-decoration: none; overflow-wrap: anywhere; }
+ul.ready-list .title { font-weight: 600; }
+.ready-mark { flex: 0 0 22px; height: 22px; border-radius: 50%; text-align: center; line-height: 22px; font-weight: 700; color: #fff; }
+li.ready.ok .ready-mark { background: var(--ok); }
+li.ready.warn .ready-mark { background: #8a5a00; }
+li.ready.no .ready-mark { background: var(--danger); }
 ul.points { list-style: none; margin: 6px 0 0; padding: 0; }
 ul.points li { border: none; padding: 2px 0; overflow-wrap: anywhere; }
 ul.points label.row { margin: 0; align-items: flex-start; flex-wrap: nowrap; }

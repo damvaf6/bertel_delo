@@ -375,7 +375,8 @@ test('меню на телефоне (2.22): у администратора-с�
   await cctx.close();
 });
 
-const inDays = (n) => new Date(Date.now() + n * 86400_000).toISOString().slice(0, 10);
+// День по Москве (UTC+3, без перехода на летнее время): «сегодня» на сервере — московское, после 21:00 UTC уже завтра.
+const inDays = (n) => new Date(Date.now() + 3 * 3600_000 + n * 86400_000).toISOString().slice(0, 10);
 const H = { 'x-delo-request': '1' };
 
 test('заявка на оценку: поля услуги, срок, основание «определение суда» с файлом, отправка', async ({ page }) => {
@@ -540,6 +541,12 @@ test('ход заявки: подбор диспетчером, принятие
   await expect(sp.locator('#next-main button')).toHaveText('Добавить файл результата');
   await expect(sp.locator('#next-bar button')).toHaveText('Добавить файл результата');
   await expect(sp.locator('#next-bar')).toBeHidden(); // карточка на экране — нижняя кнопка не дублирует
+  // «Готово к сдаче?» (2.106): над кнопкой сдачи — что готово и чего нет; без файла сдать нельзя.
+  await expect(sp.locator('#ready-box')).toBeVisible();
+  await expect(sp.locator('#ready-box')).toHaveAttribute('data-state', 'no');
+  await expect(sp.locator('#ready-lead')).toContainText('Пока сдать нельзя');
+  await expect(sp.locator('#ready-list li[data-ready="result"]')).toHaveClass(/\bno\b/);
+  await expect(sp.locator('#ready-list li[data-ready="sign"]')).toContainText('подписывается файл результата');
   await sp.locator('#chat-box').scrollIntoViewIfNeeded();
   await expect(sp.locator('#next-bar')).toBeVisible();
   await sp.evaluate(() => window.scrollTo(0, 0));
@@ -576,6 +583,14 @@ test('ход заявки: подбор диспетчером, принятие
   await expect(repDoc.locator('.sig-test')).toHaveText('Тестовая подпись площадки — юридической силы не имеет');
   await shot(sp, '93-specialist-podpis');
   await expect(sp.locator('#next-main button')).toHaveText('Сдать на проверку');
+  // Файл и подпись готовы — строки зелёные, ИИ-проверку можно сделать, но сдать уже можно (2.106).
+  await expect(sp.locator('#ready-list li[data-ready="result"]')).toHaveClass(/\bok\b/);
+  await expect(sp.locator('#ready-list li[data-ready="result"]')).toContainText('тестовый-отчёт.pdf');
+  await expect(sp.locator('#ready-list li[data-ready="sign"]')).toHaveClass(/\bok\b/);
+  await expect(sp.locator('#ready-list li.no')).toHaveCount(0);
+  await expect(sp.locator('#ready-lead')).toContainText(/^(Сдать можно|Всё готово)/);
+  await sp.locator('#ready-box').scrollIntoViewIfNeeded();
+  await shot(sp, '28a-specialist-gotovo-k-sdache');
   await sp.getByRole('button', { name: 'Сдать на проверку' }).click();
   await expect(sp.locator('#order-status')).toHaveText('Проверка результата');
   await expect(sp.locator('#result-upload-box')).toBeHidden();
@@ -602,6 +617,15 @@ test('ход заявки: подбор диспетчером, принятие
   await sp.reload();
   await expect(sp.locator('#review-checks li').filter({ hasText: 'Расчёт' })).toContainText('Нет фото повреждений');
   await expect(sp.locator('#review-checks button')).toHaveCount(0);
+  // В «Готово к сдаче?» — замечания диспетчера прошлого круга; нажатие ведёт к ним (2.106).
+  const remarksRow = sp.locator('#ready-list li[data-ready="remarks"]');
+  await expect(remarksRow).toHaveClass(/\bwarn\b/);
+  await expect(remarksRow).toContainText('Замечания диспетчера (круг 1)');
+  await expect(remarksRow).toContainText('Расчёт');
+  await sp.locator('#ready-box').scrollIntoViewIfNeeded();
+  await shot(sp, '34a-specialist-gotovo-zamechaniya');
+  await remarksRow.getByRole('button').click();
+  await expect(sp.locator('#review-box')).toBeInViewport();
   await sp.locator('#result-file').setInputFiles({ name: 'отчёт-с-фото.pdf', mimeType: 'application/pdf', buffer: Buffer.from('исправленный тестовый отчёт') });
   await expect(sp.locator('#docs li').filter({ hasText: 'отчёт-с-фото.pdf' })).toBeVisible();
   await shot(sp, '34-specialist-zamechaniya');
