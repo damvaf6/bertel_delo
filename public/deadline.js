@@ -22,9 +22,9 @@ function render(r) {
   box.classList.toggle('hidden', !(r.can_request || r.requests.length));
   if (box.classList.contains('hidden')) return;
   const o = r.open;
-  $('deadline-lead').textContent = o ? `Сейчас срок — ${dayRu(r.deadline)}. Исполнитель просит перенести его; пока нет ответа, действует прежний.`
-    : r.can_request ? `Сейчас срок — ${dayRu(r.deadline)}. Не успеваете — попросите перенести: диспетчер согласится или откажет, заказчик увидит.`
-      : `Сейчас срок — ${dayRu(r.deadline)}.`;
+  $('deadline-lead').textContent = o ? `Сейчас срок — ${dayRu(r.deadline)} Исполнитель просит перенести его; пока нет ответа, действует прежний.`
+    : r.can_request ? `Сейчас срок — ${dayRu(r.deadline)} Не успеваете — попросите перенести: диспетчер согласится или откажет, заказчик увидит.`
+      : `Сейчас срок — ${dayRu(r.deadline)}`;
   $('deadline-open').classList.toggle('hidden', !o);
   if (o) $('deadline-open-text').textContent = `Просьба от ${whenRu(o.requested_at)}: перенести на ${dayRu(o.new_deadline)}. Причина: ${o.reason}`;
   $('deadline-answer-field').classList.toggle('hidden', !r.can_decide);
