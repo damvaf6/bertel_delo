@@ -9,7 +9,7 @@ import { awayOf, orgExpertsFor } from './match-ops.mjs';
 import { orderSignatures, orgReturns } from './sign-ops.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { splitAmount } from '../money/money.mjs';
-import { STATUS_NAME, isOverdue, todayMsk } from '../orders/workflow.mjs';
+import { STATUS_NAME, addDays, isOverdue, todayMsk } from '../orders/workflow.mjs';
 import { monthRu, orgMonthDoneCases, orgMonthReport, reportCsv, reportMonth } from '../orgs/report.mjs';
 import { buildOrgMonthArchive } from './case-ops.mjs';
 import { openExtends } from './deadline-ops.mjs';
@@ -227,6 +227,8 @@ export function orgOps() {
           active: CASES_ACTIVE.includes(o.status),
           deadline: o.deadline,
           overdue: isOverdue(o, today),
+          // «Горит» (2.102, как в «Сегодня» 2.98): в работе или на проверке, срок прошёл или через 1–2 дня.
+          hot: ['in_work', 'review'].includes(o.status) && !!o.deadline && o.deadline <= addDays(today, 2),
           expert: name(byId.get(o.executor_user_id)),
           expert_id: o.executor_user_id,
           fee_kop: feeOf(o),

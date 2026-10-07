@@ -70,6 +70,10 @@ button:disabled { opacity: .6; cursor: default; }
 .badge.warn { background: #fff3d6; color: #7a4b00; font-weight: 600; }
 .flash { outline: 3px solid var(--accent); outline-offset: 4px; transition: outline-color 1s; }
 .row.gap { margin-top: 8px; }
+/* Отбор одной кнопкой (2.102): кнопки переносятся на следующую строку, нажатая — залита. */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
+.chips button { min-height: 36px; padding: 6px 12px; border-radius: 99px; font-size: 14px; background: #fff; color: var(--accent); }
+.chips button[aria-pressed=true] { background: var(--accent); color: #fff; }
 h2.gap { margin-top: 16px; }
 .row select { width: auto; flex: 1 1 140px; min-width: 0; }
 /* Разделы переносятся на следующую строку, а не уходят за край экрана (2.22): у служебных их до девяти. */

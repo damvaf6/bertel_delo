@@ -79,6 +79,11 @@ test('«Сегодня» у эксперта: горит, вернули, на �
   assert.deepEqual(g.hot.map((x) => [x.expert, x.service, x.overdue]), [['Эксперт Сегодняшний', 'Оценка недвижимости', false]]);
   assert.equal(g.to_sign.length, 1);
   assert.equal(g.to_sign[0].files, 1);
+  // «Дела экспертов» (2.102): «горит» — то же, что в «Сегодня»; отбор по подписи — по sign_wait.
+  const cs = (await head.req('GET', `/api/orgs/${org.id}/cases`)).body.cases;
+  const of = (o) => cs.find((x) => x.id === o.id);
+  assert.deepEqual([fire, calm, offer, sent].map((o) => of(o).hot), [true, false, false, false]);
+  assert.equal(of(fire).sign_wait, 1);
   const text = JSON.stringify(t);
   for (const secret of ['Горящее дело', 'тестовая ул.', fire.id]) assert.ok(!text.includes(secret), `руководитель не видит: ${secret}`);
   assert.equal((await head.req('POST', `/api/org-documents/${d.id}/return`, { comment: 'Проверьте итог' })).status, 201);
