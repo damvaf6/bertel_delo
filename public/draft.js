@@ -4,6 +4,7 @@ import { api, el, say } from '/common.js';
 import { state } from '/shell.js';
 import { setNext } from '/next.js';
 import { loadAnalogs } from '/analogs.js';
+import { loadSnippets } from '/snippets.js';
 
 const $ = (id) => document.getElementById(id);
 const timeRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
@@ -40,6 +41,8 @@ export async function loadDraft(current, reload) {
   $('draft-confirm').checked = false;
   $('draft-state').textContent = stateText(r);
   countGaps();
+  // Свои заготовки абзацев (2.87): вставка считается правкой — пометки пересчитываются, правка помнится на телефоне.
+  await loadSnippets(!!(r.draft && r.can_edit), () => $('draft-text').dispatchEvent(new Event('input')));
 }
 
 // Методические разделы из своего прошлого дела той же услуги (2.65): стандарты, допущения, выбор подходов, методика.

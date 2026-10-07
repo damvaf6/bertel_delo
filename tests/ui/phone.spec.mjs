@@ -4650,3 +4650,86 @@ test('осмотр при плохой связи (2.68): владелец по 
   await hctx.close();
   await sctx.close();
 });
+
+test('свои заготовки абзацев (2.87): сохранить выделенный абзац, вставить в черновик другого дела туда, где курсор', async ({ page }) => {
+  const expert = await signIn(page, '+79990000967');
+  const ids = [];
+  for (const title of ['Квартира: заготовки, первое дело', 'Квартира: заготовки, второе дело']) {
+    const o = await db(async (c) => (await c.query(
+      `insert into orders (owner_user_id, title, module, service, fields, status, executor_user_id, price_kop, paid_at, deadline)
+       values ($1, $2, 'expertise', 'realty', $3, 'in_work', $1, 1500000, now(), now() + interval '6 days') returning id`,
+      [expert.id, title, { purpose: 'bank', region: 'moscow', object_type: 'flat', address: 'г. Москва, Тихая ул., 3', area: '40' }])).rows[0]);
+    ids.push(o.id);
+  }
+  await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+  });
+  const PARA = 'Оценщик не проводил скрытых работ и исходил из того, что конструкции объекта не имеют скрытых дефектов.';
+
+  // Первое дело: абзац в черновике выделен — «Взять выделенное», название, сохранить.
+  await page.goto(`/kabinet#order=${ids[0]}`);
+  await page.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(page.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const text = page.getByLabel('Текст заключения');
+  await text.fill(`${await text.inputValue()}\n\n${PARA}`);
+  await page.getByRole('button', { name: 'Сохранить правку' }).click();
+  await page.locator('#snip-box summary').click();
+  await expect(page.locator('#snip-use')).toBeHidden();
+  await text.evaluate((t, p) => { const at = t.value.indexOf(p); t.focus(); t.setSelectionRange(at, at + p.length); }, PARA);
+  await page.getByRole('button', { name: 'Взять выделенное в черновике' }).click();
+  await expect(page.locator('#snip-body')).toHaveValue(PARA);
+  await page.locator('#snip-kind').selectOption({ label: 'Допущения' });
+  await page.getByLabel('Название (видите только Вы)').fill('Скрытые дефекты');
+  await page.getByRole('button', { name: 'Сохранить заготовку' }).click();
+  await expect(page.locator('#snip-msg')).toHaveText('Заготовка сохранена — её можно вставить в любое своё дело');
+  await expect(page.locator('#snip-pick')).toHaveValue(/\d+/);
+  await expect(page.locator('#snip-preview')).toHaveText(PARA);
+  // Вторая — написана вручную, вид «Формулировки выводов».
+  await page.locator('#snip-kind').selectOption({ label: 'Формулировки выводов' });
+  await page.getByLabel('Название (видите только Вы)').fill('Вывод: рыночная стоимость');
+  await page.locator('#snip-body').fill('Рыночная стоимость объекта оценки на дату оценки составляет [заполнить] руб.');
+  await page.getByRole('button', { name: 'Сохранить заготовку' }).click();
+  await expect(page.locator('#snip-pick optgroup')).toHaveCount(2);
+  await page.locator('#snip-box').scrollIntoViewIfNeeded();
+  await shot(page, '99r-ekspert-zagotovki');
+
+  // Второе дело: курсор — в начале раздела, вставка отдельным абзацем; пометка из заготовки посчитана.
+  await page.goto(`/kabinet#order=${ids[1]}`);
+  await page.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(page.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const gapsBefore = Number((await page.locator('#draft-gaps').textContent()).match(/\d+/)?.[0] ?? 0);
+  const at = await text.evaluate((t) => { const i = t.value.indexOf('\n## '); t.focus(); t.setSelectionRange(i, i); return i; });
+  // Переход к другому делу — без перезагрузки страницы: раскрытый блок заготовок остаётся раскрытым.
+  await expect(page.locator('#snip-box')).toHaveAttribute('open', '');
+  await page.locator('#snip-pick').selectOption({ label: 'Скрытые дефекты' });
+  await page.getByRole('button', { name: 'Вставить в текст' }).click();
+  await expect(page.locator('#snip-msg')).toHaveText('Вставлено: «Скрытые дефекты». Не забудьте сохранить правку черновика.');
+  const body = await text.inputValue();
+  expect(body.indexOf(PARA)).toBeGreaterThanOrEqual(at);
+  expect(body).toContain(`\n\n${PARA}\n\n## `);
+  await page.locator('#snip-pick').selectOption({ label: 'Вывод: рыночная стоимость' });
+  await text.evaluate((t) => { t.focus(); t.setSelectionRange(t.value.length, t.value.length); });
+  await page.getByRole('button', { name: 'Вставить в текст' }).click();
+  await expect(text).toHaveValue(/составляет \[заполнить\] руб\.$/);
+  await expect(page.locator('#draft-gaps')).toHaveText(`Осталось пометок: ${gapsBefore + 1}`);
+  await page.getByRole('button', { name: 'Сохранить правку' }).click();
+  await expect(page.locator('#draft-msg')).toHaveText('Правка сохранена');
+  const saved = (await (await page.request.get(`/api/orders/${ids[1]}/draft`)).json()).draft.body;
+  expect(saved).toContain(PARA);
+  await page.locator('#snip-box').scrollIntoViewIfNeeded();
+  await shot(page, '99s-ekspert-zagotovka-vstavlena');
+
+  // Правка заготовки: новое название — в списке; убрать — пропадает, в черновике текст остаётся.
+  await page.locator('#snip-pick').selectOption({ label: 'Скрытые дефекты' });
+  await page.getByRole('button', { name: 'Изменить' }).click();
+  await expect(page.locator('#snip-form-title')).toHaveText('Правка заготовки «Скрытые дефекты»');
+  await page.getByLabel('Название (видите только Вы)').fill('Допущение: скрытые дефекты');
+  await page.getByRole('button', { name: 'Сохранить заготовку' }).click();
+  await expect(page.locator('#snip-pick option')).toContainText(['Допущение: скрытые дефекты', 'Вывод: рыночная стоимость']);
+  page.once('dialog', (d) => d.accept());
+  await page.getByRole('button', { name: 'Убрать' }).click();
+  await expect(page.locator('#snip-msg')).toHaveText('Заготовка убрана');
+  await expect(page.locator('#snip-pick option')).toHaveCount(1);
+  expect((await (await page.request.get(`/api/orders/${ids[1]}/draft`)).json()).draft.body).toContain(PARA);
+});
