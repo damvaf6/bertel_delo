@@ -2496,13 +2496,22 @@ test('«Сегодня» (2.34, 2.63): эксперт — горит, верну
   await expect(dl.nth(1)).toContainText(/осталось (9|10) дн\./);   // дата теста — по UTC, «Сегодня» — по Москве
   await expect(hb).not.toContainText('2063');   // номера документов руководителю не показываются
   await expect(hb.locator(`li[data-today="org-sign-${orgId}"]`)).toHaveText('Ждут подписи организации · 1');
-  await expect(hb.locator(`li[data-today-item="org-hot-${orgId}"]`).first()).toContainText('Эксперт Сегодня');
+  // «Горящее» (2.98): срок завтра, отчёт есть, а фото осмотра нет — отдельной строкой первой, в «Горит срок» не повторяется.
+  await expect(hb.locator('li[data-today]').first()).toHaveText('Горит: нет черновика или фото осмотра · 1');
+  await expect(hb.locator(`li[data-today-item="org-risk-${orgId}"]`)).toContainText('Эксперт Сегодня');
+  await expect(hb.locator(`li[data-today-item="org-risk-${orgId}"]`)).toContainText('срок завтра');
+  await expect(hb.locator(`li[data-today-item="org-risk-${orgId}"] .muted`).last()).toHaveText('нет фото осмотра');
+  await expect(hb.locator(`li[data-today-item="org-hot-${orgId}"]`)).toHaveCount(0);
   await expect(hb).not.toContainText('Квартира');   // названия заявок (текст заказчика) руководителю не показываются
   await shot(hp, '98-segodnya-rukovoditel');
   await dl.first().scrollIntoViewIfNeeded();
   await shot(hp, '98a-segodnya-dosje-ekspertov');
   await hb.locator(`li[data-today-item="org-sign-${orgId}"] button`).click();
   await expect(hp).toHaveURL(new RegExp(`#org=${orgId}&case=[0-9A-F]{8}&to=sign$`));
+  await hp.goto('/kabinet');
+  await hp.locator(`li[data-today-item="org-risk-${orgId}"] button`).click();
+  await expect(hp).toHaveURL(new RegExp(`#org=${orgId}&case=${fire.id.slice(0, 8).toUpperCase()}&to=case$`));
+  await shot(hp, '98b-segodnya-gorit-k-delu');
 
   // Заказчику карточка не показывается.
   await page.goto('/kabinet');

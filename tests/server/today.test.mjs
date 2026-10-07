@@ -145,3 +145,31 @@ test('«Сегодня» у диспетчера (2.42): назначить це
   assert.deepEqual([money.what, money.failure], ['payout', 'тест: отклонено']);
   await S.sql`delete from payouts where order_id = ${rev.id}`;
 });
+
+test('«Сегодня» у руководителя (2.98): горит срок, а нет черновика или фото осмотра — отдельно, с тем, чего нет', async () => {
+  const bare = await offered('Горит без черновика', 2);
+  assert.equal((await step(spec, bare, 'in_work')).status, 200);
+  const drafted = await offered('Горит, черновик есть', 1);
+  assert.equal((await step(spec, drafted, 'in_work')).status, 200);
+  assert.equal((await spec.req('POST', `/api/orders/${drafted.id}/draft/ai`, { from: null })).status, 201);
+  const far = await offered('Срок далеко, ничего нет', 10);
+  assert.equal((await step(spec, far, 'in_work')).status, 200);
+  const risk = async () => (await head.req('GET', '/api/today')).body.orgs[0].at_risk;
+  let list = await risk();
+  const byRef = (o) => list.find((x) => x.order_ref === `№ ${o.id.slice(0, 8).toUpperCase()}`);
+  assert.deepEqual(byRef(bare)?.missing, ['нет черновика', 'нет фото осмотра']);
+  assert.deepEqual(byRef(drafted)?.missing, ['нет фото осмотра']);
+  assert.equal(byRef(far), undefined, 'срок через 10 дней — не горит');
+  assert.equal(byRef(bare).expert, 'Эксперт Сегодняшний');
+  // Пришло фото осмотра — у дела с черновиком больше ничего не горит.
+  await S.sql`insert into documents (order_id, uploaded_by, filename, mime, size_bytes, storage_key, kind)
+              values (${drafted.id}, ${spec.user.id}, 'Фото 1.jpg', 'image/jpeg', 10, ${`t/${drafted.id}/1`}, 'inspection')`;
+  list = await risk();
+  assert.equal(byRef(drafted), undefined);
+  assert.ok(byRef(bare));
+  // Без данных заказчика и названий заявки; эксперту и чужим — не видно.
+  const text = JSON.stringify(list);
+  for (const secret of ['Горит без черновика', bare.id]) assert.ok(!text.includes(secret), `руководитель не видит: ${secret}`);
+  assert.deepEqual((await spec.req('GET', '/api/today')).body.orgs, []);
+  assert.deepEqual((await other.req('GET', '/api/today')).body.orgs, []);
+});

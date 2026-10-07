@@ -1808,6 +1808,8 @@ test('мои итоги за месяц (2.92): только свои дела �
   }
   const hist = (o, from, to) => S.sql`insert into order_status_history (order_id, from_status, to_status, side) values (${o.id}, ${from}, ${to}, 'dispatcher')`;
   await hist(onTime, 'review', 'done');
+  // Сдано на секунду раньше: в одну миллисекунду порядок дел в списке был бы случайным.
+  await S.sql`update order_status_history set at = at - interval '1 second' where order_id = ${onTime.id}`;
   await hist(late, 'review', 'in_work'); await hist(late, 'review', 'done'); await hist(late, 'done', 'closed');
   await hist(foreign, 'review', 'done');
   await S.sql`insert into payouts (order_id, executor_user_id, amount_kop, commission_kop, status, paid_at)
