@@ -1517,6 +1517,25 @@ test('запрос документов (2.64): видят те, кто види
   assert.equal((await U.owner.req('DELETE', `${base}/1`)).status, 403);
 });
 
+test('перенос срока (2.91): видят те, кто видит заявку; просит только исполнитель, решает диспетчер', async () => {
+  for (const id of ['deadline_requests.list', 'deadline_requests.create', 'deadline_requests.withdraw', 'deadline_requests.decide']) cover(id);
+  const base = `/api/orders/${ownOrder.id}/deadline-requests`;
+  for (const [who, ok] of [['owner', true], ['dispatcher', true], ['admin', true], ['stranger', false], ['headA', false], ['headB', false], ['spec', false]]) {
+    expectRead(await U[who].req('GET', base), ok, who);
+  }
+  for (const who of ['stranger', 'headA', 'headB', 'spec']) {
+    assert.equal((await U[who].req('POST', base, { new_deadline: '2030-01-01', reason: 'x' })).status, 404, `${who}: просьба`);
+    assert.equal((await U[who].req('DELETE', `${base}/1`)).status, 404, `${who}: отзыв`);
+    assert.equal((await U[who].req('POST', `${base}/1/decide`, { approve: true })).status, 404, `${who}: решение`);
+  }
+  // Заказчик и диспетчер — не исполнители: просить и отзывать нельзя; заказчик не решает.
+  for (const who of ['owner', 'dispatcher']) {
+    assert.equal((await U[who].req('POST', base, { new_deadline: '2030-01-01', reason: 'x' })).status, 403, who);
+    assert.equal((await U[who].req('DELETE', `${base}/1`)).status, 403, who);
+  }
+  assert.equal((await U.owner.req('POST', `${base}/1/decide`, { approve: true })).status, 403);
+});
+
 test('переназначение до ответа эксперта (2.76): только руководитель организации; прежний эксперт теряет предложение, «уже изменилось» после ответа', async () => {
   cover('orgs.cases.reassign');
   const events = async (userId, event) => (await S.sql`select count(*)::int as n from notifications where user_id = ${userId} and event = ${event}`)[0].n;

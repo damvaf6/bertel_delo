@@ -1,0 +1,73 @@
+// Перенос срока дела (задача 2.91). Исполнитель просит новую дату с причиной; диспетчер соглашается или отказывает одной
+// кнопкой; заказчик видит просьбу и ответ. Ниже — история переносов. Текст — через textContent.
+import { api, el, say } from '/common.js';
+
+const $ = (id) => document.getElementById(id);
+const dayRu = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+const whenRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+const OUTCOME = { approved: ['перенесён', 'ok'], declined: ['отказано', 'warn'], withdrawn: ['отозвана', ''] };
+let ctx = null; // { order, reload, open }
+
+export async function loadDeadline(current, reload) {
+  const box = $('deadline-box');
+  say($('deadline-msg'), '');
+  if (!current.order.module || !current.order.deadline) { box.classList.add('hidden'); return; }
+  ctx = { order: current.order, reload };
+  render(await api('GET', `/api/orders/${current.order.id}/deadline-requests`));
+}
+
+function render(r) {
+  ctx.open = r.open;
+  const box = $('deadline-box');
+  box.classList.toggle('hidden', !(r.can_request || r.requests.length));
+  if (box.classList.contains('hidden')) return;
+  const o = r.open;
+  $('deadline-lead').textContent = o ? `Сейчас срок — ${dayRu(r.deadline)}. Исполнитель просит перенести его; пока нет ответа, действует прежний.`
+    : r.can_request ? `Сейчас срок — ${dayRu(r.deadline)}. Не успеваете — попросите перенести: диспетчер согласится или откажет, заказчик увидит.`
+      : `Сейчас срок — ${dayRu(r.deadline)}.`;
+  $('deadline-open').classList.toggle('hidden', !o);
+  if (o) $('deadline-open-text').textContent = `Просьба от ${whenRu(o.requested_at)}: перенести на ${dayRu(o.new_deadline)}. Причина: ${o.reason}`;
+  $('deadline-answer-field').classList.toggle('hidden', !r.can_decide);
+  for (const id of ['deadline-approve', 'deadline-decline']) $(id).classList.toggle('hidden', !r.can_decide);
+  $('deadline-withdraw').classList.toggle('hidden', !r.can_withdraw);
+  $('deadline-form').classList.toggle('hidden', !r.can_request);
+  if (r.can_request) $('deadline-new').min = r.deadline;
+  const past = r.requests.filter((x) => x.outcome);
+  $('deadline-history').replaceChildren(...past.map((x) => {
+    const [word, kind] = OUTCOME[x.outcome];
+    return el('li', { 'data-deadline-request': x.id },
+      el('div', {},
+        el('div', { class: 'name' }, el('span', { text: `${dayRu(x.old_deadline)} → ${dayRu(x.new_deadline)} ` }), el('span', { class: `badge ${kind}`, text: word })),
+        el('div', { class: 'muted', text: [`причина: ${x.reason}`, x.answer ? `ответ: ${x.answer}` : null, x.decided_at ? whenRu(x.decided_at) : null].filter(Boolean).join(' · ') })));
+  }));
+}
+
+async function decide(approve) {
+  if (!ctx?.open) return;
+  try {
+    await api('POST', `/api/orders/${ctx.order.id}/deadline-requests/${ctx.open.id}/decide`, { approve, answer: $('deadline-answer').value });
+    $('deadline-answer').value = '';
+    await ctx.reload();
+    say($('deadline-msg'), approve ? 'Срок перенесён. Исполнителю и заказчику пришло уведомление.' : 'Отказано. Исполнителю пришло уведомление.', 'ok');
+  } catch (err) { say($('deadline-msg'), err.message); }
+}
+
+$('deadline-approve').addEventListener('click', () => decide(true));
+$('deadline-decline').addEventListener('click', () => decide(false));
+$('deadline-withdraw').addEventListener('click', async () => {
+  if (!ctx?.open) return;
+  try {
+    render(await api('DELETE', `/api/orders/${ctx.order.id}/deadline-requests/${ctx.open.id}`));
+    say($('deadline-msg'), 'Просьба отозвана', 'ok');
+  } catch (err) { say($('deadline-msg'), err.message); }
+});
+$('deadline-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    render(await api('POST', `/api/orders/${ctx.order.id}/deadline-requests`,
+      { new_deadline: $('deadline-new').value, reason: $('deadline-reason').value, from: ctx.order.deadline }));
+    $('deadline-new').value = '';
+    $('deadline-reason').value = '';
+    say($('deadline-msg'), 'Просьба отправлена диспетчеру. Пока нет ответа, действует прежний срок.', 'ok');
+  } catch (err) { say($('deadline-msg'), err.message); }
+});
