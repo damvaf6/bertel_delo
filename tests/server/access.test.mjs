@@ -1045,7 +1045,7 @@ test('экспресс-выезд (2.4): ход выезда видят те, к
 });
 
 test('подпись организации (2.5а): файлы видит и подписывает только руководитель организации исполнителя; загрузка — только своё', async () => {
-  for (const id of ['signature.upload', 'orgsign.list', 'orgsign.link', 'orgsign.sign', 'orgsign.upload', 'orgsign.return', 'orgreturn.item']) cover(id);
+  for (const id of ['signature.upload', 'orgsign.list', 'orgsign.link', 'orgsign.sign', 'orgsign.upload', 'orgsign.return', 'orgreturn.item', 'orgsign.remind']) cover(id);
   // Исполнитель работает от организации Б: подписывает он и руководитель Б (headB).
   const spec2 = expertB = await login(S, '+79990000053');
   const memberB = seniorB = await login(S, '+79990000022');
@@ -1095,6 +1095,13 @@ test('подпись организации (2.5а): файлы видит и п
   assert.equal(e.status, 201, JSON.stringify(e.body));
   assert.equal(e.body.signature.method, 'upload');
   assert.equal(e.body.signature.signer, 'Эксперт Внешний');
+  // Напомнить руководителю о подписи (2.99) — только сам эксперт-исполнитель; очередь подписи видит только он.
+  const remind = (c) => c.req('POST', `/api/orders/${o.id}/sign-reminder`);
+  for (const k of ['stranger', 'headA', 'spec']) assert.equal((await remind(U[k])).status, 404, k);
+  for (const c of [U.headB, memberB]) assert.equal((await remind(c)).status, 404, 'руководитель и сотрудники заявку не видят');
+  for (const k of ['owner', 'dispatcher', 'admin']) assert.equal((await remind(U[k])).status, 403, k);
+  for (const k of ['owner', 'dispatcher', 'admin']) assert.equal((await U[k].req('GET', `/api/orders/${o.id}/documents`)).body.sign_wait, undefined, k);
+  assert.equal((await spec2.req('GET', `/api/orders/${o.id}/documents`)).body.sign_wait.files, 1);
   assert.equal((await spec2.req('POST', `/api/orders/${o.id}/status`, { to: 'review', from: 'in_work' })).body.error, 'not_signed_org', 'без подписи организации не сдать');
   assert.equal((await up(U.headB, `/api/org-documents/${doc.id}/signature/upload`, expertSig)).body.error, 'not_org_certificate');
   // Вернуть эксперту с замечанием (2.27) — только руководитель Б; возвраты видит только сам эксперт.

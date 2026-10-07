@@ -64,7 +64,7 @@ export async function openOrder(id, { to } = {}) {
   loadJournal(current.order, current.access);
   await Promise.all([loadDocs(true), loadTransfer(), loadMatch(current, () => openOrder(id)), loadDraft(current, () => openOrder(id)), loadAnalogs(current), loadInspection(current), loadOnsite(current), loadDocRequests(current, (file, msg) => uploadFile(file, 'other', msg)), loadDeadline(current, () => openOrder(id)), loadReview(current), loadChat(current), loadMoney(current, () => openOrder(id))]);
   setNext({}); // разделы осмотра и черновика показаны — шаги пересчитываются
-  const box = { inspect: 'inspect-box', chat: 'chat-box', docs: 'docreq-box', deadline: 'deadline-box' }[to];
+  const box = { inspect: 'inspect-box', chat: 'chat-box', docs: 'docreq-box', deadline: 'deadline-box', sign: 'sign-wait-box' }[to];
   if (box && !$(box).classList.contains('hidden')) $(box).scrollIntoView({ block: 'start' });
 }
 
@@ -386,6 +386,7 @@ async function loadDocs(initial = false) {
   $('results-later').textContent = 'Результат работы появится здесь после проверки.';
   $('results-later').classList.toggle('hidden', !(resultsHidden && ['in_work', 'review'].includes(order.status)));
   renderOrgReturns(documentsBody.org_returns ?? []);
+  renderSignWait(documentsBody.sign_wait ?? null, documentsBody.signature_org);
   setNext({ docs: documentsBody });
   if (!initial) await refreshMissing(); // приложили определение суда — «Что дальше» знает сразу
   const basis = documents.filter((d) => d.kind === 'basis');
@@ -479,6 +480,30 @@ function signatureBlock(d, { canSign, signOrg }) {
   }
   return [el('div', { class: 'sig' }, ...lines)];
 }
+
+// Очередь подписи (2.99): эксперт подписал, организация ещё нет — сколько ждёт и «Напомнить руководителю» (раз в сутки).
+const waitedFor = (iso, now = Date.now()) => {
+  const h = Math.floor((now - Date.parse(iso)) / 3600_000);
+  return h < 1 ? 'меньше часа' : h < 24 ? `${h} ч` : `${Math.floor(h / 24)} дн.${h % 24 ? ` ${h % 24} ч` : ''}`;
+};
+const atRu = (iso) => new Date(iso).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+function renderSignWait(w, signOrg) {
+  $('sign-wait-box').classList.toggle('hidden', !w);
+  if (!w) return;
+  $('sign-wait-text').textContent = `Ждёт подписи организации ${quoted(signOrg)}: ${w.files === 1 ? 'файл' : `файлов ${w.files}`} · Вы подписали ${atRu(w.since)} — ждёт ${waitedFor(w.since)}.`;
+  $('sign-wait-reminded').textContent = w.reminded_at
+    ? `Вы напоминали руководителю ${atRu(w.reminded_at)}${w.next_remind_at ? ` · снова — после ${atRu(w.next_remind_at)}` : ''}.`
+    : 'Руководитель получил уведомление, когда Вы подписали. Если подпись задерживается — напомните (не чаще раза в сутки).';
+  $('sign-remind').disabled = !w.can_remind;
+}
+$('sign-remind').addEventListener('click', async () => {
+  $('sign-remind').disabled = true;
+  try {
+    const { sign_wait: w } = await api('POST', `/api/orders/${current.order.id}/sign-reminder`);
+    renderSignWait(w, lastDocs?.signature_org);
+    say($('doc-msg'), 'Руководителю отправлено напоминание', 'ok');
+  } catch (err) { say($('doc-msg'), err.message); await loadDocs(); }
+});
 
 let lastDocs = null;
 

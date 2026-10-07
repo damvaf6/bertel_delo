@@ -184,6 +184,29 @@ export function returnPoints(comment) {
   return lines;
 }
 
+// Очередь подписи эксперта (2.99): файлы результата исполнителя, которые он подписал, а организация ещё нет; с какого времени
+// ждут (самая ранняя подпись эксперта среди них) и когда эксперт последний раз напоминал руководителю. Напоминать — не чаще
+// раза в сутки по делу. null — ждать нечего.
+export const REMIND_EVERY_HOURS = 24;
+export async function signWait(sql, order) {
+  const r = await sql.one`
+    select count(*)::int as files, min(s.signed_at) as since
+    from documents d join document_signatures s on s.document_id = d.id and s.role = 'expert'
+    where d.order_id = ${order.id} and d.kind = 'result' and d.deleted_at is null and d.uploaded_by = ${order.executor_user_id}
+      and not exists (select 1 from document_signatures g where g.document_id = d.id and g.role = 'org')`;
+  if (!r?.files) return null;
+  const last = await sql.one`select max(created_at) as at, count(*)::int as n from sign_reminders where order_id = ${order.id}`;
+  const next = last?.at ? new Date(new Date(last.at).getTime() + REMIND_EVERY_HOURS * 3600_000) : null;
+  return {
+    files: r.files,
+    since: r.since,
+    reminded_at: last?.at ?? null,
+    reminders: last?.n ?? 0,
+    can_remind: !next || next <= new Date(),
+    next_remind_at: next && next > new Date() ? next : null,
+  };
+}
+
 function orgCheck(order) {
   if (order.status !== 'in_work') throw new HttpError(409, 'not_in_work', 'Подписать можно, пока дело в работе');
 }
@@ -242,6 +265,8 @@ export function signOps() {
             executor: o.executor_name,
             deadline: o.deadline,
             documents: docs.map((d) => ({ id: d.id, filename: d.filename, size_bytes: Number(d.size_bytes), signatures: signaturesView(signs.get(d.id)) })),
+            // Эксперт напоминал о подписи (2.99) — когда последний раз.
+            reminded_at: (await sql.one`select max(created_at) as at from sign_reminders where order_id = ${o.id} and org_id = ${org.id}`)?.at ?? null,
             // История возвратов эксперту (2.27) — только этой организации.
             returns: returns.map(({ id, at, document_id, filename, comment, by, open, items, left }) => ({ id, at, document_id, filename, comment, by, open, items, left })),
           });
@@ -345,6 +370,35 @@ export function signOps() {
         await audit(sql, actor, body.fixed ? 'org_return.item_fixed' : 'org_return.item_unfixed', 'order', order.id, { return_id: Number(rid), n: item.n });
         const fresh = (await orgReturns(sql, order.id)).find((r) => String(r.id) === rid);
         return { return: fresh };
+      },
+    },
+    {
+      // Эксперт напоминает руководителям своей организации о подписи (2.99): он подписал, организация ещё нет. Не чаще раза в
+      // сутки по делу; руководителю — уведомление, ведёт к делу в «Подписи организации».
+      id: 'orgsign.remind', method: 'POST', path: '/api/orders/:id/sign-reminder', auth: 'user',
+      access: { resource: 'order', param: 'id', need: 'read' },
+      async handler({ sql, actor, order, res }) {
+        if (order.executor_user_id !== actor.id || !orderSides(actor, order).includes('executor')) {
+          throw new HttpError(403, 'forbidden', 'Напоминает исполнитель дела');
+        }
+        if (order.status !== 'in_work') throw new HttpError(409, 'not_in_work', 'Напомнить можно, пока дело в работе');
+        const wait = await sql.tx(async (tx) => {
+          const cur = await tx.one`select status, executor_user_id from orders where id = ${order.id} for update`;
+          if (cur.status !== 'in_work' || cur.executor_user_id !== actor.id) throw new HttpError(409, 'status_changed', 'Статус заявки уже изменился, обновите страницу');
+          const signOrg = await executorSignOrg(tx, actor.id);
+          if (!signOrg) throw new HttpError(409, 'no_org', 'Вы работаете без организации — подпись организации не нужна');
+          const w = await signWait(tx, order);
+          if (!w) throw new HttpError(409, 'nothing_waiting', 'Нет файлов, которые ждут подписи организации');
+          if (!w.can_remind) throw new HttpError(409, 'too_often', 'Напомнить можно раз в сутки — руководитель уже получил напоминание');
+          const heads = (await tx`select user_id from org_members where org_id = ${signOrg.id} and role = 'head'`).map((h) => h.user_id);
+          if (!heads.length) throw new HttpError(409, 'no_head', 'В организации нет руководителя — напомнить некому');
+          await tx`insert into sign_reminders (order_id, org_id, user_id) values (${order.id}, ${signOrg.id}, ${actor.id})`;
+          await notify(tx, 'org_sign_reminder', { users: heads, orderId: order.id, orgId: signOrg.id, actor });
+          await audit(tx, actor, 'org_sign.remind', 'order', order.id, { org_id: signOrg.id, files: w.files });
+          return signWait(tx, order);
+        });
+        res.status(201);
+        return { sign_wait: wait };
       },
     },
     {

@@ -6,12 +6,14 @@
 // Руководителю — по каждой своей организации: дела экспертов, у которых горит срок, ждут подписи организации, возвращены
 // эксперту и ждут исправления, дела, которые диспетчер предложил организации, сроки документов досье экспертов (2.63),
 // «горящие» (2.98): срок через 1–2 дня или прошёл, а у эксперта нет ни черновика, ни файла результата или нет фото осмотра.
+// Эксперту — очередь подписи (2.99): он подписал, организация ещё нет; руководителю в «Ждут подписи» — когда эксперт напоминал.
 // Руководителю — те же сведения, что в «Делах экспертов» (2.16): без заказчика, полей заявки, документов и переписки.
 // Только свои дела и свои организации.
 import { orderRef } from '../notify/registry.mjs';
 import { splitAmount } from '../money/money.mjs';
 import { STATUS_NAME, addDays, isOverdue, todayMsk } from '../orders/workflow.mjs';
-import { orderSignatures, orgReturns } from './sign-ops.mjs';
+import { orderSignatures, orgReturns, signWait } from './sign-ops.mjs';
+import { executorSignOrg } from '../access/policy.mjs';
 import { dossierAlerts, loadDossier } from '../dossier/dossier.mjs';
 import { silentLinks } from './inspect-ops.mjs';
 
@@ -72,8 +74,19 @@ async function expertPart(sql, actor, registry, today) {
     if (what.length) ready.push(item(o, { what, at: n.last_at, to: n.messages ? 'chat' : n.docs ? 'docs' : 'inspect' }));
   }
   ready.sort((a, b) => new Date(b.at) - new Date(a.at));
+  // Очередь подписи (2.99): эксперт подписал, организация ещё нет — сколько ждёт, можно ли напомнить руководителю.
+  const signWaits = [];
+  const signOrg = await executorSignOrg(sql, actor.id);
+  if (signOrg) {
+    for (const o of rows.filter((x) => x.status === 'in_work')) {
+      const w = await signWait(sql, o);
+      if (w) signWaits.push(item(o, { org: signOrg.name, ...w }));
+    }
+    signWaits.sort((a, b) => new Date(a.since) - new Date(b.since));
+  }
   return {
     ready,
+    sign_wait: signWaits,
     inspect_silent: silent,
     hot: rows.filter((o) => o.status === 'in_work' && o.deadline && o.deadline <= soon).map((o) => item(o)),
     returned,
@@ -115,7 +128,11 @@ async function orgPart(sql, org, registry, today) {
     const docs = await sql`select id from documents where order_id = ${o.id} and kind = 'result' and deleted_at is null
                            and uploaded_by = (select executor_user_id from orders where id = ${o.id})`;
     const waiting = docs.filter((d) => signs.get(d.id)?.expert && !signs.get(d.id)?.org).length;
-    if (waiting) toSign.push(view(o, { files: waiting }));
+    if (waiting) {
+      // Эксперт напоминал о подписи (2.99) — когда последний раз.
+      const r = await sql.one`select max(created_at) as at from sign_reminders where order_id = ${o.id} and org_id = ${org.id}`;
+      toSign.push(view(o, { files: waiting, reminded_at: r?.at ?? null }));
+    }
     const open = (await orgReturns(sql, o.id, { orgId: org.id })).filter((r) => r.open);
     if (open.length) returned.push(view(o, { comment: open.at(-1).comment }));
   }

@@ -22,7 +22,9 @@ export async function loadOrgSign(org) {
   const signedAll = (it) => it.documents.every((d) => d.signatures.org);
   const head = (it) => [
     el('div', { class: 'title', text: `${it.service} · ${it.order_ref}` }),
-    el('div', { class: 'muted', text: [`Эксперт: ${it.executor}`, it.deadline ? `срок ${dayRu(it.deadline)}` : null].filter(Boolean).join(' · ') })];
+    el('div', { class: 'muted', text: [`Эксперт: ${it.executor}`, it.deadline ? `срок ${dayRu(it.deadline)}` : null].filter(Boolean).join(' · ') }),
+    // Эксперт напоминал о подписи (2.99) — пока файлы ждут подписи организации.
+    ...(it.reminded_at && waiting(it) ? [el('div', { class: 'sig-state', 'data-sig': 'reminded', text: `Эксперт напомнил о подписи ${new Date(it.reminded_at).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}` })] : [])];
   const open = items.filter((it) => !signedAll(it));
   const done = items.filter(signedAll);
   $('org-sign').replaceChildren(

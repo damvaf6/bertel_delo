@@ -1,7 +1,7 @@
 // «Сегодня» (2.34): над списком дел — что требует внимания сейчас. Эксперту: горит по срокам, вернули на доработку, новые
 // предложения, ждут проверки диспетчера. Руководителю экспертной организации — по делам его экспертов: горит срок, ждут
 // подписи организации, вернул эксперту, ждут назначения (без данных заказчика), сроки документов досье экспертов (2.63),
-// «горящие» — срок через 1–2 дня, а нет черновика или фото осмотра (2.98).
+// «горящие» — срок через 1–2 дня, а нет черновика или фото осмотра (2.98). Эксперту — очередь подписи организации (2.99).
 // «Можно продолжать» (2.86) — пришли документы, осмотр или сообщение. Диспетчеру (2.42) — деньги, проверка, цена, подбор, молчащие исполнители, горящие сроки. Нажатие — в дело или в раздел
 // организации.
 // Тексты — только через textContent.
@@ -10,6 +10,10 @@ import { api, el } from '/common.js';
 const $ = (id) => document.getElementById(id);
 const dayRu = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
 const since = (iso) => new Date(iso).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+const waited = (iso) => {
+  const h = Math.floor((Date.now() - Date.parse(iso)) / 3600_000);
+  return h < 1 ? 'меньше часа' : h < 24 ? `${h} ч` : `${Math.floor(h / 24)} дн.${h % 24 ? ` ${h % 24} ч` : ''}`;
+};
 const rub = (kop) => `${Math.floor(kop / 100).toLocaleString('ru-RU')} ₽`;
 
 function daysLeft(iso, today) {
@@ -42,6 +46,11 @@ export async function loadToday() {
       // Можно продолжать (2.86): пришло новое после того, как эксперт открывал дело, — сразу к переписке, документам или осмотру.
       ...group('ready', 'Можно продолжать', e.ready ?? [], (x) => [x.title, `${x.what.join(' · ')} · ${since(x.at)}`, deadline(x, t.today)],
         (x) => { location.hash = `order=${x.id}&to=${x.to}`; }),
+      // Очередь подписи (2.99): подписал, организация ещё нет — к блоку в деле с кнопкой «Напомнить руководителю».
+      ...group('sign-wait', 'Ждут подписи организации', e.sign_wait ?? [], (x) => [x.title,
+        `${x.org} · ${x.files === 1 ? 'файл' : `файлов ${x.files}`} · Вы подписали ${since(x.since)} — ждёт ${waited(x.since)}`,
+        x.reminded_at ? `напоминали ${since(x.reminded_at)}${x.can_remind ? ' · можно напомнить снова' : ''}` : 'можно напомнить руководителю'],
+      (x) => { location.hash = `order=${x.id}&to=sign`; }),
       ...group('returned', 'Вернули на доработку', e.returned, (x) => [x.title, `${x.by}: ${x.comment || 'без пояснения'}`, deadline(x, t.today)], toOrder),
       // Осмотр по ссылке 2 дня без фото (2.85) — сразу к осмотру в деле, там «Отправить ссылку снова».
       ...group('inspect-silent', 'Осмотр: 2 дня нет фото', e.inspect_silent ?? [], (x) => [x.title,
@@ -77,7 +86,8 @@ export async function loadToday() {
     const risky = new Set((g.at_risk ?? []).map((x) => x.order_ref));
     const part = [
       ...group(`org-risk-${g.id}`, 'Горит: нет черновика или фото осмотра', g.at_risk ?? [], (x) => [...caseLine(x), x.missing.join(' · ')], toOrg('case')),
-      ...group(`org-sign-${g.id}`, 'Ждут подписи организации', g.to_sign, (x) => [...caseLine(x), `файлов: ${x.files}`], toOrg('sign')),
+      ...group(`org-sign-${g.id}`, 'Ждут подписи организации', g.to_sign, (x) => [...caseLine(x),
+        `файлов: ${x.files}${x.reminded_at ? ` · эксперт напомнил ${since(x.reminded_at)}` : ''}`], toOrg('sign')),
       ...group(`org-pending-${g.id}`, 'Ждут назначения эксперта', g.pending, caseLine, toOrg('pending')),
       ...group(`org-hot-${g.id}`, 'Горит срок у экспертов', g.hot.filter((x) => !risky.has(x.order_ref)), caseLine, toOrg('case')),
       ...group(`org-returned-${g.id}`, 'Вернули эксперту — ждём исправления', g.returned, (x) => [...caseLine(x), `замечание: ${x.comment}`], toOrg('case')),

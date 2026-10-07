@@ -173,3 +173,55 @@ test('«Сегодня» у руководителя (2.98): горит срок
   assert.deepEqual((await spec.req('GET', '/api/today')).body.orgs, []);
   assert.deepEqual((await other.req('GET', '/api/today')).body.orgs, []);
 });
+
+test('очередь подписи у эксперта (2.99): подписал, организация ещё нет — сколько ждёт; «Напомнить руководителю» раз в сутки', async () => {
+  const o = await offered('Ждёт подписи организации', 12);
+  assert.equal((await step(spec, o, 'in_work')).status, 200);
+  const wait = async () => (await spec.req('GET', '/api/today')).body.expert.sign_wait.find((x) => x.id === o.id);
+  const remind = () => spec.req('POST', `/api/orders/${o.id}/sign-reminder`);
+  const events = async () => (await S.sql`select count(*)::int as n from notifications where user_id = ${head.user.id}
+                                          and event = 'org_sign_reminder' and order_id = ${o.id}`)[0].n;
+  // Файла нет или он не подписан — ждать нечего, напомнить нельзя.
+  assert.equal(await wait(), undefined);
+  assert.equal((await remind()).body.error, 'nothing_waiting');
+  const d = (await result(o, 'Заключение.pdf')).body.document;
+  assert.equal(await wait(), undefined, 'не подписан — не в очереди');
+  assert.equal((await spec.req('POST', `/api/documents/${d.id}/sign`, { confirm: true })).status, 201);
+  let w = await wait();
+  assert.equal(w.org, org.name);
+  assert.equal(w.files, 1);
+  assert.equal(w.reminded_at, null);
+  assert.equal(w.can_remind, true);
+  assert.ok(w.since);
+  assert.equal((await spec.req('GET', `/api/orders/${o.id}/documents`)).body.sign_wait.files, 1);
+  // Напомнил — руководителю уведомление; второй раз в тот же день нельзя.
+  const r = await remind();
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.equal(r.body.sign_wait.can_remind, false);
+  assert.ok(r.body.sign_wait.next_remind_at);
+  assert.equal(await events(), 1);
+  assert.equal((await remind()).body.error, 'too_often');
+  assert.equal(await events(), 1);
+  w = await wait();
+  assert.ok(w.reminded_at);
+  assert.equal(w.can_remind, false);
+  // Руководитель видит, что эксперт напоминал: в «Сегодня» и в «Подписи организации»; названия заявки — нет.
+  const g = (await head.req('GET', '/api/today')).body.orgs[0];
+  const ref = `№ ${o.id.slice(0, 8).toUpperCase()}`;
+  assert.ok(g.to_sign.find((x) => x.order_ref === ref).reminded_at);
+  const signing = (await head.req('GET', `/api/orgs/${org.id}/signing`)).body.items.find((x) => x.order_ref === ref);
+  assert.ok(signing.reminded_at);
+  assert.ok(!JSON.stringify(g).includes('Ждёт подписи организации'));
+  // Прошли сутки — можно снова.
+  await S.sql`update sign_reminders set created_at = now() - interval '25 hours' where order_id = ${o.id}`;
+  assert.equal((await wait()).can_remind, true);
+  assert.equal((await remind()).status, 201);
+  assert.equal(await events(), 2);
+  // Организация подписала — очередь пуста, напоминать нечего.
+  assert.equal((await head.req('POST', `/api/org-documents/${d.id}/sign`, { confirm: true })).status, 201);
+  assert.equal(await wait(), undefined);
+  assert.equal((await spec.req('GET', `/api/orders/${o.id}/documents`)).body.sign_wait, null);
+  assert.equal((await remind()).body.error, 'nothing_waiting');
+  // Эксперт без организации: очереди подписи организации нет.
+  assert.deepEqual((await other.req('GET', '/api/today')).body.expert.sign_wait, []);
+});
