@@ -1135,7 +1135,7 @@ test('дела экспертов (2.16): видит только руковод
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.cases.length, 1);
   const c = r.body.cases[0];
-  assert.deepEqual(Object.keys(c).sort(), ['active', 'chat', 'deadline', 'expert', 'fee_kop', 'id', 'offer_wait', 'order_ref', 'overdue', 'payout', 'returned_open', 'service', 'sign_wait', 'status', 'status_name', 'transfer_to']);
+  assert.deepEqual(Object.keys(c).sort(), ['active', 'chat', 'deadline', 'expert', 'fee_kop', 'id', 'offer_wait', 'offered_at', 'order_ref', 'overdue', 'payout', 'returned_open', 'service', 'sign_wait', 'status', 'status_name', 'transfer_to']);
   assert.deepEqual(Object.keys(c.chat).sort(), ['expert_last', 'messages']);   // переписка (2.67): только число и чьё последнее, без текста
   assert.equal(c.status, 'review');
   assert.equal(c.expert, 'Эксперт Б');
@@ -1648,7 +1648,10 @@ test('сводка за месяц по экспертам (2.78): только 
   const month = new Date(Date.now() + 3 * 3_600_000).toISOString().slice(0, 7);
   assert.equal(empty.month, month);
   assert.equal(empty.current, true);
-  assert.equal(empty.months.length, 13);
+  // Только что созданная организация (2.90): в выборе месяца только текущий; с давней — текущий и 12 прошлых.
+  assert.deepEqual(empty.months, [month]);
+  await S.sql`update organizations set created_at = now() - interval '2 years' where id = ${orgC.id}`;
+  assert.equal((await report(headC)).body.report.months.length, 13);
   assert.deepEqual(empty.total, { accepted: 0, done: 0, done_late: 0, overdue_now: 0, returned_head: 0, returned_dispatcher: 0, fee_kop: 0, paid_kop: 0 });
   for (const q of ['?month=2020-01', '?month=2099-01', '?month=13', '?month=2026-13']) assert.equal((await report(headC, q)).body.error, 'bad_month', q);
   // Дела: e1 принял 2 дела, одно сдал вовремя, другое позже срока; одно в работе просрочено; руководитель вернул раз,

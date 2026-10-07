@@ -51,6 +51,8 @@ export async function loadOrgCases(org) {
     el('div', { class: 'title', text: l.full_name }),
     el('div', { class: `muted${l.overdue ? ' overdue' : ''}`, text: [`в работе: ${l.in_work}`, l.offered ? `предложено: ${l.offered}` : null,
       l.overdue ? `просрочено: ${l.overdue}` : null].filter(Boolean).join(' · ') }),
+    // Ближайший срок (2.90): кому ещё можно дать дело — видно сразу.
+    ...(l.next_deadline && !l.overdue ? [el('div', { class: 'muted', 'data-next': '', text: `ближайший срок ${dayRu(l.next_deadline)}` })] : []),
     ...(l.away || l.paused ? [el('div', { class: 'muted', 'data-away': '', text: upper(awayText(l)) })] : []),
     expertLink(l.user_id))));
   $('org-cases-empty').classList.toggle('hidden', cases.length > 0 || pending.length > 0 || load.length === 0);
@@ -82,7 +84,9 @@ function caseItem(org, c) {
   return el('li', { 'data-case': c.order_ref },
     el('div', { class: 'title', text: `${c.service} · ${c.order_ref}` }),
     ...(c.overdue ? [el('div', { class: 'overdue big', text: deadline })] : []),
-    el('div', { class: 'muted', text: [c.status_name, `эксперт: ${c.expert}`, c.overdue ? null : deadline].filter(Boolean).join(' · ') }),
+    // Дело предложено эксперту, он ещё не принял (2.90): «Ждёт исполнителя · эксперт: …» читалось как «уже назначен».
+    el('div', { class: 'muted', text: [c.status === 'awaiting_executor' ? 'Предложено эксперту' : c.status_name, `эксперт: ${c.expert}`,
+      c.overdue ? null : deadline].filter(Boolean).join(' · ') }),
     el('div', { class: 'muted', text: [c.fee_kop != null ? `вознаграждение ${rub(c.fee_kop)}` : 'цена ещё не назначена',
       c.payout ? PAYOUT_RU[c.payout] : null].filter(Boolean).join(' · ') }),
     // Что ждёт руководителя по делу (2.36) — прямо в списке дел, с переходом к подписи.
@@ -92,6 +96,10 @@ function caseItem(org, c) {
     ...(c.returned_open ? [el('div', { class: 'muted', 'data-role': 'returned', text: 'Вы вернули отчёт эксперту — ждём исправления' })] : []),
     ...(c.status === 'in_work' ? [transferDetails(org, c)] : []),
     ...(c.offer_wait ? offerWait(org, c) : []),
+    // Предложил диспетчер — переназначает тоже он; руководитель видит, сколько эксперт молчит.
+    ...(c.status === 'awaiting_executor' && !c.offer_wait ? [el('div', { class: 'muted', 'data-role': 'offer-wait',
+      text: c.offered_at ? `Предложил диспетчер ${timeRu(c.offered_at)} (${waited(c.offered_at)}) — эксперт ещё не ответил`
+        : 'Предложил диспетчер — эксперт ещё не ответил' })] : []),
     chatDetails(c));
 }
 

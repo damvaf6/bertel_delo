@@ -292,7 +292,7 @@ test('организация: создать, пригласить, сотруд
   await page.getByRole('link', { name: /Организации/ }).click();
   await page.locator('#orgs').getByText('АНО «Тестовый центр экспертиз»').click();
   await expect(page.locator('#members li')).toHaveCount(3);
-  await expect(page.getByText('Старший · +7 999 000-05-23 · дел: 1')).toBeVisible();
+  await expect(page.getByText('Старший · +7 999 000-05-23 · заявок от организации: 1')).toBeVisible();
   await shot(page, '17-sotrudniki');
   page.once('dialog', (d) => d.accept());
   await page.locator(`#members li`).filter({ hasText: '+7 999 000-05-22' }).getByRole('button', { name: 'Убрать' }).click();
@@ -1595,7 +1595,7 @@ test('две подписи (2.5а): эксперт от организации 
   await expect(cases).not.toContainText('тестовая ул.');
   await expect(hp.locator('#org-cases-load li').first()).toContainText('в работе: 1');
   await expect(hp.locator('#org-cases-money')).toContainText('Ждёт выдачи результата12 000 ₽');
-  await expect(hp.locator('#members li').filter({ hasText: 'Тестовый эксперт компании' })).toContainText('дел: 1');
+  await expect(hp.locator('#members li').filter({ hasText: 'Тестовый эксперт компании' })).toContainText('дел в работе: 1');
   await cases.scrollIntoViewIfNeeded();
   await expect(hp.locator('#org-cases [data-role="sign-wait"]')).toHaveCount(0);   // подписано — в делах больше не ждёт
   await shot(hp, '97a-rukovoditel-dela-ekspertov');
@@ -1733,7 +1733,7 @@ test('распределение в организации (2.17): диспет�
   await pend.getByRole('button', { name: 'Назначить' }).click();
   await expect(hp.locator('#org-pending-msg')).toHaveText('Дело предложено эксперту — он примет его или откажется');
   await expect(hp.locator('#org-pending-box')).toBeHidden();
-  await expect(hp.locator('#org-cases > li').first()).toContainText('Ждёт исполнителя · эксперт: Тестовый эксперт бюро');
+  await expect(hp.locator('#org-cases > li').first()).toContainText('Предложено эксперту · эксперт: Тестовый эксперт бюро');
 
   // Эксперт отказывается — дело снова у руководителя, с причиной.
   await sp.goto('/kabinet');
@@ -3341,7 +3341,7 @@ test('сводка за месяц (2.78): руководитель видит �
   const hp = await hctx.newPage();
   const head = await signIn(hp, '+79990000792');
   const orgId = await db(async (c) => {
-    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Бюро сводки ${Date.now()}»') returning id`);
+    const { rows: [org] } = await c.query(`insert into organizations (name, created_at) values ('ООО «Бюро сводки ${Date.now()}»', now() - interval '13 months') returning id`);
     await c.query("update users set full_name = 'Эксперт Сводкин' where id = $1", [expert.id]);
     await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now()), ($1, $3, 'member', now() - interval '1 minute')", [org.id, head.id, expert.id]);
     await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [expert.id, org.id]);
@@ -3401,6 +3401,55 @@ test('сводка за месяц (2.78): руководитель видит �
   expect((await ep.request.get(`/api/orgs/${orgId}/report`)).status()).toBe(403);
   await ectx.close();
   await hctx.close();
+});
+
+test('как руководитель (2.90): нагрузка с ближайшим сроком, предложенное диспетчером дело, сотрудники, месяцы сводки', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const hp = await ctx(), ap = await ctx(), bp = await ctx(), cp = await ctx();
+  const head = await signIn(hp, '+79990009001'), a = await signIn(ap, '+79990009002'), b = await signIn(bp, '+79990009003');
+  const customer = await signIn(cp, '+79990009004');
+  const { orgId, soonIso } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Бюро нагрузки ${Date.now()}»') returning id`);
+    await c.query("update users set full_name = 'Нагрузкина Анна' where id = $1", [a.id]);
+    await c.query("update users set full_name = 'Ожидаев Борис' where id = $1", [b.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member'), ($1, $4, 'member')", [org.id, head.id, a.id, b.id]);
+    await c.query('insert into specialists (user_id, org_id) values ($1, $3), ($2, $3)', [a.id, b.id, org.id]);
+    const mk = async (executor, status, days) => (await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at)
+      values ('expertise', 'realty', 'Квартира: нагрузка', $1, $2, $3, current_date + $4::int, 1000000, now()) returning id`, [customer.id, executor, status, days])).rows[0].id;
+    await mk(a.id, 'in_work', 12);
+    await mk(a.id, 'in_work', 5);
+    // Дело предложил эксперту сам диспетчер, не организация; эксперт молчит 3 часа.
+    const offered = await mk(b.id, 'awaiting_executor', 9);
+    await c.query("insert into order_offers (order_id, specialist_id, score, offered_at) values ($1, $2, '{}', now() - interval '3 hours 5 minutes')", [offered, b.id]);
+    return { orgId: org.id, soonIso: (await c.query("select to_char(current_date + 5, 'YYYY-MM-DD') as d")).rows[0].d };
+  });
+  await hp.goto(`/kabinet#org=${orgId}`);
+  // Нагрузка: у кого сколько и когда ближайший срок — кому ещё можно дать дело.
+  const la = hp.locator('#org-cases-load > li').filter({ hasText: 'Нагрузкина Анна' });
+  await expect(la).toContainText('в работе: 2');
+  const soon = await hp.evaluate((iso) => { const [y, m, d] = iso.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }); }, soonIso);
+  await expect(la.locator('[data-next]')).toContainText(`ближайший срок ${soon}`);
+  await expect(hp.locator('#org-cases-load > li').filter({ hasText: 'Ожидаев Борис' })).toContainText('в работе: 0 · предложено: 1');
+  await hp.locator('#org-cases-load-title').scrollIntoViewIfNeeded();
+  await shot(hp, 'a9-rukovoditel-nagruzka-blizhajshij-srok');
+  // Предложенное диспетчером дело не выглядит назначенным: «Предложено эксперту», сколько ждём ответа.
+  const offeredRow = hp.locator('#org-cases > li').filter({ hasText: 'Ожидаев Борис' });
+  await expect(offeredRow).toContainText('Предложено эксперту · эксперт: Ожидаев Борис');
+  await expect(offeredRow).not.toContainText('Ждёт исполнителя');
+  await expect(offeredRow.locator('[data-role="offer-wait"]')).toContainText('Предложил диспетчер');
+  await expect(offeredRow.locator('[data-role="offer-wait"]')).toContainText('(3 ч) — эксперт ещё не ответил');
+  await expect(offeredRow.locator('[data-reassign]')).toHaveCount(0);
+  await offeredRow.scrollIntoViewIfNeeded();
+  await shot(hp, 'a9b-rukovoditel-predlozhil-dispetcher');
+  // Сотрудники: дела в работе отдельно от заявок; у кого дел нет — так и написано.
+  await expect(hp.locator('#members li').filter({ hasText: 'Нагрузкина Анна' })).toContainText('Сотрудник · +7 999 000-90-02 · дел в работе: 2');
+  await expect(hp.locator('#members li').filter({ hasText: 'Ожидаев Борис' })).toContainText('сейчас дел нет');
+  await expect(hp.locator('#members')).not.toContainText('дел: ');
+  // Сводка новой организации: в выборе месяца только текущий — прошлые заведомо пусты.
+  await expect(hp.locator('#org-report-month option')).toHaveCount(1);
+  await expect(hp.locator('#org-report-month option')).toContainText('(текущий)');
+  for (const p of [ap, bp, cp]) await p.context().close();
+  await hp.context().close();
 });
 
 test('запрос документов (2.64): эксперт отмечает недостающие, заказчик загружает к каждому, эксперт видит отметки', async ({ page, browser, baseURL }) => {
