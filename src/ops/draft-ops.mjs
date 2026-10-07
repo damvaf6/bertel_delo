@@ -14,6 +14,7 @@ import { audit, sendFile } from './util.mjs';
 import { fillDraft, itemLine, loadDossier } from '../dossier/dossier.mjs';
 import { pastValues, reuseSections, skeleton } from '../docs/reuse.mjs';
 import { orderRef } from '../notify/registry.mjs';
+import { orderSources, placeSources, sourcesLines } from '../docs/sources.mjs';
 
 const PHOTOS_MAX = 40;
 const DOCS_MAX = 5;
@@ -142,7 +143,10 @@ export function draftOps() {
         const out = await askAi(ctx, actor, 'draft', draftMessages({ brief, sections, ...inputs }));
         // Таблицы (2.29) и сведения из досье (2.14) программа вставляет сама, под заголовками разделов.
         const materials = await orderMaterials(sql, order);
-        const text = fillDraft(fillTables(cleanDraftAnswer(sections, out.text), sections, registry, order, { materials }), sections, dossier).slice(0, DRAFT_MAX);
+        // Перечень использованных документов (2.95) — из дела, программой.
+        const sources = sourcesLines(await orderSources(sql, registry, order));
+        const filled = fillDraft(fillTables(cleanDraftAnswer(sections, out.text), sections, registry, order, { materials }), sections, dossier);
+        const text = placeSources(filled, sections, sources).body.slice(0, DRAFT_MAX);
         const seen = {
           photos: inputs.photos.map((p) => p.name),
           docs: inputs.docs.map((d) => ({ name: d.name, read: d.text !== null, truncated: d.truncated })),
@@ -201,11 +205,12 @@ export function draftOps() {
         const values = pastValues(registry, past, [names?.owner, names?.org]).filter((v) => !own.has(v.toLowerCase()));
         const dossier = sections.some((s) => s.dossier) ? await loadDossier(sql, actor.id) : [];
         const materials = await orderMaterials(sql, order);
+        const sources = sourcesLines(await orderSources(sql, registry, order));
         const d = await sql.tx(async (tx) => {
           await tx`select id from orders where id = ${order.id} for update`;
           const cur = await latest(tx, order.id);
           sameBase(cur, body?.from);
-          const base = cur?.body ?? fillDraft(fillTables(skeleton(sections), sections, registry, order, { materials }), sections, dossier);
+          const base = cur?.body ?? placeSources(fillDraft(fillTables(skeleton(sections), sections, registry, order, { materials }), sections, dossier), sections, sources).body;
           const got = reuseSections(base, sections, past.body, values);
           if (!got.used.length) throw new HttpError(409, 'no_reuse', 'В том деле нет методических разделов — выберите другое');
           const text = got.body.slice(0, DRAFT_MAX);
@@ -235,6 +240,37 @@ export function draftOps() {
         await sql`update orders set approaches = ${chosen} where id = ${order.id}`;
         await audit(sql, actor, 'draft.approaches', 'order', order.id, { approaches: chosen });
         return { approaches: chosen, sections: orderSections(registry, { ...order, approaches: chosen }) };
+      },
+    },
+    {
+      // Обновить перечень использованных документов (2.95) — новой версией черновика: блок перечня собирается заново из
+      // того, что сейчас в деле (заказчик прислал документ, добавлены аналоги, пришли фото); остальной текст не меняется.
+      id: 'draft.sources', method: 'POST', path: '/api/orders/:id/draft/sources', auth: 'user',
+      access: { resource: 'order', param: 'id', need: 'read' },
+      async handler({ sql, actor, order, registry, body }) {
+        guardEdit(actor, order);
+        const sections = orderSections(registry, order);
+        if (!sections.some((s) => s.sources)) throw new HttpError(400, 'no_sources', 'Для этой услуги перечня документов в черновике нет');
+        const lines = sourcesLines(await orderSources(sql, registry, order));
+        const d = await sql.tx(async (tx) => {
+          await tx`select id from orders where id = ${order.id} for update`;
+          const cur = await latest(tx, order.id);
+          if (!cur) throw new HttpError(400, 'no_draft', 'Черновика ещё нет');
+          sameBase(cur, body?.from);
+          const got = placeSources(cur.body, sections, lines);
+          if (!got.placed) {
+            throw new HttpError(409, 'no_sources', lines.length
+              ? 'В черновике нет раздела для перечня — верните заголовок раздела приложений или подготовьте черновик заново'
+              : 'В деле пока нет документов для перечня');
+          }
+          const text = got.body.slice(0, DRAFT_MAX);
+          if (text === cur.body) return cur;
+          const row = await tx.one`insert into result_drafts (order_id, author_id, source, body, inputs)
+                                   values (${order.id}, ${actor.id}, 'edit', ${text}, ${JSON.stringify(cur.inputs ?? {})}) returning id`;
+          await audit(tx, actor, 'draft.sources', 'order', order.id, { draft: String(row.id), lines: Math.max(lines.length - 1, 0) });
+          return latest(tx, order.id);
+        });
+        return { draft: draftView(d, actor), items: lines.filter((l) => /^\d+\. /.test(l)).length };
       },
     },
     {

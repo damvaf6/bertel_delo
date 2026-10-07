@@ -209,9 +209,11 @@ async function photosPart({ sql, providers, registry }, order) {
 export const tablesBrief = (sections) => {
   const t = sections.filter((s) => s.table && s.table !== 'analogs' && s.table !== 'questions');
   const q = sections.filter((s) => s.table === 'questions');
+  const src = sections.filter((s) => s.sources);
   return [
     t.length ? `ТАБЛИЦЫ: программа сама вставит таблицы в разделы ${t.map((s) => `«${s.title}»`).join(', ')} — сам их не рисуй${t.some((s) => s.table === 'task') ? '; список документов заказчика под таблицей задания программа тоже вставит сама' : ''}.` : null,
     q.length ? `ВОПРОСЫ: программа сама вставит вопросы из заявки дословно в раздел ${q.map((s) => `«${s.title}»`).join(', ')} — не переписывай их.` : null,
+    src.length ? `ПЕРЕЧЕНЬ ДОКУМЕНТОВ: программа сама вставит в раздел ${src.map((s) => `«${s.title}»`).join(', ')} перечень использованных документов (документы заказчика, досье эксперта, фото осмотра, аналоги со ссылками) — сам их там не перечисляй.` : null,
   ].filter(Boolean).join('\n') || null;
 };
 

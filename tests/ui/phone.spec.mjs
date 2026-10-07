@@ -4967,3 +4967,43 @@ test('мои итоги за месяц (2.92): эксперт в профиле
   await rows.nth(1).getByRole('link').click();
   await expect(page).toHaveURL(new RegExp(`#order=${ids.late}`));
 });
+
+test('перечень использованных документов (2.95): собран в черновике сам; заказчик прислал документ — «Обновить перечень»', async ({ page }) => {
+  const expert = await signIn(page, '+79990000798');
+  const id = await db(async (c) => {
+    const owner = (await c.query("insert into users (phone, full_name) values ('+79990000799', 'Заказчик перечня') on conflict (phone) do update set full_name = excluded.full_name returning id")).rows[0].id;
+    const o = (await c.query(
+      `insert into orders (owner_user_id, title, module, service, fields, status, executor_user_id, price_kop, paid_at, deadline)
+       values ($1, 'Квартира: перечень документов', 'expertise', 'realty', $3, 'in_work', $2, 1500000, now(), now() + interval '6 days') returning id`,
+      [owner, expert.id, { purpose: 'bank', region: 'moscow', object_type: 'flat', address: 'г. Москва, Перечневая ул., 2', area: '51' }])).rows[0];
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    await c.query(`insert into documents (order_id, uploaded_by, filename, mime, size_bytes, storage_key, kind)
+                   values ($1, $2, 'Договор на оценку.pdf', 'application/pdf', 10, $3, 'basis')`, [o.id, owner, `ui-295-${o.id}-1`]);
+    await c.query(`insert into dossier_items (user_id, kind, title, number) values ($1, 'sro', 'СРО «Тестовые оценщики»', '7777')`, [expert.id]);
+    await c.query(`insert into order_analogs (order_id, author_id, url, url_key, confirmed_at, received_at)
+                   values ($1, $2, 'https://www.avito.ru/moskva/kvartiry/295', 'ui295', now(), now())`, [o.id, expert.id]);
+    return { id: o.id, owner };
+  });
+  await page.goto(`/kabinet#order=${id.id}`);
+  await page.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(page.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const text = page.getByLabel('Текст заключения');
+  await expect(text).toHaveValue(/Документы, представленные заказчиком:\n1\. Документ-основание — файл «Договор на оценку\.pdf»/);
+  await expect(text).toHaveValue(/Документы эксперта:\n2\. Членство в СРО: СРО «Тестовые оценщики», номер в реестре 7777/);
+  await expect(text).toHaveValue(/Объявления-аналоги:\n3\. Аналог 1 — avito\.ru: https:\/\/www\.avito\.ru\/moskva\/kvartiry\/295, скриншот получен/);
+  await expect(page.locator('#draft-sources-box')).toBeVisible();
+  // Заказчик прислал выписку ЕГРН — эксперт обновляет перечень, остальной текст не меняется.
+  await db((c) => c.query(`insert into documents (order_id, uploaded_by, filename, mime, size_bytes, storage_key, kind)
+                           values ($1, $2, 'Выписка ЕГРН.pdf', 'application/pdf', 10, $3, 'other')`, [id.id, id.owner, `ui-295-${id.id}-2`]));
+  await text.fill((await text.inputValue()).replace('## 15. Литература и приложения', '## 15. Литература и приложения\nМоя строка о литературе.'));
+  await page.getByRole('button', { name: 'Обновить перечень документов' }).click();
+  await expect(page.locator('#draft-msg')).toHaveText('Перечень обновлён: документов в нём — 4');
+  await expect(text).toHaveValue(/2\. Документ — файл «Выписка ЕГРН\.pdf»/);
+  await expect(text).toHaveValue(/Моя строка о литературе\./);
+  await expect(text).toHaveValue(/4\. Аналог 1 — avito\.ru/);
+  // Показать перечень на экране: прокрутить поле текста к нему.
+  await text.evaluate((t) => { t.focus(); const at = t.value.indexOf('Перечень использованных'); t.setSelectionRange(at, at); t.scrollTop = t.scrollHeight; });
+  await page.locator('#draft-sources-box').scrollIntoViewIfNeeded();
+  await shot(page, '114-ekspert-perechen-dokumentov');
+});

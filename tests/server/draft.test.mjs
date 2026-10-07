@@ -598,3 +598,73 @@ test('почерковедческая (2.81): документы заказчи
   assert.equal(goods.fields.filter((f) => f.label === 'Где находится товар').length, 1);
   assert.ok(!expertise.request_docs.find((d) => d.id === 'damage_docs').services.includes('goods'), 'протокол ДТП и акт о заливе — не для товара');
 });
+
+// Перечень использованных документов (2.95): программа собирает его из дела — документы заказчика (и присланные по запросу),
+// досье эксперта, фото осмотра, аналоги со ссылкой и временем скриншота; эксперт правит; «Обновить перечень» — заново.
+test('перечень использованных документов (2.95): из дела, сквозная нумерация; обновление не трогает остальной текст', async () => {
+  const o = await inWork('Квартира с перечнем');
+  const appendix = createRegistry().draftSections('expertise', 'realty').find((s) => s.sources);
+  assert.equal(appendix.id, 'r_appendix');
+  for (const svc of ['realty', 'land', 'movable', 'vehicle', 'goods', 'construction', 'handwriting']) {
+    assert.equal(createRegistry().draftSections('expertise', svc).filter((s) => s.sources).length, 1, svc);
+  }
+  assert.equal((await spec.req('POST', '/api/specialist/me/dossier', { kind: 'sro', title: 'СРО «Тестовые оценщики»', number: '7777' })).status, 201);
+  const [a1] = await S.sql`insert into order_analogs (order_id, author_id, url, url_key, confirmed_at, received_at)
+                           values (${o.id}, ${spec.user.id}, 'https://www.avito.ru/moskva/kvartiry/1', 'a1', now(), '2026-10-01T09:30:00Z') returning id`;
+  await S.sql`insert into order_analogs (order_id, author_id, url, url_key, confirmed_at) values (${o.id}, ${spec.user.id}, 'https://cian.ru/sale/2', 'a2', now())`;
+  await S.sql`insert into order_analogs (order_id, author_id, url, url_key) values (${o.id}, ${spec.user.id}, 'https://cian.ru/sale/neutverzhdyon', 'a3')`;
+  for (const n of [1, 2]) {
+    await S.sql`insert into documents (order_id, uploaded_by, filename, mime, size_bytes, storage_key, kind, created_at)
+                values (${o.id}, ${owner.user.id}, ${`осмотр-${n}.jpg`}, 'image/jpeg', 6, ${`k-${o.id}-${n}`}, 'inspection', '2026-10-05T10:00:00Z')`;
+  }
+
+  const d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {})).body.draft;
+  assert.match(lastPrompt(), /ПЕРЕЧЕНЬ ДОКУМЕНТОВ: программа сама вставит в раздел «15\. Литература и приложения»/);
+  const part = d.body.split(`## ${appendix.title}`)[1].split('\n## ')[0];
+  const day = todayMsk().split('-').reverse().join('.');
+  const block = part.split('Перечень использованных документов')[1].split('\n\n')[0];
+  assert.ok(block.includes(`Документы, представленные заказчиком:\n1. Документ — файл «фасад.jpg», получен ${day}`), block);
+  assert.ok(block.includes('3. Документ — файл «Сведения.docx»'), block);
+  assert.ok(block.includes('Документы эксперта:\n4. Членство в СРО: СРО «Тестовые оценщики», номер в реестре 7777'), block);
+  assert.ok(block.includes('Материалы осмотра:\n5. Фотоматериалы осмотра — 2 снимка, получены платформой «БЕРТЕЛ Дело» 05.10.2026'), block);
+  assert.ok(block.includes('Объявления-аналоги:\n6. Аналог 1 — avito.ru: https://www.avito.ru/moskva/kvartiry/1, скриншот получен 01.10.2026, 12:30 (МСК)'), block);
+  assert.ok(block.includes('7. Аналог 2 — cian.ru: https://cian.ru/sale/2, скриншот не приложен'), block);
+  assert.ok(!block.includes('neutverzhdyon'), 'неподтверждённый аналог — не в перечне');
+  assert.equal(d.body.split('Перечень использованных документов').length, 2, 'перечень — один раз');
+
+  // Эксперт правит перечень и текст раздела; потом заказчик присылает документ, аналог убран — «Обновить перечень».
+  const edited = d.body.replace('7. Аналог 2', '7. Аналог второй').replace(/(## 15\. Литература и приложения\n)/, '$1Мой абзац о литературе.\n');
+  const saved = (await spec.req('PUT', `/api/orders/${o.id}/draft`, { body: edited, from: d.id })).body.draft;
+  assert.equal((await put(owner, o, Buffer.from('%PDF-1.4 егрн'), 'ЕГРН.pdf', 'application/pdf')).status, 201);
+  await S.sql`update order_analogs set deleted_at = now() where id = ${a1.id}`;
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/draft/sources`, { from: d.id })).status, 409, 'уже изменился');
+  const r = await spec.req('POST', `/api/orders/${o.id}/draft/sources`, { from: saved.id });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.items, 7);
+  const b = r.body.draft.body;
+  assert.equal(r.body.draft.versions, saved.versions + 1);
+  assert.match(b, /Мой абзац о литературе\./, 'текст эксперта вне перечня не тронут');
+  assert.match(b, /4\. Документ — файл «ЕГРН\.pdf»/);
+  assert.match(b, /7\. Аналог 1 — cian\.ru: https:\/\/cian\.ru\/sale\/2/);
+  assert.ok(!b.includes('avito.ru'), 'убранный аналог ушёл из перечня');
+  assert.ok(!b.includes('Аналог второй'), 'перечень собран заново');
+  assert.equal(b.split('Перечень использованных документов').length, 2);
+  // Второе нажатие — ничего не изменилось, новой версии нет.
+  const again = await spec.req('POST', `/api/orders/${o.id}/draft/sources`, { from: r.body.draft.id });
+  assert.equal(again.body.draft.versions, r.body.draft.versions);
+  // Эксперт удалил перечень целиком — обновление вставит его снова под заголовок раздела.
+  const without = b.replace(/Перечень использованных документов[^]*?\n\n/, '');
+  const s2 = (await spec.req('PUT', `/api/orders/${o.id}/draft`, { body: without, from: r.body.draft.id })).body.draft;
+  assert.ok(!s2.body.includes('Перечень использованных'));
+  const back = (await spec.req('POST', `/api/orders/${o.id}/draft/sources`, { from: s2.id })).body.draft;
+  assert.match(back.body, /## 15\. Литература и приложения\nПеречень использованных документов/);
+  // Заказчику и диспетчеру — нельзя; в журнале дела — отметка.
+  for (const c of [owner, dispatcher]) assert.equal((await c.req('POST', `/api/orders/${o.id}/draft/sources`, { from: back.id })).status, 403);
+  const [j] = await S.sql`select count(*)::int as n from audit_log where action = 'draft.sources' and subject_id = ${o.id}`;
+  assert.equal(j.n, 2);
+  // Word: перечень — нумерованные строки в разделе приложений.
+  const word = await download(spec, `/api/orders/${o.id}/draft/docx`);
+  assert.equal(word.status, 200);
+  const text = (await extractPages(word.buf, 'Отчёт.docx')).pages.join('\n');
+  assert.match(text, /Фотоматериалы осмотра — 2 снимка/);
+});

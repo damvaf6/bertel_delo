@@ -29,6 +29,7 @@ export async function loadDraft(current, reload) {
   await loadPast(r);
   $('draft-edit').classList.toggle('hidden', !r.draft);
   $('draft-actions').classList.toggle('hidden', !(r.draft && r.can_edit));
+  $('draft-sources-box').classList.toggle('hidden', !(r.draft && r.can_edit && r.sections.some((s) => s.sources)));
   $('draft-word-box').classList.toggle('hidden', !(r.draft && mine));
   $('draft-text').readOnly = !r.can_edit;
   $('draft-text').value = r.draft?.body ?? '';
@@ -158,6 +159,14 @@ async function save() {
   $('draft-local').classList.add('hidden');
   $('draft-state').textContent = stateText({ draft: r.draft, can_edit: true });
 }
+
+// Перечень использованных документов (2.95): собирается заново из дела; несохранённая правка сначала сохраняется.
+$('draft-sources').addEventListener('click', () => run($('draft-sources'), async () => {
+  if ($('draft-text').value.trim() !== ctx.draft.body) await save();
+  const r = await api('POST', `/api/orders/${ctx.order.id}/draft/sources`, { from: ctx.draft.id });
+  await loadDraft({ order: ctx.order, executor: { is_me: true } }, ctx.reload);
+  say($('draft-msg'), `Перечень обновлён: документов в нём — ${r.items}`, 'ok');
+}));
 
 $('draft-save').addEventListener('click', () => run($('draft-save'), async () => {
   await save();
