@@ -3,7 +3,7 @@
 // (10-й знак VIN сохранён там, где по нему сверяется год). Настоящие отчёты в репозиторий не попадают.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { runAutoChecks, vinYears, wordsToNumber, tocEntries, AUTO_CHECKS, purchaseOf, questionsOf } from '../../src/ai/report-checks.mjs';
+import { runAutoChecks, vinYears, wordsToNumber, tocEntries, AUTO_CHECKS, purchaseOf, questionsOf, parseAddress } from '../../src/ai/report-checks.mjs';
 import { pagesForModel } from '../../src/ops/ai-ops.mjs';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
@@ -524,6 +524,57 @@ test('товароведческая (2.61): дата и цена покупки
     'Цена покупки 45 990 ₽ не совпадает с ценой по чеку из заявки (54 990 ₽) — проверьте чек',
   ]);
   assert.deepEqual(runAutoChecks(['purchase_match'], [doc([bad])], { fields: {} }).purchase_match, [], 'в заявке нет — не сверяем');
+});
+
+test('адрес объекта (2.94): как в заявке и одинаков по всему отчёту; адреса оценщика, организации и аналогов — не находка', () => {
+  assert.deepEqual(parseAddress('г. Москва, ул. Долевая, 3, кв. 8'), { flat: '8', settlement: ['москв'], house: '3', street: ['долев'] });
+  assert.deepEqual(parseAddress('Московская обл., г. Одинцово, Можайское шоссе, д. 12, корп. 2, кв. 45'),
+    { house: '12', korpus: '2', flat: '45', settlement: ['одинц'], street: ['можай'] });
+  assert.deepEqual(parseAddress('МО, д. Тестово, уч. 5'), { plot: '5', settlement: ['тесто'] });
+  const fields = { address: 'г. Москва, ул. Долевая, 3, кв. 8' };
+  const title = 'ОТЧЁТ ОБ ОЦЕНКЕ квартиры, расположенной по адресу: г. Москва, ул. Долевая, д. 3, кв. 8';
+  const good = [
+    title,
+    'Оценщик Тестов Т. Т., адрес: г. Москва, ул. Офисная, д. 1, оф. 5',
+    'Юридический адрес организации: г. Москва, ул. Тверская, д. 10',
+    'Адрес объекта оценки: г. Москва, улица Долевая, дом 3, квартира 8. Кадастровый номер 77:01:0001001:1234',
+    'Аналог 1 расположен по адресу: г. Москва, ул. Долевая, д. 5, кв. 3',
+    'Заказчик зарегистрирован по адресу: г. Москва, ул. Другая, д. 7, кв. 1',
+  ].join('\n');
+  assert.deepEqual(runAutoChecks(['address_match'], [doc([good])], { fields }).address_match, []);
+  const bad = [
+    title,
+    'Адрес объекта оценки: г. Москва, ул. Долевая, д. 3, кв. 18. Кадастровый номер 77:01:0001001:1234',
+    'Местоположение объекта: г. Москва, ул. Садовая, д. 3, кв. 8, общей площадью 54,3 кв. м',
+  ];
+  const res = runAutoChecks(['address_match'], [doc([bad[0], bad.slice(1).join('\n')])], { fields });
+  assert.deepEqual(texts(res, 'address_match'), [
+    'Адрес «г. Москва, ул. Долевая, д. 3, кв. 18» не совпадает с адресом из заявки (г. Москва, ул. Долевая, 3, кв. 8): квартира 18, а в заявке 8 — проверьте, нет ли данных другого объекта',
+    'Адрес «г. Москва, ул. Садовая, д. 3, кв. 8» не совпадает с адресом из заявки (г. Москва, ул. Долевая, 3, кв. 8): другая улица — проверьте, нет ли данных другого объекта',
+  ]);
+  assert.equal(res.address_match[0].where, 'стр. 2', 'находка — с файлом и страницей');
+  // В заявке нет номера дома — номер сверяется по отчёту: на титуле дом 3, в выводах дом 5.
+  const loose = runAutoChecks(['address_match'], [doc([
+    'Объект расположен по адресу: Московская обл., д. Тестово, ул. Лесная, д. 3',
+    'Выводы. Рыночная стоимость жилого дома по адресу: Московская обл., д. Тестово, ул. Лесная, д. 5',
+  ])], { fields: { address: 'МО, д. Тестово, ул. Лесная' } });
+  assert.deepEqual(texts(loose, 'address_match'), [
+    'Адрес «Московская обл., д. Тестово, ул. Лесная, д. 5» не совпадает с адресом объекта на стр. 1: дом 5, а на стр. 1 3 — проверьте, нет ли данных другого объекта',
+  ]);
+  // Участок: другой номер участка и другая деревня.
+  const land = runAutoChecks(['address_match'], [doc(['Местоположение (адрес) участка: Московская обл., д. Иваново, участок № 7'])], { fields: { address: 'МО, д. Тестово, уч. 5' } });
+  assert.deepEqual(texts(land, 'address_match'), [
+    'Адрес «Московская обл., д. Иваново, участок № 7» не совпадает с адресом из заявки (МО, д. Тестово, уч. 5): другой населённый пункт; участок 7, а в заявке 5 — проверьте, нет ли данных другого объекта',
+  ]);
+  assert.deepEqual(runAutoChecks(['address_match'], [doc(bad)], { fields: {} }).address_match, [], 'без адреса в заявке — не сверяем');
+});
+
+test('2.94: сверка адреса подключена к «Данные объекта» у всех видов', async () => {
+  const { createRegistry } = await import('../../src/modules/index.mjs');
+  const reg = createRegistry();
+  for (const svc of ['realty', 'land', 'construction']) {
+    assert.ok(reg.checks('expertise', svc).find((c) => c.id === 'object_match').auto.includes('address_match'), svc);
+  }
 });
 
 test('все виды (2.61): каждый вопрос заявки найден в выводах — по номеру или по словам вопроса', () => {
