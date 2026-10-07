@@ -2479,6 +2479,25 @@ test('«Сегодня» (2.34, 2.63): эксперт — горит, верну
   await shot(sp, '97-segodnya-ekspert');
   await box.locator('li[data-today-item="returned"] button').click();
   await expect(sp.locator('#order-title')).toHaveText('Квартира — вернули');
+  // Очередь подписи (2.99): эксперт подписал, организация ещё нет — к делу, там «Напомнить руководителю» (раз в сутки).
+  await sp.goto('/kabinet');
+  const sw = sp.locator('#today-box li[data-today-item="sign-wait"]');
+  await expect(sp.locator('#today-box li[data-today="sign-wait"]')).toHaveText('Ждут подписи организации · 1');
+  await expect(sw).toContainText('ООО «Оценка Сегодня» · файл · Вы подписали');
+  await expect(sw).toContainText('можно напомнить руководителю');
+  await sw.locator('button').click();
+  await expect(sp).toHaveURL(new RegExp(`#order=${fire.id}&to=sign$`));
+  await expect(sp.locator('#order-title')).toHaveText('Квартира — срок завтра');
+  await expect(sp.locator('#sign-wait-box')).toBeVisible();
+  await expect(sp.locator('#sign-wait-text')).toContainText('Ждёт подписи организации');
+  await expect(sp.locator('#sign-wait-text')).toContainText('ждёт меньше часа');
+  await sp.locator('#sign-remind').click();
+  await expect(sp.locator('#doc-msg')).toHaveText('Руководителю отправлено напоминание');
+  await expect(sp.locator('#sign-remind')).toBeDisabled();
+  await expect(sp.locator('#sign-wait-reminded')).toContainText('Вы напоминали руководителю');
+  await expect(sp.locator('#sign-wait-reminded')).toContainText('снова — после');
+  await sp.locator('#sign-wait-box').scrollIntoViewIfNeeded();
+  await shot(sp, '99-ochered-podpisi-napomnit');
 
   // Досье эксперта (2.63): полис кончается через 10 дней, аттестат истёк — руководитель видит вид и срок, без номеров.
   await db((c) => c.query(`insert into dossier_items (user_id, kind, title, number, valid_until, amount_kop) values
@@ -2496,6 +2515,7 @@ test('«Сегодня» (2.34, 2.63): эксперт — горит, верну
   await expect(dl.nth(1)).toContainText(/осталось (9|10) дн\./);   // дата теста — по UTC, «Сегодня» — по Москве
   await expect(hb).not.toContainText('2063');   // номера документов руководителю не показываются
   await expect(hb.locator(`li[data-today="org-sign-${orgId}"]`)).toHaveText('Ждут подписи организации · 1');
+  await expect(hb.locator(`li[data-today-item="org-sign-${orgId}"]`)).toContainText('эксперт напомнил');
   // «Горящее» (2.98): срок завтра, отчёт есть, а фото осмотра нет — отдельной строкой первой, в «Горит срок» не повторяется.
   await expect(hb.locator('li[data-today]').first()).toHaveText('Горит: нет черновика или фото осмотра · 1');
   await expect(hb.locator(`li[data-today-item="org-risk-${orgId}"]`)).toContainText('Эксперт Сегодня');

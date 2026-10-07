@@ -9,7 +9,7 @@ import { unreadCount } from './notify-ops.mjs';
 
 // Подсказки первого входа по ролям (2.52; тексты — public/help.js).
 export const HINTS = ['customer', 'expert', 'head', 'dispatcher'];
-import { orderSignatures, orgReturns, signaturesView } from './sign-ops.mjs';
+import { orderSignatures, orgReturns, signaturesView, signWait } from './sign-ops.mjs';
 
 // Облако принимает запрос не больше 3,5 МБ (Yandex Serverless Containers) — через ядро только до 3 МБ (2.49).
 const MAX_FILE_BYTES = 3 * 1024 * 1024;
@@ -148,6 +148,8 @@ export function coreOps(cfg) {
           // От какой организации нужна вторая подпись (null — только эксперт).
           signature_org: signOrg?.name ?? null,
           ...(mine ? { org_returns: await orgReturns(sql, order.id) } : {}),
+          // Очередь подписи (2.99): подписал эксперт, организация ещё нет — сколько ждёт и можно ли напомнить. Только исполнителю.
+          ...(mine && signOrg ? { sign_wait: order.status === 'in_work' ? await signWait(sql, order) : null } : {}),
         };
       },
     },
