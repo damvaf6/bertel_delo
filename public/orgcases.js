@@ -94,6 +94,9 @@ function caseItem(org, c) {
       el('span', { class: 'badge warn', text: `Ждёт Вашей подписи: ${c.sign_wait}` }),
       el('button', { class: 'secondary', 'data-action': 'go-sign', onclick: () => goSign(c.order_ref) }, 'К подписи'))] : []),
     ...(c.returned_open ? [el('div', { class: 'muted', 'data-role': 'returned', text: 'Вы вернули отчёт эксперту — ждём исправления' })] : []),
+    // Эксперт попросил перенести срок (2.100): решает диспетчер, руководитель видит новую дату.
+    ...(c.extend ? [el('div', { class: 'muted', 'data-role': 'extend',
+      text: `Эксперт просит перенести срок на ${dayRu(c.extend.new_deadline)} — ждёт ответа диспетчера` })] : []),
     ...(c.status === 'in_work' ? [transferDetails(org, c)] : []),
     ...(c.offer_wait ? offerWait(org, c) : []),
     // Предложил диспетчер — переназначает тоже он; руководитель видит, сколько эксперт молчит.

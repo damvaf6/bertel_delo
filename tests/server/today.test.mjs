@@ -225,3 +225,34 @@ test('очередь подписи у эксперта (2.99): подписал
   // Эксперт без организации: очереди подписи организации нет.
   assert.deepEqual((await other.req('GET', '/api/today')).body.expert.sign_wait, []);
 });
+
+test('стыки пачки (2.100): руководитель видит просьбу о переносе срока; после возврата прежнее напоминание не в счёт', async () => {
+  const o = await offered('Стыки пачки', 1);
+  assert.equal((await step(spec, o, 'in_work')).status, 200);
+  const ref = `№ ${o.id.slice(0, 8).toUpperCase()}`;
+  const want = addDays(todayMsk(), 9);
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/deadline-requests`, { new_deadline: want, reason: 'Заказчик не пускает на осмотр' })).status, 201);
+  // Эксперт — в «Горит срок», руководитель — в «Горит» и в «Делах экспертов»: новая дата, причины нет.
+  assert.equal((await spec.req('GET', '/api/today')).body.expert.hot.find((x) => x.id === o.id).extend.new_deadline, want);
+  const g = (await head.req('GET', '/api/today')).body.orgs[0];
+  assert.equal(g.at_risk.find((x) => x.order_ref === ref).extend.new_deadline, want);
+  assert.ok(!JSON.stringify(g).includes('не пускает'));
+  const cases = (await head.req('GET', `/api/orgs/${org.id}/cases`)).body.cases;
+  assert.equal(cases.find((x) => x.order_ref === ref).extend.new_deadline, want);
+  assert.ok(!JSON.stringify(cases).includes('не пускает'));
+  // Подписал, напомнил; руководитель вернул — напоминание к возврату не тянется.
+  const d = (await result(o, 'Стыки.pdf')).body.document;
+  assert.equal((await spec.req('POST', `/api/documents/${d.id}/sign`, { confirm: true })).status, 201);
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/sign-reminder`)).status, 201);
+  assert.equal((await head.req('POST', `/api/org-documents/${d.id}/return`, { comment: '1. Нет даты осмотра' })).status, 201);
+  const signing = async () => (await head.req('GET', `/api/orgs/${org.id}/signing`)).body.items.find((x) => x.order_ref === ref);
+  assert.equal((await signing()).reminded_at, null);
+  // Подписал заново — новое ожидание: можно напомнить сразу, у руководителя «напомнил» пока нет.
+  assert.equal((await spec.req('POST', `/api/documents/${d.id}/sign`, { confirm: true })).status, 201);
+  const w = (await spec.req('GET', '/api/today')).body.expert.sign_wait.find((x) => x.id === o.id);
+  assert.equal(w.reminded_at, null);
+  assert.equal(w.can_remind, true);
+  assert.equal((await head.req('GET', '/api/today')).body.orgs[0].to_sign.find((x) => x.order_ref === ref).reminded_at, null);
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/sign-reminder`)).status, 201);
+  assert.ok((await signing()).reminded_at);
+});

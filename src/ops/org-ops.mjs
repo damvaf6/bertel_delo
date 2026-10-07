@@ -12,6 +12,7 @@ import { splitAmount } from '../money/money.mjs';
 import { STATUS_NAME, isOverdue, todayMsk } from '../orders/workflow.mjs';
 import { monthRu, orgMonthDoneCases, orgMonthReport, reportCsv, reportMonth } from '../orgs/report.mjs';
 import { buildOrgMonthArchive } from './case-ops.mjs';
+import { openExtends } from './deadline-ops.mjs';
 
 export const INVITE_TTL_DAYS = 14;
 export const LIMITS = {
@@ -208,8 +209,11 @@ export function orgOps() {
         const chats = new Map(rows.length ? (await sql`
           select order_id, count(*)::int as n, (array_agg(side order by id desc))[1] as last_side from org_messages
           where org_id = ${org.id} and order_id = any(${rows.map((o) => o.id)}::uuid[]) group by order_id`).map((c) => [c.order_id, c]) : []);
+        // Эксперт попросил перенести срок (2.100): на какую дату — пока диспетчер не ответил; причину руководитель не видит.
+        const ext = await openExtends(sql, rows.filter((o) => CASES_ACTIVE.includes(o.status)).map((o) => o.id));
         const cases = rows.map((o) => ({
           ...(waits.get(o.id) ?? { sign_wait: 0, returned_open: false }),
+          extend: ext.get(o.id) ?? null,
           transfer_to: transfer.get(o.id) ?? [],
           offer_wait: waitingAnswer.get(o.id) ?? null,
           offered_at: offeredAt.get(o.id) ?? null,

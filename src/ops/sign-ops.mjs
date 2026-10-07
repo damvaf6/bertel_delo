@@ -195,7 +195,9 @@ export async function signWait(sql, order) {
     where d.order_id = ${order.id} and d.kind = 'result' and d.deleted_at is null and d.uploaded_by = ${order.executor_user_id}
       and not exists (select 1 from document_signatures g where g.document_id = d.id and g.role = 'org')`;
   if (!r?.files) return null;
-  const last = await sql.one`select max(created_at) as at, count(*)::int as n from sign_reminders where order_id = ${order.id}`;
+  // Напоминания — только с тех пор, как файл ждёт (2.100): после возврата и новой подписи прежнее напоминание не в счёт.
+  const last = await sql.one`select max(created_at) as at, count(*)::int as n from sign_reminders
+                             where order_id = ${order.id} and created_at >= ${r.since}`;
   const next = last?.at ? new Date(new Date(last.at).getTime() + REMIND_EVERY_HOURS * 3600_000) : null;
   return {
     files: r.files,
@@ -247,7 +249,7 @@ export function signOps() {
       access: { resource: 'org', param: 'id', need: 'manage' },
       async handler({ sql, org, registry }) {
         const orders = await sql`
-          select o.id, o.module, o.service, o.deadline, u.full_name as executor_name
+          select o.id, o.module, o.service, o.deadline, o.executor_user_id, u.full_name as executor_name
           from orders o join specialists s on s.user_id = o.executor_user_id and s.org_id = ${org.id}
           join org_members m on m.org_id = s.org_id and m.user_id = s.user_id
           join users u on u.id = o.executor_user_id
@@ -265,8 +267,8 @@ export function signOps() {
             executor: o.executor_name,
             deadline: o.deadline,
             documents: docs.map((d) => ({ id: d.id, filename: d.filename, size_bytes: Number(d.size_bytes), signatures: signaturesView(signs.get(d.id)) })),
-            // Эксперт напоминал о подписи (2.99) — когда последний раз.
-            reminded_at: (await sql.one`select max(created_at) as at from sign_reminders where order_id = ${o.id} and org_id = ${org.id}`)?.at ?? null,
+            // Эксперт напоминал о подписи (2.99) — когда последний раз, пока файл ждёт (после возврата прежнее не показывается).
+            reminded_at: (await signWait(sql, o))?.reminded_at ?? null,
             // История возвратов эксперту (2.27) — только этой организации.
             returns: returns.map(({ id, at, document_id, filename, comment, by, open, items, left }) => ({ id, at, document_id, filename, comment, by, open, items, left })),
           });

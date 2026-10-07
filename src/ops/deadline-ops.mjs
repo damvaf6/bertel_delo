@@ -47,6 +47,15 @@ async function view(sql, actor, order) {
   };
 }
 
+// Открытые просьбы о переносе по делам (2.100): эксперту и руководителю в «Сегодня» и «Делах экспертов» — на какую дату
+// просят, пока диспетчер не ответил. Только дата: причину пишет эксперт про заказчика, руководителю она не показывается.
+export async function openExtends(sql, ids) {
+  if (!ids.length) return new Map();
+  const rows = await sql`select order_id, to_char(new_deadline, 'YYYY-MM-DD') as new_deadline, requested_at from deadline_requests
+                         where outcome is null and order_id = any(${ids}::uuid[])`;
+  return new Map(rows.map((r) => [r.order_id, { new_deadline: r.new_deadline, requested_at: r.requested_at }]));
+}
+
 export function deadlineOps() {
   return [
     {
