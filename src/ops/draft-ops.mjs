@@ -15,6 +15,7 @@ import { fillDraft, itemLine, loadDossier } from '../dossier/dossier.mjs';
 import { pastValues, reuseSections, skeleton } from '../docs/reuse.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { orderSources, placeSources, sourcesLines } from '../docs/sources.mjs';
+import { draftDiff } from '../docs/diff.mjs';
 
 const PHOTOS_MAX = 40;
 const DOCS_MAX = 5;
@@ -42,6 +43,9 @@ async function latest(sql, orderId) {
   return sql.one`select d.*, (select count(*)::int from result_drafts x where x.order_id = d.order_id) as versions
                  from result_drafts d where d.order_id = ${orderId} order by d.id desc limit 1`;
 }
+
+const VERSIONS_MAX = 100;
+const versionView = (d, actor) => ({ id: String(d.id), source: d.source, at: d.at, mine: d.author_id === actor.id, chars: d.chars });
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -164,6 +168,38 @@ export function draftOps() {
         });
         res.status(201);
         return { draft: draftView(d, actor) };
+      },
+    },
+    {
+      // Версии черновика (2.104): кто и когда (ИИ, правка, разделы из прошлого дела), последние сначала. Видят те же, кто
+      // видит черновик, — исполнитель и диспетчер.
+      id: 'draft.versions', method: 'GET', path: '/api/orders/:id/draft/versions', auth: 'user',
+      access: { resource: 'order', param: 'id', need: 'read' },
+      async handler({ sql, actor, order }) {
+        guard(actor, order);
+        const rows = await sql`select id, source, at, author_id, length(body)::int as chars from result_drafts
+                               where order_id = ${order.id} order by id desc limit ${VERSIONS_MAX}`;
+        return { versions: rows.map((d) => versionView(d, actor)) };
+      },
+    },
+    {
+      // Что изменилось (2.104): от прошлой версии from до версии to (по умолчанию — текущей) — по разделам добавленные и
+      // убранные абзацы. Версия чужого дела — «не найдено».
+      id: 'draft.diff', method: 'GET', path: '/api/orders/:id/draft/diff', auth: 'user',
+      access: { resource: 'order', param: 'id', need: 'read' },
+      async handler({ sql, actor, order, query }) {
+        guard(actor, order);
+        const version = async (v) => {
+          const id = /^\d{1,18}$/.test(String(v ?? '')) ? String(v) : null;
+          const d = id && await sql.one`select id, source, at, author_id, body, length(body)::int as chars from result_drafts
+                                        where order_id = ${order.id} and id = ${id}`;
+          if (!d) throw new HttpError(404, 'not_found', 'Версия черновика не найдена');
+          return d;
+        };
+        const from = await version(query.from);
+        const cur = await latest(sql, order.id);
+        const to = query.to === undefined || query.to === '' ? cur : await version(query.to);
+        return { from: versionView(from, actor), to: versionView({ ...to, chars: to.body.length }, actor), ...draftDiff(from.body, to.body) };
       },
     },
     {

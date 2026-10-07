@@ -688,3 +688,50 @@ test('перечень использованных документов (2.95):
   const text = (await extractPages(word.buf, 'Отчёт.docx')).pages.join('\n');
   assert.match(text, /Фотоматериалы осмотра — 2 снимка/);
 });
+
+test('что изменилось между версиями черновика (2.104): по разделам добавленные и убранные абзацы, к любой прошлой версии', async () => {
+  const diff = (await import('../../src/docs/diff.mjs')).draftDiff;
+  // Чистая разница: раздел перенумерован (лишние пробелы не в счёт), переставленный абзац, раздел добавлен и убран целиком, текст до заголовков.
+  const a = 'Вступление\n## 1. Задание\nОбъект: квартира\nЦель: суд\n\n## 2. Описание\nЭтаж 5\nРемонт 2020\n## 3. Лишнее\nУбрать';
+  const b = 'Вступление\n## 2. ЗАДАНИЕ\nОбъект:   квартира\nЦель: суд\n## 2. Описание\nРемонт 2020\nЭтаж 5\n## 4. Выводы\nИтог 15 млн';
+  const d = diff(a, b);
+  assert.deepEqual(d.sections.map((s) => [s.title, s.status]), [['2. ЗАДАНИЕ', 'renamed'], ['2. Описание', 'changed'], ['4. Выводы', 'added'], ['3. Лишнее', 'removed']]);
+  assert.equal(d.sections[0].was_title, '1. Задание');
+  assert.deepEqual([d.sections[0].added, d.sections[0].removed], [[], []]);
+  assert.equal(d.sections[1].added.length + d.sections[1].removed.length, 2, 'переставленный абзац — убран и добавлен');
+  assert.deepEqual(d.sections[2].added, ['Итог 15 млн']);
+  assert.deepEqual(d.sections[3].removed, ['Убрать']);
+  assert.equal(diff(a, a).sections.length, 0, 'без изменений — пусто');
+  assert.deepEqual(diff('', 'Строка').sections, [{ title: 'Начало текста', was_title: null, status: 'added', added: ['Строка'], removed: [] }]);
+
+  const o = await inWork('Квартира: версии черновика');
+  assert.deepEqual((await spec.req('GET', `/api/orders/${o.id}/draft/versions`)).body.versions, [], 'черновика нет — версий нет');
+  assert.equal((await spec.req('GET', `/api/orders/${o.id}/draft/diff?from=1`)).status, 404);
+  const d1 = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {})).body.draft;
+  const head = d1.body.match(/^## .+$/m)[0];
+  const v2 = d1.body.replace(head, `${head}\nЭксперт добавил абзац`);
+  const d2 = (await spec.req('PUT', `/api/orders/${o.id}/draft`, { body: v2, from: d1.id })).body.draft;
+  const d3 = (await spec.req('PUT', `/api/orders/${o.id}/draft`, { body: v2.replace('Эксперт добавил абзац', 'Эксперт поправил абзац'), from: d2.id })).body.draft;
+
+  const vs = (await spec.req('GET', `/api/orders/${o.id}/draft/versions`)).body.versions;
+  assert.deepEqual(vs.map((v) => [v.id, v.source, v.mine]), [[d3.id, 'edit', true], [d2.id, 'edit', true], [d1.id, 'ai', true]]);
+  assert.ok(vs[0].chars > 100);
+  assert.equal((await dispatcher.req('GET', `/api/orders/${o.id}/draft/versions`)).body.versions[0].mine, false);
+
+  // От версии ИИ к текущей — одна добавленная строка в первом разделе.
+  let r = (await spec.req('GET', `/api/orders/${o.id}/draft/diff?from=${d1.id}`)).body;
+  assert.deepEqual([r.from.id, r.to.id, r.added, r.removed], [d1.id, d3.id, 1, 0]);
+  assert.deepEqual(r.sections, [{ title: head.replace(/^##\s*/, ''), was_title: null, status: 'changed', added: ['Эксперт поправил абзац'], removed: [] }]);
+  // Между двумя прошлыми версиями — свой отрезок; в обратную сторону — добавленное становится убранным.
+  r = (await spec.req('GET', `/api/orders/${o.id}/draft/diff?from=${d2.id}&to=${d3.id}`)).body;
+  assert.deepEqual([r.sections[0].added, r.sections[0].removed], [['Эксперт поправил абзац'], ['Эксперт добавил абзац']]);
+  r = (await spec.req('GET', `/api/orders/${o.id}/draft/diff?from=${d3.id}&to=${d1.id}`)).body;
+  assert.deepEqual([r.added, r.removed], [0, 1]);
+  // Версия другого дела или мусор — «не найдено»; диспетчер смотрит тоже.
+  const other = await inWork('Квартира: чужая версия');
+  const od = (await spec.req('POST', `/api/orders/${other.id}/draft/ai`, {})).body.draft;
+  for (const q of [`from=${od.id}`, `from=${d1.id}&to=${od.id}`, 'from=abc', 'from=', `from=${d1.id}&to=1x`]) {
+    assert.equal((await spec.req('GET', `/api/orders/${o.id}/draft/diff?${q}`)).status, 404, q);
+  }
+  assert.equal((await dispatcher.req('GET', `/api/orders/${o.id}/draft/diff?from=${d1.id}`)).body.added, 1);
+});
