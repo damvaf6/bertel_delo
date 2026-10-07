@@ -1721,10 +1721,28 @@ test('сводка за месяц по экспертам (2.78): только 
   const doc = await upload(U.owner, overdue.id, 'отчёт.pdf');
   await S.sql`insert into org_returns (order_id, document_id, org_id, executor_user_id, returned_by, filename, comment)
               values (${overdue.id}, ${doc.id}, ${orgC.id}, ${ex.e1.user.id}, ${headC.user.id}, 'отчёт.pdf', 'Поправьте')`;
+  // Пункты замечаний (2.105): одинаковые без учёта регистра и точки — один пункт; у e2 — тот же пункт в другом деле.
+  const ret = async (executor, items, minsAgo) => {
+    const [{ id }] = await S.sql`insert into org_returns (order_id, document_id, org_id, executor_user_id, returned_by, filename, comment, created_at)
+      values (${overdue.id}, ${doc.id}, ${orgC.id}, ${executor}, ${headC.user.id}, 'отчёт.pdf', ${items.join('\n')},
+              now() - make_interval(mins => ${minsAgo}::int)) returning id`;
+    for (const [i, text] of items.entries()) await S.sql`insert into org_return_items (return_id, n, text) values (${id}, ${i + 1}, ${text})`;
+    return id;
+  };
+  await S.sql`insert into org_return_items (return_id, n, text)
+              select id, 1, 'Нет даты осмотра.' from org_returns where org_id = ${orgC.id}`;
+  await ret(ex.e2.user.id, ['нет  даты осмотра', 'Не указан этаж'], 1);
+  const old = await ret(ex.e2.user.id, ['Не указан этаж', 'Нет подписи на титуле'], 0);
+  await S.sql`update org_returns set created_at = (date_trunc('month', now() at time zone 'Europe/Moscow') - interval '15 days')
+              at time zone 'Europe/Moscow' where id = ${old}`;
   const r = (await report(headC)).body.report;
   const e1 = r.experts.find((e) => e.user_id === ex.e1.user.id);
   assert.deepEqual({ ...e1, user_id: undefined, full_name: undefined }, { user_id: undefined, full_name: undefined,
-    accepted: 2, done: 2, done_late: 1, overdue_now: 1, returned_head: 1, returned_dispatcher: 1, fee_kop: 800_000 + 1_600_000, paid_kop: 800_000 });
+    accepted: 2, done: 2, done_late: 1, overdue_now: 1, returned_head: 1, returned_dispatcher: 1, fee_kop: 800_000 + 1_600_000, paid_kop: 800_000,
+    remarks: [{ text: 'Нет даты осмотра.', n: 1 }] });
+  assert.deepEqual(r.top_remarks, [{ text: 'Нет даты осмотра.', n: 2, experts: 2 }, { text: 'Не указан этаж', n: 1, experts: 1 }]);
+  assert.deepEqual(r.experts.find((e) => e.user_id === ex.e2.user.id).remarks, [{ text: 'нет  даты осмотра', n: 1 }, { text: 'Не указан этаж', n: 1 }]);
+  assert.equal(r.experts.find((e) => e.user_id === ex.e2.user.id).returned_head, 1, 'возврат прошлого месяца не считается');
   assert.equal(r.experts.find((e) => e.user_id === ex.e2.user.id).done, 0);
   assert.equal(r.total.done, 2);
   assert.equal(r.total.fee_kop, 2_400_000);
@@ -1735,6 +1753,7 @@ test('сводка за месяц по экспертам (2.78): только 
   assert.equal(prev.current, false);
   assert.equal(prev.total.done, 0);
   assert.equal(prev.total.overdue_now, null);
+  assert.deepEqual(prev.top_remarks.map((x) => x.text).sort(), ['Не указан этаж', 'Нет подписи на титуле']);
   // Таблица для Excel: BOM, точка с запятой, суммы с запятой, имя с «=» — не формула, «;» — в кавычках.
   const csv = await headC.req('GET', `/api/orgs/${orgC.id}/report?format=csv`, undefined, { binary: true });
   assert.equal(csv.status, 200);
@@ -1744,8 +1763,9 @@ test('сводка за месяц по экспертам (2.78): только 
   const text = csv.body.toString('utf8');
   assert.ok(text.includes('Тестовая организация В'));
   assert.ok(text.includes("'=Сидоров «Эксперт»;2;2;1;1;1;1;24000,00;8000,00"), text);
-  assert.ok(text.includes('"Петрова; Эксперт";0;0;0;0;0;0;0,00;0,00'), text);
-  assert.ok(text.includes('Итого;2;2;1;1;1;1;24000,00;8000,00'), text);
+  assert.ok(text.includes('"Петрова; Эксперт";0;0;0;0;1;0;0,00;0,00'), text);
+  assert.ok(text.includes('Итого;2;2;1;1;2;1;24000,00;8000,00'), text);
+  assert.ok(text.includes('Частые замечания при возврате;Сколько раз;У скольких экспертов\r\nНет даты осмотра.;2;2\r\nНе указан этаж;1;1'), text);
   assert.equal((await report(ex.e1, '?format=csv')).status, 403);
 
   // Архив сданных за месяц заключений (2.89): только руководитель; без сданных дел — «нечего выгружать».
