@@ -1770,7 +1770,7 @@ test('распределение в организации (2.17): диспет�
   await expect(pend).toContainText('вознаграждение 16 000 ₽');
   await expect(hp.locator('#org-pending-box')).not.toContainText('распределение');
   await expect(hp.locator('#org-pending-box')).not.toContainText('Распределительная');
-  await expect(pend.locator('select option')).toHaveText(['Тестовый эксперт бюро · в работе 0']);
+  await expect(pend.locator('select option')).toHaveText(['Тестовый эксперт бюро · в работе 0 · сдать за 2 недели: 0']);
   await hp.locator('#org-pending-box').scrollIntoViewIfNeeded();
   await shot(hp, '99b-rukovoditel-zhdut-naznacheniya');
   await pend.getByRole('button', { name: 'Назначить' }).click();
@@ -3252,7 +3252,7 @@ test('передача дела (2.62): руководитель передаё�
   const row = hp.locator('#org-cases > li').first();
   await expect(row).toContainText('В работе · эксперт: Эксперт Заболевший');
   await row.locator('[data-transfer] summary').click();
-  await expect(row.locator('[data-transfer] select option')).toHaveText(['Эксперт Сменщик']);
+  await expect(row.locator('[data-transfer] select option')).toHaveText(['Эксперт Сменщик · сдать за 2 недели: 0']);
   await row.getByRole('button', { name: 'Передать дело' }).click();
   await expect(row.locator('[data-transfer] .msg')).toHaveText('Укажите причину');
   await row.getByLabel(/Причина передачи дела/).fill('Эксперт заболел на две недели');
@@ -3327,7 +3327,7 @@ test('переназначение до ответа (2.76): эксперт мо
   await expect(row.locator('[data-role="offer-wait"]')).toContainText('Эксперт ещё не ответил · предложено');
   await expect(row.locator('[data-role="offer-wait"]')).toContainText('(1 дн.)');
   await row.locator('[data-reassign] summary').click();
-  await expect(row.locator('[data-reassign] select option')).toHaveText(['Эксперт Быстрый']);
+  await expect(row.locator('[data-reassign] select option')).toHaveText(['Эксперт Быстрый · сдать за 2 недели: 0']);
   await row.locator('[data-reassign]').scrollIntoViewIfNeeded();
   await shot(hp, 'a1-rukovoditel-pereznachit-do-otveta');
   await row.getByRole('button', { name: 'Предложить другому' }).click();
@@ -4803,7 +4803,7 @@ test('как руководитель (2.67): организация, пригл
   await expect(pend).toHaveClass(/flash/);
   await expect(hp.locator('#org-cases-empty')).toBeHidden();
   const pick = pend.locator('select');
-  await pick.selectOption({ label: 'Экспертова Елена Евгеньевна · в работе 0' });
+  await pick.selectOption({ label: 'Экспертова Елена Евгеньевна · в работе 0 · сдать за 2 недели: 0' });
   // Список экспертов — во всю ширину карточки: имя не обрезано.
   const [pw, lw] = await Promise.all([pick.evaluate((x) => x.getBoundingClientRect().width), pend.evaluate((x) => x.getBoundingClientRect().width)]);
   expect(pw).toBeGreaterThan(lw - 2);
@@ -4867,7 +4867,7 @@ test('как руководитель (2.67): организация, пригл
   // 6. Передача дела другому эксперту.
   await hp.reload();
   await row.locator('[data-transfer] summary').click();
-  await expect(row.locator('[data-transfer] select option')).toHaveText(['Сменщиков Семён Сергеевич']);
+  await expect(row.locator('[data-transfer] select option')).toHaveText(['Сменщиков Семён Сергеевич · сдать за 2 недели: 0']);
   await row.getByLabel(/Причина передачи дела/).fill('Уходит в отпуск');
   await row.getByRole('button', { name: 'Передать дело' }).click();
   await expect(hp.locator('#org-cases-msg')).toHaveText('Дело передано — новый эксперт получил уведомление');
