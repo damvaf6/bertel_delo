@@ -2090,6 +2090,37 @@ test('мои сроки на две недели (2.109): по дням — ср
   const h = (await schedule(helper)).body.schedule;
   assert.deepEqual(h.days[1].items.map((i) => i.kind), ['my_visit']);
   assert.ok(!JSON.stringify(h).includes('Сроки:') && !JSON.stringify(h).includes(soon.id));
+
+  // Файл для календаря телефона (2.122): сроки и выезды, без названий заявок; чужого нет; не специалист — 404.
+  const ics = (c) => c.req('GET', '/api/specialist/me/schedule?format=ics', undefined, { binary: true });
+  assert.equal((await ics(U.owner)).status, 404);
+  const f = await ics(exp);
+  assert.equal(f.status, 200);
+  assert.match(f.headers.get('content-type'), /^text\/calendar/);
+  assert.match(decodeURIComponent(f.headers.get('content-disposition')), new RegExp(`attachment.*Мои сроки ${today}\\.ics`));
+  const cal = f.body.toString('utf8');
+  assert.ok(cal.startsWith('BEGIN:VCALENDAR\r\n') && cal.endsWith('END:VCALENDAR\r\n'));
+  assert.ok(cal.split('\r\n').every((l) => Buffer.byteLength(l) <= 75), 'строки не длиннее 75 байт');
+  const unfolded = cal.replace(/\r\n /g, '');
+  const ev = unfolded.split('BEGIN:VEVENT').slice(1);
+  assert.equal(ev.length, 4, 'срок через 2 дня, срок на проверке, выезд помощника, свой выезд помощником');
+  const ref = (o) => `№ ${o.id.slice(0, 8).toUpperCase()}`;
+  const soonEv = ev.find((e) => e.includes(`UID:deadline-${soon.id}@`));
+  assert.ok(soonEv.includes(`DTSTART;VALUE=DATE:${plus(2).replace(/-/g, '')}`) && soonEv.includes(`DTEND;VALUE=DATE:${plus(3).replace(/-/g, '')}`));
+  assert.ok(soonEv.includes(`SUMMARY:Срок сдачи: дело ${ref(soon)}\\, `) && soonEv.includes('TRIGGER:-PT15H'), soonEv);
+  const reviewEv = ev.find((e) => e.includes(`UID:deadline-${review.id}@`));
+  assert.ok(reviewEv.includes('ждёт проверки') && !reviewEv.includes('VALARM'));
+  // Выезд 10:30 по Москве = 07:30 UTC, на час, напоминание за час.
+  const visitEv = ev.find((e) => e.includes('SUMMARY:Выезд помощника'));
+  assert.ok(visitEv.includes(`DTSTART:${plus(1).replace(/-/g, '')}T073000Z`) && visitEv.includes(`DTEND:${plus(1).replace(/-/g, '')}T083000Z`), visitEv);
+  assert.ok(visitEv.includes(ref(soon)) && visitEv.includes('TRIGGER:-PT1H') && visitEv.includes('TRANSP:OPAQUE'));
+  const myEv = ev.find((e) => e.includes('SUMMARY:Мой выезд на объект: '));
+  assert.ok(myEv.includes(`DTSTART:${plus(4).replace(/-/g, '')}T060000Z`) && !myEv.includes(ref(foreign)), 'свой выезд по чужому делу — без номера');
+  for (const t of ['Сроки:', late.id, foreign.id, far.id, doneOne.id, 'Ждём выписку', 'отпуск']) assert.ok(!unfolded.includes(t), t);
+  // Помощник: свой выезд — без номера чужого дела.
+  const hcal = (await ics(helper)).body.toString('utf8').replace(/\r\n /g, '');
+  assert.equal(hcal.split('BEGIN:VEVENT').length - 1, 1);
+  assert.ok(hcal.includes('SUMMARY:Мой выезд на объект: ') && !hcal.includes(soon.id.slice(0, 8).toUpperCase()));
 });
 
 test('нагрузка экспертов на две недели (2.111): только руководитель организации (подробно — orgschedule.test.mjs)', async () => {
