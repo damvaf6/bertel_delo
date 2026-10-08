@@ -512,16 +512,16 @@ test('2.86: «Можно продолжать» — документы по за
     raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('egrn.pdf') } })).body.document;
   assert.equal((await owner.req('POST', `/api/orders/${o.id}/doc-requests/${rid}/attach`, { document_id: doc.id })).status, 200);
   let r = await readyOf(spec, o);
-  assert.deepEqual(r.what, ['документы: получено 1'], JSON.stringify(r));
+  assert.deepEqual(r.what, ['документы получены: Выписка ЕГРН — все запрошенные'], JSON.stringify(r));
   assert.equal(r.to, 'docs');
   assert.ok(r.at && r.deadline);
   assert.equal((await owner.req('POST', `/api/orders/${o.id}/messages`, { body: 'Ключи у консьержа' })).status, 201);
   r = await readyOf(spec, o);
-  assert.deepEqual(r.what, ['документы: получено 1', 'сообщений: 1']);
+  assert.deepEqual(r.what, ['документы получены: Выписка ЕГРН — все запрошенные', 'сообщений: 1']);
   assert.equal(r.to, 'chat');
   // Своё сообщение эксперта — не «новое».
   assert.equal((await spec.req('POST', `/api/orders/${o.id}/messages`, { body: 'Спасибо' })).status, 201);
-  assert.deepEqual((await readyOf(spec, o)).what, ['документы: получено 1', 'сообщений: 1']);
+  assert.deepEqual((await readyOf(spec, o)).what, ['документы получены: Выписка ЕГРН — все запрошенные', 'сообщений: 1']);
   // Заказчик, второй эксперт и диспетчер этой строки не видят.
   assert.equal((await owner.req('GET', '/api/today')).body.expert, null);
   assert.equal(await readyOf(spec2, o), undefined);
@@ -547,6 +547,33 @@ test('2.86: «Можно продолжать» — документы по за
   await S.sql`update orders set status = 'review' where id = ${o.id}`;
   await S.sql`insert into order_messages (order_id, author_id, side, body) values (${o.id}, ${dispatcher.user.id}, 'dispatcher', 'Проверяю')`;
   assert.equal(await readyOf(spec, o), undefined);
+});
+
+// 2.128: в «Можно продолжать» — какие запрошенные документы пришли и сколько ещё ждём.
+test('2.128: «Можно продолжать» — названия полученных документов и сколько ещё ждём', async () => {
+  const o = await inWork('Документы пришли');
+  assert.equal((await spec.req('GET', `/api/orders/${o.id}`)).status, 200);
+  const titles = ['Выписка ЕГРН', 'Техпаспорт БТИ', 'Договор купли-продажи', 'Свидетельство', 'Справка о перепланировке'];
+  const asked = await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { custom: titles });
+  assert.equal(asked.status, 201, JSON.stringify(asked.body));
+  const attach = async (title) => {
+    const rid = asked.body.requests.find((r) => r.title === title).id;
+    const doc = (await owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from('скан'), {
+      raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('doc.pdf') } })).body.document;
+    assert.equal((await owner.req('POST', `/api/orders/${o.id}/doc-requests/${rid}/attach`, { document_id: doc.id })).status, 200);
+  };
+  await attach('Техпаспорт БТИ');
+  assert.deepEqual((await readyOf(spec, o)).what, ['документы получены: Техпаспорт БТИ — ждём ещё 4']);
+  for (const t of ['Выписка ЕГРН', 'Договор купли-продажи', 'Свидетельство']) await attach(t);
+  assert.deepEqual((await readyOf(spec, o)).what,
+    ['документы получены: Техпаспорт БТИ, Выписка ЕГРН, Договор купли-продажи и ещё 1 — ждём ещё 1']);
+  // Открыл дело — прежние не считаются; пришёл последний — «все запрошенные».
+  assert.equal((await spec.req('GET', `/api/orders/${o.id}`)).status, 200);
+  assert.equal(await readyOf(spec, o), undefined);
+  await attach('Справка о перепланировке');
+  assert.deepEqual((await readyOf(spec, o)).what, ['документы получены: Справка о перепланировке — все запрошенные']);
+  // Чужому эксперту — ни строки, ни названий.
+  assert.equal(await readyOf(spec2, o), undefined);
 });
 
 test('2.88: ИИ-проверка сверяет дату осмотра в отчёте с днями, когда в деле получены фото осмотра', async () => {
