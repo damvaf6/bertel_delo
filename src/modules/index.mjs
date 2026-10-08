@@ -34,6 +34,10 @@
 //       нужно подтверждённых; near: { field: id числового поля заявки, within?: разница, pct?: разница в % } — предупреждение;
 //       adjustments?: [{ id, name, services?, covers?: ['date' | 'region' | id признака с near…] }…] — виды корректировок (2.74),
 //       covers — какие предупреждения «нужна корректировка» снимает такая корректировка; «Другая» (other) — в ядре, у всех
+//     repeat?: [{ services: [id услуги…], match: [id поля заявки…], sections: [id раздела черновика…] }…]  — повторная оценка
+//       того же объекта (2.118): по полям match (кадастровый номер, адрес, VIN) программа узнаёт своё прошлое дело с тем же
+//       объектом; из него эксперт берёт разделы sections (описание объекта — данные объекта не вычищаются, данные прошлого
+//       заказчика — да), аналоги и перечень запрошенных документов
 // Поле: { id, label, type: 'text' | 'longtext' | 'number' | 'select', required?, max?, min?, integer?,
 //         options?: [{ id, name }…] (для select), pattern?, hint?, upper? }
 //   Общие поля модуля идут в заявке перед полями услуги; id не должны совпадать.
@@ -109,7 +113,7 @@ function validateField(f, where) {
 }
 
 export function validateModule(m) {
-  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express', 'signature', 'analogs', 'approaches', 'request_docs'], 'модуль');
+  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express', 'signature', 'analogs', 'approaches', 'request_docs', 'repeat'], 'модуль');
   if (!ID_RE.test(m.id ?? '')) fail('модуль', `неверный id «${m.id}»`);
   const at = `модуль ${m.id}`;
   if (!nonEmpty(m.name)) fail(at, 'нет названия');
@@ -203,6 +207,33 @@ export function validateModule(m) {
       if (d.hint !== undefined && !nonEmpty(d.hint)) fail(where, 'пустая подсказка');
       if (d.services !== undefined && (!Array.isArray(d.services) || d.services.length === 0 || d.services.some((id) => !serviceIds.includes(id)))) {
         fail(where, 'services — непустой список услуг этого модуля');
+      }
+    }
+  }
+  // Повторная оценка того же объекта (2.118) — необязательно: без описания эксперт берёт из прошлого дела только
+  // методические разделы (2.65).
+  if (m.repeat !== undefined) {
+    if (!Array.isArray(m.repeat) || m.repeat.length === 0) fail(`${at}, повторная оценка`, 'пустой список');
+    const taken = new Set();
+    for (const [i, r] of m.repeat.entries()) {
+      const where = `${at}, повторная оценка ${i + 1}`;
+      onlyKeys(r, ['services', 'match', 'sections'], where);
+      if (!Array.isArray(r.services) || r.services.length === 0 || r.services.some((id) => !serviceIds.includes(id) || taken.has(id))) {
+        fail(where, 'services — непустой список услуг этого модуля, каждая услуга — в одном описании');
+      }
+      r.services.forEach((id) => taken.add(id));
+      for (const sid of r.services) {
+        const own = serviceFields(m, m.services.find((s) => s.id === sid));
+        if (!Array.isArray(r.match) || r.match.length === 0 || r.match.some((id) => !own.some((f) => f.id === id && f.type === 'text'))) {
+          fail(where, `match — текстовые поля заявки услуги ${sid}`);
+        }
+        const draft = (m.draft ?? []).filter((d) => !d.services || d.services.includes(sid));
+        if (!Array.isArray(r.sections) || r.sections.length === 0 || new Set(r.sections).size !== r.sections.length) fail(where, 'sections — непустой список разделов');
+        for (const id of r.sections) {
+          const d = draft.find((x) => x.id === id);
+          if (!d) fail(where, `раздела ${id} нет в черновике услуги ${sid}`);
+          if (d.reuse || d.table || d.dossier || d.sources) fail(where, `раздел ${id} — не методический, без таблицы, досье и перечня: их программа заполняет сама`);
+        }
       }
     }
   }
@@ -365,6 +396,15 @@ export function createRegistry(modules = DEFAULT_MODULES) {
       if (!m?.request_docs || !m.services.some((x) => x.id === serviceId)) return [];
       return m.request_docs.filter((d) => (!d.services || d.services.includes(serviceId)) && (!d.basis || d.basis.includes(basisKind)))
         .map((d) => ({ id: d.id, title: d.title, hint: d.hint ?? null, ...(d.basis ? { basis: true } : {}) }));
+    },
+    // Повторная оценка того же объекта для услуги (2.118): поля, по которым узнаётся объект, и разделы описания объекта;
+    // null — повторной оценки для услуги нет.
+    repeat(moduleId, serviceId) {
+      const m = modulesList.find((x) => x.id === moduleId);
+      const r = m?.repeat?.find((x) => x.services.includes(serviceId));
+      if (!r) return null;
+      const own = serviceFields(m, m.services.find((x) => x.id === serviceId));
+      return { match: r.match.map((id) => { const f = own.find((x) => x.id === id); return { id, label: f.label }; }), sections: [...r.sections] };
     },
     // Экспресс-услуга для услуги (2.4): поля заявки, которые видит помощник, и данные, которые он заполняет; null — экспресса нет.
     express(moduleId, serviceId) {

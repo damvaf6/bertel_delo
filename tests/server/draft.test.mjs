@@ -63,7 +63,9 @@ test('разделы черновика — в описании модуля; у
   const goods = reg.draftSections('expertise', 'goods').map((s) => s.id);
   assert.ok(goods.includes('g_questions') && !goods.includes('r_compare'));
   assert.deepEqual(reg.draftSections('expertise', 'nope'), []);
-  const { draft, ...noDraft } = structuredClone(expertise);
+  // Повторная оценка (2.118) берёт разделы черновика — без черновика её описание тоже убирается.
+  const { draft, repeat, ...noDraft } = structuredClone(expertise);
+  assert.ok(repeat.length);
   assert.ok(draft.length);
   assert.deepEqual(createRegistry([noDraft]).draftSections('expertise', 'realty'), [], 'без разделов — черновик не готовится');
 });

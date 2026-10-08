@@ -1572,6 +1572,20 @@ test('заметки эксперта к делу (2.115): видит и пиш�
   }
 });
 
+test('повторная оценка того же объекта (2.118): брать из своего прошлого дела — только исполнитель дела', async () => {
+  for (const id of ['orders.repeat', 'orders.repeat.take']) cover(id);
+  // Подробно — tests/server/repeat.test.mjs; здесь — чужие и стороны заявки без исполнителя.
+  const base = `/api/orders/${ownOrder.id}/repeat`;
+  for (const who of ['stranger', 'headA', 'headB', 'spec']) {
+    assert.equal((await U[who].req('GET', base)).status, 404, `${who}: смотреть`);
+    assert.equal((await U[who].req('POST', base, { past_id: ownOrder.id, take: { analogs: true } })).status, 404, `${who}: взять`);
+  }
+  for (const who of ['owner', 'dispatcher', 'admin']) {
+    assert.deepEqual((await U[who].req('GET', base)).body, { cases: [] }, who);
+    assert.equal((await U[who].req('POST', base, { past_id: ownOrder.id, take: { analogs: true } })).status, 403, who);
+  }
+});
+
 test('запрос документов (2.64): видят те, кто видит заявку; просит только исполнитель, прикладывает заказчик', async () => {
   for (const id of ['doc_requests.list', 'doc_requests.create', 'doc_requests.attach', 'doc_requests.cancel']) cover(id);
   const base = `/api/orders/${ownOrder.id}/doc-requests`;

@@ -39,9 +39,18 @@ const pastCases = (sql, actor, order, pastId = null) => sql`
     and (${pastId}::uuid is null or o.id = ${pastId}::uuid)
   order by d.at desc limit ${PAST_MAX}`;
 
-async function latest(sql, orderId) {
+export async function latest(sql, orderId) {
   return sql.one`select d.*, (select count(*)::int from result_drafts x where x.order_id = d.order_id) as versions
                  from result_drafts d where d.order_id = ${orderId} order by d.id desc limit 1`;
+}
+
+// Заготовка черновика без ИИ, когда своего черновика ещё нет: разделы с пометками «заполнить», таблицы из заявки, досье,
+// перечень документов дела.
+export async function emptyDraft(sql, actor, order, registry, sections) {
+  const dossier = sections.some((s) => s.dossier) ? await loadDossier(sql, actor.id) : [];
+  const materials = await orderMaterials(sql, order);
+  const sources = sourcesLines(await orderSources(sql, registry, order));
+  return placeSources(fillDraft(fillTables(skeleton(sections), sections, registry, order, { materials }), sections, dossier), sections, sources).body;
 }
 
 const VERSIONS_MAX = 100;
@@ -64,7 +73,7 @@ function guardEdit(actor, order) {
 }
 
 // Человек правил ту версию, которую видел: если с тех пор появилась другая — «уже изменился» (в соседней вкладке и т. п.).
-function sameBase(cur, from) {
+export function sameBase(cur, from) {
   const seen = from === null || from === undefined || from === '' ? null : String(from);
   if ((cur ? String(cur.id) : null) !== seen) throw new HttpError(409, 'draft_changed', 'Черновик уже изменился, обновите страницу');
 }
@@ -239,14 +248,12 @@ export function draftOps() {
         // То, что совпадает с этим делом (тот же город, тот же заказчик), — не чужие данные: остаётся как есть.
         const own = new Set(pastValues(registry, order, []).map((v) => v.toLowerCase()));
         const values = pastValues(registry, past, [names?.owner, names?.org]).filter((v) => !own.has(v.toLowerCase()));
-        const dossier = sections.some((s) => s.dossier) ? await loadDossier(sql, actor.id) : [];
-        const materials = await orderMaterials(sql, order);
-        const sources = sourcesLines(await orderSources(sql, registry, order));
+        const empty = await emptyDraft(sql, actor, order, registry, sections);
         const d = await sql.tx(async (tx) => {
           await tx`select id from orders where id = ${order.id} for update`;
           const cur = await latest(tx, order.id);
           sameBase(cur, body?.from);
-          const base = cur?.body ?? placeSources(fillDraft(fillTables(skeleton(sections), sections, registry, order, { materials }), sections, dossier), sections, sources).body;
+          const base = cur?.body ?? empty;
           const got = reuseSections(base, sections, past.body, values);
           if (!got.used.length) throw new HttpError(409, 'no_reuse', 'В том деле нет методических разделов — выберите другое');
           const text = got.body.slice(0, DRAFT_MAX);

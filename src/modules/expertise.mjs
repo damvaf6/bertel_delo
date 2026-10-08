@@ -520,6 +520,15 @@ export default {
     { id: 'court_order', title: 'Определение суда о назначении экспертизы', hint: 'Если экспертиза назначена судом', basis: ['court'] },
   ],
 
+  // Повторная оценка того же объекта (2.118): эксперт снова оценивает объект, который уже оценивал (новая дата, другая
+  // цель). Объект узнаётся по кадастровому номеру и адресу или по VIN и госномеру; из прошлого дела берутся описание
+  // объекта (и местоположение квартиры — оно не меняется), аналоги и перечень запрошенных документов.
+  repeat: [
+    { services: ['realty'], match: ['cadastral', 'address'], sections: ['r_object', 'r_location'] },
+    { services: ['land'], match: ['cadastral', 'address'], sections: ['l_object'] },
+    { services: ['vehicle'], match: ['vin', 'reg_number'], sections: ['v_object'] },
+  ],
+
   inspection: [
     { id: 'facade', title: 'Дом снаружи', hint: 'Фасад целиком; чтобы был виден номер дома или табличка с адресом', services: ['realty'] },
     { id: 'entrance', title: 'Подъезд и лестничная площадка', hint: 'Вход в подъезд, площадка у квартиры', services: ['realty'] },

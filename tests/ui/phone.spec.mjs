@@ -6063,3 +6063,66 @@ test('заметки эксперта к делу (2.115): заметка с н�
   await expect(cp.locator('#order-title')).toHaveText('Квартира: заметки');
   await expect(cp.locator('#notes-box')).toBeHidden();
 });
+
+test('повторная оценка того же объекта (2.118): эксперт берёт из своего прошлого дела описание объекта, аналоги и документы', async ({ browser, baseURL }) => {
+  const ep = await (await phoneContext(browser, baseURL)).newPage();
+  const cp = await (await phoneContext(browser, baseURL)).newPage();
+  const past = await signIn(await (await phoneContext(browser, baseURL)).newPage(), '+79990010191');
+  const customer = await signIn(cp, '+79990010192');
+  const expert = await signIn(ep, '+79990010193');
+  const ids = await db(async (c) => {
+    await c.query("insert into specialists (user_id, created_at) values ($1, now() - interval '1 year')", [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const order = async (owner, title, fields, created) => {
+      const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields, created_at)
+        values ('expertise', 'realty', $1, $2, $3, 'in_work', current_date + 9, 1500000, now(), $4, now() - $5::interval) returning id`, [title, owner, expert.id, JSON.stringify(fields), created]);
+      await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [o.id, expert.id]);
+      return o.id;
+    };
+    const obj = { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, ул. Повторная, д. 8, кв. 21', cadastral: '77:02:0003004:5678', area: '52.4', floor: '7 / 12' };
+    const a = await order(past.id, 'Квартира на Повторной (прошлый раз)', obj, '200 days');
+    const b = await order(customer.id, 'Квартира на Повторной: для банка', { ...obj, purpose: 'bank', address: 'Москва, Повторная 8, кв 21', area: '54.1' }, '1 hour');
+    await c.query(`insert into result_drafts (order_id, author_id, source, body) values ($1, $2, 'edit', $3)`, [a, expert.id,
+      '## 3. Общие сведения: основание, заказчик, номер и дата отчёта\nЗаказчик — Петров Пётр.\n\n## 7. Описание объекта оценки\nКвартира по адресу г. Москва, ул. Повторная, д. 8, кв. 21, кадастровый номер 77:02:0003004:5678, площадь 52.4 кв. м. Санузел совмещённый, окна во двор.\n\n## 8. Местоположение и анализ рынка\nДом у парка, до метро 10 минут пешком.']);
+    await c.query(`insert into order_analogs (order_id, author_id, url, url_key, fields, confirmed_at)
+      values ($1, $2, 'https://example.ru/povtornaya/1', 'example.ru/povtornaya/1', '{"price_rub":"18500000","region":"moscow","address":"Москва, Повторная 10","area":"51"}', now())`, [a, expert.id]);
+    await c.query("insert into doc_requests (order_id, item_id, title, requested_by) values ($1, 'egrn', 'Выписка из ЕГРН', $2), ($1, 'tech_plan', 'Технический паспорт БТИ или поэтажный план', $2)", [a, expert.id]);
+    return { a, b };
+  });
+  const ref = (id) => `№ ${id.slice(0, 8).toUpperCase()}`;
+
+  // Новое дело: блок «Повторная оценка того же объекта» сверху — что совпало, что изменилось, что взять.
+  await ep.goto(`/kabinet#order=${ids.b}`);
+  const box = ep.locator('#repeat-box');
+  await expect(box).toBeVisible();
+  const item = box.locator('#repeat-list > li');
+  await expect(item).toHaveCount(1);
+  await expect(item).toContainText(`Ваше дело ${ref(ids.a)}`);
+  await expect(item).toContainText('совпадает кадастровый номер и адрес объекта');
+  await expect(item.locator('[data-changed]')).toContainText('площадь, кв. м — было 52.4, сейчас 54.1');
+  await expect(item).toContainText('7. Описание объекта оценки, 8. Местоположение и анализ рынка');
+  await expect(item).toContainText('Аналоги: 1');
+  await expect(item).toContainText('Выписка из ЕГРН, Технический паспорт БТИ или поэтажный план');
+  await box.scrollIntoViewIfNeeded();
+  await shot(ep, 'h7-ekspert-povtornaya-ocenka');
+  await item.getByRole('button', { name: `Взять из дела ${ref(ids.a)}` }).click();
+  await expect(ep.locator('#repeat-msg')).toContainText(`Взято из дела ${ref(ids.a)}: описание объекта — разделов: 2`);
+  await expect(ep.locator('#repeat-msg')).toContainText('аналогов: 1 (подтвердите их); запрошено у заказчика документов: 2');
+  await shot(ep, 'h8-ekspert-povtornaya-vzyato');
+
+  // Черновик: описание того же объекта, без прошлого заказчика; аналог — с пометкой «взят из прошлого дела».
+  const draft = await (await ep.request.get(`/api/orders/${ids.b}/draft`)).json();
+  expect(draft.draft.body).toContain('77:02:0003004:5678');
+  expect(draft.draft.body).toContain('окна во двор');
+  expect(draft.draft.body).not.toContain('Петров');
+  expect(draft.draft.body).not.toContain('52.4');
+  await expect(ep.locator('#analogs-list li.analog [data-copied]')).toHaveCount(1);
+  await ep.locator('#analogs-list li.analog').first().scrollIntoViewIfNeeded();
+  await shot(ep, 'h9-ekspert-analog-iz-proshlogo');
+
+  // Заказчик видит запрос документов, но не прошлое дело и не блок повторной оценки.
+  await cp.goto(`/kabinet#order=${ids.b}`);
+  await expect(cp.locator('#order-title')).toHaveText('Квартира на Повторной: для банка');
+  await expect(cp.locator('#repeat-box')).toBeHidden();
+  await expect(cp.locator('#docreq-list > li')).toHaveCount(2);
+});
