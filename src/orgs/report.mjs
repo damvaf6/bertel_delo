@@ -5,6 +5,8 @@
 // точки в конце считаются одним пунктом; по организации и по каждому эксперту.
 // Скорость и сроки (2.117): сколько дней в среднем от принятия дела экспертом (принял предложение или руководитель передал
 // ему дело) до сдачи и сколько дел сдано позже первоначального срока — из них сколько с одобренным переносом срока.
+// Сравнение с прошлым месяцем (2.124): у каждого эксперта и в итоге — сколько сдано, из них в срок и сколько раз возвращали
+// (руководитель и диспетчер вместе) в прошлом месяце; если прошлый месяц раньше создания организации — сравнения нет.
 // Месяц — по московскому времени. Выгрузка таблицей — CSV для Excel (точка с запятой, BOM, суммы с запятой).
 import { HttpError } from '../http/core.mjs';
 import { splitAmount } from '../money/money.mjs';
@@ -107,6 +109,44 @@ async function orgMonthDone(sql, orgId, ids, { start, end }) {
       order by o.id, h.at`;
 }
 
+// Возвраты за месяц: руководителем (до подписи организации) и диспетчером (на доработку) — по эксперту.
+const headReturnsQ = (sql, orgId, ids, { start, end }) => sql`
+  select executor_user_id as user_id, count(*)::int as n from org_returns
+  where org_id = ${orgId} and executor_user_id = any(${ids}::uuid[]) and created_at >= ${start} and created_at < ${end}
+  group by executor_user_id`;
+const dispReturnsQ = (sql, orgId, ids, { start, end }) => sql`
+  select o.executor_user_id as user_id, count(*)::int as n
+  from order_status_history h join orders o on o.id = h.order_id
+  join org_members m on m.org_id = ${orgId} and m.user_id = o.executor_user_id
+  where o.executor_user_id = any(${ids}::uuid[]) and h.from_status = 'review' and h.to_status = 'in_work'
+    and h.at >= ${start} and h.at < ${end} and h.at >= m.created_at
+  group by o.executor_user_id`;
+
+export const prevMonth = (month) => {
+  const y = Number(month.slice(0, 4));
+  const m = Number(month.slice(5, 7));
+  return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
+};
+
+// Прошлый месяц для сравнения (2.124): { experts: Map(user_id → { done, on_time, returned }), total }.
+async function monthCompare(sql, orgId, ids, month) {
+  const bounds = await monthBounds(sql, month);
+  const [done, head, disp] = ids.length
+    ? [await orgMonthDone(sql, orgId, ids, bounds), await headReturnsQ(sql, orgId, ids, bounds), await dispReturnsQ(sql, orgId, ids, bounds)]
+    : [[], [], []];
+  const n = (rows, u) => rows.find((r) => r.user_id === u)?.n ?? 0;
+  const of = (rows, retHead, retDisp) => ({
+    done: rows.length,
+    on_time: rows.filter((o) => !(o.deadline && dayMsk(o.at) > o.deadline)).length,
+    returned: retHead + retDisp,
+  });
+  const sum = (rows) => rows.reduce((s, r) => s + r.n, 0);
+  return {
+    experts: new Map(ids.map((u) => [u, of(done.filter((o) => o.user_id === u), n(head, u), n(disp, u))])),
+    total: of(done, sum(head), sum(disp)),
+  };
+}
+
 // Эксперты, которые сейчас работают от организации (выбрана в профиле специалиста и состоят в ней).
 async function orgExperts(sql, orgId) {
   return sql`
@@ -138,22 +178,13 @@ export async function orgMonthReport(sql, orgId, month, today = todayMsk()) {
         and f.outcome_at >= ${start} and f.outcome_at < ${end} and f.outcome_at >= m.created_at
       group by f.specialist_id`,
     done: await orgMonthDone(sql, orgId, ids, { start, end }),
-    headReturns: await sql`
-      select executor_user_id as user_id, count(*)::int as n from org_returns
-      where org_id = ${orgId} and executor_user_id = any(${ids}::uuid[]) and created_at >= ${start} and created_at < ${end}
-      group by executor_user_id`,
+    headReturns: await headReturnsQ(sql, orgId, ids, { start, end }),
     remarkItems: await sql`
       select r.executor_user_id as user_id, i.text, r.created_at as at from org_returns r
       join org_return_items i on i.return_id = r.id
       where r.org_id = ${orgId} and r.executor_user_id = any(${ids}::uuid[]) and r.created_at >= ${start} and r.created_at < ${end}
       order by r.created_at desc, r.id desc, i.n`,
-    dispReturns: await sql`
-      select o.executor_user_id as user_id, count(*)::int as n
-      from order_status_history h join orders o on o.id = h.order_id
-      join org_members m on m.org_id = ${orgId} and m.user_id = o.executor_user_id
-      where o.executor_user_id = any(${ids}::uuid[]) and h.from_status = 'review' and h.to_status = 'in_work'
-        and h.at >= ${start} and h.at < ${end} and h.at >= m.created_at
-      group by o.executor_user_id`,
+    dispReturns: await dispReturnsQ(sql, orgId, ids, { start, end }),
     paid: await sql`
       select p.executor_user_id as user_id, coalesce(sum(p.amount_kop), 0)::bigint as kop from payouts p
       join org_members m on m.org_id = ${orgId} and m.user_id = p.executor_user_id
@@ -172,6 +203,8 @@ export async function orgMonthReport(sql, orgId, month, today = todayMsk()) {
   const dispReturns = count(q.dispReturns);
   const paid = new Map(q.paid.map((r) => [r.user_id, Number(r.kop)]));
   const current = month === today.slice(0, 7);
+  const prevM = prevMonth(month);
+  const cmp = prevM >= since ? await monthCompare(sql, orgId, ids, prevM) : null;
   const rows = experts.map((e) => {
     const done = q.done.filter((o) => o.user_id === e.user_id);
     const p = pace(done);
@@ -190,6 +223,7 @@ export async function orgMonthReport(sql, orgId, month, today = todayMsk()) {
       late_first: p.late_first,
       late_first_moved: p.late_first_moved,
       remarks: topRemarks(q.remarkItems.filter((i) => i.user_id === e.user_id), TOP_REMARKS_EXPERT).map(({ text, n }) => ({ text, n })),
+      prev: cmp ? cmp.experts.get(e.user_id) : null,
     };
   });
   const sum = (k) => (k === 'overdue_now' && !current ? null : rows.reduce((s, r) => s + r[k], 0));
@@ -203,7 +237,9 @@ export async function orgMonthReport(sql, orgId, month, today = todayMsk()) {
     // Месяцы до создания организации — заведомо пустые (2.90): в выборе только с месяца создания.
     months: reportMonths(today).filter((m) => m >= since || m === month),
     experts: rows,
-    total: { ...Object.fromEntries(keys.map((k) => [k, sum(k)])), avg_days: avgDays(all) },
+    total: { ...Object.fromEntries(keys.map((k) => [k, sum(k)])), avg_days: avgDays(all), prev: cmp ? cmp.total : null },
+    prev_month: cmp ? prevM : null,
+    prev_month_name: cmp ? monthRu(prevM) : null,
     top_remarks: topRemarks(q.remarkItems, TOP_REMARKS),
   };
 }
@@ -289,6 +325,10 @@ export function reportCsv(orgName, r) {
     head,
     ...r.experts.map((x) => line(x.full_name, x)),
     line('Итого', r.total),
+    ...(r.prev_month ? [[], [`Сравнение с прошлым месяцем (${r.prev_month_name})`, 'Сдано', 'Сдано в прошлом месяце',
+      'В срок', 'В срок в прошлом месяце', 'Возвраты', 'Возвраты в прошлом месяце'],
+    ...[...r.experts.map((x) => [x.full_name, x]), ['Итого', r.total]].map(([name, x]) => [name, x.done, x.prev.done,
+      x.done - x.done_late, x.prev.on_time, x.returned_head + x.returned_dispatcher, x.prev.returned])] : []),
     ...(r.top_remarks?.length ? [[], ['Частые замечания при возврате', 'Сколько раз', 'У скольких экспертов'],
       ...r.top_remarks.map((x) => [x.text, x.n, x.experts])] : []),
   ];

@@ -17,7 +17,8 @@ let ownDoc, orgDoc;
 let expertB, seniorB; // эксперт и старший организации Б (подпись организации, дела экспертов)
 
 before(async () => {
-  S = await startApp();
+  // Входов в этом файле больше 30 за 10 минут с одного адреса — лимит входа поднят (сам лимит проверяет auth.test.mjs).
+  S = await startApp({ AUTH_RATE_MAX: '400' });
   // Роли: владелец, посторонний, руководитель, старший и два сотрудника организации A, руководитель чужой организации B,
   // диспетчер, администратор, приглашённый в A.
   const phones = {
@@ -1758,7 +1759,8 @@ test('сводка за месяц по экспертам (2.78): только 
   await S.sql`update organizations set created_at = now() - interval '2 years' where id = ${orgC.id}`;
   assert.equal((await report(headC)).body.report.months.length, 13);
   assert.deepEqual(empty.total, { accepted: 0, done: 0, done_late: 0, overdue_now: 0, returned_head: 0, returned_dispatcher: 0, fee_kop: 0, paid_kop: 0,
-    late_first: 0, late_first_moved: 0, avg_days: null });
+    late_first: 0, late_first_moved: 0, avg_days: null, prev: null });
+  assert.equal(empty.prev_month, null, 'прошлый месяц раньше создания организации — сравнения нет (2.124)');
   for (const q of ['?month=2020-01', '?month=2099-01', '?month=13', '?month=2026-13']) assert.equal((await report(headC, q)).body.error, 'bad_month', q);
   // Дела: e1 принял 2 дела, одно сдал вовремя, другое позже срока; одно в работе просрочено; руководитель вернул раз,
   // диспетчер — раз; выплачено за одно. До вступления (прошлое частное дело) — не считается.
@@ -1805,7 +1807,9 @@ test('сводка за месяц по экспертам (2.78): только 
   const e1 = r.experts.find((e) => e.user_id === ex.e1.user.id);
   assert.deepEqual({ ...e1, user_id: undefined, full_name: undefined }, { user_id: undefined, full_name: undefined,
     accepted: 2, done: 2, done_late: 1, overdue_now: 1, returned_head: 1, returned_dispatcher: 1, fee_kop: 800_000 + 1_600_000, paid_kop: 800_000,
-    avg_days: 0, late_first: 1, late_first_moved: 0, remarks: [{ text: 'Нет даты осмотра.', n: 1 }] });
+    avg_days: 0, late_first: 1, late_first_moved: 0, remarks: [{ text: 'Нет даты осмотра.', n: 1 }],
+    prev: { done: 0, on_time: 0, returned: 0 } });
+  assert.deepEqual(r.experts.find((e) => e.user_id === ex.e2.user.id).prev, { done: 0, on_time: 0, returned: 1 }, 'возврат прошлого месяца (2.124)');
   assert.deepEqual(r.top_remarks, [{ text: 'Нет даты осмотра.', n: 2, experts: 2 }, { text: 'Не указан этаж', n: 1, experts: 1 }]);
   assert.deepEqual(r.experts.find((e) => e.user_id === ex.e2.user.id).remarks, [{ text: 'нет  даты осмотра', n: 1 }, { text: 'Не указан этаж', n: 1 }]);
   assert.equal(r.experts.find((e) => e.user_id === ex.e2.user.id).returned_head, 1, 'возврат прошлого месяца не считается');
@@ -1900,6 +1904,64 @@ test('сводка за месяц (2.117): дни от принятия до с
   assert.ok(csv.includes('Дней в среднем от принятия до сдачи;Позже первоначального срока;Из них с переносом срока'), csv);
   assert.ok(/Эксперт Медленнов;[^\r\n]*;6,5;1;0\r\n/.test(csv), csv);
   assert.ok(/Итого;[^\r\n]*;5,8;3;1\r\n/.test(csv), csv);
+});
+
+test('сводка за месяц (2.124): сравнение с прошлым месяцем — сдано, в срок, возвраты у эксперта и в итоге', async () => {
+  const org = await makeOrg(S.sql, 'Тестовая организация 2.124');
+  const head = await login(S, '+79990000124');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  const ex = {};
+  for (const [k, phone, name] of [['a', '+79990000224', 'Эксперт Сравнов'], ['b', '+79990000324', 'Эксперт Новиков']]) {
+    ex[k] = await login(S, phone);
+    await addMember(S.sql, org.id, ex[k].user.id, 'member');
+    await makeSpecialist(S.sql, ex[k].user.id);
+    await S.sql`update users set full_name = ${name} where id = ${ex[k].user.id}`;
+    assert.equal((await ex[k].req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  }
+  await S.sql`update organizations set created_at = now() - interval '90 days' where id = ${org.id}`;
+  await S.sql`update org_members set created_at = now() - interval '90 days' where org_id = ${org.id}`;
+  // b вступил в этом месяце — в прошлом месяце его дела не считаются.
+  await S.sql`update org_members set created_at = date_trunc('month', now() at time zone 'Europe/Moscow') at time zone 'Europe/Moscow'
+              where org_id = ${org.id} and user_id = ${ex.b.user.id}`;
+  // Середина прошлого месяца по Москве и день до неё (срок «позже»), день после (срок «в срок»).
+  const [{ at: prevAt, before, after }] = await S.sql`
+    select (date_trunc('month', now() at time zone 'Europe/Moscow') - interval '10 days') at time zone 'Europe/Moscow' as at,
+           to_char(date_trunc('month', now() at time zone 'Europe/Moscow') - interval '11 days', 'YYYY-MM-DD') as before,
+           to_char(date_trunc('month', now() at time zone 'Europe/Moscow') - interval '9 days', 'YYYY-MM-DD') as after`;
+  const day = (n) => new Date(Date.now() + 3 * 3_600_000 + n * 86400_000).toISOString().slice(0, 10);
+  const make = async (executor, deadline, at, from = 'review', to = 'done') => {
+    const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Сводка 2.124' })).body.order;
+    await S.sql`update orders set status = 'done', deadline = ${deadline}, price_kop = 1000000, executor_user_id = ${executor} where id = ${o.id}`;
+    await S.sql`insert into order_status_history (order_id, from_status, to_status, side, at) values (${o.id}, ${from}, ${to}, 'dispatcher', ${at})`;
+    return o;
+  };
+  // a в прошлом месяце: 3 сдано (одно позже срока), один возврат на доработку; в этом — 1 сдано в срок, возвратов нет.
+  await make(ex.a.user.id, after, prevAt);
+  await make(ex.a.user.id, after, prevAt);
+  const lateOne = await make(ex.a.user.id, before, prevAt);
+  await S.sql`insert into order_status_history (order_id, from_status, to_status, side, at)
+              values (${lateOne.id}, 'review', 'in_work', 'dispatcher', ${prevAt})`;
+  await make(ex.a.user.id, day(3), new Date());
+  // b: в прошлом месяце сдал до вступления — не считается; в этом — 1 сдано позже срока.
+  await make(ex.b.user.id, after, prevAt);
+  await make(ex.b.user.id, day(-2), new Date());
+  const r = (await head.req('GET', `/api/orgs/${org.id}/report`)).body.report;
+  const [y, m] = r.month.split('-').map(Number);
+  assert.equal(r.prev_month, m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`);
+  assert.ok(r.prev_month_name);
+  const x = (u) => r.experts.find((e) => e.user_id === u);
+  assert.deepEqual(x(ex.a.user.id).prev, { done: 3, on_time: 2, returned: 1 });
+  assert.deepEqual([x(ex.a.user.id).done, x(ex.a.user.id).done_late], [1, 0]);
+  assert.deepEqual(x(ex.b.user.id).prev, { done: 0, on_time: 0, returned: 0 });
+  assert.deepEqual(r.total.prev, { done: 3, on_time: 2, returned: 1 });
+  // Сводка за прошлый месяц — те же цифры, что в сравнении.
+  const p = (await head.req('GET', `/api/orgs/${org.id}/report?month=${r.prev_month}`)).body.report;
+  assert.deepEqual([p.total.done, p.total.done - p.total.done_late, p.total.returned_head + p.total.returned_dispatcher], [3, 2, 1]);
+  const csv = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv`, undefined, { binary: true })).body.toString('utf8');
+  assert.ok(csv.includes(`Сравнение с прошлым месяцем (${r.prev_month_name});Сдано;Сдано в прошлом месяце;В срок;В срок в прошлом месяце;Возвраты;Возвраты в прошлом месяце`), csv);
+  assert.ok(csv.includes('Эксперт Сравнов;1;3;1;2;0;1\r\n'), csv);
+  assert.ok(csv.includes('Эксперт Новиков;1;0;0;0;0;0\r\n'), csv);
+  assert.ok(/Итого;2;3;1;2;0;1\r\n/.test(csv), csv);
 });
 
 test('свои заготовки абзацев (2.87): видит и меняет только сам эксперт; не специалист — «не найдено»', async () => {
