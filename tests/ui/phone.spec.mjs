@@ -3856,7 +3856,7 @@ test('можно продолжать (2.86): заказчик прислал д
   await expect(ep.locator('[data-today="ready"]')).toHaveText('Можно продолжать · 1');
   const row = ep.locator('[data-today-item="ready"]');
   await expect(row).toContainText('Квартира: можно продолжать');
-  await expect(row).toContainText('документы: получено 1 · сообщений: 1');
+  await expect(row).toContainText('документы получены: Выписка из ЕГРН — все запрошенные · сообщений: 1');
   await shot(ep, '99p-ekspert-segodnya-mozhno-prodolzhat');
   await row.getByRole('button').click();
   await expect(ep.locator('#chat-box')).toBeInViewport();

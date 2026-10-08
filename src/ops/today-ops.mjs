@@ -8,7 +8,8 @@
 // «горящие» (2.98): срок через 1–2 дня или прошёл, а у эксперта нет ни черновика, ни файла результата или нет фото осмотра.
 // Эксперту — очередь подписи (2.99): он подписал, организация ещё нет; руководителю в «Ждут подписи» — когда эксперт напоминал.
 // Руководителю — просьбы экспертов передать дело коллеге (2.107); эксперт отметил «не принимаю дела до …», а у него дела
-// со сроком в эти дни (2.113) — передать коллеге. Эксперту — напоминания по своим заметкам к делу (2.115).
+// со сроком в эти дни (2.113) — передать коллеге. Эксперту — напоминания по своим заметкам к делу (2.115); в «Можно
+// продолжать» — какие запрошенные документы пришли и сколько ещё ждём (2.128).
 // Руководителю — те же сведения, что в «Делах экспертов» (2.16): без заказчика, полей заявки, документов и переписки.
 // Только свои дела и свои организации.
 import { orderRef } from '../notify/registry.mjs';
@@ -70,7 +71,7 @@ async function expertPart(sql, actor, registry, today) {
                       (select max(finished_at) from onsite_visits, s where order_id = ${o.id} and finished_at > s.seen and cancelled_at is null),
                       (select max(at) from order_messages, s where order_id = ${o.id} and side <> 'executor' and at > s.seen)) as last_at`;
     const what = [];
-    if (n.docs) what.push(`документы: получено ${n.docs}`);
+    if (n.docs) what.push(await docsLine(sql, o.id, actor.id));
     if (n.finished) what.push(`осмотр закончен${n.photos ? ` (фото: ${n.photos})` : ''}`);
     else if (n.photos) what.push(`новые фото осмотра: ${n.photos}`);
     if (n.onsite) what.push('выезд помощника завершён');
@@ -108,6 +109,19 @@ async function expertPart(sql, actor, registry, today) {
 }
 
 // Срок дела приходится на дни, когда эксперт не принимает дела (2.113): отметка ещё действует, срок раньше дня возвращения.
+
+// Что именно прислал заказчик по запросу (2.128): названия документов (до трёх) и сколько запрошенных ещё не получено —
+// эксперт сразу видит, можно ли продолжать или ждать дальше.
+async function docsLine(sql, orderId, userId) {
+  const rows = await sql`
+    with s as (select coalesce((select seen_at from order_seen where order_id = ${orderId} and user_id = ${userId}), '-infinity') as seen)
+    select r.title, r.fulfilled_at > s.seen as fresh, r.fulfilled_at is null as waiting from doc_requests r, s
+    where r.order_id = ${orderId} and r.cancelled_at is null order by r.fulfilled_at nulls last, r.id`;
+  const got = rows.filter((r) => r.fresh).map((r) => r.title);
+  const waiting = rows.filter((r) => r.waiting).length;
+  const names = got.length > 3 ? `${got.slice(0, 3).join(', ')} и ещё ${got.length - 3}` : got.join(', ');
+  return `документы получены: ${names} — ${waiting ? `ждём ещё ${waiting}` : 'все запрошенные'}`;
+}
 export function awayDeadline(o, today) {
   return !!o.away_until && o.away_until > today && !!o.deadline && o.deadline < o.away_until;
 }
