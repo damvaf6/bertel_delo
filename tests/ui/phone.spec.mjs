@@ -5631,6 +5631,15 @@ test('дела экспертов (2.127): руководитель отбира
   const w = await hp.evaluate(() => document.documentElement.scrollWidth);
   expect(w).toBeLessThanOrEqual(412);
   await shot(hp, 'c7-rukovoditel-dela-eksperta-iz-nagruzki');
+  // Из утренней сводки (2.130: адрес, которым ведёт уведомление при сроках сегодня или прошедших) — сразу к списку дел с
+  // отбором «Срок на этой неделе», прежний выбор эксперта снят.
+  await hp.goto('/kabinet#orgs');
+  await hp.goto(`/kabinet#org=${orgId}&to=week`);
+  await expect(pick).toHaveValue('');
+  await expect(hp.locator('[data-filter="week"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(rows).toHaveCount(2);
+  await expect(hp.locator('#org-cases-list-title')).toBeInViewport();
+  await shot(hp, 'c8-rukovoditel-svodka-srok-nedelya');
   for (const p of [cp, ap, bp, hp]) await p.context().close();
 });
 
@@ -6388,10 +6397,12 @@ test('утренняя сводка руководителю «На сегодн
   await sms.uncheck();
   await expect(hp.locator('#notify-msg')).toHaveText('СМС выключены — уведомления останутся в кабинете');
 
-  // Нажатие — организация.
+  // Нажатие — организация, сразу к списку дел (2.130: в сводке есть сроки — отбор «Срок на этой неделе»; дел нет — весь
+  // список).
   await n.getByRole('button').click();
-  await expect(hp).toHaveURL(new RegExp(`#org=${orgId}$`));
+  await expect(hp).toHaveURL(new RegExp(`#org=${orgId}&to=week$`));
   await expect(hp.locator('#org-title')).toHaveText('ООО «Утренняя организация»');
+  await expect(hp.locator('#org-cases-list-title')).toBeInViewport();
   await shot(hp, 'h14-rukovoditel-svodka-organizaciya');
 });
 

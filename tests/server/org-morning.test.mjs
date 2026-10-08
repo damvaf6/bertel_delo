@@ -6,7 +6,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, addMember } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
-import { orgDigestText, sendOrgMorning } from '../../src/notify/morning.mjs';
+import { orgDigestText, orgDigestTo, sendOrgMorning } from '../../src/notify/morning.mjs';
 
 let S, owner, dispatcher, spec, head, head2, idleHead, org, idleOrg;
 const FIELDS = { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, Руководящая ул., 21', area: '40' };
@@ -82,11 +82,12 @@ test('после 8:00 — одна сводка каждому руководи�
   assert.equal((await S.sql`select count(*)::int as n from org_morning_digests where user_id = ${idleHead.user.id} and notification_id is null`)[0].n, 1);
   assert.equal(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(today, '09:05') }), 0);
 
-  // В ленте — цифры (организация — отдельно), ведёт в организацию; названия дел и адреса нигде не звучат.
+  // В ленте — цифры (организация — отдельно), ведёт в организацию — сразу к делам со сроком (2.130); названия дел и адреса
+  // нигде не звучат.
   const feed = (await head.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня по организации'));
   assert.equal(feed.length, 1);
   assert.equal(feed[0].title, 'На сегодня по организации: 1 дело ждёт подписи организации, 1 просьба передать дело, у экспертов сдать сегодня 1 дело, 1 дело с прошедшим сроком');
-  assert.deepEqual([feed[0].section, feed[0].order_id, feed[0].order_ref], [`org=${org.id}`, null, null]);
+  assert.deepEqual([feed[0].section, feed[0].order_id, feed[0].order_ref], [`org=${org.id}&to=week`, null, null]);
   const [sms] = await S.sql`select d.body from notification_deliveries d join notifications n on n.id = d.notification_id
                             where n.user_id = ${head.user.id} and n.event = 'org_morning_today'`;
   assert.equal(sms.body, `БЕРТЕЛ Дело: ${feed[0].title}. Подробно — «Дела экспертов» в кабинете.`);
@@ -106,4 +107,12 @@ test('вид в настройках — только у руководител�
   assert.deepEqual([d.due, d.overdue], [0, 2]);
   assert.equal((await S.sql`select count(*)::int as n from notification_deliveries where notification_id = ${d.notification_id}`)[0].n, 0);
   assert.equal((await S.sql`select count(*)::int as n from org_morning_digests where user_id = ${head2.user.id} and day = ${tomorrow}::date`)[0].n, 0);
+});
+
+test('куда ведёт сводка (2.130): сроки — к отбору «Срок на этой неделе», иначе к подписи, иначе к просьбам передать', () => {
+  assert.equal(orgDigestTo({ sign: 2, handover: 1, due: 0, overdue: 1 }), 'week');
+  assert.equal(orgDigestTo({ sign: 0, handover: 0, due: 1, overdue: 0 }), 'week');
+  assert.equal(orgDigestTo({ sign: 1, handover: 1, due: 0, overdue: 0 }), 'sign');
+  assert.equal(orgDigestTo({ sign: 0, handover: 2, due: 0, overdue: 0 }), 'handover');
+  assert.equal(orgDigestTo({ sign: 0, handover: 0, due: 0, overdue: 0 }), null);
 });

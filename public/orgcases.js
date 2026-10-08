@@ -313,10 +313,22 @@ function offerWait(org, c) {
       msg)];
 }
 
+// К блоку организации из утренней сводки (2.130): «sign» — к подписи организации; «week», «handover» — к списку дел с
+// отбором «Срок на этой неделе» (2.127; в нём и просроченные) или «Просят передать». Отбора уже нет (дела сданы, эксперт
+// ответил) — список целиком.
+export function focusOrgBlock(to) {
+  if (to === 'sign') return goSign(null);
+  $('org-cases-search').value = '';
+  expert = '';
+  filter = to;
+  renderCases();
+  $('org-cases-list-title').scrollIntoView({ block: 'start' });
+}
+
 // Перейти к делу в «Подписи организации» и выделить его.
 function goSign(ref) {
   document.querySelector(`#org-sign li.signed[data-item="${CSS.escape(ref)}"] details`)?.setAttribute('open', '');
-  const li = document.querySelector(`#org-sign li[data-item="${CSS.escape(ref)}"]`) ?? $('org-sign-box');
+  const li = (ref && document.querySelector(`#org-sign li[data-item="${CSS.escape(ref)}"]`)) || $('org-sign-box');
   li.scrollIntoView({ behavior: 'smooth', block: 'start' });
   li.classList.add('flash');
   setTimeout(() => li.classList.remove('flash'), 2000);

@@ -2,7 +2,7 @@
 import { api, el, say, formatPhone, ROLE_RU, quoted } from '/common.js';
 import { state, show, notFoundView, refreshMe } from '/shell.js';
 import { loadOrgSign } from '/orgsign.js';
-import { loadOrgCases, focusOrgCase } from '/orgcases.js';
+import { loadOrgCases, focusOrgCase, focusOrgBlock } from '/orgcases.js';
 import { loadOrgReport } from '/orgreport.js';
 import { loadOrgTemplate } from '/orgtemplate.js';
 
@@ -65,7 +65,7 @@ $('new-org').addEventListener('submit', async (e) => {
   } catch (err) { say($('org-new-msg'), err.message); } finally { $('create-org').disabled = false; }
 });
 
-// focus — сразу к делу (2.67): { ref: '№ XXXXXXXX', to: 'pending' | 'sign' | 'chat' | 'case' }.
+// focus — сразу к делу (2.67): { ref: '№ XXXXXXXX', to: 'pending' | 'sign' | 'chat' | 'case' }; или к блоку (2.130): { block }.
 export async function showOrg(id, focus = null) {
   try {
     const r = await api('GET', `/api/orgs/${id}`);
@@ -91,7 +91,7 @@ export async function showOrg(id, focus = null) {
   show('org-view', 'orgs');
   workBox();
   await Promise.all([loadMembers(), org.manage ? loadOrgInvites() : null, org.manage ? loadOrgSign(org) : null, org.manage ? loadOrgCases(org) : null, org.manage ? loadOrgReport(org) : null, loadOrgTemplate(org)]);
-  if (focus && org.manage) focusOrgCase(focus);
+  if (focus && org.manage) (focus.block ? focusOrgBlock(focus.block) : focusOrgCase(focus));
 }
 
 // Специалист вступил в организацию, но работает не от неё (2.67): без этого дела организации ему не назначить, а его
