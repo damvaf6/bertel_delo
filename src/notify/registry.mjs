@@ -47,7 +47,7 @@ export const EVENTS = {
 
   // Утренняя сводка (2.119): src/notify/morning.mjs; в ленте и СМС — с цифрами, ведёт к «Моим срокам» в разделе «Специалист».
   morning_today: { type: 'morning', title: 'На сегодня: сроки дел, выезды и ссылки на осмотр — «Мои сроки» в разделе «Специалист»', order: false, section: 'specialist', anchor: 'schedule' },
-  // Утренняя сводка руководителю (2.121): src/notify/morning.mjs; в ленте — с цифрами и названием организации, ведёт в организацию.
+  // Утренняя сводка руководителю (2.121): src/notify/morning.mjs; в ленте и СМС — с цифрами, ведёт в организацию.
   org_morning_today: { type: 'org_morning', title: 'На сегодня по организации: подписи, просьбы передать дело, сроки экспертов', order: false, section: 'orgs' },
   offer_withdrawn: { type: 'executor_work', title: 'Предложение дела снято', order: true },
   inspection_done: { type: 'executor_work', title: 'Владелец объекта прислал фото осмотра', order: true },

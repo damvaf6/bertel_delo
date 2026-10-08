@@ -89,13 +89,13 @@ export function orgDigestCounts(part, today) {
   };
 }
 
-export function orgDigestText(c, orgName = null) {
+export function orgDigestText(c) {
   const parts = [];
   if (c.sign) parts.push(`${c.sign} ${pl(c.sign, 'дело ждёт', 'дела ждут', 'дел ждут')} подписи организации`);
   if (c.handover) parts.push(`${c.handover} ${pl(c.handover, 'просьба', 'просьбы', 'просьб')} передать дело`);
   if (c.due) parts.push(`у экспертов сдать сегодня ${c.due} ${pl(c.due, 'дело', 'дела', 'дел')}`);
   if (c.overdue) parts.push(`${c.overdue} ${pl(c.overdue, 'дело', 'дела', 'дел')} с прошедшим сроком`);
-  return parts.length ? `На сегодня по организации${orgName ? ` «${orgName}»` : ''}: ${parts.join(', ')}` : null;
+  return parts.length ? `На сегодня по организации: ${parts.join(', ')}` : null;
 }
 
 export async function sendOrgMorning(sql, registry, { now = new Date() } = {}) {
@@ -117,7 +117,6 @@ export async function sendOrgMorning(sql, registry, { now = new Date() } = {}) {
                              on conflict do nothing returning user_id`;
       const text = orgDigestText(c);
       if (!fresh.length || !text) return 0;
-      // В СМС — без названия организации: только цифры.
       const n = await notify(tx, 'org_morning_today', { users: [h.user_id], orgId: h.org_id, sms: `БЕРТЕЛ Дело: ${text}. Подробно — «Дела экспертов» в кабинете.` });
       if (n) {
         await tx`update org_morning_digests set notification_id = (select max(id) from notifications
@@ -130,10 +129,9 @@ export async function sendOrgMorning(sql, registry, { now = new Date() } = {}) {
   return sent;
 }
 
-// Текст сводки руководителя в ленте по номеру уведомления — с названием организации (её видит только сам руководитель).
+// Текст сводки руководителя в ленте по номеру уведомления (название организации лента пишет строкой ниже).
 export async function orgMorningTitles(sql, ids) {
   if (!ids.length) return new Map();
-  const rows = await sql`select d.notification_id, d.sign, d.handover, d.due, d.overdue, o.name from org_morning_digests d
-                         join organizations o on o.id = d.org_id where d.notification_id = any(${ids}::bigint[])`;
-  return new Map(rows.map((r) => [String(r.notification_id), orgDigestText(r, r.name)]));
+  const rows = await sql`select notification_id, sign, handover, due, overdue from org_morning_digests where notification_id = any(${ids}::bigint[])`;
+  return new Map(rows.map((r) => [String(r.notification_id), orgDigestText(r)]));
 }

@@ -1,6 +1,6 @@
 // Утренняя сводка руководителю «На сегодня по организации» (2.121): раз в день после 8:00 по Москве — одно уведомление на
 // организацию: сколько дел ждут подписи организации, просьб экспертов передать дело, дел экспертов со сроком сегодня и с
-// прошедшим сроком. Нечего сообщить — не приходит. В ленте и СМС — только цифры (в ленте — ещё название организации);
+// прошедшим сроком. Нечего сообщить — не приходит. В ленте и СМС — только цифры (организация — строкой ниже в ленте);
 // ведёт в организацию. Чужая организация и не руководитель — ничего.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -50,8 +50,8 @@ const mine = async (userId) => S.sql`select id from notifications where user_id 
 test('текст сводки руководителя: только непустые части, склонения', () => {
   assert.equal(orgDigestText({ sign: 0, handover: 0, due: 0, overdue: 0 }), null);
   assert.equal(orgDigestText({ sign: 1, handover: 0, due: 0, overdue: 0 }), 'На сегодня по организации: 1 дело ждёт подписи организации');
-  assert.equal(orgDigestText({ sign: 2, handover: 1, due: 5, overdue: 1 }, 'ООО «А»'),
-    'На сегодня по организации «ООО «А»»: 2 дела ждут подписи организации, 1 просьба передать дело, у экспертов сдать сегодня 5 дел, 1 дело с прошедшим сроком');
+  assert.equal(orgDigestText({ sign: 2, handover: 1, due: 5, overdue: 1 }),
+    'На сегодня по организации: 2 дела ждут подписи организации, 1 просьба передать дело, у экспертов сдать сегодня 5 дел, 1 дело с прошедшим сроком');
   assert.equal(orgDigestText({ sign: 11, handover: 3, due: 21, overdue: 12 }),
     'На сегодня по организации: 11 дел ждут подписи организации, 3 просьбы передать дело, у экспертов сдать сегодня 21 дело, 12 дел с прошедшим сроком');
 });
@@ -82,14 +82,14 @@ test('после 8:00 — одна сводка каждому руководи�
   assert.equal((await S.sql`select count(*)::int as n from org_morning_digests where user_id = ${idleHead.user.id} and notification_id is null`)[0].n, 1);
   assert.equal(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(today, '09:05') }), 0);
 
-  // В ленте — цифры и название организации, ведёт в организацию; названия дел и адреса нигде не звучат.
+  // В ленте — цифры (организация — отдельно), ведёт в организацию; названия дел и адреса нигде не звучат.
   const feed = (await head.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня по организации'));
   assert.equal(feed.length, 1);
-  assert.equal(feed[0].title, `На сегодня по организации «${org.name}»: 1 дело ждёт подписи организации, 1 просьба передать дело, у экспертов сдать сегодня 1 дело, 1 дело с прошедшим сроком`);
+  assert.equal(feed[0].title, 'На сегодня по организации: 1 дело ждёт подписи организации, 1 просьба передать дело, у экспертов сдать сегодня 1 дело, 1 дело с прошедшим сроком');
   assert.deepEqual([feed[0].section, feed[0].order_id, feed[0].order_ref], [`org=${org.id}`, null, null]);
   const [sms] = await S.sql`select d.body from notification_deliveries d join notifications n on n.id = d.notification_id
                             where n.user_id = ${head.user.id} and n.event = 'org_morning_today'`;
-  assert.equal(sms.body, 'БЕРТЕЛ Дело: На сегодня по организации: 1 дело ждёт подписи организации, 1 просьба передать дело, у экспертов сдать сегодня 1 дело, 1 дело с прошедшим сроком. Подробно — «Дела экспертов» в кабинете.');
+  assert.equal(sms.body, `БЕРТЕЛ Дело: ${feed[0].title}. Подробно — «Дела экспертов» в кабинете.`);
   assert.doesNotMatch(sms.body, /Утренн|Квартира|Москва|Отпуск|Эксперт Утренний/);
   assert.doesNotMatch(JSON.stringify(feed), /Квартира|Руководящ|Эксперт Утренний/);
 });

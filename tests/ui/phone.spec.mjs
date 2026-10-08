@@ -6197,7 +6197,8 @@ test('утренняя сводка руководителю «На сегодн
 
   await hp.goto('/kabinet#notifications');
   const n = hp.locator('#notifications li').first();
-  await expect(n).toContainText('На сегодня по организации «ООО «Утренняя организация»»: 2 дела ждут подписи организации, 1 просьба передать дело, у экспертов сдать сегодня 3 дела, 1 дело с прошедшим сроком');
+  await expect(n).toContainText('На сегодня по организации: 2 дела ждут подписи организации, 1 просьба передать дело, у экспертов сдать сегодня 3 дела, 1 дело с прошедшим сроком');
+  await expect(n).toContainText('Организация ООО «Утренняя организация»');
   const sms = hp.locator('#sms-org_morning');
   await expect(sms).toBeChecked();
   await expect(hp.locator('label[for="sms-org_morning"]')).toHaveText('Утром «На сегодня по организации»');
