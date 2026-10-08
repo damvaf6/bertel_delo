@@ -27,7 +27,7 @@ export async function loadRepeat(current, reload) {
   try { render(await api('GET', `/api/orders/${current.order.id}/repeat`)); } catch { box.classList.add('hidden'); }
 }
 
-const check = (name, label, note) => el('label', { class: 'row gap' },
+const check = (name, label, note) => el('label', { class: 'row gap check-line' },
   el('input', { type: 'checkbox', name, checked: '' }),
   el('span', {}, el('span', { text: label }), note ? el('span', { class: 'muted', text: ` — ${note}` }) : ''));
 

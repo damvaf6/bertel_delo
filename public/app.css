@@ -133,6 +133,8 @@ details.fold[open] summary { margin-bottom: 6px; }
 fieldset.field { border: none; padding: 0; margin: 0 0 12px; }
 input[type=checkbox] { width: 22px; height: 22px; flex: 0 0 auto; }
 label.row { color: var(--text); font-size: 16px; margin: 0 0 8px; }
+label.row.check-line { flex-wrap: nowrap; align-items: flex-start; }
+label.row.check-line > span { flex: 1 1 0; min-width: 0; }
 .score { font-weight: 700; color: var(--accent); }
 .features { margin: 6px 0 8px; padding: 0; list-style: none; font-size: 14px; color: var(--muted); }
 .features li { padding: 1px 0; border: none; }

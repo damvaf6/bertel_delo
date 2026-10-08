@@ -6116,11 +6116,9 @@ test('повторная оценка того же объекта (2.118): эк
   expect(draft.draft.body).toContain('окна во двор');
   expect(draft.draft.body).not.toContain('Петров');
   expect(draft.draft.body).not.toContain('52.4');
-  await ep.click('#fold-all');
   await expect(ep.locator('#analogs-list li.analog [data-copied]')).toHaveCount(1);
   await ep.locator('#analogs-list li.analog').first().scrollIntoViewIfNeeded();
   await shot(ep, 'h9-ekspert-analog-iz-proshlogo');
-  await ep.click('#fold-all');
 
   // Заказчик видит запрос документов, но не прошлое дело и не блок повторной оценки.
   await cp.goto(`/kabinet#order=${ids.b}`);
