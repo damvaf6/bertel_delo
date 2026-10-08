@@ -1922,6 +1922,74 @@ test('мои итоги за месяц (2.92): только свои дела �
   assert.equal(prev.total.overdue_now, null);
 });
 
+test('мои сроки на две недели (2.109): по дням — сроки своих дел, выезды, ссылка на осмотр, просьба о переносе; чужого нет', async () => {
+  cover('specialist.me.schedule');
+  const exp = await login(S, '+79990001495');
+  const other = await login(S, '+79990001496');
+  const helper = await login(S, '+79990001497');
+  for (const u of [exp, other, helper]) await makeSpecialist(S.sql, u.user.id);
+  const schedule = (c) => c.req('GET', '/api/specialist/me/schedule');
+  assert.equal((await schedule(U.owner)).status, 404, 'не специалист');
+  const empty = (await schedule(exp)).body.schedule;
+  assert.equal(empty.days.length, 14);
+  assert.equal(empty.days[0].date, empty.from);
+  assert.ok(empty.days[0].today);
+  assert.equal(empty.days[13].date, empty.to);
+  assert.ok(empty.days.every((d) => d.items.length === 0) && empty.overdue.length === 0 && empty.away === null);
+  const today = empty.from;
+  const plus = (n) => { const d = new Date(`${today}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  const order = async (title, status, days, executor = exp.user.id) => {
+    const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
+    await S.sql`update orders set status = ${status}, deadline = ${plus(days)}::date, executor_user_id = ${executor} where id = ${o.id}`;
+    return o;
+  };
+  const soon = await order('Сроки: через 2 дня', 'in_work', 2);
+  const review = await order('Сроки: на проверке', 'review', 5);
+  const late = await order('Сроки: просрочено', 'in_work', -1);
+  const far = await order('Сроки: через месяц', 'in_work', 30);
+  const doneOne = await order('Сроки: сдано', 'done', 3);
+  const foreign = await order('Сроки: чужое', 'in_work', 2, other.user.id);
+  // Просьба перенести срок дела «через 2 дня» на 6-й день; выезд помощника на 1-й день в 10:30 по Москве;
+  // ссылка на осмотр действует до 3-го дня; у чужого дела — свой выезд, где наш эксперт помощник.
+  await S.sql`insert into deadline_requests (order_id, requested_by, old_deadline, new_deadline, reason)
+              values (${soon.id}, ${exp.user.id}, ${plus(2)}::date, ${plus(6)}::date, 'Ждём выписку')`;
+  await S.sql`insert into onsite_visits (order_id, helper_id, assigned_by, planned_at)
+              values (${soon.id}, ${helper.user.id}, ${exp.user.id}, (${plus(1)}::date + time '10:30') at time zone 'Europe/Moscow'),
+                     (${foreign.id}, ${exp.user.id}, ${other.user.id}, (${plus(4)}::date + time '09:00') at time zone 'Europe/Moscow')`;
+  await S.sql`insert into inspection_links (order_id, created_by, token_hash, expires_at)
+              values (${late.id}, ${exp.user.id}, ${'sched-' + late.id}, (${plus(3)}::date + time '18:00') at time zone 'Europe/Moscow')`;
+  await S.sql`update specialists set away_until = ${plus(2)}::date, away_note = 'отпуск' where user_id = ${exp.user.id}`;
+  const r = (await schedule(exp)).body.schedule;
+  const at = (n) => r.days[n].items.map((i) => [i.kind, i.order_id ?? i.visit_id, i.time ?? null]);
+  assert.deepEqual(r.overdue.map((i) => [i.kind, i.order_id]), [['deadline', late.id]]);
+  assert.deepEqual(at(1), [['visit', soon.id, '10:30']]);
+  assert.deepEqual(at(2), [['deadline', soon.id, null]]);
+  assert.equal(r.days[2].items[0].extend_to, plus(6));
+  assert.equal(r.days[2].deadlines, 1);
+  assert.deepEqual(at(3), [['link', late.id, '18:00']]);
+  assert.equal(r.days[3].items[0].has_photos, false);
+  assert.equal(at(4).length, 1);
+  assert.equal(at(4)[0][0], 'my_visit');
+  assert.equal(at(4)[0][2], '09:00');
+  assert.deepEqual(at(5), [['deadline', review.id, null]]);
+  assert.equal(r.days[5].items[0].status, 'review');
+  assert.deepEqual(at(6), [['extend', soon.id, null]]);
+  assert.deepEqual(r.away, { until: plus(2), note: 'отпуск' });
+  assert.deepEqual(r.days.map((d) => d.away).slice(0, 3), [true, true, false]);
+  const text = JSON.stringify(r);
+  for (const t of ['Сроки: чужое', 'Сроки: через месяц', 'Сроки: сдано']) assert.ok(!text.includes(t), t);
+  assert.ok(!text.includes(foreign.id) && !text.includes(far.id) && !text.includes(doneOne.id));
+  // Другой эксперт видит своё дело и выезд помощника по нему, но не наши дела.
+  const o2 = (await schedule(other)).body.schedule;
+  assert.deepEqual(o2.days[2].items.map((i) => [i.kind, i.order_id]), [['deadline', foreign.id]]);
+  assert.deepEqual(o2.days[4].items.map((i) => [i.kind, i.order_id]), [['visit', foreign.id]]);
+  assert.ok(!JSON.stringify(o2).includes('Сроки: через 2 дня'));
+  // Помощник видит только свой выезд — без названия дела.
+  const h = (await schedule(helper)).body.schedule;
+  assert.deepEqual(h.days[1].items.map((i) => i.kind), ['my_visit']);
+  assert.ok(!JSON.stringify(h).includes('Сроки:') && !JSON.stringify(h).includes(soon.id));
+});
+
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {
   const PUBLIC = ['health', 'auth.code', 'auth.verify', 'files.memory', 'files.memory.upload', 'test.calls', 'test.script', 'test.reset', 'test.mail.inbound', 'stage.login', 'payments.notify',
     'inspect.view', 'inspect.photo', 'inspect.finish'];

@@ -66,7 +66,7 @@ export async function openOrder(id, { to } = {}) {
   loadJournal(current.order, current.access);
   await Promise.all([loadDocs(true), loadTransfer(), loadMatch(current, () => openOrder(id)), loadDraft(current, () => openOrder(id)), loadAnalogs(current), loadInspection(current), loadOnsite(current), loadDocRequests(current, (file, msg) => uploadFile(file, 'other', msg)), loadDeadline(current, () => openOrder(id)), loadHandover(current), loadReview(current), loadChat(current), loadMoney(current, () => openOrder(id))]);
   setNext({ loaded: true }); // разделы осмотра и черновика показаны — шаги пересчитываются, нужный сейчас блок раскрыт
-  const box = { inspect: 'inspect-box', chat: 'chat-box', docs: 'docreq-box', deadline: 'deadline-box', sign: 'sign-wait-box', handover: 'handover-box' }[to];
+  const box = { inspect: 'inspect-box', chat: 'chat-box', docs: 'docreq-box', deadline: 'deadline-box', sign: 'sign-wait-box', handover: 'handover-box', onsite: 'onsite-box' }[to];
   if (box && !$(box).classList.contains('hidden')) { reveal(box); $(box).scrollIntoView({ block: 'start' }); }
 }
 

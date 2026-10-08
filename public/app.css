@@ -304,3 +304,19 @@ h2.inline { display: inline; }
 .diff-add { background: #e6f4ea; }
 .diff-del { background: #fdecea; text-decoration: line-through; text-decoration-color: #b3261e; }
 .diff-mark { font-size: 12px; font-weight: 600; text-decoration: none; display: inline-block; margin-right: 4px; color: #555; }
+/* «Мои сроки на две недели» (2.109): день — строка с датой; пустые дни — одной строкой «свободно». */
+.schedule { list-style: none; padding: 0; margin: 8px 0 0; }
+.schedule > li { border-top: 1px solid var(--line); padding: 8px 0; }
+.schedule > li:first-child { border-top: none; }
+.schedule .day { display: flex; justify-content: space-between; gap: 8px; font-weight: 600; }
+.schedule .day .muted { font-weight: 400; font-size: 14px; }
+.schedule li.weekend .day > span:first-child { color: var(--muted); }
+.schedule li.today .day > span:first-child { color: var(--accent); }
+.schedule li.free { padding: 4px 0; }
+.schedule li.free .day { font-weight: 400; color: var(--muted); font-size: 14px; }
+.schedule ul { list-style: none; padding: 0; margin: 4px 0 0; }
+.schedule ul li { margin: 4px 0; }
+.schedule a.open { display: block; padding: 6px 8px; border-radius: 6px; background: #f2f5fa; color: var(--text); text-decoration: none; overflow-wrap: anywhere; }
+.schedule a.open .what { display: block; font-size: 14px; color: var(--muted); }
+.schedule a.open.hot { background: #fdecea; }
+.schedule a.open.wait { background: #fff3d6; }

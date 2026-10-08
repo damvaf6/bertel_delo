@@ -13,6 +13,7 @@ import { audit, text, uuidFrom } from './util.mjs';
 import { notify, orgHeads } from '../notify/notify.mjs';
 import { BLOCKING_KINDS, dossierAlerts, loadDossier, needsValidDossier } from '../dossier/dossier.mjs';
 import { expertMonthReport, reportMonth } from '../orgs/report.mjs';
+import { expertSchedule } from '../orders/schedule.mjs';
 
 const REGIONS = { moscow: 'Москва', mo: 'Московская область' };
 const OPEN_STATUSES = ['awaiting_executor', 'in_work', 'review'];
@@ -204,6 +205,14 @@ export function matchOps() {
       async handler({ sql, actor, query }) {
         if (!(await sql.one`select 1 from specialists where user_id = ${actor.id}`)) throw new HttpError(404, 'not_found', 'Вы не специалист');
         return { report: await expertMonthReport(sql, actor.id, reportMonth(query.month)) };
+      },
+    },
+    {
+      // «Мои сроки на две недели» (2.109): по дням — сроки своих дел, выезды и ссылки на осмотр, просьбы о переносе срока.
+      id: 'specialist.me.schedule', method: 'GET', path: '/api/specialist/me/schedule', auth: 'user', access: 'self',
+      async handler({ sql, actor, registry }) {
+        if (!(await sql.one`select 1 from specialists where user_id = ${actor.id}`)) throw new HttpError(404, 'not_found', 'Вы не специалист');
+        return { schedule: await expertSchedule(sql, actor.id, registry) };
       },
     },
     {
