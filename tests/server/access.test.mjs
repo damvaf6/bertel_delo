@@ -1157,7 +1157,7 @@ test('дела экспертов (2.16): видит только руковод
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.cases.length, 1);
   const c = r.body.cases[0];
-  assert.deepEqual(Object.keys(c).sort(), ['active', 'away', 'chat', 'deadline', 'expert', 'extend', 'fee_kop', 'handover', 'hot', 'id', 'offer_wait', 'offered_at', 'order_ref', 'overdue', 'payout', 'returned_open', 'service', 'sign_wait', 'status', 'status_name', 'transfer_to']);
+  assert.deepEqual(Object.keys(c).sort(), ['active', 'away', 'chat', 'deadline', 'expert', 'extend', 'fee_kop', 'handover', 'hot', 'id', 'offer_wait', 'offered_at', 'order_ref', 'overdue', 'payout', 'remind', 'returned_open', 'service', 'sign_wait', 'status', 'status_name', 'transfer_to']);
   assert.deepEqual(Object.keys(c.chat).sort(), ['expert_last', 'messages']);   // переписка (2.67): только число и чьё последнее, без текста
   assert.equal(c.status, 'review');
   assert.equal(c.expert, 'Эксперт Б');
@@ -1520,6 +1520,26 @@ test('передача дела в работе (2.62): только руков�
   assert.equal((await result(expertC, 'отчёт.txt')).status, 201);
   await S.sql`update orders set status = 'review' where id = ${o.id}`;
   assert.equal((await transfer(U.headB, orgB.id, expertB.user.id)).body.error, 'status_changed');
+});
+
+test('«Напомнить эксперту» (2.125): только руководитель организации эксперта; посторонним и чужому руководителю — «не найдено»', async () => {
+  cover('orgs.cases.remind');
+  const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Напомнить эксперту' })).body.order;
+  const fields = { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, Напоминальная ул., 1' };
+  assert.equal((await U.owner.req('PATCH', `/api/orders/${o.id}`, { fields, deadline: new Date(Date.now() + 9 * 86400_000).toISOString().slice(0, 10) })).status, 200);
+  assert.equal((await U.owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
+  await ensurePaid(S.sql, o.id);
+  assert.equal((await U.dispatcher.req('POST', `/api/orders/${o.id}/offer`, { org_id: orgB.id, from: 'matching' })).status, 200);
+  assert.equal((await U.headB.req('POST', `/api/orgs/${orgB.id}/cases/${o.id}/assign`, { specialist_id: expertB.user.id })).status, 200);
+  const remind = (c, orgId) => c.req('POST', `/api/orgs/${orgId}/cases/${o.id}/remind`);
+  assert.equal((await remind(U.headB, orgB.id)).body.error, 'status_changed', 'дело ещё не принято экспертом');
+  assert.equal((await expertB.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  for (const k of ['stranger', 'headA', 'owner', 'spec']) assert.equal((await remind(U[k], orgB.id)).status, 404, k);
+  for (const c of [seniorB, expertB, U.dispatcher, U.admin]) assert.equal((await remind(c, orgB.id)).status, 403);
+  assert.equal((await remind(U.headA, orgA.id)).status, 404, 'своей организацией чужое дело не напомнить');
+  assert.equal((await U.headB.req('POST', `/api/orgs/${orgB.id}/cases/abc/remind`)).status, 404);
+  assert.equal((await S.sql`select count(*)::int as n from case_reminders where order_id = ${o.id}`)[0].n, 0, 'отказы ничего не записали');
+  assert.equal((await remind(U.headB, orgB.id)).status, 201);
 });
 
 test('просьба передать дело коллеге (2.107): видит и просит только исполнитель; отказывает только руководитель организации эксперта', async () => {
