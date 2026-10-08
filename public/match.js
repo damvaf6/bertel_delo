@@ -74,7 +74,8 @@ async function offerOrg(order, g, reopen) {
 
 // ——— Кабинет специалиста ———
 
-export async function showSpecialist() {
+// to = 'schedule' — сразу к «Моим срокам» (утренняя сводка «На сегодня», 2.119).
+export async function showSpecialist({ to = null } = {}) {
   const sp = state.specialist;
   if (!sp) { location.hash = ''; return; }
   say($('specialist-msg'), '');
@@ -90,6 +91,7 @@ export async function showSpecialist() {
   $('specialist-permits-empty').classList.toggle('hidden', sp.permits.length > 0);
   show('specialist-view', 'specialist');
   await Promise.all([showCrm(), showVisits(sp), showDossier(), loadSchedule(), loadMyReport()]);
+  if (to === 'schedule') $('schedule-box').scrollIntoView({ block: 'start' });
 }
 
 // Выезды помощника на объект (экспресс, 2.4): открываются на странице осмотра — по шагам, с камерой и геометкой.

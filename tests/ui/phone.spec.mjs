@@ -6126,3 +6126,40 @@ test('повторная оценка того же объекта (2.118): эк
   await expect(cp.locator('#repeat-box')).toBeHidden();
   await expect(cp.locator('#docreq-list > li')).toHaveCount(2);
 });
+
+test('утренняя сводка «На сегодня» (2.119): уведомление с цифрами ведёт к «Моим срокам», СМС сводки — отдельная настройка', async ({ browser, baseURL }) => {
+  const ep = await (await phoneContext(browser, baseURL)).newPage();
+  const customer = await signIn(await (await phoneContext(browser, baseURL)).newPage(), '+79990010201');
+  const expert = await signIn(ep, '+79990010202');
+  await db(async (c) => {
+    await c.query("insert into specialists (user_id, created_at) values ($1, now() - interval '1 year')", [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Квартира: сдать сегодня', $1, $2, 'in_work', (now() at time zone 'Europe/Moscow')::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Утренняя ул., 8","area":"40"}') returning id`, [customer.id, expert.id]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [o.id, expert.id]);
+    // Сводка рассылается раз в минуту на сервере после 8:00 по Москве; здесь — запись напрямую, с цифрами дня.
+    const { rows: [n] } = await c.query("insert into notifications (user_id, type, event) values ($1, 'morning', 'morning_today') returning id", [expert.id]);
+    await c.query(`insert into morning_digests (user_id, day, due, overdue, visits, links, notification_id)
+      values ($1, (now() at time zone 'Europe/Moscow')::date, 1, 0, 1, 1, $2)`, [expert.id, n.id]);
+  });
+
+  await ep.goto('/kabinet#notifications');
+  const n = ep.locator('#notifications li').first();
+  await expect(n).toContainText('На сегодня: сдать 1 дело, 1 выезд на объект, 1 ссылка на осмотр истекает в ближайшие сутки');
+  await expect(n).not.toContainText('Квартира');
+  const sms = ep.locator('#sms-morning');
+  await expect(sms).toBeChecked();
+  await expect(ep.locator('label[for="sms-morning"]')).toHaveText('Утром «На сегодня»');
+  await shot(ep, 'h10-ekspert-utrennyaya-svodka');
+  await sms.uncheck();
+  await expect(ep.locator('#notify-msg')).toHaveText('СМС выключены — уведомления останутся в кабинете');
+
+  // Нажатие — раздел «Специалист», сразу «Мои сроки»: дело со сроком сегодня.
+  await n.getByRole('button').click();
+  await expect(ep).toHaveURL(/#specialist&to=schedule$/);
+  const box = ep.locator('#schedule-box');
+  await expect(box.locator('#schedule-days > li').first()).toContainText('Сдать: Квартира: сдать сегодня');
+  await expect(box.locator('h2')).toBeInViewport();
+  await shot(ep, 'h11-ekspert-svodka-moi-sroki');
+});
