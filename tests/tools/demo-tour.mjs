@@ -22,7 +22,7 @@ export const DEMO_TOUR = [
     say: 'Перед выдачей отчёт проверяется по правилам: реквизиты, объект, расчёт, аналоги, сведения об оценщике. ИИ подсказывает места, решает человек.' },
   { min: '5:20', who: 'morozova', title: 'Эксперт: мои дела и «Сегодня»', open: '/kabinet', wait: '#orders li',
     say: 'Эксперт видит свои дела и что горит сегодня. Дела приходят предложением — эксперт принимает или отказывается.' },
-  { min: '6:00', who: 'morozova', title: 'Эксперт: дело в работе', open: { case: 'land' }, wait: '#messages li', what: '#chat-box',
+  { min: '6:00', who: 'morozova', title: 'Эксперт: дело в работе', open: { case: 'land', to: 'chat' }, wait: '#messages li', what: '#chat-box',
     say: 'В деле — документы заказчика, осмотр по ссылке, аналоги, черновик отчёта от ИИ и переписка. Имя эксперта заказчику не показывается.' },
   { min: '6:50', who: 'tikhonov', title: 'Эксперт: предложенное дело', open: { case: 'crash' }, wait: '#order-status',
     say: 'Предложение дела: данные, срок и вознаграждение эксперта (80% цены) — до того, как он согласится.' },
@@ -54,7 +54,7 @@ export async function demoTour({ browser, baseURL, headers = {}, sessions, cases
   const shots = [];
   for (const [i, s] of DEMO_TOUR.entries()) {
     const page = await pageOf(s.who);
-    const url = typeof s.open === 'string' ? s.open : s.open.case ? `/kabinet#order=${cases[s.open.case]}` : `/kabinet#org=${orgs[s.open.org]}`;
+    const url = typeof s.open === 'string' ? s.open : s.open.case ? `/kabinet#order=${cases[s.open.case]}${s.open.to ? `&to=${s.open.to}` : ''}` : `/kabinet#org=${orgs[s.open.org]}`;
     await page.goto(url);
     await page.reload();
     await expect(page.locator(s.wait).first()).toBeVisible();

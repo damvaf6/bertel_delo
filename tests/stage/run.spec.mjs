@@ -55,6 +55,9 @@ async function phone(browser, baseURL, extra = {}) {
   const ctx = await browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true, locale: 'ru-RU', acceptDownloads: true, ...extra });
   const origin = new URL(baseURL).origin;
   await ctx.route((u) => u.origin === origin, async (route) => route.continue({ headers: { ...(await route.request().allHeaders()), ...AUTH } }));
+  // Блоки дела у исполнителя свёрнуты (2.101); сквозной путь идёт по всем — как после «Развернуть все блоки» (выбор помнится
+  // на телефоне). Само сворачивание проверяет tests/ui/phone.spec.mjs.
+  await ctx.addInitScript(() => { try { localStorage.setItem('delo.folds', 'open'); } catch { /* без хранилища */ } });
   return watched(await ctx.newPage(), baseURL);
 }
 
