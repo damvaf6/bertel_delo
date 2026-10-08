@@ -6,7 +6,7 @@
 import { el } from '/common.js';
 
 const $ = (id) => document.getElementById(id);
-export const FOLD_BOXES = ['deadline-box', 'docreq-box', 'docs-box', 'inspect-box', 'onsite-box', 'analogs-box', 'draft-box', 'review-box', 'chat-box'];
+export const FOLD_BOXES = ['deadline-box', 'handover-box', 'docreq-box', 'docs-box', 'inspect-box', 'onsite-box', 'analogs-box', 'draft-box', 'review-box', 'chat-box'];
 let orderId = null;
 const chosen = new Map(); // блок → раскрыт ли (выбор человека или уже раскрытый сам)
 const KEY = 'delo.folds';

@@ -6,7 +6,7 @@ import { el, quoted } from '/common.js';
 import { applyFolds, reveal } from '/fold.js';
 
 const $ = (id) => document.getElementById(id);
-let ctx = {}; // { current, docs, review, draft, analogs, docreq, money, deadline, inspect, onsite, chat, loaded, step(action) }
+let ctx = {}; // { current, docs, review, draft, analogs, docreq, money, deadline, handover, inspect, onsite, chat, loaded, step(action) }
 
 export function setNext(part) {
   ctx = part.reset ? { ...part } : { ...ctx, ...part };
@@ -23,6 +23,8 @@ if ('IntersectionObserver' in window) {
 }
 
 const visible = (id) => !!$(id) && !$(id).classList.contains('hidden');
+// Файлы результата исполнителя: после передачи дела файлы прежнего эксперта в сдачу не идут (own: false, 2.110).
+const ownResults = (list) => list.filter((d) => d.kind === 'result' && d.own !== false);
 const go = (id) => () => { reveal(id); $(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
 
 function steps() {
@@ -37,7 +39,7 @@ function steps() {
   if (order.status !== 'in_work') return null;
 
   const list = docs?.documents ?? [];
-  const results = list.filter((d) => d.kind === 'result');
+  const results = ownResults(list);
   const lastResultAt = results.reduce((m, d) => (d.created_at > m ? d.created_at : m), '');
   const signNeed = !!docs?.signature_required;
   const orgNeed = !!docs?.signature_org;
@@ -188,12 +190,14 @@ export function readyRows() {
   const { current, docs, review, deadline } = ctx;
   const order = current.order;
   const list = docs?.documents ?? [];
-  const results = list.filter((d) => d.kind === 'result');
+  const results = ownResults(list);
   const lastResultAt = results.reduce((m, d) => (d.created_at > m ? d.created_at : m), '');
   const rows = [];
   const row = (id, state, title, note, to) => rows.push({ id, state, title, note, to });
   row('result', results.length ? 'ok' : 'no', 'Файл результата',
-    results.length ? results.map((d) => d.filename).join(', ') : 'не приложен, без него сдать нельзя',
+    results.length ? results.map((d) => d.filename).join(', ')
+      : list.some((d) => d.kind === 'result') ? 'файлы прежнего эксперта в сдачу не идут — загрузите свой'
+        : 'не приложен, без него сдать нельзя',
     ctx.draft?.exists && visible('draft-box') ? 'draft-box' : 'docs-box');
   if (docs?.signature_required) {
     const unsigned = results.filter((d) => !d.signatures?.expert).length;
@@ -288,13 +292,14 @@ function nowBox(s) {
 const count = (n, one, few, many) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? one : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? few : many}`;
 
 function foldNotes() {
-  const { docs, review, draft, analogs, docreqAll, deadline, inspect, onsite, chat } = ctx;
+  const { docs, review, draft, analogs, docreqAll, deadline, handover, inspect, onsite, chat } = ctx;
   const notes = {};
   if (deadline) notes['deadline-box'] = `до ${dayRu(deadline.deadline)}${deadline.open ? ' · просьба о переносе ждёт ответа' : ''}`;
+  if (handover) notes['handover-box'] = handover;
   if (docreqAll) notes['docreq-box'] = docreqAll.total ? `получено ${docreqAll.got} из ${docreqAll.total}` : 'ничего не запрошено';
   if (docs) {
     const list = docs.documents ?? [];
-    const results = list.filter((d) => d.kind === 'result');
+    const results = ownResults(list);
     const unsigned = results.filter((d) => !d.signatures?.expert).length;
     const orgWait = docs.signature_org ? results.filter((d) => d.signatures?.expert && !d.signatures?.org).length : 0;
     notes['docs-box'] = [
@@ -308,7 +313,7 @@ function foldNotes() {
   if (analogs) notes['analogs-box'] = analogs.needed ? `подтверждено ${analogs.confirmed} из ${analogs.min}` : `подтверждено: ${analogs.confirmed}`;
   if (draft) notes['draft-box'] = draft.exists ? 'черновик есть' : 'черновика нет';
   if (review) {
-    const results = (docs?.documents ?? []).filter((d) => d.kind === 'result');
+    const results = ownResults(docs?.documents ?? []);
     const last = results.reduce((m, d) => (d.created_at > m ? d.created_at : m), '');
     const ai = review.ai;
     const aiNote = !ai ? 'ИИ-проверка не запускалась' : !last || ai.at >= last ? 'ИИ-проверка сделана' : 'файлы менялись — проверьте ИИ ещё раз';

@@ -359,7 +359,7 @@ async function loadDocs(initial = false) {
   $('result-sign-note').classList.toggle('hidden', !signRequired);
   lastDocs = documentsBody;
   // «Подписать все» (2.15): несколько неподписанных файлов результата — одним подтверждением.
-  const unsigned = mineResults && signRequired ? documents.filter((d) => d.kind === 'result' && !d.signatures?.expert) : [];
+  const unsigned = mineResults && signRequired ? documents.filter((d) => d.kind === 'result' && d.own !== false && !d.signatures?.expert) : [];
   $('sign-all').classList.toggle('hidden', unsigned.length < 2);
   $('sign-all').textContent = `Подписать все файлы результата (${unsigned.length})`;
   const docLi = (d) => {
@@ -370,11 +370,13 @@ async function loadDocs(initial = false) {
     return el('li', { class: 'doc' },
       el('div', {},
         el('div', { class: 'name', text: d.filename }),
-        el('div', { class: 'muted', text: [DOC_KIND_RU[d.kind], formatSize(d.size_bytes)].filter(Boolean).join(' · ') })),
+        el('div', { class: 'muted', text: [DOC_KIND_RU[d.kind], formatSize(d.size_bytes)].filter(Boolean).join(' · ') }),
+        // После передачи дела (2.110): файл прежнего эксперта остаётся в деле, но в сдачу не идёт — подписывает и сдаёт свой.
+        ...(d.kind === 'result' && d.own === false ? [el('div', { class: 'muted', 'data-role': 'former', text: 'Файл прежнего эксперта — в сдачу не идёт. Загрузите свой файл результата.' })] : [])),
       el('div', { class: 'row' },
         el('button', { class: 'secondary', 'data-action': 'download', onclick: () => download(d) }, 'Скачать'),
         ...(removable ? [el('button', { class: 'danger', 'data-action': 'delete', onclick: () => remove(d) }, 'Удалить')] : [])),
-      ...(d.kind === 'result' ? signatureBlock(d, { canSign: mineResults && signRequired, signOrg: documentsBody.signature_org }) : []));
+      ...(d.kind === 'result' ? signatureBlock(d, { canSign: mineResults && signRequired && d.own !== false, signOrg: documentsBody.signature_org }) : []));
   };
   // Много фото осмотра (2.49: бывает 100) — одной свёрнутой строкой, чтобы документы и результат не терялись внизу.
   const photos = documents.filter((d) => d.kind === 'inspection');
@@ -510,7 +512,7 @@ $('sign-remind').addEventListener('click', async () => {
 let lastDocs = null;
 
 async function signAll() {
-  const docs = (lastDocs?.documents ?? []).filter((d) => d.kind === 'result' && !d.signatures?.expert);
+  const docs = (lastDocs?.documents ?? []).filter((d) => d.kind === 'result' && d.own !== false && !d.signatures?.expert);
   if (!docs.length) return;
   if (!confirm(`${SIGN_CONFIRM(docs.map((d) => d.filename).join(', '))}\n\nФайлов: ${docs.length}.`)) return;
   say($('doc-msg'), 'Подписываем…', 'ok');

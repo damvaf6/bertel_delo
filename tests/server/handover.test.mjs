@@ -132,3 +132,19 @@ test('кто может: просит только исполнитель от �
   assert.equal((await solo.req('GET', `/api/orders/${p.id}/handover`)).body.available, false);
   assert.equal((await solo.req('POST', `/api/orders/${p.id}/handover`, { reason: 'Отпуск' })).body.error, 'no_org');
 });
+
+// Прогон пачки (2.110): после передачи дела файл результата прежнего эксперта остаётся в деле, но новому помечен «не свой» —
+// карточка «Готово к сдаче?» и «Что дальше» не засчитывают его подписи (сервер и так не примет сдачу без своего файла).
+test('после передачи дела файл прежнего эксперта у нового — own: false; свой — own: true; остальным пометки нет', async () => {
+  const o = await inWork('Передача с отчётом');
+  const up = (c, name) => c.req('POST', `/api/orders/${o.id}/results`, Buffer.from('отчёт'), { raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': name } });
+  assert.equal((await up(spec, 'old.pdf')).status, 201);
+  let docs = (await spec.req('GET', `/api/orders/${o.id}/documents`)).body.documents;
+  assert.deepEqual(docs.map((d) => [d.filename, d.own]), [['old.pdf', true]]);
+  assert.equal((await head.req('POST', `/api/orgs/${org.id}/cases/${o.id}/transfer`, { specialist_id: colleague.user.id, reason: 'Болезнь' })).status, 200);
+  assert.equal((await up(colleague, 'new.pdf')).status, 201);
+  docs = (await colleague.req('GET', `/api/orders/${o.id}/documents`)).body.documents;
+  assert.deepEqual(docs.map((d) => [d.filename, d.own]), [['old.pdf', false], ['new.pdf', true]]);
+  docs = (await dispatcher.req('GET', `/api/orders/${o.id}/documents`)).body.documents;
+  assert.ok(docs.every((d) => !('own' in d)));
+});

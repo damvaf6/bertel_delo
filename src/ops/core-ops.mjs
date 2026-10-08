@@ -142,7 +142,9 @@ export function coreOps(cfg) {
         const mine = order.executor_user_id === actor.id && orderSides(actor, order).includes('executor');
         return {
           documents: docs.filter((d) => d.kind !== 'result' || results)
-            .map((d) => (d.kind === 'result' ? { ...publicDoc(d), signatures: signaturesView(signs.get(d.id)) } : publicDoc(d))),
+            .map((d) => (d.kind === 'result' ? { ...publicDoc(d), signatures: signaturesView(signs.get(d.id)),
+              // Исполнителю — свой ли файл: после передачи дела файлы прежнего эксперта в сдачу не идут (2.110).
+              ...(mine ? { own: d.uploaded_by === actor.id } : {}) } : publicDoc(d))),
           results_hidden: !results,
           signature_required: required,
           // От какой организации нужна вторая подпись (null — только эксперт).
