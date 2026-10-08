@@ -227,7 +227,7 @@ test('дела экспертов (2.16): просрочка, нагрузка, 
   assert.deepEqual(cases.map((c) => c.status), ['in_work', 'awaiting_executor', 'done', 'done'], 'активные — сверху, отменённых нет');
   assert.equal(cases[0].overdue, true);
   assert.equal(cases[0].service, 'Оценка недвижимости');
-  assert.deepEqual(load, [{ user_id: expert.user.id, full_name: 'Эксперт Тестов', in_work: 1, offered: 1, overdue: 1, next_deadline: '2020-01-01', away: null, paused: false }]);
+  assert.deepEqual(load, [{ user_id: expert.user.id, full_name: 'Эксперт Тестов', in_work: 1, offered: 1, overdue: 1, due14: 0, next_deadline: '2020-01-01', away: null, paused: false }]);
   // Предложено, но не организацией (2.90): переназначать нечего, видно лишь, что ждём ответа эксперта.
   assert.equal(cases[1].offer_wait, null);
   assert.equal(cases[1].offered_at, null);
