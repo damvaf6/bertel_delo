@@ -4,7 +4,7 @@
 import { HttpError } from '../http/core.mjs';
 import { LEVEL, orderLevel } from '../access/policy.mjs';
 import { EVENTS, TYPE, TYPES, orderRef } from '../notify/registry.mjs';
-import { morningTitles } from '../notify/morning.mjs';
+import { morningTitles, orgMorningTitles } from '../notify/morning.mjs';
 
 const LIST_LIMIT = 100;
 const READ_IDS_MAX = 200;
@@ -12,7 +12,9 @@ const READ_IDS_MAX = 200;
 // Какие виды уведомлений человеку показывать в настройках.
 async function typesFor(sql, actor) {
   const specialist = await sql.one`select 1 from specialists where user_id = ${actor.id}`;
-  return TYPES.filter((t) => t.for === 'all' || (t.for === 'specialist' && specialist)
+  // 'head' — руководитель хотя бы одной организации (утренняя сводка по организации, 2.121).
+  const head = actor.orgs.some((m) => m.role === 'head');
+  return TYPES.filter((t) => t.for === 'all' || (t.for === 'specialist' && specialist) || (t.for === 'head' && head)
     || (t.for === 'dispatcher' && actor.platform_role === 'dispatcher'));
 }
 
@@ -52,13 +54,15 @@ export function notifyOps() {
         const visible = new Map(orders.filter((o) => orderLevel(actor, o) >= LEVEL.read).map((o) => [o.id, o]));
         // Утренняя сводка (2.119) — с цифрами дня.
         const morning = await morningTitles(sql, rows.filter((r) => r.event === 'morning_today').map((r) => String(r.id)));
+        // Утренняя сводка руководителю (2.121) — с цифрами дня и названием организации.
+        const orgMorning = await orgMorningTitles(sql, rows.filter((r) => r.event === 'org_morning_today').map((r) => String(r.id)));
         return {
           unread: await unreadCount(sql, actor.id),
           notifications: rows.map((r) => {
             const order = r.order_id ? visible.get(r.order_id) : null;
             return {
               id: String(r.id),
-              title: morning.get(String(r.id)) ?? EVENTS[r.event]?.title ?? 'Уведомление',
+              title: morning.get(String(r.id)) ?? orgMorning.get(String(r.id)) ?? EVENTS[r.event]?.title ?? 'Уведомление',
               at: r.created_at,
               read: !!r.read_at,
               order_ref: r.order_id ? orderRef(r.order_id) : null,
