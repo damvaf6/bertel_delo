@@ -3699,6 +3699,23 @@ test('запрос документов (2.64): эксперт отмечает 
   await expect(ep.locator('#docs')).toContainText('Выписка ЕГРН.pdf');
   await ep.locator('#docreq-box').scrollIntoViewIfNeeded();
   await shot(ep, '99k-ekspert-dokumenty-polucheny');
+
+  // 2.126: не успевает из-за документов — готовая причина с датой запроса и тем, чего ещё нет; новый срок подставлен.
+  await ep.goto(`/kabinet#order=${id}&to=deadline`);
+  const dbox = ep.locator('#deadline-box');
+  await expect(dbox.locator('#deadline-reasons')).toBeVisible();
+  const day = new Date().toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', year: 'numeric' });
+  await dbox.locator('#deadline-reason-list [data-reason="docs"]').click();
+  await expect(dbox.locator('#deadline-reason')).toHaveValue(`Жду документы от заказчика с ${day}: Технический паспорт БТИ или поэтажный план`);
+  await expect(dbox.locator('#deadline-new')).toHaveValue(inDays(8));
+  await expect(ep.locator('#deadline-msg')).toHaveText('Причина и новый срок в полях — поправьте и отправьте');
+  expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await dbox.scrollIntoViewIfNeeded();
+  await shot(ep, '99l-ekspert-gotovaya-prichina-perenosa');
+  await dbox.getByRole('button', { name: 'Попросить перенести срок' }).click();
+  await expect(ep.locator('#deadline-msg')).toHaveText('Просьба отправлена диспетчеру. Пока нет ответа, действует прежний срок.');
+  await expect(dbox.locator('#deadline-open-text')).toContainText(`Причина: Жду документы от заказчика с ${day}`);
+  await expect(dbox.locator('#deadline-reasons')).toBeHidden();
   await ectx.close();
 });
 

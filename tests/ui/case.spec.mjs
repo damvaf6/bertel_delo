@@ -153,6 +153,14 @@ test('дело у эксперта: блоки свёрнуты в строку 
   await expect(ep.locator('#deadline-send')).toBeVisible();
   await expect(ep.locator('#chat-box')).toHaveClass(/folded/);
   await ep.locator('#deadline-box').screenshot({ path: 'test-results/screens/case-06-ekspert-srok-raskryt.png' });
+  // 2.126: готовые причины переноса — нажатие кладёт текст в поле причины, его можно поправить.
+  await expect(ep.locator('#deadline-reasons')).toBeVisible();
+  await ep.locator('#deadline-reason-list [data-reason="inspection"]').click();
+  await expect(ep.locator('#deadline-reason')).toHaveValue('Осмотр объекта перенесён владельцем');
+  await expect(ep.locator('#deadline-msg')).toHaveText('Причина в поле — выберите новый срок и отправьте');
+  expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await ep.locator('#deadline-box').screenshot({ path: 'test-results/screens/case-06a-ekspert-gotovye-prichiny.png' });
+  await ep.locator('#deadline-reason').fill('');
 
   // «Развернуть все блоки» — помнится на телефоне; «Свернуть блоки» возвращает как было.
   await ep.locator('#fold-all').click();

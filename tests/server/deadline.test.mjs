@@ -135,3 +135,32 @@ test('отказ и отзыв просьбы: срок прежний; по з�
   assert.equal(after.can_decide, false);
   assert.equal((await ask(spec, o, { new_deadline: addDays(today, 9), reason: 'x' })).body.error, 'not_in_work');
 });
+
+test('готовые причины переноса (2.126): «жду документы с …» — дата и что просили из дела, «осмотр перенесён»; только исполнителю', async () => {
+  const o = await inWork('Квартира: готовые причины', 4);
+  let r = (await list(spec, o)).body;
+  assert.deepEqual(r.reasons.map((x) => x.id), ['inspection'], 'документы не запрашивали — причины «жду документы» нет');
+  assert.equal(r.reasons[0].reason, 'Осмотр объекта перенесён владельцем');
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { items: ['egrn', 'tech_plan'] })).status, 201);
+  // Запрос сделан три дня назад — новый срок предлагается на три дня позже нынешнего.
+  await S.sql`update doc_requests set requested_at = now() - interval '3 days' where order_id = ${o.id}`;
+  const day = (await S.sql`select to_char(requested_at at time zone 'Europe/Moscow', 'DD.MM.YYYY') as d from doc_requests where order_id = ${o.id} limit 1`)[0].d;
+  r = (await list(spec, o)).body;
+  const docs = r.reasons.find((x) => x.id === 'docs');
+  assert.equal(docs.label, `Жду документы с ${day}`);
+  assert.equal(docs.reason, `Жду документы от заказчика с ${day}: Выписка из ЕГРН, Технический паспорт БТИ или поэтажный план`);
+  assert.equal(docs.new_deadline, addDays(today, 7));
+  // Заказчику, диспетчеру — без готовых причин; посторонний не видит дело.
+  assert.deepEqual((await list(owner, o)).body.reasons, []);
+  assert.deepEqual((await list(dispatcher, o)).body.reasons, []);
+  assert.equal((await list(stranger, o)).status, 404);
+  // Отправка готовой причины — обычная просьба; пока ждёт ответа, причин нет.
+  const sent = await ask(spec, o, { new_deadline: docs.new_deadline, reason: docs.reason, from: addDays(today, 4) });
+  assert.equal(sent.status, 201, JSON.stringify(sent.body));
+  assert.equal(sent.body.open.reason, docs.reason);
+  assert.deepEqual(sent.body.reasons, []);
+  // Заказчик приложил всё — «жду документы» больше не предлагается.
+  assert.equal((await spec.req('DELETE', `/api/orders/${o.id}/deadline-requests/${sent.body.open.id}`)).status, 200);
+  await S.sql`update doc_requests set cancelled_at = now() where order_id = ${o.id}`;
+  assert.deepEqual((await list(spec, o)).body.reasons.map((x) => x.id), ['inspection']);
+});
