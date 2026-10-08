@@ -3,6 +3,8 @@
 // Считается только то, что было с тех пор, как эксперт состоит в организации, — прошлые частные дела руководитель не видит.
 // Частые пункты замечаний (2.105): пункты возвратов руководителя (2.93) за месяц — одинаковые без учёта регистра, пробелов и
 // точки в конце считаются одним пунктом; по организации и по каждому эксперту.
+// Скорость и сроки (2.117): сколько дней в среднем от принятия дела экспертом (принял предложение или руководитель передал
+// ему дело) до сдачи и сколько дел сдано позже первоначального срока — из них сколько с одобренным переносом срока.
 // Месяц — по московскому времени. Выгрузка таблицей — CSV для Excel (точка с запятой, BOM, суммы с запятой).
 import { HttpError } from '../http/core.mjs';
 import { splitAmount } from '../money/money.mjs';
@@ -53,6 +55,25 @@ export function topRemarks(items, limit) {
 }
 
 const dayMsk = (t) => todayMsk(new Date(t));
+const daysBetween = (a, b) => Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
+
+// Скорость и сроки по сданным делам (2.117): средние дни от принятия до сдачи (до десятых; дела без отметки о принятии —
+// не в среднем) и сдано позже первоначального срока — всего и из них с одобренным переносом.
+function pace(done) {
+  const days = done.filter((o) => o.taken_at).map((o) => Math.max(0, daysBetween(dayMsk(o.taken_at), dayMsk(o.at))));
+  const firstLate = done.filter((o) => {
+    const first = o.moved_from ?? o.deadline;
+    return first && dayMsk(o.at) > first;
+  });
+  return {
+    days_sum: days.reduce((s, d) => s + d, 0),
+    days_n: days.length,
+    late_first: firstLate.length,
+    late_first_moved: firstLate.filter((o) => o.moved_from).length,
+  };
+}
+const avgDays = (p) => (p.days_n ? Math.round((p.days_sum / p.days_n) * 10) / 10 : null);
+
 const feeOf = (o) => (o.payout_kop != null ? Number(o.payout_kop) : o.price_kop ? splitAmount(Number(o.price_kop)).payoutKop : 0);
 
 // Границы месяца по Москве: [начало, начало следующего).
@@ -69,7 +90,15 @@ async function orgMonthDone(sql, orgId, ids, { start, end }) {
   if (!ids.length) return [];
   return sql`
       select distinct on (o.id) o.id, o.module, o.service, o.executor_user_id as user_id, o.deadline, o.price_kop,
-             p.amount_kop as payout_kop, h.at
+             p.amount_kop as payout_kop, h.at,
+             greatest(
+               (select max(f.outcome_at) from order_offers f
+                where f.order_id = o.id and f.specialist_id = o.executor_user_id and f.outcome = 'accepted'),
+               (select max(a.at) from audit_log a
+                where a.subject_type = 'order' and a.subject_id = o.id::text and a.action = 'org.case.transfer'
+                  and a.details->>'to' = o.executor_user_id::text)) as taken_at,
+             (select to_char(d.old_deadline, 'YYYY-MM-DD') from deadline_requests d
+              where d.order_id = o.id and d.outcome = 'approved' order by d.decided_at, d.id limit 1) as moved_from
       from order_status_history h join orders o on o.id = h.order_id
       join org_members m on m.org_id = ${orgId} and m.user_id = o.executor_user_id
       left join payouts p on p.order_id = o.id
@@ -145,6 +174,7 @@ export async function orgMonthReport(sql, orgId, month, today = todayMsk()) {
   const current = month === today.slice(0, 7);
   const rows = experts.map((e) => {
     const done = q.done.filter((o) => o.user_id === e.user_id);
+    const p = pace(done);
     return {
       user_id: e.user_id,
       full_name: e.full_name || 'Без имени',
@@ -156,11 +186,16 @@ export async function orgMonthReport(sql, orgId, month, today = todayMsk()) {
       returned_dispatcher: dispReturns.get(e.user_id) ?? 0,
       fee_kop: done.reduce((s, o) => s + feeOf(o), 0),
       paid_kop: paid.get(e.user_id) ?? 0,
+      avg_days: avgDays(p),
+      late_first: p.late_first,
+      late_first_moved: p.late_first_moved,
       remarks: topRemarks(q.remarkItems.filter((i) => i.user_id === e.user_id), TOP_REMARKS_EXPERT).map(({ text, n }) => ({ text, n })),
     };
   });
   const sum = (k) => (k === 'overdue_now' && !current ? null : rows.reduce((s, r) => s + r[k], 0));
-  const keys = ['accepted', 'done', 'done_late', 'overdue_now', 'returned_head', 'returned_dispatcher', 'fee_kop', 'paid_kop'];
+  const keys = ['accepted', 'done', 'done_late', 'overdue_now', 'returned_head', 'returned_dispatcher', 'fee_kop', 'paid_kop',
+    'late_first', 'late_first_moved'];
+  const all = pace(q.done);
   return {
     month,
     month_name: monthRu(month),
@@ -168,7 +203,7 @@ export async function orgMonthReport(sql, orgId, month, today = todayMsk()) {
     // Месяцы до создания организации — заведомо пустые (2.90): в выборе только с месяца создания.
     months: reportMonths(today).filter((m) => m >= since || m === month),
     experts: rows,
-    total: Object.fromEntries(keys.map((k) => [k, sum(k)])),
+    total: { ...Object.fromEntries(keys.map((k) => [k, sum(k)])), avg_days: avgDays(all) },
     top_remarks: topRemarks(q.remarkItems, TOP_REMARKS),
   };
 }
@@ -241,9 +276,11 @@ function cell(v) {
 
 export function reportCsv(orgName, r) {
   const head = ['Эксперт', 'Принял дел', 'Сдано (готово)', 'Из них позже срока', ...(r.current ? ['Просрочено сейчас'] : []),
-    'Возвращено руководителем', 'Возвращено на доработку', 'Вознаграждение за сданные, ₽', 'Выплачено, ₽'];
+    'Возвращено руководителем', 'Возвращено на доработку', 'Вознаграждение за сданные, ₽', 'Выплачено, ₽',
+    'Дней в среднем от принятия до сдачи', 'Позже первоначального срока', 'Из них с переносом срока'];
   const line = (name, x) => [name, x.accepted, x.done, x.done_late, ...(r.current ? [x.overdue_now] : []),
-    x.returned_head, x.returned_dispatcher, rubCell(x.fee_kop), rubCell(x.paid_kop)];
+    x.returned_head, x.returned_dispatcher, rubCell(x.fee_kop), rubCell(x.paid_kop),
+    x.avg_days == null ? '' : String(x.avg_days).replace('.', ','), x.late_first, x.late_first_moved];
   const day = todayMsk();
   const lines = [
     [`Сводка по экспертам — ${orgName}`],
