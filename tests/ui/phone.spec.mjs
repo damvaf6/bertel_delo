@@ -6264,6 +6264,67 @@ test('повторная оценка того же объекта (2.118): эк
   await expect(cp.locator('#docreq-list > li')).toHaveCount(2);
 });
 
+test('мои похожие дела (2.129): эксперт открывает своё сданное заключение того же вида объекта как образец', async ({ browser, baseURL }) => {
+  const ep = await (await phoneContext(browser, baseURL)).newPage();
+  const cp = await (await phoneContext(browser, baseURL)).newPage();
+  const past = await signIn(await (await phoneContext(browser, baseURL)).newPage(), '+79990010291');
+  const customer = await signIn(cp, '+79990010292');
+  const expert = await signIn(ep, '+79990010293');
+  const ids = await db(async (c) => {
+    await c.query("insert into specialists (user_id, created_at) values ($1, now() - interval '1 year')", [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const order = async (owner, title, fields, status) => (await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', $1, $2, $3, $4, current_date + 9, 1500000, now(), $5) returning id`, [title, owner, expert.id, status, JSON.stringify(fields)])).rows[0].id;
+    const flat = { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, ул. Образцовая, д. 3, кв. 9', area: '48' };
+    const done = async (title, fields, days, file) => {
+      const id = await order(past.id, title, fields, 'done');
+      await c.query("insert into order_status_history (order_id, from_status, to_status, side, at) values ($1, 'review', 'done', 'dispatcher', now() - make_interval(days => $2))", [id, days]);
+      await c.query(`insert into documents (order_id, uploaded_by, filename, mime, size_bytes, storage_key, kind)
+                     values ($1, $2, $3, 'application/pdf', 1258291, $4, 'result')`, [id, expert.id, file, `ui-2129-${id}`]);
+      return id;
+    };
+    const a = await done('Квартира Сидоровой на Образцовой', flat, 30, 'Отчёт Сидорова Образцовая.pdf');
+    const b = await done('Квартира для банка', { ...flat, purpose: 'bank', address: 'Москва, Банковская 1' }, 5, 'Отчёт банк.pdf');
+    await done('Дом в Истре', { ...flat, object_type: 'house', address: 'Истра' }, 5, 'Дом.pdf');
+    const cur = await order(customer.id, 'Квартира на Новой: для суда', { ...flat, address: 'Москва, Новая 7, кв 2' }, 'in_work');
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [cur, expert.id]);
+    return { a, b, cur };
+  });
+  const ref = (id) => `№ ${id.slice(0, 8).toUpperCase()}`;
+
+  await ep.goto(`/kabinet#order=${ids.cur}`);
+  const box = ep.locator('#similar-box');
+  await expect(box).toBeVisible();
+  await expect(box.locator('.fold-note')).toHaveText('дел: 2');
+  if (await box.evaluate((n) => n.classList.contains('folded'))) await box.locator('.fold-toggle').click();
+  await expect(ep.locator('#similar-lead')).toContainText('Квартира: Ваши сданные дела этой услуги за год');
+  const items = box.locator('#similar-list > li');
+  await expect(items).toHaveCount(2);
+  await expect(items.first()).toContainText(`Дело ${ref(ids.a)} · сдано`);
+  await expect(items.first()).toContainText('Квартира · Для суда · Москва');
+  await expect(items.first()).toContainText('та же цель');
+  await expect(items.nth(1)).toContainText(`Дело ${ref(ids.b)}`);
+  await expect(items.nth(1)).not.toContainText('та же цель');
+  await expect(items.first().getByRole('button', { name: 'Открыть заключение (PDF, 1,2 МБ)' })).toBeVisible();
+  await expect(box).not.toContainText('Сидоров');
+  await expect(box).not.toContainText('Образцовая');
+  await box.scrollIntoViewIfNeeded();
+  await shot(ep, 'h13-ekspert-moi-pohozhie-dela');
+  // Ссылка на файл — та же, что в прошлом деле; «Открыть дело» ведёт в прошлое дело.
+  const fileId = await items.first().locator('[data-similar-file]').getAttribute('data-similar-file');
+  expect((await ep.request.get(`/api/documents/${fileId}/link`)).status()).toBe(200);
+  await items.first().getByRole('link', { name: 'Открыть дело' }).click();
+  await expect(ep).toHaveURL(new RegExp(`#order=${ids.a}$`));
+  await expect(ep.locator('#order-title')).toHaveText('Квартира Сидоровой на Образцовой');
+  await expect(ep.locator('#similar-box')).toBeHidden();
+
+  // Заказчик нового дела блока не видит, файл прошлого дела ему не открыть.
+  await cp.goto(`/kabinet#order=${ids.cur}`);
+  await expect(cp.locator('#order-title')).toHaveText('Квартира на Новой: для суда');
+  await expect(cp.locator('#similar-box')).toBeHidden();
+  expect((await cp.request.get(`/api/documents/${fileId}/link`)).status()).toBe(404);
+});
+
 test('утренняя сводка «На сегодня» (2.119): уведомление с цифрами ведёт к «Моим срокам», СМС сводки — отдельная настройка', async ({ browser, baseURL }) => {
   const ep = await (await phoneContext(browser, baseURL)).newPage();
   const customer = await signIn(await (await phoneContext(browser, baseURL)).newPage(), '+79990010201');

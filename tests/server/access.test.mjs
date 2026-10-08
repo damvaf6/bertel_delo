@@ -1607,6 +1607,14 @@ test('повторная оценка того же объекта (2.118): бр
   }
 });
 
+test('мои похожие дела (2.129): список своих сданных дел — только исполнитель дела', async () => {
+  cover('orders.similar');
+  // Подробно — tests/server/similar.test.mjs; здесь — чужие и стороны заявки без исполнителя.
+  const base = `/api/orders/${ownOrder.id}/similar`;
+  for (const who of ['stranger', 'headA', 'headB', 'spec']) assert.equal((await U[who].req('GET', base)).status, 404, who);
+  for (const who of ['owner', 'dispatcher', 'admin']) assert.deepEqual((await U[who].req('GET', base)).body, { kind: null, cases: [] }, who);
+});
+
 test('запрос документов (2.64): видят те, кто видит заявку; просит только исполнитель, прикладывает заказчик', async () => {
   for (const id of ['doc_requests.list', 'doc_requests.create', 'doc_requests.attach', 'doc_requests.cancel']) cover(id);
   const base = `/api/orders/${ownOrder.id}/doc-requests`;
