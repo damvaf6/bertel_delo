@@ -112,7 +112,8 @@ export function awayDeadline(o, today) {
   return !!o.away_until && o.away_until > today && !!o.deadline && o.deadline < o.away_until;
 }
 
-async function orgPart(sql, org, registry, today) {
+// Тот же расчёт — для утренней сводки руководителю (2.121, src/notify/morning.mjs).
+export async function orgPart(sql, org, registry, today) {
   const soon = addDays(today, HOT_DAYS);
   const service = (o) => registry.service(o.module, o.service)?.service.name ?? o.service;
   // Дела экспертов организации (выбрали её в профиле специалиста и состоят в ней) — как в «Делах экспертов».

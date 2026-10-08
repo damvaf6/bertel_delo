@@ -4,7 +4,8 @@
 // ближайшие сутки. Считается так же, как «Мои сроки на две недели» (src/orders/schedule.mjs) — туда и ведёт уведомление.
 // Нечего сообщить — сводки нет. В тексте и СМС только цифры: ни названий дел, ни имён, ни адресов.
 import { expertSchedule } from '../orders/schedule.mjs';
-import { todayMsk } from '../orders/workflow.mjs';
+import { STATUS_NAME, todayMsk } from '../orders/workflow.mjs';
+import { orgPart } from '../ops/today-ops.mjs';
 import { notify } from './notify.mjs';
 
 export const MORNING_HOUR = 8;
@@ -73,4 +74,64 @@ export async function morningTitles(sql, ids) {
   if (!ids.length) return new Map();
   const rows = await sql`select notification_id, due, overdue, visits, links from morning_digests where notification_id = any(${ids}::bigint[])`;
   return new Map(rows.map((r) => [String(r.notification_id), digestText(r)]));
+}
+
+// Утренняя сводка руководителю «На сегодня по организации» (2.121): по каждой организации, где он руководитель, — одно
+// уведомление: сколько дел ждут подписи организации, сколько экспертов просят передать дело, сколько дел экспертов сдать
+// сегодня и с прошедшим сроком. Считается так же, как «Сегодня» (src/ops/today-ops.mjs); ведёт в организацию. Только цифры.
+export function orgDigestCounts(part, today) {
+  const inWork = (x) => x.status_name === STATUS_NAME.in_work;
+  return {
+    sign: part.to_sign.length,
+    handover: part.handover.length,
+    due: part.hot.filter((x) => inWork(x) && x.deadline === today).length,
+    overdue: part.hot.filter((x) => inWork(x) && x.overdue).length,
+  };
+}
+
+export function orgDigestText(c) {
+  const parts = [];
+  if (c.sign) parts.push(`${c.sign} ${pl(c.sign, 'дело ждёт', 'дела ждут', 'дел ждут')} подписи организации`);
+  if (c.handover) parts.push(`${c.handover} ${pl(c.handover, 'просьба', 'просьбы', 'просьб')} передать дело`);
+  if (c.due) parts.push(`у экспертов сдать сегодня ${c.due} ${pl(c.due, 'дело', 'дела', 'дел')}`);
+  if (c.overdue) parts.push(`${c.overdue} ${pl(c.overdue, 'дело', 'дела', 'дел')} с прошедшим сроком`);
+  return parts.length ? `На сегодня по организации: ${parts.join(', ')}` : null;
+}
+
+export async function sendOrgMorning(sql, registry, { now = new Date() } = {}) {
+  if (mskHour(now) < MORNING_HOUR) return 0;
+  const today = todayMsk(now);
+  const heads = await sql`select m.user_id, o.id as org_id, o.name from org_members m join organizations o on o.id = m.org_id
+                          join users u on u.id = m.user_id
+                          where m.role = 'head' and u.is_active and not exists (select 1 from org_morning_digests d
+                            where d.user_id = m.user_id and d.org_id = m.org_id and d.day = ${today}::date)`;
+  // Цифры одной организации считаются один раз, даже если руководителей несколько.
+  const counted = new Map();
+  let sent = 0;
+  for (const h of heads) {
+    if (!counted.has(h.org_id)) counted.set(h.org_id, orgDigestCounts(await orgPart(sql, { id: h.org_id, name: h.name }, registry, today), today));
+    const c = counted.get(h.org_id);
+    sent += await sql.tx(async (tx) => {
+      const fresh = await tx`insert into org_morning_digests (user_id, org_id, day, sign, handover, due, overdue)
+                             values (${h.user_id}, ${h.org_id}, ${today}, ${c.sign}, ${c.handover}, ${c.due}, ${c.overdue})
+                             on conflict do nothing returning user_id`;
+      const text = orgDigestText(c);
+      if (!fresh.length || !text) return 0;
+      const n = await notify(tx, 'org_morning_today', { users: [h.user_id], orgId: h.org_id, sms: `БЕРТЕЛ Дело: ${text}. Подробно — «Дела экспертов» в кабинете.` });
+      if (n) {
+        await tx`update org_morning_digests set notification_id = (select max(id) from notifications
+                   where user_id = ${h.user_id} and org_id = ${h.org_id} and event = 'org_morning_today')
+                 where user_id = ${h.user_id} and org_id = ${h.org_id} and day = ${today}::date`;
+      }
+      return n;
+    });
+  }
+  return sent;
+}
+
+// Текст сводки руководителя в ленте по номеру уведомления (название организации лента пишет строкой ниже).
+export async function orgMorningTitles(sql, ids) {
+  if (!ids.length) return new Map();
+  const rows = await sql`select notification_id, sign, handover, due, overdue from org_morning_digests where notification_id = any(${ids}::bigint[])`;
+  return new Map(rows.map((r) => [String(r.notification_id), orgDigestText(r)]));
 }

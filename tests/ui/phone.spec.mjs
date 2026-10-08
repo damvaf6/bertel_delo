@@ -3077,7 +3077,7 @@ test('уведомления (2.45): все события на экране и 
 
   // Настройки: у этого человека — все виды (он и заказчик, и специалист, и диспетчер); СМС о сообщениях по умолчанию нет.
   await page.goto('/kabinet#notifications');
-  await expect(page.locator('#notify-types input[type=checkbox]')).toHaveCount(9);
+  await expect(page.locator('#notify-types input[type=checkbox]')).toHaveCount(10);
   const msgBox = page.getByLabel('Сообщения в переписке');
   await expect(msgBox).not.toBeChecked();
   const smsCount = async () => (await (await page.request.get('/__test/fakes/sms/calls', { headers: { 'x-test-control': CONTROL } })).json())
@@ -6180,4 +6180,37 @@ test('утренняя сводка «На сегодня» (2.119): уведо�
   await expect(box.locator('#schedule-days > li').first()).toContainText('Сдать: Квартира: сдать сегодня');
   await expect(box.locator('h2')).toBeInViewport();
   await shot(ep, 'h11-ekspert-svodka-moi-sroki');
+});
+
+test('утренняя сводка руководителю «На сегодня по организации» (2.121): цифры в ленте, ведёт в организацию, СМС — отдельная настройка', async ({ browser, baseURL }) => {
+  const hp = await (await phoneContext(browser, baseURL)).newPage();
+  const head = await signIn(hp, '+79990010211');
+  let orgId;
+  await db(async (c) => {
+    orgId = (await c.query("insert into organizations (name) values ('ООО «Утренняя организация»') returning id")).rows[0].id;
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head')", [orgId, head.id]);
+    // Сводка рассылается раз в минуту на сервере после 8:00 по Москве; здесь — запись напрямую, с цифрами дня.
+    const { rows: [n] } = await c.query("insert into notifications (user_id, type, event, org_id) values ($1, 'org_morning', 'org_morning_today', $2) returning id", [head.id, orgId]);
+    await c.query(`insert into org_morning_digests (user_id, org_id, day, sign, handover, due, overdue, notification_id)
+      values ($1, $2, (now() at time zone 'Europe/Moscow')::date, 2, 1, 3, 1, $3)`, [head.id, orgId, n.id]);
+  });
+
+  await hp.goto('/kabinet#notifications');
+  const n = hp.locator('#notifications li').first();
+  await expect(n).toContainText('На сегодня по организации: 2 дела ждут подписи организации, 1 просьба передать дело, у экспертов сдать сегодня 3 дела, 1 дело с прошедшим сроком');
+  await expect(n).toContainText('Организация ООО «Утренняя организация»');
+  const sms = hp.locator('#sms-org_morning');
+  await expect(sms).toBeChecked();
+  await expect(hp.locator('label[for="sms-org_morning"]')).toHaveText('Утром «На сегодня по организации»');
+  // Не специалист — сводки эксперта в настройках нет.
+  await expect(hp.locator('#sms-morning')).toHaveCount(0);
+  await shot(hp, 'h13-rukovoditel-utrennyaya-svodka');
+  await sms.uncheck();
+  await expect(hp.locator('#notify-msg')).toHaveText('СМС выключены — уведомления останутся в кабинете');
+
+  // Нажатие — организация.
+  await n.getByRole('button').click();
+  await expect(hp).toHaveURL(new RegExp(`#org=${orgId}$`));
+  await expect(hp.locator('#org-title')).toHaveText('ООО «Утренняя организация»');
+  await shot(hp, 'h14-rukovoditel-svodka-organizaciya');
 });
