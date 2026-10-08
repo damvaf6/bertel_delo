@@ -3,6 +3,7 @@
 // заключения» (2.89) — файлы результата с подписями и опись одним архивом; кнопка есть, только если за месяц что-то сдано.
 // Скорость и сроки (2.117): сколько дней в среднем от принятия до сдачи и сколько сдано позже первоначального срока — с
 // переносом срока и без.
+// Сравнение с прошлым месяцем (2.124): сдано, в срок, возвраты — сейчас и в прошлом месяце, у каждого эксперта и в итоге.
 // Частые замечания (2.105) — пункты, с которыми руководитель чаще всего возвращал отчёты: по организации и у каждого эксперта.
 import { api, el, say } from '/common.js';
 import { rub } from '/money.js';
@@ -22,6 +23,14 @@ const pace = (x) => [x.avg_days != null ? `в среднем ${daysRu(x.avg_days
   x.late_first ? `позже первоначального срока: ${x.late_first} (${[x.late_first_moved ? `с переносом — ${x.late_first_moved}` : null,
     x.late_first - x.late_first_moved ? `без переноса — ${x.late_first - x.late_first_moved}` : null].filter(Boolean).join(', ')})` : null,
 ].filter(Boolean).join(' · ');
+// «сдано: 5 (было 3, +2) · в срок: 4 (было 4) · возвраты: 1 (было 2, −1)»; у эксперта без дел в обоих месяцах — пусто.
+const diff = (now, was) => `${now} (было ${was}${now > was ? `, +${now - was}` : now < was ? `, −${was - now}` : ''})`;
+const compare = (x) => {
+  if (!x.prev) return '';
+  const now = { done: x.done, on_time: x.done - x.done_late, returned: x.returned_head + x.returned_dispatcher };
+  if (![now.done, now.returned, x.prev.done, x.prev.returned].some(Boolean)) return '';
+  return `сдано: ${diff(now.done, x.prev.done)} · в срок: ${diff(now.on_time, x.prev.on_time)} · возвраты: ${diff(now.returned, x.prev.returned)}`;
+};
 const fact = (dt, dd, cls) => [el('dt', { text: dt }), el('dd', { text: dd, ...(cls ? { class: cls } : {}) })];
 
 let org = null;
@@ -62,6 +71,7 @@ async function load(month) {
   $('org-report-total').replaceChildren(
     ...fact(`Итого · ${report.month_name}`, `принято дел: ${t.accepted} · сдано: ${t.done}${t.done_late ? ` (позже срока: ${t.done_late})` : ''}`),
     ...(pace(t) ? fact('Скорость и сроки', pace(t)) : []),
+    ...(compare(t) ? fact(`К прошлому месяцу (${report.prev_month_name})`, compare(t)) : []),
     ...(report.current && t.overdue_now ? fact('Просрочено сейчас', String(t.overdue_now), 'overdue') : []),
     ...fact('Вознаграждение за сданные', rub(t.fee_kop), 'money-sum'),
     ...fact('Выплачено экспертам', rub(t.paid_kop)));
@@ -76,6 +86,7 @@ async function load(month) {
     ...(x.done_late || x.overdue_now ? [el('div', { class: 'overdue', text: [x.done_late ? `позже срока: ${x.done_late}` : null,
       x.overdue_now ? `просрочено сейчас: ${x.overdue_now}` : null].filter(Boolean).join(' · ') })] : []),
     ...(pace(x) ? [el('div', { class: 'muted', 'data-expert-pace': '', text: pace(x) })] : []),
+    ...(compare(x) ? [el('div', { class: 'muted', 'data-expert-prev': '', text: `к прошлому месяцу: ${compare(x)}` })] : []),
     ...(x.returned_head || x.returned_dispatcher ? [el('div', { class: 'muted', text: `возвращено: ${[
       x.returned_head ? `Вами — ${x.returned_head}` : null, x.returned_dispatcher ? `на доработку — ${x.returned_dispatcher}` : null,
     ].filter(Boolean).join(', ')}` })] : []),
