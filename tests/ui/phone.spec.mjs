@@ -5907,3 +5907,81 @@ test('эксперт не принимает дела (2.113): руководи�
   await expect(hp.locator('#today-box')).toBeVisible();
   await expect(hp.locator(`li[data-today-item="org-away-${orgId}"]`)).toHaveCount(0);
 });
+
+test('подпись нескольких дел (2.114): руководитель отмечает дела и подписывает их файлы одним подтверждением', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), ep = await ctx(), hp = await ctx();
+  const customer = await signIn(cp, '+79990010171');
+  const expert = await signIn(ep, '+79990010172'), head = await signIn(hp, '+79990010173');
+  const { orgId, ids } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Пачка подписей ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Пачкина Вера' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const add = async (title, days) => (await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', $1, $2, $3, 'in_work', current_date + $4::int, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Пачечная ул., 1","area":"40"}') returning id`,
+      [title, customer.id, expert.id, days])).rows[0].id;
+    const ids = { a: await add('Пачка: первое', 3), b: await add('Пачка: второе', 5), c: await add('Пачка: третье', 7) };
+    for (const k of Object.keys(ids)) await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [ids[k], expert.id]);
+    return { orgId: org.id, ids };
+  });
+  const ref = (id) => `№ ${id.slice(0, 8).toUpperCase()}`;
+  const upload = async (orderId, name) => {
+    const up = await ep.request.post(`/api/orders/${orderId}/results`, { data: Buffer.from(`%PDF-1.4 ${name}`), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent(name) } });
+    expect(up.status()).toBe(201);
+    const docId = (await up.json()).document.id;
+    expect((await ep.request.post(`/api/documents/${docId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+    return docId;
+  };
+  await upload(ids.a, 'Отчёт А.pdf');
+  await upload(ids.a, 'Письмо А.pdf');
+  await upload(ids.b, 'Отчёт Б.pdf');
+  // Третье дело руководитель вернул по пунктам; эксперт подписал заново, но пункты исправленными не отметил.
+  const docC = await upload(ids.c, 'Отчёт В.pdf');
+  expect((await hp.request.post(`/api/org-documents/${docC}/return`, { data: { comment: 'Нет даты осмотра\nНе указан этаж' }, headers: H })).status()).toBe(201);
+  expect((await ep.request.post(`/api/documents/${docC}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const many = hp.locator('#org-sign-many');
+  await expect(many).toBeVisible();
+  await expect(many.locator('summary')).toHaveText('Подписать несколько дел сразу · ждут подписи 3');
+  await expect(many.locator(`[data-many="${ref(ids.a)}"]`)).toBeChecked();
+  await expect(many.locator(`[data-many="${ref(ids.b)}"]`)).toBeChecked();
+  await expect(many.locator(`[data-many="${ref(ids.c)}"]`)).not.toBeChecked();
+  await expect(many.locator('[data-role="many-left"]')).toHaveText('По Вашему замечанию эксперт не отметил исправленными: 2. Посмотрите дело ниже.');
+  await expect(many.locator('label').first()).toContainText('Пачкина Вера');
+  await expect(many.locator('label').first()).toContainText('файлов: 2');
+  await expect(many.locator('[data-action="org-sign-many"]')).toHaveText('Подписать отмеченные: дел 2, файлов 3');
+  await shot(hp, 'h3-rukovoditel-podpis-neskolkih');
+  await many.locator(`[data-many="${ref(ids.b)}"]`).uncheck();
+  await expect(many.locator('[data-action="org-sign-many"]')).toHaveText('Подписать отмеченные: дел 1, файлов 2');
+  await many.locator(`[data-many="${ref(ids.a)}"]`).uncheck();
+  await expect(many.locator('[data-action="org-sign-many"]')).toHaveText('Отметьте дела, которые подписать');
+  await expect(many.locator('[data-action="org-sign-many"]')).toBeDisabled();
+  await many.locator(`[data-many="${ref(ids.a)}"]`).check();
+  await many.locator(`[data-many="${ref(ids.b)}"]`).check();
+
+  // Одно подтверждение на все отмеченные дела. Без имени в профиле подпись не ставится — причина одной строкой.
+  const dialogs = [];
+  hp.on('dialog', (d) => { dialogs.push(d.message()); d.accept(); });
+  await many.locator('[data-action="org-sign-many"]').click();
+  await expect(hp.locator('#org-sign-msg')).toHaveText('Подписано файлов: 0 из 3. Укажите имя в профиле — оно будет в подписи (Отчёт А.pdf, Письмо А.pdf, Отчёт Б.pdf)');
+  await expect(many.locator('[data-action="org-sign-many"]')).toHaveText('Подписать отмеченные: дел 2, файлов 3');
+  await db((c) => c.query("update users set full_name = 'Главная Ирина' where id = $1", [head.id]));
+  dialogs.length = 0;
+  await many.locator('[data-action="org-sign-many"]').click();
+  await expect(hp.locator('#org-sign-msg')).toHaveText('Подписано от организации: дел 2, файлов 3');
+  expect(dialogs).toHaveLength(1);
+  expect(dialogs[0]).toContain('Отчёт А.pdf, Письмо А.pdf');
+  expect(dialogs[0]).toContain('Дел: 2, файлов: 3.');
+  // Осталось одно дело — блок «несколько дел» скрыт, дело с непроверенными пунктами ждёт руководителя.
+  await expect(many).toBeHidden();
+  await expect(hp.locator(`#org-sign > li[data-item="${ref(ids.c)}"]`)).toContainText('эксперт отметил исправленными 0 из 2');
+  await expect(hp.locator('#org-sign > li.group')).toHaveText('Подписано · 2');
+  await shot(hp, 'h4-rukovoditel-podpisal-neskolko');
+  const sign = await (await hp.request.get(`/api/orgs/${orgId}/signing`)).json();
+  const byRef = Object.fromEntries(sign.items.map((x) => [x.order_ref, x.documents.every((d) => d.signatures.org)]));
+  expect(byRef).toEqual({ [ref(ids.a)]: true, [ref(ids.b)]: true, [ref(ids.c)]: false });
+});

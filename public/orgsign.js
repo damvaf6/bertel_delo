@@ -34,6 +34,7 @@ export async function loadOrgSign(org) {
     ...(it.reminded_at && waiting(it) ? [el('div', { class: 'sig-state', 'data-sig': 'reminded', text: `Эксперт напомнил о подписи ${new Date(it.reminded_at).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}` })] : [])];
   const open = items.filter((it) => !signedAll(it));
   const done = items.filter(signedAll);
+  renderMany(open.filter(waiting));
   $('org-sign').replaceChildren(
     ...open.map((it) => {
       const ready = it.documents.filter((d) => d.signatures.expert && !d.signatures.org);
@@ -74,6 +75,59 @@ function lastReturnState(d, returns) {
   return [el('div', { class: left.length ? 'sig-state warn' : 'sig-state', 'data-role': 'points-state',
     text: `По Вашему замечанию от ${new Date(r.at).toLocaleDateString('ru-RU')}: эксперт отметил исправленными ${done} из ${r.items.length}${left.length ? ', осталось:' : ''}` }),
   ...(left.length ? [pointsList(left)] : [])];
+}
+
+// Несколько дел одним подтверждением (2.114): отмечены все, кроме дел, где по замечанию руководителя эксперт отметил не всё.
+function renderMany(list) {
+  const box = $('org-sign-many');
+  box.classList.toggle('hidden', list.length < 2);
+  if (list.length < 2) return box.replaceChildren();
+  const rows = list.map((it) => {
+    const ready = it.documents.filter((d) => d.signatures.expert && !d.signatures.org);
+    const left = ready.reduce((n, d) => {
+      const r = [...(it.returns ?? [])].reverse().find((x) => x.document_id === d.id && x.items?.length);
+      return n + (r ? r.left : 0);
+    }, 0);
+    const id = `org-many-${it.order_ref.replace(/[^0-9A-Z]/gi, '')}`;
+    const box = el('input', { type: 'checkbox', id, 'data-many': it.order_ref, ...(left ? {} : { checked: '' }), onchange: () => count() });
+    return { it, ready, box, label: el('label', { class: 'row', for: id }, box,
+      el('span', {}, el('span', { text: `${it.service} · ${it.order_ref}` }),
+        el('span', { class: 'muted', text: ` — ${it.executor}${it.deadline ? `, срок ${dayRu(it.deadline)}` : ''}, файлов: ${ready.length}` }),
+        ...(left ? [el('span', { class: 'sig-state warn', 'data-role': 'many-left', text: `По Вашему замечанию эксперт не отметил исправленными: ${left}. Посмотрите дело ниже.` })] : []))) };
+  });
+  const btn = el('button', { 'data-action': 'org-sign-many', onclick: () => {
+    const chosen = rows.filter((r) => r.box.checked);
+    if (chosen.length) signMany(chosen.map((r) => ({ ref: r.it.order_ref, docs: r.ready })));
+  } });
+  const count = () => {
+    const chosen = rows.filter((r) => r.box.checked);
+    const files = chosen.reduce((n, r) => n + r.ready.length, 0);
+    btn.textContent = chosen.length ? `Подписать отмеченные: дел ${chosen.length}, файлов ${files}` : 'Отметьте дела, которые подписать';
+    btn.disabled = !chosen.length;
+  };
+  count();
+  box.replaceChildren(el('details', { class: 'many', open: '' },
+    el('summary', { text: `Подписать несколько дел сразу · ждут подписи ${list.length}` }),
+    el('p', { class: 'muted', text: 'Отметьте дела, которые Вы проверили, — все их файлы подпишутся от организации одним подтверждением.' }),
+    el('div', { class: 'many-list' }, ...rows.map((r) => r.label)), el('div', { class: 'row gap' }, btn)));
+}
+
+async function signMany(cases) {
+  const docs = cases.flatMap((c) => c.docs);
+  const names = cases.map((c) => `${c.ref}: ${c.docs.map((d) => d.filename).join(', ')}`).join('; ');
+  if (!confirm(`${SIGN_CONFIRM(names)}\n\nДел: ${cases.length}, файлов: ${docs.length}.`)) return;
+  say($('org-sign-msg'), 'Подписываем…', 'ok');
+  const failed = [];
+  for (const d of docs) {
+    try { await api('POST', `/api/org-documents/${d.id}/sign`, { confirm: true }); }
+    catch (err) { failed.push({ name: d.filename, why: err.message }); }
+  }
+  await refresh();
+  if (!failed.length) return say($('org-sign-msg'), `Подписано от организации: дел ${cases.length}, файлов ${docs.length}`, 'ok');
+  // Одна причина на все файлы (например, нет имени в профиле) — одной строкой, а не по каждому файлу.
+  const whys = [...new Set(failed.map((f) => f.why))];
+  say($('org-sign-msg'), `Подписано файлов: ${docs.length - failed.length} из ${docs.length}. `
+    + whys.map((w) => `${w} (${failed.filter((f) => f.why === w).map((f) => f.name).join(', ')})`).join('; '));
 }
 
 async function signAll(docs) {
