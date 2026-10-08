@@ -1072,25 +1072,72 @@ function finalValues(docs) {
       });
     });
   }
+  return [...byKey].flatMap(([key, list]) => oddOnes(list, (e, ref, where) =>
+    `${VALUE_NAMES[key]} ${fmt(e.value)} руб. не совпадает с ${fmt(ref)} руб. ${where} — сумма должна быть одна во всём отчёте и в письме`));
+}
+
+// Одно значение в разных местах ({ doc, page, value, quote }): ровно два разных — находка у того, что встречается реже
+// (поровну — у того, что не в основном отчёте / позже). Оба на одной странице — видимо, два объекта: молчим
+// (samePage: true — сверяем и на одной странице).
+function oddOnes(list, say, { samePage = false } = {}) {
+  const counts = new Map();
+  for (const e of list) counts.set(e.value, (counts.get(e.value) ?? 0) + 1);
+  if (counts.size !== 2) return [];
+  const [a, b] = [...counts.keys()];
+  if (!samePage && list.some((x) => x.value === a && list.some((y) => y.value === b && y.doc === x.doc && y.page === x.page))) return [];
+  const ref = counts.get(b) > counts.get(a) ? b : a;
+  const first = list.find((e) => e.value === ref);
+  const where = (e) => `${first.doc === e.doc ? '' : `в «${first.doc.name}» `}на стр. ${first.page + 1}${counts.get(ref) > 1 ? ` (и ещё в ${counts.get(ref) - 1} ${counts.get(ref) === 2 ? 'месте' : 'местах'})` : ''}`;
+  const seen = new Set();
   const out = [];
-  for (const [key, list] of byKey) {
-    const counts = new Map();
-    for (const e of list) counts.set(e.value, (counts.get(e.value) ?? 0) + 1);
-    if (counts.size !== 2) continue;
-    const [a, b] = [...counts.keys()];
-    if (list.some((x) => x.value === a && list.some((y) => y.value === b && y.doc === x.doc && y.page === x.page))) continue;
-    const ref = counts.get(b) > counts.get(a) ? b : a;
-    const first = list.find((e) => e.value === ref);
-    const where = (e) => `${first.doc === e.doc ? '' : `в «${first.doc.name}» `}на стр. ${first.page + 1}${counts.get(ref) > 1 ? ` (и ещё в ${counts.get(ref) - 1} ${counts.get(ref) === 2 ? 'месте' : 'местах'})` : ''}`;
-    const seen = new Set();
-    for (const e of list) {
-      if (e.value === ref || seen.has(`${e.doc.name}|${e.page}`)) continue;
-      seen.add(`${e.doc.name}|${e.page}`);
-      out.push({ doc: e.doc, page: e.page, quote: e.quote,
-        text: `${VALUE_NAMES[key]} ${fmt(e.value)} руб. не совпадает с ${fmt(ref)} руб. ${where(e)} — сумма должна быть одна во всём отчёте и в письме` });
-    }
+  for (const e of list) {
+    if (e.value === ref || seen.has(`${e.doc.name}|${e.page}`)) continue;
+    seen.add(`${e.doc.name}|${e.page}`);
+    out.push({ doc: e.doc, page: e.page, quote: e.quote, text: say(e, ref, where(e)) });
   }
   return out;
+}
+
+// ——— 2.116: номер отчёта и дата составления одни на титуле, в колонтитуле и в сопроводительном письме ———
+// Номер — после «Отчёт (об оценке) №», «Заключение (эксперта / специалиста) №», «к отчёту №»; дата — «от …» сразу за
+// номером и «дата составления (подписания) отчёта …», цифрами или словами («от «05» октября 2026 г.»). Номера сверяются
+// без пробелов, точек и регистра («108/2026-О» и «108 / 2026 - о» — одно). Три и больше разных номеров (отчёт ссылается
+// на прежние) не сверяем; два разных номера на одной странице — тоже.
+const NUMBER_AT = /(?<![А-ЯЁа-яё])(?:отч[её]т\S*|заключени\S*)(?:\s+(?:об\s+оценке|эксперт\S*|специалист\S*|судебн\S*\s+эксперт\S*))?\s*(?:№|N[oо]?\.?(?=\s*\d))\s*([\p{L}\d][\p{L}\d.]*(?:\s*[\/\\\-–]\s*[\p{L}\d][\p{L}\d.]*)*)/giu;
+const NUMBER_DATE = '^\\s*,?\\s*от(?![а-яё])';
+const unquote = (s) => s.replace(/[«"“](\d{1,2})[»"”]/g, '$1');
+
+function reportNumbers(docs) {
+  const main = mainReport(docs);
+  const ordered = main ? [main, ...docs.filter((d) => d !== main)] : docs;
+  const nums = [];
+  const dates = [];
+  for (const doc of ordered) {
+    eachPage(doc, (raw, i) => {
+      const page = unquote(raw);
+      for (const m of page.matchAll(NUMBER_AT)) {
+        const shown = m[1].replace(/\s*([\/\\\-–])\s*/gu, '$1').replace(/\.+$/u, '');
+        if (!/\d/.test(shown)) continue;
+        const quote = lineAround(raw, m.index);
+        nums.push({ doc, page: i, value: squash(shown), shown, quote });
+        const rest = page.slice(m.index + m[0].length);
+        const on = dateAfter(rest, NUMBER_DATE);
+        if (on) dates.push({ doc, page: i, value: on, quote });
+      }
+      const label = new RegExp(MADE_LABEL, 'giu');
+      for (const m of page.matchAll(label)) {
+        const on = dateAfter(page.slice(m.index), MADE_LABEL);
+        if (on) dates.push({ doc, page: i, value: on, quote: lineAround(raw, m.index) });
+      }
+    });
+  }
+  const shownOf = new Map(nums.map((e) => [e.value, e.shown]));
+  // Одна и та же дата на странице (у номера и «дата составления») — одно место.
+  const once = (list) => list.filter((e, k) => list.findIndex((x) => x.doc === e.doc && x.page === e.page && x.value === e.value) === k);
+  return [
+    ...oddOnes(once(nums), (e, ref, where) => `Номер отчёта № ${e.shown} не совпадает с № ${shownOf.get(ref)} ${where} — номер должен быть один на титуле, в колонтитулах и в письме`),
+    ...oddOnes(once(dates), (e, ref, where) => `Дата отчёта ${ruDate(e.value)} не совпадает с ${ruDate(ref)} ${where} — дата составления должна быть одна на титуле, в колонтитулах и в письме`, { samePage: true }),
+  ];
 }
 
 // ——— 2.61: каждый вопрос заявки найден в выводах (все виды) ———
@@ -1152,6 +1199,7 @@ const WHOLE = {
   analog_match: analogMatch,
   report_dates: reportDates,
   final_value: finalValues,
+  report_number: reportNumbers,
 };
 
 const PER_DOC = {
@@ -1211,6 +1259,7 @@ export const AUTO_CHECKS = Object.freeze({
   purchase_match: 'дата и цена покупки товара — как в заявке',
   questions_answered: 'каждый вопрос заявки найден в выводах',
   final_value: 'итоговая стоимость одна на титуле, в задании, выводах, итоговой таблице и в сопроводительном письме',
+  report_number: 'номер отчёта и дата составления одни на титуле, в колонтитулах и в сопроводительном письме',
 });
 
 export function runAutoChecks(names, docs, ctx = {}) {
