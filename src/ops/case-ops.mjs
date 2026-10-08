@@ -96,6 +96,7 @@ function what(a, doc) {
     case 'deadline.request': return `Исполнитель попросил перенести срок с ${ruDay(d.from)} на ${ruDay(d.to)}: ${d.reason ?? ''}`;
     case 'deadline.withdraw': return 'Исполнитель отозвал просьбу о переносе срока';
     case 'deadline.approve': return `Срок перенесён с ${ruDay(d.from)} на ${ruDay(d.to)}${d.answer ? `: ${d.answer}` : ''}`;
+    case 'deadline.keep': return `Новый исполнитель оставил просьбу прежнего о переносе срока на ${ruDay(d.to)}`;
     case 'deadline.decline': return `В переносе срока на ${ruDay(d.to)} отказано${d.answer ? `: ${d.answer}` : ''}`;
     case 'case.export': return 'Дело выгружено архивом';
     default: return a.action;
