@@ -148,3 +148,78 @@ test('после передачи дела файл прежнего экспе�
   docs = (await dispatcher.req('GET', `/api/orders/${o.id}/documents`)).body.documents;
   assert.ok(docs.every((d) => !('own' in d)));
 });
+
+// «Что сделал прежний эксперт» (2.112): новому эксперту после передачи — что осталось в деле от прежнего и его просьба о
+// переносе срока: оставить (диспетчер ответит как обычно) или отозвать. Прежнему, заказчику, диспетчеру и руководителю — нет.
+test('после передачи новый эксперт видит, что сделал прежний, и решает судьбу его просьбы о переносе срока', async () => {
+  const o = await inWork('Передача с наработками');
+  const pred = (c) => c.req('GET', `/api/orders/${o.id}/predecessor`);
+  assert.deepEqual((await pred(spec)).body, { transferred: false }, 'до передачи — нечего показывать');
+  const up = (c, name) => c.req('POST', `/api/orders/${o.id}/results`, Buffer.from('отчёт'), { raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': name } });
+  assert.equal((await up(spec, 'old.pdf')).status, 201);
+  const doc = (kind, name) => S.sql`insert into documents (order_id, uploaded_by, filename, mime, size_bytes, storage_key, kind)
+    values (${o.id}, ${spec.user.id}, ${name}, 'image/jpeg', 10, ${`t/${o.id}/${name}`}, ${kind})`;
+  await doc('other', 'план.pdf');
+  await doc('inspection', 'фото1.jpg');
+  await doc('inspection', 'фото2.jpg');
+  for (const body of ['Черновик ИИ', 'Правка эксперта']) {
+    await S.sql`insert into result_drafts (order_id, author_id, source, body) values (${o.id}, ${spec.user.id}, 'edit', ${body})`;
+  }
+  for (const [url, confirmed] of [['https://example.test/a1', true], ['https://example.test/a2', false]]) {
+    await S.sql`insert into order_analogs (order_id, author_id, url, url_key, confirmed_at) values (${o.id}, ${spec.user.id}, ${url}, ${url}, ${confirmed ? new Date() : null})`;
+  }
+  await S.sql`insert into onsite_visits (order_id, helper_id, assigned_by, planned_at, finished_at) values (${o.id}, ${solo.user.id}, ${spec.user.id}, now(), now())`;
+  const to = addDays(todayMsk(), 20);
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/deadline-requests`, { new_deadline: to, reason: 'Ждём выписку' })).status, 201);
+  assert.equal((await head.req('POST', `/api/orgs/${org.id}/cases/${o.id}/transfer`, { specialist_id: colleague.user.id, reason: 'Болезнь' })).status, 200);
+
+  const v = (await pred(colleague)).body;
+  assert.equal(v.transferred, true);
+  assert.equal(v.from, 'Эксперт Уходящий');
+  assert.deepEqual([v.results, v.files, v.drafts, v.photos, v.visits_done, v.visits_cancelled, v.analogs, v.analogs_confirmed], [1, 1, 2, 2, 1, 0, 2, 1]);
+  assert.ok(v.at && v.draft_at);
+  assert.equal(v.extend.new_deadline, to);
+  assert.equal(v.extend.reason, 'Ждём выписку');
+  assert.ok(!JSON.stringify(v).includes('Болезнь'), 'причину передачи новый эксперт не видит');
+  // Прежний дела не видит; заказчик, диспетчер, руководитель — не исполнители.
+  assert.equal((await pred(spec)).status, 404);
+  for (const c of [owner, dispatcher]) assert.deepEqual((await pred(c)).body, { transferred: false });
+  assert.equal((await pred(head)).status, 404);
+
+  // Оставить просьбу: строка уходит, просьба остаётся открытой — диспетчер отвечает как обычно; повторно — «уже нет».
+  const keep = (c, rid) => c.req('POST', `/api/orders/${o.id}/predecessor/extend/${rid}/keep`, {});
+  for (const c of [owner, dispatcher]) assert.equal((await keep(c, v.extend.id)).status, 403);
+  const k = await keep(colleague, v.extend.id);
+  assert.equal(k.status, 200, JSON.stringify(k.body));
+  assert.equal(k.body.extend, null);
+  assert.equal((await keep(colleague, v.extend.id)).body.error, 'already_decided');
+  const dl = (await colleague.req('GET', `/api/orders/${o.id}/deadline-requests`)).body;
+  assert.equal(dl.open?.new_deadline, to);
+  assert.equal(dl.can_withdraw, true, 'оставленную можно отозвать и потом');
+  assert.ok((await dispatcher.req('GET', `/api/orders/${o.id}/journal`)).body.journal
+    .some((j) => j.what.startsWith('Новый исполнитель оставил просьбу прежнего о переносе срока')));
+  // Своя просьба нового эксперта — не «прежнего»: строки нет.
+  assert.equal((await colleague.req('DELETE', `/api/orders/${o.id}/deadline-requests/${v.extend.id}`)).status, 200);
+  assert.equal((await colleague.req('POST', `/api/orders/${o.id}/deadline-requests`, { new_deadline: to, reason: 'Сам' })).status, 201);
+  assert.equal((await pred(colleague)).body.extend, null);
+  // Сдал на проверку — блок не нужен.
+  await S.sql`update orders set status = 'review' where id = ${o.id}`;
+  assert.deepEqual((await pred(colleague)).body, { transferred: false });
+});
+
+test('передача обратно: прежнему эксперту — то, что сделал второй; отозвать просьбу прежнего можно сразу', async () => {
+  const o = await inWork('Туда и обратно');
+  const to = addDays(todayMsk(), 15);
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/deadline-requests`, { new_deadline: to, reason: 'Нет доступа в квартиру' })).status, 201);
+  const transfer = (who) => head.req('POST', `/api/orgs/${org.id}/cases/${o.id}/transfer`, { specialist_id: who.user.id, reason: 'Нагрузка' });
+  assert.equal((await transfer(colleague)).status, 200);
+  const v = (await colleague.req('GET', `/api/orders/${o.id}/predecessor`)).body;
+  assert.deepEqual([v.results, v.files, v.drafts, v.photos, v.analogs], [0, 0, 0, 0, 0]);
+  const w = await colleague.req('DELETE', `/api/orders/${o.id}/deadline-requests/${v.extend.id}`);
+  assert.equal(w.status, 200, JSON.stringify(w.body));
+  assert.equal((await colleague.req('GET', `/api/orders/${o.id}/predecessor`)).body.extend, null);
+  assert.equal((await transfer(spec)).status, 200);
+  const back = (await spec.req('GET', `/api/orders/${o.id}/predecessor`)).body;
+  assert.deepEqual([back.transferred, back.from], [true, 'Эксперт Коллега']);
+  assert.equal((await colleague.req('GET', `/api/orders/${o.id}/predecessor`)).status, 404);
+});

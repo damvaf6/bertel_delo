@@ -1540,6 +1540,20 @@ test('просьба передать дело коллеге (2.107): види�
   assert.equal((await decline(U.headA, orgA.id)).status, 404, 'дело не эксперта организации — «не найдено»');
 });
 
+test('что сделал прежний эксперт (2.112): только нынешнему исполнителю после передачи; оставить просьбу — только он', async () => {
+  for (const id of ['orders.predecessor', 'orders.predecessor.keep_extend']) cover(id);
+  // Подробно — tests/server/handover.test.mjs; здесь — чужие и стороны заявки, не исполнители.
+  const base = `/api/orders/${ownOrder.id}/predecessor`;
+  for (const who of ['stranger', 'headA', 'headB', 'spec']) {
+    assert.equal((await U[who].req('GET', base)).status, 404, `${who}: смотреть`);
+    assert.equal((await U[who].req('POST', `${base}/extend/1/keep`, {})).status, 404, `${who}: оставить`);
+  }
+  for (const who of ['owner', 'dispatcher', 'admin']) {
+    assert.deepEqual((await U[who].req('GET', base)).body, { transferred: false }, who);
+    assert.equal((await U[who].req('POST', `${base}/extend/1/keep`, {})).status, 403, who);
+  }
+});
+
 test('запрос документов (2.64): видят те, кто видит заявку; просит только исполнитель, прикладывает заказчик', async () => {
   for (const id of ['doc_requests.list', 'doc_requests.create', 'doc_requests.attach', 'doc_requests.cancel']) cover(id);
   const base = `/api/orders/${ownOrder.id}/doc-requests`;

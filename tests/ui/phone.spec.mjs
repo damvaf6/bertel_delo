@@ -3246,6 +3246,10 @@ test('передача дела (2.62): руководитель передаё�
   });
   // Прежний эксперт успел написать заказчику.
   expect((await ap.request.post(`/api/orders/${id}/messages`, { data: { body: 'Осмотр назначен на пятницу' }, headers: H })).status()).toBe(201);
+  // …загрузить отчёт, написать черновик и попросить перенести срок (2.112: новый эксперт увидит это в «Что сделал прежний эксперт»).
+  expect((await ap.request.post(`/api/orders/${id}/results`, { data: Buffer.from('%PDF-1.4 отчёт'), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Отчёт прежнего.pdf') } })).status()).toBe(201);
+  await db((c) => c.query("insert into result_drafts (order_id, author_id, source, body) values ($1, $2, 'edit', 'Черновик прежнего эксперта')", [id, first.id]));
+  expect((await ap.request.post(`/api/orders/${id}/deadline-requests`, { data: { new_deadline: inDays(12), reason: 'Ждём выписку ЕГРН' }, headers: H })).status()).toBe(201);
 
   // Руководитель: у дела в работе — «Передать другому эксперту»; без причины не передать.
   await hp.goto(`/kabinet#org=${orgId}`);
@@ -3270,6 +3274,30 @@ test('передача дела (2.62): руководитель передаё�
   await expect(bp.locator('#order-status')).toHaveText('В работе');
   await expect(bp.locator('#chat-box')).toContainText('Осмотр назначен на пятницу');
   await shot(bp, '99f-novyj-ekspert-delo');
+  // «Что сделал прежний эксперт» (2.112): отчёт прежнего в сдачу не идёт, черновик, просьба о переносе — оставить или отозвать.
+  const pred = bp.locator('#pred-box');
+  await expect(pred).toBeVisible();
+  await expect(pred.locator('#pred-lead')).toContainText('Раньше его вёл эксперт Эксперт Заболевший');
+  await expect(pred.locator('#pred-list li')).toHaveText([/Файлы результата: 1 — в сдачу не идут/, /Черновик: версий 1/]);
+  await expect(pred.locator('#pred-extend-text')).toContainText('попросил перенести срок на');
+  await expect(pred.locator('#pred-extend-text')).toContainText('Ждём выписку ЕГРН');
+  await expect(pred).not.toContainText('заболел на две недели');
+  await expect(pred.locator('#pred-hide')).toBeHidden();
+  await pred.scrollIntoViewIfNeeded();
+  await shot(bp, '99f1-novyj-ekspert-chto-sdelal-prezhnij');
+  await pred.getByRole('button', { name: 'Оставить просьбу' }).click();
+  await expect(pred.locator('#pred-msg')).toHaveText(/Просьба осталась/);
+  await expect(pred.locator('#pred-extend')).toBeHidden();
+  // Строка «Черновик» открывает блок черновика.
+  await pred.locator('#pred-list button', { hasText: 'Черновик' }).click();
+  await expect(bp.locator('#draft-box')).not.toHaveClass(/folded/);
+  await pred.scrollIntoViewIfNeeded();
+  await shot(bp, '99f2-novyj-ekspert-prosba-ostavlena');
+  await pred.getByRole('button', { name: 'Понятно, скрыть' }).click();
+  await expect(pred).toBeHidden();
+  await bp.reload();
+  await expect(bp.locator('#order-status')).toHaveText('В работе');
+  await expect(bp.locator('#pred-box')).toBeHidden();
 
   // Прежний эксперт: уведомление без перехода в дело; само дело — «не найдено».
   await ap.goto('/kabinet#notifications');

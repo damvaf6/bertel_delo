@@ -47,12 +47,77 @@ async function view(sql, actor, order) {
   };
 }
 
+// «Что сделал прежний эксперт» (задача 2.112): новому эксперту после передачи дела руководителем (2.62) — когда передали и
+// что в деле осталось от прежнего: файлы результата (в сдачу не идут, 2.110), другие файлы, версии черновика, фото осмотра,
+// выезд помощника, аналоги — и его просьба о переносе срока, если ждёт ответа диспетчера: оставить или отозвать. Причину
+// передачи (болезнь) не показываем — её писал руководитель про прежнего эксперта. Только нынешнему исполнителю, только
+// пока дело в работе и последняя передача — ему.
+async function predecessorView(sql, actor, order) {
+  if (!isExecutor(actor, order) || order.status !== 'in_work') return { transferred: false };
+  const t = await sql.one`select at, details from audit_log where subject_type = 'order' and subject_id = ${order.id}
+                          and action = 'org.case.transfer' order by id desc limit 1`;
+  if (!t || t.details?.to !== actor.id || !t.details?.from) return { transferred: false };
+  const prev = t.details.from;
+  const who = await sql.one`select full_name from users where id = ${prev}`;
+  const files = await sql`select kind, count(*)::int as n from documents
+                          where order_id = ${order.id} and uploaded_by = ${prev} and deleted_at is null and kind in ('result', 'other') group by kind`;
+  const fileN = (k) => files.find((f) => f.kind === k)?.n ?? 0;
+  const draft = await sql.one`select count(*)::int as n, max(at) as last_at from result_drafts where order_id = ${order.id} and author_id = ${prev}`;
+  // Фото осмотра — все, что пришли в дело до передачи (снимает владелец по ссылке или помощник, не сам эксперт).
+  const photos = await sql.one`select count(*)::int as n from documents
+                               where order_id = ${order.id} and kind = 'inspection' and deleted_at is null and created_at <= ${t.at}`;
+  const visits = await sql.one`select count(*) filter (where finished_at is not null)::int as done,
+                                      count(*) filter (where cancelled_at is not null and finished_at is null)::int as cancelled
+                               from onsite_visits where order_id = ${order.id} and assigned_by = ${prev}`;
+  const analogs = await sql.one`select count(*)::int as n, count(confirmed_at)::int as confirmed from order_analogs
+                                where order_id = ${order.id} and author_id = ${prev} and deleted_at is null`;
+  // Просьба о переносе срока, которую новый эксперт ещё не оставил за собой и не отозвал.
+  const ext = await sql.one`select id, to_char(new_deadline, 'YYYY-MM-DD') as new_deadline, reason, requested_at from deadline_requests
+                            where order_id = ${order.id} and outcome is null and requested_by <> ${actor.id} and kept_by is null`;
+  return {
+    transferred: true,
+    at: t.at,
+    from: who?.full_name || 'Без имени',
+    results: fileN('result'),
+    files: fileN('other'),
+    drafts: draft.n,
+    draft_at: draft.last_at,
+    photos: photos.n,
+    visits_done: visits.done,
+    visits_cancelled: visits.cancelled,
+    analogs: analogs.n,
+    analogs_confirmed: analogs.confirmed,
+    extend: ext ? { ...ext, id: String(ext.id) } : null,
+  };
+}
+
 export function handoverOps() {
   return [
     {
       id: 'handover.get', method: 'GET', path: '/api/orders/:id/handover', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
       async handler({ sql, actor, order }) { return view(sql, actor, order); },
+    },
+    {
+      id: 'orders.predecessor', method: 'GET', path: '/api/orders/:id/predecessor', auth: 'user',
+      access: { resource: 'order', param: 'id', need: 'read' },
+      async handler({ sql, actor, order }) { return predecessorView(sql, actor, order); },
+    },
+    {
+      // Новый эксперт оставляет за собой просьбу прежнего о переносе срока (2.112): диспетчер ответит как обычно, отозвать
+      // её новый эксперт может и потом (deadline_requests.withdraw). Отозвать сразу — тоже deadline_requests.withdraw.
+      id: 'orders.predecessor.keep_extend', method: 'POST', path: '/api/orders/:id/predecessor/extend/:rid/keep', auth: 'user',
+      access: { resource: 'order', param: 'id', need: 'read' },
+      async handler({ sql, actor, order, params }) {
+        if (!isExecutor(actor, order)) throw new HttpError(403, 'forbidden', 'Решает исполнитель дела');
+        const rid = /^\d{1,18}$/.test(String(params.rid ?? '')) ? String(params.rid) : '0';
+        const done = await sql`update deadline_requests set kept_by = ${actor.id}, kept_at = now()
+                               where id = ${rid} and order_id = ${order.id} and outcome is null and kept_by is null
+                                 and requested_by <> ${actor.id} returning to_char(new_deadline, 'YYYY-MM-DD') as new_deadline`;
+        if (!done.length) throw new HttpError(409, 'already_decided', 'Просьбы уже нет — обновите страницу');
+        await audit(sql, actor, 'deadline.keep', 'order', order.id, { to: done[0].new_deadline });
+        return predecessorView(sql, actor, order);
+      },
     },
     {
       // Эксперт просит руководителей своей организации передать дело коллеге. Причина обязательна.

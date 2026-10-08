@@ -14,6 +14,8 @@ export default defineConfig({
   outputDir: 'test-results/artifacts',
   use: {
     baseURL: process.env.UI_BASE_URL,
+    // Блоки дела у исполнителя свёрнуты (2.101); сценарии площадки идут с «Развернуть все блоки», как tests/ui.
+    storageState: { cookies: [], origins: [{ origin: new URL(process.env.UI_BASE_URL).origin, localStorage: [{ name: 'delo.folds', value: 'open' }] }] },
     viewport: { width: 412, height: 915 },
     deviceScaleFactor: 2.625,
     isMobile: true,
