@@ -6,7 +6,7 @@ import { el, quoted } from '/common.js';
 import { applyFolds, reveal } from '/fold.js';
 
 const $ = (id) => document.getElementById(id);
-let ctx = {}; // { current, docs, review, draft, analogs, docreq, money, deadline, handover, inspect, onsite, chat, loaded, step(action) }
+let ctx = {}; // { current, docs, review, draft, analogs, docreq, money, deadline, handover, notes, inspect, onsite, chat, loaded, step(action) }
 
 export function setNext(part) {
   ctx = part.reset ? { ...part } : { ...ctx, ...part };
@@ -292,8 +292,9 @@ function nowBox(s) {
 const count = (n, one, few, many) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? one : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? few : many}`;
 
 function foldNotes() {
-  const { docs, review, draft, analogs, docreqAll, deadline, handover, inspect, onsite, chat } = ctx;
+  const { docs, review, draft, analogs, docreqAll, deadline, handover, inspect, onsite, chat, notes: myNotes } = ctx;
   const notes = {};
+  if (myNotes) notes['notes-box'] = myNotes;
   if (deadline) notes['deadline-box'] = `до ${dayRu(deadline.deadline)}${deadline.open ? ' · просьба о переносе ждёт ответа' : ''}`;
   if (handover) notes['handover-box'] = handover;
   if (docreqAll) notes['docreq-box'] = docreqAll.total ? `получено ${docreqAll.got} из ${docreqAll.total}` : 'ничего не запрошено';

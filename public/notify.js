@@ -15,7 +15,7 @@ function item(n) {
     ...(where ? [el('div', { class: 'muted', text: where })] : []),
     el('div', { class: 'muted', text: dateRu(n.at) }),
   ];
-  const go = n.order_id ? `order=${n.order_id}` : n.section;
+  const go = n.order_id ? `order=${n.order_id}${n.to ? `&to=${n.to}` : ''}` : n.section;
   return el('li', { class: n.read ? '' : 'unread' },
     go ? el('button', { class: 'open', onclick: () => { location.hash = go; } }, ...body) : el('div', {}, ...body));
 }

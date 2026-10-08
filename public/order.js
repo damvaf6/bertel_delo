@@ -18,6 +18,7 @@ import { loadJournal } from '/journal.js';
 import { loadDocRequests } from '/docreq.js';
 import { loadDeadline } from '/deadline.js';
 import { loadHandover } from '/handover.js';
+import { loadNotes } from '/notes.js';
 import { loadPredecessor } from '/predecessor.js';
 
 const $ = (id) => document.getElementById(id);
@@ -48,7 +49,7 @@ export function serviceOptions(select) {
     ...m.services.map((s) => el('option', { value: `${m.id}/${s.id}`, text: s.name })))));
 }
 
-// to — сразу к разделу дела (2.85: «Сегодня» → осмотр без фото; 2.86: «можно продолжать» → переписка, документы, осмотр).
+// to — сразу к разделу дела (2.115: напоминание по заметке → заметки; 2.85: «Сегодня» → осмотр без фото; 2.86: «можно продолжать» → переписка, документы, осмотр).
 export async function openOrder(id, { to } = {}) {
   try {
     current = await api('GET', `/api/orders/${id}`);
@@ -65,9 +66,9 @@ export async function openOrder(id, { to } = {}) {
   setNext({ reset: true, current, step: doStep, signAll });
   loadOrgChat();
   loadJournal(current.order, current.access);
-  await Promise.all([loadDocs(true), loadTransfer(), loadMatch(current, () => openOrder(id)), loadDraft(current, () => openOrder(id)), loadAnalogs(current), loadInspection(current), loadOnsite(current), loadDocRequests(current, (file, msg) => uploadFile(file, 'other', msg)), loadDeadline(current, () => openOrder(id)), loadHandover(current), loadPredecessor(current, () => openOrder(id)), loadReview(current), loadChat(current), loadMoney(current, () => openOrder(id))]);
+  await Promise.all([loadDocs(true), loadTransfer(), loadMatch(current, () => openOrder(id)), loadDraft(current, () => openOrder(id)), loadAnalogs(current), loadInspection(current), loadOnsite(current), loadDocRequests(current, (file, msg) => uploadFile(file, 'other', msg)), loadDeadline(current, () => openOrder(id)), loadHandover(current), loadNotes(current), loadPredecessor(current, () => openOrder(id)), loadReview(current), loadChat(current), loadMoney(current, () => openOrder(id))]);
   setNext({ loaded: true }); // разделы осмотра и черновика показаны — шаги пересчитываются, нужный сейчас блок раскрыт
-  const box = { inspect: 'inspect-box', chat: 'chat-box', docs: 'docreq-box', deadline: 'deadline-box', sign: 'sign-wait-box', handover: 'handover-box', onsite: 'onsite-box' }[to];
+  const box = { inspect: 'inspect-box', chat: 'chat-box', docs: 'docreq-box', deadline: 'deadline-box', sign: 'sign-wait-box', handover: 'handover-box', onsite: 'onsite-box', notes: 'notes-box' }[to];
   if (box && !$(box).classList.contains('hidden')) { reveal(box); $(box).scrollIntoView({ block: 'start' }); }
 }
 

@@ -7,6 +7,7 @@ import { deliverPending } from './notify/notify.mjs';
 import { remindDeadlines } from './notify/reminders.mjs';
 import { remindDossier } from './dossier/dossier.mjs';
 import { remindSilentInspections } from './ops/inspect-ops.mjs';
+import { remindNotes } from './ops/note-ops.mjs';
 import { deliverMail } from './mail/outbox.mjs';
 import { processInbound, receiveMail } from './mail/inbound.mjs';
 import { startupSteps } from './startup.mjs';
@@ -27,7 +28,7 @@ try {
 const server = app.listen(cfg.port, () => console.log(`БЕРТЕЛ Дело · ядро · ${cfg.appEnv} · порт ${cfg.port}`));
 
 // Повтор неотправленных СМС-уведомлений раз в минуту (первая попытка — сразу после операции, src/http/router.mjs);
-// там же — напоминания о сроках (2.13) и о сроках документов досье (2.14), о ссылке осмотра без фото (2.85), каждое один раз.
+// там же — напоминания о сроках (2.13) и о сроках документов досье (2.14), о ссылке осмотра без фото (2.85), по заметкам эксперта к делу (2.115), каждое один раз.
 const sweep = setInterval(() => {
   remindDeadlines(sql)
     .catch((e) => console.error('напоминания о сроках:', e?.message || e))
@@ -35,6 +36,8 @@ const sweep = setInterval(() => {
     .catch((e) => console.error('напоминания по досье:', e?.message || e))
     .then(() => remindSilentInspections(sql))
     .catch((e) => console.error('напоминания об осмотре:', e?.message || e))
+    .then(() => remindNotes(sql))
+    .catch((e) => console.error('напоминания по заметкам:', e?.message || e))
     .then(() => deliverPending(sql, providers))
     .catch((e) => console.error('уведомления:', e?.message || e));
 }, 60_000);

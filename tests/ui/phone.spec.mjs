@@ -5985,3 +5985,68 @@ test('подпись нескольких дел (2.114): руководител
   const byRef = Object.fromEntries(sign.items.map((x) => [x.order_ref, x.documents.every((d) => d.signatures.org)]));
   expect(byRef).toEqual({ [ref(ids.a)]: true, [ref(ids.b)]: true, [ref(ids.c)]: false });
 });
+
+test('заметки эксперта к делу (2.115): заметка с напоминанием — в «Сегодня» и в ленте, «Сделано» убирает', async ({ browser, baseURL }) => {
+  const ep = await (await phoneContext(browser, baseURL)).newPage();
+  const cp = await (await phoneContext(browser, baseURL)).newPage();
+  const customer = await signIn(cp, '+79990010181');
+  const expert = await signIn(ep, '+79990010182');
+  const id = await db(async (c) => {
+    await c.query("insert into specialists (user_id, created_at) values ($1, now() - interval '1 year')", [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Квартира: заметки', $1, $2, 'in_work', current_date + 9, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Заметочная ул., 3","area":"40"}') returning id`, [customer.id, expert.id]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [o.id, expert.id]);
+    return o.id;
+  });
+
+  // Эксперт в деле: у заголовка блока «Мои заметки» — «заметок нет»; написал две заметки, одну — с напоминанием на сегодня.
+  await ep.goto(`/kabinet#order=${id}`);
+  const box = ep.locator('#notes-box');
+  await expect(box.locator('.fold-note')).toHaveText('заметок нет');
+  if (await box.evaluate((b) => b.classList.contains('folded'))) await box.locator('.fold-toggle').click();
+  await expect(ep.locator('#notes-text')).toBeVisible();
+  await ep.fill('#notes-text', 'Взять выписку из ЕГРН');
+  await ep.click('#notes-add');
+  await expect(ep.locator('#notes-msg')).toHaveText('Заметка сохранена');
+  const today = await ep.locator('#notes-remind').getAttribute('min');
+  await ep.fill('#notes-text', 'Уточнить этаж у заказчика');
+  await ep.fill('#notes-remind', today);
+  await ep.click('#notes-add');
+  await expect(ep.locator('#notes-msg')).toContainText('Заметка сохранена — напомним');
+  await expect(box.locator('#notes-list > li')).toHaveCount(2);
+  await expect(box.locator('#notes-list > li').first()).toContainText('Уточнить этаж у заказчика');
+  await expect(box.locator('#notes-list > li').first()).toContainText('напомнить сегодня');
+  await expect(box.locator('.fold-note')).toHaveText('заметок: 2 · есть напоминание на сегодня');
+  await box.scrollIntoViewIfNeeded();
+  await shot(ep, 'h5-ekspert-zametki-k-delu');
+
+  // «Сегодня»: строка с текстом заметки — нажал, дело открыто на заметках.
+  await ep.goto('/kabinet');
+  const t = ep.locator('li[data-today-item="notes"]');
+  await expect(t).toHaveCount(1);
+  await expect(t).toContainText('Квартира: заметки');
+  await expect(t).toContainText('Уточнить этаж у заказчика');
+  await expect(ep.locator('li[data-today="notes"]')).toHaveText('Напоминания по заметкам · 1');
+  await t.scrollIntoViewIfNeeded();
+  await shot(ep, 'h6-ekspert-segodnya-napominanie');
+  await t.locator('button').click();
+  await expect(ep.locator('#notes-box')).not.toHaveClass(/folded/);
+  await ep.locator('#notes-list > li').first().locator('[data-action="note-done"]').click();
+  await expect(ep.locator('#notes-msg')).toHaveText('Отмечено: сделано');
+  await expect(ep.locator('#notes-list > li').last()).toContainText('✓ Уточнить этаж у заказчика');
+  await expect(ep.locator('#notes-box .fold-note')).toHaveText('заметок: 1 (сделано 1)');
+
+  // Уведомление в ленте (напоминание — раз в минуту на сервере; здесь — запись напрямую) ведёт к заметкам.
+  await db((c) => c.query("insert into notifications (user_id, type, event, order_id) values ($1, 'executor_work', 'note_reminder', $2)", [expert.id, id]));
+  await ep.goto('/kabinet#notifications');
+  await expect(ep.locator('#notifications li').first()).toContainText('Напоминание по Вашей заметке к делу');
+  await ep.locator('#notifications li').first().getByRole('button').click();
+  await expect(ep).toHaveURL(new RegExp(`#order=${id}&to=notes$`));
+  await expect(ep.locator('#notes-box')).not.toHaveClass(/folded/);
+  // Заказчик блока не видит.
+  await cp.goto(`/kabinet#order=${id}`);
+  await expect(cp.locator('#order-title')).toHaveText('Квартира: заметки');
+  await expect(cp.locator('#notes-box')).toBeHidden();
+});
