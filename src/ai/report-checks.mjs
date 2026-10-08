@@ -1140,6 +1140,35 @@ function reportNumbers(docs) {
   ];
 }
 
+// ——— 2.123: дата оценки одна по всему отчёту и в сопроводительном письме ———
+// Дата оценки — после «дата оценки (дата определения стоимости, датой оценки является)» и после «по состоянию на», если
+// в той же строке перед ним говорится о стоимости объекта (кадастровая, балансовая, прежние оценки, аналоги и индексы —
+// не в счёт). Цифрами или словами («по состоянию на «01» октября 2026 г.»). Ровно две разные даты — находка у той, что
+// встречается реже; три и больше — молчим (значит, это не одна дата оценки).
+const VALUE_AT = new RegExp(`${VALUE_LABEL}|дат\\S*\\s+проведения\\s+оценки|датой\\s+оценки\\s+(?:является|принята|считается)|по\\s+состоянию\\s+на`, 'giu');
+const STATE_SKIP = /кадастров|балансов|инвентаризац|прежн|предыдущ|ранее|прошл|аналог|предложени|объявлени|индекс|инфляц|курс|выписк|ставк|задолженност/iu;
+
+function valueDates(docs) {
+  const main = mainReport(docs);
+  const ordered = main ? [main, ...docs.filter((d) => d !== main)] : docs;
+  const dates = [];
+  for (const doc of ordered) {
+    eachPage(doc, (raw, i) => {
+      const page = unquote(raw);
+      for (const m of page.matchAll(VALUE_AT)) {
+        if (/^по/iu.test(m[0])) {
+          const before = lineBefore(page, m.index, 250);
+          if (!/стоимост/iu.test(before) || STATE_SKIP.test(before)) continue;
+        }
+        const on = dateAfter(page.slice(m.index), `^${m[0].replace(/\s+/gu, '\\s+')}`);
+        if (on) dates.push({ doc, page: i, value: on, quote: lineAround(raw, m.index) });
+      }
+    });
+  }
+  const once = dates.filter((e, k) => dates.findIndex((x) => x.doc === e.doc && x.page === e.page && x.value === e.value) === k);
+  return oddOnes(once, (e, ref, where) => `Дата оценки ${ruDate(e.value)} не совпадает с ${ruDate(ref)} ${where} — дата оценки должна быть одна во всём отчёте и в письме`, { samePage: true });
+}
+
 // ——— 2.61: каждый вопрос заявки найден в выводах (все виды) ———
 // Вопросы — из поля заявки «Какие вопросы поставить эксперту» (нумерованные или по одному в строке). Вопрос считается
 // отвеченным, если в выводах есть «по вопросу № N» / «ответ на вопрос N» или больше половины его значимых слов.
@@ -1200,6 +1229,7 @@ const WHOLE = {
   report_dates: reportDates,
   final_value: finalValues,
   report_number: reportNumbers,
+  value_date: valueDates,
 };
 
 const PER_DOC = {
@@ -1260,6 +1290,7 @@ export const AUTO_CHECKS = Object.freeze({
   questions_answered: 'каждый вопрос заявки найден в выводах',
   final_value: 'итоговая стоимость одна на титуле, в задании, выводах, итоговой таблице и в сопроводительном письме',
   report_number: 'номер отчёта и дата составления одни на титуле, в колонтитулах и в сопроводительном письме',
+  value_date: 'дата оценки одна по всему отчёту и в сопроводительном письме',
 });
 
 export function runAutoChecks(names, docs, ctx = {}) {
