@@ -14,6 +14,7 @@ import { monthRu, orgMonthDoneCases, orgMonthReport, reportCsv, reportMonth } fr
 import { buildOrgMonthArchive } from './case-ops.mjs';
 import { openExtends } from './deadline-ops.mjs';
 import { openHandovers } from './handover-ops.mjs';
+import { orgSchedule } from '../orders/schedule.mjs';
 
 export const INVITE_TTL_DAYS = 14;
 export const LIMITS = {
@@ -245,6 +246,9 @@ export function orgOps() {
           offered: rows.filter((o) => o.executor_user_id === e.user_id && o.status === 'awaiting_executor').length,
           overdue: cases.filter((c) => c.expert_id === e.user_id && c.overdue).length,
           // Ближайший срок по делам в работе (2.90) — кому можно дать ещё дело, видно без пролистывания списка дел.
+          // Сроков на две недели вперёд (2.111) — кому назначить или передать дело, видно и в выборе эксперта.
+          due14: rows.filter((o) => o.executor_user_id === e.user_id && CASES_ACTIVE.includes(o.status) && o.deadline
+            && o.deadline >= today && o.deadline <= addDays(today, 13)).length,
           next_deadline: rows.filter((o) => o.executor_user_id === e.user_id && ['in_work', 'review'].includes(o.status) && o.deadline)
             .map((o) => o.deadline).sort()[0] ?? null,
           // Не принимает новые дела (2.77): до какого дня и почему — или выключил приём совсем.
@@ -280,7 +284,7 @@ export function orgOps() {
                                    and specialist_id is not null and outcome = 'declined' order by id desc limit 1`)?.reason ?? null,
           experts: (await orgExpertsFor(sql, o, org.id, registry)).map((c) => ({
             user_id: c.user_id, full_name: c.full_name || 'Без имени', score: c.score.total,
-            in_work: loadOf.get(c.user_id)?.in_work ?? 0, overdue: loadOf.get(c.user_id)?.overdue ?? 0,
+            in_work: loadOf.get(c.user_id)?.in_work ?? 0, overdue: loadOf.get(c.user_id)?.overdue ?? 0, due14: loadOf.get(c.user_id)?.due14 ?? 0,
           })),
         })));
         // Кого нет в списке назначения, потому что эксперт сам не принимает новые дела (2.77), — чтобы руководитель не искал.
@@ -291,6 +295,15 @@ export function orgOps() {
           load,
           money: { month: today.slice(0, 7), paid_kop: Number(month.paid), waiting_kop: waiting },
         };
+      },
+    },
+    {
+      // Нагрузка экспертов на две недели (2.111): по дням — сроки дел и выезды каждого эксперта, кто не принимает дела;
+      // только руководитель, без заказчика и названий заявок.
+      id: 'orgs.schedule', method: 'GET', path: '/api/orgs/:id/schedule', auth: 'user',
+      access: { resource: 'org', param: 'id', need: 'manage' },
+      async handler({ sql, org, registry }) {
+        return { schedule: await orgSchedule(sql, org.id, registry) };
       },
     },
     {

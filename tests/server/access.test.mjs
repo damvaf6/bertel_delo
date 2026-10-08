@@ -1990,6 +1990,16 @@ test('мои сроки на две недели (2.109): по дням — ср
   assert.ok(!JSON.stringify(h).includes('Сроки:') && !JSON.stringify(h).includes(soon.id));
 });
 
+test('нагрузка экспертов на две недели (2.111): только руководитель организации (подробно — orgschedule.test.mjs)', async () => {
+  cover('orgs.schedule');
+  const url = `/api/orgs/${orgB.id}/schedule`;
+  const r = await U.headB.req('GET', url);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.ok(r.body.schedule.experts.some((x) => x.full_name === 'Эксперт Б'));
+  for (const c of [seniorB, expertB, U.dispatcher, U.admin]) assert.equal((await c.req('GET', url)).status, 403);
+  for (const k of ['stranger', 'headA', 'owner', 'spec']) assert.equal((await U[k].req('GET', url)).status, 404, k);
+});
+
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {
   const PUBLIC = ['health', 'auth.code', 'auth.verify', 'files.memory', 'files.memory.upload', 'test.calls', 'test.script', 'test.reset', 'test.mail.inbound', 'stage.login', 'payments.notify',
     'inspect.view', 'inspect.photo', 'inspect.finish'];

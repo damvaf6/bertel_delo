@@ -14,6 +14,7 @@ import { dayRu } from '/order.js';
 import { rub } from '/money.js';
 import { orgChat } from '/orgchat.js';
 import { matcher, wireSearch } from '/search.js';
+import { loadOrgSchedule } from '/orgschedule.js';
 
 const $ = (id) => document.getElementById(id);
 const MONTHS = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
@@ -45,6 +46,9 @@ const FILTERS = [
   { id: 'silent', text: 'Предложено, молчит', test: (c) => c.status === 'awaiting_executor' },
 ];
 let filter = null;
+// Сколько сдавать за две недели (2.111) — у каждого эксперта в выборе «кому передать».
+let due14 = new Map();
+const pickText = (x) => `${x.full_name} · сдать за 2 недели: ${due14.get(x.user_id) ?? 0}`;
 
 export async function loadOrgCases(org) {
   const { pending, cases, load, money } = await api('GET', `/api/orgs/${org.id}/cases`);
@@ -70,7 +74,10 @@ export async function loadOrgCases(org) {
     ...(l.away || l.paused ? [el('div', { class: 'muted', 'data-away': '', text: upper(awayText(l)) })] : []),
     expertLink(l.user_id))));
   $('org-cases-empty').classList.toggle('hidden', cases.length > 0 || pending.length > 0 || load.length === 0);
+  due14 = new Map(load.map((l) => [l.user_id, l.due14]));
   renderCases();
+  // Нагрузка на две недели (2.111) — отдельным запросом, список дел её не ждёт.
+  loadOrgSchedule(org);
 }
 
 // Поиск по делам экспертов (2.73): номер, вид услуги, эксперт, состояние. Адреса и заказчика руководитель не видит (2.16) —
@@ -161,7 +168,7 @@ function transferDetails(org, c) {
   const msg = el('p', { class: 'msg', role: 'status', 'aria-live': 'polite' });
   const body = c.transfer_to.length ? (() => {
     const pick = el('select', { 'aria-label': `Кому передать дело ${c.order_ref}`, 'data-transfer-pick': c.order_ref },
-      ...c.transfer_to.map((x) => el('option', { value: x.user_id, text: x.full_name })));
+      ...c.transfer_to.map((x) => el('option', { value: x.user_id, text: pickText(x) })));
     const reason = el('input', { type: 'text', maxlength: '1000', placeholder: 'Причина: заболел, ушёл из организации…',
       'aria-label': `Причина передачи дела ${c.order_ref}`, 'data-transfer-reason': c.order_ref });
     const go = async () => {
@@ -186,7 +193,7 @@ function handoverBlock(org, c) {
   const h = c.handover;
   const msg = el('p', { class: 'msg', role: 'status', 'aria-live': 'polite' });
   const pick = c.transfer_to.length ? el('select', { 'aria-label': `Кому передать дело ${c.order_ref}`, 'data-handover-pick': c.order_ref },
-    ...c.transfer_to.map((x) => el('option', { value: x.user_id, text: x.full_name }))) : null;
+    ...c.transfer_to.map((x) => el('option', { value: x.user_id, text: pickText(x) }))) : null;
   const answer = el('input', { type: 'text', maxlength: '1000', placeholder: 'Пояснение эксперту, если отказываете (необязательно)',
     'aria-label': `Пояснение эксперту по делу ${c.order_ref}`, 'data-handover-answer': c.order_ref });
   const run = async (fn, done) => {
@@ -225,7 +232,7 @@ function offerWait(org, c) {
     } catch (err) { say(msg, err.message); }
   };
   const pick = w.reassign_to.length ? el('select', { 'aria-label': `Кому предложить дело ${c.order_ref}`, 'data-reassign-pick': c.order_ref },
-    ...w.reassign_to.map((x) => el('option', { value: x.user_id, text: x.full_name }))) : null;
+    ...w.reassign_to.map((x) => el('option', { value: x.user_id, text: pickText(x) }))) : null;
   return [
     el('div', { class: 'muted', 'data-role': 'offer-wait', text: w.offered_at
       ? `Эксперт ещё не ответил · предложено ${timeRu(w.offered_at)} (${waited(w.offered_at)})` : 'Эксперт ещё не ответил на предложение' }),
@@ -263,7 +270,7 @@ function pendingItem(org, p) {
   const deadline = p.deadline ? `срок ${dayRu(p.deadline)}${p.overdue ? ' · ПРОСРОЧЕНО' : ''}` : 'срок не указан';
   const pick = el('select', { 'aria-label': `Эксперт для дела ${p.order_ref}`, 'data-pick': p.order_ref },
     ...p.experts.map((x) => el('option', { value: x.user_id,
-      text: `${x.full_name} · в работе ${x.in_work}${x.overdue ? ` · просрочено ${x.overdue}` : ''}` })));
+      text: `${x.full_name} · в работе ${x.in_work}${x.overdue ? ` · просрочено ${x.overdue}` : ''} · сдать за 2 недели: ${x.due14}` })));
   return el('li', { 'data-pending': p.order_ref },
     el('div', { class: 'title', text: `${p.service} · ${p.order_ref}` }),
     el('div', { class: p.overdue ? 'overdue big' : 'muted', text: deadline }),

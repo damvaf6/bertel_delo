@@ -3,6 +3,7 @@
 // просьбы о переносе срока (на какой день просит, ждёт ответа) и дни, когда эксперт не принимает новые дела. Просроченные —
 // отдельным списком сверху. Только дела, где человек исполнитель (или помощник на выезде).
 import { addDays, todayMsk } from './workflow.mjs';
+import { orderRef } from '../notify/registry.mjs';
 
 export const SCHEDULE_DAYS = 14;
 const WEEKDAYS = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
@@ -74,4 +75,79 @@ export async function expertSchedule(sql, userId, registry, today = todayMsk()) 
     d.deadlines = d.items.filter((i) => i.kind === 'deadline').length;
   }
   return { from: today, to: last, away, overdue, days: [...days.values()] };
+}
+
+// Нагрузка экспертов организации на две недели (2.111): у руководителя — по каждому эксперту, работающему от организации,
+// по дням: сроки его дел (в работе, на проверке, предложенных), выезды на объект (помощника по его делам и его самого
+// помощником), дни, когда он не принимает новые дела. Чтобы назначать и передавать дело тому, у кого свободнее. Как и в
+// «Делах экспертов» (2.16), без заказчика и названий заявок: услуга и номер дела; выезд по чужому делу — без номера.
+export async function orgSchedule(sql, orgId, registry, today = todayMsk()) {
+  const last = addDays(today, SCHEDULE_DAYS - 1);
+  const service = (o) => registry.service(o.module, o.service)?.service.name ?? o.service;
+  const experts = await sql`
+    select s.user_id, s.active, s.away_until, s.away_note, u.full_name from specialists s
+    join org_members m on m.org_id = s.org_id and m.user_id = s.user_id join users u on u.id = s.user_id
+    where s.org_id = ${orgId} order by u.full_name nulls last, s.user_id`;
+  const ids = experts.map((e) => e.user_id);
+  const header = [];
+  for (let i = 0; i < SCHEDULE_DAYS; i++) {
+    const date = addDays(today, i);
+    header.push({ date, weekday: weekday(date), today: i === 0, weekend: ['сб', 'вс'].includes(weekday(date)) });
+  }
+  if (!ids.length) return { from: today, to: last, days: header, experts: [] };
+  const orders = await sql`
+    select o.id, o.module, o.service, o.status, o.executor_user_id, to_char(o.deadline, 'YYYY-MM-DD') as deadline,
+      (select to_char(r.new_deadline, 'YYYY-MM-DD') from deadline_requests r where r.order_id = o.id and r.outcome is null) as extend_to
+    from orders o
+    where o.executor_user_id = any(${ids}::uuid[]) and o.status in ('awaiting_executor', 'in_work', 'review') and o.deadline is not null
+      and o.deadline <= ${last}::date
+    order by o.deadline, o.created_at`;
+  const visits = await sql`
+    select v.id, v.order_id, v.planned_at, v.helper_id, o.module, o.service, o.executor_user_id
+    from onsite_visits v join orders o on o.id = v.order_id
+    where v.finished_at is null and v.cancelled_at is null and o.status = 'in_work'
+      and (o.executor_user_id = any(${ids}::uuid[]) or v.helper_id = any(${ids}::uuid[]))
+    order by v.planned_at`;
+  const mine = new Set(ids);
+  const per = new Map(experts.map((e) => {
+    const away = e.away_until && day(e.away_until) > today ? { until: day(e.away_until), note: e.away_note ?? null } : null;
+    return [e.user_id, {
+      user_id: e.user_id, full_name: e.full_name || 'Без имени', away, paused: !e.active, overdue: [],
+      days: header.map((d) => ({ date: d.date, away: !!away && d.date < away.until, items: [] })),
+    }];
+  }));
+  const put = (userId, date, item) => {
+    const x = per.get(userId);
+    if (!x) return;
+    if (date < today) x.overdue.push({ ...item, day: date });
+    else x.days.find((d) => d.date === date)?.items.push(item);
+  };
+  for (const o of orders) {
+    put(o.executor_user_id, o.deadline, { kind: 'deadline', order_ref: orderRef(o.id), service: service(o), status: o.status,
+      deadline: o.deadline, extend_to: o.extend_to ?? null });
+  }
+  for (const v of visits) {
+    const d = todayMsk(new Date(v.planned_at));
+    if (d > last) continue;
+    // Выезд помощника по делу эксперта — у эксперта; эксперт сам едет помощником — у него же, по чужому делу без номера.
+    if (mine.has(v.executor_user_id)) {
+      put(v.executor_user_id, d, { kind: 'visit', order_ref: orderRef(v.order_id), service: service(v), time: mskTime(v.planned_at) });
+    }
+    if (v.helper_id && v.helper_id !== v.executor_user_id && mine.has(v.helper_id)) {
+      put(v.helper_id, d, { kind: 'helper', ...(mine.has(v.executor_user_id) ? { order_ref: orderRef(v.order_id) } : {}), service: service(v), time: mskTime(v.planned_at) });
+    }
+  }
+  const ORDER = { visit: 0, helper: 0, deadline: 1 };
+  const result = [...per.values()].map((x) => {
+    for (const d of x.days) d.items.sort((a, b) => ORDER[a.kind] - ORDER[b.kind] || String(a.time ?? '').localeCompare(String(b.time ?? '')));
+    const all = x.days.flatMap((d) => d.items);
+    return {
+      ...x,
+      due: all.filter((i) => i.kind === 'deadline').length,
+      visits: all.filter((i) => i.kind !== 'deadline').length,
+      // Свободные будни: не выходной, не «не принимаю дела», ни срока, ни выезда — куда можно поставить новое дело.
+      free_workdays: x.days.filter((d, i) => !header[i].weekend && !d.away && !d.items.length).length,
+    };
+  });
+  return { from: today, to: last, days: header, experts: result };
 }

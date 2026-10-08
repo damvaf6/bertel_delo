@@ -1770,7 +1770,7 @@ test('распределение в организации (2.17): диспет�
   await expect(pend).toContainText('вознаграждение 16 000 ₽');
   await expect(hp.locator('#org-pending-box')).not.toContainText('распределение');
   await expect(hp.locator('#org-pending-box')).not.toContainText('Распределительная');
-  await expect(pend.locator('select option')).toHaveText(['Тестовый эксперт бюро · в работе 0']);
+  await expect(pend.locator('select option')).toHaveText(['Тестовый эксперт бюро · в работе 0 · сдать за 2 недели: 0']);
   await hp.locator('#org-pending-box').scrollIntoViewIfNeeded();
   await shot(hp, '99b-rukovoditel-zhdut-naznacheniya');
   await pend.getByRole('button', { name: 'Назначить' }).click();
@@ -3252,7 +3252,7 @@ test('передача дела (2.62): руководитель передаё�
   const row = hp.locator('#org-cases > li').first();
   await expect(row).toContainText('В работе · эксперт: Эксперт Заболевший');
   await row.locator('[data-transfer] summary').click();
-  await expect(row.locator('[data-transfer] select option')).toHaveText(['Эксперт Сменщик']);
+  await expect(row.locator('[data-transfer] select option')).toHaveText(['Эксперт Сменщик · сдать за 2 недели: 0']);
   await row.getByRole('button', { name: 'Передать дело' }).click();
   await expect(row.locator('[data-transfer] .msg')).toHaveText('Укажите причину');
   await row.getByLabel(/Причина передачи дела/).fill('Эксперт заболел на две недели');
@@ -3327,7 +3327,7 @@ test('переназначение до ответа (2.76): эксперт мо
   await expect(row.locator('[data-role="offer-wait"]')).toContainText('Эксперт ещё не ответил · предложено');
   await expect(row.locator('[data-role="offer-wait"]')).toContainText('(1 дн.)');
   await row.locator('[data-reassign] summary').click();
-  await expect(row.locator('[data-reassign] select option')).toHaveText(['Эксперт Быстрый']);
+  await expect(row.locator('[data-reassign] select option')).toHaveText(['Эксперт Быстрый · сдать за 2 недели: 0']);
   await row.locator('[data-reassign]').scrollIntoViewIfNeeded();
   await shot(hp, 'a1-rukovoditel-pereznachit-do-otveta');
   await row.getByRole('button', { name: 'Предложить другому' }).click();
@@ -4803,7 +4803,7 @@ test('как руководитель (2.67): организация, пригл
   await expect(pend).toHaveClass(/flash/);
   await expect(hp.locator('#org-cases-empty')).toBeHidden();
   const pick = pend.locator('select');
-  await pick.selectOption({ label: 'Экспертова Елена Евгеньевна · в работе 0' });
+  await pick.selectOption({ label: 'Экспертова Елена Евгеньевна · в работе 0 · сдать за 2 недели: 0' });
   // Список экспертов — во всю ширину карточки: имя не обрезано.
   const [pw, lw] = await Promise.all([pick.evaluate((x) => x.getBoundingClientRect().width), pend.evaluate((x) => x.getBoundingClientRect().width)]);
   expect(pw).toBeGreaterThan(lw - 2);
@@ -4867,7 +4867,7 @@ test('как руководитель (2.67): организация, пригл
   // 6. Передача дела другому эксперту.
   await hp.reload();
   await row.locator('[data-transfer] summary').click();
-  await expect(row.locator('[data-transfer] select option')).toHaveText(['Сменщиков Семён Сергеевич']);
+  await expect(row.locator('[data-transfer] select option')).toHaveText(['Сменщиков Семён Сергеевич · сдать за 2 недели: 0']);
   await row.getByLabel(/Причина передачи дела/).fill('Уходит в отпуск');
   await row.getByRole('button', { name: 'Передать дело' }).click();
   await expect(hp.locator('#org-cases-msg')).toHaveText('Дело передано — новый эксперт получил уведомление');
@@ -5649,7 +5649,7 @@ test('просьба передать дело коллеге (2.107): эксп�
   const row = hp.locator('#org-cases > li[data-case]').filter({ has: hp.locator('[data-handover]') });
   await expect(row).toHaveCount(1);
   await expect(row.locator('[data-handover]')).toContainText('Причина: Отпуск с 12 октября на две недели');
-  await expect(row.locator('select[data-handover-pick] option')).toHaveText(['Коллегин Пётр']);
+  await expect(row.locator('select[data-handover-pick] option')).toHaveText(['Коллегин Пётр · сдать за 2 недели: 0']);
   await expect(row.locator('details[data-transfer]')).toHaveCount(0);
   await expect(hp.locator('[data-filter="handover"]')).toHaveText('Просят передать · 1');
   await row.locator('[data-handover]').scrollIntoViewIfNeeded();
@@ -5749,4 +5749,72 @@ test('как эксперт и руководитель (2.110): просьба 
   await expect(bp.locator('#onsite-box')).not.toHaveClass(/folded/);
   await shot(bp, 'd3-sroki-vyezd-k-delu');
   for (const p of [ap, bp, hp]) await p.context().close();
+});
+
+// Нагрузка экспертов на две недели (2.111): руководитель видит полосу из 14 дней у каждого эксперта — сроки, выезды, дни
+// «не принимает дела»; «По дням» подробно, нажатие на дело открывает его в «Делах экспертов»; в выборе «кому передать» —
+// сколько у эксперта сдавать за две недели.
+test('нагрузка экспертов на две недели (2.111): у руководителя по дням, кому передать — видно по нагрузке', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const hp = await ctx(), ap = await ctx(), bp = await ctx(), cp = await ctx();
+  const customer = await signIn(cp, '+79990010151');
+  const head = await signIn(hp, '+79990010152'), busy = await signIn(ap, '+79990010153'), free = await signIn(bp, '+79990010154');
+  const { orgId, ids } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Нагрузка ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Занятова Анна' where id = $1", [busy.id]);
+    await c.query("update users set full_name = 'Свободнов Олег' where id = $1", [free.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member'), ($1, $4, 'member')", [org.id, head.id, busy.id, free.id]);
+    for (const u of [busy.id, free.id]) {
+      await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [u, org.id]);
+      await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [u]);
+    }
+    await c.query("update specialists set away_until = current_date + 3, away_note = 'отпуск' where user_id = $1", [free.id]);
+    const add = async (title, days) => (await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', $1, $2, $3, 'in_work', current_date + $4::int, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Нагрузочная ул., 5","area":"40"}') returning id`,
+      [title, customer.id, busy.id, days])).rows[0].id;
+    const ids = { a: await add('Нагрузка: первое', 2), b: await add('Нагрузка: второе', 2), c: await add('Нагрузка: третье', 6) };
+    for (const k of Object.keys(ids)) await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [ids[k], busy.id]);
+    await c.query(`insert into onsite_visits (order_id, helper_id, assigned_by, planned_at)
+      values ($1, $2, $3, ((current_date + 1) + time '10:30') at time zone 'Europe/Moscow')`, [ids.c, head.id, busy.id]);
+    return { orgId: org.id, ids };
+  });
+  const ref = (id) => `№ ${id.slice(0, 8).toUpperCase()}`;
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const box = hp.locator('#org-schedule-box');
+  await expect(box).toBeVisible();
+  const a = box.locator(`li[data-expert-schedule="${busy.id}"]`);
+  const b = box.locator(`li[data-expert-schedule="${free.id}"]`);
+  await expect(a.locator('.title')).toHaveText('Занятова Анна');
+  await expect(a.locator('[data-role="total"]')).toContainText('сдать за две недели: 3 · выездов: 1');
+  await expect(a.locator('.strip .cell')).toHaveCount(14);
+  await expect(a.locator('.strip .cell').nth(2)).toHaveClass(/heavy/);
+  await expect(a.locator('.strip .cell').nth(2).locator('.cnt')).toHaveText('2');
+  await expect(a.locator('.strip .cell').nth(1).locator('.cnt')).toHaveText('•');
+  await expect(b.locator('[data-away]')).toContainText('Не принимает новые дела до');
+  await expect(b.locator('.strip .cell.away')).toHaveCount(3);
+  await expect(b).toContainText('Две недели свободны');
+  await expect(b.locator('[data-role="total"]')).toHaveText(/^сдать за две недели: 0 · свободных будней: \d+$/);
+  // Названий заявок руководитель не видит.
+  await expect(box).not.toContainText('Нагрузка:');
+  await box.scrollIntoViewIfNeeded();
+  await shot(hp, 'g1-nagruzka-na-dve-nedeli');
+  await a.locator('details[data-days] summary').click();
+  await expect(a.locator('details[data-days] [data-schedule-item="visit"]')).toContainText(`10:30 · Выезд помощника: Оценка недвижимости · ${ref(ids.c)}`);
+  await expect(a.locator('details[data-days] [data-schedule-item="deadline"]')).toHaveCount(3);
+  await a.locator('details[data-days]').scrollIntoViewIfNeeded();
+  await shot(hp, 'g2-nagruzka-po-dnyam');
+  // Нажатие на дело — оно в «Делах экспертов»; в выборе «кому передать» — нагрузка коллеги.
+  await a.locator('details[data-days] [data-schedule-item="deadline"] button').filter({ hasText: ref(ids.c) }).click();
+  const row = hp.locator(`#org-cases > li[data-case="${ref(ids.c)}"]`);
+  await expect(row).toHaveClass(/flash/);
+  // Коллега вернулся из отпуска — в выборе «кому передать» видно, сколько ему сдавать за две недели.
+  await db((c) => c.query('update specialists set away_until = null, away_note = null where user_id = $1', [free.id]));
+  await hp.reload();
+  const row2 = hp.locator(`#org-cases > li[data-case="${ref(ids.c)}"]`);
+  await row2.locator('details[data-transfer] summary').click();
+  await expect(row2.locator('select[data-transfer-pick] option')).toHaveText(['Свободнов Олег · сдать за 2 недели: 0']);
+  await row2.locator('details[data-transfer]').scrollIntoViewIfNeeded();
+  await shot(hp, 'g3-komu-peredat-po-nagruzke');
+  for (const p of [hp, ap, bp, cp]) await p.context().close();
 });
