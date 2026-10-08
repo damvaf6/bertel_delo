@@ -46,7 +46,7 @@ function strip(x, days) {
 
 function expertItem(x, days) {
   const total = [`сдать за две недели: ${x.due}`, x.visits ? `выездов: ${x.visits}` : null,
-    `свободных будней: ${x.free_workdays}`].join(' · ');
+    `свободных будней: ${x.free_workdays}`].filter(Boolean).join(' · ');
   const busy = x.days.map((d, k) => ({ d, h: days[k] })).filter(({ d }) => d.items.length);
   return el('li', { 'data-expert-schedule': x.user_id },
     el('div', { class: 'title', text: x.full_name }),
@@ -55,16 +55,18 @@ function expertItem(x, days) {
     ...(x.away ? [el('div', { class: 'muted', 'data-away': '', text: `Не принимает новые дела до ${dayRu(x.away.until)}${x.away.note ? ` (${x.away.note})` : ''}` })]
       : x.paused ? [el('div', { class: 'muted', 'data-away': '', text: 'Не принимает новые дела — выключил приём' })] : []),
     strip(x, days),
-    ...(busy.length || x.overdue.length ? [el('details', { 'data-days': x.user_id },
-      el('summary', { text: 'По дням' }),
-      el('ol', { class: 'schedule' },
-        ...(x.overdue.length ? [el('li', { class: 'overdue-day' }, el('div', { class: 'day' }, el('span', { text: 'Срок уже прошёл' })),
-          el('ul', {}, ...x.overdue.map((i) => item(i, 'hot'))))] : []),
-        ...busy.map(({ d, h }) => el('li', { 'data-day': d.date, class: [h.today ? 'today' : '', h.weekend ? 'weekend' : ''].filter(Boolean).join(' ') },
-          el('div', { class: 'day' }, el('span', { text: `${h.today ? 'Сегодня, ' : ''}${h.weekday}, ${short(h.date)}` }),
-            el('span', { class: 'muted', text: d.away ? 'не принимает дела' : '' })),
-          el('ul', {}, ...d.items.map((i) => item(i))))))),
-    )] : [el('div', { class: 'muted', text: 'Две недели свободны — сроков и выездов нет.' })]));
+    ...(busy.length || x.overdue.length ? [daysDetails(x, busy)] : [el('div', { class: 'muted', text: 'Две недели свободны — сроков и выездов нет.' })]));
+}
+
+// «По дням»: сначала то, у чего срок уже прошёл, потом дни, где есть сроки или выезды.
+function daysDetails(x, busy) {
+  const late = x.overdue.length ? [el('li', { class: 'overdue-day' }, el('div', { class: 'day' }, el('span', { text: 'Срок уже прошёл' })),
+    el('ul', {}, ...x.overdue.map((i) => item(i, 'hot'))))] : [];
+  const rows = busy.map(({ d, h }) => el('li', { 'data-day': d.date, class: [h.today ? 'today' : '', h.weekend ? 'weekend' : ''].filter(Boolean).join(' ') },
+    el('div', { class: 'day' }, el('span', { text: `${h.today ? 'Сегодня, ' : ''}${h.weekday}, ${short(h.date)}` }),
+      el('span', { class: 'muted', text: d.away ? 'не принимает дела' : '' })),
+    el('ul', {}, ...d.items.map((i) => item(i)))));
+  return el('details', { 'data-days': x.user_id }, el('summary', { text: 'По дням' }), el('ol', { class: 'schedule' }, ...late, ...rows));
 }
 
 let seq = 0;
