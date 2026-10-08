@@ -7,7 +7,8 @@
 // эксперту и ждут исправления, дела, которые диспетчер предложил организации, сроки документов досье экспертов (2.63),
 // «горящие» (2.98): срок через 1–2 дня или прошёл, а у эксперта нет ни черновика, ни файла результата или нет фото осмотра.
 // Эксперту — очередь подписи (2.99): он подписал, организация ещё нет; руководителю в «Ждут подписи» — когда эксперт напоминал.
-// Руководителю — просьбы экспертов передать дело коллеге (2.107).
+// Руководителю — просьбы экспертов передать дело коллеге (2.107); эксперт отметил «не принимаю дела до …», а у него дела
+// со сроком в эти дни (2.113) — передать коллеге.
 // Руководителю — те же сведения, что в «Делах экспертов» (2.16): без заказчика, полей заявки, документов и переписки.
 // Только свои дела и свои организации.
 import { orderRef } from '../notify/registry.mjs';
@@ -101,12 +102,18 @@ async function expertPart(sql, actor, registry, today) {
   };
 }
 
+// Срок дела приходится на дни, когда эксперт не принимает дела (2.113): отметка ещё действует, срок раньше дня возвращения.
+export function awayDeadline(o, today) {
+  return !!o.away_until && o.away_until > today && !!o.deadline && o.deadline < o.away_until;
+}
+
 async function orgPart(sql, org, registry, today) {
   const soon = addDays(today, HOT_DAYS);
   const service = (o) => registry.service(o.module, o.service)?.service.name ?? o.service;
   // Дела экспертов организации (выбрали её в профиле специалиста и состоят в ней) — как в «Делах экспертов».
   const cases = await sql`
-    select o.id, o.module, o.service, o.status, o.deadline, o.executor_user_id, u.full_name as expert
+    select o.id, o.module, o.service, o.status, o.deadline, o.executor_user_id, u.full_name as expert,
+           to_char(s.away_until, 'YYYY-MM-DD') as away_until, s.away_note
     from orders o join specialists s on s.user_id = o.executor_user_id and s.org_id = ${org.id}
     join org_members m on m.org_id = s.org_id and m.user_id = s.user_id join users u on u.id = o.executor_user_id
     where o.status in ('awaiting_executor', 'in_work', 'review') order by o.deadline nulls last, o.id limit ${LIMIT}`;
@@ -120,6 +127,10 @@ async function orgPart(sql, org, registry, today) {
   const handovers = await openHandovers(sql, cases);
   const handover = cases.filter((o) => handovers.has(o.id))
     .map((o) => view(o, { reason: handovers.get(o.id).reason, requested_at: handovers.get(o.id).requested_at }));
+  // Эксперт не принимает дела до … (2.113): его дела в работе со сроком раньше дня возвращения — в отпуске он их не сдаст.
+  // Уже попросил передать сам — такие дела только в «просит передать».
+  const away = cases.filter((o) => o.status === 'in_work' && !handovers.has(o.id) && awayDeadline(o, today))
+    .map((o) => view(o, { away_until: o.away_until, away_note: o.away_note ?? null, extend: ext.get(o.id) ?? null }));
   const toSign = [];
   const returned = [];
   const atRisk = [];
@@ -169,6 +180,7 @@ async function orgPart(sql, org, registry, today) {
       .map((o) => view(o, { extend: ext.get(o.id) ?? null })),
     at_risk: atRisk,
     handover,
+    away,
     to_sign: toSign,
     returned,
     pending: offered.map((o) => view(o)),

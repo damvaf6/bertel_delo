@@ -238,6 +238,9 @@ export function orgOps() {
           expert_id: o.executor_user_id,
           fee_kop: feeOf(o),
           payout: o.payout_status ?? null,
+          // Срок дела в работе — в дни, когда эксперт не принимает дела (2.113): руководитель передаёт его коллеге.
+          away: o.status === 'in_work' && o.deadline && awayOf(byId.get(o.executor_user_id), today)?.until > o.deadline
+            ? awayOf(byId.get(o.executor_user_id), today) : null,
         }));
         const load = experts.map((e) => ({
           user_id: e.user_id,

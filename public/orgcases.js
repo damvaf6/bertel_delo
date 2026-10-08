@@ -136,6 +136,9 @@ function caseItem(org, c) {
     // Эксперт попросил перенести срок (2.100): решает диспетчер, руководитель видит новую дату.
     ...(c.extend ? [el('div', { class: 'muted', 'data-role': 'extend',
       text: `Эксперт просит перенести срок на ${dayRu(c.extend.new_deadline)} — ждёт ответа диспетчера` })] : []),
+    // Эксперт не принимает дела до … (2.113), а срок дела — в эти дни: «Передать другому эксперту» сразу открыто.
+    ...(c.away && !c.handover ? [el('div', { class: 'notice-warn', 'data-role': 'away',
+      text: `Эксперт не принимает дела до ${dayRu(c.away.until)}${c.away.note ? ` (${c.away.note})` : ''}, а срок дела — в эти дни. Передайте его коллеге.` })] : []),
     ...(c.handover && c.status === 'in_work' ? [handoverBlock(org, c)] : []),
     ...(c.status === 'in_work' && !c.handover ? [transferDetails(org, c)] : []),
     ...(c.offer_wait ? offerWait(org, c) : []),
@@ -156,6 +159,11 @@ export function focusOrgCase({ ref, to }) {
     || document.querySelector(`#org-cases li[data-case="${r}"]`);
   if (!li) return;
   if (to === 'chat') li.querySelector('details[data-chat]')?.setAttribute('open', '');
+  // Из «Сегодня» (2.113): эксперт не принимает дела — сразу к выбору, кому передать.
+  if (to === 'transfer') {
+    li.querySelector('details[data-transfer]')?.setAttribute('open', '');
+    li.querySelector('select[data-transfer-pick]')?.focus({ preventScroll: true });
+  }
   if (to === 'handover') li.querySelector('[data-handover]')?.querySelector('select, button')?.focus({ preventScroll: true });
   li.scrollIntoView({ block: 'start' });
   li.classList.add('flash');
@@ -170,7 +178,9 @@ function transferDetails(org, c) {
     const pick = el('select', { 'aria-label': `Кому передать дело ${c.order_ref}`, 'data-transfer-pick': c.order_ref },
       ...c.transfer_to.map((x) => el('option', { value: x.user_id, text: pickText(x) })));
     const reason = el('input', { type: 'text', maxlength: '1000', placeholder: 'Причина: заболел, ушёл из организации…',
-      'aria-label': `Причина передачи дела ${c.order_ref}`, 'data-transfer-reason': c.order_ref });
+      'aria-label': `Причина передачи дела ${c.order_ref}`, 'data-transfer-reason': c.order_ref,
+      // Эксперт не принимает дела (2.113) — причина уже подставлена, руководитель может поправить.
+      ...(c.away ? { value: `Эксперт не принимает дела до ${dayRu(c.away.until)}${c.away.note ? `: ${c.away.note}` : ''}`.slice(0, 1000) } : {}) });
     const go = async () => {
       if (!reason.value.trim()) return say(msg, 'Укажите причину');
       try {
@@ -183,7 +193,7 @@ function transferDetails(org, c) {
       el('p', { class: 'muted', text: 'Файлы, черновик, фото осмотра и переписка останутся в деле. Прежний эксперт дело больше не увидит; его ссылка на осмотр и выезд помощника закроются — новый эксперт выдаст новые.' }),
       el('button', { 'data-action': 'transfer', onclick: go }, 'Передать дело')];
   })() : [el('p', { class: 'muted', text: 'Передать некому: в организации нет другого эксперта с допуском на эту услугу, который принимает дела.' })];
-  return el('details', { class: 'org-transfer', 'data-transfer': c.order_ref },
+  return el('details', { class: 'org-transfer', 'data-transfer': c.order_ref, ...(c.away ? { open: '' } : {}) },
     el('summary', { text: 'Передать другому эксперту' }), ...body, msg);
 }
 

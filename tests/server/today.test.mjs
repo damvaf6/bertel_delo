@@ -261,3 +261,35 @@ test('стыки пачки (2.100): руководитель видит про�
   assert.equal((await spec.req('POST', `/api/orders/${o.id}/sign-reminder`)).status, 201);
   assert.ok((await signing()).reminded_at);
 });
+
+test('эксперт не принимает дела (2.113): руководителю в «Сегодня» — его дела со сроком в эти дни, в «Делах экспертов» передать', async () => {
+  const inside = await offered('Срок в отпуске', 3);
+  assert.equal((await step(spec, inside, 'in_work')).status, 200);
+  const after = await offered('Срок после отпуска', 12);
+  assert.equal((await step(spec, after, 'in_work')).status, 200);
+  const asked = await offered('Сам просит передать', 4);
+  assert.equal((await step(spec, asked, 'in_work')).status, 200);
+  assert.equal((await spec.req('POST', `/api/orders/${asked.id}/handover`, { reason: 'Отпуск' })).status, 201);
+  const ref = (o) => `№ ${o.id.slice(0, 8).toUpperCase()}`;
+  const away = async () => (await head.req('GET', '/api/today')).body.orgs[0].away;
+  assert.deepEqual(await away(), [], 'отметки нет — и списка нет');
+  const until = addDays(todayMsk(), 10);
+  assert.equal((await spec.req('PATCH', '/api/specialist/me', { away: { until, note: 'отпуск' } })).status, 200);
+  // В файле есть и другие дела эксперта в работе — смотрим на свои три.
+  const list = (await away()).filter((x) => [inside, after, asked].map(ref).includes(x.order_ref));
+  assert.deepEqual(list.map((x) => x.order_ref), [ref(inside)], 'срок после возвращения и уже просит передать — не здесь');
+  assert.equal(list[0].away_until, until);
+  assert.equal(list[0].away_note, 'отпуск');
+  assert.equal(list[0].expert, 'Эксперт Сегодняшний');
+  const text = JSON.stringify(list);
+  for (const secret of ['Срок в отпуске', inside.id]) assert.ok(!text.includes(secret), `руководитель не видит: ${secret}`);
+  // В «Делах экспертов» у дела — отметка, передать есть кому не обязательно; у дела после отпуска — нет.
+  const cases = (await head.req('GET', `/api/orgs/${org.id}/cases`)).body.cases;
+  assert.deepEqual(cases.find((c) => c.id === inside.id).away, { until, note: 'отпуск' });
+  assert.equal(cases.find((c) => c.id === after.id).away, null);
+  // Эксперту и чужим — не видно; отметку сняли — список пуст.
+  assert.deepEqual((await spec.req('GET', '/api/today')).body.orgs, []);
+  assert.deepEqual((await other.req('GET', '/api/today')).body.orgs, []);
+  assert.equal((await spec.req('PATCH', '/api/specialist/me', { away: null })).status, 200);
+  assert.deepEqual(await away(), []);
+});

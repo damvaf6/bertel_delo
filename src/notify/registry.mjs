@@ -71,7 +71,7 @@ export const EVENTS = {
   dossier_expired: { type: 'executor_work', title: 'Истёк срок документа в досье — обновите его в разделе «Специалист»', order: false, section: 'specialist' },
   // Руководителю организации эксперта (2.63): сроки документов досье его экспертов; сами копии руководитель не видит.
   // Руководителю организации эксперта (2.77): эксперт отметил «не принимаю новые дела до …» — до какого дня, видно в «Нагрузке».
-  expert_away_head: { type: 'org_cases', title: 'Эксперт Вашей организации не принимает новые дела до указанного дня — видно в «Делах экспертов»', order: false, section: 'orgs' },
+  expert_away_head: { type: 'org_cases', title: 'Эксперт Вашей организации не принимает новые дела до указанного дня — его дела со сроком в эти дни видны в «Сегодня»', order: false, section: 'orgs' },
   dossier_month_head: { type: 'org_cases', title: 'У эксперта Вашей организации через 30 дней кончается срок документа в досье', order: false, section: 'orgs' },
   dossier_week_head: { type: 'org_cases', title: 'У эксперта Вашей организации через 7 дней кончается срок документа в досье', order: false, section: 'orgs' },
   dossier_expired_head: { type: 'org_cases', title: 'У эксперта Вашей организации истёк документ в досье — по оценке он снят с подбора', order: false, section: 'orgs' },
