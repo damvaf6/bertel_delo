@@ -1,6 +1,6 @@
 // «Мои сроки на две недели» в разделе «Специалист» (2.109): по дням — сроки своих дел, выезды помощника, до какого дня
 // действует ссылка на осмотр, на какой день эксперт просил перенести срок. Подряд идущие пустые дни — одной строкой
-// «свободно». Нажатие на строку открывает дело на нужном блоке.
+// «свободно». Нажатие на строку открывает дело на нужном блоке. Свои напоминания по заметкам (2.120) — открывают заметки.
 import { api, el, say } from '/common.js';
 import { dayRu } from '/order.js';
 
@@ -28,6 +28,10 @@ function item(i, index) {
     return link(order('deadline'), `Просите перенести сюда срок: ${i.title}`, `сейчас срок ${short(i.deadline)} · ждёт ответа диспетчера`, 'wait');
   }
   if (i.kind === 'visit') return link(order('onsite'), `${i.time} · Выезд помощника: ${i.title}`, i.service);
+  if (i.kind === 'note') {
+    return link(order('notes'), `Напоминание по заметке: ${i.title}`,
+      [i.note, i.late ? `напомнить было ${short(i.remind_on)}, не отмечено «Сделано»` : null].filter(Boolean).join(' · '));
+  }
   if (i.kind === 'my_visit') return link(`/osmotr?visit=${encodeURIComponent(i.visit_id)}`, `${i.time} · Мой выезд на объект`, i.service);
   return link(order('inspect'), `до ${i.time} · Ссылка на осмотр перестанет действовать: ${i.title}`,
     i.has_photos ? 'фото уже есть, владелец не нажал «Готово»' : 'фото ещё нет — напомните владельцу');

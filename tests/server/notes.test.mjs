@@ -123,3 +123,27 @@ test('закрытое дело — заметки только для чтен�
   assert.deepEqual([v.available, v.can_write, v.notes.length], [true, false, 50]);
   assert.equal((await spec.req('DELETE', `${base}/${v.notes[0].id}`)).body.error, 'status_changed');
 });
+
+// 2.120: напоминания по заметкам видны в «Моих сроках на две недели» — в свой день; не отмеченные «сделано» с прошлых дней —
+// на сегодня; руководителю в нагрузке экспертов их нет, после передачи дела — ни прежнему, ни новому.
+test('напоминания по заметкам — в «Моих сроках» по дням; «сделано» и передача дела убирают', async () => {
+  const o = await inWork('Заметка в сроках');
+  const base = `/api/orders/${o.id}/notes`;
+  const a = (await spec.req('POST', base, { body: 'Уточнить этаж', remind_on: addDays(today, 3) })).body.notes[0];
+  await spec.req('POST', base, { body: 'Без даты' });
+  await spec.req('POST', base, { body: 'Через месяц', remind_on: addDays(today, 30) });
+  const late = (await spec.req('POST', base, { body: 'Просрочено', remind_on: today })).body.notes.find((n) => n.body === 'Просрочено');
+  await S.sql`update order_notes set remind_on = ${addDays(today, -2)}::date where id = ${late.id}`;
+  const notesOf = async (c) => (await c.req('GET', '/api/specialist/me/schedule')).body.schedule.days
+    .flatMap((d) => d.items.filter((i) => i.kind === 'note' && i.order_id === o.id).map((i) => [d.date, i.note, i.late]));
+  assert.deepEqual(await notesOf(spec), [[today, 'Просрочено', true], [addDays(today, 3), 'Уточнить этаж', false]]);
+  // Руководитель в нагрузке экспертов заметок не видит.
+  const load = (await head.req('GET', `/api/orgs/${org.id}/schedule`)).body;
+  assert.ok(!JSON.stringify(load).includes('Уточнить этаж'), 'заметки не видны руководителю');
+  assert.equal((await spec.req('PATCH', `${base}/${a.id}`, { done: true })).status, 200);
+  assert.deepEqual(await notesOf(spec), [[today, 'Просрочено', true]]);
+  const t = await head.req('POST', `/api/orgs/${org.id}/cases/${o.id}/transfer`, { specialist_id: colleague.user.id, reason: 'Отпуск' });
+  assert.equal(t.status, 200, JSON.stringify(t.body));
+  assert.deepEqual(await notesOf(spec), []);
+  assert.deepEqual(await notesOf(colleague), []);
+});
