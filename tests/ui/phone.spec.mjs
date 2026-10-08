@@ -6246,3 +6246,49 @@ test('утренняя сводка руководителю «На сегодн
   await expect(hp.locator('#org-title')).toHaveText('ООО «Утренняя организация»');
   await shot(hp, 'h14-rukovoditel-svodka-organizaciya');
 });
+
+test('«Напомнить эксперту» (2.125): руководитель напоминает о деле одной кнопкой, раз в сутки; эксперт открывает дело из уведомления', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), ep = await ctx(), hp = await ctx();
+  const customer = await signIn(cp, '+79990010261');
+  const expert = await signIn(ep, '+79990010262'), head = await signIn(hp, '+79990010263');
+  const { orgId, id } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Напоминание ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Неспешнов Игорь' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Напоминание: квартира', $1, $2, 'in_work', current_date + 2, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Напоминальная ул., 5","area":"40"}') returning id`,
+      [customer.id, expert.id]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [o.id, expert.id]);
+    return { orgId: org.id, id: o.id };
+  });
+  const ref = `№ ${id.slice(0, 8).toUpperCase()}`;
+
+  // Руководитель: в деле эксперта — «Напомнить эксперту»; нажал — сообщение, кнопка недоступна до завтра, видно когда.
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const row = hp.locator(`#org-cases > li[data-case="${ref}"]`);
+  const btn = row.locator('[data-action="remind-expert"]');
+  await expect(btn).toBeEnabled();
+  await expect(row.locator('[data-role="remind-note"]')).toHaveText('');
+  await btn.click();
+  await expect(hp.locator('#org-cases-msg')).toHaveText(`Эксперту отправлено напоминание по делу ${ref}`);
+  const row2 = hp.locator(`#org-cases > li[data-case="${ref}"]`);
+  await expect(row2.locator('[data-action="remind-expert"]')).toBeDisabled();
+  await expect(row2.locator('[data-role="remind-note"]')).toContainText('Напоминали');
+  await expect(row2.locator('[data-role="remind-note"]')).toContainText('снова — после');
+  await row2.scrollIntoViewIfNeeded();
+  await shot(hp, 'h15-rukovoditel-napomnit-ekspertu');
+
+  // Эксперт: уведомление в ленте; нажатие открывает дело.
+  await ep.goto('/kabinet');
+  await expect(ep.locator('#notify-count')).toHaveText('1');
+  await ep.getByRole('link', { name: /Уведомления/ }).click();
+  const n = ep.locator('#notifications li').first();
+  await expect(n).toContainText('Руководитель организации напоминает о деле');
+  await shot(ep, 'h16-ekspert-napominanie-rukovoditelya');
+  await n.getByRole('button').first().click();
+  await expect(ep.locator('#order-title')).toHaveText('Напоминание: квартира');
+});
