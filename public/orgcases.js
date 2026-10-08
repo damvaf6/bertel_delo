@@ -7,6 +7,7 @@
 // Отбор одной кнопкой (2.102): горит, ждёт моей подписи, вернул эксперту, просят перенести срок, предложено и молчит —
 // с числом дел; работает вместе с поиском.
 // Эксперт просит передать дело коллеге (2.107): причина и выбор, кому, — «Передать» одной кнопкой или «Отказать».
+// «Напомнить эксперту» о деле в работе (2.125) — одной кнопкой, раз в сутки.
 // «Ждут назначения» (2.17): дела, предложенные диспетчером организации, — руководитель назначает эксперта или отказывается.
 import { api, el, say } from '/common.js';
 import { expertLink } from '/expertcard.js';
@@ -139,6 +140,7 @@ function caseItem(org, c) {
     // Эксперт не принимает дела до … (2.113), а срок дела — в эти дни: «Передать другому эксперту» сразу открыто.
     ...(c.away && !c.handover ? [el('div', { class: 'notice-warn', 'data-role': 'away',
       text: `Эксперт не принимает дела до ${dayRu(c.away.until)}${c.away.note ? ` (${c.away.note})` : ''}, а срок дела — в эти дни. Передайте его коллеге.` })] : []),
+    ...(c.remind ? [remindRow(org, c)] : []),
     ...(c.handover && c.status === 'in_work' ? [handoverBlock(org, c)] : []),
     ...(c.status === 'in_work' && !c.handover ? [transferDetails(org, c)] : []),
     ...(c.offer_wait ? offerWait(org, c) : []),
@@ -168,6 +170,24 @@ export function focusOrgCase({ ref, to }) {
   li.scrollIntoView({ block: 'start' });
   li.classList.add('flash');
   setTimeout(() => li.classList.remove('flash'), 2000);
+}
+
+// «Напомнить эксперту» (2.125): дело в работе — одной кнопкой, не чаще раза в сутки по делу; эксперт получит уведомление,
+// которое ведёт к делу. Когда напоминали — видно здесь же.
+function remindRow(org, c) {
+  const r = c.remind;
+  const note = el('span', { class: 'muted', 'data-role': 'remind-note', text: r.reminded_at
+    ? `Напоминали ${timeRu(r.reminded_at)}${r.next_remind_at ? ` · снова — после ${timeRu(r.next_remind_at)}` : ''}` : '' });
+  const btn = el('button', { type: 'button', class: 'secondary', 'data-action': 'remind-expert', ...(r.can_remind ? {} : { disabled: '' }),
+    onclick: async () => {
+      btn.disabled = true;
+      try {
+        await api('POST', `/api/orgs/${org.id}/cases/${c.id}/remind`);
+        await loadOrgCases(org);
+        say($('org-cases-msg'), `Эксперту отправлено напоминание по делу ${c.order_ref}`, 'ok');
+      } catch (err) { say($('org-cases-msg'), err.message); await loadOrgCases(org); }
+    } }, 'Напомнить эксперту');
+  return el('div', { class: 'row', 'data-role': 'remind' }, btn, note);
 }
 
 // Передать дело в работе другому эксперту организации (2.62): заболел, ушёл. Файлы, черновик, осмотр и переписка

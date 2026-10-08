@@ -30,6 +30,21 @@ const CASES_LIMIT = 200;
 const ORG_CHAT_MAX = 4000;
 const ORG_CHAT_OPEN = [...CASES_ACTIVE, 'done'];
 
+// Руководитель напоминает эксперту о деле в работе (2.125), как эксперт руководителю о подписи (2.99): не чаще раза в сутки
+// по делу. Считаются напоминания только нынешнему эксперту — после передачи дела прежние не в счёт.
+export const CASE_REMIND_EVERY_HOURS = 24;
+export async function caseRemind(sql, order) {
+  const last = await sql.one`select max(created_at) as at, count(*)::int as n from case_reminders
+                             where order_id = ${order.id} and expert_id = ${order.executor_user_id}`;
+  const next = last?.at ? new Date(new Date(last.at).getTime() + CASE_REMIND_EVERY_HOURS * 3600_000) : null;
+  return {
+    reminded_at: last?.at ?? null,
+    reminders: last?.n ?? 0,
+    can_remind: !next || next <= new Date(),
+    next_remind_at: next && next > new Date() ? next : null,
+  };
+}
+
 // Кому руководитель может передать дело в работе (2.62): эксперты организации, которым дело можно отдать (допуск, «принимаю
 // дела», досье в порядке, работают от организации), кроме нынешнего исполнителя; с нагрузкой.
 async function transferTargets(sql, order, orgId, registry) {
@@ -215,8 +230,12 @@ export function orgOps() {
         const ext = await openExtends(sql, rows.filter((o) => CASES_ACTIVE.includes(o.status)).map((o) => o.id));
         // Эксперт просит передать дело коллеге (2.107): причина — руководителю, передать или отказать.
         const handovers = await openHandovers(sql, rows);
+        // «Напомнить эксперту» (2.125): когда напоминали и можно ли снова — по делам в работе.
+        const reminds = new Map();
+        for (const o of rows.filter((x) => x.status === 'in_work')) reminds.set(o.id, await caseRemind(sql, o));
         const cases = rows.map((o) => ({
           ...(waits.get(o.id) ?? { sign_wait: 0, returned_open: false }),
+          remind: reminds.get(o.id) ?? null,
           extend: ext.get(o.id) ?? null,
           handover: handovers.get(o.id) ?? null,
           transfer_to: transfer.get(o.id) ?? [],
@@ -506,6 +525,29 @@ export function orgOps() {
           await notify(tx, 'org_case_taken', { users: [prev], actor });
         });
         return { ok: true };
+      },
+    },
+    {
+      // Руководитель напоминает эксперту о деле в работе (2.125): одной кнопкой, не чаще раза в сутки по делу. Эксперту —
+      // уведомление, ведёт к делу; без текста — что нужно, руководитель пишет во внутренней переписке (2.28).
+      id: 'orgs.cases.remind', method: 'POST', path: '/api/orgs/:id/cases/:orderId/remind', auth: 'user',
+      access: { resource: 'org', param: 'id', need: 'manage' },
+      async handler({ sql, actor, org, params, res }) {
+        const orderId = uuidFrom(params.orderId, 'Дело не найдено');
+        const remind = await sql.tx(async (tx) => {
+          const cur = await tx.one`select * from orders where id = ${orderId} for update`;
+          // Дело чужой организации (или без эксперта от этой) — «не найдено», как и в «Делах экспертов».
+          if (!cur?.executor_user_id || (await executorSignOrg(tx, cur.executor_user_id))?.id !== org.id) throw new HttpError(404, 'not_found', 'Дело не найдено');
+          if (cur.status !== 'in_work') throw new HttpError(409, 'status_changed', 'Напомнить можно, пока дело в работе — обновите страницу');
+          if (cur.executor_user_id === actor.id) throw new HttpError(409, 'own_case', 'Это Ваше дело — напоминать некому');
+          if (!(await caseRemind(tx, cur)).can_remind) throw new HttpError(409, 'too_often', 'Напомнить можно раз в сутки — эксперт уже получил напоминание');
+          await tx`insert into case_reminders (order_id, org_id, user_id, expert_id) values (${cur.id}, ${org.id}, ${actor.id}, ${cur.executor_user_id})`;
+          await notify(tx, 'org_case_reminder', { users: [cur.executor_user_id], orderId: cur.id, actor });
+          await audit(tx, actor, 'org.case.remind', 'order', cur.id, { org: org.id, expert: cur.executor_user_id });
+          return caseRemind(tx, cur);
+        });
+        res.status(201);
+        return { remind };
       },
     },
     {
