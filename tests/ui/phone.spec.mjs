@@ -5846,3 +5846,64 @@ test('нагрузка экспертов на две недели (2.111): у �
   await shot(hp, 'g3-komu-peredat-po-nagruzke');
   for (const p of [hp, ap, bp, cp]) await p.context().close();
 });
+
+test('эксперт не принимает дела (2.113): руководителю в «Сегодня» — его дела со сроком в эти дни, «Передать» сразу открыто', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), hp = await ctx(), kp = await ctx();
+  const customer = await signIn(cp, '+79990010161');
+  const expert = await signIn(await ctx(), '+79990010162'), head = await signIn(hp, '+79990010163'), colleague = await signIn(kp, '+79990010164');
+  const { orgId, ids } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Отпуск ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Отдыхаева Анна' where id = $1", [expert.id]);
+    await c.query("update users set full_name = 'Дежурнов Олег' where id = $1", [colleague.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member'), ($1, $4, 'member')", [org.id, head.id, expert.id, colleague.id]);
+    for (const u of [expert.id, colleague.id]) {
+      await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [u, org.id]);
+      await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [u]);
+    }
+    await c.query("update specialists set away_until = current_date + 10, away_note = 'отпуск' where user_id = $1", [expert.id]);
+    const add = async (title, days) => (await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', $1, $2, $3, 'in_work', current_date + $4::int, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Отпускная ул., 5","area":"40"}') returning id`,
+      [title, customer.id, expert.id, days])).rows[0].id;
+    const ids = { inside: await add('Отпуск: срок внутри', 4), later: await add('Отпуск: срок после', 15) };
+    for (const k of ['inside', 'later']) await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [ids[k], expert.id]);
+    return { orgId: org.id, ids };
+  });
+  const ref = (id) => `№ ${id.slice(0, 8).toUpperCase()}`;
+
+  // Руководитель: в «Сегодня» — только дело со сроком в дни отпуска, до какого дня и почему; без названия заявки.
+  await hp.goto('/kabinet');
+  const t = hp.locator(`li[data-today-item="org-away-${orgId}"]`);
+  await expect(t).toHaveCount(1);
+  await expect(t).toContainText(ref(ids.inside));
+  await expect(t).toContainText('Отдыхаева Анна');
+  await expect(t).toContainText('не принимает дела до');
+  await expect(t).toContainText('отпуск · передайте коллеге');
+  await expect(hp.locator(`li[data-today="org-away-${orgId}"]`)).toHaveText('Эксперт не принимает дела — срок в эти дни · 1');
+  await expect(hp.locator('#today-box')).not.toContainText('Отпуск: срок внутри');
+  await t.scrollIntoViewIfNeeded();
+  await shot(hp, 'h1-rukovoditel-segodnya-ekspert-v-otpuske');
+
+  // Нажал — дело в «Делах экспертов»: пометка, «Передать другому эксперту» уже открыто, причина подставлена.
+  await t.locator('button').click();
+  const row = hp.locator(`#org-cases > li[data-case="${ref(ids.inside)}"]`);
+  await expect(row.locator('[data-role="away"]')).toContainText('Эксперт не принимает дела до');
+  await expect(row.locator('details[data-transfer]')).toHaveAttribute('open', '');
+  await expect(row.locator('[data-transfer-reason]')).toHaveValue(/^Эксперт не принимает дела до .+: отпуск$/);
+  await expect(row.locator('select[data-transfer-pick] option')).toHaveText(['Дежурнов Олег · сдать за 2 недели: 0']);
+  // У дела со сроком после возвращения — ни пометки, ни открытой передачи.
+  const later = hp.locator(`#org-cases > li[data-case="${ref(ids.later)}"]`);
+  await expect(later.locator('[data-role="away"]')).toHaveCount(0);
+  await expect(later.locator('details[data-transfer]')).not.toHaveAttribute('open', '');
+  await row.locator('details[data-transfer]').scrollIntoViewIfNeeded();
+  await shot(hp, 'h2-rukovoditel-peredat-delo-otpusk');
+  await row.locator('[data-action="transfer"]').click();
+  await expect(hp.locator('#org-cases-msg')).toContainText('Дело передано');
+  // Дело у коллеги; в «Сегодня» руководителя строки больше нет.
+  await kp.goto(`/kabinet#order=${ids.inside}`);
+  await expect(kp.locator('#order-title')).toHaveText('Отпуск: срок внутри');
+  await hp.goto('/kabinet');
+  await expect(hp.locator('#today-box')).toBeVisible();
+  await expect(hp.locator(`li[data-today-item="org-away-${orgId}"]`)).toHaveCount(0);
+});
