@@ -865,6 +865,18 @@
         </div>
         <p class="msg" id="specialist-msg" role="status" aria-live="polite"></p>
       </div>
+      <div class="card" id="schedule-box">
+        <h2>Мои сроки на две недели</h2>
+        <p class="muted">По дням: когда сдавать дела, когда выезд помощника на объект, до какого дня действует ссылка на осмотр
+          и на какой день Вы просили перенести срок. Нажмите на строку — откроется дело.</p>
+        <p class="muted hidden" id="schedule-away"></p>
+        <div class="hidden" id="schedule-overdue-box">
+          <h3 class="overdue">Срок уже прошёл</h3>
+          <ul class="schedule" id="schedule-overdue"></ul>
+        </div>
+        <ol class="schedule" id="schedule-days"></ol>
+        <p class="msg" id="schedule-msg" role="status" aria-live="polite"></p>
+      </div>
       <div class="card" id="my-report-box">
         <h2>Мои итоги за месяц</h2>
         <p class="muted">Сколько дел Вы сдали, из них в срок, сколько раз работу возвращали, сколько Вам причитается за сданные

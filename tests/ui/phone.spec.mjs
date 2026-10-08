@@ -5201,6 +5201,56 @@ test('мои итоги за месяц (2.92): эксперт в профиле
   await expect(page).toHaveURL(new RegExp(`#order=${ids.late}`));
 });
 
+test('мои сроки на две недели (2.109): по дням — сроки, выезд помощника, ссылка на осмотр, просьба о переносе; строка ведёт в дело', async ({ page }) => {
+  const expert = await signIn(page, '+79990009352');
+  const ru = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+  await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    const mk = async (title, status, day) => (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, price_kop, paid_at, deadline)
+      values ($1, $2, 'expertise', 'realty', $3, $1, 1500000, now(), $4::date) returning id`, [expert.id, title, status, day])).rows[0].id;
+    const soon = await mk('Квартира на Садовой: сроки', 'in_work', inDays(1));
+    await mk('Гараж в Мытищах: сроки', 'review', inDays(4));
+    const late = await mk('Дача в Рузе: сроки', 'in_work', inDays(-1));
+    await c.query(`insert into deadline_requests (order_id, requested_by, old_deadline, new_deadline, reason) values ($1, $2, $3::date, $4::date, 'Ждём выписку ЕГРН')`,
+      [soon, expert.id, inDays(1), inDays(5)]);
+    await c.query(`insert into onsite_visits (order_id, helper_id, assigned_by, planned_at) values ($1, $2, $2, ($3::date + time '11:00') at time zone 'Europe/Moscow')`,
+      [soon, expert.id, inDays(1)]);
+    await c.query(`insert into inspection_links (order_id, created_by, token_hash, expires_at) values ($1, $2, $3, ($4::date + time '18:00') at time zone 'Europe/Moscow')`,
+      [late, expert.id, `ui-sched-${late}`, inDays(2)]);
+  });
+  await page.goto('/kabinet#specialist');
+  const box = page.locator('#schedule-box');
+  await expect(box.getByRole('heading', { name: 'Мои сроки на две недели' })).toBeVisible();
+  await expect(box.locator('#schedule-overdue-box')).toBeVisible();
+  await expect(box.locator('#schedule-overdue li')).toHaveCount(1);
+  await expect(box.locator('#schedule-overdue li')).toContainText('Сдать: Дача в Рузе: сроки');
+  await expect(box.locator('#schedule-overdue li')).toContainText(`срок был ${ru(inDays(-1))}`);
+  const day = (n) => box.locator(`#schedule-days > li[data-day="${inDays(n)}"]`);
+  await expect(day(0)).toContainText('Сегодня');
+  await expect(day(0)).toContainText('свободно');
+  await expect(day(1).locator('[data-schedule-item]')).toHaveCount(2);
+  await expect(day(1).locator('[data-schedule-item]').nth(0)).toContainText('11:00 · Выезд помощника: Квартира на Садовой: сроки');
+  await expect(day(1).locator('[data-schedule-item]').nth(1)).toContainText(`просите перенести на ${ru(inDays(5))} — ждёт ответа`);
+  await expect(day(1).locator('a.hot')).toHaveCount(1);
+  await expect(day(2)).toContainText('до 18:00 · Ссылка на осмотр перестанет действовать: Дача в Рузе: сроки');
+  await expect(day(2)).toContainText('фото ещё нет');
+  await expect(day(4)).toContainText('сдано, ждёт проверки');
+  await expect(day(5).locator('a.wait')).toContainText(`Просите перенести сюда срок: Квартира на Садовой: сроки`);
+  await expect(day(5)).toContainText(`сейчас срок ${ru(inDays(1))}`);
+  // Пустые дни после 5-го — одной строкой «свободно» до конца двух недель.
+  await expect(day(6)).toContainText('свободно');
+  await expect(day(6)).toContainText(ru(inDays(13)));
+  await expect(day(3)).toContainText('свободно');
+  await expect(box.locator('#schedule-days > li')).toHaveCount(7);
+  await box.scrollIntoViewIfNeeded();
+  await shot(page, 'a11-ekspert-sroki-dve-nedeli');
+  // Строка просьбы о переносе ведёт в дело к блоку «Срок».
+  await day(5).locator('a.wait').click();
+  await expect(page.locator('#order-title')).toHaveText('Квартира на Садовой: сроки');
+  await expect(page.locator('#deadline-box')).toBeVisible();
+  await shot(page, 'a11b-ekspert-sroki-k-delu');
+});
+
 test('перечень использованных документов (2.95): собран в черновике сам; заказчик прислал документ — «Обновить перечень»', async ({ page }) => {
   const expert = await signIn(page, '+79990000798');
   const id = await db(async (c) => {

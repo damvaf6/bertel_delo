@@ -5,6 +5,7 @@ import { dayRu } from '/order.js';
 import { showDossier } from '/dossier.js';
 import { expertLink } from '/expertcard.js';
 import { loadMyReport } from '/myreport.js';
+import { loadSchedule } from '/schedule.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -88,7 +89,7 @@ export async function showSpecialist() {
   $('specialist-permits').replaceChildren(...sp.permits.map((p) => el('li', { text: permitText(p) })));
   $('specialist-permits-empty').classList.toggle('hidden', sp.permits.length > 0);
   show('specialist-view', 'specialist');
-  await Promise.all([showCrm(), showVisits(sp), showDossier(), loadMyReport()]);
+  await Promise.all([showCrm(), showVisits(sp), showDossier(), loadSchedule(), loadMyReport()]);
 }
 
 // Выезды помощника на объект (экспресс, 2.4): открываются на странице осмотра — по шагам, с камерой и геометкой.
