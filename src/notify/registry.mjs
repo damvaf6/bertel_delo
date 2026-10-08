@@ -11,6 +11,7 @@ export const TYPES = [
   { id: 'org_invites', name: 'Приглашения в организацию', hint: 'Вас пригласили стать сотрудником организации', for: 'all', sms: true },
   { id: 'offers', name: 'Предложения дел', hint: 'Вам предложили новое дело (и предложения госзаказа из БЕРТЕЛ CRM)', for: 'specialist', sms: true },
   { id: 'executor_work', name: 'Мои дела как исполнителя', hint: 'напоминания о сроке дела и документов досье, заказчик загрузил запрошенный документ, владелец или помощник прислал фото осмотра, по ссылке осмотра 2 дня нет фото, назначен или отменён выезд, ответ на просьбу о переносе срока, напоминание по своей заметке к делу, возврат на доработку, сообщение руководителя организации или эксперта по делу, результат принят, дело снято, передано другому (или руководитель передал дело Вам) или отменено', for: 'specialist', sms: true },
+  { id: 'morning', name: 'Утром «На сегодня»', hint: 'после 8 утра — одно уведомление: сколько дел сдать сегодня и с прошедшим сроком, выезды на объект и ссылки на осмотр, которые истекают; если ничего нет — не приходит', for: 'specialist', sms: true },
   { id: 'org_cases', name: 'Дела организации', hint: 'организации предложено дело — назначьте эксперта; эксперт отказался; предложение снято; эксперт не принимает новые дела до какого-то дня; у эксперта кончается или истёк документ досье (для руководителя)', for: 'all', sms: true },
   { id: 'dispatch', name: 'Очередь диспетчера', hint: 'новые и оплаченные заявки, отказы исполнителей, просьбы о переносе срока, сдача на проверку, просроченные сроки, истёкшие документы экспертов, отмены, неудачные выплаты и возвраты, сообщения о проблемах', for: 'dispatcher', sms: false },
 ];
@@ -20,6 +21,7 @@ export const TYPE = Object.fromEntries(TYPES.map((t) => [t.id, t]));
 // section — куда ведёт уведомление без заявки (2.45): 'orgs' (с организацией — сразу в неё), 'specialist', 'specialists', 'problems'.
 // focus (2.67) — уведомление руководителю по делу организации ведёт прямо к делу в «Организации»: 'pending' (назначить),
 // 'sign' (подписать), 'chat' (переписка с экспертом), 'handover' (эксперт просит передать дело, 2.107); номер дела передаётся в notify() как orderId.
+// anchor (2.119) — уведомление без заявки ведёт к блоку раздела «Специалист» ('schedule' — «Мои сроки»).
 // to (2.115) — уведомление по заявке ведёт сразу к блоку дела ('notes' — заметки эксперта).
 // mail: true — заказчику заявки, пришедшей по письму, уходит и письмо в ту же переписку (1.9, src/mail/mail.mjs).
 export const EVENTS = {
@@ -42,6 +44,8 @@ export const EVENTS = {
   offer: { type: 'offers', title: 'Вам предложено новое дело', order: true },
   crm_offer: { type: 'offers', title: 'Новое предложение госзаказа — принять можно в БЕРТЕЛ CRM', order: false, section: 'specialist' },
 
+  // Утренняя сводка (2.119): src/notify/morning.mjs; в ленте и СМС — с цифрами, ведёт к «Моим срокам» в разделе «Специалист».
+  morning_today: { type: 'morning', title: 'На сегодня: сроки дел, выезды и ссылки на осмотр — «Мои сроки» в разделе «Специалист»', order: false, section: 'specialist', anchor: 'schedule' },
   offer_withdrawn: { type: 'executor_work', title: 'Предложение дела снято', order: true },
   inspection_done: { type: 'executor_work', title: 'Владелец объекта прислал фото осмотра', order: true },
   // Ссылка осмотра молчит 2 дня (2.85): src/ops/inspect-ops.mjs, раз в минуту вместе с напоминаниями о сроках.
@@ -121,6 +125,7 @@ const ID_RE = /^[a-z_]{1,40}$/;
 export const SECTIONS = ['orgs', 'specialist', 'specialists', 'problems'];
 export const FOCUS = ['pending', 'sign', 'chat', 'handover'];
 export const ORDER_TO = ['notes'];
+export const ANCHORS = ['schedule'];
 
 // Проверка реестра при запуске: ошибка в описании — сервер не стартует (как у модулей-профессий).
 export function validateRegistry(types = TYPES, events = EVENTS) {
@@ -138,6 +143,7 @@ export function validateRegistry(types = TYPES, events = EVENTS) {
     // Уведомление без заявки должно куда-то вести (2.45): иначе человек видит строку и не знает, где действовать.
     if (e.section !== undefined && !SECTIONS.includes(e.section)) throw new Error(`уведомления: у события «${id}» неизвестный раздел «${e.section}»`);
     if (e.focus !== undefined && (e.section !== 'orgs' || !FOCUS.includes(e.focus))) throw new Error(`уведомления: у события «${id}» неверный focus`);
+    if (e.anchor !== undefined && (e.section !== 'specialist' || !ANCHORS.includes(e.anchor))) throw new Error(`уведомления: у события «${id}» неверный anchor`);
     if (e.to !== undefined && (!e.order || !ORDER_TO.includes(e.to))) throw new Error(`уведомления: у события «${id}» неверный to`);
     if (!e.order && !e.section) throw new Error(`уведомления: событие «${id}» без заявки — укажите раздел (section)`);
   }

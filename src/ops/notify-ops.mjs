@@ -4,6 +4,7 @@
 import { HttpError } from '../http/core.mjs';
 import { LEVEL, orderLevel } from '../access/policy.mjs';
 import { EVENTS, TYPE, TYPES, orderRef } from '../notify/registry.mjs';
+import { morningTitles } from '../notify/morning.mjs';
 
 const LIST_LIMIT = 100;
 const READ_IDS_MAX = 200;
@@ -32,7 +33,9 @@ function sectionOf(actor, r) {
     const focus = EVENTS[r.event]?.focus;
     return focus && r.order_id ? `org=${r.org_id}&case=${orderRef(r.order_id).slice(2)}&to=${focus}` : `org=${r.org_id}`;
   }
-  return sec;
+  // К блоку раздела (2.119: утренняя сводка — к «Моим срокам»).
+  const anchor = EVENTS[r.event]?.anchor;
+  return anchor ? `${sec}&to=${anchor}` : sec;
 }
 
 export function notifyOps() {
@@ -47,13 +50,15 @@ export function notifyOps() {
         const orderIds = [...new Set(rows.map((r) => r.order_id).filter(Boolean))];
         const orders = orderIds.length ? await sql`select * from orders where id = any(${orderIds}::uuid[])` : [];
         const visible = new Map(orders.filter((o) => orderLevel(actor, o) >= LEVEL.read).map((o) => [o.id, o]));
+        // Утренняя сводка (2.119) — с цифрами дня.
+        const morning = await morningTitles(sql, rows.filter((r) => r.event === 'morning_today').map((r) => String(r.id)));
         return {
           unread: await unreadCount(sql, actor.id),
           notifications: rows.map((r) => {
             const order = r.order_id ? visible.get(r.order_id) : null;
             return {
               id: String(r.id),
-              title: EVENTS[r.event]?.title ?? 'Уведомление',
+              title: morning.get(String(r.id)) ?? EVENTS[r.event]?.title ?? 'Уведомление',
               at: r.created_at,
               read: !!r.read_at,
               order_ref: r.order_id ? orderRef(r.order_id) : null,

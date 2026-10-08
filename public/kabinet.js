@@ -52,6 +52,7 @@ async function route() {
   if (h === '#assistant') return showAssistant();
   if ((m = h.match(/^#assistant=([0-9a-f-]{36})$/i))) return showAssistant(m[1]);
   if (h === '#specialist') return showSpecialist();
+  if (h === '#specialist&to=schedule') return showSpecialist({ to: 'schedule' });
   if (h === '#specialists' && ['dispatcher', 'admin'].includes(state.me.user.platform_role)) return showSpecialists();
   if (h === '#admin' && state.me.user.platform_role === 'admin') return showAdmin();
   if (h === '#money') return showMoney();

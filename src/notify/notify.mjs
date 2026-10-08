@@ -11,7 +11,8 @@ export const DELIVERY = {
 };
 
 // Записать уведомление события каждому получателю; СМС — тем, у кого они включены для этого вида.
-export async function notify(tx, eventId, { users = [], orderId = null, orgId = null, actor = null } = {}) {
+// sms — свой текст СМС вместо собранного из реестра (утренняя сводка с цифрами, 2.119): тоже без имён и названий.
+export async function notify(tx, eventId, { users = [], orderId = null, orgId = null, actor = null, sms = null } = {}) {
   const e = EVENTS[eventId];
   if (!e) throw new Error(`Неизвестное событие уведомления: ${eventId}`);
   // Заявка пришла по письму — о событии пишем и в её переписку (1.9), кто бы ни сделал шаг.
@@ -27,7 +28,7 @@ export async function notify(tx, eventId, { users = [], orderId = null, orgId = 
                            values (${u.id}, ${e.type}, ${eventId}, ${orderId}, ${orgId}) returning id`;
     if (u.sms ?? TYPE[e.type].sms) {
       await tx`insert into notification_deliveries (notification_id, channel, phone, body)
-               values (${n.id}, 'sms', ${u.phone}, ${smsText(eventId, { orderId })})`;
+               values (${n.id}, 'sms', ${u.phone}, ${sms ?? smsText(eventId, { orderId })})`;
     }
   }
   return rows.length;
