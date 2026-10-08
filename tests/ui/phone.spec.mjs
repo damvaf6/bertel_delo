@@ -6064,6 +6064,18 @@ test('заметки эксперта к делу (2.115): заметка с н�
   await ep.locator('#notifications li').first().getByRole('button').click();
   await expect(ep).toHaveURL(new RegExp(`#order=${id}&to=notes$`));
   await expect(ep.locator('#notes-box')).not.toHaveClass(/folded/);
+  // 2.120: заметка с напоминанием через 3 дня — в «Моих сроках на две недели» в свой день; нажатие открывает заметки.
+  const later = await db(async (c) => (await c.query(`insert into order_notes (order_id, author_id, body, remind_on)
+    values ($1, $2, 'Позвонить в БТИ', current_date + 3) returning to_char(remind_on, 'YYYY-MM-DD') as d`, [id, expert.id])).rows[0].d);
+  await ep.goto('/kabinet#specialist&to=schedule');
+  const row = ep.locator(`#schedule-days li[data-day="${later}"] li[data-schedule-item="note"]`);
+  await expect(row).toContainText('Напоминание по заметке: Квартира: заметки');
+  await expect(row).toContainText('Позвонить в БТИ');
+  await row.scrollIntoViewIfNeeded();
+  await shot(ep, 'h12-ekspert-moi-sroki-zametka');
+  await row.locator('a').click();
+  await expect(ep).toHaveURL(new RegExp(`#order=${id}&to=notes$`));
+  await expect(ep.locator('#notes-box')).not.toHaveClass(/folded/);
   // Заказчик блока не видит.
   await cp.goto(`/kabinet#order=${id}`);
   await expect(cp.locator('#order-title')).toHaveText('Квартира: заметки');
