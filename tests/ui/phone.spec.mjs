@@ -3071,7 +3071,7 @@ test('уведомления (2.45): все события на экране и 
 
   // Настройки: у этого человека — все виды (он и заказчик, и специалист, и диспетчер); СМС о сообщениях по умолчанию нет.
   await page.goto('/kabinet#notifications');
-  await expect(page.locator('#notify-types input[type=checkbox]')).toHaveCount(8);
+  await expect(page.locator('#notify-types input[type=checkbox]')).toHaveCount(9);
   const msgBox = page.getByLabel('Сообщения в переписке');
   await expect(msgBox).not.toBeChecked();
   const smsCount = async () => (await (await page.request.get('/__test/fakes/sms/calls', { headers: { 'x-test-control': CONTROL } })).json())
