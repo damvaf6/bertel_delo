@@ -66,8 +66,8 @@ export async function expertSchedule(sql, userId, registry, today = todayMsk()) 
     const mine = v.helper_id === userId && v.executor_user_id !== userId;
     // Помощник видит свой выезд без названия дела — как в списке «Мои выезды».
     const it = mine
-      ? { kind: 'my_visit', visit_id: v.id, service: service(v), time: mskTime(v.planned_at) }
-      : { kind: 'visit', ...base(v, v.order_id), time: mskTime(v.planned_at) };
+      ? { kind: 'my_visit', visit_id: v.id, service: service(v), time: mskTime(v.planned_at), at: new Date(v.planned_at).toISOString() }
+      : { kind: 'visit', ...base(v, v.order_id), visit_id: v.id, time: mskTime(v.planned_at), at: new Date(v.planned_at).toISOString() };
     const d = mskDay(v.planned_at);
     if (d < today) overdue.push({ ...it, day: d });
     else put(d, it);

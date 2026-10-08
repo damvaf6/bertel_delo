@@ -14,6 +14,7 @@ import { notify, orgHeads } from '../notify/notify.mjs';
 import { BLOCKING_KINDS, dossierAlerts, loadDossier, needsValidDossier } from '../dossier/dossier.mjs';
 import { expertMonthReport, reportMonth } from '../orgs/report.mjs';
 import { expertSchedule } from '../orders/schedule.mjs';
+import { scheduleIcs } from '../orders/ics.mjs';
 
 const REGIONS = { moscow: 'Москва', mo: 'Московская область' };
 const OPEN_STATUSES = ['awaiting_executor', 'in_work', 'review'];
@@ -209,10 +210,18 @@ export function matchOps() {
     },
     {
       // «Мои сроки на две недели» (2.109): по дням — сроки своих дел, выезды и ссылки на осмотр, просьбы о переносе срока.
+      // ?format=ics (2.122) — сроки и выезды файлом для календаря телефона, без заказчика и адресов.
       id: 'specialist.me.schedule', method: 'GET', path: '/api/specialist/me/schedule', auth: 'user', access: 'self',
-      async handler({ sql, actor, registry }) {
+      async handler({ sql, actor, registry, query, res }) {
         if (!(await sql.one`select 1 from specialists where user_id = ${actor.id}`)) throw new HttpError(404, 'not_found', 'Вы не специалист');
-        return { schedule: await expertSchedule(sql, actor.id, registry) };
+        const schedule = await expertSchedule(sql, actor.id, registry);
+        if (query.format !== 'ics') return { schedule };
+        res.set({
+          'content-type': 'text/calendar; charset=utf-8',
+          'content-disposition': `attachment; filename="sroki.ics"; filename*=UTF-8''${encodeURIComponent(`Мои сроки ${schedule.from}.ics`)}`,
+          'cache-control': 'no-store',
+        });
+        return res.send(scheduleIcs(schedule));
       },
     },
     {

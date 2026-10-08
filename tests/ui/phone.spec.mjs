@@ -5291,6 +5291,19 @@ test('мои сроки на две недели (2.109): по дням — ср
   await expect(box.locator('#schedule-days > li')).toHaveCount(7);
   await box.scrollIntoViewIfNeeded();
   await shot(page, 'a11-ekspert-sroki-dve-nedeli');
+  // Файл для календаря телефона (2.122): сроки и выезд, без названий заявок.
+  const ics = box.locator('#schedule-ics');
+  await ics.scrollIntoViewIfNeeded();
+  await expect(ics).toBeVisible();
+  await shot(page, 'a11c-ekspert-sroki-v-kalendar');
+  const [file] = await Promise.all([page.waitForEvent('download'), ics.click()]);
+  expect(file.suggestedFilename()).toBe(`Мои сроки ${inDays(0)}.ics`);
+  const cal = fs.readFileSync(await file.path(), 'utf8').replace(/\r\n /g, '');
+  expect(cal.split('BEGIN:VEVENT').length - 1).toBe(3);
+  expect(cal).toContain('SUMMARY:Выезд помощника на объект: дело №');
+  expect(cal).toContain('Срок сдачи (сдано\\, ждёт проверки)');
+  expect(cal).not.toContain('Садовой');
+  expect(cal).not.toContain('Рузе');
   // Строка просьбы о переносе ведёт в дело к блоку «Срок».
   await day(5).locator('a.wait').click();
   await expect(page.locator('#order-title')).toHaveText('Квартира на Садовой: сроки');

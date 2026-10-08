@@ -12,6 +12,9 @@ const short = (iso) => {
 const dayName = (d) => `${d.weekday}, ${short(d.date)}`;
 // «Горит» — как в «Сегодня»: срок сегодня, завтра или послезавтра.
 const HOT_DAYS = 2;
+// Файл для календаря телефона (2.122): сроки дел и выезды — в файле только они.
+const IN_CALENDAR = new Set(['deadline', 'visit', 'my_visit']);
+$('schedule-ics').addEventListener('click', () => location.assign('/api/specialist/me/schedule?format=ics'));
 
 function item(i, index) {
   const order = (to) => `#order=${encodeURIComponent(i.order_id)}&to=${to}`;
@@ -78,4 +81,5 @@ export async function loadSchedule() {
     k = j;
   }
   $('schedule-days').replaceChildren(...rows);
+  $('schedule-ics-box').classList.toggle('hidden', !s.days.some((d) => d.items.some((i) => IN_CALENDAR.has(i.kind))));
 }
