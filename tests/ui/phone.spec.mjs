@@ -5924,6 +5924,7 @@ test('нагрузка экспертов на две недели (2.111): у �
   const hp = await ctx(), ap = await ctx(), bp = await ctx(), cp = await ctx();
   const customer = await signIn(cp, '+79990010151');
   const head = await signIn(hp, '+79990010152'), busy = await signIn(ap, '+79990010153'), free = await signIn(bp, '+79990010154');
+  // Дни — по Москве, как в программе: около полуночи часы базы (UTC) ещё во вчерашнем дне.
   const { orgId, ids } = await db(async (c) => {
     const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Нагрузка ${Date.now() % 100000}»') returning id`);
     await c.query("update users set full_name = 'Занятова Анна' where id = $1", [busy.id]);
@@ -5933,15 +5934,15 @@ test('нагрузка экспертов на две недели (2.111): у �
       await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [u, org.id]);
       await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [u]);
     }
-    await c.query("update specialists set away_until = current_date + 3, away_note = 'отпуск' where user_id = $1", [free.id]);
+    await c.query("update specialists set away_until = (now() at time zone 'Europe/Moscow')::date + 3, away_note = 'отпуск' where user_id = $1", [free.id]);
     const add = async (title, days) => (await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
-      values ('expertise', 'realty', $1, $2, $3, 'in_work', current_date + $4::int, 1500000, now(),
+      values ('expertise', 'realty', $1, $2, $3, 'in_work', (now() at time zone 'Europe/Moscow')::date + $4::int, 1500000, now(),
               '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Нагрузочная ул., 5","area":"40"}') returning id`,
       [title, customer.id, busy.id, days])).rows[0].id;
     const ids = { a: await add('Нагрузка: первое', 2), b: await add('Нагрузка: второе', 2), c: await add('Нагрузка: третье', 6) };
     for (const k of Object.keys(ids)) await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [ids[k], busy.id]);
     await c.query(`insert into onsite_visits (order_id, helper_id, assigned_by, planned_at)
-      values ($1, $2, $3, ((current_date + 1) + time '10:30') at time zone 'Europe/Moscow')`, [ids.c, head.id, busy.id]);
+      values ($1, $2, $3, (((now() at time zone 'Europe/Moscow')::date + 1) + time '10:30') at time zone 'Europe/Moscow')`, [ids.c, head.id, busy.id]);
     return { orgId: org.id, ids };
   });
   const ref = (id) => `№ ${id.slice(0, 8).toUpperCase()}`;
