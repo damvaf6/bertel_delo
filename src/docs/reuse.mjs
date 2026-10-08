@@ -25,7 +25,9 @@ const ruDate = (d) => {
   return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s.split('-').reverse().join('.') : null;
 };
 
-// Похожее на данные конкретного дела — независимо от того, что заполнял заказчик.
+// Похожее на данные конкретного дела — независимо от того, что заполнял заказчик. Первые три — приметы самого объекта:
+// при повторной оценке того же объекта (2.118) они остаются (keepObject).
+const OBJECT_PATTERNS = 3;
 const PATTERNS = [
   /\b[A-HJ-NPR-Z0-9]{17}\b/g,                                                   // VIN
   /\b\d{2}:\d{2}:\d{5,7}:\d{1,7}\b/g,                                           // кадастровый номер
@@ -57,15 +59,16 @@ export function pastValues(registry, past, names = []) {
   return [...out].sort((a, b) => b.length - a.length);
 }
 
-// Вычистить из текста данные прошлого дела; n — сколько мест заменено.
-export function scrub(text, values) {
+// Вычистить из текста данные прошлого дела; n — сколько мест заменено. keepObject — приметы объекта (VIN, кадастровый
+// номер, госномер) не трогать: это тот же объект (2.118).
+export function scrub(text, values, { keepObject = false } = {}) {
   let n = 0;
   let out = text;
   for (const v of values) {
     const re = new RegExp(`(?<![\\p{L}\\d])${esc(v).replace(/ /g, '\\s+')}(?![\\p{L}\\d])`, 'giu');
     out = out.replace(re, () => { n += 1; return PAST_MARK; });
   }
-  for (const re of PATTERNS) out = out.replace(re, () => { n += 1; return PAST_MARK; });
+  for (const re of keepObject ? PATTERNS.slice(OBJECT_PATTERNS) : PATTERNS) out = out.replace(re, () => { n += 1; return PAST_MARK; });
   return { text: out, n };
 }
 
@@ -74,16 +77,17 @@ export const skeleton = (sections) => sections.map((s) => `## ${s.title}\n${EMPT
 
 // В тексте base заменить разделы reuse на текст тех же разделов прошлого черновика. Раздела нет в прошлом или он пустой —
 // остаётся как был. Раздела нет в base — добавляется в конце (так же, как cleanDraftAnswer добавляет пропущенные).
-export function reuseSections(base, sections, pastBody, values) {
+// pick — какие разделы брать (по умолчанию методические), keepObject — см. scrub (описание того же объекта, 2.118).
+export function reuseSections(base, sections, pastBody, values, { pick = (x) => x.reuse, keepObject = false } = {}) {
   const past = new Map(splitSections(pastBody).map((s) => [s.key, s.text]));
   let out = base;
   const used = [];
   let marks = 0;
-  for (const s of sections.filter((x) => x.reuse)) {
+  for (const s of sections.filter(pick)) {
     const key = headKey(s.title);
     const src = past.get(key);
     if (!src) continue;
-    const { text, n } = scrub(src, values);
+    const { text, n } = scrub(src, values, { keepObject });
     marks += n;
     used.push(s.title);
     const cur = splitSections(out).find((x) => x.key === key);

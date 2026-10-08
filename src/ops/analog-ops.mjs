@@ -14,7 +14,7 @@ import { audit, text as textFrom } from './util.mjs';
 
 // Облако принимает запрос не больше 3,5 МБ (Yandex Serverless Containers) — через ядро только до 3 МБ (2.49).
 export const ANALOG_FILE_MAX = 3 * 1024 * 1024;
-const MAX_ANALOGS = 20;
+export const MAX_ANALOGS = 20;
 
 // Вид файла — по его содержимому, а не по имени: скриншот (png, jpeg, webp, heic) или PDF страницы.
 export function fileKind(buf) {
@@ -66,6 +66,8 @@ const publicAnalog = (a, warnings) => ({
   confirmed_at: a.confirmed_at,
   file: a.file_key ? { name: a.file_name, mime: a.file_mime, size: a.file_size, sha256: a.file_sha256, received_at: a.received_at } : null,
   warnings: warnings ?? [],
+  // Взят из своего прошлого дела с тем же объектом (2.118): подтверждение снято — сверить объявление на новую дату.
+  copied: !!a.copied_from,
 });
 
 async function view({ sql, actor, order, registry, providers }) {

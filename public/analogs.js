@@ -144,6 +144,7 @@ function card(a, i, data) {
       el('span', { class: a.confirmed ? 'badge' : 'badge overdue', text: a.confirmed ? 'подтверждён' : 'не подтверждён' })),
     el('a', { href: a.url, target: '_blank', rel: 'noopener noreferrer', text: a.url }),
     el('div', { class: 'photo-meta', text: meta }),
+    ...(a.copied && !a.confirmed ? [el('p', { class: 'muted', 'data-copied': '', text: 'Взят из Вашего прошлого дела с тем же объектом — проверьте, годится ли объявление на новую дату оценки, и подтвердите.' })] : []),
     ...(a.file ? [el('button', { type: 'button', class: 'link', onclick: () => openFile(a) }, 'Открыть скриншот')] : []),
     ...(a.warnings.length ? [el('ul', { class: 'analog-warn' }, ...a.warnings.map((w) => el('li', { text: w })))] : []),
     fieldsBox,
