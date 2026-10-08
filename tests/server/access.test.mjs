@@ -1554,6 +1554,24 @@ test('что сделал прежний эксперт (2.112): только н
   }
 });
 
+test('заметки эксперта к делу (2.115): видит и пишет только исполнитель дела', async () => {
+  for (const id of ['notes.list', 'notes.create', 'notes.update', 'notes.delete']) cover(id);
+  // Подробно — tests/server/notes.test.mjs; здесь — чужие и стороны заявки без исполнителя.
+  const base = `/api/orders/${ownOrder.id}/notes`;
+  for (const who of ['stranger', 'headA', 'headB', 'spec']) {
+    assert.equal((await U[who].req('GET', base)).status, 404, `${who}: смотреть`);
+    assert.equal((await U[who].req('POST', base, { body: 'Заметка' })).status, 404, `${who}: писать`);
+    assert.equal((await U[who].req('PATCH', `${base}/1`, { done: true })).status, 404, `${who}: править`);
+    assert.equal((await U[who].req('DELETE', `${base}/1`)).status, 404, `${who}: удалить`);
+  }
+  for (const who of ['owner', 'dispatcher', 'admin']) {
+    assert.deepEqual((await U[who].req('GET', base)).body, { available: false }, who);
+    assert.equal((await U[who].req('POST', base, { body: 'Заметка' })).status, 403, who);
+    assert.equal((await U[who].req('PATCH', `${base}/1`, { done: true })).status, 403, who);
+    assert.equal((await U[who].req('DELETE', `${base}/1`)).status, 403, who);
+  }
+});
+
 test('запрос документов (2.64): видят те, кто видит заявку; просит только исполнитель, прикладывает заказчик', async () => {
   for (const id of ['doc_requests.list', 'doc_requests.create', 'doc_requests.attach', 'doc_requests.cancel']) cover(id);
   const base = `/api/orders/${ownOrder.id}/doc-requests`;

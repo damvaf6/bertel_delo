@@ -8,7 +8,7 @@
 // «горящие» (2.98): срок через 1–2 дня или прошёл, а у эксперта нет ни черновика, ни файла результата или нет фото осмотра.
 // Эксперту — очередь подписи (2.99): он подписал, организация ещё нет; руководителю в «Ждут подписи» — когда эксперт напоминал.
 // Руководителю — просьбы экспертов передать дело коллеге (2.107); эксперт отметил «не принимаю дела до …», а у него дела
-// со сроком в эти дни (2.113) — передать коллеге.
+// со сроком в эти дни (2.113) — передать коллеге. Эксперту — напоминания по своим заметкам к делу (2.115).
 // Руководителю — те же сведения, что в «Делах экспертов» (2.16): без заказчика, полей заявки, документов и переписки.
 // Только свои дела и свои организации.
 import { orderRef } from '../notify/registry.mjs';
@@ -20,6 +20,7 @@ import { dossierAlerts, loadDossier } from '../dossier/dossier.mjs';
 import { silentLinks } from './inspect-ops.mjs';
 import { openExtends } from './deadline-ops.mjs';
 import { openHandovers } from './handover-ops.mjs';
+import { dueNotes } from './note-ops.mjs';
 
 // «Горит» — просрочено или до срока не больше двух дней (как подсветка в списке дел).
 const HOT_DAYS = 2;
@@ -89,8 +90,12 @@ async function expertPart(sql, actor, registry, today) {
     }
     signWaits.sort((a, b) => new Date(a.since) - new Date(b.since));
   }
+  // Напоминания по своим заметкам к делу (2.115): день настал, заметка не отмечена «сделано».
+  const notes = (await dueNotes(sql, actor.id, rows.map((o) => o.id), today))
+    .map((n) => item(rows.find((o) => o.id === n.order_id), { note: n.body, remind_on: n.remind_on }));
   return {
     ready,
+    notes,
     sign_wait: signWaits,
     inspect_silent: silent,
     // Уже попросил перенести срок (2.100) — в строке видно, на какую дату и что ответа ещё нет.
