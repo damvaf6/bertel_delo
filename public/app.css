@@ -335,3 +335,8 @@ h2.inline { display: inline; }
 .strip .cell.heavy { background: #fbd5cf; }
 .strip .cell.away { background: repeating-linear-gradient(135deg, #e3e5ea 0 4px, #f5f6f8 4px 8px); color: var(--muted); }
 .strip .cell.today { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* Подписать несколько дел сразу (2.114) */
+#org-sign-many details.many { margin: 8px 0 12px; }
+#org-sign-many .many-list label.row { flex-wrap: nowrap; align-items: flex-start; margin-top: 8px; }
+#org-sign-many .many-list label.row > span { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+#org-sign-many [data-role="many-left"] { display: block; color: #7a4b00; font-weight: 600; }
