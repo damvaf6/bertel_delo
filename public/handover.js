@@ -2,6 +2,7 @@
 // в работе другому эксперту (отпуск, болезнь) с причиной; пока нет ответа — может отозвать. Руководитель передаёт или
 // отказывает в «Сегодня» и «Делах экспертов». Заказчик и диспетчер блок не видят. Текст — через textContent.
 import { api, say } from '/common.js';
+import { setNext } from '/next.js';
 
 const $ = (id) => document.getElementById(id);
 const whenRu = (s) => new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
@@ -10,7 +11,7 @@ let ctx = null; // { order, open }
 export async function loadHandover(current) {
   const box = $('handover-box');
   say($('handover-msg'), '');
-  if (!current.executor?.is_me || current.order.status !== 'in_work') { box.classList.add('hidden'); return; }
+  if (!current.executor?.is_me || current.order.status !== 'in_work') { box.classList.add('hidden'); setNext({ handover: null }); return; }
   ctx = { order: current.order, open: null };
   render(await api('GET', `/api/orders/${current.order.id}/handover`));
 }
@@ -18,6 +19,9 @@ export async function loadHandover(current) {
 function render(r) {
   const box = $('handover-box');
   box.classList.toggle('hidden', !r.available || (!r.open && !r.can_request));
+  // Строка у свёрнутого блока (2.110): блок не нужен каждый день — свёрнут, как и остальные блоки дела (2.101).
+  setNext({ handover: box.classList.contains('hidden') ? null
+    : r.open ? 'просьба ждёт ответа руководителя' : r.declined ? 'руководитель отказал — можно попросить снова' : 'можно попросить руководителя' });
   if (box.classList.contains('hidden')) return;
   ctx.open = r.open;
   $('handover-lead').textContent = r.open ? `Ждём ответа руководителя организации «${r.org}». Пока он не ответил, дело ведёте Вы.`

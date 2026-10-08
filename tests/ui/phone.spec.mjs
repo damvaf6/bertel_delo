@@ -5676,3 +5676,77 @@ test('просьба передать дело коллеге (2.107): эксп�
   await shot(ep, 'f4-ekspert-otkazano');
   for (const p of [cp, ep, hp, kp]) await p.context().close();
 });
+
+// Прогон «как эксперт и руководитель» по пачке 2.101–2.109 (2.110): стыки — блок «Передать дело коллеге» сворачивается со
+// всеми (2.101 + 2.107); после передачи «Готово к сдаче?» нового эксперта не засчитывает файл и подпись прежнего (2.106 +
+// 2.62); строка выезда помощника в «Моих сроках» открывает дело на блоке выезда (2.109).
+test('как эксперт и руководитель (2.110): просьба передать свёрнута, после передачи — свой файл, выезд из сроков ведёт в дело', async ({ page, browser, baseURL }) => {
+  const clean = { storageState: { cookies: [], origins: [] } }; // блоки дела свёрнуты, как у эксперта по умолчанию
+  const ctx = async () => (await phoneContext(browser, baseURL, clean)).newPage();
+  const ap = await ctx(), bp = await ctx(), hp = await ctx();
+  const customer = await signIn(page, '+79990010131');
+  const a = await signIn(ap, '+79990010132'), b = await signIn(bp, '+79990010133'), head = await signIn(hp, '+79990010134');
+  const { orgId, id } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Пачка ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Уходова Анна' where id = $1", [a.id]);
+    await c.query("update users set full_name = 'Приходов Борис' where id = $1", [b.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member'), ($1, $4, 'member')", [org.id, head.id, a.id, b.id]);
+    for (const u of [a, b]) {
+      await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [u.id, org.id]);
+      await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [u.id]);
+    }
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, express, fields)
+      values ('expertise', 'realty', 'Квартира: пачка 2.110', $1, $2, 'in_work', current_date + 3, 1500000, now(), true,
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Пачечная ул., 10","area":"48"}') returning id`, [customer.id, a.id]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [o.id, a.id]);
+    return { orgId: org.id, id: o.id };
+  });
+
+  // Анна подписала отчёт и попросила передать дело: блок просьбы свёрнут в строку с состоянием, как остальные.
+  const up = await ap.request.post(`/api/orders/${id}/results`, { data: Buffer.from('%PDF-1.4 отчёт Уходовой'), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Отчёт Уходовой.pdf') } });
+  expect((await ap.request.post(`/api/documents/${(await up.json()).document.id}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  expect((await ap.request.post(`/api/orders/${id}/handover`, { data: { reason: 'Отпуск с 12 октября' }, headers: H })).status()).toBe(201);
+  await ap.goto(`/kabinet#order=${id}`);
+  const hb = ap.locator('#handover-box');
+  await expect(hb).toHaveClass(/folded/);
+  await expect(hb.locator('.fold-note')).toHaveText('просьба ждёт ответа руководителя');
+  await expect(ap.locator('#handover-withdraw')).toBeHidden();
+  await hb.locator('.fold-toggle').click();
+  await expect(ap.locator('#handover-withdraw')).toBeVisible();
+  await hb.scrollIntoViewIfNeeded();
+  await shot(ap, 'd1-ekspert-prosba-peredat-svernuta');
+
+  // Руководитель передаёт дело Борису (по просьбе).
+  expect((await hp.request.post(`/api/orgs/${orgId}/cases/${id}/transfer`, { data: { specialist_id: b.id, reason: 'Отпуск Анны' }, headers: H })).status()).toBe(200);
+
+  // Борис: файл Анны в деле, но в сдачу не идёт — «Готово к сдаче?» и «Что дальше» ждут его файла и подписи.
+  await bp.goto(`/kabinet#order=${id}`);
+  await expect(bp.locator('#order-title')).toHaveText('Квартира: пачка 2.110');
+  const ready = bp.locator('#ready-box');
+  await expect(ready.locator('[data-ready="result"]')).toHaveClass(/\bno\b/);
+  await expect(ready.locator('[data-ready="result"]')).toContainText('файлы прежнего эксперта в сдачу не идут — загрузите свой');
+  await expect(ready.locator('[data-ready="sign"]')).toHaveClass(/\bno\b/);
+  await expect(bp.locator('#next-steps [data-step="result"]')).not.toHaveClass(/done/);
+  await expect(bp.locator('#docs-box .fold-note')).toHaveText('файлов: 1 · результата нет');
+  await expect(bp.locator('#handover-box .fold-note')).toHaveText('можно попросить руководителя');
+  await ready.locator('[data-ready="result"] button').click();
+  await expect(bp.locator('#docs [data-role="former"]')).toHaveText('Файл прежнего эксперта — в сдачу не идёт. Загрузите свой файл результата.');
+  await expect(bp.locator('#docs li').filter({ hasText: 'Отчёт Уходовой.pdf' }).getByRole('button', { name: 'Подписать' })).toHaveCount(0);
+  await ready.scrollIntoViewIfNeeded();
+  await shot(bp, 'd2-novyj-ekspert-gotovo-k-sdache');
+
+  // Борис назначил выезд помощника на завтра — строка в «Моих сроках» открывает дело на блоке выезда.
+  await db(async (c) => {
+    const helper = (await c.query("insert into users (phone, full_name) values ('+79990010135', 'Помощник Пачки') on conflict (phone) do update set full_name = excluded.full_name returning id")).rows[0].id;
+    await c.query(`insert into onsite_visits (order_id, helper_id, assigned_by, planned_at) values ($1, $2, $3, ($4::date + time '10:30') at time zone 'Europe/Moscow')`, [id, helper, b.id, inDays(1)]);
+  });
+  await bp.goto('/kabinet#specialist');
+  const visit = bp.locator(`#schedule-days > li[data-day="${inDays(1)}"] [data-schedule-item="visit"]`);
+  await expect(visit).toContainText('10:30 · Выезд помощника: Квартира: пачка 2.110');
+  await visit.locator('a').click();
+  await expect(bp.locator('#order-title')).toHaveText('Квартира: пачка 2.110');
+  await expect(bp.locator('#onsite-box')).toBeVisible();
+  await expect(bp.locator('#onsite-box')).not.toHaveClass(/folded/);
+  await shot(bp, 'd3-sroki-vyezd-k-delu');
+  for (const p of [ap, bp, hp]) await p.context().close();
+});
