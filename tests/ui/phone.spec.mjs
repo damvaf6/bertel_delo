@@ -3488,7 +3488,7 @@ test('сводка за месяц (2.78): руководитель видит �
   const orgId = await db(async (c) => {
     const { rows: [org] } = await c.query(`insert into organizations (name, created_at) values ('ООО «Бюро сводки ${Date.now()}»', now() - interval '13 months') returning id`);
     await c.query("update users set full_name = 'Эксперт Сводкин' where id = $1", [expert.id]);
-    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now()), ($1, $3, 'member', now() - interval '10 days')", [org.id, head.id, expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now()), ($1, $3, 'member', now() - interval '40 days')", [org.id, head.id, expert.id]);
     await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [expert.id, org.id]);
     // Дело принято и сдано позже срока; диспетчер раз возвращал на доработку; выплата прошла.
     await c.query("update orders set price_kop = 1500000, paid_at = now(), status = 'in_work', executor_user_id = $2, deadline = current_date - 3 where id = $1", [id, expert.id]);
@@ -3499,6 +3499,13 @@ test('сводка за месяц (2.78): руководитель видит �
       values ($1, $2, current_date - 6, current_date - 3, 'ждали документы', 'approved', now())`, [id, expert.id]);
     await c.query(`insert into order_status_history (order_id, from_status, to_status, side) values ($1, 'review', 'in_work', 'dispatcher'), ($1, 'review', 'done', 'dispatcher')`, [id]);
     await c.query(`insert into payouts (order_id, executor_user_id, amount_kop, commission_kop, status, paid_at) values ($1, $2, 1200000, 300000, 'succeeded', now())`, [id, expert.id]);
+    // Прошлый месяц (2.124): одно дело сдано позже срока после возврата на доработку.
+    const { rows: [old] } = await c.query(`insert into orders (owner_user_id, module, service, title, status, executor_user_id, deadline)
+      select owner_user_id, module, service, 'Квартира: прошлый месяц', 'done', $2,
+             (date_trunc('month', now() at time zone 'Europe/Moscow') - interval '12 days')::date from orders where id = $1 returning id`, [id, expert.id]);
+    await c.query(`insert into order_status_history (order_id, from_status, to_status, side, at)
+      select $1, s.f, s.t, 'dispatcher', (date_trunc('month', now() at time zone 'Europe/Moscow') - interval '10 days') at time zone 'Europe/Moscow'
+      from (values ('review', 'in_work'), ('review', 'done')) s(f, t)`, [old.id]);
     return org.id;
   });
   // Эксперт приложил и подписал отчёт (2.89 — попадёт в архив сданных за месяц); дело сдано.
@@ -3532,6 +3539,9 @@ test('сводка за месяц (2.78): руководитель видит �
   await expect(row.locator('[data-expert-remarks]')).toHaveText('частые замечания: «нет даты осмотра.» ×2, «Не указан этаж»');
   await expect(hp.locator('#org-report-remarks > li')).toHaveText(['нет даты осмотра. — 2 раза', 'Не указан этаж — 1 раз']);
   await expect(row).toContainText('вознаграждение за сданные: 12 000 ₽ · выплачено: 12 000 ₽');
+  // Сравнение с прошлым месяцем (2.124).
+  await expect(row.locator('[data-expert-prev]')).toHaveText('к прошлому месяцу: сдано: 1 (было 1) · в срок: 0 (было 0) · возвраты: 3 (было 1, +2)');
+  await expect(hp.locator('#org-report-total')).toContainText(/К прошлому месяцу \(\S+ \d{4}\)сдано: 1 \(было 1\) · в срок: 0 \(было 0\) · возвраты: 3 \(было 1, \+2\)/);
   await box.scrollIntoViewIfNeeded();
   await shot(hp, 'a7-rukovoditel-svodka-mesyac');
   await hp.locator('#org-report-remarks-box').scrollIntoViewIfNeeded();
@@ -3543,6 +3553,7 @@ test('сводка за месяц (2.78): руководитель видит �
   expect([...csv.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
   expect(csv.toString('utf8')).toContain('Эксперт Сводкин;1;1;1;0;2;1;12000,00;12000,00');
   expect(csv.toString('utf8')).toContain('нет даты осмотра.;2;1');
+  expect(csv.toString('utf8')).toContain('Эксперт Сводкин;1;1;0;0;3;1\r\n');
   // Сданные заключения одним архивом (2.89): отчёт эксперта с подписью и опись.
   const zipBtn = hp.locator('#org-report-zip');
   await expect(zipBtn).toHaveText('Заключения архивом (1)');
@@ -3556,11 +3567,12 @@ test('сводка за месяц (2.78): руководитель видит �
   expect(zipText).toContain('/Отчёт Сводкина.pdf');
   expect(zipText).toContain('%PDF-1.4 отчёт для архива');
   expect(zipText).toContain('Опись');
-  // Прошлый месяц — пусто.
+  // Прошлый месяц — одно дело сдано, без денег и замечаний; сравнение — с позапрошлым.
   await hp.locator('#org-report-month').selectOption({ index: 1 });
-  await expect(hp.locator('#org-report-total')).toContainText('принято дел: 0 · сдано: 0');
+  await expect(hp.locator('#org-report-total')).toContainText('принято дел: 0 · сдано: 1 (позже срока: 1)');
   await expect(row).toContainText('вознаграждение за сданные: 0 ₽ · выплачено: 0 ₽');
-  await expect(zipBtn).toBeHidden();
+  await expect(row.locator('[data-expert-prev]')).toHaveText('к прошлому месяцу: сдано: 1 (было 0, +1) · в срок: 0 (было 0) · возвраты: 1 (было 0, +1)');
+  await expect(zipBtn).toHaveText('Заключения архивом (1)');
   await expect(hp.locator('#org-report-remarks-box')).toBeHidden();
   await expect(row.locator('[data-expert-remarks]')).toHaveCount(0);
   await shot(hp, 'a8-rukovoditel-svodka-proshlyj');
