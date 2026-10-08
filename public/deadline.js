@@ -34,6 +34,18 @@ function render(r) {
   $('deadline-withdraw').classList.toggle('hidden', !r.can_withdraw);
   $('deadline-form').classList.toggle('hidden', !r.can_request);
   if (r.can_request) $('deadline-new').min = r.deadline;
+  // Готовые причины (2.126): текст в поле причины, новый срок — если ещё не выбран и сервер его предложил.
+  const reasons = r.reasons ?? [];
+  $('deadline-reasons').classList.toggle('hidden', !reasons.length);
+  $('deadline-reason-list').replaceChildren(...reasons.map((p) => el('button', {
+    class: 'secondary', type: 'button', 'data-reason': p.id,
+    onclick: () => {
+      $('deadline-reason').value = p.reason;
+      if (p.new_deadline && !$('deadline-new').value) $('deadline-new').value = p.new_deadline;
+      $('deadline-reason').focus();
+      say($('deadline-msg'), p.new_deadline ? 'Причина и новый срок в полях — поправьте и отправьте' : 'Причина в поле — выберите новый срок и отправьте', 'ok');
+    },
+  }, p.label)));
   const past = r.requests.filter((x) => x.outcome);
   $('deadline-history').replaceChildren(...past.map((x) => {
     const [word, kind] = OUTCOME[x.outcome];
