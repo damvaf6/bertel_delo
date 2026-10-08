@@ -129,9 +129,17 @@ export async function sendOrgMorning(sql, registry, { now = new Date() } = {}) {
   return sent;
 }
 
-// Текст сводки руководителя в ленте по номеру уведомления (название организации лента пишет строкой ниже).
+// К какому блоку организации ведёт сводка (2.130): есть сроки сегодня или прошедшие — «Дела экспертов» с отбором «Срок на
+// этой неделе» (2.127: туда входят и просроченные); иначе — к подписи организации; иначе — отбор «Просят передать».
+export function orgDigestTo(c) {
+  if (c.due || c.overdue) return 'week';
+  if (c.sign) return 'sign';
+  return c.handover ? 'handover' : null;
+}
+
+// Текст сводки руководителя в ленте по номеру уведомления (название организации лента пишет строкой ниже) и куда она ведёт.
 export async function orgMorningTitles(sql, ids) {
   if (!ids.length) return new Map();
   const rows = await sql`select notification_id, sign, handover, due, overdue from org_morning_digests where notification_id = any(${ids}::bigint[])`;
-  return new Map(rows.map((r) => [String(r.notification_id), orgDigestText(r)]));
+  return new Map(rows.map((r) => [String(r.notification_id), { title: orgDigestText(r), to: orgDigestTo(r) }]));
 }
