@@ -5525,7 +5525,8 @@ test('дела экспертов (2.102): руководитель отбира
   expect((await ep.request.post(`/api/documents/${docId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
 
   await hp.goto(`/kabinet#org=${orgId}`);
-  const chips = hp.locator('#org-cases-filter button');
+  // «Срок на этой неделе» (2.127) зависит от дня недели — проверяется отдельно.
+  const chips = hp.locator('#org-cases-filter button:not([data-filter="week"])');
   const rows = hp.locator('#org-cases > li[data-case]');
   await expect(rows).toHaveCount(4);
   await expect(chips).toHaveText(['Все', 'Горит · 1', 'Ждёт моей подписи · 1', 'Просят перенести срок · 1', 'Предложено, молчит · 1']);
@@ -5563,6 +5564,74 @@ test('дела экспертов (2.102): руководитель отбира
   await expect(rows.first().locator('[data-role="returned"]')).toBeVisible();
   await shot(hp, 'c4-rukovoditel-otbor-vernul');
   for (const p of [cp, ep, hp]) await p.context().close();
+});
+
+// Отбор по эксперту и «Срок на этой неделе» (2.127) — вместе с отбором 2.102 и поиском; «Дела эксперта» из нагрузки.
+test('дела экспертов (2.127): руководитель отбирает дела по эксперту и по сроку на этой неделе', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), ap = await ctx(), bp = await ctx(), hp = await ctx();
+  const customer = await signIn(cp, '+79990012711');
+  const a = await signIn(ap, '+79990012712'), b = await signIn(bp, '+79990012713'), head = await signIn(hp, '+79990012714');
+  const { orgId } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Неделя ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Недельная Ольга' where id = $1", [a.id]);
+    await c.query("update users set full_name = 'Срочный Пётр' where id = $1", [b.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member'), ($1, $4, 'member')", [org.id, head.id, a.id, b.id]);
+    for (const u of [a, b]) {
+      await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [u.id, org.id]);
+      await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [u.id]);
+    }
+    const add = async (title, who, days) => {
+      const id = (await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+        values ('expertise', 'realty', $1, $2, $3, 'in_work', current_date + $4::int, 1500000, now(),
+                '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Недельная ул., 1","area":"40"}') returning id`,
+        [title, customer.id, who.id, days])).rows[0].id;
+      await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [id, who.id]);
+    };
+    // Срок «сегодня» (или вчера — по Москве) всегда на этой неделе; через 30 дней — никогда.
+    await add('Неделя: Ольга сегодня', a, 0);
+    await add('Неделя: Ольга нескоро', a, 30);
+    await add('Неделя: Пётр сегодня', b, 0);
+    await add('Неделя: Пётр нескоро', b, 30);
+    return { orgId: org.id };
+  });
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const rows = hp.locator('#org-cases > li[data-case]');
+  const pick = hp.locator('#org-cases-expert');
+  await expect(rows).toHaveCount(4);
+  await expect(pick).toBeVisible();
+  await expect(pick.locator('option')).toHaveText(['Все эксперты · дел: 4', 'Недельная Ольга · в работе: 2', 'Срочный Пётр · в работе: 2']);
+  await expect(hp.locator('[data-filter="week"]')).toHaveText('Срок на этой неделе · 2');
+  await pick.scrollIntoViewIfNeeded();
+  await shot(hp, 'c5-rukovoditel-otbor-ekspert-vse');
+  // Эксперт — только его дела; число у «Срок на этой неделе» — по нему.
+  await pick.selectOption({ label: 'Срочный Пётр · в работе: 2' });
+  await expect(rows).toHaveCount(2);
+  await expect(rows).toContainText(['эксперт: Срочный Пётр', 'эксперт: Срочный Пётр']);
+  await expect(hp.locator('[data-filter="week"]')).toHaveText('Срок на этой неделе · 1');
+  await hp.locator('[data-filter="week"]').click();
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first()).toContainText('эксперт: Срочный Пётр');
+  await shot(hp, 'c6-rukovoditel-otbor-ekspert-nedelya');
+  // Поиск внутри отбора: ничего — подсказка про «Все» и «Все эксперты».
+  await hp.locator('#org-cases-search').fill('нет такого');
+  await expect(hp.locator('#org-cases-none')).toContainText('«Все эксперты»');
+  await hp.locator('#org-cases-search').fill('');
+  // «Все эксперты» — отбор по сроку остаётся: дела обоих на этой неделе.
+  await pick.selectOption('');
+  await expect(rows).toHaveCount(2);
+  await hp.locator('[data-filter="all"]').click();
+  await expect(rows).toHaveCount(4);
+  // «Дела эксперта» из нагрузки — тот же выбор.
+  await hp.locator(`#org-cases-load li[data-expert="${a.id}"] [data-action="expert-cases"]`).click();
+  await expect(pick).toHaveValue(a.id);
+  await expect(rows).toHaveCount(2);
+  await expect(rows).toContainText(['эксперт: Недельная Ольга', 'эксперт: Недельная Ольга']);
+  // Не уходит за край экрана.
+  const w = await hp.evaluate(() => document.documentElement.scrollWidth);
+  expect(w).toBeLessThanOrEqual(412);
+  await shot(hp, 'c7-rukovoditel-dela-eksperta-iz-nagruzki');
+  for (const p of [cp, ap, bp, hp]) await p.context().close();
 });
 
 test('заготовки замечаний руководителя (2.103): запомнить пункты один раз, вставить в следующее замечание одной кнопкой', async ({ browser, baseURL }) => {
