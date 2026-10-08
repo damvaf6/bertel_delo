@@ -91,6 +91,20 @@
         <a class="btn secondary" id="ask-assistant" href="#assistant">Спросить ассистента об этом деле</a>
         <button type="button" class="link hidden" id="fold-all" aria-pressed="false">Развернуть все блоки</button>
       </div>
+      <div class="card hidden" id="pred-box" data-predecessor>
+        <h2>Что сделал прежний эксперт</h2>
+        <p class="muted" id="pred-lead"></p>
+        <ul class="ready-list" id="pred-list"></ul>
+        <div class="hidden notice-warn" id="pred-extend">
+          <p id="pred-extend-text"></p>
+          <div class="row">
+            <button type="button" class="secondary" id="pred-keep">Оставить просьбу</button>
+            <button type="button" class="secondary" id="pred-withdraw">Отозвать</button>
+          </div>
+        </div>
+        <button type="button" class="link" id="pred-hide">Понятно, скрыть</button>
+        <p class="msg" id="pred-msg" role="status" aria-live="polite"></p>
+      </div>
       <div class="card hidden" id="next-box">
         <h2>Что дальше</h2>
         <p class="muted" id="next-lead"></p>
