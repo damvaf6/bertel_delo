@@ -3475,11 +3475,15 @@ test('сводка за месяц (2.78): руководитель видит �
   const orgId = await db(async (c) => {
     const { rows: [org] } = await c.query(`insert into organizations (name, created_at) values ('ООО «Бюро сводки ${Date.now()}»', now() - interval '13 months') returning id`);
     await c.query("update users set full_name = 'Эксперт Сводкин' where id = $1", [expert.id]);
-    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now()), ($1, $3, 'member', now() - interval '1 minute')", [org.id, head.id, expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now()), ($1, $3, 'member', now() - interval '10 days')", [org.id, head.id, expert.id]);
     await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [expert.id, org.id]);
     // Дело принято и сдано позже срока; диспетчер раз возвращал на доработку; выплата прошла.
     await c.query("update orders set price_kop = 1500000, paid_at = now(), status = 'in_work', executor_user_id = $2, deadline = current_date - 3 where id = $1", [id, expert.id]);
-    await c.query(`insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())`, [id, expert.id]);
+    // Принято до 5 дней назад (не раньше начала месяца — иначе не в сводке месяца); срок переносили (2.117).
+    await c.query(`insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted',
+      greatest(date_trunc('month', now() at time zone 'Europe/Moscow') at time zone 'Europe/Moscow', now() - interval '5 days'))`, [id, expert.id]);
+    await c.query(`insert into deadline_requests (order_id, requested_by, old_deadline, new_deadline, reason, outcome, decided_at)
+      values ($1, $2, current_date - 6, current_date - 3, 'ждали документы', 'approved', now())`, [id, expert.id]);
     await c.query(`insert into order_status_history (order_id, from_status, to_status, side) values ($1, 'review', 'in_work', 'dispatcher'), ($1, 'review', 'done', 'dispatcher')`, [id]);
     await c.query(`insert into payouts (order_id, executor_user_id, amount_kop, commission_kop, status, paid_at) values ($1, $2, 1200000, 300000, 'succeeded', now())`, [id, expert.id]);
     return org.id;
@@ -3509,6 +3513,8 @@ test('сводка за месяц (2.78): руководитель видит �
   const row = hp.locator('#org-report > li').filter({ hasText: 'Эксперт Сводкин' });
   await expect(row).toContainText('принял: 1 · сдано: 1');
   await expect(row.locator('.overdue')).toHaveText('позже срока: 1');
+  await expect(row.locator('[data-expert-pace]')).toHaveText(/^в среднем \d (день|дня|дней) от принятия до сдачи · позже первоначального срока: 1 \(с переносом — 1\)$/);
+  await expect(hp.locator('#org-report-total')).toContainText('позже первоначального срока: 1 (с переносом — 1)');
   await expect(row).toContainText('возвращено: Вами — 2, на доработку — 1');
   await expect(row.locator('[data-expert-remarks]')).toHaveText('частые замечания: «нет даты осмотра.» ×2, «Не указан этаж»');
   await expect(hp.locator('#org-report-remarks > li')).toHaveText(['нет даты осмотра. — 2 раза', 'Не указан этаж — 1 раз']);
