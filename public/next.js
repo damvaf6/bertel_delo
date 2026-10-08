@@ -292,7 +292,7 @@ function nowBox(s) {
 const count = (n, one, few, many) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? one : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? few : many}`;
 
 function foldNotes() {
-  const { docs, review, draft, analogs, docreqAll, deadline, handover, inspect, onsite, chat, notes: myNotes } = ctx;
+  const { docs, review, draft, analogs, docreqAll, deadline, handover, inspect, onsite, chat, notes: myNotes, similar } = ctx;
   const notes = {};
   if (myNotes) notes['notes-box'] = myNotes;
   if (deadline) notes['deadline-box'] = `до ${dayRu(deadline.deadline)}${deadline.open ? ' · просьба о переносе ждёт ответа' : ''}`;
@@ -312,6 +312,7 @@ function foldNotes() {
   if (inspect) notes['inspect-box'] = inspect.photos ? `фото: ${inspect.photos}${inspect.missing ? ` · не снято: ${count(inspect.missing, 'шаг', 'шага', 'шагов')}` : ''}` : inspect.issued ? 'ссылка выдана, фото пока нет' : 'фото нет';
   if (onsite) notes['onsite-box'] = onsite;
   if (analogs) notes['analogs-box'] = analogs.needed ? `подтверждено ${analogs.confirmed} из ${analogs.min}` : `подтверждено: ${analogs.confirmed}`;
+  if (similar) notes['similar-box'] = similar;
   if (draft) notes['draft-box'] = draft.exists ? 'черновик есть' : 'черновика нет';
   if (review) {
     const results = ownResults(docs?.documents ?? []);

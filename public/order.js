@@ -21,6 +21,7 @@ import { loadHandover } from '/handover.js';
 import { loadNotes } from '/notes.js';
 import { loadPredecessor } from '/predecessor.js';
 import { loadRepeat } from '/repeat.js';
+import { loadSimilar } from '/similar.js';
 
 const $ = (id) => document.getElementById(id);
 // До 3 МБ — обычной загрузкой через ядро; больше — прямо в хранилище (облако: запрос не больше 3,5 МБ, 2.49).
@@ -67,7 +68,7 @@ export async function openOrder(id, { to } = {}) {
   setNext({ reset: true, current, step: doStep, signAll });
   loadOrgChat();
   loadJournal(current.order, current.access);
-  await Promise.all([loadDocs(true), loadTransfer(), loadMatch(current, () => openOrder(id)), loadDraft(current, () => openOrder(id)), loadAnalogs(current), loadInspection(current), loadOnsite(current), loadDocRequests(current, (file, msg) => uploadFile(file, 'other', msg)), loadDeadline(current, () => openOrder(id)), loadHandover(current), loadNotes(current), loadPredecessor(current, () => openOrder(id)), loadRepeat(current, () => openOrder(id)), loadReview(current), loadChat(current), loadMoney(current, () => openOrder(id))]);
+  await Promise.all([loadDocs(true), loadTransfer(), loadMatch(current, () => openOrder(id)), loadDraft(current, () => openOrder(id)), loadAnalogs(current), loadInspection(current), loadOnsite(current), loadDocRequests(current, (file, msg) => uploadFile(file, 'other', msg)), loadDeadline(current, () => openOrder(id)), loadHandover(current), loadNotes(current), loadPredecessor(current, () => openOrder(id)), loadRepeat(current, () => openOrder(id)), loadSimilar(current), loadReview(current), loadChat(current), loadMoney(current, () => openOrder(id))]);
   setNext({ loaded: true }); // разделы осмотра и черновика показаны — шаги пересчитываются, нужный сейчас блок раскрыт
   const box = { inspect: 'inspect-box', chat: 'chat-box', docs: 'docreq-box', deadline: 'deadline-box', sign: 'sign-wait-box', handover: 'handover-box', onsite: 'onsite-box', notes: 'notes-box' }[to];
   if (box && !$(box).classList.contains('hidden')) { reveal(box); $(box).scrollIntoView({ block: 'start' }); }
