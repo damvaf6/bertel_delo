@@ -8,6 +8,7 @@
 // с числом дел; работает вместе с поиском.
 // Эксперт просит передать дело коллеге (2.107): причина и выбор, кому, — «Передать» одной кнопкой или «Отказать».
 // «Напомнить эксперту» о деле в работе (2.125) — одной кнопкой, раз в сутки.
+// Отбор по эксперту и «Срок на этой неделе» (2.127) — вместе с отбором 2.102 и поиском.
 // «Ждут назначения» (2.17): дела, предложенные диспетчером организации, — руководитель назначает эксперта или отказывается.
 import { api, el, say } from '/common.js';
 import { expertLink } from '/expertcard.js';
@@ -36,17 +37,21 @@ const fact = (dt, dd, cls) => [el('dt', { text: dt }), el('dd', { text: dd, ...(
 // Последний список дел — для поиска (2.73) без нового запроса.
 let shown = { org: null, orgObj: null, cases: [] };
 wireSearch($('org-cases-search'), () => renderCases());
+$('org-cases-expert').addEventListener('change', (e) => { expert = e.target.value; renderCases(); });
 
 // Отборы (2.102): только среди активных дел; кнопка видна, когда есть хоть одно такое дело.
 const FILTERS = [
   { id: 'handover', text: 'Просят передать', test: (c) => !!c.handover },
   { id: 'hot', text: 'Горит', test: (c) => c.hot },
+  { id: 'week', text: 'Срок на этой неделе', test: (c) => c.week },
   { id: 'sign', text: 'Ждёт моей подписи', test: (c) => c.sign_wait > 0 },
   { id: 'returned', text: 'Вернул эксперту', test: (c) => c.returned_open },
   { id: 'extend', text: 'Просят перенести срок', test: (c) => !!c.extend },
   { id: 'silent', text: 'Предложено, молчит', test: (c) => c.status === 'awaiting_executor' },
 ];
 let filter = null;
+// Чьи дела показать (2.127): номер эксперта или '' — все.
+let expert = '';
 // Сколько сдавать за две недели (2.111) — у каждого эксперта в выборе «кому передать».
 let due14 = new Map();
 const pickText = (x) => `${x.full_name} · сдать за 2 недели: ${due14.get(x.user_id) ?? 0}`;
@@ -54,7 +59,7 @@ const pickText = (x) => `${x.full_name} · сдать за 2 недели: ${due
 export async function loadOrgCases(org) {
   const { pending, cases, load, money } = await api('GET', `/api/orgs/${org.id}/cases`);
   // Другая организация — поиск с чистого листа; та же (передали дело, подписали) — запрос остаётся.
-  if (shown.org !== org.id) { $('org-cases-search').value = ''; filter = null; }
+  if (shown.org !== org.id) { $('org-cases-search').value = ''; filter = null; expert = ''; }
   shown = { org: org.id, orgObj: org, cases };
   $('org-cases-box').classList.remove('hidden');
   $('org-pending-box').classList.toggle('hidden', pending.length === 0);
@@ -73,6 +78,9 @@ export async function loadOrgCases(org) {
     // Ближайший срок (2.90): кому ещё можно дать дело — видно сразу.
     ...(l.next_deadline && !l.overdue ? [el('div', { class: 'muted', 'data-next': '', text: `ближайший срок ${dayRu(l.next_deadline)}` })] : []),
     ...(l.away || l.paused ? [el('div', { class: 'muted', 'data-away': '', text: upper(awayText(l)) })] : []),
+    // Дела этого эксперта (2.127) — одной кнопкой: тот же отбор, что в списке дел ниже.
+    ...(cases.some((c) => c.expert_id === l.user_id) && new Set(cases.map((c) => c.expert_id)).size > 1
+      ? [el('button', { type: 'button', class: 'secondary', 'data-action': 'expert-cases', onclick: () => showExpert(l.user_id) }, 'Дела эксперта')] : []),
     expertLink(l.user_id))));
   $('org-cases-empty').classList.toggle('hidden', cases.length > 0 || pending.length > 0 || load.length === 0);
   due14 = new Map(load.map((l) => [l.user_id, l.due14]));
@@ -89,24 +97,53 @@ function renderCases() {
   $('org-cases-search-box').classList.toggle('hidden', cases.length < 2);
   const q = cases.length < 2 ? '' : $('org-cases-search').value;
   const hit = matcher(q);
+  renderExperts(cases);
+  const mine = expert ? cases.filter((c) => c.expert_id === expert) : cases;
   // Отбор, по которому дел не осталось (подписали, эксперт ответил), снимается сам.
-  const counts = new Map(FILTERS.map((f) => [f.id, cases.filter((c) => c.active && f.test(c)).length]));
+  const counts = new Map(FILTERS.map((f) => [f.id, mine.filter((c) => c.active && f.test(c)).length]));
   if (filter && !counts.get(filter)) filter = null;
   const chosen = FILTERS.find((f) => f.id === filter);
   renderFilters(counts);
-  const found = cases.filter((c) => hit([c.order_ref, c.service, c.expert, c.status_name].join(' '))
+  const found = mine.filter((c) => hit([c.order_ref, c.service, c.expert, c.status_name].join(' '))
     && (!chosen || (c.active && chosen.test(c))));
   const active = found.filter((c) => c.active);
   const done = found.filter((c) => !c.active);
   const none = cases.length > 0 && !found.length;
   $('org-cases-none').classList.toggle('hidden', !none);
+  const who = expert ? ` у эксперта «${mine[0]?.expert ?? ''}»` : '';
   $('org-cases-none').textContent = !none ? '' : chosen
-    ? `По отбору «${chosen.text}» ничего не найдено по «${q.trim()}». Нажмите «Все», чтобы искать по всем делам.`
-    : `Ничего не найдено по «${q.trim()}». Ищите по номеру дела, виду услуги или эксперту.`;
+    ? `По отбору «${chosen.text}»${who} ничего не найдено${q.trim() ? ` по «${q.trim()}»` : ''}. Нажмите «Все»${expert ? ' или выберите «Все эксперты»' : ''}, чтобы искать по всем делам.`
+    : expert ? `У эксперта «${mine[0]?.expert ?? ''}» ничего не найдено по «${q.trim()}». Выберите «Все эксперты», чтобы искать по всем делам.`
+      : `Ничего не найдено по «${q.trim()}». Ищите по номеру дела, виду услуги или эксперту.`;
   $('org-cases').replaceChildren(
     ...active.map((c) => caseItem(org, c)),
     ...(done.length ? [el('li', { class: 'group', text: `Завершённые · ${done.length}` })] : []),
     ...done.map((c) => caseItem(org, c)));
+}
+
+// Выбор эксперта (2.127): когда дела ведут хотя бы двое — «Все эксперты» и каждый с числом его дел в работе и всего.
+// Эксперт, у которого дел не осталось, из выбора уходит, отбор снимается сам.
+function renderExperts(cases) {
+  const by = new Map();
+  for (const c of cases) {
+    const x = by.get(c.expert_id) ?? { name: c.expert, all: 0, active: 0 };
+    x.all += 1; if (c.active) x.active += 1;
+    by.set(c.expert_id, x);
+  }
+  if (!by.has(expert)) expert = '';
+  $('org-cases-expert-box').classList.toggle('hidden', by.size < 2);
+  const sel = $('org-cases-expert');
+  sel.replaceChildren(el('option', { value: '', text: `Все эксперты · дел: ${cases.length}` }),
+    ...[...by].sort((a, b) => a[1].name.localeCompare(b[1].name, 'ru')).map(([id, x]) => el('option', { value: id,
+      text: `${x.name} · в работе: ${x.active}${x.all > x.active ? `, всего: ${x.all}` : ''}` })));
+  sel.value = expert;
+}
+
+// «Дела эксперта» из нагрузки (2.127): выбрать эксперта и показать его дела.
+function showExpert(id) {
+  expert = id; filter = null;
+  renderCases();
+  $('org-cases-expert-box').scrollIntoView({ block: 'start' });
 }
 
 // Кнопки отбора: «Все» и те, по которым есть дела, с числом. Ни одного отбора — строки нет.
@@ -154,7 +191,7 @@ function caseItem(org, c) {
 // Открыть организацию сразу на нужном деле (2.67): из уведомления или «Сегодня» — назначить, подписать, ответить эксперту.
 export function focusOrgCase({ ref, to }) {
   // Поиск мог спрятать нужное дело — переход из уведомления важнее.
-  if ($('org-cases-search').value || filter) { $('org-cases-search').value = ''; filter = null; renderCases(); }
+  if ($('org-cases-search').value || filter || expert) { $('org-cases-search').value = ''; filter = null; expert = ''; renderCases(); }
   const r = CSS.escape(ref);
   if (to === 'sign' && document.querySelector(`#org-sign li[data-item="${r}"]`)) return goSign(ref);
   const li = (to === 'pending' && document.querySelector(`#org-pending li[data-pending="${r}"]`))

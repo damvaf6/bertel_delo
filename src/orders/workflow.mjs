@@ -87,3 +87,9 @@ export function addDays(isoDate, days) {
 }
 
 export const isOverdue = (order, today = todayMsk()) => !!order.deadline && !DEADLINE_OFF.includes(order.status) && order.deadline < today;
+
+// Последний день недели (воскресенье) для даты YYYY-MM-DD — «срок на этой неделе» (2.127).
+export function weekEnd(isoDate) {
+  const dow = new Date(`${isoDate}T00:00:00Z`).getUTCDay();
+  return addDays(isoDate, (7 - dow) % 7);
+}
