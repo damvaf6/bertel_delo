@@ -2097,6 +2097,39 @@ test('заготовки замечаний руководителя (2.103): с
   assert.equal((await U.headA.req('DELETE', `${base}/${id}`)).status, 404, 'убранная — больше не найти');
 });
 
+test('заготовки фраз руководителя в переписке с экспертом (2.137): свои у руководителя; отдельно от заготовок замечаний', async () => {
+  for (const id of ['orgs.phrases.list', 'orgs.phrases.add', 'orgs.phrases.remove']) cover(id);
+  const base = `/api/orgs/${orgA.id}/phrases`;
+  const add = await U.headA.req('POST', base, { text: '  Посмотрите   замечания, пожалуйста.\nКогда будет готово?  ' });
+  assert.equal(add.status, 201);
+  assert.equal(add.body.added, true);
+  assert.deepEqual(add.body.phrases.map((r) => r.text), ['Посмотрите замечания, пожалуйста.\nКогда будет готово?']);
+  // Та же фраза ещё раз — не дублируется; в заготовки замечаний она не попадает.
+  const again = await U.headA.req('POST', base, { text: 'посмотрите замечания, пожалуйста.\nкогда будет готово?' });
+  assert.equal(again.status, 200);
+  assert.equal(again.body.added, false);
+  assert.ok(!JSON.stringify((await U.headA.req('GET', `/api/orgs/${orgA.id}/remarks`)).body).includes('Посмотрите'));
+  assert.equal((await U.headA.req('POST', base, { text: '  ' })).status, 400);
+  assert.equal((await U.headA.req('POST', base, { text: 'x'.repeat(1001) })).status, 400);
+  const id = add.body.phrases[0].id;
+  // Заготовку фразы нельзя убрать как замечание и наоборот.
+  assert.equal((await U.headA.req('DELETE', `/api/orgs/${orgA.id}/remarks/${id}`)).status, 404);
+  for (const k of ['memberA', 'seniorA', 'headB', 'stranger', 'spec', 'dispatcher', 'owner']) {
+    const c = U[k];
+    const list = await c.req('GET', base);
+    assert.ok([403, 404].includes(list.status), `${k}: ${list.status}`);
+    assert.ok(!JSON.stringify(list.body ?? {}).includes('Посмотрите'), k);
+    assert.ok([403, 404].includes((await c.req('POST', base, { text: 'Подлог' })).status), k);
+    assert.ok([403, 404].includes((await c.req('DELETE', `${base}/${id}`)).status), k);
+  }
+  assert.equal((await U.headB.req('GET', `/api/orgs/${orgB.id}/phrases`)).body.phrases.length, 0);
+  assert.equal((await U.headB.req('DELETE', `/api/orgs/${orgB.id}/phrases/${id}`)).status, 404);
+  const del = await U.headA.req('DELETE', `${base}/${id}`);
+  assert.equal(del.status, 200);
+  assert.equal(del.body.phrases.length, 0);
+  assert.equal((await U.headA.req('DELETE', `${base}/${id}`)).status, 404, 'убранная — больше не найти');
+});
+
 test('мои итоги за месяц (2.92): только свои дела — частные и от организации; в срок, возвраты, деньги; не специалист — 404', async () => {
   cover('specialist.me.report');
   const exp = await login(S, '+79990001493');
