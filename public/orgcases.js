@@ -355,7 +355,7 @@ function chatDetails(c) {
   const n = c.chat?.messages ?? 0;
   const title = ['Переписка с экспертом', n ? `сообщений: ${n}` : null, c.chat?.expert_last ? 'ждёт Вашего ответа' : null].filter(Boolean).join(' · ');
   const d = el('details', { class: 'org-chat', 'data-chat': c.order_ref }, el('summary', { text: title }), box);
-  d.addEventListener('toggle', () => { if (d.open && !box.firstChild) orgChat(box, c.id); });
+  d.addEventListener('toggle', () => { if (d.open && !box.firstChild) orgChat(box, c.id, { orgId: shown.org }); });
   return d;
 }
 

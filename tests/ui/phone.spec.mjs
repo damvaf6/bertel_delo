@@ -5829,6 +5829,78 @@ test('заготовки замечаний руководителя (2.103): з
   expect((await ep.request.get(`/api/orgs/${orgId}/remarks`)).status()).toBe(403);
 });
 
+test('заготовки фраз руководителя (2.137): запомнить сообщение эксперту один раз, вставлять в переписку одной кнопкой', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), ep = await ctx(), hp = await ctx();
+  const customer = await signIn(cp, '+79990010137');
+  const expert = await signIn(ep, '+79990010138'), head = await signIn(hp, '+79990010139');
+  const { orgId, id } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Фразы ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Фразова Ольга' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Квартира: заготовки фраз', $1, $2, 'in_work', current_date + 5, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Фразовая ул., 7","area":"44"}') returning id`, [customer.id, expert.id]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [o.id, expert.id]);
+    return { orgId: org.id, id: o.id };
+  });
+
+  // Первое сообщение: заготовок нет — руководитель пишет и запоминает его.
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const row = hp.locator('#org-cases > li').filter({ hasText: 'Фразова Ольга' });
+  await row.locator('[data-chat] summary').click();
+  const chat = row.locator('[data-chat]');
+  const area = chat.getByLabel('Сообщение во внутренней переписке');
+  await expect(chat.locator('.chips.phrases button')).toHaveCount(0);
+  await expect(chat.locator('details.phrases-own')).toBeHidden();
+  await chat.locator('[data-action="org-phrase-save"]').click();
+  await expect(chat.locator('.msg')).toHaveText('Напишите сообщение, потом нажмите «Запомнить как заготовку»');
+  await area.fill('Посмотрите, пожалуйста, замечания в подписи — исправьте и подпишите заново.');
+  await chat.locator('[data-action="org-phrase-save"]').click();
+  await expect(chat.locator('.msg')).toHaveText('Заготовка запомнена');
+  await area.fill('Когда будет готово? Срок у заказчика жёсткий.');
+  await chat.locator('[data-action="org-phrase-save"]').click();
+  await chat.locator('[data-action="org-phrase-save"]').click();
+  await expect(chat.locator('.msg')).toHaveText('Такая заготовка уже есть');
+  await expect(chat.locator('.chips.phrases button')).toHaveText([
+    '+ Посмотрите, пожалуйста, замечания в подписи — исправьте и подпишите за…', '+ Когда будет готово? Срок у заказчика жёсткий.']);
+  await shot(hp, 'd4-rukovoditel-zagotovki-fraz');
+  await chat.getByRole('button', { name: 'Отправить' }).click();
+  await expect(chat.locator('.msg')).toHaveText('Сообщение отправлено');
+
+  // Следующее сообщение — одной кнопкой; повтор не вставляется.
+  await hp.reload();
+  await row.locator('[data-chat] summary').click();
+  await expect(chat.locator('.chips.phrases button')).toHaveCount(2);
+  await chat.locator('.chips.phrases button').nth(0).click();
+  await expect(area).toHaveValue('Посмотрите, пожалуйста, замечания в подписи — исправьте и подпишите заново.');
+  await chat.locator('.chips.phrases button').nth(0).click();
+  await expect(chat.locator('.msg')).toHaveText('Эта фраза уже есть в сообщении');
+  await chat.locator('.chips.phrases button').nth(1).click();
+  await expect(area).toHaveValue('Посмотрите, пожалуйста, замечания в подписи — исправьте и подпишите заново.\nКогда будет готово? Срок у заказчика жёсткий.');
+  await chat.locator('.chips.phrases').scrollIntoViewIfNeeded();
+  await shot(hp, 'd5-rukovoditel-fraza-vstavlena');
+  await chat.getByRole('button', { name: 'Отправить' }).click();
+  await expect(chat.locator('.chat li .body').last()).toHaveText('Посмотрите, пожалуйста, замечания в подписи — исправьте и подпишите заново.\nКогда будет готово? Срок у заказчика жёсткий.');
+
+  // Лишнюю убирает; эксперт заготовок руководителя не видит — в его переписке их нет.
+  await chat.locator('details.phrases-own summary').click();
+  await expect(chat.locator('details.phrases-own summary')).toHaveText('Мои заготовки фраз · 2');
+  hp.once('dialog', (d) => d.accept());
+  await chat.locator('details.phrases-own [data-action="org-phrase-remove"]').last().click();
+  await expect(chat.locator('.msg')).toHaveText('Заготовка убрана');
+  await expect(chat.locator('.chips.phrases button')).toHaveCount(1);
+  // На экране телефона ничего не уходит за край.
+  expect(await hp.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await shot(hp, 'd6-rukovoditel-fraza-ubrana');
+  await ep.goto(`/kabinet#order=${id}`);
+  await expect(ep.locator('#org-chat')).toContainText('Когда будет готово?');
+  await expect(ep.locator('#org-chat .chips.phrases')).toHaveCount(0);
+  expect((await ep.request.get(`/api/orgs/${orgId}/phrases`)).status()).toBe(403);
+});
+
 test('что изменилось между версиями черновика (2.104): эксперт выбирает прошлую версию — по разделам добавлено и убрано', async ({ page }) => {
   const expert = await signIn(page, '+79990000968');
   const o = await db(async (c) => (await c.query(
