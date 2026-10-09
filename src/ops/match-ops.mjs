@@ -4,10 +4,12 @@
 // Решения Claude (на подтверждение Дамиру, DECISIONS.md 01.10.2026): допуск выдаёт администратор; специалист не получает
 // собственные дела; отказ — с причиной, доля принятых предложений идёт в «качество прошлых работ».
 import { HttpError } from '../http/core.mjs';
-import { orderSides } from '../access/policy.mjs';
+import { orderSides, roleIn } from '../access/policy.mjs';
 import { scoreSpecialist } from '../matching/score.mjs';
 import { workStats, yearStats } from '../matching/stats.mjs';
-import { STATUS_NAME, addDays, todayMsk } from '../orders/workflow.mjs';
+import { STATUS_NAME, addDays, isOverdue, todayMsk } from '../orders/workflow.mjs';
+import { CASE_IDLE_DAYS, caseMoves } from './org-ops.mjs';
+import { openExtends } from './deadline-ops.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { audit, text, uuidFrom } from './util.mjs';
 import { notify, orgHeads } from '../notify/notify.mjs';
@@ -227,10 +229,12 @@ export function matchOps() {
     {
       // Карточка эксперта (2.35): то, по чему диспетчер и руководитель выбирают, кому отдать дело. Досье — без копий
       // документов (копии видит только сам эксперт); история — без заказчика, названий заявок и полей. Сданное за год по услугам
-      // и средний срок (2.139) — `year`.
+      // и средний срок (2.139) — `year`. «Сейчас в работе» (2.143) — `now`: дела в работе, на проверке и предложенные, со сроком,
+      // днями без движения (как «Дела экспертов», 2.133) и открытой просьбой о переносе срока; руководителю организации эксперта
+      // — `org_id`, чтобы открыть дело в «Делах экспертов». Без заказчика и данных заявки.
       id: 'specialists.card', method: 'GET', path: '/api/specialists/:id/card', auth: 'user',
       access: { resource: 'specialistCard', param: 'id', need: 'read' },
-      async handler({ sql, specialist, registry }) {
+      async handler({ sql, actor, specialist, signOrg, registry }) {
         const id = specialist.user_id;
         const profile = await profileView(sql, id);
         const dossier = (await loadDossier(sql, id)).map((i) => ({
@@ -251,12 +255,35 @@ export function matchOps() {
           from orders o where o.executor_user_id = ${id} and o.status <> 'cancelled'
           order by o.updated_at desc limit 30`;
         const day = (d) => (d ? (d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10)) : null);
+        const today = todayMsk();
+        const active = await sql`
+          select id, module, service, status, deadline, updated_at from orders
+          where executor_user_id = ${id} and status = any(${OPEN_STATUSES}::text[])
+          order by deadline nulls last, updated_at desc`;
+        const moves = await caseMoves(sql, active.filter((o) => o.status !== 'awaiting_executor'));
+        const ext = await openExtends(sql, active.map((o) => o.id));
         return {
           specialist: profile,
           dossier,
           stats,
           quality: { score: quality.score, note: quality.note },
           year: await yearStats(sql, id, { registry }),
+          now: {
+            org_id: signOrg && roleIn(actor, signOrg.id) === 'head' ? signOrg.id : null,
+            cases: active.map((o) => ({
+              order_ref: orderRef(o.id),
+              service: registry.service(o.module, o.service)?.service.name ?? o.service,
+              status: o.status,
+              status_name: STATUS_NAME[o.status],
+              deadline: o.deadline,
+              overdue: isOverdue(o, today),
+              // «Горит» — как в «Делах экспертов» (2.102): в работе или на проверке, срок прошёл или через 1–2 дня.
+              hot: o.status !== 'awaiting_executor' && !!o.deadline && o.deadline <= addDays(today, 2),
+              idle_days: moves.get(o.id)?.days ?? null,
+              idle: (moves.get(o.id)?.days ?? 0) >= CASE_IDLE_DAYS,
+              extend: ext.get(o.id) ? { new_deadline: ext.get(o.id).new_deadline } : null,
+            })),
+          },
           history: rows.map((o) => ({
             order_ref: orderRef(o.id),
             service: registry.service(o.module, o.service)?.service.name ?? o.service,

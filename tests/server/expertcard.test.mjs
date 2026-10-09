@@ -129,3 +129,52 @@ test('карточка эксперта: сдано за год по услуг�
     assert.ok(!JSON.stringify(y).includes('Дело за год'), 'без названий заявок');
   }
 });
+
+// 2.143: «Сейчас в работе» — дела в работе, на проверке и предложенные: срок, «горит», дни без движения, открытая просьба
+// о переносе срока. Сданные и отменённые — нет. Руководителю организации эксперта — `org_id` (открыть в «Делах экспертов»).
+test('карточка эксперта: сейчас в работе — сроки, без движения, просьба о переносе; без заказчика', async () => {
+  const spec3 = await login(S, '+79990003607');
+  await makeSpecialist(S.sql, spec3.user.id);
+  await addMember(S.sql, org.id, spec3.user.id, 'member');
+  assert.equal((await spec3.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  const today = todayMsk();
+  // [статус, срок (дней вперёд), последнее движение (дней назад), просьба о переносе]
+  const cases = [
+    ['in_work', 1, 5, true], // горит, без движения 5 дней, просит перенос
+    ['review', 10, 0, false],
+    ['awaiting_executor', 20, null, false],
+    ['done', 3, 1, false], // сдано — не в блоке
+    ['cancelled', 3, 1, false],
+  ];
+  const ids = [];
+  for (const [status, deadline, moved, extend] of cases) {
+    const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Дело сейчас' })).body.order;
+    ids.push(o.id);
+    await S.sql`update orders set executor_user_id = ${spec3.user.id}, status = ${status}, deadline = ${addDays(today, deadline)},
+                  updated_at = now() - make_interval(days => ${moved ?? 0}) where id = ${o.id}`;
+    if (moved != null) {
+      await S.sql`update order_status_history set at = now() - make_interval(days => ${moved + 1}) where order_id = ${o.id}`;
+      await S.sql`insert into order_status_history (order_id, from_status, to_status, side, actor_id, at)
+                  values (${o.id}, 'matching', ${status}, 'executor', ${spec3.user.id}, now() - make_interval(days => ${moved}))`;
+    }
+    if (extend) {
+      await S.sql`insert into deadline_requests (order_id, requested_by, old_deadline, new_deadline, reason, requested_at)
+                  values (${o.id}, ${spec3.user.id}, ${addDays(today, deadline)}, ${addDays(today, deadline + 7)}, 'Жду выписку из ЕГРН',
+                          now() - make_interval(days => 6))`;
+    }
+  }
+  for (const [c, orgId] of [[dispatcher, null], [head, org.id], [spec3, null]]) {
+    const r = await c.req('GET', `/api/specialists/${spec3.user.id}/card`);
+    assert.equal(r.status, 200);
+    const now = r.body.now;
+    assert.equal(now.org_id, orgId, 'ссылка к делу — только руководителю организации эксперта');
+    assert.deepEqual(now.cases.map((x) => [x.status, x.hot, x.idle, x.idle_days, x.extend?.new_deadline ?? null]), [
+      ['in_work', true, true, 5, addDays(today, 8)],
+      ['review', false, false, 0, null],
+      ['awaiting_executor', false, false, null, null],
+    ]);
+    assert.equal(now.cases[0].service, 'Оценка недвижимости');
+    const text = JSON.stringify(now);
+    for (const secret of ['Дело сейчас', 'Жду выписку', owner.user.id, ...ids]) assert.ok(!text.includes(secret), `в блоке нет: ${secret}`);
+  }
+});
