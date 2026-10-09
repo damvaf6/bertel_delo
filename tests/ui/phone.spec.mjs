@@ -6458,3 +6458,43 @@ test('«Напомнить эксперту» (2.125): руководитель 
   await n.getByRole('button').first().click();
   await expect(ep.locator('#order-title')).toHaveText('Напоминание: квартира');
 });
+
+test('заказчик ждёт ответа (2.132): сообщение без ответа больше суток — строка в «Сегодня», нажатие ведёт к переписке', async ({ page, browser, baseURL }) => {
+  await signIn(page, '+79990002132');
+  const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира: ждут ответа' }, headers: H })).json();
+  const id = created.order.id;
+  expect((await page.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(9), fields: { purpose: 'bank', region: 'moscow', object_type: 'flat', address: 'г. Москва, Тихая ул., 3', area: '44' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  const ectx = await phoneContext(browser, baseURL);
+  const ep = await ectx.newPage();
+  const expert = await signIn(ep, '+79990002133');
+  await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    await c.query("update orders set price_kop = 1500000, paid_at = now(), status = 'in_work', executor_user_id = $2 where id = $1", [id, expert.id]);
+  });
+  expect((await page.request.post(`/api/orders/${id}/messages`, { data: { body: 'Подскажите, когда будет осмотр?' }, headers: H })).status()).toBe(201);
+  // Эксперт прочитал, но не ответил; прошло больше суток.
+  await ep.goto(`/kabinet#order=${id}`);
+  await expect(ep.locator('#messages li')).toContainText('когда будет осмотр');
+  await db((c) => c.query("update order_messages set at = now() - interval '30 hours' where order_id = $1", [id]));
+  await ep.goto('/kabinet');
+  await expect(ep.locator('[data-today="reply-wait"]')).toHaveText('Заказчик ждёт ответа · 1');
+  const row = ep.locator('[data-today-item="reply-wait"]');
+  await expect(row).toContainText('Квартира: ждут ответа');
+  await expect(row).toContainText('«Подскажите, когда будет осмотр?»');
+  await expect(row).toContainText('ждёт 1 дн. 6 ч');
+  await expect(ep.locator('[data-today="ready"]')).toHaveCount(0);
+  await shot(ep, '113e-ekspert-zakazchik-zhdyot-otveta');
+  await row.getByRole('button').click();
+  await expect(ep.locator('#chat-box')).toBeInViewport();
+  await ep.locator('#message-text').fill('Осмотр завтра в 11:00.');
+  await ep.locator('#message-send').click();
+  await expect(ep.locator('#messages li')).toHaveCount(2);
+  await ep.goto('/kabinet');
+  await expect(ep.locator('#today-box')).toBeVisible();
+  await expect(ep.locator('[data-today="reply-wait"]')).toHaveCount(0);
+  await ectx.close();
+});

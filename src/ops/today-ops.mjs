@@ -9,7 +9,8 @@
 // Эксперту — очередь подписи (2.99): он подписал, организация ещё нет; руководителю в «Ждут подписи» — когда эксперт напоминал.
 // Руководителю — просьбы экспертов передать дело коллеге (2.107); эксперт отметил «не принимаю дела до …», а у него дела
 // со сроком в эти дни (2.113) — передать коллеге. Эксперту — напоминания по своим заметкам к делу (2.115); в «Можно
-// продолжать» — какие запрошенные документы пришли и сколько ещё ждём (2.128).
+// продолжать» — какие запрошенные документы пришли и сколько ещё ждём (2.128). Заказчик ждёт ответа в переписке больше суток
+// (2.132): его сообщение без ответа эксперта — даже если эксперт его уже прочитал.
 // Руководителю — те же сведения, что в «Делах экспертов» (2.16): без заказчика, полей заявки, документов и переписки.
 // Только свои дела и свои организации.
 import { orderRef } from '../notify/registry.mjs';
@@ -26,6 +27,8 @@ import { dueNotes } from './note-ops.mjs';
 // «Горит» — просрочено или до срока не больше двух дней (как подсветка в списке дел).
 const HOT_DAYS = 2;
 const LIMIT = 50;
+// Заказчик ждёт ответа в переписке дольше суток (2.132).
+const REPLY_HOURS = 24;
 
 async function expertPart(sql, actor, registry, today) {
   const sp = await sql.one`select user_id from specialists where user_id = ${actor.id}`;
@@ -91,11 +94,26 @@ async function expertPart(sql, actor, registry, today) {
     }
     signWaits.sort((a, b) => new Date(a.since) - new Date(b.since));
   }
+  // Заказчик ждёт ответа больше суток (2.132): после последнего сообщения эксперта заказчик написал, и первому такому
+  // сообщению больше суток. Сообщения диспетчера не в счёт — отвечает эксперт заказчику.
+  const unanswered = rows.filter((o) => ['in_work', 'review'].includes(o.status)).map((o) => o.id);
+  const waits = unanswered.length ? await sql`
+    select m.order_id, min(m.at) as since, count(*)::int as count,
+           (array_agg(m.body order by m.id desc))[1] as last_body
+    from order_messages m
+    where m.order_id = any(${unanswered}::uuid[]) and m.side = 'customer'
+      and m.id > coalesce((select max(e.id) from order_messages e where e.order_id = m.order_id and e.side = 'executor'), 0)
+    group by m.order_id having min(m.at) < now() - make_interval(hours => ${REPLY_HOURS})
+    order by min(m.at)` : [];
+  const replyWait = waits.map((w) => item(rows.find((o) => o.id === w.order_id), {
+    since: w.since, count: w.count, last: w.last_body.length > 80 ? `${w.last_body.slice(0, 80)}…` : w.last_body,
+  }));
   // Напоминания по своим заметкам к делу (2.115): день настал, заметка не отмечена «сделано».
   const notes = (await dueNotes(sql, actor.id, rows.map((o) => o.id), today))
     .map((n) => item(rows.find((o) => o.id === n.order_id), { note: n.body, remind_on: n.remind_on }));
   return {
     ready,
+    reply_wait: replyWait,
     notes,
     sign_wait: signWaits,
     inspect_silent: silent,
