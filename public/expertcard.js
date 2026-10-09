@@ -1,5 +1,5 @@
 // Карточка эксперта (2.35): квалификация и допуски, досье (без копий), итоги работы и оценка «качество» в подборе,
-// загрузка, сданное за год по услугам и средний срок (2.139), история дел. Для диспетчера и администратора, руководителя
+// загрузка, «Сейчас в работе» (2.143), сданное за год по услугам и средний срок (2.139), история дел. Для диспетчера и администратора, руководителя
 // организации эксперта и самого эксперта.
 // Открывается по адресу #expert=<id> из подбора, списка специалистов и «Дел экспертов». Тексты — через textContent.
 import { api, el } from '/common.js';
@@ -38,6 +38,24 @@ function showYear(y) {
     el('div', { class: x.done_late ? 'overdue' : 'muted', text: yearLine(x) }))));
 }
 
+// Сейчас в работе (2.143): дела со сроками, «без движения» (как в «Делах экспертов», 2.133) и просьбы о переносе срока.
+// Руководителю организации эксперта — ссылка к делу в «Делах экспертов» (там напомнить, передать, написать эксперту).
+function showNow(now) {
+  const n = now.cases.length;
+  const idle = now.cases.filter((x) => x.idle).length;
+  const hot = now.cases.filter((x) => x.hot).length;
+  $('expert-now-note').textContent = n
+    ? [`Дел: ${n}`, hot ? `срок горит: ${hot}` : null, idle ? `без движения 3 дня и больше: ${idle}` : null].filter(Boolean).join(' · ') + '. Без заказчика и данных заявки.'
+    : 'Дел в работе нет.';
+  $('expert-now').replaceChildren(...now.cases.map((x) => el('li', { 'data-now': x.order_ref },
+    el('div', { class: 'title', text: `${x.service} · ${x.order_ref}` }),
+    el('div', { class: x.overdue || x.hot ? 'overdue' : 'muted', text: [x.status_name,
+      x.deadline ? `срок ${dayRu(x.deadline)}` : 'без срока', x.overdue ? 'просрочено' : x.hot ? 'срок горит' : null].filter(Boolean).join(' · ') }),
+    ...(x.idle ? [el('div', { class: 'overdue', 'data-idle': '', text: `Без движения ${x.idle_days} дн.` })] : []),
+    ...(x.extend ? [el('div', { class: 'muted', 'data-extend': '', text: `Просит перенести срок на ${dayRu(x.extend.new_deadline)} — ждёт решения диспетчера` })] : []),
+    ...(now.org_id ? [el('a', { class: 'link', href: `#org=${now.org_id}&case=${x.order_ref.slice(2)}&to=case`, 'data-action': 'now-open' }, 'Открыть в делах экспертов')] : []))));
+}
+
 export async function showExpertCard(id) {
   let c;
   try { c = await api('GET', `/api/specialists/${id}/card`); } catch (err) {
@@ -55,6 +73,7 @@ export async function showExpertCard(id) {
     ['Качество в подборе', `${c.quality.score} из 100 — ${c.quality.note}`],
     ['Итоги', `сдано ${c.stats.done}, из них в срок ${c.stats.on_time}; возвратов на доработку ${c.stats.returned}; предложений принято ${c.stats.accepted} из ${c.stats.offers}`],
   ].flatMap(([k, v]) => [el('dt', { text: k }), el('dd', { text: v })]));
+  showNow(c.now);
   showYear(c.year);
   $('expert-permits').replaceChildren(...(s.permits.length ? s.permits.map((p) => el('li', { text: `${serviceName(p.module, p.service)}${p.valid_until ? ` · до ${dayRu(p.valid_until)}` : ''}` }))
     : [el('li', { class: 'muted', text: 'Допусков нет' })]));

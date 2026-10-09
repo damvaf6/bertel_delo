@@ -2622,6 +2622,8 @@ test('карточка эксперта (2.35): из подбора у дисп�
   await expect(dp.locator('#expert-dossier')).toContainText('копии нет');
   await expect(dp.locator('#expert-permits')).toContainText('Оценка недвижимости');
   await expect(dp.locator('#expert-year-note')).toContainText('сданных дел нет');
+  await expect(dp.locator('#expert-now-note')).toHaveText('Дел в работе нет.');
+  await expect(dp.locator('#expert-now [data-action="now-open"]')).toHaveCount(0);
   await shot(dp, '99-kartochka-eksperta');
   await dp.getByRole('link', { name: '← Назад' }).click();
   await expect(dp.locator('#order-title')).toHaveText('Квартира для карточки');
@@ -2645,6 +2647,35 @@ test('карточка эксперта (2.35): из подбора у дисп�
   await expect(hp.locator('#expert-year')).not.toContainText('Сданная квартира');
   await hp.locator('#expert-year-box').scrollIntoViewIfNeeded();
   await shot(hp, '99a-kartochka-sdano-za-god');
+
+  // 2.143: «Сейчас в работе» — дело в работе: срок через 2 дня, 4 дня без движения, просьба о переносе срока; руководитель
+  // открывает его в «Делах экспертов».
+  let busy;
+  await db(async (c) => {
+    busy = (await c.query("insert into orders (owner_user_id, module, service, title, status, deadline, executor_user_id, updated_at) values ($1, 'expertise', 'realty', 'Квартира в работе', 'in_work', $2, $3, now() - interval '4 days') returning id", [customer.id, inDays(2), spec.id])).rows[0].id;
+    await c.query("insert into order_status_history (order_id, from_status, to_status, side, actor_id, at) values ($1, 'awaiting_executor', 'in_work', 'executor', $2, now() - interval '4 days')", [busy, spec.id]);
+    await c.query("insert into deadline_requests (order_id, requested_by, old_deadline, new_deadline, reason, requested_at) values ($1, $2, $3, $4, 'Жду выписку', now() - interval '5 days')", [busy, spec.id, inDays(2), inDays(9)]);
+  });
+  const ref = busy.slice(0, 8).toUpperCase();
+  await hp.reload();
+  await expect(hp.locator('#expert-now-note')).toContainText('Дел: 1 · срок горит: 1 · без движения 3 дня и больше: 1');
+  const now = hp.locator(`#expert-now li[data-now="№ ${ref}"]`);
+  await expect(now).toContainText('Оценка недвижимости');
+  await expect(now).toContainText('срок горит');
+  await expect(now.locator('[data-idle]')).toHaveText('Без движения 4 дн.');
+  await expect(now.locator('[data-extend]')).toContainText('Просит перенести срок на');
+  await expect(hp.locator('#expert-now')).not.toContainText('Квартира в работе');
+  await expect(hp.locator('#expert-now')).not.toContainText('Жду выписку');
+  await hp.locator('#expert-now-box').scrollIntoViewIfNeeded();
+  await shot(hp, '99b-kartochka-sejchas-v-rabote');
+  await now.getByRole('link', { name: 'Открыть в делах экспертов' }).click();
+  await expect(hp).toHaveURL(new RegExp(`#org=${orgId}&case=${ref}&to=case$`));
+  await expect(hp.locator(`#org-cases li[data-case="№ ${ref}"]`)).toBeInViewport();
+  await shot(hp, '99c-kartochka-k-delu');
+  // Сам эксперт видит блок у себя, но без ссылки в «Дела экспертов».
+  await sp.goto(`/kabinet#expert=${spec.id}`);
+  await expect(sp.locator(`#expert-now li[data-now="№ ${ref}"]`)).toBeVisible();
+  await expect(sp.locator('#expert-now [data-action="now-open"]')).toHaveCount(0);
 
   // Заказчик по прямой ссылке — «не найдено».
   await page.goto(`/kabinet#expert=${spec.id}`);
