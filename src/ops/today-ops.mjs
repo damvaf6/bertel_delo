@@ -11,7 +11,7 @@
 // со сроком в эти дни (2.113) — передать коллеге. Эксперту — напоминания по своим заметкам к делу (2.115); в «Можно
 // продолжать» — какие запрошенные документы пришли и сколько ещё ждём (2.128). Заказчик ждёт ответа в переписке больше суток
 // (2.132): его сообщение без ответа эксперта — даже если эксперт его уже прочитал. Срок через 1–2 дня или прошёл, а своего
-// файла результата нет (2.138).
+// файла результата нет (2.138). «Вернули на доработку» — когда вернули, пункты замечания, ближе срок — выше (2.147).
 // Руководителю — те же сведения, что в «Делах экспертов» (2.16): без заказчика, полей заявки, документов и переписки.
 // Только свои дела и свои организации.
 import { orderRef } from '../notify/registry.mjs';
@@ -44,14 +44,18 @@ async function expertPart(sql, actor, registry, today) {
   const returned = [];
   for (const o of rows.filter((x) => x.status === 'in_work')) {
     // Диспетчер вернул на доработку: последний переход в «В работе» — из «Проверки результата».
-    const last = await sql.one`select from_status, reason from order_status_history where order_id = ${o.id} and to_status = 'in_work'
+    const last = await sql.one`select from_status, reason, at from order_status_history where order_id = ${o.id} and to_status = 'in_work'
                                order by id desc limit 1`;
-    if (last?.from_status === 'review') returned.push(item(o, { by: 'Диспетчер', comment: last.reason ?? '' }));
+    // Когда вернули (2.147) и куда вести: после диспетчера — к файлу результата, после руководителя — к замечаниям по пунктам.
+    if (last?.from_status === 'review') returned.push(item(o, { by: 'Диспетчер', comment: last.reason ?? '', at: last.at, to: 'result' }));
     // Руководитель вернул файл (2.27), а эксперт ещё не исправил.
     for (const r of (await orgReturns(sql, o.id)).filter((x) => x.open)) {
-      returned.push(item(o, { by: `Руководитель${r.by ? ` (${r.by})` : ''}`, comment: r.comment }));
+      returned.push(item(o, { by: `Руководитель${r.by ? ` (${r.by})` : ''}`, comment: r.comment, at: r.at, to: 'fix',
+        points: r.items.length, left: r.left }));
     }
   }
+  // Ближе срок — выше (2.147); без срока — в конце, при равном сроке раньше вернули — выше.
+  returned.sort((a, b) => (a.deadline ?? '9999').localeCompare(b.deadline ?? '9999') || new Date(a.at) - new Date(b.at));
   // Осмотр по ссылке молчит 2 дня (2.85): владелец не прислал ни одного фото — отправить ссылку снова.
   const silent = [];
   for (const l of await silentLinks(sql, { executor: actor.id })) {

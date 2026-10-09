@@ -72,7 +72,7 @@ export async function openOrder(id, { to } = {}) {
   setNext({ loaded: true }); // разделы осмотра и черновика показаны — шаги пересчитываются, нужный сейчас блок раскрыт
   // Черновик и «Срок» уже показаны — у предупреждения «нет файла результата» (2.138) видны нужные кнопки.
   renderResultDue(lastDocs?.result_due ?? null);
-  const box = { result: 'docs-box', inspect: 'inspect-box', chat: 'chat-box', docs: 'docreq-box', deadline: 'deadline-box', extend: 'deadline-box', sign: 'sign-wait-box', handover: 'handover-box', onsite: 'onsite-box', notes: 'notes-box' }[to];
+  const box = { result: 'docs-box', inspect: 'inspect-box', chat: 'chat-box', docs: 'docreq-box', deadline: 'deadline-box', extend: 'deadline-box', sign: 'sign-wait-box', fix: 'org-returns-box', handover: 'handover-box', onsite: 'onsite-box', notes: 'notes-box' }[to];
   if (box && !$(box).classList.contains('hidden')) { reveal(box); $(box).scrollIntoView({ block: 'start' }); }
   // «Попросить перенос» из «Моих сроков» (2.134): причина «много дел в этот день» и новый срок — сразу в полях.
   if (to === 'extend') document.querySelector('#deadline-reason-list [data-reason="busy"]')?.click();
