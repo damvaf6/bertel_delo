@@ -67,3 +67,40 @@ test('дела экспертов (2.127): номер эксперта у дел
   // Эксперт сам «Дела экспертов» не видит — номера коллег ему не раскрываются.
   assert.equal((await a.req('GET', `/api/orgs/${org.id}/cases`)).status, 403);
 });
+
+// Дело без движения (2.133): сколько дней по делу ничего не происходило; переписка с заказчиком и его файлы не в счёт,
+// файл эксперта — движение. Файл заказчика (по запросу документов) — как будто приложил заказчик: тот же файл, другой автор.
+const PDF = Buffer.from('%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n');
+const put = (c, o, name) => c.req('POST', `/api/orders/${o.id}/results`, PDF, {
+  raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent(name) },
+});
+
+test('дела экспертов (2.133): «без движения» — дни с последнего события дела, переписка заказчика не в счёт', async () => {
+  const idle = await taken('Без движения', 10, a);
+  const fresh = await taken('Свежее', 10, b);
+  await S.sql`update order_status_history set at = now() - interval '5 days 1 hour' where order_id = ${idle.id}`;
+  await S.sql`update orders set updated_at = now() - interval '5 days' where id = ${idle.id}`;
+  const get = async (o) => (await head.req('GET', `/api/orgs/${org.id}/cases`)).body.cases.find((c) => c.id === o.id);
+  let c = await get(idle);
+  assert.equal(c.last_move.days, 5);
+  assert.equal(c.idle, true);
+  c = await get(fresh);
+  assert.equal(c.last_move.days, 0);
+  assert.equal(c.idle, false);
+  // Заказчик пишет и прикладывает файл — дело всё равно без движения.
+  assert.equal((await owner.req('POST', `/api/orders/${idle.id}/messages`, { body: 'Как дела с оценкой?' })).status, 201);
+  const r = await put(a, idle, 'выписка.pdf');
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  await S.sql`update documents set uploaded_by = ${owner.user.id} where order_id = ${idle.id}`;
+  c = await get(idle);
+  assert.equal(c.idle, true, 'переписка и файлы заказчика не в счёт');
+  assert.equal(c.last_move.days, 5);
+  // Эксперт приложил файл — движение есть.
+  assert.equal((await put(a, idle, 'расчёт.pdf')).status, 201);
+  c = await get(idle);
+  assert.equal(c.idle, false);
+  assert.equal(c.last_move.days, 0);
+  // Ожидающие ответа эксперта и завершённые — без «последнего движения».
+  const done = (await head.req('GET', `/api/orgs/${org.id}/cases`)).body.cases.filter((x) => !['in_work', 'review'].includes(x.status));
+  assert.ok(done.length > 0 && done.every((x) => x.last_move === null && x.idle === false));
+});
