@@ -293,3 +293,31 @@ test('эксперт не принимает дела (2.113): руководи�
   assert.equal((await spec.req('PATCH', '/api/specialist/me', { away: null })).status, 200);
   assert.deepEqual(await away(), []);
 });
+
+test('заказчик ждёт ответа больше суток (2.132): без ответа эксперта — даже прочитанное; ответил — пропало; диспетчер не в счёт', async () => {
+  const o = await offered('Дело с вопросом заказчика', 12);
+  assert.equal((await step(spec, o, 'in_work')).status, 200);
+  const say = (c, body) => c.req('POST', `/api/orders/${o.id}/messages`, { body });
+  const waits = async (c = spec) => (await c.req('GET', '/api/today')).body.expert?.reply_wait ?? [];
+  assert.equal((await say(owner, 'Когда будет готово?')).status, 201);
+  assert.deepEqual(await waits(), [], 'меньше суток — не горит');
+  await S.sql`update order_messages set at = now() - interval '26 hours' where order_id = ${o.id}`;
+  assert.equal((await say(owner, 'Ответьте, пожалуйста')).status, 201);
+  // Эксперт открыл дело — сообщение прочитано, но ответа нет: строка остаётся.
+  assert.equal((await spec.req('GET', `/api/orders/${o.id}`)).status, 200);
+  let w = await waits();
+  assert.deepEqual(w.map((x) => [x.id, x.count, x.last]), [[o.id, 2, 'Ответьте, пожалуйста']]);
+  assert.ok(Date.now() - Date.parse(w[0].since) > 25 * 3600_000, 'ждёт с первого сообщения без ответа');
+  assert.deepEqual(await waits(other), [], 'чужой эксперт не видит');
+  // Ответил диспетчер — заказчик всё ещё ждёт эксперта.
+  assert.equal((await say(dispatcher, 'Передадим эксперту')).status, 201);
+  assert.equal((await waits()).length, 1);
+  // Эксперт ответил — строки нет; новое сообщение заказчика снова ждёт сутки.
+  assert.equal((await say(spec, 'Завтра к вечеру')).status, 201);
+  assert.deepEqual(await waits(), []);
+  assert.equal((await say(owner, 'Спасибо')).status, 201);
+  assert.deepEqual(await waits(), []);
+  await S.sql`update order_messages set at = now() - interval '25 hours' where order_id = ${o.id} and body = 'Спасибо'`;
+  w = await waits();
+  assert.deepEqual(w.map((x) => [x.count, x.last]), [[1, 'Спасибо']]);
+});
