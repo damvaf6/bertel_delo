@@ -1,5 +1,6 @@
 // Карточка эксперта (2.35): квалификация и допуски, досье (без копий), итоги работы и оценка «качество» в подборе,
-// загрузка, история дел. Для диспетчера и администратора, руководителя организации эксперта и самого эксперта.
+// загрузка, сданное за год по услугам и средний срок (2.139), история дел. Для диспетчера и администратора, руководителя
+// организации эксперта и самого эксперта.
 // Открывается по адресу #expert=<id> из подбора, списка специалистов и «Дел экспертов». Тексты — через textContent.
 import { api, el } from '/common.js';
 import { state, show, notFoundView } from '/shell.js';
@@ -20,6 +21,23 @@ export const expertLink = (id) => el('a', { class: 'link', href: `#expert=${id}`
 // «Назад» — туда, откуда открыли карточку (подбор, список специалистов, дела организации).
 $('expert-back').addEventListener('click', (e) => { e.preventDefault(); history.back(); });
 
+// Сдано за год (2.139): всего и по услугам — сколько, из них позже срока, в среднем дней от принятия дела до «готово».
+const daysRu = (n) => {
+  const s = String(n).replace('.', ',');
+  if (!Number.isInteger(n)) return `${s} дн.`;
+  const m10 = n % 10, m100 = n % 100;
+  return `${s} ${m10 === 1 && m100 !== 11 ? 'день' : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? 'дня' : 'дней'}`;
+};
+const yearLine = (x) => [`сдано ${x.done}`, x.done_late ? `позже срока ${x.done_late}` : 'все в срок',
+  x.avg_days != null ? `в среднем ${daysRu(x.avg_days)} от принятия до сдачи` : null].filter(Boolean).join(' · ');
+
+function showYear(y) {
+  $('expert-year-note').textContent = y.done ? `С ${dayRu(y.since)} по сегодня: ${yearLine(y)}.` : `С ${dayRu(y.since)} сданных дел нет.`;
+  $('expert-year').replaceChildren(...y.by_service.map((x) => el('li', { 'data-service': `${x.module}/${x.service}` },
+    el('div', { class: 'title', text: x.name }),
+    el('div', { class: x.done_late ? 'overdue' : 'muted', text: yearLine(x) }))));
+}
+
 export async function showExpertCard(id) {
   let c;
   try { c = await api('GET', `/api/specialists/${id}/card`); } catch (err) {
@@ -37,6 +55,7 @@ export async function showExpertCard(id) {
     ['Качество в подборе', `${c.quality.score} из 100 — ${c.quality.note}`],
     ['Итоги', `сдано ${c.stats.done}, из них в срок ${c.stats.on_time}; возвратов на доработку ${c.stats.returned}; предложений принято ${c.stats.accepted} из ${c.stats.offers}`],
   ].flatMap(([k, v]) => [el('dt', { text: k }), el('dd', { text: v })]));
+  showYear(c.year);
   $('expert-permits').replaceChildren(...(s.permits.length ? s.permits.map((p) => el('li', { text: `${serviceName(p.module, p.service)}${p.valid_until ? ` · до ${dayRu(p.valid_until)}` : ''}` }))
     : [el('li', { class: 'muted', text: 'Допусков нет' })]));
   $('expert-dossier').replaceChildren(...(c.dossier.length ? c.dossier.map((d) => el('li', { 'data-kind': d.kind },
