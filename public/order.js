@@ -70,7 +70,9 @@ export async function openOrder(id, { to } = {}) {
   loadJournal(current.order, current.access);
   await Promise.all([loadDocs(true), loadTransfer(), loadMatch(current, () => openOrder(id)), loadDraft(current, () => openOrder(id)), loadAnalogs(current), loadInspection(current), loadOnsite(current), loadDocRequests(current, (file, msg) => uploadFile(file, 'other', msg)), loadDeadline(current, () => openOrder(id)), loadHandover(current), loadNotes(current), loadPredecessor(current, () => openOrder(id)), loadRepeat(current, () => openOrder(id)), loadSimilar(current), loadReview(current), loadChat(current), loadMoney(current, () => openOrder(id))]);
   setNext({ loaded: true }); // разделы осмотра и черновика показаны — шаги пересчитываются, нужный сейчас блок раскрыт
-  const box = { inspect: 'inspect-box', chat: 'chat-box', docs: 'docreq-box', deadline: 'deadline-box', extend: 'deadline-box', sign: 'sign-wait-box', handover: 'handover-box', onsite: 'onsite-box', notes: 'notes-box' }[to];
+  // Черновик и «Срок» уже показаны — у предупреждения «нет файла результата» (2.138) видны нужные кнопки.
+  renderResultDue(lastDocs?.result_due ?? null);
+  const box = { result: 'docs-box', inspect: 'inspect-box', chat: 'chat-box', docs: 'docreq-box', deadline: 'deadline-box', extend: 'deadline-box', sign: 'sign-wait-box', handover: 'handover-box', onsite: 'onsite-box', notes: 'notes-box' }[to];
   if (box && !$(box).classList.contains('hidden')) { reveal(box); $(box).scrollIntoView({ block: 'start' }); }
   // «Попросить перенос» из «Моих сроков» (2.134): причина «много дел в этот день» и новый срок — сразу в полях.
   if (to === 'extend') document.querySelector('#deadline-reason-list [data-reason="busy"]')?.click();
@@ -395,6 +397,7 @@ async function loadDocs(initial = false) {
   $('docs-empty').classList.toggle('hidden', documents.length > 0);
   $('results-later').textContent = 'Результат работы появится здесь после проверки.';
   $('results-later').classList.toggle('hidden', !(resultsHidden && ['in_work', 'review'].includes(order.status)));
+  renderResultDue(documentsBody.result_due ?? null);
   renderOrgReturns(documentsBody.org_returns ?? []);
   renderSignWait(documentsBody.sign_wait ?? null, documentsBody.signature_org);
   setNext({ docs: documentsBody });
@@ -402,6 +405,23 @@ async function loadDocs(initial = false) {
   const basis = documents.filter((d) => d.kind === 'basis');
   $('basis-file-state').textContent = basis.length ? `Приложено: ${basis.map((d) => d.filename).join(', ')}` : 'Файл определения ещё не приложен';
 }
+
+// Срок через 1–2 дня или прошёл, а своего файла результата нет (2.138): предупреждение исполнителю над документами —
+// загрузить файл, собрать отчёт из черновика или попросить перенести срок (если просить можно).
+function renderResultDue(due) {
+  $('result-due-box').classList.toggle('hidden', !due);
+  if (!due) return;
+  const n = due.days_left;
+  const when = due.overdue ? `Срок прошёл (${dayRu(due.deadline)})` : n === 0 ? 'Срок сегодня' : n === 1 ? 'Срок завтра' : `Срок ${dayRu(due.deadline)} — через ${n} дн.`;
+  $('result-due-text').textContent = `${when}, а файла результата ещё нет. ${due.has_draft
+    ? 'Черновик есть — соберите из него отчёт Word и загрузите файл.' : 'Загрузите файл результата или попросите перенести срок.'}`;
+  $('result-due-draft').classList.toggle('hidden', !due.has_draft || $('draft-box').classList.contains('hidden'));
+  $('result-due-extend').classList.toggle('hidden', $('deadline-form').classList.contains('hidden'));
+}
+const goTo = (id) => { reveal(id); $(id).scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+$('result-due-upload').addEventListener('click', () => { reveal('result-upload-box'); $('result-file').click(); });
+$('result-due-draft').addEventListener('click', () => goTo('draft-box'));
+$('result-due-extend').addEventListener('click', () => goTo('deadline-box'));
 
 // Внутренняя переписка с руководителем организации (2.28) — только самому исполнителю, если он работает от организации.
 function loadOrgChat() {

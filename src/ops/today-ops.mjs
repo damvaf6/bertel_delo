@@ -10,12 +10,13 @@
 // Руководителю — просьбы экспертов передать дело коллеге (2.107); эксперт отметил «не принимаю дела до …», а у него дела
 // со сроком в эти дни (2.113) — передать коллеге. Эксперту — напоминания по своим заметкам к делу (2.115); в «Можно
 // продолжать» — какие запрошенные документы пришли и сколько ещё ждём (2.128). Заказчик ждёт ответа в переписке больше суток
-// (2.132): его сообщение без ответа эксперта — даже если эксперт его уже прочитал.
+// (2.132): его сообщение без ответа эксперта — даже если эксперт его уже прочитал. Срок через 1–2 дня или прошёл, а своего
+// файла результата нет (2.138).
 // Руководителю — те же сведения, что в «Делах экспертов» (2.16): без заказчика, полей заявки, документов и переписки.
 // Только свои дела и свои организации.
 import { orderRef } from '../notify/registry.mjs';
 import { splitAmount } from '../money/money.mjs';
-import { STATUS_NAME, addDays, isOverdue, todayMsk } from '../orders/workflow.mjs';
+import { STATUS_NAME, addDays, isOverdue, resultDue, todayMsk } from '../orders/workflow.mjs';
 import { orderSignatures, orgReturns, signWait } from './sign-ops.mjs';
 import { executorSignOrg } from '../access/policy.mjs';
 import { dossierAlerts, loadDossier } from '../dossier/dossier.mjs';
@@ -111,14 +112,24 @@ async function expertPart(sql, actor, registry, today) {
   // Напоминания по своим заметкам к делу (2.115): день настал, заметка не отмечена «сделано».
   const notes = (await dueNotes(sql, actor.id, rows.map((o) => o.id), today))
     .map((n) => item(rows.find((o) => o.id === n.order_id), { note: n.body, remind_on: n.remind_on }));
+  // Срок через 1–2 дня или прошёл, а своего файла результата нет (2.138) — на странице — выше «Горит срок» и там не повторяется.
+  const hotRows = rows.filter((o) => o.status === 'in_work' && o.deadline && o.deadline <= soon);
+  const own = hotRows.length ? await sql`
+    select order_id, count(*)::int as n from documents where order_id = any(${hotRows.map((o) => o.id)}::uuid[]) and kind = 'result'
+      and deleted_at is null and uploaded_by = ${actor.id} group by order_id` : [];
+  const drafts = hotRows.length ? await sql`
+    select distinct order_id from result_drafts where order_id = any(${hotRows.map((o) => o.id)}::uuid[])` : [];
+  const noResult = hotRows.filter((o) => resultDue(o, own.find((x) => x.order_id === o.id)?.n ?? 0, today))
+    .map((o) => item(o, { has_draft: drafts.some((x) => x.order_id === o.id), extend: ext.get(o.id) ?? null }));
   return {
     ready,
+    no_result: noResult,
     reply_wait: replyWait,
     notes,
     sign_wait: signWaits,
     inspect_silent: silent,
     // Уже попросил перенести срок (2.100) — в строке видно, на какую дату и что ответа ещё нет.
-    hot: rows.filter((o) => o.status === 'in_work' && o.deadline && o.deadline <= soon).map((o) => item(o, { extend: ext.get(o.id) ?? null })),
+    hot: hotRows.map((o) => item(o, { extend: ext.get(o.id) ?? null })),
     returned,
     review: rows.filter((o) => o.status === 'review').map((o) => item(o)),
     offers: rows.filter((o) => o.status === 'awaiting_executor')

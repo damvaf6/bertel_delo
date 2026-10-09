@@ -5481,7 +5481,8 @@ test('как эксперт и руководитель (2.100): перенос 
   // Эксперт: срок завтра, ничего не готово — просит перенести срок.
   expect((await ep.request.post(`/api/orders/${id}/deadline-requests`, { data: { new_deadline: want, reason: 'Заказчик не открыл доступ в квартиру' }, headers: H })).status()).toBe(201);
   await ep.goto('/kabinet');
-  const hot = ep.locator('#today-box li[data-today-item="hot"]').filter({ hasText: 'Квартира: стыки пачки' });
+  // Файла результата нет — дело в строке «Срок близко — нет файла результата» (2.138), просьба о переносе видна там же.
+  const hot = ep.locator('#today-box li[data-today-item="no-result"]').filter({ hasText: 'Квартира: стыки пачки' });
   await expect(hot).toContainText(`Вы попросили перенести на ${ru(want)}, ждёт ответа диспетчера`);
   await shot(ep, 'b1-ekspert-gorit-prosil-perenos');
 
@@ -6674,5 +6675,51 @@ test('заказчик ждёт ответа (2.132): сообщение без 
   await ep.goto('/kabinet');
   await expect(ep.locator('#today-box')).toBeVisible();
   await expect(ep.locator('[data-today="reply-wait"]')).toHaveCount(0);
+  await ectx.close();
+});
+
+test('срок близко, а файла результата нет (2.138): строка в «Сегодня» и предупреждение в деле', async ({ page, browser, baseURL }) => {
+  await signIn(page, '+79990002138');
+  const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира: файла ещё нет' }, headers: H })).json();
+  const id = created.order.id;
+  expect((await page.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(1), fields: { purpose: 'bank', region: 'moscow', object_type: 'flat', address: 'г. Москва, Срочная ул., 8', area: '38' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  const ectx = await phoneContext(browser, baseURL);
+  const ep = await ectx.newPage();
+  const expert = await signIn(ep, '+79990002139');
+  await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    await c.query("update orders set price_kop = 1500000, paid_at = now(), status = 'in_work', executor_user_id = $2 where id = $1", [id, expert.id]);
+  });
+  await ep.goto('/kabinet');
+  await expect(ep.locator('[data-today="no-result"]')).toHaveText('Срок близко — нет файла результата · 1');
+  const row = ep.locator('[data-today-item="no-result"]');
+  await expect(row).toContainText('Квартира: файла ещё нет');
+  await expect(row).toContainText('срок завтра');
+  await expect(row).toContainText('загрузите файл результата или попросите перенести срок');
+  await expect(ep.locator('[data-today="hot"]')).toHaveCount(0); // в «Горит срок» не повторяется
+  await shot(ep, '113f-ekspert-net-fajla-rezultata');
+  await row.getByRole('button').click();
+  const due = ep.locator('#result-due-box');
+  await expect(due).toBeVisible();
+  await expect(due).toBeInViewport();
+  await expect(ep.locator('#result-due-text')).toHaveText('Срок завтра, а файла результата ещё нет. Загрузите файл результата или попросите перенести срок.');
+  await expect(ep.locator('#result-due-upload')).toBeVisible();
+  await expect(ep.locator('#result-due-extend')).toBeVisible();
+  await expect(ep.locator('#result-due-draft')).toBeHidden();
+  await shot(ep, '113g-delo-net-fajla-rezultata');
+  await ep.locator('#result-due-extend').click();
+  await expect(ep.locator('#deadline-box')).toBeInViewport();
+  // Файл результата загружен — предупреждение пропадает, в «Сегодня» дело снова просто «Горит срок».
+  await ep.setInputFiles('#result-file', { name: 'Отчёт.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 отчёт') });
+  await expect(ep.locator('#docs li.doc')).toContainText('Отчёт.pdf');
+  await expect(due).toBeHidden();
+  await ep.goto('/kabinet');
+  await expect(ep.locator('#today-box')).toBeVisible();
+  await expect(ep.locator('[data-today="no-result"]')).toHaveCount(0);
+  await expect(ep.locator('[data-today="hot"]')).toHaveText('Горит срок · 1');
   await ectx.close();
 });
