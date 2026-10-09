@@ -8,7 +8,7 @@ import { orderSides, roleIn } from '../access/policy.mjs';
 import { scoreSpecialist } from '../matching/score.mjs';
 import { workStats, yearStats } from '../matching/stats.mjs';
 import { STATUS_NAME, addDays, isOverdue, todayMsk } from '../orders/workflow.mjs';
-import { CASE_IDLE_DAYS, caseMoves } from './org-ops.mjs';
+import { caseMoves } from './org-ops.mjs';
 import { openExtends } from './deadline-ops.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { audit, text, uuidFrom } from './util.mjs';
@@ -280,7 +280,7 @@ export function matchOps() {
               // «Горит» — как в «Делах экспертов» (2.102): в работе или на проверке, срок прошёл или через 1–2 дня.
               hot: o.status !== 'awaiting_executor' && !!o.deadline && o.deadline <= addDays(today, 2),
               idle_days: moves.get(o.id)?.days ?? null,
-              idle: (moves.get(o.id)?.days ?? 0) >= CASE_IDLE_DAYS,
+              idle: !!moves.get(o.id)?.idle,
               extend: ext.get(o.id) ? { new_deadline: ext.get(o.id).new_deadline } : null,
             })),
           },

@@ -65,10 +65,19 @@ export async function caseMoves(sql, orders) {
       union all select order_id, requested_at from deadline_requests where order_id = any(${ids}::uuid[])
     ) e group by e.order_id`;
   const at = new Map(rows.map((r) => [r.order_id, r.at]));
+  // Эксперт подписал, файл ждёт подписи организации (2.148, прогон 2.150): ход за руководителем — дело не «без движения»
+  // у эксперта (ни в отборе, ни в утренней сводке, ни в карточке эксперта); сколько ждёт подписи — видно отдельно.
+  const orgSign = new Set((await sql`
+    select distinct d.order_id from documents d join orders o on o.id = d.order_id and o.status = 'in_work'
+    join document_signatures s on s.document_id = d.id and s.role = 'expert'
+    where d.order_id = any(${ids}::uuid[]) and d.kind = 'result' and d.deleted_at is null and d.uploaded_by = o.executor_user_id
+      and not exists (select 1 from document_signatures g where g.document_id = d.id and g.role = 'org')`).map((r) => r.order_id));
   const now = Date.now();
   return new Map(orders.map((o) => {
     const last = at.get(o.id) ?? o.updated_at;
-    return [o.id, { at: last, days: Math.max(0, Math.floor((now - new Date(last).getTime()) / 86_400_000)) }];
+    const days = Math.max(0, Math.floor((now - new Date(last).getTime()) / 86_400_000));
+    const waitsOrg = orgSign.has(o.id);
+    return [o.id, { at: last, days, org_sign: waitsOrg, idle: days >= CASE_IDLE_DAYS && !waitsOrg }];
   }));
 }
 
@@ -267,7 +276,7 @@ export function orgOps() {
           ...(waits.get(o.id) ?? { sign_wait: 0, sign_since: null, sign_reminded_at: null, returned_open: false }),
           remind: reminds.get(o.id) ?? null,
           last_move: moves.get(o.id) ?? null,
-          idle: (moves.get(o.id)?.days ?? 0) >= CASE_IDLE_DAYS,
+          idle: !!moves.get(o.id)?.idle,
           extend: ext.get(o.id) ?? null,
           handover: handovers.get(o.id) ?? null,
           transfer_to: transfer.get(o.id) ?? [],
