@@ -4,7 +4,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, addMember } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
-import { remindNotes } from '../../src/ops/note-ops.mjs';
+import { beforeDeadline, remindNotes } from '../../src/ops/note-ops.mjs';
 
 let S, owner, dispatcher, spec, colleague, head, org;
 const FIELDS = { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, Заметочная ул., 3', area: '40' };
@@ -146,4 +146,56 @@ test('напоминания по заметкам — в «Моих срока�
   assert.equal(t.status, 200, JSON.stringify(t.body));
   assert.deepEqual(await notesOf(spec), []);
   assert.deepEqual(await notesOf(colleague), []);
+});
+
+// 2.149: «За день до срока» одной кнопкой — дата от срока дела (срок − 1, не раньше сегодня); своя дата снимает привязку;
+// диспетчер перенёс срок — напоминание переезжает и придёт снова; сделанные заметки не трогаются.
+test('напоминание «за день до срока»: от срока дела, переезжает при переносе срока', async () => {
+  const o = await inWork('Заметка за день до срока');
+  const base = `/api/orders/${o.id}/notes`;
+  const deadline = addDays(today, 9);
+  let v = (await spec.req('GET', base)).body;
+  assert.deepEqual([v.deadline, v.before_deadline], [deadline, addDays(today, 8)]);
+  let r = await spec.req('POST', base, { body: 'Проверить подпись руководителя', remind_on: 'deadline' });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  const a = r.body.notes[0];
+  assert.deepEqual([a.remind_on, a.remind_deadline], [addDays(today, 8), true]);
+  const b = (await spec.req('POST', base, { body: 'Своя дата', remind_on: addDays(today, 2) })).body.notes.find((n) => n.body === 'Своя дата');
+  assert.equal(b.remind_deadline, false);
+  // Уже записанная заметка — «за день до срока» одной кнопкой; потом своя дата — привязка снята.
+  const c0 = (await spec.req('POST', base, { body: 'Без даты' })).body.notes.find((n) => n.body === 'Без даты');
+  r = await spec.req('PATCH', `${base}/${c0.id}`, { remind_on: 'deadline' });
+  let c = r.body.notes.find((n) => n.id === c0.id);
+  assert.deepEqual([c.remind_on, c.remind_deadline], [addDays(today, 8), true]);
+  // Правка текста с той же датой привязку не снимает.
+  r = await spec.req('PATCH', `${base}/${c0.id}`, { body: 'Без даты — уже с датой', remind_on: addDays(today, 8) });
+  assert.equal(r.body.notes.find((n) => n.id === c0.id).remind_deadline, true);
+  r = await spec.req('PATCH', `${base}/${c0.id}`, { remind_on: addDays(today, 5) });
+  c = r.body.notes.find((n) => n.id === c0.id);
+  assert.deepEqual([c.remind_on, c.remind_deadline], [addDays(today, 5), false]);
+
+  // Напоминание пришло (день настал), потом диспетчер перенёс срок на 5 дней — заметка переехала и напомнит снова.
+  assert.equal(await remindNotes(S.sql, { today: addDays(today, 8) }), 3);
+  const done = (await spec.req('POST', base, { body: 'Сделанная', remind_on: 'deadline' })).body.notes.find((n) => n.body === 'Сделанная');
+  await spec.req('PATCH', `${base}/${done.id}`, { done: true });
+  const ask = await spec.req('POST', `/api/orders/${o.id}/deadline-requests`, { new_deadline: addDays(deadline, 5), reason: 'Жду документы' });
+  assert.equal(ask.status, 201, JSON.stringify(ask.body));
+  const rid = ask.body.requests?.[0]?.id ?? ask.body.request?.id;
+  const dec = await dispatcher.req('POST', `/api/orders/${o.id}/deadline-requests/${rid}/decide`, { approve: true });
+  assert.equal(dec.status, 200, JSON.stringify(dec.body));
+  v = (await spec.req('GET', base)).body;
+  const by = Object.fromEntries(v.notes.map((n) => [n.body, [n.remind_on, n.remind_deadline, !!n.reminded_at]]));
+  assert.deepEqual(by['Проверить подпись руководителя'], [addDays(today, 13), true, false]);
+  assert.deepEqual(by['Своя дата'], [addDays(today, 2), false, true]);
+  assert.deepEqual(by['Без даты — уже с датой'], [addDays(today, 5), false, true]);
+  assert.deepEqual(by['Сделанная'], [addDays(today, 8), true, false]);
+  assert.equal(v.before_deadline, addDays(today, 13));
+  assert.equal(await remindNotes(S.sql, { today: addDays(today, 13) }), 1);
+
+  // Срок завтра или уже прошёл — напомнить сегодня; без срока — ошибка с подсказкой.
+  await S.sql`update orders set deadline = ${today}::date where id = ${o.id}`;
+  r = await spec.req('POST', base, { body: 'Срок сегодня', remind_on: 'deadline' });
+  assert.equal(r.body.notes.find((n) => n.body === 'Срок сегодня').remind_on, today);
+  assert.equal(beforeDeadline(addDays(today, -3), today), today);
+  assert.equal(beforeDeadline(null, today), null);
 });

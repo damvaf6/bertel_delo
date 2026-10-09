@@ -6500,6 +6500,25 @@ test('заметки эксперта к делу (2.115): заметка с н�
   await row.locator('a').click();
   await expect(ep).toHaveURL(new RegExp(`#order=${id}&to=notes$`));
   await expect(ep.locator('#notes-box')).not.toHaveClass(/folded/);
+  // 2.149: «Напомнить за день до срока» одной кнопкой — срок дела через 9 дней, напоминание — через 8; у записанной
+  // заметки без даты — «За день до срока».
+  const nb = ep.locator('#notes-box');
+  await expect(ep.locator('#notes-deadline-hint')).toContainText('Перенесут срок — напоминание переедет');
+  await ep.fill('#notes-text', 'Проверить подпись руководителя');
+  await ep.click('#notes-add-deadline');
+  await expect(ep.locator('#notes-msg')).toContainText('за день до срока');
+  const byDeadline = nb.locator('#notes-list > li', { hasText: 'Проверить подпись руководителя' });
+  await expect(byDeadline).toContainText('— за день до срока');
+  await expect(byDeadline.locator('[data-action="note-deadline"]')).toHaveCount(0);
+  const plain = nb.locator('#notes-list > li', { hasText: 'Взять выписку из ЕГРН' });
+  await plain.locator('[data-action="note-deadline"]').click();
+  await expect(ep.locator('#notes-msg')).toContainText('— за день до срока');
+  await expect(plain).toContainText('— за день до срока');
+  await nb.scrollIntoViewIfNeeded();
+  await shot(ep, 'h12a-ekspert-zametka-za-den-do-sroka');
+  const linked = await db(async (c) => (await c.query(`select count(*)::int as n from order_notes where order_id = $1
+    and remind_deadline and remind_on = (select deadline - 1 from orders where id = $1)`, [id])).rows[0].n);
+  expect(linked).toBe(2);
   // Заказчик блока не видит.
   await cp.goto(`/kabinet#order=${id}`);
   await expect(cp.locator('#order-title')).toHaveText('Квартира: заметки');

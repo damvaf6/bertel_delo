@@ -9,6 +9,7 @@ import { BUSY_DEADLINES } from '../orders/schedule.mjs';
 import { yearStats } from '../matching/stats.mjs';
 import { customersOf, dispatchers, notify } from '../notify/notify.mjs';
 import { audit, text } from './util.mjs';
+import { moveDeadlineNotes } from './note-ops.mjs';
 
 const MAX_DAYS = 730; // как у срока заявки — не дальше двух лет
 const DECIDE_STATUSES = ['in_work', 'review'];
@@ -197,6 +198,7 @@ export function deadlineOps() {
             const moved = await tx`update orders set deadline = ${newDeadline}, updated_at = now()
                                    where id = ${order.id} and deadline = ${oldDeadline}::date returning id`;
             if (!moved.length) throw new HttpError(409, 'status_changed', 'Срок заявки уже изменился — обновите страницу');
+            await moveDeadlineNotes(tx, order.id, newDeadline);
           }
           await audit(tx, actor, approve ? 'deadline.approve' : 'deadline.decline', 'order', order.id,
             { from: oldDeadline, to: newDeadline, answer });

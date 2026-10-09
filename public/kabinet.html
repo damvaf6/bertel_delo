@@ -236,7 +236,11 @@
             <label for="notes-remind">Напомнить (необязательно)</label>
             <input id="notes-remind" type="date">
           </div>
-          <button type="submit" class="secondary" id="notes-add">Добавить заметку</button>
+          <div class="row">
+            <button type="submit" class="secondary" id="notes-add">Добавить заметку</button>
+            <button type="button" class="secondary hidden" id="notes-add-deadline">Напомнить за день до срока</button>
+          </div>
+          <p class="muted hidden" id="notes-deadline-hint"></p>
         </form>
         <p class="msg" id="notes-msg" role="status" aria-live="polite"></p>
       </div>
