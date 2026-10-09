@@ -5682,6 +5682,8 @@ test('дела экспертов (2.102): руководитель отбира
   const up = await ep.request.post(`/api/orders/${ids.sign}/results`, { data: Buffer.from('%PDF-1.4 отбор'), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Отчёт.pdf') } });
   const docId = (await up.json()).document.id;
   expect((await ep.request.post(`/api/documents/${docId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  // 2.148: эксперт подписал три дня назад — подпись организации ждёт долго.
+  await db((c) => c.query("update document_signatures set signed_at = now() - interval '3 days 2 hours' where document_id = $1", [docId]));
 
   await hp.goto(`/kabinet#org=${orgId}`);
   // «Срок на этой неделе» (2.127) зависит от дня недели — проверяется отдельно.
@@ -5704,6 +5706,15 @@ test('дела экспертов (2.102): руководитель отбира
   await hp.locator('[data-filter="sign"]').click();
   await expect(rows).toHaveCount(1);
   await expect(rows.first().locator('[data-role="sign-wait"]')).toBeVisible();
+  // 2.148: сколько ждёт подписи — два дня и дольше заметно.
+  const since = rows.first().locator('[data-role="sign-since"]');
+  await expect(since).toContainText('Эксперт подписал');
+  await expect(since).toContainText('ждёт 3 дн.');
+  await expect(since).toHaveClass(/overdue/);
+  await since.scrollIntoViewIfNeeded();
+  await shot(hp, 'c2a-rukovoditel-zhdet-podpisi-3-dnya');
+  // То же — в блоке «Подпись организации».
+  await expect(hp.locator('#org-sign > li').filter({ hasText: 'Отчёт.pdf' }).locator('[data-sig="since"]')).toContainText('Ждёт Вашей подписи 3 дн.');
   await hp.locator('[data-filter="silent"]').click();
   await expect(rows).toHaveCount(1);
   await expect(rows.first()).toContainText('Предложено эксперту');

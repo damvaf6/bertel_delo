@@ -226,6 +226,12 @@ test('очередь подписи у эксперта (2.99): подписал
   const signing = (await head.req('GET', `/api/orgs/${org.id}/signing`)).body.items.find((x) => x.order_ref === ref);
   assert.ok(signing.reminded_at);
   assert.ok(!JSON.stringify(g).includes('Ждёт подписи организации'));
+  // 2.148: с какого времени ждёт подписи — в «Подписи организации» и в «Делах экспертов», вместе с напоминанием.
+  assert.equal(new Date(signing.waiting_since).getTime(), new Date(w.since).getTime());
+  const kase = (await head.req('GET', `/api/orgs/${org.id}/cases`)).body.cases.find((x) => x.id === o.id);
+  assert.equal(kase.sign_wait, 1);
+  assert.equal(new Date(kase.sign_since).getTime(), new Date(w.since).getTime());
+  assert.equal(new Date(kase.sign_reminded_at).getTime(), new Date(w.reminded_at).getTime());
   // Прошли сутки — можно снова.
   await S.sql`update sign_reminders set created_at = now() - interval '25 hours' where order_id = ${o.id}`;
   assert.equal((await wait()).can_remind, true);
@@ -234,6 +240,8 @@ test('очередь подписи у эксперта (2.99): подписал
   // Организация подписала — очередь пуста, напоминать нечего.
   assert.equal((await head.req('POST', `/api/org-documents/${d.id}/sign`, { confirm: true })).status, 201);
   assert.equal(await wait(), undefined);
+  const signed = (await head.req('GET', `/api/orgs/${org.id}/cases`)).body.cases.find((x) => x.id === o.id);
+  assert.deepEqual([signed.sign_wait, signed.sign_since, signed.sign_reminded_at], [0, null, null]);
   assert.equal((await spec.req('GET', `/api/orders/${o.id}/documents`)).body.sign_wait, null);
   assert.equal((await remind()).body.error, 'nothing_waiting');
   // Эксперт без организации: очереди подписи организации нет.
