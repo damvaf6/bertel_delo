@@ -57,6 +57,15 @@ const SIGN_LONG_DAYS = 2;
 const signLong = (c) => !!c.sign_since && Date.now() - new Date(c.sign_since).getTime() >= SIGN_LONG_DAYS * 86_400_000;
 const signSinceText = (c) => [`Эксперт подписал ${timeRu(c.sign_since)} — ждёт ${waited(c.sign_since)}`,
   c.sign_reminded_at ? `напомнил ${timeRu(c.sign_reminded_at)}` : null].filter(Boolean).join(' · ');
+// Возврат эксперту (2.151): когда вернул и сколько пунктов замечания эксперт уже отметил исправленными.
+function returnedText(c) {
+  const r = c.returned;
+  const when = r ? ` ${timeRu(r.at)} (${waited(r.at)} назад)` : '';
+  const state = !r?.items ? 'ждём исправления'
+    : r.fixed === r.items ? `эксперт отметил исправленным всё (${r.fixed} из ${r.items}) — ждём его подписи`
+      : `эксперт отметил исправленными ${r.fixed} из ${r.items}`;
+  return `Вы вернули отчёт эксперту${when} — ${state}`;
+}
 // Чьи дела показать (2.127): номер эксперта или '' — все.
 let expert = '';
 // Сколько сдавать за две недели (2.111) — у каждого эксперта в выборе «кому передать».
@@ -181,7 +190,7 @@ function caseItem(org, c) {
       el('span', { class: 'badge warn', text: `Ждёт Вашей подписи: ${c.sign_wait}` }),
       el('button', { class: 'secondary', 'data-action': 'go-sign', onclick: () => goSign(c.order_ref) }, 'К подписи')),
     ...(c.sign_since ? [el('div', { class: signLong(c) ? 'overdue' : 'muted', 'data-role': 'sign-since', text: signSinceText(c) })] : [])] : []),
-    ...(c.returned_open ? [el('div', { class: 'muted', 'data-role': 'returned', text: 'Вы вернули отчёт эксперту — ждём исправления' })] : []),
+    ...(c.returned_open ? [el('div', { class: 'muted', 'data-role': 'returned', text: returnedText(c) })] : []),
     // Эксперт попросил перенести срок (2.100): решает диспетчер, руководитель видит новую дату.
     ...(c.extend ? [el('div', { class: 'muted', 'data-role': 'extend',
       text: `Эксперт просит перенести срок на ${dayRu(c.extend.new_deadline)} — ждёт ответа диспетчера` })] : []),

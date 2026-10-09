@@ -242,11 +242,15 @@ export function orgOps() {
         const waits = new Map();
         for (const o of rows.filter((x) => x.status === 'in_work')) {
           const w = await signWait(sql, o);
+          // Открытый возврат (2.151): когда вернул и сколько пунктов замечания эксперт уже отметил исправленными.
+          const open = (await orgReturns(sql, o.id, { orgId: org.id })).filter((r) => r.open);
+          const last = open.at(-1);
           waits.set(o.id, {
             sign_wait: w?.files ?? 0,
             sign_since: w?.since ?? null,
             sign_reminded_at: w?.reminded_at ?? null,
-            returned_open: (await orgReturns(sql, o.id, { orgId: org.id })).some((r) => r.open),
+            returned_open: open.length > 0,
+            returned: last ? { at: last.at, items: last.items.length, fixed: last.items.length - last.left } : null,
           });
         }
         // Кому можно передать дело в работе (2.62): эксперты организации с допуском на услугу, кроме нынешнего.
@@ -278,7 +282,7 @@ export function orgOps() {
         // Сколько дней по делу ничего не происходило (2.133) — в работе и на проверке.
         const moves = await caseMoves(sql, rows.filter((o) => ['in_work', 'review'].includes(o.status)));
         const cases = rows.map((o) => ({
-          ...(waits.get(o.id) ?? { sign_wait: 0, sign_since: null, sign_reminded_at: null, returned_open: false }),
+          ...(waits.get(o.id) ?? { sign_wait: 0, sign_since: null, sign_reminded_at: null, returned_open: false, returned: null }),
           remind: reminds.get(o.id) ?? null,
           last_move: moves.get(o.id) ?? null,
           idle: !!moves.get(o.id)?.idle,

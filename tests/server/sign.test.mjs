@@ -350,12 +350,19 @@ test('замечания по пунктам (2.93): эксперт отмеча
   let item = (await head.req('GET', `/api/orgs/${org.id}/signing`)).body.items.find((x) => x.documents.some((y) => y.id === d.id));
   assert.deepEqual(item.returns[0].items.map((x) => x.fixed), [true, false, true]);
   assert.deepEqual([item.returns[0].left, item.returns[0].document_id, item.returns[0].open], [1, d.id, true]);
+  // 2.151: в «Делах экспертов» — когда вернул и сколько пунктов эксперт уже отметил исправленными.
+  let cs = (await head.req('GET', `/api/orgs/${org.id}/cases`)).body.cases.find((c) => c.id === o.id);
+  assert.equal(cs.returned_open, true);
+  assert.deepEqual([cs.returned.items, cs.returned.fixed], [3, 2]);
+  assert.ok(Math.abs(new Date(cs.returned.at) - new Date(r.body.return.at)) < 1000);
   // Эксперт подписал заново, не отметив пункт 2: возврат закрыт, отметки больше не меняются; руководитель видит, что осталось.
   assert.equal((await sign(d, undefined, spec)).status, 201);
   assert.equal((await mark(spec, 2, true)).body.error, 'return_closed');
   item = (await head.req('GET', `/api/orgs/${org.id}/signing`)).body.items.find((x) => x.documents.some((y) => y.id === d.id));
   assert.deepEqual([item.returns[0].open, item.returns[0].left], [false, 1]);
   assert.equal(item.returns[0].items.find((x) => !x.fixed).text, 'Итог не совпадает с таблицей');
+  cs = (await head.req('GET', `/api/orgs/${org.id}/cases`)).body.cases.find((c) => c.id === o.id);
+  assert.deepEqual([cs.returned_open, cs.returned], [false, null]);
   // Заказчик и диспетчер пунктов не видят.
   for (const c of [owner, dispatcher]) assert.ok(!JSON.stringify(await docsOf(c, o)).includes('титуле'));
   // Больше 30 пунктов в одном возврате нельзя.
