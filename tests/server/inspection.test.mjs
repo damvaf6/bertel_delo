@@ -588,5 +588,28 @@ test('2.88: ИИ-проверка сверяет дату осмотра в от
   const r = await spec.req('POST', `/api/orders/${o.id}/review/ai`);
   assert.equal(r.status, 201, JSON.stringify(r.body));
   const found = r.body.ai.items.find((i) => i.id === 'requisites').found ?? [];
-  assert.deepEqual(found.map((f) => f.text), [`Дата осмотра в отчёте — 01.02.2026, а фото осмотра в деле получены ${today.split('-').reverse().join('.')} — проверьте дату осмотра`]);
+  assert.deepEqual(found.map((f) => f.text), [`Дата осмотра в отчёте — 01.02.2026, а фото осмотра в деле сделаны ${today.split('-').reverse().join('.')} — проверьте дату осмотра`]);
+});
+
+test('2.146: день осмотра — по часам телефона и по дню получения; «без осмотра» при фото в деле — находка', async () => {
+  const o = await inWork('Осмотр — снято вечером, дошло утром');
+  const { token } = await issue(o, { days: 1 });
+  // Телефон снял почти сутки назад, платформа получила сейчас: оба дня — дни осмотра.
+  const shotAt = new Date(Date.now() - 23 * 3600_000);
+  assert.equal((await shoot(token, 'facade', { headers: { ...GEO, 'x-shot-at': shotAt.toISOString() } })).status, 201);
+  const ru = (d) => d.split('-').reverse().join('.');
+  const today = todayMsk();
+  const shotDay = new Date(shotAt.getTime() + 3 * 3600_000).toISOString().slice(0, 10);
+  const check = async (text) => {
+    assert.equal((await spec.req('POST', `/api/orders/${o.id}/results`, Buffer.from(text), {
+      raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('отчёт.txt') },
+    })).status, 201);
+    const r = await spec.req('POST', `/api/orders/${o.id}/review/ai`);
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    return (r.body.ai.items.find((i) => i.id === 'requisites').found ?? []).map((f) => f.text);
+  };
+  assert.deepEqual(await check(`Отчёт об оценке\nДата осмотра: ${ru(shotDay)}\nДата составления отчёта: ${ru(today)}`), [], 'день съёмки');
+  assert.deepEqual(await check(`Отчёт об оценке\nДата осмотра: ${ru(today)}\nДата составления отчёта: ${ru(today)}`), [], 'день получения');
+  assert.deepEqual(await check(`Отчёт об оценке\nОценка проведена без осмотра.\nДата составления отчёта: ${ru(today)}`),
+    [`В отчёте сказано «без осмотра», а в деле есть фото осмотра от ${ru(shotDay)} — проверьте, был ли осмотр`]);
 });
