@@ -322,6 +322,24 @@ test('заказчик ждёт ответа больше суток (2.132): б
   assert.deepEqual(w.map((x) => [x.count, x.last]), [[1, 'Спасибо']]);
 });
 
+test('«Можно продолжать» и «Заказчик ждёт ответа» не повторяют одно дело (2.140)', async () => {
+  const o = await offered('Дело, не открытое экспертом', 12);
+  assert.equal((await step(spec, o, 'in_work')).status, 200);
+  await S.sql`delete from order_seen where order_id = ${o.id}`;
+  const today = async () => (await spec.req('GET', '/api/today')).body.expert;
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/messages`, { body: 'Есть новости?' })).status, 201);
+  // Меньше суток — сообщение в «Можно продолжать».
+  let t = await today();
+  assert.deepEqual(t.ready.find((x) => x.id === o.id)?.what, ['сообщений: 1']);
+  assert.ok(!ids(t.reply_wait).includes(o.id));
+  // Больше суток — только в «Заказчик ждёт ответа».
+  await S.sql`update order_messages set at = now() - interval '26 hours' where order_id = ${o.id}`;
+  t = await today();
+  assert.ok(ids(t.reply_wait).includes(o.id));
+  assert.ok(!ids(t.ready).includes(o.id), 'одни сообщения — в «Можно продолжать» строки нет');
+  assert.ok(t.ready.every((x) => !('other' in x)), 'служебное поле наружу не уходит');
+});
+
 test('Срок близко, а файла результата нет (2.138): строка в «Сегодня» и предупреждение в деле — только исполнителю', async () => {
   const bare = await offered('Без файла, срок завтра', 1, other);
   assert.equal((await step(other, bare, 'in_work')).status, 200);
