@@ -3549,8 +3549,14 @@ test('сводка за месяц (2.78): руководитель видит �
   // Сравнение с прошлым месяцем (2.124).
   await expect(row.locator('[data-expert-prev]')).toHaveText('к прошлому месяцу: сдано: 1 (было 1) · в срок: 0 (было 0) · возвраты: 3 (было 1, +2)');
   await expect(hp.locator('#org-report-total')).toContainText(/К прошлому месяцу \(\S+ \d{4}\)сдано: 1 \(было 1\) · в срок: 0 \(было 0\) · возвраты: 3 \(было 1, \+2\)/);
+  // Сдано по услугам (2.135): у организации и у эксперта.
+  await expect(hp.locator('#org-report-services > li')).toHaveCount(1);
+  await expect(hp.locator('#org-report-services > li').first()).toHaveText('Оценка недвижимости — 1позже срока: 1 · вознаграждение: 12 000 ₽ · один эксперт');
+  await expect(row.locator('[data-expert-services]')).toHaveText('по услугам: Оценка недвижимости — 1');
   await box.scrollIntoViewIfNeeded();
   await shot(hp, 'a7-rukovoditel-svodka-mesyac');
+  await hp.locator('#org-report-services-box').scrollIntoViewIfNeeded();
+  await shot(hp, 'a7c-rukovoditel-svodka-po-uslugam');
   await hp.locator('#org-report-remarks-box').scrollIntoViewIfNeeded();
   await shot(hp, 'a7a-rukovoditel-chastye-zamechaniya');
   // Таблица для Excel скачивается файлом.
@@ -3560,6 +3566,7 @@ test('сводка за месяц (2.78): руководитель видит �
   expect([...csv.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
   expect(csv.toString('utf8')).toContain('Эксперт Сводкин;1;1;1;0;2;1;12000,00;12000,00');
   expect(csv.toString('utf8')).toContain('нет даты осмотра.;2;1');
+  expect(csv.toString('utf8')).toContain('Оценка недвижимости;1;1;12000,00;1\r\n');
   expect(csv.toString('utf8')).toContain('Эксперт Сводкин;1;1;0;0;3;1\r\n');
   // Сданные заключения одним архивом (2.89): отчёт эксперта с подписью и опись.
   const zipBtn = hp.locator('#org-report-zip');

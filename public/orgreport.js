@@ -4,6 +4,8 @@
 // Скорость и сроки (2.117): сколько дней в среднем от принятия до сдачи и сколько сдано позже первоначального срока — с
 // переносом срока и без.
 // Сравнение с прошлым месяцем (2.124): сдано, в срок, возвраты — сейчас и в прошлом месяце, у каждого эксперта и в итоге.
+// По услугам (2.135): сколько сдано по каждой услуге — из них позже срока, вознаграждение, у скольких экспертов; у эксперта —
+// его сданные по услугам.
 // Частые замечания (2.105) — пункты, с которыми руководитель чаще всего возвращал отчёты: по организации и у каждого эксперта.
 import { api, el, say } from '/common.js';
 import { rub } from '/money.js';
@@ -75,6 +77,12 @@ async function load(month) {
     ...(report.current && t.overdue_now ? fact('Просрочено сейчас', String(t.overdue_now), 'overdue') : []),
     ...fact('Вознаграждение за сданные', rub(t.fee_kop), 'money-sum'),
     ...fact('Выплачено экспертам', rub(t.paid_kop)));
+  const svc = report.by_service ?? [];
+  $('org-report-services-box').classList.toggle('hidden', !svc.length);
+  $('org-report-services').replaceChildren(...svc.map((x) => el('li', { 'data-report-service': x.service },
+    el('div', { class: 'title', text: `${x.name} — ${x.done}` }),
+    el('div', { class: 'muted', text: [x.done_late ? `позже срока: ${x.done_late}` : null, `вознаграждение: ${rub(x.fee_kop)}`,
+      `${x.experts === 1 ? 'один эксперт' : `экспертов: ${x.experts}`}`].filter(Boolean).join(' · ') }))));
   const top = report.top_remarks ?? [];
   $('org-report-remarks-box').classList.toggle('hidden', !top.length);
   $('org-report-remarks').replaceChildren(...top.map((x) => el('li', { 'data-remark': '' },
@@ -85,6 +93,8 @@ async function load(month) {
     el('div', { class: 'muted', text: `принял: ${x.accepted} · сдано: ${x.done}` }),
     ...(x.done_late || x.overdue_now ? [el('div', { class: 'overdue', text: [x.done_late ? `позже срока: ${x.done_late}` : null,
       x.overdue_now ? `просрочено сейчас: ${x.overdue_now}` : null].filter(Boolean).join(' · ') })] : []),
+    ...(x.services?.length ? [el('div', { class: 'muted', 'data-expert-services': '', text: `по услугам: ${
+      x.services.map((s) => `${s.name} — ${s.n}`).join(', ')}` })] : []),
     ...(pace(x) ? [el('div', { class: 'muted', 'data-expert-pace': '', text: pace(x) })] : []),
     ...(compare(x) ? [el('div', { class: 'muted', 'data-expert-prev': '', text: `к прошлому месяцу: ${compare(x)}` })] : []),
     ...(x.returned_head || x.returned_dispatcher ? [el('div', { class: 'muted', text: `возвращено: ${[

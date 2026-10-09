@@ -7,6 +7,8 @@
 // ему дело) до сдачи и сколько дел сдано позже первоначального срока — из них сколько с одобренным переносом срока.
 // Сравнение с прошлым месяцем (2.124): у каждого эксперта и в итоге — сколько сдано, из них в срок и сколько раз возвращали
 // (руководитель и диспетчер вместе) в прошлом месяце; если прошлый месяц раньше создания организации — сравнения нет.
+// По услугам (2.135): сколько сдано по каждой услуге за месяц, из них позже срока, вознаграждение и у скольких экспертов; у
+// каждого эксперта — его сданные по услугам. Название услуги — из описания модуля.
 // Месяц — по московскому времени. Выгрузка таблицей — CSV для Excel (точка с запятой, BOM, суммы с запятой).
 import { HttpError } from '../http/core.mjs';
 import { splitAmount } from '../money/money.mjs';
@@ -163,7 +165,26 @@ export async function orgMonthDoneCases(sql, orgId, month) {
   return rows.map((o) => ({ ...o, expert_name: names.get(o.user_id) })).sort((a, b) => new Date(a.at) - new Date(b.at));
 }
 
-export async function orgMonthReport(sql, orgId, month, today = todayMsk()) {
+// Сданные по услугам (2.135): [{ module, service, name, done, done_late, fee_kop, experts }] — по убыванию числа, при
+// равенстве — по названию.
+function byService(done, registry) {
+  const groups = new Map();
+  for (const o of done) {
+    const key = `${o.module}/${o.service}`;
+    const g = groups.get(key) ?? groups.set(key, {
+      module: o.module, service: o.service, name: registry?.service(o.module, o.service)?.service.name ?? o.service,
+      done: 0, done_late: 0, fee_kop: 0, users: new Set(),
+    }).get(key);
+    g.done++;
+    if (o.deadline && dayMsk(o.at) > o.deadline) g.done_late++;
+    g.fee_kop += feeOf(o);
+    g.users.add(o.user_id);
+  }
+  return [...groups.values()].sort((a, b) => b.done - a.done || a.name.localeCompare(b.name, 'ru'))
+    .map(({ users, ...g }) => ({ ...g, experts: users.size }));
+}
+
+export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), registry = null } = {}) {
   const experts = await orgExperts(sql, orgId);
   const ids = experts.map((e) => e.user_id);
   const { start, end } = await monthBounds(sql, month);
@@ -224,6 +245,7 @@ export async function orgMonthReport(sql, orgId, month, today = todayMsk()) {
       late_first_moved: p.late_first_moved,
       remarks: topRemarks(q.remarkItems.filter((i) => i.user_id === e.user_id), TOP_REMARKS_EXPERT).map(({ text, n }) => ({ text, n })),
       prev: cmp ? cmp.experts.get(e.user_id) : null,
+      services: byService(done, registry).map(({ name, done: n }) => ({ name, n })),
     };
   });
   const sum = (k) => (k === 'overdue_now' && !current ? null : rows.reduce((s, r) => s + r[k], 0));
@@ -241,6 +263,7 @@ export async function orgMonthReport(sql, orgId, month, today = todayMsk()) {
     prev_month: cmp ? prevM : null,
     prev_month_name: cmp ? monthRu(prevM) : null,
     top_remarks: topRemarks(q.remarkItems, TOP_REMARKS),
+    by_service: byService(q.done, registry),
   };
 }
 
@@ -329,6 +352,8 @@ export function reportCsv(orgName, r) {
       'В срок', 'В срок в прошлом месяце', 'Возвраты', 'Возвраты в прошлом месяце'],
     ...[...r.experts.map((x) => [x.full_name, x]), ['Итого', r.total]].map(([name, x]) => [name, x.done, x.prev.done,
       x.done - x.done_late, x.prev.on_time, x.returned_head + x.returned_dispatcher, x.prev.returned])] : []),
+    ...(r.by_service?.length ? [[], ['По услугам', 'Сдано (готово)', 'Из них позже срока', 'Вознаграждение за сданные, ₽',
+      'Экспертов'], ...r.by_service.map((x) => [x.name, x.done, x.done_late, rubCell(x.fee_kop), x.experts])] : []),
     ...(r.top_remarks?.length ? [[], ['Частые замечания при возврате', 'Сколько раз', 'У скольких экспертов'],
       ...r.top_remarks.map((x) => [x.text, x.n, x.experts])] : []),
   ];
