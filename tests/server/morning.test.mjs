@@ -62,8 +62,9 @@ test('после 8:00 — одна сводка с цифрами дня; до 8
   assert.equal((await S.sql`select count(*)::int as n from morning_digests`)[0].n, 0);
 
   assert.equal(await sendMorning(S.sql, { now: at(today, '12:00') }), 2);
-  const [d] = await S.sql`select due, overdue, visits, links from morning_digests where user_id = ${spec.user.id}`;
-  assert.deepEqual({ ...d }, { due: 1, overdue: 1, visits: 1, links: 1 });
+  const [d] = await S.sql`select due, overdue, visits, links, no_result, reply_wait from morning_digests where user_id = ${spec.user.id}`;
+  // Оба дела в работе со сроком сегодня и прошедшим без файла результата — «нет файла результата: 2» (2.142).
+  assert.deepEqual({ ...d }, { due: 1, overdue: 1, visits: 1, links: 1, no_result: 2, reply_wait: 0 });
   assert.equal((await mine(spec.user.id)).length, 1);
   assert.equal((await mine(helper.user.id)).length, 1);
   // Без дел — сводки нет, но день посчитан (не считаем заново каждую минуту).
@@ -74,7 +75,7 @@ test('после 8:00 — одна сводка с цифрами дня; до 8
   // В ленте — цифры, ведёт к «Моим срокам»; название дела нигде не звучит.
   const feed = (await spec.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня'));
   assert.equal(feed.length, 1);
-  assert.equal(feed[0].title, 'На сегодня: сдать 1 дело, 1 дело с прошедшим сроком, 1 выезд на объект, 1 ссылка на осмотр истекает в ближайшие сутки');
+  assert.equal(feed[0].title, 'На сегодня: сдать 1 дело, 1 дело с прошедшим сроком, 1 выезд на объект, 1 ссылка на осмотр истекает в ближайшие сутки, нет файла результата: 2');
   assert.deepEqual([feed[0].section, feed[0].order_id, feed[0].order_ref], ['specialist&to=schedule', null, null]);
   const hfeed = (await helper.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня'));
   assert.equal(hfeed[0].title, 'На сегодня: 1 выезд на объект');
@@ -104,4 +105,42 @@ test('реестр: anchor — только у раздела «Специали
   const { validateRegistry, TYPES } = await import('../../src/notify/registry.mjs');
   assert.throws(() => validateRegistry(TYPES, { x: { type: 'morning', title: 'т', order: false, section: 'orgs', anchor: 'schedule' } }), /неверный anchor/);
   assert.throws(() => validateRegistry(TYPES, { x: { type: 'morning', title: 'т', order: false, section: 'specialist', anchor: 'нет' } }), /неверный anchor/);
+});
+
+test('2.142: «нет файла результата» и «заказчик ждёт ответа» — цифрами; только они — сводка ведёт к «Сегодня»', async () => {
+  assert.equal(digestText({ due: 0, overdue: 0, visits: 0, links: 0, no_result: 2, reply_wait: 1 }),
+    'На сегодня: нет файла результата: 2, заказчик ждёт ответа: 1');
+  const day = addDays(today, 3);
+  const at3 = (time) => at(day, time);
+  // Отдельный эксперт, чтобы прежние дела не мешали счёту.
+  const solo = await login(S, '+79990003706');
+  await makeSpecialist(S.sql, solo.user.id);
+  const mk = async (title, deadline) => {
+    const o = await inWork(title, deadline);
+    await S.sql`update orders set executor_user_id = ${solo.user.id} where id = ${o.id}`;
+    return o;
+  };
+  // Срок через 2 дня (от «сегодня» сводки), файла нет — в счёт; с файлом результата — нет; срок через неделю — нет.
+  const bare = await mk('Без файла результата', addDays(day, 2));
+  const done = await mk('С файлом результата', addDays(day, 1));
+  await mk('Срок не скоро', addDays(day, 7));
+  await S.sql`insert into documents (order_id, uploaded_by, filename, mime, size_bytes, storage_key, kind)
+              values (${done.id}, ${solo.user.id}, 'otchet.pdf', 'application/pdf', 10, ${`morning-${done.id}`}, 'result')`;
+  // Заказчик написал два дня назад, эксперт не ответил — в счёт; по второму делу эксперт ответил — нет.
+  await S.sql`insert into order_messages (order_id, author_id, side, body, at) values
+              (${bare.id}, ${owner.user.id}, 'customer', 'Когда будет готово?', now() - interval '2 days'),
+              (${done.id}, ${owner.user.id}, 'customer', 'Вопрос', now() - interval '2 days'),
+              (${done.id}, ${solo.user.id}, 'executor', 'Ответ', now() - interval '1 day')`;
+  await S.sql`delete from morning_digests where day = ${day}::date`;
+  await sendMorning(S.sql, { now: at3('09:00') });
+  const [d] = await S.sql`select due, overdue, visits, links, no_result, reply_wait from morning_digests where user_id = ${solo.user.id} and day = ${day}::date`;
+  assert.deepEqual({ ...d }, { due: 0, overdue: 0, visits: 0, links: 0, no_result: 1, reply_wait: 1 });
+  const feed = (await solo.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня'));
+  assert.equal(feed.length, 1);
+  assert.equal(feed[0].title, 'На сегодня: нет файла результата: 1, заказчик ждёт ответа: 1');
+  assert.deepEqual([feed[0].section, feed[0].order_id], ['today', null]);
+  const [sms] = await S.sql`select d.body from notification_deliveries d join notifications n on n.id = d.notification_id
+                            where n.user_id = ${solo.user.id} and n.event = 'morning_today'`;
+  assert.equal(sms.body, `БЕРТЕЛ Дело: ${feed[0].title}. Подробно — «Сегодня» в кабинете.`);
+  assert.doesNotMatch(sms.body, /Когда|файлом|Утренн/);
 });

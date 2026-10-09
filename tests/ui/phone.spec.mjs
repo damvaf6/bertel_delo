@@ -6578,6 +6578,25 @@ test('утренняя сводка «На сегодня» (2.119): уведо�
   await expect(box.locator('#schedule-days > li').first()).toContainText('Сдать: Квартира: сдать сегодня');
   await expect(box.locator('h2')).toBeInViewport();
   await shot(ep, 'h11-ekspert-svodka-moi-sroki');
+
+  // 2.142: в сводке только «нет файла результата» и «заказчик ждёт ответа» — цифрами; нажатие ведёт к «Сегодня» на главной.
+  await db(async (c) => {
+    const { rows: [n] } = await c.query("insert into notifications (user_id, type, event) values ($1, 'morning', 'morning_today') returning id", [expert.id]);
+    await c.query(`insert into morning_digests (user_id, day, due, overdue, visits, links, no_result, reply_wait, notification_id)
+      values ($1, (now() at time zone 'Europe/Moscow')::date - 1, 0, 0, 0, 0, 1, 1, $2)`, [expert.id, n.id]);
+  });
+  await ep.goto('/kabinet#notifications');
+  const n2 = ep.locator('#notifications li').first();
+  await expect(n2).toContainText('На сегодня: нет файла результата: 1, заказчик ждёт ответа: 1');
+  await expect(n2).not.toContainText('Квартира');
+  await shot(ep, 'h12-ekspert-svodka-net-fajla');
+  await n2.getByRole('button').click();
+  await expect(ep).toHaveURL(/#today$/);
+  const today = ep.locator('#today-box');
+  await expect(today.locator('[data-today="no-result"]')).toContainText('Срок близко — нет файла результата · 1');
+  await expect(today.locator('[data-today-item="no-result"]').first()).toContainText('Квартира: сдать сегодня');
+  await expect(today.locator('[data-today="no-result"]')).toBeInViewport();
+  await shot(ep, 'h13-ekspert-svodka-segodnya');
 });
 
 test('утренняя сводка руководителю «На сегодня по организации» (2.121): цифры в ленте, ведёт в организацию, СМС — отдельная настройка', async ({ browser, baseURL }) => {

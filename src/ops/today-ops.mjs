@@ -97,17 +97,8 @@ async function expertPart(sql, actor, registry, today) {
     }
     signWaits.sort((a, b) => new Date(a.since) - new Date(b.since));
   }
-  // Заказчик ждёт ответа больше суток (2.132): после последнего сообщения эксперта заказчик написал, и первому такому
-  // сообщению больше суток. Сообщения диспетчера не в счёт — отвечает эксперт заказчику.
-  const unanswered = rows.filter((o) => ['in_work', 'review'].includes(o.status)).map((o) => o.id);
-  const waits = unanswered.length ? await sql`
-    select m.order_id, min(m.at) as since, count(*)::int as count,
-           (array_agg(m.body order by m.id desc))[1] as last_body
-    from order_messages m
-    where m.order_id = any(${unanswered}::uuid[]) and m.side = 'customer'
-      and m.id > coalesce((select max(e.id) from order_messages e where e.order_id = m.order_id and e.side = 'executor'), 0)
-    group by m.order_id having min(m.at) < now() - make_interval(hours => ${REPLY_HOURS})
-    order by min(m.at)` : [];
+  // Заказчик ждёт ответа больше суток (2.132) — replyWaits ниже.
+  const waits = await replyWaits(sql, rows.filter((o) => ['in_work', 'review'].includes(o.status)).map((o) => o.id));
   const replyWait = waits.map((w) => item(rows.find((o) => o.id === w.order_id), {
     since: w.since, count: w.count, last: w.last_body.length > 80 ? `${w.last_body.slice(0, 80)}…` : w.last_body,
   }));
@@ -119,13 +110,10 @@ async function expertPart(sql, actor, registry, today) {
     .map((n) => item(rows.find((o) => o.id === n.order_id), { note: n.body, remind_on: n.remind_on }));
   // Срок через 1–2 дня или прошёл, а своего файла результата нет (2.138) — на странице — выше «Горит срок» и там не повторяется.
   const hotRows = rows.filter((o) => o.status === 'in_work' && o.deadline && o.deadline <= soon);
-  const own = hotRows.length ? await sql`
-    select order_id, count(*)::int as n from documents where order_id = any(${hotRows.map((o) => o.id)}::uuid[]) and kind = 'result'
-      and deleted_at is null and uploaded_by = ${actor.id} group by order_id` : [];
-  const drafts = hotRows.length ? await sql`
-    select distinct order_id from result_drafts where order_id = any(${hotRows.map((o) => o.id)}::uuid[])` : [];
-  const noResult = hotRows.filter((o) => resultDue(o, own.find((x) => x.order_id === o.id)?.n ?? 0, today))
-    .map((o) => item(o, { has_draft: drafts.some((x) => x.order_id === o.id), extend: ext.get(o.id) ?? null }));
+  const due = await noResultOrders(sql, actor.id, hotRows, today);
+  const drafts = due.length ? await sql`
+    select distinct order_id from result_drafts where order_id = any(${due.map((o) => o.id)}::uuid[])` : [];
+  const noResult = due.map((o) => item(o, { has_draft: drafts.some((x) => x.order_id === o.id), extend: ext.get(o.id) ?? null }));
   return {
     ready: readyLeft,
     no_result: noResult,
@@ -139,6 +127,41 @@ async function expertPart(sql, actor, registry, today) {
     review: rows.filter((o) => o.status === 'review').map((o) => item(o)),
     offers: rows.filter((o) => o.status === 'awaiting_executor')
       .map((o) => item(o, { fee_kop: o.price_kop ? splitAmount(Number(o.price_kop)).payoutKop : null })),
+  };
+}
+
+// Заказчик ждёт ответа больше суток (2.132): после последнего сообщения эксперта заказчик написал, и первому такому
+// сообщению больше суток. Сообщения диспетчера не в счёт — отвечает эксперт заказчику. orderIds — дела в работе и на проверке.
+async function replyWaits(sql, orderIds) {
+  return orderIds.length ? sql`
+    select m.order_id, min(m.at) as since, count(*)::int as count,
+           (array_agg(m.body order by m.id desc))[1] as last_body
+    from order_messages m
+    where m.order_id = any(${orderIds}::uuid[]) and m.side = 'customer'
+      and m.id > coalesce((select max(e.id) from order_messages e where e.order_id = m.order_id and e.side = 'executor'), 0)
+    group by m.order_id having min(m.at) < now() - make_interval(hours => ${REPLY_HOURS})
+    order by min(m.at)` : [];
+}
+
+// Срок через 1–2 дня или прошёл, а своего файла результата нет (2.138). hotRows — дела в работе со сроком до «горит».
+async function noResultOrders(sql, userId, hotRows, today) {
+  const own = hotRows.length ? await sql`
+    select order_id, count(*)::int as n from documents where order_id = any(${hotRows.map((o) => o.id)}::uuid[]) and kind = 'result'
+      and deleted_at is null and uploaded_by = ${userId} group by order_id` : [];
+  return hotRows.filter((o) => resultDue(o, own.find((x) => x.order_id === o.id)?.n ?? 0, today));
+}
+
+// Для утренней сводки эксперта (2.142): сколько дел «срок близко — нет файла результата» и «заказчик ждёт ответа» — тем же
+// расчётом, что «Сегодня». Только цифры.
+export async function expertMorningAlerts(sql, userId, today) {
+  const rows = await sql`
+    select id, status, deadline from orders where executor_user_id = ${userId} and status in ('in_work', 'review')
+    order by deadline nulls last, updated_at limit ${LIMIT}`;
+  const soon = addDays(today, HOT_DAYS);
+  const hotRows = rows.filter((o) => o.status === 'in_work' && o.deadline && o.deadline <= soon);
+  return {
+    no_result: (await noResultOrders(sql, userId, hotRows, today)).length,
+    reply_wait: (await replyWaits(sql, rows.map((o) => o.id))).length,
   };
 }
 
