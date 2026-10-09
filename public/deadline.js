@@ -27,6 +27,7 @@ function render(r) {
   $('deadline-lead').textContent = o ? `Сейчас срок — ${dayRu(r.deadline)} Исполнитель просит перенести его; пока нет ответа, действует прежний.`
     : r.can_request ? `Сейчас срок — ${dayRu(r.deadline)} Не успеваете — попросите перенести: диспетчер согласится или откажет, заказчик увидит.`
       : `Сейчас срок — ${dayRu(r.deadline)}`;
+  renderPace(r.pace);
   $('deadline-open').classList.toggle('hidden', !o);
   if (o) $('deadline-open-text').textContent = `Просьба от ${whenRu(o.requested_at)}: перенести на ${dayRu(o.new_deadline)}. Причина: ${o.reason}`;
   $('deadline-answer-field').classList.toggle('hidden', !r.can_decide);
@@ -56,6 +57,26 @@ function render(r) {
         el('div', { class: 'name' }, el('span', { text: `${dayRu(x.old_deadline)} → ${dayRu(x.new_deadline)} ` }), el('span', { class: `badge ${kind}`, text: word })),
         el('div', { class: 'muted', text: [`причина: ${x.reason}`, x.answer ? `ответ: ${x.answer}` : null, x.decided_at ? whenRu(x.decided_at) : null].filter(Boolean).join(' · ') })));
   }));
+}
+
+const days = (n) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? 'день' : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? 'дня' : 'дней'}`;
+const daysRu = (x) => (Number.isInteger(x) ? days(x) : `${String(x).replace('.', ',')} дня`);
+
+// Свой темп (2.145): сколько дней осталось и сколько у исполнителя обычно занимает такая услуга; обычно нужно больше, чем
+// осталось, — мягкое предупреждение. Сданных дел этой услуги мало — только «осталось».
+function renderPace(p) {
+  const box = $('deadline-pace');
+  box.classList.toggle('hidden', !p);
+  if (!p) return;
+  const left = p.days_left < 0 ? `Срок прошёл ${days(-p.days_left)} назад.` : p.days_left === 0 ? 'Срок сегодня.' : `До срока ${days(p.days_left)}.`;
+  const usual = p.usual_days == null ? ''
+    : ` Такие дела Вы обычно сдаёте за ${daysRu(p.usual_days)} от принятия${p.spent_days == null ? '' : `, это дело у Вас ${days(p.spent_days)}`}.`;
+  const warn = p.late && p.days_left >= 0
+    ? ` По Вашему обычному темпу нужно ещё около ${days(p.need_days)} — можно не успеть. Начните с главного или заранее попросите перенести срок.`
+    : '';
+  box.textContent = left + usual + warn;
+  box.className = warn ? 'msg warn' : 'muted';
+  box.dataset.late = p.late ? '1' : '0';
 }
 
 async function decide(approve) {

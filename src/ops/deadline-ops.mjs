@@ -6,6 +6,7 @@ import { HttpError } from '../http/core.mjs';
 import { orderSides } from '../access/policy.mjs';
 import { addDays, todayMsk } from '../orders/workflow.mjs';
 import { BUSY_DEADLINES } from '../orders/schedule.mjs';
+import { yearStats } from '../matching/stats.mjs';
 import { customersOf, dispatchers, notify } from '../notify/notify.mjs';
 import { audit, text } from './util.mjs';
 
@@ -77,6 +78,30 @@ async function presetReasons(sql, order, registry) {
   return out;
 }
 
+// Свой темп (2.145): исполнителю дела в работе — сколько дней до срока и сколько у него обычно занимает такая услуга (средний
+// из «Сдано за год», 2.139: от принятия до «готово»; нужно хотя бы два сданных дела этой услуги). Сколько дней дело уже у
+// него — от принятия предложения или передачи ему руководителем, как в 2.139. Обычно нужно ещё больше, чем осталось до
+// срока, — `late` (мягкое предупреждение, решает сам исполнитель). Видит только исполнитель: это его собственные цифры.
+const PACE_MIN_DONE = 2;
+async function paceOf(sql, order, registry) {
+  const today = todayMsk();
+  const daysLeft = Math.round((Date.parse(order.deadline) - Date.parse(today)) / 86_400_000);
+  const year = await yearStats(sql, order.executor_user_id, { today, registry });
+  const same = year.by_service.find((s) => s.module === order.module && s.service === order.service);
+  const out = { days_left: daysLeft, usual_days: null, done: same?.done ?? 0, spent_days: null, need_days: null, late: false };
+  if (!same || same.done < PACE_MIN_DONE || same.avg_days == null) return out;
+  const [t] = await sql`
+    select to_char(greatest(
+      (select max(f.outcome_at) from order_offers f
+       where f.order_id = ${order.id} and f.specialist_id = ${order.executor_user_id} and f.outcome = 'accepted'),
+      (select max(a.at) from audit_log a
+       where a.subject_type = 'order' and a.subject_id = ${order.id}::text and a.action = 'org.case.transfer'
+         and a.details->>'to' = ${order.executor_user_id}::text)) at time zone 'Europe/Moscow', 'YYYY-MM-DD') as taken_day`;
+  const spent = t?.taken_day ? Math.max(0, Math.round((Date.parse(today) - Date.parse(t.taken_day)) / 86_400_000)) : null;
+  const need = Math.max(0, Math.ceil(same.avg_days - (spent ?? 0)));
+  return { ...out, usual_days: same.avg_days, spent_days: spent, need_days: need, late: need > Math.max(0, daysLeft) };
+}
+
 async function view(sql, actor, order, registry) {
   const sides = orderSides(actor, order);
   const rows = await sql`
@@ -92,6 +117,7 @@ async function view(sql, actor, order, registry) {
     reasons: canRequest ? await presetReasons(sql, order, registry) : [],
     can_withdraw: !!open && sides.includes('executor'),
     can_decide: !!open && sides.includes('dispatcher') && DECIDE_STATUSES.includes(order.status),
+    pace: sides.includes('executor') && order.status === 'in_work' && order.deadline ? await paceOf(sql, order, registry) : null,
   };
 }
 
