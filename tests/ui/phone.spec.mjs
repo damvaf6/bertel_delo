@@ -5259,6 +5259,21 @@ test('перенос срока (2.91): эксперт просит новую �
   const box = ep.locator('#deadline-box');
   await expect(box).toBeVisible();
   await expect(box.locator('#deadline-lead')).toContainText(`Сейчас срок — ${ru(inDays(2))}`);
+  // 2.145: сданных квартир у эксперта нет — только сколько осталось.
+  await expect(box.locator('#deadline-pace')).toHaveText('До срока 2 дня.');
+  // Две сданные квартиры: принял 10 и 8 дней назад, сдал через 6 и 4 дня — обычно 5 дней; до срока 2 — «можно не успеть».
+  await db(async (c) => {
+    for (const [taken, took] of [[10, 6], [8, 4]]) {
+      const done = (await c.query("insert into orders (owner_user_id, module, service, title, status, deadline, executor_user_id) select owner_user_id, 'expertise', 'realty', 'Сданная квартира', 'done', $2, $3 from orders where id = $1 returning id", [id, inDays(-1), expert.id])).rows[0].id;
+      await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now() - make_interval(days => $3))", [done, expert.id, taken]);
+      await c.query("insert into order_status_history (order_id, from_status, to_status, side, actor_id, at) values ($1, 'review', 'done', 'dispatcher', $2, now() - make_interval(days => $3))", [done, disp.id, taken - took]);
+    }
+  });
+  await ep.reload();
+  await expect(box.locator('#deadline-pace')).toHaveText('До срока 2 дня. Такие дела Вы обычно сдаёте за 5 дней от принятия. По Вашему обычному темпу нужно ещё около 5 дней — можно не успеть. Начните с главного или заранее попросите перенести срок.');
+  await expect(box.locator('#deadline-pace')).toHaveClass(/warn/);
+  await box.scrollIntoViewIfNeeded();
+  await shot(ep, '99o-ekspert-srok-svoj-temp');
   await box.getByRole('button', { name: 'Попросить перенести срок' }).click();
   await expect(ep.locator('#deadline-msg')).toHaveText('Укажите новую дату срока');
   await box.getByLabel('Новый срок').fill(want);
