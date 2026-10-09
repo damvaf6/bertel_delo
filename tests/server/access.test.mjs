@@ -1992,7 +1992,7 @@ test('сводка за месяц (2.124): сравнение с прошлым
   assert.ok(/Итого;2;3;1;2;0;1\r\n/.test(csv), csv);
 });
 
-test('сводка за месяц (2.135): сдано по услугам — у организации, у эксперта и в таблице для Excel', async () => {
+test('сводка за месяц (2.135, 2.144): сдано по услугам и средний срок — у организации, у эксперта и в таблице для Excel', async () => {
   const org = await makeOrg(S.sql, 'Тестовая организация 2.135');
   const head = await login(S, '+79990000135');
   await addMember(S.sql, org.id, head.user.id, 'head');
@@ -2005,30 +2005,35 @@ test('сводка за месяц (2.135): сдано по услугам — �
     assert.equal((await ex[k].req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
   }
   const day = (n) => new Date(Date.now() + 3 * 3_600_000 + n * 86400_000).toISOString().slice(0, 10);
-  const make = async (executor, service, deadline, status = 'done') => {
+  const make = async (executor, service, deadline, status = 'done', takenDaysAgo = null) => {
     const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service, title: 'Сводка 2.135' })).body.order;
     await S.sql`update orders set status = ${status}, deadline = ${deadline}, price_kop = 1000000, executor_user_id = ${executor} where id = ${o.id}`;
+    if (takenDaysAgo != null) {
+      await S.sql`insert into order_offers (order_id, specialist_id, score, outcome, outcome_at)
+                  values (${o.id}, ${executor}, '{}', 'accepted', now() - make_interval(days => ${takenDaysAgo}::int))`;
+    }
     if (status === 'done') await S.sql`insert into order_status_history (order_id, from_status, to_status, side) values (${o.id}, 'review', 'done', 'dispatcher')`;
     return o;
   };
   // Недвижимость: a — 2 (одно позже срока), b — 1; транспорт: b — 1; дело в работе не в счёт.
-  await make(ex.a.user.id, 'realty', day(3));
-  await make(ex.a.user.id, 'realty', day(-2));
+  // Средний срок (2.144): недвижимость — 2 и 5 дней (дело b без отметки о принятии — не в среднем), транспорт — 4 дня.
+  await make(ex.a.user.id, 'realty', day(3), 'done', 2);
+  await make(ex.a.user.id, 'realty', day(-2), 'done', 5);
   await make(ex.b.user.id, 'realty', day(3));
-  await make(ex.b.user.id, 'vehicle', day(3));
-  await make(ex.b.user.id, 'land', day(3), 'in_work');
+  await make(ex.b.user.id, 'vehicle', day(3), 'done', 4);
+  await make(ex.b.user.id, 'land', day(3), 'in_work', 9);
   const r = (await head.req('GET', `/api/orgs/${org.id}/report`)).body.report;
-  assert.deepEqual(r.by_service.map((x) => [x.service, x.name, x.done, x.done_late, x.fee_kop, x.experts]), [
-    ['realty', 'Оценка недвижимости', 3, 1, 2400000, 2],
-    ['vehicle', 'Оценка транспортного средства', 1, 0, 800000, 1],
+  assert.deepEqual(r.by_service.map((x) => [x.service, x.name, x.done, x.done_late, x.fee_kop, x.experts, x.avg_days]), [
+    ['realty', 'Оценка недвижимости', 3, 1, 2400000, 2, 3.5],
+    ['vehicle', 'Оценка транспортного средства', 1, 0, 800000, 1, 4],
   ]);
   const x = (u) => r.experts.find((e) => e.user_id === u);
   assert.deepEqual(x(ex.a.user.id).services, [{ name: 'Оценка недвижимости', n: 2 }]);
   assert.deepEqual(x(ex.b.user.id).services, [{ name: 'Оценка недвижимости', n: 1 }, { name: 'Оценка транспортного средства', n: 1 }]);
   const csv = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv`, undefined, { binary: true })).body.toString('utf8');
-  assert.ok(csv.includes('По услугам;Сдано (готово);Из них позже срока;Вознаграждение за сданные, ₽;Экспертов\r\n'), csv);
-  assert.ok(csv.includes('Оценка недвижимости;3;1;24000,00;2\r\n'), csv);
-  assert.ok(csv.includes('Оценка транспортного средства;1;0;8000,00;1\r\n'), csv);
+  assert.ok(csv.includes('По услугам;Сдано (готово);Из них позже срока;Вознаграждение за сданные, ₽;Экспертов;Дней в среднем от принятия до сдачи\r\n'), csv);
+  assert.ok(csv.includes('Оценка недвижимости;3;1;24000,00;2;3,5\r\n'), csv);
+  assert.ok(csv.includes('Оценка транспортного средства;1;0;8000,00;1;4\r\n'), csv);
   // Прошлый месяц пустой — блока по услугам нет.
   const p = (await head.req('GET', `/api/orgs/${org.id}/report?month=${r.months[1] ?? r.month}`)).body.report;
   if (p.month !== r.month) assert.deepEqual(p.by_service, []);

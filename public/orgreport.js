@@ -81,7 +81,8 @@ async function load(month) {
   $('org-report-services-box').classList.toggle('hidden', !svc.length);
   $('org-report-services').replaceChildren(...svc.map((x) => el('li', { 'data-report-service': x.service },
     el('div', { class: 'title', text: `${x.name} — ${x.done}` }),
-    el('div', { class: 'muted', text: [x.done_late ? `позже срока: ${x.done_late}` : null, `вознаграждение: ${rub(x.fee_kop)}`,
+    el('div', { class: 'muted', text: [x.done_late ? `позже срока: ${x.done_late}` : null,
+      x.avg_days != null ? `в среднем ${daysRu(x.avg_days)} от принятия до сдачи` : null, `вознаграждение: ${rub(x.fee_kop)}`,
       `${x.experts === 1 ? 'один эксперт' : `экспертов: ${x.experts}`}`].filter(Boolean).join(' · ') }))));
   const top = report.top_remarks ?? [];
   $('org-report-remarks-box').classList.toggle('hidden', !top.length);
