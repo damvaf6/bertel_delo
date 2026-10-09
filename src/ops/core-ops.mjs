@@ -1,7 +1,7 @@
 // Операции каркаса: проверка работы, вход, профиль, документы заявки и результат работы (1.5). Сама заявка — order-ops.mjs.
 import crypto from 'node:crypto';
 import { HttpError, rateLimiter, sessionCookie } from '../http/core.mjs';
-import { FINAL } from '../orders/workflow.mjs';
+import { FINAL, resultDue } from '../orders/workflow.mjs';
 import { executorSignOrg, orderSides, seesResults } from '../access/policy.mjs';
 import { requestCode, verifyCode, endSession, SESSION_TTL_SEC } from '../auth/auth.mjs';
 import { audit, oneOf, phoneFrom, publicUser, text } from './util.mjs';
@@ -54,6 +54,14 @@ export async function registerDocument({ sql, actor, order, providers }, { filen
 export const publicDoc = (d) => ({ id: d.id, order_id: d.order_id, kind: d.kind, filename: d.filename, mime: d.mime, size_bytes: d.size_bytes, created_at: d.created_at });
 
 // Лимит запросов входа с одного адреса — 30 за 10 минут; поднять можно только в автотестах (AUTH_RATE_MAX, config.mjs).
+// Срок близко, а своего файла результата нет (2.138); черновик от ИИ есть — подсказать собрать из него отчёт Word.
+async function resultDueView(sql, order, docs, userId) {
+  const due = resultDue(order, docs.filter((d) => d.kind === 'result' && d.uploaded_by === userId).length);
+  if (!due) return null;
+  const d = await sql.one`select count(*)::int as n from result_drafts where order_id = ${order.id}`;
+  return { ...due, has_draft: d.n > 0 };
+}
+
 export function coreOps(cfg) {
   const authLimit = rateLimiter({ windowMs: 10 * 60_000, max: cfg?.authRateMax ?? 30 });
 
@@ -155,6 +163,8 @@ export function coreOps(cfg) {
           // От какой организации нужна вторая подпись (null — только эксперт).
           signature_org: signOrg?.name ?? null,
           ...(mine ? { org_returns: await orgReturns(sql, order.id) } : {}),
+          // Срок через 1–2 дня или прошёл, а своего файла результата нет (2.138) — предупреждение исполнителю; есть ли черновик.
+          ...(mine ? { result_due: await resultDueView(sql, order, docs, actor.id) } : {}),
           // Очередь подписи (2.99): подписал эксперт, организация ещё нет — сколько ждёт и можно ли напомнить. Только исполнителю.
           ...(mine && signOrg ? { sign_wait: order.status === 'in_work' ? await signWait(sql, order) : null } : {}),
         };

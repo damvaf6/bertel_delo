@@ -321,3 +321,37 @@ test('заказчик ждёт ответа больше суток (2.132): б
   w = await waits();
   assert.deepEqual(w.map((x) => [x.count, x.last]), [[1, 'Спасибо']]);
 });
+
+test('Срок близко, а файла результата нет (2.138): строка в «Сегодня» и предупреждение в деле — только исполнителю', async () => {
+  const bare = await offered('Без файла, срок завтра', 1, other);
+  assert.equal((await step(other, bare, 'in_work')).status, 200);
+  const late = await offered('Без файла, просрочено', 3, other);
+  assert.equal((await step(other, late, 'in_work')).status, 200);
+  await S.sql`update orders set deadline = ${addDays(todayMsk(), -1)} where id = ${late.id}`;
+  const far = await offered('Без файла, срок далеко', 10, other);
+  assert.equal((await step(other, far, 'in_work')).status, 200);
+  const done = await offered('С файлом, срок завтра', 1, other);
+  assert.equal((await step(other, done, 'in_work')).status, 200);
+  assert.equal((await result(done, 'Отчёт готов.pdf', other)).status, 201);
+  await S.sql`insert into result_drafts (order_id, author_id, source, body) values (${late.id}, ${other.user.id}, 'edit', 'Черновик')`;
+
+  const t = (await other.req('GET', '/api/today')).body.expert;
+  const mine = new Set([bare.id, late.id, far.id, done.id]); // у этого эксперта есть дела из прежних проверок
+  assert.deepEqual(ids(t.no_result).filter((x) => mine.has(x)).sort(), [bare.id, late.id].sort(), 'только дела в работе со сроком ≤ 2 дней и без своего файла');
+  assert.equal(t.no_result.find((x) => x.id === late.id).overdue, true);
+  assert.equal(t.no_result.find((x) => x.id === late.id).has_draft, true);
+  assert.equal(t.no_result.find((x) => x.id === bare.id).has_draft, false);
+  assert.ok(ids(t.hot).includes(done.id), 'с файлом — остаётся в «Горит срок»');
+
+  const due = (o, who = other) => who.req('GET', `/api/orders/${o.id}/documents`).then((r) => r.body.result_due);
+  assert.deepEqual(await due(bare), { deadline: addDays(todayMsk(), 1), days_left: 1, overdue: false, has_draft: false });
+  assert.deepEqual(await due(late), { deadline: addDays(todayMsk(), -1), days_left: -1, overdue: true, has_draft: true });
+  assert.equal(await due(far), null, 'срок далеко — без предупреждения');
+  assert.equal(await due(done), null, 'файл есть — без предупреждения');
+  // Заказчик предупреждения не получает.
+  assert.equal(await due(bare, owner), undefined);
+  // Файл загружен — предупреждение и строка пропадают.
+  assert.equal((await result(bare, 'Отчёт.pdf', other)).status, 201);
+  assert.equal(await due(bare), null);
+  assert.ok(!ids((await other.req('GET', '/api/today')).body.expert.no_result).includes(bare.id));
+});

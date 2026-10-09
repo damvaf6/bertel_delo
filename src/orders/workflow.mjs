@@ -93,3 +93,12 @@ export function weekEnd(isoDate) {
   const dow = new Date(`${isoDate}T00:00:00Z`).getUTCDay();
   return addDays(isoDate, (7 - dow) % 7);
 }
+
+// Срок близко, а файла результата нет (2.138): дело в работе, до срока не больше двух дней (или уже просрочено), а свой файл
+// результата исполнитель ещё не загрузил. Предупреждение в деле и строка в «Сегодня».
+export const RESULT_DUE_DAYS = 2;
+export function resultDue(order, ownResults, today = todayMsk()) {
+  if (order.status !== 'in_work' || !order.deadline || ownResults > 0 || order.deadline > addDays(today, RESULT_DUE_DAYS)) return null;
+  const days = Math.round((Date.parse(`${order.deadline}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86400_000);
+  return { deadline: order.deadline, days_left: days, overdue: days < 0 };
+}

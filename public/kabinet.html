@@ -318,6 +318,14 @@
       </div>
       <div class="card" id="docs-box">
         <h2>Документы</h2>
+        <div class="hidden notice-warn" id="result-due-box" data-result-due>
+          <p id="result-due-text"></p>
+          <div class="row">
+            <button type="button" id="result-due-upload">Добавить файл результата</button>
+            <button type="button" class="secondary hidden" id="result-due-draft">К черновику</button>
+            <button type="button" class="secondary hidden" id="result-due-extend">Попросить перенести срок</button>
+          </div>
+        </div>
         <ul class="list" id="docs"></ul>
         <button type="button" class="hidden" id="sign-all">Подписать все файлы результата</button>
         <div class="hidden notice-warn" id="sign-wait-box" data-sign-wait>
