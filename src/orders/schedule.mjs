@@ -7,6 +7,8 @@ import { addDays, todayMsk } from './workflow.mjs';
 import { orderRef } from '../notify/registry.mjs';
 
 export const SCHEDULE_DAYS = 14;
+// Перегруженный день (2.134): сдать больше двух дел (в работе и предложенных; сданные на проверку не в счёт).
+export const BUSY_DEADLINES = 2;
 const WEEKDAYS = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
 const weekday = (iso) => WEEKDAYS[new Date(`${iso}T00:00:00Z`).getUTCDay()];
 const day = (d) => (d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10));
@@ -84,6 +86,10 @@ export async function expertSchedule(sql, userId, registry, today = todayMsk()) 
   for (const d of days.values()) {
     d.items.sort((a, b) => ORDER[a.kind] - ORDER[b.kind] || String(a.time ?? '').localeCompare(String(b.time ?? '')));
     d.deadlines = d.items.filter((i) => i.kind === 'deadline').length;
+    d.due = d.items.filter((i) => i.kind === 'deadline' && i.status !== 'review').length;
+    d.busy = d.due > BUSY_DEADLINES;
+    // «Попросить перенос» — у дел в работе без открытой просьбы (просить можно только по делу в работе, 2.91).
+    for (const i of d.items) if (i.kind === 'deadline') i.can_extend = d.busy && i.status === 'in_work' && !i.extend_to;
   }
   return { from: today, to: last, away, overdue, days: [...days.values()] };
 }

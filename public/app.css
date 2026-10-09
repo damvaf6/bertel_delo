@@ -322,6 +322,10 @@ h2.inline { display: inline; }
 .schedule a.open .what { display: block; font-size: 14px; color: var(--muted); }
 .schedule a.open.hot { background: #fdecea; }
 .schedule a.open.wait { background: #fff3d6; }
+.schedule li.busy { border-left: 4px solid #d93025; padding-left: 8px; }
+.schedule li.busy > p { margin: 2px 0 0; font-size: 14px; }
+.schedule .day .busy-mark { color: #b3261e; font-size: 14px; }
+.schedule a.ask { display: inline-block; margin: 4px 0 0 8px; font-size: 14px; color: var(--accent); }
 /* Нагрузка экспертов на две недели у руководителя (2.111): полоса из 14 дней; строка дела — кнопка, открывает дело в списке. */
 .schedule .open { display: block; width: 100%; text-align: left; font: inherit; padding: 6px 8px; border: none; border-radius: 6px;
   background: #f2f5fa; color: var(--text); overflow-wrap: anywhere; min-height: 0; }
