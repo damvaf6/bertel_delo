@@ -83,3 +83,49 @@ test('карточка эксперта: досье без копий, допу�
   await S.sql`delete from org_members where org_id = ${org.id} and user_id = ${spec.user.id}`;
   assert.equal((await head.req('GET', `/api/specialists/${spec.user.id}/card`)).status, 404);
 });
+
+// 2.139: сданное за год по услугам и средний срок от принятия до «готово»; дела старше года и не сданные — не в счёт.
+test('карточка эксперта: сдано за год по услугам, позже срока и средний срок от принятия', async () => {
+  const spec2 = await login(S, '+79990003606');
+  await makeSpecialist(S.sql, spec2.user.id);
+  await addMember(S.sql, org.id, spec2.user.id, 'member');
+  assert.equal((await spec2.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  const today = todayMsk();
+  // [услуга, принял (дней назад), «готово» (дней назад), срок (дней назад; меньше нуля — впереди), статус]
+  const cases = [
+    ['realty', 8, 4, 6, 'done'], // 4 дня, позже срока
+    ['realty', 5, 3, 1, 'closed'], // 2 дня, в срок
+    ['vehicle', 3, 0, -10, 'done'], // 3 дня
+    ['vehicle', null, 1, -10, 'done'], // без отметки о принятии — в число, но не в среднее
+    ['realty', 400, 380, 390, 'done'], // больше года назад — не в счёт
+    ['realty', 2, null, -10, 'in_work'], // не сдано
+  ];
+  for (const [service, taken, done, deadline, status] of cases) {
+    const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service, title: 'Дело за год' })).body.order;
+    await S.sql`update orders set executor_user_id = ${spec2.user.id}, status = ${status},
+                  deadline = ${addDays(today, -deadline)} where id = ${o.id}`;
+    if (taken != null) {
+      await S.sql`insert into order_offers (order_id, specialist_id, score, outcome, outcome_at)
+                  values (${o.id}, ${spec2.user.id}, '{}', 'accepted', now() - make_interval(days => ${taken}))`;
+    }
+    if (done != null) {
+      await S.sql`insert into order_status_history (order_id, from_status, to_status, side, actor_id, at)
+                  values (${o.id}, 'review', 'done', 'dispatcher', ${dispatcher.user.id}, now() - make_interval(days => ${done}))`;
+      // Повторное «готово» позже (после «закрыто» и возврата) не сдвигает дату первой сдачи.
+      await S.sql`insert into order_status_history (order_id, from_status, to_status, side, actor_id, at)
+                  values (${o.id}, 'review', 'done', 'dispatcher', ${dispatcher.user.id}, now())`;
+    }
+  }
+  for (const c of [dispatcher, head, spec2]) {
+    const r = await c.req('GET', `/api/specialists/${spec2.user.id}/card`);
+    assert.equal(r.status, 200);
+    const y = r.body.year;
+    assert.equal(y.since, addDays(today, -364));
+    assert.deepEqual([y.done, y.done_late, y.avg_days], [4, 1, 3], 'среднее (4 + 2 + 3) / 3');
+    assert.deepEqual(y.by_service.map((x) => [x.service, x.name, x.done, x.done_late, x.avg_days]), [
+      ['realty', 'Оценка недвижимости', 2, 1, 3],
+      ['vehicle', y.by_service[1].name, 2, 0, 3],
+    ]);
+    assert.ok(!JSON.stringify(y).includes('Дело за год'), 'без названий заявок');
+  }
+});

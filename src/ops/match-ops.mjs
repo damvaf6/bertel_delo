@@ -6,7 +6,7 @@
 import { HttpError } from '../http/core.mjs';
 import { orderSides } from '../access/policy.mjs';
 import { scoreSpecialist } from '../matching/score.mjs';
-import { workStats } from '../matching/stats.mjs';
+import { workStats, yearStats } from '../matching/stats.mjs';
 import { STATUS_NAME, addDays, todayMsk } from '../orders/workflow.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { audit, text, uuidFrom } from './util.mjs';
@@ -226,7 +226,8 @@ export function matchOps() {
     },
     {
       // Карточка эксперта (2.35): то, по чему диспетчер и руководитель выбирают, кому отдать дело. Досье — без копий
-      // документов (копии видит только сам эксперт); история — без заказчика, названий заявок и полей.
+      // документов (копии видит только сам эксперт); история — без заказчика, названий заявок и полей. Сданное за год по услугам
+      // и средний срок (2.139) — `year`.
       id: 'specialists.card', method: 'GET', path: '/api/specialists/:id/card', auth: 'user',
       access: { resource: 'specialistCard', param: 'id', need: 'read' },
       async handler({ sql, specialist, registry }) {
@@ -255,6 +256,7 @@ export function matchOps() {
           dossier,
           stats,
           quality: { score: quality.score, note: quality.note },
+          year: await yearStats(sql, id, { registry }),
           history: rows.map((o) => ({
             order_ref: orderRef(o.id),
             service: registry.service(o.module, o.service)?.service.name ?? o.service,
