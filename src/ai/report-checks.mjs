@@ -1169,6 +1169,74 @@ function valueDates(docs) {
   return oddOnes(once, (e, ref, where) => `Дата оценки ${ruDate(e.value)} не совпадает с ${ruDate(ref)} ${where} — дата оценки должна быть одна во всём отчёте и в письме`, { samePage: true });
 }
 
+// ——— 2.131: цель оценки — как в заявке, вид стоимости один по отчёту и подходит к цели ———
+// Цель — после «цель оценки» / «предполагаемое использование результатов»: суд, наследство, банк, сделка, раздел, ущерб.
+// Совместимые цели не в счёт (раздел через суд, ипотека при покупке). Вид — после «вид (определяемой) стоимости».
+// Для суда, нотариуса, банка, сделки и раздела нужна рыночная (ст. 7 закона об оценке; для залога ликвидационная — только
+// вместе с рыночной). Только отчёты об оценке; цель «другое» и пустая — не сверяем.
+const VALUATION = ['realty', 'land', 'vehicle', 'movable'];
+const PURPOSE_AT = /цел[ьи]\s+(?:проведения\s+)?оценки|предполагаем\S*\s+использовани\S*\s+результат\S*(?:\s+оценки)?/giu;
+const PURPOSE_KIND = {
+  court: /(?<![а-яё])(?:суд(?:а|у|е|ом|ебн\S*)?|арбитраж\S*)(?![а-яё])/iu,
+  inheritance: /наследств|наследник|нотари/iu,
+  bank: /ипотек|залог|кредит|(?<![а-яё])банк/iu,
+  deal: /купл|продаж|сделк|отчужден/iu,
+  division: /раздел\S*\s+(?:совместн|общ|имуществ|наследств)|супруг|развод|выдел\S*\s+(?:в\s+натуре|дол)/iu,
+  damage: /ущерб|страхов|возмещени|(?<![А-ЯЁ])ДТП(?![А-ЯЁ])|залив|пожар/iu,
+};
+const PURPOSE_NAME = { court: 'для суда', inheritance: 'наследство, нотариус', bank: 'ипотека, залог, банк', deal: 'купля-продажа', division: 'раздел имущества', damage: 'ущерб, страховой случай' };
+const PURPOSE_ALSO = { court: ['division', 'inheritance', 'damage'], inheritance: ['court', 'division'], bank: ['deal'], deal: ['bank'], division: ['court', 'inheritance'], damage: ['court'] };
+const KIND_AT = /вид\S*\s+(?:(?:определяем|оцениваем|рассчитываем|устанавливаем)\S*\s+)?стоимост\S*/giu;
+const VALUE_KIND = { market: /рыночн/iu, liquidation: /ликвидац/iu, investment: /инвестиц/iu, cadastral: /кадастров/iu, utilization: /утилизац/iu };
+const KIND_NAME = { market: 'рыночная', liquidation: 'ликвидационная', investment: 'инвестиционная', cadastral: 'кадастровая', utilization: 'утилизационная' };
+const NEED_MARKET = ['court', 'inheritance', 'bank', 'deal', 'division'];
+const STOP_AT = /\.\s+(?=[А-ЯЁA-Z])|;|\s{3,}|\n|вид\S*\s+(?:определяем\S*\s+)?стоимост|дат\S*\s+оценки|предполагаем\S*\s+пользоват|цел[ьи]\s+оценки/iu;
+function labelled(docs, re, max) {
+  const out = [];
+  for (const doc of docs) {
+    eachPage(doc, (raw, i) => {
+      for (const m of raw.matchAll(re)) {
+        if (TOC_END.test(lineAround(raw, m.index))) continue;
+        const rest = raw.slice(m.index + m[0].length).replace(/^[\s:\-–—]+/u, '');
+        const cut = rest.search(STOP_AT);
+        const value = clean(rest.slice(0, cut < 0 ? max : Math.min(cut, max))).replace(/[.,]+$/u, '');
+        if (value) out.push({ doc, page: i, value, quote: lineAround(raw, m.index) });
+      }
+    });
+  }
+  return out;
+}
+const kindsOf = (text, table) => Object.keys(table).filter((k) => table[k].test(text));
+function purposeValue(docs, ctx) {
+  if (ctx.service && !VALUATION.includes(ctx.service)) return [];
+  const main = mainReport(docs);
+  const ordered = main ? [main, ...docs.filter((d) => d !== main)] : docs;
+  const out = [];
+  const purpose = ctx.fields?.purpose;
+  if (PURPOSE_NAME[purpose]) {
+    const ok = [purpose, ...PURPOSE_ALSO[purpose]];
+    const seen = new Set();
+    for (const e of labelled(ordered, PURPOSE_AT, 200)) {
+      const kinds = kindsOf(e.value, PURPOSE_KIND);
+      if (!kinds.length || kinds.some((k) => ok.includes(k)) || seen.has(`${e.doc.name}|${e.page}`)) continue;
+      seen.add(`${e.doc.name}|${e.page}`);
+      out.push({ doc: e.doc, page: e.page, quote: e.quote, text: `Цель оценки в отчёте — «${e.value.slice(0, 80)}» (${kinds.map((k) => PURPOSE_NAME[k]).join('; ')}), а в заявке — «${PURPOSE_NAME[purpose]}»: цель должна быть как в заявке` });
+    }
+  }
+  const kinds = labelled(ordered, KIND_AT, 120).map((e) => ({ ...e, kinds: kindsOf(e.value, VALUE_KIND) })).filter((e) => e.kinds.length);
+  const single = kinds.filter((e) => e.kinds.length === 1).map((e) => ({ ...e, value: e.kinds[0] }));
+  const both = (a, b) => kinds.some((e) => e.kinds.includes(a) && e.kinds.includes(b));
+  const distinct = [...new Set(single.map((e) => e.value))];
+  if (distinct.length === 2 && !both(...distinct)) {
+    out.push(...oddOnes(single, (e, ref, where) => `Вид стоимости «${KIND_NAME[e.value]}» не совпадает с «${KIND_NAME[ref]}» ${where} — вид стоимости должен быть один во всём отчёте и в письме`));
+  }
+  if (NEED_MARKET.includes(purpose) && kinds.length && !kinds.some((e) => e.kinds.includes('market'))) {
+    const e = kinds[0];
+    out.push({ doc: e.doc, page: e.page, quote: e.quote, text: `В отчёте вид стоимости — ${e.kinds.map((k) => `«${KIND_NAME[k]}»`).join(', ')}, а для цели заявки «${PURPOSE_NAME[purpose]}» нужна рыночная стоимость` });
+  }
+  return out;
+}
+
 // ——— 2.61: каждый вопрос заявки найден в выводах (все виды) ———
 // Вопросы — из поля заявки «Какие вопросы поставить эксперту» (нумерованные или по одному в строке). Вопрос считается
 // отвеченным, если в выводах есть «по вопросу № N» / «ответ на вопрос N» или больше половины его значимых слов.
@@ -1230,6 +1298,7 @@ const WHOLE = {
   final_value: finalValues,
   report_number: reportNumbers,
   value_date: valueDates,
+  purpose_value: purposeValue,
 };
 
 const PER_DOC = {
@@ -1291,6 +1360,7 @@ export const AUTO_CHECKS = Object.freeze({
   final_value: 'итоговая стоимость одна на титуле, в задании, выводах, итоговой таблице и в сопроводительном письме',
   report_number: 'номер отчёта и дата составления одни на титуле, в колонтитулах и в сопроводительном письме',
   value_date: 'дата оценки одна по всему отчёту и в сопроводительном письме',
+  purpose_value: 'цель оценки — как в заявке; вид стоимости один по всему отчёту и в письме, для суда, нотариуса, банка, сделки и раздела — рыночная',
 });
 
 export function runAutoChecks(names, docs, ctx = {}) {

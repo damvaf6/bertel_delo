@@ -761,3 +761,62 @@ test('2.116: сверка номера и даты отчёта подключе
     assert.ok(reg.checks('expertise', svc).find((c) => c.id === 'requisites').auto.includes('report_number'), svc);
   }
 });
+
+test('2.131: цель оценки — как в заявке, вид стоимости один по отчёту и подходит к цели', () => {
+  const report = [
+    'ОТЧЁТ ОБ ОЦЕНКЕ № 31/2026\nСодержание\nЗадание на оценку ........ 3',
+    'Задание на оценку\nЦель оценки: определение рыночной стоимости для совершения нотариальных действий по наследственному делу.\nВид определяемой стоимости — рыночная.\nДата оценки: 01.10.2026',
+    'Выводы\nРыночная стоимость квартиры составляет 9 000 000 руб.',
+  ];
+  const letter = doc(['Сопроводительное письмо', 'Вид стоимости: рыночная. Цель оценки — для нотариуса.'], 'Письмо.pdf');
+  assert.deepEqual(runAutoChecks(['purpose_value'], [doc(report), letter], { fields: { purpose: 'inheritance' }, service: 'realty' }).purpose_value, [], 'цель и вид как в заявке');
+
+  // В письме осталась цель из шаблона банка: находка с файлом, страницей и строкой.
+  const bankLetter = doc(['Сопроводительное письмо', 'Цель оценки: для предоставления в банк в качестве залога.'], 'Письмо.pdf');
+  const res = runAutoChecks(['purpose_value'], [doc(report), bankLetter], { fields: { purpose: 'inheritance' }, service: 'realty' });
+  assert.deepEqual(texts(res, 'purpose_value'), [
+    'Цель оценки в отчёте — «для предоставления в банк в качестве залога» (ипотека, залог, банк), а в заявке — «наследство, нотариус»: цель должна быть как в заявке',
+  ]);
+  assert.equal(res.purpose_value[0].file, 'Письмо.pdf');
+  assert.equal(res.purpose_value[0].where, 'стр. 2');
+  assert.equal(res.purpose_value[0].quote, 'Цель оценки: для предоставления в банк в качестве залога.');
+
+  // Совместимые цели не в счёт: раздел имущества через суд; ипотека при покупке; цель без признаков и «другое» — молчим.
+  const court = [report[0], report[1].replace(/для совершения[^.]+/u, 'для представления в суд по делу о разделе совместно нажитого имущества'), report[2]];
+  assert.deepEqual(runAutoChecks(['purpose_value'], [doc(court)], { fields: { purpose: 'division' } }).purpose_value, []);
+  const loan = [report[0], report[1].replace(/для совершения[^.]+/u, 'для ипотечного кредитования'), report[2]];
+  assert.deepEqual(runAutoChecks(['purpose_value'], [doc(loan)], { fields: { purpose: 'deal' } }).purpose_value, []);
+  assert.deepEqual(runAutoChecks(['purpose_value'], [doc(loan)], { fields: { purpose: 'other' } }).purpose_value, []);
+  const plain = [report[0], report[1].replace(/для совершения[^.]+/u, 'для принятия управленческих решений'), report[2]];
+  assert.deepEqual(runAutoChecks(['purpose_value'], [doc(plain)], { fields: { purpose: 'court' } }).purpose_value, []);
+
+  // В выводах другой вид стоимости, чем в задании и в письме: находка на стр. 3.
+  const odd = [report[0], report[1], `${report[2]}\nВид стоимости: ликвидационная`];
+  const kind = runAutoChecks(['purpose_value'], [doc(odd), letter], { fields: { purpose: 'inheritance' } });
+  assert.deepEqual(texts(kind, 'purpose_value'), [
+    'Вид стоимости «ликвидационная» не совпадает с «рыночная» на стр. 2 (и ещё в 1 месте) — вид стоимости должен быть один во всём отчёте и в письме',
+  ]);
+  assert.equal(kind.purpose_value[0].where, 'стр. 3');
+
+  // Для банка рыночная и ликвидационная вместе — норма.
+  const bank = [report[0], 'Задание на оценку\nЦель оценки: для залога в банке.\nВид стоимости: рыночная и ликвидационная.', 'Выводы\nВид стоимости: рыночная\nВид стоимости: ликвидационная'];
+  assert.deepEqual(runAutoChecks(['purpose_value'], [doc(bank)], { fields: { purpose: 'bank' } }).purpose_value, []);
+
+  // Для нотариуса — только ликвидационная: нужна рыночная.
+  const liq = [report[0], report[1].replace('рыночная.', 'ликвидационная.'), report[2]];
+  assert.deepEqual(texts(runAutoChecks(['purpose_value'], [doc(liq)], { fields: { purpose: 'inheritance' } }), 'purpose_value'), [
+    'В отчёте вид стоимости — «ликвидационная», а для цели заявки «наследство, нотариус» нужна рыночная стоимость',
+  ]);
+
+  // Не оценка (строительная экспертиза) — молчим; строка оглавления — не цель.
+  assert.deepEqual(runAutoChecks(['purpose_value'], [doc(liq)], { fields: { purpose: 'inheritance' }, service: 'construction' }).purpose_value, []);
+  assert.deepEqual(runAutoChecks(['purpose_value'], [doc(['Содержание\nЦель оценки для банка ........ 4'])], { fields: { purpose: 'court' } }).purpose_value, []);
+});
+
+test('2.131: сверка цели и вида стоимости подключена к оценке', async () => {
+  const { createRegistry } = await import('../../src/modules/index.mjs');
+  const reg = createRegistry();
+  for (const svc of ['realty', 'land', 'vehicle', 'movable']) {
+    assert.ok(reg.checks('expertise', svc).find((c) => c.id === 'appraiser').auto.includes('purpose_value'), svc);
+  }
+});
