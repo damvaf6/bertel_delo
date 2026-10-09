@@ -2538,10 +2538,15 @@ test('«Сегодня» (2.34, 2.63): эксперт — горит, верну
   await expect(box).toBeVisible();
   await expect(box.locator('li[data-today="returned"]')).toHaveText('Вернули на доработку · 1');
   await expect(box.locator('li[data-today-item="returned"]')).toContainText('Диспетчер: Нет даты осмотра в разделе 3');
+  // 2.147: когда вернули и сколько осталось до срока.
+  await expect(box.locator('li[data-today-item="returned"]')).toContainText('вернули ');
+  await expect(box.locator('li[data-today-item="returned"]')).toContainText('меньше часа назад');
+  await expect(box.locator('li[data-today-item="returned"]')).toContainText('осталось 6 дн.');
   await expect(box.locator('li[data-today-item="hot"]')).toContainText('срок завтра');
   await expect(box.locator('li[data-today-item="offers"]')).toContainText('Вам 12 000 ₽');
   await shot(sp, '97-segodnya-ekspert');
   await box.locator('li[data-today-item="returned"] button').click();
+  await expect(sp).toHaveURL(new RegExp(`#order=${back.id}&to=result$`));
   await expect(sp.locator('#order-title')).toHaveText('Квартира — вернули');
   // Очередь подписи (2.99): эксперт подписал, организация ещё нет — к делу, там «Напомнить руководителю» (раз в сутки).
   await sp.goto('/kabinet');
@@ -5607,7 +5612,16 @@ test('как эксперт и руководитель (2.100): перенос 
   await ep.goto('/kabinet');
   await expect(ep.locator('#today-box li[data-today-item="returned"]')).toContainText('Нет даты осмотра');
   await expect(ep.locator('#today-box li[data-today-item="sign-wait"]')).toHaveCount(0);
+  // 2.147: когда вернули, сколько пунктов не исправлено; нажатие — к замечаниям по пунктам в деле.
+  const ret = ep.locator('#today-box li[data-today-item="returned"]');
+  await expect(ret).toContainText('Руководитель');
+  await expect(ret).toContainText('меньше часа назад · не исправлено пунктов: 2 из 2');
   await shot(ep, 'b4-ekspert-vernuli-po-punktam');
+  await ret.locator('button').click();
+  await expect(ep).toHaveURL(new RegExp(`#order=${id}&to=fix$`));
+  await expect(ep.locator('#org-returns-box')).toBeVisible();
+  await expect(ep.locator('#org-returns-box')).toBeInViewport();
+  await shot(ep, 'b4a-ekspert-vernuli-k-zamechaniyam');
   const rid = signing.items.find((x) => x.documents.some((d) => d.id === docId)).returns[0].id;
   for (const n of [1, 2]) expect((await ep.request.put(`/api/orders/${id}/org-returns/${rid}/items/${n}`, { data: { fixed: true }, headers: H })).status()).toBe(200);
   expect((await ep.request.post(`/api/documents/${docId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);

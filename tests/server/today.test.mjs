@@ -65,6 +65,10 @@ test('«Сегодня» у эксперта: горит, вернули, на �
   assert.ok(t.expert.offers[0].fee_kop > 0);
   assert.deepEqual(ids(t.expert.review), [sent.id]);
   assert.deepEqual(t.expert.returned.map((x) => [x.id, x.by, x.comment]), [[back.id, 'Диспетчер', 'В разделе 3 нет даты осмотра']]);
+  // Когда вернули и куда вести (2.147): после диспетчера — к файлу результата.
+  assert.equal(t.expert.returned[0].to, 'result');
+  assert.ok(Date.now() - Date.parse(t.expert.returned[0].at) < 60_000, 'время возврата — из истории статусов');
+  assert.equal(t.expert.returned[0].points, undefined, 'у возврата диспетчера пунктов нет');
   assert.deepEqual(t.orgs, [], 'эксперт — не руководитель');
 
   // Руководитель: подпись организации ждёт, после возврата — «вернул, ждём исправления».
@@ -93,6 +97,11 @@ test('«Сегодня» у эксперта: горит, вернули, на �
   // Эксперт видит возврат руководителя.
   const mine = (await spec.req('GET', '/api/today')).body.expert.returned;
   assert.ok(mine.some((x) => x.id === fire.id && x.by === 'Руководитель (Руководитель Сегодняшний)' && x.comment === 'Проверьте итог'));
+  // 2.147: возврат руководителя — к замечаниям по пунктам, сколько не исправлено; ближе срок — выше (срок через день раньше, чем через 6).
+  const fromHead = mine.find((x) => x.id === fire.id);
+  assert.deepEqual([fromHead.to, fromHead.points, fromHead.left], ['fix', 1, 1]);
+  assert.ok(fromHead.at);
+  assert.deepEqual(ids(mine), [fire.id, back.id], 'ближе срок — выше');
 
   // Дело, предложенное организации, — у руководителя «ждут назначения».
   const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Дело организации' })).body.order;

@@ -41,7 +41,7 @@ async function route() {
   if (h === '#notifications') return showNotifications();
   refreshCounts();
   let m;
-  if ((m = h.match(/^#order=([0-9a-f-]{36})(?:&to=(inspect|chat|docs|deadline|extend|sign|handover|onsite|notes|result))?$/i))) return openOrder(m[1], { to: m[2] });
+  if ((m = h.match(/^#order=([0-9a-f-]{36})(?:&to=(inspect|chat|docs|deadline|extend|sign|handover|onsite|notes|result|fix))?$/i))) return openOrder(m[1], { to: m[2] });
   // #org=…&case=XXXXXXXX&to=pending|sign|chat|case|handover|transfer — сразу к делу организации (2.67: из уведомления или «Сегодня»).
   if ((m = h.match(/^#org=([0-9a-f-]{36})(?:&case=([0-9A-F]{8})(?:&to=(pending|sign|chat|case|handover|transfer))?)?$/i))) return showOrg(m[1], m[2] ? { ref: `№ ${m[2].toUpperCase()}`, to: m[3] } : null);
   // #org=…&to=week|sign|handover|idle — к блоку организации без дела (2.130, 2.141: из утренней сводки руководителю).
