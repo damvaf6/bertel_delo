@@ -45,6 +45,33 @@ export async function caseRemind(sql, order) {
   };
 }
 
+// Дело без движения (2.133): когда по делу в работе или на проверке последний раз что-то происходило — смена состояния,
+// файл (кроме файлов заказчика), черновик, ИИ-проверка, аналог, подпись, фото осмотра и выезд помощника, просьба о переносе
+// срока. Переписка с заказчиком и внутренняя переписка не в счёт. С какого дня — «без движения» в отборе руководителя.
+export const CASE_IDLE_DAYS = 3;
+export async function caseMoves(sql, orders) {
+  const ids = orders.map((o) => o.id);
+  if (!ids.length) return new Map();
+  const rows = await sql`
+    select e.order_id, max(e.at) as at from (
+      select order_id, at from order_status_history where order_id = any(${ids}::uuid[])
+      union all select d.order_id, d.created_at from documents d join orders o on o.id = d.order_id
+        where d.order_id = any(${ids}::uuid[]) and d.uploaded_by <> o.owner_user_id
+      union all select order_id, at from result_drafts where order_id = any(${ids}::uuid[])
+      union all select order_id, at from ai_reviews where order_id = any(${ids}::uuid[])
+      union all select order_id, updated_at from order_analogs where order_id = any(${ids}::uuid[])
+      union all select order_id, signed_at from document_signatures where order_id = any(${ids}::uuid[])
+      union all select order_id, coalesce(finished_at, created_at) from onsite_visits where order_id = any(${ids}::uuid[])
+      union all select order_id, requested_at from deadline_requests where order_id = any(${ids}::uuid[])
+    ) e group by e.order_id`;
+  const at = new Map(rows.map((r) => [r.order_id, r.at]));
+  const now = Date.now();
+  return new Map(orders.map((o) => {
+    const last = at.get(o.id) ?? o.updated_at;
+    return [o.id, { at: last, days: Math.max(0, Math.floor((now - new Date(last).getTime()) / 86_400_000)) }];
+  }));
+}
+
 // Кому руководитель может передать дело в работе (2.62): эксперты организации, которым дело можно отдать (допуск, «принимаю
 // дела», досье в порядке, работают от организации), кроме нынешнего исполнителя; с нагрузкой.
 async function transferTargets(sql, order, orgId, registry) {
@@ -233,9 +260,13 @@ export function orgOps() {
         // «Напомнить эксперту» (2.125): когда напоминали и можно ли снова — по делам в работе.
         const reminds = new Map();
         for (const o of rows.filter((x) => x.status === 'in_work')) reminds.set(o.id, await caseRemind(sql, o));
+        // Сколько дней по делу ничего не происходило (2.133) — в работе и на проверке.
+        const moves = await caseMoves(sql, rows.filter((o) => ['in_work', 'review'].includes(o.status)));
         const cases = rows.map((o) => ({
           ...(waits.get(o.id) ?? { sign_wait: 0, returned_open: false }),
           remind: reminds.get(o.id) ?? null,
+          last_move: moves.get(o.id) ?? null,
+          idle: (moves.get(o.id)?.days ?? 0) >= CASE_IDLE_DAYS,
           extend: ext.get(o.id) ?? null,
           handover: handovers.get(o.id) ?? null,
           transfer_to: transfer.get(o.id) ?? [],

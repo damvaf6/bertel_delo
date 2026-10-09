@@ -5650,6 +5650,51 @@ test('дела экспертов (2.127): руководитель отбира
   for (const p of [cp, ap, bp, hp]) await p.context().close();
 });
 
+// Дело без движения (2.133): сколько дней по делу ничего не происходило — у каждого дела в работе; отбор «Без движения».
+test('дела экспертов (2.133): руководитель видит дело без движения и отбирает такие дела', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), ap = await ctx(), hp = await ctx();
+  const customer = await signIn(cp, '+79990013311');
+  const a = await signIn(ap, '+79990013312'), head = await signIn(hp, '+79990013313');
+  const { orgId } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Движение ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Тихонова Вера' where id = $1", [a.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, a.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [a.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [a.id]);
+    const add = async (title, idle) => {
+      const id = (await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+        values ('expertise', 'realty', $1, $2, $3, 'in_work', current_date + 10, 1500000, now(),
+                '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Тихая ул., 1","area":"40"}') returning id`,
+        [title, customer.id, a.id])).rows[0].id;
+      await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [id, a.id]);
+      await c.query(`insert into order_status_history (order_id, actor_id, side, from_status, to_status, at)
+        values ($1, $2, 'executor', 'awaiting_executor', 'in_work', now() - make_interval(days => $3::int, hours => 1))`, [id, a.id, idle]);
+      // Заказчик спрашивает в переписке — движением дела это не считается.
+      if (idle) await c.query("insert into order_messages (order_id, author_id, side, body) values ($1, $2, 'customer', 'Как продвигается оценка?')", [id, customer.id]);
+    };
+    await add('Движение: тихое', 6);
+    await add('Движение: свежее', 0);
+    return { orgId: org.id };
+  });
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const rows = hp.locator('#org-cases > li[data-case]');
+  await expect(rows).toHaveCount(2);
+  await expect(hp.locator('[data-filter="idle"]')).toHaveText('Без движения · 1');
+  await expect(hp.locator('#org-cases [data-role="idle"]')).toHaveCount(1);
+  await expect(hp.locator('#org-cases [data-role="idle"]')).toContainText('Без движения 6 дн.');
+  await expect(hp.locator('#org-cases [data-role="last-move"]')).toHaveText('Последнее движение по делу: сегодня');
+  await hp.locator('[data-filter="idle"]').click();
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first().locator('[data-role="idle"]')).toBeVisible();
+  await expect(rows.first().locator('[data-action="remind-expert"]')).toBeEnabled();
+  const w = await hp.evaluate(() => document.documentElement.scrollWidth);
+  expect(w).toBeLessThanOrEqual(412);
+  await rows.first().scrollIntoViewIfNeeded();
+  await shot(hp, 'c9-rukovoditel-bez-dvizheniya');
+  for (const p of [cp, ap, hp]) await p.context().close();
+});
+
 test('заготовки замечаний руководителя (2.103): запомнить пункты один раз, вставить в следующее замечание одной кнопкой', async ({ browser, baseURL }) => {
   const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
   const cp = await ctx(), ep = await ctx(), hp = await ctx();

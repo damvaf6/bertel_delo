@@ -9,6 +9,7 @@
 // Эксперт просит передать дело коллеге (2.107): причина и выбор, кому, — «Передать» одной кнопкой или «Отказать».
 // «Напомнить эксперту» о деле в работе (2.125) — одной кнопкой, раз в сутки.
 // Отбор по эксперту и «Срок на этой неделе» (2.127) — вместе с отбором 2.102 и поиском.
+// Сколько дней по делу ничего не происходило и отбор «Без движения» (2.133) — переписка с заказчиком не в счёт.
 // «Ждут назначения» (2.17): дела, предложенные диспетчером организации, — руководитель назначает эксперта или отказывается.
 import { api, el, say } from '/common.js';
 import { expertLink } from '/expertcard.js';
@@ -44,6 +45,7 @@ const FILTERS = [
   { id: 'handover', text: 'Просят передать', test: (c) => !!c.handover },
   { id: 'hot', text: 'Горит', test: (c) => c.hot },
   { id: 'week', text: 'Срок на этой неделе', test: (c) => c.week },
+  { id: 'idle', text: 'Без движения', test: (c) => c.idle },
   { id: 'sign', text: 'Ждёт моей подписи', test: (c) => c.sign_wait > 0 },
   { id: 'returned', text: 'Вернул эксперту', test: (c) => c.returned_open },
   { id: 'extend', text: 'Просят перенести срок', test: (c) => !!c.extend },
@@ -177,6 +179,7 @@ function caseItem(org, c) {
     // Эксперт не принимает дела до … (2.113), а срок дела — в эти дни: «Передать другому эксперту» сразу открыто.
     ...(c.away && !c.handover ? [el('div', { class: 'notice-warn', 'data-role': 'away',
       text: `Эксперт не принимает дела до ${dayRu(c.away.until)}${c.away.note ? ` (${c.away.note})` : ''}, а срок дела — в эти дни. Передайте его коллеге.` })] : []),
+    ...(c.last_move ? [moveRow(c)] : []),
     ...(c.remind ? [remindRow(org, c)] : []),
     ...(c.handover && c.status === 'in_work' ? [handoverBlock(org, c)] : []),
     ...(c.status === 'in_work' && !c.handover ? [transferDetails(org, c)] : []),
@@ -207,6 +210,17 @@ export function focusOrgCase({ ref, to }) {
   li.scrollIntoView({ block: 'start' });
   li.classList.add('flash');
   setTimeout(() => li.classList.remove('flash'), 2000);
+}
+
+// Последнее движение по делу (2.133): смена состояния, файл эксперта, черновик, проверка, аналог, подпись, осмотр.
+// Три дня и больше — «Без движения», заметно; рядом «Напомнить эксперту».
+function moveRow(c) {
+  const d = c.last_move.days;
+  const ago = d === 0 ? 'сегодня' : d === 1 ? 'вчера' : `${d} дн. назад`;
+  return c.idle
+    ? el('div', { class: 'row', 'data-role': 'idle' }, el('span', { class: 'badge warn', text: `Без движения ${d} дн.` }),
+      el('span', { class: 'muted', text: `последнее — ${timeRu(c.last_move.at)}` }))
+    : el('div', { class: 'muted', 'data-role': 'last-move', text: `Последнее движение по делу: ${ago}` });
 }
 
 // «Напомнить эксперту» (2.125): дело в работе — одной кнопкой, не чаще раза в сутки по делу; эксперт получит уведомление,
