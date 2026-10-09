@@ -211,3 +211,51 @@ test('перегруженный день (2.134): больше двух дел 
   // Посторонний не видит чужие дела и причины.
   assert.equal((await list(stranger, b)).status, 404);
 });
+
+// 2.145: свой темп в блоке «Срок» — дней до срока и обычный срок эксперта по этой услуге (средний из «Сдано за год», 2.139);
+// обычно нужно ещё больше, чем осталось, — мягкое предупреждение. Видит только исполнитель.
+test('свой темп (2.145): дней до срока, обычный срок по услуге, «можно не успеть»; только исполнителю', async () => {
+  const me = await login(S, '+79990002916');
+  await makeSpecialist(S.sql, me.user.id);
+  async function inWorkFor(c, title, days) {
+    const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
+    assert.equal((await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: addDays(today, days), fields: FIELDS })).status, 200);
+    assert.equal((await owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
+    await ensurePaid(S.sql, o.id);
+    assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: c.user.id, from: 'matching' })).status, 200);
+    assert.equal((await c.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+    return o;
+  }
+  const o = await inWorkFor(me, 'Квартира: свой темп', 3);
+  // Сданных дел этой услуги нет — только «осталось».
+  let p = (await list(me, o)).body.pace;
+  assert.deepEqual([p.days_left, p.usual_days, p.late], [3, null, false]);
+  assert.equal((await list(owner, o)).body.pace, null, 'заказчик темп эксперта не видит');
+  assert.equal((await list(dispatcher, o)).body.pace, null);
+  // Сданные за год дела той же услуги: принял 10 и 8 дней назад, сдал через 6 и 4 дня — в среднем 5. Одно дело — мало.
+  async function doneCase(taken, took) {
+    const d = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Сдано раньше' })).body.order;
+    await S.sql`update orders set executor_user_id = ${me.user.id}, status = 'done', deadline = ${today} where id = ${d.id}`;
+    await S.sql`insert into order_offers (order_id, specialist_id, score, outcome, outcome_at)
+                values (${d.id}, ${me.user.id}, '{}', 'accepted', now() - make_interval(days => ${taken}))`;
+    await S.sql`insert into order_status_history (order_id, from_status, to_status, side, actor_id, at)
+                values (${d.id}, 'review', 'done', 'dispatcher', ${dispatcher.user.id}, now() - make_interval(days => ${taken - took}))`;
+  }
+  await doneCase(10, 6);
+  assert.equal((await list(me, o)).body.pace.usual_days, null, 'одного сданного дела мало');
+  await doneCase(8, 4);
+  p = (await list(me, o)).body.pace;
+  assert.deepEqual([p.days_left, p.usual_days, p.spent_days, p.need_days, p.late], [3, 5, 0, 5, true]);
+  // Дело у эксперта уже 3 дня — по обычному темпу нужно ещё 2, до срока 3: успевает.
+  await S.sql`update order_offers set outcome_at = now() - interval '3 days' where order_id = ${o.id} and specialist_id = ${me.user.id}`;
+  p = (await list(me, o)).body.pace;
+  assert.deepEqual([p.spent_days, p.need_days, p.late], [3, 2, false]);
+  // Другая услуга — обычный срок по ней не считается.
+  const v = await inWorkFor(me, 'Машина: свой темп', 1);
+  await S.sql`update orders set service = 'vehicle' where id = ${v.id}`;
+  p = (await list(me, v)).body.pace;
+  assert.deepEqual([p.days_left, p.usual_days, p.late], [1, null, false]);
+  // Сдано на проверку — темп не нужен.
+  await S.sql`update orders set status = 'review' where id = ${o.id}`;
+  assert.equal((await list(me, o)).body.pace, null);
+});
