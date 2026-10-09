@@ -218,11 +218,15 @@ export function aiOps() {
         const analogs = names.includes('analog_match') || names.includes('report_dates')
           ? inItemOrder(registry.analogs(order.module, order.service), order, await sql`select url, fields, adjustments from order_analogs where order_id = ${order.id} and deleted_at is null and confirmed_at is not null order by id`)
           : [];
-        const inspectionDays = names.includes('report_dates')
-          ? (await sql`select distinct to_char(p.received_at at time zone 'Europe/Moscow', 'YYYY-MM-DD') as day from inspection_photos p
-              join documents d on d.id = p.document_id where d.order_id = ${order.id} and d.deleted_at is null`).map((r) => r.day)
+        // 2.146: день съёмки — по часам телефона, если он их передал; день получения тоже считается днём осмотра.
+        const shots = names.includes('report_dates')
+          ? await sql`select to_char(coalesce(p.shot_at, p.received_at) at time zone 'Europe/Moscow', 'YYYY-MM-DD') as day,
+              to_char(p.received_at at time zone 'Europe/Moscow', 'YYYY-MM-DD') as got from inspection_photos p
+              join documents d on d.id = p.document_id where d.order_id = ${order.id} and d.deleted_at is null`
           : [];
-        const auto = runAutoChecks(names, files, { fields: order.fields ?? {}, dossier, basis, service: order.service, analogs, inspectionDays });
+        const inspectionDays = [...new Set(shots.map((r) => r.day))];
+        const inspectionUploadDays = [...new Set(shots.map((r) => r.got))];
+        const auto = runAutoChecks(names, files, { fields: order.fields ?? {}, dossier, basis, service: order.service, analogs, inspectionDays, inspectionUploadDays });
         const found = Object.fromEntries(rules.map((r) => [r.id, (r.auto ?? []).flatMap((a) => auto[a] ?? [])]));
         // Модель недоступна или лимит исчерпан, но автоматические находки есть — показываем их, а не ошибку.
         let out;

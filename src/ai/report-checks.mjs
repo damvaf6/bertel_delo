@@ -687,7 +687,11 @@ function dateOrder(doc) {
 // ——— 2.88: даты по всему отчёту ———
 // Осмотр не позже составления отчёта и в те дни, когда в деле получены фото осмотра; объявления аналогов (из дела и из
 // таблицы в отчёте) — не позже даты оценки: объявления, которого на дату оценки ещё не было, в аналоги брать нельзя.
-// ctx.inspectionDays — дни (по Москве), когда платформа получила фото осмотра по ссылке или с выезда помощника.
+// ctx.inspectionDays — дни (по Москве), когда сделаны фото осмотра по ссылке или с выезда помощника (по часам телефона,
+// если он их передал, иначе — когда платформа получила фото); ctx.inspectionUploadDays — дни получения (2.146): фото,
+// снятое вечером и дошедшее утром при плохой связи, — тоже день осмотра.
+// 2.146: все даты осмотра в отчёте, а не только первая — разные даты в одном отчёте (титул от шаблона, раздел от дела)
+// и «без осмотра», когда в деле есть фото осмотра, — тоже находки.
 const INSPECT_LABELS = [
   'дата\\s+(?:проведения\\s+)?(?:визуального\\s+|натурного\\s+)?осмотра(?:\\s+объекта(?:\\s+(?:оценки|экспертизы))?)?',
   'осмотр\\S*\\s+(?:объекта\\s+(?:оценки\\s+|экспертизы\\s+)?)?(?:был\\s+)?(?:проведен|произведен|проведён|произведён)\\S*',
@@ -699,21 +703,51 @@ const pageWith = (doc, label) => {
   const page = doc.pages?.[i] ?? '';
   return { doc, page: i, quote: lineAround(page, Math.max(0, page.search(re))) };
 };
+const NO_INSPECT = /без\s+(?:проведения\s+)?осмотра/iu;
+// Все даты осмотра в отчёте: по одной на день, в порядке страниц, с местом первого упоминания.
+function inspectDates(doc) {
+  const seen = new Map();
+  eachPage(doc, (page, i) => {
+    const hits = [];
+    for (const l of INSPECT_LABELS) {
+      for (const m of page.matchAll(new RegExp(l, 'giu'))) {
+        const day = dateAfter(page.slice(m.index, m.index + m[0].length + 60), l);
+        if (day) hits.push({ day, index: m.index });
+      }
+    }
+    for (const h of hits.sort((a, b) => a.index - b.index)) {
+      if (!seen.has(h.day)) seen.set(h.day, { day: h.day, page: i, quote: lineAround(page, h.index) });
+    }
+  });
+  return [...seen.values()];
+}
 function reportDates(docs, ctx) {
   const d = mainReport(docs) ?? docs[0];
   if (!d) return [];
   const text = (d.pages ?? []).join('\n');
   const made = dateAfter(text, MADE_LABEL);
   const val = dateAfter(text, VALUE_LABEL);
-  const label = INSPECT_LABELS.find((l) => dateAfter(text, l));
-  const insp = label ? dateAfter(text, label) : null;
+  const found = inspectDates(d);
   const out = [];
-  if (insp && made && insp > made) {
-    out.push({ ...pageWith(d, label), text: `Дата осмотра (${ruDate(insp)}) позже даты составления отчёта (${ruDate(made)}) — осмотр не может быть после того, как отчёт составлен` });
+  const late = found.find((f) => made && f.day > made);
+  if (late) {
+    out.push({ doc: d, page: late.page, quote: late.quote, text: `Дата осмотра (${ruDate(late.day)}) позже даты составления отчёта (${ruDate(made)}) — осмотр не может быть после того, как отчёт составлен` });
+  }
+  if (found.length > 1) {
+    out.push({ doc: d, page: found[1].page, quote: found[1].quote, text: `В отчёте разные даты осмотра: ${found.map((f) => `${ruDate(f.day)} (стр. ${f.page + 1})`).join(', ')} — оставьте одну, верную` });
   }
   const days = [...new Set(ctx.inspectionDays ?? [])].sort();
-  if (insp && days.length && !days.includes(insp) && !/без\s+(?:проведения\s+)?осмотра/iu.test(text)) {
-    out.push({ ...pageWith(d, label), text: `Дата осмотра в отчёте — ${ruDate(insp)}, а фото осмотра в деле получены ${days.map(ruDate).join(', ')} — проверьте дату осмотра` });
+  const ok = new Set([...days, ...(ctx.inspectionUploadDays ?? [])]);
+  const none = text.match(NO_INSPECT);
+  if (days.length && !none) {
+    for (const f of found.filter((x) => !ok.has(x.day))) {
+      out.push({ doc: d, page: f.page, quote: f.quote, text: `Дата осмотра в отчёте — ${ruDate(f.day)}, а фото осмотра в деле сделаны ${days.map(ruDate).join(', ')} — проверьте дату осмотра` });
+    }
+  }
+  if (days.length && none) {
+    const i = Math.max(0, (d.pages ?? []).findIndex((p) => NO_INSPECT.test(p)));
+    out.push({ doc: d, page: i, quote: lineAround(d.pages[i], Math.max(0, d.pages[i].search(NO_INSPECT))),
+      text: `В отчёте сказано «${clean(none[0])}», а в деле есть фото осмотра от ${days.map(ruDate).join(', ')} — проверьте, был ли осмотр` });
   }
   if (!val) return out;
   const told = new Set();
@@ -1349,7 +1383,7 @@ export const AUTO_CHECKS = Object.freeze({
   court_order: 'по определению суда — номер определения и ст. 307 УК РФ',
   vin_match: 'VIN в отчёте — как в заявке',
   date_order: 'дата составления отчёта не раньше даты оценки',
-  report_dates: 'даты по всему отчёту: осмотр не позже составления и в дни фото осмотра в деле, объявления аналогов не позже даты оценки',
+  report_dates: 'даты по всему отчёту: осмотр не позже составления, одна дата осмотра и в дни фото осмотра в деле, объявления аналогов не позже даты оценки',
   reg_match: 'госномер в отчёте — как в заявке',
   mileage_match: 'пробег в отчёте — как в заявке (с запасом 10%)',
   approach_weights: 'веса подходов в согласовании в сумме 1',

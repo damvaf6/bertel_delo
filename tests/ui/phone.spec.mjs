@@ -2313,6 +2313,20 @@ test('аналоги в деле (2.32): ссылка и скриншот — И
   await dates.scrollIntoViewIfNeeded();
   await shot(sp, '95a-specialist-ii-daty-v-otchete');
 
+  // 2.146: в отчёте две разные даты осмотра (титул от шаблона, раздел от дела) — находка с обеими датами и страницами.
+  await sp.locator('#result-file').setInputFiles({ name: 'Отчёт две даты осмотра.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    buffer: makeDocx(['ОТЧЁТ ОБ ОЦЕНКЕ', 'Дата оценки: 12.01.2026', 'Дата составления отчёта: 14.01.2026', 'Дата осмотра: 12.01.2026',
+      'Раздел 5. Описание объекта. Осмотр объекта проведён 03.11.2025 в присутствии собственника.']) });
+  await expect(sp.locator('#doc-msg')).toHaveText('Файл добавлен');
+  await sp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  const twoDates = sp.locator('li[data-check="requisites"] .ai-found');
+  await expect(twoDates).toContainText('В отчёте разные даты осмотра: 12.01.2026');
+  await expect(twoDates).toContainText('03.11.2025');
+  await expect(twoDates).toContainText('оставьте одну, верную');
+  await twoDates.scrollIntoViewIfNeeded();
+  await shot(sp, '95b-specialist-ii-dve-daty-osmotra');
+
   // Заказчик раздела аналогов не видит.
   await page.goto(`/kabinet#order=${id}`);
   await expect(page.locator('#order-view')).toBeVisible();
