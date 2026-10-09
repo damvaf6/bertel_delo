@@ -162,3 +162,56 @@ test('без движения (2.141): число дел без движения
   assert.equal(feed[0].section, `org=${o2.id}&to=idle`);
   assert.doesNotMatch(JSON.stringify(feed), /Неподвижное|Свежее|Как продвигается/);
 });
+
+test('прогон 2.150: эксперт подписал, файл ждёт подписи организации — дело не «без движения» ни в сводке, ни в делах, ни в карточке', async () => {
+  const h = await login(S, '+79990003809');
+  const e = await login(S, '+79990003810');
+  const o3 = await makeOrg(S.sql, 'ООО «Подписная оценка»');
+  await addMember(S.sql, o3.id, h.user.id, 'head');
+  await makeSpecialist(S.sql, e.user.id);
+  await addMember(S.sql, o3.id, e.user.id, 'member');
+  await e.req('PATCH', '/api/me', { full_name: 'Эксперт Подписной' });
+  assert.equal((await e.req('PATCH', '/api/specialist/me', { org_id: o3.id })).status, 200);
+  const make = async (title) => {
+    const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
+    assert.equal((await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: addDays(today, 12), fields: FIELDS })).status, 200);
+    assert.equal((await owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
+    await ensurePaid(S.sql, o.id);
+    assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: e.user.id, from: 'matching' })).status, 200);
+    assert.equal((await e.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+    return o;
+  };
+  const signed = await make('Подписано экспертом');
+  const still = await make('Стоит без файла');
+  const d = (await e.req('POST', `/api/orders/${signed.id}/results`, Buffer.from('отчёт'), {
+    raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Отчёт.pdf') },
+  })).body.document;
+  assert.equal((await e.req('POST', `/api/documents/${d.id}/sign`, { confirm: true })).status, 201);
+  // Пять дней ничего не происходит по обоим делам.
+  const ids = [signed.id, still.id];
+  await S.sql`update order_status_history set at = at - interval '5 days' where order_id = any(${ids}::uuid[])`;
+  await S.sql`update documents set created_at = created_at - interval '5 days' where order_id = any(${ids}::uuid[])`;
+  await S.sql`update document_signatures set signed_at = signed_at - interval '5 days' where order_id = any(${ids}::uuid[])`;
+  await S.sql`update orders set updated_at = now() - interval '5 days' where id = any(${ids}::uuid[])`;
+
+  const cases = (await h.req('GET', `/api/orgs/${o3.id}/cases`)).body.cases;
+  const byId = new Map(cases.map((c) => [c.id, c]));
+  assert.equal(byId.get(signed.id).sign_wait, 1);
+  assert.equal(byId.get(signed.id).idle, false, 'ход за руководителем — не «без движения» у эксперта');
+  assert.equal(byId.get(signed.id).last_move.days, 5);
+  assert.equal(byId.get(still.id).idle, true);
+
+  const card = (await h.req('GET', `/api/specialists/${e.user.id}/card`)).body;
+  assert.deepEqual(card.now.cases.map((x) => x.idle).sort(), [false, true]);
+
+  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(today, '08:30') }) >= 1);
+  const [r] = await S.sql`select sign, idle from org_morning_digests where user_id = ${h.user.id} and org_id = ${o3.id}`;
+  assert.deepEqual({ ...r }, { sign: 1, idle: 1 });
+
+  // Руководитель вернул файл с замечаниями: подпись эксперта снята, но возврат — свежее движение, дело не «стоит 5 дней».
+  assert.equal((await h.req('POST', `/api/org-documents/${d.id}/return`, { comment: '1. Итог не совпадает с таблицей' })).status, 201);
+  const back = (await h.req('GET', `/api/orgs/${o3.id}/cases`)).body.cases.find((c) => c.id === signed.id);
+  assert.equal(back.sign_wait, 0);
+  assert.equal(back.idle, false);
+  assert.equal(back.last_move.days, 0);
+});

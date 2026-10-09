@@ -24,7 +24,7 @@ import { silentLinks } from './inspect-ops.mjs';
 import { openExtends } from './deadline-ops.mjs';
 import { openHandovers } from './handover-ops.mjs';
 import { dueNotes } from './note-ops.mjs';
-import { CASE_IDLE_DAYS, caseMoves } from './org-ops.mjs';
+import { caseMoves } from './org-ops.mjs';
 
 // «Горит» — просрочено или до срока не больше двух дней (как подсветка в списке дел).
 const HOT_DAYS = 2;
@@ -257,7 +257,7 @@ export async function orgPart(sql, org, registry, today) {
   const moves = await caseMoves(sql, cases.filter((o) => ['in_work', 'review'].includes(o.status)));
   return {
     dossier,
-    idle: [...moves.values()].filter((m) => m.days >= CASE_IDLE_DAYS).length,
+    idle: [...moves.values()].filter((m) => m.idle).length,
     id: org.id,
     name: org.name,
     hot: cases.filter((o) => ['in_work', 'review'].includes(o.status) && o.deadline && o.deadline <= soon)
