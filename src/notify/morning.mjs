@@ -3,9 +3,11 @@
 // выездов на объект сегодня (помощника по своим делам и своих выездов помощником) и сколько ссылок на осмотр истекают в
 // ближайшие сутки. Считается так же, как «Мои сроки на две недели» (src/orders/schedule.mjs) — туда и ведёт уведомление.
 // Нечего сообщить — сводки нет. В тексте и СМС только цифры: ни названий дел, ни имён, ни адресов.
+// С 2.142 — ещё сколько дел «срок близко — нет файла результата» и «заказчик ждёт ответа» (как в «Сегодня»); если, кроме
+// них, в сводке ничего нет, она ведёт к «Сегодня», а не к «Моим срокам».
 import { expertSchedule } from '../orders/schedule.mjs';
 import { STATUS_NAME, todayMsk } from '../orders/workflow.mjs';
-import { orgPart } from '../ops/today-ops.mjs';
+import { expertMorningAlerts, orgPart } from '../ops/today-ops.mjs';
 import { notify } from './notify.mjs';
 
 export const MORNING_HOUR = 8;
@@ -40,6 +42,8 @@ export function digestText(c) {
   if (c.overdue) parts.push(`${c.overdue} ${pl(c.overdue, 'дело', 'дела', 'дел')} с прошедшим сроком`);
   if (c.visits) parts.push(`${c.visits} ${pl(c.visits, 'выезд', 'выезда', 'выездов')} на объект`);
   if (c.links) parts.push(`${c.links} ${pl(c.links, 'ссылка', 'ссылки', 'ссылок')} на осмотр ${c.links === 1 ? 'истекает' : 'истекают'} в ближайшие сутки`);
+  if (c.no_result) parts.push(`нет файла результата: ${c.no_result}`);
+  if (c.reply_wait) parts.push(`заказчик ждёт ответа: ${c.reply_wait}`);
   return parts.length ? `На сегодня: ${parts.join(', ')}` : null;
 }
 
@@ -51,14 +55,15 @@ export async function sendMorning(sql, { now = new Date() } = {}) {
                            where u.is_active and not exists (select 1 from morning_digests d where d.user_id = s.user_id and d.day = ${today}::date)`;
   let sent = 0;
   for (const { user_id: userId } of people) {
-    const c = digestCounts(await expertSchedule(sql, userId, NO_NAMES, today), now);
+    const c = { ...digestCounts(await expertSchedule(sql, userId, NO_NAMES, today), now), ...await expertMorningAlerts(sql, userId, today) };
     sent += await sql.tx(async (tx) => {
-      const fresh = await tx`insert into morning_digests (user_id, day, due, overdue, visits, links)
-                             values (${userId}, ${today}, ${c.due}, ${c.overdue}, ${c.visits}, ${c.links})
+      const fresh = await tx`insert into morning_digests (user_id, day, due, overdue, visits, links, no_result, reply_wait)
+                             values (${userId}, ${today}, ${c.due}, ${c.overdue}, ${c.visits}, ${c.links}, ${c.no_result}, ${c.reply_wait})
                              on conflict do nothing returning user_id`;
       const text = digestText(c);
       if (!fresh.length || !text) return 0;
-      const n = await notify(tx, 'morning_today', { users: [userId], sms: `БЕРТЕЛ Дело: ${text}. Подробно — «Мои сроки» в кабинете.` });
+      const where = morningTo(c) === 'today' ? '«Сегодня»' : '«Мои сроки»';
+      const n = await notify(tx, 'morning_today', { users: [userId], sms: `БЕРТЕЛ Дело: ${text}. Подробно — ${where} в кабинете.` });
       if (n) {
         await tx`update morning_digests set notification_id = (select max(id) from notifications where user_id = ${userId} and event = 'morning_today')
                  where user_id = ${userId} and day = ${today}::date`;
@@ -69,11 +74,18 @@ export async function sendMorning(sql, { now = new Date() } = {}) {
   return sent;
 }
 
-// Текст сводки в ленте по номеру уведомления (цифры — из morning_digests).
+// Куда ведёт сводка (2.142): есть сроки, выезды или ссылки — к «Моим срокам»; только «нет файла результата» и «заказчик ждёт
+// ответа» — к «Сегодня», где эти дела строками.
+export function morningTo(c) {
+  return c.due || c.overdue || c.visits || c.links ? 'schedule' : 'today';
+}
+
+// Текст сводки в ленте по номеру уведомления (цифры — из morning_digests) и куда она ведёт.
 export async function morningTitles(sql, ids) {
   if (!ids.length) return new Map();
-  const rows = await sql`select notification_id, due, overdue, visits, links from morning_digests where notification_id = any(${ids}::bigint[])`;
-  return new Map(rows.map((r) => [String(r.notification_id), digestText(r)]));
+  const rows = await sql`select notification_id, due, overdue, visits, links, no_result, reply_wait from morning_digests
+                         where notification_id = any(${ids}::bigint[])`;
+  return new Map(rows.map((r) => [String(r.notification_id), { title: digestText(r), to: morningTo(r) }]));
 }
 
 // Утренняя сводка руководителю «На сегодня по организации» (2.121): по каждой организации, где он руководитель, — одно

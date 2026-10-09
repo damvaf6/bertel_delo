@@ -37,6 +37,8 @@ function sectionOf(actor, r, block = null) {
     const focus = EVENTS[r.event]?.focus;
     return focus && r.order_id ? `org=${r.org_id}&case=${orderRef(r.order_id).slice(2)}&to=${focus}` : `org=${r.org_id}`;
   }
+  // Утренняя сводка эксперту только с делами из «Сегодня» (2.142) — к «Сегодня» на главной.
+  if (block === 'today' && r.event === 'morning_today') return 'today';
   // К блоку раздела (2.119: утренняя сводка — к «Моим срокам»).
   const anchor = EVENTS[r.event]?.anchor;
   return anchor ? `${sec}&to=${anchor}` : sec;
@@ -64,7 +66,7 @@ export function notifyOps() {
             const order = r.order_id ? visible.get(r.order_id) : null;
             return {
               id: String(r.id),
-              title: morning.get(String(r.id)) ?? orgMorning.get(String(r.id))?.title ?? EVENTS[r.event]?.title ?? 'Уведомление',
+              title: morning.get(String(r.id))?.title ?? orgMorning.get(String(r.id))?.title ?? EVENTS[r.event]?.title ?? 'Уведомление',
               at: r.created_at,
               read: !!r.read_at,
               order_ref: r.order_id ? orderRef(r.order_id) : null,
@@ -73,7 +75,7 @@ export function notifyOps() {
               order_title: order ? order.title : null,
               // Куда ведёт уведомление без заявки (2.45) — раздел из реестра; по организации — сразу в неё (если человек
               // в ней состоит: иначе — общий раздел «Организации», где видно приглашение).
-              section: sectionOf(actor, r, orgMorning.get(String(r.id))?.to),
+              section: sectionOf(actor, r, orgMorning.get(String(r.id))?.to ?? morning.get(String(r.id))?.to),
               // К какому блоку дела (2.115: напоминание по заметке — к заметкам).
               to: order ? (EVENTS[r.event]?.to ?? null) : null,
               // Какая организация (2.45): у руководителя их может быть несколько.

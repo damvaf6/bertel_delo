@@ -61,6 +61,8 @@ async function route() {
   show('list-view', 'orders');
   showFirstHint();
   await Promise.all([loadOrders(), loadToday()]);
+  // #today — к «Сегодня» на главной (2.142: утренняя сводка эксперта, где только дела из «Сегодня»).
+  if (h === '#today') $('today-box').scrollIntoView({ block: 'start' });
 }
 
 let allOrders = [];
