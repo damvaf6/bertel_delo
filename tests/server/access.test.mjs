@@ -1836,7 +1836,7 @@ test('сводка за месяц по экспертам (2.78): только 
   assert.deepEqual({ ...e1, user_id: undefined, full_name: undefined }, { user_id: undefined, full_name: undefined,
     accepted: 2, done: 2, done_late: 1, overdue_now: 1, returned_head: 1, returned_dispatcher: 1, fee_kop: 800_000 + 1_600_000, paid_kop: 800_000,
     avg_days: 0, late_first: 1, late_first_moved: 0, remarks: [{ text: 'Нет даты осмотра.', n: 1 }],
-    prev: { done: 0, on_time: 0, returned: 0 } });
+    prev: { done: 0, on_time: 0, returned: 0 }, services: [{ name: 'Оценка недвижимости', n: 2 }] });
   assert.deepEqual(r.experts.find((e) => e.user_id === ex.e2.user.id).prev, { done: 0, on_time: 0, returned: 1 }, 'возврат прошлого месяца (2.124)');
   assert.deepEqual(r.top_remarks, [{ text: 'Нет даты осмотра.', n: 2, experts: 2 }, { text: 'Не указан этаж', n: 1, experts: 1 }]);
   assert.deepEqual(r.experts.find((e) => e.user_id === ex.e2.user.id).remarks, [{ text: 'нет  даты осмотра', n: 1 }, { text: 'Не указан этаж', n: 1 }]);
@@ -1990,6 +1990,48 @@ test('сводка за месяц (2.124): сравнение с прошлым
   assert.ok(csv.includes('Эксперт Сравнов;1;3;1;2;0;1\r\n'), csv);
   assert.ok(csv.includes('Эксперт Новиков;1;0;0;0;0;0\r\n'), csv);
   assert.ok(/Итого;2;3;1;2;0;1\r\n/.test(csv), csv);
+});
+
+test('сводка за месяц (2.135): сдано по услугам — у организации, у эксперта и в таблице для Excel', async () => {
+  const org = await makeOrg(S.sql, 'Тестовая организация 2.135');
+  const head = await login(S, '+79990000135');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  const ex = {};
+  for (const [k, phone, name] of [['a', '+79990000235', 'Эксперт Услугин'], ['b', '+79990000335', 'Эксперт Машинов']]) {
+    ex[k] = await login(S, phone);
+    await addMember(S.sql, org.id, ex[k].user.id, 'member');
+    await makeSpecialist(S.sql, ex[k].user.id);
+    await S.sql`update users set full_name = ${name} where id = ${ex[k].user.id}`;
+    assert.equal((await ex[k].req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  }
+  const day = (n) => new Date(Date.now() + 3 * 3_600_000 + n * 86400_000).toISOString().slice(0, 10);
+  const make = async (executor, service, deadline, status = 'done') => {
+    const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service, title: 'Сводка 2.135' })).body.order;
+    await S.sql`update orders set status = ${status}, deadline = ${deadline}, price_kop = 1000000, executor_user_id = ${executor} where id = ${o.id}`;
+    if (status === 'done') await S.sql`insert into order_status_history (order_id, from_status, to_status, side) values (${o.id}, 'review', 'done', 'dispatcher')`;
+    return o;
+  };
+  // Недвижимость: a — 2 (одно позже срока), b — 1; транспорт: b — 1; дело в работе не в счёт.
+  await make(ex.a.user.id, 'realty', day(3));
+  await make(ex.a.user.id, 'realty', day(-2));
+  await make(ex.b.user.id, 'realty', day(3));
+  await make(ex.b.user.id, 'vehicle', day(3));
+  await make(ex.b.user.id, 'land', day(3), 'in_work');
+  const r = (await head.req('GET', `/api/orgs/${org.id}/report`)).body.report;
+  assert.deepEqual(r.by_service.map((x) => [x.service, x.name, x.done, x.done_late, x.fee_kop, x.experts]), [
+    ['realty', 'Оценка недвижимости', 3, 1, 2400000, 2],
+    ['vehicle', 'Оценка транспортного средства', 1, 0, 800000, 1],
+  ]);
+  const x = (u) => r.experts.find((e) => e.user_id === u);
+  assert.deepEqual(x(ex.a.user.id).services, [{ name: 'Оценка недвижимости', n: 2 }]);
+  assert.deepEqual(x(ex.b.user.id).services, [{ name: 'Оценка недвижимости', n: 1 }, { name: 'Оценка транспортного средства', n: 1 }]);
+  const csv = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv`, undefined, { binary: true })).body.toString('utf8');
+  assert.ok(csv.includes('По услугам;Сдано (готово);Из них позже срока;Вознаграждение за сданные, ₽;Экспертов\r\n'), csv);
+  assert.ok(csv.includes('Оценка недвижимости;3;1;24000,00;2\r\n'), csv);
+  assert.ok(csv.includes('Оценка транспортного средства;1;0;8000,00;1\r\n'), csv);
+  // Прошлый месяц пустой — блока по услугам нет.
+  const p = (await head.req('GET', `/api/orgs/${org.id}/report?month=${r.months[1] ?? r.month}`)).body.report;
+  if (p.month !== r.month) assert.deepEqual(p.by_service, []);
 });
 
 test('свои заготовки абзацев (2.87): видит и меняет только сам эксперт; не специалист — «не найдено»', async () => {

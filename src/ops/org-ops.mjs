@@ -364,12 +364,12 @@ export function orgOps() {
       },
     },
     {
-      // Сводка за месяц по экспертам (2.78): принято, сдано, позже срока, возвращено, вознаграждение и выплачено; только
-      // руководитель. ?format=csv — та же сводка таблицей для Excel.
+      // Сводка за месяц по экспертам (2.78): принято, сдано, позже срока, возвращено, вознаграждение и выплачено; сдано по
+      // услугам (2.135); только руководитель. ?format=csv — та же сводка таблицей для Excel.
       id: 'orgs.report', method: 'GET', path: '/api/orgs/:id/report', auth: 'user',
       access: { resource: 'org', param: 'id', need: 'manage' },
-      async handler({ sql, org, query, res }) {
-        const report = await orgMonthReport(sql, org.id, reportMonth(query.month));
+      async handler({ sql, org, query, res, registry }) {
+        const report = await orgMonthReport(sql, org.id, reportMonth(query.month), { registry });
         if (query.format !== 'csv') return { report };
         res.set({
           'content-type': 'text/csv; charset=utf-8',
