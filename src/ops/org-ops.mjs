@@ -6,7 +6,7 @@ import { LEVEL, ORG_ROLES, executorSignOrg, orgCaseSide, orgLevel } from '../acc
 import { audit, oneOf, phoneFrom, sendFile, text, uuidFrom } from './util.mjs';
 import { dispatchers, notify, notifyPhone, orgHeads } from '../notify/notify.mjs';
 import { awayOf, orgExpertsFor } from './match-ops.mjs';
-import { orderSignatures, orgReturns } from './sign-ops.mjs';
+import { orgReturns, signWait } from './sign-ops.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { splitAmount } from '../money/money.mjs';
 import { STATUS_NAME, addDays, isOverdue, todayMsk, weekEnd } from '../orders/workflow.mjs';
@@ -223,14 +223,15 @@ export function orgOps() {
         const byId = new Map(experts.map((e) => [e.user_id, e]));
         const feeOf = (o) => (o.payout_kop != null ? Number(o.payout_kop) : o.price_kop ? splitAmount(Number(o.price_kop)).payoutKop : null);
         // Что ждёт руководителя по делу (2.36): файлы, подписанные экспертом, ждут подписи организации; возврат эксперту
-        // ещё не исправлен. Только по делам в работе.
+        // ещё не исправлен. Только по делам в работе. С какого времени ждут и когда эксперт напоминал (2.148) — как в
+        // очереди подписи эксперта (2.99).
         const waits = new Map();
         for (const o of rows.filter((x) => x.status === 'in_work')) {
-          const signs = await orderSignatures(sql, o.id);
-          const docs = await sql`select id from documents where order_id = ${o.id} and kind = 'result' and deleted_at is null
-                                 and uploaded_by = ${o.executor_user_id}`;
+          const w = await signWait(sql, o);
           waits.set(o.id, {
-            sign_wait: docs.filter((d) => signs.get(d.id)?.expert && !signs.get(d.id)?.org).length,
+            sign_wait: w?.files ?? 0,
+            sign_since: w?.since ?? null,
+            sign_reminded_at: w?.reminded_at ?? null,
             returned_open: (await orgReturns(sql, o.id, { orgId: org.id })).some((r) => r.open),
           });
         }
@@ -263,7 +264,7 @@ export function orgOps() {
         // Сколько дней по делу ничего не происходило (2.133) — в работе и на проверке.
         const moves = await caseMoves(sql, rows.filter((o) => ['in_work', 'review'].includes(o.status)));
         const cases = rows.map((o) => ({
-          ...(waits.get(o.id) ?? { sign_wait: 0, returned_open: false }),
+          ...(waits.get(o.id) ?? { sign_wait: 0, sign_since: null, sign_reminded_at: null, returned_open: false }),
           remind: reminds.get(o.id) ?? null,
           last_move: moves.get(o.id) ?? null,
           idle: (moves.get(o.id)?.days ?? 0) >= CASE_IDLE_DAYS,

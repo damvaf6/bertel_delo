@@ -8,6 +8,11 @@ import { loadOrgCases } from '/orgcases.js';
 
 const $ = (id) => document.getElementById(id);
 let current = null;
+// «2 дн.», «5 ч», «меньше часа» (2.148).
+const waitedDays = (iso) => {
+  const h = Math.floor((Date.now() - new Date(iso).getTime()) / 3_600_000);
+  return h < 1 ? 'меньше часа' : h < 24 ? `${h} ч` : `${Math.floor(h / 24)} дн.`;
+};
 let remarks = [];           // свои заготовки замечаний руководителя (2.103)
 let remarkOrg = null;       // организация, для которой они загружены
 const remarkViews = new Set(); // открытые формы возврата — перерисовать после изменения заготовок
@@ -30,6 +35,8 @@ export async function loadOrgSign(org) {
   const head = (it) => [
     el('div', { class: 'title', text: `${it.service} · ${it.order_ref}` }),
     el('div', { class: 'muted', text: [`Эксперт: ${it.executor}`, it.deadline ? `срок ${dayRu(it.deadline)}` : null].filter(Boolean).join(' · ') }),
+    // Сколько файлы ждут подписи организации (2.148).
+    ...(it.waiting_since && waiting(it) ? [el('div', { class: 'sig-state warn', 'data-sig': 'since', text: `Ждёт Вашей подписи ${waitedDays(it.waiting_since)} — эксперт подписал ${new Date(it.waiting_since).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}` })] : []),
     // Эксперт напоминал о подписи (2.99) — пока файлы ждут подписи организации.
     ...(it.reminded_at && waiting(it) ? [el('div', { class: 'sig-state', 'data-sig': 'reminded', text: `Эксперт напомнил о подписи ${new Date(it.reminded_at).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}` })] : [])];
   const open = items.filter((it) => !signedAll(it));

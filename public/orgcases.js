@@ -52,6 +52,11 @@ const FILTERS = [
   { id: 'silent', text: 'Предложено, молчит', test: (c) => c.status === 'awaiting_executor' },
 ];
 let filter = null;
+// Подпись организации ждёт два дня и дольше (2.148) — строка красная, в отборе «Ждёт моей подписи» такие дела выше.
+const SIGN_LONG_DAYS = 2;
+const signLong = (c) => !!c.sign_since && Date.now() - new Date(c.sign_since).getTime() >= SIGN_LONG_DAYS * 86_400_000;
+const signSinceText = (c) => [`Эксперт подписал ${timeRu(c.sign_since)} — ждёт ${waited(c.sign_since)}`,
+  c.sign_reminded_at ? `напомнил ${timeRu(c.sign_reminded_at)}` : null].filter(Boolean).join(' · ');
 // Чьи дела показать (2.127): номер эксперта или '' — все.
 let expert = '';
 // Сколько сдавать за две недели (2.111) — у каждого эксперта в выборе «кому передать».
@@ -109,6 +114,8 @@ function renderCases() {
   const found = mine.filter((c) => hit([c.order_ref, c.service, c.expert, c.status_name].join(' '))
     && (!chosen || (c.active && chosen.test(c))));
   const active = found.filter((c) => c.active);
+  // «Ждёт моей подписи» (2.148): дольше всех ждущие — первыми.
+  if (filter === 'sign') active.sort((a, b) => new Date(a.sign_since) - new Date(b.sign_since));
   const done = found.filter((c) => !c.active);
   const none = cases.length > 0 && !found.length;
   $('org-cases-none').classList.toggle('hidden', !none);
@@ -169,9 +176,11 @@ function caseItem(org, c) {
     el('div', { class: 'muted', text: [c.fee_kop != null ? `вознаграждение ${rub(c.fee_kop)}` : 'цена ещё не назначена',
       c.payout ? PAYOUT_RU[c.payout] : null].filter(Boolean).join(' · ') }),
     // Что ждёт руководителя по делу (2.36) — прямо в списке дел, с переходом к подписи.
+    // Сколько ждёт и напоминал ли эксперт (2.148): долго ждёт — заметно.
     ...(c.sign_wait ? [el('div', { class: 'row', 'data-role': 'sign-wait' },
       el('span', { class: 'badge warn', text: `Ждёт Вашей подписи: ${c.sign_wait}` }),
-      el('button', { class: 'secondary', 'data-action': 'go-sign', onclick: () => goSign(c.order_ref) }, 'К подписи'))] : []),
+      el('button', { class: 'secondary', 'data-action': 'go-sign', onclick: () => goSign(c.order_ref) }, 'К подписи')),
+    ...(c.sign_since ? [el('div', { class: signLong(c) ? 'overdue' : 'muted', 'data-role': 'sign-since', text: signSinceText(c) })] : [])] : []),
     ...(c.returned_open ? [el('div', { class: 'muted', 'data-role': 'returned', text: 'Вы вернули отчёт эксперту — ждём исправления' })] : []),
     // Эксперт попросил перенести срок (2.100): решает диспетчер, руководитель видит новую дату.
     ...(c.extend ? [el('div', { class: 'muted', 'data-role': 'extend',

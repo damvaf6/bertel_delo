@@ -261,6 +261,7 @@ export function signOps() {
           if (!docs.length) continue;
           const signs = await orderSignatures(sql, o.id);
           const returns = await orgReturns(sql, o.id, { orgId: org.id });
+          const wait = await signWait(sql, o);
           items.push({
             order_ref: orderRef(o.id),
             service: registry.service(o.module, o.service)?.service.name ?? o.service,
@@ -268,7 +269,9 @@ export function signOps() {
             deadline: o.deadline,
             documents: docs.map((d) => ({ id: d.id, filename: d.filename, size_bytes: Number(d.size_bytes), signatures: signaturesView(signs.get(d.id)) })),
             // Эксперт напоминал о подписи (2.99) — когда последний раз, пока файл ждёт (после возврата прежнее не показывается).
-            reminded_at: (await signWait(sql, o))?.reminded_at ?? null,
+            reminded_at: wait?.reminded_at ?? null,
+            // С какого времени файлы ждут подписи организации (2.148) — самая ранняя подпись эксперта среди них.
+            waiting_since: wait?.since ?? null,
             // История возвратов эксперту (2.27) — только этой организации.
             returns: returns.map(({ id, at, document_id, filename, comment, by, open, items, left }) => ({ id, at, document_id, filename, comment, by, open, items, left })),
           });
