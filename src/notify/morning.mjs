@@ -78,7 +78,8 @@ export async function morningTitles(sql, ids) {
 
 // Утренняя сводка руководителю «На сегодня по организации» (2.121): по каждой организации, где он руководитель, — одно
 // уведомление: сколько дел ждут подписи организации, сколько экспертов просят передать дело, сколько дел экспертов сдать
-// сегодня и с прошедшим сроком. Считается так же, как «Сегодня» (src/ops/today-ops.mjs); ведёт в организацию. Только цифры.
+// сегодня и с прошедшим сроком, сколько дел без движения 3 дня и больше (2.141). Считается так же, как «Сегодня»
+// (src/ops/today-ops.mjs); ведёт в организацию. Только цифры.
 export function orgDigestCounts(part, today) {
   const inWork = (x) => x.status_name === STATUS_NAME.in_work;
   return {
@@ -86,6 +87,7 @@ export function orgDigestCounts(part, today) {
     handover: part.handover.length,
     due: part.hot.filter((x) => inWork(x) && x.deadline === today).length,
     overdue: part.hot.filter((x) => inWork(x) && x.overdue).length,
+    idle: part.idle ?? 0,
   };
 }
 
@@ -95,6 +97,7 @@ export function orgDigestText(c) {
   if (c.handover) parts.push(`${c.handover} ${pl(c.handover, 'просьба', 'просьбы', 'просьб')} передать дело`);
   if (c.due) parts.push(`у экспертов сдать сегодня ${c.due} ${pl(c.due, 'дело', 'дела', 'дел')}`);
   if (c.overdue) parts.push(`${c.overdue} ${pl(c.overdue, 'дело', 'дела', 'дел')} с прошедшим сроком`);
+  if (c.idle) parts.push(`${c.idle} ${pl(c.idle, 'дело', 'дела', 'дел')} без движения 3 дня и больше`);
   return parts.length ? `На сегодня по организации: ${parts.join(', ')}` : null;
 }
 
@@ -112,8 +115,8 @@ export async function sendOrgMorning(sql, registry, { now = new Date() } = {}) {
     if (!counted.has(h.org_id)) counted.set(h.org_id, orgDigestCounts(await orgPart(sql, { id: h.org_id, name: h.name }, registry, today), today));
     const c = counted.get(h.org_id);
     sent += await sql.tx(async (tx) => {
-      const fresh = await tx`insert into org_morning_digests (user_id, org_id, day, sign, handover, due, overdue)
-                             values (${h.user_id}, ${h.org_id}, ${today}, ${c.sign}, ${c.handover}, ${c.due}, ${c.overdue})
+      const fresh = await tx`insert into org_morning_digests (user_id, org_id, day, sign, handover, due, overdue, idle)
+                             values (${h.user_id}, ${h.org_id}, ${today}, ${c.sign}, ${c.handover}, ${c.due}, ${c.overdue}, ${c.idle})
                              on conflict do nothing returning user_id`;
       const text = orgDigestText(c);
       if (!fresh.length || !text) return 0;
@@ -130,16 +133,18 @@ export async function sendOrgMorning(sql, registry, { now = new Date() } = {}) {
 }
 
 // К какому блоку организации ведёт сводка (2.130): есть сроки сегодня или прошедшие — «Дела экспертов» с отбором «Срок на
-// этой неделе» (2.127: туда входят и просроченные); иначе — к подписи организации; иначе — отбор «Просят передать».
+// этой неделе» (2.127: туда входят и просроченные); иначе — к подписи организации; иначе — отбор «Просят передать»; иначе —
+// отбор «Без движения» (2.141).
 export function orgDigestTo(c) {
   if (c.due || c.overdue) return 'week';
   if (c.sign) return 'sign';
-  return c.handover ? 'handover' : null;
+  if (c.handover) return 'handover';
+  return c.idle ? 'idle' : null;
 }
 
 // Текст сводки руководителя в ленте по номеру уведомления (название организации лента пишет строкой ниже) и куда она ведёт.
 export async function orgMorningTitles(sql, ids) {
   if (!ids.length) return new Map();
-  const rows = await sql`select notification_id, sign, handover, due, overdue from org_morning_digests where notification_id = any(${ids}::bigint[])`;
+  const rows = await sql`select notification_id, sign, handover, due, overdue, idle from org_morning_digests where notification_id = any(${ids}::bigint[])`;
   return new Map(rows.map((r) => [String(r.notification_id), { title: orgDigestText(r), to: orgDigestTo(r) }]));
 }

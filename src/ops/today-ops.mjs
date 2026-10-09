@@ -24,6 +24,7 @@ import { silentLinks } from './inspect-ops.mjs';
 import { openExtends } from './deadline-ops.mjs';
 import { openHandovers } from './handover-ops.mjs';
 import { dueNotes } from './note-ops.mjs';
+import { CASE_IDLE_DAYS, caseMoves } from './org-ops.mjs';
 
 // «Горит» — просрочено или до срока не больше двух дней (как подсветка в списке дел).
 const HOT_DAYS = 2;
@@ -165,7 +166,7 @@ export async function orgPart(sql, org, registry, today) {
   const service = (o) => registry.service(o.module, o.service)?.service.name ?? o.service;
   // Дела экспертов организации (выбрали её в профиле специалиста и состоят в ней) — как в «Делах экспертов».
   const cases = await sql`
-    select o.id, o.module, o.service, o.status, o.deadline, o.executor_user_id, u.full_name as expert,
+    select o.id, o.module, o.service, o.status, o.deadline, o.executor_user_id, o.updated_at, u.full_name as expert,
            to_char(s.away_until, 'YYYY-MM-DD') as away_until, s.away_note
     from orders o join specialists s on s.user_id = o.executor_user_id and s.org_id = ${org.id}
     join org_members m on m.org_id = s.org_id and m.user_id = s.user_id join users u on u.id = o.executor_user_id
@@ -225,8 +226,11 @@ export async function orgPart(sql, org, registry, today) {
     }
   }
   dossier.sort((a, b) => a.valid_until.localeCompare(b.valid_until));
+  // Сколько дел без движения 3 дня и больше (2.133) — только число, для утренней сводки руководителю (2.141).
+  const moves = await caseMoves(sql, cases.filter((o) => ['in_work', 'review'].includes(o.status)));
   return {
     dossier,
+    idle: [...moves.values()].filter((m) => m.days >= CASE_IDLE_DAYS).length,
     id: org.id,
     name: org.name,
     hot: cases.filter((o) => ['in_work', 'review'].includes(o.status) && o.deadline && o.deadline <= soon)
