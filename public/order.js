@@ -458,10 +458,28 @@ async function markPoint(r, p, box) {
   } catch (err) { box.checked = !box.checked; box.disabled = false; say($('doc-msg'), err.message); }
 }
 
+// Напоминание перед подписью (2.136): ИИ-проверку этого файла не запускали или в ней есть пункты «посмотрите». Подсказка —
+// подписать можно и без проверки.
+function aiCheckText(c) {
+  if (!c) return '';
+  if (c.state === 'none') return c.other
+    ? 'ИИ-проверку этой версии файла не запускали (проверяли другой файл) — перед подписью стоит проверить.'
+    : 'ИИ-проверку этого файла не запускали — перед подписью стоит проверить.';
+  return `В ИИ-проверке этого файла стоит посмотреть пунктов: ${c.count} (${c.titles.join('; ')}${c.count > c.titles.length ? '; …' : ''}).`;
+}
+
 // Перед новой подписью: если в открытом возврате по этому файлу остались неотмеченные пункты — предупредить.
 function signConfirmText(d) {
   const left = orgReturnsNow.filter((r) => r.open && r.document_id === d.id).reduce((n, r) => n + (r.left ?? 0), 0);
-  return (left ? `Не отмечено исправленными пунктов замечания руководителя: ${left}. Руководитель это увидит.\n\n` : '') + SIGN_CONFIRM(d.filename);
+  const ai = aiCheckText(d.ai_check);
+  return (left ? `Не отмечено исправленными пунктов замечания руководителя: ${left}. Руководитель это увидит.\n\n` : '')
+    + (ai ? `${ai}\n\n` : '') + SIGN_CONFIRM(d.filename);
+}
+
+function toAiReview() {
+  if ($('ai-review-box').classList.contains('hidden')) return;
+  reveal('ai-review-box');
+  $('ai-review-box').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 // Подписи УКЭП у файла результата (2.5, 2.5а): эксперт и, если он работает от организации, её руководитель. Исполнитель
@@ -473,6 +491,8 @@ function signatureBlock(d, { canSign, signOrg }) {
   if (expert) lines.push(...signatureLines(expert));
   else if (canSign) {
     lines.push(el('div', { class: 'sig-state', text: 'Не подписан УКЭП — без подписи на проверку не сдать' }),
+      ...(d.ai_check ? [el('div', { class: 'sig-ai', 'data-sig': `ai-${d.ai_check.state}`, text: `${aiCheckText(d.ai_check)} ` },
+        el('button', { class: 'link', 'data-action': 'to-ai-review', onclick: toAiReview }, 'К ИИ-проверке'))] : []),
       el('div', { class: 'row' },
         el('button', { 'data-action': 'sign', onclick: () => signDoc(d) }, 'Подписать'),
         ...uploadSignatureButton(d.filename, (file) => uploadSignature(d, file))),
@@ -520,7 +540,8 @@ let lastDocs = null;
 async function signAll() {
   const docs = (lastDocs?.documents ?? []).filter((d) => d.kind === 'result' && d.own !== false && !d.signatures?.expert);
   if (!docs.length) return;
-  if (!confirm(`${SIGN_CONFIRM(docs.map((d) => d.filename).join(', '))}\n\nФайлов: ${docs.length}.`)) return;
+  const ai = docs.filter((d) => d.ai_check).map((d) => `${d.filename}: ${aiCheckText(d.ai_check)}`);
+  if (!confirm(`${ai.length ? `${ai.join('\n')}\n\n` : ''}${SIGN_CONFIRM(docs.map((d) => d.filename).join(', '))}\n\nФайлов: ${docs.length}.`)) return;
   say($('doc-msg'), 'Подписываем…', 'ok');
   try {
     for (const d of docs) await api('POST', `/api/documents/${d.id}/sign`, { confirm: true });
@@ -529,6 +550,7 @@ async function signAll() {
   } catch (err) { await loadDocs(); say($('doc-msg'), err.message); }
 }
 $('sign-all').addEventListener('click', signAll);
+document.addEventListener('ai-review-done', () => { if (current) loadDocs().catch(() => {}); });
 
 async function signDoc(d) {
   if (!confirm(signConfirmText(d))) return;

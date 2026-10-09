@@ -1030,8 +1030,21 @@ test('ИИ-проверка результата: специалист пере�
   await sp.goto(`/kabinet#order=${id}`);
   await expect(sp.locator('#review-summary')).toContainText('Перед сдачей можно проверить результат с помощью ИИ');
   await expect(sp.locator('#ai-review-state')).toHaveText('ИИ-проверка ещё не запускалась.');
+  // Напоминание у подписи (2.136): ИИ-проверку этого файла не запускали — подсказка и переход к проверке.
+  const aiDoc = sp.locator('#docs li').filter({ hasText: 'отчёт.pdf' });
+  await expect(aiDoc.locator('[data-sig="ai-none"]')).toContainText('ИИ-проверку этого файла не запускали — перед подписью стоит проверить.');
+  await aiDoc.locator('[data-sig="ai-none"]').scrollIntoViewIfNeeded();
+  await shot(sp, '54a-specialist-podpis-bez-ii');
+  await aiDoc.getByRole('button', { name: 'К ИИ-проверке' }).click();
+  await expect(sp.locator('#ai-review-box')).toBeInViewport();
   await sp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
   await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  // После проверки — сколько пунктов «посмотрите» и какие; в окне подписи — то же. Подписать всё равно можно.
+  await expect(aiDoc.locator('[data-sig="ai-none"]')).toHaveCount(0);
+  await expect(aiDoc.locator('[data-sig="ai-attention"]')).toContainText('В ИИ-проверке этого файла стоит посмотреть пунктов:');
+  await expect(aiDoc.locator('[data-sig="ai-attention"]')).toContainText('Технические ошибки');
+  await aiDoc.locator('[data-sig="ai-attention"]').scrollIntoViewIfNeeded();
+  await shot(sp, '54b-specialist-podpis-ii-posmotrite');
   await expect(sp.locator('#ai-review-state')).toContainText('запускал исполнитель перед сдачей');
   await expect(sp.locator('#review-checks li').filter({ hasText: 'Технические ошибки' }).locator('.ai-hint')).toContainText('посмотрите');
   await expect(sp.locator('#review-checks li').filter({ hasText: 'Технические ошибки' }).locator('.ai-marks li')).toHaveText(['отчёт.pdf, стр. 2: В разделе 3 опечатка в адресе.']);
@@ -1039,7 +1052,12 @@ test('ИИ-проверка результата: специалист пере�
   await expect(sp.locator('#review-checks .verdict')).toHaveCount(0);
   await shot(sp, '54-specialist-ii-proverka');
   expect((await sp.request.patch('/api/me', { data: { full_name: 'Тестов Эксперт ИИ' }, headers: H })).status()).toBe(200);
-  await signResults(sp);
+  await sp.reload();
+  const asked = new Promise((ok) => sp.once('dialog', (d) => { ok(d.message()); d.accept(); }));
+  await aiDoc.getByRole('button', { name: 'Подписать' }).click();
+  expect(await asked).toMatch(/^В ИИ-проверке этого файла стоит посмотреть пунктов: \d+ \(/);
+  await expect(sp.locator('#doc-msg')).toHaveText('Файл подписан');
+  await expect(aiDoc.locator('.sig-ai')).toHaveCount(0);
   await sp.getByRole('button', { name: 'Сдать на проверку' }).click();
   await expect(sp.locator('#order-status')).toHaveText('Проверка результата');
   await expect(sp.getByRole('button', { name: 'Проверить с помощью ИИ' })).toBeHidden();

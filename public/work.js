@@ -76,6 +76,8 @@ async function runAi(order) {
   try {
     await api('POST', `/api/orders/${order.id}/review/ai`);
     await loadReview({ order });
+    // Напоминание у подписи (2.136) зависит от ИИ-проверки — список файлов обновляется.
+    document.dispatchEvent(new CustomEvent('ai-review-done'));
     say($('review-msg'), 'ИИ-проверка готова', 'ok');
   } catch (err) { say($('review-msg'), err.message); } finally { $('ai-review-run').disabled = false; }
 }
