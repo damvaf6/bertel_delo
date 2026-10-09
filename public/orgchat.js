@@ -18,9 +18,11 @@ async function loadPhrases(orgId) {
 function phraseTools(orgId, area, msg) {
   const chips = el('div', { class: 'chips phrases' });
   const hint = el('div', { class: 'muted' });
-  const sum = el('summary');
-  const list = el('ul', { class: 'list' });
-  const own = el('details', { class: 'phrases-own' }, sum, list);
+  // Свой список — кнопкой, не вложенным <details>: переписка сама раскрывается по <summary>.
+  const list = el('ul', { class: 'list hidden' });
+  const sum = el('button', { type: 'button', class: 'link', 'aria-expanded': 'false', 'data-action': 'org-phrases-own',
+    onclick: () => { list.classList.toggle('hidden'); sum.setAttribute('aria-expanded', String(!list.classList.contains('hidden'))); } });
+  const own = el('div', { class: 'phrases-own' }, sum, list);
   const short = (t) => { const l = t.split('\n')[0]; return l.length > 70 || t.includes('\n') ? `${l.slice(0, 70).trimEnd()}…` : l; };
   const draw = () => {
     chips.replaceChildren(...phrases.list.map((p) => el('button', { type: 'button', 'data-phrase': p.id, title: p.text, onclick: () => insert(p.text) }, `+ ${short(p.text)}`)));

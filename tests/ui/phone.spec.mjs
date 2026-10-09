@@ -5854,7 +5854,7 @@ test('заготовки фраз руководителя (2.137): запомн
   const chat = row.locator('[data-chat]');
   const area = chat.getByLabel('Сообщение во внутренней переписке');
   await expect(chat.locator('.chips.phrases button')).toHaveCount(0);
-  await expect(chat.locator('details.phrases-own')).toBeHidden();
+  await expect(chat.locator('.phrases-own')).toBeHidden();
   await chat.locator('[data-action="org-phrase-save"]').click();
   await expect(chat.locator('.msg')).toHaveText('Напишите сообщение, потом нажмите «Запомнить как заготовку»');
   await area.fill('Посмотрите, пожалуйста, замечания в подписи — исправьте и подпишите заново.');
@@ -5886,10 +5886,11 @@ test('заготовки фраз руководителя (2.137): запомн
   await expect(chat.locator('.chat li .body').last()).toHaveText('Посмотрите, пожалуйста, замечания в подписи — исправьте и подпишите заново.\nКогда будет готово? Срок у заказчика жёсткий.');
 
   // Лишнюю убирает; эксперт заготовок руководителя не видит — в его переписке их нет.
-  await chat.locator('details.phrases-own summary').click();
-  await expect(chat.locator('details.phrases-own summary')).toHaveText('Мои заготовки фраз · 2');
+  await expect(chat.locator('summary')).toHaveCount(1);   // свой список — кнопкой, не вторым <summary> в переписке
+  await chat.locator('[data-action="org-phrases-own"]').click();
+  await expect(chat.locator('[data-action="org-phrases-own"]')).toHaveText('Мои заготовки фраз · 2');
   hp.once('dialog', (d) => d.accept());
-  await chat.locator('details.phrases-own [data-action="org-phrase-remove"]').last().click();
+  await chat.locator('.phrases-own [data-action="org-phrase-remove"]').last().click();
   await expect(chat.locator('.msg')).toHaveText('Заготовка убрана');
   await expect(chat.locator('.chips.phrases button')).toHaveCount(1);
   // На экране телефона ничего не уходит за край.
