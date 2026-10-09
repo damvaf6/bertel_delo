@@ -6728,6 +6728,19 @@ test('срок близко, а файла результата нет (2.138): 
   await shot(ep, '113g-delo-net-fajla-rezultata');
   await ep.locator('#result-due-extend').click();
   await expect(ep.locator('#deadline-box')).toBeInViewport();
+  // Перенос уже попросили (2.140) — второй раз не предлагаем ни в деле, ни в «Сегодня».
+  await ep.locator('#deadline-new').fill(inDays(5));
+  await ep.locator('#deadline-reason').fill('Жду ответа из БТИ');
+  await ep.locator('#deadline-send').click();
+  await expect(ep.locator('#deadline-open')).toBeVisible();
+  await expect(ep.locator('#result-due-text')).toHaveText('Срок завтра, а файла результата ещё нет. Загрузите файл результата.');
+  await expect(ep.locator('#result-due-extend')).toBeHidden();
+  await ep.goto('/kabinet');
+  await expect(row).toContainText('Вы попросили перенести на');
+  await expect(row).not.toContainText('попросите перенести срок');
+  await shot(ep, '113h-ekspert-net-fajla-perenos-poproshen');
+  await row.getByRole('button').click();
+  await expect(due).toBeVisible();
   // Файл результата загружен — предупреждение пропадает, в «Сегодня» дело снова просто «Горит срок».
   await ep.setInputFiles('#result-file', { name: 'Отчёт.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 отчёт') });
   await expect(ep.locator('#docs li.doc')).toContainText('Отчёт.pdf');

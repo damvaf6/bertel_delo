@@ -413,11 +413,15 @@ function renderResultDue(due) {
   if (!due) return;
   const n = due.days_left;
   const when = due.overdue ? `Срок прошёл (${dayRu(due.deadline)})` : n === 0 ? 'Срок сегодня' : n === 1 ? 'Срок завтра' : `Срок ${dayRu(due.deadline)} — через ${n} дн.`;
+  // Просить перенос нельзя (уже попросили — 2.140) — и в тексте не предлагаем.
+  const canExtend = !$('deadline-form').classList.contains('hidden');
   $('result-due-text').textContent = `${when}, а файла результата ещё нет. ${due.has_draft
-    ? 'Черновик есть — соберите из него отчёт Word и загрузите файл.' : 'Загрузите файл результата или попросите перенести срок.'}`;
+    ? 'Черновик есть — соберите из него отчёт Word и загрузите файл.'
+    : canExtend ? 'Загрузите файл результата или попросите перенести срок.' : 'Загрузите файл результата.'}`;
   $('result-due-draft').classList.toggle('hidden', !due.has_draft || $('draft-box').classList.contains('hidden'));
-  $('result-due-extend').classList.toggle('hidden', $('deadline-form').classList.contains('hidden'));
+  $('result-due-extend').classList.toggle('hidden', !canExtend);
 }
+document.addEventListener('deadline-changed', () => { if (!$('result-due-box').classList.contains('hidden')) renderResultDue(lastDocs?.result_due ?? null); });
 const goTo = (id) => { reveal(id); $(id).scrollIntoView({ behavior: 'smooth', block: 'start' }); };
 $('result-due-upload').addEventListener('click', () => { reveal('result-upload-box'); $('result-file').click(); });
 $('result-due-draft').addEventListener('click', () => goTo('draft-box'));

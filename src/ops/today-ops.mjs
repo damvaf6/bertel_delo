@@ -79,9 +79,10 @@ async function expertPart(sql, actor, registry, today) {
     if (n.finished) what.push(`осмотр закончен${n.photos ? ` (фото: ${n.photos})` : ''}`);
     else if (n.photos) what.push(`новые фото осмотра: ${n.photos}`);
     if (n.onsite) what.push('выезд помощника завершён');
+    // Куда вести, если сообщений нет: к запрошенным документам или к осмотру.
+    const other = what.length ? { what: [...what], to: n.docs ? 'docs' : 'inspect' } : null;
     if (n.messages) what.push(`сообщений: ${n.messages}`);
-    // Куда вести: к переписке, к запрошенным документам или к осмотру.
-    if (what.length) ready.push(item(o, { what, at: n.last_at, to: n.messages ? 'chat' : n.docs ? 'docs' : 'inspect' }));
+    if (what.length) ready.push(item(o, { what, at: n.last_at, to: n.messages ? 'chat' : other.to, other }));
   }
   ready.sort((a, b) => new Date(b.at) - new Date(a.at));
   const ext = await openExtends(sql, rows.map((o) => o.id));
@@ -109,6 +110,9 @@ async function expertPart(sql, actor, registry, today) {
   const replyWait = waits.map((w) => item(rows.find((o) => o.id === w.order_id), {
     since: w.since, count: w.count, last: w.last_body.length > 80 ? `${w.last_body.slice(0, 80)}…` : w.last_body,
   }));
+  // Дело уже в «Заказчик ждёт ответа» (2.140) — в «Можно продолжать» сообщения не повторяются: остаются документы и осмотр,
+  // а если пришли только сообщения — строки там нет.
+  const readyLeft = ready.flatMap(({ other, ...x }) => (!waits.some((w) => w.order_id === x.id) ? [x] : other ? [{ ...x, ...other }] : []));
   // Напоминания по своим заметкам к делу (2.115): день настал, заметка не отмечена «сделано».
   const notes = (await dueNotes(sql, actor.id, rows.map((o) => o.id), today))
     .map((n) => item(rows.find((o) => o.id === n.order_id), { note: n.body, remind_on: n.remind_on }));
@@ -122,7 +126,7 @@ async function expertPart(sql, actor, registry, today) {
   const noResult = hotRows.filter((o) => resultDue(o, own.find((x) => x.order_id === o.id)?.n ?? 0, today))
     .map((o) => item(o, { has_draft: drafts.some((x) => x.order_id === o.id), extend: ext.get(o.id) ?? null }));
   return {
-    ready,
+    ready: readyLeft,
     no_result: noResult,
     reply_wait: replyWait,
     notes,
