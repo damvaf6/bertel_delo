@@ -5,6 +5,7 @@
 import { HttpError } from '../http/core.mjs';
 import { orderSides } from '../access/policy.mjs';
 import { addDays, todayMsk } from '../orders/workflow.mjs';
+import { BUSY_DEADLINES } from '../orders/schedule.mjs';
 import { customersOf, dispatchers, notify } from '../notify/notify.mjs';
 import { audit, text } from './util.mjs';
 
@@ -48,6 +49,26 @@ async function presetReasons(sql, order, registry) {
       reason: `Жду документы от заказчика с ${docs[0].day}: ${titles}${more}`.slice(0, 1000),
       new_deadline: addDays(order.deadline, Math.max(1, docs[0].waited)),
     });
+  }
+  // «Много дел в этот день» (2.134): у исполнителя в день срока больше двух дел к сдаче (число — только в подписи кнопки,
+  // в причину, которую видит заказчик, не идёт). Новый срок — ближайший будний
+  // день после срока, где к сдаче меньше двух дел (с этим делом будет не больше двух); ищем на две недели вперёд.
+  const due = await sql`select to_char(deadline, 'YYYY-MM-DD') as day, count(*)::int as n from orders
+                        where executor_user_id = ${order.executor_user_id} and status in ('awaiting_executor', 'in_work')
+                          and deadline between ${order.deadline}::date and ${addDays(order.deadline, 14)}::date
+                        group by deadline`;
+  const per = new Map(due.map((r) => [r.day, r.n]));
+  const n = per.get(order.deadline) ?? 0;
+  if (n > BUSY_DEADLINES) {
+    let next = null;
+    for (let i = 1; i <= 14 && !next; i++) {
+      const d = addDays(order.deadline, i);
+      const wd = new Date(`${d}T00:00:00Z`).getUTCDay();
+      if (wd !== 0 && wd !== 6 && (per.get(d) ?? 0) < BUSY_DEADLINES) next = d;
+    }
+    const [y, m, d] = order.deadline.split('-');
+    out.push({ id: 'busy', label: `Много дел в этот день (${n})`, reason: `Высокая загрузка: на ${d}.${m}.${y} у меня к сдаче несколько дел — прошу перенести срок`,
+      ...(next ? { new_deadline: next } : {}) });
   }
   const steps = registry?.inspectionSteps(order.module, order.service) ?? [];
   const [had] = await sql`select (exists (select 1 from inspection_links where order_id = ${order.id})

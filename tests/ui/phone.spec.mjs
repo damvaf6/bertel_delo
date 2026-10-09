@@ -5354,6 +5354,41 @@ test('мои сроки на две недели (2.109): по дням — ср
   await shot(page, 'a11b-ekspert-sroki-k-delu');
 });
 
+test('перегруженный день (2.134): больше двух дел к сдаче — день выделен, «Попросить перенос» открывает дело с готовой причиной', async ({ page }) => {
+  const expert = await signIn(page, '+79990009353');
+  const busy = inDays(3);
+  const ids = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    const mk = async (title, status) => (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, price_kop, paid_at, deadline)
+      values ($1, $2, 'expertise', 'realty', $3, $1, 1500000, now(), $4::date) returning id`, [expert.id, title, status, busy])).rows[0].id;
+    return { a: await mk('Квартира на Ленина: много дел', 'in_work'), b: await mk('Дом в Истре: много дел', 'in_work'),
+      c: await mk('Гараж в Химках: много дел', 'in_work'), d: await mk('Склад в Люберцах: много дел', 'review') };
+  });
+  await page.goto('/kabinet#specialist');
+  const day = page.locator(`#schedule-days > li[data-day="${busy}"]`);
+  await expect(day).toHaveClass(/busy/);
+  await expect(day.locator('.busy-mark')).toHaveText('много: к сдаче 3');
+  await expect(day).toContainText('больше двух дел к сдаче');
+  await expect(day.locator('[data-ask-extend]')).toHaveCount(3);
+  await expect(day.locator(`[data-ask-extend="${ids.d}"]`)).toHaveCount(0);
+  await day.scrollIntoViewIfNeeded();
+  await shot(page, 'a11d-ekspert-sroki-mnogo-del');
+  await day.locator(`[data-ask-extend="${ids.a}"]`).click();
+  await expect(page.locator('#order-title')).toHaveText('Квартира на Ленина: много дел');
+  await expect(page.locator('#deadline-box')).toBeVisible();
+  const [y, m, d] = busy.split('-');
+  await expect(page.locator('#deadline-reason')).toHaveValue(`Высокая загрузка: на ${d}.${m}.${y} у меня к сдаче несколько дел — прошу перенести срок`);
+  await expect(page.locator('#deadline-new')).not.toHaveValue('');
+  await page.locator('#deadline-box').scrollIntoViewIfNeeded();
+  await shot(page, 'a11e-ekspert-perenos-mnogo-del');
+  await page.locator('#deadline-form button[type="submit"]').click();
+  await expect(page.locator('#deadline-msg')).toContainText('Просьба отправлена диспетчеру');
+  // В «Моих сроках» у этого дела кнопки больше нет — просьба уже ждёт ответа.
+  await page.goto('/kabinet#specialist');
+  await expect(day.locator('[data-ask-extend]')).toHaveCount(2);
+  await expect(day.locator(`[data-ask-extend="${ids.a}"]`)).toHaveCount(0);
+});
+
 test('перечень использованных документов (2.95): собран в черновике сам; заказчик прислал документ — «Обновить перечень»', async ({ page }) => {
   const expert = await signIn(page, '+79990000798');
   const id = await db(async (c) => {

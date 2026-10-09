@@ -25,7 +25,10 @@ function item(i, index) {
       : i.status === 'awaiting_executor' ? 'предложено Вам, ещё не приняли' : null;
     const ext = i.extend_to ? `просите перенести на ${short(i.extend_to)} — ждёт ответа` : null;
     const hot = index !== null && index <= HOT_DAYS && i.status !== 'review';
-    return link(order('deadline'), `Сдать: ${i.title}`, [i.service, note, ext].filter(Boolean).join(' · '), hot ? 'hot' : '');
+    const li = link(order('deadline'), `Сдать: ${i.title}`, [i.service, note, ext].filter(Boolean).join(' · '), hot ? 'hot' : '');
+    // Перегруженный день (2.134): рядом — «Попросить перенос», дело откроется с готовой причиной и новым сроком.
+    if (i.can_extend) li.append(el('a', { class: 'ask', href: order('extend'), 'data-ask-extend': i.order_id, text: 'Попросить перенос' }));
+    return li;
   }
   if (i.kind === 'extend') {
     return link(order('deadline'), `Просите перенести сюда срок: ${i.title}`, `сейчас срок ${short(i.deadline)} · ждёт ответа диспетчера`, 'wait');
@@ -67,9 +70,10 @@ export async function loadSchedule() {
   for (let k = 0; k < s.days.length; k++) {
     const d = s.days[k];
     if (d.items.length) {
-      rows.push(el('li', { 'data-day': d.date, class: [d.today ? 'today' : '', d.weekend ? 'weekend' : ''].filter(Boolean).join(' ') },
+      rows.push(el('li', { 'data-day': d.date, class: [d.today ? 'today' : '', d.weekend ? 'weekend' : '', d.busy ? 'busy' : ''].filter(Boolean).join(' ') },
         el('div', { class: 'day' }, el('span', { text: `${d.today ? 'Сегодня, ' : ''}${dayName(d)}` }),
-          el('span', { class: 'muted', text: d.deadlines > 1 ? `сдать дел: ${d.deadlines}` : '' })),
+          el('span', { class: d.busy ? 'busy-mark' : 'muted', text: d.busy ? `много: к сдаче ${d.due}` : d.deadlines > 1 ? `сдать дел: ${d.deadlines}` : '' })),
+        ...(d.busy ? [el('p', { class: 'muted', text: 'В этот день больше двух дел к сдаче — можно попросить перенести срок одного из них.' })] : []),
         el('ul', {}, ...d.items.map((i) => item(i, k)))));
       continue;
     }
