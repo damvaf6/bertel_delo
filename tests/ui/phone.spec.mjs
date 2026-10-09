@@ -2593,7 +2593,7 @@ test('«Сегодня» (2.34, 2.63): эксперт — горит, верну
 // допуски, итоги работы и оценка «качество», история дел без данных заказчика.
 test('карточка эксперта (2.35): из подбора у диспетчера и из «Дел экспертов» у руководителя', async ({ page, browser, baseURL }) => {
   const D = '+79990003701', S = '+79990003702', HD = '+79990003703', C = '+79990003704';
-  await signIn(page, C);
+  const customer = await signIn(page, C);
   const dctx = await phoneContext(browser, baseURL), sctx = await phoneContext(browser, baseURL), hctx = await phoneContext(browser, baseURL);
   const dp = await dctx.newPage(), sp = await sctx.newPage(), hp = await hctx.newPage();
   const disp = await signIn(dp, D), spec = await signIn(sp, S), head = await signIn(hp, HD);
@@ -2621,6 +2621,7 @@ test('карточка эксперта (2.35): из подбора у дисп�
   await expect(dp.locator('#expert-dossier li[data-kind="certificate"]')).toContainText('№ 055555-1');
   await expect(dp.locator('#expert-dossier')).toContainText('копии нет');
   await expect(dp.locator('#expert-permits')).toContainText('Оценка недвижимости');
+  await expect(dp.locator('#expert-year-note')).toContainText('сданных дел нет');
   await shot(dp, '99-kartochka-eksperta');
   await dp.getByRole('link', { name: '← Назад' }).click();
   await expect(dp.locator('#order-title')).toHaveText('Квартира для карточки');
@@ -2630,6 +2631,20 @@ test('карточка эксперта (2.35): из подбора у дисп�
   await hp.locator('#org-cases-load li').filter({ hasText: 'Эксперт Карточный' }).getByRole('link', { name: 'Карточка эксперта' }).click();
   await expect(hp.locator('#expert-name')).toHaveText('Эксперт Карточный');
   await expect(hp.locator('#expert-view')).not.toContainText('Карточная');
+
+  // 2.139: сдано за год по услугам и средний срок — дело принято 4 дня назад, «готово» вчера, в срок.
+  await db(async (c) => {
+    const done = (await c.query("insert into orders (owner_user_id, module, service, title, status, deadline, executor_user_id) values ($1, 'expertise', 'realty', 'Сданная квартира', 'done', $2, $3) returning id", [customer.id, inDays(3), spec.id])).rows[0].id;
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now() - interval '4 days')", [done, spec.id]);
+    await c.query("insert into order_status_history (order_id, from_status, to_status, side, actor_id, at) values ($1, 'in_work', 'review', 'executor', $2, now() - interval '2 days')", [done, spec.id]);
+    await c.query("insert into order_status_history (order_id, from_status, to_status, side, actor_id, at) values ($1, 'review', 'done', 'dispatcher', $2, now() - interval '1 day')", [done, disp.id]);
+  });
+  await hp.reload();
+  await expect(hp.locator('#expert-year-note')).toContainText('сдано 1 · все в срок · в среднем 3 дня от принятия до сдачи');
+  await expect(hp.locator('#expert-year li[data-service="expertise/realty"]')).toContainText('Оценка недвижимости');
+  await expect(hp.locator('#expert-year')).not.toContainText('Сданная квартира');
+  await hp.locator('#expert-year-box').scrollIntoViewIfNeeded();
+  await shot(hp, '99a-kartochka-sdano-za-god');
 
   // Заказчик по прямой ссылке — «не найдено».
   await page.goto(`/kabinet#expert=${spec.id}`);
