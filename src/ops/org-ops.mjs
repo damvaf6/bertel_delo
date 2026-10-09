@@ -47,7 +47,9 @@ export async function caseRemind(sql, order) {
 
 // Дело без движения (2.133): когда по делу в работе или на проверке последний раз что-то происходило — смена состояния,
 // файл (кроме файлов заказчика), черновик, ИИ-проверка, аналог, подпись, фото осмотра и выезд помощника, просьба о переносе
-// срока. Переписка с заказчиком и внутренняя переписка не в счёт. С какого дня — «без движения» в отборе руководителя.
+// срока; возврат руководителем с замечаниями и отметки «исправлено» по пунктам (прогон 2.150: при возврате подпись эксперта
+// снимается — без этого только что возвращённое дело выглядело давно стоящим). Переписка с заказчиком и внутренняя
+// переписка не в счёт. С какого дня — «без движения» в отборе руководителя.
 export const CASE_IDLE_DAYS = 3;
 export async function caseMoves(sql, orders) {
   const ids = orders.map((o) => o.id);
@@ -63,6 +65,9 @@ export async function caseMoves(sql, orders) {
       union all select order_id, signed_at from document_signatures where order_id = any(${ids}::uuid[])
       union all select order_id, coalesce(finished_at, created_at) from onsite_visits where order_id = any(${ids}::uuid[])
       union all select order_id, requested_at from deadline_requests where order_id = any(${ids}::uuid[])
+      union all select order_id, created_at from org_returns where order_id = any(${ids}::uuid[])
+      union all select r.order_id, i.fixed_at from org_return_items i join org_returns r on r.id = i.return_id
+        where r.order_id = any(${ids}::uuid[]) and i.fixed_at is not null
     ) e group by e.order_id`;
   const at = new Map(rows.map((r) => [r.order_id, r.at]));
   // Эксперт подписал, файл ждёт подписи организации (2.148, прогон 2.150): ход за руководителем — дело не «без движения»

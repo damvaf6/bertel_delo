@@ -207,4 +207,11 @@ test('прогон 2.150: эксперт подписал, файл ждёт п�
   assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(today, '08:30') }) >= 1);
   const [r] = await S.sql`select sign, idle from org_morning_digests where user_id = ${h.user.id} and org_id = ${o3.id}`;
   assert.deepEqual({ ...r }, { sign: 1, idle: 1 });
+
+  // Руководитель вернул файл с замечаниями: подпись эксперта снята, но возврат — свежее движение, дело не «стоит 5 дней».
+  assert.equal((await h.req('POST', `/api/org-documents/${d.id}/return`, { comment: '1. Итог не совпадает с таблицей' })).status, 201);
+  const back = (await h.req('GET', `/api/orgs/${o3.id}/cases`)).body.cases.find((c) => c.id === signed.id);
+  assert.equal(back.sign_wait, 0);
+  assert.equal(back.idle, false);
+  assert.equal(back.last_move.days, 0);
 });
