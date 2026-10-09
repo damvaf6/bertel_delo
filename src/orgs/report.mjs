@@ -8,7 +8,8 @@
 // Сравнение с прошлым месяцем (2.124): у каждого эксперта и в итоге — сколько сдано, из них в срок и сколько раз возвращали
 // (руководитель и диспетчер вместе) в прошлом месяце; если прошлый месяц раньше создания организации — сравнения нет.
 // По услугам (2.135): сколько сдано по каждой услуге за месяц, из них позже срока, вознаграждение и у скольких экспертов; у
-// каждого эксперта — его сданные по услугам. Название услуги — из описания модуля.
+// каждого эксперта — его сданные по услугам. Название услуги — из описания модуля. Средний срок по услуге (2.144) — дни от
+// принятия до сдачи, как в общей скорости 2.117 и в карточке эксперта 2.139.
 // Месяц — по московскому времени. Выгрузка таблицей — CSV для Excel (точка с запятой, BOM, суммы с запятой).
 import { HttpError } from '../http/core.mjs';
 import { splitAmount } from '../money/money.mjs';
@@ -165,23 +166,24 @@ export async function orgMonthDoneCases(sql, orgId, month) {
   return rows.map((o) => ({ ...o, expert_name: names.get(o.user_id) })).sort((a, b) => new Date(a.at) - new Date(b.at));
 }
 
-// Сданные по услугам (2.135): [{ module, service, name, done, done_late, fee_kop, experts }] — по убыванию числа, при
-// равенстве — по названию.
+// Сданные по услугам (2.135): [{ module, service, name, done, done_late, fee_kop, experts, avg_days }] — по убыванию числа,
+// при равенстве — по названию; avg_days (2.144) — null, если ни у одного дела нет отметки о принятии.
 function byService(done, registry) {
   const groups = new Map();
   for (const o of done) {
     const key = `${o.module}/${o.service}`;
     const g = groups.get(key) ?? groups.set(key, {
       module: o.module, service: o.service, name: registry?.service(o.module, o.service)?.service.name ?? o.service,
-      done: 0, done_late: 0, fee_kop: 0, users: new Set(),
+      done: 0, done_late: 0, fee_kop: 0, users: new Set(), cases: [],
     }).get(key);
     g.done++;
+    g.cases.push(o);
     if (o.deadline && dayMsk(o.at) > o.deadline) g.done_late++;
     g.fee_kop += feeOf(o);
     g.users.add(o.user_id);
   }
   return [...groups.values()].sort((a, b) => b.done - a.done || a.name.localeCompare(b.name, 'ru'))
-    .map(({ users, ...g }) => ({ ...g, experts: users.size }));
+    .map(({ users, cases, ...g }) => ({ ...g, experts: users.size, avg_days: avgDays(pace(cases)) }));
 }
 
 export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), registry = null } = {}) {
@@ -326,6 +328,7 @@ export async function expertMonthReport(sql, userId, month, today = todayMsk()) 
 
 // Таблица для Excel: точка с запятой, BOM (иначе Excel путает кодировку), суммы — рубли с запятой. Ячейка, начинающаяся
 // с «= + - @», — с апострофом, чтобы Excel не принял имя за формулу.
+const daysCell = (d) => (d == null ? '' : String(d).replace('.', ','));
 const rubCell = (kop) => `${Math.floor(kop / 100)},${String(kop % 100).padStart(2, '0')}`;
 function cell(v) {
   let s = v == null ? '' : String(v);
@@ -339,7 +342,7 @@ export function reportCsv(orgName, r) {
     'Дней в среднем от принятия до сдачи', 'Позже первоначального срока', 'Из них с переносом срока'];
   const line = (name, x) => [name, x.accepted, x.done, x.done_late, ...(r.current ? [x.overdue_now] : []),
     x.returned_head, x.returned_dispatcher, rubCell(x.fee_kop), rubCell(x.paid_kop),
-    x.avg_days == null ? '' : String(x.avg_days).replace('.', ','), x.late_first, x.late_first_moved];
+    daysCell(x.avg_days), x.late_first, x.late_first_moved];
   const day = todayMsk();
   const lines = [
     [`Сводка по экспертам — ${orgName}`],
@@ -353,7 +356,8 @@ export function reportCsv(orgName, r) {
     ...[...r.experts.map((x) => [x.full_name, x]), ['Итого', r.total]].map(([name, x]) => [name, x.done, x.prev.done,
       x.done - x.done_late, x.prev.on_time, x.returned_head + x.returned_dispatcher, x.prev.returned])] : []),
     ...(r.by_service?.length ? [[], ['По услугам', 'Сдано (готово)', 'Из них позже срока', 'Вознаграждение за сданные, ₽',
-      'Экспертов'], ...r.by_service.map((x) => [x.name, x.done, x.done_late, rubCell(x.fee_kop), x.experts])] : []),
+      'Экспертов', 'Дней в среднем от принятия до сдачи'], ...r.by_service.map((x) => [x.name, x.done, x.done_late,
+      rubCell(x.fee_kop), x.experts, daysCell(x.avg_days)])] : []),
     ...(r.top_remarks?.length ? [[], ['Частые замечания при возврате', 'Сколько раз', 'У скольких экспертов'],
       ...r.top_remarks.map((x) => [x.text, x.n, x.experts])] : []),
   ];
