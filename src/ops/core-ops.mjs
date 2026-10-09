@@ -10,6 +10,7 @@ import { unreadCount } from './notify-ops.mjs';
 // Подсказки первого входа по ролям (2.52; тексты — public/help.js).
 export const HINTS = ['customer', 'expert', 'head', 'dispatcher'];
 import { orderSignatures, orgReturns, signaturesView, signWait } from './sign-ops.mjs';
+import { aiSignHints } from '../ai/ai.mjs';
 
 // Облако принимает запрос не больше 3,5 МБ (Yandex Serverless Containers) — через ядро только до 3 МБ (2.49).
 const MAX_FILE_BYTES = 3 * 1024 * 1024;
@@ -140,11 +141,15 @@ export function coreOps(cfg) {
         const signOrg = results && required ? await executorSignOrg(sql, order.executor_user_id) : null;
         // Возвраты руководителя организации с замечаниями (2.27) — только самому исполнителю.
         const mine = order.executor_user_id === actor.id && orderSides(actor, order).includes('executor');
+        // Перед подписью (2.136): свой неподписанный файл результата в работе — проверял ли его ИИ и что нашёл. Только исполнителю.
+        const unsigned = mine && required && order.status === 'in_work'
+          ? docs.filter((d) => d.kind === 'result' && d.uploaded_by === actor.id && !signs.get(d.id)?.expert).map((d) => d.id) : [];
+        const aiHints = await aiSignHints(sql, registry, order, unsigned);
         return {
           documents: docs.filter((d) => d.kind !== 'result' || results)
             .map((d) => (d.kind === 'result' ? { ...publicDoc(d), signatures: signaturesView(signs.get(d.id)),
               // Исполнителю — свой ли файл: после передачи дела файлы прежнего эксперта в сдачу не идут (2.110).
-              ...(mine ? { own: d.uploaded_by === actor.id } : {}) } : publicDoc(d))),
+              ...(mine ? { own: d.uploaded_by === actor.id } : {}), ...(aiHints.has(d.id) ? { ai_check: aiHints.get(d.id) } : {}) } : publicDoc(d))),
           results_hidden: !results,
           signature_required: required,
           // От какой организации нужна вторая подпись (null — только эксперт).

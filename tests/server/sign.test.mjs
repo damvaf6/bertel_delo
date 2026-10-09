@@ -464,3 +464,37 @@ test('все способы подписи одним прогоном (2.69): �
   // Выгружает дело заказчик или платформа — исполнитель нет.
   assert.equal((await spec.req('GET', `/api/orders/${o.id}/export`)).status, 403);
 });
+
+test('напоминание перед подписью (2.136): ИИ-проверку файла не запускали, проверяли прежнюю версию, есть пункты «посмотрите» — видно только исполнителю', async () => {
+  const o = await inWork('Квартира — ИИ перед подписью');
+  const reg = createRegistry();
+  const rules = reg.checks('expertise', 'realty');
+  const d1 = (await result(o, 'Отчёт v1.docx.txt', 'отчёт первая версия')).body.document;
+  const hint = async (who, d) => (await docsOf(who, o)).documents.find((x) => x.id === d.id)?.ai_check;
+  assert.deepEqual(await hint(spec, d1), { state: 'none', other: false });
+  assert.equal(await hint(dispatcher, d1), undefined, 'диспетчеру — без напоминания');
+
+  const orig = S.providers.ai.complete;
+  const answer = (bad) => async () => ({ model: 'fake', text: JSON.stringify({ items: rules.map((r) => ({ id: r.id, hint: bad.includes(r.id) ? 'attention' : 'ok', note: bad.includes(r.id) ? 'не совпадает' : 'в порядке' })) }) });
+  try {
+    S.providers.ai.complete = answer(['requisites', 'object_match']);
+    assert.equal((await spec.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
+    const h = await hint(spec, d1);
+    assert.equal(h.state, 'attention');
+    assert.equal(h.count, 2);
+    assert.deepEqual(h.titles, rules.filter((r) => ['requisites', 'object_match'].includes(r.id)).map((r) => r.title.split(':')[0].trim()));
+
+    // Новая версия файла — прежняя проверка её не касается.
+    const d2 = (await result(o, 'Отчёт v2.docx.txt', 'отчёт вторая версия')).body.document;
+    assert.deepEqual(await hint(spec, d2), { state: 'none', other: true });
+
+    S.providers.ai.complete = answer([]);
+    assert.equal((await spec.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
+    assert.equal(await hint(spec, d2), null, 'проверено, замечаний нет — напоминания нет');
+
+    // Подсказка, не запрет: подписать можно; у подписанного — напоминания нет.
+    assert.equal((await spec.req('PATCH', '/api/me', { full_name: 'Тестов Эксперт Экспертович' })).status, 200);
+    assert.equal((await sign(d1)).status, 201);
+    assert.equal(await hint(spec, d1), undefined);
+  } finally { S.providers.ai.complete = orig; }
+});
