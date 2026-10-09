@@ -5481,7 +5481,8 @@ test('как эксперт и руководитель (2.100): перенос 
   // Эксперт: срок завтра, ничего не готово — просит перенести срок.
   expect((await ep.request.post(`/api/orders/${id}/deadline-requests`, { data: { new_deadline: want, reason: 'Заказчик не открыл доступ в квартиру' }, headers: H })).status()).toBe(201);
   await ep.goto('/kabinet');
-  const hot = ep.locator('#today-box li[data-today-item="hot"]').filter({ hasText: 'Квартира: стыки пачки' });
+  // Файла результата нет — дело в строке «Срок близко — нет файла результата» (2.138), просьба о переносе видна там же.
+  const hot = ep.locator('#today-box li[data-today-item="no-result"]').filter({ hasText: 'Квартира: стыки пачки' });
   await expect(hot).toContainText(`Вы попросили перенести на ${ru(want)}, ждёт ответа диспетчера`);
   await shot(ep, 'b1-ekspert-gorit-prosil-perenos');
 
