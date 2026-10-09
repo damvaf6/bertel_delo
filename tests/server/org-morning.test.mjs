@@ -116,3 +116,49 @@ test('куда ведёт сводка (2.130): сроки — к отбору �
   assert.equal(orgDigestTo({ sign: 0, handover: 2, due: 0, overdue: 0 }), 'handover');
   assert.equal(orgDigestTo({ sign: 0, handover: 0, due: 0, overdue: 0 }), null);
 });
+
+test('без движения (2.141): число дел без движения 3 дня и больше — в тексте; больше ничего нет — к отбору «Без движения»', async () => {
+  assert.equal(orgDigestText({ sign: 0, handover: 0, due: 0, overdue: 0, idle: 1 }), 'На сегодня по организации: 1 дело без движения 3 дня и больше');
+  assert.equal(orgDigestText({ sign: 1, handover: 0, due: 0, overdue: 2, idle: 5 }),
+    'На сегодня по организации: 1 дело ждёт подписи организации, 2 дела с прошедшим сроком, 5 дел без движения 3 дня и больше');
+  assert.equal(orgDigestTo({ sign: 0, handover: 0, due: 0, overdue: 0, idle: 2 }), 'idle');
+  assert.equal(orgDigestTo({ sign: 0, handover: 1, due: 0, overdue: 0, idle: 2 }), 'handover');
+  assert.equal(orgDigestTo({ sign: 1, handover: 0, due: 0, overdue: 0, idle: 2 }), 'sign');
+
+  // Отдельная организация: у эксперта два дела в работе со сроком через неделю; по одному ничего не происходит 5 дней,
+  // заказчик при этом пишет (переписка движением не считается), по другому — эксперт только что принял дело.
+  const h = await login(S, '+79990003807');
+  const e = await login(S, '+79990003808');
+  const o2 = await makeOrg(S.sql, 'ООО «Неподвижная оценка»');
+  await addMember(S.sql, o2.id, h.user.id, 'head');
+  await makeSpecialist(S.sql, e.user.id);
+  await addMember(S.sql, o2.id, e.user.id, 'member');
+  assert.equal((await e.req('PATCH', '/api/specialist/me', { org_id: o2.id })).status, 200);
+  const day3 = addDays(today, 3);
+  const make = async (title) => {
+    const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
+    assert.equal((await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: addDays(today, 12), fields: FIELDS })).status, 200);
+    assert.equal((await owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
+    await ensurePaid(S.sql, o.id);
+    assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: e.user.id, from: 'matching' })).status, 200);
+    assert.equal((await e.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+    return o;
+  };
+  const still = await make('Неподвижное дело');
+  await make('Свежее дело');
+  await S.sql`update order_status_history set at = now() - interval '5 days' where order_id = ${still.id}`;
+  await S.sql`update orders set updated_at = now() - interval '5 days' where id = ${still.id}`;
+  assert.equal((await owner.req('POST', `/api/orders/${still.id}/messages`, { body: 'Как продвигается?' })).status, 201);
+
+  // Через три дня утром: «Неподвижное» без движения 8 дней, «Свежее» — 3 дня (тоже без движения); сроки не горят.
+  await S.sql`update order_status_history set at = at - interval '3 days' where order_id in
+              (select id from orders where executor_user_id = ${e.user.id})`;
+  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(day3, '08:30') }) >= 1);
+  const [r] = await S.sql`select sign, handover, due, overdue, idle from org_morning_digests where user_id = ${h.user.id} and org_id = ${o2.id}`;
+  assert.deepEqual({ ...r }, { sign: 0, handover: 0, due: 0, overdue: 0, idle: 2 });
+  const feed = (await h.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня по организации'));
+  assert.equal(feed.length, 1);
+  assert.equal(feed[0].title, 'На сегодня по организации: 2 дела без движения 3 дня и больше');
+  assert.equal(feed[0].section, `org=${o2.id}&to=idle`);
+  assert.doesNotMatch(JSON.stringify(feed), /Неподвижное|Свежее|Как продвигается/);
+});

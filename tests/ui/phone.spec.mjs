@@ -5768,6 +5768,14 @@ test('дела экспертов (2.133): руководитель видит �
   expect(w).toBeLessThanOrEqual(412);
   await rows.first().scrollIntoViewIfNeeded();
   await shot(hp, 'c9-rukovoditel-bez-dvizheniya');
+  // Из утренней сводки (2.141: кроме дел без движения ничего нет) — сразу к списку дел с отбором «Без движения».
+  await hp.goto('/kabinet#orgs');
+  await hp.goto(`/kabinet#org=${orgId}&to=idle`);
+  await expect(hp.locator('[data-filter="idle"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first().locator('[data-role="idle"]')).toContainText('Без движения 6 дн.');
+  await expect(hp.locator('#org-cases-list-title')).toBeInViewport();
+  await shot(hp, 'c9a-rukovoditel-svodka-bez-dvizheniya');
   for (const p of [cp, ap, hp]) await p.context().close();
 });
 
