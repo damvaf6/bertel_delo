@@ -400,3 +400,24 @@ test('Срок близко, а файла результата нет (2.138): 
   assert.equal(await due(bare), null);
   assert.ok(!ids((await other.req('GET', '/api/today')).body.expert.no_result).includes(bare.id));
 });
+
+test('«Ждут подписи организации» у руководителя (2.161): дольше всех ждущие — первыми, 2 дня и дольше — отметка long', async () => {
+  const signed = async (title, hours) => {
+    const o = await offered(title, 12);
+    assert.equal((await step(spec, o, 'in_work')).status, 200);
+    const d = (await result(o, `${title}.pdf`)).body.document;
+    assert.equal((await spec.req('POST', `/api/documents/${d.id}/sign`, { confirm: true })).status, 201);
+    await S.sql`update document_signatures set signed_at = now() - make_interval(hours => ${hours}) where document_id = ${d.id}`;
+    return { o, d, ref: `№ ${o.id.slice(0, 8).toUpperCase()}` };
+  };
+  const fresh = await signed('Свежая подпись', 1);
+  const old = await signed('Давняя подпись', 72);
+  const mid = await signed('Почти два дня', 47);
+  const g = (await head.req('GET', '/api/today')).body.orgs[0];
+  const mine = g.to_sign.filter((x) => [fresh, old, mid].some((c) => c.ref === x.order_ref));
+  assert.deepEqual(mine.map((x) => x.order_ref), [old.ref, mid.ref, fresh.ref]);
+  assert.deepEqual(mine.map((x) => x.long), [true, false, false]);
+  // Руководитель подписал — дела больше нет в очереди.
+  for (const c of [fresh, old, mid]) assert.equal((await head.req('POST', `/api/org-documents/${c.d.id}/sign`, { confirm: true })).status, 201);
+  assert.equal((await head.req('GET', '/api/today')).body.orgs[0].to_sign.filter((x) => [fresh, old, mid].some((c) => c.ref === x.order_ref)).length, 0);
+});

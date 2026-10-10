@@ -7,6 +7,7 @@
 // результата нет (2.138). «Вернули на доработку» — когда вернули и сколько осталось до срока (2.147).
 // Руководитель не подписал 2 дня и дольше (2.152) — отдельной строкой с «Напомнить руководителю» прямо здесь.
 // Ответ диспетчера на просьбу о переносе срока — до первого просмотра «Срока» в деле (2.155).
+// Руководителю «Ждут подписи организации» — дольше всех ждущие первыми, 2 дня и дольше — красным (2.161).
 // «Можно продолжать» (2.86) — пришли документы, осмотр или сообщение. Диспетчеру (2.42) — деньги, проверка, цена, подбор, молчащие исполнители, горящие сроки. Нажатие — в дело или в раздел
 // организации.
 // Тексты — только через textContent.
@@ -33,12 +34,14 @@ function deadline(x, today) {
   return `${n === 0 ? 'срок сегодня' : n === 1 ? 'срок завтра' : `срок ${dayRu(x.deadline)} · осталось ${n} дн.`}${ext}`;
 }
 
-// Группа строк: заголовок с числом и строки-кнопки.
+// Группа строк: заголовок с числом и строки-кнопки. Строка может быть { text, class } — например, красная (2.161).
 function group(id, title, items, line, go) {
   if (!items.length) return [];
   return [el('li', { class: 'group', 'data-today': id, text: `${title} · ${items.length}` }),
     ...items.map((x) => el('li', { 'data-today-item': id },
-      el('button', { class: 'open', onclick: () => go(x) }, ...line(x).map((t, i) => el('div', { class: i ? 'muted' : 'title', text: t })))))];
+      el('button', { class: 'open', onclick: () => go(x) }, ...line(x).map((t, i) => (typeof t === 'string'
+        ? el('div', { class: i ? 'muted' : 'title', text: t })
+        : el('div', { class: t.class, ...(t.role ? { 'data-role': t.role } : {}), text: t.text }))))))];
 }
 
 // «Руководитель ещё не подписал» (2.152): строка ведёт к блоку подписи в деле, рядом — «Напомнить руководителю» (раз в сутки).
@@ -153,9 +156,11 @@ export async function loadToday() {
       ...group(`org-away-${g.id}`, 'Эксперт не принимает дела — срок в эти дни', g.away ?? [], (x) => [...caseLine(x),
         `не принимает дела до ${dayRu(x.away_until)}${x.away_note ? ` · ${x.away_note}` : ''} · передайте коллеге`], toOrg('transfer')),
       ...group(`org-risk-${g.id}`, 'Горит: нет черновика или фото осмотра', g.at_risk ?? [], (x) => [...caseLine(x), x.missing.join(' · ')], toOrg('case')),
-      ...group(`org-sign-${g.id}`, 'Ждут подписи организации', g.to_sign, (x) => [...caseLine(x),
-        [`файлов: ${x.files}`, x.since ? `эксперт подписал ${since(x.since)} — ждёт ${waited(x.since)}` : null,
-          x.reminded_at ? `эксперт напомнил ${since(x.reminded_at)}` : null].filter(Boolean).join(' · ')], toOrg('sign')),
+      // Дольше всех ждущие — первыми (порядок с сервера), два дня и дольше — красным (2.161, как в «Делах экспертов»).
+      ...group(`org-sign-${g.id}`, 'Ждут подписи организации', g.to_sign, (x) => [...caseLine(x), {
+        class: x.long ? 'overdue' : 'muted', role: 'sign-since',
+        text: [`файлов: ${x.files}`, x.since ? `эксперт подписал ${since(x.since)} — ждёт ${waited(x.since)}` : null,
+          x.reminded_at ? `эксперт напомнил ${since(x.reminded_at)}` : null].filter(Boolean).join(' · ') }], toOrg('sign')),
       ...group(`org-pending-${g.id}`, 'Ждут назначения эксперта', g.pending, caseLine, toOrg('pending')),
       ...group(`org-hot-${g.id}`, 'Горит срок у экспертов', g.hot.filter((x) => !risky.has(x.order_ref)), caseLine, toOrg('case')),
       // Когда вернули и сколько пунктов эксперт уже отметил исправленными (2.160 — как в «Делах экспертов»).

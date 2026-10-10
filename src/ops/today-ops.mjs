@@ -248,7 +248,9 @@ export async function orgPart(sql, org, registry, today) {
       // Эксперт напоминал о подписи (2.99) — когда последний раз, пока файл ждёт (2.100).
       const w = await signWait(sql, o);
       // Когда эксперт подписал и сколько ждёт (2.160 — как в «Делах экспертов», 2.148).
-      toSign.push(view(o, { files: waiting, reminded_at: w?.reminded_at ?? null, since: w?.since ?? null }));
+      // Два дня и дольше — заметно (2.161 — как в «Делах экспертов», 2.148).
+      toSign.push(view(o, { files: waiting, reminded_at: w?.reminded_at ?? null, since: w?.since ?? null,
+        long: !!w?.since && Date.now() - new Date(w.since).getTime() >= SIGN_LONG_DAYS * 86400_000 }));
     }
     const open = (await orgReturns(sql, o.id, { orgId: org.id })).filter((r) => r.open);
     // Сколько пунктов замечания эксперт уже отметил исправленными (2.160 — как в «Делах экспертов», 2.151).
@@ -268,6 +270,8 @@ export async function orgPart(sql, org, registry, today) {
     }
   }
   dossier.sort((a, b) => a.valid_until.localeCompare(b.valid_until));
+  // «Ждут подписи организации» (2.161): дольше всех ждущие — первыми, без времени подписи — в конце.
+  toSign.sort((a, b) => (a.since ? Date.parse(a.since) : Infinity) - (b.since ? Date.parse(b.since) : Infinity));
   // Сколько дел без движения 3 дня и больше (2.133) — только число, для утренней сводки руководителю (2.141).
   const moves = await caseMoves(sql, cases.filter((o) => ['in_work', 'review'].includes(o.status)));
   return {

@@ -7258,3 +7258,48 @@ test('прогон 2.160: эксперт и руководитель по пач
   await expect(hp.locator('#expert-returns-note')).toContainText('Ваша организация возвращала отчёты 1 раз по 1 делу');
   for (const p of [cp, ep, hp, dp]) await p.context().close();
 });
+
+// 2.161: руководителю в «Сегодня» «Ждут подписи организации» — дольше всех ждущие первыми, 2 дня и дольше — красным.
+test('«Ждут подписи организации» в «Сегодня» руководителя (2.161): долго ждущие — первыми и красным', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), ep = await ctx(), hp = await ctx();
+  const customer = await signIn(cp, '+79990016101');
+  const expert = await signIn(ep, '+79990016102'), head = await signIn(hp, '+79990016103');
+  const { orgId, A, B } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Очередь подписи ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Подписная Ольга' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id) values ($1, $2)", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const add = async (title) => (await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', $1, $2, $3, 'in_work', (now() at time zone 'Europe/Moscow')::date + 9, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Подписная ул., 2","area":"40"}') returning id`,
+    [title, customer.id, expert.id])).rows[0].id;
+    return { orgId: org.id, A: await add('Очередь: свежая'), B: await add('Очередь: давняя') };
+  });
+  const signed = async (id, name, hours) => {
+    const up = await ep.request.post(`/api/orders/${id}/results`, { data: Buffer.from(`%PDF-1.4 ${name}`), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent(name) } });
+    expect(up.status()).toBe(201);
+    const doc = (await up.json()).document.id;
+    expect((await ep.request.post(`/api/documents/${doc}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+    await db((c) => c.query('update document_signatures set signed_at = now() - make_interval(hours => $2) where document_id = $1', [doc, hours]));
+  };
+  await signed(A, 'Отчёт свежий.pdf', 2);
+  await signed(B, 'Отчёт давний.pdf', 73);
+  await hp.goto('/kabinet');
+  const items = hp.locator(`li[data-today-item="org-sign-${orgId}"]`);
+  await expect(items).toHaveCount(2);
+  const ref = (id) => `№ ${id.slice(0, 8).toUpperCase()}`;
+  await expect(items.nth(0)).toContainText(ref(B));
+  await expect(items.nth(0).locator('[data-role="sign-since"]')).toHaveClass(/overdue/);
+  await expect(items.nth(0).locator('[data-role="sign-since"]')).toContainText('— ждёт 3 дн. 1 ч');
+  await expect(items.nth(1)).toContainText(ref(A));
+  await expect(items.nth(1).locator('[data-role="sign-since"]')).toHaveClass(/muted/);
+  await expect(items.nth(1).locator('[data-role="sign-since"]')).toContainText('— ждёт 2 ч');
+  await items.nth(0).scrollIntoViewIfNeeded();
+  await shot(hp, 'c15-rukovoditel-segodnya-ochered-podpisi');
+  // Нажатие — к подписи этого дела в разделе организации.
+  await items.nth(0).locator('button').click();
+  await expect(hp).toHaveURL(new RegExp(`#org=${orgId}&case=${B.slice(0, 8).toUpperCase()}&to=sign$`));
+  for (const p of [cp, ep, hp]) await p.context().close();
+});
