@@ -38,7 +38,7 @@ function render(r) {
   $('deadline-form').classList.toggle('hidden', !r.can_request);
   // Попросил или отозвал перенос (2.140) — предупреждение «нет файла результата» в деле пересчитывает свои кнопки.
   document.dispatchEvent(new Event('deadline-changed'));
-  if (r.can_request) $('deadline-new').min = r.deadline;
+  if (r.can_request) $('deadline-new').min = r.min_new ?? r.deadline;
   // Готовые причины (2.126): текст в поле причины, новый срок — если ещё не выбран и сервер его предложил.
   const reasons = r.reasons ?? [];
   $('deadline-reasons').classList.toggle('hidden', !reasons.length);

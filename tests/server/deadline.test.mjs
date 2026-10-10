@@ -301,3 +301,32 @@ test('ответ диспетчера заметно (2.155): в «Сроке» 
   assert.equal((await list(other, o)).status, 404);
   assert.equal(((await other.req('GET', '/api/today')).body.expert?.extend_answer ?? []).some((x) => x.id === o.id), false);
 });
+
+test('просроченное дело (2.166): в «Сегодня» — без просьбы о переносе; новый срок — не раньше сегодня, готовая причина тоже', async () => {
+  const o = await inWork('Квартира: срок прошёл', 3);
+  const past = addDays(today, -4);
+  await S.sql`update orders set deadline = ${past} where id = ${o.id}`;
+  const hot = async () => (await spec.req('GET', '/api/today')).body.expert.hot.find((x) => x.id === o.id);
+  let h = await hot();
+  assert.equal(h.overdue, true);
+  assert.equal(h.extend, null, 'перенос не просили — в «Сегодня» кнопка «Попросить перенести срок»');
+  // Самый ранний новый срок — сегодня (а не день после прошедшего срока).
+  let r = (await list(spec, o)).body;
+  assert.equal(r.min_new, today);
+  assert.equal((await list(owner, o)).body.min_new, null);
+  // Документы ждут 2 дня: «срок + 2 дня» уже прошёл — готовая причина предлагает сегодня.
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { items: ['egrn'] })).status, 201);
+  await S.sql`update doc_requests set requested_at = now() - interval '2 days' where order_id = ${o.id}`;
+  r = (await list(spec, o)).body;
+  assert.equal(r.reasons.find((x) => x.id === 'docs').new_deadline, today);
+  // Дата позже прошедшего срока, но тоже в прошлом — нельзя.
+  assert.equal((await ask(spec, o, { new_deadline: addDays(today, -1), reason: 'Жду выписку' })).body.error, 'in_past');
+  const sent = await ask(spec, o, { new_deadline: addDays(today, 3), reason: 'Жду выписку', from: past });
+  assert.equal(sent.status, 201, JSON.stringify(sent.body));
+  // Просьба есть — в «Сегодня» видно, на какую дату; второй раз не предлагается.
+  h = await hot();
+  assert.equal(h.extend.new_deadline, addDays(today, 3));
+  // У дела со сроком в будущем самый ранний новый срок — день после нынешнего, как раньше.
+  const f = await inWork('Квартира: срок впереди', 5);
+  assert.equal((await list(spec, f)).body.min_new, addDays(today, 6));
+});
