@@ -2662,6 +2662,7 @@ test('карточка эксперта (2.35): из подбора у дисп�
   await expect(dp.locator('#expert-year-note')).toContainText('сданных дел нет');
   await expect(dp.locator('#expert-now-note')).toHaveText('Дел в работе нет.');
   await expect(dp.locator('#expert-now [data-action="now-open"]')).toHaveCount(0);
+  await expect(dp.locator('#expert-returns-box')).toBeHidden();
   await shot(dp, '99-kartochka-eksperta');
   await dp.getByRole('link', { name: '← Назад' }).click();
   await expect(dp.locator('#order-title')).toHaveText('Квартира для карточки');
@@ -2710,10 +2711,27 @@ test('карточка эксперта (2.35): из подбора у дисп�
   await expect(hp).toHaveURL(new RegExp(`#org=${orgId}&case=${ref}&to=case$`));
   await expect(hp.locator(`#org-cases li[data-case="№ ${ref}"]`)).toBeInViewport();
   await shot(hp, '99c-kartochka-k-delu');
+  // 2.156: «Возвраты за год» — руководителю: два возврата по делу, частый пункт замечаний — первым.
+  await db(async (c) => {
+    const doc = (await c.query("insert into documents (order_id, uploaded_by, filename, mime, size_bytes, storage_key) values ($1, $2, 'отчёт.pdf', 'application/pdf', 1, $3) returning id", [busy, spec.id, `ui/2156/${busy}`])).rows[0].id;
+    for (const [items, days] of [[['Нет даты осмотра', 'Не указан этаж'], 20], [['нет даты осмотра.'], 3]]) {
+      const id = (await c.query("insert into org_returns (order_id, document_id, org_id, executor_user_id, returned_by, filename, comment, created_at) values ($1, $2, $3, $4, $5, 'отчёт.pdf', $6, now() - make_interval(days => $7)) returning id", [busy, doc, orgId, spec.id, head.id, items.join('\n'), days])).rows[0].id;
+      for (const [i, t] of items.entries()) await c.query('insert into org_return_items (return_id, n, text) values ($1, $2, $3)', [id, i + 1, t]);
+    }
+  });
+  await hp.goto(`/kabinet#expert=${spec.id}`);
+  await expect(hp.locator('#expert-returns-note')).toContainText('Ваша организация возвращала отчёты 2 раза по 1 делу');
+  await expect(hp.locator('#expert-returns li[data-remark]').first()).toContainText('нет даты осмотра.');
+  await expect(hp.locator('#expert-returns li[data-remark]').first()).toContainText('2 раза');
+  await expect(hp.locator('#expert-returns li[data-remark]').nth(1)).toContainText('Не указан этаж');
+  await expect(hp.locator('#expert-returns')).not.toContainText('Квартира в работе');
+  await hp.locator('#expert-returns-box').scrollIntoViewIfNeeded();
+  await shot(hp, 'b4g-kartochka-vozvraty-za-god');
   // Сам эксперт видит блок у себя, но без ссылки в «Дела экспертов».
   await sp.goto(`/kabinet#expert=${spec.id}`);
   await expect(sp.locator(`#expert-now li[data-now="№ ${ref}"]`)).toBeVisible();
   await expect(sp.locator('#expert-now [data-action="now-open"]')).toHaveCount(0);
+  await expect(sp.locator('#expert-returns-box')).toBeHidden();
 
   // Заказчик по прямой ссылке — «не найдено».
   await page.goto(`/kabinet#expert=${spec.id}`);

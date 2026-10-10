@@ -178,3 +178,54 @@ test('карточка эксперта: сейчас в работе — сро
     for (const secret of ['Дело сейчас', 'Жду выписку', owner.user.id, ...ids]) assert.ok(!text.includes(secret), `в блоке нет: ${secret}`);
   }
 });
+
+// 2.156: «Возвраты за год» — только руководителю организации эксперта: возвраты его организации за 365 дней, по скольким
+// делам, последний день и частые пункты замечаний (одинаковые без учёта регистра и точки — один пункт). Возвраты старше года
+// и чужой организации — не в счёт; диспетчеру и самому эксперту блока нет.
+test('карточка эксперта: возвраты за год — руководителю, частые пункты, без чужих и старых', async () => {
+  const spec4 = await login(S, '+79990003608');
+  await makeSpecialist(S.sql, spec4.user.id);
+  await addMember(S.sql, org.id, spec4.user.id, 'member');
+  assert.equal((await spec4.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  const other = await makeOrg(S.sql, 'ООО «Прежняя»');
+  const orders = [];
+  for (let i = 0; i < 2; i++) {
+    const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Дело с возвратом' })).body.order;
+    await S.sql`update orders set executor_user_id = ${spec4.user.id}, status = 'in_work', deadline = ${addDays(todayMsk(), 5)} where id = ${o.id}`;
+    const [d] = await S.sql`insert into documents (order_id, uploaded_by, filename, mime, size_bytes, storage_key)
+      values (${o.id}, ${spec4.user.id}, 'отчёт.pdf', 'application/pdf', 1, ${`test/2156/${o.id}`}) returning id`;
+    orders.push({ ...o, doc: d.id });
+  }
+  const ret = async (orgId, o, items, daysAgo) => {
+    const [{ id }] = await S.sql`insert into org_returns (order_id, document_id, org_id, executor_user_id, returned_by, filename, comment, created_at)
+      values (${o.id}, ${o.doc}, ${orgId}, ${spec4.user.id}, ${head.user.id}, 'отчёт.pdf', ${items.join('\n') || 'Поправьте'},
+              now() - make_interval(days => ${daysAgo}::int)) returning id`;
+    for (const [i, text] of items.entries()) await S.sql`insert into org_return_items (return_id, n, text) values (${id}, ${i + 1}, ${text})`;
+  };
+  await ret(org.id, orders[0], ['Нет даты осмотра.', 'Не указан этаж'], 40);
+  await ret(org.id, orders[0], ['нет  даты осмотра'], 10);
+  await ret(org.id, orders[1], ['Нет даты осмотра', 'Нет подписи на титуле'], 2);
+  await ret(org.id, orders[1], [], 1); // без пунктов — возврат в счёт, пунктов нет
+  await ret(org.id, orders[1], ['Старое замечание'], 400); // больше года назад
+  await ret(other.id, orders[1], ['Чужое замечание'], 3); // другая организация
+  const r = (await head.req('GET', `/api/specialists/${spec4.user.id}/card`)).body.returns_year;
+  assert.equal(r.since, addDays(todayMsk(), -364));
+  assert.deepEqual([r.n, r.cases, r.last_day], [4, 2, addDays(todayMsk(), -1)]);
+  assert.deepEqual(r.top_remarks, [
+    { text: 'Нет даты осмотра', n: 3 },
+    { text: 'Нет подписи на титуле', n: 1 },
+    { text: 'Не указан этаж', n: 1 },
+  ]);
+  const text = JSON.stringify(r);
+  for (const secret of ['Дело с возвратом', 'Старое замечание', 'Чужое замечание', owner.user.id, ...orders.map((o) => o.id)]) {
+    assert.ok(!text.includes(secret), `в блоке нет: ${secret}`);
+  }
+  for (const c of [dispatcher, spec4]) assert.equal((await c.req('GET', `/api/specialists/${spec4.user.id}/card`)).body.returns_year, null);
+  // Возвратов не было — блок есть, нули.
+  const spec5 = await login(S, '+79990003609');
+  await makeSpecialist(S.sql, spec5.user.id);
+  await addMember(S.sql, org.id, spec5.user.id, 'member');
+  assert.equal((await spec5.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  const z = (await head.req('GET', `/api/specialists/${spec5.user.id}/card`)).body.returns_year;
+  assert.deepEqual([z.n, z.cases, z.last_day, z.top_remarks], [0, 0, null, []]);
+});
