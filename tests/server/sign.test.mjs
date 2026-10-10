@@ -505,3 +505,28 @@ test('напоминание перед подписью (2.136): ИИ-пров�
     assert.equal(await hint(spec, d1), undefined);
   } finally { S.providers.ai.complete = orig; }
 });
+
+test('2.154: ИИ-проверка — дата составления отчёта не позже дня подписи эксперта; без подписи — не позже сегодня', async () => {
+  const o = await inWork('Квартира — дата отчёта и подпись');
+  const ru = (d) => d.split('-').reverse().join('.');
+  const today = todayMsk();
+  const later = addDays(today, 3);
+  const put = (text, name) => spec.req('POST', `/api/orders/${o.id}/results`, Buffer.from(text), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) },
+  }).then((r) => r.body.document);
+  const found = async () => {
+    const r = await spec.req('POST', `/api/orders/${o.id}/review/ai`);
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    return (r.body.ai.items.find((i) => i.id === 'requisites').found ?? []).map((f) => f.text).filter((t) => /Дата составления/.test(t));
+  };
+  // Не подписан, дата составления — через три дня.
+  const d1 = await put(`Отчёт об оценке\nДата составления отчёта: ${ru(later)}`, 'Отчёт.txt');
+  assert.deepEqual(await found(), [`Дата составления отчёта (${ru(later)}) ещё не наступила (сегодня ${ru(today)}) — подписать отчёт раньше даты составления нельзя; поставьте дату, когда будете подписывать`]);
+  // Подписан сегодня, а составлен «через три дня».
+  assert.equal((await spec.req('PATCH', '/api/me', { full_name: 'Тестов Эксперт Экспертович' })).status, 200);
+  assert.equal((await sign(d1)).status, 201);
+  assert.deepEqual(await found(), [`Дата составления отчёта (${ru(later)}) позже дня, когда эксперт подписал файл (${ru(today)}), — отчёт подписан раньше, чем составлен; исправьте дату и подпишите файл заново`]);
+  // Подпись записана задним числом — сверка по дню подписи, а не по сегодня.
+  await S.sql`update document_signatures set signed_at = now() - interval '5 days' where document_id = ${d1.id}`;
+  assert.match((await found())[0], new RegExp(`подписал файл \\(${ru(addDays(today, -5)).replace(/\./g, '\\.')}\\)`));
+});
