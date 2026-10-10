@@ -7573,3 +7573,69 @@ test('прогон 2.170: эксперт и руководитель по пач
   await shot(hp, 'c22-progon2-rukovoditel-svodka');
   for (const p of [cp, ep, hp, dp]) await p.context().close();
 });
+
+// Отбор «Исправленный файл ждёт подписи эксперта» (2.171): после возврата эксперт загрузил новый файл, но не подписал —
+// дольше всех ждущие первыми, 2 дня и дольше — строка красная; возврат без нового файла в отбор не попадает.
+test('дела экспертов (2.171): руководитель отбирает дела, где исправленный файл ждёт подписи эксперта', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), ep = await ctx(), hp = await ctx();
+  const customer = await signIn(cp, '+79990017101');
+  const expert = await signIn(ep, '+79990017102'), head = await signIn(hp, '+79990017103');
+  const { orgId, A, B, C } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Исправлено ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Правкина Нина' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const add = async (title, days) => (await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', $1, $2, $3, 'in_work', (now() at time zone 'Europe/Moscow')::date + $4::int, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Правочная ул., 3","area":"40"}') returning id`,
+    [title, customer.id, expert.id, days])).rows[0].id;
+    return { orgId: org.id, A: await add('Исправлено: свежее', 6), B: await add('Исправлено: давно', 8), C: await add('Возврат без файла', 9) };
+  });
+  const ref = (id) => id.slice(0, 8).toUpperCase();
+  const upload = async (id, name) => {
+    const up = await ep.request.post(`/api/orders/${id}/results`, { data: Buffer.from(`%PDF-1.4 ${name}`), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent(name) } });
+    expect(up.status()).toBe(201);
+    return (await up.json()).document.id;
+  };
+  // Возврат: эксперт подписал, руководитель вернул; для A и B эксперт удалил файл и загрузил исправленный, но не подписал.
+  const returned = async (id, fix) => {
+    const d = await upload(id, 'Отчёт.pdf');
+    expect((await ep.request.post(`/api/documents/${d}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+    expect((await hp.request.post(`/api/org-documents/${d}/return`, { data: { comment: 'Нет даты осмотра' }, headers: H })).status()).toBe(201);
+    await db((c) => c.query("update org_returns set created_at = now() - interval '4 days' where order_id = $1", [id]));
+    if (!fix) return null;
+    expect((await ep.request.delete(`/api/documents/${d}`, { headers: H })).status()).toBe(204);
+    return upload(id, 'Отчёт (исправлен).pdf');
+  };
+  await returned(A, true);
+  const b2 = await returned(B, true);
+  await returned(C, false);
+  await db((c) => c.query("update documents set created_at = now() - interval '3 days' where id = $1", [b2]));
+
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const rows = hp.locator('#org-cases > li[data-case]');
+  await expect(rows).toHaveCount(3);
+  await expect(hp.locator('[data-filter="returned"]')).toHaveText('Вернул эксперту · 3');
+  const chip = hp.locator('[data-filter="fresh"]');
+  await expect(chip).toHaveText('Исправленный файл ждёт подписи эксперта · 2');
+  await chip.click();
+  await expect(chip).toHaveAttribute('aria-pressed', 'true');
+  await expect(rows).toHaveCount(2);
+  // Дольше всех ждущее — первым и красным; свежее — спокойным цветом; возврат без нового файла в отбор не попал.
+  await expect(rows.nth(0)).toHaveAttribute('data-case', `№ ${ref(B)}`);
+  await expect(rows.nth(0).locator('[data-role="fresh-file"]')).toHaveClass(/overdue/);
+  await expect(rows.nth(0).locator('[data-role="fresh-file"]')).toContainText(/Эксперт загрузил исправленный файл .+ — ещё не подписал \(3 дн\.\)/);
+  await expect(rows.nth(1)).toHaveAttribute('data-case', `№ ${ref(A)}`);
+  await expect(rows.nth(1).locator('[data-role="fresh-file"]')).toHaveClass(/muted/);
+  await expect(hp.locator(`#org-cases li[data-case="№ ${ref(C)}"]`)).toHaveCount(0);
+  await hp.locator('#org-cases-filter').scrollIntoViewIfNeeded();
+  await shot(hp, 'c23-rukovoditel-otbor-ispravlennyj-fajl');
+
+  // Эксперт подписал исправленный файл — дело уходит из отбора, у руководителя — к его подписи.
+  await expect((await ep.request.post(`/api/documents/${b2}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  await hp.reload();
+  await expect(hp.locator('[data-filter="fresh"]')).toHaveText('Исправленный файл ждёт подписи эксперта · 1');
+  for (const p of [cp, ep, hp]) await p.context().close();
+});
