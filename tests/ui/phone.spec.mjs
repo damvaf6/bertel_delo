@@ -3178,6 +3178,11 @@ test('уведомления (2.45): все события на экране и 
     await c.query('insert into specialists (user_id) values ($1)', [me.id]);
     orgId = (await c.query("insert into organizations (name) values ('ООО «Тестовые уведомления»') returning id")).rows[0].id;
     await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head')", [orgId, me.id]);
+    // Пользователь — диспетчер: ежеминутная рассылка (src/server.mjs) прислала бы ему «срок прошёл» по просроченным делам
+    // других проверок — лишняя строка в ленте. Отмечаем такие напоминания уже отправленными.
+    await c.query(`insert into deadline_reminders (order_id, kind, deadline)
+      select id, 'overdue', deadline from orders where deadline < (now() at time zone 'Europe/Moscow')::date
+      on conflict do nothing`);
   });
   const o = (await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Заявка для уведомлений' }, headers: H })).json()).order;
   orderId = o.id;
