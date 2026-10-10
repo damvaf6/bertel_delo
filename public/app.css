@@ -66,6 +66,9 @@ button:disabled { opacity: .6; cursor: default; }
 .doc .sig-state.bad { color: var(--danger); }
 .doc .sig-state.warn { color: #7a4b00; }
 .doc .sig-ai { color: #7a4b00; font-weight: 600; margin: 4px 0; }
+.doc .sig-points { margin: 6px 0; padding: 6px 8px; border-left: 3px solid var(--line, #ccc); }
+.doc .sig-points.warn { border-left-color: #c98a00; }
+.doc .sig-points [data-role="sig-points-state"] { font-weight: 600; }
 .doc .sig-test { color: var(--danger); font-size: 14px; }
 .badge { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 99px; background: #eef2f8; color: var(--muted); }
 .badge.warn { background: #fff3d6; color: #7a4b00; font-weight: 600; }

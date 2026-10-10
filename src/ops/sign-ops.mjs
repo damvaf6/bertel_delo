@@ -143,14 +143,18 @@ function expertCheck(actor, doc, order) {
 }
 
 // Возвраты руководителя (2.27) по заявке: открытый — пока эксперт не подписал файл заново (или, если файл удалён, пока не
-// загрузил новый результат после возврата). Видят только исполнитель и руководитель — заказчику и диспетчеру не отдаются.
+// подписал новый результат, загруженный после возврата, — 2.159: до подписи новой версии отметки «исправлено» ещё ставятся). Видят только исполнитель и руководитель — заказчику и диспетчеру не отдаются.
 export async function orgReturns(sql, orderId, { orgId = null } = {}) {
   const rows = await sql`
     select r.*, u.full_name as head_name, g.name as org_name,
            exists (select 1 from documents d where d.id = r.document_id and d.deleted_at is null) as doc_alive,
            exists (select 1 from document_signatures s where s.document_id = r.document_id and s.role = 'expert' and s.signed_at > r.created_at) as resigned,
-           exists (select 1 from documents d where d.order_id = r.order_id and d.kind = 'result' and d.deleted_at is null
-                   and d.created_at > r.created_at) as new_file
+           exists (select 1 from documents d join document_signatures s on s.document_id = d.id and s.role = 'expert'
+                   where d.order_id = r.order_id and d.kind = 'result' and d.deleted_at is null
+                     and d.created_at > r.created_at and s.signed_at > r.created_at)
+           -- новая версия уже подписана и снова возвращена — прежний возврат закрыт ею
+           or exists (select 1 from org_returns r2 join documents d on d.id = r2.document_id
+                      where r2.order_id = r.order_id and r2.id > r.id and d.created_at > r.created_at) as new_signed
     from org_returns r join users u on u.id = r.returned_by join organizations g on g.id = r.org_id
     where r.order_id = ${orderId} and (${orgId}::uuid is null or r.org_id = ${orgId}::uuid) order by r.id`;
   const items = rows.length
@@ -166,7 +170,7 @@ export async function orgReturns(sql, orderId, { orgId = null } = {}) {
       comment: r.comment,
       org: r.org_name,
       by: r.head_name,
-      open: r.doc_alive ? !r.resigned : !r.new_file,
+      open: r.doc_alive ? !r.resigned : !r.new_signed,
       // Пункты замечания (2.93): эксперт отмечает исправленные; left — сколько ещё не отмечено.
       items: points,
       left: points.filter((i) => !i.fixed).length,
@@ -256,7 +260,7 @@ export function signOps() {
           where o.status = 'in_work' order by o.deadline nulls last, o.id`;
         const items = [];
         for (const o of orders) {
-          const docs = await sql`select id, filename, size_bytes from documents where order_id = ${o.id} and kind = 'result'
+          const docs = await sql`select id, filename, size_bytes, created_at from documents where order_id = ${o.id} and kind = 'result'
                                  and deleted_at is null and uploaded_by = (select executor_user_id from orders where id = ${o.id}) order by created_at`;
           if (!docs.length) continue;
           const signs = await orderSignatures(sql, o.id);
@@ -267,7 +271,7 @@ export function signOps() {
             service: registry.service(o.module, o.service)?.service.name ?? o.service,
             executor: o.executor_name,
             deadline: o.deadline,
-            documents: docs.map((d) => ({ id: d.id, filename: d.filename, size_bytes: Number(d.size_bytes), signatures: signaturesView(signs.get(d.id)) })),
+            documents: docs.map((d) => ({ id: d.id, filename: d.filename, size_bytes: Number(d.size_bytes), created_at: d.created_at, signatures: signaturesView(signs.get(d.id)) })),
             // Эксперт напоминал о подписи (2.99) — когда последний раз, пока файл ждёт (после возврата прежнее не показывается).
             reminded_at: wait?.reminded_at ?? null,
             // С какого времени файлы ждут подписи организации (2.148) — самая ранняя подпись эксперта среди них.
