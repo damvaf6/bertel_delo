@@ -215,3 +215,53 @@ test('прогон 2.150: эксперт подписал, файл ждёт п�
   assert.equal(back.idle, false);
   assert.equal(back.last_move.days, 0);
 });
+
+test('вернул эксперту (2.153): число дел, где возврат не исправлен 2 дня и больше, — в тексте; больше ничего нет — к отбору «Вернул эксперту»', async () => {
+  assert.equal(orgDigestText({ sign: 0, handover: 0, due: 0, overdue: 0, idle: 0, returned: 1 }),
+    'На сегодня по организации: 1 дело после возврата эксперту не исправлено 2 дня и больше');
+  assert.equal(orgDigestText({ sign: 1, handover: 0, due: 0, overdue: 0, idle: 3, returned: 2 }),
+    'На сегодня по организации: 1 дело ждёт подписи организации, 3 дела без движения 3 дня и больше, 2 дела после возврата эксперту не исправлены 2 дня и больше');
+  assert.equal(orgDigestTo({ sign: 0, handover: 0, due: 0, overdue: 0, idle: 2, returned: 1 }), 'returned');
+  assert.equal(orgDigestTo({ sign: 0, handover: 1, due: 0, overdue: 0, idle: 0, returned: 1 }), 'handover');
+
+  // Отдельная организация: у эксперта три дела. По «Давнему» руководитель вернул отчёт 3 дня назад, эксперт не исправил;
+  // по «Свежему» — вернул только что; по «Исправленному» вернул 3 дня назад, эксперт подписал заново (ждёт подписи).
+  const h = await login(S, '+79990003811');
+  const e = await login(S, '+79990003812');
+  const o4 = await makeOrg(S.sql, 'ООО «Возвратная оценка»');
+  await addMember(S.sql, o4.id, h.user.id, 'head');
+  await makeSpecialist(S.sql, e.user.id);
+  await addMember(S.sql, o4.id, e.user.id, 'member');
+  await e.req('PATCH', '/api/me', { full_name: 'Эксперт Возвратный' });
+  assert.equal((await e.req('PATCH', '/api/specialist/me', { org_id: o4.id })).status, 200);
+  const make = async (title) => {
+    const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
+    assert.equal((await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: addDays(today, 12), fields: FIELDS })).status, 200);
+    assert.equal((await owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
+    await ensurePaid(S.sql, o.id);
+    assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: e.user.id, from: 'matching' })).status, 200);
+    assert.equal((await e.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+    const d = (await e.req('POST', `/api/orders/${o.id}/results`, Buffer.from(`отчёт ${title}`), {
+      raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Отчёт.pdf') },
+    })).body.document;
+    assert.equal((await e.req('POST', `/api/documents/${d.id}/sign`, { confirm: true })).status, 201);
+    assert.equal((await h.req('POST', `/api/org-documents/${d.id}/return`, { comment: '1. Нет даты осмотра\n2. Не указан этаж' })).status, 201);
+    return { o, d };
+  };
+  const old = await make('Давнее');
+  await make('Свежее');
+  const fixed = await make('Исправленное');
+  await S.sql`update org_returns set created_at = now() - interval '3 days' where order_id = any(${[old.o.id, fixed.o.id]}::uuid[])`;
+  assert.equal((await e.req('POST', `/api/documents/${fixed.d.id}/sign`, { confirm: true })).status, 201);
+
+  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(today, '08:30') }) >= 1);
+  const [r] = await S.sql`select sign, handover, due, overdue, idle, returned from org_morning_digests where user_id = ${h.user.id} and org_id = ${o4.id}`;
+  assert.deepEqual({ ...r }, { sign: 1, handover: 0, due: 0, overdue: 0, idle: 0, returned: 1 });
+  const feed = (await h.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня по организации'));
+  assert.equal(feed.length, 1);
+  assert.equal(feed[0].title, 'На сегодня по организации: 1 дело ждёт подписи организации, 1 дело после возврата эксперту не исправлено 2 дня и больше');
+  assert.equal(feed[0].section, `org=${o4.id}&to=sign`);
+  assert.doesNotMatch(JSON.stringify(feed), /Давнее|Свежее|Нет даты осмотра/);
+  // Подписи ждать уже нечего — сводка ведёт к отбору «Вернул эксперту».
+  assert.equal(orgDigestTo({ ...r, sign: 0 }), 'returned');
+});

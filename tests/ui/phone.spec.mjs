@@ -5649,6 +5649,14 @@ test('как эксперт и руководитель (2.100): перенос 
   await expect(back).toContainText('(меньше часа назад) — эксперт отметил исправленными 1 из 2');
   await back.scrollIntoViewIfNeeded();
   await shot(hp, 'b4b-rukovoditel-vernul-ispravleno-1-iz-2');
+  // Из утренней сводки (2.153: «после возврата эксперту не исправлено 2 дня и больше») — к отбору «Вернул эксперту».
+  await hp.goto('/kabinet#orgs');
+  await hp.goto(`/kabinet#org=${orgId}&to=returned`);
+  await expect(hp.locator('[data-filter="returned"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(hp.locator('#org-cases > li[data-case]')).toHaveCount(1);
+  await expect(back).toContainText('эксперт отметил исправленными 1 из 2');
+  await expect(hp.locator('#org-cases-list-title')).toBeInViewport();
+  await shot(hp, 'b4c-rukovoditel-svodka-vernul');
   await fix(2);
   await hp.reload();
   await expect(back).toContainText('эксперт отметил исправленным всё (2 из 2) — ждём его подписи');

@@ -44,8 +44,8 @@ async function route() {
   if ((m = h.match(/^#order=([0-9a-f-]{36})(?:&to=(inspect|chat|docs|deadline|extend|sign|handover|onsite|notes|result|fix))?$/i))) return openOrder(m[1], { to: m[2] });
   // #org=…&case=XXXXXXXX&to=pending|sign|chat|case|handover|transfer — сразу к делу организации (2.67: из уведомления или «Сегодня»).
   if ((m = h.match(/^#org=([0-9a-f-]{36})(?:&case=([0-9A-F]{8})(?:&to=(pending|sign|chat|case|handover|transfer))?)?$/i))) return showOrg(m[1], m[2] ? { ref: `№ ${m[2].toUpperCase()}`, to: m[3] } : null);
-  // #org=…&to=week|sign|handover|idle — к блоку организации без дела (2.130, 2.141: из утренней сводки руководителю).
-  if ((m = h.match(/^#org=([0-9a-f-]{36})&to=(week|sign|handover|idle)$/i))) return showOrg(m[1], { block: m[2] });
+  // #org=…&to=week|sign|handover|returned|idle — к блоку организации без дела (2.130, 2.141, 2.153: из утренней сводки руководителю).
+  if ((m = h.match(/^#org=([0-9a-f-]{36})&to=(week|sign|handover|returned|idle)$/i))) return showOrg(m[1], { block: m[2] });
   if (h === '#orgs') return showOrgs();
   if ((m = h.match(/^#expert=([0-9a-f-]{36})$/i))) return showExpertCard(m[1]);
   if (h === '#profile') return showProfile();
