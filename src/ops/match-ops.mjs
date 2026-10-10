@@ -14,7 +14,7 @@ import { orderRef } from '../notify/registry.mjs';
 import { audit, text, uuidFrom } from './util.mjs';
 import { notify, orgHeads } from '../notify/notify.mjs';
 import { BLOCKING_KINDS, dossierAlerts, loadDossier, needsValidDossier } from '../dossier/dossier.mjs';
-import { expertMonthReport, reportMonth } from '../orgs/report.mjs';
+import { expertMonthReport, orgReturnsYear, reportMonth } from '../orgs/report.mjs';
 import { expertSchedule } from '../orders/schedule.mjs';
 import { scheduleIcs } from '../orders/ics.mjs';
 
@@ -231,7 +231,8 @@ export function matchOps() {
       // документов (копии видит только сам эксперт); история — без заказчика, названий заявок и полей. Сданное за год по услугам
       // и средний срок (2.139) — `year`. «Сейчас в работе» (2.143) — `now`: дела в работе, на проверке и предложенные, со сроком,
       // днями без движения (как «Дела экспертов», 2.133) и открытой просьбой о переносе срока; руководителю организации эксперта
-      // — `org_id`, чтобы открыть дело в «Делах экспертов». Без заказчика и данных заявки.
+      // — `org_id`, чтобы открыть дело в «Делах экспертов». Без заказчика и данных заявки. Руководителю организации эксперта —
+      // «Возвраты за год» (2.156) — `returns_year`: сколько раз его организация возвращала отчёты и частые пункты замечаний.
       id: 'specialists.card', method: 'GET', path: '/api/specialists/:id/card', auth: 'user',
       access: { resource: 'specialistCard', param: 'id', need: 'read' },
       async handler({ sql, actor, specialist, signOrg, registry }) {
@@ -262,6 +263,7 @@ export function matchOps() {
           order by deadline nulls last, updated_at desc`;
         const moves = await caseMoves(sql, active.filter((o) => o.status !== 'awaiting_executor'));
         const ext = await openExtends(sql, active.map((o) => o.id));
+        const headOrg = signOrg && roleIn(actor, signOrg.id) === 'head' ? signOrg.id : null;
         return {
           specialist: profile,
           dossier,
@@ -269,7 +271,7 @@ export function matchOps() {
           quality: { score: quality.score, note: quality.note },
           year: await yearStats(sql, id, { registry }),
           now: {
-            org_id: signOrg && roleIn(actor, signOrg.id) === 'head' ? signOrg.id : null,
+            org_id: headOrg,
             cases: active.map((o) => ({
               order_ref: orderRef(o.id),
               service: registry.service(o.module, o.service)?.service.name ?? o.service,
@@ -284,6 +286,7 @@ export function matchOps() {
               extend: ext.get(o.id) ? { new_deadline: ext.get(o.id).new_deadline } : null,
             })),
           },
+          returns_year: headOrg ? await orgReturnsYear(sql, headOrg, id, today) : null,
           history: rows.map((o) => ({
             order_ref: orderRef(o.id),
             service: registry.service(o.module, o.service)?.service.name ?? o.service,

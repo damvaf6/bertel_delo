@@ -13,7 +13,7 @@
 // Месяц — по московскому времени. Выгрузка таблицей — CSV для Excel (точка с запятой, BOM, суммы с запятой).
 import { HttpError } from '../http/core.mjs';
 import { splitAmount } from '../money/money.mjs';
-import { isOverdue, todayMsk } from '../orders/workflow.mjs';
+import { addDays, isOverdue, todayMsk } from '../orders/workflow.mjs';
 
 export const REPORT_MONTHS_BACK = 12;
 const MONTHS_GEN = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
@@ -57,6 +57,27 @@ export function topRemarks(items, limit) {
   }
   return [...groups.values()].sort((a, b) => b.n - a.n || b.last - a.last).slice(0, limit)
     .map((g) => ({ text: g.text, n: g.n, experts: g.experts.size }));
+}
+
+// Возвраты за год (2.156) — руководителю в карточке эксперта: сколько раз организация возвращала отчёты этому эксперту за
+// последние 365 дней по Москве (с `since` по сегодня), по скольким делам, когда в последний раз и самые частые пункты замечаний
+// (как в сводке за месяц, 2.105). Только возвраты этой организации; без заказчиков, названий и полей заявки.
+export async function orgReturnsYear(sql, orgId, userId, today = todayMsk()) {
+  const since = addDays(today, -364);
+  const rows = await sql`
+    select r.id, r.order_id, r.created_at as at, i.text from org_returns r
+    left join org_return_items i on i.return_id = r.id
+    where r.org_id = ${orgId} and r.executor_user_id = ${userId}
+      and r.created_at >= (${since}::date::timestamp at time zone 'Europe/Moscow')
+    order by r.created_at desc, r.id desc, i.n`;
+  return {
+    since,
+    n: new Set(rows.map((r) => String(r.id))).size,
+    cases: new Set(rows.map((r) => r.order_id)).size,
+    last_day: rows.length ? todayMsk(new Date(rows[0].at)) : null,
+    top_remarks: topRemarks(rows.filter((r) => r.text).map((r) => ({ user_id: userId, text: r.text, at: r.at })), TOP_REMARKS)
+      .map(({ text, n }) => ({ text, n })),
+  };
 }
 
 const dayMsk = (t) => todayMsk(new Date(t));

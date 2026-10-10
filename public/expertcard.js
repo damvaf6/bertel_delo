@@ -1,5 +1,5 @@
 // Карточка эксперта (2.35): квалификация и допуски, досье (без копий), итоги работы и оценка «качество» в подборе,
-// загрузка, «Сейчас в работе» (2.143), сданное за год по услугам и средний срок (2.139), история дел. Для диспетчера и администратора, руководителя
+// загрузка, «Сейчас в работе» (2.143), сданное за год по услугам и средний срок (2.139), возвраты за год руководителю (2.156), история дел. Для диспетчера и администратора, руководителя
 // организации эксперта и самого эксперта.
 // Открывается по адресу #expert=<id> из подбора, списка специалистов и «Дел экспертов». Тексты — через textContent.
 import { api, el } from '/common.js';
@@ -56,6 +56,20 @@ function showNow(now) {
     ...(now.org_id ? [el('a', { class: 'link', href: `#org=${now.org_id}&case=${x.order_ref.slice(2)}&to=case`, 'data-action': 'now-open' }, 'Открыть в делах экспертов')] : []))));
 }
 
+// Возвраты за год (2.156) — только руководителю организации эксперта: сколько раз его организация возвращала отчёты, по
+// скольким делам, когда в последний раз и самые частые пункты замечаний (как в сводке за месяц).
+const timesRu = (n) => `${n} ${n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? 'раза' : 'раз'}`;
+function showReturns(r) {
+  $('expert-returns-box').hidden = !r;
+  if (!r) return;
+  $('expert-returns-note').textContent = r.n
+    ? `С ${dayRu(r.since)} Ваша организация возвращала отчёты ${timesRu(r.n)} по ${r.cases} ${r.cases % 10 === 1 && r.cases % 100 !== 11 ? 'делу' : 'делам'}, последний раз — ${dayRu(r.last_day)}${r.top_remarks.length ? ' Частые пункты замечаний:' : ''}`
+    : `С ${dayRu(r.since)} возвратов не было.`;
+  $('expert-returns').replaceChildren(...r.top_remarks.map((x) => el('li', { 'data-remark': '' },
+    el('div', { class: 'title', text: x.text }),
+    el('div', { class: 'muted', text: timesRu(x.n) }))));
+}
+
 export async function showExpertCard(id) {
   let c;
   try { c = await api('GET', `/api/specialists/${id}/card`); } catch (err) {
@@ -75,6 +89,7 @@ export async function showExpertCard(id) {
   ].flatMap(([k, v]) => [el('dt', { text: k }), el('dd', { text: v })]));
   showNow(c.now);
   showYear(c.year);
+  showReturns(c.returns_year);
   $('expert-permits').replaceChildren(...(s.permits.length ? s.permits.map((p) => el('li', { text: `${serviceName(p.module, p.service)}${p.valid_until ? ` · до ${dayRu(p.valid_until)}` : ''}` }))
     : [el('li', { class: 'muted', text: 'Допусков нет' })]));
   $('expert-dossier').replaceChildren(...(c.dossier.length ? c.dossier.map((d) => el('li', { 'data-kind': d.kind },
