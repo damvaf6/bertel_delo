@@ -366,6 +366,7 @@ async function loadDocs(initial = false) {
   const signRequired = !!documentsBody.signature_required;
   $('result-sign-note').classList.toggle('hidden', !signRequired);
   lastDocs = documentsBody;
+  orgReturnsNow = documentsBody.org_returns ?? []; // окно подписи файла (2.159) показывает пункты замечаний
   // «Подписать все» (2.15): несколько неподписанных файлов результата — одним подтверждением.
   const unsigned = mineResults && signRequired ? documents.filter((d) => d.kind === 'result' && d.own !== false && !d.signatures?.expert) : [];
   $('sign-all').classList.toggle('hidden', unsigned.length < 2);
@@ -492,9 +493,38 @@ function aiCheckText(c) {
   return `В ИИ-проверке этого файла стоит посмотреть пунктов: ${c.count} (${c.titles.join('; ')}${c.count > c.titles.length ? '; …' : ''}).`;
 }
 
+// Открытые возвраты, которые закроет подпись этого файла (2.159): возвращён сам файл или — если возвращённый файл удалён —
+// это новая версия, загруженная после возврата.
+function returnsForDoc(d) {
+  const alive = new Set((lastDocs?.documents ?? []).map((x) => x.id));
+  return orgReturnsNow.filter((r) => r.open && (r.document_id === d.id
+    || (!alive.has(r.document_id) && Date.parse(d.created_at) > Date.parse(r.at))));
+}
+
+// В окне подписи (2.159): пункты замечаний руководителя с отметками «исправлено» — отметить можно здесь же; неотмеченные —
+// подсказкой, подписать можно и с ними.
+function signReturnPoints(d) {
+  return returnsForDoc(d).filter((r) => r.items?.length).map((r) => {
+    const point = (p) => {
+      const id = `sig-${d.id}-${r.id}-${p.n}`;
+      const box = el('input', { type: 'checkbox', id, 'data-action': 'sig-point-fixed' });
+      box.checked = p.fixed;
+      box.addEventListener('change', () => markPoint(r, p, box));
+      return el('li', { class: p.fixed ? 'point fixed' : 'point', 'data-point': String(p.n) },
+        el('label', { for: id, class: 'row gap' }, box, el('span', { text: `${p.n}. ${p.text}` }),
+          el('span', { class: 'muted', text: p.fixed ? ' — исправлено' : ' — не отмечено' })));
+    };
+    const done = r.items.length - r.left;
+    return el('div', { class: r.left ? 'sig-points warn' : 'sig-points', 'data-sig': 'points', 'data-return': String(r.id) },
+      el('div', { 'data-role': 'sig-points-state', text: `Замечание руководителя от ${new Date(r.at).toLocaleDateString('ru-RU')}${r.document_id === d.id ? '' : ` к файлу «${r.filename}»`}: исправлено ${done} из ${r.items.length}` }),
+      el('ul', { class: 'points' }, ...r.items.map(point)),
+      ...(r.left ? [el('div', { class: 'muted', 'data-role': 'sig-points-hint', text: `Не отмечено: ${r.left}. Подписать можно и так — руководитель увидит, какие пункты не отмечены.` })] : []));
+  });
+}
+
 // Перед новой подписью: если в открытом возврате по этому файлу остались неотмеченные пункты — предупредить.
 function signConfirmText(d) {
-  const left = orgReturnsNow.filter((r) => r.open && r.document_id === d.id).reduce((n, r) => n + (r.left ?? 0), 0);
+  const left = returnsForDoc(d).reduce((n, r) => n + (r.left ?? 0), 0);
   const ai = aiCheckText(d.ai_check);
   return (left ? `Не отмечено исправленными пунктов замечания руководителя: ${left}. Руководитель это увидит.\n\n` : '')
     + (ai ? `${ai}\n\n` : '') + SIGN_CONFIRM(d.filename);
@@ -515,6 +545,7 @@ function signatureBlock(d, { canSign, signOrg }) {
   if (expert) lines.push(...signatureLines(expert));
   else if (canSign) {
     lines.push(el('div', { class: 'sig-state', text: 'Не подписан УКЭП — без подписи на проверку не сдать' }),
+      ...signReturnPoints(d),
       ...(d.ai_check ? [el('div', { class: 'sig-ai', 'data-sig': `ai-${d.ai_check.state}`, text: `${aiCheckText(d.ai_check)} ` },
         el('button', { class: 'link', 'data-action': 'to-ai-review', onclick: toAiReview }, 'К ИИ-проверке'))] : []),
       el('div', { class: 'row' },
@@ -565,7 +596,8 @@ async function signAll() {
   const docs = (lastDocs?.documents ?? []).filter((d) => d.kind === 'result' && d.own !== false && !d.signatures?.expert);
   if (!docs.length) return;
   const ai = docs.filter((d) => d.ai_check).map((d) => `${d.filename}: ${aiCheckText(d.ai_check)}`);
-  if (!confirm(`${ai.length ? `${ai.join('\n')}\n\n` : ''}${SIGN_CONFIRM(docs.map((d) => d.filename).join(', '))}\n\nФайлов: ${docs.length}.`)) return;
+  const left = [...new Set(docs.flatMap(returnsForDoc))].reduce((n, r) => n + (r.left ?? 0), 0);
+  if (!confirm(`${left ? `Не отмечено исправленными пунктов замечания руководителя: ${left}. Руководитель это увидит.\n\n` : ''}${ai.length ? `${ai.join('\n')}\n\n` : ''}${SIGN_CONFIRM(docs.map((d) => d.filename).join(', '))}\n\nФайлов: ${docs.length}.`)) return;
   say($('doc-msg'), 'Подписываем…', 'ok');
   try {
     for (const d of docs) await api('POST', `/api/documents/${d.id}/sign`, { confirm: true });

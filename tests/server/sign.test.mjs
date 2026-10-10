@@ -289,11 +289,12 @@ test('возврат эксперту (2.27): руководитель возв�
   let item = (await head.req('GET', `/api/orgs/${org.id}/signing`)).body.items.find((x) => x.documents.some((y) => y.id === d.id));
   assert.equal(item.returns.length, 1);
   assert.equal(item.returns[0].open, true);
-  // Эксперт удаляет старый файл и кладёт новый — замечание закрыто; подписывает новый.
+  // Эксперт удаляет старый файл и кладёт новый — замечание открыто до подписи новой версии (2.159); подписал — закрыто.
   assert.equal((await spec.req('DELETE', `/api/documents/${d.id}`)).status, 204);
   const d2 = (await result(o, 'Отчёт 7 (исправлен).pdf', 'вторая версия', spec)).body.document;
-  assert.equal((await docsOf(spec, o)).org_returns[0].open, false);
+  assert.equal((await docsOf(spec, o)).org_returns[0].open, true);
   assert.equal((await sign(d2, undefined, spec)).status, 201);
+  assert.equal((await docsOf(spec, o)).org_returns[0].open, false);
   // Второй возврат — уже нового файла; эксперт подписывает его заново, не меняя.
   assert.equal((await head.req('POST', `/api/org-documents/${d2.id}/return`, { comment: 'Нет подписи на титуле' })).status, 201);
   let rs = (await docsOf(spec, o)).org_returns;
@@ -384,6 +385,52 @@ function unzip(buf) {
   return out;
 }
 const docText = (docx) => unzip(docx).get('word/document.xml').toString('utf8').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+
+test('2.159: новая версия файла после возврата — отметки «исправлено» ставятся до её подписи; подпись с неотмеченными — можно', async () => {
+  const org = await makeOrg(S.sql, 'ООО «Новая версия»');
+  const head = await login(S, '+79990001594');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  const spec = await login(S, '+79990001595');
+  await makeSpecialist(S.sql, spec.user.id);
+  await addMember(S.sql, org.id, spec.user.id, 'member');
+  assert.equal((await head.req('PATCH', '/api/me', { full_name: 'Руководитель Версий' })).status, 200);
+  assert.equal((await spec.req('PATCH', '/api/me', { full_name: 'Эксперт Версий' })).status, 200);
+  assert.equal((await spec.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  const o = await inWork('Квартира: новая версия', spec);
+  const d = (await result(o, 'Отчёт 9.pdf', 'первая версия', spec)).body.document;
+  assert.equal((await sign(d, undefined, spec)).status, 201);
+  const r = await head.req('POST', `/api/org-documents/${d.id}/return`, { comment: '1. Торг\n2. Итог\n3. Титул' });
+  assert.equal(r.status, 201);
+  const rid = r.body.return.id;
+  const mark = (n, fixed = true) => spec.req('PUT', `/api/orders/${o.id}/org-returns/${rid}/items/${n}`, { fixed });
+  // Старый файл удалён, новая версия загружена, но не подписана — отмечать можно.
+  assert.equal((await spec.req('DELETE', `/api/documents/${d.id}`)).status, 204);
+  const d2 = (await result(o, 'Отчёт 9 (исправлен).pdf', 'вторая версия', spec)).body.document;
+  assert.equal((await mark(1)).status, 200);
+  assert.equal((await mark(2)).status, 200);
+  let ret = (await docsOf(spec, o)).org_returns[0];
+  assert.deepEqual([ret.open, ret.left, ret.items.map((x) => x.fixed)], [true, 1, [true, true, false]]);
+  // Новая версия видна руководителю с датой загрузки — по ней подписи организации видно, к какому возврату она.
+  let item = (await head.req('GET', `/api/orgs/${org.id}/signing`)).body.items.find((x) => x.documents.some((y) => y.id === d2.id));
+  assert.ok(Date.parse(item.documents.find((y) => y.id === d2.id).created_at) > Date.parse(item.returns[0].at));
+  // Подпись с неотмеченным пунктом — можно; возврат закрыт, отметки больше не меняются.
+  assert.equal((await sign(d2, undefined, spec)).status, 201);
+  ret = (await docsOf(spec, o)).org_returns[0];
+  assert.deepEqual([ret.open, ret.left], [false, 1]);
+  assert.equal((await mark(3)).body.error, 'return_closed');
+  item = (await head.req('GET', `/api/orgs/${org.id}/signing`)).body.items.find((x) => x.documents.some((y) => y.id === d2.id));
+  assert.deepEqual([item.returns[0].open, item.returns[0].left], [false, 1]);
+  // Старый файл оставлен, рядом загружен и подписан другой — возврат старого файла остаётся открытым до его подписи.
+  const o2 = await inWork('Квартира: старый оставлен', spec);
+  const a = (await result(o2, 'Отчёт 10.pdf', 'первая', spec)).body.document;
+  assert.equal((await sign(a, undefined, spec)).status, 201);
+  assert.equal((await head.req('POST', `/api/org-documents/${a.id}/return`, { comment: 'Торг' })).status, 201);
+  const b = (await result(o2, 'Приложение.pdf', 'приложение', spec)).body.document;
+  assert.equal((await sign(b, undefined, spec)).status, 201);
+  assert.equal((await docsOf(spec, o2)).org_returns[0].open, true);
+  assert.equal((await sign(a, undefined, spec)).status, 201);
+  assert.equal((await docsOf(spec, o2)).org_returns[0].open, false);
+});
 
 test('все способы подписи одним прогоном (2.69): эксперт и руководитель — в кабинете, готовым файлом, «Госключ»; заказчик проверяет каждую; протокол в архиве', async () => {
   const org = await makeOrg(S.sql, 'ООО «Все способы»');

@@ -47,13 +47,13 @@ export async function loadOrgSign(org) {
       const ready = it.documents.filter((d) => d.signatures.expert && !d.signatures.org);
       return el('li', { 'data-item': it.order_ref }, ...head(it),
         ...(waiting(it) && ready.length > 1 ? [el('button', { 'data-action': 'org-sign-all', onclick: () => signAll(ready) }, `Подписать все файлы дела (${ready.length})`)] : []),
-        el('ul', { class: 'list' }, ...it.documents.map((d) => docItem(d, it.returns ?? []))),
+        el('ul', { class: 'list' }, ...it.documents.map((d) => docItem(d, it))),
         ...returnsBlock(it.returns ?? []));
     }),
     ...(done.length ? [el('li', { class: 'group', text: `Подписано · ${done.length}` })] : []),
     ...done.map((it) => el('li', { class: 'signed', 'data-item': it.order_ref },
       el('details', {}, el('summary', { text: `${it.service} · ${it.order_ref} · подписано` }), ...head(it).slice(1),
-        el('ul', { class: 'list' }, ...it.documents.map((d) => docItem(d, []))), ...returnsBlock(it.returns ?? [])))));
+        el('ul', { class: 'list' }, ...it.documents.map((d) => docItem(d, null))), ...returnsBlock(it.returns ?? [])))));
 }
 
 // История возвратов эксперту (2.27): что и когда вернули, исправил ли эксперт (подписал заново); по пунктам (2.93) — что
@@ -73,9 +73,17 @@ function returnsBlock(list) {
 const pointsList = (items) => el('ul', { class: 'points' }, ...items.map((p) => el('li', { class: p.fixed ? 'point fixed' : 'point', 'data-point': String(p.n) },
   el('span', { text: `${p.n}. ${p.text}` }), el('span', { class: 'muted', text: p.fixed ? ' — исправлено' : ' — не отмечено' }))));
 
+// Последний возврат с пунктами, к которому относится файл (2.159): возвращён сам файл или — если возвращённый удалён — это
+// новая версия, загруженная после возврата.
+function returnOf(d, it) {
+  const alive = new Set(it.documents.map((x) => x.id));
+  return [...(it.returns ?? [])].reverse().find((x) => x.items?.length && (x.document_id === d.id
+    || (!alive.has(x.document_id) && Date.parse(d.created_at) > Date.parse(x.at))));
+}
+
 // До подписи от организации (2.93): по последнему возврату этого файла — что эксперт отметил исправленным, что осталось.
-function lastReturnState(d, returns) {
-  const r = [...returns].reverse().find((x) => x.document_id === d.id && x.items?.length);
+function lastReturnState(d, it) {
+  const r = returnOf(d, it);
   if (!r) return [];
   const done = r.items.length - r.left;
   const left = r.items.filter((p) => !p.fixed);
@@ -92,7 +100,7 @@ function renderMany(list) {
   const rows = list.map((it) => {
     const ready = it.documents.filter((d) => d.signatures.expert && !d.signatures.org);
     const left = ready.reduce((n, d) => {
-      const r = [...(it.returns ?? [])].reverse().find((x) => x.document_id === d.id && x.items?.length);
+      const r = returnOf(d, it);
       return n + (r ? r.left : 0);
     }, 0);
     const id = `org-many-${it.order_ref.replace(/[^0-9A-Z]/gi, '')}`;
@@ -147,14 +155,14 @@ async function signAll(docs) {
   } catch (err) { await refresh(); say($('org-sign-msg'), err.message); }
 }
 
-function docItem(d, returns) {
+function docItem(d, it) {
   const { expert, org } = d.signatures;
   const lines = [];
   if (expert) lines.push(...signatureLines(expert));
   else lines.push(el('div', { class: 'sig-state', text: 'Эксперт ещё не подписал — подпись организации после него' }));
   if (org) lines.push(...signatureLines(org));
   else if (expert) {
-    lines.push(...lastReturnState(d, returns), el('div', { class: 'row' },
+    lines.push(...(it ? lastReturnState(d, it) : []), el('div', { class: 'row' },
       el('button', { 'data-action': 'org-sign', onclick: () => sign(d) }, 'Подписать от организации'),
       ...uploadSignatureButton(d.filename, (file) => upload(d, file))),
     el('div', { class: 'muted', text: `${UPLOAD_HINT} Нужен сертификат организации.` }),
