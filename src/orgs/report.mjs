@@ -10,6 +10,8 @@
 // По услугам (2.135): сколько сдано по каждой услуге за месяц, из них позже срока, вознаграждение и у скольких экспертов; у
 // каждого эксперта — его сданные по услугам. Название услуги — из описания модуля. Средний срок по услуге (2.144) — дни от
 // принятия до сдачи, как в общей скорости 2.117 и в карточке эксперта 2.139.
+// От возврата до новой подписи (2.168): по возвратам руководителя за месяц — сколько дней (до десятых, по часам) в среднем
+// прошло до следующей подписи эксперта по тому же делу; ещё не подписанные заново — отдельным числом, в среднее не входят.
 // Месяц — по московскому времени. Выгрузка таблицей — CSV для Excel (точка с запятой, BOM, суммы с запятой).
 import { HttpError } from '../http/core.mjs';
 import { splitAmount } from '../money/money.mjs';
@@ -146,6 +148,27 @@ const dispReturnsQ = (sql, orgId, ids, { start, end }) => sql`
     and h.at >= ${start} and h.at < ${end} and h.at >= m.created_at
   group by o.executor_user_id`;
 
+// Возвраты руководителя за месяц и первая подпись эксперта по тому же делу после каждого (2.168): из журнала, потому что
+// строку подписи следующий возврат снимает.
+const resignQ = (sql, orgId, ids, { start, end }) => sql`
+  select r.executor_user_id as user_id, r.created_at as returned_at,
+         (select min(a.at) from audit_log a
+          where a.action = 'document.sign' and a.actor_id = r.executor_user_id and a.details->>'order_id' = r.order_id::text
+            and a.at > r.created_at) as signed_at
+  from org_returns r
+  where r.org_id = ${orgId} and r.executor_user_id = any(${ids}::uuid[]) and r.created_at >= ${start} and r.created_at < ${end}`;
+
+// { resign_days, resign_n, resign_wait }: среднее (до десятых) по подписанным заново и сколько ещё ждут новой подписи.
+function resign(rows) {
+  const signed = rows.filter((r) => r.signed_at);
+  const days = signed.map((r) => (Date.parse(r.signed_at) - Date.parse(r.returned_at)) / 86_400_000);
+  return {
+    resign_days: days.length ? Math.round((days.reduce((s, d) => s + d, 0) / days.length) * 10) / 10 : null,
+    resign_n: signed.length,
+    resign_wait: rows.length - signed.length,
+  };
+}
+
 export const prevMonth = (month) => {
   const y = Number(month.slice(0, 4));
   const m = Number(month.slice(5, 7));
@@ -213,7 +236,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
   const { start, end } = await monthBounds(sql, month);
   const since = (await sql`select to_char(created_at at time zone 'Europe/Moscow', 'YYYY-MM') as m from organizations
                            where id = ${orgId}`)[0]?.m ?? '';
-  const none = { accepted: [], done: [], headReturns: [], remarkItems: [], dispReturns: [], paid: [], active: [] };
+  const none = { accepted: [], done: [], headReturns: [], resign: [], remarkItems: [], dispReturns: [], paid: [], active: [] };
   const q = !ids.length ? none : {
     accepted: await sql`
       select f.specialist_id as user_id, count(distinct f.order_id)::int as n from order_offers f
@@ -223,6 +246,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
       group by f.specialist_id`,
     done: await orgMonthDone(sql, orgId, ids, { start, end }),
     headReturns: await headReturnsQ(sql, orgId, ids, { start, end }),
+    resign: await resignQ(sql, orgId, ids, { start, end }),
     remarkItems: await sql`
       select r.executor_user_id as user_id, i.text, r.created_at as at from org_returns r
       join org_return_items i on i.return_id = r.id
@@ -266,6 +290,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
       avg_days: avgDays(p),
       late_first: p.late_first,
       late_first_moved: p.late_first_moved,
+      ...resign(q.resign.filter((r) => r.user_id === e.user_id)),
       remarks: topRemarks(q.remarkItems.filter((i) => i.user_id === e.user_id), TOP_REMARKS_EXPERT).map(({ text, n }) => ({ text, n })),
       prev: cmp ? cmp.experts.get(e.user_id) : null,
       services: byService(done, registry).map(({ name, done: n }) => ({ name, n })),
@@ -282,7 +307,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
     // Месяцы до создания организации — заведомо пустые (2.90): в выборе только с месяца создания.
     months: reportMonths(today).filter((m) => m >= since || m === month),
     experts: rows,
-    total: { ...Object.fromEntries(keys.map((k) => [k, sum(k)])), avg_days: avgDays(all), prev: cmp ? cmp.total : null },
+    total: { ...Object.fromEntries(keys.map((k) => [k, sum(k)])), avg_days: avgDays(all), ...resign(q.resign), prev: cmp ? cmp.total : null },
     prev_month: cmp ? prevM : null,
     prev_month_name: cmp ? monthRu(prevM) : null,
     top_remarks: topRemarks(q.remarkItems, TOP_REMARKS),
@@ -360,10 +385,11 @@ function cell(v) {
 export function reportCsv(orgName, r) {
   const head = ['Эксперт', 'Принял дел', 'Сдано (готово)', 'Из них позже срока', ...(r.current ? ['Просрочено сейчас'] : []),
     'Возвращено руководителем', 'Возвращено на доработку', 'Вознаграждение за сданные, ₽', 'Выплачено, ₽',
-    'Дней в среднем от принятия до сдачи', 'Позже первоначального срока', 'Из них с переносом срока'];
+    'Дней в среднем от принятия до сдачи', 'Позже первоначального срока', 'Из них с переносом срока',
+    'Дней в среднем от возврата до новой подписи', 'Ждут новой подписи после возврата'];
   const line = (name, x) => [name, x.accepted, x.done, x.done_late, ...(r.current ? [x.overdue_now] : []),
     x.returned_head, x.returned_dispatcher, rubCell(x.fee_kop), rubCell(x.paid_kop),
-    daysCell(x.avg_days), x.late_first, x.late_first_moved];
+    daysCell(x.avg_days), x.late_first, x.late_first_moved, daysCell(x.resign_days), x.resign_wait];
   const day = todayMsk();
   const lines = [
     [`Сводка по экспертам — ${orgName}`],
