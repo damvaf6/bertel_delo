@@ -6573,6 +6573,22 @@ test('заметки эксперта к делу (2.115): заметка с н�
   const linked = await db(async (c) => (await c.query(`select count(*)::int as n from order_notes where order_id = $1
     and remind_deadline and remind_on = (select deadline - 1 from orders where id = $1)`, [id])).rows[0].n);
   expect(linked).toBe(2);
+  // 2.157: в «Моих сроках» напоминание «за день до срока» — с отметкой и сроком дела; «Сделано» прямо в строке убирает его.
+  const dl = await db(async (c) => (await c.query(`select to_char(deadline - 1, 'YYYY-MM-DD') as d from orders where id = $1`, [id])).rows[0].d);
+  await ep.goto('/kabinet#specialist&to=schedule');
+  const dayNotes = ep.locator(`#schedule-days li[data-day="${dl}"] li[data-schedule-item="note"]`);
+  await expect(dayNotes).toHaveCount(2);
+  const first = dayNotes.filter({ hasText: 'Проверить подпись руководителя' });
+  await expect(first).toContainText('за день до срока (срок ');
+  await first.scrollIntoViewIfNeeded();
+  await shot(ep, 'h12b-ekspert-moi-sroki-za-den-do-sroka');
+  await first.locator('[data-note-done]').click();
+  await expect(ep.locator('#schedule-msg')).toHaveText('Отмечено: сделано — «Проверить подпись руководителя»');
+  await expect(dayNotes).toHaveCount(1);
+  await expect(dayNotes).toContainText('Взять выписку из ЕГРН');
+  const doneAt = await db(async (c) => (await c.query(`select done_at is not null as d from order_notes where order_id = $1
+    and body = 'Проверить подпись руководителя'`, [id])).rows[0].d);
+  expect(doneAt).toBe(true);
   // Заказчик блока не видит.
   await cp.goto(`/kabinet#order=${id}`);
   await expect(cp.locator('#order-title')).toHaveText('Квартира: заметки');

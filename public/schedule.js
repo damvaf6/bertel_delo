@@ -1,6 +1,7 @@
 // «Мои сроки на две недели» в разделе «Специалист» (2.109): по дням — сроки своих дел, выезды помощника, до какого дня
 // действует ссылка на осмотр, на какой день эксперт просил перенести срок. Подряд идущие пустые дни — одной строкой
-// «свободно». Нажатие на строку открывает дело на нужном блоке. Свои напоминания по заметкам (2.120) — открывают заметки.
+// «свободно». Нажатие на строку открывает дело на нужном блоке. Свои напоминания по заметкам (2.120) — открывают заметки;
+// «Сделано» у напоминания отмечает заметку, не открывая дело (2.157).
 import { api, el, say } from '/common.js';
 import { dayRu } from '/order.js';
 
@@ -35,12 +36,26 @@ function item(i, index) {
   }
   if (i.kind === 'visit') return link(order('onsite'), `${i.time} · Выезд помощника: ${i.title}`, i.service);
   if (i.kind === 'note') {
-    return link(order('notes'), `Напоминание по заметке: ${i.title}`,
-      [i.note, i.late ? `напомнить было ${short(i.remind_on)}, не отмечено «Сделано»` : null].filter(Boolean).join(' · '));
+    // 2.157: «за день до срока» — со сроком дела; «Сделано» — прямо здесь, не открывая дело.
+    const li = link(order('notes'), `Напоминание по заметке: ${i.title}`,
+      [i.note, i.by_deadline ? `за день до срока (срок ${short(i.deadline)})` : null,
+        i.late ? `напомнить было ${short(i.remind_on)}, не отмечено «Сделано»` : null].filter(Boolean).join(' · '));
+    li.append(el('button', { type: 'button', class: 'ask', 'data-note-done': i.note_id, text: 'Сделано',
+      onclick: (e) => noteDone(e.currentTarget, i) }));
+    return li;
   }
   if (i.kind === 'my_visit') return link(`/osmotr?visit=${encodeURIComponent(i.visit_id)}`, `${i.time} · Мой выезд на объект`, i.service);
   return link(order('inspect'), `до ${i.time} · Ссылка на осмотр перестанет действовать: ${i.title}`,
     i.has_photos ? 'фото уже есть, владелец не нажал «Готово»' : 'фото ещё нет — напомните владельцу');
+}
+
+async function noteDone(btn, i) {
+  btn.disabled = true;
+  try {
+    await api('PATCH', `/api/orders/${encodeURIComponent(i.order_id)}/notes/${encodeURIComponent(i.note_id)}`, { done: true });
+  } catch (err) { btn.disabled = false; say($('schedule-msg'), err.message); return; }
+  await loadSchedule();
+  say($('schedule-msg'), `Отмечено: сделано — «${i.note}»`, 'ok');
 }
 
 let seq = 0;
