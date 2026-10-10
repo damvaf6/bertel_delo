@@ -421,3 +421,26 @@ test('«Ждут подписи организации» у руководите
   for (const c of [fresh, old, mid]) assert.equal((await head.req('POST', `/api/org-documents/${c.d.id}/sign`, { confirm: true })).status, 201);
   assert.equal((await head.req('GET', '/api/today')).body.orgs[0].to_sign.filter((x) => [fresh, old, mid].some((c) => c.ref === x.order_ref)).length, 0);
 });
+
+test('«Вернули эксперту» у руководителя (2.162): «Напомнить эксперту» прямо в «Сегодня», раз в сутки', async () => {
+  const o = await offered('Напомнить из Сегодня', 12);
+  assert.equal((await step(spec, o, 'in_work')).status, 200);
+  const d = (await result(o, 'Напомнить.pdf')).body.document;
+  assert.equal((await spec.req('POST', `/api/documents/${d.id}/sign`, { confirm: true })).status, 201);
+  assert.equal((await head.req('POST', `/api/org-documents/${d.id}/return`, { comment: 'Поправьте раздел 4' })).status, 201);
+  const ref = `№ ${o.id.slice(0, 8).toUpperCase()}`;
+  const row = async () => (await head.req('GET', '/api/today')).body.orgs[0].returned.find((x) => x.order_ref === ref);
+  let x = await row();
+  assert.deepEqual([x.remind.can_remind, x.remind.reminded_at], [true, null]);
+  assert.ok(!JSON.stringify(x).includes(o.id), 'полного номера дела в «Сегодня» нет');
+  assert.equal((await head.req('POST', `/api/orgs/${org.id}/cases/${o.id}/remind`)).status, 201);
+  x = await row();
+  assert.equal(x.remind.can_remind, false, 'снова — только через сутки');
+  assert.ok(Date.now() - Date.parse(x.remind.reminded_at) < 60_000);
+  assert.equal(x.remind.reminders, 1);
+  // Сутки прошли — снова можно.
+  await S.sql`update case_reminders set created_at = now() - interval '25 hours' where order_id = ${o.id}`;
+  assert.equal((await row()).remind.can_remind, true);
+  // Эксперт своей «кнопки» не видит: у него в «Сегодня» руководительской части нет.
+  assert.deepEqual((await spec.req('GET', '/api/today')).body.orgs, []);
+});

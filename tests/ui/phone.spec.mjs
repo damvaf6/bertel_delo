@@ -7303,3 +7303,52 @@ test('«Ждут подписи организации» в «Сегодня» �
   await expect(hp).toHaveURL(new RegExp(`#org=${orgId}&case=${B.slice(0, 8).toUpperCase()}&to=sign$`));
   for (const p of [cp, ep, hp]) await p.context().close();
 });
+
+// 2.162: руководителю в «Сегодня» у «Вернули эксперту» — «Напомнить эксперту» прямо там, раз в сутки.
+test('«Напомнить эксперту» в «Сегодня» руководителя (2.162): у возвращённого дела, раз в сутки', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), ep = await ctx(), hp = await ctx();
+  const customer = await signIn(cp, '+79990016201');
+  const expert = await signIn(ep, '+79990016202'), head = await signIn(hp, '+79990016203');
+  const { orgId, A } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Напоминание ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Возвратный Игорь' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id) values ($1, $2)", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Напомнить из Сегодня', $1, $2, 'in_work', (now() at time zone 'Europe/Moscow')::date + 9, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Возвратная ул., 3","area":"40"}') returning id`,
+    [customer.id, expert.id]);
+    return { orgId: org.id, A: o.id };
+  });
+  const up = await ep.request.post(`/api/orders/${A}/results`, { data: Buffer.from('%PDF-1.4 Отчёт'), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Отчёт.pdf') } });
+  expect(up.status()).toBe(201);
+  const doc = (await up.json()).document.id;
+  expect((await ep.request.post(`/api/documents/${doc}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  expect((await hp.request.post(`/api/org-documents/${doc}/return`, { data: { comment: 'Поправьте раздел 4' }, headers: H })).status()).toBe(201);
+  await hp.goto('/kabinet');
+  const item = hp.locator(`li[data-today-item="org-returned-${orgId}"]`);
+  await expect(item).toHaveCount(1);
+  await expect(item).toContainText(`№ ${A.slice(0, 8).toUpperCase()}`);
+  await expect(item).toContainText('эксперту ещё не напоминали');
+  const btn = item.locator('[data-action="returned-remind"]');
+  await expect(btn).toHaveText('Напомнить эксперту');
+  await item.scrollIntoViewIfNeeded();
+  await shot(hp, 'c16-rukovoditel-segodnya-napomnit-ekspertu');
+  await btn.click();
+  await expect(item.locator('[data-role="returned-remind-msg"]')).toHaveText('Эксперту отправлено напоминание');
+  await expect(btn).toHaveCount(0);
+  await shot(hp, 'c17-rukovoditel-segodnya-napomnil');
+  // После обновления — когда напоминали; снова — завтра, кнопки нет.
+  await hp.reload();
+  await expect(item).toContainText('снова — завтра');
+  await expect(item.locator('[data-action="returned-remind"]')).toHaveCount(0);
+  // Нажатие на строку — к делу в «Делах экспертов».
+  await item.locator('button.open').click();
+  await expect(hp).toHaveURL(new RegExp(`#org=${orgId}&case=${A.slice(0, 8).toUpperCase()}&to=case$`));
+  // Эксперт получил напоминание в ленте.
+  const feed = await (await ep.request.get('/api/notifications', { headers: H })).json();
+  expect(JSON.stringify(feed)).toContain('Руководитель организации напоминает о деле');
+  for (const p of [cp, ep, hp]) await p.context().close();
+});
