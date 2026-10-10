@@ -226,7 +226,13 @@ export function aiOps() {
           : [];
         const inspectionDays = [...new Set(shots.map((r) => r.day))];
         const inspectionUploadDays = [...new Set(shots.map((r) => r.got))];
-        const auto = runAutoChecks(names, files, { fields: order.fields ?? {}, dossier, basis, service: order.service, analogs, inspectionDays, inspectionUploadDays });
+        // 2.154: день подписи эксперта по каждому файлу (по Москве); не подписан — сверка с сегодняшним днём.
+        const signs = names.includes('report_dates') && files.length
+          ? await sql`select document_id, to_char(signed_at at time zone 'Europe/Moscow', 'YYYY-MM-DD') as day from document_signatures
+                      where order_id = ${order.id} and role = 'expert' and document_id = any(${files.map((f) => f.id)}::uuid[])`
+          : [];
+        const signedOn = Object.fromEntries(signs.map((r) => [r.document_id, r.day]));
+        const auto = runAutoChecks(names, files, { fields: order.fields ?? {}, dossier, basis, service: order.service, analogs, inspectionDays, inspectionUploadDays, signedOn, today: dossier.today });
         const found = Object.fromEntries(rules.map((r) => [r.id, (r.auto ?? []).flatMap((a) => auto[a] ?? [])]));
         // Модель недоступна или лимит исчерпан, но автоматические находки есть — показываем их, а не ошибку.
         let out;

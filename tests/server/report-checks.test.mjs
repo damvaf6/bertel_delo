@@ -188,6 +188,22 @@ test('дата осмотра (2.146): разные даты в отчёте, д
   assert.deepEqual(runAutoChecks(['report_dates'], [doc(none)], {}).report_dates, [], 'без фото в деле — «без осмотра» не находка');
 });
 
+// 2.154: дата составления не позже дня подписи эксперта; файл не подписан — не позже сегодняшнего дня.
+test('дата составления (2.154): не позже дня подписи эксперта, без подписи — не позже сегодня', () => {
+  const d = { ...doc(FULL), id: 'f1' };
+  assert.deepEqual(runAutoChecks(['report_dates'], [d], { signedOn: { f1: '2026-09-20' }, today: '2026-10-10' }).report_dates, [], 'подписан в день составления');
+  assert.deepEqual(runAutoChecks(['report_dates'], [d], { today: '2026-09-20' }).report_dates, [], 'не подписан, составлен сегодня');
+  const r = runAutoChecks(['report_dates'], [d], { signedOn: { f1: '2026-09-18' }, today: '2026-10-10' }).report_dates;
+  assert.deepEqual(r.map((f) => f.text), ['Дата составления отчёта (20.09.2026) позже дня, когда эксперт подписал файл (18.09.2026), — отчёт подписан раньше, чем составлен; исправьте дату и подпишите файл заново']);
+  assert.match(r[0].quote, /20\.09\.2026/, 'место — строка с датой составления');
+  assert.deepEqual(texts(runAutoChecks(['report_dates'], [d], { signedOn: { other: '2026-09-18' }, today: '2026-09-19' }), 'report_dates'),
+    ['Дата составления отчёта (20.09.2026) ещё не наступила (сегодня 19.09.2026) — подписать отчёт раньше даты составления нельзя; поставьте дату, когда будете подписывать'],
+    'подпись другого файла не в счёт');
+  const words = [...FULL.map((p) => p.replace('20.09.2026', '25 сентября 2026 г.'))];
+  assert.equal(runAutoChecks(['report_dates'], [{ ...doc(words), id: 'f1' }], { signedOn: { f1: '2026-09-21' } }).report_dates.length, 1, 'дата словами');
+  assert.deepEqual(runAutoChecks(['report_dates'], [d], {}).report_dates, [], 'без дня подписи и сегодняшнего дня — молчим');
+});
+
 test('отчёт как «241»: несколько машин — год сверяется по каждому VIN, округление на 4,7%, модельный год по VIN', () => {
   const title = [
     'ОТЧЕТ ОБ ОЦЕНКЕ № 200/2026',

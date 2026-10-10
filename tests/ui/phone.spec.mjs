@@ -6920,3 +6920,50 @@ test('срок близко, а файла результата нет (2.138): 
   await expect(ep.locator('[data-today="hot"]')).toHaveText('Горит срок · 1');
   await ectx.close();
 });
+
+test('дата составления отчёта (2.154): ИИ-проверка — отчёт составлен позже дня подписи эксперта', async ({ browser, baseURL }) => {
+  const dctx = await phoneContext(browser, baseURL);
+  const dp = await dctx.newPage();
+  const disp = await signIn(dp, '+79990009741');
+  const created = await (await dp.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Оценка квартиры — дата отчёта' }, headers: H })).json();
+  const id = created.order.id;
+  expect((await dp.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(9), fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 54' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await dp.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  const sctx = await phoneContext(browser, baseURL);
+  const sp = await sctx.newPage();
+  const spec = await signIn(sp, '+79990009742');
+  await db(async (c) => {
+    await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [spec.id]);
+    await c.query('update orders set price_kop = 1500000, paid_at = now() where id = $1', [id]);
+    await c.query("insert into payments (order_id, amount_kop, status, provider_id, created_by, paid_at) values ($1, 1500000, 'succeeded', $2, $3, now())", [id, `pay_ui_${id}`, disp.id]);
+  });
+  expect((await dp.request.post(`/api/orders/${id}/offer`, { data: { specialist_id: spec.id, from: 'matching' }, headers: H })).status()).toBe(200);
+  expect((await sp.request.post(`/api/orders/${id}/status`, { data: { from: 'awaiting_executor', to: 'in_work' }, headers: H })).status()).toBe(200);
+  // Отчёт датирован через три дня, а эксперт подписал его вчера.
+  const ru = (d) => d.split('-').reverse().join('.');
+  const up = await sp.request.post(`/api/orders/${id}/results`, {
+    data: makePdf([['Отчёт об оценке № 54/2026', `Дата составления отчёта: ${ru(inDays(3))}`], ['Итоговая стоимость 9 500 000 руб.']]),
+    headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('отчёт.pdf') },
+  });
+  expect(up.status()).toBe(201);
+  const docId = (await up.json()).document.id;
+  expect((await sp.request.patch('/api/me', { data: { full_name: 'Тестов Эксперт Даты' }, headers: H })).status()).toBe(200);
+  expect((await sp.request.post(`/api/documents/${docId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  await db((c) => c.query("update document_signatures set signed_at = now() - interval '1 day' where document_id = $1", [docId]));
+
+  await sp.goto(`/kabinet#order=${id}`);
+  await sp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  const req = sp.locator('#review-checks li').filter({ hasText: 'Реквизиты' });
+  await expect(req.locator('.ai-marks li')).toContainText([
+    `отчёт.pdf, стр. 1: Дата составления отчёта (${ru(inDays(3))}) позже дня, когда эксперт подписал файл (${ru(inDays(-1))}), — отчёт подписан раньше, чем составлен; исправьте дату и подпишите файл заново`,
+  ]);
+  await req.locator('.ai-marks').scrollIntoViewIfNeeded();
+  await shot(sp, 'b4d-ekspert-ii-data-otcheta-podpis');
+  await dctx.close();
+  await sctx.close();
+});
