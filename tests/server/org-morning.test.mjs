@@ -267,3 +267,58 @@ test('вернул эксперту (2.153): число дел, где возв�
   // Подписи ждать уже нечего — сводка ведёт к отбору «Вернул эксперту».
   assert.equal(orgDigestTo({ ...r, sign: 0 }), 'returned');
 });
+
+test('исправленный файл не подписан (2.172): число дел, где после возврата эксперт загрузил исправленный файл и не подписал 2 дня и больше; больше ничего нет — к отбору «Исправленный файл ждёт подписи эксперта»', async () => {
+  assert.equal(orgDigestText({ sign: 0, handover: 0, due: 0, overdue: 0, idle: 0, returned: 0, fresh: 1 }),
+    'На сегодня по организации: 1 дело — исправленный файл не подписан экспертом 2 дня и больше');
+  assert.equal(orgDigestText({ sign: 0, handover: 0, due: 0, overdue: 0, idle: 0, returned: 1, fresh: 3 }),
+    'На сегодня по организации: 1 дело после возврата эксперту не исправлено 2 дня и больше, 3 дела — исправленный файл не подписан экспертом 2 дня и больше');
+  assert.equal(orgDigestTo({ sign: 0, handover: 0, due: 0, overdue: 0, idle: 2, returned: 0, fresh: 1 }), 'fresh');
+  assert.equal(orgDigestTo({ sign: 0, handover: 0, due: 0, overdue: 0, idle: 0, returned: 1, fresh: 1 }), 'returned');
+
+  // Своя организация: у эксперта три возвращённых дела. По «Старому файлу» эксперт удалил возвращённый файл и 3 дня назад
+  // загрузил исправленный, не подписал; по «Новому файлу» — загрузил только что; по «Без файла» — удалил и ничего не загрузил
+  // (возврат 3 дня назад — это «не исправлено», не «не подписан»).
+  const h = await login(S, '+79990003821');
+  const e = await login(S, '+79990003822');
+  const o5 = await makeOrg(S.sql, 'ООО «Исправленная оценка»');
+  await addMember(S.sql, o5.id, h.user.id, 'head');
+  await makeSpecialist(S.sql, e.user.id);
+  await addMember(S.sql, o5.id, e.user.id, 'member');
+  await e.req('PATCH', '/api/me', { full_name: 'Эксперт Исправленный' });
+  assert.equal((await e.req('PATCH', '/api/specialist/me', { org_id: o5.id })).status, 200);
+  const upload = async (o, name) => (await e.req('POST', `/api/orders/${o.id}/results`, Buffer.from(`отчёт ${name}`), {
+    raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent(name) },
+  })).body.document;
+  const make = async (title) => {
+    const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
+    assert.equal((await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: addDays(today, 12), fields: FIELDS })).status, 200);
+    assert.equal((await owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
+    await ensurePaid(S.sql, o.id);
+    assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: e.user.id, from: 'matching' })).status, 200);
+    assert.equal((await e.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+    const d = await upload(o, 'Отчёт.pdf');
+    assert.equal((await e.req('POST', `/api/documents/${d.id}/sign`, { confirm: true })).status, 201);
+    assert.equal((await h.req('POST', `/api/org-documents/${d.id}/return`, { comment: 'Нет даты осмотра' })).status, 201);
+    assert.equal((await e.req('DELETE', `/api/documents/${d.id}`)).status, 204);
+    return o;
+  };
+  const old = await make('Старый файл');
+  const fresh = await make('Новый файл');
+  const none = await make('Без файла');
+  await S.sql`update org_returns set created_at = now() - interval '4 days' where order_id = any(${[old.id, fresh.id, none.id]}::uuid[])`;
+  const oldDoc = await upload(old, 'Исправленный.pdf');
+  await S.sql`update documents set created_at = now() - interval '3 days' where id = ${oldDoc.id}`;
+  await upload(fresh, 'Исправленный.pdf');
+
+  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(today, '08:30') }) >= 1);
+  const [r] = await S.sql`select sign, handover, due, overdue, idle, returned, fresh from org_morning_digests where user_id = ${h.user.id} and org_id = ${o5.id}`;
+  assert.deepEqual({ ...r }, { sign: 0, handover: 0, due: 0, overdue: 0, idle: 0, returned: 1, fresh: 1 });
+  const feed = (await h.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня по организации'));
+  assert.equal(feed.length, 1);
+  assert.equal(feed[0].title, 'На сегодня по организации: 1 дело после возврата эксперту не исправлено 2 дня и больше, 1 дело — исправленный файл не подписан экспертом 2 дня и больше');
+  assert.equal(feed[0].section, `org=${o5.id}&to=returned`);
+  assert.doesNotMatch(JSON.stringify(feed), /Старый файл|Новый файл|Исправленный\.pdf|Нет даты осмотра/);
+  // «Не исправлено» уже нечего — сводка ведёт к отбору «Исправленный файл ждёт подписи эксперта».
+  assert.equal(orgDigestTo({ ...r, returned: 0 }), 'fresh');
+});
