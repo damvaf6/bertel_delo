@@ -330,3 +330,24 @@ test('просроченное дело (2.166): в «Сегодня» — бе�
   const f = await inWork('Квартира: срок впереди', 5);
   assert.equal((await list(spec, f)).body.min_new, addDays(today, 6));
 });
+
+// 2.169: в «Сроке» — сколько раз уже переносили и на сколько дней всего; считаются только согласованные просьбы.
+test('сколько раз переносили срок (2.169): число, всего дней, первоначальный срок; отказ и отзыв не считаются', async () => {
+  const o = await inWork('Квартира: переносы считаем', 3);
+  const first = addDays(today, 3);
+  assert.equal((await list(spec, o)).body.moved, null, 'не переносили — строки нет');
+  let r = (await ask(spec, o, { new_deadline: addDays(first, 4), reason: 'Жду выписку', from: first })).body;
+  await decide(dispatcher, o, r.open.id, { approve: true });
+  r = (await ask(spec, o, { new_deadline: addDays(first, 9), reason: 'Ещё неделя' })).body;
+  await decide(dispatcher, o, r.open.id, { approve: false });
+  r = (await ask(spec, o, { new_deadline: addDays(first, 6), reason: 'Осмотр перенесён' })).body;
+  await decide(dispatcher, o, r.open.id, { approve: true });
+  r = (await ask(spec, o, { new_deadline: addDays(first, 8), reason: 'Попробую' })).body;
+  assert.equal((await spec.req('DELETE', `/api/orders/${o.id}/deadline-requests/${r.open.id}`)).status, 200);
+  const m = (await list(spec, o)).body.moved;
+  assert.deepEqual(m, { times: 2, days: 6, first });
+  // Видят те же стороны, что и историю; чужой — нет.
+  assert.deepEqual((await list(owner, o)).body.moved, m);
+  assert.deepEqual((await list(dispatcher, o)).body.moved, m);
+  assert.equal((await list(stranger, o)).status, 404);
+});

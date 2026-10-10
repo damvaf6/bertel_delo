@@ -29,6 +29,7 @@ function render(r) {
     : r.can_request ? `Сейчас срок — ${dayRu(r.deadline)} Не успеваете — попросите перенести: диспетчер согласится или откажет, заказчик увидит.`
       : `Сейчас срок — ${dayRu(r.deadline)}`;
   renderFresh(r.fresh_answer);
+  renderMoved(r.moved);
   renderPace(r.pace);
   $('deadline-open').classList.toggle('hidden', !o);
   if (o) $('deadline-open-text').textContent = `Просьба от ${whenRu(o.requested_at)}: перенести на ${dayRu(o.new_deadline)}. Причина: ${o.reason}`;
@@ -77,6 +78,18 @@ function renderFresh(a) {
 
 const days = (n) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? 'день' : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? 'дня' : 'дней'}`;
 const daysRu = (x) => (Number.isInteger(x) ? days(x) : `${String(x).replace('.', ',')} дня`);
+
+const timesRu = (n) => `${n} ${n % 10 >= 2 && n % 10 <= 4 && ![12, 13, 14].includes(n % 100) ? 'раза' : 'раз'}`;
+
+// Сколько раз уже переносили срок (2.169): одной строкой, чтобы не считать по истории — и первоначальный срок.
+function renderMoved(m) {
+  const box = $('deadline-moved');
+  box.classList.toggle('hidden', !m);
+  if (!m) return;
+  box.textContent = `Срок переносили ${m.times === 1 ? 'один раз' : timesRu(m.times)} — всего на ${days(m.days)}. Первоначальный срок — ${dayRu(m.first)}`;
+  box.dataset.times = String(m.times);
+  box.dataset.days = String(m.days);
+}
 
 // Свой темп (2.145): сколько дней осталось и сколько у исполнителя обычно занимает такая услуга; обычно нужно больше, чем
 // осталось, — мягкое предупреждение. Сданных дел этой услуги мало — только «осталось».

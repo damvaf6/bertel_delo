@@ -127,11 +127,19 @@ async function view(sql, actor, order, registry) {
     select id, old_deadline, new_deadline, reason, requested_at, outcome, decided_at, answer from deadline_requests where order_id = ${order.id} order by id desc`;
   const requests = rows.map((r) => ({ ...r, id: String(r.id) }));
   const open = requests.find((r) => !r.outcome) ?? null;
+  // Сколько раз уже переносили (2.169): только согласованные просьбы — число, всего дней и первоначальный срок.
+  const ok = requests.filter((r) => r.outcome === 'approved');
+  const moved = ok.length ? {
+    times: ok.length,
+    days: ok.reduce((n, r) => n + Math.round((Date.parse(r.new_deadline) - Date.parse(r.old_deadline)) / 86_400_000), 0),
+    first: ok.at(-1).old_deadline,
+  } : null;
   const canRequest = sides.includes('executor') && order.status === 'in_work' && !!order.deadline && !open;
   return {
     deadline: order.deadline,
     fresh_answer: fresh,
     requests,
+    moved,
     open,
     can_request: canRequest,
     // Самый ранний новый срок (2.166): день после нынешнего, у просроченного дела — не раньше сегодняшнего.
