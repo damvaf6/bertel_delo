@@ -31,6 +31,8 @@ const HOT_DAYS = 2;
 const LIMIT = 50;
 // Заказчик ждёт ответа в переписке дольше суток (2.132).
 const REPLY_HOURS = 24;
+// Файл ждёт подписи организации столько дней и дольше (2.152) — эксперту строкой «Руководитель ещё не подписал».
+const SIGN_LONG_DAYS = 2;
 
 async function expertPart(sql, actor, registry, today) {
   const sp = await sql.one`select user_id from specialists where user_id = ${actor.id}`;
@@ -97,7 +99,8 @@ async function expertPart(sql, actor, registry, today) {
   if (signOrg) {
     for (const o of rows.filter((x) => x.status === 'in_work')) {
       const w = await signWait(sql, o);
-      if (w) signWaits.push(item(o, { org: signOrg.name, ...w }));
+      // Ждёт 2 дня и дольше (2.152) — отдельной строкой «Руководитель ещё не подписал» с «Напомнить руководителю».
+      if (w) signWaits.push(item(o, { org: signOrg.name, ...w, long: Date.now() - new Date(w.since).getTime() >= SIGN_LONG_DAYS * 86400_000 }));
     }
     signWaits.sort((a, b) => new Date(a.since) - new Date(b.since));
   }
