@@ -376,7 +376,7 @@ async function loadDocs(initial = false) {
     // Фото дистанционного осмотра не удаляются никем: это свидетельство осмотра со временем и местом (2.3).
     const removable = d.kind === 'inspection' ? false
       : d.kind === 'result' ? mineResults : canChange && !(d.kind === 'basis' && order.status !== 'new');
-    return el('li', { class: 'doc' },
+    return el('li', { class: 'doc', 'data-doc': String(d.id) },
       el('div', {},
         el('div', { class: 'name', text: d.filename }),
         el('div', { class: 'muted', text: [DOC_KIND_RU[d.kind], formatSize(d.size_bytes)].filter(Boolean).join(' · ') }),
@@ -452,8 +452,30 @@ function renderOrgReturns(list) {
   const item = (r) => el('li', { class: r.open ? 'return open' : 'return', 'data-return': String(r.id) },
     el('div', { class: 'title', text: `${r.filename} · ${r.open ? 'исправить' : 'исправлено'}` }),
     el('div', { class: 'muted', text: [r.by, r.org, new Date(r.at).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })].filter(Boolean).join(' · ') }),
+    ...returnFileState(r),
     ...(r.items?.length ? returnPoints(r) : [el('div', { class: 'comment', text: r.comment })]));
   $('org-returns').replaceChildren(...[...open].reverse().map(item), ...list.filter((r) => !r.open).reverse().map(item));
+}
+
+// Возвращённый файл удалён (2.163): виден ли уже исправленный — загружен после возврата и ждёт подписи эксперта — или его ещё
+// нет. «К подписи» ведёт к этому файлу в «Документах».
+function returnFileState(r) {
+  const docs = lastDocs?.documents ?? [];
+  if (!r.open || docs.some((x) => x.id === r.document_id)) return [];
+  const fresh = docs.filter((x) => x.kind === 'result' && x.own !== false && !x.signatures?.expert
+    && Date.parse(x.created_at) > Date.parse(r.at));
+  if (!fresh.length) return [el('div', { class: 'return-file warn', 'data-role': 'return-file', text: 'Возвращённый файл удалён — загрузите исправленный файл и подпишите его.' })];
+  const d = fresh.at(-1);
+  return [el('div', { class: 'return-file ok', 'data-role': 'return-file' },
+    el('span', { text: `Исправленный файл «${d.filename}» загружен ${new Date(d.created_at).toLocaleDateString('ru-RU')} — ждёт Вашей подписи${fresh.length > 1 ? ` (новых файлов: ${fresh.length})` : ''}. ` }),
+    el('button', { class: 'link', 'data-action': 'to-return-file', onclick: () => toDoc(d.id) }, 'К подписи'))];
+}
+
+function toDoc(id) {
+  const li = document.querySelector(`#docs li.doc[data-doc="${id}"]`);
+  if (!li) return;
+  reveal('docs-box');
+  li.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 function returnPoints(r) {

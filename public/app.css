@@ -216,6 +216,9 @@ a.btn { text-decoration: none; margin-top: 8px; }
 /* Замечания руководителя эксперту (2.27) */
 .return .comment { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 4px; }
 li.return.open { border-left: 3px solid var(--danger); padding-left: 8px; }
+.return .return-file { margin-top: 4px; }
+.return .return-file.ok { color: var(--ok); }
+.return .return-file.warn { color: #7a4b00; }
 details.returns { margin-top: 8px; }
 /* Пункты замечания руководителя (2.93). */
 .ready-box { margin: 8px 0 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; }
