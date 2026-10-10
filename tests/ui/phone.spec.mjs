@@ -6967,3 +6967,47 @@ test('дата составления отчёта (2.154): ИИ-проверк�
   await dctx.close();
   await sctx.close();
 });
+
+// 2.155: ответ диспетчера на просьбу о переносе срока — эксперту в «Сегодня» и в блоке «Срок» до первого просмотра.
+test('эксперт (2.155): отказ диспетчера в переносе срока заметен в «Сегодня» и в «Сроке», потом — только в истории', async ({ page, browser, baseURL }) => {
+  const dp = await (await phoneContext(browser, baseURL)).newPage();
+  const customer = await signIn(dp, '+79990015501');
+  const disp = await signIn(dp, '+79990015503');
+  const expert = await signIn(page, '+79990015502');
+  const id = await db(async (c) => {
+    await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    await c.query('insert into specialists (user_id) values ($1) on conflict do nothing', [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Квартира: ответ на перенос', $1, $2, 'in_work', current_date + 3, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Ответная ул., 5","area":"40"}') returning id`, [customer.id, expert.id]);
+    return o.id;
+  });
+  const ru = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+  const want = inDays(9);
+  expect((await page.request.post(`/api/orders/${id}/deadline-requests`, { data: { new_deadline: want, reason: 'Жду выписку ЕГРН' }, headers: H })).status()).toBe(201);
+  const reqs = await (await dp.request.get(`/api/orders/${id}/deadline-requests`)).json();
+  expect((await dp.request.post(`/api/orders/${id}/deadline-requests/${reqs.open.id}/decide`,
+    { data: { approve: false, answer: 'Банк не продлит срок, сдайте без выписки' }, headers: H })).status()).toBe(200);
+
+  await page.goto('/kabinet');
+  const row = page.locator('#today-box li[data-today-item="extend-answer"]');
+  await expect(page.locator('#today-box li[data-today="extend-answer"]')).toHaveText('Ответ на просьбу о переносе срока · 1');
+  await expect(row).toContainText(`Диспетчер отказал в переносе на ${ru(want)} — срок прежний, ${ru(inDays(3))}`);
+  await expect(row).toContainText('пояснение: Банк не продлит срок, сдайте без выписки');
+  await shot(page, 'b4e-ekspert-otvet-na-perenos-segodnya');
+  await row.locator('button').click();
+  await expect(page).toHaveURL(new RegExp(`#order=${id}&to=deadline$`));
+  const fresh = page.locator('#deadline-fresh');
+  await expect(fresh).toBeVisible();
+  await expect(fresh).toHaveAttribute('data-outcome', 'declined');
+  await expect(fresh).toContainText(`в переносе на ${ru(want)}`);
+  await expect(fresh).toContainText('Пояснение: Банк не продлит срок, сдайте без выписки');
+  await expect(fresh).toBeInViewport();
+  await shot(page, 'b4f-ekspert-otvet-na-perenos-srok');
+  // Увидел — в «Сегодня» строки больше нет, в деле ответ остаётся в истории.
+  await page.goto('/kabinet');
+  await expect(page.locator('#today-box li[data-today="extend-answer"]')).toHaveCount(0);
+  await page.goto(`/kabinet#order=${id}&to=deadline`);
+  await expect(page.locator('#deadline-history li')).toContainText('отказано');
+  await expect(page.locator('#deadline-fresh')).toBeHidden();
+});

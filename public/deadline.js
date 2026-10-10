@@ -12,6 +12,7 @@ let ctx = null; // { order, reload, open }
 export async function loadDeadline(current, reload) {
   const box = $('deadline-box');
   say($('deadline-msg'), '');
+  $('deadline-fresh').classList.add('hidden');
   if (!current.order.module || !current.order.deadline) { box.classList.add('hidden'); setNext({ deadline: null }); return; }
   ctx = { order: current.order, reload };
   render(await api('GET', `/api/orders/${current.order.id}/deadline-requests`));
@@ -27,6 +28,7 @@ function render(r) {
   $('deadline-lead').textContent = o ? `Сейчас срок — ${dayRu(r.deadline)} Исполнитель просит перенести его; пока нет ответа, действует прежний.`
     : r.can_request ? `Сейчас срок — ${dayRu(r.deadline)} Не успеваете — попросите перенести: диспетчер согласится или откажет, заказчик увидит.`
       : `Сейчас срок — ${dayRu(r.deadline)}`;
+  renderFresh(r.fresh_answer);
   renderPace(r.pace);
   $('deadline-open').classList.toggle('hidden', !o);
   if (o) $('deadline-open-text').textContent = `Просьба от ${whenRu(o.requested_at)}: перенести на ${dayRu(o.new_deadline)}. Причина: ${o.reason}`;
@@ -57,6 +59,20 @@ function render(r) {
         el('div', { class: 'name' }, el('span', { text: `${dayRu(x.old_deadline)} → ${dayRu(x.new_deadline)} ` }), el('span', { class: `badge ${kind}`, text: word })),
         el('div', { class: 'muted', text: [`причина: ${x.reason}`, x.answer ? `ответ: ${x.answer}` : null, x.decided_at ? whenRu(x.decided_at) : null].filter(Boolean).join(' · ') })));
   }));
+}
+
+// Ответ диспетчера, который исполнитель видит впервые (2.155): согласился — новый срок, отказал — срок прежний и почему.
+// Показывается до следующего открытия дела; дальше — только в истории ниже.
+function renderFresh(a) {
+  const box = $('deadline-fresh');
+  // Нет нового ответа — оставляем показанный в этом открытии дела (после своих действий в блоке не прячем).
+  if (!a) return;
+  const why = a.answer ? ` Пояснение: ${a.answer}` : '';
+  box.textContent = a.outcome === 'approved'
+    ? `Диспетчер согласился ${whenRu(a.decided_at)}: срок перенесён с ${dayRu(a.old_deadline)} на ${dayRu(a.new_deadline)}.${why}`
+    : `Диспетчер отказал ${whenRu(a.decided_at)} в переносе на ${dayRu(a.new_deadline)} — срок прежний, ${dayRu(a.old_deadline)}.${why || ' Пояснения нет.'}`;
+  box.className = a.outcome === 'approved' ? 'msg ok' : 'msg warn';
+  box.dataset.outcome = a.outcome;
 }
 
 const days = (n) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? 'день' : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? 'дня' : 'дней'}`;

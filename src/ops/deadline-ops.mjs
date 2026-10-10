@@ -103,8 +103,23 @@ async function paceOf(sql, order, registry) {
   return { ...out, usual_days: same.avg_days, spent_days: spent, need_days: need, late: need > Math.max(0, daysLeft) };
 }
 
+// Ответ диспетчера, который исполнитель ещё не видел (2.155): согласие или отказ по последней просьбе — заметно в «Сроке»
+// (один раз: открыл блок — увидел) и строкой в «Сегодня» (answeredExtends). Видит нынешний исполнитель дела — и тогда, когда
+// просьбу подавал прежний эксперт, а новый её оставил (2.114).
+async function freshAnswer(sql, actor, order) {
+  if (order.executor_user_id !== actor.id) return null;
+  const r = await sql.one`
+    update deadline_requests set seen_at = now()
+    where id = (select id from deadline_requests where order_id = ${order.id} and outcome is not null order by decided_at desc, id desc limit 1)
+      and outcome in ('approved', 'declined') and seen_at is null
+    returning id, outcome, to_char(old_deadline, 'YYYY-MM-DD') as old_deadline, to_char(new_deadline, 'YYYY-MM-DD') as new_deadline,
+              answer, decided_at`;
+  return r ? { ...r, id: String(r.id) } : null;
+}
+
 async function view(sql, actor, order, registry) {
   const sides = orderSides(actor, order);
+  const fresh = await freshAnswer(sql, actor, order);
   const rows = await sql`
     select id, old_deadline, new_deadline, reason, requested_at, outcome, decided_at, answer from deadline_requests where order_id = ${order.id} order by id desc`;
   const requests = rows.map((r) => ({ ...r, id: String(r.id) }));
@@ -112,6 +127,7 @@ async function view(sql, actor, order, registry) {
   const canRequest = sides.includes('executor') && order.status === 'in_work' && !!order.deadline && !open;
   return {
     deadline: order.deadline,
+    fresh_answer: fresh,
     requests,
     open,
     can_request: canRequest,
@@ -129,6 +145,19 @@ export async function openExtends(sql, ids) {
   const rows = await sql`select order_id, to_char(new_deadline, 'YYYY-MM-DD') as new_deadline, requested_at from deadline_requests
                          where outcome is null and order_id = any(${ids}::uuid[])`;
   return new Map(rows.map((r) => [r.order_id, { new_deadline: r.new_deadline, requested_at: r.requested_at }]));
+}
+
+// Ответы диспетчера, которые исполнитель ещё не видел (2.155) — эксперту в «Сегодня»: согласился (новый срок) или отказал и
+// почему. Последний ответ по каждому делу; строка уходит, когда эксперт откроет дело (блок «Срок»).
+export async function answeredExtends(sql, ids) {
+  if (!ids.length) return new Map();
+  const rows = await sql`
+    select distinct on (order_id) order_id, outcome, to_char(old_deadline, 'YYYY-MM-DD') as old_deadline,
+           to_char(new_deadline, 'YYYY-MM-DD') as new_deadline, answer, decided_at, seen_at
+    from deadline_requests where order_id = any(${ids}::uuid[]) and outcome is not null
+    order by order_id, decided_at desc, id desc`;
+  return new Map(rows.filter((r) => ['approved', 'declined'].includes(r.outcome) && !r.seen_at)
+    .map(({ seen_at: _, ...r }) => [r.order_id, r]));
 }
 
 export function deadlineOps() {

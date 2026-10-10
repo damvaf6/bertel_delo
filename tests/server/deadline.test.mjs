@@ -259,3 +259,45 @@ test('свой темп (2.145): дней до срока, обычный сро
   await S.sql`update orders set status = 'review' where id = ${o.id}`;
   assert.equal((await list(me, o)).body.pace, null);
 });
+
+test('ответ диспетчера заметно (2.155): в «Сроке» и в «Сегодня» до первого просмотра; только нынешнему исполнителю', async () => {
+  const o = await inWork('Квартира: ответ на перенос', 4);
+  const old = addDays(today, 4);
+  const want = addDays(today, 11);
+  const expert = async () => (await spec.req('GET', '/api/today')).body.expert.extend_answer.find((x) => x.id === o.id);
+  let r = (await ask(spec, o, { new_deadline: want, reason: 'Жду выписку', from: old })).body;
+  assert.equal(r.fresh_answer, null, 'ответа ещё нет');
+  assert.equal(await expert(), undefined);
+  await decide(dispatcher, o, r.open.id, { approve: true, answer: 'Согласовано с заказчиком' });
+  // Заказчик и диспетчер, открывая «Срок», ответ «увиденным» не делают.
+  assert.equal((await list(owner, o)).body.fresh_answer, null);
+  assert.equal((await list(dispatcher, o)).body.fresh_answer, null);
+  const line = await expert();
+  assert.equal(line.outcome, 'approved');
+  assert.equal(line.old_deadline, old);
+  assert.equal(line.new_deadline, want);
+  assert.equal(line.deadline, want, 'в строке уже новый срок');
+  assert.equal(line.answer, 'Согласовано с заказчиком');
+  assert.equal((await owner.req('GET', '/api/today')).body.expert, null, 'заказчику — не эксперту — строки нет');
+  // Эксперт открыл дело — ответ показан один раз, из «Сегодня» строка ушла.
+  const first = (await list(spec, o)).body.fresh_answer;
+  assert.equal(first.outcome, 'approved');
+  assert.equal(first.new_deadline, want);
+  assert.equal(first.answer, 'Согласовано с заказчиком');
+  assert.equal((await list(spec, o)).body.fresh_answer, null);
+  assert.equal(await expert(), undefined);
+  // Отказ без пояснения — тоже заметно; отзыв своей просьбы — не ответ.
+  r = (await ask(spec, o, { new_deadline: addDays(want, 3), reason: 'Ещё неделя' })).body;
+  await decide(dispatcher, o, r.open.id, { approve: false });
+  const no = await expert();
+  assert.equal(no.outcome, 'declined');
+  assert.equal(no.answer, null);
+  assert.equal(no.deadline, want);
+  r = (await ask(spec, o, { new_deadline: addDays(want, 2), reason: 'Попробую ещё' })).body;
+  assert.equal((await spec.req('DELETE', `/api/orders/${o.id}/deadline-requests/${r.open.id}`)).status, 200);
+  assert.equal(await expert(), undefined, 'после отзыва старый отказ уже не новость');
+  assert.equal((await list(spec, o)).body.fresh_answer, null);
+  // Чужой специалист «Срока» не видит и ответа не получает.
+  assert.equal((await list(other, o)).status, 404);
+  assert.equal(((await other.req('GET', '/api/today')).body.expert?.extend_answer ?? []).some((x) => x.id === o.id), false);
+});
