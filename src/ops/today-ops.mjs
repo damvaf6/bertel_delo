@@ -290,7 +290,10 @@ export async function orgPart(sql, org, registry, today, { actorId = null } = {}
     dossier,
     idle: [...moves.values()].filter((m) => m.idle).length,
     // Сколько возвращённых эксперту дел не исправлено 2 дня и больше (2.153) — только число, для утренней сводки.
-    returned_long: returned.filter((r) => Date.now() - new Date(r.at).getTime() >= RETURN_LONG_DAYS * 86400_000).length,
+    // Дела, где исправленный файл уже загружен (2.172), — не «не исправлено», а отдельным числом: файл ждёт подписи эксперта
+    // 2 дня и больше (как красная строка в отборе «Исправленный файл ждёт подписи эксперта», 2.171).
+    returned_long: returned.filter((r) => !r.fresh_file && Date.now() - new Date(r.at).getTime() >= RETURN_LONG_DAYS * 86400_000).length,
+    fresh_long: returned.filter((r) => r.fresh_file && Date.now() - new Date(r.fresh_file.at).getTime() >= SIGN_LONG_DAYS * 86400_000).length,
     id: org.id,
     name: org.name,
     hot: cases.filter((o) => ['in_work', 'review'].includes(o.status) && o.deadline && o.deadline <= soon)

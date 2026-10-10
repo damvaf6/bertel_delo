@@ -7132,7 +7132,7 @@ test('эксперт (2.155): отказ диспетчера в перенос�
     await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
     await c.query('insert into specialists (user_id) values ($1) on conflict do nothing', [expert.id]);
     const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
-      values ('expertise', 'realty', 'Квартира: ответ на перенос', $1, $2, 'in_work', current_date + 3, 1500000, now(),
+      values ('expertise', 'realty', 'Квартира: ответ на перенос', $1, $2, 'in_work', (now() at time zone 'Europe/Moscow')::date + 3, 1500000, now(),
               '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Ответная ул., 5","area":"40"}') returning id`, [customer.id, expert.id]);
     return o.id;
   });
@@ -7167,7 +7167,7 @@ test('эксперт (2.155): отказ диспетчера в перенос�
   // 2.169: отказ переносом не считается — строки «переносили» нет; после согласованного переноса — число и дни.
   await expect(page.locator('#deadline-moved')).toBeHidden();
   await db((c) => c.query(`insert into deadline_requests (order_id, requested_by, old_deadline, new_deadline, reason, requested_at, outcome, decided_by, decided_at, seen_at)
-    values ($1, $2, current_date - 2, current_date + 3, 'Осмотр перенесён', now() - interval '6 days', 'approved', $3, now() - interval '5 days', now())`, [id, expert.id, disp.id]));
+    values ($1, $2, (now() at time zone 'Europe/Moscow')::date - 2, (now() at time zone 'Europe/Moscow')::date + 3, 'Осмотр перенесён', now() - interval '6 days', 'approved', $3, now() - interval '5 days', now())`, [id, expert.id, disp.id]));
   await page.reload();
   const moved = page.locator('#deadline-moved');
   await expect(moved).toHaveText(`Срок переносили один раз — всего на 5 дней. Первоначальный срок — ${new Date(`${inDays(-2)}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })}`);
@@ -7576,7 +7576,7 @@ test('прогон 2.170: эксперт и руководитель по пач
 
 // Отбор «Исправленный файл ждёт подписи эксперта» (2.171): после возврата эксперт загрузил новый файл, но не подписал —
 // дольше всех ждущие первыми, 2 дня и дольше — строка красная; возврат без нового файла в отбор не попадает.
-test('дела экспертов (2.171): руководитель отбирает дела, где исправленный файл ждёт подписи эксперта', async ({ browser, baseURL }) => {
+test('дела экспертов (2.171, 2.172): руководитель отбирает дела, где исправленный файл ждёт подписи эксперта; утренняя сводка ведёт к отбору', async ({ browser, baseURL }) => {
   const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
   const cp = await ctx(), ep = await ctx(), hp = await ctx();
   const customer = await signIn(cp, '+79990017101');
@@ -7632,6 +7632,27 @@ test('дела экспертов (2.171): руководитель отбира
   await expect(hp.locator(`#org-cases li[data-case="№ ${ref(C)}"]`)).toHaveCount(0);
   await hp.locator('#org-cases-filter').scrollIntoViewIfNeeded();
   await shot(hp, 'c23-rukovoditel-otbor-ispravlennyj-fajl');
+
+  // Утренняя сводка (2.172): «исправленный файл не подписан экспертом 2 дня и больше» — только число; больше в сводке ничего
+  // нет — нажатие ведёт к отбору «Исправленный файл ждёт подписи эксперта». Сводка рассылается сервером после 8:00 по Москве;
+  // здесь — запись напрямую, с цифрами дня.
+  await db(async (c) => {
+    const { rows: [n] } = await c.query("insert into notifications (user_id, type, event, org_id) values ($1, 'org_morning', 'org_morning_today', $2) returning id", [head.id, orgId]);
+    await c.query(`insert into org_morning_digests (user_id, org_id, day, fresh, notification_id)
+      values ($1, $2, (now() at time zone 'Europe/Moscow')::date, 1, $3)`, [head.id, orgId, n.id]);
+  });
+  await hp.goto('/kabinet#notifications');
+  const morning = hp.locator('#notifications li').first();
+  await expect(morning).toContainText('На сегодня по организации: 1 дело — исправленный файл не подписан экспертом 2 дня и больше');
+  await expect(morning).not.toContainText('Исправлено:');
+  await shot(hp, 'c24-rukovoditel-svodka-ispravlennyj-fajl');
+  await morning.getByRole('button').click();
+  await expect(hp).toHaveURL(new RegExp(`#org=${orgId}&to=fresh$`));
+  await expect(hp.locator('[data-filter="fresh"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0)).toHaveAttribute('data-case', `№ ${ref(B)}`);
+  await expect(hp.locator('#org-cases-list-title')).toBeInViewport();
+  await shot(hp, 'c25-rukovoditel-svodka-k-otboru');
 
   // Эксперт подписал исправленный файл — дело уходит из отбора, у руководителя — к его подписи.
   await expect((await ep.request.post(`/api/documents/${b2}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
