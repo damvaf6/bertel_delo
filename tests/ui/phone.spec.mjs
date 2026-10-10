@@ -6820,6 +6820,21 @@ test('утренняя сводка «На сегодня» (2.119): уведо�
   await expect(today.locator('[data-today-item="no-result"]').first()).toContainText('Квартира: сдать сегодня');
   await expect(today.locator('[data-today="no-result"]')).toBeInViewport();
   await shot(ep, 'h13-ekspert-svodka-segodnya');
+
+  // 2.164: «руководитель не подписал 2 дня и больше» — числом, без названий; нажатие тоже ведёт к «Сегодня».
+  await db(async (c) => {
+    const { rows: [n] } = await c.query("insert into notifications (user_id, type, event) values ($1, 'morning', 'morning_today') returning id", [expert.id]);
+    await c.query(`insert into morning_digests (user_id, day, due, overdue, visits, links, lead_unsigned, notification_id)
+      values ($1, (now() at time zone 'Europe/Moscow')::date - 2, 0, 0, 0, 0, 2, $2)`, [expert.id, n.id]);
+  });
+  await ep.goto('/kabinet#notifications');
+  const n3 = ep.locator('#notifications li').first();
+  await expect(n3).toContainText('На сегодня: руководитель не подписал 2 дня и больше: 2');
+  await expect(n3).not.toContainText('Квартира');
+  await shot(ep, 'h13b-ekspert-svodka-rukovoditel-ne-podpisal');
+  await n3.getByRole('button').click();
+  await expect(ep).toHaveURL(/#today$/);
+  await expect(ep.locator('#today-box')).toBeVisible();
 });
 
 test('утренняя сводка руководителю «На сегодня по организации» (2.121): цифры в ленте, ведёт в организацию, СМС — отдельная настройка', async ({ browser, baseURL }) => {

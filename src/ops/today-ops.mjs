@@ -170,15 +170,24 @@ async function noResultOrders(sql, userId, hotRows, today) {
 
 // Для утренней сводки эксперта (2.142): сколько дел «срок близко — нет файла результата» и «заказчик ждёт ответа» — тем же
 // расчётом, что «Сегодня». Только цифры.
-export async function expertMorningAlerts(sql, userId, today) {
+export async function expertMorningAlerts(sql, userId, today, now = new Date()) {
   const rows = await sql`
-    select id, status, deadline from orders where executor_user_id = ${userId} and status in ('in_work', 'review')
+    select id, status, deadline, executor_user_id from orders where executor_user_id = ${userId} and status in ('in_work', 'review')
     order by deadline nulls last, updated_at limit ${LIMIT}`;
   const soon = addDays(today, HOT_DAYS);
   const hotRows = rows.filter((o) => o.status === 'in_work' && o.deadline && o.deadline <= soon);
+  // Руководитель не подписал 2 дня и дольше (2.164) — как строка «Руководитель ещё не подписал» в «Сегодня» (2.152).
+  let leadUnsigned = 0;
+  if (await executorSignOrg(sql, userId)) {
+    for (const o of rows.filter((x) => x.status === 'in_work')) {
+      const w = await signWait(sql, o);
+      if (w && now.getTime() - new Date(w.since).getTime() >= SIGN_LONG_DAYS * 86400_000) leadUnsigned += 1;
+    }
+  }
   return {
     no_result: (await noResultOrders(sql, userId, hotRows, today)).length,
     reply_wait: (await replyWaits(sql, rows.map((o) => o.id))).length,
+    lead_unsigned: leadUnsigned,
   };
 }
 
