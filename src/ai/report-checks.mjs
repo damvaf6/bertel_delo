@@ -380,30 +380,54 @@ function addressMatch(doc, ctx) {
 // ——— Недвижимость и земля (2.59): площадь, этаж и этажность, доля, категория земель и назначение — как в заявке ———
 // Строки про аналоги, жилую площадь, кухню, балкон, застройку не трогаем; в отчёте о квартире — площадь участка и дома,
 // в отчёте об участке — площадь построек.
-const AREA_NUM = /(\d{1,3}(?:[  ]\d{3})+|\d+)(?:[,.](\d{1,2}))?\s*(кв\.?\s*м\.?|м2|м²|квадратн\S*\s+метр\S*|га(?![а-яё])|гектар\S*|сот(?:ок|ки|ка|ых)?(?![а-яё]))/giu;
-const AREA_SKIP = /жил\S*\s+площад|кухн|балкон|лодж|застройк/iu;
+// 2.174: «1200 +/- 12 кв. м» (погрешность из ЕГРН) — площадь 1200, не 12; «0,1200 га» — число целиком; «м 2» — разорванный «м²».
+const AREA_UNIT = String.raw`кв\.?\s*м\.?|м2(?![\d,.])|м\s2(?![\d,.])|м²|квадратн\S*\s+метр\S*|га(?![а-яё])|гектар\S*|сот(?:ок|ки|ка|ых)?(?![а-яё])`;
+const AREA_NUM = new RegExp(String.raw`(?<![\d,.])(\d{1,3}(?:[  ]\d{3})+|\d+)(?:[,.](\d{1,4}))?(?:\s*(?:±|\+\s*\/?\s*-)\s*\d+(?:[,.]\d+)?)?\s*(${AREA_UNIT})`, 'giu');
+// 2.174: единица перед числом — столбец таблицы «Общая площадь, кв. м: 45,1» или «Площадь (кв. м) 45,1».
+const AREA_HEAD = new RegExp(String.raw`(?<=площад[а-яё]*[^\n\d]{0,40}?[,(]\s*)(${AREA_UNIT})\)?\s*[:\-–—]?\s*(\d{1,3}(?:[  ]\d{3})+|\d+)(?:[,.](\d{1,4}))?(?![\d,./])`, 'giu');
+// 2.174: части квартиры или дома — комнаты, санузел, коридор и т. п. — не площадь объекта.
+const AREA_SKIP = /жил\S*\s+площад|кухн|балкон|лодж|застройк|комнат|санузл|ванн|туалет|коридор|прихож|холл|кладов|гардероб|подсобн|вспомогат|лестни|общего\s+пользован|террас|веранд|подвал|чердак|мансард/iu;
+const ROOM_SKIP = /жил\S*\s+площад|кухн|балкон|лодж|застройк|санузл|ванн|туалет|коридор|прихож|холл|кладов|гардероб|подсобн|вспомогат|лестни|общего\s+пользован/iu;
 const lineBefore = (page, index, len = 80) => { const b = page.slice(Math.max(0, index - len), index); return b.slice(b.lastIndexOf('\n') + 1); };
+// 2.174: «…общей площадью» / «45,1 кв. м» — число в начале строки: «площадь» ищем и в строке выше.
+function areaBefore(page, index) {
+  const before = lineBefore(page, index);
+  if (/[а-яёa-z]/iu.test(before)) return before;
+  if (index - before.length === 0) return before;
+  return `${lineBefore(page, index - before.length - 1)} ${before}`;
+}
 function areaMatch(doc, ctx) {
   const mine = Number(String(ctx.fields?.area ?? '').replace(',', '.'));
   if (!(mine > 0)) return [];
   const land = ctx.service === 'land';
+  const room = ctx.fields?.object_type === 'room';
   const other = land ? /(?<![а-яё])дом|здани|строени|постройк|помещени/iu
-    : ctx.fields?.object_type === 'house' ? /участ/iu : /участ|(?<![а-яё])дом(?:а|у|е)?(?![а-яё])|здани/iu;
+    : ctx.fields?.object_type === 'house' ? /участ/iu
+      : room ? /участ|(?<![а-яё])дом(?:а|у|е)?(?![а-яё])|здани|квартир/iu : /участ|(?<![а-яё])дом(?:а|у|е)?(?![а-яё])|здани/iu;
+  const skip = room ? ROOM_SKIP : AREA_SKIP;
   const out = [];
   const seen = new Set();
   eachPage(doc, (page, i) => {
-    for (const m of page.matchAll(AREA_NUM)) {
-      const before = lineBefore(page, m.index);
+    const found = [];
+    for (const m of page.matchAll(AREA_NUM)) found.push({ index: m.index, int: m[1], frac: m[2], unit: m[3] });
+    for (const m of page.matchAll(AREA_HEAD)) found.push({ index: m.index, int: m[2], frac: m[3], unit: m[1], head: true });
+    found.sort((a, b) => a.index - b.index);
+    for (const f of found) {
+      const before = areaBefore(page, f.index);
       const at = before.search(/площад(?!.*площад)/iu);
-      // Ближайшая «площадь» перед числом: смотрим 30 знаков перед ней (чья это площадь) и всё до числа.
-      const near = at < 0 ? '' : before.slice(Math.max(0, at - 30));
-      if (!near || other.test(near) || AREA_SKIP.test(near) || /аналог/iu.test(lineAround(page, m.index))) continue;
-      const unit = m[3].toLowerCase();
+      // Ближайшая «площадь» перед числом: до 30 знаков перед ней (чья это площадь, но не дальше запятой или точки
+      // перед ней — 2.174: «площадь кухни 8 кв. м, общая площадь 45,1» — 45,1 не кухня) и всё до числа.
+      let pre = at < 0 ? '' : before.slice(Math.max(0, at - 30), at);
+      const cut = Math.max(pre.lastIndexOf(';'), pre.search(/[,.]\s(?!.*[,.]\s)/u));
+      if (cut >= 0) pre = pre.slice(cut + 1);
+      const near = at < 0 ? '' : pre + before.slice(at);
+      if (!near || other.test(near) || skip.test(near) || /аналог/iu.test(lineAround(page, f.index))) continue;
+      const unit = f.unit.toLowerCase();
       const mult = /^га|^гектар/.test(unit) ? 10000 : /^сот/.test(unit) ? 100 : 1;
-      const v = Math.round(Number(`${m[1].replace(/[  ]/g, '')}.${m[2] ?? 0}`) * mult * 100) / 100;
+      const v = Math.round(Number(`${f.int.replace(/[  ]/g, '')}.${f.frac ?? 0}`) * mult * 100) / 100;
       if (Math.abs(v - mine) < 0.05 || seen.has(v)) continue;
       seen.add(v);
-      out.push({ page: i, quote: lineAround(page, m.index), text: `Площадь ${fmt(v)} кв. м не совпадает с площадью из заявки (${fmt(mine)} кв. м) — проверьте, нет ли данных другого объекта` });
+      out.push({ page: i, quote: lineAround(page, f.index), text: `Площадь ${fmt(v)} кв. м не совпадает с площадью из заявки (${fmt(mine)} кв. м) — проверьте, нет ли данных другого объекта` });
     }
   });
   return out;

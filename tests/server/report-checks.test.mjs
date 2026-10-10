@@ -421,6 +421,28 @@ test('земля (2.59): площадь в сотках и гектарах, к�
   assert.deepEqual(other.land_match, []);
 });
 
+test('площадь (2.174): погрешность из ЕГРН, единица перед числом, перенос строки, части квартиры, «0,1200 га»', () => {
+  const area = (lines, ctx) => texts(runAutoChecks(['area_match'], [doc([lines.join('\n')])], ctx), 'area_match');
+  const flat = { fields: { area: 54.3, object_type: 'flat' }, service: 'realty' };
+  const land = { fields: { area: 1200 }, service: 'land' };
+  const wrong = (v, mine) => [`Площадь ${v} кв. м не совпадает с площадью из заявки (${mine} кв. м) — проверьте, нет ли данных другого объекта`];
+  // Ложные находки прежней проверки — теперь их нет.
+  assert.deepEqual(area(['Площадь: 1200 +/- 12 кв. м', 'Площадь участка 1200 ± 12 кв.м', 'Площадь участка 0,1200 га'], land), []);
+  assert.deepEqual(area(['Общая площадь 54,3 кв. м, в том числе площадь комнат 36,2 кв. м, площадь санузла 4 кв. м, площадь коридора 6 кв. м'], flat), []);
+  assert.deepEqual(area(['Общая площадь, кв. м: 54,3', 'Площадь кухни, кв. м: 9'], flat), []);
+  // Пропуски прежней проверки — теперь находка.
+  assert.deepEqual(area(['Общая площадь, кв. м: 45,1'], flat), wrong('45,1', '54,3'));
+  assert.deepEqual(area(['Площадь (кв. м) 45,1'], flat), wrong('45,1', '54,3'));
+  assert.deepEqual(area(['Квартира общей площадью', '45,1 кв. м'], flat), wrong('45,1', '54,3'));
+  assert.deepEqual(area(['Общая площадь 45,1 м 2'], flat), wrong('45,1', '54,3'));
+  assert.deepEqual(area(['Площадь кухни 8 кв. м, общая площадь 45,1 кв. м'], flat), wrong('45,1', '54,3'));
+  assert.deepEqual(area(['Площадь: 1500 +/- 14 кв. м'], land), wrong('1 500', '1 200'));
+  // Комната: площадь квартиры — не находка, другая площадь комнаты — находка.
+  const room = { fields: { area: 18.2, object_type: 'room' }, service: 'realty' };
+  assert.deepEqual(area(['Комната площадью 18,2 кв. м в квартире общей площадью 60 кв. м'], room), []);
+  assert.deepEqual(area(['Комната площадью 17 кв. м'], room), wrong('17', '18,2'));
+});
+
 test('недвижимость и земля (2.59): новые правила подключены к проверке «Адрес, кадастровый номер, площадь»', async () => {
   const { DEFAULT_MODULES } = await import('../../src/modules/index.mjs');
   const exp = DEFAULT_MODULES.find((m) => m.id === 'expertise');
