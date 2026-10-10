@@ -83,6 +83,8 @@ test('«Сегодня» у эксперта: горит, вернули, на �
   assert.deepEqual(g.hot.map((x) => [x.expert, x.service, x.overdue]), [['Эксперт Сегодняшний', 'Оценка недвижимости', false]]);
   assert.equal(g.to_sign.length, 1);
   assert.equal(g.to_sign[0].files, 1);
+  // 2.160: когда эксперт подписал — как в «Делах экспертов».
+  assert.ok(Date.now() - Date.parse(g.to_sign[0].since) < 60_000);
   // «Дела экспертов» (2.102): «горит» — то же, что в «Сегодня»; отбор по подписи — по sign_wait.
   const cs = (await head.req('GET', `/api/orgs/${org.id}/cases`)).body.cases;
   const of = (o) => cs.find((x) => x.id === o.id);
@@ -94,6 +96,8 @@ test('«Сегодня» у эксперта: горит, вернули, на �
   t = (await head.req('GET', '/api/today')).body;
   assert.equal(t.orgs[0].to_sign.length, 0);
   assert.deepEqual(t.orgs[0].returned.map((x) => x.comment), ['Проверьте итог']);
+  // 2.160: сколько пунктов замечания эксперт уже отметил — как в «Делах экспертов».
+  assert.deepEqual([t.orgs[0].returned[0].points, t.orgs[0].returned[0].left], [1, 1]);
   // Эксперт видит возврат руководителя.
   const mine = (await spec.req('GET', '/api/today')).body.expert.returned;
   assert.ok(mine.some((x) => x.id === fire.id && x.by === 'Руководитель (Руководитель Сегодняшний)' && x.comment === 'Проверьте итог'));
