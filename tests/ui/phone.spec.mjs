@@ -6804,6 +6804,8 @@ test('«Напомнить эксперту» (2.125): руководитель 
     await c.query("update users set full_name = 'Неспешнов Игорь' where id = $1", [expert.id]);
     await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
     await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    // Утренняя сводка (2.119) после 8:00 по Москве — второе уведомление; здесь считаем её уже посчитанной за сегодня.
+    await c.query("insert into morning_digests (user_id, day) values ($1, (now() at time zone 'Europe/Moscow')::date)", [expert.id]);
     await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
     const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
       values ('expertise', 'realty', 'Напоминание: квартира', $1, $2, 'in_work', current_date + 2, 1500000, now(),
