@@ -8,6 +8,7 @@
 // Руководитель не подписал 2 дня и дольше (2.152) — отдельной строкой с «Напомнить руководителю» прямо здесь.
 // Ответ диспетчера на просьбу о переносе срока — до первого просмотра «Срока» в деле (2.155).
 // Руководителю «Ждут подписи организации» — дольше всех ждущие первыми, 2 дня и дольше — красным (2.161).
+// «Вернули эксперту» — с «Напомнить эксперту» прямо здесь (2.162).
 // «Можно продолжать» (2.86) — пришли документы, осмотр или сообщение. Диспетчеру (2.42) — деньги, проверка, цена, подбор, молчащие исполнители, горящие сроки. Нажатие — в дело или в раздел
 // организации.
 // Тексты — только через textContent.
@@ -65,6 +66,40 @@ function signLate(items) {
             x.reminded_at ? `напоминали ${since(x.reminded_at)}${x.can_remind ? '' : ' · снова — завтра'}` : 'руководителю ещё не напоминали']
             .map((t, i) => el('div', { class: i ? 'muted' : 'title', text: t }))),
         ...(x.can_remind ? [remind] : []), msg);
+    })];
+}
+
+// «Вернули эксперту — ждём исправления» у руководителя (2.162): строка ведёт к делу в «Делах экспертов», рядом —
+// «Напомнить эксперту» (раз в сутки, как там, 2.125). Номер дела в «Сегодня» — короткий; полный берём из «Дел экспертов».
+function orgReturned(g, caseLine, go) {
+  const items = g.returned ?? [];
+  if (!items.length) return [];
+  const id = `org-returned-${g.id}`;
+  return [el('li', { class: 'group', 'data-today': id, text: `Вернули эксперту — ждём исправления · ${items.length}` }),
+    ...items.map((x) => {
+      const r = x.remind;
+      const msg = el('div', { class: 'muted', 'data-role': 'returned-remind-msg' });
+      const remind = el('button', { type: 'button', class: 'secondary', 'data-action': 'returned-remind' }, 'Напомнить эксперту');
+      remind.onclick = async () => {
+        remind.disabled = true;
+        try {
+          const ref = x.order_ref.slice(2).toLowerCase();
+          const c = (await api('GET', `/api/orgs/${g.id}/cases`)).cases.find((k) => k.id.startsWith(ref));
+          if (!c) throw new Error('Дело не найдено — обновите страницу');
+          await api('POST', `/api/orgs/${g.id}/cases/${c.id}/remind`);
+          msg.textContent = 'Эксперту отправлено напоминание';
+          remind.remove();
+        } catch (err) { msg.textContent = err.message; remind.disabled = false; }
+      };
+      const lines = [...caseLine(x), `замечание: ${x.comment}`,
+        [x.at ? `вернули ${since(x.at)} — ${waited(x.at)} назад` : null,
+          x.points ? (x.left ? `эксперт отметил исправленными ${x.points - x.left} из ${x.points}` : `эксперт отметил исправленным всё (${x.points} из ${x.points}) — ждём его подписи`) : null]
+          .filter(Boolean).join(' · '),
+        r ? (r.reminded_at ? `напоминали ${since(r.reminded_at)}${r.can_remind ? '' : ' · снова — завтра'}` : 'эксперту ещё не напоминали') : null]
+        .filter(Boolean);
+      return el('li', { 'data-today-item': id },
+        el('button', { class: 'open', onclick: () => go(x) }, ...lines.map((t, i) => el('div', { class: i ? 'muted' : 'title', text: t }))),
+        ...(r?.can_remind ? [remind] : []), msg);
     })];
 }
 
@@ -163,11 +198,9 @@ export async function loadToday() {
           x.reminded_at ? `эксперт напомнил ${since(x.reminded_at)}` : null].filter(Boolean).join(' · ') }], toOrg('sign')),
       ...group(`org-pending-${g.id}`, 'Ждут назначения эксперта', g.pending, caseLine, toOrg('pending')),
       ...group(`org-hot-${g.id}`, 'Горит срок у экспертов', g.hot.filter((x) => !risky.has(x.order_ref)), caseLine, toOrg('case')),
-      // Когда вернули и сколько пунктов эксперт уже отметил исправленными (2.160 — как в «Делах экспертов»).
-      ...group(`org-returned-${g.id}`, 'Вернули эксперту — ждём исправления', g.returned, (x) => [...caseLine(x), `замечание: ${x.comment}`,
-        [x.at ? `вернули ${since(x.at)} — ${waited(x.at)} назад` : null,
-          x.points ? (x.left ? `эксперт отметил исправленными ${x.points - x.left} из ${x.points}` : `эксперт отметил исправленным всё (${x.points} из ${x.points}) — ждём его подписи`) : null]
-          .filter(Boolean).join(' · ')].filter(Boolean), toOrg('case')),
+      // Когда вернули и сколько пунктов эксперт уже отметил исправленными (2.160 — как в «Делах экспертов»);
+      // «Напомнить эксперту» прямо здесь (2.162).
+      ...orgReturned(g, caseLine, toOrg('case')),
       // Досье экспертов (2.63): только вид документа и срок; копии руководитель не видит.
       ...group(`org-dossier-${g.id}`, 'Документы экспертов: срок', g.dossier ?? [], (x) => [`${x.expert} · ${x.kind_name}`,
         x.state === 'expired' ? `срок истёк ${dayRu(x.valid_until)} — по оценке эксперт снят с подбора` : `действует до ${dayRu(x.valid_until)} · осталось ${daysLeft(x.valid_until, t.today)} дн.`], toOrg()),

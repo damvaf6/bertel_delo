@@ -25,7 +25,7 @@ import { silentLinks } from './inspect-ops.mjs';
 import { answeredExtends, openExtends } from './deadline-ops.mjs';
 import { openHandovers } from './handover-ops.mjs';
 import { dueNotes } from './note-ops.mjs';
-import { caseMoves } from './org-ops.mjs';
+import { caseMoves, caseRemind } from './org-ops.mjs';
 
 // «Горит» — просрочено или до срока не больше двух дней (как подсветка в списке дел).
 const HOT_DAYS = 2;
@@ -201,7 +201,7 @@ export function awayDeadline(o, today) {
 }
 
 // Тот же расчёт — для утренней сводки руководителю (2.121, src/notify/morning.mjs).
-export async function orgPart(sql, org, registry, today) {
+export async function orgPart(sql, org, registry, today, { actorId = null } = {}) {
   const soon = addDays(today, HOT_DAYS);
   const service = (o) => registry.service(o.module, o.service)?.service.name ?? o.service;
   // Дела экспертов организации (выбрали её в профиле специалиста и состоят в ней) — как в «Делах экспертов».
@@ -254,7 +254,9 @@ export async function orgPart(sql, org, registry, today) {
     }
     const open = (await orgReturns(sql, o.id, { orgId: org.id })).filter((r) => r.open);
     // Сколько пунктов замечания эксперт уже отметил исправленными (2.160 — как в «Делах экспертов», 2.151).
-    if (open.length) returned.push(view(o, { comment: open.at(-1).comment, at: open[0].at, points: open.at(-1).items.length, left: open.at(-1).left }));
+    // «Напомнить эксперту» прямо в «Сегодня» (2.162) — как в «Делах экспертов» (2.125): раз в сутки; своё дело — без кнопки.
+    if (open.length) returned.push(view(o, { comment: open.at(-1).comment, at: open[0].at, points: open.at(-1).items.length, left: open.at(-1).left,
+      remind: o.executor_user_id === actorId ? null : await caseRemind(sql, o) }));
   }
   const offered = await sql`
     select id, module, service, status, deadline from orders where offer_org_id = ${org.id} and status = 'awaiting_executor'
@@ -356,7 +358,7 @@ export function todayOps() {
           today,
           expert: await expertPart(sql, actor, registry, today),
           dispatcher: await dispatcherPart(sql, actor, registry, today),
-          orgs: await Promise.all(orgs.map((o) => orgPart(sql, o, registry, today))),
+          orgs: await Promise.all(orgs.map((o) => orgPart(sql, o, registry, today, { actorId: actor.id }))),
         };
       },
     },
