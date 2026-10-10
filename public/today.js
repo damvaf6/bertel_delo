@@ -99,17 +99,24 @@ function orgReturned(g, caseLine, go) {
           await api('POST', `/api/orgs/${g.id}/cases/${c.id}/remind`);
           msg.textContent = 'Эксперту отправлено напоминание';
           remind.remove();
+          // Строка «ещё не напоминали» больше не верна (2.170) — сразу «напоминали сегодня».
+          const state = li.querySelector('[data-role="returned-remind-state"]');
+          if (state) state.textContent = `напоминали ${since(new Date().toISOString())} · снова — завтра`;
         } catch (err) { msg.textContent = err.message; remind.disabled = false; }
       };
       const lines = [...caseLine(x), `замечание: ${x.comment}`,
         [x.at ? `вернули ${since(x.at)} — ${waited(x.at)} назад` : null,
           x.points ? (x.left ? `эксперт отметил исправленными ${x.points - x.left} из ${x.points}` : `эксперт отметил исправленным всё (${x.points} из ${x.points}) — ждём его подписи`) : null]
           .filter(Boolean).join(' · '),
+        // Эксперт уже загрузил исправленный файл (2.170) — осталось его подписать; напоминать, может, и не нужно.
+        x.fresh_file ? `эксперт загрузил исправленный файл ${since(x.fresh_file.at)} — ещё не подписал` : null,
         r ? (r.reminded_at ? `напоминали ${since(r.reminded_at)}${r.can_remind ? '' : ' · снова — завтра'}` : 'эксперту ещё не напоминали') : null]
         .filter(Boolean);
-      return el('li', { 'data-today-item': id },
-        el('button', { class: 'open', onclick: () => go(x) }, ...lines.map((t, i) => el('div', { class: i ? 'muted' : 'title', text: t }))),
+      const li = el('li', { 'data-today-item': id },
+        el('button', { class: 'open', onclick: () => go(x) }, ...lines.map((t, i) => el('div', {
+          class: i ? 'muted' : 'title', text: t, ...(r && i === lines.length - 1 ? { 'data-role': 'returned-remind-state' } : {}) }))),
         ...(r?.can_remind ? [remind] : []), msg);
+      return li;
     })];
 }
 
@@ -159,6 +166,8 @@ export async function loadToday() {
         [x.at ? `вернули ${since(x.at)} — ${waited(x.at)} назад` : null,
           x.points ? (x.left ? `не исправлено пунктов: ${x.left} из ${x.points}` : 'все пункты отмечены — подпишите файл заново') : null]
           .filter(Boolean).join(' · '),
+        // Исправленный файл уже загружен (2.170): осталось подписать — как в «Замечаниях руководителя» в деле (2.163).
+        x.fresh_file ? `исправленный файл «${x.fresh_file.filename}» загружен — ждёт Вашей подписи` : null,
         deadline(x, t.today)].filter(Boolean),
       (x) => { location.hash = x.to ? `order=${x.id}&to=${x.to}` : `order=${x.id}`; }),
       // Осмотр по ссылке 2 дня без фото (2.85) — сразу к осмотру в деле, там «Отправить ссылку снова».

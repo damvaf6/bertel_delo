@@ -444,3 +444,28 @@ test('«Вернули эксперту» у руководителя (2.162): �
   // Эксперт своей «кнопки» не видит: у него в «Сегодня» руководительской части нет.
   assert.deepEqual((await spec.req('GET', '/api/today')).body.orgs, []);
 });
+
+test('возвращённый файл удалён, исправленный загружен (2.170): в «Сегодня» эксперта и руководителя видно, что ждёт подписи', async () => {
+  const o = await offered('Исправленный ждёт подписи', 11);
+  assert.equal((await step(spec, o, 'in_work')).status, 200);
+  const d = (await result(o, 'Первый.pdf')).body.document;
+  assert.equal((await spec.req('POST', `/api/documents/${d.id}/sign`, { confirm: true })).status, 201);
+  assert.equal((await head.req('POST', `/api/org-documents/${d.id}/return`, { comment: '1. Нет даты\n2. Нет этажа' })).status, 201);
+  const ref = `№ ${o.id.slice(0, 8).toUpperCase()}`;
+  const mine = async () => (await spec.req('GET', '/api/today')).body.expert.returned.find((x) => x.id === o.id);
+  const lead = async () => (await head.req('GET', '/api/today')).body.orgs[0].returned.find((x) => x.order_ref === ref);
+  // Файл не удалён — исправленного нет.
+  assert.equal((await mine()).fresh_file, null);
+  assert.equal((await lead()).fresh_file, null);
+  assert.equal((await spec.req('DELETE', `/api/documents/${d.id}`)).status, 204);
+  assert.equal((await mine()).fresh_file, null, 'удалён, но новый ещё не загружен');
+  const n = (await result(o, 'Исправленный.pdf')).body.document;
+  assert.equal((await mine()).fresh_file.filename, 'Исправленный.pdf');
+  const l = await lead();
+  assert.equal(l.fresh_file.filename, 'Исправленный.pdf');
+  assert.ok(Date.now() - Date.parse(l.fresh_file.at) < 60_000);
+  // Подписал — возврат закрыт, строки нет ни у кого.
+  assert.equal((await spec.req('POST', `/api/documents/${n.id}/sign`, { confirm: true })).status, 201);
+  assert.equal(await mine(), undefined);
+  assert.equal(await lead(), undefined);
+});
