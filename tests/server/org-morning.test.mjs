@@ -110,7 +110,9 @@ test('вид в настройках — только у руководител�
 });
 
 test('куда ведёт сводка (2.130): сроки — к отбору «Срок на этой неделе», иначе к подписи, иначе к просьбам передать', () => {
-  assert.equal(orgDigestTo({ sign: 2, handover: 1, due: 0, overdue: 1 }), 'week');
+  assert.equal(orgDigestTo({ sign: 2, handover: 1, due: 1, overdue: 1 }), 'week');
+  // 2.158: сегодня сроков нет, только прошедшие — к отбору «Срок прошёл».
+  assert.equal(orgDigestTo({ sign: 2, handover: 1, due: 0, overdue: 1 }), 'overdue');
   assert.equal(orgDigestTo({ sign: 0, handover: 0, due: 1, overdue: 0 }), 'week');
   assert.equal(orgDigestTo({ sign: 1, handover: 1, due: 0, overdue: 0 }), 'sign');
   assert.equal(orgDigestTo({ sign: 0, handover: 2, due: 0, overdue: 0 }), 'handover');

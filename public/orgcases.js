@@ -10,6 +10,7 @@
 // «Напомнить эксперту» о деле в работе (2.125) — одной кнопкой, раз в сутки.
 // Отбор по эксперту и «Срок на этой неделе» (2.127) — вместе с отбором 2.102 и поиском.
 // Сколько дней по делу ничего не происходило и отбор «Без движения» (2.133) — переписка с заказчиком не в счёт.
+// Отбор «Срок прошёл» (2.158): только просроченные, дольше всех просроченные — первыми; на сколько дней — у дела.
 // «Ждут назначения» (2.17): дела, предложенные диспетчером организации, — руководитель назначает эксперта или отказывается.
 import { api, el, say } from '/common.js';
 import { expertLink } from '/expertcard.js';
@@ -43,6 +44,7 @@ $('org-cases-expert').addEventListener('change', (e) => { expert = e.target.valu
 // Отборы (2.102): только среди активных дел; кнопка видна, когда есть хоть одно такое дело.
 const FILTERS = [
   { id: 'handover', text: 'Просят передать', test: (c) => !!c.handover },
+  { id: 'overdue', text: 'Срок прошёл', test: (c) => c.overdue },
   { id: 'hot', text: 'Горит', test: (c) => c.hot },
   { id: 'week', text: 'Срок на этой неделе', test: (c) => c.week },
   { id: 'idle', text: 'Без движения', test: (c) => c.idle },
@@ -125,6 +127,8 @@ function renderCases() {
   const active = found.filter((c) => c.active);
   // «Ждёт моей подписи» (2.148): дольше всех ждущие — первыми.
   if (filter === 'sign') active.sort((a, b) => new Date(a.sign_since) - new Date(b.sign_since));
+  // «Срок прошёл» (2.158): дольше всех просроченные — первыми.
+  if (filter === 'overdue') active.sort((a, b) => b.overdue_days - a.overdue_days);
   const done = found.filter((c) => !c.active);
   const none = cases.length > 0 && !found.length;
   $('org-cases-none').classList.toggle('hidden', !none);
@@ -175,7 +179,8 @@ function renderFilters(counts) {
 }
 
 function caseItem(org, c) {
-  const deadline = c.deadline ? `срок ${dayRu(c.deadline)}${c.overdue ? ' · ПРОСРОЧЕНО' : ''}` : 'срок не указан';
+  const late = c.overdue_days ? ` на ${c.overdue_days} дн.` : '';
+  const deadline = c.deadline ? `срок ${dayRu(c.deadline)}${c.overdue ? ` · ПРОСРОЧЕНО${late}` : ''}` : 'срок не указан';
   return el('li', { 'data-case': c.order_ref },
     el('div', { class: 'title', text: `${c.service} · ${c.order_ref}` }),
     ...(c.overdue ? [el('div', { class: 'overdue big', text: deadline })] : []),
@@ -345,9 +350,9 @@ function offerWait(org, c) {
       msg)];
 }
 
-// К блоку организации из утренней сводки (2.130): «sign» — к подписи организации; «week», «handover», «returned», «idle» — к
-// списку дел с отбором «Срок на этой неделе» (2.127; в нём и просроченные), «Просят передать», «Вернул эксперту» (2.153) или
-// «Без движения» (2.141). Отбора уже
+// К блоку организации из утренней сводки (2.130): «sign» — к подписи организации; «week», «overdue», «handover», «returned»,
+// «idle» — к списку дел с отбором «Срок на этой неделе» (2.127; в нём и просроченные), «Срок прошёл» (2.158), «Просят
+// передать», «Вернул эксперту» (2.153) или «Без движения» (2.141). Отбора уже
 // нет (дела сданы, эксперт ответил) — список целиком.
 export function focusOrgBlock(to) {
   if (to === 'sign') return goSign(null);
