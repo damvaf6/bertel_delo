@@ -1594,7 +1594,7 @@ test('две подписи (2.5а): эксперт от организации 
   await shot(hp, '97c-rukovoditel-vozvrat');
   await item.getByRole('button', { name: 'Вернуть с замечанием' }).click();
   await expect(hp.locator('#org-sign-msg')).toHaveText('Файл возвращён эксперту с замечанием — его подпись снята');
-  await expect(hp.locator('#org-cases li[data-case]').first().locator('[data-role="returned"]')).toHaveText('Вы вернули отчёт эксперту — ждём исправления');
+  await expect(hp.locator('#org-cases li[data-case]').first().locator('[data-role="returned"]')).toContainText('— эксперт отметил исправленными 0 из 2');
   await expect(hp.locator('#org-cases [data-role="sign-wait"]')).toHaveCount(0);
   await expect(hp.locator('#org-sign details.returns summary')).toHaveText('Возвраты эксперту · 1 · ждём исправления (исправлено 0 из 2)');
   await expect(item.getByRole('button', { name: 'Подписать от организации' })).toHaveCount(0);
@@ -5623,7 +5623,18 @@ test('как эксперт и руководитель (2.100): перенос 
   await expect(ep.locator('#org-returns-box')).toBeInViewport();
   await shot(ep, 'b4a-ekspert-vernuli-k-zamechaniyam');
   const rid = signing.items.find((x) => x.documents.some((d) => d.id === docId)).returns[0].id;
-  for (const n of [1, 2]) expect((await ep.request.put(`/api/orders/${id}/org-returns/${rid}/items/${n}`, { data: { fixed: true }, headers: H })).status()).toBe(200);
+  const fix = async (n) => expect((await ep.request.put(`/api/orders/${id}/org-returns/${rid}/items/${n}`, { data: { fixed: true }, headers: H })).status()).toBe(200);
+  // 2.151: руководитель в «Делах экспертов» видит, когда вернул и сколько пунктов эксперт уже отметил исправленными.
+  await fix(1);
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const back = hp.locator('#org-cases li[data-case] [data-role="returned"]');
+  await expect(back).toContainText('Вы вернули отчёт эксперту');
+  await expect(back).toContainText('(меньше часа назад) — эксперт отметил исправленными 1 из 2');
+  await back.scrollIntoViewIfNeeded();
+  await shot(hp, 'b4b-rukovoditel-vernul-ispravleno-1-iz-2');
+  await fix(2);
+  await hp.reload();
+  await expect(back).toContainText('эксперт отметил исправленным всё (2 из 2) — ждём его подписи');
   expect((await ep.request.post(`/api/documents/${docId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
   // Новая подпись — новое ожидание: прежнее напоминание не в счёт, можно напомнить сразу.
   await ep.goto('/kabinet');
