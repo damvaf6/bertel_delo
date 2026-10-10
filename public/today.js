@@ -5,6 +5,7 @@
 // Эксперт не принимает дела, а срок его дела в эти дни (2.113) — передать коллеге.
 // Напоминания по своим заметкам к делу (2.115). Заказчик ждёт ответа в переписке больше суток (2.132). Срок близко, а файла
 // результата нет (2.138). «Вернули на доработку» — когда вернули и сколько осталось до срока (2.147).
+// Руководитель не подписал 2 дня и дольше (2.152) — отдельной строкой с «Напомнить руководителю» прямо здесь.
 // «Можно продолжать» (2.86) — пришли документы, осмотр или сообщение. Диспетчеру (2.42) — деньги, проверка, цена, подбор, молчащие исполнители, горящие сроки. Нажатие — в дело или в раздел
 // организации.
 // Тексты — только через textContent.
@@ -39,6 +40,30 @@ function group(id, title, items, line, go) {
       el('button', { class: 'open', onclick: () => go(x) }, ...line(x).map((t, i) => el('div', { class: i ? 'muted' : 'title', text: t })))))];
 }
 
+// «Руководитель ещё не подписал» (2.152): строка ведёт к блоку подписи в деле, рядом — «Напомнить руководителю» (раз в сутки).
+function signLate(items) {
+  if (!items.length) return [];
+  return [el('li', { class: 'group', 'data-today': 'sign-late', text: `Руководитель ещё не подписал · ${items.length}` }),
+    ...items.map((x) => {
+      const msg = el('div', { class: 'muted', 'data-role': 'sign-late-msg' });
+      const remind = el('button', { type: 'button', class: 'secondary', 'data-action': 'sign-late-remind' }, 'Напомнить руководителю');
+      remind.onclick = async () => {
+        remind.disabled = true;
+        try {
+          await api('POST', `/api/orders/${x.id}/sign-reminder`);
+          msg.textContent = 'Руководителю отправлено напоминание';
+          remind.remove();
+        } catch (err) { msg.textContent = err.message; remind.disabled = false; }
+      };
+      return el('li', { 'data-today-item': 'sign-late' },
+        el('button', { class: 'open', onclick: () => { location.hash = `order=${x.id}&to=sign`; } },
+          ...[x.title, `${x.org} · ${x.files === 1 ? 'файл' : `файлов ${x.files}`} · Вы подписали ${since(x.since)} — ждёт ${waited(x.since)}`,
+            x.reminded_at ? `напоминали ${since(x.reminded_at)}${x.can_remind ? '' : ' · снова — завтра'}` : 'руководителю ещё не напоминали']
+            .map((t, i) => el('div', { class: i ? 'muted' : 'title', text: t }))),
+        ...(x.can_remind ? [remind] : []), msg);
+    })];
+}
+
 export async function loadToday() {
   const box = $('today-box');
   let t;
@@ -55,6 +80,7 @@ export async function loadToday() {
         x.has_draft ? 'черновик есть — соберите отчёт Word и загрузите файл'
           : x.extend ? 'загрузите файл результата' : 'загрузите файл результата или попросите перенести срок'],
       (x) => { location.hash = `order=${x.id}&to=result`; }),
+      ...signLate((e.sign_wait ?? []).filter((x) => x.long)),
       // Можно продолжать (2.86): пришло новое после того, как эксперт открывал дело, — сразу к переписке, документам или осмотру.
       ...group('ready', 'Можно продолжать', e.ready ?? [], (x) => [x.title, `${x.what.join(' · ')} · ${since(x.at)}`, deadline(x, t.today)],
         (x) => { location.hash = `order=${x.id}&to=${x.to}`; }),
@@ -68,7 +94,7 @@ export async function loadToday() {
         x.remind_on < t.today ? `напомнить было ${dayRu(x.remind_on)}` : 'напомнить сегодня'],
       (x) => { location.hash = `order=${x.id}&to=notes`; }),
       // Очередь подписи (2.99): подписал, организация ещё нет — к блоку в деле с кнопкой «Напомнить руководителю».
-      ...group('sign-wait', 'Ждут подписи организации', e.sign_wait ?? [], (x) => [x.title,
+      ...group('sign-wait', 'Ждут подписи организации', (e.sign_wait ?? []).filter((x) => !x.long), (x) => [x.title,
         `${x.org} · ${x.files === 1 ? 'файл' : `файлов ${x.files}`} · Вы подписали ${since(x.since)} — ждёт ${waited(x.since)}`,
         x.reminded_at ? `напоминали ${since(x.reminded_at)}${x.can_remind ? ' · можно напомнить снова' : ''}` : 'можно напомнить руководителю'],
       (x) => { location.hash = `order=${x.id}&to=sign`; }),

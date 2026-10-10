@@ -2567,6 +2567,23 @@ test('«Сегодня» (2.34, 2.63): эксперт — горит, верну
   await expect(sp.locator('#sign-wait-reminded')).toContainText('снова — после');
   await sp.locator('#sign-wait-box').scrollIntoViewIfNeeded();
   await shot(sp, '99-ochered-podpisi-napomnit');
+  // 2.152: ждёт подписи 3 дня — в «Сегодня» отдельной строкой «Руководитель ещё не подписал» с «Напомнить руководителю».
+  await db((c) => c.query(`update document_signatures set signed_at = now() - interval '3 days'
+    where document_id in (select id from documents where order_id = $1)`, [fire.id]));
+  await db((c) => c.query('delete from sign_reminders where order_id = $1', [fire.id]));
+  await sp.goto('/kabinet');
+  await expect(sp.locator('#today-box li[data-today="sign-late"]')).toHaveText('Руководитель ещё не подписал · 1');
+  await expect(sp.locator('#today-box li[data-today="sign-wait"]')).toHaveCount(0);
+  const late = sp.locator('#today-box li[data-today-item="sign-late"]');
+  await expect(late).toContainText('ждёт 3 дн.');
+  await expect(late).toContainText('руководителю ещё не напоминали');
+  await shot(sp, 'b5-rukovoditel-ne-podpisal');
+  await late.locator('[data-action="sign-late-remind"]').click();
+  await expect(late.locator('[data-role="sign-late-msg"]')).toHaveText('Руководителю отправлено напоминание');
+  await expect(late.locator('[data-action="sign-late-remind"]')).toHaveCount(0);
+  await sp.reload();
+  await expect(late).toContainText('снова — завтра');
+  await expect(late.locator('[data-action="sign-late-remind"]')).toHaveCount(0);
 
   // Досье эксперта (2.63): полис кончается через 10 дней, аттестат истёк — руководитель видит вид и срок, без номеров.
   await db((c) => c.query(`insert into dossier_items (user_id, kind, title, number, valid_until, amount_kop) values

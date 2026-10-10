@@ -207,6 +207,12 @@ test('очередь подписи у эксперта (2.99): подписал
   assert.equal(w.reminded_at, null);
   assert.equal(w.can_remind, true);
   assert.ok(w.since);
+  assert.equal(w.long, false, 'только что подписал — не «Руководитель ещё не подписал»');
+  // 2.152: ждёт 2 дня и дольше — отметка long (строка «Руководитель ещё не подписал»); чуть меньше — ещё нет.
+  await S.sql`update document_signatures set signed_at = now() - interval '47 hours' where document_id = ${d.id}`;
+  assert.equal((await wait()).long, false);
+  await S.sql`update document_signatures set signed_at = now() - interval '49 hours' where document_id = ${d.id}`;
+  assert.equal((await wait()).long, true);
   assert.equal((await spec.req('GET', `/api/orders/${o.id}/documents`)).body.sign_wait.files, 1);
   // Напомнил — руководителю уведомление; второй раз в тот же день нельзя.
   const r = await remind();
