@@ -301,6 +301,8 @@ export function orgOps() {
           active: CASES_ACTIVE.includes(o.status),
           deadline: o.deadline,
           overdue: isOverdue(o, today),
+          // На сколько дней прошёл срок (2.158) — для отбора «Срок прошёл»: дольше всех просроченные — первыми.
+          overdue_days: isOverdue(o, today) ? Math.round((Date.parse(today) - Date.parse(o.deadline)) / 86_400_000) : 0,
           // «Горит» (2.102, как в «Сегодня» 2.98): в работе или на проверке, срок прошёл или через 1–2 дня.
           hot: ['in_work', 'review'].includes(o.status) && !!o.deadline && o.deadline <= addDays(today, 2),
           // «Срок на этой неделе» (2.127): активное дело со сроком до воскресенья включительно, просроченные — тоже (их сдавать

@@ -1157,7 +1157,7 @@ test('дела экспертов (2.16): видит только руковод
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.cases.length, 1);
   const c = r.body.cases[0];
-  assert.deepEqual(Object.keys(c).sort(), ['active', 'away', 'chat', 'deadline', 'expert', 'expert_id', 'extend', 'fee_kop', 'handover', 'hot', 'id', 'idle', 'last_move', 'offer_wait', 'offered_at', 'order_ref', 'overdue', 'payout', 'remind', 'returned', 'returned_open', 'service', 'sign_reminded_at', 'sign_since', 'sign_wait', 'status', 'status_name', 'transfer_to', 'week']);
+  assert.deepEqual(Object.keys(c).sort(), ['active', 'away', 'chat', 'deadline', 'expert', 'expert_id', 'extend', 'fee_kop', 'handover', 'hot', 'id', 'idle', 'last_move', 'offer_wait', 'offered_at', 'order_ref', 'overdue', 'overdue_days', 'payout', 'remind', 'returned', 'returned_open', 'service', 'sign_reminded_at', 'sign_since', 'sign_wait', 'status', 'status_name', 'transfer_to', 'week']);
   assert.deepEqual(Object.keys(c.chat).sort(), ['expert_last', 'messages']);   // переписка (2.67): только число и чьё последнее, без текста
   assert.equal(c.status, 'review');
   assert.equal(c.expert, 'Эксперт Б');

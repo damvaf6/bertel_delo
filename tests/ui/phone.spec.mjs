@@ -1734,7 +1734,7 @@ test('две подписи (2.5а): эксперт от организации 
   await hp.reload();
   const late = hp.locator('#org-cases > li').first();
   await expect(late.locator('.title')).toContainText('Оценка транспортного средства');
-  await expect(late.locator('.overdue.big')).toHaveText('срок 15 января 2026 г. · ПРОСРОЧЕНО');
+  await expect(late.locator('.overdue.big')).toHaveText(/^срок 15 января 2026 г\. · ПРОСРОЧЕНО на \d+ дн\.$/);
   await expect(hp.locator('#org-cases-load li').first()).toContainText('в работе: 1 · просрочено: 1');
   await expect(hp.locator('#org-cases li.group')).toHaveText('Завершённые · 1');
   await expect(hp.locator('#org-cases-box')).not.toContainText('Просроченное дело');
@@ -5868,6 +5868,53 @@ test('дела экспертов (2.127): руководитель отбира
 });
 
 // Дело без движения (2.133): сколько дней по делу ничего не происходило — у каждого дела в работе; отбор «Без движения».
+// Отбор «Срок прошёл» (2.158): только просроченные дела, дольше всех просроченные — первыми, на сколько дней — у дела.
+test('дела экспертов (2.158): руководитель отбирает дела с прошедшим сроком — дольше всех просроченные первыми', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), ep = await ctx(), hp = await ctx();
+  const customer = await signIn(cp, '+79990010294');
+  const expert = await signIn(ep, '+79990010295'), head = await signIn(hp, '+79990010296');
+  const orgId = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Срок прошёл ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Срокова Ольга' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    const add = async (title, status, days) => c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at)
+      values ('expertise', 'realty', $1, $2, $3, $4, (now() at time zone 'Europe/Moscow')::date + $5::int, 1500000, now())`, [title, customer.id, expert.id, status, days]);
+    await add('Прошёл: вчера', 'in_work', -1);
+    await add('Прошёл: неделя', 'review', -7);
+    await add('Прошёл: спокойно', 'in_work', 20);
+    await add('Прошёл: сдано', 'done', -30);
+    return org.id;
+  });
+
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const rows = hp.locator('#org-cases > li[data-case]');
+  await expect(rows).toHaveCount(4);
+  const chip = hp.locator('[data-filter="overdue"]');
+  await expect(chip).toHaveText('Срок прошёл · 2');
+  // Кнопка — сразу после «Все»: самое срочное.
+  await expect(hp.locator('#org-cases-filter button').nth(1)).toHaveAttribute('data-filter', 'overdue');
+  await chip.click();
+  await expect(chip).toHaveAttribute('aria-pressed', 'true');
+  await expect(rows).toHaveCount(2);
+  // Просрочено на неделю — первым; сданное дело в отбор не попадает.
+  await expect(rows.nth(0).locator('.overdue.big')).toContainText('ПРОСРОЧЕНО на 7 дн.');
+  await expect(rows.nth(0)).toContainText('Проверка результата');
+  await expect(rows.nth(1).locator('.overdue.big')).toContainText('ПРОСРОЧЕНО на 1 дн.');
+  await expect(hp.locator('#org-cases li.group')).toHaveCount(0);
+  await hp.locator('#org-cases-filter').scrollIntoViewIfNeeded();
+  await shot(hp, 'c9-rukovoditel-otbor-srok-proshel');
+
+  // Из утренней сводки, где только прошедшие сроки, — сразу этот отбор.
+  await hp.goto('/kabinet#notifications');
+  await hp.goto(`/kabinet#org=${orgId}&to=overdue`);
+  await expect(hp.locator('[data-filter="overdue"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(rows).toHaveCount(2);
+  await expect(hp.locator('#org-cases-list-title')).toBeInViewport();
+  for (const p of [cp, ep, hp]) await p.context().close();
+});
+
 test('дела экспертов (2.133): руководитель видит дело без движения и отбирает такие дела', async ({ browser, baseURL }) => {
   const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
   const cp = await ctx(), ap = await ctx(), hp = await ctx();
