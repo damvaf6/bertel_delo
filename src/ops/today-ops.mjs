@@ -12,6 +12,7 @@
 // продолжать» — какие запрошенные документы пришли и сколько ещё ждём (2.128). Заказчик ждёт ответа в переписке больше суток
 // (2.132): его сообщение без ответа эксперта — даже если эксперт его уже прочитал. Срок через 1–2 дня или прошёл, а своего
 // файла результата нет (2.138). «Вернули на доработку» — когда вернули, пункты замечания, ближе срок — выше (2.147).
+// Ответ диспетчера на просьбу о переносе срока — пока эксперт не открыл «Срок» в деле (2.155).
 // Руководителю — те же сведения, что в «Делах экспертов» (2.16): без заказчика, полей заявки, документов и переписки.
 // Только свои дела и свои организации.
 import { orderRef } from '../notify/registry.mjs';
@@ -21,7 +22,7 @@ import { orderSignatures, orgReturns, signWait } from './sign-ops.mjs';
 import { executorSignOrg } from '../access/policy.mjs';
 import { dossierAlerts, loadDossier } from '../dossier/dossier.mjs';
 import { silentLinks } from './inspect-ops.mjs';
-import { openExtends } from './deadline-ops.mjs';
+import { answeredExtends, openExtends } from './deadline-ops.mjs';
 import { openHandovers } from './handover-ops.mjs';
 import { dueNotes } from './note-ops.mjs';
 import { caseMoves } from './org-ops.mjs';
@@ -123,7 +124,14 @@ async function expertPart(sql, actor, registry, today) {
   const drafts = due.length ? await sql`
     select distinct order_id from result_drafts where order_id = any(${due.map((o) => o.id)}::uuid[])` : [];
   const noResult = due.map((o) => item(o, { has_draft: drafts.some((x) => x.order_id === o.id), extend: ext.get(o.id) ?? null }));
+  // Диспетчер ответил на просьбу о переносе срока (2.155), а эксперт ещё не открывал «Срок» в деле: согласился или отказал.
+  const answers = await answeredExtends(sql, rows.filter((o) => ['in_work', 'review'].includes(o.status)).map((o) => o.id));
+  const extendAnswer = rows.filter((o) => answers.has(o.id)).map((o) => {
+    const { order_id: _, ...a } = answers.get(o.id);
+    return item(o, a);
+  }).sort((a, b) => new Date(b.decided_at) - new Date(a.decided_at));
   return {
+    extend_answer: extendAnswer,
     ready: readyLeft,
     no_result: noResult,
     reply_wait: replyWait,
