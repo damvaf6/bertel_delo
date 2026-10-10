@@ -6,6 +6,8 @@
 // Сравнение с прошлым месяцем (2.124): сдано, в срок, возвраты — сейчас и в прошлом месяце, у каждого эксперта и в итоге.
 // По услугам (2.135): сколько сдано по каждой услуге — из них позже срока, вознаграждение, у скольких экспертов; у эксперта —
 // его сданные по услугам.
+// От возврата до новой подписи (2.168): после возвратов руководителя за месяц — сколько дней в среднем эксперт заново
+// подписывал файл и сколько возвратов ещё ждут новой подписи; в итоге и у каждого эксперта.
 // Частые замечания (2.105) — пункты, с которыми руководитель чаще всего возвращал отчёты: по организации и у каждого эксперта.
 import { api, el, say } from '/common.js';
 import { rub } from '/money.js';
@@ -25,6 +27,9 @@ const pace = (x) => [x.avg_days != null ? `в среднем ${daysRu(x.avg_days
   x.late_first ? `позже первоначального срока: ${x.late_first} (${[x.late_first_moved ? `с переносом — ${x.late_first_moved}` : null,
     x.late_first - x.late_first_moved ? `без переноса — ${x.late_first - x.late_first_moved}` : null].filter(Boolean).join(', ')})` : null,
 ].filter(Boolean).join(' · ');
+// «новая подпись в среднем через 1,5 дня · ещё не подписано заново: 1»; без возвратов — пусто.
+const resign = (x) => [x.resign_days != null ? `новая подпись в среднем через ${x.resign_days < 0.1 ? 'меньше 2 часов' : daysRu(x.resign_days)}` : null,
+  x.resign_wait ? `ещё не подписано заново: ${x.resign_wait}` : null].filter(Boolean).join(' · ');
 // «сдано: 5 (было 3, +2) · в срок: 4 (было 4) · возвраты: 1 (было 2, −1)»; у эксперта без дел в обоих месяцах — пусто.
 const diff = (now, was) => `${now} (было ${was}${now > was ? `, +${now - was}` : now < was ? `, −${was - now}` : ''})`;
 const compare = (x) => {
@@ -74,6 +79,7 @@ async function load(month) {
     ...fact(`Итого · ${report.month_name}`, `принято дел: ${t.accepted} · сдано: ${t.done}${t.done_late ? ` (позже срока: ${t.done_late})` : ''}`),
     ...(pace(t) ? fact('Скорость и сроки', pace(t)) : []),
     ...(compare(t) ? fact(`К прошлому месяцу (${report.prev_month_name})`, compare(t)) : []),
+    ...(resign(t) ? fact('После Ваших возвратов', resign(t)) : []),
     ...(report.current && t.overdue_now ? fact('Просрочено сейчас', String(t.overdue_now), 'overdue') : []),
     ...fact('Вознаграждение за сданные', rub(t.fee_kop), 'money-sum'),
     ...fact('Выплачено экспертам', rub(t.paid_kop)));
@@ -101,6 +107,7 @@ async function load(month) {
     ...(x.returned_head || x.returned_dispatcher ? [el('div', { class: 'muted', text: `возвращено: ${[
       x.returned_head ? `Вами — ${x.returned_head}` : null, x.returned_dispatcher ? `на доработку — ${x.returned_dispatcher}` : null,
     ].filter(Boolean).join(', ')}` })] : []),
+    ...(resign(x) ? [el('div', { class: 'muted', 'data-expert-resign': '', text: `после Ваших возвратов: ${resign(x)}` })] : []),
     ...(x.remarks?.length ? [el('div', { class: 'muted', 'data-expert-remarks': '', text: `частые замечания: ${
       x.remarks.map((m) => `«${m.text}»${m.n > 1 ? ` ×${m.n}` : ''}`).join(', ')}` })] : []),
     el('div', { class: 'muted', text: `вознаграждение за сданные: ${rub(x.fee_kop)} · выплачено: ${rub(x.paid_kop)}` }))));

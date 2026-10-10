@@ -3642,10 +3642,14 @@ test('сводка за месяц (2.78): руководитель видит �
   expect((await ep.request.post(`/api/documents/${docId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
   await db(async (c) => {
     await c.query("update orders set status = 'done' where id = $1", [id]);
-    // Руководитель дважды возвращал отчёт (2.105): «Нет даты осмотра» — оба раза.
-    for (const items of [['Нет даты осмотра', 'Не указан этаж'], ['нет даты осмотра.']]) {
-      const { rows: [r] } = await c.query(`insert into org_returns (order_id, document_id, org_id, executor_user_id, returned_by, filename, comment)
-        values ($1, $2, $3, $4, $5, 'Отчёт Сводкина.pdf', $6) returning id`, [id, docId, orgId, expert.id, head.id, items.join('\n')]);
+    // Руководитель дважды возвращал отчёт (2.105): «Нет даты осмотра» — оба раза. Первый возврат — до подписи эксперта выше
+    // (не раньше начала месяца): эксперт подписал заново (2.168); после второго — ещё нет.
+    for (const [k, items] of [[0, ['Нет даты осмотра', 'Не указан этаж']], [1, ['нет даты осмотра.']]]) {
+      const { rows: [r] } = await c.query(`insert into org_returns (order_id, document_id, org_id, executor_user_id, returned_by, filename, comment, created_at)
+        values ($1, $2::uuid, $3, $4, $5, 'Отчёт Сводкина.pdf', $6, case when $7::int = 0 then greatest(
+          date_trunc('month', now() at time zone 'Europe/Moscow') at time zone 'Europe/Moscow',
+          (select min(at) from audit_log where action = 'document.sign' and subject_id = $2::uuid::text) - interval '36 hours') else now() end)
+        returning id`, [id, docId, orgId, expert.id, head.id, items.join('\n'), k]);
       for (const [i, text] of items.entries()) await c.query('insert into org_return_items (return_id, n, text) values ($1, $2, $3)', [r.id, i + 1, text]);
     }
   });
@@ -3663,6 +3667,9 @@ test('сводка за месяц (2.78): руководитель видит �
   await expect(row.locator('[data-expert-pace]')).toHaveText(/^в среднем \d (день|дня|дней) от принятия до сдачи · позже первоначального срока: 1 \(с переносом — 1\)$/);
   await expect(hp.locator('#org-report-total')).toContainText('позже первоначального срока: 1 (с переносом — 1)');
   await expect(row).toContainText('возвращено: Вами — 2, на доработку — 1');
+  // От возврата до новой подписи (2.168).
+  await expect(row.locator('[data-expert-resign]')).toHaveText(/^после Ваших возвратов: новая подпись в среднем через .+ · ещё не подписано заново: 1$/);
+  await expect(hp.locator('#org-report-total')).toContainText(/После Ваших возвратовновая подпись в среднем через .+ · ещё не подписано заново: 1/);
   await expect(row.locator('[data-expert-remarks]')).toHaveText('частые замечания: «нет даты осмотра.» ×2, «Не указан этаж»');
   await expect(hp.locator('#org-report-remarks > li')).toHaveText(['нет даты осмотра. — 2 раза', 'Не указан этаж — 1 раз']);
   await expect(row).toContainText('вознаграждение за сданные: 12 000 ₽ · выплачено: 12 000 ₽');
