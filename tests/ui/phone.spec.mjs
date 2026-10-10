@@ -7132,7 +7132,7 @@ test('эксперт (2.155): отказ диспетчера в перенос�
     await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
     await c.query('insert into specialists (user_id) values ($1) on conflict do nothing', [expert.id]);
     const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
-      values ('expertise', 'realty', 'Квартира: ответ на перенос', $1, $2, 'in_work', current_date + 3, 1500000, now(),
+      values ('expertise', 'realty', 'Квартира: ответ на перенос', $1, $2, 'in_work', (now() at time zone 'Europe/Moscow')::date + 3, 1500000, now(),
               '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Ответная ул., 5","area":"40"}') returning id`, [customer.id, expert.id]);
     return o.id;
   });
@@ -7167,7 +7167,7 @@ test('эксперт (2.155): отказ диспетчера в перенос�
   // 2.169: отказ переносом не считается — строки «переносили» нет; после согласованного переноса — число и дни.
   await expect(page.locator('#deadline-moved')).toBeHidden();
   await db((c) => c.query(`insert into deadline_requests (order_id, requested_by, old_deadline, new_deadline, reason, requested_at, outcome, decided_by, decided_at, seen_at)
-    values ($1, $2, current_date - 2, current_date + 3, 'Осмотр перенесён', now() - interval '6 days', 'approved', $3, now() - interval '5 days', now())`, [id, expert.id, disp.id]));
+    values ($1, $2, (now() at time zone 'Europe/Moscow')::date - 2, (now() at time zone 'Europe/Moscow')::date + 3, 'Осмотр перенесён', now() - interval '6 days', 'approved', $3, now() - interval '5 days', now())`, [id, expert.id, disp.id]));
   await page.reload();
   const moved = page.locator('#deadline-moved');
   await expect(moved).toHaveText(`Срок переносили один раз — всего на 5 дней. Первоначальный срок — ${new Date(`${inDays(-2)}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })}`);
