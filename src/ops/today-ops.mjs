@@ -33,6 +33,8 @@ const LIMIT = 50;
 const REPLY_HOURS = 24;
 // Файл ждёт подписи организации столько дней и дольше (2.152) — эксперту строкой «Руководитель ещё не подписал».
 const SIGN_LONG_DAYS = 2;
+// Возврат руководителя не исправлен 2 дня и дольше (2.153) — в утренней сводке руководителю.
+const RETURN_LONG_DAYS = 2;
 
 async function expertPart(sql, actor, registry, today) {
   const sp = await sql.one`select user_id from specialists where user_id = ${actor.id}`;
@@ -240,7 +242,7 @@ export async function orgPart(sql, org, registry, today) {
       toSign.push(view(o, { files: waiting, reminded_at: w?.reminded_at ?? null }));
     }
     const open = (await orgReturns(sql, o.id, { orgId: org.id })).filter((r) => r.open);
-    if (open.length) returned.push(view(o, { comment: open.at(-1).comment }));
+    if (open.length) returned.push(view(o, { comment: open.at(-1).comment, at: open[0].at }));
   }
   const offered = await sql`
     select id, module, service, status, deadline from orders where offer_org_id = ${org.id} and status = 'awaiting_executor'
@@ -261,6 +263,8 @@ export async function orgPart(sql, org, registry, today) {
   return {
     dossier,
     idle: [...moves.values()].filter((m) => m.idle).length,
+    // Сколько возвращённых эксперту дел не исправлено 2 дня и больше (2.153) — только число, для утренней сводки.
+    returned_long: returned.filter((r) => Date.now() - new Date(r.at).getTime() >= RETURN_LONG_DAYS * 86400_000).length,
     id: org.id,
     name: org.name,
     hot: cases.filter((o) => ['in_work', 'review'].includes(o.status) && o.deadline && o.deadline <= soon)
