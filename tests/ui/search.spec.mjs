@@ -84,6 +84,15 @@ test('поиск по своим делам: эксперт, заказчик-ю
   await box.fill(ref(r.cases.signature));
   await expect(cases).toHaveCount(1);
   await expect(hp.locator(`#org-cases li[data-case="№ ${ref(r.cases.signature)}"]`)).toBeVisible();
+  // 2.165: номер набран с русской раскладкой и полный номер из письма — то же дело.
+  const ru = (t) => [...t.toLowerCase()].map((ch) => ({ a: 'ф', b: 'и', c: 'с', d: 'в', e: 'у', f: 'а' })[ch] ?? ch).join('');
+  await box.fill(`№ ${ru(ref(r.cases.signature))}`);
+  await expect(cases).toHaveCount(1);
+  await expect(hp.locator(`#org-cases li[data-case="№ ${ref(r.cases.signature)}"]`)).toBeVisible();
+  await box.fill(r.cases.signature);
+  await expect(cases).toHaveCount(1);
+  await expect(hp.locator(`#org-cases li[data-case="№ ${ref(r.cases.signature)}"]`)).toBeVisible();
+  await hp.locator('#org-cases').locator('..').screenshot({ path: 'test-results/screens/search-03b-rukovoditel-nomer.png' });
   await box.fill('Лесная');
   await expect(cases).toHaveCount(0);
   await expect(hp.locator('#org-cases-none')).toContainText('Ничего не найдено по «Лесная»');

@@ -107,8 +107,8 @@ export async function loadOrgCases(org) {
   loadOrgSchedule(org);
 }
 
-// Поиск по делам экспертов (2.73): номер, вид услуги, эксперт, состояние. Адреса и заказчика руководитель не видит (2.16) —
-// по ним и не ищется. Строка поиска — когда дел больше одного.
+// Поиск по делам экспертов (2.73): номер (2.165: и полный — из письма или ссылки), вид услуги, эксперт, состояние.
+// Адреса и заказчика руководитель не видит (2.16) — по ним и не ищется. Строка поиска — когда дел больше одного.
 function renderCases() {
   const { orgObj: org, cases } = shown;
   if (!org) return;
@@ -122,7 +122,7 @@ function renderCases() {
   if (filter && !counts.get(filter)) filter = null;
   const chosen = FILTERS.find((f) => f.id === filter);
   renderFilters(counts);
-  const found = mine.filter((c) => hit([c.order_ref, c.service, c.expert, c.status_name].join(' '))
+  const found = mine.filter((c) => hit([c.order_ref, c.id, c.service, c.expert, c.status_name].join(' '))
     && (!chosen || (c.active && chosen.test(c))));
   const active = found.filter((c) => c.active);
   // «Ждёт моей подписи» (2.148): дольше всех ждущие — первыми.
