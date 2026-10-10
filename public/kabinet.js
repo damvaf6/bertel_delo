@@ -81,8 +81,8 @@ function setupFilter() {
   $('orders-filter').addEventListener('change', renderOrders);
 }
 
-// Поиск по своим делам (2.73): номер, адрес и другие поля заявки, вид услуги, заказчик (организация и кто ведёт),
-// номер дела суда, состояние. Варианты выбора — названиями, как на экране, а не внутренними кодами.
+// Поиск по своим делам (2.73): номер (и полный — 2.165), адрес и другие поля заявки, вид услуги, заказчик (организация
+// и кто ведёт), номер дела суда, состояние. Варианты выбора — названиями, как на экране, а не внутренними кодами.
 const orderRef = (o) => `№ ${o.id.slice(0, 8).toUpperCase()}`;
 function searchText(o) {
   const fields = state.catalog.modules.find((m) => m.id === o.module)?.services.find((s) => s.id === o.service)?.fields ?? [];
@@ -90,7 +90,7 @@ function searchText(o) {
     const f = fields.find((x) => x.id === k);
     return f?.type === 'select' ? f.options?.find((x) => x.id === v)?.name ?? v : v;
   });
-  return [orderRef(o), o.id.slice(0, 8), o.title, o.service_name, o.module_name, o.status_name, o.org_name, o.responsible_name,
+  return [orderRef(o), o.id, o.title, o.service_name, o.module_name, o.status_name, o.org_name, o.responsible_name,
     o.basis_name, o.basis_number, ...values].filter((x) => x != null && x !== '').join(' \n ');
 }
 wireSearch($('orders-search'), () => renderOrders());
