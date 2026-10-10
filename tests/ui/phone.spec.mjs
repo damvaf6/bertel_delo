@@ -7128,9 +7128,19 @@ test('новая версия после возврата (2.159): в окне �
 
   // Эксперт удаляет прежний файл и кладёт исправленный — у нового файла в окне подписи пункты замечания.
   expect((await ep.request.delete(`/api/documents/${first}`, { headers: H })).status()).toBe(204);
-  const second = await upload('Отчёт Версиева (исправлен).pdf', 'вторая версия');
+  // 2.163: в «Замечаниях руководителя» видно, что возвращённый файл удалён, а исправленного ещё нет…
   await ep.goto(`/kabinet#order=${id}`);
+  const fileState = ep.locator('#org-returns li.return.open [data-role="return-file"]');
+  await expect(fileState).toHaveText('Возвращённый файл удалён — загрузите исправленный файл и подпишите его.');
+  const second = await upload('Отчёт Версиева (исправлен).pdf', 'вторая версия');
+  await ep.reload();
+  // …а после загрузки — что исправленный файл загружен и ждёт подписи эксперта; «К подписи» ведёт к нему.
+  await expect(fileState).toHaveText(/^Исправленный файл «Отчёт Версиева \(исправлен\)\.pdf» загружен \d{2}\.\d{2}\.\d{4} — ждёт Вашей подписи\. К подписи$/);
+  await fileState.scrollIntoViewIfNeeded();
+  await shot(ep, 'c18-ekspert-zamechaniya-ispravlennyy-fayl-zhdyot-podpisi');
+  await fileState.getByRole('button', { name: 'К подписи' }).click();
   const doc = ep.locator('#docs li.doc').filter({ hasText: 'Отчёт Версиева (исправлен).pdf' });
+  await expect(doc).toBeInViewport();
   const box = doc.locator('[data-sig="points"]');
   await expect(box.locator('[data-role="sig-points-state"]')).toHaveText(/^Замечание руководителя от \d{2}\.\d{2}\.\d{4} к файлу «Отчёт Версиева\.pdf»: исправлено 0 из 3$/);
   await expect(box.locator('ul.points > li')).toHaveText(['1. Нет даты осмотра — не отмечено', '2. Не указан этаж — не отмечено', '3. Итог не совпадает — не отмечено']);
@@ -7153,6 +7163,7 @@ test('новая версия после возврата (2.159): в окне �
   expect(warned).toContain('Не отмечено исправленными пунктов замечания руководителя: 1. Руководитель это увидит.');
   await expect(doc.locator('[data-sig="points"]')).toHaveCount(0);
   await expect(ep.locator('#org-returns li').first()).toContainText('Отчёт Версиева.pdf · исправлено');
+  await expect(fileState).toHaveCount(0); // подписан — возврат закрыт, строки о файле нет
 
   // Руководитель у новой версии перед подписью от организации видит, что отмечено и что осталось.
   await hp.goto(`/kabinet#org=${orgId}`);
