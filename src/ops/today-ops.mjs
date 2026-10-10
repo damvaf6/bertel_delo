@@ -56,7 +56,7 @@ async function expertPart(sql, actor, registry, today) {
     // Руководитель вернул файл (2.27), а эксперт ещё не исправил.
     for (const r of (await orgReturns(sql, o.id)).filter((x) => x.open)) {
       returned.push(item(o, { by: `Руководитель${r.by ? ` (${r.by})` : ''}`, comment: r.comment, at: r.at, to: 'fix',
-        points: r.items.length, left: r.left }));
+        points: r.items.length, left: r.left, fresh_file: r.fresh_file }));
     }
   }
   // Ближе срок — выше (2.147); без срока — в конце, при равном сроке раньше вернули — выше.
@@ -265,6 +265,7 @@ export async function orgPart(sql, org, registry, today, { actorId = null } = {}
     // Сколько пунктов замечания эксперт уже отметил исправленными (2.160 — как в «Делах экспертов», 2.151).
     // «Напомнить эксперту» прямо в «Сегодня» (2.162) — как в «Делах экспертов» (2.125): раз в сутки; своё дело — без кнопки.
     if (open.length) returned.push(view(o, { comment: open.at(-1).comment, at: open[0].at, points: open.at(-1).items.length, left: open.at(-1).left,
+      fresh_file: open.at(-1).fresh_file,
       remind: o.executor_user_id === actorId ? null : await caseRemind(sql, o) }));
   }
   const offered = await sql`

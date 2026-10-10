@@ -154,8 +154,15 @@ export async function orgReturns(sql, orderId, { orgId = null } = {}) {
                      and d.created_at > r.created_at and s.signed_at > r.created_at)
            -- новая версия уже подписана и снова возвращена — прежний возврат закрыт ею
            or exists (select 1 from org_returns r2 join documents d on d.id = r2.document_id
-                      where r2.order_id = r.order_id and r2.id > r.id and d.created_at > r.created_at) as new_signed
+                      where r2.order_id = r.order_id and r2.id > r.id and d.created_at > r.created_at) as new_signed,
+           f.filename as fresh_name, f.created_at as fresh_at
     from org_returns r join users u on u.id = r.returned_by join organizations g on g.id = r.org_id
+    -- Возвращённый файл удалён, исправленный загружен и ждёт подписи эксперта (2.170 — в «Сегодня», как в деле, 2.163).
+    left join lateral (select d.filename, d.created_at from documents d
+                       where d.order_id = r.order_id and d.kind = 'result' and d.deleted_at is null and d.created_at > r.created_at
+                         and d.uploaded_by = r.executor_user_id
+                         and not exists (select 1 from document_signatures s where s.document_id = d.id and s.role = 'expert')
+                       order by d.created_at desc limit 1) f on true
     where r.order_id = ${orderId} and (${orgId}::uuid is null or r.org_id = ${orgId}::uuid) order by r.id`;
   const items = rows.length
     ? await sql`select return_id, n, text, fixed_at from org_return_items where return_id = any(${rows.map((r) => r.id)}::bigint[]) order by return_id, n`
@@ -174,6 +181,7 @@ export async function orgReturns(sql, orderId, { orgId = null } = {}) {
       // Пункты замечания (2.93): эксперт отмечает исправленные; left — сколько ещё не отмечено.
       items: points,
       left: points.filter((i) => !i.fixed).length,
+      fresh_file: !r.doc_alive && r.fresh_name ? { filename: r.fresh_name, at: r.fresh_at } : null,
     };
   });
 }

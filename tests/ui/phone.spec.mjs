@@ -7439,3 +7439,132 @@ test('«Напомнить эксперту» в «Сегодня» руково
   expect(JSON.stringify(feed)).toContain('Руководитель организации напоминает о деле');
   for (const p of [cp, ep, hp]) await p.context().close();
 });
+
+// 2.170: прогон «как эксперт и руководитель» по пачке 2.161–2.169 — одна организация, одни дела: очередь подписи
+// организации (долгие — первыми), «Напомнить эксперту» из «Сегодня», удалённый возвращённый файл и исправленный, ждущий
+// подписи, «Руководитель ещё не подписал» у эксперта, поиск номера русскими буквами, просроченное дело → перенос срока →
+// «Срок переносили», сводка за месяц — дни от возврата до новой подписи.
+test('прогон 2.170: эксперт и руководитель по пачке 2.161–2.169 на одних делах', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), ep = await ctx(), hp = await ctx(), dp = await ctx();
+  const customer = await signIn(cp, '+79990017001');
+  const expert = await signIn(ep, '+79990017002'), head = await signIn(hp, '+79990017003'), disp = await signIn(dp, '+79990017004');
+  const { orgId, A, F, B, C } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Прогон-2 ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Пачкина Вера' where id = $1", [expert.id]);
+    await c.query("update users set full_name = 'Старший Глеб' where id = $1", [head.id]);
+    await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    await c.query("insert into morning_digests (user_id, day) values ($1, (now() at time zone 'Europe/Moscow')::date), ($2, (now() at time zone 'Europe/Moscow')::date)", [expert.id, head.id]);
+    const add = async (title, days) => (await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', $1, $2, $3, 'in_work', (now() at time zone 'Europe/Moscow')::date + $4::int, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Пачечная ул., 7","area":"40"}') returning id`,
+    [title, customer.id, expert.id, days])).rows[0].id;
+    return { orgId: org.id, A: await add('Пачка: подпись давно', 6), F: await add('Пачка: подпись свежая', 7), B: await add('Пачка: возврат', 5), C: await add('Пачка: просрочено', -2) };
+  });
+  const ref = (id) => id.slice(0, 8).toUpperCase();
+  const upload = async (id, name) => {
+    const up = await ep.request.post(`/api/orders/${id}/results`, { data: Buffer.from(`%PDF-1.4 ${name}`), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent(name) } });
+    expect(up.status()).toBe(201);
+    return (await up.json()).document.id;
+  };
+  const sign = async (doc) => expect((await ep.request.post(`/api/documents/${doc}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  // A — эксперт подписал 3 дня назад, F — 2 часа назад; руководитель ещё не подписал.
+  const a1 = await upload(A, 'Отчёт давний.pdf');
+  await sign(a1);
+  const f1 = await upload(F, 'Отчёт свежий.pdf');
+  await sign(f1);
+  await db((c) => c.query(`update document_signatures set signed_at = now() - case when document_id = $1 then interval '73 hours' else interval '2 hours' end
+    where document_id in ($1, $2)`, [a1, f1]));
+  // B — руководитель вернул по пунктам 2 дня назад; эксперт удалил файл и загрузил исправленный, но ещё не подписал.
+  const b1 = await upload(B, 'Отчёт B.pdf');
+  await sign(b1);
+  expect((await hp.request.post(`/api/org-documents/${b1}/return`, { data: { comment: '1. Нет даты осмотра\n2. Не указан этаж' }, headers: H })).status()).toBe(201);
+  await db((c) => c.query("update org_returns set created_at = now() - interval '2 days' where order_id = $1", [B]));
+  expect((await ep.request.delete(`/api/documents/${b1}`, { headers: H })).status()).toBe(204);
+  const b2 = await upload(B, 'Отчёт B (исправлен).pdf');
+
+  // Руководитель: «Сегодня» — давняя подпись первой и красной (2.161), у возврата — «Напомнить эксперту» (2.162).
+  await hp.goto('/kabinet');
+  const toSign = hp.locator(`li[data-today-item="org-sign-${orgId}"]`);
+  await expect(toSign).toHaveCount(2);
+  await expect(toSign.nth(0)).toContainText(`№ ${ref(A)}`);
+  await expect(toSign.nth(0).locator('[data-role="sign-since"]')).toHaveClass(/overdue/);
+  await expect(toSign.nth(1)).toContainText(`№ ${ref(F)}`);
+  await expect(toSign.nth(1).locator('[data-role="sign-since"]')).toHaveClass(/muted/);
+  const ret = hp.locator(`li[data-today-item="org-returned-${orgId}"]`);
+  await expect(ret).toHaveCount(1);
+  await expect(ret).toContainText('2 дн. назад · эксперт отметил исправленными 0 из 2');
+  // Найдено прогоном: руководитель не видел, что исправленный файл уже загружен, — теперь видно (2.170).
+  await expect(ret).toContainText(/эксперт загрузил исправленный файл .+ — ещё не подписал/);
+  await expect(ret.locator('[data-role="returned-remind-state"]')).toHaveText('эксперту ещё не напоминали');
+  await ret.locator('[data-action="returned-remind"]').click();
+  await expect(ret.locator('[data-role="returned-remind-msg"]')).toHaveText('Эксперту отправлено напоминание');
+  // …и после напоминания строка «ещё не напоминали» сразу меняется (2.170).
+  await expect(ret.locator('[data-role="returned-remind-state"]')).toHaveText(/^напоминали .+ · снова — завтра$/);
+  await shot(hp, 'c19-progon2-rukovoditel-segodnya');
+  // «Дела экспертов»: номер, набранный русскими буквами (2.165), находит дело.
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const ru = (t) => [...t.toLowerCase()].map((ch) => ({ a: 'ф', b: 'и', c: 'с', d: 'в', e: 'у', f: 'а' })[ch] ?? ch).join('');
+  const search = hp.locator('#org-cases-search');
+  await search.fill(`№ ${ru(ref(C))}`);
+  await expect(hp.locator('#org-cases > li[data-case]')).toHaveCount(1);
+  await expect(hp.locator(`#org-cases li[data-case="№ ${ref(C)}"]`)).toBeVisible();
+  await search.fill('');
+
+  // Эксперт: «Сегодня» — напоминание руководителя, «Руководитель ещё не подписал» (2.152/2.164), просроченное без просьбы (2.166).
+  await ep.goto('/kabinet');
+  const et = ep.locator('#today-box');
+  await expect(et.locator('li[data-today-item="sign-late"]')).toHaveCount(1);
+  await expect(et.locator('li[data-today-item="sign-late"]')).toContainText('Пачка: подпись давно');
+  await expect(et.locator('li[data-today-item="sign-late"] [data-action="sign-late-remind"]')).toHaveText('Напомнить руководителю');
+  const late = et.locator('li[data-today-item]:has(button.open:has-text("Пачка: просрочено"))');
+  await expect(late.locator('[data-action="ask-late"]')).toHaveText('Попросить перенести срок');
+  // Найдено прогоном: в «Вернули на доработку» не было видно, что исправленный файл загружен и ждёт подписи (2.170).
+  await expect(et.locator('li[data-today-item="returned"]')).toContainText('исправленный файл «Отчёт B (исправлен).pdf» загружен — ждёт Вашей подписи');
+  await shot(ep, 'c20-progon2-ekspert-segodnya');
+  // Дело B: в «Замечаниях руководителя» — исправленный файл ждёт подписи (2.163), «К подписи» — к нему.
+  await ep.goto(`/kabinet#order=${B}`);
+  const fileState = ep.locator('#org-returns li.return.open [data-role="return-file"]');
+  await expect(fileState).toContainText('Исправленный файл «Отчёт B (исправлен).pdf» загружен');
+  await fileState.getByRole('button', { name: 'К подписи' }).click();
+  const doc = ep.locator('#docs li.doc').filter({ hasText: 'Отчёт B (исправлен).pdf' });
+  await expect(doc).toBeInViewport();
+  ep.once('dialog', (d) => d.accept());
+  await doc.getByRole('button', { name: 'Подписать', exact: true }).click();
+  await expect(ep.locator('#doc-msg')).toHaveText('Файл подписан');
+  await expect(fileState).toHaveCount(0);
+  // Дело C: из «Сегодня» — к полю нового срока, просьба; диспетчер согласился — «Срок переносили один раз» (2.169).
+  await ep.goto('/kabinet');
+  await late.locator('[data-action="ask-late"]').click();
+  await expect(ep.locator('#deadline-new')).toBeFocused();
+  await ep.locator('#deadline-new').fill(inDays(3));
+  await ep.locator('#deadline-reason').fill('Жду выписку ЕГРН');
+  await ep.locator('#deadline-form button[type="submit"]').click();
+  await expect(ep.locator('#deadline-msg')).toContainText('Просьба отправлена диспетчеру');
+  const reqs = await (await dp.request.get(`/api/orders/${C}/deadline-requests`)).json();
+  expect((await dp.request.post(`/api/orders/${C}/deadline-requests/${reqs.open.id}/decide`, { data: { approve: true }, headers: H })).status()).toBe(200);
+  await ep.goto(`/kabinet#order=${C}&to=deadline`);
+  await expect(ep.locator('#deadline-moved')).toContainText('Срок переносили один раз — всего на 5 дней');
+  await expect(ep.locator('#deadline-moved')).toHaveAttribute('data-days', '5');
+  await ep.locator('#deadline-box').scrollIntoViewIfNeeded();
+  await shot(ep, 'c21-progon2-ekspert-srok-perenosili');
+  // В «Сегодня» у просроченного дела больше нет кнопки переноса — срок уже новый.
+  await ep.goto('/kabinet');
+  await expect(et.locator('[data-action="ask-late"]')).toHaveCount(0);
+
+  // Руководитель: возврат закрыт, новый файл B — в очереди подписи; сводка за месяц — новая подпись через 2 дня.
+  await hp.goto('/kabinet');
+  await expect(hp.locator(`li[data-today-item="org-returned-${orgId}"]`)).toHaveCount(0);
+  await expect(hp.locator(`li[data-today-item="org-sign-${orgId}"]`)).toHaveCount(3);
+  await hp.goto(`/kabinet#org=${orgId}`);
+  await expect(hp.locator(`#org-sign li.doc[data-doc="${b2}"]`)).toBeVisible();
+  const row = hp.locator('#org-report > li').filter({ hasText: 'Пачкина Вера' });
+  await expect(row.locator('[data-expert-resign]')).toHaveText('после Ваших возвратов: новая подпись в среднем через 2 дня');
+  await expect(hp.locator('#org-report-total')).toContainText('новая подпись в среднем через 2 дня');
+  await row.scrollIntoViewIfNeeded();
+  await shot(hp, 'c22-progon2-rukovoditel-svodka');
+  for (const p of [cp, ep, hp, dp]) await p.context().close();
+});
