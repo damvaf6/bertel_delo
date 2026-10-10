@@ -7,6 +7,7 @@
 // результата нет (2.138). «Вернули на доработку» — когда вернули и сколько осталось до срока (2.147).
 // Руководитель не подписал 2 дня и дольше (2.152) — отдельной строкой с «Напомнить руководителю» прямо здесь.
 // Ответ диспетчера на просьбу о переносе срока — до первого просмотра «Срока» в деле (2.155).
+// Срок прошёл, а перенос не просили — «Попросить перенести срок» прямо в строке (2.166).
 // Руководителю «Ждут подписи организации» — дольше всех ждущие первыми, 2 дня и дольше — красным (2.161).
 // «Вернули эксперту» — с «Напомнить эксперту» прямо здесь (2.162).
 // «Можно продолжать» (2.86) — пришли документы, осмотр или сообщение. Диспетчеру (2.42) — деньги, проверка, цена, подбор, молчащие исполнители, горящие сроки. Нажатие — в дело или в раздел
@@ -36,13 +37,22 @@ function deadline(x, today) {
 }
 
 // Группа строк: заголовок с числом и строки-кнопки. Строка может быть { text, class } — например, красная (2.161).
-function group(id, title, items, line, go) {
+// extra(x) — кнопки под строкой (2.166: «Попросить перенести срок» у просроченного дела).
+function group(id, title, items, line, go, extra = () => []) {
   if (!items.length) return [];
   return [el('li', { class: 'group', 'data-today': id, text: `${title} · ${items.length}` }),
     ...items.map((x) => el('li', { 'data-today-item': id },
       el('button', { class: 'open', onclick: () => go(x) }, ...line(x).map((t, i) => (typeof t === 'string'
         ? el('div', { class: i ? 'muted' : 'title', text: t })
-        : el('div', { class: t.class, ...(t.role ? { 'data-role': t.role } : {}), text: t.text }))))))];
+        : el('div', { class: t.class, ...(t.role ? { 'data-role': t.role } : {}), text: t.text })))),
+      ...extra(x)))];
+}
+
+// Срок прошёл, а перенос ещё не просили (2.166) — кнопка сразу к форме «Попросить перенести срок» в деле.
+function askLate(x) {
+  if (!x.overdue || x.extend) return [];
+  return [el('button', { type: 'button', class: 'secondary', 'data-action': 'ask-late',
+    onclick: () => { location.hash = `order=${x.id}&to=late`; } }, 'Попросить перенести срок')];
 }
 
 // «Руководитель ещё не подписал» (2.152): строка ведёт к блоку подписи в деле, рядом — «Напомнить руководителю» (раз в сутки).
@@ -118,7 +128,7 @@ export async function loadToday() {
         // Перенос уже попросили (2.140) — второй раз не предлагаем.
         x.has_draft ? 'черновик есть — соберите отчёт Word и загрузите файл'
           : x.extend ? 'загрузите файл результата' : 'загрузите файл результата или попросите перенести срок'],
-      (x) => { location.hash = `order=${x.id}&to=result`; }),
+      (x) => { location.hash = `order=${x.id}&to=result`; }, askLate),
       // Диспетчер ответил на просьбу о переносе срока (2.155) — пока эксперт не открыл «Срок» в деле.
       ...group('extend-answer', 'Ответ на просьбу о переносе срока', e.extend_answer ?? [], (x) => [x.title,
         x.outcome === 'approved' ? `Диспетчер согласился: срок перенесён на ${dayRu(x.new_deadline)} (был ${dayRu(x.old_deadline)})`
@@ -155,7 +165,7 @@ export async function loadToday() {
       ...group('inspect-silent', 'Осмотр: 2 дня нет фото', e.inspect_silent ?? [], (x) => [x.title,
         `ссылка от ${since(x.link_at)}${x.expired ? ' — срок истёк' : ''}${x.sms_to ? ` · СМС на ${x.sms_to}` : ''} · отправьте снова`],
       (x) => { location.hash = `order=${x.id}&to=inspect`; }),
-      ...group('hot', 'Горит срок', e.hot.filter((x) => !noResult.some((n) => n.id === x.id)), (x) => [x.title, `${x.service} · ${deadline({ ...x, who: 'Вы попросили' }, t.today)}`], toOrder),
+      ...group('hot', 'Горит срок', e.hot.filter((x) => !noResult.some((n) => n.id === x.id)), (x) => [x.title, `${x.service} · ${deadline({ ...x, who: 'Вы попросили' }, t.today)}`], toOrder, askLate),
       ...group('offers', 'Новые предложения', e.offers, (x) => [x.title, [x.service, x.fee_kop ? `Вам ${rub(x.fee_kop)}` : null, deadline(x, t.today)].filter(Boolean).join(' · ')], toOrder),
       ...group('review', 'Ждут проверки диспетчера', e.review, (x) => [x.title, `${x.service} · ${deadline(x, t.today)}`], toOrder),
     );

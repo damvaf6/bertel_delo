@@ -5531,6 +5531,50 @@ test('перегруженный день (2.134): больше двух дел 
   await expect(day.locator(`[data-ask-extend="${ids.a}"]`)).toHaveCount(0);
 });
 
+test('срок прошёл (2.166): в «Сегодня» у просроченного дела без просьбы — «Попросить перенести срок», сразу к полю нового срока', async ({ page }) => {
+  const expert = await signIn(page, '+79990009366');
+  const ids = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    const mk = async (title) => (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, price_kop, paid_at, deadline)
+      values ($1, $2, 'expertise', 'realty', 'in_work', $1, 1500000, now(), $3::date) returning id`, [expert.id, title, inDays(-3)])).rows[0].id;
+    const a = await mk('Квартира на Садовой: срок прошёл');
+    const b = await mk('Дача в Рузе: срок прошёл, перенос просили');
+    await c.query(`insert into deadline_requests (order_id, requested_by, old_deadline, new_deadline, reason) values ($1, $2, $3::date, $4::date, 'Жду выписку')`,
+      [b, expert.id, inDays(-3), inDays(4)]);
+    return { a, b };
+  });
+  await page.goto('/kabinet');
+  const box = page.locator('#today-box');
+  const row = (id) => box.locator(`li[data-today-item]:has(button.open:has-text("${id}"))`);
+  const late = row('Квартира на Садовой');
+  await expect(late.locator('[data-action="ask-late"]')).toHaveText('Попросить перенести срок');
+  await expect(late).toContainText('просрочено — срок был');
+  // Перенос уже просили — кнопки нет, видно, на какую дату.
+  const asked = row('Дача в Рузе');
+  await expect(asked).toContainText('Вы попросили перенести на');
+  await expect(asked.locator('[data-action="ask-late"]')).toHaveCount(0);
+  await late.scrollIntoViewIfNeeded();
+  await shot(page, 'a11f-ekspert-segodnya-srok-proshel');
+  await late.locator('[data-action="ask-late"]').click();
+  await expect(page.locator('#order-title')).toHaveText('Квартира на Садовой: срок прошёл');
+  await expect(page.locator('#deadline-form')).toBeVisible();
+  await expect(page.locator('#deadline-new')).toBeFocused();
+  // Новый срок — не раньше сегодня: прошедшие дни выбрать нельзя.
+  await expect(page.locator('#deadline-new')).toHaveAttribute('min', inDays(0));
+  await expect(page.locator('#deadline-msg')).toHaveText('Срок прошёл — выберите новый срок и напишите причину');
+  await page.locator('#deadline-box').scrollIntoViewIfNeeded();
+  await shot(page, 'a11g-ekspert-perenos-srok-proshel');
+  await page.locator('#deadline-new').fill(inDays(3));
+  await page.locator('#deadline-reason').fill('Заказчик не прислал выписку ЕГРН');
+  await page.locator('#deadline-form button[type="submit"]').click();
+  await expect(page.locator('#deadline-msg')).toContainText('Просьба отправлена диспетчеру');
+  // В «Сегодня» кнопки больше нет — просьба ждёт ответа.
+  await page.goto('/kabinet');
+  await expect(late).toContainText('Вы попросили перенести на');
+  await expect(box.locator('[data-action="ask-late"]')).toHaveCount(0);
+  expect(ids.a).toBeTruthy();
+});
+
 test('перечень использованных документов (2.95): собран в черновике сам; заказчик прислал документ — «Обновить перечень»', async ({ page }) => {
   const expert = await signIn(page, '+79990000798');
   const id = await db(async (c) => {

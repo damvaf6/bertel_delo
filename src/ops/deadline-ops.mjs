@@ -22,6 +22,8 @@ function newDateFrom(value, order) {
     throw new HttpError(400, 'bad_date', 'Укажите новую дату срока');
   }
   if (v <= order.deadline) throw new HttpError(400, 'not_later', 'Новый срок должен быть позже нынешнего');
+  // Срок уже прошёл (2.166): новый срок в прошлом ничего не даёт — сегодня или позже.
+  if (v < todayMsk()) throw new HttpError(400, 'in_past', 'Новый срок уже прошёл — выберите сегодня или позже');
   if (v > addDays(todayMsk(), MAX_DAYS)) throw new HttpError(400, 'deadline_far', 'Срок — не дальше двух лет');
   return v;
 }
@@ -49,7 +51,8 @@ async function presetReasons(sql, order, registry) {
     out.push({
       id: 'docs', label: `Жду документы с ${docs[0].day}`,
       reason: `Жду документы от заказчика с ${docs[0].day}: ${titles}${more}`.slice(0, 1000),
-      new_deadline: addDays(order.deadline, Math.max(1, docs[0].waited)),
+      // У просроченного дела (2.166) — не раньше сегодняшнего дня.
+      new_deadline: [addDays(order.deadline, Math.max(1, docs[0].waited)), todayMsk()].sort().at(-1),
     });
   }
   // «Много дел в этот день» (2.134): у исполнителя в день срока больше двух дел к сдаче (число — только в подписи кнопки,
@@ -131,6 +134,8 @@ async function view(sql, actor, order, registry) {
     requests,
     open,
     can_request: canRequest,
+    // Самый ранний новый срок (2.166): день после нынешнего, у просроченного дела — не раньше сегодняшнего.
+    min_new: canRequest ? [addDays(order.deadline, 1), todayMsk()].sort().at(-1) : null,
     reasons: canRequest ? await presetReasons(sql, order, registry) : [],
     can_withdraw: !!open && sides.includes('executor'),
     can_decide: !!open && sides.includes('dispatcher') && DECIDE_STATUSES.includes(order.status),
