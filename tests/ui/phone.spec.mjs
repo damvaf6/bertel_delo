@@ -7094,3 +7094,71 @@ test('эксперт (2.155): отказ диспетчера в перенос�
   await expect(page.locator('#deadline-history li')).toContainText('отказано');
   await expect(page.locator('#deadline-fresh')).toBeHidden();
 });
+
+// 2.159: после возврата эксперт загружает новую версию файла — в окне подписи пункты замечания с отметками «исправлено»;
+// неотмеченные — подсказкой, подписать можно. Руководитель у новой версии видит, что отмечено.
+test('новая версия после возврата (2.159): в окне подписи — пункты замечания руководителя с отметками', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), ep = await ctx(), hp = await ctx();
+  const customer = await signIn(cp, '+79990010591');
+  const expert = await signIn(ep, '+79990010592'), head = await signIn(hp, '+79990010593');
+  const { orgId, id } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Версия ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Версиев Олег' where id = $1", [expert.id]);
+    await c.query("update users set full_name = 'Главная Нина' where id = $1", [head.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into morning_digests (user_id, day) values ($1, (now() at time zone 'Europe/Moscow')::date), ($2, (now() at time zone 'Europe/Moscow')::date)", [expert.id, head.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Версия: квартира', $1, $2, 'in_work', current_date + 5, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Версионная ул., 9","area":"40"}') returning id`,
+      [customer.id, expert.id]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [o.id, expert.id]);
+    return { orgId: org.id, id: o.id };
+  });
+  const upload = async (name, text) => {
+    const up = await ep.request.post(`/api/orders/${id}/results`, { data: Buffer.from(`%PDF-1.4 ${text}`), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent(name) } });
+    expect(up.status()).toBe(201);
+    return (await up.json()).document.id;
+  };
+  const first = await upload('Отчёт Версиева.pdf', 'первая версия');
+  expect((await ep.request.post(`/api/documents/${first}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  expect((await hp.request.post(`/api/org-documents/${first}/return`, { data: { comment: '1. Нет даты осмотра\n2. Не указан этаж\n3. Итог не совпадает' }, headers: H })).status()).toBe(201);
+
+  // Эксперт удаляет прежний файл и кладёт исправленный — у нового файла в окне подписи пункты замечания.
+  expect((await ep.request.delete(`/api/documents/${first}`, { headers: H })).status()).toBe(204);
+  const second = await upload('Отчёт Версиева (исправлен).pdf', 'вторая версия');
+  await ep.goto(`/kabinet#order=${id}`);
+  const doc = ep.locator('#docs li.doc').filter({ hasText: 'Отчёт Версиева (исправлен).pdf' });
+  const box = doc.locator('[data-sig="points"]');
+  await expect(box.locator('[data-role="sig-points-state"]')).toHaveText(/^Замечание руководителя от \d{2}\.\d{2}\.\d{4} к файлу «Отчёт Версиева\.pdf»: исправлено 0 из 3$/);
+  await expect(box.locator('ul.points > li')).toHaveText(['1. Нет даты осмотра — не отмечено', '2. Не указан этаж — не отмечено', '3. Итог не совпадает — не отмечено']);
+  // Отмечает два пункта прямо в окне подписи.
+  await box.locator('ul.points > li').nth(0).getByRole('checkbox').check();
+  await expect(ep.locator('#doc-msg')).toHaveText('Пункт 1 отмечен исправленным');
+  await box.locator('ul.points > li').nth(1).getByRole('checkbox').check();
+  await expect(ep.locator('#doc-msg')).toHaveText('Пункт 2 отмечен исправленным');
+  await expect(box.locator('[data-role="sig-points-state"]')).toContainText('исправлено 2 из 3');
+  await expect(box.locator('ul.points > li').nth(0)).toHaveText('1. Нет даты осмотра — исправлено');
+  await expect(box.locator('[data-role="sig-points-hint"]')).toHaveText('Не отмечено: 1. Подписать можно и так — руководитель увидит, какие пункты не отмечены.');
+  await expect(ep.locator('#org-returns [data-role="points-left"]').first()).toHaveText('Исправлено 2 из 3');
+  await box.scrollIntoViewIfNeeded();
+  await shot(ep, 'c10-ekspert-podpis-novoy-versii-punkty');
+  // Подписать с неотмеченным пунктом — можно, перед подписью предупреждение.
+  let warned = '';
+  ep.once('dialog', (d) => { warned = d.message(); d.accept(); });
+  await doc.getByRole('button', { name: 'Подписать', exact: true }).click();
+  await expect(ep.locator('#doc-msg')).toHaveText('Файл подписан');
+  expect(warned).toContain('Не отмечено исправленными пунктов замечания руководителя: 1. Руководитель это увидит.');
+  await expect(doc.locator('[data-sig="points"]')).toHaveCount(0);
+  await expect(ep.locator('#org-returns li').first()).toContainText('Отчёт Версиева.pdf · исправлено');
+
+  // Руководитель у новой версии перед подписью от организации видит, что отмечено и что осталось.
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const item = hp.locator(`#org-sign li.doc[data-doc="${second}"]`);
+  await expect(item.locator('[data-role="points-state"]')).toHaveText(/^По Вашему замечанию от \d{2}\.\d{2}\.\d{4}: эксперт отметил исправленными 2 из 3, осталось:$/);
+  await expect(item.locator('ul.points > li')).toHaveText(['3. Итог не совпадает — не отмечено']);
+  await item.locator('[data-role="points-state"]').scrollIntoViewIfNeeded();
+  await shot(hp, 'c11-rukovoditel-novaya-versiya-punkty');
+});
