@@ -7660,3 +7660,58 @@ test('дела экспертов (2.171, 2.172): руководитель от�
   await expect(hp.locator('[data-filter="fresh"]')).toHaveText('Исправленный файл ждёт подписи эксперта · 1');
   for (const p of [cp, ep, hp]) await p.context().close();
 });
+
+// «Мои заявки» (2.173): у дела, которое вернул руководитель, — заметная отметка «Вернули» и что осталось сделать;
+// нажатие ведёт сразу к замечаниям по пунктам. Подписал исправленный файл — отметка пропала.
+test('мои заявки (2.173): эксперт видит отметку «Вернули» у дела, которое вернул руководитель', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), ep = await ctx(), hp = await ctx();
+  const customer = await signIn(cp, '+79990017301');
+  const expert = await signIn(ep, '+79990017302'), head = await signIn(hp, '+79990017303');
+  const { A, B } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Вернули ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Возвратова Ольга' where id = $1", [expert.id]);
+    await c.query("update users set full_name = 'Строгий Пётр' where id = $1", [head.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const add = async (title, days) => (await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', $1, $2, $3, 'in_work', (now() at time zone 'Europe/Moscow')::date + $4::int, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Возвратная ул., 5","area":"40"}') returning id`,
+    [title, customer.id, expert.id, days])).rows[0].id;
+    return { A: await add('Вернули: квартира', 7), B: await add('Без возврата: квартира', 5) };
+  });
+  const upload = async (id, name) => {
+    const up = await ep.request.post(`/api/orders/${id}/results`, { data: Buffer.from(`%PDF-1.4 ${name}`), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent(name) } });
+    expect(up.status()).toBe(201);
+    return (await up.json()).document.id;
+  };
+  const d = await upload(A, 'Отчёт.pdf');
+  expect((await ep.request.post(`/api/documents/${d}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  expect((await hp.request.post(`/api/org-documents/${d}/return`, { data: { comment: '1. Нет даты осмотра\n2. Нет этажа' }, headers: H })).status()).toBe(201);
+
+  await ep.goto('/kabinet');
+  const rowA = ep.locator(`#orders li:has(button[data-id="${A}"])`);
+  const rowB = ep.locator(`#orders li:has(button[data-id="${B}"])`);
+  await expect(rowA).toHaveClass(/returned/);
+  await expect(rowA.locator('[data-role="returned-badge"]')).toHaveText('Вернули');
+  await expect(rowA.locator('[data-role="returned-note"]')).toContainText(/Руководитель \(Строгий Пётр\) вернул .+ · не исправлено пунктов: 2 из 2/);
+  await expect(rowB.locator('[data-role="returned-badge"]')).toHaveCount(0);
+  await shot(ep, 'c26-ekspert-moi-zayavki-vernuli');
+  await rowA.locator('button.open').click();
+  await expect(ep).toHaveURL(new RegExp(`#order=${A}&to=fix$`));
+  await expect(ep.locator('#org-returns-box')).toBeInViewport();
+
+  // Удалил возвращённый файл и загрузил исправленный — в списке: «исправленный файл загружен — подпишите его».
+  expect((await ep.request.delete(`/api/documents/${d}`, { headers: H })).status()).toBe(204);
+  const n = await upload(A, 'Отчёт (исправлен).pdf');
+  await ep.goto('/kabinet');
+  await expect(rowA.locator('[data-role="returned-note"]')).toContainText('исправленный файл загружен — подпишите его');
+  // Подписал — возврат закрыт, отметки нет.
+  expect((await ep.request.post(`/api/documents/${n}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  await ep.reload();
+  await expect(rowA.locator('button.open')).toBeVisible();
+  await expect(rowA.locator('[data-role="returned-badge"]')).toHaveCount(0);
+  await expect(rowA).not.toHaveClass(/returned/);
+  for (const p of [cp, ep, hp]) await p.context().close();
+});

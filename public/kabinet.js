@@ -127,14 +127,25 @@ function deadlineText(o) {
   return `срок ${dayRu(o.deadline)} · ${n === 0 ? 'сегодня' : `осталось ${n} дн.`}`;
 }
 
+// Руководитель вернул файл (2.173): отметка «Вернули» и что осталось — нажатие ведёт сразу к замечаниям по пунктам.
+function returnedText(r) {
+  const when = new Date(r.at).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+  const left = r.fresh_file ? 'исправленный файл загружен — подпишите его'
+    : r.left ? `не исправлено пунктов: ${r.left} из ${r.points}` : r.points ? 'все пункты отмечены — подпишите файл заново' : 'исправьте и подпишите файл заново';
+  return `Руководитель${r.by ? ` (${r.by})` : ''} вернул ${when} · ${left}`;
+}
+
 function orderItem(o) {
   const soon = o.deadline && !['done', 'closed', 'cancelled'].includes(o.status) && daysLeft(o.deadline) <= 2;
-  const li = el('li', {},
-    el('button', { class: 'open', 'data-id': o.id, onclick: () => { location.hash = `order=${o.id}`; } },
+  const back = o.as_executor && o.returned;
+  const li = el('li', back ? { class: 'returned' } : {},
+    el('button', { class: 'open', 'data-id': o.id, onclick: () => { location.hash = `order=${o.id}${back ? '&to=fix' : ''}`; } },
       el('div', { class: 'title', text: o.title }),
       el('div', { class: 'row' },
         el('span', { class: `badge status${o.status === 'cancelled' ? ' cancelled' : ''}`, text: o.status_name }),
+        ...(back ? [el('span', { class: 'badge back', 'data-role': 'returned-badge', text: 'Вернули' })] : []),
         el('span', { class: `muted${o.overdue || soon ? ' overdue' : ''}`, text: deadlineText(o) })),
+      ...(back ? [el('div', { class: 'back-note', 'data-role': 'returned-note', text: returnedText(o.returned) })] : []),
       el('div', { class: 'muted', text: [o.service_name, orderRef(o), o.as_executor && o.fee_kop ? `Вам ${rubShort(o.fee_kop)}` : null, o.as_executor ? null : dateRu(o.created_at),
         o.org_name ? `${o.org_name} · ведёт ${o.responsible_name || 'сотрудник'}` : null].filter(Boolean).join(' · ') }),
       ...(o.as_executor && o.brief ? [el('div', { class: 'brief', text: o.brief })] : [])));

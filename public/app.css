@@ -357,3 +357,7 @@ h2.inline { display: inline; }
 #org-sign-many .many-list label.row { flex-wrap: nowrap; align-items: flex-start; margin-top: 8px; }
 #org-sign-many .many-list label.row > span { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 #org-sign-many [data-role="many-left"] { display: block; color: #7a4b00; font-weight: 600; }
+/* «Мои заявки» (2.173): дело вернул руководитель — заметная отметка слева и под строкой что осталось. */
+.list li.returned { border-left: 4px solid var(--danger); padding-left: 10px; }
+.badge.back { background: var(--danger); color: #fff; font-weight: 700; font-size: 13px; }
+.list .back-note { margin-top: 4px; font-size: 15px; color: var(--danger); font-weight: 600; overflow-wrap: anywhere; }
