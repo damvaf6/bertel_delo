@@ -8,6 +8,7 @@ import { STATUSES, STATUS_NAME, TRANSITIONS, WORK_STARTED, addDays, availableAct
 import { runSettlement, settleCancel, settleDone, splitAmount } from '../money/money.mjs';
 import { audit, oneOf, quoted, text, uuidFrom } from './util.mjs';
 import { reviewState } from './work-ops.mjs';
+import { orgReturns } from './sign-ops.mjs';
 import { notify, notifyStatus, orgHeads } from '../notify/notify.mjs';
 
 const LEVEL_NAME = ['none', 'read', 'write', 'manage'];
@@ -193,6 +194,15 @@ export function orderOps() {
       async handler({ sql, actor, registry }) {
         const rows = await listVisibleOrders(sql, actor);
         const today = todayMsk();
+        // Руководитель вернул файл, а эксперт ещё не исправил (2.173) — отметка «вернули» в «Моих заявках».
+        const back = new Map();
+        for (const r of rows.filter((x) => x.executor_user_id === actor.id && x.status === 'in_work')) {
+          const open = (await orgReturns(sql, r.id)).filter((x) => x.open);
+          if (open.length) {
+            const last = open.at(-1);
+            back.set(r.id, { at: open[0].at, by: last.by, points: last.items.length, left: last.left, fresh_file: !!last.fresh_file });
+          }
+        }
         // Исполнителю в списке — его вознаграждение (80% цены), чтобы не открывать каждое дело (разбор 03.10.2026, 2.12).
         return {
           orders: rows.map((r) => {
@@ -202,6 +212,7 @@ export function orderOps() {
               ...(mine && r.price_kop ? { fee_kop: splitAmount(Number(r.price_kop)).payoutKop } : {}),
               // Исполнителю — главное о деле одной строкой (2.33): решить по предложению, не открывая каждое.
               ...(mine ? { brief: fieldsBrief(registry, r) } : {}),
+              ...(back.has(r.id) ? { returned: back.get(r.id) } : {}),
             };
           }),
         };

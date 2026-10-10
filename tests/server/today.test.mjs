@@ -491,3 +491,27 @@ test('«Дела экспертов» (2.171): исправленный файл
   assert.equal(after.returned_open, false);
   assert.equal(after.returned, null);
 });
+
+test('«Мои заявки» (2.173): у дела, которое вернул руководитель, — отметка «вернули», пока эксперт не подписал исправленный', async () => {
+  const o = await offered('Отметка «вернули» в списке', 13);
+  assert.equal((await step(spec, o, 'in_work')).status, 200);
+  const d = (await result(o, 'Первый.pdf')).body.document;
+  assert.equal((await spec.req('POST', `/api/documents/${d.id}/sign`, { confirm: true })).status, 201);
+  const mine = async (who = spec) => (await who.req('GET', '/api/orders')).body.orders.find((x) => x.id === o.id);
+  assert.equal((await mine()).returned, undefined, 'не возвращали — отметки нет');
+  assert.equal((await head.req('POST', `/api/org-documents/${d.id}/return`, { comment: '1. Нет даты\n2. Нет этажа' })).status, 201);
+  const r = (await mine()).returned;
+  assert.equal(r.points, 2);
+  assert.equal(r.left, 2);
+  assert.equal(r.fresh_file, false);
+  assert.ok(Date.now() - Date.parse(r.at) < 60_000);
+  // Заказчик и руководитель отметки эксперта не получают — она только исполнителю.
+  assert.equal((await mine(owner)).returned, undefined);
+  assert.equal((await mine(head))?.returned, undefined);
+  assert.equal((await spec.req('DELETE', `/api/documents/${d.id}`)).status, 204);
+  const n = (await result(o, 'Исправленный.pdf')).body.document;
+  assert.equal((await mine()).returned.fresh_file, true);
+  // Подписал исправленный — возврат закрыт, отметки нет.
+  assert.equal((await spec.req('POST', `/api/documents/${n.id}/sign`, { confirm: true })).status, 201);
+  assert.equal((await mine()).returned, undefined);
+});
