@@ -250,7 +250,8 @@ export function orgOps() {
             sign_since: w?.since ?? null,
             sign_reminded_at: w?.reminded_at ?? null,
             returned_open: open.length > 0,
-            returned: last ? { at: last.at, items: last.items.length, fixed: last.items.length - last.left } : null,
+            // Исправленный файл загружен и ждёт подписи эксперта (2.171) — для отбора «Исправленный файл ждёт подписи эксперта».
+            returned: last ? { at: last.at, items: last.items.length, fixed: last.items.length - last.left, fresh_file: last.fresh_file } : null,
           });
         }
         // Кому можно передать дело в работе (2.62): эксперты организации с допуском на услугу, кроме нынешнего.
