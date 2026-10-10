@@ -3,7 +3,7 @@
 // Нечего сообщить — не приходит. В ленте и СМС — без названий дел и имён; ведёт к «Моим срокам» в разделе «Специалист».
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid } from '../helpers.mjs';
+import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, addMember } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import { digestText, sendMorning } from '../../src/notify/morning.mjs';
 
@@ -143,4 +143,48 @@ test('2.142: «нет файла результата» и «заказчик ж
                             where n.user_id = ${solo.user.id} and n.event = 'morning_today'`;
   assert.equal(sms.body, `БЕРТЕЛ Дело: ${feed[0].title}. Подробно — «Сегодня» в кабинете.`);
   assert.doesNotMatch(sms.body, /Когда|файлом|Утренн/);
+});
+
+test('2.164: «руководитель не подписал 2 дня и больше» — числом; только оно — сводка ведёт к «Сегодня»', async () => {
+  assert.equal(digestText({ due: 0, overdue: 0, visits: 0, links: 0, no_result: 0, reply_wait: 0, lead_unsigned: 2 }),
+    'На сегодня: руководитель не подписал 2 дня и больше: 2');
+  const day = addDays(today, 4);
+  const now = at(day, '09:00');
+  // Эксперт от организации; дела со сроком через неделю — ничего, кроме подписи, в сводке нет.
+  const lead = await login(S, '+79990003707');
+  await makeSpecialist(S.sql, lead.user.id);
+  const org = await makeOrg(S.sql, 'Утренняя оценочная');
+  await addMember(S.sql, org.id, lead.user.id, 'member');
+  await S.sql`update specialists set org_id = ${org.id} where user_id = ${lead.user.id}`;
+  const signed = async (title, hoursAgo, orgToo = false) => {
+    const o = await inWork(title, addDays(day, 7));
+    await S.sql`update orders set executor_user_id = ${lead.user.id} where id = ${o.id}`;
+    const [d] = await S.sql`insert into documents (order_id, uploaded_by, filename, mime, size_bytes, storage_key, kind)
+                            values (${o.id}, ${lead.user.id}, 'otchet.pdf', 'application/pdf', 10, ${`morning-lead-${o.id}`}, 'result') returning id`;
+    for (const role of orgToo ? ['expert', 'org'] : ['expert']) {
+      await S.sql`insert into document_signatures (document_id, order_id, signer_id, provider, digest, storage_key, size_bytes, certificate, test, checked_ok, role, org_id, signed_at)
+                  values (${d.id}, ${o.id}, ${lead.user.id}, 'fake', ${'a'.repeat(64)}, ${`sig-${role}-${d.id}`}, 10, '{}', true, true, ${role}, ${role === 'org' ? org.id : null},
+                          ${new Date(now.getTime() - hoursAgo * 3600_000)})`;
+    }
+    return o;
+  };
+  // Ждёт подписи руководителя 3 дня — в счёт; сутки — ещё нет; подписано и организацией — нет.
+  await signed('Ждёт руководителя давно', 72);
+  await signed('Ждёт руководителя сутки', 24);
+  await signed('Подписано обоими', 96, true);
+  await S.sql`delete from morning_digests where day = ${day}::date`;
+  await sendMorning(S.sql, { now });
+  const [d] = await S.sql`select due, overdue, no_result, reply_wait, lead_unsigned from morning_digests where user_id = ${lead.user.id} and day = ${day}::date`;
+  assert.deepEqual({ ...d }, { due: 0, overdue: 0, no_result: 0, reply_wait: 0, lead_unsigned: 1 });
+  const feed = (await lead.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня'));
+  assert.equal(feed.length, 1);
+  assert.equal(feed[0].title, 'На сегодня: руководитель не подписал 2 дня и больше: 1');
+  assert.deepEqual([feed[0].section, feed[0].order_id], ['today', null]);
+  const [sms] = await S.sql`select d.body from notification_deliveries d join notifications n on n.id = d.notification_id
+                            where n.user_id = ${lead.user.id} and n.event = 'morning_today'`;
+  assert.equal(sms.body, `БЕРТЕЛ Дело: ${feed[0].title}. Подробно — «Сегодня» в кабинете.`);
+  assert.doesNotMatch(sms.body, /Ждёт|Утренняя оценочная/);
+  // Эксперт без организации — этой части нет (у других экспертов сводки тот же день — 0).
+  const [solo] = await S.sql`select lead_unsigned from morning_digests where user_id = ${spec.user.id} and day = ${day}::date`;
+  assert.equal(solo?.lead_unsigned ?? 0, 0);
 });
