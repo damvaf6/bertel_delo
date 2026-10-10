@@ -4,7 +4,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, addMember } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
-import { beforeDeadline, remindNotes } from '../../src/ops/note-ops.mjs';
+import { beforeDeadline, moveDeadlineNotes, remindNotes } from '../../src/ops/note-ops.mjs';
 
 let S, owner, dispatcher, spec, colleague, head, org;
 const FIELDS = { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, Заметочная ул., 3', area: '40' };
@@ -198,4 +198,21 @@ test('напоминание «за день до срока»: от срока 
   assert.equal(r.body.notes.find((n) => n.body === 'Срок сегодня').remind_on, today);
   assert.equal(beforeDeadline(addDays(today, -3), today), today);
   assert.equal(beforeDeadline(null, today), null);
+});
+
+// 2.157: в «Моих сроках на две недели» напоминание «за день до срока» — с отметкой и сроком дела; после переноса срока —
+// в новом дне; своя дата — без отметки.
+test('«Мои сроки»: напоминание «за день до срока» — со сроком дела, переезжает с переносом срока', async () => {
+  const o = await inWork('Сроки: за день до срока');
+  const base = `/api/orders/${o.id}/notes`;
+  const deadline = addDays(today, 9);
+  await spec.req('POST', base, { body: 'Проверить отчёт', remind_on: 'deadline' });
+  await spec.req('POST', base, { body: 'Позвонить', remind_on: addDays(today, 2) });
+  const notesOf = async () => (await spec.req('GET', '/api/specialist/me/schedule')).body.schedule.days
+    .flatMap((d) => d.items.filter((i) => i.kind === 'note' && i.order_id === o.id)
+      .map((i) => [d.date, i.note, i.by_deadline ?? false, i.deadline ?? null]));
+  assert.deepEqual(await notesOf(), [[addDays(today, 2), 'Позвонить', false, null], [addDays(today, 8), 'Проверить отчёт', true, deadline]]);
+  await S.sql`update orders set deadline = ${addDays(today, 12)}::date where id = ${o.id}`;
+  await moveDeadlineNotes(S.sql, o.id, addDays(today, 12), today);
+  assert.deepEqual((await notesOf())[1], [addDays(today, 11), 'Проверить отчёт', true, addDays(today, 12)]);
 });

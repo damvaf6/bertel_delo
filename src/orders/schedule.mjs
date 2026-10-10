@@ -2,7 +2,8 @@
 // проверке, предложенных), выезды помощника на свои дела и свои выезды помощником, до какого дня действует ссылка на осмотр,
 // просьбы о переносе срока (на какой день просит, ждёт ответа) и дни, когда эксперт не принимает новые дела. Просроченные —
 // отдельным списком сверху. Только дела, где человек исполнитель (или помощник на выезде). Свои заметки с напоминанием
-// (2.115, видит только автор) — в день напоминания; не отмеченные «сделано» с прошлых дней — на сегодня (2.120).
+// (2.115, видит только автор) — в день напоминания; не отмеченные «сделано» с прошлых дней — на сегодня (2.120); «за день
+// до срока» (2.149) — с отметкой и сроком дела (2.157).
 import { addDays, todayMsk } from './workflow.mjs';
 import { orderRef } from '../notify/registry.mjs';
 
@@ -40,7 +41,8 @@ export async function expertSchedule(sql, userId, registry, today = todayMsk()) 
       and l.revoked_at is null and l.finished_at is null and l.expires_at > now()
       and not exists (select 1 from inspection_links n where n.order_id = l.order_id and n.id > l.id)`;
   const notes = await sql`
-    select n.id, n.order_id, n.body, to_char(n.remind_on, 'YYYY-MM-DD') as remind_on, o.title, o.module, o.service
+    select n.id, n.order_id, n.body, to_char(n.remind_on, 'YYYY-MM-DD') as remind_on, n.remind_deadline,
+      to_char(o.deadline, 'YYYY-MM-DD') as deadline, o.title, o.module, o.service
     from order_notes n join orders o on o.id = n.order_id
     where n.author_id = ${userId} and o.executor_user_id = ${userId} and o.status in ('awaiting_executor', 'in_work', 'review', 'done')
       and n.deleted_at is null and n.done_at is null and n.remind_on is not null and n.remind_on <= ${last}::date
@@ -79,7 +81,7 @@ export async function expertSchedule(sql, userId, registry, today = todayMsk()) 
   }
   for (const n of notes) {
     put(n.remind_on < today ? today : n.remind_on, { kind: 'note', ...base(n, n.order_id), note_id: String(n.id), note: n.body, remind_on: n.remind_on,
-      late: n.remind_on < today });
+      late: n.remind_on < today, ...(n.remind_deadline && n.deadline ? { by_deadline: true, deadline: n.deadline } : {}) });
   }
   // В дне: сначала выезды по времени, потом сроки, просьбы о переносе, ссылки и заметки.
   const ORDER = { my_visit: 0, visit: 0, deadline: 1, extend: 2, link: 3, note: 4 };
