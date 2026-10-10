@@ -7159,6 +7159,16 @@ test('эксперт (2.155): отказ диспетчера в перенос�
   await page.goto(`/kabinet#order=${id}&to=deadline`);
   await expect(page.locator('#deadline-history li')).toContainText('отказано');
   await expect(page.locator('#deadline-fresh')).toBeHidden();
+  // 2.169: отказ переносом не считается — строки «переносили» нет; после согласованного переноса — число и дни.
+  await expect(page.locator('#deadline-moved')).toBeHidden();
+  await db((c) => c.query(`insert into deadline_requests (order_id, requested_by, old_deadline, new_deadline, reason, requested_at, outcome, decided_by, decided_at, seen_at)
+    values ($1, $2, current_date - 2, current_date + 3, 'Осмотр перенесён', now() - interval '6 days', 'approved', $3, now() - interval '5 days', now())`, [id, expert.id, disp.id]));
+  await page.reload();
+  const moved = page.locator('#deadline-moved');
+  await expect(moved).toHaveText(`Срок переносили один раз — всего на 5 дней. Первоначальный срок — ${new Date(`${inDays(-2)}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })}`);
+  await expect(moved).toHaveAttribute('data-days', '5');
+  await moved.scrollIntoViewIfNeeded();
+  await shot(page, 'b4g-ekspert-srok-perenosili');
 });
 
 // 2.159: после возврата эксперт загружает новую версию файла — в окне подписи пункты замечания с отметками «исправлено»;
