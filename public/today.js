@@ -154,10 +154,15 @@ export async function loadToday() {
         `не принимает дела до ${dayRu(x.away_until)}${x.away_note ? ` · ${x.away_note}` : ''} · передайте коллеге`], toOrg('transfer')),
       ...group(`org-risk-${g.id}`, 'Горит: нет черновика или фото осмотра', g.at_risk ?? [], (x) => [...caseLine(x), x.missing.join(' · ')], toOrg('case')),
       ...group(`org-sign-${g.id}`, 'Ждут подписи организации', g.to_sign, (x) => [...caseLine(x),
-        `файлов: ${x.files}${x.reminded_at ? ` · эксперт напомнил ${since(x.reminded_at)}` : ''}`], toOrg('sign')),
+        [`файлов: ${x.files}`, x.since ? `эксперт подписал ${since(x.since)} — ждёт ${waited(x.since)}` : null,
+          x.reminded_at ? `эксперт напомнил ${since(x.reminded_at)}` : null].filter(Boolean).join(' · ')], toOrg('sign')),
       ...group(`org-pending-${g.id}`, 'Ждут назначения эксперта', g.pending, caseLine, toOrg('pending')),
       ...group(`org-hot-${g.id}`, 'Горит срок у экспертов', g.hot.filter((x) => !risky.has(x.order_ref)), caseLine, toOrg('case')),
-      ...group(`org-returned-${g.id}`, 'Вернули эксперту — ждём исправления', g.returned, (x) => [...caseLine(x), `замечание: ${x.comment}`], toOrg('case')),
+      // Когда вернули и сколько пунктов эксперт уже отметил исправленными (2.160 — как в «Делах экспертов»).
+      ...group(`org-returned-${g.id}`, 'Вернули эксперту — ждём исправления', g.returned, (x) => [...caseLine(x), `замечание: ${x.comment}`,
+        [x.at ? `вернули ${since(x.at)} — ${waited(x.at)} назад` : null,
+          x.points ? (x.left ? `эксперт отметил исправленными ${x.points - x.left} из ${x.points}` : `эксперт отметил исправленным всё (${x.points} из ${x.points}) — ждём его подписи`) : null]
+          .filter(Boolean).join(' · ')].filter(Boolean), toOrg('case')),
       // Досье экспертов (2.63): только вид документа и срок; копии руководитель не видит.
       ...group(`org-dossier-${g.id}`, 'Документы экспертов: срок', g.dossier ?? [], (x) => [`${x.expert} · ${x.kind_name}`,
         x.state === 'expired' ? `срок истёк ${dayRu(x.valid_until)} — по оценке эксперт снят с подбора` : `действует до ${dayRu(x.valid_until)} · осталось ${daysLeft(x.valid_until, t.today)} дн.`], toOrg()),

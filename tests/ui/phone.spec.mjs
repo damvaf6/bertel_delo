@@ -7162,3 +7162,99 @@ test('новая версия после возврата (2.159): в окне �
   await item.locator('[data-role="points-state"]').scrollIntoViewIfNeeded();
   await shot(hp, 'c11-rukovoditel-novaya-versiya-punkty');
 });
+
+// 2.160: прогон «как эксперт и руководитель» по пачке 2.151–2.159 — одна организация, одни и те же дела: возврат по пунктам
+// и новая версия файла, долгое ожидание подписи организации, прошедший срок, ответ на перенос срока, напоминание «за день
+// до срока», утренняя сводка руководителя, «Возвраты за год» в карточке.
+test('прогон 2.160: эксперт и руководитель по пачке 2.151–2.159 на одних делах', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), ep = await ctx(), hp = await ctx(), dp = await ctx();
+  const customer = await signIn(cp, '+79990016001');
+  const expert = await signIn(ep, '+79990016002'), head = await signIn(hp, '+79990016003'), disp = await signIn(dp, '+79990016004');
+  const { orgId, A, B, C, D } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Прогон ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Прогонова Анна' where id = $1", [expert.id]);
+    await c.query("update users set full_name = 'Главный Пётр' where id = $1", [head.id]);
+    await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const add = async (title, days) => (await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', $1, $2, $3, 'in_work', (now() at time zone 'Europe/Moscow')::date + $4::int, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Прогонная ул., 1","area":"40"}') returning id`,
+    [title, customer.id, expert.id, days])).rows[0].id;
+    return { orgId: org.id, A: await add('Прогон: ждёт подписи', 6), B: await add('Прогон: возврат', 4), C: await add('Прогон: просрочено', -2), D: await add('Прогон: перенос', 3) };
+  });
+  const upload = async (id, name) => {
+    const up = await ep.request.post(`/api/orders/${id}/results`, { data: Buffer.from(`%PDF-1.4 ${name}`), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent(name) } });
+    expect(up.status()).toBe(201);
+    return (await up.json()).document.id;
+  };
+  const sign = async (doc) => expect((await ep.request.post(`/api/documents/${doc}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  // A: эксперт подписал 3 дня назад, руководитель не подписал.
+  const a1 = await upload(A, 'Отчёт A.pdf');
+  await sign(a1);
+  await db((c) => c.query("update document_signatures set signed_at = now() - interval '3 days' where document_id = $1", [a1]));
+  // B: руководитель вернул по пунктам 3 дня назад; эксперт удалил файл и положил исправленный, один пункт отметил.
+  const b1 = await upload(B, 'Отчёт B.pdf');
+  await sign(b1);
+  expect((await hp.request.post(`/api/org-documents/${b1}/return`, { data: { comment: '1. Нет даты осмотра\n2. Не указан этаж' }, headers: H })).status()).toBe(201);
+  await db((c) => c.query("update org_returns set created_at = now() - interval '3 days' where order_id = $1", [B]));
+  await db((c) => c.query("update documents set created_at = now() - interval '4 days' where id = $1", [b1]));
+  expect((await ep.request.delete(`/api/documents/${b1}`, { headers: H })).status()).toBe(204);
+  const b2 = await upload(B, 'Отчёт B (исправлен).pdf');
+  const rid = await db(async (c) => (await c.query('select id from org_returns where order_id = $1', [B])).rows[0].id);
+  expect((await ep.request.put(`/api/orders/${B}/org-returns/${rid}/items/1`, { data: { fixed: true }, headers: H })).status()).toBe(200);
+  // D: просьба о переносе срока — диспетчер согласился; у эксперта заметка «за день до срока».
+  const want = inDays(8);
+  await db((c) => c.query(`insert into order_notes (order_id, author_id, body, remind_on, remind_deadline)
+    values ($1, $2, 'Сверить площадь', (select deadline - 1 from orders where id = $1), true)`, [D, expert.id]));
+  expect((await ep.request.post(`/api/orders/${D}/deadline-requests`, { data: { new_deadline: want, reason: 'Жду выписку ЕГРН' }, headers: H })).status()).toBe(201);
+  const reqs = await (await dp.request.get(`/api/orders/${D}/deadline-requests`)).json();
+  expect((await dp.request.post(`/api/orders/${D}/deadline-requests/${reqs.open.id}/decide`, { data: { approve: true }, headers: H })).status()).toBe(200);
+
+  // Эксперт: «Сегодня» — ответ на перенос, руководитель не подписал 3 дня, вернули с отмеченным пунктом, просрочено без файла.
+  await ep.goto('/kabinet');
+  const et = ep.locator('#today-box');
+  await expect(et.locator('li[data-today-item="extend-answer"]')).toContainText('Диспетчер согласился: срок перенесён на');
+  await expect(et.locator('li[data-today-item="sign-late"]')).toContainText('ждёт 3 дн.');
+  await expect(et.locator('li[data-today-item="sign-wait"]')).toHaveCount(0);
+  const er = et.locator('li[data-today-item="returned"]');
+  await expect(er).toContainText('Руководитель (Главный Пётр)');
+  await expect(er).toContainText('3 дн. назад · не исправлено пунктов: 1 из 2');
+  await expect(et.locator('li[data-today-item="no-result"]')).toContainText('Прогон: просрочено');
+  await shot(ep, 'c12-progon-ekspert-segodnya');
+  // Дело B: у новой версии — пункты замечания к удалённому файлу, один отмечен.
+  await er.locator('button').click();
+  await expect(ep).toHaveURL(new RegExp(`#order=${B}&to=fix$`));
+  const box = ep.locator('#docs li.doc').filter({ hasText: 'Отчёт B (исправлен).pdf' }).locator('[data-sig="points"]');
+  await expect(box.locator('[data-role="sig-points-state"]')).toContainText('к файлу «Отчёт B.pdf»: исправлено 1 из 2');
+  // «Мои сроки»: напоминание «за день до срока» переехало вместе с перенесённым сроком; просроченное — отдельно.
+  await ep.goto('/kabinet#specialist&to=schedule');
+  const moved = await db(async (c) => (await c.query(`select to_char(deadline - 1, 'YYYY-MM-DD') as d, to_char(deadline, 'YYYY-MM-DD') as dl from orders where id = $1`, [D])).rows[0]);
+  expect(moved.dl).toBe(want);
+  await expect(ep.locator(`#schedule-days li[data-day="${moved.d}"] li[data-schedule-item="note"]`)).toContainText('Сверить площадь · за день до срока (срок ');
+  await expect(ep.locator('#schedule-overdue')).toContainText('Прогон: просрочено');
+
+  // Руководитель: «Сегодня» — сколько ждёт подпись и сколько пунктов эксперт отметил (как в «Делах экспертов»).
+  await hp.goto('/kabinet');
+  await expect(hp.locator(`li[data-today-item="org-sign-${orgId}"]`)).toContainText(/файлов: 1 · эксперт подписал .+ — ждёт 3 дн\./);
+  await expect(hp.locator(`li[data-today-item="org-returned-${orgId}"]`)).toContainText('3 дн. назад · эксперт отметил исправленными 1 из 2');
+  await shot(hp, 'c13-progon-rukovoditel-segodnya');
+  // «Дела экспертов»: отборы пачки, у каждого дела — своё.
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const rows = hp.locator('#org-cases > li[data-case]');
+  await expect(rows).toHaveCount(4);
+  await expect(hp.locator('[data-filter="overdue"]')).toHaveText('Срок прошёл · 1');
+  await expect(hp.locator('[data-filter="returned"]')).toHaveText('Вернул эксперту · 1');
+  await expect(rows.nth(0).locator('.overdue.big')).toContainText('ПРОСРОЧЕНО на 2 дн.');
+  await expect(hp.locator('#org-cases [data-role="returned"]')).toContainText('(3 дн. назад) — эксперт отметил исправленными 1 из 2');
+  await expect(hp.locator('#org-cases')).toContainText('— ждёт 3 дн.');
+  await shot(hp, 'c14-progon-rukovoditel-dela');
+  // У новой версии в «Подписи организации» — что эксперт отметил.
+  await expect(hp.locator(`#org-sign li.doc[data-doc="${b2}"]`)).toContainText('Эксперт ещё не подписал');
+  // Карточка эксперта: «Возвраты за год».
+  await hp.goto(`/kabinet#expert=${expert.id}`);
+  await expect(hp.locator('#expert-returns-note')).toContainText('Ваша организация возвращала отчёты 1 раз по 1 делу');
+  for (const p of [cp, ep, hp, dp]) await p.context().close();
+});

@@ -247,10 +247,12 @@ export async function orgPart(sql, org, registry, today) {
     if (waiting) {
       // Эксперт напоминал о подписи (2.99) — когда последний раз, пока файл ждёт (2.100).
       const w = await signWait(sql, o);
-      toSign.push(view(o, { files: waiting, reminded_at: w?.reminded_at ?? null }));
+      // Когда эксперт подписал и сколько ждёт (2.160 — как в «Делах экспертов», 2.148).
+      toSign.push(view(o, { files: waiting, reminded_at: w?.reminded_at ?? null, since: w?.since ?? null }));
     }
     const open = (await orgReturns(sql, o.id, { orgId: org.id })).filter((r) => r.open);
-    if (open.length) returned.push(view(o, { comment: open.at(-1).comment, at: open[0].at }));
+    // Сколько пунктов замечания эксперт уже отметил исправленными (2.160 — как в «Делах экспертов», 2.151).
+    if (open.length) returned.push(view(o, { comment: open.at(-1).comment, at: open[0].at, points: open.at(-1).items.length, left: open.at(-1).left }));
   }
   const offered = await sql`
     select id, module, service, status, deadline from orders where offer_org_id = ${org.id} and status = 'awaiting_executor'
