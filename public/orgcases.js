@@ -11,6 +11,8 @@
 // Отбор по эксперту и «Срок на этой неделе» (2.127) — вместе с отбором 2.102 и поиском.
 // Сколько дней по делу ничего не происходило и отбор «Без движения» (2.133) — переписка с заказчиком не в счёт.
 // Отбор «Срок прошёл» (2.158): только просроченные, дольше всех просроченные — первыми; на сколько дней — у дела.
+// Отбор «Исправленный файл ждёт подписи эксперта» (2.171): после возврата эксперт загрузил новый файл, но не подписал —
+// дольше всех ждущие первыми; 2 дня и дольше — строка красная.
 // «Ждут назначения» (2.17): дела, предложенные диспетчером организации, — руководитель назначает эксперта или отказывается.
 import { api, el, say } from '/common.js';
 import { expertLink } from '/expertcard.js';
@@ -50,6 +52,7 @@ const FILTERS = [
   { id: 'idle', text: 'Без движения', test: (c) => c.idle },
   { id: 'sign', text: 'Ждёт моей подписи', test: (c) => c.sign_wait > 0 },
   { id: 'returned', text: 'Вернул эксперту', test: (c) => c.returned_open },
+  { id: 'fresh', text: 'Исправленный файл ждёт подписи эксперта', test: (c) => !!c.returned?.fresh_file },
   { id: 'extend', text: 'Просят перенести срок', test: (c) => !!c.extend },
   { id: 'silent', text: 'Предложено, молчит', test: (c) => c.status === 'awaiting_executor' },
 ];
@@ -68,6 +71,9 @@ function returnedText(c) {
       : `эксперт отметил исправленными ${r.fixed} из ${r.items}`;
   return `Вы вернули отчёт эксперту${when} — ${state}`;
 }
+// Исправленный файл после возврата загружен, эксперт его ещё не подписал (2.171).
+const freshLong = (c) => Date.now() - new Date(c.returned.fresh_file.at).getTime() >= SIGN_LONG_DAYS * 86_400_000;
+const freshText = (c) => `Эксперт загрузил исправленный файл ${timeRu(c.returned.fresh_file.at)} — ещё не подписал (${waited(c.returned.fresh_file.at)})`;
 // Чьи дела показать (2.127): номер эксперта или '' — все.
 let expert = '';
 // Сколько сдавать за две недели (2.111) — у каждого эксперта в выборе «кому передать».
@@ -129,6 +135,8 @@ function renderCases() {
   if (filter === 'sign') active.sort((a, b) => new Date(a.sign_since) - new Date(b.sign_since));
   // «Срок прошёл» (2.158): дольше всех просроченные — первыми.
   if (filter === 'overdue') active.sort((a, b) => b.overdue_days - a.overdue_days);
+  // «Исправленный файл ждёт подписи эксперта» (2.171): дольше всех ждущие — первыми.
+  if (filter === 'fresh') active.sort((a, b) => new Date(a.returned.fresh_file.at) - new Date(b.returned.fresh_file.at));
   const done = found.filter((c) => !c.active);
   const none = cases.length > 0 && !found.length;
   $('org-cases-none').classList.toggle('hidden', !none);
@@ -196,6 +204,7 @@ function caseItem(org, c) {
       el('button', { class: 'secondary', 'data-action': 'go-sign', onclick: () => goSign(c.order_ref) }, 'К подписи')),
     ...(c.sign_since ? [el('div', { class: signLong(c) ? 'overdue' : 'muted', 'data-role': 'sign-since', text: signSinceText(c) })] : [])] : []),
     ...(c.returned_open ? [el('div', { class: 'muted', 'data-role': 'returned', text: returnedText(c) })] : []),
+    ...(c.returned?.fresh_file ? [el('div', { class: freshLong(c) ? 'overdue' : 'muted', 'data-role': 'fresh-file', text: freshText(c) })] : []),
     // Эксперт попросил перенести срок (2.100): решает диспетчер, руководитель видит новую дату.
     ...(c.extend ? [el('div', { class: 'muted', 'data-role': 'extend',
       text: `Эксперт просит перенести срок на ${dayRu(c.extend.new_deadline)} — ждёт ответа диспетчера` })] : []),

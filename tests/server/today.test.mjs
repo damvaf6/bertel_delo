@@ -469,3 +469,25 @@ test('возвращённый файл удалён, исправленный �
   assert.equal(await mine(), undefined);
   assert.equal(await lead(), undefined);
 });
+
+test('«Дела экспертов» (2.171): исправленный файл после возврата загружен и не подписан — для отбора руководителя', async () => {
+  const o = await offered('Отбор исправленного файла', 12);
+  assert.equal((await step(spec, o, 'in_work')).status, 200);
+  const d = (await result(o, 'Первый.pdf')).body.document;
+  assert.equal((await spec.req('POST', `/api/documents/${d.id}/sign`, { confirm: true })).status, 201);
+  assert.equal((await head.req('POST', `/api/org-documents/${d.id}/return`, { comment: 'Нет даты осмотра' })).status, 201);
+  const row = async () => (await head.req('GET', `/api/orgs/${org.id}/cases`)).body.cases.find((c) => c.id === o.id);
+  assert.equal((await row()).returned.fresh_file, null, 'возвращённый файл на месте — исправленного нет');
+  assert.equal((await spec.req('DELETE', `/api/documents/${d.id}`)).status, 204);
+  assert.equal((await row()).returned.fresh_file, null, 'удалён, но новый ещё не загружен');
+  const n = (await result(o, 'Исправленный.pdf')).body.document;
+  const c = await row();
+  assert.equal(c.returned_open, true);
+  assert.equal(c.returned.fresh_file.filename, 'Исправленный.pdf');
+  assert.ok(Date.now() - Date.parse(c.returned.fresh_file.at) < 60_000);
+  // Эксперт подписал — возврат закрыт, в отбор дело больше не попадает.
+  assert.equal((await spec.req('POST', `/api/documents/${n.id}/sign`, { confirm: true })).status, 201);
+  const after = await row();
+  assert.equal(after.returned_open, false);
+  assert.equal(after.returned, null);
+});
