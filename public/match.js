@@ -99,7 +99,8 @@ const VISIT_STATE = { active: 'назначен', finished: 'завершён', 
 async function showVisits(sp) {
   const { visits } = await api('GET', '/api/visits');
   $('visits-box').classList.toggle('hidden', !sp.onsite && !visits.length);
-  const when = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+  // Время выезда — по Москве, как в «Моих сроках на две недели» рядом (2.180: на телефоне не в московском поясе было «08:00» против «11:00»).
+  const when = (s) => new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
   $('visits').replaceChildren(...visits.map((v) => el('li', { 'data-visit': v.id },
     el('div', { class: 'title', text: `${v.service || 'Выезд'} · ${when(v.planned_at)}` }),
     el('div', { class: 'muted', text: [v.place, VISIT_STATE[v.state]].filter(Boolean).join(' · ') }),
