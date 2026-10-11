@@ -161,6 +161,8 @@ test('деньги перевода: 20% только с услуг, нотар�
   assert.equal((await spec.req('GET', '/api/orders')).body.orders.find((x) => x.id === o.id).fee_kop, 80_000);
   assert.equal((await spec.req('POST', `/api/orders/${o.id}/results`, Buffer.from('перевод'), { raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': 'p.pdf' } })).status, 201);
   await signResults(S, spec, o.id);
+  // Шаги до сдачи (2а.6): оригинал получен, подписано у нотариуса.
+  for (const step of ['original', 'notarized']) assert.equal((await spec.req('POST', `/api/orders/${o.id}/steps/${step}`, {})).status, 200, step);
   assert.equal((await spec.req('POST', `/api/orders/${o.id}/status`, { to: 'review', from: 'in_work' })).status, 200);
   const rv = (await dispatcher.req('GET', `/api/orders/${o.id}/review`)).body;
   for (const c of rv.checks) await dispatcher.req('PUT', `/api/orders/${o.id}/review/${c.id}`, { verdict: 'ok', round: rv.round });
@@ -277,6 +279,7 @@ test('переводчики: без статуса не допускаются;
   assert.equal((await receipt(URL_OK)).status, 404, 'выплаты ещё нет');
   assert.equal((await tr.req('POST', `/api/orders/${en.id}/results`, Buffer.from('перевод'), { raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': 'p.pdf' } })).status, 201);
   await signResults(S, tr, en.id);
+  for (const step of ['original', 'notarized']) assert.equal((await tr.req('POST', `/api/orders/${en.id}/steps/${step}`, {})).status, 200, step);
   assert.equal((await tr.req('POST', `/api/orders/${en.id}/status`, { to: 'review', from: 'in_work' })).status, 200);
   const rv = (await dispatcher.req('GET', `/api/orders/${en.id}/review`)).body;
   for (const c of rv.checks) await dispatcher.req('PUT', `/api/orders/${en.id}/review/${c.id}`, { verdict: 'ok', round: rv.round });

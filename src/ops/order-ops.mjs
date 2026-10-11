@@ -10,6 +10,7 @@ import { runSettlement, settleCancel, settleDone, orderSplit } from '../money/mo
 import { audit, oneOf, quoted, text, uuidFrom } from './util.mjs';
 import { reviewState } from './work-ops.mjs';
 import { orgReturns } from './sign-ops.mjs';
+import { missingSteps } from './step-ops.mjs';
 import { notify, notifyStatus, orgHeads } from '../notify/notify.mjs';
 
 const LEVEL_NAME = ['none', 'read', 'write', 'manage'];
@@ -350,6 +351,9 @@ export function orderOps() {
             const res = await tx.one`select 1 from documents where order_id = ${cur.id} and kind = 'result' and deleted_at is null
                                      and uploaded_by = ${cur.executor_user_id} limit 1`;
             if (!res) throw new HttpError(400, 'no_result', 'Сначала добавьте файл результата');
+            // Шаги заказа до сдачи (2а.6): оригинал получен, подписано у нотариуса, файл нотариуса.
+            const steps = await missingSteps(tx, registry, cur);
+            if (steps.length) throw new HttpError(400, 'steps_missing', `Сначала отметьте в «Ходе заказа»: ${steps.join('; ')}`);
             // Заключение подписывается УКЭП до сдачи, если так требует модуль (2.5, 2.5а, src/ops/sign-ops.mjs): эксперт и,
             // если он работает от организации, — её руководитель.
             if (registry.signatureRequired(cur.module, cur.service)) {

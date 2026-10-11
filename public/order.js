@@ -19,6 +19,7 @@ import { loadDocRequests } from '/docreq.js';
 import { loadDeadline } from '/deadline.js';
 import { loadHandover } from '/handover.js';
 import { loadNotes } from '/notes.js';
+import { loadSteps } from '/steps.js';
 import { loadPredecessor } from '/predecessor.js';
 import { loadRepeat } from '/repeat.js';
 import { loadSimilar } from '/similar.js';
@@ -68,11 +69,11 @@ export async function openOrder(id, { to } = {}) {
   setNext({ reset: true, current, step: doStep, signAll });
   loadOrgChat();
   loadJournal(current.order, current.access);
-  await Promise.all([loadDocs(true), loadTransfer(), loadMatch(current, () => openOrder(id)), loadDraft(current, () => openOrder(id)), loadAnalogs(current), loadInspection(current), loadOnsite(current), loadDocRequests(current, (file, msg) => uploadFile(file, 'other', msg)), loadDeadline(current, () => openOrder(id)), loadHandover(current), loadNotes(current), loadPredecessor(current, () => openOrder(id)), loadRepeat(current, () => openOrder(id)), loadSimilar(current), loadReview(current), loadChat(current), loadMoney(current, () => openOrder(id))]);
+  await Promise.all([loadDocs(true), loadTransfer(), loadMatch(current, () => openOrder(id)), loadDraft(current, () => openOrder(id)), loadAnalogs(current), loadInspection(current), loadOnsite(current), loadDocRequests(current, (file, msg) => uploadFile(file, 'other', msg)), loadDeadline(current, () => openOrder(id)), loadHandover(current), loadNotes(current), loadSteps(current), loadPredecessor(current, () => openOrder(id)), loadRepeat(current, () => openOrder(id)), loadSimilar(current), loadReview(current), loadChat(current), loadMoney(current, () => openOrder(id))]);
   setNext({ loaded: true }); // разделы осмотра и черновика показаны — шаги пересчитываются, нужный сейчас блок раскрыт
   // Черновик и «Срок» уже показаны — у предупреждения «нет файла результата» (2.138) видны нужные кнопки.
   renderResultDue(lastDocs?.result_due ?? null);
-  const box = { result: 'docs-box', inspect: 'inspect-box', chat: 'chat-box', docs: 'docreq-box', deadline: 'deadline-box', extend: 'deadline-box', late: 'deadline-box', sign: 'sign-wait-box', fix: 'org-returns-box', handover: 'handover-box', onsite: 'onsite-box', notes: 'notes-box' }[to];
+  const box = { result: 'docs-box', inspect: 'inspect-box', chat: 'chat-box', docs: 'docreq-box', deadline: 'deadline-box', extend: 'deadline-box', late: 'deadline-box', sign: 'sign-wait-box', fix: 'org-returns-box', handover: 'handover-box', onsite: 'onsite-box', notes: 'notes-box', steps: 'steps-box' }[to];
   if (box && !$(box).classList.contains('hidden')) { reveal(box); $(box).scrollIntoView({ block: 'start' }); }
   // «Попросить перенос» из «Моих сроков» (2.134): причина «много дел в этот день» и новый срок — сразу в полях.
   if (to === 'extend') document.querySelector('#deadline-reason-list [data-reason="busy"]')?.click();
@@ -390,6 +391,8 @@ async function loadDocs(initial = false) {
   const signRequired = !!documentsBody.signature_required;
   $('result-sign-note').classList.toggle('hidden', !signRequired);
   lastDocs = documentsBody;
+  // Файлы результата поменялись — у «Хода заказа» новый список для «файла нотариуса» (2а.6).
+  if (!initial && current.executor?.is_me && !$('steps-box').classList.contains('hidden')) loadSteps(current);
   orgReturnsNow = documentsBody.org_returns ?? []; // окно подписи файла (2.159) показывает пункты замечаний
   // «Подписать все» (2.15): несколько неподписанных файлов результата — одним подтверждением.
   const unsigned = mineResults && signRequired ? documents.filter((d) => d.kind === 'result' && d.own !== false && !d.signatures?.expert) : [];
@@ -403,7 +406,7 @@ async function loadDocs(initial = false) {
     return el('li', { class: 'doc', 'data-doc': String(d.id) },
       el('div', {},
         el('div', { class: 'name', text: d.filename }),
-        el('div', { class: 'muted', text: [DOC_KIND_RU[d.kind], formatSize(d.size_bytes)].filter(Boolean).join(' · ') }),
+        el('div', { class: 'muted', text: [DOC_KIND_RU[d.kind], d.step_file, formatSize(d.size_bytes)].filter(Boolean).join(' · ') }),
         // После передачи дела (2.110): файл прежнего эксперта остаётся в деле, но в сдачу не идёт — подписывает и сдаёт свой.
         ...(d.kind === 'result' && d.own === false ? [el('div', { class: 'muted', 'data-role': 'former', text: 'Файл прежнего эксперта — в сдачу не идёт. Загрузите свой файл результата.' })] : [])),
       el('div', { class: 'row' },

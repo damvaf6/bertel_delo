@@ -467,6 +467,21 @@ test('сертификат перевода (2а.5): выдаёт только �
   assert.equal((await U.owner.req('GET', '/api/certificates/AAAAAAAAAAAA')).status, 404);
 });
 
+test('шаги заказа перевода (2а.6): видят стороны заявки, отмечают исполнитель или платформа (подробно — steps.test.mjs)', async () => {
+  for (const id of ['steps.list', 'steps.mark', 'steps.undo']) cover(id);
+  // У заявки об оценке шагов нет: стороны видят «нет блока», отметить нечего; посторонним — «не найдено».
+  const base = `/api/orders/${ownOrder.id}/steps`;
+  for (const who of ['stranger', 'headB', 'spec']) {
+    assert.equal((await U[who].req('GET', base)).status, 404, `${who}: смотреть`);
+    assert.equal((await U[who].req('POST', `${base}/original`, {})).status, 404, `${who}: отметить`);
+    assert.equal((await U[who].req('DELETE', `${base}/original`)).status, 404, `${who}: снять`);
+  }
+  for (const who of ['owner', 'dispatcher', 'admin']) {
+    assert.deepEqual((await U[who].req('GET', base)).body, { available: false }, who);
+    assert.equal((await U[who].req('POST', `${base}/original`, {})).status, 404, `${who}: такого шага нет`);
+  }
+});
+
 // Заполненная заявка, готовая к отправке (договор — файл основания не нужен).
 const READY = { deadline: '2099-01-01', fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 1' } };
 function soon() {

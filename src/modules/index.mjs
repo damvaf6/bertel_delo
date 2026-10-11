@@ -34,6 +34,11 @@
 //       в подбор не попадает; language_doc — к этим услугам только с проверенным документом о знании языка из поля field
 //     certificate?: { services: [id услуги…], language: id поля-списка модуля, direction?: id поля-списка (to_ru | from_ru) }  —
 //       сертификат платформы к файлу результата (2а.5): номер, QR, открытая страница проверки; язык — из поля language
+//     steps?: [{ id, title?, services?, by: ['executor' | 'dispatcher'…], before?: 'review', field?, titles?, hint?, note?, file? }…]  —
+//       шаги заказа (2а.6): передать оригинал, подписать у нотариуса, выдать бумагу; отмечает исполнитель или диспетчер, заказчик
+//       видит. field + titles — шаг только при таком значении поля заявки, со своим названием ({ значение: название });
+//       before: 'review' — без шага не сдать на проверку; note — подпись поля пометки; file: true — шаг отмечается своим файлом
+//       результата (файл нотариуса), только с before: 'review'
 //     analogs?: { services: [id услуги…], min, fields: [поле + services? + near?…] }  — раздел «Аналоги» в деле (2.32): признаки
 //       аналога по виду объекта (цена, дата объявления и регион — у всех, в ядре: src/analogs/analogs.mjs); min — сколько
 //       нужно подтверждённых; near: { field: id числового поля заявки, within?: разница, pct?: разница в % } — предупреждение;
@@ -119,7 +124,7 @@ function validateField(f, where) {
 }
 
 export function validateModule(m) {
-  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express', 'signature', 'analogs', 'approaches', 'request_docs', 'repeat', 'executors', 'certificate'], 'модуль');
+  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express', 'signature', 'analogs', 'approaches', 'request_docs', 'repeat', 'executors', 'certificate', 'steps'], 'модуль');
   if (!ID_RE.test(m.id ?? '')) fail('модуль', `неверный id «${m.id}»`);
   const at = `модуль ${m.id}`;
   if (!nonEmpty(m.name)) fail(at, 'нет названия');
@@ -312,6 +317,34 @@ export function validateModule(m) {
       }
     }
   }
+  // Шаги заказа (2а.6) — необязательно.
+  if (m.steps !== undefined) {
+    const where = `${at}, шаги заказа`;
+    checkIds(m.steps, where);
+    const allFields = [...(m.fields ?? []), ...(m.services ?? []).flatMap((x) => x.fields ?? [])];
+    for (const st of m.steps) {
+      const w = `${where}, ${st.id}`;
+      onlyKeys(st, ['id', 'title', 'services', 'by', 'before', 'field', 'titles', 'hint', 'note', 'file'], w);
+      const sv = st.services;
+      if (sv !== undefined && (!Array.isArray(sv) || sv.length === 0 || sv.some((id) => !serviceIds.includes(id)) || new Set(sv).size !== sv.length)) {
+        fail(w, 'services — непустой список услуг этого модуля');
+      }
+      if (!Array.isArray(st.by) || st.by.length === 0 || st.by.some((x) => !['executor', 'dispatcher'].includes(x)) || new Set(st.by).size !== st.by.length) {
+        fail(w, 'by — executor и/или dispatcher');
+      }
+      if (st.before !== undefined && st.before !== 'review') fail(w, "before — только 'review'");
+      if (st.file !== undefined && (st.file !== true || st.before !== 'review')) fail(w, "file: true — только с before: 'review'");
+      if (st.field !== undefined) {
+        const opts = new Set(allFields.filter((f) => f.id === st.field && f.type === 'select').flatMap((f) => f.options.map((o) => o.id)));
+        if (!opts.size) fail(w, 'field — поле-список заявки');
+        const t = st.titles;
+        if (!t || typeof t !== 'object' || !Object.keys(t).length || Object.entries(t).some(([k, v]) => !opts.has(k) || typeof v !== 'string' || !v.trim())) {
+          fail(w, 'titles — названия шага для вариантов поля field');
+        }
+      } else if (st.titles !== undefined || typeof st.title !== 'string' || !st.title.trim()) fail(w, 'title — название шага (titles — только с field)');
+      for (const k of ['hint', 'note']) if (st[k] !== undefined && (typeof st[k] !== 'string' || !st[k].trim())) fail(w, `${k} — строка`);
+    }
+  }
   // Выбор подходов к оценке (2.33) — необязательно: без него черновик пишется со всеми разделами.
   if (m.approaches !== undefined) {
     const where = `${at}, подходы`;
@@ -489,6 +522,19 @@ export function createRegistry(modules = DEFAULT_MODULES) {
         language_name: lf.options.find((o) => o.id === lang)?.name ?? lang,
         direction: ['to_ru', 'from_ru'].includes(dir) ? dir : null,
       };
+    },
+    // Шаги заказа (2а.6) для услуги и значений полей заявки: те, что подходят, со своим названием.
+    steps(moduleId, serviceId, fields = {}) {
+      const m = modulesList.find((x) => x.id === moduleId);
+      const out = [];
+      for (const st of m?.steps ?? []) {
+        if (st.services && !st.services.includes(serviceId)) continue;
+        const value = st.field ? String(fields?.[st.field] ?? '') : null;
+        if (st.field && !Object.hasOwn(st.titles, value)) continue;
+        const title = st.field ? st.titles[value] : st.title;
+        out.push({ id: st.id, title, by: st.by, before: st.before ?? null, hint: st.hint ?? null, note: st.note ?? null, file: !!st.file });
+      }
+      return out;
     },
     // Нужна ли подпись результата УКЭП исполнителя до сдачи на проверку (2.5).
     signatureRequired(moduleId, serviceId) {
