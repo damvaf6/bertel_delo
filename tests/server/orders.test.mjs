@@ -8,7 +8,7 @@ import expertise from '../../src/modules/expertise.mjs';
 
 // Вторая «профессия» только описанием — ядро не меняется (устав, раздел 1а: новая профессия = три описания).
 const TRANSLATION = {
-  id: 'translation',
+  id: 'probe',
   name: 'Перевод (проверочный модуль)',
   basis: ['contract'],
   fields: [{ id: 'notary', label: 'Нужно нотариальное заверение', type: 'select', required: true, options: [{ id: 'yes', name: 'Да' }, { id: 'no', name: 'Нет' }] }],
@@ -119,8 +119,8 @@ test('ошибка в описании модуля — приложение н�
 
 test('новая профессия — только описанием: заявка создаётся, заполняется и отправляется без правок ядра', async () => {
   const cat = (await owner.req('GET', '/api/catalog')).body.modules;
-  assert.deepEqual(cat.map((m) => m.id), ['expertise', 'translation']);
-  const o = await create(owner, { module: 'translation', service: 'written' });
+  assert.deepEqual(cat.map((m) => m.id), ['expertise', 'translation', 'probe']);
+  const o = await create(owner, { module: 'probe', service: 'written' });
   assert.equal(o.title, 'Письменный перевод', 'название по умолчанию — название услуги');
   assert.equal(o.basis_kind, 'contract');
   assert.equal((await patch(owner, o, { deadline: soon, fields: { notary: 'yes', pages: '12' } })).status, 200);
@@ -128,7 +128,7 @@ test('новая профессия — только описанием: зая�
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.order.module_name, 'Перевод (проверочный модуль)');
   assert.deepEqual(r.body.order.fields, { notary: 'yes', pages: 12 });
-  assert.equal((await patch(owner, await create(owner, { module: 'translation', service: 'written' }), { basis_kind: 'court' })).status, 400,
+  assert.equal((await patch(owner, await create(owner, { module: 'probe', service: 'written' }), { basis_kind: 'court' })).status, 400,
     'основание, которого нет в описании модуля, не выбрать');
 });
 

@@ -23,7 +23,9 @@ const fact = (dt, dd, cls) => [el('dt', { text: dt }), el('dd', { text: dd, ...(
 
 export async function loadMoney(current, reload) {
   const { order } = current;
-  ctx = { order, reload };
+  // Перевод: цена по таблице цен (задача штаба 3f617197) — подставляется диспетчеру, пока цена не назначена.
+  const quote = 'quote' in current ? current.quote : ctx?.order.id === order.id ? ctx.quote : null;
+  ctx = { order, reload, quote };
   say($('money-msg'), '');
   $('closing-doc').classList.add('hidden');
   const box = $('money-box');
@@ -69,7 +71,10 @@ export async function loadMoney(current, reload) {
   $('money-facts').replaceChildren(...facts);
 
   $('price-form').classList.toggle('hidden', !money.can_set_price);
-  if (money.can_set_price) $('price').value = money.price_kop ? String(money.price_kop / 100).replace('.', ',') : '';
+  const quoted = !money.price_kop && ctx.quote ? ctx.quote.total_kop : null;
+  if (money.can_set_price) $('price').value = money.price_kop ? String(money.price_kop / 100).replace('.', ',') : quoted ? String(quoted / 100).replace('.', ',') : '';
+  $('price-quoted').classList.toggle('hidden', !(money.can_set_price && quoted));
+  $('price-quoted').textContent = quoted ? 'Подставлена цена по таблице цен перевода — проверьте и назначьте.' : '';
   $('pay').classList.toggle('hidden', !money.can_pay);
   if (money.can_pay) $('pay').textContent = `Оплатить ${rub(money.price_kop)}`;
   $('payout-retry').classList.toggle('hidden', !money.can_retry_payout);

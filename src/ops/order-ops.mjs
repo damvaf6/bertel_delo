@@ -4,6 +4,7 @@
 import { HttpError } from '../http/core.mjs';
 import { LEVEL, executorSignOrg, isStaff, memberOf, orderLevel, orderSides, visibleOrdersFilter } from '../access/policy.mjs';
 import { BASIS_KINDS, cleanValues, missingRequired } from '../modules/index.mjs';
+import { moduleNotices, moduleQuote, moduleSubmitProblems } from '../modules/extras.mjs';
 import { STATUSES, STATUS_NAME, TRANSITIONS, WORK_STARTED, addDays, availableActions, findTransition, isOverdue, todayMsk } from '../orders/workflow.mjs';
 import { runSettlement, settleCancel, settleDone, splitAmount } from '../money/money.mjs';
 import { audit, oneOf, quoted, text, uuidFrom } from './util.mjs';
@@ -76,7 +77,7 @@ export async function problemsForSubmit(tx, registry, order) {
   const out = [];
   const def = order.module ? registry.service(order.module, order.service) : null;
   if (!def) out.push('услуга');
-  else out.push(...missingRequired(def.fields, order.fields));
+  else out.push(...missingRequired(def.fields, order.fields), ...moduleSubmitProblems(order));
   if (!order.deadline) out.push('срок');
   else if (order.deadline < todayMsk()) out.push('срок (дата уже прошла)');
   if (def && !def.module.basis.includes(order.basis_kind)) out.push('основание');
@@ -250,6 +251,10 @@ export function orderOps() {
           customer: orderSides(actor, order).includes('customer'),
           dispatcher: orderSides(actor, order).includes('dispatcher'),
           submit_missing: order.status === 'new' && level >= LEVEL.write ? await problemsForSubmit(sql, registry, order) : [],
+          // Перевод (задача штаба 3f617197): предварительный расчёт по таблице цен — заказчику и диспетчеру; предупреждения
+          // («туда нужен нотариальный перевод») — всем, кто видит заявку.
+          quote: isStaff(actor) || orderSides(actor, order).includes('customer') ? moduleQuote(order) : null,
+          notices: moduleNotices(order),
           // Закрыть неоплаченную заявку нельзя — такой кнопки и не показываем (1.6).
           actions: availableActions(order.status, orderSides(actor, order)).filter((a) => a.to !== 'closed' || !!order.paid_at),
           history: history.map((h) => ({ ...h, from_name: STATUS_NAME[h.from_status] ?? null, to_name: STATUS_NAME[h.to_status] })),
