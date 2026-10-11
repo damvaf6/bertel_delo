@@ -6,7 +6,7 @@ import { LEVEL, executorSignOrg, isStaff, memberOf, orderLevel, orderSides, visi
 import { BASIS_KINDS, cleanValues, missingRequired } from '../modules/index.mjs';
 import { moduleNotices, moduleQuote, moduleSubmitProblems } from '../modules/extras.mjs';
 import { STATUSES, STATUS_NAME, TRANSITIONS, WORK_STARTED, addDays, availableActions, findTransition, isOverdue, todayMsk } from '../orders/workflow.mjs';
-import { runSettlement, settleCancel, settleDone, splitAmount } from '../money/money.mjs';
+import { runSettlement, settleCancel, settleDone, orderSplit } from '../money/money.mjs';
 import { audit, oneOf, quoted, text, uuidFrom } from './util.mjs';
 import { reviewState } from './work-ops.mjs';
 import { orgReturns } from './sign-ops.mjs';
@@ -210,7 +210,7 @@ export function orderOps() {
             const mine = r.executor_user_id === actor.id;
             return {
               ...describe(registry, r, today), as_executor: mine,
-              ...(mine && r.price_kop ? { fee_kop: splitAmount(Number(r.price_kop)).payoutKop } : {}),
+              ...(mine && r.price_kop ? { fee_kop: orderSplit(r).payoutKop } : {}),
               // Исполнителю — главное о деле одной строкой (2.33): решить по предложению, не открывая каждое.
               ...(mine ? { brief: fieldsBrief(registry, r) } : {}),
               ...(back.has(r.id) ? { returned: back.get(r.id) } : {}),

@@ -16,7 +16,7 @@
 // переноса; дела без срока сюда не входят.
 // Месяц — по московскому времени. Выгрузка таблицей — CSV для Excel (точка с запятой, BOM, суммы с запятой).
 import { HttpError } from '../http/core.mjs';
-import { splitAmount } from '../money/money.mjs';
+import { orderSplit } from '../money/money.mjs';
 import { addDays, isOverdue, todayMsk } from '../orders/workflow.mjs';
 
 export const REPORT_MONTHS_BACK = 12;
@@ -108,7 +108,7 @@ function pace(done) {
 }
 const avgDays = (p) => (p.days_n ? Math.round((p.days_sum / p.days_n) * 10) / 10 : null);
 
-const feeOf = (o) => (o.payout_kop != null ? Number(o.payout_kop) : o.price_kop ? splitAmount(Number(o.price_kop)).payoutKop : 0);
+const feeOf = (o) => (o.payout_kop != null ? Number(o.payout_kop) : o.price_kop ? orderSplit(o).payoutKop : 0);
 
 // Границы месяца по Москве: [начало, начало следующего).
 async function monthBounds(sql, month) {
@@ -123,7 +123,7 @@ async function monthBounds(sql, month) {
 async function orgMonthDone(sql, orgId, ids, { start, end }) {
   if (!ids.length) return [];
   return sql`
-      select distinct on (o.id) o.id, o.module, o.service, o.executor_user_id as user_id, o.deadline, o.price_kop,
+      select distinct on (o.id) o.id, o.module, o.service, o.executor_user_id as user_id, o.deadline, o.price_kop, o.transit_kop,
              p.amount_kop as payout_kop, h.at,
              greatest(
                (select max(f.outcome_at) from order_offers f
@@ -334,7 +334,7 @@ export async function expertMonthReport(sql, userId, month, today = todayMsk()) 
     select count(distinct order_id)::int as n from order_offers
     where specialist_id = ${userId} and outcome = 'accepted' and outcome_at >= ${start} and outcome_at < ${end}`;
   const done = await sql`
-    select distinct on (o.id) o.id, o.title, o.deadline, o.price_kop, p.amount_kop as payout_kop, p.status as payout_status, h.at
+    select distinct on (o.id) o.id, o.title, o.deadline, o.price_kop, o.transit_kop, p.amount_kop as payout_kop, p.status as payout_status, h.at
     from order_status_history h join orders o on o.id = h.order_id left join payouts p on p.order_id = o.id
     where o.executor_user_id = ${userId} and h.to_status = 'done' and h.at >= ${start} and h.at < ${end}
     order by o.id, h.at`;

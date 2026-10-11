@@ -46,8 +46,11 @@ export async function loadMoney(current, reload) {
   if (money.sees.customer) {
     facts.push(...fact('Цена', money.price_kop ? rub(money.price_kop) : 'ещё не назначена — её назначит диспетчер при подборе исполнителя', money.price_kop ? 'money-sum' : undefined));
   }
-  if (money.fee_kop !== null) facts.push(...fact(executorOnly ? 'Ваше вознаграждение (80% цены)' : 'Исполнителю (80%)', rub(money.fee_kop), executorOnly ? 'money-sum' : ''));
-  if (money.commission_kop !== null) facts.push(...fact('Платформе (20%)', rub(money.commission_kop)));
+  // Перевод (2а.2): тарифы нотариуса и доставка — транзитом, 80/20 — только от услуг.
+  const ofServices = money.transit_kop ? ' от услуг' : '';
+  if (money.transit_kop) facts.push(...fact('Нотариус и доставка', `${rub(money.transit_kop)} — по тарифам, без вознаграждения платформы`));
+  if (money.fee_kop !== null) facts.push(...fact(executorOnly ? `Ваше вознаграждение (80% ${ofServices ? 'от услуг' : 'цены'})` : `Исполнителю (80%${ofServices})`, rub(money.fee_kop), executorOnly ? 'money-sum' : ''));
+  if (money.commission_kop !== null) facts.push(...fact(`Платформе (20%${ofServices})`, rub(money.commission_kop)));
   if (!executorOnly) {
     const pay = money.paid ? `оплачено ${dayRu(money.paid_at)}`
       : money.payment?.status === 'pending' ? PAYMENT_RU.pending
@@ -74,7 +77,7 @@ export async function loadMoney(current, reload) {
   const quoted = !money.price_kop && ctx.quote ? ctx.quote.total_kop : null;
   if (money.can_set_price) $('price').value = money.price_kop ? String(money.price_kop / 100).replace('.', ',') : quoted ? String(quoted / 100).replace('.', ',') : '';
   $('price-quoted').classList.toggle('hidden', !(money.can_set_price && quoted));
-  $('price-quoted').textContent = quoted ? 'Подставлена цена по таблице цен перевода — проверьте и назначьте.' : '';
+  $('price-quoted').textContent = quoted ? `Подставлена цена по таблице цен перевода — проверьте и назначьте.${ctx.quote.transit_kop ? ` Из неё ${rub(ctx.quote.transit_kop)} — тарифы нотариуса и доставка: без вознаграждения, 80/20 делится только остальное.` : ''}` : '';
   $('pay').classList.toggle('hidden', !money.can_pay);
   if (money.can_pay) $('pay').textContent = `Оплатить ${rub(money.price_kop)}`;
   $('payout-retry').classList.toggle('hidden', !money.can_retry_payout);
@@ -97,6 +100,16 @@ export async function loadMoney(current, reload) {
 }
 
 // Закрывающий документ — текстом на странице (содержимое зафиксировано при выдаче результата или отмене).
+// Транзит (2а.2): услуги и тарифы нотариуса / доставка — отдельными строками.
+function transitParas(x, p) {
+  if (!x.transit_kop) return [];
+  return [
+    p(`Услуги (перевод, организация заверения, сертификат): ${rub(x.services_kop)}`),
+    p(`Тарифы нотариуса и доставка — оплачиваются агентом нотариусу и курьеру, без вознаграждения: ${rub(x.transit_kop)}`),
+    ...(x.transit_lines ?? []).map((l) => p(`· ${l.title} — ${rub(l.kop)}`)),
+  ];
+}
+
 function openDoc(d) {
   const x = d.data;
   const service = state.catalog.modules.find((m) => m.id === x.module)?.services.find((s) => s.id === x.service)?.name ?? 'Услуга';
@@ -108,7 +121,8 @@ function openDoc(d) {
       p(`Агент: ${x.platform}`),
       p(`Заказчик: ${x.customer}`),
       p(`Услуга: ${service}, заявка ${x.order_ref} («${x.order_title}»)`),
-      p(`Стоимость: ${rub(x.price_kop)}, в том числе вознаграждение агента (${x.commission_percent}%): ${rub(x.commission_kop)}`),
+      p(`Стоимость: ${rub(x.price_kop)}, в том числе вознаграждение агента (${x.commission_percent}%${x.transit_kop ? ' от услуг' : ''}): ${rub(x.commission_kop)}`),
+      ...transitParas(x, p),
       p(partial
         ? `Заказчик отказался от услуги после начала работ; оказана часть услуги (${x.partial_percent}%). Оплачено ${rub(x.paid_kop)}, остаток возвращается заказчику.`
         : 'Услуга оказана полностью, результат проверен и передан заказчику. Оплата получена.'),
@@ -127,7 +141,8 @@ function openDoc(d) {
       p(`Агент: ${x.platform}`),
       p(`Поручение: ${service}, заявка ${x.order_ref}`),
       p(`Получено от заказчика: ${rub(x.price_kop)}`),
-      p(`Вознаграждение агента (${x.commission_percent}%): ${rub(x.commission_kop)}`),
+      ...transitParas(x, p),
+      p(`Вознаграждение агента (${x.commission_percent}%${x.transit_kop ? ' от услуг' : ''}): ${rub(x.commission_kop)}`),
       p(`К перечислению исполнителю: ${rub(x.payout_kop)}`),
       ...(partial ? [p(`Заказ отменён заказчиком после начала работ; оплачена сделанная часть (${x.partial_percent}%).`)] : []),
     ];
@@ -194,6 +209,7 @@ export async function showMoney() {
       ...fact('Выплачено исполнителям', rub(totals.paid_out_kop)),
       ...fact('Возвращено заказчикам', rub(totals.refunded_kop)),
       ...(totals.to_refund_kop ? fact('К возврату заказчикам', rub(totals.to_refund_kop), 'overdue') : []),
+      ...(totals.transit_kop ? fact('Нотариусу и за доставку (транзит)', rub(totals.transit_kop)) : []),
       ...fact('Вознаграждение платформы (20%)', rub(totals.commission_kop)));
     $('money-payments').replaceChildren(...payments.map((p) => el('li', {},
       el('button', { class: 'open', onclick: openOrder(p.order_id) },

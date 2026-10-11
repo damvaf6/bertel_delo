@@ -16,7 +16,7 @@
 // Руководителю — те же сведения, что в «Делах экспертов» (2.16): без заказчика, полей заявки, документов и переписки.
 // Только свои дела и свои организации.
 import { orderRef } from '../notify/registry.mjs';
-import { splitAmount } from '../money/money.mjs';
+import { orderSplit } from '../money/money.mjs';
 import { STATUS_NAME, addDays, isOverdue, resultDue, todayMsk } from '../orders/workflow.mjs';
 import { orderSignatures, orgReturns, signWait } from './sign-ops.mjs';
 import { executorSignOrg } from '../access/policy.mjs';
@@ -143,7 +143,7 @@ async function expertPart(sql, actor, registry, today) {
     returned,
     review: rows.filter((o) => o.status === 'review').map((o) => item(o)),
     offers: rows.filter((o) => o.status === 'awaiting_executor')
-      .map((o) => item(o, { fee_kop: o.price_kop ? splitAmount(Number(o.price_kop)).payoutKop : null })),
+      .map((o) => item(o, { fee_kop: o.price_kop ? orderSplit(o).payoutKop : null })),
   };
 }
 

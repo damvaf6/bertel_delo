@@ -5,7 +5,8 @@
 import { HttpError } from '../http/core.mjs';
 import { moneyView, orderSides } from '../access/policy.mjs';
 import { ProviderError } from '../providers/fake.mjs';
-import { applyPaymentStatus, runPayout, runRefund, runSettlement, shortRef, splitAmount } from '../money/money.mjs';
+import { applyPaymentStatus, orderSplit, runPayout, runRefund, runSettlement, shortRef } from '../money/money.mjs';
+import { moduleQuote } from '../modules/extras.mjs';
 import { customersOf, notify } from '../notify/notify.mjs';
 import { audit, sendFile } from './util.mjs';
 import { closingDoc, invoiceDoc } from '../money/papers.mjs';
@@ -59,7 +60,7 @@ export function moneyOps() {
     const see = moneyView(actor, order);
     const sides = orderSides(actor, order);
     const price = num(order.price_kop);
-    const split = price ? splitAmount(price) : null;
+    const split = price ? orderSplit(order) : null;
     const pending = await sql.one`select 1 from payments where order_id = ${order.id} and status = 'pending'`;
     const out = {
       sees: { customer: see.customer, executor: see.executor, staff: see.staff },
@@ -73,6 +74,8 @@ export function moneyOps() {
       payment: null,
       fee_kop: see.executor && split ? split.payoutKop : null,
       commission_kop: see.staff && split ? split.commissionKop : null,
+      // Перевод (2а.2): тарифы нотариуса и доставка в цене — транзитом, без вознаграждения; заказчику и служебным.
+      transit_kop: (see.customer || see.staff) && split?.transitKop ? split.transitKop : null,
       payout: null,
       can_retry_payout: false,
       refund: null,
@@ -153,8 +156,10 @@ export function moneyOps() {
           if (cur.paid_at) throw new HttpError(409, 'price_locked', 'Заявка уже оплачена — цену не изменить');
           const pending = await tx.one`select 1 from payments where order_id = ${cur.id} and status = 'pending'`;
           if (pending) throw new HttpError(409, 'price_locked', 'Заказчик уже начал оплату — цену сейчас не изменить');
-          await tx`update orders set price_kop = ${kop}, updated_at = now() where id = ${order.id}`;
-          await audit(tx, actor, 'order.price', 'order', order.id, { price_kop: kop });
+          // Транзит (2а.2) — снимок из расчёта модуля на момент цены (поля заявки после отправки не меняются); не больше цены.
+          const transit = Math.min(moduleQuote(cur)?.transit_kop ?? 0, kop);
+          await tx`update orders set price_kop = ${kop}, transit_kop = ${transit}, updated_at = now() where id = ${order.id}`;
+          await audit(tx, actor, 'order.price', 'order', order.id, { price_kop: kop, ...(transit ? { transit_kop: transit } : {}) });
           await notify(tx, 'priced', { users: await customersOf(tx, cur), orderId: cur.id, actor });
         });
         return { money: await view(sql, actor, order.id) };
@@ -259,7 +264,8 @@ export function moneyOps() {
                  (select coalesce(sum(amount_kop), 0) from payouts where status <> 'succeeded') as to_pay,
                  (select coalesce(sum(amount_kop), 0) from payouts where status = 'succeeded') as paid_out,
                  (select coalesce(sum(commission_kop), 0) from payouts) as commission,
-                 (select coalesce(sum(amount_kop + commission_kop), 0) from payouts) as settled,
+                 (select coalesce(sum(transit_kop), 0) from payouts) as transit,
+                 (select coalesce(sum(amount_kop + commission_kop + transit_kop), 0) from payouts) as settled,
                  (select coalesce(sum(amount_kop), 0) from refunds where status = 'succeeded') as refunded,
                  (select coalesce(sum(amount_kop), 0) from refunds) as refunds_all,
                  (select coalesce(sum(amount_kop), 0) from refunds where status <> 'succeeded') as to_refund`;
@@ -273,6 +279,8 @@ export function moneyOps() {
           totals: {
             received_kop: num(t.received), to_pay_kop: num(t.to_pay), paid_out_kop: num(t.paid_out), commission_kop: num(t.commission),
             refunded_kop: num(t.refunded), to_refund_kop: num(t.to_refund),
+            // Тарифы нотариуса и доставка по выданным переводам (2а.2) — у платформы для нотариуса и курьера, не вознаграждение.
+            transit_kop: num(t.transit),
             // Оплачено, но результат ещё не выдан и заявка не отменена — деньги ждут у платформы.
             held_kop: num(t.received) - num(t.settled) - num(t.refunds_all),
           },
