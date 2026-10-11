@@ -986,6 +986,18 @@
         </div>
         <p class="msg" id="schedule-msg" role="status" aria-live="polite"></p>
       </div>
+      <div class="card hidden" id="desk-box">
+        <h2>Нотариус: окна и пачка</h2>
+        <p class="muted">Когда нотариусы-партнёры принимают переводчиков на две недели вперёд и что взять с собой: Ваши
+          нотариальные переводы в работе. Нажмите на строку пачки — откроется дело.</p>
+        <h3>Окна нотариусов</h3>
+        <ul class="list" id="desk-windows"></ul>
+        <p class="muted hidden" id="desk-no-windows">Окон на две недели нет — платформа сообщит, когда появится нотариус.</p>
+        <h3 id="desk-batch-title">Пачка</h3>
+        <ul class="schedule" id="desk-batch"></ul>
+        <p class="muted hidden" id="desk-no-batch">Нотариальных переводов в работе нет.</p>
+        <p class="msg" id="desk-msg" role="status" aria-live="polite"></p>
+      </div>
       <div class="card" id="my-report-box">
         <h2>Мои итоги за месяц</h2>
         <p class="muted">Сколько дел Вы сдали, из них в срок, сколько раз работу возвращали, сколько Вам причитается за сданные
@@ -1182,6 +1194,47 @@
         </div>
         <p class="msg" id="sp-msg" role="status" aria-live="polite"></p>
       </form>
+      <div class="card" id="notaries-box">
+        <h2>Нотариусы-партнёры</h2>
+        <p class="muted">Справочник для нотариальных переводов: переводчики видят окна нотариусов на две недели и несут им
+          подписывать переводы пачкой. Нотариуса не удаляют — выключают («Не работаем»).</p>
+        <ul class="list" id="notaries"></ul>
+        <p class="muted" id="notaries-empty">Пока нет ни одного нотариуса.</p>
+        <button type="button" class="secondary" id="notary-new">Добавить нотариуса</button>
+        <form class="hidden" id="notary-form" novalidate>
+          <h3 id="notary-form-title">Новый нотариус</h3>
+          <div class="field">
+            <label for="nt-name">ФИО нотариуса</label>
+            <input id="nt-name" type="text" maxlength="200">
+          </div>
+          <div class="field">
+            <label for="nt-address">Адрес нотариуса</label>
+            <input id="nt-address" type="text" maxlength="300">
+          </div>
+          <div class="field">
+            <label for="nt-contacts">Контакты (телефон, почта, помощник)</label>
+            <input id="nt-contacts" type="text" maxlength="300">
+          </div>
+          <fieldset class="field">
+            <legend>Окна — когда принимает переводчиков (по Москве)</legend>
+            <ol class="list" id="nt-windows"></ol>
+            <button type="button" class="secondary" id="nt-add-window">Добавить окно</button>
+          </fieldset>
+          <div class="field">
+            <label for="nt-payment">Оплата нотариусу</label>
+            <select id="nt-payment">
+              <option value="invoice">По счёту от платформы</option>
+              <option value="on_site">На месте при подписании</option>
+            </select>
+          </div>
+          <label class="row"><input type="checkbox" id="nt-identity"> <span>Заверяет электронным файлом перевод паспорта</span></label>
+          <div class="row">
+            <button type="submit" id="nt-save">Сохранить</button>
+            <button type="button" class="secondary" id="nt-cancel">Отмена</button>
+          </div>
+        </form>
+        <p class="msg" id="notary-msg" role="status" aria-live="polite"></p>
+      </div>
       <div class="card">
         <h2>Искусственный интеллект</h2>
         <dl class="facts" id="admin-ai"></dl>

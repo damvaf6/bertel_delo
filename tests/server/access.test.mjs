@@ -440,6 +440,21 @@ test('admin.*: только администратор; остальным — �
   assert.deepEqual(staff, [U.dispatcher.user.id, U.admin.user.id].sort());
 });
 
+test('нотариусы-партнёры (2а.4): справочник — только администратор; окна и пачка — только свои (подробно — notaries.test.mjs)', async () => {
+  cover('admin.notaries.list'); cover('admin.notaries.create'); cover('admin.notaries.update'); cover('specialist.me.notary');
+  const card = { full_name: 'Тестовый нотариус', address: 'г. Москва, тестовая ул., 2', windows: [{ weekday: 2, from: '10:00', to: '12:00' }] };
+  for (const c of [U.owner, U.headA, U.dispatcher, U.spec]) {
+    assert.equal((await c.req('GET', '/api/admin/notaries')).status, 404);
+    assert.equal((await c.req('POST', '/api/admin/notaries', card)).status, 404);
+  }
+  const n = (await U.admin.req('POST', '/api/admin/notaries', card)).body.notary;
+  for (const c of [U.owner, U.headA, U.dispatcher, U.spec]) assert.equal((await c.req('PUT', `/api/admin/notaries/${n.id}`, { active: false })).status, 404);
+  assert.equal((await U.admin.req('PUT', `/api/admin/notaries/${n.id}`, { active: false })).status, 200);
+  assert.equal((await U.admin.req('GET', '/api/admin/notaries')).status, 200);
+  // Свои окна и пачка — у каждого вошедшего свои; у не переводчика блок пуст.
+  for (const c of [U.owner, U.spec, U.stranger]) assert.deepEqual((await c.req('GET', '/api/specialist/me/notary')).body.desk, { translator: false });
+});
+
 // Заполненная заявка, готовая к отправке (договор — файл основания не нужен).
 const READY = { deadline: '2099-01-01', fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 1' } };
 function soon() {

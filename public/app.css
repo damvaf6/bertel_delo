@@ -367,3 +367,10 @@ h2.inline { display: inline; }
 
 /* Пустые разделы черновика перед «Скачать Word» (2.177). */
 #draft-empty { margin-bottom: .75rem; }
+/* Нотариусы-партнёры (2а.4): окно — день, с, до, «Убрать» в одну строку; галочка с текстом рядом. */
+#nt-windows li.row { flex-wrap: nowrap; gap: 6px; }
+#nt-windows select { flex: 0 0 64px; }
+#nt-windows input[type="time"] { width: auto; flex: 1 1 0; min-width: 0; }
+#nt-windows button { flex: 0 0 auto; padding-left: 10px; padding-right: 10px; }
+#notary-form label.row { flex-wrap: nowrap; align-items: flex-start; }
+#notary-form label.row > span { flex: 1 1 auto; min-width: 0; }

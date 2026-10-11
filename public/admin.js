@@ -2,13 +2,14 @@
 import { api, el, say, formatPhone, ROLE_RU, PLATFORM_ROLE_RU } from '/common.js';
 import { state, show } from '/shell.js';
 import { serviceName } from '/match.js';
+import { loadNotaries } from '/notaries.js';
 
 const $ = (id) => document.getElementById(id);
 let found = null;
 
 export async function showAdmin() {
   show('admin-view', 'admin');
-  await Promise.all([loadStaff(), loadAi()]);
+  await Promise.all([loadStaff(), loadAi(), loadNotaries()]);
 }
 
 const rub = (n) => `${Number(n).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽`;
