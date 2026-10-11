@@ -371,24 +371,36 @@ function intoTemplate(text, meta, template, appendix = null) {
 }
 
 // Простой документ (2.46): счёт, акт, отчёт агента, документ о возврате — заголовок, строки, таблица, подписи.
-// blocks: [{ type: 'title' | 'para' | 'bold' | 'note', text } | { type: 'table', rows: [[…]] } | { type: 'sign', text }].
+// blocks: [{ type: 'title' | 'para' | 'bold' | 'note', text } | { type: 'table', rows: [[…]] } | { type: 'sign', text }
+//          | { type: 'image', data: Buffer PNG/JPEG, cm?: ширина в сантиметрах } (2а.5: QR сертификата)].
 export function buildSimpleDoc(blocks) {
   const { st, xml: styles } = ownStyles();
+  const media = [];
   const body = blocks.map((b) => {
     if (b.type === 'table') return table(b.rows, st);
     if (b.type === 'title') return para(run(b.text, '<w:b/><w:sz w:val="28"/>'), '<w:jc w:val="center"/><w:spacing w:after="240"/>');
     if (b.type === 'bold') return para(run(b.text, '<w:b/>'));
     if (b.type === 'note') return para(run(b.text, '<w:i/><w:color w:val="9B1C1C"/>'));
     if (b.type === 'sign') return para(run(b.text), '<w:spacing w:before="480"/>');
+    if (b.type === 'image') {
+      const size = imageSize(b.data);
+      if (!size || size.w <= 0 || size.h <= 0) return '';
+      // Ширина в сантиметрах: 1 см = 360 000 EMU; размер в точках пересчитывается так, чтобы drawing() дал нужную ширину.
+      const k = b.cm ? (b.cm * 360000) / (size.w * EMU_PX) : 1;
+      const img = { ...size, w: Math.round(size.w * k), h: Math.round(size.h * k), buf: b.data, n: media.length + 1, rid: `rIdDeloImg${media.length + 1}` };
+      media.push(img);
+      return para(drawing(img, img.n), '<w:jc w:val="center"/>');
+    }
     return para(run(b.text));
   }).join('');
   return zip([
-    ['[Content_Types].xml', contentTypes([['word/styles.xml', STYLES_CT]])],
+    ['[Content_Types].xml', contentTypes([['word/styles.xml', STYLES_CT]]).replace('<Default Extension="xml"', `${mediaTypes(media)}<Default Extension="xml"`)],
     ['_rels/.rels', ROOT_RELS],
     ['word/_rels/document.xml.rels', `${XML_HEAD}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`
-      + `<Relationship Id="rId1" Type="${STYLES_REL}" Target="styles.xml"/></Relationships>`],
+      + `<Relationship Id="rId1" Type="${STYLES_REL}" Target="styles.xml"/>${mediaRels(media)}</Relationships>`],
     ['word/styles.xml', styles],
-    ['word/document.xml', `${XML_HEAD}<w:document xmlns:w="${W}" xmlns:r="${R}"><w:body>${body}<w:sectPr>${PAGE_A4}</w:sectPr></w:body></w:document>`],
+    ['word/document.xml', `${XML_HEAD}<w:document xmlns:w="${W}" xmlns:r="${R}" xmlns:wp="${WP}"><w:body>${body}<w:sectPr>${PAGE_A4}</w:sectPr></w:body></w:document>`],
+    ...media.map((x) => [`word/media/delo${x.n}.${x.ext}`, x.buf]),
   ]);
 }
 
@@ -420,7 +432,7 @@ export function checkTemplate(buf, filename) {
 
 // ——— Архив ———
 
-function unzip(buf) {
+export function unzip(buf) {
   let eocd = -1;
   for (let i = buf.length - 22; i >= Math.max(0, buf.length - 22 - 65535); i -= 1) {
     if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }

@@ -455,6 +455,18 @@ test('нотариусы-партнёры (2а.4): справочник — то
   for (const c of [U.owner, U.spec, U.stranger]) assert.deepEqual((await c.req('GET', '/api/specialist/me/notary')).body.desk, { translator: false });
 });
 
+test('сертификат перевода (2а.5): выдаёт только переводчик к своему файлу; лист — кому виден файл (подробно — certificates.test.mjs)', async () => {
+  cover('certificates.issue'); cover('certificates.sheet');
+  // Документ заявки об оценке: сертификат к нему не выдаётся никому, листа нет; посторонним — «не найдено».
+  for (const c of [U.stranger, U.headB, U.spec]) {
+    assert.equal((await c.req('POST', `/api/documents/${ownDoc.id}/certificate`)).status, 404);
+    assert.equal((await c.req('GET', `/api/documents/${ownDoc.id}/certificate`)).status, 404);
+  }
+  assert.notEqual((await U.owner.req('POST', `/api/documents/${ownDoc.id}/certificate`)).status, 201);
+  assert.equal((await U.owner.req('GET', `/api/documents/${ownDoc.id}/certificate`)).status, 404);
+  assert.equal((await U.owner.req('GET', '/api/certificates/AAAAAAAAAAAA')).status, 404);
+});
+
 // Заполненная заявка, готовая к отправке (договор — файл основания не нужен).
 const READY = { deadline: '2099-01-01', fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 1' } };
 function soon() {
@@ -2402,7 +2414,7 @@ test('нагрузка экспертов на две недели (2.111): то
 
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {
   const PUBLIC = ['health', 'auth.code', 'auth.verify', 'files.memory', 'files.memory.upload', 'test.calls', 'test.script', 'test.reset', 'test.mail.inbound', 'stage.login', 'payments.notify',
-    'inspect.view', 'inspect.photo', 'inspect.finish'];
+    'inspect.view', 'inspect.photo', 'inspect.finish', 'certificates.check'];
   const ops = S.app.locals.ops;
   const extraPublic = ops.filter((o) => o.auth === 'public' && !PUBLIC.includes(o.id)).map((o) => o.id);
   assert.deepEqual(extraPublic, [], `новые открытые операции: ${extraPublic.join(', ')}`);

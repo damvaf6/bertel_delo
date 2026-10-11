@@ -32,6 +32,8 @@
 //     executors?: { tax_status?: true, language_doc?: { field: id поля-списка модуля, services: [id услуги…] } }  — кого
 //       допускать (2а.3): tax_status — только с указанным статусом (самозанятый, ИП, ООО/бюро), без него допуск не выдаётся и
 //       в подбор не попадает; language_doc — к этим услугам только с проверенным документом о знании языка из поля field
+//     certificate?: { services: [id услуги…], language: id поля-списка модуля, direction?: id поля-списка (to_ru | from_ru) }  —
+//       сертификат платформы к файлу результата (2а.5): номер, QR, открытая страница проверки; язык — из поля language
 //     analogs?: { services: [id услуги…], min, fields: [поле + services? + near?…] }  — раздел «Аналоги» в деле (2.32): признаки
 //       аналога по виду объекта (цена, дата объявления и регион — у всех, в ядре: src/analogs/analogs.mjs); min — сколько
 //       нужно подтверждённых; near: { field: id числового поля заявки, within?: разница, pct?: разница в % } — предупреждение;
@@ -117,7 +119,7 @@ function validateField(f, where) {
 }
 
 export function validateModule(m) {
-  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express', 'signature', 'analogs', 'approaches', 'request_docs', 'repeat', 'executors'], 'модуль');
+  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express', 'signature', 'analogs', 'approaches', 'request_docs', 'repeat', 'executors', 'certificate'], 'модуль');
   if (!ID_RE.test(m.id ?? '')) fail('модуль', `неверный id «${m.id}»`);
   const at = `модуль ${m.id}`;
   if (!nonEmpty(m.name)) fail(at, 'нет названия');
@@ -291,6 +293,25 @@ export function validateModule(m) {
       }
     }
   }
+  // Сертификат платформы к результату (2а.5) — необязательно.
+  if (m.certificate !== undefined) {
+    const where = `${at}, сертификат`;
+    const c = m.certificate;
+    onlyKeys(c, ['services', 'language', 'direction'], where);
+    const sv = c.services;
+    if (!Array.isArray(sv) || sv.length === 0 || sv.some((id) => !serviceIds.includes(id)) || new Set(sv).size !== sv.length) {
+      fail(where, 'services — непустой список услуг этого модуля');
+    }
+    const lf = (m.fields ?? []).find((x) => x.id === c.language);
+    if (!lf || lf.type !== 'select' || !lf.required) fail(where, 'language — обязательное поле-список модуля');
+    if (c.direction !== undefined) {
+      const df = (m.fields ?? []).find((x) => x.id === c.direction);
+      const ids = df?.options?.map((o) => o.id) ?? [];
+      if (!df || df.type !== 'select' || !df.required || ids.length !== 2 || !ids.includes('to_ru') || !ids.includes('from_ru')) {
+        fail(where, 'direction — обязательное поле-список модуля с вариантами to_ru и from_ru');
+      }
+    }
+  }
   // Выбор подходов к оценке (2.33) — необязательно: без него черновик пишется со всеми разделами.
   if (m.approaches !== undefined) {
     const where = `${at}, подходы`;
@@ -454,6 +475,20 @@ export function createRegistry(modules = DEFAULT_MODULES) {
         for (const o of f?.options ?? []) if (!out.has(o.id)) out.set(o.id, o.name);
       }
       return [...out].map(([id, name]) => ({ id, name }));
+    },
+    // Сертификат платформы к результату услуги (2а.5): язык (название варианта) и направление из полей заявки; null — не выдаётся.
+    certificate(moduleId, serviceId, fields = {}) {
+      const m = modulesList.find((x) => x.id === moduleId);
+      const c = m?.certificate;
+      if (!c?.services.includes(serviceId)) return null;
+      const lf = m.fields.find((x) => x.id === c.language);
+      const lang = String(fields?.[c.language] ?? '');
+      const dir = c.direction ? String(fields?.[c.direction] ?? '') : '';
+      return {
+        language: lang,
+        language_name: lf.options.find((o) => o.id === lang)?.name ?? lang,
+        direction: ['to_ru', 'from_ru'].includes(dir) ? dir : null,
+      };
     },
     // Нужна ли подпись результата УКЭП исполнителя до сдачи на проверку (2.5).
     signatureRequired(moduleId, serviceId) {

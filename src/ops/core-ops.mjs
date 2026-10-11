@@ -11,6 +11,8 @@ import { unreadCount } from './notify-ops.mjs';
 export const HINTS = ['customer', 'expert', 'head', 'dispatcher'];
 import { orderSignatures, orgReturns, signaturesView, signWait } from './sign-ops.mjs';
 import { aiSignHints } from '../ai/ai.mjs';
+import { orderCertificates, siteOrigin } from './certificate-ops.mjs';
+import { caseCertificate } from '../translation/certificate.mjs';
 
 // Облако принимает запрос не больше 3,5 МБ (Yandex Serverless Containers) — через ядро только до 3 МБ (2.49).
 const MAX_FILE_BYTES = 3 * 1024 * 1024;
@@ -139,7 +141,7 @@ export function coreOps(cfg) {
     {
       id: 'documents.list', method: 'GET', path: '/api/orders/:id/documents', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
-      async handler({ sql, actor, order, registry }) {
+      async handler({ sql, actor, order, registry, cfg, req }) {
         const docs = await sql`select * from documents where order_id = ${order.id} and deleted_at is null order by created_at`;
         // Результат работы заказчик видит только после проверки (src/access/policy.mjs); вместе с ним — подписи УКЭП эксперта
         // и организации (2.5, 2.5а).
@@ -153,11 +155,21 @@ export function coreOps(cfg) {
         const unsigned = mine && required && order.status === 'in_work'
           ? docs.filter((d) => d.kind === 'result' && d.uploaded_by === actor.id && !signs.get(d.id)?.expert).map((d) => d.id) : [];
         const aiHints = await aiSignHints(sql, registry, order, unsigned);
+        // Сертификат платформы к переводу (2а.5): у файла — номер и ссылка проверки; свой файл в работе — можно выдать.
+        const certRule = registry.certificate(order.module, order.service, order.fields);
+        const certs = certRule && results ? await orderCertificates(sql, order.id) : new Map();
+        const origin = certs.size ? siteOrigin(cfg, req) : '';
+        const certOf = (d) => {
+          if (!certRule) return {};
+          const c = certs.get(d.id);
+          if (c) return { certificate: caseCertificate(c, origin) };
+          return mine && order.status === 'in_work' && d.uploaded_by === actor.id ? { certificate: null, can_certify: true } : {};
+        };
         return {
           documents: docs.filter((d) => d.kind !== 'result' || results)
             .map((d) => (d.kind === 'result' ? { ...publicDoc(d), signatures: signaturesView(signs.get(d.id)),
               // Исполнителю — свой ли файл: после передачи дела файлы прежнего эксперта в сдачу не идут (2.110).
-              ...(mine ? { own: d.uploaded_by === actor.id } : {}), ...(aiHints.has(d.id) ? { ai_check: aiHints.get(d.id) } : {}) } : publicDoc(d))),
+              ...(mine ? { own: d.uploaded_by === actor.id } : {}), ...(aiHints.has(d.id) ? { ai_check: aiHints.get(d.id) } : {}), ...certOf(d) } : publicDoc(d))),
           results_hidden: !results,
           signature_required: required,
           // От какой организации нужна вторая подпись (null — только эксперт).
@@ -216,6 +228,8 @@ export function coreOps(cfg) {
           await tx`update documents set deleted_at = now() where id = ${doc.id}`;
           // Файл к запрошенному исполнителем документу (2.64) удалён — просьба снова ждёт заказчика.
           await tx`update doc_requests set document_id = null, fulfilled_at = null where document_id = ${doc.id}`;
+          // Сертификат удалённого файла перевода (2а.5) отозван: страница проверки так и скажет.
+          await tx`update certificates set revoked_at = now() where document_id = ${doc.id} and revoked_at is null`;
           await audit(tx, actor, 'document.delete', 'document', doc.id);
         });
         await providers.storage.delete(doc.storage_key);
