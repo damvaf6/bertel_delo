@@ -176,3 +176,64 @@ test('переводчик: правила самозанятого, дипло�
   } finally { await db.end(); }
   expect(errors).toEqual([]);
 });
+
+// Нотариусы-партнёры (2а.4): администратор заводит нотариуса с окнами; переводчик видит окна на две недели и пачку —
+// свои нотариальные переводы в работе.
+test('нотариусы: администратор заводит нотариуса и окна, переводчик видит окна и пачку', async ({ page, browser, baseURL }) => {
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  const adm = await signIn(page, '+79990000980');
+  const db = new pg.Client({ connectionString: DB_URL });
+  await db.connect();
+  try {
+    await db.query("update users set platform_role = 'admin' where id = $1", [adm.id]);
+    await page.goto('/kabinet#admin');
+    await page.getByRole('button', { name: 'Добавить нотариуса' }).click();
+    await page.getByLabel('ФИО нотариуса').fill('Тестовый нотариус Сидорова С. С.');
+    await page.getByLabel('Адрес нотариуса').fill('г. Москва, тестовая ул., 5');
+    await page.getByLabel('Контакты (телефон, почта, помощник)').fill('+7 999 000-09-82');
+    // Окна по умолчанию — вт и чт 10:00–12:00; второе поменяем на пятницу 15:00–17:00.
+    const rows = page.locator('#nt-windows [data-window]');
+    await expect(rows).toHaveCount(2);
+    await rows.nth(1).getByLabel('День недели').selectOption({ label: 'пт' });
+    await rows.nth(1).getByLabel('С', { exact: true }).fill('15:00');
+    await rows.nth(1).getByLabel('До', { exact: true }).fill('17:00');
+    await page.locator('#notary-form').scrollIntoViewIfNeeded();
+    await shot(page, 'notarius-01-admin-forma');
+    await page.locator('#nt-save').click();
+    await expect(page.locator('#notary-msg')).toHaveText('Нотариус сохранён');
+    const card = page.locator('#notaries li').filter({ hasText: 'Сидорова' });
+    await expect(card).toContainText('Окна: вт 10:00–12:00, пт 15:00–17:00 · оплата по счёту от платформы · паспорт файлом — нет');
+    await card.scrollIntoViewIfNeeded();
+    await shot(page, 'notarius-02-admin-spravochnik');
+
+    // Переводчик с допуском к нотариальному переводу и одним делом в работе.
+    const ctx = await browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, isMobile: true, hasTouch: true, locale: 'ru-RU' });
+    const tp = await ctx.newPage();
+    tp.on('pageerror', (e) => errors.push(e.message));
+    const tr = await signIn(tp, '+79990000981');
+    await db.query("insert into specialists (user_id, regions, capacity, tax_status) values ($1, '{moscow}', 5, 'ip')", [tr.id]);
+    await db.query("insert into specialist_permits (user_id, module, service) values ($1, 'translation', 'notary_paper')", [tr.id]);
+    const fields = { recipient: 'zags', language: 'de', direction: 'to_ru', doc_kind: 'civil', docs: 1, pages: 1, urgent: 'no', original: 'meeting', delivery: 'pickup' };
+    await db.query(`insert into orders (owner_user_id, title, module, service, status, deadline, fields, executor_user_id)
+      values ($1, 'Перевод свидетельства о браке', 'translation', 'notary_paper', 'in_work', $2, $3, $4)`, [adm.id, inDays(4), JSON.stringify(fields), tr.id]);
+    await tp.goto('/kabinet#specialist');
+    const desk = tp.locator('#desk-box');
+    await expect(desk).toBeVisible();
+    await expect(tp.locator('#desk-windows li').first()).toContainText('Сидорова');
+    await expect(tp.locator('#desk-batch-title')).toHaveText('Пачка: 1 пер. · документов 1');
+    await expect(tp.locator('#desk-batch')).toContainText('Нотариальный перевод (бумага) · Свидетельство ЗАГС · немецкий → русский · 1 док. · 1 стр. · оригинал: при встрече');
+    await desk.scrollIntoViewIfNeeded();
+    await shot(tp, 'notarius-03-perevodchik-okna-pachka');
+    await tp.locator('#desk-batch a').first().click();
+    await expect(tp.locator('#order-status')).toHaveText('В работе');
+    await ctx.close();
+
+    // Перестали работать с нотариусом — он остаётся в справочнике выключенным.
+    page.once('dialog', (d) => d.accept());
+    await card.getByRole('button', { name: 'Не работаем' }).click();
+    await expect(page.locator('#notary-msg')).toHaveText('Нотариус выключен');
+    await expect(page.locator('#notaries li').filter({ hasText: 'Сидорова' })).toContainText('не работаем');
+  } finally { await db.end(); }
+  expect(errors).toEqual([]);
+});

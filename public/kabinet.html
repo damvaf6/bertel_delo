@@ -994,7 +994,7 @@
         <ul class="list" id="desk-windows"></ul>
         <p class="muted hidden" id="desk-no-windows">Окон на две недели нет — платформа сообщит, когда появится нотариус.</p>
         <h3 id="desk-batch-title">Пачка</h3>
-        <ul class="list" id="desk-batch"></ul>
+        <ul class="schedule" id="desk-batch"></ul>
         <p class="muted hidden" id="desk-no-batch">Нотариальных переводов в работе нет.</p>
         <p class="msg" id="desk-msg" role="status" aria-live="polite"></p>
       </div>
@@ -1208,7 +1208,7 @@
             <input id="nt-name" type="text" maxlength="200">
           </div>
           <div class="field">
-            <label for="nt-address">Адрес</label>
+            <label for="nt-address">Адрес нотариуса</label>
             <input id="nt-address" type="text" maxlength="300">
           </div>
           <div class="field">
@@ -1227,7 +1227,7 @@
               <option value="on_site">На месте при подписании</option>
             </select>
           </div>
-          <label class="row"><input type="checkbox" id="nt-identity"> Заверяет электронным файлом перевод паспорта</label>
+          <label class="row"><input type="checkbox" id="nt-identity"> <span>Заверяет электронным файлом перевод паспорта</span></label>
           <div class="row">
             <button type="submit" id="nt-save">Сохранить</button>
             <button type="button" class="secondary" id="nt-cancel">Отмена</button>

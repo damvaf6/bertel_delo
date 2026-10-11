@@ -34,7 +34,7 @@ function windowRow(w = { weekday: 2, from: '10:00', to: '12:00' }) {
   day.value = String(w.weekday);
   const time = (v, label, k) => { const i = el('input', { type: 'time', 'aria-label': label, 'data-w': k }); i.value = v; return i; };
   const li = el('li', { class: 'row', 'data-window': '' }, day, time(w.from, 'С', 'from'), el('span', { text: '–' }), time(w.to, 'До', 'to'));
-  li.append(el('button', { type: 'button', class: 'danger', onclick: () => li.remove() }, 'Убрать'));
+  li.append(el('button', { type: 'button', class: 'danger', 'aria-label': 'Убрать окно', onclick: () => li.remove() }, '✕'));
   return li;
 }
 
@@ -112,8 +112,8 @@ export async function loadNotaryDesk() {
   $('desk-no-batch').classList.toggle('hidden', desk.batch.length > 0);
   $('desk-batch').replaceChildren(...desk.batch.map((b) => el('li', { 'data-desk-order': b.order_id },
     el('a', { class: 'open', href: `#order=${encodeURIComponent(b.order_id)}` },
-      el('div', { class: 'title', text: `${b.ref} · ${b.title}` }),
-      el('div', { class: 'muted', text: [b.service, b.doc_kind, b.language, b.docs ? `${b.docs} док.` : '', b.pages ? `${b.pages} стр.` : '',
+      el('span', { text: `${b.ref} · ${b.title}` }),
+      el('span', { class: 'what', text: [b.service, b.doc_kind, b.language, b.docs ? `${b.docs} док.` : '', b.pages ? `${b.pages} стр.` : '',
         b.original ? `оригинал: ${b.original.toLowerCase()}` : '', b.urgent ? 'срочно' : '', b.deadline ? `срок ${short(b.deadline)}` : '']
         .filter(Boolean).join(' · ') })))));
 }
