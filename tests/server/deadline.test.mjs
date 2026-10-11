@@ -351,3 +351,26 @@ test('сколько раз переносили срок (2.169): число, �
   assert.deepEqual((await list(dispatcher, o)).body.moved, m);
   assert.equal((await list(stranger, o)).status, 404);
 });
+
+test('готовая фраза заказчику «срок перенесён на …» (2.178): после согласия, пока срок в силе; после отказа — нет', async () => {
+  const o = await inWork('Квартира: фраза о переносе', 4);
+  const old = addDays(today, 4);
+  const want = addDays(today, 11);
+  const words = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'UTC' });
+  const phrase = async (c) => (await c.req('GET', `/api/orders/${o.id}/messages`)).body.phrases.find((p) => p.id === 'deadline');
+  assert.equal(await phrase(spec), undefined, 'срок не переносили — фразы нет');
+  let rid = (await ask(spec, o, { new_deadline: want, reason: 'Жду выписку ЕГРН' })).body.open.id;
+  assert.equal(await phrase(spec), undefined, 'пока диспетчер не ответил — фразы нет');
+  assert.equal((await decide(dispatcher, o, rid, { approve: true })).status, 200);
+  const p = await phrase(spec);
+  assert.equal(p.title, 'Срок перенесён');
+  assert.equal(p.text, `Здравствуйте! Срок по Вашей заявке перенесён на ${words(want)} (был ${words(old)}). Если появятся вопросы — напишите здесь.`);
+  // Заказчику и диспетчеру готовых фраз нет; фраза — только текст, в переписке ничего не появилось.
+  assert.deepEqual((await owner.req('GET', `/api/orders/${o.id}/messages`)).body.phrases, []);
+  assert.equal((await spec.req('GET', `/api/orders/${o.id}/messages`)).body.messages.length, 0);
+  // Новая просьба отклонена — последнее решение «отказ»: фразы о переносе нет.
+  rid = (await ask(spec, o, { new_deadline: addDays(today, 20), reason: 'Ещё нужно время' })).body.open.id;
+  assert.ok(await phrase(spec), 'пока ждёт ответа — прежний перенос в силе');
+  assert.equal((await decide(dispatcher, o, rid, { approve: false })).status, 200);
+  assert.equal(await phrase(spec), undefined);
+});
