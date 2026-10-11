@@ -97,6 +97,7 @@ function render() {
   $('details-form').classList.toggle('hidden', !current.editable);
   $('details-view').classList.toggle('hidden', current.editable);
   if (current.editable) renderForm(); else renderFacts();
+  renderQuote();
   renderProgress();
   $('upload-box').classList.toggle('hidden', current.access === 'read' || FINAL.includes(order.status));
   $('result-upload-box').classList.toggle('hidden', !(current.executor?.is_me && order.status === 'in_work'));
@@ -114,6 +115,21 @@ function renderOrgLine() {
   $('order-mail-line').classList.toggle('hidden', !current.mail);
   $('order-mail-line').textContent = !current.mail ? ''
     : current.mail.email ? `Пришла по письму. Ход заявки и результат — письмами на ${current.mail.email}` : 'Заявка пришла по письму';
+}
+
+// Перевод (задача штаба 3f617197): предварительный расчёт по таблице цен и предупреждения («туда нужен нотариальный»).
+// Окончательную цену назначает диспетчер; тарифы нотариуса и доставка — без вознаграждения платформы.
+const rubKop = (kop) => `${(kop / 100).toLocaleString('ru-RU')} ₽`;
+function renderQuote() {
+  const quote = current.quote ?? null;
+  const notices = current.notices ?? [];
+  $('quote-box').classList.toggle('hidden', !quote && notices.length === 0);
+  $('quote-notices').replaceChildren(...notices.map((n) => el('div', { class: 'notice-warn', 'data-notice': n.id }, el('p', { text: n.text }))));
+  $('quote-lines').replaceChildren(...(quote?.lines ?? []).map((l) => el('li', { class: 'row' },
+    el('span', { text: l.title }), el('b', { text: rubKop(l.kop) }))));
+  $('quote-total').textContent = quote ? `Итого по таблице цен: ${rubKop(quote.total_kop)}` : '';
+  $('quote-note').textContent = !quote ? 'Стоимость появится, когда будут указаны документы и страницы.'
+    : `Предварительно. Окончательную цену назначит диспетчер.${quote.transit_kop ? ` Тарифы нотариуса и доставка (${rubKop(quote.transit_kop)}) — без наценки платформы.` : ''}`;
 }
 
 // ——— Данные заявки: форма ———
@@ -210,6 +226,9 @@ async function refreshMissing() {
   if (!current?.editable) return;
   const fresh = await api('GET', `/api/orders/${current.order.id}`);
   current.submit_missing = fresh.submit_missing;
+  current.quote = fresh.quote;
+  current.notices = fresh.notices;
+  renderQuote();
   setNext({});
 }
 

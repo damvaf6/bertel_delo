@@ -118,6 +118,13 @@
         <ol class="next-steps" id="next-steps"></ol>
         <div id="next-main"></div>
       </div>
+      <div class="card hidden" id="quote-box">
+        <h2>Стоимость</h2>
+        <div id="quote-notices"></div>
+        <ul class="list" id="quote-lines"></ul>
+        <p class="money-sum" id="quote-total"></p>
+        <p class="muted" id="quote-note"></p>
+      </div>
       <form class="card hidden" id="details-form" novalidate>
         <h2>Данные заявки</h2>
         <p class="muted">Поля со звёздочкой нужны, чтобы отправить заявку. Сохранять можно частями.</p>
@@ -557,6 +564,7 @@
             <label for="price">Цена, рублей</label>
             <input id="price" type="text" inputmode="decimal" maxlength="14" placeholder="Например: 15 000">
           </div>
+          <p class="muted hidden" id="price-quoted"></p>
           <p class="muted">Исполнителю — 80%, платформе — 20%. Цену можно менять, пока заказчик не оплатил заявку.</p>
           <button type="submit" class="secondary" id="price-save">Назначить цену</button>
         </form>

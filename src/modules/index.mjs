@@ -45,8 +45,9 @@
 import { HttpError } from '../http/core.mjs';
 import { AUTO_CHECKS } from '../ai/report-checks.mjs';
 import expertise from './expertise.mjs';
+import translation from './translation.mjs';
 
-export const DEFAULT_MODULES = [expertise];
+export const DEFAULT_MODULES = [expertise, translation];
 
 // Виды основания заявки. «С реквизитами» — номер, дата и файл обязательны для отправки.
 export const BASIS_KINDS = {
