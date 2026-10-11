@@ -2158,6 +2158,21 @@ test('черновик готовым файлом Word (2.29): руководи
   await expect(text).toHaveValue(/\| Адрес объекта \| г\. Москва, тестовая ул\., 50 \|/);
   await expect(text).toHaveValue(/\| Подход \| Стоимость, руб\. \| Вес \|/);
   await expect(sp.getByRole('button', { name: 'Скачать Word' })).toBeVisible();
+  // 2.177: перед сборкой Word — какие разделы ещё пустые; нажатие ведёт к пометке в разделе, заполненный уходит из списка.
+  await expect(sp.locator('#draft-empty-text')).toContainText('Ещё пустые разделы:');
+  const emptyBtn = sp.locator('#draft-empty-list button').first();
+  const emptyTitle = (await emptyBtn.textContent()).trim();
+  const emptyCount = await sp.locator('#draft-empty-list button').count();
+  await sp.locator('#draft-word-box').scrollIntoViewIfNeeded();
+  await shot(sp, '99i2-specialist-pustye-razdely');
+  await emptyBtn.click();
+  await expect(text).toBeFocused();
+  expect(await text.evaluate((t) => t.value.slice(t.selectionStart, t.selectionEnd))).toMatch(/^\[(?:заполнить|описать)/);
+  // Пометка — в том самом разделе: ближайший заголовок перед ней — нажатый.
+  expect(await text.evaluate((t) => t.value.slice(0, t.selectionStart).match(/^#{1,3}\s*(.+)$/gm).at(-1).replace(/^#{1,3}\s*/, '').trim())).toBe(emptyTitle);
+  await sp.keyboard.type('Текст эксперта в разделе.');
+  await expect(sp.locator('#draft-empty-list').getByRole('button', { name: emptyTitle, exact: true })).toHaveCount(0);
+  await expect(sp.locator('#draft-empty-list button')).toHaveCount(emptyCount - 1);
   await sp.locator('#draft-word-box').scrollIntoViewIfNeeded();
   await shot(sp, '99i-specialist-skachat-word');
   // Несохранённая правка уходит в файл: сначала сохраняется.

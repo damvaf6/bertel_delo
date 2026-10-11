@@ -361,3 +361,6 @@ h2.inline { display: inline; }
 .list li.returned { border-left: 4px solid var(--danger); padding-left: 10px; }
 .badge.back { background: var(--danger); color: #fff; font-weight: 700; font-size: 13px; }
 .list .back-note { margin-top: 4px; font-size: 15px; color: var(--danger); font-weight: 600; overflow-wrap: anywhere; }
+
+/* Пустые разделы черновика перед «Скачать Word» (2.177). */
+#draft-empty { margin-bottom: .75rem; }

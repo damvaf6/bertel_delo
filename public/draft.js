@@ -6,6 +6,7 @@ import { setNext } from '/next.js';
 import { loadAnalogs } from '/analogs.js';
 import { loadSnippets } from '/snippets.js';
 import { loadDraftDiff } from '/draftdiff.js';
+import { emptySections } from '/draftempty.js';
 
 const $ = (id) => document.getElementById(id);
 const timeRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
@@ -103,6 +104,33 @@ function countGaps() {
   const n = ($('draft-text').value.match(GAP) ?? []).length;
   $('draft-gaps').textContent = n ? `Осталось пометок: ${n}` : 'Пометок не осталось';
   $('draft-next-gap').classList.toggle('hidden', !n || $('draft-text').readOnly);
+  renderEmpty();
+}
+
+// Пустые разделы перед сборкой Word (2.177): список по тексту на экране; нажатие — к разделу в тексте (выделяется пометка
+// «[заполнить…]», если она там есть, иначе курсор встаёт под заголовок). Служебным, которые только читают, список не нужен.
+function renderEmpty() {
+  const t = $('draft-text');
+  const list = t.readOnly ? [] : emptySections(t.value);
+  $('draft-empty').classList.toggle('hidden', !list.length);
+  if (!list.length) return $('draft-empty-list').replaceChildren();
+  $('draft-empty-text').textContent = `Ещё пустые разделы: ${list.length}. Заполните их до сборки Word или уберите лишние — нажмите, чтобы перейти к разделу.`;
+  $('draft-empty-list').replaceChildren(...list.map((s) => el('button', {
+    type: 'button', class: 'secondary', onclick: () => toSection(s.title),
+  }, s.title)));
+}
+
+function toSection(title) {
+  const t = $('draft-text');
+  const s = emptySections(t.value).find((x) => x.title === title);
+  if (!s) return renderEmpty();
+  const next = t.value.slice(s.end).search(/\n#{1,3}\s*\S/);
+  const stop = next < 0 ? t.value.length : s.end + next;
+  const gap = new RegExp(GAP.source, 'i').exec(t.value.slice(s.end, stop));
+  const from = gap ? s.end + gap.index : Math.min(s.end + 1, t.value.length);
+  t.scrollIntoView({ block: 'center' });
+  t.focus();
+  t.setSelectionRange(from, gap ? from + gap[0].length : from);
 }
 $('draft-text').addEventListener('input', () => {
   countGaps();
