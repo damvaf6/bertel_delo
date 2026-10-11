@@ -3,7 +3,7 @@
 // (10-й знак VIN сохранён там, где по нему сверяется год). Настоящие отчёты в репозиторий не попадают.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { runAutoChecks, vinYears, wordsToNumber, tocEntries, AUTO_CHECKS, purchaseOf, questionsOf, parseAddress } from '../../src/ai/report-checks.mjs';
+import { runAutoChecks, vinYears, wordsToNumber, tocEntries, AUTO_CHECKS, purchaseOf, questionsOf, parseAddress, parseFloorField } from '../../src/ai/report-checks.mjs';
 import { pagesForModel } from '../../src/ops/ai-ops.mjs';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
@@ -422,6 +422,33 @@ test('недвижимость и земля (2.59): площадь, этаж и
   // Только этаж в заявке («5») — этажность не сверяем.
   assert.deepEqual(texts(runAutoChecks(['floor_match'], [doc([flat])], { fields: { floor: '5' }, service: 'realty' }), 'floor_match'),
     ['Этаж 7 не совпадает с этажом из заявки (5) — проверьте, нет ли данных другого объекта']);
+});
+
+test('этаж и этажность (2.187): «этаж 3 из 9», «3/9 эт.», «Этаж: 3/9» — сверяются; магазин на 1 этаже и подземные этажи — не находка', () => {
+  assert.deepEqual(['5 / 9', '5/9', '5 из 9', '5 этаж из 9', '5-й этаж из 9', '5'].map(parseFloorField),
+    [...Array(5).fill({ floor: 5, floors: 9 }), { floor: 5, floors: null }]);
+  assert.equal(parseFloorField('цоколь'), null);
+  const same = [
+    'Квартира расположена на этаже 3 из 9',
+    'Этаж: 3/9; этаж 3 из 9',
+    'Квартира 3/9 эт. панельного дома, на 3-м этаже из 9',
+    'Этаж/этажей в доме: 3/9',
+    'Этаж / этажность дома: 3 / 9',
+    'Квартира расположена на 3 этаже 9-этажного жилого дома, на этаже 3 9-этажного дома',
+    'Количество подземных этажей: 1',
+    'Этажность: 9, в т.ч. подземных 1, цокольных этажей: 1',
+    'На 1 этаже дома расположен магазин',
+    'Аналог 2: квартира 7/12 эт.',
+  ].join('\n');
+  for (const floor of ['3 / 9', '3 из 9', '3 этаж из 9']) {
+    assert.deepEqual(runAutoChecks(['floor_match'], [doc([same])], { fields: { floor }, service: 'realty' }).floor_match, [], floor);
+  }
+  const other = ['Этаж 4 из 9', 'Этаж: 3/10', '6/9 эт.'].join('\n');
+  assert.deepEqual(texts(runAutoChecks(['floor_match'], [doc([other])], { fields: { floor: '3 из 9' }, service: 'realty' }), 'floor_match'), [
+    'Этаж 4 не совпадает с этажом из заявки (3) — проверьте, нет ли данных другого объекта',
+    'Этажей в доме 10, а в заявке 9 — проверьте, нет ли данных другого дома',
+    'Этаж 6 не совпадает с этажом из заявки (3) — проверьте, нет ли данных другого объекта',
+  ]);
 });
 
 test('земля (2.59): площадь в сотках и гектарах, категория земель и вид разрешённого использования — как в заявке', () => {
