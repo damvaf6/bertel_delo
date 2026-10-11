@@ -125,6 +125,17 @@
         <p class="money-sum" id="quote-total"></p>
         <p class="muted" id="quote-note"></p>
       </div>
+      <div class="card hidden" id="terms-box">
+        <h2>Условия заказа</h2>
+        <p class="notice-warn hidden" id="terms-draft">Черновик условий: проверяется юристом и пока не действует.</p>
+        <details class="fold" id="terms-details">
+          <summary id="terms-summary">Главное из оферты</summary>
+          <ul class="list" id="terms-customer"></ul>
+          <h3 class="hidden" id="terms-executor-title">Для исполнителя</h3>
+          <ul class="list" id="terms-executor"></ul>
+          <p class="muted" id="terms-version"></p>
+        </details>
+      </div>
       <form class="card hidden" id="details-form" novalidate>
         <h2>Данные заявки</h2>
         <p class="muted">Поля со звёздочкой нужны, чтобы отправить заявку. Сохранять можно частями.</p>

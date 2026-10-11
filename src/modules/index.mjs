@@ -43,6 +43,9 @@
 //       добавляется «Вычитка» — обязательно, пока у исполнителя в модуле сдано меньше new_orders дел, иначе выборочно
 //       (sample_percent из 100); заказчик после выдачи может попросить бесплатную переделку (срок — не раньше redo_days дней),
 //       тогда вычитка обязательна; refund_note — правило возврата, его видит диспетчер при отмене после начала работ
+//     offer?: { version: 'ГГГГ-ММ-ДД', draft: true?, doc: путь в docs/, points: [{ id, text, to: 'customer' | 'executor', services? }…] }  —
+//       главные условия оферты (2а.8) в карточке заявки: заказчику — свои пункты, исполнителю и служебным — все; draft — черновик,
+//       пока юрист не проверил (пометка «пока не действует»); полный текст — doc
 //     analogs?: { services: [id услуги…], min, fields: [поле + services? + near?…] }  — раздел «Аналоги» в деле (2.32): признаки
 //       аналога по виду объекта (цена, дата объявления и регион — у всех, в ядре: src/analogs/analogs.mjs); min — сколько
 //       нужно подтверждённых; near: { field: id числового поля заявки, within?: разница, pct?: разница в % } — предупреждение;
@@ -136,7 +139,7 @@ function validateField(f, where) {
 }
 
 export function validateModule(m) {
-  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express', 'signature', 'analogs', 'approaches', 'request_docs', 'repeat', 'executors', 'certificate', 'steps', 'proofread'], 'модуль');
+  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express', 'signature', 'analogs', 'approaches', 'request_docs', 'repeat', 'executors', 'certificate', 'steps', 'proofread', 'offer'], 'модуль');
   if (!ID_RE.test(m.id ?? '')) fail('модуль', `неверный id «${m.id}»`);
   const at = `модуль ${m.id}`;
   if (!nonEmpty(m.name)) fail(at, 'нет названия');
@@ -369,6 +372,26 @@ export function validateModule(m) {
     if (p.refund_note !== undefined && (typeof p.refund_note !== 'string' || !p.refund_note.trim())) fail(where, 'refund_note — строка');
     if ((m.checks ?? []).some((c) => c.id === PROOFREAD_CHECK.id)) fail(where, `id «${PROOFREAD_CHECK.id}» занят правилом проверки модуля`);
   }
+  // Условия оферты (2а.8) — необязательно.
+  if (m.offer !== undefined) {
+    const where = `${at}, оферта`;
+    const o = m.offer;
+    onlyKeys(o, ['version', 'draft', 'doc', 'points'], where);
+    if (typeof o.version !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(o.version)) fail(where, 'version — дата ГГГГ-ММ-ДД');
+    if (o.draft !== undefined && o.draft !== true) fail(where, 'draft — только true');
+    if (typeof o.doc !== 'string' || !/^docs\/[\w./-]+\.md$/.test(o.doc)) fail(where, 'doc — путь к тексту в docs/…md');
+    if (!Array.isArray(o.points) || o.points.length === 0) fail(where, 'points — непустой список');
+    checkIds(o.points, where);
+    for (const pt of o.points) {
+      onlyKeys(pt, ['id', 'text', 'to', 'services'], `${where}, пункт ${pt.id}`);
+      if (!nonEmpty(pt.text)) fail(`${where}, пункт ${pt.id}`, 'text — строка до 300 знаков');
+      if (!['customer', 'executor'].includes(pt.to)) fail(`${where}, пункт ${pt.id}`, 'to — customer или executor');
+      if (pt.services !== undefined && (!Array.isArray(pt.services) || pt.services.length === 0 || pt.services.some((id) => !serviceIds.includes(id)))) {
+        fail(`${where}, пункт ${pt.id}`, 'services — непустой список услуг этого модуля');
+      }
+    }
+    if (!o.points.some((pt) => pt.to === 'customer')) fail(where, 'нет пунктов для заказчика');
+  }
   // Выбор подходов к оценке (2.33) — необязательно: без него черновик пишется со всеми разделами.
   if (m.approaches !== undefined) {
     const where = `${at}, подходы`;
@@ -564,6 +587,14 @@ export function createRegistry(modules = DEFAULT_MODULES) {
     proofread(moduleId) {
       const p = modulesList.find((x) => x.id === moduleId)?.proofread;
       return p ? { new_orders: p.new_orders, sample_percent: p.sample_percent, redo_days: p.redo_days, refund_note: p.refund_note ?? null } : null;
+    },
+    // Условия оферты (2а.8) для услуги: пункты заказчику (customer) и исполнителю (executor); null — у модуля оферты нет.
+    offer(moduleId, serviceId) {
+      const o = modulesList.find((x) => x.id === moduleId)?.offer;
+      if (!o) return null;
+      const own = o.points.filter((pt) => !pt.services || pt.services.includes(serviceId));
+      const pick = (to) => own.filter((pt) => pt.to === to).map(({ id, text }) => ({ id, text }));
+      return { version: o.version, draft: !!o.draft, doc: o.doc, customer: pick('customer'), executor: pick('executor') };
     },
     // Нужна ли подпись результата УКЭП исполнителя до сдачи на проверку (2.5).
     signatureRequired(moduleId, serviceId) {

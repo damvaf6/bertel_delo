@@ -21,6 +21,8 @@ const features = (registry, order) => (registry.proofread(order.module) ? ['redo
 
 // Нужна ли вычитка (2а.7) при первой сдаче на проверку: новый исполнитель (сдал в модуле меньше new_orders дел) — 'new',
 // иначе выборочно — 'sample' или 'none'. rand — целое от 0 до 99.
+const offerFor = (o, executor) => (o ? { ...o, executor: executor ? o.executor : [] } : null);
+
 export function proofreadReason(cfg, doneCount, rand) {
   if (doneCount < cfg.new_orders) return 'new';
   return rand < cfg.sample_percent ? 'sample' : 'none';
@@ -267,6 +269,8 @@ export function orderOps() {
           // («туда нужен нотариальный перевод») — всем, кто видит заявку.
           quote: isStaff(actor) || orderSides(actor, order).includes('customer') ? moduleQuote(order) : null,
           notices: moduleNotices(order),
+          // Условия оферты (2а.8): пункты заказчика — всем, кто видит заявку; пункты исполнителя — ему самому и служебным.
+          terms: offerFor(registry.offer(order.module, order.service), isStaff(actor) || order.executor_user_id === actor.id),
           // Правило возврата (2а.7) — диспетчеру при отмене после начала работ.
           cancel_note: orderSides(actor, order).includes('dispatcher') ? registry.proofread(order.module)?.refund_note ?? null : null,
           // Закрыть неоплаченную заявку нельзя — такой кнопки и не показываем (1.6).

@@ -295,3 +295,41 @@ test('переводчики: без статуса не допускаются;
   assert.deepEqual([done.receipt_url, done.receipt_needed], [URL_OK, false]);
   assert.equal((await dispatcher.req('GET', '/api/money')).body.totals.receipts_missing, missing - 1);
 });
+
+// Оферта (2а.8): главные условия в карточке заявки — черновик, пока юрист не проверил; полный текст — docs/legal.
+test('условия заказа: заказчику — его пункты по услуге, исполнителю и диспетчеру — и свои; гарантия по сертификату — в пределах стоимости заказа', async () => {
+  const { existsSync } = await import('node:fs');
+  assert.ok(existsSync(new URL(`../../${translation.offer.doc}`, import.meta.url)), 'полный текст оферты лежит в docs');
+  const reg = createRegistry([translation]);
+  const plain = reg.offer('translation', 'plain');
+  assert.equal(plain.draft, true);
+  assert.ok(plain.customer.some((p) => p.id === 'guarantee' && /в пределах стоимости заказа/.test(p.text)));
+  assert.ok(plain.customer.some((p) => p.id === 'quality' && /отвечает переводчик/.test(p.text)));
+  assert.ok(!plain.customer.some((p) => p.id === 'notary'), 'без нотариуса — без пункта о нотариусе');
+  const paper = reg.offer('translation', 'notary_paper');
+  assert.ok(paper.customer.some((p) => p.id === 'notary') && !paper.customer.some((p) => p.id === 'guarantee'));
+  assert.equal(createRegistry().offer('expertise', 'any'), null, 'у экспертизы оферты в карточке пока нет');
+
+  // Ошибки в описании — сервер не стартует.
+  const bad = (offer) => assert.throws(() => validateModule({ ...translation, offer }), /оферта/);
+  bad({ ...translation.offer, version: '12.10.2026' });
+  bad({ ...translation.offer, doc: 'https://example.ru/oferta' });
+  bad({ ...translation.offer, points: translation.offer.points.filter((p) => p.to === 'executor') });
+  bad({ ...translation.offer, points: [{ id: 'x', to: 'all', text: 'т' }] });
+  bad({ ...translation.offer, points: [{ id: 'x', to: 'customer', text: 'т', services: ['nope'] }] });
+
+  const r = await owner.req('POST', '/api/orders', { module: 'translation', service: 'plain' });
+  const id = r.body.order.id;
+  const mine = (await owner.req('GET', `/api/orders/${id}`)).body.terms;
+  assert.deepEqual(mine.customer.map((p) => p.id), plain.customer.map((p) => p.id));
+  assert.deepEqual(mine.executor, [], 'заказчику пункты переводчика не показываются');
+  await owner.req('PATCH', `/api/orders/${id}`, { deadline: soon, fields: { ...PASSPORT, recipient: 'business', urgent: 'no', delivery: 'none' } });
+  assert.equal((await owner.req('POST', `/api/orders/${id}/status`, { to: 'matching', from: 'new' })).status, 200);
+  const staff = (await dispatcher.req('GET', `/api/orders/${id}`)).body.terms;
+  assert.ok(staff.executor.some((p) => p.id === 'executor_money' && /80%/.test(p.text)));
+  const tr = await login(S, '+79990000957');
+  await S.sql`update orders set executor_user_id = ${tr.user.id}, status = 'in_work' where id = ${id}`;
+  const exec = await tr.req('GET', `/api/orders/${id}`);
+  assert.equal(exec.status, 200);
+  assert.deepEqual(exec.body.terms.executor.map((p) => p.id), staff.executor.map((p) => p.id));
+});
