@@ -126,6 +126,9 @@ export default {
   // Исполнители (2а.3): только самозанятый, ИП, ООО или бюро; к нотариальным — с проверенным документом о знании языка заявки.
   executors: { tax_status: true, language_doc: { field: 'language', services: ['notary_paper', 'notary_file'] } },
 
+  // Сертификат платформы (2а.5): к переводу без нотариуса — номер, QR, открытая страница проверки.
+  certificate: { services: ['plain'], language: 'language', direction: 'direction' },
+
   checks: [
     {
       id: 'names', title: 'Имена, фамилии и названия — как в документе и в загранпаспорте',

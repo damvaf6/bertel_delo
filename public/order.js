@@ -409,7 +409,8 @@ async function loadDocs(initial = false) {
       el('div', { class: 'row' },
         el('button', { class: 'secondary', 'data-action': 'download', onclick: () => download(d) }, 'Скачать'),
         ...(removable ? [el('button', { class: 'danger', 'data-action': 'delete', onclick: () => remove(d) }, 'Удалить')] : [])),
-      ...(d.kind === 'result' ? signatureBlock(d, { canSign: mineResults && signRequired && d.own !== false, signOrg: documentsBody.signature_org }) : []));
+      ...(d.kind === 'result' ? signatureBlock(d, { canSign: mineResults && signRequired && d.own !== false, signOrg: documentsBody.signature_org }) : []),
+      ...(d.kind === 'result' ? certificateBlock(d) : []));
   };
   // Много фото осмотра (2.49: бывает 100) — одной свёрнутой строкой, чтобы документы и результат не терялись внизу.
   const photos = documents.filter((d) => d.kind === 'inspection');
@@ -617,6 +618,35 @@ function signatureBlock(d, { canSign, signOrg }) {
       el('button', { class: 'secondary', 'data-action': 'verify', onclick: () => verifyDoc(d) }, 'Проверить подпись')));
   }
   return [el('div', { class: 'sig' }, ...lines)];
+}
+
+// Сертификат платформы к переводу без нотариуса (2а.5): номер, ссылка на страницу проверки, лист Word с QR-кодом. Переводчик
+// выдаёт его к своему файлу, пока дело в работе; заказчик видит после проверки — вместе с файлом.
+function certificateBlock(d) {
+  const c = d.certificate;
+  if (c) {
+    const when = new Date(c.issued_at).toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow' });
+    if (c.revoked) return [el('div', { class: 'sig', 'data-role': 'certificate' }, el('div', { class: 'sig-state warn', text: `Сертификат № ${c.number} отозван` }))];
+    return [el('div', { class: 'sig', 'data-role': 'certificate' },
+      el('div', { class: 'sig-state', 'data-cert': c.number, text: `Сертификат платформы № ${c.number} от ${when}` }),
+      el('div', { class: 'muted', text: 'Получатель проверит его по QR-коду на листе или по ссылке:' }),
+      el('a', { href: c.url, target: '_blank', rel: 'noopener', class: 'cert-link', 'data-role': 'cert-url', text: c.url }),
+      el('div', { class: 'row' },
+        el('button', { class: 'secondary', 'data-action': 'cert-sheet', onclick: () => location.assign(`/api/documents/${d.id}/certificate`) }, 'Лист сертификата (Word)')))];
+  }
+  if (!d.can_certify) return [];
+  return [el('div', { class: 'sig', 'data-role': 'certificate' },
+    el('div', { class: 'muted', text: 'Перевод без нотариуса: выдайте сертификат платформы — номер и QR-код для проверки. В нём — Ваши ФИО, языки и отпечаток этого файла: загрузите окончательную версию перевода.' }),
+    el('div', { class: 'row' }, el('button', { 'data-action': 'cert-issue', onclick: (e) => issueCertificate(d, e.currentTarget) }, 'Выдать сертификат')))];
+}
+async function issueCertificate(d, btn) {
+  if (!confirm(`Выдать сертификат платформы к файлу «${d.filename}»? Если потом удалите файл, сертификат будет отозван.`)) return;
+  btn.disabled = true;
+  try {
+    const { certificate } = await api('POST', `/api/documents/${d.id}/certificate`);
+    await loadDocs();
+    say($('doc-msg'), `Сертификат № ${certificate.number} выдан`, 'ok');
+  } catch (err) { btn.disabled = false; say($('doc-msg'), err.message); }
 }
 
 // Очередь подписи (2.99): эксперт подписал, организация ещё нет — сколько ждёт и «Напомнить руководителю» (раз в сутки).
