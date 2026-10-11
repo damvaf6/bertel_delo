@@ -1851,7 +1851,8 @@ test('распределение в организации (2.17): диспет�
   await expect(hp.locator('#org-pending-msg')).toHaveText('Вы отказались от дела — оно вернулось диспетчеру');
   await expect(hp.locator('#org-pending-box')).toBeHidden();
   await dp.goto('/kabinet#notifications');
-  await expect(dp.locator('#notifications li').first()).toContainText('Организация отказалась от дела');
+  // Диспетчеру приходят уведомления по всем делам (сервер мог разослать «срок прошёл» во время теста) — ищем своё по тексту.
+  await expect(dp.locator('#notifications li').filter({ hasText: 'Организация отказалась от дела' }).first()).toBeVisible();
   await dp.goto(`/kabinet#order=${id}`);
   await expect(dp.locator('#order-status')).toHaveText('Подбор исполнителя');
   await expect(dp.locator('#history')).toContainText('Все эксперты заняты');
