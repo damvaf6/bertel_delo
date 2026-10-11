@@ -70,6 +70,8 @@ export async function loadMoney(current, reload) {
     facts.push(...fact('Возврат заказчику', `${rub(money.refund.amount_kop)} — ${REFUND_RU[money.refund.status]}${money.refund.failure ? ` (${money.refund.failure})` : ''}`));
   }
   if (money.payout) facts.push(...fact(executorOnly ? 'Выплата' : 'Выплата исполнителю', `${rub(money.payout.amount_kop)} — ${PAYOUT_RU[money.payout.status]}${money.payout.failure ? ` (${money.payout.failure})` : ''}`));
+  if (money.payout?.receipt_url) facts.push(...fact('Чек самозанятого', `приложен ${dayRu(money.payout.receipt_at)}`));
+  else if (money.payout?.receipt_needed) facts.push(...fact('Чек самозанятого', 'нужен: выдайте чек в «Мой налог» и приложите ссылку', 'overdue'));
   else if (executorOnly && order.status !== 'cancelled') facts.push(...fact('Выплата', 'автоматически, когда результат проверен и выдан заказчику'));
   $('money-facts').replaceChildren(...facts);
 
@@ -81,6 +83,9 @@ export async function loadMoney(current, reload) {
   $('pay').classList.toggle('hidden', !money.can_pay);
   if (money.can_pay) $('pay').textContent = `Оплатить ${rub(money.price_kop)}`;
   $('payout-retry').classList.toggle('hidden', !money.can_retry_payout);
+  // Чек самозанятого на выплату (2а.3): приложить или заменить ссылку «Мой налог».
+  $('receipt-form').classList.toggle('hidden', !money.can_add_receipt);
+  if (money.can_add_receipt) $('receipt-url').value = money.payout.receipt_url ?? '';
   $('refund-retry').classList.toggle('hidden', !money.can_retry_refund);
 
   $('closing-title').classList.toggle('hidden', money.documents.length === 0);
@@ -182,6 +187,16 @@ $('refund-retry').addEventListener('click', async () => {
   } catch (err) { say($('money-msg'), err.message); } finally { $('refund-retry').disabled = false; }
 });
 
+$('receipt-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  $('receipt-save').disabled = true;
+  try {
+    await api('PUT', `/api/orders/${ctx.order.id}/payout/receipt`, { url: $('receipt-url').value.trim() });
+    await loadMoney({ order: ctx.order }, ctx.reload);
+    say($('money-msg'), 'Чек приложен', 'ok');
+  } catch (err) { say($('money-msg'), err.message); } finally { $('receipt-save').disabled = false; }
+});
+
 $('payout-retry').addEventListener('click', async () => {
   $('payout-retry').disabled = true;
   try {
@@ -210,6 +225,7 @@ export async function showMoney() {
       ...fact('Возвращено заказчикам', rub(totals.refunded_kop)),
       ...(totals.to_refund_kop ? fact('К возврату заказчикам', rub(totals.to_refund_kop), 'overdue') : []),
       ...(totals.transit_kop ? fact('Нотариусу и за доставку (транзит)', rub(totals.transit_kop)) : []),
+      ...(totals.receipts_missing ? fact('Выплаты самозанятым без чека', String(totals.receipts_missing), 'overdue') : []),
       ...fact('Вознаграждение платформы (20%)', rub(totals.commission_kop)));
     $('money-payments').replaceChildren(...payments.map((p) => el('li', {},
       el('button', { class: 'open', onclick: openOrder(p.order_id) },
@@ -233,6 +249,6 @@ function renderPayouts(payouts, staff) {
   $('money-payouts').replaceChildren(...payouts.map((p) => el('li', {},
     el('button', { class: 'open', onclick: openOrder(p.order_id) },
       el('div', { class: 'title', text: p.title }),
-      el('div', { class: `muted${p.status === 'failed' ? ' overdue' : ''}`, text: [rub(p.amount_kop), PAYOUT_RU[p.status], staff ? p.executor_name : null].filter(Boolean).join(' · ') })))));
+      el('div', { class: `muted${p.status === 'failed' ? ' overdue' : ''}`, text: [rub(p.amount_kop), PAYOUT_RU[p.status], p.receipt_needed ? 'нет чека' : null, staff ? p.executor_name : null].filter(Boolean).join(' · ') })))));
   $('money-payouts-empty').classList.toggle('hidden', payouts.length > 0);
 }

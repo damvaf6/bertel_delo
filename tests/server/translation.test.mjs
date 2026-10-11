@@ -117,7 +117,7 @@ test('деньги перевода: 20% только с услуг, нотар�
   }
 
   const spec = await login(S, '+79990000954');
-  await makeSpecialist(S.sql, spec.user.id, { permits: [['translation', 'notary_paper'], ['translation', 'plain']], capacity: 20 });
+  await makeSpecialist(S.sql, spec.user.id, { permits: [['translation', 'notary_paper'], ['translation', 'plain']], capacity: 20, taxStatus: 'ip', languages: ['en'] });
   // Паспорт, английский, бумага, самовывоз: 1 550 ₽ = платформа 200 + переводчик 800 + нотариус 550.
   const priced = async (fields) => {
     const o = (await owner.req('POST', '/api/orders', { module: 'translation', service: 'notary_paper', title: 'Перевод паспорта' })).body.order;
@@ -192,4 +192,103 @@ test('деньги перевода: 20% только с услуг, нотар�
   assert.deepEqual([Number(pb.amount_kop), Number(pb.commission_kop), Number(pb.transit_kop)], [40_000, 10_000, 0]);
   const [rb] = await S.sql`select amount_kop from refunds where order_id = ${b.id}`;
   assert.equal(Number(rb.amount_kop), 105_000);
+});
+
+// Исполнители-переводчики (2а.3; задачи штаба 3f617197 и 3f417197-…-813c): статус, документ о знании языка, чек на выплату.
+test('переводчики: без статуса не допускаются; к нотариальным — только с проверенным дипломом по языку; самозанятый — чек на выплату', async () => {
+  const admin = await login(S, '+79990000955');
+  await setPlatformRole(S.sql, admin.user.id, 'admin');
+  const tr = await login(S, '+79990000956');
+  const id = tr.user.id;
+  const adm = (method, path, body) => admin.req(method, `/api/admin/specialists/${id}${path}`, body);
+
+  // Физлицо без статуса: допуск к переводам не выдаётся (иначе платформа — налоговый агент); к экспертизе — как раньше.
+  assert.equal((await adm('PUT', '', { regions: ['moscow'] })).status, 200);
+  const noTax = await adm('POST', '/permits', { module: 'translation', service: 'plain' });
+  assert.equal(noTax.status, 409);
+  assert.match(noTax.body.message, /самозанятый, ИП или ООО\/бюро/);
+  assert.equal((await adm('PUT', '', { tax_status: 'физлицо' })).status, 400);
+  const prof = (await adm('PUT', '', { tax_status: 'self_employed' })).body.specialist;
+  assert.equal(prof.tax_status_name, 'Самозанятый');
+  assert.ok(prof.tax_rules.some((r) => /чек в приложении «Мой налог»/.test(r)), 'правило: чек на каждую выплату');
+  for (const service of ['notary_paper', 'plain']) assert.equal((await adm('POST', '/permits', { module: 'translation', service })).status, 201);
+  assert.equal((await adm('PUT', '', { tax_status: null })).status, 409, 'статус не снять, пока есть допуски к переводам');
+  assert.deepEqual((await tr.req('GET', '/api/specialist/me')).body.specialist.tax_rules, prof.tax_rules, 'переводчик видит свои правила');
+
+  // Документ о знании языка — в досье, по языку из списка заявки.
+  const add = (b) => tr.req('POST', '/api/specialist/me/dossier', { kind: 'language', title: 'Диплом МГЛУ, переводчик', ...b });
+  assert.equal((await add({})).status, 400, 'без языка');
+  assert.equal((await add({ language: 'xx' })).status, 400, 'язык не из списка');
+  assert.equal((await tr.req('POST', '/api/specialist/me/dossier', { kind: 'sro', title: 'СРО', number: '1', language: 'en' })).status, 400);
+  const d = await add({ language: 'en', number: 'ВСА 0000001' });
+  assert.equal(d.status, 201, JSON.stringify(d.body));
+  const item = d.body.items.find((i) => i.kind === 'language');
+  assert.deepEqual([item.language_name, item.verified], ['Английский', false]);
+  assert.ok(d.body.languages.some((l) => l.id === 'zh'));
+  const verify = (v) => adm('PUT', `/languages/${item.id}`, { verified: v });
+  assert.equal((await verify(true)).status, 409, 'без копии проверять нечего');
+  const upload = () => tr.req('POST', `/api/specialist/me/dossier/${item.id}/file`, Buffer.from('скан диплома'), { raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': 'diplom.pdf' } });
+  assert.equal((await upload()).status, 200);
+  assert.ok((await adm('GET', `/languages/${item.id}/file`)).body.url, 'администратор открывает копию');
+  assert.equal((await tr.req('GET', `/api/admin/specialists/${id}/languages/${item.id}/file`)).status, 404, 'переводчик — не через служебный путь');
+  assert.equal((await verify('да')).status, 400);
+  const ok = (await verify(true)).body.specialist;
+  assert.deepEqual(ok.languages.map((l) => [l.language_name, l.verified, l.has_copy]), [['Английский', true, true]]);
+  assert.equal(ok.languages[0].number, undefined, 'номер документа в карточке не показывается');
+
+  // Подбор: нотариальный английский — переводчик есть; нотариальный немецкий — нет; без нотариуса немецкий — есть.
+  const ready = async (service, fields) => {
+    const o = (await owner.req('POST', '/api/orders', { module: 'translation', service, title: 'Перевод для подбора' })).body.order;
+    assert.equal((await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: soon, fields })).status, 200);
+    assert.equal((await owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
+    return o;
+  };
+  const paper = { ...PASSPORT, original: 'courier', urgent: 'no', delivery: 'pickup' };
+  const cands = async (o) => (await dispatcher.req('GET', `/api/orders/${o.id}/candidates`)).body.candidates.map((c) => c.user_id);
+  const en = await ready('notary_paper', paper);
+  assert.ok((await cands(en)).includes(id), 'нотариальный английский — с проверенным дипломом');
+  assert.ok(!(await cands(await ready('notary_paper', { ...paper, language: 'de' }))).includes(id), 'немецкого диплома нет');
+  assert.ok((await cands(await ready('plain', { ...PASSPORT, language: 'de', urgent: 'no', delivery: 'none' }))).includes(id), 'без нотариуса — по допуску');
+  // Изменил сведения или копию — проверка заново, до неё к нотариальным не подбирается.
+  assert.equal((await tr.req('PUT', `/api/specialist/me/dossier/${item.id}`, { title: 'Другой диплом', language: 'en' })).status, 200);
+  assert.ok(!(await cands(en)).includes(id), 'после правки — снова на проверке');
+  assert.equal((await verify(true)).status, 200);
+  assert.equal((await tr.req('PUT', `/api/specialist/me/dossier/${item.id}`, { title: 'Другой диплом', language: 'en' })).body.items.find((i) => i.id === item.id).verified, true, 'те же сведения — отметка остаётся');
+  assert.equal((await upload()).status, 200);
+  assert.ok(!(await cands(en)).includes(id), 'новая копия — снова на проверке');
+  assert.equal((await verify(true)).status, 200);
+  // Статус снят администратором напрямую (например, самозанятость прекращена) — к переводам не подбирается.
+  await S.sql`update specialists set tax_status = null where user_id = ${id}`;
+  assert.ok(!(await cands(en)).includes(id), 'без статуса — не подбирается');
+  await S.sql`update specialists set tax_status = 'self_employed' where user_id = ${id}`;
+  // Диплом в досье переводчика не попадает в сведения эксперта для черновика оценки.
+  const { loadDossier } = await import('../../src/dossier/dossier.mjs');
+  assert.deepEqual(await loadDossier(S.sql, id), []);
+
+  // Выплата самозанятому: «нужен чек», в сводке — без чека; чек прикладывает сам по ссылке ФНС.
+  const q = (await dispatcher.req('GET', `/api/orders/${en.id}`)).body.quote;
+  assert.equal((await dispatcher.req('PUT', `/api/orders/${en.id}/price`, { price: String(q.total_kop / 100) })).status, 200);
+  assert.equal((await owner.req('POST', `/api/orders/${en.id}/payments`)).status, 201);
+  assert.equal((await owner.req('POST', `/api/orders/${en.id}/payments/refresh`)).body.money.paid, true);
+  assert.equal((await dispatcher.req('POST', `/api/orders/${en.id}/offer`, { specialist_id: id, from: 'matching' })).status, 200);
+  assert.equal((await tr.req('POST', `/api/orders/${en.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  const receipt = (url) => tr.req('PUT', `/api/orders/${en.id}/payout/receipt`, { url });
+  const URL_OK = 'https://lknpd.nalog.ru/api/v1/receipt/770000000000/20abc0001/print';
+  assert.equal((await receipt(URL_OK)).status, 404, 'выплаты ещё нет');
+  assert.equal((await tr.req('POST', `/api/orders/${en.id}/results`, Buffer.from('перевод'), { raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': 'p.pdf' } })).status, 201);
+  await signResults(S, tr, en.id);
+  assert.equal((await tr.req('POST', `/api/orders/${en.id}/status`, { to: 'review', from: 'in_work' })).status, 200);
+  const rv = (await dispatcher.req('GET', `/api/orders/${en.id}/review`)).body;
+  for (const c of rv.checks) await dispatcher.req('PUT', `/api/orders/${en.id}/review/${c.id}`, { verdict: 'ok', round: rv.round });
+  assert.equal((await dispatcher.req('POST', `/api/orders/${en.id}/status`, { to: 'done', from: 'review' })).status, 200);
+  const m = (await tr.req('GET', `/api/orders/${en.id}/money`)).body.money;
+  assert.deepEqual([m.payout.status, m.payout.receipt_needed, m.can_add_receipt], ['succeeded', true, true]);
+  assert.equal((await dispatcher.req('GET', `/api/orders/${en.id}/money`)).body.money.can_add_receipt, false, 'диспетчер чек не прикладывает');
+  const missing = (await dispatcher.req('GET', '/api/money')).body.totals.receipts_missing;
+  assert.ok(missing >= 1);
+  assert.ok((await tr.req('GET', '/api/payouts')).body.payouts.find((p) => p.order_id === en.id).receipt_needed);
+  for (const bad of ['http://lknpd.nalog.ru/x', 'https://lknpd.nalog.ru.evil.ru/x', 'чек', '']) assert.equal((await receipt(bad)).status, 400, bad);
+  const done = (await receipt(URL_OK)).body.money.payout;
+  assert.deepEqual([done.receipt_url, done.receipt_needed], [URL_OK, false]);
+  assert.equal((await dispatcher.req('GET', '/api/money')).body.totals.receipts_missing, missing - 1);
 });

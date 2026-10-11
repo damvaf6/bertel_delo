@@ -153,10 +153,14 @@ export async function ensurePaid(sql, orderId, kop = 1_500_000) {
 }
 
 // Сделать человека специалистом с допусками (напрямую в базе — для проверок, не через кабинет администратора).
-export async function makeSpecialist(sql, userId, { permits = [['expertise', 'realty']], regions = ['moscow', 'mo'], capacity = 5, validUntil = null } = {}) {
-  await sql`insert into specialists (user_id, regions, capacity) values (${userId}, ${regions}, ${capacity})`;
+// taxStatus и languages — переводчик (2а.3): статус исполнителя и проверенные документы о знании языка.
+export async function makeSpecialist(sql, userId, { permits = [['expertise', 'realty']], regions = ['moscow', 'mo'], capacity = 5, validUntil = null, taxStatus = null, languages = [] } = {}) {
+  await sql`insert into specialists (user_id, regions, capacity, tax_status) values (${userId}, ${regions}, ${capacity}, ${taxStatus})`;
   for (const [module, service] of permits) {
     await sql`insert into specialist_permits (user_id, module, service, valid_until) values (${userId}, ${module}, ${service}, ${validUntil})`;
+  }
+  for (const language of languages) {
+    await sql`insert into dossier_items (user_id, kind, title, language, verified_at) values (${userId}, 'language', 'Тестовый диплом', ${language}, now())`;
   }
 }
 

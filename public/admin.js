@@ -63,6 +63,8 @@ async function loadSpecialist(userId) {
   $('sp-mo').checked = specialist ? specialist.regions.includes('mo') : true;
   $('sp-capacity').value = specialist ? String(specialist.capacity) : '5';
   $('sp-onsite').checked = !!specialist?.onsite;
+  $('sp-tax').value = specialist?.tax_status ?? '';
+  renderLanguages(specialist?.languages ?? []);
   $('sp-permits-box').classList.toggle('hidden', !specialist);
   $('sp-service').replaceChildren(...state.catalog.modules.flatMap((m) => m.services.map((s) => el('option', { value: `${m.id}/${s.id}`, text: `${m.name} · ${s.name}` }))));
   $('sp-permits').replaceChildren(...(specialist?.permits ?? []).map((p) => el('li', { class: 'row' },
@@ -77,7 +79,9 @@ $('admin-specialist').addEventListener('submit', async (e) => {
   const regions = [['moscow', 'sp-moscow'], ['mo', 'sp-mo']].filter(([, id]) => $(id).checked).map(([r]) => r);
   if (!regions.length) return say($('sp-msg'), 'Выберите, где работает специалист');
   try {
-    await api('PUT', `/api/admin/specialists/${found.id}`, { regions, capacity: Number($('sp-capacity').value), onsite: $('sp-onsite').checked });
+    await api('PUT', `/api/admin/specialists/${found.id}`, {
+      regions, capacity: Number($('sp-capacity').value), onsite: $('sp-onsite').checked, tax_status: $('sp-tax').value || null,
+    });
     await loadSpecialist(found.id);
     say($('sp-msg'), 'Профиль специалиста сохранён', 'ok');
   } catch (err) { say($('sp-msg'), err.message); }
@@ -91,6 +95,33 @@ $('sp-add-permit').addEventListener('click', async () => {
     say($('sp-msg'), 'Допуск выдан', 'ok');
   } catch (err) { say($('sp-msg'), err.message); }
 });
+
+// Документы о знании языка переводчика (2а.3): открыть копию и отметить проверенным (или снять отметку).
+function renderLanguages(list) {
+  $('sp-langs-box').classList.toggle('hidden', !list.length);
+  $('sp-langs').replaceChildren(...list.map((l) => el('li', {},
+    el('div', { class: 'title', text: `${l.language_name}: ${l.title}` }),
+    el('div', { class: 'muted', text: [l.verified ? 'проверен' : 'ждёт проверки', l.has_copy ? 'копия загружена' : 'копии нет'].join(' · ') }),
+    el('div', { class: 'row' },
+      l.has_copy ? el('button', { type: 'button', class: 'secondary', 'data-action': 'lang-copy', onclick: () => openCopy(l) }, 'Открыть копию') : null,
+      el('button', { type: 'button', class: l.verified ? 'danger' : 'secondary', 'data-action': 'lang-verify', onclick: () => verifyLanguage(l, !l.verified) },
+        l.verified ? 'Снять отметку' : 'Проверен')))));
+}
+
+async function openCopy(l) {
+  try {
+    const { url } = await api('GET', `/api/admin/specialists/${found.id}/languages/${l.id}/file`);
+    window.open(url, '_blank', 'noopener');
+  } catch (err) { say($('sp-msg'), err.message); }
+}
+
+async function verifyLanguage(l, verified) {
+  try {
+    await api('PUT', `/api/admin/specialists/${found.id}/languages/${l.id}`, { verified });
+    await loadSpecialist(found.id);
+    say($('sp-msg'), verified ? 'Документ отмечен проверенным' : 'Отметка снята', 'ok');
+  } catch (err) { say($('sp-msg'), err.message); }
+}
 
 async function removePermit(p) {
   if (!confirm('Убрать допуск? Специалисту перестанут предлагать дела этой услуги.')) return;

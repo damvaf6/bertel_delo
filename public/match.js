@@ -87,6 +87,10 @@ export async function showSpecialist({ to = null } = {}) {
     ...orgs.map((o) => el('option', { value: o.org_id, text: o.name })));
   $('specialist-org').value = sp.org?.id ?? '';
   $('specialist-facts').textContent = `Дел сейчас: ${sp.open_orders} из ${sp.capacity}. Район: ${sp.regions.map((r) => (r === 'moscow' ? 'Москва' : 'Московская область')).join(', ')}.`;
+  // Статус исполнителя и правила для него (2а.3): самозанятому — чек на каждую выплату.
+  $('specialist-tax').classList.toggle('hidden', !sp.tax_status);
+  $('specialist-tax-name').textContent = sp.tax_status_name ? `Статус: ${sp.tax_status_name}` : '';
+  $('specialist-tax-rules').replaceChildren(...(sp.tax_rules ?? []).map((r) => el('li', { text: r })));
   $('specialist-permits').replaceChildren(...sp.permits.map((p) => el('li', { text: permitText(p) })));
   $('specialist-permits-empty').classList.toggle('hidden', sp.permits.length > 0);
   show('specialist-view', 'specialist');
