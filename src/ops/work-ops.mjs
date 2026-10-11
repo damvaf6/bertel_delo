@@ -37,6 +37,15 @@ export async function reviewState(sql, registry, order) {
   };
 }
 
+// Последний решённый перенос срока (2.178), если диспетчер согласился и срок с тех пор не меняли — для готовой фразы
+// заказчику «срок перенесён на …». После отказа или другого срока фразы нет.
+async function lastMove(sql, order) {
+  const [r] = await sql`select outcome, old_deadline, new_deadline from deadline_requests
+                        where order_id = ${order.id} and outcome in ('approved', 'declined')
+                        order by decided_at desc, id desc limit 1`;
+  return r?.outcome === 'approved' && r.new_deadline === order.deadline ? { from: r.old_deadline, to: r.new_deadline } : null;
+}
+
 export function workOps() {
   return [
     {
@@ -64,6 +73,7 @@ export function workOps() {
                                  left join documents d on d.id = r.document_id and d.deleted_at is null
                                  where r.order_id = ${order.id} and r.cancelled_at is null and d.id is null
                                  order by r.id`).map((d) => d.title),
+            moved: await lastMove(sql, order),
           }) : [],
         };
       },

@@ -16,9 +16,14 @@ export function dueDateRu(now = new Date(), days = 3) {
     .toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'Europe/Moscow' });
 }
 
+// Дата 'YYYY-MM-DD' словами: «20 октября».
+const dayWords = (iso) => new Date(`${iso}T12:00:00Z`)
+  .toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'UTC' });
+
 // def — услуга из реестра (registry.service), fields — поля заявки, openDocs — названия запрошенных и ещё не присланных
-// документов (src/ops/docreq-ops.mjs).
-export function messagePhrases({ def, fields = {}, openDocs = [], now = new Date() }) {
+// документов (src/ops/docreq-ops.mjs), moved — последний согласованный перенос срока, пока он в силе (2.178):
+// { from, to } — даты 'YYYY-MM-DD'; заказчик и так видит перенос в своей заявке.
+export function messagePhrases({ def, fields = {}, openDocs = [], moved = null, now = new Date() }) {
   const subject = def?.service.subject ?? 'object';
   const n = NOUN[subject] ?? NOUN.object;
   const due = dueDateRu(now);
@@ -60,5 +65,13 @@ export function messagePhrases({ def, fields = {}, openDocs = [], now = new Date
       : `Здравствуйте! Пришлите, пожалуйста, до ${due} документы: [какие]. Приложить можно в деле или ответом здесь. `
         + 'Если какого-то документа нет — напишите.',
   });
+
+  if (moved) {
+    out.push({
+      id: 'deadline', title: 'Срок перенесён',
+      text: `Здравствуйте! Срок по Вашей заявке перенесён на ${dayWords(moved.to)} (был ${dayWords(moved.from)}). `
+        + 'Если появятся вопросы — напишите здесь.',
+    });
+  }
   return out;
 }

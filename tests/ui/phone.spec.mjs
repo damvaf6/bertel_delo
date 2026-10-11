@@ -5406,6 +5406,15 @@ test('перенос срока (2.91): эксперт просит новую �
   await expect(hist.locator('.badge')).toHaveText('перенесён');
   await expect(hist).toContainText('ответ: Согласовано с заказчиком по телефону');
   await expect(ep.locator('#deadline-form')).toBeVisible();
+  // 2.178: в переписке — готовая фраза заказчику «срок перенесён на …»; нажатие — текст в поле, ничего не отправлено.
+  const day = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'UTC' });
+  const chat = ep.locator('#chat-box');
+  await expect(chat.locator('#message-phrase-list button').last()).toHaveText('Срок перенесён');
+  await chat.getByRole('button', { name: 'Срок перенесён' }).click();
+  await expect(chat.locator('#message-text')).toHaveValue(`Здравствуйте! Срок по Вашей заявке перенесён на ${day(want)} (был ${day(inDays(2))}). Если появятся вопросы — напишите здесь.`);
+  await expect(chat.locator('#messages li')).toHaveCount(0);
+  await chat.locator('#message-form').scrollIntoViewIfNeeded();
+  await shot(ep, '99s1-ekspert-fraza-srok-perenesen');
 
   // Заказчик: уведомление о новом сроке и история в заявке и журнале.
   await page.goto('/kabinet#notifications');
