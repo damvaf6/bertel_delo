@@ -391,6 +391,8 @@ async function loadDocs(initial = false) {
   const signRequired = !!documentsBody.signature_required;
   $('result-sign-note').classList.toggle('hidden', !signRequired);
   lastDocs = documentsBody;
+  // Файлы результата поменялись — у «Хода заказа» новый список для «файла нотариуса» (2а.6).
+  if (!initial && current.executor?.is_me && !$('steps-box').classList.contains('hidden')) loadSteps(current);
   orgReturnsNow = documentsBody.org_returns ?? []; // окно подписи файла (2.159) показывает пункты замечаний
   // «Подписать все» (2.15): несколько неподписанных файлов результата — одним подтверждением.
   const unsigned = mineResults && signRequired ? documents.filter((d) => d.kind === 'result' && d.own !== false && !d.signatures?.expert) : [];

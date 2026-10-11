@@ -297,3 +297,62 @@ test('сертификат платформы: переводчик выдаёт
   await ctx.close();
   expect(errors).toEqual([]);
 });
+
+test('ход заказа: переводчик отмечает оригинал, нотариуса и файл нотариуса, потом сдаёт; заказчик видит ход', async ({ page, browser, baseURL }) => {
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  const tr = await signIn(page, '+79990000987');
+  const db = new pg.Client({ connectionString: DB_URL });
+  await db.connect();
+  let o;
+  try {
+    await db.query("insert into specialists (user_id, regions, capacity, tax_status) values ($1, '{moscow}', 5, 'self_employed')", [tr.id]);
+    await db.query("insert into specialist_permits (user_id, module, service) values ($1, 'translation', 'notary_file')", [tr.id]);
+    const owner = (await db.query("insert into users (phone) values ('+79990000988') on conflict (phone) do update set phone = excluded.phone returning id")).rows[0];
+    const fields = { recipient: 'university', language: 'en', direction: 'to_ru', doc_kind: 'diploma', docs: 1, pages: 2, original: 'courier', delivery: 'none' };
+    o = (await db.query(`insert into orders (owner_user_id, title, module, service, status, deadline, fields, executor_user_id, paid_at)
+      values ($1, 'Перевод диплома', 'translation', 'notary_file', 'in_work', $2, $3, $4, now()) returning id`, [owner.id, inDays(3), JSON.stringify(fields), tr.id])).rows[0];
+  } finally { await db.end(); }
+
+  await page.goto(`/kabinet#order=${o.id}&to=steps`);
+  await expect(page.locator('#order-status')).toHaveText('В работе');
+  const box = page.locator('#steps-box');
+  await expect(box).toBeVisible();
+  await expect(box.locator('[data-order-step]')).toHaveCount(3);
+  await expect(box.locator('[data-order-step="original"]')).toContainText('Оригинал получен от курьера');
+  await box.scrollIntoViewIfNeeded();
+  await shot(page, 'hod-zakaza-01-shagi');
+
+  await box.locator('[data-order-step="original"] [data-role="step-note"]').fill('курьер привёз в 11:00');
+  await box.locator('[data-order-step="original"] [data-action="step-mark"]').click();
+  await expect(page.locator('#steps-msg')).toContainText('Отмечено: Оригинал получен от курьера');
+  await expect(box.locator('[data-order-step="original"]')).toContainText('курьер привёз в 11:00');
+  await box.locator('[data-order-step="notarized"] [data-action="step-mark"]').click();
+  await expect(box.locator('[data-order-step="notarized"]')).toContainText('✓');
+
+  // Файл нотариуса: загрузили файл результата — он появился в выборе.
+  await page.locator('#result-file').setInputFiles({ name: 'diplom-notarius.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 файл нотариуса') });
+  await expect(page.locator('li.doc').filter({ hasText: 'diplom-notarius.pdf' })).toBeVisible();
+  const pick = box.locator('[data-order-step="notary_file"] [data-role="step-file"]');
+  await expect(pick.locator('option')).toHaveCount(2);
+  await pick.selectOption({ label: 'diplom-notarius.pdf' });
+  await box.locator('[data-order-step="notary_file"] [data-action="step-mark"]').click();
+  await expect(box.locator('[data-order-step="notary_file"]')).toContainText('✓');
+  await expect(page.locator('#next-steps [data-step="steps"]')).toHaveClass(/done/);
+  await box.scrollIntoViewIfNeeded();
+  await shot(page, 'hod-zakaza-02-otmecheno');
+
+  // Заказчик: видит ход, без кнопок.
+  const ctx = await browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, isMobile: true, hasTouch: true, locale: 'ru-RU' });
+  const cp = await ctx.newPage();
+  cp.on('pageerror', (e) => errors.push(e.message));
+  await signIn(cp, '+79990000988');
+  await cp.goto(`/kabinet#order=${o.id}&to=steps`);
+  const cbox = cp.locator('#steps-box');
+  await expect(cbox.locator('[data-order-step="original"]')).toContainText('✓ Оригинал получен от курьера');
+  await expect(cbox.locator('[data-action="step-mark"], [data-action="step-undo"]')).toHaveCount(0);
+  await cbox.scrollIntoViewIfNeeded();
+  await shot(cp, 'hod-zakaza-03-zakazchik');
+  await ctx.close();
+  expect(errors).toEqual([]);
+});
