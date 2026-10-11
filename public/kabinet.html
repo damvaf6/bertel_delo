@@ -191,6 +191,7 @@
               <option value="customer">Заказчик — оплатить часть</option>
             </select>
           </div>
+          <p class="muted hidden" id="cancel-note"></p>
           <div class="field hidden" id="done-percent-box">
             <label for="done-percent">Сделано работы, %</label>
             <input id="done-percent" type="text" inputmode="numeric" maxlength="3" placeholder="от 0 до 100">
@@ -553,6 +554,7 @@
       <div class="card hidden" id="review-box">
         <h2>Проверка результата</h2>
         <p class="muted" id="review-summary"></p>
+        <p class="muted hidden" id="review-proofread"></p>
         <div class="hidden" id="ai-review-box">
           <button type="button" class="secondary" id="ai-review-run">Проверить с помощью ИИ</button>
           <p class="muted" id="ai-review-state"></p>

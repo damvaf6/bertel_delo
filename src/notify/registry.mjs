@@ -30,6 +30,7 @@ export const EVENTS = {
   declined: { type: 'dispatch', title: 'Исполнитель отказался от дела — нужен новый подбор', order: true },
   org_declined: { type: 'dispatch', title: 'Организация отказалась от дела — нужен новый подбор', order: true },
   in_review: { type: 'dispatch', title: 'Результат сдан на проверку', order: true },
+  redo_staff: { type: 'dispatch', title: 'Заказчик нашёл ошибку в выданном результате — бесплатная переделка, потом вычитка', order: true },
   cancelled_by_customer: { type: 'dispatch', title: 'Заказчик отменил заявку', order: true },
   payout_failed_staff: { type: 'dispatch', title: 'Выплата исполнителю не прошла — нужен повтор', order: true },
   paid_staff: { type: 'dispatch', title: 'Заявка оплачена — можно предлагать исполнителю', order: true },
@@ -67,6 +68,7 @@ export const EVENTS = {
   org_chat_expert: { type: 'executor_work', title: 'Руководитель организации написал Вам по делу', order: true },
   org_chat_head: { type: 'executor_work', title: 'Эксперт написал Вам по делу — «Дела экспертов» в разделе «Организации»', order: false, section: 'orgs', focus: 'chat' },
   rework: { type: 'executor_work', title: 'Результат возвращён на доработку', order: true },
+  redo: { type: 'executor_work', title: 'Заказчик нашёл ошибку в выданном результате — переделайте бесплатно (причина — в истории заявки)', order: true },
   // Напоминания о сроках (2.13): src/notify/reminders.mjs, раз в минуту вместе с повтором СМС.
   deadline_soon: { type: 'executor_work', title: 'До срока по делу осталось 3 дня', order: true },
   deadline_tomorrow: { type: 'executor_work', title: 'Срок по делу — завтра', order: true },

@@ -29,6 +29,9 @@ export async function loadReview(current) {
   else if (s.unchecked === 0 && s.issues === 0) summary = `Результат проверен: все правила (${s.total}) в порядке.`;
   else summary = `Круг проверки ${r.round}. В порядке: ${s.ok} из ${s.total}${s.issues ? `, замечаний: ${s.issues}` : ''}${s.unchecked ? `, не проверено: ${s.unchecked}` : ''}.`;
   $('review-summary').textContent = summary;
+  // Вычитка (2а.7): почему нужна — исполнителю и служебным.
+  $('review-proofread').textContent = r.details && r.proofread ? `Вычитка ${r.proofread.name}: прочитайте текст целиком и отметьте правило «Вычитка».` : '';
+  $('review-proofread').classList.toggle('hidden', !(r.details && r.proofread));
   $('ai-review-box').classList.toggle('hidden', !r.details || (!r.can_ai && !r.ai));
   $('ai-review-run').classList.toggle('hidden', !r.can_ai);
   $('ai-review-run').onclick = () => runAi(order);

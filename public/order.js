@@ -301,6 +301,9 @@ function renderProgress() {
   const lateCancel = WORK_STARTED.includes(order.status) && actions.some((a) => a.to === 'cancelled');
   $('cancel-box').classList.toggle('hidden', !lateCancel);
   if (lateCancel) syncCancelBox();
+  // Правило возврата модуля (2а.7): у перевода — только за качество.
+  $('cancel-note').textContent = current.cancel_note || '';
+  $('cancel-note').classList.toggle('hidden', !lateCancel || !current.cancel_note);
   $('actions').replaceChildren(...actions.map((a) => el('button', {
     class: a.to === 'cancelled' ? 'danger' : a.to === 'matching' && order.status === 'new' ? 'wide' : 'secondary',
     'data-to': a.to,

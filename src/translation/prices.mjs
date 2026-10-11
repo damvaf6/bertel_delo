@@ -26,6 +26,12 @@ export const TRANSLATION_PRICES = Object.freeze({
 export const TRANSLATION_RULES = Object.freeze({
   // В2 для документов, удостоверяющих личность: выключено до ответа нотариуса-партнёра.
   file_for_identity: false,
+  // Вычитка (2а.7): обязательна, пока у переводчика сдано (проверено) меньше переводов, чем proofread_new_orders;
+  // остальным — выборочно, примерно каждый proofread_sample_percent-й перевод. После замечания заказчика — всегда.
+  proofread_new_orders: 3,
+  proofread_sample_percent: 10,
+  // Бесплатная переделка по замечанию заказчика: срок — не раньше чем через redo_days дней от просьбы.
+  redo_days: 2,
 });
 
 // Восточные языки — перевод ×2.

@@ -44,30 +44,35 @@ export const TRANSITIONS = [
   { from: 'review', to: 'matching', by: 'dispatcher', name: 'Передать другому исполнителю', reason: true },
   { from: 'review', to: 'done', by: 'dispatcher', name: 'Проверено, готово' },
   { from: 'done', to: 'closed', by: 'customer', name: 'Принять и закрыть' },
+  // Бесплатная переделка (2а.7): заказчик нашёл ошибку после выдачи — дело возвращается тому же исполнителю, без доплаты.
+  // Только в модулях с вычиткой (proofread в описании модуля) — признак 'redo'.
+  { from: 'done', to: 'in_work', by: 'customer', name: 'Нашли ошибку — переделать бесплатно', reason: true, feature: 'redo' },
   { from: 'done', to: 'closed', by: 'dispatcher', name: 'Закрыть заявку' },
   ...CUSTOMER_CANCEL_FROM.map((from) => ({ from, to: 'cancelled', by: 'customer', name: 'Отменить заявку' })),
   ...DISPATCHER_CANCEL_FROM.map((from) => ({ from, to: 'cancelled', by: 'dispatcher', name: 'Отменить заявку', reason: true })),
 ];
 
 // Переход из статуса from в to для вошедшего со сторонами sides. Если подходят обе стороны, берётся сторона заказчика
-// (у неё меньше требований — например, причина отмены не обязательна).
-export function findTransition(from, to, sides) {
+// (у неё меньше требований — например, причина отмены не обязательна). features — признаки модуля заявки ('redo').
+const allowed = (t, features) => !t.feature || features.includes(t.feature);
+
+export function findTransition(from, to, sides, features = []) {
   for (const side of ['customer', 'dispatcher', 'executor']) {
     if (!sides.includes(side)) continue;
-    const t = TRANSITIONS.find((x) => x.from === from && x.to === to && x.by === side);
+    const t = TRANSITIONS.find((x) => x.from === from && x.to === to && x.by === side && allowed(x, features));
     if (t) return t;
   }
   return null;
 }
 
 // Что вошедший может сделать с заявкой сейчас (для кнопок в кабинете).
-export function availableActions(status, sides) {
+export function availableActions(status, sides, features = []) {
   const seen = new Set();
   const out = [];
   for (const side of ['customer', 'dispatcher', 'executor']) {
     if (!sides.includes(side)) continue;
     for (const t of TRANSITIONS) {
-      if (t.from !== status || t.by !== side || seen.has(t.to)) continue;
+      if (t.from !== status || t.by !== side || seen.has(t.to) || !allowed(t, features)) continue;
       seen.add(t.to);
       out.push({ to: t.to, name: t.name, reason: !!t.reason });
     }

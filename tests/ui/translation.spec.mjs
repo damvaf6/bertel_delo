@@ -356,3 +356,55 @@ test('ход заказа: переводчик отмечает оригина�
   await ctx.close();
   expect(errors).toEqual([]);
 });
+
+test('вычитка и переделка: диспетчер видит обязательную вычитку; заказчик просит бесплатную переделку; правило возврата', async ({ page, browser, baseURL }) => {
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  const disp = await signIn(page, '+79990000989');
+  const db = new pg.Client({ connectionString: DB_URL });
+  await db.connect();
+  let o;
+  try {
+    await db.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    const tr = (await db.query("insert into users (phone) values ('+79990000979') on conflict (phone) do update set phone = excluded.phone returning id")).rows[0];
+    const owner = (await db.query("insert into users (phone) values ('+79990000978') on conflict (phone) do update set phone = excluded.phone returning id")).rows[0];
+    const fields = { recipient: 'business', language: 'en', direction: 'to_ru', doc_kind: 'contract', docs: 1, pages: 2, urgent: 'no', delivery: 'none' };
+    o = (await db.query(`insert into orders (owner_user_id, title, module, service, status, deadline, fields, executor_user_id, paid_at, review_round, proofread)
+      values ($1, 'Перевод устава', 'translation', 'plain', 'review', $2, $3, $4, now(), 1, 'new') returning id`, [owner.id, inDays(3), JSON.stringify(fields), tr.id])).rows[0];
+  } finally { await db.end(); }
+
+  await page.goto(`/kabinet#order=${o.id}`);
+  await expect(page.locator('#order-status')).toHaveText('Проверка результата');
+  await expect(page.locator('#review-proofread')).toContainText('Вычитка обязательная — у исполнителя ещё мало сданных дел');
+  await expect(page.locator('#review-checks')).toContainText('Вычитка: текст прочитан целиком, ошибок нет');
+  await page.locator('#review-box').scrollIntoViewIfNeeded();
+  await shot(page, 'vychitka-01-dispetcher');
+
+  // Выдано заказчику — заказчик нашёл ошибку и просит переделать бесплатно.
+  const c2 = new pg.Client({ connectionString: DB_URL });
+  await c2.connect();
+  try { await c2.query("update orders set status = 'done' where id = $1", [o.id]); } finally { await c2.end(); }
+  const ctx = await browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, isMobile: true, hasTouch: true, locale: 'ru-RU' });
+  const cp = await ctx.newPage();
+  cp.on('pageerror', (e) => errors.push(e.message));
+  await signIn(cp, '+79990000978');
+  await cp.goto(`/kabinet#order=${o.id}`);
+  await expect(cp.locator('#order-status')).toHaveText('Готово');
+  const redo = cp.locator('#actions [data-to="in_work"]');
+  await expect(redo).toHaveText('Нашли ошибку — переделать бесплатно');
+  await cp.locator('#reason').fill('В фамилии директора ошибка');
+  await redo.scrollIntoViewIfNeeded();
+  await shot(cp, 'vychitka-02-zakazchik-peredelka');
+  await redo.click();
+  await expect(cp.locator('#order-status')).toHaveText('В работе');
+  await ctx.close();
+
+  // Диспетчер: при отмене после начала работ видит правило возврата.
+  await page.goto(`/kabinet#order=${o.id}`);
+  await page.reload();
+  await expect(page.locator('#order-status')).toHaveText('В работе');
+  await expect(page.locator('#cancel-note')).toContainText('Возврат — только за качество перевода');
+  await page.locator('#cancel-box').scrollIntoViewIfNeeded();
+  await shot(page, 'vychitka-03-pravilo-vozvrata');
+  expect(errors).toEqual([]);
+});
