@@ -89,8 +89,16 @@ jobs:
       - name: Закрыть площадку от посторонних
         run: |
           [ "$ENV" = stage ] || { echo "::error::Служебный вход — только на stage"; exit 1; }
-          yc serverless container get --name "$CONTAINER" >/dev/null 2>&1 || \
-            yc serverless container create --name "$CONTAINER" --description "БЕРТЕЛ Дело · ядро · $ENV (тестовые данные)"
+          # Создаём контейнер, только если облако ответило «не найден»; иначе — показать настоящую причину (11.10.2026:
+          # сбой облака прятался за «create … DeadlineExceeded»).
+          if ! err=$(yc serverless container get --name "$CONTAINER" 2>&1 >/dev/null); then
+            echo "container get: $err"
+            if echo "$err" | grep -qi 'not found\|NotFound'; then
+              yc serverless container create --name "$CONTAINER" --description "БЕРТЕЛ Дело · ядро · $ENV (тестовые данные)"
+            else
+              echo "::error::Облако не ответило на запрос контейнера площадки: $err"; exit 1
+            fi
+          fi
           yc serverless container deny-unauthenticated-invoke --name "$CONTAINER"
           URL=$(yc serverless container get --name "$CONTAINER" --format json | jq -r .url)
           echo "URL=${URL%/}" >> $GITHUB_ENV
