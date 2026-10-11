@@ -64,6 +64,7 @@ export function topRemarks(items, limit) {
 // Возвраты за год (2.156) — руководителю в карточке эксперта: сколько раз организация возвращала отчёты этому эксперту за
 // последние 365 дней по Москве (с `since` по сегодня), по скольким делам, когда в последний раз и самые частые пункты замечаний
 // (как в сводке за месяц, 2.105). Только возвраты этой организации; без заказчиков, названий и полей заявки.
+// От возврата до новой подписи эксперта за тот же год (2.176) — `resign_days`, `resign_n`, `resign_wait`, как в сводке (2.168).
 export async function orgReturnsYear(sql, orgId, userId, today = todayMsk()) {
   const since = addDays(today, -364);
   const rows = await sql`
@@ -79,6 +80,7 @@ export async function orgReturnsYear(sql, orgId, userId, today = todayMsk()) {
     last_day: rows.length ? todayMsk(new Date(rows[0].at)) : null,
     top_remarks: topRemarks(rows.filter((r) => r.text).map((r) => ({ user_id: userId, text: r.text, at: r.at })), TOP_REMARKS)
       .map(({ text, n }) => ({ text, n })),
+    ...resign(await resignQ(sql, orgId, [userId], { start: new Date(`${since}T00:00:00+03:00`), end: new Date(Date.now() + 86_400_000) })),
   };
 }
 

@@ -2718,6 +2718,8 @@ test('карточка эксперта (2.35): из подбора у дисп�
       const id = (await c.query("insert into org_returns (order_id, document_id, org_id, executor_user_id, returned_by, filename, comment, created_at) values ($1, $2, $3, $4, $5, 'отчёт.pdf', $6, now() - make_interval(days => $7)) returning id", [busy, doc, orgId, spec.id, head.id, items.join('\n'), days])).rows[0].id;
       for (const [i, t] of items.entries()) await c.query('insert into org_return_items (return_id, n, text) values ($1, $2, $3)', [id, i + 1, t]);
     }
+    // 2.176: после первого возврата эксперт подписал заново через 2 дня.
+    await c.query("insert into audit_log (actor_id, action, subject_type, subject_id, details, at) values ($1, 'document.sign', 'document', $2, $3, now() - interval '18 days')", [spec.id, doc, JSON.stringify({ order_id: busy })]);
   });
   await hp.goto(`/kabinet#expert=${spec.id}`);
   await expect(hp.locator('#expert-returns-note')).toContainText('Ваша организация возвращала отчёты 2 раза по 1 делу');
@@ -2725,6 +2727,7 @@ test('карточка эксперта (2.35): из подбора у дисп�
   await expect(hp.locator('#expert-returns li[data-remark]').first()).toContainText('2 раза');
   await expect(hp.locator('#expert-returns li[data-remark]').nth(1)).toContainText('Не указан этаж');
   await expect(hp.locator('#expert-returns')).not.toContainText('Квартира в работе');
+  await expect(hp.locator('#expert-returns-resign')).toHaveText('После возвратов: новая подпись в среднем через 2 дня · ещё не подписано заново: 1.');
   await hp.locator('#expert-returns-box').scrollIntoViewIfNeeded();
   await shot(hp, 'b4g-kartochka-vozvraty-za-god');
   // Сам эксперт видит блок у себя, но без ссылки в «Дела экспертов».
