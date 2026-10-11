@@ -11,6 +11,7 @@ import { customersOf, notify } from '../notify/notify.mjs';
 import { audit, sendFile } from './util.mjs';
 import { closingDoc, invoiceDoc } from '../money/papers.mjs';
 import { DOCX_MIME } from '../docs/docx.mjs';
+import { receiptUrlFrom } from '../matching/executors.mjs';
 
 const PRICE_RE = /^\d{1,8}([.,]\d{1,2})?$/;
 const num = (v) => (v == null ? null : Number(v));
@@ -29,6 +30,9 @@ const payView = (p) => p && ({ id: p.id, status: p.status, amount_kop: num(p.amo
 const payoutView = (p) => p && ({
   status: p.status, amount_kop: num(p.amount_kop), commission_kop: num(p.commission_kop), failure: p.failure,
   attempts: p.attempts, paid_at: p.paid_at, created_at: p.created_at,
+  // Чек самозанятого на выплату (2а.3): ссылка из «Мой налог»; receipt_needed — выплата прошла, исполнитель самозанятый, чека нет.
+  receipt_url: p.receipt_url ?? null, receipt_at: p.receipt_at ?? null,
+  receipt_needed: p.tax_status === 'self_employed' && p.status === 'succeeded' && !p.receipt_url,
 });
 const refundView = (r) => r && ({
   status: r.status, amount_kop: num(r.amount_kop), reason: r.reason, failure: r.failure, attempts: r.attempts,
@@ -84,6 +88,7 @@ export function moneyOps() {
       cancel_fault: order.cancel_fault,
       done_percent: order.done_percent,
       documents: [],
+      can_add_receipt: false,
     };
     if (see.customer) {
       out.payment = payView(await sql.one`select * from payments where order_id = ${order.id} order by created_at desc limit 1`);
@@ -92,8 +97,11 @@ export function moneyOps() {
       out.can_retry_refund = !!r && r.status === 'failed' && sides.includes('dispatcher');
     }
     if (see.executor) {
-      const p = await sql.one`select * from payouts where order_id = ${order.id}`;
+      const p = await sql.one`select p.*, s.tax_status from payouts p left join specialists s on s.user_id = p.executor_user_id
+                              where p.order_id = ${order.id}`;
       out.payout = payoutView(p);
+      // Приложить чек «Мой налог» (2а.3) — сам исполнитель-самозанятый, к прошедшей выплате.
+      out.can_add_receipt = !!p && p.executor_user_id === actor.id && p.tax_status === 'self_employed' && p.status === 'succeeded';
       out.can_retry_payout = !!p && p.status === 'failed' && sides.includes('dispatcher');
     }
     const kinds = [...(see.customer ? ['act', 'refund'] : []), ...(see.executor ? ['agent_report'] : [])];
@@ -242,6 +250,24 @@ export function moneyOps() {
       },
     },
     {
+      // Чек самозанятого на выплату (2а.3, задача штаба 3f417197-…-813c): исполнитель сам прикладывает ссылку на чек
+      // «Мой налог» к своей прошедшей выплате; новая ссылка заменяет прежнюю (чек аннулировали и выдали заново).
+      id: 'payouts.receipt', method: 'PUT', path: '/api/orders/:id/payout/receipt', auth: 'user',
+      access: { resource: 'order', param: 'id', need: 'read' },
+      async handler({ sql, actor, order, body }) {
+        const url = receiptUrlFrom(body?.url);
+        if (!url) throw new HttpError(400, 'bad_receipt', 'Ссылка на чек — из «Мой налог»: https://lknpd.nalog.ru/…');
+        await sql.tx(async (tx) => {
+          const p = await tx.one`select * from payouts where order_id = ${order.id} for update`;
+          if (!p || p.executor_user_id !== actor.id) throw new HttpError(404, 'not_found', 'Выплата не найдена');
+          if (p.status !== 'succeeded') throw new HttpError(409, 'payout_not_paid', 'Чек выдаётся, когда деньги получены');
+          await tx`update payouts set receipt_url = ${url}, receipt_at = now(), updated_at = now() where id = ${p.id}`;
+          await audit(tx, actor, 'payout.receipt', 'order', order.id, { payout: p.id });
+        });
+        return { money: await view(sql, actor, order.id) };
+      },
+    },
+    {
       // Повтор неудавшегося возврата заказчику — диспетчер. Успешный возврат повторить нельзя.
       id: 'refunds.retry', method: 'POST', path: '/api/orders/:id/refund/retry', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
@@ -268,12 +294,15 @@ export function moneyOps() {
                  (select coalesce(sum(amount_kop + commission_kop + transit_kop), 0) from payouts) as settled,
                  (select coalesce(sum(amount_kop), 0) from refunds where status = 'succeeded') as refunded,
                  (select coalesce(sum(amount_kop), 0) from refunds) as refunds_all,
-                 (select coalesce(sum(amount_kop), 0) from refunds where status <> 'succeeded') as to_refund`;
+                 (select coalesce(sum(amount_kop), 0) from refunds where status <> 'succeeded') as to_refund,
+                 (select count(*)::int from payouts p join specialists s on s.user_id = p.executor_user_id
+                   where p.status = 'succeeded' and p.receipt_url is null and s.tax_status = 'self_employed') as receipts_missing`;
         const payments = await sql`
           select p.*, o.title from payments p join orders o on o.id = p.order_id
           where p.status = 'succeeded' order by p.paid_at desc limit 50`;
         const payouts = await sql`
-          select p.*, o.title, u.full_name from payouts p join orders o on o.id = p.order_id join users u on u.id = p.executor_user_id
+          select p.*, o.title, u.full_name, s.tax_status from payouts p join orders o on o.id = p.order_id join users u on u.id = p.executor_user_id
+          left join specialists s on s.user_id = p.executor_user_id
           order by p.created_at desc limit 50`;
         return {
           totals: {
@@ -281,6 +310,8 @@ export function moneyOps() {
             refunded_kop: num(t.refunded), to_refund_kop: num(t.to_refund),
             // Тарифы нотариуса и доставка по выданным переводам (2а.2) — у платформы для нотариуса и курьера, не вознаграждение.
             transit_kop: num(t.transit),
+            // Выплаты самозанятым без чека «Мой налог» (2а.3).
+            receipts_missing: t.receipts_missing,
             // Оплачено, но результат ещё не выдан и заявка не отменена — деньги ждут у платформы.
             held_kop: num(t.received) - num(t.settled) - num(t.refunds_all),
           },
@@ -294,7 +325,8 @@ export function moneyOps() {
       id: 'payouts.mine', method: 'GET', path: '/api/payouts', auth: 'user', access: 'self',
       async handler({ sql, actor }) {
         const rows = await sql`
-          select p.*, o.title from payouts p join orders o on o.id = p.order_id
+          select p.*, o.title, s.tax_status from payouts p join orders o on o.id = p.order_id
+          left join specialists s on s.user_id = p.executor_user_id
           where p.executor_user_id = ${actor.id} order by p.created_at desc limit 100`;
         const sum = (st) => rows.filter((r) => st(r.status)).reduce((a, r) => a + Number(r.amount_kop), 0);
         return {

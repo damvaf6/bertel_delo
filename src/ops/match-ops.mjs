@@ -17,6 +17,7 @@ import { BLOCKING_KINDS, dossierAlerts, loadDossier, needsValidDossier } from '.
 import { expertMonthReport, orgReturnsYear, reportMonth } from '../orgs/report.mjs';
 import { expertSchedule } from '../orders/schedule.mjs';
 import { scheduleIcs } from '../orders/ics.mjs';
+import { TAX_STATUSES, taxStatusFrom } from '../matching/executors.mjs';
 
 const REGIONS = { moscow: 'Москва', mo: 'Московская область' };
 const OPEN_STATUSES = ['awaiting_executor', 'in_work', 'review'];
@@ -46,7 +47,8 @@ function regionsFrom(value) {
   return value;
 }
 
-async function profileView(sql, userId) {
+// registry — чтобы назвать языки документов о знании языка (2а.3).
+async function profileView(sql, userId, registry) {
   const sp = await sql.one`
     select s.*, u.full_name, u.is_active as user_active, c.languages as crm_languages, c.qualification as crm_qualification,
            (select o.name from organizations o join org_members m on m.org_id = o.id and m.user_id = s.user_id where o.id = s.org_id) as org_name,
@@ -65,6 +67,15 @@ async function profileView(sql, userId) {
     // Организация, от которой работает (2.5а): результат подписывает ещё и её руководитель. null — частная практика.
     org: sp.org_name ? { id: sp.org_id, name: sp.org_name } : null,
     permits: permits.map((p) => ({ ...p, valid_until: p.valid_until ?? null })),
+    // Статус исполнителя (2а.3): самозанятый, ИП, ООО/бюро; null — не указан. Правила для статуса — в профиле.
+    tax_status: sp.tax_status ?? null,
+    tax_status_name: TAX_STATUSES[sp.tax_status]?.name ?? null,
+    tax_rules: TAX_STATUSES[sp.tax_status]?.rules ?? [],
+    // Документы о знании языка (2а.3): язык, есть ли копия, проверен ли администратором — без номеров.
+    languages: (await loadDossier(sql, userId, { languages: true })).filter((i) => i.kind === 'language').map((i) => ({
+      id: i.id, language: i.language, language_name: registry?.languages().find((l) => l.id === i.language)?.name ?? i.language,
+      title: i.title, has_copy: !!i.file, verified: i.verified,
+    })),
     // Профиль перенесён из БЕРТЕЛ CRM (1.10): языки и квалификация; дела вне платформы приходят из CRM.
     crm: sp.crm_languages ? { languages: sp.crm_languages, qualification: sp.crm_qualification } : null,
     // Досье (2.14): только предупреждения о сроках — сами документы видит лишь эксперт.
@@ -75,8 +86,12 @@ async function profileView(sql, userId) {
 // Допущенные к услуге заявки специалисты с оценкой по признакам — по убыванию общей оценки.
 // Решение Дамира 03.10.2026 (2.14, вопрос 17): по услугам оценки (где ИИ-проверка сверяет отчёт с досье —
 // правило dossier_appraiser в описании модуля) эксперт с истёкшим аттестатом или полисом в подбор не попадает.
+// Переводы (2а.3, executors в описании модуля): только исполнители со статусом; к нотариальным — с проверенным документом
+// о знании языка заявки.
 export async function candidatesFor(sql, order, registry) {
   const today = todayMsk();
+  const rules = registry?.executorRules(order.module, order.service) ?? { tax_status: false, language_field: null };
+  const lang = rules.language_field ? String(order.fields?.[rules.language_field] ?? '') : null;
   const rows = await sql`
     select s.user_id, s.regions, s.capacity, s.external_load, u.full_name,
       (select count(*)::int from orders o where o.executor_user_id = s.user_id and o.status = any(${OPEN_STATUSES}::text[])) as open,
@@ -87,7 +102,10 @@ export async function candidatesFor(sql, order, registry) {
     join specialist_permits p on p.user_id = s.user_id and p.module = ${order.module} and p.service = ${order.service}
          and (p.valid_until is null or p.valid_until >= ${today})
     where s.active and (s.away_until is null or s.away_until <= ${today}) and s.user_id <> ${order.owner_user_id}
-      and not exists (select 1 from org_members m where m.user_id = s.user_id and m.org_id = ${order.org_id})`;
+      and not exists (select 1 from org_members m where m.user_id = s.user_id and m.org_id = ${order.org_id})
+      and (${!rules.tax_status} or s.tax_status is not null)
+      and (${lang === null} or exists (select 1 from dossier_items d where d.user_id = s.user_id and d.kind = 'language'
+           and d.language = ${lang ?? ''} and d.verified_at is not null and d.deleted_at is null))`;
   const daysLeft = order.deadline ? Math.round((new Date(order.deadline) - new Date(today)) / 86400000) : null;
   // Истёкшие документы досье (2.14): по услугам оценки аттестат и полисы снимают с подбора, остальное — предупреждение.
   const blocking = needsValidDossier(registry, order);
@@ -152,6 +170,17 @@ function awayFrom(value) {
   return { until, note: raw || null };
 }
 
+// Документ о знании языка специалиста :id (2а.3) — или «не найдено».
+async function languageItem(sql, params, { lock = false } = {}) {
+  const userId = uuidFrom(params.id, 'Документ не найден');
+  if (!/^\d{1,18}$/.test(String(params.item ?? ''))) throw new HttpError(404, 'not_found', 'Документ не найден');
+  const row = lock
+    ? await sql.one`select * from dossier_items where id = ${params.item} and user_id = ${userId} and kind = 'language' and deleted_at is null for update`
+    : await sql.one`select * from dossier_items where id = ${params.item} and user_id = ${userId} and kind = 'language' and deleted_at is null`;
+  if (!row) throw new HttpError(404, 'not_found', 'Документ не найден');
+  return row;
+}
+
 function requireDispatcher(actor, order) {
   if (!orderSides(actor, order).includes('dispatcher')) throw new HttpError(403, 'forbidden', 'Недостаточно прав');
 }
@@ -161,8 +190,8 @@ export function matchOps() {
     {
       // Мой профиль специалиста (если меня им сделали) — для кабинета.
       id: 'specialist.me', method: 'GET', path: '/api/specialist/me', auth: 'user', access: 'self',
-      async handler({ sql, actor }) {
-        return { specialist: await profileView(sql, actor.id) };
+      async handler({ sql, actor, registry }) {
+        return { specialist: await profileView(sql, actor.id, registry) };
       },
     },
     {
@@ -171,7 +200,7 @@ export function matchOps() {
       // «Не принимаю новые дела до …» (2.77): away — { until: день, с которого снова принимает, note: почему } или null —
       // снять отметку. Дела, которые уже у эксперта, остаются; новые подбор не предлагает, руководитель видит до какого дня.
       id: 'specialist.me.update', method: 'PATCH', path: '/api/specialist/me', auth: 'user', access: 'self',
-      async handler({ sql, actor, body }) {
+      async handler({ sql, actor, body, registry }) {
         const hasActive = body?.active !== undefined;
         const hasOrg = body?.org_id !== undefined;
         const hasAway = body?.away !== undefined;
@@ -198,7 +227,7 @@ export function matchOps() {
             await audit(tx, actor, 'specialist.org', 'user', actor.id, { org_id: orgId });
           }
         });
-        return { specialist: await profileView(sql, actor.id) };
+        return { specialist: await profileView(sql, actor.id, registry) };
       },
     },
     {
@@ -237,7 +266,7 @@ export function matchOps() {
       access: { resource: 'specialistCard', param: 'id', need: 'read' },
       async handler({ sql, actor, specialist, signOrg, registry }) {
         const id = specialist.user_id;
-        const profile = await profileView(sql, id);
+        const profile = await profileView(sql, id, registry);
         const dossier = (await loadDossier(sql, id)).map((i) => ({
           kind: i.kind, kind_name: i.kind_name, title: i.title, number: i.number, issued_on: i.issued_on,
           valid_until: i.valid_until, amount_kop: i.amount_kop, state: i.state, has_copy: !!i.file,
@@ -302,16 +331,17 @@ export function matchOps() {
     },
     {
       id: 'specialists.list', method: 'GET', path: '/api/specialists', auth: 'user', access: { platform: 'staff' },
-      async handler({ sql }) {
+      async handler({ sql, registry }) {
         const ids = await sql`select user_id from specialists order by user_id`;
-        const list = await Promise.all(ids.map((r) => profileView(sql, r.user_id)));
+        const list = await Promise.all(ids.map((r) => profileView(sql, r.user_id, registry)));
         return { specialists: list.sort((a, b) => a.full_name.localeCompare(b.full_name)) };
       },
     },
     {
-      // Сделать человека специалистом или поменять его профиль (район, нормальная нагрузка, выезды на объект — 2.4).
+      // Сделать человека специалистом или поменять его профиль (район, нормальная нагрузка, выезды на объект — 2.4,
+      // статус исполнителя — 2а.3: самозанятый, ИП, ООО/бюро или null).
       id: 'specialists.upsert', method: 'PUT', path: '/api/admin/specialists/:id', auth: 'user', access: { platform: 'admin' },
-      async handler({ sql, actor, params, body }) {
+      async handler({ sql, actor, params, body, registry }) {
         const userId = uuidFrom(params.id, 'Пользователь не найден');
         const view = await sql.tx(async (tx) => {
           const u = await tx.one`select 1 from users where id = ${userId}`;
@@ -322,12 +352,21 @@ export function matchOps() {
           const external = body?.external_load === undefined ? (cur?.external_load ?? 0) : intIn(body.external_load, 'Дела вне платформы', 0, 500);
           if (body?.onsite !== undefined && typeof body.onsite !== 'boolean') throw new HttpError(400, 'bad_input', 'Поле «Выезды на объект»: да или нет');
           const onsite = body?.onsite ?? cur?.onsite ?? false;
+          const tax = body?.tax_status === undefined ? (cur?.tax_status ?? null) : taxStatusFrom(body.tax_status);
+          // Без статуса допуск к переводам не держится (2а.3): снять статус можно, когда таких допусков нет.
+          if (!tax && cur?.tax_status) {
+            const held = await tx`select module, service from specialist_permits where user_id = ${userId}`;
+            if (held.some((p) => registry.executorRules(p.module, p.service).tax_status)) {
+              throw new HttpError(409, 'tax_status_needed', 'Сначала снимите допуски к услугам, где нужен статус исполнителя');
+            }
+          }
           await tx`
-            insert into specialists (user_id, regions, capacity, external_load, onsite)
-            values (${userId}, ${regions}, ${capacity}, ${external}, ${onsite})
-            on conflict (user_id) do update set regions = ${regions}, capacity = ${capacity}, external_load = ${external}, onsite = ${onsite}`;
-          await audit(tx, actor, 'specialist.upsert', 'user', userId, { regions, capacity, external, onsite });
-          return profileView(tx, userId);
+            insert into specialists (user_id, regions, capacity, external_load, onsite, tax_status)
+            values (${userId}, ${regions}, ${capacity}, ${external}, ${onsite}, ${tax})
+            on conflict (user_id) do update set regions = ${regions}, capacity = ${capacity}, external_load = ${external}, onsite = ${onsite},
+              tax_status = ${tax}`;
+          await audit(tx, actor, 'specialist.upsert', 'user', userId, { regions, capacity, external, onsite, tax_status: tax });
+          return profileView(tx, userId, registry);
         });
         return { specialist: view };
       },
@@ -346,14 +385,18 @@ export function matchOps() {
           if (until < todayMsk() || until > addDays(todayMsk(), 10 * 365)) throw new HttpError(400, 'bad_date', 'Поле «Действует до»: не в прошлом и не дальше десяти лет');
         }
         const view = await sql.tx(async (tx) => {
-          const sp = await tx.one`select 1 from specialists where user_id = ${userId}`;
+          const sp = await tx.one`select tax_status from specialists where user_id = ${userId}`;
           if (!sp) throw new HttpError(404, 'not_found', 'Специалист не найден');
+          // Физлицо без статуса к переводам не допускается (2а.3): иначе платформа — налоговый агент.
+          if (!sp.tax_status && registry.executorRules(def.module.id, def.service.id).tax_status) {
+            throw new HttpError(409, 'tax_status_needed', 'Сначала укажите статус исполнителя: самозанятый, ИП или ООО/бюро. Физическое лицо без статуса не допускается');
+          }
           await tx`
             insert into specialist_permits (user_id, module, service, valid_until, granted_by)
             values (${userId}, ${def.module.id}, ${def.service.id}, ${until}, ${actor.id})
             on conflict (user_id, module, service) do update set valid_until = ${until}, granted_by = ${actor.id}`;
           await audit(tx, actor, 'specialist.permit.add', 'user', userId, { module: def.module.id, service: def.service.id, until });
-          return profileView(tx, userId);
+          return profileView(tx, userId, registry);
         });
         res.status(201);
         return { specialist: view };
@@ -361,13 +404,39 @@ export function matchOps() {
     },
     {
       id: 'specialists.permit.remove', method: 'DELETE', path: '/api/admin/specialists/:id/permits/:module/:service', auth: 'user', access: { platform: 'admin' },
-      async handler({ sql, actor, params }) {
+      async handler({ sql, actor, params, registry }) {
         const userId = uuidFrom(params.id, 'Специалист не найден');
         const view = await sql.tx(async (tx) => {
           const gone = await tx`delete from specialist_permits where user_id = ${userId} and module = ${params.module} and service = ${params.service} returning 1`;
           if (!gone.length) throw new HttpError(404, 'not_found', 'Допуск не найден');
           await audit(tx, actor, 'specialist.permit.remove', 'user', userId, { module: params.module, service: params.service });
-          return profileView(tx, userId);
+          return profileView(tx, userId, registry);
+        });
+        return { specialist: view };
+      },
+    },
+    {
+      // Копия документа о знании языка переводчика (2а.3) — администратору, чтобы проверить документ.
+      id: 'specialists.language.file', method: 'GET', path: '/api/admin/specialists/:id/languages/:item/file', auth: 'user', access: { platform: 'admin' },
+      async handler({ sql, params, providers }) {
+        const row = await languageItem(sql, params);
+        if (!row.file_key) throw new HttpError(404, 'not_found', 'Копия не загружена');
+        return { url: await providers.storage.link(row.file_key, { filename: row.file_name }) };
+      },
+    },
+    {
+      // Отметить документ о знании языка проверенным (или снять отметку) — по копии (2а.3). К нотариальным переводам
+      // подбор берёт только переводчиков с проверенным документом по языку заявки.
+      id: 'specialists.language.verify', method: 'PUT', path: '/api/admin/specialists/:id/languages/:item', auth: 'user', access: { platform: 'admin' },
+      async handler({ sql, actor, params, body, registry }) {
+        if (typeof body?.verified !== 'boolean') throw new HttpError(400, 'bad_input', 'Поле «Проверен»: да или нет');
+        const view = await sql.tx(async (tx) => {
+          const row = await languageItem(tx, params, { lock: true });
+          if (body.verified && !row.file_key) throw new HttpError(409, 'no_copy', 'Проверить можно только по копии: переводчик ещё не загрузил её');
+          await tx`update dossier_items set verified_at = ${body.verified ? new Date() : null}, verified_by = ${body.verified ? actor.id : null}
+                   where id = ${row.id}`;
+          await audit(tx, actor, 'specialist.language.verify', 'user', row.user_id, { item: String(row.id), language: row.language, verified: body.verified });
+          return profileView(tx, row.user_id, registry);
         });
         return { specialist: view };
       },

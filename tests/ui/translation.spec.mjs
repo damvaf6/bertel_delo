@@ -99,3 +99,80 @@ test('заявка на перевод: «Куда подаёте», преду�
   await shot(page, 'perevod-05-zakazchik-oplata');
   expect(errors).toEqual([]);
 });
+
+// Исполнители-переводчики (2а.3): статус и правила самозанятого, документ о знании языка на проверке у администратора,
+// чек «Мой налог» к выплате.
+test('переводчик: правила самозанятого, диплом на проверку, администратор отмечает «проверен», чек к выплате', async ({ page, browser, baseURL }) => {
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  const tr = await signIn(page, '+79990000971');
+  const db = new pg.Client({ connectionString: DB_URL });
+  await db.connect();
+  try {
+    await db.query("update users set full_name = 'Тестовый Переводчик' where id = $1", [tr.id]);
+    await db.query("insert into specialists (user_id, regions, capacity, tax_status) values ($1, '{moscow}', 5, 'self_employed')", [tr.id]);
+    await db.query("insert into specialist_permits (user_id, module, service) values ($1, 'translation', 'plain')", [tr.id]);
+
+    await page.goto('/kabinet#specialist');
+    await expect(page.locator('#specialist-tax-name')).toHaveText('Статус: Самозанятый');
+    await expect(page.locator('#specialist-tax-rules')).toContainText('чек в приложении «Мой налог»');
+    await shot(page, 'perevodchik-01-pravila-samozanyatogo');
+
+    await page.locator('#dossier-kind').selectOption({ label: 'Документ о знании языка' });
+    await page.getByLabel('Язык', { exact: true }).selectOption({ label: 'Английский' });
+    await page.locator('#dossier-title').fill('Диплом МГЛУ, переводчик английского языка');
+    await page.locator('#dossier-save').click();
+    await expect(page.locator('#dossier-msg')).toHaveText('Документ добавлен — загрузите копию');
+    const item = page.locator('[data-dossier]').filter({ hasText: 'Английский' });
+    await item.locator('input[type=file]').setInputFiles({ name: 'diplom.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 скан') });
+    await expect(page.locator('#dossier-msg')).toHaveText('Копия сохранена');
+    await expect(item).toContainText('ждёт проверки');
+    await item.scrollIntoViewIfNeeded();
+    await shot(page, 'perevodchik-02-diplom-na-proverke');
+
+    // Администратор: статус в профиле, копия и отметка «проверен».
+    const actx = await browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, isMobile: true, hasTouch: true, locale: 'ru-RU' });
+    const ap = await actx.newPage();
+    ap.on('pageerror', (e) => errors.push(e.message));
+    const adm = await signIn(ap, '+79990000972');
+    await db.query("update users set platform_role = 'admin' where id = $1", [adm.id]);
+    await ap.goto('/kabinet#admin');
+    await ap.locator('#admin-phone').fill('+79990000971');
+    await ap.locator('#admin-search').click();
+    await expect(ap.locator('#sp-tax')).toHaveValue('self_employed');
+    const lang = ap.locator('#sp-langs li').first();
+    await expect(lang).toContainText('Английский: Диплом МГЛУ');
+    await expect(lang).toContainText('ждёт проверки · копия загружена');
+    await lang.getByRole('button', { name: 'Проверен' }).click();
+    await expect(ap.locator('#sp-msg')).toHaveText('Документ отмечен проверенным');
+    await expect(ap.locator('#sp-langs li').first()).toContainText('проверен · копия загружена');
+    await ap.locator('#sp-langs-box').scrollIntoViewIfNeeded();
+    await shot(ap, 'perevodchik-03-admin-proveril-diplom');
+    await actx.close();
+
+    await page.reload();
+    await expect(page.locator('[data-dossier]').filter({ hasText: 'Английский' })).toContainText('проверен');
+
+    // Выплата прошла — самозанятый прикладывает чек «Мой налог».
+    const owner = await (await browser.newContext({ baseURL })).newPage();
+    await signIn(owner, '+79990000973');
+    const o = await (await owner.request.post('/api/orders', { data: { module: 'translation', service: 'plain', title: 'Перевод диплома' }, headers: H })).json();
+    const id = o.order.id;
+    const fields = { recipient: 'business', language: 'en', direction: 'to_ru', doc_kind: 'diploma', docs: 1, pages: 1, urgent: 'no', delivery: 'none' };
+    expect((await owner.request.patch(`/api/orders/${id}`, { data: { deadline: inDays(3), fields }, headers: H })).status()).toBe(200);
+    await db.query("update orders set status = 'done', executor_user_id = $2, price_kop = 75000, paid_at = now() where id = $1", [id, tr.id]);
+    await db.query("insert into payouts (order_id, executor_user_id, amount_kop, commission_kop, status, paid_at) values ($1, $2, 60000, 15000, 'succeeded', now())", [id, tr.id]);
+    await page.goto(`/kabinet#order=${id}`);
+    await expect(page.locator('#money-facts')).toContainText('нужен: выдайте чек в «Мой налог» и приложите ссылку');
+    await page.locator('#receipt-url').fill('https://example.com/chek');
+    await page.getByRole('button', { name: 'Приложить чек' }).click();
+    await expect(page.locator('#money-msg')).toContainText('lknpd.nalog.ru');
+    await page.locator('#receipt-url').fill('https://lknpd.nalog.ru/api/v1/receipt/770000000000/20abc0009/print');
+    await page.getByRole('button', { name: 'Приложить чек' }).click();
+    await expect(page.locator('#money-msg')).toHaveText('Чек приложен');
+    await expect(page.locator('#money-facts')).toContainText(/Чек самозанятого\s*приложен/);
+    await page.locator('#receipt-form').scrollIntoViewIfNeeded();
+    await shot(page, 'perevodchik-04-chek-k-vyplate');
+  } finally { await db.end(); }
+  expect(errors).toEqual([]);
+});

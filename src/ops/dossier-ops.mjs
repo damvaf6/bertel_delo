@@ -27,11 +27,16 @@ function dateFrom(value, field, { future = false } = {}) {
 }
 
 // Поля записи по виду: лишние для вида — отклоняются, обязательные — проверяются.
-function itemFrom(body, kind) {
+// languages — языки для документа о знании языка (registry.languages(), 2а.3).
+function itemFrom(body, kind, languages = []) {
   const def = KINDS[kind];
   if (!def) throw new HttpError(400, 'bad_input', 'Выберите вид документа');
-  const out = { title: text(body?.title, def.title, 300), number: null, issued_on: null, valid_until: null, amount_kop: null };
+  const out = { title: text(body?.title, def.title, 300), number: null, issued_on: null, valid_until: null, amount_kop: null, language: null };
   const given = (k) => body?.[k] !== undefined && body[k] !== null && body[k] !== '';
+  if (def.lang) {
+    if (!languages.some((l) => l.id === body?.language)) throw new HttpError(400, 'bad_input', 'Выберите язык');
+    out.language = body.language;
+  } else if (given('language')) throw new HttpError(400, 'bad_input', `У документа «${def.name}» нет поля language`);
   for (const k of ['number', 'issued_on', 'valid_until', 'amount_rub']) {
     const field = k === 'amount_rub' ? 'amount_kop' : k;
     if (given(k) && !def.has.includes(field)) throw new HttpError(400, 'bad_input', `У документа «${def.name}» нет поля ${k}`);
@@ -68,12 +73,15 @@ async function ownItem(sql, actor, id, { lock = false } = {}) {
   return row;
 }
 
-async function view(sql, userId) {
-  const items = await loadDossier(sql, userId);
+async function view(sql, userId, registry) {
+  const items = await loadDossier(sql, userId, { languages: true });
+  const languages = registry.languages();
   return {
-    items,
+    items: items.map((i) => (i.language ? { ...i, language_name: languages.find((l) => l.id === i.language)?.name ?? i.language } : i)),
     alerts: dossierAlerts(items),
     kinds: Object.entries(KINDS).map(([id, k]) => ({ id, name: k.name, title: k.title, number: k.number, has: k.has, need: k.need })),
+    // Языки для документа о знании языка (2а.3); отметку «проверен» ставит администратор по копии.
+    languages,
   };
 }
 
@@ -83,61 +91,66 @@ export function dossierOps() {
   return [
     {
       id: 'dossier.get', method: 'GET', path: '/api/specialist/me/dossier', auth: 'user', access: 'self',
-      async handler({ sql, actor }) {
+      async handler({ sql, actor, registry }) {
         await requireSpecialist(sql, actor);
-        return view(sql, actor.id);
+        return view(sql, actor.id, registry);
       },
     },
     {
       id: 'dossier.add', method: 'POST', path: '/api/specialist/me/dossier', auth: 'user', access: 'self',
-      async handler({ sql, actor, body, res }) {
+      async handler({ sql, actor, body, res, registry }) {
         await requireSpecialist(sql, actor);
         const kind = String(body?.kind ?? '');
-        const f = itemFrom(body, kind);
+        const f = itemFrom(body, kind, registry.languages());
         const id = await sql.tx(async (tx) => {
           await tx`select 1 from specialists where user_id = ${actor.id} for update`;
           const n = await tx.one`select count(*)::int as n from dossier_items where user_id = ${actor.id} and deleted_at is null`;
           if (n.n >= MAX_ITEMS) throw new HttpError(409, 'too_many', `В досье — не больше ${MAX_ITEMS} документов`);
-          const row = await tx.one`insert into dossier_items (user_id, kind, title, number, issued_on, valid_until, amount_kop)
-                                   values (${actor.id}, ${kind}, ${f.title}, ${f.number}, ${f.issued_on}, ${f.valid_until}, ${f.amount_kop}) returning id`;
+          const row = await tx.one`insert into dossier_items (user_id, kind, title, number, issued_on, valid_until, amount_kop, language)
+                                   values (${actor.id}, ${kind}, ${f.title}, ${f.number}, ${f.issued_on}, ${f.valid_until}, ${f.amount_kop}, ${f.language}) returning id`;
           await audit(tx, actor, 'dossier.add', 'dossier', row.id, { kind });
           return String(row.id);
         });
         res.status(201);
-        return { id, ...(await view(sql, actor.id)) };
+        return { id, ...(await view(sql, actor.id, registry)) };
       },
     },
     {
       // Поправить сведения (новый аттестат или полис — новый номер и срок; напоминания пойдут по новому сроку).
+      // Документ о знании языка (2а.3): изменённые сведения снимают отметку «проверен» — администратор проверит заново.
       id: 'dossier.update', method: 'PUT', path: '/api/specialist/me/dossier/:item', auth: 'user', access: 'self',
-      async handler({ sql, actor, params, body }) {
+      async handler({ sql, actor, params, body, registry }) {
         await sql.tx(async (tx) => {
           const cur = await ownItem(tx, actor, params.item, { lock: true });
-          const f = itemFrom(body, cur.kind);
+          const f = itemFrom(body, cur.kind, registry.languages());
+          const same = await tx.one`select (title = ${f.title} and number is not distinct from ${f.number}::text
+                     and issued_on is not distinct from ${f.issued_on}::date and language is not distinct from ${f.language}::text) as same
+                     from dossier_items where id = ${cur.id}`;
           await tx`update dossier_items set title = ${f.title}, number = ${f.number}, issued_on = ${f.issued_on},
-                     valid_until = ${f.valid_until}, amount_kop = ${f.amount_kop}, updated_at = now() where id = ${cur.id}`;
+                     valid_until = ${f.valid_until}, amount_kop = ${f.amount_kop}, language = ${f.language}, updated_at = now(),
+                     verified_at = ${same.same ? cur.verified_at : null}, verified_by = ${same.same ? cur.verified_by : null} where id = ${cur.id}`;
           await audit(tx, actor, 'dossier.update', 'dossier', cur.id, { kind: cur.kind });
         });
-        return view(sql, actor.id);
+        return view(sql, actor.id, registry);
       },
     },
     {
       // Убрать документ из досье. Запись и копия остаются в истории (по ним могли составить отчёт), в досье их больше нет.
       id: 'dossier.remove', method: 'DELETE', path: '/api/specialist/me/dossier/:item', auth: 'user', access: 'self',
-      async handler({ sql, actor, params }) {
+      async handler({ sql, actor, params, registry }) {
         await sql.tx(async (tx) => {
           const cur = await ownItem(tx, actor, params.item, { lock: true });
           await tx`update dossier_items set deleted_at = now() where id = ${cur.id}`;
           await audit(tx, actor, 'dossier.remove', 'dossier', cur.id, { kind: cur.kind });
         });
-        return view(sql, actor.id);
+        return view(sql, actor.id, registry);
       },
     },
     {
       // Копия документа (скан или фото) — один раз; новая заменяет прежнюю.
       id: 'dossier.file', method: 'POST', path: '/api/specialist/me/dossier/:item/file', auth: 'user', access: 'self',
       body: 'raw', limit: MAX_FILE_BYTES,
-      async handler({ sql, actor, params, req, body, providers }) {
+      async handler({ sql, actor, params, req, body, providers, registry }) {
         const cur = await ownItem(sql, actor, params.item);
         if (!Buffer.isBuffer(body) || body.length === 0) throw new HttpError(400, 'empty_file', 'Файл пустой');
         let filename;
@@ -150,8 +163,9 @@ export function dossierOps() {
         try {
           old = await sql.tx(async (tx) => {
             const row = await ownItem(tx, actor, cur.id, { lock: true });
-            await tx`update dossier_items set file_key = ${key}, file_name = ${name}, file_mime = ${mime}, file_size = ${body.length}, updated_at = now()
-                     where id = ${row.id}`;
+            // Новая копия — проверка документа о знании языка заново (2а.3).
+            await tx`update dossier_items set file_key = ${key}, file_name = ${name}, file_mime = ${mime}, file_size = ${body.length}, updated_at = now(),
+                     verified_at = null, verified_by = null where id = ${row.id}`;
             await audit(tx, actor, 'dossier.file', 'dossier', row.id, { size: body.length });
             return row.file_key;
           });
@@ -160,7 +174,7 @@ export function dossierOps() {
           throw e;
         }
         if (old) await providers.storage.delete(old).catch(() => {});
-        return view(sql, actor.id);
+        return view(sql, actor.id, registry);
       },
     },
     {

@@ -7725,11 +7725,14 @@ test('дела экспертов (2.171, 2.172): руководитель от�
 
   // Утренняя сводка (2.172): «исправленный файл не подписан экспертом 2 дня и больше» — только число; больше в сводке ничего
   // нет — нажатие ведёт к отбору «Исправленный файл ждёт подписи эксперта». Сводка рассылается сервером после 8:00 по Москве;
-  // здесь — запись напрямую, с цифрами дня.
+  // здесь — запись напрямую, с цифрами дня. Если прогон идёт после 8:00, сервер мог уже разослать сводку сам — тогда
+  // запись дня заменяется тестовой (иначе — «уже есть»).
   await db(async (c) => {
     const { rows: [n] } = await c.query("insert into notifications (user_id, type, event, org_id) values ($1, 'org_morning', 'org_morning_today', $2) returning id", [head.id, orgId]);
     await c.query(`insert into org_morning_digests (user_id, org_id, day, fresh, notification_id)
-      values ($1, $2, (now() at time zone 'Europe/Moscow')::date, 1, $3)`, [head.id, orgId, n.id]);
+      values ($1, $2, (now() at time zone 'Europe/Moscow')::date, 1, $3)
+      on conflict (user_id, org_id, day) do update set sign = 0, handover = 0, due = 0, overdue = 0, idle = 0, returned = 0, fresh = 1,
+        notification_id = excluded.notification_id`, [head.id, orgId, n.id]);
   });
   await hp.goto('/kabinet#notifications');
   const morning = hp.locator('#notifications li').first();

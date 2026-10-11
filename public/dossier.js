@@ -21,6 +21,9 @@ function details(i) {
 
 function render(data) {
   kinds = data.kinds;
+  if (!$('dossier-language').options.length) {
+    $('dossier-language').replaceChildren(...data.languages.map((l) => el('option', { value: l.id, text: l.name })));
+  }
   if (!$('dossier-kind').options.length) {
     $('dossier-kind').replaceChildren(...kinds.map((k) => el('option', { value: k.id, text: k.name })));
     applyKind();
@@ -37,8 +40,10 @@ function render(data) {
     const input = el('input', { id: fileId, type: 'file', class: 'visually-hidden', 'aria-label': `Копия: ${i.kind_name}`, onchange: (e) => upload(i, e) });
     return el('li', { 'data-dossier': i.id },
       el('div', { class: 'row' },
-        el('span', { class: 'title', text: i.kind_name }),
-        ...(i.state && STATE[i.state] ? [el('span', { class: 'badge overdue', text: STATE[i.state] })] : [])),
+        el('span', { class: 'title', text: i.language_name ? `${i.kind_name}: ${i.language_name}` : i.kind_name }),
+        ...(i.state && STATE[i.state] ? [el('span', { class: 'badge overdue', text: STATE[i.state] })] : []),
+        // Документ о знании языка (2а.3): к нотариальным переводам — только проверенный администратором по копии.
+        ...(i.kind === 'language' ? [el('span', { class: `badge${i.verified ? '' : ' overdue'}`, text: i.verified ? 'проверен' : 'ждёт проверки' })] : [])),
       el('div', { text: i.title }),
       el('div', { class: 'muted', text: details(i) }),
       el('div', { class: 'muted', text: i.file ? `Копия: ${i.file.name} (${formatSize(i.file.size_bytes)})` : 'Копия не загружена' }),
@@ -82,6 +87,7 @@ function edit(i) {
   $('dossier-issued').value = i.issued_on ?? '';
   $('dossier-until').value = i.valid_until ?? '';
   $('dossier-amount').value = i.amount_kop ? String(i.amount_kop / 100) : '';
+  if (i.language) $('dossier-language').value = i.language;
   $('dossier-form-title').textContent = `Изменить: ${i.kind_name}`;
   $('dossier-save').textContent = 'Сохранить';
   $('dossier-cancel').classList.remove('hidden');
@@ -138,6 +144,7 @@ $('dossier-form').addEventListener('submit', async (e) => {
     issued_on: val('dossier-issued', 'issued_on'),
     valid_until: val('dossier-until', 'valid_until'),
     amount_rub: val('dossier-amount', 'amount_kop'),
+    ...(k.has.includes('language') ? { language: $('dossier-language').value } : {}),
   };
   try {
     const data = editing
@@ -146,6 +153,6 @@ $('dossier-form').addEventListener('submit', async (e) => {
     const was = editing;
     render(data);
     resetForm();
-    say($('dossier-msg'), was ? 'Сохранено' : 'Документ добавлен — загрузите копию', 'ok');
+    say($('dossier-msg'), was ? `Сохранено${k.id === 'language' ? ' — документ снова на проверке, если сведения изменились' : ''}` : 'Документ добавлен — загрузите копию', 'ok');
   } catch (err) { say($('dossier-msg'), err.message); }
 });

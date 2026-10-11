@@ -517,14 +517,19 @@ test('orders.status: шаги заказчика — только его сто�
 
 test('специалисты и подбор: допуски — только администратор; подбор — только диспетчер; чужое дело исполнитель не видит', async () => {
   for (const id of ['specialist.me', 'specialist.me.update', 'specialists.list', 'specialists.upsert',
-    'specialists.permit.add', 'specialists.permit.remove', 'orders.candidates', 'orders.offer']) cover(id);
+    'specialists.permit.add', 'specialists.permit.remove', 'orders.candidates', 'orders.offer',
+    'specialists.language.file', 'specialists.language.verify']) cover(id);
   const target = U.memberA2.user.id;
   // Профиль и допуски выдаёт только администратор; диспетчер и обычный человек получают «не найдено».
   for (const who of ['owner', 'dispatcher', 'spec']) {
     assert.equal((await U[who].req('PUT', `/api/admin/specialists/${target}`, {})).status, 404, `${who}: профиль`);
     assert.equal((await U[who].req('POST', `/api/admin/specialists/${target}/permits`, { module: 'expertise', service: 'land' })).status, 404, `${who}: допуск`);
     assert.equal((await U[who].req('DELETE', `/api/admin/specialists/${target}/permits/expertise/realty`)).status, 404);
+    // Документ о знании языка переводчика (2а.3): копию и отметку «проверен» — только администратор.
+    assert.equal((await U[who].req('GET', `/api/admin/specialists/${target}/languages/1/file`)).status, 404, `${who}: копия диплома`);
+    assert.equal((await U[who].req('PUT', `/api/admin/specialists/${target}/languages/1`, { verified: true })).status, 404, `${who}: проверка диплома`);
   }
+  assert.equal((await U.admin.req('PUT', `/api/admin/specialists/${target}/languages/1`, { verified: true })).status, 404, 'чужой номер документа');
   assert.equal((await U.admin.req('PUT', `/api/admin/specialists/${target}`, { regions: ['moscow'], capacity: 3 })).status, 200);
   assert.equal((await U.admin.req('POST', `/api/admin/specialists/${target}/permits`, { module: 'expertise', service: 'land' })).status, 201);
   assert.equal((await U.admin.req('POST', `/api/admin/specialists/${target}/permits`, { module: 'expertise', service: 'nope' })).status, 400);
@@ -694,7 +699,7 @@ test('работа по делу: результат — только испол
 });
 
 test('деньги: цену — диспетчер; платит заказчик при заказе; суммы и документы — каждому свои; возвраты; сводка — служебным', async () => {
-  for (const id of ['orders.money', 'orders.price', 'payments.create', 'payments.refresh', 'payouts.retry', 'refunds.retry', 'money.summary', 'payouts.mine', 'orders.invoice', 'orders.closing.docx']) cover(id);
+  for (const id of ['orders.money', 'orders.price', 'payments.create', 'payments.refresh', 'payouts.retry', 'refunds.retry', 'money.summary', 'payouts.mine', 'orders.invoice', 'orders.closing.docx', 'payouts.receipt']) cover(id);
   const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Деньги' })).body.order;
   assert.equal((await U.owner.req('PATCH', `/api/orders/${o.id}`, { ...READY, deadline: soon() })).status, 200);
   assert.equal((await U.owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
@@ -783,6 +788,13 @@ test('деньги: цену — диспетчер; платит заказчи
   for (const [who, code] of [['owner', 200], ['dispatcher', 200], ['spec', 403], ['stranger', 404], ['headB', 404]]) {
     assert.equal((await word(U[who], 'invoice')).status, code, `счёт: ${who}`);
   }
+
+  // Чек на выплату (2а.3) прикладывает только сам исполнитель; остальным выплата «не найдена».
+  const receipt = (c) => c.req('PUT', `/api/orders/${o.id}/payout/receipt`, { url: 'https://lknpd.nalog.ru/api/v1/receipt/770000000000/200abc/print' });
+  for (const who of ['owner', 'dispatcher', 'admin']) assert.equal((await receipt(U[who])).status, 404, `${who}: чек`);
+  for (const who of ['stranger', 'headB']) assert.equal((await receipt(U[who])).status, 404, `${who}: чек`);
+  assert.equal((await U.spec.req('PUT', `/api/orders/${o.id}/payout/receipt`, { url: 'https://example.com/чек' })).status, 400, 'только ссылка ФНС');
+  assert.equal((await receipt(U.spec)).body.money.payout.receipt_url, 'https://lknpd.nalog.ru/api/v1/receipt/770000000000/200abc/print');
 
   // Повтор выплаты и возврата — только диспетчер и только у неудавшихся.
   assert.equal((await retry(U.dispatcher)).status, 409);

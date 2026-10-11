@@ -11,6 +11,9 @@ export const KINDS = {
   sro: { name: 'Членство в СРО', title: 'Название СРО', number: 'Номер в реестре', has: ['number', 'issued_on'], need: ['number'] },
   policy: { name: 'Полис страхования оценщика', title: 'Страховщик', number: 'Номер полиса', has: ['number', 'issued_on', 'valid_until', 'amount_kop'], need: ['number', 'valid_until', 'amount_kop'], term: true },
   policy_org: { name: 'Полис страхования организации', title: 'Страховщик', number: 'Номер полиса', has: ['number', 'issued_on', 'valid_until', 'amount_kop'], need: ['number', 'valid_until', 'amount_kop'], term: true },
+  // Документ о знании языка (2а.3): у переводчика — по каждому языку; проверяет администратор по копии. В черновик заключения
+  // и сверку отчёта оценки не идёт.
+  language: { name: 'Документ о знании языка', title: 'Документ и кем выдан (диплом, сертификат)', number: 'Номер документа', has: ['number', 'issued_on', 'language'], need: ['language'], lang: true },
 };
 export const KIND_ORDER = Object.keys(KINDS);
 
@@ -33,11 +36,14 @@ export function termState(validUntil, today = todayMsk()) {
   return 'ok';
 }
 
-export async function loadDossier(sql, userId) {
+// languages: true — вместе с документами о знании языка (2а.3); без него — только документы эксперта (черновик, сверка, сроки).
+export async function loadDossier(sql, userId, { languages = false } = {}) {
   const rows = await sql`select *, to_char(issued_on, 'YYYY-MM-DD') as issued, to_char(valid_until, 'YYYY-MM-DD') as until
                          from dossier_items where user_id = ${userId} and deleted_at is null order by id`;
   return rows
+    .filter((r) => languages || r.kind !== 'language')
     .map((r) => ({
+      ...(r.kind === 'language' ? { language: r.language, verified: !!r.verified_at } : {}),
       id: String(r.id), kind: r.kind, kind_name: KINDS[r.kind].name, title: r.title, number: r.number ?? null,
       issued_on: r.issued ?? null, valid_until: r.until ?? null, amount_kop: r.amount_kop === null ? null : Number(r.amount_kop),
       file: r.file_key ? { name: r.file_name, mime: r.file_mime, size_bytes: r.file_size } : null,

@@ -29,6 +29,9 @@
 //     express?: { services: [id услуги…], show: [id поля заявки…], fields: [поле + services?…] } }  — экспресс-услуга (2.4):
 //       для каких услуг, какие поля заявки видит помощник на объекте и какие данные он заполняет (нужны шаги осмотра)
 //     signature?: { services?: [id услуги…] }  — результат подписывается УКЭП исполнителя до сдачи (2.5); без services — все услуги
+//     executors?: { tax_status?: true, language_doc?: { field: id поля-списка модуля, services: [id услуги…] } }  — кого
+//       допускать (2а.3): tax_status — только с указанным статусом (самозанятый, ИП, ООО/бюро), без него допуск не выдаётся и
+//       в подбор не попадает; language_doc — к этим услугам только с проверенным документом о знании языка из поля field
 //     analogs?: { services: [id услуги…], min, fields: [поле + services? + near?…] }  — раздел «Аналоги» в деле (2.32): признаки
 //       аналога по виду объекта (цена, дата объявления и регион — у всех, в ядре: src/analogs/analogs.mjs); min — сколько
 //       нужно подтверждённых; near: { field: id числового поля заявки, within?: разница, pct?: разница в % } — предупреждение;
@@ -114,7 +117,7 @@ function validateField(f, where) {
 }
 
 export function validateModule(m) {
-  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express', 'signature', 'analogs', 'approaches', 'request_docs', 'repeat'], 'модуль');
+  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express', 'signature', 'analogs', 'approaches', 'request_docs', 'repeat', 'executors'], 'модуль');
   if (!ID_RE.test(m.id ?? '')) fail('модуль', `неверный id «${m.id}»`);
   const at = `модуль ${m.id}`;
   if (!nonEmpty(m.name)) fail(at, 'нет названия');
@@ -272,6 +275,22 @@ export function validateModule(m) {
       fail(where, 'services — непустой список услуг этого модуля');
     }
   }
+  // Кого допускать к услугам модуля (2а.3) — необязательно.
+  if (m.executors !== undefined) {
+    const where = `${at}, исполнители`;
+    const ex = m.executors;
+    onlyKeys(ex, ['tax_status', 'language_doc'], where);
+    if (ex.tax_status !== undefined && ex.tax_status !== true) fail(where, 'tax_status — true или нет');
+    if (ex.language_doc !== undefined) {
+      onlyKeys(ex.language_doc, ['field', 'services'], `${where}, язык`);
+      const f = (m.fields ?? []).find((x) => x.id === ex.language_doc.field);
+      if (!f || f.type !== 'select' || !f.required) fail(where, 'language_doc.field — обязательное поле-список модуля');
+      const sv = ex.language_doc.services;
+      if (!Array.isArray(sv) || sv.length === 0 || sv.some((id) => !serviceIds.includes(id)) || new Set(sv).size !== sv.length) {
+        fail(where, 'language_doc.services — непустой список услуг этого модуля');
+      }
+    }
+  }
   // Выбор подходов к оценке (2.33) — необязательно: без него черновик пишется со всеми разделами.
   if (m.approaches !== undefined) {
     const where = `${at}, подходы`;
@@ -417,6 +436,24 @@ export function createRegistry(modules = DEFAULT_MODULES) {
         show: m.express.show.map((id) => own.find((f) => f.id === id)).filter(Boolean),
         fields: m.express.fields.filter((f) => !f.services || f.services.includes(serviceId)).map(({ services, ...f }) => f),
       };
+    },
+    // Кого допускать к услуге (2а.3): нужен ли статус исполнителя и по какому полю заявки нужен проверенный документ о
+    // знании языка (null — не нужен).
+    executorRules(moduleId, serviceId) {
+      const ex = modulesList.find((x) => x.id === moduleId)?.executors;
+      return {
+        tax_status: !!ex?.tax_status,
+        language_field: ex?.language_doc?.services.includes(serviceId) ? ex.language_doc.field : null,
+      };
+    },
+    // Языки для документа о знании языка в досье (2а.3) — варианты полей language_doc всех модулей.
+    languages() {
+      const out = new Map();
+      for (const m of modulesList) {
+        const f = m.executors?.language_doc && m.fields.find((x) => x.id === m.executors.language_doc.field);
+        for (const o of f?.options ?? []) if (!out.has(o.id)) out.set(o.id, o.name);
+      }
+      return [...out].map(([id, name]) => ({ id, name }));
     },
     // Нужна ли подпись результата УКЭП исполнителя до сдачи на проверку (2.5).
     signatureRequired(moduleId, serviceId) {
