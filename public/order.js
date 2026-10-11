@@ -545,16 +545,23 @@ function signReturnPoints(d) {
     return el('div', { class: r.left ? 'sig-points warn' : 'sig-points', 'data-sig': 'points', 'data-return': String(r.id) },
       el('div', { 'data-role': 'sig-points-state', text: `Замечание руководителя от ${new Date(r.at).toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow' })}${r.document_id === d.id ? '' : ` к файлу «${r.filename}»`}: исправлено ${done} из ${r.items.length}` }),
       el('ul', { class: 'points' }, ...r.items.map(point)),
-      ...(r.left ? [el('div', { class: 'muted', 'data-role': 'sig-points-hint', text: `Не отмечено: ${r.left}. Подписать можно и так — руководитель увидит, какие пункты не отмечены.` })] : []));
+      ...(r.left ? [el('div', { class: 'muted', 'data-role': 'sig-points-hint', text: `Не отмечено: ${r.left} (${r.left === 1 ? 'пункт' : 'пункты'} ${r.items.filter((p) => !p.fixed).map((p) => p.n).join(', ')}). Подписать можно и так — руководитель увидит, какие пункты не отмечены.` })] : []));
   });
 }
 
-// Перед новой подписью: если в открытом возврате по этому файлу остались неотмеченные пункты — предупредить.
+// Перед новой подписью: если в открытых возвратах по файлам остались неотмеченные пункты — напомнить, какие (2.185):
+// номер и начало текста каждого пункта; подписать можно и так.
+const clip = (t, n = 90) => (t.length > n ? `${t.slice(0, n - 1).trimEnd()}…` : t);
+function unfixedText(returns) {
+  const items = [...new Set(returns)].flatMap((r) => (r.items ?? []).filter((p) => !p.fixed));
+  if (!items.length) return '';
+  return `Не отмечено исправленными пунктов замечания руководителя: ${items.length}.\n`
+    + items.map((p) => `${p.n}. ${clip(p.text)}`).join('\n')
+    + '\nРуководитель это увидит. Если исправили — отметьте пункт в окне подписи.\n\n';
+}
 function signConfirmText(d) {
-  const left = returnsForDoc(d).reduce((n, r) => n + (r.left ?? 0), 0);
   const ai = aiCheckText(d.ai_check);
-  return (left ? `Не отмечено исправленными пунктов замечания руководителя: ${left}. Руководитель это увидит.\n\n` : '')
-    + (ai ? `${ai}\n\n` : '') + SIGN_CONFIRM(d.filename);
+  return unfixedText(returnsForDoc(d)) + (ai ? `${ai}\n\n` : '') + SIGN_CONFIRM(d.filename);
 }
 
 function toAiReview() {
@@ -623,8 +630,7 @@ async function signAll() {
   const docs = (lastDocs?.documents ?? []).filter((d) => d.kind === 'result' && d.own !== false && !d.signatures?.expert);
   if (!docs.length) return;
   const ai = docs.filter((d) => d.ai_check).map((d) => `${d.filename}: ${aiCheckText(d.ai_check)}`);
-  const left = [...new Set(docs.flatMap(returnsForDoc))].reduce((n, r) => n + (r.left ?? 0), 0);
-  if (!confirm(`${left ? `Не отмечено исправленными пунктов замечания руководителя: ${left}. Руководитель это увидит.\n\n` : ''}${ai.length ? `${ai.join('\n')}\n\n` : ''}${SIGN_CONFIRM(docs.map((d) => d.filename).join(', '))}\n\nФайлов: ${docs.length}.`)) return;
+  if (!confirm(`${unfixedText(docs.flatMap(returnsForDoc))}${ai.length ? `${ai.join('\n')}\n\n` : ''}${SIGN_CONFIRM(docs.map((d) => d.filename).join(', '))}\n\nФайлов: ${docs.length}.`)) return;
   say($('doc-msg'), 'Подписываем…', 'ok');
   try {
     for (const d of docs) await api('POST', `/api/documents/${d.id}/sign`, { confirm: true });
