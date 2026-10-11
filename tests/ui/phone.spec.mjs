@@ -7773,3 +7773,138 @@ test('мои заявки (2.173): эксперт видит отметку «В
   await expect(rowA).not.toHaveClass(/returned/);
   for (const p of [cp, ep, hp]) await p.context().close();
 });
+
+// 2.180: прогон «как эксперт и руководитель» по пачке 2.171–2.179 — одна организация, одни дела: возврат → исправленный
+// файл ждёт подписи (отбор руководителя, «Вернули» в «Моих заявках»), ИИ-проверка исправленного файла (площадь, дата оценки),
+// подпись → карточка эксперта «после возвратов»; перенос срока → готовая фраза заказчику → новый срок попал в день со сдачей
+// и выездом — «перегруженный день»; черновик — пустые разделы.
+test('прогон 2.180: эксперт и руководитель по пачке 2.171–2.179 на одних делах', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), ep = await ctx(), hp = await ctx(), dp = await ctx();
+  const customer = await signIn(cp, '+79990018001');
+  const expert = await signIn(ep, '+79990018002'), head = await signIn(hp, '+79990018003'), disp = await signIn(dp, '+79990018004');
+  const busy = inDays(5);
+  const { orgId, A, B, C } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Прогон-3 ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Сквознов Илья' where id = $1", [expert.id]);
+    await c.query("update users set full_name = 'Строгова Анна' where id = $1", [head.id]);
+    await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    await c.query("insert into morning_digests (user_id, day) values ($1, (now() at time zone 'Europe/Moscow')::date), ($2, (now() at time zone 'Europe/Moscow')::date)", [expert.id, head.id]);
+    const add = async (title, days) => (await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', $1, $2, $3, 'in_work', (now() at time zone 'Europe/Moscow')::date + $4::int, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Сквозная ул., 9","area":"40"}') returning id`,
+    [title, customer.id, expert.id, days])).rows[0].id;
+    const ids = { orgId: org.id, A: await add('Сквозной: возврат', 6), B: await add('Сквозной: перенос', 2), C: await add('Сквозной: сдача и выезд', 5) };
+    await c.query(`insert into onsite_visits (order_id, helper_id, assigned_by, planned_at) values ($1, $2, $2, ($3::date + time '11:00') at time zone 'Europe/Moscow')`,
+      [ids.C, expert.id, busy]);
+    return ids;
+  });
+  const ref = (id) => id.slice(0, 8).toUpperCase();
+  const dmy = (iso) => iso.split('-').reverse().join('.');
+  const upload = async (id, name, text) => {
+    const up = await ep.request.post(`/api/orders/${id}/results`, { data: Buffer.from(text), headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } });
+    expect(up.status()).toBe(201);
+    return (await up.json()).document.id;
+  };
+  // A: эксперт подписал, руководитель вернул по пунктам 3 дня назад; эксперт удалил файл и 2 дня назад загрузил исправленный.
+  const a1 = await upload(A, 'Отчёт A.txt', 'Отчёт об оценке квартиры');
+  expect((await ep.request.post(`/api/documents/${a1}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  expect((await hp.request.post(`/api/org-documents/${a1}/return`, { data: { comment: '1. Нет даты осмотра\n2. Нет площади кухни' }, headers: H })).status()).toBe(201);
+  await db((c) => c.query("update org_returns set created_at = now() - interval '3 days' where order_id = $1", [A]));
+  expect((await ep.request.delete(`/api/documents/${a1}`, { headers: H })).status()).toBe(204);
+  const a2 = await upload(A, 'Отчёт A (исправлен).txt', [
+    'Отчёт об оценке квартиры', 'Адрес объекта оценки: г. Москва, Сквозная ул., д. 9',
+    'Общая площадь, кв. м: 40', 'Площадь кухни 8 кв. м, общая площадь 40 кв. м',
+    `Дата оценки: ${dmy(inDays(-3))}`, `Дата осмотра: ${dmy(inDays(-1))}`,
+  ].join('\n'));
+  await db((c) => c.query("update documents set created_at = now() - interval '2 days 1 hour' where id = $1", [a2]));
+
+  // Руководитель: отбор «Исправленный файл ждёт подписи эксперта» (2.171) — дело A, красное.
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const chip = hp.locator('[data-filter="fresh"]');
+  await expect(chip).toHaveText('Исправленный файл ждёт подписи эксперта · 1');
+  await chip.click();
+  const rows = hp.locator('#org-cases > li[data-case]');
+  await expect(rows).toHaveCount(1);
+  await expect(rows.nth(0)).toHaveAttribute('data-case', `№ ${ref(A)}`);
+  await expect(rows.nth(0).locator('[data-role="fresh-file"]')).toHaveClass(/overdue/);
+  await hp.locator('#org-cases-filter').scrollIntoViewIfNeeded();
+  await shot(hp, 'c27-progon3-rukovoditel-otbor');
+
+  // Эксперт: «Мои заявки» — «Вернули», исправленный файл загружен (2.173); нажатие — к замечаниям.
+  await ep.goto('/kabinet');
+  const rowA = ep.locator(`#orders li:has(button[data-id="${A}"])`);
+  await expect(rowA.locator('[data-role="returned-badge"]')).toHaveText('Вернули');
+  await expect(rowA.locator('[data-role="returned-note"]')).toContainText('исправленный файл загружен — подпишите его');
+  await shot(ep, 'c28-progon3-ekspert-moi-zayavki');
+  await rowA.locator('button.open').click();
+  await expect(ep).toHaveURL(new RegExp(`#order=${A}&to=fix$`));
+  // ИИ-проверка исправленного файла: площадь как в заявке (2.174 — площадь кухни не находка), дата оценки раньше осмотра (2.175).
+  await ep.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(ep.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  const review = ep.locator('#review-box');
+  await expect(review).toContainText(`Дата оценки (${dmy(inDays(-3))}) раньше даты осмотра (${dmy(inDays(-1))})`);
+  await expect(review).not.toContainText('не совпадает с площадью из заявки');
+  await review.getByText(`Дата оценки (${dmy(inDays(-3))}) раньше даты осмотра`).scrollIntoViewIfNeeded();
+  await shot(ep, 'c29-progon3-ekspert-ii-proverka');
+  // Подпись исправленного файла — возврат закрыт.
+  const doc = ep.locator('#docs li.doc').filter({ hasText: 'Отчёт A (исправлен).txt' });
+  ep.once('dialog', (d) => d.accept());
+  await doc.getByRole('button', { name: 'Подписать', exact: true }).click();
+  await expect(ep.locator('#doc-msg')).toHaveText('Файл подписан');
+  await ep.goto('/kabinet');
+  await expect(rowA.locator('[data-role="returned-badge"]')).toHaveCount(0);
+
+  // Руководитель: отбор пуст, в карточке эксперта — новая подпись через 3 дня после возврата (2.176).
+  await hp.reload();
+  await expect(hp.locator('[data-filter="returned"]')).toHaveCount(0);
+  await expect(hp.locator('[data-filter="fresh"]')).toHaveCount(0);
+  await hp.goto(`/kabinet#expert=${expert.id}`);
+  await expect(hp.locator('#expert-returns-resign')).toHaveText('После возвратов: новая подпись в среднем через 3 дня.');
+  await hp.locator('#expert-returns-box').scrollIntoViewIfNeeded();
+  await shot(hp, 'c30-progon3-rukovoditel-kartochka');
+
+  // B: эксперт просит перенести срок на день, где уже сдача C и выезд; диспетчер согласился.
+  await ep.goto(`/kabinet#order=${B}&to=deadline`);
+  await ep.locator('#deadline-new').fill(busy);
+  await ep.locator('#deadline-reason').fill('Жду выписку ЕГРН');
+  await ep.locator('#deadline-form button[type="submit"]').click();
+  await expect(ep.locator('#deadline-msg')).toContainText('Просьба отправлена диспетчеру');
+  const reqs = await (await dp.request.get(`/api/orders/${B}/deadline-requests`)).json();
+  expect((await dp.request.post(`/api/orders/${B}/deadline-requests/${reqs.open.id}/decide`, { data: { approve: true }, headers: H })).status()).toBe(200);
+  // Готовая фраза заказчику (2.178): подставляет текст, ничего не отправляет.
+  const day = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'UTC' });
+  await ep.goto(`/kabinet#order=${B}`);
+  const chat = ep.locator('#chat-box');
+  await chat.getByRole('button', { name: 'Срок перенесён' }).click();
+  await expect(chat.locator('#message-text')).toHaveValue(`Здравствуйте! Срок по Вашей заявке перенесён на ${day(busy)} (был ${day(inDays(2))}). Если появятся вопросы — напишите здесь.`);
+  await expect(chat.locator('#messages li')).toHaveCount(0);
+  await chat.locator('#message-form').scrollIntoViewIfNeeded();
+  await shot(ep, 'c31-progon3-ekspert-fraza');
+  // «Мои сроки на две недели» (2.179): в этот день теперь две сдачи и выезд — день перегружен.
+  await ep.goto('/kabinet#specialist');
+  const busyDay = ep.locator(`#schedule-days > li[data-day="${busy}"]`);
+  await expect(busyDay).toHaveClass(/busy/);
+  await expect(busyDay.locator('.busy-mark')).toHaveText('много: к сдаче 2 + выезд');
+  await busyDay.scrollIntoViewIfNeeded();
+  await shot(ep, 'c32-progon3-ekspert-sroki');
+  // Найдено прогоном: в «Моих выездах на объект» тот же выезд был «в 08:00» (не по Москве) — теперь как в сроках (2.180).
+  await expect(busyDay).toContainText('11:00 · Выезд');
+  await expect(ep.locator('#visits')).toContainText(`${day(busy)} в 11:00`);
+  await busyDay.locator(`[data-ask-extend="${B}"]`).click();
+  await expect(ep.locator('#order-title')).toHaveText('Сквозной: перенос');
+  await expect(ep.locator('#deadline-reason-list [data-reason="busy"]')).toHaveText('Много дел в этот день (2 и выезд)');
+
+  // Черновик B (2.177): пустые разделы над «Скачать Word», нажатие — к пометке.
+  await ep.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  await expect(ep.locator('#draft-empty-text')).toContainText('Ещё пустые разделы:');
+  await ep.locator('#draft-empty-list button').first().click();
+  await expect(ep.getByLabel('Текст заключения')).toBeFocused();
+  await ep.locator('#draft-word-box').scrollIntoViewIfNeeded();
+  await shot(ep, 'c33-progon3-ekspert-chernovik');
+  for (const p of [cp, ep, hp, dp]) await p.context().close();
+});
