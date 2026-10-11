@@ -99,6 +99,7 @@ function render() {
   $('details-view').classList.toggle('hidden', current.editable);
   if (current.editable) renderForm(); else renderFacts();
   renderQuote();
+  renderTerms();
   renderProgress();
   $('upload-box').classList.toggle('hidden', current.access === 'read' || FINAL.includes(order.status));
   $('result-upload-box').classList.toggle('hidden', !(current.executor?.is_me && order.status === 'in_work'));
@@ -131,6 +132,20 @@ function renderQuote() {
   $('quote-total').textContent = quote ? `Итого по таблице цен: ${rubKop(quote.total_kop)}` : '';
   $('quote-note').textContent = !quote ? 'Стоимость появится, когда будут указаны документы и страницы.'
     : `Предварительно. Окончательную цену назначит диспетчер.${quote.transit_kop ? ` Тарифы нотариуса и доставка (${rubKop(quote.transit_kop)}) — без наценки платформы.` : ''}`;
+}
+
+// Условия заказа (2а.8): главные пункты оферты модуля; пока юрист не проверил — пометка «черновик».
+function renderTerms() {
+  const offer = current.terms ?? null;
+  $('terms-box').classList.toggle('hidden', !offer);
+  if (!offer) return;
+  const items = (list) => list.map((p) => el('li', { 'data-point': p.id, text: p.text }));
+  $('terms-draft').classList.toggle('hidden', !offer.draft);
+  $('terms-customer').replaceChildren(...items(offer.customer));
+  $('terms-executor-title').classList.toggle('hidden', offer.executor.length === 0);
+  $('terms-executor').replaceChildren(...items(offer.executor));
+  const [y, m, d] = offer.version.split('-');
+  $('terms-version').textContent = `Редакция от ${d}.${m}.${y}`;
 }
 
 // ——— Данные заявки: форма ———

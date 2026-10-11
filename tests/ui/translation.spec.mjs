@@ -408,3 +408,40 @@ test('вычитка и переделка: диспетчер видит обя
   await shot(page, 'vychitka-03-pravilo-vozvrata');
   expect(errors).toEqual([]);
 });
+
+// Оферта (2а.8): «Условия заказа» в карточке заявки — черновик, пока юрист не проверил; заказчику — свои пункты,
+// диспетчеру — и пункты для переводчика.
+test('условия заказа: заказчик видит главное из оферты с пометкой «черновик», диспетчер — и пункты для переводчика', async ({ page, browser, baseURL }) => {
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await signIn(page, '+79990009399');
+  const o = await (await page.request.post('/api/orders', { data: { module: 'translation', service: 'plain', title: 'Перевод справки' }, headers: H })).json();
+  await page.goto(`/kabinet#order=${o.order.id}`);
+  const box = page.locator('#terms-box');
+  await expect(box).toBeVisible();
+  await expect(page.locator('#terms-draft')).toHaveText('Черновик условий: проверяется юристом и пока не действует.');
+  await page.locator('#terms-summary').click();
+  await expect(page.locator('[data-point="guarantee"]')).toContainText('в пределах стоимости заказа');
+  await expect(page.locator('[data-point="quality"]')).toContainText('отвечает переводчик');
+  await expect(page.locator('[data-point="notary"]')).toHaveCount(0);
+  await expect(page.locator('#terms-executor-title')).toBeHidden();
+  await expect(page.locator('#terms-version')).toHaveText('Редакция от 12.10.2026');
+  await box.scrollIntoViewIfNeeded();
+  await shot(page, 'perevod-20-usloviya-zakazchik');
+
+  const ctx = await browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, isMobile: true, hasTouch: true, locale: 'ru-RU' });
+  const dp = await ctx.newPage();
+  dp.on('pageerror', (e) => errors.push(e.message));
+  const disp = await signIn(dp, '+79990009398');
+  const c = new pg.Client({ connectionString: DB_URL });
+  await c.connect();
+  try { await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]); } finally { await c.end(); }
+  await dp.goto(`/kabinet#order=${o.order.id}`);
+  await dp.locator('#terms-summary').click();
+  await expect(dp.locator('#terms-executor-title')).toBeVisible();
+  await expect(dp.locator('[data-point="executor_money"]')).toContainText('80% от услуг');
+  await dp.locator('#terms-executor').scrollIntoViewIfNeeded();
+  await shot(dp, 'perevod-21-usloviya-dispetcher');
+  await ctx.close();
+  expect(errors).toEqual([]);
+});
