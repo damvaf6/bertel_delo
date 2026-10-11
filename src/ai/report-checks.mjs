@@ -433,39 +433,50 @@ function areaMatch(doc, ctx) {
   return out;
 }
 
+// Этаж объекта; вторая группа, если есть, — этажей в доме: «этаж/этажность: 3/9», «на 3 этаже из 9», «этаж 3 из 9»,
+// «Этаж: 3/9», «3/9 эт.» (2.187).
 const FLOOR_AT = [
-  /этаж\s*\/\s*этажност\S*[^\d\n]{0,10}(\d{1,3})\s*\/\s*(\d{1,3})/giu,
-  /(?<![\d/])(\d{1,3})(?:-?(?:м|ом|й))?\s+этаж(?:е|у)?(?![а-яё])/giu,
-  /(?<![а-яё])этаж(?:\s+расположения)?\s*[:\-–—]\s*(\d{1,3})(?![\d/])/giu,
+  /этаж\s*\/\s*этаж(?:ност\S*|ей)[^\d\n]{0,20}?(\d{1,3})\s*\/\s*(\d{1,3})/giu,
+  /(?<![\d/])(\d{1,3})(?:-?(?:м|ом|й))?[^\S\n]+этаж(?:е|у)?(?![а-яё])(?:\s*(?:из|\/)\s*(\d{1,3})(?![\d/,.]\d))?/giu,
+  /(?<![а-яё])этаж(?:е|\s+расположения)?\s*[:\-–—]?\s*(\d{1,3})(?:\s*(?:\/|из)\s*(\d{1,3}))?(?![\d/]|-|\s*этажн)/giu,
+  /(?<![\d/,.])(\d{1,3})\s*\/\s*(\d{1,3})\s*эт(?:\.|аж(?:е|а)?(?![а-яё]))/giu,
 ];
 const FLOORS_AT = [
-  /(?<![\d/])(\d{1,3})(?:-?(?:ти|х|ми))?[-\s]?этажн/giu,
+  /(?<![\d/])(\d{1,3})(?:-?(?:ти|х|ми))?[-\t ]?этажн/giu,
   /(?<!этаж\s*\/\s*)этажност\S*(?:\s+(?:дома|здания))?\s*[:\-–—]?\s*(\d{1,3})(?![\d/])/giu,
-  /(?:всего\s+)?этажей(?:\s+в\s+(?:доме|здании))?\s*[:\-–—]\s*(\d{1,3})/giu,
-  /(?<![\d/])(\d{1,3})\s+этаж(?:а|ей)(?![а-яё])/giu,
+  /(?<!этаж\s*\/\s*)(?:всего\s+)?этажей(?:\s+в\s+(?:доме|здании))?\s*[:\-–—]\s*(\d{1,3})(?![\d/])/giu,
+  /(?<![\d/])(\d{1,3})[^\S\n]+этаж(?:а|ей)(?![а-яё])/giu,
 ];
+// Не про объект: этаж аналога, магазин или нежилые помещения на первом этаже дома; подземные этажи — не этажность.
+const FLOOR_OTHER = /аналог|магазин|нежил|коммерч|офис/iu;
+// Заявка: «5 / 9», «5/9», «5 из 9», «5 этаж из 9», «5».
+export function parseFloorField(value) {
+  const f = String(value ?? '').match(/^\s*(-?\d{1,3})(?:\s*(?:-?(?:й|м|ом))?\s*(?:этаж\S*\s*)?(?:\/|из)\s*(\d{1,3}))?/iu);
+  return f ? { floor: Number(f[1]), floors: f[2] ? Number(f[2]) : null } : null;
+}
 function floorMatch(doc, ctx) {
-  const f = String(ctx.fields?.floor ?? '').match(/^\s*(-?\d{1,3})\s*(?:\/\s*(\d{1,3}))?/);
+  const f = parseFloorField(ctx.fields?.floor);
   if (!f) return [];
-  const [mineFloor, mineFloors] = [Number(f[1]), f[2] ? Number(f[2]) : null];
+  const { floor: mineFloor, floors: mineFloors } = f;
   const out = [];
   const seen = new Set();
   const add = (i, page, idx, key, text) => { if (seen.has(key)) return; seen.add(key); out.push({ page: i, quote: lineAround(page, idx), text }); };
+  const floorsText = (v) => `Этажей в доме ${v}, а в заявке ${mineFloors} — проверьте, нет ли данных другого дома`;
   eachPage(doc, (page, i) => {
-    FLOOR_AT.forEach((re, n) => {
+    for (const re of FLOOR_AT) {
       for (const m of page.matchAll(re)) {
-        if (/аналог/iu.test(lineAround(page, m.index))) continue;
+        if (FLOOR_OTHER.test(lineAround(page, m.index))) continue;
         const v = Number(m[1]);
         if (v !== mineFloor) add(i, page, m.index, `f${v}`, `Этаж ${v} не совпадает с этажом из заявки (${mineFloor}) — проверьте, нет ли данных другого объекта`);
-        if (n === 0 && mineFloors && Number(m[2]) !== mineFloors) add(i, page, m.index, `n${m[2]}`, `Этажей в доме ${m[2]}, а в заявке ${mineFloors} — проверьте, нет ли данных другого дома`);
+        if (m[2] && mineFloors && Number(m[2]) !== mineFloors) add(i, page, m.index, `n${m[2]}`, floorsText(m[2]));
       }
-    });
+    }
     if (!mineFloors) return;
     for (const re of FLOORS_AT) {
       for (const m of page.matchAll(re)) {
-        if (/аналог/iu.test(lineAround(page, m.index))) continue;
+        if (/аналог/iu.test(lineAround(page, m.index)) || /подземн|цокол/iu.test(page.slice(Math.max(0, m.index - 25), m.index + m[0].length))) continue;
         const v = Number(m[1]);
-        if (v !== mineFloors) add(i, page, m.index, `n${v}`, `Этажей в доме ${v}, а в заявке ${mineFloors} — проверьте, нет ли данных другого дома`);
+        if (v !== mineFloors) add(i, page, m.index, `n${v}`, floorsText(v));
       }
     }
   });
