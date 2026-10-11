@@ -79,6 +79,11 @@ export async function notifyStatus(tx, { actor, before, to, by }) {
   }
   if (from === 'in_work' && to === 'review') return notify(tx, 'in_review', opts(await dispatchers(tx)));
   if (from === 'review' && to === 'in_work') return notify(tx, 'rework', opts([executor]));
+  // Бесплатная переделка по просьбе заказчика (2а.7): исполнителю и диспетчерам.
+  if (from === 'done' && to === 'in_work') {
+    await notify(tx, 'redo_staff', opts(await dispatchers(tx)));
+    return notify(tx, 'redo', opts([executor]));
+  }
   if (from === 'review' && to === 'done') {
     await notify(tx, 'done', opts(await customersOf(tx, before)));
     return notify(tx, 'result_accepted', opts([executor]));

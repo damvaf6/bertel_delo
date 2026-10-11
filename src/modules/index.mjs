@@ -39,6 +39,10 @@
 //       видит. field + titles — шаг только при таком значении поля заявки, со своим названием ({ значение: название });
 //       before: 'review' — без шага не сдать на проверку; note — подпись поля пометки; file: true — шаг отмечается своим файлом
 //       результата (файл нотариуса), только с before: 'review'
+//     proofread?: { new_orders, sample_percent, redo_days, refund_note? }  — вычитка и переделка (2а.7): к правилам проверки
+//       добавляется «Вычитка» — обязательно, пока у исполнителя в модуле сдано меньше new_orders дел, иначе выборочно
+//       (sample_percent из 100); заказчик после выдачи может попросить бесплатную переделку (срок — не раньше redo_days дней),
+//       тогда вычитка обязательна; refund_note — правило возврата, его видит диспетчер при отмене после начала работ
 //     analogs?: { services: [id услуги…], min, fields: [поле + services? + near?…] }  — раздел «Аналоги» в деле (2.32): признаки
 //       аналога по виду объекта (цена, дата объявления и регион — у всех, в ядре: src/analogs/analogs.mjs); min — сколько
 //       нужно подтверждённых; near: { field: id числового поля заявки, within?: разница, pct?: разница в % } — предупреждение;
@@ -72,6 +76,14 @@ const ID_RE = /^[a-z][a-z0-9_]{1,31}$/;
 const FIELD_TYPES = ['text', 'longtext', 'number', 'select'];
 const FIELD_KEYS = ['id', 'label', 'type', 'required', 'max', 'min', 'integer', 'options', 'pattern', 'hint', 'upper'];
 const TEXT_MAX = { text: 300, longtext: 2000 };
+
+// Правило «Вычитка» (2а.7): добавляется к правилам проверки модуля, если вычитка этого дела нужна (orders.proofread).
+export const PROOFREAD_CHECK = Object.freeze({ id: 'proofread', title: 'Вычитка: текст прочитан целиком, ошибок нет' });
+export const PROOFREAD_REASONS = Object.freeze({
+  new: 'обязательная — у исполнителя ещё мало сданных дел',
+  sample: 'выборочная',
+  redo: 'обязательная — заказчик нашёл ошибку после выдачи',
+});
 
 function fail(where, what) {
   throw new Error(`Описание модуля: ${where}: ${what}`);
@@ -124,7 +136,7 @@ function validateField(f, where) {
 }
 
 export function validateModule(m) {
-  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express', 'signature', 'analogs', 'approaches', 'request_docs', 'repeat', 'executors', 'certificate', 'steps'], 'модуль');
+  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express', 'signature', 'analogs', 'approaches', 'request_docs', 'repeat', 'executors', 'certificate', 'steps', 'proofread'], 'модуль');
   if (!ID_RE.test(m.id ?? '')) fail('модуль', `неверный id «${m.id}»`);
   const at = `модуль ${m.id}`;
   if (!nonEmpty(m.name)) fail(at, 'нет названия');
@@ -345,6 +357,18 @@ export function validateModule(m) {
       for (const k of ['hint', 'note']) if (st[k] !== undefined && (typeof st[k] !== 'string' || !st[k].trim())) fail(w, `${k} — строка`);
     }
   }
+  // Вычитка и переделка (2а.7) — необязательно.
+  if (m.proofread !== undefined) {
+    const where = `${at}, вычитка`;
+    const p = m.proofread;
+    onlyKeys(p, ['new_orders', 'sample_percent', 'redo_days', 'refund_note'], where);
+    const int = (v, min, max) => Number.isInteger(v) && v >= min && v <= max;
+    if (!int(p.new_orders, 0, 100)) fail(where, 'new_orders — целое от 0 до 100');
+    if (!int(p.sample_percent, 0, 100)) fail(where, 'sample_percent — целое от 0 до 100');
+    if (!int(p.redo_days, 1, 30)) fail(where, 'redo_days — целое от 1 до 30');
+    if (p.refund_note !== undefined && (typeof p.refund_note !== 'string' || !p.refund_note.trim())) fail(where, 'refund_note — строка');
+    if ((m.checks ?? []).some((c) => c.id === PROOFREAD_CHECK.id)) fail(where, `id «${PROOFREAD_CHECK.id}» занят правилом проверки модуля`);
+  }
   // Выбор подходов к оценке (2.33) — необязательно: без него черновик пишется со всеми разделами.
   if (m.approaches !== undefined) {
     const where = `${at}, подходы`;
@@ -535,6 +559,11 @@ export function createRegistry(modules = DEFAULT_MODULES) {
         out.push({ id: st.id, title, by: st.by, before: st.before ?? null, hint: st.hint ?? null, note: st.note ?? null, file: !!st.file });
       }
       return out;
+    },
+    // Вычитка и переделка (2а.7): настройки модуля или null.
+    proofread(moduleId) {
+      const p = modulesList.find((x) => x.id === moduleId)?.proofread;
+      return p ? { new_orders: p.new_orders, sample_percent: p.sample_percent, redo_days: p.redo_days, refund_note: p.refund_note ?? null } : null;
     },
     // Нужна ли подпись результата УКЭП исполнителя до сдачи на проверку (2.5).
     signatureRequired(moduleId, serviceId) {

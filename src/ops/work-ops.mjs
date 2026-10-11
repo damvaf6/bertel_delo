@@ -7,6 +7,7 @@ import { HttpError } from '../http/core.mjs';
 import { aiReviewSide, isStaff, messageSide, orderSides, seesReviewDetails } from '../access/policy.mjs';
 import { aiReviewView } from '../ai/ai.mjs';
 import { FINAL } from '../orders/workflow.mjs';
+import { PROOFREAD_CHECK, PROOFREAD_REASONS } from '../modules/index.mjs';
 import { audit, text } from './util.mjs';
 import { notifyMessage } from '../notify/notify.mjs';
 import { messagePhrases } from '../orders/phrases.mjs';
@@ -15,8 +16,14 @@ const MESSAGE_MAX = 4000;
 const NOTE_MAX = 1000;
 
 // Отметки текущего (или последнего) круга проверки по правилам услуги и итог.
-export async function reviewState(sql, registry, order) {
+// Правила проверки дела: правила модуля и, если вычитка нужна (2а.7, orders.proofread), — «Вычитка».
+export function reviewRules(registry, order) {
   const rules = registry.checks(order.module, order.service);
+  return PROOFREAD_REASONS[order.proofread] && registry.proofread(order.module) ? [...rules, { ...PROOFREAD_CHECK }] : rules;
+}
+
+export async function reviewState(sql, registry, order) {
+  const rules = reviewRules(registry, order);
   const marks = order.review_round > 0
     ? await sql`select check_id, verdict, note, at from result_checks where order_id = ${order.id} and round = ${order.review_round}`
     : [];
@@ -27,6 +34,7 @@ export async function reviewState(sql, registry, order) {
   });
   return {
     round: order.review_round,
+    ...(PROOFREAD_REASONS[order.proofread] ? { proofread: { reason: order.proofread, name: PROOFREAD_REASONS[order.proofread] } } : {}),
     checks,
     summary: {
       total: checks.length,
@@ -115,7 +123,7 @@ export function workOps() {
       access: { resource: 'order', param: 'id', need: 'read' },
       async handler({ sql, actor, order, params, body, registry }) {
         if (!orderSides(actor, order).includes('dispatcher')) throw new HttpError(403, 'forbidden', 'Недостаточно прав');
-        const rule = registry.checks(order.module, order.service).find((c) => c.id === params.check);
+        const rule = reviewRules(registry, order).find((c) => c.id === params.check);
         if (!rule) throw new HttpError(404, 'not_found', 'Такого правила проверки нет');
         const verdict = String(body?.verdict ?? '');
         if (!['ok', 'issue'].includes(verdict)) throw new HttpError(400, 'bad_input', 'Отметка: «в порядке» или «замечание»');

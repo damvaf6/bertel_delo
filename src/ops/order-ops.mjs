@@ -1,6 +1,7 @@
 // Единая «Заявка» (задача 1.3): услуга из описания модуля, поля, срок, основание, статусы и история.
 // Решения Дамира 30.09.2026: срок обязателен; основание — договор по умолчанию, определение суда — с номером, датой
 // и файлом; отмена заказчиком — только до начала работ; перечень услуг и поля меняются через разработку.
+import { randomInt } from 'node:crypto';
 import { HttpError } from '../http/core.mjs';
 import { LEVEL, executorSignOrg, isStaff, memberOf, orderLevel, orderSides, visibleOrdersFilter } from '../access/policy.mjs';
 import { BASIS_KINDS, cleanValues, missingRequired } from '../modules/index.mjs';
@@ -14,6 +15,16 @@ import { missingSteps } from './step-ops.mjs';
 import { notify, notifyStatus, orgHeads } from '../notify/notify.mjs';
 
 const LEVEL_NAME = ['none', 'read', 'write', 'manage'];
+
+// Признаки модуля для шагов статуса: 'redo' — бесплатная переделка после выдачи (модуль с вычиткой, 2а.7).
+const features = (registry, order) => (registry.proofread(order.module) ? ['redo'] : []);
+
+// Нужна ли вычитка (2а.7) при первой сдаче на проверку: новый исполнитель (сдал в модуле меньше new_orders дел) — 'new',
+// иначе выборочно — 'sample' или 'none'. rand — целое от 0 до 99.
+export function proofreadReason(cfg, doneCount, rand) {
+  if (doneCount < cfg.new_orders) return 'new';
+  return rand < cfg.sample_percent ? 'sample' : 'none';
+}
 const DEADLINE_MAX_DAYS = 2 * 365;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -256,8 +267,10 @@ export function orderOps() {
           // («туда нужен нотариальный перевод») — всем, кто видит заявку.
           quote: isStaff(actor) || orderSides(actor, order).includes('customer') ? moduleQuote(order) : null,
           notices: moduleNotices(order),
+          // Правило возврата (2а.7) — диспетчеру при отмене после начала работ.
+          cancel_note: orderSides(actor, order).includes('dispatcher') ? registry.proofread(order.module)?.refund_note ?? null : null,
           // Закрыть неоплаченную заявку нельзя — такой кнопки и не показываем (1.6).
-          actions: availableActions(order.status, orderSides(actor, order)).filter((a) => a.to !== 'closed' || !!order.paid_at),
+          actions: availableActions(order.status, orderSides(actor, order), features(registry, order)).filter((a) => a.to !== 'closed' || !!order.paid_at),
           history: history.map((h) => ({ ...h, from_name: STATUS_NAME[h.from_status] ?? null, to_name: STATUS_NAME[h.to_status] })),
         };
       },
@@ -323,10 +336,11 @@ export function orderOps() {
           // Строка заявки блокируется: два одновременных шага не пройдут оба.
           const cur = await tx.one`select * from orders where id = ${order.id} for update`;
           if (cur.status !== from) throw new HttpError(409, 'status_changed', 'Статус заявки уже изменился, обновите страницу');
-          const t = findTransition(cur.status, to, orderSides(actor, cur));
+          const feats = features(registry, cur);
+          const t = findTransition(cur.status, to, orderSides(actor, cur), feats);
           if (!t) {
             // Шаг есть, но делает его другая сторона (например, диспетчер) — нет прав; шага нет вовсе — так нельзя.
-            if (TRANSITIONS.some((x) => x.from === cur.status && x.to === to)) throw new HttpError(403, 'forbidden', 'Недостаточно прав');
+            if (TRANSITIONS.some((x) => x.from === cur.status && x.to === to && (!x.feature || feats.includes(x.feature)))) throw new HttpError(403, 'forbidden', 'Недостаточно прав');
             throw new HttpError(409, 'bad_transition', `Из статуса «${STATUS_NAME[cur.status]}» так нельзя`);
           }
           if (t.reason && !reason) throw new HttpError(400, 'reason_required', 'Укажите причину');
@@ -379,12 +393,31 @@ export function orderOps() {
             const left = checks.filter((c) => !c.verdict);
             if (left.length) throw new HttpError(409, 'review_incomplete', `Не все правила проверены: ${left.map((c) => c.title).join('; ')}`);
           }
+          // Вычитка (2а.7): решается при первой сдаче на проверку; переделка по просьбе заказчика — всегда с вычиткой и сроком
+          // не раньше чем через redo_days дней; передача другому исполнителю — решается заново при его сдаче.
+          const pr = registry.proofread(cur.module);
+          let proofread = cur.proofread;
+          let redoDeadline = null;
+          if (pr && to === 'review' && !cur.proofread) {
+            const { n } = await tx.one`select count(*)::int as n from orders where executor_user_id = ${cur.executor_user_id}
+                                       and module = ${cur.module} and status in ('done', 'closed') and id <> ${cur.id}`;
+            proofread = proofreadReason(pr, n, randomInt(100));
+          }
+          if (cur.status === 'done' && to === 'in_work') {
+            if (!cur.executor_user_id) throw new HttpError(409, 'no_executor', 'У заявки нет исполнителя — напишите диспетчеру');
+            proofread = 'redo';
+            redoDeadline = addDays(todayMsk(), pr.redo_days);
+          }
+          if (to === 'matching') proofread = null;
           // Закрыть можно только оплаченную заявку (оплата — при заказе, до предложения исполнителю; 1.6а).
           if (to === 'closed' && !cur.paid_at) throw new HttpError(409, 'not_paid', 'Заявка ещё не оплачена');
           // Отмена после начала работ: диспетчер указывает, по чьей причине; при отказе заказчика — сделанную долю работы.
           let fault = null;
           let percent = null;
           if (to === 'cancelled' && WORK_STARTED.includes(cur.status)) {
+            // Переделка после выдачи (2а.7): исполнителю уже выплачено — отменить с возвратом отсюда нельзя.
+            const paidOut = await tx.one`select 1 from payouts where order_id = ${cur.id}`;
+            if (paidOut) throw new HttpError(409, 'paid_out', 'Результат уже выдавался и исполнителю выплачено — отмена с возвратом здесь невозможна, переделка продолжается');
             fault = String(body?.fault ?? '');
             if (!['executor', 'customer'].includes(fault)) throw new HttpError(400, 'fault_required', 'Укажите, по чьей причине отмена: исполнителя или заказчика');
             if (fault === 'customer') {
@@ -413,7 +446,9 @@ export function orderOps() {
                    cancel_fault = case when ${to} = 'cancelled' then ${fault} else cancel_fault end,
                    done_percent = case when ${to} = 'cancelled' then ${percent}::int else done_percent end,
                    submitted_at = case when ${to} = 'matching' then coalesce(submitted_at, now()) else submitted_at end,
-                   review_round = case when ${to} = 'review' then review_round + 1 else review_round end
+                   review_round = case when ${to} = 'review' then review_round + 1 else review_round end,
+                   proofread = ${proofread},
+                   deadline = case when ${redoDeadline}::date is null then deadline else greatest(deadline, ${redoDeadline}::date) end
             where id = ${cur.id} returning *`;
           await tx`insert into order_status_history (order_id, from_status, to_status, actor_id, side, reason)
                    values (${cur.id}, ${cur.status}, ${to}, ${actor.id}, ${t.by}, ${reason})`;
