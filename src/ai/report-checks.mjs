@@ -1007,23 +1007,104 @@ function analogMatch(docs, ctx) {
     if (Number.isFinite(area) && area > 0 && !has(area, 0.051)) out.push(at(`${name}: площадь ${String(area).replace('.', ',')} кв. м в отчёте не найдена — проверьте площадь в таблице аналогов`));
   });
   // Ссылки под «Аналог № N» в отчёте, которых нет в деле (без скриншота и времени получения платформой).
+  // 2.184: ссылка из дела, но под чужим номером (под «Аналог № 2» — объявление аналога 1 из дела) — тоже находка:
+  // скриншоты в приложении подписаны номерами дела. Номер — первая ячейка строки таблицы или ближайшее «Аналог № N»
+  // без другой ссылки между ними.
+  const keys = list.map((a) => hostPath(a.url));
+  const caseNo = (hp) => {
+    const hit = keys.map((k, i) => (k && k.startsWith(hp) ? i + 1 : 0)).filter(Boolean);
+    return hit.length === 1 ? hit[0] : 0;
+  };
   let maxNo = 0;
   const seen = new Set();
   for (const doc of docs) {
     eachPage(doc, (page, p) => {
       const marks = [...page.matchAll(ANALOG_NO)].map((m) => ({ at: m.index, n: Number(m[1]) })).filter((x) => x.n >= 1 && x.n <= 30);
       for (const x of marks) maxNo = Math.max(maxNo, x.n);
+      let prevUrl = -1;
       for (const m of page.matchAll(URL_RE)) {
         const before = marks.filter((x) => x.at < m.index && m.index - x.at <= 300).pop();
         const hp = hostPath(m[0].replace(/[.,;:]+$/, ''));
+        const row = lineAround(page, m.index).match(TABLE_ROW_NO);
+        const label = row ? Number(row[1]) : before && before.at > prevUrl ? before.n : 0;
+        prevUrl = m.index;
+        if (!hp) continue;
         // Ссылка, перенесённая в PDF на следующую строку, читается обрезанной — своя, если с неё начинается ссылка дела.
-        if (!before || !hp || [...mine].some((x) => x.startsWith(hp)) || seen.has(hp)) continue;
+        if ([...mine].some((x) => x.startsWith(hp))) {
+          const k = caseNo(hp);
+          if (label && k && label !== k && label <= n && !seen.has(`${label}:${k}`)) {
+            seen.add(`${label}:${k}`);
+            out.push({ doc, page: p, quote: lineAround(page, m.index), text: `У аналога № ${label} в отчёте ссылка аналога ${k} из дела (${siteOf(list[k - 1].url)}) — номера в отчёте и в деле разные, а скриншоты в приложении подписаны по делу: проверьте порядок аналогов` });
+          }
+          continue;
+        }
+        if (!before || seen.has(hp)) continue;
         seen.add(hp);
         out.push({ doc, page: p, quote: lineAround(page, m.index), text: `Ссылка у аналога № ${before.n} в отчёте — не из аналогов дела: добавьте объявление в раздел «Аналоги» (ссылка и скриншот со временем) или проверьте ссылку` });
       }
     });
   }
+  out.push(...analogPriceOrder(docs, list));
   if (maxNo > n) out.unshift(at(`В отчёте есть аналог № ${maxNo}, а в деле ${many} — добавьте недостающие в раздел «Аналоги» или проверьте нумерацию`));
+  return out;
+}
+
+// ——— 2.184: цена аналога — в его строке (столбце) таблицы, а не у соседа ———
+// Строка таблицы «| N | … |» — у аналога № N; строка «Цена …» с ценами по столбцам — по порядку аналогов. Находка, если
+// в строке (столбце) аналога нет ни его цены, ни цены после корректировок, но стоит цена другого аналога дела —
+// строки переставлены или цена перенесена не туда. Совпадение цен у двух аналогов находкой не считается. Строки берём
+// только под шапкой «№ … Цена …» (не таблицы позиций и корректировок, где номер — не номер аналога).
+const TABLE_ROW_NO = /^\s*\|\s*(?:аналог\S*\s*)?(?:№\s*)?(\d{1,2})\s*\|/iu;
+function analogPriceOrder(docs, list) {
+  const own = list.map((a) => [a.fields?.price_rub, adjusted(a)?.price].filter((x) => Number.isFinite(x)));
+  const near = (vals, x) => vals.some((v) => Math.abs(v - x) <= 1);
+  const wrong = (no, vals) => {
+    if (!own[no - 1]?.length || vals.some((x) => near(own[no - 1], x))) return null;
+    for (const x of vals) {
+      const k = own.findIndex((o, i) => i !== no - 1 && near(o, x));
+      if (k >= 0) return { x, k: k + 1 };
+    }
+    return null;
+  };
+  const out = [];
+  const seen = new Set();
+  const say = (doc, p, quote, no, hit) => {
+    if (seen.has(no)) return;
+    seen.add(no);
+    const a = list[hit.k - 1];
+    out.push({ doc, page: p, quote, text: `У аналога № ${no} в таблице отчёта цена ${fmt(hit.x)} руб. — это цена аналога ${hit.k} из дела (${siteOf(a.url)}); у аналога ${no} из дела — ${fmt(list[no - 1].fields.price_rub)} руб.: проверьте порядок строк и цены в таблице` });
+  };
+  for (const doc of docs) {
+    eachPage(doc, (page, p) => {
+      let head = false; // строки берём только под шапкой таблицы аналогов: «| № | … | Цена … |» (не перечень позиций)
+      for (const line of page.split('\n')) {
+        const row = line.match(TABLE_ROW_NO);
+        if (!row && /^\s*\|/u.test(line) && !/^\s*\|\s*цен/iu.test(line)) {
+          const first = line.split('|')[1].trim();
+          head = /^(?:№|n|аналог|п\/п)/iu.test(first) && /цен/iu.test(line) && !/позици|средн/iu.test(line);
+          continue;
+        }
+        if (row) {
+          if (!head) continue;
+          const no = Number(row[1]);
+          if (no < 1 || no > list.length) continue;
+          const vals = numbersIn(line.slice(row[0].length)).filter((x) => x >= 1000);
+          const hit = vals.length && wrong(no, vals);
+          if (hit) say(doc, p, line.trim(), no, hit);
+          continue;
+        }
+        // Таблица «по столбцам»: «| Цена предложения, руб. | 14 000 000 | 14 500 000 | 15 000 000 |».
+        const cells = line.split('|').map((c) => c.trim()).filter(Boolean);
+        if (cells.length < 2 || !/^цен/iu.test(cells[0]) || /кв\.?\s*м|м2|м²|за\s+(?:1|ед)/iu.test(cells[0])) continue;
+        const cols = cells.slice(1).map((c) => numbersIn(c).filter((x) => x >= 1000));
+        if (cols.length !== list.length || cols.some((c) => c.length !== 1)) continue;
+        cols.forEach((c, i) => {
+          const hit = wrong(i + 1, c);
+          if (hit) say(doc, p, line.trim(), i + 1, hit);
+        });
+      }
+    });
+  }
   return out;
 }
 
@@ -1443,7 +1524,7 @@ export const AUTO_CHECKS = Object.freeze({
   mileage_match: 'пробег в отчёте — как в заявке (с запасом 10%)',
   approach_weights: 'веса подходов в согласовании в сумме 1',
   analog_list: 'аналогов не меньше трёх, ссылки у разных аналогов не повторяются',
-  analog_match: 'аналоги в отчёте — как подтверждённые в деле: ссылка, цена, площадь, число аналогов',
+  analog_match: 'аналоги в отчёте — как подтверждённые в деле: ссылка, цена, площадь, число аналогов; у каждого номера — своя ссылка и своя цена',
   purchase_match: 'дата и цена покупки товара — как в заявке',
   questions_answered: 'каждый вопрос заявки найден в выводах',
   final_value: 'итоговая стоимость одна на титуле, в задании, выводах, итоговой таблице и в сопроводительном письме',
