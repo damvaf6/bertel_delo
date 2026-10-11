@@ -17,7 +17,7 @@ export async function orderSources(sql, registry, order) {
   const [ph] = await sql`select count(*)::int as n, min(created_at) as first, max(created_at) as last from documents
                          where order_id = ${order.id} and kind = 'inspection' and deleted_at is null`;
   const spec = registry.analogs(order.module, order.service);
-  const analogs = spec ? inItemOrder(spec, order, await sql`select url, received_at from order_analogs where order_id = ${order.id}
+  const analogs = spec ? inItemOrder(spec, order, await sql`select url, received_at, fields from order_analogs where order_id = ${order.id}
                                                             and deleted_at is null and confirmed_at is not null order by id`) : [];
   return { materials, dossier, photos: ph, analogs };
 }
