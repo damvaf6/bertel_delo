@@ -1648,7 +1648,9 @@ test('две подписи (2.5а): эксперт от организации 
     buffer: testGoskeySignature({ digest, subject: 'Тестовый эксперт компании' }) });
   await expect(sp.locator('#doc-msg')).toHaveText('Подпись проверена и добавлена');
   await expect(doc.locator('[data-sig="method"]').first()).toContainText('загружена готовым файлом из приложения «Госключ»');
-  expect(warned).toContain('Не отмечено исправленными пунктов замечания руководителя: 1. Руководитель это увидит.');
+  // 2.185: в предупреждении — какой именно пункт не отмечен.
+  expect(warned).toContain('Не отмечено исправленными пунктов замечания руководителя: 1.\n2. Проверьте итог.\nРуководитель это увидит.');
+  expect(warned).not.toContain('1. Раздел 5');
   await expect(sp.locator('#org-returns li').first()).toContainText('отчёт-компании.pdf · исправлено');
   await expect(sp.locator('#org-returns-lead')).toHaveText('Все замечания учтены. История возвратов:');
   await expect(sp.locator('#next-steps [data-step="fix"]')).toHaveCount(0);
@@ -7309,7 +7311,7 @@ test('новая версия после возврата (2.159): в окне �
   await expect(ep.locator('#doc-msg')).toHaveText('Пункт 2 отмечен исправленным');
   await expect(box.locator('[data-role="sig-points-state"]')).toContainText('исправлено 2 из 3');
   await expect(box.locator('ul.points > li').nth(0)).toHaveText('1. Нет даты осмотра — исправлено');
-  await expect(box.locator('[data-role="sig-points-hint"]')).toHaveText('Не отмечено: 1. Подписать можно и так — руководитель увидит, какие пункты не отмечены.');
+  await expect(box.locator('[data-role="sig-points-hint"]')).toHaveText('Не отмечено: 1 (пункт 3). Подписать можно и так — руководитель увидит, какие пункты не отмечены.');
   await expect(ep.locator('#org-returns [data-role="points-left"]').first()).toHaveText('Исправлено 2 из 3');
   await box.scrollIntoViewIfNeeded();
   await shot(ep, 'c10-ekspert-podpis-novoy-versii-punkty');
@@ -7318,7 +7320,9 @@ test('новая версия после возврата (2.159): в окне �
   ep.once('dialog', (d) => { warned = d.message(); d.accept(); });
   await doc.getByRole('button', { name: 'Подписать', exact: true }).click();
   await expect(ep.locator('#doc-msg')).toHaveText('Файл подписан');
-  expect(warned).toContain('Не отмечено исправленными пунктов замечания руководителя: 1. Руководитель это увидит.');
+  // 2.185: перед подписью — какие пункты не отмечены, с текстом; отмеченные не названы.
+  expect(warned).toContain('Не отмечено исправленными пунктов замечания руководителя: 1.\n3. Итог не совпадает\nРуководитель это увидит. Если исправили — отметьте пункт в окне подписи.');
+  expect(warned).not.toContain('Нет даты осмотра');
   await expect(doc.locator('[data-sig="points"]')).toHaveCount(0);
   await expect(ep.locator('#org-returns li').first()).toContainText('Отчёт Версиева.pdf · исправлено');
   await expect(fileState).toHaveCount(0); // подписан — возврат закрыт, строки о файле нет
