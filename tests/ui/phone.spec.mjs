@@ -3719,7 +3719,7 @@ test('сводка за месяц (2.78): руководитель видит �
   const row = hp.locator('#org-report > li').filter({ hasText: 'Эксперт Сводкин' });
   await expect(row).toContainText('принял: 1 · сдано: 1');
   await expect(row.locator('.overdue')).toHaveText('позже срока: 1');
-  await expect(row.locator('[data-expert-pace]')).toHaveText(/^в среднем \d (день|дня|дней) от принятия до сдачи · позже первоначального срока: 1 \(с переносом — 1\)$/);
+  await expect(row.locator('[data-expert-pace]')).toHaveText(/^в первоначальный срок, без переносов: 0 из 1 · в среднем \d (день|дня|дней) от принятия до сдачи · позже первоначального срока: 1 \(с переносом — 1\)$/);
   await expect(hp.locator('#org-report-total')).toContainText('позже первоначального срока: 1 (с переносом — 1)');
   await expect(row).toContainText('возвращено: Вами — 2, на доработку — 1');
   // От возврата до новой подписи (2.168).

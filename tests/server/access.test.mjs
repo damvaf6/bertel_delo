@@ -1787,7 +1787,7 @@ test('сводка за месяц по экспертам (2.78): только 
   await S.sql`update organizations set created_at = now() - interval '2 years' where id = ${orgC.id}`;
   assert.equal((await report(headC)).body.report.months.length, 13);
   assert.deepEqual(empty.total, { accepted: 0, done: 0, done_late: 0, overdue_now: 0, returned_head: 0, returned_dispatcher: 0, fee_kop: 0, paid_kop: 0,
-    late_first: 0, late_first_moved: 0, avg_days: null, resign_days: null, resign_n: 0, resign_wait: 0, prev: null });
+    late_first: 0, late_first_moved: 0, first_kept: 0, avg_days: null, resign_days: null, resign_n: 0, resign_wait: 0, prev: null });
   assert.equal(empty.prev_month, null, 'прошлый месяц раньше создания организации — сравнения нет (2.124)');
   for (const q of ['?month=2020-01', '?month=2099-01', '?month=13', '?month=2026-13']) assert.equal((await report(headC, q)).body.error, 'bad_month', q);
   // Дела: e1 принял 2 дела, одно сдал вовремя, другое позже срока; одно в работе просрочено; руководитель вернул раз,
@@ -1835,7 +1835,7 @@ test('сводка за месяц по экспертам (2.78): только 
   const e1 = r.experts.find((e) => e.user_id === ex.e1.user.id);
   assert.deepEqual({ ...e1, user_id: undefined, full_name: undefined }, { user_id: undefined, full_name: undefined,
     accepted: 2, done: 2, done_late: 1, overdue_now: 1, returned_head: 1, returned_dispatcher: 1, fee_kop: 800_000 + 1_600_000, paid_kop: 800_000,
-    avg_days: 0, late_first: 1, late_first_moved: 0, resign_days: null, resign_n: 0, resign_wait: 1,
+    avg_days: 0, late_first: 1, late_first_moved: 0, first_kept: 1, resign_days: null, resign_n: 0, resign_wait: 1,
     remarks: [{ text: 'Нет даты осмотра.', n: 1 }],
     prev: { done: 0, on_time: 0, returned: 0 }, services: [{ name: 'Оценка недвижимости', n: 2 }] });
   assert.deepEqual(r.experts.find((e) => e.user_id === ex.e2.user.id).prev, { done: 0, on_time: 0, returned: 1 }, 'возврат прошлого месяца (2.124)');
@@ -1923,16 +1923,18 @@ test('сводка за месяц (2.117): дни от принятия до с
                       now() - interval '3 days')`;
   await make(ex.b.user.id, day(-3), 10);
   const r = (await head.req('GET', `/api/orgs/${org.id}/report`)).body.report;
-  const pick = (u) => { const x = r.experts.find((e) => e.user_id === u); return [x.avg_days, x.late_first, x.late_first_moved, x.done, x.done_late]; };
-  assert.deepEqual(pick(ex.a.user.id), [5, 2, 1, 3, 1]);
-  assert.deepEqual(pick(ex.b.user.id), [6.5, 1, 0, 2, 1]);
+  const pick = (u) => { const x = r.experts.find((e) => e.user_id === u); return [x.avg_days, x.late_first, x.late_first_moved, x.done, x.done_late, x.first_kept]; };
+  // В первоначальный срок, без переносов (2.188): у a — только первое дело (второе сдано в срок, но после переноса).
+  assert.deepEqual(pick(ex.a.user.id), [5, 2, 1, 3, 1, 1]);
+  assert.deepEqual(pick(ex.b.user.id), [6.5, 1, 0, 2, 1, 1]);
+  assert.equal(r.total.first_kept, 2);
   assert.equal(r.total.avg_days, 5.8, '(4 + 6 + 3 + 10) / 4 = 5,75');
   assert.equal(r.total.late_first, 3);
   assert.equal(r.total.late_first_moved, 1);
   const csv = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv`, undefined, { binary: true })).body.toString('utf8');
-  assert.ok(csv.includes('Дней в среднем от принятия до сдачи;Позже первоначального срока;Из них с переносом срока'), csv);
-  assert.ok(/Эксперт Медленнов;[^\r\n]*;6,5;1;0;;0\r\n/.test(csv), csv);
-  assert.ok(/Итого;[^\r\n]*;5,8;3;1;;0\r\n/.test(csv), csv);
+  assert.ok(csv.includes('Дней в среднем от принятия до сдачи;Позже первоначального срока;Из них с переносом срока;В первоначальный срок, без переносов'), csv);
+  assert.ok(/Эксперт Медленнов;[^\r\n]*;6,5;1;0;1;;0\r\n/.test(csv), csv);
+  assert.ok(/Итого;[^\r\n]*;5,8;3;1;2;;0\r\n/.test(csv), csv);
 });
 
 test('сводка за месяц (2.124): сравнение с прошлым месяцем — сдано, в срок, возвраты у эксперта и в итоге', async () => {
@@ -2053,7 +2055,7 @@ test('сводка за месяц (2.168): дни от возврата рук�
   const now = (await head.req('GET', `/api/orgs/${org.id}/report`)).body.report;
   assert.deepEqual([now.total.resign_days, now.total.resign_n, now.total.resign_wait], [null, 0, 0]);
   const csv = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv&month=${prev}`, undefined, { binary: true })).body.toString('utf8');
-  assert.ok(csv.includes('Из них с переносом срока;Дней в среднем от возврата до новой подписи;Ждут новой подписи после возврата'), csv);
+  assert.ok(csv.includes('Из них с переносом срока;В первоначальный срок, без переносов;Дней в среднем от возврата до новой подписи;Ждут новой подписи после возврата'), csv);
   assert.ok(/Эксперт Исправлов;[^\r\n]*;0,8;0\r\n/.test(csv), csv);
   assert.ok(/Эксперт Ждунов;[^\r\n]*;;1\r\n/.test(csv), csv);
   // Чужой организации сводка не видна.

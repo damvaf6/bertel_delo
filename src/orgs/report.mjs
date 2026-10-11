@@ -12,6 +12,8 @@
 // принятия до сдачи, как в общей скорости 2.117 и в карточке эксперта 2.139.
 // От возврата до новой подписи (2.168): по возвратам руководителя за месяц — сколько дней (до десятых, по часам) в среднем
 // прошло до следующей подписи эксперта по тому же делу; ещё не подписанные заново — отдельным числом, в среднее не входят.
+// В первоначальный срок, без переносов (2.188): сдано не позже срока, на который дело принимали, и ни одного одобренного
+// переноса; дела без срока сюда не входят.
 // Месяц — по московскому времени. Выгрузка таблицей — CSV для Excel (точка с запятой, BOM, суммы с запятой).
 import { HttpError } from '../http/core.mjs';
 import { splitAmount } from '../money/money.mjs';
@@ -88,7 +90,8 @@ const dayMsk = (t) => todayMsk(new Date(t));
 const daysBetween = (a, b) => Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
 
 // Скорость и сроки по сданным делам (2.117): средние дни от принятия до сдачи (до десятых; дела без отметки о принятии —
-// не в среднем) и сдано позже первоначального срока — всего и из них с одобренным переносом.
+// не в среднем) и сдано позже первоначального срока — всего и из них с одобренным переносом; в первоначальный срок без
+// переносов (2.188).
 function pace(done) {
   const days = done.filter((o) => o.taken_at).map((o) => Math.max(0, daysBetween(dayMsk(o.taken_at), dayMsk(o.at))));
   const firstLate = done.filter((o) => {
@@ -100,6 +103,7 @@ function pace(done) {
     days_n: days.length,
     late_first: firstLate.length,
     late_first_moved: firstLate.filter((o) => o.moved_from).length,
+    first_kept: done.filter((o) => o.deadline && !o.moved_from && dayMsk(o.at) <= o.deadline).length,
   };
 }
 const avgDays = (p) => (p.days_n ? Math.round((p.days_sum / p.days_n) * 10) / 10 : null);
@@ -292,6 +296,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
       avg_days: avgDays(p),
       late_first: p.late_first,
       late_first_moved: p.late_first_moved,
+      first_kept: p.first_kept,
       ...resign(q.resign.filter((r) => r.user_id === e.user_id)),
       remarks: topRemarks(q.remarkItems.filter((i) => i.user_id === e.user_id), TOP_REMARKS_EXPERT).map(({ text, n }) => ({ text, n })),
       prev: cmp ? cmp.experts.get(e.user_id) : null,
@@ -300,7 +305,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
   });
   const sum = (k) => (k === 'overdue_now' && !current ? null : rows.reduce((s, r) => s + r[k], 0));
   const keys = ['accepted', 'done', 'done_late', 'overdue_now', 'returned_head', 'returned_dispatcher', 'fee_kop', 'paid_kop',
-    'late_first', 'late_first_moved'];
+    'late_first', 'late_first_moved', 'first_kept'];
   const all = pace(q.done);
   return {
     month,
@@ -388,10 +393,10 @@ export function reportCsv(orgName, r) {
   const head = ['Эксперт', 'Принял дел', 'Сдано (готово)', 'Из них позже срока', ...(r.current ? ['Просрочено сейчас'] : []),
     'Возвращено руководителем', 'Возвращено на доработку', 'Вознаграждение за сданные, ₽', 'Выплачено, ₽',
     'Дней в среднем от принятия до сдачи', 'Позже первоначального срока', 'Из них с переносом срока',
-    'Дней в среднем от возврата до новой подписи', 'Ждут новой подписи после возврата'];
+    'В первоначальный срок, без переносов', 'Дней в среднем от возврата до новой подписи', 'Ждут новой подписи после возврата'];
   const line = (name, x) => [name, x.accepted, x.done, x.done_late, ...(r.current ? [x.overdue_now] : []),
     x.returned_head, x.returned_dispatcher, rubCell(x.fee_kop), rubCell(x.paid_kop),
-    daysCell(x.avg_days), x.late_first, x.late_first_moved, daysCell(x.resign_days), x.resign_wait];
+    daysCell(x.avg_days), x.late_first, x.late_first_moved, x.first_kept, daysCell(x.resign_days), x.resign_wait];
   const day = todayMsk();
   const lines = [
     [`Сводка по экспертам — ${orgName}`],
