@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Проверка сертификата перевода · БЕРТЕЛ Дело</title>
+  <link rel="stylesheet" href="/app.css">
+  <script type="module" src="/proverka.js"></script>
+</head>
+<body>
+  <div class="test-mark hidden" id="test-mark">Проверочная версия · только тестовые данные</div>
+  <header class="top"><div class="brand">БЕРТЕЛ Дело<small>проверка сертификата перевода</small></div></header>
+  <main>
+    <section class="card">
+      <h1>Проверка сертификата перевода</h1>
+      <p class="muted">Наведите камеру телефона на QR-код листа сертификата или введите код с листа.</p>
+      <form id="code-form" class="row">
+        <label for="code" class="visually-hidden">Код с листа</label>
+        <input id="code" name="code" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX" maxlength="20">
+        <button type="submit">Проверить</button>
+      </form>
+      <p class="msg" id="code-msg" role="status" aria-live="polite"></p>
+    </section>
+    <section class="card hidden" id="result">
+      <h2 id="state"></h2>
+      <dl class="facts">
+        <dt>Номер</dt><dd id="number"></dd>
+        <dt>Дата выдачи</dt><dd id="issued"></dd>
+        <dt>Перевод</dt><dd id="languages"></dd>
+        <dt>Переводчик</dt><dd id="translator"></dd>
+        <dt>Отпечаток файла перевода (SHA-256)</dt><dd id="sha" class="mono"></dd>
+      </dl>
+      <p class="muted">Перевод выполнен через БЕРТЕЛ Дело, квалификация переводчика проверена платформой. Это перевод без
+        нотариального удостоверения.</p>
+      <h2>Тот ли это файл</h2>
+      <p class="muted">Выберите полученный файл перевода — страница сверит его отпечаток с сертификатом. Файл никуда не
+        отправляется, сверка идёт на Вашем устройстве.</p>
+      <input type="file" id="file">
+      <p class="msg" id="file-msg" role="status" aria-live="polite"></p>
+    </section>
+  </main>
+</body>
+</html>

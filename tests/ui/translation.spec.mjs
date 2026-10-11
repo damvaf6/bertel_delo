@@ -237,3 +237,63 @@ test('нотариусы: администратор заводит нотари
   } finally { await db.end(); }
   expect(errors).toEqual([]);
 });
+
+test('сертификат платформы: переводчик выдаёт к файлу, получатель проверяет по ссылке и сверяет файл', async ({ page, browser, baseURL }) => {
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  const tr = await signIn(page, '+79990000985');
+  const db = new pg.Client({ connectionString: DB_URL });
+  await db.connect();
+  const FILE = Buffer.from('%PDF-1.4 тестовый перевод договора');
+  let url;
+  try {
+    await db.query("update users set full_name = 'Тестова Переводчица Ивановна' where id = $1", [tr.id]);
+    await db.query("insert into specialists (user_id, regions, capacity, tax_status) values ($1, '{moscow}', 5, 'self_employed')", [tr.id]);
+    await db.query("insert into specialist_permits (user_id, module, service) values ($1, 'translation', 'plain')", [tr.id]);
+    await db.query("insert into dossier_items (user_id, kind, title, number, language, verified_at) values ($1, 'language', 'Тестовый диплом', 'ТД-7', 'en', now())", [tr.id]);
+    const owner = (await db.query("insert into users (phone) values ('+79990000986') on conflict (phone) do update set phone = excluded.phone returning id")).rows[0];
+    const fields = { recipient: 'business', language: 'en', direction: 'to_ru', doc_kind: 'contract', docs: 1, pages: 2, urgent: 'no', delivery: 'none' };
+    const o = (await db.query(`insert into orders (owner_user_id, title, module, service, status, deadline, fields, executor_user_id)
+      values ($1, 'Перевод договора поставки', 'translation', 'plain', 'in_work', $2, $3, $4) returning id`, [owner.id, inDays(3), JSON.stringify(fields), tr.id])).rows[0];
+    await page.goto(`/kabinet#order=${o.id}`);
+    await expect(page.locator('#order-status')).toHaveText('В работе');
+    await page.locator('#result-file').setInputFiles({ name: 'perevod-dogovora.pdf', mimeType: 'application/pdf', buffer: FILE });
+    const doc = page.locator('li.doc').filter({ hasText: 'perevod-dogovora.pdf' });
+    await expect(doc.locator('[data-action="cert-issue"]')).toBeVisible();
+    await doc.scrollIntoViewIfNeeded();
+    await shot(page, 'sertifikat-01-vydat');
+    page.once('dialog', (d) => d.accept());
+    await doc.locator('[data-action="cert-issue"]').click();
+    await expect(page.locator('#doc-msg')).toContainText('Сертификат № П-');
+    const block = doc.locator('[data-role="certificate"]');
+    await expect(block).toContainText('Сертификат платформы № П-');
+    url = await block.locator('[data-role="cert-url"]').textContent();
+    expect(url).toMatch(/\/proverka\.html#[A-Z2-9]{12}$/);
+    await block.scrollIntoViewIfNeeded();
+    await shot(page, 'sertifikat-02-vydan');
+    const [dl] = await Promise.all([page.waitForEvent('download'), block.locator('[data-action="cert-sheet"]').click()]);
+    expect(dl.suggestedFilename()).toMatch(/^Сертификат П-\d{4}-\d{6}\.docx$/);
+  } finally { await db.end(); }
+
+  // Получатель: без входа, по ссылке из QR-кода.
+  const ctx = await browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, isMobile: true, hasTouch: true, locale: 'ru-RU' });
+  const pp = await ctx.newPage();
+  pp.on('pageerror', (e) => errors.push(e.message));
+  await pp.goto(new URL(url).pathname + new URL(url).hash);
+  await expect(pp.locator('#state')).toHaveText('Сертификат действует');
+  await expect(pp.locator('#translator')).toHaveText('Тестова Переводчица Ивановна');
+  await expect(pp.locator('#languages')).toHaveText('с английского на русский');
+  await pp.locator('#file').setInputFiles({ name: 'perevod-dogovora.pdf', mimeType: 'application/pdf', buffer: FILE });
+  await expect(pp.locator('#file-msg')).toContainText('Совпадает');
+  await shot(pp, 'sertifikat-03-proverka-sovpadaet');
+  await pp.locator('#file').setInputFiles({ name: 'drugoj.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 изменённый') });
+  await expect(pp.locator('#file-msg')).toContainText('Не совпадает');
+  // Код вручную: неверный — понятное сообщение.
+  await pp.locator('#code').fill('AAAA-AAAA-AAAA');
+  await pp.getByRole('button', { name: 'Проверить' }).click();
+  await expect(pp.locator('#code-msg')).toContainText('не найден');
+  await expect(pp.locator('#result')).toBeHidden();
+  await shot(pp, 'sertifikat-04-kod-ne-najden');
+  await ctx.close();
+  expect(errors).toEqual([]);
+});

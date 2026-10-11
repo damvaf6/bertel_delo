@@ -65,6 +65,7 @@ button:disabled { opacity: .6; cursor: default; }
 .doc .sig-state.ok { color: var(--ok); }
 .doc .sig-state.bad { color: var(--danger); }
 .doc .sig-state.warn { color: #7a4b00; }
+.doc .cert-link { overflow-wrap: anywhere; font-size: 14px; }
 .doc .sig-ai { color: #7a4b00; font-weight: 600; margin: 4px 0; }
 .doc .sig-points { margin: 6px 0; padding: 6px 8px; border-left: 3px solid var(--line, #ccc); }
 .doc .sig-points.warn { border-left-color: #c98a00; }
@@ -374,3 +375,8 @@ h2.inline { display: inline; }
 #nt-windows button { flex: 0 0 auto; padding-left: 10px; padding-right: 10px; }
 #notary-form label.row { flex-wrap: nowrap; align-items: flex-start; }
 #notary-form label.row > span { flex: 1 1 auto; min-width: 0; }
+/* Проверка сертификата перевода (2а.5) */
+.mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; }
+#result h2.ok { color: var(--ok); }
+#result h2.bad { color: var(--danger); }
+#code-form input { flex: 1 1 160px; min-width: 0; letter-spacing: 1px; }
