@@ -33,7 +33,7 @@ const WORK_STARTED = ['in_work', 'review'];
 const DOC_KIND_RU = { basis: 'Основание', result: 'Результат работы', inspection: 'Фото осмотра' };
 let current = null; // { order, access, editable, actions, history }
 
-const dateTimeRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+const dateTimeRu = (s) => new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
 export function dayRu(iso) {
   const [y, m, d] = String(iso).split('-').map(Number);
   return new Date(y, m - 1, d).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
@@ -290,7 +290,7 @@ function renderProgress() {
   const last = history[history.length - 1];
   $('history-details').classList.toggle('hidden', !last);
   $('history-summary').textContent = last
-    ? `История: ${history.length} · последнее — ${last.to_name}, ${new Date(last.at).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}` : '';
+    ? `История: ${history.length} · последнее — ${last.to_name}, ${new Date(last.at).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}` : '';
   $('history').replaceChildren(...history.slice().reverse().map((h) => el('li', {},
     el('div', { class: 'title', text: h.to_name }),
     el('div', { class: 'muted', text: [dateTimeRu(h.at), { dispatcher: 'диспетчер', executor: 'исполнитель' }[h.side] || 'заказчик'].join(' · ') }),
@@ -456,7 +456,7 @@ function renderOrgReturns(list) {
     : 'Все замечания учтены. История возвратов:';
   const item = (r) => el('li', { class: r.open ? 'return open' : 'return', 'data-return': String(r.id) },
     el('div', { class: 'title', text: `${r.filename} · ${r.open ? 'исправить' : 'исправлено'}` }),
-    el('div', { class: 'muted', text: [r.by, r.org, new Date(r.at).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })].filter(Boolean).join(' · ') }),
+    el('div', { class: 'muted', text: [r.by, r.org, new Date(r.at).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', dateStyle: 'short', timeStyle: 'short' })].filter(Boolean).join(' · ') }),
     ...returnFileState(r),
     ...(r.items?.length ? returnPoints(r) : [el('div', { class: 'comment', text: r.comment })]));
   $('org-returns').replaceChildren(...[...open].reverse().map(item), ...list.filter((r) => !r.open).reverse().map(item));
@@ -472,7 +472,7 @@ function returnFileState(r) {
   if (!fresh.length) return [el('div', { class: 'return-file warn', 'data-role': 'return-file', text: 'Возвращённый файл удалён — загрузите исправленный файл и подпишите его.' })];
   const d = fresh.at(-1);
   return [el('div', { class: 'return-file ok', 'data-role': 'return-file' },
-    el('span', { text: `Исправленный файл «${d.filename}» загружен ${new Date(d.created_at).toLocaleDateString('ru-RU')} — ждёт Вашей подписи${fresh.length > 1 ? ` (новых файлов: ${fresh.length})` : ''}. ` }),
+    el('span', { text: `Исправленный файл «${d.filename}» загружен ${new Date(d.created_at).toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow' })} — ждёт Вашей подписи${fresh.length > 1 ? ` (новых файлов: ${fresh.length})` : ''}. ` }),
     el('button', { class: 'link', 'data-action': 'to-return-file', onclick: () => toDoc(d.id) }, 'К подписи'))];
 }
 
@@ -543,7 +543,7 @@ function signReturnPoints(d) {
     };
     const done = r.items.length - r.left;
     return el('div', { class: r.left ? 'sig-points warn' : 'sig-points', 'data-sig': 'points', 'data-return': String(r.id) },
-      el('div', { 'data-role': 'sig-points-state', text: `Замечание руководителя от ${new Date(r.at).toLocaleDateString('ru-RU')}${r.document_id === d.id ? '' : ` к файлу «${r.filename}»`}: исправлено ${done} из ${r.items.length}` }),
+      el('div', { 'data-role': 'sig-points-state', text: `Замечание руководителя от ${new Date(r.at).toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow' })}${r.document_id === d.id ? '' : ` к файлу «${r.filename}»`}: исправлено ${done} из ${r.items.length}` }),
       el('ul', { class: 'points' }, ...r.items.map(point)),
       ...(r.left ? [el('div', { class: 'muted', 'data-role': 'sig-points-hint', text: `Не отмечено: ${r.left}. Подписать можно и так — руководитель увидит, какие пункты не отмечены.` })] : []));
   });
@@ -598,7 +598,7 @@ const waitedFor = (iso, now = Date.now()) => {
   const h = Math.floor((now - Date.parse(iso)) / 3600_000);
   return h < 1 ? 'меньше часа' : h < 24 ? `${h} ч` : `${Math.floor(h / 24)} дн.${h % 24 ? ` ${h % 24} ч` : ''}`;
 };
-const atRu = (iso) => new Date(iso).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+const atRu = (iso) => new Date(iso).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
 function renderSignWait(w, signOrg) {
   $('sign-wait-box').classList.toggle('hidden', !w);
   if (!w) return;

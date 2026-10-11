@@ -5,7 +5,7 @@ import { setNext } from '/next.js';
 const $ = (id) => document.getElementById(id);
 const SIDE_RU = { customer: 'Заказчик', executor: 'Исполнитель', dispatcher: 'Диспетчер' };
 const VERDICT_RU = { ok: 'В порядке', issue: 'Замечание' };
-const timeRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+const timeRu = (s) => new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
 let orderRef = null;
 
 // ——— Проверка результата ———

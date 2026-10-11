@@ -18,7 +18,7 @@ import { showProblems } from '/problems.js';
 import { matcher, wireSearch } from '/search.js';
 
 const $ = (id) => document.getElementById(id);
-const dateRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+const dateRu = (s) => new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
 
 async function start() {
   api('GET', '/api/health').then((h) => {
@@ -129,7 +129,7 @@ function deadlineText(o) {
 
 // Руководитель вернул файл (2.173): отметка «Вернули» и что осталось — нажатие ведёт сразу к замечаниям по пунктам.
 function returnedText(r) {
-  const when = new Date(r.at).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+  const when = new Date(r.at).toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long' });
   const left = r.fresh_file ? 'исправленный файл загружен — подпишите его'
     : r.left ? `не исправлено пунктов: ${r.left} из ${r.points}` : r.points ? 'все пункты отмечены — подпишите файл заново' : 'исправьте и подпишите файл заново';
   return `Руководитель${r.by ? ` (${r.by})` : ''} вернул ${when} · ${left}`;

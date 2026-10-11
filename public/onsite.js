@@ -6,16 +6,13 @@ import { loadInspection } from '/inspect.js';
 import { setNext } from '/next.js';
 
 const $ = (id) => document.getElementById(id);
-const timeRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+const timeRu = (s) => new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
 const STATE_RU = { active: 'назначен', finished: 'завершён', cancelled: 'отменён', closed: 'закрыт' };
 let ctx = null;   // { order }
 
-// Значение для поля «дата и время» по местному времени: завтра, 10:00.
+// Поле «дата и время» — по Москве (2.181), как время выезда у помощника и в «Моих сроках»: по умолчанию завтра, 10:00.
 function tomorrowAt10() {
-  const d = new Date(Date.now() + 86400_000);
-  d.setHours(10, 0, 0, 0);
-  const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T10:00`;
+  return `${new Date(Date.now() + 3 * 3_600_000 + 86_400_000).toISOString().slice(0, 10)}T10:00`;
 }
 
 export async function loadOnsite(current) {
@@ -65,7 +62,7 @@ $('onsite-assign').addEventListener('submit', async (e) => {
   if (!when) return say($('onsite-msg'), 'Укажите дату и время выезда');
   $('onsite-new').disabled = true;
   try {
-    await api('POST', `/api/orders/${ctx.order.id}/onsite`, { helper_id: $('onsite-helper').value, planned_at: new Date(when).toISOString() });
+    await api('POST', `/api/orders/${ctx.order.id}/onsite`, { helper_id: $('onsite-helper').value, planned_at: `${when}:00+03:00` });
     await Promise.all([loadOnsite({ order: ctx.order }), loadInspection({ order: ctx.order })]);
     say($('onsite-msg'), 'Выезд назначен — помощник получил уведомление', 'ok');
   } catch (err) { say($('onsite-msg'), err.message); } finally { $('onsite-new').disabled = false; }

@@ -4,7 +4,7 @@ import { api, el, say } from '/common.js';
 import { state } from '/shell.js';
 
 const $ = (id) => document.getElementById(id);
-const dt = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+const dt = (s) => new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
 let orderId = null;
 
 // access — уровень вошедшего по заявке (read / write / manage); выгружать могут сторона заказчика и служебные

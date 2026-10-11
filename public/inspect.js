@@ -5,7 +5,7 @@ import { api, el, say } from '/common.js';
 import { setNext } from '/next.js';
 
 const $ = (id) => document.getElementById(id);
-const timeRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+const timeRu = (s) => new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
 const STATE_RU = { active: 'действует', finished: 'владелец нажал «Готово»', revoked: 'отозвана', expired: 'срок истёк', closed: 'закрыта' };
 let ctx = null;   // { order, silent }
 

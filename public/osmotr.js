@@ -25,7 +25,7 @@ api('GET', '/api/health').then((h) => { if (h?.test_data) $('test-mark').classLi
 // Секрет из адреса больше не нужен в строке браузера (не попадёт в историю, если страницу покажут кому-то с экрана).
 if (!visitId) history.replaceState(null, '', location.pathname);
 
-const dateRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+const dateRu = (s) => new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
 
 function closed(text) {
   $('intro').classList.add('hidden');

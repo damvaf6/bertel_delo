@@ -9,7 +9,7 @@ import { loadDraftDiff } from '/draftdiff.js';
 import { emptySections } from '/draftempty.js';
 
 const $ = (id) => document.getElementById(id);
-const timeRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+const timeRu = (s) => new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
 const GAP = /\[(?:заполнить|описать)[^\]]*\]/gi;
 let ctx = null;   // { order, draft, reload }
 
@@ -60,7 +60,7 @@ async function loadPast(r) {
   $('draft-past-hint').textContent = `Возьмутся: ${p.sections.map((t) => `«${t.replace(/^\d+\.\s*/, '')}»`).join(', ')}. `
     + 'Остальные разделы не изменятся. Имена, адреса, номера и суммы прошлого дела заменятся пометками «заполнить».';
   $('draft-past-case').replaceChildren(...p.cases.map((c) => el('option', { value: c.id },
-    `${c.ref} от ${new Date(c.at).toLocaleDateString('ru-RU')}`)));
+    `${c.ref} от ${new Date(c.at).toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow' })}`)));
 }
 
 $('draft-past-take').addEventListener('click', () => run($('draft-past-take'), async () => {

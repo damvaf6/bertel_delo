@@ -5,7 +5,7 @@ import { setNext } from '/next.js';
 
 const $ = (id) => document.getElementById(id);
 const dayRu = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
-const whenRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+const whenRu = (s) => new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
 const OUTCOME = { approved: ['перенесён', 'ok'], declined: ['отказано', 'warn'], withdrawn: ['отозвана', ''] };
 let ctx = null; // { order, reload, open }
 
