@@ -12,6 +12,7 @@ export const HINTS = ['customer', 'expert', 'head', 'dispatcher'];
 import { orderSignatures, orgReturns, signaturesView, signWait } from './sign-ops.mjs';
 import { aiSignHints } from '../ai/ai.mjs';
 import { orderCertificates, siteOrigin } from './certificate-ops.mjs';
+import { stepFiles } from './step-ops.mjs';
 import { caseCertificate } from '../translation/certificate.mjs';
 
 // Облако принимает запрос не больше 3,5 МБ (Yandex Serverless Containers) — через ядро только до 3 МБ (2.49).
@@ -165,11 +166,13 @@ export function coreOps(cfg) {
           if (c) return { certificate: caseCertificate(c, origin) };
           return mine && order.status === 'in_work' && d.uploaded_by === actor.id ? { certificate: null, can_certify: true } : {};
         };
+        // Файл нотариуса (2а.6) — пометка у файла результата.
+        const marked = results ? await stepFiles(sql, registry, order) : new Map();
         return {
           documents: docs.filter((d) => d.kind !== 'result' || results)
             .map((d) => (d.kind === 'result' ? { ...publicDoc(d), signatures: signaturesView(signs.get(d.id)),
               // Исполнителю — свой ли файл: после передачи дела файлы прежнего эксперта в сдачу не идут (2.110).
-              ...(mine ? { own: d.uploaded_by === actor.id } : {}), ...(aiHints.has(d.id) ? { ai_check: aiHints.get(d.id) } : {}), ...certOf(d) } : publicDoc(d))),
+              ...(mine ? { own: d.uploaded_by === actor.id } : {}), ...(aiHints.has(d.id) ? { ai_check: aiHints.get(d.id) } : {}), ...certOf(d), ...(marked.has(d.id) ? { step_file: marked.get(d.id) } : {}) } : publicDoc(d))),
           results_hidden: !results,
           signature_required: required,
           // От какой организации нужна вторая подпись (null — только эксперт).
@@ -230,6 +233,8 @@ export function coreOps(cfg) {
           await tx`update doc_requests set document_id = null, fulfilled_at = null where document_id = ${doc.id}`;
           // Сертификат удалённого файла перевода (2а.5) отозван: страница проверки так и скажет.
           await tx`update certificates set revoked_at = now() where document_id = ${doc.id} and revoked_at is null`;
+          // Файл нотариуса удалён (2а.6) — шаг «файл нотариуса загружен» снова не отмечен.
+          await tx`delete from order_steps where document_id = ${doc.id}`;
           await audit(tx, actor, 'document.delete', 'document', doc.id);
         });
         await providers.storage.delete(doc.storage_key);

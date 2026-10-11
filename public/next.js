@@ -64,6 +64,9 @@ function steps() {
   // Черновик сделан, когда он есть (файл из черновика называется по виду документа: «Отчёт об оценке», «Заключение…»).
   if (visible('draft-box')) items.push({ id: 'draft', title: 'Черновик заключения от ИИ (по желанию)', done: !!ctx.draft?.exists, go: go('draft-box'), optional: true });
   items.push({ id: 'result', title: 'Файл результата', done: results.length > 0, go: go('result-upload-box') });
+  // Ход заказа перевода (2а.6): оригинал получен, подписано у нотариуса, файл нотариуса — без них не сдать.
+  const st = ctx.steps;
+  if (st?.need) items.push({ id: 'steps', title: `Ход заказа (отмечено ${st.done} из ${st.need})`, done: st.done >= st.need, go: go('steps-box') });
   // Руководитель вернул файл с замечанием (2.27) — сначала исправить по замечанию.
   const returnsOpen = (docs?.org_returns ?? []).filter((r) => r.open);
   if (returnsOpen.length) items.push({ id: 'fix', title: 'Исправить по замечанию руководителя', done: false, go: go('org-returns-box') });
@@ -83,6 +86,7 @@ function steps() {
   // Черновик уже есть (2.66) — файл результата обычно из него: кнопка ведёт к «Приложить как файл результата».
   else if (firstOpen?.id === 'result' && ctx.draft?.exists) main = { label: 'Приложить черновик как файл результата', run: () => { go('draft-confirm')(); $('draft-confirm')?.focus({ preventScroll: true }); } };
   else if (firstOpen?.id === 'result') main = { label: 'Добавить файл результата', run: () => { reveal('result-upload-box'); $('result-file')?.click(); } };
+  else if (firstOpen?.id === 'steps') main = { label: 'Отметить шаги заказа', run: go('steps-box') };
   else if (firstOpen?.id === 'sign') main = { label: unsigned.length > 1 ? `Подписать все файлы (${unsigned.length})` : 'Подписать файл', run: () => { reveal('docs'); ctx.signAll?.(); } };
   else if (firstOpen?.id === 'org') main = { label: 'Ждём подпись руководителя', disabled: true };
   const done = items.filter((i) => i.done).length;
@@ -285,6 +289,7 @@ function nowBox(s) {
     draft: 'draft-box',
     result: ctx.draft?.exists && visible('draft-box') ? 'draft-box' : 'docs-box',
     ai: 'review-box',
+    steps: 'steps-box',
     sign: 'docs-box',
     org: 'docs-box',
   }[open?.id];
@@ -294,9 +299,10 @@ function nowBox(s) {
 const count = (n, one, few, many) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? one : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? few : many}`;
 
 function foldNotes() {
-  const { docs, review, draft, analogs, docreqAll, deadline, handover, inspect, onsite, chat, notes: myNotes, similar } = ctx;
+  const { docs, review, draft, analogs, docreqAll, deadline, handover, inspect, onsite, chat, notes: myNotes, similar, steps: st } = ctx;
   const notes = {};
   if (myNotes) notes['notes-box'] = myNotes;
+  if (st) notes['steps-box'] = `отмечено ${st.all} из ${st.total}`;
   if (deadline) notes['deadline-box'] = `до ${dayRu(deadline.deadline)}${deadline.open ? ' · просьба о переносе ждёт ответа' : ''}`;
   if (handover) notes['handover-box'] = handover;
   if (docreqAll) notes['docreq-box'] = docreqAll.total ? `получено ${docreqAll.got} из ${docreqAll.total}` : 'ничего не запрошено';
