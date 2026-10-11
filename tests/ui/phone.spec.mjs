@@ -1277,6 +1277,25 @@ test('дистанционный осмотр: специалист выдаёт
   await expect(facade.locator('.badge').first()).toHaveText('фото: 2');
   await expect(facade).not.toContainText('Попросили переснять');
   await expect(facade).toContainText('Осмотр · Дом снаружи · 2.jpg');
+  // 2.183: у фото с картинкой нет «Открыть» — открывает сама картинка.
+  await expect(facade.locator('[data-action="open-photo"]:visible')).toHaveCount(0);
+  // Больше трёх фото в шаге — полоса картинок сразу, подробный список свёрнут.
+  for (const n of [3, 4]) {
+    await f2.locator('input[type=file]').setInputFiles({ name: `facade${n}.jpg`, mimeType: 'image/jpeg', buffer: jpeg });
+    await expect(f2.locator('.badge')).toHaveText(`Фото: ${n - 1}`);
+  }
+  await sp.reload();
+  await expect(facade.locator('.badge').first()).toHaveText('фото: 4');
+  const strip = facade.locator('.photo-strip img.photo-thumb');
+  await expect(strip).toHaveCount(4);
+  await strip.last().scrollIntoViewIfNeeded();
+  await expect.poll(() => strip.last().evaluate((i) => i.complete && i.naturalWidth)).toBe(320);
+  await expect(facade.locator('details.step-photos summary')).toHaveText('Все фото шага: 4');
+  await expect(facade.locator('details.step-photos')).not.toHaveAttribute('open', '');
+  await shot(sp, '84c-specialist-osmotr-polosa');
+  const [full4] = await Promise.all([sp.waitForRequest((r) => r.url().includes('/link')), strip.nth(3).click()]);
+  expect(full4.url()).toContain('/api/documents/');
+  await sp.goto(`/kabinet#order=${id}`);
 
   // Заказчик видит фото в документах, удалить их не может.
   await page.goto(`/kabinet#order=${id}`);

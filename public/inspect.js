@@ -98,27 +98,43 @@ function renderSteps(r, photos) {
 }
 
 // Фото шага: «Фото N» — тот же номер, что в отчёте Word (2.96). До трёх — сразу, больше — свёрнуто (2.49: при 100 фото страница дела уходила на десятки экранов).
+// Картинки — сразу и без «Открыть» у каждого (2.183): нажал картинку — фото целиком. Больше трёх — первые шесть картинок
+// полосой над свёрнутым списком. «Открыть» остаётся только у снимка без картинки или если картинка не загрузилась.
 const PHOTOS_OPEN = 3;
+const STRIP = 6;
 function stepPhotos(photos) {
-  const row = (p) => el('div', { class: 'doc' },
-    ...(p.thumb ? [thumbImg(p)] : []),
-    el('div', { class: 'photo-text' },
-      el('div', { class: 'name', text: `Фото ${p.no} · ${p.filename}` }),
-      el('div', { class: 'photo-meta', text: photoLine(p) }),
-      ...(p.geo ? [] : [el('div', { class: 'photo-meta warn', text: 'без геометки' })])),
-    el('button', { class: 'secondary', 'data-action': 'open-photo', onclick: () => open(p) }, 'Открыть'));
+  const row = (p) => {
+    const btn = el('button', { class: 'secondary', 'data-action': 'open-photo', onclick: () => open(p) }, 'Открыть');
+    if (p.thumb) btn.classList.add('hidden');
+    return el('div', { class: 'doc' },
+      ...(p.thumb ? [thumbImg(p, () => btn.classList.remove('hidden'))] : []),
+      el('div', { class: 'photo-text' },
+        el('div', { class: 'name', text: `Фото ${p.no} · ${p.filename}` }),
+        el('div', { class: 'photo-meta', text: photoLine(p) }),
+        ...(p.geo ? [] : [el('div', { class: 'photo-meta warn', text: 'без геометки' })])),
+      btn);
+  };
   if (photos.length <= PHOTOS_OPEN) return photos.map(row);
   const noGeo = photos.filter((p) => !p.geo).length;
-  return [el('details', { class: 'step-photos' },
-    el('summary', { text: `Показать фото: ${photos.length}${noGeo ? ` (без геометки: ${noGeo})` : ''}` }),
-    ...photos.map(row))];
+  const withThumb = photos.filter((p) => p.thumb);
+  const strip = withThumb.slice(0, STRIP);
+  const more = photos.length - strip.length;
+  return [
+    ...(strip.length ? [el('div', { class: 'photo-strip', 'data-action': 'photo-strip' },
+      ...strip.map((p) => thumbImg(p)),
+      ...(more ? [el('span', { class: 'photo-more muted', text: `ещё ${more}` })] : []))] : []),
+    el('details', { class: 'step-photos' },
+      el('summary', { text: `${strip.length ? 'Все фото шага' : 'Показать фото'}: ${photos.length}${noGeo ? ` (без геометки: ${noGeo})` : ''}` }),
+      ...photos.map(row))];
 }
 
-// Картинка снимка (2.71): грузится, когда видна на экране; нажал — фото целиком. Не загрузилась — остаётся «Открыть».
-function thumbImg(p) {
-  const img = el('img', { class: 'photo-thumb', src: `/api/documents/${p.document_id}/thumb`, alt: p.filename, loading: 'lazy',
-    width: '96', height: '72', 'data-action': 'photo-thumb', onclick: () => open(p) });
-  img.addEventListener('error', () => img.remove());
+// Картинка снимка (2.71): грузится, когда видна на экране; нажал — фото целиком. Не загрузилась — убирается, onFail
+// показывает «Открыть».
+function thumbImg(p, onFail) {
+  const img = el('img', { class: 'photo-thumb', src: `/api/documents/${p.document_id}/thumb`, alt: `Фото ${p.no}`, title: `Фото ${p.no} — открыть целиком`,
+    loading: 'lazy', width: '96', height: '72', role: 'button', tabindex: '0', 'data-action': 'photo-thumb', onclick: () => open(p) });
+  img.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(p); } });
+  img.addEventListener('error', () => { img.remove(); onFail?.(); });
   return img;
 }
 
