@@ -283,7 +283,8 @@ export async function aiReviewView(sql, order) {
 // Напоминание перед подписью (2.136): для каждого файла результата — последняя ИИ-проверка этого круга, в которой этот файл
 // (эта версия: новый файл — новый документ) был. Нет такой — 'none' (other: проверяли, но другие файлы, например прежнюю
 // версию); есть пункты «посмотрите» — 'attention' с названиями правил; иначе null. Подсказка, не запрет: подпись не держит.
-export async function aiSignHints(sql, registry, order, docIds) {
+// Руководителю перед подписью организации (2.186) — { ok: true }: проверено без замечаний — 'ok' с временем проверки.
+export async function aiSignHints(sql, registry, order, docIds, { ok = false } = {}) {
   const out = new Map();
   if (!docIds.length) return out;
   const rows = await sql`select items, files, at from ai_reviews
@@ -293,7 +294,8 @@ export async function aiSignHints(sql, registry, order, docIds) {
     const r = rows.find((x) => (x.files ?? []).some((f) => f.id === id));
     if (!r) { out.set(id, { state: 'none', other: rows.length > 0 }); continue; }
     const att = (r.items ?? []).filter((i) => i.hint === 'attention');
-    out.set(id, att.length ? { state: 'attention', at: r.at, count: att.length, titles: att.map((i) => (titles.get(i.id) ?? i.id).split(':')[0].trim()).slice(0, 3) } : null);
+    out.set(id, att.length ? { state: 'attention', at: r.at, count: att.length, titles: att.map((i) => (titles.get(i.id) ?? i.id).split(':')[0].trim()).slice(0, 3) }
+      : ok ? { state: 'ok', at: r.at } : null);
   }
   return out;
 }
