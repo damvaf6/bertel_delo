@@ -227,5 +227,46 @@ test('карточка эксперта: возвраты за год — рук
   await addMember(S.sql, org.id, spec5.user.id, 'member');
   assert.equal((await spec5.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
   const z = (await head.req('GET', `/api/specialists/${spec5.user.id}/card`)).body.returns_year;
-  assert.deepEqual([z.n, z.cases, z.last_day, z.top_remarks], [0, 0, null, []]);
+  assert.deepEqual([z.n, z.cases, z.last_day, z.top_remarks, z.resign_days, z.resign_n, z.resign_wait], [0, 0, null, [], null, 0, 0]);
+});
+
+// 2.176: в «Возвратах за год» — за год в среднем дней от возврата руководителем до новой подписи эксперта по тому же делу
+// и сколько возвратов ещё ждут новой подписи (как в сводке за месяц, 2.168). Подпись до возврата, по другому делу, вторая
+// подпись после возврата, возвраты старше года и чужой организации — не в счёт.
+test('карточка эксперта: от возврата до новой подписи за год — руководителю', async () => {
+  const spec6 = await login(S, '+79990003610');
+  await makeSpecialist(S.sql, spec6.user.id);
+  await addMember(S.sql, org.id, spec6.user.id, 'member');
+  assert.equal((await spec6.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  const other = await makeOrg(S.sql, 'ООО «Чужая 2.176»');
+  const [{ at }] = await S.sql`select now() - interval '30 days' as at`;
+  const hours = (h) => new Date(at.getTime() + h * 3_600_000);
+  const make = async () => {
+    const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Дело 2.176' })).body.order;
+    await S.sql`update orders set executor_user_id = ${spec6.user.id}, status = 'in_work', deadline = ${addDays(todayMsk(), 5)} where id = ${o.id}`;
+    const [d] = await S.sql`insert into documents (order_id, uploaded_by, filename, mime, size_bytes, storage_key)
+      values (${o.id}, ${spec6.user.id}, 'отчёт.pdf', 'application/pdf', 1, ${`test/2176/${o.id}`}) returning id`;
+    return { ...o, doc: d.id };
+  };
+  const ret = (o, h, orgId = org.id) => S.sql`
+    insert into org_returns (order_id, document_id, org_id, executor_user_id, returned_by, filename, comment, created_at)
+    values (${o.id}, ${o.doc}, ${orgId}, ${spec6.user.id}, ${head.user.id}, 'отчёт.pdf', 'Поправьте', ${hours(h)})`;
+  const sign = (o, h, actor = spec6.user.id) => S.sql`
+    insert into audit_log (actor_id, action, subject_type, subject_id, details, at)
+    values (${actor}, 'document.sign', 'document', ${o.doc}, ${JSON.stringify({ order_id: o.id })}, ${hours(h)})`;
+  const [c1, c2, c3, c4] = [await make(), await make(), await make(), await make()];
+  await sign(c1, -5); // до возврата — не в счёт
+  await ret(c1, 0);
+  await sign(c1, 60); // через 60 ч
+  await sign(c1, 90); // вторая после возврата — не в счёт
+  await ret(c2, 0);
+  await sign(c3, 2); // по другому делу — не в счёт
+  await sign(c2, 12); // через 12 ч
+  await ret(c3, 10); // ещё не подписал заново
+  await S.sql`insert into org_returns (order_id, document_id, org_id, executor_user_id, returned_by, filename, comment, created_at)
+    values (${c4.id}, ${c4.doc}, ${org.id}, ${spec6.user.id}, ${head.user.id}, 'отчёт.pdf', 'Старое', now() - interval '400 days')`;
+  await ret(c4, 0, other.id); // чужая организация
+  const r = (await head.req('GET', `/api/specialists/${spec6.user.id}/card`)).body.returns_year;
+  assert.deepEqual([r.n, r.resign_days, r.resign_n, r.resign_wait], [3, 1.5, 2, 1], '(60 + 12) / 2 = 36 ч = 1,5 дня');
+  for (const c of [dispatcher, spec6]) assert.equal((await c.req('GET', `/api/specialists/${spec6.user.id}/card`)).body.returns_year, null);
 });
