@@ -2727,7 +2727,7 @@ test('карточка эксперта (2.35): из подбора у дисп�
   await expect(hp.locator('#expert-returns li[data-remark]').first()).toContainText('2 раза');
   await expect(hp.locator('#expert-returns li[data-remark]').nth(1)).toContainText('Не указан этаж');
   await expect(hp.locator('#expert-returns')).not.toContainText('Квартира в работе');
-  await expect(hp.locator('#expert-returns-resign')).toHaveText(/^После возвратов: новая подпись в среднем через .+\.$/);
+  await expect(hp.locator('#expert-returns-resign')).toHaveText('После возвратов: новая подпись в среднем через 2 дня · ещё не подписано заново: 1.');
   await hp.locator('#expert-returns-box').scrollIntoViewIfNeeded();
   await shot(hp, 'b4g-kartochka-vozvraty-za-god');
   // Сам эксперт видит блок у себя, но без ссылки в «Дела экспертов».
