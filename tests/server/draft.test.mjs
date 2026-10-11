@@ -737,3 +737,23 @@ test('что изменилось между версиями черновика
   }
   assert.equal((await dispatcher.req('GET', `/api/orders/${o.id}/draft/diff?from=${d1.id}`)).body.added, 1);
 });
+
+// 2.177: перед сборкой Word — какие разделы ещё пустые (тот же модуль, что на странице, public/draftempty.js).
+test('пустые разделы черновика: только пометки — пустой, подразделы — нет, текст под заголовком — нет', async () => {
+  const { emptySections } = await import('../../public/draftempty.js');
+  const body = [
+    '## 1. Задание на оценку', 'Основание: договор', '',
+    '## 2. Допущения', '[заполнить: раздел по этому делу]', '',
+    '## 3. Расчёт', '', '### 3.1 Сравнительный подход', '[заполнить: расчёт и итоговая величина]',
+    '### 3.2 Затратный подход', 'Не применялся.', '',
+    '## 4. Описание объекта', 'Фото 1 (кухня): [описать по фото: кухня]', '',
+    '## 5. Выводы',
+  ].join('\n');
+  const list = emptySections(body);
+  assert.deepEqual(list.map((s) => s.title), ['2. Допущения', '3.1 Сравнительный подход', '5. Выводы']);
+  // Положение — начало и конец строки заголовка: по ним страница ставит курсор в раздел.
+  for (const s of list) assert.equal(body.slice(s.at, s.end), `${body.slice(s.at).startsWith('###') ? '###' : '##'} ${s.title}`);
+  assert.deepEqual(emptySections('Текст без заголовков'), []);
+  assert.deepEqual(emptySections(''), []);
+  assert.deepEqual(emptySections(null), []);
+});
