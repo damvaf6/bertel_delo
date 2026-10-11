@@ -105,7 +105,7 @@ test('заявка на перевод: «Куда подаёте», преду�
 test('переводчик: правила самозанятого, диплом на проверку, администратор отмечает «проверен», чек к выплате', async ({ page, browser, baseURL }) => {
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  const tr = await signIn(page, '+79990000963');
+  const tr = await signIn(page, '+79990000971');
   const db = new pg.Client({ connectionString: DB_URL });
   await db.connect();
   try {
@@ -134,10 +134,10 @@ test('переводчик: правила самозанятого, дипло�
     const actx = await browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, isMobile: true, hasTouch: true, locale: 'ru-RU' });
     const ap = await actx.newPage();
     ap.on('pageerror', (e) => errors.push(e.message));
-    const adm = await signIn(ap, '+79990000964');
+    const adm = await signIn(ap, '+79990000972');
     await db.query("update users set platform_role = 'admin' where id = $1", [adm.id]);
     await ap.goto('/kabinet#admin');
-    await ap.locator('#admin-phone').fill('+79990000963');
+    await ap.locator('#admin-phone').fill('+79990000971');
     await ap.locator('#admin-search').click();
     await expect(ap.locator('#sp-tax')).toHaveValue('self_employed');
     const lang = ap.locator('#sp-langs li').first();
@@ -155,7 +155,7 @@ test('переводчик: правила самозанятого, дипло�
 
     // Выплата прошла — самозанятый прикладывает чек «Мой налог».
     const owner = await (await browser.newContext({ baseURL })).newPage();
-    await signIn(owner, '+79990000965');
+    await signIn(owner, '+79990000973');
     const o = await (await owner.request.post('/api/orders', { data: { module: 'translation', service: 'plain', title: 'Перевод диплома' }, headers: H })).json();
     const id = o.order.id;
     const fields = { recipient: 'business', language: 'en', direction: 'to_ru', doc_kind: 'diploma', docs: 1, pages: 1, urgent: 'no', delivery: 'none' };
