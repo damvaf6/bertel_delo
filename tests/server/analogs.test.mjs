@@ -546,6 +546,8 @@ test('Перечень по позициям (2.83): в Word — таблица 
   const shot = (n) => text.slice(text.lastIndexOf(`Аналог ${n} — avito.ru`)).match(/Ссылка: (\S+)/)[1];
   assert.equal(shot(1), urls[1].url);
   assert.equal(shot(4), urls[0].url);
+  // 2.184: в перечне использованных документов — те же номера (было по порядку добавления — ИИ-проверка ловила разнобой).
+  assert.ok(text.includes(`Аналог 1 — avito.ru: ${urls[1].url},`) && text.includes(`Аналог 4 — avito.ru: ${urls[0].url},`), 'перечень документов — номера как в таблице');
 
   // Отчёт собран программой — ИИ-проверка аналогов сходится.
   r = await spec.req('POST', `/api/orders/${o.id}/draft/result`, { from: d.id, confirm: true });
