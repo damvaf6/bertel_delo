@@ -212,6 +212,58 @@ test('перегруженный день (2.134): больше двух дел 
   assert.equal((await list(stranger, b)).status, 404);
 });
 
+// 2.179: выезд на объект в день сдачи считается за дело — два дела к сдаче и выезд помощника — день перегружен.
+test('перегруженный день (2.179): два дела к сдаче и выезд помощника в тот же день — перегружен, готовая причина', async () => {
+  const me = await login(S, '+79990002917');
+  const helper = await login(S, '+79990002918');
+  await makeSpecialist(S.sql, me.user.id);
+  await makeSpecialist(S.sql, helper.user.id);
+  async function inWorkFor(c, title, days) {
+    const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
+    assert.equal((await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: addDays(today, days), fields: FIELDS })).status, 200);
+    assert.equal((await owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
+    await ensurePaid(S.sql, o.id);
+    assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: c.user.id, from: 'matching' })).status, 200);
+    assert.equal((await c.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+    return o;
+  }
+  const busyDay = addDays(today, 6);
+  const dayOf = async (c) => (await c.req('GET', '/api/specialist/me/schedule')).body.schedule.days.find((d) => d.date === busyDay);
+  const visit = (o, day) => S.sql`insert into onsite_visits (order_id, helper_id, assigned_by, planned_at)
+    values (${o.id}, ${helper.user.id}, ${me.user.id}, (${day}::date + time '11:00') at time zone 'Europe/Moscow') returning id`;
+  const a = await inWorkFor(me, 'Квартира: сдача и выезд 1', 6);
+  // Одно дело и выезд — не перегружен.
+  const [v1] = await visit(a, busyDay);
+  let d = await dayOf(me);
+  assert.deepEqual([d.due, d.trips, d.busy], [1, 1, false]);
+  const b = await inWorkFor(me, 'Квартира: сдача и выезд 2', 6);
+  d = await dayOf(me);
+  assert.deepEqual([d.due, d.trips, d.busy], [2, 1, true]);
+  assert.deepEqual(d.items.filter((i) => i.kind === 'deadline').map((i) => i.can_extend), [true, true]);
+  const r = (await list(me, b)).body.reasons.find((x) => x.id === 'busy');
+  assert.equal(r.label, 'Много дел в этот день (2 и выезд)');
+  let next = addDays(busyDay, 1);
+  while ([0, 6].includes(new Date(`${next}T00:00:00Z`).getUTCDay())) next = addDays(next, 1);
+  assert.equal(r.new_deadline, next);
+  // В ближайший будний день после срока — дело и выезд: новый срок — следующий свободный будний.
+  const c = await inWorkFor(me, 'Квартира: сдача и выезд 3', 6);
+  await S.sql`update orders set deadline = ${next} where id = ${c.id}`;
+  await visit(c, next);
+  let after = addDays(next, 1);
+  while ([0, 6].includes(new Date(`${after}T00:00:00Z`).getUTCDay())) after = addDays(after, 1);
+  assert.equal((await list(me, b)).body.reasons.find((x) => x.id === 'busy').new_deadline, after);
+  // У помощника в этот день только свой выезд, сдавать нечего — не перегружен.
+  const h = await dayOf(helper);
+  assert.deepEqual([h.due, h.trips, h.busy], [0, 1, false]);
+  // Выезд отменён — два дела к сдаче, не перегружен; причины «много дел» нет.
+  await S.sql`update onsite_visits set cancelled_at = now() where id = ${v1.id}`;
+  d = await dayOf(me);
+  assert.deepEqual([d.due, d.trips, d.busy], [2, 0, false]);
+  assert.ok(!(await list(me, b)).body.reasons.some((x) => x.id === 'busy'));
+  // Посторонний не видит чужие дела и причины.
+  assert.equal((await list(stranger, b)).status, 404);
+});
+
 // 2.145: свой темп в блоке «Срок» — дней до срока и обычный срок эксперта по этой услуге (средний из «Сдано за год», 2.139);
 // обычно нужно ещё больше, чем осталось, — мягкое предупреждение. Видит только исполнитель.
 test('свой темп (2.145): дней до срока, обычный срок по услуге, «можно не успеть»; только исполнителю', async () => {

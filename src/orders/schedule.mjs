@@ -8,8 +8,23 @@ import { addDays, todayMsk } from './workflow.mjs';
 import { orderRef } from '../notify/registry.mjs';
 
 export const SCHEDULE_DAYS = 14;
-// Перегруженный день (2.134): сдать больше двух дел (в работе и предложенных; сданные на проверку не в счёт).
+// Перегруженный день (2.134): сдать больше двух дел (в работе и предложенных; сданные на проверку не в счёт). Выезд на
+// объект в тот же день (2.179: помощника по своему делу или свой помощником) считается за дело — если в день есть что сдать.
 export const BUSY_DEADLINES = 2;
+export const isBusy = (due, trips = 0) => due > 0 && due + trips > BUSY_DEADLINES;
+
+// Выезды на объект по дням (по Москве), как в «Моих сроках»: не завершённые и не отменённые, дело в работе; человек —
+// исполнитель дела или помощник на выезде.
+export async function tripsByDay(sql, userId, from, to) {
+  const rows = await sql`
+    select to_char(v.planned_at at time zone 'Europe/Moscow', 'YYYY-MM-DD') as day, count(*)::int as n
+    from onsite_visits v join orders o on o.id = v.order_id
+    where v.finished_at is null and v.cancelled_at is null and o.status = 'in_work'
+      and (o.executor_user_id = ${userId} or v.helper_id = ${userId})
+      and (v.planned_at at time zone 'Europe/Moscow')::date between ${from}::date and ${to}::date
+    group by 1`;
+  return new Map(rows.map((r) => [r.day, r.n]));
+}
 const WEEKDAYS = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
 const weekday = (iso) => WEEKDAYS[new Date(`${iso}T00:00:00Z`).getUTCDay()];
 const day = (d) => (d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10));
@@ -89,7 +104,8 @@ export async function expertSchedule(sql, userId, registry, today = todayMsk()) 
     d.items.sort((a, b) => ORDER[a.kind] - ORDER[b.kind] || String(a.time ?? '').localeCompare(String(b.time ?? '')));
     d.deadlines = d.items.filter((i) => i.kind === 'deadline').length;
     d.due = d.items.filter((i) => i.kind === 'deadline' && i.status !== 'review').length;
-    d.busy = d.due > BUSY_DEADLINES;
+    d.trips = d.items.filter((i) => i.kind === 'visit' || i.kind === 'my_visit').length;
+    d.busy = isBusy(d.due, d.trips);
     // «Попросить перенос» — у дел в работе без открытой просьбы (просить можно только по делу в работе, 2.91).
     for (const i of d.items) if (i.kind === 'deadline') i.can_extend = d.busy && i.status === 'in_work' && !i.extend_to;
   }
