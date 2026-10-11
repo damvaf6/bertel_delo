@@ -8,7 +8,7 @@ import { dispatchers, notify, notifyPhone, orgHeads } from '../notify/notify.mjs
 import { awayOf, orgExpertsFor } from './match-ops.mjs';
 import { orgReturns, signWait } from './sign-ops.mjs';
 import { orderRef } from '../notify/registry.mjs';
-import { splitAmount } from '../money/money.mjs';
+import { orderSplit } from '../money/money.mjs';
 import { STATUS_NAME, addDays, isOverdue, todayMsk, weekEnd } from '../orders/workflow.mjs';
 import { monthRu, orgMonthDoneCases, orgMonthReport, reportCsv, reportMonth } from '../orgs/report.mjs';
 import { buildOrgMonthArchive } from './case-ops.mjs';
@@ -225,7 +225,7 @@ export function orgOps() {
           where s.org_id = ${org.id} order by u.full_name nulls last, s.user_id`;
         const ids = experts.map((e) => e.user_id);
         const rows = ids.length ? await sql`
-          select o.id, o.module, o.service, o.status, o.deadline, o.price_kop, o.paid_at, o.executor_user_id, o.updated_at,
+          select o.id, o.module, o.service, o.status, o.deadline, o.price_kop, o.transit_kop, o.paid_at, o.executor_user_id, o.updated_at,
                  o.owner_user_id, o.org_id, o.offer_org_id,
                  p.status as payout_status, p.amount_kop as payout_kop, p.paid_at as payout_paid_at
           from orders o left join payouts p on p.order_id = o.id
@@ -235,7 +235,7 @@ export function orgOps() {
           limit ${CASES_LIMIT}` : [];
         const name = (e) => e?.full_name || 'Без имени';
         const byId = new Map(experts.map((e) => [e.user_id, e]));
-        const feeOf = (o) => (o.payout_kop != null ? Number(o.payout_kop) : o.price_kop ? splitAmount(Number(o.price_kop)).payoutKop : null);
+        const feeOf = (o) => (o.payout_kop != null ? Number(o.payout_kop) : o.price_kop ? orderSplit(o).payoutKop : null);
         // Что ждёт руководителя по делу (2.36): файлы, подписанные экспертом, ждут подписи организации; возврат эксперту
         // ещё не исправлен. Только по делам в работе. С какого времени ждут и когда эксперт напоминал (2.148) — как в
         // очереди подписи эксперта (2.99).
@@ -341,9 +341,9 @@ export function orgOps() {
                  coalesce(sum(amount_kop) filter (where status <> 'succeeded'), 0)::bigint as pending
           from payouts where executor_user_id = any(${ids}::uuid[])` : { paid: 0, pending: 0 };
         const working = ids.length ? await sql`
-          select price_kop from orders where executor_user_id = any(${ids}::uuid[]) and status in ('in_work', 'review')
+          select price_kop, transit_kop from orders where executor_user_id = any(${ids}::uuid[]) and status in ('in_work', 'review')
             and price_kop is not null and paid_at is not null` : [];
-        const waiting = Number(month.pending) + working.reduce((s, o) => s + splitAmount(Number(o.price_kop)).payoutKop, 0);
+        const waiting = Number(month.pending) + working.reduce((s, o) => s + orderSplit(o).payoutKop, 0);
         // Ждут назначения (2.17): дела, которые диспетчер предложил организации, — те же сведения, что в «Делах экспертов»,
         // и эксперты, которых можно назначить (допуск, «принимаю дела»), с нагрузкой.
         const offered = await sql`
@@ -356,7 +356,7 @@ export function orgOps() {
           service: registry.service(o.module, o.service)?.service.name ?? o.service,
           deadline: o.deadline,
           overdue: isOverdue(o, today),
-          fee_kop: o.price_kop ? splitAmount(Number(o.price_kop)).payoutKop : null,
+          fee_kop: o.price_kop ? orderSplit(o).payoutKop : null,
           // Эксперт отказался — руководитель видит причину последнего отказа (только своих экспертов по этому делу).
           declined: (await sql.one`select reason from order_offers where order_id = ${o.id} and org_id = ${org.id}
                                    and specialist_id is not null and outcome = 'declined' order by id desc limit 1`)?.reason ?? null,

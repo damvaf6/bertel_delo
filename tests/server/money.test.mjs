@@ -58,9 +58,9 @@ const refundsOf = (o) => S.sql`select amount_kop, status from refunds where orde
 const docsOf = (o) => S.sql`select kind, data from closing_documents where order_id = ${o.id} order by number`;
 
 test('расчёт: 20% платформе с округлением до копейки, остальное исполнителю; при отмене — доля работы и остаток', () => {
-  assert.deepEqual(splitAmount(1_000_000), { priceKop: 1_000_000, commissionKop: 200_000, payoutKop: 800_000 });
-  assert.deepEqual(splitAmount(1_001), { priceKop: 1_001, commissionKop: 200, payoutKop: 801 });
-  assert.deepEqual(splitAmount(1_003), { priceKop: 1_003, commissionKop: 201, payoutKop: 802 });
+  assert.deepEqual(splitAmount(1_000_000), { priceKop: 1_000_000, transitKop: 0, commissionKop: 200_000, payoutKop: 800_000 });
+  assert.deepEqual(splitAmount(1_001), { priceKop: 1_001, transitKop: 0, commissionKop: 200, payoutKop: 801 });
+  assert.deepEqual(splitAmount(1_003), { priceKop: 1_003, transitKop: 0, commissionKop: 201, payoutKop: 802 });
   for (const p of [100, 101, 333, 999_999, 1_000_000_000]) {
     const s = splitAmount(p);
     assert.equal(s.commissionKop + s.payoutKop, p);

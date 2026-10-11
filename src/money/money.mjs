@@ -9,6 +9,7 @@
 import { audit, quoted } from '../ops/util.mjs';
 import { customersOf, dispatchers, notify } from '../notify/notify.mjs';
 import { orderRef } from '../notify/registry.mjs';
+import { moduleQuote } from '../modules/extras.mjs';
 
 export const COMMISSION_PERCENT = 20;
 
@@ -16,14 +17,22 @@ export const COMMISSION_PERCENT = 20;
 export const BEFORE_WORK = ['new', 'matching', 'awaiting_executor'];
 
 // Цена → вознаграждение платформы и выплата исполнителю, в копейках. Округление вознаграждения — до копейки.
-export function splitAmount(priceKop) {
-  const commissionKop = Math.round((priceKop * COMMISSION_PERCENT) / 100);
-  return { priceKop, commissionKop, payoutKop: priceKop - commissionKop };
+// transitKop — часть цены транзитом (перевод: тарифы нотариуса и доставка, 2а.2): без вознаграждения, исполнителю не идёт —
+// остаётся у платформы для нотариуса и курьера. Больше цены не бывает.
+export function splitAmount(priceKop, transitKop = 0) {
+  const t = Math.min(Math.max(transitKop, 0), priceKop);
+  const commissionKop = Math.round(((priceKop - t) * COMMISSION_PERCENT) / 100);
+  return { priceKop, transitKop: t, commissionKop, payoutKop: priceKop - t - commissionKop };
 }
 
+// Деление цены заявки (у заявки есть price_kop и transit_kop).
+export const orderSplit = (o) => splitAmount(Number(o.price_kop), Number(o.transit_kop ?? 0));
+
 // Отмена оплаченной заявки: сколько оплачено за сделанную работу (из неё — 80/20) и сколько вернуть заказчику.
-export function cancelSplit(paidKop, percent) {
-  const workKop = Math.round((paidKop * percent) / 100);
+// Доля работы — только от услуг; транзит (нотариус, доставка) до выдачи результата не потрачен и возвращается целиком.
+export function cancelSplit(paidKop, percent, transitKop = 0) {
+  const t = Math.min(Math.max(transitKop, 0), paidKop);
+  const workKop = Math.round(((paidKop - t) * percent) / 100);
   return { workKop, refundKop: paidKop - workKop };
 }
 
@@ -61,12 +70,12 @@ export async function applyPaymentStatus(sql, { paymentId, status, test }) {
   });
 }
 
-// Результат проверен и выдан («готово»): выплата исполнителю 80% оплаты, акт заказчику, отчёт агента исполнителю.
+// Результат проверен и выдан («готово»): выплата исполнителю 80% оплаты услуг, акт заказчику, отчёт агента исполнителю.
 // Вызывается в транзакции шага статуса; order — заявка до шага (с исполнителем). Возвращает id выплаты.
 export async function settleDone(tx, order, { test }) {
   const p = await paidPayment(tx, order.id);
   if (!p || !order.executor_user_id) return null;
-  const split = splitAmount(Number(p.amount_kop));
+  const split = splitAmount(Number(p.amount_kop), Number(order.transit_kop ?? 0));
   await makeClosingDocs(tx, order, split, { test });
   return makePayout(tx, order, split);
 }
@@ -79,7 +88,7 @@ export async function settleCancel(tx, order, { fault, percent, reason, test }) 
   if (!p) return {};
   const paid = Number(p.amount_kop);
   const share = !BEFORE_WORK.includes(order.status) && fault === 'customer' ? percent : 0;
-  const { workKop, refundKop } = cancelSplit(paid, share);
+  const { workKop, refundKop } = cancelSplit(paid, share, Number(order.transit_kop ?? 0));
   let payoutId = null;
   if (workKop > 0 && order.executor_user_id) {
     const split = splitAmount(workKop);
@@ -92,8 +101,8 @@ export async function settleCancel(tx, order, { fault, percent, reason, test }) 
 
 async function makePayout(tx, order, split) {
   const payout = await tx.one`
-    insert into payouts (order_id, executor_user_id, amount_kop, commission_kop)
-    values (${order.id}, ${order.executor_user_id}, ${split.payoutKop}, ${split.commissionKop})
+    insert into payouts (order_id, executor_user_id, amount_kop, commission_kop, transit_kop)
+    values (${order.id}, ${order.executor_user_id}, ${split.payoutKop}, ${split.commissionKop}, ${split.transitKop})
     on conflict (order_id) do nothing returning id`;
   return payout?.id ?? null;
 }
@@ -198,6 +207,8 @@ async function makeClosingDocs(tx, order, split, { test, partial = null }) {
     where u.id = ${order.owner_user_id}`;
   const base = {
     ...docBase(order, { test }), price_kop: split.priceKop, commission_kop: split.commissionKop, payout_kop: split.payoutKop,
+    // Транзит (2а.2): тарифы нотариуса и доставка — отдельной строкой, без вознаграждения.
+    ...(split.transitKop ? { transit_kop: split.transitKop, services_kop: split.priceKop - split.transitKop, transit_lines: transitLines(order) } : {}),
     ...(partial ? { partial_percent: partial.percent, paid_kop: partial.paid_kop } : {}),
   };
   // Название организации — как его записали: «ООО «Юрфирма»» без второй пары кавычек (2.41).
@@ -208,4 +219,9 @@ async function makeClosingDocs(tx, order, split, { test, partial = null }) {
            on conflict (order_id, kind) do nothing`;
   await tx`insert into closing_documents (order_id, kind, data) values (${order.id}, 'agent_report', ${JSON.stringify(base)})
            on conflict (order_id, kind) do nothing`;
+}
+
+// Строки транзита из расчёта модуля (нотариус: подпись, копия, равнозначность; доставка) — для акта и отчёта агента.
+function transitLines(order) {
+  return (moduleQuote(order)?.lines ?? []).filter((l) => l.kind === 'transit').map((l) => ({ title: l.title, kop: l.kop }));
 }

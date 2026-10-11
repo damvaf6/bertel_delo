@@ -1,7 +1,9 @@
 // Модуль «Переводы» (задача штаба 3f617197, решение Дамира 11.10.2026): три услуги, «Куда подаёте», цены настройками.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, login, setPlatformRole } from '../helpers.mjs';
+import { startApp, login, setPlatformRole, makeSpecialist, signResults } from '../helpers.mjs';
+import { cancelSplit, splitAmount } from '../../src/money/money.mjs';
+import { extractPages } from '../../src/ai/extract.mjs';
 import { createRegistry, validateModule } from '../../src/modules/index.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import translation from '../../src/modules/translation.mjs';
@@ -102,4 +104,92 @@ test('заявка на перевод: расчёт — заказчику и �
   const r = await owner.req('POST', `/api/orders/${f.id}/status`, { to: 'matching', from: 'new' });
   assert.equal(r.status, 400);
   assert.match(r.body.message, /только на бумаге/);
+});
+
+// Деньги перевода (2а.2): 20% — только от услуг; тарифы нотариуса и доставка — транзитом, без вознаграждения.
+test('деньги перевода: 20% только с услуг, нотариус и доставка — транзитом; отдельной строкой в счёте, акте и отчёте агента', async () => {
+  assert.deepEqual(splitAmount(155_000, 55_000), { priceKop: 155_000, transitKop: 55_000, commissionKop: 20_000, payoutKop: 80_000 });
+  assert.deepEqual(splitAmount(30_000, 55_000), { priceKop: 30_000, transitKop: 30_000, commissionKop: 0, payoutKop: 0 }, 'транзит не больше цены');
+  assert.deepEqual(cancelSplit(155_000, 50, 55_000), { workKop: 50_000, refundKop: 105_000 }, 'при отмене нотариус возвращается целиком');
+  for (const [price, transit] of [[155_000, 55_000], [101, 33], [999_999, 1]]) {
+    const x = splitAmount(price, transit);
+    assert.equal(x.transitKop + x.commissionKop + x.payoutKop, price);
+  }
+
+  const spec = await login(S, '+79990000954');
+  await makeSpecialist(S.sql, spec.user.id, { permits: [['translation', 'notary_paper'], ['translation', 'plain']], capacity: 20 });
+  // Паспорт, английский, бумага, самовывоз: 1 550 ₽ = платформа 200 + переводчик 800 + нотариус 550.
+  const priced = async (fields) => {
+    const o = (await owner.req('POST', '/api/orders', { module: 'translation', service: 'notary_paper', title: 'Перевод паспорта' })).body.order;
+    assert.equal((await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: soon, fields })).status, 200);
+    assert.equal((await owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
+    const q = (await dispatcher.req('GET', `/api/orders/${o.id}`)).body.quote;
+    const r = await dispatcher.req('PUT', `/api/orders/${o.id}/price`, { price: String(q.total_kop / 100) });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    return { o, m: r.body.money };
+  };
+  const pay = async (o) => {
+    assert.equal((await owner.req('POST', `/api/orders/${o.id}/payments`)).status, 201);
+    assert.equal((await owner.req('POST', `/api/orders/${o.id}/payments/refresh`)).body.money.paid, true);
+  };
+  const inWork = async (o) => {
+    assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: spec.user.id, from: 'matching' })).status, 200);
+    assert.equal((await spec.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  };
+  const fields = { ...PASSPORT, original: 'courier', urgent: 'no', delivery: 'pickup' };
+
+  const { o, m } = await priced(fields);
+  assert.deepEqual([m.price_kop, m.transit_kop, m.commission_kop, m.fee_kop], [155_000, 55_000, 20_000, 80_000]);
+  const mo = (await owner.req('GET', `/api/orders/${o.id}/money`)).body.money;
+  assert.deepEqual([mo.transit_kop, mo.commission_kop], [55_000, null], 'заказчик видит транзит, вознаграждение — нет');
+
+  const docx = async (c, path) => {
+    const r = await fetch(`${S.base}/api/orders/${o.id}/${path}`, { headers: { cookie: c.cookie } });
+    assert.equal(r.status, 200, path);
+    const buf = Buffer.from(await r.arrayBuffer());
+    return (await extractPages(buf, 'x.docx')).pages.join('\n');
+  };
+  const inv = await docx(owner, 'invoice');
+  assert.match(inv, /услуги[\s\S]*1\s000,00 ₽/);
+  assert.match(inv, /Тарифы нотариуса и доставка[\s\S]*550,00 ₽/);
+  assert.match(inv, /Итого к оплате: 1\s550,00 ₽/);
+  assert.match(inv, /20% от услуг/);
+
+  await pay(o);
+  await inWork(o);
+  // До выдачи переводчику в списке и в «Сегодня» — его 800 ₽, а не 80% от 1 550.
+  assert.equal((await spec.req('GET', '/api/orders')).body.orders.find((x) => x.id === o.id).fee_kop, 80_000);
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/results`, Buffer.from('перевод'), { raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': 'p.pdf' } })).status, 201);
+  await signResults(S, spec, o.id);
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/status`, { to: 'review', from: 'in_work' })).status, 200);
+  const rv = (await dispatcher.req('GET', `/api/orders/${o.id}/review`)).body;
+  for (const c of rv.checks) await dispatcher.req('PUT', `/api/orders/${o.id}/review/${c.id}`, { verdict: 'ok', round: rv.round });
+  assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/status`, { to: 'done', from: 'review' })).status, 200);
+
+  const [po] = await S.sql`select amount_kop, commission_kop, transit_kop from payouts where order_id = ${o.id}`;
+  assert.deepEqual([Number(po.amount_kop), Number(po.commission_kop), Number(po.transit_kop)], [80_000, 20_000, 55_000]);
+  const ms = (await spec.req('GET', `/api/orders/${o.id}/money`)).body.money;
+  assert.equal(ms.payout.amount_kop, 80_000);
+  assert.equal(ms.transit_kop, null, 'переводчику транзит не показывается');
+  const act = (await owner.req('GET', `/api/orders/${o.id}/money`)).body.money.documents.find((d) => d.kind === 'act');
+  assert.deepEqual([act.data.services_kop, act.data.transit_kop, act.data.commission_kop], [100_000, 55_000, 20_000]);
+  assert.deepEqual(act.data.transit_lines.map((l) => l.kop), [40_000, 15_000], 'подпись переводчика и копия у нотариуса');
+  const at = await docx(owner, `closing/${act.id}`);
+  assert.match(at, /Нотариус — подпись переводчика[\s\S]*400,00 ₽/);
+  assert.match(at, /Нотариус — копия оригинала[\s\S]*150,00 ₽/);
+  assert.match(at, /вознаграждение агента \(20% от услуг\): 200,00 ₽/);
+  const rt = await docx(spec, `closing/${ms.documents[0].id}`);
+  assert.match(rt, /1\s550,00 ₽[\s\S]*550,00 ₽[\s\S]*200,00 ₽ \(20% от услуг 1\s000,00 ₽\)[\s\S]*800,00 ₽/);
+  const sum = (await dispatcher.req('GET', '/api/money')).body.totals;
+  assert.ok(sum.transit_kop >= 55_000, 'в сводке — транзит отдельно');
+
+  // Отказ заказчика после начала работ, сделано 50%: переводчику 80% от 500 ₽, нотариус (550 ₽) — возврат целиком.
+  const { o: b } = await priced(fields);
+  await pay(b);
+  await inWork(b);
+  assert.equal((await dispatcher.req('POST', `/api/orders/${b.id}/status`, { to: 'cancelled', from: 'in_work', reason: 'Заказчик отказался', fault: 'customer', done_percent: 50 })).status, 200);
+  const [pb] = await S.sql`select amount_kop, commission_kop, transit_kop from payouts where order_id = ${b.id}`;
+  assert.deepEqual([Number(pb.amount_kop), Number(pb.commission_kop), Number(pb.transit_kop)], [40_000, 10_000, 0]);
+  const [rb] = await S.sql`select amount_kop from refunds where order_id = ${b.id}`;
+  assert.equal(Number(rb.amount_kop), 105_000);
 });
