@@ -78,9 +78,24 @@ test('заявка на перевод: «Куда подаёте», преду�
   try { await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]); } finally { await c.end(); }
   await dp.goto(`/kabinet#order=${id}`);
   await expect(dp.locator('#price')).toHaveValue('1550');
-  await expect(dp.locator('#price-quoted')).toBeVisible();
+  await expect(dp.locator('#price-quoted')).toContainText('550 ₽ — тарифы нотариуса и доставка');
   await dp.locator('#price-form').scrollIntoViewIfNeeded();
   await shot(dp, 'perevod-03-dispetcher-cena');
+  // Деньги перевода (2а.2): 80/20 — только от услуг (1 000 ₽), нотариус 550 ₽ — без вознаграждения.
+  await dp.getByRole('button', { name: 'Назначить цену' }).click();
+  const facts = dp.locator('#money-facts');
+  await expect(facts).toContainText('Нотариус и доставка');
+  await expect(facts).toContainText('550 ₽ — по тарифам, без вознаграждения платформы');
+  await expect(facts).toContainText(/Исполнителю \(80% от услуг\)\s*800 ₽/);
+  await expect(facts).toContainText(/Платформе \(20% от услуг\)\s*200 ₽/);
+  await facts.scrollIntoViewIfNeeded();
+  await shot(dp, 'perevod-04-dispetcher-dengi');
   await ctx.close();
+
+  await page.reload();
+  await expect(page.locator('#money-facts')).toContainText('550 ₽ — по тарифам, без вознаграждения платформы');
+  await expect(page.locator('#money-facts')).not.toContainText('Платформе');
+  await page.locator('#money-facts').scrollIntoViewIfNeeded();
+  await shot(page, 'perevod-05-zakazchik-oplata');
   expect(errors).toEqual([]);
 });
