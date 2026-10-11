@@ -6,7 +6,7 @@ import { state, show } from '/shell.js';
 import { setNext } from '/next.js';
 
 const $ = (id) => document.getElementById(id);
-const dayRu = (s) => new Date(s).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+const dayRu = (s) => new Date(s).toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', year: 'numeric' });
 const PAYMENT_RU = { pending: 'ждёт оплаты', succeeded: 'оплачено', canceled: 'оплата не прошла' };
 const PAYOUT_RU = { pending: 'выплачивается', succeeded: 'выплачено', failed: 'выплата не прошла' };
 const REFUND_RU = { pending: 'возвращается', succeeded: 'возвращено', failed: 'возврат не прошёл' };

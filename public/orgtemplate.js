@@ -2,7 +2,7 @@
 import { api, say } from '/common.js';
 
 const $ = (id) => document.getElementById(id);
-const dateRu = (s) => new Date(s).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+const dateRu = (s) => new Date(s).toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', year: 'numeric' });
 let org = null;
 let maxBytes = 3 * 1024 * 1024;
 

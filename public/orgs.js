@@ -7,7 +7,7 @@ import { loadOrgReport } from '/orgreport.js';
 import { loadOrgTemplate } from '/orgtemplate.js';
 
 const $ = (id) => document.getElementById(id);
-const dateRu = (s) => new Date(s).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+const dateRu = (s) => new Date(s).toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long' });
 let org = null; // открытая организация: { ...org, my_role, manage }
 
 export async function showOrgs() {

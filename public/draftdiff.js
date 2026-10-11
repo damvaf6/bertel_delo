@@ -3,7 +3,7 @@
 import { api, el, say } from '/common.js';
 
 const $ = (id) => document.getElementById(id);
-const timeRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+const timeRu = (s) => new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
 const SOURCE_RU = { ai: 'ИИ', edit: 'правка', past: 'разделы из прошлого дела' };
 const STATUS_RU = { added: 'новый раздел', removed: 'раздел убран' };
 let order = null;

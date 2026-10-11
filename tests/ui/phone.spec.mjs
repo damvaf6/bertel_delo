@@ -7908,3 +7908,45 @@ test('прогон 2.180: эксперт и руководитель по пач
   await shot(ep, 'c33-progon3-ekspert-chernovik');
   for (const p of [cp, ep, hp, dp]) await p.context().close();
 });
+
+test('2.181: телефон не в московском поясе — время в кабинете эксперта по Москве, выезд назначается по Москве', async ({ browser, baseURL }) => {
+  // Телефон эксперта и помощника — в Екатеринбурге (Москва + 2 часа).
+  const ctx = async () => (await phoneContext(browser, baseURL, { timezoneId: 'Asia/Yekaterinburg' })).newPage();
+  const ep = await ctx(), hp = await ctx();
+  const expert = await signIn(ep, '+79990018101'), helper = await signIn(hp, '+79990018102');
+  const yesterday = inDays(-1), tomorrow = inDays(1);
+  const day = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'UTC' });
+  const id = await db(async (c) => {
+    await c.query("update users set full_name = 'Поясов Олег' where id = $1", [helper.id]);
+    const { rows: [cust] } = await c.query("insert into users (phone) values ('+79990018103') on conflict (phone) do update set phone = excluded.phone returning id");
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialists (user_id, onsite, regions) values ($1, true, '{moscow}')", [helper.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, express, fields)
+      values ('expertise', 'realty', 'Пояс: экспресс', $2, $1, 'in_work', (now() at time zone 'Europe/Moscow')::date + 3, 1500000, now(), true,
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Поясная ул., 2","area":"40"}') returning id`, [expert.id, cust.id]);
+    // Сообщение вчера в 23:30 по Москве — в Екатеринбурге это уже 01:30 сегодня.
+    await c.query(`insert into order_messages (order_id, author_id, side, body, at) values ($1, $2, 'executor', 'Поздно вечером', ($3::date + time '23:30') at time zone 'Europe/Moscow')`,
+      [o.id, expert.id, yesterday]);
+    return o.id;
+  });
+
+  await ep.goto(`/kabinet#order=${id}`);
+  await expect(ep.locator('#messages')).toContainText(`${day(yesterday)} в 23:30`);
+  // Поле времени выезда — по Москве: по умолчанию завтра 10:00 по Москве, так и сохраняется.
+  await expect(ep.getByLabel('Когда выезд (по Москве)')).toHaveValue(`${tomorrow}T10:00`);
+  await ep.getByRole('button', { name: 'Назначить выезд' }).click();
+  await expect(ep.locator('#onsite-msg')).toHaveText('Выезд назначен — помощник получил уведомление');
+  await expect(ep.locator('#onsite-visits li')).toContainText(`Выезд ${day(tomorrow)} в 10:00`);
+  const planned = await db(async (c) => (await c.query(`select to_char(planned_at at time zone 'Europe/Moscow', 'YYYY-MM-DD HH24:MI') t from onsite_visits where order_id = $1`, [id])).rows[0].t);
+  expect(planned).toBe(`${tomorrow} 10:00`);
+  await ep.locator('#onsite-box').scrollIntoViewIfNeeded();
+  await shot(ep, 'c34-ekspert-vremya-po-moskve');
+
+  // Помощник в том же поясе видит выезд в «Моих выездах» тоже в 10:00.
+  await hp.goto('/kabinet#specialist');
+  await expect(hp.locator('#visits')).toContainText(`${day(tomorrow)} в 10:00`);
+  await shot(hp, 'c35-pomoshnik-vremya-po-moskve');
+  await ep.context().close();
+  await hp.context().close();
+});

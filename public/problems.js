@@ -4,7 +4,7 @@ import { api, el, say, formatPhone } from '/common.js';
 import { show } from '/shell.js';
 
 const $ = (id) => document.getElementById(id);
-const dateRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+const dateRu = (s) => new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
 
 $('report-open').addEventListener('click', () => {
   $('report-form').classList.remove('hidden');

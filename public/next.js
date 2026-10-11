@@ -181,9 +181,11 @@ function render() {
 // проверяет сервер); «стоит посмотреть» — сдать можно. Считается по уже загруженному на странице, отдельного запроса нет.
 
 const DAY = 86_400_000;
+// Сегодня — по Москве, как сроки на сервере (2.181: на телефоне в другом поясе «осталось» сбивалось на день).
 const daysLeft = (iso) => {
-  const t = new Date();
-  return Math.round((new Date(`${iso}T00:00`) - new Date(t.getFullYear(), t.getMonth(), t.getDate())) / DAY);
+  const [y, m, d] = String(iso).split('-').map(Number);
+  const msk = new Date(Date.now() + 3 * 3_600_000);
+  return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(msk.getUTCFullYear(), msk.getUTCMonth(), msk.getUTCDate())) / DAY);
 };
 
 export function readyRows() {

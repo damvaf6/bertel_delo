@@ -36,9 +36,9 @@ export async function loadOrgSign(org) {
     el('div', { class: 'title', text: `${it.service} · ${it.order_ref}` }),
     el('div', { class: 'muted', text: [`Эксперт: ${it.executor}`, it.deadline ? `срок ${dayRu(it.deadline)}` : null].filter(Boolean).join(' · ') }),
     // Сколько файлы ждут подписи организации (2.148).
-    ...(it.waiting_since && waiting(it) ? [el('div', { class: 'sig-state warn', 'data-sig': 'since', text: `Ждёт Вашей подписи ${waitedDays(it.waiting_since)} — эксперт подписал ${new Date(it.waiting_since).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}` })] : []),
+    ...(it.waiting_since && waiting(it) ? [el('div', { class: 'sig-state warn', 'data-sig': 'since', text: `Ждёт Вашей подписи ${waitedDays(it.waiting_since)} — эксперт подписал ${new Date(it.waiting_since).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}` })] : []),
     // Эксперт напоминал о подписи (2.99) — пока файлы ждут подписи организации.
-    ...(it.reminded_at && waiting(it) ? [el('div', { class: 'sig-state', 'data-sig': 'reminded', text: `Эксперт напомнил о подписи ${new Date(it.reminded_at).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}` })] : [])];
+    ...(it.reminded_at && waiting(it) ? [el('div', { class: 'sig-state', 'data-sig': 'reminded', text: `Эксперт напомнил о подписи ${new Date(it.reminded_at).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}` })] : [])];
   const open = items.filter((it) => !signedAll(it));
   const done = items.filter(signedAll);
   renderMany(open.filter(waiting));
@@ -66,7 +66,7 @@ function returnsBlock(list) {
     el('summary', { text: `Возвраты эксперту · ${list.length}${opened.length ? ` · ждём исправления${progress.length ? ` (${progress.join(', ')})` : ''}` : ''}` }),
     el('ul', { class: 'list' }, ...[...list].reverse().map((r) => el('li', { class: 'return', 'data-return': String(r.id) },
       el('div', { class: 'title', text: `${r.filename} · ${r.open ? 'ждём исправления' : 'эксперт подписал заново'}` }),
-      el('div', { class: 'muted', text: [r.by, new Date(r.at).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })].filter(Boolean).join(' · ') }),
+      el('div', { class: 'muted', text: [r.by, new Date(r.at).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', dateStyle: 'short', timeStyle: 'short' })].filter(Boolean).join(' · ') }),
       ...(r.items?.length ? [pointsList(r.items)] : [el('div', { class: 'comment', text: r.comment })])))))];
 }
 
@@ -88,7 +88,7 @@ function lastReturnState(d, it) {
   const done = r.items.length - r.left;
   const left = r.items.filter((p) => !p.fixed);
   return [el('div', { class: left.length ? 'sig-state warn' : 'sig-state', 'data-role': 'points-state',
-    text: `По Вашему замечанию от ${new Date(r.at).toLocaleDateString('ru-RU')}: эксперт отметил исправленными ${done} из ${r.items.length}${left.length ? ', осталось:' : ''}` }),
+    text: `По Вашему замечанию от ${new Date(r.at).toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow' })}: эксперт отметил исправленными ${done} из ${r.items.length}${left.length ? ', осталось:' : ''}` }),
   ...(left.length ? [pointsList(left)] : [])];
 }
 

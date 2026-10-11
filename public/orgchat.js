@@ -4,7 +4,7 @@
 import { api, el, say } from '/common.js';
 
 const SIDE_RU = { head: 'Руководитель', expert: 'Эксперт' };
-const timeRu = (s) => new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+const timeRu = (s) => new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
 
 // Заготовки фраз руководителя — одни на организацию для всех открытых переписок; после изменения перерисовываются все.
 const phrases = { org: null, list: [], views: new Set() };
