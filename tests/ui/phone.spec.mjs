@@ -5572,6 +5572,35 @@ test('перегруженный день (2.134): больше двух дел 
   await expect(day.locator(`[data-ask-extend="${ids.a}"]`)).toHaveCount(0);
 });
 
+test('перегруженный день (2.179): два дела к сдаче и выезд помощника в тот же день — день выделен, причина «много дел»', async ({ page }) => {
+  const expert = await signIn(page, '+79990009379');
+  const busy = inDays(3);
+  const ids = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    const mk = async (title) => (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, price_kop, paid_at, deadline)
+      values ($1, $2, 'expertise', 'realty', 'in_work', $1, 1500000, now(), $3::date) returning id`, [expert.id, title, busy])).rows[0].id;
+    const a = await mk('Квартира на Тверской: сдача и выезд');
+    const b = await mk('Дом в Одинцово: сдача и выезд');
+    await c.query(`insert into onsite_visits (order_id, helper_id, assigned_by, planned_at) values ($1, $2, $2, ($3::date + time '10:30') at time zone 'Europe/Moscow')`,
+      [b, expert.id, busy]);
+    return { a, b };
+  });
+  await page.goto('/kabinet#specialist');
+  const day = page.locator(`#schedule-days > li[data-day="${busy}"]`);
+  await expect(day).toHaveClass(/busy/);
+  await expect(day.locator('.busy-mark')).toHaveText('много: к сдаче 2 + выезд');
+  await expect(day).toContainText('к сдаче 2 дела и выезд на объект');
+  await expect(day.locator('[data-ask-extend]')).toHaveCount(2);
+  await day.scrollIntoViewIfNeeded();
+  await shot(page, 'a11e2-ekspert-sroki-sdacha-i-vyezd');
+  await day.locator(`[data-ask-extend="${ids.a}"]`).click();
+  await expect(page.locator('#order-title')).toHaveText('Квартира на Тверской: сдача и выезд');
+  await expect(page.locator('#deadline-reason-list [data-reason="busy"]')).toHaveText('Много дел в этот день (2 и выезд)');
+  const [y, m, d] = busy.split('-');
+  await expect(page.locator('#deadline-reason')).toHaveValue(`Высокая загрузка: на ${d}.${m}.${y} у меня к сдаче несколько дел — прошу перенести срок`);
+  await expect(page.locator('#deadline-new')).not.toHaveValue('');
+});
+
 test('срок прошёл (2.166): в «Сегодня» у просроченного дела без просьбы — «Попросить перенести срок», сразу к полю нового срока', async ({ page }) => {
   const expert = await signIn(page, '+79990009366');
   const ids = await db(async (c) => {

@@ -5,7 +5,7 @@
 import { HttpError } from '../http/core.mjs';
 import { orderSides } from '../access/policy.mjs';
 import { addDays, todayMsk } from '../orders/workflow.mjs';
-import { BUSY_DEADLINES } from '../orders/schedule.mjs';
+import { BUSY_DEADLINES, isBusy, tripsByDay } from '../orders/schedule.mjs';
 import { yearStats } from '../matching/stats.mjs';
 import { customersOf, dispatchers, notify } from '../notify/notify.mjs';
 import { audit, text } from './util.mjs';
@@ -56,23 +56,26 @@ async function presetReasons(sql, order, registry) {
     });
   }
   // «Много дел в этот день» (2.134): у исполнителя в день срока больше двух дел к сдаче (число — только в подписи кнопки,
-  // в причину, которую видит заказчик, не идёт). Новый срок — ближайший будний
-  // день после срока, где к сдаче меньше двух дел (с этим делом будет не больше двух); ищем на две недели вперёд.
+  // в причину, которую видит заказчик, не идёт); выезд на объект в тот же день — за дело (2.179). Новый срок — ближайший
+  // будний день после срока, где к сдаче и выездов меньше двух (с этим делом будет не больше двух); ищем на две недели вперёд.
   const due = await sql`select to_char(deadline, 'YYYY-MM-DD') as day, count(*)::int as n from orders
                         where executor_user_id = ${order.executor_user_id} and status in ('awaiting_executor', 'in_work')
                           and deadline between ${order.deadline}::date and ${addDays(order.deadline, 14)}::date
                         group by deadline`;
   const per = new Map(due.map((r) => [r.day, r.n]));
+  // Выезд на объект в тот же день считается за дело (2.179), как в «Моих сроках».
+  const trips = await tripsByDay(sql, order.executor_user_id, order.deadline, addDays(order.deadline, 14));
   const n = per.get(order.deadline) ?? 0;
-  if (n > BUSY_DEADLINES) {
+  const t = trips.get(order.deadline) ?? 0;
+  if (isBusy(n, t)) {
     let next = null;
     for (let i = 1; i <= 14 && !next; i++) {
       const d = addDays(order.deadline, i);
       const wd = new Date(`${d}T00:00:00Z`).getUTCDay();
-      if (wd !== 0 && wd !== 6 && (per.get(d) ?? 0) < BUSY_DEADLINES) next = d;
+      if (wd !== 0 && wd !== 6 && (per.get(d) ?? 0) + (trips.get(d) ?? 0) < BUSY_DEADLINES) next = d;
     }
     const [y, m, d] = order.deadline.split('-');
-    out.push({ id: 'busy', label: `Много дел в этот день (${n})`, reason: `Высокая загрузка: на ${d}.${m}.${y} у меня к сдаче несколько дел — прошу перенести срок`,
+    out.push({ id: 'busy', label: `Много дел в этот день (${n}${t ? ` и ${t === 1 ? 'выезд' : `выездов: ${t}`}` : ''})`, reason: `Высокая загрузка: на ${d}.${m}.${y} у меня к сдаче несколько дел — прошу перенести срок`,
       ...(next ? { new_deadline: next } : {}) });
   }
   const steps = registry?.inspectionSteps(order.module, order.service) ?? [];

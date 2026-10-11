@@ -11,6 +11,8 @@ const short = (iso) => {
   return new Date(y, m - 1, d).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
 };
 const dayName = (d) => `${d.weekday}, ${short(d.date)}`;
+// Выездов в перегруженном дне (2.179): «выезд», «2 выезда».
+const trips = (n) => (n === 1 ? 'выезд' : `${n} ${n < 5 ? 'выезда' : 'выездов'}`);
 // «Горит» — как в «Сегодня»: срок сегодня, завтра или послезавтра.
 const HOT_DAYS = 2;
 // Файл для календаря телефона (2.122): сроки дел и выезды — в файле только они.
@@ -87,8 +89,10 @@ export async function loadSchedule() {
     if (d.items.length) {
       rows.push(el('li', { 'data-day': d.date, class: [d.today ? 'today' : '', d.weekend ? 'weekend' : '', d.busy ? 'busy' : ''].filter(Boolean).join(' ') },
         el('div', { class: 'day' }, el('span', { text: `${d.today ? 'Сегодня, ' : ''}${dayName(d)}` }),
-          el('span', { class: d.busy ? 'busy-mark' : 'muted', text: d.busy ? `много: к сдаче ${d.due}` : d.deadlines > 1 ? `сдать дел: ${d.deadlines}` : '' })),
-        ...(d.busy ? [el('p', { class: 'muted', text: 'В этот день больше двух дел к сдаче — можно попросить перенести срок одного из них.' })] : []),
+          el('span', { class: d.busy ? 'busy-mark' : 'muted', text: d.busy ? `много: к сдаче ${d.due}${d.trips ? ` + ${trips(d.trips)}` : ''}` : d.deadlines > 1 ? `сдать дел: ${d.deadlines}` : '' })),
+        ...(d.busy ? [el('p', { class: 'muted', text: d.trips
+          ? `В этот день к сдаче ${d.due} ${d.due === 1 ? 'дело' : d.due < 5 ? 'дела' : 'дел'} и ${trips(d.trips)} на объект — можно попросить перенести срок.`
+          : 'В этот день больше двух дел к сдаче — можно попросить перенести срок одного из них.' })] : []),
         el('ul', {}, ...d.items.map((i) => item(i, k)))));
       continue;
     }
