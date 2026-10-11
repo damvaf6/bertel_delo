@@ -553,6 +553,50 @@ test('напоминание перед подписью (2.136): ИИ-пров�
   } finally { S.providers.ai.complete = orig; }
 });
 
+test('2.186: руководитель перед подписью организации видит, запускал ли эксперт ИИ-проверку этой версии файла и что осталось «посмотрите»', async () => {
+  const org = await makeOrg(S.sql, 'ООО «ИИ перед подписью»');
+  const head = await login(S, '+79990001518');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  const ex = await login(S, '+79990001519');
+  await makeSpecialist(S.sql, ex.user.id);
+  await addMember(S.sql, org.id, ex.user.id, 'member');
+  assert.equal((await ex.req('PATCH', '/api/me', { full_name: 'Эксперт Проверкин' })).status, 200);
+  assert.equal((await ex.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  const o = await inWork('Квартира: ИИ у руководителя', ex);
+  const rules = createRegistry().checks('expertise', 'realty');
+  const docOf = async (d) => (await head.req('GET', `/api/orgs/${org.id}/signing`)).body.items.flatMap((x) => x.documents).find((x) => x.id === d.id);
+  const d1 = (await result(o, 'Отчёт 1.pdf', 'первая версия', ex)).body.document;
+  assert.equal((await docOf(d1)).ai_check, undefined, 'эксперт ещё не подписал — подсказки нет');
+  assert.equal((await sign(d1, undefined, ex)).status, 201);
+  assert.deepEqual((await docOf(d1)).ai_check, { state: 'none', other: false });
+
+  const orig = S.providers.ai.complete;
+  const answer = (bad) => async () => ({ model: 'fake', text: JSON.stringify({ items: rules.map((r) => ({ id: r.id, hint: bad.includes(r.id) ? 'attention' : 'ok', note: 'н' })) }) });
+  try {
+    S.providers.ai.complete = answer(['requisites']);
+    assert.equal((await ex.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
+    const h = (await docOf(d1)).ai_check;
+    assert.deepEqual([h.state, h.count, h.titles], ['attention', 1, [rules.find((r) => r.id === 'requisites').title.split(':')[0].trim()]]);
+    assert.ok(h.at);
+
+    // Новая версия файла — проверка прежней её не касается; проверил без замечаний — «ok» с временем.
+    const d2 = (await result(o, 'Отчёт 2.pdf', 'вторая версия', ex)).body.document;
+    assert.equal((await sign(d2, undefined, ex)).status, 201);
+    assert.deepEqual((await docOf(d2)).ai_check, { state: 'none', other: true });
+    S.providers.ai.complete = answer([]);
+    assert.equal((await ex.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
+    assert.equal((await docOf(d2)).ai_check.state, 'ok');
+    assert.ok((await docOf(d2)).ai_check.at);
+    // Эксперту в своём деле «ok» по-прежнему не показывается — только «не запускал» и «посмотрите».
+    assert.equal((await docsOf(ex, o)).documents.find((x) => x.id === d2.id).ai_check, undefined);
+
+    // Подписано организацией — подсказки нет.
+    assert.equal((await head.req('PATCH', '/api/me', { full_name: 'Руководитель Проверкин' })).status, 200);
+    assert.equal((await head.req('POST', `/api/org-documents/${d2.id}/sign`, { confirm: true })).status, 201);
+    assert.equal((await docOf(d2)).ai_check, undefined);
+  } finally { S.providers.ai.complete = orig; }
+});
+
 test('2.154: ИИ-проверка — дата составления отчёта не позже дня подписи эксперта; без подписи — не позже сегодня', async () => {
   const o = await inWork('Квартира — дата отчёта и подпись');
   const ru = (d) => d.split('-').reverse().join('.');

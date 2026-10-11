@@ -92,6 +92,20 @@ function lastReturnState(d, it) {
   ...(left.length ? [pointsList(left)] : [])];
 }
 
+// ИИ-проверка эксперта перед подписью организации (2.186): запускал ли эксперт её для этой версии файла и что в ней осталось
+// «посмотрите». Подсказка — подписать можно и так.
+const when = (iso) => new Date(iso).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+function aiCheckText(c) {
+  if (c.state === 'none') return c.other
+    ? 'Эксперт не запускал ИИ-проверку этой версии файла (проверял прежнюю).'
+    : 'Эксперт не запускал ИИ-проверку этого файла.';
+  if (c.state === 'ok') return `Эксперт проверил файл ИИ-проверкой ${when(c.at)} — пунктов «посмотрите» нет.`;
+  return `В ИИ-проверке эксперта (${when(c.at)}) осталось «посмотрите»: ${c.count} — ${c.titles.join('; ')}${c.count > c.titles.length ? '; …' : ''}.`;
+}
+const aiCheckLine = (d) => (d.ai_check
+  ? [el('div', { class: d.ai_check.state === 'ok' ? 'sig-state' : 'sig-state warn', 'data-role': 'ai-check', 'data-ai': d.ai_check.state, text: aiCheckText(d.ai_check) })]
+  : []);
+
 // Несколько дел одним подтверждением (2.114): отмечены все, кроме дел, где по замечанию руководителя эксперт отметил не всё.
 function renderMany(list) {
   const box = $('org-sign-many');
@@ -103,12 +117,17 @@ function renderMany(list) {
       const r = returnOf(d, it);
       return n + (r ? r.left : 0);
     }, 0);
+    // 2.186: сколько файлов дела без ИИ-проверки эксперта или с пунктами «посмотрите».
+    const noAi = ready.filter((d) => d.ai_check?.state === 'none').length;
+    const look = ready.filter((d) => d.ai_check?.state === 'attention').length;
+    const ai = [noAi ? `без ИИ-проверки: ${noAi}` : null, look ? `в ИИ-проверке есть «посмотрите»: ${look}` : null].filter(Boolean);
     const id = `org-many-${it.order_ref.replace(/[^0-9A-Z]/gi, '')}`;
     const box = el('input', { type: 'checkbox', id, 'data-many': it.order_ref, ...(left ? {} : { checked: '' }), onchange: () => count() });
     return { it, ready, box, label: el('label', { class: 'row', for: id }, box,
       el('span', {}, el('span', { text: `${it.service} · ${it.order_ref}` }),
         el('span', { class: 'muted', text: ` — ${it.executor}${it.deadline ? `, срок ${dayRu(it.deadline)}` : ''}, файлов: ${ready.length}` }),
-        ...(left ? [el('span', { class: 'sig-state warn', 'data-role': 'many-left', text: `По Вашему замечанию эксперт не отметил исправленными: ${left}. Посмотрите дело ниже.` })] : []))) };
+        ...(left ? [el('span', { class: 'sig-state warn', 'data-role': 'many-left', text: `По Вашему замечанию эксперт не отметил исправленными: ${left}. Посмотрите дело ниже.` })] : []),
+        ...(ai.length ? [el('span', { class: 'muted', 'data-role': 'many-ai', text: ` Файлы — ${ai.join(', ')}.` })] : []))) };
   });
   const btn = el('button', { 'data-action': 'org-sign-many', onclick: () => {
     const chosen = rows.filter((r) => r.box.checked);
@@ -162,7 +181,7 @@ function docItem(d, it) {
   else lines.push(el('div', { class: 'sig-state', text: 'Эксперт ещё не подписал — подпись организации после него' }));
   if (org) lines.push(...signatureLines(org));
   else if (expert) {
-    lines.push(...(it ? lastReturnState(d, it) : []), el('div', { class: 'row' },
+    lines.push(...(it ? lastReturnState(d, it) : []), ...aiCheckLine(d), el('div', { class: 'row' },
       el('button', { 'data-action': 'org-sign', onclick: () => sign(d) }, 'Подписать от организации'),
       ...uploadSignatureButton(d.filename, (file) => upload(d, file))),
     el('div', { class: 'muted', text: `${UPLOAD_HINT} Нужен сертификат организации.` }),

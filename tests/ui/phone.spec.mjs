@@ -1602,6 +1602,8 @@ test('две подписи (2.5а): эксперт от организации 
   await expect(hp.locator('#org-sign > li').first()).toContainText('Эксперт: Тестовый эксперт компании');
   await expect(hp.locator('#org-sign')).not.toContainText('две подписи');
   await expect(item.locator('.sig-state').first()).toContainText('Подпись эксперта: Тестовый эксперт компании');
+  // 2.186: перед подписью организации — запускал ли эксперт ИИ-проверку этого файла.
+  await expect(item.locator('[data-role="ai-check"]')).toHaveText('Эксперт не запускал ИИ-проверку этого файла.');
   const [file] = await Promise.all([hp.waitForEvent('download'), item.getByRole('button', { name: 'Скачать' }).click()]);
   expect(file.suggestedFilename()).toBe('отчёт-компании.pdf');
 
@@ -1659,7 +1661,14 @@ test('две подписи (2.5а): эксперт от организации 
   await expect(page.locator('#order-status')).toHaveText('В работе');
   await expect(page.locator('#org-returns-box')).toBeHidden();
   await page.goto('/kabinet');
+  // 2.186: эксперт запускал ИИ-проверку исправленного файла — у руководителя видно, что в ней осталось «посмотрите».
+  await db((c) => c.query(`insert into ai_reviews (order_id, round, requested_by, side, model, items, files)
+    select o.id, o.review_round + 1, o.executor_user_id, 'executor', 'fake', $2::jsonb, jsonb_build_array(jsonb_build_object('id', d.id, 'name', d.filename, 'read', true))
+    from orders o join documents d on d.order_id = o.id and d.kind = 'result' and d.deleted_at is null where o.id = $1`,
+  [id, JSON.stringify([{ id: 'requisites', hint: 'attention', note: 'дата', marks: [] }, { id: 'object_match', hint: 'ok', note: '', marks: [] }])]));
   await hp.reload();
+  await expect(item.locator('[data-role="ai-check"]')).toHaveText(/^В ИИ-проверке эксперта \(\d{1,2} [а-я]+ в \d{2}:\d{2}\) осталось «посмотрите»: 1 — Реквизиты\.$/);
+  await expect(item.locator('[data-role="ai-check"]')).toHaveAttribute('data-ai', 'attention');
   await expect(hp.locator('#org-sign details.returns summary')).toHaveText('Возвраты эксперту · 1');
   // 2.93: у файла перед подписью от организации — что эксперт отметил и что осталось.
   await expect(item.locator('[data-role="points-state"]')).toHaveText(/^По Вашему замечанию от \d{2}\.\d{2}\.\d{4}: эксперт отметил исправленными 1 из 2, осталось:$/);

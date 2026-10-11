@@ -15,6 +15,7 @@ import { ProviderError } from '../providers/fake.mjs';
 import { notify } from '../notify/notify.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { signatureFilename } from '../providers/sign.mjs';
+import { aiSignHints } from '../ai/ai.mjs';
 import { audit, text } from './util.mjs';
 
 export const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
@@ -261,7 +262,7 @@ export function signOps() {
       access: { resource: 'org', param: 'id', need: 'manage' },
       async handler({ sql, org, registry }) {
         const orders = await sql`
-          select o.id, o.module, o.service, o.deadline, o.executor_user_id, u.full_name as executor_name
+          select o.id, o.module, o.service, o.deadline, o.executor_user_id, o.status, o.review_round, u.full_name as executor_name
           from orders o join specialists s on s.user_id = o.executor_user_id and s.org_id = ${org.id}
           join org_members m on m.org_id = s.org_id and m.user_id = s.user_id
           join users u on u.id = o.executor_user_id
@@ -274,12 +275,15 @@ export function signOps() {
           const signs = await orderSignatures(sql, o.id);
           const returns = await orgReturns(sql, o.id, { orgId: org.id });
           const wait = await signWait(sql, o);
+          // 2.186: файл подписан экспертом и ждёт подписи организации — запускал ли эксперт ИИ-проверку этой версии и что в ней
+          // осталось «посмотрите». Подсказка руководителю, подпись не держит.
+          const ai = await aiSignHints(sql, registry, o, docs.filter((d) => signs.get(d.id)?.expert && !signs.get(d.id)?.org).map((d) => d.id), { ok: true });
           items.push({
             order_ref: orderRef(o.id),
             service: registry.service(o.module, o.service)?.service.name ?? o.service,
             executor: o.executor_name,
             deadline: o.deadline,
-            documents: docs.map((d) => ({ id: d.id, filename: d.filename, size_bytes: Number(d.size_bytes), created_at: d.created_at, signatures: signaturesView(signs.get(d.id)) })),
+            documents: docs.map((d) => ({ id: d.id, filename: d.filename, size_bytes: Number(d.size_bytes), created_at: d.created_at, signatures: signaturesView(signs.get(d.id)), ...(ai.has(d.id) ? { ai_check: ai.get(d.id) } : {}) })),
             // Эксперт напоминал о подписи (2.99) — когда последний раз, пока файл ждёт (после возврата прежнее не показывается).
             reminded_at: wait?.reminded_at ?? null,
             // С какого времени файлы ждут подписи организации (2.148) — самая ранняя подпись эксперта среди них.
