@@ -1,5 +1,6 @@
 // Модуль «Переводы» (задача штаба 3f617197, решение Дамира 11.10.2026): цены и правила — настройками, в одной таблице.
-// Стартовые цены — от Дамира; меняются здесь (через разработку), нотариальные тарифы Москвы обновлять в январе.
+// Стартовые цены — от Дамира; администратор правит их в кабинете («Управление» → «Цены и правила перевода», задача 2а.9) —
+// сохранённое лежит в module_settings и действует вместо значений ниже; нотариальные тарифы Москвы обновлять в январе.
 // Деньги — в копейках. Вознаграждение платформы — 20% только от услуг (перевод, срочность, организация заверения,
 // сертификат); тарифы нотариуса и доставка — транзитом, без комиссии.
 // Описание услуг и полей заявки — src/modules/translation.mjs.
@@ -34,6 +35,83 @@ export const TRANSLATION_RULES = Object.freeze({
   redo_days: 2,
 });
 
+// Что администратор правит в кабинете (2а.9): плоский список; деньги — в копейках. Вознаграждение платформы (20%, устав) —
+// не настройка. Поля из списка ниже читаются расчётом через currentPrices() / currentRules().
+const P0 = TRANSLATION_PRICES;
+const [EQ1, EQ2, EQ3] = P0.notary.equivalence;
+export const SETTING_FIELDS = Object.freeze([
+  { key: 'page_kop', group: 'Перевод', title: 'Перевод, за страницу', kind: 'rub', min: 100, def: P0.page_kop },
+  { key: 'eastern_factor', group: 'Перевод', title: 'Восточные языки — во сколько раз дороже', kind: 'factor', min: 1, max: 5, def: P0.eastern_factor },
+  { key: 'urgent_kop', group: 'Перевод', title: 'Срочно, за заказ', kind: 'rub', def: P0.urgent_kop },
+  { key: 'organize_kop', group: 'Услуги платформы', title: 'Организация нотариального заверения, за документ', kind: 'rub', def: P0.organize_kop },
+  { key: 'organize_batch_kop', group: 'Услуги платформы', title: 'То же в пачке, за документ', kind: 'rub', def: P0.organize_batch_kop },
+  { key: 'organize_batch_from', group: 'Услуги платформы', title: 'Пачка — от скольких документов в заказе', kind: 'int', min: 2, max: 100, def: P0.organize_batch_from },
+  { key: 'certificate_kop', group: 'Услуги платформы', title: 'Сертификат платформы (без нотариуса), за документ', kind: 'rub', def: P0.certificate_kop },
+  { key: 'notary_signature_kop', group: 'Нотариус (без наценки)', title: 'Подпись переводчика, за документ', kind: 'rub', def: P0.notary.signature_kop },
+  { key: 'notary_copy_page_kop', group: 'Нотариус (без наценки)', title: 'Копия оригинала, за страницу', kind: 'rub', def: P0.notary.copy_page_kop },
+  { key: 'equivalence_kop', group: 'Нотариус (без наценки)', title: 'Равнозначность файла, за страницу', kind: 'rub', def: EQ1.kop },
+  { key: 'equivalence2_from', group: 'Нотариус (без наценки)', title: 'Равнозначность — вторая цена со страницы №', kind: 'int', min: 2, max: 1000, def: EQ2.from },
+  { key: 'equivalence2_kop', group: 'Нотариус (без наценки)', title: 'Равнозначность — вторая цена, за страницу', kind: 'rub', def: EQ2.kop },
+  { key: 'equivalence3_from', group: 'Нотариус (без наценки)', title: 'Равнозначность — третья цена со страницы №', kind: 'int', min: 3, max: 1000, def: EQ3.from },
+  { key: 'equivalence3_kop', group: 'Нотариус (без наценки)', title: 'Равнозначность — третья цена, за страницу', kind: 'rub', def: EQ3.kop },
+  { key: 'courier_kop', group: 'Доставка (без наценки)', title: 'Курьер по Москве, за заказ', kind: 'rub', def: P0.courier_kop },
+  { key: 'file_for_identity', group: 'Правила', title: 'Паспорт можно заказать нотариальным файлом', kind: 'bool', def: TRANSLATION_RULES.file_for_identity },
+  { key: 'proofread_new_orders', group: 'Правила', title: 'Вычитка обязательна, пока у переводчика сдано меньше переводов', kind: 'int', min: 0, max: 100, def: TRANSLATION_RULES.proofread_new_orders },
+  { key: 'proofread_sample_percent', group: 'Правила', title: 'Вычитка остальных — процент переводов', kind: 'int', min: 0, max: 100, def: TRANSLATION_RULES.proofread_sample_percent },
+  { key: 'redo_days', group: 'Правила', title: 'Бесплатная переделка — срок, дней', kind: 'int', min: 1, max: 30, def: TRANSLATION_RULES.redo_days },
+]);
+const MAX_KOP = 1_000_000_00; // 1 млн ₽ — защита от лишнего нуля
+
+export const DEFAULT_SETTINGS = Object.freeze(Object.fromEntries(SETTING_FIELDS.map((f) => [f.key, f.def])));
+
+function pricesFrom(v) {
+  return {
+    ...P0,
+    page_kop: v.page_kop, eastern_factor: v.eastern_factor, urgent_kop: v.urgent_kop, organize_kop: v.organize_kop,
+    organize_batch_kop: v.organize_batch_kop, organize_batch_from: v.organize_batch_from, certificate_kop: v.certificate_kop,
+    courier_kop: v.courier_kop,
+    notary: {
+      signature_kop: v.notary_signature_kop, copy_page_kop: v.notary_copy_page_kop,
+      equivalence: [{ from: 1, kop: v.equivalence_kop }, { from: v.equivalence2_from, kop: v.equivalence2_kop }, { from: v.equivalence3_from, kop: v.equivalence3_kop }],
+    },
+  };
+}
+const rulesFrom = (v) => ({ file_for_identity: v.file_for_identity, proofread_new_orders: v.proofread_new_orders, proofread_sample_percent: v.proofread_sample_percent, redo_days: v.redo_days });
+
+// Проверка того, что прислал администратор: { key: значение } поверх текущих; ошибка — Error с понятным текстом (msg).
+// Неизвестные ключи — ошибка; значения — в копейках, целые.
+export function settingsFrom(body, base = DEFAULT_SETTINGS) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw settingsError('Нет значений');
+  const out = { ...base };
+  for (const [k, v] of Object.entries(body)) {
+    const f = SETTING_FIELDS.find((x) => x.key === k);
+    if (!f) throw settingsError(`Неизвестная настройка «${k}»`);
+    if (f.kind === 'bool') {
+      if (typeof v !== 'boolean') throw settingsError(`«${f.title}»: да или нет`);
+    } else if (f.kind === 'factor') {
+      if (typeof v !== 'number' || !Number.isFinite(v) || v < f.min || v > f.max || Math.round(v * 10) !== v * 10) {
+        throw settingsError(`«${f.title}»: число от ${f.min} до ${f.max}, не больше одного знака после запятой`);
+      }
+    } else if (f.kind === 'rub') {
+      if (!Number.isInteger(v) || v < (f.min ?? 0) || v > MAX_KOP) throw settingsError(`«${f.title}»: сумма от ${rubShort(f.min ?? 0)} до ${rubShort(MAX_KOP)}`);
+    } else if (!Number.isInteger(v) || v < f.min || v > f.max) throw settingsError(`«${f.title}»: целое от ${f.min} до ${f.max}`);
+    out[k] = v;
+  }
+  if (out.equivalence3_from <= out.equivalence2_from) throw settingsError('Равнозначность: третья цена должна начинаться позже второй');
+  return out;
+}
+function settingsError(msg) { const e = new Error(msg); e.settings = true; return e; }
+
+// Действующие значения — в памяти процесса; обновляет src/translation/settings.mjs из module_settings.
+let current = { values: DEFAULT_SETTINGS, prices: pricesFrom(DEFAULT_SETTINGS), rules: rulesFrom(DEFAULT_SETTINGS) };
+export function applySettings(saved) {
+  const values = saved ? settingsFrom(Object.fromEntries(Object.entries(saved).filter(([k]) => SETTING_FIELDS.some((f) => f.key === k)))) : DEFAULT_SETTINGS;
+  current = { values, prices: pricesFrom(values), rules: rulesFrom(values) };
+}
+export const currentSettings = () => current.values;
+export const currentPrices = () => current.prices;
+export const currentRules = () => current.rules;
+
 // Восточные языки — перевод ×2.
 export const EASTERN_LANGUAGES = Object.freeze(['zh', 'ja', 'ko', 'ar', 'fa', 'he', 'hi', 'vi', 'th']);
 
@@ -52,7 +130,7 @@ const NOTARIAL = ['notary_paper', 'notary_file'];
 
 function equivalenceKop(pages) {
   let kop = 0;
-  const tiers = TRANSLATION_PRICES.notary.equivalence;
+  const tiers = currentPrices().notary.equivalence;
   for (let p = 1; p <= pages; p += 1) kop += [...tiers].reverse().find((t) => p >= t.from).kop;
   return kop;
 }
@@ -62,7 +140,7 @@ const whole = (v, min = 0) => (Number.isInteger(v) && v >= min ? v : null);
 // Предварительный расчёт по полям заявки: строки (услуги и транзит отдельно), итог и деление.
 // null — данных для расчёта не хватает (нет числа страниц или документов).
 export function quoteTranslation(serviceId, fields = {}) {
-  const P = TRANSLATION_PRICES;
+  const P = currentPrices();
   const pages = whole(fields.pages, 1);
   const docs = whole(fields.docs ?? 1, 1);
   if (!pages || !docs || !['notary_paper', 'notary_file', 'plain'].includes(serviceId)) return null;
@@ -70,8 +148,8 @@ export function quoteTranslation(serviceId, fields = {}) {
   const lines = [];
   const add = (kind, title, kop) => { if (kop > 0) lines.push({ kind, title, kop }); };
 
-  add('service', `Перевод: ${pages} стр. × ${rubShort(P.page_kop * (eastern ? P.eastern_factor : 1))}${eastern ? ' (восточный язык ×2)' : ''}`,
-    pages * P.page_kop * (eastern ? P.eastern_factor : 1));
+  const page = Math.round(P.page_kop * (eastern ? P.eastern_factor : 1));
+  add('service', `Перевод: ${pages} стр. × ${rubShort(page)}${eastern ? ` (восточный язык ×${String(P.eastern_factor).replace('.', ',')})` : ''}`, pages * page);
   if (fields.urgent === 'yes') add('service', 'Срочно', P.urgent_kop);
   if (NOTARIAL.includes(serviceId)) {
     const each = docs >= P.organize_batch_from ? P.organize_batch_kop : P.organize_kop;
@@ -110,7 +188,7 @@ export function translationNotices(serviceId, fields = {}) {
       text: `Куда подаёте: ${why} — там обычно принимают только нотариальный перевод. Выберите «Нотариальный перевод (бумага)» или «(электронный файл)». Перевод без нотариуса подойдёт для бизнеса, бухгалтерии, ВЭД и части зарубежных получателей; если получатель его не примет, деньги за это не возвращаются.`,
     });
   }
-  if (serviceId === 'notary_file' && fields.doc_kind === 'identity' && !TRANSLATION_RULES.file_for_identity) {
+  if (serviceId === 'notary_file' && fields.doc_kind === 'identity' && !currentRules().file_for_identity) {
     out.push({ id: 'file_identity', text: 'Паспорт и другие документы, удостоверяющие личность, пока заверяются только на бумаге: выберите «Нотариальный перевод (бумага)».' });
   }
   return out;

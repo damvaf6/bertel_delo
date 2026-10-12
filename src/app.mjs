@@ -39,13 +39,15 @@ import { similarOps } from './ops/similar-ops.mjs';
 import { notaryOps } from './ops/notary-ops.mjs';
 import { certificateOps } from './ops/certificate-ops.mjs';
 import { stepOps } from './ops/step-ops.mjs';
+import { priceOps } from './ops/price-ops.mjs';
 import { uploadOps } from './ops/upload-ops.mjs';
 import { createRegistry, DEFAULT_MODULES } from './modules/index.mjs';
+import { resetModuleSettings } from './modules/extras.mjs';
 
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
 export function listOps(cfg, providers) {
-  const ops = [...coreOps(cfg), ...orderOps(), ...orgOps(), ...adminOps(), ...matchOps(), ...workOps(), ...moneyOps(), ...notifyOps(), ...aiOps(), ...draftOps(), ...inspectOps(), ...onsiteOps(), ...signOps(), ...dossierOps(), ...snippetOps(), ...remarkOps(), ...analogOps(), ...templateOps(), ...mailOps(), ...todayOps(), ...problemOps(), ...caseOps(), ...uploadOps(), ...docRequestOps(), ...deadlineOps(), ...handoverOps(), ...noteOps(), ...repeatOps(), ...similarOps(), ...notaryOps(), ...certificateOps(), ...stepOps(), ...bridgeOps(cfg)];
+  const ops = [...coreOps(cfg), ...orderOps(), ...orgOps(), ...adminOps(), ...matchOps(), ...workOps(), ...moneyOps(), ...notifyOps(), ...aiOps(), ...draftOps(), ...inspectOps(), ...onsiteOps(), ...signOps(), ...dossierOps(), ...snippetOps(), ...remarkOps(), ...analogOps(), ...templateOps(), ...mailOps(), ...todayOps(), ...problemOps(), ...caseOps(), ...uploadOps(), ...docRequestOps(), ...deadlineOps(), ...handoverOps(), ...noteOps(), ...repeatOps(), ...similarOps(), ...notaryOps(), ...certificateOps(), ...stepOps(), ...priceOps(), ...bridgeOps(cfg)];
   if (providers.storage.kind === 'memory') ops.push(...memoryFileOps());
   if (cfg.appEnv === 'test' && cfg.testControlToken) ops.push(...testControlOps(cfg));
   ops.push(...stageLoginOps(cfg));
@@ -63,6 +65,7 @@ export function listOps(cfg, providers) {
 export function createApp({ cfg, sql, providers, modules = DEFAULT_MODULES }) {
   const registry = createRegistry(modules);
   validateRegistry();
+  resetModuleSettings(); // настройки модулей (2а.9) — прочитать из базы при первой операции
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', cfg.trustProxy ? 1 : false);

@@ -1253,6 +1253,25 @@
         </form>
         <p class="msg" id="notary-msg" role="status" aria-live="polite"></p>
       </div>
+      <div class="card" id="tprices-box">
+        <h2>Цены и правила перевода</h2>
+        <p class="muted">По этим ценам заказчик видит предварительную стоимость, а диспетчеру она подставляется. Новые цены —
+          для новых расчётов; цена, уже назначенная в заявке, не меняется. Тарифы нотариуса и доставка идут без наценки
+          (нотариальные тарифы Москвы — обновлять в январе). Вознаграждение платформы — <span id="tp-commission"></span>% от
+          услуг, по уставу, здесь не меняется.</p>
+        <form id="tprices-form" novalidate>
+          <div id="tp-fields"></div>
+          <div class="row">
+            <button type="submit" id="tp-save">Сохранить цены и правила</button>
+          </div>
+        </form>
+        <p class="msg" id="tp-msg" role="status" aria-live="polite"></p>
+        <details id="tp-history-box">
+          <summary>История изменений</summary>
+          <ul class="list" id="tp-history"></ul>
+          <p class="muted" id="tp-history-empty">Цены ещё не меняли — действуют стартовые.</p>
+        </details>
+      </div>
       <div class="card">
         <h2>Искусственный интеллект</h2>
         <dl class="facts" id="admin-ai"></dl>
