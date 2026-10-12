@@ -40,6 +40,7 @@ export async function loadReview(current) {
   const hints = new Map((r.ai?.items ?? []).map((i) => [i.id, i]));
   // Короче на телефоне (2.191): вверху — «Посмотрите: N» с названиями правил, нажатие ведёт к правилу. Тому, кто не
   // ставит отметки (исполнитель), правила, где у ИИ нет замечаний и находок, — одной свёрнутой строкой.
+  prevBox(r);
   const look = r.checks.filter((c) => hints.get(c.id)?.hint === 'attention');
   $('ai-review-look').classList.toggle('hidden', look.length === 0);
   $('ai-review-look').replaceChildren(...(look.length ? [el('span', { text: `Посмотрите: ${look.length} — ` }),
@@ -73,6 +74,25 @@ export async function loadReview(current) {
   if (r.can_mark && issues.length && !$('reason').value.trim()) {
     $('reason').value = issues.map((c) => `${c.title}: ${c.note}`).join('; ').slice(0, 1000);
   }
+}
+
+// Что изменилось с ИИ-проверки прежней версии файла (2.206): ушло, осталось, появилось — по правилам, нажатие ведёт к правилу.
+function prevBox(r) {
+  const p = r.ai?.prev;
+  const box = $('ai-review-prev');
+  box.classList.toggle('hidden', !p);
+  if (!p) { box.replaceChildren(); return; }
+  const title = new Map(r.checks.map((c) => [c.id, c.title]));
+  const row = (cls, label, ids) => el('p', { class: `ai-prev-row ${cls}`, 'data-prev': cls },
+    el('span', { text: `${label}: ${ids.length} — ` }),
+    ...ids.flatMap((id, i) => [...(i ? [el('span', { text: ', ' })] : []),
+      el('button', { type: 'button', class: 'link', 'data-look': id, onclick: () => toRule(id) }, short(title.get(id) ?? id))]));
+  box.replaceChildren(
+    el('p', { class: 'ai-prev-head', text: `С прошлой ИИ-проверки (${p.files.join(', ') || 'прежняя версия'}, ${timeRu(p.at)}):` }),
+    ...(p.gone.length ? [row('gone', 'Исправлено', p.gone)] : []),
+    ...(p.kept.length ? [row('kept', 'Осталось', p.kept)] : []),
+    ...(p.fresh.length ? [row('fresh', 'Новое', p.fresh)] : []),
+    ...(!p.kept.length && !p.fresh.length ? [el('p', { class: 'ai-prev-row gone', text: 'Всё, на что ИИ указывал в прежней версии, ушло.' })] : []));
 }
 
 // Название правила до двоеточия — для сводок в строку (2.191).
