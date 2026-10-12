@@ -8585,3 +8585,57 @@ test('прогон 2.200: эксперт и руководитель по пач
   await shot(hp, 'c50-progon5-rukovoditel-svodka');
   for (const p of [ep, hp, cp]) await p.context().close();
 });
+
+test('2.201: срок дела в отпуске эксперта, передать некому — «Напомнить эксперту попросить перенос срока»', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), hp = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990020101'), head = await signIn(hp, '+79990020102'), customer = await signIn(cp, '+79990020103');
+  const { orgId, A } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Один эксперт ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Одинов Пётр' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now() - interval '1 year'), ($1, $3, 'member', now() - interval '1 year')", [org.id, head.id, expert.id]);
+    await c.query(`insert into specialists (user_id, org_id, created_at, away_until, away_note)
+      values ($1, $2, now() - interval '1 year', (now() at time zone 'Europe/Moscow')::date + 4, 'отпуск')`, [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    await c.query("insert into morning_digests (user_id, day) values ($1, (now() at time zone 'Europe/Moscow')::date), ($2, (now() at time zone 'Europe/Moscow')::date)", [expert.id, head.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Дом в отпуске', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, ул. Летняя, д. 1, кв. 2","area":"40"}') returning id`,
+    [customer.id, expert.id, inDays(2)]);
+    return { orgId: org.id, A: o.id };
+  });
+
+  // Руководитель: «передать некому» — под предупреждением кнопка «Напомнить эксперту попросить перенос срока».
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const li = hp.locator(`#org-cases li[data-case="№ ${A.slice(0, 8).toUpperCase()}"]`);
+  await expect(li.locator('[data-role="away"]')).toContainText('Передать его некому — попросите эксперта перенести срок.');
+  const ask = li.locator('[data-action="remind-extend"]');
+  await expect(ask).toHaveText('Напомнить эксперту попросить перенос срока');
+  await li.scrollIntoViewIfNeeded();
+  await shot(hp, 'c51-2201-rukovoditel-peredat-nekomu');
+  await ask.click();
+  await expect(hp.locator('#org-cases-msg')).toHaveText(`Эксперту отправлена просьба попросить перенос срока по делу № ${A.slice(0, 8).toUpperCase()}`);
+  await expect(li.locator('[data-action="remind-extend"]')).toBeDisabled();
+  await expect(li.locator('[data-action="remind-expert"]')).toBeDisabled();
+  await expect(li.locator('[data-role="remind-note"]')).toContainText('Напоминали попросить перенос срока');
+  await li.scrollIntoViewIfNeeded();
+  await shot(hp, 'c52-2201-rukovoditel-napomnil');
+
+  // Эксперт: уведомление открывает дело на просьбе о переносе — причина и день возвращения уже в полях.
+  await ep.goto('/kabinet#notifications');
+  const n = ep.locator('#notifications li').filter({ hasText: 'Руководитель организации: попросите перенести срок дела' });
+  await expect(n).toContainText('Дом в отпуске');
+  await shot(ep, 'c53-2201-ekspert-uvedomlenie');
+  await n.getByRole('button').click();
+  await expect(ep.locator('#deadline-reason')).toHaveValue(/^В день срока меня не будет, работаю снова с /);
+  await expect(ep.locator('#deadline-new')).toHaveValue(inDays(4));
+  await ep.locator('#deadline-box').scrollIntoViewIfNeeded();
+  await shot(ep, 'c54-2201-ekspert-perenos');
+  await ep.locator('#deadline-send').click();
+  await expect(ep.locator('#deadline-msg')).toContainText('Просьба отправлена диспетчеру');
+  // Эксперт попросил — у руководителя кнопки больше нет, видно, что ждёт ответа диспетчера.
+  await hp.reload();
+  await expect(li).toContainText(`Эксперт просит перенести срок на`);
+  await expect(li.locator('[data-action="remind-extend"]')).toHaveCount(0);
+  for (const p of [ep, hp, cp]) await p.context().close();
+});

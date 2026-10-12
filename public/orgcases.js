@@ -212,6 +212,8 @@ function caseItem(org, c) {
     ...(c.away && !c.handover ? [el('div', { class: 'notice-warn', 'data-role': 'away',
       text: `Эксперт не принимает дела до ${dayRu(c.away.until)}${c.away.note ? ` (${c.away.note})` : ''}, а срок дела — в эти дни. ${c.transfer_to?.length
         ? 'Передайте его коллеге.' : 'Передать его некому — попросите эксперта перенести срок.'}` })] : []),
+    // Передать некому (2.201): одной кнопкой — эксперту уведомление, дело откроется на просьбе о переносе с готовой причиной.
+    ...(c.away && !c.handover && !c.transfer_to?.length && !c.extend && c.remind ? [remindRow(org, c, 'extend')] : []),
     ...(c.last_move ? [moveRow(c)] : []),
     ...(c.remind ? [remindRow(org, c)] : []),
     ...(c.handover && c.status === 'in_work' ? [handoverBlock(org, c)] : []),
@@ -238,6 +240,8 @@ export function focusOrgCase({ ref, to }) {
   if (to === 'transfer') {
     li.querySelector('details[data-transfer]')?.setAttribute('open', '');
     li.querySelector('select[data-transfer-pick]')?.focus({ preventScroll: true });
+    // Передать некому (2.201) — к кнопке «Напомнить эксперту попросить перенос срока».
+    li.querySelector('[data-action="remind-extend"]')?.focus({ preventScroll: true });
   }
   if (to === 'handover') li.querySelector('[data-handover]')?.querySelector('select, button')?.focus({ preventScroll: true });
   li.scrollIntoView({ block: 'start' });
@@ -258,20 +262,25 @@ function moveRow(c) {
 
 // «Напомнить эксперту» (2.125): дело в работе — одной кнопкой, не чаще раза в сутки по делу; эксперт получит уведомление,
 // которое ведёт к делу. Когда напоминали — видно здесь же.
-function remindRow(org, c) {
+// kind 'extend' (2.201) — «попросите перенос срока»; предел общий: одно напоминание по делу в сутки.
+function remindRow(org, c, kind = 'case') {
   const r = c.remind;
+  const what = r.kind === 'extend' ? 'Напоминали попросить перенос срока' : 'Напоминали';
   const note = el('span', { class: 'muted', 'data-role': 'remind-note', text: r.reminded_at
-    ? `Напоминали ${timeRu(r.reminded_at)}${r.next_remind_at ? ` · снова — после ${timeRu(r.next_remind_at)}` : ''}` : '' });
-  const btn = el('button', { type: 'button', class: 'secondary', 'data-action': 'remind-expert', ...(r.can_remind ? {} : { disabled: '' }),
+    ? `${what} ${timeRu(r.reminded_at)}${r.next_remind_at ? ` · снова — после ${timeRu(r.next_remind_at)}` : ''}` : '' });
+  const btn = el('button', { type: 'button', class: 'secondary', 'data-action': kind === 'extend' ? 'remind-extend' : 'remind-expert',
+    ...(r.can_remind ? {} : { disabled: '' }),
     onclick: async () => {
       btn.disabled = true;
       try {
-        await api('POST', `/api/orgs/${org.id}/cases/${c.id}/remind`);
+        await api('POST', `/api/orgs/${org.id}/cases/${c.id}/remind`, kind === 'extend' ? { kind } : undefined);
         await loadOrgCases(org);
-        say($('org-cases-msg'), `Эксперту отправлено напоминание по делу ${c.order_ref}`, 'ok');
+        say($('org-cases-msg'), kind === 'extend' ? `Эксперту отправлена просьба попросить перенос срока по делу ${c.order_ref}`
+          : `Эксперту отправлено напоминание по делу ${c.order_ref}`, 'ok');
       } catch (err) { say($('org-cases-msg'), err.message); await loadOrgCases(org); }
-    } }, 'Напомнить эксперту');
-  return el('div', { class: 'row', 'data-role': 'remind' }, btn, note);
+    } }, kind === 'extend' ? 'Напомнить эксперту попросить перенос срока' : 'Напомнить эксперту');
+  // Под «Эксперт не принимает дела…» — только кнопка, когда напоминали — видно в общей строке «Напомнить эксперту».
+  return kind === 'extend' ? el('div', { class: 'row', 'data-role': 'remind-extend' }, btn) : el('div', { class: 'row', 'data-role': 'remind' }, btn, note);
 }
 
 // Передать дело в работе другому эксперту организации (2.62): заболел, ушёл. Файлы, черновик, осмотр и переписка
