@@ -8780,3 +8780,55 @@ test('2.201: срок дела в отпуске эксперта, переда�
   await expect(li.locator('[data-action="remind-extend"]')).toHaveCount(0);
   for (const p of [ep, hp, cp]) await p.context().close();
 });
+test('ИИ-проверка новой версии файла (2.206): что из находок прежней версии ушло, что осталось и что появилось', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), ep = await ctx();
+  const customer = await signIn(cp, '+79990010617');
+  const expert = await signIn(ep, '+79990010618');
+  const id = await db(async (c) => {
+    await c.query("insert into specialists (user_id, created_at) values ($1, now() - interval '1 year') on conflict do nothing", [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty') on conflict do nothing", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Версии: ИИ-проверка', $1, $2, 'in_work', current_date + 5, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Версионная ул., 2","area":"40"}') returning id`, [customer.id, expert.id]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [o.id, expert.id]);
+    return o.id;
+  });
+  const up = async (name) => (await (await ep.request.post(`/api/orders/${id}/results`, { data: Buffer.from(`%PDF-1.4 ${name}`), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent(name) } })).json()).document;
+  // ИИ-проверка как её записывает сервер: по файлам, которые были в деле, и «посмотрите» по правилам.
+  const review = (files, bad, ago) => db((c) => c.query(`insert into ai_reviews (order_id, round, requested_by, side, model, items, files, at)
+    values ($1, 1, $2, 'executor', 'fake', $3::jsonb, $4::jsonb, now() - $5::interval)`,
+  [id, expert.id, JSON.stringify(['requisites', 'object_match', 'technical', 'calculation'].map((r) => ({ id: r, hint: bad.includes(r) ? 'attention' : 'ok', note: 'н', marks: [] }))),
+    JSON.stringify(files.map((d) => ({ id: d.id, name: d.filename, read: true }))), ago]));
+  const v1 = await up('Отчёт v1.pdf');
+  await review([v1], ['requisites', 'object_match'], '2 hours');
+  await ep.goto(`/kabinet#order=${id}`);
+  await expect(ep.locator('#ai-review-state')).toContainText('запускал исполнитель перед сдачей');
+  await expect(ep.locator('#ai-review-prev')).toBeHidden();
+
+  const v2 = await up('Отчёт v2.pdf');
+  await review([v1, v2], ['object_match', 'technical'], '1 minute');
+  await ep.reload();
+  const prev = ep.locator('#ai-review-prev');
+  await expect(prev).toBeVisible();
+  await expect(prev.locator('.ai-prev-head')).toHaveText(/^С прошлой ИИ-проверки \(Отчёт v1\.pdf, \d{1,2} [а-я]+ в \d{2}:\d{2}\):$/);
+  await expect(prev.locator('[data-prev="gone"]')).toHaveText('Исправлено: 1 — Реквизиты');
+  await expect(prev.locator('[data-prev="kept"]')).toContainText('Осталось: 1 — ');
+  await expect(prev.locator('[data-prev="fresh"]')).toContainText('Новое: 1 — Технические ошибки');
+  // Нажатие ведёт к правилу.
+  await prev.locator('[data-prev="kept"] button[data-look="object_match"]').click();
+  await expect(ep.locator('#review-checks li[data-check="object_match"]')).toBeInViewport();
+  await prev.scrollIntoViewIfNeeded();
+  await shot(ep, 'h5a-ekspert-ii-novaya-versiya');
+
+  // Исправил всё — «Всё, на что ИИ указывал в прежней версии, ушло».
+  await review([v1, v2], [], '0 minutes');
+  await ep.reload();
+  await expect(prev.locator('.ai-prev-row')).toHaveText(['Исправлено: 2 — Реквизиты, Данные объекта в заключении совпадают с заявкой и документами', 'Всё, на что ИИ указывал в прежней версии, ушло.']);
+  await prev.scrollIntoViewIfNeeded();
+  await shot(ep, 'h5b-ekspert-ii-vse-ushlo');
+  // Заказчику ИИ-проверка не видна.
+  await cp.goto(`/kabinet#order=${id}`);
+  await expect(cp.locator('#order-status')).toHaveText('В работе');
+  await expect(cp.locator('#ai-review-prev')).toBeHidden();
+});

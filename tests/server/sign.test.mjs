@@ -553,6 +553,37 @@ test('напоминание перед подписью (2.136): ИИ-пров�
   } finally { S.providers.ai.complete = orig; }
 });
 
+test('2.206: ИИ-проверка новой версии файла показывает, что из находок прежней версии ушло, что осталось и что появилось', async () => {
+  const o = await inWork('Квартира — ИИ по версиям');
+  const rules = createRegistry().checks('expertise', 'realty');
+  const [a, b, c] = rules.map((r) => r.id);
+  const review = async () => (await spec.req('GET', `/api/orders/${o.id}/review`)).body.ai;
+  const orig = S.providers.ai.complete;
+  const answer = (bad) => async () => ({ model: 'fake', text: JSON.stringify({ items: rules.map((r) => ({ id: r.id, hint: bad.includes(r.id) ? 'attention' : 'ok', note: 'н' })) }) });
+  try {
+    await result(o, 'Отчёт v1.docx.txt', 'отчёт первая версия');
+    S.providers.ai.complete = answer([a, b]);
+    assert.equal((await spec.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
+    assert.equal((await review()).prev, undefined, 'первая проверка — сравнивать не с чем');
+    // Та же версия ещё раз — сравнивать не с чем.
+    assert.equal((await spec.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
+    assert.equal((await review()).prev, undefined);
+
+    await result(o, 'Отчёт v2.docx.txt', 'отчёт вторая версия');
+    S.providers.ai.complete = answer([b, c]);
+    const ai = (await spec.req('POST', `/api/orders/${o.id}/review/ai`)).body.ai;
+    assert.deepEqual([ai.prev.gone, ai.prev.kept, ai.prev.fresh], [[a], [b], [c]]);
+    assert.deepEqual(ai.prev.files, ['Отчёт v1.docx.txt']);
+    assert.ok(ai.prev.at);
+    // Повтор на той же версии сравнивается всё равно с прежней версией.
+    S.providers.ai.complete = answer([]);
+    assert.equal((await spec.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
+    assert.deepEqual([(await review()).prev.gone, (await review()).prev.kept, (await review()).prev.fresh], [[a, b], [], []]);
+    // Заказчику ИИ-проверки не видно вовсе.
+    assert.equal((await owner.req('GET', `/api/orders/${o.id}/review`)).body.ai, undefined);
+  } finally { S.providers.ai.complete = orig; }
+});
+
 test('2.186: руководитель перед подписью организации видит, запускал ли эксперт ИИ-проверку этой версии файла и что осталось «посмотрите»', async () => {
   const org = await makeOrg(S.sql, 'ООО «ИИ перед подписью»');
   const head = await login(S, '+79990001518');

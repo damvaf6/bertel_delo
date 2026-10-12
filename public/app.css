@@ -191,6 +191,12 @@ details.ai-quiet summary { cursor: pointer; padding: 8px 0; color: var(--ok); ov
 .ai-found q { color: var(--muted, #5b6573); }
 .ai-mark-where { color: var(--muted, #5b6472); }
 #ai-review-box { margin-bottom: 8px; }
+.ai-prev { margin: 6px 0; padding: 6px 8px; border-left: 3px solid #8a5a00; background: #fffaf0; overflow-wrap: anywhere; }
+.ai-prev p { margin: 2px 0; font-size: 14px; }
+.ai-prev-head { font-weight: 600; }
+.ai-prev button.link { text-align: left; }
+.ai-prev-row.gone { color: var(--ok); }
+.ai-prev-row.kept, .ai-prev-row.fresh { color: #8a5a00; }
 #mail-status { margin: 0 0 12px; }
 #mail-org-box, #mail-delete { margin-top: 16px; }
 a.btn { text-decoration: none; margin-top: 8px; }

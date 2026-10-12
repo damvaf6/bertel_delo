@@ -280,9 +280,34 @@ export function cleanReviewAnswer(rules, text, docs = [], found = {}) {
 export async function aiReviewView(sql, order) {
   const round = order.status === 'in_work' ? order.review_round + 1 : order.review_round;
   if (round < 1) return null;
-  const r = await sql.one`select round, side, model, items, files, at from ai_reviews
+  const r = await sql.one`select id, round, side, model, items, files, at from ai_reviews
                           where order_id = ${order.id} and round = ${round} order by id desc limit 1`;
-  return r && { round: r.round, side: r.side, model: r.model, items: r.items, files: r.files, at: r.at };
+  if (!r) return null;
+  const prev = await prevReview(sql, order, r);
+  return { round: r.round, side: r.side, model: r.model, items: r.items, files: r.files, at: r.at, ...(prev ? { prev } : {}) };
+}
+
+// Что изменилось с ИИ-проверки прежней версии файла (2.206): последняя более ранняя проверка этого дела (любого круга —
+// обычно до возврата руководителя или диспетчера), где проверялись другие файлы. По правилам: «посмотрите» было и ушло —
+// gone, осталось — kept, появилось — fresh. Прежняя проверка без «посмотрите» и нынешняя без них — сравнивать нечего.
+const fileSet = (files) => (files ?? []).map((f) => f.id).sort().join(',');
+async function prevReview(sql, order, cur) {
+  const rows = await sql`select items, files, at from ai_reviews where order_id = ${order.id} and id < ${cur.id}
+                         order by id desc limit 20`;
+  const p = rows.find((x) => fileSet(x.files) !== fileSet(cur.files));
+  if (!p) return null;
+  const att = (items) => new Set((items ?? []).filter((i) => i.hint === 'attention').map((i) => i.id));
+  const before = att(p.items);
+  const now = att(cur.items);
+  if (!before.size && !now.size) return null;
+  const known = new Set((p.items ?? []).map((i) => i.id));
+  return {
+    at: p.at, files: (p.files ?? []).map((f) => f.name),
+    gone: [...before].filter((id) => !now.has(id)),
+    kept: [...before].filter((id) => now.has(id)),
+    // Новое «посмотрите» — только по правилам, которые прежняя проверка тоже смотрела.
+    fresh: [...now].filter((id) => !before.has(id) && known.has(id)),
+  };
 }
 
 // Напоминание перед подписью (2.136): для каждого файла результата — последняя ИИ-проверка этого круга, в которой этот файл
