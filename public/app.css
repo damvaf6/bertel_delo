@@ -329,6 +329,10 @@ h2.inline { display: inline; }
 .schedule li.today .day > span:first-child { color: var(--accent); }
 .schedule li.free { padding: 4px 0; }
 .schedule li.free .day { font-weight: 400; color: var(--muted); font-size: 14px; }
+/* «Не принимаю новые дела до …» (2.189): дни отпуска — штриховкой слева, день возвращения — зелёной отметкой. */
+.schedule li.away { border-left: 4px solid #9aa0a6; padding-left: 8px; background: repeating-linear-gradient(135deg, #f1f2f4 0 4px, #fff 4px 8px); }
+.schedule li.free.back .day > span:last-child, .schedule li.back .away-mark { color: #137333; }
+.schedule .away-mark { margin: 2px 0 0; font-size: 14px; color: var(--muted); }
 .schedule ul { list-style: none; padding: 0; margin: 4px 0 0; }
 .schedule ul li { margin: 4px 0; }
 .schedule a.open { display: block; padding: 6px 8px; border-radius: 6px; background: #f2f5fa; color: var(--text); text-decoration: none; overflow-wrap: anywhere; }
