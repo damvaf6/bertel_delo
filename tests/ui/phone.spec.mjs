@@ -1089,6 +1089,13 @@ test('ИИ-проверка результата: специалист пере�
   await expect(quiet.locator('li[data-check]').filter({ hasText: 'Расчёт' }).locator('.ai-hint')).toHaveText('ИИ: Замечаний не найдено');
   await expect(sp.locator('#review-checks .verdict')).toHaveCount(0);
   await shot(sp, '54-specialist-ii-proverka');
+  // Черновик заключения (2.207): дата оценки — из приложенного задания на оценку, в таблице задания и в тексте; откуда — видно.
+  await sp.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  await expect(sp.getByLabel('Текст заключения')).toHaveValue(/\| Дата оценки \| 03\.10\.2026 \|/);
+  await expect(sp.locator('#draft-state')).toContainText('Дата оценки 03.10.2026 — как в задании на оценку «Задание на оценку.txt» (стр. 1) — сверьте.');
+  await sp.locator('#draft-state').scrollIntoViewIfNeeded();
+  await shot(sp, '54g-specialist-chernovik-data-ocenki');
   expect((await sp.request.patch('/api/me', { data: { full_name: 'Тестов Эксперт ИИ' }, headers: H })).status()).toBe(200);
   await sp.reload();
   const asked = new Promise((ok) => sp.once('dialog', (d) => { ok(d.message()); d.accept(); }));
