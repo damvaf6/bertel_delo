@@ -8,6 +8,14 @@ import { loadOrgCases } from '/orgcases.js';
 
 const $ = (id) => document.getElementById(id);
 let current = null;
+// Отбор дел на подпись по ИИ-проверке эксперта (2.193): файлы, ждущие подписи организации, без ИИ-проверки этой версии или
+// с оставшимися «посмотрите».
+const SIGN_FILTERS = [
+  { id: 'noai', text: 'Без ИИ-проверки этой версии', test: (d) => d.ai_check?.state === 'none' },
+  { id: 'look', text: 'Есть «посмотрите»', test: (d) => d.ai_check?.state === 'attention' },
+];
+let signFilter = null;
+let signItems = [];
 // «2 дн.», «5 ч», «меньше часа» (2.148).
 const waitedDays = (iso) => {
   const h = Math.floor((Date.now() - new Date(iso).getTime()) / 3_600_000);
@@ -20,14 +28,20 @@ const remarkViews = new Set(); // открытые формы возврата �
 const refresh = () => Promise.all([loadOrgSign(current), loadOrgCases(current)]);
 
 export async function loadOrgSign(org) {
+  if (current?.id !== org.id) signFilter = null;
   current = org;
-  const { items } = await api('GET', `/api/orgs/${org.id}/signing`);
+  signItems = (await api('GET', `/api/orgs/${org.id}/signing`)).items;
   if (remarkOrg !== org.id) {
     try { remarks = (await api('GET', `/api/orgs/${org.id}/remarks`)).remarks; remarkOrg = org.id; } catch { remarks = []; }
   }
+  renderSign();
+}
+
+function renderSign() {
+  const all = signItems;
   remarkViews.clear();
   $('org-sign-box').classList.remove('hidden');
-  $('org-sign-empty').classList.toggle('hidden', items.length > 0);
+  $('org-sign-empty').classList.toggle('hidden', all.length > 0);
   // Сначала — что ждёт подписи; подписанное — ниже, свёрнутым (разбор 03.10.2026, 2.23). «Подписать все файлы дела» — одной
   // кнопкой, если ждут несколько (2.15).
   const waiting = (it) => it.documents.some((d) => d.signatures.expert && !d.signatures.org);
@@ -39,8 +53,15 @@ export async function loadOrgSign(org) {
     ...(it.waiting_since && waiting(it) ? [el('div', { class: 'sig-state warn', 'data-sig': 'since', text: `Ждёт Вашей подписи ${waitedDays(it.waiting_since)} — эксперт подписал ${new Date(it.waiting_since).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}` })] : []),
     // Эксперт напоминал о подписи (2.99) — пока файлы ждут подписи организации.
     ...(it.reminded_at && waiting(it) ? [el('div', { class: 'sig-state', 'data-sig': 'reminded', text: `Эксперт напомнил о подписи ${new Date(it.reminded_at).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}` })] : [])];
+  const readyOf = (it) => it.documents.filter((d) => d.signatures.expert && !d.signatures.org);
+  const counts = new Map(SIGN_FILTERS.map((f) => [f.id, all.filter((it) => readyOf(it).some(f.test)).length]));
+  if (signFilter && !counts.get(signFilter)) signFilter = null;
+  const chosen = SIGN_FILTERS.find((f) => f.id === signFilter);
+  renderFilter(counts, all.filter((it) => readyOf(it).length).length);
+  // В отборе — только дела, где такой файл ждёт подписи; подписанные скрыты.
+  const items = chosen ? all.filter((it) => readyOf(it).some(chosen.test)) : all;
   const open = items.filter((it) => !signedAll(it));
-  const done = items.filter(signedAll);
+  const done = chosen ? [] : items.filter(signedAll);
   renderMany(open.filter(waiting));
   $('org-sign').replaceChildren(
     ...open.map((it) => {
@@ -54,6 +75,15 @@ export async function loadOrgSign(org) {
     ...done.map((it) => el('li', { class: 'signed', 'data-item': it.order_ref },
       el('details', {}, el('summary', { text: `${it.service} · ${it.order_ref} · подписано` }), ...head(it).slice(1),
         el('ul', { class: 'list' }, ...it.documents.map((d) => docItem(d, null))), ...returnsBlock(it.returns ?? [])))));
+}
+
+function renderFilter(counts, waiting) {
+  const box = $('org-sign-filter');
+  const used = SIGN_FILTERS.filter((f) => counts.get(f.id));
+  box.classList.toggle('hidden', !used.length);
+  const chip = (id, text) => el('button', { type: 'button', class: 'secondary', 'data-sign-filter': id ?? 'all',
+    'aria-pressed': String(signFilter === id), onclick: () => { signFilter = id; renderSign(); } }, text);
+  box.replaceChildren(...(used.length ? [chip(null, `Все ждут подписи · ${waiting}`), ...used.map((f) => chip(f.id, `${f.text} · ${counts.get(f.id)}`))] : []));
 }
 
 // История возвратов эксперту (2.27): что и когда вернули, исправил ли эксперт (подписал заново); по пунктам (2.93) — что
