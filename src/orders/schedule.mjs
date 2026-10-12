@@ -148,7 +148,8 @@ export async function orgSchedule(sql, orgId, registry, today = todayMsk()) {
     const away = e.away_until && day(e.away_until) > today ? { until: day(e.away_until), note: e.away_note ?? null } : null;
     return [e.user_id, {
       user_id: e.user_id, full_name: e.full_name || 'Без имени', away, paused: !e.active, overdue: [],
-      days: header.map((d) => ({ date: d.date, away: !!away && d.date < away.until, items: [] })),
+      // Не принимает новые дела (2.194): до дня возвращения или, если выключил приём, все две недели.
+      days: header.map((d) => ({ date: d.date, away: !e.active || (!!away && d.date < away.until), items: [] })),
     }];
   }));
   const put = (userId, date, item) => {
