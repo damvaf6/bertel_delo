@@ -101,6 +101,36 @@ export async function expiringLinks(sql, { executor = null, order = null } = {})
     order by l.expires_at, l.id`;
 }
 
+// Осмотр закончен не полностью (2.208): последняя ссылка дела, выданная исполнителем (дело у него в работе), закрыта «Готово»,
+// а у обязательных шагов осмотра в деле нет ни одного фото (ни по ссылке, ни с выезда помощника). Держится, пока шаги не
+// досняты или эксперт не выдал новую ссылку. asked — по скольким из них уже есть просьба доснять (владелец увидит её по новой
+// ссылке). Только своё: { executor } — дела исполнителя, { order } — одно дело.
+export async function incompleteInspections(sql, registry, { executor = null, order = null } = {}) {
+  const links = await sql`
+    select l.id, l.order_id, l.finished_at, o.module, o.service,
+           (select count(*)::int from inspection_photos p where p.link_id = l.id) as photos
+    from inspection_links l join orders o on o.id = l.order_id
+    where o.status = 'in_work' and o.executor_user_id = l.created_by
+      and (${executor}::uuid is null or l.created_by = ${executor}::uuid)
+      and (${order}::uuid is null or l.order_id = ${order}::uuid)
+      and l.revoked_at is null and l.finished_at is not null
+      and not exists (select 1 from inspection_links n where n.order_id = l.order_id and n.id > l.id)
+    order by l.finished_at, l.id`;
+  const out = [];
+  for (const l of links) {
+    const need = registry.inspectionSteps(l.module, l.service).filter((s) => !s.optional);
+    if (!need.length) continue;
+    const have = new Set((await sql`select distinct p.step from inspection_photos p join documents d on d.id = p.document_id
+                                    where d.order_id = ${l.order_id} and d.deleted_at is null`).map((r) => r.step));
+    const missing = need.filter((s) => !have.has(s.id));
+    if (!missing.length) continue;
+    const retakes = await openRetakes(sql, l.order_id);
+    out.push({ link_id: String(l.id), order_id: l.order_id, finished_at: l.finished_at, photos: l.photos,
+      missing: missing.map((s) => ({ id: s.id, title: s.title })), asked: missing.filter((s) => retakes[s.id]).length });
+  }
+  return out;
+}
+
 // Напомнить эксперту (раз в минуту вместе с напоминаниями о сроках, src/server.mjs) — один раз на ссылку.
 export async function remindSilentInspections(sql) {
   let sent = 0;
@@ -260,9 +290,12 @@ export function inspectOps() {
         const [silent] = canIssue(actor, order) ? await silentLinks(sql, { order: order.id }) : [];
         // Ссылка перестанет действовать в ближайшие сутки (2.196) — «Продлить ссылку» без новой ссылки владельцу.
         const [expiring] = canIssue(actor, order) ? await expiringLinks(sql, { order: order.id }) : [];
+        // Владелец нажал «Готово», а обязательные шаги не сняты (2.208) — «Попросить доснять» с новой ссылкой.
+        const [incomplete] = canIssue(actor, order) ? await incompleteInspections(sql, registry, { order: order.id }) : [];
         return {
           silent: silent ? { link_id: String(silent.id), since: silent.created_at, expired: new Date(silent.expires_at) <= new Date(), sms_to: silent.sms_to ?? null } : null,
           expiring: expiring ? { link_id: String(expiring.id), expires_at: expiring.expires_at, photos: expiring.photos } : null,
+          incomplete: incomplete ? { link_id: incomplete.link_id, finished_at: incomplete.finished_at, photos: incomplete.photos, missing: incomplete.missing, asked: incomplete.asked } : null,
           steps: steps.map((s) => ({ ...s, photos: byStep(s.id), retake: retakes[s.id] ?? null })),
           links: links.map((l) => linkView(l, order, l.photos)),
           can_issue: canIssue(actor, order) && steps.length > 0,
@@ -446,11 +479,12 @@ export function inspectOps() {
       },
     },
     {
-      // «Готово»: ссылка закрывается, исполнитель получает уведомление. Пропущенные шаги эксперт увидит у себя.
+      // «Готово»: ссылка закрывается, исполнитель получает уведомление. Пропущенные шаги эксперт увидит у себя; не сняты
+      // обязательные шаги (2.208) — уведомление другое: «снял не всё — попросите доснять».
       id: 'inspect.finish', method: 'POST', path: '/api/inspect/finish', auth: 'public',
       publicReason: 'владелец объекта завершает осмотр по секрету ссылки; ссылка после этого не действует',
       rateLimit: (ip) => ownerLimit(ip),
-      async handler({ sql, req }) {
+      async handler({ sql, req, registry }) {
         return sql.tx(async (tx) => {
           const { link, order, state } = await linkByToken(tx, req, { lock: true });
           if (state !== 'active') throw new HttpError(410, 'link_inactive', STATE_RU[state]);
@@ -458,7 +492,8 @@ export function inspectOps() {
           if (!n) throw new HttpError(409, 'no_photos', 'Сначала сделайте хотя бы одно фото');
           await tx`update inspection_links set finished_at = now() where id = ${link.id}`;
           await audit(tx, null, 'inspect.finish', 'order', order.id, { link: String(link.id), photos: n });
-          await notify(tx, 'inspection_done', { users: [link.created_by], orderId: order.id });
+          const [gap] = await incompleteInspections(tx, registry, { order: order.id });
+          await notify(tx, gap ? 'inspection_incomplete' : 'inspection_done', { users: [link.created_by], orderId: order.id });
           return { finished: true, photos: n };
         });
       },

@@ -1290,7 +1290,8 @@ test('дистанционный осмотр: специалист выдаёт
   await sp.goto(`/kabinet#order=${id}`);
   await expect(sp.locator('#inspect-state')).toContainText('Фото осмотра: 2');
   const notes = await (await sp.request.get('/api/notifications')).json();
-  expect(JSON.stringify(notes)).toContain('Владелец объекта прислал фото осмотра');
+  // Сняты не все обязательные шаги — уведомление «снял не всё» (2.208).
+  expect(JSON.stringify(notes)).toContain('Владелец нажал «Готово», но снял не всё');
 
   // 2.20: специалист просит переснять фасад и отправляет владельцу новую ссылку СМС с платформы.
   await sp.getByLabel('Попросить переснять шаг').selectOption('facade');

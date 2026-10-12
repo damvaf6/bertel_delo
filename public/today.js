@@ -201,6 +201,11 @@ export async function loadToday() {
       ...group('inspect-expiring', 'Осмотр: ссылка скоро перестанет действовать', e.inspect_expiring ?? [], (x) => [x.title,
         `ссылка действует до ${since(x.expires_at)} · владелец не нажал «Готово» · ${x.photos ? `фото по ссылке: ${x.photos}` : 'фото пока нет'}${x.sms_to ? ` · СМС на ${x.sms_to}` : ''}`],
       (x) => { location.hash = `order=${x.id}&to=inspect`; }, extendLink),
+      // Владелец нажал «Готово», а обязательные шаги осмотра без фото (2.208) — к осмотру в деле, там «Попросить доснять».
+      ...group('inspect-incomplete', 'Осмотр: владелец нажал «Готово», а снял не всё', e.inspect_incomplete ?? [], (x) => [x.title,
+        `«Готово» ${since(x.finished_at)} · не снято: ${x.missing.join(', ')}`,
+        x.asked === x.missing.length ? 'просьба доснять готова — отправьте владельцу новую ссылку' : 'попросите доснять — владельцу уйдёт новая ссылка'],
+      (x) => { location.hash = `order=${x.id}&to=inspect`; }),
       ...group('hot', 'Горит срок', e.hot.filter((x) => !noResult.some((n) => n.id === x.id)), (x) => [x.title, `${x.service} · ${deadline({ ...x, who: 'Вы попросили' }, t.today)}`], toOrder, askLate),
       ...group('offers', 'Новые предложения', e.offers, (x) => [x.title, [x.service, x.fee_kop ? `Вам ${rub(x.fee_kop)}` : null, deadline(x, t.today)].filter(Boolean).join(' · ')], toOrder),
       ...group('review', 'Ждут проверки диспетчера', e.review, (x) => [x.title, `${x.service} · ${deadline(x, t.today)}`], toOrder),

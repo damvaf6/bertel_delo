@@ -12,7 +12,8 @@
 // продолжать» — какие запрошенные документы пришли и сколько ещё ждём (2.128). Заказчик ждёт ответа в переписке больше суток
 // (2.132): его сообщение без ответа эксперта — даже если эксперт его уже прочитал. Срок через 1–2 дня или прошёл, а своего
 // файла результата нет (2.138). «Вернули на доработку» — когда вернули, пункты замечания, ближе срок — выше (2.147).
-// Ответ диспетчера на просьбу о переносе срока — пока эксперт не открыл «Срок» в деле (2.155).
+// Ответ диспетчера на просьбу о переносе срока — пока эксперт не открыл «Срок» в деле (2.155). Владелец нажал «Готово»
+// осмотра, а обязательные шаги без фото (2.208).
 // Руководителю — те же сведения, что в «Делах экспертов» (2.16): без заказчика, полей заявки, документов и переписки.
 // Только свои дела и свои организации.
 import { orderRef } from '../notify/registry.mjs';
@@ -21,7 +22,7 @@ import { STATUS_NAME, addDays, isOverdue, resultDue, todayMsk } from '../orders/
 import { orderSignatures, orgReturns, signWait } from './sign-ops.mjs';
 import { executorSignOrg } from '../access/policy.mjs';
 import { dossierAlerts, loadDossier } from '../dossier/dossier.mjs';
-import { expiringLinks, silentLinks } from './inspect-ops.mjs';
+import { expiringLinks, incompleteInspections, silentLinks } from './inspect-ops.mjs';
 import { answeredExtends, openExtends } from './deadline-ops.mjs';
 import { openHandovers } from './handover-ops.mjs';
 import { dueNotes } from './note-ops.mjs';
@@ -78,6 +79,12 @@ async function expertPart(sql, actor, registry, today) {
     const o = rows.find((x) => x.id === l.order_id);
     if (o) expiring.push(item(o, { link_id: String(l.id), expires_at: l.expires_at, photos: l.photos, sms_to: l.sms_to ?? null }));
   }
+  // Владелец нажал «Готово», а обязательные шаги осмотра без фото (2.208) — попросить доснять по новой ссылке.
+  const incomplete = [];
+  for (const l of await incompleteInspections(sql, registry, { executor: actor.id })) {
+    const o = rows.find((x) => x.id === l.order_id);
+    if (o) incomplete.push(item(o, { finished_at: l.finished_at, photos: l.photos, missing: l.missing.map((s) => s.title), asked: l.asked }));
+  }
   // Можно продолжать (2.86): что пришло по делу в работе после того, как эксперт его последний раз открыл (order_seen).
   const ready = [];
   for (const o of rows.filter((x) => x.status === 'in_work')) {
@@ -97,8 +104,9 @@ async function expertPart(sql, actor, registry, today) {
                       (select max(at) from order_messages, s where order_id = ${o.id} and side <> 'executor' and at > s.seen)) as last_at`;
     const what = [];
     if (n.docs) what.push(await docsLine(sql, o.id, actor.id));
-    if (n.finished) what.push(`осмотр закончен${n.photos ? ` (фото: ${n.photos})` : ''}`);
-    else if (n.photos) what.push(`новые фото осмотра: ${n.photos}`);
+    // Осмотр закончен не полностью (2.208) — своя строка «снял не всё», здесь не повторяется.
+    if (n.finished && !incomplete.some((x) => x.id === o.id)) what.push(`осмотр закончен${n.photos ? ` (фото: ${n.photos})` : ''}`);
+    else if (n.photos && !n.finished) what.push(`новые фото осмотра: ${n.photos}`);
     if (n.onsite) what.push('выезд помощника завершён');
     // Куда вести, если сообщений нет: к запрошенным документам или к осмотру.
     const other = what.length ? { what: [...what], to: n.docs ? 'docs' : 'inspect' } : null;
@@ -150,6 +158,7 @@ async function expertPart(sql, actor, registry, today) {
     sign_wait: signWaits,
     inspect_silent: silent,
     inspect_expiring: expiring,
+    inspect_incomplete: incomplete,
     // Уже попросил перенести срок (2.100) — в строке видно, на какую дату и что ответа ещё нет.
     hot: hotRows.map((o) => item(o, { extend: ext.get(o.id) ?? null })),
     fresh_late: freshLate,

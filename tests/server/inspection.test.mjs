@@ -43,6 +43,8 @@ async function inWork(title, executor = spec) {
   return o;
 }
 
+// Обязательные шаги осмотра квартиры (realty), без «если есть».
+const NEED = ['facade', 'entrance', 'door', 'rooms', 'kitchen', 'bathroom', 'window_view', 'surroundings'];
 const tokenOf = (path) => path.split('#')[1];
 const anon = () => client(S);
 const view = (token) => anon().req('GET', '/api/inspect', undefined, { headers: { 'x-inspect-token': token } });
@@ -167,7 +169,8 @@ test('«Готово»: ссылка закрывается, исполните�
   const r = await finish(token);
   assert.equal(r.status, 200);
   assert.deepEqual(r.body, { finished: true, photos: 1 });
-  const [n] = await S.sql`select * from notifications where user_id = ${spec.user.id} and event = 'inspection_done' and order_id = ${o.id}`;
+  // Снята одна кухня — обязательные шаги без фото: уведомление «снял не всё» (2.208).
+  const [n] = await S.sql`select * from notifications where user_id = ${spec.user.id} and event = 'inspection_incomplete' and order_id = ${o.id}`;
   assert.ok(n, 'исполнитель получил уведомление');
   const sms = await S.sql`select body from notification_deliveries where notification_id = ${n.id}`;
   assert.equal(sms.length, 1);
@@ -538,8 +541,9 @@ test('2.86: «Можно продолжать» — документы по за
   r = await readyOf(spec, o);
   assert.deepEqual(r.what, ['новые фото осмотра: 1']);
   assert.equal(r.to, 'inspect');
+  for (const st of NEED) if (st !== 'facade') assert.equal((await shoot(l.token, st)).status, 201);
   assert.equal((await finish(l.token)).status, 200);
-  assert.deepEqual((await readyOf(spec, o)).what, ['осмотр закончен (фото: 1)']);
+  assert.deepEqual((await readyOf(spec, o)).what, [`осмотр закончен (фото: ${NEED.length})`]);
   assert.equal((await spec.req('GET', `/api/orders/${o.id}`)).status, 200);
   assert.equal(await readyOf(spec, o), undefined);
 
@@ -682,4 +686,81 @@ test('2.196: ссылка, что уже «молчит» 2 дня, — толь
   await expiresIn(a.link.id, 10);
   assert.ok(!(await todayExpiring(spec)).some((x) => x.id === p.id), 'действует новая ссылка');
   void b;
+});
+
+// 2.208: владелец нажал «Готово», а обязательные шаги без фото — в деле и в «Сегодня» «снял не всё»; «Попросить доснять» —
+// просьбы у шагов и новая ссылка; досняли — строка уходит.
+const todayIncomplete = async (c) => (await c.req('GET', '/api/today')).body.expert?.inspect_incomplete ?? [];
+
+test('2.208: «Готово» без обязательных шагов — в деле и в «Сегодня», уведомление «снял не всё»; новая ссылка и доснятые шаги — строка уходит', async () => {
+  const o = await inWork('Осмотр — снял не всё');
+  const l = await issue(o);
+  assert.equal((await shoot(l.token, 'facade', { headers: GEO })).status, 201);
+  assert.equal((await shoot(l.token, 'kitchen', { headers: GEO })).status, 201);
+  assert.equal((await shoot(l.token, 'meters', { headers: GEO })).status, 201);
+  assert.equal((await spec.req('GET', `/api/orders/${o.id}/inspection`)).body.incomplete, null, 'пока «Готово» не нажато — нет');
+  assert.ok(!(await todayIncomplete(spec)).some((x) => x.id === o.id));
+  assert.equal((await finish(l.token)).status, 200);
+
+  const g = (await spec.req('GET', `/api/orders/${o.id}/inspection`)).body.incomplete;
+  assert.equal(g.link_id, l.link.id);
+  assert.equal(g.photos, 3);
+  assert.deepEqual(g.missing.map((s) => s.id), NEED.filter((s) => !['facade', 'kitchen'].includes(s)), '«Счётчики» — «если есть», не в счёт');
+  assert.equal(g.asked, 0);
+  const t = (await todayIncomplete(spec)).find((x) => x.id === o.id);
+  assert.ok(t, 'строка в «Сегодня»');
+  assert.deepEqual(t.missing, g.missing.map((s) => s.title));
+  assert.ok(t.missing.includes('Каждая комната'));
+  // В «Можно продолжать» «осмотр закончен» не повторяется.
+  const ready = (await spec.req('GET', '/api/today')).body.expert.ready.find((x) => x.id === o.id);
+  assert.ok(!ready || !ready.what.some((w) => w.startsWith('осмотр закончен')));
+  const [n] = await S.sql`select event from notifications where user_id = ${spec.user.id} and order_id = ${o.id} and event like 'inspection_%'`;
+  assert.equal(n.event, 'inspection_incomplete');
+  // Заказчик, диспетчер, чужой эксперт — не видят.
+  assert.equal((await owner.req('GET', `/api/orders/${o.id}/inspection`)).body.incomplete, null);
+  assert.equal((await dispatcher.req('GET', `/api/orders/${o.id}/inspection`)).body.incomplete, null);
+  assert.ok(!(await todayIncomplete(spec2)).some((x) => x.id === o.id));
+
+  // Попросил доснять — у шагов просьбы, строка держится («просьба готова — отправьте ссылку»).
+  for (const st of g.missing) {
+    assert.equal((await spec.req('POST', `/api/orders/${o.id}/inspection/retakes`, { step: st.id, note: 'Этот шаг не снят — снимите, пожалуйста' })).status, 201);
+  }
+  assert.equal((await todayIncomplete(spec)).find((x) => x.id === o.id).asked, g.missing.length);
+  // Новая ссылка — строка уходит; владелец видит просьбы у шагов.
+  const l2 = await issue(o);
+  assert.ok(!(await todayIncomplete(spec)).some((x) => x.id === o.id), 'выдана новая ссылка');
+  assert.equal((await spec.req('GET', `/api/orders/${o.id}/inspection`)).body.incomplete, null);
+  const v = await view(l2.token);
+  assert.equal(v.body.steps.find((s) => s.id === 'rooms').retake, 'Этот шаг не снят — снимите, пожалуйста');
+  // Доснял всё и нажал «Готово» — обычное «прислал фото», строки нет.
+  for (const st of g.missing) assert.equal((await shoot(l2.token, st.id)).status, 201);
+  assert.equal((await finish(l2.token)).status, 200);
+  assert.ok(!(await todayIncomplete(spec)).some((x) => x.id === o.id));
+  const evs = await S.sql`select event from notifications where order_id = ${o.id} and event like 'inspection_%' order by id`;
+  assert.deepEqual(evs.map((e) => e.event), ['inspection_incomplete', 'inspection_done']);
+});
+
+test('2.208: все обязательные шаги в деле есть — строки нет; дело не в работе — строки нет', async () => {
+  const o = await inWork('Осмотр — досняли с выезда');
+  const l = await issue(o);
+  assert.equal((await shoot(l.token, 'facade')).status, 201);
+  assert.equal((await finish(l.token)).status, 200);
+  assert.ok((await todayIncomplete(spec)).some((x) => x.id === o.id));
+  // Остальные шаги оказались в деле (как с выезда помощника) — всё снято.
+  const [p] = await S.sql`select * from inspection_photos where link_id = ${l.link.id}`;
+  const [d] = await S.sql`select * from documents where id = ${p.document_id}`;
+  for (const st of NEED.filter((x) => x !== 'facade')) {
+    const [nd] = await S.sql`insert into documents (order_id, uploaded_by, kind, filename, mime, size_bytes, storage_key)
+      values (${o.id}, ${d.uploaded_by}, 'inspection', ${st + '.jpg'}, 'image/jpeg', 10, ${d.storage_key + st}) returning id`;
+    await S.sql`insert into inspection_photos (document_id, link_id, step) values (${nd.id}, ${l.link.id}, ${st})`;
+  }
+  assert.ok(!(await todayIncomplete(spec)).some((x) => x.id === o.id), 'всё снято');
+  // Дело ушло на проверку — не в работе.
+  const q = await inWork('Осмотр — на проверке');
+  const lq = await issue(q);
+  assert.equal((await shoot(lq.token, 'facade')).status, 201);
+  assert.equal((await finish(lq.token)).status, 200);
+  assert.ok((await todayIncomplete(spec)).some((x) => x.id === q.id));
+  await S.sql`update orders set status = 'review' where id = ${q.id}`;
+  assert.ok(!(await todayIncomplete(spec)).some((x) => x.id === q.id));
 });
