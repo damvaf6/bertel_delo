@@ -9,8 +9,9 @@ import { loadOrgCases } from '/orgcases.js';
 const $ = (id) => document.getElementById(id);
 let current = null;
 // Отбор дел на подпись по ИИ-проверке эксперта (2.193): файлы, ждущие подписи организации, без ИИ-проверки этой версии или
-// с оставшимися «посмотрите».
+// с оставшимися «посмотрите»; 2.205 — по замечанию руководителя эксперт отметил исправленными не все пункты.
 const SIGN_FILTERS = [
+  { id: 'left', text: 'Отмечены не все пункты замечания', test: (d, it) => (returnOf(d, it)?.left ?? 0) > 0 },
   { id: 'noai', text: 'Без ИИ-проверки этой версии', test: (d) => d.ai_check?.state === 'none' },
   { id: 'look', text: 'Есть «посмотрите»', test: (d) => d.ai_check?.state === 'attention' },
 ];
@@ -54,12 +55,13 @@ function renderSign() {
     // Эксперт напоминал о подписи (2.99) — пока файлы ждут подписи организации.
     ...(it.reminded_at && waiting(it) ? [el('div', { class: 'sig-state', 'data-sig': 'reminded', text: `Эксперт напомнил о подписи ${new Date(it.reminded_at).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}` })] : [])];
   const readyOf = (it) => it.documents.filter((d) => d.signatures.expert && !d.signatures.org);
-  const counts = new Map(SIGN_FILTERS.map((f) => [f.id, all.filter((it) => readyOf(it).some(f.test)).length]));
+  const fits = (f, it) => readyOf(it).some((d) => f.test(d, it));
+  const counts = new Map(SIGN_FILTERS.map((f) => [f.id, all.filter((it) => fits(f, it)).length]));
   if (signFilter && !counts.get(signFilter)) signFilter = null;
   const chosen = SIGN_FILTERS.find((f) => f.id === signFilter);
   renderFilter(counts, all.filter((it) => readyOf(it).length).length);
   // В отборе — только дела, где такой файл ждёт подписи; подписанные скрыты.
-  const items = chosen ? all.filter((it) => readyOf(it).some(chosen.test)) : all;
+  const items = chosen ? all.filter((it) => fits(chosen, it)) : all;
   const open = items.filter((it) => !signedAll(it));
   const done = chosen ? [] : items.filter(signedAll);
   renderMany(open.filter(waiting));
