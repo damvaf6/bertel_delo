@@ -2542,7 +2542,8 @@ test('как настоящий эксперт (2.33): автобус для с�
   await op.getByRole('button', { name: 'Готово' }).click();
   await expect(op.locator('#closed-text')).toContainText('Эксперт получил 3 фото');
   await sp.reload();
-  await expect(sp.locator('#inspect-state')).toContainText('Не снято: Сзади, Слева, Справа, Салон — попросите доснять ниже.');
+  // «Готово» нажато, а снято не всё — недостающие шаги в плашке «Попросить доснять» (2.208, раньше — строкой, 2.33).
+  await expect(sp.locator('#inspect-incomplete-text')).toContainText('но не снял: Сзади, Слева, Справа, Салон.');
   // 2.96: у фото в деле — сквозной номер по шагам осмотра, тот же, что в Word.
   await expect(sp.locator('#inspect-steps li[data-step="car_front"] .name')).toHaveText('Фото 1 · Осмотр · Спереди · 1.jpg');
   await expect(sp.locator('#inspect-steps li[data-step="car_odometer"] .name')).toHaveText('Фото 3 · Осмотр · Пробег · 1.jpg');
