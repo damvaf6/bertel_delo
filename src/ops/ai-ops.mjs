@@ -119,6 +119,26 @@ async function assignmentDocs(sql, storage, order) {
   return out;
 }
 
+// 2.202: выписки ЕГРН дела — приложенные заказчиком к просьбе «Выписка из ЕГРН», с «ЕГРН» или «выписка» в названии файла
+// или начинающиеся словами «Выписка из Единого государственного реестра недвижимости». Только для автоматических правил.
+const EGRN_MAX = 3;
+const EGRN_HEAD = /выписк\S*\s+из\s+(?:единого\s+государственного\s+реестра\s+недвижимости|ЕГРН)/iu;
+async function egrnDocs(sql, storage, order) {
+  const docs = await sql`select d.*, exists (select 1 from doc_requests r where r.document_id = d.id and r.item_id = 'egrn' and r.cancelled_at is null) as asked
+                         from documents d where d.order_id = ${order.id} and d.kind in ('basis', 'other') and d.deleted_at is null
+                         order by d.created_at desc limit 20`;
+  const out = [];
+  for (const d of docs) {
+    if (out.length >= EGRN_MAX) break;
+    if (!readableKind(d.filename, d.mime) || d.size_bytes > READ_MAX_BYTES) continue;
+    const buf = await storage.get(d.storage_key);
+    const got = buf ? await extractPages(buf, d.filename, d.mime) : null;
+    if (!got) continue;
+    if (d.asked || /егрн|egrn|выписк/iu.test(d.filename) || EGRN_HEAD.test(String(got.pages[0] ?? '').slice(0, 1000))) out.push({ id: d.id, name: d.filename, pages: got.pages });
+  }
+  return out;
+}
+
 export function aiOps() {
   return [
     {
@@ -254,7 +274,9 @@ export function aiOps() {
         const signedOn = Object.fromEntries(signs.map((r) => [r.document_id, r.day]));
         // 2.198: дата оценки в отчёте — как в задании на оценку, письме или определении суда, приложенных к делу.
         const assignment = names.includes('value_date') ? await assignmentDocs(sql, providers.storage, order) : [];
-        const auto = runAutoChecks(names, files, { fields: order.fields ?? {}, dossier, basis, service: order.service, analogs, inspectionDays, inspectionUploadDays, signedOn, assignment, today: dossier.today });
+        // 2.202: площадь объекта в отчёте — как в выписке ЕГРН из дела.
+        const egrn = names.includes('area_match') ? await egrnDocs(sql, providers.storage, order) : [];
+        const auto = runAutoChecks(names, files, { fields: order.fields ?? {}, dossier, basis, service: order.service, analogs, inspectionDays, inspectionUploadDays, signedOn, assignment, egrn, today: dossier.today });
         const found = Object.fromEntries(rules.map((r) => [r.id, (r.auto ?? []).flatMap((a) => auto[a] ?? [])]));
         // Модель недоступна или лимит исчерпан, но автоматические находки есть — показываем их, а не ошибку.
         let out;
