@@ -40,6 +40,7 @@ export async function loadInspection(current) {
       : 'Владелец объекта снимает его сам по ссылке — без входа, по шагам для этого вида объекта. Фото появятся здесь.')
       : 'Фото осмотра пока нет.';
   renderSilent(r);
+  renderExpiring(r);
   renderLinks(r);
   renderSteps(r, photos);
 }
@@ -55,6 +56,29 @@ function renderSilent(r) {
   $('inspect-silent-text').textContent = `${s.expired ? 'Срок ссылки истёк, а' : 'Уже 2 дня'} владелец не прислал ни одного фото (ссылка от ${timeRu(s.since)}${s.sms_to ? `, СМС на ${s.sms_to}` : ''}). `
     + 'Отправьте ссылку снова — новая заменит прежнюю. Чтобы ушла СМС, впишите телефон ниже: номер мы не храним.';
 }
+
+// Ссылка перестанет действовать в ближайшие сутки, «Готово» не нажато (2.196): «Продлить ссылку» — на срок из формы ниже
+// (по умолчанию 3 дня), считая от прежнего срока; владелец снимает по той же ссылке.
+function renderExpiring(r) {
+  const x = r.expiring;
+  ctx.expiring = x;
+  $('inspect-expiring').classList.toggle('hidden', !(x && r.can_issue));
+  if (!x || !r.can_issue) return;
+  $('inspect-expiring-text').textContent = `Ссылка действует до ${timeRu(x.expires_at)}, а владелец ещё не нажал «Готово»`
+    + ` (${x.photos ? `фото по ссылке: ${x.photos}` : 'фото пока нет'}). Продлите — владелец доснимет по той же ссылке, отправлять заново не нужно.`;
+  const d = Number($('inspect-days').value);
+  $('inspect-extend').textContent = `Продлить на ${d === 1 ? '1 день' : d < 5 ? `${d} дня` : `${d} дней`}`;
+}
+$('inspect-days').addEventListener('change', () => { if (ctx?.expiring) renderExpiring({ expiring: ctx.expiring, can_issue: true }); });
+$('inspect-extend').addEventListener('click', async () => {
+  const btn = $('inspect-extend');
+  btn.disabled = true;
+  try {
+    const r = await api('POST', `/api/orders/${ctx.order.id}/inspection/extend`, { link_id: ctx.expiring.link_id, days: Number($('inspect-days').value) });
+    await loadInspection({ order: ctx.order });
+    say($('inspect-msg'), `Ссылка продлена до ${timeRu(r.expires_at)} — владелец снимает по той же ссылке`, 'ok');
+  } catch (err) { say($('inspect-msg'), err.message); } finally { btn.disabled = false; }
+});
 
 // Прежняя ушла СМС, а телефон не вписан — сначала просим вписать; второе нажатие — ссылка без СМС (скопировать и отправить самому).
 let askedPhone = false;

@@ -613,3 +613,73 @@ test('2.146: день осмотра — по часам телефона и п�
   assert.deepEqual(await check(`Отчёт об оценке\nОценка проведена без осмотра.\nДата составления отчёта: ${ru(today)}`),
     [`В отчёте сказано «без осмотра», а в деле есть фото осмотра от ${ru(shotDay)} — проверьте, был ли осмотр`]);
 });
+
+// 2.196: ссылка перестанет действовать в ближайшие сутки, а «Готово» не нажато — строка в «Сегодня» и в деле, «Продлить».
+const todayExpiring = async (c) => (await c.req('GET', '/api/today')).body.expert?.inspect_expiring ?? [];
+const expiresIn = (linkId, hours) => S.sql`update inspection_links set expires_at = now() + make_interval(hours => ${hours}) where id = ${linkId}`;
+
+test('2.196: ссылка истекает в ближайшие сутки — строка в «Сегодня» и в деле; «Продлить» — та же ссылка действует дольше', async () => {
+  const o = await inWork('Осмотр — скоро истечёт');
+  const l = await issue(o, { days: 3 });
+  assert.ok(!(await todayExpiring(spec)).some((x) => x.id === o.id), 'до срока больше суток — рано');
+  assert.equal((await spec.req('GET', `/api/orders/${o.id}/inspection`)).body.expiring, null);
+
+  assert.equal((await shoot(l.token, 'facade', { headers: GEO })).status, 201);
+  await expiresIn(l.link.id, 20);
+  const t = (await todayExpiring(spec)).find((x) => x.id === o.id);
+  assert.ok(t, 'строка в «Сегодня»');
+  assert.equal(t.link_id, l.link.id);
+  assert.equal(t.photos, 1);
+  const g = (await spec.req('GET', `/api/orders/${o.id}/inspection`)).body;
+  assert.equal(g.expiring.link_id, l.link.id);
+  assert.equal(g.expiring.photos, 1);
+  // Заказчик, диспетчер и чужой эксперт этого не видят и продлить не могут.
+  assert.equal((await owner.req('GET', `/api/orders/${o.id}/inspection`)).body.expiring, null);
+  assert.ok(!(await todayExpiring(spec2)).some((x) => x.id === o.id));
+  for (const c of [owner, dispatcher]) {
+    assert.equal((await c.req('POST', `/api/orders/${o.id}/inspection/extend`, { link_id: l.link.id, days: 3 })).status, 403);
+  }
+  assert.equal((await spec2.req('POST', `/api/orders/${o.id}/inspection/extend`, { link_id: l.link.id, days: 3 })).status, 404);
+  // Неверный срок или ссылка — отказ.
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/inspection/extend`, { link_id: l.link.id, days: 30 })).status, 400);
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/inspection/extend`, { link_id: 'x', days: 3 })).status, 400);
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/inspection/extend`, { link_id: '999999999', days: 3 })).status, 409);
+
+  const before = (await S.sql`select expires_at from inspection_links where id = ${l.link.id}`)[0].expires_at;
+  const r = await spec.req('POST', `/api/orders/${o.id}/inspection/extend`, { link_id: l.link.id, days: 3 });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(new Date(r.body.expires_at) - before, 3 * 86400_000, 'на 3 дня от прежнего срока');
+  assert.ok(!(await todayExpiring(spec)).some((x) => x.id === o.id), 'продлил — строка ушла');
+  assert.equal((await spec.req('GET', `/api/orders/${o.id}/inspection`)).body.expiring, null);
+  // Владелец снимает по той же ссылке.
+  assert.equal((await shoot(l.token, 'entrance', { headers: GEO })).status, 201);
+  const [a] = await S.sql`select action, details from audit_log where subject_id = ${o.id} and action = 'inspection.extend'`;
+  assert.equal(a?.details?.days, 3);
+
+  // «Готово» нажато, отозвана, истекла — продлить нельзя; в «Сегодня» нет.
+  assert.equal((await finish(l.token)).status, 200);
+  await expiresIn(l.link.id, 5);
+  assert.ok(!(await todayExpiring(spec)).some((x) => x.id === o.id), '«Готово» нажато');
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/inspection/extend`, { link_id: l.link.id, days: 1 })).status, 409);
+  const l2 = await issue(o, { days: 1 });
+  await S.sql`update inspection_links set expires_at = now() - interval '1 minute' where id = ${l2.link.id}`;
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/inspection/extend`, { link_id: l2.link.id, days: 1 })).status, 409, 'истекла');
+});
+
+test('2.196: ссылка, что уже «молчит» 2 дня, — только в «Осмотр: 2 дня нет фото»; прежняя ссылка при новой — не в счёт', async () => {
+  const o = await inWork('Осмотр — молчит и истекает');
+  const l = await issue(o, { days: 3 });
+  await ago(l.link.id, 50);
+  await expiresIn(l.link.id, 10);
+  assert.ok((await todaySilent(spec)).some((x) => x.id === o.id));
+  assert.ok(!(await todayExpiring(spec)).some((x) => x.id === o.id));
+
+  const p = await inWork('Осмотр — две ссылки');
+  const a = await issue(p, { days: 1 });
+  await S.sql`update inspection_links set revoked_at = null where order_id = ${p.id}`;
+  const b = await issue(p, { days: 7 });
+  await S.sql`update inspection_links set revoked_at = null where id = ${a.link.id}`;
+  await expiresIn(a.link.id, 10);
+  assert.ok(!(await todayExpiring(spec)).some((x) => x.id === p.id), 'действует новая ссылка');
+  void b;
+});

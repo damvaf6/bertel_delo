@@ -55,6 +55,21 @@ function askLate(x) {
     onclick: () => { location.hash = `order=${x.id}&to=late`; } }, 'Попросить перенести срок')];
 }
 
+// «Продлить на 3 дня» (2.196): та же ссылка действует дольше — владельцу ничего заново отправлять не нужно.
+function extendLink(x) {
+  const msg = el('div', { class: 'muted', 'data-role': 'inspect-extend-msg' });
+  const btn = el('button', { type: 'button', class: 'secondary', 'data-action': 'inspect-extend' }, 'Продлить на 3 дня');
+  btn.onclick = async () => {
+    btn.disabled = true;
+    try {
+      const r = await api('POST', `/api/orders/${x.id}/inspection/extend`, { link_id: x.link_id, days: 3 });
+      msg.textContent = `Продлено: ссылка действует до ${since(r.expires_at)} — владелец снимает по той же ссылке`;
+      btn.remove();
+    } catch (err) { msg.textContent = err.message; btn.disabled = false; }
+  };
+  return [btn, msg];
+}
+
 // «Руководитель ещё не подписал» (2.152): строка ведёт к блоку подписи в деле, рядом — «Напомнить руководителю» (раз в сутки).
 function signLate(items) {
   if (!items.length) return [];
@@ -174,6 +189,11 @@ export async function loadToday() {
       ...group('inspect-silent', 'Осмотр: 2 дня нет фото', e.inspect_silent ?? [], (x) => [x.title,
         `ссылка от ${since(x.link_at)}${x.expired ? ' — срок истёк' : ''}${x.sms_to ? ` · СМС на ${x.sms_to}` : ''} · отправьте снова`],
       (x) => { location.hash = `order=${x.id}&to=inspect`; }),
+      // Ссылка на осмотр перестанет действовать в ближайшие сутки, а «Готово» не нажато (2.196): продлить прямо здесь — владелец
+      // снимает по той же ссылке; нажатие на строку — к осмотру в деле.
+      ...group('inspect-expiring', 'Осмотр: ссылка скоро перестанет действовать', e.inspect_expiring ?? [], (x) => [x.title,
+        `ссылка действует до ${since(x.expires_at)} · владелец не нажал «Готово» · ${x.photos ? `фото по ссылке: ${x.photos}` : 'фото пока нет'}${x.sms_to ? ` · СМС на ${x.sms_to}` : ''}`],
+      (x) => { location.hash = `order=${x.id}&to=inspect`; }, extendLink),
       ...group('hot', 'Горит срок', e.hot.filter((x) => !noResult.some((n) => n.id === x.id)), (x) => [x.title, `${x.service} · ${deadline({ ...x, who: 'Вы попросили' }, t.today)}`], toOrder, askLate),
       ...group('offers', 'Новые предложения', e.offers, (x) => [x.title, [x.service, x.fee_kop ? `Вам ${rub(x.fee_kop)}` : null, deadline(x, t.today)].filter(Boolean).join(' · ')], toOrder),
       ...group('review', 'Ждут проверки диспетчера', e.review, (x) => [x.title, `${x.service} · ${deadline(x, t.today)}`], toOrder),

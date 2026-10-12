@@ -21,7 +21,7 @@ import { STATUS_NAME, addDays, isOverdue, resultDue, todayMsk } from '../orders/
 import { orderSignatures, orgReturns, signWait } from './sign-ops.mjs';
 import { executorSignOrg } from '../access/policy.mjs';
 import { dossierAlerts, loadDossier } from '../dossier/dossier.mjs';
-import { silentLinks } from './inspect-ops.mjs';
+import { expiringLinks, silentLinks } from './inspect-ops.mjs';
 import { answeredExtends, openExtends } from './deadline-ops.mjs';
 import { openHandovers } from './handover-ops.mjs';
 import { dueNotes } from './note-ops.mjs';
@@ -66,6 +66,12 @@ async function expertPart(sql, actor, registry, today) {
   for (const l of await silentLinks(sql, { executor: actor.id })) {
     const o = rows.find((x) => x.id === l.order_id);
     if (o) silent.push(item(o, { link_at: l.created_at, expired: new Date(l.expires_at) <= new Date(), sms_to: l.sms_to ?? null }));
+  }
+  // Ссылка на осмотр перестанет действовать в ближайшие сутки, а владелец не нажал «Готово» (2.196) — продлить.
+  const expiring = [];
+  for (const l of await expiringLinks(sql, { executor: actor.id })) {
+    const o = rows.find((x) => x.id === l.order_id);
+    if (o) expiring.push(item(o, { link_id: String(l.id), expires_at: l.expires_at, photos: l.photos, sms_to: l.sms_to ?? null }));
   }
   // Можно продолжать (2.86): что пришло по делу в работе после того, как эксперт его последний раз открыл (order_seen).
   const ready = [];
@@ -138,6 +144,7 @@ async function expertPart(sql, actor, registry, today) {
     notes,
     sign_wait: signWaits,
     inspect_silent: silent,
+    inspect_expiring: expiring,
     // Уже попросил перенести срок (2.100) — в строке видно, на какую дату и что ответа ещё нет.
     hot: hotRows.map((o) => item(o, { extend: ext.get(o.id) ?? null })),
     returned,
