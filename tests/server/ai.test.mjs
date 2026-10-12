@@ -627,3 +627,24 @@ test('2.198: дата оценки сверяется с заданием на �
   assert.equal((await putResult(o, 'ОТЧЁТ ОБ ОЦЕНКЕ № 5/2026\nДата оценки: 03.10.2026', 'отчёт-2.txt', 'text/plain')).status, 201);
   assert.deepEqual(await found(), []);
 });
+
+test('2.202: площадь в отчёте сверяется с выпиской ЕГРН, приложенной к просьбе о документах; текст выписки в модель не уходит', async () => {
+  const o = await inWork('Квартира: площадь по выписке');
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { items: ['egrn'] })).status, 201);
+  const put = await owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from('Вид объекта недвижимости: Помещение\nПлощадь, м2: 47,3\nНомер этажа: 3'), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('скан от Росреестра.txt') } });
+  assert.equal(put.status, 201, JSON.stringify(put.body));
+  const [rq] = (await owner.req('GET', `/api/orders/${o.id}/doc-requests`)).body.requests;
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/doc-requests/${rq.id}/attach`, { document_id: put.body.document.id })).status, 200);
+  assert.equal((await putResult(o, 'ОТЧЁТ ОБ ОЦЕНКЕ\nОбъект оценки: квартира общей площадью 45,1 кв. м', 'отчёт.txt', 'text/plain')).status, 201);
+  const found = async () => {
+    const res = await spec.req('POST', `/api/orders/${o.id}/review/ai`);
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    return res.body.ai.items.flatMap((i) => i.found ?? []).map((f) => f.text).filter((t) => /выписке ЕГРН/.test(t));
+  };
+  assert.deepEqual(await found(), ['Площадь 45,1 кв. м не совпадает с площадью в выписке ЕГРН «скан от Росреестра.txt» (47,3 кв. м, стр. 1) — площадь берётся из выписки']);
+  assert.doesNotMatch(lastPrompt(), /Номер этажа: 3/, 'текст выписки в модель не уходит');
+  await S.sql`update documents set deleted_at = now() where order_id = ${o.id} and kind = 'result'`;
+  assert.equal((await putResult(o, 'ОТЧЁТ ОБ ОЦЕНКЕ\nОбъект оценки: квартира общей площадью 47,3 кв. м', 'отчёт-2.txt', 'text/plain')).status, 201);
+  assert.deepEqual(await found(), []);
+});

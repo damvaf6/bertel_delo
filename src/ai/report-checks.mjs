@@ -406,9 +406,8 @@ function areaBefore(page, index) {
   if (index - before.length === 0) return before;
   return `${lineBefore(page, index - before.length - 1)} ${before}`;
 }
-function areaMatch(doc, ctx) {
-  const mine = Number(String(ctx.fields?.area ?? '').replace(',', '.'));
-  if (!(mine > 0)) return [];
+// Площади объекта на страницах документа (без аналогов, частей квартиры и чужих объектов — дома при участке и т. п.).
+function objectAreas(doc, ctx) {
   const land = ctx.service === 'land';
   const room = ctx.fields?.object_type === 'room';
   const other = land ? /(?<![а-яё])дом|здани|строени|постройк|помещени/iu
@@ -416,7 +415,6 @@ function areaMatch(doc, ctx) {
       : room ? /участ|(?<![а-яё])дом(?:а|у|е)?(?![а-яё])|здани|квартир/iu : /участ|(?<![а-яё])дом(?:а|у|е)?(?![а-яё])|здани/iu;
   const skip = room ? ROOM_SKIP : AREA_SKIP;
   const out = [];
-  const seen = new Set();
   eachPage(doc, (page, i) => {
     const found = [];
     for (const m of page.matchAll(AREA_NUM)) found.push({ index: m.index, int: m[1], frac: m[2], unit: m[3] });
@@ -434,12 +432,47 @@ function areaMatch(doc, ctx) {
       if (!near || other.test(near) || skip.test(near) || /аналог/iu.test(lineAround(page, f.index))) continue;
       const unit = f.unit.toLowerCase();
       const mult = /^га|^гектар/.test(unit) ? 10000 : /^сот/.test(unit) ? 100 : 1;
-      const v = Math.round(Number(`${f.int.replace(/[  ]/g, '')}.${f.frac ?? 0}`) * mult * 100) / 100;
-      if (Math.abs(v - mine) < 0.05 || seen.has(v)) continue;
-      seen.add(v);
-      out.push({ page: i, quote: lineAround(page, f.index), text: `Площадь ${fmt(v)} кв. м не совпадает с площадью из заявки (${fmt(mine)} кв. м) — проверьте, нет ли данных другого объекта` });
+      out.push({ page: i, index: f.index, v: Math.round(Number(`${f.int.replace(/[  ]/g, '')}.${f.frac ?? 0}`) * mult * 100) / 100 });
     }
   });
+  return out;
+}
+
+// 2.202: площадь из выписки ЕГРН, приложенной к делу (ctx.egrn — ai-ops). Выписка на участок при оценке квартиры или дома
+// (и наоборот) не в счёт; в выписках разные площади объекта — какая верная, решает эксперт: сверяем с заявкой, как раньше.
+const EGRN_LAND = /вид\s+объекта(?:\s+недвижимости)?\s*[:\-–—]?\s*земельн/iu;
+const EGRN_BUILT = /вид\s+объекта(?:\s+недвижимости)?\s*[:\-–—]?\s*(?:помещени|здани|сооружени|объект\s+незаверш|машино)/iu;
+export function egrnArea(egrn, ctx) {
+  const land = ctx.service === 'land';
+  const values = new Map();
+  for (const d of egrn ?? []) {
+    if (!Array.isArray(d.pages)) continue;
+    const head = d.pages.slice(0, 2).join('\n');
+    if (land ? EGRN_BUILT.test(head) && !EGRN_LAND.test(head) : EGRN_LAND.test(head) && !EGRN_BUILT.test(head)) continue;
+    for (const a of objectAreas(d, ctx)) if (!values.has(a.v)) values.set(a.v, { doc: d, page: a.page });
+  }
+  if (values.size !== 1) return null;
+  const [[v, at]] = [...values];
+  return v > 0 ? { v, name: at.doc.name, page: at.page } : null;
+}
+
+function areaMatch(doc, ctx) {
+  const mine = Number(String(ctx.fields?.area ?? '').replace(',', '.'));
+  const egrn = ctx.egrn?.length ? egrnArea(ctx.egrn, ctx) : null;
+  const ref = egrn ? egrn.v : mine;
+  if (!(ref > 0)) return [];
+  // В заявке другая площадь — заказчик ошибся или выписка не на тот объект: подсказываем один раз, у первой площади.
+  const differs = egrn && mine > 0 && Math.abs(mine - egrn.v) >= 0.05;
+  const out = [];
+  const seen = new Set();
+  for (const a of objectAreas(doc, ctx)) {
+    if (Math.abs(a.v - ref) < 0.05 || seen.has(a.v)) continue;
+    seen.add(a.v);
+    const page = doc.pages[a.page];
+    out.push({ page: a.page, quote: lineAround(page, a.index), text: egrn
+      ? `Площадь ${fmt(a.v)} кв. м не совпадает с площадью в выписке ЕГРН «${egrn.name}» (${fmt(egrn.v)} кв. м, стр. ${egrn.page + 1})${differs ? `; в заявке — ${fmt(mine)} кв. м` : ''} — площадь берётся из выписки`
+      : `Площадь ${fmt(a.v)} кв. м не совпадает с площадью из заявки (${fmt(mine)} кв. м) — проверьте, нет ли данных другого объекта` });
+  }
   return out;
 }
 
@@ -1552,7 +1585,7 @@ export const AUTO_CHECKS = Object.freeze({
   template_leftovers: 'нет остатков шаблона другого вида: недвижимость в отчёте о машине, машина в отчёте о квартире',
   cadastral_match: 'кадастровый номер в отчёте — как в заявке',
   address_match: 'адрес объекта одинаков по всему отчёту и как в заявке: населённый пункт, улица, дом, корпус, квартира, участок',
-  area_match: 'площадь объекта в отчёте — как в заявке',
+  area_match: 'площадь объекта в отчёте — как в выписке ЕГРН из дела, а без неё — как в заявке',
   floor_match: 'этаж и этажность дома в отчёте — как в заявке',
   share_match: 'размер доли в отчёте — как в заявке',
   land_match: 'категория земель и вид разрешённого использования — как в заявке',

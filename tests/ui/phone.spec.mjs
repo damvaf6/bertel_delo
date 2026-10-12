@@ -1022,13 +1022,18 @@ test('ИИ-проверка результата: специалист пере�
   expect((await sp.request.post(`/api/orders/${id}/status`, { data: { from: 'awaiting_executor', to: 'in_work' }, headers: H })).status()).toBe(200);
   // Отчёт — PDF на две страницы (задача 2.1): ИИ читает его и показывает отмеченное место со страницей.
   expect((await sp.request.post(`/api/orders/${id}/results`, {
-    data: makePdf([['Заключение № 3/2026 об оценке квартиры', 'Дата оценки: 01.10.2026'], ['Итоговая стоимость 9 500 000 руб.', 'В разделе 3 опечатка в адресе.']]),
+    data: makePdf([['Заключение № 3/2026 об оценке квартиры', 'Дата оценки: 01.10.2026', 'Квартира общей площадью 45,1 кв. м'], ['Итоговая стоимость 9 500 000 руб.', 'В разделе 3 опечатка в адресе.']]),
     headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('отчёт.pdf') },
   })).status()).toBe(201);
   // Задание на оценку от заказчика (2.198): в нём другая дата оценки — ИИ-проверка показывает расхождение.
   expect((await dp.request.post(`/api/orders/${id}/documents`, {
     data: Buffer.from('ЗАДАНИЕ НА ОЦЕНКУ\nДата оценки: 03.10.2026'),
     headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание на оценку.txt'), 'x-doc-kind': 'basis' },
+  })).status()).toBe(201);
+  // Выписка ЕГРН от заказчика (2.202): площадь в ней другая — ИИ-проверка показывает расхождение с выпиской.
+  expect((await dp.request.post(`/api/orders/${id}/documents`, {
+    data: Buffer.from('Выписка из Единого государственного реестра недвижимости\nВид объекта недвижимости: Помещение\nПлощадь, м2: 47,3'),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Выписка ЕГРН.txt') },
   })).status()).toBe(201);
 
   // Специалист проверяет результат с помощью ИИ до сдачи.
@@ -1070,6 +1075,10 @@ test('ИИ-проверка результата: специалист пере�
   await expect(req).toContainText('Дата оценки в отчёте 01.10.2026, а в задании на оценку «Задание на оценку.txt» — 03.10.2026');
   await req.getByText('в задании на оценку').scrollIntoViewIfNeeded();
   await shot(sp, '54d-specialist-ii-data-ocenki-zadanie');
+  const ident = sp.locator('#review-checks > li[data-check="realty_identity"]');
+  await expect(ident).toContainText('Площадь 45,1 кв. м не совпадает с площадью в выписке ЕГРН «Выписка ЕГРН.txt» (47,3 кв. м, стр. 1) — площадь берётся из выписки');
+  await ident.getByText('в выписке ЕГРН').scrollIntoViewIfNeeded();
+  await shot(sp, '54e-specialist-ii-ploshchad-egrn');
   await look.locator('button[data-look="technical"]').click();
   await expect(sp.locator('#review-checks > li[data-check="technical"]')).toBeInViewport();
   await quiet.locator('summary').click();
