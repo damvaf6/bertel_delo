@@ -7998,6 +7998,71 @@ test('мои заявки (2.173): эксперт видит отметку «В
   for (const p of [cp, ep, hp]) await p.context().close();
 });
 
+// «Сегодня» эксперта (2.204): исправленный файл после возврата руководителя загружен больше суток назад и не подписан —
+// отдельная красная строка; нажатие — сразу к этому файлу в «Документах». В «Вернули на доработку» дело не повторяется.
+test('сегодня (2.204): исправленный файл больше суток не подписан — строка с переходом к файлу', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), ep = await ctx(), hp = await ctx();
+  const customer = await signIn(cp, '+79990020401');
+  const expert = await signIn(ep, '+79990020402'), head = await signIn(hp, '+79990020403');
+  const { A } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Сутки ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Медлительный Иван' where id = $1", [expert.id]);
+    await c.query("update users set full_name = 'Строгая Анна' where id = $1", [head.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Сутки: квартира', $1, $2, 'in_work', (now() at time zone 'Europe/Moscow')::date + 6, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Суточная ул., 2","area":"38"}') returning id`,
+    [customer.id, expert.id]);
+    return { A: o.id };
+  });
+  const upload = async (name) => {
+    const up = await ep.request.post(`/api/orders/${A}/results`, { data: Buffer.from(`%PDF-1.4 ${name}`), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent(name) } });
+    expect(up.status()).toBe(201);
+    return (await up.json()).document.id;
+  };
+  const d = await upload('Отчёт.pdf');
+  expect((await ep.request.post(`/api/documents/${d}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  expect((await hp.request.post(`/api/org-documents/${d}/return`, { data: { comment: 'Нет даты осмотра' }, headers: H })).status()).toBe(201);
+  expect((await ep.request.delete(`/api/documents/${d}`, { headers: H })).status()).toBe(204);
+  const n = await upload('Отчёт (исправлен).pdf');
+
+  // Только что загружен — пока в «Вернули на доработку».
+  await ep.goto('/kabinet');
+  const box = ep.locator('#today-box');
+  await expect(box.locator('li[data-today-item="returned"]')).toContainText('Сутки: квартира');
+  await expect(box.locator('li[data-today-item="fresh-late"]')).toHaveCount(0);
+
+  // Прошло больше суток.
+  await db(async (c) => {
+    await c.query("update org_returns set created_at = now() - interval '30 hours' where order_id = $1", [A]);
+    await c.query("update documents set created_at = now() - interval '27 hours' where id = $1", [n]);
+  });
+  await ep.reload();
+  const row = box.locator('li[data-today-item="fresh-late"]');
+  await expect(box.locator('li[data-today="fresh-late"]')).toHaveText('Исправленный файл не подписан · 1');
+  await expect(row).toContainText('Сутки: квартира');
+  await expect(row.locator('[data-role="fresh-late-since"]')).toHaveClass(/overdue/);
+  await expect(row.locator('[data-role="fresh-late-since"]')).toContainText(/«Отчёт \(исправлен\)\.pdf» загружен .+ — не подписан 1 дн\. 3 ч/);
+  await expect(row).toContainText('Руководитель (Строгая Анна) ждёт подписи');
+  await expect(box.locator('li[data-today-item="returned"]')).toHaveCount(0);
+  await row.scrollIntoViewIfNeeded();
+  await shot(ep, 'c55-ekspert-segodnya-ispravlennyi-ne-podpisan');
+  await row.locator('button.open').click();
+  await expect(ep).toHaveURL(new RegExp(`#order=${A}&to=fresh$`));
+  await expect(ep.locator(`#docs li.doc[data-doc="${n}"]`)).toBeInViewport();
+  await shot(ep, 'c56-ekspert-delo-k-ispravlennomu-failu');
+
+  // Подписал — строки нет.
+  expect((await ep.request.post(`/api/documents/${n}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  await ep.goto('/kabinet');
+  await expect(box.locator('li[data-today-item="fresh-late"]')).toHaveCount(0);
+  await expect(box.locator('li[data-today-item="returned"]')).toHaveCount(0);
+  for (const p of [cp, ep, hp]) await p.context().close();
+});
+
 // 2.180: прогон «как эксперт и руководитель» по пачке 2.171–2.179 — одна организация, одни дела: возврат → исправленный
 // файл ждёт подписи (отбор руководителя, «Вернули» в «Моих заявках»), ИИ-проверка исправленного файла (площадь, дата оценки),
 // подпись → карточка эксперта «после возвратов»; перенос срока → готовая фраза заказчику → новый срок попал в день со сдачей
