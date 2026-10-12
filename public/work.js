@@ -38,7 +38,22 @@ export async function loadReview(current) {
   $('ai-review-state').textContent = r.ai ? aiState(r.ai) : 'ИИ-проверка ещё не запускалась.';
   if (!r.details) { $('review-checks').replaceChildren(); $('review-rest-ok').classList.add('hidden'); return; }
   const hints = new Map((r.ai?.items ?? []).map((i) => [i.id, i]));
-  $('review-checks').replaceChildren(...r.checks.map((c) => checkItem(order, r, c, hints.get(c.id))));
+  // Короче на телефоне (2.191): вверху — «Посмотрите: N» с названиями правил, нажатие ведёт к правилу. Тому, кто не
+  // ставит отметки (исполнитель), правила, где у ИИ нет замечаний и находок, — одной свёрнутой строкой.
+  const look = r.checks.filter((c) => hints.get(c.id)?.hint === 'attention');
+  $('ai-review-look').classList.toggle('hidden', look.length === 0);
+  $('ai-review-look').replaceChildren(...(look.length ? [el('span', { text: `Посмотрите: ${look.length} — ` }),
+    ...look.map((c) => el('button', { type: 'button', class: 'link', 'data-look': c.id, 'aria-label': c.title, onclick: () => toRule(c.id) }, short(c.title)))] : []));
+  const quiet = (c) => { const h = hints.get(c.id); return h?.hint === 'ok' && !h.found?.length && !h.marks?.length && !c.note && c.verdict !== 'issue'; };
+  const fold = !r.can_mark && r.checks.filter(quiet).length > 1;
+  const items = r.checks.filter((c) => !fold || !quiet(c)).map((c) => checkItem(order, r, c, hints.get(c.id)));
+  if (fold) {
+    const q = r.checks.filter(quiet);
+    items.push(el('li', { class: 'ai-quiet' }, el('details', { class: 'ai-quiet' },
+      el('summary', { text: `ИИ без замечаний: ${q.length} — ${q.map((c) => short(c.title)).join(', ')}` }),
+      el('ul', { class: 'list' }, ...q.map((c) => checkItem(order, r, c, hints.get(c.id)))))));
+  }
+  $('review-checks').replaceChildren(...items);
   // «Остальное в порядке» (разбор 03.10.2026, 2.18): правила без отметки, где у ИИ нет замечаний и находок, — одной
   // кнопкой. Правила с подсказкой «посмотрите» человек отмечает сам.
   const rest = r.can_mark ? r.checks.filter((c) => !c.verdict && r.ai && hints.get(c.id)?.hint === 'ok') : [];
@@ -60,13 +75,25 @@ export async function loadReview(current) {
   }
 }
 
+// Название правила до двоеточия — для сводок в строку (2.191).
+const short = (t) => t.split(':')[0];
+
+// К правилу из сводки «Посмотрите» (2.191): прокрутить и подсветить.
+function toRule(id) {
+  const li = document.querySelector(`#review-checks li[data-check="${CSS.escape(id)}"]`);
+  if (!li) return;
+  li.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  li.classList.add('flash');
+  setTimeout(() => li.classList.remove('flash'), 2000);
+}
+
 function aiState(ai) {
   const unread = ai.files.filter((f) => !f.read).map((f) => f.name);
   const attention = ai.items.filter((i) => i.hint === 'attention').length;
   return [
     `ИИ-проверка: запускал ${AI_SIDE_RU[ai.side]}, ${timeRu(ai.at)}.`,
     ai.model === 'auto' ? 'Модель ИИ не ответила — показаны только автоматические находки, остальное посмотрите сами.' : null,
-    attention ? `Стоит посмотреть: ${attention} из ${ai.items.length}.` : 'Замечаний ИИ не видит.',
+    attention ? null : 'Замечаний ИИ не видит.', // что посмотреть — строкой «Посмотрите» ниже (2.191)
     unread.length ? `Не прочитаны (ИИ читает PDF, Word и текст; эти посмотрите сами): ${unread.join(', ')}.` : null,
     ai.files.some((f) => f.truncated) ? `Прочитано не до конца (длинный текст): ${ai.files.filter((f) => f.truncated).map((f) => f.name).join(', ')}.` : null,
     'Это подсказка: решение и отметки — за человеком.',

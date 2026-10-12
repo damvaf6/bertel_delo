@@ -1048,7 +1048,23 @@ test('ИИ-проверка результата: специалист пере�
   await expect(sp.locator('#ai-review-state')).toContainText('запускал исполнитель перед сдачей');
   await expect(sp.locator('#review-checks li').filter({ hasText: 'Технические ошибки' }).locator('.ai-hint')).toContainText('посмотрите');
   await expect(sp.locator('#review-checks li').filter({ hasText: 'Технические ошибки' }).locator('.ai-marks li')).toHaveText(['отчёт.pdf, стр. 2: В разделе 3 опечатка в адресе.']);
-  await expect(sp.locator('#review-checks li').filter({ hasText: 'Расчёт' }).locator('.ai-hint')).toHaveText('ИИ: Замечаний не найдено');
+  // Короче на телефоне (2.191): вверху «Посмотрите: N» с названиями, нажатие ведёт к правилу; правила без замечаний ИИ —
+  // одной свёрнутой строкой, раскрываются нажатием.
+  const look = sp.locator('#ai-review-look');
+  await expect(look).toContainText('Посмотрите: ');
+  await expect(look.locator('button[data-look="technical"]')).toContainText('Технические ошибки');
+  const quiet = sp.locator('#review-checks details.ai-quiet');
+  await expect(quiet.locator('summary')).toContainText('ИИ без замечаний:');
+  await expect(quiet.locator('summary')).toContainText('Расчёт');
+  await expect(quiet.locator('li[data-check]').filter({ hasText: 'Расчёт' })).toBeHidden();
+  await expect(sp.locator('#review-checks > li[data-check]').filter({ hasText: 'Технические ошибки' })).toBeVisible();
+  await expect(sp.locator('#ai-review-state')).not.toContainText('Замечаний ИИ не видит');
+  await sp.locator('#review-box').scrollIntoViewIfNeeded();
+  await shot(sp, '54c-specialist-ii-korotko');
+  await look.locator('button[data-look="technical"]').click();
+  await expect(sp.locator('#review-checks > li[data-check="technical"]')).toBeInViewport();
+  await quiet.locator('summary').click();
+  await expect(quiet.locator('li[data-check]').filter({ hasText: 'Расчёт' }).locator('.ai-hint')).toHaveText('ИИ: Замечаний не найдено');
   await expect(sp.locator('#review-checks .verdict')).toHaveCount(0);
   await shot(sp, '54-specialist-ii-proverka');
   expect((await sp.request.patch('/api/me', { data: { full_name: 'Тестов Эксперт ИИ' }, headers: H })).status()).toBe(200);
