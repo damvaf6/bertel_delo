@@ -82,14 +82,19 @@ export async function loadSchedule() {
     li.querySelector('a').classList.add('hot');
     return li;
   }));
-  // Подряд пустые дни — одной строкой: «сб, 10 октября — пн, 12 октября · свободно».
+  // Подряд пустые дни — одной строкой: «сб, 10 октября — пн, 12 октября · свободно». Дни «не принимаю новые дела» (2.189) —
+  // своей строкой «новые дела не предлагают», день возвращения — «снова предлагают дела»: пустой день в отпуске не «свободно».
+  const back = s.away?.until;
+  const kind = (d) => (d.away ? 'away' : d.date === back ? 'back' : 'free');
+  const FREE = { away: 'новые дела не предлагают', back: 'снова предлагают дела', free: 'свободно' };
   const rows = [];
   for (let k = 0; k < s.days.length; k++) {
     const d = s.days[k];
     if (d.items.length) {
-      rows.push(el('li', { 'data-day': d.date, class: [d.today ? 'today' : '', d.weekend ? 'weekend' : '', d.busy ? 'busy' : ''].filter(Boolean).join(' ') },
+      rows.push(el('li', { 'data-day': d.date, class: [d.today ? 'today' : '', d.weekend ? 'weekend' : '', d.busy ? 'busy' : '', kind(d) !== 'free' ? kind(d) : ''].filter(Boolean).join(' ') },
         el('div', { class: 'day' }, el('span', { text: `${d.today ? 'Сегодня, ' : ''}${dayName(d)}` }),
           el('span', { class: d.busy ? 'busy-mark' : 'muted', text: d.busy ? `много: к сдаче ${d.due}${d.trips ? ` + ${trips(d.trips)}` : ''}` : d.deadlines > 1 ? `сдать дел: ${d.deadlines}` : '' })),
+        ...(kind(d) !== 'free' ? [el('p', { class: 'away-mark', text: FREE[kind(d)] })] : []),
         ...(d.busy ? [el('p', { class: 'muted', text: d.trips
           ? `В этот день к сдаче ${d.due} ${d.due === 1 ? 'дело' : d.due < 5 ? 'дела' : 'дел'} и ${trips(d.trips)} на объект — можно попросить перенести срок.`
           : 'В этот день больше двух дел к сдаче — можно попросить перенести срок одного из них.' })] : []),
@@ -97,10 +102,10 @@ export async function loadSchedule() {
       continue;
     }
     let j = k;
-    while (j + 1 < s.days.length && !s.days[j + 1].items.length) j++;
+    while (j + 1 < s.days.length && !s.days[j + 1].items.length && kind(s.days[j + 1]) === kind(d) && kind(d) !== 'back') j++;
     const span = j === k ? dayName(d) : `${dayName(d)} — ${dayName(s.days[j])}`;
-    rows.push(el('li', { 'data-day': d.date, class: 'free' },
-      el('div', { class: 'day' }, el('span', { text: `${d.today ? 'Сегодня, ' : ''}${span}` }), el('span', { text: 'свободно' }))));
+    rows.push(el('li', { 'data-day': d.date, class: kind(d) === 'free' ? 'free' : `free ${kind(d)}` },
+      el('div', { class: 'day' }, el('span', { text: `${d.today ? 'Сегодня, ' : ''}${span}` }), el('span', { text: FREE[kind(d)] }))));
     k = j;
   }
   $('schedule-days').replaceChildren(...rows);

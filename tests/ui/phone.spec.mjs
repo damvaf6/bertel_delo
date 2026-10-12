@@ -7986,3 +7986,30 @@ test('2.181: телефон не в московском поясе — врем
   await ep.context().close();
   await hp.context().close();
 });
+
+test('2.189: мои сроки — дни «не принимаю новые дела» отмечены, пустой день в отпуске не «свободно», день возвращения виден', async ({ page }) => {
+  const expert = await signIn(page, '+79990009189');
+  await db(async (c) => {
+    await c.query("insert into specialists (user_id, away_until, away_note) values ($1, (now() at time zone 'Europe/Moscow')::date + 3, 'отпуск')", [expert.id]);
+    await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, price_kop, paid_at, deadline)
+      values ($1, 'Квартира в отпуске: сроки', 'expertise', 'realty', 'in_work', $1, 1500000, now(), $2::date)`, [expert.id, inDays(1)]);
+  });
+  await page.goto('/kabinet#specialist');
+  const box = page.locator('#schedule-box');
+  const day = (n) => box.locator(`#schedule-days > li[data-day="${inDays(n)}"]`);
+  await expect(box.locator('#schedule-away')).toContainText('Новые дела Вам не предлагают до');
+  await expect(day(0)).toHaveClass(/away/);
+  await expect(day(0)).toContainText('новые дела не предлагают');
+  await expect(day(0)).not.toContainText('свободно');
+  await expect(day(1)).toHaveClass(/away/);
+  await expect(day(1)).toContainText('Сдать: Квартира в отпуске: сроки');
+  await expect(day(1).locator('.away-mark')).toHaveText('новые дела не предлагают');
+  await expect(day(2)).toContainText('новые дела не предлагают');
+  await expect(day(3)).toHaveClass(/back/);
+  await expect(day(3)).toContainText('снова предлагают дела');
+  await expect(day(4)).toContainText('свободно');
+  await expect(day(4)).not.toHaveClass(/away/);
+  await expect(box.locator('#schedule-days > li')).toHaveCount(5);
+  await box.locator('#schedule-days').scrollIntoViewIfNeeded();
+  await shot(page, 'c36-ekspert-sroki-ne-prinimayu');
+});
