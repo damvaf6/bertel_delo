@@ -1008,7 +1008,7 @@ test('шаблон отчёта организации (2.29): меняет ру
 });
 
 test('дистанционный осмотр (2.3): в деле видят те, кто видит заявку; ссылку выдаёт и отзывает только исполнитель в работе', async () => {
-  for (const id of ['inspection.get', 'inspection.issue', 'inspection.revoke', 'inspection.retake', 'inspection.retake_cancel', 'inspection.thumb']) cover(id);
+  for (const id of ['inspection.get', 'inspection.issue', 'inspection.revoke', 'inspection.retake', 'inspection.retake_cancel', 'inspection.thumb', 'inspection.extend']) cover(id);
   // Картинка снимка (2.71): документ не фото осмотра — «не найдено» даже тем, кто его видит; чужим — тоже «не найдено».
   for (const k of ['owner', 'spec', 'dispatcher']) assert.equal((await U[k].req('GET', `/api/documents/${ownDoc.id}/thumb`)).status, 404, k);
   for (const k of ['stranger', 'headB']) assert.equal((await U[k].req('GET', `/api/documents/${ownDoc.id}/thumb`)).status, 404, k);
@@ -1021,7 +1021,8 @@ test('дистанционный осмотр (2.3): в деле видят те
   for (const k of ['stranger', 'headB', 'spec']) assert.equal((await U[k].req('GET', `/api/orders/${ownOrder.id}/inspection`)).status, 404, k);
   assert.equal((await U.memberA2.req('GET', `/api/orders/${orgOrder.id}/inspection`)).status, 404, 'коллега-сотрудник');
   for (const [method, path, body] of [['POST', 'inspection', { days: 3, phone: '+79990009999' }], ['DELETE', 'inspection/1', undefined],
-    ['POST', 'inspection/retakes', { step: 'facade', note: 'Тёмно' }], ['DELETE', 'inspection/retakes/1', undefined]]) {
+    ['POST', 'inspection/retakes', { step: 'facade', note: 'Тёмно' }], ['DELETE', 'inspection/retakes/1', undefined],
+    ['POST', 'inspection/extend', { link_id: '1', days: 3 }]]) {
     for (const k of ['owner', 'dispatcher', 'admin']) assert.equal((await U[k].req(method, `/api/orders/${ownOrder.id}/${path}`, body)).status, 403, `${k} ${path}`);
     for (const k of ['stranger', 'headB']) assert.equal((await U[k].req(method, `/api/orders/${ownOrder.id}/${path}`, body)).status, 404, `${k} ${path}`);
   }

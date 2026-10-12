@@ -4031,6 +4031,73 @@ test('осмотр без фото (2.85): ссылка молчит 2 дня �
   await ectx.close();
 });
 
+test('ссылка на осмотр истекает (2.196): строка в «Сегодня» с «Продлить на 3 дня», в деле — «Продлить ссылку»', async ({ page, browser, baseURL }) => {
+  await signIn(page, '+79990000880');
+  const mk = async (title) => {
+    const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title }, headers: H })).json();
+    expect((await page.request.patch(`/api/orders/${created.order.id}`, {
+      data: { deadline: inDays(9), fields: { purpose: 'bank', region: 'moscow', object_type: 'flat', address: 'г. Москва, Короткая ул., 3', area: '44' } }, headers: H,
+    })).status()).toBe(200);
+    expect((await page.request.post(`/api/orders/${created.order.id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+    return created.order.id;
+  };
+  const a = await mk('Квартира: ссылка истекает');
+  const b = await mk('Квартира: ссылка истекает в деле');
+  const ectx = await phoneContext(browser, baseURL);
+  const ep = await ectx.newPage();
+  const expert = await signIn(ep, '+79990000881');
+  await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    await c.query("update orders set price_kop = 1500000, paid_at = now(), status = 'in_work', executor_user_id = $2 where id = any($1::uuid[])", [[a, b], expert.id]);
+  });
+  // Ссылки выдали вчера, владелец снял фасад, а «Готово» не нажал; срок — через 5 часов.
+  for (const id of [a, b]) {
+    const issued = await ep.request.post(`/api/orders/${id}/inspection`, { data: { days: 1 }, headers: H });
+    expect(issued.status()).toBe(201);
+    const token = (await issued.json()).path.split('#')[1];
+    const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]), Buffer.from('JFIF-2196')]);
+    const sent = await page.request.post('/api/inspect/photos', { data: jpeg, headers: { ...H, 'x-inspect-token': token, 'content-type': 'image/jpeg', 'x-step': 'facade' } });
+    expect(sent.status()).toBe(201);
+    await db((c) => c.query("update inspection_links set created_at = now() - interval '19 hours', expires_at = now() + interval '5 hours' where order_id = $1", [id]));
+  }
+
+  await ep.goto('/kabinet');
+  await expect(ep.locator('[data-today="inspect-expiring"]')).toHaveText('Осмотр: ссылка скоро перестанет действовать · 2');
+  const row = ep.locator('[data-today-item="inspect-expiring"]', { hasText: 'Квартира: ссылка истекает' }).first();
+  await expect(row).toContainText('владелец не нажал «Готово»');
+  await expect(row).toContainText('фото по ссылке: 1');
+  await shot(ep, 'c38a-ekspert-segodnya-ssylka-istekaet');
+  await row.getByRole('button', { name: 'Продлить на 3 дня' }).click();
+  await expect(row.locator('[data-role="inspect-extend-msg"]')).toContainText('Продлено: ссылка действует до');
+  await expect(row.getByRole('button', { name: 'Продлить на 3 дня' })).toHaveCount(0);
+  await shot(ep, 'c38b-ekspert-segodnya-ssylka-prodlena');
+
+  // В деле — плашка и «Продлить ссылку» на срок из формы.
+  await ep.goto(`/kabinet#order=${b}&to=inspect`);
+  const box = ep.locator('#inspect-box');
+  await expect(box.locator('#inspect-expiring')).toBeVisible();
+  await expect(box.locator('#inspect-expiring-text')).toContainText('владелец ещё не нажал «Готово» (фото по ссылке: 1)');
+  await expect(box.locator('#inspect-extend')).toHaveText('Продлить на 3 дня');
+  await ep.locator('#inspect-days').selectOption('7');
+  await expect(box.locator('#inspect-extend')).toHaveText('Продлить на 7 дней');
+  await box.locator('#inspect-expiring').scrollIntoViewIfNeeded();
+  await shot(ep, 'c38c-ekspert-osmotr-prodlit-ssylku');
+  await box.locator('#inspect-extend').click();
+  await expect(ep.locator('#inspect-msg')).toContainText('Ссылка продлена до');
+  await expect(box.locator('#inspect-expiring')).toBeHidden();
+  await expect(box.locator('#inspect-links li')).toHaveCount(1);
+  await expect(box.locator('#inspect-links li').first()).toContainText('действует');
+
+  await ep.goto('/kabinet');
+  await expect(ep.locator('#today-box')).toBeVisible();
+  await expect(ep.locator('[data-today="inspect-expiring"]')).toHaveCount(0);
+  // Заказчик плашки не видит.
+  await page.goto(`/kabinet#order=${b}`);
+  await expect(page.locator('#inspect-expiring')).toBeHidden();
+  await ectx.close();
+});
+
 test('можно продолжать (2.86): заказчик прислал документ и написал — строка в «Сегодня», нажатие ведёт к переписке', async ({ page, browser, baseURL }) => {
   await signIn(page, '+79990000965');
   const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира: можно продолжать' }, headers: H })).json();

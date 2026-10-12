@@ -80,6 +80,27 @@ export async function silentLinks(sql, { executor = null, order = null } = {}) {
     order by l.created_at, l.id`;
 }
 
+// Ссылка скоро перестанет действовать (2.196): последняя ссылка дела, выданная исполнителем (дело у него в работе), действует,
+// «Готово» не нажато, а срок кончается в ближайшие сутки. Ссылка, что уже «молчит» (2.85), здесь не повторяется — у неё своя
+// строка. photos — сколько фото пришло по этой ссылке; missing — сколько обязательных шагов в деле ещё без фото.
+export const EXPIRING_HOURS = 24;
+export async function expiringLinks(sql, { executor = null, order = null } = {}) {
+  return sql`
+    select l.id, l.order_id, l.created_at, l.expires_at, l.sms_to,
+           (select count(*)::int from inspection_photos p where p.link_id = l.id) as photos
+    from inspection_links l join orders o on o.id = l.order_id
+    where o.status = 'in_work' and o.executor_user_id = l.created_by
+      and (${executor}::uuid is null or l.created_by = ${executor}::uuid)
+      and (${order}::uuid is null or l.order_id = ${order}::uuid)
+      and l.revoked_at is null and l.finished_at is null
+      and l.expires_at > now() and l.expires_at <= now() + make_interval(hours => ${EXPIRING_HOURS})
+      and not exists (select 1 from inspection_links n where n.order_id = l.order_id and n.id > l.id)
+      and not (l.created_at <= now() - make_interval(days => ${SILENT_DAYS})
+               and not exists (select 1 from inspection_photos p join documents d on d.id = p.document_id
+                               where d.order_id = l.order_id and p.received_at >= l.created_at))
+    order by l.expires_at, l.id`;
+}
+
 // Напомнить эксперту (раз в минуту вместе с напоминаниями о сроках, src/server.mjs) — один раз на ссылку.
 export async function remindSilentInspections(sql) {
   let sent = 0;
@@ -237,8 +258,11 @@ export function inspectOps() {
         const retakes = await openRetakes(sql, order.id);
         // Ссылка молчит 2 дня (2.85) — исполнителю над формой «Отправить ссылку снова».
         const [silent] = canIssue(actor, order) ? await silentLinks(sql, { order: order.id }) : [];
+        // Ссылка перестанет действовать в ближайшие сутки (2.196) — «Продлить ссылку» без новой ссылки владельцу.
+        const [expiring] = canIssue(actor, order) ? await expiringLinks(sql, { order: order.id }) : [];
         return {
           silent: silent ? { link_id: String(silent.id), since: silent.created_at, expired: new Date(silent.expires_at) <= new Date(), sms_to: silent.sms_to ?? null } : null,
+          expiring: expiring ? { link_id: String(expiring.id), expires_at: expiring.expires_at, photos: expiring.photos } : null,
           steps: steps.map((s) => ({ ...s, photos: byStep(s.id), retake: retakes[s.id] ?? null })),
           links: links.map((l) => linkView(l, order, l.photos)),
           can_issue: canIssue(actor, order) && steps.length > 0,
@@ -307,6 +331,28 @@ export function inspectOps() {
         res.status(201);
         // Секрет отдаётся один раз: в базе его нет, потерянную ссылку не восстановить — только выдать новую.
         return { link: linkView(link, order, 0), path, sms };
+      },
+    },
+    {
+      // Продлить действующую ссылку (2.196): владелец снимает по той же ссылке, ничего заново отправлять не нужно. Срок —
+      // от прежнего, на 1, 3 или 7 дней; ссылка отозвана, истекла или «Готово» нажато — нужна новая ссылка.
+      id: 'inspection.extend', method: 'POST', path: '/api/orders/:id/inspection/extend', auth: 'user',
+      access: { resource: 'order', param: 'id', need: 'read' },
+      async handler({ sql, actor, order, body }) {
+        if (!canIssue(actor, order)) throw new HttpError(403, 'forbidden', 'Продлить ссылку может исполнитель, пока дело в работе');
+        const days = body?.days === undefined ? 3 : body.days;
+        if (!INSPECT.days.includes(days)) throw new HttpError(400, 'bad_input', `Продлить можно на ${INSPECT.days.join(', ')} дн.`);
+        if (!/^\d{1,18}$/.test(String(body?.link_id ?? ''))) throw new HttpError(400, 'bad_input', 'Какую ссылку продлить?');
+        return sql.tx(async (tx) => {
+          await tx`select id from orders where id = ${order.id} for update`;
+          const l = await tx.one`update inspection_links set expires_at = expires_at + make_interval(days => ${days})
+                                 where id = ${body.link_id} and order_id = ${order.id} and created_by = ${actor.id}
+                                   and revoked_at is null and finished_at is null and expires_at > now()
+                                 returning id, expires_at`;
+          if (!l) throw new HttpError(409, 'link_inactive', 'Ссылка уже не действует — выдайте новую');
+          await audit(tx, actor, 'inspection.extend', 'order', order.id, { link: String(l.id), days });
+          return { link_id: String(l.id), expires_at: l.expires_at };
+        });
       },
     },
     {
