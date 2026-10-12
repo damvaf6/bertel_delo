@@ -28,9 +28,12 @@ function item(i, index) {
       : i.status === 'awaiting_executor' ? 'предложено Вам, ещё не приняли' : null;
     const ext = i.extend_to ? `просите перенести на ${short(i.extend_to)} — ждёт ответа` : null;
     const hot = index !== null && index <= HOT_DAYS && i.status !== 'review';
-    const li = link(order('deadline'), `Сдать: ${i.title}`, [i.service, note, ext].filter(Boolean).join(' · '), hot ? 'hot' : '');
-    // Перегруженный день (2.134): рядом — «Попросить перенос», дело откроется с готовой причиной и новым сроком.
-    if (i.can_extend) li.append(el('a', { class: 'ask', href: order('extend'), 'data-ask-extend': i.order_id, text: 'Попросить перенос' }));
+    const away = i.away_due ? 'срок в дни, когда Вы не принимаете новые дела' : null;
+    const li = link(order('deadline'), `Сдать: ${i.title}`, [i.service, note, ext, away].filter(Boolean).join(' · '), hot || away ? 'hot' : '');
+    // Перегруженный день (2.134): рядом — «Попросить перенос», дело откроется с готовой причиной и новым сроком. Срок в отпуске
+    // (2.195) — причина «меня не будет», новый срок — день возвращения; эксперту от организации — ещё «Передать коллеге».
+    if (i.can_extend) li.append(el('a', { class: 'ask', href: order(i.away_due ? 'away' : 'extend'), 'data-ask-extend': i.order_id, text: 'Попросить перенос' }));
+    if (i.can_handover) li.append(el('a', { class: 'ask', href: order('handover'), 'data-ask-handover': i.order_id, text: 'Передать коллеге' }));
     return li;
   }
   if (i.kind === 'extend') {
@@ -71,7 +74,8 @@ export async function loadSchedule() {
   say($('schedule-msg'), '');
   const s = schedule;
   $('schedule-away').textContent = s.away
-    ? `Новые дела Вам не предлагают до ${dayRu(s.away.until)}${s.away.note ? ` (${s.away.note})` : ''}. Дела, которые уже у Вас, — ниже.` : '';
+    ? `Новые дела Вам не предлагают до ${dayRu(s.away.until)}${s.away.note ? ` (${s.away.note})` : ''}. Дела, которые уже у Вас, — ниже.${s.away_due
+      ? ` Срок сдачи в эти дни: ${s.away_due} — попросите перенос или передайте дело коллеге.` : ''}` : '';
   $('schedule-away').classList.toggle('hidden', !s.away);
   $('schedule-overdue-box').classList.toggle('hidden', s.overdue.length === 0);
   $('schedule-overdue').replaceChildren(...s.overdue.map((i) => {

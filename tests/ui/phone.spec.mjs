@@ -8107,6 +8107,50 @@ test('2.189: мои сроки — дни «не принимаю новые д�
   await shot(page, 'c36-ekspert-sroki-ne-prinimayu');
 });
 
+// 2.195: срок сдачи в дни «не принимаю новые дела» — в «Моих сроках» подсказка вверху, у дела «Попросить перенос» (причина
+// «меня не будет» и день возвращения — сразу в полях) и эксперту от организации — «Передать коллеге».
+test('2.195: мои сроки — срок в дни «не принимаю новые дела»: попросить перенос или передать коллеге', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const page = await ctx();
+  const customer = await signIn(await ctx(), '+79990019501');
+  const expert = await signIn(page, '+79990019502');
+  const id = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Срок в отпуске ${Date.now() % 100000}»') returning id`);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'member')", [org.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, away_until, away_note) values ($1, $2, (now() at time zone 'Europe/Moscow')::date + 3, 'отпуск')", [expert.id, org.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Сдать в отпуске', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Отпускная ул., 5","area":"40"}') returning id`,
+    [customer.id, expert.id, inDays(1)]);
+    return o.id;
+  });
+  await page.goto('/kabinet#specialist');
+  const box = page.locator('#schedule-box');
+  await expect(box.locator('#schedule-away')).toContainText('Срок сдачи в эти дни: 1 — попросите перенос или передайте дело коллеге.');
+  const it = box.locator(`#schedule-days > li[data-day="${inDays(1)}"] li[data-schedule-item="deadline"]`);
+  await expect(it).toContainText('срок в дни, когда Вы не принимаете новые дела');
+  await expect(it.locator('a.open')).toHaveClass(/hot/);
+  await expect(it.locator(`[data-ask-extend="${id}"]`)).toHaveText('Попросить перенос');
+  await expect(it.locator(`[data-ask-handover="${id}"]`)).toHaveText('Передать коллеге');
+  await box.locator('#schedule-days').scrollIntoViewIfNeeded();
+  await shot(page, 'c37a-ekspert-sroki-srok-v-otpuske');
+  // «Попросить перенос»: причина «меня не будет» и день возвращения (или ближайший будний после него) — в полях.
+  await it.locator('[data-ask-extend]').click();
+  await expect(page.locator('#deadline-box')).toBeVisible();
+  await expect(page.locator('#deadline-reason')).toHaveValue(/^В день срока меня не будет, работаю снова с /);
+  let back = inDays(3);
+  while ([0, 6].includes(new Date(`${back}T00:00:00Z`).getUTCDay())) back = new Date(Date.parse(`${back}T00:00:00Z`) + 864e5).toISOString().slice(0, 10);
+  await expect(page.locator('#deadline-new')).toHaveValue(back);
+  await expect(page.locator('#deadline-reason')).not.toHaveValue(/отпуск/);
+  await shot(page, 'c37b-ekspert-perenos-menya-ne-budet');
+  // «Передать коллеге»: дело открыто на просьбе руководителю, поле причины — в фокусе.
+  await page.goto('/kabinet#specialist');
+  await it.locator('[data-ask-handover]').click();
+  await expect(page.locator('#handover-box')).toBeVisible();
+  await expect(page.locator('#handover-reason')).toBeFocused();
+  await shot(page, 'c37c-ekspert-peredat-kollege');
+});
+
 // 2.190: прогон «как эксперт и руководитель» по пачке 2.181–2.189 — одна организация, одни дела. Телефон эксперта — в
 // Екатеринбурге (время по Москве, 2.181); осмотр — полоса картинок (2.183); ИИ-проверка: перепутанные цены аналогов (2.184),
 // этаж «3/9» при заявке «3 из 9» — не находка (2.187); руководитель перед подписью видит ИИ-проверку эксперта (2.186),

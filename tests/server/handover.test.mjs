@@ -223,3 +223,43 @@ test('передача обратно: прежнему эксперту — т�
   assert.deepEqual([back.transferred, back.from], [true, 'Эксперт Коллега']);
   assert.equal((await colleague.req('GET', `/api/orders/${o.id}/predecessor`)).status, 404);
 });
+
+// 2.195: срок сдачи попал на дни «не принимаю новые дела» — в «Моих сроках» подсказка: попросить перенос (готовая причина
+// «меня не будет», новый срок — день возвращения или ближайший будний после него) и эксперту от организации — передать коллеге.
+test('2.195: срок в дни «не принимаю новые дела» — «Попросить перенос» с днём возвращения и «Передать коллеге»', async () => {
+  const today = todayMsk();
+  const until = addDays(today, 12);
+  const o = await inWork('Срок в отпуске');
+  const s = await inWork('Частный: срок в отпуске', solo);
+  for (const c of [spec, solo]) await S.sql`update specialists set away_until = ${until}, away_note = 'отпуск' where user_id = ${c.user.id}`;
+  const sched = async (c) => (await c.req('GET', '/api/specialist/me/schedule')).body.schedule;
+  const itemOf = (sc, id) => sc.days.flatMap((d) => d.items).find((i) => i.kind === 'deadline' && i.order_id === id);
+  let sc = await sched(spec);
+  // Счёт вверху — дела в работе со сроком в отпуске (у эксперта есть и дела прошлых тестов).
+  assert.equal(sc.away_due, sc.days.flatMap((d) => d.items).filter((i) => i.away_due && i.status === 'in_work').length);
+  assert.ok(sc.away_due >= 1);
+  assert.deepEqual(['away_due', 'can_extend', 'can_handover'].map((k) => itemOf(sc, o.id)[k]), [true, true, true]);
+  // Частный эксперт: перенос можно, передать коллеге — нет (просит только эксперт от организации, 2.107).
+  const mine = itemOf(await sched(solo), s.id);
+  assert.deepEqual([mine.away_due, mine.can_extend, !!mine.can_handover], [true, true, false]);
+  // Готовая причина: без пометки к отпуску (её видит заказчик), новый срок — день возвращения или ближайший будний.
+  const r = (await spec.req('GET', `/api/orders/${o.id}/deadline-requests`)).body.reasons.find((x) => x.id === 'away');
+  const [y, m, d] = until.split('-');
+  let back = until;
+  while ([0, 6].includes(new Date(`${back}T00:00:00Z`).getUTCDay())) back = addDays(back, 1);
+  assert.deepEqual([r.label, r.reason, r.new_deadline],
+    [`Меня не будет до ${d}.${m}`, `В день срока меня не будет, работаю снова с ${d}.${m}.${y} — прошу перенести срок`, back]);
+  assert.ok(!r.reason.includes('отпуск'));
+  // Попросил передать коллеге — «Передать коллеге» больше не предлагается; попросил перенос — и «Попросить перенос».
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/handover`, { reason: 'Отпуск' })).status, 201);
+  assert.equal(itemOf(await sched(spec), o.id).can_handover, false);
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/deadline-requests`, { new_deadline: r.new_deadline, reason: r.reason, from: addDays(today, 9) })).status, 201);
+  sc = await sched(spec);
+  assert.deepEqual([itemOf(sc, o.id).away_due, itemOf(sc, o.id).can_extend], [true, false]);
+  // Срок после дня возвращения — подсказки и причины нет.
+  await S.sql`update specialists set away_until = ${addDays(today, 5)} where user_id = ${solo.user.id}`;
+  const later = itemOf(await sched(solo), s.id);
+  assert.deepEqual([later.away_due, later.can_extend], [false, false]);
+  assert.ok(!(await solo.req('GET', `/api/orders/${s.id}/deadline-requests`)).body.reasons.some((x) => x.id === 'away'));
+  for (const c of [spec, solo]) await S.sql`update specialists set away_until = null, away_note = null where user_id = ${c.user.id}`;
+});
