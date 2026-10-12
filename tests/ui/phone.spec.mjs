@@ -6850,6 +6850,69 @@ test('отбор дел на подпись по ИИ-проверке (2.193): 
   await expect(hp.locator('#org-sign > li.group')).toHaveText('Подписано · 1');
 });
 
+test('отбор дел на подпись (2.205): эксперт отметил исправленными не все пункты замечания руководителя', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), ep = await ctx(), hp = await ctx();
+  const customer = await signIn(cp, '+79990010614');
+  const expert = await signIn(ep, '+79990010615'), head = await signIn(hp, '+79990010616');
+  const { orgId, ids } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Пункты ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Пунктов Иван' where id = $1", [expert.id]);
+    await c.query("update users set full_name = 'Главный Пётр' where id = $1", [head.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const add = async (title, days) => (await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', $1, $2, $3, 'in_work', current_date + $4::int, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Пунктовая ул., 4","area":"40"}') returning id`,
+      [title, customer.id, expert.id, days])).rows[0].id;
+    const ids = { part: await add('Пункты: не все', 3), all: await add('Пункты: все', 5), clean: await add('Пункты: без возврата', 7) };
+    for (const k of Object.keys(ids)) await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [ids[k], expert.id]);
+    return { orgId: org.id, ids };
+  });
+  const ref = (id) => `№ ${id.slice(0, 8).toUpperCase()}`;
+  const docs = {};
+  for (const [k, name] of [['part', 'Отчёт А.pdf'], ['all', 'Отчёт Б.pdf'], ['clean', 'Отчёт В.pdf']]) {
+    const up = await ep.request.post(`/api/orders/${ids[k]}/results`, { data: Buffer.from(`%PDF-1.4 ${name}`), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent(name) } });
+    expect(up.status()).toBe(201);
+    docs[k] = (await up.json()).document.id;
+    expect((await ep.request.post(`/api/documents/${docs[k]}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  }
+  // Руководитель вернул два дела по пунктам; в первом эксперт отметил 1 из 3, во втором — оба; оба подписал заново.
+  const ret = async (k, comment, fixed) => {
+    const r = await hp.request.post(`/api/org-documents/${docs[k]}/return`, { data: { comment }, headers: H });
+    expect(r.status()).toBe(201);
+    const rid = (await r.json()).return.id;
+    for (const n of fixed) expect((await ep.request.put(`/api/orders/${ids[k]}/org-returns/${rid}/items/${n}`, { data: { fixed: true }, headers: H })).status()).toBe(200);
+    expect((await ep.request.post(`/api/documents/${docs[k]}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  };
+  await ret('part', '1. Нет даты осмотра\n2. Не указан этаж\n3. Итог не совпадает', [1]);
+  await ret('all', '1. Нет фото фасада\n2. Опечатка в адресе', [1, 2]);
+
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const f = hp.locator('#org-sign-filter');
+  await expect(f.locator('button')).toHaveText(['Все ждут подписи · 3', 'Отмечены не все пункты замечания · 1', 'Без ИИ-проверки этой версии · 3']);
+  await expect(hp.locator('#org-sign > li[data-item]')).toHaveCount(3);
+
+  // Отбор — только дело, где эксперт отметил не всё; у файла — какие пункты остались.
+  await f.locator('[data-sign-filter="left"]').click();
+  await expect(f.locator('[data-sign-filter="left"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(hp.locator('#org-sign > li[data-item]')).toHaveCount(1);
+  const item = hp.locator(`#org-sign > li[data-item="${ref(ids.part)}"]`);
+  await expect(item.locator('[data-role="points-state"]')).toHaveText(/^По Вашему замечанию от \d{2}\.\d{2}\.\d{4}: эксперт отметил исправленными 1 из 3, осталось:$/);
+  await expect(item.locator('li.doc ul.points > li')).toHaveText(['2. Не указан этаж — не отмечено', '3. Итог не совпадает — не отмечено']);
+  await expect(hp.locator('#org-sign-many')).toBeHidden();
+  await f.scrollIntoViewIfNeeded();
+  await shot(hp, 'h4c-rukovoditel-otbor-ne-vse-punkty');
+
+  // Подписал это дело — отбора «не все пункты» больше нет, список вернулся ко всем.
+  hp.on('dialog', (d) => d.accept());
+  await item.locator('[data-action="org-sign"]').click();
+  await expect(hp.locator('#org-sign-msg')).toHaveText('Файл подписан от организации');
+  await expect(f.locator('button')).toHaveText(['Все ждут подписи · 2', 'Без ИИ-проверки этой версии · 2']);
+  await expect(f.locator('[data-sign-filter="all"]')).toHaveAttribute('aria-pressed', 'true');
+});
+
 test('заметки эксперта к делу (2.115): заметка с напоминанием — в «Сегодня» и в ленте, «Сделано» убирает', async ({ browser, baseURL }) => {
   const ep = await (await phoneContext(browser, baseURL)).newPage();
   const cp = await (await phoneContext(browser, baseURL)).newPage();
