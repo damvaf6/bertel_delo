@@ -165,8 +165,12 @@ export function moneyOps() {
           const pending = await tx.one`select 1 from payments where order_id = ${cur.id} and status = 'pending'`;
           if (pending) throw new HttpError(409, 'price_locked', 'Заказчик уже начал оплату — цену сейчас не изменить');
           // Транзит (2а.2) — снимок из расчёта модуля на момент цены (поля заявки после отправки не меняются); не больше цены.
-          const transit = Math.min(moduleQuote(cur)?.transit_kop ?? 0, kop);
-          await tx`update orders set price_kop = ${kop}, transit_kop = ${transit}, updated_at = now() where id = ${order.id}`;
+          // Строки нотариуса и доставки — тоже снимком (2а.9): тарифы потом могут поправить, акт и отчёт агента — по этим.
+          const q = moduleQuote(cur);
+          const transit = Math.min(q?.transit_kop ?? 0, kop);
+          const lines = transit ? q.lines.filter((l) => l.kind === 'transit').map((l) => ({ title: l.title, kop: l.kop })) : null;
+          await tx`update orders set price_kop = ${kop}, transit_kop = ${transit}, transit_lines = ${lines && transit === q.transit_kop ? JSON.stringify(lines) : null},
+                   updated_at = now() where id = ${order.id}`;
           await audit(tx, actor, 'order.price', 'order', order.id, { price_kop: kop, ...(transit ? { transit_kop: transit } : {}) });
           await notify(tx, 'priced', { users: await customersOf(tx, cur), orderId: cur.id, actor });
         });

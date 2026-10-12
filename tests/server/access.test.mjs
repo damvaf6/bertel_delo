@@ -455,6 +455,17 @@ test('нотариусы-партнёры (2а.4): справочник — то
   for (const c of [U.owner, U.spec, U.stranger]) assert.deepEqual((await c.req('GET', '/api/specialist/me/notary')).body.desk, { translator: false });
 });
 
+test('цены и правила перевода (2а.9): смотрит и правит только администратор (подробно — translation-settings.test.mjs)', async () => {
+  cover('admin.translation_settings.get'); cover('admin.translation_settings.save');
+  for (const c of [U.owner, U.headA, U.dispatcher, U.spec, U.stranger]) {
+    assert.equal((await c.req('GET', '/api/admin/translation-settings')).status, 404);
+    assert.equal((await c.req('PUT', '/api/admin/translation-settings', { values: { page_kop: 1_00 } })).status, 404);
+  }
+  const r = await U.admin.req('GET', '/api/admin/translation-settings');
+  assert.equal(r.status, 200);
+  assert.equal(r.body.settings.fields.find((f) => f.key === 'page_kop').value, 600_00, 'чужие попытки ничего не поменяли');
+});
+
 test('сертификат перевода (2а.5): выдаёт только переводчик к своему файлу; лист — кому виден файл (подробно — certificates.test.mjs)', async () => {
   cover('certificates.issue'); cover('certificates.sheet');
   // Документ заявки об оценке: сертификат к нему не выдаётся никому, листа нет; посторонним — «не найдено».

@@ -221,7 +221,9 @@ async function makeClosingDocs(tx, order, split, { test, partial = null }) {
            on conflict (order_id, kind) do nothing`;
 }
 
-// Строки транзита из расчёта модуля (нотариус: подпись, копия, равнозначность; доставка) — для акта и отчёта агента.
+// Строки транзита (нотариус: подпись, копия, равнозначность; доставка) — для акта и отчёта агента: снимок на момент цены
+// (2а.9), у старых заявок — из расчёта модуля.
 function transitLines(order) {
+  if (Array.isArray(order.transit_lines)) return order.transit_lines;
   return (moduleQuote(order)?.lines ?? []).filter((l) => l.kind === 'transit').map((l) => ({ title: l.title, kop: l.kop }));
 }

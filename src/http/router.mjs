@@ -10,6 +10,7 @@
 // csrf: false — только у открытой операции, которую зовёт внешний сервис (уведомление ЮKassa) и которая содержимому не верит.
 import express from 'express';
 import { HttpError, parseCookies } from './core.mjs';
+import { refreshModuleSettings } from '../modules/extras.mjs';
 import { authorize, authorizePlatform, LEVEL, RESOURCES } from '../access/policy.mjs';
 import { sessionUser } from '../auth/auth.mjs';
 import { deliverPending } from '../notify/notify.mjs';
@@ -71,6 +72,8 @@ export function mountOps(app, ops, deps) {
           if (op.access.platform) authorizePlatform(ctx.actor, op.access.platform);
           else if (op.access !== 'self') Object.assign(ctx, await authorize(deps.sql, ctx.actor, op.access, req.params));
         }
+        // Цены и правила модулей, которые правит администратор (2а.9), — перечитать, если давно не читали.
+        await refreshModuleSettings(deps.sql);
         const out = await op.handler(ctx);
         // Изменяющая операция могла записать уведомления — СМС и письма уходят сразу; неудачные повторит обход в server.mjs.
         if (op.method !== 'GET') {

@@ -61,6 +61,7 @@
 // Описание проверяется при запуске: ошибка в описании — сервер не стартует.
 import { HttpError } from '../http/core.mjs';
 import { AUTO_CHECKS } from '../ai/report-checks.mjs';
+import { moduleProofread } from './extras.mjs';
 import expertise from './expertise.mjs';
 import translation from './translation.mjs';
 
@@ -586,7 +587,8 @@ export function createRegistry(modules = DEFAULT_MODULES) {
     // Вычитка и переделка (2а.7): настройки модуля или null.
     proofread(moduleId) {
       const p = modulesList.find((x) => x.id === moduleId)?.proofread;
-      return p ? { new_orders: p.new_orders, sample_percent: p.sample_percent, redo_days: p.redo_days, refund_note: p.refund_note ?? null } : null;
+      // Числа — действующие настройки модуля, если администратор их правил (2а.9).
+      return p ? { new_orders: p.new_orders, sample_percent: p.sample_percent, redo_days: p.redo_days, ...moduleProofread(moduleId), refund_note: p.refund_note ?? null } : null;
     },
     // Условия оферты (2а.8) для услуги: пункты заказчику (customer) и исполнителю (executor); null — у модуля оферты нет.
     offer(moduleId, serviceId) {

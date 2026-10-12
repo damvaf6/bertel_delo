@@ -445,3 +445,69 @@ test('условия заказа: заказчик видит главное и
   await ctx.close();
   expect(errors).toEqual([]);
 });
+
+test('цены и правила перевода: администратор меняет цену, видит историю; заказчику расчёт по новой цене', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  const adm = await signIn(page, '+79990000990');
+  const db = new pg.Client({ connectionString: DB_URL });
+  await db.connect();
+  // Вернуть стартовые цены — так же, как правит администратор (сервер сразу считает по ним).
+  const restore = async () => {
+    const r = await page.request.get('/api/admin/translation-settings');
+    const values = Object.fromEntries((await r.json()).settings.fields.map((f) => [f.key, f.default]));
+    expect((await page.request.put('/api/admin/translation-settings', { data: { values }, headers: H })).status()).toBe(200);
+  };
+  try {
+    await db.query("update users set platform_role = 'admin' where id = $1", [adm.id]);
+    await page.goto('/kabinet#admin');
+    const box = page.locator('#tprices-box');
+    await expect(page.locator('#tp-page_kop')).toHaveValue('600');
+    await expect(page.locator('#tp-commission')).toHaveText('20');
+    await page.getByLabel('Перевод, за страницу, ₽').fill('650');
+    await page.getByLabel('Подпись переводчика, за документ, ₽').fill('450,50');
+    await page.getByLabel('Паспорт можно заказать нотариальным файлом').check();
+    await page.getByRole('button', { name: 'Сохранить цены и правила' }).click();
+    await expect(page.locator('#tp-msg')).toContainText('Сохранено. Изменено: Перевод, за страницу — 650 ₽; Подпись переводчика, за документ — 450,5 ₽; Паспорт можно заказать нотариальным файлом — да');
+    await expect(box.locator('#tp-page_kop + .muted')).toHaveText('стартовое: 600 ₽');
+    await box.locator('#tp-history-box summary').click();
+    await expect(page.locator('#tp-history li').first()).toContainText('Перевод, за страницу: 600 ₽ → 650 ₽');
+    await page.locator('#tp-history li').first().scrollIntoViewIfNeeded();
+    await shot(page, 'ceny-01-admin-pravka-istoriya');
+
+    // Ошибка в поле — понятное сообщение, ничего не сохранено.
+    await page.getByLabel('Перевод, за страницу, ₽').fill('сто');
+    await page.getByRole('button', { name: 'Сохранить цены и правила' }).click();
+    await expect(page.locator('#tp-msg')).toHaveText('«Перевод, за страницу»: введите число');
+    await page.getByLabel('Перевод, за страницу, ₽').fill('0');
+    await page.getByRole('button', { name: 'Сохранить цены и правила' }).click();
+    await expect(page.locator('#tp-msg')).toContainText('«Перевод, за страницу»: сумма от 1 ₽');
+    await page.locator('#tp-page_kop').scrollIntoViewIfNeeded();
+    await shot(page, 'ceny-02-admin-oshibka');
+
+    // Заказчик: перевод без нотариуса, 1 стр., обычный срок — 650 + 150 = 800 ₽.
+    await page.goto('/kabinet');
+    await page.locator('#new-order').getByLabel('Услуга').selectOption({ label: 'Перевод без нотариуса (с сертификатом платформы)' });
+    await page.getByRole('button', { name: 'Создать заявку' }).click();
+    await expect(page.locator('#order-status')).toHaveText('Новая');
+    await page.getByLabel('Куда подаёте перевод').selectOption({ label: 'МВД, миграционная служба' });
+    await page.getByLabel('Язык (кроме русского)').selectOption({ label: 'Английский' });
+    await page.getByLabel('Направление перевода').selectOption({ label: 'С языка на русский' });
+    await page.getByLabel('Что переводим').selectOption({ label: 'Паспорт, удостоверение личности' });
+    await page.getByLabel('Документов, шт.').fill('1');
+    await page.getByLabel('Страниц всего').fill('1');
+    await page.getByLabel('Срочность').selectOption({ label: '1–2 дня' });
+    await page.getByLabel('Бумажный экземпляр').selectOption({ label: 'Не нужен, только PDF' });
+    await page.getByLabel('Срок: результат нужен к').fill(inDays(5));
+    await page.getByRole('button', { name: 'Сохранить' }).click();
+    await expect(page.locator('#details-msg')).toHaveText('Сохранено');
+    await expect(page.locator('#quote-lines')).toContainText('Перевод: 1 стр. × 650 ₽');
+    await expect(page.locator('#quote-total')).toHaveText('Итого по таблице цен: 800 ₽');
+    await page.locator('#quote-box').scrollIntoViewIfNeeded();
+    await shot(page, 'ceny-03-zakazchik-novaya-cena');
+  } finally {
+    await restore();
+    await db.end();
+  }
+  expect(errors).toEqual([]);
+});
