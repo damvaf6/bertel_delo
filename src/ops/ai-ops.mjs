@@ -103,7 +103,7 @@ async function resultDocs(sql, storage, order) {
 // файлы, где сказано «задание на оценку» или «письмо». Только для автоматических правил; модели не уходят.
 const ASSIGNMENT_MAX = 5;
 const ASSIGNMENT_TEXT = /задани\S*\s+на\s+(?:проведение\s+)?оценк/iu;
-async function assignmentDocs(sql, storage, order) {
+export async function assignmentDocs(sql, storage, order) {
   const docs = await sql`select * from documents where order_id = ${order.id} and kind in ('basis', 'other') and deleted_at is null
                          order by created_at desc limit 20`;
   const out = [];

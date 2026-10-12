@@ -1439,17 +1439,27 @@ function valueDates(docs, ctx = {}) {
 function assignmentDate(reportDates, assignment) {
   const values = [...new Set(reportDates.map((e) => e.value))];
   if (values.length !== 1) return [];
-  const given = assignment.filter((d) => Array.isArray(d.pages)).flatMap(valueDatesIn);
+  const got = assignmentValue(assignment);
+  if (!got.day || got.day === values[0]) return [];
+  const first = reportDates[0];
+  return [{ doc: first.doc, page: first.page, quote: first.quote,
+    text: `Дата оценки в отчёте ${ruDate(values[0])}, а ${got.what} «${got.name}» — ${ruDate(got.day)} (стр. ${got.page + 1}); дата оценки берётся из задания — исправьте отчёт или приложите к делу новое задание` }];
+}
+
+// 2.207: дата оценки из приложенных к делу задания на оценку, письма заказчика или определения суда — для ИИ-проверки
+// (2.198) и черновика заключения. Ровно одна дата — { day: 'ГГГГ-ММ-ДД', name, page, what }; разные — { days: […] }
+// (какая верная, решает эксперт); нет ни одной — {}.
+export function assignmentValue(assignment) {
+  const given = (assignment ?? []).filter((d) => Array.isArray(d.pages)).flatMap(valueDatesIn);
   const days = [...new Set(given.map((e) => e.value))];
-  if (days.length !== 1 || days[0] === values[0]) return [];
+  if (days.length > 1) return { days };
+  if (!days.length) return {};
   const src = given[0].doc;
   const head = (src.pages ?? []).slice(0, 2).join('\n');
   const what = /задани\S*\s+на\s+(?:проведение\s+)?оценк/iu.test(head) || /задани/iu.test(src.name) ? 'в задании на оценку'
     : /(?<![а-яё])суд(?:а|ом|ебн\S*)?(?![а-яё])/iu.test(head) && /определ|назнач/iu.test(head) ? 'в определении суда'
       : 'в письме заказчика';
-  const first = reportDates[0];
-  return [{ doc: first.doc, page: first.page, quote: first.quote,
-    text: `Дата оценки в отчёте ${ruDate(values[0])}, а ${what} «${src.name}» — ${ruDate(days[0])} (стр. ${given[0].page + 1}); дата оценки берётся из задания — исправьте отчёт или приложите к делу новое задание` }];
+  return { day: days[0], name: src.name, page: given[0].page, what };
 }
 
 // ——— 2.131: цель оценки — как в заявке, вид стоимости один по отчёту и подходит к цели ———
