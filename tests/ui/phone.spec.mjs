@@ -6727,12 +6727,12 @@ test('отбор дел на подпись по ИИ-проверке (2.193): 
   const f = hp.locator('#org-sign-filter');
   await expect(f).toBeVisible();
   await expect(f.locator('button')).toHaveText(['Все ждут подписи · 3', 'Без ИИ-проверки этой версии · 1', 'Есть «посмотрите» · 1']);
-  await expect(f.locator('[data-filter="all"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(f.locator('[data-sign-filter="all"]')).toHaveAttribute('aria-pressed', 'true');
   await expect(hp.locator('#org-sign > li[data-item]')).toHaveCount(3);
 
   // «Без ИИ-проверки этой версии» — только первое дело; «несколько сразу» скрыто — в отборе одно дело.
-  await f.locator('[data-filter="noai"]').click();
-  await expect(f.locator('[data-filter="noai"]')).toHaveAttribute('aria-pressed', 'true');
+  await f.locator('[data-sign-filter="noai"]').click();
+  await expect(f.locator('[data-sign-filter="noai"]')).toHaveAttribute('aria-pressed', 'true');
   await expect(hp.locator('#org-sign > li[data-item]')).toHaveCount(1);
   await expect(hp.locator(`#org-sign > li[data-item="${ref(ids.none)}"] [data-role="ai-check"]`)).toHaveText('Эксперт не запускал ИИ-проверку этого файла.');
   await expect(hp.locator('#org-sign-many')).toBeHidden();
@@ -6740,7 +6740,7 @@ test('отбор дел на подпись по ИИ-проверке (2.193): 
   await shot(hp, 'h4a-rukovoditel-otbor-bez-ii');
 
   // «Есть «посмотрите»» — только второе дело.
-  await f.locator('[data-filter="look"]').click();
+  await f.locator('[data-sign-filter="look"]').click();
   await expect(hp.locator('#org-sign > li[data-item]')).toHaveCount(1);
   await expect(hp.locator(`#org-sign > li[data-item="${ref(ids.look)}"] [data-role="ai-check"]`)).toContainText('осталось «посмотрите»: 1 — Реквизиты');
   await shot(hp, 'h4b-rukovoditel-otbor-posmotrite');
@@ -6751,7 +6751,7 @@ test('отбор дел на подпись по ИИ-проверке (2.193): 
   await hp.locator(`#org-sign > li[data-item="${ref(ids.look)}"] [data-action="org-sign"]`).click();
   await expect(hp.locator('#org-sign-msg')).toHaveText('Файл подписан от организации');
   await expect(f.locator('button')).toHaveText(['Все ждут подписи · 2', 'Без ИИ-проверки этой версии · 1']);
-  await expect(f.locator('[data-filter="all"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(f.locator('[data-sign-filter="all"]')).toHaveAttribute('aria-pressed', 'true');
   await expect(hp.locator('#org-sign > li.group')).toHaveText('Подписано · 1');
 });
 

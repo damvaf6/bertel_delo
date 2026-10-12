@@ -81,7 +81,7 @@ function renderFilter(counts, waiting) {
   const box = $('org-sign-filter');
   const used = SIGN_FILTERS.filter((f) => counts.get(f.id));
   box.classList.toggle('hidden', !used.length);
-  const chip = (id, text) => el('button', { type: 'button', class: 'secondary', 'data-filter': id ?? 'all',
+  const chip = (id, text) => el('button', { type: 'button', class: 'secondary', 'data-sign-filter': id ?? 'all',
     'aria-pressed': String(signFilter === id), onclick: () => { signFilter = id; renderSign(); } }, text);
   box.replaceChildren(...(used.length ? [chip(null, `Все ждут подписи · ${waiting}`), ...used.map((f) => chip(f.id, `${f.text} · ${counts.get(f.id)}`))] : []));
 }
