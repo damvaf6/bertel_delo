@@ -34,12 +34,15 @@ const ORG_CHAT_OPEN = [...CASES_ACTIVE, 'done'];
 // по делу. Считаются напоминания только нынешнему эксперту — после передачи дела прежние не в счёт.
 export const CASE_REMIND_EVERY_HOURS = 24;
 export async function caseRemind(sql, order) {
-  const last = await sql.one`select max(created_at) as at, count(*)::int as n from case_reminders
+  const last = await sql.one`select max(created_at) as at, count(*)::int as n,
+                               (array_agg(kind order by created_at desc))[1] as kind from case_reminders
                              where order_id = ${order.id} and expert_id = ${order.executor_user_id}`;
   const next = last?.at ? new Date(new Date(last.at).getTime() + CASE_REMIND_EVERY_HOURS * 3600_000) : null;
   return {
     reminded_at: last?.at ?? null,
     reminders: last?.n ?? 0,
+    // О чём напомнили последний раз (2.201): 'case' — о деле, 'extend' — попросить перенос срока.
+    kind: last?.kind ?? null,
     can_remind: !next || next <= new Date(),
     next_remind_at: next && next > new Date() ? next : null,
   };
@@ -587,20 +590,25 @@ export function orgOps() {
     {
       // Руководитель напоминает эксперту о деле в работе (2.125): одной кнопкой, не чаще раза в сутки по делу. Эксперту —
       // уведомление, ведёт к делу; без текста — что нужно, руководитель пишет во внутренней переписке (2.28).
+      // kind: 'extend' (2.201) — срок дела в дни, когда эксперт не принимает дела, а передать некому: «попросите перенос
+      // срока», дело у эксперта откроется на просьбе с готовой причиной. Тот же предел — раз в сутки по делу.
       id: 'orgs.cases.remind', method: 'POST', path: '/api/orgs/:id/cases/:orderId/remind', auth: 'user',
       access: { resource: 'org', param: 'id', need: 'manage' },
-      async handler({ sql, actor, org, params, res }) {
+      async handler({ sql, actor, org, params, body, res }) {
         const orderId = uuidFrom(params.orderId, 'Дело не найдено');
+        const kind = body?.kind ?? 'case';
+        if (!['case', 'extend'].includes(kind)) throw new HttpError(400, 'bad_kind', 'Неизвестный вид напоминания');
         const remind = await sql.tx(async (tx) => {
           const cur = await tx.one`select * from orders where id = ${orderId} for update`;
           // Дело чужой организации (или без эксперта от этой) — «не найдено», как и в «Делах экспертов».
           if (!cur?.executor_user_id || (await executorSignOrg(tx, cur.executor_user_id))?.id !== org.id) throw new HttpError(404, 'not_found', 'Дело не найдено');
           if (cur.status !== 'in_work') throw new HttpError(409, 'status_changed', 'Напомнить можно, пока дело в работе — обновите страницу');
           if (cur.executor_user_id === actor.id) throw new HttpError(409, 'own_case', 'Это Ваше дело — напоминать некому');
+          if (kind === 'extend' && (await openExtends(tx, [cur.id])).get(cur.id)) throw new HttpError(409, 'extend_open', 'Эксперт уже просит перенести срок — ждёт ответа диспетчера');
           if (!(await caseRemind(tx, cur)).can_remind) throw new HttpError(409, 'too_often', 'Напомнить можно раз в сутки — эксперт уже получил напоминание');
-          await tx`insert into case_reminders (order_id, org_id, user_id, expert_id) values (${cur.id}, ${org.id}, ${actor.id}, ${cur.executor_user_id})`;
-          await notify(tx, 'org_case_reminder', { users: [cur.executor_user_id], orderId: cur.id, actor });
-          await audit(tx, actor, 'org.case.remind', 'order', cur.id, { org: org.id, expert: cur.executor_user_id });
+          await tx`insert into case_reminders (order_id, org_id, user_id, expert_id, kind) values (${cur.id}, ${org.id}, ${actor.id}, ${cur.executor_user_id}, ${kind})`;
+          await notify(tx, kind === 'extend' ? 'org_case_extend_ask' : 'org_case_reminder', { users: [cur.executor_user_id], orderId: cur.id, actor });
+          await audit(tx, actor, 'org.case.remind', 'order', cur.id, { org: org.id, expert: cur.executor_user_id, kind });
           return caseRemind(tx, cur);
         });
         res.status(201);

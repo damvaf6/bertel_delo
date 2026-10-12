@@ -100,6 +100,8 @@ export const EVENTS = {
   org_handover_declined: { type: 'executor_work', title: 'Руководитель организации не стал передавать дело — оно остаётся у Вас', order: true },
   // Руководитель напомнил эксперту о деле в работе (2.125): не чаще раза в сутки по делу, src/ops/org-ops.mjs.
   org_case_reminder: { type: 'executor_work', title: 'Руководитель организации напоминает о деле — проверьте срок и что осталось сделать', order: true },
+  // Срок дела — в дни, когда эксперт не принимает дела, а передать некому (2.201): дело откроется на просьбе о переносе.
+  org_case_extend_ask: { type: 'executor_work', title: 'Руководитель организации: попросите перенести срок дела — он в дни, когда Вы не принимаете дела', order: true, to: 'away' },
   org_case_given: { type: 'executor_work', title: 'Руководитель организации передал Вам дело в работе', order: true },
   // Эксперту (2.76): руководитель отдал предложенное ему дело другому (или забрал назад) до его ответа — без номера.
   org_offer_taken: { type: 'executor_work', title: 'Руководитель организации снял предложенное Вам дело — отвечать не нужно', order: false, section: 'specialist' },
@@ -136,7 +138,7 @@ export const EVENTS = {
 const ID_RE = /^[a-z_]{1,40}$/;
 export const SECTIONS = ['orgs', 'specialist', 'specialists', 'problems'];
 export const FOCUS = ['pending', 'sign', 'chat', 'handover'];
-export const ORDER_TO = ['notes', 'steps'];
+export const ORDER_TO = ['notes', 'steps', 'away'];
 export const ANCHORS = ['schedule'];
 
 // Проверка реестра при запуске: ошибка в описании — сервер не стартует (как у модулей-профессий).

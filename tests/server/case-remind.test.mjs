@@ -88,3 +88,30 @@ test('после передачи дела другому эксперту — �
   assert.equal((await caseOf(o)).remind, null);
   assert.equal((await remind(o)).body.error, 'status_changed');
 });
+
+// Срок дела — в дни, когда эксперт не принимает дела, а передать некому (2.201): «Напомнить эксперту попросить перенос
+// срока» — то же напоминание раз в сутки, но эксперту уведомление ведёт на просьбу о переносе с готовой причиной.
+test('руководитель просит эксперта попросить перенос срока: уведомление ведёт к переносу, предел — общий', async () => {
+  const o = await inWork('Срок в отпуске');
+  const ext = (body) => head.req('POST', `/api/orgs/${org.id}/cases/${o.id}/remind`, body);
+  assert.equal((await ext({ kind: 'другое' })).body.error, 'bad_kind');
+  const r = await ext({ kind: 'extend' });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.equal(r.body.remind.kind, 'extend');
+  const n = (await spec.req('GET', '/api/notifications')).body.notifications.find((x) => x.order_id === o.id);
+  assert.ok(n.title.startsWith('Руководитель организации: попросите перенести срок'), n.title);
+  assert.equal(n.to, 'away');
+  // Предел общий: в те же сутки ни «напомнить», ни «попросить перенос» ещё раз.
+  assert.equal((await remind(o)).body.error, 'too_often');
+  assert.equal((await ext({ kind: 'extend' })).body.error, 'too_often');
+  assert.equal((await caseOf(o)).remind.kind, 'extend');
+  const a = await S.sql`select details from audit_log where action = 'org.case.remind' and subject_id = ${o.id}`;
+  assert.equal(a[0].details.kind, 'extend');
+  // Эксперт уже попросил перенос — просить его об этом не нужно, даже через сутки.
+  await S.sql`update case_reminders set created_at = now() - interval '25 hours' where order_id = ${o.id}`;
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/deadline-requests`, { new_deadline: addDays(todayMsk(), 15), reason: 'В день срока меня не будет' })).status, 201);
+  assert.equal((await ext({ kind: 'extend' })).body.error, 'extend_open');
+  // Обычное «Напомнить эксперту» — можно.
+  assert.equal((await remind(o)).status, 201);
+  assert.equal((await caseOf(o)).remind.kind, 'case');
+});
