@@ -34,13 +34,14 @@ export async function loadInspection(current) {
   if (missing.length) $('retake-step').value = missing[0].id;
   $('inspect-state').textContent = photos
     ? `Фото осмотра: ${photos}. У каждого — время и место съёмки; «без геометки» — владелец не разрешил определять место.`
-      + (missing.length ? ` Не снято: ${missing.map((s) => s.title).join(', ')} — попросите доснять ниже.` : '')
+      + (missing.length && !(r.incomplete && r.can_issue) ? ` Не снято: ${missing.map((s) => s.title).join(', ')} — попросите доснять ниже.` : '')
     : r.can_issue ? (subject === 'goods' ? 'Тот, у кого товар, снимает его сам по ссылке — без входа, по шагам: товар целиком, маркировка, недостаток крупно. Фото появятся здесь.'
       : subject === 'car' ? 'Владелец снимает машину сам по ссылке — без входа, по шагам: с четырёх сторон, VIN, пробег, каждое повреждение крупно. Фото появятся здесь.'
       : 'Владелец объекта снимает его сам по ссылке — без входа, по шагам для этого вида объекта. Фото появятся здесь.')
       : 'Фото осмотра пока нет.';
   renderSilent(r);
   renderExpiring(r);
+  renderIncomplete(r);
   renderLinks(r);
   renderSteps(r, photos);
 }
@@ -77,6 +78,39 @@ $('inspect-extend').addEventListener('click', async () => {
     const r = await api('POST', `/api/orders/${ctx.order.id}/inspection/extend`, { link_id: ctx.expiring.link_id, days: Number($('inspect-days').value) });
     await loadInspection({ order: ctx.order });
     say($('inspect-msg'), `Ссылка продлена до ${timeRu(r.expires_at)} — владелец снимает по той же ссылке`, 'ok');
+  } catch (err) { say($('inspect-msg'), err.message); } finally { btn.disabled = false; }
+});
+
+// Владелец нажал «Готово», а обязательные шаги без фото (2.208): «Попросить доснять» ставит у каждого такого шага просьбу и
+// выдаёт новую ссылку (по закрытой владелец уже не снимет) — с тем сроком и телефоном, что в форме ниже; СМС скажет «переснять».
+const ASK_MISSING = 'Этот шаг не снят — снимите, пожалуйста';
+function renderIncomplete(r) {
+  const x = r.incomplete;
+  ctx.incomplete = x;
+  askedMissingPhone = false;
+  $('inspect-incomplete').classList.toggle('hidden', !(x && r.can_issue));
+  if (!x || !r.can_issue) return;
+  $('inspect-incomplete-text').textContent = `Владелец нажал «Готово» ${timeRu(x.finished_at)} (фото по ссылке: ${x.photos}), но не снял: `
+    + `${x.missing.map((s) => s.title).join(', ')}. По этой ссылке он больше снимать не может — попросите доснять: у шагов появится просьба,`
+    + ' владельцу уйдёт новая ссылка. Чтобы ушла СМС, впишите телефон ниже: номер мы не храним.';
+}
+let askedMissingPhone = false;
+$('inspect-ask-missing').addEventListener('click', async () => {
+  if (!$('inspect-phone').value.trim() && !askedMissingPhone) {
+    askedMissingPhone = true;
+    $('inspect-phone').focus();
+    say($('inspect-msg'), 'Впишите телефон владельца — пришлём СМС. Без телефона нажмите ещё раз: ссылку скопируете и отправите сами');
+    return;
+  }
+  const btn = $('inspect-ask-missing');
+  btn.disabled = true;
+  try {
+    // Просьба уже стоит у шага — её текст эксперта не трогаем.
+    const open = await api('GET', `/api/orders/${ctx.order.id}/inspection`);
+    for (const s of open.steps.filter((st) => ctx.incomplete.missing.some((m) => m.id === st.id) && !st.retake)) {
+      await api('POST', `/api/orders/${ctx.order.id}/inspection/retakes`, { step: s.id, note: ASK_MISSING });
+    }
+    $('inspect-issue').requestSubmit();
   } catch (err) { say($('inspect-msg'), err.message); } finally { btn.disabled = false; }
 });
 
