@@ -8769,7 +8769,10 @@ test('2.201: срок дела в отпуске эксперта, переда�
   await shot(ep, 'c53-2201-ekspert-uvedomlenie');
   await n.getByRole('button').click();
   await expect(ep.locator('#deadline-reason')).toHaveValue(/^В день срока меня не будет, работаю снова с /);
-  await expect(ep.locator('#deadline-new')).toHaveValue(inDays(4));
+  // День возвращения или ближайший будний после него (2.195).
+  let back = 4;
+  while ([0, 6].includes(new Date(`${inDays(back)}T00:00:00Z`).getUTCDay())) back += 1;
+  await expect(ep.locator('#deadline-new')).toHaveValue(inDays(back));
   await ep.locator('#deadline-box').scrollIntoViewIfNeeded();
   await shot(ep, 'c54-2201-ekspert-perenos');
   await ep.locator('#deadline-send').click();
