@@ -511,3 +511,32 @@ test('цены и правила перевода: администратор м
   }
   expect(errors).toEqual([]);
 });
+
+test('оплата ЮKassa — проверка перед подключением: адрес уведомлений, частые ошибки, кнопка проверки адреса', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  const adm = await signIn(page, '+79990000991');
+  const db = new pg.Client({ connectionString: DB_URL });
+  await db.connect();
+  try {
+    await db.query("update users set platform_role = 'admin' where id = $1", [adm.id]);
+    await page.goto('/kabinet#admin');
+    const box = page.locator('#paycheck-box');
+    // На стенде оплата поддельная и адреса сайта нет — проверка честно говорит, что ещё не готово.
+    await expect(box.locator('[data-pc="provider"]')).toContainText('поддельная оплата');
+    await expect(box.locator('[data-pc="webhook"]')).toHaveAttribute('data-ok', 'false');
+    await expect(box.locator('[data-pc="webhook"]')).toContainText('появится, когда задан PUBLIC_URL');
+    await expect(box.locator('[data-pc="receipts"]')).toContainText('только по решению Дамира');
+    await expect(box.locator('[data-pc="operator"]')).toContainText('ИНН');
+    await box.getByRole('button', { name: 'Проверить адрес уведомлений' }).click();
+    await expect(page.locator('#pc-msg')).toHaveText('Адрес уведомлений: сначала исправьте адрес сайта (PUBLIC_URL)');
+    await box.locator('#pc-mistakes-box summary').click();
+    await expect(page.locator('[data-pc-mistake="return_url"]')).toContainText('return_url');
+    await expect(page.locator('[data-pc-mistake="receipt_contact"]')).toContainText('почты или телефона');
+    await box.scrollIntoViewIfNeeded();
+    await shot(page, 'yukassa-01-admin-proverka');
+  } finally {
+    await db.end();
+  }
+  expect(errors).toEqual([]);
+});

@@ -1272,6 +1272,20 @@
           <p class="muted" id="tp-history-empty">Цены ещё не меняли — действуют стартовые.</p>
         </details>
       </div>
+      <div class="card" id="paycheck-box">
+        <h2>Оплата ЮKassa: проверка перед подключением</h2>
+        <p class="muted">Что указать в кабинете ЮKassa и что проверить до отправки магазина на модерацию. Ключ магазина здесь
+          не показывается.</p>
+        <ul class="list" id="pc-items"></ul>
+        <div class="row">
+          <button type="button" class="secondary" id="pc-probe">Проверить адрес уведомлений</button>
+        </div>
+        <p class="msg" id="pc-msg" role="status" aria-live="polite"></p>
+        <details id="pc-mistakes-box">
+          <summary>Частые ошибки при подключении</summary>
+          <ul class="list" id="pc-mistakes"></ul>
+        </details>
+      </div>
       <div class="card">
         <h2>Искусственный интеллект</h2>
         <dl class="facts" id="admin-ai"></dl>

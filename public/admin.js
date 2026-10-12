@@ -4,13 +4,14 @@ import { state, show } from '/shell.js';
 import { serviceName } from '/match.js';
 import { loadNotaries } from '/notaries.js';
 import { loadTranslationPrices } from '/tprices.js';
+import { loadPayCheck } from '/paycheck.js';
 
 const $ = (id) => document.getElementById(id);
 let found = null;
 
 export async function showAdmin() {
   show('admin-view', 'admin');
-  await Promise.all([loadStaff(), loadAi(), loadNotaries(), loadTranslationPrices()]);
+  await Promise.all([loadStaff(), loadAi(), loadNotaries(), loadTranslationPrices(), loadPayCheck()]);
 }
 
 const rub = (n) => `${Number(n).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽`;
