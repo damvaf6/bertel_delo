@@ -16,6 +16,8 @@ import { pastValues, reuseSections, skeleton } from '../docs/reuse.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { orderSources, placeSources, sourcesLines } from '../docs/sources.mjs';
 import { draftDiff } from '../docs/diff.mjs';
+import { assignmentValue } from '../ai/report-checks.mjs';
+import { assignmentDocs } from './ai-ops.mjs';
 
 const PHOTOS_MAX = 40;
 const DOCS_MAX = 5;
@@ -112,6 +114,19 @@ async function onsiteBrief(sql, registry, order) {
   return [`ДАННЫЕ С ОБЪЕКТА (выезд помощника ${dayRu(v.finished_at)}):`, ...lines].join('\n');
 }
 
+// Дата оценки (2.207) — из приложенного к делу задания на оценку, письма заказчика или определения суда, как её ищет
+// ИИ-проверка (2.198, правило value_date): только для услуг с этим правилом. Ровно одна дата — она идёт в таблицу задания,
+// модели и вместо пометок «заполнить: дата оценки»; разные даты — ничего не подставляем, эксперт выбирает сам.
+async function valueDateFor(sql, storage, registry, order) {
+  if (!registry.checks(order.module, order.service).some((r) => (r.auto ?? []).includes('value_date'))) return null;
+  const got = assignmentValue(await assignmentDocs(sql, storage, order));
+  if (got.days) return { days: got.days.map(ruDay) };
+  return got.day ? { day: ruDay(got.day), name: got.name, page: got.page + 1, what: got.what } : null;
+}
+const ruDay = (d) => d.split('-').reverse().join('.');
+// Пометка модели про дату оценки: «[заполнить: дата оценки]», «[заполнить: дату оценки из задания]».
+const VALUE_GAP = /\[(?:заполнить|указать)\s*:?\s*дат[аыу]\s+оценки[^\]]*\]/giu;
+
 export function draftOps() {
   return [
     {
@@ -152,13 +167,17 @@ export function draftOps() {
         // Подтверждённые аналоги (2.32) — модели для текста о корректировках; таблицу программа вставит в Word сама.
         const spec = registry.analogs(order.module, order.service);
         const analogs = spec ? await sql`select * from order_analogs where order_id = ${order.id} and deleted_at is null and confirmed_at is not null order by id` : [];
-        const brief = [orderBrief(registry, order), onsite, dossierBrief, spec ? analogsBrief(spec, analogs, order) : null, tablesBrief(sections)].filter(Boolean).join('\n');
+        const valueDate = await valueDateFor(sql, providers.storage, registry, order);
+        const valueBrief = valueDate?.day ? `Дата оценки: ${valueDate.day} (${valueDate.what} «${valueDate.name}», стр. ${valueDate.page}) — пиши её везде, где нужна дата оценки, без пометок` : null;
+        const brief = [orderBrief(registry, order), valueBrief, onsite, dossierBrief, spec ? analogsBrief(spec, analogs, order) : null, tablesBrief(sections)].filter(Boolean).join('\n');
         const out = await askAi(ctx, actor, 'draft', draftMessages({ brief, sections, ...inputs }));
         // Таблицы (2.29) и сведения из досье (2.14) программа вставляет сама, под заголовками разделов.
         const materials = await orderMaterials(sql, order);
         // Перечень использованных документов (2.95) — из дела, программой.
         const sources = sourcesLines(await orderSources(sql, registry, order));
-        const filled = fillDraft(fillTables(cleanDraftAnswer(sections, out.text), sections, registry, order, { materials }), sections, dossier);
+        const answer = cleanDraftAnswer(sections, out.text);
+        const dated = valueDate?.day ? answer.replace(VALUE_GAP, valueDate.day) : answer;
+        const filled = fillDraft(fillTables(dated, sections, registry, order, { materials, valueDate: valueDate?.day }), sections, dossier);
         const text = placeSources(filled, sections, sources).body.slice(0, DRAFT_MAX);
         const seen = {
           photos: inputs.photos.map((p) => p.name),
@@ -166,6 +185,7 @@ export function draftOps() {
           onsite: !!onsite,
           dossier: dossier.length,
           analogs: analogs.length,
+          value_date: valueDate,
         };
         const d = await sql.tx(async (tx) => {
           await tx`select id from orders where id = ${order.id} for update`;

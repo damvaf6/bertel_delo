@@ -206,7 +206,7 @@ function fakeDraft(text) {
   return sections.map((title) => {
     const t = title.replace(/^\d+\.\s*/, ''); // «7. Описание объекта оценки» — по смыслу, без номера
     let body = '[заполнить: эксперт]';
-    if (/^(?:Вводная|Задание)/.test(t)) body = `${brief.find((l) => l.startsWith('Основание')) ?? 'Основание: [заполнить]'}\n${brief.find((l) => l.startsWith('Для чего')) ?? ''}`.trim();
+    if (/^(?:Вводная|Задание)/.test(t)) body = [brief.find((l) => l.startsWith('Основание')) ?? 'Основание: [заполнить]', brief.find((l) => l.startsWith('Для чего')), brief.find((l) => l.startsWith('Дата оценки:'))?.replace(/ \(.*$/, '')].filter(Boolean).join('\n');
     else if (/^(?:Объект|Описание)/.test(t)) {
       const facts = brief.filter((l) => /^(Услуга|Что оцениваем|Адрес|Площадь|Кадастровый|Этаж|Комнат|Год|Категория|Марка|VIN|Какой товар|Что оценить)/.test(l)).join('\n') || '[заполнить: объект]';
       body = /^Описание/.test(t) ? `${facts}\n${photoLines()}` : byProgram(title) ? '' : facts;

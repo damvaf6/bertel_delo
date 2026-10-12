@@ -757,3 +757,38 @@ test('пустые разделы черновика: только пометк�
   assert.deepEqual(emptySections(''), []);
   assert.deepEqual(emptySections(null), []);
 });
+
+test('2.207: дата оценки из приложенного задания на оценку — в таблицу задания, модели и вместо пометки; разные даты — эксперт выбирает сам', async () => {
+  const o = await inWork('Квартира: дата оценки в черновик');
+  const putDoc = (body, name, kind) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), ...(kind ? { 'x-doc-kind': kind } : {}) } });
+  // Без задания — ничего не подставляется.
+  let d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {})).body.draft;
+  assert.equal(d.inputs.value_date, null);
+  assert.doesNotMatch(d.body, /\| Дата оценки \|/);
+  assert.equal((await putDoc('ЗАДАНИЕ НА ОЦЕНКУ\nОбъект: квартира\nДата оценки: 03.10.2026', 'Задание на оценку.txt', 'basis')).status, 201);
+  // Выписка с кадастровой стоимостью «по состоянию на» — не дата оценки.
+  assert.equal((await putDoc('Кадастровая стоимость по состоянию на 01.01.2026 — 7 000 000 руб.', 'Выписка ЕГРН.txt')).status, 201);
+  d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+  assert.deepEqual(d.inputs.value_date, { day: '03.10.2026', name: 'Задание на оценку.txt', page: 1, what: 'в задании на оценку' });
+  assert.match(d.body, /## 2\. Задание на оценку\n\| Сведение \| Значение \|\n\| Услуга \| Оценка недвижимости \|\n\| Основание \|[^\n]*\|\n\| Дата оценки \| 03\.10\.2026 \|\n/);
+  assert.match(lastPrompt(), /Дата оценки: 03\.10\.2026 \(в задании на оценку «Задание на оценку\.txt», стр\. 1\)/);
+  assert.match(d.body, /\nДата оценки: 03\.10\.2026\n/);
+  // Модель всё же оставила пометку про дату оценки — программа ставит дату; другие пометки не трогает.
+  const orig = S.providers.ai.complete;
+  S.providers.ai.complete = async () => ({ text: '## 1. Основные факты и выводы\nДата оценки — [заполнить: дата оценки]. Стоимость — [заполнить: расчёт]\n## 2. Задание на оценку\nДату оценки: [заполнить: дату оценки из задания]', model: 'fake' });
+  try {
+    d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+    assert.match(d.body, /Дата оценки — 03\.10\.2026\. Стоимость — \[заполнить: расчёт\]/);
+    assert.match(d.body, /Дату оценки: 03\.10\.2026/);
+  } finally { S.providers.ai.complete = orig; }
+  // Правка эксперта сохраняет, откуда дата.
+  const saved = (await spec.req('PUT', `/api/orders/${o.id}/draft`, { body: `${d.body}\nправка`, from: d.id })).body.draft;
+  assert.equal(saved.inputs.value_date.day, '03.10.2026');
+  // Новое задание с другой датой рядом со старым — дата не подставляется, эксперту — обе даты.
+  assert.equal((await putDoc('ЗАДАНИЕ НА ОЦЕНКУ (уточнённое)\nДата оценки: 05.10.2026', 'Задание новое.txt')).status, 201);
+  d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: saved.id })).body.draft;
+  assert.deepEqual(d.inputs.value_date, { days: ['05.10.2026', '03.10.2026'] });
+  assert.doesNotMatch(d.body, /\| Дата оценки \|/);
+  assert.doesNotMatch(lastPrompt(), /Дата оценки: [\d.]+ \(/, 'даты в модель — только текстом самих документов');
+});
