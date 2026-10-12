@@ -31,6 +31,8 @@ const payView = (p) => p && ({ id: p.id, status: p.status, amount_kop: num(p.amo
 const payoutView = (p) => p && ({
   status: p.status, amount_kop: num(p.amount_kop), commission_kop: num(p.commission_kop), failure: p.failure,
   attempts: p.attempts, paid_at: p.paid_at, created_at: p.created_at,
+  // Удержано из выплаты в счёт долга исполнителя (2а.11): перевод по другой заявке признан плохим.
+  withheld_kop: num(p.withheld_kop ?? 0),
   // Чек самозанятого на выплату (2а.3): ссылка из «Мой налог»; receipt_needed — выплата прошла, исполнитель самозанятый, чека нет.
   receipt_url: p.receipt_url ?? null, receipt_at: p.receipt_at ?? null,
   receipt_needed: p.tax_status === 'self_employed' && p.status === 'succeeded' && !p.receipt_url,
@@ -96,6 +98,9 @@ export function moneyOps() {
       // Отмена после начала работ: по чьей причине и какая доля работы сделана.
       cancel_fault: order.cancel_fault,
       done_percent: order.done_percent,
+      // Возврат после выплаты исполнителю (2а.11): чем признан результат; долг исполнителя по этой заявке.
+      refund_quality: order.refund_quality,
+      clawback: null,
       documents: [],
       can_add_receipt: false,
     };
@@ -112,6 +117,8 @@ export function moneyOps() {
       // Приложить чек «Мой налог» (2а.3) — сам исполнитель-самозанятый, к прошедшей выплате.
       out.can_add_receipt = !!p && p.executor_user_id === actor.id && p.tax_status === 'self_employed' && p.status === 'succeeded';
       out.can_retry_payout = !!p && p.status === 'failed' && sides.includes('dispatcher');
+      const c = await sql.one`select * from clawbacks where order_id = ${order.id}`;
+      out.clawback = c && { amount_kop: num(c.amount_kop), withheld_kop: num(c.withheld_kop), closed: !!c.closed_at };
     }
     const kinds = [...(see.customer ? ['act', 'refund'] : []), ...(see.executor ? ['agent_report'] : [])];
     if (kinds.length) {
@@ -316,7 +323,9 @@ export function moneyOps() {
                  (select coalesce(sum(amount_kop), 0) from payouts where status = 'succeeded') as paid_out,
                  (select coalesce(sum(commission_kop), 0) from payouts) as commission,
                  (select coalesce(sum(transit_kop), 0) from payouts) as transit,
-                 (select coalesce(sum(amount_kop + commission_kop + transit_kop), 0) from payouts) as settled,
+                 (select coalesce(sum(amount_kop + withheld_kop + commission_kop + transit_kop), 0) from payouts) as settled,
+                 (select coalesce(sum(amount_kop), 0) from refunds where after_payout) as refunds_after,
+                 (select coalesce(sum(amount_kop - withheld_kop), 0) from clawbacks) as clawback_open,
                  (select coalesce(sum(amount_kop), 0) from refunds where status = 'succeeded') as refunded,
                  (select coalesce(sum(amount_kop), 0) from refunds) as refunds_all,
                  (select coalesce(sum(amount_kop), 0) from refunds where status <> 'succeeded') as to_refund,
@@ -337,8 +346,11 @@ export function moneyOps() {
             transit_kop: num(t.transit),
             // Выплаты самозанятым без чека «Мой налог» (2а.3).
             receipts_missing: t.receipts_missing,
+            // Возвраты после выплаты исполнителю (2а.11) и ещё не удержанный долг исполнителей за плохие переводы.
+            refunds_after_payout_kop: num(t.refunds_after), clawback_open_kop: num(t.clawback_open),
             // Оплачено, но результат ещё не выдан и заявка не отменена — деньги ждут у платформы.
-            held_kop: num(t.received) - num(t.settled) - num(t.refunds_all),
+            // Возврат после выплаты (2а.11) идёт уже не из этих денег — платформа доплачивает или удерживает у исполнителя.
+            held_kop: num(t.received) - num(t.settled) - (num(t.refunds_all) - num(t.refunds_after)),
           },
           payments: payments.map((p) => ({ ...payView(p), order_id: p.order_id, title: p.title })),
           payouts: payouts.map((p) => ({ ...payoutView(p), order_id: p.order_id, title: p.title, executor_name: p.full_name })),

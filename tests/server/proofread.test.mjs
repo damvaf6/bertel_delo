@@ -120,12 +120,14 @@ test('заказчик нашёл ошибку после выдачи: бесп
   assert.ok(kinds.some((n) => n.event === 'redo' && n.user_id === tr.user.id));
   assert.ok(kinds.some((n) => n.event === 'redo_staff' && n.user_id === dispatcher.user.id));
 
-  // Отменить с возвратом после выплаты нельзя: правило возврата диспетчер видит.
+  // Отмена с возвратом после выплаты (2а.11): диспетчер видит правило возврата и должен указать, чем признан перевод.
   const dv = (await dispatcher.req('GET', `/api/orders/${o.id}`)).body;
   assert.match(dv.cancel_note, /только за качество/);
+  assert.equal(dv.after_payout, true);
+  assert.equal((await owner.req('GET', `/api/orders/${o.id}`)).body.after_payout, false, 'заказчику — нет');
   const c = await dispatcher.req('POST', `/api/orders/${o.id}/status`, { to: 'cancelled', from: 'in_work', reason: 'x', fault: 'executor' });
-  assert.equal(c.status, 409);
-  assert.equal(c.body.error, 'paid_out');
+  assert.equal(c.status, 400);
+  assert.equal(c.body.error, 'quality_required');
 
   assert.equal((await submit(tr, o)).status, 200);
   const rv = await review(o);
@@ -156,4 +158,86 @@ test('опытный переводчик (сдал 3 перевода): выч�
   assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'review', reason: 'другому' })).status, 200);
   const [r2] = await S.sql`select proofread from orders where id = ${o.id}`;
   assert.equal(r2.proofread, null);
+});
+
+// Решение Дамира 12.10.2026 (2а.11): возврат после выплаты переводчику. Плохой перевод — выплаченное удерживается из его
+// следующих выплат; нормальный, а заказчик просто недоволен, — возврат за счёт платформы, у переводчика не удерживается.
+test('возврат после выплаты: перевод нормальный — за счёт платформы, у переводчика не удерживается', async () => {
+  const o = await order(tr2);
+  assert.equal((await submit(tr2, o)).status, 200);
+  await allOkDone(o);
+  const [pay] = await S.sql`select * from payouts where order_id = ${o.id}`;
+  const dv = (await dispatcher.req('GET', `/api/orders/${o.id}`)).body;
+  assert.ok(dv.actions.some((a) => a.to === 'cancelled' && a.name === 'Отменить с возвратом' && a.reason), 'выданное дело диспетчер может отменить');
+  assert.equal(dv.after_payout, true);
+  assert.ok(!(await owner.req('GET', `/api/orders/${o.id}`)).body.actions.some((a) => a.to === 'cancelled'), 'заказчик сам не отменяет');
+  assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/status`, { to: 'cancelled', from: 'done', reason: 'x', quality: 'так себе' })).body.error, 'quality_required');
+  const r = await dispatcher.req('POST', `/api/orders/${o.id}/status`, { to: 'cancelled', from: 'done', reason: 'Заказчику не понравился стиль', quality: 'ok' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const [row] = await S.sql`select status, refund_quality, cancel_fault, executor_user_id from orders where id = ${o.id}`;
+  assert.deepEqual([row.status, row.refund_quality, row.cancel_fault, row.executor_user_id], ['cancelled', 'ok', null, tr2.user.id]);
+  const [pm] = await S.sql`select amount_kop from payments where order_id = ${o.id} and status = 'succeeded'`;
+  const [rf] = await S.sql`select * from refunds where order_id = ${o.id}`;
+  assert.equal(Number(rf.amount_kop), Number(pm.amount_kop) - Number(pay.transit_kop), 'возврат — оплата услуг');
+  assert.equal(rf.after_payout, true);
+  assert.equal(rf.status, 'succeeded');
+  assert.equal((await S.sql`select count(*)::int as n from clawbacks where order_id = ${o.id}`)[0].n, 0, 'у переводчика не удерживается');
+  // Переводчик видит дело и деньги: выплата на месте, удержания нет.
+  const m = (await tr2.req('GET', `/api/orders/${o.id}/money`)).body.money;
+  assert.equal(m.payout.status, 'succeeded');
+  assert.equal(m.clawback, null);
+  assert.equal(m.refund_quality, 'ok');
+});
+
+test('возврат после выплаты: перевод плохой — выплаченное удерживается из следующих выплат переводчику', async () => {
+  const tr3 = await login(S, '+79990000994');
+  await makeSpecialist(S.sql, tr3.user.id, { permits: [['translation', 'plain']], capacity: 20, taxStatus: 'self_employed', languages: ['en'] });
+  const a = await order(tr3);
+  assert.equal((await submit(tr3, a)).status, 200);
+  await allOkDone(a);
+  const [payA] = await S.sql`select * from payouts where order_id = ${a.id}`;
+  assert.equal((await owner.req('POST', `/api/orders/${a.id}/status`, { to: 'in_work', from: 'done', reason: 'Пропущен абзац' })).status, 200);
+  const r = await dispatcher.req('POST', `/api/orders/${a.id}/status`, { to: 'cancelled', from: 'in_work', reason: 'Переделка не исправила ошибки', quality: 'bad' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const [row] = await S.sql`select refund_quality, cancel_fault from orders where id = ${a.id}`;
+  assert.deepEqual([row.refund_quality, row.cancel_fault], ['bad', 'executor']);
+  const [cb] = await S.sql`select * from clawbacks where order_id = ${a.id}`;
+  assert.equal(Number(cb.amount_kop), Number(payA.amount_kop), 'долг — выплаченные 80%');
+  assert.equal(cb.executor_user_id, tr3.user.id);
+  assert.equal(cb.closed_at, null);
+  assert.ok((await S.sql`select 1 from notifications where order_id = ${a.id} and user_id = ${tr3.user.id} and event = 'clawback'`).length);
+  const ma = (await tr3.req('GET', `/api/orders/${a.id}/money`)).body.money;
+  assert.deepEqual(ma.clawback, { amount_kop: Number(payA.amount_kop), withheld_kop: 0, closed: false });
+  const sum1 = (await dispatcher.req('GET', '/api/money')).body.totals;
+  assert.ok(sum1.clawback_open_kop >= Number(payA.amount_kop));
+  assert.ok(sum1.refunds_after_payout_kop > 0);
+
+  // Следующий перевод: из выплаты сначала гасится долг — отчёт агента это показывает; выплата может уйти в ноль.
+  const b = await order(tr3);
+  assert.equal((await submit(tr3, b)).status, 200);
+  await allOkDone(b);
+  const [payB] = await S.sql`select * from payouts where order_id = ${b.id}`;
+  const gross = Number(payB.amount_kop) + Number(payB.withheld_kop);
+  assert.equal(Number(payB.withheld_kop), Math.min(gross, Number(payA.amount_kop)));
+  assert.equal(payB.status, 'succeeded', 'выплата прошла (или ушла в ноль без перевода)');
+  const [cb2] = await S.sql`select * from clawbacks where order_id = ${a.id}`;
+  assert.equal(Number(cb2.withheld_kop), Number(payB.withheld_kop));
+  assert.equal(cb2.closed_at !== null, Number(cb2.withheld_kop) === Number(cb2.amount_kop));
+  const mb = (await tr3.req('GET', `/api/orders/${b.id}/money`)).body.money;
+  assert.equal(mb.payout.withheld_kop, Number(payB.withheld_kop));
+  const rep = mb.documents.find((d) => d.kind === 'agent_report');
+  assert.equal(rep.data.withheld_kop, Number(payB.withheld_kop));
+  assert.equal(rep.data.withheld[0].order_ref, `№ ${a.id.slice(0, 8).toUpperCase()}`);
+  // Заказчику удержание не показывается.
+  const mc = (await owner.req('GET', `/api/orders/${b.id}/money`)).body.money;
+  assert.ok(mc.documents.every((d) => d.kind !== 'agent_report' && d.data.withheld_kop === undefined));
+  // Отчёт агента файлом Word собирается.
+  const w = await tr3.req('GET', `/api/orders/${b.id}/closing/${rep.id}`, undefined, { raw: true });
+  assert.equal(w.status, 200);
+});
+
+test('у экспертизы возврата после выплаты нет: выданное дело диспетчер не отменяет', () => {
+  assert.ok(!availableActions('done', ['dispatcher']).some((a) => a.to === 'cancelled'));
+  assert.ok(availableActions('done', ['dispatcher'], ['redo']).some((a) => a.to === 'cancelled'));
+  assert.equal(findTransition('done', 'cancelled', ['dispatcher']), null);
 });

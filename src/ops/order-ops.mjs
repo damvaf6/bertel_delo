@@ -7,7 +7,7 @@ import { LEVEL, executorSignOrg, isStaff, memberOf, orderLevel, orderSides, visi
 import { BASIS_KINDS, cleanValues, missingRequired } from '../modules/index.mjs';
 import { moduleNotices, moduleQuote, moduleSubmitProblems } from '../modules/extras.mjs';
 import { STATUSES, STATUS_NAME, TRANSITIONS, WORK_STARTED, addDays, availableActions, findTransition, isOverdue, todayMsk } from '../orders/workflow.mjs';
-import { runSettlement, settleCancel, settleDone, orderSplit } from '../money/money.mjs';
+import { runSettlement, settleAfterPayout, settleCancel, settleDone, orderSplit } from '../money/money.mjs';
 import { audit, oneOf, quoted, text, uuidFrom } from './util.mjs';
 import { reviewState } from './work-ops.mjs';
 import { orgReturns } from './sign-ops.mjs';
@@ -273,6 +273,9 @@ export function orderOps() {
           terms: offerFor(registry.offer(order.module, order.service), isStaff(actor) || order.executor_user_id === actor.id),
           // Правило возврата (2а.7) — диспетчеру при отмене после начала работ.
           cancel_note: orderSides(actor, order).includes('dispatcher') ? registry.proofread(order.module)?.refund_note ?? null : null,
+          // Исполнителю уже выплачено (2а.11): отмена диспетчером — с выбором «результат плохой / нормальный».
+          after_payout: orderSides(actor, order).includes('dispatcher') && ['in_work', 'review', 'done'].includes(order.status)
+            && !!(await sql.one`select 1 from payouts where order_id = ${order.id}`),
           // Закрыть неоплаченную заявку нельзя — такой кнопки и не показываем (1.6).
           actions: availableActions(order.status, orderSides(actor, order), features(registry, order)).filter((a) => a.to !== 'closed' || !!order.paid_at),
           history: history.map((h) => ({ ...h, from_name: STATUS_NAME[h.from_status] ?? null, to_name: STATUS_NAME[h.to_status] })),
@@ -418,10 +421,17 @@ export function orderOps() {
           // Отмена после начала работ: диспетчер указывает, по чьей причине; при отказе заказчика — сделанную долю работы.
           let fault = null;
           let percent = null;
-          if (to === 'cancelled' && WORK_STARTED.includes(cur.status)) {
-            // Переделка после выдачи (2а.7): исполнителю уже выплачено — отменить с возвратом отсюда нельзя.
-            const paidOut = await tx.one`select 1 from payouts where order_id = ${cur.id}`;
-            if (paidOut) throw new HttpError(409, 'paid_out', 'Результат уже выдавался и исполнителю выплачено — отмена с возвратом здесь невозможна, переделка продолжается');
+          let quality = null;
+          const paidOut = to === 'cancelled' && (WORK_STARTED.includes(cur.status) || cur.status === 'done')
+            && !!(await tx.one`select 1 from payouts where order_id = ${cur.id}`);
+          if (paidOut) {
+            // Выдано и исполнителю выплачено (переделка или выданный перевод, 2а.11): чем признан результат. Плохой —
+            // удержание у исполнителя; нормальный, заказчик просто недоволен, — возврат за счёт платформы (решение Дамира 12.10).
+            if (!pr) throw new HttpError(409, 'paid_out', 'Результат уже выдавался и исполнителю выплачено — отмена с возвратом здесь невозможна');
+            quality = String(body?.quality ?? '');
+            if (!['bad', 'ok'].includes(quality)) throw new HttpError(400, 'quality_required', 'Укажите, чем проверка признала результат: плохим (удержать у исполнителя) или нормальным (возврат за счёт платформы)');
+            fault = quality === 'bad' ? 'executor' : null;
+          } else if (to === 'cancelled' && WORK_STARTED.includes(cur.status)) {
             fault = String(body?.fault ?? '');
             if (!['executor', 'customer'].includes(fault)) throw new HttpError(400, 'fault_required', 'Укажите, по чьей причине отмена: исполнителя или заказчика');
             if (fault === 'customer') {
@@ -433,9 +443,12 @@ export function orderOps() {
           }
           // Деньги: «готово» — выплата исполнителю и закрывающие документы; отмена оплаченной — возврат (и оплата сделанной части).
           if (cur.status === 'review' && to === 'done') settlement = { payoutId: await settleDone(tx, cur, { test }) };
-          if (to === 'cancelled') settlement = await settleCancel(tx, cur, { fault, percent, reason, test });
+          if (to === 'cancelled') {
+            settlement = paidOut ? await settleAfterPayout(tx, cur, { quality, reason, test })
+              : await settleCancel(tx, cur, { fault, percent, reason, test });
+          }
           // Исполнитель, получающий оплату за сделанную часть, сохраняет доступ к отменённому делу (видит отчёт агента).
-          const keepExecutor = to === 'cancelled' && !!settlement.payoutId;
+          const keepExecutor = to === 'cancelled' && (!!settlement.payoutId || paidOut);
           // Предложение исполнителю закрывается: принято, отказ исполнителя, либо снято (диспетчером или отменой).
           if ((cur.executor_user_id || cur.offer_org_id) && (to === 'in_work' || to === 'matching' || to === 'cancelled') && cur.status === 'awaiting_executor') {
             const outcome = to === 'in_work' ? 'accepted' : t.by === 'executor' ? 'declined' : 'withdrawn';
@@ -449,6 +462,7 @@ export function orderOps() {
                    offer_org_id = case when ${to} = 'matching' then null else offer_org_id end,
                    cancel_fault = case when ${to} = 'cancelled' then ${fault} else cancel_fault end,
                    done_percent = case when ${to} = 'cancelled' then ${percent}::int else done_percent end,
+                   refund_quality = case when ${to} = 'cancelled' then ${quality} else refund_quality end,
                    submitted_at = case when ${to} = 'matching' then coalesce(submitted_at, now()) else submitted_at end,
                    review_round = case when ${to} = 'review' then review_round + 1 else review_round end,
                    proofread = ${proofread},

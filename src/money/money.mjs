@@ -76,8 +76,9 @@ export async function settleDone(tx, order, { test }) {
   const p = await paidPayment(tx, order.id);
   if (!p || !order.executor_user_id) return null;
   const split = splitAmount(Number(p.amount_kop), Number(order.transit_kop ?? 0));
-  await makeClosingDocs(tx, order, split, { test });
-  return makePayout(tx, order, split);
+  const payout = await makePayout(tx, order, split);
+  await makeClosingDocs(tx, order, split, { test, withheld: payout?.withheld });
+  return payout?.id ?? null;
 }
 
 // Отмена оплаченной заявки (в транзакции шага статуса). До начала работ и по вине исполнителя — полный возврат;
@@ -92,24 +93,66 @@ export async function settleCancel(tx, order, { fault, percent, reason, test }) 
   let payoutId = null;
   if (workKop > 0 && order.executor_user_id) {
     const split = splitAmount(workKop);
-    await makeClosingDocs(tx, order, split, { test, partial: { percent: share, paid_kop: paid } });
-    payoutId = await makePayout(tx, order, split);
+    const payout = await makePayout(tx, order, split);
+    await makeClosingDocs(tx, order, split, { test, partial: { percent: share, paid_kop: paid }, withheld: payout?.withheld });
+    payoutId = payout?.id ?? null;
   }
   const refundId = refundKop > 0 ? await makeRefund(tx, order, p, refundKop, reason, test) : null;
   return { payoutId, refundId };
 }
 
-async function makePayout(tx, order, split) {
-  const payout = await tx.one`
-    insert into payouts (order_id, executor_user_id, amount_kop, commission_kop, transit_kop)
-    values (${order.id}, ${order.executor_user_id}, ${split.payoutKop}, ${split.commissionKop}, ${split.transitKop})
-    on conflict (order_id) do nothing returning id`;
-  return payout?.id ?? null;
+// Возврат после выплаты исполнителю (решение Дамира 12.10.2026, 2а.11): дело выдано, переводчику уже выплачено 80%.
+// Заказчику возвращается оплата услуг (тарифы нотариуса и доставка уже потрачены). quality 'bad' — проверка признала
+// результат плохим: выплаченное исполнителю становится его долгом и удерживается из следующих выплат; 'ok' — результат
+// нормальный, заказчик просто недоволен: возврат за счёт платформы, у исполнителя не удерживается. Возвращает { refundId }.
+export async function settleAfterPayout(tx, order, { quality, reason, test }) {
+  const p = await paidPayment(tx, order.id);
+  const payout = await tx.one`select * from payouts where order_id = ${order.id}`;
+  if (!p || !payout) return {};
+  const refundKop = Number(p.amount_kop) - Math.min(Number(payout.transit_kop), Number(p.amount_kop));
+  if (quality === 'bad') {
+    const owed = Number(payout.amount_kop) + Number(payout.withheld_kop);
+    const c = await tx.one`
+      insert into clawbacks (order_id, executor_user_id, amount_kop, reason)
+      values (${order.id}, ${payout.executor_user_id}, ${owed}, ${reason}) on conflict (order_id) do nothing returning id`;
+    if (c) {
+      await audit(tx, null, 'clawback.create', 'order', order.id, { clawback: c.id, amount_kop: String(owed) });
+      await notify(tx, 'clawback', { users: [payout.executor_user_id], orderId: order.id });
+    }
+  }
+  const refundId = refundKop > 0 ? await makeRefund(tx, order, p, refundKop, reason, test, { afterPayout: true }) : null;
+  return { refundId };
 }
 
-async function makeRefund(tx, order, payment, amountKop, reason, test) {
+// Выплата исполнителю. Если за ним долг (перевод признан плохим и деньги вернули заказчику) — сначала гасится долг, по
+// старшинству; выплата может уйти в ноль. Возвращает { id, withheld: [{ order_ref, kop }] } или null, если выплата уже есть.
+async function makePayout(tx, order, split) {
+  if (await tx.one`select 1 from payouts where order_id = ${order.id}`) return null;
+  const debts = await tx`select * from clawbacks where executor_user_id = ${order.executor_user_id} and closed_at is null
+                         order by created_at for update`;
+  let left = split.payoutKop;
+  const withheld = [];
+  for (const d of debts) {
+    const kop = Math.min(left, Number(d.amount_kop) - Number(d.withheld_kop));
+    if (kop <= 0) continue;
+    left -= kop;
+    withheld.push({ order_ref: shortRef(d.order_id), kop });
+    await tx`update clawbacks set withheld_kop = withheld_kop + ${kop},
+             closed_at = case when withheld_kop + ${kop} >= amount_kop then now() else null end where id = ${d.id}`;
+  }
+  const withheldKop = split.payoutKop - left;
+  const payout = await tx.one`
+    insert into payouts (order_id, executor_user_id, amount_kop, commission_kop, transit_kop, withheld_kop)
+    values (${order.id}, ${order.executor_user_id}, ${left}, ${split.commissionKop}, ${split.transitKop}, ${withheldKop})
+    returning id`;
+  if (withheldKop) await audit(tx, null, 'clawback.withhold', 'order', order.id, { payout: payout.id, withheld_kop: String(withheldKop) });
+  return { id: payout.id, withheld };
+}
+
+async function makeRefund(tx, order, payment, amountKop, reason, test, { afterPayout = false } = {}) {
   const r = await tx.one`
-    insert into refunds (order_id, payment_id, amount_kop, reason) values (${order.id}, ${payment.id}, ${amountKop}, ${reason})
+    insert into refunds (order_id, payment_id, amount_kop, reason, after_payout)
+    values (${order.id}, ${payment.id}, ${amountKop}, ${reason}, ${afterPayout})
     on conflict (order_id) do nothing returning id`;
   if (!r) return null;
   await audit(tx, null, 'refund.create', 'order', order.id, { refund: r.id, amount_kop: String(amountKop) });
@@ -150,7 +193,9 @@ async function runTransfer(sql, providers, kind, id) {
   if (!row0) return null;
   let result;
   try {
-    if (kind === 'payout') {
+    // Выплата целиком ушла в погашение долга (2а.11) — переводить нечего.
+    if (kind === 'payout' && Number(row0.amount_kop) === 0) result = { status: 'succeeded' };
+    else if (kind === 'payout') {
       result = await providers.payments.createPayout({
         idempotenceKey: `${row0.id}:${row0.attempts}`, executorId: row0.executor_user_id, amountKop: Number(row0.amount_kop),
         description: `Выплата исполнителю по заявке ${shortRef(row0.order_id)}`,
@@ -201,7 +246,7 @@ const docBase = (order, { test }) => ({
 
 // Акт заказчику и отчёт агента исполнителю. Содержимое — снимок на момент выдачи результата (или отмены с частичной
 // оплатой — partial); имя заказчика исполнителю не попадает.
-async function makeClosingDocs(tx, order, split, { test, partial = null }) {
+async function makeClosingDocs(tx, order, split, { test, partial = null, withheld = [] }) {
   const who = await tx.one`
     select u.full_name, o.name as org_name, o.inn, o.kpp, o.legal_address from users u left join organizations o on o.id = ${order.org_id}
     where u.id = ${order.owner_user_id}`;
@@ -211,13 +256,15 @@ async function makeClosingDocs(tx, order, split, { test, partial = null }) {
     ...(split.transitKop ? { transit_kop: split.transitKop, services_kop: split.priceKop - split.transitKop, transit_lines: transitLines(order) } : {}),
     ...(partial ? { partial_percent: partial.percent, paid_kop: partial.paid_kop } : {}),
   };
+  // Удержание в счёт долга исполнителя (2а.11) — только в отчёт агента исполнителю; заказчику не показывается.
+  const agent = withheld?.length ? { ...base, withheld, withheld_kop: withheld.reduce((a, w) => a + w.kop, 0) } : base;
   // Название организации — как его записали: «ООО «Юрфирма»» без второй пары кавычек (2.41).
   const customer = who?.org_name ? `Организация ${quoted(who.org_name)}` : who?.full_name || 'Заказчик';
   // Реквизиты организации-заказчика (2.46) — в акт на дату выдачи; у частного лица — только имя.
   const customerDetails = who?.org_name ? { name: customer, inn: who.inn, kpp: who.kpp, address: who.legal_address } : { name: customer };
   await tx`insert into closing_documents (order_id, kind, data) values (${order.id}, 'act', ${JSON.stringify({ ...base, customer, customer_details: customerDetails })})
            on conflict (order_id, kind) do nothing`;
-  await tx`insert into closing_documents (order_id, kind, data) values (${order.id}, 'agent_report', ${JSON.stringify(base)})
+  await tx`insert into closing_documents (order_id, kind, data) values (${order.id}, 'agent_report', ${JSON.stringify(agent)})
            on conflict (order_id, kind) do nothing`;
 }
 

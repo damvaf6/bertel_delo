@@ -194,7 +194,16 @@
           <input id="reason" type="text" maxlength="1000">
         </div>
         <div class="hidden" id="cancel-box">
-          <div class="field">
+          <div class="field hidden" id="cancel-quality-box">
+            <label for="cancel-quality">Исполнителю уже выплачено. Чем проверка признала результат</label>
+            <select id="cancel-quality">
+              <option value="">— выберите —</option>
+              <option value="bad">Плохим — вернуть заказчику, выплаченное удержать у исполнителя</option>
+              <option value="ok">Нормальным, заказчик просто недоволен — вернуть за счёт платформы</option>
+            </select>
+            <p class="muted">Заказчику возвращается оплата услуг; тарифы нотариуса и доставка уже потрачены. Удержание — из следующих выплат исполнителю.</p>
+          </div>
+          <div class="field" id="cancel-fault-box">
             <label for="cancel-fault">Если отменить: по чьей причине</label>
             <select id="cancel-fault">
               <option value="">— выберите —</option>
