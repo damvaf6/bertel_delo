@@ -36,6 +36,8 @@ const REPLY_HOURS = 24;
 const SIGN_LONG_DAYS = 2;
 // Возврат руководителя не исправлен 2 дня и дольше (2.153) — в утренней сводке руководителю.
 const RETURN_LONG_DAYS = 2;
+// Исправленный файл после возврата руководителя загружен больше суток назад, а эксперт его не подписал (2.204).
+const FRESH_LATE_HOURS = 24;
 
 async function expertPart(sql, actor, registry, today) {
   const sp = await sql.one`select user_id from specialists where user_id = ${actor.id}`;
@@ -61,6 +63,9 @@ async function expertPart(sql, actor, registry, today) {
   }
   // Ближе срок — выше (2.147); без срока — в конце, при равном сроке раньше вернули — выше.
   returned.sort((a, b) => (a.deadline ?? '9999').localeCompare(b.deadline ?? '9999') || new Date(a.at) - new Date(b.at));
+  // Исправленный файл лежит неподписанным больше суток (2.204) — отдельной строкой «подпишите», в «Вернули» не повторяется.
+  const freshLate = returned.filter((r) => r.fresh_file && Date.now() - new Date(r.fresh_file.at).getTime() >= FRESH_LATE_HOURS * 3600_000)
+    .sort((a, b) => new Date(a.fresh_file.at) - new Date(b.fresh_file.at));
   // Осмотр по ссылке молчит 2 дня (2.85): владелец не прислал ни одного фото — отправить ссылку снова.
   const silent = [];
   for (const l of await silentLinks(sql, { executor: actor.id })) {
@@ -147,7 +152,8 @@ async function expertPart(sql, actor, registry, today) {
     inspect_expiring: expiring,
     // Уже попросил перенести срок (2.100) — в строке видно, на какую дату и что ответа ещё нет.
     hot: hotRows.map((o) => item(o, { extend: ext.get(o.id) ?? null })),
-    returned,
+    fresh_late: freshLate,
+    returned: returned.filter((r) => !freshLate.includes(r)),
     review: rows.filter((o) => o.status === 'review').map((o) => item(o)),
     offers: rows.filter((o) => o.status === 'awaiting_executor')
       .map((o) => item(o, { fee_kop: o.price_kop ? orderSplit(o).payoutKop : null })),
