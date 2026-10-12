@@ -579,8 +579,9 @@ function signReturnPoints(d) {
       box.checked = p.fixed;
       box.addEventListener('change', () => markPoint(r, p, box));
       return el('li', { class: p.fixed ? 'point fixed' : 'point', 'data-point': String(p.n) },
-        el('label', { for: id, class: 'row gap' }, box, el('span', { text: `${p.n}. ${p.text}` }),
-          el('span', { class: 'muted', text: p.fixed ? ' — исправлено' : ' — не отмечено' })));
+        // Пометка — в строку за текстом пункта, а не отдельной колонкой справа (найдено прогоном 2.190).
+        el('label', { for: id, class: 'row gap' }, box, el('span', { class: 'point-line' }, el('span', { text: `${p.n}. ${p.text}` }),
+          el('span', { class: 'muted', text: p.fixed ? ' — исправлено' : ' — не отмечено' }))));
     };
     const done = r.items.length - r.left;
     return el('div', { class: r.left ? 'sig-points warn' : 'sig-points', 'data-sig': 'points', 'data-return': String(r.id) },

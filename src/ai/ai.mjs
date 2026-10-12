@@ -251,6 +251,7 @@ export function reviewMessages({ rules, brief, files, found = {} }) {
 // цитаты, которые нашлись в тексте отчёта (с файлом и страницей); выдуманные модель цитаты отбрасываются.
 // found — автоматические находки (src/ai/report-checks.mjs) по правилу: они показываются всегда и делают правило
 // «посмотрите», даже если модель замечаний не увидела или не ответила.
+const NO_REMARKS = /^\s*(замечани[йя] (не (найдено|выявлено|обнаружено)|нет)|нет замечаний|всё в порядке|все в порядке)[.!]?\s*$/i;
 export function cleanReviewAnswer(rules, text, docs = [], found = {}) {
   const j = parseJsonAnswer(text);
   const items = Array.isArray(j?.items) ? j.items : [];
@@ -260,7 +261,11 @@ export function cleanReviewAnswer(rules, text, docs = [], found = {}) {
     const hint = it?.hint === 'ok' && !auto.length ? 'ok' : 'attention';
     let note = clip(it?.note, 1000);
     if (!note) note = auto.length ? 'есть автоматические находки — см. ниже' : it ? '' : 'Помощник не дал ответа по этому правилу — проверьте сами';
-    else if (auto.length && it?.hint === 'ok') note = `модель замечаний не увидела, но есть автоматические находки — см. ниже. ${note}`;
+    // «Замечаний не найдено» модели рядом с находками читалось как противоречие (прогон 2.190) — такие слова не повторяем,
+    // остальной ответ модели — с пометкой, что это её слова.
+    else if (auto.length && it?.hint === 'ok') {
+      note = `модель замечаний не увидела, но есть автоматические находки — см. ниже${NO_REMARKS.test(note) ? '' : `. Модель: ${note}`}`;
+    }
     const marks = [];
     for (const q of (Array.isArray(it?.quotes) ? it.quotes : []).slice(0, 3)) {
       if (typeof q !== 'string') continue;
