@@ -6,6 +6,7 @@
 // до срока» (2.149) — с отметкой и сроком дела (2.157).
 import { addDays, todayMsk } from './workflow.mjs';
 import { orderRef } from '../notify/registry.mjs';
+import { executorSignOrg } from '../access/policy.mjs';
 
 export const SCHEDULE_DAYS = 14;
 // Перегруженный день (2.134): сдать больше двух дел (в работе и предложенных; сданные на проверку не в счёт). Выезд на
@@ -107,9 +108,21 @@ export async function expertSchedule(sql, userId, registry, today = todayMsk()) 
     d.trips = d.items.filter((i) => i.kind === 'visit' || i.kind === 'my_visit').length;
     d.busy = isBusy(d.due, d.trips);
     // «Попросить перенос» — у дел в работе без открытой просьбы (просить можно только по делу в работе, 2.91).
-    for (const i of d.items) if (i.kind === 'deadline') i.can_extend = d.busy && i.status === 'in_work' && !i.extend_to;
+    for (const i of d.items) {
+      if (i.kind !== 'deadline') continue;
+      // Срок сдачи в день «не принимаю новые дела» (2.195): попросить перенос на день возвращения или передать дело коллеге.
+      i.away_due = d.away && i.status !== 'review';
+      i.can_extend = (d.busy || i.away_due) && i.status === 'in_work' && !i.extend_to;
+    }
   }
-  return { from: today, to: last, away, overdue, days: [...days.values()] };
+  // «Передать коллеге» — эксперту от организации, по делу в работе без открытой просьбы (2.107).
+  const awayDue = [...days.values()].flatMap((d) => d.items.filter((i) => i.away_due && i.status === 'in_work'));
+  if (awayDue.length && await executorSignOrg(sql, userId)) {
+    const open = new Set((await sql`select order_id from handover_requests where outcome is null and requested_by = ${userId}
+                                     and order_id = any(${awayDue.map((i) => i.order_id)}::uuid[])`).map((r) => r.order_id));
+    for (const i of awayDue) i.can_handover = !open.has(i.order_id);
+  }
+  return { from: today, to: last, away, overdue, away_due: awayDue.length, days: [...days.values()] };
 }
 
 // Нагрузка экспертов организации на две недели (2.111): у руководителя — по каждому эксперту, работающему от организации,
