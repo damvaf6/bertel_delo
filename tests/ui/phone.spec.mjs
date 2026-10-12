@@ -6526,7 +6526,7 @@ test('нагрузка экспертов на две недели (2.111): у �
   await expect(a.locator('.strip .cell').nth(1).locator('.cnt')).toHaveText('•');
   await expect(b.locator('[data-away]')).toContainText('Не принимает новые дела до');
   await expect(b.locator('.strip .cell.away')).toHaveCount(3);
-  await expect(b).toContainText('Две недели свободны');
+  await expect(b).toContainText('Сроков и выездов нет.');
   await expect(b.locator('[data-role="total"]')).toHaveText(/^сдать за две недели: 0 · свободных будней: \d+$/);
   // Названий заявок руководитель не видит.
   await expect(box).not.toContainText('Нагрузка:');
@@ -8270,4 +8270,61 @@ test('прогон 2.190: эксперт и руководитель по пач
   await shot(ep, 'c43-progon4-ekspert-sroki');
   await ep.context().close();
   await hp.context().close();
+});
+
+test('2.194: нагрузка экспертов — дни «не принимает новые дела» и день возвращения отмечены, срок в отпуске заметен', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const hp = await ctx(), cp = await ctx();
+  const customer = await signIn(cp, '+79990019401');
+  const head = await signIn(hp, '+79990019402');
+  const away = await signIn(await ctx(), '+79990019403'), off = await signIn(await ctx(), '+79990019404');
+  const { orgId, id } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Отпуск в нагрузке ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Отпускова Анна' where id = $1", [away.id]);
+    await c.query("update users set full_name = 'Выключенов Олег' where id = $1", [off.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member'), ($1, $4, 'member')", [org.id, head.id, away.id, off.id]);
+    for (const u of [away.id, off.id]) {
+      await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [u, org.id]);
+      await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [u]);
+    }
+    await c.query("update specialists set away_until = (now() at time zone 'Europe/Moscow')::date + 3, away_note = 'отпуск' where user_id = $1", [away.id]);
+    await c.query('update specialists set active = false where user_id = $1', [off.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Срок в отпуске', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Отпускная ул., 1","area":"40"}') returning id`,
+    [customer.id, away.id, inDays(1)]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [o.id, away.id]);
+    return { orgId: org.id, id: o.id };
+  });
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const box = hp.locator('#org-schedule-box');
+  await expect(box).toBeVisible();
+  const a = box.locator(`li[data-expert-schedule="${away.id}"]`);
+  const b = box.locator(`li[data-expert-schedule="${off.id}"]`);
+  const cell = (x, n) => x.locator('.strip .cell').nth(n);
+  // Отпуск: три дня штриховкой, срок в отпуске — красной цифрой, день возвращения — зелёной чертой.
+  await expect(a.locator('.strip .cell.away')).toHaveCount(3);
+  await expect(cell(a, 1)).toHaveClass(/clash/);
+  await expect(cell(a, 1).locator('.cnt')).toHaveText('1');
+  await expect(cell(a, 3)).toHaveClass(/back/);
+  await expect(cell(a, 4)).not.toHaveClass(/away|back/);
+  await expect(a.locator('[data-role="clash"]')).toHaveText('Срок сдачи в дни, когда эксперт не принимает дела: 1 — можно передать коллеге');
+  // Выключил приём — все дни штриховкой, но срок в работе не «в отпуске»: красной отметки нет.
+  await expect(b.locator('[data-away]')).toHaveText('Не принимает новые дела — выключил приём');
+  await expect(b.locator('.strip .cell.away')).toHaveCount(14);
+  await expect(b.locator('[data-role="total"]')).toContainText('свободных будней: 0');
+  await expect(b.locator('[data-role="clash"]')).toHaveCount(0);
+  await expect(b).toContainText('Сроков и выездов нет.');
+  await expect(box).not.toContainText('Срок в отпуске');
+  await a.scrollIntoViewIfNeeded();
+  await shot(hp, 'g4a-nagruzka-ne-prinimaet-dela');
+  await a.locator('details[data-days] summary').click();
+  const row = a.locator(`details[data-days] li[data-day="${inDays(1)}"]`);
+  await expect(row).toHaveClass(/away/);
+  await expect(row.locator('.away-mark')).toHaveText('новые дела не предлагают');
+  await expect(row.locator('[data-schedule-item="deadline"] .open')).toHaveClass(/hot/);
+  await expect(row).toContainText(`№ ${id.slice(0, 8).toUpperCase()}`);
+  await row.scrollIntoViewIfNeeded();
+  await shot(hp, 'g4b-nagruzka-srok-v-otpuske');
+  for (const p of [hp, cp]) await p.context().close();
 });

@@ -68,6 +68,13 @@ test('нагрузка экспертов на две недели (2.111): по
   assert.deepEqual(f.away, { until: plus(3), note: 'отпуск' });
   assert.deepEqual(f.days.map((d) => d.away).slice(0, 4), [true, true, true, false]);
   assert.equal(f.free_workdays, f.days.filter((d, i) => !r.body.schedule.days[i].weekend && !d.away && !d.items.length).length);
+  // Выключил приём (2.194) — все две недели «не принимает новые дела», свободных будней нет; включил — снова как было.
+  await S.sql`update specialists set active = false where user_id = ${busy.user.id}`;
+  const paused = (await head.req('GET', url)).body.schedule.experts[0];
+  assert.equal(paused.paused, true);
+  assert.ok(paused.days.every((d) => d.away));
+  assert.equal(paused.free_workdays, 0);
+  await S.sql`update specialists set active = true where user_id = ${busy.user.id}`;
   const text = JSON.stringify(r.body);
   for (const t of ['Нагрузка:', soon.id, far.id, done.id, foreign.id, ref(foreign), ref(far), ref(done), owner.user.id, 'Ждём выписку']) {
     assert.ok(!text.includes(t), `не раскрывает: ${t}`);
