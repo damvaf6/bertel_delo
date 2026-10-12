@@ -63,13 +63,23 @@ export async function loadMoney(current, reload) {
         : 'хранятся у платформы и уйдут исполнителю, только когда результат проверен и выдан Вам'));
     }
   }
-  if (money.cancel_fault) {
+  if (money.refund_quality) {
+    facts.push(...fact('Отмена', money.refund_quality === 'bad'
+      ? 'после выдачи: результат признан плохим — возврат заказчику, выплаченное удерживается у исполнителя'
+      : 'после выдачи: результат нормальный — возврат за счёт платформы, у исполнителя не удерживается'));
+  } else if (money.cancel_fault) {
     facts.push(...fact('Отмена', money.cancel_fault === 'executor' ? 'по вине исполнителя' : `заказчик отказался, сделано ${money.done_percent}% работы`));
   }
   if (money.refund) {
     facts.push(...fact('Возврат заказчику', `${rub(money.refund.amount_kop)} — ${REFUND_RU[money.refund.status]}${money.refund.failure ? ` (${money.refund.failure})` : ''}`));
   }
   if (money.payout) facts.push(...fact(executorOnly ? 'Выплата' : 'Выплата исполнителю', `${rub(money.payout.amount_kop)} — ${PAYOUT_RU[money.payout.status]}${money.payout.failure ? ` (${money.payout.failure})` : ''}`));
+  if (money.payout?.withheld_kop) facts.push(...fact('Удержано из выплаты', `${rub(money.payout.withheld_kop)} — в счёт возврата по плохому переводу`));
+  if (money.clawback) {
+    facts.push(...fact(executorOnly ? 'Удержание с Вас' : 'Удержание у исполнителя', money.clawback.closed
+      ? `${rub(money.clawback.amount_kop)} — удержано полностью`
+      : `${rub(money.clawback.amount_kop)} — из следующих выплат, удержано ${rub(money.clawback.withheld_kop)}`, money.clawback.closed ? '' : 'overdue'));
+  }
   if (money.payout?.receipt_url) facts.push(...fact('Чек самозанятого', `приложен ${dayRu(money.payout.receipt_at)}`));
   else if (money.payout?.receipt_needed) facts.push(...fact('Чек самозанятого', 'нужен: выдайте чек в «Мой налог» и приложите ссылку', 'overdue'));
   else if (executorOnly && order.status !== 'cancelled') facts.push(...fact('Выплата', 'автоматически, когда результат проверен и выдан заказчику'));
@@ -148,7 +158,10 @@ function openDoc(d) {
       p(`Получено от заказчика: ${rub(x.price_kop)}`),
       ...transitParas(x, p),
       p(`Вознаграждение агента (${x.commission_percent}%${x.transit_kop ? ' от услуг' : ''}): ${rub(x.commission_kop)}`),
-      p(`К перечислению исполнителю: ${rub(x.payout_kop)}`),
+      ...(x.withheld_kop ? [
+        p(`Удержано в счёт возврата заказчику по плохому переводу: ${rub(x.withheld_kop)} (${x.withheld.map((w) => `заявка ${w.order_ref} — ${rub(w.kop)}`).join('; ')})`),
+        p(`К перечислению исполнителю: ${rub(x.payout_kop - x.withheld_kop)}`),
+      ] : [p(`К перечислению исполнителю: ${rub(x.payout_kop)}`)]),
       ...(partial ? [p(`Заказ отменён заказчиком после начала работ; оплачена сделанная часть (${x.partial_percent}%).`)] : []),
     ];
   if (x.test) lines.splice(1, 0, p('Проверочный документ: оплата тестовая, юридической силы не имеет.', 'doc-test'));
@@ -224,6 +237,8 @@ export async function showMoney() {
       ...fact('Выплачено исполнителям', rub(totals.paid_out_kop)),
       ...fact('Возвращено заказчикам', rub(totals.refunded_kop)),
       ...(totals.to_refund_kop ? fact('К возврату заказчикам', rub(totals.to_refund_kop), 'overdue') : []),
+      ...(totals.refunds_after_payout_kop ? fact('Возвраты после выплаты исполнителю', rub(totals.refunds_after_payout_kop)) : []),
+      ...(totals.clawback_open_kop ? fact('Удержать у исполнителей (плохие переводы)', rub(totals.clawback_open_kop), 'overdue') : []),
       ...(totals.transit_kop ? fact('Нотариусу и за доставку (транзит)', rub(totals.transit_kop)) : []),
       ...(totals.receipts_missing ? fact('Выплаты самозанятым без чека', String(totals.receipts_missing), 'overdue') : []),
       ...fact('Вознаграждение платформы (20%)', rub(totals.commission_kop)));

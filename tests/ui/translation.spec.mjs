@@ -409,6 +409,56 @@ test('вычитка и переделка: диспетчер видит обя
   expect(errors).toEqual([]);
 });
 
+// Возврат после выплаты (решение Дамира 12.10.2026, 2а.11): диспетчер отменяет выданный перевод и указывает, чем проверка
+// признала результат; плохой — выплаченное удерживается у переводчика, он видит удержание в деньгах дела.
+test('возврат после выплаты: диспетчер выбирает «перевод плохой», переводчик видит удержание', async ({ page, browser, baseURL }) => {
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  const disp = await signIn(page, '+79990000975');
+  const db = new pg.Client({ connectionString: DB_URL });
+  await db.connect();
+  let o;
+  try {
+    await db.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    const tr = (await db.query("insert into users (phone) values ('+79990000976') on conflict (phone) do update set phone = excluded.phone returning id")).rows[0];
+    const owner = (await db.query("insert into users (phone) values ('+79990000978') on conflict (phone) do update set phone = excluded.phone returning id")).rows[0];
+    const fields = { recipient: 'business', language: 'en', direction: 'to_ru', doc_kind: 'contract', docs: 1, pages: 2, urgent: 'no', delivery: 'none' };
+    o = (await db.query(`insert into orders (owner_user_id, title, module, service, status, deadline, fields, executor_user_id, paid_at, price_kop, review_round, proofread)
+      values ($1, 'Перевод доверенности', 'translation', 'plain', 'done', $2, $3, $4, now(), 300000, 1, 'none') returning id`, [owner.id, inDays(3), JSON.stringify(fields), tr.id])).rows[0];
+    await db.query(`insert into payments (order_id, amount_kop, status, provider_id, created_by, paid_at) values ($1, 300000, 'succeeded', $2, $3, now())`, [o.id, `pay_ui_${o.id}`, owner.id]);
+    await db.query(`insert into payouts (order_id, executor_user_id, amount_kop, commission_kop, status, paid_at) values ($1, $2, 240000, 60000, 'succeeded', now())`, [o.id, tr.id]);
+  } finally { await db.end(); }
+
+  await page.goto(`/kabinet#order=${o.id}`);
+  await expect(page.locator('#order-status')).toHaveText('Готово');
+  await expect(page.locator('#cancel-quality-box')).toBeVisible();
+  await expect(page.locator('#cancel-fault-box')).toBeHidden();
+  const cancel = page.locator('#actions [data-to="cancelled"]');
+  await expect(cancel).toHaveText('Отменить с возвратом');
+  await page.locator('#reason').fill('Переделка не исправила ошибки в датах');
+  await page.locator('#cancel-quality').selectOption('bad');
+  await page.locator('#cancel-box').scrollIntoViewIfNeeded();
+  await shot(page, 'vozvrat-01-dispetcher-kachestvo');
+  page.once('dialog', (d) => d.accept());
+  await cancel.click();
+  await expect(page.locator('#order-status')).toHaveText('Отменена');
+  await expect(page.locator('#money-facts')).toContainText('результат признан плохим');
+  await expect(page.locator('#money-facts')).toContainText('Удержание у исполнителя');
+
+  const ctx = await browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, isMobile: true, hasTouch: true, locale: 'ru-RU' });
+  const tp = await ctx.newPage();
+  tp.on('pageerror', (e) => errors.push(e.message));
+  await signIn(tp, '+79990000976');
+  await tp.goto(`/kabinet#order=${o.id}`);
+  await expect(tp.locator('#order-status')).toHaveText('Отменена');
+  await expect(tp.locator('#money-facts')).toContainText('Удержание с Вас');
+  await expect(tp.locator('#money-facts')).toContainText('2 400 ₽ — из следующих выплат');
+  await tp.locator('#money-box').scrollIntoViewIfNeeded();
+  await shot(tp, 'vozvrat-02-perevodchik-uderzhanie');
+  await ctx.close();
+  expect(errors).toEqual([]);
+});
+
 // Оферта (2а.8): «Условия заказа» в карточке заявки — черновик, пока юрист не проверил; заказчику — свои пункты,
 // диспетчеру — и пункты для переводчика.
 test('условия заказа: заказчик видит главное из оферты с пометкой «черновик», диспетчер — и пункты для переводчика', async ({ page, browser, baseURL }) => {

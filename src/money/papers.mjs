@@ -121,6 +121,11 @@ export function closingDoc({ doc, number, registry, op }) {
         : [{ type: 'table', rows: [['Получено от заказчика', 'Вознаграждение агента', 'К перечислению исполнителю'],
           [rub(x.price_kop), `${rub(x.commission_kop)} (${x.commission_percent}%)`, rub(x.payout_kop)]] }]),
       ...(partial ? [p(`Заказ отменён заказчиком после начала работ; оплачена сделанная часть (${x.partial_percent}%).`)] : []),
+      // Удержание в счёт возврата по плохому переводу (2а.11).
+      ...(x.withheld_kop ? [
+        p(`Удержано в счёт возврата заказчику по плохому переводу: ${rub(x.withheld_kop)} (${x.withheld.map((w) => `заявка ${w.order_ref} — ${rub(w.kop)}`).join('; ')}).`),
+        { type: 'bold', text: `Перечисляется исполнителю: ${rub(x.payout_kop - x.withheld_kop)}` },
+      ] : []),
       p('Перечисление исполнителю — на реквизиты, указанные им на платформе.'),
       { type: 'sign', text: 'Агент ______________________' },
     ];

@@ -48,6 +48,9 @@ export const TRANSITIONS = [
   // Только в модулях с вычиткой (proofread в описании модуля) — признак 'redo'.
   { from: 'done', to: 'in_work', by: 'customer', name: 'Нашли ошибку — переделать бесплатно', reason: true, feature: 'redo' },
   { from: 'done', to: 'closed', by: 'dispatcher', name: 'Закрыть заявку' },
+  // Возврат после выдачи (решение Дамира 12.10.2026, 2а.11): диспетчер отменяет выданное дело с возвратом; удержание у
+  // исполнителя — только если проверка признала результат плохим (src/money/money.mjs, settleAfterPayout).
+  { from: 'done', to: 'cancelled', by: 'dispatcher', name: 'Отменить с возвратом', reason: true, feature: 'redo' },
   ...CUSTOMER_CANCEL_FROM.map((from) => ({ from, to: 'cancelled', by: 'customer', name: 'Отменить заявку' })),
   ...DISPATCHER_CANCEL_FROM.map((from) => ({ from, to: 'cancelled', by: 'dispatcher', name: 'Отменить заявку', reason: true })),
 ];

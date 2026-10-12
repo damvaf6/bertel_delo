@@ -63,6 +63,7 @@ export async function openOrder(id, { to } = {}) {
   for (const m of ['doc-msg', 'transfer-msg', 'details-msg', 'status-msg']) say($(m), '');
   $('reason').value = '';
   $('cancel-fault').value = '';
+  $('cancel-quality').value = '';
   $('done-percent').value = '';
   render();
   show('order-view', 'orders');
@@ -313,8 +314,12 @@ function renderProgress() {
 
   $('reason-box').classList.toggle('hidden', !actions.some((a) => a.reason));
   // Отмена после начала работ (диспетчер): по чьей причине и какая часть работы сделана — от этого зависит возврат.
-  const lateCancel = WORK_STARTED.includes(order.status) && actions.some((a) => a.to === 'cancelled');
+  // Исполнителю уже выплачено (переделка или выданный перевод, 2а.11) — вместо «по чьей причине» диспетчер указывает, чем
+  // проверка признала результат: плохим (удержание у исполнителя) или нормальным (возврат за счёт платформы).
+  const lateCancel = (WORK_STARTED.includes(order.status) || current.after_payout) && actions.some((a) => a.to === 'cancelled');
   $('cancel-box').classList.toggle('hidden', !lateCancel);
+  $('cancel-quality-box').classList.toggle('hidden', !current.after_payout);
+  $('cancel-fault-box').classList.toggle('hidden', !!current.after_payout);
   if (lateCancel) syncCancelBox();
   // Правило возврата модуля (2а.7): у перевода — только за качество.
   $('cancel-note').textContent = current.cancel_note || '';
@@ -336,7 +341,7 @@ function renderProgress() {
 }
 
 function syncCancelBox() {
-  $('done-percent-box').classList.toggle('hidden', $('cancel-fault').value !== 'customer');
+  $('done-percent-box').classList.toggle('hidden', !!current?.after_payout || $('cancel-fault').value !== 'customer');
 }
 $('cancel-fault').addEventListener('change', syncCancelBox);
 
@@ -344,7 +349,10 @@ async function doStep(a) {
   const reason = $('reason').value.trim();
   if (a.reason && !reason) return say($('status-msg'), 'Укажите причину');
   const extra = {};
-  if (a.to === 'cancelled' && WORK_STARTED.includes(current.order.status)) {
+  if (a.to === 'cancelled' && current.after_payout) {
+    extra.quality = $('cancel-quality').value;
+    if (!extra.quality) return say($('status-msg'), 'Укажите, чем проверка признала результат');
+  } else if (a.to === 'cancelled' && WORK_STARTED.includes(current.order.status)) {
     extra.fault = $('cancel-fault').value;
     if (!extra.fault) return say($('status-msg'), 'Укажите, по чьей причине отмена');
     if (extra.fault === 'customer') {
