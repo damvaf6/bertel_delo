@@ -256,21 +256,56 @@ function templateLeftovers(doc, ctx = {}) {
 }
 
 // Кадастровый номер в отчёте — как в заявке (2.43): другой номер рядом со словом «кадастровый» — данные другого объекта.
+// 2.203: выписка ЕГРН в деле (ctx.egrn — ai-ops) — номер берётся из неё, как площадь (2.202).
 const CADASTRAL_RE = /\b\d{2}:\d{2}:\d{6,7}:\d{1,7}\b/g;
+// В выписке рядом с номером объекта бывают номер участка или здания, «в пределах которого» он стоит, номера помещений
+// в здании, прежние номера — это не номер объекта.
+const EGRN_CAD_OTHER = /предел|располож|образован|исходн|ранее\s+присвоен|преж|помещени\S*\s*,?\s*(?:расположен|в\s+здани)|машино-мест|входящ|связ|квартал|аналог/iu;
+export function egrnCadastral(egrn, ctx) {
+  const land = ctx.service === 'land';
+  const values = new Map();
+  for (const d of egrn ?? []) {
+    if (!Array.isArray(d.pages)) continue;
+    const head = d.pages.slice(0, 2).join('\n');
+    if (land ? EGRN_BUILT.test(head) && !EGRN_LAND.test(head) : EGRN_LAND.test(head) && !EGRN_BUILT.test(head)) continue;
+    // Номер объекта в выписке — первый номер после слов «кадастровый номер» в начале выписки.
+    d.pages.some((page, i) => {
+      for (const m of page.matchAll(CADASTRAL_RE)) {
+        const before = page.slice(Math.max(0, m.index - 80), m.index);
+        if (!/кадастров\S*\s+(?:номер|№)\s*(?:объекта(?:\s+недвижимости)?)?\s*[:\-–—]?\s*$/iu.test(before)) continue;
+        if (EGRN_CAD_OTHER.test(lineBefore(page, m.index))) continue;
+        if (!values.has(m[0])) values.set(m[0], { name: d.name, page: i });
+        return true;
+      }
+      return false;
+    });
+  }
+  if (values.size !== 1) return null;
+  const [[v, at]] = [...values];
+  return { v, ...at };
+}
+
 function cadastralMatch(doc, ctx) {
-  const mine = String(ctx.fields?.cadastral ?? '').trim();
-  if (!/^\d{2}:\d{2}:\d{6,7}:\d+$/.test(mine)) return [];
+  const typed = String(ctx.fields?.cadastral ?? '').trim();
+  const mine = /^\d{2}:\d{2}:\d{6,7}:\d+$/.test(typed) ? typed : '';
+  const egrn = ctx.egrn?.length ? egrnCadastral(ctx.egrn, ctx) : null;
+  const ref = egrn ? egrn.v : mine;
+  if (!ref) return [];
+  // В заявке другой номер — заказчик ошибся или выписка не на тот объект: подсказываем.
+  const differs = egrn && mine && mine !== egrn.v;
   const out = [];
   const seen = new Set();
   eachPage(doc, (page, i) => {
     for (const m of page.matchAll(CADASTRAL_RE)) {
       const v = m[0];
-      if (v === mine || seen.has(v)) continue;
+      if (v === ref || seen.has(v)) continue;
       // Номера аналогов и кадастрового квартала стоят без слов «кадастровый номер объекта» — их не трогаем.
       if (!/кадастров\S*\s+(?:номер|№)/iu.test(page.slice(Math.max(0, m.index - 60), m.index))) continue;
       if (/аналог/iu.test(lineAround(page, m.index))) continue;
       seen.add(v);
-      out.push({ page: i, quote: lineAround(page, m.index), text: `Кадастровый номер ${v} не совпадает с номером из заявки (${mine}) — проверьте, нет ли данных другого объекта` });
+      out.push({ page: i, quote: lineAround(page, m.index), text: egrn
+        ? `Кадастровый номер ${v} не совпадает с номером в выписке ЕГРН «${egrn.name}» (${egrn.v}, стр. ${egrn.page + 1})${differs ? `; в заявке — ${mine}` : ''} — проверьте, нет ли данных другого объекта`
+        : `Кадастровый номер ${v} не совпадает с номером из заявки (${mine}) — проверьте, нет ли данных другого объекта` });
     }
   });
   return out;
@@ -1583,7 +1618,7 @@ export const AUTO_CHECKS = Object.freeze({
   rounding: 'итог не дальше 2% от расчёта',
   approaches_toc: 'подход из оглавления не отвергнут в тексте',
   template_leftovers: 'нет остатков шаблона другого вида: недвижимость в отчёте о машине, машина в отчёте о квартире',
-  cadastral_match: 'кадастровый номер в отчёте — как в заявке',
+  cadastral_match: 'кадастровый номер в отчёте — как в выписке ЕГРН из дела, а без неё — как в заявке',
   address_match: 'адрес объекта одинаков по всему отчёту и как в заявке: населённый пункт, улица, дом, корпус, квартира, участок',
   area_match: 'площадь объекта в отчёте — как в выписке ЕГРН из дела, а без неё — как в заявке',
   floor_match: 'этаж и этажность дома в отчёте — как в заявке',

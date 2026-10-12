@@ -648,3 +648,20 @@ test('2.202: площадь в отчёте сверяется с выписко
   assert.equal((await putResult(o, 'ОТЧЁТ ОБ ОЦЕНКЕ\nОбъект оценки: квартира общей площадью 47,3 кв. м', 'отчёт-2.txt', 'text/plain')).status, 201);
   assert.deepEqual(await found(), []);
 });
+
+test('2.203: кадастровый номер в отчёте сверяется с выпиской ЕГРН из дела', async () => {
+  const o = await inWork('Квартира: номер по выписке');
+  const put = await owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from('Выписка из Единого государственного реестра недвижимости\nВид объекта недвижимости: Помещение\nКадастровый номер: 77:01:0001001:4321'), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Выписка ЕГРН.txt') } });
+  assert.equal(put.status, 201, JSON.stringify(put.body));
+  assert.equal((await putResult(o, 'ОТЧЁТ ОБ ОЦЕНКЕ\nКвартира, кадастровый номер 77:01:0001001:1234', 'отчёт.txt', 'text/plain')).status, 201);
+  const found = async () => {
+    const res = await spec.req('POST', `/api/orders/${o.id}/review/ai`);
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    return res.body.ai.items.flatMap((i) => i.found ?? []).map((f) => f.text).filter((t) => /Кадастровый номер/.test(t));
+  };
+  assert.deepEqual(await found(), ['Кадастровый номер 77:01:0001001:1234 не совпадает с номером в выписке ЕГРН «Выписка ЕГРН.txt» (77:01:0001001:4321, стр. 1) — проверьте, нет ли данных другого объекта']);
+  await S.sql`update documents set deleted_at = now() where order_id = ${o.id} and kind = 'result'`;
+  assert.equal((await putResult(o, 'ОТЧЁТ ОБ ОЦЕНКЕ\nКвартира, кадастровый номер 77:01:0001001:4321', 'отчёт-2.txt', 'text/plain')).status, 201);
+  assert.deepEqual(await found(), []);
+});
