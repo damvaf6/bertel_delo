@@ -285,7 +285,8 @@ const ADDR_AT = /(?:адрес\S*\s*\((?:местоположени|местон
 const ADDR_OTHER = /зарегистр|прожива|юридическ|почтов|организац|обществ|(?<![А-ЯЁ])ООО(?![А-ЯЁ])|оценщик|заказчик|исполнител|офис|(?<![а-яё])СРО(?![а-яё])|суд/iu;
 const ADDR_OBJECT = /объект|квартир|комнат|помещени|участ|здани|строени|имуществ|недвижим|(?<![а-яё])дом/iu;
 // Конец адреса: дальше идут кадастровый номер, площадь, этаж, собственник или новое предложение.
-const ADDR_END = /\s(?:с|со)\s+(?=кадастр|общ|площ)|кадастр|площад|общей|этаж|принадлеж|собственн|[;()]|\s[—–]\s|(?<=[а-яё]{4}|\d)\.\s+(?=[А-ЯЁA-Z])/iu;
+// 2.197: сокращения в названии улицы («ул. Акад. Королёва», «Больш. Серпуховская») — не конец предложения.
+const ADDR_END = /\s(?:с|со)\s+(?=кадастр|общ|площ)|кадастр|площад|общей|этаж|принадлеж|собственн|[;()]|\s[—–]\s|(?<=[а-яё]{4}|\d)(?<!(?<![а-яё])(?:акад|генер|марш|адмир|проф|больш|верх|нижн|стар|сред|просп|влад|корп|литер|кварт|респ|посел|посёл|станиц))\.\s+(?=[А-ЯЁA-Z])/iu;
 const ADDR_PART = {
   house: /(?<![а-я])(?:д|дом|вл|владение)\.?\s*№?\s*(\d+[а-я]?(?:\/\d+[а-я]?)?)(?![\d])/u,
   korpus: /(?<![а-я])(?:корп|корпус|к)\.?\s*(\d+[а-я]?)(?!\d)/u,
@@ -323,11 +324,17 @@ export function parseAddress(text) {
   }
   return out;
 }
-const sameWords = (a, b) => a.every((w) => b.includes(w)) || b.every((w) => a.includes(w));
+// 2.197: сокращённое слово названия — то же слово («Ген. Белова» = «Генерала Белова», «Акад.» = «Академика»).
+const wordIn = (w, list) => list.some((x) => x === w || (x.startsWith(w) || w.startsWith(x)));
+const sameWords = (a, b) => a.every((w) => wordIn(w, b)) || b.every((w) => wordIn(w, a));
+// 2.197: населённый пункт в одном адресе без «г.» или с внутригородским делением («Москва, вн.тер.г. муниципальный
+// округ …», «Москва, поселение Внуковское, д. Ракитки») — тот же, если его название есть в другом адресе.
+const addrWords = (s) => stems(String(s ?? '').toLowerCase().replace(/ё/g, 'е'));
 function addressMatch(doc, ctx) {
   const mineText = clean(ctx.fields?.address);
   const mine = parseAddress(mineText);
   if (!mineText) return [];
+  const mineWords = addrWords(mineText);
   const first = {}; // часть, которой нет в заявке, → { value, page }
   const out = [];
   const seen = new Set();
@@ -353,6 +360,7 @@ function addressMatch(doc, ctx) {
       text = clean(text).replace(/[,.\s]+$/, '').slice(0, 200);
       const got = parseAddress(text);
       if (!got.house && !got.flat && !got.plot && !got.room) continue;
+      const words = addrWords(text);
       const key = JSON.stringify(got);
       if (seen.has(key)) continue;
       seen.add(key);
@@ -360,9 +368,11 @@ function addressMatch(doc, ctx) {
       let againstMine = false;
       for (const k of Object.keys(ADDR_NAMES)) {
         if (got[k] === undefined) continue;
-        const ref = mine[k] !== undefined ? { value: mine[k], mine: true } : first[k];
-        if (!ref) { first[k] = { value: got[k], page: i }; continue; }
-        const same = Array.isArray(got[k]) ? sameWords(got[k], ref.value) : got[k] === ref.value;
+        const ref = mine[k] !== undefined ? { value: mine[k], mine: true, words: mineWords } : first[k];
+        if (!ref) { first[k] = { value: got[k], page: i, words }; continue; }
+        const same = Array.isArray(got[k]) ? sameWords(got[k], ref.value)
+          || (k === 'settlement' && (ref.value.every((w) => words.includes(w)) || got[k].every((w) => ref.words.includes(w))))
+          : got[k] === ref.value;
         if (same) continue;
         if (ref.mine) againstMine = true;
         diff.push({ k, ref });
