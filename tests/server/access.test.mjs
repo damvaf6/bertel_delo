@@ -2008,8 +2008,8 @@ test('сводка за месяц (2.117): дни от принятия до с
   assert.equal(r.total.late_first_moved, 1);
   const csv = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv`, undefined, { binary: true })).body.toString('utf8');
   assert.ok(csv.includes('Дней в среднем от принятия до сдачи;Позже первоначального срока;Из них с переносом срока;В первоначальный срок, без переносов'), csv);
-  assert.ok(/Эксперт Медленнов;[^\r\n]*;6,5;1;0;1;;0\r\n/.test(csv), csv);
-  assert.ok(/Итого;[^\r\n]*;5,8;3;1;2;;0\r\n/.test(csv), csv);
+  assert.ok(/Эксперт Медленнов;[^\r\n]*;6,5;1;0;1;;0;0;0\r\n/.test(csv), csv);
+  assert.ok(/Итого;[^\r\n]*;5,8;3;1;2;;0;0;0\r\n/.test(csv), csv);
 });
 
 test('сводка за месяц (2.124): сравнение с прошлым месяцем — сдано, в срок, возвраты у эксперта и в итоге', async () => {
