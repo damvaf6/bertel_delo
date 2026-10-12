@@ -470,6 +470,36 @@ test('возвращённый файл удалён, исправленный �
   assert.equal(await lead(), undefined);
 });
 
+test('исправленный файл больше суток не подписан (2.204): у эксперта отдельной строкой, в «Вернули» не повторяется', async () => {
+  const o = await offered('Исправленный лежит сутки', 13);
+  assert.equal((await step(spec, o, 'in_work')).status, 200);
+  const d = (await result(o, 'Сутки.pdf')).body.document;
+  assert.equal((await spec.req('POST', `/api/documents/${d.id}/sign`, { confirm: true })).status, 201);
+  assert.equal((await head.req('POST', `/api/org-documents/${d.id}/return`, { comment: 'Поправьте вывод' })).status, 201);
+  assert.equal((await spec.req('DELETE', `/api/documents/${d.id}`)).status, 204);
+  const n = (await result(o, 'Сутки-исправленный.pdf')).body.document;
+  const today = async () => (await spec.req('GET', '/api/today')).body.expert;
+  // Только что загружен — строки «не подписан» ещё нет, дело в «Вернули на доработку».
+  let e = await today();
+  assert.equal(e.fresh_late.find((x) => x.id === o.id), undefined);
+  assert.equal(e.returned.find((x) => x.id === o.id).fresh_file.filename, 'Сутки-исправленный.pdf');
+  // Прошло больше суток.
+  await S.sql`update org_returns set created_at = now() - interval '26 hours' where order_id = ${o.id}`;
+  await S.sql`update documents set created_at = now() - interval '25 hours' where id = ${n.id}`;
+  e = await today();
+  const x = e.fresh_late.find((r) => r.id === o.id);
+  assert.equal(x.fresh_file.filename, 'Сутки-исправленный.pdf');
+  assert.ok(x.by.startsWith('Руководитель'));
+  assert.equal(e.returned.find((r) => r.id === o.id), undefined, 'в «Вернули на доработку» не повторяется');
+  // Руководителю «Сегодня» эксперта не видно.
+  assert.equal((await head.req('GET', '/api/today')).body.expert?.fresh_late?.some((r) => r.id === o.id) ?? false, false);
+  // Подписал — строки нет.
+  assert.equal((await spec.req('POST', `/api/documents/${n.id}/sign`, { confirm: true })).status, 201);
+  e = await today();
+  assert.equal(e.fresh_late.find((r) => r.id === o.id), undefined);
+  assert.equal(e.returned.find((r) => r.id === o.id), undefined);
+});
+
 test('«Дела экспертов» (2.171): исправленный файл после возврата загружен и не подписан — для отбора руководителя', async () => {
   const o = await offered('Отбор исправленного файла', 12);
   assert.equal((await step(spec, o, 'in_work')).status, 200);
