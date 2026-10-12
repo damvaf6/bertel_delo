@@ -52,7 +52,7 @@ function strip(x, days) {
   }));
 }
 
-function expertItem(x, days) {
+function expertItem(x, days, experts) {
   const total = [`сдать за две недели: ${x.due}`, x.visits ? `выездов: ${x.visits}` : null,
     `свободных будней: ${x.free_workdays}`].filter(Boolean).join(' · ');
   const busy = x.days.map((d, k) => ({ d, h: days[k] })).filter(({ d }) => d.items.length);
@@ -65,7 +65,9 @@ function expertItem(x, days) {
     ...(x.away ? [el('div', { class: 'muted', 'data-away': '', text: `Не принимает новые дела до ${dayRu(x.away.until)}${x.away.note ? ` (${x.away.note})` : ''}` })]
       : x.paused ? [el('div', { class: 'muted', 'data-away': '', text: 'Не принимает новые дела — выключил приём' })] : []),
     strip(x, days),
-    ...(clash ? [el('div', { class: 'clash-note', 'data-role': 'clash', text: `Срок сдачи в дни, когда эксперт не принимает дела: ${clash} — можно передать коллеге` })] : []),
+    ...(clash ? [el('div', { class: 'clash-note', 'data-role': 'clash', text: `Срок сдачи в дни, когда эксперт не принимает дела: ${clash} — ${
+      // Прогон 2.200: другого эксперта, который принимает дела, нет — «передать коллеге» не подсказываем.
+      experts.some((y) => y.user_id !== x.user_id && !y.away && !y.paused) ? 'можно передать коллеге' : 'передать некому: другие эксперты не принимают дела — попросите эксперта перенести срок'}` })] : []),
     ...(busy.length || x.overdue.length ? [daysDetails(x, busy)]
       : [el('div', { class: 'muted', text: x.away || x.paused ? 'Сроков и выездов нет.' : 'Две недели свободны — сроков и выездов нет.' })]));
 }
@@ -93,5 +95,5 @@ export async function loadOrgSchedule(org) {
   say($('org-schedule-msg'), '');
   $('org-schedule-box').classList.toggle('hidden', schedule.experts.length === 0);
   $('org-schedule-range').textContent = `${short(schedule.from)} — ${short(schedule.to)}`;
-  $('org-schedule').replaceChildren(...schedule.experts.map((x) => expertItem(x, schedule.days)));
+  $('org-schedule').replaceChildren(...schedule.experts.map((x) => expertItem(x, schedule.days, schedule.experts)));
 }
