@@ -8913,3 +8913,62 @@ test('ИИ-проверка новой версии файла (2.206): что �
   await expect(cp.locator('#order-status')).toHaveText('В работе');
   await expect(cp.locator('#ai-review-prev')).toBeHidden();
 });
+
+test('утренняя сводка руководителя (2.209): срок дела в дни, когда эксперт не принимает дела, — отдельной цифрой, нажатие ведёт к отбору', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), hp = await ctx(), ep = await ctx();
+  const customer = await signIn(cp, '+79990020901');
+  const expert = await signIn(ep, '+79990020902'), head = await signIn(hp, '+79990020903');
+  const { orgId, A, B, C } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Отпуск ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Отпускова Анна' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query(`insert into specialists (user_id, org_id, created_at, away_until, away_note)
+      values ($1, $2, now() - interval '1 year', (now() at time zone 'Europe/Moscow')::date + 10, 'отпуск')`, [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const add = async (title, days) => (await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', $1, $2, $3, 'in_work', (now() at time zone 'Europe/Moscow')::date + $4::int, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Отпускная ул., 9","area":"40"}') returning id`,
+    [title, customer.id, expert.id, days])).rows[0].id;
+    return { orgId: org.id, A: await add('Срок в отпуске: позже', 8), B: await add('Срок в отпуске: раньше', 5), C: await add('Срок после отпуска', 14) };
+  });
+  const ref = (id) => id.slice(0, 8).toUpperCase();
+
+  // Утренняя сводка: «у 2 дел срок в дни, когда эксперт не принимает дела» — только число; больше ничего нет — нажатие ведёт
+  // к отбору. Сводка рассылается сервером после 8:00 по Москве; здесь — запись напрямую, с цифрами дня (как в 2.172).
+  await db(async (c) => {
+    const { rows: [n] } = await c.query("insert into notifications (user_id, type, event, org_id) values ($1, 'org_morning', 'org_morning_today', $2) returning id", [head.id, orgId]);
+    await c.query(`insert into org_morning_digests (user_id, org_id, day, away, notification_id)
+      values ($1, $2, (now() at time zone 'Europe/Moscow')::date, 2, $3)
+      on conflict (user_id, org_id, day) do update set sign = 0, handover = 0, due = 0, overdue = 0, idle = 0, returned = 0, fresh = 0, away = 2,
+        notification_id = excluded.notification_id`, [head.id, orgId, n.id]);
+  });
+  await hp.goto('/kabinet#notifications');
+  const morning = hp.locator('#notifications li').first();
+  await expect(morning).toContainText('На сегодня по организации: у 2 дел срок в дни, когда эксперт не принимает дела');
+  await expect(morning).not.toContainText('Срок в отпуске');
+  await expect(morning).not.toContainText('Отпускова');
+  await shot(hp, 'c39a-rukovoditel-svodka-ekspert-ne-prinimaet');
+  await morning.getByRole('button').click();
+  await expect(hp).toHaveURL(new RegExp(`#org=${orgId}&to=away$`));
+  const chip = hp.locator('[data-filter="away"]');
+  await expect(chip).toHaveText('Эксперт не принимает дела — срок в эти дни · 2');
+  await expect(chip).toHaveAttribute('aria-pressed', 'true');
+  const rows = hp.locator('#org-cases > li[data-case]');
+  await expect(rows).toHaveCount(2);
+  // Ближайший срок — первым; у каждого — пометка с днём возвращения; дело со сроком после отпуска в отбор не попало.
+  await expect(rows.nth(0)).toHaveAttribute('data-case', `№ ${ref(B)}`);
+  await expect(rows.nth(1)).toHaveAttribute('data-case', `№ ${ref(A)}`);
+  await expect(rows.nth(0).locator('[data-role="away"]')).toContainText('Эксперт не принимает дела до');
+  await expect(rows.nth(0).locator('[data-role="away"]')).toContainText('(отпуск)');
+  await expect(hp.locator(`#org-cases li[data-case="№ ${ref(C)}"]`)).toHaveCount(0);
+  await expect(hp.locator('#org-cases-list-title')).toBeInViewport();
+  await shot(hp, 'c39b-rukovoditel-otbor-ekspert-ne-prinimaet');
+
+  // Эксперт попросил передать дело B — оно уходит в «Просят передать», в этом отборе остаётся одно.
+  expect((await ep.request.post(`/api/orders/${B}/handover`, { data: { reason: 'Буду в отпуске' }, headers: H })).status()).toBe(201);
+  await hp.reload();
+  await expect(chip).toHaveText('Эксперт не принимает дела — срок в эти дни · 1');
+  await expect(hp.locator('[data-filter="handover"]')).toHaveText('Просят передать · 1');
+  for (const p of [cp, ep, hp]) await p.context().close();
+});
