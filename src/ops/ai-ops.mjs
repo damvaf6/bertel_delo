@@ -99,6 +99,26 @@ async function resultDocs(sql, storage, order) {
   return out;
 }
 
+// 2.198: документы дела, с которыми сверяется дата оценки, — основание (задание на оценку, определение суда) и другие
+// файлы, где сказано «задание на оценку» или «письмо». Только для автоматических правил; модели не уходят.
+const ASSIGNMENT_MAX = 5;
+const ASSIGNMENT_TEXT = /задани\S*\s+на\s+(?:проведение\s+)?оценк/iu;
+async function assignmentDocs(sql, storage, order) {
+  const docs = await sql`select * from documents where order_id = ${order.id} and kind in ('basis', 'other') and deleted_at is null
+                         order by created_at desc limit 20`;
+  const out = [];
+  for (const d of docs) {
+    if (out.length >= ASSIGNMENT_MAX) break;
+    if (!readableKind(d.filename, d.mime) || d.size_bytes > READ_MAX_BYTES) continue;
+    const buf = await storage.get(d.storage_key);
+    const got = buf ? await extractPages(buf, d.filename, d.mime) : null;
+    if (!got) continue;
+    const head = got.pages.slice(0, 2).join('\n');
+    if (d.kind === 'basis' || ASSIGNMENT_TEXT.test(head) || /задани|письм/iu.test(d.filename)) out.push({ id: d.id, name: d.filename, pages: got.pages });
+  }
+  return out;
+}
+
 export function aiOps() {
   return [
     {
@@ -232,7 +252,9 @@ export function aiOps() {
                       where order_id = ${order.id} and role = 'expert' and document_id = any(${files.map((f) => f.id)}::uuid[])`
           : [];
         const signedOn = Object.fromEntries(signs.map((r) => [r.document_id, r.day]));
-        const auto = runAutoChecks(names, files, { fields: order.fields ?? {}, dossier, basis, service: order.service, analogs, inspectionDays, inspectionUploadDays, signedOn, today: dossier.today });
+        // 2.198: дата оценки в отчёте — как в задании на оценку, письме или определении суда, приложенных к делу.
+        const assignment = names.includes('value_date') ? await assignmentDocs(sql, providers.storage, order) : [];
+        const auto = runAutoChecks(names, files, { fields: order.fields ?? {}, dossier, basis, service: order.service, analogs, inspectionDays, inspectionUploadDays, signedOn, assignment, today: dossier.today });
         const found = Object.fromEntries(rules.map((r) => [r.id, (r.auto ?? []).flatMap((a) => auto[a] ?? [])]));
         // Модель недоступна или лимит исчерпан, но автоматические находки есть — показываем их, а не ошибку.
         let out;
