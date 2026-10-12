@@ -14,6 +14,9 @@
 // прошло до следующей подписи эксперта по тому же делу; ещё не подписанные заново — отдельным числом, в среднее не входят.
 // В первоначальный срок, без переносов (2.188): сдано не позже срока, на который дело принимали, и ни одного одобренного
 // переноса; дела без срока сюда не входят.
+// Подписано без ИИ-проверки (2.199): сколько файлов эксперт подписал за месяц и сколько из них — без ИИ-проверки этой версии
+// (до подписи ни одна ИИ-проверка по делу не включала этот файл; новый файл — новая версия, как в подсказке 2.136). Файл,
+// подписанный за месяц несколько раз (после возврата), — один, по последней подписи. Подсказка, не оценка эксперта.
 // Месяц — по московскому времени. Выгрузка таблицей — CSV для Excel (точка с запятой, BOM, суммы с запятой).
 import { HttpError } from '../http/core.mjs';
 import { orderSplit } from '../money/money.mjs';
@@ -164,6 +167,19 @@ const resignQ = (sql, orgId, ids, { start, end }) => sql`
   from org_returns r
   where r.org_id = ${orgId} and r.executor_user_id = any(${ids}::uuid[]) and r.created_at >= ${start} and r.created_at < ${end}`;
 
+// Подписанные экспертами за месяц файлы и без ИИ-проверки этой версии (2.199): [{ user_id, signed, signed_no_ai }].
+const signedQ = (sql, orgId, ids, { start, end }) => sql`
+  select x.user_id, count(*)::int as signed,
+         count(*) filter (where not exists (
+           select 1 from ai_reviews r where r.order_id = x.order_id and r.at <= x.at
+             and r.files @> jsonb_build_array(jsonb_build_object('id', x.doc))))::int as signed_no_ai
+  from (select a.actor_id as user_id, a.subject_id as doc, (a.details->>'order_id')::uuid as order_id, max(a.at) as at
+        from audit_log a join org_members m on m.org_id = ${orgId} and m.user_id = a.actor_id
+        where a.action = 'document.sign' and a.actor_id = any(${ids}::uuid[]) and a.at >= ${start} and a.at < ${end}
+          and a.at >= m.created_at
+        group by 1, 2, 3) x
+  group by x.user_id`;
+
 // { resign_days, resign_n, resign_wait }: среднее (до десятых) по подписанным заново и сколько ещё ждут новой подписи.
 function resign(rows) {
   const signed = rows.filter((r) => r.signed_at);
@@ -242,7 +258,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
   const { start, end } = await monthBounds(sql, month);
   const since = (await sql`select to_char(created_at at time zone 'Europe/Moscow', 'YYYY-MM') as m from organizations
                            where id = ${orgId}`)[0]?.m ?? '';
-  const none = { accepted: [], done: [], headReturns: [], resign: [], remarkItems: [], dispReturns: [], paid: [], active: [] };
+  const none = { accepted: [], done: [], headReturns: [], resign: [], signed: [], remarkItems: [], dispReturns: [], paid: [], active: [] };
   const q = !ids.length ? none : {
     accepted: await sql`
       select f.specialist_id as user_id, count(distinct f.order_id)::int as n from order_offers f
@@ -253,6 +269,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
     done: await orgMonthDone(sql, orgId, ids, { start, end }),
     headReturns: await headReturnsQ(sql, orgId, ids, { start, end }),
     resign: await resignQ(sql, orgId, ids, { start, end }),
+    signed: await signedQ(sql, orgId, ids, { start, end }),
     remarkItems: await sql`
       select r.executor_user_id as user_id, i.text, r.created_at as at from org_returns r
       join org_return_items i on i.return_id = r.id
@@ -275,6 +292,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
   const accepted = count(q.accepted);
   const headReturns = count(q.headReturns);
   const dispReturns = count(q.dispReturns);
+  const signed = new Map(q.signed.map((r) => [r.user_id, r]));
   const paid = new Map(q.paid.map((r) => [r.user_id, Number(r.kop)]));
   const current = month === today.slice(0, 7);
   const prevM = prevMonth(month);
@@ -298,6 +316,8 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
       late_first_moved: p.late_first_moved,
       first_kept: p.first_kept,
       ...resign(q.resign.filter((r) => r.user_id === e.user_id)),
+      signed: signed.get(e.user_id)?.signed ?? 0,
+      signed_no_ai: signed.get(e.user_id)?.signed_no_ai ?? 0,
       remarks: topRemarks(q.remarkItems.filter((i) => i.user_id === e.user_id), TOP_REMARKS_EXPERT).map(({ text, n }) => ({ text, n })),
       prev: cmp ? cmp.experts.get(e.user_id) : null,
       services: byService(done, registry).map(({ name, done: n }) => ({ name, n })),
@@ -305,7 +325,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
   });
   const sum = (k) => (k === 'overdue_now' && !current ? null : rows.reduce((s, r) => s + r[k], 0));
   const keys = ['accepted', 'done', 'done_late', 'overdue_now', 'returned_head', 'returned_dispatcher', 'fee_kop', 'paid_kop',
-    'late_first', 'late_first_moved', 'first_kept'];
+    'late_first', 'late_first_moved', 'first_kept', 'signed', 'signed_no_ai'];
   const all = pace(q.done);
   return {
     month,
@@ -393,10 +413,12 @@ export function reportCsv(orgName, r) {
   const head = ['Эксперт', 'Принял дел', 'Сдано (готово)', 'Из них позже срока', ...(r.current ? ['Просрочено сейчас'] : []),
     'Возвращено руководителем', 'Возвращено на доработку', 'Вознаграждение за сданные, ₽', 'Выплачено, ₽',
     'Дней в среднем от принятия до сдачи', 'Позже первоначального срока', 'Из них с переносом срока',
-    'В первоначальный срок, без переносов', 'Дней в среднем от возврата до новой подписи', 'Ждут новой подписи после возврата'];
+    'В первоначальный срок, без переносов', 'Дней в среднем от возврата до новой подписи', 'Ждут новой подписи после возврата',
+    'Подписал файлов', 'Из них без ИИ-проверки этой версии'];
   const line = (name, x) => [name, x.accepted, x.done, x.done_late, ...(r.current ? [x.overdue_now] : []),
     x.returned_head, x.returned_dispatcher, rubCell(x.fee_kop), rubCell(x.paid_kop),
-    daysCell(x.avg_days), x.late_first, x.late_first_moved, x.first_kept, daysCell(x.resign_days), x.resign_wait];
+    daysCell(x.avg_days), x.late_first, x.late_first_moved, x.first_kept, daysCell(x.resign_days), x.resign_wait,
+    x.signed, x.signed_no_ai];
   const day = todayMsk();
   const lines = [
     [`Сводка по экспертам — ${orgName}`],

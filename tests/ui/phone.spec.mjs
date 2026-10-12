@@ -3751,6 +3751,10 @@ test('сводка за месяц (2.78): руководитель видит �
   // От возврата до новой подписи (2.168).
   await expect(row.locator('[data-expert-resign]')).toHaveText(/^после Ваших возвратов: новая подпись в среднем через .+ · ещё не подписано заново: 1$/);
   await expect(hp.locator('#org-report-total')).toContainText(/После Ваших возвратовновая подпись в среднем через .+ · ещё не подписано заново: 1/);
+  // Подписано без ИИ-проверки этой версии (2.199): эксперт подписал отчёт, не запуская ИИ-проверку.
+  await expect(row.locator('[data-expert-signed]')).toHaveText('подписано файлов: 1 · без ИИ-проверки этой версии: 1');
+  await expect(row.locator('[data-expert-signed]')).toHaveClass(/warn/);
+  await expect(hp.locator('#org-report-total')).toContainText('Подпись экспертовподписано файлов: 1 · без ИИ-проверки этой версии: 1');
   await expect(row.locator('[data-expert-remarks]')).toHaveText('частые замечания: «нет даты осмотра.» ×2, «Не указан этаж»');
   await expect(hp.locator('#org-report-remarks > li')).toHaveText(['нет даты осмотра. — 2 раза', 'Не указан этаж — 1 раз']);
   await expect(row).toContainText('вознаграждение за сданные: 12 000 ₽ · выплачено: 12 000 ₽');
@@ -3763,6 +3767,8 @@ test('сводка за месяц (2.78): руководитель видит �
   await expect(row.locator('[data-expert-services]')).toHaveText('по услугам: Оценка недвижимости — 1');
   await box.scrollIntoViewIfNeeded();
   await shot(hp, 'a7-rukovoditel-svodka-mesyac');
+  await row.locator('[data-expert-signed]').scrollIntoViewIfNeeded();
+  await shot(hp, 'a7d-rukovoditel-svodka-bez-ii-proverki');
   await hp.locator('#org-report-services-box').scrollIntoViewIfNeeded();
   await shot(hp, 'a7c-rukovoditel-svodka-po-uslugam');
   await hp.locator('#org-report-remarks-box').scrollIntoViewIfNeeded();
