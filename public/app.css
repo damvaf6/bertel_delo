@@ -227,6 +227,7 @@ li.return.open { border-left: 3px solid var(--danger); padding-left: 8px; }
 .return .return-file, .return .return-ai { margin-top: 4px; }
 .return .return-file.ok, .return .return-ai.ok { color: var(--ok); }
 .return .return-file.warn, .return .return-ai.warn { color: #7a4b00; }
+#org-report .warn, #org-report-total dd.warn { color: #7a4b00; }
 details.returns { margin-top: 8px; }
 /* Пункты замечания руководителя (2.93). */
 .ready-box { margin: 8px 0 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; }

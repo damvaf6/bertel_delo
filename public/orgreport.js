@@ -8,6 +8,7 @@
 // его сданные по услугам.
 // От возврата до новой подписи (2.168): после возвратов руководителя за месяц — сколько дней в среднем эксперт заново
 // подписывал файл и сколько возвратов ещё ждут новой подписи; в итоге и у каждого эксперта.
+// Подписано без ИИ-проверки (2.199): сколько файлов эксперт подписал за месяц и сколько из них без ИИ-проверки этой версии.
 // Частые замечания (2.105) — пункты, с которыми руководитель чаще всего возвращал отчёты: по организации и у каждого эксперта.
 import { api, el, say } from '/common.js';
 import { rub } from '/money.js';
@@ -32,6 +33,9 @@ const pace = (x) => [x.done ? `в первоначальный срок, без 
 // «новая подпись в среднем через 1,5 дня · ещё не подписано заново: 1»; без возвратов — пусто.
 const resign = (x) => [x.resign_days != null ? `новая подпись в среднем через ${x.resign_days < 0.1 ? 'меньше 2 часов' : daysRu(x.resign_days)}` : null,
   x.resign_wait ? `ещё не подписано заново: ${x.resign_wait}` : null].filter(Boolean).join(' · ');
+// «подписано файлов: 4 · без ИИ-проверки этой версии: 1»; ничего не подписано — пусто.
+const signedAi = (x) => (x.signed ? `подписано файлов: ${x.signed}${x.signed_no_ai ? ` · без ИИ-проверки этой версии: ${x.signed_no_ai}`
+  : ' · все после ИИ-проверки'}` : '');
 // «сдано: 5 (было 3, +2) · в срок: 4 (было 4) · возвраты: 1 (было 2, −1)»; у эксперта без дел в обоих месяцах — пусто.
 const diff = (now, was) => `${now} (было ${was}${now > was ? `, +${now - was}` : now < was ? `, −${was - now}` : ''})`;
 const compare = (x) => {
@@ -82,6 +86,7 @@ async function load(month) {
     ...(pace(t) ? fact('Скорость и сроки', pace(t)) : []),
     ...(compare(t) ? fact(`К прошлому месяцу (${report.prev_month_name})`, compare(t)) : []),
     ...(resign(t) ? fact('После Ваших возвратов', resign(t)) : []),
+    ...(signedAi(t) ? fact('Подпись экспертов', signedAi(t), t.signed_no_ai ? 'warn' : '') : []),
     ...(report.current && t.overdue_now ? fact('Просрочено сейчас', String(t.overdue_now), 'overdue') : []),
     ...fact('Вознаграждение за сданные', rub(t.fee_kop), 'money-sum'),
     ...fact('Выплачено экспертам', rub(t.paid_kop)));
@@ -110,6 +115,7 @@ async function load(month) {
       x.returned_head ? `Вами — ${x.returned_head}` : null, x.returned_dispatcher ? `на доработку — ${x.returned_dispatcher}` : null,
     ].filter(Boolean).join(', ')}` })] : []),
     ...(resign(x) ? [el('div', { class: 'muted', 'data-expert-resign': '', text: `после Ваших возвратов: ${resign(x)}` })] : []),
+    ...(signedAi(x) ? [el('div', { class: x.signed_no_ai ? 'warn' : 'muted', 'data-expert-signed': '', text: signedAi(x) })] : []),
     ...(x.remarks?.length ? [el('div', { class: 'muted', 'data-expert-remarks': '', text: `частые замечания: ${
       x.remarks.map((m) => `«${m.text}»${m.n > 1 ? ` ×${m.n}` : ''}`).join(', ')}` })] : []),
     el('div', { class: 'muted', text: `вознаграждение за сданные: ${rub(x.fee_kop)} · выплачено: ${rub(x.paid_kop)}` }))));
