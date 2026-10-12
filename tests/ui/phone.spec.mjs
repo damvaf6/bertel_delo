@@ -1052,7 +1052,7 @@ test('ИИ-проверка результата: специалист пере�
   // После проверки — сколько пунктов «посмотрите» и какие; в окне подписи — то же. Подписать всё равно можно.
   await expect(aiDoc.locator('[data-sig="ai-none"]')).toHaveCount(0);
   await expect(aiDoc.locator('[data-sig="ai-attention"]')).toContainText('В ИИ-проверке этого файла стоит посмотреть пунктов:');
-  await expect(aiDoc.locator('[data-sig="ai-attention"]')).toContainText('Технические ошибки');
+  await expect(aiDoc.locator('[data-sig="ai-attention"]')).toContainText('Недвижимость и земля');
   await aiDoc.locator('[data-sig="ai-attention"]').scrollIntoViewIfNeeded();
   await shot(sp, '54b-specialist-podpis-ii-posmotrite');
   await expect(sp.locator('#ai-review-state')).toContainText('запускал исполнитель перед сдачей');
