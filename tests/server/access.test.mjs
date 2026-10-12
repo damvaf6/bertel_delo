@@ -466,6 +466,15 @@ test('цены и правила перевода (2а.9): смотрит и п�
   assert.equal(r.body.settings.fields.find((f) => f.key === 'page_kop').value, 600_00, 'чужие попытки ничего не поменяли');
 });
 
+test('ЮKassa — проверка перед подключением (2а.10): только администратор (подробно — yookassa-check.test.mjs)', async () => {
+  cover('admin.payments.check');
+  for (const c of [U.owner, U.headA, U.dispatcher, U.spec, U.stranger]) {
+    assert.equal((await c.req('GET', '/api/admin/payments-check')).status, 404);
+    assert.equal((await c.req('GET', '/api/admin/payments-check?probe=1')).status, 404);
+  }
+  assert.equal((await U.admin.req('GET', '/api/admin/payments-check')).status, 200);
+});
+
 test('сертификат перевода (2а.5): выдаёт только переводчик к своему файлу; лист — кому виден файл (подробно — certificates.test.mjs)', async () => {
   cover('certificates.issue'); cover('certificates.sheet');
   // Документ заявки об оценке: сертификат к нему не выдаётся никому, листа нет; посторонним — «не найдено».

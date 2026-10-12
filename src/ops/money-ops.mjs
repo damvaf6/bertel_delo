@@ -12,6 +12,7 @@ import { audit, sendFile } from './util.mjs';
 import { closingDoc, invoiceDoc } from '../money/papers.mjs';
 import { DOCX_MIME } from '../docs/docx.mjs';
 import { receiptUrlFrom } from '../matching/executors.mjs';
+import { paymentsReadiness, probeWebhook } from '../money/yookassa-check.mjs';
 
 const PRICE_RE = /^\d{1,8}([.,]\d{1,2})?$/;
 const num = (v) => (v == null ? null : Number(v));
@@ -55,6 +56,14 @@ async function syncPayment(sql, providers, cfg, payment) {
   await runSettlement(sql, providers, settlement);
 }
 
+
+// Контакт покупателя для чека (2а.10): подтверждённая почта из профиля, без неё — телефон входа (ЮKassa: 7XXXXXXXXXX).
+async function receiptContact(sql, actor) {
+  const m = await sql.one`select email from mail_addresses where user_id = ${actor.id} and confirmed_at is not null`;
+  if (m?.email) return { email: m.email };
+  const u = await sql.one`select phone from users where id = ${actor.id}`;
+  return u?.phone ? { phone: u.phone.replace(/^\+/, '') } : null;
+}
 
 export function moneyOps() {
   // Деньги по заявке глазами вошедшего: заказчик — цена, оплата, акт; исполнитель — своё вознаграждение, выплата,
@@ -202,8 +211,10 @@ export function moneyOps() {
             const r = await providers.payments.createPayment({
               idempotenceKey: payment.id, orderId: order.id, amountKop: Number(payment.amount_kop), description,
               returnUrl: `${cfg.publicUrl}/kabinet.html#order=${order.id}`,
-              // Чек (54-ФЗ) формирует ЮKassa: одна позиция — услуга по агентской схеме.
-              receipt: { items: [{ description, amountKop: Number(payment.amount_kop), agent: true }] },
+              // Чек (54-ФЗ) формирует ЮKassa: одна позиция — услуга по агентской схеме; контакт покупателя — только когда
+              // чеки включены (2а.10: без почты или телефона ЮKassa чек не примет).
+              receipt: { customer: cfg.yookassa.receipts ? await receiptContact(sql, actor) : null,
+                items: [{ description, amountKop: Number(payment.amount_kop), agent: true }] },
             });
             payment = await sql.one`update payments set provider_id = ${r.id}, confirmation_url = ${r.confirmationUrl}, updated_at = now()
                                     where id = ${payment.id} returning *`;
@@ -238,6 +249,16 @@ export function moneyOps() {
         const p = await sql.one`select * from payments where provider_id = ${pid}`;
         await syncPayment(sql, providers, cfg, p);
         return {};
+      },
+    },
+    {
+      // ЮKassa — проверка перед подключением (2а.10): адрес уведомлений и возврата, ключи, чеки, реквизиты, частые ошибки.
+      // ?probe=1 — сервер шлёт пустое уведомление на свой публичный адрес и смотрит, доходит ли (ничего не меняет).
+      id: 'admin.payments.check', method: 'GET', path: '/api/admin/payments-check', auth: 'user', access: { platform: 'admin' },
+      async handler({ cfg, query }) {
+        const out = paymentsReadiness(cfg);
+        if (query?.probe === '1') out.probe = await probeWebhook(cfg.publicUrl);
+        return { check: out };
       },
     },
     {
