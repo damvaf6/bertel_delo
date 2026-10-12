@@ -1339,25 +1339,49 @@ function reportNumbers(docs) {
 const VALUE_AT = new RegExp(`${VALUE_LABEL}|дат\\S*\\s+проведения\\s+оценки|датой\\s+оценки\\s+(?:является|принята|считается)|по\\s+состоянию\\s+на`, 'giu');
 const STATE_SKIP = /кадастров|балансов|инвентаризац|прежн|предыдущ|ранее|прошл|аналог|предложени|объявлени|индекс|инфляц|курс|выписк|ставк|задолженност/iu;
 
-function valueDates(docs) {
+// Все даты оценки в документе: по одной на страницу и день, с местом.
+function valueDatesIn(doc) {
+  const dates = [];
+  eachPage(doc, (raw, i) => {
+    const page = unquote(raw);
+    for (const m of page.matchAll(VALUE_AT)) {
+      if (/^по/iu.test(m[0])) {
+        const before = lineBefore(page, m.index, 250);
+        if (!/стоимост/iu.test(before) || STATE_SKIP.test(before)) continue;
+      }
+      const on = dateAfter(page.slice(m.index), `^${m[0].replace(/\s+/gu, '\\s+')}`);
+      if (on && !dates.some((x) => x.page === i && x.value === on)) dates.push({ doc, page: i, value: on, quote: lineAround(raw, m.index) });
+    }
+  });
+  return dates;
+}
+
+function valueDates(docs, ctx = {}) {
   const main = mainReport(docs);
   const ordered = main ? [main, ...docs.filter((d) => d !== main)] : docs;
-  const dates = [];
-  for (const doc of ordered) {
-    eachPage(doc, (raw, i) => {
-      const page = unquote(raw);
-      for (const m of page.matchAll(VALUE_AT)) {
-        if (/^по/iu.test(m[0])) {
-          const before = lineBefore(page, m.index, 250);
-          if (!/стоимост/iu.test(before) || STATE_SKIP.test(before)) continue;
-        }
-        const on = dateAfter(page.slice(m.index), `^${m[0].replace(/\s+/gu, '\\s+')}`);
-        if (on) dates.push({ doc, page: i, value: on, quote: lineAround(raw, m.index) });
-      }
-    });
-  }
-  const once = dates.filter((e, k) => dates.findIndex((x) => x.doc === e.doc && x.page === e.page && x.value === e.value) === k);
-  return oddOnes(once, (e, ref, where) => `Дата оценки ${ruDate(e.value)} не совпадает с ${ruDate(ref)} ${where} — дата оценки должна быть одна во всём отчёте и в письме`, { samePage: true });
+  const once = ordered.flatMap(valueDatesIn);
+  const out = oddOnes(once, (e, ref, where) => `Дата оценки ${ruDate(e.value)} не совпадает с ${ruDate(ref)} ${where} — дата оценки должна быть одна во всём отчёте и в письме`, { samePage: true });
+  return [...out, ...assignmentDate(once, ctx.assignment ?? [])];
+}
+
+// ——— 2.198: дата оценки — как в задании на оценку, письме заказчика или определении суда, приложенных к делу ———
+// ctx.assignment — документы дела, которые не результат: основание и файлы с «заданием на оценку» или «письмом» (ai-ops).
+// В них ровно одна дата оценки, а в отчёте — тоже одна и другая: находка у первого места в отчёте. Разные даты в
+// приложенных документах (новое задание рядом со старым) — молчим: какая верная, решает эксперт.
+function assignmentDate(reportDates, assignment) {
+  const values = [...new Set(reportDates.map((e) => e.value))];
+  if (values.length !== 1) return [];
+  const given = assignment.filter((d) => Array.isArray(d.pages)).flatMap(valueDatesIn);
+  const days = [...new Set(given.map((e) => e.value))];
+  if (days.length !== 1 || days[0] === values[0]) return [];
+  const src = given[0].doc;
+  const head = (src.pages ?? []).slice(0, 2).join('\n');
+  const what = /задани\S*\s+на\s+(?:проведение\s+)?оценк/iu.test(head) || /задани/iu.test(src.name) ? 'в задании на оценку'
+    : /(?<![а-яё])суд(?:а|ом|ебн\S*)?(?![а-яё])/iu.test(head) && /определ|назнач/iu.test(head) ? 'в определении суда'
+      : 'в письме заказчика';
+  const first = reportDates[0];
+  return [{ doc: first.doc, page: first.page, quote: first.quote,
+    text: `Дата оценки в отчёте ${ruDate(values[0])}, а ${what} «${src.name}» — ${ruDate(days[0])} (стр. ${given[0].page + 1}); дата оценки берётся из задания — исправьте отчёт или приложите к делу новое задание` }];
 }
 
 // ——— 2.131: цель оценки — как в заявке, вид стоимости один по отчёту и подходит к цели ———
@@ -1550,7 +1574,7 @@ export const AUTO_CHECKS = Object.freeze({
   questions_answered: 'каждый вопрос заявки найден в выводах',
   final_value: 'итоговая стоимость одна на титуле, в задании, выводах, итоговой таблице и в сопроводительном письме',
   report_number: 'номер отчёта и дата составления одни на титуле, в колонтитулах и в сопроводительном письме',
-  value_date: 'дата оценки одна по всему отчёту и в сопроводительном письме',
+  value_date: 'дата оценки одна по всему отчёту и в сопроводительном письме и такая же, как в задании на оценку (письме заказчика, определении суда), если оно приложено к делу',
   purpose_value: 'цель оценки — как в заявке; вид стоимости один по всему отчёту и в письме, для суда, нотариуса, банка, сделки и раздела — рыночная',
 });
 

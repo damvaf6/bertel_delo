@@ -1051,3 +1051,37 @@ test('2.131: сверка цели и вида стоимости подключ
     assert.ok(reg.checks('expertise', svc).find((c) => c.id === 'appraiser').auto.includes('purpose_value'), svc);
   }
 });
+
+test('2.198: дата оценки — как в задании на оценку, письме или определении суда, приложенных к делу', () => {
+  const report = doc([
+    ['ОТЧЁТ ОБ ОЦЕНКЕ № 124/2026-О', 'Дата оценки: 01.10.2026', 'Дата составления отчёта: 05.10.2026'].join('\n'),
+    'Рыночная стоимость квартиры по состоянию на 01.10.2026 составляет 9 000 000 руб.',
+  ]);
+  const task = (date, name = 'Задание.pdf') => doc([['ЗАДАНИЕ НА ОЦЕНКУ', `Дата оценки: ${date}`].join('\n')], name);
+  const ctx = (...assignment) => ({ assignment });
+  assert.deepEqual(runAutoChecks(['value_date'], [report], ctx(task('01.10.2026'))).value_date, [], 'дата как в задании');
+  assert.deepEqual(runAutoChecks(['value_date'], [report], ctx(task('1 октября 2026 г.'))).value_date, [], 'словами — та же дата');
+
+  const res = runAutoChecks(['value_date'], [report], ctx(task('03.10.2026')));
+  assert.deepEqual(texts(res, 'value_date'), [
+    'Дата оценки в отчёте 01.10.2026, а в задании на оценку «Задание.pdf» — 03.10.2026 (стр. 1); дата оценки берётся из задания — исправьте отчёт или приложите к делу новое задание',
+  ]);
+  assert.equal(res.value_date[0].file, 'Отчёт.pdf');
+  assert.equal(res.value_date[0].where, 'стр. 1');
+  assert.equal(res.value_date[0].quote, 'Дата оценки: 01.10.2026');
+
+  // Определение суда и письмо заказчика — так же, со своим названием.
+  const court = doc(['ОПРЕДЕЛЕНИЕ о назначении судебной экспертизы\nМещанский районный суд г. Москвы определил: определить рыночную стоимость квартиры по состоянию на 15.09.2026.'], 'Определение.pdf');
+  assert.match(texts(runAutoChecks(['value_date'], [report], ctx(court)), 'value_date')[0], /а в определении суда «Определение\.pdf» — 15\.09\.2026/);
+  const letter = doc(['Прошу определить рыночную стоимость квартиры по состоянию на 20.09.2026.'], 'Письмо банка.pdf');
+  assert.match(texts(runAutoChecks(['value_date'], [report], ctx(letter)), 'value_date')[0], /а в письме заказчика «Письмо банка\.pdf» — 20\.09\.2026/);
+
+  // В приложенных документах две разные даты (старое и новое задание) — молчим; дат нет — молчим.
+  assert.deepEqual(runAutoChecks(['value_date'], [report], ctx(task('03.10.2026'), task('04.10.2026', 'Задание-2.pdf'))).value_date, []);
+  assert.deepEqual(runAutoChecks(['value_date'], [report], ctx(doc(['ЗАДАНИЕ НА ОЦЕНКУ\nДата оценки — дата осмотра'], 'Задание.pdf'))).value_date, []);
+  // Кадастровая стоимость в выписке — не дата оценки.
+  assert.deepEqual(runAutoChecks(['value_date'], [report], ctx(doc(['Кадастровая стоимость по состоянию на 01.01.2026'], 'ЕГРН.pdf'))).value_date, []);
+  // В самом отчёте две даты — уже находка «одна во всём отчёте»; с заданием не сверяем, чтобы не дублировать.
+  const two = doc(['Дата оценки: 01.10.2026', 'Дата оценки: 01.10.2026', 'по состоянию на 02.10.2026 рыночная стоимость… Рыночная стоимость по состоянию на 02.10.2026']);
+  assert.ok(texts(runAutoChecks(['value_date'], [two], ctx(task('03.10.2026'))), 'value_date').every((t) => !/в задании/.test(t)));
+});

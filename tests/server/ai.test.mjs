@@ -604,3 +604,26 @@ test('2.190: модель «замечаний не найдено», а авт�
   assert.equal(c.hint, 'ok');
   assert.equal(c.note, 'Замечаний не найдено');
 });
+
+test('2.198: дата оценки сверяется с заданием на оценку, приложенным к делу; другие файлы дела не мешают', async () => {
+  const o = await inWork('Квартира: дата оценки по заданию');
+  const putDoc = (who, body, name, kind) => who.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), ...(kind ? { 'x-doc-kind': kind } : {}) } });
+  let r = await putDoc(owner, 'ЗАДАНИЕ НА ОЦЕНКУ\nОбъект: квартира\nДата оценки: 03.10.2026', 'Задание на оценку.txt', 'basis');
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.equal((await putDoc(owner, 'Кадастровая стоимость по состоянию на 01.01.2026 — 7 000 000 руб.', 'Выписка ЕГРН.txt')).status, 201);
+  assert.equal((await putResult(o, 'ОТЧЁТ ОБ ОЦЕНКЕ № 5/2026\nДата оценки: 01.10.2026\nРыночная стоимость квартиры по состоянию на 01.10.2026 составляет 9 000 000 руб.', 'отчёт.txt', 'text/plain')).status, 201);
+  const found = async () => {
+    const res = await spec.req('POST', `/api/orders/${o.id}/review/ai`);
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    return (res.body.ai.items.find((i) => i.id === 'requisites').found ?? []).map((f) => f.text).filter((t) => /в задании на оценку/.test(t));
+  };
+  assert.deepEqual(await found(), [
+    'Дата оценки в отчёте 01.10.2026, а в задании на оценку «Задание на оценку.txt» — 03.10.2026 (стр. 1); дата оценки берётся из задания — исправьте отчёт или приложите к делу новое задание',
+  ]);
+  assert.doesNotMatch(lastPrompt(), /Объект: квартира/, 'текст задания в модель не уходит — только автоматическая сверка');
+  // Эксперт исправил отчёт — находки нет.
+  await S.sql`update documents set deleted_at = now() where order_id = ${o.id} and kind = 'result'`;
+  assert.equal((await putResult(o, 'ОТЧЁТ ОБ ОЦЕНКЕ № 5/2026\nДата оценки: 03.10.2026', 'отчёт-2.txt', 'text/plain')).status, 201);
+  assert.deepEqual(await found(), []);
+});
