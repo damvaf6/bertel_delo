@@ -4134,6 +4134,75 @@ test('ссылка на осмотр истекает (2.196): строка в �
   await ectx.close();
 });
 
+test('осмотр без обязательных шагов (2.208): «Готово» нажато, а снято не всё — строка в «Сегодня», в деле «Попросить доснять»', async ({ page, browser, baseURL }) => {
+  await signIn(page, '+79990000882');
+  const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира: снято не всё' }, headers: H })).json();
+  const id = created.order.id;
+  expect((await page.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(9), fields: { purpose: 'bank', region: 'moscow', object_type: 'flat', address: 'г. Москва, Неполная ул., 5', area: '52' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  const ectx = await phoneContext(browser, baseURL);
+  const ep = await ectx.newPage();
+  const expert = await signIn(ep, '+79990000883');
+  await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    await c.query("update orders set price_kop = 1500000, paid_at = now(), status = 'in_work', executor_user_id = $2 where id = $1", [id, expert.id]);
+  });
+  // Владелец снял фасад и кухню и нажал «Готово».
+  const issued = await ep.request.post(`/api/orders/${id}/inspection`, { data: { days: 3 }, headers: H });
+  expect(issued.status()).toBe(201);
+  const token = (await issued.json()).path.split('#')[1];
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]), Buffer.from('JFIF-2208')]);
+  for (const st of ['facade', 'kitchen']) {
+    const sent = await page.request.post('/api/inspect/photos', { data: jpeg, headers: { ...H, 'x-inspect-token': token, 'content-type': 'image/jpeg', 'x-step': st } });
+    expect(sent.status()).toBe(201);
+  }
+  expect((await page.request.post('/api/inspect/finish', { data: {}, headers: { ...H, 'x-inspect-token': token } })).status()).toBe(200);
+  const notes = await (await ep.request.get('/api/notifications')).json();
+  expect(JSON.stringify(notes)).toContain('Владелец нажал «Готово», но снял не всё');
+
+  await ep.goto('/kabinet');
+  await expect(ep.locator('[data-today="inspect-incomplete"]')).toHaveText('Осмотр: владелец нажал «Готово», а снял не всё · 1');
+  const row = ep.locator('[data-today-item="inspect-incomplete"]').first();
+  await expect(row).toContainText('Квартира: снято не всё');
+  await expect(row).toContainText('не снято: Подъезд и лестничная площадка, Входная дверь, Каждая комната');
+  await expect(row).toContainText('попросите доснять — владельцу уйдёт новая ссылка');
+  // В «Можно продолжать» «осмотр закончен» не повторяется.
+  await expect(ep.locator('[data-today-item="ready"]', { hasText: 'Квартира: снято не всё' })).toHaveCount(0);
+  await shot(ep, 'c38d-ekspert-segodnya-osmotr-snyato-ne-vse');
+  await row.click();
+
+  const box = ep.locator('#inspect-box');
+  await expect(box.locator('#inspect-incomplete')).toBeVisible();
+  await expect(box.locator('#inspect-incomplete-text')).toContainText('Владелец нажал «Готово»');
+  await expect(box.locator('#inspect-incomplete-text')).toContainText('(фото по ссылке: 2), но не снял: Подъезд и лестничная площадка');
+  await expect(box.locator('#inspect-incomplete-text')).not.toContainText('Счётчики');
+  await expect(box.locator('#inspect-state')).not.toContainText('Не снято:');
+  await box.locator('#inspect-incomplete').scrollIntoViewIfNeeded();
+  await shot(ep, 'c38e-ekspert-osmotr-poprosit-dosnyat');
+  // Без телефона — сначала просим вписать; вписал — просьбы у шагов и новая ссылка СМС.
+  await box.locator('#inspect-ask-missing').click();
+  await expect(ep.locator('#inspect-msg')).toContainText('Впишите телефон владельца');
+  await ep.locator('#inspect-phone').fill('+79990000884');
+  await box.locator('#inspect-ask-missing').click();
+  await expect(ep.locator('#inspect-msg')).toContainText('Ссылка отправлена СМС на');
+  await expect(box.locator('#inspect-incomplete')).toBeHidden();
+  await expect(box.locator('#inspect-steps li[data-step="rooms"] .badge').first()).toHaveText('переснять');
+  await expect(box.locator('#inspect-steps li[data-step="facade"] .badge').first()).toHaveText('фото: 1');
+  await expect(box.locator('#inspect-steps li[data-step="meters"] .badge').first()).toHaveText('если есть');
+  await shot(ep, 'c38f-ekspert-osmotr-dosnyat-ssylka');
+
+  await ep.goto('/kabinet');
+  await expect(ep.locator('#today-box')).toBeVisible();
+  await expect(ep.locator('[data-today="inspect-incomplete"]')).toHaveCount(0);
+  // Заказчик плашки не видит.
+  await page.goto(`/kabinet#order=${id}`);
+  await expect(page.locator('#inspect-incomplete')).toBeHidden();
+  await ectx.close();
+});
+
 test('можно продолжать (2.86): заказчик прислал документ и написал — строка в «Сегодня», нажатие ведёт к переписке', async ({ page, browser, baseURL }) => {
   await signIn(page, '+79990000965');
   const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира: можно продолжать' }, headers: H })).json();
