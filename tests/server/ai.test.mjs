@@ -8,7 +8,7 @@ import { loadConfig, ConfigError } from '../../src/config.mjs';
 import { aiChain, createAi } from '../../src/providers/ai.mjs';
 import { createOcr } from '../../src/providers/ocr.mjs';
 import { makeFake } from '../../src/providers/fake.mjs';
-import { parseJsonAnswer, LEGAL_NOTE } from '../../src/ai/ai.mjs';
+import { parseJsonAnswer, LEGAL_NOTE, cleanReviewAnswer } from '../../src/ai/ai.mjs';
 import { PROBLEM_QUESTIONS } from '../tools/problem-questions.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import { makePdf, makeDocx } from '../tools/make-docs.mjs';
@@ -587,4 +587,20 @@ test('расход считается по токенам поставщика, 
     S.providers.ai.complete = before;
     await S.sql`delete from ai_usage where model = 'yandexgpt:test2'`;
   }
+});
+
+test('2.190: модель «замечаний не найдено», а автоматические находки есть — без противоречивых слов', () => {
+  const rules = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+  const answer = JSON.stringify({ items: [
+    { id: 'a', hint: 'ok', note: 'Замечаний не найдено' },
+    { id: 'b', hint: 'ok', note: 'Аналоги описаны подробно' },
+    { id: 'c', hint: 'ok', note: 'Замечаний не найдено' },
+  ] });
+  const found = { a: [{ text: 'находка' }], b: [{ text: 'находка' }] };
+  const [a, b, c] = cleanReviewAnswer(rules, answer, [], found);
+  assert.equal(a.hint, 'attention');
+  assert.equal(a.note, 'модель замечаний не увидела, но есть автоматические находки — см. ниже');
+  assert.equal(b.note, 'модель замечаний не увидела, но есть автоматические находки — см. ниже. Модель: Аналоги описаны подробно');
+  assert.equal(c.hint, 'ok');
+  assert.equal(c.note, 'Замечаний не найдено');
 });
