@@ -506,7 +506,7 @@ function renderOrgReturns(list) {
   const item = (r) => el('li', { class: r.open ? 'return open' : 'return', 'data-return': String(r.id) },
     el('div', { class: 'title', text: `${r.filename} · ${r.open ? 'исправить' : 'исправлено'}` }),
     el('div', { class: 'muted', text: [r.by, r.org, new Date(r.at).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', dateStyle: 'short', timeStyle: 'short' })].filter(Boolean).join(' · ') }),
-    ...returnFileState(r),
+    ...returnFileState(r), ...returnAiState(r),
     ...(r.items?.length ? returnPoints(r) : [el('div', { class: 'comment', text: r.comment })]));
   $('org-returns').replaceChildren(...[...open].reverse().map(item), ...list.filter((r) => !r.open).reverse().map(item));
 }
@@ -516,14 +516,32 @@ function renderOrgReturns(list) {
 function returnFileState(r) {
   const docs = lastDocs?.documents ?? [];
   if (!r.open || docs.some((x) => x.id === r.document_id)) return [];
-  const fresh = docs.filter((x) => x.kind === 'result' && x.own !== false && !x.signatures?.expert
-    && Date.parse(x.created_at) > Date.parse(r.at));
+  const fresh = freshAfter(r);
   if (!fresh.length) return [el('div', { class: 'return-file warn', 'data-role': 'return-file', text: 'Возвращённый файл удалён — загрузите исправленный файл и подпишите его.' })];
   const d = fresh.at(-1);
   return [el('div', { class: 'return-file ok', 'data-role': 'return-file' },
     el('span', { text: `Исправленный файл «${d.filename}» загружен ${new Date(d.created_at).toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow' })} — ждёт Вашей подписи${fresh.length > 1 ? ` (новых файлов: ${fresh.length})` : ''}. ` }),
     el('button', { class: 'link', 'data-action': 'to-return-file', onclick: () => toDoc(d.id) }, 'К подписи'))];
 }
+
+// Исправленный файл после возврата (2.192): проверял ли его ИИ. Не запускали или есть «посмотрите» — подсказка с переходом к
+// ИИ-проверке; проверено без замечаний — так и сказано. Подписать можно и без проверки (как у подписи — 2.136).
+function returnAiState(r) {
+  if (!r.open) return [];
+  const d = freshAfter(r).at(-1);
+  if (!d) return [];
+  const c = d.ai_check;
+  if (!c) return [el('div', { class: 'return-ai ok', 'data-role': 'return-ai', 'data-ai': 'ok', text: `ИИ-проверка исправленного файла «${d.filename}»: замечаний нет.` })];
+  const text = c.state === 'none'
+    ? `Исправленный файл «${d.filename}» ИИ ещё не проверял — запустите ИИ-проверку этой версии перед подписью. `
+    : `В ИИ-проверке исправленного файла «${d.filename}» стоит посмотреть: ${c.count} (${c.titles.join('; ')}${c.count > c.titles.length ? '; …' : ''}). `;
+  return [el('div', { class: 'return-ai warn', 'data-role': 'return-ai', 'data-ai': c.state, text },
+    el('button', { class: 'link', 'data-action': 'return-to-ai', onclick: toAiReview }, 'К ИИ-проверке'))];
+}
+
+// Свои неподписанные файлы результата, загруженные после возврата, — исправленные версии.
+const freshAfter = (r) => (lastDocs?.documents ?? []).filter((x) => x.kind === 'result' && x.own !== false && !x.signatures?.expert
+  && Date.parse(x.created_at) > Date.parse(r.at));
 
 function toDoc(id) {
   const li = document.querySelector(`#docs li.doc[data-doc="${id}"]`);

@@ -7324,6 +7324,19 @@ test('новая версия после возврата (2.159): в окне �
   await expect(fileState).toHaveText(/^Исправленный файл «Отчёт Версиева \(исправлен\)\.pdf» загружен \d{2}\.\d{2}\.\d{4} — ждёт Вашей подписи\. К подписи$/);
   await fileState.scrollIntoViewIfNeeded();
   await shot(ep, 'c18-ekspert-zamechaniya-ispravlennyy-fayl-zhdyot-podpisi');
+  // 2.192: ИИ исправленную версию ещё не проверял — подсказка «запустите ИИ-проверку этой версии» с переходом к ней.
+  const aiState = ep.locator('#org-returns li.return.open [data-role="return-ai"]');
+  await expect(aiState).toHaveText('Исправленный файл «Отчёт Версиева (исправлен).pdf» ИИ ещё не проверял — запустите ИИ-проверку этой версии перед подписью. К ИИ-проверке');
+  await expect(aiState).toHaveAttribute('data-ai', 'none');
+  await aiState.scrollIntoViewIfNeeded();
+  await shot(ep, 'c18a-ekspert-zamechaniya-zapustite-ii-proverku');
+  await aiState.getByRole('button', { name: 'К ИИ-проверке' }).click();
+  await expect(ep.locator('#ai-review-run')).toBeInViewport();
+  await ep.locator('#ai-review-run').click();
+  await expect(ep.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  // Проверил — подсказка «не проверял» ушла: либо «замечаний нет», либо что посмотреть.
+  await expect(aiState).not.toHaveAttribute('data-ai', 'none');
+  await expect(aiState).toHaveText(/^(ИИ-проверка исправленного файла «Отчёт Версиева \(исправлен\)\.pdf»: замечаний нет\.|В ИИ-проверке исправленного файла «Отчёт Версиева \(исправлен\)\.pdf» стоит посмотреть: \d+ \(.+\)\. К ИИ-проверке)$/);
   await fileState.getByRole('button', { name: 'К подписи' }).click();
   const doc = ep.locator('#docs li.doc').filter({ hasText: 'Отчёт Версиева (исправлен).pdf' });
   await expect(doc).toBeInViewport();
