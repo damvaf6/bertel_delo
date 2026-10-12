@@ -210,7 +210,8 @@ function caseItem(org, c) {
       text: `Эксперт просит перенести срок на ${dayRu(c.extend.new_deadline)} — ждёт ответа диспетчера` })] : []),
     // Эксперт не принимает дела до … (2.113), а срок дела — в эти дни: «Передать другому эксперту» сразу открыто.
     ...(c.away && !c.handover ? [el('div', { class: 'notice-warn', 'data-role': 'away',
-      text: `Эксперт не принимает дела до ${dayRu(c.away.until)}${c.away.note ? ` (${c.away.note})` : ''}, а срок дела — в эти дни. Передайте его коллеге.` })] : []),
+      text: `Эксперт не принимает дела до ${dayRu(c.away.until)}${c.away.note ? ` (${c.away.note})` : ''}, а срок дела — в эти дни. ${c.transfer_to?.length
+        ? 'Передайте его коллеге.' : 'Передать его некому — попросите эксперта перенести срок.'}` })] : []),
     ...(c.last_move ? [moveRow(c)] : []),
     ...(c.remind ? [remindRow(org, c)] : []),
     ...(c.handover && c.status === 'in_work' ? [handoverBlock(org, c)] : []),

@@ -8434,7 +8434,8 @@ test('2.194: нагрузка экспертов — дни «не приним�
   await expect(cell(a, 1).locator('.cnt')).toHaveText('1');
   await expect(cell(a, 3)).toHaveClass(/back/);
   await expect(cell(a, 4)).not.toHaveClass(/away|back/);
-  await expect(a.locator('[data-role="clash"]')).toHaveText('Срок сдачи в дни, когда эксперт не принимает дела: 1 — можно передать коллеге');
+  // Второй эксперт выключил приём — передать некому (прогон 2.200).
+  await expect(a.locator('[data-role="clash"]')).toHaveText('Срок сдачи в дни, когда эксперт не принимает дела: 1 — передать некому: другие эксперты не принимают дела — попросите эксперта перенести срок');
   // Выключил приём — все дни штриховкой, но срок в работе не «в отпуске»: красной отметки нет.
   await expect(b.locator('[data-away]')).toHaveText('Не принимает новые дела — выключил приём');
   await expect(b.locator('.strip .cell.away')).toHaveCount(14);
@@ -8453,4 +8454,134 @@ test('2.194: нагрузка экспертов — дни «не приним�
   await row.scrollIntoViewIfNeeded();
   await shot(hp, 'g4b-nagruzka-srok-v-otpuske');
   for (const p of [hp, cp]) await p.context().close();
+});
+
+// 2.200: прогон «как эксперт и руководитель» по пачке 2.191–2.199 — одна организация, одно дело. Эксперт в отпуске, срок —
+// в дни отпуска (2.195, у руководителя — 2.194); ссылка на осмотр скоро кончится — «Продлить» из «Сегодня» (2.196); ИИ-проверка
+// коротко (2.191): «Акад. Королёва» с другой квартирой — находка (2.197), дата оценки не как в задании (2.198); возврат,
+// исправленный файл — «запустите ИИ-проверку этой версии» (2.192), эксперт подписывает без неё; руководитель отбирает такие
+// дела (2.193) и видит в сводке за месяц «без ИИ-проверки этой версии» (2.199).
+test('прогон 2.200: эксперт и руководитель по пачке 2.191–2.199 на одних делах', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), hp = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990020001'), head = await signIn(hp, '+79990020002'), customer = await signIn(cp, '+79990020003');
+  const { orgId, A } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Прогон-5 ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Пятов Лев' where id = $1", [expert.id]);
+    await c.query("update users set full_name = 'Главная Ирина' where id = $1", [head.id]);
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now() - interval '1 year'), ($1, $3, 'member', now() - interval '1 year')", [org.id, head.id, expert.id]);
+    await c.query(`insert into specialists (user_id, org_id, created_at, away_until, away_note)
+      values ($1, $2, now() - interval '1 year', (now() at time zone 'Europe/Moscow')::date + 3, 'отпуск')`, [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    await c.query("insert into morning_digests (user_id, day) values ($1, (now() at time zone 'Europe/Moscow')::date), ($2, (now() at time zone 'Europe/Moscow')::date)", [expert.id, head.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Пятая пачка: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, ул. Академика Королёва, д. 12, кв. 5","area":"40"}') returning id`,
+    [customer.id, expert.id, inDays(1)]);
+    await c.query(`insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted',
+      greatest(date_trunc('month', now() at time zone 'Europe/Moscow') at time zone 'Europe/Moscow', now() - interval '2 days'))`, [o.id, expert.id]);
+    return { orgId: org.id, A: o.id };
+  });
+
+  // «Мои сроки»: срок дела — в дни отпуска; «Попросить перенос» открывает дело с готовой причиной (2.195).
+  await ep.goto('/kabinet#specialist');
+  const sbox = ep.locator('#schedule-box');
+  await expect(sbox.locator('#schedule-away')).toContainText('Срок сдачи в эти дни: 1 — попросите перенос или передайте дело коллеге.');
+  const due = sbox.locator(`#schedule-days > li[data-day="${inDays(1)}"] li[data-schedule-item="deadline"]`);
+  await expect(due).toContainText('срок в дни, когда Вы не принимаете новые дела');
+  await expect(due.locator(`[data-ask-handover="${A}"]`)).toHaveText('Передать коллеге');
+  await sbox.locator('#schedule-days').scrollIntoViewIfNeeded();
+  await shot(ep, 'c44-progon5-ekspert-sroki-otpusk');
+  await due.locator('[data-ask-extend]').click();
+  await expect(ep.locator('#deadline-reason')).toHaveValue(/^В день срока меня не будет, работаю снова с /);
+
+  // Осмотр: ссылку выдали вчера на сутки, владелец снял фасад, «Готово» не нажал — в «Сегодня» «Продлить на 3 дня» (2.196).
+  const issued = await ep.request.post(`/api/orders/${A}/inspection`, { data: { days: 1 }, headers: H });
+  expect(issued.status()).toBe(201);
+  const token = (await issued.json()).path.split('#')[1];
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]), Buffer.from('JFIF-2200')]);
+  expect((await cp.request.post('/api/inspect/photos', { data: jpeg, headers: { ...H, 'x-inspect-token': token, 'content-type': 'image/jpeg', 'x-step': 'facade' } })).status()).toBe(201);
+  await db((c) => c.query("update inspection_links set created_at = now() - interval '19 hours', expires_at = now() + interval '5 hours' where order_id = $1", [A]));
+  await ep.goto('/kabinet');
+  const exp = ep.locator('[data-today-item="inspect-expiring"]', { hasText: 'Пятая пачка: квартира' });
+  await expect(exp).toContainText('фото по ссылке: 1');
+  await shot(ep, 'c45-progon5-ekspert-segodnya-ssylka');
+  await exp.getByRole('button', { name: 'Продлить на 3 дня' }).click();
+  await expect(exp.locator('[data-role="inspect-extend-msg"]')).toContainText('Продлено: ссылка действует до');
+
+  // Заказчик прикладывает задание на оценку с датой оценки 03.10.2026.
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from('ЗАДАНИЕ НА ОЦЕНКУ\nОбъект: квартира, г. Москва, ул. Академика Королёва, д. 12, кв. 5\nДата оценки: 03.10.2026'),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание на оценку.txt'), 'x-doc-kind': 'basis' },
+  })).status()).toBe(201);
+
+  // Отчёт: «Акад. Королёва» с квартирой 15 и дата оценки 01.10.2026.
+  const upload = async (name, flat, date) => {
+    const text = ['ОТЧЁТ ОБ ОЦЕНКЕ № 5/2026', `Адрес объекта оценки: Москва, ул. Акад. Королёва, д. 12, кв. ${flat}`,
+      `Дата оценки: ${date}`, 'Общая площадь, кв. м: 40', 'Итоговая стоимость 12 000 000 руб.'].join('\n');
+    const up = await ep.request.post(`/api/orders/${A}/results`, { data: Buffer.from(text), headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } });
+    expect(up.status()).toBe(201);
+    return (await up.json()).document.id;
+  };
+  const first = await upload('Отчёт Пятова.txt', '15', '01.10.2026');
+  await ep.goto(`/kabinet#order=${A}`);
+  await ep.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(ep.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  const review = ep.locator('#review-box');
+  await expect(review).toContainText('квартира 15, а в заявке 5');
+  await expect(review).toContainText('Дата оценки в отчёте 01.10.2026, а в задании на оценку «Задание на оценку.txt» — 03.10.2026');
+  const look = ep.locator('#ai-review-look');
+  await expect(look).toContainText('Посмотрите: ');
+  await expect(ep.locator('#review-checks details.ai-quiet summary')).toContainText('ИИ без замечаний:');
+  await review.scrollIntoViewIfNeeded();
+  await shot(ep, 'c46-progon5-ekspert-ii-korotko');
+  expect((await ep.request.post(`/api/documents/${first}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+
+  // Руководитель возвращает; эксперт кладёт исправленный файл — в «Замечаниях руководителя» «запустите ИИ-проверку» (2.192).
+  expect((await hp.request.post(`/api/org-documents/${first}/return`, { data: { comment: '1. Квартира не та\n2. Дата оценки не как в задании' }, headers: H })).status()).toBe(201);
+  expect((await ep.request.delete(`/api/documents/${first}`, { headers: H })).status()).toBe(204);
+  const second = await upload('Отчёт Пятова (исправлен).txt', '5', '03.10.2026');
+  await ep.reload();
+  const aiState = ep.locator('#org-returns li.return.open [data-role="return-ai"]');
+  await expect(aiState).toHaveAttribute('data-ai', 'none');
+  await expect(aiState).toContainText('ИИ ещё не проверял — запустите ИИ-проверку этой версии перед подписью');
+  await aiState.scrollIntoViewIfNeeded();
+  await shot(ep, 'c47-progon5-ekspert-zamechaniya-ii');
+  // Эксперт всё равно подписывает без проверки.
+  expect((await ep.request.post(`/api/documents/${second}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+
+  // Руководитель: отбор «Без ИИ-проверки этой версии» (2.193), нагрузка — срок в отпуске эксперта (2.194).
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const f = hp.locator('#org-sign-filter');
+  await expect(f.locator('[data-sign-filter="noai"]')).toHaveText('Без ИИ-проверки этой версии · 1');
+  await f.locator('[data-sign-filter="noai"]').click();
+  const item = hp.locator(`#org-sign > li[data-item="№ ${A.slice(0, 8).toUpperCase()}"]`);
+  await expect(item.locator('[data-role="ai-check"]')).toHaveText('Эксперт не запускал ИИ-проверку этой версии файла (проверял прежнюю).');
+  await f.scrollIntoViewIfNeeded();
+  await shot(hp, 'c48-progon5-rukovoditel-otbor-bez-ii');
+  const load = hp.locator(`#org-schedule-box li[data-expert-schedule="${expert.id}"]`);
+  // Найдено прогоном: «можно передать коллеге» и «Передайте его коллеге», хотя другого эксперта в организации нет.
+  await expect(load.locator('[data-role="clash"]')).toHaveText('Срок сдачи в дни, когда эксперт не принимает дела: 1 — передать некому: другие эксперты не принимают дела — попросите эксперта перенести срок');
+  const caseAway = hp.locator(`#org-cases li[data-case="№ ${A.slice(0, 8).toUpperCase()}"] [data-role="away"]`);
+  await expect(caseAway).toContainText('Передать его некому — попросите эксперта перенести срок.');
+  await load.scrollIntoViewIfNeeded();
+  await shot(hp, 'c49-progon5-rukovoditel-nagruzka');
+  // В организации появился второй эксперт с допуском — подсказка «передать коллеге» вернулась.
+  const mate = await signIn(await ctx(), '+79990020004');
+  await db(async (c) => {
+    await c.query("update users set full_name = 'Второй Эксперт' where id = $1", [mate.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'member')", [orgId, mate.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [mate.id, orgId]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [mate.id]);
+  });
+  await hp.reload();
+  await expect(load.locator('[data-role="clash"]')).toHaveText('Срок сдачи в дни, когда эксперт не принимает дела: 1 — можно передать коллеге');
+  await expect(caseAway).toContainText('а срок дела — в эти дни. Передайте его коллеге.');
+
+  // Сводка за месяц (2.199): подписано файлов и сколько без ИИ-проверки этой версии.
+  const row = hp.locator('#org-report > li').filter({ hasText: 'Пятов Лев' });
+  await expect(row.locator('[data-expert-signed]')).toHaveText('подписано файлов: 2 · без ИИ-проверки этой версии: 1');
+  await row.locator('[data-expert-signed]').scrollIntoViewIfNeeded();
+  await shot(hp, 'c50-progon5-rukovoditel-svodka');
+  for (const p of [ep, hp, cp]) await p.context().close();
 });
