@@ -10,6 +10,7 @@ import { unreadCount } from './notify-ops.mjs';
 // Подсказки первого входа по ролям (2.52; тексты — public/help.js).
 export const HINTS = ['customer', 'expert', 'head', 'dispatcher'];
 import { orderSignatures, orgReturns, signaturesView, signWait } from './sign-ops.mjs';
+import { GOSUSLUGI_CHECK_URL } from '../providers/sign.mjs';
 import { aiSignHints } from '../ai/ai.mjs';
 import { orderCertificates, siteOrigin } from './certificate-ops.mjs';
 import { stepFiles } from './step-ops.mjs';
@@ -180,7 +181,7 @@ export function coreOps(cfg) {
           // Как подписывают (задача штаба 3f817197-…-81ac): 'manual' — только загрузкой файла подписи, подпись проверяет
           // диспетчер на Госуслугах (can_check_signature); 'cabinet' — ещё и в кабинете.
           ...(required ? { sign_mode: providers.sign.manual ? 'manual' : 'cabinet' } : {}),
-          ...(required && providers.sign.manual && isStaff(actor) ? { can_check_signature: true } : {}),
+          ...(required && providers.sign.manual && isStaff(actor) ? { can_check_signature: true, signature_check_url: GOSUSLUGI_CHECK_URL } : {}),
           ...(mine ? { org_returns: await orgReturns(sql, order.id) } : {}),
           // Срок через 1–2 дня или прошёл, а своего файла результата нет (2.138) — предупреждение исполнителю; есть ли черновик.
           ...(mine ? { result_due: await resultDueView(sql, order, docs, actor.id) } : {}),

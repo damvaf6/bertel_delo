@@ -10,7 +10,7 @@ import { loadDraft } from '/draft.js';
 import { loadAnalogs } from '/analogs.js';
 import { loadInspection } from '/inspect.js';
 import { loadOnsite } from '/onsite.js';
-import { signatureLines, uploadSignatureButton, SIGN_CONFIRM, UPLOAD_HINT, MANUAL_HINT, SIGN_HOWTO, COURT_HOWTO, memo, GOSUSLUGI_CHECK_URL } from '/sign.js';
+import { signatureLines, uploadSignatureButton, SIGN_CONFIRM, UPLOAD_HINT, MANUAL_HINT, SIGN_HOWTO, COURT_HOWTO, memo } from '/sign.js';
 import { setNext } from '/next.js';
 import { reveal } from '/fold.js';
 import { orgChat } from '/orgchat.js';
@@ -447,7 +447,7 @@ async function loadDocs(initial = false) {
       el('div', { class: 'row' },
         el('button', { class: 'secondary', 'data-action': 'download', onclick: () => download(d) }, 'Скачать'),
         ...(removable ? [el('button', { class: 'danger', 'data-action': 'delete', onclick: () => remove(d) }, 'Удалить')] : [])),
-      ...(d.kind === 'result' ? signatureBlock(d, { canSign: mineResults && signRequired && d.own !== false, signOrg: documentsBody.signature_org, manual: documentsBody.sign_mode === 'manual', canCheck: !!documentsBody.can_check_signature }) : []),
+      ...(d.kind === 'result' ? signatureBlock(d, { canSign: mineResults && signRequired && d.own !== false, signOrg: documentsBody.signature_org, manual: documentsBody.sign_mode === 'manual', canCheck: !!documentsBody.can_check_signature, checkUrl: documentsBody.signature_check_url }) : []),
       ...(d.kind === 'result' ? certificateBlock(d) : []));
   };
   // Много фото осмотра (2.49: бывает 100) — одной свёрнутой строкой, чтобы документы и результат не терялись внизу.
@@ -649,7 +649,7 @@ function toAiReview() {
 
 // Подписи УКЭП у файла результата (2.5, 2.5а): эксперт и, если он работает от организации, её руководитель. Исполнитель
 // подписывает свой файл, пока дело в работе, — в кабинете или загрузив готовую подпись (программа УЦ, «Госключ»).
-function signatureBlock(d, { canSign, signOrg, manual = false, canCheck = false }) {
+function signatureBlock(d, { canSign, signOrg, manual = false, canCheck = false, checkUrl = '' }) {
   const { expert, org } = d.signatures ?? {};
   if (!expert && !org && !canSign) return [];
   const lines = [];
@@ -676,7 +676,7 @@ function signatureBlock(d, { canSign, signOrg, manual = false, canCheck = false 
     ? `Ждёт подписи организации ${quoted(signOrg)} — подписывает руководитель в разделе «Организации»`
     : `После Вашей подписи файл подписывает руководитель организации ${quoted(signOrg)}` }));
   // Сотрудник платформы: подпись ждёт проверки — открыть Госуслуги, сверить файл и подпись и отметить итог.
-  if (canCheck) for (const s of [expert, org].filter((x) => x?.manual_check === 'pending')) lines.push(checkBox(d, s));
+  if (canCheck) for (const s of [expert, org].filter((x) => x?.manual_check === 'pending')) lines.push(checkBox(d, s, checkUrl));
   // Заказчику с подписанным результатом — как подать его в суд электронно.
   if ((expert || org) && !canSign && !canCheck && current.access !== 'read' && ['done', 'closed'].includes(current.order.status)) {
     lines.push(memo('Как подать отчёт в суд электронно', COURT_HOWTO, 'court-howto'));
@@ -783,10 +783,10 @@ async function uploadSignature(d, file) {
 
 // Ручная проверка подписи сотрудником платформы: файл и подпись — на Госуслугах («Отсоединённая подпись»), итог — здесь.
 const SIGN_ROLE_RU = { expert: 'эксперта', org: 'организации' };
-function checkBox(d, s) {
+function checkBox(d, s, checkUrl) {
   return el('div', { class: 'sig-check', 'data-role': 'sig-check', 'data-sig-role': s.role },
     el('div', { class: 'muted', text: `Проверьте подпись ${SIGN_ROLE_RU[s.role]}: скачайте файл и подпись, на Госуслугах выберите «Отсоединённая подпись» и загрузите оба. Подпись верна, если Госуслуги подтвердили её и владелец сертификата — тот, кто должен подписать.` }),
-    el('a', { href: GOSUSLUGI_CHECK_URL, target: '_blank', rel: 'noopener', 'data-role': 'gosuslugi', text: 'Проверка подписи на Госуслугах' }),
+    el('a', { href: checkUrl, target: '_blank', rel: 'noopener', 'data-role': 'gosuslugi', text: 'Проверка подписи на Госуслугах' }),
     el('div', { class: 'row' },
       el('button', { 'data-action': 'sig-ok', onclick: (e) => markSignature(d, s.role, true, e.currentTarget) }, 'Подпись верна'),
       el('button', { class: 'danger', 'data-action': 'sig-bad', onclick: (e) => markSignature(d, s.role, false, e.currentTarget) }, 'Не подтвердилась')));

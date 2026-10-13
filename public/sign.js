@@ -81,4 +81,3 @@ export function memo(title, lines, role) {
     el('summary', { text: title }),
     el('ol', { class: 'howto' }, ...lines.map((t) => el('li', { text: t }))));
 }
-export const GOSUSLUGI_CHECK_URL = 'https://www.gosuslugi.ru/eds';
