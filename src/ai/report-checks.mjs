@@ -372,12 +372,8 @@ const sameWords = (a, b) => a.every((w) => wordIn(w, b)) || b.every((w) => wordI
 // 2.197: населённый пункт в одном адресе без «г.» или с внутригородским делением («Москва, вн.тер.г. муниципальный
 // округ …», «Москва, поселение Внуковское, д. Ракитки») — тот же, если его название есть в другом адресе.
 const addrWords = (s) => stems(String(s ?? '').toLowerCase().replace(/ё/g, 'е'));
-function addressMatch(doc, ctx) {
-  const mineText = clean(ctx.fields?.address);
-  const mine = parseAddress(mineText);
-  if (!mineText) return [];
-  const mineWords = addrWords(mineText);
-  const first = {}; // часть, которой нет в заявке, → { value, page }
+// Адреса объекта на страницах документа: { page, index, text, got, words }; одинаковые записи — один раз.
+function objectAddresses(doc) {
   const out = [];
   const seen = new Set();
   eachPage(doc, (page, i) => {
@@ -402,30 +398,74 @@ function addressMatch(doc, ctx) {
       text = clean(text).replace(/[,.\s]+$/, '').slice(0, 200);
       const got = parseAddress(text);
       if (!got.house && !got.flat && !got.plot && !got.room) continue;
-      const words = addrWords(text);
       const key = JSON.stringify(got);
       if (seen.has(key)) continue;
       seen.add(key);
-      const diff = [];
-      let againstMine = false;
-      for (const k of Object.keys(ADDR_NAMES)) {
-        if (got[k] === undefined) continue;
-        const ref = mine[k] !== undefined ? { value: mine[k], mine: true, words: mineWords } : first[k];
-        if (!ref) { first[k] = { value: got[k], page: i, words }; continue; }
-        const same = Array.isArray(got[k]) ? sameWords(got[k], ref.value)
-          || (k === 'settlement' && (ref.value.every((w) => words.includes(w)) || got[k].every((w) => ref.words.includes(w))))
-          : got[k] === ref.value;
-        if (same) continue;
-        if (ref.mine) againstMine = true;
-        diff.push({ k, ref });
-      }
-      if (!diff.length) continue;
-      const parts = diff.map(({ k, ref }) => (Array.isArray(got[k]) ? ADDR_NAMES[k]
-        : `${ADDR_NAMES[k]} ${got[k]}, а ${ref.mine ? 'в заявке' : `на стр. ${ref.page + 1}`} ${ref.value}`)).join('; ');
-      const where = againstMine ? `с адресом из заявки (${mineText})` : `с адресом объекта на стр. ${diff[0].ref.page + 1}`;
-      out.push({ page: i, quote: lineAround(page, m.index), text: `Адрес «${text}» не совпадает ${where}: ${parts} — проверьте, нет ли данных другого объекта` });
+      out.push({ page: i, index: m.index, text, got, words: addrWords(text) });
     }
   });
+  return out;
+}
+// Часть адреса k одинакова в got (слова — words) и ref (слова — refWords).
+function samePart(k, got, words, ref, refWords) {
+  if (!Array.isArray(got)) return got === ref;
+  return sameWords(got, ref) || (k === 'settlement' && (ref.every((w) => words.includes(w)) || got.every((w) => refWords.includes(w))));
+}
+// Адреса a и b не расходятся ни в одной части, которая есть в обоих.
+const sameAddress = (a, b) => Object.keys(ADDR_NAMES).every((k) => a.got[k] === undefined || b.got[k] === undefined
+  || samePart(k, a.got[k], a.words, b.got[k], b.words));
+
+// 2.213: адрес из выписок ЕГРН дела (ctx.egrn — ai-ops), как площадь (2.202): первый адрес объекта в каждой выписке.
+// Выписка на участок при оценке квартиры или дома (и наоборот) не в счёт. Выписки на дом и на квартиру в нём не спорят —
+// берём адрес, где частей больше; разные адреса — какой верный, решает эксперт: сверяем с заявкой, как раньше.
+export function egrnAddress(egrn, ctx) {
+  const land = ctx.service === 'land';
+  let best = null;
+  for (const d of egrn ?? []) {
+    if (!Array.isArray(d.pages)) continue;
+    const head = d.pages.slice(0, 2).join('\n');
+    if (land ? EGRN_BUILT.test(head) && !EGRN_LAND.test(head) : EGRN_LAND.test(head) && !EGRN_BUILT.test(head)) continue;
+    const [a] = objectAddresses(d);
+    if (!a) continue;
+    const got = { ...a, name: d.name };
+    if (best && !sameAddress(best, got)) return null;
+    if (!best || Object.keys(got.got).length > Object.keys(best.got).length) best = got;
+  }
+  return best;
+}
+
+function addressMatch(doc, ctx) {
+  const mineText = clean(ctx.fields?.address);
+  const egrn = ctx.egrn?.length ? egrnAddress(ctx.egrn, ctx) : null;
+  if (!mineText && !egrn) return [];
+  const mine = parseAddress(mineText);
+  const mineWords = addrWords(mineText);
+  // В заявке другой адрес, чем в выписке, — заказчик ошибся или выписка не на тот объект: подсказываем.
+  const mineDiffers = egrn && mineText && !sameAddress(egrn, { got: mine, words: mineWords });
+  const first = {}; // часть, которой нет ни в выписке, ни в заявке, → { value, page }
+  const out = [];
+  for (const { page: i, index, text, got, words } of objectAddresses(doc)) {
+    const page = doc.pages[i];
+    const diff = [];
+    let against = null;
+    for (const k of Object.keys(ADDR_NAMES)) {
+      if (got[k] === undefined) continue;
+      const ref = egrn?.got[k] !== undefined ? { value: egrn.got[k], egrn: true, words: egrn.words }
+        : mine[k] !== undefined ? { value: mine[k], mine: true, words: mineWords } : first[k];
+      if (!ref) { first[k] = { value: got[k], page: i, words }; continue; }
+      if (samePart(k, got[k], words, ref.value, ref.words)) continue;
+      if (ref.egrn) against = 'egrn';
+      else if (ref.mine && !against) against = 'mine';
+      diff.push({ k, ref });
+    }
+    if (!diff.length) continue;
+    const refName = (ref) => (ref.egrn ? 'в выписке' : ref.mine ? 'в заявке' : `на стр. ${ref.page + 1}`);
+    const parts = diff.map(({ k, ref }) => (Array.isArray(got[k]) ? ADDR_NAMES[k]
+      : `${ADDR_NAMES[k]} ${got[k]}, а ${refName(ref)} ${ref.value}`)).join('; ');
+    const where = against === 'egrn' ? `с адресом в выписке ЕГРН «${egrn.name}» (${egrn.text}, стр. ${egrn.page + 1})${mineDiffers ? `; в заявке — ${mineText}` : ''}`
+      : against === 'mine' ? `с адресом из заявки (${mineText})` : `с адресом объекта на стр. ${diff[0].ref.page + 1}`;
+    out.push({ page: i, quote: lineAround(page, index), text: `Адрес «${text}» не совпадает ${where}: ${parts} — проверьте, нет ли данных другого объекта` });
+  }
   return out;
 }
 

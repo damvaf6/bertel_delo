@@ -666,6 +666,24 @@ test('2.203: кадастровый номер в отчёте сверяетс�
   assert.deepEqual(await found(), []);
 });
 
+test('2.213: адрес объекта в отчёте сверяется с выпиской ЕГРН из дела', async () => {
+  const o = await inWork('Квартира: адрес по выписке');
+  const putDoc = (body, name) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } });
+  assert.equal((await putDoc('Выписка из Единого государственного реестра недвижимости\nВид объекта недвижимости: Помещение\nАдрес (местоположение): г. Москва, ул. Долевая, д. 3, кв. 18', 'Выписка ЕГРН квартира.txt')).status, 201);
+  assert.equal((await putResult(o, 'ОТЧЁТ ОБ ОЦЕНКЕ\nАдрес объекта оценки: г. Москва, ул. Долевая, д. 3, кв. 8', 'отчёт.txt', 'text/plain')).status, 201);
+  const found = async () => {
+    const res = await spec.req('POST', `/api/orders/${o.id}/review/ai`);
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    return res.body.ai.items.flatMap((i) => i.found ?? []).map((f) => f.text).filter((t) => /^Адрес/.test(t));
+  };
+  assert.deepEqual(await found(), [
+    'Адрес «г. Москва, ул. Долевая, д. 3, кв. 8» не совпадает с адресом в выписке ЕГРН «Выписка ЕГРН квартира.txt» (г. Москва, ул. Долевая, д. 3, кв. 18, стр. 1); в заявке — г. Москва, тестовая ул., 7: квартира 8, а в выписке 18 — проверьте, нет ли данных другого объекта',
+  ]);
+  await S.sql`update documents set deleted_at = now() where order_id = ${o.id} and kind = 'result'`;
+  assert.equal((await putResult(o, 'ОТЧЁТ ОБ ОЦЕНКЕ\nАдрес объекта оценки: город Москва, улица Долевая, дом 3, квартира 18', 'отчёт-2.txt', 'text/plain')).status, 201);
+  assert.deepEqual(await found(), []);
+});
 test('2.212: этаж и этажность в отчёте сверяются с выписками ЕГРН из дела', async () => {
   const o = await inWork('Квартира: этаж по выписке');
   const putDoc = (body, name) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
