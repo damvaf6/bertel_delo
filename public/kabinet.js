@@ -16,8 +16,13 @@ import { showExpertCard } from '/expertcard.js';
 import { showFirstHint, showHelp } from '/help.js';
 import { showProblems } from '/problems.js';
 import { matcher, wireSearch } from '/search.js';
+import { wireInstall } from '/pwa.js';
 
 const $ = (id) => document.getElementById(id);
+
+// Приложение на телефоне: карточка в «Заявках» (можно отложить) и постоянная кнопка в «Профиле».
+wireInstall({ box: $('install-box'), button: $('install-app'), help: $('install-help'), later: $('install-later') });
+wireInstall({ box: $('install-card'), button: $('install-app2'), help: $('install-help2') });
 const dateRu = (s) => new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
 
 async function start() {

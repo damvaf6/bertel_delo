@@ -5473,7 +5473,7 @@ test('осмотр при плохой связи (2.68): владелец по 
   await hctx.setOffline(true);
   await hp.getByLabel('Замечания помощника').fill('Подъезд закрыт, ждали консьержа');
   await hp.getByRole('button', { name: 'Сохранить данные' }).click();
-  await expect(hp.locator('#data-msg')).toHaveText('Нет связи с сервером — проверьте интернет и повторите');
+  await expect(hp.locator('#data-msg')).toHaveText('Нет связи — данные сохранены на телефоне. Нажмите «Сохранить данные», когда связь появится.');
   const kitchen = hp.locator('#steps li[data-step="kitchen"]');
   await kitchen.locator('input[type=file]').setInputFiles({ name: 'kitchen.jpg', mimeType: 'image/jpeg', buffer: jpeg });
   await expect(kitchen.locator('.msg')).toContainText('Нет связи — фото не потеряно');

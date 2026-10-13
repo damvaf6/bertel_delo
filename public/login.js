@@ -1,6 +1,8 @@
 import { api, say, formatPhone } from '/common.js';
+import { wireInstall } from '/pwa.js';
 
 const $ = (id) => document.getElementById(id);
+wireInstall({ box: $('install-box'), button: $('install-app'), help: $('install-help') });
 const msg = $('msg');
 const RESEND_SEC = 60; // как на сервере: новый код не чаще раза в минуту
 let phone = '';

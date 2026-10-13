@@ -4,6 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Вход · БЕРТЕЛ Дело</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#1f4e8c">
+  <link rel="icon" href="/icon-192.png" type="image/png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Дело">
   <link rel="stylesheet" href="/app.css">
   <script type="module" src="/login.js"></script>
 </head>
@@ -43,6 +49,12 @@
         <button type="button" class="link" id="change-phone">Изменить номер</button>
       </form>
       <p class="msg" id="msg" role="status" aria-live="polite"></p>
+    </section>
+    <section class="card hidden" id="install-box">
+      <h2>Дело — на экране телефона</h2>
+      <p class="muted">Установите «Дело» как приложение: значок на экране «Домой», без магазина приложений и бесплатно.</p>
+      <button type="button" class="secondary wide" id="install-app">Установить</button>
+      <p class="msg hidden" id="install-help" role="status" aria-live="polite"></p>
     </section>
     <p class="center"><a class="link" href="/ekspertiza">Что такое «Дело: Экспертиза»</a></p>
   </main>

@@ -4,12 +4,19 @@
 // Та же страница — для выезда помощника по экспресс-заявке (задача 2.4): /osmotr?visit=номер, со входом в кабинет; помощник
 // ещё видит, где объект (поля из описания модуля), и заполняет данные с объекта.
 // Задача 2.20: если эксперт попросил переснять шаг — просьба видна у шага, новое фото этого шага её закрывает.
+// Черновик осмотра (задача штаба: приложение с экрана «Домой»): неотправленные фото, данные с объекта и сами шаги хранятся
+// на телефоне (drafts.js) — страницу можно закрыть или открыть без связи, ничего не пропадёт; отправлено — черновик удалён.
 import { api, el, say } from '/common.js';
+import { getDraft, putDraft, dropDraft } from '/drafts.js';
+import '/pwa.js';
 
 const $ = (id) => document.getElementById(id);
 const visitId = new URLSearchParams(location.search).get('visit');
-const token = visitId ? '' : decodeURIComponent(location.hash.slice(1));
-const headers = visitId ? {} : { 'x-inspect-token': token };
+let token = visitId ? '' : decodeURIComponent(location.hash.slice(1));
+const headers = {};
+const LAST = 'inspect:last';            // ссылка владельца, открытая последней: страница без «#…» продолжает её
+let draftKey = '';
+let draft = { photos: [] };
 const API = visitId
   ? { view: `/api/visits/${encodeURIComponent(visitId)}`, photos: `/api/visits/${encodeURIComponent(visitId)}/photos`, finish: `/api/visits/${encodeURIComponent(visitId)}/finish` }
   : { view: '/api/inspect', photos: '/api/inspect/photos', finish: '/api/inspect/finish' };
@@ -27,7 +34,9 @@ if (!visitId) history.replaceState(null, '', location.pathname);
 
 const dateRu = (s) => new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
 
-function closed(text) {
+// keep — черновик не удалять (не вошёл в кабинет, нет связи): фото и данные ещё понадобятся.
+function closed(text, { keep = false } = {}) {
+  if (!keep && draftKey) { dropDraft(draftKey); if (!visitId) dropDraft(LAST); draftKey = ''; }
   $('intro').classList.add('hidden');
   $('steps-box').classList.add('hidden');
   $('closed').classList.remove('hidden');
@@ -35,13 +44,24 @@ function closed(text) {
 }
 
 async function load() {
+  if (!visitId && !token) token = (await getDraft(LAST)) || '';
+  if (!visitId) headers['x-inspect-token'] = token;
+  draftKey = visitId ? `visit:${visitId}` : token ? `inspect:${token}` : '';
+  if (draftKey) {
+    draft = (await getDraft(draftKey)) || { photos: [] };
+    if (!visitId) putDraft(LAST, token);
+  }
+  let offline = false;
   try {
     info = visitId ? visitInfo((await api('GET', API.view)).visit) : await api('GET', API.view, undefined, headers);
   } catch (err) {
-    if (visitId) return closed(err.status === 401 ? 'Войдите в кабинет и откройте выезд в разделе «Специалист».' : err.status === 404 ? 'Выезд не найден.' : err.message);
-    return closed(err.status === 404 ? 'Ссылка неверная или больше не действует. Попросите эксперта прислать новую.' : err.message);
+    // Нет связи, а шаги уже открывались на этом телефоне — продолжаем по сохранённому: фото уйдут, когда связь появится.
+    if (err.network && draft.info) { info = draft.info; offline = true; }
+    else if (visitId) return closed(err.status === 401 ? 'Войдите в кабинет и откройте выезд в разделе «Специалист».' : err.status === 404 ? 'Выезд не найден.' : err.message, { keep: err.status !== 404 });
+    else return closed(err.status === 404 ? 'Ссылка неверная или больше не действует. Попросите эксперта прислать новую.' : err.message, { keep: err.status !== 404 });
   }
   if (!info.active) return closed(info.message);
+  if (!offline) saveDraft({ info });
   $('service').textContent = info.service || '';
   // Почерковедческая (2.81): снимают документ и образцы подписи, а не объект на месте.
   if (info.subject === 'document') {
@@ -73,6 +93,46 @@ async function load() {
   } else $('expires').textContent = `Ссылка действует до ${dateRu(info.expires_at)}.`;
   if (info.steps.some((s) => s.retake)) $('expires').textContent += ' Эксперт просит переснять шаги, отмеченные ниже.';
   renderSteps();
+  restore(offline);
+}
+
+// ——— Черновик на телефоне ———
+
+function saveDraft(patch) {
+  if (!draftKey) return;
+  Object.assign(draft, patch, { saved_at: new Date().toISOString() });
+  putDraft(draftKey, draft);
+}
+
+// Очередь в черновике — без ссылок на шаги страницы (их не сохранить), только номер шага.
+const saveQueue = () => saveDraft({
+  photos: queue.map((q) => ({ id: q.id, step: q.s.id, blob: q.blob, thumbBytes: q.thumbBytes, shotAt: q.shotAt, pos: q.pos })),
+});
+
+// Снятое в прошлый раз, но не отправленное — снова в очередь; данные с объекта — в поля.
+function restore(offline) {
+  const byId = new Map(info.steps.map((s) => [s.id, s]));
+  for (const p of draft.photos || []) {
+    const s = byId.get(p.step);
+    if (s && p.blob) queue.push({ ...p, s });
+  }
+  if (visitId && draft.data) {
+    for (const node of $('data-fields').querySelectorAll('[data-field]')) {
+      if (draft.data[node.dataset.field] !== undefined) node.value = draft.data[node.dataset.field];
+    }
+    say($('data-msg'), 'Данные с объекта ещё не отправлены — они сохранены на телефоне. Нажмите «Сохранить данные», когда будет связь.', 'warn');
+  }
+  if (offline) say($('progress'), 'Нет связи — показываем сохранённое на этом телефоне. Снимайте дальше: фото уйдут, когда связь появится.', 'warn');
+  if (!queue.length && !offline && !(visitId && draft.data)) return;
+  $('start').classList.add('hidden');
+  $('steps-box').classList.remove('hidden');
+  startGeo();
+  if (queue.length) {
+    say($('finish-msg'), `Фото с прошлого раза ещё не отправлены: ${queue.length}. Отправляем — страницу можно не закрывать.`, 'warn');
+    $('finish-msg').dataset.wait = '1';
+    paintQueue();
+    pump();
+  }
 }
 
 // ——— Выезд помощника (2.4) ———
@@ -103,11 +163,20 @@ function renderVisit() {
   }));
 }
 
-async function saveData() {
+function fieldData() {
   const data = {};
   for (const node of $('data-fields').querySelectorAll('[data-field]')) data[node.dataset.field] = node.value;
-  info.data = (await api('PUT', `${API.view}/data`, { data })).visit.data;
+  return data;
 }
+
+async function saveData() {
+  info.data = (await api('PUT', `${API.view}/data`, { data: fieldData() })).visit.data;
+  saveDraft({ data: null, info });
+}
+
+// Каждое изменение поля сразу ложится в черновик на телефоне — закрытая страница или пропавшая связь его не сотрут.
+$('data-fields').addEventListener('input', () => saveDraft({ data: fieldData() }));
+$('data-fields').addEventListener('change', () => saveDraft({ data: fieldData() }));
 
 $('data-save').addEventListener('click', async () => {
   $('data-save').disabled = true;
@@ -116,6 +185,7 @@ $('data-save').addEventListener('click', async () => {
     say($('data-msg'), 'Данные сохранены', 'ok');
   } catch (err) {
     if (err.status === 410) return closed(err.message);
+    if (err.network) { saveDraft({ data: fieldData() }); return say($('data-msg'), 'Нет связи — данные сохранены на телефоне. Нажмите «Сохранить данные», когда связь появится.', 'warn'); }
     say($('data-msg'), err.message);
   } finally { $('data-save').disabled = false; }
 });
@@ -189,6 +259,7 @@ async function enqueue(s, file) {
   // Картинка для дела едет впереди снимка тем же запросом: при повторе по плохой связи они не разойдутся.
   const type = blob.type || file.type || 'image/jpeg';
   queue.push({ id: photoId(), s, blob: new Blob(thumb ? [thumb, blob] : [blob], { type }), thumbBytes: thumb ? thumb.size : 0, shotAt, pos });
+  saveQueue();
   paintQueue();
   pump();
 }
@@ -215,7 +286,7 @@ function pause(ms) {
 async function send(q) {
   const h = { ...headers, 'x-step': q.s.id, 'x-shot-at': q.shotAt, 'x-photo-id': q.id };
   if (q.thumbBytes) h['x-thumb-bytes'] = String(q.thumbBytes);
-  if (q.pos) Object.assign(h, { 'x-lat': String(q.pos.coords.latitude), 'x-lon': String(q.pos.coords.longitude), 'x-accuracy': String(q.pos.coords.accuracy) });
+  if (q.pos) Object.assign(h, { 'x-lat': String(q.pos.lat), 'x-lon': String(q.pos.lon), 'x-accuracy': String(q.pos.accuracy) });
   return api('POST', API.photos, q.blob, h, { timeoutMs: UPLOAD_TIMEOUT_MS });
 }
 
@@ -230,6 +301,7 @@ async function pump() {
       try {
         const r = await send(q);
         queue.shift();
+        saveQueue();
         fails = 0;
         delete status.dataset.wait;
         q.s.photos = r.photos;
@@ -241,6 +313,7 @@ async function pump() {
         if (err.status === 410) { queue.length = 0; return closed(err.message); }
         if (!retryable(err)) {
           queue.shift();
+          saveQueue();
           delete status.dataset.wait;
           say(status, err.message);
         } else {
@@ -280,10 +353,13 @@ function startGeo() {
   }, { enableHighAccuracy: true, maximumAge: 30_000, timeout: 20_000 });
 }
 
+// Место — простыми числами: так его можно сохранить в черновике вместе с фото.
+const plain = (p) => (p ? { lat: p.coords.latitude, lon: p.coords.longitude, accuracy: p.coords.accuracy } : null);
+
 function position() {
-  if (lastPos && Date.now() - lastPos.timestamp < GEO_FRESH_MS) return Promise.resolve(lastPos);
+  if (lastPos && Date.now() - lastPos.timestamp < GEO_FRESH_MS) return Promise.resolve(plain(lastPos));
   if (geoDenied || !navigator.geolocation) return Promise.resolve(null);
-  return new Promise((resolve) => navigator.geolocation.getCurrentPosition(resolve, () => resolve(null), { enableHighAccuracy: true, timeout: 8000, maximumAge: GEO_FRESH_MS }));
+  return new Promise((resolve) => navigator.geolocation.getCurrentPosition((p) => resolve(plain(p)), () => resolve(null), { enableHighAccuracy: true, timeout: 8000, maximumAge: GEO_FRESH_MS }));
 }
 
 // Уменьшить снимок (JPEG) и сделать картинку для дела; не вышло (например, HEIC в этом браузере) — уходит исходный файл,
