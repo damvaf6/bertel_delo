@@ -5,6 +5,7 @@ import { serviceName } from '/match.js';
 import { loadNotaries } from '/notaries.js';
 import { loadTranslationPrices } from '/tprices.js';
 import { loadPayCheck } from '/paycheck.js';
+import { loadAdminCard } from '/permitcard.js';
 
 const $ = (id) => document.getElementById(id);
 let found = null;
@@ -73,6 +74,7 @@ async function loadSpecialist(userId) {
   $('sp-permits').replaceChildren(...(specialist?.permits ?? []).map((p) => el('li', { class: 'row' },
     el('span', { text: `${serviceName(p.module, p.service)}${p.valid_until ? ` · до ${p.valid_until}` : ''}` }),
     el('button', { type: 'button', class: 'danger', 'data-action': 'remove-permit', onclick: () => removePermit(p) }, 'Убрать'))));
+  await loadAdminCard(specialist ? userId : null);
   // Чей профиль на экране — чтобы правка не ушла предыдущему найденному (экран дорисовывается после поиска).
   if (found?.id === userId) $('admin-specialist').dataset.phone = found.phone;
 }

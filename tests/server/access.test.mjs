@@ -487,6 +487,22 @@ test('сертификат перевода (2а.5): выдаёт только �
   assert.equal((await U.owner.req('GET', '/api/certificates/AAAAAAAAAAAA')).status, 404);
 });
 
+test('карточка допуска (задача штаба 81b2): выдаёт и отзывает только администратор, свою видит исполнитель (подробно — permit-cards.test.mjs)', async () => {
+  cover('permit_cards.admin.get'); cover('permit_cards.issue'); cover('permit_cards.update'); cover('permit_cards.revoke');
+  cover('specialist.me.card'); cover('specialist.me.card.sheet');
+  const url = `/api/admin/specialists/${U.spec.user.id}/card`;
+  for (const c of [U.owner, U.headA, U.dispatcher, U.spec, U.stranger]) {
+    assert.equal((await c.req('GET', url)).status, 404);
+    assert.equal((await c.req('POST', url, { valid_until: '2099-01-01' })).status, 404);
+    assert.equal((await c.req('PUT', url, { valid_until: '2099-01-01' })).status, 404);
+    assert.equal((await c.req('POST', `${url}/revoke`, { reason: 'request' })).status, 404);
+  }
+  assert.equal((await U.admin.req('GET', url)).status, 200);
+  assert.equal((await U.spec.req('GET', '/api/specialist/me/card')).status, 200);
+  assert.equal((await U.stranger.req('GET', '/api/specialist/me/card')).status, 404);
+  assert.equal((await U.stranger.req('GET', '/api/specialist/me/card/sheet')).status, 404);
+});
+
 test('шаги заказа перевода (2а.6): видят стороны заявки, отмечают исполнитель или платформа (подробно — steps.test.mjs)', async () => {
   for (const id of ['steps.list', 'steps.mark', 'steps.undo']) cover(id);
   // У заявки об оценке шагов нет: стороны видят «нет блока», отметить нечего; посторонним — «не найдено».
@@ -2577,7 +2593,7 @@ test('нагрузка экспертов на две недели (2.111): то
 
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {
   const PUBLIC = ['health', 'auth.code', 'auth.verify', 'files.memory', 'files.memory.upload', 'test.calls', 'test.script', 'test.reset', 'test.sign.mode', 'test.mail.inbound', 'stage.login', 'payments.notify',
-    'inspect.view', 'inspect.photo', 'inspect.finish', 'certificates.check'];
+    'inspect.view', 'inspect.photo', 'inspect.finish', 'certificates.check', 'permit_cards.check'];
   const ops = S.app.locals.ops;
   const extraPublic = ops.filter((o) => o.auth === 'public' && !PUBLIC.includes(o.id)).map((o) => o.id);
   assert.deepEqual(extraPublic, [], `новые открытые операции: ${extraPublic.join(', ')}`);

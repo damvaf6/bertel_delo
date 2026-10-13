@@ -1078,6 +1078,31 @@
         <ul class="list" id="specialist-permits"></ul>
         <p class="muted hidden" id="specialist-permits-empty">Допусков пока нет. Допуск выдаёт администратор платформы.</p>
       </div>
+      <div class="card permit-card" id="mycard-box">
+        <h2>Карточка допуска</h2>
+        <p class="muted hidden" id="mycard-empty">Карточки пока нет. Её выдаёт администратор платформы, когда у Вас есть допуск
+          к услуге и в профиле указаны фамилия, имя и отчество.</p>
+        <div class="hidden" id="mycard">
+          <p id="mycard-state"></p>
+          <dl class="facts">
+            <dt>Номер</dt><dd id="mycard-number"></dd>
+            <dt>Действует до</dt><dd id="mycard-until"></dd>
+            <dt>Код для проверки</dt><dd id="mycard-code" class="mono"></dd>
+          </dl>
+          <p id="mycard-level"></p>
+          <ul class="checks" id="mycard-checks"></ul>
+          <div id="mycard-share">
+            <img class="qr" id="mycard-qr" alt="QR-код страницы проверки карточки">
+            <p class="muted">Покажите QR-код заказчику или дайте ссылку: на странице проверки видно, что карточка действует, срок,
+              услуги и пройденные проверки. Телефон и документы там не показываются.</p>
+            <p><a id="mycard-url" target="_blank" rel="noopener"></a></p>
+            <button type="button" class="secondary wide" id="mycard-sheet">Скачать карточку (Word, с QR-кодом)</button>
+          </div>
+          <p class="muted">Проверку «Подпись КЭП» платформа отмечает после того, как сотрудник проверит Вашу подпись под
+            результатом на Госуслугах. Ключ подписи остаётся только у Вас.</p>
+        </div>
+        <p class="msg" id="mycard-msg" role="status" aria-live="polite"></p>
+      </div>
       <div class="card" id="dossier-box">
         <h2>Моё досье</h2>
         <p class="muted">Диплом, квалификационный аттестат, СРО, полисы. Заполните один раз: сведения сами попадут в черновик
@@ -1248,6 +1273,34 @@
             <input id="sp-until" type="date">
           </div>
           <button type="button" class="secondary wide" id="sp-add-permit">Дать допуск</button>
+          <div class="permit-card" id="sp-card-box">
+            <h2 class="gap">Карточка допуска</h2>
+            <div class="hidden" id="sp-card">
+              <p id="sp-card-state"></p>
+              <p class="muted" id="sp-card-facts"></p>
+              <ul class="checks" id="sp-card-checks"></ul>
+              <p><a id="sp-card-url" target="_blank" rel="noopener"></a></p>
+            </div>
+            <div class="field" id="sp-card-until-box">
+              <label for="sp-card-until">Карточка действует до</label>
+              <input id="sp-card-until" type="date">
+            </div>
+            <label class="row"><input type="checkbox" id="sp-card-docs"> Документы об образовании и квалификации сверены по копиям</label>
+            <button type="button" class="secondary wide" id="sp-card-issue">Выдать карточку</button>
+            <button type="button" class="secondary wide hidden" id="sp-card-save">Сохранить срок и отметку</button>
+            <div class="hidden" id="sp-card-revoke-box">
+              <div class="field">
+                <label for="sp-card-reason">Причина отзыва</label>
+                <select id="sp-card-reason"></select>
+              </div>
+              <div class="field">
+                <label for="sp-card-note">Пояснение (видит только платформа)</label>
+                <input id="sp-card-note" type="text" maxlength="500">
+              </div>
+              <button type="button" class="danger wide" id="sp-card-revoke">Отозвать карточку</button>
+            </div>
+            <ul class="list" id="sp-card-history"></ul>
+          </div>
           <div class="hidden" id="sp-langs-box">
             <h2 class="gap">Документы о знании языка</h2>
             <p class="muted">К нотариальным переводам подбор берёт только проверенный документ по языку заявки. Проверяйте по копии.</p>
