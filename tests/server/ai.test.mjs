@@ -684,6 +684,35 @@ test('2.213: адрес объекта в отчёте сверяется с в�
   assert.equal((await putResult(o, 'ОТЧЁТ ОБ ОЦЕНКЕ\nАдрес объекта оценки: город Москва, улица Долевая, дом 3, квартира 18', 'отчёт-2.txt', 'text/plain')).status, 201);
   assert.deepEqual(await found(), []);
 });
+
+test('2.218: у находки по выписке ЕГРН — где в выписке значение, файл выписки открывается; без выписки — нет', async () => {
+  const o = await inWork('Квартира: находка ведёт к выписке');
+  const put = await owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from('Выписка из Единого государственного реестра недвижимости\nВид объекта недвижимости: Помещение\nКадастровый номер: 77:01:0001001:4321\nПлощадь, м2: 47,3\nНомер, тип этажа, на котором расположено помещение, машино-место: Этаж № 6\nАдрес (местоположение): г. Москва, ул. Долевая, д. 3, кв. 18'), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Выписка ЕГРН.txt') } });
+  assert.equal(put.status, 201, JSON.stringify(put.body));
+  const egrnId = put.body.document.id;
+  assert.equal((await putResult(o, 'ОТЧЁТ ОБ ОЦЕНКЕ\nКвартира, кадастровый номер 77:01:0001001:1234\nОбщей площадью 45,1 кв. м\nКвартира на 5 этаже\nАдрес объекта: г. Москва, ул. Долевая, д. 3, кв. 8', 'отчёт.txt', 'text/plain')).status, 201);
+  const res = await spec.req('POST', `/api/orders/${o.id}/review/ai`);
+  assert.equal(res.status, 201, JSON.stringify(res.body));
+  const found = res.body.ai.items.flatMap((i) => i.found ?? []).filter((f) => /выписке ЕГРН/.test(f.text));
+  const at = (re) => found.find((f) => re.test(f.text))?.egrn;
+  assert.equal(found.length, 4, JSON.stringify(found));
+  for (const f of found) assert.equal(f.egrn?.doc_id, egrnId, f.text);
+  assert.deepEqual(at(/^Кадастровый/), { doc_id: egrnId, file: 'Выписка ЕГРН.txt', where: 'стр. 1', quote: 'Кадастровый номер: 77:01:0001001:4321' });
+  assert.equal(at(/^Площадь/).quote, 'Площадь, м2: 47,3');
+  assert.equal(at(/^Этаж/).quote, 'Номер, тип этажа, на котором расположено помещение, машино-место: Этаж № 6');
+  assert.equal(at(/^Адрес/).quote, 'Адрес (местоположение): г. Москва, ул. Долевая, д. 3, кв. 18');
+  // Сохранённая проверка отдаёт то же; файл выписки исполнитель открывает, чужой — нет.
+  const saved = (await spec.req('GET', `/api/orders/${o.id}/review`)).body.ai.items.flatMap((i) => i.found ?? []).filter((f) => f.egrn);
+  assert.equal(saved.length, 4);
+  assert.equal((await spec.req('GET', `/api/documents/${egrnId}/link`)).status, 200);
+  assert.equal((await other.req('GET', `/api/documents/${egrnId}/link`)).status, 404);
+  // Без выписки сверка с заявкой — у находки нет ссылки на выписку.
+  await S.sql`update documents set deleted_at = now() where id = ${egrnId}`;
+  const again = (await spec.req('POST', `/api/orders/${o.id}/review/ai`)).body.ai.items.flatMap((i) => i.found ?? []);
+  assert.ok(again.length > 0);
+  assert.ok(again.every((f) => !f.egrn), JSON.stringify(again));
+});
 test('2.212: этаж и этажность в отчёте сверяются с выписками ЕГРН из дела', async () => {
   const o = await inWork('Квартира: этаж по выписке');
   const putDoc = (body, name) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
