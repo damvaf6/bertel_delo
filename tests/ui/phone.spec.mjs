@@ -8488,6 +8488,56 @@ test('2.195: мои сроки — срок в дни «не принимаю н
   await shot(page, 'c37c-ekspert-peredat-kollege');
 });
 
+// 2.215: диспетчер отказал в переносе, а срок в дни «не принимаю дела» — в «Сегодня» эксперта от организации своя строка с
+// «Попросить руководителя передать дело»: дело открывается на просьбе руководителю, поле причины в фокусе.
+test('2.215: «Сегодня» — отказали в переносе, а срок в дни «не принимаю дела»: попросить руководителя передать дело', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const page = await ctx();
+  const dp = await ctx();
+  const customer = await signIn(await ctx(), '+79990022151');
+  const disp = await signIn(dp, '+79990022153');
+  const expert = await signIn(page, '+79990022152');
+  const head = await signIn(await ctx(), '+79990022154');
+  const id = await db(async (c) => {
+    await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Отказ в переносе ${Date.now() % 100000}»') returning id`);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head')", [org.id, head.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'member')", [org.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id) values ($1, $2)", [expert.id, org.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Квартира: срок в отпуске, перенос не дали', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Отказная ул., 5","area":"40"}') returning id`,
+    [customer.id, expert.id, inDays(2)]);
+    return o.id;
+  });
+  const ru = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+  expect((await page.request.post(`/api/orders/${id}/deadline-requests`, { data: { new_deadline: inDays(9), reason: 'Меня не будет' }, headers: H })).status()).toBe(201);
+  const reqs = await (await dp.request.get(`/api/orders/${id}/deadline-requests`)).json();
+  expect((await dp.request.post(`/api/orders/${id}/deadline-requests/${reqs.open.id}/decide`,
+    { data: { approve: false, answer: 'Банк не продлит срок' }, headers: H })).status()).toBe(200);
+  await db((c) => c.query("update specialists set away_until = (now() at time zone 'Europe/Moscow')::date + 6, away_note = 'отпуск' where user_id = $1", [expert.id]));
+
+  await page.goto('/kabinet');
+  await expect(page.locator('#today-box li[data-today="away-declined"]')).toHaveText('Отказали в переносе — срок в дни, когда Вы не принимаете дела · 1');
+  await expect(page.locator('#today-box li[data-today="extend-answer"]')).toHaveCount(0);
+  const row = page.locator('#today-box li[data-today-item="away-declined"]');
+  await expect(row.locator('[data-role="away-declined-why"]')).toHaveText(
+    `Диспетчер отказал в переносе на ${ru(inDays(9))} — срок ${ru(inDays(2))} · осталось 2 дн., а Вы не принимаете дела до ${ru(inDays(6))}`);
+  await expect(row).toContainText('пояснение: Банк не продлит срок');
+  await row.scrollIntoViewIfNeeded();
+  await shot(page, 'c37d-ekspert-segodnya-otkaz-v-perenose-otpusk');
+  await row.locator('[data-action="away-handover"]').click();
+  await expect(page.locator('#handover-box')).toBeVisible();
+  await expect(page.locator('#handover-reason')).toBeFocused();
+  await page.locator('#handover-reason').fill('Отпуск, перенос срока не согласовали');
+  await shot(page, 'c37e-ekspert-prosba-peredat-posle-otkaza');
+  await page.locator('#handover-form button[type="submit"]').click();
+  await expect(page.locator('#handover-msg')).toContainText('Просьба отправлена руководителю');
+  await page.goto('/kabinet');
+  await expect(page.locator('#today-box')).toBeVisible();
+  await expect(page.locator('#today-box li[data-today="away-declined"]')).toHaveCount(0);
+});
+
 // 2.190: прогон «как эксперт и руководитель» по пачке 2.181–2.189 — одна организация, одни дела. Телефон эксперта — в
 // Екатеринбурге (время по Москве, 2.181); осмотр — полоса картинок (2.183); ИИ-проверка: перепутанные цены аналогов (2.184),
 // этаж «3/9» при заявке «3 из 9» — не находка (2.187); руководитель перед подписью видит ИИ-проверку эксперта (2.186),

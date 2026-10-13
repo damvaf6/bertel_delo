@@ -263,3 +263,49 @@ test('2.195: срок в дни «не принимаю новые дела» �
   assert.ok(!(await solo.req('GET', `/api/orders/${s.id}/deadline-requests`)).body.reasons.some((x) => x.id === 'away'));
   for (const c of [spec, solo]) await S.sql`update specialists set away_until = null, away_note = null where user_id = ${c.user.id}`;
 });
+
+// 2.215: диспетчер отказал в переносе, а срок в дни «не принимаю дела» — в «Сегодня» эксперта от организации строка
+// «Отказали в переносе…» (вместо «Ответа на просьбу») с «Попросить руководителя передать дело»; у частного эксперта — нет.
+test('2.215: отказ в переносе, а срок в дни «не принимаю дела» — в «Сегодня» попросить руководителя передать дело', async () => {
+  const today = todayMsk();
+  const until = addDays(today, 12);
+  const o = await inWork('Отказ: срок в отпуске');
+  const s = await inWork('Частный отказ: срок в отпуске', solo);
+  const o2 = await inWork('Отказ: срок после отпуска');
+  for (const c of [spec, solo]) await S.sql`update specialists set away_until = ${until}, away_note = 'отпуск' where user_id = ${c.user.id}`;
+  const expertToday = async (c) => (await c.req('GET', '/api/today')).body.expert;
+  const decline = async (c, x) => {
+    const r = await c.req('POST', `/api/orders/${x.id}/deadline-requests`, { new_deadline: addDays(until, 2), reason: 'Меня не будет', from: addDays(today, 9) });
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    const d = await dispatcher.req('POST', `/api/orders/${x.id}/deadline-requests/${r.body.open.id}/decide`, { approve: false, answer: 'Заказчик не согласен' });
+    assert.equal(d.status, 200, JSON.stringify(d.body));
+  };
+  // Пока просьба ждёт ответа — строки нет.
+  assert.equal((await expertToday(spec)).away_declined.some((x) => x.id === o.id), false);
+  await decline(spec, o);
+  await decline(solo, s);
+  let t = await expertToday(spec);
+  const row = t.away_declined.find((x) => x.id === o.id);
+  assert.deepEqual([row?.away_until, row?.asked, row?.answer, row?.deadline], [until, addDays(until, 2), 'Заказчик не согласен', addDays(today, 9)]);
+  assert.equal(t.extend_answer.some((x) => x.id === o.id), false, 'в «Ответе на просьбу» не повторяется');
+  // Частный эксперт: передать некому — обычный «Ответ на просьбу о переносе».
+  t = await expertToday(solo);
+  assert.equal(t.away_declined.some((x) => x.id === s.id), false);
+  assert.equal(t.extend_answer.some((x) => x.id === s.id), true);
+  // Открыл «Срок» в деле — строка остаётся, пока не попросил передать.
+  await spec.req('GET', `/api/orders/${o.id}/deadline-requests`);
+  assert.equal((await expertToday(spec)).away_declined.some((x) => x.id === o.id), true);
+  // Попросил руководителя передать — строки нет; руководитель отказал — тоже нет (решение уже принято).
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/handover`, { reason: 'Отпуск, перенос не согласовали' })).status, 201);
+  assert.equal((await expertToday(spec)).away_declined.some((x) => x.id === o.id), false);
+  assert.equal((await head.req('POST', `/api/orgs/${org.id}/cases/${o.id}/handover/decline`, { answer: 'Некому' })).status, 200);
+  assert.equal((await expertToday(spec)).away_declined.some((x) => x.id === o.id), false);
+  // Срок после дня возвращения — строки нет ни у кого.
+  await decline(spec, o2);
+  assert.equal((await expertToday(spec)).away_declined.some((x) => x.id === o2.id), true);
+  await S.sql`update specialists set away_until = ${addDays(today, 5)} where user_id = ${spec.user.id}`;
+  assert.equal((await expertToday(spec)).away_declined.some((x) => x.id === o2.id), false);
+  // Чужой не видит.
+  assert.equal(((await colleague.req('GET', '/api/today')).body.expert?.away_declined ?? []).some((x) => [o.id, o2.id].includes(x.id)), false);
+  for (const c of [spec, solo]) await S.sql`update specialists set away_until = null, away_note = null where user_id = ${c.user.id}`;
+});
