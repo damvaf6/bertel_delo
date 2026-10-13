@@ -9441,3 +9441,52 @@ test('дела экспертов (2.216): отбор «Осмотр не зак
   await expect(hp.locator('[data-filter="inspect"]')).toHaveText('Осмотр не закончен · 1');
   for (const p of [cp, ep, hp]) await p.context().close();
 });
+
+// 2.219: руководитель просил попросить перенос срока (2.201) — в «Моих сроках» у дела «напоминал руководитель …» и кнопка
+// «Попросить перенос», пока эксперт перенос не попросил; день не перегружен и не в отпуске — кнопка всё равно есть.
+test('2.219: мои сроки — отметка «напоминал руководитель» у дела, по которому пришло «попросите перенос»', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), hp = await ctx();
+  const customer = await signIn(await ctx(), '+79990021901');
+  const expert = await signIn(ep, '+79990021902'), head = await signIn(hp, '+79990021903');
+  const { orgId, A } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Напоминал ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Строгова Инна' where id = $1", [head.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Просили перенос', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Строгая ул., 3","area":"40"}') returning id`,
+    [customer.id, expert.id, inDays(5)]);
+    return { orgId: org.id, A: o.id };
+  });
+  const sched = () => ep.locator(`#schedule-days li[data-schedule-item="deadline"]`).filter({ hasText: 'Просили перенос' });
+  await ep.goto('/kabinet#specialist');
+  await expect(sched()).toBeVisible();
+  await expect(sched()).not.toContainText('напоминал руководитель');
+  await expect(sched().locator('[data-ask-extend]')).toHaveCount(0);
+
+  expect((await hp.request.post(`/api/orgs/${orgId}/cases/${A}/remind`, { data: { kind: 'extend' }, headers: H })).status()).toBe(201);
+  await ep.reload();
+  const today = new Date().toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long' });
+  await expect(sched()).toContainText(`напоминал руководитель Строгова Инна ${today} — попросите перенос срока`);
+  await expect(sched().locator('a.open')).toHaveClass(/hot/);
+  const ask = sched().locator(`[data-ask-extend="${A}"]`);
+  await expect(ask).toHaveText('Попросить перенос');
+  await sched().scrollIntoViewIfNeeded();
+  await shot(ep, 'c55-2219-ekspert-sroki-napominal-rukovoditel');
+  await ask.click();
+  await expect(ep.locator('#deadline-box')).toBeVisible();
+  await ep.locator('#deadline-new').fill(inDays(9));
+  await ep.locator('#deadline-reason').fill('Не успеваю к сроку, прошу перенести');
+  await ep.locator('#deadline-send').click();
+  await expect(ep.locator('#deadline-msg')).toContainText('Просьба отправлена диспетчеру');
+
+  // Попросил — отметки нет, у дела «просите перенести … — ждёт ответа».
+  await ep.goto('/kabinet#specialist');
+  await expect(sched()).toContainText('ждёт ответа');
+  await expect(sched()).not.toContainText('напоминал руководитель');
+  await expect(sched().locator('[data-ask-extend]')).toHaveCount(0);
+  for (const p of [ep, hp]) await p.context().close();
+});

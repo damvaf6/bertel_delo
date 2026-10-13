@@ -115,3 +115,43 @@ test('руководитель просит эксперта попросить 
   assert.equal((await remind(o)).status, 201);
   assert.equal((await caseOf(o)).remind.kind, 'case');
 });
+
+// «Мои сроки на две недели» (2.219): руководитель просил попросить перенос срока — у дела отметка «напоминал руководитель»
+// и кнопка «Попросить перенос», пока эксперт не попросил перенос. Обычное «Напомнить» отметки не даёт.
+test('«Мои сроки»: отметка «напоминал руководитель» у дела, по которому пришло «попросите перенос»', async () => {
+  await head.req('PATCH', '/api/me', { full_name: 'Руководитель Строгий' });
+  const o = await inWork('Сроки: напоминал руководитель');
+  const plain = await inWork('Сроки: обычное напоминание');
+  const itemOf = async (c, id) => (await c.req('GET', '/api/specialist/me/schedule')).body.schedule.days
+    .flatMap((d) => d.items).find((i) => i.kind === 'deadline' && i.order_id === id);
+  assert.equal((await itemOf(spec, o.id)).head_ask, undefined);
+  assert.equal((await remind(plain)).status, 201);
+  assert.equal((await itemOf(spec, plain.id)).head_ask, undefined, 'обычное напоминание — без отметки');
+
+  assert.equal((await head.req('POST', `/api/orgs/${org.id}/cases/${o.id}/remind`, { kind: 'extend' })).status, 201);
+  let it = await itemOf(spec, o.id);
+  assert.equal(it.head_ask.by, 'Руководитель Строгий');
+  assert.ok(Date.parse(it.head_ask.at) > Date.now() - 60_000);
+  // День не перегружен и не в отпуске — кнопка «Попросить перенос» всё равно есть.
+  assert.equal(it.away_due, false);
+  assert.equal(it.can_extend, true);
+
+  // Эксперт попросил перенос — отметки нет; диспетчер отказал — отметка не возвращается (эксперт уже просил).
+  const r = await spec.req('POST', `/api/orders/${o.id}/deadline-requests`, { new_deadline: addDays(todayMsk(), 15), reason: 'В день срока меня не будет' });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  it = await itemOf(spec, o.id);
+  assert.equal(it.head_ask, undefined);
+  assert.equal(it.can_extend, false);
+  await S.sql`update deadline_requests set outcome = 'declined', decided_at = now() where order_id = ${o.id} and outcome is null`;
+  assert.equal((await itemOf(spec, o.id)).head_ask, undefined);
+  // Руководитель снова просит (через сутки) — отметка снова есть.
+  await S.sql`update case_reminders set created_at = created_at - interval '25 hours' where order_id = ${o.id}`;
+  await S.sql`update deadline_requests set requested_at = requested_at - interval '25 hours' where order_id = ${o.id}`;
+  assert.equal((await head.req('POST', `/api/orgs/${org.id}/cases/${o.id}/remind`, { kind: 'extend' })).status, 201);
+  assert.equal((await itemOf(spec, o.id)).head_ask.by, 'Руководитель Строгий');
+
+  // Дело передали коллеге — у него отметки нет (просили не его).
+  assert.equal((await head.req('POST', `/api/orgs/${org.id}/cases/${o.id}/transfer`, { specialist_id: colleague.user.id, reason: 'Отпуск' })).status, 200);
+  assert.equal((await itemOf(colleague, o.id)).head_ask, undefined);
+  assert.equal(await itemOf(spec, o.id), undefined);
+});
