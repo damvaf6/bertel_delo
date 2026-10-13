@@ -3,7 +3,8 @@
 // просьбы о переносе срока (на какой день просит, ждёт ответа) и дни, когда эксперт не принимает новые дела. Просроченные —
 // отдельным списком сверху. Только дела, где человек исполнитель (или помощник на выезде). Свои заметки с напоминанием
 // (2.115, видит только автор) — в день напоминания; не отмеченные «сделано» с прошлых дней — на сегодня (2.120); «за день
-// до срока» (2.149) — с отметкой и сроком дела (2.157).
+// до срока» (2.149) — с отметкой и сроком дела (2.157). Руководитель просил попросить перенос срока (2.201) — у дела
+// отметка «напоминал руководитель» (2.219), пока эксперт не попросил перенос.
 import { addDays, todayMsk } from './workflow.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { executorSignOrg } from '../access/policy.mjs';
@@ -38,7 +39,12 @@ export async function expertSchedule(sql, userId, registry, today = todayMsk()) 
   const service = (o) => registry.service(o.module, o.service)?.service.name ?? o.service;
   const orders = await sql`
     select o.id, o.title, o.module, o.service, o.status, to_char(o.deadline, 'YYYY-MM-DD') as deadline,
-      (select to_char(r.new_deadline, 'YYYY-MM-DD') from deadline_requests r where r.order_id = o.id and r.outcome is null) as extend_to
+      (select to_char(r.new_deadline, 'YYYY-MM-DD') from deadline_requests r where r.order_id = o.id and r.outcome is null) as extend_to,
+      -- Руководитель просил попросить перенос срока (2.201), а эксперт с тех пор перенос не просил (2.219).
+      (select json_build_object('at', c.created_at, 'by', u.full_name) from case_reminders c join users u on u.id = c.user_id
+       where c.order_id = o.id and c.expert_id = o.executor_user_id and c.kind = 'extend'
+         and not exists (select 1 from deadline_requests r where r.order_id = o.id and r.requested_at >= c.created_at)
+       order by c.created_at desc limit 1) as head_ask
     from orders o
     where o.executor_user_id = ${userId} and o.status in ('awaiting_executor', 'in_work', 'review') and o.deadline is not null
     order by o.deadline, o.created_at`;
@@ -77,6 +83,7 @@ export async function expertSchedule(sql, userId, registry, today = todayMsk()) 
   const overdue = [];
   for (const o of orders) {
     const it = { kind: 'deadline', ...base(o), status: o.status, deadline: o.deadline, extend_to: o.extend_to ?? null };
+    if (o.head_ask && o.status === 'in_work' && !o.extend_to) it.head_ask = { at: new Date(o.head_ask.at).toISOString(), by: o.head_ask.by || null };
     if (o.deadline < today) overdue.push(it);
     else put(o.deadline, it);
     // Просьба о переносе: на новый день — «сюда просите перенести», пока диспетчер не ответил.
@@ -112,7 +119,8 @@ export async function expertSchedule(sql, userId, registry, today = todayMsk()) 
       if (i.kind !== 'deadline') continue;
       // Срок сдачи в день «не принимаю новые дела» (2.195): попросить перенос на день возвращения или передать дело коллеге.
       i.away_due = d.away && i.status !== 'review';
-      i.can_extend = (d.busy || i.away_due) && i.status === 'in_work' && !i.extend_to;
+      // Руководитель просил попросить перенос (2.219) — кнопка у дела, даже если отпуск уже сдвинулся и день не перегружен.
+      i.can_extend = (d.busy || i.away_due || !!i.head_ask) && i.status === 'in_work' && !i.extend_to;
     }
   }
   // «Передать коллеге» — эксперту от организации, по делу в работе без открытой просьбы (2.107).

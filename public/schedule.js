@@ -10,6 +10,8 @@ const short = (iso) => {
   const [y, m, d] = iso.split('-').map(Number);
   return new Date(y, m - 1, d).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
 };
+// «13 октября» — когда напоминал руководитель (по Москве).
+const when = (t) => new Date(t).toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long' });
 const dayName = (d) => `${d.weekday}, ${short(d.date)}`;
 // Выездов в перегруженном дне (2.179): «выезд», «2 выезда».
 const trips = (n) => (n === 1 ? 'выезд' : `${n} ${n < 5 ? 'выезда' : 'выездов'}`);
@@ -29,7 +31,10 @@ function item(i, index) {
     const ext = i.extend_to ? `просите перенести на ${short(i.extend_to)} — ждёт ответа` : null;
     const hot = index !== null && index <= HOT_DAYS && i.status !== 'review';
     const away = i.away_due ? 'срок в дни, когда Вы не принимаете новые дела' : null;
-    const li = link(order('deadline'), `Сдать: ${i.title}`, [i.service, note, ext, away].filter(Boolean).join(' · '), hot || away ? 'hot' : '');
+    // 2.219: руководитель просил попросить перенос срока (2.201), а просьбы с тех пор нет.
+    const asked = i.head_ask ? `напоминал руководитель${i.head_ask.by ? ` ${i.head_ask.by}` : ''} ${when(i.head_ask.at)} — попросите перенос срока` : null;
+    const li = link(order('deadline'), `Сдать: ${i.title}`, [i.service, note, ext, away, asked].filter(Boolean).join(' · '), hot || away || asked ? 'hot' : '');
+    if (asked) li.dataset.headAsk = '1';
     // Перегруженный день (2.134): рядом — «Попросить перенос», дело откроется с готовой причиной и новым сроком. Срок в отпуске
     // (2.195) — причина «меня не будет», новый срок — день возвращения; эксперту от организации — ещё «Передать коллеге».
     if (i.can_extend) li.append(el('a', { class: 'ask', href: order(i.away_due ? 'away' : 'extend'), 'data-ask-extend': i.order_id, text: 'Попросить перенос' }));
