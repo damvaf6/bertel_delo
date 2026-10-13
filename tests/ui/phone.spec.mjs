@@ -4216,6 +4216,27 @@ test('осмотр без обязательных шагов (2.208): «Гот�
   // Заказчик плашки не видит.
   await page.goto(`/kabinet#order=${id}`);
   await expect(page.locator('#inspect-incomplete')).toBeHidden();
+
+  // Владелец доснял по новой ссылке всё, о чём просили (2.214): уведомление «досняли всё», строка в «Можно продолжать».
+  const again = await ep.request.post(`/api/orders/${id}/inspection`, { data: { days: 3 }, headers: H });
+  expect(again.status()).toBe(201);
+  const token2 = (await again.json()).path.split('#')[1];
+  for (const st of ['entrance', 'door', 'rooms', 'bathroom', 'window_view', 'surroundings']) {
+    const sent = await page.request.post('/api/inspect/photos', { data: jpeg, headers: { ...H, 'x-inspect-token': token2, 'content-type': 'image/jpeg', 'x-step': st } });
+    expect(sent.status()).toBe(201);
+  }
+  expect((await page.request.post('/api/inspect/finish', { data: {}, headers: { ...H, 'x-inspect-token': token2 } })).status()).toBe(200);
+  expect(JSON.stringify(await (await ep.request.get('/api/notifications')).json())).toContain('Владелец доснял всё, о чём Вы просили');
+  await ep.goto('/kabinet');
+  const done = ep.locator('[data-today-item="ready"]', { hasText: 'Квартира: снято не всё' });
+  await expect(done).toContainText('владелец доснял всё, о чём Вы просили: Подъезд и лестничная площадка, Входная дверь, Каждая комната');
+  await expect(done).not.toContainText('осмотр закончен');
+  await expect(ep.locator('[data-today="inspect-incomplete"]')).toHaveCount(0);
+  await done.scrollIntoViewIfNeeded();
+  await shot(ep, 'c38g-ekspert-segodnya-dosnyali-vse');
+  await done.click();
+  await expect(ep.locator('#inspect-box')).toBeVisible();
+  await expect(ep.locator('#inspect-incomplete')).toBeHidden();
   await ectx.close();
 });
 

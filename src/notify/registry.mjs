@@ -54,6 +54,8 @@ export const EVENTS = {
   inspection_done: { type: 'executor_work', title: 'Владелец объекта прислал фото осмотра', order: true },
   // Владелец нажал «Готово», а обязательные шаги осмотра без фото (2.208): src/ops/inspect-ops.mjs.
   inspection_incomplete: { type: 'executor_work', title: 'Владелец нажал «Готово», но снял не всё — попросите доснять', order: true },
+  // Владелец доснял по просьбе всё недостающее (2.214): src/ops/inspect-ops.mjs, reshotAll.
+  inspection_reshot: { type: 'executor_work', title: 'Владелец доснял всё, о чём Вы просили, — осмотр можно продолжать', order: true },
   // Ссылка осмотра молчит 2 дня (2.85): src/ops/inspect-ops.mjs, раз в минуту вместе с напоминаниями о сроках.
   inspection_silent: { type: 'executor_work', title: 'По ссылке осмотра 2 дня нет фото — отправьте ссылку владельцу снова', order: true },
   onsite_done: { type: 'executor_work', title: 'Помощник завершил выезд: фото и данные с объекта в деле', order: true },

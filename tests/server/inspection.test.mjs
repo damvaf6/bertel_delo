@@ -732,12 +732,12 @@ test('2.208: «Готово» без обязательных шагов — в 
   assert.equal((await spec.req('GET', `/api/orders/${o.id}/inspection`)).body.incomplete, null);
   const v = await view(l2.token);
   assert.equal(v.body.steps.find((s) => s.id === 'rooms').retake, 'Этот шаг не снят — снимите, пожалуйста');
-  // Доснял всё и нажал «Готово» — обычное «прислал фото», строки нет.
+  // Доснял всё и нажал «Готово» — «досняли всё» (2.214), строки нет.
   for (const st of g.missing) assert.equal((await shoot(l2.token, st.id)).status, 201);
   assert.equal((await finish(l2.token)).status, 200);
   assert.ok(!(await todayIncomplete(spec)).some((x) => x.id === o.id));
   const evs = await S.sql`select event from notifications where order_id = ${o.id} and event like 'inspection_%' order by id`;
-  assert.deepEqual(evs.map((e) => e.event), ['inspection_incomplete', 'inspection_done']);
+  assert.deepEqual(evs.map((e) => e.event), ['inspection_incomplete', 'inspection_reshot']);
 });
 
 test('2.208: все обязательные шаги в деле есть — строки нет; дело не в работе — строки нет', async () => {
@@ -763,4 +763,71 @@ test('2.208: все обязательные шаги в деле есть — �
   assert.ok((await todayIncomplete(spec)).some((x) => x.id === q.id));
   await S.sql`update orders set status = 'review' where id = ${q.id}`;
   assert.ok(!(await todayIncomplete(spec)).some((x) => x.id === q.id));
+});
+
+// 2.214: владелец доснял по просьбе всё недостающее — уведомление «досняли всё» и строка в «Можно продолжать» с шагами.
+
+test('2.214: доснял всё по просьбе — «досняли всё» в уведомлении и в «Можно продолжать»; доснял не всё — как раньше', async () => {
+  const o = await inWork('Осмотр — досняли по просьбе');
+  const l = await issue(o);
+  assert.equal((await shoot(l.token, 'facade')).status, 201);
+  assert.equal((await shoot(l.token, 'kitchen')).status, 201);
+  assert.equal((await finish(l.token)).status, 200);
+  const g = (await spec.req('GET', `/api/orders/${o.id}/inspection`)).body.incomplete;
+  for (const st of g.missing) {
+    assert.equal((await spec.req('POST', `/api/orders/${o.id}/inspection/retakes`, { step: st.id, note: 'Снимите, пожалуйста' })).status, 201);
+  }
+  // Эксперт открыл дело — прежнее «Готово» он уже видел.
+  assert.equal((await spec.req('GET', `/api/orders/${o.id}`)).status, 200);
+  const l2 = await issue(o);
+  // Доснял не всё — снова «снял не всё», «досняли всё» нет.
+  assert.equal((await shoot(l2.token, g.missing[0].id)).status, 201);
+  assert.equal((await finish(l2.token)).status, 200);
+  let evs = await S.sql`select event from notifications where order_id = ${o.id} and event like 'inspection_%' order by id`;
+  assert.deepEqual(evs.map((e) => e.event), ['inspection_incomplete', 'inspection_incomplete']);
+  assert.ok(!(await readyOf(spec, o))?.what.some((w) => w.startsWith('владелец доснял')));
+
+  // Ещё ссылка — доснял остальное: «досняли всё», в «Можно продолжать» — какие шаги.
+  assert.equal((await spec.req('GET', `/api/orders/${o.id}`)).status, 200);
+  const l3 = await issue(o);
+  const rest = g.missing.slice(1);
+  for (const st of rest) assert.equal((await shoot(l3.token, st.id)).status, 201);
+  assert.equal((await finish(l3.token)).status, 200);
+  evs = await S.sql`select event from notifications where order_id = ${o.id} and event like 'inspection_%' order by id`;
+  assert.equal(evs.at(-1).event, 'inspection_reshot');
+  const r = await readyOf(spec, o);
+  const line = r.what.find((w) => w.startsWith('владелец доснял всё, о чём Вы просили: '));
+  assert.ok(line, r.what.join(' | '));
+  for (const st of rest) assert.ok(line.includes(st.title), st.title);
+  assert.ok(!line.includes(g.missing[0].title), 'снятое по прошлой ссылке не повторяется');
+  assert.equal(r.to, 'inspect');
+  assert.ok(!r.what.some((w) => w.startsWith('осмотр закончен')));
+  // Открыл дело — строка уходит; чужой эксперт её не видит.
+  assert.ok(!(await readyOf(spec2, o)));
+  assert.equal((await spec.req('GET', `/api/orders/${o.id}`)).status, 200);
+  assert.ok(!(await readyOf(spec, o)));
+});
+
+test('2.214: просьб не было — обычное «прислал фото» и «осмотр закончен»; просьба осталась — тоже', async () => {
+  const o = await inWork('Осмотр — без просьб');
+  const l = await issue(o);
+  for (const st of NEED) assert.equal((await shoot(l.token, st)).status, 201);
+  assert.equal((await finish(l.token)).status, 200);
+  const [n] = await S.sql`select event from notifications where order_id = ${o.id} and event like 'inspection_%'`;
+  assert.equal(n.event, 'inspection_done');
+  assert.ok((await readyOf(spec, o)).what.some((w) => w.startsWith('осмотр закончен')));
+
+  // Две просьбы, доснят один шаг — просьба осталась: «досняли всё» нет.
+  const q = await inWork('Осмотр — просьба осталась');
+  const lq = await issue(q);
+  for (const st of NEED) assert.equal((await shoot(lq.token, st)).status, 201);
+  assert.equal((await finish(lq.token)).status, 200);
+  for (const st of ['facade', 'kitchen']) {
+    assert.equal((await spec.req('POST', `/api/orders/${q.id}/inspection/retakes`, { step: st, note: 'Темно' })).status, 201);
+  }
+  const lq2 = await issue(q);
+  assert.equal((await shoot(lq2.token, 'facade')).status, 201);
+  assert.equal((await finish(lq2.token)).status, 200);
+  const evs = await S.sql`select event from notifications where order_id = ${q.id} and event like 'inspection_%' order by id`;
+  assert.deepEqual(evs.map((e) => e.event), ['inspection_done', 'inspection_done']);
 });
