@@ -194,3 +194,83 @@ test('готовые фразы (2.84): у товара и документа �
   const due = messagePhrases({ def: reg.service('expertise', 'realty'), now: new Date('2026-10-06T21:30:00Z') })[2].text;
   assert.match(due, /до 10 октября/, 'через 3 дня по Москве');
 });
+
+test('2.224: выписка ЕГРН старше 30 дней на дату оценки — подсказка в деле и в «Сегодня», свежая запрашивается одной кнопкой', async () => {
+  const ru = (iso) => iso.split('-').reverse().join('.');
+  const today = todayMsk();
+  const putDoc = (o, body, name, kind) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), ...(kind ? { 'x-doc-kind': kind } : {}) } });
+  const egrnText = (day) => `Выписка из Единого государственного реестра недвижимости об объекте недвижимости\n${ru(day)} № КУВИ-001/2026-12345678\nВид объекта недвижимости: Помещение\nКадастровая стоимость по состоянию на ${ru(addDays(today, -5))}`;
+  const list = (o, c = spec) => c.req('GET', `/api/orders/${o.id}/doc-requests`);
+  const todayRows = async () => (await spec.req('GET', '/api/today')).body.expert.egrn_old;
+
+  // Без даты оценки — на сегодня; «по состоянию на» (дата кадастровой стоимости) — не дата выписки.
+  const o = await inWork('Квартира: старая выписка ЕГРН');
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  assert.equal((await list(o)).body.egrn_old, null, 'выписки нет — подсказки нет');
+  const old = addDays(today, -40);
+  assert.equal((await putDoc(o, egrnText(old), 'Выписка ЕГРН.txt')).status, 201);
+  let r = (await list(o)).body;
+  assert.deepEqual({ ...r.egrn_old, id: undefined }, { id: undefined, name: 'Выписка ЕГРН.txt', page: 0, day: old, on: today, on_value: false, age: 40, asked: false });
+  assert.ok((await todayRows()).some((x) => x.id === o.id && x.egrn.day === old));
+  // Заказчик подсказки не видит.
+  assert.equal((await list(o, owner)).body.egrn_old, null);
+
+  // Дата оценки из задания (2.207) — через 20 дней после выписки: выписка годится.
+  const o2 = await inWork('Квартира: выписка свежая на дату оценки');
+  assert.equal((await spec.req('POST', `/api/orders/${o2.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  assert.equal((await putDoc(o2, egrnText(old), 'Выписка ЕГРН.txt')).status, 201);
+  assert.equal((await putDoc(o2, `ЗАДАНИЕ НА ОЦЕНКУ\nДата оценки: ${ru(addDays(old, 20))}`, 'Задание на оценку.txt', 'basis')).status, 201);
+  assert.equal((await list(o2)).body.egrn_old, null);
+  assert.ok(!(await todayRows()).some((x) => x.id === o2.id));
+
+  // Дата оценки — через 45 дней после выписки: устарела на дату оценки.
+  const o3 = await inWork('Квартира: выписка старая на дату оценки');
+  assert.equal((await spec.req('POST', `/api/orders/${o3.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  const early = addDays(today, -60);
+  assert.equal((await putDoc(o3, egrnText(early), 'ЕГРН.txt')).status, 201);
+  assert.equal((await putDoc(o3, `ЗАДАНИЕ НА ОЦЕНКУ\nДата оценки: ${ru(addDays(early, 45))}`, 'Задание на оценку.txt', 'basis')).status, 201);
+  r = (await list(o3)).body;
+  assert.equal(r.egrn_old.on, addDays(early, 45));
+  assert.equal(r.egrn_old.on_value, true);
+  assert.equal(r.egrn_old.age, 45);
+
+  // «Запросить свежую выписку» — запрос документов с пояснением заказчику; подсказка остаётся «запрошена», из «Сегодня» уходит.
+  const before = await events(owner, 'docs_requested');
+  r = await spec.req('POST', `/api/orders/${o3.id}/doc-requests`, { items: ['egrn'], fresh_egrn: true });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  const asked = r.body.requests.find((x) => x.item_id === 'egrn' && !x.done);
+  assert.match(asked.note, new RegExp(`от ${ru(early).replace(/\./g, '\\.')} — старше 30 дней на дату оценки`));
+  assert.equal(r.body.egrn_old.asked, true);
+  assert.equal(await events(owner, 'docs_requested'), before + 1);
+  assert.ok(!(await todayRows()).some((x) => x.id === o3.id));
+  // Второй раз та же просьба не дублируется.
+  assert.equal((await spec.req('POST', `/api/orders/${o3.id}/doc-requests`, { items: ['egrn'], fresh_egrn: true })).body.error, 'already_requested');
+
+  // Заказчик прислал свежую — подсказки нет.
+  const fresh = (await putDoc(o3, egrnText(addDays(early, 40)), 'Выписка ЕГРН новая.txt')).body.document;
+  assert.equal((await owner.req('POST', `/api/orders/${o3.id}/doc-requests/${asked.id}/attach`, { document_id: fresh.id })).status, 200);
+  assert.equal((await list(o3)).body.egrn_old, null);
+
+  // Последняя выписка без распознанной даты — не судим (не держим подсказку вечно).
+  assert.equal((await putDoc(o, 'Выписка из ЕГРН\nВид объекта недвижимости: Помещение', 'Выписка ЕГРН скан.txt')).status, 201);
+  assert.equal((await list(o)).body.egrn_old, null);
+
+  // Машина — выписки ЕГРН в списке услуги нет.
+  const v = await inWork('Машина: выписка ни при чём', 'vehicle', { purpose: 'deal', region: 'moscow', vehicle_type: 'car', make_model: 'Лада Веста', year: 2020 });
+  assert.equal((await spec.req('POST', `/api/orders/${v.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  assert.equal((await putDoc(v, egrnText(old), 'Выписка ЕГРН.txt')).status, 201);
+  assert.equal((await list(v)).body.egrn_old, null);
+});
+
+test('2.224: дата выписки ЕГРН — «№ КУВИ», «Дата формирования», «Дата:»; дата кадастровой стоимости и регистрации — нет', async () => {
+  const { egrnIssued } = await import('../../src/ai/report-checks.mjs');
+  const day = (text) => egrnIssued([{ id: 'x', name: 'в', pages: [text] }])[0]?.day ?? null;
+  assert.equal(day('Выписка\n02.09.2026 г. № КУВИ-001/2026-1'), '2026-09-02');
+  assert.equal(day('Дата формирования выписки: 5 октября 2026 г.'), '2026-10-05');
+  assert.equal(day('Выписка сформирована «12» мая 2026 г.'), '2026-05-12');
+  assert.equal(day('Дата: 01.10.2026'), '2026-10-01');
+  assert.equal(day('Кадастровая стоимость по состоянию на 01.01.2026'), null);
+  assert.equal(day('Дата государственной регистрации: 01.01.2010\nДата присвоения кадастрового номера: 03.03.2003'), null);
+  assert.equal(egrnIssued([{ id: 'x', name: 'в', pages: ['пусто', 'пусто', 'Дата: 01.10.2026'] }]).length, 0, 'только первые две страницы');
+});

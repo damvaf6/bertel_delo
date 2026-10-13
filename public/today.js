@@ -12,6 +12,7 @@
 // «Вернули эксперту» — с «Напомнить эксперту» прямо здесь (2.162).
 // Отказали в переносе, а срок в дни «не принимаю дела» (2.215) — «Попросить руководителя передать дело» прямо в строке.
 // Исправленный файл больше суток не подписан (2.204) — отдельной красной строкой, сразу к файлу.
+// Выписка ЕГРН в деле старше 30 дней на дату оценки (2.224) — «Запросить свежую выписку» прямо в строке.
 // «Можно продолжать» (2.86) — пришли документы, осмотр или сообщение. Диспетчеру (2.42) — деньги, проверка, цена, подбор, молчащие исполнители, горящие сроки. Нажатие — в дело или в раздел
 // организации.
 // Тексты — только через textContent.
@@ -66,6 +67,21 @@ function extendLink(x) {
     try {
       const r = await api('POST', `/api/orders/${x.id}/inspection/extend`, { link_id: x.link_id, days: 3 });
       msg.textContent = `Продлено: ссылка действует до ${since(r.expires_at)} — владелец снимает по той же ссылке`;
+      btn.remove();
+    } catch (err) { msg.textContent = err.message; btn.disabled = false; }
+  };
+  return [btn, msg];
+}
+
+// «Запросить свежую выписку» (2.224): запрос документов в деле — заказчику уведомление с пояснением, от какого числа старая.
+function egrnFresh(x) {
+  const msg = el('div', { class: 'muted', 'data-role': 'egrn-fresh-msg' });
+  const btn = el('button', { type: 'button', class: 'secondary', 'data-action': 'egrn-fresh' }, 'Запросить свежую выписку');
+  btn.onclick = async () => {
+    btn.disabled = true;
+    try {
+      await api('POST', `/api/orders/${x.id}/doc-requests`, { items: ['egrn'], fresh_egrn: true });
+      msg.textContent = 'Запрошено — заказчику отправлено уведомление';
       btn.remove();
     } catch (err) { msg.textContent = err.message; btn.disabled = false; }
   };
@@ -174,6 +190,11 @@ export async function loadToday() {
         { class: 'overdue', role: 'fresh-late-since', text: `«${x.fresh_file.filename}» загружен ${since(x.fresh_file.at)} — не подписан ${waited(x.fresh_file.at)}` },
         `${x.by} ждёт подписи, чтобы подписать от организации · ${deadline(x, t.today)}`],
       (x) => { location.hash = `order=${x.id}&to=fresh`; }),
+      // Выписка ЕГРН старше 30 дней на дату оценки (2.224) — строка к запросу документов в деле, кнопка — запросить сразу.
+      ...group('egrn-old', 'Выписка ЕГРН устарела', e.egrn_old ?? [], (x) => [x.title,
+        { class: 'overdue', role: 'egrn-old-why', text: `«${x.egrn.name}» от ${dayRu(x.egrn.day)} — старше 30 дней на ${x.egrn.on_value ? `дату оценки ${dayRu(x.egrn.on)}` : 'сегодня'}` },
+        deadline(x, t.today)],
+      (x) => { location.hash = `order=${x.id}&to=docs`; }, egrnFresh),
       // Можно продолжать (2.86): пришло новое после того, как эксперт открывал дело, — сразу к переписке, документам или осмотру.
       ...group('ready', 'Можно продолжать', e.ready ?? [], (x) => [x.title, `${x.what.join(' · ')} · ${since(x.at)}`, deadline(x, t.today)],
         (x) => { location.hash = `order=${x.id}&to=${x.to}`; }),

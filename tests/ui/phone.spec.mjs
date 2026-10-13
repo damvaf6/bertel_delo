@@ -9744,3 +9744,74 @@ test('2.221: передать некому — руководитель прос
   await shot(ep, 'c80-2221-ekspert-rukovoditel-poprosil');
   for (const p of [ep, hp, cp, dp]) await p.context().close();
 });
+
+test('2.224: выписка ЕГРН старше 30 дней — подсказка в деле и в «Сегодня», свежая запрашивается одной кнопкой', async ({ browser, baseURL }) => {
+  const ru = (iso) => iso.split('-').reverse().join('.');
+  const dctx = await phoneContext(browser, baseURL);
+  const dp = await dctx.newPage();
+  const disp = await signIn(dp, '+79990009751');
+  const sctx = await phoneContext(browser, baseURL);
+  const sp = await sctx.newPage();
+  const spec = await signIn(sp, '+79990009752');
+  await db(async (c) => {
+    await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [spec.id]);
+  });
+  const ids = [];
+  for (const title of ['Квартира: выписка ЕГРН устарела', 'Квартира: выписка ЕГРН в деле старая']) {
+    const id = (await (await dp.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title }, headers: H })).json()).order.id;
+    expect((await dp.request.patch(`/api/orders/${id}`, {
+      data: { deadline: inDays(9), fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, Выписная ул., 3' } }, headers: H,
+    })).status()).toBe(200);
+    expect((await dp.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+    await db(async (c) => {
+      await c.query('update orders set price_kop = 1500000, paid_at = now() where id = $1', [id]);
+      await c.query("insert into payments (order_id, amount_kop, status, provider_id, created_by, paid_at) values ($1, 1500000, 'succeeded', $2, $3, now())", [id, `pay_ui_${id}`, disp.id]);
+    });
+    expect((await dp.request.post(`/api/orders/${id}/offer`, { data: { specialist_id: spec.id, from: 'matching' }, headers: H })).status()).toBe(200);
+    expect((await sp.request.post(`/api/orders/${id}/status`, { data: { from: 'awaiting_executor', to: 'in_work' }, headers: H })).status()).toBe(200);
+    // Выписка ЕГРН от заказчика — сформирована 40 дней назад; дата кадастровой стоимости — не дата выписки.
+    expect((await dp.request.post(`/api/orders/${id}/documents`, {
+      data: Buffer.from(`Выписка из Единого государственного реестра недвижимости об объекте недвижимости\n${ru(inDays(-40))} № КУВИ-001/2026-55501234\nВид объекта недвижимости: Помещение\nКадастровая стоимость по состоянию на ${ru(inDays(-3))}`),
+      headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Выписка ЕГРН.txt') },
+    })).status()).toBe(201);
+    ids.push(id);
+  }
+
+  // «Сегодня»: строка «Выписка ЕГРН устарела» — от какого числа и на какую дату; кнопка запрашивает свежую прямо здесь.
+  await sp.goto('/kabinet');
+  const rows = sp.locator('li[data-today-item="egrn-old"]');
+  await expect(rows).toHaveCount(2);
+  const first = rows.filter({ hasText: 'Квартира: выписка ЕГРН устарела' });
+  await expect(first.locator('[data-role="egrn-old-why"]')).toHaveText(`«Выписка ЕГРН.txt» от ${new Date(`${inDays(-40)}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })} — старше 30 дней на сегодня`);
+  await first.scrollIntoViewIfNeeded();
+  await shot(sp, 'c81-2224-segodnya-vypiska-egrn-ustarela');
+  await first.getByRole('button', { name: 'Запросить свежую выписку' }).click();
+  await expect(first.locator('[data-role="egrn-fresh-msg"]')).toHaveText('Запрошено — заказчику отправлено уведомление');
+  await shot(sp, 'c82-2224-segodnya-svezhaya-zaproshena');
+
+  // В деле: подсказка у «Запрошенных документов» и кнопка; после нажатия — «запрошена, ждём заказчика».
+  await sp.goto(`/kabinet#order=${ids[1]}&to=docs`);
+  const hint = sp.locator('#docreq-egrn');
+  await expect(hint).toBeVisible();
+  await expect(sp.locator('#docreq-egrn-text')).toHaveText(`Выписка ЕГРН «Выписка ЕГРН.txt» от ${ru(inDays(-40))} — старше 30 дней на сегодня (40 дн.). Для отчёта нужна свежая — запросите её у заказчика.`);
+  await hint.scrollIntoViewIfNeeded();
+  await shot(sp, 'c83-2224-delo-vypiska-egrn-ustarela');
+  await sp.getByRole('button', { name: 'Запросить свежую выписку' }).click();
+  await expect(sp.locator('#docreq-msg')).toHaveText('Свежая выписка ЕГРН запрошена. Заказчику отправлено уведомление.');
+  await expect(sp.locator('#docreq-egrn-text')).toContainText('Свежая выписка запрошена — ждём заказчика.');
+  await expect(sp.locator('#docreq-egrn-ask')).toBeHidden();
+  await expect(sp.locator('#docreq-list li').filter({ hasText: 'Выписка из ЕГРН' })).toContainText(`Пояснение: Выписка ЕГРН в деле от ${ru(inDays(-40))} — старше 30 дней на сегодня.`);
+  await shot(sp, 'c84-2224-delo-svezhaya-zaproshena');
+
+  // Заказчик видит просьбу с пояснением, подсказки «устарела» у него нет.
+  await dp.goto(`/kabinet#order=${ids[1]}&to=docs`);
+  await expect(dp.locator('#docreq-list li').filter({ hasText: 'Выписка из ЕГРН' })).toContainText('Нужна свежая выписка');
+  await expect(dp.locator('#docreq-egrn')).toBeHidden();
+  await shot(dp, 'c85-2224-zakazchik-prosba-svezhaya-vypiska');
+  // В «Сегодня» эксперта строки больше нет.
+  await sp.goto('/kabinet');
+  await expect(sp.locator('li[data-today-item="egrn-old"]')).toHaveCount(0);
+  for (const p of [sp, dp]) await p.context().close();
+});
