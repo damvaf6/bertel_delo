@@ -16,7 +16,7 @@ import { pastValues, reuseSections, skeleton } from '../docs/reuse.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { orderSources, placeSources, sourcesLines } from '../docs/sources.mjs';
 import { draftDiff } from '../docs/diff.mjs';
-import { assignmentValue, egrnFacts } from '../ai/report-checks.mjs';
+import { assignmentValue, egrnFacts, parseFloorField, sameAddressText } from '../ai/report-checks.mjs';
 import { assignmentDocs, egrnDocs } from './ai-ops.mjs';
 
 const PHOTOS_MAX = 40;
@@ -131,9 +131,10 @@ const VALUE_GAP = /\[(?:заполнить|указать)\s*:?\s*дат[аыу]
 // cadastral_match): только для услуг с этими правилами. Одно значение — в таблицу задания (вместо того, что написал
 // заказчик; другое в заявке — видно рядом), модели и вместо пометок «заполнить: площадь / кадастровый номер»; в выписках
 // разные — ничего не подставляем, эксперт выбирает сам.
+// 2.222: так же этаж с этажностью (floor_match, 2.212) и адрес (address_match, 2.213).
 async function egrnFor(sql, storage, registry, order) {
   const auto = registry.checks(order.module, order.service).flatMap((r) => r.auto ?? []);
-  if (!auto.includes('area_match') && !auto.includes('cadastral_match')) return null;
+  if (!['area_match', 'cadastral_match', 'floor_match', 'address_match'].some((k) => auto.includes(k))) return null;
   const docs = await egrnDocs(sql, storage, order);
   if (!docs.length) return null;
   const facts = egrnFacts(docs, { service: order.service, fields: order.fields ?? {} });
@@ -145,22 +146,57 @@ async function egrnFor(sql, storage, registry, order) {
   const cadastral = !auto.includes('cadastral_match') ? null : facts.cadastral?.values ? { values: facts.cadastral.values }
     : facts.cadastral ? { v: facts.cadastral.v, name: facts.cadastral.name, page: facts.cadastral.page + 1,
       typed: typedCad && typedCad !== facts.cadastral.v ? typedCad : null } : null;
-  return area || cadastral ? { area, cadastral } : null;
+  const floor = auto.includes('floor_match') ? egrnFloorFact(facts, order.fields?.floor) : null;
+  const typedAddr = String(order.fields?.address ?? '').trim();
+  const address = !auto.includes('address_match') ? null : facts.address?.values ? { values: facts.address.values }
+    : facts.address ? { v: facts.address.text, name: facts.address.name, page: facts.address.page + 1,
+      typed: typedAddr && !sameAddressText(facts.address, typedAddr) ? typedAddr : null } : null;
+  return area || cadastral || floor || address ? { area, cadastral, floor, address } : null;
+}
+// Этаж и этажность (2.222): в таблицу задания — «6 / 10, надземных 9», когда этаж помещения в выписках один; одна
+// этажность (выписка только на здание) — модели и вместо пометки «этажность»; разные — эксперт выбирает сам.
+function egrnFloorFact(facts, typedText) {
+  const f = facts.floor, n = facts.floors;
+  if (f?.values || n?.values) return { values: [...(f?.values ?? []).map((v) => `этаж ${v}`), ...(n?.values ?? []).map((v) => `этажей ${v}`)] };
+  if (!f && !n) return null;
+  const at = f ?? n;
+  const floors = n ? (n.above != null ? `${n.v}, надземных ${n.above}` : `${n.v}`) : null;
+  const typed = parseFloorField(typedText);
+  const differs = typed && ((f && typed.floor !== f.v) || (n && typed.floors != null && typed.floors !== n.v && typed.floors !== n.above));
+  return { v: f ? (floors ? `${f.v} / ${floors}` : `${f.v}`) : null, floor: f ? f.v : null, floors: n ? n.v : null,
+    above: n?.above ?? null, name: at.name, page: at.page + 1, typed: differs ? String(typedText).trim() : null };
 }
 const ruNum = (v) => String(v).replace('.', ',');
 // Пометки модели: «[заполнить: площадь]», «[заполнить: общую площадь объекта]», «[заполнить: кадастровый номер]».
 const AREA_GAP = /\[(?:заполнить|указать)\s*:?\s*(?:общ\S*\s+)?площад[ьи][^\]]*\]/giu;
 const CAD_GAP = /\[(?:заполнить|указать)\s*:?\s*кадастров\S*\s+номер[^\]]*\]/giu;
 // Пометку площади заменяем числом; «кв. м» дописываем, если его нет сразу после пометки.
+// 2.222: «[заполнить: этаж]» — этаж, «[заполнить: этажность дома]», «[заполнить: количество этажей]» — этажей в доме,
+// «[заполнить: этаж / этажность]» — оба; «[заполнить: адрес объекта]» — адрес (адрес аналога, заказчика, эксперта — нет).
+const FLOOR_GAP = /\[(?:заполнить|указать)\s*:?\s*((?:количеств\S*\s+)?этаж[^\]]*)\]/giu;
+const ADDR_GAP = /\[(?:заполнить|указать)\s*:?\s*(?:полн\S*\s+|точн\S*\s+)?адрес([^\]]*)\]/giu;
+const ADDR_NOT_OBJECT = /аналог|заказчик|оценщик|эксперт|исполнител|организац|регистрац|проживан|почтов|электрон/iu;
+function floorGap(m, inner, f) {
+  const both = /этаж(?!ност|ей|н).*этаж(?:ност|ей)/iu.test(inner);
+  const floorsOnly = !both && /^(?:количеств\S*\s+)?этаж(?:ност|ей)/iu.test(inner);
+  const floors = f.floors == null ? null : f.above != null ? `${f.floors} (надземных ${f.above})` : `${f.floors}`;
+  if (both) return f.floor != null && floors ? `${f.floor} / ${floors}` : m;
+  if (floorsOnly) return floors ?? m;
+  return f.floor != null ? `${f.floor}` : m;
+}
 function fillEgrn(text, egrn) {
   let out = text;
   if (egrn?.area?.v) out = out.replace(AREA_GAP, (m, at, all) => (/^\s*(?:кв\.?\s*м|м2|м²)/iu.test(all.slice(at + m.length)) ? egrn.area.v : `${egrn.area.v} кв. м`));
   if (egrn?.cadastral?.v) out = out.replace(CAD_GAP, egrn.cadastral.v);
+  if (egrn?.floor && !egrn.floor.values) out = out.replace(FLOOR_GAP, (m, inner) => floorGap(m, inner, egrn.floor));
+  if (egrn?.address?.v) out = out.replace(ADDR_GAP, (m, rest) => (ADDR_NOT_OBJECT.test(rest) ? m : egrn.address.v));
   return out;
 }
 const egrnBrief = (egrn) => [
   egrn?.area?.v ? `Площадь объекта по выписке ЕГРН: ${egrn.area.v} кв. м (выписка «${egrn.area.name}», стр. ${egrn.area.page}) — пиши её везде, где нужна площадь объекта, без пометок` : null,
   egrn?.cadastral?.v ? `Кадастровый номер по выписке ЕГРН: ${egrn.cadastral.v} (выписка «${egrn.cadastral.name}», стр. ${egrn.cadastral.page}) — пиши его везде, где нужен кадастровый номер, без пометок` : null,
+  egrn?.floor && !egrn.floor.values ? `${[egrn.floor.floor != null ? `Этаж объекта по выписке ЕГРН: ${egrn.floor.floor}` : null, egrn.floor.floors != null ? `этажей в доме: ${egrn.floor.floors}${egrn.floor.above != null ? `, из них надземных ${egrn.floor.above}` : ''}` : null].filter(Boolean).join(', ')} (выписка «${egrn.floor.name}», стр. ${egrn.floor.page}) — пиши так везде, без пометок` : null,
+  egrn?.address?.v ? `Адрес объекта по выписке ЕГРН: ${egrn.address.v} (выписка «${egrn.address.name}», стр. ${egrn.address.page}) — пиши его везде, где нужен адрес объекта, без пометок` : null,
 ].filter(Boolean).join('\n') || null;
 
 export function draftOps() {
