@@ -4,6 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Кабинет · БЕРТЕЛ Дело</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#1f4e8c">
+  <link rel="icon" href="/icon-192.png" type="image/png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Дело">
   <link rel="stylesheet" href="/app.css">
   <script type="module" src="/kabinet.js"></script>
 </head>
@@ -35,6 +41,16 @@
           <button id="hint-ok">Понятно</button>
           <a class="btn secondary" href="#help">Как работать</a>
         </div>
+      </div>
+      <div class="card hidden" id="install-box">
+        <h2>Дело — на экране телефона</h2>
+        <p class="muted">Установите «Дело» как приложение: значок на экране «Домой», открывается без браузера и работает при
+          слабой связи — снятые фото осмотра не пропадут.</p>
+        <div class="row">
+          <button type="button" id="install-app">Установить</button>
+          <button type="button" class="secondary" id="install-later">Не сейчас</button>
+        </div>
+        <p class="msg hidden" id="install-help" role="status" aria-live="polite"></p>
       </div>
       <div class="card hidden" id="today-box">
         <h2>Сегодня</h2>
@@ -952,6 +968,13 @@
         <button type="submit" class="wide" id="save-profile">Сохранить</button>
         <p class="msg" id="profile-msg" role="status" aria-live="polite"></p>
       </form>
+      <div class="card hidden" id="install-card">
+        <h2>Приложение на телефоне</h2>
+        <p class="muted">Значок «Дело» на экране «Домой»: открывается без браузера, при слабой связи страницы и черновики осмотра
+          остаются на телефоне. Бесплатно, без магазина приложений.</p>
+        <button type="button" class="wide" id="install-app2">Установить</button>
+        <p class="msg hidden" id="install-help2" role="status" aria-live="polite"></p>
+      </div>
       <div class="card" id="mail-card">
         <h2>Почта для заявок</h2>
         <p class="muted">Заявку можно прислать письмом с вложениями на адрес <strong id="mail-inbox"></strong> — с подключённой здесь почты.
