@@ -71,7 +71,7 @@ function renderAdmin(view) {
   $('sp-card-note').value = '';
   $('sp-card-history').replaceChildren(...view.history.filter((h) => h.revoked_at).map((h) => el('li', {},
     el('div', { class: 'title', text: `№ ${h.number} — отозвана ${dateRu(h.revoked_at)}` }),
-    el('div', { class: 'muted', text: [h.revoke_reason_name, h.revoke_note].filter(Boolean).join(': ') })))));
+    el('div', { class: 'muted', text: [h.revoke_reason_name, h.revoke_note].filter(Boolean).join(': ') }))));
 }
 
 export async function loadAdminCard(id) {

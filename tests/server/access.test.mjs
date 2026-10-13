@@ -497,8 +497,12 @@ test('карточка допуска (задача штаба 81b2): выдаё
     assert.equal((await c.req('PUT', url, { valid_until: '2099-01-01' })).status, 404);
     assert.equal((await c.req('POST', `${url}/revoke`, { reason: 'request' })).status, 404);
   }
-  assert.equal((await U.admin.req('GET', url)).status, 200);
-  assert.equal((await U.spec.req('GET', '/api/specialist/me/card')).status, 200);
+  assert.equal((await U.admin.req('GET', url)).status, 404, 'не специалист');
+  const cardSpec = await login(S, '+79990000869');
+  await makeSpecialist(S.sql, cardSpec.user.id);
+  assert.equal((await U.admin.req('GET', `/api/admin/specialists/${cardSpec.user.id}/card`)).status, 200);
+  assert.equal((await cardSpec.req('GET', '/api/specialist/me/card')).status, 200);
+  assert.equal((await U.spec.req('GET', `/api/admin/specialists/${cardSpec.user.id}/card`)).status, 404);
   assert.equal((await U.stranger.req('GET', '/api/specialist/me/card')).status, 404);
   assert.equal((await U.stranger.req('GET', '/api/specialist/me/card/sheet')).status, 404);
 });

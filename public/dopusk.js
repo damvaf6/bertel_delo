@@ -47,5 +47,10 @@ $('code-form').addEventListener('submit', (e) => {
   check($('code').value);
 });
 
-const fromHash = decodeURIComponent(location.hash.slice(1));
-if (fromHash) { $('code').value = fromHash; check(fromHash); }
+// Код из адреса: при открытии и когда адрес сменился без перезагрузки (вставили другую ссылку в ту же вкладку).
+function fromHash() {
+  const code = decodeURIComponent(location.hash.slice(1));
+  if (code && clean(code) !== clean($('code').value)) { $('code').value = code; check(code); }
+}
+window.addEventListener('hashchange', fromHash);
+fromHash();
