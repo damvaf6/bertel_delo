@@ -308,6 +308,8 @@ test('эксперт не принимает дела (2.113): руководи�
   assert.equal(list[0].away_until, until);
   assert.equal(list[0].away_note, 'отпуск');
   assert.equal(list[0].expert, 'Эксперт Сегодняшний');
+  // Передать есть кому или нет (прогон 2.210) — «передайте коллеге» в «Сегодня» только если есть.
+  assert.equal(typeof list[0].can_transfer, 'boolean');
   const text = JSON.stringify(list);
   for (const secret of ['Срок в отпуске', inside.id]) assert.ok(!text.includes(secret), `руководитель не видит: ${secret}`);
   // В «Делах экспертов» у дела — отметка, передать есть кому не обязательно; у дела после отпуска — нет.

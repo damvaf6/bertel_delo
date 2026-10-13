@@ -91,7 +91,7 @@ export async function caseMoves(sql, orders) {
 
 // Кому руководитель может передать дело в работе (2.62): эксперты организации, которым дело можно отдать (допуск, «принимаю
 // дела», досье в порядке, работают от организации), кроме нынешнего исполнителя; с нагрузкой.
-async function transferTargets(sql, order, orgId, registry) {
+export async function transferTargets(sql, order, orgId, registry) {
   return (await orgExpertsFor(sql, order, orgId, registry))
     .filter((c) => c.user_id !== order.executor_user_id)
     .map((c) => ({ user_id: c.user_id, full_name: c.full_name || 'Без имени' }));

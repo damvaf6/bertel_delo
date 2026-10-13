@@ -8972,3 +8972,166 @@ test('утренняя сводка руководителя (2.209): срок �
   await expect(hp.locator('[data-filter="handover"]')).toHaveText('Просят передать · 1');
   for (const p of [cp, ep, hp]) await p.context().close();
 });
+
+// 2.210: прогон «как эксперт и руководитель» по пачке 2.201–2.209 — одна организация, одно дело. Эксперт в отпуске, срок —
+// в дни отпуска, передать некому: у руководителя «Сегодня», отбор «Эксперт не принимает дела» (2.209) и «Напомнить эксперту
+// попросить перенос» (2.201); заказчик прикладывает задание на оценку и выписку ЕГРН — дата оценки в черновике (2.207),
+// площадь и кадастровый номер в ИИ-проверке (2.202, 2.203); владелец нажал «Готово», сняв не всё (2.208); возврат по двум
+// пунктам — ИИ-проверка новой версии (2.206), отмечен один пункт, файл лежит больше суток (2.204) — у руководителя отбор
+// «Отмечены не все пункты» (2.205).
+test('прогон 2.210: эксперт и руководитель по пачке 2.201–2.209 на одном деле', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), hp = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990021001'), head = await signIn(hp, '+79990021002'), customer = await signIn(cp, '+79990021003');
+  const { orgId, A } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Прогон-6 ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Шестов Ян' where id = $1", [expert.id]);
+    await c.query("update users set full_name = 'Главная Вера' where id = $1", [head.id]);
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now() - interval '1 year'), ($1, $3, 'member', now() - interval '1 year')", [org.id, head.id, expert.id]);
+    await c.query(`insert into specialists (user_id, org_id, created_at, away_until, away_note)
+      values ($1, $2, now() - interval '1 year', (now() at time zone 'Europe/Moscow')::date + 4, 'отпуск')`, [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    await c.query("insert into morning_digests (user_id, day) values ($1, (now() at time zone 'Europe/Moscow')::date), ($2, (now() at time zone 'Europe/Moscow')::date)", [expert.id, head.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Шестая пачка: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Шестая ул., д. 6, кв. 6","area":"47,3"}') returning id`,
+    [customer.id, expert.id, inDays(2)]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now() - interval '2 days')", [o.id, expert.id]);
+    return { orgId: org.id, A: o.id };
+  });
+  const ref = `№ ${A.slice(0, 8).toUpperCase()}`;
+
+  // Руководитель: «Сегодня» — срок дела в дни, когда эксперт не принимает дела.
+  await hp.goto('/kabinet');
+  const away = hp.locator(`#today-box li[data-today-item="org-away-${orgId}"]`).filter({ hasText: ref });
+  // Найдено прогоном: писалось «передайте коллеге», хотя другого эксперта в организации нет.
+  await expect(away).toContainText('не принимает дела до');
+  await expect(away).toContainText('отпуск · передать некому — попросите перенести срок');
+  await expect(away).not.toContainText('передайте коллеге');
+  await away.scrollIntoViewIfNeeded();
+  await shot(hp, 'c57-progon6-rukovoditel-segodnya');
+
+  // Отбор «Эксперт не принимает дела» (2.209) и «Напомнить эксперту попросить перенос срока» (2.201).
+  await hp.goto(`/kabinet#org=${orgId}&to=away`);
+  await expect(hp.locator('[data-filter="away"]')).toHaveText('Эксперт не принимает дела — срок в эти дни · 1');
+  const li = hp.locator(`#org-cases li[data-case="${ref}"]`);
+  await expect(li.locator('[data-role="away"]')).toContainText('Передать его некому — попросите эксперта перенести срок.');
+  await li.locator('[data-action="remind-extend"]').click();
+  await expect(hp.locator('#org-cases-msg')).toContainText('Эксперту отправлена просьба попросить перенос срока');
+  await li.scrollIntoViewIfNeeded();
+  await shot(hp, 'c58-progon6-rukovoditel-napomnil');
+
+  // Эксперт: из уведомления — просьба о переносе с готовой причиной.
+  await ep.goto('/kabinet#notifications');
+  await ep.locator('#notifications li').filter({ hasText: 'попросите перенести срок дела' }).getByRole('button').click();
+  await expect(ep.locator('#deadline-reason')).toHaveValue(/^В день срока меня не будет, работаю снова с /);
+  await ep.locator('#deadline-send').click();
+  await expect(ep.locator('#deadline-msg')).toContainText('Просьба отправлена диспетчеру');
+
+  // Руководитель: эксперт уже попросил перенос — что теперь в «Сегодня» и в отборе.
+  await hp.goto('/kabinet');
+  // Найдено прогоном: и после просьбы — «передайте коллеге»; теперь видна только просьба о переносе.
+  await expect(away).toContainText('эксперт просит перенести на');
+  await expect(away).not.toContainText('передайте коллеге');
+  await expect(away).not.toContainText('передать некому');
+  await away.scrollIntoViewIfNeeded();
+  await shot(hp, 'c59-progon6-rukovoditel-segodnya-perenos');
+
+  // Заказчик: задание на оценку и выписка ЕГРН.
+  const attach = async (name, text, kind) => expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from(text), headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), ...(kind ? { 'x-doc-kind': kind } : {}) },
+  })).status()).toBe(201);
+  await attach('Задание на оценку.txt', 'ЗАДАНИЕ НА ОЦЕНКУ\nОбъект: квартира, г. Москва, Шестая ул., д. 6, кв. 6\nДата оценки: 05.10.2026', 'basis');
+  await attach('Выписка ЕГРН.txt', 'Выписка из Единого государственного реестра недвижимости\nВид объекта недвижимости: Помещение\nКадастровый номер: 77:06:0006006:6060\nПлощадь, м2: 47,3');
+
+  // Эксперт: черновик — дата оценки из задания (2.207).
+  await ep.goto(`/kabinet#order=${A}`);
+  await ep.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  await expect(ep.getByLabel('Текст заключения')).toHaveValue(/\| Дата оценки \| 05\.10\.2026 \|/);
+  await expect(ep.locator('#draft-state')).toContainText('Дата оценки 05.10.2026 — как в задании на оценку «Задание на оценку.txt» (стр. 1) — сверьте.');
+  await ep.locator('#draft-state').scrollIntoViewIfNeeded();
+  await shot(ep, 'c60-progon6-ekspert-chernovik');
+
+  // Осмотр: владелец снял фасад и нажал «Готово» (2.208).
+  const issued = await ep.request.post(`/api/orders/${A}/inspection`, { data: { days: 3 }, headers: H });
+  expect(issued.status()).toBe(201);
+  const token = (await issued.json()).path.split('#')[1];
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]), Buffer.from('JFIF-2210')]);
+  expect((await cp.request.post('/api/inspect/photos', { data: jpeg, headers: { ...H, 'x-inspect-token': token, 'content-type': 'image/jpeg', 'x-step': 'facade' } })).status()).toBe(201);
+  expect((await cp.request.post('/api/inspect/finish', { data: {}, headers: { ...H, 'x-inspect-token': token } })).status()).toBe(200);
+  await ep.goto('/kabinet');
+  const inc = ep.locator('[data-today-item="inspect-incomplete"]', { hasText: 'Шестая пачка: квартира' });
+  await expect(inc).toContainText('не снято:');
+  await expect(inc).toContainText('попросите доснять — владельцу уйдёт новая ссылка');
+  await shot(ep, 'c61-progon6-ekspert-segodnya');
+  await inc.click();
+  await ep.locator('#inspect-phone').fill('+79990021004');
+  await ep.locator('#inspect-ask-missing').click();
+  await expect(ep.locator('#inspect-msg')).toContainText('Ссылка отправлена СМС на');
+
+  // Отчёт: площадь и кадастровый номер не как в выписке (2.202, 2.203).
+  const upload = async (name, area, cad) => {
+    const text = ['ОТЧЁТ ОБ ОЦЕНКЕ № 6/2026', 'Адрес объекта оценки: г. Москва, Шестая ул., д. 6, кв. 6', 'Дата оценки: 05.10.2026',
+      `Общая площадь, кв. м: ${area}`, `Кадастровый номер ${cad}`, 'Итоговая стоимость 12 000 000 руб.'].join('\n');
+    const up = await ep.request.post(`/api/orders/${A}/results`, { data: Buffer.from(text), headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } });
+    expect(up.status()).toBe(201);
+    return (await up.json()).document.id;
+  };
+  const first = await upload('Отчёт Шестова.txt', '45,1', '77:06:0006006:6061');
+  await ep.goto(`/kabinet#order=${A}`);
+  await ep.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(ep.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  const ident = ep.locator('#review-checks > li[data-check="realty_identity"]');
+  await expect(ident).toContainText('Площадь 45,1 кв. м не совпадает с площадью в выписке ЕГРН «Выписка ЕГРН.txt» (47,3 кв. м, стр. 1)');
+  await expect(ident).toContainText('Кадастровый номер 77:06:0006006:6061 не совпадает с номером в выписке ЕГРН «Выписка ЕГРН.txt» (77:06:0006006:6060, стр. 1)');
+  await ident.scrollIntoViewIfNeeded();
+  await shot(ep, 'c62-progon6-ekspert-ii-egrn');
+  expect((await ep.request.post(`/api/documents/${first}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+
+  // Возврат руководителя по двум пунктам; исправленный файл — ИИ-проверка новой версии (2.206).
+  const ret = await hp.request.post(`/api/org-documents/${first}/return`, { data: { comment: '1. Площадь не как в выписке\n2. Кадастровый номер не тот' }, headers: H });
+  expect(ret.status()).toBe(201);
+  const rid = (await ret.json()).return.id;
+  expect((await ep.request.delete(`/api/documents/${first}`, { headers: H })).status()).toBe(204);
+  const second = await upload('Отчёт Шестова (исправлен).txt', '47,3', '77:06:0006006:6061');
+  await ep.goto(`/kabinet#order=${A}`);
+  await ep.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(ep.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  const prev = ep.locator('#ai-review-prev');
+  await expect(prev).toBeVisible();
+  await prev.scrollIntoViewIfNeeded();
+  // Площадь исправлена, кадастровый номер — нет: то же правило «Недвижимость и земля» осталось.
+  await expect(prev.locator('[data-prev="kept"]')).toContainText('Недвижимость и земля');
+  await expect(ep.locator('#review-checks > li[data-check="realty_identity"]')).not.toContainText('Площадь 47,3');
+  await expect(ep.locator('#review-checks > li[data-check="realty_identity"]')).toContainText('Кадастровый номер 77:06:0006006:6061 не совпадает');
+  await shot(ep, 'c63-progon6-ekspert-ii-novaya-versiya');
+  // Отмечен исправленным только пункт 1; файл лежит больше суток (2.204).
+  expect((await ep.request.put(`/api/orders/${A}/org-returns/${rid}/items/1`, { data: { fixed: true }, headers: H })).status()).toBe(200);
+  await db(async (c) => {
+    await c.query("update org_returns set created_at = now() - interval '30 hours' where order_id = $1", [A]);
+    await c.query("update documents set created_at = now() - interval '27 hours' where id = $1", [second]);
+  });
+  await ep.goto('/kabinet');
+  const late = ep.locator('li[data-today-item="fresh-late"]', { hasText: 'Шестая пачка: квартира' });
+  await expect(late).toContainText('Руководитель (Главная Вера) ждёт подписи');
+  await late.scrollIntoViewIfNeeded();
+  await shot(ep, 'c64-progon6-ekspert-ne-podpisan');
+  await late.locator('button.open').click();
+  const doc = ep.locator(`#docs li.doc[data-doc="${second}"]`);
+  await expect(doc).toBeInViewport();
+  await expect(doc).toContainText('Не отмечено: 1 (пункт 2)');
+  await shot(ep, 'c65-progon6-ekspert-fail');
+  expect((await ep.request.post(`/api/documents/${second}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+
+  // Руководитель: отбор «Отмечены не все пункты замечания» (2.205).
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const f = hp.locator('#org-sign-filter');
+  await expect(f.locator('[data-sign-filter="left"]')).toHaveText('Отмечены не все пункты замечания · 1');
+  await f.locator('[data-sign-filter="left"]').click();
+  await f.scrollIntoViewIfNeeded();
+  await expect(hp.locator('#org-sign')).toContainText('эксперт отметил исправленными 1 из 2, осталось:');
+  await expect(hp.locator('#org-sign')).toContainText('2. Кадастровый номер не тот — не отмечено');
+  await shot(hp, 'c66-progon6-rukovoditel-otbor');
+  for (const p of [ep, hp, cp]) await p.context().close();
+});

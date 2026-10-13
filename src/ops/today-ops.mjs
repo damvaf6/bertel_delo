@@ -26,7 +26,7 @@ import { expiringLinks, incompleteInspections, silentLinks } from './inspect-ops
 import { answeredExtends, openExtends } from './deadline-ops.mjs';
 import { openHandovers } from './handover-ops.mjs';
 import { dueNotes } from './note-ops.mjs';
-import { caseMoves, caseRemind } from './org-ops.mjs';
+import { caseMoves, caseRemind, transferTargets } from './org-ops.mjs';
 
 // «Горит» — просрочено или до срока не больше двух дней (как подсветка в списке дел).
 const HOT_DAYS = 2;
@@ -254,8 +254,12 @@ export async function orgPart(sql, org, registry, today, { actorId = null } = {}
     .map((o) => view(o, { reason: handovers.get(o.id).reason, requested_at: handovers.get(o.id).requested_at }));
   // Эксперт не принимает дела до … (2.113): его дела в работе со сроком раньше дня возвращения — в отпуске он их не сдаст.
   // Уже попросил передать сам — такие дела только в «просит передать».
-  const away = cases.filter((o) => o.status === 'in_work' && !handovers.has(o.id) && awayDeadline(o, today))
-    .map((o) => view(o, { away_until: o.away_until, away_note: o.away_note ?? null, extend: ext.get(o.id) ?? null }));
+  // Передать некому (прогон 2.210) — «передайте коллеге» не советуем, как в «Делах экспертов» (прогон 2.200).
+  const awayCases = cases.filter((o) => o.status === 'in_work' && !handovers.has(o.id) && awayDeadline(o, today));
+  const full = awayCases.length ? await sql`select * from orders where id = any(${awayCases.map((o) => o.id)}::uuid[])` : [];
+  const mates = new Map(await Promise.all(full.map(async (o) => [o.id, (await transferTargets(sql, o, org.id, registry)).length > 0])));
+  const away = awayCases.map((o) => view(o, { away_until: o.away_until, away_note: o.away_note ?? null, extend: ext.get(o.id) ?? null,
+    can_transfer: mates.get(o.id) ?? false }));
   const toSign = [];
   const returned = [];
   const atRisk = [];
