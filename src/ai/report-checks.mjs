@@ -549,29 +549,88 @@ export function parseFloorField(value) {
   const f = String(value ?? '').match(/^\s*(-?\d{1,3})(?:\s*(?:-?(?:й|м|ом))?\s*(?:этаж\S*\s*)?(?:\/|из)\s*(\d{1,3}))?/iu);
   return f ? { floor: Number(f[1]), floors: f[2] ? Number(f[2]) : null } : null;
 }
+// 2.212: этаж помещения и этажность здания из выписок ЕГРН дела (ctx.egrn — ai-ops), как площадь (2.202). Выписка на
+// участок не в счёт. Этаж — «Номер, тип этажа, на котором расположено помещение: Этаж № 3», «Номер этажа: 3»; помещение на
+// двух этажах (в выписке разные этажи) — этаж не берём. Этажность — «Количество этажей, в том числе подземных этажей: 10,
+// в том числе подземных 1»: в отчёте обычно пишут надземные (9) — годится и то, и другое число.
+const EGRN_FLOOR_AT = [
+  /номер,?\s*(?:тип\s+)?этажа[^:\n]{0,80}:\s*(?:этаж\s*)?№?\s*(\d{1,3})(?!\d|[,.]\d)/giu,
+  /(?<![а-яё])этаж\s*№\s*(\d{1,3})(?!\d|[,.]\d)/giu,
+];
+const EGRN_FLOORS_AT = /количество\s+этажей[^:\n]{0,60}:\s*(\d{1,3})(?!\d|[,.]\d)([^\n]*)/giu;
+function egrnFloorValues(egrn, ctx) {
+  const floors = new Map();
+  const totals = new Map();
+  if (ctx.service === 'land') return { floors, totals };
+  for (const d of egrn ?? []) {
+    if (!Array.isArray(d.pages)) continue;
+    const head = d.pages.slice(0, 2).join('\n');
+    if (EGRN_LAND.test(head) && !EGRN_BUILT.test(head)) continue;
+    const mine = new Map();
+    d.pages.forEach((page, i) => {
+      for (const re of EGRN_FLOOR_AT) {
+        for (const m of page.matchAll(re)) {
+          if (/аналог|машино-мест\S*\s+в\s+здани/iu.test(lineBefore(page, m.index))) continue;
+          if (!mine.has(Number(m[1]))) mine.set(Number(m[1]), i);
+        }
+      }
+      for (const m of page.matchAll(EGRN_FLOORS_AT)) {
+        const total = Number(m[1]);
+        const under = m[2].match(/подземн\S*(?:\s+этаж\S*)?\s*[:\-–—]?\s*(\d{1,3})(?!\d|[,.]\d)/iu);
+        const above = under && Number(under[1]) > 0 && Number(under[1]) < total ? total - Number(under[1]) : null;
+        if (total > 0 && !totals.has(total)) totals.set(total, { name: d.name, page: i, above });
+      }
+    });
+    if (mine.size === 1) {
+      const [[v, page]] = [...mine];
+      if (!floors.has(v)) floors.set(v, { name: d.name, page });
+    }
+  }
+  return { floors, totals };
+}
+export function egrnFloor(egrn, ctx) {
+  const { floors, totals } = egrnFloorValues(egrn, ctx);
+  return { floor: oneValue(floors), floors: oneValue(totals) };
+}
+
 function floorMatch(doc, ctx) {
   const f = parseFloorField(ctx.fields?.floor);
-  if (!f) return [];
-  const { floor: mineFloor, floors: mineFloors } = f;
+  const egrn = ctx.egrn?.length ? egrnFloor(ctx.egrn, ctx) : { floor: null, floors: null };
+  if (!f && !egrn.floor && !egrn.floors) return [];
+  const mineFloor = f?.floor ?? null;
+  const mineFloors = f?.floors ?? null;
+  const refFloor = egrn.floor ? egrn.floor.v : mineFloor;
+  const refFloors = egrn.floors ? egrn.floors.v : mineFloors;
+  const floorsOk = (v) => v === refFloors || (egrn.floors?.above != null && v === egrn.floors.above);
   const out = [];
   const seen = new Set();
   const add = (i, page, idx, key, text) => { if (seen.has(key)) return; seen.add(key); out.push({ page: i, quote: lineAround(page, idx), text }); };
-  const floorsText = (v) => `Этажей в доме ${v}, а в заявке ${mineFloors} — проверьте, нет ли данных другого дома`;
+  // В заявке другое — заказчик ошибся или выписка не на тот объект: подсказываем.
+  const floorText = (v) => (egrn.floor
+    ? `Этаж ${v} не совпадает с этажом в выписке ЕГРН «${egrn.floor.name}» (${refFloor}, стр. ${egrn.floor.page + 1})${mineFloor != null && mineFloor !== refFloor ? `; в заявке — ${mineFloor}` : ''} — проверьте, нет ли данных другого объекта`
+    : `Этаж ${v} не совпадает с этажом из заявки (${mineFloor}) — проверьте, нет ли данных другого объекта`);
+  const floorsText = (v) => {
+    if (!egrn.floors) return `Этажей в доме ${v}, а в заявке ${mineFloors} — проверьте, нет ли данных другого дома`;
+    const { name, page, above } = egrn.floors;
+    const shown = above != null ? `${refFloors}, из них надземных ${above}` : `${refFloors}`;
+    const differs = mineFloors && mineFloors !== refFloors && mineFloors !== above;
+    return `Этажей в доме ${v}, а в выписке ЕГРН «${name}» — ${shown} (стр. ${page + 1})${differs ? `; в заявке — ${mineFloors}` : ''} — проверьте, нет ли данных другого дома`;
+  };
   eachPage(doc, (page, i) => {
     for (const re of FLOOR_AT) {
       for (const m of page.matchAll(re)) {
         if (FLOOR_OTHER.test(lineAround(page, m.index))) continue;
         const v = Number(m[1]);
-        if (v !== mineFloor) add(i, page, m.index, `f${v}`, `Этаж ${v} не совпадает с этажом из заявки (${mineFloor}) — проверьте, нет ли данных другого объекта`);
-        if (m[2] && mineFloors && Number(m[2]) !== mineFloors) add(i, page, m.index, `n${m[2]}`, floorsText(m[2]));
+        if (refFloor != null && v !== refFloor) add(i, page, m.index, `f${v}`, floorText(v));
+        if (m[2] && refFloors && !floorsOk(Number(m[2]))) add(i, page, m.index, `n${m[2]}`, floorsText(m[2]));
       }
     }
-    if (!mineFloors) return;
+    if (!refFloors) return;
     for (const re of FLOORS_AT) {
       for (const m of page.matchAll(re)) {
         if (/аналог/iu.test(lineAround(page, m.index)) || /подземн|цокол/iu.test(page.slice(Math.max(0, m.index - 25), m.index + m[0].length))) continue;
         const v = Number(m[1]);
-        if (v !== mineFloors) add(i, page, m.index, `n${v}`, floorsText(v));
+        if (!floorsOk(v)) add(i, page, m.index, `n${v}`, floorsText(v));
       }
     }
   });
@@ -1648,7 +1707,7 @@ export const AUTO_CHECKS = Object.freeze({
   cadastral_match: 'кадастровый номер в отчёте — как в выписке ЕГРН из дела, а без неё — как в заявке',
   address_match: 'адрес объекта одинаков по всему отчёту и как в заявке: населённый пункт, улица, дом, корпус, квартира, участок',
   area_match: 'площадь объекта в отчёте — как в выписке ЕГРН из дела, а без неё — как в заявке',
-  floor_match: 'этаж и этажность дома в отчёте — как в заявке',
+  floor_match: 'этаж и этажность дома в отчёте — как в выписке ЕГРН из дела, а без неё — как в заявке',
   share_match: 'размер доли в отчёте — как в заявке',
   land_match: 'категория земель и вид разрешённого использования — как в заявке',
   inspection: '«без осмотра» и дата осмотра одновременно',
