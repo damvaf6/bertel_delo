@@ -356,6 +356,9 @@ test('срок в дни, когда эксперт не принимает де
   await make('Позже отпуска', 12);
   const asks = await make('Просит передать', 4);
   assert.equal((await e.req('POST', `/api/orders/${asks.id}/handover`, { reason: 'Буду в отпуске' })).status, 201);
+  // Прогон 2.210: эксперт уже попросил перенести срок — руководителю тут делать нечего, в сводке не считается.
+  const ext = await make('Просит перенос', 3);
+  assert.equal((await e.req('POST', `/api/orders/${ext.id}/deadline-requests`, { new_deadline: addDays(today, 14), reason: 'В день срока меня не будет' })).status, 201);
   await S.sql`update specialists set away_until = ${addDays(today, 10)}::date, away_note = 'отпуск' where user_id = ${e.user.id}`;
 
   assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(today, '08:30') }) >= 1);
@@ -368,5 +371,5 @@ test('срок в дни, когда эксперт не принимает де
   assert.doesNotMatch(JSON.stringify(feed), /В отпуске|Позже отпуска|Просит передать|Буду в отпуске|отпуск\b|Отпускной/);
   // Эксперту в «Делах экспертов» руководителя то же дело — с пометкой.
   const cases = (await h.req('GET', `/api/orgs/${o6.id}/cases`)).body.cases;
-  assert.equal(cases.filter((c) => c.away && !c.handover).length, 1);
+  assert.equal(cases.filter((c) => c.away && !c.handover).length, 2, 'в отборе — оба, у одного видна просьба о переносе');
 });
