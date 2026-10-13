@@ -104,6 +104,9 @@ export async function candidatesFor(sql, order, registry) {
     where s.active and (s.away_until is null or s.away_until <= ${today}) and s.user_id <> ${order.owner_user_id}
       and not exists (select 1 from org_members m where m.user_id = s.user_id and m.org_id = ${order.org_id})
       and (${!rules.tax_status} or s.tax_status is not null)
+      -- Карточка допуска отозвана, а новой нет (задача штаба 3f817197-…-81b2) — не предлагать.
+      and not (exists (select 1 from permit_cards c where c.user_id = s.user_id and c.revoked_at is not null)
+               and not exists (select 1 from permit_cards c where c.user_id = s.user_id and c.revoked_at is null))
       and (${lang === null} or exists (select 1 from dossier_items d where d.user_id = s.user_id and d.kind = 'language'
            and d.language = ${lang ?? ''} and d.verified_at is not null and d.deleted_at is null))`;
   const daysLeft = order.deadline ? Math.round((new Date(order.deadline) - new Date(today)) / 86400000) : null;

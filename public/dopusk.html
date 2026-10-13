@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Проверка карточки допуска · БЕРТЕЛ Дело</title>
+  <link rel="stylesheet" href="/app.css">
+  <script type="module" src="/dopusk.js"></script>
+</head>
+<body>
+  <div class="test-mark hidden" id="test-mark">Проверочная версия · только тестовые данные</div>
+  <header class="top"><div class="brand">БЕРТЕЛ Дело<small>проверка карточки допуска</small></div></header>
+  <main>
+    <section class="card">
+      <h1>Проверка карточки допуска исполнителя</h1>
+      <p class="muted">Наведите камеру телефона на QR-код карточки или введите код с неё.</p>
+      <form id="code-form" class="row">
+        <label for="code" class="visually-hidden">Код с карточки</label>
+        <input id="code" name="code" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX" maxlength="20">
+        <button type="submit">Проверить</button>
+      </form>
+      <p class="msg" id="code-msg" role="status" aria-live="polite"></p>
+    </section>
+    <section class="card hidden" id="result">
+      <h2 id="state"></h2>
+      <dl class="facts">
+        <dt>Номер</dt><dd id="number"></dd>
+        <dt>Исполнитель</dt><dd id="name"></dd>
+        <dt>Дата выдачи</dt><dd id="issued"></dd>
+        <dt>Действует до</dt><dd id="until"></dd>
+      </dl>
+      <div id="services-box">
+        <h2 class="gap">Допущен к услугам</h2>
+        <ul id="services"></ul>
+      </div>
+      <h2 id="level"></h2>
+      <ul class="checks" id="checks"></ul>
+      <p class="muted">Карточка допуска — внутренняя отметка платформы БЕРТЕЛ Дело о пройденных проверках, не лицензия и не
+        государственный документ. Подпись КЭП на документе исполнителя можно проверить самостоятельно и бесплатно на Госуслугах
+        (раздел «Подтверждение подлинности электронной подписи»).</p>
+    </section>
+  </main>
+</body>
+</html>

@@ -7,6 +7,7 @@ import { expertLink } from '/expertcard.js';
 import { loadMyReport } from '/myreport.js';
 import { loadSchedule } from '/schedule.js';
 import { loadNotaryDesk } from '/notaries.js';
+import { loadMyCard } from '/permitcard.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -95,7 +96,7 @@ export async function showSpecialist({ to = null } = {}) {
   $('specialist-permits').replaceChildren(...sp.permits.map((p) => el('li', { text: permitText(p) })));
   $('specialist-permits-empty').classList.toggle('hidden', sp.permits.length > 0);
   show('specialist-view', 'specialist');
-  await Promise.all([showCrm(), showVisits(sp), showDossier(), loadSchedule(), loadNotaryDesk(), loadMyReport()]);
+  await Promise.all([showCrm(), showVisits(sp), showDossier(), loadSchedule(), loadNotaryDesk(), loadMyReport(), loadMyCard()]);
   if (to === 'schedule') $('schedule-box').scrollIntoView({ block: 'start' });
 }
 
