@@ -569,6 +569,41 @@ export function egrnFacts(egrn, ctx) {
   };
 }
 
+// 2.224: дата выписки ЕГРН — «02.10.2026 № КУВИ-001/…», «Дата формирования выписки: …», «Выписка сформирована …»,
+// «Дата: …» в начале строки (цифрами или «2 октября 2026 г.»). «По состоянию на …» — дата кадастровой стоимости, не выписки.
+// Ищем в первых двух страницах; нашли несколько — берём самую позднюю. Каждой выписке — { id, name, page, day: 'ГГГГ-ММ-ДД' }; без даты — не в списке.
+const EGRN_DAY_AT = [
+  /(?<![\d.])(\d{1,2})\.(\d{1,2})\.(\d{4})\s*(?:г(?:ода)?\.?)?\s*№\s*КУВИ/giu,
+  /(?:дата\s+(?:формирования|выдачи|подготовки|составления)(?:\s+выписки)?|выписк\S*\s+(?:сформирован|выдан|подготовлен)\S*|^[^\S\n]*дата)[^\S\n]*[:\-–—]?[^\S\n]*(?:«\s*)?(\d{1,2})(?:\s*»)?(?:\.(\d{1,2})\.|[^\S\n]+([а-яё]+)[^\S\n]+)(\d{4})/gimu,
+];
+function egrnDayIn(text) {
+  const days = [];
+  for (const re of EGRN_DAY_AT) {
+    for (const m of text.matchAll(re)) {
+      let v = null;
+      if (m.length === 4) v = ymd(m[3], m[2], m[1]);
+      else if (m[2]) v = ymd(m[4], m[2], m[1]);
+      else {
+        const mi = MONTHS.findIndex((x, i) => (i === 4 ? /^ма[яй]$/iu.test(m[3]) : m[3].toLowerCase().startsWith(x)));
+        if (mi >= 0) v = ymd(m[4], mi + 1, m[1]);
+      }
+      if (v) days.push(v);
+    }
+  }
+  return days.sort().at(-1) ?? null;
+}
+export function egrnIssued(egrn) {
+  const out = [];
+  for (const d of egrn ?? []) {
+    const pages = (d.pages ?? []).slice(0, 2);
+    for (let i = 0; i < pages.length; i += 1) {
+      const day = egrnDayIn(String(pages[i] ?? ''));
+      if (day) { out.push({ id: d.id ?? null, name: d.name, page: i, day }); break; }
+    }
+  }
+  return out;
+}
+
 function areaMatch(doc, ctx) {
   const mine = Number(String(ctx.fields?.area ?? '').replace(',', '.'));
   const egrn = ctx.egrn?.length ? egrnArea(ctx.egrn, ctx) : null;

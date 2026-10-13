@@ -1,9 +1,11 @@
 // Запрос недостающих документов (задача 2.64). Исполнитель отмечает документы из списка услуги (или пишет свои) и одной
 // кнопкой просит их у заказчика; заказчик видит список с отметками и загружает файл к каждому. Текст — через textContent.
+// Выписка ЕГРН в деле старше 30 дней на дату оценки (2.224) — подсказка и «Запросить свежую выписку» одной кнопкой.
 import { api, el, say } from '/common.js';
 import { setNext } from '/next.js';
 
 const $ = (id) => document.getElementById(id);
+const ruDay = (iso) => iso.split('-').reverse().join('.');
 let ctx = null; // { order, upload(file, msg) → документ или null }
 
 export async function loadDocRequests(current, upload) {
@@ -28,6 +30,7 @@ function render(r) {
     : waiting ? (r.can_upload ? `Исполнитель просит документы: осталось загрузить ${waiting}. Нажмите «Загрузить файл» у каждого.` : `Исполнитель ждёт документы от заказчика: ${waiting}.`)
       : 'Все запрошенные документы получены.';
   $('docreq-list').replaceChildren(...r.requests.map((x) => item(x, r)));
+  egrnOld(r.egrn_old);
   $('docreq-form').classList.toggle('hidden', !r.can_request);
   if (r.can_request) {
     $('docreq-items').replaceChildren(...r.catalog.map((c) => {
@@ -54,6 +57,23 @@ function item(x, r) {
       ...(sub ? [el('div', { class: 'muted', text: sub })] : [])),
     ...(actions.length ? [el('div', { class: 'row' }, ...actions)] : []));
 }
+
+// 2.224: от какого числа выписка, на какую дату судим и сколько дней прошло; уже запросили — ждём заказчика.
+function egrnOld(o) {
+  $('docreq-egrn').classList.toggle('hidden', !o);
+  if (!o) return;
+  $('docreq-egrn-text').textContent = `Выписка ЕГРН «${o.name}» от ${ruDay(o.day)} — старше 30 дней на ${o.on_value ? `дату оценки ${ruDay(o.on)}` : 'сегодня'} (${o.age} дн.). `
+    + (o.asked ? 'Свежая выписка запрошена — ждём заказчика.' : 'Для отчёта нужна свежая — запросите её у заказчика.');
+  $('docreq-egrn-ask').classList.toggle('hidden', o.asked);
+}
+
+$('docreq-egrn-ask').addEventListener('click', async () => {
+  try {
+    const r = await api('POST', `/api/orders/${ctx.order.id}/doc-requests`, { items: ['egrn'], fresh_egrn: true });
+    render(r);
+    say($('docreq-msg'), 'Свежая выписка ЕГРН запрошена. Заказчику отправлено уведомление.', 'ok');
+  } catch (err) { say($('docreq-msg'), err.message); }
+});
 
 async function attach(x, e) {
   const file = e.target.files[0];

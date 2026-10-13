@@ -3,14 +3,20 @@
 // заявка пришла по письму). Заказчик видит список с отметками и загружает файл к каждому — исполнителю уведомление.
 // Видят запрос все, кто видит заявку; просит и снимает просьбу только исполнитель, пока дело в работе; файл прикладывает
 // заказчик (тот, кто может добавлять документы заявки). Удалённый заказчиком файл — просьба снова открыта (core-ops.mjs).
+// Выписка ЕГРН в деле старше 30 дней на дату оценки (2.224) — исполнителю подсказка запросить свежую одной кнопкой.
 import { HttpError } from '../http/core.mjs';
-import { FINAL } from '../orders/workflow.mjs';
+import { FINAL, todayMsk } from '../orders/workflow.mjs';
+import { assignmentValue, egrnIssued } from '../ai/report-checks.mjs';
+import { assignmentDocs, egrnDocs } from './ai-ops.mjs';
 import { LEVEL, orderLevel, orderSides } from '../access/policy.mjs';
 import { customersOf, notify } from '../notify/notify.mjs';
 import { audit, text, uuidFrom } from './util.mjs';
 
 const MAX_CUSTOM = 5;
 const MAX_OPEN = 30;
+
+// Выписка ЕГРН «не старше месяца» (подсказка в request_docs модуля): старше — подсказать запросить свежую.
+export const EGRN_FRESH_DAYS = 30;
 
 const isExecutor = (actor, order) => orderSides(actor, order).includes('executor');
 
@@ -26,7 +32,30 @@ async function requestOf(sql, order, raw) {
   return r;
 }
 
-async function view(sql, actor, order, registry) {
+// 2.224: самая свежая выписка ЕГРН дела старше 30 дней на дату оценки (из задания на оценку, письма или определения суда —
+// 2.207; без неё — на сегодня). Только для услуг, где выписку можно запросить (request_docs: egrn), и пока дело в работе.
+// { id, name, page, day, on, on_value, age, asked } — asked: свежая выписка уже запрошена и ещё не получена; иначе null.
+export async function egrnOld(sql, storage, registry, order, today = todayMsk()) {
+  if (order.status !== 'in_work' || !storage) return null;
+  if (!registry.requestDocs(order.module, order.service, order.basis_kind).some((c) => c.id === 'egrn')) return null;
+  const docs = await egrnDocs(sql, storage, order);
+  const issued = egrnIssued(docs);
+  // Последняя загруженная выписка без распознанной даты (заказчик прислал свежую не тем видом) — не судим.
+  if (!issued.length || !issued.some((x) => x.id === docs[0].id)) return null;
+  const last = issued.reduce((a, b) => (b.day > a.day ? b : a));
+  const value = assignmentValue(await assignmentDocs(sql, storage, order)).day ?? null;
+  const on = value ?? today;
+  const age = Math.round((Date.parse(`${on}T00:00:00Z`) - Date.parse(`${last.day}T00:00:00Z`)) / 86400_000);
+  if (age <= EGRN_FRESH_DAYS) return null;
+  const asked = !!(await sql`select 1 from doc_requests where order_id = ${order.id} and item_id = 'egrn'
+                             and cancelled_at is null and fulfilled_at is null limit 1`).length;
+  return { id: last.id, name: last.name, page: last.page, day: last.day, on, on_value: !!value, age, asked };
+}
+
+// Пояснение заказчику к просьбе о свежей выписке — сразу видно, почему старая не годится.
+export const egrnOldNote = (o) => `Выписка ЕГРН в деле от ${o.day.split('-').reverse().join('.')} — старше ${EGRN_FRESH_DAYS} дней на ${o.on_value ? 'дату оценки' : 'сегодня'}. Нужна свежая выписка: закажите её на Госуслугах или в МФЦ и загрузите сюда.`;
+
+async function view(sql, actor, order, registry, storage) {
   const catalog = registry.requestDocs(order.module, order.service, order.basis_kind);
   const hints = new Map(catalog.map((c) => [c.id, c.hint]));
   const rows = await sql`
@@ -48,6 +77,8 @@ async function view(sql, actor, order, registry) {
     can_upload: orderLevel(actor, order) >= LEVEL.write && !FINAL.includes(order.status),
     // Список услуги — исполнителю: уже запрошенные и ещё не полученные отмечены.
     catalog: canRequest ? catalog.filter((c) => !(c.basis && basisAttached)).map(({ basis, ...c }) => ({ ...c, open: open.has(c.id) })) : [],
+    // Выписка ЕГРН старше 30 дней на дату оценки (2.224) — исполнителю.
+    egrn_old: canRequest ? await egrnOld(sql, storage, registry, order) : null,
   };
 }
 
@@ -56,13 +87,13 @@ export function docRequestOps() {
     {
       id: 'doc_requests.list', method: 'GET', path: '/api/orders/:id/doc-requests', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
-      async handler({ sql, actor, order, registry }) { return view(sql, actor, order, registry); },
+      async handler({ sql, actor, order, registry, providers }) { return view(sql, actor, order, registry, providers.storage); },
     },
     {
       // Запросить документы: отмеченные из списка услуги и (или) свои строки; уже запрошенные и не полученные — не дублируются.
       id: 'doc_requests.create', method: 'POST', path: '/api/orders/:id/doc-requests', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
-      async handler({ sql, actor, order, registry, body, res }) {
+      async handler({ sql, actor, order, registry, providers, body, res }) {
         executorOnly(actor, order);
         const catalog = registry.requestDocs(order.module, order.service, order.basis_kind);
         const ids = Array.isArray(body?.items) ? [...new Set(body.items.map(String))] : [];
@@ -75,7 +106,12 @@ export function docRequestOps() {
         });
         for (const t of custom) items.push({ item_id: null, title: text(t, 'Какой документ нужен', 200) });
         if (!items.length) throw new HttpError(400, 'nothing_selected', 'Отметьте документы или напишите, какой нужен');
-        const note = body?.note && String(body.note).trim() ? text(body.note, 'Пояснение для заказчика', 1000) : null;
+        let note = body?.note && String(body.note).trim() ? text(body.note, 'Пояснение для заказчика', 1000) : null;
+        // «Запросить свежую выписку» (2.224): пояснение заказчику — от какого числа выписка в деле и почему нужна новая.
+        if (body?.fresh_egrn && !note && ids.includes('egrn')) {
+          const old = await egrnOld(sql, providers.storage, registry, order);
+          if (old) note = egrnOldNote(old);
+        }
         const made = await sql.tx(async (tx) => {
           const open = await tx`select item_id, title from doc_requests
                                 where order_id = ${order.id} and cancelled_at is null and fulfilled_at is null`;
@@ -91,14 +127,14 @@ export function docRequestOps() {
           return fresh.length;
         });
         res.status(201);
-        return { requested: made, ...(await view(sql, actor, order, registry)) };
+        return { requested: made, ...(await view(sql, actor, order, registry, providers.storage)) };
       },
     },
     {
       // Заказчик загрузил файл (обычной или прямой загрузкой) — приложить его к запрошенному документу.
       id: 'doc_requests.attach', method: 'POST', path: '/api/orders/:id/doc-requests/:rid/attach', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'write' },
-      async handler({ sql, actor, order, registry, body, params }) {
+      async handler({ sql, actor, order, registry, providers, body, params }) {
         if (FINAL.includes(order.status)) throw new HttpError(409, 'order_final', 'Заявка завершена — файлы не добавляются');
         const r = await requestOf(sql, order, params.rid);
         const docId = uuidFrom(body?.document_id, 'Файл не найден');
@@ -110,14 +146,14 @@ export function docRequestOps() {
           await audit(tx, actor, 'doc_request.attach', 'order', order.id, { title: r.title });
           if (order.executor_user_id) await notify(tx, 'docs_received', { users: [order.executor_user_id], orderId: order.id, actor });
         });
-        return view(sql, actor, order, registry);
+        return view(sql, actor, order, registry, providers.storage);
       },
     },
     {
       // Исполнитель снимает просьбу (документ больше не нужен) — пока она не выполнена.
       id: 'doc_requests.cancel', method: 'DELETE', path: '/api/orders/:id/doc-requests/:rid', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
-      async handler({ sql, actor, order, registry, params }) {
+      async handler({ sql, actor, order, registry, providers, params }) {
         executorOnly(actor, order);
         const r = await requestOf(sql, order, params.rid);
         if (r.fulfilled_at) throw new HttpError(409, 'already_done', 'Документ уже получен');
@@ -125,7 +161,7 @@ export function docRequestOps() {
           await tx`update doc_requests set cancelled_at = now() where id = ${r.id}`;
           await audit(tx, actor, 'doc_request.cancel', 'order', order.id, { title: r.title });
         });
-        return view(sql, actor, order, registry);
+        return view(sql, actor, order, registry, providers.storage);
       },
     },
   ];

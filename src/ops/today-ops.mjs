@@ -13,7 +13,7 @@
 // (2.132): его сообщение без ответа эксперта — даже если эксперт его уже прочитал. Срок через 1–2 дня или прошёл, а своего
 // файла результата нет (2.138). «Вернули на доработку» — когда вернули, пункты замечания, ближе срок — выше (2.147).
 // Ответ диспетчера на просьбу о переносе срока — пока эксперт не открыл «Срок» в деле (2.155). Владелец нажал «Готово»
-// осмотра, а обязательные шаги без фото (2.208).
+// осмотра, а обязательные шаги без фото (2.208). Выписка ЕГРН в деле старше 30 дней на дату оценки (2.224) — запросить свежую.
 // Руководителю — те же сведения, что в «Делах экспертов» (2.16): без заказчика, полей заявки, документов и переписки.
 // Только свои дела и свои организации.
 import { orderRef } from '../notify/registry.mjs';
@@ -27,6 +27,7 @@ import { answeredExtends, openExtends } from './deadline-ops.mjs';
 import { openHandovers } from './handover-ops.mjs';
 import { dueNotes } from './note-ops.mjs';
 import { caseMoves, caseRemind, transferTargets } from './org-ops.mjs';
+import { egrnOld } from './docreq-ops.mjs';
 
 // «Горит» — просрочено или до срока не больше двух дней (как подсветка в списке дел).
 const HOT_DAYS = 2;
@@ -40,7 +41,7 @@ const RETURN_LONG_DAYS = 2;
 // Исправленный файл после возврата руководителя загружен больше суток назад, а эксперт его не подписал (2.204).
 const FRESH_LATE_HOURS = 24;
 
-async function expertPart(sql, actor, registry, today) {
+async function expertPart(sql, actor, registry, today, storage) {
   const sp = await sql.one`select user_id from specialists where user_id = ${actor.id}`;
   if (!sp) return null;
   const rows = await sql`
@@ -156,7 +157,14 @@ async function expertPart(sql, actor, registry, today) {
     return item(o, a);
   }).sort((a, b) => new Date(b.decided_at) - new Date(a.decided_at));
   const awayDeclined = await awayDeclinedCases(sql, actor, rows, ext, today, item);
+  // Выписка ЕГРН в деле старше 30 дней на дату оценки, свежую ещё не просили (2.224) — запросить одной кнопкой.
+  const egrnStale = [];
+  for (const o of rows.filter((x) => x.status === 'in_work')) {
+    const old = await egrnOld(sql, storage, registry, o, today);
+    if (old && !old.asked) egrnStale.push(item(o, { egrn: old }));
+  }
   return {
+    egrn_old: egrnStale,
     // Отказ в переносе, а срок в дни «не принимаю дела» (2.215) — своей строкой с «Попросить руководителя передать дело».
     away_declined: awayDeclined,
     extend_answer: extendAnswer.filter((x) => !awayDeclined.some((a) => a.id === x.id)),
@@ -432,13 +440,13 @@ export function todayOps() {
   return [
     {
       id: 'today.get', method: 'GET', path: '/api/today', auth: 'user', access: 'self',
-      async handler({ sql, actor, registry }) {
+      async handler({ sql, actor, registry, providers }) {
         const today = todayMsk();
         const headOf = actor.orgs.filter((m) => m.role === 'head').map((m) => m.org_id);
         const orgs = headOf.length ? await sql`select id, name from organizations where id = any(${headOf}::uuid[]) order by name` : [];
         return {
           today,
-          expert: await expertPart(sql, actor, registry, today),
+          expert: await expertPart(sql, actor, registry, today, providers.storage),
           dispatcher: await dispatcherPart(sql, actor, registry, today),
           orgs: await Promise.all(orgs.map((o) => orgPart(sql, o, registry, today, { actorId: actor.id }))),
         };
