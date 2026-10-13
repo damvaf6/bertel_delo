@@ -155,8 +155,11 @@ async function expertPart(sql, actor, registry, today) {
     const { order_id: _, ...a } = answers.get(o.id);
     return item(o, a);
   }).sort((a, b) => new Date(b.decided_at) - new Date(a.decided_at));
+  const awayDeclined = await awayDeclinedCases(sql, actor, rows, ext, today, item);
   return {
-    extend_answer: extendAnswer,
+    // Отказ в переносе, а срок в дни «не принимаю дела» (2.215) — своей строкой с «Попросить руководителя передать дело».
+    away_declined: awayDeclined,
+    extend_answer: extendAnswer.filter((x) => !awayDeclined.some((a) => a.id === x.id)),
     ready: readyLeft,
     no_result: noResult,
     reply_wait: replyWait,
@@ -233,6 +236,28 @@ async function docsLine(sql, orderId, userId) {
   const names = got.length > 3 ? `${got.slice(0, 3).join(', ')} и ещё ${got.length - 3}` : got.join(', ');
   return `документы получены: ${names} — ${waiting ? `ждём ещё ${waiting}` : 'все запрошенные'}`;
 }
+// Диспетчер отказал в переносе срока, а срок в дни, когда эксперт не принимает дела (2.215): эксперту от организации —
+// попросить руководителя передать дело коллеге. Строка держится, пока эксперт не попросил передать (или руководитель уже
+// отказал после этого отказа диспетчера), не попросил перенос заново или не сдвинул «не принимаю дела до …».
+async function awayDeclinedCases(sql, actor, rows, ext, today, item) {
+  const sp = await sql.one`select to_char(away_until, 'YYYY-MM-DD') as away_until, away_note from specialists where user_id = ${actor.id}`;
+  const list = rows.filter((o) => o.status === 'in_work' && !ext.get(o.id) && awayDeadline({ ...o, away_until: sp?.away_until }, today));
+  if (!list.length || !(await executorSignOrg(sql, actor.id))) return [];
+  const ids = list.map((o) => o.id);
+  const last = new Map((await sql`
+    select distinct on (order_id) order_id, outcome, to_char(new_deadline, 'YYYY-MM-DD') as new_deadline, answer, decided_at
+    from deadline_requests where order_id = any(${ids}::uuid[]) and outcome is not null
+    order by order_id, decided_at desc, id desc`).map((r) => [r.order_id, r]));
+  const handed = await sql`select order_id, outcome, coalesce(decided_at, requested_at) as at from handover_requests
+                           where requested_by = ${actor.id} and order_id = any(${ids}::uuid[])`;
+  return list.flatMap((o) => {
+    const d = last.get(o.id);
+    if (d?.outcome !== 'declined') return [];
+    if (handed.some((h) => h.order_id === o.id && (h.outcome === null || new Date(h.at) > new Date(d.decided_at)))) return [];
+    return [item(o, { away_until: sp.away_until, asked: d.new_deadline, answer: d.answer ?? null, decided_at: d.decided_at })];
+  });
+}
+
 export function awayDeadline(o, today) {
   return !!o.away_until && o.away_until > today && !!o.deadline && o.deadline < o.away_until;
 }
