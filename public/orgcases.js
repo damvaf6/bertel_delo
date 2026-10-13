@@ -49,6 +49,8 @@ const FILTERS = [
   { id: 'overdue', text: 'Срок прошёл', test: (c) => c.overdue },
   { id: 'hot', text: 'Горит', test: (c) => c.hot },
   { id: 'week', text: 'Срок на этой неделе', test: (c) => c.week },
+  // 2.209: срок в дни, когда эксперт не принимает дела; о которых эксперт уже просит передать — в «Просят передать».
+  { id: 'away', text: 'Эксперт не принимает дела — срок в эти дни', test: (c) => !!c.away && !c.handover },
   { id: 'idle', text: 'Без движения', test: (c) => c.idle },
   { id: 'sign', text: 'Ждёт моей подписи', test: (c) => c.sign_wait > 0 },
   { id: 'returned', text: 'Вернул эксперту', test: (c) => c.returned_open },
@@ -137,6 +139,8 @@ function renderCases() {
   if (filter === 'overdue') active.sort((a, b) => b.overdue_days - a.overdue_days);
   // «Исправленный файл ждёт подписи эксперта» (2.171): дольше всех ждущие — первыми.
   if (filter === 'fresh') active.sort((a, b) => new Date(a.returned.fresh_file.at) - new Date(b.returned.fresh_file.at));
+  // «Эксперт не принимает дела — срок в эти дни» (2.209): ближайший срок — первым.
+  if (filter === 'away') active.sort((a, b) => String(a.deadline).localeCompare(String(b.deadline)));
   const done = found.filter((c) => !c.active);
   const none = cases.length > 0 && !found.length;
   $('org-cases-none').classList.toggle('hidden', !none);
@@ -369,7 +373,8 @@ function offerWait(org, c) {
       msg)];
 }
 
-// К блоку организации из утренней сводки (2.130): «sign» — к подписи организации; «week», «overdue», «handover», «returned»,
+// К блоку организации из утренней сводки (2.130): «sign» — к подписи организации; «away» (2.209) — к отбору «Эксперт не принимает
+// дела — срок в эти дни»; «week», «overdue», «handover», «returned»,
 // «fresh», «idle» — к списку дел с отбором «Срок на этой неделе» (2.127; в нём и просроченные), «Срок прошёл» (2.158), «Просят
 // передать», «Вернул эксперту» (2.153), «Исправленный файл ждёт подписи эксперта» (2.172) или «Без движения» (2.141). Отбора уже
 // нет (дела сданы, эксперт ответил) — список целиком.

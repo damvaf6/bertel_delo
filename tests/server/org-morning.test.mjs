@@ -322,3 +322,51 @@ test('исправленный файл не подписан (2.172): числ�
   // «Не исправлено» уже нечего — сводка ведёт к отбору «Исправленный файл ждёт подписи эксперта».
   assert.equal(orgDigestTo({ ...r, returned: 0 }), 'fresh');
 });
+
+test('срок в дни, когда эксперт не принимает дела (2.209): число таких дел в работе — в тексте; о которых эксперт просит передать — не считаются; больше ничего нет — к отбору «Эксперт не принимает дела — срок в эти дни»', async () => {
+  assert.equal(orgDigestText({ sign: 0, handover: 0, due: 0, overdue: 0, idle: 0, returned: 0, fresh: 0, away: 1 }),
+    'На сегодня по организации: у 1 дела срок в дни, когда эксперт не принимает дела');
+  assert.equal(orgDigestText({ sign: 0, handover: 1, due: 0, overdue: 0, idle: 0, returned: 0, fresh: 0, away: 5 }),
+    'На сегодня по организации: 1 просьба передать дело, у 5 дел срок в дни, когда эксперт не принимает дела');
+  assert.equal(orgDigestTo({ sign: 0, handover: 0, due: 0, overdue: 0, idle: 0, returned: 0, fresh: 0, away: 2 }), 'away');
+  assert.equal(orgDigestTo({ sign: 1, handover: 1, due: 0, overdue: 0, idle: 1, returned: 1, fresh: 1, away: 2 }), 'away');
+  assert.equal(orgDigestTo({ sign: 0, handover: 0, due: 0, overdue: 1, idle: 0, returned: 0, fresh: 0, away: 2 }), 'overdue');
+
+  // Своя организация: эксперт не принимает дела 10 дней. «В отпуске» — срок через 5 дней (считается), «Позже отпуска» — срок
+  // через 12 дней (не считается), «Просит передать» — срок через 4 дня, но эксперт уже просит передать (не повторяется).
+  const h = await login(S, '+79990003831');
+  const e = await login(S, '+79990003832');
+  const o6 = await makeOrg(S.sql, 'ООО «Отпускная оценка»');
+  await addMember(S.sql, o6.id, h.user.id, 'head');
+  await makeSpecialist(S.sql, e.user.id);
+  await addMember(S.sql, o6.id, e.user.id, 'member');
+  await e.req('PATCH', '/api/me', { full_name: 'Эксперт Отпускной' });
+  assert.equal((await e.req('PATCH', '/api/specialist/me', { org_id: o6.id })).status, 200);
+  const make = async (title, days) => {
+    const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
+    assert.equal((await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: addDays(today, 15), fields: FIELDS })).status, 200);
+    assert.equal((await owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
+    await ensurePaid(S.sql, o.id);
+    assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: e.user.id, from: 'matching' })).status, 200);
+    assert.equal((await e.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+    await S.sql`update orders set deadline = ${addDays(today, days)}::date where id = ${o.id}`;
+    return o;
+  };
+  await make('В отпуске', 5);
+  await make('Позже отпуска', 12);
+  const asks = await make('Просит передать', 4);
+  assert.equal((await e.req('POST', `/api/orders/${asks.id}/handover`, { reason: 'Буду в отпуске' })).status, 201);
+  await S.sql`update specialists set away_until = ${addDays(today, 10)}::date, away_note = 'отпуск' where user_id = ${e.user.id}`;
+
+  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(today, '08:30') }) >= 1);
+  const [r] = await S.sql`select sign, handover, due, overdue, idle, returned, fresh, away from org_morning_digests where user_id = ${h.user.id} and org_id = ${o6.id}`;
+  assert.deepEqual({ ...r }, { sign: 0, handover: 1, due: 0, overdue: 0, idle: 0, returned: 0, fresh: 0, away: 1 });
+  const feed = (await h.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня по организации'));
+  assert.equal(feed.length, 1);
+  assert.equal(feed[0].title, 'На сегодня по организации: 1 просьба передать дело, у 1 дела срок в дни, когда эксперт не принимает дела');
+  assert.equal(feed[0].section, `org=${o6.id}&to=away`);
+  assert.doesNotMatch(JSON.stringify(feed), /В отпуске|Позже отпуска|Просит передать|Буду в отпуске|отпуск\b|Отпускной/);
+  // Эксперту в «Делах экспертов» руководителя то же дело — с пометкой.
+  const cases = (await h.req('GET', `/api/orgs/${o6.id}/cases`)).body.cases;
+  assert.equal(cases.filter((c) => c.away && !c.handover).length, 1);
+});
