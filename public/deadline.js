@@ -32,7 +32,7 @@ function render(r) {
   renderMoved(r.moved);
   renderPace(r.pace);
   $('deadline-open').classList.toggle('hidden', !o);
-  if (o) $('deadline-open-text').textContent = `Просьба от ${whenRu(o.requested_at)}: перенести на ${dayRu(o.new_deadline)}. Причина: ${o.reason}`;
+  if (o) $('deadline-open-text').textContent = `Просьба${o.org_name ? ` организации «${o.org_name}» (передать дело некому)` : ''} от ${whenRu(o.requested_at)}: перенести на ${dayRu(o.new_deadline)}. Причина: ${o.reason}`;
   $('deadline-answer-field').classList.toggle('hidden', !r.can_decide);
   for (const id of ['deadline-approve', 'deadline-decline']) $(id).classList.toggle('hidden', !r.can_decide);
   $('deadline-withdraw').classList.toggle('hidden', !r.can_withdraw);

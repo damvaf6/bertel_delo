@@ -5,7 +5,10 @@
 // видят (внутреннее дело организации); в журнале дела — только служебным.
 import { HttpError } from '../http/core.mjs';
 import { executorSignOrg, orderSides } from '../access/policy.mjs';
-import { notify } from '../notify/notify.mjs';
+import { dispatchers, notify } from '../notify/notify.mjs';
+import { addDays, todayMsk } from '../orders/workflow.mjs';
+import { orgExpertsFor } from './match-ops.mjs';
+import { newDateFrom } from './deadline-ops.mjs';
 import { audit, text, uuidFrom } from './util.mjs';
 
 const isExecutor = (actor, order) => order.executor_user_id === actor.id && orderSides(actor, order).includes('executor');
@@ -29,6 +32,21 @@ export async function openHandovers(sql, orders) {
     .map((r) => [r.order_id, { id: String(r.id), reason: r.reason, requested_at: r.requested_at }]));
 }
 
+// Передать некому (2.221): руководитель вместо передачи сам просит диспетчера перенести срок от организации. Готовые новый
+// срок и причина: эксперт не принимает дела до … — день возвращения (будний); иначе — неделя от срока (или от сегодня).
+// Причину видит заказчик — в ней нет того, что эксперт написал руководителю (болезнь и т. п.).
+const weekday = (d) => { let x = d; while ([0, 6].includes(new Date(`${x}T00:00:00Z`).getUTCDay())) x = addDays(x, 1); return x; };
+export function extendSuggest(order, awayUntil, today = todayMsk()) {
+  if (!order.deadline) return null;
+  const ru = (d) => d.split('-').reverse().join('.');
+  if (awayUntil && awayUntil > today && order.deadline < awayUntil) {
+    return { new_deadline: weekday(awayUntil),
+      reason: `Исполнитель не работает до ${ru(awayUntil)}, передать дело другому эксперту организации некому — просим перенести срок` };
+  }
+  return { new_deadline: weekday(addDays([order.deadline, today].sort().at(-1), 7)),
+    reason: 'Исполнитель временно не может работать, передать дело другому эксперту организации некому — просим перенести срок' };
+}
+
 async function view(sql, actor, order) {
   if (!isExecutor(actor, order)) return { available: false };
   const org = await executorSignOrg(sql, actor.id);
@@ -38,11 +56,18 @@ async function view(sql, actor, order) {
   const last = await sql.one`select outcome, answer, decided_at, reason from handover_requests
                              where order_id = ${order.id} and requested_by = ${actor.id} and outcome = 'declined'
                              order by id desc limit 1`;
+  // Передать некому (2.221): руководитель попросил диспетчера перенести срок — на какую дату и ответил ли диспетчер.
+  const ext = await sql.one`select h.decided_at, to_char(r.new_deadline, 'YYYY-MM-DD') as new_deadline, r.outcome
+                            from handover_requests h join deadline_requests r on r.id = h.extend_id
+                            where h.order_id = ${order.id} and h.requested_by = ${actor.id} and h.outcome = 'extend'
+                            order by h.id desc limit 1`;
+  const lastOut = [last, ext].filter(Boolean).sort((a, b) => new Date(b.decided_at) - new Date(a.decided_at))[0];
   return {
     available: true,
     org: org.name,
     open,
-    declined: !open && last ? { answer: last.answer ?? null, decided_at: last.decided_at, reason: last.reason } : null,
+    declined: !open && last && lastOut === last ? { answer: last.answer ?? null, decided_at: last.decided_at, reason: last.reason } : null,
+    extend_asked: !open && ext && lastOut === ext ? { decided_at: ext.decided_at, new_deadline: ext.new_deadline, outcome: ext.outcome ?? null } : null,
     can_request: order.status === 'in_work' && !open,
   };
 }
@@ -179,6 +204,44 @@ export function handoverOps() {
           await notify(tx, 'org_handover_declined', { users: [cur.executor_user_id], orderId: cur.id, actor });
         });
         return { ok: true };
+      },
+    },
+    {
+      // Передать некому (2.221): руководитель организации эксперта отвечает на просьбу передать дело просьбой к диспетчеру
+      // перенести срок — от организации, с новым сроком и причиной (видит заказчик). Просьба передать закрывается
+      // (исход 'extend'), эксперту — уведомление; ответ диспетчера придёт и эксперту, и руководителям.
+      id: 'orgs.cases.handover_extend', method: 'POST', path: '/api/orgs/:id/cases/:orderId/handover/extend', auth: 'user',
+      access: { resource: 'org', param: 'id', need: 'manage' },
+      async handler({ sql, actor, org, params, body, registry, res }) {
+        const orderId = uuidFrom(params.orderId, 'Дело не найдено');
+        if (!String(body?.reason ?? '').trim()) throw new HttpError(400, 'reason_required', 'Укажите причину переноса');
+        const reason = text(body.reason, 'Причина переноса', 1000);
+        let made;
+        await sql.tx(async (tx) => {
+          const cur = await tx.one`select * from orders where id = ${orderId} for update`;
+          if (!cur?.executor_user_id || (await executorSignOrg(tx, cur.executor_user_id))?.id !== org.id) throw new HttpError(404, 'not_found', 'Дело не найдено');
+          const open = await openHandover(tx, cur);
+          if (!open || cur.status !== 'in_work') throw new HttpError(409, 'already_decided', 'Просьбы уже нет — обновите страницу');
+          if (!cur.deadline) throw new HttpError(409, 'no_deadline', 'У дела нет срока');
+          if (body?.from !== undefined && body.from !== cur.deadline) throw new HttpError(409, 'status_changed', 'Срок уже изменился — обновите страницу');
+          // Есть кому передать — передайте: перенос от организации только когда передать некому.
+          const mates = (await orgExpertsFor(tx, cur, org.id, registry)).filter((c) => c.user_id !== cur.executor_user_id);
+          if (mates.length) throw new HttpError(409, 'can_transfer', 'В организации есть эксперт, которому можно передать дело, — передайте его');
+          const to = newDateFrom(body?.new_deadline, cur);
+          const rows = await tx`insert into deadline_requests (order_id, requested_by, org_id, old_deadline, new_deadline, reason)
+                                values (${cur.id}, ${actor.id}, ${org.id}, ${cur.deadline}, ${to}, ${reason})
+                                on conflict do nothing returning id`;
+          if (!rows.length) throw new HttpError(409, 'already_requested', 'Просьба о переносе срока уже ждёт ответа диспетчера');
+          made = { id: String(rows[0].id), new_deadline: to };
+          await tx`update handover_requests set outcome = 'extend', decided_by = ${actor.id}, decided_at = now(), extend_id = ${rows[0].id}
+                   where id = ${open.id} and outcome is null`;
+          await audit(tx, actor, 'deadline.request', 'order', cur.id, { from: cur.deadline, to, reason, org: org.id });
+          await audit(tx, actor, 'handover.extend', 'order', cur.id, { org: org.id, to });
+          await notify(tx, 'deadline_ext_requested', { users: await dispatchers(tx), orderId: cur.id, actor });
+          await notify(tx, 'org_handover_extend', { users: [cur.executor_user_id], orderId: cur.id, actor });
+        });
+        res.status(201);
+        return { ok: true, extend: made };
       },
     },
   ];

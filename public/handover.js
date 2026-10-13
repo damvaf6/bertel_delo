@@ -6,6 +6,7 @@ import { setNext } from '/next.js';
 
 const $ = (id) => document.getElementById(id);
 const whenRu = (s) => new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+const dayRu = (s) => s.split('-').reverse().join('.');
 let ctx = null; // { order, open }
 
 export async function loadHandover(current) {
@@ -31,6 +32,13 @@ function render(r) {
   const d = r.declined;
   $('handover-declined').classList.toggle('hidden', !d);
   if (d) $('handover-declined').textContent = `Руководитель не стал передавать дело ${whenRu(d.decided_at)}${d.answer ? `: ${d.answer}` : ''}.`;
+  // Передать некому (2.221): руководитель попросил диспетчера перенести срок — ответ диспетчера виден в блоке «Срок».
+  const x = r.extend_asked;
+  $('handover-extend').classList.toggle('hidden', !x);
+  if (x) {
+    $('handover-extend').textContent = `Передать дело некому — руководитель ${whenRu(x.decided_at)} попросил диспетчера перенести срок на ${dayRu(x.new_deadline)}${
+      x.outcome === 'approved' ? ': диспетчер согласился' : x.outcome === 'declined' ? ': диспетчер отказал' : x.outcome === 'withdrawn' ? ' (просьба отозвана)' : ' — ждёт ответа диспетчера'}.`;
+  }
   $('handover-form').classList.toggle('hidden', !r.can_request);
 }
 

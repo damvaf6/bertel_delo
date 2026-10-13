@@ -13,7 +13,7 @@ import { STATUS_NAME, addDays, isOverdue, todayMsk, weekEnd } from '../orders/wo
 import { monthRu, orgMonthDoneCases, orgMonthReport, reportCsv, reportMonth } from '../orgs/report.mjs';
 import { buildOrgMonthArchive } from './case-ops.mjs';
 import { openExtends } from './deadline-ops.mjs';
-import { openHandovers } from './handover-ops.mjs';
+import { extendSuggest, openHandovers } from './handover-ops.mjs';
 import { orgSchedule } from '../orders/schedule.mjs';
 import { expiringLinks, incompleteInspections } from './inspect-ops.mjs';
 
@@ -302,7 +302,9 @@ export function orgOps() {
           inspection: inspections.get(o.id) ?? null,
           idle: !!moves.get(o.id)?.idle,
           extend: ext.get(o.id) ?? null,
-          handover: handovers.get(o.id) ?? null,
+          // Передать некому и перенос ещё не просят (2.221): готовые новый срок и причина для просьбы к диспетчеру от организации.
+          handover: handovers.get(o.id) ? { ...handovers.get(o.id), suggest: !(transfer.get(o.id) ?? []).length && !ext.get(o.id)
+            ? extendSuggest(o, awayOf(byId.get(o.executor_user_id), today)?.until ?? null, today) : null } : null,
           transfer_to: transfer.get(o.id) ?? [],
           offer_wait: waitingAnswer.get(o.id) ?? null,
           offered_at: offeredAt.get(o.id) ?? null,

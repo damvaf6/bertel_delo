@@ -7,7 +7,7 @@ import { orderSides } from '../access/policy.mjs';
 import { addDays, todayMsk } from '../orders/workflow.mjs';
 import { BUSY_DEADLINES, isBusy, tripsByDay } from '../orders/schedule.mjs';
 import { yearStats } from '../matching/stats.mjs';
-import { customersOf, dispatchers, notify } from '../notify/notify.mjs';
+import { customersOf, dispatchers, notify, orgHeads } from '../notify/notify.mjs';
 import { audit, text } from './util.mjs';
 import { moveDeadlineNotes } from './note-ops.mjs';
 
@@ -15,7 +15,7 @@ const MAX_DAYS = 730; // как у срока заявки — не дальше
 const DECIDE_STATUSES = ['in_work', 'review'];
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-function newDateFrom(value, order) {
+export function newDateFrom(value, order) {
   const v = String(value ?? '');
   const d = new Date(`${v}T00:00:00Z`);
   if (!DATE_RE.test(v) || Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== v) {
@@ -138,7 +138,9 @@ async function view(sql, actor, order, registry) {
   const sides = orderSides(actor, order);
   const fresh = await freshAnswer(sql, actor, order);
   const rows = await sql`
-    select id, old_deadline, new_deadline, reason, requested_at, outcome, decided_at, answer from deadline_requests where order_id = ${order.id} order by id desc`;
+    select r.id, r.old_deadline, r.new_deadline, r.reason, r.requested_at, r.outcome, r.decided_at, r.answer, g.name as org_name
+    from deadline_requests r left join organizations g on g.id = r.org_id where r.order_id = ${order.id} order by r.id desc`;
+  // От организации (2.221): руководитель попросил перенос, потому что передать дело некому, — видно, кто просит.
   const requests = rows.map((r) => ({ ...r, id: String(r.id) }));
   const open = requests.find((r) => !r.outcome) ?? null;
   // Сколько раз уже переносили (2.169): только согласованные просьбы — число, всего дней и первоначальный срок.
@@ -260,6 +262,11 @@ export function deadlineOps() {
             { from: oldDeadline, to: newDeadline, answer });
           const executor = order.executor_user_id ? [order.executor_user_id] : [];
           await notify(tx, approve ? 'deadline_ext_approved' : 'deadline_ext_declined', { users: executor, orderId: order.id, actor });
+          // Просила организация (2.221) — ответ и руководителям: уведомление ведёт к делу в «Делах экспертов».
+          if (r.org_id) {
+            await notify(tx, approve ? 'org_extend_approved' : 'org_extend_declined',
+              { users: await orgHeads(tx, r.org_id), orderId: order.id, orgId: r.org_id, actor });
+          }
           if (approve) await notify(tx, 'deadline_moved', { users: await customersOf(tx, order), orderId: order.id, actor });
         });
         return view(sql, actor, { ...order, deadline: approve ? newDeadline : order.deadline }, registry);

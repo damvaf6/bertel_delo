@@ -315,3 +315,66 @@ test('2.215: отказ в переносе, а срок в дни «не при
   assert.equal(((await colleague.req('GET', '/api/today')).body.expert?.away_declined ?? []).some((x) => [o.id, o2.id].includes(x.id)), false);
   for (const c of [spec, solo]) await S.sql`update specialists set away_until = null, away_note = null where user_id = ${c.user.id}`;
 });
+
+// 2.221: эксперт просит передать дело, а передать некому — руководитель сам просит диспетчера перенести срок от организации:
+// готовые срок и причина в «Делах экспертов», просьба передать закрыта, эксперту — уведомление, диспетчер видит организацию,
+// ответ диспетчера — эксперту и руководителю. Есть кому передать — нельзя.
+test('2.221: передать некому — руководитель просит диспетчера перенести срок от организации', async () => {
+  const today = todayMsk();
+  const until = addDays(today, 12);
+  const o = await inWork('Некому передать: перенос от организации');
+  const ext = (body) => head.req('POST', `/api/orgs/${org.id}/cases/${o.id}/handover/extend`, body);
+  const good = { new_deadline: addDays(until, 1), reason: 'Передать некому — просим перенести', from: addDays(today, 9) };
+  // Просьбы передать нет — нечего.
+  assert.equal((await ext(good)).body.error, 'already_decided');
+  await S.sql`update specialists set away_until = ${until}, away_note = 'отпуск' where user_id = ${spec.user.id}`;
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/handover`, { reason: 'Отпуск, болею' })).status, 201);
+  // Коллега принимает дела — есть кому передать: перенос от организации не предлагается и не проходит.
+  assert.equal((await caseOf(o)).handover.suggest, null);
+  assert.equal((await ext(good)).body.error, 'can_transfer');
+  await S.sql`update specialists set away_until = ${until} where user_id = ${colleague.user.id}`;
+  const c = await caseOf(o);
+  let back = until;
+  while ([0, 6].includes(new Date(`${back}T00:00:00Z`).getUTCDay())) back = addDays(back, 1);
+  assert.equal(c.handover.suggest.new_deadline, back, 'день возвращения эксперта (будний)');
+  assert.match(c.handover.suggest.reason, /^Исполнитель не работает до \d\d\.\d\d\.\d{4}, передать дело другому эксперту организации некому/);
+  assert.ok(!c.handover.suggest.reason.includes('болею'), 'что писал эксперт руководителю, заказчик не видит');
+  // Проверки: причина, дата, срок уже изменился; чужие — нет.
+  assert.equal((await ext({ ...good, reason: ' ' })).body.error, 'reason_required');
+  assert.equal((await ext({ ...good, new_deadline: today })).body.error, 'not_later');
+  assert.equal((await ext({ ...good, from: today })).body.error, 'status_changed');
+  // Сотрудники организации — «нет прав», посторонние — «не найдено».
+  for (const who of [spec, colleague, dispatcher]) assert.equal((await who.req('POST', `/api/orgs/${org.id}/cases/${o.id}/handover/extend`, good)).status, 403);
+  for (const who of [solo, owner]) assert.equal((await who.req('POST', `/api/orgs/${org.id}/cases/${o.id}/handover/extend`, good)).status, 404);
+  const r = await ext(good);
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.equal(r.body.extend.new_deadline, good.new_deadline);
+  assert.equal((await ext(good)).body.error, 'already_decided', 'просьба передать закрыта');
+  // Эксперту — уведомление, к «Сроку» в деле; в блоке «Передать дело» — что руководитель попросил перенос.
+  assert.equal(await events(spec.user.id, 'org_handover_extend'), 1);
+  const n = (await spec.req('GET', '/api/notifications')).body.notifications.find((x) => x.title.startsWith('Передать дело некому'));
+  assert.deepEqual([n?.order_id, n?.to], [o.id, 'deadline'], 'уведомление эксперту — к «Сроку» в деле');
+  let hv = (await spec.req('GET', `/api/orders/${o.id}/handover`)).body;
+  assert.deepEqual([hv.open, hv.declined, hv.extend_asked?.new_deadline, hv.extend_asked?.outcome, hv.can_request], [null, null, good.new_deadline, null, true]);
+  // В «Делах экспертов» — просьбы передать нет, перенос ждёт ответа; в «Сегодня» руководителя — тоже.
+  const c2 = await caseOf(o);
+  assert.deepEqual([c2.handover, c2.extend?.new_deadline], [null, good.new_deadline]);
+  assert.equal((await todayOf()).some((x) => x.order_ref === c.order_ref), false);
+  // Диспетчер: в «Сегодня» и в деле — от организации; заказчик видит причину.
+  const d = (await dispatcher.req('GET', '/api/today')).body.dispatcher.extend.find((x) => x.id === o.id);
+  assert.deepEqual([d?.org_name, d?.reason], [org.name, good.reason]);
+  assert.equal(await events(dispatcher.user.id, 'deadline_ext_requested') > 0, true);
+  const dv = (await dispatcher.req('GET', `/api/orders/${o.id}/deadline-requests`)).body;
+  assert.deepEqual([dv.open?.org_name, dv.can_decide], [org.name, true]);
+  assert.equal((await owner.req('GET', `/api/orders/${o.id}/deadline-requests`)).body.open.reason, good.reason);
+  // Диспетчер согласился — срок новый; ответ — эксперту и руководителю (к делу в «Делах экспертов»).
+  assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/deadline-requests/${dv.open.id}/decide`, { approve: true })).status, 200);
+  assert.equal((await caseOf(o)).deadline, good.new_deadline);
+  assert.equal(await events(spec.user.id, 'deadline_ext_approved'), 1);
+  assert.equal(await events(head.user.id, 'org_extend_approved'), 1);
+  const hn = (await head.req('GET', '/api/notifications')).body.notifications.find((x) => x.title.startsWith('Диспетчер согласился перенести срок дела эксперта'));
+  assert.equal(hn?.section, `org=${org.id}&case=${o.id.slice(0, 8).toUpperCase()}&to=case`, JSON.stringify(hn));
+  hv = (await spec.req('GET', `/api/orders/${o.id}/handover`)).body;
+  assert.equal(hv.extend_asked.outcome, 'approved');
+  for (const x of [spec, colleague]) await S.sql`update specialists set away_until = null, away_note = null where user_id = ${x.user.id}`;
+});
