@@ -1092,6 +1092,24 @@ test('ИИ-проверка результата: специалист пере�
   await expect(objm).toContainText('Адрес «г. Москва, тестовая ул., д. 9, кв. 12» не совпадает с адресом в выписке ЕГРН «Выписка ЕГРН.txt» (г. Москва, тестовая ул., д. 9, кв. 21, стр. 1): квартира 12, а в выписке 21');
   await objm.getByText('с адресом в выписке ЕГРН').scrollIntoViewIfNeeded();
   await shot(sp, '54i-specialist-ii-adres-egrn');
+  // 2.218: у находки по выписке — кнопка «Выписка ЕГРН, стр. 1»: строка из выписки, с которой сверяли, и файл выписки.
+  const areaFind = ident.locator('.ai-found li').filter({ hasText: 'Площадь 45,1 кв. м' });
+  await expect(areaFind.locator('[data-role="egrn-place"]')).toBeHidden();
+  await areaFind.getByRole('button', { name: 'Выписка ЕГРН, стр. 1' }).click();
+  await expect(areaFind.locator('[data-role="egrn-place"]')).toBeVisible();
+  await expect(areaFind.locator('[data-role="egrn-place"]')).toContainText('Выписка ЕГРН.txt, стр. 1: Площадь, м2: 47,3');
+  const cadFind = ident.locator('.ai-found li').filter({ hasText: 'Кадастровый номер 77:01:0001001:1234' });
+  await cadFind.getByRole('button', { name: 'Выписка ЕГРН, стр. 1' }).click();
+  await expect(cadFind.locator('[data-role="egrn-place"]')).toContainText('Кадастровый номер: 77:01:0001001:4321');
+  await areaFind.locator('[data-role="egrn-place"]').scrollIntoViewIfNeeded();
+  await shot(sp, '54j-specialist-ii-nahodka-vypiska-egrn');
+  const egrnFile = sp.waitForResponse((r) => /\/api\/documents\/[^/]+\/link$/.test(r.url()));
+  await areaFind.getByRole('button', { name: 'Открыть файл выписки' }).click();
+  const linkRes = await egrnFile;
+  expect(linkRes.status()).toBe(200);
+  expect(await (await sp.request.get((await linkRes.json()).url)).text()).toContain('Площадь, м2: 47,3');
+  await sp.goto(`/kabinet#order=${id}`);
+  await expect(sp.locator('#review-checks > li[data-check="realty_identity"]')).toContainText('Площадь 45,1 кв. м');
   await look.locator('button[data-look="technical"]').click();
   await expect(sp.locator('#review-checks > li[data-check="technical"]')).toBeInViewport();
   await quiet.locator('summary').click();
