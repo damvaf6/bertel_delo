@@ -713,6 +713,30 @@ test('2.218: у находки по выписке ЕГРН — где в вып
   assert.ok(again.length > 0);
   assert.ok(again.every((f) => !f.egrn), JSON.stringify(again));
 });
+test('2.223: год постройки и материал стен в отчёте сверяются с выпиской ЕГРН на здание из дела', async () => {
+  const o = await inWork('Квартира: дом по выписке');
+  const putDoc = (body, name) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } });
+  assert.equal((await putDoc('Выписка из Единого государственного реестра недвижимости\nВид объекта недвижимости: Здание\nГод ввода в эксплуатацию по завершении строительства: 1984\nМатериал наружных стен: Панельные', 'Выписка ЕГРН дом.txt')).status, 201);
+  assert.equal((await putResult(o, 'ОТЧЁТ ОБ ОЦЕНКЕ\nКвартира в кирпичном жилом доме 1975 года постройки.', 'отчёт.txt', 'text/plain')).status, 201);
+  const found = async () => {
+    const res = await spec.req('POST', `/api/orders/${o.id}/review/ai`);
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    const item = res.body.ai.items.find((i) => i.id === 'realty_identity');
+    return (item?.found ?? []).filter((f) => /^(Год постройки|Материал стен)/.test(f.text));
+  };
+  const got = await found();
+  assert.deepEqual(got.map((f) => f.text), [
+    'Год постройки 1975 не совпадает с выпиской ЕГРН «Выписка ЕГРН дом.txt» (1984, стр. 1) — проверьте, нет ли данных другого дома',
+    'Материал стен «кирпичном жилом доме» не совпадает с выпиской ЕГРН «Выписка ЕГРН дом.txt» («Панельные», стр. 1) — проверьте, нет ли данных другого дома',
+  ]);
+  // Кнопка «Выписка ЕГРН, стр. N» (2.218) — у обеих находок.
+  assert.equal(got[1].egrn.file, 'Выписка ЕГРН дом.txt');
+  assert.match(got[1].egrn.quote, /Материал наружных стен: Панельные/);
+  await S.sql`update documents set deleted_at = now() where order_id = ${o.id} and kind = 'result'`;
+  assert.equal((await putResult(o, 'ОТЧЁТ ОБ ОЦЕНКЕ\nКвартира в панельном жилом доме 1984 года постройки.', 'отчёт-2.txt', 'text/plain')).status, 201);
+  assert.deepEqual(await found(), []);
+});
 test('2.212: этаж и этажность в отчёте сверяются с выписками ЕГРН из дела', async () => {
   const o = await inWork('Квартира: этаж по выписке');
   const putDoc = (body, name) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {

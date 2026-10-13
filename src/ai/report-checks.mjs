@@ -698,6 +698,122 @@ function floorMatch(doc, ctx) {
   return out;
 }
 
+// 2.223: год постройки и материал стен дома в отчёте — как в выписке ЕГРН на здание из дела (ctx.egrn — ai-ops), как этаж
+// (2.212); выписки на участок не в счёт. В выписке бывают и «Год ввода в эксплуатацию», и «Год завершения строительства» —
+// годится любой. Выписки спорят между собой — какая верная, решает эксперт: год сверяем с заявкой, материал — не сверяем.
+const EGRN_YEAR_AT = /год\s+(?:ввода\s+в\s+эксплуатацию(?:\s+по\s+завершени\S*\s+строительства)?|завершения\s+строительства)\s*[:\-–—]?\s*(\d{4})(?!\d)/giu;
+const EGRN_WALLS_AT = /материал\s+(?:наружных\s+)?стен\S*[^:\n]{0,30}:\s*([^\n]{3,60})/giu;
+const YEAR_AT = [
+  /(?<![а-яё])год\S*\s+(?:постройки|постр\.|ввода\s+(?:дома\s+|здания\s+)?в\s+эксплуатацию|завершения\s+строительства|строительства)(?:\s+(?:дома|здания))?\s*[:\-–—]?\s*(\d{4})(?!\d)/giu,
+  /(?<![\d/.,])(\d{4})\s*(?:г\.?|года?)?\s+постройки/giu,
+  /(?<![а-яё])(?:построен|введ[её]н)\S*(?:\s+в\s+эксплуатацию)?\s+в\s+(\d{4})(?!\d)/giu,
+];
+const WALLS_AT = [
+  /материал\S*\s+(?:наружных\s+)?стен\S*(?:\s+(?:дома|здания))?\s*[:\-–—]?\s*([^\n;.]{3,60})/giu,
+  // Просто «Стены: обои, панели ПВХ» — отделка квартиры, не материал дома.
+  /(?<![а-яё])(?:наружные\s+стены(?:\s+(?:дома|здания))?|стены\s+(?:дома|здания))\s*[:\-–—]\s*([^\n;.]{3,60})/giu,
+  /(?<![а-яё])тип\s+(?:дома|здания)\s*[:\-–—]?\s*([^\n;.]{3,40})/giu,
+  /(?<![а-яё-])((?:[а-яё]+-)?(?:кирпичн|крупнопанельн|панельн|монолитн|блочн|деревянн|бревенчат)\S*\s+(?:(?:\d+-?)?(?:много|мало)?(?:квартирн|этажн|жил|секционн|подъездн)\S*\s+){0,2}(?:дом|здани)[а-яё]*)/giu,
+];
+// Класс материала: «кирпичный дом» и «Кирпичные» — одно; «монолитно-кирпичный» сходится и с кирпичом, и с монолитом;
+// «Смешанные», «Прочие» — не сверяем.
+const WALL_KIND = [
+  ['brick', /кирпич|камен/iu],
+  ['panel', /панел|железобетон|ж\/б/iu],
+  ['monolith', /монолит|железобетон|ж\/б/iu],
+  ['block', /бло(?:к|ч)|газобетон|пенобетон|газосиликат|керамзитобетон|шлакобло|камен/iu],
+  ['wood', /дерев|брус|бр[её]в(?:е|н)|каркасн|щитов/iu],
+  ['metal', /металл/iu],
+];
+function wallKinds(text) {
+  return new Set(WALL_KIND.filter(([, re]) => re.test(text)).map(([id]) => id));
+}
+const overlap = (a, b) => [...a].some((x) => b.has(x));
+function egrnBuilding(egrn, ctx) {
+  const out = { years: null, walls: null };
+  if (ctx.service === 'land') return out;
+  let years = null;
+  let walls = null;
+  let yearsBad = false;
+  let wallsBad = false;
+  for (const d of egrn ?? []) {
+    if (!Array.isArray(d.pages)) continue;
+    const head = d.pages.slice(0, 2).join('\n');
+    if (EGRN_LAND.test(head) && !EGRN_BUILT.test(head)) continue;
+    const ys = new Map();
+    let w = null;
+    d.pages.forEach((page, i) => {
+      for (const m of page.matchAll(EGRN_YEAR_AT)) {
+        if (!ys.has(Number(m[1]))) ys.set(Number(m[1]), { name: d.name, doc: d.id, page: i, quote: lineAround(page, m.index) });
+      }
+      for (const m of page.matchAll(EGRN_WALLS_AT)) {
+        const kinds = wallKinds(m[1]);
+        if (!w && kinds.size) w = { v: clean(m[1]), kinds, name: d.name, doc: d.id, page: i, quote: lineAround(page, m.index) };
+      }
+    });
+    if (ys.size) {
+      if (!years) years = ys;
+      else if (![...ys.keys()].some((y) => years.has(y))) yearsBad = true;
+      else for (const [y, at] of ys) if (!years.has(y)) years.set(y, at);
+    }
+    if (w) {
+      if (!walls) walls = w;
+      else if (!overlap(walls.kinds, w.kinds)) wallsBad = true;
+    }
+  }
+  if (years && !yearsBad) out.years = years;
+  if (walls && !wallsBad) out.walls = walls;
+  return out;
+}
+
+function buildingMatch(doc, ctx) {
+  if (ctx.service !== 'realty') return [];
+  const typed = Number(ctx.fields?.year_built);
+  const mine = Number.isInteger(typed) && typed > 0 ? typed : null;
+  const egrn = ctx.egrn?.length ? egrnBuilding(ctx.egrn, ctx) : { years: null, walls: null };
+  if (!mine && !egrn.years && !egrn.walls) return [];
+  const yearAt = egrn.years ? [...egrn.years.values()][0] : null;
+  const refYears = egrn.years ? [...egrn.years.keys()] : mine ? [mine] : [];
+  const out = [];
+  const seen = new Set();
+  const add = (i, page, idx, key, text, at) => { if (seen.has(key)) return; seen.add(key); out.push({ page: i, quote: lineAround(page, idx), egrn: egrnAt(at), text }); };
+  const yearText = (v) => {
+    if (!egrn.years) return `Год постройки ${v} не совпадает с годом из заявки (${mine}) — проверьте, нет ли данных другого дома`;
+    const shown = refYears.join(' и ');
+    const differs = mine && !refYears.includes(mine);
+    return `Год постройки ${v} не совпадает с выпиской ЕГРН «${yearAt.name}» (${shown}, стр. ${yearAt.page + 1})${differs ? `; в заявке — ${mine}` : ''} — проверьте, нет ли данных другого дома`;
+  };
+  eachPage(doc, (page, i) => {
+    if (refYears.length) {
+      for (const re of YEAR_AT) {
+        for (const m of page.matchAll(re)) {
+          const line = lineAround(page, m.index);
+          if (/аналог|капитальн\S*\s+ремонт|реконструкц/iu.test(line)) continue;
+          // Строка таблицы аналогов: «Год постройки 1975 1980 1990» — не про объект.
+          const end = m.index + m[0].length;
+          if (/^[\s|;\t]*\d{4}(?!\d)/.test(page.slice(end, page.indexOf('\n', end) < 0 ? undefined : page.indexOf('\n', end)))) continue;
+          const v = Number(m[1]);
+          if (v < 1700 || v > 2100 || refYears.includes(v)) continue;
+          add(i, page, m.index, `y${v}`, yearText(v), yearAt);
+        }
+      }
+    }
+    if (egrn.walls) {
+      for (const re of WALLS_AT) {
+        for (const m of page.matchAll(re)) {
+          if (/аналог/iu.test(lineAround(page, m.index))) continue;
+          const raw = clean(m[1].split(',')[0]);
+          const kinds = wallKinds(raw);
+          if (!kinds.size || overlap(kinds, egrn.walls.kinds)) continue;
+          const { v, name, page: p } = egrn.walls;
+          add(i, page, m.index, `w${[...kinds].sort().join()}`, `Материал стен «${raw}» не совпадает с выпиской ЕГРН «${name}» («${v}», стр. ${p + 1}) — проверьте, нет ли данных другого дома`, egrn.walls);
+        }
+      }
+    }
+  });
+  return out;
+}
+
 const SHARE_AT = [
   /(?<![а-яё])дол(?:я|и|е|ю|ей)(?![а-яё])[^\d\n]{0,60}?(\d{1,3})\s*\/\s*(\d{1,4})(?![\d/])/giu,
   /(?<![\d/])(\d{1,3})\s*\/\s*(\d{1,4})\s+(?:доли|долю|доля|доле)(?![а-яё])/giu,
@@ -1745,6 +1861,7 @@ const PER_DOC = {
   address_match: addressMatch,
   area_match: areaMatch,
   floor_match: floorMatch,
+  building_match: buildingMatch,
   share_match: shareMatch,
   land_match: landMatch,
   date_order: dateOrder,
@@ -1769,6 +1886,7 @@ export const AUTO_CHECKS = Object.freeze({
   address_match: 'адрес объекта одинаков по всему отчёту и как в заявке: населённый пункт, улица, дом, корпус, квартира, участок',
   area_match: 'площадь объекта в отчёте — как в выписке ЕГРН из дела, а без неё — как в заявке',
   floor_match: 'этаж и этажность дома в отчёте — как в выписке ЕГРН из дела, а без неё — как в заявке',
+  building_match: 'год постройки и материал стен дома в отчёте — как в выписке ЕГРН на здание из дела, а год без неё — как в заявке',
   share_match: 'размер доли в отчёте — как в заявке',
   land_match: 'категория земель и вид разрешённого использования — как в заявке',
   inspection: '«без осмотра» и дата осмотра одновременно',
