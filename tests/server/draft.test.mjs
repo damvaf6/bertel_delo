@@ -792,3 +792,46 @@ test('2.207: дата оценки из приложенного задания 
   assert.doesNotMatch(d.body, /\| Дата оценки \|/);
   assert.doesNotMatch(lastPrompt(), /Дата оценки: [\d.]+ \(/, 'даты в модель — только текстом самих документов');
 });
+
+test('2.211: площадь и кадастровый номер из выписки ЕГРН — в таблицу задания, модели и вместо пометок; разные значения — эксперт выбирает сам', async () => {
+  const o = await inWork('Квартира: площадь и номер из выписки в черновик');
+  const putDoc = (body, name) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } });
+  // Без выписки — как заполнил заказчик.
+  let d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {})).body.draft;
+  assert.equal(d.inputs.egrn, null);
+  assert.match(d.body, /\| Площадь, кв\. м \| 54,3 \|/);
+  // Выписка на участок под домом при оценке квартиры — не в счёт.
+  assert.equal((await putDoc('Выписка из ЕГРН\nВид объекта недвижимости: Земельный участок\nКадастровый номер: 77:01:0001001:10\nПлощадь: 1500 кв. м', 'Выписка ЕГРН участок.txt')).status, 201);
+  assert.equal((await putDoc('Выписка из Единого государственного реестра недвижимости\nВид объекта недвижимости: Помещение\nКадастровый номер: 77:01:0001001:4321\nПлощадь, м2: 47,3', 'Выписка ЕГРН.txt')).status, 201);
+  d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+  assert.deepEqual(d.inputs.egrn, {
+    area: { v: '47,3', name: 'Выписка ЕГРН.txt', page: 1, typed: '54,3' },
+    cadastral: { v: '77:01:0001001:4321', name: 'Выписка ЕГРН.txt', page: 1, typed: null },
+  });
+  assert.match(d.body, /\| Кадастровый номер \| 77:01:0001001:4321 \(по выписке ЕГРН\) \|/);
+  assert.match(d.body, /\| Площадь, кв\. м \| 47,3 \(по выписке ЕГРН; в заявке — 54,3\) \|/);
+  assert.match(lastPrompt(), /Площадь объекта по выписке ЕГРН: 47,3 кв\. м \(выписка «Выписка ЕГРН\.txt», стр\. 1\)/);
+  assert.match(lastPrompt(), /Кадастровый номер по выписке ЕГРН: 77:01:0001001:4321/);
+  // Модель оставила пометки — программа ставит значения из выписки; «кв. м» не задваивается; другие пометки не трогает.
+  const orig = S.providers.ai.complete;
+  S.providers.ai.complete = async () => ({ text: '## 1. Основные факты и выводы\nОбщая площадь — [заполнить: площадь] кв. м, кадастровый номер [заполнить: кадастровый номер]. Стоимость — [заполнить: расчёт]\n## 2. Задание на оценку\nПлощадь: [заполнить: общую площадь объекта]', model: 'fake' });
+  try {
+    d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+    assert.match(d.body, /Общая площадь — 47,3 кв\. м, кадастровый номер 77:01:0001001:4321\. Стоимость — \[заполнить: расчёт\]/);
+    assert.match(d.body, /Площадь: 47,3 кв\. м/);
+  } finally { S.providers.ai.complete = orig; }
+  // Правка эксперта сохраняет, откуда значения.
+  const saved = (await spec.req('PUT', `/api/orders/${o.id}/draft`, { body: `${d.body}\nправка`, from: d.id })).body.draft;
+  assert.equal(saved.inputs.egrn.area.v, '47,3');
+  // Вторая выписка на тот же объект с другой площадью — площадь не подставляется, номер — да.
+  assert.equal((await putDoc('Выписка из ЕГРН\nВид объекта недвижимости: Помещение\nКадастровый номер: 77:01:0001001:4321\nПлощадь, м2: 47,8', 'Выписка ЕГРН новая.txt')).status, 201);
+  d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: saved.id })).body.draft;
+  assert.deepEqual(d.inputs.egrn.area, { values: ['47,8', '47,3'] });
+  assert.equal(d.inputs.egrn.cadastral.v, '77:01:0001001:4321');
+  assert.match(d.body, /\| Площадь, кв\. м \| 54,3 \|/);
+  assert.doesNotMatch(lastPrompt(), /Площадь объекта по выписке ЕГРН/);
+  // Выписок нет — ничего не подставляется.
+  const { egrnFacts } = await import('../../src/ai/report-checks.mjs');
+  assert.deepEqual(egrnFacts([], { service: 'realty' }), { area: null, cadastral: null });
+});

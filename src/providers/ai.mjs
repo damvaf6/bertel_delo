@@ -208,7 +208,8 @@ function fakeDraft(text) {
     let body = '[заполнить: эксперт]';
     if (/^(?:Вводная|Задание)/.test(t)) body = [brief.find((l) => l.startsWith('Основание')) ?? 'Основание: [заполнить]', brief.find((l) => l.startsWith('Для чего')), brief.find((l) => l.startsWith('Дата оценки:'))?.replace(/ \(.*$/, '')].filter(Boolean).join('\n');
     else if (/^(?:Объект|Описание)/.test(t)) {
-      const facts = brief.filter((l) => /^(Услуга|Что оцениваем|Адрес|Площадь|Кадастровый|Этаж|Комнат|Год|Категория|Марка|VIN|Какой товар|Что оценить)/.test(l)).join('\n') || '[заполнить: объект]';
+      const facts = brief.filter((l) => /^(Услуга|Что оцениваем|Адрес|Площадь|Кадастровый|Этаж|Комнат|Год|Категория|Марка|VIN|Какой товар|Что оценить)/.test(l))
+        .map((l) => l.replace(/ \(выписка «.*$/, '')).join('\n') || '[заполнить: объект]';
       body = /^Описание/.test(t) ? `${facts}\n${photoLines()}` : byProgram(title) ? '' : facts;
     } else if (/^Осмотр/.test(t)) body = photoLines();
     else if (/^Вопросы/.test(t) && byProgram(title)) body = '';

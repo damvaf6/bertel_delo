@@ -153,6 +153,13 @@ function readLocal(id) { try { return JSON.parse(localStorage.getItem(KEY(id)) |
 function writeLocal(id, v) { try { localStorage.setItem(KEY(id), JSON.stringify(v)); } catch { /* без восстановления */ } }
 function dropLocal(id) { try { localStorage.removeItem(KEY(id)); } catch { /* ничего */ } }
 
+function egrnLine(k, e) {
+  if (!e) return null;
+  const what = k === 'area' ? 'Площадь' : 'Кадастровый номер';
+  if (e.values) return `В выписках ЕГРН разные ${k === 'area' ? 'площади' : 'кадастровые номера'} (${e.values.join(k === 'area' ? ' и ' : ', ')}${k === 'area' ? ' кв. м' : ''}) — впишите верн${k === 'area' ? 'ую' : 'ый'} сами.`;
+  return `${what} ${e.v}${k === 'area' ? ' кв. м' : ''} — как в выписке ЕГРН «${e.name}» (стр. ${e.page})${e.typed ? `; в заявке — ${e.typed}${k === 'area' ? ' кв. м' : ''}` : ''} — сверьте.`;
+}
+
 function stateText(r) {
   const d = r.draft;
   if (!d) {
@@ -167,6 +174,8 @@ function stateText(r) {
     // Дата оценки из приложенного задания (2.207): откуда взята; в документах разные даты — выбрать эксперту.
     d.inputs?.value_date?.day ? `Дата оценки ${d.inputs.value_date.day} — как ${d.inputs.value_date.what} «${d.inputs.value_date.name}» (стр. ${d.inputs.value_date.page}) — сверьте.` : null,
     d.inputs?.value_date?.days ? `В приложенных документах разные даты оценки (${d.inputs.value_date.days.join(', ')}) — впишите верную сами.` : null,
+    // Площадь и кадастровый номер из выписки ЕГРН (2.211): откуда взяты; в выписках разные — выбрать эксперту.
+    ...['area', 'cadastral'].map((k) => egrnLine(k, d.inputs?.egrn?.[k])),
     d.inputs?.photos?.length ? `Фото в черновике: ${d.inputs.photos.length} (сами снимки ИИ не видит — опишите их).` : null,
     gaps ? `Осталось заполнить мест: ${gaps} (в квадратных скобках).` : null,
     r.can_edit ? 'Итоговый файл приложите, когда текст готов: он уйдёт на проверку вместе с результатом.' : 'Черновик видят только исполнитель и диспетчер.',

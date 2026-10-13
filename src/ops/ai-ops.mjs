@@ -123,7 +123,7 @@ export async function assignmentDocs(sql, storage, order) {
 // или начинающиеся словами «Выписка из Единого государственного реестра недвижимости». Только для автоматических правил.
 const EGRN_MAX = 3;
 const EGRN_HEAD = /выписк\S*\s+из\s+(?:единого\s+государственного\s+реестра\s+недвижимости|ЕГРН)/iu;
-async function egrnDocs(sql, storage, order) {
+export async function egrnDocs(sql, storage, order) {
   const docs = await sql`select d.*, exists (select 1 from doc_requests r where r.document_id = d.id and r.item_id = 'egrn' and r.cancelled_at is null) as asked
                          from documents d where d.order_id = ${order.id} and d.kind in ('basis', 'other') and d.deleted_at is null
                          order by d.created_at desc limit 20`;
