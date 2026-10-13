@@ -15,6 +15,7 @@ import { buildOrgMonthArchive } from './case-ops.mjs';
 import { openExtends } from './deadline-ops.mjs';
 import { openHandovers } from './handover-ops.mjs';
 import { orgSchedule } from '../orders/schedule.mjs';
+import { expiringLinks, incompleteInspections } from './inspect-ops.mjs';
 
 export const INVITE_TTL_DAYS = 14;
 export const LIMITS = {
@@ -285,10 +286,20 @@ export function orgOps() {
         for (const o of rows.filter((x) => x.status === 'in_work')) reminds.set(o.id, await caseRemind(sql, o));
         // Сколько дней по делу ничего не происходило (2.133) — в работе и на проверке.
         const moves = await caseMoves(sql, rows.filter((o) => ['in_work', 'review'].includes(o.status)));
+        // Осмотр не закончен (2.216): владелец нажал «Готово», сняв не всё (2.208), или ссылка перестанет действовать в
+        // ближайшие сутки, а «Готово» не нажато (2.196). Только названия шагов и сроки — фото и адрес руководитель не видит.
+        const inspections = new Map();
+        for (const o of rows.filter((x) => x.status === 'in_work')) {
+          const [gap] = await incompleteInspections(sql, registry, { order: o.id });
+          if (gap) { inspections.set(o.id, { kind: 'incomplete', at: gap.finished_at, missing: gap.missing.map((s) => s.title), asked: gap.asked }); continue; }
+          const [exp] = await expiringLinks(sql, { order: o.id });
+          if (exp) inspections.set(o.id, { kind: 'expiring', at: exp.expires_at, photos: exp.photos });
+        }
         const cases = rows.map((o) => ({
           ...(waits.get(o.id) ?? { sign_wait: 0, sign_since: null, sign_reminded_at: null, returned_open: false, returned: null }),
           remind: reminds.get(o.id) ?? null,
           last_move: moves.get(o.id) ?? null,
+          inspection: inspections.get(o.id) ?? null,
           idle: !!moves.get(o.id)?.idle,
           extend: ext.get(o.id) ?? null,
           handover: handovers.get(o.id) ?? null,
