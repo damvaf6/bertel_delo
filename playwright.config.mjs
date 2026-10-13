@@ -2,6 +2,10 @@
 // UI_BASE_URL задан — проверяется уже запущенный контейнер (CI); иначе поднимается локальный стенд.
 import { defineConfig } from '@playwright/test';
 
+// Приложение с экрана «Домой»: запросы служебного помощника (sw.js) видны проверкам — «нет связи» для него тоже
+// изображается перехватом (context.route), а не только setOffline, который помощника не касается.
+process.env.PW_EXPERIMENTAL_SERVICE_WORKER_NETWORK_EVENTS ??= '1';
+
 const STAND = 'http://127.0.0.1:8788';
 const BASE = process.env.UI_BASE_URL || STAND;
 

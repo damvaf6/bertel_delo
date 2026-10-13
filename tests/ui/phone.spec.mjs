@@ -9171,3 +9171,138 @@ test('прогон 2.210: эксперт и руководитель по пач
   await shot(hp, 'c66-progon6-rukovoditel-otbor');
   for (const p of [ep, hp, cp]) await p.context().close();
 });
+
+// Задача штаба 3f817197: «Дело» — приложение с экрана «Домой». Кнопка «Установить» (окно браузера или подсказка, где
+// нажать; на iPhone — своя), «Не сейчас» запоминается, установленному кнопки нет; страницы открываются без связи;
+// черновик осмотра: снятое без связи фото переживает закрытие страницы и уходит, когда связь появилась.
+test('приложение с экрана «Домой»: «Установить», без связи, черновик осмотра на телефоне', async ({ page, browser, baseURL }) => {
+  test.setTimeout(120_000);
+  // «Нет связи» для страницы и для служебного помощника: ни один запрос не уходит.
+  const cut = (r) => r.abort('internetdisconnected');
+  const offline = async (c, on) => { await c.setOffline(on); if (on) await c.route('**/*', cut); else await c.unroute('**/*', cut); };
+  // Окно установки браузера в проверке не появляется само — «браузер» подаём своим событием.
+  const noAutoOffer = () => window.addEventListener('beforeinstallprompt', (e) => { if (!e.fake) e.stopImmediatePropagation(); }, true);
+  const ctx = await phoneContext(browser, baseURL);
+  await ctx.addInitScript(noAutoOffer);
+  const kp = await ctx.newPage();
+  await kp.goto('/');
+  await expect(kp.locator('#install-box')).toBeVisible();
+  await signIn(kp, '+79990006901');
+  await kp.goto('/kabinet');
+  const box = kp.locator('#install-box');
+  await expect(box.getByRole('heading', { name: 'Дело — на экране телефона' })).toBeVisible();
+  // Служебный помощник встал и управляет страницей.
+  await kp.evaluate(() => navigator.serviceWorker.ready);
+  await kp.reload();
+  expect(await kp.evaluate(() => Boolean(navigator.serviceWorker.controller))).toBe(true);
+  await shot(kp, 'pwa-1-kabinet-ustanovit');
+  // Браузер окна не дал — подсказка, где нажать.
+  await box.getByRole('button', { name: 'Установить' }).click();
+  await expect(kp.locator('#install-help')).toHaveText('Откройте меню браузера (три точки справа вверху) и выберите «Установить приложение» или «Добавить на главный экран».');
+  // Браузер дал окно (Android) — оно и открывается; согласие — «Готово».
+  await kp.evaluate(() => {
+    const e = new Event('beforeinstallprompt');
+    Object.assign(e, { fake: true, prompt: async () => { window.offerShown = true; }, userChoice: Promise.resolve({ outcome: 'accepted' }) });
+    window.dispatchEvent(e);
+  });
+  await box.getByRole('button', { name: 'Установить' }).click();
+  await expect(kp.locator('#install-help')).toHaveText('Готово: значок «Дело» — на экране телефона.');
+  expect(await kp.evaluate(() => window.offerShown)).toBe(true);
+  await shot(kp, 'pwa-2-kabinet-ustanovleno');
+  // «Не сейчас» — карточка уходит и не возвращается; в «Профиле» кнопка остаётся.
+  await box.getByRole('button', { name: 'Не сейчас' }).click();
+  await expect(box).toBeHidden();
+  await kp.reload();
+  await expect(kp.locator('#orders-title')).toBeVisible();
+  await expect(box).toBeHidden();
+  await kp.goto('/kabinet#profile');
+  await expect(kp.locator('#install-card').getByRole('heading', { name: 'Приложение на телефоне' })).toBeVisible();
+  await kp.locator('#install-card').getByRole('button', { name: 'Установить' }).click();
+  await expect(kp.locator('#install-help2')).toContainText('«Установить приложение»');
+  await shot(kp, 'pwa-3-profil-prilozhenie');
+
+  // Без связи: открытые раньше страницы — с телефона; не открытые — понятная страница «нет связи».
+  await offline(ctx, true);
+  await kp.goto('/kabinet');
+  await expect(kp).toHaveTitle('Кабинет · БЕРТЕЛ Дело');
+  await kp.goto('/proverka');
+  await expect(kp.getByRole('heading', { name: 'Нет связи с интернетом' })).toBeVisible();
+  await shot(kp, 'pwa-4-net-svyazi');
+  await offline(ctx, false);
+
+  // iPhone: окна установки у Safari нет — подсказка про «Поделиться».
+  const ictx = await phoneContext(browser, baseURL, { userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1' });
+  const ip = await ictx.newPage();
+  await ip.goto('/');
+  await ip.locator('#install-box').getByRole('button', { name: 'Установить' }).click();
+  await expect(ip.locator('#install-help')).toHaveText('На iPhone: внизу экрана нажмите «Поделиться» (квадрат со стрелкой вверх), затем «На экран „Домой“» и «Добавить».');
+  await shot(ip, 'pwa-5-iphone-podskazka');
+  await ictx.close();
+  // Уже установлено (открыто с экрана «Домой») — кнопок нет.
+  const sctx = await phoneContext(browser, baseURL);
+  await sctx.addInitScript(() => Object.defineProperty(navigator, 'standalone', { value: true }));
+  const st = await sctx.newPage();
+  await st.goto('/');
+  await expect(st.locator('#login-box')).toBeVisible();
+  await expect(st.locator('#install-box')).toBeHidden();
+  await sctx.close();
+
+  // Черновик осмотра: эксперт выдал ссылку; владелец снял фото без связи, закрыл страницу, открыл снова — фото на месте
+  // и ушло, когда связь вернулась.
+  await signIn(page, '+79990006902');
+  const o = (await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Черновик осмотра' }, headers: H })).json()).order;
+  expect((await page.request.patch(`/api/orders/${o.id}`, {
+    data: { deadline: inDays(9), fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, Черновая ул., 5', area: '40' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${o.id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  const spec = await signIn(kp, '+79990006903');
+  await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [spec.id]);
+    await c.query('update orders set price_kop = 1500000, paid_at = now(), status = $2, executor_user_id = $3 where id = $1', [o.id, 'in_work', spec.id]);
+    await c.query("insert into payments (order_id, amount_kop, status, provider_id, created_by, paid_at) values ($1, 1500000, 'succeeded', $2, $3, now())", [o.id, `pay_ui_${o.id}`, spec.id]);
+  });
+  const issued = await (await kp.request.post(`/api/orders/${o.id}/inspection`, { data: { days: 1 }, headers: H })).json();
+  const jpeg = Buffer.from((await kp.evaluate(() => {
+    const c = document.createElement('canvas');
+    c.width = 640; c.height = 480;
+    const g = c.getContext('2d');
+    g.fillStyle = '#c9d6c0'; g.fillRect(0, 0, 640, 480);
+    return c.toDataURL('image/jpeg', 0.8);
+  })).split(',')[1], 'base64');
+  const octx = await phoneContext(browser, baseURL, { permissions: ['geolocation'], geolocation: { latitude: 55.7512, longitude: 37.6184, accuracy: 10 } });
+  const op = await octx.newPage();
+  await op.goto(issued.path);
+  await op.getByRole('button', { name: 'Начать: разрешить определение места' }).click();
+  await expect(op.locator('#progress')).toHaveText(/^Снято 0 из \d+ нужных шагов\.$/);
+  await op.evaluate(() => navigator.serviceWorker.ready);
+  await offline(octx, true);
+  const facade = op.locator('#steps li[data-step="facade"]');
+  await facade.locator('input[type=file]').setInputFiles({ name: 'facade.jpg', mimeType: 'image/jpeg', buffer: jpeg });
+  await expect(facade.locator('.msg')).toContainText('Нет связи — фото не потеряно');
+  await op.close();
+  // Открыл снова без связи (из истории или с экрана «Домой») — шаги и неотправленное фото на месте.
+  const op2 = await octx.newPage();
+  await op2.goto('/osmotr');
+  await expect(op2.locator('#progress')).toHaveText('Нет связи — показываем сохранённое на этом телефоне. Снимайте дальше: фото уйдут, когда связь появится.');
+  await expect(op2.locator('#finish-msg')).toHaveText('Фото с прошлого раза ещё не отправлены: 1. Отправляем — страницу можно не закрывать.');
+  await expect(op2.locator('#pending')).toHaveText('Ещё не отправлено фото: 1. Не закрывайте страницу — отправим, как только будет связь.');
+  await shot(op2, 'pwa-6-osmotr-chernovik-bez-svyazi');
+  await offline(octx, false);
+  await op2.evaluate(() => window.dispatchEvent(new Event('online')));
+  const facade2 = op2.locator('#steps li[data-step="facade"]');
+  await expect(facade2.locator('.badge')).toHaveText('Фото: 1');
+  await expect(op2.locator('#pending')).toBeHidden();
+  await expect(op2.locator('#finish-msg')).toHaveText('Все фото отправлены — можно нажать «Готово».');
+  const n = await db(async (c) => (await c.query("select count(*)::int as n from documents where order_id = $1 and kind = 'inspection'", [o.id])).rows[0].n);
+  expect(n).toBe(1);
+  await shot(op2, 'pwa-7-osmotr-chernovik-otpravleno');
+  // «Готово» — черновик удалён: та же страница без ссылки больше ничего не продолжает.
+  op2.once('dialog', (d) => d.accept());
+  await op2.getByRole('button', { name: 'Готово' }).click();
+  await expect(op2.locator('#closed-text')).toHaveText('Спасибо! Эксперт получил 1 фото. Страницу можно закрыть.');
+  await op2.goto('/osmotr');
+  await expect(op2.locator('#closed-text')).toHaveText('Ссылка неверная или больше не действует. Попросите эксперта прислать новую.');
+  await octx.close();
+  await ctx.close();
+});
