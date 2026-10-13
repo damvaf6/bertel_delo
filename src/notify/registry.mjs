@@ -106,6 +106,10 @@ export const EVENTS = {
   note_reminder: { type: 'executor_work', title: 'Напоминание по Вашей заметке к делу', order: true, to: 'notes' },
   // Просьба передать дело коллеге (2.107): руководителю — к делу в «Делах экспертов»; эксперту — отказ.
   org_handover_requested: { type: 'executor_work', title: 'Эксперт просит передать дело коллеге — ответьте в «Делах экспертов»', order: false, section: 'orgs', focus: 'handover' },
+  // Передать некому (2.221): руководитель сам попросил диспетчера перенести срок — эксперту; ответ диспетчера — руководителям.
+  org_handover_extend: { type: 'executor_work', title: 'Передать дело некому — руководитель организации попросил диспетчера перенести срок', order: true, to: 'deadline' },
+  org_extend_approved: { type: 'org_cases', title: 'Диспетчер согласился перенести срок дела эксперта по просьбе организации', order: false, section: 'orgs', focus: 'case' },
+  org_extend_declined: { type: 'org_cases', title: 'Диспетчер отказал в переносе срока дела эксперта по просьбе организации', order: false, section: 'orgs', focus: 'case' },
   org_handover_declined: { type: 'executor_work', title: 'Руководитель организации не стал передавать дело — оно остаётся у Вас', order: true },
   // Руководитель напомнил эксперту о деле в работе (2.125): не чаще раза в сутки по делу, src/ops/org-ops.mjs.
   org_case_reminder: { type: 'executor_work', title: 'Руководитель организации напоминает о деле — проверьте срок и что осталось сделать', order: true },
@@ -146,8 +150,8 @@ export const EVENTS = {
 
 const ID_RE = /^[a-z_]{1,40}$/;
 export const SECTIONS = ['orgs', 'specialist', 'specialists', 'problems'];
-export const FOCUS = ['pending', 'sign', 'chat', 'handover'];
-export const ORDER_TO = ['notes', 'steps', 'away'];
+export const FOCUS = ['pending', 'sign', 'chat', 'handover', 'case'];
+export const ORDER_TO = ['notes', 'steps', 'away', 'deadline'];
 export const ANCHORS = ['schedule'];
 
 // Проверка реестра при запуске: ошибка в описании — сервер не стартует (как у модулей-профессий).

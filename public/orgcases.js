@@ -354,11 +354,29 @@ function handoverBlock(org, c) {
   return el('div', { class: 'notice-warn', 'data-handover': c.order_ref },
     el('p', { text: `Эксперт просит передать дело коллеге (${timeRu(h.requested_at)}). Причина: ${h.reason}` }),
     ...(pick ? [el('label', { text: 'Кому передать' }), pick]
-      : [el('p', { class: 'muted', text: 'Передать некому: в организации нет другого эксперта с допуском на эту услугу, который принимает дела.' })]),
+      : [el('p', { class: 'muted', text: 'Передать некому: в организации нет другого эксперта с допуском на эту услугу, который принимает дела.' }),
+        ...(h.suggest ? extendForm(org, c, run) : [])]),
     el('div', { class: 'row gap' },
       ...(pick ? [el('button', { 'data-action': 'handover-give', onclick: give }, 'Передать')] : []),
       el('button', { class: 'secondary', 'data-action': 'handover-decline', onclick: refuse }, 'Отказать')),
     answer, msg);
+}
+
+// Передать некому (2.221): одной кнопкой — просьба к диспетчеру перенести срок от организации. Новый срок и причина готовы
+// (день возвращения эксперта или неделя от срока), поправить можно; причину увидит заказчик — без того, что писал эксперт.
+function extendForm(org, c, run) {
+  const s = c.handover.suggest;
+  const date = el('input', { type: 'date', value: s.new_deadline, min: c.deadline, 'aria-label': `Новый срок дела ${c.order_ref}`,
+    'data-handover-extend-date': c.order_ref });
+  const reason = el('textarea', { maxlength: '1000', rows: '2', 'aria-label': `Причина переноса дела ${c.order_ref}`,
+    'data-handover-extend-reason': c.order_ref });
+  reason.value = s.reason;
+  const ask = () => run(() => api('POST', `/api/orgs/${org.id}/cases/${c.id}/handover/extend`,
+    { new_deadline: date.value, reason: reason.value.trim(), from: c.deadline }),
+  'Диспетчеру отправлена просьба перенести срок от организации — эксперт получил уведомление');
+  return [el('p', { text: 'Можно попросить диспетчера перенести срок от организации. Причину увидит заказчик.' }),
+    el('label', { text: 'Новый срок' }), date, el('label', { text: 'Причина' }), reason,
+    el('div', { class: 'row gap' }, el('button', { 'data-action': 'handover-extend', onclick: ask }, 'Попросить диспетчера перенести срок'))];
 }
 
 // Эксперт ещё не ответил на предложенное дело (2.76): сколько ждём; отдать другому эксперту или забрать назад в «Ждут

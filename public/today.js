@@ -226,7 +226,7 @@ export async function loadToday() {
     rows.push(
       ...group('d-money', 'Деньги', d.money, (x) => [x.title, [MONEY[x.what], x.failure].filter(Boolean).join(': ')], toOrder),
       // Перенос срока (2.91) — сразу к блоку «Срок» в деле: согласиться или отказать.
-      ...group('d-extend', 'Просят перенести срок', d.extend ?? [], (x) => [x.title, `${deadline(x, t.today)} → просят ${dayRu(x.new_deadline)}`, `причина: ${x.reason}`],
+      ...group('d-extend', 'Просят перенести срок', d.extend ?? [], (x) => [x.title, `${deadline(x, t.today)} → просят ${dayRu(x.new_deadline)}`, `${x.org_name ? `просит организация «${x.org_name}» — передать дело некому · ` : ''}причина: ${x.reason}`],
         (x) => { location.hash = `order=${x.id}&to=deadline`; }),
       ...group('d-review', 'Ждут проверки результата', d.review, (x) => [x.title, `${x.service} · ${deadline(x, t.today)}`], toOrder),
       ...group('d-price', 'Назначить цену', d.price, (x) => [x.title, `${x.service} · ${deadline(x, t.today)}`], toOrder),

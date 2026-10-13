@@ -1644,7 +1644,7 @@ test('«Напомнить эксперту» (2.125): только руково
 });
 
 test('просьба передать дело коллеге (2.107): видит и просит только исполнитель; отказывает только руководитель организации эксперта', async () => {
-  for (const id of ['handover.get', 'handover.create', 'handover.withdraw', 'orgs.cases.handover_decline']) cover(id);
+  for (const id of ['handover.get', 'handover.create', 'handover.withdraw', 'orgs.cases.handover_decline', 'orgs.cases.handover_extend']) cover(id);
   // Подробно — tests/server/handover.test.mjs; здесь — чужие и стороны заявки без исполнителя.
   const base = `/api/orders/${ownOrder.id}/handover`;
   for (const who of ['stranger', 'headA', 'headB', 'spec']) {
