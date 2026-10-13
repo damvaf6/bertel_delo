@@ -3789,10 +3789,11 @@ test('сводка за месяц (2.78): руководитель видит �
   // От возврата до новой подписи (2.168).
   await expect(row.locator('[data-expert-resign]')).toHaveText(/^после Ваших возвратов: новая подпись в среднем через .+ · ещё не подписано заново: 1$/);
   await expect(hp.locator('#org-report-total')).toContainText(/После Ваших возвратовновая подпись в среднем через .+ · ещё не подписано заново: 1/);
-  // Подписано без ИИ-проверки этой версии (2.199): эксперт подписал отчёт, не запуская ИИ-проверку.
-  await expect(row.locator('[data-expert-signed]')).toHaveText('подписано файлов: 1 · без ИИ-проверки этой версии: 1');
+  // Подписано без ИИ-проверки этой версии (2.199): эксперт подписал отчёт, не запуская ИИ-проверку; и не отметив пункты
+  // первого возврата (2.217).
+  await expect(row.locator('[data-expert-signed]')).toHaveText('подписано файлов: 1 · без ИИ-проверки этой версии: 1 · не отметив все пункты замечания: 1');
   await expect(row.locator('[data-expert-signed]')).toHaveClass(/warn/);
-  await expect(hp.locator('#org-report-total')).toContainText('Подпись экспертовподписано файлов: 1 · без ИИ-проверки этой версии: 1');
+  await expect(hp.locator('#org-report-total')).toContainText('Подпись экспертовподписано файлов: 1 · без ИИ-проверки этой версии: 1 · не отметив все пункты замечания: 1');
   await expect(row.locator('[data-expert-remarks]')).toHaveText('частые замечания: «нет даты осмотра.» ×2, «Не указан этаж»');
   await expect(hp.locator('#org-report-remarks > li')).toHaveText(['нет даты осмотра. — 2 раза', 'Не указан этаж — 1 раз']);
   await expect(row).toContainText('вознаграждение за сданные: 12 000 ₽ · выплачено: 12 000 ₽');
@@ -8886,7 +8887,7 @@ test('прогон 2.200: эксперт и руководитель по пач
 
   // Сводка за месяц (2.199): подписано файлов и сколько без ИИ-проверки этой версии.
   const row = hp.locator('#org-report > li').filter({ hasText: 'Пятов Лев' });
-  await expect(row.locator('[data-expert-signed]')).toHaveText('подписано файлов: 2 · без ИИ-проверки этой версии: 1');
+  await expect(row.locator('[data-expert-signed]')).toHaveText('подписано файлов: 2 · без ИИ-проверки этой версии: 1 · не отметив все пункты замечания: 1');
   await row.locator('[data-expert-signed]').scrollIntoViewIfNeeded();
   await shot(hp, 'c50-progon5-rukovoditel-svodka');
   for (const p of [ep, hp, cp]) await p.context().close();

@@ -167,12 +167,19 @@ const resignQ = (sql, orgId, ids, { start, end }) => sql`
   from org_returns r
   where r.org_id = ${orgId} and r.executor_user_id = any(${ids}::uuid[]) and r.created_at >= ${start} and r.created_at < ${end}`;
 
-// Подписанные экспертами за месяц файлы и без ИИ-проверки этой версии (2.199): [{ user_id, signed, signed_no_ai }].
+// Подписанные экспертами за месяц файлы, без ИИ-проверки этой версии (2.199) и не отметив все пункты замечания (2.217):
+// [{ user_id, signed, signed_no_ai, signed_points_left }]. Пункты — по последнему возврату руководителя по делу до подписи;
+// пункт не отмечен, если на момент подписи он ещё не был отмечен исправленным.
 const signedQ = (sql, orgId, ids, { start, end }) => sql`
   select x.user_id, count(*)::int as signed,
          count(*) filter (where not exists (
            select 1 from ai_reviews r where r.order_id = x.order_id and r.at <= x.at
-             and r.files @> jsonb_build_array(jsonb_build_object('id', x.doc))))::int as signed_no_ai
+             and r.files @> jsonb_build_array(jsonb_build_object('id', x.doc))))::int as signed_no_ai,
+         count(*) filter (where exists (
+           select 1 from org_return_items i
+           where i.return_id = (select r.id from org_returns r where r.order_id = x.order_id and r.org_id = ${orgId}
+                                  and r.created_at < x.at order by r.created_at desc, r.id desc limit 1)
+             and (i.fixed_at is null or i.fixed_at > x.at)))::int as signed_points_left
   from (select a.actor_id as user_id, a.subject_id as doc, (a.details->>'order_id')::uuid as order_id, max(a.at) as at
         from audit_log a join org_members m on m.org_id = ${orgId} and m.user_id = a.actor_id
         where a.action = 'document.sign' and a.actor_id = any(${ids}::uuid[]) and a.at >= ${start} and a.at < ${end}
@@ -318,6 +325,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
       ...resign(q.resign.filter((r) => r.user_id === e.user_id)),
       signed: signed.get(e.user_id)?.signed ?? 0,
       signed_no_ai: signed.get(e.user_id)?.signed_no_ai ?? 0,
+      signed_points_left: signed.get(e.user_id)?.signed_points_left ?? 0,
       remarks: topRemarks(q.remarkItems.filter((i) => i.user_id === e.user_id), TOP_REMARKS_EXPERT).map(({ text, n }) => ({ text, n })),
       prev: cmp ? cmp.experts.get(e.user_id) : null,
       services: byService(done, registry).map(({ name, done: n }) => ({ name, n })),
@@ -325,7 +333,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
   });
   const sum = (k) => (k === 'overdue_now' && !current ? null : rows.reduce((s, r) => s + r[k], 0));
   const keys = ['accepted', 'done', 'done_late', 'overdue_now', 'returned_head', 'returned_dispatcher', 'fee_kop', 'paid_kop',
-    'late_first', 'late_first_moved', 'first_kept', 'signed', 'signed_no_ai'];
+    'late_first', 'late_first_moved', 'first_kept', 'signed', 'signed_no_ai', 'signed_points_left'];
   const all = pace(q.done);
   return {
     month,
@@ -414,11 +422,11 @@ export function reportCsv(orgName, r) {
     'Возвращено руководителем', 'Возвращено на доработку', 'Вознаграждение за сданные, ₽', 'Выплачено, ₽',
     'Дней в среднем от принятия до сдачи', 'Позже первоначального срока', 'Из них с переносом срока',
     'В первоначальный срок, без переносов', 'Дней в среднем от возврата до новой подписи', 'Ждут новой подписи после возврата',
-    'Подписал файлов', 'Из них без ИИ-проверки этой версии'];
+    'Подписал файлов', 'Из них без ИИ-проверки этой версии', 'Из них не отметив все пункты замечания'];
   const line = (name, x) => [name, x.accepted, x.done, x.done_late, ...(r.current ? [x.overdue_now] : []),
     x.returned_head, x.returned_dispatcher, rubCell(x.fee_kop), rubCell(x.paid_kop),
     daysCell(x.avg_days), x.late_first, x.late_first_moved, x.first_kept, daysCell(x.resign_days), x.resign_wait,
-    x.signed, x.signed_no_ai];
+    x.signed, x.signed_no_ai, x.signed_points_left];
   const day = todayMsk();
   const lines = [
     [`Сводка по экспертам — ${orgName}`],
