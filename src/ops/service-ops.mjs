@@ -8,6 +8,7 @@ import { contentDisposition } from '../providers/storage.mjs';
 import { processInbound, receiveMail } from '../mail/inbound.mjs';
 import { deliverMail } from '../mail/outbox.mjs';
 import { DIRECT_UPLOAD_MAX } from './upload-ops.mjs';
+import { manualSign } from '../providers/sign.mjs';
 
 // Хранилище «в памяти»: выдача по подписанной временной ссылке (как у S3).
 export function memoryFileOps() {
@@ -75,6 +76,7 @@ export function testControlOps(cfg) {
     return f;
   };
   const reason = 'только APP_ENV=test, по служебному токену';
+  let savedSign = null;
   return [
     {
       id: 'test.calls', method: 'GET', path: '/__test/fakes/:name/calls', auth: 'public', publicReason: reason,
@@ -103,8 +105,23 @@ export function testControlOps(cfg) {
       },
     },
     {
+      // Подпись при ручной проверке (задача штаба 3f817197-…-81ac): проверка на телефоне переключает стенд на SIGN_PROVIDER=manual
+      // и обратно ('fake'); сброс поддельных поставщиков тоже возвращает поддельную подпись.
+      id: 'test.sign.mode', method: 'POST', path: '/__test/sign/mode', auth: 'public', publicReason: reason,
+      async handler({ req, providers, body }) {
+        guard(req);
+        savedSign ??= providers.sign;
+        providers.sign = body?.mode === 'manual' ? manualSign() : savedSign;
+        return { mode: providers.sign.manual ? 'manual' : 'fake' };
+      },
+    },
+    {
       id: 'test.reset', method: 'POST', path: '/__test/fakes/reset', auth: 'public', publicReason: reason,
-      async handler({ req, providers }) { guard(req); for (const p of Object.values(providers)) p.reset?.(); },
+      async handler({ req, providers }) {
+        guard(req);
+        if (savedSign) providers.sign = savedSign;
+        for (const p of Object.values(providers)) p.reset?.();
+      },
     },
   ];
 }

@@ -10,7 +10,7 @@
 // проверить подписи. Поставщик подписи — src/providers/sign.mjs.
 import crypto from 'node:crypto';
 import { HttpError } from '../http/core.mjs';
-import { orderSides, executorSignOrg } from '../access/policy.mjs';
+import { orderSides, executorSignOrg, isStaff } from '../access/policy.mjs';
 import { ProviderError } from '../providers/fake.mjs';
 import { notify } from '../notify/notify.mjs';
 import { orderRef } from '../notify/registry.mjs';
@@ -21,6 +21,7 @@ import { audit, text } from './util.mjs';
 export const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 const MAX_SIGNATURE_BYTES = 256 * 1024;
 const ROLE_RU = { expert: 'эксперта', org: 'организации' };
+const MANUAL_REASON = { pending: 'ещё не проверена платформой на Госуслугах', bad: 'не подтвердилась при проверке платформой' };
 
 export const signatureView = (s) => s && {
   role: s.role,
@@ -37,6 +38,8 @@ export const signatureView = (s) => s && {
   test: s.test,
   checked_at: s.checked_at,
   checked_ok: s.checked_ok,
+  // Ручная проверка на Госуслугах (SIGN_PROVIDER=manual): 'pending' — ждёт, 'ok' — «подписано КЭП, проверено», 'bad' — нет.
+  ...(s.manual_check ? { manual_check: s.manual_check, manual_checked_at: s.manual_checked_at ?? null, manual_note: s.manual_note ?? null } : {}),
 };
 
 // Подписи файлов заявки: document_id → { expert, org } (строки подписи или null).
@@ -62,6 +65,7 @@ async function providerCall(fn) {
 // Записать проверенную подпись файла. role — 'expert' или 'org'; out — { signature, certificate, test } (кабинет) или
 // загруженный файл (upload), который сначала проверяется у поставщика.
 async function addSignature({ sql, actor, providers }, { doc, order, role, method, org, out }) {
+  if (method === 'cabinet') cabinetOn(providers);
   const buf = await providers.storage.get(doc.storage_key);
   if (!buf) throw new HttpError(409, 'file_missing', 'Файл не найден в хранилище — загрузите его заново');
   const digest = sha256(buf);
@@ -78,30 +82,37 @@ async function addSignature({ sql, actor, providers }, { doc, order, role, metho
       ? new HttpError(400, 'bad_signature', `Подпись не подходит к файлу: ${check.reason ?? 'причина неизвестна'}`)
       : new HttpError(502, 'sign_failed', `Подпись не прошла проверку: ${check.reason ?? 'причина неизвестна'}`);
   }
-  // Подпись организации — сертификатом организации (в нём её название).
-  if (role === 'org' && !check.certificate?.org) {
+  // Ручная проверка: файл подписи разобран, верна ли подпись — проверит сотрудник платформы на Госуслугах.
+  const manual = !!check.manual;
+  // Подпись организации — сертификатом организации (в нём её название); при ручной проверке это смотрит сотрудник платформы.
+  if (role === 'org' && !manual && !check.certificate?.org) {
     throw new HttpError(400, 'not_org_certificate', `${check.certificate?.app ? `Подпись из приложения «${check.certificate.app}» — это подпись физического лица` : 'Это подпись физического лица'} — для подписи организации нужен сертификат организации (руководителя)`);
   }
   const key = `orders/${order.id}/${crypto.randomUUID()}.sig`;
   await providers.storage.put(key, signature, 'application/pkcs7-signature');
+  const replaced = [];
   try {
-    return await sql.tx(async (tx) => {
+    const row = await sql.tx(async (tx) => {
       const cur = await tx.one`select status, executor_user_id from orders where id = ${order.id} for update`;
       if (cur.status !== 'in_work' || cur.executor_user_id !== order.executor_user_id) throw new HttpError(409, 'status_changed', 'Статус заявки уже изменился, обновите страницу');
       const alive = await tx.one`select 1 from documents where id = ${doc.id} and deleted_at is null`;
       if (!alive) throw new HttpError(404, 'not_found', 'Не найдено');
       if (role === 'org') {
         // Организация подписывает то, что эксперт уже подписал, и только пока исполнитель работает от неё.
-        const expert = await tx.one`select 1 from document_signatures where document_id = ${doc.id} and role = 'expert'`;
+        const expert = await tx.one`select 1 from document_signatures where document_id = ${doc.id} and role = 'expert'
+                                    and manual_check is distinct from 'bad'`;
         if (!expert) throw new HttpError(409, 'expert_first', 'Сначала файл подписывает эксперт');
         const now = await executorSignOrg(tx, cur.executor_user_id);
         if (now?.id !== org.id) throw new HttpError(409, 'org_changed', 'Исполнитель больше не работает от этой организации');
       }
+      // Подпись, которая не подтвердилась при ручной проверке, заменяется новой.
+      for (const old of await tx`delete from document_signatures where document_id = ${doc.id} and role = ${role} and manual_check = 'bad' returning storage_key`) replaced.push(old.storage_key);
       const s = await tx.one`
         insert into document_signatures (document_id, order_id, signer_id, provider, digest, storage_key, size_bytes, certificate, test,
-                                         checked_ok, role, method, org_id)
+                                         checked_ok, role, method, org_id, manual_check)
         values (${doc.id}, ${order.id}, ${actor.id}, ${providers.sign.name}, ${digest}, ${key}, ${signature.length},
-                ${JSON.stringify(check.certificate)}, ${!!(check.test ?? out?.test)}, true, ${role}, ${method}, ${org?.id ?? null})
+                ${JSON.stringify(check.certificate)}, ${!!(check.test ?? out?.test)}, ${!manual}, ${role}, ${method}, ${org?.id ?? null},
+                ${manual ? 'pending' : null})
         on conflict (document_id, role) do nothing returning *`;
       if (!s) throw new HttpError(409, 'already_signed', `Файл уже подписан от ${ROLE_RU[role]}`);
       await audit(tx, actor, role === 'org' ? 'document.sign_org' : 'document.sign', 'document', doc.id,
@@ -116,10 +127,17 @@ async function addSignature({ sql, actor, providers }, { doc, order, role, metho
       }
       return s;
     });
+    for (const k of replaced) await providers.storage.delete(k).catch(() => {});
+    return row;
   } catch (e) {
     await providers.storage.delete(key).catch(() => {});
     throw e;
   }
+}
+
+// Ручная проверка (SIGN_PROVIDER=manual): в кабинете не подписывают — только загрузкой своего файла подписи.
+function cabinetOn(providers) {
+  if (providers.sign.manual) throw new HttpError(409, 'cabinet_off', 'Подпись в кабинете пока не подключена — подпишите файл своей программой подписи и загрузите файл подписи (.sig)');
 }
 
 function confirmed(body) {
@@ -235,6 +253,7 @@ export function signOps() {
       async handler(ctx) {
         const { actor, subject: doc, order, body, res } = ctx;
         expertCheck(actor, doc, order);
+        cabinetOn(ctx.providers);
         confirmed(body);
         needName(actor);
         const row = await addSignature(ctx, { doc, order, role: 'expert', method: 'cabinet', org: null, out: null });
@@ -260,7 +279,7 @@ export function signOps() {
       // Руководитель организации исполнителя: дела в работе, где нужна подпись организации, — только файлы результата.
       id: 'orgsign.list', method: 'GET', path: '/api/orgs/:id/signing', auth: 'user',
       access: { resource: 'org', param: 'id', need: 'manage' },
-      async handler({ sql, org, registry }) {
+      async handler({ sql, org, registry, providers }) {
         const orders = await sql`
           select o.id, o.module, o.service, o.deadline, o.executor_user_id, o.status, o.review_round, u.full_name as executor_name
           from orders o join specialists s on s.user_id = o.executor_user_id and s.org_id = ${org.id}
@@ -292,7 +311,7 @@ export function signOps() {
             returns: returns.map(({ id, at, document_id, filename, comment, by, open, items, left }) => ({ id, at, document_id, filename, comment, by, open, items, left })),
           });
         }
-        return { items };
+        return { items, sign_mode: providers.sign.manual ? 'manual' : 'cabinet' };
       },
     },
     {
@@ -311,6 +330,7 @@ export function signOps() {
       async handler(ctx) {
         const { actor, subject: doc, order, signOrg, body, res } = ctx;
         orgCheck(order);
+        cabinetOn(ctx.providers);
         confirmed(body);
         needName(actor);
         const row = await addSignature(ctx, { doc, order, role: 'org', method: 'cabinet', org: signOrg, out: null });
@@ -433,6 +453,13 @@ export function signOps() {
         const results = [];
         for (const s of rows) {
           const sig = await providers.storage.get(s.storage_key);
+          // Ручная проверка: файл сверяется с отпечатком при загрузке подписи, сама подпись — отметкой сотрудника платформы.
+          if (s.manual_check) {
+            const same = !!buf && sha256(buf) === s.digest;
+            results.push({ row: s, valid: same && s.manual_check === 'ok',
+              reason: !same ? 'Файл изменён после подписи' : MANUAL_REASON[s.manual_check] ?? null });
+            continue;
+          }
           const r = !buf || !sig
             ? { valid: false, reason: 'Файл или подпись не найдены в хранилище' }
             : await providerCall(() => providers.sign.verify({ digest: sha256(buf), signature: sig }));
@@ -448,6 +475,37 @@ export function signOps() {
           reason: bad ? `Подпись ${ROLE_RU[bad.row.role]}: ${bad.reason}` : null,
           signatures: signaturesView(pair),
         };
+      },
+    },
+    {
+      // Ручная проверка подписи (SIGN_PROVIDER=manual): диспетчер заявки проверил файл и подпись на Госуслугах и отмечает
+      // итог. ok: true — «подписано КЭП, проверено»; ok: false — с причиной, исполнитель получает уведомление и загружает
+      // подпись заново (пока дело в работе). Файл, изменённый после подписи, не отмечается.
+      id: 'signature.check', method: 'POST', path: '/api/documents/:id/signature/check', auth: 'user',
+      access: { resource: 'document', param: 'id', need: 'read' },
+      async handler({ sql, actor, subject: doc, order, providers, body }) {
+        if (!isStaff(actor)) throw new HttpError(403, 'forbidden', 'Подпись отмечает сотрудник платформы');
+        const role = body?.role === 'org' ? 'org' : 'expert';
+        if (typeof body?.ok !== 'boolean') throw new HttpError(400, 'bad_ok', 'Укажите итог проверки');
+        const note = String(body?.note ?? '').trim();
+        if (note.length > 500) throw new HttpError(400, 'bad_input', 'Причина — не длиннее 500 символов');
+        if (!body.ok && note.length < 3) throw new HttpError(400, 'note_required', 'Напишите, что не так с подписью — исполнитель это увидит');
+        const s = await sql.one`select * from document_signatures where document_id = ${doc.id} and role = ${role}`;
+        if (!s) throw new HttpError(404, 'not_signed', 'Файл не подписан');
+        if (!s.manual_check) throw new HttpError(409, 'not_manual', 'Эту подпись платформа проверяет сама');
+        if (s.manual_check !== 'pending') throw new HttpError(409, 'already_checked', 'Подпись уже отмечена');
+        const buf = await providers.storage.get(doc.storage_key);
+        if (!buf || sha256(buf) !== s.digest) throw new HttpError(409, 'file_changed', 'Файл изменён после подписи — отметить нельзя');
+        const row = await sql.tx(async (tx) => {
+          const u = await tx.one`update document_signatures set manual_check = ${body.ok ? 'ok' : 'bad'}, manual_note = ${body.ok ? null : note},
+                                   manual_checked_by = ${actor.id}, manual_checked_at = now(), checked_at = now(), checked_ok = ${body.ok}
+                                 where id = ${s.id} and manual_check = 'pending' returning *`;
+          if (!u) throw new HttpError(409, 'changed', 'Подпись уже отметили, обновите страницу');
+          await audit(tx, actor, 'signature.check', 'document', doc.id, { order_id: order.id, role, ok: body.ok });
+          if (!body.ok) await notify(tx, 'signature_rejected', { users: [s.signer_id], orderId: order.id, actor });
+          return u;
+        });
+        return { signature: signatureView(row) };
       },
     },
     {

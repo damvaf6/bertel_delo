@@ -391,6 +391,11 @@ export function orderOps() {
                                          and d.uploaded_by = ${cur.executor_user_id} and s.id is null order by d.created_at`;
                 if (noOrg.length) throw new HttpError(400, 'not_signed_org', `Нужна подпись организации ${quoted(signOrg.name)} (руководитель): ${noOrg.map((d) => d.filename).join(', ')}`);
               }
+              // Подпись не подтвердилась при ручной проверке на Госуслугах (sign-ops.mjs, signature.check) — сначала загрузить заново.
+              const bad = await tx`select distinct d.filename from documents d join document_signatures s on s.document_id = d.id
+                                   where d.order_id = ${cur.id} and d.kind = 'result' and d.deleted_at is null
+                                     and d.uploaded_by = ${cur.executor_user_id} and s.manual_check = 'bad' order by d.filename`;
+              if (bad.length) throw new HttpError(400, 'signature_bad', `Подпись не подтвердилась при проверке — загрузите подпись заново: ${bad.map((d) => d.filename).join(', ')}`);
             }
           }
           if (cur.status === 'review' && to === 'done') {
@@ -399,6 +404,11 @@ export function orderOps() {
             if (issues.length) throw new HttpError(409, 'review_issues', `Есть замечания — верните результат на доработку: ${issues.map((c) => c.title).join('; ')}`);
             const left = checks.filter((c) => !c.verdict);
             if (left.length) throw new HttpError(409, 'review_incomplete', `Не все правила проверены: ${left.map((c) => c.title).join('; ')}`);
+            // Ручная проверка подписи (SIGN_PROVIDER=manual): до выдачи каждая загруженная подпись отмечена «проверено».
+            const unchecked = await tx`select distinct d.filename from documents d join document_signatures s on s.document_id = d.id
+                                       where d.order_id = ${cur.id} and d.kind = 'result' and d.deleted_at is null
+                                         and s.manual_check in ('pending', 'bad') order by d.filename`;
+            if (unchecked.length) throw new HttpError(409, 'signature_unchecked', `Проверьте подпись на Госуслугах и отметьте итог: ${unchecked.map((d) => d.filename).join(', ')}`);
           }
           // Вычитка (2а.7): решается при первой сдаче на проверку; переделка по просьбе заказчика — всегда с вычиткой и сроком
           // не раньше чем через redo_days дней; передача другому исполнителю — решается заново при его сдаче.

@@ -10,7 +10,7 @@ import { loadDraft } from '/draft.js';
 import { loadAnalogs } from '/analogs.js';
 import { loadInspection } from '/inspect.js';
 import { loadOnsite } from '/onsite.js';
-import { signatureLines, uploadSignatureButton, SIGN_CONFIRM, UPLOAD_HINT } from '/sign.js';
+import { signatureLines, uploadSignatureButton, SIGN_CONFIRM, UPLOAD_HINT, MANUAL_HINT, SIGN_HOWTO, COURT_HOWTO, memo } from '/sign.js';
 import { setNext } from '/next.js';
 import { reveal } from '/fold.js';
 import { orgChat } from '/orgchat.js';
@@ -424,12 +424,13 @@ async function loadDocs(initial = false) {
   const mineResults = current.executor?.is_me && order.status === 'in_work';
   const signRequired = !!documentsBody.signature_required;
   $('result-sign-note').classList.toggle('hidden', !signRequired);
+  if (documentsBody.sign_mode === 'manual') $('result-sign-note').textContent = 'Перед сдачей подпишите каждый файл результата своей КЭП (КриптоПро, программа удостоверяющего центра, «Госключ») и загрузите файл подписи .sig у файла. Платформа проверит подпись на Госуслугах. Если Вы работаете от организации, файл подписывает ещё её руководитель.';
   lastDocs = documentsBody;
   // Файлы результата поменялись — у «Хода заказа» новый список для «файла нотариуса» (2а.6).
   if (!initial && current.executor?.is_me && !$('steps-box').classList.contains('hidden')) loadSteps(current);
   orgReturnsNow = documentsBody.org_returns ?? []; // окно подписи файла (2.159) показывает пункты замечаний
   // «Подписать все» (2.15): несколько неподписанных файлов результата — одним подтверждением.
-  const unsigned = mineResults && signRequired ? documents.filter((d) => d.kind === 'result' && d.own !== false && !d.signatures?.expert) : [];
+  const unsigned = mineResults && signRequired && documentsBody.sign_mode !== 'manual' ? documents.filter((d) => d.kind === 'result' && d.own !== false && !d.signatures?.expert) : [];
   $('sign-all').classList.toggle('hidden', unsigned.length < 2);
   $('sign-all').textContent = `Подписать все файлы результата (${unsigned.length})`;
   const docLi = (d) => {
@@ -446,7 +447,7 @@ async function loadDocs(initial = false) {
       el('div', { class: 'row' },
         el('button', { class: 'secondary', 'data-action': 'download', onclick: () => download(d) }, 'Скачать'),
         ...(removable ? [el('button', { class: 'danger', 'data-action': 'delete', onclick: () => remove(d) }, 'Удалить')] : [])),
-      ...(d.kind === 'result' ? signatureBlock(d, { canSign: mineResults && signRequired && d.own !== false, signOrg: documentsBody.signature_org }) : []),
+      ...(d.kind === 'result' ? signatureBlock(d, { canSign: mineResults && signRequired && d.own !== false, signOrg: documentsBody.signature_org, manual: documentsBody.sign_mode === 'manual', canCheck: !!documentsBody.can_check_signature, checkUrl: documentsBody.signature_check_url }) : []),
       ...(d.kind === 'result' ? certificateBlock(d) : []));
   };
   // Много фото осмотра (2.49: бывает 100) — одной свёрнутой строкой, чтобы документы и результат не терялись внизу.
@@ -648,12 +649,19 @@ function toAiReview() {
 
 // Подписи УКЭП у файла результата (2.5, 2.5а): эксперт и, если он работает от организации, её руководитель. Исполнитель
 // подписывает свой файл, пока дело в работе, — в кабинете или загрузив готовую подпись (программа УЦ, «Госключ»).
-function signatureBlock(d, { canSign, signOrg }) {
+function signatureBlock(d, { canSign, signOrg, manual = false, canCheck = false, checkUrl = '' }) {
   const { expert, org } = d.signatures ?? {};
   if (!expert && !org && !canSign) return [];
   const lines = [];
   if (expert) lines.push(...signatureLines(expert));
-  else if (canSign) {
+  // Ручная проверка (задача штаба 3f817197-…-81ac): только загрузка своего файла подписи; не подтвердилась — загрузить заново.
+  if (manual && canSign && (!expert || expert.manual_check === 'bad')) {
+    lines.push(...(expert ? [] : [el('div', { class: 'sig-state', text: 'Не подписан КЭП — без подписи на проверку не сдать' })]),
+      ...signReturnPoints(d),
+      el('div', { class: 'row' }, ...uploadSignatureButton(d.filename, (file) => uploadSignature(d, file), 'Загрузить файл подписи (.sig)')),
+      el('div', { class: 'muted', text: MANUAL_HINT }),
+      memo('Как подписать файл КЭП', SIGN_HOWTO, 'sign-howto'));
+  } else if (!expert && canSign) {
     lines.push(el('div', { class: 'sig-state', text: 'Не подписан УКЭП — без подписи на проверку не сдать' }),
       ...signReturnPoints(d),
       ...(d.ai_check ? [el('div', { class: 'sig-ai', 'data-sig': `ai-${d.ai_check.state}`, text: `${aiCheckText(d.ai_check)} ` },
@@ -667,6 +675,12 @@ function signatureBlock(d, { canSign, signOrg }) {
   else if (signOrg && canSign) lines.push(el('div', { class: 'sig-state', 'data-sig': 'org-wait', text: expert
     ? `Ждёт подписи организации ${quoted(signOrg)} — подписывает руководитель в разделе «Организации»`
     : `После Вашей подписи файл подписывает руководитель организации ${quoted(signOrg)}` }));
+  // Сотрудник платформы: подпись ждёт проверки — открыть Госуслуги, сверить файл и подпись и отметить итог.
+  if (canCheck) for (const s of [expert, org].filter((x) => x?.manual_check === 'pending')) lines.push(checkBox(d, s, checkUrl));
+  // Заказчику с подписанным результатом — как подать его в суд электронно.
+  if ((expert || org) && !canSign && !canCheck && current.access !== 'read' && ['done', 'closed'].includes(current.order.status)) {
+    lines.push(memo('Как подать отчёт в суд электронно', COURT_HOWTO, 'court-howto'));
+  }
   if (expert || org) {
     lines.push(el('div', { class: 'row' },
       el('button', { class: 'secondary', 'data-action': 'signature', onclick: () => downloadSignature(d, 'expert') }, 'Файл подписи'),
@@ -761,10 +775,35 @@ async function uploadSignature(d, file) {
   if (!confirm(signConfirmText(d))) return;
   say($('doc-msg'), 'Проверяем подпись…', 'ok');
   try {
-    await api('POST', `/api/documents/${d.id}/signature/upload`, file, { 'content-type': 'application/octet-stream', 'x-confirm': '1' });
+    const { signature } = await api('POST', `/api/documents/${d.id}/signature/upload`, file, { 'content-type': 'application/octet-stream', 'x-confirm': '1' });
     await loadDocs();
-    say($('doc-msg'), 'Подпись проверена и добавлена', 'ok');
+    say($('doc-msg'), signature.manual_check ? 'Подпись загружена — платформа проверит её на Госуслугах' : 'Подпись проверена и добавлена', 'ok');
   } catch (err) { say($('doc-msg'), err.message); }
+}
+
+// Ручная проверка подписи сотрудником платформы: файл и подпись — на Госуслугах («Отсоединённая подпись»), итог — здесь.
+const SIGN_ROLE_RU = { expert: 'эксперта', org: 'организации' };
+function checkBox(d, s, checkUrl) {
+  return el('div', { class: 'sig-check', 'data-role': 'sig-check', 'data-sig-role': s.role },
+    el('div', { class: 'muted', text: `Проверьте подпись ${SIGN_ROLE_RU[s.role]}: скачайте файл и подпись, на Госуслугах выберите «Отсоединённая подпись» и загрузите оба. Подпись верна, если Госуслуги подтвердили её и владелец сертификата — тот, кто должен подписать.` }),
+    el('a', { href: checkUrl, target: '_blank', rel: 'noopener', 'data-role': 'gosuslugi', text: 'Проверка подписи на Госуслугах' }),
+    el('div', { class: 'row' },
+      el('button', { 'data-action': 'sig-ok', onclick: (e) => markSignature(d, s.role, true, e.currentTarget) }, 'Подпись верна'),
+      el('button', { class: 'danger', 'data-action': 'sig-bad', onclick: (e) => markSignature(d, s.role, false, e.currentTarget) }, 'Не подтвердилась')));
+}
+async function markSignature(d, role, ok, btn) {
+  let note = '';
+  if (ok && !confirm(`Подпись ${SIGN_ROLE_RU[role]} к «${d.filename}» проверена на Госуслугах и верна?`)) return;
+  if (!ok) {
+    note = prompt('Что не так с подписью? Исполнитель увидит это и загрузит подпись заново.') ?? '';
+    if (!note.trim()) return;
+  }
+  btn.disabled = true;
+  try {
+    await api('POST', `/api/documents/${d.id}/signature/check`, { role, ok, note });
+    await loadDocs();
+    say($('doc-msg'), ok ? `«${d.filename}»: подписано КЭП, проверено` : `«${d.filename}»: подпись не подтвердилась — исполнитель получил уведомление`, 'ok');
+  } catch (err) { btn.disabled = false; say($('doc-msg'), err.message); }
 }
 
 async function verifyDoc(d) {

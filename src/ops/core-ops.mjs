@@ -2,7 +2,7 @@
 import crypto from 'node:crypto';
 import { HttpError, rateLimiter, sessionCookie } from '../http/core.mjs';
 import { FINAL, resultDue } from '../orders/workflow.mjs';
-import { executorSignOrg, orderSides, seesResults } from '../access/policy.mjs';
+import { executorSignOrg, isStaff, orderSides, seesResults } from '../access/policy.mjs';
 import { requestCode, verifyCode, endSession, SESSION_TTL_SEC } from '../auth/auth.mjs';
 import { audit, oneOf, phoneFrom, publicUser, text } from './util.mjs';
 import { unreadCount } from './notify-ops.mjs';
@@ -10,6 +10,7 @@ import { unreadCount } from './notify-ops.mjs';
 // Подсказки первого входа по ролям (2.52; тексты — public/help.js).
 export const HINTS = ['customer', 'expert', 'head', 'dispatcher'];
 import { orderSignatures, orgReturns, signaturesView, signWait } from './sign-ops.mjs';
+import { GOSUSLUGI_CHECK_URL } from '../providers/sign.mjs';
 import { aiSignHints } from '../ai/ai.mjs';
 import { orderCertificates, siteOrigin } from './certificate-ops.mjs';
 import { stepFiles } from './step-ops.mjs';
@@ -142,7 +143,7 @@ export function coreOps(cfg) {
     {
       id: 'documents.list', method: 'GET', path: '/api/orders/:id/documents', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
-      async handler({ sql, actor, order, registry, cfg, req }) {
+      async handler({ sql, actor, order, registry, cfg, req, providers }) {
         const docs = await sql`select * from documents where order_id = ${order.id} and deleted_at is null order by created_at`;
         // Результат работы заказчик видит только после проверки (src/access/policy.mjs); вместе с ним — подписи УКЭП эксперта
         // и организации (2.5, 2.5а).
@@ -177,6 +178,10 @@ export function coreOps(cfg) {
           signature_required: required,
           // От какой организации нужна вторая подпись (null — только эксперт).
           signature_org: signOrg?.name ?? null,
+          // Как подписывают (задача штаба 3f817197-…-81ac): 'manual' — только загрузкой файла подписи, подпись проверяет
+          // диспетчер на Госуслугах (can_check_signature); 'cabinet' — ещё и в кабинете.
+          ...(required ? { sign_mode: providers.sign.manual ? 'manual' : 'cabinet' } : {}),
+          ...(required && providers.sign.manual && isStaff(actor) ? { can_check_signature: true, signature_check_url: GOSUSLUGI_CHECK_URL } : {}),
           ...(mine ? { org_returns: await orgReturns(sql, order.id) } : {}),
           // Срок через 1–2 дня или прошёл, а своего файла результата нет (2.138) — предупреждение исполнителю; есть ли черновик.
           ...(mine ? { result_due: await resultDueView(sql, order, docs, actor.id) } : {}),

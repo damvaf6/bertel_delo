@@ -399,3 +399,8 @@ h2.inline { display: inline; }
 #result h2.ok { color: var(--ok); }
 #result h2.bad { color: var(--danger); }
 #code-form input { flex: 1 1 160px; min-width: 0; letter-spacing: 1px; }
+/* Ручная проверка подписи и памятки (задача штаба 3f817197-…-81ac). */
+.doc .sig-check { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; }
+.doc .sig-check a { overflow-wrap: anywhere; }
+.doc details.memo { margin: 0; }
+.doc details.memo ol { margin: 4px 0 0; padding-left: 20px; display: grid; gap: 4px; }
