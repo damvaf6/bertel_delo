@@ -13,6 +13,8 @@
 // Отбор «Срок прошёл» (2.158): только просроченные, дольше всех просроченные — первыми; на сколько дней — у дела.
 // Отбор «Исправленный файл ждёт подписи эксперта» (2.171): после возврата эксперт загрузил новый файл, но не подписал —
 // дольше всех ждущие первыми; 2 дня и дольше — строка красная.
+// Отбор «Осмотр не закончен» (2.216): владелец нажал «Готово», сняв не всё, или ссылка перестанет действовать в ближайшие
+// сутки — «снял не всё» первыми, дольше всех ждущие первыми; затем ссылки, что кончаются раньше.
 // «Ждут назначения» (2.17): дела, предложенные диспетчером организации, — руководитель назначает эксперта или отказывается.
 import { api, el, say } from '/common.js';
 import { expertLink } from '/expertcard.js';
@@ -51,6 +53,7 @@ const FILTERS = [
   { id: 'week', text: 'Срок на этой неделе', test: (c) => c.week },
   // 2.209: срок в дни, когда эксперт не принимает дела; о которых эксперт уже просит передать — в «Просят передать».
   { id: 'away', text: 'Эксперт не принимает дела — срок в эти дни', test: (c) => !!c.away && !c.handover },
+  { id: 'inspect', text: 'Осмотр не закончен', test: (c) => !!c.inspection },
   { id: 'idle', text: 'Без движения', test: (c) => c.idle },
   { id: 'sign', text: 'Ждёт моей подписи', test: (c) => c.sign_wait > 0 },
   { id: 'returned', text: 'Вернул эксперту', test: (c) => c.returned_open },
@@ -141,6 +144,8 @@ function renderCases() {
   if (filter === 'fresh') active.sort((a, b) => new Date(a.returned.fresh_file.at) - new Date(b.returned.fresh_file.at));
   // «Эксперт не принимает дела — срок в эти дни» (2.209): ближайший срок — первым.
   if (filter === 'away') active.sort((a, b) => String(a.deadline).localeCompare(String(b.deadline)));
+  if (filter === 'inspect') active.sort((a, b) => (a.inspection.kind === b.inspection.kind
+    ? new Date(a.inspection.at) - new Date(b.inspection.at) : a.inspection.kind === 'incomplete' ? -1 : 1));
   const done = found.filter((c) => !c.active);
   const none = cases.length > 0 && !found.length;
   $('org-cases-none').classList.toggle('hidden', !none);
@@ -218,6 +223,7 @@ function caseItem(org, c) {
         ? 'Передайте его коллеге.' : 'Передать его некому — попросите эксперта перенести срок.'}` })] : []),
     // Передать некому (2.201): одной кнопкой — эксперту уведомление, дело откроется на просьбе о переносе с готовой причиной.
     ...(c.away && !c.handover && !c.transfer_to?.length && !c.extend && c.remind ? [remindRow(org, c, 'extend')] : []),
+    ...(c.inspection ? [inspectRow(c)] : []),
     ...(c.last_move ? [moveRow(c)] : []),
     ...(c.remind ? [remindRow(org, c)] : []),
     ...(c.handover && c.status === 'in_work' ? [handoverBlock(org, c)] : []),
@@ -255,6 +261,17 @@ export function focusOrgCase({ ref, to }) {
 
 // Последнее движение по делу (2.133): смена состояния, файл эксперта, черновик, проверка, аналог, подпись, осмотр.
 // Три дня и больше — «Без движения», заметно; рядом «Напомнить эксперту».
+// Осмотр не закончен (2.216): что не снято и попросил ли эксперт доснять, или когда кончится ссылка владельцу.
+function inspectRow({ inspection: i }) {
+  const text = i.kind === 'incomplete'
+    ? `Осмотр не закончен: владелец нажал «Готово» ${timeRu(i.at)}, а не снял: ${i.missing.join(', ')}. ${i.asked
+      ? `Эксперт попросил доснять${i.asked < i.missing.length ? ` (${i.asked} из ${i.missing.length})` : ''} — новую ссылку ещё не выдал.`
+      : 'Эксперт ещё не попросил доснять.'}`
+    : `Осмотр не закончен: ссылка владельцу перестанет действовать ${timeRu(i.at)}, а «Готово» не нажато${i.photos
+      ? ` (фото пришло: ${i.photos})` : ' — фото ещё нет'}.`;
+  return el('div', { class: i.kind === 'incomplete' ? 'notice-warn' : 'muted', 'data-role': 'inspect', text });
+}
+
 function moveRow(c) {
   const d = c.last_move.days;
   const ago = d === 0 ? 'сегодня' : d === 1 ? 'вчера' : `${d} дн. назад`;

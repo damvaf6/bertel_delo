@@ -1650,7 +1650,8 @@ test('две подписи (2.5а): эксперт от организации 
 
   // Руководитель: уведомление, раздел организации — подписать от организации.
   await hp.goto('/kabinet#notifications');
-  await expect(hp.locator('#notifications li').first()).toContainText('нужна подпись организации');
+  // Утренняя сводка руководителя (после 8:00 МСК) может прийти следом и встать первой — ищем само уведомление.
+  await expect(hp.locator('#notifications li', { hasText: 'нужна подпись организации' })).toHaveCount(1);
   await hp.goto(`/kabinet#org=${orgId}`);
   await expect(hp.locator('#org-title')).toHaveText('ООО «Тестовая оценочная компания»');
   // 2.36: в «Делах экспертов» у дела — «Ждёт Вашей подписи» и переход к подписи.
@@ -9355,4 +9356,69 @@ test('приложение с экрана «Домой»: «Установит�
   await expect(op2.locator('#closed-text')).toHaveText('Ссылка неверная или больше не действует. Попросите эксперта прислать новую.');
   await octx.close();
   await ctx.close();
+});
+
+// 2.216: «Дела экспертов» — отбор «Осмотр не закончен»: владелец нажал «Готово», сняв не всё, — первым и с перечнем шагов;
+// ссылка кончается в ближайшие сутки — следом; ссылка на неделю в отбор не попадает.
+test('дела экспертов (2.216): отбор «Осмотр не закончен» — снял не всё и ссылка скоро кончится', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), hp = await ctx(), ep = await ctx();
+  const customer = await signIn(cp, '+79990021601');
+  const expert = await signIn(ep, '+79990021602'), head = await signIn(hp, '+79990021603');
+  const { orgId, A, B, C } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Осмотр ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Осмотрова Ольга' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const add = async (title) => (await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', $1, $2, $3, 'in_work', (now() at time zone 'Europe/Moscow')::date + 9, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Осмотровая ул., 16","area":"40"}') returning id`,
+    [title, customer.id, expert.id])).rows[0].id;
+    return { orgId: org.id, A: await add('Осмотр: ссылка кончается'), B: await add('Осмотр: снял не всё'), C: await add('Осмотр: ссылка на неделю') };
+  });
+  const ref = (id) => id.slice(0, 8).toUpperCase();
+  const issue = async (id, days) => {
+    const r = await ep.request.post(`/api/orders/${id}/inspection`, { data: { days }, headers: H });
+    expect(r.status()).toBe(201);
+    const j = await r.json();
+    return { token: j.path.split('#')[1], id: j.link.id };
+  };
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]), Buffer.from('JFIF-2216')]);
+  const la = await issue(A, 3);
+  const lb = await issue(B, 3);
+  await issue(C, 7);
+  for (const [l, st] of [[la, 'facade'], [lb, 'facade'], [lb, 'kitchen']]) {
+    expect((await cp.request.post('/api/inspect/photos', { data: jpeg, headers: { ...H, 'x-inspect-token': l.token, 'content-type': 'image/jpeg', 'x-step': st } })).status()).toBe(201);
+  }
+  expect((await cp.request.post('/api/inspect/finish', { data: {}, headers: { ...H, 'x-inspect-token': lb.token } })).status()).toBe(200);
+  await db((c) => c.query("update inspection_links set expires_at = now() + interval '20 hours' where id = $1", [la.id]));
+
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const chip = hp.locator('[data-filter="inspect"]');
+  await expect(chip).toHaveText('Осмотр не закончен · 2');
+  await chip.click();
+  await expect(chip).toHaveAttribute('aria-pressed', 'true');
+  const rows = hp.locator('#org-cases > li[data-case]');
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0)).toHaveAttribute('data-case', `№ ${ref(B)}`);
+  await expect(rows.nth(1)).toHaveAttribute('data-case', `№ ${ref(A)}`);
+  const gap = rows.nth(0).locator('[data-role="inspect"]');
+  await expect(gap).toContainText('владелец нажал «Готово»');
+  await expect(gap).toContainText('Каждая комната');
+  await expect(gap).not.toContainText('Дом снаружи');
+  await expect(gap).toContainText('Эксперт ещё не попросил доснять.');
+  await expect(rows.nth(1).locator('[data-role="inspect"]')).toContainText('ссылка владельцу перестанет действовать');
+  await expect(rows.nth(1).locator('[data-role="inspect"]')).toContainText('(фото пришло: 1)');
+  // Фото и адрес объекта руководителю не показываются.
+  await expect(rows.nth(0)).not.toContainText('Осмотровая');
+  await expect(hp.locator(`#org-cases li[data-case="№ ${ref(C)}"]`)).toHaveCount(0);
+  await rows.nth(0).scrollIntoViewIfNeeded();
+  await shot(hp, 'c67-rukovoditel-otbor-osmotr-ne-zakonchen');
+
+  // Эксперт продлил ссылку — в отборе одно дело.
+  expect((await ep.request.post(`/api/orders/${A}/inspection/extend`, { data: { link_id: la.id, days: 3 }, headers: H })).status()).toBe(200);
+  await hp.reload();
+  await expect(hp.locator('[data-filter="inspect"]')).toHaveText('Осмотр не закончен · 1');
+  for (const p of [cp, ep, hp]) await p.context().close();
 });

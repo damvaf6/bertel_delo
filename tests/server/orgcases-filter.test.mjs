@@ -2,7 +2,7 @@
 // (до воскресенья включительно, просроченные тоже); завершённые и сроки после воскресенья — нет.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, addMember } from '../helpers.mjs';
+import { startApp, login, client, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, addMember } from '../helpers.mjs';
 import { addDays, todayMsk, weekEnd } from '../../src/orders/workflow.mjs';
 
 let S, owner, dispatcher, a, b, head, org;
@@ -103,4 +103,61 @@ test('дела экспертов (2.133): «без движения» — дн�
   // Ожидающие ответа эксперта и завершённые — без «последнего движения».
   const done = (await head.req('GET', `/api/orgs/${org.id}/cases`)).body.cases.filter((x) => !['in_work', 'review'].includes(x.status));
   assert.ok(done.length > 0 && done.every((x) => x.last_move === null && x.idle === false));
+});
+
+// Отбор «Осмотр не закончен» (2.216): владелец нажал «Готово», сняв не всё (2.208), или ссылка кончится в ближайшие сутки,
+// а «Готово» не нажато (2.196). Руководитель видит названия шагов и сроки, не фото; эксперт «Дела экспертов» не видит.
+const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]), Buffer.from('JFIF-осмотр-2.216')]);
+const inspectAnon = (token, path, body, extra = {}) => client(S).req('POST', path, body, { headers: { 'x-inspect-token': token, ...extra } });
+const shootStep = (token, st) => client(S).req('POST', '/api/inspect/photos', JPEG, {
+  raw: true, csrf: true, headers: { 'x-inspect-token': token, 'content-type': 'image/jpeg', 'x-step': st },
+});
+async function issueLink(who, o) {
+  const r = await who.req('POST', `/api/orders/${o.id}/inspection`, {});
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  return { token: r.body.path.split('#')[1], id: r.body.link.id };
+}
+const caseOf = async (o) => (await head.req('GET', `/api/orgs/${org.id}/cases`)).body.cases.find((c) => c.id === o.id);
+
+test('дела экспертов (2.216): «осмотр не закончен» — «Готово» без обязательных шагов или ссылка кончается в ближайшие сутки', async () => {
+  const gap = await taken('Осмотр — снял не всё', 10, a);
+  const soon = await taken('Осмотр — ссылка кончается', 10, b);
+  const calm = await taken('Осмотр — ссылка на неделю', 10, a);
+
+  const l1 = await issueLink(a, gap);
+  assert.equal((await shootStep(l1.token, 'facade')).status, 201);
+  assert.equal((await caseOf(gap)).inspection, null, '«Готово» не нажато, до конца ссылки далеко — нет');
+  assert.equal((await inspectAnon(l1.token, '/api/inspect/finish', {})).status, 200);
+  let c = await caseOf(gap);
+  assert.equal(c.inspection.kind, 'incomplete');
+  assert.ok(c.inspection.missing.includes('Каждая комната'));
+  assert.ok(!c.inspection.missing.includes('Дом снаружи'));
+  assert.equal(c.inspection.asked, 0);
+  // Эксперт попросил доснять — видно, сколько просьб; новая ссылка — строка уходит.
+  assert.equal((await a.req('POST', `/api/orders/${gap.id}/inspection/retakes`, { step: 'rooms', note: 'Снимите комнаты' })).status, 201);
+  assert.equal((await caseOf(gap)).inspection.asked, 1);
+
+  const l2 = await issueLink(b, soon);
+  await S.sql`update inspection_links set expires_at = now() + interval '20 hours' where id = ${l2.id}`;
+  c = await caseOf(soon);
+  assert.equal(c.inspection.kind, 'expiring');
+  assert.equal(c.inspection.photos, 0);
+  assert.ok(Math.abs(new Date(c.inspection.at) - (Date.now() + 20 * 3600_000)) < 60_000);
+
+  await issueLink(a, calm);
+  assert.equal((await caseOf(calm)).inspection, null, 'ссылка на неделю — рано');
+
+  // Продлил — строка ушла; выдал новую ссылку по делу «снял не всё» — тоже.
+  assert.equal((await b.req('POST', `/api/orders/${soon.id}/inspection/extend`, { link_id: l2.id, days: 3 })).status, 200);
+  assert.equal((await caseOf(soon)).inspection, null);
+  await issueLink(a, gap);
+  assert.equal((await caseOf(gap)).inspection, null);
+
+  // Дело не в работе — нет; эксперт «Дела экспертов» не видит.
+  const l3 = await issueLink(a, calm);
+  await S.sql`update inspection_links set expires_at = now() + interval '5 hours' where id = ${l3.id}`;
+  assert.equal((await caseOf(calm)).inspection.kind, 'expiring');
+  await S.sql`update orders set status = 'review' where id = ${calm.id}`;
+  assert.equal((await caseOf(calm)).inspection, null);
+  assert.equal((await b.req('GET', `/api/orgs/${org.id}/cases`)).status, 403);
 });
