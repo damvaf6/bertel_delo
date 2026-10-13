@@ -665,3 +665,24 @@ test('2.203: кадастровый номер в отчёте сверяетс�
   assert.equal((await putResult(o, 'ОТЧЁТ ОБ ОЦЕНКЕ\nКвартира, кадастровый номер 77:01:0001001:4321', 'отчёт-2.txt', 'text/plain')).status, 201);
   assert.deepEqual(await found(), []);
 });
+
+test('2.212: этаж и этажность в отчёте сверяются с выписками ЕГРН из дела', async () => {
+  const o = await inWork('Квартира: этаж по выписке');
+  const putDoc = (body, name) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } });
+  assert.equal((await putDoc('Выписка из Единого государственного реестра недвижимости\nВид объекта недвижимости: Помещение\nНомер, тип этажа, на котором расположено помещение, машино-место: Этаж № 6', 'Выписка ЕГРН квартира.txt')).status, 201);
+  assert.equal((await putDoc('Выписка из Единого государственного реестра недвижимости\nВид объекта недвижимости: Здание\nКоличество этажей, в том числе подземных этажей: 10, в том числе подземных 1', 'Выписка ЕГРН дом.txt')).status, 201);
+  assert.equal((await putResult(o, 'ОТЧЁТ ОБ ОЦЕНКЕ\nКвартира расположена на 5 этаже 12-этажного жилого дома.', 'отчёт.txt', 'text/plain')).status, 201);
+  const found = async () => {
+    const res = await spec.req('POST', `/api/orders/${o.id}/review/ai`);
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    return res.body.ai.items.flatMap((i) => i.found ?? []).map((f) => f.text).filter((t) => /^Этаж/.test(t));
+  };
+  assert.deepEqual(await found(), [
+    'Этаж 5 не совпадает с этажом в выписке ЕГРН «Выписка ЕГРН квартира.txt» (6, стр. 1) — проверьте, нет ли данных другого объекта',
+    'Этажей в доме 12, а в выписке ЕГРН «Выписка ЕГРН дом.txt» — 10, из них надземных 9 (стр. 1) — проверьте, нет ли данных другого дома',
+  ]);
+  await S.sql`update documents set deleted_at = now() where order_id = ${o.id} and kind = 'result'`;
+  assert.equal((await putResult(o, 'ОТЧЁТ ОБ ОЦЕНКЕ\nКвартира расположена на 6 этаже 9-этажного жилого дома.', 'отчёт-2.txt', 'text/plain')).status, 201);
+  assert.deepEqual(await found(), []);
+});
