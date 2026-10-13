@@ -1650,7 +1650,8 @@ test('две подписи (2.5а): эксперт от организации 
 
   // Руководитель: уведомление, раздел организации — подписать от организации.
   await hp.goto('/kabinet#notifications');
-  await expect(hp.locator('#notifications li').first()).toContainText('нужна подпись организации');
+  // Утренняя сводка руководителя (после 8:00 МСК) может прийти следом и встать первой — ищем само уведомление.
+  await expect(hp.locator('#notifications li', { hasText: 'нужна подпись организации' })).toHaveCount(1);
   await hp.goto(`/kabinet#org=${orgId}`);
   await expect(hp.locator('#org-title')).toHaveText('ООО «Тестовая оценочная компания»');
   // 2.36: в «Делах экспертов» у дела — «Ждёт Вашей подписи» и переход к подписи.
