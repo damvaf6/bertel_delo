@@ -262,6 +262,9 @@ const CADASTRAL_RE = /\b\d{2}:\d{2}:\d{6,7}:\d{1,7}\b/g;
 // в здании, прежние номера — это не номер объекта.
 const EGRN_CAD_OTHER = /предел|располож|образован|исходн|ранее\s+присвоен|преж|помещени\S*\s*,?\s*(?:расположен|в\s+здани)|машино-мест|входящ|связ|квартал|аналог/iu;
 export function egrnCadastral(egrn, ctx) {
+  return oneValue(egrnCadastralValues(egrn, ctx));
+}
+function egrnCadastralValues(egrn, ctx) {
   const land = ctx.service === 'land';
   const values = new Map();
   for (const d of egrn ?? []) {
@@ -280,6 +283,10 @@ export function egrnCadastral(egrn, ctx) {
       return false;
     });
   }
+  return values;
+}
+// Ровно одно значение из выписок — { v, name, page }; ни одного или разные — null.
+function oneValue(values) {
   if (values.size !== 1) return null;
   const [[v, at]] = [...values];
   return { v, ...at };
@@ -478,17 +485,27 @@ function objectAreas(doc, ctx) {
 const EGRN_LAND = /вид\s+объекта(?:\s+недвижимости)?\s*[:\-–—]?\s*земельн/iu;
 const EGRN_BUILT = /вид\s+объекта(?:\s+недвижимости)?\s*[:\-–—]?\s*(?:помещени|здани|сооружени|объект\s+незаверш|машино)/iu;
 export function egrnArea(egrn, ctx) {
+  const got = oneValue(egrnAreaValues(egrn, ctx));
+  return got && got.v > 0 ? got : null;
+}
+function egrnAreaValues(egrn, ctx) {
   const land = ctx.service === 'land';
   const values = new Map();
   for (const d of egrn ?? []) {
     if (!Array.isArray(d.pages)) continue;
     const head = d.pages.slice(0, 2).join('\n');
     if (land ? EGRN_BUILT.test(head) && !EGRN_LAND.test(head) : EGRN_LAND.test(head) && !EGRN_BUILT.test(head)) continue;
-    for (const a of objectAreas(d, ctx)) if (!values.has(a.v)) values.set(a.v, { doc: d, page: a.page });
+    for (const a of objectAreas(d, ctx)) if (a.v > 0 && !values.has(a.v)) values.set(a.v, { name: d.name, page: a.page });
   }
-  if (values.size !== 1) return null;
-  const [[v, at]] = [...values];
-  return v > 0 ? { v, name: at.doc.name, page: at.page } : null;
+  return values;
+}
+
+// 2.211: площадь и кадастровый номер из выписок ЕГРН дела — для черновика заключения, теми же правилами, что в ИИ-проверке
+// (2.202, 2.203). Каждое — { v, name, page }, когда в выписках оно одно; разные — { values: […] } (какое верное, решает
+// эксперт); нет — null.
+export function egrnFacts(egrn, ctx) {
+  const pick = (values) => (values.size > 1 ? { values: [...values.keys()] } : oneValue(values));
+  return { area: pick(egrnAreaValues(egrn, ctx)), cadastral: pick(egrnCadastralValues(egrn, ctx)) };
 }
 
 function areaMatch(doc, ctx) {

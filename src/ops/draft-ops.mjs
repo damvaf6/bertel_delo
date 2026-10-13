@@ -16,8 +16,8 @@ import { pastValues, reuseSections, skeleton } from '../docs/reuse.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { orderSources, placeSources, sourcesLines } from '../docs/sources.mjs';
 import { draftDiff } from '../docs/diff.mjs';
-import { assignmentValue } from '../ai/report-checks.mjs';
-import { assignmentDocs } from './ai-ops.mjs';
+import { assignmentValue, egrnFacts } from '../ai/report-checks.mjs';
+import { assignmentDocs, egrnDocs } from './ai-ops.mjs';
 
 const PHOTOS_MAX = 40;
 const DOCS_MAX = 5;
@@ -127,6 +127,42 @@ const ruDay = (d) => d.split('-').reverse().join('.');
 // Пометка модели про дату оценки: «[заполнить: дата оценки]», «[заполнить: дату оценки из задания]».
 const VALUE_GAP = /\[(?:заполнить|указать)\s*:?\s*дат[аыу]\s+оценки[^\]]*\]/giu;
 
+// Площадь и кадастровый номер (2.211) — из выписок ЕГРН дела, как их сверяет ИИ-проверка (2.202, 2.203, правила area_match и
+// cadastral_match): только для услуг с этими правилами. Одно значение — в таблицу задания (вместо того, что написал
+// заказчик; другое в заявке — видно рядом), модели и вместо пометок «заполнить: площадь / кадастровый номер»; в выписках
+// разные — ничего не подставляем, эксперт выбирает сам.
+async function egrnFor(sql, storage, registry, order) {
+  const auto = registry.checks(order.module, order.service).flatMap((r) => r.auto ?? []);
+  if (!auto.includes('area_match') && !auto.includes('cadastral_match')) return null;
+  const docs = await egrnDocs(sql, storage, order);
+  if (!docs.length) return null;
+  const facts = egrnFacts(docs, { service: order.service, fields: order.fields ?? {} });
+  const typedArea = Number(String(order.fields?.area ?? '').replace(',', '.'));
+  const typedCad = String(order.fields?.cadastral ?? '').trim();
+  const area = !auto.includes('area_match') ? null : facts.area?.values ? { values: facts.area.values.map(ruNum) }
+    : facts.area ? { v: ruNum(facts.area.v), name: facts.area.name, page: facts.area.page + 1,
+      typed: typedArea > 0 && Math.abs(typedArea - facts.area.v) >= 0.05 ? ruNum(typedArea) : null } : null;
+  const cadastral = !auto.includes('cadastral_match') ? null : facts.cadastral?.values ? { values: facts.cadastral.values }
+    : facts.cadastral ? { v: facts.cadastral.v, name: facts.cadastral.name, page: facts.cadastral.page + 1,
+      typed: typedCad && typedCad !== facts.cadastral.v ? typedCad : null } : null;
+  return area || cadastral ? { area, cadastral } : null;
+}
+const ruNum = (v) => String(v).replace('.', ',');
+// Пометки модели: «[заполнить: площадь]», «[заполнить: общую площадь объекта]», «[заполнить: кадастровый номер]».
+const AREA_GAP = /\[(?:заполнить|указать)\s*:?\s*(?:общ\S*\s+)?площад[ьи][^\]]*\]/giu;
+const CAD_GAP = /\[(?:заполнить|указать)\s*:?\s*кадастров\S*\s+номер[^\]]*\]/giu;
+// Пометку площади заменяем числом; «кв. м» дописываем, если его нет сразу после пометки.
+function fillEgrn(text, egrn) {
+  let out = text;
+  if (egrn?.area?.v) out = out.replace(AREA_GAP, (m, at, all) => (/^\s*(?:кв\.?\s*м|м2|м²)/iu.test(all.slice(at + m.length)) ? egrn.area.v : `${egrn.area.v} кв. м`));
+  if (egrn?.cadastral?.v) out = out.replace(CAD_GAP, egrn.cadastral.v);
+  return out;
+}
+const egrnBrief = (egrn) => [
+  egrn?.area?.v ? `Площадь объекта по выписке ЕГРН: ${egrn.area.v} кв. м (выписка «${egrn.area.name}», стр. ${egrn.area.page}) — пиши её везде, где нужна площадь объекта, без пометок` : null,
+  egrn?.cadastral?.v ? `Кадастровый номер по выписке ЕГРН: ${egrn.cadastral.v} (выписка «${egrn.cadastral.name}», стр. ${egrn.cadastral.page}) — пиши его везде, где нужен кадастровый номер, без пометок` : null,
+].filter(Boolean).join('\n') || null;
+
 export function draftOps() {
   return [
     {
@@ -169,15 +205,16 @@ export function draftOps() {
         const analogs = spec ? await sql`select * from order_analogs where order_id = ${order.id} and deleted_at is null and confirmed_at is not null order by id` : [];
         const valueDate = await valueDateFor(sql, providers.storage, registry, order);
         const valueBrief = valueDate?.day ? `Дата оценки: ${valueDate.day} (${valueDate.what} «${valueDate.name}», стр. ${valueDate.page}) — пиши её везде, где нужна дата оценки, без пометок` : null;
-        const brief = [orderBrief(registry, order), valueBrief, onsite, dossierBrief, spec ? analogsBrief(spec, analogs, order) : null, tablesBrief(sections)].filter(Boolean).join('\n');
+        const egrn = await egrnFor(sql, providers.storage, registry, order);
+        const brief = [orderBrief(registry, order), valueBrief, egrnBrief(egrn), onsite, dossierBrief, spec ? analogsBrief(spec, analogs, order) : null, tablesBrief(sections)].filter(Boolean).join('\n');
         const out = await askAi(ctx, actor, 'draft', draftMessages({ brief, sections, ...inputs }));
         // Таблицы (2.29) и сведения из досье (2.14) программа вставляет сама, под заголовками разделов.
         const materials = await orderMaterials(sql, order);
         // Перечень использованных документов (2.95) — из дела, программой.
         const sources = sourcesLines(await orderSources(sql, registry, order));
         const answer = cleanDraftAnswer(sections, out.text);
-        const dated = valueDate?.day ? answer.replace(VALUE_GAP, valueDate.day) : answer;
-        const filled = fillDraft(fillTables(dated, sections, registry, order, { materials, valueDate: valueDate?.day }), sections, dossier);
+        const dated = fillEgrn(valueDate?.day ? answer.replace(VALUE_GAP, valueDate.day) : answer, egrn);
+        const filled = fillDraft(fillTables(dated, sections, registry, order, { materials, valueDate: valueDate?.day, egrn }), sections, dossier);
         const text = placeSources(filled, sections, sources).body.slice(0, DRAFT_MAX);
         const seen = {
           photos: inputs.photos.map((p) => p.name),
@@ -186,6 +223,7 @@ export function draftOps() {
           dossier: dossier.length,
           analogs: analogs.length,
           value_date: valueDate,
+          egrn,
         };
         const d = await sql.tx(async (tx) => {
           await tx`select id from orders where id = ${order.id} for update`;
