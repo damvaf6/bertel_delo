@@ -6935,6 +6935,43 @@ test('подпись нескольких дел (2.114): руководител
   expect(byRef).toEqual({ [ref(ids.a)]: true, [ref(ids.b)]: true, [ref(ids.c)]: false });
 });
 
+test('расхождения с выпиской ЕГРН перед подписью организации (2.225): руководитель видит их одной строкой у файла', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), ep = await ctx(), hp = await ctx();
+  const customer = await signIn(cp, '+79990018821');
+  const expert = await signIn(ep, '+79990018822'), head = await signIn(hp, '+79990018823');
+  const { orgId, id } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Выписка у подписи ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Выписочкина Ольга' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Квартира: выписка у подписи', $1, $2, 'in_work', current_date + 5, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Выписная ул., 4","area":"47.3"}') returning id`, [customer.id, expert.id]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [o.id, expert.id]);
+    return { orgId: org.id, id: o.id };
+  });
+  const up = await ep.request.post(`/api/orders/${id}/results`, { data: Buffer.from('%PDF-1.4 Отчёт'), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Отчёт.pdf') } });
+  expect(up.status()).toBe(201);
+  expect((await ep.request.post(`/api/documents/${(await up.json()).document.id}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  const egrn = { doc_id: id, file: 'Выписка ЕГРН.pdf', where: 'стр. 1', quote: 'Площадь, м2: 47,3' };
+  await db((c) => c.query(`insert into ai_reviews (order_id, round, requested_by, side, model, items, files)
+    select o.id, o.review_round + 1, o.executor_user_id, 'executor', 'fake', $2::jsonb, jsonb_build_array(jsonb_build_object('id', d.id, 'name', d.filename, 'read', true))
+    from orders o join documents d on d.order_id = o.id and d.kind = 'result' and d.deleted_at is null where o.id = $1`, [id, JSON.stringify([
+    { id: 'realty_identity', hint: 'attention', note: '', marks: [], found: [
+      { text: 'Площадь 45,1 кв. м не совпадает с площадью в выписке ЕГРН «Выписка ЕГРН.pdf» (47,3 кв. м, стр. 1) — площадь берётся из выписки', file: 'Отчёт.pdf', where: 'стр. 2', quote: 'Общей площадью 45,1 кв. м', egrn },
+      { text: 'Этаж 5 не совпадает с этажом в выписке ЕГРН «Выписка ЕГРН.pdf» (6, стр. 1) — проверьте, нет ли данных другого объекта', file: 'Отчёт.pdf', where: 'стр. 2', quote: 'Квартира на 5 этаже', egrn: { ...egrn, quote: 'Этаж № 6' } },
+    ] }])]));
+
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const item = hp.locator('#org-sign > li[data-item]').first();
+  await expect(item.locator('[data-role="ai-check"]')).toHaveAttribute('data-ai', 'attention');
+  await expect(item.locator('[data-role="ai-egrn"]')).toHaveText('Расхождения с выпиской ЕГРН (2): Площадь 45,1 кв. м не совпадает с площадью в выписке ЕГРН (47,3 кв. м); Этаж 5 не совпадает с этажом в выписке ЕГРН (6).');
+  await item.locator('[data-role="ai-egrn"]').scrollIntoViewIfNeeded();
+  await shot(hp, 'h4c-rukovoditel-raskhozhdeniya-egrn');
+});
+
 test('отбор дел на подпись по ИИ-проверке (2.193): руководитель видит дела без ИИ-проверки этой версии и с «посмотрите»', async ({ browser, baseURL }) => {
   const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
   const cp = await ctx(), ep = await ctx(), hp = await ctx();

@@ -314,6 +314,17 @@ async function prevReview(sql, order, cur) {
 // (эта версия: новый файл — новый документ) был. Нет такой — 'none' (other: проверяли, но другие файлы, например прежнюю
 // версию); есть пункты «посмотрите» — 'attention' с названиями правил; иначе null. Подсказка, не запрет: подпись не держит.
 // Руководителю перед подписью организации (2.186) — { ok: true }: проверено без замечаний — 'ok' с временем проверки.
+// Находка по выписке ЕГРН коротко (2.225): без имени файла выписки, страниц, строки заявки и совета в конце.
+export function egrnShort(f) {
+  return String(f.text ?? '')
+    .replace(` «${f.egrn?.file ?? ''}»`, '')
+    .replace(/;\s*в заявке — .*?(?=\)?\s—\s|$)/, '')
+    .replace(/\s—\s(?:проверьте|площадь берётся)[^]*$/, '')
+    .replace(/,\s*стр\.\s*\d+\)/g, ')')
+    .replace(/\s*\(стр\.\s*\d+\)/g, '')
+    .trim().slice(0, 180);
+}
+
 export async function aiSignHints(sql, registry, order, docIds, { ok = false } = {}) {
   const out = new Map();
   if (!docIds.length) return out;
@@ -324,7 +335,11 @@ export async function aiSignHints(sql, registry, order, docIds, { ok = false } =
     const r = rows.find((x) => (x.files ?? []).some((f) => f.id === id));
     if (!r) { out.set(id, { state: 'none', other: rows.length > 0 }); continue; }
     const att = (r.items ?? []).filter((i) => i.hint === 'attention');
-    out.set(id, att.length ? { state: 'attention', at: r.at, count: att.length, titles: att.map((i) => (titles.get(i.id) ?? i.id).split(':')[0].trim()).slice(0, 3) }
+    // 2.225: находки, сверенные с выпиской ЕГРН из дела, — коротко, одной строкой у файла (только по этому файлу).
+    const file = (r.files ?? []).find((f) => f.id === id)?.name;
+    const egrn = att.flatMap((i) => i.found ?? []).filter((f) => f.egrn && (!file || f.file === file)).map(egrnShort);
+    out.set(id, att.length ? { state: 'attention', at: r.at, count: att.length, titles: att.map((i) => (titles.get(i.id) ?? i.id).split(':')[0].trim()).slice(0, 3),
+      ...(egrn.length ? { egrn: [...new Set(egrn)] } : {}) }
       : ok ? { state: 'ok', at: r.at } : null);
   }
   return out;

@@ -628,6 +628,40 @@ test('2.186: руководитель перед подписью организ
   } finally { S.providers.ai.complete = orig; }
 });
 
+test('2.225: руководитель перед подписью организации видит одной строкой расхождения отчёта с выпиской ЕГРН из ИИ-проверки эксперта', async () => {
+  const org = await makeOrg(S.sql, 'ООО «Выписка перед подписью»');
+  const head = await login(S, '+79990001526');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  const ex = await login(S, '+79990001527');
+  await makeSpecialist(S.sql, ex.user.id);
+  await addMember(S.sql, org.id, ex.user.id, 'member');
+  assert.equal((await ex.req('PATCH', '/api/me', { full_name: 'Эксперт Выписочкин' })).status, 200);
+  assert.equal((await ex.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  const o = await inWork('Квартира: выписка у руководителя', ex);
+  const putTxt = (who, url, body, name) => who.req('POST', url, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } });
+  assert.equal((await putTxt(owner, `/api/orders/${o.id}/documents`, 'Выписка из Единого государственного реестра недвижимости\nВид объекта недвижимости: Помещение\nКадастровый номер: 77:01:0001001:4321\nПлощадь, м2: 47,3\nНомер, тип этажа, на котором расположено помещение, машино-место: Этаж № 6\nАдрес (местоположение): г. Москва, тестовая ул., д. 15, кв. 18', 'Выписка ЕГРН.txt')).status, 201);
+  const d1 = (await putTxt(ex, `/api/orders/${o.id}/results`, 'ОТЧЁТ ОБ ОЦЕНКЕ\nКвартира, кадастровый номер 77:01:0001001:1234\nОбщей площадью 45,1 кв. м\nКвартира на 5 этаже', 'Отчёт.txt')).body.document;
+  assert.equal((await sign(d1, undefined, ex)).status, 201);
+  const docOf = async (d) => (await head.req('GET', `/api/orgs/${org.id}/signing`)).body.items.flatMap((x) => x.documents).find((x) => x.id === d.id);
+  assert.equal((await ex.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
+  const h = (await docOf(d1)).ai_check;
+  assert.equal(h.state, 'attention');
+  assert.deepEqual([...h.egrn].sort(), [
+    'Кадастровый номер 77:01:0001001:1234 не совпадает с номером в выписке ЕГРН (77:01:0001001:4321)',
+    'Площадь 45,1 кв. м не совпадает с площадью в выписке ЕГРН (47,3 кв. м)',
+    'Этаж 5 не совпадает с этажом в выписке ЕГРН (6)',
+  ].sort());
+  // Исправленная версия без расхождений — строки нет; без выписки сверка с заявкой — тоже нет.
+  const d2 = (await putTxt(ex, `/api/orders/${o.id}/results`, 'ОТЧЁТ ОБ ОЦЕНКЕ\nКвартира, кадастровый номер 77:01:0001001:4321\nОбщей площадью 47,3 кв. м\nКвартира на 6 этаже', 'Отчёт 2.txt')).body.document;
+  assert.equal((await sign(d2, undefined, ex)).status, 201);
+  assert.equal((await ex.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
+  assert.equal((await docOf(d2)).ai_check?.egrn, undefined);
+  // Чужой руководитель дела не видит.
+  const stranger = await login(S, '+79990001528');
+  assert.notEqual((await stranger.req('GET', `/api/orgs/${org.id}/signing`)).status, 200);
+});
+
 test('2.154: ИИ-проверка — дата составления отчёта не позже дня подписи эксперта; без подписи — не позже сегодня', async () => {
   const o = await inWork('Квартира — дата отчёта и подпись');
   const ru = (d) => d.split('-').reverse().join('.');
