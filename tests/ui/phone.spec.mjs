@@ -9664,3 +9664,68 @@ test('прогон 2.220: эксперт и руководитель по пач
   await shot(hp, 'c76-progon7-rukovoditel-prosba-peredat');
   for (const p of [ep, hp, cp, dp]) await p.context().close();
 });
+
+// 2.221: эксперт в отпуске просит передать дело, а передать некому — руководитель из «Сегодня» попадает к просьбе в «Делах
+// экспертов»: срок и причина уже готовы, «Попросить диспетчера перенести срок» — одной кнопкой. Диспетчер видит, что просит
+// организация; эксперт — что руководитель попросил перенос.
+test('2.221: передать некому — руководитель просит диспетчера перенести срок', async ({ browser, baseURL }) => {
+  test.setTimeout(90_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), hp = await ctx(), cp = await ctx(), dp = await ctx();
+  const expert = await signIn(ep, '+79990022211'), head = await signIn(hp, '+79990022212');
+  const customer = await signIn(cp, '+79990022213'), disp = await signIn(dp, '+79990022214');
+  const orgName = `ООО «Некому ${Date.now() % 100000}»`;
+  const { orgId, A } = await db(async (c) => {
+    await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    const { rows: [org] } = await c.query('insert into organizations (name) values ($1) returning id', [orgName]);
+    await c.query("update users set full_name = 'Отпускной Пётр' where id = $1", [expert.id]);
+    await c.query("update users set full_name = 'Старшая Ольга' where id = $1", [head.id]);
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now() - interval '1 year'), ($1, $3, 'member', now() - interval '1 year')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at, away_until, away_note) values ($1, $2, now() - interval '1 year', (now() at time zone 'Europe/Moscow')::date + 6, 'отпуск')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    await c.query("insert into morning_digests (user_id, day) values ($1, (now() at time zone 'Europe/Moscow')::date), ($2, (now() at time zone 'Europe/Moscow')::date)", [expert.id, head.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Некому передать: дом', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Тихая ул., д. 1, кв. 1","area":"40"}') returning id`,
+    [customer.id, expert.id, inDays(2)]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now() - interval '2 days')", [o.id, expert.id]);
+    return { orgId: org.id, A: o.id };
+  });
+  const ref = `№ ${A.slice(0, 8).toUpperCase()}`;
+  expect((await ep.request.post(`/api/orders/${A}/handover`, { data: { reason: 'Отпуск, заболел ребёнок' }, headers: H })).status()).toBe(201);
+
+  // Руководитель: «Сегодня» → к просьбе в «Делах экспертов».
+  await hp.goto('/kabinet');
+  const asks = hp.locator(`#today-box li[data-today-item="org-handover-${orgId}"]`).filter({ hasText: ref });
+  await expect(asks.locator('[data-role="handover-why"]')).toContainText('передать некому');
+  await asks.click();
+  const block = hp.locator(`[data-handover="${ref}"]`);
+  await expect(block).toBeVisible();
+  await expect(hp.locator(`[data-handover-extend-date="${ref}"]`)).toHaveValue(/^\d{4}-\d{2}-\d{2}$/);
+  await expect(hp.locator(`[data-handover-extend-reason="${ref}"]`)).toHaveValue(/^Исполнитель не работает до .+ передать дело другому эксперту организации некому/);
+  await expect(hp.locator(`[data-handover-extend-reason="${ref}"]`)).not.toHaveValue(/ребёнок/);
+  await block.scrollIntoViewIfNeeded();
+  await shot(hp, 'c77-2221-rukovoditel-peredat-nekomu');
+  await block.locator('[data-action="handover-extend"]').click();
+  await expect(hp.locator('#org-cases-msg')).toContainText('Диспетчеру отправлена просьба перенести срок от организации');
+  const li = hp.locator(`#org-cases li[data-case="${ref}"]`);
+  await expect(li.locator('[data-role="extend"]')).toContainText('ждёт ответа диспетчера');
+  await expect(li.locator('[data-handover]')).toHaveCount(0);
+  await li.scrollIntoViewIfNeeded();
+  await shot(hp, 'c78-2221-rukovoditel-perenos-poprosili');
+
+  // Диспетчер: в «Сегодня» — просит организация.
+  await dp.goto('/kabinet');
+  const ext = dp.locator('#today-box li[data-today-item="d-extend"]').filter({ hasText: 'Некому передать: дом' });
+  await expect(ext).toContainText(`просит организация «${orgName}» — передать дело некому`);
+  await ext.scrollIntoViewIfNeeded();
+  await shot(dp, 'c79-2221-dispetcher-prosit-organizaciya');
+
+  // Эксперт: в деле — руководитель попросил перенос.
+  await ep.goto(`/kabinet#order=${A}&to=handover`);
+  await expect(ep.locator('#handover-extend')).toContainText('руководитель');
+  await expect(ep.locator('#handover-extend')).toContainText('ждёт ответа диспетчера');
+  await ep.locator('#handover-extend').scrollIntoViewIfNeeded();
+  await shot(ep, 'c80-2221-ekspert-rukovoditel-poprosil');
+  for (const p of [ep, hp, cp, dp]) await p.context().close();
+});
