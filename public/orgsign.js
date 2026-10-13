@@ -138,8 +138,14 @@ function aiCheckText(c) {
   if (c.state === 'ok') return `Эксперт проверил файл ИИ-проверкой ${when(c.at)} — пунктов «посмотрите» нет.`;
   return `В ИИ-проверке эксперта (${when(c.at)}) осталось «посмотрите»: ${c.count} — ${c.titles.join('; ')}${c.count > c.titles.length ? '; …' : ''}.`;
 }
+// 2.225: расхождения отчёта с выпиской ЕГРН из ИИ-проверки эксперта — одной строкой (площадь, кадастровый номер, этаж, адрес).
+const egrnLine = (c) => (c?.egrn?.length
+  ? [el('div', { class: 'sig-state warn', 'data-role': 'ai-egrn',
+    text: `Расхождения с выпиской ЕГРН (${c.egrn.length}): ${c.egrn.slice(0, 3).join('; ')}${c.egrn.length > 3 ? '; …' : ''}.` })]
+  : []);
 const aiCheckLine = (d) => (d.ai_check
-  ? [el('div', { class: d.ai_check.state === 'ok' ? 'sig-state' : 'sig-state warn', 'data-role': 'ai-check', 'data-ai': d.ai_check.state, text: aiCheckText(d.ai_check) })]
+  ? [el('div', { class: d.ai_check.state === 'ok' ? 'sig-state' : 'sig-state warn', 'data-role': 'ai-check', 'data-ai': d.ai_check.state, text: aiCheckText(d.ai_check) }),
+    ...egrnLine(d.ai_check)]
   : []);
 
 // Несколько дел одним подтверждением (2.114): отмечены все, кроме дел, где по замечанию руководителя эксперт отметил не всё.
