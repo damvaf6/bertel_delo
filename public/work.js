@@ -107,6 +107,27 @@ function toRule(id) {
   setTimeout(() => li.classList.remove('flash'), 2000);
 }
 
+// 2.218: находка по выписке ЕГРН — одной кнопкой строка из выписки, с которой сверяли, и сам файл выписки на этой странице.
+function egrnPlace(g) {
+  const box = el('div', { class: 'ai-egrn hidden', 'data-role': 'egrn-place' },
+    el('span', { class: 'ai-mark-where', text: `${g.file}, ${g.where}: ` }),
+    el('q', { text: g.quote || 'строка не найдена — откройте файл' }),
+    el('div', { class: 'row' }, el('button', { class: 'secondary', type: 'button', 'data-action': 'egrn-file', onclick: () => openEgrn(g) }, 'Открыть файл выписки')));
+  const btn = el('button', { class: 'link', type: 'button', 'data-action': 'egrn', 'aria-expanded': 'false', onclick: () => {
+    const open = box.classList.toggle('hidden') === false;
+    btn.setAttribute('aria-expanded', String(open));
+    if (open) box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  } }, `Выписка ЕГРН, ${g.where}`);
+  return [el('br'), btn, box];
+}
+async function openEgrn(g) {
+  try {
+    const { url } = await api('GET', `/api/documents/${g.doc_id}/link`);
+    // PDF открывается сразу на нужной странице; другие файлы — как есть.
+    location.assign(/\.pdf$/i.test(g.file) ? `${url}#page=${g.where.replace(/\D/g, '')}` : url);
+  } catch (err) { say($('review-msg'), err.status === 404 ? 'Выписки уже нет в деле' : err.message); }
+}
+
 function aiState(ai) {
   const unread = ai.files.filter((f) => !f.read).map((f) => f.name);
   const attention = ai.items.filter((i) => i.hint === 'attention').length;
@@ -142,7 +163,8 @@ function checkItem(order, r, c, hint) {
     ...(hint?.found?.length ? [el('ul', { class: 'ai-marks ai-found' }, ...hint.found.map((f) => el('li', {},
       el('span', { class: 'ai-mark-where', text: `${f.file}, ${f.where}: ` }),
       el('span', { text: f.text }),
-      ...(f.quote ? [el('br'), el('q', { text: f.quote })] : []))))] : []),
+      ...(f.quote ? [el('br'), el('q', { text: f.quote })] : []),
+      ...(f.egrn ? egrnPlace(f.egrn) : []))))] : []),
     // Отмеченные места: цитата из отчёта, файл и страница — сервер показывает только найденные в тексте цитаты.
     ...(hint?.marks?.length ? [el('ul', { class: 'ai-marks' }, ...hint.marks.map((m) => el('li', {},
       el('span', { class: 'ai-mark-where', text: `${m.file}, ${m.where}: ` }),

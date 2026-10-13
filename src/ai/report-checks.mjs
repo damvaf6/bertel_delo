@@ -277,7 +277,7 @@ function egrnCadastralValues(egrn, ctx) {
         const before = page.slice(Math.max(0, m.index - 80), m.index);
         if (!/кадастров\S*\s+(?:номер|№)\s*(?:объекта(?:\s+недвижимости)?)?\s*[:\-–—]?\s*$/iu.test(before)) continue;
         if (EGRN_CAD_OTHER.test(lineBefore(page, m.index))) continue;
-        if (!values.has(m[0])) values.set(m[0], { name: d.name, page: i });
+        if (!values.has(m[0])) values.set(m[0], { name: d.name, page: i, doc: d.id, quote: lineAround(page, m.index) });
         return true;
       }
       return false;
@@ -285,7 +285,11 @@ function egrnCadastralValues(egrn, ctx) {
   }
   return values;
 }
-// Ровно одно значение из выписок — { v, name, page }; ни одного или разные — null.
+// 2.218: где в выписке ЕГРН стоит значение, с которым сверяли, — у находки кнопка «Выписка ЕГРН, стр. N».
+function egrnAt(at) {
+  return at?.doc ? { doc: at.doc, name: at.name, page: at.page, quote: at.quote } : null;
+}
+// Ровно одно значение из выписок — { v, name, page, doc, quote }; ни одного или разные — null.
 function oneValue(values) {
   if (values.size !== 1) return null;
   const [[v, at]] = [...values];
@@ -310,7 +314,7 @@ function cadastralMatch(doc, ctx) {
       if (!/кадастров\S*\s+(?:номер|№)/iu.test(page.slice(Math.max(0, m.index - 60), m.index))) continue;
       if (/аналог/iu.test(lineAround(page, m.index))) continue;
       seen.add(v);
-      out.push({ page: i, quote: lineAround(page, m.index), text: egrn
+      out.push({ page: i, quote: lineAround(page, m.index), egrn: egrnAt(egrn), text: egrn
         ? `Кадастровый номер ${v} не совпадает с номером в выписке ЕГРН «${egrn.name}» (${egrn.v}, стр. ${egrn.page + 1})${differs ? `; в заявке — ${mine}` : ''} — проверьте, нет ли данных другого объекта`
         : `Кадастровый номер ${v} не совпадает с номером из заявки (${mine}) — проверьте, нет ли данных другого объекта` });
     }
@@ -427,7 +431,7 @@ export function egrnAddress(egrn, ctx) {
     if (land ? EGRN_BUILT.test(head) && !EGRN_LAND.test(head) : EGRN_LAND.test(head) && !EGRN_BUILT.test(head)) continue;
     const [a] = objectAddresses(d);
     if (!a) continue;
-    const got = { ...a, name: d.name };
+    const got = { ...a, name: d.name, doc: d.id, quote: lineAround(d.pages[a.page], a.index) };
     if (best && !sameAddress(best, got)) return null;
     if (!best || Object.keys(got.got).length > Object.keys(best.got).length) best = got;
   }
@@ -464,7 +468,7 @@ function addressMatch(doc, ctx) {
       : `${ADDR_NAMES[k]} ${got[k]}, а ${refName(ref)} ${ref.value}`)).join('; ');
     const where = against === 'egrn' ? `с адресом в выписке ЕГРН «${egrn.name}» (${egrn.text}, стр. ${egrn.page + 1})${mineDiffers ? `; в заявке — ${mineText}` : ''}`
       : against === 'mine' ? `с адресом из заявки (${mineText})` : `с адресом объекта на стр. ${diff[0].ref.page + 1}`;
-    out.push({ page: i, quote: lineAround(page, index), text: `Адрес «${text}» не совпадает ${where}: ${parts} — проверьте, нет ли данных другого объекта` });
+    out.push({ page: i, quote: lineAround(page, index), egrn: against === 'egrn' ? egrnAt(egrn) : null, text: `Адрес «${text}» не совпадает ${where}: ${parts} — проверьте, нет ли данных другого объекта` });
   }
   return out;
 }
@@ -535,7 +539,7 @@ function egrnAreaValues(egrn, ctx) {
     if (!Array.isArray(d.pages)) continue;
     const head = d.pages.slice(0, 2).join('\n');
     if (land ? EGRN_BUILT.test(head) && !EGRN_LAND.test(head) : EGRN_LAND.test(head) && !EGRN_BUILT.test(head)) continue;
-    for (const a of objectAreas(d, ctx)) if (a.v > 0 && !values.has(a.v)) values.set(a.v, { name: d.name, page: a.page });
+    for (const a of objectAreas(d, ctx)) if (a.v > 0 && !values.has(a.v)) values.set(a.v, { name: d.name, page: a.page, doc: d.id, quote: lineAround(d.pages[a.page], a.index) });
   }
   return values;
 }
@@ -561,7 +565,7 @@ function areaMatch(doc, ctx) {
     if (Math.abs(a.v - ref) < 0.05 || seen.has(a.v)) continue;
     seen.add(a.v);
     const page = doc.pages[a.page];
-    out.push({ page: a.page, quote: lineAround(page, a.index), text: egrn
+    out.push({ page: a.page, quote: lineAround(page, a.index), egrn: egrnAt(egrn), text: egrn
       ? `Площадь ${fmt(a.v)} кв. м не совпадает с площадью в выписке ЕГРН «${egrn.name}» (${fmt(egrn.v)} кв. м, стр. ${egrn.page + 1})${differs ? `; в заявке — ${fmt(mine)} кв. м` : ''} — площадь берётся из выписки`
       : `Площадь ${fmt(a.v)} кв. м не совпадает с площадью из заявки (${fmt(mine)} кв. м) — проверьте, нет ли данных другого объекта` });
   }
@@ -611,19 +615,19 @@ function egrnFloorValues(egrn, ctx) {
       for (const re of EGRN_FLOOR_AT) {
         for (const m of page.matchAll(re)) {
           if (/аналог|машино-мест\S*\s+в\s+здани/iu.test(lineBefore(page, m.index))) continue;
-          if (!mine.has(Number(m[1]))) mine.set(Number(m[1]), i);
+          if (!mine.has(Number(m[1]))) mine.set(Number(m[1]), { page: i, quote: lineAround(page, m.index) });
         }
       }
       for (const m of page.matchAll(EGRN_FLOORS_AT)) {
         const total = Number(m[1]);
         const under = m[2].match(/подземн\S*(?:\s+этаж\S*)?\s*[:\-–—]?\s*(\d{1,3})(?!\d|[,.]\d)/iu);
         const above = under && Number(under[1]) > 0 && Number(under[1]) < total ? total - Number(under[1]) : null;
-        if (total > 0 && !totals.has(total)) totals.set(total, { name: d.name, page: i, above });
+        if (total > 0 && !totals.has(total)) totals.set(total, { name: d.name, page: i, above, doc: d.id, quote: lineAround(page, m.index) });
       }
     });
     if (mine.size === 1) {
-      const [[v, page]] = [...mine];
-      if (!floors.has(v)) floors.set(v, { name: d.name, page });
+      const [[v, at]] = [...mine];
+      if (!floors.has(v)) floors.set(v, { name: d.name, doc: d.id, ...at });
     }
   }
   return { floors, totals };
@@ -644,7 +648,7 @@ function floorMatch(doc, ctx) {
   const floorsOk = (v) => v === refFloors || (egrn.floors?.above != null && v === egrn.floors.above);
   const out = [];
   const seen = new Set();
-  const add = (i, page, idx, key, text) => { if (seen.has(key)) return; seen.add(key); out.push({ page: i, quote: lineAround(page, idx), text }); };
+  const add = (i, page, idx, key, text, at) => { if (seen.has(key)) return; seen.add(key); out.push({ page: i, quote: lineAround(page, idx), egrn: egrnAt(at), text }); };
   // В заявке другое — заказчик ошибся или выписка не на тот объект: подсказываем.
   const floorText = (v) => (egrn.floor
     ? `Этаж ${v} не совпадает с этажом в выписке ЕГРН «${egrn.floor.name}» (${refFloor}, стр. ${egrn.floor.page + 1})${mineFloor != null && mineFloor !== refFloor ? `; в заявке — ${mineFloor}` : ''} — проверьте, нет ли данных другого объекта`
@@ -661,8 +665,8 @@ function floorMatch(doc, ctx) {
       for (const m of page.matchAll(re)) {
         if (FLOOR_OTHER.test(lineAround(page, m.index))) continue;
         const v = Number(m[1]);
-        if (refFloor != null && v !== refFloor) add(i, page, m.index, `f${v}`, floorText(v));
-        if (m[2] && refFloors && !floorsOk(Number(m[2]))) add(i, page, m.index, `n${m[2]}`, floorsText(m[2]));
+        if (refFloor != null && v !== refFloor) add(i, page, m.index, `f${v}`, floorText(v), egrn.floor);
+        if (m[2] && refFloors && !floorsOk(Number(m[2]))) add(i, page, m.index, `n${m[2]}`, floorsText(m[2]), egrn.floors);
       }
     }
     if (!refFloors) return;
@@ -670,7 +674,7 @@ function floorMatch(doc, ctx) {
       for (const m of page.matchAll(re)) {
         if (/аналог/iu.test(lineAround(page, m.index)) || /подземн|цокол/iu.test(page.slice(Math.max(0, m.index - 25), m.index + m[0].length))) continue;
         const v = Number(m[1]);
-        if (!floorsOk(v)) add(i, page, m.index, `n${v}`, floorsText(v));
+        if (!floorsOk(v)) add(i, page, m.index, `n${v}`, floorsText(v), egrn.floors);
       }
     }
   });
@@ -1795,6 +1799,7 @@ export function runAutoChecks(names, docs, ctx = {}) {
       file: f.doc.name,
       where: f.doc.pages.length > 1 ? `стр. ${f.page + 1}` : 'стр. 1',
       quote: clean(f.quote).slice(0, 200),
+      ...(f.egrn ? { egrn: { doc_id: f.egrn.doc, file: f.egrn.name, where: `стр. ${f.egrn.page + 1}`, quote: clean(f.egrn.quote).slice(0, 200) } } : {}),
     }));
   }
   return res;
