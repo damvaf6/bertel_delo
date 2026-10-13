@@ -808,6 +808,8 @@ test('2.211: площадь и кадастровый номер из выпис
   assert.deepEqual(d.inputs.egrn, {
     area: { v: '47,3', name: 'Выписка ЕГРН.txt', page: 1, typed: '54,3' },
     cadastral: { v: '77:01:0001001:4321', name: 'Выписка ЕГРН.txt', page: 1, typed: null },
+    floor: null,
+    address: null,
   });
   assert.match(d.body, /\| Кадастровый номер \| 77:01:0001001:4321 \(по выписке ЕГРН\) \|/);
   assert.match(d.body, /\| Площадь, кв\. м \| 47,3 \(по выписке ЕГРН; в заявке — 54,3\) \|/);
@@ -833,5 +835,41 @@ test('2.211: площадь и кадастровый номер из выпис
   assert.doesNotMatch(lastPrompt(), /Площадь объекта по выписке ЕГРН/);
   // Выписок нет — ничего не подставляется.
   const { egrnFacts } = await import('../../src/ai/report-checks.mjs');
-  assert.deepEqual(egrnFacts([], { service: 'realty' }), { area: null, cadastral: null });
+  assert.deepEqual(egrnFacts([], { service: 'realty' }), { area: null, cadastral: null, floor: null, floors: null, address: null });
+});
+
+test('2.222: этаж, этажность и адрес из выписки ЕГРН — в таблицу задания, модели и вместо пометок; разные — эксперт выбирает сам', async () => {
+  const o = await inWork('Квартира: этаж и адрес из выписки в черновик');
+  const putDoc = (body, name) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } });
+  await S.sql`update orders set fields = fields || ${JSON.stringify({ floor: '5 / 9' })}::jsonb where id = ${o.id}`;
+  // Выписка на помещение: этаж и адрес; на здание — этажность и тот же адрес короче (не спорят).
+  assert.equal((await putDoc('Выписка из ЕГРН\nВид объекта недвижимости: Помещение\nКадастровый номер: 77:01:0001001:4321\nАдрес (местоположение): г. Москва, ул. Долевая, д. 3, кв. 8\nНомер, тип этажа, на котором расположено помещение: Этаж № 6', 'Выписка ЕГРН квартира.txt')).status, 201);
+  assert.equal((await putDoc('Выписка из ЕГРН\nВид объекта недвижимости: Здание\nКадастровый номер: 77:01:0001001:100\nМестоположение: г. Москва, ул. Долевая, д. 3\nКоличество этажей, в том числе подземных этажей: 10, в том числе подземных 1', 'Выписка ЕГРН дом.txt')).status, 201);
+  let d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {})).body.draft;
+  assert.deepEqual(d.inputs.egrn.floor, { v: '6 / 10, надземных 9', floor: 6, floors: 10, above: 9, name: 'Выписка ЕГРН квартира.txt', page: 1, typed: '5 / 9' });
+  assert.deepEqual(d.inputs.egrn.address, { v: 'г. Москва, ул. Долевая, д. 3, кв. 8', name: 'Выписка ЕГРН квартира.txt', page: 1, typed: 'г. Москва, тестовая ул., 9' });
+  assert.match(d.body, /\| Адрес объекта \| г\. Москва, ул\. Долевая, д\. 3, кв\. 8 \(по выписке ЕГРН; в заявке — г\. Москва, тестовая ул\., 9\) \|/);
+  assert.match(d.body, /\| Этаж \/ этажей в доме \| 6 \/ 10, надземных 9 \(по выписке ЕГРН; в заявке — 5 \/ 9\) \|/);
+  assert.match(lastPrompt(), /Этаж объекта по выписке ЕГРН: 6, этажей в доме: 10, из них надземных 9/);
+  assert.match(lastPrompt(), /Адрес объекта по выписке ЕГРН: г\. Москва, ул\. Долевая, д\. 3, кв\. 8/);
+  // Модель оставила пометки — программа ставит этаж, этажность и адрес; адрес аналога не трогает.
+  const orig = S.providers.ai.complete;
+  S.providers.ai.complete = async () => ({ text: '## 1. Основные факты и выводы\nКвартира по адресу [заполнить: адрес объекта] на [заполнить: этаж] этаже [заполнить: этажность дома]-этажного дома (этаж/этажность — [заполнить: этаж / этажность]). Адрес аналога — [заполнить: адрес аналога]\n## 2. Задание на оценку\nТекст', model: 'fake' });
+  try {
+    d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+  } finally { S.providers.ai.complete = orig; }
+  assert.match(d.body, /Квартира по адресу г\. Москва, ул\. Долевая, д\. 3, кв\. 8 на 6 этаже 10 \(надземных 9\)-этажного дома \(этаж\/этажность — 6 \/ 10 \(надземных 9\)\)\. Адрес аналога — \[заполнить: адрес аналога\]/);
+  // В заявке то же, что в выписке, — без «в заявке — …» (9 надземных — тоже верно).
+  await S.sql`update orders set fields = fields || ${JSON.stringify({ floor: '6 / 9', address: 'Москва, Долевая улица, дом 3, квартира 8' })}::jsonb where id = ${o.id}`;
+  d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+  assert.equal(d.inputs.egrn.floor.typed, null);
+  assert.equal(d.inputs.egrn.address.typed, null);
+  // Вторая выписка на помещение с другим этажом и адресом — не подставляются, эксперт видит оба.
+  assert.equal((await putDoc('Выписка из ЕГРН\nВид объекта недвижимости: Помещение\nКадастровый номер: 77:01:0001001:4322\nАдрес (местоположение): г. Москва, ул. Долевая, д. 3, кв. 9\nНомер этажа: 7', 'Выписка ЕГРН другая.txt')).status, 201);
+  d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+  assert.deepEqual(d.inputs.egrn.floor, { values: ['этаж 7', 'этаж 6'] });
+  assert.deepEqual(d.inputs.egrn.address, { values: ['г. Москва, ул. Долевая, д. 3, кв. 9', 'г. Москва, ул. Долевая, д. 3, кв. 8'] });
+  assert.match(d.body, /\| Этаж \/ этажей в доме \| 6 \/ 9 \|/);
+  assert.doesNotMatch(lastPrompt(), /Этаж объекта по выписке ЕГРН|Адрес объекта по выписке ЕГРН/);
 });

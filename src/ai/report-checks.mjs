@@ -423,8 +423,13 @@ const sameAddress = (a, b) => Object.keys(ADDR_NAMES).every((k) => a.got[k] === 
 // Выписка на участок при оценке квартиры или дома (и наоборот) не в счёт. Выписки на дом и на квартиру в нём не спорят —
 // берём адрес, где частей больше; разные адреса — какой верный, решает эксперт: сверяем с заявкой, как раньше.
 export function egrnAddress(egrn, ctx) {
+  const list = egrnAddressValues(egrn, ctx);
+  return list.length === 1 ? list[0] : null;
+}
+// Все разные адреса объекта в выписках (2.222 — для черновика): одинаковые сливаются, остаётся более полный.
+function egrnAddressValues(egrn, ctx) {
   const land = ctx.service === 'land';
-  let best = null;
+  const list = [];
   for (const d of egrn ?? []) {
     if (!Array.isArray(d.pages)) continue;
     const head = d.pages.slice(0, 2).join('\n');
@@ -432,11 +437,14 @@ export function egrnAddress(egrn, ctx) {
     const [a] = objectAddresses(d);
     if (!a) continue;
     const got = { ...a, name: d.name, doc: d.id, quote: lineAround(d.pages[a.page], a.index) };
-    if (best && !sameAddress(best, got)) return null;
-    if (!best || Object.keys(got.got).length > Object.keys(best.got).length) best = got;
+    const i = list.findIndex((b) => sameAddress(b, got));
+    if (i < 0) list.push(got);
+    else if (Object.keys(got.got).length > Object.keys(list[i].got).length) list[i] = got;
   }
-  return best;
+  return list;
 }
+// Адрес text (из заявки) не расходится с адресом a из выписки (2.222).
+export const sameAddressText = (a, text) => sameAddress(a, { got: parseAddress(clean(text)), words: addrWords(clean(text)) });
 
 function addressMatch(doc, ctx) {
   const mineText = clean(ctx.fields?.address);
@@ -547,9 +555,18 @@ function egrnAreaValues(egrn, ctx) {
 // 2.211: площадь и кадастровый номер из выписок ЕГРН дела — для черновика заключения, теми же правилами, что в ИИ-проверке
 // (2.202, 2.203). Каждое — { v, name, page }, когда в выписках оно одно; разные — { values: […] } (какое верное, решает
 // эксперт); нет — null.
+// 2.222: и этаж с этажностью (2.212), и адрес (2.213) — так же.
 export function egrnFacts(egrn, ctx) {
   const pick = (values) => (values.size > 1 ? { values: [...values.keys()] } : oneValue(values));
-  return { area: pick(egrnAreaValues(egrn, ctx)), cadastral: pick(egrnCadastralValues(egrn, ctx)) };
+  const { floors, totals } = egrnFloorValues(egrn, ctx);
+  const addresses = egrnAddressValues(egrn, ctx);
+  return {
+    area: pick(egrnAreaValues(egrn, ctx)),
+    cadastral: pick(egrnCadastralValues(egrn, ctx)),
+    floor: pick(floors),
+    floors: pick(totals),
+    address: addresses.length > 1 ? { values: addresses.map((a) => a.text) } : addresses[0] ?? null,
+  };
 }
 
 function areaMatch(doc, ctx) {

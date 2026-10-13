@@ -1129,6 +1129,11 @@ test('ИИ-проверка результата: специалист пере�
   await expect(sp.locator('#draft-state')).toContainText('Площадь 47,3 кв. м — как в выписке ЕГРН «Выписка ЕГРН.txt» (стр. 1)');
   await expect(sp.locator('#draft-state')).toContainText('Кадастровый номер 77:01:0001001:4321 — как в выписке ЕГРН «Выписка ЕГРН.txt» (стр. 1)');
   await shot(sp, '54h-specialist-chernovik-egrn');
+  // Этаж и адрес (2.222) — тоже из выписки: в таблице задания и откуда взяты; в заявке другой адрес — видно рядом.
+  await expect(sp.getByLabel('Текст заключения')).toHaveValue(/\| Адрес объекта \| г\. Москва, тестовая ул\., д\. 9, кв\. 21 \(по выписке ЕГРН[^|]*\|/);
+  await expect(sp.locator('#draft-state')).toContainText('Этаж / этажей в доме 6 — как в выписке ЕГРН «Выписка ЕГРН.txt» (стр. 1)');
+  await expect(sp.locator('#draft-state')).toContainText('Адрес г. Москва, тестовая ул., д. 9, кв. 21 — как в выписке ЕГРН «Выписка ЕГРН.txt» (стр. 1); в заявке —');
+  await shot(sp, '54k-specialist-chernovik-etazh-adres-egrn');
   expect((await sp.request.patch('/api/me', { data: { full_name: 'Тестов Эксперт ИИ' }, headers: H })).status()).toBe(200);
   await sp.reload();
   const asked = new Promise((ok) => sp.once('dialog', (d) => { ok(d.message()); d.accept(); }));
