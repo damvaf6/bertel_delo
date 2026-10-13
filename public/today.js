@@ -237,6 +237,13 @@ export async function loadToday() {
   }
   for (const g of t.orgs) {
     // Сразу к делу в разделе организации (2.67): назначить, подписать или само дело в «Делах экспертов».
+    // Прогон 2.220: почему эксперт просит передать дело и есть ли кому передать — без открытия дела.
+    const handoverWhy = (x) => {
+      const text = [x.away_until ? `срок в дни, когда эксперт не принимает дела (до ${dayRu(x.away_until)})` : null,
+        x.extend_declined ? 'диспетчер отказал в переносе срока' : null,
+        x.can_transfer ? null : 'передать некому — нет другого эксперта с допуском к этой услуге'].filter(Boolean).join(' · ');
+      return text ? [{ class: x.can_transfer ? 'muted' : 'overdue', role: 'handover-why', text }] : [];
+    };
     const toOrg = (to) => (x) => {
       location.hash = x?.order_ref ? `org=${g.id}&case=${x.order_ref.slice(2)}&to=${to}` : `org=${g.id}`;
     };
@@ -246,7 +253,7 @@ export async function loadToday() {
     const part = [
       // Эксперт просит передать дело коллеге (2.107) — к делу в «Делах экспертов»: «Передать» или «Отказать».
       ...group(`org-handover-${g.id}`, 'Эксперт просит передать дело коллеге', g.handover ?? [], (x) => [...caseLine(x),
-        `${since(x.requested_at)} · причина: ${x.reason}`], toOrg('handover')),
+        `${since(x.requested_at)} · причина: ${x.reason}`, ...handoverWhy(x)], toOrg('handover')),
       // Эксперт не принимает дела до … (2.113), а срок его дела — в эти дни: к делу, там «Передать другому эксперту» уже открыто.
       ...group(`org-away-${g.id}`, 'Эксперт не принимает дела — срок в эти дни', g.away ?? [], (x) => [...caseLine(x),
         // Перенос уже просит — строкой выше; передать некому — не «передайте коллеге» (прогон 2.210).

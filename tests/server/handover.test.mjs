@@ -298,6 +298,12 @@ test('2.215: отказ в переносе, а срок в дни «не при
   // Попросил руководителя передать — строки нет; руководитель отказал — тоже нет (решение уже принято).
   assert.equal((await spec.req('POST', `/api/orders/${o.id}/handover`, { reason: 'Отпуск, перенос не согласовали' })).status, 201);
   assert.equal((await expertToday(spec)).away_declined.some((x) => x.id === o.id), false);
+  // Прогон 2.220: руководителю в «Сегодня» у просьбы — срок в дни «не принимаю дела», отказ в переносе и есть ли кому передать.
+  const h = (await todayOf()).find((x) => x.order_ref === `№ ${o.id.slice(0, 8).toUpperCase()}`);
+  assert.deepEqual([h?.away_until, h?.extend_declined, h?.can_transfer], [until, true, true]);
+  await S.sql`update specialists set away_until = ${until} where user_id = ${colleague.user.id}`;
+  assert.equal((await todayOf()).find((x) => x.order_ref === h.order_ref).can_transfer, false, 'коллега не принимает дела — передать некому');
+  await S.sql`update specialists set away_until = null where user_id = ${colleague.user.id}`;
   assert.equal((await head.req('POST', `/api/orgs/${org.id}/cases/${o.id}/handover/decline`, { answer: 'Некому' })).status, 200);
   assert.equal((await expertToday(spec)).away_declined.some((x) => x.id === o.id), false);
   // Срок после дня возвращения — строки нет ни у кого.

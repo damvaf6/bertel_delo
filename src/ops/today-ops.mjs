@@ -281,8 +281,20 @@ export async function orgPart(sql, org, registry, today, { actorId = null } = {}
   });
   // Эксперт просит передать дело коллеге (2.107): с причиной — первой строкой, ответить одной кнопкой в «Делах экспертов».
   const handovers = await openHandovers(sql, cases);
-  const handover = cases.filter((o) => handovers.has(o.id))
-    .map((o) => view(o, { reason: handovers.get(o.id).reason, requested_at: handovers.get(o.id).requested_at }));
+  // Прогон 2.220: под причиной — почему просит (срок в дни «не принимаю дела», диспетчер отказал в переносе) и есть ли кому
+  // передать — чтобы руководитель решал, не открывая дело.
+  const asking = cases.filter((o) => handovers.has(o.id));
+  const askFull = asking.length ? await sql`select * from orders where id = any(${asking.map((o) => o.id)}::uuid[])` : [];
+  const askMates = new Map(await Promise.all(askFull.map(async (o) => [o.id, (await transferTargets(sql, o, org.id, registry)).length > 0])));
+  const declined = new Set(asking.length ? (await sql`
+    select distinct on (order_id) order_id, outcome from deadline_requests
+    where order_id = any(${asking.map((o) => o.id)}::uuid[]) and outcome is not null
+    order by order_id, decided_at desc, id desc`).filter((r) => r.outcome === 'declined').map((r) => r.order_id) : []);
+  const handover = asking.map((o) => view(o, {
+    reason: handovers.get(o.id).reason, requested_at: handovers.get(o.id).requested_at,
+    away_until: o.status === 'in_work' && awayDeadline(o, today) ? o.away_until : null,
+    extend_declined: !ext.get(o.id) && declined.has(o.id), can_transfer: askMates.get(o.id) ?? false,
+  }));
   // Эксперт не принимает дела до … (2.113): его дела в работе со сроком раньше дня возвращения — в отпуске он их не сдаст.
   // Уже попросил передать сам — такие дела только в «просит передать».
   // Передать некому (прогон 2.210) — «передайте коллеге» не советуем, как в «Делах экспертов» (прогон 2.200).
