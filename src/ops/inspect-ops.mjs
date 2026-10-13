@@ -131,6 +131,24 @@ export async function incompleteInspections(sql, registry, { executor = null, or
   return out;
 }
 
+// Досняли по просьбе (2.214): шаги, у которых просьба доснять (2.20, 2.208) закрыта фото по этой ссылке. Возвращает их
+// названия, только если ссылка закрыта «Готово», обязательные шаги все в деле и открытых просьб не осталось; иначе — [].
+export async function reshotAll(sql, registry, link) {
+  if (!link?.finished_at) return [];
+  const order = await sql.one`select id, module, service from orders where id = ${link.order_id}`;
+  const steps = registry.inspectionSteps(order.module, order.service);
+  if (Object.keys(await openRetakes(sql, order.id)).length) return [];
+  const need = steps.filter((s) => !s.optional);
+  const have = new Set((await sql`select distinct p.step from inspection_photos p join documents d on d.id = p.document_id
+                                  where d.order_id = ${order.id} and d.deleted_at is null`).map((r) => r.step));
+  if (need.some((s) => !have.has(s.id))) return [];
+  const rows = await sql`select distinct r.step from inspection_retakes r
+                         where r.order_id = ${order.id} and r.closed_reason = 'photo' and r.closed_at >= ${link.created_at}
+                           and exists (select 1 from inspection_photos p where p.link_id = ${link.id} and p.step = r.step)`;
+  const done = new Set(rows.map((r) => r.step));
+  return steps.filter((s) => done.has(s.id)).map((s) => s.title);
+}
+
 // Напомнить эксперту (раз в минуту вместе с напоминаниями о сроках, src/server.mjs) — один раз на ссылку.
 export async function remindSilentInspections(sql) {
   let sent = 0;
@@ -480,7 +498,8 @@ export function inspectOps() {
     },
     {
       // «Готово»: ссылка закрывается, исполнитель получает уведомление. Пропущенные шаги эксперт увидит у себя; не сняты
-      // обязательные шаги (2.208) — уведомление другое: «снял не всё — попросите доснять».
+      // обязательные шаги (2.208) — уведомление другое: «снял не всё — попросите доснять»; доснял всё, о чём просили (2.214), —
+      // «досняли всё».
       id: 'inspect.finish', method: 'POST', path: '/api/inspect/finish', auth: 'public',
       publicReason: 'владелец объекта завершает осмотр по секрету ссылки; ссылка после этого не действует',
       rateLimit: (ip) => ownerLimit(ip),
@@ -493,7 +512,9 @@ export function inspectOps() {
           await tx`update inspection_links set finished_at = now() where id = ${link.id}`;
           await audit(tx, null, 'inspect.finish', 'order', order.id, { link: String(link.id), photos: n });
           const [gap] = await incompleteInspections(tx, registry, { order: order.id });
-          await notify(tx, gap ? 'inspection_incomplete' : 'inspection_done', { users: [link.created_by], orderId: order.id });
+          // Доснял всё, о чём просил эксперт (2.214), — своё уведомление «досняли всё».
+          const reshot = gap ? [] : await reshotAll(tx, registry, { ...link, finished_at: new Date() });
+          await notify(tx, gap ? 'inspection_incomplete' : reshot.length ? 'inspection_reshot' : 'inspection_done', { users: [link.created_by], orderId: order.id });
           return { finished: true, photos: n };
         });
       },

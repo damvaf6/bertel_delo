@@ -22,7 +22,7 @@ import { STATUS_NAME, addDays, isOverdue, resultDue, todayMsk } from '../orders/
 import { orderSignatures, orgReturns, signWait } from './sign-ops.mjs';
 import { executorSignOrg } from '../access/policy.mjs';
 import { dossierAlerts, loadDossier } from '../dossier/dossier.mjs';
-import { expiringLinks, incompleteInspections, silentLinks } from './inspect-ops.mjs';
+import { expiringLinks, incompleteInspections, reshotAll, silentLinks } from './inspect-ops.mjs';
 import { answeredExtends, openExtends } from './deadline-ops.mjs';
 import { openHandovers } from './handover-ops.mjs';
 import { dueNotes } from './note-ops.mjs';
@@ -105,7 +105,13 @@ async function expertPart(sql, actor, registry, today) {
     const what = [];
     if (n.docs) what.push(await docsLine(sql, o.id, actor.id));
     // Осмотр закончен не полностью (2.208) — своя строка «снял не всё», здесь не повторяется.
-    if (n.finished && !incomplete.some((x) => x.id === o.id)) what.push(`осмотр закончен${n.photos ? ` (фото: ${n.photos})` : ''}`);
+    if (n.finished && !incomplete.some((x) => x.id === o.id)) {
+      // Доснял по просьбе всё недостающее (2.214) — видно, какие шаги.
+      const last = await sql.one`select * from inspection_links where order_id = ${o.id} and finished_at is not null order by id desc limit 1`;
+      const reshot = await reshotAll(sql, registry, last);
+      what.push(reshot.length ? `владелец доснял всё, о чём Вы просили: ${reshot.join(', ')}${n.photos ? ` (фото: ${n.photos})` : ''}`
+        : `осмотр закончен${n.photos ? ` (фото: ${n.photos})` : ''}`);
+    }
     else if (n.photos && !n.finished) what.push(`новые фото осмотра: ${n.photos}`);
     if (n.onsite) what.push('выезд помощника завершён');
     // Куда вести, если сообщений нет: к запрошенным документам или к осмотру.
