@@ -11,6 +11,7 @@
 // юридической силы не имеет и так и подписана в самом файле.
 import crypto from 'node:crypto';
 import { makeFake } from './fake.mjs';
+import { cmsInfo } from './cms.mjs';
 
 // Имя файла подписи рядом с файлом: «Заключение.pdf.sig» — эксперт, «Заключение.pdf.org.sig» — организация (2.5а).
 export const signatureFilename = (filename, role) => `${filename}${role === 'org' ? '.org' : ''}.sig`;
@@ -79,4 +80,23 @@ export function fakeSign(appSecret) {
       return { valid: true, certificate: fields.certificate, signedAt: fields.signed_at, test: true };
     },
   });
+}
+
+// Ручная проверка (SIGN_PROVIDER=manual; задача штаба 3f817197-…-81ac, план КриптоПро, раздел 6): договора с удостоверяющим
+// центром ещё нет, покупать ничего не нужно. Исполнитель подписывает файл своей КЭП где угодно (КриптоПро, программа УЦ,
+// «Госключ») и загружает файл подписи; платформа хранит оба и отпечаток файла, ключей подписи не хранит и не видит. Подписать
+// в кабинете нельзя. Сам файл подписи здесь только разбирается (CMS, сертификат — src/providers/cms.mjs); верна ли подпись
+// ГОСТ, проверяет сотрудник платформы на Госуслугах и ставит отметку «подписано КЭП, проверено» (sign-ops.mjs).
+export const GOSUSLUGI_CHECK_URL = 'https://www.gosuslugi.ru/eds';
+export function manualSign() {
+  return {
+    name: 'manual',
+    manual: true,
+    sign: async () => { throw new Error('Подпись в кабинете при ручной проверке не делается'); },
+    verify: async ({ signature }) => {
+      const info = cmsInfo(Buffer.from(signature));
+      if (!info) return { valid: false, reason: 'это не файл открепленной подписи (.sig, .p7s, .sgn) — сохраните подпись из программы подписи отдельным файлом' };
+      return { valid: true, manual: true, certificate: info.certificate ?? {}, test: false };
+    },
+  };
 }

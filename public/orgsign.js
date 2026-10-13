@@ -2,7 +2,7 @@
 // подписывает их от организации — в кабинете или готовой подписью с сертификатом организации. Саму заявку и заказчика
 // руководитель не видит: только услугу, номер, эксперта, срок и файлы.
 import { api, el, say, formatSize } from '/common.js';
-import { signatureLines, uploadSignatureButton, SIGN_CONFIRM, UPLOAD_HINT } from '/sign.js';
+import { signatureLines, uploadSignatureButton, SIGN_CONFIRM, UPLOAD_HINT, SIGN_HOWTO, memo } from '/sign.js';
 import { dayRu } from '/order.js';
 import { loadOrgCases } from '/orgcases.js';
 
@@ -17,6 +17,7 @@ const SIGN_FILTERS = [
 ];
 let signFilter = null;
 let signItems = [];
+let manualSign = false; // ручная проверка подписи: от организации — только загрузкой файла подписи
 // «2 дн.», «5 ч», «меньше часа» (2.148).
 const waitedDays = (iso) => {
   const h = Math.floor((Date.now() - new Date(iso).getTime()) / 3_600_000);
@@ -31,7 +32,10 @@ const refresh = () => Promise.all([loadOrgSign(current), loadOrgCases(current)])
 export async function loadOrgSign(org) {
   if (current?.id !== org.id) signFilter = null;
   current = org;
-  signItems = (await api('GET', `/api/orgs/${org.id}/signing`)).items;
+  const got = await api('GET', `/api/orgs/${org.id}/signing`);
+  signItems = got.items;
+  // Ручная проверка (задача штаба 3f817197-…-81ac): от организации — только загрузкой файла подписи.
+  manualSign = got.sign_mode === 'manual';
   if (remarkOrg !== org.id) {
     try { remarks = (await api('GET', `/api/orgs/${org.id}/remarks`)).remarks; remarkOrg = org.id; } catch { remarks = []; }
   }
@@ -69,7 +73,7 @@ function renderSign() {
     ...open.map((it) => {
       const ready = it.documents.filter((d) => d.signatures.expert && !d.signatures.org);
       return el('li', { 'data-item': it.order_ref }, ...head(it),
-        ...(waiting(it) && ready.length > 1 ? [el('button', { 'data-action': 'org-sign-all', onclick: () => signAll(ready) }, `Подписать все файлы дела (${ready.length})`)] : []),
+        ...(!manualSign && waiting(it) && ready.length > 1 ? [el('button', { 'data-action': 'org-sign-all', onclick: () => signAll(ready) }, `Подписать все файлы дела (${ready.length})`)] : []),
         el('ul', { class: 'list' }, ...it.documents.map((d) => docItem(d, it))),
         ...returnsBlock(it.returns ?? []));
     }),
@@ -141,8 +145,8 @@ const aiCheckLine = (d) => (d.ai_check
 // Несколько дел одним подтверждением (2.114): отмечены все, кроме дел, где по замечанию руководителя эксперт отметил не всё.
 function renderMany(list) {
   const box = $('org-sign-many');
-  box.classList.toggle('hidden', list.length < 2);
-  if (list.length < 2) return box.replaceChildren();
+  box.classList.toggle('hidden', list.length < 2 || manualSign);
+  if (list.length < 2 || manualSign) return box.replaceChildren();
   const rows = list.map((it) => {
     const ready = it.documents.filter((d) => d.signatures.expert && !d.signatures.org);
     const left = ready.reduce((n, d) => {
@@ -212,7 +216,14 @@ function docItem(d, it) {
   if (expert) lines.push(...signatureLines(expert));
   else lines.push(el('div', { class: 'sig-state', text: 'Эксперт ещё не подписал — подпись организации после него' }));
   if (org) lines.push(...signatureLines(org));
-  else if (expert) {
+  if (expert?.manual_check === 'bad') lines.push(el('div', { class: 'muted', text: 'Подпись организации — после того как эксперт загрузит подпись заново.' }));
+  else if (expert && manualSign && (!org || org.manual_check === 'bad')) {
+    lines.push(...(it ? lastReturnState(d, it) : []), ...aiCheckLine(d), el('div', { class: 'row' },
+      ...uploadSignatureButton(d.filename, (file) => upload(d, file), 'Загрузить подпись организации (.sig)')),
+    el('div', { class: 'muted', text: 'Подпишите этот файл КЭП организации (руководителя) своей программой и загрузите файл подписи .sig. Платформа проверит подпись на Госуслугах.' }),
+    memo('Как подписать файл КЭП', SIGN_HOWTO, 'sign-howto'),
+    ...(org ? [] : [returnForm(d)]));
+  } else if (expert && !org) {
     lines.push(...(it ? lastReturnState(d, it) : []), ...aiCheckLine(d), el('div', { class: 'row' },
       el('button', { 'data-action': 'org-sign', onclick: () => sign(d) }, 'Подписать от организации'),
       ...uploadSignatureButton(d.filename, (file) => upload(d, file))),

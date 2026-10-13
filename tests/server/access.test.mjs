@@ -718,6 +718,12 @@ test('работа по делу: результат — только испол
     assert.equal((await verify(U[k])).status, 404, k);
     assert.equal((await sigLink(U[k])).status, 404, k);
   }
+  // Ручная отметка подписи (задача штаба 3f817197-…-81ac) — только диспетчер; подпись площадки проверяется сама.
+  cover('signature.check');
+  const sigCheck = (c) => c.req('POST', `/api/documents/${doc.id}/signature/check`, { role: 'expert', ok: true });
+  for (const k of ['owner', 'stranger', 'headB']) assert.equal((await sigCheck(U[k])).status, 404, k);
+  assert.equal((await sigCheck(U.spec)).status, 403, 'исполнитель свою подпись не отмечает');
+  for (const k of ['dispatcher', 'admin']) assert.equal((await sigCheck(U[k])).body.error, 'not_manual', k);
   assert.equal((await U.spec.req('POST', `/api/orders/${o.id}/status`, { to: 'review', from: 'in_work' })).status, 200);
   assert.equal((await U.spec.req('DELETE', `/api/documents/${doc.id}`)).status, 409, 'сданный результат не убрать');
   assert.equal((await result(U.spec)).status, 409, 'после сдачи — только через доработку');

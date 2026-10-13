@@ -19,7 +19,7 @@ import crypto from 'node:crypto';
 import { makeFake } from './fake.mjs';
 import { createAi } from './ai.mjs';
 import { createOcr } from './ocr.mjs';
-import { fakeSign } from './sign.mjs';
+import { fakeSign, manualSign } from './sign.mjs';
 import { yookassa } from './yookassa.mjs';
 import { memoryStorage, s3Storage } from './storage.mjs';
 
@@ -109,8 +109,10 @@ export function createProviders(cfg) {
   }
   out.ai = createAi(cfg);
   out.ocr = createOcr(cfg);
-  if (cfg.providers.sign !== 'fake') throw new Error(`Поставщик «sign: ${cfg.providers.sign}» ещё не подключён`);
-  out.sign = fakeSign(cfg.appSecret);
+  // Подпись: поддельная (площадка, проверки) или ручная проверка на Госуслугах (manual — пока нет договора с УЦ).
+  if (cfg.providers.sign === 'manual') out.sign = manualSign();
+  else if (cfg.providers.sign !== 'fake') throw new Error(`Поставщик «sign: ${cfg.providers.sign}» ещё не подключён`);
+  else out.sign = fakeSign(cfg.appSecret);
   const storage = cfg.providers.storage;
   if (storage === 'memory') out.storage = memoryStorage(cfg.appSecret);
   else if (storage === 's3') out.storage = s3Storage(cfg.s3);
