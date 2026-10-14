@@ -314,7 +314,7 @@ test('эксперт не принимает дела (2.113): руководи�
   for (const secret of ['Срок в отпуске', inside.id]) assert.ok(!text.includes(secret), `руководитель не видит: ${secret}`);
   // В «Делах экспертов» у дела — отметка, передать есть кому не обязательно; у дела после отпуска — нет.
   const cases = (await head.req('GET', `/api/orgs/${org.id}/cases`)).body.cases;
-  assert.deepEqual(cases.find((c) => c.id === inside.id).away, { until, note: 'отпуск' });
+  assert.deepEqual(cases.find((c) => c.id === inside.id).away, { from: null, until, note: 'отпуск' });
   assert.equal(cases.find((c) => c.id === after.id).away, null);
   // Эксперту и чужим — не видно; отметку сняли — список пуст.
   assert.deepEqual((await spec.req('GET', '/api/today')).body.orgs, []);

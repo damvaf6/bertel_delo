@@ -1827,7 +1827,7 @@ test('«не принимаю новые дела до …» (2.77): подбо�
   const before = (await S.sql`select count(*)::int as n from notifications where user_id = ${U.headB.user.id} and event = 'expert_away_head'`)[0].n;
   const r = await away({ until: day(10), note: '  отпуск ' });
   assert.equal(r.status, 200, JSON.stringify(r.body));
-  assert.deepEqual(r.body.specialist.away, { until: day(10), note: 'отпуск' });
+  assert.deepEqual(r.body.specialist.away, { from: null, until: day(10), note: 'отпуск' });
   assert.equal(r.body.specialist.active, true, 'выключатель «принимаю дела» не трогается');
   const after = (await S.sql`select count(*)::int as n, bool_and(org_id = ${orgB.id}) as org from notifications where user_id = ${U.headB.user.id} and event = 'expert_away_head'`)[0];
   assert.equal(after.n, before + 1, 'руководителю — уведомление');
@@ -1841,13 +1841,13 @@ test('«не принимаю новые дела до …» (2.77): подбо�
   assert.ok(!(await cands()).includes(expertB.user.id), 'подбор не предлагает');
   assert.equal((await U.dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: expertB.user.id, from: 'matching' })).body.error, 'not_eligible');
   const list = (await U.dispatcher.req('GET', '/api/specialists')).body.specialists.find((s) => s.user_id === expertB.user.id);
-  assert.deepEqual(list.away, { until: day(10), note: 'отпуск' }, 'диспетчер видит в списке специалистов');
+  assert.deepEqual(list.away, { from: null, until: day(10), note: 'отпуск' }, 'диспетчер видит в списке специалистов');
   assert.equal((await U.dispatcher.req('POST', `/api/orders/${o.id}/offer`, { org_id: orgB.id, from: 'matching' })).status, 200);
   const v = (await U.headB.req('GET', `/api/orgs/${orgB.id}/cases`)).body;
   const p = v.pending.find((x) => x.id === o.id);
   assert.ok(!p.experts.some((x) => x.user_id === expertB.user.id), 'назначить нельзя');
   assert.ok(p.away.some((a) => a.until === day(10) && a.note === 'отпуск'), JSON.stringify(p.away));
-  assert.deepEqual(v.load.find((l) => l.user_id === expertB.user.id).away, { until: day(10), note: 'отпуск' });
+  assert.deepEqual(v.load.find((l) => l.user_id === expertB.user.id).away, { from: null, until: day(10), note: 'отпуск' });
   assert.equal((await U.headB.req('POST', `/api/orgs/${orgB.id}/cases/${o.id}/assign`, { specialist_id: expertB.user.id })).status, 409);
   // День возвращения наступил — отметка перестала действовать сама.
   await S.sql`update specialists set away_until = ${day(0)} where user_id = ${expertB.user.id}`;
@@ -2538,7 +2538,7 @@ test('мои сроки на две недели (2.109): по дням — ср
   assert.deepEqual(at(5), [['deadline', review.id, null]]);
   assert.equal(r.days[5].items[0].status, 'review');
   assert.deepEqual(at(6), [['extend', soon.id, null]]);
-  assert.deepEqual(r.away, { until: plus(2), note: 'отпуск' });
+  assert.deepEqual(r.away, { from: null, until: plus(2), note: 'отпуск' });
   assert.deepEqual(r.days.map((d) => d.away).slice(0, 3), [true, true, false]);
   const text = JSON.stringify(r);
   for (const t of ['Сроки: чужое', 'Сроки: через месяц', 'Сроки: сдано']) assert.ok(!text.includes(t), t);

@@ -4,7 +4,7 @@
 // Раскрыл эксперта — его дни подробно; нажатие на дело открывает его в «Делах экспертов». Заказчика и названий заявок
 // руководитель не видит — услуга и номер дела.
 import { api, el, say } from '/common.js';
-import { dayRu } from '/order.js';
+import { awaySpan, dayRu } from '/order.js';
 import { focusOrgCase } from '/orgcases.js';
 
 const $ = (id) => document.getElementById(id);
@@ -37,7 +37,7 @@ const kind = (x, d) => (d.away ? 'away' : d.date === x.away?.until ? 'back' : 'f
 const FREE = { away: 'новые дела не предлагают', back: 'снова предлагают дела' };
 const dueOn = (d) => d.items.filter((i) => i.kind === 'deadline' && i.status !== 'review').length;
 // Срок в отпуске («не принимаю до …») — заметно; выключил приём — дела в работе ведёт как обычно, не отмечаем.
-const vacation = (x, d) => !!x.away && d.date < x.away.until;
+const vacation = (x, d) => !!x.away && d.date < x.away.until && (!x.away.from || d.date >= x.away.from);
 
 function strip(x, days) {
   return el('div', { class: 'strip', 'aria-hidden': 'true' }, ...days.map((h, k) => {
@@ -62,7 +62,7 @@ function expertItem(x, days, experts) {
     el('div', { class: 'title', text: x.full_name }),
     el('div', { class: 'muted', 'data-role': 'total', text: total }),
     ...(x.overdue.length ? [el('div', { class: 'overdue', 'data-role': 'overdue', text: `Срок уже прошёл: ${x.overdue.length}` })] : []),
-    ...(x.away ? [el('div', { class: 'muted', 'data-away': '', text: `Не принимает новые дела до ${dayRu(x.away.until)}${x.away.note ? ` (${x.away.note})` : ''}` })]
+    ...(x.away ? [el('div', { class: 'muted', 'data-away': '', text: `Не принимает новые дела ${awaySpan(x.away)}${x.away.note ? ` (${x.away.note})` : ''}` })]
       : x.paused ? [el('div', { class: 'muted', 'data-away': '', text: 'Не принимает новые дела — выключил приём' })] : []),
     strip(x, days),
     ...(clash ? [el('div', { class: 'clash-note', 'data-role': 'clash', text: `Срок сдачи в дни, когда эксперт не принимает дела: ${clash} — ${

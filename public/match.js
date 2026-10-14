@@ -1,7 +1,7 @@
 // Подбор исполнителя (диспетчер), кабинет специалиста и список специалистов. Тексты — только через textContent.
 import { api, el, say, ROLE_RU, quoted } from '/common.js';
 import { state, show, refreshMe } from '/shell.js';
-import { dayRu } from '/order.js';
+import { awaySpan, dayRu } from '/order.js';
 import { showDossier } from '/dossier.js';
 import { expertLink } from '/expertcard.js';
 import { loadMyReport } from '/myreport.js';
@@ -141,12 +141,14 @@ $('specialist-active').addEventListener('change', async (e) => {
 const tomorrow = () => new Date(Date.now() + 3 * 3_600_000 + 86_400_000).toISOString().slice(0, 10);
 function showAway(sp) {
   const a = sp.away;
-  $('specialist-away-now').textContent = a ? `Вы не принимаете новые дела до ${dayRu(a.until)}${a.note ? ` (${a.note})` : ''}.` : '';
+  $('specialist-away-now').textContent = a ? `Вы не принимаете новые дела ${awaySpan(a)}${a.note ? ` (${a.note})` : ''}.${a.from
+    ? ' До первого из этих дней дела предлагают; за 3 дня до него придёт напоминание, если срок какого-то дела — в эти дни.' : ''}` : '';
   $('specialist-away-now').classList.toggle('hidden', !a);
   $('specialist-away-form').classList.toggle('hidden', !!a);
   $('specialist-away-clear').classList.toggle('hidden', !a);
   $('specialist-away-until').min = tomorrow();
-  if (!a) { $('specialist-away-until').value = ''; $('specialist-away-note').value = ''; }
+  $('specialist-away-from').min = tomorrow();
+  if (!a) { $('specialist-away-from').value = ''; $('specialist-away-until').value = ''; $('specialist-away-note').value = ''; }
 }
 
 async function setAway(away, done) {
@@ -161,7 +163,9 @@ async function setAway(away, done) {
 $('specialist-away-set').addEventListener('click', () => {
   const until = $('specialist-away-until').value;
   if (!until) return say($('specialist-msg'), 'Укажите день, с которого снова принимаете дела');
-  setAway({ until, note: $('specialist-away-note').value }, `Новые дела не будут предлагать до ${dayRu(until)}`);
+  // С какого дня (2.226): пусто — с сегодня.
+  const from = $('specialist-away-from').value || null;
+  setAway({ from, until, note: $('specialist-away-note').value }, `Новые дела не будут предлагать ${awaySpan({ from, until })}`);
 });
 $('specialist-away-clear').addEventListener('click', () => setAway(null, 'Теперь Вам снова предлагают дела'));
 
@@ -182,7 +186,7 @@ export async function showSpecialists() {
   $('specialists-empty').classList.toggle('hidden', specialists.length > 0);
   $('specialists').replaceChildren(...specialists.map((s) => el('li', {},
     el('div', { class: 'title', text: s.full_name || 'Без имени' }),
-    el('div', { class: 'muted', text: [!s.active ? 'не принимает дела' : s.away ? `не принимает новые дела до ${dayRu(s.away.until)}${s.away.note ? ` (${s.away.note})` : ''}` : 'принимает дела', `дел ${s.open_orders} из ${s.capacity}`,
+    el('div', { class: 'muted', text: [!s.active ? 'не принимает дела' : s.away ? `не принимает новые дела ${awaySpan(s.away)}${s.away.note ? ` (${s.away.note})` : ''}` : 'принимает дела', `дел ${s.open_orders} из ${s.capacity}`,
       s.regions.map((r) => (r === 'moscow' ? 'Москва' : 'область')).join(' и ')].join(' · ') }),
     el('div', { class: 'muted', text: s.permits.length ? `Допуски: ${s.permits.map(permitText).join('; ')}` : 'Допусков нет' }),
     ...(s.dossier_alerts?.length ? [el('div', { class: 'overdue', text: s.dossier_alerts.map((a) => `${a.kind_name}: ${a.state === 'expired' ? 'срок истёк' : `срок до ${dayRu(a.valid_until)}`}`).join('; ') })] : []),

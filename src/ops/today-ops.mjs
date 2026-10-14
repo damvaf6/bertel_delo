@@ -248,8 +248,9 @@ async function docsLine(sql, orderId, userId) {
 // попросить руководителя передать дело коллеге. Строка держится, пока эксперт не попросил передать (или руководитель уже
 // отказал после этого отказа диспетчера), не попросил перенос заново или не сдвинул «не принимаю дела до …».
 async function awayDeclinedCases(sql, actor, rows, ext, today, item) {
-  const sp = await sql.one`select to_char(away_until, 'YYYY-MM-DD') as away_until, away_note from specialists where user_id = ${actor.id}`;
-  const list = rows.filter((o) => o.status === 'in_work' && !ext.get(o.id) && awayDeadline({ ...o, away_until: sp?.away_until }, today));
+  const sp = await sql.one`select to_char(away_from, 'YYYY-MM-DD') as away_from, to_char(away_until, 'YYYY-MM-DD') as away_until, away_note
+                           from specialists where user_id = ${actor.id}`;
+  const list = rows.filter((o) => o.status === 'in_work' && !ext.get(o.id) && awayDeadline({ ...o, away_from: sp?.away_from, away_until: sp?.away_until }, today));
   if (!list.length || !(await executorSignOrg(sql, actor.id))) return [];
   const ids = list.map((o) => o.id);
   const last = new Map((await sql`
@@ -266,8 +267,9 @@ async function awayDeclinedCases(sql, actor, rows, ext, today, item) {
   });
 }
 
+// Срок дела — в днях «не принимаю дела» эксперта: до дня возвращения и не раньше первого такого дня (away_from, 2.226).
 export function awayDeadline(o, today) {
-  return !!o.away_until && o.away_until > today && !!o.deadline && o.deadline < o.away_until;
+  return !!o.away_until && o.away_until > today && !!o.deadline && o.deadline < o.away_until && (!o.away_from || o.deadline >= o.away_from);
 }
 
 // Тот же расчёт — для утренней сводки руководителю (2.121, src/notify/morning.mjs).
@@ -277,7 +279,7 @@ export async function orgPart(sql, org, registry, today, { actorId = null } = {}
   // Дела экспертов организации (выбрали её в профиле специалиста и состоят в ней) — как в «Делах экспертов».
   const cases = await sql`
     select o.id, o.module, o.service, o.status, o.deadline, o.executor_user_id, o.updated_at, u.full_name as expert,
-           to_char(s.away_until, 'YYYY-MM-DD') as away_until, s.away_note
+           to_char(s.away_from, 'YYYY-MM-DD') as away_from, to_char(s.away_until, 'YYYY-MM-DD') as away_until, s.away_note
     from orders o join specialists s on s.user_id = o.executor_user_id and s.org_id = ${org.id}
     join org_members m on m.org_id = s.org_id and m.user_id = s.user_id join users u on u.id = o.executor_user_id
     where o.status in ('awaiting_executor', 'in_work', 'review') order by o.deadline nulls last, o.id limit ${LIMIT}`;
