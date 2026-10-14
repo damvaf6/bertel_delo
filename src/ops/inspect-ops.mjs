@@ -149,6 +149,27 @@ export async function reshotAll(sql, registry, link) {
   return steps.filter((s) => done.has(s.id)).map((s) => s.title);
 }
 
+// Доснято по подсказке (2.237): у шага последняя просьба переснять (2.20, 2.227), закрытая фото, и пока по шагу нет новой
+// открытой просьбы. after — первое фото шага после просьбы (им владелец ответил), before — последнее фото шага до просьбы
+// (было ли что сравнивать). photos — фото дела в порядке inspectionPhotos (удалённые там уже отброшены).
+export async function reshotSteps(sql, orderId, photos, retakes) {
+  const rows = await sql`select distinct on (step) id, step, note, requested_at, closed_at from inspection_retakes
+                         where order_id = ${orderId} and closed_reason = 'photo' order by step, closed_at desc, id desc`;
+  const out = {};
+  for (const r of rows) {
+    if (retakes[r.step]) continue;
+    const mine = photos.filter((p) => p.step === r.step);
+    const asked = new Date(r.requested_at).getTime();
+    const after = mine.filter((p) => new Date(p.received_at).getTime() >= asked)
+      .sort((a, b) => new Date(a.received_at) - new Date(b.received_at))[0];
+    if (!after) continue;
+    const before = mine.filter((p) => new Date(p.received_at).getTime() < asked)
+      .sort((a, b) => new Date(b.received_at) - new Date(a.received_at))[0] ?? null;
+    out[r.step] = { note: r.note, requested_at: r.requested_at, closed_at: r.closed_at, after, before };
+  }
+  return out;
+}
+
 // Напомнить эксперту (раз в минуту вместе с напоминаниями о сроках, src/server.mjs) — один раз на ссылку.
 export async function remindSilentInspections(sql) {
   let sent = 0;
@@ -304,6 +325,9 @@ export function inspectOps() {
           geo: p.lat === null ? null : { lat: p.lat, lon: p.lon, accuracy_m: p.accuracy_m === null ? null : Math.round(p.accuracy_m) },
         }));
         const retakes = await openRetakes(sql, order.id);
+        // Доснято по подсказке эксперта (2.237) — у шага пометка и прежнее фото рядом с новым.
+        const reshot = await reshotSteps(sql, order.id, photos, retakes);
+        const photoRef = (p) => (p ? { no: p.no, document_id: p.document_id, thumb: p.has_thumb, received_at: p.received_at } : null);
         // Ссылка молчит 2 дня (2.85) — исполнителю над формой «Отправить ссылку снова».
         const [silent] = canIssue(actor, order) ? await silentLinks(sql, { order: order.id }) : [];
         // Ссылка перестанет действовать в ближайшие сутки (2.196) — «Продлить ссылку» без новой ссылки владельцу.
@@ -314,7 +338,9 @@ export function inspectOps() {
           silent: silent ? { link_id: String(silent.id), since: silent.created_at, expired: new Date(silent.expires_at) <= new Date(), sms_to: silent.sms_to ?? null } : null,
           expiring: expiring ? { link_id: String(expiring.id), expires_at: expiring.expires_at, photos: expiring.photos } : null,
           incomplete: incomplete ? { link_id: incomplete.link_id, finished_at: incomplete.finished_at, photos: incomplete.photos, missing: incomplete.missing, asked: incomplete.asked } : null,
-          steps: steps.map((s) => ({ ...s, photos: byStep(s.id), retake: retakes[s.id] ?? null })),
+          steps: steps.map((s) => ({ ...s, photos: byStep(s.id), retake: retakes[s.id] ?? null,
+            reshot: reshot[s.id] ? { note: reshot[s.id].note, requested_at: reshot[s.id].requested_at, closed_at: reshot[s.id].closed_at,
+              after: photoRef(reshot[s.id].after), before: photoRef(reshot[s.id].before) } : null })),
           links: links.map((l) => linkView(l, order, l.photos)),
           can_issue: canIssue(actor, order) && steps.length > 0,
           days: INSPECT.days,
