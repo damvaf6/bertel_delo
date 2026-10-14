@@ -9908,7 +9908,8 @@ test('2.226: за 3 дня до дней «не принимаю дела» — 
   await expect(pre).not.toContainText('не принимаете');
   await expect(pre.locator(`[data-ask-handover="${early}"]`)).toHaveCount(0);
   await expect(box.locator(`#schedule-days > li[data-day="${inDays(2)}"] .away-mark`)).toHaveCount(0);
-  await expect(box.locator(`#schedule-days > li[data-day="${inDays(3)}"] .away-mark`)).toHaveText('новые дела не предлагают');
+  await expect(box.locator(`#schedule-days > li[data-day="${inDays(3)}"]`)).toContainText('новые дела не предлагают');
+  await expect(box.locator(`#schedule-days > li[data-day="${inDays(5)}"] .away-mark`)).toHaveText('новые дела не предлагают');
   await it.scrollIntoViewIfNeeded();
   await shot(page, 'h4g-ekspert-sroki-skoro-otpusk');
 });

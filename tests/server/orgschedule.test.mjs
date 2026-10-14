@@ -65,7 +65,7 @@ test('нагрузка экспертов на две недели (2.111): по
   assert.deepEqual([b.due, b.visits], [2, 1]);
   // Чужое дело, куда свободный эксперт едет помощником, — без номера; дни «не принимает дела» отмечены.
   assert.deepEqual(at(f, 4), [['helper', null, '09:00']]);
-  assert.deepEqual(f.away, { until: plus(3), note: 'отпуск' });
+  assert.deepEqual(f.away, { from: null, until: plus(3), note: 'отпуск' });
   assert.deepEqual(f.days.map((d) => d.away).slice(0, 4), [true, true, true, false]);
   assert.equal(f.free_workdays, f.days.filter((d, i) => !r.body.schedule.days[i].weekend && !d.away && !d.items.length).length);
   // Выключил приём (2.194) — все две недели «не принимает новые дела», свободных будней нет; включил — снова как было.
