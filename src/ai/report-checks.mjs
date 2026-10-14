@@ -314,7 +314,7 @@ function cadastralMatch(doc, ctx) {
       if (!/кадастров\S*\s+(?:номер|№)/iu.test(page.slice(Math.max(0, m.index - 60), m.index))) continue;
       if (/аналог/iu.test(lineAround(page, m.index))) continue;
       seen.add(v);
-      out.push({ page: i, quote: lineAround(page, m.index), egrn: egrnAt(egrn), text: egrn
+      out.push({ page: i, quote: lineAround(page, m.index), egrn: egrnAt(egrn), fix: egrn ? { bad: v, right: egrn.v } : null, text: egrn
         ? `Кадастровый номер ${v} не совпадает с номером в выписке ЕГРН «${egrn.name}» (${egrn.v}, стр. ${egrn.page + 1})${differs ? `; в заявке — ${mine}` : ''} — проверьте, нет ли данных другого объекта`
         : `Кадастровый номер ${v} не совпадает с номером из заявки (${mine}) — проверьте, нет ли данных другого объекта` });
     }
@@ -476,7 +476,7 @@ function addressMatch(doc, ctx) {
       : `${ADDR_NAMES[k]} ${got[k]}, а ${refName(ref)} ${ref.value}`)).join('; ');
     const where = against === 'egrn' ? `с адресом в выписке ЕГРН «${egrn.name}» (${egrn.text}, стр. ${egrn.page + 1})${mineDiffers ? `; в заявке — ${mineText}` : ''}`
       : against === 'mine' ? `с адресом из заявки (${mineText})` : `с адресом объекта на стр. ${diff[0].ref.page + 1}`;
-    out.push({ page: i, quote: lineAround(page, index), egrn: against === 'egrn' ? egrnAt(egrn) : null, text: `Адрес «${text}» не совпадает ${where}: ${parts} — проверьте, нет ли данных другого объекта` });
+    out.push({ page: i, quote: lineAround(page, index), egrn: against === 'egrn' ? egrnAt(egrn) : null, fix: against === 'egrn' ? { bad: text, right: egrn.text } : null, text: `Адрес «${text}» не совпадает ${where}: ${parts} — проверьте, нет ли данных другого объекта` });
   }
   return out;
 }
@@ -526,7 +526,7 @@ function objectAreas(doc, ctx) {
       if (!near || other.test(near) || skip.test(near) || /аналог/iu.test(lineAround(page, f.index))) continue;
       const unit = f.unit.toLowerCase();
       const mult = /^га|^гектар/.test(unit) ? 10000 : /^сот/.test(unit) ? 100 : 1;
-      out.push({ page: i, index: f.index, v: Math.round(Number(`${f.int.replace(/[  ]/g, '')}.${f.frac ?? 0}`) * mult * 100) / 100 });
+      out.push({ page: i, index: f.index, raw: `${f.int}${f.frac ? `,${f.frac}` : ''}`, v: Math.round(Number(`${f.int.replace(/[  ]/g, '')}.${f.frac ?? 0}`) * mult * 100) / 100 });
     }
   });
   return out;
@@ -617,7 +617,7 @@ function areaMatch(doc, ctx) {
     if (Math.abs(a.v - ref) < 0.05 || seen.has(a.v)) continue;
     seen.add(a.v);
     const page = doc.pages[a.page];
-    out.push({ page: a.page, quote: lineAround(page, a.index), egrn: egrnAt(egrn), text: egrn
+    out.push({ page: a.page, quote: lineAround(page, a.index), egrn: egrnAt(egrn), fix: egrn ? { bad: a.raw, right: fmt(egrn.v) } : null, text: egrn
       ? `Площадь ${fmt(a.v)} кв. м не совпадает с площадью в выписке ЕГРН «${egrn.name}» (${fmt(egrn.v)} кв. м, стр. ${egrn.page + 1})${differs ? `; в заявке — ${fmt(mine)} кв. м` : ''} — площадь берётся из выписки`
       : `Площадь ${fmt(a.v)} кв. м не совпадает с площадью из заявки (${fmt(mine)} кв. м) — проверьте, нет ли данных другого объекта` });
   }
@@ -700,7 +700,7 @@ function floorMatch(doc, ctx) {
   const floorsOk = (v) => v === refFloors || (egrn.floors?.above != null && v === egrn.floors.above);
   const out = [];
   const seen = new Set();
-  const add = (i, page, idx, key, text, at) => { if (seen.has(key)) return; seen.add(key); out.push({ page: i, quote: lineAround(page, idx), egrn: egrnAt(at), text }); };
+  const add = (i, page, idx, key, text, at, fix) => { if (seen.has(key)) return; seen.add(key); out.push({ page: i, quote: lineAround(page, idx), egrn: egrnAt(at), fix: at ? fix : null, text }); };
   // В заявке другое — заказчик ошибся или выписка не на тот объект: подсказываем.
   const floorText = (v) => (egrn.floor
     ? `Этаж ${v} не совпадает с этажом в выписке ЕГРН «${egrn.floor.name}» (${refFloor}, стр. ${egrn.floor.page + 1})${mineFloor != null && mineFloor !== refFloor ? `; в заявке — ${mineFloor}` : ''} — проверьте, нет ли данных другого объекта`
@@ -717,8 +717,8 @@ function floorMatch(doc, ctx) {
       for (const m of page.matchAll(re)) {
         if (FLOOR_OTHER.test(lineAround(page, m.index))) continue;
         const v = Number(m[1]);
-        if (refFloor != null && v !== refFloor) add(i, page, m.index, `f${v}`, floorText(v), egrn.floor);
-        if (m[2] && refFloors && !floorsOk(Number(m[2]))) add(i, page, m.index, `n${m[2]}`, floorsText(m[2]), egrn.floors);
+        if (refFloor != null && v !== refFloor) add(i, page, m.index, `f${v}`, floorText(v), egrn.floor, { bad: String(v), right: String(refFloor) });
+        if (m[2] && refFloors && !floorsOk(Number(m[2]))) add(i, page, m.index, `n${m[2]}`, floorsText(m[2]), egrn.floors, { bad: m[2], right: String(refFloors) });
       }
     }
     if (!refFloors) return;
@@ -726,7 +726,7 @@ function floorMatch(doc, ctx) {
       for (const m of page.matchAll(re)) {
         if (/аналог/iu.test(lineAround(page, m.index)) || /подземн|цокол/iu.test(page.slice(Math.max(0, m.index - 25), m.index + m[0].length))) continue;
         const v = Number(m[1]);
-        if (!floorsOk(v)) add(i, page, m.index, `n${v}`, floorsText(v), egrn.floors);
+        if (!floorsOk(v)) add(i, page, m.index, `n${v}`, floorsText(v), egrn.floors, { bad: String(v), right: String(refFloors) });
       }
     }
   });
@@ -811,7 +811,7 @@ function buildingMatch(doc, ctx) {
   const refYears = egrn.years ? [...egrn.years.keys()] : mine ? [mine] : [];
   const out = [];
   const seen = new Set();
-  const add = (i, page, idx, key, text, at) => { if (seen.has(key)) return; seen.add(key); out.push({ page: i, quote: lineAround(page, idx), egrn: egrnAt(at), text }); };
+  const add = (i, page, idx, key, text, at, fix) => { if (seen.has(key)) return; seen.add(key); out.push({ page: i, quote: lineAround(page, idx), egrn: egrnAt(at), fix: at ? fix : null, text }); };
   const yearText = (v) => {
     if (!egrn.years) return `Год постройки ${v} не совпадает с годом из заявки (${mine}) — проверьте, нет ли данных другого дома`;
     const shown = refYears.join(' и ');
@@ -829,7 +829,7 @@ function buildingMatch(doc, ctx) {
           if (/^[\s|;\t]*\d{4}(?!\d)/.test(page.slice(end, page.indexOf('\n', end) < 0 ? undefined : page.indexOf('\n', end)))) continue;
           const v = Number(m[1]);
           if (v < 1700 || v > 2100 || refYears.includes(v)) continue;
-          add(i, page, m.index, `y${v}`, yearText(v), yearAt);
+          add(i, page, m.index, `y${v}`, yearText(v), yearAt, { bad: String(v), right: refYears.join(' или ') });
         }
       }
     }
@@ -841,7 +841,7 @@ function buildingMatch(doc, ctx) {
           const kinds = wallKinds(raw);
           if (!kinds.size || overlap(kinds, egrn.walls.kinds)) continue;
           const { v, name, page: p } = egrn.walls;
-          add(i, page, m.index, `w${[...kinds].sort().join()}`, `Материал стен «${raw}» не совпадает с выпиской ЕГРН «${name}» («${v}», стр. ${p + 1}) — проверьте, нет ли данных другого дома`, egrn.walls);
+          add(i, page, m.index, `w${[...kinds].sort().join()}`, `Материал стен «${raw}» не совпадает с выпиской ЕГРН «${name}» («${v}», стр. ${p + 1}) — проверьте, нет ли данных другого дома`, egrn.walls, { bad: raw, right: v });
         }
       }
     }
@@ -1969,7 +1969,9 @@ export function runAutoChecks(names, docs, ctx = {}) {
       file: f.doc.name,
       where: f.doc.pages.length > 1 ? `стр. ${f.page + 1}` : 'стр. 1',
       quote: clean(f.quote).slice(0, 200),
-      ...(f.egrn ? { egrn: { doc_id: f.egrn.doc, file: f.egrn.name, where: `стр. ${f.egrn.page + 1}`, quote: clean(f.egrn.quote).slice(0, 200) } } : {}),
+      ...(f.egrn ? { egrn: { doc_id: f.egrn.doc, file: f.egrn.name, where: `стр. ${f.egrn.page + 1}`, quote: clean(f.egrn.quote).slice(0, 200),
+        // 2.229: что в отчёте разошлось с выпиской и что в выписке — «Исправить в черновике» ищет это место в тексте черновика.
+        ...(f.fix ? { bad: clean(f.fix.bad).slice(0, 200), right: clean(f.fix.right).slice(0, 200) } : {}) } } : {}),
     }));
   }
   return res;
