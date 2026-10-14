@@ -49,3 +49,15 @@ export function findInDraft(body, { bad, quote } = {}) {
   const short = /^\d{1,3}$/.test(String(bad).trim());
   return short && best.score === 0 ? null : { from: best.from, to: best.to };
 }
+
+// 2.232: «Заменить на значение из выписки» — чем заменить найденное значение; null — заменять одной кнопкой нельзя:
+// в выписках несколько годов («1984 или 1985»), материал стен словом (род и падеж в тексте свои), пустое значение.
+// Разделитель дробной части — как в тексте черновика («45.1» → «47.3»).
+export function swapValue(g, found) {
+  const right = String(g?.right ?? '').replace(/\s+/g, ' ').trim();
+  const bad = String(g?.bad ?? '');
+  if (!right || / или /.test(right) || !/\d/.test(bad) || right.length > 200) return null;
+  const num = /^\d[\d\s]*([,.])\d+$/;
+  const was = num.exec(String(found ?? ''));
+  return was && num.test(right) ? right.replace(/[,.]/, was[1]) : right;
+}

@@ -1157,6 +1157,22 @@ test('ИИ-проверка результата: специалист пере�
   expect(await draftText.evaluate((t) => t.value.slice(t.selectionStart, t.selectionEnd))).toBe('45,1');
   await expect(sp.locator('#draft-msg')).toHaveText('Выделено «45,1» — в выписке ЕГРН: 47,3. Исправьте и сохраните черновик, затем соберите Word заново.');
   await shot(sp, '54m-specialist-ispravit-v-chernovike');
+  // 2.232: «Заменить на значение из выписки» — одной кнопкой: в тексте «47,3», черновик сохранён; видно, что было и что стало.
+  await areaFind.getByRole('button', { name: 'Заменить на значение из выписки' }).click();
+  await expect(areaFind.locator('[data-role="egrn-swap-what"]')).toHaveText('Было «45,1» — стало «47,3», как в выписке ЕГРН. Черновик сохранён; соберите Word заново.');
+  await expect(draftText).toHaveValue(/Общей площадью 47,3 кв\. м — по техническому паспорту\./);
+  expect(await draftText.evaluate((t) => t.value.slice(t.selectionStart, t.selectionEnd))).toBe('47,3');
+  expect((await (await sp.request.get(`/api/orders/${id}/draft`, { headers: H })).json()).draft.body).toContain('Общей площадью 47,3 кв. м');
+  await expect(areaFind.getByRole('button', { name: 'Заменить на значение из выписки' })).toBeDisabled();
+  await areaFind.locator('[data-role="egrn-swap-done"]').scrollIntoViewIfNeeded();
+  await shot(sp, '54p-specialist-zamenit-iz-vypiski');
+  // «Отменить» — прежнее значение вернулось и сохранено.
+  await areaFind.getByRole('button', { name: 'Отменить' }).click();
+  await expect(areaFind.locator('[data-role="egrn-swap-what"]')).toHaveText('Замена отменена: снова «45,1». Черновик сохранён.');
+  await expect(draftText).toHaveValue(/Общей площадью 45,1 кв\. м — по техническому паспорту\./);
+  expect((await (await sp.request.get(`/api/orders/${id}/draft`, { headers: H })).json()).draft.body).toContain('Общей площадью 45,1 кв. м');
+  await expect(areaFind.getByRole('button', { name: 'Заменить на значение из выписки' })).toBeEnabled();
+  await shot(sp, '54q-specialist-zamena-otmenena');
   // Значения в черновике нет — правят в файле отчёта.
   await cadFind.getByRole('button', { name: 'Исправить в черновике' }).click();
   await expect(cadFind.locator('[data-role="egrn-draft-miss"]')).toHaveText('В тексте черновика «77:01:0001001:1234» нет — исправьте в файле отчёта (в выписке: 77:01:0001001:4321).');

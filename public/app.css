@@ -192,6 +192,7 @@ details.ai-quiet summary { cursor: pointer; padding: 8px 0; color: var(--ok); ov
 .ai-mark-where { color: var(--muted, #5b6472); }
 .ai-egrn { margin: 6px 0 0; padding: 8px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
 .ai-egrn .row { margin-top: 6px; }
+.ai-egrn .egrn-swap { margin: 6px 0 0; color: var(--ok); }
 #ai-review-box { margin-bottom: 8px; }
 .ai-prev { margin: 6px 0; padding: 6px 8px; border-left: 3px solid #8a5a00; background: #fffaf0; overflow-wrap: anywhere; }
 .ai-prev p { margin: 2px 0; font-size: 14px; }
