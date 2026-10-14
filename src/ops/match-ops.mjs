@@ -28,11 +28,16 @@ const AWAY_NOTE_MAX = 80;
 const isoDay = (d) => (d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10));
 
 // Отметка «не принимаю до …» действует, пока день возвращения не наступил; прошла — как будто её нет.
+// from (2.226) — первый день «не принимаю», если он ещё не наступил; null — отметка уже действует.
 export function awayOf(sp, today = todayMsk()) {
   if (!sp?.away_until) return null;
   const until = isoDay(sp.away_until);
-  return until > today ? { until, note: sp.away_note ?? null } : null;
+  const from = sp.away_from ? isoDay(sp.away_from) : null;
+  return until > today ? { from: from && from > today ? from : null, until, note: sp.away_note ?? null } : null;
 }
+
+// День date — в днях «не принимаю дела» отметки a (из awayOf).
+export const awayOn = (a, date) => !!a && !!date && date < a.until && (!a.from || date >= a.from);
 
 function intIn(value, field, min, max) {
   const n = Number(value);
@@ -101,7 +106,7 @@ export async function candidatesFor(sql, order, registry) {
     join users u on u.id = s.user_id and u.is_active
     join specialist_permits p on p.user_id = s.user_id and p.module = ${order.module} and p.service = ${order.service}
          and (p.valid_until is null or p.valid_until >= ${today})
-    where s.active and (s.away_until is null or s.away_until <= ${today}) and s.user_id <> ${order.owner_user_id}
+    where s.active and (s.away_until is null or s.away_until <= ${today} or s.away_from > ${today}) and s.user_id <> ${order.owner_user_id}
       and not exists (select 1 from org_members m where m.user_id = s.user_id and m.org_id = ${order.org_id})
       and (${!rules.tax_status} or s.tax_status is not null)
       -- Карточка допуска отозвана, а новой нет (задача штаба 3f817197-…-81b2) — не предлагать.
@@ -158,6 +163,7 @@ export async function orgExpertsFor(sql, order, orgId, registry) {
 }
 
 // Разбор отметки «не принимаю до …» (2.77): день — завтра или позже, но не дальше года; причина — по желанию.
+// from (2.226) — с какого дня не принимать: завтра или позже, раньше дня возвращения; пусто — с сегодня.
 function awayFrom(value) {
   if (value === null) return null;
   const until = String(value?.until ?? '');
@@ -170,7 +176,16 @@ function awayFrom(value) {
   if (until > addDays(today, AWAY_MAX_DAYS)) throw new HttpError(400, 'bad_date', 'Не дальше чем на год вперёд');
   const raw = value?.note == null ? '' : String(value.note).trim();
   if (raw.length > AWAY_NOTE_MAX) throw new HttpError(400, 'bad_input', `Поле «Почему»: не длиннее ${AWAY_NOTE_MAX} знаков`);
-  return { until, note: raw || null };
+  const from = value?.from == null || value.from === '' ? null : String(value.from);
+  if (from !== null) {
+    const f = new Date(`${from}T00:00:00Z`);
+    if (!DATE_RE.test(from) || Number.isNaN(f.getTime()) || f.toISOString().slice(0, 10) !== from) {
+      throw new HttpError(400, 'bad_date', 'Укажите день, с которого не принимаете дела');
+    }
+    if (from <= today) throw new HttpError(400, 'bad_date', 'День, с которого не принимаете дела, — не раньше завтра (с сегодня — оставьте пустым)');
+    if (from >= until) throw new HttpError(400, 'bad_date', 'День, с которого не принимаете дела, — раньше дня, с которого снова принимаете');
+  }
+  return { from, until, note: raw || null };
 }
 
 // Документ о знании языка специалиста :id (2а.3) — или «не найдено».
@@ -217,8 +232,9 @@ export function matchOps() {
           if (!sp) throw new HttpError(404, 'not_found', 'Вы не специалист');
           if (hasActive) await tx`update specialists set active = ${body.active} where user_id = ${actor.id}`;
           if (hasAway) {
-            await tx`update specialists set away_until = ${away?.until ?? null}, away_note = ${away?.note ?? null} where user_id = ${actor.id}`;
-            await audit(tx, actor, 'specialist.away', 'user', actor.id, { until: away?.until ?? null });
+            await tx`update specialists set away_from = ${away?.from ?? null}, away_until = ${away?.until ?? null}, away_note = ${away?.note ?? null}
+                     where user_id = ${actor.id}`;
+            await audit(tx, actor, 'specialist.away', 'user', actor.id, { from: away?.from ?? null, until: away?.until ?? null });
             // Руководителю организации, от которой эксперт работает, — чтобы не ждал от него ответа на новые дела.
             const org = (hasOrg ? orgId : sp.org_id);
             if (away && org) await notify(tx, 'expert_away_head', { users: await orgHeads(tx, org), orgId: org, actor });

@@ -5,7 +5,7 @@ import { HttpError } from '../http/core.mjs';
 import { LEVEL, ORG_ROLES, executorSignOrg, orgCaseSide, orgLevel } from '../access/policy.mjs';
 import { audit, oneOf, phoneFrom, sendFile, text, uuidFrom } from './util.mjs';
 import { dispatchers, notify, notifyPhone, orgHeads } from '../notify/notify.mjs';
-import { awayOf, orgExpertsFor } from './match-ops.mjs';
+import { awayOf, awayOn, orgExpertsFor } from './match-ops.mjs';
 import { orgReturns, signWait } from './sign-ops.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { orderSplit } from '../money/money.mjs';
@@ -224,7 +224,7 @@ export function orgOps() {
       async handler({ sql, org, registry }) {
         const today = todayMsk();
         const experts = await sql`
-          select s.user_id, s.active, s.away_until, s.away_note, u.full_name from specialists s
+          select s.user_id, s.active, s.away_from, s.away_until, s.away_note, u.full_name from specialists s
           join org_members m on m.org_id = s.org_id and m.user_id = s.user_id join users u on u.id = s.user_id
           where s.org_id = ${org.id} order by u.full_name nulls last, s.user_id`;
         const ids = experts.map((e) => e.user_id);
@@ -330,7 +330,8 @@ export function orgOps() {
           fee_kop: feeOf(o),
           payout: o.payout_status ?? null,
           // Срок дела в работе — в дни, когда эксперт не принимает дела (2.113): руководитель передаёт его коллеге.
-          away: o.status === 'in_work' && o.deadline && awayOf(byId.get(o.executor_user_id), today)?.until > o.deadline
+          // С 2.226 дни «не принимаю» могут начаться позже — срок до их начала не в счёт.
+          away: o.status === 'in_work' && awayOn(awayOf(byId.get(o.executor_user_id), today), o.deadline)
             ? awayOf(byId.get(o.executor_user_id), today) : null,
         }));
         const load = experts.map((e) => ({
@@ -382,7 +383,8 @@ export function orgOps() {
           })),
         })));
         // Кого нет в списке назначения, потому что эксперт сам не принимает новые дела (2.77), — чтобы руководитель не искал.
-        const away = load.filter((l) => l.away || l.paused).map((l) => ({ full_name: l.full_name, until: l.away?.until ?? null, note: l.away?.note ?? null }));
+        // Дни «не принимаю» ещё не начались (2.226) — эксперт в списке назначения есть, здесь его нет.
+        const away = load.filter((l) => (l.away && !l.away.from) || l.paused).map((l) => ({ full_name: l.full_name, until: l.away?.until ?? null, note: l.away?.note ?? null }));
         return {
           pending: pending.map((p) => ({ ...p, away })),
           // Отбор по эксперту (2.127) — по его номеру: двое экспертов могут зваться одинаково.

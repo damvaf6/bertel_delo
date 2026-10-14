@@ -30,6 +30,9 @@ export async function tripsByDay(sql, userId, from, to) {
 const WEEKDAYS = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
 const weekday = (iso) => WEEKDAYS[new Date(`${iso}T00:00:00Z`).getUTCDay()];
 const day = (d) => (d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10));
+// Дни «не принимаю дела» (2.77, 2.226): первый такой день, если он ещё впереди (иначе null), и попадает ли день в них.
+const awayStart = (sp, today) => (sp.away_from && day(sp.away_from) > today ? day(sp.away_from) : null);
+const inAway = (away, date) => !!away && date < away.until && (!away.from || date >= away.from);
 // Время по Москве для «выезд в 10:30» и «ссылка до 18:00».
 const mskDay = (t) => todayMsk(new Date(t));
 const mskTime = (t) => new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit' }).format(new Date(t));
@@ -69,14 +72,15 @@ export async function expertSchedule(sql, userId, registry, today = todayMsk()) 
     where n.author_id = ${userId} and o.executor_user_id = ${userId} and o.status in ('awaiting_executor', 'in_work', 'review', 'done')
       and n.deleted_at is null and n.done_at is null and n.remind_on is not null and n.remind_on <= ${last}::date
     order by n.remind_on, n.id`;
-  const sp = await sql.one`select away_until, away_note from specialists where user_id = ${userId}`;
-  const away = sp?.away_until && day(sp.away_until) > today ? { until: day(sp.away_until), note: sp.away_note ?? '' } : null;
+  const sp = await sql.one`select away_from, away_until, away_note from specialists where user_id = ${userId}`;
+  // from (2.226) — первый день «не принимаю», если ещё не наступил; null — уже не принимает.
+  const away = sp?.away_until && day(sp.away_until) > today ? { from: awayStart(sp, today), until: day(sp.away_until), note: sp.away_note ?? '' } : null;
 
   const days = new Map();
   for (let i = 0; i < SCHEDULE_DAYS; i++) {
     const date = addDays(today, i);
     days.set(date, { date, weekday: weekday(date), today: i === 0, weekend: ['сб', 'вс'].includes(weekday(date)),
-      away: !!away && date < away.until, items: [] });
+      away: inAway(away, date), items: [] });
   }
   const put = (date, item) => days.get(date)?.items.push(item);
   const base = (o, id = o.id) => ({ order_id: id, title: o.title || 'Дело', service: service(o) });
@@ -141,7 +145,7 @@ export async function orgSchedule(sql, orgId, registry, today = todayMsk()) {
   const last = addDays(today, SCHEDULE_DAYS - 1);
   const service = (o) => registry.service(o.module, o.service)?.service.name ?? o.service;
   const experts = await sql`
-    select s.user_id, s.active, s.away_until, s.away_note, u.full_name from specialists s
+    select s.user_id, s.active, s.away_from, s.away_until, s.away_note, u.full_name from specialists s
     join org_members m on m.org_id = s.org_id and m.user_id = s.user_id join users u on u.id = s.user_id
     where s.org_id = ${orgId} order by u.full_name nulls last, s.user_id`;
   const ids = experts.map((e) => e.user_id);
@@ -166,11 +170,11 @@ export async function orgSchedule(sql, orgId, registry, today = todayMsk()) {
     order by v.planned_at`;
   const mine = new Set(ids);
   const per = new Map(experts.map((e) => {
-    const away = e.away_until && day(e.away_until) > today ? { until: day(e.away_until), note: e.away_note ?? null } : null;
+    const away = e.away_until && day(e.away_until) > today ? { from: awayStart(e, today), until: day(e.away_until), note: e.away_note ?? null } : null;
     return [e.user_id, {
       user_id: e.user_id, full_name: e.full_name || 'Без имени', away, paused: !e.active, overdue: [],
       // Не принимает новые дела (2.194): до дня возвращения или, если выключил приём, все две недели.
-      days: header.map((d) => ({ date: d.date, away: !e.active || (!!away && d.date < away.until), items: [] })),
+      days: header.map((d) => ({ date: d.date, away: !e.active || inAway(away, d.date), items: [] })),
     }];
   }));
   const put = (userId, date, item) => {

@@ -3,7 +3,7 @@
 // «свободно». Нажатие на строку открывает дело на нужном блоке. Свои напоминания по заметкам (2.120) — открывают заметки;
 // «Сделано» у напоминания отмечает заметку, не открывая дело (2.157).
 import { api, el, say } from '/common.js';
-import { dayRu } from '/order.js';
+import { awaySpan, dayRu } from '/order.js';
 
 const $ = (id) => document.getElementById(id);
 const short = (iso) => {
@@ -79,7 +79,7 @@ export async function loadSchedule() {
   say($('schedule-msg'), '');
   const s = schedule;
   $('schedule-away').textContent = s.away
-    ? `Новые дела Вам не предлагают до ${dayRu(s.away.until)}${s.away.note ? ` (${s.away.note})` : ''}. Дела, которые уже у Вас, — ниже.${s.away_due
+    ? `Новые дела Вам ${s.away.from ? 'не будут предлагать' : 'не предлагают'} ${awaySpan(s.away)}${s.away.note ? ` (${s.away.note})` : ''}. Дела, которые уже у Вас, — ниже.${s.away_due
       ? ` Срок сдачи в эти дни: ${s.away_due} — попросите перенос или передайте дело коллеге.` : ''}` : '';
   $('schedule-away').classList.toggle('hidden', !s.away);
   $('schedule-overdue-box').classList.toggle('hidden', s.overdue.length === 0);

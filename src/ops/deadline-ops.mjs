@@ -81,7 +81,8 @@ async function presetReasons(sql, order, registry) {
   // «Срок — в дни, когда я не принимаю новые дела» (2.195): срок раньше дня возвращения эксперта. Новый срок — день
   // возвращения или ближайший будний после него. Пометку эксперта к отпуску в причину не берём — её видит заказчик.
   const sp = await sql.one`select to_char(away_until, 'YYYY-MM-DD') as until from specialists
-                           where user_id = ${order.executor_user_id} and away_until > ${todayMsk()}::date`;
+                           where user_id = ${order.executor_user_id} and away_until > ${todayMsk()}::date
+                             and (away_from is null or away_from <= ${order.deadline}::date)`;
   if (sp && order.deadline < sp.until) {
     let back = sp.until;
     while ([0, 6].includes(new Date(`${back}T00:00:00Z`).getUTCDay())) back = addDays(back, 1);

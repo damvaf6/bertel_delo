@@ -18,7 +18,7 @@
 // «Ждут назначения» (2.17): дела, предложенные диспетчером организации, — руководитель назначает эксперта или отказывается.
 import { api, el, say } from '/common.js';
 import { expertLink } from '/expertcard.js';
-import { dayRu } from '/order.js';
+import { awaySpan, dayRu } from '/order.js';
 import { rub } from '/money.js';
 import { orgChat } from '/orgchat.js';
 import { matcher, wireSearch } from '/search.js';
@@ -35,7 +35,7 @@ function waited(s) {
 }
 // Эксперт сам не принимает новые дела (2.77): до какого дня и почему, или выключил приём совсем.
 const awayText = (a) => (a.away || a.until
-  ? `не принимает новые дела до ${dayRu(a.away?.until ?? a.until)}${(a.away?.note ?? a.note) ? ` (${a.away?.note ?? a.note})` : ''}`
+  ? `не принимает новые дела ${awaySpan(a.away ?? a)}${(a.away?.note ?? a.note) ? ` (${a.away?.note ?? a.note})` : ''}`
   : 'не принимает новые дела — выключил приём');
 const upper = (t) => t[0].toUpperCase() + t.slice(1);
 const fact = (dt, dd, cls) => [el('dt', { text: dt }), el('dd', { text: dd, ...(cls ? { class: cls } : {}) })];
@@ -219,7 +219,7 @@ function caseItem(org, c) {
       text: `Эксперт просит перенести срок на ${dayRu(c.extend.new_deadline)} — ждёт ответа диспетчера` })] : []),
     // Эксперт не принимает дела до … (2.113), а срок дела — в эти дни: «Передать другому эксперту» сразу открыто.
     ...(c.away && !c.handover ? [el('div', { class: 'notice-warn', 'data-role': 'away',
-      text: `Эксперт не принимает дела до ${dayRu(c.away.until)}${c.away.note ? ` (${c.away.note})` : ''}, а срок дела — в эти дни. ${c.transfer_to?.length
+      text: `Эксперт не принимает дела ${awaySpan(c.away)}${c.away.note ? ` (${c.away.note})` : ''}, а срок дела — в эти дни. ${c.transfer_to?.length
         ? 'Передайте его коллеге.' : 'Передать его некому — попросите эксперта перенести срок.'}` })] : []),
     // Передать некому (2.201): одной кнопкой — эксперту уведомление, дело откроется на просьбе о переносе с готовой причиной.
     ...(c.away && !c.handover && !c.transfer_to?.length && !c.extend && c.remind ? [remindRow(org, c, 'extend')] : []),
@@ -314,7 +314,7 @@ function transferDetails(org, c) {
     const reason = el('input', { type: 'text', maxlength: '1000', placeholder: 'Причина: заболел, ушёл из организации…',
       'aria-label': `Причина передачи дела ${c.order_ref}`, 'data-transfer-reason': c.order_ref,
       // Эксперт не принимает дела (2.113) — причина уже подставлена, руководитель может поправить.
-      ...(c.away ? { value: `Эксперт не принимает дела до ${dayRu(c.away.until)}${c.away.note ? `: ${c.away.note}` : ''}`.slice(0, 1000) } : {}) });
+      ...(c.away ? { value: `Эксперт не принимает дела ${awaySpan(c.away)}${c.away.note ? `: ${c.away.note}` : ''}`.slice(0, 1000) } : {}) });
     const go = async () => {
       if (!reason.value.trim()) return say(msg, 'Укажите причину');
       try {

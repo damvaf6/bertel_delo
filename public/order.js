@@ -40,6 +40,9 @@ export function dayRu(iso) {
   return new Date(y, m - 1, d).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
 }
 
+// Дни «не принимаю дела» (2.77, 2.226): «до 30 октября» или, если ещё не начались, «с 20 октября до 30 октября».
+export const awaySpan = (a) => `${a.from ? `с ${dayRu(a.from)} ` : ''}до ${dayRu(a.until)}`;
+
 export function serviceDef(moduleId, serviceId) {
   const m = state.catalog.modules.find((x) => x.id === moduleId);
   const s = m?.services.find((x) => x.id === serviceId);

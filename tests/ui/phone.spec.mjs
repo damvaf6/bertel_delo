@@ -9852,3 +9852,64 @@ test('2.224: выписка ЕГРН старше 30 дней — подсказ
   await expect(sp.locator('li[data-today-item="egrn-old"]')).toHaveCount(0);
   for (const p of [sp, dp]) await p.context().close();
 });
+
+// 2.226: «не принимаю дела» с заданного дня — в профиле «с … до …»; за 3 дня до начала — уведомление, оно ведёт к «Моим
+// срокам», где у дела со сроком в эти дни «Попросить перенос» и «Передать коллеге»; срок до начала — без пометки.
+test('2.226: за 3 дня до дней «не принимаю дела» — уведомление и кнопки у дела со сроком в эти дни', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const page = await ctx();
+  const customer = await signIn(await ctx(), '+79990022601');
+  const expert = await signIn(page, '+79990022602');
+  const [inside, early] = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Скоро отпуск ${Date.now() % 100000}»') returning id`);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'member')", [org.id, expert.id]);
+    await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [expert.id, org.id]);
+    const ids = [];
+    for (const [title, days] of [['Сдать в отпуске', 5], ['Сдать до отпуска', 2]]) {
+      const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+        values ('expertise', 'realty', $3, $1, $2, 'in_work', $4::date, 1500000, now(),
+                '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Скорая ул., 6","area":"40"}') returning id`,
+      [customer.id, expert.id, title, inDays(days)]);
+      ids.push(o.id);
+    }
+    return ids;
+  });
+
+  // Профиль: с какого дня и до какого не принимать.
+  await page.goto('/kabinet#specialist');
+  await page.locator('#specialist-away-from').fill(inDays(3));
+  await page.locator('#specialist-away-until').fill(inDays(10));
+  await page.locator('#specialist-away-note').fill('отпуск');
+  await page.locator('#specialist-away-box').scrollIntoViewIfNeeded();
+  await shot(page, 'h4d-ekspert-ne-prinimayu-s-do');
+  await page.locator('#specialist-away-set').click();
+  await expect(page.locator('#specialist-msg')).toContainText('Новые дела не будут предлагать с ');
+  await expect(page.locator('#specialist-away-now')).toContainText('Вы не принимаете новые дела с ');
+  await expect(page.locator('#specialist-away-now')).toContainText('за 3 дня до него придёт напоминание');
+  await shot(page, 'h4e-ekspert-otmetka-s-do');
+
+  // Предупреждение рассылается раз в минуту на сервере; здесь — запись напрямую.
+  await db((c) => c.query("insert into notifications (user_id, type, event) values ($1, 'executor_work', 'away_soon')", [expert.id]));
+  await page.goto('/kabinet#notifications');
+  const n = page.locator('#notifications li').filter({ hasText: 'Скоро Ваши дни «не принимаю дела»' });
+  await expect(n).toHaveCount(1);
+  await expect(n).not.toContainText('Сдать в отпуске');
+  await shot(page, 'h4f-ekspert-uvedomlenie-skoro-otpusk');
+  await n.getByRole('button').click();
+  await expect(page).toHaveURL(/#specialist&to=schedule$/);
+  const box = page.locator('#schedule-box');
+  await expect(box.locator('#schedule-away')).toContainText('Новые дела Вам не будут предлагать с ');
+  await expect(box.locator('#schedule-away')).toContainText('Срок сдачи в эти дни: 1');
+  const it = box.locator(`#schedule-days > li[data-day="${inDays(5)}"] li[data-schedule-item="deadline"]`);
+  await expect(it).toContainText('срок в дни, когда Вы не принимаете новые дела');
+  await expect(it.locator(`[data-ask-extend="${inside}"]`)).toHaveText('Попросить перенос');
+  await expect(it.locator(`[data-ask-handover="${inside}"]`)).toHaveText('Передать коллеге');
+  const pre = box.locator(`#schedule-days > li[data-day="${inDays(2)}"] li[data-schedule-item="deadline"]`);
+  await expect(pre).not.toContainText('не принимаете');
+  await expect(pre.locator(`[data-ask-handover="${early}"]`)).toHaveCount(0);
+  await expect(box.locator(`#schedule-days > li[data-day="${inDays(2)}"] .away-mark`)).toHaveCount(0);
+  await expect(box.locator(`#schedule-days > li[data-day="${inDays(3)}"]`)).toContainText('новые дела не предлагают');
+  await expect(box.locator(`#schedule-days > li[data-day="${inDays(5)}"] .away-mark`)).toHaveText('новые дела не предлагают');
+  await it.scrollIntoViewIfNeeded();
+  await shot(page, 'h4g-ekspert-sroki-skoro-otpusk');
+});
