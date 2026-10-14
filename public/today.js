@@ -88,6 +88,21 @@ function egrnFresh(x) {
   return [btn, msg];
 }
 
+// «Напомнить заказчику» (2.234): запрошенное не пришло 3 дня — напоминание заказчику одной кнопкой, снова — завтра.
+function docsRemind(x) {
+  const msg = el('div', { class: 'muted', 'data-role': 'docs-remind-msg' });
+  const btn = el('button', { type: 'button', class: 'secondary', 'data-action': 'docs-remind' }, 'Напомнить заказчику');
+  btn.onclick = async () => {
+    btn.disabled = true;
+    try {
+      await api('POST', `/api/orders/${x.id}/doc-requests/remind`);
+      msg.textContent = 'Напомнили — заказчику отправлено уведомление; снова можно завтра';
+      btn.remove();
+    } catch (err) { msg.textContent = err.message; btn.disabled = false; }
+  };
+  return [btn, msg];
+}
+
 // «Руководитель ещё не подписал» (2.152): строка ведёт к блоку подписи в деле, рядом — «Напомнить руководителю» (раз в сутки).
 function signLate(items) {
   if (!items.length) return [];
@@ -195,6 +210,11 @@ export async function loadToday() {
         { class: 'overdue', role: 'egrn-old-why', text: `«${x.egrn.name}» от ${dayRu(x.egrn.day)} — старше 30 дней на ${x.egrn.on_value ? `дату оценки ${dayRu(x.egrn.on)}` : 'сегодня'}` },
         deadline(x, t.today)],
       (x) => { location.hash = `order=${x.id}&to=docs`; }, egrnFresh),
+      // Запрошенные документы не пришли 3 дня (2.234) — строка к запросу документов в деле, кнопка — напомнить сразу.
+      ...group('docs-wait', 'Документы не пришли', e.docs_wait ?? [], (x) => [x.title,
+        { class: 'overdue', role: 'docs-wait-what', text: `Ждём ${waited(x.wait.since)}: ${x.wait.titles.join(', ')}` },
+        x.wait.reminded_at ? `напоминали ${since(x.wait.reminded_at)} · можно напомнить снова` : 'заказчику ещё не напоминали'],
+      (x) => { location.hash = `order=${x.id}&to=docs`; }, docsRemind),
       // Можно продолжать (2.86): пришло новое после того, как эксперт открывал дело, — сразу к переписке, документам или осмотру.
       ...group('ready', 'Можно продолжать', e.ready ?? [], (x) => [x.title, `${x.what.join(' · ')} · ${since(x.at)}`, deadline(x, t.today)],
         (x) => { location.hash = `order=${x.id}&to=${x.to}`; }),

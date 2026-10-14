@@ -4,6 +4,7 @@
 // Видят запрос все, кто видит заявку; просит и снимает просьбу только исполнитель, пока дело в работе; файл прикладывает
 // заказчик (тот, кто может добавлять документы заявки). Удалённый заказчиком файл — просьба снова открыта (core-ops.mjs).
 // Выписка ЕГРН в деле старше 30 дней на дату оценки (2.224) — исполнителю подсказка запросить свежую одной кнопкой.
+// Запрошенное не пришло 3 дня (2.234) — «Напомнить заказчику» одной кнопкой, не чаще раза в сутки; строка и в «Сегодня».
 import { HttpError } from '../http/core.mjs';
 import { FINAL, todayMsk } from '../orders/workflow.mjs';
 import { assignmentValue, egrnIssued, egrnOnObject } from '../ai/report-checks.mjs';
@@ -17,6 +18,9 @@ const MAX_OPEN = 30;
 
 // Выписка ЕГРН «не старше месяца» (подсказка в request_docs модуля): старше — подсказать запросить свежую.
 export const EGRN_FRESH_DAYS = 30;
+// Запрошенный документ не пришёл столько дней — исполнителю «Напомнить заказчику» (2.234); снова — через сутки.
+export const DOC_WAIT_DAYS = 3;
+export const DOC_REMIND_EVERY_HOURS = 24;
 
 const isExecutor = (actor, order) => orderSides(actor, order).includes('executor');
 
@@ -53,6 +57,30 @@ export async function egrnOld(sql, storage, registry, order, today = todayMsk())
   return { id: last.id, name: last.name, page: last.page, day: last.day, on, on_value: !!value, age, asked };
 }
 
+// 2.234: какие запрошенные документы ждут заказчика 3 дня и дольше (пока дело в работе), когда напоминали и можно ли снова.
+// { titles, since, days, reminded_at, reminders, can_remind, next_remind_at } или null.
+export async function docWait(sql, order, now = new Date()) {
+  if (order.status !== 'in_work') return null;
+  const rows = await sql`select title, requested_at from doc_requests
+                         where order_id = ${order.id} and cancelled_at is null and fulfilled_at is null
+                           and requested_at <= ${new Date(now.getTime() - DOC_WAIT_DAYS * 86400_000)} order by requested_at, id`;
+  if (!rows.length) return null;
+  const since = rows[0].requested_at;
+  // Напоминания — только с тех пор, как ждём самый старый из неполученных: прежние по уже пришедшим не в счёт.
+  const last = await sql.one`select max(created_at) as at, count(*)::int as n from doc_reminders
+                             where order_id = ${order.id} and created_at >= ${since}`;
+  const next = last?.at ? new Date(new Date(last.at).getTime() + DOC_REMIND_EVERY_HOURS * 3600_000) : null;
+  return {
+    titles: rows.map((r) => r.title),
+    since,
+    days: Math.floor((now.getTime() - new Date(since).getTime()) / 86400_000),
+    reminded_at: last?.at ?? null,
+    reminders: last?.n ?? 0,
+    can_remind: !next || next <= now,
+    next_remind_at: next && next > now ? next : null,
+  };
+}
+
 // Пояснение заказчику к просьбе о свежей выписке — сразу видно, почему старая не годится.
 export const egrnOldNote = (o) => `Выписка ЕГРН в деле от ${o.day.split('-').reverse().join('.')} — старше ${EGRN_FRESH_DAYS} дней на ${o.on_value ? 'дату оценки' : 'сегодня'}. Нужна свежая выписка: закажите её на Госуслугах или в МФЦ и загрузите сюда.`;
 
@@ -80,6 +108,8 @@ async function view(sql, actor, order, registry, storage) {
     catalog: canRequest ? catalog.filter((c) => !(c.basis && basisAttached)).map(({ basis, ...c }) => ({ ...c, open: open.has(c.id) })) : [],
     // Выписка ЕГРН старше 30 дней на дату оценки (2.224) — исполнителю.
     egrn_old: canRequest ? await egrnOld(sql, storage, registry, order) : null,
+    // Не пришло 3 дня и дольше (2.234) — исполнителю «Напомнить заказчику».
+    wait: canRequest ? await docWait(sql, order) : null,
   };
 }
 
@@ -147,6 +177,28 @@ export function docRequestOps() {
           await audit(tx, actor, 'doc_request.attach', 'order', order.id, { title: r.title });
           if (order.executor_user_id) await notify(tx, 'docs_received', { users: [order.executor_user_id], orderId: order.id, actor });
         });
+        return view(sql, actor, order, registry, providers.storage);
+      },
+    },
+    {
+      // «Напомнить заказчику» (2.234): запрошенное не пришло 3 дня — уведомление (и письмо) заказчику, раз в сутки по делу.
+      id: 'doc_requests.remind', method: 'POST', path: '/api/orders/:id/doc-requests/remind', auth: 'user',
+      access: { resource: 'order', param: 'id', need: 'read' },
+      async handler({ sql, actor, order, registry, providers, res }) {
+        executorOnly(actor, order);
+        await sql.tx(async (tx) => {
+          // Два нажатия одновременно — одно напоминание: блокируем строку заявки до записи.
+          await tx`select id from orders where id = ${order.id} for update`;
+          const w = await docWait(tx, order);
+          if (!w) throw new HttpError(409, 'not_waiting', `Напомнить можно, когда запрошенный документ не пришёл ${DOC_WAIT_DAYS} дня`);
+          if (!w.can_remind) throw new HttpError(409, 'too_often', 'Напомнить можно раз в сутки — заказчик уже получил напоминание');
+          const users = await customersOf(tx, order);
+          if (!users.length) throw new HttpError(409, 'no_customer', 'У заявки нет заказчика в кабинете — напомнить некому');
+          await tx`insert into doc_reminders (order_id, user_id, titles) values (${order.id}, ${actor.id}, ${w.titles})`;
+          await notify(tx, 'docs_reminder', { users, orderId: order.id, actor });
+          await audit(tx, actor, 'doc_request.remind', 'order', order.id, { titles: w.titles });
+        });
+        res.status(201);
         return view(sql, actor, order, registry, providers.storage);
       },
     },

@@ -286,3 +286,65 @@ test('2.224: дата выписки ЕГРН — «№ КУВИ», «Дата �
   assert.equal(day('Дата государственной регистрации: 01.01.2010\nДата присвоения кадастрового номера: 03.03.2003'), null);
   assert.equal(egrnIssued([{ id: 'x', name: 'в', pages: ['пусто', 'пусто', 'Дата: 01.10.2026'] }]).length, 0, 'только первые две страницы');
 });
+
+test('2.234: запрошенное не пришло 3 дня — «Напомнить заказчику» одной кнопкой, раз в сутки; строка в «Сегодня»', async () => {
+  const o = await inWork('Квартира: документы не пришли');
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  const list = (c = spec) => c.req('GET', `/api/orders/${o.id}/doc-requests`);
+  const remind = (c = spec) => c.req('POST', `/api/orders/${o.id}/doc-requests/remind`);
+  const todayRow = async () => (await spec.req('GET', '/api/today')).body.expert.docs_wait.find((x) => x.id === o.id);
+  const age = (days) => S.sql`update doc_requests set requested_at = now() - make_interval(days => ${days}) where order_id = ${o.id} and fulfilled_at is null`;
+  // Ничего не запрошено — напоминать не о чем.
+  assert.equal((await list()).body.wait, null);
+  assert.equal((await remind()).body.error, 'not_waiting');
+  const r = await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { items: ['egrn', 'tech_plan'] });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  // Запросили два дня назад — ещё рано.
+  await age(2);
+  assert.equal((await list()).body.wait, null);
+  assert.equal((await remind()).body.error, 'not_waiting');
+  assert.equal(await todayRow(), undefined);
+  // Три дня — строка в деле и в «Сегодня»: что ждём и сколько; заказчик её не видит, напомнить не может.
+  await age(4);
+  let w = (await list()).body.wait;
+  assert.deepEqual({ ...w, since: undefined }, { titles: ['Выписка из ЕГРН', 'Технический паспорт БТИ или поэтажный план'],
+    since: undefined, days: 4, reminded_at: null, reminders: 0, can_remind: true, next_remind_at: null });
+  assert.equal((await list(owner)).body.wait, null);
+  assert.equal((await remind(owner)).status, 403);
+  assert.equal((await remind(dispatcher)).status, 403);
+  assert.equal((await remind(stranger)).status, 404);
+  assert.deepEqual((await todayRow())?.wait.titles, w.titles);
+  // Напомнили — уведомление заказчику (событие со ссылкой на заявку, без названий документов), журнал; второй раз — завтра.
+  const before = await events(owner, 'docs_reminder');
+  const ok = await remind();
+  assert.equal(ok.status, 201, JSON.stringify(ok.body));
+  assert.equal(ok.body.wait.reminders, 1);
+  assert.equal(ok.body.wait.can_remind, false);
+  assert.ok(ok.body.wait.next_remind_at);
+  assert.equal(await events(owner, 'docs_reminder'), before + 1);
+  assert.equal(await events(spec, 'docs_reminder'), 0, 'себе не напоминаем');
+  assert.equal((await S.sql`select count(*)::int as n from audit_log where action = 'doc_request.remind' and subject_id = ${o.id}`)[0].n, 1);
+  assert.equal((await remind()).body.error, 'too_often');
+  assert.equal(await events(owner, 'docs_reminder'), before + 1);
+  assert.equal(await todayRow(), undefined, 'напомнили — до завтра строки нет');
+  // Прошли сутки — снова можно; в «Сегодня» видно, когда напоминали.
+  await S.sql`update doc_reminders set created_at = created_at - interval '25 hours' where order_id = ${o.id}`;
+  w = (await list()).body.wait;
+  assert.equal(w.can_remind, true);
+  assert.ok((await todayRow())?.wait.reminded_at);
+  // Заказчик прислал всё — напоминать не о чем, строки нет.
+  for (const x of (await list(owner)).body.requests) {
+    const doc = await upload(owner, o, `${x.title}.pdf`);
+    assert.equal((await owner.req('POST', `/api/orders/${o.id}/doc-requests/${x.id}/attach`, { document_id: doc.id })).status, 200);
+  }
+  assert.equal((await list()).body.wait, null);
+  assert.equal(await todayRow(), undefined);
+  assert.equal((await remind()).body.error, 'not_waiting');
+  // Новый запрос — прежние напоминания не в счёт: через 3 дня можно напомнить сразу.
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { custom: ['Справка о зарегистрированных'] })).status, 201);
+  await age(3);
+  await S.sql`update doc_reminders set created_at = now() - interval '3 days 2 hours' where order_id = ${o.id}`;
+  w = (await list()).body.wait;
+  assert.deepEqual(w.titles, ['Справка о зарегистрированных']);
+  assert.equal(w.can_remind, true);
+});

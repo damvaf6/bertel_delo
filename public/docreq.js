@@ -1,6 +1,7 @@
 // Запрос недостающих документов (задача 2.64). Исполнитель отмечает документы из списка услуги (или пишет свои) и одной
 // кнопкой просит их у заказчика; заказчик видит список с отметками и загружает файл к каждому. Текст — через textContent.
 // Выписка ЕГРН в деле старше 30 дней на дату оценки (2.224) — подсказка и «Запросить свежую выписку» одной кнопкой.
+// Запрошенное не пришло 3 дня (2.234) — «Напомнить заказчику» одной кнопкой, раз в сутки.
 import { api, el, say } from '/common.js';
 import { setNext } from '/next.js';
 
@@ -31,6 +32,7 @@ function render(r) {
       : 'Все запрошенные документы получены.';
   $('docreq-list').replaceChildren(...r.requests.map((x) => item(x, r)));
   egrnOld(r.egrn_old);
+  docWait(r.wait);
   $('docreq-form').classList.toggle('hidden', !r.can_request);
   if (r.can_request) {
     $('docreq-items').replaceChildren(...r.catalog.map((c) => {
@@ -66,6 +68,23 @@ function egrnOld(o) {
     + (o.asked ? 'Свежая выписка запрошена — ждём заказчика.' : 'Для отчёта нужна свежая — запросите её у заказчика.');
   $('docreq-egrn-ask').classList.toggle('hidden', o.asked);
 }
+
+// 2.234: что не пришло и сколько ждём; напоминали — когда, и можно ли снова (раз в сутки).
+const ruTime = (iso) => new Date(iso).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+function docWait(w) {
+  $('docreq-wait').classList.toggle('hidden', !w);
+  if (!w) return;
+  $('docreq-wait-text').textContent = `Заказчик не прислал ${w.titles.length === 1 ? `«${w.titles[0]}»` : `документы (${w.titles.length}): ${w.titles.map((t) => `«${t}»`).join(', ')}`} — ждём ${w.days} дн. `
+    + (w.reminded_at ? `Напоминали ${ruTime(w.reminded_at)}${w.can_remind ? ' — можно напомнить снова.' : ' — снова можно завтра.'}` : 'Напомните заказчику одной кнопкой.');
+  $('docreq-remind').classList.toggle('hidden', !w.can_remind);
+}
+
+$('docreq-remind').addEventListener('click', async () => {
+  try {
+    render(await api('POST', `/api/orders/${ctx.order.id}/doc-requests/remind`));
+    say($('docreq-msg'), 'Напомнили — заказчику отправлено уведомление.', 'ok');
+  } catch (err) { say($('docreq-msg'), err.message); }
+});
 
 $('docreq-egrn-ask').addEventListener('click', async () => {
   try {
