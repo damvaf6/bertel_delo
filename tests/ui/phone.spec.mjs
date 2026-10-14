@@ -7039,6 +7039,25 @@ test('расхождения с выпиской ЕГРН перед подпи�
   await expect(item.locator('[data-role="ai-egrn"]')).toHaveText('Расхождения с выпиской ЕГРН (2): Площадь 45,1 кв. м не совпадает с площадью в выписке ЕГРН (47,3 кв. м); Этаж 5 не совпадает с этажом в выписке ЕГРН (6).');
   await item.locator('[data-role="ai-egrn"]').scrollIntoViewIfNeeded();
   await shot(hp, 'h4c-rukovoditel-raskhozhdeniya-egrn');
+
+  // 2.236: «Вернуть эксперту» — расхождения уже в замечании пунктами; руководитель правит, кнопка возвращает убранное.
+  await item.locator('[data-action="org-return"]').click();
+  const area = item.locator('textarea');
+  const p1 = 'Площадь 45,1 кв. м не совпадает с площадью в выписке ЕГРН (47,3 кв. м) — исправьте по выписке';
+  const p2 = 'Этаж 5 не совпадает с этажом в выписке ЕГРН (6) — исправьте по выписке';
+  await expect(area).toHaveValue(`${p1}\n${p2}`);
+  await expect(item.locator('[data-role="egrn-points-hint"]')).toHaveText('Расхождения с выпиской ЕГРН из ИИ-проверки эксперта (2) подставлены пунктами — поправьте или уберите лишнее.');
+  await shot(hp, 'h4d-rukovoditel-vozvrat-egrn');
+  await area.fill(p1);
+  await item.locator('[data-action="org-return-egrn"]').click();
+  await expect(area).toHaveValue(`${p1}\n${p2}`);
+  await item.locator('[data-action="org-return-egrn"]').click();
+  await expect(hp.locator('#org-sign-msg')).toHaveText('Все расхождения с выпиской уже в замечании');
+  await area.fill(`${p1}\nПриложите выписку в отчёт`);
+  await item.locator('[data-action="org-return-send"]').click();
+  await expect(hp.locator('#org-sign-msg')).toHaveText('Файл возвращён эксперту с замечанием — его подпись снята');
+  const back = await db((c) => c.query('select i.n, i.text from org_return_items i join org_returns r on r.id = i.return_id where r.order_id = $1 order by i.n', [id]));
+  expect(back.rows.map((r) => r.text)).toEqual([p1, 'Приложите выписку в отчёт']);
 });
 
 test('отбор дел на подпись по ИИ-проверке (2.193): руководитель видит дела без ИИ-проверки этой версии и с «посмотрите»', async ({ browser, baseURL }) => {
