@@ -9920,7 +9920,10 @@ test('2.221: передать некому — руководитель прос
   await block.locator('[data-action="handover-extend"]').click();
   await expect(hp.locator('#org-cases-msg')).toContainText('Диспетчеру отправлена просьба перенести срок от организации');
   const li = hp.locator(`#org-cases li[data-case="${ref}"]`);
-  await expect(li.locator('[data-role="extend"]')).toContainText('ждёт ответа диспетчера');
+  // 2.238: просит организация — строка «Организация попросила…», а не «Эксперт просит…».
+  await expect(li.locator('[data-role="org-extend"]')).toContainText('Организация попросила перенести срок');
+  await expect(li.locator('[data-role="org-extend"]')).toContainText('ждёт ответа диспетчера');
+  await expect(li.locator('[data-role="extend"]')).toHaveCount(0);
   await expect(li.locator('[data-handover]')).toHaveCount(0);
   await li.scrollIntoViewIfNeeded();
   await shot(hp, 'c78-2221-rukovoditel-perenos-poprosili');
@@ -9938,6 +9941,38 @@ test('2.221: передать некому — руководитель прос
   await expect(ep.locator('#handover-extend')).toContainText('ждёт ответа диспетчера');
   await ep.locator('#handover-extend').scrollIntoViewIfNeeded();
   await shot(ep, 'c80-2221-ekspert-rukovoditel-poprosil');
+
+  // 2.238: диспетчер отказал с пояснением — утренняя сводка руководителя ведёт к отбору «Перенос от организации», у дела —
+  // отказ, пояснение и что делать дальше.
+  const dv = await (await dp.request.get(`/api/orders/${A}/deadline-requests`)).json();
+  expect((await dp.request.post(`/api/orders/${A}/deadline-requests/${dv.open.id}/decide`,
+    { data: { approve: false, answer: 'Заказчику заключение нужно к сроку' }, headers: H })).status()).toBe(200);
+  await db(async (c) => {
+    const { rows: [n] } = await c.query("insert into notifications (user_id, type, event, org_id) values ($1, 'org_morning', 'org_morning_today', $2) returning id", [head.id, orgId]);
+    await c.query(`insert into org_morning_digests (user_id, org_id, day, ext_declined, notification_id)
+      values ($1, $2, (now() at time zone 'Europe/Moscow')::date, 1, $3)
+      on conflict (user_id, org_id, day) do update set sign = 0, handover = 0, stuck = 0, due = 0, overdue = 0, idle = 0, returned = 0, fresh = 0, away = 0,
+        ext_declined = 1, notification_id = excluded.notification_id`, [head.id, orgId, n.id]);
+  });
+  await hp.goto('/kabinet#notifications');
+  const morning = hp.locator('#notifications li').filter({ hasText: 'На сегодня по организации' }).first();
+  await expect(morning).toContainText('На сегодня по организации: диспетчер отказал в переносе срока по просьбе организации: 1');
+  await expect(morning).not.toContainText('Заказчику заключение');
+  await shot(hp, 'c81-2238-rukovoditel-svodka-otkaz');
+  await morning.getByRole('button').click();
+  await expect(hp).toHaveURL(new RegExp(`#org=${orgId}&to=orgext$`));
+  const chip = hp.locator('[data-filter="orgext"]');
+  await expect(chip).toHaveText('Перенос от организации: ждём ответа / отказано · 1');
+  await expect(chip).toHaveAttribute('aria-pressed', 'true');
+  const rows = hp.locator('#org-cases > li[data-case]');
+  await expect(rows).toHaveCount(1);
+  const row = rows.first().locator('[data-role="org-extend"]');
+  await expect(row).toContainText('Диспетчер отказал в переносе срока');
+  await expect(row).toContainText('«Заказчику заключение нужно к сроку»');
+  await expect(row).toContainText('Передать дело некому — напомните эксперту о сроке.');
+  await expect(row).toHaveClass(/notice-warn/);
+  await row.scrollIntoViewIfNeeded();
+  await shot(hp, 'c82-2238-rukovoditel-otbor-otkazano');
   for (const p of [ep, hp, cp, dp]) await p.context().close();
 });
 

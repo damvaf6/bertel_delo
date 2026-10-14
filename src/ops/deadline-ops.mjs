@@ -172,9 +172,27 @@ async function view(sql, actor, order, registry) {
 // просят, пока диспетчер не ответил. Только дата: причину пишет эксперт про заказчика, руководителю она не показывается.
 export async function openExtends(sql, ids) {
   if (!ids.length) return new Map();
-  const rows = await sql`select order_id, to_char(new_deadline, 'YYYY-MM-DD') as new_deadline, requested_at from deadline_requests
+  const rows = await sql`select order_id, to_char(new_deadline, 'YYYY-MM-DD') as new_deadline, requested_at, org_id from deadline_requests
                          where outcome is null and order_id = any(${ids}::uuid[])`;
-  return new Map(rows.map((r) => [r.order_id, { new_deadline: r.new_deadline, requested_at: r.requested_at }]));
+  // by_org (2.238): просит организация (2.221), а не сам эксперт — руководителю строка «Организация просит…».
+  return new Map(rows.map((r) => [r.order_id, { new_deadline: r.new_deadline, requested_at: r.requested_at, by_org: !!r.org_id }]));
+}
+
+// Просьба о переносе срока от организации (2.238): последняя просьба по делу, если её подала эта организация (2.221), — ждёт
+// ответа диспетчера, отказано (с его пояснением) или согласовано (пока срок дела — согласованный). Позже просил сам эксперт
+// или просьбу отозвали — нет. Руководителю — отбор «Перенос от организации» и отказы в утренней сводке.
+export async function orgExtends(sql, orgId, orders) {
+  const ids = orders.map((o) => o.id);
+  if (!ids.length) return new Map();
+  const rows = await sql`
+    select distinct on (order_id) order_id, org_id, outcome, to_char(old_deadline, 'YYYY-MM-DD') as old_deadline,
+           to_char(new_deadline, 'YYYY-MM-DD') as new_deadline, answer, requested_at, decided_at
+    from deadline_requests where order_id = any(${ids}::uuid[]) order by order_id, requested_at desc, id desc`;
+  const deadline = new Map(orders.map((o) => [o.id, o.deadline ? String(o.deadline).slice(0, 10) : null]));
+  return new Map(rows
+    .filter((r) => r.org_id === orgId && r.outcome !== 'withdrawn' && (r.outcome !== 'approved' || deadline.get(r.order_id) === r.new_deadline))
+    .map((r) => [r.order_id, { state: r.outcome ?? 'waiting', old_deadline: r.old_deadline, new_deadline: r.new_deadline,
+      answer: r.outcome === 'declined' ? r.answer ?? null : null, requested_at: r.requested_at, decided_at: r.decided_at ?? null }]));
 }
 
 // Ответы диспетчера, которые исполнитель ещё не видел (2.155) — эксперту в «Сегодня»: согласился (новый срок) или отказал и
