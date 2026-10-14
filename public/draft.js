@@ -7,7 +7,7 @@ import { loadAnalogs } from '/analogs.js';
 import { loadSnippets } from '/snippets.js';
 import { loadDraftDiff } from '/draftdiff.js';
 import { emptySections } from '/draftempty.js';
-import { findInDraft } from '/draftfind.js';
+import { findInDraft, swapValue } from '/draftfind.js';
 
 const $ = (id) => document.getElementById(id);
 const timeRu = (s) => new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
@@ -138,7 +138,7 @@ function toSection(title) {
 // 2.231 — и у находки, сверенной с заявкой или заданием на оценку.
 export const canFixInDraft = () => !!ctx?.draft && !$('draft-text').readOnly && !$('draft-box').classList.contains('hidden');
 function syncFixButtons() {
-  for (const b of document.querySelectorAll('[data-action="egrn-draft"], [data-action="fix-draft"]')) b.classList.toggle('hidden', !canFixInDraft());
+  for (const b of document.querySelectorAll('[data-action="egrn-draft"], [data-action="fix-draft"], [data-action="egrn-swap"]')) b.classList.toggle('hidden', !canFixInDraft());
 }
 // Выделяет в тексте черновика значение, которое разошлось с выпиской (заявкой, заданием); в черновике его нет — false
 // (правят в файле отчёта).
@@ -151,6 +151,37 @@ export function fixInDraft(g, quote) {
   t.setSelectionRange(at.from, at.to);
   say($('draft-msg'), `Выделено «${t.value.slice(at.from, at.to)}» — ${g.from || 'в выписке ЕГРН'}: ${g.right}. Исправьте и сохраните черновик, затем соберите Word заново.`, 'ok');
   return true;
+}
+
+// 2.232: «Заменить на значение из выписки» — одной кнопкой: значение в тексте черновика меняется на то, что в выписке ЕГРН,
+// черновик сохраняется (новая версия); → { from, was, now } для «Отменить» или null (в черновике значения нет).
+export async function swapInDraft(g, quote) {
+  const t = $('draft-text');
+  const at = canFixInDraft() ? findInDraft(t.value, { bad: g.bad, quote }) : null;
+  if (!at) return null;
+  const was = t.value.slice(at.from, at.to);
+  const now = swapValue(g, was);
+  if (!now) return null;
+  await putText(t.value.slice(0, at.from) + now + t.value.slice(at.to), at.from, now.length);
+  return { from: at.from, was, now };
+}
+// Отмена замены: на том же месте ещё стоит новое значение — возвращается прежнее; текст там уже правили — false.
+export async function undoSwap(s) {
+  const t = $('draft-text');
+  if (!canFixInDraft() || t.value.slice(s.from, s.from + s.now.length) !== s.now) return false;
+  await putText(t.value.slice(0, s.from) + s.was + t.value.slice(s.from + s.now.length), s.from, s.was.length);
+  return true;
+}
+// Новый текст — на экран и в черновик; не сохранилось — на экране прежний текст.
+async function putText(body, from, len) {
+  const t = $('draft-text');
+  const before = t.value;
+  t.value = body;
+  try { await save(); } catch (err) { t.value = before; throw err; }
+  countGaps();
+  t.scrollIntoView({ block: 'center' });
+  t.focus();
+  t.setSelectionRange(from, from + len);
 }
 
 $('draft-text').addEventListener('input', () => {

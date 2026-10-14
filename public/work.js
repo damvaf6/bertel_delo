@@ -1,7 +1,8 @@
 // Работа по делу (задача 1.5): проверка результата по правилам и переписка по заявке. Тексты — только через textContent.
 import { api, el, say } from '/common.js';
 import { setNext } from '/next.js';
-import { canFixInDraft, fixInDraft } from '/draft.js';
+import { canFixInDraft, fixInDraft, swapInDraft, undoSwap } from '/draft.js';
+import { swapValue } from '/draftfind.js';
 
 const $ = (id) => document.getElementById(id);
 const SIDE_RU = { customer: 'Заказчик', executor: 'Исполнитель', dispatcher: 'Диспетчер' };
@@ -126,15 +127,47 @@ function mineFix(g, quote) {
   return [el('div', { class: 'row' }, btn), miss];
 }
 
+// 2.232: «Заменить на значение из выписки» — одной кнопкой, черновик сохраняется; под кнопкой — что было и что стало, и
+// «Отменить» (вернуть прежнее значение). Год из нескольких выписок и материал стен словом — без этой кнопки (swapValue).
+function egrnSwap(g, quote, miss) {
+  const what = el('span', { 'data-role': 'egrn-swap-what' });
+  let last = null;
+  const undo = el('button', { class: 'link', type: 'button', 'data-action': 'egrn-unswap', onclick: async () => {
+    try {
+      const ok = last && await undoSwap(last);
+      if (!ok) { what.textContent = `Текст на этом месте уже правили — верните «${last?.was ?? g.bad}» сами, если нужно.`; undo.classList.add('hidden'); return; }
+      what.textContent = `Замена отменена: снова «${last.was}». Черновик сохранён.`;
+      undo.classList.add('hidden');
+      btn.disabled = false;
+      last = null;
+    } catch (err) { say($('review-msg'), err.message); }
+  } }, 'Отменить');
+  const done = el('p', { class: 'egrn-swap hidden', 'data-role': 'egrn-swap-done' }, what, ' ', undo);
+  const btn = el('button', { class: `secondary${canFixInDraft() ? '' : ' hidden'}`, type: 'button', 'data-action': 'egrn-swap', onclick: async () => {
+    btn.disabled = true;
+    try {
+      last = await swapInDraft(g, quote);
+      miss.classList.toggle('hidden', !!last);
+      miss.textContent = last ? '' : `В тексте черновика «${g.bad}» нет — исправьте в файле отчёта (в выписке: ${g.right}).`;
+      done.classList.toggle('hidden', !last);
+      if (!last) { btn.disabled = false; return; }
+      what.textContent = `Было «${last.was}» — стало «${last.now}», как в выписке ЕГРН. Черновик сохранён; соберите Word заново.`;
+      undo.classList.remove('hidden');
+    } catch (err) { btn.disabled = false; say($('review-msg'), err.message); }
+  } }, 'Заменить на значение из выписки');
+  return { btn, done };
+}
+
 // 2.218: находка по выписке ЕГРН — одной кнопкой строка из выписки, с которой сверяли, и сам файл выписки на этой странице.
 function egrnPlace(g, quote) {
   const { btn: fixBtn, miss } = g.bad ? draftFix(g, quote, 'egrn-draft') : { btn: null, miss: el('p', { class: 'hidden' }) };
-  const fix = fixBtn ? [fixBtn] : [];
+  const swap = g.bad && swapValue(g) ? egrnSwap(g, quote, miss) : { btn: null, done: null };
+  const fix = [fixBtn, swap.btn].filter(Boolean);
   const box = el('div', { class: 'ai-egrn hidden', 'data-role': 'egrn-place' },
     el('span', { class: 'ai-mark-where', text: `${g.file}, ${g.where}: ` }),
     el('q', { text: g.quote || 'строка не найдена — откройте файл' }),
     el('div', { class: 'row' }, el('button', { class: 'secondary', type: 'button', 'data-action': 'egrn-file', onclick: () => openEgrn(g) }, 'Открыть файл выписки'), ...fix),
-    miss);
+    miss, ...(swap.done ? [swap.done] : []));
   const btn = el('button', { class: 'link', type: 'button', 'data-action': 'egrn', 'aria-expanded': 'false', onclick: () => {
     const open = box.classList.toggle('hidden') === false;
     btn.setAttribute('aria-expanded', String(open));

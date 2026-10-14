@@ -783,6 +783,23 @@ test('2.229: место в черновике для находки по вып�
   assert.equal(findInDraft('', { bad: '45,1' }), null);
 });
 
+// 2.232: «Заменить на значение из выписки» — чем заменить (public/draftfind.js): разделитель — как в тексте; несколько годов
+// и материал стен словом — одной кнопкой не заменяются.
+test('2.232: замена на значение из выписки: число с разделителем текста, номер и адрес как есть, год «или» и материал — нет', async () => {
+  const { swapValue } = await import('../../public/draftfind.js');
+  assert.equal(swapValue({ bad: '45,1', right: '47,3' }, '45,1'), '47,3');
+  assert.equal(swapValue({ bad: '45,1', right: '47,3' }, '45.1'), '47.3');
+  assert.equal(swapValue({ bad: '45,1', right: '47,3' }), '47,3');
+  assert.equal(swapValue({ bad: '77:01:0001001:1234', right: '77:01:0001001:4321' }, '77:01:0001001:1234'), '77:01:0001001:4321');
+  assert.equal(swapValue({ bad: '5', right: '6' }, '5'), '6');
+  assert.equal(swapValue({ bad: 'г. Москва, ул. Тестовая, д. 9, кв. 12', right: 'г. Москва,  ул. Тестовая, д. 9, кв. 21' }), 'г. Москва, ул. Тестовая, д. 9, кв. 21');
+  assert.equal(swapValue({ bad: '1975', right: '1984' }, '1975'), '1984');
+  assert.equal(swapValue({ bad: '1975', right: '1984 или 1985' }, '1975'), null);
+  assert.equal(swapValue({ bad: 'кирпичный', right: 'Панельные' }, 'кирпичный'), null);
+  assert.equal(swapValue({ bad: '45,1', right: '' }), null);
+  assert.equal(swapValue(null), null);
+});
+
 test('2.207: дата оценки из приложенного задания на оценку — в таблицу задания, модели и вместо пометки; разные даты — эксперт выбирает сам', async () => {
   const o = await inWork('Квартира: дата оценки в черновик');
   const putDoc = (body, name, kind) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
