@@ -244,7 +244,7 @@ export function aiOps() {
         const { sql, actor, order, registry, providers, res } = ctx;
         const side = aiReviewSide(actor, order);
         if (!side) throw new HttpError(403, 'forbidden', 'ИИ-проверку запускает исполнитель перед сдачей или диспетчер на проверке');
-        const rules = registry.checks(order.module, order.service);
+        const rules = registry.checks(order.module, order.service, order.fields);
         const files = await resultDocs(sql, providers.storage, order);
         if (!files.length) throw new HttpError(400, 'no_result', 'Сначала добавьте файл результата');
         // Автоматические правила — по всему тексту, до модели: их находки модель видит и не повторяет.
