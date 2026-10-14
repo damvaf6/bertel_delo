@@ -443,3 +443,78 @@ test('просят передать, а передать некому (2.228): �
   const cases = (await h.req('GET', `/api/orgs/${o7.id}/cases`)).body.cases;
   assert.deepEqual(cases.filter((c) => c.handover && !c.transfer_to.length && !c.extend).map((c) => c.id), [alone.id]);
 });
+
+// 2.238: руководитель попросил диспетчера перенести срок от организации (2.221) — в «Делах экспертов» у дела видно, ждём ли
+// ответа, отказал ли диспетчер (с пояснением) или согласился; отбор — ждём ответа и отказано. Отказы за сутки — в утренней сводке.
+test('2.238: перенос от организации — ждём ответа / отказано / согласовано в «Делах экспертов», отказы — в утренней сводке', async () => {
+  assert.equal(orgDigestText({ sign: 0, handover: 0, stuck: 0, due: 0, overdue: 0, idle: 0, returned: 0, fresh: 0, away: 0, ext_declined: 2 }),
+    'На сегодня по организации: диспетчер отказал в переносе срока по просьбе организации: 2');
+  assert.equal(orgDigestTo({ sign: 1, handover: 0, stuck: 0, due: 0, overdue: 0, idle: 0, returned: 0, fresh: 0, away: 1, ext_declined: 1 }), 'orgext');
+  assert.equal(orgDigestTo({ sign: 0, handover: 1, stuck: 1, due: 0, overdue: 0, idle: 0, returned: 0, fresh: 0, away: 0, ext_declined: 1 }), 'stuck');
+
+  const h = await login(S, '+79990003851');
+  const e = await login(S, '+79990003852');
+  const other = await login(S, '+79990003853');
+  const o9 = await makeOrg(S.sql, 'ООО «Срочная оценка»');
+  const oX = await makeOrg(S.sql, 'ООО «Чужая оценка»');
+  await addMember(S.sql, o9.id, h.user.id, 'head');
+  await addMember(S.sql, oX.id, other.user.id, 'head');
+  await makeSpecialist(S.sql, e.user.id);
+  await addMember(S.sql, o9.id, e.user.id, 'member');
+  assert.equal((await e.req('PATCH', '/api/specialist/me', { org_id: o9.id })).status, 200);
+  const make = async (title, days) => {
+    const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
+    assert.equal((await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: addDays(today, 15), fields: FIELDS })).status, 200);
+    assert.equal((await owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
+    await ensurePaid(S.sql, o.id);
+    assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: e.user.id, from: 'matching' })).status, 200);
+    assert.equal((await e.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+    await S.sql`update orders set deadline = ${addDays(today, days)}::date where id = ${o.id}`;
+    assert.equal((await e.req('POST', `/api/orders/${o.id}/handover`, { reason: 'Заболел' })).status, 201);
+    assert.equal((await h.req('POST', `/api/orgs/${o9.id}/cases/${o.id}/handover/extend`,
+      { new_deadline: addDays(today, days + 7), reason: 'Передать некому — просим перенести срок', from: addDays(today, days) })).status, 201);
+    return o;
+  };
+  const decide = async (o, approve, answer) => {
+    const dv = (await dispatcher.req('GET', `/api/orders/${o.id}/deadline-requests`)).body;
+    assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/deadline-requests/${dv.open.id}/decide`, { approve, answer })).status, 200);
+  };
+  const waiting = await make('Ждём ответа', 6);
+  const declined = await make('Отказали', 5);
+  await decide(declined, false, 'Заказчик не согласен на перенос');
+  const approved = await make('Согласились', 7);
+  await decide(approved, true);
+  const casesOf = async () => new Map((await h.req('GET', `/api/orgs/${o9.id}/cases`)).body.cases.map((c) => [c.id, c]));
+  let cases = await casesOf();
+  const w = cases.get(waiting.id);
+  assert.deepEqual([w.org_extend?.state, w.org_extend?.new_deadline, w.extend?.by_org], ['waiting', addDays(today, 13), true]);
+  const d = cases.get(declined.id);
+  assert.deepEqual([d.org_extend?.state, d.org_extend?.answer, d.org_extend?.new_deadline, d.extend, d.deadline],
+    ['declined', 'Заказчик не согласен на перенос', addDays(today, 12), null, addDays(today, 5)]);
+  assert.ok(d.org_extend.decided_at);
+  const a = cases.get(approved.id);
+  assert.deepEqual([a.org_extend?.state, a.deadline], ['approved', addDays(today, 14)]);
+  // Эксперт сам попросил перенос после отказа — у дела уже не «перенос от организации», а просьба эксперта.
+  const own = await make('Эксперт попросил сам', 4);
+  await decide(own, false);
+  assert.equal((await e.req('POST', `/api/orders/${own.id}/deadline-requests`, { new_deadline: addDays(today, 9), reason: 'Ещё раз' })).status, 201);
+  cases = await casesOf();
+  assert.deepEqual([cases.get(own.id).org_extend, cases.get(own.id).extend?.by_org], [null, false]);
+  // Чужой руководитель — не видит дел и не получает ответов.
+  assert.equal((await other.req('GET', `/api/orgs/${o9.id}/cases`)).status, 404);
+
+  // Сводка: отказ за сутки — один (второй отказ перекрыт просьбой эксперта); ведёт к отбору «Перенос от организации».
+  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(today, '08:30') }) >= 1);
+  const [r] = await S.sql`select ext_declined, stuck from org_morning_digests where user_id = ${h.user.id} and org_id = ${o9.id}`;
+  assert.deepEqual({ ...r }, { ext_declined: 1, stuck: 0 });
+  const feed = (await h.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня по организации'));
+  assert.equal(feed.length, 1);
+  assert.equal(feed[0].title, 'На сегодня по организации: диспетчер отказал в переносе срока по просьбе организации: 1');
+  assert.equal(feed[0].section, `org=${o9.id}&to=orgext`);
+  assert.doesNotMatch(JSON.stringify(feed), /Отказали|Заказчик не согласен|Заболел/);
+  // Отказ старше суток — в сводку не идёт (в «Делах экспертов» по-прежнему виден).
+  await S.sql`update deadline_requests set decided_at = now() - interval '25 hours' where order_id = ${declined.id}`;
+  const { orgPart } = await import('../../src/ops/today-ops.mjs');
+  assert.equal((await orgPart(S.sql, { id: o9.id, name: o9.name }, S.app.locals.registry, today)).ext_declined, 0);
+  assert.equal((await casesOf()).get(declined.id).org_extend.state, 'declined');
+});

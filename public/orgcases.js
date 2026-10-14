@@ -63,6 +63,8 @@ const FILTERS = [
   { id: 'returned', text: 'Вернул эксперту', test: (c) => c.returned_open },
   { id: 'fresh', text: 'Исправленный файл ждёт подписи эксперта', test: (c) => !!c.returned?.fresh_file },
   { id: 'extend', text: 'Просят перенести срок', test: (c) => !!c.extend },
+  // 2.238: руководитель сам попросил диспетчера перенести срок (2.221) — ждём ответа или отказано (отказы выше).
+  { id: 'orgext', text: 'Перенос от организации: ждём ответа / отказано', test: (c) => !!c.org_extend && c.org_extend.state !== 'approved' },
   { id: 'silent', text: 'Предложено, молчит', test: (c) => c.status === 'awaiting_executor' },
 ];
 let filter = null;
@@ -147,6 +149,10 @@ function renderCases() {
   // «Исправленный файл ждёт подписи эксперта» (2.171): дольше всех ждущие — первыми.
   if (filter === 'fresh') active.sort((a, b) => new Date(a.returned.fresh_file.at) - new Date(b.returned.fresh_file.at));
   // «Эксперт не принимает дела — срок в эти дни» (2.209): ближайший срок — первым.
+  if (filter === 'orgext') {
+    active.sort((a, b) => (a.org_extend.state === b.org_extend.state ? new Date(b.org_extend.decided_at ?? b.org_extend.requested_at)
+      - new Date(a.org_extend.decided_at ?? a.org_extend.requested_at) : a.org_extend.state === 'declined' ? -1 : 1));
+  }
   if (filter === 'docs') active.sort((a, b) => new Date(a.docs_wait.since) - new Date(b.docs_wait.since));
   if (filter === 'away') active.sort((a, b) => String(a.deadline).localeCompare(String(b.deadline)));
   if (filter === 'inspect') active.sort((a, b) => (a.inspection.kind === b.inspection.kind
@@ -220,8 +226,10 @@ function caseItem(org, c) {
     ...(c.returned_open ? [el('div', { class: 'muted', 'data-role': 'returned', text: returnedText(c) })] : []),
     ...(c.returned?.fresh_file ? [el('div', { class: freshLong(c) ? 'overdue' : 'muted', 'data-role': 'fresh-file', text: freshText(c) })] : []),
     // Эксперт попросил перенести срок (2.100): решает диспетчер, руководитель видит новую дату.
-    ...(c.extend ? [el('div', { class: 'muted', 'data-role': 'extend',
+    ...(c.extend && !c.extend.by_org ? [el('div', { class: 'muted', 'data-role': 'extend',
       text: `Эксперт просит перенести срок на ${dayRu(c.extend.new_deadline)} — ждёт ответа диспетчера` })] : []),
+    // Перенос от организации (2.238): ждём ответа диспетчера, отказал (с пояснением) или согласился.
+    ...(c.org_extend ? [orgExtendRow(c)] : []),
     // Эксперт не принимает дела до … (2.113), а срок дела — в эти дни: «Передать другому эксперту» сразу открыто.
     ...(c.away && !c.handover ? [el('div', { class: 'notice-warn', 'data-role': 'away',
       text: `Эксперт не принимает дела ${awaySpan(c.away)}${c.away.note ? ` (${c.away.note})` : ''}, а срок дела — в эти дни. ${c.transfer_to?.length
@@ -286,6 +294,19 @@ function docsRow({ docs_wait: w }) {
     w.reminded_at ? `эксперт напоминал заказчику ${timeRu(w.reminded_at)}` : w.long ? 'эксперт заказчику ещё не напоминал' : null]
     .filter(Boolean).join(' · ');
   return el('div', { class: w.long ? 'notice-warn' : 'muted', 'data-role': 'docs-wait', text });
+}
+
+// Перенос срока по просьбе организации (2.221, 2.238): что ответил диспетчер. Отказал — заметно, и что делать дальше.
+function orgExtendRow({ org_extend: x, transfer_to: mates, deadline }) {
+  const asked = `Организация попросила перенести срок на ${dayRu(x.new_deadline)} (${timeRu(x.requested_at)})`;
+  if (x.state === 'waiting') return el('div', { class: 'muted', 'data-role': 'org-extend', text: `${asked} — ждёт ответа диспетчера` });
+  if (x.state === 'approved') {
+    return el('div', { class: 'muted', 'data-role': 'org-extend', text: `Диспетчер согласился перенести срок по просьбе организации — новый срок ${dayRu(x.new_deadline)}` });
+  }
+  const next = mates?.length ? 'Передайте дело коллеге или напомните эксперту о сроке.' : 'Передать дело некому — напомните эксперту о сроке.';
+  return el('div', { class: 'notice-warn', 'data-role': 'org-extend',
+    text: [`Диспетчер отказал в переносе срока на ${dayRu(x.new_deadline)} (${timeRu(x.decided_at)})${x.answer ? `: «${x.answer}»` : ''}.`,
+      `Срок дела — ${deadline ? dayRu(deadline) : 'не указан'}. ${next}`].join(' ') });
 }
 
 function moveRow(c) {
@@ -426,7 +447,7 @@ function offerWait(org, c) {
 
 // К блоку организации из утренней сводки (2.130): «sign» — к подписи организации; «away» (2.209) — к отбору «Эксперт не принимает
 // дела — срок в эти дни»; «stuck» (2.228) — к отбору «Просят передать — передать некому» и кнопке «Попросить диспетчера
-// перенести срок» первого дела; «week», «overdue», «handover», «returned»,
+// перенести срок» первого дела; «orgext» (2.238) — к отбору «Перенос от организации: ждём ответа / отказано»; «week», «overdue», «handover», «returned»,
 // «fresh», «idle», «docs» — к списку дел с отбором «Срок на этой неделе» (2.127; в нём и просроченные), «Срок прошёл» (2.158), «Просят
 // передать», «Вернул эксперту» (2.153), «Исправленный файл ждёт подписи эксперта» (2.172), «Без движения» (2.141) или «Ждём документы от заказчика» (2.235). Отбора уже
 // нет (дела сданы, эксперт ответил) — список целиком.

@@ -24,7 +24,7 @@ import { orderSignatures, orgReturns, signWait } from './sign-ops.mjs';
 import { executorSignOrg } from '../access/policy.mjs';
 import { dossierAlerts, loadDossier } from '../dossier/dossier.mjs';
 import { expiringLinks, incompleteInspections, reshotAll, silentLinks } from './inspect-ops.mjs';
-import { answeredExtends, openExtends } from './deadline-ops.mjs';
+import { answeredExtends, openExtends, orgExtends } from './deadline-ops.mjs';
 import { openHandovers } from './handover-ops.mjs';
 import { dueNotes } from './note-ops.mjs';
 import { caseMoves, caseRemind, transferTargets } from './org-ops.mjs';
@@ -323,6 +323,9 @@ export async function orgPart(sql, org, registry, today, { actorId = null } = {}
   const mates = new Map(await Promise.all(full.map(async (o) => [o.id, (await transferTargets(sql, o, org.id, registry)).length > 0])));
   const away = awayCases.map((o) => view(o, { away_until: o.away_until, away_note: o.away_note ?? null, extend: ext.get(o.id) ?? null,
     can_transfer: mates.get(o.id) ?? false }));
+  // Диспетчер отказал в переносе срока, о котором просила организация (2.238), за последние сутки — в утренней сводке.
+  const orgExt = await orgExtends(sql, org.id, cases.filter((o) => o.status === 'in_work'));
+  const extDeclined = [...orgExt.values()].filter((x) => x.state === 'declined' && Date.now() - new Date(x.decided_at).getTime() < 86400_000).length;
   const toSign = [];
   const returned = [];
   const atRisk = [];
@@ -383,6 +386,8 @@ export async function orgPart(sql, org, registry, today, { actorId = null } = {}
     // 2 дня и больше (как красная строка в отборе «Исправленный файл ждёт подписи эксперта», 2.171).
     returned_long: returned.filter((r) => !r.fresh_file && Date.now() - new Date(r.at).getTime() >= RETURN_LONG_DAYS * 86400_000).length,
     fresh_long: returned.filter((r) => r.fresh_file && Date.now() - new Date(r.fresh_file.at).getTime() >= SIGN_LONG_DAYS * 86400_000).length,
+    // Отказы диспетчера в переносе срока по просьбе организации за сутки (2.238) — только число, для утренней сводки.
+    ext_declined: extDeclined,
     id: org.id,
     name: org.name,
     hot: cases.filter((o) => ['in_work', 'review'].includes(o.status) && o.deadline && o.deadline <= soon)

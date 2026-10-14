@@ -12,7 +12,7 @@ import { orderSplit } from '../money/money.mjs';
 import { STATUS_NAME, addDays, isOverdue, todayMsk, weekEnd } from '../orders/workflow.mjs';
 import { monthRu, orgMonthDoneCases, orgMonthReport, reportCsv, reportMonth } from '../orgs/report.mjs';
 import { buildOrgMonthArchive } from './case-ops.mjs';
-import { openExtends } from './deadline-ops.mjs';
+import { openExtends, orgExtends } from './deadline-ops.mjs';
 import { extendSuggest, openHandovers } from './handover-ops.mjs';
 import { orgSchedule } from '../orders/schedule.mjs';
 import { expiringLinks, incompleteInspections } from './inspect-ops.mjs';
@@ -298,6 +298,8 @@ export function orgOps() {
         }
         // Ждём документы от заказчика (2.235): почему дело стоит — эксперт запросил документы, а заказчик ещё не прислал.
         const docs = await docsWaiting(sql, rows);
+        // Перенос от организации (2.238): руководитель попросил диспетчера (2.221) — ждём ответа, отказано или согласовано.
+        const orgExt = await orgExtends(sql, org.id, rows.filter((o) => CASES_ACTIVE.includes(o.status)));
         const cases = rows.map((o) => ({
           ...(waits.get(o.id) ?? { sign_wait: 0, sign_since: null, sign_reminded_at: null, returned_open: false, returned: null }),
           remind: reminds.get(o.id) ?? null,
@@ -306,6 +308,7 @@ export function orgOps() {
           docs_wait: docs.get(o.id) ?? null,
           idle: !!moves.get(o.id)?.idle,
           extend: ext.get(o.id) ?? null,
+          org_extend: orgExt.get(o.id) ?? null,
           // Передать некому и перенос ещё не просят (2.221): готовые новый срок и причина для просьбы к диспетчеру от организации.
           handover: handovers.get(o.id) ? { ...handovers.get(o.id), suggest: !(transfer.get(o.id) ?? []).length && !ext.get(o.id)
             ? extendSuggest(o, awayOf(byId.get(o.executor_user_id), today)?.until ?? null, today) : null } : null,
