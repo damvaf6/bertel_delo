@@ -199,7 +199,7 @@ function renderSteps() {
     const status = el('p', { class: 'msg', role: 'status', 'aria-live': 'polite' });
     const count = el('span', { class: 'badge' });
     const button = el('label', { class: 'btn secondary', for: `f-${s.id}` });
-    const retake = s.retake ? el('p', { class: 'photo-meta warn', 'data-retake': '', text: `Эксперт просит переснять: ${s.retake}` }) : '';
+    const retake = s.retake ? el('p', { class: 'photo-meta warn', 'data-retake': '', text: `Эксперт просит ${s.shot_before ? 'переснять' : 'снять'}: ${s.retake}` }) : '';
     input.addEventListener('change', () => { const file = input.files[0]; input.value = ''; if (file) enqueue(s, file); });
     const li = el('li', { class: 'card', 'data-step': s.id },
       el('div', { class: 'doc' }, el('span', { class: 'title', text: s.title }), count),
@@ -215,9 +215,9 @@ function renderSteps() {
 
 function paintStep(s) {
   const { count, button } = stepUi[s.id];
-  count.textContent = s.retake ? 'переснять' : s.photos ? `Фото: ${s.photos}` : s.optional ? 'если есть' : 'нужно фото';
+  count.textContent = s.retake ? (s.photos || s.shot_before ? 'переснять' : 'нужно фото') : s.photos ? `Фото: ${s.photos}` : s.optional ? 'если есть' : 'нужно фото';
   count.className = `badge${s.photos && !s.retake ? ' ok' : ''}`;
-  button.textContent = s.retake ? 'Переснять' : s.photos ? 'Ещё фото' : 'Сфотографировать';
+  button.textContent = s.retake && (s.photos || s.shot_before) ? 'Переснять' : s.photos ? 'Ещё фото' : 'Сфотографировать';
 }
 
 // Шаг не снят: нет фото или эксперт просит переснять (2.68: пересъёмка тоже считается несделанной).

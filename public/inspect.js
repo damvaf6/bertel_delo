@@ -93,7 +93,22 @@ function renderIncomplete(r) {
   $('inspect-incomplete-text').textContent = `Владелец нажал «Готово» ${timeRu(x.finished_at)} (фото по ссылке: ${x.photos}), но не снял: `
     + `${x.missing.map((s) => s.title).join(', ')}. По этой ссылке он больше снимать не может — попросите доснять: у шагов появится просьба,`
     + ' владельцу уйдёт новая ссылка. Чтобы ушла СМС, впишите телефон ниже: номер мы не храним.';
+  // Своя подсказка владельцу к каждому шагу (2.227): он увидит её у шага; пусто — общая просьба «снимите, пожалуйста».
+  const byId = Object.fromEntries(r.steps.map((s) => [s.id, s]));
+  $('inspect-missing-notes').replaceChildren(...x.missing.map((m) => {
+    const id = `missing-note-${m.id}`;
+    const own = byId[m.id]?.retake?.note;
+    return el('div', { class: 'field', 'data-missing-step': m.id },
+      el('label', { for: id, text: `${m.title} — подсказка владельцу` }),
+      el('input', { id, type: 'text', maxlength: String(r.note_max), value: own && own !== ASK_MISSING ? own : '',
+        placeholder: `Необязательно. Например: ${MISSING_EXAMPLE[m.id] ?? 'крупно, при дневном свете'}` }));
+  }));
 }
+// Примеры в поле — чтобы было понятно, что писать; сам текст эксперт пишет свой.
+const MISSING_EXAMPLE = {
+  meters: 'счётчики — крупно, чтобы читались цифры', rooms: 'каждую комнату из двух углов', door: 'дверь вместе с номером квартиры',
+  facade: 'дом целиком, чтобы был виден номер', car_vin: 'VIN крупно, чтобы читались все знаки', car_odometer: 'пробег при включённом зажигании',
+};
 let askedMissingPhone = false;
 $('inspect-ask-missing').addEventListener('click', async () => {
   if (!$('inspect-phone').value.trim() && !askedMissingPhone) {
@@ -105,10 +120,12 @@ $('inspect-ask-missing').addEventListener('click', async () => {
   const btn = $('inspect-ask-missing');
   btn.disabled = true;
   try {
-    // Просьба уже стоит у шага — её текст эксперта не трогаем.
+    // Просьба уже стоит у шага, а поле пусто — её текст не трогаем; вписал подсказку — она заменяет прежнюю.
     const open = await api('GET', `/api/orders/${ctx.order.id}/inspection`);
-    for (const s of open.steps.filter((st) => ctx.incomplete.missing.some((m) => m.id === st.id) && !st.retake)) {
-      await api('POST', `/api/orders/${ctx.order.id}/inspection/retakes`, { step: s.id, note: ASK_MISSING });
+    for (const s of open.steps.filter((st) => ctx.incomplete.missing.some((m) => m.id === st.id))) {
+      const own = $(`missing-note-${s.id}`)?.value.trim() ?? '';
+      const note = own || (s.retake ? null : ASK_MISSING);
+      if (note && note !== s.retake?.note) await api('POST', `/api/orders/${ctx.order.id}/inspection/retakes`, { step: s.id, note });
     }
     $('inspect-issue').requestSubmit();
   } catch (err) { say($('inspect-msg'), err.message); } finally { btn.disabled = false; }

@@ -831,3 +831,34 @@ test('2.214: просьб не было — обычное «прислал фо
   const evs = await S.sql`select event from notifications where order_id = ${q.id} and event like 'inspection_%' order by id`;
   assert.deepEqual(evs.map((e) => e.event), ['inspection_done', 'inspection_done']);
 });
+
+// 2.227: в просьбе доснять — своя подсказка владельцу к каждому шагу; владелец видит её у шага; не снятый в деле шаг —
+// «снять», снятый раньше — «переснять» (shot_before).
+test('2.227: своя подсказка к шагу в просьбе доснять — у владельца у шага; shot_before — снят ли шаг в деле раньше', async () => {
+  const o = await inWork('Осмотр — подсказки к шагам');
+  const l = await issue(o);
+  assert.equal((await shoot(l.token, 'facade', { headers: GEO })).status, 201);
+  assert.equal((await finish(l.token)).status, 200);
+  const g = (await spec.req('GET', `/api/orders/${o.id}/inspection`)).body.incomplete;
+  assert.ok(g.missing.some((s) => s.id === 'rooms'));
+  const ask = (stepId, note) => spec.req('POST', `/api/orders/${o.id}/inspection/retakes`, { step: stepId, note });
+  assert.equal((await ask('rooms', 'Каждую комнату из двух углов, при свете')).status, 201);
+  assert.equal((await ask('door', 'Этот шаг не снят — снимите, пожалуйста')).status, 201);
+  assert.equal((await ask('facade', 'Размыто — дом целиком, днём')).status, 201);
+  // Повторная просьба по шагу заменяет подсказку, а не добавляет вторую.
+  assert.equal((await ask('rooms', 'Каждую комнату из двух углов, днём')).status, 201);
+  const [{ n }] = await S.sql`select count(*)::int as n from inspection_retakes where order_id = ${o.id} and step = 'rooms' and closed_at is null`;
+  assert.equal(n, 1);
+  // Чужой эксперт и заказчик подсказку не ставят.
+  assert.equal((await spec2.req('POST', `/api/orders/${o.id}/inspection/retakes`, { step: 'rooms', note: 'чужое' })).status, 404);
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/inspection/retakes`, { step: 'rooms', note: 'заказчик' })).status, 403);
+
+  const l2 = await issue(o);
+  const steps = Object.fromEntries((await view(l2.token)).body.steps.map((s) => [s.id, s]));
+  assert.equal(steps.rooms.retake, 'Каждую комнату из двух углов, днём');
+  assert.equal(steps.rooms.shot_before, false, 'комнату ещё не снимали — «снять»');
+  assert.equal(steps.door.retake, 'Этот шаг не снят — снимите, пожалуйста');
+  assert.equal(steps.facade.shot_before, true, 'фасад снят по прошлой ссылке — «переснять»');
+  assert.equal(steps.facade.photos, 0, 'фото по новой ссылке считаются отдельно');
+  assert.equal(steps.kitchen.retake, null);
+});
