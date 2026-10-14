@@ -869,6 +869,102 @@ function buildingMatch(doc, ctx) {
   return out;
 }
 
+// ——— 2.233: кадастровая стоимость в отчёте — как в выписке ЕГРН из дела ———
+// В выписке: «Кадастровая стоимость, руб.: 8123456.78» (число — в той же строке или в следующей, если в строке только
+// подпись), дата — «по состоянию на …» в той же строке или «Дата определения кадастровой стоимости: …» на странице.
+// В отчёте: число после слов «кадастровая стоимость» в той же строке; «млн», «тыс.» — сверяем с точностью записи.
+// Не про объект: удельный показатель, за кв. м, проценты и отношения, аналоги; при оценке квартиры — стоимость дома или
+// участка, при оценке дома — участка, при оценке участка — дома. Если в строке отчёта своя дата «по состоянию на» и она не
+// как в выписке (или в выписке даты нет) — это может быть прежняя кадастровая стоимость, не сверяем.
+const CADV_LABEL = /кадастров\S*\s+стоимост\S*/giu;
+const CADV_DATE = /(?<![\d.])(\d{1,2})\.(\d{1,2})\.(\d{4})(?:\s*г(?:ода|\.)?)?|(?<!\d)(\d{1,2})\s+([а-яё]+)\s+(\d{4})(?:\s*г(?:ода|\.)?)?/giu;
+const CADV_NUM = /(?<![\d.,])(\d{1,3}(?:[   ]\d{3})+|\d+)(?:[.,](\d{1,2}))?(?![\d])(?:\s*(млн|тыс))?/u;
+const CADV_SKIP = /удельн|за\s+(?:1|одн|единиц)|кв\.?\s*м|м2|м²|(?<![а-яё])дат|аналог|процент|отношени|коэффициент|изменени|оспари|пересмотр/iu;
+function dayOf(m) {
+  if (m[1]) return ymd(m[3], m[2], m[1]);
+  const mi = MONTHS.findIndex((x, i) => (i === 4 ? /^ма[яй]$/iu.test(m[5]) : m[5].toLowerCase().startsWith(x)));
+  return mi >= 0 ? ymd(m[6], mi + 1, m[4]) : null;
+}
+function lineDay(text) {
+  for (const m of String(text).matchAll(CADV_DATE)) { const d = dayOf(m); if (d) return d; }
+  return null;
+}
+// Числа после подписи «кадастровая стоимость» на странице: { index, raw, v, tol, unit, day, line }.
+function cadValues(page, other) {
+  const out = [];
+  for (const l of page.matchAll(CADV_LABEL)) {
+    const start = page.lastIndexOf('\n', l.index) + 1;
+    const stop = page.indexOf('\n', l.index);
+    const line = page.slice(start, stop < 0 ? page.length : stop);
+    let from = l.index + l[0].length;
+    let rest = page.slice(from, stop < 0 ? page.length : stop);
+    // Подпись в строке одна («Кадастровая стоимость, руб.:») — число в следующей строке.
+    if (!/\d/.test(rest.replace(CADV_DATE, '')) && stop >= 0 && !/[а-яё]{3}/iu.test(rest.replace(/руб\S*|по\s+состоянию\s+на/giu, '').replace(CADV_DATE, ''))) {
+      const next = page.indexOf('\n', stop + 1);
+      const nl = page.slice(stop + 1, next < 0 ? page.length : next);
+      if (/^[\s|:]*\d[\d\s  .,]*(?:руб\S*)?\s*$/iu.test(nl)) { from = stop + 1; rest = nl; }
+    }
+    const masked = rest.slice(0, 120).replace(CADV_DATE, (s) => ' '.repeat(s.length));
+    const m = CADV_NUM.exec(masked);
+    if (!m) continue;
+    const between = masked.slice(0, m.index);
+    const near = `${page.slice(Math.max(start, l.index - 30), l.index)}${l[0]}${between}`;
+    if (CADV_SKIP.test(near) || (other && other.test(near)) || /аналог/iu.test(line)) continue;
+    if (/^\s*(?:%|кв|м2|м²|руб\S*\s*(?:за|\/))/iu.test(masked.slice(m.index + m[0].length))) continue;
+    const unit = m[3]?.toLowerCase();
+    const mult = unit === 'млн' ? 1e6 : unit === 'тыс' ? 1e3 : 1;
+    const v = Number(`${m[1].replace(/[   ]/g, '')}.${m[2] ?? 0}`) * mult;
+    if (!(v >= 1000)) continue;
+    const step = (m[2] ? 10 ** -m[2].length : 1) * mult;
+    out.push({ index: from + m.index, raw: `${m[1]}${m[2] ? `,${m[2]}` : ''}`, v: Math.round(v * 100) / 100, tol: Math.max(1, step / 2), unit, day: lineDay(line), line });
+  }
+  return out;
+}
+const CADV_DAY_AT = /(?:дата\s+определения\s+кадастров\S*\s+стоимост\S*|по\s+состоянию\s+на)\s*[:\-–—]?\s*/giu;
+function egrnCadValueValues(egrn, ctx) {
+  const land = ctx.service === 'land';
+  const values = new Map();
+  for (const d of egrnOnObject(egrn, ctx)) {
+    if (!Array.isArray(d.pages)) continue;
+    const head = d.pages.slice(0, 2).join('\n');
+    if (land ? EGRN_BUILT.test(head) && !EGRN_LAND.test(head) : EGRN_LAND.test(head) && !EGRN_BUILT.test(head)) continue;
+    d.pages.some((page, i) => {
+      const got = cadValues(page, null).find((c) => !c.unit);
+      if (!got) return false;
+      let day = got.day;
+      if (!day) for (const m of page.matchAll(CADV_DAY_AT)) { day = lineDay(page.slice(m.index + m[0].length, m.index + m[0].length + 30)); if (day) break; }
+      if (!values.has(got.v)) values.set(got.v, { name: d.name, page: i, doc: d.id, quote: lineAround(page, got.index), day });
+      return true;
+    });
+  }
+  return values;
+}
+export function egrnCadValue(egrn, ctx) {
+  return oneValue(egrnCadValueValues(egrn, ctx));
+}
+function cadValueMatch(doc, ctx) {
+  if (!ctx.egrn?.length) return [];
+  const egrn = egrnCadValue(ctx.egrn, ctx);
+  if (!egrn) return [];
+  const type = ctx.fields?.object_type;
+  const other = ctx.service === 'land' ? /(?<![а-яё])дом|здани|строени|постройк|помещени|квартир/iu
+    : type === 'house' ? /участ/iu
+      : PREMISES.includes(type) ? /участ|(?<![а-яё])дом(?:а|у|е)?(?![а-яё])|здани/iu : /участ/iu;
+  const out = [];
+  const seen = new Set();
+  eachPage(doc, (page, i) => {
+    for (const c of cadValues(page, other)) {
+      if (Math.abs(c.v - egrn.v) < c.tol || seen.has(`${c.v}${c.unit ?? ''}`)) continue;
+      if (c.day && c.day !== egrn.day) continue;
+      seen.add(`${c.v}${c.unit ?? ''}`);
+      const on = egrn.day ? ` по состоянию на ${ruDate(egrn.day)}` : '';
+      out.push({ page: i, quote: lineAround(page, c.index), egrn: egrnAt(egrn), ...(c.unit ? {} : { fix: { bad: c.raw, right: fmt(egrn.v) } }),
+        text: `Кадастровая стоимость ${c.unit ? `${c.raw} ${c.unit === 'млн' ? 'млн' : 'тыс.'}` : fmt(c.v)} руб. не совпадает с выпиской ЕГРН «${egrn.name}» (${fmt(egrn.v)} руб.${on}, стр. ${egrn.page + 1}) — проверьте, не стоимость ли это другого объекта или прежней даты` });
+    }
+  });
+  return out;
+}
+
 const SHARE_AT = [
   /(?<![а-яё])дол(?:я|и|е|ю|ей)(?![а-яё])[^\d\n]{0,60}?(\d{1,3})\s*\/\s*(\d{1,4})(?![\d/])/giu,
   /(?<![\d/])(\d{1,3})\s*\/\s*(\d{1,4})\s+(?:доли|долю|доля|доле)(?![а-яё])/giu,
@@ -1918,6 +2014,7 @@ const PER_DOC = {
   area_match: areaMatch,
   floor_match: floorMatch,
   building_match: buildingMatch,
+  cad_value_match: cadValueMatch,
   share_match: shareMatch,
   land_match: landMatch,
   date_order: dateOrder,
@@ -1943,6 +2040,7 @@ export const AUTO_CHECKS = Object.freeze({
   area_match: 'площадь объекта в отчёте — как в выписке ЕГРН из дела, а без неё — как в заявке',
   floor_match: 'этаж и этажность дома в отчёте — как в выписке ЕГРН из дела, а без неё — как в заявке',
   building_match: 'год постройки и материал стен дома в отчёте — как в выписке ЕГРН на здание из дела, а год без неё — как в заявке',
+  cad_value_match: 'кадастровая стоимость объекта в отчёте — как в выписке ЕГРН из дела (если в отчёте своя дата «по состоянию на» — с той же датой)',
   share_match: 'размер доли в отчёте — как в заявке',
   land_match: 'категория земель и вид разрешённого использования — как в заявке',
   inspection: '«без осмотра» и дата осмотра одновременно',
