@@ -8,9 +8,11 @@
 //       subject: 'document' — по ссылке осмотра снимают не объект, а документ (почерковедческая, 2.81): страница владельца так и
 //       называется — «Съёмка документа»; 'goods' — снимают товар (товароведческая, 2.82): «Осмотр товара»; 'car' — снимают
 //       повреждённую машину (ущерб после ДТП, 2.97): «Осмотр автомобиля», до осмотра не ремонтировать
-//     checks: [{ id, title, services?: [id услуги…], ask?, auto?: [имя правила…] }…],
+//     checks: [{ id, title, services?: [id услуги…], ask?, auto?: [имя правила…], when? }…],
 //       ask — что именно проверить (подсказка модели ИИ, человеку не показывается); auto — автоматические правила по
-//       всему тексту отчёта (src/ai/report-checks.mjs, AUTO_CHECKS): их находки показываются под этой проверкой
+//       всему тексту отчёта (src/ai/report-checks.mjs, AUTO_CHECKS): их находки показываются под этой проверкой;
+//       when: { field: id поля-списка, in: [значение…] } — пункт только для заявок с таким значением поля (чек-лист банка:
+//       отчёт для Сбербанка — пункты по требованиям банка, задача штаба 3f917197)
 //     draft?: [{ id, title, services?: [id услуги…], ask?, dossier?, table? }…],  — разделы черновика заключения от ИИ (задача 2.2);
 //       dossier: 'info' — сюда подставляются сведения из досье эксперта, 'copies' — перечень копий документов (2.14);
 //       table: 'task' — таблица «задание» из полей заявки, 'approaches' — таблица «подход — стоимость — вес» (2.29);
@@ -174,7 +176,7 @@ export function validateModule(m) {
   const serviceIds = m.services.map((s) => s.id);
   for (const c of m.checks) {
     const where = `${at}, проверка ${c.id}`;
-    onlyKeys(c, ['id', 'title', 'services', 'ask', 'auto'], where);
+    onlyKeys(c, ['id', 'title', 'services', 'ask', 'auto', 'when'], where);
     if (!nonEmpty(c.title)) fail(where, 'нет описания');
     if (c.ask !== undefined && !askText(c.ask)) fail(where, 'ask — непустой текст до 600 знаков');
     if (c.auto !== undefined && (!Array.isArray(c.auto) || c.auto.length === 0 || c.auto.some((a) => !Object.hasOwn(AUTO_CHECKS, a)))) {
@@ -182,6 +184,17 @@ export function validateModule(m) {
     }
     if (c.services !== undefined && (!Array.isArray(c.services) || c.services.length === 0 || c.services.some((id) => !serviceIds.includes(id)))) {
       fail(where, 'services — непустой список услуг этого модуля');
+    }
+    if (c.when !== undefined) {
+      onlyKeys(c.when, ['field', 'in'], `${where}, when`);
+      const users = m.services.filter((x) => !c.services || c.services.includes(x.id));
+      const f = users.length ? serviceFields(m, users[0]).find((x) => x.id === c.when.field) : null;
+      if (!f || f.type !== 'select' || users.some((x) => !serviceFields(m, x).some((y) => y.id === c.when.field))) {
+        fail(where, 'when.field — поле-список, которое есть у каждой услуги проверки');
+      }
+      if (!Array.isArray(c.when.in) || c.when.in.length === 0 || c.when.in.some((v) => !f.options.some((o) => o.id === v))) {
+        fail(where, 'when.in — непустой список значений этого поля');
+      }
     }
   }
   // Разделы черновика заключения (2.2) — необязательно: без них черновик от ИИ для модуля не готовится.
@@ -479,11 +492,12 @@ export function createRegistry(modules = DEFAULT_MODULES) {
       if (!s) return null;
       return { module: m, service: s, fields: serviceFields(m, s) };
     },
-    // Правила проверки результата для услуги (общие для модуля и только для этой услуги).
-    checks(moduleId, serviceId) {
+    // Правила проверки результата для услуги (общие для модуля и только для этой услуги). fields — поля заявки: пункты
+    // с when (чек-лист банка) — только если поле заявки подходит; без полей заявки таких пунктов нет.
+    checks(moduleId, serviceId, fields = null) {
       const m = modulesList.find((x) => x.id === moduleId);
       if (!m?.services.some((x) => x.id === serviceId)) return [];
-      return m.checks.filter((c) => !c.services || c.services.includes(serviceId))
+      return m.checks.filter((c) => (!c.services || c.services.includes(serviceId)) && (!c.when || c.when.in.includes(fields?.[c.when.field])))
         .map((c) => ({ id: c.id, title: c.title, ...(c.ask ? { ask: c.ask } : {}), ...(c.auto ? { auto: c.auto } : {}) }));
     },
     // Разделы черновика заключения для услуги (2.2); пустой список — черновик для услуги не готовится.
@@ -621,7 +635,7 @@ export function createRegistry(modules = DEFAULT_MODULES) {
         name: m.name,
         basis: m.basis.map((id) => ({ id, name: BASIS_KINDS[id].name, details: BASIS_KINDS[id].details })),
         services: m.services.map((s) => ({ id: s.id, name: s.name, fields: serviceFields(m, s), express: !!m.express?.services.includes(s.id) })),
-        checks: m.checks.map((c) => ({ id: c.id, title: c.title, services: c.services ?? m.services.map((s) => s.id) })),
+        checks: m.checks.map((c) => ({ id: c.id, title: c.title, services: c.services ?? m.services.map((s) => s.id), ...(c.when ? { when: c.when } : {}) })),
       }));
     },
   };

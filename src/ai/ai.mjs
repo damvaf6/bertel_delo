@@ -330,7 +330,7 @@ export async function aiSignHints(sql, registry, order, docIds, { ok = false } =
   if (!docIds.length) return out;
   const rows = await sql`select items, files, at from ai_reviews
                          where order_id = ${order.id} and round = ${order.review_round + 1} order by id desc`;
-  const titles = new Map(registry.checks(order.module, order.service).map((r) => [r.id, r.title]));
+  const titles = new Map(registry.checks(order.module, order.service, order.fields).map((r) => [r.id, r.title]));
   for (const id of docIds) {
     const r = rows.find((x) => (x.files ?? []).some((f) => f.id === id));
     if (!r) { out.set(id, { state: 'none', other: rows.length > 0 }); continue; }

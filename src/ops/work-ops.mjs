@@ -18,7 +18,7 @@ const NOTE_MAX = 1000;
 // Отметки текущего (или последнего) круга проверки по правилам услуги и итог.
 // Правила проверки дела: правила модуля и, если вычитка нужна (2а.7, orders.proofread), — «Вычитка».
 export function reviewRules(registry, order) {
-  const rules = registry.checks(order.module, order.service);
+  const rules = registry.checks(order.module, order.service, order.fields);
   return PROOFREAD_REASONS[order.proofread] && registry.proofread(order.module) ? [...rules, { ...PROOFREAD_CHECK }] : rules;
 }
 
