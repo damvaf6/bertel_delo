@@ -14,6 +14,7 @@
 // файла результата нет (2.138). «Вернули на доработку» — когда вернули, пункты замечания, ближе срок — выше (2.147).
 // Ответ диспетчера на просьбу о переносе срока — пока эксперт не открыл «Срок» в деле (2.155). Владелец нажал «Готово»
 // осмотра, а обязательные шаги без фото (2.208). Выписка ЕГРН в деле старше 30 дней на дату оценки (2.224) — запросить свежую.
+// Запрошенные документы не пришли 3 дня (2.234) — «Напомнить заказчику», пока сегодня ещё не напоминали.
 // Руководителю — те же сведения, что в «Делах экспертов» (2.16): без заказчика, полей заявки, документов и переписки.
 // Только свои дела и свои организации.
 import { orderRef } from '../notify/registry.mjs';
@@ -27,7 +28,7 @@ import { answeredExtends, openExtends } from './deadline-ops.mjs';
 import { openHandovers } from './handover-ops.mjs';
 import { dueNotes } from './note-ops.mjs';
 import { caseMoves, caseRemind, transferTargets } from './org-ops.mjs';
-import { egrnOld } from './docreq-ops.mjs';
+import { docWait, egrnOld } from './docreq-ops.mjs';
 
 // «Горит» — просрочено или до срока не больше двух дней (как подсветка в списке дел).
 const HOT_DAYS = 2;
@@ -163,8 +164,16 @@ async function expertPart(sql, actor, registry, today, storage) {
     const old = await egrnOld(sql, storage, registry, o, today);
     if (old && !old.asked) egrnStale.push(item(o, { egrn: old }));
   }
+  // Запрошенное не пришло 3 дня и дольше (2.234): строка с «Напомнить заказчику»; напомнили — до завтра строки нет.
+  const docsWait = [];
+  for (const o of rows.filter((x) => x.status === 'in_work')) {
+    const w = await docWait(sql, o);
+    if (w?.can_remind) docsWait.push(item(o, { wait: w }));
+  }
+  docsWait.sort((a, b) => new Date(a.wait.since) - new Date(b.wait.since));
   return {
     egrn_old: egrnStale,
+    docs_wait: docsWait,
     // Отказ в переносе, а срок в дни «не принимаю дела» (2.215) — своей строкой с «Попросить руководителя передать дело».
     away_declined: awayDeclined,
     extend_answer: extendAnswer.filter((x) => !awayDeclined.some((a) => a.id === x.id)),

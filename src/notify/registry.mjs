@@ -129,6 +129,8 @@ export const EVENTS = {
   deadline_moved: { type: 'order_progress', title: 'Срок по заявке перенесён по просьбе исполнителя — новая дата в заявке', order: true, mail: true },
   // Исполнитель запросил документы (2.64): список с отметками — на странице заявки.
   docs_requested: { type: 'order_progress', title: 'Исполнитель просит документы — список на странице заявки, загрузите файлы', order: true, mail: true },
+  // Исполнитель напоминает (2.234): запрошенные документы не пришли 3 дня — список на странице заявки.
+  docs_reminder: { type: 'order_progress', title: 'Исполнитель напоминает: ждёт документы — список на странице заявки, загрузите файлы', order: true, mail: true },
   order_step: { type: 'order_progress', title: 'Ход заказа: отмечен новый шаг — оригинал получен, подписано у нотариуса или бумага передана', order: true, to: 'steps', mail: true },
   done: { type: 'order_progress', title: 'Результат проверен и доступен в кабинете', order: true, mail: true },
   cancelled_by_dispatcher: { type: 'order_progress', title: 'Диспетчер отменил заявку', order: true, mail: true },
