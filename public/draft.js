@@ -7,6 +7,7 @@ import { loadAnalogs } from '/analogs.js';
 import { loadSnippets } from '/snippets.js';
 import { loadDraftDiff } from '/draftdiff.js';
 import { emptySections } from '/draftempty.js';
+import { findInDraft } from '/draftfind.js';
 
 const $ = (id) => document.getElementById(id);
 const timeRu = (s) => new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
@@ -44,6 +45,7 @@ export async function loadDraft(current, reload) {
   $('draft-confirm').checked = false;
   $('draft-state').textContent = stateText(r);
   countGaps();
+  syncFixButtons();
   // Что изменилось между версиями (2.104).
   loadDraftDiff(ctx.order, r.draft);
   // Свои заготовки абзацев (2.87): вставка считается правкой — пометки пересчитываются, правка помнится на телефоне.
@@ -132,6 +134,23 @@ function toSection(title) {
   t.focus();
   t.setSelectionRange(from, gap ? from + gap[0].length : from);
 }
+// 2.229: «Исправить в черновике» у находки ИИ-проверки по выписке ЕГРН (work.js) — только пока черновик можно править.
+export const canFixInDraft = () => !!ctx?.draft && !$('draft-text').readOnly && !$('draft-box').classList.contains('hidden');
+function syncFixButtons() {
+  for (const b of document.querySelectorAll('[data-action="egrn-draft"]')) b.classList.toggle('hidden', !canFixInDraft());
+}
+// Выделяет в тексте черновика значение, которое разошлось с выпиской; в черновике его нет — false (правят в файле отчёта).
+export function fixInDraft(g, quote) {
+  const t = $('draft-text');
+  const at = canFixInDraft() ? findInDraft(t.value, { bad: g.bad, quote }) : null;
+  if (!at) return false;
+  t.scrollIntoView({ block: 'center' });
+  t.focus();
+  t.setSelectionRange(at.from, at.to);
+  say($('draft-msg'), `Выделено «${t.value.slice(at.from, at.to)}» — в выписке ЕГРН: ${g.right}. Исправьте и сохраните черновик, затем соберите Word заново.`, 'ok');
+  return true;
+}
+
 $('draft-text').addEventListener('input', () => {
   countGaps();
   if (ctx?.draft) writeLocal(ctx.order.id, { from: ctx.draft.id, body: $('draft-text').value });

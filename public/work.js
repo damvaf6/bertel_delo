@@ -1,6 +1,7 @@
 // Работа по делу (задача 1.5): проверка результата по правилам и переписка по заявке. Тексты — только через textContent.
 import { api, el, say } from '/common.js';
 import { setNext } from '/next.js';
+import { canFixInDraft, fixInDraft } from '/draft.js';
 
 const $ = (id) => document.getElementById(id);
 const SIDE_RU = { customer: 'Заказчик', executor: 'Исполнитель', dispatcher: 'Диспетчер' };
@@ -108,11 +109,19 @@ function toRule(id) {
 }
 
 // 2.218: находка по выписке ЕГРН — одной кнопкой строка из выписки, с которой сверяли, и сам файл выписки на этой странице.
-function egrnPlace(g) {
+// 2.229: «Исправить в черновике» — к месту в тексте черновика, где стоит это значение (кнопка — только пока черновик правится).
+function egrnPlace(g, quote) {
+  const miss = el('p', { class: 'muted hidden', 'data-role': 'egrn-draft-miss' });
+  const fix = g.bad ? [el('button', { class: `secondary${canFixInDraft() ? '' : ' hidden'}`, type: 'button', 'data-action': 'egrn-draft', onclick: () => {
+    const ok = fixInDraft(g, quote);
+    miss.classList.toggle('hidden', ok);
+    miss.textContent = ok ? '' : `В тексте черновика «${g.bad}» нет — исправьте в файле отчёта (в выписке: ${g.right}).`;
+  } }, 'Исправить в черновике')] : [];
   const box = el('div', { class: 'ai-egrn hidden', 'data-role': 'egrn-place' },
     el('span', { class: 'ai-mark-where', text: `${g.file}, ${g.where}: ` }),
     el('q', { text: g.quote || 'строка не найдена — откройте файл' }),
-    el('div', { class: 'row' }, el('button', { class: 'secondary', type: 'button', 'data-action': 'egrn-file', onclick: () => openEgrn(g) }, 'Открыть файл выписки')));
+    el('div', { class: 'row' }, el('button', { class: 'secondary', type: 'button', 'data-action': 'egrn-file', onclick: () => openEgrn(g) }, 'Открыть файл выписки'), ...fix),
+    miss);
   const btn = el('button', { class: 'link', type: 'button', 'data-action': 'egrn', 'aria-expanded': 'false', onclick: () => {
     const open = box.classList.toggle('hidden') === false;
     btn.setAttribute('aria-expanded', String(open));
@@ -164,7 +173,7 @@ function checkItem(order, r, c, hint) {
       el('span', { class: 'ai-mark-where', text: `${f.file}, ${f.where}: ` }),
       el('span', { text: f.text }),
       ...(f.quote ? [el('br'), el('q', { text: f.quote })] : []),
-      ...(f.egrn ? egrnPlace(f.egrn) : []))))] : []),
+      ...(f.egrn ? egrnPlace(f.egrn, f.quote) : []))))] : []),
     // Отмеченные места: цитата из отчёта, файл и страница — сервер показывает только найденные в тексте цитаты.
     ...(hint?.marks?.length ? [el('ul', { class: 'ai-marks' }, ...hint.marks.map((m) => el('li', {},
       el('span', { class: 'ai-mark-where', text: `${m.file}, ${m.where}: ` }),

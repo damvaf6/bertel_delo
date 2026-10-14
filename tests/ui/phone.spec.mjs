@@ -1108,6 +1108,8 @@ test('ИИ-проверка результата: специалист пере�
   await areaFind.getByRole('button', { name: 'Выписка ЕГРН, стр. 1' }).click();
   await expect(areaFind.locator('[data-role="egrn-place"]')).toBeVisible();
   await expect(areaFind.locator('[data-role="egrn-place"]')).toContainText('Выписка ЕГРН.txt, стр. 1: Площадь, м2: 47,3');
+  // Черновика ещё нет — «Исправить в черновике» не показывается (2.229).
+  await expect(areaFind.getByRole('button', { name: 'Исправить в черновике' })).toBeHidden();
   const cadFind = ident.locator('.ai-found li').filter({ hasText: 'Кадастровый номер 77:01:0001001:1234' });
   await cadFind.getByRole('button', { name: 'Выписка ЕГРН, стр. 1' }).click();
   await expect(cadFind.locator('[data-role="egrn-place"]')).toContainText('Кадастровый номер: 77:01:0001001:4321');
@@ -1144,6 +1146,21 @@ test('ИИ-проверка результата: специалист пере�
   await expect(sp.locator('#draft-state')).toContainText('Этаж / этажей в доме 6 — как в выписке ЕГРН «Выписка ЕГРН.txt» (стр. 1)');
   await expect(sp.locator('#draft-state')).toContainText('Адрес г. Москва, тестовая ул., д. 9, кв. 21 — как в выписке ЕГРН «Выписка ЕГРН.txt» (стр. 1) — сверьте.');
   await shot(sp, '54k-specialist-chernovik-etazh-adres-egrn');
+  // 2.229: у находки по выписке — «Исправить в черновике»: выделяет в тексте черновика значение, которое разошлось с выпиской.
+  const draftText = sp.getByLabel('Текст заключения');
+  await draftText.fill(`${await draftText.inputValue()}\nОбщей площадью 45,1 кв. м — по техническому паспорту.`);
+  // Место в выписке уже открыто (2.218, выше) — кнопка рядом с «Открыть файл выписки».
+  await expect(areaFind.locator('[data-role="egrn-place"]')).toBeVisible();
+  await areaFind.getByRole('button', { name: 'Исправить в черновике' }).click();
+  await expect(draftText).toBeFocused();
+  expect(await draftText.evaluate((t) => t.value.slice(t.selectionStart, t.selectionEnd))).toBe('45,1');
+  await expect(sp.locator('#draft-msg')).toHaveText('Выделено «45,1» — в выписке ЕГРН: 47,3. Исправьте и сохраните черновик, затем соберите Word заново.');
+  await shot(sp, '54m-specialist-ispravit-v-chernovike');
+  // Значения в черновике нет — правят в файле отчёта.
+  await cadFind.getByRole('button', { name: 'Исправить в черновике' }).click();
+  await expect(cadFind.locator('[data-role="egrn-draft-miss"]')).toHaveText('В тексте черновика «77:01:0001001:1234» нет — исправьте в файле отчёта (в выписке: 77:01:0001001:4321).');
+  await cadFind.locator('[data-role="egrn-draft-miss"]').scrollIntoViewIfNeeded();
+  await shot(sp, '54n-specialist-net-v-chernovike');
   expect((await sp.request.patch('/api/me', { data: { full_name: 'Тестов Эксперт ИИ' }, headers: H })).status()).toBe(200);
   await sp.reload();
   const asked = new Promise((ok) => sp.once('dialog', (d) => { ok(d.message()); d.accept(); }));

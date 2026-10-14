@@ -698,10 +698,14 @@ test('2.218: у находки по выписке ЕГРН — где в вып
   const at = (re) => found.find((f) => re.test(f.text))?.egrn;
   assert.equal(found.length, 4, JSON.stringify(found));
   for (const f of found) assert.equal(f.egrn?.doc_id, egrnId, f.text);
-  assert.deepEqual(at(/^Кадастровый/), { doc_id: egrnId, file: 'Выписка ЕГРН.txt', where: 'стр. 1', quote: 'Кадастровый номер: 77:01:0001001:4321' });
+  assert.deepEqual(at(/^Кадастровый/), { doc_id: egrnId, file: 'Выписка ЕГРН.txt', where: 'стр. 1', quote: 'Кадастровый номер: 77:01:0001001:4321',
+    bad: '77:01:0001001:1234', right: '77:01:0001001:4321' });
   assert.equal(at(/^Площадь/).quote, 'Площадь, м2: 47,3');
   assert.equal(at(/^Этаж/).quote, 'Номер, тип этажа, на котором расположено помещение, машино-место: Этаж № 6');
   assert.equal(at(/^Адрес/).quote, 'Адрес (местоположение): г. Москва, ул. Долевая, д. 3, кв. 18');
+  // 2.229: что разошлось и что в выписке — для «Исправить в черновике».
+  assert.deepEqual([at(/^Площадь/), at(/^Этаж/), at(/^Адрес/)].map((g) => [g.bad, g.right]), [
+    ['45,1', '47,3'], ['5', '6'], ['г. Москва, ул. Долевая, д. 3, кв. 8', 'г. Москва, ул. Долевая, д. 3, кв. 18']]);
   // Сохранённая проверка отдаёт то же; файл выписки исполнитель открывает, чужой — нет.
   const saved = (await spec.req('GET', `/api/orders/${o.id}/review`)).body.ai.items.flatMap((i) => i.found ?? []).filter((f) => f.egrn);
   assert.equal(saved.length, 4);
@@ -732,6 +736,7 @@ test('2.223: год постройки и материал стен в отчё�
   ]);
   // Кнопка «Выписка ЕГРН, стр. N» (2.218) — у обеих находок.
   assert.equal(got[1].egrn.file, 'Выписка ЕГРН дом.txt');
+  assert.deepEqual(got.map((f) => [f.egrn.bad, f.egrn.right]), [['1975', '1984'], ['кирпичном жилом доме', 'Панельные']]);
   assert.match(got[1].egrn.quote, /Материал наружных стен: Панельные/);
   await S.sql`update documents set deleted_at = now() where order_id = ${o.id} and kind = 'result'`;
   assert.equal((await putResult(o, 'ОТЧЁТ ОБ ОЦЕНКЕ\nКвартира в панельном жилом доме 1984 года постройки.', 'отчёт-2.txt', 'text/plain')).status, 201);
