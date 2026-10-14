@@ -41,7 +41,7 @@ test('отчёт для Сбербанка: выбор банка в заявк�
   watch(page);
 
   // Заказчик заполняет заявку на телефоне и выбирает банк.
-  await signIn(page, '+79990008601');
+  const owner = await signIn(page, '+79990008601');
   await page.goto('/kabinet');
   await page.locator('#new-order').getByLabel('Услуга').selectOption({ label: 'Оценка недвижимости' });
   await page.getByRole('button', { name: 'Создать заявку' }).click();
@@ -59,7 +59,7 @@ test('отчёт для Сбербанка: выбор банка в заявк�
   await page.getByRole('button', { name: 'Отправить заявку' }).click();
   await expect(page.locator('#order-status')).toHaveText('Подбор исполнителя');
   await expect(page.locator('#facts')).toContainText('Сбербанк');
-  const id = new URL(page.url()).hash.match(/order=(\d+)/)[1];
+  const id = await db(async (c) => (await c.query('select id from orders where owner_user_id = $1 order by created_at desc limit 1', [owner.id])).rows[0].id);
 
   // Диспетчер и эксперт; заявка оплачена и в работе — через API.
   const dctx = await phoneContext(browser, baseURL);
