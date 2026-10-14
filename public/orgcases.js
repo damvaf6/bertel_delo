@@ -48,6 +48,8 @@ $('org-cases-expert').addEventListener('change', (e) => { expert = e.target.valu
 // Отборы (2.102): только среди активных дел; кнопка видна, когда есть хоть одно такое дело.
 const FILTERS = [
   { id: 'handover', text: 'Просят передать', test: (c) => !!c.handover },
+  // 2.228: передать некому, а перенос срока ещё не просят — руководителю «Попросить диспетчера перенести срок» (2.221).
+  { id: 'stuck', text: 'Просят передать — передать некому', test: (c) => !!c.handover && !c.transfer_to.length && !c.extend },
   { id: 'overdue', text: 'Срок прошёл', test: (c) => c.overdue },
   { id: 'hot', text: 'Горит', test: (c) => c.hot },
   { id: 'week', text: 'Срок на этой неделе', test: (c) => c.week },
@@ -409,7 +411,8 @@ function offerWait(org, c) {
 }
 
 // К блоку организации из утренней сводки (2.130): «sign» — к подписи организации; «away» (2.209) — к отбору «Эксперт не принимает
-// дела — срок в эти дни»; «week», «overdue», «handover», «returned»,
+// дела — срок в эти дни»; «stuck» (2.228) — к отбору «Просят передать — передать некому» и кнопке «Попросить диспетчера
+// перенести срок» первого дела; «week», «overdue», «handover», «returned»,
 // «fresh», «idle» — к списку дел с отбором «Срок на этой неделе» (2.127; в нём и просроченные), «Срок прошёл» (2.158), «Просят
 // передать», «Вернул эксперту» (2.153), «Исправленный файл ждёт подписи эксперта» (2.172) или «Без движения» (2.141). Отбора уже
 // нет (дела сданы, эксперт ответил) — список целиком.
@@ -420,6 +423,7 @@ export function focusOrgBlock(to) {
   filter = to;
   renderCases();
   $('org-cases-list-title').scrollIntoView({ block: 'start' });
+  if (to === 'stuck') document.querySelector('#org-cases [data-action="handover-extend"]')?.focus({ preventScroll: true });
 }
 
 // Перейти к делу в «Подписи организации» и выделить его.

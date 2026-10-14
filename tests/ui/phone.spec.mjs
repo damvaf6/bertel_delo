@@ -9150,6 +9150,60 @@ test('утренняя сводка руководителя (2.209): срок �
   for (const p of [cp, ep, hp]) await p.context().close();
 });
 
+test('утренняя сводка руководителя (2.228): «передать некому» — отдельной цифрой у просьб передать дело, нажатие ведёт к отбору и кнопке «Попросить диспетчера перенести срок»', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), hp = await ctx(), ep = await ctx();
+  const customer = await signIn(cp, '+79990022281');
+  const expert = await signIn(ep, '+79990022282'), head = await signIn(hp, '+79990022283');
+  const { orgId, A, B } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Некому ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Одинокова Вера' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const add = async (title, days) => (await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', $1, $2, $3, 'in_work', (now() at time zone 'Europe/Moscow')::date + $4::int, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Одинокая ул., 3","area":"40"}') returning id`,
+    [title, customer.id, expert.id, days])).rows[0].id;
+    return { orgId: org.id, A: await add('Просит передать — некому', 6), B: await add('Просто в работе', 9) };
+  });
+  const ref = (id) => id.slice(0, 8).toUpperCase();
+  expect((await ep.request.post(`/api/orders/${A}/handover`, { data: { reason: 'Заболела' }, headers: H })).status()).toBe(201);
+
+  // Сводка рассылается сервером после 8:00 по Москве; здесь — запись напрямую, с цифрами дня (как в 2.209).
+  await db(async (c) => {
+    const { rows: [n] } = await c.query("insert into notifications (user_id, type, event, org_id) values ($1, 'org_morning', 'org_morning_today', $2) returning id", [head.id, orgId]);
+    await c.query(`insert into org_morning_digests (user_id, org_id, day, handover, stuck, notification_id)
+      values ($1, $2, (now() at time zone 'Europe/Moscow')::date, 1, 1, $3)
+      on conflict (user_id, org_id, day) do update set sign = 0, handover = 1, stuck = 1, due = 0, overdue = 0, idle = 0, returned = 0, fresh = 0, away = 0,
+        notification_id = excluded.notification_id`, [head.id, orgId, n.id]);
+  });
+  await hp.goto('/kabinet#notifications');
+  const morning = hp.locator('#notifications li').first();
+  await expect(morning).toContainText('На сегодня по организации: 1 просьба передать дело (передать некому: 1)');
+  await expect(morning).not.toContainText('Заболела');
+  await expect(morning).not.toContainText('Одинокова');
+  await shot(hp, 'h4j-rukovoditel-svodka-peredat-nekomu');
+  await morning.getByRole('button').click();
+  await expect(hp).toHaveURL(new RegExp(`#org=${orgId}&to=stuck$`));
+  const chip = hp.locator('[data-filter="stuck"]');
+  await expect(chip).toHaveText('Просят передать — передать некому · 1');
+  await expect(chip).toHaveAttribute('aria-pressed', 'true');
+  const rows = hp.locator('#org-cases > li[data-case]');
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first()).toHaveAttribute('data-case', `№ ${ref(A)}`);
+  await expect(hp.locator(`#org-cases li[data-case="№ ${ref(B)}"]`)).toHaveCount(0);
+  await expect(rows.first().locator('[data-handover]')).toContainText('Передать некому');
+  await expect(rows.first().locator('[data-action="handover-extend"]')).toBeFocused();
+  await shot(hp, 'h4k-rukovoditel-otbor-peredat-nekomu');
+
+  // Руководитель попросил диспетчера перенести срок — просьба передать закрыта, отбора больше нет.
+  await rows.first().locator('[data-action="handover-extend"]').click();
+  await expect(hp.locator('#org-cases-msg')).toContainText('Диспетчеру отправлена просьба');
+  await expect(chip).toHaveCount(0);
+  for (const p of [cp, ep, hp]) await p.context().close();
+});
+
 // 2.210: прогон «как эксперт и руководитель» по пачке 2.201–2.209 — одна организация, одно дело. Эксперт в отпуске, срок —
 // в дни отпуска, передать некому: у руководителя «Сегодня», отбор «Эксперт не принимает дела» (2.209) и «Напомнить эксперту
 // попросить перенос» (2.201); заказчик прикладывает задание на оценку и выписку ЕГРН — дата оценки в черновике (2.207),
