@@ -169,7 +169,27 @@ function renderSteps(r, photos) {
     ...(s.retake ? [el('div', { class: 'doc retake' },
       el('div', { class: 'photo-meta warn', text: `Попросили переснять: ${s.retake.note}` }),
       ...(r.can_issue ? [el('button', { class: 'secondary', 'data-action': 'retake-cancel', onclick: () => cancelRetake(s.retake) }, 'Отменить')] : []))] : []),
+    ...(s.reshot ? [reshotBox(s.reshot)] : []),
     ...stepPhotos(s.photos))));
+}
+
+// Доснято по подсказке (2.237): что просили, новое фото и прежнее рядом — сравнить, стало ли лучше. Прежнего не было — так и
+// написано. Нажал картинку — фото целиком.
+function reshotBox(rs) {
+  const pic = (label, p) => {
+    const btn = el('button', { class: 'secondary', 'data-action': 'open-photo', onclick: () => open(p) }, `Фото ${p.no}`);
+    if (p.thumb) btn.classList.add('hidden');
+    return el('div', { class: 'reshot-pic' },
+      el('div', { class: 'photo-meta', text: `${label} — Фото ${p.no}` }),
+      ...(p.thumb ? [thumbImg(p, () => btn.classList.remove('hidden'))] : []),
+      btn);
+  };
+  return el('div', { class: 'reshot', 'data-reshot': '' },
+    // Общая фраза «Этот шаг не снят…» (своей подсказки не было) — просто «по Вашей просьбе».
+    el('div', { class: 'photo-meta ok', text: rs.note === ASK_MISSING ? 'Доснято по Вашей просьбе' : `Доснято по Вашей подсказке: ${rs.note}` }),
+    rs.before
+      ? el('div', { class: 'reshot-compare' }, pic('Было', rs.before), pic('Стало', rs.after))
+      : el('div', { class: 'photo-meta', text: `Раньше этот шаг не снимали — новое: Фото ${rs.after.no}` }));
 }
 
 // Фото шага: «Фото N» — тот же номер, что в отчёте Word (2.96). До трёх — сразу, больше — свёрнуто (2.49: при 100 фото страница дела уходила на десятки экранов).

@@ -209,6 +209,10 @@ a.btn { text-decoration: none; margin-top: 8px; }
 .badge.ok { background: #e3f3e8; color: var(--ok); }
 .photo-meta { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
 .photo-meta.warn { color: var(--danger); }
+.photo-meta.ok { color: var(--ok); }
+.reshot { padding: 6px 0; display: grid; gap: 6px; }
+.reshot-compare { display: flex; gap: 12px; flex-wrap: wrap; }
+.reshot-pic { display: grid; gap: 4px; justify-items: start; }
 .photo-thumb { width: 96px; height: 72px; object-fit: cover; border-radius: 6px; background: var(--line, #ddd); cursor: pointer; flex: none; align-self: flex-start; }
 .doc .photo-text { flex: 1; min-width: 0; }
 .photo-strip { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0; }

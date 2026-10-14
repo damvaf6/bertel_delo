@@ -862,3 +862,57 @@ test('2.227: своя подсказка к шагу в просьбе досн�
   assert.equal(steps.facade.photos, 0, 'фото по новой ссылке считаются отдельно');
   assert.equal(steps.kitchen.retake, null);
 });
+
+// 2.237: владелец доснял по просьбе — у шага в деле «доснято по Вашей подсказке», новое фото и прежнее (если было) рядом.
+test('2.237: доснято по подсказке — у шага подсказка, новое фото и прежнее; новая просьба по шагу — пометка уходит', async () => {
+  const o = await inWork('Осмотр — доснято по подсказке');
+  const l = await issue(o);
+  assert.equal((await shoot(l.token, 'facade', { headers: GEO })).status, 201);
+  assert.equal((await finish(l.token)).status, 200);
+  const ask = (stepId, note) => spec.req('POST', `/api/orders/${o.id}/inspection/retakes`, { step: stepId, note });
+  assert.equal((await ask('facade', 'Размыто — дом целиком, днём')).status, 201);
+  assert.equal((await ask('rooms', 'Каждую комнату из двух углов')).status, 201);
+  assert.equal((await ask('door', 'Дверь целиком')).status, 201);
+  const stepsOf = async (c = spec) => Object.fromEntries((await c.req('GET', `/api/orders/${o.id}/inspection`)).body.steps.map((s) => [s.id, s]));
+  let st = await stepsOf();
+  assert.equal(st.facade.reshot, null, 'просьба ещё открыта — пометки нет');
+  const before = st.facade.photos[0];
+
+  const l2 = await issue(o);
+  assert.equal((await shoot(l2.token, 'facade', { headers: GEO })).status, 201);
+  assert.equal((await shoot(l2.token, 'rooms')).status, 201);
+  assert.equal((await shoot(l2.token, 'rooms')).status, 201);
+  st = await stepsOf();
+  assert.equal(st.facade.retake, null);
+  assert.equal(st.facade.reshot.note, 'Размыто — дом целиком, днём');
+  assert.equal(st.facade.reshot.before.document_id, before.document_id, 'прежнее фото — то, что было до просьбы');
+  assert.equal(st.facade.reshot.before.no, before.no);
+  const fresh = st.facade.photos.find((p) => p.document_id !== before.document_id);
+  assert.equal(st.facade.reshot.after.document_id, fresh.document_id, 'новое — ответ владельца');
+  assert.equal(st.facade.reshot.after.no, fresh.no);
+  // Шаг раньше не снимали — прежнего нет; новое — первое фото после просьбы.
+  assert.equal(st.rooms.reshot.note, 'Каждую комнату из двух углов');
+  assert.equal(st.rooms.reshot.before, null);
+  assert.equal(st.rooms.reshot.after.document_id, st.rooms.photos[0].document_id);
+  // Не доснято — просьба открыта, пометки нет; шаг без просьбы — тоже.
+  assert.equal(st.door.reshot, null);
+  assert.ok(st.door.retake);
+  assert.equal(st.kitchen.reshot, null);
+  // Отменённая просьба — не «доснято».
+  const doorRetake = st.door.retake.id;
+  assert.equal((await spec.req('DELETE', `/api/orders/${o.id}/inspection/retakes/${doorRetake}`)).status, 204);
+  assert.equal((await stepsOf()).door.reshot, null);
+  // Заказчик видит то же (видит осмотр в деле); чужой эксперт — нет.
+  assert.equal((await stepsOf(owner)).facade.reshot.note, 'Размыто — дом целиком, днём');
+  assert.equal((await spec2.req('GET', `/api/orders/${o.id}/inspection`)).status, 404);
+
+  // Новая просьба по шагу — пометка уходит, пока владелец снова не доснимет; доснял — в паре уже последнее до новой просьбы.
+  assert.equal((await ask('facade', 'Ещё раз, без машины перед домом')).status, 201);
+  st = await stepsOf();
+  assert.equal(st.facade.reshot, null);
+  assert.equal((await shoot(l2.token, 'facade')).status, 201);
+  st = await stepsOf();
+  assert.equal(st.facade.reshot.note, 'Ещё раз, без машины перед домом');
+  assert.equal(st.facade.reshot.before.document_id, fresh.document_id);
+  assert.equal(st.facade.photos.length, 3);
+});

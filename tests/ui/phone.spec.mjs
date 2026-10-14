@@ -4322,10 +4322,12 @@ test('осмотр без обязательных шагов (2.208): «Гот�
   await expect(page.locator('#inspect-incomplete')).toBeHidden();
 
   // Владелец доснял по новой ссылке всё, о чём просили (2.214): уведомление «досняли всё», строка в «Можно продолжать».
+  // Фасад снят, но эксперт просит переснять — после ответа владельца прежнее фото будет рядом с новым (2.237).
+  expect((await ep.request.post(`/api/orders/${id}/inspection/retakes`, { data: { step: 'facade', note: 'Размыто — дом целиком, днём' }, headers: H })).status()).toBe(201);
   const again = await ep.request.post(`/api/orders/${id}/inspection`, { data: { days: 3 }, headers: H });
   expect(again.status()).toBe(201);
   const token2 = (await again.json()).path.split('#')[1];
-  for (const st of ['entrance', 'door', 'rooms', 'bathroom', 'window_view', 'surroundings']) {
+  for (const st of ['facade', 'entrance', 'door', 'rooms', 'bathroom', 'window_view', 'surroundings']) {
     const sent = await page.request.post('/api/inspect/photos', { data: jpeg, headers: { ...H, 'x-inspect-token': token2, 'content-type': 'image/jpeg', 'x-step': st } });
     expect(sent.status()).toBe(201);
   }
@@ -4333,7 +4335,7 @@ test('осмотр без обязательных шагов (2.208): «Гот�
   expect(JSON.stringify(await (await ep.request.get('/api/notifications')).json())).toContain('Владелец доснял всё, о чём Вы просили');
   await ep.goto('/kabinet');
   const done = ep.locator('[data-today-item="ready"]', { hasText: 'Квартира: снято не всё' });
-  await expect(done).toContainText('владелец доснял всё, о чём Вы просили: Подъезд и лестничная площадка, Входная дверь, Каждая комната');
+  await expect(done).toContainText('владелец доснял всё, о чём Вы просили: Дом снаружи, Подъезд и лестничная площадка, Входная дверь, Каждая комната');
   await expect(done).not.toContainText('осмотр закончен');
   await expect(ep.locator('[data-today="inspect-incomplete"]')).toHaveCount(0);
   await done.scrollIntoViewIfNeeded();
@@ -4341,6 +4343,21 @@ test('осмотр без обязательных шагов (2.208): «Гот�
   await done.click();
   await expect(ep.locator('#inspect-box')).toBeVisible();
   await expect(ep.locator('#inspect-incomplete')).toBeHidden();
+  // У шагов — «доснято по Вашей подсказке» (2.237): у фасада прежнее фото рядом с новым, у комнат прежнего не было.
+  const facade = ep.locator('#inspect-steps li[data-step="facade"] [data-reshot]');
+  await expect(facade).toContainText('Доснято по Вашей подсказке: Размыто — дом целиком, днём');
+  await expect(facade).toContainText('Было — Фото 1');
+  await expect(facade).toContainText('Стало — Фото 2');
+  await expect(facade.locator('[data-action="open-photo"]')).toHaveCount(2);
+  const rooms = ep.locator('#inspect-steps li[data-step="rooms"] [data-reshot]');
+  await expect(rooms).toContainText('Доснято по Вашей подсказке: Каждую комнату из двух углов, при свете');
+  await expect(rooms).toContainText('Раньше этот шаг не снимали — новое: Фото');
+  await expect(ep.locator('#inspect-steps li[data-step="rooms"] .retake')).toHaveCount(0);
+  await expect(ep.locator('#inspect-steps li[data-step="door"] [data-reshot]')).toContainText('Доснято по Вашей просьбе');
+  await expect(ep.locator('#inspect-steps li[data-step="door"] [data-reshot]')).not.toContainText('подсказке');
+  await expect(ep.locator('#inspect-steps li[data-step="kitchen"] [data-reshot]')).toHaveCount(0);
+  await facade.scrollIntoViewIfNeeded();
+  await shot(ep, 'h4j-ekspert-dosnyato-po-podskazke');
   await ectx.close();
 });
 
