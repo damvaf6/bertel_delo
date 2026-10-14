@@ -134,12 +134,14 @@ function toSection(title) {
   t.focus();
   t.setSelectionRange(from, gap ? from + gap[0].length : from);
 }
-// 2.229: «Исправить в черновике» у находки ИИ-проверки по выписке ЕГРН (work.js) — только пока черновик можно править.
+// 2.229: «Исправить в черновике» у находки ИИ-проверки по выписке ЕГРН (work.js) — только пока черновик можно править;
+// 2.231 — и у находки, сверенной с заявкой или заданием на оценку.
 export const canFixInDraft = () => !!ctx?.draft && !$('draft-text').readOnly && !$('draft-box').classList.contains('hidden');
 function syncFixButtons() {
-  for (const b of document.querySelectorAll('[data-action="egrn-draft"]')) b.classList.toggle('hidden', !canFixInDraft());
+  for (const b of document.querySelectorAll('[data-action="egrn-draft"], [data-action="fix-draft"]')) b.classList.toggle('hidden', !canFixInDraft());
 }
-// Выделяет в тексте черновика значение, которое разошлось с выпиской; в черновике его нет — false (правят в файле отчёта).
+// Выделяет в тексте черновика значение, которое разошлось с выпиской (заявкой, заданием); в черновике его нет — false
+// (правят в файле отчёта).
 export function fixInDraft(g, quote) {
   const t = $('draft-text');
   const at = canFixInDraft() ? findInDraft(t.value, { bad: g.bad, quote }) : null;
@@ -147,7 +149,7 @@ export function fixInDraft(g, quote) {
   t.scrollIntoView({ block: 'center' });
   t.focus();
   t.setSelectionRange(at.from, at.to);
-  say($('draft-msg'), `Выделено «${t.value.slice(at.from, at.to)}» — в выписке ЕГРН: ${g.right}. Исправьте и сохраните черновик, затем соберите Word заново.`, 'ok');
+  say($('draft-msg'), `Выделено «${t.value.slice(at.from, at.to)}» — ${g.from || 'в выписке ЕГРН'}: ${g.right}. Исправьте и сохраните черновик, затем соберите Word заново.`, 'ok');
   return true;
 }
 

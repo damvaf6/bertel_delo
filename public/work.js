@@ -108,15 +108,28 @@ function toRule(id) {
   setTimeout(() => li.classList.remove('flash'), 2000);
 }
 
-// 2.218: находка по выписке ЕГРН — одной кнопкой строка из выписки, с которой сверяли, и сам файл выписки на этой странице.
-// 2.229: «Исправить в черновике» — к месту в тексте черновика, где стоит это значение (кнопка — только пока черновик правится).
-function egrnPlace(g, quote) {
-  const miss = el('p', { class: 'muted hidden', 'data-role': 'egrn-draft-miss' });
-  const fix = g.bad ? [el('button', { class: `secondary${canFixInDraft() ? '' : ' hidden'}`, type: 'button', 'data-action': 'egrn-draft', onclick: () => {
+// 2.229, 2.231: «Исправить в черновике» — к месту в тексте черновика, где стоит значение, разошедшееся с выпиской ЕГРН,
+// заявкой или заданием на оценку (кнопка — только пока черновик правится).
+function draftFix(g, quote, action) {
+  const from = g.from || 'в выписке';
+  const miss = el('p', { class: 'muted hidden', 'data-role': `${action}-miss` });
+  const btn = el('button', { class: `secondary${canFixInDraft() ? '' : ' hidden'}`, type: 'button', 'data-action': action, onclick: () => {
     const ok = fixInDraft(g, quote);
     miss.classList.toggle('hidden', ok);
-    miss.textContent = ok ? '' : `В тексте черновика «${g.bad}» нет — исправьте в файле отчёта (в выписке: ${g.right}).`;
-  } }, 'Исправить в черновике')] : [];
+    miss.textContent = ok ? '' : `В тексте черновика «${g.bad}» нет — исправьте в файле отчёта (${from}: ${g.right}).`;
+  } }, 'Исправить в черновике');
+  return { btn, miss };
+}
+// Находка сверена с заявкой или заданием на оценку (2.231): своей строки выписки нет — только кнопка к черновику.
+function mineFix(g, quote) {
+  const { btn, miss } = draftFix(g, quote, 'fix-draft');
+  return [el('div', { class: 'row' }, btn), miss];
+}
+
+// 2.218: находка по выписке ЕГРН — одной кнопкой строка из выписки, с которой сверяли, и сам файл выписки на этой странице.
+function egrnPlace(g, quote) {
+  const { btn: fixBtn, miss } = g.bad ? draftFix(g, quote, 'egrn-draft') : { btn: null, miss: el('p', { class: 'hidden' }) };
+  const fix = fixBtn ? [fixBtn] : [];
   const box = el('div', { class: 'ai-egrn hidden', 'data-role': 'egrn-place' },
     el('span', { class: 'ai-mark-where', text: `${g.file}, ${g.where}: ` }),
     el('q', { text: g.quote || 'строка не найдена — откройте файл' }),
@@ -173,7 +186,8 @@ function checkItem(order, r, c, hint) {
       el('span', { class: 'ai-mark-where', text: `${f.file}, ${f.where}: ` }),
       el('span', { text: f.text }),
       ...(f.quote ? [el('br'), el('q', { text: f.quote })] : []),
-      ...(f.egrn ? egrnPlace(f.egrn, f.quote) : []))))] : []),
+      ...(f.egrn ? egrnPlace(f.egrn, f.quote) : []),
+      ...(f.fix ? mineFix(f.fix, f.quote) : []))))] : []),
     // Отмеченные места: цитата из отчёта, файл и страница — сервер показывает только найденные в тексте цитаты.
     ...(hint?.marks?.length ? [el('ul', { class: 'ai-marks' }, ...hint.marks.map((m) => el('li', {},
       el('span', { class: 'ai-mark-where', text: `${m.file}, ${m.where}: ` }),
