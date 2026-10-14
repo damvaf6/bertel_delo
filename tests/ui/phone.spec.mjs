@@ -1110,6 +1110,7 @@ test('ИИ-проверка результата: специалист пере�
   await expect(areaFind.locator('[data-role="egrn-place"]')).toContainText('Выписка ЕГРН.txt, стр. 1: Площадь, м2: 47,3');
   // Черновика ещё нет — «Исправить в черновике» не показывается (2.229).
   await expect(areaFind.getByRole('button', { name: 'Исправить в черновике' })).toBeHidden();
+  await expect(req.locator('.ai-found li').filter({ hasText: 'Дата оценки в отчёте 01.10.2026' }).getByRole('button', { name: 'Исправить в черновике' })).toBeHidden();
   const cadFind = ident.locator('.ai-found li').filter({ hasText: 'Кадастровый номер 77:01:0001001:1234' });
   await cadFind.getByRole('button', { name: 'Выписка ЕГРН, стр. 1' }).click();
   await expect(cadFind.locator('[data-role="egrn-place"]')).toContainText('Кадастровый номер: 77:01:0001001:4321');
@@ -1161,6 +1162,14 @@ test('ИИ-проверка результата: специалист пере�
   await expect(cadFind.locator('[data-role="egrn-draft-miss"]')).toHaveText('В тексте черновика «77:01:0001001:1234» нет — исправьте в файле отчёта (в выписке: 77:01:0001001:4321).');
   await cadFind.locator('[data-role="egrn-draft-miss"]').scrollIntoViewIfNeeded();
   await shot(sp, '54n-specialist-net-v-chernovike');
+  // 2.231: у находки, сверенной с заданием на оценку, — тоже «Исправить в черновике»: дата оценки, которая разошлась с заданием.
+  const dateFind = req.locator('.ai-found li').filter({ hasText: 'Дата оценки в отчёте 01.10.2026' });
+  await draftText.fill(`${await draftText.inputValue()}\nОценка выполнена по состоянию на «01» октября 2026 г.`);
+  await dateFind.getByRole('button', { name: 'Исправить в черновике' }).click();
+  await expect(draftText).toBeFocused();
+  expect(await draftText.evaluate((t) => t.value.slice(t.selectionStart, t.selectionEnd))).toBe('«01» октября 2026');
+  await expect(sp.locator('#draft-msg')).toHaveText('Выделено ««01» октября 2026» — в задании на оценку «Задание на оценку.txt»: 03.10.2026. Исправьте и сохраните черновик, затем соберите Word заново.');
+  await shot(sp, '54o-specialist-ispravit-datu-v-chernovike');
   expect((await sp.request.patch('/api/me', { data: { full_name: 'Тестов Эксперт ИИ' }, headers: H })).status()).toBe(200);
   await sp.reload();
   const asked = new Promise((ok) => sp.once('dialog', (d) => { ok(d.message()); d.accept(); }));
