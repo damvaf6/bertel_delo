@@ -274,8 +274,8 @@ export function aiOps() {
         const signedOn = Object.fromEntries(signs.map((r) => [r.document_id, r.day]));
         // 2.198: дата оценки в отчёте — как в задании на оценку, письме или определении суда, приложенных к делу.
         const assignment = names.includes('value_date') ? await assignmentDocs(sql, providers.storage, order) : [];
-        // 2.202, 2.203: площадь и кадастровый номер объекта в отчёте — как в выписке ЕГРН из дела; 2.223 — год постройки и стены.
-        const egrn = names.includes('area_match') || names.includes('cadastral_match') || names.includes('floor_match') || names.includes('building_match') || names.includes('address_match') ? await egrnDocs(sql, providers.storage, order) : [];
+        // 2.202, 2.203: площадь и кадастровый номер объекта в отчёте — как в выписке ЕГРН из дела; 2.223 — год постройки и стены; 2.233 — кадастровая стоимость.
+        const egrn = names.includes('area_match') || names.includes('cadastral_match') || names.includes('floor_match') || names.includes('building_match') || names.includes('cad_value_match') || names.includes('address_match') ? await egrnDocs(sql, providers.storage, order) : [];
         const auto = runAutoChecks(names, files, { fields: order.fields ?? {}, dossier, basis, service: order.service, analogs, inspectionDays, inspectionUploadDays, signedOn, assignment, egrn, today: dossier.today });
         const found = Object.fromEntries(rules.map((r) => [r.id, (r.auto ?? []).flatMap((a) => auto[a] ?? [])]));
         // Модель недоступна или лимит исчерпан, но автоматические находки есть — показываем их, а не ошибку.
