@@ -304,6 +304,7 @@ export async function orgPart(sql, org, registry, today, { actorId = null } = {}
     reason: handovers.get(o.id).reason, requested_at: handovers.get(o.id).requested_at,
     away_until: o.status === 'in_work' && awayDeadline(o, today) ? o.away_until : null,
     extend_declined: !ext.get(o.id) && declined.has(o.id), can_transfer: askMates.get(o.id) ?? false,
+    extend_asked: !!ext.get(o.id),
   }));
   // Эксперт не принимает дела до … (2.113): его дела в работе со сроком раньше дня возвращения — в отпуске он их не сдаст.
   // Уже попросил передать сам — такие дела только в «просит передать».

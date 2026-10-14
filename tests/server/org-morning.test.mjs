@@ -86,7 +86,7 @@ test('после 8:00 — одна сводка каждому руководи�
   // нигде не звучат.
   const feed = (await head.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня по организации'));
   assert.equal(feed.length, 1);
-  assert.equal(feed[0].title, 'На сегодня по организации: 1 дело ждёт подписи организации, 1 просьба передать дело, у экспертов сдать сегодня 1 дело, 1 дело с прошедшим сроком');
+  assert.equal(feed[0].title, 'На сегодня по организации: 1 дело ждёт подписи организации, 1 просьба передать дело (передать некому: 1), у экспертов сдать сегодня 1 дело, 1 дело с прошедшим сроком');
   assert.deepEqual([feed[0].section, feed[0].order_id, feed[0].order_ref], [`org=${org.id}&to=week`, null, null]);
   const [sms] = await S.sql`select d.body from notification_deliveries d join notifications n on n.id = d.notification_id
                             where n.user_id = ${head.user.id} and n.event = 'org_morning_today'`;
@@ -366,10 +366,80 @@ test('срок в дни, когда эксперт не принимает де
   assert.deepEqual({ ...r }, { sign: 0, handover: 1, due: 0, overdue: 0, idle: 0, returned: 0, fresh: 0, away: 1 });
   const feed = (await h.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня по организации'));
   assert.equal(feed.length, 1);
-  assert.equal(feed[0].title, 'На сегодня по организации: 1 просьба передать дело, у 1 дела срок в дни, когда эксперт не принимает дела');
-  assert.equal(feed[0].section, `org=${o6.id}&to=away`);
+  // Эксперт в организации один — передать некому (2.228): сводка ведёт к отбору «Просят передать — передать некому».
+  assert.equal(feed[0].title, 'На сегодня по организации: 1 просьба передать дело (передать некому: 1), у 1 дела срок в дни, когда эксперт не принимает дела');
+  assert.equal(feed[0].section, `org=${o6.id}&to=stuck`);
   assert.doesNotMatch(JSON.stringify(feed), /В отпуске|Позже отпуска|Просит передать|Буду в отпуске|отпуск\b|Отпускной/);
   // Эксперту в «Делах экспертов» руководителя то же дело — с пометкой.
   const cases = (await h.req('GET', `/api/orgs/${o6.id}/cases`)).body.cases;
   assert.equal(cases.filter((c) => c.away && !c.handover).length, 2, 'в отборе — оба, у одного видна просьба о переносе');
+});
+
+test('просят передать, а передать некому (2.228): число таких просьб — в скобках у просьб передать дело; есть кому передать или уже просят перенос — не считаются; ведёт к отбору «Просят передать — передать некому»', async () => {
+  assert.equal(orgDigestText({ sign: 0, handover: 1, stuck: 1, due: 0, overdue: 0, idle: 0, returned: 0, fresh: 0, away: 0 }),
+    'На сегодня по организации: 1 просьба передать дело (передать некому: 1)');
+  assert.equal(orgDigestText({ sign: 0, handover: 3, stuck: 0, due: 0, overdue: 0, idle: 0, returned: 0, fresh: 0, away: 0 }),
+    'На сегодня по организации: 3 просьбы передать дело');
+  assert.equal(orgDigestTo({ sign: 1, handover: 1, stuck: 1, due: 0, overdue: 0, idle: 0, returned: 0, fresh: 0, away: 2 }), 'stuck');
+  assert.equal(orgDigestTo({ sign: 0, handover: 2, stuck: 0, due: 0, overdue: 0, idle: 0, returned: 0, fresh: 0, away: 0 }), 'handover');
+  assert.equal(orgDigestTo({ sign: 0, handover: 1, stuck: 1, due: 0, overdue: 1, idle: 0, returned: 0, fresh: 0, away: 0 }), 'overdue');
+
+  // Одна организация — один эксперт: передать некому. «Некому» — просит передать (считается), «Уже перенос» — эксперт сам
+  // попросил перенос, потом передать (не считается), «Руководитель попросил» — руководитель уже попросил диспетчера перенести
+  // срок (просьба передать закрыта — не считается вовсе).
+  const h = await login(S, '+79990003841');
+  const e = await login(S, '+79990003842');
+  const o7 = await makeOrg(S.sql, 'ООО «Одинокая оценка»');
+  await addMember(S.sql, o7.id, h.user.id, 'head');
+  await makeSpecialist(S.sql, e.user.id);
+  await addMember(S.sql, o7.id, e.user.id, 'member');
+  assert.equal((await e.req('PATCH', '/api/specialist/me', { org_id: o7.id })).status, 200);
+  // Вторая организация — два эксперта: передать есть кому, просьба считается, «некому» — нет.
+  const h2 = await login(S, '+79990003843');
+  const a = await login(S, '+79990003844');
+  const b = await login(S, '+79990003845');
+  const o8 = await makeOrg(S.sql, 'ООО «Дружная оценка»');
+  await addMember(S.sql, o8.id, h2.user.id, 'head');
+  for (const x of [a, b]) {
+    await makeSpecialist(S.sql, x.user.id);
+    await addMember(S.sql, o8.id, x.user.id, 'member');
+    assert.equal((await x.req('PATCH', '/api/specialist/me', { org_id: o8.id })).status, 200);
+  }
+  const make = async (who, title, days) => {
+    const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
+    assert.equal((await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: addDays(today, 15), fields: FIELDS })).status, 200);
+    assert.equal((await owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
+    await ensurePaid(S.sql, o.id);
+    assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: who.user.id, from: 'matching' })).status, 200);
+    assert.equal((await who.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+    await S.sql`update orders set deadline = ${addDays(today, days)}::date where id = ${o.id}`;
+    return o;
+  };
+  const alone = await make(e, 'Дело без замены', 6);
+  assert.equal((await e.req('POST', `/api/orders/${alone.id}/handover`, { reason: 'Заболел' })).status, 201);
+  const asked = await make(e, 'Уже перенос', 7);
+  assert.equal((await e.req('POST', `/api/orders/${asked.id}/deadline-requests`, { new_deadline: addDays(today, 14), reason: 'Заболел' })).status, 201);
+  assert.equal((await e.req('POST', `/api/orders/${asked.id}/handover`, { reason: 'Заболел' })).status, 201);
+  const byHead = await make(e, 'Руководитель попросил', 8);
+  assert.equal((await e.req('POST', `/api/orders/${byHead.id}/handover`, { reason: 'Заболел' })).status, 201);
+  assert.equal((await h.req('POST', `/api/orgs/${o7.id}/cases/${byHead.id}/handover/extend`,
+    { new_deadline: addDays(today, 15), reason: 'Передать некому — просим перенести срок', from: addDays(today, 8) })).status, 201);
+  const mates = await make(a, 'Есть кому', 6);
+  assert.equal((await a.req('POST', `/api/orders/${mates.id}/handover`, { reason: 'Заболел' })).status, 201);
+
+  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(today, '08:30') }) >= 2);
+  const [r] = await S.sql`select handover, stuck from org_morning_digests where user_id = ${h.user.id} and org_id = ${o7.id}`;
+  assert.deepEqual({ ...r }, { handover: 2, stuck: 1 });
+  const [r2] = await S.sql`select handover, stuck from org_morning_digests where user_id = ${h2.user.id} and org_id = ${o8.id}`;
+  assert.deepEqual({ ...r2 }, { handover: 1, stuck: 0 });
+  const feed = (await h.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня по организации'));
+  assert.equal(feed.length, 1);
+  assert.match(feed[0].title, /^На сегодня по организации: 2 просьбы передать дело \(передать некому: 1\)/);
+  assert.equal(feed[0].section, `org=${o7.id}&to=stuck`);
+  assert.doesNotMatch(JSON.stringify(feed), /Дело без замены|Уже перенос|Заболел/);
+  const feed2 = (await h2.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня по организации'));
+  assert.equal(feed2[0].section, `org=${o8.id}&to=handover`);
+  // В «Делах экспертов» — те же дела под отбор: просит передать, передать некому, перенос не просят.
+  const cases = (await h.req('GET', `/api/orgs/${o7.id}/cases`)).body.cases;
+  assert.deepEqual(cases.filter((c) => c.handover && !c.transfer_to.length && !c.extend).map((c) => c.id), [alone.id]);
 });
