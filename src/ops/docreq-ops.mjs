@@ -6,7 +6,7 @@
 // Выписка ЕГРН в деле старше 30 дней на дату оценки (2.224) — исполнителю подсказка запросить свежую одной кнопкой.
 import { HttpError } from '../http/core.mjs';
 import { FINAL, todayMsk } from '../orders/workflow.mjs';
-import { assignmentValue, egrnIssued } from '../ai/report-checks.mjs';
+import { assignmentValue, egrnIssued, egrnOnObject } from '../ai/report-checks.mjs';
 import { assignmentDocs, egrnDocs } from './ai-ops.mjs';
 import { LEVEL, orderLevel, orderSides } from '../access/policy.mjs';
 import { customersOf, notify } from '../notify/notify.mjs';
@@ -38,7 +38,8 @@ async function requestOf(sql, order, raw) {
 export async function egrnOld(sql, storage, registry, order, today = todayMsk()) {
   if (order.status !== 'in_work' || !storage) return null;
   if (!registry.requestDocs(order.module, order.service, order.basis_kind).some((c) => c.id === 'egrn')) return null;
-  const docs = await egrnDocs(sql, storage, order);
+  // Выписка на дом при оценке квартиры (и наоборот) свежесть не решает (2.230).
+  const docs = egrnOnObject(await egrnDocs(sql, storage, order), order);
   const issued = egrnIssued(docs);
   // Последняя загруженная выписка без распознанной даты (заказчик прислал свежую не тем видом) — не судим.
   if (!issued.length || !issued.some((x) => x.id === docs[0].id)) return null;

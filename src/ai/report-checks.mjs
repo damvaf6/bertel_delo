@@ -592,6 +592,26 @@ function egrnDayIn(text) {
   }
   return days.sort().at(-1) ?? null;
 }
+// 2.230: выписки на сам объект оценки — для свежести (2.224). При оценке квартиры, комнаты, доли или нежилого помещения
+// выписка на здание или участок не в счёт, при оценке дома — на помещение; вид не распознан — в счёт. Выписок на сам объект
+// нет — судим по всем, как раньше.
+const EGRN_KIND_AT = /вид\s+объекта(?:\s+недвижимости)?\s*[:\-–—]?\s*([а-яё-]+)/iu;
+const PREMISES = ['flat', 'room', 'share', 'commercial'];
+function egrnKind(d) {
+  const m = (d.pages ?? []).slice(0, 2).join('\n').match(EGRN_KIND_AT);
+  if (!m) return null;
+  if (/^(?:помещени|машино)/iu.test(m[1])) return 'premises';
+  if (/^(?:здани|сооружени|многоквартир|объект)/iu.test(m[1])) return 'building';
+  return /^земельн/iu.test(m[1]) ? 'land' : null;
+}
+export function egrnOnObject(egrn, ctx) {
+  const type = ctx?.fields?.object_type;
+  if (ctx?.service !== 'realty' || !type) return egrn ?? [];
+  const wrong = PREMISES.includes(type) ? ['building', 'land'] : type === 'house' ? ['premises'] : [];
+  const mine = (egrn ?? []).filter((d) => !wrong.includes(egrnKind(d)));
+  return mine.length ? mine : egrn ?? [];
+}
+
 export function egrnIssued(egrn) {
   const out = [];
   for (const d of egrn ?? []) {

@@ -10003,3 +10003,201 @@ test('2.226: за 3 дня до дней «не принимаю дела» — 
   await it.scrollIntoViewIfNeeded();
   await shot(page, 'h4g-ekspert-sroki-skoro-otpusk');
 });
+
+// 2.230: прогон «как эксперт и руководитель» по пачке 2.221–2.229 — одна организация, одно дело. Выписка ЕГРН устарела —
+// эксперт запрашивает свежую, заказчик прикладывает (2.224); этаж и адрес в черновике — из выписки (2.222); владелец нажал
+// «Готово», сняв не всё, — своя подсказка к шагу (2.227); в отчёте другие год постройки и площадь — находки по выписке на дом
+// (2.223) и «Исправить в черновике» (2.229); руководитель у подписи видит расхождения (2.225); эксперт отмечает отпуск с
+// будущего дня — предупреждение (2.226) и просьба передать; передать некому — сводка руководителя (2.228) и просьба диспетчеру
+// перенести срок от организации (2.221).
+test('прогон 2.230: эксперт и руководитель по пачке 2.221–2.229 на одном деле', async ({ browser, baseURL }) => {
+  test.setTimeout(150_000);
+  const ru = (iso) => iso.split('-').reverse().join('.');
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), hp = await ctx(), cp = await ctx(), dp = await ctx();
+  const expert = await signIn(ep, '+79990023001'), head = await signIn(hp, '+79990023002');
+  const customer = await signIn(cp, '+79990023003'), disp = await signIn(dp, '+79990023004');
+  const orgName = `ООО «Прогон-8 ${Date.now() % 100000}»`;
+  const { orgId, A } = await db(async (c) => {
+    await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    const { rows: [org] } = await c.query('insert into organizations (name) values ($1) returning id', [orgName]);
+    await c.query("update users set full_name = 'Восьмов Илья' where id = $1", [expert.id]);
+    await c.query("update users set full_name = 'Главная Ада' where id = $1", [head.id]);
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now() - interval '1 year'), ($1, $3, 'member', now() - interval '1 year')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    await c.query("insert into morning_digests (user_id, day) values ($1, (now() at time zone 'Europe/Moscow')::date), ($2, (now() at time zone 'Europe/Moscow')::date)", [expert.id, head.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Восьмая пачка: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Восьмая ул., д. 8, кв. 8","area":"48"}') returning id`,
+    [customer.id, expert.id, inDays(6)]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now() - interval '2 days')", [o.id, expert.id]);
+    return { orgId: org.id, A: o.id };
+  });
+  const ref = `№ ${A.slice(0, 8).toUpperCase()}`;
+  const flat = (date) => Buffer.from(['Выписка из Единого государственного реестра недвижимости об объекте недвижимости',
+    `${ru(date)} № КУВИ-001/2026-88808880`, 'Вид объекта недвижимости: Помещение', 'Кадастровый номер: 77:08:0008008:8080',
+    'Площадь, м2: 47,3', 'Номер, тип этажа, на котором расположено помещение, машино-место: Этаж № 6',
+    'Адрес (местоположение): г. Москва, Восьмая ул., д. 8, кв. 8'].join('\n'));
+  const upDoc = async (data, name) => {
+    const r = await cp.request.post(`/api/orders/${A}/documents`, { data, headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } });
+    expect(r.status()).toBe(201);
+    return (await r.json()).document.id;
+  };
+  // Заказчик: выписка на квартиру — 40 дней назад; выписка на дом.
+  await upDoc(flat(inDays(-40)), 'Выписка ЕГРН.txt');
+  await upDoc(Buffer.from(['Выписка из Единого государственного реестра недвижимости', 'Вид объекта недвижимости: Здание',
+    'Год ввода в эксплуатацию по завершении строительства: 1984', 'Материал наружных стен: Панельные'].join('\n')), 'Выписка ЕГРН дом.txt');
+
+  // Эксперт: «Сегодня» — выписка устарела, свежая запрашивается прямо здесь (2.224).
+  await ep.goto('/kabinet');
+  const old = ep.locator('li[data-today-item="egrn-old"]').filter({ hasText: 'Восьмая пачка: квартира' });
+  await expect(old.locator('[data-role="egrn-old-why"]')).toContainText('старше 30 дней');
+  await old.scrollIntoViewIfNeeded();
+  await shot(ep, 'c86-progon8-ekspert-vypiska-ustarela');
+  await old.getByRole('button', { name: 'Запросить свежую выписку' }).click();
+  await expect(old.locator('[data-role="egrn-fresh-msg"]')).toHaveText('Запрошено — заказчику отправлено уведомление');
+
+  // Заказчик прикладывает свежую выписку к просьбе.
+  await cp.goto(`/kabinet#order=${A}&to=docs`);
+  const asked = cp.locator('#docreq-list li').filter({ hasText: 'Выписка из ЕГРН' });
+  await expect(asked).toContainText(`Выписка ЕГРН в деле от ${ru(inDays(-40))}`);
+  await cp.getByLabel('Файл: Выписка из ЕГРН').setInputFiles({ name: 'Выписка ЕГРН свежая.txt', mimeType: 'text/plain', buffer: flat(inDays(-2)) });
+  await expect(asked).toContainText('Выписка ЕГРН свежая.txt');
+  await asked.scrollIntoViewIfNeeded();
+  await shot(cp, 'c87-progon8-zakazchik-svezhaya-vypiska');
+  await ep.goto('/kabinet');
+  await expect(ep.locator('li[data-today-item="egrn-old"]').filter({ hasText: 'Восьмая пачка: квартира' })).toHaveCount(0);
+
+  // Черновик: площадь, этаж и адрес — из выписки (2.211, 2.222).
+  await ep.goto(`/kabinet#order=${A}`);
+  await expect(ep.locator('#docreq-egrn')).toBeHidden();
+  await ep.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const draftText = ep.getByLabel('Текст заключения');
+  await expect(draftText).toHaveValue(/\| Площадь, кв\. м \| 47,3 \(по выписке ЕГРН; в заявке — 48\)/);
+  await expect(draftText).toHaveValue(/\| Адрес объекта \| г\. Москва, Восьмая ул\., д\. 8, кв\. 8 \(по выписке ЕГРН[^|]*\|/);
+  await expect(ep.locator('#draft-state')).toContainText('Этаж / этажей в доме 6 — как в выписке ЕГРН');
+  await ep.locator('#draft-state').scrollIntoViewIfNeeded();
+  await shot(ep, 'c88-progon8-ekspert-chernovik-egrn');
+
+  // Осмотр: владелец снял фасад и нажал «Готово»; эксперт просит доснять со своей подсказкой к шагу (2.227).
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]), Buffer.from('JFIF-2230')]);
+  const issued = await ep.request.post(`/api/orders/${A}/inspection`, { data: { days: 3 }, headers: H });
+  expect(issued.status()).toBe(201);
+  const token = (await issued.json()).path.split('#')[1];
+  expect((await cp.request.post('/api/inspect/photos', { data: jpeg, headers: { ...H, 'x-inspect-token': token, 'content-type': 'image/jpeg', 'x-step': 'facade' } })).status()).toBe(201);
+  expect((await cp.request.post('/api/inspect/finish', { data: {}, headers: { ...H, 'x-inspect-token': token } })).status()).toBe(200);
+  await ep.goto('/kabinet');
+  await ep.locator('[data-today-item="inspect-incomplete"]', { hasText: 'Восьмая пачка: квартира' }).click();
+  const ibox = ep.locator('#inspect-box');
+  await ibox.getByLabel('Санузел и ванная — подсказка владельцу').fill('Санузел целиком, с трубами и счётчиками');
+  await ep.locator('#inspect-phone').fill('+79990023005');
+  await ibox.locator('#inspect-ask-missing').click();
+  await expect(ep.locator('#inspect-msg')).toContainText('Ссылка отправлена СМС на');
+  await expect(ibox.locator('#inspect-steps li[data-step="bathroom"]')).toContainText('Попросили переснять: Санузел целиком, с трубами и счётчиками');
+  const octx = await phoneContext(browser, baseURL);
+  const op = await octx.newPage();
+  await op.goto(await ep.locator('#inspect-url').textContent());
+  await op.getByRole('button', { name: 'Начать: разрешить определение места' }).click();
+  await expect(op.locator('#steps li[data-step="bathroom"]')).toContainText('Эксперт просит снять: Санузел целиком, с трубами и счётчиками');
+  await op.locator('#steps li[data-step="bathroom"]').scrollIntoViewIfNeeded();
+  await shot(op, 'c89-progon8-vladelec-podskazka');
+  await octx.close();
+
+  // Отчёт: год постройки и материал не как в выписке на дом (2.223), площадь не как в выписке; в черновике — та же площадь.
+  const up = await ep.request.post(`/api/orders/${A}/results`, {
+    data: Buffer.from(['ОТЧЁТ ОБ ОЦЕНКЕ № 8/2026', 'Адрес объекта оценки: г. Москва, Восьмая ул., д. 8, кв. 8', 'Дата оценки: 10.10.2026',
+      'Общая площадь, кв. м: 45,1', 'Кадастровый номер 77:08:0008008:8080', 'Этаж: 6', 'Год постройки: 1975', 'Материал стен: кирпич',
+      'Итоговая стоимость 11 000 000 руб.'].join('\n')),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Отчёт Восьмова.txt') },
+  });
+  expect(up.status()).toBe(201);
+  const resultId = (await up.json()).document.id;
+  await ep.goto(`/kabinet#order=${A}`);
+  await draftText.fill(`${await draftText.inputValue()}\nОбщая площадь квартиры 45,1 кв. м.`);
+  await ep.getByRole('button', { name: 'Сохранить правку' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Правка сохранена');
+  await ep.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(ep.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  const ident = ep.locator('#review-checks > li[data-check="realty_identity"]');
+  await expect(ident).toContainText('Год постройки 1975 не совпадает с выпиской ЕГРН «Выписка ЕГРН дом.txt» (1984');
+  await expect(ident).toContainText('Материал стен «кирпич» не совпадает с выпиской ЕГРН «Выписка ЕГРН дом.txt» («Панельные»');
+  await ident.getByText('Год постройки 1975').scrollIntoViewIfNeeded();
+  await shot(ep, 'c90-progon8-ekspert-ii-god-material');
+  const areaFind = ident.locator('.ai-found li').filter({ hasText: 'Площадь 45,1 кв. м' });
+  await areaFind.getByRole('button', { name: /^Выписка ЕГРН/ }).click();
+  await areaFind.getByRole('button', { name: 'Исправить в черновике' }).click();
+  await expect(draftText).toBeFocused();
+  expect(await draftText.evaluate((t) => t.value.slice(t.selectionStart, t.selectionEnd))).toBe('45,1');
+  await expect(ep.locator('#draft-msg')).toHaveText('Выделено «45,1» — в выписке ЕГРН: 47,3. Исправьте и сохраните черновик, затем соберите Word заново.');
+  await shot(ep, 'c91-progon8-ekspert-ispravit-v-chernovike');
+  expect((await ep.request.post(`/api/documents/${resultId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+
+  // Руководитель: у файла на подпись — расхождения с выпиской ЕГРН (2.225).
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const item = hp.locator('#org-sign > li[data-item]').filter({ hasText: 'Отчёт Восьмова.txt' });
+  await expect(item.locator('[data-role="ai-egrn"]')).toContainText('Расхождения с выпиской ЕГРН (');
+  await expect(item.locator('[data-role="ai-egrn"]')).toContainText('Площадь 45,1 кв. м не совпадает с площадью в выписке ЕГРН (47,3 кв. м)');
+  await expect(item.locator('[data-role="ai-egrn"]')).toContainText('Год постройки 1975');
+  await item.locator('[data-role="ai-egrn"]').scrollIntoViewIfNeeded();
+  await shot(hp, 'c92-progon8-rukovoditel-raskhozhdeniya');
+
+  // Эксперт: отпуск с 3-го дня — срок дела в эти дни; предупреждение (2.226) ведёт к «Моим срокам» → «Передать коллеге».
+  await ep.goto('/kabinet#specialist');
+  await ep.locator('#specialist-away-from').fill(inDays(3));
+  await ep.locator('#specialist-away-until').fill(inDays(10));
+  await ep.locator('#specialist-away-note').fill('отпуск');
+  await ep.locator('#specialist-away-set').click();
+  await expect(ep.locator('#specialist-away-now')).toContainText('Вы не принимаете новые дела с ');
+  // Предупреждение рассылается раз в минуту на сервере; здесь — запись напрямую (как в 2.226).
+  await db((c) => c.query("insert into notifications (user_id, type, event) values ($1, 'executor_work', 'away_soon')", [expert.id]));
+  await ep.goto('/kabinet#notifications');
+  await ep.locator('#notifications li').filter({ hasText: 'Скоро Ваши дни «не принимаю дела»' }).getByRole('button').click();
+  await expect(ep).toHaveURL(/#specialist&to=schedule$/);
+  const it = ep.locator(`#schedule-days > li[data-day="${inDays(6)}"] li[data-schedule-item="deadline"]`);
+  await expect(it).toContainText('срок в дни, когда Вы не принимаете новые дела');
+  await it.scrollIntoViewIfNeeded();
+  await shot(ep, 'c93-progon8-ekspert-sroki-otpusk');
+  await it.locator(`[data-ask-handover="${A}"]`).click();
+  await expect(ep.locator('#handover-reason')).toBeFocused();
+  await ep.locator('#handover-reason').fill('Отпуск с семьёй, билеты куплены');
+  await ep.locator('#handover-form button[type="submit"]').click();
+  await expect(ep.locator('#handover-msg')).toContainText('Просьба отправлена руководителю');
+
+  // Руководитель: утренняя сводка — «передать некому: 1» (2.228), к отбору и кнопке; просьба диспетчеру от организации (2.221).
+  await db(async (c) => {
+    const { rows: [n] } = await c.query("insert into notifications (user_id, type, event, org_id) values ($1, 'org_morning', 'org_morning_today', $2) returning id", [head.id, orgId]);
+    await c.query(`insert into org_morning_digests (user_id, org_id, day, sign, handover, stuck, notification_id)
+      values ($1, $2, (now() at time zone 'Europe/Moscow')::date, 1, 1, 1, $3)`, [head.id, orgId, n.id]);
+  });
+  await hp.goto('/kabinet#notifications');
+  const morning = hp.locator('#notifications li').first();
+  await expect(morning).toContainText('1 просьба передать дело (передать некому: 1)');
+  await expect(morning).not.toContainText('билеты');
+  await morning.getByRole('button').click();
+  await expect(hp).toHaveURL(new RegExp(`#org=${orgId}&to=stuck$`));
+  const row = hp.locator(`#org-cases > li[data-case="${ref}"]`);
+  await expect(row.locator('[data-handover]')).toContainText('Передать некому');
+  await expect(hp.locator(`[data-handover-extend-reason="${ref}"]`)).not.toHaveValue(/билеты/);
+  await expect(row.locator('[data-action="handover-extend"]')).toBeFocused();
+  await row.scrollIntoViewIfNeeded();
+  await shot(hp, 'c94-progon8-rukovoditel-peredat-nekomu');
+  await row.locator('[data-action="handover-extend"]').click();
+  await expect(hp.locator('#org-cases-msg')).toContainText('Диспетчеру отправлена просьба перенести срок от организации');
+
+  // Диспетчер видит, что просит организация; эксперт — что руководитель попросил перенос.
+  await dp.goto('/kabinet');
+  const ext = dp.locator('#today-box li[data-today-item="d-extend"]').filter({ hasText: 'Восьмая пачка: квартира' });
+  await expect(ext).toContainText(`просит организация «${orgName}»`);
+  await ext.scrollIntoViewIfNeeded();
+  await shot(dp, 'c95-progon8-dispetcher-prosit-organizaciya');
+  // Эксперт: уведомление ведёт к сроку дела — там просьба организации; в «Передать дело коллеге» — что попросил руководитель.
+  await ep.goto('/kabinet#notifications');
+  await ep.locator('#notifications li').filter({ hasText: 'руководитель организации попросил диспетчера перенести срок' }).getByRole('button').click();
+  await expect(ep.locator('#deadline-open-text')).toContainText(`Просьба организации «${orgName}» (передать дело некому)`);
+  await expect(ep.locator('#handover-extend')).toContainText('ждёт ответа диспетчера');
+  await ep.locator('#deadline-open-text').scrollIntoViewIfNeeded();
+  await shot(ep, 'c96-progon8-ekspert-rukovoditel-poprosil');
+  for (const p of [ep, hp, cp, dp]) await p.context().close();
+});

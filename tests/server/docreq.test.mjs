@@ -256,6 +256,18 @@ test('2.224: выписка ЕГРН старше 30 дней на дату оц
   assert.equal((await putDoc(o, 'Выписка из ЕГРН\nВид объекта недвижимости: Помещение', 'Выписка ЕГРН скан.txt')).status, 201);
   assert.equal((await list(o)).body.egrn_old, null);
 
+  // 2.230: выписка на дом при оценке квартиры свежесть не решает — ни свежая, ни загруженная последней без даты.
+  const o4 = await inWork('Квартира: старая выписка и выписка на дом');
+  assert.equal((await spec.req('POST', `/api/orders/${o4.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  assert.equal((await putDoc(o4, egrnText(old), 'Выписка ЕГРН.txt')).status, 201);
+  assert.equal((await putDoc(o4, 'Выписка из ЕГРН\nВид объекта недвижимости: Здание\nМатериал наружных стен: Панельные', 'Выписка ЕГРН дом.txt')).status, 201);
+  assert.equal((await list(o4)).body.egrn_old?.day, old);
+  assert.equal((await putDoc(o4, egrnText(addDays(today, -2)).replace('Помещение', 'Здание'), 'Выписка ЕГРН дом свежая.txt')).status, 201);
+  assert.equal((await list(o4)).body.egrn_old?.name, 'Выписка ЕГРН.txt');
+  // Свежая выписка на квартиру — подсказки нет.
+  assert.equal((await putDoc(o4, egrnText(addDays(today, -1)), 'Выписка ЕГРН квартира.txt')).status, 201);
+  assert.equal((await list(o4)).body.egrn_old, null);
+
   // Машина — выписки ЕГРН в списке услуги нет.
   const v = await inWork('Машина: выписка ни при чём', 'vehicle', { purpose: 'deal', region: 'moscow', vehicle_type: 'car', make_model: 'Лада Веста', year: 2020 });
   assert.equal((await spec.req('POST', `/api/orders/${v.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
