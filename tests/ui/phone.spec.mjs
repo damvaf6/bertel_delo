@@ -10221,7 +10221,9 @@ test('прогон 2.230: эксперт и руководитель по пач
   await db(async (c) => {
     const { rows: [n] } = await c.query("insert into notifications (user_id, type, event, org_id) values ($1, 'org_morning', 'org_morning_today', $2) returning id", [head.id, orgId]);
     await c.query(`insert into org_morning_digests (user_id, org_id, day, sign, handover, stuck, notification_id)
-      values ($1, $2, (now() at time zone 'Europe/Moscow')::date, 1, 1, 1, $3)`, [head.id, orgId, n.id]);
+      values ($1, $2, (now() at time zone 'Europe/Moscow')::date, 1, 1, 1, $3)
+      on conflict (user_id, org_id, day) do update set sign = 1, handover = 1, stuck = 1, due = 0, overdue = 0, idle = 0, returned = 0, fresh = 0, away = 0,
+        notification_id = excluded.notification_id`, [head.id, orgId, n.id]);
   });
   await hp.goto('/kabinet#notifications');
   const morning = hp.locator('#notifications li').first();
