@@ -16,6 +16,7 @@ import { openExtends } from './deadline-ops.mjs';
 import { extendSuggest, openHandovers } from './handover-ops.mjs';
 import { orgSchedule } from '../orders/schedule.mjs';
 import { expiringLinks, incompleteInspections } from './inspect-ops.mjs';
+import { docsWaiting } from './docreq-ops.mjs';
 
 export const INVITE_TTL_DAYS = 14;
 export const LIMITS = {
@@ -295,11 +296,14 @@ export function orgOps() {
           const [exp] = await expiringLinks(sql, { order: o.id });
           if (exp) inspections.set(o.id, { kind: 'expiring', at: exp.expires_at, photos: exp.photos });
         }
+        // Ждём документы от заказчика (2.235): почему дело стоит — эксперт запросил документы, а заказчик ещё не прислал.
+        const docs = await docsWaiting(sql, rows);
         const cases = rows.map((o) => ({
           ...(waits.get(o.id) ?? { sign_wait: 0, sign_since: null, sign_reminded_at: null, returned_open: false, returned: null }),
           remind: reminds.get(o.id) ?? null,
           last_move: moves.get(o.id) ?? null,
           inspection: inspections.get(o.id) ?? null,
+          docs_wait: docs.get(o.id) ?? null,
           idle: !!moves.get(o.id)?.idle,
           extend: ext.get(o.id) ?? null,
           // Передать некому и перенос ещё не просят (2.221): готовые новый срок и причина для просьбы к диспетчеру от организации.

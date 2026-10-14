@@ -81,6 +81,22 @@ export async function docWait(sql, order, now = new Date()) {
   };
 }
 
+// Ждём документы от заказчика (2.235) — руководителю в «Делах экспертов»: по делам в работе неполученные запросы с любого
+// дня (что ждём, с какого дня самый старый, когда эксперт напоминал); `long` — ждём дольше ${DOC_WAIT_DAYS} дней.
+export async function docsWaiting(sql, orders, now = new Date()) {
+  const ids = orders.filter((o) => o.status === 'in_work').map((o) => o.id);
+  if (!ids.length) return new Map();
+  const rows = await sql`
+    select r.order_id, array_agg(r.title order by r.requested_at, r.id) as titles, min(r.requested_at) as since,
+           (select max(m.created_at) from doc_reminders m where m.order_id = r.order_id and m.created_at >= min(r.requested_at)) as reminded_at
+    from doc_requests r where r.order_id = any(${ids}::uuid[]) and r.cancelled_at is null and r.fulfilled_at is null
+    group by r.order_id`;
+  return new Map(rows.map((r) => {
+    const days = Math.max(0, Math.floor((now.getTime() - new Date(r.since).getTime()) / 86400_000));
+    return [r.order_id, { titles: r.titles, since: r.since, days, long: days >= DOC_WAIT_DAYS, reminded_at: r.reminded_at ?? null }];
+  }));
+}
+
 // Пояснение заказчику к просьбе о свежей выписке — сразу видно, почему старая не годится.
 export const egrnOldNote = (o) => `Выписка ЕГРН в деле от ${o.day.split('-').reverse().join('.')} — старше ${EGRN_FRESH_DAYS} дней на ${o.on_value ? 'дату оценки' : 'сегодня'}. Нужна свежая выписка: закажите её на Госуслугах или в МФЦ и загрузите сюда.`;
 

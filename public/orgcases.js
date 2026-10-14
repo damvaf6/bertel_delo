@@ -57,6 +57,8 @@ const FILTERS = [
   { id: 'away', text: 'Эксперт не принимает дела — срок в эти дни', test: (c) => !!c.away && !c.handover },
   { id: 'inspect', text: 'Осмотр не закончен', test: (c) => !!c.inspection },
   { id: 'idle', text: 'Без движения', test: (c) => c.idle },
+  // 2.235: эксперт запросил документы у заказчика, а их ещё нет — почему дело стоит.
+  { id: 'docs', text: 'Ждём документы от заказчика', test: (c) => !!c.docs_wait },
   { id: 'sign', text: 'Ждёт моей подписи', test: (c) => c.sign_wait > 0 },
   { id: 'returned', text: 'Вернул эксперту', test: (c) => c.returned_open },
   { id: 'fresh', text: 'Исправленный файл ждёт подписи эксперта', test: (c) => !!c.returned?.fresh_file },
@@ -145,6 +147,7 @@ function renderCases() {
   // «Исправленный файл ждёт подписи эксперта» (2.171): дольше всех ждущие — первыми.
   if (filter === 'fresh') active.sort((a, b) => new Date(a.returned.fresh_file.at) - new Date(b.returned.fresh_file.at));
   // «Эксперт не принимает дела — срок в эти дни» (2.209): ближайший срок — первым.
+  if (filter === 'docs') active.sort((a, b) => new Date(a.docs_wait.since) - new Date(b.docs_wait.since));
   if (filter === 'away') active.sort((a, b) => String(a.deadline).localeCompare(String(b.deadline)));
   if (filter === 'inspect') active.sort((a, b) => (a.inspection.kind === b.inspection.kind
     ? new Date(a.inspection.at) - new Date(b.inspection.at) : a.inspection.kind === 'incomplete' ? -1 : 1));
@@ -226,6 +229,7 @@ function caseItem(org, c) {
     // Передать некому (2.201): одной кнопкой — эксперту уведомление, дело откроется на просьбе о переносе с готовой причиной.
     ...(c.away && !c.handover && !c.transfer_to?.length && !c.extend && c.remind ? [remindRow(org, c, 'extend')] : []),
     ...(c.inspection ? [inspectRow(c)] : []),
+    ...(c.docs_wait ? [docsRow(c)] : []),
     ...(c.last_move ? [moveRow(c)] : []),
     ...(c.remind ? [remindRow(org, c)] : []),
     ...(c.handover && c.status === 'in_work' ? [handoverBlock(org, c)] : []),
@@ -272,6 +276,16 @@ function inspectRow({ inspection: i }) {
     : `Осмотр не закончен: ссылка владельцу перестанет действовать ${timeRu(i.at)}, а «Готово» не нажато${i.photos
       ? ` (фото пришло: ${i.photos})` : ' — фото ещё нет'}.`;
   return el('div', { class: i.kind === 'incomplete' ? 'notice-warn' : 'muted', 'data-role': 'inspect', text });
+}
+
+// Ждём документы от заказчика (2.235): что запросил эксперт, сколько дней ждём самый старый, напоминал ли заказчику (2.234).
+// Три дня и дольше — заметно: дело стоит не по вине эксперта.
+function docsRow({ docs_wait: w }) {
+  const ago = w.days === 0 ? 'с сегодняшнего дня' : w.days === 1 ? 'со вчерашнего дня' : `${w.days} дн.`;
+  const text = [`Ждём документы от заказчика ${ago}: ${w.titles.join(', ')}`,
+    w.reminded_at ? `эксперт напоминал заказчику ${timeRu(w.reminded_at)}` : w.long ? 'эксперт заказчику ещё не напоминал' : null]
+    .filter(Boolean).join(' · ');
+  return el('div', { class: w.long ? 'notice-warn' : 'muted', 'data-role': 'docs-wait', text });
 }
 
 function moveRow(c) {
@@ -413,8 +427,8 @@ function offerWait(org, c) {
 // К блоку организации из утренней сводки (2.130): «sign» — к подписи организации; «away» (2.209) — к отбору «Эксперт не принимает
 // дела — срок в эти дни»; «stuck» (2.228) — к отбору «Просят передать — передать некому» и кнопке «Попросить диспетчера
 // перенести срок» первого дела; «week», «overdue», «handover», «returned»,
-// «fresh», «idle» — к списку дел с отбором «Срок на этой неделе» (2.127; в нём и просроченные), «Срок прошёл» (2.158), «Просят
-// передать», «Вернул эксперту» (2.153), «Исправленный файл ждёт подписи эксперта» (2.172) или «Без движения» (2.141). Отбора уже
+// «fresh», «idle», «docs» — к списку дел с отбором «Срок на этой неделе» (2.127; в нём и просроченные), «Срок прошёл» (2.158), «Просят
+// передать», «Вернул эксперту» (2.153), «Исправленный файл ждёт подписи эксперта» (2.172), «Без движения» (2.141) или «Ждём документы от заказчика» (2.235). Отбора уже
 // нет (дела сданы, эксперт ответил) — список целиком.
 export function focusOrgBlock(to) {
   if (to === 'sign') return goSign(null);
