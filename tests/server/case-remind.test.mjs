@@ -155,3 +155,30 @@ test('«Мои сроки»: отметка «напоминал руковод�
   assert.equal((await itemOf(colleague, o.id)).head_ask, undefined);
   assert.equal(await itemOf(spec, o.id), undefined);
 });
+
+test('2.235: «Ждём документы от заказчика» в «Делах экспертов» — что запрошено, сколько дней, напоминал ли эксперт', async () => {
+  const o = await inWork('Ждём документы');
+  assert.equal((await caseOf(o)).docs_wait, null);
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { items: ['egrn'] })).status, 201);
+  // Запросили сегодня — уже видно, но без тревоги.
+  let w = (await caseOf(o)).docs_wait;
+  assert.deepEqual([w.titles, w.days, w.long, w.reminded_at], [['Выписка из ЕГРН'], 0, false, null]);
+  // Позже — ещё один документ; самый старый ждём 4 дня — заметно; эксперт напомнил заказчику — видно когда.
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { custom: ['Справка БТИ'] })).status, 201);
+  await S.sql`update doc_requests set requested_at = now() - interval '4 days' where order_id = ${o.id} and title = 'Выписка из ЕГРН'`;
+  w = (await caseOf(o)).docs_wait;
+  assert.deepEqual([w.titles, w.days, w.long, w.reminded_at], [['Выписка из ЕГРН', 'Справка БТИ'], 4, true, null]);
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/doc-requests/remind`)).status, 201);
+  assert.ok((await caseOf(o)).docs_wait.reminded_at);
+  // Заказчик прислал всё — строки нет.
+  for (const x of (await owner.req('GET', `/api/orders/${o.id}/doc-requests`)).body.requests) {
+    const doc = (await owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from('скан'), {
+      raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent(`${x.title}.pdf`) } })).body.document;
+    assert.equal((await owner.req('POST', `/api/orders/${o.id}/doc-requests/${x.id}/attach`, { document_id: doc.id })).status, 200);
+  }
+  assert.equal((await caseOf(o)).docs_wait, null);
+  // Отменённый запрос не ждём.
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { custom: ['Ещё справка'] })).status, 201);
+  await S.sql`update doc_requests set cancelled_at = now() where order_id = ${o.id} and fulfilled_at is null`;
+  assert.equal((await caseOf(o)).docs_wait, null);
+});

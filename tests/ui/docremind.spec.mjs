@@ -1,5 +1,6 @@
 // «Напомнить заказчику» о запрошенных документах (задача 2.234) — телефон 412×915: документ запрошен 3 дня назад и не
 // пришёл — строка в «Сегодня» эксперта и в деле с кнопкой; после нажатия — «снова можно завтра», заказчику уведомление.
+// 2.235 — руководитель видит такие дела в «Делах экспертов» отбором «Ждём документы от заказчика».
 // Номера +7 999 000-87-xx — только здесь.
 import { test, expect } from '@playwright/test';
 import pg from 'pg';
@@ -106,7 +107,35 @@ test('2.234: документы не пришли 3 дня — «Напомни�
   // В «Сегодня» эксперта строк больше нет — до завтра.
   await sp.goto('/kabinet');
   await expect(sp.locator('li[data-today-item="docs-wait"]')).toHaveCount(0);
+
+  // 2.235: руководитель организации эксперта — в «Делах экспертов» отбор «Ждём документы от заказчика»: что запрошено,
+  // сколько дней, когда эксперт напоминал заказчику. Дело стоит не по вине эксперта — видно сразу.
+  const hctx = await phoneContext(browser, baseURL);
+  const hp = await hctx.newPage();
+  watch(hp);
+  const head = await signIn(hp, '+79990008703');
+  const orgId = await db(async (c) => {
+    const id = (await c.query("insert into organizations (name) values ('ООО «Ждём документы»') returning id")).rows[0].id;
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [id, head.id, spec.id]);
+    await c.query('update specialists set org_id = $1 where user_id = $2', [id, spec.id]);
+    // Второй запрос — свежий, сегодняшний: в отборе он ниже, без тревоги.
+    await c.query("update doc_requests set requested_at = now() - interval '1 hour' where order_id = $1", [ids[1]]);
+    return id;
+  });
+  await hp.goto(`/kabinet#org=${orgId}&to=docs`);
+  await expect(hp.locator('#org-cases-filter [data-filter="docs"]')).toHaveText('Ждём документы от заказчика · 2');
+  await expect(hp.locator('#org-cases-filter [data-filter="docs"]')).toHaveAttribute('aria-pressed', 'true');
+  const cases = hp.locator('#org-cases > li');
+  await expect(cases).toHaveCount(2);
+  const old = cases.nth(0).locator('[data-role="docs-wait"]');
+  await expect(old).toHaveText(/^Ждём документы от заказчика 4 дн\.: Выписка из ЕГРН, Технический паспорт БТИ или поэтажный план · эксперт напоминал заказчику /);
+  await expect(old).toHaveClass(/notice-warn/);
+  await expect(cases.nth(1).locator('[data-role="docs-wait"]')).toHaveText(/^Ждём документы от заказчика с сегодняшнего дня: Выписка из ЕГРН · эксперт напоминал заказчику /);
+  await expect(cases.nth(1).locator('[data-role="docs-wait"]')).toHaveClass(/muted/);
+  await hp.locator('#org-cases-list-title').scrollIntoViewIfNeeded();
+  await shot(hp, 'dr6-2235-rukovoditel-zhdyom-dokumenty');
   expect(problems, problems.join('\n')).toEqual([]);
+  await hctx.close();
   await dctx.close();
   await sctx.close();
 });
