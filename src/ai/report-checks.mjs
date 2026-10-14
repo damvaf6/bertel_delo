@@ -314,7 +314,7 @@ function cadastralMatch(doc, ctx) {
       if (!/кадастров\S*\s+(?:номер|№)/iu.test(page.slice(Math.max(0, m.index - 60), m.index))) continue;
       if (/аналог/iu.test(lineAround(page, m.index))) continue;
       seen.add(v);
-      out.push({ page: i, quote: lineAround(page, m.index), egrn: egrnAt(egrn), fix: egrn ? { bad: v, right: egrn.v } : null, text: egrn
+      out.push({ page: i, quote: lineAround(page, m.index), egrn: egrnAt(egrn), fix: egrn ? { bad: v, right: egrn.v } : { bad: v, right: mine, from: MINE }, text: egrn
         ? `Кадастровый номер ${v} не совпадает с номером в выписке ЕГРН «${egrn.name}» (${egrn.v}, стр. ${egrn.page + 1})${differs ? `; в заявке — ${mine}` : ''} — проверьте, нет ли данных другого объекта`
         : `Кадастровый номер ${v} не совпадает с номером из заявки (${mine}) — проверьте, нет ли данных другого объекта` });
     }
@@ -476,7 +476,7 @@ function addressMatch(doc, ctx) {
       : `${ADDR_NAMES[k]} ${got[k]}, а ${refName(ref)} ${ref.value}`)).join('; ');
     const where = against === 'egrn' ? `с адресом в выписке ЕГРН «${egrn.name}» (${egrn.text}, стр. ${egrn.page + 1})${mineDiffers ? `; в заявке — ${mineText}` : ''}`
       : against === 'mine' ? `с адресом из заявки (${mineText})` : `с адресом объекта на стр. ${diff[0].ref.page + 1}`;
-    out.push({ page: i, quote: lineAround(page, index), egrn: against === 'egrn' ? egrnAt(egrn) : null, fix: against === 'egrn' ? { bad: text, right: egrn.text } : null, text: `Адрес «${text}» не совпадает ${where}: ${parts} — проверьте, нет ли данных другого объекта` });
+    out.push({ page: i, quote: lineAround(page, index), egrn: against === 'egrn' ? egrnAt(egrn) : null, fix: against === 'egrn' ? { bad: text, right: egrn.text } : against === 'mine' ? { bad: text, right: mineText, from: MINE } : null, text: `Адрес «${text}» не совпадает ${where}: ${parts} — проверьте, нет ли данных другого объекта` });
   }
   return out;
 }
@@ -637,7 +637,7 @@ function areaMatch(doc, ctx) {
     if (Math.abs(a.v - ref) < 0.05 || seen.has(a.v)) continue;
     seen.add(a.v);
     const page = doc.pages[a.page];
-    out.push({ page: a.page, quote: lineAround(page, a.index), egrn: egrnAt(egrn), fix: egrn ? { bad: a.raw, right: fmt(egrn.v) } : null, text: egrn
+    out.push({ page: a.page, quote: lineAround(page, a.index), egrn: egrnAt(egrn), fix: egrn ? { bad: a.raw, right: fmt(egrn.v) } : { bad: a.raw, right: fmt(mine), from: MINE }, text: egrn
       ? `Площадь ${fmt(a.v)} кв. м не совпадает с площадью в выписке ЕГРН «${egrn.name}» (${fmt(egrn.v)} кв. м, стр. ${egrn.page + 1})${differs ? `; в заявке — ${fmt(mine)} кв. м` : ''} — площадь берётся из выписки`
       : `Площадь ${fmt(a.v)} кв. м не совпадает с площадью из заявки (${fmt(mine)} кв. м) — проверьте, нет ли данных другого объекта` });
   }
@@ -720,7 +720,7 @@ function floorMatch(doc, ctx) {
   const floorsOk = (v) => v === refFloors || (egrn.floors?.above != null && v === egrn.floors.above);
   const out = [];
   const seen = new Set();
-  const add = (i, page, idx, key, text, at, fix) => { if (seen.has(key)) return; seen.add(key); out.push({ page: i, quote: lineAround(page, idx), egrn: egrnAt(at), fix: at ? fix : null, text }); };
+  const add = (i, page, idx, key, text, at, fix) => { if (seen.has(key)) return; seen.add(key); out.push({ page: i, quote: lineAround(page, idx), egrn: egrnAt(at), fix: at ? fix : { ...fix, from: MINE }, text }); };
   // В заявке другое — заказчик ошибся или выписка не на тот объект: подсказываем.
   const floorText = (v) => (egrn.floor
     ? `Этаж ${v} не совпадает с этажом в выписке ЕГРН «${egrn.floor.name}» (${refFloor}, стр. ${egrn.floor.page + 1})${mineFloor != null && mineFloor !== refFloor ? `; в заявке — ${mineFloor}` : ''} — проверьте, нет ли данных другого объекта`
@@ -831,7 +831,7 @@ function buildingMatch(doc, ctx) {
   const refYears = egrn.years ? [...egrn.years.keys()] : mine ? [mine] : [];
   const out = [];
   const seen = new Set();
-  const add = (i, page, idx, key, text, at, fix) => { if (seen.has(key)) return; seen.add(key); out.push({ page: i, quote: lineAround(page, idx), egrn: egrnAt(at), fix: at ? fix : null, text }); };
+  const add = (i, page, idx, key, text, at, fix) => { if (seen.has(key)) return; seen.add(key); out.push({ page: i, quote: lineAround(page, idx), egrn: egrnAt(at), fix: at ? fix : { ...fix, from: MINE }, text }); };
   const yearText = (v) => {
     if (!egrn.years) return `Год постройки ${v} не совпадает с годом из заявки (${mine}) — проверьте, нет ли данных другого дома`;
     const shown = refYears.join(' и ');
@@ -1751,6 +1751,7 @@ function assignmentDate(reportDates, assignment) {
   if (!got.day || got.day === values[0]) return [];
   const first = reportDates[0];
   return [{ doc: first.doc, page: first.page, quote: first.quote,
+    fix: { bad: ruDate(values[0]), right: ruDate(got.day), from: `${got.what} «${got.name}»` },
     text: `Дата оценки в отчёте ${ruDate(values[0])}, а ${got.what} «${got.name}» — ${ruDate(got.day)} (стр. ${got.page + 1}); дата оценки берётся из задания — исправьте отчёт или приложите к делу новое задание` }];
 }
 
@@ -1992,12 +1993,16 @@ export function runAutoChecks(names, docs, ctx = {}) {
       ...(f.egrn ? { egrn: { doc_id: f.egrn.doc, file: f.egrn.name, where: `стр. ${f.egrn.page + 1}`, quote: clean(f.egrn.quote).slice(0, 200),
         // 2.229: что в отчёте разошлось с выпиской и что в выписке — «Исправить в черновике» ищет это место в тексте черновика.
         ...(f.fix ? { bad: clean(f.fix.bad).slice(0, 200), right: clean(f.fix.right).slice(0, 200) } : {}) } } : {}),
+      // 2.231: находка сверена с заявкой или заданием на оценку, а не с выпиской — то же «Исправить в черновике», без выписки.
+      ...(f.fix?.from && !f.egrn ? { fix: { bad: clean(f.fix.bad).slice(0, 200), right: clean(f.fix.right).slice(0, 200), from: clean(f.fix.from).slice(0, 200) } } : {}),
     }));
   }
   return res;
 }
 
 // ——— мелочи ———
+// 2.231: откуда верное значение у находки без выписки ЕГРН — для «Исправить в черновике».
+const MINE = 'в заявке';
 function eachPage(doc, fn) { (doc.pages ?? []).forEach((p, i) => fn(p, i)); }
 function clean(s) { return String(s ?? '').replace(/\s+/g, ' ').trim(); }
 function fmt(n) { return Number(n).toLocaleString('ru-RU').replace(/ /g, ' '); }

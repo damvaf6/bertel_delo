@@ -1249,3 +1249,45 @@ test('2.213: адрес объекта — как в выписке ЕГРН и�
   assert.deepEqual(run({}, doc(['Выписка из ЕГРН\nКадастровый номер: 77:01:0001001:1234'])), []);
   assert.deepEqual(run({}), []);
 });
+
+// 2.231: находка, сверенная с заявкой или заданием на оценку (не с выпиской), тоже несёт «что разошлось и что верно» —
+// для «Исправить в черновике»; у находки по выписке ЕГРН это по-прежнему в `egrn` (2.229).
+test('2.231: находки по заявке и заданию на оценку — что разошлось и откуда верное значение', () => {
+  const fields = { area: '54,3', cadastral: '77:01:0001001:4321', floor: '6 из 9', year_built: '1984', address: 'г. Москва, ул. Долевая, д. 3, кв. 18' };
+  const report = doc([[
+    'ОТЧЁТ ОБ ОЦЕНКЕ',
+    'Адрес объекта: г. Москва, ул. Долевая, д. 3, кв. 8',
+    'Кадастровый номер объекта: 77:01:0001001:1234',
+    'Квартира общей площадью 45,1 кв. м расположена на 5 этаже 9-этажного дома.',
+    'Год постройки 1975.',
+  ].join('\n')]);
+  const res = runAutoChecks(['area_match', 'cadastral_match', 'floor_match', 'building_match', 'address_match'], [report], { fields, service: 'realty' });
+  const fix = (rule) => res[rule].map((f) => f.fix);
+  assert.deepEqual(fix('area_match'), [{ bad: '45,1', right: '54,3', from: 'в заявке' }]);
+  assert.deepEqual(fix('cadastral_match'), [{ bad: '77:01:0001001:1234', right: '77:01:0001001:4321', from: 'в заявке' }]);
+  assert.deepEqual(fix('floor_match'), [{ bad: '5', right: '6', from: 'в заявке' }]);
+  assert.deepEqual(fix('building_match'), [{ bad: '1975', right: '1984', from: 'в заявке' }]);
+  assert.deepEqual(fix('address_match'), [{ bad: 'г. Москва, ул. Долевая, д. 3, кв. 8', right: 'г. Москва, ул. Долевая, д. 3, кв. 18', from: 'в заявке' }]);
+  for (const rule of Object.keys(res)) assert.ok(res[rule].every((f) => !f.egrn), rule);
+
+  // Дата оценки — как в задании: верная дата и откуда она.
+  const dated = doc([['ОТЧЁТ ОБ ОЦЕНКЕ', 'Дата оценки: 01.10.2026'].join('\n')]);
+  const task = doc([['ЗАДАНИЕ НА ОЦЕНКУ', 'Дата оценки: 03.10.2026'].join('\n')], 'Задание.pdf');
+  assert.deepEqual(runAutoChecks(['value_date'], [dated], { assignment: [task] }).value_date.map((f) => f.fix),
+    [{ bad: '01.10.2026', right: '03.10.2026', from: 'в задании на оценку «Задание.pdf»' }]);
+
+  // С выпиской ЕГРН — по-прежнему в `egrn`, без отдельного `fix`.
+  const egrn = [{ id: 'e1', name: 'Выписка ЕГРН.pdf', kind: 'pdf', pages: ['Выписка из Единого государственного реестра недвижимости\nПлощадь, м2: 47,3'] }];
+  const withEgrn = runAutoChecks(['area_match'], [report], { fields, service: 'realty', egrn });
+  assert.deepEqual(withEgrn.area_match.map((f) => [f.fix, f.egrn?.bad, f.egrn?.right]), [[undefined, '45,1', '47,3']]);
+});
+
+test('2.231: место в черновике для даты оценки — цифрами и словами', async () => {
+  const { findInDraft } = await import('../../public/draftfind.js');
+  const at = (body) => { const r = findInDraft(body, { bad: '01.10.2026', quote: 'Дата оценки: 01.10.2026' }); return r && body.slice(r.from, r.to); };
+  assert.equal(at('| Дата оценки | 01.10.2026 |'), '01.10.2026');
+  assert.equal(at('Дата оценки — «01» октября 2026 г.'), '«01» октября 2026');
+  assert.equal(at('по состоянию на 1 октября 2026 г.'), '1 октября 2026');
+  assert.equal(at('Дата составления 11.10.2026, договор 101.10.2026'), null);
+  assert.equal(at('11 октября 2026'), null);
+});
