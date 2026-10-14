@@ -4233,6 +4233,12 @@ test('осмотр без обязательных шагов (2.208): «Гот�
   await expect(box.locator('#inspect-state')).not.toContainText('Не снято:');
   await box.locator('#inspect-incomplete').scrollIntoViewIfNeeded();
   await shot(ep, 'c38e-ekspert-osmotr-poprosit-dosnyat');
+  // У каждого недоснятого шага — поле своей подсказки владельцу (2.227); счётчиков (необязательный шаг) нет.
+  await expect(box.locator('[data-missing-step]')).toHaveCount(6);
+  await expect(box.locator('[data-missing-step="meters"]')).toHaveCount(0);
+  await box.getByLabel('Каждая комната — подсказка владельцу').fill('Каждую комнату из двух углов, при свете');
+  await box.locator('[data-missing-step="rooms"]').scrollIntoViewIfNeeded();
+  await shot(ep, 'h4h-ekspert-dosnyat-podskazka');
   // Без телефона — сначала просим вписать; вписал — просьбы у шагов и новая ссылка СМС.
   await box.locator('#inspect-ask-missing').click();
   await expect(ep.locator('#inspect-msg')).toContainText('Впишите телефон владельца');
@@ -4243,7 +4249,20 @@ test('осмотр без обязательных шагов (2.208): «Гот�
   await expect(box.locator('#inspect-steps li[data-step="rooms"] .badge').first()).toHaveText('переснять');
   await expect(box.locator('#inspect-steps li[data-step="facade"] .badge').first()).toHaveText('фото: 1');
   await expect(box.locator('#inspect-steps li[data-step="meters"] .badge').first()).toHaveText('если есть');
+  await expect(box.locator('#inspect-steps li[data-step="rooms"]')).toContainText('Попросили переснять: Каждую комнату из двух углов, при свете');
+  await expect(box.locator('#inspect-steps li[data-step="door"]')).toContainText('Попросили переснять: Этот шаг не снят — снимите, пожалуйста');
   await shot(ep, 'c38f-ekspert-osmotr-dosnyat-ssylka');
+  // Владелец по новой ссылке видит подсказку эксперта у шага (2.227).
+  const ownerUrl = await ep.locator('#inspect-url').textContent();
+  const octx = await phoneContext(browser, baseURL);
+  const op = await octx.newPage();
+  await op.goto(ownerUrl);
+  await op.getByRole('button', { name: 'Начать: разрешить определение места' }).click();
+  await expect(op.locator('#steps li[data-step="rooms"]')).toContainText('Эксперт просит снять: Каждую комнату из двух углов, при свете');
+  await expect(op.locator('#steps li[data-step="door"]')).toContainText('Эксперт просит снять: Этот шаг не снят — снимите, пожалуйста');
+  await op.locator('#steps li[data-step="rooms"]').scrollIntoViewIfNeeded();
+  await shot(op, 'h4i-vladelec-podskazka-eksperta');
+  await octx.close();
 
   await ep.goto('/kabinet');
   await expect(ep.locator('#today-box')).toBeVisible();

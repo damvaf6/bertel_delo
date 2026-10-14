@@ -469,13 +469,17 @@ export function inspectOps() {
         const def = registry.service(order.module, order.service);
         const counts = await stepCounts(sql, { link: link.id });
         const retakes = await openRetakes(sql, order.id);
+        // Шаг уже снят в деле раньше (по другой ссылке или помощником) — просьба «переснять», иначе — «снять» (2.227).
+        const shot = new Set((await sql`select distinct p.step from inspection_photos p
+          left join inspection_links l on l.id = p.link_id left join onsite_visits v on v.id = p.visit_id
+          where coalesce(l.order_id, v.order_id) = ${order.id}`).map((r) => r.step));
         return {
           active: true,
           service: def?.service.name ?? null,
           subject: def?.service.subject ?? 'object',
           expires_at: link.expires_at,
           steps: registry.inspectionSteps(order.module, order.service)
-            .map((s) => ({ ...s, photos: counts[s.id] ?? 0, retake: retakes[s.id]?.note ?? null })),
+            .map((s) => ({ ...s, photos: counts[s.id] ?? 0, retake: retakes[s.id]?.note ?? null, shot_before: shot.has(s.id) })),
           limits: { photos: INSPECT.photosMax, per_step: INSPECT.perStepMax, file_bytes: INSPECT.fileMax },
         };
       },
