@@ -249,12 +249,38 @@ function returnForm(d) {
   const area = el('textarea', { id: `ret-${d.id}`, rows: '3', maxlength: '2000', 'aria-label': `Замечание эксперту по файлу ${d.filename}` });
   const box = el('div', { class: 'field hidden', 'data-return-form': d.id },
     el('label', { for: `ret-${d.id}`, text: 'Что исправить — каждый пункт с новой строки (эксперт отметит исправленные)' }), area,
+    ...egrnTools(d, area),
     ...remarkTools(d, area),
     el('div', { class: 'row' },
       el('button', { class: 'danger', 'data-action': 'org-return-send', onclick: () => sendReturn(d, area.value) }, 'Вернуть с замечанием'),
       el('button', { class: 'secondary', onclick: () => box.classList.add('hidden') }, 'Отмена')));
-  const open = el('button', { class: 'secondary', 'data-action': 'org-return', onclick: () => { box.classList.remove('hidden'); area.focus(); } }, 'Вернуть эксперту');
+  // 2.236: есть расхождения с выпиской ЕГРН из ИИ-проверки эксперта — при первом открытии они уже в замечании пунктами.
+  const open = el('button', { class: 'secondary', 'data-action': 'org-return', onclick: () => {
+    if (!area.value.trim() && egrnPoints(d).length) { area.value = egrnPoints(d).join('\n'); fitRows(area); }
+    box.classList.remove('hidden');
+    area.focus();
+  } }, 'Вернуть эксперту');
   return el('div', {}, el('div', { class: 'row' }, open), box);
+}
+
+// Расхождения отчёта с выпиской ЕГРН (2.225) пунктами замечания (2.236): подставляются при открытии формы, их можно править
+// и убирать; кнопка возвращает недостающие. Не больше пунктов, чем принимает возврат.
+const egrnPoints = (d) => (d.ai_check?.egrn ?? []).slice(0, 30).map((t) => `${t.replace(/[.\s]+$/, '')} — исправьте по выписке`);
+// Подставленные пункты видны целиком (каждый на телефоне — в две-три строки), но поле не выше 12 строк.
+const fitRows = (area) => { area.rows = Math.min(12, Math.max(3, area.value.split('\n').length * 3)); };
+function egrnTools(d, area) {
+  const points = egrnPoints(d);
+  if (!points.length) return [];
+  return [el('div', { class: 'muted', 'data-role': 'egrn-points-hint', text: `Расхождения с выпиской ЕГРН из ИИ-проверки эксперта (${points.length}) подставлены пунктами — поправьте или уберите лишнее.` }),
+    el('div', { class: 'row' }, el('button', { type: 'button', class: 'secondary', 'data-action': 'org-return-egrn', onclick: () => {
+      const have = area.value.split(/\r?\n/).map((l) => l.trim());
+      const add = points.filter((p) => !have.includes(p));
+      if (!add.length) return say($('org-sign-msg'), 'Все расхождения с выпиской уже в замечании');
+      area.value = area.value.replace(/\s+$/, '') + (area.value.trim() ? '\n' : '') + add.join('\n');
+      fitRows(area);
+      area.focus();
+      say($('org-sign-msg'), '');
+    } }, 'Подставить расхождения с выпиской ЕГРН'))];
 }
 
 // Свои заготовки замечаний (2.103): частый пункт — одной кнопкой в замечание; пункты из замечания — «Запомнить» один раз.
