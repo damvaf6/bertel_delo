@@ -10161,7 +10161,8 @@ test('2.239: «Пока Вас не было» — что произошло с 
       await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'member')", [org.id, u.id]);
       await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [u.id, org.id]);
     }
-    await c.query("update specialists set away_since = $2::date, away_until = $3::date, away_note = 'отпуск' where user_id = $1",
+    // Сводку «Пока Вас не было» уже «отправили» (уведомление ниже) — фоновая рассылка после 8:00 МСК второй не шлёт.
+    await c.query("update specialists set away_since = $2::date, away_until = $3::date, away_back_for = $3::date, away_note = 'отпуск' where user_id = $1",
       [expert.id, inDays(-7), inDays(0)]);
     const ids = [];
     for (const [title, who] of [['Квартира на Лесной', expert.id], ['Дом в Химках', expert.id], ['Участок в Истре', colleague.id]]) {
@@ -10602,7 +10603,7 @@ test('прогон 2.240: эксперт и руководитель по пач
   await expect(cp.locator('#docreq-list li').filter({ hasText: 'Технический паспорт' })).toContainText('Техпаспорт.txt');
   expect((await cp.request.post(`/api/orders/${A}/messages`, { data: { body: 'Техпаспорт приложил' }, headers: H })).status()).toBe(201);
   await db(async (c) => {
-    await c.query("update specialists set away_since = $2::date, away_until = $3::date, away_note = 'отпуск' where user_id = $1", [expert.id, inDays(-5), inDays(0)]);
+    await c.query("update specialists set away_since = $2::date, away_until = $3::date, away_back_for = $3::date, away_note = 'отпуск' where user_id = $1", [expert.id, inDays(-5), inDays(0)]);
     await c.query("update deadline_requests set requested_at = requested_at - interval '1 day', decided_at = decided_at - interval '1 day' where order_id = $1", [A]);
     await c.query("update doc_requests set fulfilled_at = fulfilled_at - interval '1 day' where order_id = $1 and fulfilled_at is not null", [A]);
     await c.query("update order_messages set at = at - interval '1 day' where order_id = $1", [A]);
