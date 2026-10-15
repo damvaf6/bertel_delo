@@ -6,6 +6,7 @@ import { showDossier } from '/dossier.js';
 import { expertLink } from '/expertcard.js';
 import { loadMyReport } from '/myreport.js';
 import { loadSchedule } from '/schedule.js';
+import { loadAwayBack } from '/awayback.js';
 import { loadNotaryDesk } from '/notaries.js';
 import { loadMyCard } from '/permitcard.js';
 
@@ -76,7 +77,7 @@ async function offerOrg(order, g, reopen) {
 
 // ——— Кабинет специалиста ———
 
-// to = 'schedule' — сразу к «Моим срокам» (утренняя сводка «На сегодня», 2.119).
+// to = 'schedule' — сразу к «Моим срокам» (утренняя сводка «На сегодня», 2.119); 'back' — к «Пока Вас не было» (2.239).
 export async function showSpecialist({ to = null } = {}) {
   const sp = state.specialist;
   if (!sp) { location.hash = ''; return; }
@@ -96,8 +97,10 @@ export async function showSpecialist({ to = null } = {}) {
   $('specialist-permits').replaceChildren(...sp.permits.map((p) => el('li', { text: permitText(p) })));
   $('specialist-permits-empty').classList.toggle('hidden', sp.permits.length > 0);
   show('specialist-view', 'specialist');
-  await Promise.all([showCrm(), showVisits(sp), showDossier(), loadSchedule(), loadNotaryDesk(), loadMyReport(), loadMyCard()]);
+  await Promise.all([showCrm(), showVisits(sp), showDossier(), loadSchedule(), loadAwayBack(), loadNotaryDesk(), loadMyReport(), loadMyCard()]);
   if (to === 'schedule') $('schedule-box').scrollIntoView({ block: 'start' });
+  // «Пока Вас не было» (2.239) — из уведомления в первый день после дней «не принимаю дела».
+  if (to === 'back' && !$('back-box').classList.contains('hidden')) $('back-box').scrollIntoView({ block: 'start' });
 }
 
 // Выезды помощника на объект (экспресс, 2.4): открываются на странице осмотра — по шагам, с камерой и геометкой.
