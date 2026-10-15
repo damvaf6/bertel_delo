@@ -1127,7 +1127,10 @@ function egrnEncumbrances(egrn, ctx) {
           lines.push(line);
           from = next;
         }
-        if (ENC_NONE.test(lines[0]) && !/вид\s*:/iu.test(lines[0])) continue;
+        if (ENC_NONE.test(lines[0]) && !/вид\s*:/iu.test(lines[0])) {
+          got.none ??= { name: d.name, page: i, doc: d.id };
+          continue;
+        }
         // Вид — в строках «вид: …»; нет их — весь блок (без строк о сроке и о том, в чью пользу).
         const vid = lines.map((l) => l.match(/(?<![а-яё])вид\s*:\s*(.+)$/iu)?.[1]).filter(Boolean);
         const where = vid.length ? vid : lines.filter((l) => !/в\s+пользу|срок|дата|номер/iu.test(l));
@@ -1141,6 +1144,20 @@ function egrnEncumbrances(egrn, ctx) {
     });
   }
   return got;
+}
+// 2.243: правообладатель, вид права и обременения из выписок ЕГРН на объект — для таблицы задания в черновике. Сведения о
+// правообладателе скрыты — его не даём; видов права в выписках несколько — эксперт выбирает сам; обременений нет, а выписка
+// прямо пишет «не зарегистрировано» — так и даём.
+export function egrnRightsFacts(egrn, ctx) {
+  const r = egrnRights(egrn, ctx);
+  const at = (x) => ({ name: x.name, page: x.page + 1 });
+  const holders = r.hidden || !r.holders.length ? null : { v: r.holders.map((h) => h.raw).join(', '), ...at(r.holders[0]) };
+  const kinds = [...r.kinds.values()];
+  const kind = kinds.length > 1 ? { values: kinds.map((k) => k.v) } : kinds.length ? { v: kinds[0].v, ...at(kinds[0]) } : null;
+  const e = egrnEncumbrances(egrn, ctx);
+  const list = [...e.values()];
+  const enc = list.length ? { v: list.map((x) => x.v).join('; '), ...at(list[0]) } : e.none ? { v: 'не зарегистрированы', ...at(e.none) } : null;
+  return { holders, kind, enc };
 }
 function encumbranceMatch(docs, ctx) {
   if (!ctx.egrn?.length || !docs.length) return [];
