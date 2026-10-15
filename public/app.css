@@ -263,6 +263,7 @@ ul.points li { border: none; padding: 2px 0; overflow-wrap: anywhere; }
 ul.points label.row { margin: 0; align-items: flex-start; flex-wrap: nowrap; }
 ul.points label.row > span { flex: 1 1 auto; min-width: 0; }
 ul.points li.fixed span:not(.muted):not(.point-line) { color: var(--muted); text-decoration: line-through; }
+ul.points li[data-egrn="kept"] span.muted { color: var(--danger); }
 details.org-chat, details.org-transfer { margin-top: 8px; }
 details.org-chat summary, details.org-transfer summary { cursor: pointer; color: var(--accent); }
 

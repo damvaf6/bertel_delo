@@ -325,6 +325,31 @@ export function egrnShort(f) {
     .trim().slice(0, 180);
 }
 
+// Пункты возврата из расхождений с выпиской ЕГРН (2.247): находки последней проверки файла — правило, верное значение из
+// выписки и короткий текст (как в «Вернуть эксперту», 2.236). Пункт привязан, если начинается с этого текста.
+const egrnTrim = (t) => String(t ?? '').replace(/[.\s]+$/, '');
+const egrnNorm = (t) => String(t ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+export function egrnLinks(review, docId) {
+  if (!review) return [];
+  const file = (review.files ?? []).find((f) => f.id === docId)?.name;
+  return (review.items ?? []).filter((i) => i.hint === 'attention').flatMap((i) => (i.found ?? [])
+    .filter((f) => f.egrn && (!file || f.file === file))
+    .map((f) => ({ rule: i.id, ...(f.egrn.right ? { right: f.egrn.right } : {}), short: egrnShort(f) })));
+}
+export function egrnLinkOf(point, links) {
+  return links.find((l) => l.short && point.startsWith(egrnTrim(l.short))) ?? null;
+}
+// Ушло ли расхождение пункта в проверке после возврата: правило не смотрели или проверки нет — 'none'; та же находка
+// (то же верное значение из выписки или тот же текст) — 'kept'; иначе 'gone'.
+export function egrnLinkState(link, review, docIds) {
+  const item = review && (review.items ?? []).find((i) => i.id === link.rule);
+  if (!item) return 'none';
+  const files = new Set((review.files ?? []).filter((f) => docIds.includes(f.id)).map((f) => f.name));
+  const same = (item.found ?? []).some((f) => f.egrn && (!files.size || files.has(f.file))
+    && ((link.right && f.egrn.right && egrnNorm(f.egrn.right) === egrnNorm(link.right)) || egrnTrim(egrnShort(f)) === egrnTrim(link.short)));
+  return same ? 'kept' : 'gone';
+}
+
 export async function aiSignHints(sql, registry, order, docIds, { ok = false } = {}) {
   const out = new Map();
   if (!docIds.length) return out;
