@@ -432,6 +432,11 @@ async function loadDocs(initial = false) {
   // Файлы результата поменялись — у «Хода заказа» новый список для «файла нотариуса» (2а.6).
   if (!initial && current.executor?.is_me && !$('steps-box').classList.contains('hidden')) loadSteps(current);
   orgReturnsNow = documentsBody.org_returns ?? []; // окно подписи файла (2.159) показывает пункты замечаний
+  // Вопрос «исправленная версия?» (2.251) больше не к месту — возвращённый файл удалили или замечание закрыто.
+  if (replacePair && !(documentsBody.org_returns ?? []).some((r) => r.open && r.id === replacePair.r.id && documents.some((x) => x.id === r.document_id))) {
+    replacePair = null;
+    $('replace-box').classList.add('hidden');
+  }
   // «Подписать все» (2.15): несколько неподписанных файлов результата — одним подтверждением.
   const unsigned = mineResults && signRequired && documentsBody.sign_mode !== 'manual' ? documents.filter((d) => d.kind === 'result' && d.own !== false && !d.signatures?.expert) : [];
   $('sign-all').classList.toggle('hidden', unsigned.length < 2);
@@ -507,6 +512,7 @@ function loadOrgChat() {
 // Открытые — сверху; закрытые (файл подписан заново) — ниже, как история. Замечание по пунктам (2.93): эксперт отмечает
 // исправленные, руководитель видит, что осталось.
 let orgReturnsNow = [];
+let replacePair = null; // вопрос «исправленная версия?» после загрузки (2.251)
 function renderOrgReturns(list) {
   orgReturnsNow = list;
   $('org-returns-box').classList.toggle('hidden', !list.length);
@@ -545,7 +551,10 @@ function besideReturned(r, docs) {
   if (!d) return [];
   return [el('div', { class: 'return-file warn', 'data-role': 'return-beside' },
     el('span', { text: `После возврата загружен «${d.filename}», а возвращённый «${r.filename}» не удалён — замечание пока открыто. Если «${d.filename}» — исправленная версия, удалите «${r.filename}» и подпишите новый файл: тогда руководитель увидит у него Ваши отметки. Если это приложение — подпишите заново «${r.filename}». ` }),
-    el('button', { class: 'link', 'data-action': 'to-returned-file', onclick: () => toDoc(r.document_id) }, 'К возвращённому файлу'))];
+    el('button', { class: 'link', 'data-action': 'to-returned-file', onclick: () => toDoc(r.document_id) }, 'К возвращённому файлу'),
+    // Тот же вопрос, что сразу после загрузки (2.251): ответили «Нет» или обновили страницу — заменить можно и отсюда.
+    ...(current.executor?.is_me && current.order.status === 'in_work' ? [' · ', el('button', { class: 'link', 'data-action': 'replace-returned',
+      onclick: () => { if (confirm(`Удалить «${r.filename}» — «${d.filename}» его исправленная версия?`)) replaceReturned({ doc: d, r }); } }, `Заменить «${r.filename}» на «${d.filename}»`)] : []))];
 }
 
 // Исправленный файл после возврата (2.192): проверял ли его ИИ. Не запускали или есть «посмотрите» — подсказка с переходом к
@@ -913,11 +922,39 @@ $('dossier-attach').addEventListener('click', async () => {
   } catch (err) { say($('doc-msg'), err.message); }
 });
 
-$('result-file').addEventListener('change', (e) => {
+$('result-file').addEventListener('change', async (e) => {
   const file = e.target.files[0];
   e.target.value = '';
-  uploadFile(file, 'result', $('doc-msg'));
+  const doc = await uploadFile(file, 'result', $('doc-msg'));
+  if (doc) askReplace(doc);
 });
+
+// Новый файл результата, пока открыт возврат руководителя, а возвращённый файл не удалён (2.251): сразу спросить, исправленная
+// ли это версия. «Да, заменить» удаляет возвращённый одним нажатием — тогда подпись нового файла закрывает замечание и
+// руководитель видит у него отметки (2.159). «Нет» — новый файл остаётся приложением, возвращённый подписывают заново.
+function returnedStill(docId) {
+  const docs = lastDocs?.documents ?? [];
+  return (lastDocs?.org_returns ?? []).filter((r) => r.open && r.document_id !== docId && docs.some((x) => x.id === r.document_id)).at(-1) ?? null;
+}
+function askReplace(doc) {
+  const r = returnedStill(doc.id);
+  replacePair = r ? { doc, r } : null;
+  $('replace-box').classList.toggle('hidden', !r);
+  if (!r) return;
+  $('replace-text').textContent = `«${doc.filename}» — исправленная версия возвращённого «${r.filename}»?`;
+  $('replace-note').textContent = `«Да, заменить» удалит «${r.filename}»: подпишите «${doc.filename}» — руководитель увидит у него Ваши отметки по замечанию. Если это приложение к отчёту — «Нет», а «${r.filename}» подпишите заново.`;
+}
+async function replaceReturned(pair) {
+  try {
+    await api('DELETE', `/api/documents/${pair.r.document_id}`);
+    $('replace-box').classList.add('hidden');
+    replacePair = null;
+    await loadDocs();
+    say($('doc-msg'), `«${pair.r.filename}» удалён. Подпишите «${pair.doc.filename}».`, 'ok');
+  } catch (err) { say($('doc-msg'), err.message); }
+}
+$('replace-yes').addEventListener('click', () => { if (replacePair) replaceReturned(replacePair); });
+$('replace-no').addEventListener('click', () => { replacePair = null; $('replace-box').classList.add('hidden'); });
 
 $('basis-file').addEventListener('change', (e) => {
   const file = e.target.files[0];
