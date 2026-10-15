@@ -116,6 +116,8 @@ textarea.draft-text { min-height: 360px; font-size: 15px; line-height: 1.45; }
 .badge.status.cancelled { background: #f6e3e3; color: var(--danger); }
 .overdue { color: var(--danger); font-weight: 600; }
 .overdue.big { font-size: 18px; font-weight: 700; margin: 4px 0; }
+/* Пришли документы после ИИ-проверки (2.248) — не беда, но посмотреть. */
+.warn-line { color: #7a4b00; font-weight: 600; }
 .steps { list-style: none; padding: 0; margin: 0 0 12px; }
 /* Страница дела короче (2.72): шаги, история и журнал — одной строкой, раскрываются по нажатию */
 details.fold { margin: 0 0 12px; }
@@ -200,6 +202,9 @@ details.ai-quiet summary { cursor: pointer; padding: 8px 0; color: var(--ok); ov
 .ai-prev p { margin: 2px 0; font-size: 14px; }
 .ai-prev-head { font-weight: 600; }
 .ai-prev button.link { text-align: left; }
+.ai-recheck { margin: 6px 0; padding: 6px 8px; border-left: 3px solid #c98a00; background: #fff3d6; overflow-wrap: anywhere; }
+.ai-recheck p { margin: 2px 0; font-size: 14px; }
+.ai-recheck-head { font-weight: 600; color: #7a4b00; }
 .ai-prev-row.gone { color: var(--ok); }
 .ai-prev-row.kept, .ai-prev-row.fresh { color: #8a5a00; }
 #mail-status { margin: 0 0 12px; }

@@ -348,3 +348,46 @@ test('2.234: запрошенное не пришло 3 дня — «Напом�
   assert.deepEqual(w.titles, ['Справка о зарегистрированных']);
   assert.equal(w.can_remind, true);
 });
+
+test('2.248: после ИИ-проверки пришёл запрошенный документ — «проверьте заново» у ИИ-проверки и в «Сегодня»', async () => {
+  const o = await inWork('Квартира: документ после ИИ-проверки');
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  const review = async (c = spec) => (await c.req('GET', `/api/orders/${o.id}/review`)).body.ai;
+  const todayRow = async () => (await spec.req('GET', '/api/today')).body.expert.ai_recheck.find((x) => x.id === o.id);
+  const asked = (await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { items: ['egrn', 'tech_plan'] })).body.requests;
+  const rid = (item) => asked.find((r) => r.item_id === item).id;
+  const attach = async (item, name) => {
+    const doc = await upload(owner, o, name);
+    assert.equal((await owner.req('POST', `/api/orders/${o.id}/doc-requests/${rid(item)}/attach`, { document_id: doc.id })).status, 200);
+    return doc;
+  };
+  // Документ пришёл до ИИ-проверки — проверка его видела, подсказки нет.
+  await attach('tech_plan', 'Техплан.pdf');
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/results`, Buffer.from('Отчёт об оценке квартиры'), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Отчёт.txt') } })).status, 201);
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
+  assert.equal((await review()).recheck, undefined);
+  assert.equal(await todayRow(), undefined);
+  // Выписка пришла после проверки — подсказка у ИИ-проверки (исполнителю и диспетчеру) и строка в «Сегодня».
+  const egrn = await attach('egrn', 'Выписка.pdf');
+  const r = (await review()).recheck;
+  assert.equal(r.egrn, true);
+  assert.deepEqual(r.docs.map((d) => [d.title, d.filename]), [['Выписка из ЕГРН', 'Выписка.pdf']]);
+  assert.ok((await review(dispatcher)).recheck);
+  assert.equal((await owner.req('GET', `/api/orders/${o.id}/review`)).body.ai, undefined, 'заказчику подсказки ИИ не видны');
+  const row = await todayRow();
+  assert.ok(row && row.recheck.egrn && row.recheck.review_at && row.recheck.docs.length === 1);
+  // Новая ИИ-проверка — подсказка и строка уходят.
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
+  assert.equal((await review()).recheck, undefined);
+  assert.equal(await todayRow(), undefined);
+  // Заказчик удалил пришедший файл — не в счёт (просьба снова открыта); приложил заново — снова «проверьте заново».
+  assert.equal((await owner.req('DELETE', `/api/documents/${egrn.id}`)).status, 204);
+  assert.equal((await review()).recheck, undefined);
+  await attach('egrn', 'Выписка свежая.pdf');
+  assert.deepEqual((await review()).recheck.docs.map((d) => d.filename), ['Выписка свежая.pdf']);
+  // Сдал на проверку (подпись здесь не проверяем — статус прямо в базе) — дело не в работе, строки в «Сегодня» нет.
+  await S.sql`update orders set status = 'review', review_round = review_round + 1 where id = ${o.id}`;
+  assert.equal(await todayRow(), undefined);
+  assert.equal((await review(dispatcher)).recheck, undefined);
+});

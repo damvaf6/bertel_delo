@@ -15,6 +15,7 @@
 // Ответ диспетчера на просьбу о переносе срока — пока эксперт не открыл «Срок» в деле (2.155). Владелец нажал «Готово»
 // осмотра, а обязательные шаги без фото (2.208). Выписка ЕГРН в деле старше 30 дней на дату оценки (2.224) — запросить свежую.
 // Запрошенные документы не пришли 3 дня (2.234) — «Напомнить заказчику», пока сегодня ещё не напоминали.
+// После ИИ-проверки пришёл запрошенный документ (2.248) — «Проверьте заново».
 // Руководителю — те же сведения, что в «Делах экспертов» (2.16): без заказчика, полей заявки, документов и переписки.
 // Только свои дела и свои организации.
 import { orderRef } from '../notify/registry.mjs';
@@ -29,6 +30,7 @@ import { openHandovers } from './handover-ops.mjs';
 import { dueNotes } from './note-ops.mjs';
 import { caseMoves, caseRemind, transferTargets } from './org-ops.mjs';
 import { docWait, egrnOld } from './docreq-ops.mjs';
+import { aiRecheck } from '../ai/ai.mjs';
 
 // «Горит» — просрочено или до срока не больше двух дней (как подсветка в списке дел).
 const HOT_DAYS = 2;
@@ -171,7 +173,15 @@ async function expertPart(sql, actor, registry, today, storage) {
     if (w?.can_remind) docsWait.push(item(o, { wait: w }));
   }
   docsWait.sort((a, b) => new Date(a.wait.since) - new Date(b.wait.since));
+  // После ИИ-проверки пришли запрошенные документы (2.248) — «Проверьте заново»; новая ИИ-проверка — строка уходит.
+  const recheck = [];
+  for (const o of rows.filter((x) => x.status === 'in_work')) {
+    const r = await aiRecheck(sql, o);
+    if (r) recheck.push(item(o, { recheck: r }));
+  }
+  recheck.sort((a, b) => new Date(b.recheck.docs.at(-1).at) - new Date(a.recheck.docs.at(-1).at));
   return {
+    ai_recheck: recheck,
     egrn_old: egrnStale,
     docs_wait: docsWait,
     // Отказ в переносе, а срок в дни «не принимаю дела» (2.215) — своей строкой с «Попросить руководителя передать дело».
