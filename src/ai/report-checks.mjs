@@ -1223,6 +1223,63 @@ function shareMatch(doc, ctx) {
   return out;
 }
 
+// ——— 2.253: размер доли в отчёте — как в выписке ЕГРН на объект из дела ———
+// В выписке доля — в строке вида права («Общая долевая собственность, 1/2» или «…, доля в праве 1/2») или отдельно
+// («Доля в праве: 1/3», «1.1. Петров П.П. (доля 1/2)»). Номер регистрации «…-77/051/2020-3» долей не считается. Совпадает
+// хоть с одной долей из выписки (у собственников разные доли) — не находка; 2/4 и 1/2 — одно и то же. «Исправить в
+// черновике» — только когда доля в выписках одна. Аналоги, этажи, прежние собственники — не про объект.
+const EGRN_SHARE_AT = [
+  /(?<![а-яё])дол(?:я|и|е|ю|ей)(?![а-яё])(?:\s+в\s+праве)?(?:\s+общей\s+долевой\s+собственности)?\s*[:\-–—]?\s*(\d{1,3})\s*\/\s*(\d{1,4})(?![\d/])/giu,
+  /долев\S*\s+собственность\s*[,:\-–—]?\s*(\d{1,3})\s*\/\s*(\d{1,4})(?![\d/])/giu,
+];
+const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+const shareKey = (a, b) => { const g = gcd(a, b) || 1; return `${a / g}/${b / g}`; };
+function egrnShares(egrn, ctx) {
+  const land = ctx.service === 'land';
+  const got = new Map();
+  for (const d of egrnOnObject(egrn, ctx)) {
+    if (!Array.isArray(d.pages)) continue;
+    const head = d.pages.slice(0, 2).join('\n');
+    if (land ? EGRN_BUILT.test(head) && !EGRN_LAND.test(head) : EGRN_LAND.test(head) && !EGRN_BUILT.test(head)) continue;
+    d.pages.forEach((page, i) => {
+      for (const re of EGRN_SHARE_AT) {
+        for (const m of page.matchAll(re)) {
+          const [a, b] = [Number(m[1]), Number(m[2])];
+          if (!a || !b || a > b) continue;
+          const key = shareKey(a, b);
+          if (!got.has(key)) got.set(key, { v: `${a}/${b}`, name: d.name, page: i, doc: d.id, quote: lineAround(page, m.index) });
+        }
+      }
+    });
+  }
+  return got;
+}
+function shareEgrnMatch(doc, ctx) {
+  if (!ctx.egrn?.length) return [];
+  const shares = egrnShares(ctx.egrn, ctx);
+  if (!shares.size) return [];
+  const list = [...shares.values()];
+  const at = list[0];
+  const all = list.length > 1 ? `доли в праве: ${list.map((x) => x.v).join(', ')}` : `доля в праве ${at.v}`;
+  const out = [];
+  const seen = new Set();
+  eachPage(doc, (page, i) => {
+    for (const re of SHARE_AT) {
+      for (const m of page.matchAll(re)) {
+        const [c, d] = [Number(m[1]), Number(m[2])];
+        if (!c || !d || c > d) continue;
+        const key = shareKey(c, d);
+        const line = lineAround(page, m.index);
+        if (shares.has(key) || seen.has(key) || /аналог|этаж/iu.test(line) || RIGHTS_SKIP.test(line)) continue;
+        seen.add(key);
+        out.push({ page: i, quote: line, egrn: egrnAt(at), ...(list.length === 1 ? { fix: { bad: `${c}/${d}`, right: at.v } } : {}),
+          text: `Доля ${c}/${d} не совпадает с выпиской ЕГРН «${at.name}» (${all}, стр. ${at.page + 1}) — проверьте, не доля ли это другого собственника или другого объекта` });
+      }
+    }
+  });
+  return out;
+}
+
 const LAND_CATEGORY = {
   settlement: ['земли населённых пунктов', /населённ|населенн/iu],
   agricultural: ['земли сельхозназначения', /сельскохоз|сельхоз/iu],
@@ -2253,6 +2310,7 @@ const PER_DOC = {
   cad_value_match: cadValueMatch,
   rights_match: rightsMatch,
   share_match: shareMatch,
+  share_egrn_match: shareEgrnMatch,
   land_match: landMatch,
   date_order: dateOrder,
   reg_match: regMatch,
@@ -2281,6 +2339,7 @@ export const AUTO_CHECKS = Object.freeze({
   rights_match: 'правообладатель и вид права (собственность, общая долевая, общая совместная) в отчёте — как в выписке ЕГРН на объект из дела',
   encumbrance_match: 'ограничения и обременения из выписки ЕГРН на объект (ипотека, арест, запрещение регистрации, аренда, сервитут, доверительное управление) упомянуты в отчёте',
   share_match: 'размер доли в отчёте — как в заявке',
+  share_egrn_match: 'размер доли в отчёте — одна из долей в выписке ЕГРН на объект из дела',
   land_match: 'категория земель и вид разрешённого использования — как в заявке',
   inspection: '«без осмотра» и дата осмотра одновременно',
   court_purpose: 'цель «для суда» и отказ являться в суд',
