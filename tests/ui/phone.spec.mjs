@@ -10883,7 +10883,7 @@ test('прогон 2.250: эксперт и руководитель по пач
   // руководитель не видел отметок у нового файла. Теперь у замечания — подсказка и кнопка к возвращённому файлу.
   await ep.goto(`/kabinet#order=${A}`);
   const beside = ep.locator('#org-returns [data-role="return-beside"]');
-  await expect(beside).toHaveText('После возврата загружен «Отчёт Десятова испр.txt», а возвращённый «Отчёт Десятова.txt» не удалён — замечание пока открыто. Если «Отчёт Десятова испр.txt» — исправленная версия, удалите «Отчёт Десятова.txt» и подпишите новый файл: тогда руководитель увидит у него Ваши отметки. Если это приложение — подпишите заново «Отчёт Десятова.txt». К возвращённому файлу');
+  await expect(beside).toHaveText('После возврата загружен «Отчёт Десятова испр.txt», а возвращённый «Отчёт Десятова.txt» не удалён — замечание пока открыто. Если «Отчёт Десятова испр.txt» — исправленная версия, удалите «Отчёт Десятова.txt» и подпишите новый файл: тогда руководитель увидит у него Ваши отметки. Если это приложение — подпишите заново «Отчёт Десятова.txt». К возвращённому файлу · Заменить «Отчёт Десятова.txt» на «Отчёт Десятова испр.txt»');
   await beside.scrollIntoViewIfNeeded();
   await shot(ep, 'd13a-progon10-ekspert-vozvrashchennyj-ne-udalen');
   await beside.screenshot({ path: 'test-results/screens/d13b-progon10-ekspert-vozvrashchennyj-ne-udalen-blok.png' });
@@ -10960,4 +10960,60 @@ test('прогон 2.250: эксперт и руководитель по пач
   await brow.scrollIntoViewIfNeeded();
   await shot(hp, 'd16-progon10-rukovoditel-vernulsya');
   for (const p of [ep, hp, cp]) await p.context().close();
+});
+
+test('2.251: новый файл результата при открытом возврате — «Это исправленная версия?» и замена одним нажатием', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), hp = await ctx();
+  const expert = await signIn(ep, '+79990025101'), head = await signIn(hp, '+79990025102');
+  const { A } = await db(async (c) => {
+    const { rows: [org] } = await c.query('insert into organizations (name) values ($1) returning id', [`ООО «Замена ${Date.now() % 100000}»`]);
+    await c.query("update users set full_name = 'Заменов Илья' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now() - interval '1 year'), ($1, $3, 'member', now() - interval '1 year')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into morning_digests (user_id, day) values ($1, (now() at time zone 'Europe/Moscow')::date), ($2, (now() at time zone 'Europe/Moscow')::date)", [expert.id, head.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Замена файла: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"sale","region":"moscow","object_type":"flat","address":"г. Москва, ул. Замены, д. 1, кв. 1","area":"40"}') returning id`,
+    [head.id, expert.id, inDays(9)]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now() - interval '5 days')", [o.id, expert.id]);
+    return { A: o.id };
+  });
+  const up = await ep.request.post(`/api/orders/${A}/results`, { data: Buffer.from('%PDF-1.4 отчёт замены'), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Отчёт Заменова.pdf') } });
+  expect(up.status()).toBe(201);
+  const oldId = (await up.json()).document.id;
+  expect((await ep.request.post(`/api/documents/${oldId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  expect((await hp.request.post(`/api/org-documents/${oldId}/return`, { data: { comment: '1. Нет даты осмотра\n2. Не указан этаж' }, headers: H })).status()).toBe(201);
+
+  await ep.goto(`/kabinet#order=${A}`);
+  const ask = ep.locator('#replace-box');
+  // Приложение к отчёту — «Нет»: возвращённый остаётся, вопрос уходит, у замечания — подсказка и та же замена кнопкой.
+  await ep.locator('#result-file').setInputFiles({ name: 'Приложение фото.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 фото') });
+  await expect(ask.locator('#replace-text')).toHaveText('«Приложение фото.pdf» — исправленная версия возвращённого «Отчёт Заменова.pdf»?');
+  await ask.getByRole('button', { name: 'Нет, это приложение' }).click();
+  await expect(ask).toBeHidden();
+  await expect(ep.locator(`#docs li.doc[data-doc="${oldId}"]`)).toHaveCount(1);
+  await expect(ep.locator('#org-returns [data-action="replace-returned"]')).toHaveText('Заменить «Отчёт Заменова.pdf» на «Приложение фото.pdf»');
+
+  // Исправленный отчёт — «Да, заменить»: возвращённый удалён одним нажатием, у замечания — «исправленный загружен».
+  await ep.locator('#result-file').setInputFiles({ name: 'Отчёт Заменова испр.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 отчёт исправлен') });
+  await expect(ask.locator('#replace-text')).toHaveText('«Отчёт Заменова испр.pdf» — исправленная версия возвращённого «Отчёт Заменова.pdf»?');
+  await expect(ask.locator('#replace-note')).toContainText('«Да, заменить» удалит «Отчёт Заменова.pdf»: подпишите «Отчёт Заменова испр.pdf»');
+  await ask.scrollIntoViewIfNeeded();
+  await shot(ep, 'd17-ekspert-ispravlennaya-versiya-vopros');
+  await ask.screenshot({ path: 'test-results/screens/d17b-ekspert-ispravlennaya-versiya-vopros-blok.png' });
+  await ask.getByRole('button', { name: 'Да, заменить' }).click();
+  await expect(ep.locator('#doc-msg')).toHaveText('«Отчёт Заменова.pdf» удалён. Подпишите «Отчёт Заменова испр.pdf».');
+  await expect(ask).toBeHidden();
+  await expect(ep.locator(`#docs li.doc[data-doc="${oldId}"]`)).toHaveCount(0);
+  await expect(ep.locator('#org-returns [data-role="return-beside"]')).toHaveCount(0);
+  await expect(ep.locator('#org-returns [data-role="return-file"]')).toContainText('Исправленный файл «Отчёт Заменова испр.pdf» загружен');
+  await ep.locator('#org-returns').scrollIntoViewIfNeeded();
+  await shot(ep, 'd18-ekspert-ispravlennaya-versiya-zamenen');
+
+  // Новый файл, когда возвращённого уже нет, — вопроса нет.
+  await ep.locator('#result-file').setInputFiles({ name: 'Ещё приложение.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 ещё') });
+  await expect(ep.locator('#doc-msg')).toHaveText('Файл добавлен');
+  await expect(ask).toBeHidden();
+  for (const p of [ep, hp]) await p.context().close();
 });

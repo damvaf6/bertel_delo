@@ -429,3 +429,5 @@ ul.checks li.ok { color: var(--ok); }
 .permit-card .bad { color: var(--danger); font-weight: 600; }
 .permit-card .ok { color: var(--ok); font-weight: 600; }
 .permit-card a { overflow-wrap: anywhere; }
+.replace-ask { border: 1px solid #e0b252; background: #fff8e6; border-radius: 8px; padding: 10px; }
+.replace-ask p { margin: 0 0 6px; }
