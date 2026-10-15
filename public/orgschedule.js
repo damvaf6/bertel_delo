@@ -46,7 +46,7 @@ function strip(x, days) {
     const go = d.items.length - due;
     const cls = ['cell', h.today ? 'today' : '', h.weekend ? 'weekend' : '', kind(x, d) !== 'free' ? kind(x, d) : '',
       vacation(x, d) && dueOn(d) ? 'clash' : '', due > 1 ? 'heavy' : due || go ? 'busy' : ''].filter(Boolean).join(' ');
-    return el('span', { class: cls, 'data-day': h.date, title: `${h.weekday}, ${short(h.date)}` },
+    return el('span', { class: cls, 'data-day': h.date, title: [`${h.weekday}, ${short(h.date)}`, kind(x, d) !== 'free' ? FREE[kind(x, d)] : null].filter(Boolean).join(' — ') },
       el('span', { class: 'num', text: String(Number(h.date.slice(8))) }),
       el('span', { class: 'cnt', text: due ? String(due) : go ? '•' : '' }));
   }));
@@ -56,6 +56,9 @@ function expertItem(x, days, experts) {
   const total = [`сдать за две недели: ${x.due}`, x.visits ? `выездов: ${x.visits}` : null,
     `свободных будней: ${x.free_workdays}`].filter(Boolean).join(' · ');
   const busy = x.days.map((d, k) => ({ d, h: days[k] })).filter(({ d }) => d.items.length);
+  // «По дням» (2.245): кроме дней со сроками и выездами — первый день «не принимает новые дела» и день возвращения.
+  const marked = x.days.map((d, k) => ({ d, h: days[k], k }))
+    .filter(({ d, k }) => d.items.length || kind(x, d) === 'back' || (vacation(x, d) && (k === 0 || !vacation(x, x.days[k - 1]))));
   // Срок сдачи в дни, когда эксперт не принимает дела (2.194): руководителю — заметно, кому передать — его решение.
   const clash = x.days.reduce((n, d) => n + (vacation(x, d) ? dueOn(d) : 0), 0);
   return el('li', { 'data-expert-schedule': x.user_id },
@@ -68,8 +71,8 @@ function expertItem(x, days, experts) {
     ...(clash ? [el('div', { class: 'clash-note', 'data-role': 'clash', text: `Срок сдачи в дни, когда эксперт не принимает дела: ${clash} — ${
       // Прогон 2.200: другого эксперта, который принимает дела, нет — «передать коллеге» не подсказываем.
       experts.some((y) => y.user_id !== x.user_id && !y.away && !y.paused) ? 'можно передать коллеге' : 'передать некому: другие эксперты не принимают дела — попросите эксперта перенести срок'}` })] : []),
-    ...(busy.length || x.overdue.length ? [daysDetails(x, busy)]
-      : [el('div', { class: 'muted', text: x.away || x.paused ? 'Сроков и выездов нет.' : 'Две недели свободны — сроков и выездов нет.' })]));
+    ...(busy.length || x.overdue.length ? [] : [el('div', { class: 'muted', text: x.away || x.paused ? 'Сроков и выездов нет.' : 'Две недели свободны — сроков и выездов нет.' })]),
+    ...(marked.length || x.overdue.length ? [daysDetails(x, marked)] : []));
 }
 
 // «По дням»: сначала то, у чего срок уже прошёл, потом дни, где есть сроки или выезды.
@@ -80,8 +83,41 @@ function daysDetails(x, busy) {
     class: [h.today ? 'today' : '', h.weekend ? 'weekend' : '', kind(x, d) !== 'free' ? kind(x, d) : ''].filter(Boolean).join(' ') },
     el('div', { class: 'day' }, el('span', { text: `${h.today ? 'Сегодня, ' : ''}${h.weekday}, ${short(h.date)}` })),
     ...(kind(x, d) !== 'free' ? [el('p', { class: 'away-mark', text: FREE[kind(x, d)] })] : []),
-    el('ul', {}, ...d.items.map((i) => item(i, vacation(x, d) && i.kind === 'deadline' && i.status !== 'review' ? 'hot' : '')))));
+    ...(d.items.length ? [el('ul', {}, ...d.items.map((i) => item(i, vacation(x, d) && i.kind === 'deadline' && i.status !== 'review' ? 'hot' : '')))] : [])));
   return el('details', { 'data-days': x.user_id }, el('summary', { text: 'По дням' }), el('ol', { class: 'schedule' }, ...late, ...rows));
+}
+
+// Сколько экспертов принимают новые дела по дням (2.245) — полоса над экспертами, на тех же днях. Никто не принимает —
+// день красным и строкой «Никто не принимает новые дела: …», чтобы руководитель заранее знал, когда дело назначить некому.
+function spans(dates) {
+  const out = [];
+  for (const d of dates) {
+    const last = out.at(-1);
+    if (last && addDay(last.to) === d) last.to = d; else out.push({ from: d, to: d });
+  }
+  return out.map((p) => (p.from === p.to ? short(p.from) : `${short(p.from)} — ${short(p.to)}`)).join(', ');
+}
+function addDay(iso) {
+  const [y, m, d] = iso.split('-').map(Number);
+  const t = new Date(Date.UTC(y, m - 1, d + 1));
+  return t.toISOString().slice(0, 10);
+}
+function team(schedule) {
+  const total = schedule.experts.length;
+  const none = schedule.days.filter((h) => h.accepting === 0).map((h) => h.date);
+  const fewer = schedule.days.some((h) => h.accepting < total);
+  const note = none.length ? el('div', { class: 'clash-note', 'data-role': 'nobody', text: `Никто не принимает новые дела: ${spans(none)}` })
+    : el('div', { class: 'muted', 'data-role': 'nobody', text: fewer ? 'Каждый день кто-то из экспертов принимает новые дела.'
+      : 'Все эксперты принимают новые дела все две недели.' });
+  return [
+    el('div', { class: 'title', text: `Принимают новые дела (из ${total})` }),
+    el('div', { class: 'strip', 'aria-hidden': 'true' }, ...schedule.days.map((h) => el('span', {
+      class: ['cell', h.today ? 'today' : '', h.weekend ? 'weekend' : '', h.accepting === 0 ? 'nobody' : h.accepting < total ? 'fewer' : ''].filter(Boolean).join(' '),
+      'data-day': h.date, title: `${h.weekday}, ${short(h.date)} — принимают: ${h.accepting} из ${total}` },
+    el('span', { class: 'num', text: String(Number(h.date.slice(8))) }),
+    el('span', { class: 'cnt', text: String(h.accepting) })))),
+    note,
+  ];
 }
 
 let seq = 0;
@@ -95,5 +131,6 @@ export async function loadOrgSchedule(org) {
   say($('org-schedule-msg'), '');
   $('org-schedule-box').classList.toggle('hidden', schedule.experts.length === 0);
   $('org-schedule-range').textContent = `${short(schedule.from)} — ${short(schedule.to)}`;
+  $('org-schedule-team').replaceChildren(...(schedule.experts.length ? team(schedule) : []));
   $('org-schedule').replaceChildren(...schedule.experts.map((x) => expertItem(x, schedule.days, schedule.experts)));
 }

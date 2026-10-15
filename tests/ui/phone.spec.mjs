@@ -8957,6 +8957,22 @@ test('2.194: нагрузка экспертов — дни «не приним�
   await expect(row).toContainText(`№ ${id.slice(0, 8).toUpperCase()}`);
   await row.scrollIntoViewIfNeeded();
   await shot(hp, 'g4b-nagruzka-srok-v-otpuske');
+  // 2.245: над экспертами — сколько принимают новые дела по дням; второй выключил приём — в дни отпуска первого никто.
+  const team = box.locator('#org-schedule-team');
+  await expect(team).toContainText('Принимают новые дела (из 2)');
+  await expect(team.locator('.strip .cell.nobody')).toHaveCount(3);
+  await expect(team.locator('.strip .cell').nth(0).locator('.cnt')).toHaveText('0');
+  await expect(team.locator('.strip .cell').nth(3).locator('.cnt')).toHaveText('1');
+  await expect(team.locator('[data-role="nobody"]')).toHaveText(/^Никто не принимает новые дела: \d+ \S+ — \d+ \S+$/);
+  // «По дням»: день возвращения виден, хоть в нём нет ни сроков, ни выездов.
+  const back = a.locator(`details[data-days] li[data-day="${inDays(3)}"]`);
+  await expect(back.locator('.away-mark')).toHaveText('снова предлагают дела');
+  await expect(back.locator('ul')).toHaveCount(0);
+  await expect(cell(a, 3)).toHaveAttribute('title', /снова предлагают дела$/);
+  // Выключил приём — дней возвращения нет, «По дням» не нужен.
+  await expect(b.locator('details[data-days]')).toHaveCount(0);
+  await team.scrollIntoViewIfNeeded();
+  await shot(hp, 'g4c-nagruzka-kto-prinimaet-dela');
   for (const p of [hp, cp]) await p.context().close();
 });
 
