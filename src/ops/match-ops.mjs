@@ -17,7 +17,7 @@ import { BLOCKING_KINDS, dossierAlerts, loadDossier, needsValidDossier } from '.
 import { expertMonthReport, orgReturnsYear, reportMonth } from '../orgs/report.mjs';
 import { expertSchedule } from '../orders/schedule.mjs';
 import { scheduleIcs } from '../orders/ics.mjs';
-import { awayBackOf } from '../notify/away.mjs';
+import { AWAY_BACK_SHOW_DAYS, awayBackOf } from '../notify/away.mjs';
 import { TAX_STATUSES, taxStatusFrom } from '../matching/executors.mjs';
 
 const REGIONS = { moscow: 'Москва', mo: 'Московская область' };
@@ -39,6 +39,16 @@ export function awayOf(sp, today = todayMsk()) {
 
 // День date — в днях «не принимаю дела» отметки a (из awayOf).
 export const awayOn = (a, date) => !!a && !!date && date < a.until && (!a.from || date >= a.from);
+
+// Эксперт вернулся после дней «не принимаю дела» (2.249): день возвращения (away_until) уже наступил, не раньше недели назад
+// (как блок «Пока Вас не было», 2.239) — руководителю видно, у чьих дел стоит посмотреть, что изменилось.
+export function backOf(sp, today = todayMsk()) {
+  if (!sp?.away_until) return null;
+  const until = isoDay(sp.away_until);
+  if (until > today || until <= addDays(today, -AWAY_BACK_SHOW_DAYS)) return null;
+  const since = sp.away_since ? isoDay(sp.away_since) : sp.away_from ? isoDay(sp.away_from) : null;
+  return { since: since && since < until ? since : null, until, today: until === today };
+}
 
 function intIn(value, field, min, max) {
   const n = Number(value);

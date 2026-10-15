@@ -398,6 +398,8 @@ export async function orgPart(sql, org, registry, today, { actorId = null } = {}
     fresh_long: returned.filter((r) => r.fresh_file && Date.now() - new Date(r.fresh_file.at).getTime() >= SIGN_LONG_DAYS * 86400_000).length,
     // Отказы диспетчера в переносе срока по просьбе организации за сутки (2.238) — только число, для утренней сводки.
     ext_declined: extDeclined,
+    // Сколько экспертов сегодня вернулись после дней «не принимаю дела» (2.249) и у них есть дела — для утренней сводки.
+    back_today: new Set(cases.filter((o) => o.away_until === today).map((o) => o.executor_user_id)).size,
     id: org.id,
     name: org.name,
     hot: cases.filter((o) => ['in_work', 'review'].includes(o.status) && o.deadline && o.deadline <= soon)
