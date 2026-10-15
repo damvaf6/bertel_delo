@@ -284,7 +284,30 @@ export async function aiReviewView(sql, order) {
                           where order_id = ${order.id} and round = ${round} order by id desc limit 1`;
   if (!r) return null;
   const prev = await prevReview(sql, order, r);
-  return { round: r.round, side: r.side, model: r.model, items: r.items, files: r.files, at: r.at, ...(prev ? { prev } : {}) };
+  const recheck = await docsAfterReview(sql, order, r.at);
+  return { round: r.round, side: r.side, model: r.model, items: r.items, files: r.files, at: r.at, ...(prev ? { prev } : {}), ...(recheck ? { recheck } : {}) };
+}
+
+// Пришёл запрошенный документ после ИИ-проверки (2.248): заказчик приложил файл к просьбе (выписка ЕГРН, техпаспорт…)
+// позже, чем ИИ проверял отчёт, — проверка не видела этот документ, исполнителю подсказка «проверьте заново». Пока дело в
+// работе; удалённый файл не в счёт. { docs: [{ title, filename, at }], egrn } или null; egrn — среди них выписка ЕГРН.
+export async function docsAfterReview(sql, order, at) {
+  if (order.status !== 'in_work' || !at) return null;
+  const rows = await sql`select r.item_id, r.title, r.fulfilled_at, d.filename from doc_requests r
+                         join documents d on d.id = r.document_id and d.deleted_at is null
+                         where r.order_id = ${order.id} and r.cancelled_at is null and r.fulfilled_at > ${at}
+                         order by r.fulfilled_at, r.id`;
+  if (!rows.length) return null;
+  return { docs: rows.map((x) => ({ title: x.title, filename: x.filename, at: x.fulfilled_at })), egrn: rows.some((x) => x.item_id === 'egrn') };
+}
+
+// Последняя ИИ-проверка текущего круга (как в aiReviewView) и документы, пришедшие после неё, — для «Сегодня» (2.248).
+export async function aiRecheck(sql, order) {
+  if (order.status !== 'in_work') return null;
+  const r = await sql.one`select at from ai_reviews where order_id = ${order.id} and round = ${order.review_round + 1}
+                          order by id desc limit 1`;
+  const recheck = r ? await docsAfterReview(sql, order, r.at) : null;
+  return recheck ? { ...recheck, review_at: r.at } : null;
 }
 
 // Что изменилось с ИИ-проверки прежней версии файла (2.206): последняя более ранняя проверка этого дела (любого круга —

@@ -139,3 +139,72 @@ test('2.234: документы не пришли 3 дня — «Напомни�
   await dctx.close();
   await sctx.close();
 });
+
+test('2.248: после ИИ-проверки пришла запрошенная выписка — «проверьте заново» в «Сегодня» и у ИИ-проверки', async ({ browser, baseURL }) => {
+  const problems = [];
+  const watch = (p) => {
+    p.on('pageerror', (e) => problems.push(`ошибка JS: ${e.message}`));
+    p.on('request', (r) => { const u = new URL(r.url()); if (u.protocol.startsWith('http') && u.origin !== new URL(baseURL).origin && !process.env.UI_ALLOWED_ORIGINS?.includes(u.origin)) problems.push(`внешний запрос: ${r.url()}`); });
+  };
+  const dctx = await phoneContext(browser, baseURL);
+  const dp = await dctx.newPage();
+  const sctx = await phoneContext(browser, baseURL);
+  const sp = await sctx.newPage();
+  watch(dp); watch(sp);
+  const disp = await signIn(dp, '+79990008741');
+  const spec = await signIn(sp, '+79990008742');
+  await db(async (c) => {
+    await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [spec.id]);
+  });
+  const id = (await (await dp.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира: выписка после ИИ-проверки' }, headers: H })).json()).order.id;
+  expect((await dp.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(9), fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, Сверочная ул., 8' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await dp.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  await db(async (c) => {
+    await c.query('update orders set price_kop = 1500000, paid_at = now() where id = $1', [id]);
+    await c.query("insert into payments (order_id, amount_kop, status, provider_id, created_by, paid_at) values ($1, 1500000, 'succeeded', $2, $3, now())", [id, `pay_ui_${id}`, disp.id]);
+  });
+  expect((await dp.request.post(`/api/orders/${id}/offer`, { data: { specialist_id: spec.id, from: 'matching' }, headers: H })).status()).toBe(200);
+  expect((await sp.request.post(`/api/orders/${id}/status`, { data: { from: 'awaiting_executor', to: 'in_work' }, headers: H })).status()).toBe(200);
+  const asked = await (await sp.request.post(`/api/orders/${id}/doc-requests`, { data: { items: ['egrn'] }, headers: H })).json();
+  // Эксперт загрузил отчёт и проверил его с помощью ИИ, пока выписки ещё не было.
+  expect((await sp.request.post(`/api/orders/${id}/results`, { data: Buffer.from('Отчёт об оценке квартиры. Итоговая стоимость 9 500 000 руб.'),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Отчёт.txt') } })).status()).toBe(201);
+  expect((await sp.request.post(`/api/orders/${id}/review/ai`, { headers: H })).status()).toBe(201);
+  // Заказчик прислал выписку после проверки.
+  const doc = (await (await dp.request.post(`/api/orders/${id}/documents`, { data: Buffer.from('Выписка из ЕГРН'),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Выписка ЕГРН.txt') } })).json()).document;
+  expect((await dp.request.post(`/api/orders/${id}/doc-requests/${asked.requests[0].id}/attach`, { data: { document_id: doc.id }, headers: H })).status()).toBe(200);
+
+  // «Сегодня»: «Пришли документы после ИИ-проверки» — что пришло, нажатие ведёт к ИИ-проверке в деле.
+  await sp.goto('/kabinet');
+  const row = sp.locator('li[data-today-item="ai-recheck"]');
+  await expect(row).toHaveCount(1);
+  await expect(row.locator('[data-role="ai-recheck-what"]')).toHaveText(/^Выписка из ЕГРН \(«Выписка ЕГРН\.txt»\) — пришло после ИИ-проверки /);
+  await expect(row).toContainText('проверьте заново: ИИ сверит отчёт с новой выпиской');
+  await row.scrollIntoViewIfNeeded();
+  await shot(sp, 'dr7-2248-segodnya-proverte-zanovo');
+  await row.screenshot({ path: 'test-results/screens/dr7b-2248-segodnya-stroka.png' });
+  await row.locator('button.open').click();
+  const box = sp.locator('#ai-review-recheck');
+  await expect(box).toBeVisible();
+  await expect(box).toContainText('После ИИ-проверки пришли запрошенные документы: Выписка из ЕГРН («Выписка ЕГРН.txt»,');
+  await expect(box).toContainText('ИИ ещё не сверял отчёт с новой выпиской ЕГРН — проверьте заново.');
+  await expect(box).toBeInViewport();
+  await shot(sp, 'dr8-2248-ii-proverka-proverte-zanovo');
+  await sp.locator('#ai-review-box').screenshot({ path: 'test-results/screens/dr8b-2248-ii-proverka-blok.png' });
+  // «Проверить заново» — новая ИИ-проверка, подсказка уходит; в «Сегодня» строки больше нет.
+  await box.getByRole('button', { name: 'Проверить заново' }).click();
+  await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  await expect(box).toBeHidden();
+  await shot(sp, 'dr9-2248-ii-proverka-zanovo-gotova');
+  await sp.goto('/kabinet');
+  await sp.waitForLoadState('networkidle');
+  await expect(sp.locator('li[data-today-item="ai-recheck"]')).toHaveCount(0);
+  expect(problems, problems.join('\n')).toEqual([]);
+  await dctx.close();
+  await sctx.close();
+});

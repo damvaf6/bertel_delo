@@ -45,6 +45,7 @@ export async function loadReview(current) {
   // Короче на телефоне (2.191): вверху — «Посмотрите: N» с названиями правил, нажатие ведёт к правилу. Тому, кто не
   // ставит отметки (исполнитель), правила, где у ИИ нет замечаний и находок, — одной свёрнутой строкой.
   prevBox(r);
+  recheckBox(order, r);
   const look = r.checks.filter((c) => hints.get(c.id)?.hint === 'attention');
   $('ai-review-look').classList.toggle('hidden', look.length === 0);
   $('ai-review-look').replaceChildren(...(look.length ? [el('span', { text: `Посмотрите: ${look.length} — ` }),
@@ -149,6 +150,19 @@ function prevBox(r) {
     ...(p.kept.length ? [row('kept', 'Осталось', p.kept)] : []),
     ...(p.fresh.length ? [row('fresh', 'Новое', p.fresh)] : []),
     ...(!p.kept.length && !p.fresh.length ? [el('p', { class: 'ai-prev-row gone', text: 'Всё, на что ИИ указывал в прежней версии, ушло.' })] : []));
+}
+
+// Пришли запрошенные документы после ИИ-проверки (2.248): проверка их не видела — «Проверить заново» здесь же.
+function recheckBox(order, r) {
+  const x = r.ai?.recheck;
+  const box = $('ai-review-recheck');
+  const on = !!x && r.can_ai;
+  box.classList.toggle('hidden', !on);
+  if (!on) { box.replaceChildren(); return; }
+  box.replaceChildren(
+    el('p', { class: 'ai-recheck-head', text: `После ИИ-проверки пришли запрошенные документы: ${x.docs.map((d) => `${d.title} («${d.filename}», ${timeRu(d.at)})`).join(', ')}.` }),
+    el('p', { class: 'muted', text: x.egrn ? 'ИИ ещё не сверял отчёт с новой выпиской ЕГРН — проверьте заново.' : 'ИИ их ещё не видел — проверьте заново.' }),
+    el('button', { type: 'button', class: 'secondary', 'data-action': 'ai-recheck', onclick: () => runAi(order) }, 'Проверить заново'));
 }
 
 // Название правила до двоеточия — для сводок в строку (2.191).
