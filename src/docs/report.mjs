@@ -34,6 +34,9 @@ function taskTable(registry, order, { skip = [], materials = [], valueDate = nul
     // Площадь и кадастровый номер — из выписки ЕГРН в деле (2.211), когда в выписках они одни; другое в заявке — рядом.
     ...(def?.fields ?? []).filter((f) => !skip.includes(f.id) && ((order.fields?.[f.id] !== undefined && order.fields[f.id] !== '') || egrn?.[f.id]?.v))
       .map((f) => [f.label, egrn?.[f.id]?.v ? `${egrn[f.id].v} (по выписке ЕГРН${egrn[f.id].typed ? `; в заявке — ${egrn[f.id].typed}` : ''})` : valueText(f, order.fields[f.id])]),
+    // Правообладатель, вид права и обременения (2.243) — из выписки ЕГРН на объект: в заявке их нет.
+    ...[['holders', 'Правообладатель'], ['kind', 'Вид права'], ['enc', 'Ограничения и обременения']]
+      .filter(([k]) => egrn?.rights?.[k]?.v).map(([k, label]) => [label, `${egrn.rights[k].v} (по выписке ЕГРН)`]),
     ['Срок', order.deadline ? ru(order.deadline) : GAP],
   ];
   const got = materials.length

@@ -1169,6 +1169,14 @@ test('ИИ-проверка результата: специалист пере�
   await expect(sp.locator('#draft-state')).toContainText('Этаж / этажей в доме 6 — как в выписке ЕГРН «Выписка ЕГРН.txt» (стр. 1)');
   await expect(sp.locator('#draft-state')).toContainText('Адрес г. Москва, тестовая ул., д. 9, кв. 21 — как в выписке ЕГРН «Выписка ЕГРН.txt» (стр. 1) — сверьте.');
   await shot(sp, '54k-specialist-chernovik-etazh-adres-egrn');
+  // Правообладатель, вид права и обременения (2.243) — из выписки: в таблице задания и откуда взяты.
+  await expect(sp.getByLabel('Текст заключения')).toHaveValue(/\| Правообладатель \| Сергеев Сергей Сергеевич \(по выписке ЕГРН\) \|/);
+  await expect(sp.getByLabel('Текст заключения')).toHaveValue(/\| Вид права \| Собственность \(по выписке ЕГРН\) \|/);
+  await expect(sp.getByLabel('Текст заключения')).toHaveValue(/\| Ограничения и обременения \| Ипотека в силу закона \(по выписке ЕГРН\) \|/);
+  await expect(sp.locator('#draft-state')).toContainText('Правообладатель: Сергеев Сергей Сергеевич — как в выписке ЕГРН «Выписка ЕГРН.txt» (стр. 1) — сверьте.');
+  await expect(sp.locator('#draft-state')).toContainText('Ограничения и обременения: Ипотека в силу закона — как в выписке ЕГРН «Выписка ЕГРН.txt» (стр. 1) — сверьте.');
+  await sp.locator('#draft-state').scrollIntoViewIfNeeded();
+  await shot(sp, '54u-specialist-chernovik-prava-egrn');
   // 2.229: у находки по выписке — «Исправить в черновике»: выделяет в тексте черновика значение, которое разошлось с выпиской.
   const draftText = sp.getByLabel('Текст заключения');
   await draftText.fill(`${await draftText.inputValue()}\nОбщей площадью 45,1 кв. м — по техническому паспорту.`);

@@ -16,7 +16,7 @@ import { pastValues, reuseSections, skeleton } from '../docs/reuse.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { orderSources, placeSources, sourcesLines } from '../docs/sources.mjs';
 import { draftDiff } from '../docs/diff.mjs';
-import { assignmentValue, egrnFacts, parseFloorField, sameAddressText } from '../ai/report-checks.mjs';
+import { assignmentValue, egrnFacts, egrnRightsFacts, parseFloorField, sameAddressText } from '../ai/report-checks.mjs';
 import { assignmentDocs, egrnDocs } from './ai-ops.mjs';
 
 const PHOTOS_MAX = 40;
@@ -132,9 +132,11 @@ const VALUE_GAP = /\[(?:заполнить|указать)\s*:?\s*дат[аыу]
 // заказчик; другое в заявке — видно рядом), модели и вместо пометок «заполнить: площадь / кадастровый номер»; в выписках
 // разные — ничего не подставляем, эксперт выбирает сам.
 // 2.222: так же этаж с этажностью (floor_match, 2.212) и адрес (address_match, 2.213).
+// 2.243: правообладатель, вид права и обременения (rights_match, encumbrance_match; 2.241, 2.242) — в заявке их нет, поэтому
+// в таблицу задания отдельными строками; видов права в выписках несколько — эксперт выбирает сам.
 async function egrnFor(sql, storage, registry, order) {
   const auto = registry.checks(order.module, order.service).flatMap((r) => r.auto ?? []);
-  if (!['area_match', 'cadastral_match', 'floor_match', 'address_match'].some((k) => auto.includes(k))) return null;
+  if (!['area_match', 'cadastral_match', 'floor_match', 'address_match', 'rights_match', 'encumbrance_match'].some((k) => auto.includes(k))) return null;
   const docs = await egrnDocs(sql, storage, order);
   if (!docs.length) return null;
   const facts = egrnFacts(docs, { service: order.service, fields: order.fields ?? {} });
@@ -151,7 +153,13 @@ async function egrnFor(sql, storage, registry, order) {
   const address = !auto.includes('address_match') ? null : facts.address?.values ? { values: facts.address.values }
     : facts.address ? { v: facts.address.text, name: facts.address.name, page: facts.address.page + 1,
       typed: typedAddr && !sameAddressText(facts.address, typedAddr) ? typedAddr : null } : null;
-  return area || cadastral || floor || address ? { area, cadastral, floor, address } : null;
+  const r = auto.includes('rights_match') || auto.includes('encumbrance_match') ? egrnRightsFacts(docs, { service: order.service, fields: order.fields ?? {} }) : null;
+  const rights = r && (r.holders || r.kind || r.enc) ? {
+    holders: auto.includes('rights_match') ? r.holders : null,
+    kind: auto.includes('rights_match') ? r.kind : null,
+    enc: auto.includes('encumbrance_match') ? r.enc : null,
+  } : null;
+  return area || cadastral || floor || address || rights ? { area, cadastral, floor, address, rights } : null;
 }
 // Этаж и этажность (2.222): в таблицу задания — «6 / 10, надземных 9», когда этаж помещения в выписках один; одна
 // этажность (выписка только на здание) — модели и вместо пометки «этажность»; разные — эксперт выбирает сам.
@@ -175,6 +183,10 @@ const CAD_GAP = /\[(?:заполнить|указать)\s*:?\s*кадастро
 // «[заполнить: этаж / этажность]» — оба; «[заполнить: адрес объекта]» — адрес (адрес аналога, заказчика, эксперта — нет).
 const FLOOR_GAP = /\[(?:заполнить|указать)\s*:?\s*((?:количеств\S*\s+)?этаж[^\]]*)\]/giu;
 const ADDR_GAP = /\[(?:заполнить|указать)\s*:?\s*(?:полн\S*\s+|точн\S*\s+)?адрес([^\]]*)\]/giu;
+// 2.243: «[заполнить: правообладатель]», «[заполнить: собственник]», «[заполнить: вид права]», «[заполнить: обременения]».
+const HOLDER_GAP = /\[(?:заполнить|указать)\s*:?\s*(?:правообладател|собственник)[^\]]*\]/giu;
+const KIND_GAP = /\[(?:заполнить|указать)\s*:?\s*(?:вид\S*\s+(?:зарегистрированн\S*\s+)?прав|оцениваем\S*\s+(?:имущественн\S*\s+)?прав)[^\]]*\]/giu;
+const ENC_GAP = /\[(?:заполнить|указать)\s*:?\s*(?:ограничени|обременени)[^\]]*\]/giu;
 const ADDR_NOT_OBJECT = /аналог|заказчик|оценщик|эксперт|исполнител|организац|регистрац|проживан|почтов|электрон/iu;
 function floorGap(m, inner, f) {
   const both = /этаж(?!ност|ей|н).*этаж(?:ност|ей)/iu.test(inner);
@@ -190,6 +202,9 @@ function fillEgrn(text, egrn) {
   if (egrn?.cadastral?.v) out = out.replace(CAD_GAP, egrn.cadastral.v);
   if (egrn?.floor && !egrn.floor.values) out = out.replace(FLOOR_GAP, (m, inner) => floorGap(m, inner, egrn.floor));
   if (egrn?.address?.v) out = out.replace(ADDR_GAP, (m, rest) => (ADDR_NOT_OBJECT.test(rest) ? m : egrn.address.v));
+  if (egrn?.rights?.holders?.v) out = out.replace(HOLDER_GAP, egrn.rights.holders.v);
+  if (egrn?.rights?.kind?.v) out = out.replace(KIND_GAP, egrn.rights.kind.v);
+  if (egrn?.rights?.enc?.v) out = out.replace(ENC_GAP, egrn.rights.enc.v);
   return out;
 }
 const egrnBrief = (egrn) => [
@@ -197,6 +212,9 @@ const egrnBrief = (egrn) => [
   egrn?.cadastral?.v ? `Кадастровый номер по выписке ЕГРН: ${egrn.cadastral.v} (выписка «${egrn.cadastral.name}», стр. ${egrn.cadastral.page}) — пиши его везде, где нужен кадастровый номер, без пометок` : null,
   egrn?.floor && !egrn.floor.values ? `${[egrn.floor.floor != null ? `Этаж объекта по выписке ЕГРН: ${egrn.floor.floor}` : null, egrn.floor.floors != null ? `этажей в доме: ${egrn.floor.floors}${egrn.floor.above != null ? `, из них надземных ${egrn.floor.above}` : ''}` : null].filter(Boolean).join(', ')} (выписка «${egrn.floor.name}», стр. ${egrn.floor.page}) — пиши так везде, без пометок` : null,
   egrn?.address?.v ? `Адрес объекта по выписке ЕГРН: ${egrn.address.v} (выписка «${egrn.address.name}», стр. ${egrn.address.page}) — пиши его везде, где нужен адрес объекта, без пометок` : null,
+  egrn?.rights?.holders?.v ? `Правообладатель по выписке ЕГРН: ${egrn.rights.holders.v} (выписка «${egrn.rights.holders.name}», стр. ${egrn.rights.holders.page}) — пиши так в разделе о правах, без пометок` : null,
+  egrn?.rights?.kind?.v ? `Вид права по выписке ЕГРН: ${egrn.rights.kind.v} (выписка «${egrn.rights.kind.name}», стр. ${egrn.rights.kind.page}) — пиши так в разделе о правах, без пометок` : null,
+  egrn?.rights?.enc?.v ? `Ограничения и обременения по выписке ЕГРН: ${egrn.rights.enc.v} (выписка «${egrn.rights.enc.name}», стр. ${egrn.rights.enc.page}) — назови их в разделе о правах и обременениях, без пометок` : null,
 ].filter(Boolean).join('\n') || null;
 
 export function draftOps() {
