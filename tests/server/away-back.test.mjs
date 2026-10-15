@@ -117,3 +117,25 @@ test('2.239: ничего не произошло — не беспокоим; �
     'отметили — не проверяем каждую минуту');
   assert.equal(await getBack(), null, 'блока нет');
 });
+
+test('2.244: «Всё посмотрел» убирает блок до следующих дней «не принимаю дела»; дни изменились — «уже изменилось»', async () => {
+  const o = await order('Посмотрел: дело с сообщением');
+  await S.sql`update specialists set away_since = ${addDays(T, -4)}::date, away_from = null, away_until = ${addDays(T, -1)}::date,
+                away_back_for = null, away_back_seen = null where user_id = ${spec.user.id}`;
+  await S.sql`insert into order_messages (order_id, author_id, side, body, at) values (${o.id}, ${owner.user.id}, 'customer', 'Вы где?', ${ago(2)})`;
+  const b = await getBack();
+  assert.equal(b.until, addDays(T, -1));
+  const seen = (until) => spec.req('POST', '/api/specialist/me/back/seen', { until });
+  assert.equal((await seen('вчера')).status, 400);
+  const stale = await seen(addDays(T, -2));
+  assert.equal(stale.status, 409, 'видел другие дни');
+  assert.ok(await getBack(), 'блок на месте');
+  assert.equal((await seen(b.until)).status, 200);
+  assert.equal(await getBack(), null, 'блок убран');
+  // Не специалист — тоже «уже изменилось», чужая отметка не трогается.
+  assert.equal((await owner.req('POST', '/api/specialist/me/back/seen', { until: b.until })).status, 409);
+  // Новые дни «не принимаю» закончились — блок снова виден.
+  await S.sql`update specialists set away_since = ${addDays(T, -3)}::date, away_until = ${T}::date where user_id = ${spec.user.id}`;
+  assert.equal((await getBack()).until, T);
+  await S.sql`update orders set status = 'cancelled' where id = ${o.id}`;
+});

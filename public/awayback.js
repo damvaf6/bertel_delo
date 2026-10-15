@@ -1,6 +1,7 @@
 // «Пока Вас не было» в разделе «Специалист» (2.239): неделю после дней «не принимаю дела» — что произошло с делами за эти
 // дни: какие дела руководитель передал коллегам (только числом — их уже не открыть) и какие передал Вам, что решил диспетчер
 // по срокам, новые сообщения заказчика, диспетчера и руководителя, пришедшие запрошенные документы. Строка открывает дело.
+// «Всё посмотрел» (2.244) убирает блок до следующих дней «не принимаю дела».
 import { api, el } from '/common.js';
 import { dayRu } from '/order.js';
 
@@ -47,4 +48,18 @@ export async function loadAwayBack() {
   }
   for (const d of back.docs) items.push(row(d.order_id, 'docs', `Пришли документы: ${d.title}`, `заказчик загрузил ${d.n} ${many(d.n, 'запрошенный документ', 'запрошенных документа', 'запрошенных документов')}`));
   $('back-list').replaceChildren(...items);
+  $('back-error').classList.add('hidden');
+  $('back-seen').onclick = async () => {
+    $('back-seen').disabled = true;
+    try {
+      await api('POST', '/api/specialist/me/back/seen', { until: back.until });
+      $('back-box').classList.add('hidden');
+    } catch (e) {
+      $('back-error').textContent = e.message;
+      $('back-error').classList.remove('hidden');
+      await loadAwayBack().catch(() => {});
+    } finally {
+      $('back-seen').disabled = false;
+    }
+  };
 }

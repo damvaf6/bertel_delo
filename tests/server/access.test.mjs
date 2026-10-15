@@ -2617,6 +2617,12 @@ test('«Пока Вас не было» (2.239): только свои дела;
   const mine = (await back(exp)).body.back;
   assert.deepEqual(mine.messages.map((m) => [m.order_id, m.chat]), [[o.id, 1]]);
   assert.equal((await back(other)).body.back, null, 'у другого эксперта чужого дела нет');
+  // «Всё посмотрел» (2.244) — только своя отметка: другой эксперт с теми же днями свою не убрал у первого.
+  cover('specialist.me.back.seen');
+  assert.equal((await other.req('POST', '/api/specialist/me/back/seen', { until: t })).status, 200);
+  assert.ok((await back(exp)).body.back, 'у первого эксперта блок на месте');
+  assert.equal((await exp.req('POST', '/api/specialist/me/back/seen', { until: t })).status, 200);
+  assert.equal((await back(exp)).body.back, null);
 });
 
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {
