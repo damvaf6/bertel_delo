@@ -1208,6 +1208,30 @@ test('ИИ-проверка результата: специалист пере�
   await expect(cadFind.locator('[data-role="egrn-draft-miss"]')).toHaveText('В тексте черновика «77:01:0001001:1234» нет — исправьте в файле отчёта (в выписке: 77:01:0001001:4321).');
   await cadFind.locator('[data-role="egrn-draft-miss"]').scrollIntoViewIfNeeded();
   await shot(sp, '54n-specialist-net-v-chernovike');
+  // 2.246: «Заменить всё по выписке» — все находки по выписке сразу, черновик сохранён одной версией; «Отменить всё».
+  await draftText.fill(`${await draftText.inputValue()}\nКадастровый номер объекта 77:01:0001001:1234.`);
+  const swapAllBox = sp.locator('#ai-swap-all');
+  await expect(swapAllBox.getByRole('button', { name: /^Заменить всё по выписке \(\d+\)$/ })).toBeVisible();
+  await swapAllBox.getByRole('button', { name: /^Заменить всё по выписке/ }).click();
+  await expect(swapAllBox.locator('[data-role="egrn-swap-all-what"]')).toContainText(/^Заменено по выписке ЕГРН: \d+\. Черновик сохранён; соберите Word заново\./);
+  await expect(swapAllBox.locator('[data-role="egrn-swap-all-list"]')).toContainText('«45,1» → «47,3»');
+  await expect(swapAllBox.locator('[data-role="egrn-swap-all-list"]')).toContainText('«77:01:0001001:1234» → «77:01:0001001:4321»');
+  await expect(draftText).toHaveValue(/Общей площадью 47,3 кв\. м — по техническому паспорту\.\nКадастровый номер объекта 77:01:0001001:4321\./);
+  const savedAll = (await (await sp.request.get(`/api/orders/${id}/draft`, { headers: H })).json()).draft.body;
+  expect(savedAll).toContain('Общей площадью 47,3 кв. м');
+  expect(savedAll).toContain('Кадастровый номер объекта 77:01:0001001:4321.');
+  await expect(areaFind.locator('[data-role="egrn-swap-what"]')).toHaveText('Было «45,1» — стало «47,3», как в выписке ЕГРН (заменено вместе со всеми).');
+  await expect(areaFind.getByRole('button', { name: 'Заменить на значение из выписки' })).toBeDisabled();
+  await expect(swapAllBox.getByRole('button', { name: /^Заменить всё по выписке/ })).toBeDisabled();
+  await swapAllBox.scrollIntoViewIfNeeded();
+  await shot(sp, '54v-specialist-zamenit-vse-po-vypiske');
+  await swapAllBox.getByRole('button', { name: 'Отменить всё' }).click();
+  await expect(swapAllBox.locator('[data-role="egrn-swap-all-what"]')).toContainText(/^Замены отменены: в черновике снова прежние значения \(\d+\)\. Черновик сохранён\.$/);
+  await expect(draftText).toHaveValue(/Общей площадью 45,1 кв\. м — по техническому паспорту\.\nКадастровый номер объекта 77:01:0001001:1234\./);
+  expect((await (await sp.request.get(`/api/orders/${id}/draft`, { headers: H })).json()).draft.body).toContain('Кадастровый номер объекта 77:01:0001001:1234.');
+  await expect(areaFind.getByRole('button', { name: 'Заменить на значение из выписки' })).toBeEnabled();
+  await expect(swapAllBox.getByRole('button', { name: /^Заменить всё по выписке/ })).toBeEnabled();
+  await shot(sp, '54w-specialist-zamenit-vse-otmeneno');
   // 2.231: у находки, сверенной с заданием на оценку, — тоже «Исправить в черновике»: дата оценки, которая разошлась с заданием.
   const dateFind = req.locator('.ai-found li').filter({ hasText: 'Дата оценки в отчёте 01.10.2026' });
   await draftText.fill(`${await draftText.inputValue()}\nОценка выполнена по состоянию на «01» октября 2026 г.`);

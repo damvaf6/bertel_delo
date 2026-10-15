@@ -800,6 +800,32 @@ test('2.232: замена на значение из выписки: число 
   assert.equal(swapValue(null), null);
 });
 
+// 2.246: «Заменить всё по выписке» — все замены одним проходом (public/draftfind.js); отмена — где значение ещё на месте.
+test('2.246: заменить всё по выписке: замены одним проходом, нет в тексте и год «или» — пропущены, отмена по месту', async () => {
+  const { swapAll, unswapAll } = await import('../../public/draftfind.js');
+  const body = 'Кадастровый номер 77:01:0001001:1234.\nОбщей площадью 45,1 кв. м по техпаспорту.\nГод постройки 1975.\nЭтажей 5';
+  const items = [
+    { g: { bad: '45,1', right: '47.3' }, quote: 'Общей площадью 45,1 кв. м' },
+    { g: { bad: '77:01:0001001:1234', right: '77:01:0001001:4321' } },
+    { g: { bad: '1975', right: '1984 или 1985' } },
+    { g: { bad: '99,9', right: '47,3' } },
+    { g: { bad: '45,1', right: '47,3' }, quote: 'площадью' }, // то же место — второй раз не заменяется
+  ];
+  const r = swapAll(body, items);
+  assert.equal(r.body, 'Кадастровый номер 77:01:0001001:4321.\nОбщей площадью 47,3 кв. м по техпаспорту.\nГод постройки 1975.\nЭтажей 5');
+  assert.deepEqual(r.done.map((d) => [d.i, d.was, d.now]), [[1, '77:01:0001001:1234', '77:01:0001001:4321'], [0, '45,1', '47,3']]);
+  for (const d of r.done) assert.equal(r.body.slice(d.from, d.from + d.now.length), d.now);
+  assert.deepEqual(r.missing, [2, 3, 4]);
+  // Отмена всего — исходный текст.
+  assert.deepEqual(unswapAll(r.body, r.done), { body, undone: [1, 0], kept: [] });
+  // Номер уже правили руками — его не трогаем, площадь возвращаем.
+  const edited = r.body.replace('77:01:0001001:4321', '77:01:0001001:5555');
+  const u = unswapAll(edited, r.done);
+  assert.deepEqual([u.undone, u.kept], [[0], [1]]);
+  assert.match(u.body, /:5555\.\nОбщей площадью 45,1 кв\. м/);
+  assert.deepEqual(swapAll('', items), { body: '', done: [], missing: [0, 1, 2, 3, 4] });
+});
+
 test('2.207: дата оценки из приложенного задания на оценку — в таблицу задания, модели и вместо пометки; разные даты — эксперт выбирает сам', async () => {
   const o = await inWork('Квартира: дата оценки в черновик');
   const putDoc = (body, name, kind) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
