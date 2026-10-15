@@ -117,6 +117,9 @@ export const EVENTS = {
   // За 3 дня до дней «не принимаю дела» (2.226): src/notify/away.mjs; ведёт к «Моим срокам» — там у дела «Попросить перенос»
   // и «Передать коллеге».
   away_soon: { type: 'executor_work', title: 'Скоро Ваши дни «не принимаю дела», а срок дел — в эти дни: попросите перенос или передайте дело коллеге — «Мои сроки»', order: false, section: 'specialist', anchor: 'schedule' },
+  // Эксперт вернулся после дней «не принимаю дела» (2.239): одно уведомление в первый день, если с делами что-то произошло;
+  // ведёт к блоку «Пока Вас не было» в разделе «Специалист» (src/notify/away.mjs).
+  away_back: { type: 'executor_work', title: 'Пока Вас не было: что произошло с Вашими делами — передачи, сроки, новые сообщения', order: false, section: 'specialist', anchor: 'back' },
   org_case_extend_ask: { type: 'executor_work', title: 'Руководитель организации: попросите перенести срок дела — он в дни, когда Вы не принимаете дела', order: true, to: 'away' },
   org_case_given: { type: 'executor_work', title: 'Руководитель организации передал Вам дело в работе', order: true },
   // Эксперту (2.76): руководитель отдал предложенное ему дело другому (или забрал назад) до его ответа — без номера.
@@ -157,7 +160,7 @@ const ID_RE = /^[a-z_]{1,40}$/;
 export const SECTIONS = ['orgs', 'specialist', 'specialists', 'problems'];
 export const FOCUS = ['pending', 'sign', 'chat', 'handover', 'case'];
 export const ORDER_TO = ['notes', 'steps', 'away', 'deadline'];
-export const ANCHORS = ['schedule'];
+export const ANCHORS = ['schedule', 'back'];
 
 // Проверка реестра при запуске: ошибка в описании — сервер не стартует (как у модулей-профессий).
 export function validateRegistry(types = TYPES, events = EVENTS) {

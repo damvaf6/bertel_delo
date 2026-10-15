@@ -10108,6 +10108,72 @@ test('2.226: за 3 дня до дней «не принимаю дела» — 
   await shot(page, 'h4g-ekspert-sroki-skoro-otpusk');
 });
 
+// 2.239: эксперт вернулся после дней «не принимаю дела» — уведомление «Пока Вас не было» ведёт к блоку в разделе
+// «Специалист»: сколько дел передали коллегам (без названий), какое передали ему, отказ диспетчера по сроку, новые сообщения,
+// пришедший документ; строка открывает дело на нужном блоке.
+test('2.239: «Пока Вас не было» — что произошло с делами за дни «не принимаю дела»', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const page = await ctx();
+  const customer = await signIn(await ctx(), '+79990022391');
+  const colleague = await signIn(await ctx(), '+79990022392');
+  const expert = await signIn(page, '+79990022393');
+  const [kept, given] = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Вернулся ${Date.now() % 100000}»') returning id`);
+    for (const u of [expert, colleague]) {
+      await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'member')", [org.id, u.id]);
+      await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [u.id, org.id]);
+    }
+    await c.query("update specialists set away_since = $2::date, away_until = $3::date, away_note = 'отпуск' where user_id = $1",
+      [expert.id, inDays(-7), inDays(0)]);
+    const ids = [];
+    for (const [title, who] of [['Квартира на Лесной', expert.id], ['Дом в Химках', expert.id], ['Участок в Истре', colleague.id]]) {
+      const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+        values ('expertise', 'realty', $3, $1, $2, 'in_work', $4::date, 1500000, now(),
+                '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Лесная ул., 9","area":"40"}') returning id`,
+      [customer.id, who, title, inDays(6)]);
+      ids.push(o.id);
+    }
+    const [k, g, t] = ids;
+    // «Дом в Химках» руководитель передал эксперту, «Участок в Истре» — забрал у него коллеге.
+    await c.query(`insert into audit_log (action, subject_type, subject_id, details, at) values
+      ('org.case.transfer', 'order', $1, jsonb_build_object('from', $3::text, 'to', $4::text), now() - interval '3 days'),
+      ('org.case.transfer', 'order', $2, jsonb_build_object('from', $4::text, 'to', $3::text), now() - interval '2 days')`, [g, t, colleague.id, expert.id]);
+    await c.query(`insert into deadline_requests (order_id, requested_by, old_deadline, new_deadline, reason, requested_at, outcome, decided_at, answer)
+      values ($1, $2, $3::date, $4::date, 'меня не будет', now() - interval '9 days', 'declined', now() - interval '4 days', 'Банк ждёт отчёт')`,
+    [k, expert.id, inDays(6), inDays(12)]);
+    await c.query(`insert into order_messages (order_id, author_id, side, body, at) values
+      ($1, $2, 'customer', 'Когда будет осмотр?', now() - interval '2 days'), ($1, $2, 'customer', 'Ключи у соседки', now() - interval '1 day')`, [k, customer.id]);
+    await c.query(`insert into doc_requests (order_id, title, requested_by, requested_at, fulfilled_at)
+      values ($1, 'Выписка ЕГРН', $2, now() - interval '9 days', now() - interval '1 day')`, [k, expert.id]);
+    await c.query("insert into notifications (user_id, type, event) values ($1, 'executor_work', 'away_back')", [expert.id]);
+    return [k, g];
+  });
+
+  await page.goto('/kabinet#notifications');
+  const n = page.locator('#notifications li').filter({ hasText: 'Пока Вас не было' });
+  await expect(n).toHaveCount(1);
+  await shot(page, 'h5a-ekspert-uvedomlenie-poka-ne-bylo');
+  await n.getByRole('button').click();
+  await expect(page).toHaveURL(/#specialist&to=back$/);
+  const box = page.locator('#back-box');
+  await expect(box).toBeVisible();
+  await expect(box.locator('#back-span')).toContainText('Вы не принимали новые дела. Вот что произошло с Вашими делами');
+  await expect(box.locator('[data-back-taken]')).toContainText('передали другому эксперту 1 Ваше дело');
+  await expect(box).not.toContainText('Участок в Истре');
+  await expect(box.locator(`[data-back-order="${given}"]`)).toContainText('Передано Вам: Дом в Химках');
+  const rows = box.locator(`[data-back-order="${kept}"]`);
+  await expect(rows).toHaveCount(3);
+  await expect(rows.nth(0)).toContainText('Диспетчер отказал в переносе срока: Квартира на Лесной');
+  await expect(rows.nth(0)).toContainText('«Банк ждёт отчёт»');
+  await expect(rows.nth(1)).toContainText('2 сообщения от заказчика или диспетчера');
+  await expect(rows.nth(2)).toContainText('заказчик загрузил 1 запрошенный документ');
+  await shot(page, 'h5b-ekspert-poka-vas-ne-bylo');
+  await rows.nth(1).locator('a').click();
+  await expect(page).toHaveURL(new RegExp(`#order=${kept}&to=chat$`));
+  await expect(page.locator('#chat-box')).toContainText('Ключи у соседки');
+  await shot(page, 'h5c-ekspert-poka-ne-bylo-perepiska');
+});
+
 // 2.230: прогон «как эксперт и руководитель» по пачке 2.221–2.229 — одна организация, одно дело. Выписка ЕГРН устарела —
 // эксперт запрашивает свежую, заказчик прикладывает (2.224); этаж и адрес в черновике — из выписки (2.222); владелец нажал
 // «Готово», сняв не всё, — своя подсказка к шагу (2.227); в отчёте другие год постройки и площадь — находки по выписке на дом

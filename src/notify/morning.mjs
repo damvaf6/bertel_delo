@@ -13,7 +13,7 @@ import { notify } from './notify.mjs';
 
 export const MORNING_HOUR = 8;
 
-const mskHour = (now) => Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Moscow', hour: '2-digit', hourCycle: 'h23' }).format(now));
+export const mskHour = (now) => Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Moscow', hour: '2-digit', hourCycle: 'h23' }).format(now));
 const mskTime = (now) => new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit' }).format(now);
 const pl = (n, one, few, many) => {
   const m10 = n % 10, m100 = n % 100;
