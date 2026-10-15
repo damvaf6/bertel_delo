@@ -1234,7 +1234,7 @@ const EGRN_SHARE_AT = [
 ];
 const gcd = (a, b) => (b ? gcd(b, a % b) : a);
 const shareKey = (a, b) => { const g = gcd(a, b) || 1; return `${a / g}/${b / g}`; };
-function egrnShares(egrn, ctx) {
+export function egrnShares(egrn, ctx) {
   const land = ctx.service === 'land';
   const got = new Map();
   for (const d of egrnOnObject(egrn, ctx)) {

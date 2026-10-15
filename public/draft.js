@@ -233,6 +233,8 @@ const EGRN_WHAT = {
   holders: { one: 'Правообладатель:', many: 'правообладатели', unit: '', join: '; ', pick: 'верного' },
   kind: { one: 'Вид права:', many: 'виды права', unit: '', join: '; ', pick: 'верный' },
   enc: { one: 'Ограничения и обременения:', many: 'обременения', unit: '', join: '; ', pick: 'верные' },
+  // 2.254: размер доли.
+  share_size: { one: 'Размер доли', many: 'доли собственников', unit: '', join: ', ', pick: 'долю объекта оценки' },
 };
 function egrnLine(k, e) {
   if (!e) return null;
@@ -241,7 +243,7 @@ function egrnLine(k, e) {
   // Выписка только на здание: этажа помещения в ней нет — только этажность.
   const v = e.v ?? (k === 'floor' && e.floors != null ? `этажей ${e.floors}${e.above != null ? `, надземных ${e.above}` : ''}` : null);
   if (!v) return null;
-  return `${w.one} ${v}${w.unit} — как в выписке ЕГРН «${e.name}» (стр. ${e.page})${e.typed ? `; в заявке — ${e.typed}${w.unit}` : ''} — сверьте.`;
+  return `${w.one} ${v}${w.unit} — как в выписке ЕГРН «${e.name}» (стр. ${e.page})${e.typed ? `; в заявке — ${e.typed}${w.unit}` : ''}${e.others?.length ? `; у других собственников — ${e.others.join(', ')}` : ''} — сверьте.`;
 }
 
 function stateText(r) {
@@ -259,7 +261,7 @@ function stateText(r) {
     d.inputs?.value_date?.day ? `Дата оценки ${d.inputs.value_date.day} — как ${d.inputs.value_date.what} «${d.inputs.value_date.name}» (стр. ${d.inputs.value_date.page}) — сверьте.` : null,
     d.inputs?.value_date?.days ? `В приложенных документах разные даты оценки (${d.inputs.value_date.days.join(', ')}) — впишите верную сами.` : null,
     // Площадь и кадастровый номер (2.211), этаж и адрес (2.222) из выписки ЕГРН: откуда взяты; в выписках разные — выбрать эксперту.
-    ...['area', 'cadastral', 'floor', 'address'].map((k) => egrnLine(k, d.inputs?.egrn?.[k])),
+    ...['area', 'cadastral', 'floor', 'address', 'share_size'].map((k) => egrnLine(k, d.inputs?.egrn?.[k])),
     // Правообладатель, вид права и обременения (2.243).
     ...['holders', 'kind', 'enc'].map((k) => egrnLine(k, d.inputs?.egrn?.rights?.[k])),
     d.inputs?.photos?.length ? `Фото в черновике: ${d.inputs.photos.length} (сами снимки ИИ не видит — опишите их).` : null,

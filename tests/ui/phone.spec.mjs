@@ -11077,7 +11077,7 @@ test('2.252: «Подписи организации» — возвращённ�
 // 2.253: ИИ-проверка — размер доли в отчёте как в выписке ЕГРН на объект. Оценивается доля в квартире; в выписке —
 // общая долевая собственность, доля в праве 1/2, а в отчёте и черновике — 1/3. Находка в «Права и обременения» с кнопкой к
 // строке выписки; «Заменить на значение из выписки» меняет долю в черновике.
-test('2.253: ИИ-проверка — размер доли в отчёте как в выписке ЕГРН', async ({ browser, baseURL }) => {
+test('2.253, 2.254: размер доли из выписки ЕГРН — в черновике и в ИИ-проверке отчёта', async ({ browser, baseURL }) => {
   test.setTimeout(120_000);
   const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
   const ep = await ctx(), cp = await ctx();
@@ -11103,6 +11103,11 @@ test('2.253: ИИ-проверка — размер доли в отчёте к�
   await ep.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
   await expect(ep.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
   const draftText = ep.getByLabel('Текст заключения');
+  // 2.254: доля из выписки — в строке «Размер доли» таблицы задания, доля из заявки — рядом; откуда взята — под черновиком.
+  await expect(draftText).toHaveValue(/\| Размер доли \(если оценивается доля\) \| 1\/2 \(по выписке ЕГРН; в заявке — 1\/3\) \|/);
+  await expect(ep.locator('#draft-state')).toContainText('Размер доли 1/2 — как в выписке ЕГРН «Выписка ЕГРН.txt» (стр. 1); в заявке — 1/3 — сверьте.');
+  await ep.locator('#draft-state').scrollIntoViewIfNeeded();
+  await shot(ep, 'd22-ekspert-chernovik-dolya');
   await draftText.fill(`${await draftText.inputValue()}\nОбъект оценки: 1/3 доли в праве общей долевой собственности на квартиру.`);
   await ep.getByRole('button', { name: 'Сохранить правку' }).click();
   await expect(ep.locator('#draft-msg')).toHaveText('Правка сохранена');
