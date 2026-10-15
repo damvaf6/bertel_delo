@@ -236,7 +236,7 @@ async function signAll(docs) {
 
 function docItem(d, it) {
   const { expert, org } = d.signatures;
-  const lines = [];
+  const lines = [...(it ? besideReturned(d, it) : [])];
   if (expert) lines.push(...signatureLines(expert));
   else lines.push(el('div', { class: 'sig-state', text: 'Эксперт ещё не подписал — подпись организации после него' }));
   if (org) lines.push(...signatureLines(org));
@@ -260,6 +260,32 @@ function docItem(d, it) {
       el('div', { class: 'muted', text: formatSize(d.size_bytes) })),
     el('div', { class: 'row' }, el('button', { class: 'secondary', 'data-action': 'download', onclick: () => download(d) }, 'Скачать')),
     el('div', { class: 'sig' }, ...lines));
+}
+
+// Возвращённый файл не удалён, а после возврата эксперт загрузил другой (2.252; у эксперта — 2.250, 2.251): замечание открыто,
+// отметок эксперта у нового файла нет. Это может быть и исправленная версия, и приложение — пометка у обоих файлов, без вывода.
+const dayMonth = (iso) => new Date(iso).toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long' });
+function besideReturned(d, it) {
+  const open = (it.returns ?? []).filter((r) => r.open);
+  const alive = new Map(it.documents.map((x) => [x.id, x]));
+  const after = (r) => it.documents.filter((x) => x.id !== r.document_id && Date.parse(x.created_at) > Date.parse(r.at));
+  const mine = [...open].reverse().find((r) => r.document_id === d.id);
+  if (mine) {
+    const fresh = after(mine);
+    if (!fresh.length) return [];
+    const n = fresh.at(-1);
+    return [el('div', { class: 'sig-state warn', 'data-role': 'beside-new' },
+      el('span', { text: `Эксперт загрузил новый файл «${n.filename}» ${dayMonth(n.created_at)}, а этот, возвращённый, не удалил${fresh.length > 1 ? ` (новых файлов: ${fresh.length})` : ''} — замечание пока открыто. Если «${n.filename}» — исправленная версия, эксперт удалит этот файл, и у нового Вы увидите его отметки по пунктам; если приложение — эксперт подпишет этот файл заново. ` }),
+      el('button', { class: 'link', 'data-action': 'to-beside-new', onclick: () => toOrgDoc(n.id) }, 'К новому файлу'))];
+  }
+  const r = [...open].reverse().find((x) => alive.has(x.document_id) && after(x).some((y) => y.id === d.id));
+  if (!r) return [];
+  return [el('div', { class: 'sig-state', 'data-role': 'beside-returned' },
+    el('span', { text: `Загружен после Вашего возврата; возвращённый «${r.filename}» эксперт не удалил. ` }),
+    el('button', { class: 'link', 'data-action': 'to-beside-returned', onclick: () => toOrgDoc(r.document_id) }, 'К возвращённому файлу'))];
+}
+function toOrgDoc(id) {
+  document.querySelector(`#org-sign li.doc[data-doc="${id}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 // «Вернуть эксперту» (2.27): замечание обязательно; подпись эксперта снимается, эксперту — уведомление.

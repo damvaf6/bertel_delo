@@ -11017,3 +11017,59 @@ test('2.251: новый файл результата при открытом в
   await expect(ask).toBeHidden();
   for (const p of [ep, hp]) await p.context().close();
 });
+
+test('2.252: «Подписи организации» — возвращённый файл не удалён, рядом новый файл эксперта', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), hp = await ctx();
+  const expert = await signIn(ep, '+79990025103'), head = await signIn(hp, '+79990025104');
+  const { A, orgId } = await db(async (c) => {
+    const { rows: [org] } = await c.query('insert into organizations (name) values ($1) returning id', [`ООО «Рядом ${Date.now() % 100000}»`]);
+    await c.query("update users set full_name = 'Рядов Олег' where id = $1", [expert.id]);
+    await c.query("update users set full_name = 'Главный Пётр' where id = $1", [head.id]);
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now() - interval '1 year'), ($1, $3, 'member', now() - interval '1 year')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into morning_digests (user_id, day) values ($1, (now() at time zone 'Europe/Moscow')::date), ($2, (now() at time zone 'Europe/Moscow')::date)", [expert.id, head.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Рядом файл: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"sale","region":"moscow","object_type":"flat","address":"г. Москва, ул. Рядом, д. 2, кв. 3","area":"41"}') returning id`,
+    [head.id, expert.id, inDays(9)]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now() - interval '5 days')", [o.id, expert.id]);
+    return { A: o.id, orgId: org.id };
+  });
+  const upload = async (name, body) => {
+    const r = await ep.request.post(`/api/orders/${A}/results`, { data: Buffer.from(body), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent(name) } });
+    expect(r.status()).toBe(201);
+    return (await r.json()).document.id;
+  };
+  const oldId = await upload('Отчёт Рядова.pdf', '%PDF-1.4 отчёт');
+  expect((await ep.request.post(`/api/documents/${oldId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  expect((await hp.request.post(`/api/org-documents/${oldId}/return`, { data: { comment: '1. Нет даты осмотра\n2. Не указан этаж' }, headers: H })).status()).toBe(201);
+  // Эксперт загрузил новый файл и подписал его, возвращённый не удалил.
+  const newId = await upload('Отчёт Рядова испр.pdf', '%PDF-1.4 отчёт исправлен');
+  expect((await ep.request.post(`/api/documents/${newId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const was = hp.locator(`#org-sign li.doc[data-doc="${oldId}"]`);
+  const now = hp.locator(`#org-sign li.doc[data-doc="${newId}"]`);
+  await expect(was.locator('[data-role="beside-new"]')).toContainText(/^Эксперт загрузил новый файл «Отчёт Рядова испр\.pdf» \d+ [а-я]+, а этот, возвращённый, не удалил — замечание пока открыто\. Если «Отчёт Рядова испр\.pdf» — исправленная версия, эксперт удалит этот файл/);
+  await expect(now.locator('[data-role="beside-returned"]')).toContainText('Загружен после Вашего возврата; возвращённый «Отчёт Рядова.pdf» эксперт не удалил.');
+  // У нового файла отметок по замечанию нет — замечание относится к возвращённому.
+  await expect(now.locator('[data-role="points-state"]')).toHaveCount(0);
+  await was.locator('[data-role="beside-new"]').scrollIntoViewIfNeeded();
+  await shot(hp, 'd19-rukovoditel-vozvrashchennyj-ne-udalen');
+  await was.locator('[data-role="beside-new"]').screenshot({ path: 'test-results/screens/d19b-rukovoditel-vozvrashchennyj-ne-udalen-blok.png' });
+  await was.getByRole('button', { name: 'К новому файлу' }).click();
+  await expect(now).toBeInViewport();
+  await now.getByRole('button', { name: 'К возвращённому файлу' }).click();
+  await expect(was).toBeInViewport();
+
+  // Эксперт удалил возвращённый — пометок нет, у нового файла видно, что по замечанию отмечено.
+  expect((await ep.request.delete(`/api/documents/${oldId}`, { headers: H })).status()).toBe(204);
+  await hp.reload();
+  await expect(was).toHaveCount(0);
+  await expect(now.locator('[data-role="beside-returned"]')).toHaveCount(0);
+  await expect(now.locator('[data-role="points-state"]')).toContainText('эксперт отметил исправленными 0 из 2');
+  await now.locator('[data-role="points-state"]').scrollIntoViewIfNeeded();
+  await shot(hp, 'd20-rukovoditel-vozvrashchennyj-udalen');
+  for (const p of [ep, hp]) await p.context().close();
+});
