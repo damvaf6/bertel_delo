@@ -159,6 +159,8 @@ function egrnSwap(g, quote, miss) {
 }
 
 // 2.218: находка по выписке ЕГРН — одной кнопкой строка из выписки, с которой сверяли, и сам файл выписки на этой странице.
+// 2.240: «Исправить в черновике» и «Заменить на значение из выписки» — видны сразу, как у находок по заявке и заданию
+// (раньше — только после «Выписка ЕГРН, стр. N»).
 function egrnPlace(g, quote) {
   const { btn: fixBtn, miss } = g.bad ? draftFix(g, quote, 'egrn-draft') : { btn: null, miss: el('p', { class: 'hidden' }) };
   const swap = g.bad && swapValue(g) ? egrnSwap(g, quote, miss) : { btn: null, done: null };
@@ -166,14 +168,13 @@ function egrnPlace(g, quote) {
   const box = el('div', { class: 'ai-egrn hidden', 'data-role': 'egrn-place' },
     el('span', { class: 'ai-mark-where', text: `${g.file}, ${g.where}: ` }),
     el('q', { text: g.quote || 'строка не найдена — откройте файл' }),
-    el('div', { class: 'row' }, el('button', { class: 'secondary', type: 'button', 'data-action': 'egrn-file', onclick: () => openEgrn(g) }, 'Открыть файл выписки'), ...fix),
-    miss, ...(swap.done ? [swap.done] : []));
+    el('div', { class: 'row' }, el('button', { class: 'secondary', type: 'button', 'data-action': 'egrn-file', onclick: () => openEgrn(g) }, 'Открыть файл выписки')));
   const btn = el('button', { class: 'link', type: 'button', 'data-action': 'egrn', 'aria-expanded': 'false', onclick: () => {
     const open = box.classList.toggle('hidden') === false;
     btn.setAttribute('aria-expanded', String(open));
     if (open) box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   } }, `Выписка ЕГРН, ${g.where}`);
-  return [el('br'), btn, box];
+  return [el('br'), btn, box, ...(fix.length ? [el('div', { class: 'row' }, ...fix)] : []), miss, ...(swap.done ? [swap.done] : [])];
 }
 async function openEgrn(g) {
   try {
