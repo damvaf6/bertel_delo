@@ -10738,3 +10738,226 @@ test('2.249: утренняя сводка руководителя — эксп
   await expect(hp.locator(`#org-cases li[data-case="${ref(other)}"] [data-role="back"]`)).toHaveCount(0);
   for (const p of pages) await p.context().close();
 });
+
+// 2.250: прогон «как эксперт и руководитель» по пачке 2.241–2.249 — одна организация, одно дело. Выписка ЕГРН на квартиру с
+// правообладателем, видом права и ипотекой: черновик берёт их в таблицу задания (2.243); в отчёте другой собственник (2.241)
+// и ни слова об ипотеке (2.242); площадь и кадастровая стоимость — «Заменить всё по выписке» и «Отменить всё» (2.246);
+// техпаспорт пришёл после ИИ-проверки — «Проверить заново» из «Сегодня» (2.248); руководитель вернул отчёт пунктами из
+// расхождений, эксперт прислал исправленный — у пунктов, ушли ли расхождения (2.247); эксперт ставит дни «не принимаю дела» —
+// у руководителя «никто не принимает» (2.245); вернулся — «Пока Вас не было» и «Всё посмотрел» (2.244), у руководителя в
+// утренней сводке «вернулись …» и отбор (2.249).
+test('прогон 2.250: эксперт и руководитель по пачке 2.241–2.249 на одном деле', async ({ browser, baseURL }) => {
+  test.setTimeout(180_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), hp = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990025001'), head = await signIn(hp, '+79990025002');
+  const customer = await signIn(cp, '+79990025003');
+  const orgName = `ООО «Прогон-10 ${Date.now() % 100000}»`;
+  const { orgId, A } = await db(async (c) => {
+    const { rows: [org] } = await c.query('insert into organizations (name) values ($1) returning id', [orgName]);
+    await c.query("update users set full_name = 'Десятов Марк' where id = $1", [expert.id]);
+    await c.query("update users set full_name = 'Главная Нина' where id = $1", [head.id]);
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now() - interval '1 year'), ($1, $3, 'member', now() - interval '1 year')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    await c.query("insert into morning_digests (user_id, day) values ($1, (now() at time zone 'Europe/Moscow')::date), ($2, (now() at time zone 'Europe/Moscow')::date)", [expert.id, head.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Десятая пачка: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Десятая ул., д. 10, кв. 10","area":"48"}') returning id`,
+    [customer.id, expert.id, inDays(9)]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now() - interval '5 days')", [o.id, expert.id]);
+    return { orgId: org.id, A: o.id };
+  });
+  const ref = `№ ${A.slice(0, 8).toUpperCase()}`;
+  // Заказчик: свежая выписка ЕГРН на квартиру — правообладатель, вид права, ипотека.
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from(['Выписка из Единого государственного реестра недвижимости об объекте недвижимости',
+      `${inDays(-2).split('-').reverse().join('.')} № КУВИ-001/2026-10101010`, 'Вид объекта недвижимости: Помещение',
+      'Кадастровый номер: 77:10:0010010:1010', 'Площадь, м2: 47,3', 'Номер, тип этажа, на котором расположено помещение, машино-место: Этаж № 6',
+      'Адрес (местоположение): г. Москва, Десятая ул., д. 10, кв. 10', 'Кадастровая стоимость, руб.: 8431520.17',
+      'Правообладатель (правообладатели): 1.1. Сергеев Сергей Сергеевич', 'Вид, номер и дата государственной регистрации права: 2.1. Собственность',
+      'Ограничение прав и обременение объекта недвижимости: вид: Ипотека в силу закона'].join('\n')),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Выписка ЕГРН.txt') },
+  })).status()).toBe(201);
+  // Эксперт запросил техпаспорт — заказчик пришлёт его позже, уже после ИИ-проверки.
+  expect((await ep.request.post(`/api/orders/${A}/doc-requests`, { data: { items: ['tech_plan'] }, headers: H })).status()).toBe(201);
+
+  // 2.243: черновик — правообладатель, вид права и ипотека из выписки в таблице задания, откуда взято — под черновиком.
+  await ep.goto(`/kabinet#order=${A}`);
+  await ep.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const draftText = ep.getByLabel('Текст заключения');
+  await expect(draftText).toHaveValue(/\| Правообладатель \| Сергеев Сергей Сергеевич \(по выписке ЕГРН\) \|/);
+  await expect(draftText).toHaveValue(/\| Вид права \| Собственность \(по выписке ЕГРН\) \|/);
+  await expect(draftText).toHaveValue(/\| Ограничения и обременения \| Ипотека в силу закона \(по выписке ЕГРН\) \|/);
+  await expect(ep.locator('#draft-state')).toContainText('Правообладатель: Сергеев Сергей Сергеевич — как в выписке ЕГРН «Выписка ЕГРН.txt» (стр. 1) — сверьте.');
+  await ep.locator('#draft-state').scrollIntoViewIfNeeded();
+  await shot(ep, 'd07-progon10-ekspert-chernovik-prava');
+  await draftText.fill(`${await draftText.inputValue()}\nОбщая площадь квартиры 45,1 кв. м.\nКадастровая стоимость объекта: 8 200 000 руб.`);
+  await ep.getByRole('button', { name: 'Сохранить правку' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Правка сохранена');
+
+  // Отчёт: другой собственник, ипотеки нет, площадь и кадастровая стоимость — не как в выписке.
+  const report = (lines, name) => ep.request.post(`/api/orders/${A}/results`, {
+    data: Buffer.from(['ОТЧЁТ ОБ ОЦЕНКЕ № 10/2026', 'Адрес объекта оценки: г. Москва, Десятая ул., д. 10, кв. 10', 'Кадастровый номер 77:10:0010010:1010',
+      'Этаж: 6', ...lines, 'Итоговая стоимость 11 900 000 руб.'].join('\n')),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) },
+  });
+  const up = await report(['Общая площадь, кв. м: 45,1', 'Кадастровая стоимость объекта: 8 200 000 руб.', 'Собственник объекта оценки: Петров Пётр Петрович'], 'Отчёт Десятова.txt');
+  expect(up.status()).toBe(201);
+  const resultId = (await up.json()).document.id;
+  await ep.reload();
+  await ep.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(ep.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  const rights = ep.locator('#review-checks > li[data-check="rights"]');
+  // 2.241: правообладатель — не как в выписке; кнопка к строке выписки и «Исправить в черновике».
+  const holderFind = rights.locator('.ai-found li').filter({ hasText: 'Правообладатель «Петров' });
+  await expect(holderFind).toContainText('не совпадает с выпиской ЕГРН «Выписка ЕГРН.txt» (Сергеев Сергей Сергеевич, стр. 1)');
+  await expect(holderFind.getByRole('button', { name: 'Исправить в черновике' })).toBeVisible();
+  await holderFind.getByRole('button', { name: 'Выписка ЕГРН, стр. 1' }).click();
+  await expect(holderFind.locator('[data-role="egrn-place"]')).toContainText('Правообладатель (правообладатели): 1.1. Сергеев Сергей Сергеевич');
+  await holderFind.scrollIntoViewIfNeeded();
+  await shot(ep, 'd08-progon10-ekspert-pravoobladatel');
+  // 2.242: ипотека в выписке, а в отчёте о ней ни слова.
+  const encFind = rights.locator('.ai-found li').filter({ hasText: 'есть обременение' });
+  await expect(encFind).toContainText('есть обременение — ипотека («Ипотека в силу закона», стр. 1), а в отчёте оно не упомянуто');
+  await encFind.scrollIntoViewIfNeeded();
+  await shot(ep, 'd09-progon10-ekspert-ipoteka');
+  // 2.246: «Заменить всё по выписке» — площадь и кадастровая стоимость одной кнопкой; «Отменить всё»; снова «Заменить всё».
+  const swapAllBox = ep.locator('#ai-swap-all');
+  const swapAll = swapAllBox.getByRole('button', { name: /^Заменить всё по выписке/ });
+  await swapAll.click();
+  await expect(swapAllBox.locator('[data-role="egrn-swap-all-list"]')).toContainText('«45,1» → «47,3»');
+  await expect(swapAllBox.locator('[data-role="egrn-swap-all-list"]')).toContainText('«8 200 000» → «8 431 520,17»');
+  await expect(draftText).toHaveValue(/Общая площадь квартиры 47,3 кв\. м\.\nКадастровая стоимость объекта: 8 431 520,17 руб\./);
+  await swapAllBox.scrollIntoViewIfNeeded();
+  await shot(ep, 'd10-progon10-ekspert-zamenit-vse');
+  await swapAllBox.getByRole('button', { name: 'Отменить всё' }).click();
+  await expect(swapAllBox.locator('[data-role="egrn-swap-all-what"]')).toContainText(/^Замены отменены: в черновике снова прежние значения/);
+  await expect(draftText).toHaveValue(/Общая площадь квартиры 45,1 кв\. м\.\nКадастровая стоимость объекта: 8 200 000 руб\./);
+  await swapAll.click();
+  await expect(swapAllBox.locator('[data-role="egrn-swap-all-what"]')).toContainText(/^Заменено по выписке ЕГРН: \d+\./);
+  expect((await (await ep.request.get(`/api/orders/${A}/draft`, { headers: H })).json()).draft.body).toContain('Кадастровая стоимость объекта: 8 431 520,17 руб.');
+
+  // 2.248: заказчик прислал техпаспорт после ИИ-проверки — «Сегодня» → к ИИ-проверке в деле → «Проверить заново».
+  await cp.goto(`/kabinet#order=${A}&to=docs`);
+  await cp.getByLabel('Файл: Технический паспорт БТИ или поэтажный план').setInputFiles({ name: 'Техпаспорт.txt', mimeType: 'text/plain', buffer: Buffer.from('Поэтажный план') });
+  await expect(cp.locator('#docreq-list li').filter({ hasText: 'Технический паспорт' })).toContainText('Техпаспорт.txt');
+  await ep.goto('/kabinet');
+  const recheck = ep.locator('li[data-today-item="ai-recheck"]').filter({ hasText: 'Десятая пачка: квартира' });
+  await expect(recheck.locator('[data-role="ai-recheck-what"]')).toHaveText(/^Технический паспорт БТИ или поэтажный план \(«Техпаспорт\.txt»\) — пришло после ИИ-проверки /);
+  await recheck.scrollIntoViewIfNeeded();
+  await shot(ep, 'd11-progon10-ekspert-segodnya-proverte-zanovo');
+  await recheck.locator('button.open').click();
+  const rbox = ep.locator('#ai-review-recheck');
+  await expect(rbox).toBeInViewport();
+  await expect(rbox).toContainText('После ИИ-проверки пришли запрошенные документы: Технический паспорт БТИ или поэтажный план («Техпаспорт.txt»,');
+  await rbox.getByRole('button', { name: 'Проверить заново' }).click();
+  await expect(ep.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  await expect(rbox).toBeHidden();
+
+  // Эксперт подписал; руководитель «Вернуть эксперту» — все четыре расхождения с выпиской пунктами (2.236).
+  expect((await ep.request.post(`/api/documents/${resultId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const item = hp.locator('#org-sign > li[data-item]').filter({ hasText: 'Отчёт Десятова.txt' });
+  await expect(item.locator('[data-role="ai-egrn"]')).toContainText('Расхождения с выпиской ЕГРН (4)');
+  await item.locator('[data-action="org-return"]').click();
+  const area = item.locator('textarea');
+  const points = (await area.inputValue()).split('\n');
+  expect(points).toHaveLength(4);
+  expect(points.join('\n')).toContain('Правообладатель «Петров Пётр Петрович» не совпадает с выпиской ЕГРН (Сергеев Сергей Сергеевич) — исправьте по выписке');
+  expect(points.join('\n')).toContain('Площадь 45,1 кв. м не совпадает с площадью в выписке ЕГРН (47,3 кв. м) — исправьте по выписке');
+  // Найдено прогоном: у находки об ипотеке уже есть «укажите его …» — второго «исправьте по выписке» в конце нет.
+  expect(points).toContain('В выписке ЕГРН есть обременение — ипотека («Ипотека в силу закона»), а в отчёте оно не упомянуто: укажите его в разделе о правах и обременениях');
+  await area.scrollIntoViewIfNeeded();
+  await shot(hp, 'd12-progon10-rukovoditel-vernut-punkty');
+  await item.locator('[data-action="org-return-send"]').click();
+  await expect(hp.locator('#org-sign-msg')).toHaveText('Файл возвращён эксперту с замечанием — его подпись снята');
+
+  // Эксперт: исправленный отчёт — площадь, собственник и ипотека как в выписке, кадастровую стоимость забыл; отметил все
+  // пункты исправленными, проверил ИИ и подписал. 2.247: у руководителя — ушли 3, осталось 1 (красным, хоть и отмечено).
+  const up2 = await report(['Общая площадь, кв. м: 47,3', 'Кадастровая стоимость объекта: 8 200 000 руб.', 'Собственник объекта оценки: Сергеев Сергей Сергеевич',
+    'Обременения: ипотека в силу закона'], 'Отчёт Десятова испр.txt');
+  expect(up2.status()).toBe(201);
+  // Найдено прогоном: возвращённый файл не удалён — новым файлом замечание не закрывалось, а эксперт об этом не знал и
+  // руководитель не видел отметок у нового файла. Теперь у замечания — подсказка и кнопка к возвращённому файлу.
+  await ep.goto(`/kabinet#order=${A}`);
+  const beside = ep.locator('#org-returns [data-role="return-beside"]');
+  await expect(beside).toHaveText('После возврата загружен «Отчёт Десятова испр.txt», а возвращённый «Отчёт Десятова.txt» не удалён — замечание пока открыто. Если «Отчёт Десятова испр.txt» — исправленная версия, удалите «Отчёт Десятова.txt» и подпишите новый файл: тогда руководитель увидит у него Ваши отметки. Если это приложение — подпишите заново «Отчёт Десятова.txt». К возвращённому файлу');
+  await beside.scrollIntoViewIfNeeded();
+  await shot(ep, 'd13a-progon10-ekspert-vozvrashchennyj-ne-udalen');
+  await beside.screenshot({ path: 'test-results/screens/d13b-progon10-ekspert-vozvrashchennyj-ne-udalen-blok.png' });
+  await beside.getByRole('button', { name: 'К возвращённому файлу' }).click();
+  const oldLi = ep.locator(`#docs li.doc[data-doc="${resultId}"]`);
+  await expect(oldLi).toBeInViewport();
+  ep.once('dialog', (d) => d.accept());
+  await oldLi.getByRole('button', { name: 'Удалить' }).click();
+  await expect(oldLi).toHaveCount(0);
+  await expect(beside).toHaveCount(0);
+  await expect(ep.locator('#org-returns [data-role="return-file"]')).toContainText('Исправленный файл «Отчёт Десятова испр.txt» загружен');
+  const ret = await db((c) => c.query('select r.id from org_returns r where r.order_id = $1', [A]));
+  for (const n of [1, 2, 3, 4]) expect((await ep.request.put(`/api/orders/${A}/org-returns/${ret.rows[0].id}/items/${n}`, { data: { fixed: true }, headers: H })).status()).toBe(200);
+  expect((await ep.request.post(`/api/orders/${A}/review/ai`, { headers: H })).status()).toBe(201);
+  expect((await ep.request.post(`/api/documents/${(await up2.json()).document.id}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  await hp.reload();
+  const again = hp.locator('#org-sign > li[data-item]').filter({ hasText: 'Отчёт Десятова испр.txt' });
+  await expect(again.locator('[data-role="points-egrn"]')).toHaveText('Расхождения с выпиской ЕГРН по новой ИИ-проверке эксперта: ушли — 3, остались — 1');
+  await expect(again.locator('li.doc ul.points > li[data-egrn="kept"]')).toHaveCount(1);
+  await expect(again.locator('li.doc ul.points > li[data-egrn="kept"]')).toContainText('Кадастровая стоимость 8 200 000');
+  await again.locator('[data-role="points-egrn"]').scrollIntoViewIfNeeded();
+  await shot(hp, 'd13-progon10-rukovoditel-povtornaya-podpis');
+
+  // 2.245: эксперт не принимает дела три дня со завтра — у руководителя в нагрузке «никто не принимает» на эти дни.
+  await ep.goto('/kabinet#specialist');
+  await ep.locator('#specialist-away-from').fill(inDays(1));
+  await ep.locator('#specialist-away-until').fill(inDays(4));
+  await ep.locator('#specialist-away-note').fill('отпуск');
+  await ep.locator('#specialist-away-set').click();
+  await expect(ep.locator('#specialist-away-now')).toContainText('Вы не принимаете новые дела с ');
+  await hp.goto(`/kabinet#org=${orgId}`);
+  await hp.reload();
+  const team = hp.locator('#org-schedule-box #org-schedule-team');
+  await expect(team).toContainText('Принимают новые дела (из 1)');
+  await expect(team.locator('.strip .cell.nobody')).toHaveCount(3);
+  await expect(team.locator('[data-role="nobody"]')).toHaveText(/^Никто не принимает новые дела: \d+ \S+ — \d+ \S+$/);
+  await team.scrollIntoViewIfNeeded();
+  await shot(hp, 'd14-progon10-rukovoditel-nikto-ne-prinimaet');
+
+  // Дни прошли (сдвигаем назад): пока эксперта не было, заказчик написал. Эксперт сегодня вернулся.
+  expect((await cp.request.post(`/api/orders/${A}/messages`, { data: { body: 'Ключи у консьержа' }, headers: H })).status()).toBe(201);
+  await db(async (c) => {
+    await c.query('update specialists set away_since = $2::date, away_until = $3::date, away_back_for = $3::date where user_id = $1', [expert.id, inDays(-4), inDays(0)]);
+    await c.query("update order_messages set at = at - interval '1 day' where order_id = $1", [A]);
+    await c.query("insert into notifications (user_id, type, event) values ($1, 'executor_work', 'away_back')", [expert.id]);
+    const { rows: [n] } = await c.query("insert into notifications (user_id, type, event, org_id) values ($1, 'org_morning', 'org_morning_today', $2) returning id", [head.id, orgId]);
+    await c.query(`insert into org_morning_digests (user_id, org_id, day, back, notification_id)
+      values ($1, $2, (now() at time zone 'Europe/Moscow')::date, 1, $3)
+      on conflict (user_id, org_id, day) do update set sign = 0, handover = 0, stuck = 0, due = 0, overdue = 0, idle = 0, returned = 0, fresh = 0, away = 0,
+        ext_declined = 0, back = 1, notification_id = excluded.notification_id`, [head.id, orgId, n.id]);
+  });
+  // 2.244: «Пока Вас не было» — сообщение заказчика; «Всё посмотрел» убирает блок и после перезагрузки.
+  await ep.goto('/kabinet#notifications');
+  await ep.locator('#notifications li').filter({ hasText: 'Пока Вас не было' }).getByRole('button').click();
+  await expect(ep).toHaveURL(/#specialist&to=back$/);
+  const back = ep.locator('#back-box');
+  await expect(back.locator(`[data-back-order="${A}"]`).filter({ hasText: 'сообщени' })).toHaveCount(1);
+  await back.getByRole('button', { name: 'Всё посмотрел' }).scrollIntoViewIfNeeded();
+  await shot(ep, 'd15-progon10-ekspert-poka-ne-bylo');
+  await back.getByRole('button', { name: 'Всё посмотрел' }).click();
+  await expect(back).toBeHidden();
+  await ep.reload();
+  await expect(ep.locator('#specialist-view')).toBeVisible();
+  await expect(back).toBeHidden();
+  // 2.249: у руководителя утренняя сводка «вернулись …» ведёт к отбору — дело вернувшегося эксперта с пометкой.
+  await hp.goto('/kabinet#notifications');
+  const morning = hp.locator('#notifications li').filter({ hasText: 'На сегодня по организации' }).first();
+  await expect(morning).toContainText('вернулись после дней «не принимаю дела»: 1 эксперт');
+  await morning.getByRole('button').click();
+  await expect(hp).toHaveURL(new RegExp(`#org=${orgId}&to=back$`));
+  await expect(hp.locator('[data-filter="back"]')).toHaveText('Эксперт вернулся после «не принимаю дела» · 1');
+  const brow = hp.locator(`#org-cases > li[data-case="${ref}"] [data-role="back"]`);
+  await expect(brow).toHaveText(/^Эксперт сегодня вернулся после дней «не принимаю дела» \(с .+\)/);
+  await brow.scrollIntoViewIfNeeded();
+  await shot(hp, 'd16-progon10-rukovoditel-vernulsya');
+  for (const p of [ep, hp, cp]) await p.context().close();
+});
