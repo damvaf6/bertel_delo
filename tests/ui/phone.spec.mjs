@@ -11073,3 +11073,61 @@ test('2.252: «Подписи организации» — возвращённ�
   await shot(hp, 'd20-rukovoditel-vozvrashchennyj-udalen');
   for (const p of [ep, hp]) await p.context().close();
 });
+
+// 2.253: ИИ-проверка — размер доли в отчёте как в выписке ЕГРН на объект. Оценивается доля в квартире; в выписке —
+// общая долевая собственность, доля в праве 1/2, а в отчёте и черновике — 1/3. Находка в «Права и обременения» с кнопкой к
+// строке выписки; «Заменить на значение из выписки» меняет долю в черновике.
+test('2.253: ИИ-проверка — размер доли в отчёте как в выписке ЕГРН', async ({ browser, baseURL }) => {
+  test.setTimeout(120_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990025201'), customer = await signIn(cp, '+79990025202');
+  const A = await db(async (c) => {
+    await c.query("insert into specialists (user_id, created_at) values ($1, now() - interval '1 year') on conflict do nothing", [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty') on conflict do nothing", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Доля в квартире', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"division","region":"moscow","object_type":"share","address":"г. Москва, Долевая ул., д. 3, кв. 7","area":"52","share_size":"1/3"}') returning id`,
+    [customer.id, expert.id, inDays(9)]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now() - interval '2 days')", [o.id, expert.id]);
+    return o.id;
+  });
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from(['Выписка из Единого государственного реестра недвижимости об объекте недвижимости', 'Вид объекта недвижимости: Помещение',
+      'Кадастровый номер: 77:03:0030030:3030', 'Площадь, м2: 52', 'Адрес (местоположение): г. Москва, Долевая ул., д. 3, кв. 7',
+      'Правообладатель (правообладатели): 1.1. Долин Денис Денисович', '1.2. Долина Дарья Денисовна',
+      'Вид, номер и дата государственной регистрации права: 2.1. Общая долевая собственность, № 77:03:0030030:3030-77/051/2021-5, 12.04.2021, доля в праве 1/2'].join('\n')),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Выписка ЕГРН.txt') },
+  })).status()).toBe(201);
+  await ep.goto(`/kabinet#order=${A}`);
+  await ep.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const draftText = ep.getByLabel('Текст заключения');
+  await draftText.fill(`${await draftText.inputValue()}\nОбъект оценки: 1/3 доли в праве общей долевой собственности на квартиру.`);
+  await ep.getByRole('button', { name: 'Сохранить правку' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Правка сохранена');
+  expect((await ep.request.post(`/api/orders/${A}/results`, {
+    data: Buffer.from(['ОТЧЁТ ОБ ОЦЕНКЕ № 3/2026', 'Адрес объекта оценки: г. Москва, Долевая ул., д. 3, кв. 7', 'Кадастровый номер 77:03:0030030:3030',
+      'Общая площадь, кв. м: 52', 'Объект оценки: 1/3 доли в праве общей долевой собственности на квартиру', 'Аналог 1: доля 1/4 в квартире',
+      'Итоговая стоимость доли 4 100 000 руб.'].join('\n')),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Отчёт о доле.txt') },
+  })).status()).toBe(201);
+  await ep.reload();
+  await ep.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(ep.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  const rights = ep.locator('#review-checks > li[data-check="rights"]');
+  const shareFind = rights.locator('.ai-found li').filter({ hasText: 'Доля 1/3' });
+  await expect(shareFind).toHaveCount(1);
+  await expect(shareFind).toContainText('Доля 1/3 не совпадает с выпиской ЕГРН «Выписка ЕГРН.txt» (доля в праве 1/2, стр. 1) — проверьте, не доля ли это другого собственника или другого объекта');
+  await expect(rights).not.toContainText('Доля 1/4');
+  await shareFind.getByRole('button', { name: 'Выписка ЕГРН, стр. 1' }).click();
+  await expect(shareFind.locator('[data-role="egrn-place"]')).toContainText('доля в праве 1/2');
+  await shareFind.scrollIntoViewIfNeeded();
+  await shot(ep, 'd21-ekspert-dolya-egrn');
+  await shareFind.getByRole('button', { name: 'Заменить на значение из выписки' }).click();
+  await expect(shareFind.locator('[data-role="egrn-swap-what"]')).toHaveText('Было «1/3» — стало «1/2», как в выписке ЕГРН. Черновик сохранён; соберите Word заново.');
+  await expect(draftText).toHaveValue(/Объект оценки: 1\/2 доли в праве общей долевой собственности на квартиру\./);
+  await shareFind.locator('[data-role="egrn-swap-what"]').scrollIntoViewIfNeeded();
+  await shot(ep, 'd21b-ekspert-dolya-zamenena');
+  for (const p of [ep, cp]) await p.context().close();
+});
