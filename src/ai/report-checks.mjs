@@ -1092,6 +1092,97 @@ function rightsMatch(doc, ctx) {
   return out;
 }
 
+// ——— 2.242: ограничения и обременения из выписки ЕГРН (ипотека, арест, аренда …) упомянуты в отчёте ———
+// В выписке: «Ограничение прав и обременение объекта недвижимости: не зарегистрировано» или блок с «вид: Ипотека в силу
+// закона» (в той же строке или в следующих, до следующей подписи выписки). В отчёте вид обременения должен быть назван
+// хоть где-то, кроме аналогов, цели оценки и рынка («ипотечные ставки», «ставки аренды» — другие слова или не в счёт).
+// Отчёт прямо говорит «Обременения: не зарегистрированы» — находка у этой строки с «Исправить в черновике».
+const ENC_AT = /ограничени\S*\s+прав\S*\s+и\s+обременени\S*(?:\s+объекта(?:\s+недвижимости)?)?\s*[:\-–—]?/giu;
+const ENC_STOP = /^\s*(?:\d+(?:\.\d+)*\.?\s*)?(?:заявленн|сведения|правоприт|правообладател|кадастров|получател|особые|вид\S*,\s*номер|ограничени\S*\s+прав\S*\s+и\s+обременени)/iu;
+const ENC_NONE = /не\s+зарегистрирован|отсутству|данные\s+отсутству|не\s+выявлен|не\s+установлен|не\s+имеется|(?<![а-яё])нет(?![а-яё])/iu;
+const ENC_KINDS = {
+  mortgage: ['ипотека', /ипотек|залог/iu, /(?<![а-яё])ипотек(?:а|и|е|у|ой|ою)?(?![а-яё])|(?<![а-яё])залог(?:а|е|у|ом)?(?![а-яё])|залогодерж/iu],
+  arrest: ['арест', /арест/iu, /(?<![а-яё])арест/iu],
+  ban: ['запрещение регистрации', /запрещ|запрет/iu, /запрещени\S*\s+(?:сделок|регистрац|на\s+совершени)|запрет\S*\s+(?:на\s+)?(?:регистрац|совершени|сделок)/iu],
+  lease: ['аренда', /аренд/iu, /(?<![а-яё])(?:суб)?аренд(?:а|ы|е|у|ой|атор)(?![а-яё])/iu],
+  servitude: ['сервитут', /сервитут/iu, /сервитут/iu],
+  trust: ['доверительное управление', /доверительн\S*\s+управлен/iu, /доверительн\S*\s+управлен/iu],
+};
+const ENC_SKIP = /аналог|цел\S*\s+(?:проведения\s+)?оценки|предполагаем\S*\s+использован|ипотечн|ставк|рын/iu;
+function egrnEncumbrances(egrn, ctx) {
+  const land = ctx.service === 'land';
+  const got = new Map();
+  for (const d of egrnOnObject(egrn, ctx)) {
+    if (!Array.isArray(d.pages)) continue;
+    const head = d.pages.slice(0, 2).join('\n');
+    if (land ? EGRN_BUILT.test(head) && !EGRN_LAND.test(head) : EGRN_LAND.test(head) && !EGRN_BUILT.test(head)) continue;
+    d.pages.forEach((page, i) => {
+      for (const m of page.matchAll(ENC_AT)) {
+        const stop = page.indexOf('\n', m.index);
+        const lines = [page.slice(m.index + m[0].length, stop < 0 ? page.length : stop)];
+        for (let from = stop, k = 0; k < 12 && from >= 0; k += 1) {
+          const next = page.indexOf('\n', from + 1);
+          const line = page.slice(from + 1, next < 0 ? page.length : next);
+          if (ENC_STOP.test(line)) break;
+          lines.push(line);
+          from = next;
+        }
+        if (ENC_NONE.test(lines[0]) && !/вид\s*:/iu.test(lines[0])) continue;
+        // Вид — в строках «вид: …»; нет их — весь блок (без строк о сроке и о том, в чью пользу).
+        const vid = lines.map((l) => l.match(/(?<![а-яё])вид\s*:\s*(.+)$/iu)?.[1]).filter(Boolean);
+        const where = vid.length ? vid : lines.filter((l) => !/в\s+пользу|срок|дата|номер/iu.test(l));
+        for (const v of where) {
+          for (const [kind, [, re]] of Object.entries(ENC_KINDS)) {
+            if (!re.test(v) || got.has(kind)) continue;
+            got.set(kind, { v: clean(v.replace(/^[\s\d.]*/, '').split(/[,;]/)[0]), name: d.name, page: i, doc: d.id, quote: lineAround(page, Math.max(m.index, page.indexOf(v, m.index))) });
+          }
+        }
+      }
+    });
+  }
+  return got;
+}
+function encumbranceMatch(docs, ctx) {
+  if (!ctx.egrn?.length || !docs.length) return [];
+  const enc = egrnEncumbrances(ctx.egrn, ctx);
+  if (!enc.size) return [];
+  const main = mainReport(docs) ?? docs[0];
+  const named = new Set();
+  for (const d of docs) {
+    for (const page of d.pages) {
+      for (const line of page.split('\n')) {
+        if (ENC_SKIP.test(line)) continue;
+        for (const [kind, [, , re]] of Object.entries(ENC_KINDS)) if (re.test(line)) named.add(kind);
+      }
+    }
+  }
+  // Где в отчёте раздел об обременениях: строка «обременения … не зарегистрированы» — первая, иначе любая про обременения.
+  let none = null;
+  let any = null;
+  main.pages.forEach((page, i) => {
+    for (const m of page.matchAll(/обременени|ограничени\S*\s+прав/giu)) {
+      const line = lineAround(page, m.index);
+      if (ENC_SKIP.test(line)) continue;
+      if (!any) any = { page: i, quote: line };
+      const after = line.match(/(?:обременени|ограничени)[^:\n]*:\s*((?:не\s+зарегистрирован|отсутству|не\s+выявлен|не\s+установлен|не\s+имеется|нет(?![а-яё]))[а-яё]*)/iu);
+      if (!none && (after || (ENC_NONE.test(line) && !Object.values(ENC_KINDS).some(([, , re]) => re.test(line))))) none = { page: i, quote: line, bad: after?.[1] ?? null };
+    }
+  });
+  const out = [];
+  for (const [kind, at] of enc) {
+    if (named.has(kind)) continue;
+    const what = `${ENC_KINDS[kind][0]} («${at.v}», стр. ${at.page + 1})`;
+    if (none) {
+      out.push({ doc: main, page: none.page, quote: none.quote, egrn: egrnAt(at), ...(none.bad ? { fix: { bad: none.bad, right: at.v } } : {}),
+        text: `В отчёте сказано, что обременений нет, а в выписке ЕГРН «${at.name}» — ${what}: укажите обременение в разделе о правах и обременениях` });
+    } else {
+      out.push({ doc: main, page: any?.page ?? 0, quote: any?.quote ?? '', egrn: egrnAt(at),
+        text: `В выписке ЕГРН «${at.name}» есть обременение — ${what}, а в отчёте оно не упомянуто: укажите его в разделе о правах и обременениях` });
+    }
+  }
+  return out;
+}
+
 const SHARE_AT = [
   /(?<![а-яё])дол(?:я|и|е|ю|ей)(?![а-яё])[^\d\n]{0,60}?(\d{1,3})\s*\/\s*(\d{1,4})(?![\d/])/giu,
   /(?<![\d/])(\d{1,3})\s*\/\s*(\d{1,4})\s+(?:доли|долю|доля|доле)(?![а-яё])/giu,
@@ -2124,6 +2215,7 @@ const WHOLE = {
   report_number: reportNumbers,
   value_date: valueDates,
   purpose_value: purposeValue,
+  encumbrance_match: encumbranceMatch,
 };
 
 const PER_DOC = {
@@ -2170,6 +2262,7 @@ export const AUTO_CHECKS = Object.freeze({
   building_match: 'год постройки и материал стен дома в отчёте — как в выписке ЕГРН на здание из дела, а год без неё — как в заявке',
   cad_value_match: 'кадастровая стоимость объекта в отчёте — как в выписке ЕГРН из дела (если в отчёте своя дата «по состоянию на» — с той же датой)',
   rights_match: 'правообладатель и вид права (собственность, общая долевая, общая совместная) в отчёте — как в выписке ЕГРН на объект из дела',
+  encumbrance_match: 'ограничения и обременения из выписки ЕГРН на объект (ипотека, арест, запрещение регистрации, аренда, сервитут, доверительное управление) упомянуты в отчёте',
   share_match: 'размер доли в отчёте — как в заявке',
   land_match: 'категория земель и вид разрешённого использования — как в заявке',
   inspection: '«без осмотра» и дата осмотра одновременно',
