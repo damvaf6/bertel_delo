@@ -513,7 +513,7 @@ function renderOrgReturns(list) {
   if (!list.length) return;
   const open = list.filter((r) => r.open);
   $('org-returns-lead').textContent = open.length
-    ? 'Руководитель вернул файл с замечанием: исправьте файл (или загрузите новый), отметьте исправленные пункты и подпишите заново — руководитель увидит, что осталось, и подпишет от организации.'
+    ? 'Руководитель вернул файл с замечанием: исправьте файл (или удалите его и загрузите исправленный), отметьте исправленные пункты и подпишите заново — руководитель увидит, что осталось, и подпишет от организации.'
     : 'Все замечания учтены. История возвратов:';
   const item = (r) => el('li', { class: r.open ? 'return open' : 'return', 'data-return': String(r.id) },
     el('div', { class: 'title', text: `${r.filename} · ${r.open ? 'исправить' : 'исправлено'}` }),
@@ -527,13 +527,25 @@ function renderOrgReturns(list) {
 // нет. «К подписи» ведёт к этому файлу в «Документах».
 function returnFileState(r) {
   const docs = lastDocs?.documents ?? [];
-  if (!r.open || docs.some((x) => x.id === r.document_id)) return [];
+  if (!r.open) return [];
+  if (docs.some((x) => x.id === r.document_id)) return besideReturned(r, docs);
   const fresh = freshAfter(r);
   if (!fresh.length) return [el('div', { class: 'return-file warn', 'data-role': 'return-file', text: 'Возвращённый файл удалён — загрузите исправленный файл и подпишите его.' })];
   const d = fresh.at(-1);
   return [el('div', { class: 'return-file ok', 'data-role': 'return-file' },
     el('span', { text: `Исправленный файл «${d.filename}» загружен ${new Date(d.created_at).toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow' })} — ждёт Вашей подписи${fresh.length > 1 ? ` (новых файлов: ${fresh.length})` : ''}. ` }),
     el('button', { class: 'link', 'data-action': 'to-return-file', onclick: () => toDoc(d.id) }, 'К подписи'))];
+}
+
+// Возвращённый файл не удалён, а рядом после возврата загружен другой (найдено прогоном 2.250): новым файлом замечание не
+// закроется — закрывает его новая подпись возвращённого файла или подпись новой версии, когда возвращённый удалён (2.159; рядом
+// может лежать приложение). Подсказка — что сделать в каждом случае, кнопка ведёт к возвращённому файлу.
+function besideReturned(r, docs) {
+  const d = docs.filter((x) => x.kind === 'result' && x.own !== false && x.id !== r.document_id && Date.parse(x.created_at) > Date.parse(r.at)).at(-1);
+  if (!d) return [];
+  return [el('div', { class: 'return-file warn', 'data-role': 'return-beside' },
+    el('span', { text: `После возврата загружен «${d.filename}», а возвращённый «${r.filename}» не удалён — замечание пока открыто. Если «${d.filename}» — исправленная версия, удалите «${r.filename}» и подпишите новый файл: тогда руководитель увидит у него Ваши отметки. Если это приложение — подпишите заново «${r.filename}». ` }),
+    el('button', { class: 'link', 'data-action': 'to-returned-file', onclick: () => toDoc(r.document_id) }, 'К возвращённому файлу'))];
 }
 
 // Исправленный файл после возврата (2.192): проверял ли его ИИ. Не запускали или есть «посмотрите» — подсказка с переходом к
