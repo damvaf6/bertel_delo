@@ -7,7 +7,7 @@ import { loadAnalogs } from '/analogs.js';
 import { loadSnippets } from '/snippets.js';
 import { loadDraftDiff } from '/draftdiff.js';
 import { emptySections } from '/draftempty.js';
-import { findInDraft, swapValue } from '/draftfind.js';
+import { findInDraft, swapAll, swapValue, unswapAll } from '/draftfind.js';
 
 const $ = (id) => document.getElementById(id);
 const timeRu = (s) => new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
@@ -138,7 +138,7 @@ function toSection(title) {
 // 2.231 — и у находки, сверенной с заявкой или заданием на оценку.
 export const canFixInDraft = () => !!ctx?.draft && !$('draft-text').readOnly && !$('draft-box').classList.contains('hidden');
 function syncFixButtons() {
-  for (const b of document.querySelectorAll('[data-action="egrn-draft"], [data-action="fix-draft"], [data-action="egrn-swap"]')) b.classList.toggle('hidden', !canFixInDraft());
+  for (const b of document.querySelectorAll('[data-action="egrn-draft"], [data-action="fix-draft"], [data-action="egrn-swap"], [data-action="egrn-swap-all"]')) b.classList.toggle('hidden', !canFixInDraft());
 }
 // Выделяет в тексте черновика значение, которое разошлось с выпиской (заявкой, заданием); в черновике его нет — false
 // (правят в файле отчёта).
@@ -171,6 +171,24 @@ export async function undoSwap(s) {
   if (!canFixInDraft() || t.value.slice(s.from, s.from + s.now.length) !== s.now) return false;
   await putText(t.value.slice(0, s.from) + s.was + t.value.slice(s.from + s.now.length), s.from, s.was.length);
   return true;
+}
+// 2.246: «Заменить всё по выписке» — все замены сразу, черновик сохраняется одной новой версией; → { done, missing }
+// (swapAll) или null (черновик сейчас не правится).
+export async function swapAllInDraft(items) {
+  const t = $('draft-text');
+  if (!canFixInDraft()) return null;
+  const r = swapAll(t.value, items);
+  if (r.done.length) await putText(r.body, r.done[0].from, r.done[0].now.length);
+  return { done: r.done, missing: r.missing };
+}
+// Отмена всех замен одной версией; → { undone, kept } (unswapAll) или null.
+export async function undoSwapAll(done) {
+  const t = $('draft-text');
+  if (!canFixInDraft()) return null;
+  const r = unswapAll(t.value, done);
+  const first = done.find((s) => r.undone.includes(s.i));
+  if (first) await putText(r.body, first.from, first.was.length);
+  return { undone: r.undone, kept: r.kept };
 }
 // Новый текст — на экран и в черновик; не сохранилось — на экране прежний текст.
 async function putText(body, from, len) {

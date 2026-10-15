@@ -1,7 +1,7 @@
 // Работа по делу (задача 1.5): проверка результата по правилам и переписка по заявке. Тексты — только через textContent.
 import { api, el, say } from '/common.js';
 import { setNext } from '/next.js';
-import { canFixInDraft, fixInDraft, swapInDraft, undoSwap } from '/draft.js';
+import { canFixInDraft, fixInDraft, swapAllInDraft, swapInDraft, undoSwap, undoSwapAll } from '/draft.js';
 import { swapValue } from '/draftfind.js';
 
 const $ = (id) => document.getElementById(id);
@@ -9,6 +9,8 @@ const SIDE_RU = { customer: 'Заказчик', executor: 'Исполнител�
 const VERDICT_RU = { ok: 'В порядке', issue: 'Замечание' };
 const timeRu = (s) => new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
 let orderRef = null;
+// 2.246: находки по выписке ЕГРН, которые можно заменить одной кнопкой (egrnSwap), — для «Заменить всё по выписке».
+let swaps = [];
 
 // ——— Проверка результата ———
 
@@ -49,6 +51,7 @@ export async function loadReview(current) {
     ...look.map((c) => el('button', { type: 'button', class: 'link', 'data-look': c.id, 'aria-label': c.title, onclick: () => toRule(c.id) }, short(c.title)))] : []));
   const quiet = (c) => { const h = hints.get(c.id); return h?.hint === 'ok' && !h.found?.length && !h.marks?.length && !c.note && c.verdict !== 'issue'; };
   const fold = !r.can_mark && r.checks.filter(quiet).length > 1;
+  swaps = [];
   const items = r.checks.filter((c) => !fold || !quiet(c)).map((c) => checkItem(order, r, c, hints.get(c.id)));
   if (fold) {
     const q = r.checks.filter(quiet);
@@ -57,6 +60,7 @@ export async function loadReview(current) {
       el('ul', { class: 'list' }, ...q.map((c) => checkItem(order, r, c, hints.get(c.id)))))));
   }
   $('review-checks').replaceChildren(...items);
+  swapAllBox();
   // «Остальное в порядке» (разбор 03.10.2026, 2.18): правила без отметки, где у ИИ нет замечаний и находок, — одной
   // кнопкой. Правила с подсказкой «посмотрите» человек отмечает сам.
   const rest = r.can_mark ? r.checks.filter((c) => !c.verdict && r.ai && hints.get(c.id)?.hint === 'ok') : [];
@@ -76,6 +80,56 @@ export async function loadReview(current) {
   if (r.can_mark && issues.length && !$('reason').value.trim()) {
     $('reason').value = issues.map((c) => `${c.title}: ${c.note}`).join('; ').slice(0, 1000);
   }
+}
+
+// 2.246: «Заменить всё по выписке» — все находки по выписке ЕГРН, которые можно заменить (кроме уже заменённых по одной), —
+// одной кнопкой, черновик сохраняется одной версией; под кнопкой — что было и что стало, и «Отменить всё». Кнопка — пока
+// черновик правится и таких находок хотя бы две (одну заменяют её собственной кнопкой).
+function swapAllBox() {
+  const box = $('ai-swap-all');
+  const list = swaps;
+  let last = null;
+  const btn = el('button', { class: `secondary${canFixInDraft() ? '' : ' hidden'}`, type: 'button', 'data-action': 'egrn-swap-all' }, `Заменить всё по выписке (${list.length})`);
+  const what = el('p', { class: 'muted hidden', 'data-role': 'egrn-swap-all-what' });
+  const lines = el('ul', { class: 'ai-swap-all-list hidden', 'data-role': 'egrn-swap-all-list' });
+  const undo = el('button', { class: 'link hidden', type: 'button', 'data-action': 'egrn-unswap-all' }, 'Отменить всё');
+  btn.onclick = async () => {
+    const todo = list.filter((s) => !s.swapped());
+    btn.disabled = true;
+    try {
+      const r = await swapAllInDraft(todo);
+      if (!r) { btn.disabled = false; return; }
+      for (const i of r.missing) todo[i].missed();
+      last = r.done.length ? { todo, done: r.done } : null;
+      for (const d of r.done) todo[d.i].bulk(d);
+      const miss = r.missing.length ? ` Нет в тексте черновика: ${r.missing.length} — исправьте в файле отчёта.` : '';
+      what.textContent = r.done.length
+        ? `Заменено по выписке ЕГРН: ${r.done.length}. Черновик сохранён; соберите Word заново.${miss}`
+        : `В тексте черновика этих значений нет — исправьте в файле отчёта.`;
+      lines.replaceChildren(...r.done.map((d) => el('li', { text: `«${d.was}» → «${d.now}»` })));
+      what.classList.remove('hidden');
+      lines.classList.toggle('hidden', !r.done.length);
+      undo.classList.toggle('hidden', !r.done.length);
+      if (!r.done.length) btn.disabled = false;
+    } catch (err) { btn.disabled = false; say($('review-msg'), err.message); }
+  };
+  undo.onclick = async () => {
+    if (!last) return;
+    try {
+      const r = await undoSwapAll(last.done);
+      if (!r) return;
+      for (const i of r.undone) last.todo[i].unbulk();
+      what.textContent = r.kept.length
+        ? `Отменено: ${r.undone.length}. Где текст уже правили (${r.kept.length}), верните прежнее значение сами, если нужно.`
+        : `Замены отменены: в черновике снова прежние значения (${r.undone.length}). Черновик сохранён.`;
+      lines.classList.add('hidden');
+      undo.classList.add('hidden');
+      btn.disabled = false;
+      last = null;
+    } catch (err) { say($('review-msg'), err.message); }
+  };
+  box.classList.toggle('hidden', list.length < 2);
+  box.replaceChildren(...(list.length < 2 ? [] : [btn, what, lines, undo]));
 }
 
 // Что изменилось с ИИ-проверки прежней версии файла (2.206): ушло, осталось, появилось — по правилам, нажатие ведёт к правилу.
@@ -143,6 +197,20 @@ function egrnSwap(g, quote, miss) {
     } catch (err) { say($('review-msg'), err.message); }
   } }, 'Отменить');
   const done = el('p', { class: 'egrn-swap hidden', 'data-role': 'egrn-swap-done' }, what, ' ', undo);
+  // 2.246: заменено вместе со всеми — отменяется кнопкой «Отменить всё».
+  swaps.push({
+    g, quote,
+    swapped: () => !!last || btn.disabled,
+    missed: () => { miss.textContent = `В тексте черновика «${g.bad}» нет — исправьте в файле отчёта (в выписке: ${g.right}).`; miss.classList.remove('hidden'); },
+    bulk: (d) => {
+      btn.disabled = true;
+      miss.classList.add('hidden');
+      what.textContent = `Было «${d.was}» — стало «${d.now}», как в выписке ЕГРН (заменено вместе со всеми).`;
+      undo.classList.add('hidden');
+      done.classList.remove('hidden');
+    },
+    unbulk: () => { btn.disabled = false; done.classList.add('hidden'); },
+  });
   const btn = el('button', { class: `secondary${canFixInDraft() ? '' : ' hidden'}`, type: 'button', 'data-action': 'egrn-swap', onclick: async () => {
     btn.disabled = true;
     try {

@@ -61,3 +61,47 @@ export function swapValue(g, found) {
   const was = num.exec(String(found ?? ''));
   return was && num.test(right) ? right.replace(/[,.]/, was[1]) : right;
 }
+
+// 2.246: «Заменить всё по выписке» — все замены одним проходом по тексту: items — [{ g, quote }] (находки по выписке ЕГРН).
+// Места ищутся в исходном тексте; два значения на одном месте — заменяется первое. → { body, done: [{ i, from, was, now }]
+// (from — уже в новом тексте), missing: [i] — в черновике значения нет или заменить одной кнопкой нельзя }.
+export function swapAll(body, items) {
+  const text = String(body ?? '');
+  const picked = [];
+  const missing = [];
+  (items ?? []).forEach(({ g, quote }, i) => {
+    const at = g?.bad ? findInDraft(text, { bad: g.bad, quote }) : null;
+    const was = at && text.slice(at.from, at.to);
+    const now = at && swapValue(g, was);
+    if (!now || picked.some((p) => at.from < p.to && p.from < at.to)) return missing.push(i);
+    picked.push({ i, from: at.from, to: at.to, was, now });
+  });
+  picked.sort((a, b) => a.from - b.from);
+  let out = '';
+  let pos = 0;
+  const done = picked.map((p) => {
+    out += text.slice(pos, p.from);
+    const from = out.length;
+    out += p.now;
+    pos = p.to;
+    return { i: p.i, from, was: p.was, now: p.now };
+  });
+  return { body: out + text.slice(pos), done, missing };
+}
+
+// Отмена всех замен: где новое значение ещё стоит на своём месте — возвращается прежнее; где текст уже правили — не
+// трогается. → { body, undone: [i], kept: [i] }.
+export function unswapAll(body, done) {
+  const text = String(body ?? '');
+  const undone = [];
+  const kept = [];
+  let out = '';
+  let pos = 0;
+  for (const s of [...(done ?? [])].sort((a, b) => a.from - b.from)) {
+    if (s.from < pos || text.slice(s.from, s.from + s.now.length) !== s.now) { kept.push(s.i); continue; }
+    out += text.slice(pos, s.from) + s.was;
+    pos = s.from + s.now.length;
+    undone.push(s.i);
+  }
+  return { body: out + text.slice(pos), undone, kept };
+}
