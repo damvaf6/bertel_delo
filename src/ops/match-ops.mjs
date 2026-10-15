@@ -17,6 +17,7 @@ import { BLOCKING_KINDS, dossierAlerts, loadDossier, needsValidDossier } from '.
 import { expertMonthReport, orgReturnsYear, reportMonth } from '../orgs/report.mjs';
 import { expertSchedule } from '../orders/schedule.mjs';
 import { scheduleIcs } from '../orders/ics.mjs';
+import { awayBackOf } from '../notify/away.mjs';
 import { TAX_STATUSES, taxStatusFrom } from '../matching/executors.mjs';
 
 const REGIONS = { moscow: 'Москва', mo: 'Московская область' };
@@ -232,7 +233,12 @@ export function matchOps() {
           if (!sp) throw new HttpError(404, 'not_found', 'Вы не специалист');
           if (hasActive) await tx`update specialists set active = ${body.active} where user_id = ${actor.id}`;
           if (hasAway) {
-            await tx`update specialists set away_from = ${away?.from ?? null}, away_until = ${away?.until ?? null}, away_note = ${away?.note ?? null}
+            // С какого дня считать «Пока Вас не было» (2.239): первый день отметки; продлил уже идущие дни — прежний.
+            const cur = awayOf(sp);
+            const going = cur && !cur.from && sp.away_since ? isoDay(sp.away_since) : null;
+            const since = away ? away.from ?? going ?? todayMsk() : null;
+            await tx`update specialists set away_from = ${away?.from ?? null}, away_until = ${away?.until ?? null}, away_note = ${away?.note ?? null},
+                       away_since = ${since}::date
                      where user_id = ${actor.id}`;
             await audit(tx, actor, 'specialist.away', 'user', actor.id, { from: away?.from ?? null, until: away?.until ?? null });
             // Руководителю организации, от которой эксперт работает, — чтобы не ждал от него ответа на новые дела.
@@ -256,6 +262,14 @@ export function matchOps() {
       async handler({ sql, actor, query }) {
         if (!(await sql.one`select 1 from specialists where user_id = ${actor.id}`)) throw new HttpError(404, 'not_found', 'Вы не специалист');
         return { report: await expertMonthReport(sql, actor.id, reportMonth(query.month)) };
+      },
+    },
+    {
+      // «Пока Вас не было» (2.239): неделю после дней «не принимаю дела» — что произошло с делами эксперта за эти дни.
+      id: 'specialist.me.back', method: 'GET', path: '/api/specialist/me/back', auth: 'user', access: 'self',
+      async handler({ sql, actor }) {
+        const back = await awayBackOf(sql, actor.id);
+        return { back: back && !back.empty ? back : null };
       },
     },
     {

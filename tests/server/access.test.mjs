@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { startApp, login, client, makeOrg, addMember, setPlatformRole, ensurePaid, bridge, TEST_TOKEN, signResults, makeSpecialist } from '../helpers.mjs';
 import { testExternalSignature } from '../../src/providers/sign.mjs';
 import crypto from 'node:crypto';
+import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 
 const covered = new Set();
 const cover = (id) => covered.add(id);
@@ -2596,6 +2597,26 @@ test('нагрузка экспертов на две недели (2.111): то
   assert.ok(r.body.schedule.experts.some((x) => x.full_name === 'Эксперт Б'));
   for (const c of [seniorB, expertB, U.dispatcher, U.admin]) assert.equal((await c.req('GET', url)).status, 403);
   for (const k of ['stranger', 'headA', 'owner', 'spec']) assert.equal((await U[k].req('GET', url)).status, 404, k);
+});
+
+test('«Пока Вас не было» (2.239): только свои дела; чужой эксперт и не специалист — пусто', async () => {
+  cover('specialist.me.back');
+  const exp = await login(S, '+79990006391');
+  const other = await login(S, '+79990006392');
+  for (const u of [exp, other]) await makeSpecialist(S.sql, u.user.id);
+  const back = (c) => c.req('GET', '/api/specialist/me/back');
+  const r0 = await back(U.owner);
+  assert.equal(r0.status, 200);
+  assert.equal(r0.body.back, null, 'не специалист — пусто');
+  const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Пока не было: дело' })).body.order;
+  await S.sql`update orders set status = 'in_work', deadline = ${addDays(todayMsk(), 10)}::date, executor_user_id = ${exp.user.id} where id = ${o.id}`;
+  await S.sql`insert into order_messages (order_id, author_id, side, body, at)
+              values (${o.id}, ${U.owner.user.id}, 'customer', 'Как дела?', now() - interval '2 days')`;
+  const t = todayMsk();
+  await S.sql`update specialists set away_since = ${addDays(t, -5)}::date, away_until = ${t}::date where user_id = any(${[exp.user.id, other.user.id]}::uuid[])`;
+  const mine = (await back(exp)).body.back;
+  assert.deepEqual(mine.messages.map((m) => [m.order_id, m.chat]), [[o.id, 1]]);
+  assert.equal((await back(other)).body.back, null, 'у другого эксперта чужого дела нет');
 });
 
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {
