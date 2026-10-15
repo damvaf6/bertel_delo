@@ -10194,6 +10194,19 @@ test('2.239: «Пока Вас не было» — что произошло с 
   await expect(page).toHaveURL(new RegExp(`#order=${kept}&to=chat$`));
   await expect(page.locator('#chat-box')).toContainText('Ключи у соседки');
   await shot(page, 'h5c-ekspert-poka-ne-bylo-perepiska');
+  // 2.244: «Всё посмотрел» — блок убран и не возвращается после перезагрузки.
+  await page.goto('/kabinet#specialist&to=back');
+  await expect(box).toBeVisible();
+  await box.getByRole('button', { name: 'Всё посмотрел' }).scrollIntoViewIfNeeded();
+  await shot(page, 'h5d-ekspert-poka-ne-bylo-vse-posmotrel');
+  await box.getByRole('button', { name: 'Всё посмотрел' }).click();
+  await expect(box).toBeHidden();
+  const again = page.waitForResponse((r) => r.url().endsWith('/api/specialist/me/back'));
+  await page.reload();
+  expect((await (await again).json()).back).toBeNull();
+  await expect(page.locator('#specialist-view')).toBeVisible();
+  await expect(box).toBeHidden();
+  await shot(page, 'h5e-ekspert-poka-ne-bylo-ubrano');
 });
 
 // 2.230: прогон «как эксперт и руководитель» по пачке 2.221–2.229 — одна организация, одно дело. Выписка ЕГРН устарела —

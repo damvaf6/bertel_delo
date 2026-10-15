@@ -273,6 +273,19 @@ export function matchOps() {
       },
     },
     {
+      // «Всё посмотрел» (2.244): блок «Пока Вас не было» убирается до следующих дней «не принимаю дела». until — какие дни
+      // человек видел: продлил или поставил новые — «уже изменилось».
+      id: 'specialist.me.back.seen', method: 'POST', path: '/api/specialist/me/back/seen', auth: 'user', access: 'self',
+      async handler({ sql, actor, body }) {
+        const until = String(body?.until ?? '');
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(until)) throw new HttpError(400, 'bad_date', 'Не указано, какие дни посмотрены');
+        const r = await sql.one`update specialists set away_back_seen = away_until
+                                where user_id = ${actor.id} and away_until = ${until}::date returning user_id`;
+        if (!r) throw new HttpError(409, 'changed', 'Дни «не принимаю дела» уже изменились — обновите страницу');
+        return { ok: true };
+      },
+    },
+    {
       // «Мои сроки на две недели» (2.109): по дням — сроки своих дел, выезды и ссылки на осмотр, просьбы о переносе срока.
       // ?format=ics (2.122) — сроки и выезды файлом для календаря телефона, без заказчика и адресов.
       id: 'specialist.me.schedule', method: 'GET', path: '/api/specialist/me/schedule', auth: 'user', access: 'self',

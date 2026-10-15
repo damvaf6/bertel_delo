@@ -100,12 +100,14 @@ export async function awayBack(sql, userId, since, until) {
   return back;
 }
 
-// Последняя законченная отметка «не принимаю дела» эксперта, если вернулся не больше недели назад, — и что произошло.
+// Последняя законченная отметка «не принимаю дела» эксперта, если вернулся не больше недели назад и не нажал «Всё
+// посмотрел» (2.244), — и что произошло.
 export async function awayBackOf(sql, userId, today = todayMsk()) {
   const sp = await sql.one`select to_char(coalesce(away_since, away_from, away_until - 14), 'YYYY-MM-DD') as since,
                                   to_char(away_until, 'YYYY-MM-DD') as until
                            from specialists where user_id = ${userId}
-                             and away_until <= ${today}::date and away_until > ${addDays(today, -AWAY_BACK_SHOW_DAYS)}::date`;
+                             and away_until <= ${today}::date and away_until > ${addDays(today, -AWAY_BACK_SHOW_DAYS)}::date
+                             and away_back_seen is distinct from away_until`;
   return sp ? awayBack(sql, userId, sp.since, sp.until) : null;
 }
 
