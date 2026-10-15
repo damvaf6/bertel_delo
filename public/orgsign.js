@@ -123,10 +123,28 @@ function lastReturnState(d, it) {
   if (!r) return [];
   const done = r.items.length - r.left;
   const left = r.items.filter((p) => !p.fixed);
-  return [el('div', { class: left.length ? 'sig-state warn' : 'sig-state', 'data-role': 'points-state',
-    text: `По Вашему замечанию от ${new Date(r.at).toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow' })}: эксперт отметил исправленными ${done} из ${r.items.length}${left.length ? ', осталось:' : ''}` }),
-  ...(left.length ? [pointsList(left)] : [])];
+  const egrn = r.items.filter((p) => p.egrn);
+  const head = el('div', { class: left.length ? 'sig-state warn' : 'sig-state', 'data-role': 'points-state',
+    text: `По Вашему замечанию от ${new Date(r.at).toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow' })}: эксперт отметил исправленными ${done} из ${r.items.length}${left.length ? ', осталось:' : ''}` });
+  if (!egrn.length) return [head, ...(left.length ? [pointsList(left)] : [])];
+  // 2.247: есть пункты из расхождений с выпиской ЕГРН — каждый пункт целиком: отметка эксперта и что показала новая ИИ-проверка.
+  const kept = egrn.filter((p) => p.egrn === 'kept').length;
+  const gone = egrn.filter((p) => p.egrn === 'gone').length;
+  const none = egrn.length - kept - gone;
+  head.textContent = head.textContent.replace(/, осталось:$/, '');
+  return [head,
+    el('div', { class: kept || none ? 'sig-state warn' : 'sig-state', 'data-role': 'points-egrn',
+      text: `Расхождения с выпиской ЕГРН по новой ИИ-проверке эксперта: ${[gone ? `ушли — ${gone}` : '', kept ? `остались — ${kept}` : '',
+        none ? `не проверены после возврата — ${none}` : ''].filter(Boolean).join(', ')}` }),
+    el('ul', { class: 'points' }, ...r.items.map((p) => el('li', { class: p.egrn === 'kept' || !p.fixed ? 'point' : 'point fixed', 'data-point': String(p.n), ...(p.egrn ? { 'data-egrn': p.egrn } : {}) },
+      el('span', { text: `${p.n}. ${p.text}` }),
+      el('span', { class: 'muted', text: ` — ${p.fixed ? 'отмечено исправленным' : 'не отмечено'}${p.egrn ? ` · ${EGRN_STATE[p.egrn]}` : ''}` }))))];
 }
+const EGRN_STATE = {
+  gone: 'в новой ИИ-проверке расхождения нет',
+  kept: 'в новой ИИ-проверке расхождение осталось',
+  none: 'ИИ-проверку после возврата эксперт не запускал',
+};
 
 // ИИ-проверка эксперта перед подписью организации (2.186): запускал ли эксперт её для этой версии файла и что в ней осталось
 // «посмотрите». Подсказка — подписать можно и так.

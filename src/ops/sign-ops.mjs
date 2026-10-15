@@ -15,7 +15,7 @@ import { ProviderError } from '../providers/fake.mjs';
 import { notify } from '../notify/notify.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { signatureFilename } from '../providers/sign.mjs';
-import { aiSignHints } from '../ai/ai.mjs';
+import { aiSignHints, egrnLinks, egrnLinkOf, egrnLinkState } from '../ai/ai.mjs';
 import { audit, text } from './util.mjs';
 
 export const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
@@ -184,11 +184,11 @@ export async function orgReturns(sql, orderId, { orgId = null } = {}) {
                        order by d.created_at desc limit 1) f on true
     where r.order_id = ${orderId} and (${orgId}::uuid is null or r.org_id = ${orgId}::uuid) order by r.id`;
   const items = rows.length
-    ? await sql`select return_id, n, text, fixed_at from org_return_items where return_id = any(${rows.map((r) => r.id)}::bigint[]) order by return_id, n`
+    ? await sql`select return_id, n, text, fixed_at, egrn from org_return_items where return_id = any(${rows.map((r) => r.id)}::bigint[]) order by return_id, n`
     : [];
   return rows.map((r) => {
     const points = items.filter((i) => String(i.return_id) === String(r.id)).map((i) => ({ n: i.n, text: i.text, fixed: !!i.fixed_at, fixed_at: i.fixed_at }));
-    return {
+    const ret = {
       id: Number(r.id),
       at: r.created_at,
       document_id: r.document_id,
@@ -202,7 +202,29 @@ export async function orgReturns(sql, orderId, { orgId = null } = {}) {
       left: points.filter((i) => !i.fixed).length,
       fresh_file: !r.doc_alive && r.fresh_name ? { filename: r.fresh_name, at: r.fresh_at } : null,
     };
+    // 2.247: из каких расхождений с выпиской ЕГРН подставлены пункты — только для «Подписи организации», в ответы не уходит.
+    Object.defineProperty(ret, 'links', { value: items.filter((i) => String(i.return_id) === String(r.id) && i.egrn).map((i) => ({ n: i.n, ...i.egrn })) });
+    return ret;
   });
+}
+
+// Последняя ИИ-проверка дела, где был этот файл (2.247) — по ней пункты возврата связываются с расхождениями.
+async function lastReview(sql, orderId, docIds, after = null) {
+  return sql.one`select items, files, at from ai_reviews where order_id = ${orderId}
+                 and (${after}::timestamptz is null or at > ${after}::timestamptz)
+                 and exists (select 1 from jsonb_array_elements(files) f where f->>'id' = any(${docIds}::text[]))
+                 order by id desc limit 1`;
+}
+
+// Пункты возврата из расхождений с выпиской (2.247): по новой ИИ-проверке эксперта (после возврата, по файлу, к которому
+// относится возврат, — возвращённому или новой версии) — ушло ли расхождение.
+async function returnEgrn(sql, orderId, r, docs) {
+  if (!r.links.length) return new Map();
+  // Новая версия после возврата (2.159) — по ней; нет — по самому возвращённому файлу.
+  const newer = docs.filter((d) => new Date(d.created_at) > new Date(r.at)).map((d) => d.id);
+  const ids = newer.length ? newer : docs.filter((d) => d.id === r.document_id).map((d) => d.id);
+  const review = ids.length ? await lastReview(sql, orderId, ids, r.at) : null;
+  return new Map(r.links.map((l) => [l.n, review ? egrnLinkState(l, review, ids) : 'none']));
 }
 
 // Замечание руководителя по пунктам (2.93): каждая непустая строка — пункт; нумерация «1.», «2)», «-», «•» в начале снимается.
@@ -308,7 +330,13 @@ export function signOps() {
             // С какого времени файлы ждут подписи организации (2.148) — самая ранняя подпись эксперта среди них.
             waiting_since: wait?.since ?? null,
             // История возвратов эксперту (2.27) — только этой организации.
-            returns: returns.map(({ id, at, document_id, filename, comment, by, open, items, left }) => ({ id, at, document_id, filename, comment, by, open, items, left })),
+            // 2.247: у пункта из расхождения с выпиской — ушло ли оно в ИИ-проверке после возврата (egrn: gone / kept / none).
+            returns: await Promise.all(returns.map(async (r) => {
+              const st = await returnEgrn(sql, o.id, r, docs);
+              const { id, at, document_id, filename, comment, by, open, left } = r;
+              return { id, at, document_id, filename, comment, by, open, left,
+                items: r.items.map((p) => (st.has(p.n) ? { ...p, egrn: st.get(p.n) } : p)) };
+            })),
           });
         }
         return { items, sign_mode: providers.sign.manual ? 'manual' : 'cabinet' };
@@ -375,11 +403,16 @@ export function signOps() {
           if (!expert) throw new HttpError(409, 'not_signed', 'Эксперт ещё не подписал файл — возвращать нечего');
           // Подпись эксперта снимается: строка удаляется, файл подписи остаётся в хранилище (ключ — в истории возврата).
           await tx`delete from document_signatures where id = ${expert.id}`;
+          // 2.247: пункты, подставленные из расхождений с выпиской ЕГРН последней ИИ-проверки этого файла, — с привязкой.
+          const links = egrnLinks(await lastReview(tx, order.id, [doc.id]), doc.id);
           const r = await tx.one`
             insert into org_returns (order_id, document_id, org_id, executor_user_id, returned_by, filename, comment, signature_key)
             values (${order.id}, ${doc.id}, ${signOrg.id}, ${cur.executor_user_id}, ${actor.id}, ${doc.filename}, ${comment}, ${expert.storage_key})
             returning *`;
-          for (const [i, t] of points.entries()) await tx`insert into org_return_items (return_id, n, text) values (${r.id}, ${i + 1}, ${t})`;
+          for (const [i, t] of points.entries()) {
+            const link = egrnLinkOf(t, links);
+            await tx`insert into org_return_items (return_id, n, text, egrn) values (${r.id}, ${i + 1}, ${t}, ${link ? JSON.stringify(link) : null}::jsonb)`;
+          }
           await audit(tx, actor, 'document.org_return', 'document', doc.id, { order_id: order.id, org_id: signOrg.id, return_id: Number(r.id) });
           await notify(tx, 'org_returned', { users: [cur.executor_user_id], orderId: order.id, actor });
           return r;

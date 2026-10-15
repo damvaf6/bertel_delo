@@ -662,6 +662,48 @@ test('2.225: руководитель перед подписью организ
   assert.notEqual((await stranger.req('GET', `/api/orgs/${org.id}/signing`)).status, 200);
 });
 
+test('2.247: повторная подпись после «Вернуть эксперту» — у пункта из расхождения с выпиской видно, ушло ли оно в новой ИИ-проверке', async () => {
+  const org = await makeOrg(S.sql, 'ООО «Пункты по выписке»');
+  const head = await login(S, '+79990001531');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  const ex = await login(S, '+79990001532');
+  await makeSpecialist(S.sql, ex.user.id);
+  await addMember(S.sql, org.id, ex.user.id, 'member');
+  assert.equal((await ex.req('PATCH', '/api/me', { full_name: 'Эксперт Повторов' })).status, 200);
+  assert.equal((await ex.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  const o = await inWork('Квартира: пункты по выписке', ex);
+  const putTxt = (who, url, body, name) => who.req('POST', url, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } });
+  assert.equal((await putTxt(owner, `/api/orders/${o.id}/documents`, 'Выписка из Единого государственного реестра недвижимости\nВид объекта недвижимости: Помещение\nКадастровый номер: 77:01:0001001:4321\nПлощадь, м2: 47,3\nНомер, тип этажа, на котором расположено помещение, машино-место: Этаж № 6\nАдрес (местоположение): г. Москва, тестовая ул., д. 15, кв. 18', 'Выписка ЕГРН.txt')).status, 201);
+  const d1 = (await putTxt(ex, `/api/orders/${o.id}/results`, 'ОТЧЁТ ОБ ОЦЕНКЕ\nКвартира, кадастровый номер 77:01:0001001:4321\nОбщей площадью 45,1 кв. м\nКвартира на 5 этаже', 'Отчёт.txt')).body.document;
+  assert.equal((await sign(d1, undefined, ex)).status, 201);
+  assert.equal((await ex.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
+  const p1 = 'Площадь 45,1 кв. м не совпадает с площадью в выписке ЕГРН (47,3 кв. м) — исправьте по выписке';
+  const p2 = 'Этаж 5 не совпадает с этажом в выписке ЕГРН (6) — исправьте по выписке';
+  // Руководитель вернул: два пункта из расхождений (один поправил словами в конце), третий — свой.
+  const r = await head.req('POST', `/api/org-documents/${d1.id}/return`, { comment: `1. ${p1}\n2. ${p2.replace('исправьте по выписке', 'проверьте этаж')}\n3. Приложите выписку в отчёт` });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  const links = await S.sql`select n, egrn from org_return_items where return_id = ${r.body.return.id} order by n`;
+  assert.deepEqual(links.map((x) => [x.n, x.egrn?.rule ?? null, x.egrn?.right ?? null]), [[1, links[0].egrn.rule, '47,3'], [2, links[1].egrn.rule, '6'], [3, null, null]]);
+  assert.ok(links[0].egrn.rule);
+  // Привязка в ответы эксперту не уходит.
+  assert.ok(!JSON.stringify(await docsOf(ex, o)).includes('"rule"'));
+  const state = async () => (await head.req('GET', `/api/orgs/${org.id}/signing`)).body.items.find((x) => x.order_ref.endsWith(o.id.slice(0, 8).toUpperCase()))
+    .returns[0].items.map((p) => [p.n, p.fixed, p.egrn ?? null]);
+  // После возврата ИИ-проверку ещё не запускали.
+  assert.deepEqual(await state(), [[1, false, 'none'], [2, false, 'none'], [3, false, null]]);
+  // Новая версия: площадь исправлена, этаж — нет; эксперт отметил исправленными оба пункта, подписал и проверил заново.
+  const d2 = (await putTxt(ex, `/api/orders/${o.id}/results`, 'ОТЧЁТ ОБ ОЦЕНКЕ\nКвартира, кадастровый номер 77:01:0001001:4321\nОбщей площадью 47,3 кв. м\nКвартира на 5 этаже', 'Отчёт 2.txt')).body.document;
+  for (const n of [1, 2]) assert.equal((await ex.req('PUT', `/api/orders/${o.id}/org-returns/${r.body.return.id}/items/${n}`, { fixed: true })).status, 200);
+  assert.equal((await sign(d2, undefined, ex)).status, 201);
+  assert.deepEqual(await state(), [[1, true, 'none'], [2, true, 'none'], [3, false, null]], 'проверка до возврата не в счёт');
+  assert.equal((await ex.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
+  assert.deepEqual(await state(), [[1, true, 'gone'], [2, true, 'kept'], [3, false, null]]);
+  // Чужой руководитель не видит.
+  const stranger = await login(S, '+79990001533');
+  assert.notEqual((await stranger.req('GET', `/api/orgs/${org.id}/signing`)).status, 200);
+});
+
 test('2.154: ИИ-проверка — дата составления отчёта не позже дня подписи эксперта; без подписи — не позже сегодня', async () => {
   const o = await inWork('Квартира — дата отчёта и подпись');
   const ru = (d) => d.split('-').reverse().join('.');

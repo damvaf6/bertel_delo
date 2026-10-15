@@ -7116,11 +7116,37 @@ test('расхождения с выпиской ЕГРН перед подпи�
   await expect(area).toHaveValue(`${p1}\n${p2}`);
   await item.locator('[data-action="org-return-egrn"]').click();
   await expect(hp.locator('#org-sign-msg')).toHaveText('Все расхождения с выпиской уже в замечании');
-  await area.fill(`${p1}\nПриложите выписку в отчёт`);
+  await area.fill(`${p1}\n${p2}\nПриложите выписку в отчёт`);
   await item.locator('[data-action="org-return-send"]').click();
   await expect(hp.locator('#org-sign-msg')).toHaveText('Файл возвращён эксперту с замечанием — его подпись снята');
-  const back = await db((c) => c.query('select i.n, i.text from org_return_items i join org_returns r on r.id = i.return_id where r.order_id = $1 order by i.n', [id]));
-  expect(back.rows.map((r) => r.text)).toEqual([p1, 'Приложите выписку в отчёт']);
+  const back = await db((c) => c.query('select i.n, i.text, i.egrn, r.id as rid, r.document_id from org_return_items i join org_returns r on r.id = i.return_id where r.order_id = $1 order by i.n', [id]));
+  expect(back.rows.map((r) => r.text)).toEqual([p1, p2, 'Приложите выписку в отчёт']);
+  expect(back.rows.map((r) => r.egrn?.rule ?? null)).toEqual(['realty_identity', 'realty_identity', null]);
+
+  // 2.247: эксперт отметил исправленными оба пункта по выписке, подписал заново и проверил ИИ — площадь ушла, этаж остался.
+  const rid = back.rows[0].rid;
+  for (const n of [1, 2]) expect((await ep.request.put(`/api/orders/${id}/org-returns/${rid}/items/${n}`, { data: { fixed: true }, headers: H })).status()).toBe(200);
+  expect((await ep.request.post(`/api/documents/${back.rows[0].document_id}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  await hp.reload();
+  const again = hp.locator('#org-sign > li[data-item]').first();
+  await expect(again.locator('[data-role="points-egrn"]')).toHaveText('Расхождения с выпиской ЕГРН по новой ИИ-проверке эксперта: не проверены после возврата — 2');
+  await db((c) => c.query(`insert into ai_reviews (order_id, round, requested_by, side, model, items, files)
+    select o.id, o.review_round + 1, o.executor_user_id, 'executor', 'fake', $2::jsonb, jsonb_build_array(jsonb_build_object('id', d.id, 'name', d.filename, 'read', true))
+    from orders o join documents d on d.order_id = o.id and d.kind = 'result' and d.deleted_at is null where o.id = $1`, [id, JSON.stringify([
+    { id: 'realty_identity', hint: 'attention', note: '', marks: [], found: [
+      { text: 'Этаж 5 не совпадает с этажом в выписке ЕГРН «Выписка ЕГРН.pdf» (6, стр. 1) — проверьте, нет ли данных другого объекта', file: 'Отчёт.pdf', where: 'стр. 2', quote: 'Квартира на 5 этаже', egrn: { ...egrn, quote: 'Этаж № 6' } },
+    ] }])]));
+  await hp.reload();
+  await expect(again.locator('[data-role="points-state"]')).toHaveText(/^По Вашему замечанию от \d{2}\.\d{2}\.\d{4}: эксперт отметил исправленными 2 из 3$/);
+  await expect(again.locator('[data-role="points-egrn"]')).toHaveText('Расхождения с выпиской ЕГРН по новой ИИ-проверке эксперта: ушли — 1, остались — 1');
+  await expect(again.locator('li.doc ul.points > li')).toHaveText([
+    `1. ${p1} — отмечено исправленным · в новой ИИ-проверке расхождения нет`,
+    `2. ${p2} — отмечено исправленным · в новой ИИ-проверке расхождение осталось`,
+    '3. Приложите выписку в отчёт — не отмечено',
+  ]);
+  await expect(again.locator('li.doc ul.points > li[data-egrn="kept"]')).toHaveCount(1);
+  await again.locator('[data-role="points-state"]').scrollIntoViewIfNeeded();
+  await shot(hp, 'h4e-rukovoditel-povtornaya-podpis-egrn');
 });
 
 test('отбор дел на подпись по ИИ-проверке (2.193): руководитель видит дела без ИИ-проверки этой версии и с «посмотрите»', async ({ browser, baseURL }) => {
