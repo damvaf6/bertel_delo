@@ -109,6 +109,18 @@ function team(schedule) {
   const note = none.length ? el('div', { class: 'clash-note', 'data-role': 'nobody', text: `Никто не принимает новые дела: ${spans(none)}` })
     : el('div', { class: 'muted', 'data-role': 'nobody', text: fewer ? 'Каждый день кто-то из экспертов принимает новые дела.'
       : 'Все эксперты принимают новые дела все две недели.' });
+  // Дела со сроком в дни «никто не принимает» (2.255): передать в эти дни некому — нажатие ведёт к делу, сразу к «кому передать»
+  // или «попросить перенос срока»; сдано и ждёт проверки — не в счёт.
+  const due = schedule.days.flatMap((h, k) => (h.accepting === 0 ? schedule.experts.flatMap((x) => x.days[k].items
+    .filter((i) => i.kind === 'deadline' && i.status !== 'review').map((i) => ({ i, x, h }))) : []));
+  const cases = due.length ? [el('div', { class: 'clash-note', 'data-role': 'nobody-due', text: `Срок сдачи в эти дни: ${due.length}` }),
+    el('ul', { class: 'schedule nobody-due' }, ...due.map(({ i, x, h }) => {
+      const t = itemText(i);
+      return el('li', { 'data-day': h.date, 'data-schedule-item': 'deadline' },
+        el('button', { type: 'button', class: 'open hot', onclick: () => focusOrgCase({ ref: i.order_ref, to: 'transfer' }) },
+          el('span', { text: `${short(h.date)} · ${t.title.replace(/^Сдать: /, '')}` }),
+          el('span', { class: 'what', text: [x.full_name, t.what].filter(Boolean).join(' · ') })));
+    }))] : [];
   return [
     el('div', { class: 'title', text: `Принимают новые дела (из ${total})` }),
     el('div', { class: 'strip', 'aria-hidden': 'true' }, ...schedule.days.map((h) => el('span', {
@@ -117,6 +129,7 @@ function team(schedule) {
     el('span', { class: 'num', text: String(Number(h.date.slice(8))) }),
     el('span', { class: 'cnt', text: String(h.accepting) })))),
     note,
+    ...cases,
   ];
 }
 

@@ -9014,6 +9014,20 @@ test('2.194: нагрузка экспертов — дни «не приним�
   await expect(team.locator('.strip .cell').nth(0).locator('.cnt')).toHaveText('0');
   await expect(team.locator('.strip .cell').nth(3).locator('.cnt')).toHaveText('1');
   await expect(team.locator('[data-role="nobody"]')).toHaveText(/^Никто не принимает новые дела: \d+ \S+ — \d+ \S+$/);
+  // 2.255: в дни «никто не принимает» — дело со сроком в эти дни; нажатие — к делу, сразу к «кому передать».
+  await expect(team.locator('[data-role="nobody-due"]')).toHaveText('Срок сдачи в эти дни: 1');
+  const nd = team.locator('ul.nobody-due > li');
+  await expect(nd).toHaveCount(1);
+  await expect(nd).toHaveAttribute('data-day', inDays(1));
+  await expect(nd).toContainText(`№ ${id.slice(0, 8).toUpperCase()}`);
+  await expect(nd.locator('.what')).toHaveText('Отпускова Анна');
+  await team.scrollIntoViewIfNeeded();
+  await shot(hp, 'g4d-nagruzka-nikto-srok-dela');
+  await nd.locator('button').click();
+  const caseRow = hp.locator(`#org-cases > li[data-case="№ ${id.slice(0, 8).toUpperCase()}"]`);
+  await expect(caseRow).toHaveClass(/flash/);
+  await expect(caseRow.locator('details[data-transfer]')).toHaveAttribute('open', '');
+  await shot(hp, 'g4e-nagruzka-nikto-k-delu');
   // «По дням»: день возвращения виден, хоть в нём нет ни сроков, ни выездов.
   const back = a.locator(`details[data-days] li[data-day="${inDays(3)}"]`);
   await expect(back.locator('.away-mark')).toHaveText('снова предлагают дела');
