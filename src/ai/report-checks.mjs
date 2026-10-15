@@ -965,6 +965,133 @@ function cadValueMatch(doc, ctx) {
   return out;
 }
 
+// ——— 2.241: правообладатель и вид права в отчёте — как в выписке ЕГРН на объект из дела ———
+// В выписке: «Правообладатель (правообладатели): 1.1. Иванов Иван Иванович» (имена — в той же строке и в следующих, до
+// строки «Вид, номер и дата государственной регистрации права») и «Вид … регистрации права: 2.1. Общая долевая
+// собственность, …». Сведения скрыты («Физическое лицо», «не предоставлены») — правообладателя не сверяем.
+// В отчёте: строки с подписью «Правообладатель:», «Собственник:», «Субъект права:» — фамилия (и первая буква имени, если
+// есть) или название организации в кавычках; падеж и женская фамилия («Иванова») находкой не считаются. Вид права — в
+// строках «Вид права:», «Оцениваемые права:», «Имущественные права …:», «Существующие права:», «… на праве … собственности»:
+// «долевая», «совместная», «индивидуальная» (или просто «Собственность») — сверяем; общее «право собственности» — нет.
+// Прежний собственник, продавец, аналоги — не про объект.
+const RIGHTS_HOLDER_AT = /правообладател\S*(?:\s*\([^)\n]*\))?\s*[:\-–—]?/giu;
+const RIGHTS_KIND_AT = /вид\S*(?:,\s*номер\S*)?(?:\s+и)?(?:\s+дата\S*)?(?:\s+и\s+время)?\s+(?:государственн\S*\s+)?регистраци\S*\s+прав\S*\s*[:\-–—]?/giu;
+const RIGHTS_STOP = /^\s*(?:\d+(?:\.\d+)*\.?\s*)?(?:вид\S*[,\s]|документ|ограничени|сведения|заявленн|особые|правоприт|кадастров|получател)/iu;
+const PERSON = /(?<![А-ЯЁа-яё])([А-ЯЁ][а-яё]+(?:-[А-ЯЁ][а-яё]+)?)\s+(?:([А-ЯЁ])[а-яё]+\s+[А-ЯЁ][а-яё]+(?:вич|вна|чна|оглы|кызы)|([А-ЯЁ])\.\s*[А-ЯЁ]\.)/gu;
+const ORG = /(?<![А-ЯЁа-яё])(?:ООО|АО|ПАО|ЗАО|ОАО|НАО|ГУП|МУП|ФГУП|ИП)\s*[«"„]([^»"“\n]{2,80})[»"“]/gu;
+const REPORT_HOLDER_AT = /(?:правообладател\S*|собственник\S*(?:\s+объекта(?:\s+оценки)?)?|субъект\S*\s+прав\S*)(?:\s*\([^)\n]*\))?\s*[:\-–—]\s*/giu;
+const REPORT_KIND_AT = /(?:вид\S*\s+(?:зарегистрированн\S*\s+)?прав\S*|оцениваем\S*\s+(?:имущественн\S*\s+)?прав\S*|имущественн\S*\s+прав\S*(?:\s+на\s+объект\S*(?:\s+оценки)?)?|существующ\S*\s+прав\S*(?:\s+на\s+объект\S*(?:\s+оценки)?)?)(?:\s*\([^)\n]*\))?\s*[:\-–—]\s*|на\s+праве\s+(?=(?:общей\s+)?(?:долев|совместн|индивидуальн|единоличн)\S*\s+собственност)/giu;
+const RIGHTS_SKIP = /аналог|прежн|бывш|продав|покупател|предыдущ|до\s+(?:перехода|регистрации)/iu;
+function holdersIn(text) {
+  const out = [];
+  for (const m of text.matchAll(PERSON)) out.push({ raw: m[0], surname: m[1].toLowerCase(), initial: (m[2] ?? m[3]).toLowerCase() });
+  for (const m of text.matchAll(ORG)) out.push({ raw: m[0], org: m[1].toLowerCase().replace(/\s+/g, ' ').trim() });
+  return out;
+}
+function sameHolder(a, b) {
+  if (a.org || b.org) return !!a.org && !!b.org && (a.org.includes(b.org) || b.org.includes(a.org));
+  const [x, y] = [a.surname, b.surname];
+  let n = 0;
+  while (n < x.length && x[n] === y[n]) n += 1;
+  return n >= Math.max(4, Math.min(x.length, y.length) - 2) && a.initial === b.initial;
+}
+function rightsKind(text) {
+  const t = String(text);
+  if (/долев/iu.test(t)) return 'shared';
+  if (/совместн/iu.test(t)) return 'joint';
+  if (/(?:индивидуальн|единоличн)\S*\s+собственност/iu.test(t) || /^[\s.\d]*собственность(?![а-яё])\s*(?:[,;.(№\d]|$)/iu.test(t)) return 'own';
+  if (/собственност/iu.test(t)) return null;
+  return /\S/.test(t) ? 'other' : null;
+}
+const RIGHTS_KIND_NAME = { own: 'собственность', shared: 'общая долевая собственность', joint: 'общая совместная собственность' };
+// Подпись в строке, значение — в той же строке после неё и, если нужно, в следующих (до следующей подписи выписки).
+function egrnBlock(page, at, lines) {
+  const stop = page.indexOf('\n', at);
+  const out = [page.slice(at, stop < 0 ? page.length : stop)];
+  let from = stop;
+  for (let k = 0; k < lines && from >= 0; k += 1) {
+    const next = page.indexOf('\n', from + 1);
+    const line = page.slice(from + 1, next < 0 ? page.length : next);
+    if (RIGHTS_STOP.test(line) || /правообладател/iu.test(line)) break;
+    out.push(line);
+    from = next;
+  }
+  return out.join('\n');
+}
+function egrnRights(egrn, ctx) {
+  const land = ctx.service === 'land';
+  const got = { holders: [], hidden: false, kinds: new Map() };
+  for (const d of egrnOnObject(egrn, ctx)) {
+    if (!Array.isArray(d.pages)) continue;
+    const head = d.pages.slice(0, 2).join('\n');
+    if (land ? EGRN_BUILT.test(head) && !EGRN_LAND.test(head) : EGRN_LAND.test(head) && !EGRN_BUILT.test(head)) continue;
+    d.pages.forEach((page, i) => {
+      for (const m of page.matchAll(RIGHTS_HOLDER_AT)) {
+        const block = egrnBlock(page, m.index + m[0].length, 4);
+        const found = holdersIn(block);
+        if (!found.length && /\p{L}{3}/u.test(block)) got.hidden = true;
+        for (const h of found) {
+          if (!got.holders.some((x) => sameHolder(x, h))) got.holders.push({ ...h, name: d.name, page: i, doc: d.id, quote: lineAround(page, m.index) });
+        }
+      }
+      for (const m of page.matchAll(RIGHTS_KIND_AT)) {
+        const block = egrnBlock(page, m.index + m[0].length, 1).replace(/\n/g, ' ');
+        const kind = rightsKind(block.replace(/^[\s\d.]*/, ''));
+        if (kind && !got.kinds.has(kind)) {
+          const v = block.replace(/^[\s\d.]*/, '');
+          const text = clean((v.match(/^[^,;№\d]*?собственност[а-яё]*/iu) ?? [v.split(/[,;№\d]/)[0]])[0]);
+          got.kinds.set(kind, { v: text, name: d.name, page: i, doc: d.id, quote: lineAround(page, m.index) });
+        }
+      }
+    });
+  }
+  return got;
+}
+function rightsMatch(doc, ctx) {
+  if (!ctx.egrn?.length) return [];
+  const egrn = egrnRights(ctx.egrn, ctx);
+  const kinds = [...egrn.kinds.keys()];
+  // Вид права сверяем, только когда в выписках он один из трёх видов собственности и один.
+  const kind = kinds.length === 1 && RIGHTS_KIND_NAME[kinds[0]] ? egrn.kinds.get(kinds[0]) : null;
+  const holders = egrn.hidden ? [] : egrn.holders;
+  if (!kind && !holders.length) return [];
+  const out = [];
+  const seen = new Set();
+  eachPage(doc, (page, i) => {
+    if (holders.length) {
+      for (const m of page.matchAll(REPORT_HOLDER_AT)) {
+        const line = lineAround(page, m.index);
+        if (RIGHTS_SKIP.test(line)) continue;
+        const stop = page.indexOf('\n', m.index);
+        const rest = page.slice(m.index + m[0].length, stop < 0 ? page.length : stop);
+        for (const h of holdersIn(rest)) {
+          if (holders.some((x) => sameHolder(x, h)) || seen.has(`h${h.raw}`)) continue;
+          seen.add(`h${h.raw}`);
+          const at = holders[0];
+          const all = holders.map((x) => x.raw).join(', ');
+          out.push({ page: i, quote: line, egrn: egrnAt(at), fix: { bad: h.raw, right: at.raw },
+            text: `Правообладатель «${h.raw}» не совпадает с выпиской ЕГРН «${at.name}» (${all}, стр. ${at.page + 1}) — проверьте, нет ли данных другого объекта или старого отчёта` });
+        }
+      }
+    }
+    if (kind) {
+      for (const m of page.matchAll(REPORT_KIND_AT)) {
+        const line = lineAround(page, m.index);
+        if (RIGHTS_SKIP.test(line)) continue;
+        const stop = page.indexOf('\n', m.index);
+        const rest = page.slice(m.index + m[0].length, stop < 0 ? page.length : stop);
+        const mine = rightsKind(rest);
+        if (!mine || mine === 'other' || mine === kinds[0] || seen.has(`k${mine}`)) continue;
+        seen.add(`k${mine}`);
+        const raw = clean((rest.match(/^[^,;.(]*?собственност[а-яё]*/iu) ?? [rest.split(/[,;(]/)[0]])[0]);
+        out.push({ page: i, quote: line, egrn: egrnAt(kind), fix: { bad: raw, right: kind.v },
+          text: `Вид права «${raw}» не совпадает с выпиской ЕГРН «${kind.name}» («${kind.v}», стр. ${kind.page + 1}) — проверьте раздел о правах на объект оценки` });
+      }
+    }
+  });
+  return out;
+}
+
 const SHARE_AT = [
   /(?<![а-яё])дол(?:я|и|е|ю|ей)(?![а-яё])[^\d\n]{0,60}?(\d{1,3})\s*\/\s*(\d{1,4})(?![\d/])/giu,
   /(?<![\d/])(\d{1,3})\s*\/\s*(\d{1,4})\s+(?:доли|долю|доля|доле)(?![а-яё])/giu,
@@ -2015,6 +2142,7 @@ const PER_DOC = {
   floor_match: floorMatch,
   building_match: buildingMatch,
   cad_value_match: cadValueMatch,
+  rights_match: rightsMatch,
   share_match: shareMatch,
   land_match: landMatch,
   date_order: dateOrder,
@@ -2041,6 +2169,7 @@ export const AUTO_CHECKS = Object.freeze({
   floor_match: 'этаж и этажность дома в отчёте — как в выписке ЕГРН из дела, а без неё — как в заявке',
   building_match: 'год постройки и материал стен дома в отчёте — как в выписке ЕГРН на здание из дела, а год без неё — как в заявке',
   cad_value_match: 'кадастровая стоимость объекта в отчёте — как в выписке ЕГРН из дела (если в отчёте своя дата «по состоянию на» — с той же датой)',
+  rights_match: 'правообладатель и вид права (собственность, общая долевая, общая совместная) в отчёте — как в выписке ЕГРН на объект из дела',
   share_match: 'размер доли в отчёте — как в заявке',
   land_match: 'категория земель и вид разрешённого использования — как в заявке',
   inspection: '«без осмотра» и дата осмотра одновременно',
