@@ -55,6 +55,8 @@ const FILTERS = [
   { id: 'week', text: 'Срок на этой неделе', test: (c) => c.week },
   // 2.209: срок в дни, когда эксперт не принимает дела; о которых эксперт уже просит передать — в «Просят передать».
   { id: 'away', text: 'Эксперт не принимает дела — срок в эти дни', test: (c) => !!c.away && !c.handover },
+  // 2.249: эксперт вернулся после дней «не принимаю дела» за последнюю неделю — что изменилось по его делам, пока его не было.
+  { id: 'back', text: 'Эксперт вернулся после «не принимаю дела»', test: (c) => !!c.back },
   { id: 'inspect', text: 'Осмотр не закончен', test: (c) => !!c.inspection },
   { id: 'idle', text: 'Без движения', test: (c) => c.idle },
   // 2.235: эксперт запросил документы у заказчика, а их ещё нет — почему дело стоит.
@@ -154,6 +156,7 @@ function renderCases() {
       - new Date(a.org_extend.decided_at ?? a.org_extend.requested_at) : a.org_extend.state === 'declined' ? -1 : 1));
   }
   if (filter === 'docs') active.sort((a, b) => new Date(a.docs_wait.since) - new Date(b.docs_wait.since));
+  if (filter === 'back') active.sort((a, b) => b.back.until.localeCompare(a.back.until) || String(a.deadline).localeCompare(String(b.deadline)));
   if (filter === 'away') active.sort((a, b) => String(a.deadline).localeCompare(String(b.deadline)));
   if (filter === 'inspect') active.sort((a, b) => (a.inspection.kind === b.inspection.kind
     ? new Date(a.inspection.at) - new Date(b.inspection.at) : a.inspection.kind === 'incomplete' ? -1 : 1));
@@ -236,6 +239,7 @@ function caseItem(org, c) {
         ? 'Передайте его коллеге.' : 'Передать его некому — попросите эксперта перенести срок.'}` })] : []),
     // Передать некому (2.201): одной кнопкой — эксперту уведомление, дело откроется на просьбе о переносе с готовой причиной.
     ...(c.away && !c.handover && !c.transfer_to?.length && !c.extend && c.remind ? [remindRow(org, c, 'extend')] : []),
+    ...(c.back ? [backRow(c)] : []),
     ...(c.inspection ? [inspectRow(c)] : []),
     ...(c.docs_wait ? [docsRow(c)] : []),
     ...(c.last_move ? [moveRow(c)] : []),
@@ -271,6 +275,13 @@ export function focusOrgCase({ ref, to }) {
   li.scrollIntoView({ block: 'start' });
   li.classList.add('flash');
   setTimeout(() => li.classList.remove('flash'), 2000);
+}
+
+// Эксперт вернулся после дней «не принимаю дела» (2.249): когда вернулся и с какого дня не принимал — сегодня заметно.
+function backRow({ back: b }) {
+  const span = b.since ? ` (с ${dayRu(b.since)})` : '';
+  return el('div', { class: b.today ? 'notice-warn' : 'muted', 'data-role': 'back',
+    text: `Эксперт ${b.today ? 'сегодня вернулся' : `вернулся ${dayRu(b.until)}`} после дней «не принимаю дела»${span} — посмотрите, что изменилось по делу, пока его не было.` });
 }
 
 // Последнее движение по делу (2.133): смена состояния, файл эксперта, черновик, проверка, аналог, подпись, осмотр.
@@ -447,7 +458,8 @@ function offerWait(org, c) {
 
 // К блоку организации из утренней сводки (2.130): «sign» — к подписи организации; «away» (2.209) — к отбору «Эксперт не принимает
 // дела — срок в эти дни»; «stuck» (2.228) — к отбору «Просят передать — передать некому» и кнопке «Попросить диспетчера
-// перенести срок» первого дела; «orgext» (2.238) — к отбору «Перенос от организации: ждём ответа / отказано»; «week», «overdue», «handover», «returned»,
+// перенести срок» первого дела; «orgext» (2.238) — к отбору «Перенос от организации: ждём ответа / отказано»; «back» (2.249) —
+// к отбору «Эксперт вернулся после «не принимаю дела»»; «week», «overdue», «handover», «returned»,
 // «fresh», «idle», «docs» — к списку дел с отбором «Срок на этой неделе» (2.127; в нём и просроченные), «Срок прошёл» (2.158), «Просят
 // передать», «Вернул эксперту» (2.153), «Исправленный файл ждёт подписи эксперта» (2.172), «Без движения» (2.141) или «Ждём документы от заказчика» (2.235). Отбора уже
 // нет (дела сданы, эксперт ответил) — список целиком.

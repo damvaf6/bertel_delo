@@ -10675,3 +10675,66 @@ test('прогон 2.240: эксперт и руководитель по пач
   await shot(ep, 'd06-progon9-ekspert-dokument-prishel');
   for (const p of [ep, hp, cp, dp]) await p.context().close();
 });
+
+// 2.249: эксперт сегодня вернулся после дней «не принимаю дела» — утренняя сводка руководителя «вернулись после дней «не
+// принимаю дела»: 1 эксперт» ведёт к отбору «Эксперт вернулся после «не принимаю дела»»: только его дела, у каждого — когда
+// вернулся и с какого дня не принимал.
+test('2.249: утренняя сводка руководителя — эксперт вернулся после «не принимаю дела»', async ({ browser, baseURL }) => {
+  const pages = [];
+  const ctx = async () => { const p = await (await phoneContext(browser, baseURL)).newPage(); pages.push(p); return p; };
+  const hp = await ctx();
+  const head = await signIn(hp, '+79990022491');
+  const back = await signIn(await ctx(), '+79990022492');
+  const stay = await signIn(await ctx(), '+79990022493');
+  const customer = await signIn(await ctx(), '+79990022494');
+  const { orgId, mine, other } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Снова в строю ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Вернувшийся Иван' where id = $1", [back.id]);
+    await c.query("update users set full_name = 'Работающая Анна' where id = $1", [stay.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member'), ($1, $4, 'member')", [org.id, head.id, back.id, stay.id]);
+    await c.query('insert into specialists (user_id, org_id) values ($1, $2), ($3, $2)', [back.id, org.id, stay.id]);
+    // Вернулся сегодня; «Пока Вас не было» эксперту уже «отправлено» — фоновая рассылка его не трогает.
+    await c.query('update specialists set away_since = $2::date, away_until = $3::date, away_back_for = $3::date where user_id = $1',
+      [back.id, inDays(-10), inDays(0)]);
+    await c.query("insert into morning_digests (user_id, day) values ($1, (now() at time zone 'Europe/Moscow')::date), ($2, (now() at time zone 'Europe/Moscow')::date)", [back.id, stay.id]);
+    const ids = [];
+    for (const [title, who, days] of [['Квартира вернувшегося', back.id, 5], ['Дом вернувшегося', back.id, 9], ['Участок коллеги', stay.id, 4]]) {
+      const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+        values ('expertise', 'realty', $3, $1, $2, 'in_work', $4::date, 1500000, now(),
+                '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Возвратная ул., 3","area":"40"}') returning id`,
+      [customer.id, who, title, inDays(days)]);
+      ids.push(o.id);
+    }
+    const { rows: [n] } = await c.query("insert into notifications (user_id, type, event, org_id) values ($1, 'org_morning', 'org_morning_today', $2) returning id", [head.id, org.id]);
+    await c.query(`insert into org_morning_digests (user_id, org_id, day, back, notification_id)
+      values ($1, $2, (now() at time zone 'Europe/Moscow')::date, 1, $3)
+      on conflict (user_id, org_id, day) do update set sign = 0, handover = 0, stuck = 0, due = 0, overdue = 0, idle = 0, returned = 0, fresh = 0, away = 0,
+        ext_declined = 0, back = 1, notification_id = excluded.notification_id`, [head.id, org.id, n.id]);
+    return { orgId: org.id, mine: ids.slice(0, 2), other: ids[2] };
+  });
+  const ref = (id) => `№ ${id.slice(0, 8).toUpperCase()}`;
+
+  await hp.goto('/kabinet#notifications');
+  const morning = hp.locator('#notifications li').filter({ hasText: 'На сегодня по организации' }).first();
+  await expect(morning).toContainText('На сегодня по организации: вернулись после дней «не принимаю дела»: 1 эксперт');
+  await expect(morning).not.toContainText('Вернувшийся');
+  await shot(hp, 'h6a-rukovoditel-svodka-vernulis');
+  await morning.getByRole('button').click();
+  await expect(hp).toHaveURL(new RegExp(`#org=${orgId}&to=back$`));
+  const chip = hp.locator('[data-filter="back"]');
+  await expect(chip).toHaveText('Эксперт вернулся после «не принимаю дела» · 2');
+  await expect(chip).toHaveAttribute('aria-pressed', 'true');
+  const rows = hp.locator('#org-cases > li[data-case]');
+  await expect(rows).toHaveCount(2);
+  for (const id of mine) await expect(hp.locator(`#org-cases li[data-case="${ref(id)}"]`)).toBeVisible();
+  await expect(hp.locator(`#org-cases li[data-case="${ref(other)}"]`)).toHaveCount(0);
+  const row = rows.first().locator('[data-role="back"]');
+  await expect(row).toHaveText(/^Эксперт сегодня вернулся после дней «не принимаю дела» \(с .+\) — посмотрите, что изменилось по делу, пока его не было\.$/);
+  await expect(row).toHaveClass(/notice-warn/);
+  await rows.first().scrollIntoViewIfNeeded();
+  await shot(hp, 'h6b-rukovoditel-otbor-vernulsya');
+  // «Все» — у дела коллеги пометки нет.
+  await hp.locator('[data-filter="all"]').click();
+  await expect(hp.locator(`#org-cases li[data-case="${ref(other)}"] [data-role="back"]`)).toHaveCount(0);
+  for (const p of pages) await p.context().close();
+});

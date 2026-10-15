@@ -518,3 +518,67 @@ test('2.238: перенос от организации — ждём ответ�
   assert.equal((await orgPart(S.sql, { id: o9.id, name: o9.name }, S.app.locals.registry, today)).ext_declined, 0);
   assert.equal((await casesOf()).get(declined.id).org_extend.state, 'declined');
 });
+
+// 2.249: эксперт сегодня вернулся после дней «не принимаю дела» — в утренней сводке руководителя «вернулись после дней «не
+// принимаю дела»: N эксперт(ов)» (только те, у кого есть дела), ведёт к отбору «Эксперт вернулся после «не принимаю дела»»;
+// в «Делах экспертов» у дел вернувшегося за неделю — когда вернулся и с какого дня не принимал.
+test('2.249: вернулись после «не принимаю дела» — в утренней сводке руководителя и у дел в «Делах экспертов»', async () => {
+  assert.equal(orgDigestText({ sign: 0, handover: 0, stuck: 0, due: 0, overdue: 0, idle: 0, returned: 0, fresh: 0, away: 0, ext_declined: 0, back: 1 }),
+    'На сегодня по организации: вернулись после дней «не принимаю дела»: 1 эксперт');
+  assert.equal(orgDigestText({ sign: 0, handover: 0, stuck: 0, due: 0, overdue: 0, idle: 0, returned: 0, fresh: 0, away: 0, ext_declined: 0, back: 3 }),
+    'На сегодня по организации: вернулись после дней «не принимаю дела»: 3 эксперта');
+  assert.equal(orgDigestTo({ sign: 1, handover: 1, stuck: 0, due: 0, overdue: 0, idle: 0, returned: 0, fresh: 0, away: 0, ext_declined: 0, back: 2 }), 'back');
+  assert.equal(orgDigestTo({ sign: 0, handover: 0, stuck: 0, due: 0, overdue: 0, idle: 0, returned: 0, fresh: 0, away: 1, ext_declined: 0, back: 2 }), 'away');
+
+  const h = await login(S, '+79990003861');
+  const other = await login(S, '+79990003862');
+  const [today1, earlier, still, idle] = await Promise.all(['+79990003863', '+79990003864', '+79990003865', '+79990003866'].map((p) => login(S, p)));
+  const o10 = await makeOrg(S.sql, 'ООО «Вернувшаяся оценка»');
+  const oX = await makeOrg(S.sql, 'ООО «Посторонняя оценка»');
+  await addMember(S.sql, o10.id, h.user.id, 'head');
+  await addMember(S.sql, oX.id, other.user.id, 'head');
+  for (const x of [today1, earlier, still, idle]) {
+    await makeSpecialist(S.sql, x.user.id);
+    await addMember(S.sql, o10.id, x.user.id, 'member');
+    assert.equal((await x.req('PATCH', '/api/specialist/me', { org_id: o10.id })).status, 200);
+  }
+  const make = async (who, title, days) => {
+    const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
+    assert.equal((await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: addDays(today, 15), fields: FIELDS })).status, 200);
+    assert.equal((await owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
+    await ensurePaid(S.sql, o.id);
+    assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: who.user.id, from: 'matching' })).status, 200);
+    assert.equal((await who.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+    await S.sql`update orders set deadline = ${addDays(today, days)}::date where id = ${o.id}`;
+    return o;
+  };
+  const a = await make(today1, 'Дело вернувшегося сегодня', 6);
+  const b = await make(earlier, 'Дело вернувшегося раньше', 8);
+  const c = await make(still, 'Дело того, кто ещё не вернулся', 20);
+  // Вернулся сегодня (не принимал 10 дней), вернулся 3 дня назад, ещё не вернулся, вернулся сегодня, но дел нет.
+  await S.sql`update specialists set away_since = ${addDays(today, -10)}::date, away_until = ${today}::date where user_id = ${today1.user.id}`;
+  await S.sql`update specialists set away_since = ${addDays(today, -8)}::date, away_until = ${addDays(today, -3)}::date where user_id = ${earlier.user.id}`;
+  await S.sql`update specialists set away_until = ${addDays(today, 4)}::date, away_note = 'отпуск' where user_id = ${still.user.id}`;
+  await S.sql`update specialists set away_since = ${addDays(today, -5)}::date, away_until = ${today}::date where user_id = ${idle.user.id}`;
+
+  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(today, '08:30') }) >= 1);
+  const [r] = await S.sql`select back, away from org_morning_digests where user_id = ${h.user.id} and org_id = ${o10.id}`;
+  assert.deepEqual({ ...r }, { back: 1, away: 0 });
+  const feed = (await h.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня по организации'));
+  assert.equal(feed.length, 1);
+  assert.equal(feed[0].title, 'На сегодня по организации: вернулись после дней «не принимаю дела»: 1 эксперт');
+  assert.equal(feed[0].section, `org=${o10.id}&to=back`);
+  assert.doesNotMatch(JSON.stringify(feed), /Дело вернувшегося|отпуск/);
+  // Посторонняя организация — ничего не знает о вернувшихся.
+  const [rx] = await S.sql`select back from org_morning_digests where user_id = ${other.user.id} and org_id = ${oX.id}`;
+  assert.equal(rx?.back ?? 0, 0);
+
+  const cases = new Map((await h.req('GET', `/api/orgs/${o10.id}/cases`)).body.cases.map((x) => [x.id, x]));
+  assert.deepEqual(cases.get(a.id).back, { since: addDays(today, -10), until: today, today: true });
+  assert.deepEqual(cases.get(b.id).back, { since: addDays(today, -8), until: addDays(today, -3), today: false });
+  assert.equal(cases.get(c.id).back, null);
+  // Вернулся больше недели назад — пометка уходит.
+  await S.sql`update specialists set away_until = ${addDays(today, -7)}::date where user_id = ${earlier.user.id}`;
+  assert.equal((await h.req('GET', `/api/orgs/${o10.id}/cases`)).body.cases.find((x) => x.id === b.id).back, null);
+  assert.equal((await other.req('GET', `/api/orgs/${o10.id}/cases`)).status, 404);
+});

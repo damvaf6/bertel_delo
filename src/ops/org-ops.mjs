@@ -5,7 +5,7 @@ import { HttpError } from '../http/core.mjs';
 import { LEVEL, ORG_ROLES, executorSignOrg, orgCaseSide, orgLevel } from '../access/policy.mjs';
 import { audit, oneOf, phoneFrom, sendFile, text, uuidFrom } from './util.mjs';
 import { dispatchers, notify, notifyPhone, orgHeads } from '../notify/notify.mjs';
-import { awayOf, awayOn, orgExpertsFor } from './match-ops.mjs';
+import { awayOf, awayOn, backOf, orgExpertsFor } from './match-ops.mjs';
 import { orgReturns, signWait } from './sign-ops.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { orderSplit } from '../money/money.mjs';
@@ -225,7 +225,7 @@ export function orgOps() {
       async handler({ sql, org, registry }) {
         const today = todayMsk();
         const experts = await sql`
-          select s.user_id, s.active, s.away_from, s.away_until, s.away_note, u.full_name from specialists s
+          select s.user_id, s.active, s.away_from, s.away_until, s.away_note, s.away_since, u.full_name from specialists s
           join org_members m on m.org_id = s.org_id and m.user_id = s.user_id join users u on u.id = s.user_id
           where s.org_id = ${org.id} order by u.full_name nulls last, s.user_id`;
         const ids = experts.map((e) => e.user_id);
@@ -340,6 +340,9 @@ export function orgOps() {
           // С 2.226 дни «не принимаю» могут начаться позже — срок до их начала не в счёт.
           away: o.status === 'in_work' && awayOn(awayOf(byId.get(o.executor_user_id), today), o.deadline)
             ? awayOf(byId.get(o.executor_user_id), today) : null,
+          // Эксперт вернулся после дней «не принимаю дела» за последнюю неделю (2.249) — отбор «Вернулись после «не принимаю
+          // дела»» из утренней сводки: посмотреть, что изменилось по его делам.
+          back: CASES_ACTIVE.includes(o.status) ? backOf(byId.get(o.executor_user_id), today) : null,
         }));
         const load = experts.map((e) => ({
           user_id: e.user_id,

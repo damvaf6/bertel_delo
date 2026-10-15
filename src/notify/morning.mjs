@@ -97,7 +97,8 @@ export async function morningTitles(sql, ids) {
 // принимает дела (2.209; о которых эксперт уже просит передать — не считаются, как в «Сегодня»; уже попросил перенос срока — тоже,
 // руководителю тут делать нечего — прогон 2.210), из просьб передать дело — сколько тех, где передать некому, а перенос срока ещё
 // не просят (2.228: руководителю — попросить диспетчера перенести срок от организации, 2.221), в скольких делах диспетчер за
-// сутки отказал в переносе срока, о котором просила организация (2.238). Считается так же, как «Сегодня»
+// сутки отказал в переносе срока, о котором просила организация (2.238), сколько экспертов сегодня вернулись после дней «не
+// принимаю дела» и у них есть дела (2.249). Считается так же, как «Сегодня»
 // (src/ops/today-ops.mjs); ведёт в организацию. Только цифры.
 export function orgDigestCounts(part, today) {
   const inWork = (x) => x.status_name === STATUS_NAME.in_work;
@@ -112,6 +113,7 @@ export function orgDigestCounts(part, today) {
     fresh: part.fresh_long ?? 0,
     away: (part.away ?? []).filter((x) => !x.extend).length,
     ext_declined: part.ext_declined ?? 0,
+    back: part.back_today ?? 0,
   };
 }
 
@@ -125,6 +127,7 @@ export function orgDigestText(c) {
   if (c.due) parts.push(`у экспертов сдать сегодня ${c.due} ${pl(c.due, 'дело', 'дела', 'дел')}`);
   if (c.overdue) parts.push(`${c.overdue} ${pl(c.overdue, 'дело', 'дела', 'дел')} с прошедшим сроком`);
   if (c.away) parts.push(`у ${c.away} ${pl(c.away, 'дела', 'дел', 'дел')} срок в дни, когда эксперт не принимает дела`);
+  if (c.back) parts.push(`вернулись после дней «не принимаю дела»: ${c.back} ${pl(c.back, 'эксперт', 'эксперта', 'экспертов')}`);
   if (c.idle) parts.push(`${c.idle} ${pl(c.idle, 'дело', 'дела', 'дел')} без движения 3 дня и больше`);
   if (c.returned) {
     parts.push(`${c.returned} ${pl(c.returned, 'дело', 'дела', 'дел')} после возврата эксперту ${pl(c.returned, 'не исправлено', 'не исправлены', 'не исправлено')} 2 дня и больше`);
@@ -147,8 +150,8 @@ export async function sendOrgMorning(sql, registry, { now = new Date() } = {}) {
     if (!counted.has(h.org_id)) counted.set(h.org_id, orgDigestCounts(await orgPart(sql, { id: h.org_id, name: h.name }, registry, today), today));
     const c = counted.get(h.org_id);
     sent += await sql.tx(async (tx) => {
-      const fresh = await tx`insert into org_morning_digests (user_id, org_id, day, sign, handover, stuck, due, overdue, idle, returned, fresh, away, ext_declined)
-                             values (${h.user_id}, ${h.org_id}, ${today}, ${c.sign}, ${c.handover}, ${c.stuck}, ${c.due}, ${c.overdue}, ${c.idle}, ${c.returned}, ${c.fresh}, ${c.away}, ${c.ext_declined})
+      const fresh = await tx`insert into org_morning_digests (user_id, org_id, day, sign, handover, stuck, due, overdue, idle, returned, fresh, away, ext_declined, back)
+                             values (${h.user_id}, ${h.org_id}, ${today}, ${c.sign}, ${c.handover}, ${c.stuck}, ${c.due}, ${c.overdue}, ${c.idle}, ${c.returned}, ${c.fresh}, ${c.away}, ${c.ext_declined}, ${c.back})
                              on conflict do nothing returning user_id`;
       const text = orgDigestText(c);
       if (!fresh.length || !text) return 0;
@@ -167,7 +170,7 @@ export async function sendOrgMorning(sql, registry, { now = new Date() } = {}) {
 // К какому блоку организации ведёт сводка (2.130): есть сроки сегодня — «Дела экспертов» с отбором «Срок на этой неделе»
 // (2.127: туда входят и просроченные); только прошедшие сроки — отбор «Срок прошёл» (2.158); иначе — отбор «Просят передать —
 // передать некому» (2.228); иначе — отбор «Перенос от организации» (2.238: диспетчер отказал); иначе — отбор «Срок в дни, когда
-// эксперт не принимает дела» (2.209); иначе — к подписи организации;
+// эксперт не принимает дела» (2.209); иначе — отбор «Вернулись после «не принимаю дела»» (2.249); иначе — к подписи организации;
 // иначе — отбор «Просят передать»; иначе — отбор «Вернул эксперту» (2.153); иначе — отбор «Исправленный файл ждёт подписи
 // эксперта» (2.172); иначе — отбор «Без движения» (2.141).
 export function orgDigestTo(c) {
@@ -176,6 +179,7 @@ export function orgDigestTo(c) {
   if (c.stuck) return 'stuck';
   if (c.ext_declined) return 'orgext';
   if (c.away) return 'away';
+  if (c.back) return 'back';
   if (c.sign) return 'sign';
   if (c.handover) return 'handover';
   if (c.returned) return 'returned';
@@ -186,6 +190,6 @@ export function orgDigestTo(c) {
 // Текст сводки руководителя в ленте по номеру уведомления (название организации лента пишет строкой ниже) и куда она ведёт.
 export async function orgMorningTitles(sql, ids) {
   if (!ids.length) return new Map();
-  const rows = await sql`select notification_id, sign, handover, stuck, due, overdue, idle, returned, fresh, away, ext_declined from org_morning_digests where notification_id = any(${ids}::bigint[])`;
+  const rows = await sql`select notification_id, sign, handover, stuck, due, overdue, idle, returned, fresh, away, ext_declined, back from org_morning_digests where notification_id = any(${ids}::bigint[])`;
   return new Map(rows.map((r) => [String(r.notification_id), { title: orgDigestText(r), to: orgDigestTo(r) }]));
 }
