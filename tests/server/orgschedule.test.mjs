@@ -86,3 +86,30 @@ test('нагрузка экспертов на две недели (2.111): по
   for (const c of [busy, free]) assert.equal((await c.req('GET', url)).status, 403);
   for (const c of [outsider, otherHead, owner]) assert.equal((await c.req('GET', url)).status, 404);
 });
+
+test('2.245: нагрузка — сколько экспертов принимают новые дела в каждый день; никто — 0', async () => {
+  const org = await makeOrg(S.sql, 'ООО «Кто принимает дела»');
+  const head = await login(S, '+79990004961');
+  const a = await login(S, '+79990004962');
+  const b = await login(S, '+79990004963');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  const url = `/api/orgs/${org.id}/schedule`;
+  // Экспертов нет — у дней 0.
+  const none = (await head.req('GET', url)).body.schedule;
+  assert.ok(none.days.every((d) => d.accepting === 0));
+  for (const c of [a, b]) {
+    await makeSpecialist(S.sql, c.user.id);
+    await addMember(S.sql, org.id, c.user.id, 'member');
+    assert.equal((await c.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  }
+  assert.ok((await head.req('GET', url)).body.schedule.days.every((d) => d.accepting === 2));
+  const today = none.from;
+  const plus = (n) => { const d = new Date(`${today}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  // Первый не принимает со 2-го по 5-й день, второй выключил приём: со 2-го по 5-й — никто, остальные дни — один.
+  await S.sql`update specialists set away_from = ${plus(2)}::date, away_until = ${plus(6)}::date where user_id = ${a.user.id}`;
+  await S.sql`update specialists set active = false where user_id = ${b.user.id}`;
+  const s = (await head.req('GET', url)).body.schedule;
+  assert.deepEqual(s.days.map((d) => d.accepting), [1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1]);
+  // Совпадает с днями «не принимает» у экспертов.
+  s.days.forEach((d, i) => assert.equal(d.accepting, s.experts.filter((x) => !x.days[i].away).length));
+});

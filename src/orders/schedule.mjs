@@ -154,7 +154,7 @@ export async function orgSchedule(sql, orgId, registry, today = todayMsk()) {
     const date = addDays(today, i);
     header.push({ date, weekday: weekday(date), today: i === 0, weekend: ['сб', 'вс'].includes(weekday(date)) });
   }
-  if (!ids.length) return { from: today, to: last, days: header, experts: [] };
+  if (!ids.length) return { from: today, to: last, days: header.map((h) => ({ ...h, accepting: 0 })), experts: [] };
   const orders = await sql`
     select o.id, o.module, o.service, o.status, o.executor_user_id, to_char(o.deadline, 'YYYY-MM-DD') as deadline,
       (select to_char(r.new_deadline, 'YYYY-MM-DD') from deadline_requests r where r.order_id = o.id and r.outcome is null) as extend_to
@@ -210,5 +210,8 @@ export async function orgSchedule(sql, orgId, registry, today = todayMsk()) {
       free_workdays: x.days.filter((d, i) => !header[i].weekend && !d.away && !d.items.length).length,
     };
   });
-  return { from: today, to: last, days: header, experts: result };
+  // Сколько экспертов принимают новые дела в каждый день (2.245): на тех же днях, что полосы, — видно, в какие дни дело
+  // назначить некому.
+  const days = header.map((h, i) => ({ ...h, accepting: result.filter((x) => !x.days[i].away).length }));
+  return { from: today, to: last, days, experts: result };
 }

@@ -380,6 +380,9 @@ h2.inline { display: inline; }
 .strip .cell.back { box-shadow: inset 0 -3px 0 #137333; }
 /* Срок сдачи в дни «не принимает дела» (2.194): цифра красным на штриховке. */
 .strip .cell.away.clash .cnt { color: var(--danger); }
+.strip .cell.nobody { background: #fbd5cf; color: var(--danger); }
+.strip .cell.fewer .cnt { color: #8a5a00; }
+.team-strip { margin: 8px 0 12px; padding: 8px; border: 1px solid #e3e5ea; border-radius: 8px; }
 .clash-note { margin: 2px 0 4px; font-size: 14px; color: var(--danger); }
 .strip .cell.today { outline: 2px solid var(--accent); outline-offset: -2px; }
 /* Подписать несколько дел сразу (2.114) */
