@@ -879,6 +879,7 @@ test('2.211: площадь и кадастровый номер из выпис
     floor: null,
     address: null,
     rights: null,
+    share_size: null,
   });
   assert.match(d.body, /\| Кадастровый номер \| 77:01:0001001:4321 \(по выписке ЕГРН\) \|/);
   assert.match(d.body, /\| Площадь, кв\. м \| 47,3 \(по выписке ЕГРН; в заявке — 54,3\) \|/);
@@ -953,6 +954,41 @@ test('2.243: правообладатель, вид права и обремен
   assert.equal(d.inputs.egrn.rights.kind.values.length, 2);
   assert.doesNotMatch(d.body, /\| Вид права \|/);
   assert.doesNotMatch(lastPrompt(), /Вид права по выписке ЕГРН/);
+});
+
+test('2.254: размер доли из выписки ЕГРН — в таблицу задания, модели и вместо пометок; у собственников разные доли — та, что в заявке, иначе эксперт выбирает сам', async () => {
+  const o = await inWork('Квартира: доля из выписки в черновик');
+  const putDoc = (body, name) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } });
+  await S.sql`update orders set fields = fields || ${JSON.stringify({ share_size: '1/3' })}::jsonb where id = ${o.id}`;
+  // Одна доля в выписке — она в строке «Размер доли», в заявке другая — рядом; номер регистрации «-77/051/» не доля.
+  assert.equal((await putDoc('Выписка из ЕГРН\nВид объекта недвижимости: Помещение\nКадастровый номер: 77:01:0001001:4321\nПравообладатель (правообладатели): 1.1. Сергеев Сергей Сергеевич\nВид, номер и дата государственной регистрации права: 2.1. Общая долевая собственность, доля в праве 1/2, № 77:01:0001001:4321-77/051/2020-3', 'Выписка ЕГРН.txt')).status, 201);
+  let d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {})).body.draft;
+  assert.deepEqual(d.inputs.egrn.share_size, { v: '1/2', name: 'Выписка ЕГРН.txt', page: 1, typed: '1/3' });
+  assert.match(d.body, /\| Размер доли \(если оценивается доля\) \| 1\/2 \(по выписке ЕГРН; в заявке — 1\/3\) \|/);
+  assert.match(lastPrompt(), /Размер оцениваемой доли по выписке ЕГРН: 1\/2 \(выписка «Выписка ЕГРН\.txt», стр\. 1\)/);
+  // Модель оставила пометки — программа ставит долю; «доля рынка» — не про объект.
+  const orig = S.providers.ai.complete;
+  S.providers.ai.complete = async () => ({ text: '## 1. Основные факты и выводы\nОценивается доля [заполнить: размер доли] (доля в праве — [заполнить: доля в праве]). Доля рынка — [заполнить: доля рынка]\n## 2. Задание на оценку\nТекст', model: 'fake' });
+  try {
+    d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+  } finally { S.providers.ai.complete = orig; }
+  assert.match(d.body, /Оценивается доля 1\/2 \(доля в праве — 1\/2\)\. Доля рынка — \[заполнить: доля рынка\]/);
+  // В заявке та же доля другой записью (2/4) — без «в заявке — …».
+  await S.sql`update orders set fields = fields || ${JSON.stringify({ share_size: '2/4' })}::jsonb where id = ${o.id}`;
+  d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+  assert.equal(d.inputs.egrn.share_size.typed, null);
+  // У собственников разные доли: в заявке одна из них — она, остальные видны; нет в заявке — эксперт выбирает сам.
+  assert.equal((await putDoc('Выписка из ЕГРН\nВид объекта недвижимости: Помещение\nКадастровый номер: 77:01:0001001:4321\n1.2. Сергеева Анна Петровна (доля 1/4)', 'Выписка ЕГРН вторая.txt')).status, 201);
+  await S.sql`update orders set fields = fields || ${JSON.stringify({ share_size: '1/4' })}::jsonb where id = ${o.id}`;
+  d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+  assert.deepEqual(d.inputs.egrn.share_size, { v: '1/4', name: 'Выписка ЕГРН вторая.txt', page: 1, typed: null, others: ['1/2'] });
+  assert.match(d.body, /\| Размер доли \(если оценивается доля\) \| 1\/4 \(по выписке ЕГРН\) \|/);
+  await S.sql`update orders set fields = fields - 'share_size' where id = ${o.id}`;
+  d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+  assert.deepEqual(d.inputs.egrn.share_size, { values: ['1/4', '1/2'] });
+  assert.doesNotMatch(d.body, /\| Размер доли/);
+  assert.doesNotMatch(lastPrompt(), /Размер оцениваемой доли по выписке ЕГРН/);
 });
 
 test('2.222: этаж, этажность и адрес из выписки ЕГРН — в таблицу задания, модели и вместо пометок; разные — эксперт выбирает сам', async () => {
