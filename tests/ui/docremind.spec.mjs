@@ -208,3 +208,80 @@ test('2.248: после ИИ-проверки пришла запрошенна�
   await dctx.close();
   await sctx.close();
 });
+
+// 2.256: эксперт был в днях «не принимаю дела», а заказчик за это время прислал выписку уже после его ИИ-проверки — в «Пока
+// Вас не было» вместо «Пришли документы» строка «Проверьте заново» ведёт к ИИ-проверке; проверил заново — снова «Пришли документы».
+test('2.256: «Пока Вас не было» — документ пришёл после ИИ-проверки: «Проверьте заново» ведёт к ИИ-проверке', async ({ browser, baseURL }) => {
+  const problems = [];
+  const watch = (p) => {
+    p.on('pageerror', (e) => problems.push(`ошибка JS: ${e.message}`));
+    p.on('request', (r) => { const u = new URL(r.url()); if (u.protocol.startsWith('http') && u.origin !== new URL(baseURL).origin && !process.env.UI_ALLOWED_ORIGINS?.includes(u.origin)) problems.push(`внешний запрос: ${r.url()}`); });
+  };
+  const dctx = await phoneContext(browser, baseURL);
+  const dp = await dctx.newPage();
+  const sctx = await phoneContext(browser, baseURL);
+  const sp = await sctx.newPage();
+  watch(dp); watch(sp);
+  const disp = await signIn(dp, '+79990008743');
+  const spec = await signIn(sp, '+79990008744');
+  await db(async (c) => {
+    await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [spec.id]);
+  });
+  const id = (await (await dp.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира на Отпускной' }, headers: H })).json()).order.id;
+  expect((await dp.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(9), fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, Отпускная ул., 3' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await dp.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  await db(async (c) => {
+    await c.query('update orders set price_kop = 1500000, paid_at = now() where id = $1', [id]);
+    await c.query("insert into payments (order_id, amount_kop, status, provider_id, created_by, paid_at) values ($1, 1500000, 'succeeded', $2, $3, now())", [id, `pay_ui_${id}`, disp.id]);
+  });
+  expect((await dp.request.post(`/api/orders/${id}/offer`, { data: { specialist_id: spec.id, from: 'matching' }, headers: H })).status()).toBe(200);
+  expect((await sp.request.post(`/api/orders/${id}/status`, { data: { from: 'awaiting_executor', to: 'in_work' }, headers: H })).status()).toBe(200);
+  const asked = await (await sp.request.post(`/api/orders/${id}/doc-requests`, { data: { items: ['egrn'] }, headers: H })).json();
+  expect((await sp.request.post(`/api/orders/${id}/results`, { data: Buffer.from('Отчёт об оценке квартиры. Итоговая стоимость 9 500 000 руб.'),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Отчёт.txt') } })).status()).toBe(201);
+  expect((await sp.request.post(`/api/orders/${id}/review/ai`, { headers: H })).status()).toBe(201);
+  const doc = (await (await dp.request.post(`/api/orders/${id}/documents`, { data: Buffer.from('Выписка из ЕГРН'),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Выписка ЕГРН.txt') } })).json()).document;
+  expect((await dp.request.post(`/api/orders/${id}/doc-requests/${asked.requests[0].id}/attach`, { data: { document_id: doc.id }, headers: H })).status()).toBe(200);
+  // ИИ-проверка — до дней «не принимаю дела», выписка пришла в эти дни; сводку уже «отправили» — фоновая рассылка второй не шлёт.
+  await db(async (c) => {
+    await c.query("update ai_reviews set at = now() - interval '9 days' where order_id = $1", [id]);
+    await c.query("update doc_requests set requested_at = now() - interval '10 days', fulfilled_at = now() - interval '1 day' where order_id = $1", [id]);
+    await c.query('update specialists set away_since = $2::date, away_until = $3::date, away_back_for = $3::date where user_id = $1',
+      [spec.id, inDays(-7), inDays(0)]);
+  });
+
+  await sp.goto('/kabinet#specialist&to=back');
+  const box = sp.locator('#back-box');
+  await expect(box).toBeVisible();
+  const row = box.locator(`[data-back-order="${id}"]`);
+  await expect(row).toHaveCount(1);
+  await expect(row).toContainText('Проверьте заново: Квартира на Отпускной');
+  await expect(row).toContainText('пришло после ИИ-проверки: Выписка из ЕГРН — ИИ ещё не сверял отчёт с этим');
+  await expect(row).not.toContainText('Пришли документы');
+  await row.scrollIntoViewIfNeeded();
+  await shot(sp, 'dr10-2256-poka-ne-bylo-proverte-zanovo');
+  await row.screenshot({ path: 'test-results/screens/dr10b-2256-stroka.png' });
+  await row.locator('a').click();
+  await expect(sp).toHaveURL(new RegExp(`#order=${id}&to=review$`));
+  const re = sp.locator('#ai-review-recheck');
+  await expect(re).toBeVisible();
+  await expect(re).toBeInViewport();
+  await shot(sp, 'dr11-2256-ii-proverka-iz-poka-ne-bylo');
+  await re.getByRole('button', { name: 'Проверить заново' }).click();
+  await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  await expect(re).toBeHidden();
+  // Проверил заново — в «Пока Вас не было» строка снова просто «Пришли документы».
+  await sp.goto('/kabinet#specialist&to=back');
+  await expect(row).toContainText('Пришли документы: Квартира на Отпускной');
+  await expect(row).toContainText('заказчик загрузил 1 запрошенный документ');
+  await expect(row).not.toContainText('Проверьте заново');
+  await shot(sp, 'dr12-2256-poka-ne-bylo-provereno');
+  expect(problems, problems.join('\n')).toEqual([]);
+  await dctx.close();
+  await sctx.close();
+});
