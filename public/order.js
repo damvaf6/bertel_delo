@@ -721,6 +721,12 @@ function toSwapAll() {
   btn.click();
 }
 document.addEventListener('egrn-swapped', () => { if (current && lastDocs) loadDocs().catch(() => {}); });
+// 2.268: «Собрать Word заново» в ИИ-проверке — новый файл результата: список файлов заново и, если открыт возврат
+// руководителя, сразу «Это исправленная версия?» (2.251).
+document.addEventListener('draft-rebuilt', async (e) => {
+  if (!current) return;
+  try { await loadDocs(); askReplace(e.detail); } catch { /* список обновится при следующем открытии */ }
+});
 
 function toAiReview() {
   if ($('ai-review-box').classList.contains('hidden')) return;
