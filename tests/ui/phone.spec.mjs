@@ -10787,6 +10787,8 @@ test('прогон 2.240: эксперт и руководитель по пач
     'Кадастровая стоимость 8 200 000 руб. не совпадает с выпиской ЕГРН (8 431 520,17 руб.) — исправьте по выписке',
     // 2.269: и находка, сверенная с заданием на оценку.
     'Дата оценки в отчёте 01.10.2026, а в задании на оценку «Задание на оценку.txt» — 03.10.2026 — исправьте, как в задании на оценку',
+    // Прогон 2.270: эксперт заменил по выписке в черновике после загрузки файла — и «соберите Word заново».
+    'Расхождения с выпиской ЕГРН Вы заменили в черновике, а подписали файл, собранный до замены, — соберите Word заново из черновика, загрузите и подпишите новый файл, а этот удалите',
   ].join('\n'));
   await area.scrollIntoViewIfNeeded();
   await shot(hp, 'd03-progon9-rukovoditel-vernut-punkty');
@@ -11029,7 +11031,8 @@ test('прогон 2.250: эксперт и руководитель по пач
   await item.locator('[data-action="org-return"]').click();
   const area = item.locator('textarea');
   const points = (await area.inputValue()).split('\n');
-  expect(points).toHaveLength(4);
+  expect(points).toHaveLength(5);
+  expect(points.at(-1)).toBe('Расхождения с выпиской ЕГРН Вы заменили в черновике, а подписали файл, собранный до замены, — соберите Word заново из черновика, загрузите и подпишите новый файл, а этот удалите'); // прогон 2.270: файл собран до замены
   expect(points.join('\n')).toContain('Правообладатель «Петров Пётр Петрович» не совпадает с выпиской ЕГРН (Сергеев Сергей Сергеевич) — исправьте по выписке');
   expect(points.join('\n')).toContain('Площадь 45,1 кв. м не совпадает с площадью в выписке ЕГРН (47,3 кв. м) — исправьте по выписке');
   // Найдено прогоном: у находки об ипотеке уже есть «укажите его …» — второго «исправьте по выписке» в конце нет.
@@ -11061,7 +11064,7 @@ test('прогон 2.250: эксперт и руководитель по пач
   await expect(beside).toHaveCount(0);
   await expect(ep.locator('#org-returns [data-role="return-file"]')).toContainText('Исправленный файл «Отчёт Десятова испр.txt» загружен');
   const ret = await db((c) => c.query('select r.id from org_returns r where r.order_id = $1', [A]));
-  for (const n of [1, 2, 3, 4]) expect((await ep.request.put(`/api/orders/${A}/org-returns/${ret.rows[0].id}/items/${n}`, { data: { fixed: true }, headers: H })).status()).toBe(200);
+  for (const n of [1, 2, 3, 4, 5]) expect((await ep.request.put(`/api/orders/${A}/org-returns/${ret.rows[0].id}/items/${n}`, { data: { fixed: true }, headers: H })).status()).toBe(200);
   expect((await ep.request.post(`/api/orders/${A}/review/ai`, { headers: H })).status()).toBe(201);
   expect((await ep.request.post(`/api/documents/${(await up2.json()).document.id}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
   await hp.reload();
@@ -11480,7 +11483,8 @@ test('прогон 2.260: эксперт и руководитель по пач
   await item.locator('[data-action="org-return"]').click();
   const area = item.locator('textarea');
   const points = (await area.inputValue()).split('\n');
-  expect(points).toHaveLength(2);
+  expect(points).toHaveLength(3);
+  expect(points.at(-1)).toBe('Расхождения с выпиской ЕГРН Вы заменили в черновике, а подписали файл, собранный до замены, — соберите Word заново из черновика, загрузите и подпишите новый файл, а этот удалите'); // прогон 2.270: файл собран до замены
   await area.scrollIntoViewIfNeeded();
   await shot(hp, 'd30-progon11-rukovoditel-vernut');
   await item.locator('[data-action="org-return-send"]').click();
@@ -11498,7 +11502,7 @@ test('прогон 2.260: эксперт и руководитель по пач
   await expect(ask).toBeHidden();
   const newId = await db(async (c) => (await c.query("select id from documents where order_id = $1 and filename = 'Отчёт Одиннадцатова испр.txt'", [A])).rows[0].id);
   const ret = await db((c) => c.query('select id from org_returns where order_id = $1', [A]));
-  for (const n of [1, 2]) expect((await ep.request.put(`/api/orders/${A}/org-returns/${ret.rows[0].id}/items/${n}`, { data: { fixed: true }, headers: H })).status()).toBe(200);
+  for (const n of [1, 2, 3]) expect((await ep.request.put(`/api/orders/${A}/org-returns/${ret.rows[0].id}/items/${n}`, { data: { fixed: true }, headers: H })).status()).toBe(200);
   expect((await ep.request.post(`/api/documents/${newId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
 
   // 2.252: у руководителя — пометки у возвращённого и у нового файла.
