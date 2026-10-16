@@ -1267,6 +1267,21 @@ test('ИИ-проверка результата: специалист пере�
   await expect(aiDoc.locator('[data-sig="egrn-swap"]')).toHaveCount(0);
   await aiDoc.locator('[data-sig="egrn-swapped"]').scrollIntoViewIfNeeded();
   await shot(sp, '54y-specialist-podpis-zameneno');
+  // 2.272: в «Сегодня» — «Соберите Word заново»: в черновике заменено по выписке, а файл собран до замены; нажатие — к кнопке
+  // «Приложить как файл результата» в черновике.
+  const rp = await sctx.newPage();
+  await rp.goto('/kabinet');
+  const rebuildRow = rp.locator('li[data-today-item="egrn-rebuild"]').filter({ hasText: 'Оценка квартиры для ИИ-проверки' });
+  await expect(rebuildRow.locator('[data-role="egrn-rebuild-what"]')).toHaveText(/^В черновике заменено по выписке ЕГРН .+ \(\d+\): /);
+  await expect(rebuildRow).toContainText(/собран до замены — соберите Word заново и подпишите его/);
+  await rebuildRow.scrollIntoViewIfNeeded();
+  await shot(rp, 'd53-specialist-segodnya-sobrat-word-zanovo');
+  await rebuildRow.locator('button.open').click();
+  await expect(rp.locator('#draft-attach')).toBeInViewport();
+  await expect(rp.locator('#draft-attach')).toBeFocused();
+  await expect(rp.locator('#draft-msg')).toHaveText('Черновик изменён после загрузки файла результата — отметьте, что проверили текст, и приложите Word заново; прежний файл удалите');
+  await shot(rp, 'd54-specialist-delo-sobrat-word-zanovo');
+  await rp.close();
   // Отменили — подсказка снова с кнопкой.
   await swapAllBox.getByRole('button', { name: 'Отменить всё' }).click();
   await expect(draftText).toHaveValue(/Кадастровый номер объекта 77:01:0001001:1234\./);

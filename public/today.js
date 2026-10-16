@@ -230,6 +230,11 @@ export async function loadToday() {
         { class: 'warn-line', role: 'egrn-swap-what', text: `${x.swap.length > 1 ? `Расхождений с выпиской: ${x.swap.length} — ` : ''}${x.swap[0].length > 120 ? `${x.swap[0].slice(0, 119)}…` : x.swap[0]}` },
         `замените в черновике, соберите Word заново и загрузите — тогда подписывайте · ${deadline(x, t.today)}`],
       (x) => { location.hash = `order=${x.id}&to=review`; }),
+      // Заменил по выписке ЕГРН в черновике, а файл результата собран до замены (2.272) — к кнопке сборки Word в деле.
+      ...group('egrn-rebuild', 'Соберите Word заново', e.egrn_rebuild ?? [], (x) => [x.title,
+        { class: 'warn-line', role: 'egrn-rebuild-what', text: `В черновике заменено по выписке ЕГРН ${since(x.draft_at)}${x.swapped.length > 1 ? ` (${x.swapped.length})` : ''}: ${x.swapped[0].length > 100 ? `${x.swapped[0].slice(0, 99)}…` : x.swapped[0]}` },
+        `«${x.file}» собран до замены — соберите Word заново и подпишите его · ${deadline(x, t.today)}`],
+      (x) => { location.hash = `order=${x.id}&to=rebuild`; }),
       // Можно продолжать (2.86): пришло новое после того, как эксперт открывал дело, — сразу к переписке, документам или осмотру.
       ...group('ready', 'Можно продолжать', e.ready ?? [], (x) => [x.title, `${x.what.join(' · ')} · ${since(x.at)}`, deadline(x, t.today)],
         (x) => { location.hash = `order=${x.id}&to=${x.to}`; }),

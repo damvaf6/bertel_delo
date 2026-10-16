@@ -762,6 +762,75 @@ test('2.266: в «Сегодня» и утренней сводке экспер
   assert.equal((await expertMorningAlerts(S.sql, other.user.id, today)).egrn_swap, 0);
 });
 
+test('2.272: в «Сегодня» и утренней сводке эксперта — заменил по выписке в черновике, а файл собран до замены', async () => {
+  const ex = await login(S, '+79990001539');
+  await makeSpecialist(S.sql, ex.user.id);
+  assert.equal((await ex.req('PATCH', '/api/me', { full_name: 'Эксперт Пересборов' })).status, 200);
+  const o = await inWork('Квартира: собрать Word заново', ex);
+  const putTxt = (who, url, body, name) => who.req('POST', url, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } });
+  assert.equal((await putTxt(owner, `/api/orders/${o.id}/documents`, 'Выписка из Единого государственного реестра недвижимости\nВид объекта недвижимости: Помещение\nКадастровый номер: 77:01:0001001:4321\nПлощадь, м2: 47,3', 'Выписка ЕГРН.txt')).status, 201);
+  const report = 'ОТЧЁТ ОБ ОЦЕНКЕ\nКвартира, кадастровый номер 77:01:0001001:4321\nОбщей площадью 45,1 кв. м';
+  const fixed = report.replace('45,1', '47,3');
+  const save = async (body) => {
+    const cur = (await ex.req('GET', `/api/orders/${o.id}/draft`)).body.draft;
+    assert.equal((await ex.req('PUT', `/api/orders/${o.id}/draft`, { body, from: cur?.id ?? null })).status, 200);
+  };
+  const today = todayMsk();
+  const rows = () => ex.req('GET', '/api/today').then((r) => r.body.expert.egrn_rebuild.filter((x) => x.id === o.id));
+  const swapRows = () => ex.req('GET', '/api/today').then((r) => r.body.expert.egrn_swap.filter((x) => x.id === o.id));
+  const alerts = () => expertMorningAlerts(S.sql, ex.user.id, today);
+  const back = (id) => S.sql`update documents set created_at = now() - interval '1 minute' where id = ${id}`;
+  await save(report);
+  const d1 = (await putTxt(ex, `/api/orders/${o.id}/results`, report, 'Отчёт.txt')).body.document;
+  await back(d1.id);
+  assert.equal((await ex.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
+  assert.deepEqual(await rows(), [], 'в черновике ещё прежнее значение — это 2.266, не «собрать заново»');
+  assert.equal((await swapRows()).length, 1);
+  // Заменил в черновике по выписке — файл собран до замены: строка «Соберите Word заново», в утренней сводке — цифра.
+  await save(fixed);
+  const [r] = await rows();
+  assert.deepEqual(r.swapped, ['Площадь 45,1 кв. м не совпадает с площадью в выписке ЕГРН (47,3 кв. м)']);
+  assert.equal(r.file, 'Отчёт.txt');
+  assert.ok(r.draft_at);
+  assert.deepEqual(await swapRows(), []);
+  const a = await alerts();
+  assert.equal(a.egrn_rebuild, 1);
+  assert.equal(a.egrn_swap, 0);
+  assert.equal(digestText({ due: 0, overdue: 0, visits: 0, links: 0, ...a }),
+    'На сегодня: заменили по выписке в черновике, а файл собран до замены — соберите Word заново: 1 дело');
+  assert.equal(morningTo({ due: 0, overdue: 0, visits: 0, links: 0, ...a }), 'today');
+  // Правка черновика после замены (значение из выписки осталось) — строка держится.
+  await save(`${fixed}\nДополнение.`);
+  assert.equal((await rows()).length, 1);
+  // Вернул прежнее значение — строки нет.
+  await save(report);
+  assert.deepEqual(await rows(), []);
+  // Снова заменил и собрал Word заново (новый файл после замены) — строки нет, хоть прежний файл ещё лежит.
+  await save(fixed);
+  assert.equal((await rows()).length, 1);
+  const built = await ex.req('POST', `/api/orders/${o.id}/draft/result`, { from: (await ex.req('GET', `/api/orders/${o.id}/draft`)).body.draft.id, confirm: true });
+  assert.equal(built.status, 201, JSON.stringify(built.body));
+  assert.deepEqual(await rows(), []);
+  assert.equal((await alerts()).egrn_rebuild, 0);
+  // Правка черновика после сборки (замена та же) — по-прежнему нет: Word собран после замены.
+  await save(`${fixed}\nЕщё строка.`);
+  assert.deepEqual(await rows(), []);
+  // Новый собранный файл удалён — прежний, собранный до замены, остался: строка снова есть.
+  assert.equal((await ex.req('DELETE', `/api/documents/${built.body.document.id}`)).status, 204);
+  assert.equal((await rows()).length, 1);
+  // Подписал прежний файл (без подписи организации) — строки нет: подписанное уже не заменить.
+  const sg = await sign(d1, undefined, ex);
+  assert.equal(sg.status, 201, JSON.stringify(sg.body));
+  assert.deepEqual(await rows(), []);
+  assert.equal((await alerts()).egrn_rebuild, 0);
+  // Чужой специалист — чужого дела не видно.
+  const other = await login(S, '+79990001540');
+  await makeSpecialist(S.sql, other.user.id);
+  assert.ok(!JSON.stringify((await other.req('GET', '/api/today')).body).includes(o.id));
+  assert.equal((await expertMorningAlerts(S.sql, other.user.id, today)).egrn_rebuild, 0);
+});
+
 test('2.263: руководитель видит, что эксперт заменил значения по выписке в черновике, а подписал файл, собранный до замены', async () => {
   const org = await makeOrg(S.sql, 'ООО «Собрано до замены»');
   const head = await login(S, '+79990001534');
