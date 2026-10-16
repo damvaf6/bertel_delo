@@ -14,6 +14,8 @@ const SIGN_FILTERS = [
   { id: 'left', text: 'Отмечены не все пункты замечания', test: (d, it) => (returnOf(d, it)?.left ?? 0) > 0 },
   { id: 'noai', text: 'Без ИИ-проверки этой версии', test: (d) => d.ai_check?.state === 'none' },
   { id: 'look', text: 'Есть «посмотрите»', test: (d) => d.ai_check?.state === 'attention' },
+  // 2.263: в черновике заменены расхождения с выпиской, а подписан файл, собранный до замены.
+  { id: 'swapped', text: 'Файл собран до замены по выписке', test: (d) => (d.ai_check?.swapped?.length ?? 0) > 0 },
 ];
 let signFilter = null;
 let signItems = [];
@@ -163,8 +165,29 @@ const egrnLine = (c) => (c?.egrn?.length
   : []);
 const aiCheckLine = (d) => (d.ai_check
   ? [el('div', { class: d.ai_check.state === 'ok' ? 'sig-state' : 'sig-state warn', 'data-role': 'ai-check', 'data-ai': d.ai_check.state, text: aiCheckText(d.ai_check) }),
-    ...egrnLine(d.ai_check)]
+    ...egrnLine(d.ai_check), ...swappedLine(d)]
   : []);
+// 2.263: эксперт заменил расхождения с выпиской в черновике (2.232, 2.246) уже после того, как загрузил этот файл, — значит,
+// подписан файл, собранный до замены: в нём прежние значения. Подписать можно и так; «Вернуть: собрать Word заново» —
+// форма возврата с готовым пунктом.
+const SWAP_POINT = 'Расхождения с выпиской ЕГРН Вы заменили в черновике, а подписали файл, собранный до замены, — соберите Word заново из черновика, загрузите и подпишите новый файл, а этот удалите';
+function swappedLine(d) {
+  const list = d.ai_check?.swapped ?? [];
+  if (!list.length) return [];
+  return [el('div', { class: 'sig-state warn', 'data-role': 'ai-swapped' },
+    el('div', { text: `Эксперт заменил в черновике по выписке ЕГРН ${when(d.ai_check.draft_at)}: ${list.slice(0, 3).join('; ')}${list.length > 3 ? '; …' : ''}. Этот файл загружен ${when(d.created_at)} — до замены, в нём прежние значения.` }),
+    el('div', { class: 'muted', text: 'Попросите эксперта собрать Word заново из черновика и подписать новый файл. Подписать можно и так.' }),
+    el('div', { class: 'row' }, el('button', { class: 'secondary', type: 'button', 'data-action': 'org-return-swapped', onclick: () => returnSwapped(d) }, 'Вернуть: собрать Word заново')))];
+}
+function returnSwapped(d) {
+  const box = document.querySelector(`[data-return-form="${d.id}"]`);
+  const area = document.getElementById(`ret-${d.id}`);
+  if (!box || !area) return;
+  if (!area.value.includes(SWAP_POINT)) { area.value = area.value.trim() ? `${area.value.trim()}\n${SWAP_POINT}` : SWAP_POINT; fitRows(area); }
+  box.classList.remove('hidden');
+  box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  area.focus();
+}
 
 // Несколько дел одним подтверждением (2.114): отмечены все, кроме дел, где по замечанию руководителя эксперт отметил не всё.
 function renderMany(list) {
@@ -180,7 +203,9 @@ function renderMany(list) {
     // 2.186: сколько файлов дела без ИИ-проверки эксперта или с пунктами «посмотрите».
     const noAi = ready.filter((d) => d.ai_check?.state === 'none').length;
     const look = ready.filter((d) => d.ai_check?.state === 'attention').length;
-    const ai = [noAi ? `без ИИ-проверки: ${noAi}` : null, look ? `в ИИ-проверке есть «посмотрите»: ${look}` : null].filter(Boolean);
+    const old = ready.filter((d) => d.ai_check?.swapped?.length).length;
+    const ai = [noAi ? `без ИИ-проверки: ${noAi}` : null, look ? `в ИИ-проверке есть «посмотрите»: ${look}` : null,
+      old ? `собраны до замены по выписке в черновике: ${old}` : null].filter(Boolean);
     const id = `org-many-${it.order_ref.replace(/[^0-9A-Z]/gi, '')}`;
     const box = el('input', { type: 'checkbox', id, 'data-many': it.order_ref, ...(left ? {} : { checked: '' }), onchange: () => count() });
     return { it, ready, box, label: el('label', { class: 'row', for: id }, box,
