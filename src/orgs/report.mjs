@@ -17,6 +17,10 @@
 // Подписано без ИИ-проверки (2.199): сколько файлов эксперт подписал за месяц и сколько из них — без ИИ-проверки этой версии
 // (до подписи ни одна ИИ-проверка по делу не включала этот файл; новый файл — новая версия, как в подсказке 2.136). Файл,
 // подписанный за месяц несколько раз (после возврата), — один, по последней подписи. Подсказка, не оценка эксперта.
+// Расхождения с выпиской ЕГРН при первой подписи (2.265): по делам, которые эксперт впервые подписал в этом месяце, — сколько
+// находок, сверенных с выпиской ЕГРН из дела (пункты «посмотрите» с `egrn`, 2.225), было в последней ИИ-проверке этого файла
+// до первой подписи; в скольких делах они были; первая подпись без ИИ-проверки файла — отдельно, в число не входит. Частые
+// пункты проверки с такими находками — по названию правила. Подсказка, не оценка эксперта.
 // Месяц — по московскому времени. Выгрузка таблицей — CSV для Excel (точка с запятой, BOM, суммы с запятой).
 import { HttpError } from '../http/core.mjs';
 import { orderSplit } from '../money/money.mjs';
@@ -187,6 +191,54 @@ const signedQ = (sql, orgId, ids, { start, end }) => sql`
         group by 1, 2, 3) x
   group by x.user_id`;
 
+// Первая подпись эксперта по делу (за всё время) — в этом месяце, с последней ИИ-проверкой подписанного файла до неё (2.265).
+const firstSignQ = (sql, orgId, ids, { start, end }) => sql`
+  select x.user_id, x.order_id, x.doc, o.module, o.service, o.fields, r.items, r.files
+  from (select distinct on (a.actor_id, a.details->>'order_id') a.actor_id as user_id, (a.details->>'order_id')::uuid as order_id,
+               a.subject_id as doc, a.at
+        from audit_log a
+        where a.action = 'document.sign' and a.actor_id = any(${ids}::uuid[])
+        order by a.actor_id, a.details->>'order_id', a.at) x
+  join org_members m on m.org_id = ${orgId} and m.user_id = x.user_id
+  join orders o on o.id = x.order_id
+  left join lateral (select r.items, r.files from ai_reviews r
+                     where r.order_id = x.order_id and r.at <= x.at and r.files @> jsonb_build_array(jsonb_build_object('id', x.doc))
+                     order by r.id desc limit 1) r on true
+  where x.at >= ${start} and x.at < ${end} and x.at >= m.created_at`;
+
+export const TOP_EGRN_RULES = 3;
+// { first_signed, first_no_ai, egrn_first, egrn_first_cases, egrn_rules: [{ title, n }] } — по строкам firstSignQ.
+function egrnFirst(rows, registry) {
+  const rules = new Map();
+  let found = 0;
+  let cases = 0;
+  for (const x of rows) {
+    if (!x.items) continue;
+    const file = (x.files ?? []).find((f) => f.id === x.doc)?.name;
+    let n = 0;
+    for (const i of x.items) {
+      if (i.hint !== 'attention') continue;
+      const k = (i.found ?? []).filter((f) => f.egrn && (!file || f.file === file)).length;
+      if (!k) continue;
+      n += k;
+      let title = i.id;
+      try { title = registry?.checks(x.module, x.service, x.fields).find((c) => c.id === i.id)?.title ?? i.id; } catch { /* услуга убрана */ }
+      title = title.split(':')[0].trim();
+      rules.set(title, (rules.get(title) ?? 0) + k);
+    }
+    found += n;
+    if (n) cases++;
+  }
+  return {
+    first_signed: rows.length,
+    first_no_ai: rows.filter((x) => !x.items).length,
+    egrn_first: found,
+    egrn_first_cases: cases,
+    egrn_rules: [...rules].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'ru')).slice(0, TOP_EGRN_RULES)
+      .map(([title, n]) => ({ title, n })),
+  };
+}
+
 // { resign_days, resign_n, resign_wait }: среднее (до десятых) по подписанным заново и сколько ещё ждут новой подписи.
 function resign(rows) {
   const signed = rows.filter((r) => r.signed_at);
@@ -265,7 +317,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
   const { start, end } = await monthBounds(sql, month);
   const since = (await sql`select to_char(created_at at time zone 'Europe/Moscow', 'YYYY-MM') as m from organizations
                            where id = ${orgId}`)[0]?.m ?? '';
-  const none = { accepted: [], done: [], headReturns: [], resign: [], signed: [], remarkItems: [], dispReturns: [], paid: [], active: [] };
+  const none = { accepted: [], done: [], headReturns: [], resign: [], signed: [], firstSign: [], remarkItems: [], dispReturns: [], paid: [], active: [] };
   const q = !ids.length ? none : {
     accepted: await sql`
       select f.specialist_id as user_id, count(distinct f.order_id)::int as n from order_offers f
@@ -277,6 +329,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
     headReturns: await headReturnsQ(sql, orgId, ids, { start, end }),
     resign: await resignQ(sql, orgId, ids, { start, end }),
     signed: await signedQ(sql, orgId, ids, { start, end }),
+    firstSign: await firstSignQ(sql, orgId, ids, { start, end }),
     remarkItems: await sql`
       select r.executor_user_id as user_id, i.text, r.created_at as at from org_returns r
       join org_return_items i on i.return_id = r.id
@@ -326,6 +379,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
       signed: signed.get(e.user_id)?.signed ?? 0,
       signed_no_ai: signed.get(e.user_id)?.signed_no_ai ?? 0,
       signed_points_left: signed.get(e.user_id)?.signed_points_left ?? 0,
+      ...egrnFirst(q.firstSign.filter((x) => x.user_id === e.user_id), registry),
       remarks: topRemarks(q.remarkItems.filter((i) => i.user_id === e.user_id), TOP_REMARKS_EXPERT).map(({ text, n }) => ({ text, n })),
       prev: cmp ? cmp.experts.get(e.user_id) : null,
       services: byService(done, registry).map(({ name, done: n }) => ({ name, n })),
@@ -342,7 +396,8 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
     // Месяцы до создания организации — заведомо пустые (2.90): в выборе только с месяца создания.
     months: reportMonths(today).filter((m) => m >= since || m === month),
     experts: rows,
-    total: { ...Object.fromEntries(keys.map((k) => [k, sum(k)])), avg_days: avgDays(all), ...resign(q.resign), prev: cmp ? cmp.total : null },
+    total: { ...Object.fromEntries(keys.map((k) => [k, sum(k)])), avg_days: avgDays(all), ...resign(q.resign),
+      ...egrnFirst(q.firstSign, registry), prev: cmp ? cmp.total : null },
     prev_month: cmp ? prevM : null,
     prev_month_name: cmp ? monthRu(prevM) : null,
     top_remarks: topRemarks(q.remarkItems, TOP_REMARKS),
@@ -422,11 +477,12 @@ export function reportCsv(orgName, r) {
     'Возвращено руководителем', 'Возвращено на доработку', 'Вознаграждение за сданные, ₽', 'Выплачено, ₽',
     'Дней в среднем от принятия до сдачи', 'Позже первоначального срока', 'Из них с переносом срока',
     'В первоначальный срок, без переносов', 'Дней в среднем от возврата до новой подписи', 'Ждут новой подписи после возврата',
-    'Подписал файлов', 'Из них без ИИ-проверки этой версии', 'Из них не отметив все пункты замечания'];
+    'Подписал файлов', 'Из них без ИИ-проверки этой версии', 'Из них не отметив все пункты замечания',
+    'Впервые подписал дел', 'Расхождений с выпиской ЕГРН при первой подписи', 'В скольких делах', 'Первая подпись без ИИ-проверки'];
   const line = (name, x) => [name, x.accepted, x.done, x.done_late, ...(r.current ? [x.overdue_now] : []),
     x.returned_head, x.returned_dispatcher, rubCell(x.fee_kop), rubCell(x.paid_kop),
     daysCell(x.avg_days), x.late_first, x.late_first_moved, x.first_kept, daysCell(x.resign_days), x.resign_wait,
-    x.signed, x.signed_no_ai, x.signed_points_left];
+    x.signed, x.signed_no_ai, x.signed_points_left, x.first_signed, x.egrn_first, x.egrn_first_cases, x.first_no_ai];
   const day = todayMsk();
   const lines = [
     [`Сводка по экспертам — ${orgName}`],
@@ -442,6 +498,8 @@ export function reportCsv(orgName, r) {
     ...(r.by_service?.length ? [[], ['По услугам', 'Сдано (готово)', 'Из них позже срока', 'Вознаграждение за сданные, ₽',
       'Экспертов', 'Дней в среднем от принятия до сдачи'], ...r.by_service.map((x) => [x.name, x.done, x.done_late,
       rubCell(x.fee_kop), x.experts, daysCell(x.avg_days)])] : []),
+    ...(r.total.egrn_rules?.length ? [[], ['Расхождения с выпиской ЕГРН при первой подписи — пункт проверки', 'Сколько'],
+      ...r.total.egrn_rules.map((x) => [x.title, x.n])] : []),
     ...(r.top_remarks?.length ? [[], ['Частые замечания при возврате', 'Сколько раз', 'У скольких экспертов'],
       ...r.top_remarks.map((x) => [x.text, x.n, x.experts])] : []),
   ];
