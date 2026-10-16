@@ -31,7 +31,7 @@ import { openHandovers } from './handover-ops.mjs';
 import { dueNotes } from './note-ops.mjs';
 import { caseMoves, caseRemind, transferTargets } from './org-ops.mjs';
 import { docWait, egrnOld } from './docreq-ops.mjs';
-import { aiRecheck, egrnSwapLeft } from '../ai/ai.mjs';
+import { aiRecheck, egrnRebuildLeft, egrnSwapLeft } from '../ai/ai.mjs';
 import { latest } from './draft-ops.mjs';
 
 // «Горит» — просрочено или до срока не больше двух дней (как подсветка в списке дел).
@@ -184,9 +184,13 @@ async function expertPart(sql, actor, registry, today, storage) {
   recheck.sort((a, b) => new Date(b.recheck.docs.at(-1).at) - new Date(a.recheck.docs.at(-1).at));
   // Остались расхождения с выпиской, которые можно заменить в черновике (2.266) — к ИИ-проверке в деле.
   const egrnSwap = (await egrnSwapCases(sql, actor.id, rows)).map(({ order, left }) => item(order, { swap: left }));
+  // Заменил по выписке в черновике, а файл результата собран до замены (2.272) — к кнопке сборки Word в деле.
+  const egrnRebuild = (await egrnRebuildCases(sql, actor.id, rows))
+    .map(({ order, swapped, draftAt, file }) => item(order, { swapped, draft_at: draftAt, file }));
   return {
     ai_recheck: recheck,
     egrn_swap: egrnSwap,
+    egrn_rebuild: egrnRebuild,
     egrn_old: egrnStale,
     docs_wait: docsWait,
     // Отказ в переносе, а срок в дни «не принимаю дела» (2.215) — своей строкой с «Попросить руководителя передать дело».
@@ -252,7 +256,30 @@ export async function expertMorningAlerts(sql, userId, today, now = new Date()) 
     reply_wait: (await replyWaits(sql, rows.map((o) => o.id))).length,
     lead_unsigned: leadUnsigned,
     egrn_swap: (await egrnSwapCases(sql, userId, rows)).length,
+    egrn_rebuild: (await egrnRebuildCases(sql, userId, rows)).length,
   };
+}
+
+// Дела в работе, где эксперт заменил по выписке ЕГРН в черновике уже после того, как загрузил свой файл результата, а Word
+// заново не собрал (2.272, как пометка у руководителя — 2.263). Файлы — свои, ещё не подписанные им, а если подписывает и
+// организация — не подписанные ею.
+export async function egrnRebuildCases(sql, userId, rows) {
+  const out = [];
+  const org = await executorSignOrg(sql, userId);
+  for (const o of rows.filter((x) => x.status === 'in_work')) {
+    const docs = await sql`select id, filename, created_at from documents where order_id = ${o.id} and kind = 'result'
+                           and deleted_at is null and uploaded_by = ${userId} order by created_at`;
+    if (!docs.length) continue;
+    const signs = await orderSignatures(sql, o.id);
+    const open = docs.filter((d) => !signs.get(d.id)?.expert || (org && !signs.get(d.id)?.org));
+    if (!open.length) continue;
+    const versions = await sql`select body, at from result_drafts where order_id = ${o.id} and at > ${open[0].created_at} order by id`;
+    if (!versions.length) continue;
+    const swapped = await egrnRebuildLeft(sql, o, open.map((d) => d.id), versions,
+      new Map(docs.map((d) => [d.id, d.created_at])), docs.at(-1).created_at);
+    if (swapped.length) out.push({ order: o, swapped, draftAt: versions.at(-1).at, file: open.at(-1).filename });
+  }
+  return out;
 }
 
 // Дела в работе, где в последней ИИ-проверке своего неподписанного файла результата остались расхождения с выпиской ЕГРН,
