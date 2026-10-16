@@ -499,7 +499,7 @@ test('недвижимость и земля (2.59): новые правила �
   const { DEFAULT_MODULES } = await import('../../src/modules/index.mjs');
   const exp = DEFAULT_MODULES.find((m) => m.id === 'expertise');
   const rule = exp.checks.find((c) => c.id === 'realty_identity');
-  assert.deepEqual(rule.auto, ['cadastral_match', 'area_match', 'floor_match', 'building_match', 'use_match', 'cad_value_match', 'share_match', 'land_match']);
+  assert.deepEqual(rule.auto, ['cadastral_match', 'area_match', 'floor_match', 'building_match', 'use_match', 'cad_value_match', 'share_match', 'egrn_doc_match', 'land_match']);
 });
 
 test('остальные виды оценки (2.43): правила проверки как у транспорта — сверка объекта, шаблон, обязательные сведения', async () => {
@@ -1469,4 +1469,40 @@ test('2.233: кадастровая стоимость в отчёте — ка�
   res = runAutoChecks(['cad_value_match'], [doc(['Кадастровая стоимость жилого дома: 4 000 000 руб.\nКадастровая стоимость земельного участка: 1 200 000 руб.'])],
     { fields: { object_type: 'house' }, service: 'realty', egrn: [house('Кадастровая стоимость, руб.: 4100000')] });
   assert.deepEqual(res.cad_value_match.map((f) => f.egrn.bad), ['4 000 000']);
+});
+test('2.264: номер и дата выписки ЕГРН в отчёте — как у выписки в деле', () => {
+  const egrn = (head, name = 'Выписка ЕГРН.pdf') => ({ ...doc([`Выписка из Единого государственного реестра недвижимости об объекте недвижимости\n${head}\nВид объекта недвижимости: Помещение\nПлощадь, м2: 47,3`], name), id: name });
+  const flat = egrn('02.10.2026 № КУВИ-001/2026-12345678');
+  const run = (pages, list = [flat]) => runAutoChecks(['egrn_doc_match'], [doc(pages)], { fields: { object_type: 'flat' }, service: 'realty', egrn: list });
+  // Номер и дата как в деле (пробелы и тире любые, дата словами), имя файла в «…» и дата получения — не в счёт.
+  assert.deepEqual(run(['Перечень использованных документов:\n1. Выписка из ЕГРН № КУВИ – 001/2026 – 12345678 от 2 октября 2026 г.\n2. Выписка из ЕГРН — файл «ЕГРН от 01.09.2026.pdf», получен 03.10.2026']).egrn_doc_match, []);
+  // Та же выписка, другая дата — находка с кнопкой к выписке и заменой даты тем же видом.
+  let res = run(['Перечень использованных документов:\n1. Выписка из ЕГРН № КУВИ-001/2026-12345678 от 01.09.2026; 2. Технический паспорт от 01.01.2001']);
+  assert.deepEqual(texts(res, 'egrn_doc_match'), ['Дата выписки ЕГРН № КУВИ-001/2026-12345678 в отчёте — 01.09.2026, а у этой выписки в деле — 02.10.2026 («Выписка ЕГРН.pdf», стр. 1) — проверьте перечень документов']);
+  assert.equal(res.egrn_doc_match[0].egrn.bad, '01.09.2026');
+  assert.equal(res.egrn_doc_match[0].egrn.right, '02.10.2026');
+  assert.match(res.egrn_doc_match[0].egrn.quote, /КУВИ-001\/2026-12345678/);
+  res = run(['Выписка из ЕГРН от 1 сентября 2026 г. № КУВИ-001/2026-12345678']);
+  assert.equal(res.egrn_doc_match[0].egrn.right, '2 октября 2026');
+  // Номера нет в деле — находка; выписка в деле одна — замена номера.
+  res = run(['Задание на оценку: выписка из ЕГРН № КУВИ-001/2025-99999999 от 02.10.2026']);
+  assert.deepEqual(texts(res, 'egrn_doc_match'), ['Выписка ЕГРН № КУВИ-001/2025-99999999 в отчёте — в деле такой нет; в деле — № КУВИ-001/2026-12345678 от 02.10.2026 («Выписка ЕГРН.pdf», стр. 1) — проверьте, не номер ли это старой выписки или другого объекта']);
+  assert.equal(res.egrn_doc_match[0].egrn.bad, 'КУВИ-001/2025-99999999');
+  assert.equal(res.egrn_doc_match[0].egrn.right, 'КУВИ-001/2026-12345678');
+  // Две выписки в деле — сверяется с той, у которой этот номер; чужого номера — без замены.
+  const house = egrn('Дата формирования выписки: 05.10.2026\nНомер: КУВИ-001/2026-55555555', 'ЕГРН дом.pdf');
+  assert.deepEqual(run(['Выписка ЕГРН № КУВИ-001/2026-55555555 от 05.10.2026; выписка ЕГРН № КУВИ-001/2026-12345678 от 02.10.2026'], [flat, house]).egrn_doc_match, []);
+  res = run(['Выписка ЕГРН № КУВИ-001/2025-1111'], [flat, house]);
+  assert.equal(res.egrn_doc_match.length, 1);
+  assert.equal(res.egrn_doc_match[0].egrn, undefined);
+  // Без номера: «Выписка из ЕГРН от …» — дата у одной из выписок дела; нет — находка с заменой (дата в деле одна).
+  assert.deepEqual(run(['Выписка из Единого государственного реестра недвижимости от 02.10.2026']).egrn_doc_match, []);
+  res = run(['Документы: выписка из ЕГРН от 15.08.2026, технический паспорт']);
+  assert.deepEqual(texts(res, 'egrn_doc_match'), ['Выписка ЕГРН от 15.08.2026 в отчёте — в деле выписки от этого числа нет; в деле — № КУВИ-001/2026-12345678 от 02.10.2026 («Выписка ЕГРН.pdf», стр. 1) — проверьте перечень документов']);
+  assert.equal(res.egrn_doc_match[0].egrn.right, '02.10.2026');
+  // Не про выписку ЕГРН или без даты после «от» — молчим; в деле выписки без номера и даты — правило молчит.
+  assert.deepEqual(run(['Выписка из домовой книги от 15.08.2026\nВыписка из ЕГРН получена от заказчика 15.08.2026']).egrn_doc_match, []);
+  assert.deepEqual(run(['Выписка ЕГРН № КУВИ-001/2025-99999999'], [egrn('Без даты')]).egrn_doc_match, []);
+  assert.deepEqual(run(['Выписка ЕГРН № КУВИ-001/2025-99999999'], []).egrn_doc_match, []);
+  assert.ok(AUTO_CHECKS.egrn_doc_match);
 });

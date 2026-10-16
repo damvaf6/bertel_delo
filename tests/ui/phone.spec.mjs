@@ -1023,7 +1023,7 @@ test('ИИ-проверка результата: специалист пере�
   expect((await sp.request.post(`/api/orders/${id}/status`, { data: { from: 'awaiting_executor', to: 'in_work' }, headers: H })).status()).toBe(200);
   // Отчёт — PDF на две страницы (задача 2.1): ИИ читает его и показывает отмеченное место со страницей.
   expect((await sp.request.post(`/api/orders/${id}/results`, {
-    data: makePdf([['Заключение № 3/2026 об оценке квартиры', 'Дата оценки: 01.10.2026', 'Квартира общей площадью 45,1 кв. м', 'Кадастровый номер 77:01:0001001:1234', 'Квартира на 5 этаже', 'Адрес объекта: г. Москва, тестовая ул., д. 9, кв. 12', 'Год постройки дома: 1975'], ['Итоговая стоимость 9 500 000 руб.', 'Кадастровая стоимость объекта: 8 200 000 руб.', 'Назначение помещения: нежилое', 'Собственник объекта оценки: Петров Пётр Петрович', 'В разделе 3 опечатка в адресе.']]),
+    data: makePdf([['Заключение № 3/2026 об оценке квартиры', 'Дата оценки: 01.10.2026', 'Квартира общей площадью 45,1 кв. м', 'Кадастровый номер 77:01:0001001:1234', 'Квартира на 5 этаже', 'Адрес объекта: г. Москва, тестовая ул., д. 9, кв. 12', 'Год постройки дома: 1975'], ['Итоговая стоимость 9 500 000 руб.', 'Кадастровая стоимость объекта: 8 200 000 руб.', 'Назначение помещения: нежилое', 'Выписка из ЕГРН № КУВИ-001/2026-12345678 от 20.09.2026', 'Собственник объекта оценки: Петров Пётр Петрович', 'В разделе 3 опечатка в адресе.']]),
     headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('отчёт.pdf') },
   })).status()).toBe(201);
   // Задание на оценку от заказчика (2.198): в нём другая дата оценки — ИИ-проверка показывает расхождение.
@@ -1033,7 +1033,7 @@ test('ИИ-проверка результата: специалист пере�
   })).status()).toBe(201);
   // Выписка ЕГРН от заказчика (2.202): площадь в ней другая — ИИ-проверка показывает расхождение с выпиской.
   expect((await dp.request.post(`/api/orders/${id}/documents`, {
-    data: Buffer.from('Выписка из Единого государственного реестра недвижимости\nВид объекта недвижимости: Помещение\nКадастровый номер: 77:01:0001001:4321\nПлощадь, м2: 47,3\nНомер, тип этажа, на котором расположено помещение, машино-место: Этаж № 6\nНазначение помещения: Жилое помещение\nАдрес (местоположение): г. Москва, тестовая ул., д. 9, кв. 21\nКадастровая стоимость, руб.: 8431520.17\nПравообладатель (правообладатели): 1.1. Сергеев Сергей Сергеевич\nВид, номер и дата государственной регистрации права: 2.1. Собственность\nОграничение прав и обременение объекта недвижимости: вид: Ипотека в силу закона'),
+    data: Buffer.from('Выписка из Единого государственного реестра недвижимости\n25.09.2026 № КУВИ-001/2026-12345678\nВид объекта недвижимости: Помещение\nКадастровый номер: 77:01:0001001:4321\nПлощадь, м2: 47,3\nНомер, тип этажа, на котором расположено помещение, машино-место: Этаж № 6\nНазначение помещения: Жилое помещение\nАдрес (местоположение): г. Москва, тестовая ул., д. 9, кв. 21\nКадастровая стоимость, руб.: 8431520.17\nПравообладатель (правообладатели): 1.1. Сергеев Сергей Сергеевич\nВид, номер и дата государственной регистрации права: 2.1. Собственность\nОграничение прав и обременение объекта недвижимости: вид: Ипотека в силу закона'),
     headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Выписка ЕГРН.txt') },
   })).status()).toBe(201);
   // Выписка ЕГРН на дом (2.223): год постройки в ней другой — ИИ-проверка показывает расхождение.
@@ -1112,6 +1112,13 @@ test('ИИ-проверка результата: специалист пере�
   await expect(useFind.locator('[data-role="egrn-place"]')).toContainText('Назначение помещения: Жилое помещение');
   await useFind.scrollIntoViewIfNeeded();
   await shot(sp, '54z-specialist-ii-naznachenie-egrn');
+  // Номер и дата выписки (2.264): в отчёте та же выписка, но с другой датой; у находки — кнопка к строке выписки.
+  const refFind = ident.locator('.ai-found li').filter({ hasText: 'Дата выписки ЕГРН' });
+  await expect(refFind).toContainText('Дата выписки ЕГРН № КУВИ-001/2026-12345678 в отчёте — 20.09.2026, а у этой выписки в деле — 25.09.2026 («Выписка ЕГРН.txt», стр. 1) — проверьте перечень документов');
+  await refFind.getByRole('button', { name: 'Выписка ЕГРН, стр. 1' }).click();
+  await expect(refFind.locator('[data-role="egrn-place"]')).toContainText('25.09.2026 № КУВИ-001/2026-12345678');
+  await refFind.scrollIntoViewIfNeeded();
+  await shot(sp, 'd41-specialist-ii-nomer-data-vypiski');
   // Правообладатель (2.241): в отчёте другой собственник, чем в выписке ЕГРН; у находки — кнопка к строке выписки.
   const holderFind = sp.locator('#review-checks > li[data-check="rights"] .ai-found li').filter({ hasText: 'Правообладатель «Петров' });
   await expect(holderFind).toContainText('Правообладатель «Петров Пётр Петрович» не совпадает с выпиской ЕГРН «Выписка ЕГРН.txt» (Сергеев Сергей Сергеевич, стр. 1) — проверьте, нет ли данных другого объекта или старого отчёта');
@@ -10774,7 +10781,7 @@ test('2.249: утренняя сводка руководителя — эксп
     await c.query(`insert into org_morning_digests (user_id, org_id, day, back, notification_id)
       values ($1, $2, (now() at time zone 'Europe/Moscow')::date, 1, $3)
       on conflict (user_id, org_id, day) do update set sign = 0, handover = 0, stuck = 0, due = 0, overdue = 0, idle = 0, returned = 0, fresh = 0, away = 0,
-        ext_declined = 0, back = 1, notification_id = excluded.notification_id`, [head.id, org.id, n.id]);
+        ext_declined = 0, back = 1, egrn_kept = 0, notification_id = excluded.notification_id`, [head.id, org.id, n.id]);
     return { orgId: org.id, mine: ids.slice(0, 2), other: ids[2] };
   });
   const ref = (id) => `№ ${id.slice(0, 8).toUpperCase()}`;
@@ -10995,10 +11002,12 @@ test('прогон 2.250: эксперт и руководитель по пач
     await c.query("update order_messages set at = at - interval '1 day' where order_id = $1", [A]);
     await c.query("insert into notifications (user_id, type, event) values ($1, 'executor_work', 'away_back')", [expert.id]);
     const { rows: [n] } = await c.query("insert into notifications (user_id, type, event, org_id) values ($1, 'org_morning', 'org_morning_today', $2) returning id", [head.id, orgId]);
+    // Сводку за сегодня могла уже собрать программа (в деле после возврата расхождение с выпиской осталось — egrn_kept):
+    // здесь проверяется только «вернулись», остальные счётчики сбрасываются.
     await c.query(`insert into org_morning_digests (user_id, org_id, day, back, notification_id)
       values ($1, $2, (now() at time zone 'Europe/Moscow')::date, 1, $3)
       on conflict (user_id, org_id, day) do update set sign = 0, handover = 0, stuck = 0, due = 0, overdue = 0, idle = 0, returned = 0, fresh = 0, away = 0,
-        ext_declined = 0, back = 1, notification_id = excluded.notification_id`, [head.id, orgId, n.id]);
+        ext_declined = 0, back = 1, egrn_kept = 0, notification_id = excluded.notification_id`, [head.id, orgId, n.id]);
   });
   // 2.244: «Пока Вас не было» — сообщение заказчика; «Всё посмотрел» убирает блок и после перезагрузки.
   await ep.goto('/kabinet#notifications');
