@@ -9,6 +9,8 @@
 // От возврата до новой подписи (2.168): после возвратов руководителя за месяц — сколько дней в среднем эксперт заново
 // подписывал файл и сколько возвратов ещё ждут новой подписи; в итоге и у каждого эксперта.
 // Подписано без ИИ-проверки (2.199): сколько файлов эксперт подписал за месяц и сколько из них без ИИ-проверки этой версии.
+// Расхождения с выпиской ЕГРН при первой подписи (2.265): по делам, впервые подписанным экспертом за месяц, — сколько находок,
+// сверенных с выпиской, было в ИИ-проверке файла перед подписью, в скольких делах и в каких пунктах проверки чаще.
 // Частые замечания (2.105) — пункты, с которыми руководитель чаще всего возвращал отчёты: по организации и у каждого эксперта.
 import { api, el, say } from '/common.js';
 import { rub } from '/money.js';
@@ -38,6 +40,14 @@ const resign = (x) => [x.resign_days != null ? `новая подпись в с�
 const signedAi = (x) => (x.signed ? `подписано файлов: ${x.signed}${x.signed_no_ai ? ` · без ИИ-проверки этой версии: ${x.signed_no_ai}`
   : ' · все после ИИ-проверки'}${x.signed_points_left ? ` · не отметив все пункты замечания: ${x.signed_points_left}` : ''}` : '');
 const signedWarn = (x) => x.signed_no_ai || x.signed_points_left;
+// «при первой подписи расхождений с выпиской ЕГРН: 3 в 2 делах из 4 · чаще: Недвижимость и земля — 2 · без ИИ-проверки: 1»;
+// ничего впервые не подписано — пусто.
+const caseWord = (n) => (n % 10 === 1 && n % 100 !== 11 ? 'деле' : 'делах');
+const egrnFirst = (x) => (x.first_signed ? [x.egrn_first
+  ? `при первой подписи расхождений с выпиской ЕГРН: ${x.egrn_first} в ${x.egrn_first_cases} ${caseWord(x.egrn_first_cases)} из ${x.first_signed}`
+  : `при первой подписи расхождений с выпиской ЕГРН нет (дел: ${x.first_signed})`,
+x.egrn_rules?.length ? `чаще: ${x.egrn_rules.map((r) => `${r.title} — ${r.n}`).join(', ')}` : null,
+x.first_no_ai ? `без ИИ-проверки: ${x.first_no_ai}` : null].filter(Boolean).join(' · ') : '');
 // «сдано: 5 (было 3, +2) · в срок: 4 (было 4) · возвраты: 1 (было 2, −1)»; у эксперта без дел в обоих месяцах — пусто.
 const diff = (now, was) => `${now} (было ${was}${now > was ? `, +${now - was}` : now < was ? `, −${was - now}` : ''})`;
 const compare = (x) => {
@@ -89,6 +99,7 @@ async function load(month) {
     ...(compare(t) ? fact(`К прошлому месяцу (${report.prev_month_name})`, compare(t)) : []),
     ...(resign(t) ? fact('После Ваших возвратов', resign(t)) : []),
     ...(signedAi(t) ? fact('Подпись экспертов', signedAi(t), signedWarn(t) ? 'warn' : '') : []),
+    ...(egrnFirst(t) ? fact('Выписка ЕГРН', egrnFirst(t), t.egrn_first ? 'warn' : '') : []),
     ...(report.current && t.overdue_now ? fact('Просрочено сейчас', String(t.overdue_now), 'overdue') : []),
     ...fact('Вознаграждение за сданные', rub(t.fee_kop), 'money-sum'),
     ...fact('Выплачено экспертам', rub(t.paid_kop)));
@@ -118,6 +129,7 @@ async function load(month) {
     ].filter(Boolean).join(', ')}` })] : []),
     ...(resign(x) ? [el('div', { class: 'muted', 'data-expert-resign': '', text: `после Ваших возвратов: ${resign(x)}` })] : []),
     ...(signedAi(x) ? [el('div', { class: signedWarn(x) ? 'warn' : 'muted', 'data-expert-signed': '', text: signedAi(x) })] : []),
+    ...(egrnFirst(x) ? [el('div', { class: x.egrn_first ? 'warn' : 'muted', 'data-expert-egrn': '', text: egrnFirst(x) })] : []),
     ...(x.remarks?.length ? [el('div', { class: 'muted', 'data-expert-remarks': '', text: `частые замечания: ${
       x.remarks.map((m) => `«${m.text}»${m.n > 1 ? ` ×${m.n}` : ''}`).join(', ')}` })] : []),
     el('div', { class: 'muted', text: `вознаграждение за сданные: ${rub(x.fee_kop)} · выплачено: ${rub(x.paid_kop)}` }))));
