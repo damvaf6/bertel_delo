@@ -624,6 +624,110 @@ export function egrnIssued(egrn) {
   return out;
 }
 
+// ——— 2.264: номер и дата выписки ЕГРН в отчёте (перечень документов, задание, приложения) — как у выписки в деле ———
+// Номер — «КУВИ-001/2026-12345678» (тире и пробелы любые), дата — «от 02.10.2026» или «от 2 октября 2026 г.» в той же
+// части строки (до «;»), либо «02.10.2026 № КУВИ-…». У выписки в деле — номер с первых двух страниц и дата по 2.224
+// (`egrnIssued`). Номер в отчёте есть в деле — сверяется дата; нет в деле — находка «в деле такой нет». Выписка в отчёте без
+// номера, но «Выписка из ЕГРН … от …» — дата должна быть у одной из выписок дела. Названия файлов в «…» не в счёт: в имени
+// файла дата бывает любой. Выписки дела — все (и на здание, и на участок): в перечне документов отчёта бывают все.
+const KUVI_AT = /КУВИ[^\S\n]*[-‐‑–—][^\S\n]*(\d{3})[^\S\n]*\/[^\S\n]*(\d{4})[^\S\n]*[-‐‑–—][^\S\n]*(\d{4,12})/giu;
+const kuviNum = (m) => `КУВИ-${m[1]}/${m[2]}-${m[3]}`;
+const EGRN_NAME = /(?:ЕГРН|ЕГРП|единого\s+государственного\s+реестра\s+(?:недвижимости|прав))/iu;
+const DOC_DAY_AT = /(\d{1,2})\.(\d{1,2})\.(\d{4})|(\d{1,2})[^\S\n]+([а-яё]+)[^\S\n]+(\d{4})/giu;
+const MONTHS_OF = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+function dayOfDoc(m) {
+  if (m[1]) return ymd(m[3], m[2], m[1]);
+  const mi = MONTHS.findIndex((x, i) => (i === 4 ? /^ма[яй]$/iu.test(m[5]) : m[5].toLowerCase().startsWith(x)));
+  return mi >= 0 ? ymd(m[6], mi + 1, m[4]) : null;
+}
+// Дата в тексте — тем же видом, что в отчёте: «02.10.2026» или «2 октября 2026».
+const dayLike = (day, raw) => {
+  const [y, m, d] = day.split('-');
+  return /^\d{1,2}\.\d/.test(raw) ? `${d}.${m}.${y}` : `${Number(d)} ${MONTHS_OF[Number(m) - 1]} ${y}`;
+};
+// Выписки дела: { num, day, name, page, doc, quote } — у кого нет ни номера, ни даты, те не в списке.
+export function egrnRefs(egrn) {
+  const issued = new Map(egrnIssued(egrn).map((x) => [x.id ?? x.name, x]));
+  const out = [];
+  for (const d of egrn ?? []) {
+    const pages = (d.pages ?? []).slice(0, 2).map((p) => String(p ?? ''));
+    let num = null;
+    pages.some((page, i) => {
+      const m = [...page.matchAll(KUVI_AT)][0];
+      if (m) num = { num: kuviNum(m), page: i, quote: lineAround(page, m.index) };
+      return !!m;
+    });
+    const got = issued.get(d.id ?? d.name);
+    if (!num && !got) continue;
+    const page = num?.page ?? got.page;
+    out.push({ num: num?.num ?? null, day: got?.day ?? null, name: d.name, doc: d.id, page,
+      quote: num?.quote ?? lineAround(pages[page], Math.max(0, pages[page].search(/выписк|дата/iu))) });
+  }
+  return out;
+}
+// Часть строки вокруг места: от «;» (или начала строки) до «;» (или конца строки); имена файлов в «…» — пробелами.
+function partAround(page, index) {
+  const start = Math.max(page.lastIndexOf('\n', index), page.lastIndexOf(';', index)) + 1;
+  const ends = [page.indexOf('\n', index), page.indexOf(';', index)].filter((x) => x >= 0);
+  const end = ends.length ? Math.min(...ends) : page.length;
+  return { start, text: page.slice(start, end).replace(/«[^»\n]*»/g, (s) => ' '.repeat(s.length)) };
+}
+function dayIn(part, start) {
+  for (const m of part.matchAll(DOC_DAY_AT)) {
+    const day = dayOfDoc(m);
+    if (day) return { day, raw: m[0], index: start + m.index };
+  }
+  return null;
+}
+function egrnDocMatch(doc, ctx) {
+  const refs = egrnRefs(ctx.egrn);
+  if (!refs.length) return [];
+  const numbered = refs.filter((r) => r.num);
+  const days = [...new Set(refs.map((r) => r.day).filter(Boolean))];
+  const out = [];
+  const seen = new Set();
+  const inCase = (r) => `${r.num ? `№ ${r.num}` : ''}${r.num && r.day ? ' ' : ''}${r.day ? `от ${ruDate(r.day)}` : ''} («${r.name}», стр. ${r.page + 1})`;
+  eachPage(doc, (page, i) => {
+    const withNum = new Set();
+    for (const m of page.matchAll(KUVI_AT)) {
+      const num = kuviNum(m);
+      const part = partAround(page, m.index);
+      withNum.add(part.start);
+      if (seen.has(num)) continue;
+      seen.add(num);
+      const ref = refs.find((r) => r.num === num);
+      if (!ref) {
+        if (!numbered.length) continue;
+        const one = numbered.length === 1 ? numbered[0] : null;
+        out.push({ page: i, quote: lineAround(page, m.index), egrn: one ? egrnAt(one) : null, ...(one ? { fix: { bad: m[0], right: one.num } } : {}),
+          text: `Выписка ЕГРН № ${num} в отчёте — в деле такой нет; в деле — ${numbered.map(inCase).join(', ')} — проверьте, не номер ли это старой выписки или другого объекта` });
+        continue;
+      }
+      const got = ref.day && dayIn(part.text, part.start);
+      if (!got || got.day === ref.day) continue;
+      out.push({ page: i, quote: lineAround(page, m.index), egrn: egrnAt(ref), fix: { bad: got.raw, right: dayLike(ref.day, got.raw) },
+        text: `Дата выписки ЕГРН № ${num} в отчёте — ${ruDate(got.day)}, а у этой выписки в деле — ${ruDate(ref.day)} («${ref.name}», стр. ${ref.page + 1}) — проверьте перечень документов` });
+    }
+    // Выписка без номера: «Выписка из ЕГРН … от …».
+    if (!days.length) return;
+    for (const m of page.matchAll(/выписк\S*/giu)) {
+      const part = partAround(page, m.index);
+      if (withNum.has(part.start) || !EGRN_NAME.test(part.text)) continue;
+      const after = part.text.slice(m.index - part.start);
+      const at = after.match(/(?<![а-яё])от[^\S\n]+/iu);
+      if (!at) continue;
+      const got = dayIn(after.slice(at.index), m.index + at.index);
+      if (!got || got.index !== m.index + at.index + at[0].length || days.includes(got.day) || seen.has(got.day)) continue;
+      seen.add(got.day);
+      const dated = refs.filter((r) => r.day);
+      const one = days.length === 1 ? dated[0] : null;
+      out.push({ page: i, quote: lineAround(page, m.index), egrn: one ? egrnAt(one) : null, ...(one ? { fix: { bad: got.raw, right: dayLike(one.day, got.raw) } } : {}),
+        text: `Выписка ЕГРН от ${ruDate(got.day)} в отчёте — в деле выписки от этого числа нет; в деле — ${dated.map(inCase).join(', ')} — проверьте перечень документов` });
+    }
+  });
+  return out;
+}
+
 function areaMatch(doc, ctx) {
   const mine = Number(String(ctx.fields?.area ?? '').replace(',', '.'));
   const egrn = ctx.egrn?.length ? egrnArea(ctx.egrn, ctx) : null;
@@ -2398,6 +2502,7 @@ const PER_DOC = {
   rights_match: rightsMatch,
   share_match: shareMatch,
   share_egrn_match: shareEgrnMatch,
+  egrn_doc_match: egrnDocMatch,
   land_match: landMatch,
   date_order: dateOrder,
   reg_match: regMatch,
@@ -2428,6 +2533,7 @@ export const AUTO_CHECKS = Object.freeze({
   encumbrance_match: 'ограничения и обременения из выписки ЕГРН на объект (ипотека, арест, запрещение регистрации, аренда, сервитут, доверительное управление) упомянуты в отчёте',
   share_match: 'размер доли в отчёте — как в заявке',
   share_egrn_match: 'размер доли в отчёте — одна из долей в выписке ЕГРН на объект из дела',
+  egrn_doc_match: 'номер и дата выписки ЕГРН в отчёте (перечень документов, задание, приложения) — как у выписки в деле',
   land_match: 'категория земель и вид разрешённого использования — как в заявке',
   inspection: '«без осмотра» и дата осмотра одновременно',
   court_purpose: 'цель «для суда» и отказ являться в суд',
