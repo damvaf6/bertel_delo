@@ -3954,6 +3954,8 @@ test('сводка за месяц (2.78): руководитель видит �
   // первого возврата (2.217).
   await expect(row.locator('[data-expert-signed]')).toHaveText('подписано файлов: 1 · без ИИ-проверки этой версии: 1 · не отметив все пункты замечания: 1');
   await expect(row.locator('[data-expert-signed]')).toHaveClass(/warn/);
+  // Расхождения с выпиской при первой подписи (2.265): подписано без ИИ-проверки — строки нет.
+  await expect(row.locator('[data-expert-egrn]')).toHaveCount(0);
   await expect(hp.locator('#org-report-total')).toContainText('Подпись экспертовподписано файлов: 1 · без ИИ-проверки этой версии: 1 · не отметив все пункты замечания: 1');
   await expect(row.locator('[data-expert-remarks]')).toHaveText('частые замечания: «нет даты осмотра.» ×2, «Не указан этаж»');
   await expect(hp.locator('#org-report-remarks > li')).toHaveText(['нет даты осмотра. — 2 раза', 'Не указан этаж — 1 раз']);
@@ -11594,5 +11596,55 @@ test('2.263: «Подписи организации» — эксперт зам
   await expect(area).toBeVisible();
   await expect(area).toHaveValue(/соберите Word заново из черновика, загрузите и подпишите новый файл, а этот удалите/);
   await shot(hp, 'd40-rukovoditel-vernut-sobrat-word');
+  for (const p of [ep, hp, cp]) await p.context().close();
+});
+
+// 2.265: сводка за месяц — сколько расхождений с выпиской ЕГРН было в ИИ-проверке перед первой подписью у каждого эксперта.
+test('2.265: сводка за месяц — расхождения с выпиской ЕГРН при первой подписи по экспертам', async ({ browser, baseURL }) => {
+  const ectx = await phoneContext(browser, baseURL);
+  const ep = await ectx.newPage();
+  const expert = await signIn(ep, '+79990002651');
+  const hctx = await phoneContext(browser, baseURL);
+  const hp = await hctx.newPage();
+  const head = await signIn(hp, '+79990002652');
+  const cctx = await phoneContext(browser, baseURL);
+  const cp = await cctx.newPage();
+  await signIn(cp, '+79990002653');
+  const ids = [];
+  for (const t of ['Квартира: выписка расходится', 'Комната: без расхождений', 'Квартира: без ИИ-проверки']) {
+    ids.push((await (await cp.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: t }, headers: H })).json()).order.id);
+  }
+  const orgId = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name, created_at) values ('ООО «Бюро выписок ${Date.now()}»', now() - interval '3 months') returning id`);
+    await c.query("update users set full_name = 'Эксперт Выпискин' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now()), ($1, $3, 'member', now() - interval '40 days')", [org.id, head.id, expert.id]);
+    await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [expert.id, org.id]);
+    await c.query("update orders set status = 'in_work', executor_user_id = $2, deadline = current_date + 5 where id = any($1::uuid[])", [ids, expert.id]);
+    return org.id;
+  });
+  const egrn = (n, right) => Array.from({ length: n }, (_, i) => ({ file: 'Отчёт.pdf', text: `Расхождение ${i + 1}`, egrn: { file: 'Выписка.pdf', bad: '45,1', right } }));
+  const found = [{ realty_identity: [...egrn(2, '47,3')], rights: egrn(1, '1/2') }, { realty_identity: [{ file: 'Отчёт.pdf', text: 'Нет даты осмотра' }] }, null];
+  for (const [i, id] of ids.entries()) {
+    const up = await ep.request.post(`/api/orders/${id}/results`, { data: Buffer.from('%PDF-1.4 отчёт'), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Отчёт.pdf') } });
+    expect(up.status()).toBe(201);
+    const docId = (await up.json()).document.id;
+    if (found[i]) {
+      await db((c) => c.query(`insert into ai_reviews (order_id, round, requested_by, side, model, items, files, at)
+        values ($1, 1, $2, 'executor', 'fake', $3, $4, now() - interval '1 minute')`, [id, expert.id,
+        JSON.stringify(Object.entries(found[i]).map(([rule, f]) => ({ id: rule, hint: 'attention', found: f }))),
+        JSON.stringify([{ id: docId, name: 'Отчёт.pdf' }])]));
+    }
+    expect((await ep.request.post(`/api/documents/${docId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  }
+
+  await hp.goto(`/kabinet#org=${orgId}`);
+  await expect(hp.locator('#org-report-box')).toBeVisible();
+  const row = hp.locator('#org-report > li').filter({ hasText: 'Эксперт Выпискин' });
+  await expect(row.locator('[data-expert-egrn]')).toHaveText('при первой подписи расхождений с выпиской ЕГРН: 3 в 1 деле из 2 проверенных ИИ'
+    + ' · чаще: Недвижимость и земля — 2, Права и обременения — 1 · впервые подписано без ИИ-проверки: 1');
+  await expect(row.locator('[data-expert-egrn]')).toHaveClass(/warn/);
+  await expect(hp.locator('#org-report-total')).toContainText('Выписка ЕГРНпри первой подписи расхождений с выпиской ЕГРН: 3 в 1 деле из 2 проверенных ИИ');
+  await row.locator('[data-expert-egrn]').scrollIntoViewIfNeeded();
+  await shot(hp, 'd42-rukovoditel-svodka-vypiska-egrn');
   for (const p of [ep, hp, cp]) await p.context().close();
 });

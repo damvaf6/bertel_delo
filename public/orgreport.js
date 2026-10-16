@@ -40,14 +40,18 @@ const resign = (x) => [x.resign_days != null ? `новая подпись в с�
 const signedAi = (x) => (x.signed ? `подписано файлов: ${x.signed}${x.signed_no_ai ? ` · без ИИ-проверки этой версии: ${x.signed_no_ai}`
   : ' · все после ИИ-проверки'}${x.signed_points_left ? ` · не отметив все пункты замечания: ${x.signed_points_left}` : ''}` : '');
 const signedWarn = (x) => x.signed_no_ai || x.signed_points_left;
-// «при первой подписи расхождений с выпиской ЕГРН: 3 в 2 делах из 4 · чаще: Недвижимость и земля — 2 · без ИИ-проверки: 1»;
-// ничего впервые не подписано — пусто.
+// «при первой подписи расхождений с выпиской ЕГРН: 3 в 1 деле из 2 проверенных ИИ · чаще: Недвижимость и земля — 2 · впервые
+// подписано без ИИ-проверки: 1»; ни одно дело не подписано впервые после ИИ-проверки — пусто (без проверки не видно).
 const caseWord = (n) => (n % 10 === 1 && n % 100 !== 11 ? 'деле' : 'делах');
-const egrnFirst = (x) => (x.first_signed ? [x.egrn_first
-  ? `при первой подписи расхождений с выпиской ЕГРН: ${x.egrn_first} в ${x.egrn_first_cases} ${caseWord(x.egrn_first_cases)} из ${x.first_signed}`
-  : `при первой подписи расхождений с выпиской ЕГРН нет (дел: ${x.first_signed})`,
-x.egrn_rules?.length ? `чаще: ${x.egrn_rules.map((r) => `${r.title} — ${r.n}`).join(', ')}` : null,
-x.first_no_ai ? `без ИИ-проверки: ${x.first_no_ai}` : null].filter(Boolean).join(' · ') : '');
+const egrnFirst = (x) => {
+  const checked = (x.first_signed ?? 0) - (x.first_no_ai ?? 0);
+  if (checked <= 0) return '';
+  return [x.egrn_first
+    ? `при первой подписи расхождений с выпиской ЕГРН: ${x.egrn_first} в ${x.egrn_first_cases} ${caseWord(x.egrn_first_cases)} из ${checked} проверенных ИИ`
+    : `при первой подписи расхождений с выпиской ЕГРН нет (проверено ИИ дел: ${checked})`,
+  x.egrn_rules?.length ? `чаще: ${x.egrn_rules.map((r) => `${r.title} — ${r.n}`).join(', ')}` : null,
+  x.first_no_ai ? `впервые подписано без ИИ-проверки: ${x.first_no_ai}` : null].filter(Boolean).join(' · ');
+};
 // «сдано: 5 (было 3, +2) · в срок: 4 (было 4) · возвраты: 1 (было 2, −1)»; у эксперта без дел в обоих месяцах — пусто.
 const diff = (now, was) => `${now} (было ${was}${now > was ? `, +${now - was}` : now < was ? `, −${was - now}` : ''})`;
 const compare = (x) => {
