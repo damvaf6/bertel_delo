@@ -630,7 +630,7 @@ test('2.186: руководитель перед подписью организ
   } finally { S.providers.ai.complete = orig; }
 });
 
-test('2.225: руководитель перед подписью организации видит одной строкой расхождения отчёта с выпиской ЕГРН из ИИ-проверки эксперта', async () => {
+test('2.225, 2.269: руководитель перед подписью организации видит одной строкой расхождения отчёта с выпиской ЕГРН из ИИ-проверки эксперта', async () => {
   const org = await makeOrg(S.sql, 'ООО «Выписка перед подписью»');
   const head = await login(S, '+79990001526');
   await addMember(S.sql, org.id, head.user.id, 'head');
@@ -662,6 +662,28 @@ test('2.225: руководитель перед подписью организ
   // Чужой руководитель дела не видит.
   const stranger = await login(S, '+79990001528');
   assert.notEqual((await stranger.req('GET', `/api/orgs/${org.id}/signing`)).status, 200);
+
+  // 2.269: выписки нет — площадь сверяется с заявкой (41), дата оценки — с заданием на оценку; эти находки — тоже списком
+  // для «Вернуть эксперту» пунктами (текст коротко и откуда верное значение).
+  const o2 = await inWork('Квартира: сверка с заявкой у руководителя', ex);
+  assert.equal((await putTxt(owner, `/api/orders/${o2.id}/documents`, 'ЗАДАНИЕ НА ОЦЕНКУ\nДата оценки: 03.10.2026', 'Задание на оценку.txt')).status, 201);
+  const d3 = (await putTxt(ex, `/api/orders/${o2.id}/results`, 'ОТЧЁТ ОБ ОЦЕНКЕ\nДата оценки: 01.10.2026\nКвартира общей площадью 45,1 кв. м', 'Отчёт.txt')).body.document;
+  assert.equal((await sign(d3, undefined, ex)).status, 201);
+  assert.equal((await docOf(d3)).ai_check?.order, undefined, 'ИИ-проверку не запускали — списка нет');
+  assert.equal((await ex.req('POST', `/api/orders/${o2.id}/review/ai`)).status, 201);
+  const h3 = (await docOf(d3)).ai_check;
+  assert.equal(h3.state, 'attention');
+  assert.equal(h3.egrn, undefined, 'выписки нет — расхождений с выпиской нет');
+  const byText = (a, b) => a.text.localeCompare(b.text);
+  assert.deepEqual([...h3.order].sort(byText), [
+    { text: 'Дата оценки в отчёте 01.10.2026, а в задании на оценку «Задание на оценку.txt» — 03.10.2026', from: 'в задании на оценку' },
+    { text: 'Площадь 45,1 кв. м не совпадает с площадью из заявки (41 кв. м)', from: 'в заявке' },
+  ].sort(byText));
+  // Исправленная версия — списка нет.
+  const d4 = (await putTxt(ex, `/api/orders/${o2.id}/results`, 'ОТЧЁТ ОБ ОЦЕНКЕ\nДата оценки: 03.10.2026\nКвартира общей площадью 41 кв. м', 'Отчёт 2.txt')).body.document;
+  assert.equal((await sign(d4, undefined, ex)).status, 201);
+  assert.equal((await ex.req('POST', `/api/orders/${o2.id}/review/ai`)).status, 201);
+  assert.equal((await docOf(d4)).ai_check?.order, undefined);
 });
 
 test('2.258: эксперт перед подписью видит расхождения с выпиской ЕГРН, которые можно заменить в черновике одной кнопкой', async () => {
