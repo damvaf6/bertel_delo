@@ -8,6 +8,8 @@ import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, 
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import { createRegistry } from '../../src/modules/index.mjs';
 import expertise from '../../src/modules/expertise.mjs';
+import { expertMorningAlerts } from '../../src/ops/today-ops.mjs';
+import { digestText, morningTo } from '../../src/notify/morning.mjs';
 import { fakeSign, testExternalSignature, testGoskeySignature } from '../../src/providers/sign.mjs';
 
 let S, owner, dispatcher, spec;
@@ -690,6 +692,52 @@ test('2.258: эксперт перед подписью видит расхож�
   // Чужой не видит дела.
   const stranger = await login(S, '+79990001530');
   assert.notEqual((await stranger.req('GET', `/api/orders/${o.id}/documents`)).status, 200);
+});
+
+test('2.266: в «Сегодня» и утренней сводке эксперта — дела, где в ИИ-проверке остались расхождения с выпиской, которые можно заменить', async () => {
+  const ex = await login(S, '+79990001537');
+  await makeSpecialist(S.sql, ex.user.id);
+  assert.equal((await ex.req('PATCH', '/api/me', { full_name: 'Эксперт Утренний' })).status, 200);
+  const o = await inWork('Квартира: заменить по выписке утром', ex);
+  const putTxt = (who, url, body, name) => who.req('POST', url, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } });
+  assert.equal((await putTxt(owner, `/api/orders/${o.id}/documents`, 'Выписка из Единого государственного реестра недвижимости\nВид объекта недвижимости: Помещение\nКадастровый номер: 77:01:0001001:4321\nПлощадь, м2: 47,3', 'Выписка ЕГРН.txt')).status, 201);
+  const report = 'ОТЧЁТ ОБ ОЦЕНКЕ\nКвартира, кадастровый номер 77:01:0001001:4321\nОбщей площадью 45,1 кв. м';
+  const save = async (body) => {
+    const cur = (await ex.req('GET', `/api/orders/${o.id}/draft`)).body.draft;
+    assert.equal((await ex.req('PUT', `/api/orders/${o.id}/draft`, { body, from: cur?.id ?? null })).status, 200);
+  };
+  const today = todayMsk();
+  const rows = () => ex.req('GET', '/api/today').then((r) => r.body.expert.egrn_swap.filter((x) => x.id === o.id));
+  const alerts = () => expertMorningAlerts(S.sql, ex.user.id, today);
+  await save(report);
+  const d1 = (await putTxt(ex, `/api/orders/${o.id}/results`, report, 'Отчёт.txt')).body.document;
+  assert.deepEqual(await rows(), [], 'ИИ-проверку не запускали — строки нет');
+  assert.equal((await ex.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
+  const [r] = await rows();
+  assert.deepEqual(r.swap, ['Площадь 45,1 кв. м не совпадает с площадью в выписке ЕГРН (47,3 кв. м)']);
+  assert.equal(r.title, 'Квартира: заменить по выписке утром');
+  const a = await alerts();
+  assert.equal(a.egrn_swap, 1);
+  assert.equal(digestText({ due: 0, overdue: 0, visits: 0, links: 0, ...a }),
+    'На сегодня: в ИИ-проверке остались расхождения с выпиской ЕГРН, которые можно заменить: 1 дело');
+  assert.equal(morningTo({ due: 0, overdue: 0, visits: 0, links: 0, ...a }), 'today');
+  // Заменил в черновике — строки нет (дальше — собрать Word заново; это видно в окне подписи, 2.258).
+  await save(report.replace('45,1', '47,3'));
+  assert.deepEqual(await rows(), []);
+  assert.equal((await alerts()).egrn_swap, 0);
+  // В черновике прежнее значение, но файл подписан — тоже нет: подписанное уже не заменить.
+  await save(report);
+  assert.equal((await rows()).length, 1);
+  const sg = await sign(d1, undefined, ex);
+  assert.equal(sg.status, 201, JSON.stringify(sg.body));
+  assert.deepEqual(await rows(), []);
+  assert.equal((await alerts()).egrn_swap, 0);
+  // Чужой специалист — своего дела нет, чужое не видно.
+  const other = await login(S, '+79990001538');
+  await makeSpecialist(S.sql, other.user.id);
+  assert.ok(!JSON.stringify((await other.req('GET', '/api/today')).body).includes(o.id));
+  assert.equal((await expertMorningAlerts(S.sql, other.user.id, today)).egrn_swap, 0);
 });
 
 test('2.263: руководитель видит, что эксперт заменил значения по выписке в черновике, а подписал файл, собранный до замены', async () => {

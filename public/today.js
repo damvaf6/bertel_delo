@@ -224,6 +224,12 @@ export async function loadToday() {
         { class: 'warn-line', role: 'ai-recheck-what', text: `${recheckDocs(x.recheck.docs)} — пришло после ИИ-проверки ${since(x.recheck.review_at)}` },
         `${x.recheck.egrn ? 'проверьте заново: ИИ сверит отчёт с новой выпиской' : 'проверьте заново: ИИ увидит и эти документы'} · ${deadline(x, t.today)}`],
       (x) => { location.hash = `order=${x.id}&to=review`; }),
+      // В ИИ-проверке неподписанного файла остались расхождения с выпиской ЕГРН, которые можно заменить в черновике (2.266) —
+      // к ИИ-проверке в деле, там «Заменить всё по выписке».
+      ...group('egrn-swap', 'Можно заменить по выписке ЕГРН', e.egrn_swap ?? [], (x) => [x.title,
+        { class: 'warn-line', role: 'egrn-swap-what', text: `${x.swap.length > 1 ? `Расхождений с выпиской: ${x.swap.length} — ` : ''}${x.swap[0].length > 120 ? `${x.swap[0].slice(0, 119)}…` : x.swap[0]}` },
+        `замените в черновике, соберите Word заново и загрузите — тогда подписывайте · ${deadline(x, t.today)}`],
+      (x) => { location.hash = `order=${x.id}&to=review`; }),
       // Можно продолжать (2.86): пришло новое после того, как эксперт открывал дело, — сразу к переписке, документам или осмотру.
       ...group('ready', 'Можно продолжать', e.ready ?? [], (x) => [x.title, `${x.what.join(' · ')} · ${since(x.at)}`, deadline(x, t.today)],
         (x) => { location.hash = `order=${x.id}&to=${x.to}`; }),

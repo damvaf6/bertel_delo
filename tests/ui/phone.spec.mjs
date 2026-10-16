@@ -1264,6 +1264,17 @@ test('ИИ-проверка результата: специалист пере�
   await swapAllBox.getByRole('button', { name: 'Отменить всё' }).click();
   await expect(draftText).toHaveValue(/Кадастровый номер объекта 77:01:0001001:1234\./);
   await expect(aiDoc.locator('[data-sig="egrn-swap"]')).toBeVisible();
+  // 2.266: в «Сегодня» — дело, где в ИИ-проверке остались расхождения с выпиской, которые можно заменить; нажатие — к ИИ-проверке.
+  const tp = await sctx.newPage();
+  await tp.goto('/kabinet');
+  const swapRow = tp.locator('li[data-today-item="egrn-swap"]').filter({ hasText: 'Оценка квартиры для ИИ-проверки' });
+  await expect(swapRow.locator('[data-role="egrn-swap-what"]')).toHaveText(/^Расхождений с выпиской: \d+ — /);
+  await expect(swapRow).toContainText('замените в черновике, соберите Word заново и загрузите — тогда подписывайте');
+  await swapRow.scrollIntoViewIfNeeded();
+  await shot(tp, 'd43-specialist-segodnya-zamenit-po-vypiske');
+  await swapRow.locator('button.open').click();
+  await expect(tp.locator('#ai-review-box')).toBeInViewport();
+  await tp.close();
   // 2.231: у находки, сверенной с заданием на оценку, — тоже «Исправить в черновике»: дата оценки, которая разошлась с заданием.
   const dateFind = req.locator('.ai-found li').filter({ hasText: 'Дата оценки в отчёте 01.10.2026' });
   await draftText.fill(`${await draftText.inputValue()}\nОценка выполнена по состоянию на «01» октября 2026 г.`);
