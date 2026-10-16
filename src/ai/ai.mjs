@@ -407,6 +407,26 @@ export async function aiSignHints(sql, registry, order, docIds, { ok = false, dr
   return out;
 }
 
+// 2.266: для «Сегодня» и утренней сводки эксперта — расхождения с выпиской ЕГРН из последней ИИ-проверки его неподписанных
+// файлов (как 2.258), которые можно заменить одной кнопкой и которые ещё стоят в черновике (значение из файла в тексте есть).
+// Заменил или в черновике этих значений нет — пусто. Коротко, без повторов.
+export async function egrnSwapLeft(sql, order, docIds, body) {
+  if (!docIds.length || !body) return [];
+  const rows = await sql`select files, items from ai_reviews
+                         where order_id = ${order.id} and round = ${order.review_round + 1} order by id desc`;
+  const left = [];
+  for (const id of docIds) {
+    const r = rows.find((x) => (x.files ?? []).some((f) => f.id === id));
+    if (!r) continue;
+    const file = (r.files ?? []).find((f) => f.id === id)?.name;
+    left.push(...(r.items ?? []).filter((i) => i.hint === 'attention').flatMap((i) => i.found ?? [])
+      .filter((f) => f.egrn && (!file || f.file === file) && f.egrn.bad && swapValue(f.egrn)
+        && findInDraft(body, { bad: f.egrn.bad, quote: f.quote }))
+      .map(egrnShort));
+  }
+  return [...new Set(left)];
+}
+
 // ——— Черновик заключения (задача 2.2) ———
 
 export const DRAFT_MAX = 50_000;

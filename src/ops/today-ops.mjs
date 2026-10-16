@@ -16,6 +16,7 @@
 // осмотра, а обязательные шаги без фото (2.208). Выписка ЕГРН в деле старше 30 дней на дату оценки (2.224) — запросить свежую.
 // Запрошенные документы не пришли 3 дня (2.234) — «Напомнить заказчику», пока сегодня ещё не напоминали.
 // После ИИ-проверки пришёл запрошенный документ (2.248) — «Проверьте заново».
+// В ИИ-проверке неподписанного файла остались расхождения с выпиской ЕГРН, которые можно заменить в черновике (2.266).
 // Руководителю — те же сведения, что в «Делах экспертов» (2.16): без заказчика, полей заявки, документов и переписки.
 // Только свои дела и свои организации.
 import { orderRef } from '../notify/registry.mjs';
@@ -30,7 +31,8 @@ import { openHandovers } from './handover-ops.mjs';
 import { dueNotes } from './note-ops.mjs';
 import { caseMoves, caseRemind, transferTargets } from './org-ops.mjs';
 import { docWait, egrnOld } from './docreq-ops.mjs';
-import { aiRecheck } from '../ai/ai.mjs';
+import { aiRecheck, egrnSwapLeft } from '../ai/ai.mjs';
+import { latest } from './draft-ops.mjs';
 
 // «Горит» — просрочено или до срока не больше двух дней (как подсветка в списке дел).
 const HOT_DAYS = 2;
@@ -180,8 +182,11 @@ async function expertPart(sql, actor, registry, today, storage) {
     if (r) recheck.push(item(o, { recheck: r }));
   }
   recheck.sort((a, b) => new Date(b.recheck.docs.at(-1).at) - new Date(a.recheck.docs.at(-1).at));
+  // Остались расхождения с выпиской, которые можно заменить в черновике (2.266) — к ИИ-проверке в деле.
+  const egrnSwap = (await egrnSwapCases(sql, actor.id, rows)).map(({ order, left }) => item(order, { swap: left }));
   return {
     ai_recheck: recheck,
+    egrn_swap: egrnSwap,
     egrn_old: egrnStale,
     docs_wait: docsWait,
     // Отказ в переносе, а срок в дни «не принимаю дела» (2.215) — своей строкой с «Попросить руководителя передать дело».
@@ -230,7 +235,7 @@ async function noResultOrders(sql, userId, hotRows, today) {
 // расчётом, что «Сегодня». Только цифры.
 export async function expertMorningAlerts(sql, userId, today, now = new Date()) {
   const rows = await sql`
-    select id, status, deadline, executor_user_id from orders where executor_user_id = ${userId} and status in ('in_work', 'review')
+    select id, status, deadline, executor_user_id, review_round from orders where executor_user_id = ${userId} and status in ('in_work', 'review')
     order by deadline nulls last, updated_at limit ${LIMIT}`;
   const soon = addDays(today, HOT_DAYS);
   const hotRows = rows.filter((o) => o.status === 'in_work' && o.deadline && o.deadline <= soon);
@@ -246,7 +251,24 @@ export async function expertMorningAlerts(sql, userId, today, now = new Date()) 
     no_result: (await noResultOrders(sql, userId, hotRows, today)).length,
     reply_wait: (await replyWaits(sql, rows.map((o) => o.id))).length,
     lead_unsigned: leadUnsigned,
+    egrn_swap: (await egrnSwapCases(sql, userId, rows)).length,
   };
+}
+
+// Дела в работе, где в последней ИИ-проверке своего неподписанного файла результата остались расхождения с выпиской ЕГРН,
+// которые можно заменить в черновике одной кнопкой и которые там ещё стоят (2.266, как подсказка в окне подписи — 2.258).
+export async function egrnSwapCases(sql, userId, rows) {
+  const out = [];
+  for (const o of rows.filter((x) => x.status === 'in_work')) {
+    const docs = await sql`select id from documents where order_id = ${o.id} and kind = 'result' and deleted_at is null and uploaded_by = ${userId}`;
+    if (!docs.length) continue;
+    const signs = await orderSignatures(sql, o.id);
+    const unsigned = docs.map((d) => d.id).filter((id) => !signs.get(id)?.expert);
+    if (!unsigned.length) continue;
+    const left = await egrnSwapLeft(sql, o, unsigned, (await latest(sql, o.id))?.body);
+    if (left.length) out.push({ order: o, left });
+  }
+  return out;
 }
 
 // Срок дела приходится на дни, когда эксперт не принимает дела (2.113): отметка ещё действует, срок раньше дня возвращения.
