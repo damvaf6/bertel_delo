@@ -188,9 +188,10 @@ export async function orgReturns(sql, orderId, { orgId = null } = {}) {
     ? await sql`select return_id, n, text, fixed_at, egrn from org_return_items where return_id = any(${rows.map((r) => r.id)}::bigint[]) order by return_id, n`
     : [];
   return rows.map((r) => {
-    // 2.262: пункт из расхождения с выпиской ЕГРН — правило и верное значение: у эксперта в замечании «Заменить по выписке».
+    // 2.262: пункт из расхождения с выпиской ЕГРН — правило и верное значение: у эксперта в замечании «Заменить по выписке»
+    // (пункт по заявке и заданию на оценку, 2.271, — без этого: заменять его по выписке нечем).
     const points = items.filter((i) => String(i.return_id) === String(r.id)).map((i) => ({ n: i.n, text: i.text, fixed: !!i.fixed_at, fixed_at: i.fixed_at,
-      ...(i.egrn?.rule ? { egrn: { rule: i.egrn.rule, ...(i.egrn.right ? { right: i.egrn.right } : {}) } } : {}) }));
+      ...(i.egrn?.rule && i.egrn.kind !== 'order' ? { egrn: { rule: i.egrn.rule, ...(i.egrn.right ? { right: i.egrn.right } : {}) } } : {}) }));
     const ret = {
       id: Number(r.id),
       at: r.created_at,
@@ -340,8 +341,10 @@ export function signOps() {
             returns: await Promise.all(returns.map(async (r) => {
               const st = await returnEgrn(sql, o.id, r, docs);
               const { id, at, document_id, filename, comment, by, open, left } = r;
+              // 2.271: пункт из расхождения с заявкой или заданием на оценку — order: gone / kept / none.
+              const kind = new Map(r.links.map((l) => [l.n, l.kind === 'order' ? 'order' : 'egrn']));
               return { id, at, document_id, filename, comment, by, open, left,
-                items: r.items.map((p) => (st.has(p.n) ? { ...p, egrn: st.get(p.n) } : p)) };
+                items: r.items.map((p) => (st.has(p.n) ? { ...p, [kind.get(p.n)]: st.get(p.n) } : p)) };
             })),
           });
         }
@@ -409,7 +412,8 @@ export function signOps() {
           if (!expert) throw new HttpError(409, 'not_signed', 'Эксперт ещё не подписал файл — возвращать нечего');
           // Подпись эксперта снимается: строка удаляется, файл подписи остаётся в хранилище (ключ — в истории возврата).
           await tx`delete from document_signatures where id = ${expert.id}`;
-          // 2.247: пункты, подставленные из расхождений с выпиской ЕГРН последней ИИ-проверки этого файла, — с привязкой.
+          // 2.247: пункты, подставленные из расхождений с выпиской ЕГРН последней ИИ-проверки этого файла, — с привязкой
+          // (2.271 — и из расхождений с заявкой и заданием на оценку).
           const links = egrnLinks(await lastReview(tx, order.id, [doc.id]), doc.id);
           const r = await tx.one`
             insert into org_returns (order_id, document_id, org_id, executor_user_id, returned_by, filename, comment, signature_key)

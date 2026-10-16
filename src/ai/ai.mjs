@@ -369,19 +369,26 @@ export function egrnLinks(review, docId) {
   const file = (review.files ?? []).find((f) => f.id === docId)?.name;
   return (review.items ?? []).filter((i) => i.hint === 'attention').flatMap((i) => (i.found ?? [])
     .filter((f) => f.egrn && (!file || f.file === file))
-    .map((f) => ({ rule: i.id, ...(f.egrn.right ? { right: f.egrn.right } : {}), short: egrnShort(f) })));
+    .map((f) => ({ rule: i.id, ...(f.egrn.right ? { right: f.egrn.right } : {}), short: egrnShort(f) }))
+    // 2.271: и находки, сверенные с заявкой или заданием на оценку (2.269), — kind 'order', верное значение — fix.right.
+    .concat((i.found ?? []).filter((f) => !f.egrn && f.fix?.from && (!file || f.file === file))
+      .map((f) => ({ rule: i.id, kind: 'order', ...(f.fix.right ? { right: f.fix.right } : {}), short: fixShort(f).text }))));
 }
 export function egrnLinkOf(point, links) {
   return links.find((l) => l.short && point.startsWith(egrnTrim(l.short))) ?? null;
 }
 // Ушло ли расхождение пункта в проверке после возврата: правило не смотрели или проверки нет — 'none'; та же находка
-// (то же верное значение из выписки или тот же текст) — 'kept'; иначе 'gone'.
+// (то же верное значение из выписки или тот же текст) — 'kept'; иначе 'gone'. Пункт по заявке и заданию (2.271) — так же,
+// только среди находок без выписки, верное значение — из заявки или задания.
 export function egrnLinkState(link, review, docIds) {
   const item = review && (review.items ?? []).find((i) => i.id === link.rule);
   if (!item) return 'none';
   const files = new Set((review.files ?? []).filter((f) => docIds.includes(f.id)).map((f) => f.name));
-  const same = (item.found ?? []).some((f) => f.egrn && (!files.size || files.has(f.file))
-    && ((link.right && f.egrn.right && egrnNorm(f.egrn.right) === egrnNorm(link.right)) || egrnTrim(egrnShort(f)) === egrnTrim(link.short)));
+  const order = link.kind === 'order';
+  const same = (item.found ?? []).some((f) => (order ? !f.egrn && f.fix?.from : f.egrn) && (!files.size || files.has(f.file))
+    && (order
+      ? (link.right && f.fix.right && egrnNorm(f.fix.right) === egrnNorm(link.right)) || egrnTrim(fixShort(f).text) === egrnTrim(link.short)
+      : (link.right && f.egrn.right && egrnNorm(f.egrn.right) === egrnNorm(link.right)) || egrnTrim(egrnShort(f)) === egrnTrim(link.short)));
   return same ? 'kept' : 'gone';
 }
 

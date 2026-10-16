@@ -16,7 +16,7 @@ let S, owner, dispatcher, spec;
 const FIELDS = { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 15', area: '41' };
 
 before(async () => {
-  S = await startApp();
+  S = await startApp({ AUTH_RATE_MAX: '60' });
   owner = await login(S, '+79990001501');
   dispatcher = await login(S, '+79990001502');
   spec = await login(S, '+79990001503');
@@ -850,6 +850,51 @@ test('2.247: повторная подпись после «Вернуть эк�
   assert.deepEqual(await state(), [[1, true, 'gone'], [2, true, 'kept'], [3, false, null]]);
   // Чужой руководитель не видит.
   const stranger = await login(S, '+79990001533');
+  assert.notEqual((await stranger.req('GET', `/api/orgs/${org.id}/signing`)).status, 200);
+});
+
+test('2.271: повторная подпись — у пункта из расхождения с заявкой и заданием на оценку видно, ушло ли оно в новой ИИ-проверке', async () => {
+  const org = await makeOrg(S.sql, 'ООО «Пункты по заданию»');
+  const head = await login(S, '+79990001607');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  const ex = await login(S, '+79990001608');
+  await makeSpecialist(S.sql, ex.user.id);
+  await addMember(S.sql, org.id, ex.user.id, 'member');
+  assert.equal((await ex.req('PATCH', '/api/me', { full_name: 'Эксперт Заданиев' })).status, 200);
+  assert.equal((await ex.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  const o = await inWork('Квартира: пункты по заявке и заданию', ex);
+  const putTxt = (who, url, body, name) => who.req('POST', url, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } });
+  assert.equal((await putTxt(owner, `/api/orders/${o.id}/documents`, 'ЗАДАНИЕ НА ОЦЕНКУ\nДата оценки: 03.10.2026', 'Задание на оценку.txt')).status, 201);
+  const d1 = (await putTxt(ex, `/api/orders/${o.id}/results`, 'ОТЧЁТ ОБ ОЦЕНКЕ\nДата оценки: 01.10.2026\nКвартира общей площадью 45,1 кв. м', 'Отчёт.txt')).body.document;
+  assert.equal((await sign(d1, undefined, ex)).status, 201);
+  assert.equal((await ex.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
+  // Пункты — как подставляет «Вернуть эксперту» (2.269): «… — исправьте, как в задании на оценку» / «как в заявке».
+  const p1 = 'Дата оценки в отчёте 01.10.2026, а в задании на оценку «Задание на оценку.txt» — 03.10.2026 — исправьте, как в задании на оценку';
+  const p2 = 'Площадь 45,1 кв. м не совпадает с площадью из заявки (41 кв. м) — исправьте, как в заявке';
+  const r = await head.req('POST', `/api/org-documents/${d1.id}/return`, { comment: `1. ${p1}\n2. ${p2}\n3. Приложите задание в отчёт` });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  const links = await S.sql`select n, egrn from org_return_items where return_id = ${r.body.return.id} order by n`;
+  assert.deepEqual(links.map((x) => [x.n, x.egrn?.kind ?? null, x.egrn?.right ?? null]), [[1, 'order', '03.10.2026'], [2, 'order', '41'], [3, null, null]]);
+  // Эксперту у такого пункта «Заменить по выписке» нет — привязка не отдаётся.
+  const mine = (await docsOf(ex, o)).org_returns[0].items;
+  assert.deepEqual(mine.map((p) => p.egrn ?? null), [null, null, null]);
+  assert.ok(!JSON.stringify(mine).includes('"order"'));
+  const state = async () => (await head.req('GET', `/api/orgs/${org.id}/signing`)).body.items.find((x) => x.order_ref.endsWith(o.id.slice(0, 8).toUpperCase()))
+    .returns[0].items.map((p) => [p.n, p.fixed, p.order ?? null, p.egrn ?? null]);
+  assert.deepEqual(await state(), [[1, false, 'none', null], [2, false, 'none', null], [3, false, null, null]]);
+  // Новая версия: дата оценки исправлена, площадь — нет; эксперт подписал и проверил заново.
+  const d2 = (await putTxt(ex, `/api/orders/${o.id}/results`, 'ОТЧЁТ ОБ ОЦЕНКЕ\nДата оценки: 03.10.2026\nКвартира общей площадью 45,1 кв. м', 'Отчёт 2.txt')).body.document;
+  assert.equal((await sign(d2, undefined, ex)).status, 201);
+  assert.deepEqual(await state(), [[1, false, 'none', null], [2, false, 'none', null], [3, false, null, null]], 'проверка до возврата не в счёт');
+  assert.equal((await ex.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
+  assert.deepEqual(await state(), [[1, false, 'gone', null], [2, false, 'kept', null], [3, false, null, null]]);
+  // «Расхождение с выпиской осталось» в «Сегодня» руководителя (2.257) — только по выписке, этих пунктов не считает.
+  const today = (await head.req('GET', '/api/today')).body;
+  const row = JSON.stringify(today).includes('egrn_kept') ? today : null;
+  assert.ok(!row || !JSON.stringify(row).match(/"egrn_kept":[1-9]/));
+  // Чужой руководитель не видит.
+  const stranger = await login(S, '+79990001609');
   assert.notEqual((await stranger.req('GET', `/api/orgs/${org.id}/signing`)).status, 200);
 });
 

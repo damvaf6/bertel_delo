@@ -128,19 +128,28 @@ function lastReturnState(d, it) {
   const egrn = r.items.filter((p) => p.egrn);
   const head = el('div', { class: left.length ? 'sig-state warn' : 'sig-state', 'data-role': 'points-state',
     text: `По Вашему замечанию от ${new Date(r.at).toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow' })}: эксперт отметил исправленными ${done} из ${r.items.length}${left.length ? ', осталось:' : ''}` });
-  if (!egrn.length) return [head, ...(left.length ? [pointsList(left)] : [])];
+  // 2.271: пункты из расхождений с заявкой и заданием на оценку — так же, своей строкой.
+  const order = r.items.filter((p) => p.order);
+  if (!egrn.length && !order.length) return [head, ...(left.length ? [pointsList(left)] : [])];
   // 2.247: есть пункты из расхождений с выпиской ЕГРН — каждый пункт целиком: отметка эксперта и что показала новая ИИ-проверка.
-  const kept = egrn.filter((p) => p.egrn === 'kept').length;
-  const gone = egrn.filter((p) => p.egrn === 'gone').length;
-  const none = egrn.length - kept - gone;
+  const sum = (list, key, title, role) => {
+    if (!list.length) return [];
+    const kept = list.filter((p) => p[key] === 'kept').length;
+    const gone = list.filter((p) => p[key] === 'gone').length;
+    const none = list.length - kept - gone;
+    return [el('div', { class: kept || none ? 'sig-state warn' : 'sig-state', 'data-role': role,
+      text: `${title} по новой ИИ-проверке эксперта: ${[gone ? `ушли — ${gone}` : '', kept ? `остались — ${kept}` : '',
+        none ? `не проверены после возврата — ${none}` : ''].filter(Boolean).join(', ')}` })];
+  };
+  const st = (p) => p.egrn ?? p.order;
   head.textContent = head.textContent.replace(/, осталось:$/, '');
   return [head,
-    el('div', { class: kept || none ? 'sig-state warn' : 'sig-state', 'data-role': 'points-egrn',
-      text: `Расхождения с выпиской ЕГРН по новой ИИ-проверке эксперта: ${[gone ? `ушли — ${gone}` : '', kept ? `остались — ${kept}` : '',
-        none ? `не проверены после возврата — ${none}` : ''].filter(Boolean).join(', ')}` }),
-    el('ul', { class: 'points' }, ...r.items.map((p) => el('li', { class: p.egrn === 'kept' || !p.fixed ? 'point' : 'point fixed', 'data-point': String(p.n), ...(p.egrn ? { 'data-egrn': p.egrn } : {}) },
+    ...sum(egrn, 'egrn', 'Расхождения с выпиской ЕГРН', 'points-egrn'),
+    ...sum(order, 'order', 'Расхождения с заявкой и заданием на оценку', 'points-order'),
+    el('ul', { class: 'points' }, ...r.items.map((p) => el('li', { class: st(p) === 'kept' || !p.fixed ? 'point' : 'point fixed', 'data-point': String(p.n),
+      ...(p.egrn ? { 'data-egrn': p.egrn } : {}), ...(p.order ? { 'data-order': p.order } : {}) },
       el('span', { text: `${p.n}. ${p.text}` }),
-      el('span', { class: 'muted', text: ` — ${p.fixed ? 'отмечено исправленным' : 'не отмечено'}${p.egrn ? ` · ${EGRN_STATE[p.egrn]}` : ''}` }))))];
+      el('span', { class: 'muted', text: ` — ${p.fixed ? 'отмечено исправленным' : 'не отмечено'}${st(p) ? ` · ${EGRN_STATE[st(p)]}` : ''}` }))))];
 }
 const EGRN_STATE = {
   gone: 'в новой ИИ-проверке расхождения нет',
