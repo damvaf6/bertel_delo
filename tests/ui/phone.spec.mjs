@@ -11052,6 +11052,8 @@ test('2.251: новый файл результата при открытом в
 
   await ep.goto(`/kabinet#order=${A}`);
   const ask = ep.locator('#replace-box');
+  // Вопрос знает о возврате только после загрузки дела — ждём замечание, иначе файл уйдёт раньше (сбой CI 16.10).
+  await expect(ep.locator('#org-returns')).toContainText('Нет даты осмотра');
   // Приложение к отчёту — «Нет»: возвращённый остаётся, вопрос уходит, у замечания — подсказка и та же замена кнопкой.
   await ep.locator('#result-file').setInputFiles({ name: 'Приложение фото.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 фото') });
   await expect(ask.locator('#replace-text')).toHaveText('«Приложение фото.pdf» — исправленная версия возвращённого «Отчёт Заменова.pdf»?');
