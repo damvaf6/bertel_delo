@@ -21,6 +21,20 @@ export function egrnSwapState() {
   return { left: open.filter((s) => findInDraft(body, { bad: s.g.bad, quote: s.quote })).length, done: swaps.length - open.length };
 }
 const swapped = () => document.dispatchEvent(new CustomEvent('egrn-swapped'));
+// 2.262: пункт замечания руководителя из расхождения с выпиской ЕГРН ({ rule, right }) — та же находка в ИИ-проверке, что
+// можно заменить одной кнопкой: { state: 'open' | 'done' | 'missing', was, now, swap() } или null (находки нет).
+const norm = (t) => String(t ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+export function egrnSwapFor(link) {
+  if (!swapsReady || !canFixInDraft() || !link?.rule) return null;
+  const same = swaps.filter((s) => s.rule === link.rule);
+  const s = link.right ? same.find((x) => norm(x.g.right) === norm(link.right)) : same.length === 1 ? same[0] : null;
+  if (!s) return null;
+  const d = s.result();
+  if (d) return { state: 'done', ...d };
+  if (s.swapped()) return { state: 'done', was: s.g.bad, now: s.g.right };
+  if (!findInDraft($('draft-text').value, { bad: s.g.bad, quote: s.quote })) return { state: 'missing', was: s.g.bad, now: s.g.right };
+  return { state: 'open', was: s.g.bad, now: s.g.right, swap: () => s.swap() };
+}
 
 // ——— Проверка результата ———
 
@@ -74,6 +88,7 @@ export async function loadReview(current) {
   $('review-checks').replaceChildren(...items);
   swapAllBox();
   swapsReady = true;
+  document.dispatchEvent(new CustomEvent('egrn-swaps-ready'));
   // «Остальное в порядке» (разбор 03.10.2026, 2.18): правила без отметки, где у ИИ нет замечаний и находок, — одной
   // кнопкой. Правила с подсказкой «посмотрите» человек отмечает сам.
   const rest = r.can_mark ? r.checks.filter((c) => !c.verdict && r.ai && hints.get(c.id)?.hint === 'ok') : [];
@@ -211,9 +226,10 @@ function mineFix(g, quote) {
 
 // 2.232: «Заменить на значение из выписки» — одной кнопкой, черновик сохраняется; под кнопкой — что было и что стало, и
 // «Отменить» (вернуть прежнее значение). Год из нескольких выписок и материал стен словом — без этой кнопки (swapValue).
-function egrnSwap(g, quote, miss) {
+function egrnSwap(g, quote, miss, rule) {
   const what = el('span', { 'data-role': 'egrn-swap-what' });
   let last = null;
+  let bulked = null;
   const undo = el('button', { class: 'link', type: 'button', 'data-action': 'egrn-unswap', onclick: async () => {
     try {
       const ok = last && await undoSwap(last);
@@ -228,17 +244,21 @@ function egrnSwap(g, quote, miss) {
   const done = el('p', { class: 'egrn-swap hidden', 'data-role': 'egrn-swap-done' }, what, ' ', undo);
   // 2.246: заменено вместе со всеми — отменяется кнопкой «Отменить всё».
   swaps.push({
-    g, quote,
+    g, quote, rule,
     swapped: () => !!last || btn.disabled,
+    // 2.262: что заменено (своей кнопкой или вместе со всеми) и замена той же кнопкой — из замечания руководителя.
+    result: () => (last ? { was: last.was, now: last.now } : bulked ? { was: bulked.was, now: bulked.now } : null),
+    swap: () => { btn.click(); },
     missed: () => { miss.textContent = `В тексте черновика «${g.bad}» нет — исправьте в файле отчёта (в выписке: ${g.right}).`; miss.classList.remove('hidden'); },
     bulk: (d) => {
+      bulked = d;
       btn.disabled = true;
       miss.classList.add('hidden');
       what.textContent = `Было «${d.was}» — стало «${d.now}», как в выписке ЕГРН (заменено вместе со всеми).`;
       undo.classList.add('hidden');
       done.classList.remove('hidden');
     },
-    unbulk: () => { btn.disabled = false; done.classList.add('hidden'); },
+    unbulk: () => { bulked = null; btn.disabled = false; done.classList.add('hidden'); },
   });
   const btn = el('button', { class: `secondary${canFixInDraft() ? '' : ' hidden'}`, type: 'button', 'data-action': 'egrn-swap', onclick: async () => {
     btn.disabled = true;
@@ -259,9 +279,9 @@ function egrnSwap(g, quote, miss) {
 // 2.218: находка по выписке ЕГРН — одной кнопкой строка из выписки, с которой сверяли, и сам файл выписки на этой странице.
 // 2.240: «Исправить в черновике» и «Заменить на значение из выписки» — видны сразу, как у находок по заявке и заданию
 // (раньше — только после «Выписка ЕГРН, стр. N»).
-function egrnPlace(g, quote) {
+function egrnPlace(g, quote, rule) {
   const { btn: fixBtn, miss } = g.bad ? draftFix(g, quote, 'egrn-draft') : { btn: null, miss: el('p', { class: 'hidden' }) };
-  const swap = g.bad && swapValue(g) ? egrnSwap(g, quote, miss) : { btn: null, done: null };
+  const swap = g.bad && swapValue(g) ? egrnSwap(g, quote, miss, rule) : { btn: null, done: null };
   const fix = [fixBtn, swap.btn].filter(Boolean);
   const box = el('div', { class: 'ai-egrn hidden', 'data-role': 'egrn-place' },
     el('span', { class: 'ai-mark-where', text: `${g.file}, ${g.where}: ` }),
@@ -318,7 +338,7 @@ function checkItem(order, r, c, hint) {
       el('span', { class: 'ai-mark-where', text: `${f.file}, ${f.where}: ` }),
       el('span', { text: f.text }),
       ...(f.quote ? [el('br'), el('q', { text: f.quote })] : []),
-      ...(f.egrn ? egrnPlace(f.egrn, f.quote) : []),
+      ...(f.egrn ? egrnPlace(f.egrn, f.quote, c.id) : []),
       ...(f.fix ? mineFix(f.fix, f.quote) : []))))] : []),
     // Отмеченные места: цитата из отчёта, файл и страница — сервер показывает только найденные в тексте цитаты.
     ...(hint?.marks?.length ? [el('ul', { class: 'ai-marks' }, ...hint.marks.map((m) => el('li', {},

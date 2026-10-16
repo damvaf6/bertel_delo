@@ -435,3 +435,6 @@ ul.checks li.ok { color: var(--ok); }
 .doc .sig-swap { margin: 6px 0; padding: 6px 8px; border-radius: 6px; background: #fff3d6; color: #7a4b00; }
 .doc .sig-swap.ok { background: #eef7ee; color: #1f5f1f; }
 .doc .sig-swap .points { margin: 4px 0; }
+/* 2.262: «Заменить по выписке» у пункта замечания руководителя */
+.point-swap { margin: 4px 0 6px 26px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.point-swap.ok { padding: 6px 8px; border-radius: 6px; background: #eef7ee; color: #1f5f1f; }
