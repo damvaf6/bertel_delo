@@ -692,6 +692,53 @@ test('2.258: эксперт перед подписью видит расхож�
   assert.notEqual((await stranger.req('GET', `/api/orders/${o.id}/documents`)).status, 200);
 });
 
+test('2.263: руководитель видит, что эксперт заменил значения по выписке в черновике, а подписал файл, собранный до замены', async () => {
+  const org = await makeOrg(S.sql, 'ООО «Собрано до замены»');
+  const head = await login(S, '+79990001534');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  const ex = await login(S, '+79990001535');
+  await makeSpecialist(S.sql, ex.user.id);
+  await addMember(S.sql, org.id, ex.user.id, 'member');
+  assert.equal((await ex.req('PATCH', '/api/me', { full_name: 'Эксперт Досборов' })).status, 200);
+  assert.equal((await ex.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  const o = await inWork('Квартира: файл собран до замены', ex);
+  const putTxt = (who, url, body, name) => who.req('POST', url, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } });
+  assert.equal((await putTxt(owner, `/api/orders/${o.id}/documents`, 'Выписка из Единого государственного реестра недвижимости\nВид объекта недвижимости: Помещение\nКадастровый номер: 77:01:0001001:4321\nПлощадь, м2: 47,3', 'Выписка ЕГРН.txt')).status, 201);
+  const report = 'ОТЧЁТ ОБ ОЦЕНКЕ\nКвартира, кадастровый номер 77:01:0001001:4321\nОбщей площадью 45,1 кв. м';
+  const save = async (body) => {
+    const cur = (await ex.req('GET', `/api/orders/${o.id}/draft`)).body.draft;
+    const r = await ex.req('PUT', `/api/orders/${o.id}/draft`, { body, from: cur?.id ?? null });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+  };
+  await save(report);
+  const d1 = (await putTxt(ex, `/api/orders/${o.id}/results`, report, 'Отчёт.txt')).body.document;
+  assert.equal((await ex.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
+  assert.equal((await sign(d1, undefined, ex)).status, 201);
+  const check = async () => (await head.req('GET', `/api/orgs/${org.id}/signing`)).body.items
+    .find((x) => x.order_ref.endsWith(o.id.slice(0, 8).toUpperCase())).documents.find((x) => x.id === d1.id).ai_check;
+  const c0 = await check();
+  assert.deepEqual(c0.swap, ['Площадь 45,1 кв. м не совпадает с площадью в выписке ЕГРН (47,3 кв. м)']);
+  assert.equal(c0.swapped, undefined, 'в черновике ещё прежнее значение');
+  // Эксперт заменил в черновике по выписке — файл собран до замены.
+  await S.sql`update documents set created_at = now() - interval '1 minute' where id = ${d1.id}`;
+  await save(report.replace('45,1', '47,3'));
+  const c1 = await check();
+  assert.deepEqual(c1.swapped, ['Площадь 45,1 кв. м не совпадает с площадью в выписке ЕГРН (47,3 кв. м)']);
+  assert.ok(c1.draft_at);
+  // Правка черновика без замены (значение снова прежнее) — пометки нет.
+  await save(report);
+  assert.equal((await check()).swapped, undefined);
+  // Черновик заменён до загрузки файла — тоже нет (файл собран уже после замены).
+  await save(report.replace('45,1', '47,3'));
+  await S.sql`update documents set created_at = now() + interval '1 minute' where id = ${d1.id}`;
+  assert.equal((await check()).swapped, undefined);
+  // Эксперт не видит этой пометки у себя (только руководитель), чужой руководитель — не видит дела.
+  assert.ok(!JSON.stringify(await docsOf(ex, o)).includes('"swapped"'));
+  const stranger = await login(S, '+79990001536');
+  assert.notEqual((await stranger.req('GET', `/api/orgs/${org.id}/signing`)).status, 200);
+});
+
 test('2.247: повторная подпись после «Вернуть эксперту» — у пункта из расхождения с выпиской видно, ушло ли оно в новой ИИ-проверке', async () => {
   const org = await makeOrg(S.sql, 'ООО «Пункты по выписке»');
   const head = await login(S, '+79990001531');

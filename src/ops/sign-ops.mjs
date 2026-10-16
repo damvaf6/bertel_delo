@@ -17,6 +17,7 @@ import { orderRef } from '../notify/registry.mjs';
 import { signatureFilename } from '../providers/sign.mjs';
 import { aiSignHints, egrnLinks, egrnLinkOf, egrnLinkState } from '../ai/ai.mjs';
 import { audit, text } from './util.mjs';
+import { latest } from './draft-ops.mjs';
 
 export const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 const MAX_SIGNATURE_BYTES = 256 * 1024;
@@ -320,7 +321,10 @@ export function signOps() {
           const wait = await signWait(sql, o);
           // 2.186: файл подписан экспертом и ждёт подписи организации — запускал ли эксперт ИИ-проверку этой версии и что в ней
           // осталось «посмотрите». Подсказка руководителю, подпись не держит.
-          const ai = await aiSignHints(sql, registry, o, docs.filter((d) => signs.get(d.id)?.expert && !signs.get(d.id)?.org).map((d) => d.id), { ok: true });
+          // 2.263: черновик эксперта — заменил ли он расхождения с выпиской уже после того, как загрузил подписанный файл.
+          const draft = await latest(sql, o.id);
+          const ai = await aiSignHints(sql, registry, o, docs.filter((d) => signs.get(d.id)?.expert && !signs.get(d.id)?.org).map((d) => d.id),
+            { ok: true, draft, created: new Map(docs.map((d) => [d.id, d.created_at])) });
           items.push({
             order_ref: orderRef(o.id),
             service: registry.service(o.module, o.service)?.service.name ?? o.service,

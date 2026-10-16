@@ -5,7 +5,7 @@ import { HttpError } from '../http/core.mjs';
 import { STATUS_NAME } from '../orders/workflow.mjs';
 import { APPROACHES, BASIS_KINDS } from '../modules/index.mjs';
 import { locateQuote } from './extract.mjs';
-import { swapValue } from '../../public/draftfind.js';
+import { findInDraft, swapValue } from '../../public/draftfind.js';
 
 export const DISCLAIMER = 'Это разъяснение искусственного интеллекта, а не юридическая услуга. Решение принимаете Вы; '
   + 'за точной оценкой обращайтесь к специалисту.';
@@ -374,7 +374,13 @@ export function egrnLinkState(link, review, docIds) {
   return same ? 'kept' : 'gone';
 }
 
-export async function aiSignHints(sql, registry, order, docIds, { ok = false } = {}) {
+// 2.263: заменено ли расхождение в черновике — значения из файла в тексте уже нет, а значение из выписки есть.
+const swappedIn = (body, f) => !findInDraft(body, { bad: f.egrn.bad, quote: f.quote })
+  && !!findInDraft(body, { bad: swapValue(f.egrn, f.egrn.bad), quote: f.quote });
+
+// draft — текущий черновик ({ body, at }), created — когда загружен каждый файл: для руководителя (2.263) — расхождения
+// с выпиской, которые эксперт заменил в черновике уже после того, как загрузил этот файл (swapped).
+export async function aiSignHints(sql, registry, order, docIds, { ok = false, draft = null, created = null } = {}) {
   const out = new Map();
   if (!docIds.length) return out;
   const rows = await sql`select items, files, at from ai_reviews
@@ -389,9 +395,13 @@ export async function aiSignHints(sql, registry, order, docIds, { ok = false } =
     const mine = att.flatMap((i) => i.found ?? []).filter((f) => f.egrn && (!file || f.file === file));
     const egrn = mine.map(egrnShort);
     // 2.258: из них те, что можно заменить в черновике одной кнопкой (как «Заменить на значение из выписки» — swapValue).
-    const swap = mine.filter((f) => f.egrn.bad && swapValue(f.egrn)).map(egrnShort);
+    const can = mine.filter((f) => f.egrn.bad && swapValue(f.egrn));
+    const swap = can.map(egrnShort);
+    const at = created?.get(id);
+    const swapped = draft && at && new Date(draft.at) > new Date(at) ? can.filter((f) => swappedIn(draft.body, f)).map(egrnShort) : [];
     out.set(id, att.length ? { state: 'attention', at: r.at, count: att.length, titles: att.map((i) => (titles.get(i.id) ?? i.id).split(':')[0].trim()).slice(0, 3),
-      ...(egrn.length ? { egrn: [...new Set(egrn)] } : {}), ...(swap.length ? { swap } : {}) }
+      ...(egrn.length ? { egrn: [...new Set(egrn)] } : {}), ...(swap.length ? { swap } : {}),
+      ...(swapped.length ? { swapped: [...new Set(swapped)], draft_at: draft.at } : {}) }
       : ok ? { state: 'ok', at: r.at } : null);
   }
   return out;

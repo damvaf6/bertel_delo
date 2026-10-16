@@ -11520,3 +11520,70 @@ test('2.262: «Заменить по выписке» прямо в пункте
   await expect(pt1.locator('[data-role^="point-swap"]')).toHaveCount(0);
   for (const p of [ep, hp, cp]) await p.context().close();
 });
+
+test('2.263: «Подписи организации» — эксперт заменил по выписке в черновике, а подписал файл, собранный до замены', async ({ browser, baseURL }) => {
+  test.setTimeout(90_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), hp = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990026301'), head = await signIn(hp, '+79990026302');
+  const customer = await signIn(cp, '+79990026303');
+  const { A, orgId } = await db(async (c) => {
+    const { rows: [org] } = await c.query('insert into organizations (name) values ($1) returning id', [`ООО «Собрано до замены ${Date.now() % 100000}»`]);
+    await c.query("update users set full_name = 'Досборов Денис' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Квартира: собрано до замены', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"deal","region":"moscow","object_type":"flat","address":"г. Москва, Досборная ул., д. 3, кв. 9","area":"47.3"}') returning id`,
+    [customer.id, expert.id, inDays(6)]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now() - interval '2 days')", [o.id, expert.id]);
+    return { A: o.id, orgId: org.id };
+  });
+  const txt = (name) => ({ ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) });
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from(['Выписка из Единого государственного реестра недвижимости об объекте недвижимости', 'Вид объекта недвижимости: Помещение',
+      'Кадастровый номер: 77:02:0030030:2636', 'Площадь, м2: 47,3', 'Адрес (местоположение): г. Москва, Досборная ул., д. 3, кв. 9'].join('\n')),
+    headers: txt('Выписка ЕГРН.txt'),
+  })).status()).toBe(201);
+  // Черновик и отчёт с площадью не по выписке; эксперт подписал, проверил ИИ и заменил в черновике уже после.
+  await ep.goto(`/kabinet#order=${A}`);
+  await ep.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const draftText = ep.getByLabel('Текст заключения');
+  await draftText.fill(`${await draftText.inputValue()}\nОбщей площадью 45,1 кв. м — по техническому паспорту.`);
+  await ep.getByRole('button', { name: 'Сохранить правку' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Правка сохранена');
+  const up = await ep.request.post(`/api/orders/${A}/results`, {
+    data: Buffer.from(['ОТЧЁТ ОБ ОЦЕНКЕ', 'Квартира, кадастровый номер 77:02:0030030:2636', 'Общей площадью 45,1 кв. м — по техническому паспорту.'].join('\n')),
+    headers: txt('Отчёт.txt'),
+  });
+  expect(up.status()).toBe(201);
+  const docId = (await up.json()).document.id;
+  expect((await ep.request.post(`/api/documents/${docId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  expect((await ep.request.post(`/api/orders/${A}/review/ai`, { headers: H })).status()).toBe(201);
+
+  // До замены — у руководителя пометки нет.
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const doc = hp.locator(`#org-sign li.doc[data-doc="${docId}"]`);
+  await expect(doc.locator('[data-role="ai-egrn"]')).toBeVisible();
+  await expect(doc.locator('[data-role="ai-swapped"]')).toHaveCount(0);
+
+  await ep.reload();
+  const areaFind = ep.locator('#review-checks .ai-found li').filter({ hasText: 'Площадь 45,1 кв. м' });
+  await areaFind.getByRole('button', { name: 'Заменить на значение из выписки' }).click();
+  await expect(draftText).toHaveValue(/Общей площадью 47,3 кв\. м/);
+
+  await hp.reload();
+  const line = doc.locator('[data-role="ai-swapped"]');
+  await expect(line).toContainText(/Эксперт заменил в черновике по выписке ЕГРН .+: Площадь 45,1 кв\. м не совпадает с площадью в выписке ЕГРН \(47,3 кв\. м\)\. Этот файл загружен .+ — до замены, в нём прежние значения\./);
+  await expect(hp.locator('#org-sign-filter [data-sign-filter="swapped"]')).toHaveText('Файл собран до замены по выписке · 1');
+  await line.scrollIntoViewIfNeeded();
+  await shot(hp, 'd39-rukovoditel-fajl-do-zameny');
+  await line.getByRole('button', { name: 'Вернуть: собрать Word заново' }).click();
+  const area = hp.locator(`#ret-${docId}`);
+  await expect(area).toBeVisible();
+  await expect(area).toHaveValue(/соберите Word заново из черновика, загрузите и подпишите новый файл, а этот удалите/);
+  await shot(hp, 'd40-rukovoditel-vernut-sobrat-word');
+  for (const p of [ep, hp, cp]) await p.context().close();
+});
