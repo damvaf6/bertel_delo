@@ -5,6 +5,7 @@ import { HttpError } from '../http/core.mjs';
 import { STATUS_NAME } from '../orders/workflow.mjs';
 import { APPROACHES, BASIS_KINDS } from '../modules/index.mjs';
 import { locateQuote } from './extract.mjs';
+import { swapValue } from '../../public/draftfind.js';
 
 export const DISCLAIMER = 'Это разъяснение искусственного интеллекта, а не юридическая услуга. Решение принимаете Вы; '
   + 'за точной оценкой обращайтесь к специалисту.';
@@ -385,9 +386,12 @@ export async function aiSignHints(sql, registry, order, docIds, { ok = false } =
     const att = (r.items ?? []).filter((i) => i.hint === 'attention');
     // 2.225: находки, сверенные с выпиской ЕГРН из дела, — коротко, одной строкой у файла (только по этому файлу).
     const file = (r.files ?? []).find((f) => f.id === id)?.name;
-    const egrn = att.flatMap((i) => i.found ?? []).filter((f) => f.egrn && (!file || f.file === file)).map(egrnShort);
+    const mine = att.flatMap((i) => i.found ?? []).filter((f) => f.egrn && (!file || f.file === file));
+    const egrn = mine.map(egrnShort);
+    // 2.258: из них те, что можно заменить в черновике одной кнопкой (как «Заменить на значение из выписки» — swapValue).
+    const swap = mine.filter((f) => f.egrn.bad && swapValue(f.egrn)).map(egrnShort);
     out.set(id, att.length ? { state: 'attention', at: r.at, count: att.length, titles: att.map((i) => (titles.get(i.id) ?? i.id).split(':')[0].trim()).slice(0, 3),
-      ...(egrn.length ? { egrn: [...new Set(egrn)] } : {}) }
+      ...(egrn.length ? { egrn: [...new Set(egrn)] } : {}), ...(swap.length ? { swap } : {}) }
       : ok ? { state: 'ok', at: r.at } : null);
   }
   return out;

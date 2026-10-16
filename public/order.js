@@ -4,9 +4,9 @@
 import { api, el, say, formatPhone, formatSize, ROLE_RU, quoted } from '/common.js';
 import { state, show, notFoundView } from '/shell.js';
 import { loadMatch } from '/match.js';
-import { loadReview, loadChat } from '/work.js';
+import { loadReview, loadChat, egrnSwapState } from '/work.js';
 import { loadMoney } from '/money.js';
-import { loadDraft } from '/draft.js';
+import { loadDraft, canFixInDraft } from '/draft.js';
 import { loadAnalogs } from '/analogs.js';
 import { loadInspection } from '/inspect.js';
 import { loadOnsite } from '/onsite.js';
@@ -662,8 +662,47 @@ function unfixedText(returns) {
 }
 function signConfirmText(d) {
   const ai = aiCheckText(d.ai_check);
-  return unfixedText(returnsForDoc(d)) + (ai ? `${ai}\n\n` : '') + SIGN_CONFIRM(d.filename);
+  return unfixedText(returnsForDoc(d)) + (ai ? `${ai}\n\n` : '') + swapConfirmText(d) + SIGN_CONFIRM(d.filename);
 }
+
+// 2.258: в ИИ-проверке этого файла остались расхождения с выпиской ЕГРН, которые можно заменить в черновике одной кнопкой
+// («Заменить на значение из выписки», 2.232/2.246). Подсказка в окне подписи: заменить, собрать Word заново, загрузить —
+// тогда подписывать; заменили — напоминание собрать Word. Подписать можно и так.
+const swapsOf = (d) => d.ai_check?.swap ?? [];
+const swapsDone = () => { const st = egrnSwapState(); return !!st && st.left === 0 && st.done > 0; };
+const swapsNone = () => { const st = egrnSwapState(); return !!st && st.left === 0 && st.done === 0; };
+function swapConfirmText(d) {
+  const list = swapsOf(d);
+  if (!list.length) return '';
+  if (swapsDone()) return 'Расхождения с выпиской ЕГРН заменены в черновике, но этот файл собран до замены — соберите Word заново и загрузите его.\n\n';
+  return `Расхождения с выпиской ЕГРН, которые можно заменить в черновике: ${list.length}.\n`
+    + list.map((t) => `— ${clip(t)}`).join('\n') + '\nВ файле отчёта они останутся, если подписать его сейчас.\n\n';
+}
+function signSwapHint(d) {
+  const list = swapsOf(d);
+  if (!list.length) return [];
+  if (swapsDone()) return [el('div', { class: 'sig-swap ok', 'data-sig': 'egrn-swapped', text: 'Расхождения с выпиской ЕГРН заменены в черновике. Этот файл собран до замены — соберите Word заново, загрузите его и подпишите новый файл.' })];
+  const n = list.length;
+  if (swapsNone()) return [el('div', { class: 'sig-swap warn', 'data-sig': 'egrn-swap-file', text: `В ИИ-проверке остались расхождения с выпиской ЕГРН: ${n}. В тексте черновика этих значений нет — исправьте их в файле отчёта и загрузите его заново. Подписать можно и так.` })];
+  const btn = el('button', { class: `secondary${canFixInDraft() ? '' : ' hidden'}`, type: 'button', 'data-action': 'sig-egrn-swap', onclick: () => toSwapAll() },
+    n > 1 ? `Заменить всё по выписке (${n})` : 'Заменить по выписке');
+  return [el('div', { class: 'sig-swap warn', 'data-sig': 'egrn-swap' },
+    el('div', { text: `В ИИ-проверке остались расхождения с выпиской ЕГРН, которые можно заменить в черновике: ${n}.` }),
+    el('ul', { class: 'points' }, ...list.slice(0, 3).map((t) => el('li', { text: clip(t, 160) })), ...(n > 3 ? [el('li', { class: 'muted', text: `и ещё ${n - 3}` })] : [])),
+    el('div', { class: 'muted', text: 'Замените, соберите Word заново и загрузите исправленный файл — тогда подписывайте. Подписать можно и так.' }),
+    el('div', { class: 'row' }, btn))];
+}
+// Та же замена, что в ИИ-проверке: «Заменить всё по выписке», а если находка одна — её «Заменить на значение из выписки».
+function toSwapAll() {
+  reveal('ai-review-box');
+  const all = document.querySelector('#ai-swap-all:not(.hidden) [data-action="egrn-swap-all"]:not(:disabled)');
+  const one = document.querySelector('#review-checks [data-action="egrn-swap"]:not(:disabled):not(.hidden)');
+  const btn = all ?? one;
+  if (!btn) { toAiReview(); return; }
+  btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  btn.click();
+}
+document.addEventListener('egrn-swapped', () => { if (current && lastDocs) loadDocs().catch(() => {}); });
 
 function toAiReview() {
   if ($('ai-review-box').classList.contains('hidden')) return;
@@ -682,6 +721,7 @@ function signatureBlock(d, { canSign, signOrg, manual = false, canCheck = false,
   if (manual && canSign && (!expert || expert.manual_check === 'bad')) {
     lines.push(...(expert ? [] : [el('div', { class: 'sig-state', text: 'Не подписан КЭП — без подписи на проверку не сдать' })]),
       ...signReturnPoints(d),
+      ...signSwapHint(d),
       el('div', { class: 'row' }, ...uploadSignatureButton(d.filename, (file) => uploadSignature(d, file), 'Загрузить файл подписи (.sig)')),
       el('div', { class: 'muted', text: MANUAL_HINT }),
       memo('Как подписать файл КЭП', SIGN_HOWTO, 'sign-howto'));
@@ -690,6 +730,7 @@ function signatureBlock(d, { canSign, signOrg, manual = false, canCheck = false,
       ...signReturnPoints(d),
       ...(d.ai_check ? [el('div', { class: 'sig-ai', 'data-sig': `ai-${d.ai_check.state}`, text: `${aiCheckText(d.ai_check)} ` },
         el('button', { class: 'link', 'data-action': 'to-ai-review', onclick: toAiReview }, 'К ИИ-проверке'))] : []),
+      ...signSwapHint(d),
       el('div', { class: 'row' },
         el('button', { 'data-action': 'sign', onclick: () => signDoc(d) }, 'Подписать'),
         ...uploadSignatureButton(d.filename, (file) => uploadSignature(d, file))),
@@ -773,7 +814,7 @@ async function signAll() {
   const docs = (lastDocs?.documents ?? []).filter((d) => d.kind === 'result' && d.own !== false && !d.signatures?.expert);
   if (!docs.length) return;
   const ai = docs.filter((d) => d.ai_check).map((d) => `${d.filename}: ${aiCheckText(d.ai_check)}`);
-  if (!confirm(`${unfixedText(docs.flatMap(returnsForDoc))}${ai.length ? `${ai.join('\n')}\n\n` : ''}${SIGN_CONFIRM(docs.map((d) => d.filename).join(', '))}\n\nФайлов: ${docs.length}.`)) return;
+  if (!confirm(`${unfixedText(docs.flatMap(returnsForDoc))}${ai.length ? `${ai.join('\n')}\n\n` : ''}${docs.map(swapConfirmText).find(Boolean) ?? ''}${SIGN_CONFIRM(docs.map((d) => d.filename).join(', '))}\n\nФайлов: ${docs.length}.`)) return;
   say($('doc-msg'), 'Подписываем…', 'ok');
   try {
     for (const d of docs) await api('POST', `/api/documents/${d.id}/sign`, { confirm: true });

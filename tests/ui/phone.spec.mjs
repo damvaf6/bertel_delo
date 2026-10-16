@@ -1232,6 +1232,24 @@ test('ИИ-проверка результата: специалист пере�
   await expect(areaFind.getByRole('button', { name: 'Заменить на значение из выписки' })).toBeEnabled();
   await expect(swapAllBox.getByRole('button', { name: /^Заменить всё по выписке/ })).toBeEnabled();
   await shot(sp, '54w-specialist-zamenit-vse-otmeneno');
+  // 2.258: в окне подписи файла — расхождения с выпиской, которые можно заменить в черновике, и та же «Заменить всё по выписке».
+  const sigSwap = aiDoc.locator('[data-sig="egrn-swap"]');
+  await expect(sigSwap).toContainText(/^В ИИ-проверке остались расхождения с выпиской ЕГРН, которые можно заменить в черновике: \d+\./);
+  await expect(sigSwap).toContainText('Площадь 45,1 кв. м не совпадает с площадью в выписке ЕГРН (47,3 кв. м)');
+  await expect(sigSwap).toContainText('Замените, соберите Word заново и загрузите исправленный файл — тогда подписывайте.');
+  await sigSwap.scrollIntoViewIfNeeded();
+  await shot(sp, '54x-specialist-podpis-zamenit-po-vypiske');
+  await sigSwap.getByRole('button', { name: /^Заменить всё по выписке \(\d+\)$/ }).click();
+  await expect(swapAllBox.locator('[data-role="egrn-swap-all-what"]')).toContainText(/^Заменено по выписке ЕГРН: \d+\./);
+  await expect(draftText).toHaveValue(/Кадастровый номер объекта 77:01:0001001:4321\./);
+  await expect(aiDoc.locator('[data-sig="egrn-swapped"]')).toHaveText('Расхождения с выпиской ЕГРН заменены в черновике. Этот файл собран до замены — соберите Word заново, загрузите его и подпишите новый файл.');
+  await expect(aiDoc.locator('[data-sig="egrn-swap"]')).toHaveCount(0);
+  await aiDoc.locator('[data-sig="egrn-swapped"]').scrollIntoViewIfNeeded();
+  await shot(sp, '54y-specialist-podpis-zameneno');
+  // Отменили — подсказка снова с кнопкой.
+  await swapAllBox.getByRole('button', { name: 'Отменить всё' }).click();
+  await expect(draftText).toHaveValue(/Кадастровый номер объекта 77:01:0001001:1234\./);
+  await expect(aiDoc.locator('[data-sig="egrn-swap"]')).toBeVisible();
   // 2.231: у находки, сверенной с заданием на оценку, — тоже «Исправить в черновике»: дата оценки, которая разошлась с заданием.
   const dateFind = req.locator('.ai-found li').filter({ hasText: 'Дата оценки в отчёте 01.10.2026' });
   await draftText.fill(`${await draftText.inputValue()}\nОценка выполнена по состоянию на «01» октября 2026 г.`);
