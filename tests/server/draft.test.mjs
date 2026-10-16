@@ -797,6 +797,12 @@ test('2.232: замена на значение из выписки: число 
   assert.equal(swapValue({ bad: '1975', right: '1984 или 1985' }, '1975'), null);
   assert.equal(swapValue({ bad: 'кирпичный', right: 'Панельные' }, 'кирпичный'), null);
   assert.equal(swapValue({ bad: '45,1', right: '' }), null);
+  // 2.260: назначение (2.259) — «нежилое» ↔ «жилое» в той же форме и с той же заглавной, что в тексте черновика.
+  assert.equal(swapValue({ bad: 'нежилое', right: 'жилое', flip: 'не' }, 'нежилое'), 'жилое');
+  assert.equal(swapValue({ bad: 'нежилое', right: 'жилое', flip: 'не' }, 'Нежилого'), 'Жилого');
+  assert.equal(swapValue({ bad: 'жилое', right: 'нежилое', flip: 'не' }, 'Жилое'), 'Нежилое');
+  assert.equal(swapValue({ bad: 'жилом', right: 'нежилом', flip: 'не' }), 'нежилом');
+  assert.equal(swapValue({ bad: 'нежилое', right: 'жилое' }, 'нежилое'), null);
   assert.equal(swapValue(null), null);
 });
 

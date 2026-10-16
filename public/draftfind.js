@@ -56,10 +56,18 @@ export function findInDraft(body, { bad, quote } = {}) {
 export function swapValue(g, found) {
   const right = String(g?.right ?? '').replace(/\s+/g, ' ').trim();
   const bad = String(g?.bad ?? '');
+  // 2.260: «нежилое» ↔ «жилое» (2.259, `flip: 'не'`) — та же форма слова: приставка снимается или ставится у того, что в тексте.
+  if (g?.flip === 'не' && right) return flipNe(String(found ?? bad));
   if (!right || / или /.test(right) || !/\d/.test(bad) || right.length > 200) return null;
   const num = /^\d[\d\s]*([,.])\d+$/;
   const was = num.exec(String(found ?? ''));
   return was && num.test(right) ? right.replace(/[,.]/, was[1]) : right;
+}
+
+function flipNe(word) {
+  if (!/^\p{L}+$/u.test(word)) return null;
+  if (/^не/iu.test(word)) { const rest = word.slice(2); return /^Н/u.test(word) ? rest[0].toUpperCase() + rest.slice(1) : rest; }
+  return /^\p{Lu}/u.test(word) ? `Не${word[0].toLowerCase()}${word.slice(1)}` : `не${word}`;
 }
 
 // 2.246: «Заменить всё по выписке» — все замены одним проходом по тексту: items — [{ g, quote }] (находки по выписке ЕГРН).
