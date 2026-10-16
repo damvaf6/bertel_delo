@@ -386,7 +386,8 @@ export async function orgPart(sql, org, registry, today, { actorId = null } = {}
       // После возврата расхождение с выпиской ЕГРН осталось в новой ИИ-проверке эксперта (2.257, как в «Подписи организации»,
       // 2.247) — сколько таких пунктов последнего возврата; для строки здесь и утренней сводки.
       const last = returns.at(-1);
-      const kept = last ? [...(await returnEgrn(sql, o.id, last, docs)).values()].filter((s) => s === 'kept').length : 0;
+      const st = last ? await returnEgrn(sql, o.id, last, docs) : new Map();
+      const kept = last ? last.links.filter((l) => l.kind !== 'order' && st.get(l.n) === 'kept').length : 0;
       toSign.push(view(o, { files: waiting, reminded_at: w?.reminded_at ?? null, since: w?.since ?? null,
         long: !!w?.since && Date.now() - new Date(w.since).getTime() >= SIGN_LONG_DAYS * 86400_000, egrn_kept: kept }));
     }
