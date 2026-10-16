@@ -11201,3 +11201,213 @@ test('2.253, 2.254: размер доли из выписки ЕГРН — в ч
   await shot(ep, 'd21b-ekspert-dolya-zamenena');
   for (const p of [ep, cp]) await p.context().close();
 });
+
+// 2.260: прогон «как эксперт и руководитель» по пачке 2.251–2.259 — одна организация, одно дело о доле в квартире. Выписка
+// ЕГРН: общая долевая собственность, доля 1/2, жилое помещение. Черновик берёт долю из выписки (2.254); в отчёте — 1/3 и
+// «нежилое» (2.253, 2.259); в окне подписи — «Заменить всё по выписке» (2.258); эксперт уходит в дни «не принимаю дела» —
+// у руководителя срок дела в эти дни и переход к делу (2.255); пока эксперта не было, заказчик прислал техпаспорт после
+// ИИ-проверки — «Проверьте заново» (2.256); руководитель вернул отчёт, эксперт загрузил исправленный и ответил «Нет, это
+// приложение» (2.251) — у руководителя пометки у обоих файлов (2.252); эксперт заменил возвращённый кнопкой у замечания,
+// в новой ИИ-проверке доля осталась — в «Сегодня» и утренней сводке руководителя (2.257).
+test('прогон 2.260: эксперт и руководитель по пачке 2.251–2.259 на одном деле', async ({ browser, baseURL }) => {
+  test.setTimeout(240_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), hp = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990025301'), head = await signIn(hp, '+79990025302');
+  const customer = await signIn(cp, '+79990025303');
+  const { orgId, A } = await db(async (c) => {
+    const { rows: [org] } = await c.query('insert into organizations (name) values ($1) returning id', [`ООО «Прогон-11 ${Date.now() % 100000}»`]);
+    await c.query("update users set full_name = 'Одиннадцатов Лев' where id = $1", [expert.id]);
+    await c.query("update users set full_name = 'Главная Ольга' where id = $1", [head.id]);
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now() - interval '1 year'), ($1, $3, 'member', now() - interval '1 year')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    await c.query("insert into morning_digests (user_id, day) values ($1, (now() at time zone 'Europe/Moscow')::date), ($2, (now() at time zone 'Europe/Moscow')::date)", [expert.id, head.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Одиннадцатая пачка: доля', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"division","region":"moscow","object_type":"share","address":"г. Москва, Одиннадцатая ул., д. 11, кв. 11","area":"52","share_size":"1/3"}') returning id`,
+    [customer.id, expert.id, inDays(2)]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now() - interval '5 days')", [o.id, expert.id]);
+    return { orgId: org.id, A: o.id };
+  });
+  const ref = `№ ${A.slice(0, 8).toUpperCase()}`;
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from(['Выписка из Единого государственного реестра недвижимости об объекте недвижимости',
+      `${inDays(-2).split('-').reverse().join('.')} № КУВИ-001/2026-11111111`, 'Вид объекта недвижимости: Помещение',
+      'Кадастровый номер: 77:11:0011011:1111', 'Площадь, м2: 52', 'Назначение помещения: Жилое помещение',
+      'Адрес (местоположение): г. Москва, Одиннадцатая ул., д. 11, кв. 11',
+      'Правообладатель (правообладатели): 1.1. Долин Денис Денисович', '1.2. Долина Дарья Денисовна',
+      'Вид, номер и дата государственной регистрации права: 2.1. Общая долевая собственность, № 77:11:0011011:1111-77/051/2021-5, 12.04.2021, доля в праве 1/2'].join('\n')),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Выписка ЕГРН.txt') },
+  })).status()).toBe(201);
+  expect((await ep.request.post(`/api/orders/${A}/doc-requests`, { data: { items: ['tech_plan'] }, headers: H })).status()).toBe(201);
+
+  // 2.254: черновик — доля из выписки в таблице задания, доля из заявки рядом.
+  await ep.goto(`/kabinet#order=${A}`);
+  await ep.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const draftText = ep.getByLabel('Текст заключения');
+  await expect(draftText).toHaveValue(/\| Размер доли \(если оценивается доля\) \| 1\/2 \(по выписке ЕГРН; в заявке — 1\/3\) \|/);
+  await expect(ep.locator('#draft-state')).toContainText('Размер доли 1/2 — как в выписке ЕГРН «Выписка ЕГРН.txt» (стр. 1); в заявке — 1/3 — сверьте.');
+  await ep.locator('#draft-state').scrollIntoViewIfNeeded();
+  await shot(ep, 'd23-progon11-ekspert-chernovik-dolya');
+  await draftText.fill(`${await draftText.inputValue()}\nОбъект оценки: 1/3 доли в праве общей долевой собственности на квартиру.\nНазначение помещения: нежилое.`);
+  await ep.getByRole('button', { name: 'Сохранить правку' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Правка сохранена');
+
+  const report = (lines) => Buffer.from(['ОТЧЁТ ОБ ОЦЕНКЕ № 11/2026', 'Адрес объекта оценки: г. Москва, Одиннадцатая ул., д. 11, кв. 11',
+    'Кадастровый номер 77:11:0011011:1111', 'Общая площадь, кв. м: 52', ...lines, 'Аналог 1: доля 1/4 в квартире', 'Итоговая стоимость доли 4 300 000 руб.'].join('\n'));
+  const up = await ep.request.post(`/api/orders/${A}/results`, {
+    data: report(['Объект оценки: 1/3 доли в праве общей долевой собственности на квартиру', 'Назначение помещения: нежилое']),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Отчёт Одиннадцатова.txt') },
+  });
+  expect(up.status()).toBe(201);
+  const resultId = (await up.json()).document.id;
+  await ep.reload();
+  await ep.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(ep.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  // 2.253: доля в отчёте — не как в выписке; аналог с долей 1/4 не в счёт.
+  const rights = ep.locator('#review-checks > li[data-check="rights"]');
+  const shareFind = rights.locator('.ai-found li').filter({ hasText: 'Доля 1/3' });
+  await expect(shareFind).toContainText('Доля 1/3 не совпадает с выпиской ЕГРН «Выписка ЕГРН.txt» (доля в праве 1/2, стр. 1)');
+  await expect(rights).not.toContainText('Доля 1/4');
+  await shareFind.scrollIntoViewIfNeeded();
+  await shot(ep, 'd24-progon11-ekspert-dolya');
+  // 2.259: назначение — «нежилое», а в выписке жилое помещение.
+  const useFind = ep.locator('#review-checks > li[data-check="realty_identity"] .ai-found li').filter({ hasText: 'Назначение помещения' });
+  await expect(useFind).toContainText('Назначение помещения «нежилое» не совпадает с выпиской ЕГРН «Выписка ЕГРН.txt» («Жилое помещение», стр. 1)');
+  await useFind.getByRole('button', { name: 'Выписка ЕГРН, стр. 1' }).click();
+  await expect(useFind.locator('[data-role="egrn-place"]')).toContainText('Назначение помещения: Жилое помещение');
+  await useFind.scrollIntoViewIfNeeded();
+  await shot(ep, 'd25-progon11-ekspert-naznachenie');
+  // 2.258: в окне подписи — обе находки можно заменить в черновике одной кнопкой.
+  const doc = ep.locator(`#docs li.doc[data-doc="${resultId}"]`);
+  const sigSwap = doc.locator('[data-sig="egrn-swap"]');
+  await expect(sigSwap).toContainText('В ИИ-проверке остались расхождения с выпиской ЕГРН, которые можно заменить в черновике: 2.');
+  await sigSwap.scrollIntoViewIfNeeded();
+  await shot(ep, 'd26-progon11-ekspert-podpis-zamenit');
+  await sigSwap.getByRole('button', { name: 'Заменить всё по выписке (2)' }).click();
+  await expect(doc.locator('[data-sig="egrn-swapped"]')).toBeVisible();
+  await expect(draftText).toHaveValue(/Объект оценки: 1\/2 доли в праве общей долевой собственности на квартиру\.\nНазначение помещения: жилое\./);
+
+  // 2.255: эксперт не принимает дела со завтра на четыре дня, срок дела — в эти дни; у руководителя — дело в списке.
+  await ep.goto('/kabinet#specialist');
+  await ep.locator('#specialist-away-from').fill(inDays(1));
+  await ep.locator('#specialist-away-until').fill(inDays(4));
+  await ep.locator('#specialist-away-note').fill('отпуск');
+  await ep.locator('#specialist-away-set').click();
+  await expect(ep.locator('#specialist-away-now')).toContainText('Вы не принимаете новые дела с ');
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const team = hp.locator('#org-schedule-box #org-schedule-team');
+  await expect(team.locator('[data-role="nobody-due"]')).toHaveText('Срок сдачи в эти дни: 1');
+  const nd = team.locator('ul.nobody-due > li');
+  await expect(nd).toHaveAttribute('data-day', inDays(2));
+  await expect(nd).toContainText(ref);
+  await expect(nd.locator('.what')).toHaveText('Одиннадцатов Лев');
+  await team.scrollIntoViewIfNeeded();
+  await shot(hp, 'd27-progon11-rukovoditel-nikto-srok');
+  await nd.locator('button').click();
+  const caseRow = hp.locator(`#org-cases > li[data-case="${ref}"]`);
+  await expect(caseRow).toHaveClass(/flash/);
+  await expect(caseRow).toBeInViewport();
+  await shot(hp, 'd28-progon11-rukovoditel-k-delu');
+
+  // 2.256: в дни «не принимаю» заказчик прислал техпаспорт — уже после ИИ-проверки; эксперт вернулся.
+  await cp.goto(`/kabinet#order=${A}&to=docs`);
+  await cp.getByLabel('Файл: Технический паспорт БТИ или поэтажный план').setInputFiles({ name: 'Техпаспорт.txt', mimeType: 'text/plain', buffer: Buffer.from('Поэтажный план') });
+  await expect(cp.locator('#docreq-list li').filter({ hasText: 'Технический паспорт' })).toContainText('Техпаспорт.txt');
+  await db(async (c) => {
+    await c.query("update ai_reviews set at = now() - interval '6 days' where order_id = $1", [A]);
+    await c.query("update doc_requests set requested_at = now() - interval '7 days', fulfilled_at = now() - interval '1 day' where order_id = $1", [A]);
+    await c.query('update specialists set away_since = $2::date, away_until = $3::date, away_back_for = $3::date where user_id = $1', [expert.id, inDays(-4), inDays(0)]);
+  });
+  await ep.goto('/kabinet#specialist&to=back');
+  const row = ep.locator(`#back-box [data-back-order="${A}"]`);
+  await expect(row).toContainText('Проверьте заново: Одиннадцатая пачка: доля');
+  await expect(row).toContainText('пришло после ИИ-проверки: Технический паспорт БТИ или поэтажный план');
+  await row.scrollIntoViewIfNeeded();
+  await shot(ep, 'd29-progon11-ekspert-poka-ne-bylo-proverte');
+  await row.locator('a').click();
+  await expect(ep).toHaveURL(new RegExp(`#order=${A}&to=review$`));
+  const re = ep.locator('#ai-review-recheck');
+  await expect(re).toBeInViewport();
+  await re.getByRole('button', { name: 'Проверить заново' }).click();
+  await expect(ep.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  await expect(re).toBeHidden();
+
+  // Эксперт подписал прежний файл; руководитель вернул его пунктами из расхождений с выпиской.
+  expect((await ep.request.post(`/api/documents/${resultId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  await hp.goto(`/kabinet#org=${orgId}`);
+  await hp.reload();
+  const item = hp.locator('#org-sign > li[data-item]').filter({ hasText: 'Отчёт Одиннадцатова.txt' });
+  await expect(item.locator('[data-role="ai-egrn"]')).toContainText('Расхождения с выпиской ЕГРН (2)');
+  await item.locator('[data-action="org-return"]').click();
+  const area = item.locator('textarea');
+  const points = (await area.inputValue()).split('\n');
+  expect(points).toHaveLength(2);
+  await area.scrollIntoViewIfNeeded();
+  await shot(hp, 'd30-progon11-rukovoditel-vernut');
+  await item.locator('[data-action="org-return-send"]').click();
+  await expect(hp.locator('#org-sign-msg')).toHaveText('Файл возвращён эксперту с замечанием — его подпись снята');
+
+  // 2.251: исправленный отчёт (назначение исправлено, долю забыл) — «Это исправленная версия?»; эксперт ошибся: «Нет».
+  await ep.goto(`/kabinet#order=${A}`);
+  await ep.locator('#result-file').setInputFiles({ name: 'Отчёт Одиннадцатова испр.txt', mimeType: 'text/plain',
+    buffer: report(['Объект оценки: 1/3 доли в праве общей долевой собственности на квартиру', 'Назначение помещения: жилое']) });
+  const ask = ep.locator('#replace-box');
+  await expect(ask.locator('#replace-text')).toHaveText('«Отчёт Одиннадцатова испр.txt» — исправленная версия возвращённого «Отчёт Одиннадцатова.txt»?');
+  await ask.scrollIntoViewIfNeeded();
+  await shot(ep, 'd31-progon11-ekspert-ispravlennaya-vopros');
+  await ask.getByRole('button', { name: 'Нет, это приложение' }).click();
+  await expect(ask).toBeHidden();
+  const newId = await db(async (c) => (await c.query("select id from documents where order_id = $1 and filename = 'Отчёт Одиннадцатова испр.txt'", [A])).rows[0].id);
+  const ret = await db((c) => c.query('select id from org_returns where order_id = $1', [A]));
+  for (const n of [1, 2]) expect((await ep.request.put(`/api/orders/${A}/org-returns/${ret.rows[0].id}/items/${n}`, { data: { fixed: true }, headers: H })).status()).toBe(200);
+  expect((await ep.request.post(`/api/documents/${newId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+
+  // 2.252: у руководителя — пометки у возвращённого и у нового файла.
+  await hp.reload();
+  const was = hp.locator(`#org-sign li.doc[data-doc="${resultId}"]`);
+  const now = hp.locator(`#org-sign li.doc[data-doc="${newId}"]`);
+  await expect(was.locator('[data-role="beside-new"]')).toContainText('Эксперт загрузил новый файл «Отчёт Одиннадцатова испр.txt»');
+  await expect(now.locator('[data-role="beside-returned"]')).toContainText('Загружен после Вашего возврата; возвращённый «Отчёт Одиннадцатова.txt» эксперт не удалил.');
+  await was.locator('[data-role="beside-new"]').scrollIntoViewIfNeeded();
+  await shot(hp, 'd32-progon11-rukovoditel-oba-fajla');
+
+  // Эксперт: замена кнопкой у замечания — подписанный новый файл закрывает замечание; ИИ-проверка нового файла.
+  await ep.reload();
+  ep.once('dialog', (d) => d.accept());
+  await ep.locator('#org-returns [data-action="replace-returned"]').click();
+  await expect(ep.locator(`#docs li.doc[data-doc="${resultId}"]`)).toHaveCount(0);
+  await expect(ep.locator('#org-returns')).toContainText('Отчёт Одиннадцатова.txt · исправлено');
+  expect((await ep.request.post(`/api/orders/${A}/review/ai`, { headers: H })).status()).toBe(201);
+
+  // 2.257: у руководителя — ушло 1, осталось 1 (доля); в «Сегодня» и утренней сводке — «расхождение осталось».
+  await hp.reload();
+  const again = hp.locator('#org-sign > li[data-item]').filter({ hasText: 'Отчёт Одиннадцатова испр.txt' });
+  await expect(again.locator('[data-role="points-egrn"]')).toHaveText('Расхождения с выпиской ЕГРН по новой ИИ-проверке эксперта: ушли — 1, остались — 1');
+  await expect(again.locator('li.doc ul.points > li[data-egrn="kept"]')).toContainText('Доля 1/3');
+  await again.locator('[data-role="points-egrn"]').scrollIntoViewIfNeeded();
+  await shot(hp, 'd33-progon11-rukovoditel-ostalas-dolya');
+  await hp.goto('/kabinet');
+  const kept = hp.locator(`#today-box li[data-today-item="org-sign-${orgId}"] [data-role="egrn-kept"]`);
+  await expect(kept).toHaveText('после возврата расхождение с выпиской ЕГРН осталось: 1 пункт');
+  await kept.scrollIntoViewIfNeeded();
+  await shot(hp, 'd34-progon11-rukovoditel-segodnya');
+  await db(async (c) => {
+    const { rows: [n] } = await c.query("insert into notifications (user_id, type, event, org_id) values ($1, 'org_morning', 'org_morning_today', $2) returning id", [head.id, orgId]);
+    await c.query(`insert into org_morning_digests (user_id, org_id, day, sign, egrn_kept, notification_id)
+      values ($1, $2, (now() at time zone 'Europe/Moscow')::date, 1, 1, $3)
+      on conflict (user_id, org_id, day) do update set sign = 1, handover = 0, stuck = 0, due = 0, overdue = 0, idle = 0, returned = 0,
+        fresh = 0, away = 0, ext_declined = 0, back = 0, egrn_kept = 1, notification_id = excluded.notification_id`, [head.id, orgId, n.id]);
+  });
+  await hp.goto('/kabinet#notifications');
+  const morning = hp.locator('#notifications li').filter({ hasText: 'На сегодня по организации' }).first();
+  await expect(morning).toContainText('после возврата расхождение с выпиской ЕГРН осталось: 1 дело');
+  await morning.getByRole('button').click();
+  await expect(hp).toHaveURL(new RegExp(`#org=${orgId}&to=sign$`));
+  await expect(again).toBeInViewport();
+  await expect(again.locator('li.doc ul.points > li[data-egrn="kept"]')).toHaveCount(1);
+  await shot(hp, 'd35-progon11-rukovoditel-svodka-k-podpisi');
+  for (const p of [ep, hp, cp]) await p.context().close();
+});

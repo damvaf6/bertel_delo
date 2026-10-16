@@ -938,7 +938,7 @@ function useMatch(doc, ctx) {
         if (kind === ref || USE_SKIP.test(line) || seen.has(kind)) continue;
         seen.add(kind);
         const swap = useSwap(word);
-        const fix = swap ? { bad: word, right: swap } : null;
+        const fix = swap ? { bad: word, right: swap, flip: 'не' } : null;
         const what = house ? 'дома' : 'помещения';
         out.push({ page: i, quote: line, egrn: egrnAt(egrn), ...(fix ? { fix: egrn ? fix : { ...fix, from: MINE } } : {}),
           text: egrn
@@ -2471,7 +2471,7 @@ export function runAutoChecks(names, docs, ctx = {}) {
       quote: clean(f.quote).slice(0, 200),
       ...(f.egrn ? { egrn: { doc_id: f.egrn.doc, file: f.egrn.name, where: `стр. ${f.egrn.page + 1}`, quote: clean(f.egrn.quote).slice(0, 200),
         // 2.229: что в отчёте разошлось с выпиской и что в выписке — «Исправить в черновике» ищет это место в тексте черновика.
-        ...(f.fix ? { bad: clean(f.fix.bad).slice(0, 200), right: clean(f.fix.right).slice(0, 200) } : {}) } } : {}),
+        ...(f.fix ? { bad: clean(f.fix.bad).slice(0, 200), right: clean(f.fix.right).slice(0, 200), ...(f.fix.flip ? { flip: f.fix.flip } : {}) } : {}) } } : {}),
       // 2.231: находка сверена с заявкой или заданием на оценку, а не с выпиской — то же «Исправить в черновике», без выписки.
       ...(f.fix?.from && !f.egrn ? { fix: { bad: clean(f.fix.bad).slice(0, 200), right: clean(f.fix.right).slice(0, 200), from: clean(f.fix.from).slice(0, 200) } } : {}),
     }));

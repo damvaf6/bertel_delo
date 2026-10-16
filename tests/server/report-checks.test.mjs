@@ -1372,6 +1372,7 @@ test('2.259: назначение помещения (жилое / нежило�
   assert.equal(res.use_match[0].quote, 'Назначение помещения: Нежилое');
   assert.equal(res.use_match[0].egrn.bad, 'Нежилое');
   assert.equal(res.use_match[0].egrn.right, 'Жилое');
+  assert.equal(res.use_match[0].egrn.flip, 'не');
   assert.match(res.use_match[0].egrn.quote, /Назначение помещения: Жилое помещение/);
   // Нежилое помещение в жилом доме: заявка «квартира», выписка — нежилое; в отчёте «жилое помещение» — находка с подсказкой о заявке.
   const office = egrn('Назначение: нежилое\nНазначение здания: Жилой дом');
