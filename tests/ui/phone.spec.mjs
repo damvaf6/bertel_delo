@@ -11202,6 +11202,38 @@ test('2.253, 2.254: размер доли из выписки ЕГРН — в ч
   for (const p of [ep, cp]) await p.context().close();
 });
 
+test('2.261: назначение помещения из выписки ЕГРН — в таблице задания черновика', async ({ browser, baseURL }) => {
+  test.setTimeout(90_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990026101'), customer = await signIn(cp, '+79990026102');
+  const A = await db(async (c) => {
+    await c.query("insert into specialists (user_id, created_at) values ($1, now() - interval '1 year') on conflict do nothing", [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty') on conflict do nothing", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Квартира или нежилое', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"deal","region":"moscow","object_type":"flat","address":"г. Москва, Назначенная ул., д. 6, кв. 1","area":"40"}') returning id`,
+    [customer.id, expert.id, inDays(9)]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now() - interval '2 days')", [o.id, expert.id]);
+    return o.id;
+  });
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from(['Выписка из Единого государственного реестра недвижимости об объекте недвижимости', 'Вид объекта недвижимости: Помещение',
+      'Кадастровый номер: 77:06:0060060:6060', 'Площадь, м2: 40', 'Назначение помещения: Нежилое помещение',
+      'Адрес (местоположение): г. Москва, Назначенная ул., д. 6, кв. 1'].join('\n')),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Выписка ЕГРН.txt') },
+  })).status()).toBe(201);
+  await ep.goto(`/kabinet#order=${A}`);
+  await ep.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  // Назначение из выписки — строкой таблицы задания, из заявки (квартира — жилое) — рядом; откуда взято — под черновиком.
+  await expect(ep.getByLabel('Текст заключения')).toHaveValue(/\| Назначение помещения \| нежилое \(по выписке ЕГРН; в заявке — жилое\) \|/);
+  await expect(ep.locator('#draft-state')).toContainText('Назначение объекта: нежилое — как в выписке ЕГРН «Выписка ЕГРН.txt» (стр. 1); в заявке — жилое — сверьте.');
+  await ep.locator('#draft-state').scrollIntoViewIfNeeded();
+  await shot(ep, 'd36-ekspert-chernovik-naznachenie');
+  for (const p of [ep, cp]) await p.context().close();
+});
+
 // 2.260: прогон «как эксперт и руководитель» по пачке 2.251–2.259 — одна организация, одно дело о доле в квартире. Выписка
 // ЕГРН: общая долевая собственность, доля 1/2, жилое помещение. Черновик берёт долю из выписки (2.254); в отчёте — 1/3 и
 // «нежилое» (2.253, 2.259); в окне подписи — «Заменить всё по выписке» (2.258); эксперт уходит в дни «не принимаю дела» —

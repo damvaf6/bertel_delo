@@ -886,6 +886,7 @@ test('2.211: площадь и кадастровый номер из выпис
     address: null,
     rights: null,
     share_size: null,
+    use: null,
   });
   assert.match(d.body, /\| Кадастровый номер \| 77:01:0001001:4321 \(по выписке ЕГРН\) \|/);
   assert.match(d.body, /\| Площадь, кв\. м \| 47,3 \(по выписке ЕГРН; в заявке — 54,3\) \|/);
@@ -995,6 +996,37 @@ test('2.254: размер доли из выписки ЕГРН — в табл�
   assert.deepEqual(d.inputs.egrn.share_size, { values: ['1/4', '1/2'] });
   assert.doesNotMatch(d.body, /\| Размер доли/);
   assert.doesNotMatch(lastPrompt(), /Размер оцениваемой доли по выписке ЕГРН/);
+});
+
+test('2.261: назначение помещения из выписки ЕГРН — в таблицу задания, модели и вместо пометок; в выписках разные — эксперт выбирает сам', async () => {
+  const o = await inWork('Квартира: назначение из выписки в черновик');
+  const putDoc = (body, name) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } });
+  await S.sql`update orders set fields = fields || ${JSON.stringify({ object_type: 'flat' })}::jsonb where id = ${o.id}`;
+  // В выписке нежилое, в заявке квартира (жилое) — назначение из выписки, заявка рядом; «многоквартирный дом» — про здание.
+  assert.equal((await putDoc('Выписка из ЕГРН\nВид объекта недвижимости: Помещение\nКадастровый номер: 77:01:0001001:4321\nНазначение: Нежилое\nНаименование: помещение\nНазначение здания: многоквартирный дом', 'Выписка ЕГРН.txt')).status, 201);
+  let d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {})).body.draft;
+  assert.deepEqual(d.inputs.egrn.use, { v: 'нежилое', of: 'помещения', name: 'Выписка ЕГРН.txt', page: 1, typed: 'жилое' });
+  assert.match(d.body, /\| Назначение помещения \| нежилое \(по выписке ЕГРН; в заявке — жилое\) \|/);
+  assert.match(lastPrompt(), /Назначение помещения по выписке ЕГРН: нежилое \(выписка «Выписка ЕГРН\.txt», стр\. 1\)/);
+  // Модель оставила пометки — программа ставит назначение; назначение участка и аналога — не трогает.
+  const orig = S.providers.ai.complete;
+  S.providers.ai.complete = async () => ({ text: '## 1. Основные факты и выводы\nНазначение помещения: [заполнить: назначение помещения]; объект — [заполнить: назначение]. Участок — [заполнить: назначение участка], аналог — [заполнить: назначение аналога]\n## 2. Задание на оценку\nТекст', model: 'fake' });
+  try {
+    d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+  } finally { S.providers.ai.complete = orig; }
+  assert.match(d.body, /Назначение помещения: нежилое; объект — нежилое\. Участок — \[заполнить: назначение участка\], аналог — \[заполнить: назначение аналога\]/);
+  // В заявке нежилое помещение — без «в заявке — …».
+  await S.sql`update orders set fields = fields || ${JSON.stringify({ object_type: 'commercial' })}::jsonb where id = ${o.id}`;
+  d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+  assert.equal(d.inputs.egrn.use.typed, null);
+  assert.match(d.body, /\| Назначение помещения \| нежилое \(по выписке ЕГРН\) \|/);
+  // Вторая выписка на объект с жилым назначением — не подставляется, эксперт видит оба.
+  assert.equal((await putDoc('Выписка из ЕГРН\nВид объекта недвижимости: Помещение\nКадастровый номер: 77:01:0001001:4321\nНазначение помещения: жилое', 'Выписка ЕГРН вторая.txt')).status, 201);
+  d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+  assert.deepEqual(d.inputs.egrn.use, { of: 'помещения', values: ['жилое', 'нежилое'] });
+  assert.doesNotMatch(d.body, /\| Назначение помещения/);
+  assert.doesNotMatch(lastPrompt(), /Назначение помещения по выписке ЕГРН/);
 });
 
 test('2.222: этаж, этажность и адрес из выписки ЕГРН — в таблицу задания, модели и вместо пометок; разные — эксперт выбирает сам', async () => {

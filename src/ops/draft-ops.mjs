@@ -16,7 +16,7 @@ import { pastValues, reuseSections, skeleton } from '../docs/reuse.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { orderSources, placeSources, sourcesLines } from '../docs/sources.mjs';
 import { draftDiff } from '../docs/diff.mjs';
-import { assignmentValue, egrnFacts, egrnRightsFacts, egrnShares, parseFloorField, sameAddressText } from '../ai/report-checks.mjs';
+import { assignmentValue, egrnFacts, egrnRightsFacts, egrnShares, egrnUses, parseFloorField, sameAddressText, USE_NAME } from '../ai/report-checks.mjs';
 import { assignmentDocs, egrnDocs } from './ai-ops.mjs';
 
 const PHOTOS_MAX = 40;
@@ -136,9 +136,11 @@ const VALUE_GAP = /\[(?:заполнить|указать)\s*:?\s*дат[аыу]
 // в таблицу задания отдельными строками; видов права в выписках несколько — эксперт выбирает сам.
 // 2.254: размер доли (share_egrn_match, 2.253) — в строку «Размер доли» таблицы задания, как площадь: доля в выписках одна —
 // она (другая в заявке — рядом); у собственников разные доли — та, что в заявке, если она среди них, иначе эксперт выбирает сам.
+// 2.261: назначение помещения или дома (use_match, 2.259) — отдельной строкой «Назначение помещения»; в заявке оно —
+// из «Что оцениваем» (нежилое помещение — нежилое, остальное — жилое): другое — рядом; в выписках разные — эксперт выбирает сам.
 async function egrnFor(sql, storage, registry, order) {
   const auto = registry.checks(order.module, order.service).flatMap((r) => r.auto ?? []);
-  if (!['area_match', 'cadastral_match', 'floor_match', 'address_match', 'rights_match', 'encumbrance_match', 'share_egrn_match'].some((k) => auto.includes(k))) return null;
+  if (!['area_match', 'cadastral_match', 'floor_match', 'address_match', 'rights_match', 'encumbrance_match', 'share_egrn_match', 'use_match'].some((k) => auto.includes(k))) return null;
   const docs = await egrnDocs(sql, storage, order);
   if (!docs.length) return null;
   const facts = egrnFacts(docs, { service: order.service, fields: order.fields ?? {} });
@@ -162,7 +164,18 @@ async function egrnFor(sql, storage, registry, order) {
     enc: auto.includes('encumbrance_match') ? r.enc : null,
   } : null;
   const share_size = auto.includes('share_egrn_match') ? egrnShareFact(docs, order) : null;
-  return area || cadastral || floor || address || rights || share_size ? { area, cadastral, floor, address, rights, share_size } : null;
+  const use = auto.includes('use_match') ? egrnUseFact(docs, order) : null;
+  return area || cadastral || floor || address || rights || share_size || use ? { area, cadastral, floor, address, rights, share_size, use } : null;
+}
+function egrnUseFact(docs, order) {
+  const values = egrnUses(docs, { service: order.service, fields: order.fields ?? {} });
+  if (!values?.size) return null;
+  const type = order.fields?.object_type;
+  const of = type === 'house' ? 'дома' : 'помещения';
+  if (values.size > 1) return { of, values: [...values.keys()].map((k) => USE_NAME[k]) };
+  const [[kind, at]] = [...values];
+  const mine = type === 'commercial' ? 'non' : type ? 'living' : null;
+  return { v: USE_NAME[kind], of, name: at.name, page: at.page + 1, typed: mine && mine !== kind ? USE_NAME[mine] : null };
 }
 function egrnShareFact(docs, order) {
   const shares = [...egrnShares(docs, { service: order.service, fields: order.fields ?? {} }).values()];
@@ -202,6 +215,8 @@ const HOLDER_GAP = /\[(?:заполнить|указать)\s*:?\s*(?:право
 const KIND_GAP = /\[(?:заполнить|указать)\s*:?\s*(?:вид\S*\s+(?:зарегистрированн\S*\s+)?прав|оцениваем\S*\s+(?:имущественн\S*\s+)?прав)[^\]]*\]/giu;
 // 2.254: «[заполнить: размер доли]», «[заполнить: доля в праве]», «[заполнить: оцениваемая доля]» (не «доля рынка»).
 const SHARE_GAP = /\[(?:заполнить|указать)\s*:?\s*(?:размер\S*\s+)?(?:оцениваем\S*\s+)?дол(?:я|и|ю|ей)(?:\s+в\s+праве(?:\s+собственности)?)?\s*\]/giu;
+// 2.261: «[заполнить: назначение помещения]», «[заполнить: назначение]», «[заполнить: назначение объекта]» (не участка, не аналога).
+const USE_GAP = /\[(?:заполнить|указать)\s*:?\s*назначени\S*(?:\s+(?:помещени|объект|дома|здани)\S*(?:\s+оценки)?)?\s*\]/giu;
 const ENC_GAP = /\[(?:заполнить|указать)\s*:?\s*(?:ограничени|обременени)[^\]]*\]/giu;
 const ADDR_NOT_OBJECT = /аналог|заказчик|оценщик|эксперт|исполнител|организац|регистрац|проживан|почтов|электрон/iu;
 function floorGap(m, inner, f) {
@@ -222,6 +237,7 @@ function fillEgrn(text, egrn) {
   if (egrn?.rights?.kind?.v) out = out.replace(KIND_GAP, egrn.rights.kind.v);
   if (egrn?.rights?.enc?.v) out = out.replace(ENC_GAP, egrn.rights.enc.v);
   if (egrn?.share_size?.v) out = out.replace(SHARE_GAP, egrn.share_size.v);
+  if (egrn?.use?.v) out = out.replace(USE_GAP, egrn.use.v);
   return out;
 }
 const egrnBrief = (egrn) => [
@@ -232,6 +248,7 @@ const egrnBrief = (egrn) => [
   egrn?.rights?.holders?.v ? `Правообладатель по выписке ЕГРН: ${egrn.rights.holders.v} (выписка «${egrn.rights.holders.name}», стр. ${egrn.rights.holders.page}) — пиши так в разделе о правах, без пометок` : null,
   egrn?.rights?.kind?.v ? `Вид права по выписке ЕГРН: ${egrn.rights.kind.v} (выписка «${egrn.rights.kind.name}», стр. ${egrn.rights.kind.page}) — пиши так в разделе о правах, без пометок` : null,
   egrn?.share_size?.v ? `Размер оцениваемой доли по выписке ЕГРН: ${egrn.share_size.v} (выписка «${egrn.share_size.name}», стр. ${egrn.share_size.page}) — пиши её везде, где нужен размер доли объекта оценки, без пометок` : null,
+  egrn?.use?.v ? `Назначение ${egrn.use.of} по выписке ЕГРН: ${egrn.use.v} (выписка «${egrn.use.name}», стр. ${egrn.use.page}) — пиши так везде, где нужно назначение объекта оценки, без пометок` : null,
   egrn?.rights?.enc?.v ? `Ограничения и обременения по выписке ЕГРН: ${egrn.rights.enc.v} (выписка «${egrn.rights.enc.name}», стр. ${egrn.rights.enc.page}) — назови их в разделе о правах и обременениях, без пометок` : null,
 ].filter(Boolean).join('\n') || null;
 
