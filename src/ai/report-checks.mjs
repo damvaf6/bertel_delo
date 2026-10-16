@@ -1059,6 +1059,62 @@ function useMatch(doc, ctx) {
   return out;
 }
 
+// ——— 2.267: вид жилого помещения (квартира / комната) в отчёте — как в выписке ЕГРН на объект из дела ———
+// В выписке на помещение — «Вид жилого помещения: Квартира» / «Комната» (бывает «Наименование: Комната»). В отчёте — только
+// подписи про сам объект: «Вид жилого помещения: …», «Наименование объекта: …», «Объект оценки: …» — первое слово
+// «квартира» или «комната» после подписи («комната в трёхкомнатной квартире» — комната; «двухкомнатная квартира» —
+// квартира). Комнаты в описании квартиры, аналоги, соседи — не в счёт. Выписки спорят — молчим. Без выписки — как в заявке
+// («Квартира» / «Комната»; доля, дом, нежилое — не сверяем). Исправить в черновике — «квартира» ↔ «комната» в той же форме.
+const ROOM_KIND_WORD = '(?<![а-яё])(квартир(?:а|ы|у|е|ой|ою)?|комнат(?:а|ы|у|е|ой|ою)?)(?![а-яё])';
+const EGRN_KIND_LIVING_AT = new RegExp(`(?:вид\\s+жилого\\s+помещения|наименование(?:\\s+(?:объекта|помещения))?)\\s*[:\\-–—]\\s*${ROOM_KIND_WORD}`, 'giu');
+const ROOM_KIND_AT = new RegExp(`(?:вид\\s+жилого\\s+помещения|наименование\\s+объекта(?:\\s+оценки)?|объект\\S*\\s+оценки)\\s*[:\\-–—]([^\\n:]{0,60}?)${ROOM_KIND_WORD}(?!\\s*[:\\-–—]?\\s*\\d)`, 'giu');
+const ROOM_KIND_SKIP = /аналог|сосед|прежн/iu;
+const roomKind = (word) => (/^комнат/iu.test(word) ? 'room' : 'flat');
+export const ROOM_KIND_NAME = { flat: 'квартира', room: 'комната' };
+export function egrnRoomKind(egrn, ctx) {
+  if (ctx.service !== 'realty' || !['flat', 'room', 'share'].includes(ctx.fields?.object_type)) return null;
+  const values = new Map();
+  for (const d of egrnOnObject(egrn, ctx)) {
+    if (!Array.isArray(d.pages) || egrnKind(d) === 'building' || egrnKind(d) === 'land') continue;
+    d.pages.forEach((page, i) => {
+      for (const m of page.matchAll(EGRN_KIND_LIVING_AT)) {
+        if (/аналог/iu.test(lineBefore(page, m.index))) continue;
+        const kind = roomKind(m[1]);
+        if (!values.has(kind)) values.set(kind, { name: d.name, page: i, doc: d.id, quote: lineAround(page, m.index), word: m[1] });
+      }
+    });
+  }
+  return oneValue(values);
+}
+function roomKindMatch(doc, ctx) {
+  if (ctx.service !== 'realty') return [];
+  const type = ctx.fields?.object_type;
+  if (!['flat', 'room', 'share'].includes(type)) return [];
+  const mine = type === 'share' ? null : type;
+  const egrn = ctx.egrn?.length ? egrnRoomKind(ctx.egrn, ctx) : null;
+  const ref = egrn ? egrn.v : mine;
+  if (!ref) return [];
+  const out = [];
+  const seen = new Set();
+  eachPage(doc, (page, i) => {
+    for (const m of page.matchAll(ROOM_KIND_AT)) {
+      // Между подписью и словом — не другое слово-объект («объект оценки: доля … в квартире» — ещё объект, «аналог» — нет).
+      if (/(?<![а-яё])(?:дом|здани|участ)|состав|колич|числ|план/iu.test(m[1])) continue;
+      const line = lineAround(page, m.index);
+      const word = m[2];
+      const kind = roomKind(word);
+      if (kind === ref || ROOM_KIND_SKIP.test(line) || seen.has(kind)) continue;
+      seen.add(kind);
+      const fix = { bad: word, right: ROOM_KIND_NAME[ref], flip: 'kind' };
+      out.push({ page: i, quote: line, egrn: egrnAt(egrn), fix: egrn ? fix : { ...fix, from: MINE },
+        text: egrn
+          ? `Вид жилого помещения «${ROOM_KIND_NAME[kind]}» не совпадает с выпиской ЕГРН «${egrn.name}» («${egrn.word}», стр. ${egrn.page + 1})${mine && mine !== egrn.v ? `; в заявке — ${ROOM_KIND_NAME[mine]}` : ''} — проверьте, нет ли данных другого объекта`
+          : `Вид жилого помещения «${ROOM_KIND_NAME[kind]}» не совпадает с заявкой (${ROOM_KIND_NAME[mine]}) — проверьте, нет ли данных другого объекта` });
+    }
+  });
+  return out;
+}
+
 // ——— 2.233: кадастровая стоимость в отчёте — как в выписке ЕГРН из дела ———
 // В выписке: «Кадастровая стоимость, руб.: 8123456.78» (число — в той же строке или в следующей, если в строке только
 // подпись), дата — «по состоянию на …» в той же строке или «Дата определения кадастровой стоимости: …» на странице.
@@ -2498,6 +2554,7 @@ const PER_DOC = {
   floor_match: floorMatch,
   building_match: buildingMatch,
   use_match: useMatch,
+  room_kind_match: roomKindMatch,
   cad_value_match: cadValueMatch,
   rights_match: rightsMatch,
   share_match: shareMatch,
@@ -2528,6 +2585,7 @@ export const AUTO_CHECKS = Object.freeze({
   floor_match: 'этаж и этажность дома в отчёте — как в выписке ЕГРН из дела, а без неё — как в заявке',
   building_match: 'год постройки и материал стен дома в отчёте — как в выписке ЕГРН на здание из дела, а год без неё — как в заявке',
   use_match: 'назначение помещения или дома (жилое / нежилое) в отчёте — как в выписке ЕГРН на объект из дела, а без неё — как в заявке',
+  room_kind_match: 'вид жилого помещения (квартира / комната) в отчёте — как в выписке ЕГРН на объект из дела, а без неё — как в заявке',
   cad_value_match: 'кадастровая стоимость объекта в отчёте — как в выписке ЕГРН из дела (если в отчёте своя дата «по состоянию на» — с той же датой)',
   rights_match: 'правообладатель и вид права (собственность, общая долевая, общая совместная) в отчёте — как в выписке ЕГРН на объект из дела',
   encumbrance_match: 'ограничения и обременения из выписки ЕГРН на объект (ипотека, арест, запрещение регистрации, аренда, сервитут, доверительное управление) упомянуты в отчёте',

@@ -58,10 +58,19 @@ export function swapValue(g, found) {
   const bad = String(g?.bad ?? '');
   // 2.260: «нежилое» ↔ «жилое» (2.259, `flip: 'не'`) — та же форма слова: приставка снимается или ставится у того, что в тексте.
   if (g?.flip === 'не' && right) return flipNe(String(found ?? bad));
+  // 2.267: «квартира» ↔ «комната» (`flip: 'kind'`) — окончание и заглавная — как у того, что в тексте.
+  if (g?.flip === 'kind' && right) return flipKind(String(found ?? bad));
   if (!right || / или /.test(right) || !/\d/.test(bad) || right.length > 200) return null;
   const num = /^\d[\d\s]*([,.])\d+$/;
   const was = num.exec(String(found ?? ''));
   return was && num.test(right) ? right.replace(/[,.]/, was[1]) : right;
+}
+
+function flipKind(word) {
+  const m = /^(квартир|комнат)(\p{L}*)$/iu.exec(word);
+  if (!m) return null;
+  const stem = /^квартир$/iu.test(m[1]) ? 'комнат' : 'квартир';
+  return `${/^\p{Lu}/u.test(word) ? stem[0].toUpperCase() + stem.slice(1) : stem}${m[2]}`;
 }
 
 function flipNe(word) {
