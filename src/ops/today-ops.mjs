@@ -21,7 +21,7 @@
 import { orderRef } from '../notify/registry.mjs';
 import { orderSplit } from '../money/money.mjs';
 import { STATUS_NAME, addDays, isOverdue, resultDue, todayMsk } from '../orders/workflow.mjs';
-import { orderSignatures, orgReturns, signWait } from './sign-ops.mjs';
+import { orderSignatures, orgReturns, returnEgrn, signWait } from './sign-ops.mjs';
 import { executorSignOrg } from '../access/policy.mjs';
 import { dossierAlerts, loadDossier } from '../dossier/dossier.mjs';
 import { expiringLinks, incompleteInspections, reshotAll, silentLinks } from './inspect-ops.mjs';
@@ -352,18 +352,23 @@ export async function orgPart(sql, org, registry, today, { actorId = null } = {}
       if (missing.length) atRisk.push(view(o, { missing, extend: ext.get(o.id) ?? null }));
     }
     const signs = await orderSignatures(sql, o.id);
-    const docs = await sql`select id from documents where order_id = ${o.id} and kind = 'result' and deleted_at is null
+    const docs = await sql`select id, created_at from documents where order_id = ${o.id} and kind = 'result' and deleted_at is null
                            and uploaded_by = (select executor_user_id from orders where id = ${o.id})`;
     const waiting = docs.filter((d) => signs.get(d.id)?.expert && !signs.get(d.id)?.org).length;
+    const returns = await orgReturns(sql, o.id, { orgId: org.id });
     if (waiting) {
       // Эксперт напоминал о подписи (2.99) — когда последний раз, пока файл ждёт (2.100).
       const w = await signWait(sql, o);
       // Когда эксперт подписал и сколько ждёт (2.160 — как в «Делах экспертов», 2.148).
       // Два дня и дольше — заметно (2.161 — как в «Делах экспертов», 2.148).
+      // После возврата расхождение с выпиской ЕГРН осталось в новой ИИ-проверке эксперта (2.257, как в «Подписи организации»,
+      // 2.247) — сколько таких пунктов последнего возврата; для строки здесь и утренней сводки.
+      const last = returns.at(-1);
+      const kept = last ? [...(await returnEgrn(sql, o.id, last, docs)).values()].filter((s) => s === 'kept').length : 0;
       toSign.push(view(o, { files: waiting, reminded_at: w?.reminded_at ?? null, since: w?.since ?? null,
-        long: !!w?.since && Date.now() - new Date(w.since).getTime() >= SIGN_LONG_DAYS * 86400_000 }));
+        long: !!w?.since && Date.now() - new Date(w.since).getTime() >= SIGN_LONG_DAYS * 86400_000, egrn_kept: kept }));
     }
-    const open = (await orgReturns(sql, o.id, { orgId: org.id })).filter((r) => r.open);
+    const open = returns.filter((r) => r.open);
     // Сколько пунктов замечания эксперт уже отметил исправленными (2.160 — как в «Делах экспертов», 2.151).
     // «Напомнить эксперту» прямо в «Сегодня» (2.162) — как в «Делах экспертов» (2.125): раз в сутки; своё дело — без кнопки.
     if (open.length) returned.push(view(o, { comment: open.at(-1).comment, at: open[0].at, points: open.at(-1).items.length, left: open.at(-1).left,

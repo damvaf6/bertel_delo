@@ -314,7 +314,9 @@ export async function loadToday() {
       ...group(`org-sign-${g.id}`, 'Ждут подписи организации', g.to_sign, (x) => [...caseLine(x), {
         class: x.long ? 'overdue' : 'muted', role: 'sign-since',
         text: [`файлов: ${x.files}`, x.since ? `эксперт подписал ${since(x.since)} — ждёт ${waited(x.since)}` : null,
-          x.reminded_at ? `эксперт напомнил ${since(x.reminded_at)}` : null].filter(Boolean).join(' · ') }], toOrg('sign')),
+          x.reminded_at ? `эксперт напомнил ${since(x.reminded_at)}` : null].filter(Boolean).join(' · ') },
+        // После возврата расхождение с выпиской осталось в новой ИИ-проверке эксперта (2.257) — красным.
+        ...(x.egrn_kept ? [{ class: 'overdue', role: 'egrn-kept', text: `после возврата расхождение с выпиской ЕГРН осталось: ${x.egrn_kept} ${x.egrn_kept === 1 ? 'пункт' : x.egrn_kept < 5 ? 'пункта' : 'пунктов'}` }] : [])], toOrg('sign')),
       ...group(`org-pending-${g.id}`, 'Ждут назначения эксперта', g.pending, caseLine, toOrg('pending')),
       ...group(`org-hot-${g.id}`, 'Горит срок у экспертов', g.hot.filter((x) => !risky.has(x.order_ref)), caseLine, toOrg('case')),
       // Когда вернули и сколько пунктов эксперт уже отметил исправленными (2.160 — как в «Делах экспертов»);
