@@ -7169,8 +7169,9 @@ test('расхождения с выпиской ЕГРН перед подпи�
   await shot(hp, 'h4g-rukovoditel-svodka-rashozhdenie-ostalos');
   await morning.getByRole('button').click();
   await expect(hp).toHaveURL(new RegExp(`#org=${orgId}&to=sign$`));
-  await expect(hp.locator('#org-sign > li[data-item]').first().locator('li.doc ul.points > li[data-egrn="kept"]')).toHaveCount(1);
-  await expect(hp.locator('#org-sign')).toBeInViewport();
+  const keptCase = hp.locator('#org-sign > li[data-item]').first();
+  await expect(keptCase.locator('li.doc ul.points > li[data-egrn="kept"]')).toHaveCount(1);
+  await expect(keptCase).toBeInViewport();
   await shot(hp, 'h4h-rukovoditel-svodka-k-podpisi');
 });
 

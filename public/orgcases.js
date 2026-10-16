@@ -476,7 +476,9 @@ export function focusOrgBlock(to) {
 // Перейти к делу в «Подписи организации» и выделить его.
 function goSign(ref) {
   document.querySelector(`#org-sign li.signed[data-item="${CSS.escape(ref)}"] details`)?.setAttribute('open', '');
-  const li = (ref && document.querySelector(`#org-sign li[data-item="${CSS.escape(ref)}"]`)) || $('org-sign-box');
+  // Из утренней сводки без номера дела (2.257): есть дело, где после возврата расхождение с выпиской осталось, — к нему.
+  const kept = !ref && document.querySelector('#org-sign li[data-egrn="kept"]')?.closest('#org-sign > li[data-item]');
+  const li = (ref && document.querySelector(`#org-sign li[data-item="${CSS.escape(ref)}"]`)) || kept || $('org-sign-box');
   li.scrollIntoView({ behavior: 'smooth', block: 'start' });
   li.classList.add('flash');
   setTimeout(() => li.classList.remove('flash'), 2000);
