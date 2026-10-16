@@ -217,8 +217,8 @@ async function lastReview(sql, orderId, docIds, after = null) {
 }
 
 // Пункты возврата из расхождений с выпиской (2.247): по новой ИИ-проверке эксперта (после возврата, по файлу, к которому
-// относится возврат, — возвращённому или новой версии) — ушло ли расхождение.
-async function returnEgrn(sql, orderId, r, docs) {
+// относится возврат, — возвращённому или новой версии) — ушло ли расхождение. С 2.257 — и для утренней сводки руководителя.
+export async function returnEgrn(sql, orderId, r, docs) {
   if (!r.links.length) return new Map();
   // Новая версия после возврата (2.159) — по ней; нет — по самому возвращённому файлу.
   const newer = docs.filter((d) => new Date(d.created_at) > new Date(r.at)).map((d) => d.id);

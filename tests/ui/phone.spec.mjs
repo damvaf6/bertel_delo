@@ -7147,6 +7147,32 @@ test('расхождения с выпиской ЕГРН перед подпи�
   await expect(again.locator('li.doc ul.points > li[data-egrn="kept"]')).toHaveCount(1);
   await again.locator('[data-role="points-state"]').scrollIntoViewIfNeeded();
   await shot(hp, 'h4e-rukovoditel-povtornaya-podpis-egrn');
+
+  // 2.257: в «Сегодня» у дела на подписи — красным «после возврата расхождение с выпиской ЕГРН осталось»; утренняя сводка
+  // (запись дня напрямую, как в 2.172) — строкой с числом дел, нажатие ведёт к подписи организации.
+  await hp.goto('/kabinet');
+  const kept = hp.locator(`#today-box li[data-today-item="org-sign-${orgId}"] [data-role="egrn-kept"]`);
+  await expect(kept).toHaveText('после возврата расхождение с выпиской ЕГРН осталось: 1 пункт');
+  await expect(kept).toHaveClass(/overdue/);
+  await kept.scrollIntoViewIfNeeded();
+  await shot(hp, 'h4f-segodnya-rukovoditel-rashozhdenie-ostalos');
+  await db(async (c) => {
+    const { rows: [n] } = await c.query("insert into notifications (user_id, type, event, org_id) values ($1, 'org_morning', 'org_morning_today', $2) returning id", [head.id, orgId]);
+    await c.query(`insert into org_morning_digests (user_id, org_id, day, sign, egrn_kept, notification_id)
+      values ($1, $2, (now() at time zone 'Europe/Moscow')::date, 1, 1, $3)
+      on conflict (user_id, org_id, day) do update set sign = 1, handover = 0, stuck = 0, due = 0, overdue = 0, idle = 0, returned = 0,
+        fresh = 0, away = 0, ext_declined = 0, back = 0, egrn_kept = 1, notification_id = excluded.notification_id`, [head.id, orgId, n.id]);
+  });
+  await hp.goto('/kabinet#notifications');
+  const morning = hp.locator('#notifications li').first();
+  await expect(morning).toContainText('На сегодня по организации: 1 дело ждёт подписи организации, после возврата расхождение с выпиской ЕГРН осталось: 1 дело');
+  await shot(hp, 'h4g-rukovoditel-svodka-rashozhdenie-ostalos');
+  await morning.getByRole('button').click();
+  await expect(hp).toHaveURL(new RegExp(`#org=${orgId}&to=sign$`));
+  const keptCase = hp.locator('#org-sign > li[data-item]').first();
+  await expect(keptCase.locator('li.doc ul.points > li[data-egrn="kept"]')).toHaveCount(1);
+  await expect(keptCase).toBeInViewport();
+  await shot(hp, 'h4h-rukovoditel-svodka-k-podpisi');
 });
 
 test('отбор дел на подпись по ИИ-проверке (2.193): руководитель видит дела без ИИ-проверки этой версии и с «посмотрите»', async ({ browser, baseURL }) => {
