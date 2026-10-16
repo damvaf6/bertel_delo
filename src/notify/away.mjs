@@ -5,6 +5,7 @@
 // одно предупреждение на день начала (away_warned_from) — сдвинул начало, придёт по новому. В СМС — только цифры и дата.
 import { SCHEDULE_DAYS } from '../orders/schedule.mjs';
 import { addDays, todayMsk } from '../orders/workflow.mjs';
+import { aiRecheck } from '../ai/ai.mjs';
 import { notify } from './notify.mjs';
 import { MORNING_HOUR, mskHour } from './morning.mjs';
 
@@ -52,7 +53,7 @@ export async function warnAway(sql, { today = todayMsk() } = {}) {
 // «Пока Вас не было» (2.239): эксперт вернулся (наступил away_until) — в первый день после 8:00 по Москве одно уведомление,
 // что произошло с его делами за дни «не принимаю дела» [away_since, away_until): какие дела у него забрали и какие передали
 // ему, что решил диспетчер по срокам (и просьбы организации о переносе, которых он не подавал), новые сообщения заказчика,
-// диспетчера и руководителя, пришедшие запрошенные документы. Ничего не произошло — не беспокоим. Подробно — блок «Пока Вас
+// диспетчера и руководителя, пришедшие запрошенные документы (пришли после ИИ-проверки — «проверьте заново», 2.256). Ничего не произошло — не беспокоим. Подробно — блок «Пока Вас
 // не было» в разделе «Специалист» (неделю после возвращения); забранные дела — только числом, без названий.
 export const AWAY_BACK_SHOW_DAYS = 7;
 const AWAY_BACK_LATE_DAYS = 2; // площадка стояла в первый день — сводка уйдёт и на второй-третий
@@ -89,11 +90,20 @@ export async function awayBack(sql, userId, since, until) {
     from orders o where o.executor_user_id = ${userId} and o.status in ('in_work', 'review')
     order by o.deadline nulls last, o.id`;
   const docs = await sql`
-    select o.id as order_id, o.title, count(*)::int as n
+    select o.id as order_id, o.title, o.status, o.review_round, count(*)::int as n
     from doc_requests d join orders o on o.id = d.order_id
     where o.executor_user_id = ${userId} and o.status in ('in_work', 'review') and d.cancelled_at is null
       and d.fulfilled_at >= ${at} and d.fulfilled_at < ${to}
-    group by o.id, o.title order by o.id`;
+    group by o.id, o.title, o.status, o.review_round order by o.id`;
+  // Документы пришли уже после ИИ-проверки (2.256): проверка их не видела — у строки «проверьте заново» и переход к ИИ-проверке.
+  // Как у ИИ-проверки в деле (2.248): пока дело в работе и с последней проверки текущего круга; проверил заново — строка
+  // снова просто «пришли документы».
+  for (const d of docs) {
+    const r = await aiRecheck(sql, { id: d.order_id, status: d.status, review_round: d.review_round });
+    const fresh = r?.docs.filter((x) => new Date(x.at) >= at) ?? [];
+    if (fresh.length) d.recheck = { docs: fresh.map((x) => x.title), egrn: r.egrn, review_at: r.review_at };
+    delete d.status; delete d.review_round;
+  }
   const back = { from: since, until, taken: taken.n, given, deadlines,
     messages: messages.filter((m) => m.chat + m.head > 0), docs };
   back.empty = !back.taken && !given.length && !deadlines.length && !back.messages.length && !docs.length;
@@ -131,7 +141,8 @@ export async function sendAwayBack(sql, { now = new Date() } = {}) {
       if (b.empty) return 0;
       const parts = [b.taken && `передали коллегам: ${b.taken}`, b.given.length && `передали Вам: ${b.given.length}`,
         b.deadlines.length && `решения по срокам: ${b.deadlines.length}`, b.messages.length && `дела с новыми сообщениями: ${b.messages.length}`,
-        b.docs.length && `пришли документы: ${b.docs.length}`].filter(Boolean);
+        b.docs.length && `пришли документы: ${b.docs.length}`,
+        b.docs.some((d) => d.recheck) && `проверьте заново ИИ-проверку: ${b.docs.filter((d) => d.recheck).length}`].filter(Boolean);
       return notify(tx, 'away_back', { users: [p.user_id],
         sms: `БЕРТЕЛ Дело: пока Вас не было — ${parts.join(', ')}. Подробно — «Пока Вас не было» в кабинете.` });
     });

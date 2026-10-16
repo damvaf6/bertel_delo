@@ -103,6 +103,46 @@ test('2.239: в первый день — одно уведомление: пе�
   for (const o of [kept, given, taken, quiet]) await S.sql`update orders set status = 'cancelled' where id = ${o.id}`;
 });
 
+test('2.256: документы пришли после ИИ-проверки — «проверьте заново»; до проверки или проверил заново — просто «пришли»', async () => {
+  const late = await order('Пока не было: документ после проверки');
+  const early = await order('Пока не было: документ до проверки');
+  await S.sql`update specialists set away_since = ${addDays(T, -7)}::date, away_from = ${addDays(T, -7)}::date, away_until = ${T}::date,
+                away_back_for = null where user_id = ${spec.user.id}`;
+  const doc = async (o, name) => (await S.sql`insert into documents (order_id, uploaded_by, filename, mime, size_bytes, storage_key, kind)
+    values (${o.id}, ${owner.user.id}, ${name}, 'application/pdf', 10, ${`back-${o.id}-${name}`}, 'other') returning id`)[0].id;
+  const review = (o, at) => S.sql`insert into ai_reviews (order_id, round, requested_by, side, model, items, files, at)
+    values (${o.id}, 1, ${spec.user.id}, 'executor', 'fake', '[]', '[]', ${at})`;
+  // ИИ-проверка до отпуска; выписка ЕГРН пришла в отпуске — после проверки.
+  await review(late, ago(9));
+  await S.sql`insert into doc_requests (order_id, item_id, title, requested_by, requested_at, fulfilled_at, document_id) values
+    (${late.id}, 'egrn', 'Выписка ЕГРН', ${spec.user.id}, ${ago(10)}, ${ago(3)}, ${await doc(late, 'egrn.pdf')})`;
+  // Техпаспорт пришёл в отпуске, а ИИ-проверка — уже после него.
+  await S.sql`insert into doc_requests (order_id, title, requested_by, requested_at, fulfilled_at, document_id) values
+    (${early.id}, 'Техпаспорт', ${spec.user.id}, ${ago(10)}, ${ago(4)}, ${await doc(early, 'bti.pdf')})`;
+  await review(early, ago(2));
+
+  assert.equal(await sendAwayBack(S.sql, { now: at9 }), 1);
+  const [n] = (await backs()).slice(-1);
+  // «передали коллегам» — от прошлого теста (то же окно дней); здесь важен хвост.
+  assert.match(n.body, /пришли документы: 2, проверьте заново ИИ-проверку: 1\. Подробно — «Пока Вас не было» в кабинете\.$/);
+  const ofs = async () => { const b = await getBack(); return [late, early].map((o) => b.docs.find((d) => d.order_id === o.id)); };
+  let [dl, de] = await ofs();
+  assert.deepEqual([dl.n, dl.recheck.docs, de.n, de.recheck], [1, ['Выписка ЕГРН'], 1, undefined]);
+  assert.equal(dl.recheck.egrn, true);
+  assert.ok(!('status' in dl) && !('review_round' in dl));
+
+  // Проверил заново после возвращения — строка снова просто «пришли документы».
+  await review(late, ago(0));
+  [dl, de] = await ofs();
+  assert.deepEqual([dl.recheck, de.recheck], [undefined, undefined]);
+  // Дело сдано на проверку — ИИ-проверка этого круга закрыта, «проверьте заново» нет.
+  await S.sql`delete from ai_reviews where order_id = ${late.id} and at > ${ago(1)}`;
+  assert.ok((await ofs())[0].recheck);
+  await S.sql`update orders set status = 'review' where id = ${late.id}`;
+  assert.equal((await ofs())[0].recheck, undefined);
+  for (const o of [late, early]) await S.sql`update orders set status = 'cancelled' where id = ${o.id}`;
+});
+
 test('2.239: ничего не произошло — не беспокоим; дни ещё идут — не отправляем', async () => {
   await S.sql`delete from notification_deliveries where notification_id in (select id from notifications where user_id = ${spec.user.id} and event = 'away_back')`;
   await S.sql`delete from notifications where user_id = ${spec.user.id} and event = 'away_back'`;
