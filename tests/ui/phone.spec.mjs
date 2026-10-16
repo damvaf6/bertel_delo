@@ -7227,6 +7227,77 @@ test('расхождения с выпиской ЕГРН перед подпи�
   await shot(hp, 'h4h-rukovoditel-svodka-k-podpisi');
 });
 
+// 2.269: «Вернуть эксперту» пунктами — и находки ИИ, сверенные с заявкой и заданием на оценку (не только с выпиской ЕГРН):
+// строка у файла, пункты в замечании после расхождений с выпиской, своя кнопка «Подставить …».
+test('«Вернуть эксперту» с находками по заявке и заданию на оценку (2.269)', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), ep = await ctx(), hp = await ctx();
+  const customer = await signIn(cp, '+79990026901');
+  const expert = await signIn(ep, '+79990026902'), head = await signIn(hp, '+79990026903');
+  const { orgId, id } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Сверка с заявкой ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Заявкина Ольга' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Квартира: сверка с заявкой', $1, $2, 'in_work', current_date + 5, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Заявочная ул., 4","area":"41"}') returning id`, [customer.id, expert.id]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [o.id, expert.id]);
+    return { orgId: org.id, id: o.id };
+  });
+  const up = await ep.request.post(`/api/orders/${id}/results`, { data: Buffer.from('%PDF-1.4 Отчёт'), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Отчёт.pdf') } });
+  expect(up.status()).toBe(201);
+  expect((await ep.request.post(`/api/documents/${(await up.json()).document.id}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  const egrn = { doc_id: id, file: 'Выписка ЕГРН.pdf', where: 'стр. 1', quote: 'Этаж № 6' };
+  await db((c) => c.query(`insert into ai_reviews (order_id, round, requested_by, side, model, items, files)
+    select o.id, o.review_round + 1, o.executor_user_id, 'executor', 'fake', $2::jsonb, jsonb_build_array(jsonb_build_object('id', d.id, 'name', d.filename, 'read', true))
+    from orders o join documents d on d.order_id = o.id and d.kind = 'result' and d.deleted_at is null where o.id = $1`, [id, JSON.stringify([
+    { id: 'realty_identity', hint: 'attention', note: '', marks: [], found: [
+      { text: 'Этаж 5 не совпадает с этажом в выписке ЕГРН «Выписка ЕГРН.pdf» (6, стр. 1) — проверьте, нет ли данных другого объекта', file: 'Отчёт.pdf', where: 'стр. 2', quote: 'Квартира на 5 этаже', egrn },
+      { text: 'Площадь 45,1 кв. м не совпадает с площадью из заявки (41 кв. м) — проверьте, нет ли данных другого объекта', file: 'Отчёт.pdf', where: 'стр. 2', quote: 'Общей площадью 45,1 кв. м',
+        fix: { bad: '45,1', right: '41', from: 'в заявке' } },
+    ] },
+    { id: 'value_date', hint: 'attention', note: '', marks: [], found: [
+      { text: 'Дата оценки в отчёте 01.10.2026, а в задании на оценку «Задание.pdf» — 03.10.2026 (стр. 1); дата оценки берётся из задания — исправьте отчёт или приложите к делу новое задание',
+        file: 'Отчёт.pdf', where: 'стр. 1', quote: 'Дата оценки: 01.10.2026', fix: { bad: '01.10.2026', right: '03.10.2026', from: 'в задании на оценку «Задание.pdf»' } },
+    ] }])]));
+
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const item = hp.locator('#org-sign > li[data-item]').first();
+  await expect(item.locator('[data-role="ai-check"]')).toHaveAttribute('data-ai', 'attention');
+  await expect(item.locator('[data-role="ai-egrn"]')).toHaveText('Расхождения с выпиской ЕГРН (1): Этаж 5 не совпадает с этажом в выписке ЕГРН (6).');
+  await expect(item.locator('[data-role="ai-order"]')).toHaveText('Расхождения с заявкой и заданием на оценку (2): Площадь 45,1 кв. м не совпадает с площадью из заявки (41 кв. м); Дата оценки в отчёте 01.10.2026, а в задании на оценку «Задание.pdf» — 03.10.2026.');
+  await item.locator('[data-role="ai-order"]').scrollIntoViewIfNeeded();
+  await shot(hp, 'h4z-rukovoditel-raskhozhdeniya-zayavka');
+
+  // Открыл «Вернуть эксперту» — сначала расхождение с выпиской, потом находки по заявке и заданию.
+  await item.locator('[data-action="org-return"]').click();
+  const area = item.locator('textarea');
+  const p1 = 'Этаж 5 не совпадает с этажом в выписке ЕГРН (6) — исправьте по выписке';
+  const p2 = 'Площадь 45,1 кв. м не совпадает с площадью из заявки (41 кв. м) — исправьте, как в заявке';
+  const p3 = 'Дата оценки в отчёте 01.10.2026, а в задании на оценку «Задание.pdf» — 03.10.2026 — исправьте, как в задании на оценку';
+  await expect(area).toHaveValue(`${p1}\n${p2}\n${p3}`);
+  await expect(item.locator('[data-role="order-points-hint"]')).toHaveText('Расхождения с заявкой и заданием на оценку из ИИ-проверки эксперта (2) подставлены пунктами — поправьте или уберите лишнее.');
+  await shot(hp, 'h4za-rukovoditel-vozvrat-zayavka');
+  // Убрал пункты по заявке — кнопка возвращает их, второй раз — «уже в замечании».
+  await area.fill(p1);
+  await item.locator('[data-action="org-return-order"]').click();
+  await expect(area).toHaveValue(`${p1}\n${p2}\n${p3}`);
+  await item.locator('[data-action="org-return-order"]').click();
+  await expect(hp.locator('#org-sign-msg')).toHaveText('Все расхождения с заявкой и заданием на оценку уже в замечании');
+  await item.locator('[data-action="org-return-send"]').click();
+  await expect(hp.locator('#org-sign-msg')).toHaveText('Файл возвращён эксперту с замечанием — его подпись снята');
+  const back = await db((c) => c.query('select i.text from org_return_items i join org_returns r on r.id = i.return_id where r.order_id = $1 order by i.n', [id]));
+  expect(back.rows.map((r) => r.text)).toEqual([p1, p2, p3]);
+
+  // Эксперт видит те же три пункта в замечании.
+  await ep.goto(`/kabinet#order=${id}`);
+  for (const p of [p1, p2, p3]) await expect(ep.locator('ul.points').first()).toContainText(p);
+  await ep.locator('ul.points').first().scrollIntoViewIfNeeded();
+  await shot(ep, 'h4zb-ekspert-punkty-zayavka');
+});
+
 test('отбор дел на подпись по ИИ-проверке (2.193): руководитель видит дела без ИИ-проверки этой версии и с «посмотрите»', async ({ browser, baseURL }) => {
   const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
   const cp = await ctx(), ep = await ctx(), hp = await ctx();
@@ -10714,6 +10785,8 @@ test('прогон 2.240: эксперт и руководитель по пач
   await expect(area).toHaveValue([
     'Площадь 45,1 кв. м не совпадает с площадью в выписке ЕГРН (47,3 кв. м) — исправьте по выписке',
     'Кадастровая стоимость 8 200 000 руб. не совпадает с выпиской ЕГРН (8 431 520,17 руб.) — исправьте по выписке',
+    // 2.269: и находка, сверенная с заданием на оценку.
+    'Дата оценки в отчёте 01.10.2026, а в задании на оценку «Задание на оценку.txt» — 03.10.2026 — исправьте, как в задании на оценку',
   ].join('\n'));
   await area.scrollIntoViewIfNeeded();
   await shot(hp, 'd03-progon9-rukovoditel-vernut-punkty');

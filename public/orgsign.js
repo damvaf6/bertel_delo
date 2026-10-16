@@ -163,9 +163,14 @@ const egrnLine = (c) => (c?.egrn?.length
   ? [el('div', { class: 'sig-state warn', 'data-role': 'ai-egrn',
     text: `Расхождения с выпиской ЕГРН (${c.egrn.length}): ${c.egrn.slice(0, 3).join('; ')}${c.egrn.length > 3 ? '; …' : ''}.` })]
   : []);
+// 2.269: расхождения с заявкой и заданием на оценку — так же одной строкой.
+const orderLine = (c) => (c?.order?.length
+  ? [el('div', { class: 'sig-state warn', 'data-role': 'ai-order',
+    text: `Расхождения с ${orderWith(c)} (${c.order.length}): ${c.order.slice(0, 3).map((x) => x.text).join('; ')}${c.order.length > 3 ? '; …' : ''}.` })]
+  : []);
 const aiCheckLine = (d) => (d.ai_check
   ? [el('div', { class: d.ai_check.state === 'ok' ? 'sig-state' : 'sig-state warn', 'data-role': 'ai-check', 'data-ai': d.ai_check.state, text: aiCheckText(d.ai_check) }),
-    ...egrnLine(d.ai_check), ...swappedLine(d)]
+    ...egrnLine(d.ai_check), ...orderLine(d.ai_check), ...swappedLine(d)]
   : []);
 // 2.263: эксперт заменил расхождения с выпиской в черновике (2.232, 2.246) уже после того, как загрузил этот файл, — значит,
 // подписан файл, собранный до замены: в нём прежние значения. Подписать можно и так; «Вернуть: собрать Word заново» —
@@ -319,13 +324,15 @@ function returnForm(d) {
   const box = el('div', { class: 'field hidden', 'data-return-form': d.id },
     el('label', { for: `ret-${d.id}`, text: 'Что исправить — каждый пункт с новой строки (эксперт отметит исправленные)' }), area,
     ...egrnTools(d, area),
+    ...orderTools(d, area),
     ...remarkTools(d, area),
     el('div', { class: 'row' },
       el('button', { class: 'danger', 'data-action': 'org-return-send', onclick: () => sendReturn(d, area.value) }, 'Вернуть с замечанием'),
       el('button', { class: 'secondary', onclick: () => box.classList.add('hidden') }, 'Отмена')));
-  // 2.236: есть расхождения с выпиской ЕГРН из ИИ-проверки эксперта — при первом открытии они уже в замечании пунктами.
+  // 2.236: есть расхождения с выпиской ЕГРН из ИИ-проверки эксперта — при первом открытии они уже в замечании пунктами;
+  // 2.269: и расхождения с заявкой и заданием на оценку.
   const open = el('button', { class: 'secondary', 'data-action': 'org-return', onclick: () => {
-    if (!area.value.trim() && egrnPoints(d).length) { area.value = egrnPoints(d).join('\n'); fitRows(area); }
+    if (!area.value.trim() && aiPoints(d).length) { area.value = aiPoints(d).join('\n'); fitRows(area); }
     box.classList.remove('hidden');
     area.focus();
   } }, 'Вернуть эксперту');
@@ -341,17 +348,40 @@ const egrnPoints = (d) => (d.ai_check?.egrn ?? []).slice(0, 30).map((t) => t.rep
 const fitRows = (area) => { area.rows = Math.min(12, Math.max(3, area.value.split('\n').length * 3)); };
 function egrnTools(d, area) {
   const points = egrnPoints(d);
+  return pointTools(area, points, { role: 'egrn-points-hint', action: 'org-return-egrn', label: 'Подставить расхождения с выпиской ЕГРН',
+    hint: `Расхождения с выпиской ЕГРН из ИИ-проверки эксперта (${points.length}) подставлены пунктами — поправьте или уберите лишнее.`,
+    all: 'Все расхождения с выпиской уже в замечании' });
+}
+
+// 2.269: находки ИИ-проверки эксперта, сверенные с заявкой и заданием на оценку (а не с выпиской), — тоже пунктами:
+// «… — исправьте, как в заявке». Вместе с расхождениями с выпиской — не больше пунктов, чем принимает возврат.
+const orderPoints = (d) => (d.ai_check?.order ?? []).slice(0, 30)
+  .map((x) => `${x.text.replace(/[.\s]+$/, '')} — исправьте, как ${x.from || 'в заявке'}`);
+const aiPoints = (d) => [...egrnPoints(d), ...orderPoints(d)].slice(0, 30);
+// С чем сверено: «с заявкой», «с заданием на оценку», «с заявкой и заданием на оценку» (письмо заказчика, определение суда).
+const WITH = { 'в заявке': 'заявкой', 'в задании на оценку': 'заданием на оценку', 'в письме заказчика': 'письмом заказчика', 'в определении суда': 'определением суда' };
+const orderWith = (c) => {
+  const w = [...new Set((c?.order ?? []).map((x) => WITH[x.from] ?? 'документами дела'))];
+  return w.length > 1 ? `${w.slice(0, -1).join(', ')} и ${w.at(-1)}` : w[0];
+};
+function orderTools(d, area) {
+  const points = orderPoints(d);
+  return pointTools(area, points, { role: 'order-points-hint', action: 'org-return-order', label: `Подставить расхождения с ${orderWith(d.ai_check)}`,
+    hint: `Расхождения с ${orderWith(d.ai_check)} из ИИ-проверки эксперта (${points.length}) подставлены пунктами — поправьте или уберите лишнее.`,
+    all: `Все расхождения с ${orderWith(d.ai_check)} уже в замечании` });
+}
+function pointTools(area, points, { role, action, label, hint, all }) {
   if (!points.length) return [];
-  return [el('div', { class: 'muted', 'data-role': 'egrn-points-hint', text: `Расхождения с выпиской ЕГРН из ИИ-проверки эксперта (${points.length}) подставлены пунктами — поправьте или уберите лишнее.` }),
-    el('div', { class: 'row' }, el('button', { type: 'button', class: 'secondary', 'data-action': 'org-return-egrn', onclick: () => {
+  return [el('div', { class: 'muted', 'data-role': role, text: hint }),
+    el('div', { class: 'row' }, el('button', { type: 'button', class: 'secondary', 'data-action': action, onclick: () => {
       const have = area.value.split(/\r?\n/).map((l) => l.trim());
       const add = points.filter((p) => !have.includes(p));
-      if (!add.length) return say($('org-sign-msg'), 'Все расхождения с выпиской уже в замечании');
+      if (!add.length) return say($('org-sign-msg'), all);
       area.value = area.value.replace(/\s+$/, '') + (area.value.trim() ? '\n' : '') + add.join('\n');
       fitRows(area);
       area.focus();
       say($('org-sign-msg'), '');
-    } }, 'Подставить расхождения с выпиской ЕГРН'))];
+    } }, label))];
 }
 
 // Свои заготовки замечаний (2.103): частый пункт — одной кнопкой в замечание; пункты из замечания — «Запомнить» один раз.

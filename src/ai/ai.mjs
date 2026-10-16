@@ -349,6 +349,17 @@ export function egrnShort(f) {
     .trim().slice(0, 180);
 }
 
+// 2.269: находка, сверенная с заявкой или заданием на оценку (fix.from, без выписки), — коротко, как egrnShort: без совета
+// в конце и страниц; откуда верное значение — «в заявке» / «в задании на оценку» (без имени файла).
+export function fixShort(f) {
+  const text = String(f.text ?? '')
+    .replace(/;\s*дата оценки берётся[^]*$/, '')
+    .replace(/\s—\s(?:проверьте|исправьте)[^]*$/, '')
+    .replace(/\s*\(стр\.\s*\d+\)/g, '')
+    .trim().slice(0, 180);
+  return { text, from: String(f.fix?.from ?? '').replace(/\s*«[^»]*»\s*$/, '').trim() };
+}
+
 // Пункты возврата из расхождений с выпиской ЕГРН (2.247): находки последней проверки файла — правило, верное значение из
 // выписки и короткий текст (как в «Вернуть эксперту», 2.236). Пункт привязан, если начинается с этого текста.
 const egrnTrim = (t) => String(t ?? '').replace(/[.\s]+$/, '');
@@ -397,10 +408,13 @@ export async function aiSignHints(sql, registry, order, docIds, { ok = false, dr
     // 2.258: из них те, что можно заменить в черновике одной кнопкой (как «Заменить на значение из выписки» — swapValue).
     const can = mine.filter((f) => f.egrn.bad && swapValue(f.egrn));
     const swap = can.map(egrnShort);
+    // 2.269: находки, сверенные с заявкой или заданием на оценку, — для «Вернуть эксперту» пунктами, как расхождения с выпиской.
+    const byOrder = [...new Map(att.flatMap((i) => i.found ?? []).filter((f) => !f.egrn && f.fix?.from && (!file || f.file === file))
+      .map(fixShort).filter((x) => x.text).map((x) => [x.text, x])).values()];
     const at = created?.get(id);
     const swapped = draft && at && new Date(draft.at) > new Date(at) ? can.filter((f) => swappedIn(draft.body, f)).map(egrnShort) : [];
     out.set(id, att.length ? { state: 'attention', at: r.at, count: att.length, titles: att.map((i) => (titles.get(i.id) ?? i.id).split(':')[0].trim()).slice(0, 3),
-      ...(egrn.length ? { egrn: [...new Set(egrn)] } : {}), ...(swap.length ? { swap } : {}),
+      ...(egrn.length ? { egrn: [...new Set(egrn)] } : {}), ...(swap.length ? { swap } : {}), ...(byOrder.length ? { order: byOrder } : {}),
       ...(swapped.length ? { swapped: [...new Set(swapped)], draft_at: draft.at } : {}) }
       : ok ? { state: 'ok', at: r.at } : null);
   }
