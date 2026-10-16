@@ -10781,7 +10781,7 @@ test('2.249: утренняя сводка руководителя — эксп
     await c.query(`insert into org_morning_digests (user_id, org_id, day, back, notification_id)
       values ($1, $2, (now() at time zone 'Europe/Moscow')::date, 1, $3)
       on conflict (user_id, org_id, day) do update set sign = 0, handover = 0, stuck = 0, due = 0, overdue = 0, idle = 0, returned = 0, fresh = 0, away = 0,
-        ext_declined = 0, back = 1, notification_id = excluded.notification_id`, [head.id, org.id, n.id]);
+        ext_declined = 0, back = 1, egrn_kept = 0, notification_id = excluded.notification_id`, [head.id, org.id, n.id]);
     return { orgId: org.id, mine: ids.slice(0, 2), other: ids[2] };
   });
   const ref = (id) => `№ ${id.slice(0, 8).toUpperCase()}`;
@@ -11002,10 +11002,12 @@ test('прогон 2.250: эксперт и руководитель по пач
     await c.query("update order_messages set at = at - interval '1 day' where order_id = $1", [A]);
     await c.query("insert into notifications (user_id, type, event) values ($1, 'executor_work', 'away_back')", [expert.id]);
     const { rows: [n] } = await c.query("insert into notifications (user_id, type, event, org_id) values ($1, 'org_morning', 'org_morning_today', $2) returning id", [head.id, orgId]);
+    // Сводку за сегодня могла уже собрать программа (в деле после возврата расхождение с выпиской осталось — egrn_kept):
+    // здесь проверяется только «вернулись», остальные счётчики сбрасываются.
     await c.query(`insert into org_morning_digests (user_id, org_id, day, back, notification_id)
       values ($1, $2, (now() at time zone 'Europe/Moscow')::date, 1, $3)
       on conflict (user_id, org_id, day) do update set sign = 0, handover = 0, stuck = 0, due = 0, overdue = 0, idle = 0, returned = 0, fresh = 0, away = 0,
-        ext_declined = 0, back = 1, notification_id = excluded.notification_id`, [head.id, orgId, n.id]);
+        ext_declined = 0, back = 1, egrn_kept = 0, notification_id = excluded.notification_id`, [head.id, orgId, n.id]);
   });
   // 2.244: «Пока Вас не было» — сообщение заказчика; «Всё посмотрел» убирает блок и после перезагрузки.
   await ep.goto('/kabinet#notifications');
