@@ -4,7 +4,7 @@
 import { api, el, say, formatPhone, formatSize, ROLE_RU, quoted } from '/common.js';
 import { state, show, notFoundView } from '/shell.js';
 import { loadMatch } from '/match.js';
-import { loadReview, loadChat, egrnSwapState } from '/work.js';
+import { loadReview, loadChat, egrnSwapState, egrnSwapFor } from '/work.js';
 import { loadMoney } from '/money.js';
 import { loadDraft, canFixInDraft } from '/draft.js';
 import { loadAnalogs } from '/analogs.js';
@@ -77,6 +77,8 @@ export async function openOrder(id, { to } = {}) {
   setNext({ loaded: true }); // разделы осмотра и черновика показаны — шаги пересчитываются, нужный сейчас блок раскрыт
   // Черновик и «Срок» уже показаны — у предупреждения «нет файла результата» (2.138) видны нужные кнопки.
   renderResultDue(lastDocs?.result_due ?? null);
+  // Черновик и ИИ-проверка показаны — у пунктов замечания руководителя видна «Заменить по выписке» (2.262).
+  if (orgReturnsNow.length) renderOrgReturns(orgReturnsNow);
   const box = { result: 'docs-box', inspect: 'inspect-box', chat: 'chat-box', orgchat: 'org-chat-box', docs: 'docreq-box', review: 'review-box', deadline: 'deadline-box', extend: 'deadline-box', away: 'deadline-box', late: 'deadline-box', sign: 'sign-wait-box', fix: 'org-returns-box', fresh: 'org-returns-box', handover: 'handover-box', onsite: 'onsite-box', notes: 'notes-box', steps: 'steps-box' }[to];
   if (box && !$(box).classList.contains('hidden')) { reveal(box); $(box).scrollIntoView({ block: 'start' }); }
   // «Попросить перенос» из «Моих сроков» (2.134): причина «много дел в этот день» и новый срок — сразу в полях.
@@ -595,11 +597,27 @@ function returnPoints(r) {
     box.checked = p.fixed;
     box.addEventListener('change', () => markPoint(r, p, box));
     return el('li', { class: p.fixed ? 'point fixed' : 'point', 'data-point': String(p.n) },
-      el('label', { for: id, class: 'row gap' }, box, el('span', { text: `${p.n}. ${p.text}` })));
+      el('label', { for: id, class: 'row gap' }, box, el('span', { text: `${p.n}. ${p.text}` })), ...pointSwap(p));
   };
   return [el('div', { class: 'muted', 'data-role': 'points-left', text: `Исправлено ${done} из ${r.items.length}` }),
     el('ul', { class: 'points' }, ...r.items.map(point))];
 }
+
+// 2.262: пункт из расхождения с выпиской ЕГРН (2.236) — «Заменить по выписке» прямо в замечании: та же замена в черновике,
+// что «Заменить на значение из выписки» в ИИ-проверке (2.232); заменено — напоминание собрать Word и отметить пункт.
+// Кнопка — пока черновик правится и та же находка есть в ИИ-проверке.
+function pointSwap(p) {
+  if (!p.egrn || p.fixed) return [];
+  const st = egrnSwapFor(p.egrn);
+  if (!st) return [];
+  if (st.state === 'done') return [el('div', { class: 'point-swap ok', 'data-role': 'point-swap-done', text: `Заменено в черновике: «${st.was}» → «${st.now}», как в выписке ЕГРН. Соберите Word заново, загрузите исправленный файл и отметьте пункт.` })];
+  if (st.state === 'missing') return [el('div', { class: 'point-swap muted', 'data-role': 'point-swap-miss', text: `В тексте черновика «${st.was}» нет — исправьте в файле отчёта (в выписке: ${st.now}).` })];
+  const btn = el('button', { class: 'secondary', type: 'button', 'data-action': 'point-egrn-swap', onclick: () => { btn.disabled = true; st.swap(); } }, 'Заменить по выписке');
+  return [el('div', { class: 'point-swap', 'data-role': 'point-swap' },
+    el('span', { class: 'muted', text: `В черновике «${st.was}» — в выписке ЕГРН «${st.now}». ` }), btn)];
+}
+// ИИ-проверка показана заново (запуск, обновление) — кнопки замены в пунктах замечания по ней.
+document.addEventListener('egrn-swaps-ready', () => { if (current && orgReturnsNow.length) renderOrgReturns(orgReturnsNow); });
 
 async function markPoint(r, p, box) {
   box.disabled = true;

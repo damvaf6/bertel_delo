@@ -187,7 +187,9 @@ export async function orgReturns(sql, orderId, { orgId = null } = {}) {
     ? await sql`select return_id, n, text, fixed_at, egrn from org_return_items where return_id = any(${rows.map((r) => r.id)}::bigint[]) order by return_id, n`
     : [];
   return rows.map((r) => {
-    const points = items.filter((i) => String(i.return_id) === String(r.id)).map((i) => ({ n: i.n, text: i.text, fixed: !!i.fixed_at, fixed_at: i.fixed_at }));
+    // 2.262: пункт из расхождения с выпиской ЕГРН — правило и верное значение: у эксперта в замечании «Заменить по выписке».
+    const points = items.filter((i) => String(i.return_id) === String(r.id)).map((i) => ({ n: i.n, text: i.text, fixed: !!i.fixed_at, fixed_at: i.fixed_at,
+      ...(i.egrn?.rule ? { egrn: { rule: i.egrn.rule, ...(i.egrn.right ? { right: i.egrn.right } : {}) } } : {}) }));
     const ret = {
       id: Number(r.id),
       at: r.created_at,

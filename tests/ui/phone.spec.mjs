@@ -11445,3 +11445,78 @@ test('прогон 2.260: эксперт и руководитель по пач
   await shot(hp, 'd35-progon11-rukovoditel-svodka-k-podpisi');
   for (const p of [ep, hp, cp]) await p.context().close();
 });
+
+// 2.262: руководитель вернул отчёт с пунктом из расхождения с выпиской ЕГРН (2.236) — у эксперта в замечании у этого пункта
+// «Заменить по выписке»: та же замена в черновике, что в ИИ-проверке; после — «соберите Word заново и отметьте пункт».
+test('2.262: «Заменить по выписке» прямо в пункте замечания руководителя', async ({ browser, baseURL }) => {
+  test.setTimeout(90_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), hp = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990026201'), head = await signIn(hp, '+79990026202');
+  const customer = await signIn(cp, '+79990026203');
+  const A = await db(async (c) => {
+    const { rows: [org] } = await c.query('insert into organizations (name) values ($1) returning id', [`ООО «Замена в замечании ${Date.now() % 100000}»`]);
+    await c.query("update users set full_name = 'Заменова Зоя' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Квартира: замена в замечании', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"deal","region":"moscow","object_type":"flat","address":"г. Москва, Заменная ул., д. 2, кв. 6","area":"47.3"}') returning id`,
+    [customer.id, expert.id, inDays(6)]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now() - interval '2 days')", [o.id, expert.id]);
+    return o.id;
+  });
+  const txt = (name) => ({ ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) });
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from(['Выписка из Единого государственного реестра недвижимости об объекте недвижимости', 'Вид объекта недвижимости: Помещение',
+      'Кадастровый номер: 77:02:0020020:2626', 'Площадь, м2: 47,3', 'Адрес (местоположение): г. Москва, Заменная ул., д. 2, кв. 6'].join('\n')),
+    headers: txt('Выписка ЕГРН.txt'),
+  })).status()).toBe(201);
+  // Черновик с площадью не по выписке; отчёт — оттуда же; эксперт подписал и проверил ИИ.
+  await ep.goto(`/kabinet#order=${A}`);
+  await ep.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const draftText = ep.getByLabel('Текст заключения');
+  await draftText.fill(`${await draftText.inputValue()}\nОбщей площадью 45,1 кв. м — по техническому паспорту.`);
+  await ep.getByRole('button', { name: 'Сохранить правку' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Правка сохранена');
+  const up = await ep.request.post(`/api/orders/${A}/results`, {
+    data: Buffer.from(['ОТЧЁТ ОБ ОЦЕНКЕ', 'Квартира, кадастровый номер 77:02:0020020:2626', 'Общей площадью 45,1 кв. м — по техническому паспорту.'].join('\n')),
+    headers: txt('Отчёт.txt'),
+  });
+  expect(up.status()).toBe(201);
+  const docId = (await up.json()).document.id;
+  expect((await ep.request.post(`/api/documents/${docId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  expect((await ep.request.post(`/api/orders/${A}/review/ai`, { headers: H })).status()).toBe(201);
+  // Руководитель вернул: пункт из расхождения (2.236) и свой.
+  const p1 = 'Площадь 45,1 кв. м не совпадает с площадью в выписке ЕГРН (47,3 кв. м) — исправьте по выписке';
+  const back = await hp.request.post(`/api/org-documents/${docId}/return`, { data: { comment: `1. ${p1}\n2. Приложите выписку в отчёт` }, headers: H });
+  expect(back.status()).toBe(201);
+
+  await ep.reload();
+  const ret = ep.locator('#org-returns li.return.open');
+  const pt1 = ret.locator('li.point[data-point="1"]');
+  await expect(pt1.locator('[data-role="point-swap"]')).toHaveText('В черновике «45,1» — в выписке ЕГРН «47,3». Заменить по выписке');
+  await expect(ret.locator('li.point[data-point="2"] [data-role^="point-swap"]')).toHaveCount(0);
+  await pt1.scrollIntoViewIfNeeded();
+  await shot(ep, 'd37-ekspert-zamechanie-zamenit-po-vypiske');
+  await pt1.getByRole('button', { name: 'Заменить по выписке' }).click();
+  await expect(pt1.locator('[data-role="point-swap-done"]')).toHaveText('Заменено в черновике: «45,1» → «47,3», как в выписке ЕГРН. Соберите Word заново, загрузите исправленный файл и отметьте пункт.');
+  await expect(draftText).toHaveValue(/Общей площадью 47,3 кв\. м — по техническому паспорту\./);
+  expect((await (await ep.request.get(`/api/orders/${A}/draft`, { headers: H })).json()).draft.body).toContain('Общей площадью 47,3 кв. м');
+  // В ИИ-проверке та же находка — заменена, «Отменить» там же.
+  const areaFind = ep.locator('#review-checks .ai-found li').filter({ hasText: 'Площадь 45,1 кв. м' });
+  await expect(areaFind.getByRole('button', { name: 'Заменить на значение из выписки' })).toBeDisabled();
+  await pt1.scrollIntoViewIfNeeded();
+  await shot(ep, 'd38-ekspert-zamechanie-zameneno');
+  // Отменили в ИИ-проверке — в замечании снова кнопка.
+  await areaFind.getByRole('button', { name: 'Отменить' }).click();
+  await expect(draftText).toHaveValue(/Общей площадью 45,1 кв\. м/);
+  await expect(pt1.getByRole('button', { name: 'Заменить по выписке' })).toBeVisible();
+  // Пункт отмечен исправленным — кнопки нет.
+  await pt1.getByRole('checkbox').check();
+  await expect(ep.locator('#doc-msg')).toHaveText('Пункт 1 отмечен исправленным');
+  await expect(pt1.locator('[data-role^="point-swap"]')).toHaveCount(0);
+  for (const p of [ep, hp, cp]) await p.context().close();
+});

@@ -716,8 +716,10 @@ test('2.247: повторная подпись после «Вернуть эк�
   const links = await S.sql`select n, egrn from org_return_items where return_id = ${r.body.return.id} order by n`;
   assert.deepEqual(links.map((x) => [x.n, x.egrn?.rule ?? null, x.egrn?.right ?? null]), [[1, links[0].egrn.rule, '47,3'], [2, links[1].egrn.rule, '6'], [3, null, null]]);
   assert.ok(links[0].egrn.rule);
-  // Привязка в ответы эксперту не уходит.
-  assert.ok(!JSON.stringify(await docsOf(ex, o)).includes('"rule"'));
+  // 2.262: эксперту у пункта — только правило и верное значение из выписки (для «Заменить по выписке»), без остального.
+  const mine = (await docsOf(ex, o)).org_returns[0].items;
+  assert.deepEqual(mine.map((p) => p.egrn ?? null), [{ rule: links[0].egrn.rule, right: '47,3' }, { rule: links[1].egrn.rule, right: '6' }, null]);
+  assert.ok(!JSON.stringify(mine).includes('"short"'));
   const state = async () => (await head.req('GET', `/api/orgs/${org.id}/signing`)).body.items.find((x) => x.order_ref.endsWith(o.id.slice(0, 8).toUpperCase()))
     .returns[0].items.map((p) => [p.n, p.fixed, p.egrn ?? null]);
   // После возврата ИИ-проверку ещё не запускали.
