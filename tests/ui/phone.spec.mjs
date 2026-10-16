@@ -7296,6 +7296,31 @@ test('«Вернуть эксперту» с находками по заявк�
   for (const p of [p1, p2, p3]) await expect(ep.locator('ul.points').first()).toContainText(p);
   await ep.locator('ul.points').first().scrollIntoViewIfNeeded();
   await shot(ep, 'h4zb-ekspert-punkty-zayavka');
+
+  // 2.271: эксперт удалил возвращённый файл, загрузил исправленную версию (дата оценки — как в задании, площадь — прежняя), подписал и проверил
+  // заново — у руководителя у пунктов по заявке и заданию видно, ушло ли расхождение, как у пунктов по выписке (2.247).
+  expect((await ep.request.delete(`/api/documents/${(await up.json()).document.id}`, { headers: H })).status()).toBe(204);
+  const up2 = await ep.request.post(`/api/orders/${id}/results`, { data: Buffer.from('%PDF-1.4 Отчёт 2'), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Отчёт 2.pdf') } });
+  expect(up2.status()).toBe(201);
+  expect((await ep.request.post(`/api/documents/${(await up2.json()).document.id}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  await db((c) => c.query(`insert into ai_reviews (order_id, round, requested_by, side, model, items, files)
+    select o.id, o.review_round + 1, o.executor_user_id, 'executor', 'fake', $2::jsonb, jsonb_build_array(jsonb_build_object('id', d.id, 'name', d.filename, 'read', true))
+    from orders o join documents d on d.order_id = o.id and d.kind = 'result' and d.deleted_at is null and d.filename = 'Отчёт 2.pdf' where o.id = $1`, [id, JSON.stringify([
+    { id: 'realty_identity', hint: 'attention', note: '', marks: [], found: [
+      { text: 'Площадь 45,1 кв. м не совпадает с площадью из заявки (41 кв. м) — проверьте, нет ли данных другого объекта', file: 'Отчёт 2.pdf', where: 'стр. 2', quote: 'Общей площадью 45,1 кв. м',
+        fix: { bad: '45,1', right: '41', from: 'в заявке' } },
+    ] },
+    { id: 'value_date', hint: 'ok', note: '', marks: [], found: [] }])]));
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const again = hp.locator('#org-sign > li[data-item]').first().locator('li.doc', { hasText: 'Отчёт 2.pdf' });
+  await expect(again.locator('[data-role="points-order"]')).toHaveText('Расхождения с заявкой и заданием на оценку по новой ИИ-проверке эксперта: ушли — 1, остались — 1');
+  await expect(again.locator('[data-role="points-egrn"]')).toHaveText('Расхождения с выпиской ЕГРН по новой ИИ-проверке эксперта: ушли — 1');
+  await expect(again.locator('ul.points > li[data-point="2"]')).toHaveAttribute('data-order', 'kept');
+  await expect(again.locator('ul.points > li[data-point="2"]')).toContainText('в новой ИИ-проверке расхождение осталось');
+  await expect(again.locator('ul.points > li[data-point="3"]')).toHaveAttribute('data-order', 'gone');
+  await expect(again.locator('ul.points > li[data-point="3"]')).toContainText('в новой ИИ-проверке расхождения нет');
+  await again.locator('[data-role="points-order"]').scrollIntoViewIfNeeded();
+  await shot(hp, 'h4zc-rukovoditel-povtornaya-podpis-zayavka');
 });
 
 test('отбор дел на подпись по ИИ-проверке (2.193): руководитель видит дела без ИИ-проверки этой версии и с «посмотрите»', async ({ browser, baseURL }) => {

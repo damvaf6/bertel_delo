@@ -16,7 +16,7 @@ let S, owner, dispatcher, spec;
 const FIELDS = { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 15', area: '41' };
 
 before(async () => {
-  S = await startApp();
+  S = await startApp({ AUTH_RATE_MAX: '60' });
   owner = await login(S, '+79990001501');
   dispatcher = await login(S, '+79990001502');
   spec = await login(S, '+79990001503');
