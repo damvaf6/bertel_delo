@@ -2,7 +2,7 @@
 import { api, el, say } from '/common.js';
 import { setNext } from '/next.js';
 import { canFixInDraft, fixInDraft, swapAllInDraft, swapInDraft, undoSwap, undoSwapAll } from '/draft.js';
-import { swapValue } from '/draftfind.js';
+import { findInDraft, swapValue } from '/draftfind.js';
 
 const $ = (id) => document.getElementById(id);
 const SIDE_RU = { customer: 'Заказчик', executor: 'Исполнитель', dispatcher: 'Диспетчер' };
@@ -11,6 +11,16 @@ const timeRu = (s) => new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Mo
 let orderRef = null;
 // 2.246: находки по выписке ЕГРН, которые можно заменить одной кнопкой (egrnSwap), — для «Заменить всё по выписке».
 let swaps = [];
+let swapsReady = false;
+// 2.258: для подсказки в окне подписи — сколько замен по выписке ещё можно сделать в тексте черновика (left) и сколько
+// уже сделано (done); null — ИИ-проверка ещё не показана или черновик сейчас не правится.
+export function egrnSwapState() {
+  if (!swapsReady || !canFixInDraft()) return null;
+  const body = $('draft-text').value;
+  const open = swaps.filter((s) => !s.swapped());
+  return { left: open.filter((s) => findInDraft(body, { bad: s.g.bad, quote: s.quote })).length, done: swaps.length - open.length };
+}
+const swapped = () => document.dispatchEvent(new CustomEvent('egrn-swapped'));
 
 // ——— Проверка результата ———
 
@@ -53,6 +63,7 @@ export async function loadReview(current) {
   const quiet = (c) => { const h = hints.get(c.id); return h?.hint === 'ok' && !h.found?.length && !h.marks?.length && !c.note && c.verdict !== 'issue'; };
   const fold = !r.can_mark && r.checks.filter(quiet).length > 1;
   swaps = [];
+  swapsReady = false;
   const items = r.checks.filter((c) => !fold || !quiet(c)).map((c) => checkItem(order, r, c, hints.get(c.id)));
   if (fold) {
     const q = r.checks.filter(quiet);
@@ -62,6 +73,7 @@ export async function loadReview(current) {
   }
   $('review-checks').replaceChildren(...items);
   swapAllBox();
+  swapsReady = true;
   // «Остальное в порядке» (разбор 03.10.2026, 2.18): правила без отметки, где у ИИ нет замечаний и находок, — одной
   // кнопкой. Правила с подсказкой «посмотрите» человек отмечает сам.
   const rest = r.can_mark ? r.checks.filter((c) => !c.verdict && r.ai && hints.get(c.id)?.hint === 'ok') : [];
@@ -112,6 +124,7 @@ function swapAllBox() {
       lines.classList.toggle('hidden', !r.done.length);
       undo.classList.toggle('hidden', !r.done.length);
       if (!r.done.length) btn.disabled = false;
+      else swapped();
     } catch (err) { btn.disabled = false; say($('review-msg'), err.message); }
   };
   undo.onclick = async () => {
@@ -127,6 +140,7 @@ function swapAllBox() {
       undo.classList.add('hidden');
       btn.disabled = false;
       last = null;
+      swapped();
     } catch (err) { say($('review-msg'), err.message); }
   };
   box.classList.toggle('hidden', list.length < 2);
@@ -208,6 +222,7 @@ function egrnSwap(g, quote, miss) {
       undo.classList.add('hidden');
       btn.disabled = false;
       last = null;
+      swapped();
     } catch (err) { say($('review-msg'), err.message); }
   } }, 'Отменить');
   const done = el('p', { class: 'egrn-swap hidden', 'data-role': 'egrn-swap-done' }, what, ' ', undo);
@@ -235,6 +250,7 @@ function egrnSwap(g, quote, miss) {
       if (!last) { btn.disabled = false; return; }
       what.textContent = `Было «${last.was}» — стало «${last.now}», как в выписке ЕГРН. Черновик сохранён; соберите Word заново.`;
       undo.classList.remove('hidden');
+      swapped();
     } catch (err) { btn.disabled = false; say($('review-msg'), err.message); }
   } }, 'Заменить на значение из выписки');
   return { btn, done };

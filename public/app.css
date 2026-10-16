@@ -431,3 +431,7 @@ ul.checks li.ok { color: var(--ok); }
 .permit-card a { overflow-wrap: anywhere; }
 .replace-ask { border: 1px solid #e0b252; background: #fff8e6; border-radius: 8px; padding: 10px; }
 .replace-ask p { margin: 0 0 6px; }
+/* 2.258: в окне подписи — расхождения с выпиской, которые можно заменить в черновике */
+.doc .sig-swap { margin: 6px 0; padding: 6px 8px; border-radius: 6px; background: #fff3d6; color: #7a4b00; }
+.doc .sig-swap.ok { background: #eef7ee; color: #1f5f1f; }
+.doc .sig-swap .points { margin: 4px 0; }

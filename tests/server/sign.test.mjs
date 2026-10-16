@@ -662,6 +662,36 @@ test('2.225: руководитель перед подписью организ
   assert.notEqual((await stranger.req('GET', `/api/orgs/${org.id}/signing`)).status, 200);
 });
 
+test('2.258: эксперт перед подписью видит расхождения с выпиской ЕГРН, которые можно заменить в черновике одной кнопкой', async () => {
+  const ex = await login(S, '+79990001529');
+  await makeSpecialist(S.sql, ex.user.id);
+  assert.equal((await ex.req('PATCH', '/api/me', { full_name: 'Эксперт Заменин' })).status, 200);
+  const o = await inWork('Квартира: замена по выписке перед подписью', ex);
+  const putTxt = (who, url, body, name) => who.req('POST', url, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } });
+  assert.equal((await putTxt(owner, `/api/orders/${o.id}/documents`, 'Выписка из Единого государственного реестра недвижимости\nВид объекта недвижимости: Помещение\nКадастровый номер: 77:01:0001001:4321\nПлощадь, м2: 47,3', 'Выписка ЕГРН.txt')).status, 201);
+  const d1 = (await putTxt(ex, `/api/orders/${o.id}/results`, 'ОТЧЁТ ОБ ОЦЕНКЕ\nКвартира, кадастровый номер 77:01:0001001:1234\nОбщей площадью 45,1 кв. м', 'Отчёт.txt')).body.document;
+  const docOf = async (d) => (await docsOf(ex, o)).documents.find((x) => x.id === d.id);
+  assert.equal((await docOf(d1)).ai_check?.swap, undefined, 'ИИ-проверку не запускали — списка нет');
+  assert.equal((await ex.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
+  const h = (await docOf(d1)).ai_check;
+  assert.equal(h.state, 'attention');
+  assert.deepEqual([...h.swap].sort(), [
+    'Кадастровый номер 77:01:0001001:1234 не совпадает с номером в выписке ЕГРН (77:01:0001001:4321)',
+    'Площадь 45,1 кв. м не совпадает с площадью в выписке ЕГРН (47,3 кв. м)',
+  ].sort());
+  assert.deepEqual(h.swap, h.egrn);
+  // Исправленная версия без расхождений — списка нет; подписанный файл — подсказки нет.
+  const d2 = (await putTxt(ex, `/api/orders/${o.id}/results`, 'ОТЧЁТ ОБ ОЦЕНКЕ\nКвартира, кадастровый номер 77:01:0001001:4321\nОбщей площадью 47,3 кв. м', 'Отчёт 2.txt')).body.document;
+  assert.equal((await ex.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
+  assert.equal((await docOf(d2)).ai_check?.swap, undefined);
+  assert.equal((await sign(d2, undefined, ex)).status, 201);
+  assert.equal((await docOf(d2)).ai_check, undefined);
+  // Чужой не видит дела.
+  const stranger = await login(S, '+79990001530');
+  assert.notEqual((await stranger.req('GET', `/api/orders/${o.id}/documents`)).status, 200);
+});
+
 test('2.247: повторная подпись после «Вернуть эксперту» — у пункта из расхождения с выпиской видно, ушло ли оно в новой ИИ-проверке', async () => {
   const org = await makeOrg(S.sql, 'ООО «Пункты по выписке»');
   const head = await login(S, '+79990001531');
