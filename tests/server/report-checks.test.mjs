@@ -499,7 +499,7 @@ test('недвижимость и земля (2.59): новые правила �
   const { DEFAULT_MODULES } = await import('../../src/modules/index.mjs');
   const exp = DEFAULT_MODULES.find((m) => m.id === 'expertise');
   const rule = exp.checks.find((c) => c.id === 'realty_identity');
-  assert.deepEqual(rule.auto, ['cadastral_match', 'area_match', 'floor_match', 'building_match', 'cad_value_match', 'share_match', 'land_match']);
+  assert.deepEqual(rule.auto, ['cadastral_match', 'area_match', 'floor_match', 'building_match', 'use_match', 'cad_value_match', 'share_match', 'land_match']);
 });
 
 test('остальные виды оценки (2.43): правила проверки как у транспорта — сверка объекта, шаблон, обязательные сведения', async () => {
@@ -1358,6 +1358,49 @@ test('2.253: размер доли в отчёте — как в выписке 
   const house = { ...doc(['Выписка из ЕГРН\nВид объекта недвижимости: Здание\nВид, номер и дата государственной регистрации права: Общая долевая собственность, 1/5']), id: 'h' };
   assert.deepEqual(run(['Доля 1/3'], [egrn('Площадь, м2: 47,3'), house], { object_type: 'flat' }).share_egrn_match, []);
   assert.ok(AUTO_CHECKS.share_egrn_match);
+});
+test('2.259: назначение помещения (жилое / нежилое) в отчёте — как в выписке ЕГРН на объект', () => {
+  const egrn = (lines, name = 'Выписка ЕГРН.pdf', kind = 'Помещение') => ({ ...doc([`Выписка из Единого государственного реестра недвижимости\nВид объекта недвижимости: ${kind}\nКадастровый номер: 77:01:0001001:4321\n${lines}`], name), id: name });
+  const run = (pages, e, fields = { object_type: 'flat' }) => runAutoChecks(['use_match'], [doc(pages)], { fields, service: 'realty', egrn: e });
+  const living = egrn('Назначение помещения: Жилое помещение\nНазначение здания: Многоквартирный дом');
+  // Как в выписке; назначение здания, аналоги, нежилые помещения на первом этаже дома — не про объект.
+  assert.deepEqual(run(['ОТЧЁТ ОБ ОЦЕНКЕ\nОбъект оценки: квартира, жилое помещение\nНазначение: жилое', 'Описание дома: назначение здания — многоквартирный дом\nАналог 2: назначение — нежилое помещение\nНа первом этаже дома — нежилые помещения'], [living]).use_match, []);
+  // В отчёте «нежилое» — находка с кнопкой к выписке и «Исправить в черновике» в той же форме.
+  let res = run(['ОТЧЁТ ОБ ОЦЕНКЕ', 'Характеристики объекта\nНазначение помещения: Нежилое\nОбъект оценки: нежилое помещение площадью 47,3 кв. м'], [living]);
+  assert.deepEqual(texts(res, 'use_match'), ['Назначение помещения «нежилое» не совпадает с выпиской ЕГРН «Выписка ЕГРН.pdf» («Жилое помещение», стр. 1) — проверьте, нет ли данных другого объекта']);
+  assert.equal(res.use_match[0].where, 'стр. 2');
+  assert.equal(res.use_match[0].quote, 'Назначение помещения: Нежилое');
+  assert.equal(res.use_match[0].egrn.bad, 'Нежилое');
+  assert.equal(res.use_match[0].egrn.right, 'Жилое');
+  assert.match(res.use_match[0].egrn.quote, /Назначение помещения: Жилое помещение/);
+  // Нежилое помещение в жилом доме: заявка «квартира», выписка — нежилое; в отчёте «жилое помещение» — находка с подсказкой о заявке.
+  const office = egrn('Назначение: нежилое\nНазначение здания: Жилой дом');
+  assert.deepEqual(run(['Объект оценки: нежилое помещение в жилом доме', 'Назначение здания: жилое'], [office], { object_type: 'commercial' }).use_match, []);
+  res = run(['Объект оценки: жилое помещение (квартира)'], [office]);
+  assert.deepEqual(texts(res, 'use_match'), ['Назначение помещения «жилое» не совпадает с выпиской ЕГРН «Выписка ЕГРН.pdf» («нежилое», стр. 1); в заявке — жилое — проверьте, нет ли данных другого объекта']);
+  assert.equal(res.use_match[0].egrn.bad, 'жилое');
+  assert.equal(res.use_match[0].egrn.right, 'нежилое');
+  // Дом: назначение здания — его; садовый дом «нежилое здание», а в отчёте «жилой дом».
+  const garden = egrn('Назначение: Нежилое здание', 'ЕГРН дом.pdf', 'Здание');
+  res = run(['Объект оценки: жилой дом с участком'], [garden], { object_type: 'house' });
+  assert.deepEqual(texts(res, 'use_match'), ['Назначение дома «жилое» не совпадает с выпиской ЕГРН «ЕГРН дом.pdf» («Нежилое здание», стр. 1); в заявке — жилое — проверьте, нет ли данных другого объекта']);
+  assert.equal(res.use_match[0].egrn.right, 'нежилой');
+  // Без выписки — как в заявке, «Исправить в черновике» по заявке.
+  res = run(['Назначение помещения: нежилое'], []);
+  assert.deepEqual(texts(res, 'use_match'), ['Назначение помещения «нежилое» не совпадает с заявкой (жилое) — проверьте, нет ли данных другого объекта']);
+  assert.equal(res.use_match[0].fix.from, 'в заявке');
+  assert.equal(res.use_match[0].fix.right, 'жилое');
+  // Выписки спорят — сверяем с заявкой; выписка на участок, земля, нет заявки и выписки — молчим.
+  assert.deepEqual(texts(run(['Назначение: нежилое'], [living, egrn('Назначение помещения: Нежилое помещение', 'ЕГРН-2.pdf')], { object_type: 'commercial' }), 'use_match'), []);
+  const plot = egrn('Назначение: нежилое', 'ЕГРН участок.pdf', 'Земельный участок');
+  assert.deepEqual(texts(run(['Назначение: нежилое'], [plot], { object_type: 'commercial' }), 'use_match'), []);
+  assert.deepEqual(runAutoChecks(['use_match'], [doc(['Назначение: нежилое'])], { fields: {}, service: 'realty', egrn: [] }).use_match, []);
+  assert.deepEqual(runAutoChecks(['use_match'], [doc(['Назначение: нежилое'])], { fields: { object_type: 'flat' }, service: 'land', egrn: [living] }).use_match, []);
+  assert.ok(AUTO_CHECKS.use_match);
+  // Строка «Назначение помещения» сразу после вида права — не часть вида права (иначе вид права не узнавался).
+  const next = egrn('Вид, номер и дата государственной регистрации права: 2.1. Собственность\nНазначение помещения: Жилое помещение');
+  assert.deepEqual(texts(runAutoChecks(['rights_match'], [doc(['Вид права: общая долевая собственность'])], { fields: { object_type: 'flat' }, service: 'realty', egrn: [next] }), 'rights_match'),
+    ['Вид права «общая долевая собственность» не совпадает с выпиской ЕГРН «Выписка ЕГРН.pdf» («Собственность», стр. 1) — проверьте раздел о правах на объект оценки']);
 });
 test('2.242: обременения из выписки ЕГРН упомянуты в отчёте', () => {
   const egrn = (lines, name = 'Выписка ЕГРН.pdf') => ({ ...doc([`Выписка из Единого государственного реестра недвижимости\nВид объекта недвижимости: Помещение\nКадастровый номер: 77:01:0001001:4321\nРаздел 2. Сведения о зарегистрированных правах\nПравообладатель (правообладатели): 1.1. Петров Пётр Петрович\n${lines}`], name), id: name });

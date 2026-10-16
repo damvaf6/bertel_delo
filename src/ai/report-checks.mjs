@@ -869,6 +869,87 @@ function buildingMatch(doc, ctx) {
   return out;
 }
 
+// ——— 2.259: назначение объекта (жилое / нежилое) в отчёте — как в выписке ЕГРН на объект из дела ———
+// В выписке на помещение — «Назначение помещения: Жилое помещение» / «Нежилое помещение», на здание — «Назначение: Жилой
+// дом» / «Нежилое здание» / «Многоквартирный дом» (это жилое). При оценке помещения назначение здания не в счёт (нежилое
+// помещение бывает в жилом доме), при оценке дома — назначение помещений. Выписки спорят — молчим. Без выписки — как в
+// заявке: «Нежилое помещение» — нежилое, квартира, комната, доля, жилой дом — жилое. В отчёте — «Назначение …: …» и
+// «Объект оценки: … нежилое помещение»; аналоги, соседи, первый этаж дома — не про объект.
+const USE_WORD = '(нежил\\S*|(?<![а-яё])жил(?:ое|ой|ая|ого|ым|ом|ые|ых)(?![а-яё])|многоквартирн\\S*)';
+const EGRN_USE_AT = new RegExp(`назначени\\S*(?:\\s+(объекта(?:\\s+недвижимости)?|помещени\\S*|здани\\S*|дома))?\\s*[:\\-–—]?\\s*${USE_WORD}`, 'giu');
+const USE_AT = [
+  EGRN_USE_AT,
+  new RegExp(`(?:объект\\S*\\s+оценки|вид\\s+объекта|тип\\s+объекта|наименование\\s+объекта)\\s*[:\\-–—]?[^\\n:]{0,60}?${USE_WORD}\\s+(помещени|здани|дом)`, 'giu'),
+];
+const USE_SKIP = /аналог|сосед|прежн|перв\S*\s+этаж\S*\s+(?:дома|здания)|в\s+(?:доме|здании)\s+(?:имеются|расположен)/iu;
+const useKind = (word) => (/^нежил/iu.test(word) ? 'non' : 'living');
+const USE_NAME = { non: 'нежилое', living: 'жилое' };
+// «Нежилое» ↔ «жилое» в той же форме и с той же заглавной — для «Исправить в черновике»; «многоквартирный» не меняем.
+function useSwap(word) {
+  if (/^многоквартирн/iu.test(word)) return null;
+  if (/^нежил/iu.test(word)) { const rest = word.slice(2); return /^Н/u.test(word) ? rest[0].toUpperCase() + rest.slice(1) : rest; }
+  return /^Ж/u.test(word) ? `Не${word[0].toLowerCase()}${word.slice(1)}` : `не${word}`;
+}
+// Чьё назначение в строке: 'building' (здание, дом), 'premises' (помещение) или null (не сказано).
+function useOf(qual, word) {
+  if (/^многоквартирн/iu.test(word) || /^(?:здани|дом)/iu.test(qual ?? '')) return 'building';
+  return /^помещени/iu.test(qual ?? '') ? 'premises' : null;
+}
+export function egrnUse(egrn, ctx) {
+  if (ctx.service !== 'realty') return null;
+  const house = ctx.fields?.object_type === 'house';
+  const values = new Map();
+  for (const d of egrnOnObject(egrn, ctx)) {
+    if (!Array.isArray(d.pages)) continue;
+    const head = d.pages.slice(0, 2).join('\n');
+    if (EGRN_LAND.test(head) && !EGRN_BUILT.test(head)) continue;
+    d.pages.forEach((page, i) => {
+      for (const m of page.matchAll(EGRN_USE_AT)) {
+        const of = useOf(m[1], m[2]);
+        if (house ? of === 'premises' : of === 'building') continue;
+        if (/аналог/iu.test(lineBefore(page, m.index))) continue;
+        const line = lineAround(page, m.index);
+        const kind = useKind(m[2]);
+        if (!values.has(kind)) values.set(kind, { name: d.name, page: i, doc: d.id, quote: line, word: clean(page.slice(m.index + m[0].length - m[2].length).split('\n')[0]).slice(0, 40) });
+      }
+    });
+  }
+  return oneValue(values);
+}
+function useMatch(doc, ctx) {
+  if (ctx.service !== 'realty') return [];
+  const type = ctx.fields?.object_type;
+  const mine = type === 'commercial' ? 'non' : type ? 'living' : null;
+  const egrn = ctx.egrn?.length ? egrnUse(ctx.egrn, ctx) : null;
+  const ref = egrn ? egrn.v : mine;
+  if (!ref) return [];
+  const house = type === 'house';
+  const out = [];
+  const seen = new Set();
+  eachPage(doc, (page, i) => {
+    for (const re of USE_AT) {
+      for (const m of page.matchAll(re)) {
+        const qual = re === EGRN_USE_AT ? m[1] : m[3];
+        const word = re === EGRN_USE_AT ? m[2] : m[1];
+        const of = useOf(qual, word);
+        if (house ? of === 'premises' : of === 'building') continue;
+        const line = lineAround(page, m.index);
+        const kind = useKind(word);
+        if (kind === ref || USE_SKIP.test(line) || seen.has(kind)) continue;
+        seen.add(kind);
+        const swap = useSwap(word);
+        const fix = swap ? { bad: word, right: swap } : null;
+        const what = house ? 'дома' : 'помещения';
+        out.push({ page: i, quote: line, egrn: egrnAt(egrn), ...(fix ? { fix: egrn ? fix : { ...fix, from: MINE } } : {}),
+          text: egrn
+            ? `Назначение ${what} «${USE_NAME[kind]}» не совпадает с выпиской ЕГРН «${egrn.name}» («${egrn.word}», стр. ${egrn.page + 1})${mine && mine !== egrn.v ? `; в заявке — ${USE_NAME[mine]}` : ''} — проверьте, нет ли данных другого объекта`
+            : `Назначение ${what} «${USE_NAME[kind]}» не совпадает с заявкой (${USE_NAME[mine]}) — проверьте, нет ли данных другого объекта` });
+      }
+    }
+  });
+  return out;
+}
+
 // ——— 2.233: кадастровая стоимость в отчёте — как в выписке ЕГРН из дела ———
 // В выписке: «Кадастровая стоимость, руб.: 8123456.78» (число — в той же строке или в следующей, если в строке только
 // подпись), дата — «по состоянию на …» в той же строке или «Дата определения кадастровой стоимости: …» на странице.
@@ -976,7 +1057,7 @@ function cadValueMatch(doc, ctx) {
 // Прежний собственник, продавец, аналоги — не про объект.
 const RIGHTS_HOLDER_AT = /правообладател\S*(?:\s*\([^)\n]*\))?\s*[:\-–—]?/giu;
 const RIGHTS_KIND_AT = /вид\S*(?:,\s*номер\S*)?(?:\s+и)?(?:\s+дата\S*)?(?:\s+и\s+время)?\s+(?:государственн\S*\s+)?регистраци\S*\s+прав\S*\s*[:\-–—]?/giu;
-const RIGHTS_STOP = /^\s*(?:\d+(?:\.\d+)*\.?\s*)?(?:вид\S*[,\s]|документ|ограничени|сведения|заявленн|особые|правоприт|кадастров|получател)/iu;
+const RIGHTS_STOP = /^\s*(?:\d+(?:\.\d+)*\.?\s*)?(?:вид\S*[,\s]|документ|ограничени|сведения|заявленн|особые|правоприт|кадастров|получател|назначени|наименовани|адрес|площад)/iu;
 const PERSON = /(?<![А-ЯЁа-яё])([А-ЯЁ][а-яё]+(?:-[А-ЯЁ][а-яё]+)?)\s+(?:([А-ЯЁ])[а-яё]+\s+[А-ЯЁ][а-яё]+(?:вич|вна|чна|оглы|кызы)|([А-ЯЁ])\.\s*[А-ЯЁ]\.)/gu;
 const ORG = /(?<![А-ЯЁа-яё])(?:ООО|АО|ПАО|ЗАО|ОАО|НАО|ГУП|МУП|ФГУП|ИП)\s*[«"„]([^»"“\n]{2,80})[»"“]/gu;
 const REPORT_HOLDER_AT = /(?:правообладател\S*|собственник\S*(?:\s+объекта(?:\s+оценки)?)?|субъект\S*\s+прав\S*)(?:\s*\([^)\n]*\))?\s*[:\-–—]\s*/giu;
@@ -2307,6 +2388,7 @@ const PER_DOC = {
   area_match: areaMatch,
   floor_match: floorMatch,
   building_match: buildingMatch,
+  use_match: useMatch,
   cad_value_match: cadValueMatch,
   rights_match: rightsMatch,
   share_match: shareMatch,
@@ -2335,6 +2417,7 @@ export const AUTO_CHECKS = Object.freeze({
   area_match: 'площадь объекта в отчёте — как в выписке ЕГРН из дела, а без неё — как в заявке',
   floor_match: 'этаж и этажность дома в отчёте — как в выписке ЕГРН из дела, а без неё — как в заявке',
   building_match: 'год постройки и материал стен дома в отчёте — как в выписке ЕГРН на здание из дела, а год без неё — как в заявке',
+  use_match: 'назначение помещения или дома (жилое / нежилое) в отчёте — как в выписке ЕГРН на объект из дела, а без неё — как в заявке',
   cad_value_match: 'кадастровая стоимость объекта в отчёте — как в выписке ЕГРН из дела (если в отчёте своя дата «по состоянию на» — с той же датой)',
   rights_match: 'правообладатель и вид права (собственность, общая долевая, общая совместная) в отчёте — как в выписке ЕГРН на объект из дела',
   encumbrance_match: 'ограничения и обременения из выписки ЕГРН на объект (ипотека, арест, запрещение регистрации, аренда, сервитут, доверительное управление) упомянуты в отчёте',
