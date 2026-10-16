@@ -883,7 +883,7 @@ const USE_AT = [
 ];
 const USE_SKIP = /аналог|сосед|прежн|перв\S*\s+этаж\S*\s+(?:дома|здания)|в\s+(?:доме|здании)\s+(?:имеются|расположен)/iu;
 const useKind = (word) => (/^нежил/iu.test(word) ? 'non' : 'living');
-const USE_NAME = { non: 'нежилое', living: 'жилое' };
+export const USE_NAME = { non: 'нежилое', living: 'жилое' };
 // «Нежилое» ↔ «жилое» в той же форме и с той же заглавной — для «Исправить в черновике»; «многоквартирный» не меняем.
 function useSwap(word) {
   if (/^многоквартирн/iu.test(word)) return null;
@@ -896,6 +896,11 @@ function useOf(qual, word) {
   return /^помещени/iu.test(qual ?? '') ? 'premises' : null;
 }
 export function egrnUse(egrn, ctx) {
+  const values = egrnUses(egrn, ctx);
+  return values ? oneValue(values) : null;
+}
+// 2.261: все назначения из выписок на объект ('living' / 'non') — черновику: одно — в таблицу задания, разные — выбрать эксперту.
+export function egrnUses(egrn, ctx) {
   if (ctx.service !== 'realty') return null;
   const house = ctx.fields?.object_type === 'house';
   const values = new Map();
@@ -914,7 +919,7 @@ export function egrnUse(egrn, ctx) {
       }
     });
   }
-  return oneValue(values);
+  return values;
 }
 function useMatch(doc, ctx) {
   if (ctx.service !== 'realty') return [];

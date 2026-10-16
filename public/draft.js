@@ -235,6 +235,8 @@ const EGRN_WHAT = {
   enc: { one: 'Ограничения и обременения:', many: 'обременения', unit: '', join: '; ', pick: 'верные' },
   // 2.254: размер доли.
   share_size: { one: 'Размер доли', many: 'доли собственников', unit: '', join: ', ', pick: 'долю объекта оценки' },
+  // 2.261: назначение помещения или дома.
+  use: { one: 'Назначение объекта:', many: 'назначения', unit: '', join: ', ', pick: 'верное' },
 };
 function egrnLine(k, e) {
   if (!e) return null;
@@ -261,7 +263,7 @@ function stateText(r) {
     d.inputs?.value_date?.day ? `Дата оценки ${d.inputs.value_date.day} — как ${d.inputs.value_date.what} «${d.inputs.value_date.name}» (стр. ${d.inputs.value_date.page}) — сверьте.` : null,
     d.inputs?.value_date?.days ? `В приложенных документах разные даты оценки (${d.inputs.value_date.days.join(', ')}) — впишите верную сами.` : null,
     // Площадь и кадастровый номер (2.211), этаж и адрес (2.222) из выписки ЕГРН: откуда взяты; в выписках разные — выбрать эксперту.
-    ...['area', 'cadastral', 'floor', 'address', 'share_size'].map((k) => egrnLine(k, d.inputs?.egrn?.[k])),
+    ...['area', 'cadastral', 'floor', 'address', 'share_size', 'use'].map((k) => egrnLine(k, d.inputs?.egrn?.[k])),
     // Правообладатель, вид права и обременения (2.243).
     ...['holders', 'kind', 'enc'].map((k) => egrnLine(k, d.inputs?.egrn?.rights?.[k])),
     d.inputs?.photos?.length ? `Фото в черновике: ${d.inputs.photos.length} (сами снимки ИИ не видит — опишите их).` : null,
