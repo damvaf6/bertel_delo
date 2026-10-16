@@ -52,7 +52,7 @@ export async function loadAwayBack() {
     // Пришли после ИИ-проверки (2.256) — проверка их не видела: строка ведёт к ИИ-проверке, «Проверить заново» там.
     if (d.recheck) {
       items.push(row(d.order_id, 'review', `Проверьте заново: ${d.title}`,
-        `после ИИ-проверки пришли: ${d.recheck.docs.join(', ')} — проверка их не видела`, 'hot'));
+        `пришло после ИИ-проверки: ${d.recheck.docs.join(', ')} — ИИ ещё не сверял отчёт с этим`, 'hot'));
     } else items.push(row(d.order_id, 'docs', `Пришли документы: ${d.title}`, got));
   }
   $('back-list').replaceChildren(...items);

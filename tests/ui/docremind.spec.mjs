@@ -261,7 +261,7 @@ test('2.256: «Пока Вас не было» — документ пришёл
   const row = box.locator(`[data-back-order="${id}"]`);
   await expect(row).toHaveCount(1);
   await expect(row).toContainText('Проверьте заново: Квартира на Отпускной');
-  await expect(row).toContainText('после ИИ-проверки пришли: Выписка из ЕГРН — проверка их не видела');
+  await expect(row).toContainText('пришло после ИИ-проверки: Выписка из ЕГРН — ИИ ещё не сверял отчёт с этим');
   await expect(row).not.toContainText('Пришли документы');
   await row.scrollIntoViewIfNeeded();
   await shot(sp, 'dr10-2256-poka-ne-bylo-proverte-zanovo');
