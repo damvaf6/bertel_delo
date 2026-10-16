@@ -1,7 +1,7 @@
 // Работа по делу (задача 1.5): проверка результата по правилам и переписка по заявке. Тексты — только через textContent.
 import { api, el, say } from '/common.js';
 import { setNext } from '/next.js';
-import { canFixInDraft, fixInDraft, swapAllInDraft, swapInDraft, undoSwap, undoSwapAll } from '/draft.js';
+import { canFixInDraft, fixInDraft, rebuildWord, swapAllInDraft, swapInDraft, undoSwap, undoSwapAll } from '/draft.js';
 import { findInDraft, swapValue } from '/draftfind.js';
 
 const $ = (id) => document.getElementById(id);
@@ -121,6 +121,7 @@ function swapAllBox() {
   const what = el('p', { class: 'muted hidden', 'data-role': 'egrn-swap-all-what' });
   const lines = el('ul', { class: 'ai-swap-all-list hidden', 'data-role': 'egrn-swap-all-list' });
   const undo = el('button', { class: 'link hidden', type: 'button', 'data-action': 'egrn-unswap-all' }, 'Отменить всё');
+  const rebuild = rebuildBox();
   btn.onclick = async () => {
     const todo = list.filter((s) => !s.swapped());
     btn.disabled = true;
@@ -139,7 +140,7 @@ function swapAllBox() {
       lines.classList.toggle('hidden', !r.done.length);
       undo.classList.toggle('hidden', !r.done.length);
       if (!r.done.length) btn.disabled = false;
-      else swapped();
+      else { rebuild.show(); swapped(); }
     } catch (err) { btn.disabled = false; say($('review-msg'), err.message); }
   };
   undo.onclick = async () => {
@@ -153,13 +154,39 @@ function swapAllBox() {
         : `Замены отменены: в черновике снова прежние значения (${r.undone.length}). Черновик сохранён.`;
       lines.classList.add('hidden');
       undo.classList.add('hidden');
+      rebuild.hide();
       btn.disabled = false;
       last = null;
       swapped();
     } catch (err) { say($('review-msg'), err.message); }
   };
   box.classList.toggle('hidden', list.length < 2);
-  box.replaceChildren(...(list.length < 2 ? [] : [btn, what, lines, undo]));
+  box.replaceChildren(...(list.length < 2 ? [] : [btn, what, lines, undo, rebuild.box]));
+}
+
+// 2.268: «Собрать Word заново» — рядом с заменой по выписке ЕГРН (всё сразу или одна находка): черновик сразу собирается в
+// файл результата, без перехода к черновику. Под кнопкой — какой файл собран; дальше order.js спросит, исправленная ли это
+// версия возвращённого файла (2.251). Кнопка видна, пока замена не отменена.
+function rebuildBox() {
+  const note = el('p', { class: 'muted hidden', 'data-role': 'egrn-rebuild-done' });
+  const btn = el('button', { class: 'secondary', type: 'button', 'data-action': 'egrn-rebuild' }, 'Собрать Word заново');
+  btn.onclick = async () => {
+    if (!confirm('Собрать Word из черновика и приложить его файлом результата? Вы проверили текст и отвечаете за него.')) return;
+    btn.disabled = true;
+    try {
+      const doc = await rebuildWord();
+      if (!doc) { note.textContent = 'Черновик сейчас не правится — соберите Word в блоке «Черновик».'; note.classList.remove('hidden'); return; }
+      note.textContent = `Собран «${doc.filename}» — приложен к результату. Подпишите его; прежний файл отчёта, собранный до замены, удалите.`;
+      note.classList.remove('hidden');
+      document.dispatchEvent(new CustomEvent('draft-rebuilt', { detail: doc }));
+    } catch (err) { say($('review-msg'), err.message); } finally { btn.disabled = false; }
+  };
+  const box = el('div', { class: 'ai-rebuild hidden', 'data-role': 'egrn-rebuild' }, el('div', { class: 'row' }, btn), note);
+  return {
+    box,
+    show: () => box.classList.remove('hidden'),
+    hide: () => { box.classList.add('hidden'); note.classList.add('hidden'); },
+  };
 }
 
 // Что изменилось с ИИ-проверки прежней версии файла (2.206): ушло, осталось, появилось — по правилам, нажатие ведёт к правилу.
@@ -230,12 +257,14 @@ function egrnSwap(g, quote, miss, rule) {
   const what = el('span', { 'data-role': 'egrn-swap-what' });
   let last = null;
   let bulked = null;
+  const rebuild = rebuildBox();
   const undo = el('button', { class: 'link', type: 'button', 'data-action': 'egrn-unswap', onclick: async () => {
     try {
       const ok = last && await undoSwap(last);
       if (!ok) { what.textContent = `Текст на этом месте уже правили — верните «${last?.was ?? g.bad}» сами, если нужно.`; undo.classList.add('hidden'); return; }
       what.textContent = `Замена отменена: снова «${last.was}». Черновик сохранён.`;
       undo.classList.add('hidden');
+      rebuild.hide();
       btn.disabled = false;
       last = null;
       swapped();
@@ -256,6 +285,7 @@ function egrnSwap(g, quote, miss, rule) {
       miss.classList.add('hidden');
       what.textContent = `Было «${d.was}» — стало «${d.now}», как в выписке ЕГРН (заменено вместе со всеми).`;
       undo.classList.add('hidden');
+      rebuild.hide();
       done.classList.remove('hidden');
     },
     unbulk: () => { bulked = null; btn.disabled = false; done.classList.add('hidden'); },
@@ -270,10 +300,11 @@ function egrnSwap(g, quote, miss, rule) {
       if (!last) { btn.disabled = false; return; }
       what.textContent = `Было «${last.was}» — стало «${last.now}», как в выписке ЕГРН. Черновик сохранён; соберите Word заново.`;
       undo.classList.remove('hidden');
+      rebuild.show();
       swapped();
     } catch (err) { btn.disabled = false; say($('review-msg'), err.message); }
   } }, 'Заменить на значение из выписки');
-  return { btn, done };
+  return { btn, done, rebuild: rebuild.box };
 }
 
 // 2.218: находка по выписке ЕГРН — одной кнопкой строка из выписки, с которой сверяли, и сам файл выписки на этой странице.
@@ -281,7 +312,7 @@ function egrnSwap(g, quote, miss, rule) {
 // (раньше — только после «Выписка ЕГРН, стр. N»).
 function egrnPlace(g, quote, rule) {
   const { btn: fixBtn, miss } = g.bad ? draftFix(g, quote, 'egrn-draft') : { btn: null, miss: el('p', { class: 'hidden' }) };
-  const swap = g.bad && swapValue(g) ? egrnSwap(g, quote, miss, rule) : { btn: null, done: null };
+  const swap = g.bad && swapValue(g) ? egrnSwap(g, quote, miss, rule) : { btn: null, done: null, rebuild: null };
   const fix = [fixBtn, swap.btn].filter(Boolean);
   const box = el('div', { class: 'ai-egrn hidden', 'data-role': 'egrn-place' },
     el('span', { class: 'ai-mark-where', text: `${g.file}, ${g.where}: ` }),
@@ -292,7 +323,7 @@ function egrnPlace(g, quote, rule) {
     btn.setAttribute('aria-expanded', String(open));
     if (open) box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   } }, `Выписка ЕГРН, ${g.where}`);
-  return [el('br'), btn, box, ...(fix.length ? [el('div', { class: 'row' }, ...fix)] : []), miss, ...(swap.done ? [swap.done] : [])];
+  return [el('br'), btn, box, ...(fix.length ? [el('div', { class: 'row' }, ...fix)] : []), miss, ...(swap.done ? [swap.done, swap.rebuild] : [])];
 }
 async function openEgrn(g) {
   try {

@@ -11666,3 +11666,87 @@ test('2.265: сводка за месяц — расхождения с выпи
   await shot(hp, 'd42-rukovoditel-svodka-vypiska-egrn');
   for (const p of [ep, hp, cp]) await p.context().close();
 });
+
+// 2.268: «Собрать Word заново» — рядом с «Заменить всё по выписке» и с заменой одной находки: черновик сразу собирается в
+// файл результата, без перехода к черновику; отменили замену — кнопка уходит.
+test('2.268: «Собрать Word заново» рядом с заменой по выписке ЕГРН', async ({ browser, baseURL }) => {
+  test.setTimeout(120_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990026801'), customer = await signIn(cp, '+79990026802');
+  const A = await db(async (c) => {
+    await c.query("update users set full_name = 'Сборов Пётр' where id = $1", [expert.id]);
+    await c.query("insert into specialists (user_id, created_at) values ($1, now() - interval '1 year') on conflict do nothing", [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty') on conflict do nothing", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Сборка Word: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Сборная ул., д. 8, кв. 8","area":"48"}') returning id`,
+    [customer.id, expert.id, inDays(9)]);
+    return o.id;
+  });
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from(['Выписка из Единого государственного реестра недвижимости об объекте недвижимости',
+      `${inDays(-2).split('-').reverse().join('.')} № КУВИ-001/2026-26808080`, 'Вид объекта недвижимости: Помещение',
+      'Кадастровый номер: 77:08:0080080:808', 'Площадь, м2: 47,3', 'Адрес (местоположение): г. Москва, Сборная ул., д. 8, кв. 8',
+      'Кадастровая стоимость, руб.: 8431520.17'].join('\n')),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Выписка ЕГРН.txt') },
+  })).status()).toBe(201);
+  // Черновик без пометок «заполнить»: площадь и кадастровая стоимость — не как в выписке.
+  expect((await ep.request.put(`/api/orders/${A}/draft`, {
+    data: { body: '# Задание на оценку\nОбъект оценки: квартира по адресу г. Москва, Сборная ул., д. 8, кв. 8.\nОбщая площадь квартиры 45,1 кв. м.\nКадастровая стоимость объекта: 8 200 000 руб.\n\n# Итог\nИтоговая стоимость 11 900 000 руб.', from: null },
+    headers: H,
+  })).status()).toBe(200);
+  expect((await ep.request.post(`/api/orders/${A}/results`, {
+    data: Buffer.from(['ОТЧЁТ ОБ ОЦЕНКЕ № 8/2026', 'Адрес объекта оценки: г. Москва, Сборная ул., д. 8, кв. 8', 'Кадастровый номер 77:08:0080080:808',
+      'Общая площадь, кв. м: 45,1', 'Кадастровая стоимость объекта: 8 200 000 руб.', 'Итоговая стоимость 11 900 000 руб.'].join('\n')),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Отчёт Сборова.txt') },
+  })).status()).toBe(201);
+  await ep.goto(`/kabinet#order=${A}`);
+  await ep.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(ep.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  const draftText = ep.getByLabel('Текст заключения');
+  const swapAllBox = ep.locator('#ai-swap-all');
+  const rebuildAll = swapAllBox.locator('[data-role="egrn-rebuild"]');
+  // До замены кнопки нет.
+  await expect(rebuildAll).toBeHidden();
+  // Одна находка: заменил — «Собрать Word заново» под ней; отменил — ушла.
+  const areaFind = ep.locator('#review-checks .ai-found li').filter({ hasText: 'Площадь 45,1' });
+  await areaFind.getByRole('button', { name: 'Заменить на значение из выписки' }).click();
+  await expect(areaFind.locator('[data-role="egrn-swap-what"]')).toHaveText('Было «45,1» — стало «47,3», как в выписке ЕГРН. Черновик сохранён; соберите Word заново.');
+  await expect(areaFind.getByRole('button', { name: 'Собрать Word заново' })).toBeVisible();
+  await areaFind.scrollIntoViewIfNeeded();
+  await shot(ep, '54zl-specialist-sobrat-word-odna-zamena');
+  await areaFind.getByRole('button', { name: 'Отменить' }).click();
+  await expect(areaFind.locator('[data-role="egrn-swap-what"]')).toHaveText('Замена отменена: снова «45,1». Черновик сохранён.');
+  await expect(areaFind.getByRole('button', { name: 'Собрать Word заново' })).toBeHidden();
+  // «Заменить всё по выписке» — кнопка рядом; «Отменить всё» — уходит; снова заменить.
+  await swapAllBox.getByRole('button', { name: /^Заменить всё по выписке/ }).click();
+  await expect(swapAllBox.locator('[data-role="egrn-swap-all-what"]')).toContainText(/^Заменено по выписке ЕГРН: 2\./);
+  await expect(rebuildAll).toBeVisible();
+  await expect(areaFind.getByRole('button', { name: 'Собрать Word заново' })).toBeHidden();
+  await swapAllBox.getByRole('button', { name: 'Отменить всё' }).click();
+  await expect(rebuildAll).toBeHidden();
+  await swapAllBox.getByRole('button', { name: /^Заменить всё по выписке/ }).click();
+  await expect(draftText).toHaveValue(/Общая площадь квартиры 47,3 кв\. м\.\nКадастровая стоимость объекта: 8 431 520,17 руб\./);
+  await expect(rebuildAll).toBeVisible();
+  await swapAllBox.scrollIntoViewIfNeeded();
+  await shot(ep, '54zm-specialist-sobrat-word-zanovo');
+  // Отказался в окне — ничего не собрано.
+  const before = (await (await ep.request.get(`/api/orders/${A}/documents`, { headers: H })).json()).documents.filter((d) => d.kind === 'result').length;
+  ep.once('dialog', (d) => d.dismiss());
+  await rebuildAll.getByRole('button', { name: 'Собрать Word заново' }).click();
+  await expect(rebuildAll.locator('[data-role="egrn-rebuild-done"]')).toBeHidden();
+  // Согласился — Word из черновика (с заменёнными значениями) приложен к результату и виден в файлах.
+  const asked = new Promise((ok) => ep.once('dialog', (d) => { ok(d.message()); d.accept(); }));
+  await rebuildAll.getByRole('button', { name: 'Собрать Word заново' }).click();
+  expect(await asked).toBe('Собрать Word из черновика и приложить его файлом результата? Вы проверили текст и отвечаете за него.');
+  await expect(rebuildAll.locator('[data-role="egrn-rebuild-done"]')).toHaveText(/^Собран «.+\.docx» — приложен к результату\. Подпишите его; прежний файл отчёта, собранный до замены, удалите\.$/);
+  const docs = (await (await ep.request.get(`/api/orders/${A}/documents`, { headers: H })).json()).documents.filter((d) => d.kind === 'result');
+  expect(docs.length).toBe(before + 1);
+  const word = docs.find((d) => d.filename.endsWith('.docx'));
+  expect(word).toBeTruthy();
+  await expect(ep.locator('#docs li').filter({ hasText: word.filename }).first()).toBeAttached();
+  await rebuildAll.scrollIntoViewIfNeeded();
+  await shot(ep, '54zn-specialist-word-sobran');
+  for (const p of [ep, cp]) await p.context().close();
+});

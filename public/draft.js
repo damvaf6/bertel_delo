@@ -190,6 +190,15 @@ export async function undoSwapAll(done) {
   if (first) await putText(r.body, first.from, first.was.length);
   return { undone: r.undone, kept: r.kept };
 }
+// 2.268: «Собрать Word заново» рядом с заменой по выписке ЕГРН — тот же Word, что «Приложить как файл результата»: черновик
+// (несохранённая правка — сначала сохраняется) собирается в файл результата; → документ или null (черновик сейчас не
+// правится). Незаполненные места «[заполнить …]» — сервер не даст, сообщение как есть.
+export async function rebuildWord() {
+  if (!canFixInDraft()) return null;
+  if ($('draft-text').value.trim() !== ctx.draft.body) await save();
+  const { document: doc } = await api('POST', `/api/orders/${ctx.order.id}/draft/result`, { from: ctx.draft.id, confirm: true });
+  return doc;
+}
 // Новый текст — на экран и в черновик; не сохранилось — на экране прежний текст.
 async function putText(body, from, len) {
   const t = $('draft-text');
