@@ -7311,7 +7311,7 @@ test('«Вернуть эксперту» с находками по заявк�
         fix: { bad: '45,1', right: '41', from: 'в заявке' } },
     ] },
     { id: 'value_date', hint: 'ok', note: '', marks: [], found: [] }])]));
-  await hp.goto(`/kabinet#org=${orgId}`);
+  await hp.reload();
   const again = hp.locator('#org-sign > li[data-item]').first().locator('li.doc', { hasText: 'Отчёт 2.pdf' });
   await expect(again.locator('[data-role="points-order"]')).toHaveText('Расхождения с заявкой и заданием на оценку по новой ИИ-проверке эксперта: ушли — 1, остались — 1');
   await expect(again.locator('[data-role="points-egrn"]')).toHaveText('Расхождения с выпиской ЕГРН по новой ИИ-проверке эксперта: ушли — 1');
