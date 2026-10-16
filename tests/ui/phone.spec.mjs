@@ -10787,6 +10787,8 @@ test('прогон 2.240: эксперт и руководитель по пач
     'Кадастровая стоимость 8 200 000 руб. не совпадает с выпиской ЕГРН (8 431 520,17 руб.) — исправьте по выписке',
     // 2.269: и находка, сверенная с заданием на оценку.
     'Дата оценки в отчёте 01.10.2026, а в задании на оценку «Задание на оценку.txt» — 03.10.2026 — исправьте, как в задании на оценку',
+    // Прогон 2.270: эксперт заменил по выписке в черновике после загрузки файла — и «соберите Word заново».
+    'Расхождения с выпиской ЕГРН Вы заменили в черновике, а подписали файл, собранный до замены, — соберите Word заново из черновика, загрузите и подпишите новый файл, а этот удалите',
   ].join('\n'));
   await area.scrollIntoViewIfNeeded();
   await shot(hp, 'd03-progon9-rukovoditel-vernut-punkty');
@@ -11029,7 +11031,8 @@ test('прогон 2.250: эксперт и руководитель по пач
   await item.locator('[data-action="org-return"]').click();
   const area = item.locator('textarea');
   const points = (await area.inputValue()).split('\n');
-  expect(points).toHaveLength(4);
+  expect(points).toHaveLength(5);
+  expect(points.at(-1)).toBe('Расхождения с выпиской ЕГРН Вы заменили в черновике, а подписали файл, собранный до замены, — соберите Word заново из черновика, загрузите и подпишите новый файл, а этот удалите'); // прогон 2.270: файл собран до замены
   expect(points.join('\n')).toContain('Правообладатель «Петров Пётр Петрович» не совпадает с выпиской ЕГРН (Сергеев Сергей Сергеевич) — исправьте по выписке');
   expect(points.join('\n')).toContain('Площадь 45,1 кв. м не совпадает с площадью в выписке ЕГРН (47,3 кв. м) — исправьте по выписке');
   // Найдено прогоном: у находки об ипотеке уже есть «укажите его …» — второго «исправьте по выписке» в конце нет.
@@ -11061,7 +11064,7 @@ test('прогон 2.250: эксперт и руководитель по пач
   await expect(beside).toHaveCount(0);
   await expect(ep.locator('#org-returns [data-role="return-file"]')).toContainText('Исправленный файл «Отчёт Десятова испр.txt» загружен');
   const ret = await db((c) => c.query('select r.id from org_returns r where r.order_id = $1', [A]));
-  for (const n of [1, 2, 3, 4]) expect((await ep.request.put(`/api/orders/${A}/org-returns/${ret.rows[0].id}/items/${n}`, { data: { fixed: true }, headers: H })).status()).toBe(200);
+  for (const n of [1, 2, 3, 4, 5]) expect((await ep.request.put(`/api/orders/${A}/org-returns/${ret.rows[0].id}/items/${n}`, { data: { fixed: true }, headers: H })).status()).toBe(200);
   expect((await ep.request.post(`/api/orders/${A}/review/ai`, { headers: H })).status()).toBe(201);
   expect((await ep.request.post(`/api/documents/${(await up2.json()).document.id}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
   await hp.reload();
@@ -11480,7 +11483,8 @@ test('прогон 2.260: эксперт и руководитель по пач
   await item.locator('[data-action="org-return"]').click();
   const area = item.locator('textarea');
   const points = (await area.inputValue()).split('\n');
-  expect(points).toHaveLength(2);
+  expect(points).toHaveLength(3);
+  expect(points.at(-1)).toBe('Расхождения с выпиской ЕГРН Вы заменили в черновике, а подписали файл, собранный до замены, — соберите Word заново из черновика, загрузите и подпишите новый файл, а этот удалите'); // прогон 2.270: файл собран до замены
   await area.scrollIntoViewIfNeeded();
   await shot(hp, 'd30-progon11-rukovoditel-vernut');
   await item.locator('[data-action="org-return-send"]').click();
@@ -11498,7 +11502,7 @@ test('прогон 2.260: эксперт и руководитель по пач
   await expect(ask).toBeHidden();
   const newId = await db(async (c) => (await c.query("select id from documents where order_id = $1 and filename = 'Отчёт Одиннадцатова испр.txt'", [A])).rows[0].id);
   const ret = await db((c) => c.query('select id from org_returns where order_id = $1', [A]));
-  for (const n of [1, 2]) expect((await ep.request.put(`/api/orders/${A}/org-returns/${ret.rows[0].id}/items/${n}`, { data: { fixed: true }, headers: H })).status()).toBe(200);
+  for (const n of [1, 2, 3]) expect((await ep.request.put(`/api/orders/${A}/org-returns/${ret.rows[0].id}/items/${n}`, { data: { fixed: true }, headers: H })).status()).toBe(200);
   expect((await ep.request.post(`/api/documents/${newId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
 
   // 2.252: у руководителя — пометки у возвращённого и у нового файла.
@@ -11822,4 +11826,164 @@ test('2.268: «Собрать Word заново» рядом с заменой �
   await rebuildAll.scrollIntoViewIfNeeded();
   await shot(ep, '54zn-specialist-word-sobran');
   for (const p of [ep, cp]) await p.context().close();
+});
+
+// 2.270: прогон «как эксперт и руководитель» по пачке 2.261–2.269 — одна организация, одно дело о квартире для банка.
+// Выписка ЕГРН: квартира, жилое помещение, 47,3 кв. м, № КУВИ от 25.09.2026; задание на оценку — дата оценки 03.10.2026.
+// Черновик берёт назначение из выписки (2.261); в отчёте — «комната», 45,1 кв. м, выписка «от 20.09.2026» и дата оценки
+// 01.10.2026 (2.267, 2.264, 2.269); в «Сегодня» — «Можно заменить по выписке ЕГРН» (2.266); эксперт подписал и заменил одно
+// значение уже после — у руководителя «файл собран до замены» (2.263); руководитель вернул пунктами по выписке и по заданию
+// (2.269); эксперт заменил площадь прямо в пункте замечания (2.262), остальное — «Заменить всё по выписке», «Собрать Word
+// заново» и «Да, заменить» (2.268, 2.251); у руководителя в сводке за месяц — расхождения при первой подписи (2.265).
+test('прогон 2.270: эксперт и руководитель по пачке 2.261–2.269 на одном деле', async ({ browser, baseURL }) => {
+  test.setTimeout(300_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), hp = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990027001'), head = await signIn(hp, '+79990027002');
+  const customer = await signIn(cp, '+79990027003');
+  const { orgId, A } = await db(async (c) => {
+    const { rows: [org] } = await c.query('insert into organizations (name) values ($1) returning id', [`ООО «Прогон-12 ${Date.now() % 100000}»`]);
+    await c.query("update users set full_name = 'Двенадцатов Глеб' where id = $1", [expert.id]);
+    await c.query("update users set full_name = 'Старшая Вера' where id = $1", [head.id]);
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now() - interval '1 year'), ($1, $3, 'member', now() - interval '1 year')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Двенадцатая пачка: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Двенадцатая ул., д. 12, кв. 12","area":"47.3"}') returning id`,
+    [customer.id, expert.id, inDays(5)]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now() - interval '3 days')", [o.id, expert.id]);
+    return { orgId: org.id, A: o.id };
+  });
+  const txt = (name, extra = {}) => ({ ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), ...extra });
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from(['Выписка из Единого государственного реестра недвижимости об объекте недвижимости',
+      '25.09.2026 № КУВИ-001/2026-12121212', 'Вид объекта недвижимости: Помещение', 'Кадастровый номер: 77:12:0012012:1212',
+      'Площадь, м2: 47,3', 'Назначение помещения: Жилое помещение', 'Вид жилого помещения: Квартира',
+      'Адрес (местоположение): г. Москва, Двенадцатая ул., д. 12, кв. 12'].join('\n')),
+    headers: txt('Выписка ЕГРН.txt'),
+  })).status()).toBe(201);
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from('ЗАДАНИЕ НА ОЦЕНКУ\nДата оценки: 03.10.2026'), headers: txt('Задание на оценку.txt', { 'x-doc-kind': 'basis' }),
+  })).status()).toBe(201);
+
+  // 2.261: черновик — назначение помещения из выписки в таблице задания.
+  await ep.goto(`/kabinet#order=${A}`);
+  await ep.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const draftText = ep.getByLabel('Текст заключения');
+  await expect(draftText).toHaveValue(/\| Назначение помещения \| жилое/);
+  await expect(ep.locator('#draft-state')).toContainText('Назначение объекта: жилое — как в выписке ЕГРН «Выписка ЕГРН.txt» (стр. 1)');
+  await ep.locator('#draft-state').scrollIntoViewIfNeeded();
+  await shot(ep, 'd44-progon12-ekspert-chernovik-naznachenie');
+  const wrong = ['Объект оценки: комната в многоквартирном доме.', 'Общая площадь 45,1 кв. м.', 'Выписка из ЕГРН № КУВИ-001/2026-12121212 от 20.09.2026.'];
+  // Эксперт дописал черновик (пометок «[заполнить …]» не осталось — иначе Word не соберётся) и добавил свои строки.
+  await draftText.fill(`${(await draftText.inputValue()).replace(/\[заполнить[^\]]*\]/gu, 'дописано экспертом')}\n${wrong.join('\n')}`);
+  await ep.getByRole('button', { name: 'Сохранить правку' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Правка сохранена');
+
+  const up = await ep.request.post(`/api/orders/${A}/results`, {
+    data: Buffer.from(['ОТЧЁТ ОБ ОЦЕНКЕ № 12/2026', 'Дата оценки: 01.10.2026', 'Адрес объекта оценки: г. Москва, Двенадцатая ул., д. 12, кв. 12',
+      'Кадастровый номер 77:12:0012012:1212', ...wrong, 'Итоговая стоимость 12 100 000 руб.'].join('\n')),
+    headers: txt('Отчёт Двенадцатова.txt'),
+  });
+  expect(up.status()).toBe(201);
+  const resultId = (await up.json()).document.id;
+  await ep.reload();
+  await ep.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(ep.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  const ident = ep.locator('#review-checks > li[data-check="realty_identity"]');
+  // 2.267: «комната», а в выписке — квартира.
+  const kindFind = ident.locator('.ai-found li').filter({ hasText: 'Вид жилого помещения' });
+  await expect(kindFind).toContainText('Вид жилого помещения «комната» не совпадает с выпиской ЕГРН «Выписка ЕГРН.txt» («Квартира», стр. 1)');
+  await kindFind.scrollIntoViewIfNeeded();
+  await shot(ep, 'd45-progon12-ekspert-komnata');
+  // 2.264: дата выписки в отчёте — не как у выписки в деле.
+  const refFind = ident.locator('.ai-found li').filter({ hasText: 'Дата выписки ЕГРН' });
+  await expect(refFind).toContainText('Дата выписки ЕГРН № КУВИ-001/2026-12121212 в отчёте — 20.09.2026, а у этой выписки в деле — 25.09.2026');
+  await refFind.scrollIntoViewIfNeeded();
+  await shot(ep, 'd46-progon12-ekspert-data-vypiski');
+  // 2.269 (у эксперта): дата оценки — не как в задании на оценку.
+  await expect(ep.locator('#review-checks .ai-found li').filter({ hasText: 'Дата оценки в отчёте 01.10.2026' }))
+    .toContainText('а в задании на оценку «Задание на оценку.txt» — 03.10.2026');
+
+  // 2.266: в «Сегодня» — «Можно заменить по выписке ЕГРН», нажатие — к ИИ-проверке.
+  const tp = await ep.context().newPage();
+  await tp.goto('/kabinet');
+  const swapRow = tp.locator('li[data-today-item="egrn-swap"]').filter({ hasText: 'Двенадцатая пачка: квартира' });
+  await expect(swapRow.locator('[data-role="egrn-swap-what"]')).toHaveText(/^Расхождений с выпиской: [3-9] — /);
+  await swapRow.scrollIntoViewIfNeeded();
+  await shot(tp, 'd47-progon12-ekspert-segodnya-zamenit');
+  await swapRow.locator('button.open').click();
+  await expect(tp.locator('#ai-review-box')).toBeInViewport();
+  await tp.close();
+
+  // Эксперт подписал отчёт как есть, а потом заменил «комнату» по выписке в черновике.
+  expect((await ep.request.post(`/api/documents/${resultId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  await ep.reload();
+  await kindFind.getByRole('button', { name: 'Заменить на значение из выписки' }).click();
+  await expect(draftText).toHaveValue(/Объект оценки: квартира в многоквартирном доме\./);
+
+  // 2.263, 2.269: у руководителя — файл собран до замены, расхождения с выпиской и с заданием на оценку.
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const item = hp.locator('#org-sign > li[data-item]').filter({ hasText: 'Отчёт Двенадцатова.txt' });
+  await expect(item.locator('[data-role="ai-swapped"]')).toContainText('Этот файл загружен');
+  await expect(item.locator('[data-role="ai-egrn"]')).toContainText('Расхождения с выпиской ЕГРН');
+  await expect(item.locator('[data-role="ai-order"]')).toContainText('Расхождения с заданием на оценку (1): Дата оценки в отчёте 01.10.2026');
+  await item.locator('[data-role="ai-swapped"]').scrollIntoViewIfNeeded();
+  await shot(hp, 'd48-progon12-rukovoditel-do-zameny-i-zadanie');
+  await item.locator('[data-action="org-return"]').click();
+  const area = item.locator('textarea');
+  const points = (await area.inputValue()).split('\n');
+  // Прогон 2.270: файл собран до замены — пункт «соберите Word заново» подставлен сразу, последним.
+  expect(points.at(-1)).toBe('Расхождения с выпиской ЕГРН Вы заменили в черновике, а подписали файл, собранный до замены, — соберите Word заново из черновика, загрузите и подпишите новый файл, а этот удалите');
+  expect(points.at(-2)).toBe('Дата оценки в отчёте 01.10.2026, а в задании на оценку «Задание на оценку.txt» — 03.10.2026 — исправьте, как в задании на оценку');
+  expect(points.some((p) => /^Площадь 45,1 кв\. м .+ — исправьте по выписке$/.test(p))).toBe(true);
+  await area.scrollIntoViewIfNeeded();
+  await shot(hp, 'd49-progon12-rukovoditel-vernut-punktami');
+  await item.locator('[data-action="org-return-send"]').click();
+  await expect(hp.locator('#org-sign-msg')).toHaveText('Файл возвращён эксперту с замечанием — его подпись снята');
+
+  // 2.262: у эксперта — «Заменить по выписке» прямо у пункта о площади.
+  await ep.reload();
+  const ret = ep.locator('#org-returns li.return.open');
+  const areaPoint = ret.locator('li.point').filter({ hasText: 'Площадь 45,1' });
+  await expect(areaPoint.locator('[data-role="point-swap"]')).toHaveText('В черновике «45,1» — в выписке ЕГРН «47,3». Заменить по выписке');
+  await expect(ret.locator('li.point').filter({ hasText: 'Дата оценки' }).locator('[data-role^="point-swap"]')).toHaveCount(0);
+  await areaPoint.scrollIntoViewIfNeeded();
+  await shot(ep, 'd50-progon12-ekspert-punkt-zamenit');
+  await areaPoint.getByRole('button', { name: 'Заменить по выписке' }).click();
+  await expect(areaPoint.locator('[data-role="point-swap-done"]')).toContainText('Заменено в черновике: «45,1» → «47,3»');
+
+  // 2.268: остальное — «Заменить всё по выписке», «Собрать Word заново»; 2.251 — «Это исправленная версия?» → «Да, заменить».
+  const swapAllBox = ep.locator('#ai-swap-all');
+  await swapAllBox.getByRole('button', { name: /^Заменить всё по выписке/ }).click();
+  await expect(draftText).toHaveValue(/Выписка из ЕГРН № КУВИ-001\/2026-12121212 от 25\.09\.2026\./);
+  await expect(draftText).toHaveValue(/Общая площадь 47,3 кв\. м\./);
+  const rebuild = swapAllBox.locator('[data-role="egrn-rebuild"]');
+  await expect(rebuild).toBeVisible();
+  ep.once('dialog', (d) => d.accept());
+  await rebuild.getByRole('button', { name: 'Собрать Word заново' }).click();
+  await expect(rebuild.locator('[data-role="egrn-rebuild-done"]')).toContainText('приложен к результату');
+  const ask = ep.locator('#replace-box');
+  await expect(ask.locator('#replace-text')).toContainText('— исправленная версия возвращённого «Отчёт Двенадцатова.txt»?');
+  await ask.scrollIntoViewIfNeeded();
+  await shot(ep, 'd51-progon12-ekspert-word-ispravlennaya');
+  await ask.getByRole('button', { name: 'Да, заменить' }).click();
+  await expect(ep.locator(`#docs li.doc[data-doc="${resultId}"]`)).toHaveCount(0);
+  const word = (await (await ep.request.get(`/api/orders/${A}/documents`, { headers: H })).json()).documents.find((d) => d.kind === 'result' && d.filename.endsWith('.docx'));
+  expect(word).toBeTruthy();
+  const r = await db((c) => c.query('select r.id, count(i.*)::int as n from org_returns r join org_return_items i on i.return_id = r.id where r.order_id = $1 group by r.id', [A]));
+  for (let n = 1; n <= r.rows[0].n; n += 1) expect((await ep.request.put(`/api/orders/${A}/org-returns/${r.rows[0].id}/items/${n}`, { data: { fixed: true }, headers: H })).status()).toBe(200);
+  expect((await ep.request.post(`/api/documents/${word.id}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+
+  // У руководителя — новый Word ждёт подписи; 2.265 — в сводке за месяц расхождения с выпиской при первой подписи.
+  await hp.reload();
+  await expect(hp.locator(`#org-sign li.doc[data-doc="${word.id}"]`)).toBeVisible();
+  await expect(hp.locator('#org-report-box')).toBeVisible();
+  const rep = hp.locator('#org-report > li').filter({ hasText: 'Двенадцатов Глеб' });
+  await expect(rep.locator('[data-expert-egrn]')).toHaveText(/^при первой подписи расхождений с выпиской ЕГРН: [3-9] в 1 деле из 1 проверенных ИИ · чаще: Недвижимость и земля — [3-9]$/);
+  await rep.locator('[data-expert-egrn]').scrollIntoViewIfNeeded();
+  await shot(hp, 'd52-progon12-rukovoditel-svodka-mesyac');
+  for (const p of [ep, hp, cp]) await p.context().close();
 });

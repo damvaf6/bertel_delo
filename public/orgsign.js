@@ -330,9 +330,11 @@ function returnForm(d) {
       el('button', { class: 'danger', 'data-action': 'org-return-send', onclick: () => sendReturn(d, area.value) }, 'Вернуть с замечанием'),
       el('button', { class: 'secondary', onclick: () => box.classList.add('hidden') }, 'Отмена')));
   // 2.236: есть расхождения с выпиской ЕГРН из ИИ-проверки эксперта — при первом открытии они уже в замечании пунктами;
-  // 2.269: и расхождения с заявкой и заданием на оценку.
+  // 2.269: и расхождения с заявкой и заданием на оценку; прогон 2.270: файл собран до замены по выписке (2.263) — и пункт
+  // «соберите Word заново», как у кнопки «Вернуть: собрать Word заново».
   const open = el('button', { class: 'secondary', 'data-action': 'org-return', onclick: () => {
-    if (!area.value.trim() && aiPoints(d).length) { area.value = aiPoints(d).join('\n'); fitRows(area); }
+    const first = [...aiPoints(d), ...(d.ai_check?.swapped?.length ? [SWAP_POINT] : [])].slice(0, 30);
+    if (!area.value.trim() && first.length) { area.value = first.join('\n'); fitRows(area); }
     box.classList.remove('hidden');
     area.focus();
   } }, 'Вернуть эксперту');
