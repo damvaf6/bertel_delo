@@ -275,6 +275,8 @@ function stateText(r) {
     ...['area', 'cadastral', 'floor', 'address', 'share_size', 'use'].map((k) => egrnLine(k, d.inputs?.egrn?.[k])),
     // Правообладатель, вид права и обременения (2.243).
     ...['holders', 'kind', 'enc'].map((k) => egrnLine(k, d.inputs?.egrn?.rights?.[k])),
+    // Вид стоимости из задания на оценку (2.282).
+    d.inputs?.task_kind ? `Вид стоимости: ${d.inputs.task_kind.v} — как ${d.inputs.task_kind.what} «${d.inputs.task_kind.name}» (стр. ${d.inputs.task_kind.page}) — сверьте.` : null,
     // Адрес из задания на оценку (2.281), когда в выписках его нет.
     d.inputs?.task_address ? `Адрес объекта ${d.inputs.task_address.v} — как ${d.inputs.task_address.what} «${d.inputs.task_address.name}» (стр. ${d.inputs.task_address.page})${d.inputs.task_address.typed ? `; в заявке — ${d.inputs.task_address.typed}` : ''} — сверьте.` : null,
     d.inputs?.photos?.length ? `Фото в черновике: ${d.inputs.photos.length} (сами снимки ИИ не видит — опишите их).` : null,

@@ -2508,8 +2508,8 @@ function purposeValue(docs, ctx) {
 // виды стоимости по всем строкам «вид стоимости»; если они уже расходятся между собой (находка выше) — с заданием не сверяем.
 const KIND_STEM = { market: 'рыночн', liquidation: 'ликвидационн', investment: 'инвестиционн', cadastral: 'кадастров', utilization: 'утилизационн' };
 const TASK_KIND = /((?:рыночн|ликвидационн|инвестиционн|утилизационн)\S*(?:\s*(?:,|и|а\s+также)\s+(?:рыночн|ликвидационн|инвестиционн|утилизационн)\S*)*)\s+стоимост/giu;
-const kindList = (list) => list.map((k) => KIND_NAME[k]).join(' и ');
-function assignmentKinds(assignment) {
+export const kindList = (list) => list.map((k) => KIND_NAME[k]).join(' и ');
+export function assignmentKinds(assignment) {
   const got = [];
   for (const d of assignment ?? []) {
     if (!Array.isArray(d.pages)) continue;
