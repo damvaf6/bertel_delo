@@ -48,16 +48,21 @@ export function toOrderFix(rule) {
 // 2.262: пункт замечания руководителя из расхождения с выпиской ЕГРН ({ rule, right }) — та же находка в ИИ-проверке, что
 // можно заменить одной кнопкой: { state: 'open' | 'done' | 'missing', was, now, swap() } или null (находки нет).
 const norm = (t) => String(t ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
-export function egrnSwapFor(link) {
+// 2.285: пункт по заданию на оценку ({ rule, right }, kind 'order') — так же среди находок, заменяемых по заданию (tasks);
+// from — откуда верное значение («в задании на оценку «…»»), src — как в кнопке («из задания»).
+export const taskSwapFor = (link) => swapFor(link, tasks);
+export const egrnSwapFor = (link) => swapFor(link, swaps);
+function swapFor(link, list) {
   if (!swapsReady || !canFixInDraft() || !link?.rule) return null;
-  const same = swaps.filter((s) => s.rule === link.rule);
+  const same = list.filter((s) => s.rule === link.rule);
   const s = link.right ? same.find((x) => norm(x.g.right) === norm(link.right)) : same.length === 1 ? same[0] : null;
   if (!s) return null;
   const d = s.result();
-  if (d) return { state: 'done', ...d };
-  if (s.swapped()) return { state: 'done', was: s.g.bad, now: s.g.right };
-  if (!findInDraft($('draft-text').value, { bad: s.g.bad, quote: s.quote })) return { state: 'missing', was: s.g.bad, now: s.g.right };
-  return { state: 'open', was: s.g.bad, now: s.g.right, swap: () => s.swap() };
+  const from = { from: s.g.from, src: s.src };
+  if (d) return { state: 'done', ...d, ...from };
+  if (s.swapped()) return { state: 'done', was: s.g.bad, now: s.g.right, ...from };
+  if (!findInDraft($('draft-text').value, { bad: s.g.bad, quote: s.quote })) return { state: 'missing', was: s.g.bad, now: s.g.right, ...from };
+  return { state: 'open', was: s.g.bad, now: s.g.right, swap: () => s.swap(), ...from };
 }
 
 // ——— Проверка результата ———
@@ -277,18 +282,19 @@ function draftFix(g, quote, action) {
 // 2.274: дата оценки из задания (письма, определения суда) — и «Заменить на значение из задания» с отменой; 2.277 — и адрес.
 function mineFix(g, quote, rule) {
   const { btn, miss } = draftFix(g, quote, 'fix-draft');
-  const swap = assignmentSwap(g, quote, miss);
+  const swap = assignmentSwap(g, quote, miss, rule);
   const row = el('div', { class: 'row' }, btn, ...(swap ? [swap.btn] : []));
   // 2.279: строка находки — li, в который её вставят (родитель кнопок); ищется при переходе из окна подписи.
   if (g.bad) fixes.push({ g, quote, rule, get li() { return row.closest('li') ?? row; } });
   return [row, miss, ...(swap ? [swap.done, swap.rebuild] : [])];
 }
-function assignmentSwap(g, quote, miss) {
+function assignmentSwap(g, quote, miss, rule) {
   const src = assignmentSource(g);
   if (!src) return null;
   const what = el('span', { 'data-role': 'fix-swap-what' });
   const rebuild = rebuildBox();
   let last = null;
+  let bulked = null;
   const undo = el('button', { class: 'link', type: 'button', 'data-action': 'fix-unswap', onclick: async () => {
     try {
       const ok = last && await undoSwap(last);
@@ -304,10 +310,14 @@ function assignmentSwap(g, quote, miss) {
   const done = el('p', { class: 'egrn-swap hidden', 'data-role': 'fix-swap-done' }, what, ' ', undo);
   // 2.283: заменено вместе со всеми по заданию — отменяется кнопкой «Отменить всё».
   tasks.push({
-    g, quote,
+    g, quote, rule, src,
     swapped: () => !!last || btn.disabled,
+    // 2.285: что заменено и замена той же кнопкой — из пункта замечания руководителя (как 2.262 у выписки).
+    result: () => (last ? { was: last.was, now: last.now } : bulked ? { was: bulked.was, now: bulked.now } : null),
+    swap: () => { btn.click(); },
     missed: () => { miss.textContent = `В тексте черновика «${g.bad}» нет — исправьте в файле отчёта (${g.from}: ${g.right}).`; miss.classList.remove('hidden'); },
     bulk: (d) => {
+      bulked = d;
       btn.disabled = true;
       miss.classList.add('hidden');
       what.textContent = `Было «${d.was}» — стало «${d.now}», как ${g.from} (заменено вместе со всеми).`;
@@ -315,7 +325,7 @@ function assignmentSwap(g, quote, miss) {
       rebuild.hide();
       done.classList.remove('hidden');
     },
-    unbulk: () => { btn.disabled = false; done.classList.add('hidden'); },
+    unbulk: () => { bulked = null; btn.disabled = false; done.classList.add('hidden'); },
   });
   const btn = el('button', { class: `secondary${canFixInDraft() ? '' : ' hidden'}`, type: 'button', 'data-action': 'fix-swap', onclick: async () => {
     btn.disabled = true;

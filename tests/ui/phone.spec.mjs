@@ -11822,6 +11822,75 @@ test('2.262: «Заменить по выписке» прямо в пункте
   for (const p of [ep, hp, cp]) await p.context().close();
 });
 
+test('2.285: «Заменить на значение из задания» прямо в пункте замечания руководителя', async ({ browser, baseURL }) => {
+  test.setTimeout(90_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), hp = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990028501'), head = await signIn(hp, '+79990028502');
+  const customer = await signIn(cp, '+79990028503');
+  const A = await db(async (c) => {
+    const { rows: [org] } = await c.query('insert into organizations (name) values ($1) returning id', [`ООО «Замена по заданию ${Date.now() % 100000}»`]);
+    await c.query("update users set full_name = 'Заданова Зоя' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Квартира: замена по заданию в замечании', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"deal","region":"moscow","object_type":"flat","address":"г. Москва, Заданная ул., д. 3, кв. 8"}') returning id`,
+    [customer.id, expert.id, inDays(6)]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now() - interval '2 days')", [o.id, expert.id]);
+    return o.id;
+  });
+  const txt = (name, kind) => ({ ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), ...(kind ? { 'x-doc-kind': kind } : {}) });
+  // Черновик с датой оценки не как в задании; отчёт — оттуда же; эксперт подписал и проверил ИИ.
+  await ep.goto(`/kabinet#order=${A}`);
+  await ep.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const draftText = ep.getByLabel('Текст заключения');
+  await draftText.fill(`${await draftText.inputValue()}\nСтоимость определена по состоянию на дату оценки 01.10.2026.`);
+  await ep.getByRole('button', { name: 'Сохранить правку' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Правка сохранена');
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from('ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nДата оценки: 03.10.2026'), headers: txt('Задание на оценку.txt', 'basis'),
+  })).status()).toBe(201);
+  const up = await ep.request.post(`/api/orders/${A}/results`, {
+    data: Buffer.from(['ОТЧЁТ ОБ ОЦЕНКЕ № 85/2026', 'Дата оценки: 01.10.2026', 'Итоговая стоимость 10 000 000 руб.'].join('\n')), headers: txt('Отчёт.txt'),
+  });
+  expect(up.status()).toBe(201);
+  const docId = (await up.json()).document.id;
+  expect((await ep.request.post(`/api/documents/${docId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  expect((await ep.request.post(`/api/orders/${A}/review/ai`, { headers: H })).status()).toBe(201);
+  // Руководитель вернул: пункт из расхождения с заданием (2.269) и свой.
+  const p1 = 'Дата оценки в отчёте 01.10.2026, а в задании на оценку «Задание на оценку.txt» — 03.10.2026 — исправьте, как в задании на оценку';
+  const back = await hp.request.post(`/api/org-documents/${docId}/return`, { data: { comment: `1. ${p1}\n2. Приложите задание в отчёт` }, headers: H });
+  expect(back.status()).toBe(201);
+
+  await ep.reload();
+  const ret = ep.locator('#org-returns li.return.open');
+  const pt1 = ret.locator('li.point[data-point="1"]');
+  await expect(pt1.locator('[data-role="point-swap"]')).toHaveText('В черновике «01.10.2026» — в задании на оценку «Задание на оценку.txt» «03.10.2026». Заменить на значение из задания');
+  await expect(ret.locator('li.point[data-point="2"] [data-role^="point-swap"]')).toHaveCount(0);
+  await pt1.scrollIntoViewIfNeeded();
+  await shot(ep, 'd64-ekspert-zamechanie-zamenit-po-zadaniyu');
+  await pt1.getByRole('button', { name: 'Заменить на значение из задания' }).click();
+  await expect(pt1.locator('[data-role="point-swap-done"]')).toHaveText('Заменено в черновике: «01.10.2026» → «03.10.2026», как в задании на оценку «Задание на оценку.txt». Соберите Word заново, загрузите исправленный файл и отметьте пункт.');
+  await expect(draftText).toHaveValue(/на дату оценки 03\.10\.2026\./);
+  expect((await (await ep.request.get(`/api/orders/${A}/draft`, { headers: H })).json()).draft.body).toContain('на дату оценки 03.10.2026.');
+  // В ИИ-проверке та же находка — заменена, «Отменить» там же.
+  const dateFind = ep.locator('#review-checks .ai-found li').filter({ hasText: 'Дата оценки в отчёте 01.10.2026' });
+  await expect(dateFind.getByRole('button', { name: 'Заменить на значение из задания' })).toBeDisabled();
+  await pt1.scrollIntoViewIfNeeded();
+  await shot(ep, 'd65-ekspert-zamechanie-zameneno-po-zadaniyu');
+  await dateFind.getByRole('button', { name: 'Отменить' }).click();
+  await expect(draftText).toHaveValue(/на дату оценки 01\.10\.2026\./);
+  await expect(pt1.getByRole('button', { name: 'Заменить на значение из задания' })).toBeVisible();
+  // Пункт отмечен исправленным — кнопки нет.
+  await pt1.getByRole('checkbox').check();
+  await expect(ep.locator('#doc-msg')).toHaveText('Пункт 1 отмечен исправленным');
+  await expect(pt1.locator('[data-role^="point-swap"]')).toHaveCount(0);
+  for (const p of [ep, hp, cp]) await p.context().close();
+});
+
 test('2.263: «Подписи организации» — эксперт заменил по выписке в черновике, а подписал файл, собранный до замены', async ({ browser, baseURL }) => {
   test.setTimeout(90_000);
   const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
@@ -12196,7 +12265,10 @@ test('прогон 2.270: эксперт и руководитель по пач
   const ret = ep.locator('#org-returns li.return.open');
   const areaPoint = ret.locator('li.point').filter({ hasText: 'Площадь 45,1' });
   await expect(areaPoint.locator('[data-role="point-swap"]')).toHaveText('В черновике «45,1» — в выписке ЕГРН «47,3». Заменить по выписке');
-  await expect(ret.locator('li.point').filter({ hasText: 'Дата оценки' }).locator('[data-role^="point-swap"]')).toHaveCount(0);
+  // 2.285: у пункта по заданию на оценку — та же замена, что в ИИ-проверке; дата в черновике уже из задания (2.207) — «исправьте
+  // в файле отчёта».
+  await expect(ret.locator('li.point').filter({ hasText: 'Дата оценки' }).locator('[data-role="point-swap-miss"]'))
+    .toHaveText('В тексте черновика «01.10.2026» нет — исправьте в файле отчёта (в задании на оценку «Задание на оценку.txt»: 03.10.2026).');
   await areaPoint.scrollIntoViewIfNeeded();
   await shot(ep, 'd50-progon12-ekspert-punkt-zamenit');
   await areaPoint.getByRole('button', { name: 'Заменить по выписке' }).click();

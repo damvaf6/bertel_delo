@@ -1038,9 +1038,11 @@ test('2.271: повторная подпись — у пункта из расх
   assert.equal(r.status, 201, JSON.stringify(r.body));
   const links = await S.sql`select n, egrn from org_return_items where return_id = ${r.body.return.id} order by n`;
   assert.deepEqual(links.map((x) => [x.n, x.egrn?.kind ?? null, x.egrn?.right ?? null]), [[1, 'order', '03.10.2026'], [2, 'order', '41'], [3, null, null]]);
-  // Эксперту у такого пункта «Заменить по выписке» нет — привязка не отдаётся.
+  // Эксперту у такого пункта «Заменить по выписке» нет; 2.285 — привязка по заявке и заданию (fix): кнопка «Заменить на
+  // значение из задания» — если та же находка заменяется одной кнопкой (решает страница).
   const mine = (await docsOf(ex, o)).org_returns[0].items;
   assert.deepEqual(mine.map((p) => p.egrn ?? null), [null, null, null]);
+  assert.deepEqual(mine.map((p) => p.fix ?? null), [{ rule: links[0].egrn.rule, right: '03.10.2026' }, { rule: links[1].egrn.rule, right: '41' }, null]);
   assert.ok(!JSON.stringify(mine).includes('"order"'));
   const state = async () => (await head.req('GET', `/api/orgs/${org.id}/signing`)).body.items.find((x) => x.order_ref.endsWith(o.id.slice(0, 8).toUpperCase()))
     .returns[0].items.map((p) => [p.n, p.fixed, p.order ?? null, p.egrn ?? null]);
