@@ -1157,6 +1157,38 @@ test('2.282: вид стоимости из задания на оценку —
   assert.doesNotMatch(lastPrompt(), /Вид стоимости в задании на оценку/);
 });
 
+test('2.291: цель оценки из задания на оценку — в строку таблицы задания, модели и вместо пометки; другая в заявке — рядом', async () => {
+  const o = await inWork('Квартира: цель оценки из задания в черновик');
+  const putDoc = (body, name, kind) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), ...(kind ? { 'x-doc-kind': kind } : {}) } });
+  // Без задания — цель из заявки, как раньше.
+  let d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {})).body.draft;
+  assert.equal(d.inputs.task_purpose, null);
+  assert.match(d.body, /\| Для чего нужна оценка \| Для суда \|/);
+  assert.equal((await putDoc('ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nЦель оценки: для предоставления в банк в качестве залога\nВид стоимости: рыночная', 'Задание на оценку.txt', 'basis')).status, 201);
+  d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+  assert.deepEqual(d.inputs.task_purpose, { v: 'для предоставления в банк в качестве залога', kinds: ['bank'], what: 'в задании на оценку',
+    by: 'по заданию на оценку', name: 'Задание на оценку.txt', page: 1, typed: 'Для суда' });
+  assert.match(d.body, /\| Для чего нужна оценка \| для предоставления в банк в качестве залога \(по заданию на оценку; в заявке — Для суда\) \|/);
+  assert.match(lastPrompt(), /Цель оценки в задании на оценку «Задание на оценку\.txt» \(стр\. 1\): для предоставления в банк в качестве залога/);
+  assert.doesNotMatch(lastPrompt(), /Для чего нужна оценка: Для суда/);
+  // Модель оставила пометку — программа ставит цель; другие пометки не трогает.
+  const orig = S.providers.ai.complete;
+  S.providers.ai.complete = async () => ({ text: '## 1. Основные факты и выводы\nЦель — [заполнить: цель оценки]. Дата — [заполнить: дата отчёта]\n## 2. Задание на оценку\nТекст', model: 'fake' });
+  try {
+    d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+  } finally { S.providers.ai.complete = orig; }
+  assert.match(d.body, /Цель — для предоставления в банк в качестве залога\. Дата — \[заполнить: дата отчёта\]/);
+  // Правка эксперта сохраняет, откуда цель.
+  const saved = (await spec.req('PUT', `/api/orders/${o.id}/draft`, { body: `${d.body}\nправка`, from: d.id })).body.draft;
+  assert.equal(saved.inputs.task_purpose.v, 'для предоставления в банк в качестве залога');
+  // Письмо заказчика с другой целью рядом — какая верная, решает эксперт: цель из заявки.
+  assert.equal((await putDoc('Письмо заказчика\nЦель оценки: для нотариуса, вступление в наследство', 'Письмо.txt')).status, 201);
+  d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: saved.id })).body.draft;
+  assert.equal(d.inputs.task_purpose, null);
+  assert.match(d.body, /\| Для чего нужна оценка \| Для суда \|/);
+});
+
 test('2.273: перечень документов черновика — номер и дата выписки ЕГРН из самой выписки; сверка 2.264 по нему без находок', async () => {
   const o = await inWork('Квартира: номер выписки в перечне документов');
   const putDoc = (body, name) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {

@@ -2524,6 +2524,8 @@ export function assignmentPurpose(assignment) {
   const sets = [...new Set(got.map((g) => g.kinds.join('+')))];
   return sets.length === 1 ? got[0] : null;
 }
+// 2.291: цель заявки совместима с целью задания (раздел через суд, ипотека при покупке) — как сверяет purposeByTask.
+export const purposeFits = (task, purpose) => task.kinds.some((k) => k === purpose || PURPOSE_ALSO[k].includes(purpose));
 function purposeByTask(docs, task) {
   const ok = new Set(task.kinds.flatMap((k) => [k, ...PURPOSE_ALSO[k]]));
   const out = [];
