@@ -11,6 +11,9 @@ const timeRu = (s) => new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Mo
 let orderRef = null;
 // 2.246: находки по выписке ЕГРН, которые можно заменить одной кнопкой (egrnSwap), — для «Заменить всё по выписке».
 let swaps = [];
+// 2.283: находки по заданию на оценку (письму, определению суда), которые можно заменить одной кнопкой (assignmentSwap), —
+// для «Заменить всё по заданию».
+let tasks = [];
 let swapsReady = false;
 // 2.258: для подсказки в окне подписи — сколько замен по выписке ещё можно сделать в тексте черновика (left) и сколько
 // уже сделано (done); null — ИИ-проверка ещё не показана или черновик сейчас не правится.
@@ -98,6 +101,7 @@ export async function loadReview(current) {
   const quiet = (c) => { const h = hints.get(c.id); return h?.hint === 'ok' && !h.found?.length && !h.marks?.length && !c.note && c.verdict !== 'issue'; };
   const fold = !r.can_mark && r.checks.filter(quiet).length > 1;
   swaps = [];
+  tasks = [];
   swapsReady = false;
   fixes = [];
   const items = r.checks.filter((c) => !fold || !quiet(c)).map((c) => checkItem(order, r, c, hints.get(c.id)));
@@ -108,7 +112,8 @@ export async function loadReview(current) {
       el('ul', { class: 'list' }, ...q.map((c) => checkItem(order, r, c, hints.get(c.id)))))));
   }
   $('review-checks').replaceChildren(...items);
-  swapAllBox();
+  swapAllBox($('ai-swap-all'), swaps, EGRN_ALL);
+  swapAllBox($('ai-task-swap-all'), tasks, TASK_ALL);
   swapsReady = true;
   document.dispatchEvent(new CustomEvent('egrn-swaps-ready'));
   // «Остальное в порядке» (разбор 03.10.2026, 2.18): правила без отметки, где у ИИ нет замечаний и находок, — одной
@@ -134,15 +139,16 @@ export async function loadReview(current) {
 
 // 2.246: «Заменить всё по выписке» — все находки по выписке ЕГРН, которые можно заменить (кроме уже заменённых по одной), —
 // одной кнопкой, черновик сохраняется одной версией; под кнопкой — что было и что стало, и «Отменить всё». Кнопка — пока
-// черновик правится и таких находок хотя бы две (одну заменяют её собственной кнопкой).
-function swapAllBox() {
-  const box = $('ai-swap-all');
-  const list = swaps;
+// черновик правится и таких находок хотя бы две (одну заменяют её собственной кнопкой). 2.283 — так же «Заменить всё по
+// заданию» для находок по заданию на оценку (свой блок, своя отмена).
+const EGRN_ALL = { act: 'egrn', label: 'Заменить всё по выписке', done: 'Заменено по выписке ЕГРН' };
+const TASK_ALL = { act: 'task', label: 'Заменить всё по заданию', done: 'Заменено по заданию на оценку' };
+function swapAllBox(box, list, t) {
   let last = null;
-  const btn = el('button', { class: `secondary${canFixInDraft() ? '' : ' hidden'}`, type: 'button', 'data-action': 'egrn-swap-all' }, `Заменить всё по выписке (${list.length})`);
-  const what = el('p', { class: 'muted hidden', 'data-role': 'egrn-swap-all-what' });
-  const lines = el('ul', { class: 'ai-swap-all-list hidden', 'data-role': 'egrn-swap-all-list' });
-  const undo = el('button', { class: 'link hidden', type: 'button', 'data-action': 'egrn-unswap-all' }, 'Отменить всё');
+  const btn = el('button', { class: `secondary${canFixInDraft() ? '' : ' hidden'}`, type: 'button', 'data-action': `${t.act}-swap-all` }, `${t.label} (${list.length})`);
+  const what = el('p', { class: 'muted hidden', 'data-role': `${t.act}-swap-all-what` });
+  const lines = el('ul', { class: 'ai-swap-all-list hidden', 'data-role': `${t.act}-swap-all-list` });
+  const undo = el('button', { class: 'link hidden', type: 'button', 'data-action': `${t.act}-unswap-all` }, 'Отменить всё');
   const rebuild = rebuildBox();
   btn.onclick = async () => {
     const todo = list.filter((s) => !s.swapped());
@@ -155,7 +161,7 @@ function swapAllBox() {
       for (const d of r.done) todo[d.i].bulk(d);
       const miss = r.missing.length ? ` Нет в тексте черновика: ${r.missing.length} — исправьте в файле отчёта.` : '';
       what.textContent = r.done.length
-        ? `Заменено по выписке ЕГРН: ${r.done.length}. Черновик сохранён; соберите Word заново.${miss}`
+        ? `${t.done}: ${r.done.length}. Черновик сохранён; соберите Word заново.${miss}`
         : `В тексте черновика этих значений нет — исправьте в файле отчёта.`;
       lines.replaceChildren(...r.done.map((d) => el('li', { text: `«${d.was}» → «${d.now}»` })));
       what.classList.remove('hidden');
@@ -298,6 +304,21 @@ function assignmentSwap(g, quote, miss) {
     } catch (err) { say($('review-msg'), err.message); }
   } }, 'Отменить');
   const done = el('p', { class: 'egrn-swap hidden', 'data-role': 'fix-swap-done' }, what, ' ', undo);
+  // 2.283: заменено вместе со всеми по заданию — отменяется кнопкой «Отменить всё».
+  tasks.push({
+    g, quote,
+    swapped: () => !!last || btn.disabled,
+    missed: () => { miss.textContent = `В тексте черновика «${g.bad}» нет — исправьте в файле отчёта (${g.from}: ${g.right}).`; miss.classList.remove('hidden'); },
+    bulk: (d) => {
+      btn.disabled = true;
+      miss.classList.add('hidden');
+      what.textContent = `Было «${d.was}» — стало «${d.now}», как ${g.from} (заменено вместе со всеми).`;
+      undo.classList.add('hidden');
+      rebuild.hide();
+      done.classList.remove('hidden');
+    },
+    unbulk: () => { btn.disabled = false; done.classList.add('hidden'); },
+  });
   const btn = el('button', { class: `secondary${canFixInDraft() ? '' : ' hidden'}`, type: 'button', 'data-action': 'fix-swap', onclick: async () => {
     btn.disabled = true;
     try {
