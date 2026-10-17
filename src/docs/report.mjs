@@ -134,6 +134,19 @@ export function fillTables(body, sections, registry, order, { materials = [], va
   return out;
 }
 
+// Заказчик из задания на оценку (2.292) — первой строкой в раздел сведений о заказчике (тот же, где сведения из досье);
+// уже есть такая строка — второй раз не вставляется.
+export function placeCustomer(body, sections, customer) {
+  const info = sections.find((x) => x.dossier === 'info');
+  if (!customer?.v || !info) return body;
+  const line = `Заказчик: ${customer.v} (${customer.by}${customer.typed ? `; в заявке — ${customer.typed}` : ''})`;
+  if (body.includes(line)) return body;
+  const m = [...body.matchAll(/^#{1,3}\s*(.+)$/gm)].find((h) => headKey(h[1]) === headKey(info.title));
+  if (!m) return body;
+  const at = m.index + m[0].length;
+  return `${body.slice(0, at)}\n${line}${body.slice(at)}`;
+}
+
 function itemsTableFor(registry, order) {
   const positions = listPositions(registry.analogs(order.module, order.service), order);
   return positions.length ? itemsTable(positions) : [];

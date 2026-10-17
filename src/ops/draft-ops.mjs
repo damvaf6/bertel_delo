@@ -6,7 +6,7 @@ import { editsDraft, seesDraft } from '../access/policy.mjs';
 import { DRAFT_GAP, DRAFT_MAX, askAi, cleanDraftAnswer, draftMessages, orderBrief } from '../ai/ai.mjs';
 import { READ_MAX_BYTES, extractPages, readableKind } from '../ai/extract.mjs';
 import { DOCX_MIME } from '../docs/docx.mjs';
-import { fillTables, orderMaterials, orderSections, reportFor, tablesBrief } from '../docs/report.mjs';
+import { fillTables, orderMaterials, orderSections, placeCustomer, reportFor, tablesBrief } from '../docs/report.mjs';
 import { APPROACHES } from '../modules/index.mjs';
 import { analogsBrief } from '../analogs/analogs.mjs';
 import { publicDoc, saveDocument } from './core-ops.mjs';
@@ -16,7 +16,7 @@ import { pastValues, reuseSections, skeleton } from '../docs/reuse.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { orderSources, placeSources, sourcesLines } from '../docs/sources.mjs';
 import { draftDiff } from '../docs/diff.mjs';
-import { assignmentAddress, assignmentKinds, assignmentPurpose, assignmentValue, egrnFacts, egrnRightsFacts, egrnShares, egrnUses, kindList, parseFloorField, purposeFits, sameAddressText, USE_NAME } from '../ai/report-checks.mjs';
+import { assignmentAddress, assignmentCustomer, assignmentKinds, assignmentPurpose, assignmentValue, customerOf, egrnFacts, egrnRightsFacts, egrnShares, egrnUses, kindList, parseFloorField, purposeFits, sameAddressText, sameCustomer, USE_NAME } from '../ai/report-checks.mjs';
 import { assignmentDocs, egrnDocs } from './ai-ops.mjs';
 
 const PHOTOS_MAX = 40;
@@ -164,6 +164,18 @@ function taskPurposeFor(registry, order, assignment) {
     ? registry.service(order.module, order.service)?.fields?.find((f) => f.id === 'purpose')?.options?.find((o) => o.id === mine)?.name ?? null : null;
   return { v: p.value, kinds: p.kinds, what: p.what, by: TASK_BY[p.what], name: p.name, page: p.page + 1, typed };
 }
+// 2.292: заказчик из задания на оценку (письма заказчика), как его сверяет ИИ-проверка (2.288, правило customer_match), —
+// строкой в раздел «Сведения о заказчике…», модели и вместо пометки «заполнить: заказчик»: задание важнее заявки; владелец
+// заявки — другой человек (представитель, родственник) — видно рядом. Задания с разными заказчиками, определение суда — нет.
+function taskCustomerFor(registry, order, assignment, owner) {
+  if (!registry.checks(order.module, order.service).some((r) => (r.auto ?? []).includes('customer_match'))) return null;
+  const c = assignmentCustomer(assignment);
+  if (!c) return null;
+  const mine = owner ? customerOf(owner) : null;
+  const typed = mine && !mine.org && !c.who.org && !sameCustomer(c.who, mine) ? mine.value : null;
+  return { v: c.who.value, org: c.who.org, what: c.what, by: TASK_BY[c.what], name: c.name, page: c.page + 1, typed };
+}
+const CUSTOMER_GAP = /\[(?:заполнить|указать)\s*:?\s*(?:(?:фио|имя|наименование|название)\s+)?заказчик[а-яё]*\s*\]/giu;
 const PURPOSE_GAP = /\[(?:заполнить|указать)\s*:?\s*цел\S*\s+(?:проведения\s+)?оценки[^\]]*\]/giu;
 const VALUE_KIND_GAP = /\[(?:заполнить|указать)\s*:?\s*вид\S*\s+стоимост[^\]]*\]/giu;
 const ruDay = (d) => d.split('-').reverse().join('.');
@@ -341,9 +353,12 @@ export function draftOps() {
         const egrn = await egrnFor(sql, providers.storage, registry, order);
         const task = { address: taskAddressFor(registry, order, assignment, egrn), kind: taskKindFor(registry, order, assignment),
           purpose: taskPurposeFor(registry, order, assignment) };
+        const [owner] = await sql`select full_name from users where id = ${order.owner_user_id}`;
+        task.customer = taskCustomerFor(registry, order, assignment, owner?.full_name);
         const taskBrief = [
           task.address ? `Адрес объекта ${task.address.what} «${task.address.name}» (стр. ${task.address.page}): ${task.address.v} — пиши его везде, где нужен адрес объекта, без пометок` : null,
           task.purpose ? `Цель оценки ${task.purpose.what} «${task.purpose.name}» (стр. ${task.purpose.page}): ${task.purpose.v} — пиши её везде, где нужна цель оценки, без пометок` : null,
+          task.customer ? `Заказчик ${task.customer.what} «${task.customer.name}» (стр. ${task.customer.page}): ${task.customer.v} — пиши его везде, где нужен заказчик, без пометок` : null,
           task.kind ? `Вид стоимости ${task.kind.what} «${task.kind.name}» (стр. ${task.kind.page}): ${task.kind.v} — пиши его везде, где нужен вид стоимости, без пометок` : null,
         ].filter(Boolean).join('\n') || null;
         const taken = ['address', 'area', 'cadastral', 'purpose'].filter((k) => egrn?.[k]?.v || task[k]?.v);
@@ -354,10 +369,11 @@ export function draftOps() {
         // Перечень использованных документов (2.95) — из дела, программой.
         const sources = sourcesLines(await orderSources(sql, registry, order, providers.storage));
         const answer = cleanDraftAnswer(sections, out.text);
-        const aimed = task.purpose ? answer.replace(PURPOSE_GAP, task.purpose.v) : answer;
+        const named = task.customer ? answer.replace(CUSTOMER_GAP, task.customer.v) : answer;
+        const aimed = task.purpose ? named.replace(PURPOSE_GAP, task.purpose.v) : named;
         const kinded = task.kind ? aimed.replace(VALUE_KIND_GAP, task.kind.v) : aimed;
         const dated = fillEgrn(valueDate?.day ? kinded.replace(VALUE_GAP, valueDate.day) : kinded, task.address ? { ...egrn, address: task.address } : egrn);
-        const filled = fillDraft(fillTables(dated, sections, registry, order, { materials, valueDate: valueDate?.day, egrn, task }), sections, dossier);
+        const filled = placeCustomer(fillDraft(fillTables(dated, sections, registry, order, { materials, valueDate: valueDate?.day, egrn, task }), sections, dossier), sections, task.customer);
         const text = placeSources(filled, sections, sources).body.slice(0, DRAFT_MAX);
         const seen = {
           photos: inputs.photos.map((p) => p.name),
@@ -370,6 +386,7 @@ export function draftOps() {
           task_address: task.address,
           task_kind: task.kind,
           task_purpose: task.purpose,
+          task_customer: task.customer,
         };
         const d = await sql.tx(async (tx) => {
           await tx`select id from orders where id = ${order.id} for update`;

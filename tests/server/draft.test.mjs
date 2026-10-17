@@ -1189,6 +1189,38 @@ test('2.291: цель оценки из задания на оценку — в 
   assert.match(d.body, /\| Для чего нужна оценка \| Для суда \|/);
 });
 
+test('2.292: заказчик из задания на оценку — в раздел о заказчике, модели и вместо пометки; другой владелец заявки — рядом', async () => {
+  const o = await inWork('Квартира: заказчик из задания в черновик');
+  const putDoc = (body, name, kind) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), ...(kind ? { 'x-doc-kind': kind } : {}) } });
+  // Без задания — заказчика программа не ставит, как раньше.
+  let d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {})).body.draft;
+  assert.equal(d.inputs.task_customer, null);
+  assert.doesNotMatch(d.body, /^Заказчик: /m);
+  assert.equal((await putDoc('ЗАДАНИЕ НА ОЦЕНКУ\nЗаказчик: Иванов Пётр Сергеевич, паспорт 0000 000000\nОбъект оценки: квартира', 'Задание на оценку.txt', 'basis')).status, 201);
+  d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+  assert.deepEqual(d.inputs.task_customer, { v: 'Иванов Пётр Сергеевич', org: false, what: 'в задании на оценку', by: 'по заданию на оценку',
+    name: 'Задание на оценку.txt', page: 1, typed: 'Тестова Заказчица' });
+  assert.match(d.body, /^## 6\. Сведения о заказчике[^\n]*\nЗаказчик: Иванов Пётр Сергеевич \(по заданию на оценку; в заявке — Тестова Заказчица\)$/m);
+  assert.match(lastPrompt(), /Заказчик в задании на оценку «Задание на оценку\.txt» \(стр\. 1\): Иванов Пётр Сергеевич — пиши его везде/);
+  assert.doesNotMatch(lastPrompt(), /Тестова Заказчица/);
+  // Модель оставила пометку — программа ставит заказчика; реквизиты не трогает.
+  const orig = S.providers.ai.complete;
+  S.providers.ai.complete = async () => ({ text: '## 3. Общие сведения\nЗаказчик — [заполнить: ФИО заказчика]. Реквизиты — [заполнить: реквизиты заказчика]\n## 6. Сведения о заказчике, оценщике и исполнителе\nТекст', model: 'fake' });
+  try {
+    d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+  } finally { S.providers.ai.complete = orig; }
+  assert.match(d.body, /Заказчик — Иванов Пётр Сергеевич\. Реквизиты — \[заполнить: реквизиты заказчика\]/);
+  assert.equal(d.body.match(/^Заказчик: Иванов/gm).length, 1);
+  const saved = (await spec.req('PUT', `/api/orders/${o.id}/draft`, { body: `${d.body}\nправка`, from: d.id })).body.draft;
+  assert.equal(saved.inputs.task_customer.v, 'Иванов Пётр Сергеевич');
+  // Письмо с другим заказчиком рядом — какой верный, решает эксперт: строки нет.
+  assert.equal((await putDoc('Письмо заказчика\nЗаказчик: ООО «Ромашка»', 'Письмо.txt')).status, 201);
+  d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: saved.id })).body.draft;
+  assert.equal(d.inputs.task_customer, null);
+  assert.doesNotMatch(d.body, /^Заказчик: /m);
+});
+
 test('2.273: перечень документов черновика — номер и дата выписки ЕГРН из самой выписки; сверка 2.264 по нему без находок', async () => {
   const o = await inWork('Квартира: номер выписки в перечне документов');
   const putDoc = (body, name) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {

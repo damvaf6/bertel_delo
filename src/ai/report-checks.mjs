@@ -2565,7 +2565,7 @@ export function customerOf(value) {
   if (!words.length || words[0].length < 3 || words[0].endsWith('.')) return null;
   return { org: false, surname: surnameStem(words[0]), initial: words[1]?.[0] ?? null, value: p.slice(0, 120) };
 }
-function sameCustomer(a, b) {
+export function sameCustomer(a, b) {
   if (a.org !== b.org) return false;
   if (a.org) return a.key === b.key || a.key.includes(b.key) || b.key.includes(a.key);
   return a.surname === b.surname && (!a.initial || !b.initial || a.initial === b.initial);
