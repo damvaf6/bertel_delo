@@ -668,6 +668,22 @@ test('2.278: вид стоимости сверяется с заданием н
   assert.deepEqual(await found(), []);
 });
 
+test('2.287: цель оценки сверяется с заданием на оценку, приложенным к делу', async () => {
+  const o = await inWork('Квартира: цель по заданию');
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from('ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nЦель оценки: для совершения сделки купли-продажи'), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание на оценку.txt'), 'x-doc-kind': 'basis' } })).status, 201);
+  assert.equal((await putResult(o, 'ОТЧЁТ ОБ ОЦЕНКЕ № 9/2026\nЦель оценки: для предоставления в суд', 'отчёт.txt', 'text/plain')).status, 201);
+  const found = async () => {
+    const res = await spec.req('POST', `/api/orders/${o.id}/review/ai`);
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    return res.body.ai.items.flatMap((i) => i.found ?? []).map((f) => f.text).filter((t) => /^Цель оценки в отчёте/.test(t));
+  };
+  assert.deepEqual(await found(), ['Цель оценки в отчёте — «для предоставления в суд» (для суда), а в задании на оценку «Задание на оценку.txt» — «для совершения сделки купли-продажи» (стр. 1); цель берётся из задания — исправьте отчёт или приложите к делу новое задание']);
+  await S.sql`update documents set deleted_at = now() where order_id = ${o.id} and kind = 'result'`;
+  assert.equal((await putResult(o, 'ОТЧЁТ ОБ ОЦЕНКЕ № 9/2026\nЦель оценки: для совершения сделки купли-продажи', 'отчёт-2.txt', 'text/plain')).status, 201);
+  assert.deepEqual(await found(), []);
+});
+
 test('2.202: площадь в отчёте сверяется с выпиской ЕГРН, приложенной к просьбе о документах; текст выписки в модель не уходит', async () => {
   const o = await inWork('Квартира: площадь по выписке');
   assert.equal((await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { items: ['egrn'] })).status, 201);
