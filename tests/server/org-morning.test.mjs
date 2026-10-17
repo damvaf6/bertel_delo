@@ -646,3 +646,63 @@ test('2.257: после возврата расхождение с выписк�
   assert.equal((await ex.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
   assert.equal((await signRow()).egrn_kept, 0);
 });
+
+// 2.286: в ИИ-проверке эксперта у файла, который ждёт подписи организации, остались расхождения с заявкой или заданием на
+// оценку (как отбор в «Подписи организации», 2.276) — в утренней сводке руководителя «на подписи — расхождения с заявкой или
+// заданием на оценку: N дело», ведёт к подписи организации сразу с этим отбором; в «Сегодня» — сколько пунктов.
+test('2.286: на подписи расхождения с заявкой или заданием на оценку — в утренней сводке руководителя и в «Сегодня»', async () => {
+  const z = { sign: 0, handover: 0, stuck: 0, due: 0, overdue: 0, idle: 0, returned: 0, fresh: 0, away: 0, ext_declined: 0, back: 0, egrn_kept: 0 };
+  assert.equal(orgDigestText({ ...z, sign: 3, order_diff: 2 }),
+    'На сегодня по организации: 3 дела ждут подписи организации, на подписи — расхождения с заявкой или заданием на оценку: 2 дела');
+  assert.equal(orgDigestTo({ ...z, sign: 1, order_diff: 1, away: 1, back: 1, ext_declined: 1 }), 'sign_order');
+  assert.equal(orgDigestTo({ ...z, sign: 1, order_diff: 1, egrn_kept: 1 }), 'sign');
+  assert.equal(orgDigestTo({ ...z, sign: 1, order_diff: 1, stuck: 1, handover: 1 }), 'stuck');
+  assert.equal(orgDigestTo({ ...z, sign: 1, order_diff: 0, away: 1 }), 'away');
+
+  const h = await login(S, '+79990003881');
+  const ex = await login(S, '+79990003882');
+  const other = await login(S, '+79990003883');
+  const o12 = await makeOrg(S.sql, 'ООО «Сверка с заданием»');
+  const oX = await makeOrg(S.sql, 'ООО «Чужая сверка»');
+  await addMember(S.sql, o12.id, h.user.id, 'head');
+  await addMember(S.sql, oX.id, other.user.id, 'head');
+  await makeSpecialist(S.sql, ex.user.id);
+  await addMember(S.sql, o12.id, ex.user.id, 'member');
+  assert.equal((await ex.req('PATCH', '/api/me', { full_name: 'Эксперт Сверки' })).status, 200);
+  assert.equal((await ex.req('PATCH', '/api/specialist/me', { org_id: o12.id })).status, 200);
+  const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Квартира: расхождение с заданием' })).body.order;
+  assert.equal((await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: addDays(today, 15), fields: FIELDS })).status, 200);
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
+  await ensurePaid(S.sql, o.id);
+  assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: ex.user.id, from: 'matching' })).status, 200);
+  assert.equal((await ex.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  const putTxt = (who, url, body, name) => who.req('POST', url, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } });
+  const sign = (d) => ex.req('POST', `/api/documents/${d.id}/sign`, { confirm: true });
+  assert.equal((await putTxt(owner, `/api/orders/${o.id}/documents`, 'ЗАДАНИЕ НА ОЦЕНКУ\nДата оценки: 03.10.2026', 'Задание на оценку.txt')).status, 201);
+  // Площадь — не как в заявке (40), дата оценки — не как в задании.
+  const d1 = (await putTxt(ex, `/api/orders/${o.id}/results`, 'ОТЧЁТ ОБ ОЦЕНКЕ\nДата оценки: 01.10.2026\nКвартира общей площадью 45,1 кв. м', 'Отчёт.txt')).body.document;
+  assert.equal((await sign(d1)).status, 201);
+  const signRow = async () => (await h.req('GET', '/api/today')).body.orgs.find((g) => g.id === o12.id).to_sign.find((x) => x.order_ref.endsWith(o.id.slice(0, 8).toUpperCase()));
+  assert.equal((await signRow()).order_diff, 0, 'ИИ-проверку не запускали — не в счёт');
+  assert.equal((await ex.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
+  assert.equal((await signRow()).order_diff, 2);
+
+  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(today, '08:50') }) >= 1);
+  const [d] = await S.sql`select sign, order_diff from org_morning_digests where user_id = ${h.user.id} and org_id = ${o12.id}`;
+  assert.deepEqual({ ...d }, { sign: 1, order_diff: 1 });
+  const feed = (await h.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня по организации'));
+  assert.equal(feed.length, 1);
+  assert.equal(feed[0].title, 'На сегодня по организации: 1 дело ждёт подписи организации, на подписи — расхождения с заявкой или заданием на оценку: 1 дело');
+  assert.equal(feed[0].section, `org=${o12.id}&to=sign_order`);
+  assert.doesNotMatch(JSON.stringify(feed), /Квартира|Сверки|45,1|03\.10/);
+  const [rx] = await S.sql`select order_diff from org_morning_digests where user_id = ${other.user.id} and org_id = ${oX.id}`;
+  assert.equal(rx?.order_diff ?? 0, 0);
+
+  // Исправленная версия подписана и проверена, прежняя удалена — расхождений нет.
+  const d2 = (await putTxt(ex, `/api/orders/${o.id}/results`, 'ОТЧЁТ ОБ ОЦЕНКЕ\nДата оценки: 03.10.2026\nКвартира общей площадью 40 кв. м', 'Отчёт 2.txt')).body.document;
+  assert.equal((await ex.req('DELETE', `/api/documents/${d1.id}`)).status, 204);
+  assert.equal((await sign(d2)).status, 201);
+  assert.equal((await ex.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
+  assert.equal((await signRow()).order_diff, 0);
+});

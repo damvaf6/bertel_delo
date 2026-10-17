@@ -31,7 +31,7 @@ import { openHandovers } from './handover-ops.mjs';
 import { dueNotes } from './note-ops.mjs';
 import { caseMoves, caseRemind, transferTargets } from './org-ops.mjs';
 import { docWait, egrnOld } from './docreq-ops.mjs';
-import { aiRecheck, egrnRebuildLeft, egrnSwapLeft } from '../ai/ai.mjs';
+import { aiRecheck, aiSignHints, egrnRebuildLeft, egrnSwapLeft } from '../ai/ai.mjs';
 import { latest } from './draft-ops.mjs';
 
 // «Горит» — просрочено или до срока не больше двух дней (как подсветка в списке дел).
@@ -429,8 +429,13 @@ export async function orgPart(sql, org, registry, today, { actorId = null } = {}
       const last = returns.at(-1);
       const st = last ? await returnEgrn(sql, o.id, last, docs) : new Map();
       const kept = last ? last.links.filter((l) => l.kind !== 'order' && st.get(l.n) === 'kept').length : 0;
+      // В ИИ-проверке эксперта у ждущих подписи файлов остались расхождения с заявкой или заданием на оценку (2.286, как отбор
+      // в «Подписи организации», 2.276) — сколько таких пунктов, без повторов; для строки здесь и утренней сводки.
+      const ord = await sql.one`select * from orders where id = ${o.id}`;
+      const hints = await aiSignHints(sql, registry, ord, docs.filter((d) => signs.get(d.id)?.expert && !signs.get(d.id)?.org).map((d) => d.id));
+      const orderDiff = new Set([...hints.values()].flatMap((h) => (h?.order ?? []).map((x) => x.text))).size;
       toSign.push(view(o, { files: waiting, reminded_at: w?.reminded_at ?? null, since: w?.since ?? null,
-        long: !!w?.since && Date.now() - new Date(w.since).getTime() >= SIGN_LONG_DAYS * 86400_000, egrn_kept: kept }));
+        long: !!w?.since && Date.now() - new Date(w.since).getTime() >= SIGN_LONG_DAYS * 86400_000, egrn_kept: kept, order_diff: orderDiff }));
     }
     const open = returns.filter((r) => r.open);
     // Сколько пунктов замечания эксперт уже отметил исправленными (2.160 — как в «Делах экспертов», 2.151).
