@@ -2534,7 +2534,10 @@ function purposeByTask(docs, task) {
     const kinds = kindsOf(e.value, PURPOSE_KIND);
     if (!kinds.length || kinds.some((k) => ok.has(k)) || seen.has(`${e.doc.name}|${e.page}`)) continue;
     seen.add(`${e.doc.name}|${e.page}`);
-    out.push({ doc: e.doc, page: e.page, quote: e.quote,
+    // 2.293: цель целиком меняется на цель из задания (`flip: 'text'`, public/draftfind.js); обрезанная по длине — нет.
+    const whole = e.value.length < 200 && task.value.length < 200;
+    const fix = whole ? { bad: e.value, right: task.value, from: `${task.what} «${task.name}»`, flip: 'text' } : null;
+    out.push({ doc: e.doc, page: e.page, quote: e.quote, ...(fix ? { fix } : {}),
       text: `Цель оценки в отчёте — «${e.value.slice(0, 80)}» (${kinds.map((k) => PURPOSE_NAME[k]).join('; ')}), а ${task.what} «${task.name}» — «${task.value.slice(0, 80)}» (стр. ${task.page + 1}); цель берётся из задания — исправьте отчёт или приложите к делу новое задание` });
   }
   return out;
