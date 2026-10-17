@@ -8194,7 +8194,8 @@ test('новая версия после возврата (2.159): в окне �
   await ep.reload();
   // …а после загрузки — что исправленный файл загружен и ждёт подписи эксперта; «К подписи» ведёт к нему.
   await expect(fileState).toHaveText(/^Исправленный файл «Отчёт Версиева \(исправлен\)\.pdf» загружен \d{2}\.\d{2}\.\d{4} — ждёт Вашей подписи\. К подписи$/);
-  await fileState.scrollIntoViewIfNeeded();
+  // Блок замечаний может перерисоваться после загрузки дела — прокрутка повторяется, пока элемент не устоится.
+  await expect(async () => { await fileState.scrollIntoViewIfNeeded({ timeout: 1000 }); }).toPass();
   await shot(ep, 'c18-ekspert-zamechaniya-ispravlennyy-fayl-zhdyot-podpisi');
   // 2.192: ИИ исправленную версию ещё не проверял — подсказка «запустите ИИ-проверку этой версии» с переходом к ней.
   const aiState = ep.locator('#org-returns li.return.open [data-role="return-ai"]');
