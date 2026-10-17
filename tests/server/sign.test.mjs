@@ -800,7 +800,7 @@ test('2.272: в «Сегодня» и утренней сводке экспер
   assert.equal(a.egrn_rebuild, 1);
   assert.equal(a.egrn_swap, 0);
   assert.equal(digestText({ due: 0, overdue: 0, visits: 0, links: 0, ...a }),
-    'На сегодня: заменили по выписке в черновике, а файл собран до замены — соберите Word заново: 1 дело');
+    'На сегодня: исправили в черновике по выписке или заданию на оценку, а файл собран до исправления — соберите Word заново: 1 дело');
   assert.equal(morningTo({ due: 0, overdue: 0, visits: 0, links: 0, ...a }), 'today');
   // Правка черновика после замены (значение из выписки осталось) — строка держится.
   await save(`${fixed}\nДополнение.`);
@@ -831,6 +831,44 @@ test('2.272: в «Сегодня» и утренней сводке экспер
   await makeSpecialist(S.sql, other.user.id);
   assert.ok(!JSON.stringify((await other.req('GET', '/api/today')).body).includes(o.id));
   assert.equal((await expertMorningAlerts(S.sql, other.user.id, today)).egrn_rebuild, 0);
+});
+
+test('2.280: «Соберите Word заново» — и когда в черновике исправлено по заданию на оценку после загрузки файла', async () => {
+  const ex = await login(S, '+79990001541');
+  await makeSpecialist(S.sql, ex.user.id);
+  const o = await inWork('Квартира: исправлено по заданию', ex);
+  const putTxt = (who, url, body, name, kind) => who.req('POST', url, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), ...(kind ? { 'x-doc-kind': kind } : {}) } });
+  assert.equal((await putTxt(owner, `/api/orders/${o.id}/documents`, 'ЗАДАНИЕ НА ОЦЕНКУ\nДата оценки: 03.10.2026', 'Задание на оценку.txt', 'basis')).status, 201);
+  const report = 'ОТЧЁТ ОБ ОЦЕНКЕ\nДата оценки: 01.10.2026\nИтоговая стоимость 10 000 000 руб.';
+  const save = async (body) => {
+    const cur = (await ex.req('GET', `/api/orders/${o.id}/draft`)).body.draft;
+    assert.equal((await ex.req('PUT', `/api/orders/${o.id}/draft`, { body, from: cur?.id ?? null })).status, 200);
+  };
+  const rows = () => ex.req('GET', '/api/today').then((r) => r.body.expert.egrn_rebuild.filter((x) => x.id === o.id));
+  const alerts = () => expertMorningAlerts(S.sql, ex.user.id, todayMsk());
+  // В черновике прежняя дата не стояла (ошибка только в файле) — правка черновика строки не даёт.
+  await save(report.replace('01.10.2026', '03.10.2026'));
+  const d1 = (await putTxt(ex, `/api/orders/${o.id}/results`, report, 'Отчёт.txt')).body.document;
+  await S.sql`update documents set created_at = now() - interval '1 minute' where id = ${d1.id}`;
+  await S.sql`update result_drafts set at = now() - interval '2 minutes' where order_id = ${o.id}`;
+  assert.equal((await ex.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
+  await save(`${report.replace('01.10.2026', '03.10.2026')}\nДополнение.`);
+  assert.deepEqual(await rows(), [], 'прежнего значения в черновике не было');
+  // Прежняя дата стояла в черновике и исправлена на дату из задания — строка, в сводке — цифра.
+  await save(report);
+  assert.deepEqual(await rows(), []);
+  await save(report.replace('01.10.2026', '03.10.2026'));
+  const [r] = await rows();
+  assert.deepEqual(r.swapped, []);
+  assert.deepEqual(r.fixed, ['Дата оценки в отчёте 01.10.2026, а в задании на оценку «Задание на оценку.txt» — 03.10.2026']);
+  assert.equal(r.file, 'Отчёт.txt');
+  assert.equal((await alerts()).egrn_rebuild, 1);
+  // Собрал Word заново — строки нет.
+  const built = await ex.req('POST', `/api/orders/${o.id}/draft/result`, { from: (await ex.req('GET', `/api/orders/${o.id}/draft`)).body.draft.id, confirm: true });
+  assert.equal(built.status, 201, JSON.stringify(built.body));
+  assert.deepEqual(await rows(), []);
+  assert.equal((await alerts()).egrn_rebuild, 0);
 });
 
 test('2.263: руководитель видит, что эксперт заменил значения по выписке в черновике, а подписал файл, собранный до замены', async () => {
