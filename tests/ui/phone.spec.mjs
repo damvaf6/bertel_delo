@@ -12203,9 +12203,8 @@ test('2.277: адрес объекта — как в задании на оце�
   await ep.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
   await expect(ep.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
   const draftText = ep.getByLabel('Текст заключения');
-  await draftText.fill(`${await draftText.inputValue()}\nКвартира расположена по адресу: г. Москва, Садовая ул., д. 7, кв. 4.`);
-  await ep.getByRole('button', { name: 'Сохранить правку' }).click();
-  await expect(ep.locator('#draft-msg')).toHaveText('Правка сохранена');
+  // В таблице задания черновика — адрес из заявки (с ошибкой заказчика).
+  await expect(draftText).toHaveValue(/\| Адрес объекта \| г\. Москва, Садовая ул\., д\. 7, кв\. 4 \|/);
   expect((await ep.request.post(`/api/orders/${A}/results`, {
     data: Buffer.from(['ОТЧЁТ ОБ ОЦЕНКЕ № 77/2026', 'Адрес объекта оценки: г. Москва, Садовая ул., д. 7, кв. 4', 'Дата оценки: 03.10.2026', 'Итоговая стоимость 10 000 000 руб.'].join('\n')),
     headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Отчёт.txt') },
@@ -12219,12 +12218,12 @@ test('2.277: адрес объекта — как в задании на оце�
   await shot(ep, '54o3-specialist-adres-kak-v-zadanii');
   await find.getByRole('button', { name: 'Заменить на значение из задания' }).click();
   await expect(find.locator('[data-role="fix-swap-what"]')).toHaveText('Было «г. Москва, Садовая ул., д. 7, кв. 4» — стало «г. Москва, Садовая ул., д. 7, кв. 14», как в задании на оценку «Задание на оценку.txt». Черновик сохранён; соберите Word заново.');
-  await expect(draftText).toHaveValue(/по адресу: г\. Москва, Садовая ул\., д\. 7, кв\. 14\./);
-  expect((await (await ep.request.get(`/api/orders/${A}/draft`, { headers: H })).json()).draft.body).toContain('по адресу: г. Москва, Садовая ул., д. 7, кв. 14.');
+  await expect(draftText).toHaveValue(/\| Адрес объекта \| г\. Москва, Садовая ул\., д\. 7, кв\. 14 \|/);
+  expect((await (await ep.request.get(`/api/orders/${A}/draft`, { headers: H })).json()).draft.body).toContain('| Адрес объекта | г. Москва, Садовая ул., д. 7, кв. 14 |');
   await expect(find.locator('[data-role="egrn-rebuild"]')).toBeVisible();
   await shot(ep, '54o4-specialist-zamenit-adres-iz-zadaniya');
   await find.getByRole('button', { name: 'Отменить' }).click();
   await expect(find.locator('[data-role="fix-swap-what"]')).toHaveText('Замена отменена: снова «г. Москва, Садовая ул., д. 7, кв. 4». Черновик сохранён.');
-  await expect(draftText).toHaveValue(/по адресу: г\. Москва, Садовая ул\., д\. 7, кв\. 4\./);
+  await expect(draftText).toHaveValue(/\| Адрес объекта \| г\. Москва, Садовая ул\., д\. 7, кв\. 4 \|/);
   for (const p of [ep, cp]) await p.context().close();
 });
