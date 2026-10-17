@@ -2538,6 +2538,88 @@ function purposeByTask(docs, task) {
   return out;
 }
 
+// ——— 2.288: заказчик оценки — как в задании на оценку (письме заказчика), а без него — как в заявке ———
+// Заказчик — после «Заказчик» / «Заказчик оценки» с двоеточием или тире (определение «Заказчик — лицо, …» с маленькой буквы
+// не в счёт). Человек сверяется по фамилии и первой букве имени (падеж фамилии не важен), организация — по названию в
+// кавычках. Задание важнее заявки; задания с разными заказчиками и определение суда (суд — не заказчик) — молчим. С заявкой
+// сверяем, только когда в отчёте заказчик — человек, а в заявке — он же владелец заявки (ctx.customer): представитель
+// организации в заявке — обычное дело; цель «для суда» — тоже не сверяем.
+const CUSTOMER_AT = /(?<![а-яё])заказчик(?:\s+оценки)?(?:\s+работ)?\s*[:\-–—]+\s*/giu;
+const CUSTOMER_END = /\n|;|,\s*(?:ИНН|ОГРН|КПП|паспорт|адрес|зарегистр|дата\s+рожд|тел|проживающ|место\s+нахожд|юридическ|почтов)/iu;
+const ORG_FORM = /(?<![А-ЯЁа-яё])(?:ООО|ОАО|ЗАО|ПАО|АО|ИП|НКО|ГБУ|ГУП|МУП|ФГУП|общество\s+с\s+ограниченной\s+ответственностью|акционерное\s+общество|публичное\s+акционерное\s+общество|индивидуальный\s+предприниматель|банк)(?![А-ЯЁа-яё])/iu;
+const PERSON_LEAD = /^(?:физическое\s+лицо|гражданин(?:ка)?(?:\s+РФ)?|гр\.)\s*/iu;
+const surnameStem = (w) => w.toLowerCase().replace(/ё/gu, 'е').replace(/(?:ому|ого|ым|ой|ую|ом|ей|а|у|е|ы)$/u, '');
+export function customerOf(value) {
+  const v = clean(value).replace(/[.,]+$/u, '');
+  if (!v || /заполн/iu.test(v)) return null;
+  const q = v.match(/[«"„“]([^»"“”]{2,80})[»"“”]/u);
+  if (ORG_FORM.test(v) || q) {
+    const key = (q ? q[1] : v.replace(ORG_FORM, '')).toLowerCase().replace(/ё/gu, 'е').replace(/[^а-яa-z0-9]+/giu, ' ').trim();
+    return key ? { org: true, key, value: v.slice(0, 120) } : null;
+  }
+  const p = v.replace(PERSON_LEAD, '');
+  if (!/^[А-ЯЁ]/u.test(p)) return null;
+  const words = p.match(/[А-ЯЁ][а-яё]+(?:-[А-ЯЁ][а-яё]+)?|[А-ЯЁ]\./gu) ?? [];
+  if (!words.length || words[0].length < 3 || words[0].endsWith('.')) return null;
+  return { org: false, surname: surnameStem(words[0]), initial: words[1]?.[0] ?? null, value: p.slice(0, 120) };
+}
+function sameCustomer(a, b) {
+  if (a.org !== b.org) return false;
+  if (a.org) return a.key === b.key || a.key.includes(b.key) || b.key.includes(a.key);
+  return a.surname === b.surname && (!a.initial || !b.initial || a.initial === b.initial);
+}
+function customersIn(docs) {
+  const out = [];
+  for (const doc of docs) {
+    eachPage(doc, (raw, i) => {
+      for (const m of raw.matchAll(CUSTOMER_AT)) {
+        if (TOC_END.test(lineAround(raw, m.index))) continue;
+        const rest = raw.slice(m.index + m[0].length, m.index + m[0].length + 200);
+        const cut = rest.search(CUSTOMER_END);
+        const who = customerOf(cut < 0 ? rest : rest.slice(0, cut));
+        if (who) out.push({ doc, page: i, who, quote: lineAround(raw, m.index) });
+      }
+    });
+  }
+  return out;
+}
+export function assignmentCustomer(assignment) {
+  const got = [];
+  for (const d of assignment ?? []) {
+    if (!Array.isArray(d.pages)) continue;
+    const head = d.pages.slice(0, 2).join('\n');
+    if (EGRN_NAME.test(head) && /выписк/iu.test(head)) continue;
+    const what = assignmentWhat(d);
+    if (what === 'в определении суда') return null;
+    const found = customersIn([d])[0];
+    if (found) got.push({ who: found.who, name: d.name, page: found.page, what });
+  }
+  if (!got.length || got.some((g) => !sameCustomer(g.who, got[0].who))) return null;
+  return got[0];
+}
+function customerMatch(docs, ctx) {
+  if (ctx.service && !VALUATION.includes(ctx.service)) return [];
+  const main = mainReport(docs);
+  const ordered = main ? [main, ...docs.filter((d) => d !== main)] : docs;
+  const task = assignmentCustomer(ctx.assignment);
+  const mine = !task && ctx.fields?.purpose !== 'court' && !(ctx.assignment ?? []).some((d) => Array.isArray(d.pages) && assignmentWhat(d) === 'в определении суда')
+    ? customerOf(ctx.customer ?? '') : null;
+  const ref = task?.who ?? (mine && !mine.org ? mine : null);
+  if (!ref) return [];
+  const out = [];
+  const seen = new Set();
+  for (const e of customersIn(ordered)) {
+    if ((!task && e.who.org) || sameCustomer(e.who, ref) || seen.has(`${e.doc.name}|${e.page}`)) continue;
+    seen.add(`${e.doc.name}|${e.page}`);
+    out.push(task
+      ? { doc: e.doc, page: e.page, quote: e.quote, fix: { bad: e.who.value, right: task.who.value, from: `${task.what} «${task.name}»` },
+        text: `Заказчик в отчёте — «${e.who.value}», а ${task.what} «${task.name}» — «${task.who.value}» (стр. ${task.page + 1}); заказчик берётся из задания — исправьте отчёт или приложите к делу новое задание` }
+      : { doc: e.doc, page: e.page, quote: e.quote,
+        text: `Заказчик в отчёте — «${e.who.value}», а в заявке — «${ref.value}»: проверьте заказчика; если он другой — приложите к делу задание на оценку` });
+  }
+  return out;
+}
+
 // ——— 2.278: вид стоимости — как в задании на оценку, письме заказчика или определении суда, приложенных к делу ———
 // В задании вид стоимости — после «вид стоимости», а без такой строки — «определить рыночную стоимость» (кадастровая в
 // тексте письма — не вид стоимости). Приложенные документы с разными видами — молчим: какой верный, решает эксперт. В отчёте
@@ -2643,6 +2725,7 @@ const WHOLE = {
   report_number: reportNumbers,
   value_date: valueDates,
   purpose_value: purposeValue,
+  customer_match: customerMatch,
   encumbrance_match: encumbranceMatch,
 };
 
@@ -2721,6 +2804,7 @@ export const AUTO_CHECKS = Object.freeze({
   report_number: 'номер отчёта и дата составления одни на титуле, в колонтитулах и в сопроводительном письме',
   value_date: 'дата оценки одна по всему отчёту и в сопроводительном письме и такая же, как в задании на оценку (письме заказчика, определении суда), если оно приложено к делу',
   purpose_value: 'цель оценки — как в задании на оценку, если оно приложено к делу, иначе как в заявке; вид стоимости один по всему отчёту и в письме и как в задании на оценку, если оно приложено к делу; для суда, нотариуса, банка, сделки и раздела — рыночная',
+  customer_match: 'заказчик оценки в отчёте и в письме — как в задании на оценку (письме заказчика), если оно приложено к делу, иначе как в заявке',
 });
 
 export function runAutoChecks(names, docs, ctx = {}) {
