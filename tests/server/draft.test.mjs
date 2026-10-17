@@ -24,6 +24,8 @@ before(async () => {
   dispatcher = await login(S, '+79990000903');
   admin = await login(S, '+79990000904');
   spec = await login(S, '+79990000905');
+  // Черновиков у одного эксперта в этом файле больше суточного лимита ИИ (50); сам лимит проверяет ai.test.mjs.
+  S.cfg.ai.dailyLimit = 500;
   await setPlatformRole(S.sql, dispatcher.user.id, 'dispatcher');
   await setPlatformRole(S.sql, admin.user.id, 'admin');
   await makeSpecialist(S.sql, spec.user.id, { permits: [['expertise', 'realty'], ['expertise', 'vehicle'], ['expertise', 'land'], ['expertise', 'movable'], ['expertise', 'goods'], ['expertise', 'construction'], ['expertise', 'handwriting'], ['expertise', 'car_damage']] });

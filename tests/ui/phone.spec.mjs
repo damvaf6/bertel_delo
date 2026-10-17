@@ -6242,6 +6242,34 @@ test('адрес в таблице задания (2.281): из задания �
   await shot(page, '114b-ekspert-adres-iz-zadaniya');
 });
 
+test('вид стоимости в таблице задания (2.282): из задания на оценку', async ({ page, browser, baseURL }) => {
+  const expert = await signIn(page, '+79990028201');
+  const op = await (await phoneContext(browser, baseURL)).newPage();
+  const owner = await signIn(op, '+79990028202');
+  const id = await db(async (c) => {
+    const o = (await c.query(
+      `insert into orders (owner_user_id, title, module, service, fields, status, executor_user_id, price_kop, paid_at, deadline)
+       values ($1, 'Квартира: вид стоимости из задания', 'expertise', 'realty', $3, 'in_work', $2, 1500000, now(), now() + interval '6 days') returning id`,
+      [owner.id, expert.id, { purpose: 'bank', region: 'moscow', object_type: 'flat', address: 'г. Москва, Заявочная ул., 4', area: '51' }])).rows[0];
+    await c.query('insert into specialists (user_id) values ($1) on conflict do nothing', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty') on conflict do nothing", [expert.id]);
+    return o.id;
+  });
+  expect((await op.request.post(`/api/orders/${id}/documents`, {
+    data: Buffer.from('ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nВид стоимости: рыночная и ликвидационная\nДата оценки: 03.10.2026'),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание на оценку.txt'), 'x-doc-kind': 'basis' },
+  })).status()).toBe(201);
+  await page.goto(`/kabinet#order=${id}`);
+  await page.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(page.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const text = page.getByLabel('Текст заключения');
+  await expect(text).toHaveValue(/\| Дата оценки \| 03\.10\.2026 \|\n\| Вид стоимости \| рыночная и ликвидационная \(по заданию на оценку\) \|/);
+  await expect(page.getByText('Вид стоимости: рыночная и ликвидационная — как в задании на оценку «Задание на оценку.txt» (стр. 1) — сверьте.')).toBeVisible();
+  await text.evaluate((t) => { t.focus(); const at = t.value.indexOf('| Вид стоимости'); t.setSelectionRange(at, at); t.blur(); });
+  await page.getByText(/Вид стоимости: рыночная и ликвидационная — как в задании/).scrollIntoViewIfNeeded();
+  await shot(page, '114c-ekspert-vid-stoimosti-iz-zadaniya');
+});
+
 // Прогон «как эксперт и руководитель» по пачке 2.91–2.99 (2.100): стыки — горящее дело, просьба о переносе срока,
 // подпись, напоминание, возврат по пунктам, новая подпись, сдача, итоги месяца.
 test('как эксперт и руководитель (2.100): перенос срока виден руководителю, напоминание после возврата не тянется, итоги', async ({ page, browser, baseURL }) => {
