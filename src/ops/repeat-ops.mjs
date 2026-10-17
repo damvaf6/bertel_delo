@@ -149,7 +149,7 @@ export function repeatOps() {
           }
         }
         const sections = orderSections(registry, order);
-        const empty = take.sections && c.draft ? await emptyDraft(sql, actor, order, registry, sections) : null;
+        const empty = take.sections && c.draft ? await emptyDraft(sql, actor, order, registry, sections, providers.storage) : null;
         const [names] = await sql`select (select full_name from users where id = ${c.past.owner_user_id}) as owner,
                                          (select name from organizations where id = ${c.past.org_id}) as org`;
         try {

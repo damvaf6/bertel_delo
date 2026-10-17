@@ -50,13 +50,14 @@ function taskTable(registry, order, { skip = [], materials = [], valueDate = nul
 // Документы дела от заказчика (2.81): основание и всё, что он приложил сам или по запросу эксперта (тогда — название
 // пункта запроса). Файлы эксперта, результат и фото осмотра — не сюда.
 export async function orderMaterials(sql, order) {
-  const rows = await sql`select d.filename, d.kind, d.created_at,
+  const rows = await sql`select d.id, d.filename, d.kind, d.created_at,
                                 (select r.title from doc_requests r where r.document_id = d.id order by r.id limit 1) as asked
                            from documents d
                           where d.order_id = ${order.id} and d.deleted_at is null and d.kind in ('basis', 'other')
                             and d.uploaded_by is distinct from ${order.executor_user_id ?? null}
                           order by d.created_at, d.id`;
   return rows.map((r) => ({
+    id: r.id,
     title: r.asked ?? (r.kind === 'basis' ? 'Документ-основание' : 'Документ'),
     filename: r.filename,
     day: ru(new Date(new Date(r.created_at).getTime() + 3 * 3600_000)),

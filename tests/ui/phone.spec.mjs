@@ -6175,6 +6175,33 @@ test('перечень использованных документов (2.95):
   await shot(page, '114-ekspert-perechen-dokumentov');
 });
 
+test('перечень документов (2.273): у выписки ЕГРН — номер и дата из самой выписки', async ({ page, browser, baseURL }) => {
+  const expert = await signIn(page, '+79990027301');
+  const op = await (await phoneContext(browser, baseURL)).newPage();
+  const owner = await signIn(op, '+79990027302');
+  const id = await db(async (c) => {
+    const o = (await c.query(
+      `insert into orders (owner_user_id, title, module, service, fields, status, executor_user_id, price_kop, paid_at, deadline)
+       values ($1, 'Квартира: номер выписки в перечне', 'expertise', 'realty', $3, 'in_work', $2, 1500000, now(), now() + interval '6 days') returning id`,
+      [owner.id, expert.id, { purpose: 'bank', region: 'moscow', object_type: 'flat', address: 'г. Москва, Перечневая ул., 4', area: '51' }])).rows[0];
+    await c.query('insert into specialists (user_id) values ($1) on conflict do nothing', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty') on conflict do nothing", [expert.id]);
+    return o.id;
+  });
+  expect((await op.request.post(`/api/orders/${id}/documents`, {
+    data: Buffer.from('Выписка из Единого государственного реестра недвижимости об объекте недвижимости\n02.10.2026 № КУВИ-001/2026-27300001\nВид объекта недвижимости: Помещение\nПлощадь, м2: 51'),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('скан выписки.txt') },
+  })).status()).toBe(201);
+  await page.goto(`/kabinet#order=${id}`);
+  await page.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(page.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const text = page.getByLabel('Текст заключения');
+  await expect(text).toHaveValue(/Документы, представленные заказчиком:\n1\. Выписка из ЕГРН № КУВИ-001\/2026-27300001 от 02\.10\.2026 — файл «скан выписки\.txt»/);
+  await text.evaluate((t) => { t.focus(); const at = t.value.indexOf('Перечень использованных'); t.setSelectionRange(at, at); t.scrollTop = t.scrollHeight; });
+  await page.locator('#draft-sources-box').scrollIntoViewIfNeeded();
+  await shot(page, '114a-ekspert-perechen-nomer-vypiski');
+});
+
 // Прогон «как эксперт и руководитель» по пачке 2.91–2.99 (2.100): стыки — горящее дело, просьба о переносе срока,
 // подпись, напоминание, возврат по пунктам, новая подпись, сдача, итоги месяца.
 test('как эксперт и руководитель (2.100): перенос срока виден руководителю, напоминание после возврата не тянется, итоги', async ({ page, browser, baseURL }) => {
