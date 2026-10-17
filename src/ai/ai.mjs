@@ -5,7 +5,7 @@ import { HttpError } from '../http/core.mjs';
 import { STATUS_NAME } from '../orders/workflow.mjs';
 import { APPROACHES, BASIS_KINDS } from '../modules/index.mjs';
 import { locateQuote } from './extract.mjs';
-import { findInDraft, swapValue } from '../../public/draftfind.js';
+import { assignmentSource, findInDraft, swapValue } from '../../public/draftfind.js';
 
 export const DISCLAIMER = 'Это разъяснение искусственного интеллекта, а не юридическая услуга. Решение принимаете Вы; '
   + 'за точной оценкой обращайтесь к специалисту.';
@@ -433,21 +433,27 @@ export async function aiSignHints(sql, registry, order, docIds, { ok = false, dr
 // 2.266: для «Сегодня» и утренней сводки эксперта — расхождения с выпиской ЕГРН из последней ИИ-проверки его неподписанных
 // файлов (как 2.258), которые можно заменить одной кнопкой и которые ещё стоят в черновике (значение из файла в тексте есть).
 // Заменил или в черновике этих значений нет — пусто. Коротко, без повторов.
+// 2.284: так же — расхождения с заданием на оценку (письмом, определением суда), которые можно заменить кнопкой «Заменить на
+// значение из задания» (assignmentSource): { egrn, task }.
 export async function egrnSwapLeft(sql, order, docIds, body) {
-  if (!docIds.length || !body) return [];
+  const out = { egrn: [], task: [] };
+  if (!docIds.length || !body) return out;
   const rows = await sql`select files, items from ai_reviews
                          where order_id = ${order.id} and round = ${order.review_round + 1} order by id desc`;
-  const left = [];
   for (const id of docIds) {
     const r = rows.find((x) => (x.files ?? []).some((f) => f.id === id));
     if (!r) continue;
     const file = (r.files ?? []).find((f) => f.id === id)?.name;
-    left.push(...(r.items ?? []).filter((i) => i.hint === 'attention').flatMap((i) => i.found ?? [])
-      .filter((f) => f.egrn && (!file || f.file === file) && f.egrn.bad && swapValue(f.egrn)
-        && findInDraft(body, { bad: f.egrn.bad, quote: f.quote }))
-      .map(egrnShort));
+    for (const f of (r.items ?? []).filter((i) => i.hint === 'attention').flatMap((i) => i.found ?? [])) {
+      if (file && f.file !== file) continue;
+      if (f.egrn) {
+        if (f.egrn.bad && swapValue(f.egrn) && findInDraft(body, { bad: f.egrn.bad, quote: f.quote })) out.egrn.push(egrnShort(f));
+      } else if (f.fix?.bad && assignmentSource(f.fix) && findInDraft(body, { bad: f.fix.bad, quote: f.quote })) {
+        out.task.push(fixShort(f).text);
+      }
+    }
   }
-  return [...new Set(left)];
+  return { egrn: [...new Set(out.egrn)], task: [...new Set(out.task.filter(Boolean))] };
 }
 
 // 2.272: для «Сегодня» и утренней сводки эксперта — расхождения с выпиской ЕГРН из последней ИИ-проверки его неподписанных

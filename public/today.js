@@ -238,6 +238,11 @@ export async function loadToday() {
         { class: 'warn-line', role: 'egrn-swap-what', text: `${x.swap.length > 1 ? `Расхождений с выпиской: ${x.swap.length} — ` : ''}${x.swap[0].length > 120 ? `${x.swap[0].slice(0, 119)}…` : x.swap[0]}` },
         `замените в черновике, соберите Word заново и загрузите — тогда подписывайте · ${deadline(x, t.today)}`],
       (x) => { location.hash = `order=${x.id}&to=review`; }),
+      // То же по заданию на оценку (письму, определению суда; 2.284) — к ИИ-проверке в деле, там «Заменить всё по заданию».
+      ...group('task-swap', 'Можно заменить по заданию на оценку', e.task_swap ?? [], (x) => [x.title,
+        { class: 'warn-line', role: 'task-swap-what', text: `${x.swap.length > 1 ? `Расхождений с заданием: ${x.swap.length} — ` : ''}${x.swap[0].length > 120 ? `${x.swap[0].slice(0, 119)}…` : x.swap[0]}` },
+        `замените в черновике, соберите Word заново и загрузите — тогда подписывайте · ${deadline(x, t.today)}`],
+      (x) => { location.hash = `order=${x.id}&to=review`; }),
       // Заменил по выписке ЕГРН (2.272) или исправил по заявке и заданию на оценку (2.280) в черновике, а файл результата собран
       // до замены — к кнопке сборки Word в деле.
       ...group('egrn-rebuild', 'Соберите Word заново', e.egrn_rebuild ?? [], (x) => [x.title,

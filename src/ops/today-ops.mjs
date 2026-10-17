@@ -183,7 +183,10 @@ async function expertPart(sql, actor, registry, today, storage) {
   }
   recheck.sort((a, b) => new Date(b.recheck.docs.at(-1).at) - new Date(a.recheck.docs.at(-1).at));
   // Остались расхождения с выпиской, которые можно заменить в черновике (2.266) — к ИИ-проверке в деле.
-  const egrnSwap = (await egrnSwapCases(sql, actor.id, rows)).map(({ order, left }) => item(order, { swap: left }));
+  const swapCases = await egrnSwapCases(sql, actor.id, rows);
+  const egrnSwap = swapCases.filter((x) => x.left.length).map(({ order, left }) => item(order, { swap: left }));
+  // То же по заданию на оценку (2.284) — к ИИ-проверке в деле, там «Заменить всё по заданию».
+  const taskSwap = swapCases.filter((x) => x.task.length).map(({ order, task }) => item(order, { swap: task }));
   // Заменил по выписке (2.272) или исправил по заявке и заданию на оценку (2.280) в черновике, а файл результата собран до
   // замены — к кнопке сборки Word в деле.
   const egrnRebuild = (await egrnRebuildCases(sql, actor.id, rows))
@@ -191,6 +194,7 @@ async function expertPart(sql, actor, registry, today, storage) {
   return {
     ai_recheck: recheck,
     egrn_swap: egrnSwap,
+    task_swap: taskSwap,
     egrn_rebuild: egrnRebuild,
     egrn_old: egrnStale,
     docs_wait: docsWait,
@@ -256,9 +260,14 @@ export async function expertMorningAlerts(sql, userId, today, now = new Date()) 
     no_result: (await noResultOrders(sql, userId, hotRows, today)).length,
     reply_wait: (await replyWaits(sql, rows.map((o) => o.id))).length,
     lead_unsigned: leadUnsigned,
-    egrn_swap: (await egrnSwapCases(sql, userId, rows)).length,
+    ...await swapCounts(sql, userId, rows),
     egrn_rebuild: (await egrnRebuildCases(sql, userId, rows)).length,
   };
+}
+
+async function swapCounts(sql, userId, rows) {
+  const cases = await egrnSwapCases(sql, userId, rows);
+  return { egrn_swap: cases.filter((x) => x.left.length).length, task_swap: cases.filter((x) => x.task.length).length };
 }
 
 // Дела в работе, где эксперт заменил по выписке ЕГРН в черновике уже после того, как загрузил свой файл результата, а Word
@@ -287,6 +296,8 @@ export async function egrnRebuildCases(sql, userId, rows) {
 
 // Дела в работе, где в последней ИИ-проверке своего неподписанного файла результата остались расхождения с выпиской ЕГРН,
 // которые можно заменить в черновике одной кнопкой и которые там ещё стоят (2.266, как подсказка в окне подписи — 2.258).
+// 2.284: и расхождения с заданием на оценку, которые можно заменить «Заменить на значение из задания» (task); в egrn_swap
+// «Сегодня» — только дела с left, в task_swap — с task.
 export async function egrnSwapCases(sql, userId, rows) {
   const out = [];
   for (const o of rows.filter((x) => x.status === 'in_work')) {
@@ -296,7 +307,7 @@ export async function egrnSwapCases(sql, userId, rows) {
     const unsigned = docs.map((d) => d.id).filter((id) => !signs.get(id)?.expert);
     if (!unsigned.length) continue;
     const left = await egrnSwapLeft(sql, o, unsigned, (await latest(sql, o.id))?.body);
-    if (left.length) out.push({ order: o, left });
+    if (left.egrn.length || left.task.length) out.push({ order: o, left: left.egrn, task: left.task });
   }
   return out;
 }

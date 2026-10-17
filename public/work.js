@@ -2,7 +2,7 @@
 import { api, el, say } from '/common.js';
 import { setNext } from '/next.js';
 import { canFixInDraft, fixInDraft, rebuildWord, swapAllInDraft, swapInDraft, undoSwap, undoSwapAll } from '/draft.js';
-import { findInDraft, swapValue } from '/draftfind.js';
+import { assignmentSource, findInDraft, swapValue } from '/draftfind.js';
 
 const $ = (id) => document.getElementById(id);
 const SIDE_RU = { customer: 'Заказчик', executor: 'Исполнитель', dispatcher: 'Диспетчер' };
@@ -283,11 +283,9 @@ function mineFix(g, quote, rule) {
   if (g.bad) fixes.push({ g, quote, rule, get li() { return row.closest('li') ?? row; } });
   return [row, miss, ...(swap ? [swap.done, swap.rebuild] : [])];
 }
-const SOURCE_FROM = [[/^в задании/u, 'из задания'], [/^в письме/u, 'из письма'], [/^в определении/u, 'из определения']];
 function assignmentSwap(g, quote, miss) {
-  const dated = /^\d{2}\.\d{2}\.\d{4}$/;
-  const src = SOURCE_FROM.find(([re]) => re.test(g.from ?? ''))?.[1];
-  if (!src || dated.test(g.bad ?? '') !== dated.test(g.right ?? '') || !swapValue(g)) return null;
+  const src = assignmentSource(g);
+  if (!src) return null;
   const what = el('span', { 'data-role': 'fix-swap-what' });
   const rebuild = rebuildBox();
   let last = null;
