@@ -12273,3 +12273,64 @@ test('2.278: вид стоимости — как в задании на оце�
   await expect(draftText).toHaveValue(/Определению подлежит ликвидационная стоимость объекта\./);
   for (const p of [ep, cp]) await p.context().close();
 });
+
+// 2.279: в окне подписи неподписанного файла — расхождения с заявкой и заданием на оценку из ИИ-проверки: какие, «К находке»
+// ведёт к ней в ИИ-проверке; заменили в черновике — «соберите Word заново».
+test('2.279: окно подписи — расхождения с заданием на оценку и переход к находке', async ({ browser, baseURL }) => {
+  test.setTimeout(120_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990027901'), customer = await signIn(cp, '+79990027902');
+  const A = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Подпись и задание: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"deal","region":"moscow","object_type":"flat","address":"г. Москва, Садовая ул., д. 7, кв. 4"}') returning id`,
+    [customer.id, expert.id, inDays(6)]);
+    return o.id;
+  });
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from('ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nВид стоимости: рыночная\nДата оценки: 03.10.2026'),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание на оценку.txt'), 'x-doc-kind': 'basis' },
+  })).status()).toBe(201);
+  await ep.goto(`/kabinet#order=${A}`);
+  await ep.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const draftText = ep.getByLabel('Текст заключения');
+  await draftText.fill(`${await draftText.inputValue()}\nОпределению подлежит ликвидационная стоимость объекта.`);
+  expect((await ep.request.post(`/api/orders/${A}/results`, {
+    data: Buffer.from(['ОТЧЁТ ОБ ОЦЕНКЕ № 79/2026', 'Вид определяемой стоимости: ликвидационная', 'Дата оценки: 03.10.2026', 'Итоговая стоимость 10 000 000 руб.'].join('\n')),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Отчёт.txt') },
+  })).status()).toBe(201);
+  await ep.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(ep.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  const hint = ep.locator('[data-sig="order-left"]');
+  await expect(hint).toContainText(/^В ИИ-проверке остались расхождения с заявкой и заданием на оценку: 1\./);
+  await expect(hint).toContainText('Вид стоимости в отчёте — «ликвидационная», а в задании на оценку');
+  await expect(hint).toContainText('Исправьте в черновике или в файле отчёта, соберите Word заново и загрузите исправленный файл — тогда подписывайте.');
+  await hint.scrollIntoViewIfNeeded();
+  await shot(ep, '54o7-specialist-podpis-rashozhdeniya-s-zadaniem');
+  // «К находке» — к ней в ИИ-проверке, подсвечена.
+  await hint.getByRole('button', { name: 'К находке' }).click();
+  const find = ep.locator('#review-checks li[data-check="appraiser"] .ai-found li').filter({ hasText: 'Вид стоимости в отчёте' });
+  await expect(find).toHaveClass(/flash/);
+  await expect(find).toBeInViewport();
+  await shot(ep, '54o8-specialist-k-nahodke-iz-podpisi');
+  // Заменили по заданию в черновике — в окне подписи «соберите Word заново»; отменили — снова расхождение.
+  await find.getByRole('button', { name: 'Заменить на значение из задания' }).click();
+  await expect(find.locator('[data-role="fix-swap-what"]')).toContainText('стало «рыночная»');
+  await expect(ep.locator('[data-sig="order-fixed"]')).toHaveText('Расхождения с заявкой и заданием на оценку исправлены в черновике. Этот файл собран до исправления — соберите Word заново, загрузите его и подпишите новый файл.');
+  await expect(ep.locator('[data-sig="order-left"]')).toHaveCount(0);
+  await ep.locator('[data-sig="order-fixed"]').scrollIntoViewIfNeeded();
+  await shot(ep, '54o9-specialist-podpis-ispravleno-po-zadaniyu');
+  await find.getByRole('button', { name: 'Отменить' }).click();
+  await expect(find.locator('[data-role="fix-swap-what"]')).toHaveText('Замена отменена: снова «ликвидационная». Черновик сохранён.');
+  await expect(ep.locator('[data-sig="order-left"]')).toBeVisible();
+  // В подтверждении подписи — тот же список.
+  let asked = '';
+  ep.once('dialog', async (d) => { asked = d.message(); await d.dismiss(); });
+  await ep.locator('div.sig').filter({ has: ep.locator('[data-sig="order-left"]') }).getByRole('button', { name: 'Подписать', exact: true }).click();
+  await expect.poll(() => asked).toContain('Расхождения с заявкой и заданием на оценку: 1.');
+  for (const p of [ep, cp]) await p.context().close();
+});

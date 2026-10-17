@@ -416,8 +416,10 @@ export async function aiSignHints(sql, registry, order, docIds, { ok = false, dr
     const can = mine.filter((f) => f.egrn.bad && swapValue(f.egrn));
     const swap = can.map(egrnShort);
     // 2.269: находки, сверенные с заявкой или заданием на оценку, — для «Вернуть эксперту» пунктами, как расхождения с выпиской.
-    const byOrder = [...new Map(att.flatMap((i) => i.found ?? []).filter((f) => !f.egrn && f.fix?.from && (!file || f.file === file))
-      .map(fixShort).filter((x) => x.text).map((x) => [x.text, x])).values()];
+    // 2.279: и правило находки — эксперту в окне подписи «К находке» ведёт к нему в ИИ-проверке.
+    const byOrder = [...new Map(att.flatMap((i) => (i.found ?? []).map((f) => ({ f, rule: i.id })))
+      .filter(({ f }) => !f.egrn && f.fix?.from && (!file || f.file === file))
+      .map(({ f, rule }) => ({ ...fixShort(f), rule })).filter((x) => x.text).map((x) => [x.text, x])).values()];
     const at = created?.get(id);
     const swapped = draft && at && new Date(draft.at) > new Date(at) ? can.filter((f) => swappedIn(draft.body, f)).map(egrnShort) : [];
     out.set(id, att.length ? { state: 'attention', at: r.at, count: att.length, titles: att.map((i) => (titles.get(i.id) ?? i.id).split(':')[0].trim()).slice(0, 3),
