@@ -6214,6 +6214,34 @@ test('перечень документов (2.273): у выписки ЕГРН 
   await shot(page, '114a-ekspert-perechen-nomer-vypiski');
 });
 
+test('адрес в таблице задания (2.281): из задания на оценку, когда в выписках адреса нет', async ({ page, browser, baseURL }) => {
+  const expert = await signIn(page, '+79990028101');
+  const op = await (await phoneContext(browser, baseURL)).newPage();
+  const owner = await signIn(op, '+79990028102');
+  const id = await db(async (c) => {
+    const o = (await c.query(
+      `insert into orders (owner_user_id, title, module, service, fields, status, executor_user_id, price_kop, paid_at, deadline)
+       values ($1, 'Квартира: адрес из задания', 'expertise', 'realty', $3, 'in_work', $2, 1500000, now(), now() + interval '6 days') returning id`,
+      [owner.id, expert.id, { purpose: 'bank', region: 'moscow', object_type: 'flat', address: 'г. Москва, Заявочная ул., 4', area: '51' }])).rows[0];
+    await c.query('insert into specialists (user_id) values ($1) on conflict do nothing', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty') on conflict do nothing", [expert.id]);
+    return o.id;
+  });
+  expect((await op.request.post(`/api/orders/${id}/documents`, {
+    data: Buffer.from('ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nАдрес объекта: г. Москва, ул. Садовая, д. 5, кв. 12\nДата оценки: 03.10.2026'),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание на оценку.txt'), 'x-doc-kind': 'basis' },
+  })).status()).toBe(201);
+  await page.goto(`/kabinet#order=${id}`);
+  await page.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(page.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const text = page.getByLabel('Текст заключения');
+  await expect(text).toHaveValue(/\| Адрес объекта \| г\. Москва, ул\. Садовая, д\. 5, кв\. 12 \(по заданию на оценку; в заявке — г\. Москва, Заявочная ул\., 4\) \|/);
+  await expect(page.getByText(/Адрес объекта г\. Москва, ул\. Садовая, д\. 5, кв\. 12 — как в задании на оценку «Задание на оценку\.txt» \(стр\. 1\); в заявке — г\. Москва, Заявочная ул\., 4 — сверьте\./)).toBeVisible();
+  await text.evaluate((t) => { t.focus(); const at = t.value.indexOf('| Адрес объекта'); t.setSelectionRange(at, at); t.blur(); });
+  await page.getByText(/как в задании на оценку «Задание на оценку\.txt»/).scrollIntoViewIfNeeded();
+  await shot(page, '114b-ekspert-adres-iz-zadaniya');
+});
+
 // Прогон «как эксперт и руководитель» по пачке 2.91–2.99 (2.100): стыки — горящее дело, просьба о переносе срока,
 // подпись, напоминание, возврат по пунктам, новая подпись, сдача, итоги месяца.
 test('как эксперт и руководитель (2.100): перенос срока виден руководителю, напоминание после возврата не тянется, итоги', async ({ page, browser, baseURL }) => {
@@ -12195,16 +12223,16 @@ test('2.277: адрес объекта — как в задании на оце�
     [customer.id, expert.id, inDays(6)]);
     return o.id;
   });
-  expect((await cp.request.post(`/api/orders/${A}/documents`, {
-    data: Buffer.from('ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nАдрес объекта: г. Москва, Садовая ул., д. 7, кв. 14\nДата оценки: 03.10.2026'),
-    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание на оценку.txt'), 'x-doc-kind': 'basis' },
-  })).status()).toBe(201);
   await ep.goto(`/kabinet#order=${A}`);
   await ep.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
   await expect(ep.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
   const draftText = ep.getByLabel('Текст заключения');
-  // В таблице задания черновика — адрес из заявки (с ошибкой заказчика).
+  // Черновик готов до задания на оценку: в таблице задания — адрес из заявки (с ошибкой заказчика); с заданием — 2.281.
   await expect(draftText).toHaveValue(/\| Адрес объекта \| г\. Москва, Садовая ул\., д\. 7, кв\. 4 \|/);
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from('ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nАдрес объекта: г. Москва, Садовая ул., д. 7, кв. 14\nДата оценки: 03.10.2026'),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание на оценку.txt'), 'x-doc-kind': 'basis' },
+  })).status()).toBe(201);
   expect((await ep.request.post(`/api/orders/${A}/results`, {
     data: Buffer.from(['ОТЧЁТ ОБ ОЦЕНКЕ № 77/2026', 'Адрес объекта оценки: г. Москва, Садовая ул., д. 7, кв. 4', 'Дата оценки: 03.10.2026', 'Итоговая стоимость 10 000 000 руб.'].join('\n')),
     headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Отчёт.txt') },

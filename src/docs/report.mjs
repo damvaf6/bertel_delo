@@ -21,7 +21,7 @@ const row = (cells) => `| ${cells.map(cell).join(' | ')} |`;
 // Таблица «задание»: услуга, основание, срок и поля заявки — как их заполнил заказчик. Вопросы, если для них есть свой
 // раздел (2.81), в таблице не повторяются. Под таблицей — документы, которые представил заказчик (2.81): эксперт не
 // переписывает их в раздел об объектах и образцах сам.
-function taskTable(registry, order, { skip = [], materials = [], valueDate = null, egrn = null } = {}) {
+function taskTable(registry, order, { skip = [], materials = [], valueDate = null, egrn = null, task = null } = {}) {
   const def = registry.service(order.module, order.service);
   const basis = BASIS_KINDS[order.basis_kind];
   const rows = [
@@ -32,8 +32,10 @@ function taskTable(registry, order, { skip = [], materials = [], valueDate = nul
     ...(valueDate ? [['Дата оценки', valueDate]] : []),
     // Числа — по-русски (2.66): «54,3», а не «54.3», как в отчёте.
     // Площадь и кадастровый номер — из выписки ЕГРН в деле (2.211), когда в выписках они одни; другое в заявке — рядом.
-    ...(def?.fields ?? []).filter((f) => !skip.includes(f.id) && ((order.fields?.[f.id] !== undefined && order.fields[f.id] !== '') || egrn?.[f.id]?.v))
-      .map((f) => [f.label, egrn?.[f.id]?.v ? `${egrn[f.id].v} (по выписке ЕГРН${egrn[f.id].typed ? `; в заявке — ${egrn[f.id].typed}` : ''})` : valueText(f, order.fields[f.id])]),
+    // Адрес — из задания на оценку (2.281), когда в выписках его нет.
+    ...(def?.fields ?? []).filter((f) => !skip.includes(f.id) && ((order.fields?.[f.id] !== undefined && order.fields[f.id] !== '') || egrn?.[f.id]?.v || task?.[f.id]?.v))
+      .map((f) => [f.label, egrn?.[f.id]?.v ? `${egrn[f.id].v} (по выписке ЕГРН${egrn[f.id].typed ? `; в заявке — ${egrn[f.id].typed}` : ''})`
+        : task?.[f.id]?.v ? `${task[f.id].v} (${task[f.id].by}${task[f.id].typed ? `; в заявке — ${task[f.id].typed}` : ''})` : valueText(f, order.fields[f.id])]),
     // Назначение помещения или дома (2.261) — из выписки ЕГРН на объект; в заявке — из «Что оцениваем», другое — рядом.
     ...(egrn?.use?.v ? [[`Назначение ${egrn.use.of}`, `${egrn.use.v} (по выписке ЕГРН${egrn.use.typed ? `; в заявке — ${egrn.use.typed}` : ''})`]] : []),
     // Правообладатель, вид права и обременения (2.243) — из выписки ЕГРН на объект: в заявке их нет.
@@ -104,13 +106,13 @@ function questionsList(order) {
 export const orderSections = (registry, order) => registry.draftSections(order.module, order.service, order.approaches ?? null);
 
 // Разделы с пометкой table получают таблицу сразу под заголовком; эксперт правит её в черновике как строки «| … |».
-export function fillTables(body, sections, registry, order, { materials = [], valueDate = null, egrn = null } = {}) {
+export function fillTables(body, sections, registry, order, { materials = [], valueDate = null, egrn = null, task = null } = {}) {
   let out = body;
   const skip = sections.some((x) => x.table === 'questions') ? ['questions'] : [];
   for (const s of sections.filter((x) => x.table)) {
     const m = [...out.matchAll(/^#{1,3}\s*(.+)$/gm)].find((h) => headKey(h[1]) === headKey(s.title));
     if (!m) continue;
-    const lines = s.table === 'task' ? taskTable(registry, order, { skip, materials, valueDate, egrn }) : s.table === 'analogs' ? [ANALOGS_MARK]
+    const lines = s.table === 'task' ? taskTable(registry, order, { skip, materials, valueDate, egrn, task }) : s.table === 'analogs' ? [ANALOGS_MARK]
       : s.table === 'questions' ? questionsList(order)
         : [...approachesTable(order.approaches), ...itemsTableFor(registry, order)];
     const at = m.index + m[0].length;
