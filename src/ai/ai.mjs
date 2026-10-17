@@ -176,9 +176,11 @@ function cleanProblemJson(registry, text) {
 // ——— Ассистент ———
 
 // Сводка заявки для модели: что за услуга, статус, срок, поля. Без имён и телефонов людей.
-export function orderBrief(registry, order) {
+// omit — поля, которые черновик берёт из выписки ЕГРН или задания на оценку (прогон 2.290): прежнее значение из заявки
+// модели не даём — иначе оно попадает в текст рядом с верным, и ИИ-проверка находит в отчёте «другой адрес».
+export function orderBrief(registry, order, { omit = [] } = {}) {
   const def = order.module ? registry.service(order.module, order.service) : null;
-  const fields = (def?.fields ?? []).filter((f) => order.fields?.[f.id] !== undefined).map((f) => {
+  const fields = (def?.fields ?? []).filter((f) => order.fields?.[f.id] !== undefined && !omit.includes(f.id)).map((f) => {
     const v = order.fields[f.id];
     const shown = f.type === 'select' ? f.options.find((o) => o.id === v)?.name ?? v : v;
     return `${f.label}: ${shown}`;

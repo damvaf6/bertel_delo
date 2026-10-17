@@ -331,7 +331,8 @@ export function draftOps() {
           task.address ? `Адрес объекта ${task.address.what} «${task.address.name}» (стр. ${task.address.page}): ${task.address.v} — пиши его везде, где нужен адрес объекта, без пометок` : null,
           task.kind ? `Вид стоимости ${task.kind.what} «${task.kind.name}» (стр. ${task.kind.page}): ${task.kind.v} — пиши его везде, где нужен вид стоимости, без пометок` : null,
         ].filter(Boolean).join('\n') || null;
-        const brief = [orderBrief(registry, order), valueBrief, egrnBrief(egrn), taskBrief, onsite, dossierBrief, spec ? analogsBrief(spec, analogs, order) : null, tablesBrief(sections)].filter(Boolean).join('\n');
+        const taken = ['address', 'area', 'cadastral'].filter((k) => egrn?.[k]?.v || task[k]?.v);
+        const brief = [orderBrief(registry, order, { omit: taken }), valueBrief, egrnBrief(egrn), taskBrief, onsite, dossierBrief, spec ? analogsBrief(spec, analogs, order) : null, tablesBrief(sections)].filter(Boolean).join('\n');
         const out = await askAi(ctx, actor, 'draft', draftMessages({ brief, sections, ...inputs }));
         // Таблицы (2.29) и сведения из досье (2.14) программа вставляет сама, под заголовками разделов.
         const materials = await orderMaterials(sql, order);
