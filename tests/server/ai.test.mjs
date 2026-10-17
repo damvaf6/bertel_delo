@@ -628,6 +628,27 @@ test('2.198: дата оценки сверяется с заданием на �
   assert.deepEqual(await found(), []);
 });
 
+test('2.277: адрес объекта сверяется с заданием на оценку, приложенным к делу; текст задания в модель не уходит', async () => {
+  const o = await inWork('Квартира: адрес по заданию');
+  const putDoc = (who, body, name, kind) => who.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), ...(kind ? { 'x-doc-kind': kind } : {}) } });
+  assert.equal((await putDoc(owner, 'ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nАдрес объекта: г. Москва, ул. Долевая, д. 3, кв. 18', 'Задание на оценку.txt', 'basis')).status, 201);
+  assert.equal((await putResult(o, 'ОТЧЁТ ОБ ОЦЕНКЕ № 6/2026\nАдрес объекта оценки: г. Москва, ул. Долевая, д. 3, кв. 8', 'отчёт.txt', 'text/plain')).status, 201);
+  const found = async () => {
+    const res = await spec.req('POST', `/api/orders/${o.id}/review/ai`);
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    return res.body.ai.items.flatMap((i) => i.found ?? []).filter((f) => /в задании на оценку/.test(f.text));
+  };
+  const [f, ...more] = await found();
+  assert.equal(more.length, 0);
+  assert.equal(f.text, 'Адрес «г. Москва, ул. Долевая, д. 3, кв. 8» не совпадает с адресом в задании на оценку «Задание на оценку.txt» (г. Москва, ул. Долевая, д. 3, кв. 18, стр. 1): квартира 8, а в задании на оценку 18 — проверьте, нет ли данных другого объекта');
+  assert.deepEqual(f.fix, { bad: 'г. Москва, ул. Долевая, д. 3, кв. 8', right: 'г. Москва, ул. Долевая, д. 3, кв. 18', from: 'в задании на оценку «Задание на оценку.txt»' });
+  assert.doesNotMatch(lastPrompt(), /Объект оценки: квартира/, 'текст задания в модель не уходит');
+  await S.sql`update documents set deleted_at = now() where order_id = ${o.id} and kind = 'result'`;
+  assert.equal((await putResult(o, 'ОТЧЁТ ОБ ОЦЕНКЕ № 6/2026\nАдрес объекта оценки: г. Москва, ул. Долевая, д. 3, кв. 18', 'отчёт-2.txt', 'text/plain')).status, 201);
+  assert.deepEqual(await found(), []);
+});
+
 test('2.202: площадь в отчёте сверяется с выпиской ЕГРН, приложенной к просьбе о документах; текст выписки в модель не уходит', async () => {
   const o = await inWork('Квартира: площадь по выписке');
   assert.equal((await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { items: ['egrn'] })).status, 201);
