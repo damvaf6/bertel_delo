@@ -16,7 +16,7 @@ import { pastValues, reuseSections, skeleton } from '../docs/reuse.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { orderSources, placeSources, sourcesLines } from '../docs/sources.mjs';
 import { draftDiff } from '../docs/diff.mjs';
-import { assignmentAddress, assignmentValue, egrnFacts, egrnRightsFacts, egrnShares, egrnUses, parseFloorField, sameAddressText, USE_NAME } from '../ai/report-checks.mjs';
+import { assignmentAddress, assignmentKinds, assignmentValue, egrnFacts, egrnRightsFacts, egrnShares, egrnUses, kindList, parseFloorField, sameAddressText, USE_NAME } from '../ai/report-checks.mjs';
 import { assignmentDocs, egrnDocs } from './ai-ops.mjs';
 
 const PHOTOS_MAX = 40;
@@ -135,6 +135,15 @@ function taskAddressFor(registry, order, assignment, egrn) {
   return { v: a.text, what: a.what, by: TASK_BY[a.what], name: a.name, page: a.page + 1,
     typed: typed && !sameAddressText(a, typed) ? typed : null };
 }
+// 2.282: вид стоимости из задания на оценку (письма заказчика, определения суда), как его сверяет ИИ-проверка (2.278,
+// правило purpose_value), — в таблицу задания, модели и вместо пометки «заполнить: вид стоимости». В заявке вида стоимости
+// нет; в документах разные виды — ничего не подставляем, эксперт выбирает сам.
+function taskKindFor(registry, order, assignment) {
+  if (!registry.checks(order.module, order.service).some((r) => (r.auto ?? []).includes('purpose_value'))) return null;
+  const k = assignmentKinds(assignment);
+  return k ? { v: kindList(k.kinds), kinds: k.kinds, what: k.what, by: TASK_BY[k.what], name: k.name, page: k.page + 1 } : null;
+}
+const VALUE_KIND_GAP = /\[(?:заполнить|указать)\s*:?\s*вид\S*\s+стоимост[^\]]*\]/giu;
 const ruDay = (d) => d.split('-').reverse().join('.');
 // Пометка модели про дату оценки: «[заполнить: дата оценки]», «[заполнить: дату оценки из задания]».
 const VALUE_GAP = /\[(?:заполнить|указать)\s*:?\s*дат[аыу]\s+оценки[^\]]*\]/giu;
@@ -308,8 +317,11 @@ export function draftOps() {
         const valueDate = valueDateFor(registry, order, assignment);
         const valueBrief = valueDate?.day ? `Дата оценки: ${valueDate.day} (${valueDate.what} «${valueDate.name}», стр. ${valueDate.page}) — пиши её везде, где нужна дата оценки, без пометок` : null;
         const egrn = await egrnFor(sql, providers.storage, registry, order);
-        const task = { address: taskAddressFor(registry, order, assignment, egrn) };
-        const taskBrief = task.address ? `Адрес объекта ${task.address.what} «${task.address.name}» (стр. ${task.address.page}): ${task.address.v} — пиши его везде, где нужен адрес объекта, без пометок` : null;
+        const task = { address: taskAddressFor(registry, order, assignment, egrn), kind: taskKindFor(registry, order, assignment) };
+        const taskBrief = [
+          task.address ? `Адрес объекта ${task.address.what} «${task.address.name}» (стр. ${task.address.page}): ${task.address.v} — пиши его везде, где нужен адрес объекта, без пометок` : null,
+          task.kind ? `Вид стоимости ${task.kind.what} «${task.kind.name}» (стр. ${task.kind.page}): ${task.kind.v} — пиши его везде, где нужен вид стоимости, без пометок` : null,
+        ].filter(Boolean).join('\n') || null;
         const brief = [orderBrief(registry, order), valueBrief, egrnBrief(egrn), taskBrief, onsite, dossierBrief, spec ? analogsBrief(spec, analogs, order) : null, tablesBrief(sections)].filter(Boolean).join('\n');
         const out = await askAi(ctx, actor, 'draft', draftMessages({ brief, sections, ...inputs }));
         // Таблицы (2.29) и сведения из досье (2.14) программа вставляет сама, под заголовками разделов.
@@ -317,7 +329,8 @@ export function draftOps() {
         // Перечень использованных документов (2.95) — из дела, программой.
         const sources = sourcesLines(await orderSources(sql, registry, order, providers.storage));
         const answer = cleanDraftAnswer(sections, out.text);
-        const dated = fillEgrn(valueDate?.day ? answer.replace(VALUE_GAP, valueDate.day) : answer, task.address ? { ...egrn, address: task.address } : egrn);
+        const kinded = task.kind ? answer.replace(VALUE_KIND_GAP, task.kind.v) : answer;
+        const dated = fillEgrn(valueDate?.day ? kinded.replace(VALUE_GAP, valueDate.day) : kinded, task.address ? { ...egrn, address: task.address } : egrn);
         const filled = fillDraft(fillTables(dated, sections, registry, order, { materials, valueDate: valueDate?.day, egrn, task }), sections, dossier);
         const text = placeSources(filled, sections, sources).body.slice(0, DRAFT_MAX);
         const seen = {
@@ -329,6 +342,7 @@ export function draftOps() {
           value_date: valueDate,
           egrn,
           task_address: task.address,
+          task_kind: task.kind,
         };
         const d = await sql.tx(async (tx) => {
           await tx`select id from orders where id = ${order.id} for update`;

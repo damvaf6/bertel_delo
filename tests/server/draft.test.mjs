@@ -24,6 +24,8 @@ before(async () => {
   dispatcher = await login(S, '+79990000903');
   admin = await login(S, '+79990000904');
   spec = await login(S, '+79990000905');
+  // Черновиков у одного эксперта в этом файле больше суточного лимита ИИ (50); сам лимит проверяет ai.test.mjs.
+  S.cfg.ai.dailyLimit = 500;
   await setPlatformRole(S.sql, dispatcher.user.id, 'dispatcher');
   await setPlatformRole(S.sql, admin.user.id, 'admin');
   await makeSpecialist(S.sql, spec.user.id, { permits: [['expertise', 'realty'], ['expertise', 'vehicle'], ['expertise', 'land'], ['expertise', 'movable'], ['expertise', 'goods'], ['expertise', 'construction'], ['expertise', 'handwriting'], ['expertise', 'car_damage']] });
@@ -1117,6 +1119,38 @@ test('2.281: адрес объекта из задания на оценку —
   d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
   assert.equal(d.inputs.task_address, null);
   assert.match(d.body, /\| Адрес объекта \| Москва, Садовая улица, дом 5, квартира 12 \|/);
+});
+
+test('2.282: вид стоимости из задания на оценку — в таблицу задания, модели и вместо пометки; разные виды — эксперт выбирает сам', async () => {
+  const o = await inWork('Квартира: вид стоимости из задания в черновик');
+  const putDoc = (body, name, kind) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), ...(kind ? { 'x-doc-kind': kind } : {}) } });
+  // Без задания — строки нет.
+  let d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {})).body.draft;
+  assert.equal(d.inputs.task_kind, null);
+  assert.doesNotMatch(d.body, /\| Вид стоимости \|/);
+  assert.equal((await putDoc('ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nВид стоимости: рыночная и ликвидационная\nДата оценки: 03.10.2026', 'Задание на оценку.txt', 'basis')).status, 201);
+  d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+  assert.deepEqual(d.inputs.task_kind, { v: 'рыночная и ликвидационная', kinds: ['market', 'liquidation'], what: 'в задании на оценку',
+    by: 'по заданию на оценку', name: 'Задание на оценку.txt', page: 1 });
+  assert.match(d.body, /\| Дата оценки \| 03\.10\.2026 \|\n\| Вид стоимости \| рыночная и ликвидационная \(по заданию на оценку\) \|\n/);
+  assert.match(lastPrompt(), /Вид стоимости в задании на оценку «Задание на оценку\.txt» \(стр\. 1\): рыночная и ликвидационная/);
+  // Модель оставила пометку — программа ставит вид стоимости; другие пометки не трогает.
+  const orig = S.providers.ai.complete;
+  S.providers.ai.complete = async () => ({ text: '## 1. Основные факты и выводы\nВид стоимости — [заполнить: вид стоимости]. Цель — [заполнить: цель оценки]\n## 2. Задание на оценку\nТекст', model: 'fake' });
+  try {
+    d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+  } finally { S.providers.ai.complete = orig; }
+  assert.match(d.body, /Вид стоимости — рыночная и ликвидационная\. Цель — \[заполнить: цель оценки\]/);
+  // Правка эксперта сохраняет, откуда вид стоимости.
+  const saved = (await spec.req('PUT', `/api/orders/${o.id}/draft`, { body: `${d.body}\nправка`, from: d.id })).body.draft;
+  assert.equal(saved.inputs.task_kind.v, 'рыночная и ликвидационная');
+  // Письмо заказчика с другим видом рядом — какой верный, решает эксперт: строки нет.
+  assert.equal((await putDoc('Письмо заказчика\nПросим определить рыночную стоимость квартиры', 'Письмо.txt')).status, 201);
+  d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: saved.id })).body.draft;
+  assert.equal(d.inputs.task_kind, null);
+  assert.doesNotMatch(d.body, /\| Вид стоимости \|/);
+  assert.doesNotMatch(lastPrompt(), /Вид стоимости в задании на оценку/);
 });
 
 test('2.273: перечень документов черновика — номер и дата выписки ЕГРН из самой выписки; сверка 2.264 по нему без находок', async () => {
