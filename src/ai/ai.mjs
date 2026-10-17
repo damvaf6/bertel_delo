@@ -452,14 +452,19 @@ export async function egrnSwapLeft(sql, order, docIds, body) {
 
 // 2.272: для «Сегодня» и утренней сводки эксперта — расхождения с выпиской ЕГРН из последней ИИ-проверки его неподписанных
 // файлов, которые он уже заменил в черновике после загрузки файла (как 2.263 у руководителя). versions — версии черновика
-// ({ body, at }, по порядку, последняя — текущая), created — когда загружен каждый файл, newest — самый свежий свой файл
-// результата: собран после последней из этих замен — Word уже собран заново, пусто.
+// ({ body, at }, по порядку, последняя — текущая; первой может идти версия, что была при загрузке файла), created — когда
+// загружен каждый файл, newest — самый свежий свой файл результата: собран после последней из этих замен — Word уже собран
+// заново, пусто. 2.280: так же расхождения с заявкой и заданием на оценку (`fix.from`) — исправлены в черновике (значения из
+// файла нет, верное есть), а в какой-то версии с загрузки файла прежнее значение стояло — { swapped, fixed }.
+const fixedIn = (body, f) => !findInDraft(body, { bad: f.fix.bad, quote: f.quote })
+  && !!findInDraft(body, { bad: swapValue(f.fix, f.fix.bad) ?? f.fix.right, quote: f.quote });
 export async function egrnRebuildLeft(sql, order, docIds, versions, created, newest) {
   const draft = versions.at(-1);
-  if (!docIds.length || !draft?.body) return [];
+  const none = { swapped: [], fixed: [] };
+  if (!docIds.length || !draft?.body) return none;
   const rows = await sql`select files, items from ai_reviews
                          where order_id = ${order.id} and round = ${order.review_round + 1} order by id desc`;
-  const out = [];
+  const swapped = [], fixed = [];
   let last = null;
   for (const id of docIds) {
     const at = created.get(id);
@@ -467,17 +472,25 @@ export async function egrnRebuildLeft(sql, order, docIds, versions, created, new
     const r = rows.find((x) => (x.files ?? []).some((f) => f.id === id));
     if (!r) continue;
     const file = (r.files ?? []).find((f) => f.id === id)?.name;
+    // Версии с загрузки файла: та, что была при загрузке, и все после неё.
+    const from = Math.max(0, versions.findLastIndex((v) => new Date(v.at) <= new Date(at)));
     for (const f of (r.items ?? []).filter((i) => i.hint === 'attention').flatMap((i) => i.found ?? [])) {
-      if (!(f.egrn && (!file || f.file === file) && f.egrn.bad && swapValue(f.egrn) && swappedIn(draft.body, f))) continue;
-      // Когда замена появилась: первая версия после загрузки файла, начиная с которой значение из выписки стоит без перерыва.
+      if (file && f.file !== file) continue;
+      const egrn = f.egrn && f.egrn.bad && swapValue(f.egrn) && swappedIn(draft.body, f);
+      const order = !egrn && !f.egrn && f.fix?.from && f.fix.bad && f.fix.right && fixedIn(draft.body, f)
+        && versions.slice(from, -1).some((v) => findInDraft(v.body, { bad: f.fix.bad, quote: f.quote }));
+      if (!egrn && !order) continue;
+      const done = egrn ? swappedIn : fixedIn;
+      // Когда замена появилась: первая версия после загрузки файла, начиная с которой верное значение стоит без перерыва.
       let since = draft.at;
-      for (let i = versions.length - 1; i >= 0 && new Date(versions[i].at) > new Date(at) && swappedIn(versions[i].body, f); i -= 1) since = versions[i].at;
+      for (let i = versions.length - 1; i >= 0 && new Date(versions[i].at) > new Date(at) && done(versions[i].body, f); i -= 1) since = versions[i].at;
       if (!last || new Date(since) > new Date(last)) last = since;
-      out.push(egrnShort(f));
+      if (egrn) swapped.push(egrnShort(f));
+      else fixed.push(fixShort(f).text);
     }
   }
-  if (!out.length || (newest && last && new Date(newest) >= new Date(last))) return [];
-  return [...new Set(out)];
+  if (!(swapped.length || fixed.length) || (newest && last && new Date(newest) >= new Date(last))) return none;
+  return { swapped: [...new Set(swapped)], fixed: [...new Set(fixed.filter(Boolean))] };
 }
 
 // ——— Черновик заключения (задача 2.2) ———

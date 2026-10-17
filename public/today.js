@@ -22,6 +22,14 @@ import { api, el } from '/common.js';
 const $ = (id) => document.getElementById(id);
 const dayRu = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
 const since = (iso) => new Date(iso).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+// «Соберите Word заново» (2.272, 2.280): что заменено в черновике — по выписке ЕГРН, по заявке и заданию на оценку или и то и другое.
+function rebuildWhat(x) {
+  const swapped = x.swapped ?? [], fixed = x.fixed ?? [];
+  const all = [...swapped, ...fixed];
+  const how = !fixed.length ? 'заменено по выписке ЕГРН' : !swapped.length ? 'исправлено по заявке и заданию на оценку'
+    : 'заменено по выписке ЕГРН и исправлено по заявке и заданию на оценку';
+  return `В черновике ${how} ${since(x.draft_at)}${all.length > 1 ? ` (${all.length})` : ''}: ${all[0].length > 100 ? `${all[0].slice(0, 99)}…` : all[0]}`;
+}
 const waited = (iso) => {
   const h = Math.floor((Date.now() - Date.parse(iso)) / 3600_000);
   return h < 1 ? 'меньше часа' : h < 24 ? `${h} ч` : `${Math.floor(h / 24)} дн.${h % 24 ? ` ${h % 24} ч` : ''}`;
@@ -230,9 +238,10 @@ export async function loadToday() {
         { class: 'warn-line', role: 'egrn-swap-what', text: `${x.swap.length > 1 ? `Расхождений с выпиской: ${x.swap.length} — ` : ''}${x.swap[0].length > 120 ? `${x.swap[0].slice(0, 119)}…` : x.swap[0]}` },
         `замените в черновике, соберите Word заново и загрузите — тогда подписывайте · ${deadline(x, t.today)}`],
       (x) => { location.hash = `order=${x.id}&to=review`; }),
-      // Заменил по выписке ЕГРН в черновике, а файл результата собран до замены (2.272) — к кнопке сборки Word в деле.
+      // Заменил по выписке ЕГРН (2.272) или исправил по заявке и заданию на оценку (2.280) в черновике, а файл результата собран
+      // до замены — к кнопке сборки Word в деле.
       ...group('egrn-rebuild', 'Соберите Word заново', e.egrn_rebuild ?? [], (x) => [x.title,
-        { class: 'warn-line', role: 'egrn-rebuild-what', text: `В черновике заменено по выписке ЕГРН ${since(x.draft_at)}${x.swapped.length > 1 ? ` (${x.swapped.length})` : ''}: ${x.swapped[0].length > 100 ? `${x.swapped[0].slice(0, 99)}…` : x.swapped[0]}` },
+        { class: 'warn-line', role: 'egrn-rebuild-what', text: rebuildWhat(x) },
         `«${x.file}» собран до замены — соберите Word заново и подпишите его · ${deadline(x, t.today)}`],
       (x) => { location.hash = `order=${x.id}&to=rebuild`; }),
       // Можно продолжать (2.86): пришло новое после того, как эксперт открывал дело, — сразу к переписке, документам или осмотру.

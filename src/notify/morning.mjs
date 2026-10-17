@@ -49,7 +49,7 @@ export function digestText(c) {
   if (c.reply_wait) parts.push(`заказчик ждёт ответа: ${c.reply_wait}`);
   if (c.lead_unsigned) parts.push(`руководитель не подписал 2 дня и больше: ${c.lead_unsigned}`);
   if (c.egrn_swap) parts.push(`в ИИ-проверке остались расхождения с выпиской ЕГРН, которые можно заменить: ${c.egrn_swap} ${pl(c.egrn_swap, 'дело', 'дела', 'дел')}`);
-  if (c.egrn_rebuild) parts.push(`заменили по выписке в черновике, а файл собран до замены — соберите Word заново: ${c.egrn_rebuild} ${pl(c.egrn_rebuild, 'дело', 'дела', 'дел')}`);
+  if (c.egrn_rebuild) parts.push(`исправили в черновике по выписке или заданию на оценку, а файл собран до исправления — соберите Word заново: ${c.egrn_rebuild} ${pl(c.egrn_rebuild, 'дело', 'дела', 'дел')}`);
   return parts.length ? `На сегодня: ${parts.join(', ')}` : null;
 }
 

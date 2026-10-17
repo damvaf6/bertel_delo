@@ -12334,3 +12334,157 @@ test('2.279: окно подписи — расхождения с задани�
   await expect.poll(() => asked).toContain('Расхождения с заявкой и заданием на оценку: 1.');
   for (const p of [ep, cp]) await p.context().close();
 });
+
+// Прогон 2.280 «как эксперт и руководитель» по пачке 2.271–2.279 на одном деле организации: перечень с номером выписки,
+// находки по заданию на оценку (дата, вид стоимости), окно подписи, «Соберите Word заново» в «Сегодня», отбор и возврат у
+// руководителя, замена по заданию и сборка Word, повторная подпись — ушли ли расхождения, сводка за месяц.
+test('прогон 2.280: эксперт и руководитель по пачке 2.271–2.279 на одном деле', async ({ browser, baseURL }) => {
+  test.setTimeout(300_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), hp = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990028001'), head = await signIn(hp, '+79990028002');
+  const customer = await signIn(cp, '+79990028003');
+  const { orgId, A } = await db(async (c) => {
+    const { rows: [org] } = await c.query('insert into organizations (name) values ($1) returning id', [`ООО «Прогон-13 ${Date.now() % 100000}»`]);
+    await c.query("update users set full_name = 'Тринадцатов Лев' where id = $1", [expert.id]);
+    await c.query("update users set full_name = 'Старший Олег' where id = $1", [head.id]);
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now() - interval '1 year'), ($1, $3, 'member', now() - interval '1 year')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Тринадцатая пачка: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Тринадцатая ул., д. 13, кв. 13","area":"47.3"}') returning id`,
+    [customer.id, expert.id, inDays(5)]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now() - interval '3 days')", [o.id, expert.id]);
+    return { orgId: org.id, A: o.id };
+  });
+  const txt = (name, extra = {}) => ({ ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), ...extra });
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from(['Выписка из Единого государственного реестра недвижимости об объекте недвижимости',
+      '26.09.2026 № КУВИ-001/2026-13131313', 'Вид объекта недвижимости: Помещение', 'Кадастровый номер: 77:13:0013013:1313',
+      'Площадь, м2: 47,3', 'Назначение помещения: Жилое помещение', 'Вид жилого помещения: Квартира',
+      'Адрес (местоположение): г. Москва, Тринадцатая ул., д. 13, кв. 13'].join('\n')),
+    headers: txt('Выписка ЕГРН.txt'),
+  })).status()).toBe(201);
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from('ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nВид стоимости: рыночная\nДата оценки: 03.10.2026'),
+    headers: txt('Задание на оценку.txt', { 'x-doc-kind': 'basis' }),
+  })).status()).toBe(201);
+
+  // 2.273: в перечне документов черновика — номер и дата выписки из самой выписки.
+  await ep.goto(`/kabinet#order=${A}`);
+  await ep.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const draftText = ep.getByLabel('Текст заключения');
+  await expect(draftText).toHaveValue(/Выписка из ЕГРН № КУВИ-001\/2026-13131313 от 26\.09\.2026 — файл «Выписка ЕГРН\.txt»/);
+  await ep.locator('#draft-sources-box').scrollIntoViewIfNeeded();
+  await shot(ep, 'd55-progon13-ekspert-perechen-vypiska');
+  const wrong = ['Определению подлежит ликвидационная стоимость объекта.', 'Оценка выполнена по состоянию на 01.10.2026.', 'Общая площадь 45,1 кв. м.'];
+  await draftText.fill(`${(await draftText.inputValue()).replace(/\[заполнить[^\]]*\]/gu, 'дописано экспертом')}\n${wrong.join('\n')}`);
+  await ep.getByRole('button', { name: 'Сохранить правку' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Правка сохранена');
+  const up = await ep.request.post(`/api/orders/${A}/results`, {
+    data: Buffer.from(['ОТЧЁТ ОБ ОЦЕНКЕ № 13/2026', 'Вид определяемой стоимости: ликвидационная', 'Дата оценки: 01.10.2026',
+      'Адрес объекта оценки: г. Москва, Тринадцатая ул., д. 13, кв. 13', 'Кадастровый номер 77:13:0013013:1313',
+      'Выписка из ЕГРН № КУВИ-001/2026-13131313 от 26.09.2026.', 'Общая площадь 45,1 кв. м.', 'Итоговая стоимость 13 100 000 руб.'].join('\n')),
+    headers: txt('Отчёт Тринадцатова.txt'),
+  });
+  expect(up.status()).toBe(201);
+  const resultId = (await up.json()).document.id;
+  await ep.reload();
+  await ep.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(ep.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  // 2.278: вид стоимости — не как в задании; 2.274: дата оценки — не как в задании.
+  const kindFind = ep.locator('#review-checks li[data-check="appraiser"] .ai-found li').filter({ hasText: 'Вид стоимости в отчёте' });
+  await expect(kindFind).toContainText('Вид стоимости в отчёте — «ликвидационная», а в задании на оценку «Задание на оценку.txt» — «рыночная» (стр. 1)');
+  const dateFind = ep.locator('#review-checks .ai-found li').filter({ hasText: 'Дата оценки в отчёте 01.10.2026' });
+  await expect(dateFind).toContainText('а в задании на оценку «Задание на оценку.txt» — 03.10.2026');
+  const areaFind = ep.locator('#review-checks li[data-check="realty_identity"] .ai-found li').filter({ hasText: 'Площадь 45,1' });
+  await expect(areaFind.getByRole('button', { name: 'Заменить на значение из выписки' })).toBeVisible();
+  // 2.279: в окне подписи — расхождения с заданием на оценку и «К первой находке».
+  const hint = ep.locator('[data-sig="order-left"]');
+  await expect(hint).toContainText(/^В ИИ-проверке остались расхождения с заявкой и заданием на оценку: 2\./);
+  await hint.scrollIntoViewIfNeeded();
+  await shot(ep, 'd56-progon13-ekspert-podpis-rashozhdeniya');
+  await hint.getByRole('button', { name: /^К (первой )?находке$/ }).click();
+  await expect(ep.locator('#review-checks .ai-found li.flash')).toBeInViewport();
+
+  // Эксперт подписал как есть, а потом заменил площадь по выписке в черновике.
+  expect((await ep.request.post(`/api/documents/${resultId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  await ep.reload();
+  await areaFind.getByRole('button', { name: 'Заменить на значение из выписки' }).click();
+  await expect(draftText).toHaveValue(/Общая площадь 47,3 кв\. м\./);
+
+  // 2.272: в «Сегодня» — «Соберите Word заново», нажатие — к кнопке в черновике.
+  const tp = await ep.context().newPage();
+  await tp.goto('/kabinet');
+  const rebuildRow = tp.locator('li[data-today-item="egrn-rebuild"]').filter({ hasText: 'Тринадцатая пачка: квартира' });
+  await expect(rebuildRow).toContainText(/собран до замены — соберите Word заново и подпишите его/);
+  await rebuildRow.scrollIntoViewIfNeeded();
+  await shot(tp, 'd57-progon13-ekspert-segodnya-sobrat-word');
+  await rebuildRow.locator('button.open').click();
+  await expect(tp.locator('#draft-attach')).toBeInViewport();
+  await tp.close();
+
+  // 2.276: у руководителя — отбор «Есть расхождения с заявкой или заданием на оценку»; возврат пунктами.
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const f = hp.locator('#org-sign-filter');
+  await f.locator('[data-sign-filter="order"]').click();
+  await expect(f.locator('[data-sign-filter="order"]')).toHaveAttribute('aria-pressed', 'true');
+  const item = hp.locator('#org-sign > li[data-item]').filter({ hasText: 'Отчёт Тринадцатова.txt' });
+  await expect(hp.locator('#org-sign > li[data-item]')).toHaveCount(1);
+  await expect(item.locator('[data-role="ai-order"]')).toContainText('Расхождения с заданием на оценку (2):');
+  await f.scrollIntoViewIfNeeded();
+  await shot(hp, 'd58-progon13-rukovoditel-otbor-zadanie');
+  await item.locator('[data-action="org-return"]').click();
+  const points = (await item.locator('textarea').inputValue()).split('\n');
+  expect(points.filter((p) => p.endsWith('— исправьте, как в задании на оценку'))).toHaveLength(2);
+  expect(points.at(-1)).toMatch(/^Расхождения с выпиской ЕГРН Вы заменили в черновике, а подписали файл, собранный до замены/);
+  await item.locator('[data-action="org-return-send"]').click();
+  await expect(hp.locator('#org-sign-msg')).toHaveText('Файл возвращён эксперту с замечанием — его подпись снята');
+  await expect(f.locator('[data-sign-filter="order"]')).toHaveCount(0);
+
+  // 2.274, 2.278: эксперт меняет дату и вид стоимости «Заменить на значение из задания», собирает Word, заменяет возвращённый.
+  await ep.reload();
+  await dateFind.getByRole('button', { name: 'Заменить на значение из задания' }).click();
+  await expect(dateFind.locator('[data-role="fix-swap-what"]')).toContainText('стало «03.10.2026»');
+  await kindFind.getByRole('button', { name: 'Заменить на значение из задания' }).click();
+  await expect(kindFind.locator('[data-role="fix-swap-what"]')).toContainText('стало «рыночная»');
+  await expect(draftText).toHaveValue(/Определению подлежит рыночная стоимость объекта\.\nОценка выполнена по состоянию на 03\.10\.2026\./);
+  await expect(ep.locator('[data-sig="order-fixed"]')).toBeVisible();
+  await kindFind.scrollIntoViewIfNeeded();
+  await shot(ep, 'd59-progon13-ekspert-zamena-po-zadaniyu');
+  // Прогон 2.280: в «Сегодня» «Соберите Word заново» — и с исправлениями по заданию на оценку (прежде — только по выписке).
+  const tp2 = await ep.context().newPage();
+  await tp2.goto('/kabinet');
+  const rebuildRow2 = tp2.locator('li[data-today-item="egrn-rebuild"]').filter({ hasText: 'Тринадцатая пачка: квартира' });
+  await expect(rebuildRow2.locator('[data-role="egrn-rebuild-what"]')).toHaveText(/^В черновике заменено по выписке ЕГРН и исправлено по заявке и заданию на оценку .+ \(3\): /);
+  await rebuildRow2.scrollIntoViewIfNeeded();
+  await shot(tp2, 'd59a-progon13-ekspert-segodnya-word-po-zadaniyu');
+  await tp2.close();
+  ep.once('dialog', (d) => d.accept());
+  await kindFind.locator('[data-role="egrn-rebuild"]').getByRole('button', { name: 'Собрать Word заново' }).click();
+  await expect(kindFind.locator('[data-role="egrn-rebuild-done"]')).toContainText('приложен к результату');
+  await ep.locator('#replace-box').getByRole('button', { name: 'Да, заменить' }).click();
+  await expect(ep.locator(`#docs li.doc[data-doc="${resultId}"]`)).toHaveCount(0);
+  const word = (await (await ep.request.get(`/api/orders/${A}/documents`, { headers: H })).json()).documents.find((d) => d.kind === 'result' && d.filename.endsWith('.docx'));
+  expect(word).toBeTruthy();
+  await ep.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(ep.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  await expect(ep.locator('[data-sig="order-left"]')).toHaveCount(0);
+  const r = await db((c) => c.query('select r.id, count(i.*)::int as n from org_returns r join org_return_items i on i.return_id = r.id where r.order_id = $1 group by r.id', [A]));
+  for (let n = 1; n <= r.rows[0].n; n += 1) expect((await ep.request.put(`/api/orders/${A}/org-returns/${r.rows[0].id}/items/${n}`, { data: { fixed: true }, headers: H })).status()).toBe(200);
+  expect((await ep.request.post(`/api/documents/${word.id}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+
+  // 2.271: при повторной подписи у руководителя — расхождения с заданием на оценку ушли; 2.275 — сводка за месяц.
+  await hp.reload();
+  const again = hp.locator(`#org-sign li.doc[data-doc="${word.id}"]`);
+  await expect(again.locator('[data-role="points-order"]')).toHaveText('Расхождения с заявкой и заданием на оценку по новой ИИ-проверке эксперта: ушли — 2');
+  await again.locator('[data-role="points-order"]').scrollIntoViewIfNeeded();
+  await shot(hp, 'd60-progon13-rukovoditel-povtornaya-podpis');
+  const rep = hp.locator('#org-report > li').filter({ hasText: 'Тринадцатов Лев' });
+  await expect(rep.locator('[data-expert-order]')).toHaveText(/^при первой подписи расхождений с заявкой и заданием на оценку: 2 в 1 деле из 1 проверенных ИИ \(с заданием — 2\)/);
+  await rep.locator('[data-expert-order]').scrollIntoViewIfNeeded();
+  await shot(hp, 'd61-progon13-rukovoditel-svodka-mesyac');
+  for (const p of [ep, hp, cp]) await p.context().close();
+});

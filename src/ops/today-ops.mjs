@@ -184,9 +184,10 @@ async function expertPart(sql, actor, registry, today, storage) {
   recheck.sort((a, b) => new Date(b.recheck.docs.at(-1).at) - new Date(a.recheck.docs.at(-1).at));
   // Остались расхождения с выпиской, которые можно заменить в черновике (2.266) — к ИИ-проверке в деле.
   const egrnSwap = (await egrnSwapCases(sql, actor.id, rows)).map(({ order, left }) => item(order, { swap: left }));
-  // Заменил по выписке в черновике, а файл результата собран до замены (2.272) — к кнопке сборки Word в деле.
+  // Заменил по выписке (2.272) или исправил по заявке и заданию на оценку (2.280) в черновике, а файл результата собран до
+  // замены — к кнопке сборки Word в деле.
   const egrnRebuild = (await egrnRebuildCases(sql, actor.id, rows))
-    .map(({ order, swapped, draftAt, file }) => item(order, { swapped, draft_at: draftAt, file }));
+    .map(({ order, swapped, fixed, draftAt, file }) => item(order, { swapped, fixed, draft_at: draftAt, file }));
   return {
     ai_recheck: recheck,
     egrn_swap: egrnSwap,
@@ -275,9 +276,11 @@ export async function egrnRebuildCases(sql, userId, rows) {
     if (!open.length) continue;
     const versions = await sql`select body, at from result_drafts where order_id = ${o.id} and at > ${open[0].created_at} order by id`;
     if (!versions.length) continue;
-    const swapped = await egrnRebuildLeft(sql, o, open.map((d) => d.id), versions,
+    // 2.280: и версия, что была при загрузке файла, — стояло ли в ней прежнее значение, исправленное потом по заявке или заданию.
+    const before = await sql`select body, at from result_drafts where order_id = ${o.id} and at <= ${open[0].created_at} order by id desc limit 1`;
+    const { swapped, fixed } = await egrnRebuildLeft(sql, o, open.map((d) => d.id), [...before, ...versions],
       new Map(docs.map((d) => [d.id, d.created_at])), docs.at(-1).created_at);
-    if (swapped.length) out.push({ order: o, swapped, draftAt: versions.at(-1).at, file: open.at(-1).filename });
+    if (swapped.length || fixed.length) out.push({ order: o, swapped, fixed, draftAt: versions.at(-1).at, file: open.at(-1).filename });
   }
   return out;
 }
