@@ -12265,7 +12265,10 @@ test('прогон 2.270: эксперт и руководитель по пач
   const ret = ep.locator('#org-returns li.return.open');
   const areaPoint = ret.locator('li.point').filter({ hasText: 'Площадь 45,1' });
   await expect(areaPoint.locator('[data-role="point-swap"]')).toHaveText('В черновике «45,1» — в выписке ЕГРН «47,3». Заменить по выписке');
-  await expect(ret.locator('li.point').filter({ hasText: 'Дата оценки' }).locator('[data-role^="point-swap"]')).toHaveCount(0);
+  // 2.285: у пункта по заданию на оценку — та же замена, что в ИИ-проверке; дата в черновике уже из задания (2.207) — «исправьте
+  // в файле отчёта».
+  await expect(ret.locator('li.point').filter({ hasText: 'Дата оценки' }).locator('[data-role="point-swap-miss"]'))
+    .toHaveText('В тексте черновика «01.10.2026» нет — исправьте в файле отчёта (в задании на оценку «Задание на оценку.txt»: 03.10.2026).');
   await areaPoint.scrollIntoViewIfNeeded();
   await shot(ep, 'd50-progon12-ekspert-punkt-zamenit');
   await areaPoint.getByRole('button', { name: 'Заменить по выписке' }).click();
