@@ -12584,7 +12584,8 @@ test('2.283: «Заменить всё по заданию» и «Отменит
   // Заменили всё — осталось только то, что одной кнопкой не заменилось: прежний адрес ещё стоит в «Описании объекта».
   await tp.locator('#ai-task-swap-all').getByRole('button', { name: 'Заменить всё по заданию (2)' }).click();
   await expect(tp.locator('#ai-task-swap-all [data-role="task-swap-all-what"]')).toContainText('Заменено по заданию на оценку: 2.');
-  await tp.goto('/');
+  // Главная страница сама уводит вошедшего в кабинет — уходим на пустую, чтобы «Сегодня» загрузилось заново без гонки переходов.
+  await tp.goto('about:blank');
   await tp.goto('/kabinet');
   const left = tp.locator('li[data-today-item="task-swap"]').filter({ hasText: 'Всё по заданию: квартира' });
   await expect(left.locator('[data-role="task-swap-what"]')).toHaveText(/^Адрес «г\. Москва, Садовая ул\., д\. 7, кв\. 4» не совпадает с адресом в задании на оценку/);
