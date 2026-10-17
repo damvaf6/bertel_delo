@@ -64,6 +64,14 @@ const orderFirst = (x) => {
     caseWord(x.order_first_cases)} из ${checked} проверенных ИИ (${parts})`,
   x.order_rules?.length ? `чаще: ${x.order_rules.map((r) => `${r.title} — ${r.n}`).join(', ')}` : null].filter(Boolean).join(' · ');
 };
+// 2.289: «до первой подписи исправлено кнопкой в черновике: 3 в 2 делах (по выписке ЕГРН — 2, по заданию на оценку — 1)»;
+// ничего не заменяли — пусто.
+const swapFirst = (x) => {
+  if (!x.swap_first) return '';
+  const parts = [x.swap_first_egrn ? `по выписке ЕГРН — ${x.swap_first_egrn}` : null,
+    x.swap_first_task ? `по заданию на оценку — ${x.swap_first_task}` : null].filter(Boolean).join(', ');
+  return `до первой подписи исправлено кнопкой в черновике: ${x.swap_first} в ${x.swap_first_cases} ${caseWord(x.swap_first_cases)} (${parts})`;
+};
 // «сдано: 5 (было 3, +2) · в срок: 4 (было 4) · возвраты: 1 (было 2, −1)»; у эксперта без дел в обоих месяцах — пусто.
 const diff = (now, was) => `${now} (было ${was}${now > was ? `, +${now - was}` : now < was ? `, −${was - now}` : ''})`;
 const compare = (x) => {
@@ -117,6 +125,7 @@ async function load(month) {
     ...(signedAi(t) ? fact('Подпись экспертов', signedAi(t), signedWarn(t) ? 'warn' : '') : []),
     ...(egrnFirst(t) ? fact('Выписка ЕГРН', egrnFirst(t), t.egrn_first ? 'warn' : '') : []),
     ...(orderFirst(t) ? fact('Заявка и задание на оценку', orderFirst(t), t.order_first ? 'warn' : '') : []),
+    ...(swapFirst(t) ? fact('Исправлено кнопкой', swapFirst(t)) : []),
     ...(report.current && t.overdue_now ? fact('Просрочено сейчас', String(t.overdue_now), 'overdue') : []),
     ...fact('Вознаграждение за сданные', rub(t.fee_kop), 'money-sum'),
     ...fact('Выплачено экспертам', rub(t.paid_kop)));
@@ -148,6 +157,7 @@ async function load(month) {
     ...(signedAi(x) ? [el('div', { class: signedWarn(x) ? 'warn' : 'muted', 'data-expert-signed': '', text: signedAi(x) })] : []),
     ...(egrnFirst(x) ? [el('div', { class: x.egrn_first ? 'warn' : 'muted', 'data-expert-egrn': '', text: egrnFirst(x) })] : []),
     ...(orderFirst(x) ? [el('div', { class: x.order_first ? 'warn' : 'muted', 'data-expert-order': '', text: orderFirst(x) })] : []),
+    ...(swapFirst(x) ? [el('div', { class: 'muted', 'data-expert-swap': '', text: swapFirst(x) })] : []),
     ...(x.remarks?.length ? [el('div', { class: 'muted', 'data-expert-remarks': '', text: `частые замечания: ${
       x.remarks.map((m) => `«${m.text}»${m.n > 1 ? ` ×${m.n}` : ''}`).join(', ')}` })] : []),
     el('div', { class: 'muted', text: `вознаграждение за сданные: ${rub(x.fee_kop)} · выплачено: ${rub(x.paid_kop)}` }))));
