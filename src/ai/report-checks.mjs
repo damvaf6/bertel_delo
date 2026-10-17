@@ -2478,7 +2478,9 @@ function purposeValue(docs, ctx) {
   const ordered = main ? [main, ...docs.filter((d) => d !== main)] : docs;
   const out = [];
   const purpose = ctx.fields?.purpose;
-  if (PURPOSE_NAME[purpose]) {
+  const task = assignmentPurpose(ctx.assignment);
+  if (task) out.push(...purposeByTask(ordered, task));
+  else if (PURPOSE_NAME[purpose]) {
     const ok = [purpose, ...PURPOSE_ALSO[purpose]];
     const seen = new Set();
     for (const e of labelled(ordered, PURPOSE_AT, 200)) {
@@ -2498,6 +2500,40 @@ function purposeValue(docs, ctx) {
   if (NEED_MARKET.includes(purpose) && kinds.length && !kinds.some((e) => e.kinds.includes('market'))) {
     const e = kinds[0];
     out.push({ doc: e.doc, page: e.page, quote: e.quote, text: `В отчёте вид стоимости — ${e.kinds.map((k) => `«${KIND_NAME[k]}»`).join(', ')}, а для цели заявки «${PURPOSE_NAME[purpose]}» нужна рыночная стоимость` });
+  }
+  return out;
+}
+
+// ——— 2.287: цель оценки — как в задании на оценку, письме заказчика или определении суда, приложенных к делу ———
+// Цель в задании — после «цель оценки» / «предполагаемое использование результатов»; определение суда без такой строки —
+// цель «для суда». Задание важнее заявки: когда цель в задании есть, с заявкой не сверяем. Приложенные документы с разными
+// целями — молчим: какая верная, решает эксперт. Совместимые цели (раздел через суд, ипотека при покупке) — не в счёт.
+export function assignmentPurpose(assignment) {
+  const got = [];
+  for (const d of assignment ?? []) {
+    if (!Array.isArray(d.pages)) continue;
+    const head = d.pages.slice(0, 2).join('\n');
+    if (EGRN_NAME.test(head) && /выписк/iu.test(head)) continue;
+    const found = labelled([d], PURPOSE_AT, 200).map((e) => ({ page: e.page, value: e.value, kinds: kindsOf(e.value, PURPOSE_KIND) })).filter((e) => e.kinds.length);
+    const what = assignmentWhat(d);
+    if (found.length) {
+      const kinds = Object.keys(PURPOSE_KIND).filter((k) => found.some((e) => e.kinds.includes(k)));
+      got.push({ kinds, value: found[0].value, name: d.name, page: found[0].page, what });
+    } else if (what === 'в определении суда') got.push({ kinds: ['court'], value: 'для суда', name: d.name, page: 0, what });
+  }
+  const sets = [...new Set(got.map((g) => g.kinds.join('+')))];
+  return sets.length === 1 ? got[0] : null;
+}
+function purposeByTask(docs, task) {
+  const ok = new Set(task.kinds.flatMap((k) => [k, ...PURPOSE_ALSO[k]]));
+  const out = [];
+  const seen = new Set();
+  for (const e of labelled(docs, PURPOSE_AT, 200)) {
+    const kinds = kindsOf(e.value, PURPOSE_KIND);
+    if (!kinds.length || kinds.some((k) => ok.has(k)) || seen.has(`${e.doc.name}|${e.page}`)) continue;
+    seen.add(`${e.doc.name}|${e.page}`);
+    out.push({ doc: e.doc, page: e.page, quote: e.quote,
+      text: `Цель оценки в отчёте — «${e.value.slice(0, 80)}» (${kinds.map((k) => PURPOSE_NAME[k]).join('; ')}), а ${task.what} «${task.name}» — «${task.value.slice(0, 80)}» (стр. ${task.page + 1}); цель берётся из задания — исправьте отчёт или приложите к делу новое задание` });
   }
   return out;
 }
@@ -2684,7 +2720,7 @@ export const AUTO_CHECKS = Object.freeze({
   final_value: 'итоговая стоимость одна на титуле, в задании, выводах, итоговой таблице и в сопроводительном письме',
   report_number: 'номер отчёта и дата составления одни на титуле, в колонтитулах и в сопроводительном письме',
   value_date: 'дата оценки одна по всему отчёту и в сопроводительном письме и такая же, как в задании на оценку (письме заказчика, определении суда), если оно приложено к делу',
-  purpose_value: 'цель оценки — как в заявке; вид стоимости один по всему отчёту и в письме и как в задании на оценку, если оно приложено к делу; для суда, нотариуса, банка, сделки и раздела — рыночная',
+  purpose_value: 'цель оценки — как в задании на оценку, если оно приложено к делу, иначе как в заявке; вид стоимости один по всему отчёту и в письме и как в задании на оценку, если оно приложено к делу; для суда, нотариуса, банка, сделки и раздела — рыночная',
 });
 
 export function runAutoChecks(names, docs, ctx = {}) {
