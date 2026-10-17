@@ -11823,6 +11823,58 @@ test('2.265: сводка за месяц — расхождения с выпи
   for (const p of [ep, hp, cp]) await p.context().close();
 });
 
+// 2.275: сводка за месяц — сколько расхождений с заявкой и заданием на оценку было в ИИ-проверке перед первой подписью.
+test('2.275: сводка за месяц — расхождения с заявкой и заданием на оценку при первой подписи по экспертам', async ({ browser, baseURL }) => {
+  const ectx = await phoneContext(browser, baseURL);
+  const ep = await ectx.newPage();
+  const expert = await signIn(ep, '+79990002751');
+  const hctx = await phoneContext(browser, baseURL);
+  const hp = await hctx.newPage();
+  const head = await signIn(hp, '+79990002752');
+  const cctx = await phoneContext(browser, baseURL);
+  const cp = await cctx.newPage();
+  await signIn(cp, '+79990002753');
+  const ids = [];
+  for (const t of ['Квартира: расходится с заявкой', 'Комната: без расхождений']) {
+    ids.push((await (await cp.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: t }, headers: H })).json()).order.id);
+  }
+  const orgId = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name, created_at) values ('ООО «Бюро заданий ${Date.now()}»', now() - interval '3 months') returning id`);
+    await c.query("update users set full_name = 'Эксперт Заявкин' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now()), ($1, $3, 'member', now() - interval '40 days')", [org.id, head.id, expert.id]);
+    await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [expert.id, org.id]);
+    await c.query("update orders set status = 'in_work', executor_user_id = $2, deadline = current_date + 5 where id = any($1::uuid[])", [ids, expert.id]);
+    return org.id;
+  });
+  const fix = (text, from) => ({ file: 'Отчёт.pdf', text, fix: { bad: '45,1', right: '47,3', from } });
+  const found = [{ realty_identity: [fix('Площадь 45,1, а в заявке — 47,3', 'в заявке'), fix('Этаж 3, а в заявке — 5', 'в заявке')],
+    rights: [fix('Дата оценки 01.10.2026, а в задании на оценку — 03.10.2026', 'в задании на оценку «Задание.pdf»')] },
+  { realty_identity: [{ file: 'Отчёт.pdf', text: 'Нет даты осмотра' }] }];
+  for (const [i, id] of ids.entries()) {
+    const up = await ep.request.post(`/api/orders/${id}/results`, { data: Buffer.from('%PDF-1.4 отчёт'), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Отчёт.pdf') } });
+    expect(up.status()).toBe(201);
+    const docId = (await up.json()).document.id;
+    await db((c) => c.query(`insert into ai_reviews (order_id, round, requested_by, side, model, items, files, at)
+      values ($1, 1, $2, 'executor', 'fake', $3, $4, now() - interval '1 minute')`, [id, expert.id,
+      JSON.stringify(Object.entries(found[i]).map(([rule, f]) => ({ id: rule, hint: 'attention', found: f }))),
+      JSON.stringify([{ id: docId, name: 'Отчёт.pdf' }])]));
+    expect((await ep.request.post(`/api/documents/${docId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  }
+
+  await hp.goto(`/kabinet#org=${orgId}`);
+  await expect(hp.locator('#org-report-box')).toBeVisible();
+  const row = hp.locator('#org-report > li').filter({ hasText: 'Эксперт Заявкин' });
+  await expect(row.locator('[data-expert-order]')).toHaveText('при первой подписи расхождений с заявкой и заданием на оценку: 3 в 1 деле из 2'
+    + ' проверенных ИИ (с заявкой — 2, с заданием — 1) · чаще: Недвижимость и земля — 2, Права и обременения — 1');
+  await expect(row.locator('[data-expert-order]')).toHaveClass(/warn/);
+  // С выпиской расхождений нет — строка спокойная.
+  await expect(row.locator('[data-expert-egrn]')).toHaveText('при первой подписи расхождений с выпиской ЕГРН нет (проверено ИИ дел: 2)');
+  await expect(hp.locator('#org-report-total')).toContainText('Заявка и задание на оценкупри первой подписи расхождений с заявкой и заданием на оценку: 3 в 1 деле из 2 проверенных ИИ');
+  await row.locator('[data-expert-order]').scrollIntoViewIfNeeded();
+  await shot(hp, 'd42a-rukovoditel-svodka-zayavka-zadanie');
+  for (const p of [ep, hp, cp]) await p.context().close();
+});
+
 // 2.268: «Собрать Word заново» — рядом с «Заменить всё по выписке» и с заменой одной находки: черновик сразу собирается в
 // файл результата, без перехода к черновику; отменили замену — кнопка уходит.
 test('2.268: «Собрать Word заново» рядом с заменой по выписке ЕГРН', async ({ browser, baseURL }) => {
