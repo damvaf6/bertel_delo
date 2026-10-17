@@ -649,6 +649,25 @@ test('2.277: адрес объекта сверяется с заданием н
   assert.deepEqual(await found(), []);
 });
 
+test('2.278: вид стоимости сверяется с заданием на оценку, приложенным к делу; замена одним словом', async () => {
+  const o = await inWork('Квартира: вид стоимости по заданию');
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from('ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nВид стоимости: рыночная'), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание на оценку.txt'), 'x-doc-kind': 'basis' } })).status, 201);
+  assert.equal((await putResult(o, 'ОТЧЁТ ОБ ОЦЕНКЕ № 8/2026\nВид определяемой стоимости: ликвидационная', 'отчёт.txt', 'text/plain')).status, 201);
+  const found = async () => {
+    const res = await spec.req('POST', `/api/orders/${o.id}/review/ai`);
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    return res.body.ai.items.flatMap((i) => i.found ?? []).filter((f) => /^Вид стоимости в отчёте/.test(f.text));
+  };
+  const [f, ...more] = await found();
+  assert.equal(more.length, 0);
+  assert.equal(f.text, 'Вид стоимости в отчёте — «ликвидационная», а в задании на оценку «Задание на оценку.txt» — «рыночная» (стр. 1); вид стоимости берётся из задания — исправьте отчёт или приложите к делу новое задание');
+  assert.deepEqual(f.fix, { bad: 'ликвидационная', right: 'рыночная', from: 'в задании на оценку «Задание на оценку.txt»', flip: 'value' });
+  await S.sql`update documents set deleted_at = now() where order_id = ${o.id} and kind = 'result'`;
+  assert.equal((await putResult(o, 'ОТЧЁТ ОБ ОЦЕНКЕ № 8/2026\nВид определяемой стоимости: рыночная', 'отчёт-2.txt', 'text/plain')).status, 201);
+  assert.deepEqual(await found(), []);
+});
+
 test('2.202: площадь в отчёте сверяется с выпиской ЕГРН, приложенной к просьбе о документах; текст выписки в модель не уходит', async () => {
   const o = await inWork('Квартира: площадь по выписке');
   assert.equal((await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { items: ['egrn'] })).status, 201);

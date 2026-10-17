@@ -2494,12 +2494,55 @@ function purposeValue(docs, ctx) {
   const distinct = [...new Set(single.map((e) => e.value))];
   if (distinct.length === 2 && !both(...distinct)) {
     out.push(...oddOnes(single, (e, ref, where) => `Вид стоимости «${KIND_NAME[e.value]}» не совпадает с «${KIND_NAME[ref]}» ${where} — вид стоимости должен быть один во всём отчёте и в письме`));
-  }
+  } else out.push(...assignmentKind(kinds, ctx.assignment));
   if (NEED_MARKET.includes(purpose) && kinds.length && !kinds.some((e) => e.kinds.includes('market'))) {
     const e = kinds[0];
     out.push({ doc: e.doc, page: e.page, quote: e.quote, text: `В отчёте вид стоимости — ${e.kinds.map((k) => `«${KIND_NAME[k]}»`).join(', ')}, а для цели заявки «${PURPOSE_NAME[purpose]}» нужна рыночная стоимость` });
   }
   return out;
+}
+
+// ——— 2.278: вид стоимости — как в задании на оценку, письме заказчика или определении суда, приложенных к делу ———
+// В задании вид стоимости — после «вид стоимости», а без такой строки — «определить рыночную стоимость» (кадастровая в
+// тексте письма — не вид стоимости). Приложенные документы с разными видами — молчим: какой верный, решает эксперт. В отчёте
+// виды стоимости по всем строкам «вид стоимости»; если они уже расходятся между собой (находка выше) — с заданием не сверяем.
+const KIND_STEM = { market: 'рыночн', liquidation: 'ликвидационн', investment: 'инвестиционн', cadastral: 'кадастров', utilization: 'утилизационн' };
+const TASK_KIND = /((?:рыночн|ликвидационн|инвестиционн|утилизационн)\S*(?:\s*(?:,|и|а\s+также)\s+(?:рыночн|ликвидационн|инвестиционн|утилизационн)\S*)*)\s+стоимост/giu;
+const kindList = (list) => list.map((k) => KIND_NAME[k]).join(' и ');
+function assignmentKinds(assignment) {
+  const got = [];
+  for (const d of assignment ?? []) {
+    if (!Array.isArray(d.pages)) continue;
+    const head = d.pages.slice(0, 2).join('\n');
+    if (EGRN_NAME.test(head) && /выписк/iu.test(head)) continue;
+    let found = labelled([d], KIND_AT, 120).map((e) => ({ page: e.page, kinds: kindsOf(e.value, VALUE_KIND) })).filter((e) => e.kinds.length);
+    if (!found.length) {
+      eachPage(d, (raw, i) => {
+        for (const m of raw.matchAll(TASK_KIND)) {
+          if (/(?:определ|оцен|рассчит|установ|расч[её]т)/iu.test(lineBefore(raw, m.index, 120))) found.push({ page: i, kinds: kindsOf(m[1], VALUE_KIND) });
+        }
+      });
+    }
+    if (!found.length) continue;
+    const kinds = Object.keys(VALUE_KIND).filter((k) => found.some((e) => e.kinds.includes(k)));
+    got.push({ kinds, name: d.name, page: found[0].page, what: assignmentWhat(d) });
+  }
+  const sets = [...new Set(got.map((g) => g.kinds.join('+')))];
+  return sets.length === 1 ? got[0] : null;
+}
+function assignmentKind(reportKinds, assignment) {
+  if (!reportKinds.length) return [];
+  const task = assignmentKinds(assignment);
+  if (!task) return [];
+  const mine = Object.keys(VALUE_KIND).filter((k) => reportKinds.some((e) => e.kinds.includes(k)));
+  if (mine.join('+') === task.kinds.join('+')) return [];
+  const e = reportKinds[0];
+  const from = `${task.what} «${task.name}»`;
+  // Один вид и там и там — слово в отчёте меняется на слово из задания в той же форме (`flip: 'value'`, public/draftfind.js).
+  const word = e.value.match(new RegExp(`[А-Яа-яЁё]*(?:${Object.values(KIND_STEM).join('|')})[А-Яа-яЁё]*`, 'iu'))?.[0];
+  const fix = word ? { bad: word, right: kindList(task.kinds), from, ...(mine.length === 1 && task.kinds.length === 1 ? { flip: 'value' } : {}) } : null;
+  return [{ doc: e.doc, page: e.page, quote: e.quote, fix,
+    text: `Вид стоимости в отчёте — «${kindList(mine)}», а ${task.what} «${task.name}» — «${kindList(task.kinds)}» (стр. ${task.page + 1}); вид стоимости берётся из задания — исправьте отчёт или приложите к делу новое задание` }];
 }
 
 // ——— 2.61: каждый вопрос заявки найден в выводах (все виды) ———
@@ -2641,7 +2684,7 @@ export const AUTO_CHECKS = Object.freeze({
   final_value: 'итоговая стоимость одна на титуле, в задании, выводах, итоговой таблице и в сопроводительном письме',
   report_number: 'номер отчёта и дата составления одни на титуле, в колонтитулах и в сопроводительном письме',
   value_date: 'дата оценки одна по всему отчёту и в сопроводительном письме и такая же, как в задании на оценку (письме заказчика, определении суда), если оно приложено к делу',
-  purpose_value: 'цель оценки — как в заявке; вид стоимости один по всему отчёту и в письме, для суда, нотариуса, банка, сделки и раздела — рыночная',
+  purpose_value: 'цель оценки — как в заявке; вид стоимости один по всему отчёту и в письме и как в задании на оценку, если оно приложено к делу; для суда, нотариуса, банка, сделки и раздела — рыночная',
 });
 
 export function runAutoChecks(names, docs, ctx = {}) {
@@ -2671,7 +2714,7 @@ export function runAutoChecks(names, docs, ctx = {}) {
         // 2.229: что в отчёте разошлось с выпиской и что в выписке — «Исправить в черновике» ищет это место в тексте черновика.
         ...(f.fix ? { bad: clean(f.fix.bad).slice(0, 200), right: clean(f.fix.right).slice(0, 200), ...(f.fix.flip ? { flip: f.fix.flip } : {}) } : {}) } } : {}),
       // 2.231: находка сверена с заявкой или заданием на оценку, а не с выпиской — то же «Исправить в черновике», без выписки.
-      ...(f.fix?.from && !f.egrn ? { fix: { bad: clean(f.fix.bad).slice(0, 200), right: clean(f.fix.right).slice(0, 200), from: clean(f.fix.from).slice(0, 200) } } : {}),
+      ...(f.fix?.from && !f.egrn ? { fix: { bad: clean(f.fix.bad).slice(0, 200), right: clean(f.fix.right).slice(0, 200), from: clean(f.fix.from).slice(0, 200), ...(f.fix.flip ? { flip: f.fix.flip } : {}) } } : {}),
     }));
   }
   return res;

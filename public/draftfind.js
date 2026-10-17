@@ -60,6 +60,8 @@ export function swapValue(g, found) {
   if (g?.flip === 'не' && right) return flipNe(String(found ?? bad));
   // 2.267: «квартира» ↔ «комната» (`flip: 'kind'`) — окончание и заглавная — как у того, что в тексте.
   if (g?.flip === 'kind' && right) return flipKind(String(found ?? bad));
+  // 2.278: вид стоимости из задания (`flip: 'value'`): «ликвидационной» → «рыночной» — окончание и заглавная как в тексте.
+  if (g?.flip === 'value' && right) return flipValue(String(found ?? bad), right);
   if (!right || / или /.test(right) || !/\d/.test(bad) || right.length > 200) return null;
   // 2.274: дата оценки из задания — в той же записи, что в тексте: «01» октября 2026 → «03» октября 2026.
   const day = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(right);
@@ -81,6 +83,15 @@ function flipKind(word) {
   if (!m) return null;
   const stem = /^квартир$/iu.test(m[1]) ? 'комнат' : 'квартир';
   return `${/^\p{Lu}/u.test(word) ? stem[0].toUpperCase() + stem.slice(1) : stem}${m[2]}`;
+}
+
+const VALUE_STEM = /^(рыночн|ликвидационн|инвестиционн|кадастров|утилизационн)(\p{L}*)$/iu;
+function flipValue(word, right) {
+  const m = VALUE_STEM.exec(word);
+  const to = VALUE_STEM.exec(right)?.[1].toLowerCase();
+  if (!m || !to) return null;
+  if (word === word.toUpperCase()) return `${to}${m[2]}`.toUpperCase();
+  return `${/^\p{Lu}/u.test(word) ? to[0].toUpperCase() + to.slice(1) : to}${m[2]}`;
 }
 
 function flipNe(word) {
