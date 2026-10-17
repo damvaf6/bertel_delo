@@ -4,7 +4,7 @@
 import { api, el, say, formatPhone, formatSize, ROLE_RU, quoted } from '/common.js';
 import { state, show, notFoundView } from '/shell.js';
 import { loadMatch } from '/match.js';
-import { loadReview, loadChat, egrnSwapState, egrnSwapFor } from '/work.js';
+import { loadReview, loadChat, egrnSwapState, egrnSwapFor, orderFixState, toOrderFix } from '/work.js';
 import { loadMoney } from '/money.js';
 import { loadDraft, canFixInDraft } from '/draft.js';
 import { loadAnalogs } from '/analogs.js';
@@ -686,7 +686,7 @@ function unfixedText(returns) {
 }
 function signConfirmText(d) {
   const ai = aiCheckText(d.ai_check);
-  return unfixedText(returnsForDoc(d)) + (ai ? `${ai}\n\n` : '') + swapConfirmText(d) + SIGN_CONFIRM(d.filename);
+  return unfixedText(returnsForDoc(d)) + (ai ? `${ai}\n\n` : '') + swapConfirmText(d) + orderConfirmText(d) + SIGN_CONFIRM(d.filename);
 }
 
 // 2.258: в ИИ-проверке этого файла остались расхождения с выпиской ЕГРН, которые можно заменить в черновике одной кнопкой
@@ -715,6 +715,35 @@ function signSwapHint(d) {
     el('ul', { class: 'points' }, ...list.slice(0, 3).map((t) => el('li', { text: clip(t, 160) })), ...(n > 3 ? [el('li', { class: 'muted', text: `и ещё ${n - 3}` })] : [])),
     el('div', { class: 'muted', text: 'Замените, соберите Word заново и загрузите исправленный файл — тогда подписывайте. Подписать можно и так.' }),
     el('div', { class: 'row' }, btn))];
+}
+// 2.279: в ИИ-проверке этого файла остались расхождения с заявкой или заданием на оценку (2.231, 2.269, 2.274–2.278):
+// подсказка до подписи — какие (первые три), «исправьте в черновике или в файле, соберите Word заново и загрузите» и
+// «К находке» (к ней в ИИ-проверке, там «Исправить в черновике» / «Заменить на значение из задания»). Исправлены в
+// черновике — напоминание собрать Word. Подписать можно и так.
+const ordersOf = (d) => d.ai_check?.order ?? [];
+const ordersDone = () => { const st = orderFixState(); return !!st && st.left === 0 && st.done > 0; };
+const orderLine = (x) => clip(x.text, 160);
+function orderConfirmText(d) {
+  const list = ordersOf(d);
+  if (!list.length) return '';
+  if (ordersDone()) return 'Расхождения с заявкой и заданием на оценку исправлены в черновике, но этот файл собран до исправления — соберите Word заново и загрузите его.\n\n';
+  return `Расхождения с заявкой и заданием на оценку: ${list.length}.\n`
+    + list.map((x) => `— ${orderLine(x)}`).join('\n') + '\nВ файле отчёта они останутся, если подписать его сейчас.\n\n';
+}
+function signOrderHint(d) {
+  const list = ordersOf(d);
+  if (!list.length) return [];
+  if (ordersDone()) return [el('div', { class: 'sig-swap ok', 'data-sig': 'order-fixed', text: 'Расхождения с заявкой и заданием на оценку исправлены в черновике. Этот файл собран до исправления — соберите Word заново, загрузите его и подпишите новый файл.' })];
+  const n = list.length;
+  const go = el('button', { class: 'secondary', type: 'button', 'data-action': 'sig-order-find', onclick: () => {
+    reveal('ai-review-box');
+    if (!toOrderFix(list[0].rule)) toAiReview();
+  } }, n > 1 ? 'К первой находке' : 'К находке');
+  return [el('div', { class: 'sig-swap warn', 'data-sig': 'order-left' },
+    el('div', { text: `В ИИ-проверке остались расхождения с заявкой и заданием на оценку: ${n}.` }),
+    el('ul', { class: 'points' }, ...list.slice(0, 3).map((x) => el('li', { text: orderLine(x) })), ...(n > 3 ? [el('li', { class: 'muted', text: `и ещё ${n - 3}` })] : [])),
+    el('div', { class: 'muted', text: 'Исправьте в черновике или в файле отчёта, соберите Word заново и загрузите исправленный файл — тогда подписывайте. Подписать можно и так.' }),
+    el('div', { class: 'row' }, go))];
 }
 // Та же замена, что в ИИ-проверке: «Заменить всё по выписке», а если находка одна — её «Заменить на значение из выписки».
 function toSwapAll() {
@@ -752,6 +781,7 @@ function signatureBlock(d, { canSign, signOrg, manual = false, canCheck = false,
     lines.push(...(expert ? [] : [el('div', { class: 'sig-state', text: 'Не подписан КЭП — без подписи на проверку не сдать' })]),
       ...signReturnPoints(d),
       ...signSwapHint(d),
+      ...signOrderHint(d),
       el('div', { class: 'row' }, ...uploadSignatureButton(d.filename, (file) => uploadSignature(d, file), 'Загрузить файл подписи (.sig)')),
       el('div', { class: 'muted', text: MANUAL_HINT }),
       memo('Как подписать файл КЭП', SIGN_HOWTO, 'sign-howto'));
@@ -761,6 +791,7 @@ function signatureBlock(d, { canSign, signOrg, manual = false, canCheck = false,
       ...(d.ai_check ? [el('div', { class: 'sig-ai', 'data-sig': `ai-${d.ai_check.state}`, text: `${aiCheckText(d.ai_check)} ` },
         el('button', { class: 'link', 'data-action': 'to-ai-review', onclick: toAiReview }, 'К ИИ-проверке'))] : []),
       ...signSwapHint(d),
+      ...signOrderHint(d),
       el('div', { class: 'row' },
         el('button', { 'data-action': 'sign', onclick: () => signDoc(d) }, 'Подписать'),
         ...uploadSignatureButton(d.filename, (file) => uploadSignature(d, file))),
@@ -844,7 +875,7 @@ async function signAll() {
   const docs = (lastDocs?.documents ?? []).filter((d) => d.kind === 'result' && d.own !== false && !d.signatures?.expert);
   if (!docs.length) return;
   const ai = docs.filter((d) => d.ai_check).map((d) => `${d.filename}: ${aiCheckText(d.ai_check)}`);
-  if (!confirm(`${unfixedText(docs.flatMap(returnsForDoc))}${ai.length ? `${ai.join('\n')}\n\n` : ''}${docs.map(swapConfirmText).find(Boolean) ?? ''}${SIGN_CONFIRM(docs.map((d) => d.filename).join(', '))}\n\nФайлов: ${docs.length}.`)) return;
+  if (!confirm(`${unfixedText(docs.flatMap(returnsForDoc))}${ai.length ? `${ai.join('\n')}\n\n` : ''}${docs.map(swapConfirmText).find(Boolean) ?? ''}${docs.map(orderConfirmText).find(Boolean) ?? ''}${SIGN_CONFIRM(docs.map((d) => d.filename).join(', '))}\n\nФайлов: ${docs.length}.`)) return;
   say($('doc-msg'), 'Подписываем…', 'ok');
   try {
     for (const d of docs) await api('POST', `/api/documents/${d.id}/sign`, { confirm: true });

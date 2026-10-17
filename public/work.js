@@ -21,6 +21,27 @@ export function egrnSwapState() {
   return { left: open.filter((s) => findInDraft(body, { bad: s.g.bad, quote: s.quote })).length, done: swaps.length - open.length };
 }
 const swapped = () => document.dispatchEvent(new CustomEvent('egrn-swapped'));
+// 2.279: находки, сверенные с заявкой или заданием на оценку (mineFix), — для подсказки в окне подписи: сколько значений
+// ещё стоит в тексте черновика (left) и сколько уже исправлено там на верное (done); null — как у egrnSwapState.
+let fixes = [];
+export function orderFixState() {
+  if (!swapsReady || !canFixInDraft()) return null;
+  const body = $('draft-text').value;
+  const left = fixes.filter((x) => findInDraft(body, { bad: x.g.bad, quote: x.quote }));
+  const done = fixes.filter((x) => !left.includes(x) && x.g.right && findInDraft(body, { bad: x.g.right, quote: x.quote }));
+  return { left: left.length, done: done.length };
+}
+// «К находке» из окна подписи: первая находка этого правила по заявке или заданию — прокрутить и подсветить.
+export function toOrderFix(rule) {
+  const x = fixes.find((f) => f.rule === rule && f.li.isConnected) ?? fixes.find((f) => f.li.isConnected);
+  const li = x?.li ?? document.querySelector(`#review-checks li[data-check="${CSS.escape(rule ?? '')}"]`);
+  if (!li) return false;
+  li.closest('details')?.setAttribute('open', '');
+  li.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  li.classList.add('flash');
+  setTimeout(() => li.classList.remove('flash'), 2000);
+  return true;
+}
 // 2.262: пункт замечания руководителя из расхождения с выпиской ЕГРН ({ rule, right }) — та же находка в ИИ-проверке, что
 // можно заменить одной кнопкой: { state: 'open' | 'done' | 'missing', was, now, swap() } или null (находки нет).
 const norm = (t) => String(t ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
@@ -78,6 +99,7 @@ export async function loadReview(current) {
   const fold = !r.can_mark && r.checks.filter(quiet).length > 1;
   swaps = [];
   swapsReady = false;
+  fixes = [];
   const items = r.checks.filter((c) => !fold || !quiet(c)).map((c) => checkItem(order, r, c, hints.get(c.id)));
   if (fold) {
     const q = r.checks.filter(quiet);
@@ -247,10 +269,13 @@ function draftFix(g, quote, action) {
 }
 // Находка сверена с заявкой или заданием на оценку (2.231): своей строки выписки нет — только кнопка к черновику.
 // 2.274: дата оценки из задания (письма, определения суда) — и «Заменить на значение из задания» с отменой; 2.277 — и адрес.
-function mineFix(g, quote) {
+function mineFix(g, quote, rule) {
   const { btn, miss } = draftFix(g, quote, 'fix-draft');
   const swap = assignmentSwap(g, quote, miss);
-  return [el('div', { class: 'row' }, btn, ...(swap ? [swap.btn] : [])), miss, ...(swap ? [swap.done, swap.rebuild] : [])];
+  const row = el('div', { class: 'row' }, btn, ...(swap ? [swap.btn] : []));
+  // 2.279: строка находки — li, в который её вставят (родитель кнопок); ищется при переходе из окна подписи.
+  if (g.bad) fixes.push({ g, quote, rule, get li() { return row.closest('li') ?? row; } });
+  return [row, miss, ...(swap ? [swap.done, swap.rebuild] : [])];
 }
 const SOURCE_FROM = [[/^в задании/u, 'из задания'], [/^в письме/u, 'из письма'], [/^в определении/u, 'из определения']];
 function assignmentSwap(g, quote, miss) {
@@ -269,6 +294,7 @@ function assignmentSwap(g, quote, miss) {
       rebuild.hide();
       btn.disabled = false;
       last = null;
+      swapped();
     } catch (err) { say($('review-msg'), err.message); }
   } }, 'Отменить');
   const done = el('p', { class: 'egrn-swap hidden', 'data-role': 'fix-swap-done' }, what, ' ', undo);
@@ -283,6 +309,7 @@ function assignmentSwap(g, quote, miss) {
       what.textContent = `Было «${last.was}» — стало «${last.now}», как ${g.from}. Черновик сохранён; соберите Word заново.`;
       undo.classList.remove('hidden');
       rebuild.show();
+      swapped();
     } catch (err) { btn.disabled = false; say($('review-msg'), err.message); }
   } }, `Заменить на значение ${src}`);
   return { btn, done, rebuild: rebuild.box };
@@ -407,7 +434,7 @@ function checkItem(order, r, c, hint) {
       el('span', { text: f.text }),
       ...(f.quote ? [el('br'), el('q', { text: f.quote })] : []),
       ...(f.egrn ? egrnPlace(f.egrn, f.quote, c.id) : []),
-      ...(f.fix ? mineFix(f.fix, f.quote) : []))))] : []),
+      ...(f.fix ? mineFix(f.fix, f.quote, c.id) : []))))] : []),
     // Отмеченные места: цитата из отчёта, файл и страница — сервер показывает только найденные в тексте цитаты.
     ...(hint?.marks?.length ? [el('ul', { class: 'ai-marks' }, ...hint.marks.map((m) => el('li', {},
       el('span', { class: 'ai-mark-where', text: `${m.file}, ${m.where}: ` }),

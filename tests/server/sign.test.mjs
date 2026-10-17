@@ -675,7 +675,9 @@ test('2.225, 2.269: руководитель перед подписью орг�
   assert.equal(h3.state, 'attention');
   assert.equal(h3.egrn, undefined, 'выписки нет — расхождений с выпиской нет');
   const byText = (a, b) => a.text.localeCompare(b.text);
-  assert.deepEqual([...h3.order].sort(byText), [
+  // 2.279: у каждой — правило находки (эксперту «К находке» в окне подписи).
+  assert.ok(h3.order.every((x) => typeof x.rule === 'string' && x.rule));
+  assert.deepEqual(h3.order.map(({ text, from }) => ({ text, from })).sort(byText), [
     { text: 'Дата оценки в отчёте 01.10.2026, а в задании на оценку «Задание на оценку.txt» — 03.10.2026', from: 'в задании на оценку' },
     { text: 'Площадь 45,1 кв. м не совпадает с площадью из заявки (41 кв. м)', from: 'в заявке' },
   ].sort(byText));
