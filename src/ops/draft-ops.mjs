@@ -48,10 +48,10 @@ export async function latest(sql, orderId) {
 
 // Заготовка черновика без ИИ, когда своего черновика ещё нет: разделы с пометками «заполнить», таблицы из заявки, досье,
 // перечень документов дела.
-export async function emptyDraft(sql, actor, order, registry, sections) {
+export async function emptyDraft(sql, actor, order, registry, sections, storage) {
   const dossier = sections.some((s) => s.dossier) ? await loadDossier(sql, actor.id) : [];
   const materials = await orderMaterials(sql, order);
-  const sources = sourcesLines(await orderSources(sql, registry, order));
+  const sources = sourcesLines(await orderSources(sql, registry, order, storage));
   return placeSources(fillDraft(fillTables(skeleton(sections), sections, registry, order, { materials }), sections, dossier), sections, sources).body;
 }
 
@@ -300,7 +300,7 @@ export function draftOps() {
         // Таблицы (2.29) и сведения из досье (2.14) программа вставляет сама, под заголовками разделов.
         const materials = await orderMaterials(sql, order);
         // Перечень использованных документов (2.95) — из дела, программой.
-        const sources = sourcesLines(await orderSources(sql, registry, order));
+        const sources = sourcesLines(await orderSources(sql, registry, order, providers.storage));
         const answer = cleanDraftAnswer(sections, out.text);
         const dated = fillEgrn(valueDate?.day ? answer.replace(VALUE_GAP, valueDate.day) : answer, egrn);
         const filled = fillDraft(fillTables(dated, sections, registry, order, { materials, valueDate: valueDate?.day, egrn }), sections, dossier);
@@ -382,7 +382,7 @@ export function draftOps() {
       // были (или пустыми с пометками, если черновика ещё нет), данные прошлого заказчика и объекта вычищены.
       id: 'draft.past', method: 'POST', path: '/api/orders/:id/draft/past', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
-      async handler({ sql, actor, order, registry, body, res }) {
+      async handler({ sql, actor, order, registry, providers, body, res }) {
         guardEdit(actor, order);
         const sections = orderSections(registry, order);
         if (!sections.some((s) => s.reuse)) throw new HttpError(400, 'no_reuse', 'Для этой услуги методических разделов нет');
@@ -395,7 +395,7 @@ export function draftOps() {
         // То, что совпадает с этим делом (тот же город, тот же заказчик), — не чужие данные: остаётся как есть.
         const own = new Set(pastValues(registry, order, []).map((v) => v.toLowerCase()));
         const values = pastValues(registry, past, [names?.owner, names?.org]).filter((v) => !own.has(v.toLowerCase()));
-        const empty = await emptyDraft(sql, actor, order, registry, sections);
+        const empty = await emptyDraft(sql, actor, order, registry, sections, providers.storage);
         const d = await sql.tx(async (tx) => {
           await tx`select id from orders where id = ${order.id} for update`;
           const cur = await latest(tx, order.id);
@@ -437,11 +437,11 @@ export function draftOps() {
       // того, что сейчас в деле (заказчик прислал документ, добавлены аналоги, пришли фото); остальной текст не меняется.
       id: 'draft.sources', method: 'POST', path: '/api/orders/:id/draft/sources', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
-      async handler({ sql, actor, order, registry, body }) {
+      async handler({ sql, actor, order, registry, providers, body }) {
         guardEdit(actor, order);
         const sections = orderSections(registry, order);
         if (!sections.some((s) => s.sources)) throw new HttpError(400, 'no_sources', 'Для этой услуги перечня документов в черновике нет');
-        const lines = sourcesLines(await orderSources(sql, registry, order));
+        const lines = sourcesLines(await orderSources(sql, registry, order, providers.storage));
         const d = await sql.tx(async (tx) => {
           await tx`select id from orders where id = ${order.id} for update`;
           const cur = await latest(tx, order.id);

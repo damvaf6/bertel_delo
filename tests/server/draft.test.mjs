@@ -1064,3 +1064,28 @@ test('2.222: этаж, этажность и адрес из выписки ЕГ
   assert.match(d.body, /\| Этаж \/ этажей в доме \| 6 \/ 9 \|/);
   assert.doesNotMatch(lastPrompt(), /Этаж объекта по выписке ЕГРН|Адрес объекта по выписке ЕГРН/);
 });
+
+test('2.273: перечень документов черновика — номер и дата выписки ЕГРН из самой выписки; сверка 2.264 по нему без находок', async () => {
+  const o = await inWork('Квартира: номер выписки в перечне документов');
+  const putDoc = (body, name) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } });
+  const egrnText = 'Выписка из Единого государственного реестра недвижимости об объекте недвижимости\n02.10.2026 № КУВИ-001/2026-12345678\nВид объекта недвижимости: Помещение\nПлощадь, м2: 54,3';
+  assert.equal((await putDoc(egrnText, 'ЕГРН от 01.09.2026.txt')).status, 201);
+  // Выписка без номера — только дата из выписки; документ не выписка — как раньше.
+  const noNum = 'Выписка из ЕГРН об объекте недвижимости\nДата выдачи выписки: 05.10.2026\nВид объекта недвижимости: Помещение';
+  assert.equal((await putDoc(noNum, 'Выписка ЕГРН без номера.txt')).status, 201);
+  let d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {})).body.draft;
+  assert.match(d.body, /\d+\. Выписка из ЕГРН № КУВИ-001\/2026-12345678 от 02\.10\.2026 — файл «ЕГРН от 01\.09\.2026\.txt», получен \d\d\.\d\d\.\d{4}/);
+  assert.match(d.body, /\d+\. Выписка из ЕГРН от 05\.10\.2026 — файл «Выписка ЕГРН без номера\.txt»/);
+  assert.match(d.body, /\d+\. Документ — файл «Сведения\.docx»/);
+  // ИИ-проверка (2.264) читает перечень так же: номер и дата сходятся, имя файла в «…» не в счёт.
+  const { runAutoChecks } = await import('../../src/ai/report-checks.mjs');
+  const egrn = [{ id: 'e1', name: 'ЕГРН от 01.09.2026.txt', pages: [egrnText] }, { id: 'e2', name: 'Выписка ЕГРН без номера.txt', pages: [noNum] }];
+  assert.deepEqual(runAutoChecks(['egrn_doc_match'], [{ name: 'Отчёт.docx', pages: [d.body] }], { fields: FIELDS, service: 'realty', egrn }).egrn_doc_match, []);
+  // «Обновить перечень» — так же; выписку удалили — строка уходит.
+  const [doc] = await S.sql`select id from documents where order_id = ${o.id} and filename = 'ЕГРН от 01.09.2026.txt'`;
+  assert.equal((await owner.req('DELETE', `/api/documents/${doc.id}`)).status, 204);
+  d = (await spec.req('POST', `/api/orders/${o.id}/draft/sources`, { from: d.id })).body.draft;
+  assert.doesNotMatch(d.body, /КУВИ-001\/2026-12345678/);
+  assert.match(d.body, /Выписка из ЕГРН от 05\.10\.2026 — файл/);
+});

@@ -5,14 +5,26 @@
 import { headKey, itemLine, loadDossier } from '../dossier/dossier.mjs';
 import { hostOf, inItemOrder, timeMsk } from '../analogs/analogs.mjs';
 import { orderMaterials } from './report.mjs';
+import { egrnRefs } from '../ai/report-checks.mjs';
+import { egrnDocs } from '../ops/ai-ops.mjs';
 
 export const SOURCES_HEAD = 'Перечень использованных документов (собран программой по делу — проверьте и поправьте):';
 const dayMsk = (t) => new Date(t).toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', year: 'numeric' });
 const photosWord = (n) => (n % 10 === 1 && n % 100 !== 11 ? 'снимок' : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? 'снимка' : 'снимков');
 
 // Что есть в деле. Досье — исполнителя дела (не того, кто смотрит); аналоги — только подтверждённые, в порядке таблицы Word.
-export async function orderSources(sql, registry, order) {
+// 2.273: у выписки ЕГРН заказчика — номер и дата из самой выписки (как их читает сверка 2.264, `egrnRefs`); без хранилища
+// или правил о выписке в модуле — как раньше, только имя файла.
+export async function orderSources(sql, registry, order, storage) {
   const materials = await orderMaterials(sql, order);
+  const auto = registry.checks(order.module, order.service).flatMap((r) => r.auto ?? []);
+  if (storage && materials.length && auto.includes('egrn_doc_match')) {
+    const refs = new Map(egrnRefs(await egrnDocs(sql, storage, order)).map((r) => [String(r.doc), r]));
+    for (const m of materials) {
+      const r = refs.get(String(m.id));
+      if (r) m.egrn = { num: r.num, day: r.day };
+    }
+  }
   const dossier = order.executor_user_id ? await loadDossier(sql, order.executor_user_id) : [];
   const [ph] = await sql`select count(*)::int as n, min(created_at) as first, max(created_at) as last from documents
                          where order_id = ${order.id} and kind = 'inspection' and deleted_at is null`;
@@ -22,12 +34,20 @@ export async function orderSources(sql, registry, order) {
   return { materials, dossier, photos: ph, analogs };
 }
 
+// Выписка ЕГРН: «Выписка из ЕГРН № КУВИ-001/2026-12345678 от 02.10.2026»; название из запроса эксперта, если в нём есть ЕГРН.
+const ruDay = (d) => d.split('-').reverse().join('.');
+function egrnTitle(m) {
+  if (!m.egrn) return m.title;
+  const title = /ЕГРН|ЕГРП/u.test(m.title) ? m.title : 'Выписка из ЕГРН';
+  return [title, m.egrn.num ? `№ ${m.egrn.num}` : null, m.egrn.day ? `от ${ruDay(m.egrn.day)}` : null].filter(Boolean).join(' ');
+}
+
 // Строки блока; в деле ничего нет — пусто (блок не вставляется). Нумерация сквозная, как в перечне настоящего отчёта.
 export function sourcesLines({ materials, dossier, photos, analogs }) {
   const out = [];
   let n = 0;
   const group = (title, lines) => { if (lines.length) out.push(title, ...lines.map((l) => `${++n}. ${l}`)); };
-  group('Документы, представленные заказчиком:', materials.map((m) => `${m.title} — файл «${m.filename}», получен ${m.day}`));
+  group('Документы, представленные заказчиком:', materials.map((m) => `${egrnTitle(m)} — файл «${m.filename}», получен ${m.day}`));
   group('Документы эксперта:', dossier.map((i) => itemLine(i)));
   if (photos?.n) {
     const from = dayMsk(photos.first);
