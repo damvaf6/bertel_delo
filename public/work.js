@@ -246,7 +246,7 @@ function draftFix(g, quote, action) {
   return { btn, miss };
 }
 // Находка сверена с заявкой или заданием на оценку (2.231): своей строки выписки нет — только кнопка к черновику.
-// 2.274: дата оценки из задания (письма, определения суда) — и «Заменить на значение из задания» с отменой.
+// 2.274: дата оценки из задания (письма, определения суда) — и «Заменить на значение из задания» с отменой; 2.277 — и адрес.
 function mineFix(g, quote) {
   const { btn, miss } = draftFix(g, quote, 'fix-draft');
   const swap = assignmentSwap(g, quote, miss);
@@ -256,7 +256,7 @@ const SOURCE_FROM = [[/^в задании/u, 'из задания'], [/^в пи�
 function assignmentSwap(g, quote, miss) {
   const dated = /^\d{2}\.\d{2}\.\d{4}$/;
   const src = SOURCE_FROM.find(([re]) => re.test(g.from ?? ''))?.[1];
-  if (!src || !dated.test(g.bad ?? '') || !dated.test(g.right ?? '') || !swapValue(g)) return null;
+  if (!src || dated.test(g.bad ?? '') !== dated.test(g.right ?? '') || !swapValue(g)) return null;
   const what = el('span', { 'data-role': 'fix-swap-what' });
   const rebuild = rebuildBox();
   let last = null;

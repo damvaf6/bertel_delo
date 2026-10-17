@@ -446,14 +446,35 @@ function egrnAddressValues(egrn, ctx) {
 // Адрес text (из заявки) не расходится с адресом a из выписки (2.222).
 export const sameAddressText = (a, text) => sameAddress(a, { got: parseAddress(clean(text)), words: addrWords(clean(text)) });
 
+// 2.277: адрес объекта из приложенных к делу задания на оценку, письма заказчика или определения суда (ctx.assignment —
+// ai-ops, как дата оценки 2.198): первый адрес объекта в каждом документе; выписки ЕГРН среди них не в счёт. Документы
+// с разными адресами — какой верный, решает эксперт: молчим. Нет адреса — null.
+function assignmentAddress(assignment) {
+  const list = [];
+  for (const d of assignment ?? []) {
+    if (!Array.isArray(d.pages)) continue;
+    if (EGRN_NAME.test(d.pages.slice(0, 2).join('\n')) && /выписк/iu.test(d.pages.slice(0, 2).join('\n'))) continue;
+    const [a] = objectAddresses(d);
+    if (!a) continue;
+    const got = { ...a, name: d.name, what: assignmentWhat(d) };
+    const i = list.findIndex((b) => sameAddress(b, got));
+    if (i < 0) list.push(got);
+    else if (Object.keys(got.got).length > Object.keys(list[i].got).length) list[i] = got;
+  }
+  return list.length === 1 ? list[0] : null;
+}
+
 function addressMatch(doc, ctx) {
   const mineText = clean(ctx.fields?.address);
   const egrn = ctx.egrn?.length ? egrnAddress(ctx.egrn, ctx) : null;
-  if (!mineText && !egrn) return [];
+  const task = assignmentAddress(ctx.assignment);
+  if (!mineText && !egrn && !task) return [];
   const mine = parseAddress(mineText);
   const mineWords = addrWords(mineText);
   // В заявке другой адрес, чем в выписке, — заказчик ошибся или выписка не на тот объект: подсказываем.
   const mineDiffers = egrn && mineText && !sameAddress(egrn, { got: mine, words: mineWords });
+  // 2.277: адрес в задании на оценку — после выписки, раньше заявки (заявку пишет заказчик, задание подписано).
+  const taskFrom = task && `${task.what} «${task.name}»`;
   const first = {}; // часть, которой нет ни в выписке, ни в заявке, → { value, page }
   const out = [];
   for (const { page: i, index, text, got, words } of objectAddresses(doc)) {
@@ -463,20 +484,25 @@ function addressMatch(doc, ctx) {
     for (const k of Object.keys(ADDR_NAMES)) {
       if (got[k] === undefined) continue;
       const ref = egrn?.got[k] !== undefined ? { value: egrn.got[k], egrn: true, words: egrn.words }
-        : mine[k] !== undefined ? { value: mine[k], mine: true, words: mineWords } : first[k];
+        : task?.got[k] !== undefined ? { value: task.got[k], task: true, words: task.words }
+          : mine[k] !== undefined ? { value: mine[k], mine: true, words: mineWords } : first[k];
       if (!ref) { first[k] = { value: got[k], page: i, words }; continue; }
       if (samePart(k, got[k], words, ref.value, ref.words)) continue;
       if (ref.egrn) against = 'egrn';
+      else if (ref.task && against !== 'egrn') against = 'task';
       else if (ref.mine && !against) against = 'mine';
       diff.push({ k, ref });
     }
     if (!diff.length) continue;
-    const refName = (ref) => (ref.egrn ? 'в выписке' : ref.mine ? 'в заявке' : `на стр. ${ref.page + 1}`);
+    const refName = (ref) => (ref.egrn ? 'в выписке' : ref.task ? task.what.replace(/^в письме заказчика$/u, 'в письме') : ref.mine ? 'в заявке' : `на стр. ${ref.page + 1}`);
     const parts = diff.map(({ k, ref }) => (Array.isArray(got[k]) ? ADDR_NAMES[k]
       : `${ADDR_NAMES[k]} ${got[k]}, а ${refName(ref)} ${ref.value}`)).join('; ');
     const where = against === 'egrn' ? `с адресом в выписке ЕГРН «${egrn.name}» (${egrn.text}, стр. ${egrn.page + 1})${mineDiffers ? `; в заявке — ${mineText}` : ''}`
-      : against === 'mine' ? `с адресом из заявки (${mineText})` : `с адресом объекта на стр. ${diff[0].ref.page + 1}`;
-    out.push({ page: i, quote: lineAround(page, index), egrn: against === 'egrn' ? egrnAt(egrn) : null, fix: against === 'egrn' ? { bad: text, right: egrn.text } : against === 'mine' ? { bad: text, right: mineText, from: MINE } : null, text: `Адрес «${text}» не совпадает ${where}: ${parts} — проверьте, нет ли данных другого объекта` });
+      : against === 'task' ? `с адресом ${taskFrom} (${task.text}, стр. ${task.page + 1})`
+        : against === 'mine' ? `с адресом из заявки (${mineText})` : `с адресом объекта на стр. ${diff[0].ref.page + 1}`;
+    const fix = against === 'egrn' ? { bad: text, right: egrn.text } : against === 'task' ? { bad: text, right: task.text, from: taskFrom }
+      : against === 'mine' ? { bad: text, right: mineText, from: MINE } : null;
+    out.push({ page: i, quote: lineAround(page, index), egrn: against === 'egrn' ? egrnAt(egrn) : null, fix, text: `Адрес «${text}» не совпадает ${where}: ${parts} — проверьте, нет ли данных другого объекта` });
   }
   return out;
 }
@@ -2398,11 +2424,14 @@ export function assignmentValue(assignment) {
   if (days.length > 1) return { days };
   if (!days.length) return {};
   const src = given[0].doc;
+  return { day: days[0], name: src.name, page: given[0].page, what: assignmentWhat(src) };
+}
+// Как назвать приложенный документ в находке: задание на оценку, определение суда или письмо заказчика.
+function assignmentWhat(src) {
   const head = (src.pages ?? []).slice(0, 2).join('\n');
-  const what = /задани\S*\s+на\s+(?:проведение\s+)?оценк/iu.test(head) || /задани/iu.test(src.name) ? 'в задании на оценку'
+  return /задани\S*\s+на\s+(?:проведение\s+)?оценк/iu.test(head) || /задани/iu.test(src.name) ? 'в задании на оценку'
     : /(?<![а-яё])суд(?:а|ом|ебн\S*)?(?![а-яё])/iu.test(head) && /определ|назнач/iu.test(head) ? 'в определении суда'
       : 'в письме заказчика';
-  return { day: days[0], name: src.name, page: given[0].page, what };
 }
 
 // ——— 2.131: цель оценки — как в заявке, вид стоимости один по отчёту и подходит к цели ———
@@ -2580,7 +2609,7 @@ export const AUTO_CHECKS = Object.freeze({
   approaches_toc: 'подход из оглавления не отвергнут в тексте',
   template_leftovers: 'нет остатков шаблона другого вида: недвижимость в отчёте о машине, машина в отчёте о квартире',
   cadastral_match: 'кадастровый номер в отчёте — как в выписке ЕГРН из дела, а без неё — как в заявке',
-  address_match: 'адрес объекта одинаков по всему отчёту и как в заявке: населённый пункт, улица, дом, корпус, квартира, участок',
+  address_match: 'адрес объекта одинаков по всему отчёту и как в выписке ЕГРН, задании на оценку и заявке: населённый пункт, улица, дом, корпус, квартира, участок',
   area_match: 'площадь объекта в отчёте — как в выписке ЕГРН из дела, а без неё — как в заявке',
   floor_match: 'этаж и этажность дома в отчёте — как в выписке ЕГРН из дела, а без неё — как в заявке',
   building_match: 'год постройки и материал стен дома в отчёте — как в выписке ЕГРН на здание из дела, а год без неё — как в заявке',
