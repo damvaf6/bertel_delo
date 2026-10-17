@@ -20,6 +20,12 @@ const SIGN_FILTERS = [
   { id: 'order', text: 'Есть расхождения с заявкой или заданием на оценку', test: (d) => (d.ai_check?.order?.length ?? 0) > 0 },
 ];
 let signFilter = null;
+// Из утренней сводки (2.286): сразу с отбором — подпись организации откроется уже отобранной.
+export function pickSignFilter(id) {
+  if (!SIGN_FILTERS.some((f) => f.id === id)) return;
+  signFilter = id;
+  renderSign();
+}
 let signItems = [];
 let manualSign = false; // ручная проверка подписи: от организации — только загрузкой файла подписи
 // «2 дн.», «5 ч», «меньше часа» (2.148).

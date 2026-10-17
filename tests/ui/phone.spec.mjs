@@ -7548,6 +7548,31 @@ test('2.276: отбор «Есть расхождения с заявкой ил
   await f.scrollIntoViewIfNeeded();
   await shot(hp, 'h4c-rukovoditel-otbor-zayavka-zadanie');
 
+  // 2.286: в «Сегодня» у дела на подписи — «расхождения с заявкой или заданием на оценку: 2 пункта»; утренняя сводка (запись дня
+  // напрямую, как в 2.257) — строкой с числом дел, нажатие ведёт к подписи организации сразу с этим отбором.
+  await hp.goto('/kabinet');
+  const diff = hp.locator(`#today-box li[data-today-item="org-sign-${orgId}"] [data-role="order-diff"]`);
+  await expect(diff).toHaveText('расхождения с заявкой или заданием на оценку: 2 пункта');
+  await diff.scrollIntoViewIfNeeded();
+  await shot(hp, 'h4i-segodnya-rukovoditel-zayavka-zadanie');
+  await db(async (c) => {
+    const { rows: [n] } = await c.query("insert into notifications (user_id, type, event, org_id) values ($1, 'org_morning', 'org_morning_today', $2) returning id", [head.id, orgId]);
+    await c.query(`insert into org_morning_digests (user_id, org_id, day, sign, order_diff, notification_id)
+      values ($1, $2, (now() at time zone 'Europe/Moscow')::date, 2, 1, $3)
+      on conflict (user_id, org_id, day) do update set sign = 2, handover = 0, stuck = 0, due = 0, overdue = 0, idle = 0, returned = 0,
+        fresh = 0, away = 0, ext_declined = 0, back = 0, egrn_kept = 0, order_diff = 1, notification_id = excluded.notification_id`, [head.id, orgId, n.id]);
+  });
+  await hp.goto('/kabinet#notifications');
+  const morning = hp.locator('#notifications li').first();
+  await expect(morning).toContainText('На сегодня по организации: 2 дела ждут подписи организации, на подписи — расхождения с заявкой или заданием на оценку: 1 дело');
+  await shot(hp, 'h4j-rukovoditel-svodka-zayavka-zadanie');
+  await morning.getByRole('button').click();
+  await expect(hp).toHaveURL(new RegExp(`#org=${orgId}&to=sign_order$`));
+  await expect(f.locator('[data-sign-filter="order"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(hp.locator('#org-sign > li[data-item]')).toHaveCount(1);
+  await expect(item).toBeVisible();
+  await shot(hp, 'h4k-rukovoditel-svodka-k-otboru');
+
   // Вернул эксперту — отбор пуст и сам вернулся к «Все».
   await item.locator('[data-action="org-return"]').click();
   await item.locator('[data-action="org-return-send"]').click();

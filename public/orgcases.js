@@ -23,6 +23,7 @@ import { rub } from '/money.js';
 import { orgChat } from '/orgchat.js';
 import { matcher, wireSearch } from '/search.js';
 import { loadOrgSchedule } from '/orgschedule.js';
+import { pickSignFilter } from '/orgsign.js';
 
 const $ = (id) => document.getElementById(id);
 const MONTHS = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
@@ -465,6 +466,8 @@ function offerWait(org, c) {
 // нет (дела сданы, эксперт ответил) — список целиком.
 export function focusOrgBlock(to) {
   if (to === 'sign') return goSign(null);
+  // «sign_order» (2.286) — к подписи организации с отбором «Есть расхождения с заявкой или заданием на оценку» (2.276).
+  if (to === 'sign_order') { pickSignFilter('order'); return goSign(null); }
   $('org-cases-search').value = '';
   expert = '';
   filter = to;
