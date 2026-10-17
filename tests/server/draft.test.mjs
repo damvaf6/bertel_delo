@@ -1080,6 +1080,45 @@ test('2.222: этаж, этажность и адрес из выписки ЕГ
   assert.doesNotMatch(lastPrompt(), /Этаж объекта по выписке ЕГРН|Адрес объекта по выписке ЕГРН/);
 });
 
+test('2.281: адрес объекта из задания на оценку — в таблицу задания, модели и вместо пометки, когда в выписках адреса нет', async () => {
+  const o = await inWork('Квартира: адрес из задания в черновик');
+  const putDoc = (body, name, kind) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), ...(kind ? { 'x-doc-kind': kind } : {}) } });
+  // Без задания — адрес из заявки, как раньше.
+  let d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {})).body.draft;
+  assert.equal(d.inputs.task_address, null);
+  assert.match(d.body, /\| Адрес объекта \| г\. Москва, тестовая ул\., 9 \|/);
+  assert.equal((await putDoc('ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nАдрес объекта: г. Москва, ул. Садовая, д. 5, кв. 12\nДата оценки: 03.10.2026', 'Задание на оценку.txt', 'basis')).status, 201);
+  d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+  assert.deepEqual(d.inputs.task_address, { v: 'г. Москва, ул. Садовая, д. 5, кв. 12', what: 'в задании на оценку', by: 'по заданию на оценку',
+    name: 'Задание на оценку.txt', page: 1, typed: 'г. Москва, тестовая ул., 9' });
+  assert.match(d.body, /\| Адрес объекта \| г\. Москва, ул\. Садовая, д\. 5, кв\. 12 \(по заданию на оценку; в заявке — г\. Москва, тестовая ул\., 9\) \|/);
+  assert.match(lastPrompt(), /Адрес объекта в задании на оценку «Задание на оценку\.txt» \(стр\. 1\): г\. Москва, ул\. Садовая, д\. 5, кв\. 12/);
+  // Модель оставила пометку — программа ставит адрес из задания; адрес аналога не трогает.
+  const orig = S.providers.ai.complete;
+  S.providers.ai.complete = async () => ({ text: '## 1. Основные факты и выводы\nКвартира по адресу [заполнить: адрес объекта]. Адрес аналога — [заполнить: адрес аналога]\n## 2. Задание на оценку\nТекст', model: 'fake' });
+  try {
+    d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+  } finally { S.providers.ai.complete = orig; }
+  assert.match(d.body, /Квартира по адресу г\. Москва, ул\. Садовая, д\. 5, кв\. 12\. Адрес аналога — \[заполнить: адрес аналога\]/);
+  // В заявке тот же адрес — без «в заявке — …».
+  await S.sql`update orders set fields = fields || ${JSON.stringify({ address: 'Москва, Садовая улица, дом 5, квартира 12' })}::jsonb where id = ${o.id}`;
+  d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+  assert.equal(d.inputs.task_address.typed, null);
+  // Выписка ЕГРН с адресом — важнее задания: адрес по выписке, задания в таблице нет.
+  const egrn = (await putDoc('Выписка из ЕГРН\nВид объекта недвижимости: Помещение\nКадастровый номер: 77:01:0001001:4321\nАдрес (местоположение): г. Москва, ул. Садовая, д. 5, кв. 21', 'Выписка ЕГРН квартира.txt')).body.document;
+  d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+  assert.equal(d.inputs.task_address, null);
+  assert.match(d.body, /\| Адрес объекта \| г\. Москва, ул\. Садовая, д\. 5, кв\. 21 \(по выписке ЕГРН/);
+  assert.doesNotMatch(lastPrompt(), /Адрес объекта в задании на оценку/);
+  // Выписку удалили, рядом письмо с другим адресом — какой верный, решает эксперт: из заявки, как раньше.
+  assert.equal((await owner.req('DELETE', `/api/documents/${egrn.id}`)).status, 204);
+  assert.equal((await putDoc('Письмо заказчика\nПросим оценить квартиру по адресу: г. Москва, ул. Садовая, д. 7, кв. 3', 'Письмо.txt')).status, 201);
+  d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+  assert.equal(d.inputs.task_address, null);
+  assert.match(d.body, /\| Адрес объекта \| Москва, Садовая улица, дом 5, квартира 12 \|/);
+});
+
 test('2.273: перечень документов черновика — номер и дата выписки ЕГРН из самой выписки; сверка 2.264 по нему без находок', async () => {
   const o = await inWork('Квартира: номер выписки в перечне документов');
   const putDoc = (body, name) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {

@@ -449,7 +449,7 @@ export const sameAddressText = (a, text) => sameAddress(a, { got: parseAddress(c
 // 2.277: адрес объекта из приложенных к делу задания на оценку, письма заказчика или определения суда (ctx.assignment —
 // ai-ops, как дата оценки 2.198): первый адрес объекта в каждом документе; выписки ЕГРН среди них не в счёт. Документы
 // с разными адресами — какой верный, решает эксперт: молчим. Нет адреса — null.
-function assignmentAddress(assignment) {
+export function assignmentAddress(assignment) {
   const list = [];
   for (const d of assignment ?? []) {
     if (!Array.isArray(d.pages)) continue;
