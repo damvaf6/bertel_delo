@@ -191,9 +191,10 @@ const signedQ = (sql, orgId, ids, { start, end }) => sql`
         group by 1, 2, 3) x
   group by x.user_id`;
 
-// Первая подпись эксперта по делу (за всё время) — в этом месяце, с последней ИИ-проверкой подписанного файла до неё (2.265).
+// Первая подпись эксперта по делу (за всё время) — в этом месяце, с последней ИИ-проверкой подписанного файла до неё (2.265);
+// 2.289 — и сколько расхождений он до неё заменил в черновике кнопкой (по выписке и по заданию; отменённые не в счёт).
 const firstSignQ = (sql, orgId, ids, { start, end }) => sql`
-  select x.user_id, x.order_id, x.doc, o.module, o.service, o.fields, r.items, r.files
+  select x.user_id, x.order_id, x.doc, o.module, o.service, o.fields, r.items, r.files, s.swap_egrn, s.swap_task
   from (select distinct on (a.actor_id, a.details->>'order_id') a.actor_id as user_id, (a.details->>'order_id')::uuid as order_id,
                a.subject_id as doc, a.at
         from audit_log a
@@ -204,11 +205,20 @@ const firstSignQ = (sql, orgId, ids, { start, end }) => sql`
   left join lateral (select r.items, r.files from ai_reviews r
                      where r.order_id = x.order_id and r.at <= x.at and r.files @> jsonb_build_array(jsonb_build_object('id', x.doc))
                      order by r.id desc limit 1) r on true
+  cross join lateral (select greatest(coalesce(sum(d.n) filter (where d.kind = 'egrn'), 0), 0)::int as swap_egrn,
+                             greatest(coalesce(sum(d.n) filter (where d.kind = 'task'), 0), 0)::int as swap_task
+                      from (select a.details->'swap'->>'kind' as kind,
+                                   (a.details->'swap'->>'n')::int * (case when (a.details->'swap'->>'undo')::boolean then -1 else 1 end) as n
+                            from audit_log a
+                            where a.action = 'draft.save' and a.subject_type = 'order' and a.subject_id = x.order_id::text
+                              and a.actor_id = x.user_id and a.at < x.at and a.details ? 'swap') d) s
   where x.at >= ${start} and x.at < ${end} and x.at >= m.created_at`;
 
 export const TOP_EGRN_RULES = 3;
 // { first_signed, first_no_ai, egrn_first, egrn_first_cases, egrn_rules: [{ title, n }],
-//   order_first, order_first_cases, order_first_app, order_first_task, order_rules } — по строкам firstSignQ.
+//   order_first, order_first_cases, order_first_app, order_first_task, order_rules,
+//   swap_first, swap_first_cases, swap_first_egrn, swap_first_task } — по строкам firstSignQ.
+// 2.289: swap_* — заменено кнопкой в черновике до первой подписи (по всем впервые подписанным делам, с ИИ-проверкой и без).
 // 2.275: order_* — находки, сверенные с заявкой или заданием на оценку (fix.from, без выписки, как fixShort); app — «в заявке».
 const ruleTitle = (registry, x, id) => {
   let title = id;
@@ -223,7 +233,11 @@ function egrnFirst(rows, registry) {
   let found = 0;
   let cases = 0;
   const order = { n: 0, cases: 0, app: 0, task: 0 };
+  const swap = { cases: 0, egrn: 0, task: 0 };
   for (const x of rows) {
+    swap.egrn += x.swap_egrn ?? 0;
+    swap.task += x.swap_task ?? 0;
+    if ((x.swap_egrn ?? 0) + (x.swap_task ?? 0)) swap.cases++;
     if (!x.items) continue;
     const file = (x.files ?? []).find((f) => f.id === x.doc)?.name;
     const mine = (f) => !file || f.file === file;
@@ -261,6 +275,10 @@ function egrnFirst(rows, registry) {
     order_first_app: order.app,
     order_first_task: order.task,
     order_rules: topRules(orderRules),
+    swap_first: swap.egrn + swap.task,
+    swap_first_cases: swap.cases,
+    swap_first_egrn: swap.egrn,
+    swap_first_task: swap.task,
   };
 }
 
@@ -504,12 +522,14 @@ export function reportCsv(orgName, r) {
     'В первоначальный срок, без переносов', 'Дней в среднем от возврата до новой подписи', 'Ждут новой подписи после возврата',
     'Подписал файлов', 'Из них без ИИ-проверки этой версии', 'Из них не отметив все пункты замечания',
     'Впервые подписал дел', 'Расхождений с выпиской ЕГРН при первой подписи', 'В скольких делах', 'Первая подпись без ИИ-проверки',
-    'Расхождений с заявкой и заданием на оценку при первой подписи', 'В скольких делах', 'Из них с заявкой', 'Из них с заданием на оценку'];
+    'Расхождений с заявкой и заданием на оценку при первой подписи', 'В скольких делах', 'Из них с заявкой', 'Из них с заданием на оценку',
+    'Заменено кнопкой в черновике до первой подписи', 'В скольких делах', 'Из них по выписке ЕГРН', 'Из них по заданию на оценку'];
   const line = (name, x) => [name, x.accepted, x.done, x.done_late, ...(r.current ? [x.overdue_now] : []),
     x.returned_head, x.returned_dispatcher, rubCell(x.fee_kop), rubCell(x.paid_kop),
     daysCell(x.avg_days), x.late_first, x.late_first_moved, x.first_kept, daysCell(x.resign_days), x.resign_wait,
     x.signed, x.signed_no_ai, x.signed_points_left, x.first_signed, x.egrn_first, x.egrn_first_cases, x.first_no_ai,
-    x.order_first, x.order_first_cases, x.order_first_app, x.order_first_task];
+    x.order_first, x.order_first_cases, x.order_first_app, x.order_first_task,
+    x.swap_first, x.swap_first_cases, x.swap_first_egrn, x.swap_first_task];
   const day = todayMsk();
   const lines = [
     [`Сводка по экспертам — ${orgName}`],

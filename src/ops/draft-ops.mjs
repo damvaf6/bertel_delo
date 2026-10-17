@@ -69,6 +69,15 @@ function guard(actor, order) {
   if (!seesDraft(actor, order)) throw new HttpError(403, 'forbidden', 'Черновик заключения видят исполнитель и диспетчер');
 }
 
+// 2.289: правка сохранена кнопкой «Заменить на значение из выписки / из задания» (по одной или «Заменить всё»), или такая
+// замена отменена, — отметка в журнале { kind: 'egrn' | 'task', n, undo }: по ней сводка за месяц считает, сколько
+// расхождений эксперт исправил кнопкой до первой подписи. Без отметки или с неверной — обычная правка.
+const SWAP_KINDS = ['egrn', 'task'];
+function swapMark(v) {
+  if (!v || !SWAP_KINDS.includes(v.kind) || !Number.isInteger(v.n) || v.n < 1 || v.n > 100) return null;
+  return { kind: v.kind, n: v.n, undo: v.undo === true };
+}
+
 function guardEdit(actor, order) {
   guard(actor, order);
   if (!editsDraft(actor, order)) throw new HttpError(403, 'forbidden', 'Черновик готовит и правит исполнитель, пока дело в работе');
@@ -502,6 +511,7 @@ export function draftOps() {
         const text = typeof body?.body === 'string' ? body.body.replace(/\r\n?/g, '\n').trim() : '';
         if (!text) throw new HttpError(400, 'bad_input', 'Черновик пустой');
         if (text.length > DRAFT_MAX) throw new HttpError(400, 'bad_input', `Черновик — не длиннее ${DRAFT_MAX} символов`);
+        const swap = swapMark(body?.swap);
         const d = await sql.tx(async (tx) => {
           await tx`select id from orders where id = ${order.id} for update`;
           const cur = await latest(tx, order.id);
@@ -509,7 +519,7 @@ export function draftOps() {
           if (cur && cur.body === text) return cur;
           const row = await tx.one`insert into result_drafts (order_id, author_id, source, body, inputs)
                                    values (${order.id}, ${actor.id}, 'edit', ${text}, ${JSON.stringify(cur?.inputs ?? {})}) returning id`;
-          await audit(tx, actor, 'draft.save', 'order', order.id, { draft: String(row.id) });
+          await audit(tx, actor, 'draft.save', 'order', order.id, { draft: String(row.id), ...(swap ? { swap } : {}) });
           return latest(tx, order.id);
         });
         return { draft: draftView(d, actor) };

@@ -12068,12 +12068,21 @@ test('2.275: сводка за месяц — расхождения с заяв
       values ($1, 1, $2, 'executor', 'fake', $3, $4, now() - interval '1 minute')`, [id, expert.id,
       JSON.stringify(Object.entries(found[i]).map(([rule, f]) => ({ id: rule, hint: 'attention', found: f }))),
       JSON.stringify([{ id: docId, name: 'Отчёт.pdf' }])]));
+    // 2.289: в первом деле до подписи заменено кнопкой: по выписке — 2, по заданию — 1.
+    if (i === 0) {
+      await db((c) => c.query(`insert into audit_log (actor_id, action, subject_type, subject_id, details, at)
+        values ($1, 'draft.save', 'order', $2, '{"swap":{"kind":"egrn","n":2,"undo":false}}', now() - interval '2 minutes'),
+               ($1, 'draft.save', 'order', $2, '{"swap":{"kind":"task","n":1,"undo":false}}', now() - interval '2 minutes')`, [expert.id, id]));
+    }
     expect((await ep.request.post(`/api/documents/${docId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
   }
 
   await hp.goto(`/kabinet#org=${orgId}`);
   await expect(hp.locator('#org-report-box')).toBeVisible();
   const row = hp.locator('#org-report > li').filter({ hasText: 'Эксперт Заявкин' });
+  await expect(row.locator('[data-expert-swap]')).toHaveText('до первой подписи исправлено кнопкой в черновике: 3 в 1 деле'
+    + ' (по выписке ЕГРН — 2, по заданию на оценку — 1)');
+  await expect(hp.locator('#org-report-total')).toContainText('Исправлено кнопкойдо первой подписи исправлено кнопкой в черновике: 3 в 1 деле');
   await expect(row.locator('[data-expert-order]')).toHaveText('при первой подписи расхождений с заявкой и заданием на оценку: 3 в 1 деле из 2'
     + ' проверенных ИИ (с заявкой — 2, с заданием — 1) · чаще: Недвижимость и земля — 2, Права и обременения — 1');
   await expect(row.locator('[data-expert-order]')).toHaveClass(/warn/);
@@ -12082,6 +12091,8 @@ test('2.275: сводка за месяц — расхождения с заяв
   await expect(hp.locator('#org-report-total')).toContainText('Заявка и задание на оценкупри первой подписи расхождений с заявкой и заданием на оценку: 3 в 1 деле из 2 проверенных ИИ');
   await row.locator('[data-expert-order]').scrollIntoViewIfNeeded();
   await shot(hp, 'd42a-rukovoditel-svodka-zayavka-zadanie');
+  await row.locator('[data-expert-swap]').scrollIntoViewIfNeeded();
+  await shot(hp, 'd42b-rukovoditel-svodka-ispravleno-knopkoj');
   for (const p of [ep, hp, cp]) await p.context().close();
 });
 
@@ -12573,11 +12584,16 @@ test('2.283: «Заменить всё по заданию» и «Отменит
   // Заменили всё — осталось только то, что одной кнопкой не заменилось: прежний адрес ещё стоит в «Описании объекта».
   await tp.locator('#ai-task-swap-all').getByRole('button', { name: 'Заменить всё по заданию (2)' }).click();
   await expect(tp.locator('#ai-task-swap-all [data-role="task-swap-all-what"]')).toContainText('Заменено по заданию на оценку: 2.');
-  await tp.goto('/');
+  // Главная страница сама уводит вошедшего в кабинет — уходим на пустую, чтобы «Сегодня» загрузилось заново без гонки переходов.
+  await tp.goto('about:blank');
   await tp.goto('/kabinet');
   const left = tp.locator('li[data-today-item="task-swap"]').filter({ hasText: 'Всё по заданию: квартира' });
   await expect(left.locator('[data-role="task-swap-what"]')).toHaveText(/^Адрес «г\. Москва, Садовая ул\., д\. 7, кв\. 4» не совпадает с адресом в задании на оценку/);
   await tp.close();
+  // 2.289: замены кнопкой отмечены в журнале — по ним сводка руководителя считает исправленное до первой подписи.
+  const marks = await db(async (c) => (await c.query(`select details->'swap' as swap from audit_log
+    where action = 'draft.save' and subject_id = $1 and details ? 'swap' order by id`, [A])).rows.map((r) => r.swap));
+  expect(marks).toEqual([{ kind: 'task', n: 2, undo: false }, { kind: 'task', n: 2, undo: true }, { kind: 'task', n: 2, undo: false }]);
   for (const p of [ep, cp]) await p.context().close();
 });
 

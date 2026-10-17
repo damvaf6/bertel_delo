@@ -162,14 +162,16 @@ export async function swapInDraft(g, quote) {
   const was = t.value.slice(at.from, at.to);
   const now = swapValue(g, was);
   if (!now) return null;
-  await putText(t.value.slice(0, at.from) + now + t.value.slice(at.to), at.from, now.length);
-  return { from: at.from, was, now };
+  const kind = swapKind(g);
+  await putText(t.value.slice(0, at.from) + now + t.value.slice(at.to), at.from, now.length, { kind, n: 1 });
+  return { from: at.from, was, now, kind };
 }
 // Отмена замены: на том же месте ещё стоит новое значение — возвращается прежнее; текст там уже правили — false.
 export async function undoSwap(s) {
   const t = $('draft-text');
   if (!canFixInDraft() || t.value.slice(s.from, s.from + s.now.length) !== s.now) return false;
-  await putText(t.value.slice(0, s.from) + s.was + t.value.slice(s.from + s.now.length), s.from, s.was.length);
+  await putText(t.value.slice(0, s.from) + s.was + t.value.slice(s.from + s.now.length), s.from, s.was.length,
+    { kind: s.kind, n: 1, undo: true });
   return true;
 }
 // 2.246: «Заменить всё по выписке» — все замены сразу, черновик сохраняется одной новой версией; → { done, missing }
@@ -178,8 +180,9 @@ export async function swapAllInDraft(items) {
   const t = $('draft-text');
   if (!canFixInDraft()) return null;
   const r = swapAll(t.value, items);
-  if (r.done.length) await putText(r.body, r.done[0].from, r.done[0].now.length);
-  return { done: r.done, missing: r.missing };
+  const kind = swapKind(items[0]?.g ?? {});
+  if (r.done.length) await putText(r.body, r.done[0].from, r.done[0].now.length, { kind, n: r.done.length });
+  return { done: r.done.map((d) => ({ ...d, kind })), missing: r.missing };
 }
 // Отмена всех замен одной версией; → { undone, kept } (unswapAll) или null.
 export async function undoSwapAll(done) {
@@ -187,7 +190,7 @@ export async function undoSwapAll(done) {
   if (!canFixInDraft()) return null;
   const r = unswapAll(t.value, done);
   const first = done.find((s) => r.undone.includes(s.i));
-  if (first) await putText(r.body, first.from, first.was.length);
+  if (first) await putText(r.body, first.from, first.was.length, { kind: first.kind, n: r.undone.length, undo: true });
   return { undone: r.undone, kept: r.kept };
 }
 // 2.268: «Собрать Word заново» рядом с заменой по выписке ЕГРН — тот же Word, что «Приложить как файл результата»: черновик
@@ -199,12 +202,14 @@ export async function rebuildWord() {
   const { document: doc } = await api('POST', `/api/orders/${ctx.order.id}/draft/result`, { from: ctx.draft.id, confirm: true });
   return doc;
 }
-// Новый текст — на экран и в черновик; не сохранилось — на экране прежний текст.
-async function putText(body, from, len) {
+// 2.289: замена по заданию на оценку (у находки есть «откуда» — g.from) или по выписке ЕГРН — для отметки в журнале.
+const swapKind = (g) => (g.from ? 'task' : 'egrn');
+// Новый текст — на экран и в черновик; не сохранилось — на экране прежний текст. swap — отметка замены кнопкой (2.289).
+async function putText(body, from, len, swap) {
   const t = $('draft-text');
   const before = t.value;
   t.value = body;
-  try { await save(); } catch (err) { t.value = before; throw err; }
+  try { await save(swap); } catch (err) { t.value = before; throw err; }
   countGaps();
   t.scrollIntoView({ block: 'center' });
   t.focus();
@@ -298,8 +303,8 @@ $('draft-ai').addEventListener('click', () => run($('draft-ai'), async () => {
   say($('draft-msg'), 'Черновик готов — проверьте и поправьте', 'ok');
 }));
 
-async function save() {
-  const r = await api('PUT', `/api/orders/${ctx.order.id}/draft`, { body: $('draft-text').value, from: ctx.draft?.id ?? null });
+async function save(swap) {
+  const r = await api('PUT', `/api/orders/${ctx.order.id}/draft`, { body: $('draft-text').value, from: ctx.draft?.id ?? null, ...(swap ? { swap } : {}) });
   ctx.draft = r.draft;
   dropLocal(ctx.order.id);
   $('draft-local').classList.add('hidden');
