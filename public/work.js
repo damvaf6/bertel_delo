@@ -246,9 +246,46 @@ function draftFix(g, quote, action) {
   return { btn, miss };
 }
 // Находка сверена с заявкой или заданием на оценку (2.231): своей строки выписки нет — только кнопка к черновику.
+// 2.274: дата оценки из задания (письма, определения суда) — и «Заменить на значение из задания» с отменой.
 function mineFix(g, quote) {
   const { btn, miss } = draftFix(g, quote, 'fix-draft');
-  return [el('div', { class: 'row' }, btn), miss];
+  const swap = assignmentSwap(g, quote, miss);
+  return [el('div', { class: 'row' }, btn, ...(swap ? [swap.btn] : [])), miss, ...(swap ? [swap.done, swap.rebuild] : [])];
+}
+const SOURCE_FROM = [[/^в задании/u, 'из задания'], [/^в письме/u, 'из письма'], [/^в определении/u, 'из определения']];
+function assignmentSwap(g, quote, miss) {
+  const dated = /^\d{2}\.\d{2}\.\d{4}$/;
+  const src = SOURCE_FROM.find(([re]) => re.test(g.from ?? ''))?.[1];
+  if (!src || !dated.test(g.bad ?? '') || !dated.test(g.right ?? '') || !swapValue(g)) return null;
+  const what = el('span', { 'data-role': 'fix-swap-what' });
+  const rebuild = rebuildBox();
+  let last = null;
+  const undo = el('button', { class: 'link', type: 'button', 'data-action': 'fix-unswap', onclick: async () => {
+    try {
+      const ok = last && await undoSwap(last);
+      if (!ok) { what.textContent = `Текст на этом месте уже правили — верните «${last?.was ?? g.bad}» сами, если нужно.`; undo.classList.add('hidden'); return; }
+      what.textContent = `Замена отменена: снова «${last.was}». Черновик сохранён.`;
+      undo.classList.add('hidden');
+      rebuild.hide();
+      btn.disabled = false;
+      last = null;
+    } catch (err) { say($('review-msg'), err.message); }
+  } }, 'Отменить');
+  const done = el('p', { class: 'egrn-swap hidden', 'data-role': 'fix-swap-done' }, what, ' ', undo);
+  const btn = el('button', { class: `secondary${canFixInDraft() ? '' : ' hidden'}`, type: 'button', 'data-action': 'fix-swap', onclick: async () => {
+    btn.disabled = true;
+    try {
+      last = await swapInDraft(g, quote);
+      miss.classList.toggle('hidden', !!last);
+      miss.textContent = last ? '' : `В тексте черновика «${g.bad}» нет — исправьте в файле отчёта (${g.from}: ${g.right}).`;
+      done.classList.toggle('hidden', !last);
+      if (!last) { btn.disabled = false; return; }
+      what.textContent = `Было «${last.was}» — стало «${last.now}», как ${g.from}. Черновик сохранён; соберите Word заново.`;
+      undo.classList.remove('hidden');
+      rebuild.show();
+    } catch (err) { btn.disabled = false; say($('review-msg'), err.message); }
+  } }, `Заменить на значение ${src}`);
+  return { btn, done, rebuild: rebuild.box };
 }
 
 // 2.232: «Заменить на значение из выписки» — одной кнопкой, черновик сохраняется; под кнопкой — что было и что стало, и
