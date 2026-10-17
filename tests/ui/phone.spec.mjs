@@ -6298,6 +6298,35 @@ test('цель оценки в таблице задания (2.291): из за�
   await shot(page, '114d-ekspert-cel-ocenki-iz-zadaniya');
 });
 
+test('заказчик в разделе о заказчике (2.292): из задания на оценку, другой владелец заявки — рядом', async ({ page, browser, baseURL }) => {
+  const expert = await signIn(page, '+79990029201');
+  const op = await (await phoneContext(browser, baseURL)).newPage();
+  const owner = await signIn(op, '+79990029202');
+  const id = await db(async (c) => {
+    await c.query("update users set full_name = 'Сидоров Представитель' where id = $1", [owner.id]);
+    const o = (await c.query(
+      `insert into orders (owner_user_id, title, module, service, fields, status, executor_user_id, price_kop, paid_at, deadline)
+       values ($1, 'Квартира: заказчик из задания', 'expertise', 'realty', $3, 'in_work', $2, 1500000, now(), now() + interval '6 days') returning id`,
+      [owner.id, expert.id, { purpose: 'bank', region: 'moscow', object_type: 'flat', address: 'г. Москва, Заявочная ул., 6', area: '48' }])).rows[0];
+    await c.query('insert into specialists (user_id) values ($1) on conflict do nothing', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty') on conflict do nothing", [expert.id]);
+    return o.id;
+  });
+  expect((await op.request.post(`/api/orders/${id}/documents`, {
+    data: Buffer.from('ЗАДАНИЕ НА ОЦЕНКУ\nЗаказчик: Тестов Пётр Сергеевич, паспорт 0000 000000\nОбъект оценки: квартира'),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание на оценку.txt'), 'x-doc-kind': 'basis' },
+  })).status()).toBe(201);
+  await page.goto(`/kabinet#order=${id}`);
+  await page.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(page.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const text = page.getByLabel('Текст заключения');
+  await expect(text).toHaveValue(/\nЗаказчик: Тестов Пётр Сергеевич \(по заданию на оценку; в заявке — Сидоров Представитель\)\n/);
+  await expect(page.getByText('Заказчик: Тестов Пётр Сергеевич — как в задании на оценку «Задание на оценку.txt» (стр. 1); в заявке — Сидоров Представитель — сверьте.')).toBeVisible();
+  await text.evaluate((t) => { t.focus(); const at = t.value.indexOf('Заказчик: Тестов'); t.setSelectionRange(at, at); t.blur(); });
+  await page.getByText(/Заказчик: Тестов Пётр Сергеевич — как в задании/).scrollIntoViewIfNeeded();
+  await shot(page, '114e-ekspert-zakazchik-iz-zadaniya');
+});
+
 // Прогон «как эксперт и руководитель» по пачке 2.91–2.99 (2.100): стыки — горящее дело, просьба о переносе срока,
 // подпись, напоминание, возврат по пунктам, новая подпись, сдача, итоги месяца.
 test('как эксперт и руководитель (2.100): перенос срока виден руководителю, напоминание после возврата не тянется, итоги', async ({ page, browser, baseURL }) => {
