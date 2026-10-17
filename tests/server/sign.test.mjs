@@ -9,7 +9,7 @@ import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import { createRegistry } from '../../src/modules/index.mjs';
 import expertise from '../../src/modules/expertise.mjs';
 import { expertMorningAlerts } from '../../src/ops/today-ops.mjs';
-import { digestText, morningTo } from '../../src/notify/morning.mjs';
+import { digestText, morningTitles, morningTo } from '../../src/notify/morning.mjs';
 import { fakeSign, testExternalSignature, testGoskeySignature } from '../../src/providers/sign.mjs';
 
 let S, owner, dispatcher, spec;
@@ -869,6 +869,59 @@ test('2.280: «Соберите Word заново» — и когда в чер�
   assert.equal(built.status, 201, JSON.stringify(built.body));
   assert.deepEqual(await rows(), []);
   assert.equal((await alerts()).egrn_rebuild, 0);
+});
+
+test('2.284: в «Сегодня» и утренней сводке эксперта — остались расхождения с заданием на оценку, которые можно заменить', async () => {
+  const ex = await login(S, '+79990001542');
+  await makeSpecialist(S.sql, ex.user.id);
+  assert.equal((await ex.req('PATCH', '/api/me', { full_name: 'Эксперт Заданиев' })).status, 200);
+  const o = await inWork('Квартира: заменить по заданию утром', ex);
+  const putTxt = (who, url, body, name, kind) => who.req('POST', url, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), ...(kind ? { 'x-doc-kind': kind } : {}) } });
+  assert.equal((await putTxt(owner, `/api/orders/${o.id}/documents`, 'ЗАДАНИЕ НА ОЦЕНКУ\nДата оценки: 03.10.2026', 'Задание на оценку.txt', 'basis')).status, 201);
+  const report = 'ОТЧЁТ ОБ ОЦЕНКЕ\nДата оценки: 01.10.2026\nИтоговая стоимость 10 000 000 руб.';
+  const save = async (body) => {
+    const cur = (await ex.req('GET', `/api/orders/${o.id}/draft`)).body.draft;
+    assert.equal((await ex.req('PUT', `/api/orders/${o.id}/draft`, { body, from: cur?.id ?? null })).status, 200);
+  };
+  const today = todayMsk();
+  const list = (k) => ex.req('GET', '/api/today').then((r) => r.body.expert[k].filter((x) => x.id === o.id));
+  const alerts = () => expertMorningAlerts(S.sql, ex.user.id, today);
+  await save(report);
+  const d1 = (await putTxt(ex, `/api/orders/${o.id}/results`, report, 'Отчёт.txt')).body.document;
+  assert.deepEqual(await list('task_swap'), [], 'ИИ-проверку не запускали — строки нет');
+  assert.equal((await ex.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
+  const [r] = await list('task_swap');
+  assert.deepEqual(r.swap, ['Дата оценки в отчёте 01.10.2026, а в задании на оценку «Задание на оценку.txt» — 03.10.2026']);
+  assert.equal(r.title, 'Квартира: заменить по заданию утром');
+  assert.deepEqual(await list('egrn_swap'), [], 'по выписке заменять нечего');
+  const a = await alerts();
+  assert.equal(a.task_swap, 1);
+  assert.equal(a.egrn_swap, 0);
+  assert.equal(digestText({ due: 0, overdue: 0, visits: 0, links: 0, ...a }),
+    'На сегодня: в ИИ-проверке остались расхождения с заданием на оценку, которые можно заменить: 1 дело');
+  assert.equal(morningTo({ due: 0, overdue: 0, visits: 0, links: 0, ...a }), 'today');
+  // Цифра попадает в сводку в ленте (morning_digests.task_swap).
+  const [n] = await S.sql`insert into notifications (user_id, type, event) values (${ex.user.id}, 'morning', 'morning_today')
+                          returning id`;
+  await S.sql`insert into morning_digests (user_id, day, task_swap, notification_id) values (${ex.user.id}, ${today}, 1, ${n.id})`;
+  assert.match((await morningTitles(S.sql, [n.id])).get(String(n.id)).title, /с заданием на оценку, которые можно заменить: 1 дело/);
+  // Заменил в черновике (дата словами — тоже значение из задания) — строки нет.
+  await save(report.replace('01.10.2026', '«03» октября 2026'));
+  assert.deepEqual(await list('task_swap'), []);
+  assert.equal((await alerts()).task_swap, 0);
+  // Прежняя дата снова в черновике, но файл подписан — подписанное уже не заменить.
+  await save(report);
+  assert.equal((await list('task_swap')).length, 1);
+  const sg = await sign(d1, undefined, ex);
+  assert.equal(sg.status, 201, JSON.stringify(sg.body));
+  assert.deepEqual(await list('task_swap'), []);
+  assert.equal((await alerts()).task_swap, 0);
+  // Чужой специалист — чужое дело не видно.
+  const other = await login(S, '+79990001543');
+  await makeSpecialist(S.sql, other.user.id);
+  assert.ok(!JSON.stringify((await other.req('GET', '/api/today')).body).includes(o.id));
+  assert.equal((await expertMorningAlerts(S.sql, other.user.id, today)).task_swap, 0);
 });
 
 test('2.263: руководитель видит, что эксперт заменил значения по выписке в черновике, а подписал файл, собранный до замены', async () => {

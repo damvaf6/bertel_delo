@@ -12392,6 +12392,25 @@ test('2.283: «Заменить всё по заданию» и «Отменит
   await expect(box.locator('[data-role="egrn-rebuild"]')).toBeHidden();
   // Выписки в деле нет — «Заменить всё по выписке» не показывается.
   await expect(ep.locator('#ai-swap-all')).toBeHidden();
+  // 2.284: в «Сегодня» — «Можно заменить по заданию на оценку»: что осталось, нажатие — к ИИ-проверке в деле.
+  const tp = await ep.context().newPage();
+  await tp.goto('/kabinet');
+  const row = tp.locator('li[data-today-item="task-swap"]').filter({ hasText: 'Всё по заданию: квартира' });
+  await expect(row.locator('[data-role="task-swap-what"]')).toHaveText(/^Расхождений с заданием: 2 — /);
+  await expect(row).toContainText('замените в черновике, соберите Word заново и загрузите — тогда подписывайте');
+  await expect(tp.locator('li[data-today-item="egrn-swap"]').filter({ hasText: 'Всё по заданию: квартира' })).toHaveCount(0);
+  await row.scrollIntoViewIfNeeded();
+  await shot(tp, 'd62-specialist-segodnya-zamenit-po-zadaniyu');
+  await row.locator('button.open').click();
+  await expect(tp.locator('#ai-review-box')).toBeInViewport();
+  await expect(tp.locator('#ai-task-swap-all').getByRole('button', { name: 'Заменить всё по заданию (2)' })).toBeVisible();
+  await shot(tp, 'd63-specialist-delo-zamenit-po-zadaniyu');
+  // Заменили всё — строки больше нет.
+  await tp.locator('#ai-task-swap-all').getByRole('button', { name: 'Заменить всё по заданию (2)' }).click();
+  await expect(tp.locator('#ai-task-swap-all [data-role="task-swap-all-what"]')).toContainText('Заменено по заданию на оценку: 2.');
+  await tp.goto('/kabinet');
+  await expect(tp.locator('#today-box')).toBeVisible();
+  await expect(tp.locator('li[data-today-item="task-swap"]').filter({ hasText: 'Всё по заданию: квартира' })).toHaveCount(0);
   for (const p of [ep, cp]) await p.context().close();
 });
 

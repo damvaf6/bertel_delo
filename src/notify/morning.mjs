@@ -7,7 +7,7 @@
 // них, в сводке ничего нет, она ведёт к «Сегодня», а не к «Моим срокам». С 2.164 — ещё сколько дел руководитель организации
 // не подписал 2 дня и больше (строка «Руководитель ещё не подписал» в «Сегодня»); она тоже ведёт к «Сегодня». С 2.266 — ещё в
 // скольких делах в ИИ-проверке остались расхождения с выпиской ЕГРН, которые можно заменить в черновике (строка в «Сегодня»
-// ведёт к ИИ-проверке дела); тоже к «Сегодня».
+// ведёт к ИИ-проверке дела); тоже к «Сегодня». С 2.284 — так же расхождения с заданием на оценку (письмом, определением суда).
 import { expertSchedule } from '../orders/schedule.mjs';
 import { STATUS_NAME, todayMsk } from '../orders/workflow.mjs';
 import { expertMorningAlerts, orgPart } from '../ops/today-ops.mjs';
@@ -49,6 +49,7 @@ export function digestText(c) {
   if (c.reply_wait) parts.push(`заказчик ждёт ответа: ${c.reply_wait}`);
   if (c.lead_unsigned) parts.push(`руководитель не подписал 2 дня и больше: ${c.lead_unsigned}`);
   if (c.egrn_swap) parts.push(`в ИИ-проверке остались расхождения с выпиской ЕГРН, которые можно заменить: ${c.egrn_swap} ${pl(c.egrn_swap, 'дело', 'дела', 'дел')}`);
+  if (c.task_swap) parts.push(`в ИИ-проверке остались расхождения с заданием на оценку, которые можно заменить: ${c.task_swap} ${pl(c.task_swap, 'дело', 'дела', 'дел')}`);
   if (c.egrn_rebuild) parts.push(`исправили в черновике по выписке или заданию на оценку, а файл собран до исправления — соберите Word заново: ${c.egrn_rebuild} ${pl(c.egrn_rebuild, 'дело', 'дела', 'дел')}`);
   return parts.length ? `На сегодня: ${parts.join(', ')}` : null;
 }
@@ -63,8 +64,8 @@ export async function sendMorning(sql, { now = new Date() } = {}) {
   for (const { user_id: userId } of people) {
     const c = { ...digestCounts(await expertSchedule(sql, userId, NO_NAMES, today), now), ...await expertMorningAlerts(sql, userId, today, now) };
     sent += await sql.tx(async (tx) => {
-      const fresh = await tx`insert into morning_digests (user_id, day, due, overdue, visits, links, no_result, reply_wait, lead_unsigned, egrn_swap, egrn_rebuild)
-                             values (${userId}, ${today}, ${c.due}, ${c.overdue}, ${c.visits}, ${c.links}, ${c.no_result}, ${c.reply_wait}, ${c.lead_unsigned}, ${c.egrn_swap}, ${c.egrn_rebuild})
+      const fresh = await tx`insert into morning_digests (user_id, day, due, overdue, visits, links, no_result, reply_wait, lead_unsigned, egrn_swap, task_swap, egrn_rebuild)
+                             values (${userId}, ${today}, ${c.due}, ${c.overdue}, ${c.visits}, ${c.links}, ${c.no_result}, ${c.reply_wait}, ${c.lead_unsigned}, ${c.egrn_swap}, ${c.task_swap}, ${c.egrn_rebuild})
                              on conflict do nothing returning user_id`;
       const text = digestText(c);
       if (!fresh.length || !text) return 0;
@@ -81,7 +82,7 @@ export async function sendMorning(sql, { now = new Date() } = {}) {
 }
 
 // Куда ведёт сводка (2.142): есть сроки, выезды или ссылки — к «Моим срокам»; только «нет файла результата» и «заказчик ждёт
-// ответа» (и «руководитель не подписал», 2.164, «можно заменить по выписке», 2.266, «соберите Word заново», 2.272) — к «Сегодня», где эти дела строками.
+// ответа» (и «руководитель не подписал», 2.164, «можно заменить по выписке», 2.266, «по заданию», 2.284, «соберите Word заново», 2.272) — к «Сегодня», где эти дела строками.
 export function morningTo(c) {
   return c.due || c.overdue || c.visits || c.links ? 'schedule' : 'today';
 }
@@ -89,7 +90,7 @@ export function morningTo(c) {
 // Текст сводки в ленте по номеру уведомления (цифры — из morning_digests) и куда она ведёт.
 export async function morningTitles(sql, ids) {
   if (!ids.length) return new Map();
-  const rows = await sql`select notification_id, due, overdue, visits, links, no_result, reply_wait, lead_unsigned, egrn_swap, egrn_rebuild from morning_digests
+  const rows = await sql`select notification_id, due, overdue, visits, links, no_result, reply_wait, lead_unsigned, egrn_swap, task_swap, egrn_rebuild from morning_digests
                          where notification_id = any(${ids}::bigint[])`;
   return new Map(rows.map((r) => [String(r.notification_id), { title: digestText(r), to: morningTo(r) }]));
 }
