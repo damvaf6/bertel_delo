@@ -684,6 +684,29 @@ test('2.287: цель оценки сверяется с заданием на �
   assert.deepEqual(await found(), []);
 });
 
+// 2.288: заказчик в отчёте — как в задании на оценку, а без задания — как владелец заявки (только человек).
+test('2.288: заказчик сверяется с заданием на оценку и заявкой', async () => {
+  const o = await inWork('Квартира: заказчик по заданию');
+  await S.sql`update users set full_name = 'Сидоров Семён Семёнович' where id = (select owner_user_id from orders where id = ${o.id})`;
+  assert.equal((await putResult(o, 'ОТЧЁТ ОБ ОЦЕНКЕ № 10/2026\nЗаказчик: Петров Пётр Петрович', 'отчёт.txt', 'text/plain')).status, 201);
+  const found = async () => {
+    const res = await spec.req('POST', `/api/orders/${o.id}/review/ai`);
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    return res.body.ai.items.flatMap((i) => i.found ?? []).filter((f) => /^Заказчик в отчёте/.test(f.text));
+  };
+  assert.deepEqual((await found()).map((f) => f.text), ['Заказчик в отчёте — «Петров Пётр Петрович», а в заявке — «Сидоров Семён Семёнович»: проверьте заказчика; если он другой — приложите к делу задание на оценку']);
+  // Задание на оценку важнее заявки.
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from('ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nЗаказчик: Иванов Иван Иванович'), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание на оценку.txt'), 'x-doc-kind': 'basis' } })).status, 201);
+  const [f, ...more] = await found();
+  assert.equal(more.length, 0);
+  assert.equal(f.text, 'Заказчик в отчёте — «Петров Пётр Петрович», а в задании на оценку «Задание на оценку.txt» — «Иванов Иван Иванович» (стр. 1); заказчик берётся из задания — исправьте отчёт или приложите к делу новое задание');
+  assert.deepEqual(f.fix, { bad: 'Петров Пётр Петрович', right: 'Иванов Иван Иванович', from: 'в задании на оценку «Задание на оценку.txt»' });
+  await S.sql`update documents set deleted_at = now() where order_id = ${o.id} and kind = 'result'`;
+  assert.equal((await putResult(o, 'ОТЧЁТ ОБ ОЦЕНКЕ № 10/2026\nЗаказчик: Иванов И.И.', 'отчёт-2.txt', 'text/plain')).status, 201);
+  assert.deepEqual(await found(), []);
+});
+
 test('2.202: площадь в отчёте сверяется с выпиской ЕГРН, приложенной к просьбе о документах; текст выписки в модель не уходит', async () => {
   const o = await inWork('Квартира: площадь по выписке');
   assert.equal((await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { items: ['egrn'] })).status, 201);
