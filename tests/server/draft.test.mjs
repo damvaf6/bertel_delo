@@ -806,6 +806,21 @@ test('2.232: замена на значение из выписки: число 
   assert.equal(swapValue(null), null);
 });
 
+// 2.274: «Заменить на значение из задания» — дата оценки в той же записи, что в тексте черновика.
+test('2.274: замена даты оценки на дату из задания — цифрами и словами, как в тексте', async () => {
+  const { swapValue, findInDraft } = await import('../../public/draftfind.js');
+  const g = { bad: '01.10.2026', right: '03.10.2026', from: 'в задании на оценку «Задание.txt»' };
+  assert.equal(swapValue(g, '01.10.2026'), '03.10.2026');
+  assert.equal(swapValue(g, '«01» октября 2026'), '«03» октября 2026');
+  assert.equal(swapValue(g, '1 октября 2026'), '3 октября 2026');
+  assert.equal(swapValue({ ...g, right: '15.11.2026' }, '1 октября 2026'), '15 ноября 2026');
+  assert.equal(swapValue(g), '03.10.2026');
+  const body = 'Дата оценки — «01» октября 2026 г.';
+  const at = findInDraft(body, { bad: g.bad, quote: 'Дата оценки: 01.10.2026' });
+  const now = swapValue(g, body.slice(at.from, at.to));
+  assert.equal(body.slice(0, at.from) + now + body.slice(at.to), 'Дата оценки — «03» октября 2026 г.');
+});
+
 // 2.246: «Заменить всё по выписке» — все замены одним проходом (public/draftfind.js); отмена — где значение ещё на месте.
 test('2.246: заменить всё по выписке: замены одним проходом, нет в тексте и год «или» — пропущены, отмена по месту', async () => {
   const { swapAll, unswapAll } = await import('../../public/draftfind.js');

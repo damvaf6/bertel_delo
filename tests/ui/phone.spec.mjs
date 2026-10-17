@@ -1305,6 +1305,18 @@ test('ИИ-проверка результата: специалист пере�
   expect(await draftText.evaluate((t) => t.value.slice(t.selectionStart, t.selectionEnd))).toBe('«01» октября 2026');
   await expect(sp.locator('#draft-msg')).toHaveText('Выделено ««01» октября 2026» — в задании на оценку «Задание на оценку.txt»: 03.10.2026. Исправьте и сохраните черновик, затем соберите Word заново.');
   await shot(sp, '54o-specialist-ispravit-datu-v-chernovike');
+  // 2.274: «Заменить на значение из задания» — дата оценки в той же записи, черновик сохраняется; «Отменить» возвращает прежнюю.
+  await dateFind.getByRole('button', { name: 'Заменить на значение из задания' }).click();
+  await expect(dateFind.locator('[data-role="fix-swap-what"]')).toHaveText('Было ««01» октября 2026» — стало ««03» октября 2026», как в задании на оценку «Задание на оценку.txt». Черновик сохранён; соберите Word заново.');
+  await expect(draftText).toHaveValue(/по состоянию на «03» октября 2026 г\./);
+  expect((await (await sp.request.get(`/api/orders/${id}/draft`, { headers: H })).json()).draft.body).toContain('по состоянию на «03» октября 2026 г.');
+  await expect(dateFind.locator('[data-role="egrn-rebuild"]')).toBeVisible();
+  await dateFind.scrollIntoViewIfNeeded();
+  await shot(sp, '54o2-specialist-zamenit-datu-iz-zadaniya');
+  await dateFind.getByRole('button', { name: 'Отменить' }).click();
+  await expect(dateFind.locator('[data-role="fix-swap-what"]')).toHaveText('Замена отменена: снова ««01» октября 2026». Черновик сохранён.');
+  await expect(draftText).toHaveValue(/по состоянию на «01» октября 2026 г\./);
+  await expect(dateFind.getByRole('button', { name: 'Заменить на значение из задания' })).toBeEnabled();
   expect((await sp.request.patch('/api/me', { data: { full_name: 'Тестов Эксперт ИИ' }, headers: H })).status()).toBe(200);
   await sp.reload();
   const asked = new Promise((ok) => sp.once('dialog', (d) => { ok(d.message()); d.accept(); }));

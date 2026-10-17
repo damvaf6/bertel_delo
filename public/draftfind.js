@@ -61,9 +61,19 @@ export function swapValue(g, found) {
   // 2.267: «квартира» ↔ «комната» (`flip: 'kind'`) — окончание и заглавная — как у того, что в тексте.
   if (g?.flip === 'kind' && right) return flipKind(String(found ?? bad));
   if (!right || / или /.test(right) || !/\d/.test(bad) || right.length > 200) return null;
+  // 2.274: дата оценки из задания — в той же записи, что в тексте: «01» октября 2026 → «03» октября 2026.
+  const day = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(right);
+  if (day && found) return dateLike(day, String(found));
   const num = /^\d[\d\s]*([,.])\d+$/;
   const was = num.exec(String(found ?? ''));
   return was && num.test(right) ? right.replace(/[,.]/, was[1]) : right;
+}
+
+function dateLike([, dd, mm, yyyy], found) {
+  const m = /^([«"]?)(\d{1,2})([»"]?)(\s+)\p{L}+(\s+)\d{4}$/u.exec(found);
+  if (!m) return `${dd}.${mm}.${yyyy}`;
+  const d = m[2].length === 2 ? dd : String(Number(dd));
+  return `${m[1]}${d}${m[3]}${m[4]}${MONTHS[Number(mm) - 1]}${m[5]}${yyyy}`;
 }
 
 function flipKind(word) {
