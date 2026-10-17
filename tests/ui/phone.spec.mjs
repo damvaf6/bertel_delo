@@ -12330,6 +12330,71 @@ test('2.278: вид стоимости — как в задании на оце�
   for (const p of [ep, cp]) await p.context().close();
 });
 
+// 2.283: «Заменить всё по заданию» — адрес, вид стоимости и дата оценки, разошедшиеся с заданием на оценку, одной кнопкой;
+// черновик сохранён одной версией, под кнопкой — что было и что стало; «Отменить всё» возвращает прежнее.
+test('2.283: «Заменить всё по заданию» и «Отменить всё»', async ({ browser, baseURL }) => {
+  test.setTimeout(120_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990028301'), customer = await signIn(cp, '+79990028302');
+  const A = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Всё по заданию: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"deal","region":"moscow","object_type":"flat","address":"г. Москва, Садовая ул., д. 7, кв. 4"}') returning id`,
+    [customer.id, expert.id, inDays(6)]);
+    return o.id;
+  });
+  await ep.goto(`/kabinet#order=${A}`);
+  await ep.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const draftText = ep.getByLabel('Текст заключения');
+  await draftText.fill(`${await draftText.inputValue()}\nОпределению подлежит ликвидационная стоимость объекта.`);
+  await ep.getByRole('button', { name: 'Сохранить правку' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Правка сохранена');
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from('ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nАдрес объекта: г. Москва, Садовая ул., д. 7, кв. 14\nВид стоимости: рыночная\nДата оценки: 03.10.2026'),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание на оценку.txt'), 'x-doc-kind': 'basis' },
+  })).status()).toBe(201);
+  expect((await ep.request.post(`/api/orders/${A}/results`, {
+    data: Buffer.from(['ОТЧЁТ ОБ ОЦЕНКЕ № 83/2026', 'Адрес объекта оценки: г. Москва, Садовая ул., д. 7, кв. 4', 'Вид определяемой стоимости: ликвидационная', 'Дата оценки: 03.10.2026', 'Итоговая стоимость 10 000 000 руб.'].join('\n')),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Отчёт.txt') },
+  })).status()).toBe(201);
+  await ep.reload();
+  await ep.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(ep.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  const box = ep.locator('#ai-task-swap-all');
+  await expect(box.getByRole('button', { name: 'Заменить всё по заданию (2)' })).toBeVisible();
+  await box.scrollIntoViewIfNeeded();
+  await shot(ep, '54o7-specialist-zamenit-vse-po-zadaniyu');
+  await box.getByRole('button', { name: 'Заменить всё по заданию (2)' }).click();
+  await expect(box.locator('[data-role="task-swap-all-what"]')).toHaveText('Заменено по заданию на оценку: 2. Черновик сохранён; соберите Word заново.');
+  await expect(box.locator('[data-role="task-swap-all-list"]')).toContainText('«г. Москва, Садовая ул., д. 7, кв. 4» → «г. Москва, Садовая ул., д. 7, кв. 14»');
+  await expect(box.locator('[data-role="task-swap-all-list"]')).toContainText('«ликвидационная» → «рыночная»');
+  await expect(draftText).toHaveValue(/\| Адрес объекта \| г\. Москва, Садовая ул\., д\. 7, кв\. 14 \|/);
+  await expect(draftText).toHaveValue(/Определению подлежит рыночная стоимость объекта\./);
+  const saved = (await (await ep.request.get(`/api/orders/${A}/draft`, { headers: H })).json()).draft.body;
+  expect(saved).toContain('кв. 14 |');
+  expect(saved).toContain('подлежит рыночная стоимость');
+  // У каждой находки — «заменено вместе со всеми», своя кнопка больше не нажимается.
+  const kind = ep.locator('#review-checks li[data-check="appraiser"] .ai-found li').filter({ hasText: 'Вид стоимости в отчёте' });
+  await expect(kind.locator('[data-role="fix-swap-what"]')).toHaveText(/^Было «ликвидационная» — стало «рыночная», как в задании на оценку «Задание на оценку\.txt» \(заменено вместе со всеми\)\.$/);
+  await expect(kind.getByRole('button', { name: 'Заменить на значение из задания' })).toBeDisabled();
+  await expect(box.locator('[data-role="egrn-rebuild"]')).toBeVisible();
+  await box.scrollIntoViewIfNeeded();
+  await shot(ep, '54o8-specialist-zameneno-vse-po-zadaniyu');
+  await box.getByRole('button', { name: 'Отменить всё' }).click();
+  await expect(box.locator('[data-role="task-swap-all-what"]')).toHaveText('Замены отменены: в черновике снова прежние значения (2). Черновик сохранён.');
+  await expect(draftText).toHaveValue(/\| Адрес объекта \| г\. Москва, Садовая ул\., д\. 7, кв\. 4 \|/);
+  await expect(draftText).toHaveValue(/Определению подлежит ликвидационная стоимость объекта\./);
+  await expect(kind.getByRole('button', { name: 'Заменить на значение из задания' })).toBeEnabled();
+  await expect(box.locator('[data-role="egrn-rebuild"]')).toBeHidden();
+  // Выписки в деле нет — «Заменить всё по выписке» не показывается.
+  await expect(ep.locator('#ai-swap-all')).toBeHidden();
+  for (const p of [ep, cp]) await p.context().close();
+});
+
 // 2.279: в окне подписи неподписанного файла — расхождения с заявкой и заданием на оценку из ИИ-проверки: какие, «К находке»
 // ведёт к ней в ИИ-проверке; заменили в черновике — «соберите Word заново».
 test('2.279: окно подписи — расхождения с заданием на оценку и переход к находке', async ({ browser, baseURL }) => {
