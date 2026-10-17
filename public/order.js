@@ -4,7 +4,7 @@
 import { api, el, say, formatPhone, formatSize, ROLE_RU, quoted } from '/common.js';
 import { state, show, notFoundView } from '/shell.js';
 import { loadMatch } from '/match.js';
-import { loadReview, loadChat, egrnSwapState, egrnSwapFor, orderFixState, toOrderFix } from '/work.js';
+import { loadReview, loadChat, egrnSwapState, egrnSwapFor, taskSwapFor, orderFixState, toOrderFix } from '/work.js';
 import { loadMoney } from '/money.js';
 import { loadDraft, canFixInDraft } from '/draft.js';
 import { loadAnalogs } from '/analogs.js';
@@ -613,6 +613,7 @@ function returnPoints(r) {
 // что «Заменить на значение из выписки» в ИИ-проверке (2.232); заменено — напоминание собрать Word и отметить пункт.
 // Кнопка — пока черновик правится и та же находка есть в ИИ-проверке.
 function pointSwap(p) {
+  if (p.fix && !p.fixed) return pointTaskSwap(p);
   if (!p.egrn || p.fixed) return [];
   const st = egrnSwapFor(p.egrn);
   if (!st) return [];
@@ -621,6 +622,17 @@ function pointSwap(p) {
   const btn = el('button', { class: 'secondary', type: 'button', 'data-action': 'point-egrn-swap', onclick: () => { btn.disabled = true; st.swap(); } }, 'Заменить по выписке');
   return [el('div', { class: 'point-swap', 'data-role': 'point-swap' },
     el('span', { class: 'muted', text: `В черновике «${st.was}» — в выписке ЕГРН «${st.now}». ` }), btn)];
+}
+// 2.285: пункт «… — исправьте, как в задании на оценку» (2.269) — «Заменить на значение из задания» прямо в замечании: та
+// же замена, что у находки в ИИ-проверке (2.274, 2.277, 2.278). По заявке заменять нечем — кнопки нет.
+function pointTaskSwap(p) {
+  const st = taskSwapFor(p.fix);
+  if (!st) return [];
+  if (st.state === 'done') return [el('div', { class: 'point-swap ok', 'data-role': 'point-swap-done', text: `Заменено в черновике: «${st.was}» → «${st.now}», как ${st.from}. Соберите Word заново, загрузите исправленный файл и отметьте пункт.` })];
+  if (st.state === 'missing') return [el('div', { class: 'point-swap muted', 'data-role': 'point-swap-miss', text: `В тексте черновика «${st.was}» нет — исправьте в файле отчёта (${st.from}: ${st.now}).` })];
+  const btn = el('button', { class: 'secondary', type: 'button', 'data-action': 'point-task-swap', onclick: () => { btn.disabled = true; st.swap(); } }, `Заменить на значение ${st.src}`);
+  return [el('div', { class: 'point-swap', 'data-role': 'point-swap' },
+    el('span', { class: 'muted', text: `В черновике «${st.was}» — ${st.from} «${st.now}». ` }), btn)];
 }
 // ИИ-проверка показана заново (запуск, обновление) — кнопки замены в пунктах замечания по ней.
 document.addEventListener('egrn-swaps-ready', () => { if (current && orgReturnsNow.length) renderOrgReturns(orgReturnsNow); });
