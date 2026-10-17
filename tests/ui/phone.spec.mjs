@@ -7441,6 +7441,65 @@ test('отбор дел на подпись по ИИ-проверке (2.193): 
   await expect(hp.locator('#org-sign > li.group')).toHaveText('Подписано · 1');
 });
 
+test('2.276: отбор «Есть расхождения с заявкой или заданием на оценку» в «Подписях организации»', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), ep = await ctx(), hp = await ctx();
+  const customer = await signIn(cp, '+79990027601');
+  const expert = await signIn(ep, '+79990027602'), head = await signIn(hp, '+79990027603');
+  const { orgId, ids } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Отбор по заявке ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Сверкина Анна' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const add = async (title, days) => (await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', $1, $2, $3, 'in_work', current_date + $4::int, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Сверочная ул., 6","area":"41"}') returning id`,
+      [title, customer.id, expert.id, days])).rows[0].id;
+    const ids = { order: await add('Отбор: расхождение с заявкой', 3), ok: await add('Отбор: без расхождений', 5) };
+    for (const k of Object.keys(ids)) await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [ids[k], expert.id]);
+    return { orgId: org.id, ids };
+  });
+  const ref = (id) => `№ ${id.slice(0, 8).toUpperCase()}`;
+  for (const [k, name] of [['order', 'Отчёт 1.pdf'], ['ok', 'Отчёт 2.pdf']]) {
+    const up = await ep.request.post(`/api/orders/${ids[k]}/results`, { data: Buffer.from(`%PDF-1.4 ${name}`), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent(name) } });
+    expect(up.status()).toBe(201);
+    expect((await ep.request.post(`/api/documents/${(await up.json()).document.id}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  }
+  const review = (id, items) => db((c) => c.query(`insert into ai_reviews (order_id, round, requested_by, side, model, items, files)
+    select o.id, o.review_round + 1, o.executor_user_id, 'executor', 'fake', $2::jsonb, jsonb_build_array(jsonb_build_object('id', d.id, 'name', d.filename, 'read', true))
+    from orders o join documents d on d.order_id = o.id and d.kind = 'result' and d.deleted_at is null where o.id = $1`, [id, JSON.stringify(items)]));
+  // В первом деле — расхождения с заявкой (площадь) и с заданием на оценку (дата); во втором — «посмотрите» без них.
+  await review(ids.order, [
+    { id: 'realty_identity', hint: 'attention', note: '', marks: [], found: [
+      { text: 'Площадь 45,1 кв. м не совпадает с площадью из заявки (41 кв. м) — проверьте, нет ли данных другого объекта', file: 'Отчёт 1.pdf', where: 'стр. 2', quote: 'Общей площадью 45,1 кв. м',
+        fix: { bad: '45,1', right: '41', from: 'в заявке' } }] },
+    { id: 'value_date', hint: 'attention', note: '', marks: [], found: [
+      { text: 'Дата оценки в отчёте 01.10.2026, а в задании на оценку «Задание.pdf» — 03.10.2026 (стр. 1); дата оценки берётся из задания — исправьте отчёт или приложите к делу новое задание',
+        file: 'Отчёт 1.pdf', where: 'стр. 1', quote: 'Дата оценки: 01.10.2026', fix: { bad: '01.10.2026', right: '03.10.2026', from: 'в задании на оценку «Задание.pdf»' } }] }]);
+  await review(ids.ok, [{ id: 'requisites', hint: 'attention', note: 'дата', marks: [] }]);
+
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const f = hp.locator('#org-sign-filter');
+  await expect(f.locator('button')).toHaveText(['Все ждут подписи · 2', 'Есть «посмотрите» · 2', 'Есть расхождения с заявкой или заданием на оценку · 1']);
+  // «Несколько сразу»: у дела — сколько файлов с такими расхождениями.
+  await expect(hp.locator(`#org-sign-many [data-role="many-ai"]`).first()).toHaveText(' Файлы — в ИИ-проверке есть «посмотрите»: 1, с расхождениями с заявкой или заданием на оценку: 1.');
+  await f.locator('[data-sign-filter="order"]').click();
+  await expect(f.locator('[data-sign-filter="order"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(hp.locator('#org-sign > li[data-item]')).toHaveCount(1);
+  const item = hp.locator(`#org-sign > li[data-item="${ref(ids.order)}"]`);
+  await expect(item.locator('[data-role="ai-order"]')).toHaveText('Расхождения с заявкой и заданием на оценку (2): Площадь 45,1 кв. м не совпадает с площадью из заявки (41 кв. м); Дата оценки в отчёте 01.10.2026, а в задании на оценку «Задание.pdf» — 03.10.2026.');
+  await f.scrollIntoViewIfNeeded();
+  await shot(hp, 'h4c-rukovoditel-otbor-zayavka-zadanie');
+
+  // Вернул эксперту — отбор пуст и сам вернулся к «Все».
+  await item.locator('[data-action="org-return"]').click();
+  await item.locator('[data-action="org-return-send"]').click();
+  await expect(hp.locator('#org-sign-msg')).toHaveText('Файл возвращён эксперту с замечанием — его подпись снята');
+  await expect(f.locator('button')).toHaveText(['Все ждут подписи · 1', 'Есть «посмотрите» · 1']);
+  await expect(f.locator('[data-sign-filter="all"]')).toHaveAttribute('aria-pressed', 'true');
+});
+
 test('отбор дел на подпись (2.205): эксперт отметил исправленными не все пункты замечания руководителя', async ({ browser, baseURL }) => {
   const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
   const cp = await ctx(), ep = await ctx(), hp = await ctx();
@@ -8135,7 +8194,8 @@ test('новая версия после возврата (2.159): в окне �
   await ep.reload();
   // …а после загрузки — что исправленный файл загружен и ждёт подписи эксперта; «К подписи» ведёт к нему.
   await expect(fileState).toHaveText(/^Исправленный файл «Отчёт Версиева \(исправлен\)\.pdf» загружен \d{2}\.\d{2}\.\d{4} — ждёт Вашей подписи\. К подписи$/);
-  await fileState.scrollIntoViewIfNeeded();
+  // Блок замечаний может перерисоваться после загрузки дела — прокрутка повторяется, пока элемент не устоится.
+  await expect(async () => { await fileState.scrollIntoViewIfNeeded({ timeout: 1000 }); }).toPass();
   await shot(ep, 'c18-ekspert-zamechaniya-ispravlennyy-fayl-zhdyot-podpisi');
   // 2.192: ИИ исправленную версию ещё не проверял — подсказка «запустите ИИ-проверку этой версии» с переходом к ней.
   const aiState = ep.locator('#org-returns li.return.open [data-role="return-ai"]');

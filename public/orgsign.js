@@ -16,6 +16,8 @@ const SIGN_FILTERS = [
   { id: 'look', text: 'Есть «посмотрите»', test: (d) => d.ai_check?.state === 'attention' },
   // 2.263: в черновике заменены расхождения с выпиской, а подписан файл, собранный до замены.
   { id: 'swapped', text: 'Файл собран до замены по выписке', test: (d) => (d.ai_check?.swapped?.length ?? 0) > 0 },
+  // 2.276: в ИИ-проверке эксперта остались расхождения с заявкой или заданием на оценку (2.269).
+  { id: 'order', text: 'Есть расхождения с заявкой или заданием на оценку', test: (d) => (d.ai_check?.order?.length ?? 0) > 0 },
 ];
 let signFilter = null;
 let signItems = [];
@@ -218,8 +220,10 @@ function renderMany(list) {
     const noAi = ready.filter((d) => d.ai_check?.state === 'none').length;
     const look = ready.filter((d) => d.ai_check?.state === 'attention').length;
     const old = ready.filter((d) => d.ai_check?.swapped?.length).length;
+    const ord = ready.filter((d) => d.ai_check?.order?.length).length;
     const ai = [noAi ? `без ИИ-проверки: ${noAi}` : null, look ? `в ИИ-проверке есть «посмотрите»: ${look}` : null,
-      old ? `собраны до замены по выписке в черновике: ${old}` : null].filter(Boolean);
+      old ? `собраны до замены по выписке в черновике: ${old}` : null,
+      ord ? `с расхождениями с заявкой или заданием на оценку: ${ord}` : null].filter(Boolean);
     const id = `org-many-${it.order_ref.replace(/[^0-9A-Z]/gi, '')}`;
     const box = el('input', { type: 'checkbox', id, 'data-many': it.order_ref, ...(left ? {} : { checked: '' }), onchange: () => count() });
     return { it, ready, box, label: el('label', { class: 'row', for: id }, box,
