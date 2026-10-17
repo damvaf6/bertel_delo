@@ -16,7 +16,7 @@ import { pastValues, reuseSections, skeleton } from '../docs/reuse.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { orderSources, placeSources, sourcesLines } from '../docs/sources.mjs';
 import { draftDiff } from '../docs/diff.mjs';
-import { assignmentAddress, assignmentKinds, assignmentValue, egrnFacts, egrnRightsFacts, egrnShares, egrnUses, kindList, parseFloorField, sameAddressText, USE_NAME } from '../ai/report-checks.mjs';
+import { assignmentAddress, assignmentKinds, assignmentPurpose, assignmentValue, egrnFacts, egrnRightsFacts, egrnShares, egrnUses, kindList, parseFloorField, purposeFits, sameAddressText, USE_NAME } from '../ai/report-checks.mjs';
 import { assignmentDocs, egrnDocs } from './ai-ops.mjs';
 
 const PHOTOS_MAX = 40;
@@ -152,6 +152,19 @@ function taskKindFor(registry, order, assignment) {
   const k = assignmentKinds(assignment);
   return k ? { v: kindList(k.kinds), kinds: k.kinds, what: k.what, by: TASK_BY[k.what], name: k.name, page: k.page + 1 } : null;
 }
+// 2.291: цель оценки из задания на оценку (письма заказчика, определения суда), как её сверяет ИИ-проверка (2.287, правило
+// purpose_value), — в строку «Для чего нужна оценка» таблицы задания, модели и вместо пометки «заполнить: цель оценки»:
+// задание важнее заявки; цель в заявке другая (не совместимая) — видно рядом. В документах разные цели — эксперт выбирает сам.
+function taskPurposeFor(registry, order, assignment) {
+  if (!registry.checks(order.module, order.service).some((r) => (r.auto ?? []).includes('purpose_value'))) return null;
+  const p = assignmentPurpose(assignment);
+  if (!p) return null;
+  const mine = order.fields?.purpose;
+  const typed = mine && !purposeFits(p, mine)
+    ? registry.service(order.module, order.service)?.fields?.find((f) => f.id === 'purpose')?.options?.find((o) => o.id === mine)?.name ?? null : null;
+  return { v: p.value, kinds: p.kinds, what: p.what, by: TASK_BY[p.what], name: p.name, page: p.page + 1, typed };
+}
+const PURPOSE_GAP = /\[(?:заполнить|указать)\s*:?\s*цел\S*\s+(?:проведения\s+)?оценки[^\]]*\]/giu;
 const VALUE_KIND_GAP = /\[(?:заполнить|указать)\s*:?\s*вид\S*\s+стоимост[^\]]*\]/giu;
 const ruDay = (d) => d.split('-').reverse().join('.');
 // Пометка модели про дату оценки: «[заполнить: дата оценки]», «[заполнить: дату оценки из задания]».
@@ -326,12 +339,14 @@ export function draftOps() {
         const valueDate = valueDateFor(registry, order, assignment);
         const valueBrief = valueDate?.day ? `Дата оценки: ${valueDate.day} (${valueDate.what} «${valueDate.name}», стр. ${valueDate.page}) — пиши её везде, где нужна дата оценки, без пометок` : null;
         const egrn = await egrnFor(sql, providers.storage, registry, order);
-        const task = { address: taskAddressFor(registry, order, assignment, egrn), kind: taskKindFor(registry, order, assignment) };
+        const task = { address: taskAddressFor(registry, order, assignment, egrn), kind: taskKindFor(registry, order, assignment),
+          purpose: taskPurposeFor(registry, order, assignment) };
         const taskBrief = [
           task.address ? `Адрес объекта ${task.address.what} «${task.address.name}» (стр. ${task.address.page}): ${task.address.v} — пиши его везде, где нужен адрес объекта, без пометок` : null,
+          task.purpose ? `Цель оценки ${task.purpose.what} «${task.purpose.name}» (стр. ${task.purpose.page}): ${task.purpose.v} — пиши её везде, где нужна цель оценки, без пометок` : null,
           task.kind ? `Вид стоимости ${task.kind.what} «${task.kind.name}» (стр. ${task.kind.page}): ${task.kind.v} — пиши его везде, где нужен вид стоимости, без пометок` : null,
         ].filter(Boolean).join('\n') || null;
-        const taken = ['address', 'area', 'cadastral'].filter((k) => egrn?.[k]?.v || task[k]?.v);
+        const taken = ['address', 'area', 'cadastral', 'purpose'].filter((k) => egrn?.[k]?.v || task[k]?.v);
         const brief = [orderBrief(registry, order, { omit: taken }), valueBrief, egrnBrief(egrn), taskBrief, onsite, dossierBrief, spec ? analogsBrief(spec, analogs, order) : null, tablesBrief(sections)].filter(Boolean).join('\n');
         const out = await askAi(ctx, actor, 'draft', draftMessages({ brief, sections, ...inputs }));
         // Таблицы (2.29) и сведения из досье (2.14) программа вставляет сама, под заголовками разделов.
@@ -339,7 +354,8 @@ export function draftOps() {
         // Перечень использованных документов (2.95) — из дела, программой.
         const sources = sourcesLines(await orderSources(sql, registry, order, providers.storage));
         const answer = cleanDraftAnswer(sections, out.text);
-        const kinded = task.kind ? answer.replace(VALUE_KIND_GAP, task.kind.v) : answer;
+        const aimed = task.purpose ? answer.replace(PURPOSE_GAP, task.purpose.v) : answer;
+        const kinded = task.kind ? aimed.replace(VALUE_KIND_GAP, task.kind.v) : aimed;
         const dated = fillEgrn(valueDate?.day ? kinded.replace(VALUE_GAP, valueDate.day) : kinded, task.address ? { ...egrn, address: task.address } : egrn);
         const filled = fillDraft(fillTables(dated, sections, registry, order, { materials, valueDate: valueDate?.day, egrn, task }), sections, dossier);
         const text = placeSources(filled, sections, sources).body.slice(0, DRAFT_MAX);
@@ -353,6 +369,7 @@ export function draftOps() {
           egrn,
           task_address: task.address,
           task_kind: task.kind,
+          task_purpose: task.purpose,
         };
         const d = await sql.tx(async (tx) => {
           await tx`select id from orders where id = ${order.id} for update`;
