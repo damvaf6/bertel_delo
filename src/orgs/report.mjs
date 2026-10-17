@@ -207,35 +207,60 @@ const firstSignQ = (sql, orgId, ids, { start, end }) => sql`
   where x.at >= ${start} and x.at < ${end} and x.at >= m.created_at`;
 
 export const TOP_EGRN_RULES = 3;
-// { first_signed, first_no_ai, egrn_first, egrn_first_cases, egrn_rules: [{ title, n }] } — по строкам firstSignQ.
+// { first_signed, first_no_ai, egrn_first, egrn_first_cases, egrn_rules: [{ title, n }],
+//   order_first, order_first_cases, order_first_app, order_first_task, order_rules } — по строкам firstSignQ.
+// 2.275: order_* — находки, сверенные с заявкой или заданием на оценку (fix.from, без выписки, как fixShort); app — «в заявке».
+const ruleTitle = (registry, x, id) => {
+  let title = id;
+  try { title = registry?.checks(x.module, x.service, x.fields).find((c) => c.id === id)?.title ?? id; } catch { /* услуга убрана */ }
+  return title.split(':')[0].trim();
+};
+const topRules = (rules) => [...rules].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'ru')).slice(0, TOP_EGRN_RULES)
+  .map(([title, n]) => ({ title, n }));
 function egrnFirst(rows, registry) {
   const rules = new Map();
+  const orderRules = new Map();
   let found = 0;
   let cases = 0;
+  const order = { n: 0, cases: 0, app: 0, task: 0 };
   for (const x of rows) {
     if (!x.items) continue;
     const file = (x.files ?? []).find((f) => f.id === x.doc)?.name;
+    const mine = (f) => !file || f.file === file;
     let n = 0;
+    let m = 0;
     for (const i of x.items) {
       if (i.hint !== 'attention') continue;
-      const k = (i.found ?? []).filter((f) => f.egrn && (!file || f.file === file)).length;
-      if (!k) continue;
-      n += k;
-      let title = i.id;
-      try { title = registry?.checks(x.module, x.service, x.fields).find((c) => c.id === i.id)?.title ?? i.id; } catch { /* услуга убрана */ }
-      title = title.split(':')[0].trim();
-      rules.set(title, (rules.get(title) ?? 0) + k);
+      const k = (i.found ?? []).filter((f) => f.egrn && mine(f)).length;
+      if (k) {
+        n += k;
+        const title = ruleTitle(registry, x, i.id);
+        rules.set(title, (rules.get(title) ?? 0) + k);
+      }
+      const fixes = (i.found ?? []).filter((f) => !f.egrn && f.fix?.from && mine(f));
+      if (fixes.length) {
+        m += fixes.length;
+        for (const f of fixes) order[String(f.fix.from).startsWith('в заявке') ? 'app' : 'task']++;
+        const title = ruleTitle(registry, x, i.id);
+        orderRules.set(title, (orderRules.get(title) ?? 0) + fixes.length);
+      }
     }
     found += n;
     if (n) cases++;
+    order.n += m;
+    if (m) order.cases++;
   }
   return {
     first_signed: rows.length,
     first_no_ai: rows.filter((x) => !x.items).length,
     egrn_first: found,
     egrn_first_cases: cases,
-    egrn_rules: [...rules].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'ru')).slice(0, TOP_EGRN_RULES)
-      .map(([title, n]) => ({ title, n })),
+    egrn_rules: topRules(rules),
+    order_first: order.n,
+    order_first_cases: order.cases,
+    order_first_app: order.app,
+    order_first_task: order.task,
+    order_rules: topRules(orderRules),
   };
 }
 
@@ -478,11 +503,13 @@ export function reportCsv(orgName, r) {
     'Дней в среднем от принятия до сдачи', 'Позже первоначального срока', 'Из них с переносом срока',
     'В первоначальный срок, без переносов', 'Дней в среднем от возврата до новой подписи', 'Ждут новой подписи после возврата',
     'Подписал файлов', 'Из них без ИИ-проверки этой версии', 'Из них не отметив все пункты замечания',
-    'Впервые подписал дел', 'Расхождений с выпиской ЕГРН при первой подписи', 'В скольких делах', 'Первая подпись без ИИ-проверки'];
+    'Впервые подписал дел', 'Расхождений с выпиской ЕГРН при первой подписи', 'В скольких делах', 'Первая подпись без ИИ-проверки',
+    'Расхождений с заявкой и заданием на оценку при первой подписи', 'В скольких делах', 'Из них с заявкой', 'Из них с заданием на оценку'];
   const line = (name, x) => [name, x.accepted, x.done, x.done_late, ...(r.current ? [x.overdue_now] : []),
     x.returned_head, x.returned_dispatcher, rubCell(x.fee_kop), rubCell(x.paid_kop),
     daysCell(x.avg_days), x.late_first, x.late_first_moved, x.first_kept, daysCell(x.resign_days), x.resign_wait,
-    x.signed, x.signed_no_ai, x.signed_points_left, x.first_signed, x.egrn_first, x.egrn_first_cases, x.first_no_ai];
+    x.signed, x.signed_no_ai, x.signed_points_left, x.first_signed, x.egrn_first, x.egrn_first_cases, x.first_no_ai,
+    x.order_first, x.order_first_cases, x.order_first_app, x.order_first_task];
   const day = todayMsk();
   const lines = [
     [`Сводка по экспертам — ${orgName}`],
@@ -500,6 +527,8 @@ export function reportCsv(orgName, r) {
       rubCell(x.fee_kop), x.experts, daysCell(x.avg_days)])] : []),
     ...(r.total.egrn_rules?.length ? [[], ['Расхождения с выпиской ЕГРН при первой подписи — пункт проверки', 'Сколько'],
       ...r.total.egrn_rules.map((x) => [x.title, x.n])] : []),
+    ...(r.total.order_rules?.length ? [[], ['Расхождения с заявкой и заданием на оценку при первой подписи — пункт проверки', 'Сколько'],
+      ...r.total.order_rules.map((x) => [x.title, x.n])] : []),
     ...(r.top_remarks?.length ? [[], ['Частые замечания при возврате', 'Сколько раз', 'У скольких экспертов'],
       ...r.top_remarks.map((x) => [x.text, x.n, x.experts])] : []),
   ];

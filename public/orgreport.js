@@ -52,6 +52,18 @@ const egrnFirst = (x) => {
   x.egrn_rules?.length ? `чаще: ${x.egrn_rules.map((r) => `${r.title} — ${r.n}`).join(', ')}` : null,
   x.first_no_ai ? `впервые подписано без ИИ-проверки: ${x.first_no_ai}` : null].filter(Boolean).join(' · ');
 };
+// 2.275: «при первой подписи расхождений с заявкой и заданием на оценку: 3 в 2 делах из 4 проверенных ИИ (с заявкой — 2, с
+// заданием — 1) · чаще: Дата оценки — 1»; без проверенных ИИ дел — пусто (без ИИ-проверки сказано в строке о выписке).
+const orderFirst = (x) => {
+  const checked = (x.first_signed ?? 0) - (x.first_no_ai ?? 0);
+  if (checked <= 0) return '';
+  if (!x.order_first) return `при первой подписи расхождений с заявкой и заданием на оценку нет (проверено ИИ дел: ${checked})`;
+  const parts = [x.order_first_app ? `с заявкой — ${x.order_first_app}` : null, x.order_first_task ? `с заданием — ${x.order_first_task}` : null]
+    .filter(Boolean).join(', ');
+  return [`при первой подписи расхождений с заявкой и заданием на оценку: ${x.order_first} в ${x.order_first_cases} ${
+    caseWord(x.order_first_cases)} из ${checked} проверенных ИИ (${parts})`,
+  x.order_rules?.length ? `чаще: ${x.order_rules.map((r) => `${r.title} — ${r.n}`).join(', ')}` : null].filter(Boolean).join(' · ');
+};
 // «сдано: 5 (было 3, +2) · в срок: 4 (было 4) · возвраты: 1 (было 2, −1)»; у эксперта без дел в обоих месяцах — пусто.
 const diff = (now, was) => `${now} (было ${was}${now > was ? `, +${now - was}` : now < was ? `, −${was - now}` : ''})`;
 const compare = (x) => {
@@ -104,6 +116,7 @@ async function load(month) {
     ...(resign(t) ? fact('После Ваших возвратов', resign(t)) : []),
     ...(signedAi(t) ? fact('Подпись экспертов', signedAi(t), signedWarn(t) ? 'warn' : '') : []),
     ...(egrnFirst(t) ? fact('Выписка ЕГРН', egrnFirst(t), t.egrn_first ? 'warn' : '') : []),
+    ...(orderFirst(t) ? fact('Заявка и задание на оценку', orderFirst(t), t.order_first ? 'warn' : '') : []),
     ...(report.current && t.overdue_now ? fact('Просрочено сейчас', String(t.overdue_now), 'overdue') : []),
     ...fact('Вознаграждение за сданные', rub(t.fee_kop), 'money-sum'),
     ...fact('Выплачено экспертам', rub(t.paid_kop)));
@@ -134,6 +147,7 @@ async function load(month) {
     ...(resign(x) ? [el('div', { class: 'muted', 'data-expert-resign': '', text: `после Ваших возвратов: ${resign(x)}` })] : []),
     ...(signedAi(x) ? [el('div', { class: signedWarn(x) ? 'warn' : 'muted', 'data-expert-signed': '', text: signedAi(x) })] : []),
     ...(egrnFirst(x) ? [el('div', { class: x.egrn_first ? 'warn' : 'muted', 'data-expert-egrn': '', text: egrnFirst(x) })] : []),
+    ...(orderFirst(x) ? [el('div', { class: x.order_first ? 'warn' : 'muted', 'data-expert-order': '', text: orderFirst(x) })] : []),
     ...(x.remarks?.length ? [el('div', { class: 'muted', 'data-expert-remarks': '', text: `частые замечания: ${
       x.remarks.map((m) => `«${m.text}»${m.n > 1 ? ` ×${m.n}` : ''}`).join(', ')}` })] : []),
     el('div', { class: 'muted', text: `вознаграждение за сданные: ${rub(x.fee_kop)} · выплачено: ${rub(x.paid_kop)}` }))));
