@@ -60,7 +60,7 @@ async function lastOwnDraft(sql, actor, orderId) {
 
 // Документы из списка услуги, которые эксперт просил в прошлом деле и которых в этом ещё не просил и не получил.
 async function docsToAsk(sql, registry, past, order) {
-  const catalog = registry.requestDocs(order.module, order.service, order.basis_kind).filter((c) => !c.basis);
+  const catalog = registry.requestDocs(order.module, order.service, order.basis_kind, order.fields).filter((c) => !c.basis);
   const was = new Set((await sql`select distinct item_id from doc_requests where order_id = ${past.id} and cancelled_at is null and item_id is not null`).map((r) => r.item_id));
   const here = new Set((await sql`select item_id from doc_requests where order_id = ${order.id} and cancelled_at is null and item_id is not null`).map((r) => r.item_id));
   return catalog.filter((c) => was.has(c.id) && !here.has(c.id));
