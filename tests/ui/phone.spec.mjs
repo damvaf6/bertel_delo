@@ -13561,3 +13561,37 @@ test('прогон 2.300: эксперт и руководитель по пач
   await shot(hp, 'd79-progon15-rukovoditel-svodka-po-vidam');
   for (const p of [ep, hp, cp]) await p.context().close();
 });
+
+// 2.304: срок по заданию на оценку раньше срока дела и наступает завтра, а файла результата нет — в «Сегодня» строка «Срок по
+// заданию на оценку близко» (в «Срок близко» и «Горит срок» дело не повторяется); нажатие ведёт к файлу результата.
+test('2.304: срок по заданию на оценку близко — «Сегодня»', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990029601'), customer = await signIn(cp, '+79990029602');
+  const ru = (iso) => iso.split('-').reverse().join('.');
+  const A = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Срок по заданию близко: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Садовая ул., д. 7, кв. 4"}') returning id`,
+    [customer.id, expert.id, inDays(2)]);
+    return o.id;
+  });
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ru(inDays(1))}`),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание банка.txt'), 'x-doc-kind': 'basis' },
+  })).status()).toBe(201);
+  await ep.goto('/kabinet');
+  await expect(ep.locator('li[data-today="task-due"]')).toHaveText(/^Срок по заданию на оценку близко · \d+$/);
+  const row = ep.locator('li[data-today-item="task-due"]').filter({ hasText: 'Срок по заданию близко: квартира' });
+  await expect(row.locator('[data-role="task-due-when"]')).toHaveText(`Срок по заданию завтра — ${ru(inDays(1))} (по заданию на оценку: «Задание банка.txt», стр. 1) — раньше срока дела`);
+  await expect(row).toContainText('загрузите файл результата к сроку по заданию');
+  await expect(ep.locator('li[data-today-item="no-result"]').filter({ hasText: 'Срок по заданию близко: квартира' })).toHaveCount(0);
+  await expect(ep.locator('li[data-today-item="hot"]').filter({ hasText: 'Срок по заданию близко: квартира' })).toHaveCount(0);
+  await row.scrollIntoViewIfNeeded();
+  await shot(ep, '54u1-ekspert-segodnya-srok-po-zadaniyu');
+  await row.locator('button.open').click();
+  await expect(ep).toHaveURL(new RegExp(`#order=${A}&to=result$`));
+  for (const p of [ep, cp]) await p.context().close();
+});
