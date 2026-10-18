@@ -187,6 +187,14 @@ export function taskDueFor(registry, order, assignment) {
     later: mine && mine > d.day ? ruDay(mine) : null };
 }
 const dayOf = (v) => (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10);
+// 2.308: руководителю у дела на подписи организации — срок по заданию на оценку (2.303) прошёл или сегодня (день — по Москве).
+// Задание читается только у дел с правилом report_dates; срок позже сегодняшнего — ничего.
+export async function taskDueSign(sql, storage, registry, order, today) {
+  if (!storage || !registry.checks(order.module, order.service).some((r) => (r.auto ?? []).includes('report_dates'))) return null;
+  const d = taskDueFor(registry, order, await assignmentDocs(sql, storage, order));
+  if (!d || d.day > today) return null;
+  return { day: d.day, overdue: d.day < today, name: d.name, page: d.page, by: d.by };
+}
 const CUSTOMER_GAP = /\[(?:заполнить|указать)\s*:?\s*(?:(?:фио|имя|наименование|название)\s+)?заказчик[а-яё]*\s*\]/giu;
 const PURPOSE_GAP = /\[(?:заполнить|указать)\s*:?\s*цел\S*\s+(?:проведения\s+)?оценки[^\]]*\]/giu;
 const VALUE_KIND_GAP = /\[(?:заполнить|указать)\s*:?\s*вид\S*\s+стоимост[^\]]*\]/giu;

@@ -12740,6 +12740,55 @@ test('2.307: оценка для банка — пользователь рез�
   for (const p of [ep, cp]) await p.context().close();
 });
 
+// 2.308: у дела на подписи организации срок по заданию на оценку сегодня или прошёл — руководителю красным в «Сегодня» и в подписи.
+test('2.308: руководитель — срок по заданию на оценку у дела на подписи', async ({ browser, baseURL }) => {
+  test.setTimeout(120_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), ep = await ctx(), hp = await ctx();
+  const customer = await signIn(cp, '+79990030801');
+  const expert = await signIn(ep, '+79990030802'), head = await signIn(hp, '+79990030803');
+  const { orgId, ids } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Срок по заданию ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Срокова Анна' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const add = async (title) => (await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', $1, $2, $3, 'in_work', $4::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Срочная ул., 8"}') returning id`,
+      [title, customer.id, expert.id, inDays(5)])).rows[0].id;
+    const ids = { today: await add('Срок по заданию сегодня'), past: await add('Срок по заданию прошёл') };
+    for (const k of Object.keys(ids)) await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [ids[k], expert.id]);
+    return { orgId: org.id, ids };
+  });
+  const ruD = (s) => s.split('-').reverse().join('.');
+  for (const [k, day, name] of [['today', inDays(0), 'Задание банка.txt'], ['past', inDays(-2), 'Задание на оценку.txt']]) {
+    expect((await cp.request.post(`/api/orders/${ids[k]}/documents`, {
+      data: Buffer.from(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(day)}`),
+      headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': 'basis' },
+    })).status()).toBe(201);
+    const up = await ep.request.post(`/api/orders/${ids[k]}/results`, { data: Buffer.from(`%PDF-1.4 ${k}`), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent(`Отчёт ${k}.pdf`) } });
+    expect(up.status()).toBe(201);
+    expect((await ep.request.post(`/api/documents/${(await up.json()).document.id}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  }
+  const ref = (id) => `№ ${id.slice(0, 8).toUpperCase()}`;
+  await hp.goto('/kabinet');
+  const lines = hp.locator(`#today-box li[data-today-item="org-sign-${orgId}"] [data-role="task-due-sign"]`);
+  await expect(lines).toHaveCount(2);
+  await expect(lines.filter({ hasText: 'сегодня' })).toHaveText('Срок по заданию на оценку сегодня — подпишите сегодня («Задание банка.txt», стр. 1)');
+  await expect(lines.filter({ hasText: 'прошёл' })).toHaveText(/^Срок по заданию на оценку прошёл — \d+ \S+ \(«Задание на оценку\.txt», стр\. 1\)$/);
+  await expect(lines.first()).toHaveClass(/overdue/);
+  await lines.first().scrollIntoViewIfNeeded();
+  await shot(hp, '54y1-rukovoditel-segodnya-srok-po-zadaniyu');
+  await hp.goto(`/kabinet#org=${orgId}&to=sign`);
+  const item = hp.locator(`#org-sign > li[data-item="${ref(ids.past)}"]`);
+  await expect(item.locator('[data-sig="task-due"]')).toHaveText(/^Срок по заданию на оценку прошёл — \d+ \S+ \(«Задание на оценку\.txt», стр\. 1\)$/);
+  await expect(hp.locator(`#org-sign > li[data-item="${ref(ids.today)}"] [data-sig="task-due"]`)).toHaveText('Срок по заданию на оценку сегодня — подпишите сегодня («Задание банка.txt», стр. 1)');
+  await item.scrollIntoViewIfNeeded();
+  await shot(hp, '54y2-rukovoditel-podpis-srok-po-zadaniyu');
+  for (const p of [ep, cp, hp]) await p.context().close();
+});
+
 // 2.299: оценка для банка — в запросе документов пункт «Задание на оценку от банка»; приложено — пункта больше нет.
 test('2.299: задание на оценку от банка — в запросе документов', async ({ browser, baseURL }) => {
   test.setTimeout(120_000);

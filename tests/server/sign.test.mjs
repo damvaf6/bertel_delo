@@ -1129,3 +1129,49 @@ test('2.154: ИИ-проверка — дата составления отчё�
   await S.sql`update document_signatures set signed_at = now() - interval '5 days' where document_id = ${d1.id}`;
   assert.match((await found())[0], new RegExp(`подписал файл \\(${ru(addDays(today, -5)).replace(/\./g, '\\.')}\\)`));
 });
+
+test('2.308: у дела на подписи организации срок по заданию на оценку прошёл или сегодня — руководителю в «Сегодня» и в подписи', async () => {
+  const org = await makeOrg(S.sql, 'ООО «Срок по заданию»');
+  const head = await login(S, '+79990001612');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  assert.equal((await head.req('PATCH', '/api/me', { full_name: 'Руководитель Срокова' })).status, 200);
+  const ex = await login(S, '+79990001613');
+  await makeSpecialist(S.sql, ex.user.id);
+  await addMember(S.sql, org.id, ex.user.id, 'member');
+  assert.equal((await ex.req('PATCH', '/api/me', { full_name: 'Эксперт Срокова' })).status, 200);
+  assert.equal((await ex.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  const o = await inWork('Квартира: срок по заданию на подписи', ex);
+  const putTxt = (who, url, body, name) => who.req('POST', url, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } });
+  const ruD = (s) => s.split('-').reverse().join('.');
+  const ref = (x) => x.order_ref.endsWith(o.id.slice(0, 8).toUpperCase());
+  const signing = async () => (await head.req('GET', `/api/orgs/${org.id}/signing`)).body.items.find(ref);
+  const toSign = async () => (await head.req('GET', '/api/today')).body.orgs.find((g) => g.id === org.id).to_sign.find(ref);
+  const today = todayMsk();
+  assert.equal((await putTxt(owner, `/api/orders/${o.id}/documents`, `ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(today)}`, 'Задание на оценку.txt')).status, 201);
+  const d = (await putTxt(ex, `/api/orders/${o.id}/results`, 'ОТЧЁТ ОБ ОЦЕНКЕ\nКвартира', 'Отчёт.txt')).body.document;
+  // Эксперт ещё не подписал — файл не ждёт подписи организации, пометки нет.
+  assert.equal((await signing()).task_due, null);
+  assert.equal(await toSign(), undefined);
+  assert.equal((await sign(d, undefined, ex)).status, 201);
+  const want = { day: today, overdue: false, name: 'Задание на оценку.txt', page: 1, by: 'по заданию на оценку' };
+  assert.deepEqual((await signing()).task_due, want);
+  assert.deepEqual((await toSign()).task_due, want);
+  // Срок прошёл — overdue.
+  const past = addDays(today, -2);
+  await S.sql`update documents set deleted_at = now() where order_id = ${o.id} and filename = 'Задание на оценку.txt'`;
+  assert.equal((await putTxt(owner, `/api/orders/${o.id}/documents`, `ЗАДАНИЕ НА ОЦЕНКУ\nСрок составления отчёта: не позднее ${ruD(past)}`, 'Задание банка.txt')).status, 201);
+  assert.deepEqual((await signing()).task_due, { ...want, day: past, overdue: true, name: 'Задание банка.txt' });
+  assert.equal((await toSign()).task_due.overdue, true);
+  // Срок завтра — пометки нет.
+  await S.sql`update documents set deleted_at = now() where order_id = ${o.id} and filename = 'Задание банка.txt'`;
+  assert.equal((await putTxt(owner, `/api/orders/${o.id}/documents`, `ЗАДАНИЕ НА ОЦЕНКУ\nСрок составления отчёта: не позднее ${ruD(addDays(today, 1))}`, 'Задание 3.txt')).status, 201);
+  assert.equal((await signing()).task_due, null);
+  assert.equal((await toSign()).task_due, null);
+  // Подписано организацией — не ждёт, пометки нет.
+  await S.sql`update documents set deleted_at = now() where order_id = ${o.id} and filename = 'Задание 3.txt'`;
+  assert.equal((await putTxt(owner, `/api/orders/${o.id}/documents`, `ЗАДАНИЕ НА ОЦЕНКУ\nСрок составления отчёта: не позднее ${ruD(today)}`, 'Задание 4.txt')).status, 201);
+  assert.equal((await head.req('POST', `/api/org-documents/${d.id}/sign`, { confirm: true })).status, 201);
+  assert.equal((await signing()).task_due, null);
+  assert.equal(await toSign(), undefined);
+});

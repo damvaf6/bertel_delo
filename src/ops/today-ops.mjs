@@ -36,7 +36,7 @@ import { dueNotes } from './note-ops.mjs';
 import { caseMoves, caseRemind, transferTargets } from './org-ops.mjs';
 import { bankTaskMissing, docWait, egrnOld } from './docreq-ops.mjs';
 import { aiRecheck, aiSignHints, egrnRebuildLeft, egrnSwapLeft } from '../ai/ai.mjs';
-import { latest, taskAddressFor, taskDueFor, taskCustomerFor, taskKindFor, taskPurposeFor, valueDateFor } from './draft-ops.mjs';
+import { latest, taskAddressFor, taskDueFor, taskDueSign, taskCustomerFor, taskKindFor, taskPurposeFor, valueDateFor } from './draft-ops.mjs';
 import { assignmentDocs } from './ai-ops.mjs';
 import { assignmentAddress, customerOf, customersInText, purposeFits, purposeKinds, sameAddressText, sameCustomer } from '../ai/report-checks.mjs';
 
@@ -461,7 +461,7 @@ export function awayDeadline(o, today) {
 }
 
 // Тот же расчёт — для утренней сводки руководителю (2.121, src/notify/morning.mjs).
-export async function orgPart(sql, org, registry, today, { actorId = null } = {}) {
+export async function orgPart(sql, org, registry, today, { actorId = null, storage = null } = {}) {
   const soon = addDays(today, HOT_DAYS);
   const service = (o) => registry.service(o.module, o.service)?.service.name ?? o.service;
   // Дела экспертов организации (выбрали её в профиле специалиста и состоят в ней) — как в «Делах экспертов».
@@ -541,7 +541,9 @@ export async function orgPart(sql, org, registry, today, { actorId = null } = {}
       const hints = await aiSignHints(sql, registry, ord, docs.filter((d) => signs.get(d.id)?.expert && !signs.get(d.id)?.org).map((d) => d.id));
       const orderDiff = new Set([...hints.values()].flatMap((h) => (h?.order ?? []).map((x) => x.text))).size;
       toSign.push(view(o, { files: waiting, reminded_at: w?.reminded_at ?? null, since: w?.since ?? null,
-        long: !!w?.since && Date.now() - new Date(w.since).getTime() >= SIGN_LONG_DAYS * 86400_000, egrn_kept: kept, order_diff: orderDiff }));
+        long: !!w?.since && Date.now() - new Date(w.since).getTime() >= SIGN_LONG_DAYS * 86400_000, egrn_kept: kept, order_diff: orderDiff,
+        // Срок по заданию на оценку прошёл или сегодня (2.308) — красным.
+        task_due: await taskDueSign(sql, storage, registry, ord, today) }));
     }
     const open = returns.filter((r) => r.open);
     // Сколько пунктов замечания эксперт уже отметил исправленными (2.160 — как в «Делах экспертов», 2.151).
@@ -657,7 +659,7 @@ export function todayOps() {
           today,
           expert: await expertPart(sql, actor, registry, today, providers.storage),
           dispatcher: await dispatcherPart(sql, actor, registry, today),
-          orgs: await Promise.all(orgs.map((o) => orgPart(sql, o, registry, today, { actorId: actor.id }))),
+          orgs: await Promise.all(orgs.map((o) => orgPart(sql, o, registry, today, { actorId: actor.id, storage: providers.storage }))),
         };
       },
     },
