@@ -6322,7 +6322,7 @@ test('срок в таблице задания (2.303): из задания н�
   const text = page.getByLabel('Текст заключения');
   await expect(text).toHaveValue(new RegExp(`\\| Срок \\| ${due.replace(/\./g, '\\.')} \\(по заданию на оценку; срок дела — ${mine.replace(/\./g, '\\.')}, позже срока по заданию\\) \\|`));
   await expect(page.getByText(`Срок составления отчёта: не позднее ${due} — как в задании на оценку «Задание на оценку.txt» (стр. 1); срок дела — ${mine}, позже — успейте к сроку по заданию.`)).toBeVisible();
-  await page.getByText(/Срок составления отчёта: не позднее/).scrollIntoViewIfNeeded();
+  await page.locator('#draft-box').getByText(/Срок составления отчёта: не позднее/).scrollIntoViewIfNeeded();
   await shot(page, '114f-ekspert-srok-iz-zadaniya');
 });
 
