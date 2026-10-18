@@ -12608,6 +12608,51 @@ test('2.288: заказчик — как в задании на оценку', a
   for (const p of [ep, cp]) await p.context().close();
 });
 
+// 2.294: у находки «Заказчик в отчёте…» по заданию — «Заменить на значение из задания»: заказчик в черновике меняется
+// на заказчика из задания как есть, «Отменить» возвращает прежнего.
+test('2.294: заказчик — замена в черновике по заданию', async ({ browser, baseURL }) => {
+  test.setTimeout(120_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990029401'), customer = await signIn(cp, '+79990029402');
+  const A = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Замена заказчика по заданию: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"deal","region":"moscow","object_type":"flat","address":"г. Москва, Садовая ул., д. 7, кв. 4"}') returning id`,
+    [customer.id, expert.id, inDays(6)]);
+    return o.id;
+  });
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from('ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nЗаказчик: Иванов Иван Иванович\nВид стоимости: рыночная'),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание на оценку.txt'), 'x-doc-kind': 'basis' },
+  })).status()).toBe(201);
+  await ep.goto(`/kabinet#order=${A}`);
+  await ep.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const draftText = ep.getByLabel('Текст заключения');
+  await draftText.fill(`${await draftText.inputValue()}\nЗаказчик оценки: Петров Пётр Петрович.`);
+  expect((await ep.request.post(`/api/orders/${A}/results`, {
+    data: Buffer.from(['ОТЧЁТ ОБ ОЦЕНКЕ № 94/2026', 'Заказчик: Петров Пётр Петрович', 'Вид определяемой стоимости: рыночная', 'Итоговая стоимость 10 000 000 руб.'].join('\n')),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Отчёт.txt') },
+  })).status()).toBe(201);
+  await ep.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(ep.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  const find = ep.locator('#review-checks li[data-check="requisites"] .ai-found li').filter({ hasText: 'Заказчик в отчёте' });
+  await expect(find).toHaveCount(1);
+  await find.getByRole('button', { name: 'Заменить на значение из задания' }).click();
+  await expect(find.locator('[data-role="fix-swap-what"]')).toContainText('Было «Петров Пётр Петрович» — стало «Иванов Иван Иванович»');
+  await expect(draftText).toHaveValue(/Заказчик оценки: Иванов Иван Иванович\./);
+  expect((await (await ep.request.get(`/api/orders/${A}/draft`, { headers: H })).json()).draft.body).toContain('Заказчик оценки: Иванов Иван Иванович.');
+  await find.scrollIntoViewIfNeeded();
+  await shot(ep, '54q1-specialist-zamenit-zakazchika-iz-zadaniya');
+  await find.getByRole('button', { name: 'Отменить' }).click();
+  await expect(find.locator('[data-role="fix-swap-what"]')).toHaveText('Замена отменена: снова «Петров Пётр Петрович». Черновик сохранён.');
+  await expect(draftText).toHaveValue(/Заказчик оценки: Петров Пётр Петрович\./);
+  for (const p of [ep, cp]) await p.context().close();
+});
+
 // 2.283: «Заменить всё по заданию» — адрес, вид стоимости и дата оценки, разошедшиеся с заданием на оценку, одной кнопкой;
 // черновик сохранён одной версией, под кнопкой — что было и что стало; «Отменить всё» возвращает прежнее.
 test('2.283: «Заменить всё по заданию» и «Отменить всё»', async ({ browser, baseURL }) => {

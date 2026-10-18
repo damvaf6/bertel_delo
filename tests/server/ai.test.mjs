@@ -701,7 +701,7 @@ test('2.288: заказчик сверяется с заданием на оце
   const [f, ...more] = await found();
   assert.equal(more.length, 0);
   assert.equal(f.text, 'Заказчик в отчёте — «Петров Пётр Петрович», а в задании на оценку «Задание на оценку.txt» — «Иванов Иван Иванович» (стр. 1); заказчик берётся из задания — исправьте отчёт или приложите к делу новое задание');
-  assert.deepEqual(f.fix, { bad: 'Петров Пётр Петрович', right: 'Иванов Иван Иванович', from: 'в задании на оценку «Задание на оценку.txt»' });
+  assert.deepEqual(f.fix, { bad: 'Петров Пётр Петрович', right: 'Иванов Иван Иванович', from: 'в задании на оценку «Задание на оценку.txt»', flip: 'name' });
   await S.sql`update documents set deleted_at = now() where order_id = ${o.id} and kind = 'result'`;
   assert.equal((await putResult(o, 'ОТЧЁТ ОБ ОЦЕНКЕ № 10/2026\nЗаказчик: Иванов И.И.', 'отчёт-2.txt', 'text/plain')).status, 201);
   assert.deepEqual(await found(), []);

@@ -74,6 +74,8 @@ export function swapValue(g, found) {
   if (g?.flip === 'value' && right) return flipValue(String(found ?? bad), right);
   // 2.293: цель оценки из задания (`flip: 'text'`) — словами целиком, заглавная — как у того, что в тексте.
   if (g?.flip === 'text' && right) return /^\p{Lu}/u.test(String(found ?? bad)) ? right[0].toUpperCase() + right.slice(1) : right[0].toLowerCase() + right.slice(1);
+  // 2.294: заказчик из задания (`flip: 'name'`) — как в задании: фамилия, имя, название организации пишутся как есть.
+  if (g?.flip === 'name' && right) return right;
   if (!right || / или /.test(right) || !/\d/.test(bad) || right.length > 200) return null;
   // 2.274: дата оценки из задания — в той же записи, что в тексте: «01» октября 2026 → «03» октября 2026.
   const day = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(right);

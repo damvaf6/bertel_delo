@@ -2617,7 +2617,9 @@ function customerMatch(docs, ctx) {
     if ((!task && e.who.org) || sameCustomer(e.who, ref) || seen.has(`${e.doc.name}|${e.page}`)) continue;
     seen.add(`${e.doc.name}|${e.page}`);
     out.push(task
-      ? { doc: e.doc, page: e.page, quote: e.quote, fix: { bad: e.who.value, right: task.who.value, from: `${task.what} «${task.name}»` },
+      // 2.294: заказчик целиком меняется на заказчика из задания как есть (`flip: 'name'`, public/draftfind.js); обрезанный — нет.
+      ? { doc: e.doc, page: e.page, quote: e.quote, fix: { bad: e.who.value, right: task.who.value, from: `${task.what} «${task.name}»`,
+        ...(e.who.value.length < 120 && task.who.value.length < 120 ? { flip: 'name' } : {}) },
         text: `Заказчик в отчёте — «${e.who.value}», а ${task.what} «${task.name}» — «${task.who.value}» (стр. ${task.page + 1}); заказчик берётся из задания — исправьте отчёт или приложите к делу новое задание` }
       : { doc: e.doc, page: e.page, quote: e.quote,
         text: `Заказчик в отчёте — «${e.who.value}», а в заявке — «${ref.value}»: проверьте заказчика; если он другой — приложите к делу задание на оценку` });
