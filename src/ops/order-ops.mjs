@@ -13,6 +13,7 @@ import { reviewState } from './work-ops.mjs';
 import { orgReturns } from './sign-ops.mjs';
 import { missingSteps } from './step-ops.mjs';
 import { notify, notifyStatus, orgHeads } from '../notify/notify.mjs';
+import { ackLine, startAck } from '../orders/ack.mjs';
 
 const LEVEL_NAME = ['none', 'read', 'write', 'manage'];
 
@@ -117,7 +118,8 @@ export async function submitDraft(tx, registry, actor, cur) {
            values (${cur.id}, 'new', 'matching', ${actor.id}, 'customer')`;
   await audit(tx, actor, 'order.status', 'order', cur.id, { from: 'new', to: 'matching', side: 'customer' });
   await notifyStatus(tx, { actor, before: cur, to: 'matching', by: 'customer' });
-  return o;
+  const due = await startAck(tx, o);
+  return due ? { ...o, ack_due_at: due } : o;
 }
 
 export function orderOps() {
@@ -260,6 +262,8 @@ export function orderOps() {
           // Внутренняя переписка с руководителем организации (2.28): только самому исполнителю, если он работает от организации.
           org_chat: order.executor_user_id === actor.id ? (await executorSignOrg(sql, actor.id))?.name ?? null : null,
           access: LEVEL_NAME[level],
+          // Ответ сразу после отправки (задача штаба 3fd17197): стороне заказчика и служебным, пока цены нет.
+          ack: orderSides(actor, order).some((x) => x === 'customer' || x === 'dispatcher') ? ackLine(order) : null,
           editable: order.status === 'new' && level >= LEVEL.write,
           // «Что дальше» заказчику (2.41) и диспетчеру (2.42): чья сторона и чего не хватает для отправки черновика.
           customer: orderSides(actor, order).includes('customer'),
@@ -482,6 +486,8 @@ export function orderOps() {
                    values (${cur.id}, ${cur.status}, ${to}, ${actor.id}, ${t.by}, ${reason})`;
           await audit(tx, actor, 'order.status', 'order', cur.id, { from: cur.status, to, side: t.by });
           await notifyStatus(tx, { actor, before: cur, to, by: t.by });
+          // Заявка отправлена — обещанное время первого ответа заказчику (задача штаба 3fd17197).
+          if (cur.status === 'new' && to === 'matching') await startAck(tx, o);
           // Дело было у организации и снято (возврат в подбор, отмена) — её руководителю тоже сообщаем (2.17).
           if (cur.offer_org_id && cur.status === 'awaiting_executor' && to !== 'in_work') {
             await notify(tx, 'org_offer_withdrawn', { users: await orgHeads(tx, cur.offer_org_id), orgId: cur.offer_org_id, actor });

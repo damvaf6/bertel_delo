@@ -467,6 +467,17 @@ test('цены и правила перевода (2а.9): смотрит и п�
   assert.equal(r.body.settings.fields.find((f) => f.key === 'page_kop').value, 600_00, 'чужие попытки ничего не поменяли');
 });
 
+test('срок первого ответа заказчику (задача штаба 3fd17197): смотрит и правит только администратор (подробно — order-ack.test.mjs)', async () => {
+  cover('admin.order_ack.get'); cover('admin.order_ack.save');
+  for (const c of [U.owner, U.headA, U.dispatcher, U.spec, U.stranger]) {
+    assert.equal((await c.req('GET', '/api/admin/order-ack')).status, 404);
+    assert.equal((await c.req('PUT', '/api/admin/order-ack', { hours: { expertise: 1 } })).status, 404);
+  }
+  const r = await U.admin.req('GET', '/api/admin/order-ack');
+  assert.equal(r.status, 200);
+  assert.ok(r.body.ack.modules.every((m) => m.hours === null), 'чужие попытки ничего не включили');
+});
+
 test('ЮKassa — проверка перед подключением (2а.10): только администратор (подробно — yookassa-check.test.mjs)', async () => {
   cover('admin.payments.check');
   for (const c of [U.owner, U.headA, U.dispatcher, U.spec, U.stranger]) {

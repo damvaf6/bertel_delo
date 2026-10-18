@@ -14,6 +14,7 @@ import { orderRef } from '../notify/registry.mjs';
 import { notifyMessage } from '../notify/notify.mjs';
 import { askAi, parseJsonAnswer } from '../ai/ai.mjs';
 import { insertOrder, problemsForSubmit, submitDraft } from '../ops/order-ops.mjs';
+import { ackLine } from '../orders/ack.mjs';
 import { audit } from '../ops/util.mjs';
 import { actorOf, enqueueMail, mailToThread } from './outbox.mjs';
 
@@ -354,8 +355,10 @@ async function handleReply(deps, row, actor, orderId) {
       if (!missing.length) {
         const sent = await submitDraft(tx, registry, actor, cur);
         await done(tx, row, 'submitted', cur.id);
-        return mailToThread(tx, sent, 'Заявка отправлена. Диспетчер подберёт исполнителя и назначит цену — мы напишем сюда же, '
-          + 'когда заявку нужно будет оплатить.');
+        // Срок первого ответа (задача штаба 3fd17197) — если у модуля он включён.
+        const ack = ackLine(sent);
+        return mailToThread(tx, sent, ack ? `${ack.text} Цену напишем сюда же — после оплаты заявку передадим исполнителю.`
+          : 'Заявка отправлена. Диспетчер подберёт исполнителя и назначит цену — мы напишем сюда же, когда заявку нужно будет оплатить.');
       }
     }
     await done(tx, row, 'updated', cur.id);

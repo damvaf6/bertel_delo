@@ -5,6 +5,7 @@ import { createProviders } from './providers/index.mjs';
 import { createApp } from './app.mjs';
 import { deliverPending } from './notify/notify.mjs';
 import { remindDeadlines } from './notify/reminders.mjs';
+import { remindAck } from './orders/ack.mjs';
 import { remindDossier } from './dossier/dossier.mjs';
 import { remindSilentInspections } from './ops/inspect-ops.mjs';
 import { remindNotes } from './ops/note-ops.mjs';
@@ -30,7 +31,7 @@ try {
 const server = app.listen(cfg.port, () => console.log(`БЕРТЕЛ Дело · ядро · ${cfg.appEnv} · порт ${cfg.port}`));
 
 // Повтор неотправленных СМС-уведомлений раз в минуту (первая попытка — сразу после операции, src/http/router.mjs);
-// там же — напоминания о сроках (2.13) и о сроках документов досье (2.14), о ссылке осмотра без фото (2.85), по заметкам эксперта к делу (2.115), за 3 дня до дней «не принимаю дела» (2.226), «Пока Вас не было» (2.239), каждое один раз;
+// там же — напоминания о сроках (2.13) и о сроках документов досье (2.14), о ссылке осмотра без фото (2.85), по заметкам эксперта к делу (2.115), за 3 дня до дней «не принимаю дела» (2.226), «Пока Вас не было» (2.239), «задерживаемся» заказчику, если обещанный срок цены прошёл (задача штаба 3fd17197), каждое один раз;
 // утренняя сводка эксперту «На сегодня» (2.119) и руководителю «На сегодня по организации» (2.121) — раз в день после 8:00 по Москве.
 const sweep = setInterval(() => {
   remindDeadlines(sql)
@@ -45,6 +46,8 @@ const sweep = setInterval(() => {
     .catch((e) => console.error('предупреждение перед днями «не принимаю дела»:', e?.message || e))
     .then(() => sendAwayBack(sql))
     .catch((e) => console.error('«Пока Вас не было»:', e?.message || e))
+    .then(() => remindAck(sql))
+    .catch((e) => console.error('«задерживаемся» заказчику:', e?.message || e))
     .then(() => sendMorning(sql))
     .catch((e) => console.error('утренняя сводка:', e?.message || e))
     .then(() => sendOrgMorning(sql, app.locals.registry))

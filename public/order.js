@@ -125,6 +125,10 @@ function render() {
   $('order-deadline').textContent = order.deadline ? `Срок: ${dayRu(order.deadline)}${order.overdue ? ' · просрочено' : ''}` : 'Срок не указан';
   $('order-deadline').classList.toggle('overdue', order.overdue);
   $('order-meta').textContent = `Создана ${dateTimeRu(order.created_at)}${order.express ? ' · Экспресс: выезд помощника' : ''}`;
+  // Ответ сразу после отправки (задача штаба 3fd17197): обещанный срок цены, а не успели — «задерживаемся».
+  $('order-ack').classList.toggle('hidden', !current.ack);
+  $('order-ack').classList.toggle('overdue', !!current.ack?.late);
+  $('order-ack').textContent = current.ack?.text ?? '';
   renderOrgLine();
   $('ask-assistant').href = `#assistant=${order.id}`;
   $('details-form').classList.toggle('hidden', !current.editable);

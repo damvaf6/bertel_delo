@@ -4,6 +4,7 @@ import { state, show } from '/shell.js';
 import { serviceName } from '/match.js';
 import { loadNotaries } from '/notaries.js';
 import { loadTranslationPrices } from '/tprices.js';
+import { loadOrderAck } from '/orderack.js';
 import { loadPayCheck } from '/paycheck.js';
 import { loadAdminCard } from '/permitcard.js';
 
@@ -12,7 +13,7 @@ let found = null;
 
 export async function showAdmin() {
   show('admin-view', 'admin');
-  await Promise.all([loadStaff(), loadAi(), loadNotaries(), loadTranslationPrices(), loadPayCheck()]);
+  await Promise.all([loadStaff(), loadAi(), loadNotaries(), loadTranslationPrices(), loadOrderAck(), loadPayCheck()]);
 }
 
 const rub = (n) => `${Number(n).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽`;

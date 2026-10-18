@@ -4,6 +4,7 @@
 import { HttpError } from '../http/core.mjs';
 import { audit } from './util.mjs';
 import { saveSettings, settingsView, useSavedSettings } from '../translation/settings.mjs';
+import { ackView, saveAckHours } from '../orders/ack.mjs';
 
 export function priceOps() {
   return [
@@ -29,6 +30,30 @@ export function priceOps() {
         }
         useSavedSettings(saved.next);
         return { changes: saved.changes, settings: await settingsView(sql) };
+      },
+    },
+    {
+      // Срок первого ответа заказчику по модулям (задача штаба 3fd17197, src/orders/ack.mjs): часы или пусто — выключено.
+      id: 'admin.order_ack.get', method: 'GET', path: '/api/admin/order-ack', auth: 'user', access: { platform: 'admin' },
+      async handler({ sql, registry }) {
+        return { ack: await ackView(sql, registry) };
+      },
+    },
+    {
+      id: 'admin.order_ack.save', method: 'PUT', path: '/api/admin/order-ack', auth: 'user', access: { platform: 'admin' },
+      async handler({ sql, actor, body, registry }) {
+        let changed;
+        try {
+          changed = await sql.tx(async (tx) => {
+            const c = await saveAckHours(tx, registry, actor.id, body?.hours);
+            if (c.length) await audit(tx, actor, 'order_ack.save', 'module', 'order_ack', { changed: c });
+            return c;
+          });
+        } catch (e) {
+          if (e?.settings) throw new HttpError(400, 'bad_settings', e.message);
+          throw e;
+        }
+        return { changed, ack: await ackView(sql, registry) };
       },
     },
   ];
