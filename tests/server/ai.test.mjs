@@ -707,6 +707,24 @@ test('2.288: заказчик сверяется с заданием на оце
   assert.deepEqual(await found(), []);
 });
 
+// 2.298: дата составления отчёта не раньше даты самого задания на оценку, приложенного к делу.
+test('2.298: дата составления отчёта сверяется с датой задания на оценку', async () => {
+  const o = await inWork('Квартира: дата задания');
+  assert.equal((await putResult(o, 'ОТЧЁТ ОБ ОЦЕНКЕ № 11/2026\nДата составления отчёта: 01.10.2026', 'отчёт.txt', 'text/plain')).status, 201);
+  const found = async () => {
+    const res = await spec.req('POST', `/api/orders/${o.id}/review/ai`);
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    return res.body.ai.items.flatMap((i) => i.found ?? []).map((f) => f.text).filter((t) => /раньше даты задания/.test(t));
+  };
+  assert.deepEqual(await found(), [], 'без задания — молчим');
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from('ЗАДАНИЕ НА ОЦЕНКУ № 3 от 05.10.2026\nОбъект оценки: квартира'), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание на оценку.txt'), 'x-doc-kind': 'basis' } })).status, 201);
+  assert.deepEqual(await found(), ['Дата составления отчёта (01.10.2026) раньше даты задания на оценку «Задание на оценку.txt» (05.10.2026, стр. 1) — отчёт не может быть составлен раньше, чем дано задание; исправьте дату составления или приложите к делу верный документ']);
+  await S.sql`update documents set deleted_at = now() where order_id = ${o.id} and kind = 'result'`;
+  assert.equal((await putResult(o, 'ОТЧЁТ ОБ ОЦЕНКЕ № 11/2026\nДата составления отчёта: 06.10.2026', 'отчёт-2.txt', 'text/plain')).status, 201);
+  assert.deepEqual(await found(), []);
+});
+
 test('2.202: площадь в отчёте сверяется с выпиской ЕГРН, приложенной к просьбе о документах; текст выписки в модель не уходит', async () => {
   const o = await inWork('Квартира: площадь по выписке');
   assert.equal((await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { items: ['egrn'] })).status, 201);
