@@ -13585,7 +13585,7 @@ test('2.304: срок по заданию на оценку близко — «�
   await ep.goto('/kabinet');
   await expect(ep.locator('li[data-today="task-due"]')).toHaveText(/^Срок по заданию на оценку близко · \d+$/);
   const row = ep.locator('li[data-today-item="task-due"]').filter({ hasText: 'Срок по заданию близко: квартира' });
-  await expect(row.locator('[data-role="task-due-when"]')).toHaveText(`Срок по заданию завтра — ${ru(inDays(1))} (по заданию на оценку: «Задание банка.txt», стр. 1) — раньше срока дела`);
+  await expect(row.locator('[data-role="task-due-when"]')).toHaveText(`Срок по заданию завтра — ${new Date(`${inDays(1)}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })} (по заданию на оценку: «Задание банка.txt», стр. 1) — раньше срока дела`);
   await expect(row).toContainText('загрузите файл результата к сроку по заданию');
   await expect(ep.locator('li[data-today-item="no-result"]').filter({ hasText: 'Срок по заданию близко: квартира' })).toHaveCount(0);
   await expect(ep.locator('li[data-today-item="hot"]').filter({ hasText: 'Срок по заданию близко: квартира' })).toHaveCount(0);
