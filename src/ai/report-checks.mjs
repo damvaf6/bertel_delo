@@ -2691,6 +2691,80 @@ function customerMatch(docs, ctx) {
   return out;
 }
 
+// ——— 2.307: при оценке для банка предполагаемый пользователь результатов оценки — банк из заявки ———
+// Пользователь — после «предполагаемый пользователь (результатов оценки, отчёта)» / «пользователь результатов оценки».
+// Банк — из заявки (поле bank: Сбербанк), а для «другого банка» — из строки о пользователе в задании на оценку, если она
+// там есть. Цель «банк» — по заявке или по заданию на оценку. Пользователь в отчёте не назван вовсе — тоже находка: в
+// задании на оценку предполагаемые пользователи обязательны (ФСО III), а банк смотрит, что отчёт для него. Несколько
+// пользователей («заказчик и ПАО Сбербанк») — нужный банк среди них, этого довольно.
+const USER_AT = /предполагаем\S*\s+пользовател\S*(?:\s*\([^)\n]{0,30}\))?(?:\s+(?:результат\S*|оценк\S*|отч[её]т\S*|об|и)(?![а-яё])){0,5}|(?<!предполагаем\S*\s)пользовател\S*\s+результат\S*\s+оценки(?:\s+(?:и|об)\s+отч[её]т\S*)?/giu;
+const BANKS = [
+  { id: 'sber', re: /сбер/iu, name: 'ПАО Сбербанк' },
+  { id: 'vtb', re: /(?<![А-ЯЁ])ВТБ(?![А-ЯЁ])/u },
+  { id: 'gpb', re: /газпромбанк/iu },
+  { id: 'alfa', re: /альфа[\s-]*банк/iu },
+  { id: 'rshb', re: /россельхозбанк/iu },
+  { id: 'psb', re: /промсвязьбанк|(?<![А-ЯЁ])ПСБ(?![А-ЯЁ])/u },
+  { id: 'domrf', re: /дом\.?\s*рф/iu },
+  { id: 'sovcom', re: /совкомбанк/iu },
+  { id: 'raif', re: /райффайзен/iu },
+  { id: 'rosbank', re: /(?<![а-яё])росбанк/iu },
+  { id: 'otkr', re: /(?<![а-яё])открыти/iu },
+  { id: 'tbank', re: /(?<![А-ЯЁа-яё])т[-\s]?банк|тинькофф/iu },
+  { id: 'mkb', re: /(?<![А-ЯЁ])МКБ(?![А-ЯЁ])|московский\s+кредитный/iu },
+  { id: 'uralsib', re: /уралсиб/iu },
+];
+const ANY_BANK = /банк|(?<![А-ЯЁ])(?:ВТБ|ПСБ|МКБ)(?![А-ЯЁ])|кредитн\S*\s+организац|дом\.?\s*рф/iu;
+const banksIn = (text) => BANKS.filter((b) => b.re.test(text)).map((b) => b.id);
+export const usersIn = (docs) => labelled(docs, USER_AT, 160).filter((e) => !/^(?:результат|оценки|отч[её]т)/iu.test(e.value));
+function assignmentBank(assignment) {
+  const got = [];
+  for (const d of assignment ?? []) {
+    if (!Array.isArray(d.pages)) continue;
+    const head = d.pages.slice(0, 2).join('\n');
+    if (EGRN_NAME.test(head) && /выписк/iu.test(head)) continue;
+    const e = usersIn([d]).find((x) => banksIn(x.value).length === 1);
+    if (e) got.push({ id: banksIn(e.value)[0], value: e.value, name: d.name, page: e.page, what: assignmentWhat(d) });
+  }
+  return got.length && got.every((g) => g.id === got[0].id) ? got[0] : null;
+}
+function bankUser(docs, ctx) {
+  if (ctx.service && !VALUATION.includes(ctx.service)) return [];
+  const fields = ctx.fields ?? {};
+  if (fields.purpose !== 'bank' && !assignmentPurpose(ctx.assignment)?.kinds.includes('bank')) return [];
+  const main = mainReport(docs);
+  if (!main) return [];
+  const ordered = [main, ...docs.filter((d) => d !== main)];
+  const task = fields.bank === 'sber' ? null : assignmentBank(ctx.assignment);
+  const ref = fields.bank === 'sber' ? { id: 'sber', value: 'ПАО Сбербанк', from: MINE, where: 'в заявке банк — «Сбербанк»' }
+    : task ? { id: task.id, value: task.value, from: `${task.what} «${task.name}»`, where: `${task.what} «${task.name}» — «${task.value.slice(0, 80)}» (стр. ${task.page + 1})` } : null;
+  const users = usersIn(ordered);
+  if (!users.length) {
+    const who = ref ? `банк — ${ref.id === 'sber' ? 'ПАО Сбербанк' : `«${ref.value.slice(0, 80)}»`}` : 'банк, для которого отчёт';
+    return [{ doc: main, page: 0, quote: '', text: `В отчёте не указан предполагаемый пользователь результатов оценки — оценка для банка: укажите пользователем ${who}` }];
+  }
+  const out = [];
+  const seen = new Set();
+  for (const e of users) {
+    if (seen.has(`${e.doc.name}|${e.page}`)) continue;
+    const named = banksIn(e.value);
+    let text = null;
+    if (ref && !named.includes(ref.id)) {
+      text = `Предполагаемый пользователь в отчёте — «${e.value.slice(0, 80)}», а ${ref.where}: при оценке для банка пользователь результатов — этот банк; исправьте отчёт`;
+    } else if (!ref && fields.bank === 'other' && named.length && named.every((b) => b === 'sber')) {
+      text = `Предполагаемый пользователь в отчёте — «${e.value.slice(0, 80)}», а в заявке — другой банк, не Сбербанк: проверьте, для какого банка отчёт`;
+    } else if (!ref && !ANY_BANK.test(e.value)) {
+      text = `Предполагаемый пользователь в отчёте — «${e.value.slice(0, 80)}», а оценка для банка: назовите пользователем банк, для которого отчёт`;
+    }
+    if (!text) continue;
+    seen.add(`${e.doc.name}|${e.page}`);
+    // Пользователь целиком меняется на банк (`flip: 'name'`, public/draftfind.js); длинный или обрезанный — нет.
+    const fix = ref && e.value.length < 120 ? { bad: e.value, right: ref.id === 'sber' ? 'ПАО Сбербанк' : ref.value, from: ref.from, ...(ref.value.length < 120 ? { flip: 'name' } : {}) } : null;
+    out.push({ doc: e.doc, page: e.page, quote: e.quote, ...(fix ? { fix } : {}), text });
+  }
+  return out;
+}
+
 // ——— 2.278: вид стоимости — как в задании на оценку, письме заказчика или определении суда, приложенных к делу ———
 // В задании вид стоимости — после «вид стоимости», а без такой строки — «определить рыночную стоимость» (кадастровая в
 // тексте письма — не вид стоимости). Приложенные документы с разными видами — молчим: какой верный, решает эксперт. В отчёте
@@ -2797,6 +2871,7 @@ const WHOLE = {
   value_date: valueDates,
   purpose_value: purposeValue,
   customer_match: customerMatch,
+  bank_user: bankUser,
   encumbrance_match: encumbranceMatch,
 };
 
@@ -2876,6 +2951,7 @@ export const AUTO_CHECKS = Object.freeze({
   value_date: 'дата оценки одна по всему отчёту и в сопроводительном письме и такая же, как в задании на оценку (письме заказчика, определении суда), если оно приложено к делу',
   purpose_value: 'цель оценки — как в задании на оценку, если оно приложено к делу, иначе как в заявке; вид стоимости один по всему отчёту и в письме и как в задании на оценку, если оно приложено к делу; для суда, нотариуса, банка, сделки и раздела — рыночная',
   customer_match: 'заказчик оценки в отчёте и в письме — как в задании на оценку (письме заказчика), если оно приложено к делу, иначе как в заявке',
+  bank_user: 'при оценке для банка предполагаемый пользователь результатов оценки в отчёте — банк из заявки (Сбербанк) или из задания на оценку',
 });
 
 export function runAutoChecks(names, docs, ctx = {}) {

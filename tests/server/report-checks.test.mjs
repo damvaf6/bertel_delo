@@ -1744,3 +1744,40 @@ test('2.288: заказчик в отчёте — как в задании на 
   assert.deepEqual(run(report('Петров Пётр'), { service: 'handwriting', customer: 'Иванов Иван' }), []);
   assert.deepEqual(run(report('Петров Пётр'), {}, doc(['Выписка из Единого государственного реестра недвижимости\nЗаказчик: Иванов Иван'], 'Выписка ЕГРН.pdf')), []);
 });
+
+// 2.307: при оценке для банка предполагаемый пользователь результатов оценки — банк из заявки или из задания на оценку.
+test('2.307: оценка для банка — пользователь результатов оценки — банк из заявки', () => {
+  const report = (user) => doc([`ОТЧЁТ ОБ ОЦЕНКЕ № 7\nЦель оценки: для залога\n${user === null ? '' : `Предполагаемый пользователь результатов оценки: ${user}`}\nВид стоимости: рыночная`]);
+  const task = (user, name = 'Задание.pdf') => doc([`ЗАДАНИЕ НА ОЦЕНКУ\nЦель оценки: для ипотечного кредитования\nПредполагаемые пользователи результатов оценки и отчёта: ${user}`], name);
+  const run = (rep, fields, ...assignment) => runAutoChecks(['bank_user'], [rep], { service: 'realty', fields, assignment }).bank_user;
+  const sber = { purpose: 'bank', bank: 'sber' };
+  // Сбербанк в заявке — в отчёте Сбербанк (и с заказчиком вместе) — без находки.
+  assert.deepEqual(run(report('ПАО Сбербанк'), sber), []);
+  assert.deepEqual(run(report('Заказчик и ПАО «Сбербанк России»'), sber), []);
+  // Другой банк — находка с заменой на «ПАО Сбербанк».
+  const res = run(report('Банк ВТБ (ПАО)'), sber);
+  assert.equal(res.length, 1);
+  assert.equal(res[0].text, 'Предполагаемый пользователь в отчёте — «Банк ВТБ (ПАО)», а в заявке банк — «Сбербанк»: при оценке для банка пользователь результатов — этот банк; исправьте отчёт');
+  assert.deepEqual(res[0].fix, { bad: 'Банк ВТБ (ПАО)', right: 'ПАО Сбербанк', from: 'в заявке', flip: 'name' });
+  assert.equal(res[0].quote, 'Предполагаемый пользователь результатов оценки: Банк ВТБ (ПАО)');
+  // Только заказчик — тоже находка.
+  assert.equal(run(report('Заказчик'), sber).length, 1);
+  // Пользователь не указан вовсе — находка.
+  assert.deepEqual(run(report(null), sber).map((f) => f.text), ['В отчёте не указан предполагаемый пользователь результатов оценки — оценка для банка: укажите пользователем банк — ПАО Сбербанк']);
+  // «Другой банк» в заявке: банк из задания на оценку.
+  const other = { purpose: 'bank', bank: 'other' };
+  assert.deepEqual(run(report('Банк ВТБ (ПАО)'), other, task('Банк ВТБ (ПАО)')), []);
+  const byTask = run(report('АО «Альфа-Банк»'), other, task('Банк ВТБ (ПАО)'));
+  assert.match(byTask[0].text, /в задании на оценку «Задание\.pdf» — «Банк ВТБ \(ПАО\)» \(стр\. 1\)/);
+  assert.equal(byTask[0].fix.from, 'в задании на оценку «Задание.pdf»');
+  // Без задания: Сбербанк при «другом банке» — проверить; не банк — назвать банк; какой-то банк — молчим.
+  assert.match(run(report('ПАО Сбербанк'), other)[0].text, /другой банк, не Сбербанк/);
+  assert.match(run(report('Заказчик оценки'), other)[0].text, /назовите пользователем банк/);
+  assert.equal(run(report('Заказчик оценки'), other)[0].fix, undefined);
+  assert.deepEqual(run(report('АО «Газпромбанк»'), other), []);
+  // Банк не выбран, цель «банк» из задания: банк из задания.
+  assert.equal(run(report('Заказчик'), {}, task('ПАО Сбербанк')).length, 1);
+  // Цель не «банк» — не сверяем; не оценка — не сверяем.
+  assert.deepEqual(run(report('Заказчик'), { purpose: 'deal' }), []);
+  assert.deepEqual(runAutoChecks(['bank_user'], [report('Заказчик')], { service: 'handwriting', fields: sber }).bank_user, []);
+});
