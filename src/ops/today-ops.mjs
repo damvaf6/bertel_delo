@@ -16,7 +16,8 @@
 // осмотра, а обязательные шаги без фото (2.208). Выписка ЕГРН в деле старше 30 дней на дату оценки (2.224) — запросить свежую.
 // Запрошенные документы не пришли 3 дня (2.234) — «Напомнить заказчику», пока сегодня ещё не напоминали.
 // После ИИ-проверки пришёл запрошенный документ (2.248) — «Проверьте заново».
-// Задание на оценку пришло после черновика, и адрес, дата оценки или вид стоимости в нём не как в таблице задания (2.295).
+// Задание на оценку пришло после черновика, и адрес, дата оценки или вид стоимости в нём не как в таблице задания (2.295),
+// цель оценки не как в таблице задания или заказчик не как в черновике (2.301).
 // В ИИ-проверке неподписанного файла остались расхождения с выпиской ЕГРН, которые можно заменить в черновике (2.266).
 // Руководителю — те же сведения, что в «Делах экспертов» (2.16): без заказчика, полей заявки, документов и переписки.
 // Только свои дела и свои организации.
@@ -33,9 +34,9 @@ import { dueNotes } from './note-ops.mjs';
 import { caseMoves, caseRemind, transferTargets } from './org-ops.mjs';
 import { docWait, egrnOld } from './docreq-ops.mjs';
 import { aiRecheck, aiSignHints, egrnRebuildLeft, egrnSwapLeft } from '../ai/ai.mjs';
-import { latest, taskAddressFor, taskKindFor, valueDateFor } from './draft-ops.mjs';
+import { latest, taskAddressFor, taskCustomerFor, taskKindFor, taskPurposeFor, valueDateFor } from './draft-ops.mjs';
 import { assignmentDocs } from './ai-ops.mjs';
-import { assignmentAddress, sameAddressText } from '../ai/report-checks.mjs';
+import { assignmentAddress, customerOf, customersInText, purposeFits, purposeKinds, sameAddressText, sameCustomer } from '../ai/report-checks.mjs';
 
 // «Горит» — просрочено или до срока не больше двух дней (как подсветка в списке дел).
 const HOT_DAYS = 2;
@@ -320,7 +321,7 @@ export async function egrnSwapCases(sql, userId, rows) {
 }
 
 // 2.295: задание на оценку (письмо заказчика, определение суда) приложено к делу после черновика, а черновик с тех пор
-// заново с ИИ не готовили: дата оценки, вид стоимости или адрес, которые черновик взял бы из задания (2.207, 2.282, 2.281),
+// заново с ИИ не готовили: дата оценки, вид стоимости, адрес, цель оценки или заказчик (2.301), которые черновик взял бы из задания (2.207, 2.282, 2.281),
 // в таблице задания черновика другие или их нет. Только то, что изменилось из-за нового задания: что было и до него — не в
 // счёт (эксперт мог поправить сам). Адрес — только если черновик не взял его из выписки ЕГРН (выписка важнее задания).
 // Таблицы задания в черновике нет — сверять не с чем. Подготовил черновик заново или поправил строку — строка уходит.
@@ -358,6 +359,26 @@ export async function taskLateCases(sql, storage, registry, rows) {
     const label = registry.service(o.module, o.service)?.fields?.find((f) => f.id === 'address')?.label;
     if (addr && label && taskAddressFor(registry, o, before, egrn)?.v !== addr.v && !(cells.get(label) && sameAddressText(assignmentAddress(assignment), cells.get(label)))) {
       items.push({ what: 'address', label, v: addr.v, was: cells.get(label) || null });
+    }
+    // 2.301: цель оценки (2.291) — строка таблицы задания; совместимая цель (ипотека при покупке) не в счёт.
+    const purpose = taskPurposeFor(registry, o, assignment);
+    const aim = registry.service(o.module, o.service)?.fields?.find((f) => f.id === 'purpose')?.label;
+    const prevAim = taskPurposeFor(registry, o, before);
+    if (purpose && aim && prevAim?.kinds.join('+') !== purpose.kinds.join('+') && !purposeKinds(cells.get(aim)).some((k) => purposeFits(purpose, k))) {
+      items.push({ what: 'purpose', label: aim, v: purpose.v, was: cells.get(aim) || null });
+    }
+    // 2.301: заказчик (2.292) — строкой в разделе о заказчике. В черновике назван другой — в счёт; не назван — только если в
+    // задании не владелец заявки (его черновик и так назвал бы заказчиком).
+    const [owner] = await sql`select full_name from users where id = ${o.owner_user_id}`;
+    const customer = taskCustomerFor(registry, o, assignment, owner?.full_name);
+    const prevCustomer = taskCustomerFor(registry, o, before, owner?.full_name);
+    if (customer && !(prevCustomer && sameCustomer(customerOf(prevCustomer.v), customerOf(customer.v)))) {
+      const who = customerOf(customer.v);
+      const named = customersInText(draft?.body);
+      const mine = owner?.full_name ? customerOf(owner.full_name) : null;
+      if (named.length ? !named.some((n) => sameCustomer(n, who)) : !(mine && sameCustomer(mine, who))) {
+        items.push({ what: 'customer', label: 'Заказчик', v: customer.v, was: named[0]?.value ?? null });
+      }
     }
     if (items.length) out.push({ order: o, items, docs: fresh.map((d) => d.name), at: late.at(-1).created_at });
   }

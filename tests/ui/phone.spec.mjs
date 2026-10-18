@@ -12832,7 +12832,7 @@ test('2.295: задание пришло позже черновика — «С�
   await expect(ep).toHaveURL(new RegExp(`#order=${A}&to=task$`));
   const draftText = ep.getByLabel('Текст заключения');
   await expect(draftText).toBeFocused();
-  await expect(ep.locator('#draft-msg')).toHaveText('Задание на оценку пришло после черновика — сверьте таблицу задания с ним (дата оценки, вид стоимости, адрес) или подготовьте черновик заново');
+  await expect(ep.locator('#draft-msg')).toHaveText('Задание на оценку пришло после черновика — сверьте с ним таблицу задания (дата оценки, вид стоимости, адрес, цель оценки) и заказчика или подготовьте черновик заново');
   const picked = await draftText.evaluate((t) => t.value.slice(t.selectionStart, t.selectionEnd));
   expect(picked).toMatch(/^\| Сведение \| Значение \|/);
   expect(picked).toContain('| Адрес объекта | г. Москва, Садовая ул., д. 7, кв. 4 |');
@@ -12842,6 +12842,48 @@ test('2.295: задание пришло позже черновика — «С�
   await ep.getByRole('button', { name: 'Подготовить заново с помощью ИИ' }).click();
   await expect(ep.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
   await expect(draftText).toHaveValue(/\| Вид стоимости \| рыночная \(по заданию на оценку\) \|/);
+  const today = await (await ep.request.get('/api/today', { headers: H })).json();
+  expect(today.expert.task_late.filter((x) => x.id === A)).toEqual([]);
+  for (const p of [ep, cp]) await p.context().close();
+});
+
+// 2.301: задание на оценку пришло позже черновика, а цель оценки и заказчик в нём не как в черновике — те же строки в «Сегодня».
+test('2.301: задание пришло позже черновика — цель оценки и заказчик в «Сегодня»', async ({ browser, baseURL }) => {
+  test.setTimeout(120_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990030101'), customer = await signIn(cp, '+79990030102');
+  const A = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Цель и заказчик позже черновика', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"court","region":"moscow","object_type":"flat","address":"г. Москва, Садовая ул., д. 7, кв. 4"}') returning id`,
+    [customer.id, expert.id, inDays(6)]);
+    return o.id;
+  });
+  await ep.goto(`/kabinet#order=${A}`);
+  await ep.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from('ЗАДАНИЕ НА ОЦЕНКУ\nЗаказчик: Иванов Пётр Сергеевич\nОбъект оценки: квартира\nЦель оценки: для предоставления в банк в качестве залога'),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание банка.txt'), 'x-doc-kind': 'basis' },
+  })).status()).toBe(201);
+  await ep.goto('about:blank');
+  await ep.goto('/kabinet');
+  const row = ep.locator('li[data-today-item="task-late"]').filter({ hasText: 'Цель и заказчик позже черновика' });
+  await expect(row.locator('[data-role="task-late-what"]')).toHaveText('Для чего нужна оценка: по заданию — для предоставления в банк в качестве залога, в черновике — Для суда · Заказчик: по заданию — Иванов Пётр Сергеевич, в черновике нет');
+  await row.scrollIntoViewIfNeeded();
+  await shot(ep, '54s1-specialist-segodnya-cel-zakazchik-pozzhe');
+  await row.locator('button.open').click();
+  await expect(ep).toHaveURL(new RegExp(`#order=${A}&to=task$`));
+  await expect(ep.locator('#draft-msg')).toHaveText('Задание на оценку пришло после черновика — сверьте с ним таблицу задания (дата оценки, вид стоимости, адрес, цель оценки) и заказчика или подготовьте черновик заново');
+  await shot(ep, '54s2-specialist-delo-cel-zakazchik');
+  // Подготовил черновик заново — цель и заказчик из задания, строки нет.
+  ep.once('dialog', (d) => d.accept());
+  await ep.getByRole('button', { name: 'Подготовить заново с помощью ИИ' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  await expect(ep.getByLabel('Текст заключения')).toHaveValue(/^Заказчик: Иванов Пётр Сергеевич \(по заданию на оценку/m);
   const today = await (await ep.request.get('/api/today', { headers: H })).json();
   expect(today.expert.task_late.filter((x) => x.id === A)).toEqual([]);
   for (const p of [ep, cp]) await p.context().close();

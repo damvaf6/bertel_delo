@@ -155,7 +155,7 @@ export function taskKindFor(registry, order, assignment) {
 // 2.291: цель оценки из задания на оценку (письма заказчика, определения суда), как её сверяет ИИ-проверка (2.287, правило
 // purpose_value), — в строку «Для чего нужна оценка» таблицы задания, модели и вместо пометки «заполнить: цель оценки»:
 // задание важнее заявки; цель в заявке другая (не совместимая) — видно рядом. В документах разные цели — эксперт выбирает сам.
-function taskPurposeFor(registry, order, assignment) {
+export function taskPurposeFor(registry, order, assignment) {
   if (!registry.checks(order.module, order.service).some((r) => (r.auto ?? []).includes('purpose_value'))) return null;
   const p = assignmentPurpose(assignment);
   if (!p) return null;
@@ -167,7 +167,7 @@ function taskPurposeFor(registry, order, assignment) {
 // 2.292: заказчик из задания на оценку (письма заказчика), как его сверяет ИИ-проверка (2.288, правило customer_match), —
 // строкой в раздел «Сведения о заказчике…», модели и вместо пометки «заполнить: заказчик»: задание важнее заявки; владелец
 // заявки — другой человек (представитель, родственник) — видно рядом. Задания с разными заказчиками, определение суда — нет.
-function taskCustomerFor(registry, order, assignment, owner) {
+export function taskCustomerFor(registry, order, assignment, owner) {
   if (!registry.checks(order.module, order.service).some((r) => (r.auto ?? []).includes('customer_match'))) return null;
   const c = assignmentCustomer(assignment);
   if (!c) return null;

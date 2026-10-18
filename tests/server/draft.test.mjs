@@ -1197,6 +1197,41 @@ test('2.295: задание на оценку пришло после черно
   assert.deepEqual(await late(), []);
 });
 
+test('2.301: задание пришло позже черновика — сверяются и цель оценки, и заказчик', async () => {
+  const o = await inWork('Квартира: цель и заказчик из позднего задания');
+  const putDoc = (body, name, kind) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), ...(kind ? { 'x-doc-kind': kind } : {}) } });
+  const late = () => spec.req('GET', '/api/today').then((r) => r.body.expert.task_late.filter((x) => x.id === o.id));
+  let d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {})).body.draft;
+  assert.match(d.body, /\| Для чего нужна оценка \| Для суда \|/);
+  assert.equal((await putDoc('ЗАДАНИЕ НА ОЦЕНКУ\nЗаказчик: Иванов Пётр Сергеевич, паспорт 0000 000000\nОбъект оценки: квартира\nЦель оценки: для предоставления в банк в качестве залога', 'Задание на оценку.txt', 'basis')).status, 201);
+  let [r] = await late();
+  assert.deepEqual(r.items, [
+    { what: 'purpose', label: 'Для чего нужна оценка', v: 'для предоставления в банк в качестве залога', was: 'Для суда' },
+    { what: 'customer', label: 'Заказчик', v: 'Иванов Пётр Сергеевич', was: null },
+  ]);
+  // Эксперт поправил цель (своими словами, та же цель) и назвал другого заказчика — остаётся только заказчик, с тем, что в черновике.
+  let body = d.body.replace('| Для чего нужна оценка | Для суда |', '| Для чего нужна оценка | залог в банке |')
+    .replace(/^(## 6\. Сведения о заказчике[^\n]*)$/mu, '$1\nЗаказчик: Петров Иван Ильич');
+  d = (await spec.req('PUT', `/api/orders/${o.id}/draft`, { body, from: d.id })).body.draft;
+  [r] = await late();
+  assert.deepEqual(r.items, [{ what: 'customer', label: 'Заказчик', v: 'Иванов Пётр Сергеевич', was: 'Петров Иван Ильич' }]);
+  // Тот же заказчик другой записью (инициалы, через тире) — строка уходит.
+  body = d.body.replace('Заказчик: Петров Иван Ильич', 'Заказчик — Иванов П. С.');
+  d = (await spec.req('PUT', `/api/orders/${o.id}/draft`, { body, from: d.id })).body.draft;
+  assert.deepEqual(await late(), []);
+  // Черновик заново с ИИ — задание учтено: строки нет.
+  d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+  assert.deepEqual(await late(), []);
+
+  // Заказчик в задании — сам владелец заявки, а цель совместима с заявкой: черновик и так верен — строки нет.
+  const o2 = await inWork('Квартира: позднее задание без перемен');
+  d = (await spec.req('POST', `/api/orders/${o2.id}/draft/ai`, {})).body.draft;
+  assert.equal((await owner.req('POST', `/api/orders/${o2.id}/documents`, Buffer.from('ЗАДАНИЕ НА ОЦЕНКУ\nЗаказчик: Тестова Заказчица\nЦель оценки: для представления в суд по делу о разделе имущества'), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание на оценку.txt'), 'x-doc-kind': 'basis' } })).status, 201);
+  assert.deepEqual((await spec.req('GET', '/api/today')).body.expert.task_late.filter((x) => x.id === o2.id), []);
+});
+
 test('2.291: цель оценки из задания на оценку — в строку таблицы задания, модели и вместо пометки; другая в заявке — рядом', async () => {
   const o = await inWork('Квартира: цель оценки из задания в черновик');
   const putDoc = (body, name, kind) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
