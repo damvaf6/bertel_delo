@@ -43,7 +43,9 @@ function taskTable(registry, order, { skip = [], materials = [], valueDate = nul
     // Правообладатель, вид права и обременения (2.243) — из выписки ЕГРН на объект: в заявке их нет.
     ...[['holders', 'Правообладатель'], ['kind', 'Вид права'], ['enc', 'Ограничения и обременения']]
       .filter(([k]) => egrn?.rights?.[k]?.v).map(([k, label]) => [label, `${egrn.rights[k].v} (по выписке ЕГРН)`]),
-    ['Срок', order.deadline ? ru(order.deadline) : GAP],
+    // Срок составления отчёта — из задания на оценку (2.303); срок дела позже него — рядом.
+    ['Срок', task?.due?.v ? `${task.due.v} (${task.due.by}${task.due.later ? `; срок дела — ${task.due.later}, позже срока по заданию` : ''})`
+      : order.deadline ? ru(order.deadline) : GAP],
   ];
   const got = materials.length
     ? ['', 'Документы, представленные заказчиком:', ...materials.map((m, i) => `${i + 1}. ${m.title} — файл «${m.filename}», получен ${m.day}`)]

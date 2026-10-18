@@ -1320,3 +1320,30 @@ test('2.273: перечень документов черновика — ном
   assert.doesNotMatch(d.body, /КУВИ-001\/2026-12345678/);
   assert.match(d.body, /Выписка из ЕГРН от 05\.10\.2026 — файл/);
 });
+
+test('2.303: срок составления отчёта из задания на оценку — в строку «Срок» таблицы задания и модели; срок дела позже — рядом', async () => {
+  const o = await inWork('Квартира: срок из задания в черновик');
+  const putDoc = (body, name, kind) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), ...(kind ? { 'x-doc-kind': kind } : {}) } });
+  const ruD = (s) => s.split('-').reverse().join('.');
+  const mine = addDays(todayMsk(), 10);
+  // Без задания — срок дела, как раньше.
+  let d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {})).body.draft;
+  assert.equal(d.inputs.task_due, null);
+  assert.ok(d.body.includes(`| Срок | ${ruD(mine)} |`));
+  // Срок по заданию раньше срока дела — он в таблице, срок дела рядом.
+  const early = addDays(todayMsk(), 5);
+  assert.equal((await putDoc(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок оплаты: до ${ruD(addDays(todayMsk(), 20))}\nСрок составления отчёта: не позднее ${ruD(early)}`, 'Задание на оценку.txt', 'basis')).status, 201);
+  d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+  assert.deepEqual(d.inputs.task_due, { v: ruD(early), day: early, what: 'в задании на оценку', by: 'по заданию на оценку',
+    name: 'Задание на оценку.txt', page: 1, later: ruD(mine) });
+  assert.ok(d.body.includes(`| Срок | ${ruD(early)} (по заданию на оценку; срок дела — ${ruD(mine)}, позже срока по заданию) |`));
+  assert.ok(lastPrompt().includes(`Срок составления отчёта в задании на оценку «Задание на оценку.txt» (стр. 1): не позднее ${ruD(early)}`));
+  // Новое письмо переносит срок позже срока дела — берётся поздний, без пометки.
+  const late = addDays(todayMsk(), 15);
+  assert.equal((await putDoc(`Письмо заказчика\nСрок составления отчёта переносится: до ${ruD(late)}`, 'Письмо.txt')).status, 201);
+  d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+  assert.equal(d.inputs.task_due.v, ruD(late));
+  assert.equal(d.inputs.task_due.later, null);
+  assert.ok(d.body.includes(`| Срок | ${ruD(late)} (по письму заказчика) |`));
+});
