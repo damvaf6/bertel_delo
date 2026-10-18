@@ -20,6 +20,7 @@
 // цель оценки не как в таблице задания или заказчик не как в черновике (2.301).
 // В ИИ-проверке неподписанного файла остались расхождения с выпиской ЕГРН, которые можно заменить в черновике (2.266).
 // Срок по заданию на оценку раньше срока дела и через 1–2 дня или прошёл, а своего файла результата нет (2.304).
+// Оценка для банка, задания на оценку нет и не запрошено, а до срока дела 3 дня или меньше (2.306) — запросить одной кнопкой.
 // Руководителю — те же сведения, что в «Делах экспертов» (2.16): без заказчика, полей заявки, документов и переписки.
 // Только свои дела и свои организации.
 import { orderRef } from '../notify/registry.mjs';
@@ -33,7 +34,7 @@ import { answeredExtends, openExtends, orgExtends } from './deadline-ops.mjs';
 import { openHandovers } from './handover-ops.mjs';
 import { dueNotes } from './note-ops.mjs';
 import { caseMoves, caseRemind, transferTargets } from './org-ops.mjs';
-import { docWait, egrnOld } from './docreq-ops.mjs';
+import { bankTaskMissing, docWait, egrnOld } from './docreq-ops.mjs';
 import { aiRecheck, aiSignHints, egrnRebuildLeft, egrnSwapLeft } from '../ai/ai.mjs';
 import { latest, taskAddressFor, taskDueFor, taskCustomerFor, taskKindFor, taskPurposeFor, valueDateFor } from './draft-ops.mjs';
 import { assignmentDocs } from './ai-ops.mjs';
@@ -176,6 +177,12 @@ async function expertPart(sql, actor, registry, today, storage) {
     const old = await egrnOld(sql, storage, registry, o, today);
     if (old && !old.asked) egrnStale.push(item(o, { egrn: old }));
   }
+  // Оценка для банка без задания на оценку, а срок близко (2.306) — запросить у заказчика одной кнопкой.
+  const bankTask = [];
+  for (const o of rows.filter((x) => x.status === 'in_work')) {
+    const b = await bankTaskMissing(sql, storage, registry, o, today);
+    if (b) bankTask.push(item(o, { bank_task: b }));
+  }
   // Запрошенное не пришло 3 дня и дольше (2.234): строка с «Напомнить заказчику»; напомнили — до завтра строки нет.
   const docsWait = [];
   for (const o of rows.filter((x) => x.status === 'in_work')) {
@@ -210,6 +217,7 @@ async function expertPart(sql, actor, registry, today, storage) {
     task_swap: taskSwap,
     egrn_rebuild: egrnRebuild,
     egrn_old: egrnStale,
+    bank_task: bankTask,
     docs_wait: docsWait,
     // Отказ в переносе, а срок в дни «не принимаю дела» (2.215) — своей строкой с «Попросить руководителя передать дело».
     away_declined: awayDeclined,

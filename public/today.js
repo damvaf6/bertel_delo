@@ -13,6 +13,7 @@
 // Отказали в переносе, а срок в дни «не принимаю дела» (2.215) — «Попросить руководителя передать дело» прямо в строке.
 // Исправленный файл больше суток не подписан (2.204) — отдельной красной строкой, сразу к файлу.
 // Выписка ЕГРН в деле старше 30 дней на дату оценки (2.224) — «Запросить свежую выписку» прямо в строке.
+// Оценка для банка без задания на оценку, а срок близко (2.306) — «Запросить задание» прямо в строке.
 // После ИИ-проверки пришёл запрошенный документ (2.248) — строка к ИИ-проверке в деле.
 // Задание на оценку пришло позже черновика (2.295) — строка к таблице задания в черновике.
 // «Можно продолжать» (2.86) — пришли документы, осмотр или сообщение. Диспетчеру (2.42) — деньги, проверка, цена, подбор, молчащие исполнители, горящие сроки. Нажатие — в дело или в раздел
@@ -98,6 +99,21 @@ function egrnFresh(x) {
     btn.disabled = true;
     try {
       await api('POST', `/api/orders/${x.id}/doc-requests`, { items: ['egrn'], fresh_egrn: true });
+      msg.textContent = 'Запрошено — заказчику отправлено уведомление';
+      btn.remove();
+    } catch (err) { msg.textContent = err.message; btn.disabled = false; }
+  };
+  return [btn, msg];
+}
+
+// «Запросить задание у заказчика» (2.306): запрос документов в деле — заказчику уведомление.
+function bankTaskAsk(x) {
+  const msg = el('div', { class: 'muted', 'data-role': 'bank-task-msg' });
+  const btn = el('button', { type: 'button', class: 'secondary', 'data-action': 'bank-task-ask' }, 'Запросить задание у заказчика');
+  btn.onclick = async () => {
+    btn.disabled = true;
+    try {
+      await api('POST', `/api/orders/${x.id}/doc-requests`, { items: [x.bank_task.item_id] });
       msg.textContent = 'Запрошено — заказчику отправлено уведомление';
       btn.remove();
     } catch (err) { msg.textContent = err.message; btn.disabled = false; }
@@ -238,6 +254,12 @@ export async function loadToday() {
         { class: 'overdue', role: 'egrn-old-why', text: `«${x.egrn.name}» от ${dayRu(x.egrn.day)} — старше 30 дней на ${x.egrn.on_value ? `дату оценки ${dayRu(x.egrn.on)}` : 'сегодня'}` },
         deadline(x, t.today)],
       (x) => { location.hash = `order=${x.id}&to=docs`; }, egrnFresh),
+      // Оценка для банка, задания на оценку нет и не запрошено, а срок через 3 дня или меньше (2.306) — без задания банк
+      // отчёт может не принять; строка к запросу документов в деле, кнопка — запросить сразу.
+      ...group('bank-task', 'Запросите задание на оценку от банка', e.bank_task ?? [], (x) => [x.title,
+        { class: 'overdue', role: 'bank-task-why', text: `Оценка для банка, а задания на оценку в деле нет и его не запрашивали — ${deadline(x, t.today)}` },
+        'по заданию сверяются дата оценки, вид стоимости и адрес'],
+      (x) => { location.hash = `order=${x.id}&to=docs`; }, bankTaskAsk),
       // Запрошенные документы не пришли 3 дня (2.234) — строка к запросу документов в деле, кнопка — напомнить сразу.
       ...group('docs-wait', 'Документы не пришли', e.docs_wait ?? [], (x) => [x.title,
         { class: 'overdue', role: 'docs-wait-what', text: `Ждём ${waited(x.wait.since)}: ${x.wait.titles.join(', ')}` },

@@ -424,3 +424,36 @@ test('2.299: задание на оценку от банка — только �
   const after = await ids();
   assert.ok(!after.includes('bank_task') && after.includes('egrn'), after.join());
 });
+
+// 2.306: оценка для банка, задания на оценку нет и не запрошено, а до срока 3 дня или меньше — в «Сегодня» «Запросите задание».
+test('2.306: задания от банка нет и не запрошено, срок близко — строка в «Сегодня»; запросили или приложили — строки нет', async () => {
+  const o = await inWork('Квартира для банка: срок близко', 'realty', { ...FIELDS, purpose: 'bank' });
+  const deal = await inWork('Квартира для сделки: срок близко');
+  for (const x of [o, deal]) assert.equal((await spec.req('POST', `/api/orders/${x.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  const rows = async () => (await spec.req('GET', '/api/today')).body.expert.bank_task;
+  // Срок через 10 дней — рано.
+  assert.ok(!(await rows()).some((x) => x.id === o.id));
+  await S.sql`update orders set deadline = ${addDays(todayMsk(), 3)} where id = any(${[o.id, deal.id]}::uuid[])`;
+  let r = await rows();
+  const mine = r.find((x) => x.id === o.id);
+  assert.ok(mine, JSON.stringify(r));
+  assert.deepEqual(mine.bank_task, { item_id: 'bank_task', title: 'Задание на оценку от банка', days: 3 });
+  assert.ok(!r.some((x) => x.id === deal.id), 'не для банка — строки нет');
+  // Чужие не видят: заказчик и посторонний — без экспертной части.
+  assert.equal((await owner.req('GET', '/api/today')).body.expert, null);
+  assert.equal((await stranger.req('GET', '/api/today')).body.expert ?? null, null);
+  // Просрочено — строка остаётся.
+  await S.sql`update orders set deadline = ${addDays(todayMsk(), -1)} where id = ${o.id}`;
+  assert.equal((await rows()).find((x) => x.id === o.id).bank_task.days, -1);
+  // Запросили — строки нет; сняли просьбу — снова есть.
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { items: ['bank_task'] })).status, 201);
+  assert.ok(!(await rows()).some((x) => x.id === o.id));
+  const [rq] = (await spec.req('GET', `/api/orders/${o.id}/doc-requests`)).body.requests;
+  assert.equal((await spec.req('DELETE', `/api/orders/${o.id}/doc-requests/${rq.id}`)).status, 200);
+  assert.ok((await rows()).some((x) => x.id === o.id));
+  // Задание уже в деле (письмо банка) — строки нет.
+  const put = await owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from('ПАО Банк\nЗадание на оценку\nДата оценки: 01.10.2026'), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание банка.txt') } });
+  assert.equal(put.status, 201, JSON.stringify(put.body));
+  assert.ok(!(await rows()).some((x) => x.id === o.id));
+});
