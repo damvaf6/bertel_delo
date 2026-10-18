@@ -1062,6 +1062,49 @@ test('2.271: повторная подпись — у пункта из расх
   assert.notEqual((await stranger.req('GET', `/api/orgs/${org.id}/signing`)).status, 200);
 });
 
+test('2.296: «Вернуть эксперту» — находки по цели и заказчику (как в задании на оценку) отдельными пунктами', async () => {
+  const org = await makeOrg(S.sql, 'ООО «Цель и заказчик»');
+  const head = await login(S, '+79990001610');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  const ex = await login(S, '+79990001611');
+  await makeSpecialist(S.sql, ex.user.id);
+  await addMember(S.sql, org.id, ex.user.id, 'member');
+  assert.equal((await ex.req('PATCH', '/api/me', { full_name: 'Эксперт Целин' })).status, 200);
+  assert.equal((await ex.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  const o = await inWork('Квартира: цель и заказчик по заданию', ex);
+  const putTxt = (who, url, body, name) => who.req('POST', url, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } });
+  assert.equal((await putTxt(owner, `/api/orders/${o.id}/documents`, 'ЗАДАНИЕ НА ОЦЕНКУ\nЗаказчик: Петров Пётр Петрович\nЦель оценки: для ипотеки', 'Задание на оценку.txt')).status, 201);
+  const d1 = (await putTxt(ex, `/api/orders/${o.id}/results`, 'ОТЧЁТ ОБ ОЦЕНКЕ\nЗаказчик: Сидоров Иван Иванович\nЦель оценки: для нотариуса', 'Отчёт.txt')).body.document;
+  assert.equal((await sign(d1, undefined, ex)).status, 201);
+  assert.equal((await ex.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
+  const h = (await head.req('GET', `/api/orgs/${org.id}/signing`)).body.items.flatMap((x) => x.documents).find((x) => x.id === d1.id).ai_check;
+  const order = h.order.map(({ text, from }) => ({ text, from }));
+  // Коротко, как дата оценки (2.269): без «… берётся из задания» и совета в конце — пункт «… — исправьте, как в задании на оценку».
+  const purpose = order.find((x) => x.text.startsWith('Цель оценки'));
+  const customer = order.find((x) => x.text.startsWith('Заказчик'));
+  assert.ok(purpose && customer, JSON.stringify(order));
+  assert.deepEqual(customer, { text: 'Заказчик в отчёте — «Сидоров Иван Иванович», а в задании на оценку «Задание на оценку.txt» — «Петров Пётр Петрович»', from: 'в задании на оценку' });
+  assert.equal(purpose.from, 'в задании на оценку');
+  assert.match(purpose.text, /^Цель оценки в отчёте — «для нотариуса» \(.+\), а в задании на оценку «Задание на оценку\.txt» — «для ипотеки»$/);
+  // Возврат с этими пунктами — привязка к находке (kind 'order', верное значение из задания); эксперту — fix для кнопки (2.285).
+  const p1 = `${purpose.text} — исправьте, как в задании на оценку`;
+  const p2 = `${customer.text} — исправьте, как в задании на оценку`;
+  const r = await head.req('POST', `/api/org-documents/${d1.id}/return`, { comment: `1. ${p1}\n2. ${p2}` });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  const links = await S.sql`select n, egrn from org_return_items where return_id = ${r.body.return.id} order by n`;
+  assert.deepEqual(links.map((x) => [x.n, x.egrn?.kind ?? null, x.egrn?.right ?? null]), [[1, 'order', 'для ипотеки'], [2, 'order', 'Петров Пётр Петрович']]);
+  const mine = (await docsOf(ex, o)).org_returns[0].items;
+  assert.deepEqual(mine.map((p) => p.fix?.right ?? null), ['для ипотеки', 'Петров Пётр Петрович']);
+  // Исправленная версия — после новой ИИ-проверки оба пункта ушли.
+  const d2 = (await putTxt(ex, `/api/orders/${o.id}/results`, 'ОТЧЁТ ОБ ОЦЕНКЕ\nЗаказчик: Петров Пётр Петрович\nЦель оценки: для ипотеки', 'Отчёт 2.txt')).body.document;
+  assert.equal((await sign(d2, undefined, ex)).status, 201);
+  assert.equal((await ex.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
+  const state = (await head.req('GET', `/api/orgs/${org.id}/signing`)).body.items.find((x) => x.order_ref.endsWith(o.id.slice(0, 8).toUpperCase()))
+    .returns[0].items.map((p) => p.order ?? null);
+  assert.deepEqual(state, ['gone', 'gone']);
+});
+
 test('2.154: ИИ-проверка — дата составления отчёта не позже дня подписи эксперта; без подписи — не позже сегодня', async () => {
   const o = await inWork('Квартира — дата отчёта и подпись');
   const ru = (d) => d.split('-').reverse().join('.');
