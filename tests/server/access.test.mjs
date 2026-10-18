@@ -2043,8 +2043,8 @@ test('сводка за месяц (2.117): дни от принятия до с
   assert.equal(r.total.late_first_moved, 1);
   const csv = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv`, undefined, { binary: true })).body.toString('utf8');
   assert.ok(csv.includes('Дней в среднем от принятия до сдачи;Позже первоначального срока;Из них с переносом срока;В первоначальный срок, без переносов'), csv);
-  assert.ok(/Эксперт Медленнов;[^\r\n]*;6,5;1;0;1;;0;0;0;0;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+\r\n/.test(csv), csv);
-  assert.ok(/Итого;[^\r\n]*;5,8;3;1;2;;0;0;0;0;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+\r\n/.test(csv), csv);
+  assert.ok(/Эксперт Медленнов;[^\r\n]*;6,5;1;0;1;;0;0;0;0;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+\r\n/.test(csv), csv);
+  assert.ok(/Итого;[^\r\n]*;5,8;3;1;2;;0;0;0;0;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+\r\n/.test(csv), csv);
 });
 
 test('сводка за месяц (2.124): сравнение с прошлым месяцем — сдано, в срок, возвраты у эксперта и в итоге', async () => {
@@ -2166,8 +2166,8 @@ test('сводка за месяц (2.168): дни от возврата рук�
   assert.deepEqual([now.total.resign_days, now.total.resign_n, now.total.resign_wait], [null, 0, 0]);
   const csv = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv&month=${prev}`, undefined, { binary: true })).body.toString('utf8');
   assert.ok(csv.includes('Из них с переносом срока;В первоначальный срок, без переносов;Дней в среднем от возврата до новой подписи;Ждут новой подписи после возврата'), csv);
-  assert.ok(/Эксперт Исправлов;[^\r\n]*;0,8;0;4;4;0;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+\r\n/.test(csv), csv);
-  assert.ok(/Эксперт Ждунов;[^\r\n]*;;1;0;0;0;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+\r\n/.test(csv), csv);
+  assert.ok(/Эксперт Исправлов;[^\r\n]*;0,8;0;4;4;0;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+\r\n/.test(csv), csv);
+  assert.ok(/Эксперт Ждунов;[^\r\n]*;;1;0;0;0;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+\r\n/.test(csv), csv);
   // Чужой организации сводка не видна.
   assert.equal((await ex.a.req('GET', `/api/orgs/${org.id}/report?month=${prev}`)).status, 403);
 });
@@ -2231,8 +2231,8 @@ test('сводка за месяц (2.199): сколько файлов эксп
   assert.deepEqual([now.total.signed, now.total.signed_no_ai], [0, 0]);
   const csv = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv&month=${prev}`, undefined, { binary: true })).body.toString('utf8');
   assert.ok(csv.includes(';Подписал файлов;Из них без ИИ-проверки этой версии;Из них не отметив все пункты замечания;'), csv);
-  assert.ok(/Эксперт Проверкин;[^\r\n]*;3;2;0;1;0;0;0;0;0;0;0;0;0;0;0\r\n/.test(csv), csv);
-  assert.ok(/Итого;[^\r\n]*;3;2;0;1;0;0;0;0;0;0;0;0;0;0;0\r\n/.test(csv), csv);
+  assert.ok(/Эксперт Проверкин;[^\r\n]*;3;2;0;1;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0\r\n/.test(csv), csv);
+  assert.ok(/Итого;[^\r\n]*;3;2;0;1;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0\r\n/.test(csv), csv);
   // Эксперт b не видит сводку организации.
   assert.equal((await ex.b.req('GET', `/api/orgs/${org.id}/report`)).status, 403);
 });
@@ -2289,7 +2289,7 @@ test('сводка за месяц (2.217): сколько файлов эксп
   assert.deepEqual([e.signed, e.signed_points_left], [4, 2]);
   assert.deepEqual([r.total.signed, r.total.signed_points_left], [4, 2]);
   const csv = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv&month=${prev}`, undefined, { binary: true })).body.toString('utf8');
-  assert.ok(/Эксперт Пунктов;[^\r\n]*;4;4;2;4;0;0;4;0;0;0;0;0;0;0;0\r\n/.test(csv), csv);
+  assert.ok(/Эксперт Пунктов;[^\r\n]*;4;4;2;4;0;0;4;0;0;0;0;0;0;0;0;0;0;0;0;0\r\n/.test(csv), csv);
   assert.equal((await ex.req('GET', `/api/orgs/${org.id}/report`)).status, 403);
 });
 
@@ -2363,9 +2363,9 @@ test('сводка за месяц (2.265): расхождения с выпис
   assert.deepEqual([now.total.first_signed, now.total.egrn_first, now.total.egrn_rules], [0, 0, []]);
   const csv = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv&month=${prev}`, undefined, { binary: true })).body.toString('utf8');
   assert.ok(csv.includes(';Впервые подписал дел;Расхождений с выпиской ЕГРН при первой подписи;В скольких делах;Первая подпись без ИИ-проверки;'), csv);
-  assert.ok(/Эксперт Выпискин;[^\r\n]*;3;3;1;1;0;0;0;0;0;0;0;0\r\n/.test(csv), csv);
-  assert.ok(/Эксперт Чистов;[^\r\n]*;1;1;1;0;0;0;0;0;0;0;0;0\r\n/.test(csv), csv);
-  assert.ok(/Итого;[^\r\n]*;4;4;2;1;0;0;0;0;0;0;0;0\r\n/.test(csv), csv);
+  assert.ok(/Эксперт Выпискин;[^\r\n]*;3;3;1;1;0;0;0;0;0;0;0;0;0;0;0;0;0\r\n/.test(csv), csv);
+  assert.ok(/Эксперт Чистов;[^\r\n]*;1;1;1;0;0;0;0;0;0;0;0;0;0;0;0;0;0\r\n/.test(csv), csv);
+  assert.ok(/Итого;[^\r\n]*;4;4;2;1;0;0;0;0;0;0;0;0;0;0;0;0;0\r\n/.test(csv), csv);
   assert.ok(csv.includes('Расхождения с выпиской ЕГРН при первой подписи — пункт проверки;Сколько\r\nНедвижимость и земля;3\r\nПрава и обременения;1\r\n'), csv);
   // Эксперт сводку организации не видит.
   assert.equal((await ex.a.req('GET', `/api/orgs/${org.id}/report`)).status, 403);
