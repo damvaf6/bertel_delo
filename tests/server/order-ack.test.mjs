@@ -1,5 +1,6 @@
-// Ответ заказчику сразу после отправки заявки (задача штаба 3fd17197): срок — настройка администратора по модулю, без неё
-// ответа со сроком нет; одна строка «принята, обычно … в течение N часов»; не успели — один раз «задерживаемся» заказчику
+// Ответ заказчику сразу после отправки заявки (задача штаба 3fd17197): срок — настройка администратора по модулю, пока не
+// задавали — осторожные 3 суток / 2 суток без точного часа (решение Дамира 18.10.2026), пусто — ответа со сроком нет; одна
+// строка «принята, как правило, в течение N»; «как на деле» — от отправки до цены; не успели — один раз «задерживаемся» заказчику
 // и сигнал диспетчерам; цена назначена — обещание снято. Учебные данные (+7999000xxxx).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -37,15 +38,28 @@ const events = async (userId, orderId) => (await S.sql`select event from notific
                                                       and event like 'ack%' order by id`).map((r) => r.event);
 const save = (hours) => admin.req('PUT', '/api/admin/order-ack', { hours });
 
-test('без настройки — ответа со сроком нет и «задерживаемся» не приходит (до решения Дамира всё выключено)', async () => {
+test('пока не задавали — осторожные сроки: экспертиза 3 суток, переводы 2 суток, без точного часа (решение Дамира 18.10.2026)', async () => {
   const view = (await admin.req('GET', '/api/admin/order-ack')).body.ack;
-  assert.deepEqual(view.modules.map((m) => [m.id, m.hours]), [['expertise', null], ['translation', null]]);
+  assert.deepEqual(view.modules.map((m) => [m.id, m.hours]), [['expertise', 72], ['translation', 48]]);
   assert.deepEqual(view.history, []);
+  assert.deepEqual(view.facts.map((f) => [f.id, f.orders, f.median_hours]), [['expertise', 0, null], ['translation', 0, null]]);
   const o = await submitted();
-  assert.equal(o.ack_due_at, null);
-  assert.equal(await ackOf(owner, o.id), null);
-  assert.equal(await remindAck(S.sql, { now: new Date(Date.now() + 1000 * HOUR) }), 0);
-  assert.deepEqual(await events(owner.user.id, o.id), []);
+  assert.equal(new Date(o.ack_due_at) - new Date(o.submitted_at), 72 * HOUR);
+  const ack = await ackOf(owner, o.id);
+  assert.equal(ack.text, `Заявка № ${o.id.slice(0, 8).toUpperCase()} принята. Цену назначит диспетчер — как правило, в течение 3 суток. `
+    + 'Если понадобится больше времени — сообщим.');
+  assert.doesNotMatch(ack.text, /МСК|до \d/, 'точного часа не обещаем');
+  const t = await submitted('translation');
+  assert.match((await ackOf(owner, t.id)).text, /в течение 2 суток\./);
+  assert.equal(await remindAck(S.sql, { now: new Date(Date.now() + 47 * HOUR) }), 0);
+
+  // Цена назначена — в «Как на деле» у администратора: сколько заявок, обычно и дольше всего, в часах.
+  assert.equal((await dispatcher.req('PUT', `/api/orders/${o.id}/price`, { price: '15000' })).status, 200);
+  await S.sql`update audit_log set at = ${new Date(new Date(o.submitted_at).getTime() + 5 * HOUR)}
+              where subject_type = 'order' and subject_id = ${o.id} and action = 'order.price'`;
+  assert.equal((await owner.req('POST', `/api/orders/${t.id}/status`, { from: 'matching', to: 'cancelled' })).status, 200);
+  const facts = (await admin.req('GET', '/api/admin/order-ack')).body.ack.facts;
+  assert.deepEqual(facts.map((f) => [f.id, f.orders, f.median_hours, f.max_hours]), [['expertise', 1, 5, 5], ['translation', 0, null, null]]);
 });
 
 test('настройка: только целые часы от 1 до 168 или пусто; история — кто и что', async () => {
@@ -56,7 +70,7 @@ test('настройка: только целые часы от 1 до 168 ил�
   }
   const r = await save({ expertise: 24, translation: '' });
   assert.equal(r.status, 200, JSON.stringify(r.body));
-  assert.deepEqual(r.body.changed, ['expertise']);
+  assert.deepEqual(r.body.changed, ['expertise', 'translation'], 'переводы: было 48 по умолчанию — стало пусто');
   assert.deepEqual(r.body.ack.modules.map((m) => m.hours), [24, null]);
   assert.equal(r.body.ack.history.length, 1);
   assert.deepEqual(r.body.ack.history[0].hours, { expertise: 24, translation: null });
@@ -69,7 +83,7 @@ test('заявка отправлена — одна строка с номер�
   assert.equal(new Date(o.ack_due_at) - new Date(o.submitted_at), 24 * HOUR, 'срок — из настройки модуля');
   const ack = await ackOf(owner, o.id);
   assert.equal(ack.late, false);
-  assert.match(ack.text, new RegExp(`^Заявка № ${o.id.slice(0, 8).toUpperCase()} принята\\. Обычно диспетчер назначает цену в течение 24 часов — до .+ МСК\\. Если не успеем — сообщим\\.$`));
+  assert.match(ack.text, new RegExp(`^Заявка № ${o.id.slice(0, 8).toUpperCase()} принята\\. Цену назначит диспетчер — как правило, в течение 24 часов\\. Если понадобится больше времени — сообщим\\.$`));
   assert.ok(await ackOf(dispatcher, o.id), 'диспетчер видит, что обещано заказчику');
   assert.equal(await ackOf(spec, o.id), undefined, 'постороннему заявка не видна вовсе');
   // Сразу после отправки — никаких уведомлений заказчику (ответ — на экране и в письме), без дублей.
