@@ -12648,6 +12648,40 @@ test('2.298: дата составления — не раньше задани�
   for (const p of [ep, cp]) await p.context().close();
 });
 
+// 2.302: дата составления отчёта позже срока из приложенного задания на оценку — находка в «Реквизитах».
+test('2.302: дата составления — не позже срока из задания на оценку', async ({ browser, baseURL }) => {
+  test.setTimeout(120_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990030201'), customer = await signIn(cp, '+79990030202');
+  const A = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Срок по заданию: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"deal","region":"moscow","object_type":"flat","address":"г. Москва, Садовая ул., д. 7, кв. 4"}') returning id`,
+    [customer.id, expert.id, inDays(6)]);
+    return o.id;
+  });
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from('ЗАДАНИЕ НА ОЦЕНКУ № 4 от 01.10.2026\nОбъект оценки: квартира\nВид стоимости: рыночная\nСрок составления отчёта: не позднее 10.10.2026'),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание на оценку.txt'), 'x-doc-kind': 'basis' },
+  })).status()).toBe(201);
+  expect((await ep.request.post(`/api/orders/${A}/results`, {
+    data: Buffer.from(['ОТЧЁТ ОБ ОЦЕНКЕ № 99/2026', 'Дата составления отчёта: 12.10.2026', 'Вид определяемой стоимости: рыночная', 'Итоговая стоимость 10 000 000 руб.'].join('\n')),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Отчёт.txt') },
+  })).status()).toBe(201);
+  await ep.goto(`/kabinet#order=${A}`);
+  await ep.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(ep.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  const find = ep.locator('#review-checks li[data-check="requisites"] .ai-found li').filter({ hasText: 'позже срока из' });
+  await expect(find).toHaveCount(1);
+  await expect(find).toContainText('Дата составления отчёта (12.10.2026) позже срока из задания на оценку «Задание на оценку.txt» (не позднее 10.10.2026, стр. 1)');
+  await find.scrollIntoViewIfNeeded();
+  await shot(ep, '54t1-specialist-data-sostavleniya-pozzhe-sroka');
+  for (const p of [ep, cp]) await p.context().close();
+});
+
 // 2.299: оценка для банка — в запросе документов пункт «Задание на оценку от банка»; приложено — пункта больше нет.
 test('2.299: задание на оценку от банка — в запросе документов', async ({ browser, baseURL }) => {
   test.setTimeout(120_000);
