@@ -117,7 +117,7 @@ export async function assignmentDocs(sql, storage, order) {
     const got = buf ? await extractPages(buf, d.filename, d.mime) : null;
     if (!got) continue;
     const head = got.pages.slice(0, 2).join('\n');
-    if (d.kind === 'basis' || d.asked || ASSIGNMENT_TEXT.test(head) || /задани|письм/iu.test(d.filename)) out.push({ id: d.id, name: d.filename, pages: got.pages });
+    if (d.kind === 'basis' || d.asked || ASSIGNMENT_TEXT.test(head) || /задани|письм/iu.test(d.filename)) out.push({ id: d.id, name: d.filename, pages: got.pages, asked: d.asked });
   }
   return out;
 }
