@@ -1163,6 +1163,40 @@ test('2.282: вид стоимости из задания на оценку —
   assert.doesNotMatch(lastPrompt(), /Вид стоимости в задании на оценку/);
 });
 
+test('2.295: задание на оценку пришло после черновика, а в таблице задания другое — строка в «Сегодня» до сверки', async () => {
+  const o = await inWork('Квартира: задание пришло позже черновика');
+  const putDoc = (body, name, kind) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), ...(kind ? { 'x-doc-kind': kind } : {}) } });
+  const late = () => spec.req('GET', '/api/today').then((r) => r.body.expert.task_late.filter((x) => x.id === o.id));
+  assert.deepEqual(await late(), [], 'черновика нет — строки нет');
+  // Задание до черновика — черновик его уже учёл: строки нет.
+  assert.equal((await putDoc('Письмо заказчика\nПросим оценить квартиру', 'Письмо.txt')).status, 201);
+  let d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {})).body.draft;
+  assert.deepEqual(await late(), []);
+  // Не задание (просто фото документа) после черновика — строки нет.
+  assert.equal((await putDoc('Паспорт собственника', 'Паспорт.txt')).status, 201);
+  assert.deepEqual(await late(), []);
+  assert.equal((await putDoc('ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nАдрес объекта: г. Москва, ул. Садовая, д. 5, кв. 12\nВид стоимости: рыночная\nДата оценки: 03.10.2026', 'Задание на оценку.txt', 'basis')).status, 201);
+  let [r] = await late();
+  assert.deepEqual(r.items, [
+    { what: 'date', label: 'Дата оценки', v: '03.10.2026', was: null },
+    { what: 'kind', label: 'Вид стоимости', v: 'рыночная', was: null },
+    { what: 'address', label: 'Адрес объекта', v: 'г. Москва, ул. Садовая, д. 5, кв. 12', was: 'г. Москва, тестовая ул., 9' },
+  ]);
+  assert.deepEqual(r.docs, ['Задание на оценку.txt']);
+  assert.ok(r.doc_at);
+  // Эксперт сам поправил строки таблицы — то, что совпало, уходит; адрес в другой записи — тот же адрес, тоже уходит.
+  const body = d.body.replace('| Адрес объекта | г. Москва, тестовая ул., 9 |', '| Адрес объекта | Москва, Садовая улица, дом 5, квартира 12 |')
+    .replace(/(\| Услуга \| [^\n]*\|\n)/u, '$1| Дата оценки | 03.10.2026 |\n');
+  d = (await spec.req('PUT', `/api/orders/${o.id}/draft`, { body, from: d.id })).body.draft;
+  [r] = await late();
+  assert.deepEqual(r.items.map((i) => i.what), ['kind']);
+  // Черновик подготовлен заново с ИИ — задание уже учтено: строки нет.
+  d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+  assert.match(d.body, /\| Вид стоимости \| рыночная \(по заданию на оценку\) \|/);
+  assert.deepEqual(await late(), []);
+});
+
 test('2.291: цель оценки из задания на оценку — в строку таблицы задания, модели и вместо пометки; другая в заявке — рядом', async () => {
   const o = await inWork('Квартира: цель оценки из задания в черновик');
   const putDoc = (body, name, kind) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {

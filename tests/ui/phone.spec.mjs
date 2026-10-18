@@ -12653,6 +12653,56 @@ test('2.294: заказчик — замена в черновике по зад
   for (const p of [ep, cp]) await p.context().close();
 });
 
+// 2.295: задание на оценку приложено после черновика, а в таблице задания черновика другое — в «Сегодня» строка «Задание
+// пришло позже черновика — сверьте таблицу задания»; нажатие ведёт к таблице задания в тексте черновика.
+test('2.295: задание пришло позже черновика — «Сегодня» и таблица задания', async ({ browser, baseURL }) => {
+  test.setTimeout(120_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990029501'), customer = await signIn(cp, '+79990029502');
+  const A = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Задание позже черновика: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"deal","region":"moscow","object_type":"flat","address":"г. Москва, Садовая ул., д. 7, кв. 4"}') returning id`,
+    [customer.id, expert.id, inDays(6)]);
+    return o.id;
+  });
+  await ep.goto(`/kabinet#order=${A}`);
+  await ep.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from('ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nАдрес объекта: г. Москва, Садовая ул., д. 7, кв. 14\nВид стоимости: рыночная\nДата оценки: 03.10.2026'),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание на оценку.txt'), 'x-doc-kind': 'basis' },
+  })).status()).toBe(201);
+  await ep.goto('about:blank');
+  await ep.goto('/kabinet');
+  const row = ep.locator('li[data-today-item="task-late"]').filter({ hasText: 'Задание позже черновика: квартира' });
+  await expect(ep.locator('li[data-today="task-late"]')).toHaveText(/^Задание пришло позже черновика — сверьте таблицу задания · \d+$/);
+  await expect(row.locator('[data-role="task-late-what"]')).toHaveText('Дата оценки: по заданию — 03.10.2026, в черновике нет · Вид стоимости: по заданию — рыночная, в черновике нет · Адрес объекта: по заданию — г. Москва, Садовая ул., д. 7, кв. 14, в черновике — г. Москва, Садовая ул., д. 7, кв. 4');
+  await expect(row).toContainText('«Задание на оценку.txt» приложено');
+  await row.scrollIntoViewIfNeeded();
+  await shot(ep, '54q2-specialist-segodnya-zadanie-pozzhe-chernovika');
+  await row.locator('button.open').click();
+  await expect(ep).toHaveURL(new RegExp(`#order=${A}&to=task$`));
+  const draftText = ep.getByLabel('Текст заключения');
+  await expect(draftText).toBeFocused();
+  await expect(ep.locator('#draft-msg')).toHaveText('Задание на оценку пришло после черновика — сверьте таблицу задания с ним (дата оценки, вид стоимости, адрес) или подготовьте черновик заново');
+  const picked = await draftText.evaluate((t) => t.value.slice(t.selectionStart, t.selectionEnd));
+  expect(picked).toMatch(/^\| Сведение \| Значение \|/);
+  expect(picked).toContain('| Адрес объекта | г. Москва, Садовая ул., д. 7, кв. 4 |');
+  await shot(ep, '54q3-specialist-delo-tablica-zadaniya');
+  // Подготовил черновик заново — задание учтено, строки нет.
+  ep.once('dialog', (d) => d.accept());
+  await ep.getByRole('button', { name: 'Подготовить заново с помощью ИИ' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  await expect(draftText).toHaveValue(/\| Вид стоимости \| рыночная \(по заданию на оценку\) \|/);
+  const today = await (await ep.request.get('/api/today', { headers: H })).json();
+  expect(today.expert.task_late.filter((x) => x.id === A)).toEqual([]);
+  for (const p of [ep, cp]) await p.context().close();
+});
+
 // 2.283: «Заменить всё по заданию» — адрес, вид стоимости и дата оценки, разошедшиеся с заданием на оценку, одной кнопкой;
 // черновик сохранён одной версией, под кнопкой — что было и что стало; «Отменить всё» возвращает прежнее.
 test('2.283: «Заменить всё по заданию» и «Отменить всё»', async ({ browser, baseURL }) => {

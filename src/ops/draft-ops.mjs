@@ -126,7 +126,7 @@ async function onsiteBrief(sql, registry, order) {
 // Дата оценки (2.207) — из приложенного к делу задания на оценку, письма заказчика или определения суда, как её ищет
 // ИИ-проверка (2.198, правило value_date): только для услуг с этим правилом. Ровно одна дата — она идёт в таблицу задания,
 // модели и вместо пометок «заполнить: дата оценки»; разные даты — ничего не подставляем, эксперт выбирает сам.
-function valueDateFor(registry, order, assignment) {
+export function valueDateFor(registry, order, assignment) {
   if (!registry.checks(order.module, order.service).some((r) => (r.auto ?? []).includes('value_date'))) return null;
   const got = assignmentValue(assignment);
   if (got.days) return { days: got.days.map(ruDay) };
@@ -136,7 +136,7 @@ function valueDateFor(registry, order, assignment) {
 // правило address_match), — в таблицу задания, модели и вместо пометки «заполнить: адрес», когда в выписках ЕГРН адреса
 // нет: выписка важнее задания, задание — заявки. В документах разные адреса — ничего не подставляем, эксперт выбирает сам.
 const TASK_BY = { 'в задании на оценку': 'по заданию на оценку', 'в определении суда': 'по определению суда', 'в письме заказчика': 'по письму заказчика' };
-function taskAddressFor(registry, order, assignment, egrn) {
+export function taskAddressFor(registry, order, assignment, egrn) {
   if (egrn?.address || !registry.checks(order.module, order.service).some((r) => (r.auto ?? []).includes('address_match'))) return null;
   const a = assignmentAddress(assignment);
   if (!a) return null;
@@ -147,7 +147,7 @@ function taskAddressFor(registry, order, assignment, egrn) {
 // 2.282: вид стоимости из задания на оценку (письма заказчика, определения суда), как его сверяет ИИ-проверка (2.278,
 // правило purpose_value), — в таблицу задания, модели и вместо пометки «заполнить: вид стоимости». В заявке вида стоимости
 // нет; в документах разные виды — ничего не подставляем, эксперт выбирает сам.
-function taskKindFor(registry, order, assignment) {
+export function taskKindFor(registry, order, assignment) {
   if (!registry.checks(order.module, order.service).some((r) => (r.auto ?? []).includes('purpose_value'))) return null;
   const k = assignmentKinds(assignment);
   return k ? { v: kindList(k.kinds), kinds: k.kinds, what: k.what, by: TASK_BY[k.what], name: k.name, page: k.page + 1 } : null;
