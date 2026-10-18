@@ -21,6 +21,8 @@
 // находок, сверенных с выпиской ЕГРН из дела (пункты «посмотрите» с `egrn`, 2.225), было в последней ИИ-проверке этого файла
 // до первой подписи; в скольких делах они были; первая подпись без ИИ-проверки файла — отдельно, в число не входит. Частые
 // пункты проверки с такими находками — по названию правила. Подсказка, не оценка эксперта.
+// Задание на оценку от банка (2.309): просьбы «Задание на оценку от банка» (2.299), которые эксперт отправил заказчику за
+// месяц, — сколько, сколько пришло и через сколько дней в среднем (до десятых, по часам), сколько ещё ждут; снятые — не в счёт.
 // Месяц — по московскому времени. Выгрузка таблицей — CSV для Excel (точка с запятой, BOM, суммы с запятой).
 import { HttpError } from '../http/core.mjs';
 import { orderSplit } from '../money/money.mjs';
@@ -214,6 +216,28 @@ const firstSignQ = (sql, orgId, ids, { start, end }) => sql`
                               and a.actor_id = x.user_id and a.at < x.at and a.details ? 'swap') d) s
   where x.at >= ${start} and x.at < ${end} and x.at >= m.created_at`;
 
+// Просьбы о задании на оценку от банка за месяц (2.309) — по эксперту, который просил. Пункты — как `TASK_ITEMS` в
+// `ai-ops.mjs` (оттуда не берём: операции загружают этот файл).
+const TASK_ITEMS = ['bank_task'];
+const bankTaskQ = (sql, orgId, ids, { start, end }) => sql`
+  select r.requested_by as user_id, r.order_id, r.requested_at, r.fulfilled_at from doc_requests r
+  join org_members m on m.org_id = ${orgId} and m.user_id = r.requested_by
+  where r.requested_by = any(${ids}::uuid[]) and r.item_id = any(${TASK_ITEMS}::text[]) and r.cancelled_at is null
+    and r.requested_at >= ${start} and r.requested_at < ${end} and r.requested_at >= m.created_at`;
+
+// { bank_task, bank_task_cases, bank_task_got, bank_task_days, bank_task_wait }: среднее — по пришедшим.
+function bankTask(rows) {
+  const got = rows.filter((r) => r.fulfilled_at);
+  const days = got.map((r) => (Date.parse(r.fulfilled_at) - Date.parse(r.requested_at)) / 86_400_000);
+  return {
+    bank_task: rows.length,
+    bank_task_cases: new Set(rows.map((r) => r.order_id)).size,
+    bank_task_got: got.length,
+    bank_task_days: days.length ? Math.round((days.reduce((s, d) => s + d, 0) / days.length) * 10) / 10 : null,
+    bank_task_wait: rows.length - got.length,
+  };
+}
+
 export const TOP_EGRN_RULES = 3;
 // { first_signed, first_no_ai, egrn_first, egrn_first_cases, egrn_rules: [{ title, n }],
 //   order_first, order_first_cases, order_first_app, order_first_task, order_rules,
@@ -382,7 +406,8 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
   const { start, end } = await monthBounds(sql, month);
   const since = (await sql`select to_char(created_at at time zone 'Europe/Moscow', 'YYYY-MM') as m from organizations
                            where id = ${orgId}`)[0]?.m ?? '';
-  const none = { accepted: [], done: [], headReturns: [], resign: [], signed: [], firstSign: [], remarkItems: [], dispReturns: [], paid: [], active: [] };
+  const none = { accepted: [], done: [], headReturns: [], resign: [], signed: [], firstSign: [], remarkItems: [], dispReturns: [], paid: [], active: [],
+    bankTask: [] };
   const q = !ids.length ? none : {
     accepted: await sql`
       select f.specialist_id as user_id, count(distinct f.order_id)::int as n from order_offers f
@@ -395,6 +420,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
     resign: await resignQ(sql, orgId, ids, { start, end }),
     signed: await signedQ(sql, orgId, ids, { start, end }),
     firstSign: await firstSignQ(sql, orgId, ids, { start, end }),
+    bankTask: await bankTaskQ(sql, orgId, ids, { start, end }),
     remarkItems: await sql`
       select r.executor_user_id as user_id, i.text, r.created_at as at from org_returns r
       join org_return_items i on i.return_id = r.id
@@ -445,6 +471,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
       signed_no_ai: signed.get(e.user_id)?.signed_no_ai ?? 0,
       signed_points_left: signed.get(e.user_id)?.signed_points_left ?? 0,
       ...egrnFirst(q.firstSign.filter((x) => x.user_id === e.user_id), registry),
+      ...bankTask(q.bankTask.filter((x) => x.user_id === e.user_id)),
       remarks: topRemarks(q.remarkItems.filter((i) => i.user_id === e.user_id), TOP_REMARKS_EXPERT).map(({ text, n }) => ({ text, n })),
       prev: cmp ? cmp.experts.get(e.user_id) : null,
       services: byService(done, registry).map(({ name, done: n }) => ({ name, n })),
@@ -462,7 +489,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
     months: reportMonths(today).filter((m) => m >= since || m === month),
     experts: rows,
     total: { ...Object.fromEntries(keys.map((k) => [k, sum(k)])), avg_days: avgDays(all), ...resign(q.resign),
-      ...egrnFirst(q.firstSign, registry), prev: cmp ? cmp.total : null },
+      ...egrnFirst(q.firstSign, registry), ...bankTask(q.bankTask), prev: cmp ? cmp.total : null },
     prev_month: cmp ? prevM : null,
     prev_month_name: cmp ? monthRu(prevM) : null,
     top_remarks: topRemarks(q.remarkItems, TOP_REMARKS),
@@ -574,6 +601,11 @@ export function reportCsv(orgName, r) {
       ...r.total.order_rules.map((x) => [x.title, x.n])] : []),
     ...(r.total.order_task_kinds?.length ? [[], ['Расхождения с заданием на оценку при первой подписи — что', 'Сколько'],
       ...r.total.order_task_kinds.map((x) => [x.title, x.n])] : []),
+    // 2.309: отдельным разделом — только если за месяц просили задание от банка.
+    ...(r.total.bank_task ? [[], ['Задание на оценку от банка', 'Запрошено', 'В скольких делах', 'Пришло',
+      'Дней в среднем до задания', 'Ещё ждут'], ...[...r.experts.filter((x) => x.bank_task).map((x) => [x.full_name, x]),
+      ['Итого', r.total]].map(([name, x]) => [name, x.bank_task, x.bank_task_cases, x.bank_task_got, daysCell(x.bank_task_days),
+      x.bank_task_wait])] : []),
     ...(r.top_remarks?.length ? [[], ['Частые замечания при возврате', 'Сколько раз', 'У скольких экспертов'],
       ...r.top_remarks.map((x) => [x.text, x.n, x.experts])] : []),
   ];

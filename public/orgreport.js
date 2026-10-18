@@ -11,6 +11,7 @@
 // Подписано без ИИ-проверки (2.199): сколько файлов эксперт подписал за месяц и сколько из них без ИИ-проверки этой версии.
 // Расхождения с выпиской ЕГРН при первой подписи (2.265): по делам, впервые подписанным экспертом за месяц, — сколько находок,
 // сверенных с выпиской, было в ИИ-проверке файла перед подписью, в скольких делах и в каких пунктах проверки чаще.
+// Задание на оценку от банка (2.309): сколько раз эксперты просили его у заказчика, сколько пришло и через сколько дней.
 // Частые замечания (2.105) — пункты, с которыми руководитель чаще всего возвращал отчёты: по организации и у каждого эксперта.
 import { api, el, say } from '/common.js';
 import { rub } from '/money.js';
@@ -75,6 +76,14 @@ const swapFirst = (x) => {
     x.swap_first_task ? `по заданию на оценку — ${x.swap_first_task}` : null].filter(Boolean).join(', ');
   return `до первой подписи исправлено кнопкой в черновике: ${x.swap_first} в ${x.swap_first_cases} ${caseWord(x.swap_first_cases)} (${parts})`;
 };
+// 2.309: «задание на оценку от банка запрошено: 3 в 2 делах · пришло: 2, в среднем через 1,5 дня · ещё ждут: 1»; не
+// запрашивали — пусто.
+const bankTask = (x) => {
+  if (!x.bank_task) return '';
+  return [`задание на оценку от банка запрошено: ${x.bank_task}${x.bank_task_cases !== x.bank_task ? ` в ${x.bank_task_cases} ${caseWord(x.bank_task_cases)}` : ''}`,
+    x.bank_task_got ? `пришло: ${x.bank_task_got}${x.bank_task_days != null ? `, в среднем через ${x.bank_task_days < 0.1 ? 'меньше 2 часов' : daysRu(x.bank_task_days)}` : ''}` : 'пока не пришло ни одного',
+    x.bank_task_wait && x.bank_task_got ? `ещё ждут: ${x.bank_task_wait}` : null].filter(Boolean).join(' · ');
+};
 // «сдано: 5 (было 3, +2) · в срок: 4 (было 4) · возвраты: 1 (было 2, −1)»; у эксперта без дел в обоих месяцах — пусто.
 const diff = (now, was) => `${now} (было ${was}${now > was ? `, +${now - was}` : now < was ? `, −${was - now}` : ''})`;
 const compare = (x) => {
@@ -129,6 +138,7 @@ async function load(month) {
     ...(egrnFirst(t) ? fact('Выписка ЕГРН', egrnFirst(t), t.egrn_first ? 'warn' : '') : []),
     ...(orderFirst(t) ? fact('Заявка и задание на оценку', orderFirst(t), t.order_first ? 'warn' : '') : []),
     ...(swapFirst(t) ? fact('Исправлено кнопкой', swapFirst(t)) : []),
+    ...(bankTask(t) ? fact('Задание от банка', bankTask(t), t.bank_task_wait ? 'warn' : '') : []),
     ...(report.current && t.overdue_now ? fact('Просрочено сейчас', String(t.overdue_now), 'overdue') : []),
     ...fact('Вознаграждение за сданные', rub(t.fee_kop), 'money-sum'),
     ...fact('Выплачено экспертам', rub(t.paid_kop)));
@@ -161,6 +171,7 @@ async function load(month) {
     ...(egrnFirst(x) ? [el('div', { class: x.egrn_first ? 'warn' : 'muted', 'data-expert-egrn': '', text: egrnFirst(x) })] : []),
     ...(orderFirst(x) ? [el('div', { class: x.order_first ? 'warn' : 'muted', 'data-expert-order': '', text: orderFirst(x) })] : []),
     ...(swapFirst(x) ? [el('div', { class: 'muted', 'data-expert-swap': '', text: swapFirst(x) })] : []),
+    ...(bankTask(x) ? [el('div', { class: x.bank_task_wait ? 'warn' : 'muted', 'data-expert-banktask': '', text: bankTask(x) })] : []),
     ...(x.remarks?.length ? [el('div', { class: 'muted', 'data-expert-remarks': '', text: `частые замечания: ${
       x.remarks.map((m) => `«${m.text}»${m.n > 1 ? ` ×${m.n}` : ''}`).join(', ')}` })] : []),
     el('div', { class: 'muted', text: `вознаграждение за сданные: ${rub(x.fee_kop)} · выплачено: ${rub(x.paid_kop)}` }))));

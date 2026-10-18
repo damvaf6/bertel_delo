@@ -1906,7 +1906,8 @@ test('сводка за месяц по экспертам (2.78): только 
     late_first: 0, late_first_moved: 0, first_kept: 0, signed: 0, signed_no_ai: 0, signed_points_left: 0, avg_days: null, resign_days: null, resign_n: 0, resign_wait: 0,
     first_signed: 0, first_no_ai: 0, egrn_first: 0, egrn_first_cases: 0, egrn_rules: [], order_first: 0, order_first_cases: 0, order_first_app: 0, order_first_task: 0, order_rules: [],
     order_task_kinds: [], order_task_address: 0, order_task_date: 0, order_task_value_kind: 0, order_task_purpose: 0, order_task_customer: 0,
-    swap_first: 0, swap_first_cases: 0, swap_first_egrn: 0, swap_first_task: 0, prev: null });
+    swap_first: 0, swap_first_cases: 0, swap_first_egrn: 0, swap_first_task: 0,
+    bank_task: 0, bank_task_cases: 0, bank_task_got: 0, bank_task_days: null, bank_task_wait: 0, prev: null });
   assert.equal(empty.prev_month, null, 'прошлый месяц раньше создания организации — сравнения нет (2.124)');
   for (const q of ['?month=2020-01', '?month=2099-01', '?month=13', '?month=2026-13']) assert.equal((await report(headC, q)).body.error, 'bad_month', q);
   // Дела: e1 принял 2 дела, одно сдал вовремя, другое позже срока; одно в работе просрочено; руководитель вернул раз,
@@ -1957,7 +1958,8 @@ test('сводка за месяц по экспертам (2.78): только 
     avg_days: 0, late_first: 1, late_first_moved: 0, first_kept: 1, resign_days: null, resign_n: 0, resign_wait: 1, signed: 0, signed_no_ai: 0, signed_points_left: 0,
     first_signed: 0, first_no_ai: 0, egrn_first: 0, egrn_first_cases: 0, egrn_rules: [], order_first: 0, order_first_cases: 0, order_first_app: 0, order_first_task: 0, order_rules: [],
     order_task_kinds: [], order_task_address: 0, order_task_date: 0, order_task_value_kind: 0, order_task_purpose: 0, order_task_customer: 0,
-    swap_first: 0, swap_first_cases: 0, swap_first_egrn: 0, swap_first_task: 0, remarks: [{ text: 'Нет даты осмотра.', n: 1 }],
+    swap_first: 0, swap_first_cases: 0, swap_first_egrn: 0, swap_first_task: 0,
+    bank_task: 0, bank_task_cases: 0, bank_task_got: 0, bank_task_days: null, bank_task_wait: 0, remarks: [{ text: 'Нет даты осмотра.', n: 1 }],
     prev: { done: 0, on_time: 0, returned: 0 }, services: [{ name: 'Оценка недвижимости', n: 2 }] });
   assert.deepEqual(r.experts.find((e) => e.user_id === ex.e2.user.id).prev, { done: 0, on_time: 0, returned: 1 }, 'возврат прошлого месяца (2.124)');
   assert.deepEqual(r.top_remarks, [{ text: 'Нет даты осмотра.', n: 2, experts: 2 }, { text: 'Не указан этаж', n: 1, experts: 1 }]);
@@ -2559,6 +2561,56 @@ test('сводка за месяц (2.289): сколько расхождени�
   assert.ok(csv.includes(';Заменено кнопкой в черновике до первой подписи;В скольких делах;Из них по выписке ЕГРН;Из них по заданию на оценку\r\n'), csv);
   assert.ok(/Эксперт Кнопкин;[^\r\n]*;3;1;2;1\r\n/.test(csv), csv);
   assert.ok(/Эксперт Ручной;[^\r\n]*;0;0;0;0\r\n/.test(csv), csv);
+});
+
+test('сводка за месяц (2.309): сколько раз эксперты просили задание на оценку от банка и через сколько дней оно пришло', async () => {
+  const org = await makeOrg(S.sql, 'Тестовая организация 2.309');
+  const head = await login(S, '+79990002309');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  const ex = {};
+  for (const [k, phone, name] of [['a', '+79990002319', 'Эксперт Банкин'], ['b', '+79990002329', 'Эксперт Тихий']]) {
+    ex[k] = await login(S, phone);
+    await addMember(S.sql, org.id, ex[k].user.id, 'member');
+    await makeSpecialist(S.sql, ex[k].user.id);
+    await S.sql`update users set full_name = ${name} where id = ${ex[k].user.id}`;
+    assert.equal((await ex[k].req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  }
+  await S.sql`update organizations set created_at = now() - interval '90 days' where id = ${org.id}`;
+  await S.sql`update org_members set created_at = now() - interval '90 days' where org_id = ${org.id}`;
+  const [{ at }] = await S.sql`
+    select (date_trunc('month', now() at time zone 'Europe/Moscow') - interval '20 days') at time zone 'Europe/Moscow' as at`;
+  const hours = (h) => (h == null ? null : new Date(at.getTime() + h * 3_600_000));
+  const make = async () => {
+    const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Сводка 2.309' })).body.order;
+    await S.sql`update orders set status = 'in_work', deadline = current_date + 5, executor_user_id = ${ex.a.user.id} where id = ${o.id}`;
+    return o;
+  };
+  const ask = (o, item, from, got, cancelled = null) => S.sql`
+    insert into doc_requests (order_id, item_id, title, requested_by, requested_at, fulfilled_at, cancelled_at)
+    values (${o.id}, ${item}, ${item === 'bank_task' ? 'Задание на оценку от банка' : 'Документ'}, ${ex.a.user.id}, ${hours(from)},
+            ${hours(got)}, ${hours(cancelled)})`;
+  const [c1, c2] = [await make(), await make()];
+  // c1: пришло через 1 день; c2: первая просьба снята, вторая пришла через 2 дня, третья — ещё ждём; другой документ и
+  // просьба в другом месяце — не в счёт.
+  await ask(c1, 'bank_task', 1, 25);
+  await ask(c2, 'bank_task', 2, null, 3);
+  await ask(c2, 'bank_task', 4, 52);
+  await ask(c2, 'bank_task', 60, null);
+  await ask(c1, 'egrn', 5, null);
+  await ask(c1, 'bank_task', -24 * 15, null);
+  const prev = (await head.req('GET', `/api/orgs/${org.id}/report`)).body.report.prev_month;
+  const r = (await head.req('GET', `/api/orgs/${org.id}/report?month=${prev}`)).body.report;
+  const x = (e) => [e.bank_task, e.bank_task_cases, e.bank_task_got, e.bank_task_days, e.bank_task_wait];
+  assert.deepEqual(x(r.experts.find((y) => y.user_id === ex.a.user.id)), [3, 2, 2, 1.5, 1]);
+  assert.deepEqual(x(r.experts.find((y) => y.user_id === ex.b.user.id)), [0, 0, 0, null, 0]);
+  assert.deepEqual(x(r.total), [3, 2, 2, 1.5, 1]);
+  const csv = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv&month=${prev}`, undefined, { binary: true })).body.toString('utf8');
+  assert.ok(csv.includes('\r\nЗадание на оценку от банка;Запрошено;В скольких делах;Пришло;Дней в среднем до задания;Ещё ждут\r\n'
+    + 'Эксперт Банкин;3;2;2;1,5;1\r\nИтого;3;2;2;1,5;1\r\n'), csv);
+  assert.ok(!csv.split('Задание на оценку от банка;')[1].includes('Эксперт Тихий'), csv);
+  // В месяце без просьб раздела нет.
+  const now = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv`, undefined, { binary: true })).body.toString('utf8');
+  assert.ok(!now.includes('Задание на оценку от банка;'), now);
 });
 
 test('сводка за месяц (2.135, 2.144): сдано по услугам и средний срок — у организации, у эксперта и в таблице для Excel', async () => {
