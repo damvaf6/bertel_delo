@@ -12648,6 +12648,43 @@ test('2.298: дата составления — не раньше задани�
   for (const p of [ep, cp]) await p.context().close();
 });
 
+// 2.299: оценка для банка — в запросе документов пункт «Задание на оценку от банка»; приложено — пункта больше нет.
+test('2.299: задание на оценку от банка — в запросе документов', async ({ browser, baseURL }) => {
+  test.setTimeout(120_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990029901'), customer = await signIn(cp, '+79990029902');
+  const A = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Оценка для банка: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","bank":"sber","region":"moscow","object_type":"flat","address":"г. Москва, Садовая ул., д. 7, кв. 4"}') returning id`,
+    [customer.id, expert.id, inDays(6)]);
+    return o.id;
+  });
+  await ep.goto(`/kabinet#order=${A}`);
+  const box = ep.locator('#docreq-box');
+  await expect(box.locator('#docreq-items')).toContainText('Задание на оценку от банка');
+  await box.getByLabel('Задание на оценку от банка').check();
+  await box.getByLabel('Задание на оценку от банка').scrollIntoViewIfNeeded();
+  await shot(ep, '54r1-specialist-zadanie-ot-banka');
+  await box.getByRole('button', { name: 'Запросить у заказчика' }).click();
+  await expect(ep.locator('#docreq-msg')).toHaveText('Запрошено документов: 1. Заказчику отправлено уведомление.');
+  const put = await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from('ПАО Банк\nПросим провести оценку квартиры\nДата оценки: 01.10.2026'),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('скан.txt') },
+  });
+  expect(put.status()).toBe(201);
+  const [rq] = (await (await cp.request.get(`/api/orders/${A}/doc-requests`)).json()).requests;
+  expect((await cp.request.post(`/api/orders/${A}/doc-requests/${rq.id}/attach`, { data: { document_id: (await put.json()).document.id }, headers: H })).status()).toBe(200);
+  await ep.reload();
+  await expect(box.locator('#docreq-list li').filter({ hasText: 'Задание на оценку от банка' })).toContainText('скан.txt');
+  await expect(box.locator('#docreq-items')).not.toContainText('Задание на оценку от банка');
+  await expect(box.locator('#docreq-items')).toContainText('Выписка из ЕГРН');
+  for (const p of [ep, cp]) await p.context().close();
+});
+
 // 2.294: у находки «Заказчик в отчёте…» по заданию — «Заменить на значение из задания»: заказчик в черновике меняется
 // на заказчика из задания как есть, «Отменить» возвращает прежнего.
 test('2.294: заказчик — замена в черновике по заданию', async ({ browser, baseURL }) => {

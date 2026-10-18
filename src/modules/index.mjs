@@ -25,9 +25,10 @@
 //       sources: true — сюда программа вставляет перечень использованных документов дела (2.95, src/docs/sources.mjs)
 //     approaches?: { services: [id услуги…] }  — исполнитель отмечает, какие подходы к оценке применяет (2.33)
 //     inspection?: [{ id, title, hint?, services?: [id услуги…], optional? }…],  — шаги дистанционного осмотра (2.3)
-//     request_docs?: [{ id, title, hint?, services?: [id услуги…], basis?: [вид основания…] }…],  — документы, которые
+//     request_docs?: [{ id, title, hint?, services?: [id услуги…], basis?: [вид основания…], when? }…],  — документы, которые
 //       исполнитель может одной кнопкой запросить у заказчика (2.64): выписка ЕГРН, ПТС, чек…; заказчик загружает файл к
-//       каждому; basis — только для заявок с таким основанием (определение суда — когда экспертизу назначил суд, 2.66)
+//       каждому; basis — только для заявок с таким основанием (определение суда — когда экспертизу назначил суд, 2.66);
+//       when: { field: id поля-списка, in: [значение…] } — только для заявок с таким значением поля (задание банка — 2.299)
 //     express?: { services: [id услуги…], show: [id поля заявки…], fields: [поле + services?…] } }  — экспресс-услуга (2.4):
 //       для каких услуг, какие поля заявки видит помощник на объекте и какие данные он заполняет (нужны шаги осмотра)
 //     signature?: { services?: [id услуги…] }  — результат подписывается УКЭП исполнителя до сдачи (2.5); без services — все услуги
@@ -239,7 +240,18 @@ export function validateModule(m) {
     checkIds(m.request_docs, `${at}, запрашиваемые документы`);
     for (const d of m.request_docs) {
       const where = `${at}, документ ${d.id}`;
-      onlyKeys(d, ['id', 'title', 'hint', 'services', 'basis'], where);
+      onlyKeys(d, ['id', 'title', 'hint', 'services', 'basis', 'when'], where);
+      if (d.when !== undefined) {
+        onlyKeys(d.when, ['field', 'in'], `${where}, when`);
+        const users = d.services ? m.services.filter((x) => d.services.includes(x.id)) : m.services;
+        const f = users.length ? serviceFields(m, users[0]).find((x) => x.id === d.when.field) : null;
+        if (!f || f.type !== 'select' || users.some((x) => !serviceFields(m, x).some((y) => y.id === d.when.field))) {
+          fail(where, 'when.field — поле-список, которое есть у каждой услуги документа');
+        }
+        if (!Array.isArray(d.when.in) || d.when.in.length === 0 || d.when.in.some((v) => !f.options.some((o) => o.id === v))) {
+          fail(where, 'when.in — непустой список значений этого поля');
+        }
+      }
       if (d.basis !== undefined && (!Array.isArray(d.basis) || d.basis.length === 0 || d.basis.some((b) => !m.basis.includes(b)))) {
         fail(where, 'basis — непустой список оснований этого модуля');
       }
@@ -526,11 +538,13 @@ export function createRegistry(modules = DEFAULT_MODULES) {
       return m.inspection.filter((st) => !st.services || st.services.includes(serviceId))
         .map((st) => ({ id: st.id, title: st.title, hint: st.hint ?? null, optional: !!st.optional }));
     },
-    // Документы, которые исполнитель может запросить у заказчика по этой услуге (2.64).
-    requestDocs(moduleId, serviceId, basisKind) {
+    // Документы, которые исполнитель может запросить у заказчика по этой услуге (2.64); с when — только если поле заявки
+    // подходит (2.299), без полей заявки таких пунктов нет.
+    requestDocs(moduleId, serviceId, basisKind, fields) {
       const m = modulesList.find((x) => x.id === moduleId);
       if (!m?.request_docs || !m.services.some((x) => x.id === serviceId)) return [];
-      return m.request_docs.filter((d) => (!d.services || d.services.includes(serviceId)) && (!d.basis || d.basis.includes(basisKind)))
+      return m.request_docs.filter((d) => (!d.services || d.services.includes(serviceId)) && (!d.basis || d.basis.includes(basisKind))
+        && (!d.when || d.when.in.includes(fields?.[d.when.field])))
         .map((d) => ({ id: d.id, title: d.title, hint: d.hint ?? null, ...(d.basis ? { basis: true } : {}) }));
     },
     // Повторная оценка того же объекта для услуги (2.118): поля, по которым узнаётся объект, и разделы описания объекта;

@@ -6,6 +6,7 @@ import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid } from '..
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import { createRegistry, validateModule } from '../../src/modules/index.mjs';
 import expertise from '../../src/modules/expertise.mjs';
+import { assignmentDocs } from '../../src/ops/ai-ops.mjs';
 
 let S, owner, dispatcher, spec, stranger;
 const FIELDS = { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, Документная ул., 7' };
@@ -390,4 +391,36 @@ test('2.248: после ИИ-проверки пришёл запрошенны�
   await S.sql`update orders set status = 'review', review_round = review_round + 1 where id = ${o.id}`;
   assert.equal(await todayRow(), undefined);
   assert.equal((await review(dispatcher)).recheck, undefined);
+});
+
+// 2.299: оценка для банка — в списке «задание на оценку от банка»; приложенный к просьбе файл — задание, как бы ни назывался.
+test('2.299: задание на оценку от банка — только при цели «банк», уже приложенное не просится, файл к просьбе — задание', async () => {
+  const reg = createRegistry([expertise]);
+  const has = (service, fields) => reg.requestDocs('expertise', service, 'contract', fields).some((d) => d.id === 'bank_task');
+  assert.ok(has('realty', { purpose: 'bank' }) && has('vehicle', { purpose: 'bank' }) && has('land', { purpose: 'bank' }));
+  assert.ok(!has('realty', { purpose: 'deal' }) && !has('realty') && !has('handwriting', { purpose: 'bank' }));
+  const bad = (when) => assert.throws(() => validateModule({ ...expertise, request_docs: [{ id: 'x', title: 'Документ', when }] }));
+  bad({ field: 'нет-поля', in: ['bank'] });
+  bad({ field: 'purpose', in: ['нет-значения'] });
+  bad({ field: 'purpose', in: [] });
+  bad({ field: 'address', in: ['x'] });
+  bad({ field: 'purpose', in: ['bank'], extra: 1 });
+
+  const o = await inWork('Квартира для банка: задание', 'realty', { ...FIELDS, purpose: 'bank' });
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  const ids = async () => (await spec.req('GET', `/api/orders/${o.id}/doc-requests`)).body.catalog.map((c) => c.id);
+  assert.ok((await ids()).includes('bank_task'));
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { items: ['bank_task'] })).status, 201);
+  const cat = (await spec.req('GET', `/api/orders/${o.id}/doc-requests`)).body.catalog.find((c) => c.id === 'bank_task');
+  assert.equal(cat.open, true);
+  const put = await owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from('ПАО Банк\nПросим провести оценку квартиры\nДата оценки: 01.10.2026'), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('скан.txt') } });
+  assert.equal(put.status, 201, JSON.stringify(put.body));
+  const order = await S.sql.one`select * from orders where id = ${o.id}`;
+  assert.deepEqual(await assignmentDocs(S.sql, S.providers.storage, order), [], 'пока не приложен к просьбе — не задание');
+  const [rq] = (await owner.req('GET', `/api/orders/${o.id}/doc-requests`)).body.requests;
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/doc-requests/${rq.id}/attach`, { document_id: put.body.document.id })).status, 200);
+  assert.deepEqual((await assignmentDocs(S.sql, S.providers.storage, order)).map((d) => d.name), ['скан.txt']);
+  const after = await ids();
+  assert.ok(!after.includes('bank_task') && after.includes('egrn'), after.join());
 });

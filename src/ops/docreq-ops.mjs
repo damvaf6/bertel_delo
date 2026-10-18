@@ -8,7 +8,7 @@
 import { HttpError } from '../http/core.mjs';
 import { FINAL, todayMsk } from '../orders/workflow.mjs';
 import { assignmentValue, egrnIssued, egrnOnObject } from '../ai/report-checks.mjs';
-import { assignmentDocs, egrnDocs } from './ai-ops.mjs';
+import { assignmentDocs, egrnDocs, TASK_ITEMS } from './ai-ops.mjs';
 import { LEVEL, orderLevel, orderSides } from '../access/policy.mjs';
 import { customersOf, notify } from '../notify/notify.mjs';
 import { audit, text, uuidFrom } from './util.mjs';
@@ -41,7 +41,7 @@ async function requestOf(sql, order, raw) {
 // { id, name, page, day, on, on_value, age, asked } — asked: свежая выписка уже запрошена и ещё не получена; иначе null.
 export async function egrnOld(sql, storage, registry, order, today = todayMsk()) {
   if (order.status !== 'in_work' || !storage) return null;
-  if (!registry.requestDocs(order.module, order.service, order.basis_kind).some((c) => c.id === 'egrn')) return null;
+  if (!registry.requestDocs(order.module, order.service, order.basis_kind, order.fields).some((c) => c.id === 'egrn')) return null;
   // Выписка на дом при оценке квартиры (и наоборот) свежесть не решает (2.230).
   const docs = egrnOnObject(await egrnDocs(sql, storage, order), order);
   const issued = egrnIssued(docs);
@@ -101,7 +101,7 @@ export async function docsWaiting(sql, orders, now = new Date()) {
 export const egrnOldNote = (o) => `Выписка ЕГРН в деле от ${o.day.split('-').reverse().join('.')} — старше ${EGRN_FRESH_DAYS} дней на ${o.on_value ? 'дату оценки' : 'сегодня'}. Нужна свежая выписка: закажите её на Госуслугах или в МФЦ и загрузите сюда.`;
 
 async function view(sql, actor, order, registry, storage) {
-  const catalog = registry.requestDocs(order.module, order.service, order.basis_kind);
+  const catalog = registry.requestDocs(order.module, order.service, order.basis_kind, order.fields);
   const hints = new Map(catalog.map((c) => [c.id, c.hint]));
   const rows = await sql`
     select r.*, d.filename from doc_requests r left join documents d on d.id = r.document_id and d.deleted_at is null
@@ -115,13 +115,16 @@ async function view(sql, actor, order, registry, storage) {
   // Документ основания (определение суда) заказчик уже приложил к заявке — просить его снова незачем (2.79).
   const basisAttached = canRequest && catalog.some((c) => c.basis)
     && !!(await sql`select 1 from documents where order_id = ${order.id} and kind = 'basis' and deleted_at is null limit 1`).length;
+  // Задание банка уже в деле (основание, письмо, приложено к просьбе) — просить его снова незачем (2.299).
+  const taskAttached = canRequest && catalog.some((c) => TASK_ITEMS.includes(c.id))
+    && (await assignmentDocs(sql, storage, order)).length > 0;
   const open = new Set(requests.filter((r) => !r.done && r.item_id).map((r) => r.item_id));
   return {
     requests,
     can_request: canRequest,
     can_upload: orderLevel(actor, order) >= LEVEL.write && !FINAL.includes(order.status),
     // Список услуги — исполнителю: уже запрошенные и ещё не полученные отмечены.
-    catalog: canRequest ? catalog.filter((c) => !(c.basis && basisAttached)).map(({ basis, ...c }) => ({ ...c, open: open.has(c.id) })) : [],
+    catalog: canRequest ? catalog.filter((c) => !(c.basis && basisAttached) && !(taskAttached && TASK_ITEMS.includes(c.id) && !open.has(c.id))).map(({ basis, ...c }) => ({ ...c, open: open.has(c.id) })) : [],
     // Выписка ЕГРН старше 30 дней на дату оценки (2.224) — исполнителю.
     egrn_old: canRequest ? await egrnOld(sql, storage, registry, order) : null,
     // Не пришло 3 дня и дольше (2.234) — исполнителю «Напомнить заказчику».
@@ -142,7 +145,7 @@ export function docRequestOps() {
       access: { resource: 'order', param: 'id', need: 'read' },
       async handler({ sql, actor, order, registry, providers, body, res }) {
         executorOnly(actor, order);
-        const catalog = registry.requestDocs(order.module, order.service, order.basis_kind);
+        const catalog = registry.requestDocs(order.module, order.service, order.basis_kind, order.fields);
         const ids = Array.isArray(body?.items) ? [...new Set(body.items.map(String))] : [];
         const custom = Array.isArray(body?.custom) ? body.custom.map((c) => String(c ?? '').trim()).filter(Boolean) : [];
         if (custom.length > MAX_CUSTOM) throw new HttpError(400, 'bad_input', `Своими словами — не больше ${MAX_CUSTOM} документов за раз`);
