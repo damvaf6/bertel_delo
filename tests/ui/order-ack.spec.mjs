@@ -1,6 +1,7 @@
 // Ответ заказчику сразу после отправки заявки (задача штаба 3fd17197) на телефоне 412×915: администратор задаёт срок
-// первого ответа по модулю; заказчик сразу после «Отправить» видит «Заявка № … принята. Обычно … в течение 24 часов»;
-// срок прошёл — «задерживаемся». В конце срок снова выключается (до решения Дамира он не обещается).
+// первого ответа по модулю (пока не задавал — осторожные 72 и 48 часов, решение Дамира 18.10.2026, и «Как на деле»); заказчик
+// сразу после «Отправить» видит «Заявка № … принята. Цену назначит диспетчер — как правило, в течение 24 часов» без точного
+// часа; срок прошёл — «задерживаемся». В конце сроки возвращаются к осторожным по умолчанию.
 import { test, expect } from '@playwright/test';
 import pg from 'pg';
 import { DB_URL, TEST_TOKEN } from '../helpers.mjs';
@@ -33,7 +34,9 @@ test('срок первого ответа: администратор зада�
   try {
     await db.query("update users set platform_role = 'admin' where id = $1", [adm.id]);
     await page.goto('/kabinet#admin');
-    await expect(page.locator('#ack-expertise')).toHaveValue('');
+    await expect(page.locator('#ack-expertise')).toHaveValue('72');
+    await expect(page.locator('#ack-translation')).toHaveValue('48');
+    await expect(page.locator('#ack-facts li').first()).toContainText('Экспертиза и оценка');
     await page.getByLabel('Экспертиза и оценка, часов (1–168)').fill('сутки');
     await page.getByRole('button', { name: 'Сохранить сроки' }).click();
     await expect(page.locator('#ack-msg')).toContainText('срок — целое число часов от 1 до 168 или пусто');
@@ -57,7 +60,7 @@ test('срок первого ответа: администратор зада�
     await cp.getByRole('button', { name: 'Отправить заявку' }).click();
     await expect(cp.locator('#status-msg')).toHaveText('Заявка отправлена');
     const ref = o.id.slice(0, 8).toUpperCase();
-    await expect(cp.locator('#order-ack')).toHaveText(new RegExp(`^Заявка № ${ref} принята\\. Обычно диспетчер назначает цену в течение 24 часов — до .+ МСК\\. Если не успеем — сообщим\\.$`));
+    await expect(cp.locator('#order-ack')).toHaveText(new RegExp(`^Заявка № ${ref} принята\\. Цену назначит диспетчер — как правило, в течение 24 часов\\. Если понадобится больше времени — сообщим\\.$`));
     await shot(cp, 'otvet-02-zakazchik-srok');
 
     // Срок прошёл, цены нет — «задерживаемся» (отметку ставит обход раз в минуту; здесь — сразу).
@@ -67,7 +70,7 @@ test('срок первого ответа: администратор зада�
     await expect(cp.locator('#order-ack')).toHaveClass(/overdue/);
     await shot(cp, 'otvet-03-zakazchik-zaderzhivaemsya');
   } finally {
-    expect((await page.request.put('/api/admin/order-ack', { data: { hours: { expertise: null, translation: null } }, headers: H })).status()).toBe(200);
+    expect((await page.request.put('/api/admin/order-ack', { data: { hours: { expertise: 72, translation: 48 } }, headers: H })).status()).toBe(200);
     await ctx.close();
     await db.end();
   }

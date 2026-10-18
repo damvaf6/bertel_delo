@@ -154,17 +154,15 @@ test('письмо с вложением → заявка-черновик с п
   const [use] = await S.sql`select purpose, ok from ai_usage where user_id = ${owner.user.id} order by id desc limit 1`;
   assert.deepEqual(use, { purpose: 'mail', ok: true }, 'разбор письма — в дневном лимите');
 
-  // Ответ «Отправить» — заявка уходит в подбор от имени заказчика; диспетчер получает уведомление. Срок первого ответа у
-  // модуля включён (задача штаба 3fd17197) — он в том же письме, одном.
-  await S.sql`insert into module_settings (module, settings) values ('order_ack', ${JSON.stringify({ hours: { expertise: 24 } })})`;
+  // Ответ «Отправить» — заявка уходит в подбор от имени заказчика; диспетчер получает уведомление. Срок первого ответа —
+  // осторожный, пока администратор не задавал (задача штаба 3fd17197, решение Дамира 18.10.2026), — в том же письме, одном.
   const s = await letter({ from: OWNER_MAIL, subject: `Re: ${ans.subject}`, text: 'Отправить\n\n> старое письмо', in_reply_to: [ans.messageId] });
-  await S.sql`delete from module_settings where module = 'order_ack'`;
   assert.equal(s.inbound.outcome, 'submitted');
   const after = (await owner.req('GET', `/api/orders/${id}`)).body;
   assert.equal(after.order.status, 'matching');
   assert.equal(after.history.at(-1).side, 'customer');
   assert.equal(sent().filter((m) => m.inReplyTo === s.message_id).length, 1, 'ответ на «Отправить» — одно письмо');
-  assert.match(lastSent().text, new RegExp(`\\nЗаявка № ${id.slice(0, 8).toUpperCase()} принята\\. Обычно диспетчер назначает цену в течение 24 часов — до .+ МСК\\. Если не успеем — сообщим\\. Цену напишем сюда же`));
+  assert.match(lastSent().text, new RegExp(`\\nЗаявка № ${id.slice(0, 8).toUpperCase()} принята\\. Цену назначит диспетчер — как правило, в течение 3 суток\\. Если понадобится больше времени — сообщим\\. Цену напишем сюда же`));
   assert.equal(lastSent().inReplyTo, s.message_id);
   const [n] = await S.sql`select count(*)::int as n from notifications where user_id = ${dispatcher.user.id} and event = 'submitted' and order_id = ${id}`;
   assert.equal(n.n, 1);

@@ -475,7 +475,7 @@ test('срок первого ответа заказчику (задача шт
   }
   const r = await U.admin.req('GET', '/api/admin/order-ack');
   assert.equal(r.status, 200);
-  assert.ok(r.body.ack.modules.every((m) => m.hours === null), 'чужие попытки ничего не включили');
+  assert.deepEqual(r.body.ack.modules.map((m) => m.hours), [72, 48], 'чужие попытки ничего не изменили — осторожные сроки по умолчанию');
 });
 
 test('ЮKassa — проверка перед подключением (2а.10): только администратор (подробно — yookassa-check.test.mjs)', async () => {
