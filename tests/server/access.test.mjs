@@ -998,13 +998,13 @@ test('ИИ (1.8): разбор проблемы, ассистент, ИИ-про
 });
 
 test('черновик заключения (2.2): видят исполнитель и служебные; готовит и правит только исполнитель в работе; заказчику — нет', async () => {
-  for (const id of ['draft.get', 'draft.ai', 'draft.save', 'draft.attach', 'draft.docx', 'draft.approaches', 'draft.past.list', 'draft.past', 'draft.sources', 'draft.versions', 'draft.diff']) cover(id);
+  for (const id of ['draft.get', 'draft.ai', 'draft.save', 'draft.attach', 'draft.docx', 'draft.approaches', 'draft.past.list', 'draft.past', 'draft.sources', 'draft.versions', 'draft.diff', 'draft.task']) cover(id);
   // Заявка без исполнителя: заказчик и его организация черновика не видят, посторонние — «не найдено».
   for (const k of ['owner']) assert.equal((await U[k].req('GET', `/api/orders/${ownOrder.id}/draft`)).status, 403, k);
   for (const k of ['memberA', 'headA']) assert.equal((await U[k].req('GET', `/api/orders/${orgOrder.id}/draft`)).status, 403, k);
   for (const k of ['stranger', 'headB', 'spec']) assert.equal((await U[k].req('GET', `/api/orders/${ownOrder.id}/draft`)).status, 404, k);
   // Версии и что изменилось (2.104) — те же, кто видит черновик.
-  for (const path of ['draft/versions', 'draft/diff?from=1']) {
+  for (const path of ['draft/versions', 'draft/diff?from=1', 'task']) {
     assert.equal((await U.owner.req('GET', `/api/orders/${ownOrder.id}/${path}`)).status, 403, `owner ${path}`);
     for (const k of ['memberA', 'headA']) assert.equal((await U[k].req('GET', `/api/orders/${orgOrder.id}/${path}`)).status, 403, `${k} ${path}`);
     for (const k of ['stranger', 'headB', 'spec']) assert.equal((await U[k].req('GET', `/api/orders/${ownOrder.id}/${path}`)).status, 404, `${k} ${path}`);
