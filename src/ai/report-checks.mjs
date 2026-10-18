@@ -2557,6 +2557,8 @@ export function assignmentPurpose(assignment) {
 }
 // 2.291: цель заявки совместима с целью задания (раздел через суд, ипотека при покупке) — как сверяет purposeByTask.
 export const purposeFits = (task, purpose) => task.kinds.some((k) => k === purpose || PURPOSE_ALSO[k].includes(purpose));
+// 2.301: какие цели названы в тексте (строка «Для чего нужна оценка» таблицы задания черновика).
+export const purposeKinds = (text) => kindsOf(String(text ?? ''), PURPOSE_KIND);
 function purposeByTask(docs, task) {
   const ok = new Set(task.kinds.flatMap((k) => [k, ...PURPOSE_ALSO[k]]));
   const out = [];
@@ -2619,6 +2621,8 @@ function customersIn(docs) {
   }
   return out;
 }
+// 2.301: заказчики, названные в тексте черновика строками «Заказчик: …» / «Заказчик — …».
+export const customersInText = (text) => customersIn([{ name: '', pages: [String(text ?? '')] }]).map((x) => x.who);
 export function assignmentCustomer(assignment) {
   const got = [];
   for (const d of assignment ?? []) {
