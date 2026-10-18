@@ -62,7 +62,10 @@ const orderFirst = (x) => {
     .filter(Boolean).join(', ');
   return [`при первой подписи расхождений с заявкой и заданием на оценку: ${x.order_first} в ${x.order_first_cases} ${
     caseWord(x.order_first_cases)} из ${checked} проверенных ИИ (${parts})`,
-  x.order_rules?.length ? `чаще: ${x.order_rules.map((r) => `${r.title} — ${r.n}`).join(', ')}` : null].filter(Boolean).join(' · ');
+  x.order_rules?.length ? `чаще: ${x.order_rules.map((r) => `${r.title} — ${r.n}`).join(', ')}` : null,
+  // 2.297: «по заданию чаще: адрес — 2, дата оценки — 1».
+  x.order_task_kinds?.length ? `по заданию чаще: ${x.order_task_kinds.map((r) => `${r.title} — ${r.n}`).join(', ')}` : null]
+    .filter(Boolean).join(' · ');
 };
 // 2.289: «до первой подписи исправлено кнопкой в черновике: 3 в 2 делах (по выписке ЕГРН — 2, по заданию на оценку — 1)»;
 // ничего не заменяли — пусто.
