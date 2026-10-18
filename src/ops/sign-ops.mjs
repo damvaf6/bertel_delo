@@ -17,7 +17,8 @@ import { orderRef } from '../notify/registry.mjs';
 import { signatureFilename } from '../providers/sign.mjs';
 import { aiSignHints, egrnLinks, egrnLinkOf, egrnLinkState } from '../ai/ai.mjs';
 import { audit, text } from './util.mjs';
-import { latest } from './draft-ops.mjs';
+import { latest, taskDueSign } from './draft-ops.mjs';
+import { todayMsk } from '../orders/workflow.mjs';
 
 export const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 const MAX_SIGNATURE_BYTES = 256 * 1024;
@@ -338,6 +339,8 @@ export function signOps() {
             reminded_at: wait?.reminded_at ?? null,
             // С какого времени файлы ждут подписи организации (2.148) — самая ранняя подпись эксперта среди них.
             waiting_since: wait?.since ?? null,
+            // 2.308: срок по заданию на оценку прошёл или сегодня — пока файлы ждут подписи организации.
+            task_due: docs.some((d) => signs.get(d.id)?.expert && !signs.get(d.id)?.org) ? await taskDueSign(sql, providers.storage, registry, o, todayMsk()) : null,
             // История возвратов эксперту (2.27) — только этой организации.
             // 2.247: у пункта из расхождения с выпиской — ушло ли оно в ИИ-проверке после возврата (egrn: gone / kept / none).
             returns: await Promise.all(returns.map(async (r) => {

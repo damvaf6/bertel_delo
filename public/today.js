@@ -57,6 +57,10 @@ function taskDueWhen(d, today) {
     : n === 1 ? `Срок по заданию завтра — ${dayRu(d.day)}` : `Срок по заданию ${dayRu(d.day)} · осталось ${n} дн.`;
 }
 
+// Руководителю у дела на подписи (2.308): срок по заданию на оценку прошёл или сегодня — с файлом и страницей задания.
+export const taskDueSignText = (d) => `${d.overdue ? `Срок ${d.by} прошёл — ${dayRu(d.day)}` : `Срок ${d.by} сегодня — подпишите сегодня`}`
+  + ` («${d.name}», стр. ${d.page})`;
+
 // Группа строк: заголовок с числом и строки-кнопки. Строка может быть { text, class } — например, красная (2.161).
 // extra(x) — кнопки под строкой (2.166: «Попросить перенести срок» у просроченного дела).
 function group(id, title, items, line, go, extra = () => []) {
@@ -386,7 +390,9 @@ export async function loadToday() {
         // После возврата расхождение с выпиской осталось в новой ИИ-проверке эксперта (2.257) — красным.
         ...(x.egrn_kept ? [{ class: 'overdue', role: 'egrn-kept', text: `после возврата расхождение с выпиской ЕГРН осталось: ${x.egrn_kept} ${x.egrn_kept === 1 ? 'пункт' : x.egrn_kept < 5 ? 'пункта' : 'пунктов'}` }] : []),
         // В ИИ-проверке эксперта остались расхождения с заявкой или заданием на оценку (2.286, как отбор 2.276).
-        ...(x.order_diff ? [{ class: 'overdue', role: 'order-diff', text: `расхождения с заявкой или заданием на оценку: ${x.order_diff} ${x.order_diff === 1 ? 'пункт' : x.order_diff < 5 ? 'пункта' : 'пунктов'}` }] : [])], toOrg('sign')),
+        ...(x.order_diff ? [{ class: 'overdue', role: 'order-diff', text: `расхождения с заявкой или заданием на оценку: ${x.order_diff} ${x.order_diff === 1 ? 'пункт' : x.order_diff < 5 ? 'пункта' : 'пунктов'}` }] : []),
+        // Срок по заданию на оценку прошёл или сегодня (2.308) — красным.
+        ...(x.task_due ? [{ class: 'overdue', role: 'task-due-sign', text: taskDueSignText(x.task_due) }] : [])], toOrg('sign')),
       ...group(`org-pending-${g.id}`, 'Ждут назначения эксперта', g.pending, caseLine, toOrg('pending')),
       ...group(`org-hot-${g.id}`, 'Горит срок у экспертов', g.hot.filter((x) => !risky.has(x.order_ref)), caseLine, toOrg('case')),
       // Когда вернули и сколько пунктов эксперт уже отметил исправленными (2.160 — как в «Делах экспертов»);
