@@ -19,11 +19,12 @@
 // Задание на оценку пришло после черновика, и адрес, дата оценки или вид стоимости в нём не как в таблице задания (2.295),
 // цель оценки не как в таблице задания или заказчик не как в черновике (2.301).
 // В ИИ-проверке неподписанного файла остались расхождения с выпиской ЕГРН, которые можно заменить в черновике (2.266).
+// Срок по заданию на оценку раньше срока дела и через 1–2 дня или прошёл, а своего файла результата нет (2.304).
 // Руководителю — те же сведения, что в «Делах экспертов» (2.16): без заказчика, полей заявки, документов и переписки.
 // Только свои дела и свои организации.
 import { orderRef } from '../notify/registry.mjs';
 import { orderSplit } from '../money/money.mjs';
-import { STATUS_NAME, addDays, isOverdue, resultDue, todayMsk } from '../orders/workflow.mjs';
+import { RESULT_DUE_DAYS, STATUS_NAME, addDays, isOverdue, resultDue, todayMsk } from '../orders/workflow.mjs';
 import { orderSignatures, orgReturns, returnEgrn, signWait } from './sign-ops.mjs';
 import { executorSignOrg } from '../access/policy.mjs';
 import { dossierAlerts, loadDossier } from '../dossier/dossier.mjs';
@@ -34,7 +35,7 @@ import { dueNotes } from './note-ops.mjs';
 import { caseMoves, caseRemind, transferTargets } from './org-ops.mjs';
 import { docWait, egrnOld } from './docreq-ops.mjs';
 import { aiRecheck, aiSignHints, egrnRebuildLeft, egrnSwapLeft } from '../ai/ai.mjs';
-import { latest, taskAddressFor, taskCustomerFor, taskKindFor, taskPurposeFor, valueDateFor } from './draft-ops.mjs';
+import { latest, taskAddressFor, taskDueFor, taskCustomerFor, taskKindFor, taskPurposeFor, valueDateFor } from './draft-ops.mjs';
 import { assignmentDocs } from './ai-ops.mjs';
 import { assignmentAddress, customerOf, customersInText, purposeFits, purposeKinds, sameAddressText, sameCustomer } from '../ai/report-checks.mjs';
 
@@ -159,6 +160,9 @@ async function expertPart(sql, actor, registry, today, storage) {
   const drafts = due.length ? await sql`
     select distinct order_id from result_drafts where order_id = any(${due.map((o) => o.id)}::uuid[])` : [];
   const noResult = due.map((o) => item(o, { has_draft: drafts.some((x) => x.order_id === o.id), extend: ext.get(o.id) ?? null }));
+  // Срок по заданию на оценку раньше срока дела и близко (2.304) — выше «Срок близко», там и в «Горит срок» не повторяется.
+  const taskDue = (await taskDueCases(sql, storage, registry, actor.id, rows, today))
+    .map(({ order, due: d, draft }) => item(order, { task_due: d, has_draft: draft }));
   // Диспетчер ответил на просьбу о переносе срока (2.155), а эксперт ещё не открывал «Срок» в деле: согласился или отказал.
   const answers = await answeredExtends(sql, rows.filter((o) => ['in_work', 'review'].includes(o.status)).map((o) => o.id));
   const extendAnswer = rows.filter((o) => answers.has(o.id)).map((o) => {
@@ -201,6 +205,7 @@ async function expertPart(sql, actor, registry, today, storage) {
   return {
     ai_recheck: recheck,
     task_late: taskLate,
+    task_due: taskDue,
     egrn_swap: egrnSwap,
     task_swap: taskSwap,
     egrn_rebuild: egrnRebuild,
@@ -210,7 +215,7 @@ async function expertPart(sql, actor, registry, today, storage) {
     away_declined: awayDeclined,
     extend_answer: extendAnswer.filter((x) => !awayDeclined.some((a) => a.id === x.id)),
     ready: readyLeft,
-    no_result: noResult,
+    no_result: noResult.filter((x) => !taskDue.some((t) => t.id === x.id)),
     reply_wait: replyWait,
     notes,
     sign_wait: signWaits,
@@ -383,6 +388,26 @@ export async function taskLateCases(sql, storage, registry, rows) {
     if (items.length) out.push({ order: o, items, docs: fresh.map((d) => d.name), at: late.at(-1).created_at });
   }
   return out;
+}
+
+// 2.304: срок составления отчёта из задания на оценку (2.302, 2.303 — taskDueFor) раньше срока дела, до него 2 дня или меньше
+// (или уже прошёл), а своего файла результата нет. Задание на оценку читается только у дел в работе без своего файла.
+export async function taskDueCases(sql, storage, registry, userId, rows, today = todayMsk()) {
+  const work = rows.filter((o) => o.status === 'in_work');
+  if (!work.length) return [];
+  const own = await sql`
+    select order_id, count(*)::int as n from documents where order_id = any(${work.map((o) => o.id)}::uuid[]) and kind = 'result'
+      and deleted_at is null and uploaded_by = ${userId} group by order_id`;
+  const out = [];
+  for (const o of work.filter((x) => !own.some((r) => r.order_id === x.id))) {
+    if (!registry.checks(o.module, o.service).some((r) => (r.auto ?? []).includes('report_dates'))) continue;
+    const d = taskDueFor(registry, o, await assignmentDocs(sql, storage, o));
+    if (!d || d.day > addDays(today, RESULT_DUE_DAYS) || (o.deadline && String(o.deadline).slice(0, 10) <= d.day)) continue;
+    const days = Math.round((Date.parse(`${d.day}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86400_000);
+    const draft = !!(await sql.one`select 1 as x from result_drafts where order_id = ${o.id} limit 1`);
+    out.push({ order: o, draft, due: { day: d.day, days_left: days, overdue: days < 0, name: d.name, page: d.page, by: d.by } });
+  }
+  return out.sort((a, b) => a.due.day.localeCompare(b.due.day));
 }
 
 // Срок дела приходится на дни, когда эксперт не принимает дела (2.113): отметка ещё действует, срок раньше дня возвращения.

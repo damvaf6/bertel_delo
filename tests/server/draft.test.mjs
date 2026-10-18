@@ -1321,6 +1321,40 @@ test('2.273: перечень документов черновика — ном
   assert.match(d.body, /Выписка из ЕГРН от 05\.10\.2026 — файл/);
 });
 
+test('2.304: срок по заданию на оценку раньше срока дела и близко, а файла результата нет — строка в «Сегодня»', async () => {
+  const o = await inWork('Квартира: срок по заданию близко');
+  const putDoc = (body, name, kind) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), ...(kind ? { 'x-doc-kind': kind } : {}) } });
+  const ruD = (s) => s.split('-').reverse().join('.');
+  const today = () => spec.req('GET', '/api/today').then((r) => r.body.expert);
+  const due = (e) => e.task_due.filter((x) => x.id === o.id);
+  assert.deepEqual(due(await today()), [], 'задания нет — строки нет');
+  // Срок по заданию через 5 дней — ещё не близко.
+  assert.equal((await putDoc(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(addDays(todayMsk(), 5))}`, 'Задание на оценку.txt', 'basis')).status, 201);
+  assert.deepEqual(due(await today()), []);
+  // Срок в нескольких документах — берётся поздний (перенос); прежнее задание убрано — остаётся ранний срок нового.
+  await S.sql`update documents set deleted_at = now() where order_id = ${o.id} and filename = 'Задание на оценку.txt'`;
+  const soon = addDays(todayMsk(), 2);
+  assert.equal((await putDoc(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок оплаты: до ${ruD(addDays(todayMsk(), 1))}\nСрок составления отчёта: не позднее ${ruD(soon)}`, 'Задание банка.txt', 'basis')).status, 201);
+  let e = await today();
+  let [r] = due(e);
+  assert.deepEqual(r.task_due, { day: soon, days_left: 2, overdue: false, name: 'Задание банка.txt', page: 1, by: 'по заданию на оценку' });
+  assert.equal(r.has_draft, false);
+  assert.equal(e.no_result.some((x) => x.id === o.id), false);
+  // Черновик есть — видно в строке.
+  await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {});
+  [r] = due(await today());
+  assert.equal(r.has_draft, true);
+  // Срок дела не позже срока по заданию — строки нет (это «Срок близко»).
+  await S.sql`update orders set deadline = ${soon} where id = ${o.id}`;
+  assert.deepEqual(due(await today()), []);
+  await S.sql`update orders set deadline = ${addDays(todayMsk(), 10)} where id = ${o.id}`;
+  assert.equal(due(await today()).length, 1);
+  // Свой файл результата загружен — строки нет.
+  assert.equal((await put(spec, o, 'Отчёт об оценке', 'Отчёт.txt', 'text/plain', 'results')).status, 201);
+  assert.deepEqual(due(await today()), []);
+});
+
 test('2.303: срок составления отчёта из задания на оценку — в строку «Срок» таблицы задания и модели; срок дела позже — рядом', async () => {
   const o = await inWork('Квартира: срок из задания в черновик');
   const putDoc = (body, name, kind) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {

@@ -49,6 +49,13 @@ function deadline(x, today) {
   return `${n === 0 ? 'срок сегодня' : n === 1 ? 'срок завтра' : `срок ${dayRu(x.deadline)} · осталось ${n} дн.`}${ext}`;
 }
 
+// Срок по заданию на оценку (2.304): сегодня, завтра, через N дн. или уже прошёл.
+function taskDueWhen(d, today) {
+  const n = daysLeft(d.day, today);
+  return n < 0 ? `Срок по заданию прошёл — ${dayRu(d.day)}` : n === 0 ? `Срок по заданию сегодня — ${dayRu(d.day)}`
+    : n === 1 ? `Срок по заданию завтра — ${dayRu(d.day)}` : `Срок по заданию ${dayRu(d.day)} · осталось ${n} дн.`;
+}
+
 // Группа строк: заголовок с числом и строки-кнопки. Строка может быть { text, class } — например, красная (2.161).
 // extra(x) — кнопки под строкой (2.166: «Попросить перенести срок» у просроченного дела).
 function group(id, title, items, line, go, extra = () => []) {
@@ -191,7 +198,15 @@ export async function loadToday() {
   if (e) {
     // Срок через 1–2 дня или прошёл, а своего файла результата нет (2.138) — первой группой; в «Горит срок» не повторяется.
     const noResult = e.no_result ?? [];
+    const taskDue = e.task_due ?? [];
     rows.push(
+      // Срок по заданию на оценку раньше срока дела и близко (2.304) — выше «Срок близко»; по сроку дела ещё можно успеть,
+      // а по заданию (письму банка, определению суда) — нет. Перенос у диспетчера срок задания не двигает — кнопки нет.
+      ...group('task-due', 'Срок по заданию на оценку близко', taskDue, (x) => [x.title,
+        { class: 'overdue', role: 'task-due-when', text: `${taskDueWhen(x.task_due, t.today)} (${x.task_due.by}: «${x.task_due.name}», стр. ${x.task_due.page}) — раньше срока дела` },
+        `${x.service} · ${deadline(x, t.today)}`,
+        x.has_draft ? 'черновик есть — соберите отчёт Word и загрузите файл' : 'загрузите файл результата к сроку по заданию'],
+      (x) => { location.hash = `order=${x.id}&to=result`; }),
       ...group('no-result', 'Срок близко — нет файла результата', noResult, (x) => [x.title, `${x.service} · ${deadline({ ...x, who: 'Вы попросили' }, t.today)}`,
         // Перенос уже попросили (2.140) — второй раз не предлагаем.
         x.has_draft ? 'черновик есть — соберите отчёт Word и загрузите файл'
@@ -296,7 +311,7 @@ export async function loadToday() {
         `«Готово» ${since(x.finished_at)} · не снято: ${x.missing.join(', ')}`,
         x.asked === x.missing.length ? 'просьба доснять готова — отправьте владельцу новую ссылку' : 'попросите доснять — владельцу уйдёт новая ссылка'],
       (x) => { location.hash = `order=${x.id}&to=inspect`; }),
-      ...group('hot', 'Горит срок', e.hot.filter((x) => !noResult.some((n) => n.id === x.id)), (x) => [x.title, `${x.service} · ${deadline({ ...x, who: 'Вы попросили' }, t.today)}`], toOrder, askLate),
+      ...group('hot', 'Горит срок', e.hot.filter((x) => !noResult.some((n) => n.id === x.id) && !taskDue.some((n) => n.id === x.id)), (x) => [x.title, `${x.service} · ${deadline({ ...x, who: 'Вы попросили' }, t.today)}`], toOrder, askLate),
       ...group('offers', 'Новые предложения', e.offers, (x) => [x.title, [x.service, x.fee_kop ? `Вам ${rub(x.fee_kop)}` : null, deadline(x, t.today)].filter(Boolean).join(' · ')], toOrder),
       ...group('review', 'Ждут проверки диспетчера', e.review, (x) => [x.title, `${x.service} · ${deadline(x, t.today)}`], toOrder),
     );
