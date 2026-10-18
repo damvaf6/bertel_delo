@@ -6298,6 +6298,34 @@ test('цель оценки в таблице задания (2.291): из за�
   await shot(page, '114d-ekspert-cel-ocenki-iz-zadaniya');
 });
 
+test('срок в таблице задания (2.303): из задания на оценку, срок дела позже — рядом', async ({ page, browser, baseURL }) => {
+  const expert = await signIn(page, '+79990029303');
+  const op = await (await phoneContext(browser, baseURL)).newPage();
+  const owner = await signIn(op, '+79990029304');
+  const { id, due, mine } = await db(async (c) => {
+    const o = (await c.query(
+      `insert into orders (owner_user_id, title, module, service, fields, status, executor_user_id, price_kop, paid_at, deadline)
+       values ($1, 'Квартира: срок из задания', 'expertise', 'realty', $3, 'in_work', $2, 1500000, now(), (now() at time zone 'Europe/Moscow')::date + 9)
+       returning id, to_char(deadline, 'DD.MM.YYYY') as mine, to_char(deadline - 4, 'DD.MM.YYYY') as due`,
+      [owner.id, expert.id, { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, Заявочная ул., 4', area: '51' }])).rows[0];
+    await c.query('insert into specialists (user_id) values ($1) on conflict do nothing', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty') on conflict do nothing", [expert.id]);
+    return o;
+  });
+  expect((await op.request.post(`/api/orders/${id}/documents`, {
+    data: Buffer.from(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${due}`),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание на оценку.txt'), 'x-doc-kind': 'basis' },
+  })).status()).toBe(201);
+  await page.goto(`/kabinet#order=${id}`);
+  await page.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(page.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const text = page.getByLabel('Текст заключения');
+  await expect(text).toHaveValue(new RegExp(`\\| Срок \\| ${due.replace(/\./g, '\\.')} \\(по заданию на оценку; срок дела — ${mine.replace(/\./g, '\\.')}, позже срока по заданию\\) \\|`));
+  await expect(page.getByText(`Срок составления отчёта: не позднее ${due} — как в задании на оценку «Задание на оценку.txt» (стр. 1); срок дела — ${mine}, позже — успейте к сроку по заданию.`)).toBeVisible();
+  await page.getByText(/Срок составления отчёта: не позднее/).scrollIntoViewIfNeeded();
+  await shot(page, '114f-ekspert-srok-iz-zadaniya');
+});
+
 test('заказчик в разделе о заказчике (2.292): из задания на оценку, другой владелец заявки — рядом', async ({ page, browser, baseURL }) => {
   const expert = await signIn(page, '+79990029201');
   const op = await (await phoneContext(browser, baseURL)).newPage();

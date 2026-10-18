@@ -16,7 +16,7 @@ import { pastValues, reuseSections, skeleton } from '../docs/reuse.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { orderSources, placeSources, sourcesLines } from '../docs/sources.mjs';
 import { draftDiff } from '../docs/diff.mjs';
-import { assignmentAddress, assignmentCustomer, assignmentKinds, assignmentPurpose, assignmentValue, customerOf, egrnFacts, egrnRightsFacts, egrnShares, egrnUses, kindList, parseFloorField, purposeFits, sameAddressText, sameCustomer, USE_NAME } from '../ai/report-checks.mjs';
+import { assignmentAddress, assignmentCustomer, assignmentDue, assignmentKinds, assignmentPurpose, assignmentValue, customerOf, egrnFacts, egrnRightsFacts, egrnShares, egrnUses, kindList, parseFloorField, purposeFits, sameAddressText, sameCustomer, USE_NAME } from '../ai/report-checks.mjs';
 import { assignmentDocs, egrnDocs } from './ai-ops.mjs';
 
 const PHOTOS_MAX = 40;
@@ -175,6 +175,18 @@ export function taskCustomerFor(registry, order, assignment, owner) {
   const typed = mine && !mine.org && !c.who.org && !sameCustomer(c.who, mine) ? mine.value : null;
   return { v: c.who.value, org: c.who.org, what: c.what, by: TASK_BY[c.what], name: c.name, page: c.page + 1, typed };
 }
+// 2.303: срок составления отчёта из задания на оценку (письма заказчика, определения суда), как его сверяет ИИ-проверка
+// (2.302, правило report_dates), — в строку «Срок» таблицы задания: задание важнее срока дела; срок дела позже срока по
+// заданию — видно рядом. В нескольких документах — самый поздний (перенос новым заданием).
+export function taskDueFor(registry, order, assignment) {
+  if (!registry.checks(order.module, order.service).some((r) => (r.auto ?? []).includes('report_dates'))) return null;
+  const d = assignmentDue(assignment);
+  if (!d) return null;
+  const mine = order.deadline ? dayOf(order.deadline) : null;
+  return { v: ruDay(d.day), day: d.day, what: d.what, by: TASK_BY[d.what], name: d.name, page: d.page + 1,
+    later: mine && mine > d.day ? ruDay(mine) : null };
+}
+const dayOf = (v) => (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10);
 const CUSTOMER_GAP = /\[(?:заполнить|указать)\s*:?\s*(?:(?:фио|имя|наименование|название)\s+)?заказчик[а-яё]*\s*\]/giu;
 const PURPOSE_GAP = /\[(?:заполнить|указать)\s*:?\s*цел\S*\s+(?:проведения\s+)?оценки[^\]]*\]/giu;
 const VALUE_KIND_GAP = /\[(?:заполнить|указать)\s*:?\s*вид\S*\s+стоимост[^\]]*\]/giu;
@@ -352,13 +364,14 @@ export function draftOps() {
         const valueBrief = valueDate?.day ? `Дата оценки: ${valueDate.day} (${valueDate.what} «${valueDate.name}», стр. ${valueDate.page}) — пиши её везде, где нужна дата оценки, без пометок` : null;
         const egrn = await egrnFor(sql, providers.storage, registry, order);
         const task = { address: taskAddressFor(registry, order, assignment, egrn), kind: taskKindFor(registry, order, assignment),
-          purpose: taskPurposeFor(registry, order, assignment) };
+          purpose: taskPurposeFor(registry, order, assignment), due: taskDueFor(registry, order, assignment) };
         const [owner] = await sql`select full_name from users where id = ${order.owner_user_id}`;
         task.customer = taskCustomerFor(registry, order, assignment, owner?.full_name);
         const taskBrief = [
           task.address ? `Адрес объекта ${task.address.what} «${task.address.name}» (стр. ${task.address.page}): ${task.address.v} — пиши его везде, где нужен адрес объекта, без пометок` : null,
           task.purpose ? `Цель оценки ${task.purpose.what} «${task.purpose.name}» (стр. ${task.purpose.page}): ${task.purpose.v} — пиши её везде, где нужна цель оценки, без пометок` : null,
           task.customer ? `Заказчик ${task.customer.what} «${task.customer.name}» (стр. ${task.customer.page}): ${task.customer.v} — пиши его везде, где нужен заказчик, без пометок` : null,
+          task.due ? `Срок составления отчёта ${task.due.what} «${task.due.name}» (стр. ${task.due.page}): не позднее ${task.due.v} — дата составления отчёта не позже него` : null,
           task.kind ? `Вид стоимости ${task.kind.what} «${task.kind.name}» (стр. ${task.kind.page}): ${task.kind.v} — пиши его везде, где нужен вид стоимости, без пометок` : null,
         ].filter(Boolean).join('\n') || null;
         const taken = ['address', 'area', 'cadastral', 'purpose'].filter((k) => egrn?.[k]?.v || task[k]?.v);
@@ -387,6 +400,7 @@ export function draftOps() {
           task_kind: task.kind,
           task_purpose: task.purpose,
           task_customer: task.customer,
+          task_due: task.due,
         };
         const d = await sql.tx(async (tx) => {
           await tx`select id from orders where id = ${order.id} for update`;

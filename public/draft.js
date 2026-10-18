@@ -286,6 +286,8 @@ function stateText(r) {
     d.inputs?.task_purpose ? `Цель оценки: ${d.inputs.task_purpose.v} — как ${d.inputs.task_purpose.what} «${d.inputs.task_purpose.name}» (стр. ${d.inputs.task_purpose.page})${d.inputs.task_purpose.typed ? `; в заявке — ${d.inputs.task_purpose.typed}` : ''} — сверьте.` : null,
     // Заказчик из задания на оценку (2.292): задание важнее заявки.
     d.inputs?.task_customer ? `Заказчик: ${d.inputs.task_customer.v} — как ${d.inputs.task_customer.what} «${d.inputs.task_customer.name}» (стр. ${d.inputs.task_customer.page})${d.inputs.task_customer.typed ? `; в заявке — ${d.inputs.task_customer.typed}` : ''} — сверьте.` : null,
+    // Срок составления отчёта из задания на оценку (2.303): срок дела позже — рядом.
+    d.inputs?.task_due ? `Срок составления отчёта: не позднее ${d.inputs.task_due.v} — как ${d.inputs.task_due.what} «${d.inputs.task_due.name}» (стр. ${d.inputs.task_due.page})${d.inputs.task_due.later ? `; срок дела — ${d.inputs.task_due.later}, позже — успейте к сроку по заданию` : ''}.` : null,
     // Адрес из задания на оценку (2.281), когда в выписках его нет.
     d.inputs?.task_address ? `Адрес объекта ${d.inputs.task_address.v} — как ${d.inputs.task_address.what} «${d.inputs.task_address.name}» (стр. ${d.inputs.task_address.page})${d.inputs.task_address.typed ? `; в заявке — ${d.inputs.task_address.typed}` : ''} — сверьте.` : null,
     d.inputs?.photos?.length ? `Фото в черновике: ${d.inputs.photos.length} (сами снимки ИИ не видит — опишите их).` : null,
