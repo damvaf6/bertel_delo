@@ -6,7 +6,7 @@ const $ = (id) => document.getElementById(id);
 const timeRu = (s) => `${new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })} МСК`;
 const hoursText = (h) => (h ? `${h} ч` : 'не обещаем');
 const factText = (f, days) => (f.orders
-  ? `${f.orders} заяв. за ${days} дней: обычно ${f.median_hours} ч, дольше всего ${f.max_hours} ч`
+  ? `заявок с ценой за ${days} дней: ${f.orders}; от отправки до цены обычно ${f.median_hours} ч, дольше всего ${f.max_hours} ч`
   : `за ${days} дней цену ещё не назначали — считать не из чего`);
 
 let modules = [];
