@@ -5,8 +5,9 @@
 // заказчик (тот, кто может добавлять документы заявки). Удалённый заказчиком файл — просьба снова открыта (core-ops.mjs).
 // Выписка ЕГРН в деле старше 30 дней на дату оценки (2.224) — исполнителю подсказка запросить свежую одной кнопкой.
 // Запрошенное не пришло 3 дня (2.234) — «Напомнить заказчику» одной кнопкой, не чаще раза в сутки; строка и в «Сегодня».
+// Оценка для банка, задания на оценку нет и его не запрашивали, а до срока дела 3 дня или меньше (2.306) — строка в «Сегодня».
 import { HttpError } from '../http/core.mjs';
-import { FINAL, todayMsk } from '../orders/workflow.mjs';
+import { FINAL, addDays, todayMsk } from '../orders/workflow.mjs';
 import { assignmentValue, egrnIssued, egrnOnObject } from '../ai/report-checks.mjs';
 import { assignmentDocs, egrnDocs, TASK_ITEMS } from './ai-ops.mjs';
 import { LEVEL, orderLevel, orderSides } from '../access/policy.mjs';
@@ -21,6 +22,8 @@ export const EGRN_FRESH_DAYS = 30;
 // Запрошенный документ не пришёл столько дней — исполнителю «Напомнить заказчику» (2.234); снова — через сутки.
 export const DOC_WAIT_DAYS = 3;
 export const DOC_REMIND_EVERY_HOURS = 24;
+// До срока дела столько дней или меньше, а задания на оценку от банка нет и не просили (2.306).
+export const BANK_TASK_DAYS = 3;
 
 const isExecutor = (actor, order) => orderSides(actor, order).includes('executor');
 
@@ -79,6 +82,20 @@ export async function docWait(sql, order, now = new Date()) {
     can_remind: !next || next <= now,
     next_remind_at: next && next > now ? next : null,
   };
+}
+
+// 2.306: оценка для банка (в списке услуги есть «Задание на оценку от банка» — 2.299), дело в работе, до срока
+// 3 дня или меньше (или прошёл), задания в деле нет и его не запрашивали (снятая просьба — не в счёт).
+// { item_id, title, days } — days: сколько дней до срока (меньше нуля — просрочено); иначе null.
+export async function bankTaskMissing(sql, storage, registry, order, today = todayMsk()) {
+  if (order.status !== 'in_work' || !storage || !order.deadline || order.deadline > addDays(today, BANK_TASK_DAYS)) return null;
+  const item = registry.requestDocs(order.module, order.service, order.basis_kind, order.fields).find((c) => TASK_ITEMS.includes(c.id));
+  if (!item) return null;
+  const asked = await sql`select 1 from doc_requests where order_id = ${order.id} and item_id = any(${TASK_ITEMS}::text[])
+                          and cancelled_at is null limit 1`;
+  if (asked.length || (await assignmentDocs(sql, storage, order)).length) return null;
+  const days = Math.round((Date.parse(`${order.deadline}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86400_000);
+  return { item_id: item.id, title: item.title, days };
 }
 
 // Ждём документы от заказчика (2.235) — руководителю в «Делах экспертов»: по делам в работе неполученные запросы с любого

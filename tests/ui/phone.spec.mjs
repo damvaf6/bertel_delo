@@ -13637,3 +13637,35 @@ test('2.305: «Что сказано в задании на оценку» в д
   await shot(ep, '54v1-ekspert-delo-chto-v-zadanii');
   for (const p of [ep, cp]) await p.context().close();
 });
+
+// 2.306: оценка для банка, задания на оценку нет и не запрошено, а срок через 2 дня — в «Сегодня» «Запросите задание на оценку
+// от банка»; «Запросить задание у заказчика» прямо в строке — заказчику уведомление, после обновления строки нет.
+test('2.306: запросите задание на оценку от банка — «Сегодня»', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990029621'), customer = await signIn(cp, '+79990029622');
+  const A = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Для банка без задания: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Садовая ул., д. 7, кв. 4"}') returning id`,
+    [customer.id, expert.id, inDays(2)]);
+    return o.id;
+  });
+  await ep.goto('/kabinet');
+  await expect(ep.locator('li[data-today="bank-task"]')).toHaveText(/^Запросите задание на оценку от банка · \d+$/);
+  const row = ep.locator('li[data-today-item="bank-task"]').filter({ hasText: 'Для банка без задания: квартира' });
+  await expect(row.locator('[data-role="bank-task-why"]')).toHaveText(/^Оценка для банка, а задания на оценку в деле нет и его не запрашивали — срок .+ · осталось 2 дн\.$/);
+  await expect(row).toContainText('по заданию сверяются дата оценки, вид стоимости и адрес');
+  await row.scrollIntoViewIfNeeded();
+  await shot(ep, '54w1-ekspert-segodnya-zaprosite-zadanie-banka');
+  await row.locator('[data-action="bank-task-ask"]').click();
+  await expect(row.locator('[data-role="bank-task-msg"]')).toHaveText('Запрошено — заказчику отправлено уведомление');
+  await shot(ep, '54w2-ekspert-segodnya-zadanie-zaprosheno');
+  const list = await (await cp.request.get(`/api/orders/${A}/doc-requests`, { headers: H })).json();
+  expect(list.requests.map((r) => r.title)).toEqual(['Задание на оценку от банка']);
+  await ep.reload();
+  await expect(ep.locator('li[data-today-item="bank-task"]').filter({ hasText: 'Для банка без задания: квартира' })).toHaveCount(0);
+  for (const p of [ep, cp]) await p.context().close();
+});
