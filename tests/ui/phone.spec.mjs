@@ -12115,7 +12115,9 @@ test('2.275: сводка за месяц — расхождения с заяв
   });
   const fix = (text, from) => ({ file: 'Отчёт.pdf', text, fix: { bad: '45,1', right: '47,3', from } });
   const found = [{ realty_identity: [fix('Площадь 45,1, а в заявке — 47,3', 'в заявке'), fix('Этаж 3, а в заявке — 5', 'в заявке')],
-    rights: [fix('Дата оценки 01.10.2026, а в задании на оценку — 03.10.2026', 'в задании на оценку «Задание.pdf»')] },
+    rights: [fix('Дата оценки 01.10.2026, а в задании на оценку — 03.10.2026', 'в задании на оценку «Задание.pdf»'),
+      // 2.297: и заказчик не как в задании — в сводке «по заданию чаще: дата оценки — 1, заказчик — 1».
+      fix('Заказчик в отчёте — «Иванов И. И.», а в задании на оценку — «Петров П. П.»', 'в задании на оценку «Задание.pdf»')] },
   { realty_identity: [{ file: 'Отчёт.pdf', text: 'Нет даты осмотра' }] }];
   for (const [i, id] of ids.entries()) {
     const up = await ep.request.post(`/api/orders/${id}/results`, { data: Buffer.from('%PDF-1.4 отчёт'), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Отчёт.pdf') } });
@@ -12140,14 +12142,18 @@ test('2.275: сводка за месяц — расхождения с заяв
   await expect(row.locator('[data-expert-swap]')).toHaveText('до первой подписи исправлено кнопкой в черновике: 3 в 1 деле'
     + ' (по выписке ЕГРН — 2, по заданию на оценку — 1)');
   await expect(hp.locator('#org-report-total')).toContainText('Исправлено кнопкойдо первой подписи исправлено кнопкой в черновике: 3 в 1 деле');
-  await expect(row.locator('[data-expert-order]')).toHaveText('при первой подписи расхождений с заявкой и заданием на оценку: 3 в 1 деле из 2'
-    + ' проверенных ИИ (с заявкой — 2, с заданием — 1) · чаще: Недвижимость и земля — 2, Права и обременения — 1');
+  await expect(row.locator('[data-expert-order]')).toHaveText('при первой подписи расхождений с заявкой и заданием на оценку: 4 в 1 деле из 2'
+    + ' проверенных ИИ (с заявкой — 2, с заданием — 2) · чаще: Недвижимость и земля — 2, Права и обременения — 2'
+    + ' · по заданию чаще: дата оценки — 1, заказчик — 1');
   await expect(row.locator('[data-expert-order]')).toHaveClass(/warn/);
   // С выпиской расхождений нет — строка спокойная.
   await expect(row.locator('[data-expert-egrn]')).toHaveText('при первой подписи расхождений с выпиской ЕГРН нет (проверено ИИ дел: 2)');
-  await expect(hp.locator('#org-report-total')).toContainText('Заявка и задание на оценкупри первой подписи расхождений с заявкой и заданием на оценку: 3 в 1 деле из 2 проверенных ИИ');
+  await expect(hp.locator('#org-report-total')).toContainText('Заявка и задание на оценкупри первой подписи расхождений с заявкой и заданием на оценку: 4 в 1 деле из 2 проверенных ИИ');
+  await expect(hp.locator('#org-report-total')).toContainText('по заданию чаще: дата оценки — 1, заказчик — 1');
   await row.locator('[data-expert-order]').scrollIntoViewIfNeeded();
   await shot(hp, 'd42a-rukovoditel-svodka-zayavka-zadanie');
+  await hp.locator('#org-report-total').scrollIntoViewIfNeeded();
+  await shot(hp, 'd42c-rukovoditel-svodka-zadanie-po-vidam');
   await row.locator('[data-expert-swap]').scrollIntoViewIfNeeded();
   await shot(hp, 'd42b-rukovoditel-svodka-ispravleno-knopkoj');
   for (const p of [ep, hp, cp]) await p.context().close();

@@ -217,7 +217,8 @@ const firstSignQ = (sql, orgId, ids, { start, end }) => sql`
 export const TOP_EGRN_RULES = 3;
 // { first_signed, first_no_ai, egrn_first, egrn_first_cases, egrn_rules: [{ title, n }],
 //   order_first, order_first_cases, order_first_app, order_first_task, order_rules,
-//   swap_first, swap_first_cases, swap_first_egrn, swap_first_task } — по строкам firstSignQ.
+//   order_task_kinds: [{ kind, title, n }], order_task_<вид>, swap_first, swap_first_cases, swap_first_egrn, swap_first_task }
+//   — по строкам firstSignQ.
 // 2.289: swap_* — заменено кнопкой в черновике до первой подписи (по всем впервые подписанным делам, с ИИ-проверкой и без).
 // 2.275: order_* — находки, сверенные с заявкой или заданием на оценку (fix.from, без выписки, как fixShort); app — «в заявке».
 const ruleTitle = (registry, x, id) => {
@@ -225,6 +226,19 @@ const ruleTitle = (registry, x, id) => {
   try { title = registry?.checks(x.module, x.service, x.fields).find((c) => c.id === id)?.title ?? id; } catch { /* услуга убрана */ }
   return title.split(':')[0].trim();
 };
+// 2.297: расхождения с заданием на оценку по видам — что чаще. Вид — по пункту проверки, а в «цель и вид стоимости» — по
+// началу текста находки (старые проверки — тоже по тексту).
+export const TASK_KINDS = [['address', 'адрес'], ['date', 'дата оценки'], ['value_kind', 'вид стоимости'], ['purpose', 'цель оценки'],
+  ['customer', 'заказчик']];
+const TASK_RULE_KIND = { address_match: 'address', value_date: 'date', customer_match: 'customer' };
+export function taskKindOf(id, f) {
+  if (TASK_RULE_KIND[id]) return TASK_RULE_KIND[id];
+  const t = String(f.text ?? '');
+  return /^Дата оценки/u.test(t) ? 'date' : /^Вид стоимости/u.test(t) ? 'value_kind' : /^Цель оценки/u.test(t) ? 'purpose'
+    : /^Заказчик/u.test(t) ? 'customer' : /^Адрес/u.test(t) ? 'address' : null;
+}
+const taskKinds = (counts) => TASK_KINDS.filter(([k]) => counts[k]).map(([kind, title]) => ({ kind, title, n: counts[kind] }))
+  .sort((a, b) => b.n - a.n);
 const topRules = (rules) => [...rules].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'ru')).slice(0, TOP_EGRN_RULES)
   .map(([title, n]) => ({ title, n }));
 function egrnFirst(rows, registry) {
@@ -234,6 +248,7 @@ function egrnFirst(rows, registry) {
   let cases = 0;
   const order = { n: 0, cases: 0, app: 0, task: 0 };
   const swap = { cases: 0, egrn: 0, task: 0 };
+  const kinds = Object.fromEntries(TASK_KINDS.map(([k]) => [k, 0]));
   for (const x of rows) {
     swap.egrn += x.swap_egrn ?? 0;
     swap.task += x.swap_task ?? 0;
@@ -254,7 +269,12 @@ function egrnFirst(rows, registry) {
       const fixes = (i.found ?? []).filter((f) => !f.egrn && f.fix?.from && mine(f));
       if (fixes.length) {
         m += fixes.length;
-        for (const f of fixes) order[String(f.fix.from).startsWith('в заявке') ? 'app' : 'task']++;
+        for (const f of fixes) {
+          const app = String(f.fix.from).startsWith('в заявке');
+          order[app ? 'app' : 'task']++;
+          const kind = !app && taskKindOf(i.id, f);
+          if (kind) kinds[kind]++;
+        }
         const title = ruleTitle(registry, x, i.id);
         orderRules.set(title, (orderRules.get(title) ?? 0) + fixes.length);
       }
@@ -275,6 +295,8 @@ function egrnFirst(rows, registry) {
     order_first_app: order.app,
     order_first_task: order.task,
     order_rules: topRules(orderRules),
+    order_task_kinds: taskKinds(kinds),
+    ...Object.fromEntries(TASK_KINDS.map(([k]) => [`order_task_${k}`, kinds[k]])),
     swap_first: swap.egrn + swap.task,
     swap_first_cases: swap.cases,
     swap_first_egrn: swap.egrn,
@@ -523,12 +545,13 @@ export function reportCsv(orgName, r) {
     'Подписал файлов', 'Из них без ИИ-проверки этой версии', 'Из них не отметив все пункты замечания',
     'Впервые подписал дел', 'Расхождений с выпиской ЕГРН при первой подписи', 'В скольких делах', 'Первая подпись без ИИ-проверки',
     'Расхождений с заявкой и заданием на оценку при первой подписи', 'В скольких делах', 'Из них с заявкой', 'Из них с заданием на оценку',
+    ...TASK_KINDS.map(([, title]) => `С заданием: ${title}`),
     'Заменено кнопкой в черновике до первой подписи', 'В скольких делах', 'Из них по выписке ЕГРН', 'Из них по заданию на оценку'];
   const line = (name, x) => [name, x.accepted, x.done, x.done_late, ...(r.current ? [x.overdue_now] : []),
     x.returned_head, x.returned_dispatcher, rubCell(x.fee_kop), rubCell(x.paid_kop),
     daysCell(x.avg_days), x.late_first, x.late_first_moved, x.first_kept, daysCell(x.resign_days), x.resign_wait,
     x.signed, x.signed_no_ai, x.signed_points_left, x.first_signed, x.egrn_first, x.egrn_first_cases, x.first_no_ai,
-    x.order_first, x.order_first_cases, x.order_first_app, x.order_first_task,
+    x.order_first, x.order_first_cases, x.order_first_app, x.order_first_task, ...TASK_KINDS.map(([k]) => x[`order_task_${k}`]),
     x.swap_first, x.swap_first_cases, x.swap_first_egrn, x.swap_first_task];
   const day = todayMsk();
   const lines = [
@@ -549,6 +572,8 @@ export function reportCsv(orgName, r) {
       ...r.total.egrn_rules.map((x) => [x.title, x.n])] : []),
     ...(r.total.order_rules?.length ? [[], ['Расхождения с заявкой и заданием на оценку при первой подписи — пункт проверки', 'Сколько'],
       ...r.total.order_rules.map((x) => [x.title, x.n])] : []),
+    ...(r.total.order_task_kinds?.length ? [[], ['Расхождения с заданием на оценку при первой подписи — что', 'Сколько'],
+      ...r.total.order_task_kinds.map((x) => [x.title, x.n])] : []),
     ...(r.top_remarks?.length ? [[], ['Частые замечания при возврате', 'Сколько раз', 'У скольких экспертов'],
       ...r.top_remarks.map((x) => [x.text, x.n, x.experts])] : []),
   ];
