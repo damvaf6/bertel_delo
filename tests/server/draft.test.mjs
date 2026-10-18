@@ -1321,6 +1321,40 @@ test('2.273: перечень документов черновика — ном
   assert.match(d.body, /Выписка из ЕГРН от 05\.10\.2026 — файл/);
 });
 
+test('2.305: «Что сказано в задании на оценку» — одним списком с файлом и страницей; задания нет — пусто', async () => {
+  const o = await inWork('Квартира: что сказано в задании');
+  const putDoc = (body, name, kind) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), ...(kind ? { 'x-doc-kind': kind } : {}) } });
+  const ruD = (s) => s.split('-').reverse().join('.');
+  const get = () => spec.req('GET', `/api/orders/${o.id}/task`);
+  let r = await get();
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body, { files: [], items: [] }, 'задания нет — пусто');
+  const due = addDays(todayMsk(), 5);
+  const put = await putDoc(['ЗАДАНИЕ НА ОЦЕНКУ', 'Заказчик: Иванов Пётр Сергеевич', 'Объект оценки: квартира',
+    'Адрес объекта: г. Москва, ул. Садовая, д. 5, кв. 12', 'Цель оценки: для предоставления в банк в качестве залога',
+    'Вид стоимости: рыночная', 'Дата оценки: 03.10.2026', `Срок составления отчёта: не позднее ${ruD(due)}`].join('\n'), 'Задание на оценку.txt', 'basis');
+  assert.equal(put.status, 201);
+  const doc = put.body.document?.id ?? put.body.id;
+  r = await get();
+  assert.deepEqual(r.body.files, [{ id: doc, name: 'Задание на оценку.txt' }]);
+  const by = Object.fromEntries(r.body.items.map((x) => [x.id, x]));
+  assert.deepEqual(r.body.items.map((x) => x.id), ['value_date', 'kind', 'purpose', 'customer', 'address', 'due']);
+  assert.deepEqual(by.value_date, { id: 'value_date', label: 'Дата оценки', v: '03.10.2026', by: 'по заданию на оценку', name: 'Задание на оценку.txt', page: 1, doc_id: doc });
+  assert.equal(by.kind.v, 'рыночная');
+  assert.equal(by.purpose.v, 'для предоставления в банк в качестве залога');
+  assert.equal(by.customer.v, 'Иванов Пётр Сергеевич');
+  assert.equal(by.address.v, 'г. Москва, ул. Садовая, д. 5, кв. 12');
+  assert.equal(by.address.typed, 'г. Москва, тестовая ул., 9', 'в заявке другой адрес — видно рядом');
+  assert.equal(by.due.v, `не позднее ${ruD(due)}`);
+  assert.equal(by.due.later, ruD(addDays(todayMsk(), 10)), 'срок дела позже срока по заданию');
+  for (const x of r.body.items) assert.equal(x.doc_id, doc);
+  // Заказчику — нельзя; задание убрано — снова пусто.
+  assert.equal((await owner.req('GET', `/api/orders/${o.id}/task`)).status, 403);
+  await S.sql`update documents set deleted_at = now() where id = ${doc}`;
+  assert.deepEqual((await get()).body, { files: [], items: [] });
+});
+
 test('2.304: срок по заданию на оценку раньше срока дела и близко, а файла результата нет — строка в «Сегодня»', async () => {
   const o = await inWork('Квартира: срок по заданию близко');
   const putDoc = (body, name, kind) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {

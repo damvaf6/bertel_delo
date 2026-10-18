@@ -322,6 +322,37 @@ const egrnBrief = (egrn) => [
 export function draftOps() {
   return [
     {
+      // 2.305: «Что сказано в задании на оценку» — одним списком, что программа взяла из задания (письма заказчика,
+      // определения суда): дата оценки, вид стоимости, цель, заказчик, адрес, срок — с файлом и страницей. Те же правила, что
+      // у черновика (2.207, 2.281–2.292, 2.303): адрес — как в задании, даже если в выписке ЕГРН он есть. Задания нет — пусто.
+      id: 'draft.task', method: 'GET', path: '/api/orders/:id/task', auth: 'user',
+      access: { resource: 'order', param: 'id', need: 'read' },
+      async handler({ sql, actor, order, registry, providers }) {
+        guard(actor, order);
+        const assignment = await assignmentDocs(sql, providers.storage, order);
+        if (!assignment.length) return { files: [], items: [] };
+        const [owner] = await sql`select full_name from users where id = ${order.owner_user_id}`;
+        const idOf = (name) => assignment.find((a) => a.name === name)?.id ?? null;
+        const at = (x) => ({ by: x.by ?? TASK_BY[x.what] ?? null, name: x.name, page: x.page, doc_id: idOf(x.name) });
+        const vd = valueDateFor(registry, order, assignment);
+        const kind = taskKindFor(registry, order, assignment);
+        const purpose = taskPurposeFor(registry, order, assignment);
+        const customer = taskCustomerFor(registry, order, assignment, owner?.full_name);
+        const address = taskAddressFor(registry, order, assignment, null);
+        const due = taskDueFor(registry, order, assignment);
+        const items = [
+          vd?.day ? { id: 'value_date', label: 'Дата оценки', v: vd.day, ...at(vd) } : null,
+          vd?.days ? { id: 'value_date', label: 'Дата оценки', v: vd.days.join(', '), many: true, by: null, name: null, page: null, doc_id: null } : null,
+          kind ? { id: 'kind', label: 'Вид стоимости', v: kind.v, ...at(kind) } : null,
+          purpose ? { id: 'purpose', label: 'Для чего нужна оценка', v: purpose.v, ...at(purpose), typed: purpose.typed } : null,
+          customer ? { id: 'customer', label: 'Заказчик', v: customer.v, ...at(customer), typed: customer.typed } : null,
+          address ? { id: 'address', label: 'Адрес объекта', v: address.v, ...at(address), typed: address.typed } : null,
+          due ? { id: 'due', label: 'Срок составления отчёта', v: `не позднее ${due.v}`, ...at(due), later: due.later } : null,
+        ].filter(Boolean);
+        return { files: assignment.map((a) => ({ id: a.id, name: a.name })), items };
+      },
+    },
+    {
       id: 'draft.get', method: 'GET', path: '/api/orders/:id/draft', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
       async handler({ sql, actor, order, registry }) {

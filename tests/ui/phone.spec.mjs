@@ -13595,3 +13595,45 @@ test('2.304: срок по заданию на оценку близко — «�
   await expect(ep).toHaveURL(new RegExp(`#order=${A}&to=result$`));
   for (const p of [ep, cp]) await p.context().close();
 });
+
+// 2.305: в деле у эксперта — «Что сказано в задании на оценку»: одним списком дата оценки, вид стоимости, цель, заказчик,
+// адрес, срок с файлом и страницей; в заявке другой адрес — видно рядом; задания нет — блока нет.
+test('2.305: «Что сказано в задании на оценку» в деле', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990029611'), customer = await signIn(cp, '+79990029612');
+  const ru = (iso) => iso.split('-').reverse().join('.');
+  const A = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Что сказано в задании: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Садовая ул., д. 7, кв. 4"}') returning id`,
+    [customer.id, expert.id, inDays(10)]);
+    return o.id;
+  });
+  await ep.goto(`/kabinet#order=${A}`);
+  await expect(ep.locator('#order-title')).toHaveText('Что сказано в задании: квартира');
+  await expect(ep.locator('#task-box')).toBeHidden();
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from(['ЗАДАНИЕ НА ОЦЕНКУ', 'Заказчик: Тестов Иван Петрович', 'Объект оценки: квартира', 'Адрес объекта: г. Москва, ул. Тверская, д. 3, кв. 8',
+      'Цель оценки: для предоставления в банк в качестве залога', 'Вид стоимости: рыночная', 'Дата оценки: 03.10.2026',
+      `Срок составления отчёта: не позднее ${ru(inDays(5))}`].join('\n')),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание банка.txt'), 'x-doc-kind': 'basis' },
+  })).status()).toBe(201);
+  await ep.reload();
+  const box = ep.locator('#task-box');
+  await expect(box).toBeVisible();
+  await expect(box.locator('#task-lead')).toHaveText('Из файла задания программа взяла в черновик и проверку:');
+  await expect(box.locator('li[data-task]')).toHaveCount(6);
+  await expect(box.locator('li[data-task="value_date"]')).toContainText('Дата оценки: 03.10.2026');
+  await expect(box.locator('li[data-task="kind"]')).toContainText('Вид стоимости: рыночная');
+  await expect(box.locator('li[data-task="customer"]')).toContainText('Заказчик: Тестов Иван Петрович');
+  await expect(box.locator('li[data-task="address"]')).toContainText('в заявке — г. Москва, Садовая ул., д. 7, кв. 4');
+  await expect(box.locator('li[data-task="due"]')).toContainText(`не позднее ${ru(inDays(5))}`);
+  await expect(box.locator('li[data-task="due"]')).toContainText(`срок дела — ${ru(inDays(10))}, позже срока по заданию`);
+  await expect(box.locator('li[data-task="purpose"] [data-action="task-open"]')).toHaveText('«Задание банка.txt», стр. 1');
+  await box.scrollIntoViewIfNeeded();
+  await shot(ep, '54v1-ekspert-delo-chto-v-zadanii');
+  for (const p of [ep, cp]) await p.context().close();
+});
