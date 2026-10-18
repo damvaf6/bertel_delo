@@ -12653,6 +12653,73 @@ test('2.294: заказчик — замена в черновике по зад
   for (const p of [ep, cp]) await p.context().close();
 });
 
+// 2.296: находки по цели и заказчику (как в задании на оценку) — у руководителя в «Вернуть эксперту» отдельными пунктами
+// «… — исправьте, как в задании на оценку» (без «… берётся из задания»); у эксперта в пункте — «Заменить на значение из задания».
+test('2.296: «Вернуть эксперту» — цель и заказчик по заданию пунктами', async ({ browser, baseURL }) => {
+  test.setTimeout(120_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), ep = await ctx(), hp = await ctx();
+  const customer = await signIn(cp, '+79990029601');
+  const expert = await signIn(ep, '+79990029602'), head = await signIn(hp, '+79990029603');
+  const { orgId, A } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Цель и заказчик ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Целина Анна' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Цель и заказчик по заданию: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Садовая ул., д. 7, кв. 4"}') returning id`,
+    [customer.id, expert.id, inDays(6)]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [o.id, expert.id]);
+    return { orgId: org.id, A: o.id };
+  });
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from('ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nЗаказчик: Иванов Иван Иванович\nЦель оценки: для ипотеки\nВид стоимости: рыночная'),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание на оценку.txt'), 'x-doc-kind': 'basis' },
+  })).status()).toBe(201);
+  await ep.goto(`/kabinet#order=${A}`);
+  await ep.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const draftText = ep.getByLabel('Текст заключения');
+  await draftText.fill(`${await draftText.inputValue()}\nЗаказчик оценки: Петров Пётр Петрович.`);
+  const up = await ep.request.post(`/api/orders/${A}/results`, {
+    data: Buffer.from(['ОТЧЁТ ОБ ОЦЕНКЕ № 96/2026', 'Заказчик: Петров Пётр Петрович', 'Цель оценки: для нотариуса', 'Вид определяемой стоимости: рыночная', 'Итоговая стоимость 10 000 000 руб.'].join('\n')),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Отчёт Целиной.txt') },
+  });
+  expect(up.status()).toBe(201);
+  expect((await ep.request.post(`/api/documents/${(await up.json()).document.id}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  await ep.reload();
+  await ep.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(ep.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+
+  // Руководитель: «Вернуть эксперту» — цель и заказчик отдельными пунктами, коротко.
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const item = hp.locator('#org-sign > li[data-item]').filter({ hasText: 'Отчёт Целиной.txt' });
+  await expect(item.locator('[data-role="ai-order"]')).toContainText('Расхождения с заданием на оценку (2):');
+  await item.locator('[data-action="org-return"]').click();
+  const points = (await item.locator('textarea').inputValue()).split('\n');
+  const pc = 'Заказчик в отчёте — «Петров Пётр Петрович», а в задании на оценку «Задание на оценку.txt» — «Иванов Иван Иванович» — исправьте, как в задании на оценку';
+  expect(points).toContain(pc);
+  expect(points.filter((p) => /^Цель оценки в отчёте — «для нотариуса» \(.+\), а в задании на оценку «Задание на оценку\.txt» — «для ипотеки» — исправьте, как в задании на оценку$/.test(p))).toHaveLength(1);
+  expect(points.join('\n')).not.toContain('берётся');
+  await item.locator('textarea').scrollIntoViewIfNeeded();
+  await shot(hp, '54q4-rukovoditel-vernut-cel-zakazchik');
+  await item.locator('[data-action="org-return-send"]').click();
+  await expect(hp.locator('#org-sign-msg')).toHaveText('Файл возвращён эксперту с замечанием — его подпись снята');
+
+  // Эксперт: в пункте о заказчике — «Заменить на значение из задания»; заказчик в черновике меняется одной кнопкой.
+  await ep.reload();
+  const point = ep.locator('ul.points li.point').filter({ hasText: 'Заказчик в отчёте' }).first();
+  await expect(point.locator('[data-role="point-swap"]')).toContainText('В черновике «Петров Пётр Петрович» — в задании на оценку');
+  await point.scrollIntoViewIfNeeded();
+  await shot(ep, '54q5-ekspert-punkt-zakazchik-zamenit');
+  await point.getByRole('button', { name: 'Заменить на значение из задания' }).click();
+  await expect(point.locator('[data-role="point-swap-done"]')).toContainText('«Петров Пётр Петрович» → «Иванов Иван Иванович»');
+  await expect(draftText).toHaveValue(/Заказчик оценки: Иванов Иван Иванович\./);
+  for (const p of [cp, ep, hp]) await p.context().close();
+});
+
 // 2.295: задание на оценку приложено после черновика, а в таблице задания черновика другое — в «Сегодня» строка «Задание
 // пришло позже черновика — сверьте таблицу задания»; нажатие ведёт к таблице задания в тексте черновика.
 test('2.295: задание пришло позже черновика — «Сегодня» и таблица задания', async ({ browser, baseURL }) => {
