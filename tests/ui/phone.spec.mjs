@@ -11357,7 +11357,7 @@ test('прогон 2.250: эксперт и руководитель по пач
   await ep.goto(`/kabinet#order=${A}`);
   const beside = ep.locator('#org-returns [data-role="return-beside"]');
   await expect(beside).toHaveText('После возврата загружен «Отчёт Десятова испр.txt», а возвращённый «Отчёт Десятова.txt» не удалён — замечание пока открыто. Если «Отчёт Десятова испр.txt» — исправленная версия, удалите «Отчёт Десятова.txt» и подпишите новый файл: тогда руководитель увидит у него Ваши отметки. Если это приложение — подпишите заново «Отчёт Десятова.txt». К возвращённому файлу · Заменить «Отчёт Десятова.txt» на «Отчёт Десятова испр.txt»');
-  await beside.scrollIntoViewIfNeeded();
+  await expect(async () => beside.scrollIntoViewIfNeeded({ timeout: 2000 })).toPass(); // список мог перерисоваться после загрузки дела
   await shot(ep, 'd13a-progon10-ekspert-vozvrashchennyj-ne-udalen');
   await beside.screenshot({ path: 'test-results/screens/d13b-progon10-ekspert-vozvrashchennyj-ne-udalen-blok.png' });
   await beside.getByRole('button', { name: 'К возвращённому файлу' }).click();
