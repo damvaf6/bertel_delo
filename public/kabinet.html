@@ -102,6 +102,7 @@
         <p class="muted" id="order-service"></p>
         <p class="row"><span class="badge status" id="order-status"></span><span class="muted" id="order-deadline"></span></p>
         <p class="muted" id="order-meta"></p>
+        <p class="hidden" id="order-ack" role="status"></p>
         <p class="muted" id="order-org-line"></p>
         <p class="muted hidden" id="order-mail-line"></p>
         <a class="btn secondary" id="ask-assistant" href="#assistant">Спросить ассистента об этом деле</a>
@@ -1381,6 +1382,24 @@
           </div>
         </form>
         <p class="msg" id="notary-msg" role="status" aria-live="polite"></p>
+      </div>
+      <div class="card" id="ack-box">
+        <h2>Срок первого ответа заказчику</h2>
+        <p class="muted">Сразу после отправки заявки заказчик видит: «Заявка № … принята. Обычно диспетчер назначает цену в течение
+          N часов. Если не успеем — сообщим» (и в письме, если заявка пришла по почте). Не успели — заказчику один раз
+          «задерживаемся», диспетчерам — сигнал. Пусто — срок не обещаем. Новый срок — для новых заявок.</p>
+        <form id="ack-form" novalidate>
+          <div id="ack-fields"></div>
+          <div class="row">
+            <button type="submit" id="ack-save">Сохранить сроки</button>
+          </div>
+        </form>
+        <p class="msg" id="ack-msg" role="status" aria-live="polite"></p>
+        <details id="ack-history-box">
+          <summary>История изменений</summary>
+          <ul class="list" id="ack-history"></ul>
+          <p class="muted" id="ack-history-empty">Сроки ещё не задавали — заказчику срок не обещается.</p>
+        </details>
       </div>
       <div class="card" id="tprices-box">
         <h2>Цены и правила перевода</h2>
