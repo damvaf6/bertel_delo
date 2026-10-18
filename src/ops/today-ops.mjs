@@ -16,6 +16,7 @@
 // осмотра, а обязательные шаги без фото (2.208). Выписка ЕГРН в деле старше 30 дней на дату оценки (2.224) — запросить свежую.
 // Запрошенные документы не пришли 3 дня (2.234) — «Напомнить заказчику», пока сегодня ещё не напоминали.
 // После ИИ-проверки пришёл запрошенный документ (2.248) — «Проверьте заново».
+// Задание на оценку пришло после черновика, и адрес, дата оценки или вид стоимости в нём не как в таблице задания (2.295).
 // В ИИ-проверке неподписанного файла остались расхождения с выпиской ЕГРН, которые можно заменить в черновике (2.266).
 // Руководителю — те же сведения, что в «Делах экспертов» (2.16): без заказчика, полей заявки, документов и переписки.
 // Только свои дела и свои организации.
@@ -32,7 +33,9 @@ import { dueNotes } from './note-ops.mjs';
 import { caseMoves, caseRemind, transferTargets } from './org-ops.mjs';
 import { docWait, egrnOld } from './docreq-ops.mjs';
 import { aiRecheck, aiSignHints, egrnRebuildLeft, egrnSwapLeft } from '../ai/ai.mjs';
-import { latest } from './draft-ops.mjs';
+import { latest, taskAddressFor, taskKindFor, valueDateFor } from './draft-ops.mjs';
+import { assignmentDocs } from './ai-ops.mjs';
+import { assignmentAddress, sameAddressText } from '../ai/report-checks.mjs';
 
 // «Горит» — просрочено или до срока не больше двух дней (как подсветка в списке дел).
 const HOT_DAYS = 2;
@@ -191,8 +194,12 @@ async function expertPart(sql, actor, registry, today, storage) {
   // замены — к кнопке сборки Word в деле.
   const egrnRebuild = (await egrnRebuildCases(sql, actor.id, rows))
     .map(({ order, swapped, fixed, draftAt, file }) => item(order, { swapped, fixed, draft_at: draftAt, file }));
+  // Задание на оценку пришло после черновика (2.295) — к таблице задания в черновике.
+  const taskLate = (await taskLateCases(sql, storage, registry, rows))
+    .map(({ order, items, docs, at }) => item(order, { items, docs, doc_at: at }));
   return {
     ai_recheck: recheck,
+    task_late: taskLate,
     egrn_swap: egrnSwap,
     task_swap: taskSwap,
     egrn_rebuild: egrnRebuild,
@@ -308,6 +315,51 @@ export async function egrnSwapCases(sql, userId, rows) {
     if (!unsigned.length) continue;
     const left = await egrnSwapLeft(sql, o, unsigned, (await latest(sql, o.id))?.body);
     if (left.egrn.length || left.task.length) out.push({ order: o, left: left.egrn, task: left.task });
+  }
+  return out;
+}
+
+// 2.295: задание на оценку (письмо заказчика, определение суда) приложено к делу после черновика, а черновик с тех пор
+// заново с ИИ не готовили: дата оценки, вид стоимости или адрес, которые черновик взял бы из задания (2.207, 2.282, 2.281),
+// в таблице задания черновика другие или их нет. Только то, что изменилось из-за нового задания: что было и до него — не в
+// счёт (эксперт мог поправить сам). Адрес — только если черновик не взял его из выписки ЕГРН (выписка важнее задания).
+// Таблицы задания в черновике нет — сверять не с чем. Подготовил черновик заново или поправил строку — строка уходит.
+const TASK_ROW = /^\|\s*([^|\n]+?)\s*\|\s*([^|\n]*?)\s*\|\s*$/gmu;
+const bare = (cell) => cell.replace(/\s*\([^)]*\)\s*$/u, '').trim();
+export async function taskLateCases(sql, storage, registry, rows) {
+  const out = [];
+  for (const o of rows.filter((x) => x.status === 'in_work')) {
+    const t = await sql.one`select min(at) as first, max(at) filter (where source = 'ai') as ai from result_drafts where order_id = ${o.id}`;
+    if (!t?.first) continue;
+    const late = await sql`select id, created_at from documents where order_id = ${o.id} and kind in ('basis', 'other')
+                           and deleted_at is null and created_at > ${t.first} and created_at > coalesce(${t.ai}::timestamptz, '-infinity') order by created_at`;
+    if (!late.length) continue;
+    const assignment = await assignmentDocs(sql, storage, o);
+    const fresh = assignment.filter((d) => late.some((l) => l.id === d.id));
+    if (!fresh.length) continue;
+    const before = assignment.filter((d) => !fresh.includes(d));
+    const draft = await latest(sql, o.id);
+    const cells = new Map();
+    for (const m of String(draft?.body ?? '').matchAll(TASK_ROW)) if (!cells.has(m[1])) cells.set(m[1], bare(m[2]));
+    if (!cells.has('Сведение')) continue;
+    const ai = await sql.one`select inputs from result_drafts where order_id = ${o.id} and source = 'ai' order by id desc limit 1`;
+    const egrn = ai?.inputs?.egrn ?? null;
+    const items = [];
+    const day = valueDateFor(registry, o, assignment)?.day;
+    if (day && valueDateFor(registry, o, before)?.day !== day && !cells.get('Дата оценки')?.includes(day)) {
+      items.push({ what: 'date', label: 'Дата оценки', v: day, was: cells.get('Дата оценки') || null });
+    }
+    const kind = taskKindFor(registry, o, assignment);
+    const cell = (cells.get('Вид стоимости') ?? '').toLowerCase();
+    if (kind && taskKindFor(registry, o, before)?.v !== kind.v && !kind.v.split(' и ').every((w) => cell.includes(w))) {
+      items.push({ what: 'kind', label: 'Вид стоимости', v: kind.v, was: cells.get('Вид стоимости') || null });
+    }
+    const addr = taskAddressFor(registry, o, assignment, egrn);
+    const label = registry.service(o.module, o.service)?.fields?.find((f) => f.id === 'address')?.label;
+    if (addr && label && taskAddressFor(registry, o, before, egrn)?.v !== addr.v && !(cells.get(label) && sameAddressText(assignmentAddress(assignment), cells.get(label)))) {
+      items.push({ what: 'address', label, v: addr.v, was: cells.get(label) || null });
+    }
+    if (items.length) out.push({ order: o, items, docs: fresh.map((d) => d.name), at: late.at(-1).created_at });
   }
   return out;
 }

@@ -79,7 +79,7 @@ export async function openOrder(id, { to } = {}) {
   renderResultDue(lastDocs?.result_due ?? null);
   // Черновик и ИИ-проверка показаны — у пунктов замечания руководителя видна «Заменить по выписке» (2.262).
   if (orgReturnsNow.length) renderOrgReturns(orgReturnsNow);
-  const box = { result: 'docs-box', inspect: 'inspect-box', chat: 'chat-box', orgchat: 'org-chat-box', docs: 'docreq-box', review: 'review-box', deadline: 'deadline-box', extend: 'deadline-box', away: 'deadline-box', late: 'deadline-box', sign: 'sign-wait-box', fix: 'org-returns-box', fresh: 'org-returns-box', handover: 'handover-box', rebuild: 'draft-box', onsite: 'onsite-box', notes: 'notes-box', steps: 'steps-box' }[to];
+  const box = { result: 'docs-box', inspect: 'inspect-box', chat: 'chat-box', orgchat: 'org-chat-box', docs: 'docreq-box', review: 'review-box', deadline: 'deadline-box', extend: 'deadline-box', away: 'deadline-box', late: 'deadline-box', sign: 'sign-wait-box', fix: 'org-returns-box', fresh: 'org-returns-box', handover: 'handover-box', rebuild: 'draft-box', task: 'draft-box', onsite: 'onsite-box', notes: 'notes-box', steps: 'steps-box' }[to];
   if (box && !$(box).classList.contains('hidden')) { reveal(box); $(box).scrollIntoView({ block: 'start' }); }
   // «Попросить перенос» из «Моих сроков» (2.134): причина «много дел в этот день» и новый срок — сразу в полях.
   if (to === 'extend') document.querySelector('#deadline-reason-list [data-reason="busy"]')?.click();
@@ -96,6 +96,18 @@ export async function openOrder(id, { to } = {}) {
     $('draft-attach').scrollIntoView({ block: 'center' });
     $('draft-attach').focus();
     say($('draft-msg'), 'Черновик изменён после загрузки файла результата — отметьте, что проверили текст, и приложите Word заново; прежний файл удалите', 'ok');
+  }
+  // Задание на оценку пришло позже черновика (2.295): сразу к таблице задания в тексте черновика — строки выделены.
+  if (to === 'task' && !$('draft-box').classList.contains('hidden') && !$('draft-edit').classList.contains('hidden')) {
+    const area = $('draft-text');
+    const at = area.value.search(/^\|\s*Сведение\s*\|/mu);
+    if (at >= 0) {
+      const end = area.value.slice(at).search(/\n(?!\|)/u);
+      area.focus();
+      area.setSelectionRange(at, end < 0 ? area.value.length : at + end);
+    }
+    area.scrollIntoView({ block: 'center' });
+    say($('draft-msg'), 'Задание на оценку пришло после черновика — сверьте таблицу задания с ним (дата оценки, вид стоимости, адрес) или подготовьте черновик заново', 'ok');
   }
   // «Попросить перенести срок» у просроченного дела из «Сегодня» (2.166): сразу к полю нового срока; готовые причины — над ним.
   if (to === 'late' && !$('deadline-form').classList.contains('hidden')) {
