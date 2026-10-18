@@ -13037,11 +13037,11 @@ test('прогон 2.290: эксперт и руководитель по пач
   await expect(customerFind).toContainText('Заказчик в отчёте — «Петров Пётр Петрович», а в задании на оценку «Задание на оценку.txt» — «Иванов Иван Иванович» (стр. 1)');
   await customerFind.scrollIntoViewIfNeeded();
   await shot(ep, 'd67-progon14-ekspert-cel-i-zakazchik');
-  // 2.283: «Заменить всё по заданию» — дата, вид стоимости и (2.293) цель оценки.
+  // 2.283: «Заменить всё по заданию» — дата, вид стоимости, (2.293) цель оценки и (2.294) заказчик.
   const dateFind = ep.locator('#review-checks .ai-found li').filter({ hasText: 'Дата оценки в отчёте 01.10.2026' });
   const kindFind = ep.locator('#review-checks li[data-check="appraiser"] .ai-found li').filter({ hasText: 'Вид стоимости в отчёте' });
   const allBox = ep.locator('#ai-task-swap-all');
-  await expect(allBox.getByRole('button', { name: 'Заменить всё по заданию (3)' })).toBeVisible();
+  await expect(allBox.getByRole('button', { name: 'Заменить всё по заданию (4)' })).toBeVisible();
 
   // 2.284: в «Сегодня» — «Можно заменить по заданию на оценку».
   const tp = await ep.context().newPage();
