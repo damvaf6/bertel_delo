@@ -113,3 +113,56 @@ test('2.245: нагрузка — сколько экспертов приним
   // Совпадает с днями «не принимает» у экспертов.
   s.days.forEach((d, i) => assert.equal(d.accepting, s.experts.filter((x) => !x.days[i].away).length));
 });
+
+test('2.318: нагрузка — срок по заданию на оценку раньше срока дела в день срока по заданию; дело не считается дважды', async () => {
+  const org = await makeOrg(S.sql, 'ООО «Срок по заданию в нагрузке»');
+  const head = await login(S, '+79990004971');
+  const ex = await login(S, '+79990004972');
+  const owner = await login(S, '+79990004973');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  await makeSpecialist(S.sql, ex.user.id);
+  await addMember(S.sql, org.id, ex.user.id, 'member');
+  assert.equal((await ex.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  const url = `/api/orgs/${org.id}/schedule`;
+  const today = (await head.req('GET', url)).body.schedule.from;
+  const plus = (n) => { const d = new Date(`${today}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  const ruD = (s) => s.split('-').reverse().join('.');
+  const order = async (title, days, due) => {
+    const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
+    await S.sql`update orders set status = 'in_work', deadline = ${plus(days)}::date, executor_user_id = ${ex.user.id} where id = ${o.id}`;
+    if (due != null) {
+      assert.equal((await owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(plus(due))}`), {
+        raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание банка Иванова.txt'), 'x-doc-kind': 'basis' } })).status, 201);
+    }
+    return o;
+  };
+  const ref = (o) => `№ ${o.id.slice(0, 8).toUpperCase()}`;
+  const near = await order('Задание: срок дела в две недели', 9, 3);
+  const far = await order('Задание: срок дела через месяц', 30, 5);
+  const plain = await order('Задание: без задания', 6);
+  const later = await order('Задание: срок по заданию позже', 4, 8);
+  const s = (await head.req('GET', url)).body.schedule;
+  const [x] = s.experts;
+  const on = (n) => x.days[n].items.map((i) => [i.kind, i.order_ref, i.task_due ?? null]);
+  assert.deepEqual(on(3), [['task_due', ref(near), { day: plus(3), by: 'по заданию на оценку' }]]);
+  assert.deepEqual(on(9), [['deadline', ref(near), plus(3)]]);
+  // Срок дела после двух недель — дело видно в день срока по заданию.
+  assert.deepEqual(on(5), [['task_due', ref(far), { day: plus(5), by: 'по заданию на оценку' }]]);
+  assert.deepEqual(on(6), [['deadline', ref(plain), null]]);
+  // Срок по заданию позже срока дела — отметки нет.
+  assert.deepEqual(on(4), [['deadline', ref(later), null]]);
+  assert.ok(!x.days.some((d) => d.items.some((i) => i.kind === 'task_due' && i.order_ref === ref(later))));
+  // Сдать за две недели: near (по заданию), far (по заданию), plain, later — каждое по разу.
+  assert.equal(x.due, 4);
+  // Без названий файлов и заявок.
+  const text = JSON.stringify(s);
+  for (const t of ['Иванова', 'Задание:', near.id]) assert.ok(!text.includes(t), `не раскрывает: ${t}`);
+  // Срок по заданию прошёл — в «срок уже прошёл».
+  const { orgSchedule } = await import('../../src/orders/schedule.mjs');
+  const past = await orgSchedule(S.sql, org.id, S.app.locals.registry, plus(4), { storage: S.providers.storage });
+  assert.deepEqual(past.experts[0].overdue.filter((i) => i.kind === 'task_due').map((i) => [i.order_ref, i.day]), [[ref(near), plus(3)]]);
+  // Без хранилища — как раньше, без сроков по заданию.
+  const bare = await orgSchedule(S.sql, org.id, S.app.locals.registry);
+  assert.ok(!bare.experts[0].days.some((d) => d.items.some((i) => i.kind === 'task_due')));
+  assert.equal(bare.experts[0].due, 3);
+});

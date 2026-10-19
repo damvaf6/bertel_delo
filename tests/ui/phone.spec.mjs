@@ -14213,3 +14213,50 @@ test('2.311: задание пришло позже черновика — ср�
   expect(today.expert.task_late.filter((x) => x.id === A)).toEqual([]);
   for (const p of [ep, cp]) await p.context().close();
 });
+
+// 2.318: нагрузка экспертов у руководителя — срок по заданию на оценку раньше срока дела: дело в день срока по заданию
+// красной строкой, у срока дела — «по заданию на оценку — к …»; в полосе и «сдать» — один раз.
+test('2.318: нагрузка экспертов — срок по заданию на оценку', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const hp = await ctx(), cp = await ctx();
+  const customer = await signIn(cp, '+79990029641');
+  const head = await signIn(hp, '+79990029642');
+  const expert = await signIn(await ctx(), '+79990029643');
+  const ru = (iso) => iso.split('-').reverse().join('.');
+  const long = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+  const { orgId, A } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Задание в нагрузке ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Заданова Вера' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Нагрузка по заданию: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Садовая ул., д. 7, кв. 4"}') returning id`,
+    [customer.id, expert.id, inDays(9)]);
+    return { orgId: org.id, A: o.id };
+  });
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ru(inDays(4))}`),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание банка.txt'), 'x-doc-kind': 'basis' },
+  })).status()).toBe(201);
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const x = hp.locator(`#org-schedule-box li[data-expert-schedule="${expert.id}"]`);
+  await expect(x.locator('[data-role="total"]')).toContainText('сдать за две недели: 1');
+  await expect(x.locator(`.strip .cell[data-day="${inDays(4)}"] .cnt`)).toHaveText('1');
+  await expect(x.locator(`.strip .cell[data-day="${inDays(9)}"] .cnt`)).toHaveText('');
+  await x.locator('details[data-days] > summary').click();
+  const task = x.locator(`li[data-day="${inDays(4)}"] li[data-schedule-item="task_due"]`);
+  await expect(task).toContainText('Сдать по заданию на оценку: ');
+  await expect(task).toContainText(`срок дела позже — ${long(inDays(9))}`);
+  await expect(task.locator('button.open.hot')).toHaveCount(1);
+  const dl = x.locator(`li[data-day="${inDays(9)}"] li[data-schedule-item="deadline"]`);
+  await expect(dl).toContainText(`по заданию на оценку — к ${long(inDays(4))}`);
+  await expect(x).not.toContainText('Задание банка');
+  await expect(x).not.toContainText('Нагрузка по заданию');
+  await task.scrollIntoViewIfNeeded();
+  await shot(hp, '54z6-rukovoditel-nagruzka-srok-po-zadaniyu');
+  await task.locator('button').click();
+  await expect(hp.locator(`#org-cases li[data-case="№ ${A.slice(0, 8).toUpperCase()}"]`)).toBeInViewport();
+  for (const p of [hp, cp]) await p.context().close();
+});

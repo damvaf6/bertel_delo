@@ -409,8 +409,8 @@ export function orgOps() {
       // только руководитель, без заказчика и названий заявок.
       id: 'orgs.schedule', method: 'GET', path: '/api/orgs/:id/schedule', auth: 'user',
       access: { resource: 'org', param: 'id', need: 'manage' },
-      async handler({ sql, org, registry }) {
-        return { schedule: await orgSchedule(sql, org.id, registry) };
+      async handler({ sql, org, registry, providers }) {
+        return { schedule: await orgSchedule(sql, org.id, registry, undefined, { storage: providers.storage }) };
       },
     },
     {

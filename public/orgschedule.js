@@ -2,7 +2,8 @@
 // и выездов в день; штриховкой — дни, когда эксперт не принимает новые дела, зелёной чертой — день, когда ему снова
 // предлагают дела, красной цифрой — срок сдачи в день, когда эксперт не принимает дела (2.194)) и итог: сколько сдавать, выездов, свободных будней.
 // Раскрыл эксперта — его дни подробно; нажатие на дело открывает его в «Делах экспертов». Заказчика и названий заявок
-// руководитель не видит — услуга и номер дела.
+// руководитель не видит — услуга и номер дела. Срок по заданию на оценку раньше срока дела (2.318) — дело сдавать в его
+// день: своя строка, у срока дела — «по заданию на оценку — к …»; в полосе и «сдать» дело считается в день срока по заданию.
 import { api, el, say } from '/common.js';
 import { awaySpan, dayRu } from '/order.js';
 import { focusOrgCase } from '/orgcases.js';
@@ -16,8 +17,12 @@ const STATUS = { review: 'сдано, ждёт проверки', awaiting_execu
 
 function itemText(i) {
   const ref = i.order_ref ? `${i.service} · ${i.order_ref}` : i.service;
+  if (i.kind === 'task_due') {
+    return { title: `Сдать ${i.task_due.by}: ${ref}`, what: [STATUS[i.status], `срок дела позже — ${short(i.deadline)}`].filter(Boolean).join(' · ') };
+  }
   if (i.kind === 'deadline') {
-    return { title: `Сдать: ${ref}`, what: [STATUS[i.status], i.extend_to ? `просит перенести на ${short(i.extend_to)}` : null].filter(Boolean).join(' · ') };
+    return { title: `Сдать: ${ref}`, what: [STATUS[i.status], i.task_due ? `по заданию на оценку — к ${short(i.task_due)}` : null,
+      i.extend_to ? `просит перенести на ${short(i.extend_to)}` : null].filter(Boolean).join(' · ') };
   }
   if (i.kind === 'visit') return { title: `${i.time} · Выезд помощника: ${ref}`, what: '' };
   return { title: `${i.time} · Едет помощником на объект`, what: i.order_ref ? ref : `${i.service} · дело другой организации` };
@@ -35,15 +40,17 @@ function item(i, cls = '') {
 // День «не принимает новые дела» и день возвращения (2.194) — как у эксперта в «Моих сроках» (2.189).
 const kind = (x, d) => (d.away ? 'away' : d.date === x.away?.until ? 'back' : 'free');
 const FREE = { away: 'новые дела не предлагают', back: 'снова предлагают дела' };
-const dueOn = (d) => d.items.filter((i) => i.kind === 'deadline' && i.status !== 'review').length;
+// Что сдавать в день (2.318): срок по заданию на оценку или срок дела без более раннего срока по заданию.
+const isDue = (i) => i.kind === 'task_due' || (i.kind === 'deadline' && !i.task_due);
+const dueOn = (d) => d.items.filter((i) => isDue(i) && i.status !== 'review').length;
 // Срок в отпуске («не принимаю до …») — заметно; выключил приём — дела в работе ведёт как обычно, не отмечаем.
 const vacation = (x, d) => !!x.away && d.date < x.away.until && (!x.away.from || d.date >= x.away.from);
 
 function strip(x, days) {
   return el('div', { class: 'strip', 'aria-hidden': 'true' }, ...days.map((h, k) => {
     const d = x.days[k];
-    const due = d.items.filter((i) => i.kind === 'deadline').length;
-    const go = d.items.length - due;
+    const due = d.items.filter(isDue).length;
+    const go = d.items.filter((i) => i.kind === 'visit' || i.kind === 'helper').length;
     const cls = ['cell', h.today ? 'today' : '', h.weekend ? 'weekend' : '', kind(x, d) !== 'free' ? kind(x, d) : '',
       vacation(x, d) && dueOn(d) ? 'clash' : '', due > 1 ? 'heavy' : due || go ? 'busy' : ''].filter(Boolean).join(' ');
     return el('span', { class: cls, 'data-day': h.date, title: [`${h.weekday}, ${short(h.date)}`, kind(x, d) !== 'free' ? FREE[kind(x, d)] : null].filter(Boolean).join(' — ') },
@@ -83,7 +90,7 @@ function daysDetails(x, busy) {
     class: [h.today ? 'today' : '', h.weekend ? 'weekend' : '', kind(x, d) !== 'free' ? kind(x, d) : ''].filter(Boolean).join(' ') },
     el('div', { class: 'day' }, el('span', { text: `${h.today ? 'Сегодня, ' : ''}${h.weekday}, ${short(h.date)}` })),
     ...(kind(x, d) !== 'free' ? [el('p', { class: 'away-mark', text: FREE[kind(x, d)] })] : []),
-    ...(d.items.length ? [el('ul', {}, ...d.items.map((i) => item(i, vacation(x, d) && i.kind === 'deadline' && i.status !== 'review' ? 'hot' : '')))] : [])));
+    ...(d.items.length ? [el('ul', {}, ...d.items.map((i) => item(i, i.kind === 'task_due' || (vacation(x, d) && isDue(i) && i.status !== 'review') ? 'hot' : '')))] : [])));
   return el('details', { 'data-days': x.user_id }, el('summary', { text: 'По дням' }), el('ol', { class: 'schedule' }, ...late, ...rows));
 }
 
@@ -112,11 +119,11 @@ function team(schedule) {
   // Дела со сроком в дни «никто не принимает» (2.255): передать в эти дни некому — нажатие ведёт к делу, сразу к «кому передать»
   // или «попросить перенос срока»; сдано и ждёт проверки — не в счёт.
   const due = schedule.days.flatMap((h, k) => (h.accepting === 0 ? schedule.experts.flatMap((x) => x.days[k].items
-    .filter((i) => i.kind === 'deadline' && i.status !== 'review').map((i) => ({ i, x, h }))) : []));
+    .filter((i) => isDue(i) && i.status !== 'review').map((i) => ({ i, x, h }))) : []));
   const cases = due.length ? [el('div', { class: 'clash-note', 'data-role': 'nobody-due', text: `Срок сдачи в эти дни: ${due.length}` }),
     el('ul', { class: 'schedule nobody-due' }, ...due.map(({ i, x, h }) => {
       const t = itemText(i);
-      return el('li', { 'data-day': h.date, 'data-schedule-item': 'deadline' },
+      return el('li', { 'data-day': h.date, 'data-schedule-item': i.kind },
         el('button', { type: 'button', class: 'open hot', onclick: () => focusOrgCase({ ref: i.order_ref, to: 'transfer' }) },
           el('span', { text: `${short(h.date)} · ${t.title.replace(/^Сдать: /, '')}` }),
           el('span', { class: 'what', text: [x.full_name, t.what].filter(Boolean).join(' · ') })));
