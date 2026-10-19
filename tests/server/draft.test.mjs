@@ -1455,6 +1455,42 @@ test('2.304: срок по заданию на оценку раньше сро�
   assert.deepEqual(due(await today()), []);
 });
 
+test('2.321: в неподписанном файле результата дата составления позже срока по заданию на оценку — строка в «Сегодня»', async () => {
+  const o = await inWork('Квартира: дата составления позже срока по заданию');
+  const ruD = (s) => s.split('-').reverse().join('.');
+  const made = (e) => e.task_made.filter((x) => x.id === o.id);
+  const today = () => spec.req('GET', '/api/today').then((r) => r.body.expert);
+  const late = addDays(todayMsk(), 6), due = addDays(todayMsk(), 4);
+  const report = (day) => `ОТЧЁТ ОБ ОЦЕНКЕ № 21\nОбъект оценки: квартира\nДата оценки: ${ruD(todayMsk())}\nДата составления отчёта: ${ruD(day)}`;
+  // Файл с датой составления есть, а задания на оценку нет — сверять не с чем.
+  assert.equal((await put(spec, o, report(late), 'Отчёт.txt', 'text/plain', 'results')).status, 201);
+  assert.deepEqual(made(await today()), []);
+  // Задание со сроком раньше даты составления — строка: файл, дата и страница, срок и задание.
+  assert.equal((await put(owner, o, `ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(due)}`, 'Задание банка.txt', 'text/plain')).status, 201);
+  await S.sql`update documents set kind = 'basis' where order_id = ${o.id} and filename = 'Задание банка.txt'`;
+  let [r] = made(await today());
+  assert.equal(r.file, 'Отчёт.txt');
+  assert.deepEqual(r.made, { day: late, page: 1 });
+  assert.deepEqual(r.task_due, { day: due, name: 'Задание банка.txt', page: 1, by: 'по заданию на оценку' });
+  // Исправил дату — новый файл не позже срока: строки нет (смотрится последний файл).
+  assert.equal((await put(spec, o, report(due), 'Отчёт исправленный.txt', 'text/plain', 'results')).status, 201);
+  assert.deepEqual(made(await today()), []);
+  // Снова позже срока — строка; подписал файл — уже не «до подписи».
+  assert.equal((await put(spec, o, report(late), 'Отчёт 3.txt', 'text/plain', 'results')).status, 201);
+  [r] = made(await today());
+  assert.equal(r.file, 'Отчёт 3.txt');
+  const [d] = await S.sql`select id from documents where order_id = ${o.id} and filename = 'Отчёт 3.txt'`;
+  await S.sql`insert into document_signatures (document_id, order_id, signer_id, provider, digest, storage_key, size_bytes, certificate, test, checked_ok, role)
+              values (${d.id}, ${o.id}, ${spec.user.id}, 'fake', ${'b'.repeat(64)}, ${`sig-2321-${d.id}`}, 10, '{}', true, true, 'expert')`;
+  assert.deepEqual(made(await today()), []);
+  // Срок в задании перенесли (позднее письмо) — новый файл с той же датой уже не позже срока.
+  assert.equal((await put(spec, o, report(late), 'Отчёт 4.txt', 'text/plain', 'results')).status, 201);
+  assert.equal(made(await today()).length, 1);
+  assert.equal((await put(owner, o, `ПИСЬМО БАНКА\nЗадание на оценку: квартира\nСрок составления отчёта: не позднее ${ruD(addDays(todayMsk(), 8))}`, 'Письмо о переносе срока.txt', 'text/plain')).status, 201);
+  await S.sql`update documents set kind = 'basis' where order_id = ${o.id} and filename = 'Письмо о переносе срока.txt'`;
+  assert.deepEqual(made(await today()), []);
+});
+
 test('2.315: утренняя сводка эксперта — срок по заданию на оценку сегодня, завтра или прошёл, а файла результата нет', async () => {
   const o = await inWork('Квартира: срок по заданию в утренней сводке');
   const putDoc = (body, name) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
