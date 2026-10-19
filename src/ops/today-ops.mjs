@@ -38,7 +38,8 @@ import { bankTaskMissing, docWait, egrnOld } from './docreq-ops.mjs';
 import { aiRecheck, aiSignHints, egrnRebuildLeft, egrnSwapLeft } from '../ai/ai.mjs';
 import { latest, taskAddressFor, taskDueFor, taskDueSign, taskCustomerFor, taskKindFor, taskPurposeFor, taskUserFor, valueDateFor } from './draft-ops.mjs';
 import { assignmentDocs } from './ai-ops.mjs';
-import { assignmentAddress, banksIn, customerOf, customersInText, purposeFits, purposeKinds, sameAddressText, sameCustomer } from '../ai/report-checks.mjs';
+import { READ_MAX_BYTES, extractPages, readableKind } from '../ai/extract.mjs';
+import { assignmentAddress, banksIn, customerOf, customersInText, purposeFits, purposeKinds, reportMade, sameAddressText, sameCustomer } from '../ai/report-checks.mjs';
 
 // «Горит» — просрочено или до срока не больше двух дней (как подсветка в списке дел).
 const HOT_DAYS = 2;
@@ -209,8 +210,12 @@ async function expertPart(sql, actor, registry, today, storage) {
   // Задание на оценку пришло после черновика (2.295) — к таблице задания в черновике.
   const taskLate = (await taskLateCases(sql, storage, registry, rows))
     .map(({ order, items, docs, at }) => item(order, { items, docs, doc_at: at }));
+  // В неподписанном файле дата составления позже срока по заданию на оценку (2.321) — до подписи, к файлу результата.
+  const taskMade = (await taskMadeCases(sql, storage, registry, actor.id, rows))
+    .map(({ order, file, made, due: d }) => item(order, { file, made, task_due: d }));
   return {
     ai_recheck: recheck,
+    task_made: taskMade,
     task_late: taskLate,
     task_due: taskDue,
     egrn_swap: egrnSwap,
@@ -430,6 +435,27 @@ export async function taskDueCases(sql, storage, registry, userId, rows, today =
     const days = Math.round((Date.parse(`${d.day}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86400_000);
     const draft = !!(await sql.one`select 1 as x from result_drafts where order_id = ${o.id} limit 1`);
     out.push({ order: o, draft, due: { day: d.day, days_left: days, overdue: days < 0, name: d.name, page: d.page, by: d.by } });
+  }
+  return out.sort((a, b) => a.due.day.localeCompare(b.due.day));
+}
+
+// 2.321: в своём последнем загруженном файле результата, ещё не подписанном экспертом, дата составления отчёта позже срока
+// по заданию на оценку (2.302 — правило report_dates, срок — taskDueFor, 2.303). ИИ-проверку запускать не нужно: видно
+// сразу после загрузки, до подписи. Файл читается, только если в задании есть срок; дата не позже срока — строки нет.
+export async function taskMadeCases(sql, storage, registry, userId, rows) {
+  const out = [];
+  if (!storage) return out;
+  for (const o of rows.filter((x) => x.status === 'in_work')) {
+    if (!registry.checks(o.module, o.service).some((r) => (r.auto ?? []).includes('report_dates'))) continue;
+    const [file] = await sql`select id, filename, mime, size_bytes, storage_key from documents where order_id = ${o.id} and kind = 'result'
+                             and deleted_at is null and uploaded_by = ${userId} order by created_at desc limit 1`;
+    if (!file || !readableKind(file.filename, file.mime) || file.size_bytes > READ_MAX_BYTES) continue;
+    if ((await orderSignatures(sql, o.id)).get(file.id)?.expert) continue;
+    const d = taskDueFor(registry, o, await assignmentDocs(sql, storage, o));
+    if (!d) continue;
+    const buf = await storage.get(file.storage_key);
+    const made = buf ? reportMade((await extractPages(buf, file.filename, file.mime))?.pages) : null;
+    if (made && made.day > d.day) out.push({ order: o, file: file.filename, made, due: { day: d.day, name: d.name, page: d.page, by: d.by } });
   }
   return out.sort((a, b) => a.due.day.localeCompare(b.due.day));
 }

@@ -13917,6 +13917,43 @@ test('2.304: срок по заданию на оценку близко — «�
   for (const p of [ep, cp]) await p.context().close();
 });
 
+// 2.321: в загруженном и ещё не подписанном файле результата дата составления позже срока по заданию на оценку — в «Сегодня»
+// строка «Дата составления позже срока по заданию на оценку» (файл, дата, срок и задание); нажатие ведёт к файлу результата.
+test('2.321: дата составления позже срока по заданию — «Сегодня»', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990029711'), customer = await signIn(cp, '+79990029712');
+  const ru = (iso) => iso.split('-').reverse().join('.');
+  const long = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+  const A = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Дата составления позже срока: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Садовая ул., д. 7, кв. 4"}') returning id`,
+    [customer.id, expert.id, inDays(9)]);
+    return o.id;
+  });
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ru(inDays(4))}`),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание банка.txt'), 'x-doc-kind': 'basis' },
+  })).status()).toBe(201);
+  expect((await ep.request.post(`/api/orders/${A}/results`, {
+    data: Buffer.from(`ОТЧЁТ ОБ ОЦЕНКЕ № 21\nОбъект оценки: квартира\nДата составления отчёта: ${ru(inDays(6))}`),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Отчёт об оценке.txt') },
+  })).status()).toBe(201);
+  await ep.goto('/kabinet');
+  await expect(ep.locator('li[data-today="task-made"]')).toHaveText(/^Дата составления позже срока по заданию на оценку · \d+$/);
+  const row = ep.locator('li[data-today-item="task-made"]').filter({ hasText: 'Дата составления позже срока: квартира' });
+  await expect(row.locator('[data-role="task-made-why"]')).toHaveText(`В «Отчёт об оценке.txt» дата составления — ${long(inDays(6))} (стр. 1), а срок по заданию на оценку — ${long(inDays(4))} («Задание банка.txt», стр. 1)`);
+  await expect(row).toContainText('до подписи исправьте дату составления или приложите к делу документ о переносе срока');
+  await row.scrollIntoViewIfNeeded();
+  await shot(ep, '54u2-ekspert-segodnya-data-sostavleniya-pozzhe-sroka');
+  await row.locator('button.open').click();
+  await expect(ep).toHaveURL(new RegExp(`#order=${A}&to=result$`));
+  for (const p of [ep, cp]) await p.context().close();
+});
+
 // 2.317: «Мои сроки на две недели» — срок по заданию на оценку раньше срока дела своей строкой в его день, у срока дела —
 // «по заданию на оценку — к …»; строка ведёт к файлу результата; в файле для календаря — своё событие.
 test('2.317: срок по заданию на оценку в «Моих сроках на две недели»', async ({ browser, baseURL }) => {

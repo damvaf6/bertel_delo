@@ -1764,6 +1764,12 @@ function dateAfter(text, label) {
   return null;
 }
 const MADE_LABEL = 'дата\\s+(?:составления|подписания)(?:\\s+(?:отч[её]та|заключения))?';
+// 2.321: дата составления отчёта в файле — как её берёт правило report_dates — и страница с ней (с 1): эксперту в «Сегодня»
+// до подписи. Даты нет — null.
+export function reportMade(pages) {
+  const day = dateAfter((pages ?? []).join('\n'), MADE_LABEL);
+  return day ? { day, page: pageWith({ pages }, MADE_LABEL).page + 1 } : null;
+}
 const VALUE_LABEL = 'дата\\s+(?:оценки|определения\\s+(?:рыночной\\s+)?стоимости)';
 function dateOrder(doc) {
   const text = (doc.pages ?? []).join('\n');
