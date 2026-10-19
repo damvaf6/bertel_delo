@@ -14304,3 +14304,160 @@ test('2.318: нагрузка экспертов — срок по задани�
   await expect(hp.locator(`#org-cases li[data-case="№ ${A.slice(0, 8).toUpperCase()}"]`)).toBeInViewport();
   for (const p of [hp, cp]) await p.context().close();
 });
+
+// Прогон 2.320: эксперт и руководитель по пачке 2.311–2.319 на одном деле для Сбербанка — задание пришло позже черновика,
+// срок по заданию сегодня: «Сегодня», мои сроки, перенос срока, нагрузка у руководителя, пользователь результатов по
+// заявке, «Вернуть эксперту», сводка за месяц. Утренние сводки (2.315, 2.316) — серверными тестами.
+test('прогон 2.320: эксперт и руководитель по пачке 2.311–2.319 на одном деле', async ({ browser, baseURL }) => {
+  test.setTimeout(300_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), hp = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990032001'), head = await signIn(hp, '+79990032002');
+  const customer = await signIn(cp, '+79990032003');
+  const ru = (iso) => iso.split('-').reverse().join('.');
+  const long = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+  const longY = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+  const { orgId, A } = await db(async (c) => {
+    const { rows: [org] } = await c.query('insert into organizations (name) values ($1) returning id', [`ООО «Прогон-17 ${Date.now() % 100000}»`]);
+    await c.query("update users set full_name = 'Семнадцатова Ольга' where id = $1", [expert.id]);
+    await c.query("update users set full_name = 'Главная Инна' where id = $1", [head.id]);
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now() - interval '1 year'), ($1, $3, 'member', now() - interval '1 year')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Семнадцатая пачка: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","bank":"sber","region":"moscow","object_type":"flat","address":"г. Москва, Пятидесятая ул., д. 50, кв. 5","area":"52"}') returning id`,
+    [customer.id, expert.id, inDays(5)]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now() - interval '3 days')", [o.id, expert.id]);
+    return { orgId: org.id, A: o.id };
+  });
+  const txt = (name, kind) => ({ ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), ...(kind ? { 'x-doc-kind': kind } : {}) });
+  const title = 'Семнадцатая пачка: квартира';
+  const row = '| Предполагаемый пользователь результатов оценки |';
+
+  // Черновик до задания: пользователь результатов — Сбербанк из заявки (2.310).
+  await ep.goto(`/kabinet#order=${A}`);
+  await ep.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const draftText = ep.getByLabel('Текст заключения');
+  await expect(draftText).toHaveValue(new RegExp(`${row.replace(/[|]/g, '\\|')} ПАО Сбербанк \\(по заявке\\) \\|`));
+
+  // Заказчик прикладывает задание банка: срок отчёта — сегодня, раньше срока дела.
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from(['ЗАДАНИЕ НА ОЦЕНКУ', 'Объект оценки: квартира', 'Адрес объекта: г. Москва, Пятидесятая ул., д. 50, кв. 5',
+      'Цель оценки: для предоставления в банк в качестве залога', 'Вид стоимости: рыночная',
+      `Срок составления отчёта: не позднее ${ru(inDays(0))}`].join('\n')),
+    headers: txt('Задание Сбербанка.txt', 'basis'),
+  })).status()).toBe(201);
+
+  // «Сегодня» (2.311): задание позже черновика — срок не как в черновике; Сбербанк из заявки от задания не зависит.
+  await ep.goto('about:blank');
+  await ep.goto('/kabinet');
+  const late = ep.locator('li[data-today-item="task-late"]').filter({ hasText: title });
+  await expect(late.locator('[data-role="task-late-what"]')).toContainText(`Срок: по заданию — ${ru(inDays(0))}, в черновике — ${ru(inDays(5))}`);
+  await expect(late.locator('[data-role="task-late-what"]')).not.toContainText('Предполагаемый пользователь');
+  const due = ep.locator('li[data-today-item="task-due"]').filter({ hasText: title });
+  await expect(due.locator('[data-role="task-due-when"]')).toContainText('Срок по заданию сегодня');
+  await late.scrollIntoViewIfNeeded();
+  await shot(ep, 'd90-progon17-ekspert-segodnya-srok-pozzhe');
+
+  // «Мои сроки на две недели» (2.317): срок по заданию — сегодня своей строкой, у срока дела — «по заданию — к …».
+  await ep.goto('/kabinet#specialist');
+  const sbox = ep.locator('#schedule-box');
+  const sTask = sbox.locator(`#schedule-days > li[data-day="${inDays(0)}"] li[data-schedule-item="task_due"]`);
+  await expect(sTask).toContainText(`Срок по заданию на оценку: ${title}`);
+  await expect(sTask).toContainText(`срок дела позже — ${long(inDays(5))}`);
+  await expect(sbox.locator(`#schedule-days > li[data-day="${inDays(5)}"] li[data-schedule-item="deadline"]`)).toContainText(`по заданию на оценку — к ${long(inDays(0))}`);
+  await sTask.scrollIntoViewIfNeeded();
+  await shot(ep, 'd91-progon17-ekspert-moi-sroki');
+
+  // Перенос срока (2.319): новый срок позже срока по заданию — «Банк ждёт отчёт к …», не запрещает.
+  await ep.goto(`/kabinet#order=${A}&to=deadline`);
+  const dbox = ep.locator('#deadline-box');
+  await expect(dbox.locator('#deadline-form')).toBeVisible();
+  await dbox.locator('#deadline-new').fill(inDays(8));
+  await expect(dbox.locator('#deadline-task')).toHaveText(`Банк ждёт отчёт к ${longY(inDays(0))} (по заданию на оценку: «Задание Сбербанка.txt», стр. 1) — новый срок позже. Выберите срок не позже или напишите в причине, что с заказчиком перенос согласован.`);
+  expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await dbox.locator('#deadline-task').scrollIntoViewIfNeeded();
+  await shot(ep, 'd92-progon17-ekspert-perenos-bank-zhdyot');
+
+  // Руководитель — нагрузка на две недели (2.318): дело в день срока по заданию, один раз.
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const x = hp.locator(`#org-schedule-box li[data-expert-schedule="${expert.id}"]`);
+  await expect(x.locator('[data-role="total"]')).toContainText('сдать за две недели: 1');
+  await expect(x.locator(`.strip .cell[data-day="${inDays(0)}"] .cnt`)).toHaveText('1');
+  await expect(x.locator(`.strip .cell[data-day="${inDays(5)}"] .cnt`)).toHaveText('');
+  await x.locator('details[data-days] > summary').click();
+  await expect(x.locator(`li[data-day="${inDays(0)}"] li[data-schedule-item="task_due"]`)).toContainText('Сдать по заданию на оценку: ');
+  await x.scrollIntoViewIfNeeded();
+  await shot(hp, 'd93-progon17-rukovoditel-nagruzka');
+
+  // Черновик заново: «Срок» из задания — строки «позже черновика» больше нет; эксперт по памяти пишет другой банк.
+  await ep.goto(`/kabinet#order=${A}`);
+  ep.once('dialog', (d) => d.accept());
+  await ep.getByRole('button', { name: 'Подготовить заново с помощью ИИ' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const today = await (await ep.request.get('/api/today', { headers: H })).json();
+  expect(today.expert.task_late.filter((t) => t.id === A)).toEqual([]);
+  await draftText.fill((await draftText.inputValue()).replace(/\[заполнить[^\]]*\]/gu, 'дописано экспертом')
+    .replace(`${row} ПАО Сбербанк (по заявке) |`, `${row} Банк ВТБ (ПАО) (по заявке) |`));
+  await ep.getByRole('button', { name: 'Сохранить правку' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Правка сохранена');
+
+  // Отчёт составлен завтра (позже срока по заданию), пользователь — ВТБ, а в заявке Сбербанк: замена из заявки (2.312).
+  const up = await ep.request.post(`/api/orders/${A}/results`, {
+    data: Buffer.from(['ОТЧЁТ ОБ ОЦЕНКЕ № 17/2026', `Дата составления отчёта: ${ru(inDays(1))}`,
+      'Цель оценки: для предоставления в банк в качестве залога', 'Предполагаемый пользователь результатов оценки: Банк ВТБ (ПАО)',
+      'Вид определяемой стоимости: рыночная', 'Адрес объекта оценки: г. Москва, Пятидесятая ул., д. 50, кв. 5',
+      'Общая площадь 52 кв. м.', 'Итоговая стоимость 15 100 000 руб.'].join('\n')),
+    headers: txt('Отчёт Семнадцатовой.txt'),
+  });
+  expect(up.status()).toBe(201);
+  const resultId = (await up.json()).document.id;
+  await ep.reload();
+  await ep.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(ep.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  const user = ep.locator('#review-checks li[data-check="appraiser"] .ai-found li').filter({ hasText: 'Предполагаемый пользователь' });
+  await expect(user).toHaveCount(1);
+  await expect(user.getByRole('button', { name: 'Заменить на значение из заявки' })).toBeVisible();
+  await expect(ep.locator('#review-checks li[data-check="requisites"] .ai-found li').filter({ hasText: 'позже срока из' })).toContainText(`(не позднее ${ru(inDays(0))}, стр. 1)`);
+  // Заменить можно одно — общей кнопки «Заменить всё» нет (она от двух замен).
+  await expect(ep.locator('#ai-task-swap-all')).toBeHidden();
+  await user.scrollIntoViewIfNeeded();
+  await shot(ep, 'd94-progon17-ekspert-polzovatel-iz-zayavki');
+  expect((await ep.request.post(`/api/documents/${resultId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+
+  // Руководитель: срок по заданию сегодня — красным (2.308); «Вернуть эксперту» — коротким пунктом о пользователе (2.313).
+  await hp.goto('about:blank');
+  await hp.goto(`/kabinet#org=${orgId}&to=sign`);
+  const item = hp.locator('#org-sign > li[data-item]').filter({ hasText: 'Отчёт Семнадцатовой.txt' });
+  await expect(item.locator('[data-sig="task-due"]')).toHaveText('Срок по заданию на оценку сегодня — подпишите сегодня («Задание Сбербанка.txt», стр. 1)');
+  await item.locator('[data-action="org-return"]').click();
+  const points = (await item.locator('textarea').inputValue()).split('\n');
+  expect(points).toContain('Предполагаемый пользователь в отчёте — «Банк ВТБ (ПАО)», а в заявке банк — «Сбербанк» — исправьте, как в заявке');
+  // Найдено прогоном: отчёт составлен позже срока из задания (2.302) — тоже пунктом, без имени файла и страницы.
+  expect(points).toContain(`Дата составления отчёта (${ru(inDays(1))}) позже срока из задания на оценку (не позднее ${ru(inDays(0))}) — исправьте дату составления или приложите к делу документ о переносе срока`);
+  await expect(item.locator('[data-role="ai-order"]')).toContainText('Расхождения с заданием на оценку и заявкой (2)');
+  await item.locator('textarea').scrollIntoViewIfNeeded();
+  await shot(hp, 'd95-progon17-rukovoditel-vernut');
+  await item.locator('[data-action="org-return-send"]').click();
+  await expect(hp.locator('#org-sign-msg')).toHaveText('Файл возвращён эксперту с замечанием — его подпись снята');
+
+  // Эксперт: в пункте — замена из заявки, строка таблицы задания черновика меняется.
+  await ep.reload();
+  const point = ep.locator('ul.points li.point').filter({ hasText: 'Предполагаемый пользователь' }).first();
+  await point.getByRole('button', { name: 'Заменить на значение из заявки' }).click();
+  await expect(point.locator('[data-role="point-swap-done"]')).toContainText('→ «ПАО Сбербанк');
+  await expect(draftText).toHaveValue(new RegExp(`${row.replace(/[|]/g, '\\|')} ПАО Сбербанк \\(по заявке\\) \\|`));
+  await point.scrollIntoViewIfNeeded();
+  await shot(ep, 'd96-progon17-ekspert-punkt-zamenen');
+
+  // Сводка за месяц (2.314): срок отчёта — расхождение с заданием.
+  await hp.goto('about:blank');
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const rep = hp.locator('#org-report > li').filter({ hasText: 'Семнадцатова Ольга' });
+  await expect(rep.locator('[data-expert-order]')).toContainText('срок отчёта — 1');
+  await rep.locator('[data-expert-order]').scrollIntoViewIfNeeded();
+  await shot(hp, 'd97-progon17-rukovoditel-svodka');
+  for (const p of [ep, hp, cp]) await p.context().close();
+});
