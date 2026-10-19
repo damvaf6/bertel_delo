@@ -9,6 +9,7 @@
 // Эксперт просит передать дело коллеге (2.107): причина и выбор, кому, — «Передать» одной кнопкой или «Отказать».
 // «Напомнить эксперту» о деле в работе (2.125) — одной кнопкой, раз в сутки.
 // Отбор по эксперту и «Срок на этой неделе» (2.127) — вместе с отбором 2.102 и поиском.
+// Отбор «Срок по заданию на этой неделе» (2.325): срок из задания на оценку раньше срока дела — ближайший первым.
 // Сколько дней по делу ничего не происходило и отбор «Без движения» (2.133) — переписка с заказчиком не в счёт.
 // Отбор «Срок прошёл» (2.158): только просроченные, дольше всех просроченные — первыми; на сколько дней — у дела.
 // Отбор «Исправленный файл ждёт подписи эксперта» (2.171): после возврата эксперт загрузил новый файл, но не подписал —
@@ -54,6 +55,8 @@ const FILTERS = [
   { id: 'overdue', text: 'Срок прошёл', test: (c) => c.overdue },
   { id: 'hot', text: 'Горит', test: (c) => c.hot },
   { id: 'week', text: 'Срок на этой неделе', test: (c) => c.week },
+  // 2.325: срок из задания на оценку (письма банка, определения суда) раньше срока дела и на этой неделе — ближайший первым.
+  { id: 'task_week', text: 'Срок по заданию на этой неделе', test: (c) => c.task_week },
   // 2.209: срок в дни, когда эксперт не принимает дела; о которых эксперт уже просит передать — в «Просят передать».
   { id: 'away', text: 'Эксперт не принимает дела — срок в эти дни', test: (c) => !!c.away && !c.handover },
   // 2.249: эксперт вернулся после дней «не принимаю дела» за последнюю неделю — что изменилось по его делам, пока его не было.
@@ -158,6 +161,7 @@ function renderCases() {
   }
   if (filter === 'docs') active.sort((a, b) => new Date(a.docs_wait.since) - new Date(b.docs_wait.since));
   if (filter === 'back') active.sort((a, b) => b.back.until.localeCompare(a.back.until) || String(a.deadline).localeCompare(String(b.deadline)));
+  if (filter === 'task_week') active.sort((a, b) => a.task_due.day.localeCompare(b.task_due.day));
   if (filter === 'away') active.sort((a, b) => String(a.deadline).localeCompare(String(b.deadline)));
   if (filter === 'inspect') active.sort((a, b) => (a.inspection.kind === b.inspection.kind
     ? new Date(a.inspection.at) - new Date(b.inspection.at) : a.inspection.kind === 'incomplete' ? -1 : 1));
@@ -219,6 +223,9 @@ function caseItem(org, c) {
     // Дело предложено эксперту, он ещё не принял (2.90): «Ждёт исполнителя · эксперт: …» читалось как «уже назначен».
     el('div', { class: 'muted', text: [c.status === 'awaiting_executor' ? 'Предложено эксперту' : c.status_name, `эксперт: ${c.expert}`,
       c.overdue ? null : deadline].filter(Boolean).join(' · ') }),
+    // Срок по заданию на оценку раньше срока дела (2.325): прошёл или через 1–2 дня — красным.
+    ...(c.task_due ? [el('div', { class: c.task_due.hot ? 'overdue' : 'muted', 'data-role': 'task-due',
+      text: `Сдать ${c.task_due.by} — к ${dayRu(c.task_due.day)}${c.task_due.overdue ? ', срок прошёл' : ''} (срок дела позже)` })] : []),
     el('div', { class: 'muted', text: [c.fee_kop != null ? `вознаграждение ${rub(c.fee_kop)}` : 'цена ещё не назначена',
       c.payout ? PAYOUT_RU[c.payout] : null].filter(Boolean).join(' · ') }),
     // Что ждёт руководителя по делу (2.36) — прямо в списке дел, с переходом к подписи.

@@ -14,7 +14,7 @@ import { monthRu, orgMonthDoneCases, orgMonthReport, reportCsv, reportMonth } fr
 import { buildOrgMonthArchive } from './case-ops.mjs';
 import { openExtends, orgExtends } from './deadline-ops.mjs';
 import { extendSuggest, openHandovers } from './handover-ops.mjs';
-import { orgSchedule } from '../orders/schedule.mjs';
+import { orgSchedule, taskDues } from '../orders/schedule.mjs';
 import { expiringLinks, incompleteInspections } from './inspect-ops.mjs';
 import { docsWaiting } from './docreq-ops.mjs';
 import { taskDueFor } from './draft-ops.mjs';
@@ -224,7 +224,7 @@ export function orgOps() {
       // номер, срок, состояние, эксперт, вознаграждение; нагрузка по экспертам и деньги организации за месяц.
       id: 'orgs.cases', method: 'GET', path: '/api/orgs/:id/cases', auth: 'user',
       access: { resource: 'org', param: 'id', need: 'manage' },
-      async handler({ sql, org, registry }) {
+      async handler({ sql, org, registry, providers }) {
         const today = todayMsk();
         const experts = await sql`
           select s.user_id, s.active, s.away_from, s.away_until, s.away_note, s.away_since, u.full_name from specialists s
@@ -302,6 +302,8 @@ export function orgOps() {
         const docs = await docsWaiting(sql, rows);
         // Перенос от организации (2.238): руководитель попросил диспетчера (2.221) — ждём ответа, отказано или согласовано.
         const orgExt = await orgExtends(sql, org.id, rows.filter((o) => CASES_ACTIVE.includes(o.status)));
+        // Срок по заданию на оценку раньше срока дела (2.325, как в карточке эксперта 2.324) — день и чьё задание, без файла.
+        const task = await taskDues(sql, providers.storage, registry, rows.filter((o) => CASES_ACTIVE.includes(o.status) && o.deadline));
         const cases = rows.map((o) => ({
           ...(waits.get(o.id) ?? { sign_wait: 0, sign_since: null, sign_reminded_at: null, returned_open: false, returned: null }),
           remind: reminds.get(o.id) ?? null,
@@ -334,6 +336,11 @@ export function orgOps() {
           // «Срок на этой неделе» (2.127): активное дело со сроком до воскресенья включительно, просроченные — тоже (их сдавать
           // уже на этой неделе).
           week: CASES_ACTIVE.includes(o.status) && !!o.deadline && o.deadline <= weekEnd(today),
+          // «Срок по заданию на этой неделе» (2.325): срок из задания на оценку (письма банка, определения суда) раньше срока
+          // дела и до воскресенья включительно — прошедший тоже.
+          task_due: task.get(o.id) ? { day: task.get(o.id).day, by: task.get(o.id).by, overdue: task.get(o.id).day < today,
+            hot: task.get(o.id).day <= addDays(today, 2) } : null,
+          task_week: !!task.get(o.id) && task.get(o.id).day <= weekEnd(today),
           expert: name(byId.get(o.executor_user_id)),
           expert_id: o.executor_user_id,
           fee_kop: feeOf(o),

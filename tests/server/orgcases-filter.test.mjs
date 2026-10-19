@@ -161,3 +161,35 @@ test('дела экспертов (2.216): «осмотр не закончен�
   assert.equal((await caseOf(calm)).inspection, null);
   assert.equal((await b.req('GET', `/api/orgs/${org.id}/cases`)).status, 403);
 });
+
+// 2.325: «Срок по заданию на этой неделе» — срок из задания на оценку раньше срока дела и до воскресенья включительно (прошедший
+// тоже); срок дела при этом может быть далеко. Срок по заданию после воскресенья — не в отборе; позже срока дела — ничего.
+test('2.325: дела экспертов — срок по заданию на оценку и отбор «на этой неделе»', async () => {
+  const today = todayMsk();
+  const ruD = (s) => s.split('-').reverse().join('.');
+  const withTask = async (title, due) => {
+    const o = await taken(title, 30, a);
+    if (due != null) {
+      assert.equal((await owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(due)}`), {
+        raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание банка Сидоровой.txt'), 'x-doc-kind': 'basis' } })).status, 201);
+    }
+    return o;
+  };
+  const now = await withTask('По заданию сегодня', today);
+  const past = await withTask('По заданию вчера', addDays(today, -1));
+  const sunday = await withTask('По заданию в воскресенье', weekEnd(today));
+  const next = await withTask('По заданию на следующей неделе', addDays(weekEnd(today), 1));
+  const after = await withTask('По заданию позже срока дела', addDays(today, 40));
+  const none = await withTask('Без задания', null);
+  const r = await head.req('GET', `/api/orgs/${org.id}/cases`);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const of = (o) => r.body.cases.find((c) => c.id === o.id);
+  assert.deepEqual([now, past, sunday, next, after, none].map((o) => [of(o).week, of(o).task_week]),
+    [[false, true], [false, true], [false, true], [false, false], [false, false], [false, false]]);
+  assert.deepEqual(of(now).task_due, { day: today, by: 'по заданию на оценку', overdue: false, hot: true });
+  assert.deepEqual(of(past).task_due, { day: addDays(today, -1), by: 'по заданию на оценку', overdue: true, hot: true });
+  assert.equal(of(next).task_due.hot, addDays(weekEnd(today), 1) <= addDays(today, 2));
+  assert.equal(of(after).task_due, null);
+  assert.equal(of(none).task_due, null);
+  assert.ok(!JSON.stringify(r.body.cases).includes('Сидоровой'), 'без названия файла задания');
+});
