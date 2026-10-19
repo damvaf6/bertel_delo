@@ -166,7 +166,13 @@ export async function expertSchedule(sql, userId, registry, today = todayMsk(), 
 // по дням: сроки его дел (в работе, на проверке, предложенных), выезды на объект (помощника по его делам и его самого
 // помощником), дни, когда он не принимает новые дела. Чтобы назначать и передавать дело тому, у кого свободнее. Как и в
 // «Делах экспертов» (2.16), без заказчика и названий заявок: услуга и номер дела; выезд по чужому делу — без номера.
-export async function orgSchedule(sql, orgId, registry, today = todayMsk()) {
+// Срок по заданию на оценку раньше срока дела (2.318) — дело сдавать в день срока по заданию: там строка task_due, у срока
+// дела — отметка; в «сдать за две недели» и в полосе дело считается в день срока по заданию. Задание читается, только если
+// передано хранилище; без названия файла — руководитель не видит названий документов.
+// Что сдавать в этот день у руководителя (2.318): срок по заданию на оценку или срок дела, у которого срока по заданию
+// раньше нет, — чтобы дело не считалось дважды.
+export const dueItem = (i) => i.kind === 'task_due' || (i.kind === 'deadline' && !i.task_due);
+export async function orgSchedule(sql, orgId, registry, today = todayMsk(), { storage } = {}) {
   const last = addDays(today, SCHEDULE_DAYS - 1);
   const service = (o) => registry.service(o.module, o.service)?.service.name ?? o.service;
   const experts = await sql`
@@ -185,7 +191,6 @@ export async function orgSchedule(sql, orgId, registry, today = todayMsk()) {
       (select to_char(r.new_deadline, 'YYYY-MM-DD') from deadline_requests r where r.order_id = o.id and r.outcome is null) as extend_to
     from orders o
     where o.executor_user_id = any(${ids}::uuid[]) and o.status in ('awaiting_executor', 'in_work', 'review') and o.deadline is not null
-      and o.deadline <= ${last}::date
     order by o.deadline, o.created_at`;
   const visits = await sql`
     select v.id, v.order_id, v.planned_at, v.helper_id, o.module, o.service, o.executor_user_id
@@ -208,9 +213,17 @@ export async function orgSchedule(sql, orgId, registry, today = todayMsk()) {
     if (date < today) x.overdue.push({ ...item, day: date });
     else x.days.find((d) => d.date === date)?.items.push(item);
   };
+  // Срок дела после двух недель — дело нужно только ради срока по заданию в эти две недели (2.318).
+  const task = await taskDues(sql, storage, registry, orders);
   for (const o of orders) {
+    const t = task.get(o.id);
+    if (t && t.day <= last) {
+      put(o.executor_user_id, t.day, { kind: 'task_due', order_ref: orderRef(o.id), service: service(o), status: o.status,
+        deadline: o.deadline, task_due: { day: t.day, by: t.by } });
+    }
+    if (o.deadline > last) continue;
     put(o.executor_user_id, o.deadline, { kind: 'deadline', order_ref: orderRef(o.id), service: service(o), status: o.status,
-      deadline: o.deadline, extend_to: o.extend_to ?? null });
+      deadline: o.deadline, extend_to: o.extend_to ?? null, ...(t ? { task_due: t.day } : {}) });
   }
   for (const v of visits) {
     const d = todayMsk(new Date(v.planned_at));
@@ -223,14 +236,14 @@ export async function orgSchedule(sql, orgId, registry, today = todayMsk()) {
       put(v.helper_id, d, { kind: 'helper', ...(mine.has(v.executor_user_id) ? { order_ref: orderRef(v.order_id) } : {}), service: service(v), time: mskTime(v.planned_at) });
     }
   }
-  const ORDER = { visit: 0, helper: 0, deadline: 1 };
+  const ORDER = { visit: 0, helper: 0, task_due: 1, deadline: 1 };
   const result = [...per.values()].map((x) => {
     for (const d of x.days) d.items.sort((a, b) => ORDER[a.kind] - ORDER[b.kind] || String(a.time ?? '').localeCompare(String(b.time ?? '')));
     const all = x.days.flatMap((d) => d.items);
     return {
       ...x,
-      due: all.filter((i) => i.kind === 'deadline').length,
-      visits: all.filter((i) => i.kind !== 'deadline').length,
+      due: all.filter(dueItem).length,
+      visits: all.filter((i) => i.kind === 'visit' || i.kind === 'helper').length,
       // Свободные будни: не выходной, не «не принимаю дела», ни срока, ни выезда — куда можно поставить новое дело.
       free_workdays: x.days.filter((d, i) => !header[i].weekend && !d.away && !d.items.length).length,
     };
