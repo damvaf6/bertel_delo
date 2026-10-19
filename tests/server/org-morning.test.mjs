@@ -706,3 +706,55 @@ test('2.286: на подписи расхождения с заявкой или
   assert.equal((await ex.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
   assert.equal((await signRow()).order_diff, 0);
 });
+
+// 2.316: у дела на подписи организации срок по заданию на оценку сегодня или прошёл (2.308) — в утренней сводке руководителя
+// «срок по заданию на оценку сегодня или прошёл — подпишите сегодня: N дело», ведёт к подписи организации раньше всего прочего.
+// Срок завтра — не в счёт; чужая организация — ничего.
+test('2.316: срок по заданию на оценку у дела на подписи — в утренней сводке руководителя', async () => {
+  const z = { sign: 0, handover: 0, stuck: 0, due: 0, overdue: 0, idle: 0, returned: 0, fresh: 0, away: 0, ext_declined: 0, back: 0, egrn_kept: 0, order_diff: 0 };
+  assert.equal(orgDigestText({ ...z, sign: 2, task_due: 1 }),
+    'На сегодня по организации: 2 дела ждут подписи организации, срок по заданию на оценку сегодня или прошёл — подпишите сегодня: 1 дело');
+  assert.equal(orgDigestTo({ ...z, sign: 1, task_due: 1, due: 1, overdue: 1, stuck: 1, order_diff: 1 }), 'sign');
+  assert.equal(orgDigestTo({ ...z, sign: 1, task_due: 0, due: 1 }), 'week');
+
+  const h = await login(S, '+79990003891');
+  const ex = await login(S, '+79990003892');
+  const other = await login(S, '+79990003893');
+  const oT = await makeOrg(S.sql, 'ООО «Срок по заданию утром»');
+  const oX = await makeOrg(S.sql, 'ООО «Чужой срок по заданию»');
+  await addMember(S.sql, oT.id, h.user.id, 'head');
+  await addMember(S.sql, oX.id, other.user.id, 'head');
+  await makeSpecialist(S.sql, ex.user.id);
+  await addMember(S.sql, oT.id, ex.user.id, 'member');
+  assert.equal((await ex.req('PATCH', '/api/me', { full_name: 'Эксперт Задания' })).status, 200);
+  assert.equal((await ex.req('PATCH', '/api/specialist/me', { org_id: oT.id })).status, 200);
+  const putTxt = (who, url, body, name) => who.req('POST', url, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } });
+  const ruD = (s) => s.split('-').reverse().join('.');
+  const signed = async (title, due) => {
+    const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
+    assert.equal((await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: addDays(today, 15), fields: FIELDS })).status, 200);
+    assert.equal((await owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
+    await ensurePaid(S.sql, o.id);
+    assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: ex.user.id, from: 'matching' })).status, 200);
+    assert.equal((await ex.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+    assert.equal((await putTxt(owner, `/api/orders/${o.id}/documents`, `ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(due)}`, 'Задание на оценку.txt')).status, 201);
+    const d = (await putTxt(ex, `/api/orders/${o.id}/results`, 'ОТЧЁТ ОБ ОЦЕНКЕ\nКвартира', 'Отчёт.txt')).body.document;
+    assert.equal((await ex.req('POST', `/api/documents/${d.id}/sign`, { confirm: true })).status, 201);
+    return o;
+  };
+  await signed('Квартира: срок по заданию сегодня', today);
+  await signed('Квартира: срок по заданию прошёл', addDays(today, -1));
+  await signed('Квартира: срок по заданию завтра', tomorrow);
+
+  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(today, '08:55'), storage: S.providers.storage }) >= 1);
+  const [d] = await S.sql`select sign, task_due from org_morning_digests where user_id = ${h.user.id} and org_id = ${oT.id}`;
+  assert.deepEqual({ ...d }, { sign: 3, task_due: 2 });
+  const feed = (await h.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня по организации'));
+  assert.equal(feed.length, 1);
+  assert.equal(feed[0].title, 'На сегодня по организации: 3 дела ждут подписи организации, срок по заданию на оценку сегодня или прошёл — подпишите сегодня: 2 дела');
+  assert.equal(feed[0].section, `org=${oT.id}&to=sign`);
+  assert.doesNotMatch(JSON.stringify(feed), /Квартира|Задания|Задание на оценку\.txt/);
+  const [rx] = await S.sql`select task_due from org_morning_digests where user_id = ${other.user.id} and org_id = ${oX.id}`;
+  assert.equal(rx?.task_due ?? 0, 0);
+});
