@@ -15,7 +15,7 @@ import { audit, text, uuidFrom } from './util.mjs';
 import { notify, orgHeads } from '../notify/notify.mjs';
 import { BLOCKING_KINDS, dossierAlerts, loadDossier, needsValidDossier } from '../dossier/dossier.mjs';
 import { expertMonthReport, orgReturnsYear, reportMonth } from '../orgs/report.mjs';
-import { expertSchedule } from '../orders/schedule.mjs';
+import { expertSchedule, taskDues } from '../orders/schedule.mjs';
 import { scheduleIcs } from '../orders/ics.mjs';
 import { AWAY_BACK_SHOW_DAYS, awayBackOf } from '../notify/away.mjs';
 import { TAX_STATUSES, taxStatusFrom } from '../matching/executors.mjs';
@@ -321,7 +321,7 @@ export function matchOps() {
       // «Возвраты за год» (2.156) — `returns_year`: сколько раз его организация возвращала отчёты и частые пункты замечаний.
       id: 'specialists.card', method: 'GET', path: '/api/specialists/:id/card', auth: 'user',
       access: { resource: 'specialistCard', param: 'id', need: 'read' },
-      async handler({ sql, actor, specialist, signOrg, registry }) {
+      async handler({ sql, actor, specialist, signOrg, registry, providers }) {
         const id = specialist.user_id;
         const profile = await profileView(sql, id, registry);
         const dossier = (await loadDossier(sql, id)).map((i) => ({
@@ -344,11 +344,14 @@ export function matchOps() {
         const day = (d) => (d ? (d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10)) : null);
         const today = todayMsk();
         const active = await sql`
-          select id, module, service, status, deadline, updated_at from orders
+          select id, module, service, status, deadline, to_char(deadline, 'YYYY-MM-DD') as deadline_day, updated_at from orders
           where executor_user_id = ${id} and status = any(${OPEN_STATUSES}::text[])
           order by deadline nulls last, updated_at desc`;
         const moves = await caseMoves(sql, active.filter((o) => o.status !== 'awaiting_executor'));
         const ext = await openExtends(sql, active.map((o) => o.id));
+        // Срок по заданию на оценку раньше срока дела (2.324, как в «Моих сроках», 2.317) — день и чьё задание, без файла.
+        const task = await taskDues(sql, providers.storage, registry,
+          active.filter((o) => o.deadline_day).map((o) => ({ ...o, deadline: o.deadline_day })));
         const headOrg = signOrg && roleIn(actor, signOrg.id) === 'head' ? signOrg.id : null;
         return {
           specialist: profile,
@@ -366,7 +369,10 @@ export function matchOps() {
               deadline: o.deadline,
               overdue: isOverdue(o, today),
               // «Горит» — как в «Делах экспертов» (2.102): в работе или на проверке, срок прошёл или через 1–2 дня.
-              hot: o.status !== 'awaiting_executor' && !!o.deadline && o.deadline <= addDays(today, 2),
+              // Срок по заданию на оценку близко (2.324) — тоже «горит».
+              hot: o.status !== 'awaiting_executor' && ((!!o.deadline && o.deadline <= addDays(today, 2))
+                || (!!task.get(o.id) && task.get(o.id).day <= addDays(today, 2))),
+              task_due: task.get(o.id) ? { day: task.get(o.id).day, by: task.get(o.id).by, overdue: task.get(o.id).day < today } : null,
               idle_days: moves.get(o.id)?.days ?? null,
               idle: !!moves.get(o.id)?.idle,
               extend: ext.get(o.id) ? { new_deadline: ext.get(o.id).new_deadline } : null,

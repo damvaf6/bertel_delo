@@ -51,7 +51,10 @@ function showNow(now) {
     el('div', { class: 'title', text: `${x.service} · ${x.order_ref}` }),
     el('div', { class: x.overdue || x.hot ? 'overdue' : 'muted', text: [x.status_name,
       x.deadline ? `срок ${dayRu(x.deadline)}` : 'без срока', x.overdue ? 'просрочено' : x.hot ? 'срок горит' : null].filter(Boolean).join(' · ') }),
-    ...(x.idle ? [el('div', { class: 'overdue', 'data-idle': '', text: `Без движения ${x.idle_days} дн.` })] : []),
+    // Срок по заданию на оценку раньше срока дела (2.324).
+    ...(x.task_due ? [el('div', { class: x.task_due.overdue || x.hot ? 'overdue' : 'muted', 'data-task-due': '',
+      text: `Сдать ${x.task_due.by} — к ${dayRu(x.task_due.day)}${x.task_due.overdue ? ', срок прошёл' : ''} (срок дела позже)` })] : []),
+    ...(x.idle ? [el('div', { class: 'overdue', 'data-idle': '',text: `Без движения ${x.idle_days} дн.` })] : []),
     ...(x.extend ? [el('div', { class: 'muted', 'data-extend': '', text: `Просит перенести срок на ${dayRu(x.extend.new_deadline)} — ждёт решения диспетчера` })] : []),
     ...(now.org_id ? [el('a', { class: 'link', href: `#org=${now.org_id}&case=${x.order_ref.slice(2)}&to=case`, 'data-action': 'now-open' }, 'Открыть в делах экспертов')] : []))));
 }
