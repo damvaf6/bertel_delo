@@ -7,7 +7,7 @@ import { loadAnalogs } from '/analogs.js';
 import { loadSnippets } from '/snippets.js';
 import { loadDraftDiff } from '/draftdiff.js';
 import { emptySections } from '/draftempty.js';
-import { findInDraft, swapAll, swapValue, unswapAll } from '/draftfind.js';
+import { findInDraft, findMadeInDraft, swapAll, swapValue, unswapAll } from '/draftfind.js';
 
 const $ = (id) => document.getElementById(id);
 const timeRu = (s) => new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
@@ -150,6 +150,19 @@ export function fixInDraft(g, quote) {
   t.focus();
   t.setSelectionRange(at.from, at.to);
   say($('draft-msg'), `Выделено «${t.value.slice(at.from, at.to)}» — ${g.from || 'в выписке ЕГРН'}: ${g.right}. Исправьте и сохраните черновик, затем соберите Word заново.`, 'ok');
+  return true;
+}
+
+// 2.322: «К месту в черновике» у пункта «дата составления позже срока из задания» — выделяет дату в строке «Дата
+// составления»; такой строки в черновике нет — false (в Word дата составления — день сборки).
+export function madeInDraft(date, msg) {
+  const t = $('draft-text');
+  const at = canFixInDraft() ? findMadeInDraft(t.value, date.made) : null;
+  if (!at) return false;
+  t.scrollIntoView({ block: 'center' });
+  t.focus();
+  t.setSelectionRange(at.from, at.to);
+  say($('draft-msg'), msg(t.value.slice(at.from, at.to)), 'ok');
   return true;
 }
 

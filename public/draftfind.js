@@ -54,6 +54,23 @@ export function findInDraft(body, { bad, quote, mark } = {}) {
   return { from: best.from, to: best.to + (tail ? tail[0].length : 0) };
 }
 
+// 2.322: строка «Дата составления (подписания) отчёта» в черновике — к ней «К месту в черновике» у пункта возврата: дата
+// made в этой строке, иначе любая дата в ней, иначе конец подписи строки; строки нет — null (в Word дата — день сборки).
+const MADE_LINE = /дата\s+(?:составления|подписания)(?:\s+(?:отч[её]та|заключения))?/iu;
+const ANY_DATE = /[«"]?\d{1,2}[»"]?(?:\.\d{2}\.|\s+[а-я]+\s+)\d{4}(?:\s*г\.?)?/iu;
+export function findMadeInDraft(body, made) {
+  const text = String(body ?? '');
+  const m = MADE_LINE.exec(text);
+  if (!m) return null;
+  const stop = text.indexOf('\n', m.index);
+  const line = text.slice(m.index, stop < 0 ? text.length : stop);
+  const re = made ? pattern(made) : null;
+  const hit = (re && re.exec(line)) ?? ANY_DATE.exec(line);
+  if (hit) return { from: m.index + hit.index, to: m.index + hit.index + hit[0].length };
+  const end = m.index + m[0].length;
+  return { from: end, to: end };
+}
+
 // 2.274, 2.277, 2.278: находку по заданию на оценку (письму, определению суда) можно заменить одной кнопкой «Заменить на
 // значение из задания» — откуда верное значение (null — нельзя). 2.284: та же проверка — для «Сегодня» и утренней сводки.
 // 2.312: пользователь результатов оценки (`flip: 'name'`, правило bank_user) — и Сбербанк из заявки: «из заявки».

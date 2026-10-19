@@ -15,7 +15,7 @@ import { ProviderError } from '../providers/fake.mjs';
 import { notify } from '../notify/notify.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { signatureFilename } from '../providers/sign.mjs';
-import { aiSignHints, egrnLinks, egrnLinkOf, egrnLinkState } from '../ai/ai.mjs';
+import { aiSignHints, egrnLinks, egrnLinkOf, egrnLinkState, taskDateOf } from '../ai/ai.mjs';
 import { audit, text } from './util.mjs';
 import { latest, taskDueSign } from './draft-ops.mjs';
 import { todayMsk } from '../orders/workflow.mjs';
@@ -192,7 +192,11 @@ export async function orgReturns(sql, orderId, { orgId = null } = {}) {
     // 2.262: пункт из расхождения с выпиской ЕГРН — правило и верное значение: у эксперта в замечании «Заменить по выписке»
     // Пункт по заявке и заданию на оценку (2.271) — fix: «Заменить на значение из задания», если та же находка в ИИ-проверке
     // заменяется одной кнопкой (2.285; по заявке — только пользователь результатов оценки, 2.313).
-    const link = (l) => ({ rule: l.rule, ...(l.right ? { right: l.right } : {}) });
+    // 2.322: пункт «дата составления позже срока из задания» (прогон 2.320) — замены нет, у эксперта «К месту в черновике»: date.
+    const link = (l) => {
+      const date = l.kind === 'order' && !l.right ? taskDateOf(l.short) : null;
+      return { rule: l.rule, ...(l.right ? { right: l.right } : {}), ...(date ? { date } : {}) };
+    };
     const points = items.filter((i) => String(i.return_id) === String(r.id)).map((i) => ({ n: i.n, text: i.text, fixed: !!i.fixed_at, fixed_at: i.fixed_at,
       ...(i.egrn?.rule ? { [i.egrn.kind === 'order' ? 'fix' : 'egrn']: link(i.egrn) } : {}) }));
     const ret = {
