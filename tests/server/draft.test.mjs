@@ -14,6 +14,7 @@ import { ANALOGS_MARK, COURT_WARNING, splitQuestions } from '../../src/docs/repo
 import { validateModule } from '../../src/modules/index.mjs';
 import { expertMorningAlerts } from '../../src/ops/today-ops.mjs';
 import { digestText, morningTo, sendMorning } from '../../src/notify/morning.mjs';
+import { expertSchedule } from '../../src/orders/schedule.mjs';
 
 let S, owner, other, dispatcher, admin, spec;
 const FIELDS = { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 9', area: '54.3' };
@@ -1489,6 +1490,53 @@ test('2.315: утренняя сводка эксперта — срок по з
   assert.equal((await alerts(addDays(todayMsk(), 1))).task_due, base);
   assert.equal(digestText({ task_due: 2 }), 'На сегодня: срок по заданию на оценку сегодня, завтра или прошёл, а файла результата нет: 2 дела');
   assert.equal(morningTo({ task_due: 1 }), 'today');
+});
+
+test('2.317: «Мои сроки на две недели» и файл для календаря — срок по заданию на оценку раньше срока дела своей отметкой', async () => {
+  const o = await inWork('Квартира: срок по заданию в моих сроках');
+  const ruD = (s) => s.split('-').reverse().join('.');
+  const mine = (await S.sql`select to_char(deadline, 'YYYY-MM-DD') as d from orders where id = ${o.id}`)[0].d;
+  const items = async (who = spec) => (await who.req('GET', '/api/specialist/me/schedule')).body.schedule;
+  const of = (s, kind) => s.days.flatMap((d) => d.items.map((i) => ({ ...i, date: d.date }))).filter((i) => i.order_id === o.id && i.kind === kind);
+  // Задания нет — только срок дела, без отметки.
+  let s = await items();
+  assert.deepEqual(of(s, 'task_due'), []);
+  assert.equal(of(s, 'deadline')[0].task_due, undefined);
+  const early = addDays(todayMsk(), 3);
+  assert.ok(early < mine);
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(early)}`), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание банка.txt'), 'x-doc-kind': 'basis' } })).status, 201);
+  s = await items();
+  const [t] = of(s, 'task_due');
+  assert.equal(t.date, early);
+  assert.deepEqual(t.task_due, { day: early, by: 'по заданию на оценку', name: 'Задание банка.txt', page: 1 });
+  assert.equal(t.deadline, mine);
+  assert.equal(of(s, 'deadline')[0].date, mine);
+  assert.equal(of(s, 'deadline')[0].task_due, early);
+  // В день срока по заданию — не «сдать дел» и не перегрузка.
+  assert.equal(s.days.find((d) => d.date === early).deadlines, 0);
+  // Файл для календаря — своё событие на весь день с напоминанием накануне.
+  const text = String((await spec.req('GET', '/api/specialist/me/schedule?format=ics', undefined, { binary: true })).body);
+  assert.ok(text.includes(`UID:taskdue-${o.id}@bertel-delo`));
+  assert.ok(text.includes(`DTSTART;VALUE=DATE:${early.replace(/-/g, '')}`));
+  assert.ok(text.replace(/\r\n /g, '').includes('SUMMARY:Срок по заданию на оценку: дело '));
+  // Другой эксперт с допуском — чужого срока по заданию не видит.
+  const third = await login(S, '+79990000917');
+  await makeSpecialist(S.sql, third.user.id, { permits: [['expertise', 'realty']] });
+  assert.equal(of(await items(third), 'task_due').length, 0);
+  // Срок по заданию прошёл — в просроченном сверху.
+  s = (await expertSchedule(S.sql, spec.user.id, S.app.locals.registry, addDays(todayMsk(), 4), { storage: S.providers.storage }));
+  assert.equal(s.overdue.filter((i) => i.order_id === o.id && i.kind === 'task_due').length, 1);
+  // Без хранилища (утренняя сводка) — не читается и не падает.
+  s = await expertSchedule(S.sql, spec.user.id, S.app.locals.registry);
+  assert.deepEqual(of(s, 'task_due'), []);
+  // Срок дела не позже срока по заданию — отметки нет.
+  await S.sql`update orders set deadline = ${early} where id = ${o.id}`;
+  assert.deepEqual(of(await items(), 'task_due'), []);
+  await S.sql`update orders set deadline = ${mine} where id = ${o.id}`;
+  // Сдано на проверку — отметки нет.
+  await S.sql`update orders set status = 'review' where id = ${o.id}`;
+  assert.deepEqual(of(await items(), 'task_due'), []);
 });
 
 test('2.303: срок составления отчёта из задания на оценку — в строку «Срок» таблицы задания и модели; срок дела позже — рядом', async () => {

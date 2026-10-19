@@ -18,7 +18,7 @@ const trips = (n) => (n === 1 ? 'выезд' : `${n} ${n < 5 ? 'выезда' : 
 // «Горит» — как в «Сегодня»: срок сегодня, завтра или послезавтра.
 const HOT_DAYS = 2;
 // Файл для календаря телефона (2.122): сроки дел и выезды — в файле только они.
-const IN_CALENDAR = new Set(['deadline', 'visit', 'my_visit']);
+const IN_CALENDAR = new Set(['deadline', 'task_due', 'visit', 'my_visit']);
 $('schedule-ics').addEventListener('click', () => location.assign('/api/specialist/me/schedule?format=ics'));
 
 function item(i, index) {
@@ -33,12 +33,21 @@ function item(i, index) {
     const away = i.away_due ? 'срок в дни, когда Вы не принимаете новые дела' : null;
     // 2.219: руководитель просил попросить перенос срока (2.201), а просьбы с тех пор нет.
     const asked = i.head_ask ? `напоминал руководитель${i.head_ask.by ? ` ${i.head_ask.by}` : ''} ${when(i.head_ask.at)} — попросите перенос срока` : null;
-    const li = link(order('deadline'), `Сдать: ${i.title}`, [i.service, note, ext, away, asked].filter(Boolean).join(' · '), hot || away || asked ? 'hot' : '');
+    // 2.317: по заданию на оценку отчёт нужен раньше — день сдачи по заданию отдельной строкой выше.
+    const task = i.task_due ? `по заданию на оценку — к ${short(i.task_due)}` : null;
+    const li = link(order('deadline'), `Сдать: ${i.title}`, [i.service, note, task, ext, away, asked].filter(Boolean).join(' · '), hot || away || asked ? 'hot' : '');
     if (asked) li.dataset.headAsk = '1';
     // Перегруженный день (2.134): рядом — «Попросить перенос», дело откроется с готовой причиной и новым сроком. Срок в отпуске
     // (2.195) — причина «меня не будет», новый срок — день возвращения; эксперту от организации — ещё «Передать коллеге».
     if (i.can_extend) li.append(el('a', { class: 'ask', href: order(i.away_due ? 'away' : 'extend'), 'data-ask-extend': i.order_id, text: 'Попросить перенос' }));
     if (i.can_handover) li.append(el('a', { class: 'ask', href: order('handover'), 'data-ask-handover': i.order_id, text: 'Передать коллеге' }));
+    return li;
+  }
+  // 2.317: срок по заданию на оценку (письмо банка, определение суда) раньше срока дела — в свой день; ведёт к файлу результата.
+  if (i.kind === 'task_due') {
+    const li = link(order('result'), `Срок по заданию на оценку: ${i.title}`,
+      `${i.service} · ${i.task_due.by}: «${i.task_due.name}», стр. ${i.task_due.page} · срок дела позже — ${short(i.deadline)}`, 'hot');
+    li.dataset.taskDue = i.order_id;
     return li;
   }
   if (i.kind === 'extend') {
@@ -87,6 +96,7 @@ export async function loadSchedule() {
     const li = item(i, null);
     const what = li.querySelector('.what');
     what.textContent = i.kind === 'deadline' ? `срок был ${short(i.deadline)}${what.textContent ? ` · ${what.textContent}` : ''}`
+      : i.kind === 'task_due' ? `срок по заданию был ${short(i.task_due.day)} · ${what.textContent}`
       : `выезд был назначен на ${short(i.day)} и не завершён`;
     li.querySelector('a').classList.add('hot');
     return li;

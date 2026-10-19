@@ -4,8 +4,11 @@
 // отдельным списком сверху. Только дела, где человек исполнитель (или помощник на выезде). Свои заметки с напоминанием
 // (2.115, видит только автор) — в день напоминания; не отмеченные «сделано» с прошлых дней — на сегодня (2.120); «за день
 // до срока» (2.149) — с отметкой и сроком дела (2.157). Руководитель просил попросить перенос срока (2.201) — у дела
-// отметка «напоминал руководитель» (2.219), пока эксперт не попросил перенос.
+// отметка «напоминал руководитель» (2.219), пока эксперт не попросил перенос. Срок по заданию на оценку (2.303) раньше срока
+// дела (2.317) — своей отметкой в его день, у срока дела — «по заданию раньше»; задание читается, только если передано хранилище.
 import { addDays, todayMsk } from './workflow.mjs';
+import { taskDueFor } from '../ops/draft-ops.mjs';
+import { assignmentDocs } from '../ops/ai-ops.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { executorSignOrg } from '../access/policy.mjs';
 
@@ -37,7 +40,20 @@ const inAway = (away, date) => !!away && date < away.until && (!away.from || dat
 const mskDay = (t) => todayMsk(new Date(t));
 const mskTime = (t) => new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit' }).format(new Date(t));
 
-export async function expertSchedule(sql, userId, registry, today = todayMsk()) {
+// 2.317: срок по заданию на оценку (письмо банка, определение суда) раньше срока дела — у дел в работе и предложенных, где
+// ИИ-проверка сверяет сроки (правило report_dates). Номер дела → { day, by, name, page }.
+async function taskDues(sql, storage, registry, orders) {
+  const out = new Map();
+  if (!storage) return out;
+  for (const o of orders) {
+    if (o.status === 'review' || !registry.checks(o.module, o.service).some((r) => (r.auto ?? []).includes('report_dates'))) continue;
+    const d = taskDueFor(registry, o, await assignmentDocs(sql, storage, o));
+    if (d && d.day < o.deadline) out.set(o.id, { day: d.day, by: d.by, name: d.name, page: d.page });
+  }
+  return out;
+}
+
+export async function expertSchedule(sql, userId, registry, today = todayMsk(), { storage } = {}) {
   const last = addDays(today, SCHEDULE_DAYS - 1);
   const service = (o) => registry.service(o.module, o.service)?.service.name ?? o.service;
   const orders = await sql`
@@ -85,8 +101,17 @@ export async function expertSchedule(sql, userId, registry, today = todayMsk()) 
   const put = (date, item) => days.get(date)?.items.push(item);
   const base = (o, id = o.id) => ({ order_id: id, title: o.title || 'Дело', service: service(o) });
   const overdue = [];
+  const task = await taskDues(sql, storage, registry, orders);
   for (const o of orders) {
     const it = { kind: 'deadline', ...base(o), status: o.status, deadline: o.deadline, extend_to: o.extend_to ?? null };
+    const t = task.get(o.id);
+    if (t) {
+      it.task_due = t.day;
+      // В день срока по заданию — своя отметка: сдать к нему, хотя срок дела позже.
+      const ti = { kind: 'task_due', ...base(o), status: o.status, deadline: o.deadline, task_due: t };
+      if (t.day < today) overdue.push(ti);
+      else put(t.day, ti);
+    }
     if (o.head_ask && o.status === 'in_work' && !o.extend_to) it.head_ask = { at: new Date(o.head_ask.at).toISOString(), by: o.head_ask.by || null };
     if (o.deadline < today) overdue.push(it);
     else put(o.deadline, it);
@@ -110,8 +135,8 @@ export async function expertSchedule(sql, userId, registry, today = todayMsk()) 
     put(n.remind_on < today ? today : n.remind_on, { kind: 'note', ...base(n, n.order_id), note_id: String(n.id), note: n.body, remind_on: n.remind_on,
       late: n.remind_on < today, ...(n.remind_deadline && n.deadline ? { by_deadline: true, deadline: n.deadline } : {}) });
   }
-  // В дне: сначала выезды по времени, потом сроки, просьбы о переносе, ссылки и заметки.
-  const ORDER = { my_visit: 0, visit: 0, deadline: 1, extend: 2, link: 3, note: 4 };
+  // В дне: сначала выезды по времени, потом сроки по заданию на оценку, сроки, просьбы о переносе, ссылки и заметки.
+  const ORDER = { my_visit: 0, visit: 0, task_due: 1, deadline: 1, extend: 2, link: 3, note: 4 };
   for (const d of days.values()) {
     d.items.sort((a, b) => ORDER[a.kind] - ORDER[b.kind] || String(a.time ?? '').localeCompare(String(b.time ?? '')));
     d.deadlines = d.items.filter((i) => i.kind === 'deadline').length;
