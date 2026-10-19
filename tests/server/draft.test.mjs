@@ -814,6 +814,32 @@ test('2.232: замена на значение из выписки: число 
   assert.equal(swapValue(null), null);
 });
 
+// 2.312: пользователь результатов оценки (bank_user, `flip: 'name'`) — замена одной кнопкой и в «Заменить всё по заданию»:
+// Сбербанк из заявки — «из заявки» (другие находки по заявке — нет); в строке таблицы задания черновика меняется и пометка.
+test('2.312: пользователь результатов оценки — замена по заявке и заданию, строка таблицы задания черновика', async () => {
+  const { assignmentSource, findInDraft, swapAll } = await import('../../public/draftfind.js');
+  const sber = { bad: 'Банк ВТБ (ПАО)', right: 'ПАО Сбербанк', from: 'в заявке', flip: 'name' };
+  assert.equal(assignmentSource(sber), 'из заявки');
+  assert.equal(assignmentSource({ bad: '45,1', right: '47,3', from: 'в заявке' }), null);
+  assert.equal(assignmentSource({ ...sber, from: 'в задании на оценку «Задание.pdf»' }), 'из задания');
+  const row = '| Предполагаемый пользователь результатов оценки |';
+  const body = ['Заказчик: Банк ВТБ (ПАО) просит оценить квартиру', `${row} Банк ВТБ (ПАО) (по заданию на оценку) |`, 'Цель: залог'].join('\n');
+  const quote = 'Предполагаемый пользователь результатов оценки: Банк ВТБ (ПАО)';
+  const at = findInDraft(body, { bad: sber.bad, quote, mark: true });
+  assert.equal(body.slice(at.from, at.to), 'Банк ВТБ (ПАО) (по заданию на оценку)');
+  assert.equal(body.slice(...Object.values(findInDraft(body, { bad: sber.bad, quote }))), 'Банк ВТБ (ПАО)');
+  const date = { bad: '01.10.2026', right: '03.10.2026', from: 'в задании на оценку «Задание.pdf»' };
+  const r = swapAll(`${body}\nДата оценки: 01.10.2026`, [{ g: sber, quote }, { g: date, quote: 'Дата оценки: 01.10.2026' }]);
+  assert.deepEqual(r.missing, []);
+  assert.ok(r.body.includes(`${row} ПАО Сбербанк (по заявке) |`));
+  assert.ok(r.body.includes('Заказчик: Банк ВТБ (ПАО) просит'));
+  assert.ok(r.body.includes('Дата оценки: 03.10.2026'));
+  // Без пометки в тексте — пометка не прибавляется; из задания — «по заданию на оценку».
+  const task = { ...sber, right: 'АО «Альфа-Банк»', from: 'в задании на оценку «Задание.pdf»' };
+  assert.ok(swapAll(`${row} Банк ВТБ (ПАО) (по заявке) |`, [{ g: task, quote }]).body.includes(`${row} АО «Альфа-Банк» (по заданию на оценку) |`));
+  assert.equal(swapAll(`Пользователь: Банк ВТБ (ПАО).`, [{ g: sber, quote }]).body, 'Пользователь: ПАО Сбербанк.');
+});
+
 // 2.274: «Заменить на значение из задания» — дата оценки в той же записи, что в тексте черновика.
 test('2.274: замена даты оценки на дату из задания — цифрами и словами, как в тексте', async () => {
   const { swapValue, findInDraft } = await import('../../public/draftfind.js');

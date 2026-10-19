@@ -12781,6 +12781,67 @@ test('2.307: оценка для банка — пользователь рез�
   for (const p of [ep, cp]) await p.context().close();
 });
 
+// 2.312: пользователь результатов оценки не как в заявке (Сбербанк) — «Заменить на значение из заявки» и в «Заменить всё по
+// заданию и заявке» вместе с видом стоимости из задания; меняется строка таблицы задания черновика вместе с пометкой.
+test('2.312: пользователь результатов — замена по заявке и в «Заменить всё»', async ({ browser, baseURL }) => {
+  test.setTimeout(120_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990031201'), customer = await signIn(cp, '+79990031202');
+  const A = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Пользователь по заявке: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","bank":"sber","region":"moscow","object_type":"flat","address":"г. Москва, Садовая ул., д. 7, кв. 4"}') returning id`,
+    [customer.id, expert.id, inDays(6)]);
+    return o.id;
+  });
+  await ep.goto(`/kabinet#order=${A}`);
+  await ep.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const draftText = ep.getByLabel('Текст заключения');
+  const row = '| Предполагаемый пользователь результатов оценки |';
+  const first = await draftText.inputValue();
+  expect(first).toContain(`${row} ПАО Сбербанк (по заявке) |`);
+  await draftText.fill(`${first.replace(`${row} ПАО Сбербанк (по заявке) |`, `${row} Банк ВТБ (ПАО) (по заявке) |`)}\nОпределению подлежит ликвидационная стоимость объекта.`);
+  await ep.getByRole('button', { name: 'Сохранить правку' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Правка сохранена');
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from('ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nВид стоимости: рыночная'),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание на оценку.txt'), 'x-doc-kind': 'basis' },
+  })).status()).toBe(201);
+  expect((await ep.request.post(`/api/orders/${A}/results`, {
+    data: Buffer.from(['ОТЧЁТ ОБ ОЦЕНКЕ № 112/2026', 'Цель оценки: для ипотечного кредитования', 'Предполагаемый пользователь результатов оценки: Банк ВТБ (ПАО)',
+      'Вид определяемой стоимости: ликвидационная', 'Итоговая стоимость 10 000 000 руб.'].join('\n')),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Отчёт.txt') },
+  })).status()).toBe(201);
+  await ep.reload();
+  await ep.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(ep.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  const user = ep.locator('#review-checks li[data-check="appraiser"] .ai-found li').filter({ hasText: 'Предполагаемый пользователь' });
+  await expect(user.getByRole('button', { name: 'Заменить на значение из заявки' })).toBeVisible();
+  const box = ep.locator('#ai-task-swap-all');
+  await expect(box.getByRole('button', { name: 'Заменить всё по заданию и заявке (2)' })).toBeVisible();
+  await box.scrollIntoViewIfNeeded();
+  await shot(ep, '54z1-specialist-zamenit-vse-po-zadaniyu-i-zayavke');
+  await box.getByRole('button', { name: 'Заменить всё по заданию и заявке (2)' }).click();
+  await expect(box.locator('[data-role="task-swap-all-what"]')).toHaveText('Заменено по заданию на оценку и заявке: 2. Черновик сохранён; соберите Word заново.');
+  await expect(box.locator('[data-role="task-swap-all-list"]')).toContainText('«Банк ВТБ (ПАО) (по заявке)» → «ПАО Сбербанк (по заявке)»');
+  await expect(draftText).toHaveValue(/\| Предполагаемый пользователь результатов оценки \| ПАО Сбербанк \(по заявке\) \|/);
+  await expect(draftText).toHaveValue(/Определению подлежит рыночная стоимость объекта\./);
+  await expect(user.locator('[data-role="fix-swap-what"]')).toContainText('как в заявке (заменено вместе со всеми)');
+  await user.scrollIntoViewIfNeeded();
+  await shot(ep, '54z2-specialist-polzovatel-zamenen-po-zayavke');
+  await box.getByRole('button', { name: 'Отменить всё' }).click();
+  await expect(draftText).toHaveValue(/\| Предполагаемый пользователь результатов оценки \| Банк ВТБ \(ПАО\) \(по заявке\) \|/);
+  // Одной кнопкой у находки — то же место в таблице задания.
+  await user.getByRole('button', { name: 'Заменить на значение из заявки' }).click();
+  await expect(user.locator('[data-role="fix-swap-what"]')).toContainText('Было «Банк ВТБ (ПАО) (по заявке)» — стало «ПАО Сбербанк (по заявке)», как в заявке');
+  expect((await (await ep.request.get(`/api/orders/${A}/draft`, { headers: H })).json()).draft.body).toContain(`${row} ПАО Сбербанк (по заявке) |`);
+  for (const p of [ep, cp]) await p.context().close();
+});
+
 // 2.308: у дела на подписи организации срок по заданию на оценку сегодня или прошёл — руководителю красным в «Сегодня» и в подписи.
 test('2.308: руководитель — срок по заданию на оценку у дела на подписи', async ({ browser, baseURL }) => {
   test.setTimeout(120_000);
