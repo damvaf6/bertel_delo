@@ -12950,6 +12950,9 @@ test('2.308: руководитель — срок по заданию на оц
 
   // 2.316: утренняя сводка руководителя (запись дня напрямую, как в 2.286) — строкой с числом дел, нажатие ведёт к подписи.
   await db(async (c) => {
+    // Днём настоящая сводка за сегодня могла уже прийти — заменяем её своей записью.
+    await c.query("delete from org_morning_digests where user_id = $1 and org_id = $2", [head.id, orgId]);
+    await c.query("delete from notifications where user_id = $1 and event = 'org_morning_today'", [head.id]);
     const { rows: [n] } = await c.query("insert into notifications (user_id, type, event, org_id) values ($1, 'org_morning', 'org_morning_today', $2) returning id", [head.id, orgId]);
     await c.query(`insert into org_morning_digests (user_id, org_id, day, sign, task_due, notification_id)
       values ($1, $2, (now() at time zone 'Europe/Moscow')::date, 2, 2, $3)`, [head.id, orgId, n.id]);
@@ -13957,7 +13960,7 @@ test('2.317: срок по заданию на оценку в «Моих сро
 test('2.319: перенос срока позже срока по заданию на оценку — предупреждение', async ({ browser, baseURL }) => {
   const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
   const ep = await ctx(), cp = await ctx();
-  const expert = await signIn(ep, '+79990029641'), customer = await signIn(cp, '+79990029642');
+  const expert = await signIn(ep, '+79990029671'), customer = await signIn(cp, '+79990029672');
   const ru = (iso) => iso.split('-').reverse().join('.');
   const long = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
   const A = await db(async (c) => {
