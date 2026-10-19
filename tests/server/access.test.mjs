@@ -1905,7 +1905,7 @@ test('сводка за месяц по экспертам (2.78): только 
   assert.deepEqual(empty.total, { accepted: 0, done: 0, done_late: 0, overdue_now: 0, returned_head: 0, returned_dispatcher: 0, fee_kop: 0, paid_kop: 0,
     late_first: 0, late_first_moved: 0, first_kept: 0, signed: 0, signed_no_ai: 0, signed_points_left: 0, avg_days: null, resign_days: null, resign_n: 0, resign_wait: 0,
     first_signed: 0, first_no_ai: 0, egrn_first: 0, egrn_first_cases: 0, egrn_rules: [], order_first: 0, order_first_cases: 0, order_first_app: 0, order_first_task: 0, order_rules: [],
-    order_task_kinds: [], order_task_address: 0, order_task_date: 0, order_task_value_kind: 0, order_task_purpose: 0, order_task_customer: 0,
+    order_task_kinds: [], order_task_address: 0, order_task_date: 0, order_task_value_kind: 0, order_task_purpose: 0, order_task_customer: 0, order_task_user: 0, order_task_due: 0,
     swap_first: 0, swap_first_cases: 0, swap_first_egrn: 0, swap_first_task: 0,
     bank_task: 0, bank_task_cases: 0, bank_task_got: 0, bank_task_days: null, bank_task_wait: 0, prev: null });
   assert.equal(empty.prev_month, null, 'прошлый месяц раньше создания организации — сравнения нет (2.124)');
@@ -1957,7 +1957,7 @@ test('сводка за месяц по экспертам (2.78): только 
     accepted: 2, done: 2, done_late: 1, overdue_now: 1, returned_head: 1, returned_dispatcher: 1, fee_kop: 800_000 + 1_600_000, paid_kop: 800_000,
     avg_days: 0, late_first: 1, late_first_moved: 0, first_kept: 1, resign_days: null, resign_n: 0, resign_wait: 1, signed: 0, signed_no_ai: 0, signed_points_left: 0,
     first_signed: 0, first_no_ai: 0, egrn_first: 0, egrn_first_cases: 0, egrn_rules: [], order_first: 0, order_first_cases: 0, order_first_app: 0, order_first_task: 0, order_rules: [],
-    order_task_kinds: [], order_task_address: 0, order_task_date: 0, order_task_value_kind: 0, order_task_purpose: 0, order_task_customer: 0,
+    order_task_kinds: [], order_task_address: 0, order_task_date: 0, order_task_value_kind: 0, order_task_purpose: 0, order_task_customer: 0, order_task_user: 0, order_task_due: 0,
     swap_first: 0, swap_first_cases: 0, swap_first_egrn: 0, swap_first_task: 0,
     bank_task: 0, bank_task_cases: 0, bank_task_got: 0, bank_task_days: null, bank_task_wait: 0, remarks: [{ text: 'Нет даты осмотра.', n: 1 }],
     prev: { done: 0, on_time: 0, returned: 0 }, services: [{ name: 'Оценка недвижимости', n: 2 }] });
@@ -2056,8 +2056,8 @@ test('сводка за месяц (2.117): дни от принятия до с
   assert.equal(r.total.late_first_moved, 1);
   const csv = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv`, undefined, { binary: true })).body.toString('utf8');
   assert.ok(csv.includes('Дней в среднем от принятия до сдачи;Позже первоначального срока;Из них с переносом срока;В первоначальный срок, без переносов'), csv);
-  assert.ok(/Эксперт Медленнов;[^\r\n]*;6,5;1;0;1;;0;0;0;0;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+\r\n/.test(csv), csv);
-  assert.ok(/Итого;[^\r\n]*;5,8;3;1;2;;0;0;0;0;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+\r\n/.test(csv), csv);
+  assert.ok(/Эксперт Медленнов;[^\r\n]*;6,5;1;0;1;;0;0;0;0;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+\r\n/.test(csv), csv);
+  assert.ok(/Итого;[^\r\n]*;5,8;3;1;2;;0;0;0;0;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+\r\n/.test(csv), csv);
 });
 
 test('сводка за месяц (2.124): сравнение с прошлым месяцем — сдано, в срок, возвраты у эксперта и в итоге', async () => {
@@ -2179,8 +2179,8 @@ test('сводка за месяц (2.168): дни от возврата рук�
   assert.deepEqual([now.total.resign_days, now.total.resign_n, now.total.resign_wait], [null, 0, 0]);
   const csv = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv&month=${prev}`, undefined, { binary: true })).body.toString('utf8');
   assert.ok(csv.includes('Из них с переносом срока;В первоначальный срок, без переносов;Дней в среднем от возврата до новой подписи;Ждут новой подписи после возврата'), csv);
-  assert.ok(/Эксперт Исправлов;[^\r\n]*;0,8;0;4;4;0;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+\r\n/.test(csv), csv);
-  assert.ok(/Эксперт Ждунов;[^\r\n]*;;1;0;0;0;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+\r\n/.test(csv), csv);
+  assert.ok(/Эксперт Исправлов;[^\r\n]*;0,8;0;4;4;0;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+\r\n/.test(csv), csv);
+  assert.ok(/Эксперт Ждунов;[^\r\n]*;;1;0;0;0;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+\r\n/.test(csv), csv);
   // Чужой организации сводка не видна.
   assert.equal((await ex.a.req('GET', `/api/orgs/${org.id}/report?month=${prev}`)).status, 403);
 });
@@ -2244,8 +2244,8 @@ test('сводка за месяц (2.199): сколько файлов эксп
   assert.deepEqual([now.total.signed, now.total.signed_no_ai], [0, 0]);
   const csv = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv&month=${prev}`, undefined, { binary: true })).body.toString('utf8');
   assert.ok(csv.includes(';Подписал файлов;Из них без ИИ-проверки этой версии;Из них не отметив все пункты замечания;'), csv);
-  assert.ok(/Эксперт Проверкин;[^\r\n]*;3;2;0;1;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0\r\n/.test(csv), csv);
-  assert.ok(/Итого;[^\r\n]*;3;2;0;1;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0\r\n/.test(csv), csv);
+  assert.ok(/Эксперт Проверкин;[^\r\n]*;3;2;0;1;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0\r\n/.test(csv), csv);
+  assert.ok(/Итого;[^\r\n]*;3;2;0;1;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0\r\n/.test(csv), csv);
   // Эксперт b не видит сводку организации.
   assert.equal((await ex.b.req('GET', `/api/orgs/${org.id}/report`)).status, 403);
 });
@@ -2302,7 +2302,7 @@ test('сводка за месяц (2.217): сколько файлов эксп
   assert.deepEqual([e.signed, e.signed_points_left], [4, 2]);
   assert.deepEqual([r.total.signed, r.total.signed_points_left], [4, 2]);
   const csv = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv&month=${prev}`, undefined, { binary: true })).body.toString('utf8');
-  assert.ok(/Эксперт Пунктов;[^\r\n]*;4;4;2;4;0;0;4;0;0;0;0;0;0;0;0;0;0;0;0;0\r\n/.test(csv), csv);
+  assert.ok(/Эксперт Пунктов;[^\r\n]*;4;4;2;4;0;0;4;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0\r\n/.test(csv), csv);
   assert.equal((await ex.req('GET', `/api/orgs/${org.id}/report`)).status, 403);
 });
 
@@ -2376,9 +2376,9 @@ test('сводка за месяц (2.265): расхождения с выпис
   assert.deepEqual([now.total.first_signed, now.total.egrn_first, now.total.egrn_rules], [0, 0, []]);
   const csv = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv&month=${prev}`, undefined, { binary: true })).body.toString('utf8');
   assert.ok(csv.includes(';Впервые подписал дел;Расхождений с выпиской ЕГРН при первой подписи;В скольких делах;Первая подпись без ИИ-проверки;'), csv);
-  assert.ok(/Эксперт Выпискин;[^\r\n]*;3;3;1;1;0;0;0;0;0;0;0;0;0;0;0;0;0\r\n/.test(csv), csv);
-  assert.ok(/Эксперт Чистов;[^\r\n]*;1;1;1;0;0;0;0;0;0;0;0;0;0;0;0;0;0\r\n/.test(csv), csv);
-  assert.ok(/Итого;[^\r\n]*;4;4;2;1;0;0;0;0;0;0;0;0;0;0;0;0;0\r\n/.test(csv), csv);
+  assert.ok(/Эксперт Выпискин;[^\r\n]*;3;3;1;1;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0\r\n/.test(csv), csv);
+  assert.ok(/Эксперт Чистов;[^\r\n]*;1;1;1;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0\r\n/.test(csv), csv);
+  assert.ok(/Итого;[^\r\n]*;4;4;2;1;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0\r\n/.test(csv), csv);
   assert.ok(csv.includes('Расхождения с выпиской ЕГРН при первой подписи — пункт проверки;Сколько\r\nНедвижимость и земля;3\r\nПрава и обременения;1\r\n'), csv);
   // Эксперт сводку организации не видит.
   assert.equal((await ex.a.req('GET', `/api/orgs/${org.id}/report`)).status, 403);
@@ -2440,8 +2440,8 @@ test('сводка за месяц (2.275): расхождения с заявк
   assert.deepEqual(r.total.order_rules.map((y) => y.n), [2, 2]);
   const csv = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv&month=${prev}`, undefined, { binary: true })).body.toString('utf8');
   assert.ok(csv.includes(';Расхождений с заявкой и заданием на оценку при первой подписи;В скольких делах;Из них с заявкой;Из них с заданием на оценку;С заданием: адрес;'), csv);
-  assert.ok(/Эксперт Заявкин;[^\r\n]*;3;1;2;1;0;1;0;0;0;0;0;0;0\r\n/.test(csv), csv);
-  assert.ok(/Итого;[^\r\n]*;4;2;2;2;0;2;0;0;0;0;0;0;0\r\n/.test(csv), csv);
+  assert.ok(/Эксперт Заявкин;[^\r\n]*;3;1;2;1;0;1;0;0;0;0;0;0;0;0;0\r\n/.test(csv), csv);
+  assert.ok(/Итого;[^\r\n]*;4;2;2;2;0;2;0;0;0;0;0;0;0;0;0\r\n/.test(csv), csv);
   assert.ok(csv.includes('Расхождения с заявкой и заданием на оценку при первой подписи — пункт проверки;Сколько\r\n'), csv);
   assert.equal((await ex.a.req('GET', `/api/orgs/${org.id}/report`)).status, 403);
 });
@@ -2491,8 +2491,58 @@ test('сводка за месяц (2.297): расхождения с задан
   assert.equal(r.total.order_task_address, 2);
   const csv = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv&month=${prev}`, undefined, { binary: true })).body.toString('utf8');
   assert.ok(csv.includes(';С заданием: адрес;С заданием: дата оценки;С заданием: вид стоимости;С заданием: цель оценки;С заданием: заказчик;'), csv);
-  assert.ok(/Эксперт Видов;[^\r\n]*;7;2;1;6;2;1;1;1;1;0;0;0;0\r\n/.test(csv), csv);
+  assert.ok(/Эксперт Видов;[^\r\n]*;7;2;1;6;2;1;1;1;1;0;0;0;0;0;0\r\n/.test(csv), csv);
   assert.ok(csv.includes('Расхождения с заданием на оценку при первой подписи — что;Сколько\r\nадрес;2\r\n'), csv);
+});
+
+test('сводка за месяц (2.314): по видам — ещё пользователь результатов и срок отчёта по заданию на оценку', async () => {
+  const org = await makeOrg(S.sql, 'Тестовая организация 2.314');
+  const head = await login(S, '+79990002314');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  const ex = await login(S, '+79990002414');
+  await addMember(S.sql, org.id, ex.user.id, 'member');
+  await makeSpecialist(S.sql, ex.user.id);
+  await S.sql`update users set full_name = 'Эксперт Сроков' where id = ${ex.user.id}`;
+  assert.equal((await ex.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  await S.sql`update organizations set created_at = now() - interval '90 days' where id = ${org.id}`;
+  await S.sql`update org_members set created_at = now() - interval '90 days' where org_id = ${org.id}`;
+  const [{ at }] = await S.sql`
+    select (date_trunc('month', now() at time zone 'Europe/Moscow') - interval '10 days') at time zone 'Europe/Moscow' as at`;
+  const hours = (h) => new Date(at.getTime() + h * 3_600_000);
+  const task = 'в задании на оценку «Задание.pdf»';
+  const due = (file = 'отчёт.pdf') => ({ file, text: 'Дата составления отчёта (27.10.2026) позже срока из задания на оценку «Задание.pdf» (не позднее 24.10.2026, стр. 1) — отчёт составлен после срока; проверьте дату составления' });
+  const user = (from) => ({ file: 'отчёт.pdf', text: 'Предполагаемый пользователь в отчёте — «Банк ВТБ (ПАО)», а …',
+    fix: { bad: 'Банк ВТБ (ПАО)', right: 'АО «Альфа-Банк»', from, flip: 'name' } });
+  const cases = [
+    // Срок — дважды (второй — в другом файле, не в счёт), пользователь по заданию; по заявке (Сбербанк) — не вид задания.
+    { report_dates: [due(), due('письмо.pdf'), { file: 'отчёт.pdf', text: 'Дата оценки (01.10.2026) раньше даты осмотра' }],
+      bank_user: [user(task), user('в заявке')] },
+    { report_dates: [due()], bank_user: [user(task)] },
+  ];
+  for (const found of cases) {
+    const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Сводка 2.314' })).body.order;
+    await S.sql`update orders set status = 'in_work', deadline = current_date + 5, executor_user_id = ${ex.user.id} where id = ${o.id}`;
+    const d = await upload(U.owner, o.id, 'отчёт.pdf');
+    await S.sql`
+      insert into ai_reviews (order_id, round, requested_by, side, model, items, files, at)
+      values (${o.id}, 1, ${ex.user.id}, 'executor', 'fake',
+        ${JSON.stringify(Object.entries(found).map(([id, x]) => ({ id, hint: 'attention', found: x })))},
+        ${JSON.stringify([{ id: d.id, name: 'отчёт.pdf' }])}, ${hours(1)})`;
+    await S.sql`
+      insert into audit_log (actor_id, action, subject_type, subject_id, details, at)
+      values (${ex.user.id}, 'document.sign', 'document', ${d.id}, ${JSON.stringify({ order_id: o.id })}, ${hours(2)})`;
+  }
+  const prev = (await head.req('GET', `/api/orgs/${org.id}/report`)).body.report.prev_month;
+  const r = (await head.req('GET', `/api/orgs/${org.id}/report?month=${prev}`)).body.report;
+  const e = r.experts.find((y) => y.user_id === ex.user.id);
+  // Срок без замены — в виды, но не в расхождения с заменой.
+  assert.deepEqual([e.order_first, e.order_first_app, e.order_first_task], [3, 1, 2]);
+  assert.deepEqual(e.order_task_kinds.map((y) => [y.title, y.n]), [['пользователь результатов', 2], ['срок отчёта', 2]]);
+  assert.deepEqual([r.total.order_task_user, r.total.order_task_due], [2, 2]);
+  const csv = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv&month=${prev}`, undefined, { binary: true })).body.toString('utf8');
+  assert.ok(csv.includes(';С заданием: заказчик;С заданием: пользователь результатов;С заданием: срок отчёта;'), csv);
+  assert.ok(/Эксперт Сроков;[^\r\n]*;3;2;1;2;0;0;0;0;0;2;2;0;0;0;0\r\n/.test(csv), csv);
+  assert.ok(csv.includes('Расхождения с заданием на оценку при первой подписи — что;Сколько\r\nпользователь результатов;2\r\nсрок отчёта;2\r\n'), csv);
 });
 
 test('сводка за месяц (2.289): сколько расхождений эксперт заменил кнопкой в черновике до первой подписи', async () => {
