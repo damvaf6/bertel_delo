@@ -50,7 +50,7 @@ const sweep = setInterval(() => {
     .catch((e) => console.error('«задерживаемся» заказчику:', e?.message || e))
     .then(() => sendMorning(sql, { registry: app.locals.registry, storage: providers.storage }))
     .catch((e) => console.error('утренняя сводка:', e?.message || e))
-    .then(() => sendOrgMorning(sql, app.locals.registry))
+    .then(() => sendOrgMorning(sql, app.locals.registry, { storage: providers.storage }))
     .catch((e) => console.error('утренняя сводка руководителю:', e?.message || e))
     .then(() => deliverPending(sql, providers))
     .catch((e) => console.error('уведомления:', e?.message || e));

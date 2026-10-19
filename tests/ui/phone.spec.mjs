@@ -12900,7 +12900,8 @@ test('2.312: пользователь результатов — замена п
   for (const p of [ep, cp]) await p.context().close();
 });
 
-// 2.308: у дела на подписи организации срок по заданию на оценку сегодня или прошёл — руководителю красным в «Сегодня» и в подписи.
+// 2.308: у дела на подписи организации срок по заданию на оценку сегодня или прошёл — руководителю красным в «Сегодня» и в подписи;
+// 2.316 — и в утренней сводке руководителя.
 test('2.308: руководитель — срок по заданию на оценку у дела на подписи', async ({ browser, baseURL }) => {
   test.setTimeout(120_000);
   const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
@@ -12946,6 +12947,21 @@ test('2.308: руководитель — срок по заданию на оц
   await expect(hp.locator(`#org-sign > li[data-item="${ref(ids.today)}"] [data-sig="task-due"]`)).toHaveText('Срок по заданию на оценку сегодня — подпишите сегодня («Задание банка.txt», стр. 1)');
   await item.scrollIntoViewIfNeeded();
   await shot(hp, '54y2-rukovoditel-podpis-srok-po-zadaniyu');
+
+  // 2.316: утренняя сводка руководителя (запись дня напрямую, как в 2.286) — строкой с числом дел, нажатие ведёт к подписи.
+  await db(async (c) => {
+    const { rows: [n] } = await c.query("insert into notifications (user_id, type, event, org_id) values ($1, 'org_morning', 'org_morning_today', $2) returning id", [head.id, orgId]);
+    await c.query(`insert into org_morning_digests (user_id, org_id, day, sign, task_due, notification_id)
+      values ($1, $2, (now() at time zone 'Europe/Moscow')::date, 2, 2, $3)`, [head.id, orgId, n.id]);
+  });
+  await hp.goto('/kabinet#notifications');
+  const morning = hp.locator('#notifications li').first();
+  await expect(morning).toContainText('На сегодня по организации: 2 дела ждут подписи организации, срок по заданию на оценку сегодня или прошёл — подпишите сегодня: 2 дела');
+  await shot(hp, '54y3-rukovoditel-svodka-srok-po-zadaniyu');
+  await morning.getByRole('button').click();
+  await expect(hp).toHaveURL(new RegExp(`#org=${orgId}&to=sign$`));
+  await expect(hp.locator('#org-sign > li[data-item] [data-sig="task-due"]')).toHaveCount(2);
+  await shot(hp, '54y4-rukovoditel-svodka-k-podpisi');
   for (const p of [ep, cp, hp]) await p.context().close();
 });
 
