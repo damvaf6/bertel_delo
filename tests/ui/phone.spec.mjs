@@ -8034,6 +8034,21 @@ test('утренняя сводка «На сегодня» (2.119): уведо�
   await n3.getByRole('button').click();
   await expect(ep).toHaveURL(/#today$/);
   await expect(ep.locator('#today-box')).toBeVisible();
+
+  // 2.315: «срок по заданию на оценку сегодня, завтра или прошёл, а файла результата нет» — числом; ведёт к «Сегодня».
+  await db(async (c) => {
+    const { rows: [n] } = await c.query("insert into notifications (user_id, type, event) values ($1, 'morning', 'morning_today') returning id", [expert.id]);
+    await c.query(`insert into morning_digests (user_id, day, due, overdue, visits, links, task_due, notification_id)
+      values ($1, (now() at time zone 'Europe/Moscow')::date - 3, 0, 0, 0, 0, 2, $2)`, [expert.id, n.id]);
+  });
+  await ep.goto('/kabinet#notifications');
+  const n4 = ep.locator('#notifications li').first();
+  await expect(n4).toContainText('На сегодня: срок по заданию на оценку сегодня, завтра или прошёл, а файла результата нет: 2 дела');
+  await expect(n4).not.toContainText('Квартира');
+  await shot(ep, 'h13c-ekspert-svodka-srok-po-zadaniyu');
+  await n4.getByRole('button').click();
+  await expect(ep).toHaveURL(/#today$/);
+  await expect(ep.locator('#today-box')).toBeVisible();
 });
 
 test('утренняя сводка руководителю «На сегодня по организации» (2.121): цифры в ленте, ведёт в организацию, СМС — отдельная настройка', async ({ browser, baseURL }) => {

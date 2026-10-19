@@ -263,9 +263,9 @@ async function noResultOrders(sql, userId, hotRows, today) {
 
 // Для утренней сводки эксперта (2.142): сколько дел «срок близко — нет файла результата» и «заказчик ждёт ответа» — тем же
 // расчётом, что «Сегодня». Только цифры.
-export async function expertMorningAlerts(sql, userId, today, now = new Date()) {
+export async function expertMorningAlerts(sql, userId, today, now = new Date(), { registry = null, storage = null } = {}) {
   const rows = await sql`
-    select id, status, deadline, executor_user_id, review_round from orders where executor_user_id = ${userId} and status in ('in_work', 'review')
+    select id, module, service, fields, status, deadline, executor_user_id, review_round from orders where executor_user_id = ${userId} and status in ('in_work', 'review')
     order by deadline nulls last, updated_at limit ${LIMIT}`;
   const soon = addDays(today, HOT_DAYS);
   const hotRows = rows.filter((o) => o.status === 'in_work' && o.deadline && o.deadline <= soon);
@@ -277,8 +277,12 @@ export async function expertMorningAlerts(sql, userId, today, now = new Date()) 
       if (w && now.getTime() - new Date(w.since).getTime() >= SIGN_LONG_DAYS * 86400_000) leadUnsigned += 1;
     }
   }
+  // Срок по заданию на оценку сегодня, завтра или прошёл, а своего файла результата нет (2.315, строка «Срок по заданию на
+  // оценку близко» в «Сегодня», 2.304); такие дела в «нет файла результата» не повторяются, как в «Сегодня».
+  const taskDue = registry && storage ? (await taskDueCases(sql, storage, registry, userId, rows, today)).filter((x) => x.due.days_left <= 1) : [];
   return {
-    no_result: (await noResultOrders(sql, userId, hotRows, today)).length,
+    no_result: (await noResultOrders(sql, userId, hotRows, today)).filter((x) => !taskDue.some((t) => t.order.id === x.id)).length,
+    task_due: taskDue.length,
     reply_wait: (await replyWaits(sql, rows.map((o) => o.id))).length,
     lead_unsigned: leadUnsigned,
     ...await swapCounts(sql, userId, rows),
