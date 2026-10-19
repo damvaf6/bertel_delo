@@ -16,7 +16,7 @@ import { pastValues, reuseSections, skeleton } from '../docs/reuse.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { orderSources, placeSources, sourcesLines } from '../docs/sources.mjs';
 import { draftDiff } from '../docs/diff.mjs';
-import { assignmentAddress, assignmentCustomer, assignmentDue, assignmentKinds, assignmentPurpose, assignmentValue, customerOf, egrnFacts, egrnRightsFacts, egrnShares, egrnUses, kindList, parseFloorField, purposeFits, sameAddressText, sameCustomer, USE_NAME } from '../ai/report-checks.mjs';
+import { assignmentAddress, assignmentBank, assignmentCustomer, assignmentDue, assignmentKinds, assignmentPurpose, assignmentValue, customerOf, egrnFacts, egrnRightsFacts, egrnShares, egrnUses, kindList, parseFloorField, purposeFits, sameAddressText, sameCustomer, USE_NAME } from '../ai/report-checks.mjs';
 import { assignmentDocs, egrnDocs } from './ai-ops.mjs';
 
 const PHOTOS_MAX = 40;
@@ -186,6 +186,17 @@ export function taskDueFor(registry, order, assignment) {
   return { v: ruDay(d.day), day: d.day, what: d.what, by: TASK_BY[d.what], name: d.name, page: d.page + 1,
     later: mine && mine > d.day ? ruDay(mine) : null };
 }
+// 2.310: предполагаемый пользователь результатов оценки при оценке для банка — как его сверяет ИИ-проверка (2.307, правило
+// bank_user): Сбербанк из заявки, иначе банк из строки о пользователе в задании на оценку; в строку таблицы задания и модели.
+// Банк не известен — ничего: эксперт пишет сам.
+export function taskUserFor(registry, order, assignment) {
+  if (!registry.checks(order.module, order.service).some((r) => (r.auto ?? []).includes('bank_user'))) return null;
+  const f = order.fields ?? {};
+  if (f.purpose !== 'bank' && !assignmentPurpose(assignment)?.kinds.includes('bank')) return null;
+  if (f.bank === 'sber') return { v: 'ПАО Сбербанк', by: 'по заявке', name: null, page: null };
+  const b = assignmentBank(assignment);
+  return b && b.value.length < 120 ? { v: b.value, what: b.what, by: TASK_BY[b.what], name: b.name, page: b.page + 1 } : null;
+}
 const dayOf = (v) => (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10);
 // 2.308: руководителю у дела на подписи организации — срок по заданию на оценку (2.303) прошёл или сегодня (день — по Москве).
 // Задание читается только у дел с правилом report_dates; срок позже сегодняшнего — ничего.
@@ -348,6 +359,7 @@ export function draftOps() {
         const customer = taskCustomerFor(registry, order, assignment, owner?.full_name);
         const address = taskAddressFor(registry, order, assignment, null);
         const due = taskDueFor(registry, order, assignment);
+        const user = taskUserFor(registry, order, assignment);
         const items = [
           vd?.day ? { id: 'value_date', label: 'Дата оценки', v: vd.day, ...at(vd) } : null,
           vd?.days ? { id: 'value_date', label: 'Дата оценки', v: vd.days.join(', '), many: true, by: null, name: null, page: null, doc_id: null } : null,
@@ -355,6 +367,7 @@ export function draftOps() {
           purpose ? { id: 'purpose', label: 'Для чего нужна оценка', v: purpose.v, ...at(purpose), typed: purpose.typed } : null,
           customer ? { id: 'customer', label: 'Заказчик', v: customer.v, ...at(customer), typed: customer.typed } : null,
           address ? { id: 'address', label: 'Адрес объекта', v: address.v, ...at(address), typed: address.typed } : null,
+          user?.name ? { id: 'user', label: 'Предполагаемый пользователь результатов оценки', v: user.v, ...at(user) } : null,
           due ? { id: 'due', label: 'Срок составления отчёта', v: `не позднее ${due.v}`, ...at(due), later: due.later } : null,
         ].filter(Boolean);
         return { files: assignment.map((a) => ({ id: a.id, name: a.name })), items };
@@ -403,7 +416,8 @@ export function draftOps() {
         const valueBrief = valueDate?.day ? `Дата оценки: ${valueDate.day} (${valueDate.what} «${valueDate.name}», стр. ${valueDate.page}) — пиши её везде, где нужна дата оценки, без пометок` : null;
         const egrn = await egrnFor(sql, providers.storage, registry, order);
         const task = { address: taskAddressFor(registry, order, assignment, egrn), kind: taskKindFor(registry, order, assignment),
-          purpose: taskPurposeFor(registry, order, assignment), due: taskDueFor(registry, order, assignment) };
+          purpose: taskPurposeFor(registry, order, assignment), due: taskDueFor(registry, order, assignment),
+          user: taskUserFor(registry, order, assignment) };
         const [owner] = await sql`select full_name from users where id = ${order.owner_user_id}`;
         task.customer = taskCustomerFor(registry, order, assignment, owner?.full_name);
         const taskBrief = [
@@ -411,6 +425,7 @@ export function draftOps() {
           task.purpose ? `Цель оценки ${task.purpose.what} «${task.purpose.name}» (стр. ${task.purpose.page}): ${task.purpose.v} — пиши её везде, где нужна цель оценки, без пометок` : null,
           task.customer ? `Заказчик ${task.customer.what} «${task.customer.name}» (стр. ${task.customer.page}): ${task.customer.v} — пиши его везде, где нужен заказчик, без пометок` : null,
           task.due ? `Срок составления отчёта ${task.due.what} «${task.due.name}» (стр. ${task.due.page}): не позднее ${task.due.v} — дата составления отчёта не позже него` : null,
+          task.user ? `Предполагаемый пользователь результатов оценки (${task.user.by}${task.user.name ? ` «${task.user.name}», стр. ${task.user.page}` : ''}): ${task.user.v} — пиши его везде, где нужен пользователь результатов оценки, без пометок` : null,
           task.kind ? `Вид стоимости ${task.kind.what} «${task.kind.name}» (стр. ${task.kind.page}): ${task.kind.v} — пиши его везде, где нужен вид стоимости, без пометок` : null,
         ].filter(Boolean).join('\n') || null;
         const taken = ['address', 'area', 'cadastral', 'purpose'].filter((k) => egrn?.[k]?.v || task[k]?.v);
@@ -440,6 +455,7 @@ export function draftOps() {
           task_purpose: task.purpose,
           task_customer: task.customer,
           task_due: task.due,
+          task_user: task.user,
         };
         const d = await sql.tx(async (tx) => {
           await tx`select id from orders where id = ${order.id} for update`;

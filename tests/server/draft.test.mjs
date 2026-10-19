@@ -1415,3 +1415,31 @@ test('2.303: срок составления отчёта из задания н
   assert.equal(d.inputs.task_due.later, null);
   assert.ok(d.body.includes(`| Срок | ${ruD(late)} (по письму заказчика) |`));
 });
+
+test('2.310: оценка для банка — предполагаемый пользователь результатов оценки в таблицу задания и модели', async () => {
+  const o = await inWork('Квартира: пользователь результатов в черновик');
+  const putDoc = (body, name) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': 'basis' } });
+  const row = '| Предполагаемый пользователь результатов оценки |';
+  // Не для банка — строки нет.
+  let d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {})).body.draft;
+  assert.equal(d.inputs.task_user, null);
+  assert.ok(!d.body.includes(row));
+  // Для другого банка, задания нет — банк неизвестен, строки нет.
+  await S.sql`update orders set fields = fields || '{"purpose":"bank","bank":"other"}'::jsonb where id = ${o.id}`;
+  d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+  assert.equal(d.inputs.task_user, null);
+  // Банк назван пользователем в задании — он в таблице, у модели и в «Что сказано в задании».
+  assert.equal((await putDoc('ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nПредполагаемый пользователь результатов оценки: Банк ВТБ (ПАО)', 'Задание банка.txt')).status, 201);
+  d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+  assert.deepEqual(d.inputs.task_user, { v: 'Банк ВТБ (ПАО)', what: 'в задании на оценку', by: 'по заданию на оценку', name: 'Задание банка.txt', page: 1 });
+  assert.ok(d.body.includes(`${row} Банк ВТБ (ПАО) (по заданию на оценку) |`));
+  assert.ok(lastPrompt().includes('Предполагаемый пользователь результатов оценки (по заданию на оценку «Задание банка.txt», стр. 1): Банк ВТБ (ПАО)'));
+  const task = (await spec.req('GET', `/api/orders/${o.id}/task`)).body;
+  assert.equal(task.items.find((x) => x.id === 'user').v, 'Банк ВТБ (ПАО)');
+  // Сбербанк в заявке важнее задания: в таблице — ПАО Сбербанк по заявке; в «Что сказано в задании» — нет.
+  await S.sql`update orders set fields = fields || '{"bank":"sber"}'::jsonb where id = ${o.id}`;
+  d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+  assert.ok(d.body.includes(`${row} ПАО Сбербанк (по заявке) |`));
+  assert.equal((await spec.req('GET', `/api/orders/${o.id}/task`)).body.items.find((x) => x.id === 'user'), undefined);
+});
