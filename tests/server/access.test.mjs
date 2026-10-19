@@ -2515,9 +2515,9 @@ test('сводка за месяц (2.314): по видам — ещё поль�
     fix: { bad: 'Банк ВТБ (ПАО)', right: 'АО «Альфа-Банк»', from, flip: 'name' } });
   const cases = [
     // Срок — дважды (второй — в другом файле, не в счёт), пользователь по заданию; по заявке (Сбербанк) — не вид задания.
-    { report_dates: [due(), due('письмо.pdf'), { file: 'отчёт.pdf', text: 'Дата оценки (01.10.2026) раньше даты осмотра' }],
-      bank_user: [user(task), user('в заявке')] },
-    { report_dates: [due()], bank_user: [user(task)] },
+    { requisites: [due(), due('письмо.pdf'), { file: 'отчёт.pdf', text: 'Дата оценки (01.10.2026) раньше даты осмотра' }],
+      appraiser: [user(task), user('в заявке')] },
+    { requisites: [due()], appraiser: [user(task)] },
   ];
   for (const found of cases) {
     const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Сводка 2.314' })).body.order;
@@ -2535,13 +2535,13 @@ test('сводка за месяц (2.314): по видам — ещё поль�
   const prev = (await head.req('GET', `/api/orgs/${org.id}/report`)).body.report.prev_month;
   const r = (await head.req('GET', `/api/orgs/${org.id}/report?month=${prev}`)).body.report;
   const e = r.experts.find((y) => y.user_id === ex.user.id);
-  // Срок без замены — в виды, но не в расхождения с заменой.
-  assert.deepEqual([e.order_first, e.order_first_app, e.order_first_task], [3, 1, 2]);
+  // Срок без замены — тоже расхождение с заданием.
+  assert.deepEqual([e.order_first, e.order_first_cases, e.order_first_app, e.order_first_task], [5, 2, 1, 4]);
   assert.deepEqual(e.order_task_kinds.map((y) => [y.title, y.n]), [['пользователь результатов', 2], ['срок отчёта', 2]]);
   assert.deepEqual([r.total.order_task_user, r.total.order_task_due], [2, 2]);
   const csv = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv&month=${prev}`, undefined, { binary: true })).body.toString('utf8');
   assert.ok(csv.includes(';С заданием: заказчик;С заданием: пользователь результатов;С заданием: срок отчёта;'), csv);
-  assert.ok(/Эксперт Сроков;[^\r\n]*;3;2;1;2;0;0;0;0;0;2;2;0;0;0;0\r\n/.test(csv), csv);
+  assert.ok(/Эксперт Сроков;[^\r\n]*;5;2;1;4;0;0;0;0;0;2;2;0;0;0;0\r\n/.test(csv), csv);
   assert.ok(csv.includes('Расхождения с заданием на оценку при первой подписи — что;Сколько\r\nпользователь результатов;2\r\nсрок отчёта;2\r\n'), csv);
 });
 

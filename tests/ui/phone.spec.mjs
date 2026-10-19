@@ -12187,6 +12187,49 @@ test('2.275: сводка за месяц — расхождения с заяв
   for (const p of [ep, hp, cp]) await p.context().close();
 });
 
+// 2.314: сводка за месяц — в расхождениях с заданием по видам ещё пользователь результатов и срок отчёта.
+test('2.314: сводка за месяц — по заданию чаще: пользователь результатов и срок отчёта', async ({ browser, baseURL }) => {
+  const ep = await (await phoneContext(browser, baseURL)).newPage();
+  const expert = await signIn(ep, '+79990003141');
+  const hp = await (await phoneContext(browser, baseURL)).newPage();
+  const head = await signIn(hp, '+79990003142');
+  const cp = await (await phoneContext(browser, baseURL)).newPage();
+  await signIn(cp, '+79990003143');
+  const id = (await (await cp.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира для банка' }, headers: H })).json()).order.id;
+  const orgId = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name, created_at) values ('ООО «Бюро сроков ${Date.now()}»', now() - interval '3 months') returning id`);
+    await c.query("update users set full_name = 'Эксперт Сроков' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now()), ($1, $3, 'member', now() - interval '40 days')", [org.id, head.id, expert.id]);
+    await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [expert.id, org.id]);
+    await c.query("update orders set status = 'in_work', executor_user_id = $2, deadline = current_date + 5 where id = $1", [id, expert.id]);
+    return org.id;
+  });
+  const found = {
+    appraiser: [{ file: 'Отчёт.pdf', text: 'Предполагаемый пользователь в отчёте — «Банк ВТБ (ПАО)», а в задании на оценку «Задание.pdf» — «АО «Альфа-Банк»»',
+      fix: { bad: 'Банк ВТБ (ПАО)', right: 'АО «Альфа-Банк»', from: 'в задании на оценку «Задание.pdf»', flip: 'name' } }],
+    requisites: [{ file: 'Отчёт.pdf', text: 'Дата составления отчёта (27.10.2026) позже срока из задания на оценку «Задание.pdf» (не позднее 24.10.2026, стр. 1) — отчёт составлен после срока' }],
+  };
+  const up = await ep.request.post(`/api/orders/${id}/results`, { data: Buffer.from('%PDF-1.4 отчёт'), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Отчёт.pdf') } });
+  expect(up.status()).toBe(201);
+  const docId = (await up.json()).document.id;
+  await db((c) => c.query(`insert into ai_reviews (order_id, round, requested_by, side, model, items, files, at)
+    values ($1, 1, $2, 'executor', 'fake', $3, $4, now() - interval '1 minute')`, [id, expert.id,
+    JSON.stringify(Object.entries(found).map(([rule, f]) => ({ id: rule, hint: 'attention', found: f }))),
+    JSON.stringify([{ id: docId, name: 'Отчёт.pdf' }])]));
+  expect((await ep.request.post(`/api/documents/${docId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+
+  await hp.goto(`/kabinet#org=${orgId}`);
+  await expect(hp.locator('#org-report-box')).toBeVisible();
+  const row = hp.locator('#org-report > li').filter({ hasText: 'Эксперт Сроков' });
+  await expect(row.locator('[data-expert-order]')).toContainText('при первой подписи расхождений с заявкой и заданием на оценку: 2 в 1 деле из 1'
+    + ' проверенных ИИ (с заданием — 2)');
+  await expect(row.locator('[data-expert-order]')).toContainText('по заданию чаще: пользователь результатов — 1, срок отчёта — 1');
+  await expect(hp.locator('#org-report-total')).toContainText('по заданию чаще: пользователь результатов — 1, срок отчёта — 1');
+  await row.locator('[data-expert-order]').scrollIntoViewIfNeeded();
+  await shot(hp, 'd42d-rukovoditel-svodka-polzovatel-srok');
+  for (const p of [ep, hp, cp]) await p.context().close();
+});
+
 // 2.309: сводка за месяц — сколько раз эксперт просил задание на оценку от банка, сколько пришло и через сколько дней.
 test('2.309: сводка за месяц — задание на оценку от банка: запрошено, пришло, через сколько дней', async ({ browser, baseURL }) => {
   const ectx = await phoneContext(browser, baseURL);

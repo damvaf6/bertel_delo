@@ -253,7 +253,8 @@ const ruleTitle = (registry, x, id) => {
 // 2.297: расхождения с заданием на оценку по видам — что чаще. Вид — по пункту проверки, а в «цель и вид стоимости» — по
 // началу текста находки (старые проверки — тоже по тексту).
 // 2.314: ещё пользователь результатов оценки (bank_user по заданию) и срок отчёта (report_dates «позже срока из …», 2.302) —
-// у срока замены нет (fix), поэтому он идёт только в виды, не в order_first.
+// по тексту находки (в ИИ-проверке находки лежат у пункта модуля, а не у правила). У срока замены нет (fix), но он тоже
+// расхождение с заданием: в order_first и order_first_task.
 export const TASK_KINDS = [['address', 'адрес'], ['date', 'дата оценки'], ['value_kind', 'вид стоимости'], ['purpose', 'цель оценки'],
   ['customer', 'заказчик'], ['user', 'пользователь результатов'], ['due', 'срок отчёта']];
 const TASK_RULE_KIND = { address_match: 'address', value_date: 'date', customer_match: 'customer', bank_user: 'user' };
@@ -293,9 +294,12 @@ function egrnFirst(rows, registry) {
         const title = ruleTitle(registry, x, i.id);
         rules.set(title, (rules.get(title) ?? 0) + k);
       }
-      if (i.id === 'report_dates') kinds.due += (i.found ?? []).filter((f) => DUE_TEXT.test(String(f.text ?? '')) && mine(f)).length;
+      const due = (i.found ?? []).filter((f) => !f.fix && DUE_TEXT.test(String(f.text ?? '')) && mine(f)).length;
+      kinds.due += due;
+      order.task += due;
       const fixes = (i.found ?? []).filter((f) => !f.egrn && f.fix?.from && mine(f));
-      if (fixes.length) {
+      m += due;
+      if (fixes.length + due) {
         m += fixes.length;
         for (const f of fixes) {
           const app = String(f.fix.from).startsWith('в заявке');
@@ -304,7 +308,7 @@ function egrnFirst(rows, registry) {
           if (kind) kinds[kind]++;
         }
         const title = ruleTitle(registry, x, i.id);
-        orderRules.set(title, (orderRules.get(title) ?? 0) + fixes.length);
+        orderRules.set(title, (orderRules.get(title) ?? 0) + fixes.length + due);
       }
     }
     found += n;
