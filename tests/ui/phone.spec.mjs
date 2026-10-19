@@ -13953,6 +13953,47 @@ test('2.317: срок по заданию на оценку в «Моих сро
   for (const p of [ep, cp]) await p.context().close();
 });
 
+// 2.319: просьба о переносе срока — новый срок позже срока по заданию на оценку: до отправки «Банк ждёт отчёт к …».
+test('2.319: перенос срока позже срока по заданию на оценку — предупреждение', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990029641'), customer = await signIn(cp, '+79990029642');
+  const ru = (iso) => iso.split('-').reverse().join('.');
+  const long = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+  const A = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Перенос и задание: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Садовая ул., д. 7, кв. 4"}') returning id`,
+    [customer.id, expert.id, inDays(3)]);
+    return o.id;
+  });
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ru(inDays(6))}`),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание банка.txt'), 'x-doc-kind': 'basis' },
+  })).status()).toBe(201);
+  await ep.goto(`/kabinet#order=${A}&to=deadline`);
+  const dbox = ep.locator('#deadline-box');
+  await expect(dbox.locator('#deadline-form')).toBeVisible();
+  const warn = dbox.locator('#deadline-task');
+  // Не позже срока по заданию — предупреждения нет.
+  await dbox.locator('#deadline-new').fill(inDays(5));
+  await expect(warn).toBeHidden();
+  await dbox.locator('#deadline-new').fill(inDays(9));
+  await expect(warn).toBeVisible();
+  await expect(warn).toHaveText(`Банк ждёт отчёт к ${long(inDays(6))} (по заданию на оценку: «Задание банка.txt», стр. 1) — новый срок позже. Выберите срок не позже или напишите в причине, что с заказчиком перенос согласован.`);
+  await dbox.locator('#deadline-reason').fill('Перенос с заказчиком согласован');
+  expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await warn.scrollIntoViewIfNeeded();
+  await shot(ep, '54z7-ekspert-perenos-pozzhe-zadaniya');
+  // Предупреждение не запрещает.
+  await dbox.getByRole('button', { name: 'Попросить перенести срок' }).click();
+  await expect(ep.locator('#deadline-msg')).toHaveText('Просьба отправлена диспетчеру. Пока нет ответа, действует прежний срок.');
+  await expect(warn).toBeHidden();
+  for (const p of [ep, cp]) await p.context().close();
+});
+
 // 2.305: в деле у эксперта — «Что сказано в задании на оценку»: одним списком дата оценки, вид стоимости, цель, заказчик,
 // адрес, срок с файлом и страницей; в заявке другой адрес — видно рядом; задания нет — блока нет.
 test('2.305: «Что сказано в задании на оценку» в деле', async ({ browser, baseURL }) => {
