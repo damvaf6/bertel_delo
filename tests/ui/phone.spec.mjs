@@ -13789,3 +13789,146 @@ test('2.306: запросите задание на оценку от банка
   await expect(ep.locator('li[data-today-item="bank-task"]').filter({ hasText: 'Для банка без задания: квартира' })).toHaveCount(0);
   for (const p of [ep, cp]) await p.context().close();
 });
+
+// Прогон 2.310: эксперт и руководитель по пачке 2.301–2.309 на одном деле организации для другого банка: задания нет, срок
+// через 2 дня — «Запросите задание» в «Сегодня» (2.306) → письмо банка пришло после черновика: цель и заказчик (2.301), срок по
+// заданию сегодня (2.304) → «Что сказано в задании» (2.305) → черновик заново, «Срок» из задания (2.303) → отчёт позже срока
+// (2.302), пользователь — не тот банк (2.307) → подпись: руководителю красным «подпишите сегодня» (2.308) → сводка (2.309).
+test('прогон 2.310: эксперт и руководитель по пачке 2.301–2.309 на одном деле', async ({ browser, baseURL }) => {
+  test.setTimeout(300_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), hp = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990031001'), head = await signIn(hp, '+79990031002');
+  const customer = await signIn(cp, '+79990031003');
+  const ru = (iso) => iso.split('-').reverse().join('.');
+  const { orgId, A } = await db(async (c) => {
+    const { rows: [org] } = await c.query('insert into organizations (name) values ($1) returning id', [`ООО «Прогон-16 ${Date.now() % 100000}»`]);
+    await c.query("update users set full_name = 'Шестнадцатова Вера' where id = $1", [expert.id]);
+    await c.query("update users set full_name = 'Главная Нина' where id = $1", [head.id]);
+    await c.query("update users set full_name = 'Петров Пётр Петрович' where id = $1", [customer.id]);
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now() - interval '1 year'), ($1, $3, 'member', now() - interval '1 year')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Шестнадцатая пачка: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","bank":"other","region":"moscow","object_type":"flat","address":"г. Москва, Сороковая ул., д. 40, кв. 4","area":"48"}') returning id`,
+    [customer.id, expert.id, inDays(2)]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now() - interval '3 days')", [o.id, expert.id]);
+    return { orgId: org.id, A: o.id };
+  });
+  const txt = (name) => ({ ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) });
+  const title = 'Шестнадцатая пачка: квартира';
+
+  // Черновик — пока задания нет; в «Сегодня» — «Запросите задание на оценку от банка», запрос прямо из строки (2.306).
+  await ep.goto(`/kabinet#order=${A}`);
+  await ep.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  await expect(ep.locator('#task-box')).toBeHidden();
+  await ep.goto('about:blank');
+  await ep.goto('/kabinet');
+  const ask = ep.locator('li[data-today-item="bank-task"]').filter({ hasText: title });
+  await expect(ask.locator('[data-role="bank-task-why"]')).toHaveText(/^Оценка для банка, а задания на оценку в деле нет и его не запрашивали — срок .+ · осталось 2 дн\.$/);
+  await ask.scrollIntoViewIfNeeded();
+  await shot(ep, 'd80-progon16-ekspert-zaprosite-zadanie');
+  await ask.locator('[data-action="bank-task-ask"]').click();
+  await expect(ask.locator('[data-role="bank-task-msg"]')).toHaveText('Запрошено — заказчику отправлено уведомление');
+
+  // Заказчик прикладывает письмо банка к просьбе: срок отчёта — сегодня, раньше срока дела.
+  const put = await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from(['Банк ВТБ (ПАО)', 'Исх. № 16 от 01.10.2026', 'Просим провести оценку предмета залога.',
+      'Объект оценки: квартира', 'Адрес объекта: г. Москва, Сороковая ул., д. 40, кв. 4', 'Заказчик: Иванов Иван Иванович',
+      'Цель оценки: для предоставления в банк в качестве залога', 'Вид стоимости: рыночная', 'Дата оценки: 03.10.2026',
+      'Предполагаемый пользователь результатов оценки: Банк ВТБ (ПАО)', `Срок составления отчёта: не позднее ${ru(inDays(0))}`].join('\n')),
+    headers: txt('письмо 1610.txt'),
+  });
+  expect(put.status()).toBe(201);
+  const [rq] = (await (await cp.request.get(`/api/orders/${A}/doc-requests`)).json()).requests;
+  expect(rq.title).toBe('Задание на оценку от банка');
+  expect((await cp.request.post(`/api/orders/${A}/doc-requests/${rq.id}/attach`, { data: { document_id: (await put.json()).document.id }, headers: H })).status()).toBe(200);
+
+  // «Сегодня»: запрашивать больше нечего; задание пришло позже черновика — заказчик (2.301); срок по заданию сегодня (2.304).
+  await ep.reload();
+  await expect(ep.locator('li[data-today-item="bank-task"]').filter({ hasText: title })).toHaveCount(0);
+  const late = ep.locator('li[data-today-item="task-late"]').filter({ hasText: title });
+  await expect(late.locator('[data-role="task-late-what"]')).toContainText('Заказчик: по заданию — Иванов Иван Иванович, в черновике нет');
+  await expect(late.locator('[data-role="task-late-what"]')).not.toContainText('Для чего нужна оценка');
+  const due = ep.locator('li[data-today-item="task-due"]').filter({ hasText: title });
+  await expect(due.locator('[data-role="task-due-when"]')).toHaveText(/^Срок по заданию сегодня — .+ \(по заданию на оценку: «письмо 1610\.txt», стр\. 1\) — раньше срока дела$/);
+  await expect(ep.locator('li[data-today-item="no-result"]').filter({ hasText: title })).toHaveCount(0);
+  await due.scrollIntoViewIfNeeded();
+  await shot(ep, 'd81-progon16-ekspert-segodnya-zadanie-srok');
+
+  // В деле — «Что сказано в задании на оценку» (2.305): срок дела позже срока по заданию.
+  await late.locator('button.open').click();
+  await expect(ep).toHaveURL(new RegExp(`#order=${A}&to=task$`));
+  const box = ep.locator('#task-box');
+  await expect(box.locator('li[data-task="customer"]')).toContainText('Заказчик: Иванов Иван Иванович');
+  await expect(box.locator('li[data-task="customer"]')).toContainText('«письмо 1610.txt», стр. 1');
+  await expect(box.locator('li[data-task="due"]')).toContainText(`срок дела — ${ru(inDays(2))}, позже срока по заданию`);
+  // Найдено прогоном: пользователь результатов оценки из задания — тоже в списке и в таблице задания черновика.
+  await expect(box.locator('li[data-task="user"]')).toContainText('Предполагаемый пользователь результатов оценки: Банк ВТБ (ПАО)');
+  await box.scrollIntoViewIfNeeded();
+  await shot(ep, 'd82-progon16-ekspert-chto-v-zadanii');
+
+  // Черновик заново: «Срок» — из задания (2.303), заказчик — из задания.
+  ep.once('dialog', (d) => d.accept());
+  await ep.getByRole('button', { name: 'Подготовить заново с помощью ИИ' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const draftText = ep.getByLabel('Текст заключения');
+  await expect(draftText).toHaveValue(new RegExp(`\\| Срок \\| ${ru(inDays(0)).replace(/\./g, '\\.')} \\(по заданию на оценку; срок дела — ${ru(inDays(2)).replace(/\./g, '\\.')}, позже срока по заданию\\) \\|`));
+  await expect(draftText).toHaveValue(/\nЗаказчик: Иванов Иван Иванович \(по заданию на оценку; в заявке — Петров Пётр Петрович\)/);
+  await expect(draftText).toHaveValue(/\| Предполагаемый пользователь результатов оценки \| Банк ВТБ \(ПАО\) \(по заданию на оценку\) \|/);
+  await ep.locator('#draft-box').getByText(/Срок составления отчёта: не позднее/).scrollIntoViewIfNeeded();
+  await shot(ep, 'd83-progon16-ekspert-chernovik-srok');
+  const today = await (await ep.request.get('/api/today', { headers: H })).json();
+  expect(today.expert.task_late.filter((x) => x.id === A)).toEqual([]);
+
+  // Отчёт: составлен завтра — позже срока по заданию (2.302), пользователем назван Сбербанк, а в письме — ВТБ (2.307).
+  await draftText.fill((await draftText.inputValue()).replace(/\[заполнить[^\]]*\]/gu, 'дописано экспертом'));
+  await ep.getByRole('button', { name: 'Сохранить правку' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Правка сохранена');
+  const up = await ep.request.post(`/api/orders/${A}/results`, {
+    data: Buffer.from(['ОТЧЁТ ОБ ОЦЕНКЕ № 16/2026', `Дата составления отчёта: ${ru(inDays(1))}`, 'Заказчик: Иванов Иван Иванович',
+      'Цель оценки: для предоставления в банк в качестве залога', 'Предполагаемый пользователь результатов оценки: ПАО Сбербанк',
+      'Вид определяемой стоимости: рыночная', 'Дата оценки: 03.10.2026', 'Адрес объекта оценки: г. Москва, Сороковая ул., д. 40, кв. 4',
+      'Общая площадь 48 кв. м.', 'Итоговая стоимость 14 200 000 руб.'].join('\n')),
+    headers: txt('Отчёт Шестнадцатовой.txt'),
+  });
+  expect(up.status()).toBe(201);
+  const resultId = (await up.json()).document.id;
+  await ep.reload();
+  await ep.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(ep.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  const late2 = ep.locator('#review-checks li[data-check="requisites"] .ai-found li').filter({ hasText: 'позже срока из' });
+  await expect(late2).toContainText(`Дата составления отчёта (${ru(inDays(1))}) позже срока из задания на оценку «письмо 1610.txt» (не позднее ${ru(inDays(0))}, стр. 1)`);
+  const user = ep.locator('#review-checks li[data-check="appraiser"] .ai-found li').filter({ hasText: 'Предполагаемый пользователь' });
+  await expect(user).toHaveCount(1);
+  await expect(user).toContainText('Предполагаемый пользователь в отчёте — «ПАО Сбербанк», а в задании на оценку «письмо 1610.txt» — «Банк ВТБ (ПАО)» (стр. 1)');
+  await user.scrollIntoViewIfNeeded();
+  await shot(ep, 'd84-progon16-ekspert-srok-polzovatel');
+  await user.getByRole('button', { name: 'Заменить на значение из задания' }).click();
+  await expect(user).toContainText('В тексте черновика «ПАО Сбербанк» нет — исправьте в файле отчёта (в задании на оценку «письмо 1610.txt»: Банк ВТБ (ПАО))');
+  await shot(ep, 'd84a-progon16-ekspert-polzovatel-zamena');
+  expect((await ep.request.post(`/api/documents/${resultId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+
+  // Руководитель: срок по заданию сегодня — красным в «Сегодня» и в подписи (2.308).
+  await hp.goto('/kabinet');
+  const red = hp.locator(`#today-box li[data-today-item="org-sign-${orgId}"] [data-role="task-due-sign"]`);
+  await expect(red).toHaveText('Срок по заданию на оценку сегодня — подпишите сегодня («письмо 1610.txt», стр. 1)');
+  await expect(red).toHaveClass(/overdue/);
+  await red.scrollIntoViewIfNeeded();
+  await shot(hp, 'd85-progon16-rukovoditel-segodnya-srok');
+  await hp.goto(`/kabinet#org=${orgId}&to=sign`);
+  const item = hp.locator('#org-sign > li[data-item]').filter({ hasText: 'Отчёт Шестнадцатовой.txt' });
+  await expect(item.locator('[data-sig="task-due"]')).toHaveText('Срок по заданию на оценку сегодня — подпишите сегодня («письмо 1610.txt», стр. 1)');
+
+  // Сводка за месяц (2.309): задание от банка запрошено 1, пришло 1.
+  await hp.goto('about:blank');
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const rep = hp.locator('#org-report > li').filter({ hasText: 'Шестнадцатова Вера' });
+  await expect(rep.locator('[data-expert-banktask]')).toHaveText('задание на оценку от банка запрошено: 1 · пришло: 1, в среднем через меньше 2 часов');
+  await expect(rep.locator('[data-expert-banktask]')).not.toHaveClass(/warn/);
+  await rep.locator('[data-expert-banktask]').scrollIntoViewIfNeeded();
+  await shot(hp, 'd86-progon16-rukovoditel-svodka-zadanie');
+  for (const p of [ep, hp, cp]) await p.context().close();
+});
