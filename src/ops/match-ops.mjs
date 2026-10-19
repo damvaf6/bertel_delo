@@ -299,9 +299,10 @@ export function matchOps() {
       // «Мои сроки на две недели» (2.109): по дням — сроки своих дел, выезды и ссылки на осмотр, просьбы о переносе срока.
       // ?format=ics (2.122) — сроки и выезды файлом для календаря телефона, без заказчика и адресов.
       id: 'specialist.me.schedule', method: 'GET', path: '/api/specialist/me/schedule', auth: 'user', access: 'self',
-      async handler({ sql, actor, registry, query, res }) {
+      async handler({ sql, actor, registry, query, res, providers }) {
         if (!(await sql.one`select 1 from specialists where user_id = ${actor.id}`)) throw new HttpError(404, 'not_found', 'Вы не специалист');
-        const schedule = await expertSchedule(sql, actor.id, registry);
+        // Срок по заданию на оценку (2.317) — из файла задания в деле.
+        const schedule = await expertSchedule(sql, actor.id, registry, undefined, { storage: providers.storage });
         if (query.format !== 'ics') return { schedule };
         res.set({
           'content-type': 'text/calendar; charset=utf-8',

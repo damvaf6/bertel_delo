@@ -13914,6 +13914,45 @@ test('2.304: срок по заданию на оценку близко — «�
   for (const p of [ep, cp]) await p.context().close();
 });
 
+// 2.317: «Мои сроки на две недели» — срок по заданию на оценку раньше срока дела своей строкой в его день, у срока дела —
+// «по заданию на оценку — к …»; строка ведёт к файлу результата; в файле для календаря — своё событие.
+test('2.317: срок по заданию на оценку в «Моих сроках на две недели»', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990029631'), customer = await signIn(cp, '+79990029632');
+  const ru = (iso) => iso.split('-').reverse().join('.');
+  const long = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+  const A = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Мои сроки по заданию: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Садовая ул., д. 7, кв. 4"}') returning id`,
+    [customer.id, expert.id, inDays(9)]);
+    return o.id;
+  });
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ru(inDays(4))}`),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание банка.txt'), 'x-doc-kind': 'basis' },
+  })).status()).toBe(201);
+  await ep.goto('/kabinet#specialist');
+  const box = ep.locator('#schedule-box');
+  const task = box.locator(`#schedule-days > li[data-day="${inDays(4)}"] li[data-schedule-item="task_due"]`);
+  await expect(task).toContainText('Срок по заданию на оценку: Мои сроки по заданию: квартира');
+  await expect(task).toContainText(`по заданию на оценку: «Задание банка.txt», стр. 1 · срок дела позже — ${long(inDays(9))}`);
+  await expect(task.locator('a.hot')).toHaveCount(1);
+  const dl = box.locator(`#schedule-days > li[data-day="${inDays(9)}"] li[data-schedule-item="deadline"]`);
+  await expect(dl).toContainText(`по заданию на оценку — к ${long(inDays(4))}`);
+  await task.scrollIntoViewIfNeeded();
+  await shot(ep, '54z5-ekspert-sroki-srok-po-zadaniyu');
+  const cal = (await (await ep.request.get('/api/specialist/me/schedule?format=ics', { headers: H })).text()).replace(/\r\n /g, '');
+  expect(cal).toContain(`UID:taskdue-${A}@bertel-delo`);
+  expect(cal).toContain(`DTSTART;VALUE=DATE:${inDays(4).replace(/-/g, '')}`);
+  await task.locator('a').click();
+  await expect(ep).toHaveURL(new RegExp(`#order=${A}&to=result$`));
+  for (const p of [ep, cp]) await p.context().close();
+});
+
 // 2.305: в деле у эксперта — «Что сказано в задании на оценку»: одним списком дата оценки, вид стоимости, цель, заказчик,
 // адрес, срок с файлом и страницей; в заявке другой адрес — видно рядом; задания нет — блока нет.
 test('2.305: «Что сказано в задании на оценку» в деле', async ({ browser, baseURL }) => {
