@@ -667,7 +667,7 @@ function pointMade(date) {
     const today = todayRu();
     const fits = date.late ? dayNum(today) <= dayNum(date.edge) : dayNum(today) >= dayNum(date.edge);
     miss.textContent = `В тексте черновика строки «Дата составления» нет: в Word дата составления — день сборки. `
-      + (fits ? `Соберите Word заново — будет ${today}, загрузите исправленный файл и отметьте пункт.`
+      + (fits ? `Соберите Word заново — дата составления будет ${today}, загрузите исправленный файл и отметьте пункт.`
         : `Срок по заданию (${date.edge}) прошёл — приложите к делу документ о переносе срока или исправьте дату в файле отчёта.`);
   } }, 'К месту в черновике');
   return [el('div', { class: 'point-swap', 'data-role': 'point-made' },

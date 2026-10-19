@@ -14494,7 +14494,7 @@ test('прогон 2.320: эксперт и руководитель по пач
   const datePoint = ep.locator('ul.points li.point').filter({ hasText: 'Дата составления отчёта' }).first();
   await expect(datePoint.locator('[data-role="point-made"]')).toContainText(`В отчёте дата составления ${ru(inDays(1))} — срок по заданию на оценку — не позднее ${ru(inDays(0))}`);
   await datePoint.getByRole('button', { name: 'К месту в черновике' }).click();
-  await expect(datePoint.locator('[data-role="point-made-miss"]')).toHaveText(`В тексте черновика строки «Дата составления» нет: в Word дата составления — день сборки. Соберите Word заново — будет ${ru(inDays(0))}, загрузите исправленный файл и отметьте пункт.`);
+  await expect(datePoint.locator('[data-role="point-made-miss"]')).toHaveText(`В тексте черновика строки «Дата составления» нет: в Word дата составления — день сборки. Соберите Word заново — дата составления будет ${ru(inDays(0))}, загрузите исправленный файл и отметьте пункт.`);
   await datePoint.scrollIntoViewIfNeeded();
   await shot(ep, 'd98-ekspert-punkt-data-net-stroki');
   await draftText.fill(`Дата составления отчёта: ${ru(inDays(1))}\n${await draftText.inputValue()}`);
