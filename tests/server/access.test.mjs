@@ -1907,7 +1907,8 @@ test('сводка за месяц по экспертам (2.78): только 
     first_signed: 0, first_no_ai: 0, egrn_first: 0, egrn_first_cases: 0, egrn_rules: [], order_first: 0, order_first_cases: 0, order_first_app: 0, order_first_task: 0, order_rules: [],
     order_task_kinds: [], order_task_address: 0, order_task_date: 0, order_task_value_kind: 0, order_task_purpose: 0, order_task_customer: 0, order_task_user: 0, order_task_due: 0,
     swap_first: 0, swap_first_cases: 0, swap_first_egrn: 0, swap_first_task: 0,
-    bank_task: 0, bank_task_cases: 0, bank_task_got: 0, bank_task_days: null, bank_task_wait: 0, prev: null });
+    bank_task: 0, bank_task_cases: 0, bank_task_got: 0, bank_task_days: null, bank_task_wait: 0,
+    task_due_cases: 0, task_late: 0, task_late_days: null, task_late_max: null, prev: null });
   assert.equal(empty.prev_month, null, 'прошлый месяц раньше создания организации — сравнения нет (2.124)');
   for (const q of ['?month=2020-01', '?month=2099-01', '?month=13', '?month=2026-13']) assert.equal((await report(headC, q)).body.error, 'bad_month', q);
   // Дела: e1 принял 2 дела, одно сдал вовремя, другое позже срока; одно в работе просрочено; руководитель вернул раз,
@@ -1959,7 +1960,8 @@ test('сводка за месяц по экспертам (2.78): только 
     first_signed: 0, first_no_ai: 0, egrn_first: 0, egrn_first_cases: 0, egrn_rules: [], order_first: 0, order_first_cases: 0, order_first_app: 0, order_first_task: 0, order_rules: [],
     order_task_kinds: [], order_task_address: 0, order_task_date: 0, order_task_value_kind: 0, order_task_purpose: 0, order_task_customer: 0, order_task_user: 0, order_task_due: 0,
     swap_first: 0, swap_first_cases: 0, swap_first_egrn: 0, swap_first_task: 0,
-    bank_task: 0, bank_task_cases: 0, bank_task_got: 0, bank_task_days: null, bank_task_wait: 0, remarks: [{ text: 'Нет даты осмотра.', n: 1 }],
+    bank_task: 0, bank_task_cases: 0, bank_task_got: 0, bank_task_days: null, bank_task_wait: 0,
+    task_due_cases: 0, task_late: 0, task_late_days: null, task_late_max: null, remarks: [{ text: 'Нет даты осмотра.', n: 1 }],
     prev: { done: 0, on_time: 0, returned: 0 }, services: [{ name: 'Оценка недвижимости', n: 2 }] });
   assert.deepEqual(r.experts.find((e) => e.user_id === ex.e2.user.id).prev, { done: 0, on_time: 0, returned: 1 }, 'возврат прошлого месяца (2.124)');
   assert.deepEqual(r.top_remarks, [{ text: 'Нет даты осмотра.', n: 2, experts: 2 }, { text: 'Не указан этаж', n: 1, experts: 1 }]);
@@ -2661,6 +2663,53 @@ test('сводка за месяц (2.309): сколько раз эксперт
   // В месяце без просьб раздела нет.
   const now = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv`, undefined, { binary: true })).body.toString('utf8');
   assert.ok(!now.includes('Задание на оценку от банка;'), now);
+});
+
+test('сводка за месяц (2.323): дела, сданные позже срока по заданию на оценку, — сколько и на сколько дней', async () => {
+  const org = await makeOrg(S.sql, 'Тестовая организация 2.323');
+  const head = await login(S, '+79990002323');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  const ex = {};
+  for (const [k, phone, name] of [['a', '+79990002333', 'Эксперт Срочный'], ['b', '+79990002343', 'Эксперт Без задания']]) {
+    ex[k] = await login(S, phone);
+    await addMember(S.sql, org.id, ex[k].user.id, 'member');
+    await makeSpecialist(S.sql, ex[k].user.id);
+    await S.sql`update users set full_name = ${name} where id = ${ex[k].user.id}`;
+    assert.equal((await ex[k].req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  }
+  const ruD = (d) => d.split('-').reverse().join('.');
+  const today = todayMsk();
+  // Сдано сегодня; срок по заданию на оценку — `due` дней от сегодня (null — задания нет), status — дело ещё в работе.
+  const make = async (executor, due, status = 'done') => {
+    const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Сводка 2.323' })).body.order;
+    if (due != null) {
+      const body = `ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(addDays(today, due))}`;
+      assert.equal((await U.owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), { raw: true,
+        headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание банка.txt'), 'x-doc-kind': 'basis' } })).status, 201);
+    }
+    await S.sql`update orders set status = ${status}, deadline = ${addDays(today, 10)}, executor_user_id = ${executor} where id = ${o.id}`;
+    if (status === 'done') await S.sql`insert into order_status_history (order_id, from_status, to_status, side) values (${o.id}, 'review', 'done', 'dispatcher')`;
+    return o;
+  };
+  // a: позже на 4 и на 1 день, одно в срок по заданию, одно без задания, одно в работе с прошедшим сроком — не в счёт.
+  await make(ex.a.user.id, -4);
+  await make(ex.a.user.id, -1);
+  await make(ex.a.user.id, 2);
+  await make(ex.a.user.id, null);
+  await make(ex.a.user.id, -3, 'in_work');
+  // b: одно дело в день срока по заданию — не позже.
+  await make(ex.b.user.id, 0);
+  const r = (await head.req('GET', `/api/orgs/${org.id}/report`)).body.report;
+  const x = (e) => [e.task_due_cases, e.task_late, e.task_late_days, e.task_late_max];
+  assert.deepEqual(x(r.experts.find((y) => y.user_id === ex.a.user.id)), [3, 2, 2.5, 4]);
+  assert.deepEqual(x(r.experts.find((y) => y.user_id === ex.b.user.id)), [1, 0, null, null]);
+  assert.deepEqual(x(r.total), [4, 2, 2.5, 4]);
+  const csv = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv`, undefined, { binary: true })).body.toString('utf8');
+  assert.ok(csv.includes('\r\nСрок по заданию на оценку;Сдано дел с таким сроком;Из них позже срока по заданию;На сколько дней в среднем;Больше всего дней\r\n'
+    + 'Эксперт Без задания;1;0;;\r\nЭксперт Срочный;3;2;2,5;4\r\nИтого;4;2;2,5;4\r\n'), csv);
+  // Прошлый месяц — сданных дел со сроком по заданию нет, раздела нет.
+  const prev = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv&month=${r.prev_month ?? '2026-01'}`, undefined, { binary: true })).body.toString('utf8');
+  assert.ok(!prev.includes('Срок по заданию на оценку;'), prev);
 });
 
 test('сводка за месяц (2.135, 2.144): сдано по услугам и средний срок — у организации, у эксперта и в таблице для Excel', async () => {
