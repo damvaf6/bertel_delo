@@ -6,7 +6,7 @@ import { state, show, notFoundView } from '/shell.js';
 import { loadMatch } from '/match.js';
 import { loadReview, loadChat, egrnSwapState, egrnSwapFor, taskSwapFor, orderFixState, toOrderFix } from '/work.js';
 import { loadMoney } from '/money.js';
-import { loadDraft, canFixInDraft } from '/draft.js';
+import { loadDraft, canFixInDraft, madeInDraft } from '/draft.js';
 import { loadAnalogs } from '/analogs.js';
 import { loadInspection } from '/inspect.js';
 import { loadOnsite } from '/onsite.js';
@@ -630,6 +630,7 @@ function returnPoints(r) {
 // что «Заменить на значение из выписки» в ИИ-проверке (2.232); заменено — напоминание собрать Word и отметить пункт.
 // Кнопка — пока черновик правится и та же находка есть в ИИ-проверке.
 function pointSwap(p) {
+  if (p.fix?.date && !p.fixed) return pointMade(p.fix.date);
   if (p.fix && !p.fixed) return pointTaskSwap(p);
   if (!p.egrn || p.fixed) return [];
   const st = egrnSwapFor(p.egrn);
@@ -650,6 +651,27 @@ function pointTaskSwap(p) {
   const btn = el('button', { class: 'secondary', type: 'button', 'data-action': 'point-task-swap', onclick: () => { btn.disabled = true; st.swap(); } }, `Заменить на значение ${st.src}`);
   return [el('div', { class: 'point-swap', 'data-role': 'point-swap' },
     el('span', { class: 'muted', text: `В черновике «${st.was}» — ${st.from} «${st.now}». ` }), btn)];
+}
+// 2.322: пункт «дата составления позже срока из задания на оценку» (раньше даты задания) — заменить нечем: «К месту в
+// черновике» выделяет дату в строке «Дата составления»; такой строки нет — в Word дата составления — день сборки.
+const todayRu = () => new Date().toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', year: 'numeric' });
+const dayNum = (d) => d.split('.').reverse().join('');
+function pointMade(date) {
+  if (!canFixInDraft()) return [];
+  const rule = date.late ? `срок по заданию на оценку — не позднее ${date.edge}` : `задание на оценку от ${date.edge}`;
+  const miss = el('div', { class: 'point-swap muted hidden', 'data-role': 'point-made-miss' });
+  const btn = el('button', { class: 'secondary', type: 'button', 'data-action': 'point-made', onclick: () => {
+    const ok = madeInDraft(date, (v) => `Выделено «${v}» — ${rule}. Исправьте дату составления и сохраните черновик, затем соберите Word заново${date.late ? ' (или приложите к делу документ о переносе срока)' : ''}.`);
+    miss.classList.toggle('hidden', ok);
+    if (ok) return;
+    const today = todayRu();
+    const fits = date.late ? dayNum(today) <= dayNum(date.edge) : dayNum(today) >= dayNum(date.edge);
+    miss.textContent = `В тексте черновика строки «Дата составления» нет: в Word дата составления — день сборки. `
+      + (fits ? `Соберите Word заново — дата составления будет ${today}, загрузите исправленный файл и отметьте пункт.`
+        : `Срок по заданию (${date.edge}) прошёл — приложите к делу документ о переносе срока или исправьте дату в файле отчёта.`);
+  } }, 'К месту в черновике');
+  return [el('div', { class: 'point-swap', 'data-role': 'point-made' },
+    el('span', { class: 'muted', text: `В отчёте дата составления ${date.made} — ${rule}. ` }), btn), miss];
 }
 // ИИ-проверка показана заново (запуск, обновление) — кнопки замены в пунктах замечания по ней.
 document.addEventListener('egrn-swaps-ready', () => { if (current && orgReturnsNow.length) renderOrgReturns(orgReturnsNow); });

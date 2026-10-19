@@ -377,6 +377,13 @@ export function taskDateShort(f) {
   return { text, from: TASK_FROM[what], todo: kind === 'позже срока из'
     ? 'исправьте дату составления или приложите к делу документ о переносе срока' : 'исправьте дату составления' };
 }
+// 2.322: даты пункта из короткого текста (taskDateShort) — дата составления, срок по заданию (late) или дата задания; для
+// «К месту в черновике» у пункта возврата. Не та находка — null.
+const TASK_DATE_SHORT = /^Дата составления отчёта \((\d{2}\.\d{2}\.\d{4})\) (позже срока из|раньше даты) [^(]*\((?:не позднее )?(\d{2}\.\d{2}\.\d{4})\)/u;
+export function taskDateOf(short) {
+  const [, made, kind, edge] = String(short ?? '').match(TASK_DATE_SHORT) ?? [];
+  return made ? { made, edge, late: kind === 'позже срока из' } : null;
+}
 const orderShort = (f) => (f.fix?.from ? fixShort(f) : taskDateShort(f));
 const isOrder = (f) => !f.egrn && (f.fix?.from || isTaskDate(f));
 

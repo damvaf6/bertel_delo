@@ -14489,6 +14489,21 @@ test('прогон 2.320: эксперт и руководитель по пач
   await point.scrollIntoViewIfNeeded();
   await shot(ep, 'd96-progon17-ekspert-punkt-zamenen');
 
+  // 2.322: пункт о дате составления — «К месту в черновике». Строки «Дата составления» в черновике нет — в Word дата — день
+  // сборки, срок по заданию сегодня: «соберите Word заново»; строку дописали — выделена дата в ней.
+  const datePoint = ep.locator('ul.points li.point').filter({ hasText: 'Дата составления отчёта' }).first();
+  await expect(datePoint.locator('[data-role="point-made"]')).toContainText(`В отчёте дата составления ${ru(inDays(1))} — срок по заданию на оценку — не позднее ${ru(inDays(0))}`);
+  await datePoint.getByRole('button', { name: 'К месту в черновике' }).click();
+  await expect(datePoint.locator('[data-role="point-made-miss"]')).toHaveText(`В тексте черновика строки «Дата составления» нет: в Word дата составления — день сборки. Соберите Word заново — дата составления будет ${ru(inDays(0))}, загрузите исправленный файл и отметьте пункт.`);
+  await datePoint.scrollIntoViewIfNeeded();
+  await shot(ep, 'd98-ekspert-punkt-data-net-stroki');
+  await draftText.fill(`Дата составления отчёта: ${ru(inDays(1))}\n${await draftText.inputValue()}`);
+  await datePoint.getByRole('button', { name: 'К месту в черновике' }).click();
+  await expect(datePoint.locator('[data-role="point-made-miss"]')).toBeHidden();
+  expect(await draftText.evaluate((t) => t.value.slice(t.selectionStart, t.selectionEnd))).toBe(ru(inDays(1)));
+  await expect(ep.locator('#draft-msg')).toContainText(`Выделено «${ru(inDays(1))}» — срок по заданию на оценку — не позднее ${ru(inDays(0))}`);
+  await shot(ep, 'd99-ekspert-punkt-data-vydelena');
+
   // Сводка за месяц (2.314): срок отчёта — расхождение с заданием.
   await hp.goto('about:blank');
   await hp.goto(`/kabinet#org=${orgId}`);

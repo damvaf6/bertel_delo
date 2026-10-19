@@ -11,7 +11,7 @@ import expertise from '../../src/modules/expertise.mjs';
 import { expertMorningAlerts } from '../../src/ops/today-ops.mjs';
 import { digestText, morningTitles, morningTo } from '../../src/notify/morning.mjs';
 import { fakeSign, testExternalSignature, testGoskeySignature } from '../../src/providers/sign.mjs';
-import { taskDateShort, egrnLinks, egrnLinkState } from '../../src/ai/ai.mjs';
+import { taskDateShort, taskDateOf, egrnLinks, egrnLinkState } from '../../src/ai/ai.mjs';
 
 let S, owner, dispatcher, spec;
 const FIELDS = { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 15', area: '41' };
@@ -1233,4 +1233,8 @@ test('прогон 2.320: дата составления против зада�
   assert.deepEqual(link, { rule: 'report_dates', kind: 'order', short: 'Дата составления отчёта (20.10.2026) позже срока из задания на оценку (не позднее 19.10.2026)' });
   assert.equal(egrnLinkState(link, review([late]), ['d1']), 'kept');
   assert.equal(egrnLinkState(link, review([]), ['d1']), 'gone');
+  // 2.322: даты пункта — для «К месту в черновике» у эксперта.
+  assert.deepEqual(taskDateOf(link.short), { made: '20.10.2026', edge: '19.10.2026', late: true });
+  assert.deepEqual(taskDateOf(taskDateShort(early).text), { made: '01.10.2026', edge: '05.10.2026', late: false });
+  assert.equal(taskDateOf('Площадь в отчёте 45,1 — в выписке 44,9'), null);
 });
