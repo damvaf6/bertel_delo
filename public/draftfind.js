@@ -31,7 +31,9 @@ function pattern(bad) {
 }
 
 // → { from, to } или null (в черновике этого значения нет).
-export function findInDraft(body, { bad, quote } = {}) {
+// 2.312: mark — к найденному имени (`flip: 'name'`) прибавляется пометка за ним в таблице задания черновика («ПАО Сбербанк
+// (по заявке)», 2.310), чтобы она менялась вместе с ним.
+export function findInDraft(body, { bad, quote, mark } = {}) {
   const text = String(body ?? '');
   const re = pattern(bad);
   if (!re) return null;
@@ -47,16 +49,22 @@ export function findInDraft(body, { bad, quote } = {}) {
   }
   if (!best) return null;
   const short = /^\d{1,3}$/.test(String(bad).trim());
-  return short && best.score === 0 ? null : { from: best.from, to: best.to };
+  if (short && best.score === 0) return null;
+  const tail = mark ? MARK.exec(text.slice(best.to)) : null;
+  return { from: best.from, to: best.to + (tail ? tail[0].length : 0) };
 }
 
 // 2.274, 2.277, 2.278: находку по заданию на оценку (письму, определению суда) можно заменить одной кнопкой «Заменить на
 // значение из задания» — откуда верное значение (null — нельзя). 2.284: та же проверка — для «Сегодня» и утренней сводки.
-const SOURCE_FROM = [[/^в задании/u, 'из задания'], [/^в письме/u, 'из письма'], [/^в определении/u, 'из определения']];
+// 2.312: пользователь результатов оценки (`flip: 'name'`, правило bank_user) — и Сбербанк из заявки: «из заявки».
+const SOURCE_FROM = [[/^в задании/u, 'из задания'], [/^в письме/u, 'из письма'], [/^в определении/u, 'из определения'], [/^в заявке$/u, 'из заявки']];
+const MARK = /^ \((?:по заявке|по заданию на оценку|по письму заказчика|по определению суда)\)/u;
+const MARK_END = new RegExp(`${MARK.source.slice(1)}$`, 'u');
+const MARK_BY = [[/^в заявке/u, 'по заявке'], [/^в задании на оценку/u, 'по заданию на оценку'], [/^в письме заказчика/u, 'по письму заказчика'], [/^в определении суда/u, 'по определению суда']];
 export function assignmentSource(g) {
   const dated = /^\d{2}\.\d{2}\.\d{4}$/;
   const src = SOURCE_FROM.find(([re]) => re.test(g?.from ?? ''))?.[1];
-  if (!src || dated.test(g.bad ?? '') !== dated.test(g.right ?? '') || !swapValue(g)) return null;
+  if (!src || (src === 'из заявки' && g.flip !== 'name') || dated.test(g.bad ?? '') !== dated.test(g.right ?? '') || !swapValue(g)) return null;
   return src;
 }
 
@@ -75,7 +83,12 @@ export function swapValue(g, found) {
   // 2.293: цель оценки из задания (`flip: 'text'`) — словами целиком, заглавная — как у того, что в тексте.
   if (g?.flip === 'text' && right) return /^\p{Lu}/u.test(String(found ?? bad)) ? right[0].toUpperCase() + right.slice(1) : right[0].toLowerCase() + right.slice(1);
   // 2.294: заказчик из задания (`flip: 'name'`) — как в задании: фамилия, имя, название организации пишутся как есть.
-  if (g?.flip === 'name' && right) return right;
+  // 2.312: с пометкой из таблицы задания черновика — и пометка своя: откуда верное значение.
+  if (g?.flip === 'name' && right) {
+    if (!MARK_END.test(String(found ?? ''))) return right;
+    const by = MARK_BY.find(([re]) => re.test(g.from ?? ''))?.[1];
+    return by ? `${right} (${by})` : right;
+  }
   if (!right || / или /.test(right) || !/\d/.test(bad) || right.length > 200) return null;
   // 2.274: дата оценки из задания — в той же записи, что в тексте: «01» октября 2026 → «03» октября 2026.
   const day = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(right);
@@ -122,7 +135,7 @@ export function swapAll(body, items) {
   const picked = [];
   const missing = [];
   (items ?? []).forEach(({ g, quote }, i) => {
-    const at = g?.bad ? findInDraft(text, { bad: g.bad, quote }) : null;
+    const at = g?.bad ? findInDraft(text, { bad: g.bad, quote, mark: g.flip === 'name' }) : null;
     const was = at && text.slice(at.from, at.to);
     const now = at && swapValue(g, was);
     if (!now || picked.some((p) => at.from < p.to && p.from < at.to)) return missing.push(i);

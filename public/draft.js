@@ -157,7 +157,7 @@ export function fixInDraft(g, quote) {
 // черновик сохраняется (новая версия); → { from, was, now } для «Отменить» или null (в черновике значения нет).
 export async function swapInDraft(g, quote) {
   const t = $('draft-text');
-  const at = canFixInDraft() ? findInDraft(t.value, { bad: g.bad, quote }) : null;
+  const at = canFixInDraft() ? findInDraft(t.value, { bad: g.bad, quote, mark: g.flip === 'name' }) : null;
   if (!at) return null;
   const was = t.value.slice(at.from, at.to);
   const now = swapValue(g, was);

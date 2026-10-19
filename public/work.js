@@ -118,7 +118,7 @@ export async function loadReview(current) {
   }
   $('review-checks').replaceChildren(...items);
   swapAllBox($('ai-swap-all'), swaps, EGRN_ALL);
-  swapAllBox($('ai-task-swap-all'), tasks, TASK_ALL);
+  swapAllBox($('ai-task-swap-all'), tasks, tasks.some((s) => s.src === 'из заявки') ? TASK_MINE_ALL : TASK_ALL);
   swapsReady = true;
   document.dispatchEvent(new CustomEvent('egrn-swaps-ready'));
   // «Остальное в порядке» (разбор 03.10.2026, 2.18): правила без отметки, где у ИИ нет замечаний и находок, — одной
@@ -148,6 +148,8 @@ export async function loadReview(current) {
 // заданию» для находок по заданию на оценку (свой блок, своя отмена).
 const EGRN_ALL = { act: 'egrn', label: 'Заменить всё по выписке', done: 'Заменено по выписке ЕГРН' };
 const TASK_ALL = { act: 'task', label: 'Заменить всё по заданию', done: 'Заменено по заданию на оценку' };
+// 2.312: среди них пользователь результатов оценки — Сбербанк из заявки.
+const TASK_MINE_ALL = { act: 'task', label: 'Заменить всё по заданию и заявке', done: 'Заменено по заданию на оценку и заявке' };
 function swapAllBox(box, list, t) {
   let last = null;
   const btn = el('button', { class: `secondary${canFixInDraft() ? '' : ' hidden'}`, type: 'button', 'data-action': `${t.act}-swap-all` }, `${t.label} (${list.length})`);
