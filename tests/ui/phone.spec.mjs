@@ -14557,3 +14557,43 @@ test('прогон 2.320: эксперт и руководитель по пач
   await shot(hp, 'd97-progon17-rukovoditel-svodka');
   for (const p of [ep, hp, cp]) await p.context().close();
 });
+
+// 2.324: карточка эксперта у руководителя — «Сейчас в работе»: срок по заданию на оценку раньше срока дела своей строкой,
+// близко — «горит»; без названия файла задания.
+test('2.324: карточка эксперта — срок по заданию на оценку', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const hp = await ctx(), cp = await ctx();
+  const customer = await signIn(cp, '+79990032401');
+  const head = await signIn(hp, '+79990032402');
+  const expert = await signIn(await ctx(), '+79990032403');
+  const ru = (iso) => iso.split('-').reverse().join('.');
+  const long = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+  const { orgId, A } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Задание в карточке ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Карточкина Ольга' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Карточка по заданию: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Садовая ул., д. 9, кв. 2"}') returning id`,
+    [customer.id, expert.id, inDays(9)]);
+    return { orgId: org.id, A: o.id };
+  });
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ru(inDays(1))}`),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание банка Карточкиной.txt'), 'x-doc-kind': 'basis' },
+  })).status()).toBe(201);
+  await hp.goto(`/kabinet#expert=${expert.id}`);
+  await expect(hp.locator('#expert-now-note')).toContainText('Дел: 1 · срок горит: 1');
+  const now = hp.locator(`#expert-now li[data-now="№ ${A.slice(0, 8).toUpperCase()}"]`);
+  await expect(now).toContainText(`срок ${long(inDays(9))}`);
+  await expect(now).toContainText('срок горит');
+  await expect(now.locator('[data-task-due]')).toHaveText(`Сдать по заданию на оценку — к ${long(inDays(1))} (срок дела позже)`);
+  await expect(now.locator('[data-task-due]')).toHaveClass(/overdue/);
+  await expect(hp.locator('#expert-now')).not.toContainText('Карточкиной');
+  await hp.locator('#expert-now-box').scrollIntoViewIfNeeded();
+  await shot(hp, 'd44-kartochka-srok-po-zadaniyu');
+  await now.getByRole('link', { name: 'Открыть в делах экспертов' }).click();
+  await expect(hp).toHaveURL(new RegExp(`#org=${orgId}&case=`));
+});
