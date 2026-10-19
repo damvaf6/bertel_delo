@@ -179,6 +179,39 @@ test('карточка эксперта: сейчас в работе — сро
   }
 });
 
+// 2.324: «Сейчас в работе» — срок по заданию на оценку раньше срока дела: день и чьё задание, без названия файла; близко —
+// «горит»; срок по заданию позже срока дела — ничего.
+test('2.324: карточка эксперта — срок по заданию на оценку в «Сейчас в работе»', async () => {
+  const spec5 = await login(S, '+79990003618');
+  await makeSpecialist(S.sql, spec5.user.id);
+  await addMember(S.sql, org.id, spec5.user.id, 'member');
+  assert.equal((await spec5.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  const today = todayMsk();
+  const ruD = (s) => s.split('-').reverse().join('.');
+  const make = async (deadline, due) => {
+    const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Дело с заданием' })).body.order;
+    await S.sql`update orders set executor_user_id = ${spec5.user.id}, status = 'in_work', deadline = ${addDays(today, deadline)} where id = ${o.id}`;
+    if (due != null) {
+      assert.equal((await owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(addDays(today, due))}`), {
+        raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание банка Петровой.txt'), 'x-doc-kind': 'basis' } })).status, 201);
+    }
+    return o;
+  };
+  await make(10, 1); // по заданию через день — горит
+  await make(12, 6); // по заданию раньше, но не близко
+  await make(5, 9); // по заданию позже срока дела — ничего
+  await make(14, null);
+  const r = await head.req('GET', `/api/specialists/${spec5.user.id}/card`);
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.now.cases.map((x) => [x.deadline, x.hot, x.task_due]), [
+    [addDays(today, 5), false, null],
+    [addDays(today, 10), true, { day: addDays(today, 1), by: 'по заданию на оценку', overdue: false }],
+    [addDays(today, 12), false, { day: addDays(today, 6), by: 'по заданию на оценку', overdue: false }],
+    [addDays(today, 14), false, null],
+  ]);
+  assert.ok(!JSON.stringify(r.body.now).includes('Петровой'), 'без названия файла задания');
+});
+
 // 2.156: «Возвраты за год» — только руководителю организации эксперта: возвраты его организации за 365 дней, по скольким
 // делам, последний день и частые пункты замечаний (одинаковые без учёта регистра и точки — один пункт). Возвраты старше года
 // и чужой организации — не в счёт; диспетчеру и самому эксперту блока нет.

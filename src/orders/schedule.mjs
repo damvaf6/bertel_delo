@@ -41,8 +41,8 @@ const mskDay = (t) => todayMsk(new Date(t));
 const mskTime = (t) => new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit' }).format(new Date(t));
 
 // 2.317: срок по заданию на оценку (письмо банка, определение суда) раньше срока дела — у дел в работе и предложенных, где
-// ИИ-проверка сверяет сроки (правило report_dates). Номер дела → { day, by, name, page }.
-async function taskDues(sql, storage, registry, orders) {
+// ИИ-проверка сверяет сроки (правило report_dates). Номер дела → { day, by, name, page }. Карточка эксперта — тоже (2.324).
+export async function taskDues(sql, storage, registry, orders) {
   const out = new Map();
   if (!storage) return out;
   for (const o of orders) {
