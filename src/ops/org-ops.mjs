@@ -17,6 +17,8 @@ import { extendSuggest, openHandovers } from './handover-ops.mjs';
 import { orgSchedule } from '../orders/schedule.mjs';
 import { expiringLinks, incompleteInspections } from './inspect-ops.mjs';
 import { docsWaiting } from './docreq-ops.mjs';
+import { taskDueFor } from './draft-ops.mjs';
+import { assignmentDocs } from './ai-ops.mjs';
 
 export const INVITE_TTL_DAYS = 14;
 export const LIMITS = {
@@ -418,8 +420,11 @@ export function orgOps() {
       // услугам (2.135); только руководитель. ?format=csv — та же сводка таблицей для Excel.
       id: 'orgs.report', method: 'GET', path: '/api/orgs/:id/report', auth: 'user',
       access: { resource: 'org', param: 'id', need: 'manage' },
-      async handler({ sql, org, query, res, registry }) {
-        const report = await orgMonthReport(sql, org.id, reportMonth(query.month), { registry });
+      async handler({ sql, org, query, res, registry, providers }) {
+        // 2.323: срок по заданию на оценку — только у дел, где ИИ-проверка сверяет сроки (правило report_dates).
+        const taskDue = async (o) => (providers.storage && registry.checks(o.module, o.service).some((r) => (r.auto ?? []).includes('report_dates'))
+          ? taskDueFor(registry, o, await assignmentDocs(sql, providers.storage, o))?.day ?? null : null);
+        const report = await orgMonthReport(sql, org.id, reportMonth(query.month), { registry, taskDue });
         if (query.format !== 'csv') return { report };
         res.set({
           'content-type': 'text/csv; charset=utf-8',

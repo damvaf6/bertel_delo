@@ -238,6 +238,28 @@ function bankTask(rows) {
   };
 }
 
+// 2.323: сданные за месяц дела с сроком по заданию на оценку (2.303) и из них сданные позже него — на сколько дней (в
+// среднем и больше всего). Срок задания читает операция (`taskDue`: дело → день или null) — этот файл операции загружают.
+async function taskDueRows(done, taskDue) {
+  if (!taskDue) return [];
+  const out = [];
+  for (const o of done) {
+    const due = await taskDue(o);
+    if (due) out.push({ user_id: o.user_id, late: Math.max(0, daysBetween(due, dayMsk(o.at))) });
+  }
+  return out;
+}
+// { task_due_cases, task_late, task_late_days, task_late_max }
+function taskLate(rows) {
+  const late = rows.filter((r) => r.late > 0).map((r) => r.late);
+  return {
+    task_due_cases: rows.length,
+    task_late: late.length,
+    task_late_days: late.length ? Math.round((late.reduce((s, d) => s + d, 0) / late.length) * 10) / 10 : null,
+    task_late_max: late.length ? Math.max(...late) : null,
+  };
+}
+
 export const TOP_EGRN_RULES = 3;
 // { first_signed, first_no_ai, egrn_first, egrn_first_cases, egrn_rules: [{ title, n }],
 //   order_first, order_first_cases, order_first_app, order_first_task, order_rules,
@@ -408,7 +430,7 @@ function byService(done, registry) {
     .map(({ users, cases, ...g }) => ({ ...g, experts: users.size, avg_days: avgDays(pace(cases)) }));
 }
 
-export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), registry = null } = {}) {
+export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), registry = null, taskDue = null } = {}) {
   const experts = await orgExperts(sql, orgId);
   const ids = experts.map((e) => e.user_id);
   const { start, end } = await monthBounds(sql, month);
@@ -447,6 +469,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
       join org_members m on m.org_id = ${orgId} and m.user_id = o.executor_user_id
       where o.executor_user_id = any(${ids}::uuid[]) and o.status in ('awaiting_executor', 'in_work', 'review') and o.deadline is not null` : [],
   };
+  const taskDues = await taskDueRows(q.done, taskDue);
   const count = (rows) => new Map(rows.map((r) => [r.user_id, r.n]));
   const accepted = count(q.accepted);
   const headReturns = count(q.headReturns);
@@ -480,6 +503,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
       signed_points_left: signed.get(e.user_id)?.signed_points_left ?? 0,
       ...egrnFirst(q.firstSign.filter((x) => x.user_id === e.user_id), registry),
       ...bankTask(q.bankTask.filter((x) => x.user_id === e.user_id)),
+      ...taskLate(taskDues.filter((x) => x.user_id === e.user_id)),
       remarks: topRemarks(q.remarkItems.filter((i) => i.user_id === e.user_id), TOP_REMARKS_EXPERT).map(({ text, n }) => ({ text, n })),
       prev: cmp ? cmp.experts.get(e.user_id) : null,
       services: byService(done, registry).map(({ name, done: n }) => ({ name, n })),
@@ -497,7 +521,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
     months: reportMonths(today).filter((m) => m >= since || m === month),
     experts: rows,
     total: { ...Object.fromEntries(keys.map((k) => [k, sum(k)])), avg_days: avgDays(all), ...resign(q.resign),
-      ...egrnFirst(q.firstSign, registry), ...bankTask(q.bankTask), prev: cmp ? cmp.total : null },
+      ...egrnFirst(q.firstSign, registry), ...bankTask(q.bankTask), ...taskLate(taskDues), prev: cmp ? cmp.total : null },
     prev_month: cmp ? prevM : null,
     prev_month_name: cmp ? monthRu(prevM) : null,
     top_remarks: topRemarks(q.remarkItems, TOP_REMARKS),
@@ -614,6 +638,10 @@ export function reportCsv(orgName, r) {
       'Дней в среднем до задания', 'Ещё ждут'], ...[...r.experts.filter((x) => x.bank_task).map((x) => [x.full_name, x]),
       ['Итого', r.total]].map(([name, x]) => [name, x.bank_task, x.bank_task_cases, x.bank_task_got, daysCell(x.bank_task_days),
       x.bank_task_wait])] : []),
+    // 2.323: только если за месяц сданы дела со сроком по заданию на оценку.
+    ...(r.total.task_due_cases ? [[], ['Срок по заданию на оценку', 'Сдано дел с таким сроком', 'Из них позже срока по заданию',
+      'На сколько дней в среднем', 'Больше всего дней'], ...[...r.experts.filter((x) => x.task_due_cases).map((x) => [x.full_name, x]),
+      ['Итого', r.total]].map(([name, x]) => [name, x.task_due_cases, x.task_late, daysCell(x.task_late_days), x.task_late_max])] : []),
     ...(r.top_remarks?.length ? [[], ['Частые замечания при возврате', 'Сколько раз', 'У скольких экспертов'],
       ...r.top_remarks.map((x) => [x.text, x.n, x.experts])] : []),
   ];

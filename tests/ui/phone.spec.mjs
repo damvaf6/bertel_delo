@@ -12286,6 +12286,50 @@ test('2.309: сводка за месяц — задание на оценку �
   for (const p of [ep, hp, cp]) await p.context().close();
 });
 
+// 2.323: сводка за месяц — дела, сданные позже срока по заданию на оценку: сколько и на сколько дней.
+test('2.323: сводка за месяц — сданные позже срока по заданию на оценку', async ({ browser, baseURL }) => {
+  const ectx = await phoneContext(browser, baseURL);
+  const ep = await ectx.newPage();
+  const expert = await signIn(ep, '+79990003231');
+  const hctx = await phoneContext(browser, baseURL);
+  const hp = await hctx.newPage();
+  const head = await signIn(hp, '+79990003232');
+  const cctx = await phoneContext(browser, baseURL);
+  const cp = await cctx.newPage();
+  await signIn(cp, '+79990003233');
+  const day = (n) => new Date(Date.now() + 3 * 3_600_000 + n * 86_400_000).toISOString().slice(0, 10).split('-').reverse().join('.');
+  const ids = [];
+  // Сроки по заданию: 3 дня назад и 1 день назад — сдано позже; через 2 дня — в срок.
+  for (const [t, due] of [['Квартира для ипотеки', -3], ['Дом для залога', -1], ['Офис для банка', 2]]) {
+    const id = (await (await cp.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: t }, headers: H })).json()).order.id;
+    expect((await cp.request.post(`/api/orders/${id}/documents`, {
+      data: Buffer.from(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${day(due)}`),
+      headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание банка.txt'), 'x-doc-kind': 'basis' },
+    })).status()).toBe(201);
+    ids.push(id);
+  }
+  const orgId = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name, created_at) values ('ООО «Бюро сроков ${Date.now()}»', now() - interval '3 months') returning id`);
+    await c.query("update users set full_name = 'Эксперт Срочный' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now()), ($1, $3, 'member', now() - interval '40 days')", [org.id, head.id, expert.id]);
+    await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [expert.id, org.id]);
+    await c.query("update orders set status = 'done', executor_user_id = $2, deadline = current_date + 10 where id = any($1::uuid[])", [ids, expert.id]);
+    await c.query("insert into order_status_history (order_id, from_status, to_status, side) select unnest($1::uuid[]), 'review', 'done', 'dispatcher'", [ids]);
+    return org.id;
+  });
+
+  await hp.goto(`/kabinet#org=${orgId}`);
+  await expect(hp.locator('#org-report-box')).toBeVisible();
+  const row = hp.locator('#org-report > li').filter({ hasText: 'Эксперт Срочный' });
+  await expect(row.locator('[data-expert-tasklate]')).toHaveText('из сданных дел со сроком по заданию на оценку позже него: 2 из 3, в среднем на 2 дня'
+    + ' (больше всего — 3 дня)');
+  await expect(row.locator('[data-expert-tasklate]')).toHaveClass(/warn/);
+  await expect(hp.locator('#org-report-total')).toContainText('Срок по заданию на оценкуиз сданных дел со сроком по заданию на оценку позже него: 2 из 3');
+  await row.locator('[data-expert-tasklate]').scrollIntoViewIfNeeded();
+  await shot(hp, 'd43a-rukovoditel-svodka-pozzhe-sroka-zadaniya');
+  for (const p of [ep, hp, cp]) await p.context().close();
+});
+
 // 2.268: «Собрать Word заново» — рядом с «Заменить всё по выписке» и с заменой одной находки: черновик сразу собирается в
 // файл результата, без перехода к черновику; отменили замену — кнопка уходит.
 test('2.268: «Собрать Word заново» рядом с заменой по выписке ЕГРН', async ({ browser, baseURL }) => {
