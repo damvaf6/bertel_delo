@@ -1105,6 +1105,46 @@ test('2.296: «Вернуть эксперту» — находки по цел�
   assert.deepEqual(state, ['gone', 'gone']);
 });
 
+test('2.313: «Вернуть эксперту» — находка о пользователе результатов оценки коротким пунктом, у эксперта — замена по заявке', async () => {
+  const org = await makeOrg(S.sql, 'ООО «Пользователь результатов»');
+  const head = await login(S, '+79990001614');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  const ex = await login(S, '+79990001615');
+  await makeSpecialist(S.sql, ex.user.id);
+  await addMember(S.sql, org.id, ex.user.id, 'member');
+  assert.equal((await ex.req('PATCH', '/api/me', { full_name: 'Эксперт Банкова' })).status, 200);
+  assert.equal((await ex.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Квартира: пользователь для Сбербанка' })).body.order;
+  assert.equal((await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: addDays(todayMsk(), 10), fields: { ...FIELDS, purpose: 'bank', bank: 'sber' } })).status, 200);
+  assert.equal((await step(owner, o, 'matching')).status, 200);
+  await ensurePaid(S.sql, o.id);
+  assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: ex.user.id, from: 'matching' })).status, 200);
+  assert.equal((await step(ex, o, 'in_work')).status, 200);
+  const putTxt = (body, name) => ex.req('POST', `/api/orders/${o.id}/results`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } });
+  const d1 = (await putTxt('ОТЧЁТ ОБ ОЦЕНКЕ\nЦель оценки: для залога\nПредполагаемый пользователь результатов оценки: Банк ВТБ (ПАО)', 'Отчёт.txt')).body.document;
+  assert.equal((await sign(d1, undefined, ex)).status, 201);
+  assert.equal((await ex.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
+  const h = (await head.req('GET', `/api/orgs/${org.id}/signing`)).body.items.flatMap((x) => x.documents).find((x) => x.id === d1.id).ai_check;
+  // Коротко, как цель и заказчик (2.296): без «при оценке для банка … исправьте отчёт» в конце.
+  const user = h.order.find((x) => x.text.startsWith('Предполагаемый пользователь'));
+  assert.deepEqual({ text: user?.text, from: user?.from, rule: user?.rule },
+    { text: 'Предполагаемый пользователь в отчёте — «Банк ВТБ (ПАО)», а в заявке банк — «Сбербанк»', from: 'в заявке', rule: 'appraiser' });
+  const r = await head.req('POST', `/api/org-documents/${d1.id}/return`, { comment: `1. ${user.text} — исправьте, как в заявке` });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  const links = await S.sql`select egrn from org_return_items where return_id = ${r.body.return.id}`;
+  assert.deepEqual(links.map((x) => [x.egrn?.kind, x.egrn?.rule, x.egrn?.right]), [['order', 'appraiser', 'ПАО Сбербанк']]);
+  // Эксперту в пункте — fix для «Заменить на значение из заявки» (2.285, 2.312).
+  assert.deepEqual((await docsOf(ex, o)).org_returns[0].items.map((p) => p.fix), [{ rule: 'appraiser', right: 'ПАО Сбербанк' }]);
+  // Исправленная версия — пункт ушёл.
+  const d2 = (await putTxt('ОТЧЁТ ОБ ОЦЕНКЕ\nЦель оценки: для залога\nПредполагаемый пользователь результатов оценки: ПАО Сбербанк', 'Отчёт 2.txt')).body.document;
+  assert.equal((await sign(d2, undefined, ex)).status, 201);
+  assert.equal((await ex.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
+  const state = (await head.req('GET', `/api/orgs/${org.id}/signing`)).body.items.find((x) => x.order_ref.endsWith(o.id.slice(0, 8).toUpperCase()))
+    .returns[0].items.map((p) => p.order ?? null);
+  assert.deepEqual(state, ['gone']);
+});
+
 test('2.154: ИИ-проверка — дата составления отчёта не позже дня подписи эксперта; без подписи — не позже сегодня', async () => {
   const o = await inWork('Квартира — дата отчёта и подпись');
   const ru = (d) => d.split('-').reverse().join('.');

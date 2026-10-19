@@ -13040,6 +13040,69 @@ test('2.296: «Вернуть эксперту» — цель и заказчи�
   for (const p of [cp, ep, hp]) await p.context().close();
 });
 
+// 2.313: при оценке для Сбербанка пользователь результатов в отчёте — другой банк: руководителю — коротким пунктом
+// «… — исправьте, как в заявке», эксперту в пункте — «Заменить на значение из заявки» (строка таблицы задания черновика).
+test('2.313: «Вернуть эксперту» — пользователь результатов оценки пунктом, замена по заявке', async ({ browser, baseURL }) => {
+  test.setTimeout(120_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), ep = await ctx(), hp = await ctx();
+  const customer = await signIn(cp, '+79990031301');
+  const expert = await signIn(ep, '+79990031302'), head = await signIn(hp, '+79990031303');
+  const { orgId, A } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Пользователь результатов ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Банкова Вера' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Пользователь для Сбербанка: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","bank":"sber","region":"moscow","object_type":"flat","address":"г. Москва, Садовая ул., д. 7, кв. 4"}') returning id`,
+    [customer.id, expert.id, inDays(6)]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [o.id, expert.id]);
+    return { orgId: org.id, A: o.id };
+  });
+  await ep.goto(`/kabinet#order=${A}`);
+  await ep.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const draftText = ep.getByLabel('Текст заключения');
+  const row = '| Предполагаемый пользователь результатов оценки |';
+  await draftText.fill((await draftText.inputValue()).replace(`${row} ПАО Сбербанк (по заявке) |`, `${row} Банк ВТБ (ПАО) (по заявке) |`));
+  await ep.getByRole('button', { name: 'Сохранить правку' }).click();
+  await expect(ep.locator('#draft-msg')).toHaveText('Правка сохранена');
+  const up = await ep.request.post(`/api/orders/${A}/results`, {
+    data: Buffer.from(['ОТЧЁТ ОБ ОЦЕНКЕ № 113/2026', 'Цель оценки: для ипотечного кредитования', 'Предполагаемый пользователь результатов оценки: Банк ВТБ (ПАО)',
+      'Вид определяемой стоимости: рыночная', 'Итоговая стоимость 10 000 000 руб.'].join('\n')),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Отчёт Банковой.txt') },
+  });
+  expect(up.status()).toBe(201);
+  expect((await ep.request.post(`/api/documents/${(await up.json()).document.id}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  expect((await ep.request.post(`/api/orders/${A}/review/ai`, { headers: H })).status()).toBe(201);
+
+  // Руководитель: пункт о пользователе — коротко, без «при оценке для банка … исправьте отчёт».
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const item = hp.locator('#org-sign > li[data-item]').filter({ hasText: 'Отчёт Банковой.txt' });
+  await expect(item.locator('[data-role="ai-order"]')).toContainText('Расхождения с заявкой');
+  await item.locator('[data-action="org-return"]').click();
+  const points = (await item.locator('textarea').inputValue()).split('\n');
+  expect(points).toContain('Предполагаемый пользователь в отчёте — «Банк ВТБ (ПАО)», а в заявке банк — «Сбербанк» — исправьте, как в заявке');
+  expect(points.join('\n')).not.toContain('при оценке для банка');
+  await item.locator('textarea').scrollIntoViewIfNeeded();
+  await shot(hp, '54z3-rukovoditel-vernut-polzovatel-rezultatov');
+  await item.locator('[data-action="org-return-send"]').click();
+  await expect(hp.locator('#org-sign-msg')).toHaveText('Файл возвращён эксперту с замечанием — его подпись снята');
+
+  // Эксперт: в пункте — «Заменить на значение из заявки»; строка таблицы задания черновика меняется одной кнопкой.
+  await ep.reload();
+  const point = ep.locator('ul.points li.point').filter({ hasText: 'Предполагаемый пользователь' }).first();
+  await expect(point.locator('[data-role="point-swap"]')).toContainText('Банк ВТБ (ПАО)');
+  await point.scrollIntoViewIfNeeded();
+  await shot(ep, '54z4-ekspert-punkt-polzovatel-zamenit');
+  await point.getByRole('button', { name: 'Заменить на значение из заявки' }).click();
+  await expect(point.locator('[data-role="point-swap-done"]')).toContainText('→ «ПАО Сбербанк');
+  await expect(draftText).toHaveValue(/\| Предполагаемый пользователь результатов оценки \| ПАО Сбербанк \(по заявке\) \|/);
+  for (const p of [cp, ep, hp]) await p.context().close();
+});
+
 // 2.295: задание на оценку приложено после черновика, а в таблице задания черновика другое — в «Сегодня» строка «Задание
 // пришло позже черновика — сверьте таблицу задания»; нажатие ведёт к таблице задания в тексте черновика.
 test('2.295: задание пришло позже черновика — «Сегодня» и таблица задания', async ({ browser, baseURL }) => {

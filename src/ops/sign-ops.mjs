@@ -191,7 +191,7 @@ export async function orgReturns(sql, orderId, { orgId = null } = {}) {
   return rows.map((r) => {
     // 2.262: пункт из расхождения с выпиской ЕГРН — правило и верное значение: у эксперта в замечании «Заменить по выписке»
     // Пункт по заявке и заданию на оценку (2.271) — fix: «Заменить на значение из задания», если та же находка в ИИ-проверке
-    // заменяется одной кнопкой (2.285; по заявке — нечем).
+    // заменяется одной кнопкой (2.285; по заявке — только пользователь результатов оценки, 2.313).
     const link = (l) => ({ rule: l.rule, ...(l.right ? { right: l.right } : {}) });
     const points = items.filter((i) => String(i.return_id) === String(r.id)).map((i) => ({ n: i.n, text: i.text, fixed: !!i.fixed_at, fixed_at: i.fixed_at,
       ...(i.egrn?.rule ? { [i.egrn.kind === 'order' ? 'fix' : 'egrn']: link(i.egrn) } : {}) }));
