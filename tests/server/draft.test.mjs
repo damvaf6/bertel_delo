@@ -1232,6 +1232,43 @@ test('2.301: задание пришло позже черновика — св�
   assert.deepEqual((await spec.req('GET', '/api/today')).body.expert.task_late.filter((x) => x.id === o2.id), []);
 });
 
+test('2.311: задание пришло позже черновика — сверяются и срок, и пользователь результатов оценки', async () => {
+  const o = await inWork('Квартира: срок и банк из позднего задания');
+  await S.sql`update orders set fields = fields || '{"purpose":"bank","bank":"other"}'::jsonb where id = ${o.id}`;
+  const putDoc = (body, name) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': 'basis' } });
+  const late = () => spec.req('GET', '/api/today').then((r) => r.body.expert.task_late.filter((x) => x.id === o.id));
+  const ruD = (s) => s.split('-').reverse().join('.');
+  const mine = addDays(todayMsk(), 10), early = addDays(todayMsk(), 5);
+  const row = 'Предполагаемый пользователь результатов оценки';
+  let d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {})).body.draft;
+  assert.ok(d.body.includes(`| Срок | ${ruD(mine)} |`));
+  assert.ok(!d.body.includes(`| ${row} |`));
+  assert.equal((await putDoc(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\n${row}: Банк ВТБ (ПАО)\nСрок составления отчёта: не позднее ${ruD(early)}`, 'Задание банка.txt')).status, 201);
+  let [r] = await late();
+  assert.deepEqual(r.items.filter((i) => ['due', 'user'].includes(i.what)), [
+    { what: 'due', label: 'Срок', v: ruD(early), was: ruD(mine) },
+    { what: 'user', label: row, v: 'Банк ВТБ (ПАО)', was: null },
+  ]);
+  // Эксперт поставил срок по заданию и банк своими словами — строки по сроку и пользователю уходят.
+  const body = d.body.replace(`| Срок | ${ruD(mine)} |`, `| Срок | ${ruD(early)} |\n| ${row} | ВТБ |`);
+  d = (await spec.req('PUT', `/api/orders/${o.id}/draft`, { body, from: d.id })).body.draft;
+  r = (await late())[0];
+  assert.deepEqual((r?.items ?? []).filter((i) => ['due', 'user'].includes(i.what)), []);
+  // Черновик заново с ИИ — задание учтено: строки нет.
+  d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
+  assert.deepEqual(await late(), []);
+
+  // Сбербанк из заявки от задания не зависит: позднее задание с тем же сроком, что у дела, — строки нет.
+  const o2 = await inWork('Квартира: позднее задание Сбербанка');
+  await S.sql`update orders set fields = fields || '{"purpose":"bank","bank":"sber"}'::jsonb where id = ${o2.id}`;
+  d = (await spec.req('POST', `/api/orders/${o2.id}/draft/ai`, {})).body.draft;
+  assert.ok(d.body.includes(`| ${row} | ПАО Сбербанк (по заявке) |`));
+  assert.equal((await owner.req('POST', `/api/orders/${o2.id}/documents`, Buffer.from(`ЗАДАНИЕ НА ОЦЕНКУ\n${row}: ПАО Сбербанк\nСрок составления отчёта: не позднее ${ruD(mine)}`), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание на оценку.txt'), 'x-doc-kind': 'basis' } })).status, 201);
+  assert.deepEqual((await spec.req('GET', '/api/today')).body.expert.task_late.filter((x) => x.id === o2.id), []);
+});
+
 test('2.291: цель оценки из задания на оценку — в строку таблицы задания, модели и вместо пометки; другая в заявке — рядом', async () => {
   const o = await inWork('Квартира: цель оценки из задания в черновик');
   const putDoc = (body, name, kind) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
@@ -1432,7 +1469,7 @@ test('2.310: оценка для банка — предполагаемый п�
   // Банк назван пользователем в задании — он в таблице, у модели и в «Что сказано в задании».
   assert.equal((await putDoc('ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nПредполагаемый пользователь результатов оценки: Банк ВТБ (ПАО)', 'Задание банка.txt')).status, 201);
   d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, { from: d.id })).body.draft;
-  assert.deepEqual(d.inputs.task_user, { v: 'Банк ВТБ (ПАО)', what: 'в задании на оценку', by: 'по заданию на оценку', name: 'Задание банка.txt', page: 1 });
+  assert.deepEqual(d.inputs.task_user, { id: 'vtb', v: 'Банк ВТБ (ПАО)', what: 'в задании на оценку', by: 'по заданию на оценку', name: 'Задание банка.txt', page: 1 });
   assert.ok(d.body.includes(`${row} Банк ВТБ (ПАО) (по заданию на оценку) |`));
   assert.ok(lastPrompt().includes('Предполагаемый пользователь результатов оценки (по заданию на оценку «Задание банка.txt», стр. 1): Банк ВТБ (ПАО)'));
   const task = (await spec.req('GET', `/api/orders/${o.id}/task`)).body;

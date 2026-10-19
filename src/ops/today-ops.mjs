@@ -36,9 +36,9 @@ import { dueNotes } from './note-ops.mjs';
 import { caseMoves, caseRemind, transferTargets } from './org-ops.mjs';
 import { bankTaskMissing, docWait, egrnOld } from './docreq-ops.mjs';
 import { aiRecheck, aiSignHints, egrnRebuildLeft, egrnSwapLeft } from '../ai/ai.mjs';
-import { latest, taskAddressFor, taskDueFor, taskDueSign, taskCustomerFor, taskKindFor, taskPurposeFor, valueDateFor } from './draft-ops.mjs';
+import { latest, taskAddressFor, taskDueFor, taskDueSign, taskCustomerFor, taskKindFor, taskPurposeFor, taskUserFor, valueDateFor } from './draft-ops.mjs';
 import { assignmentDocs } from './ai-ops.mjs';
-import { assignmentAddress, customerOf, customersInText, purposeFits, purposeKinds, sameAddressText, sameCustomer } from '../ai/report-checks.mjs';
+import { assignmentAddress, banksIn, customerOf, customersInText, purposeFits, purposeKinds, sameAddressText, sameCustomer } from '../ai/report-checks.mjs';
 
 // «Горит» — просрочено или до срока не больше двух дней (как подсветка в списке дел).
 const HOT_DAYS = 2;
@@ -334,7 +334,8 @@ export async function egrnSwapCases(sql, userId, rows) {
 }
 
 // 2.295: задание на оценку (письмо заказчика, определение суда) приложено к делу после черновика, а черновик с тех пор
-// заново с ИИ не готовили: дата оценки, вид стоимости, адрес, цель оценки или заказчик (2.301), которые черновик взял бы из задания (2.207, 2.282, 2.281),
+// заново с ИИ не готовили: дата оценки, вид стоимости, адрес, цель оценки или заказчик (2.301), срок и пользователь результатов
+// оценки (2.311), которые черновик взял бы из задания (2.207, 2.282, 2.281),
 // в таблице задания черновика другие или их нет. Только то, что изменилось из-за нового задания: что было и до него — не в
 // счёт (эксперт мог поправить сам). Адрес — только если черновик не взял его из выписки ЕГРН (выписка важнее задания).
 // Таблицы задания в черновике нет — сверять не с чем. Подготовил черновик заново или поправил строку — строка уходит.
@@ -392,6 +393,17 @@ export async function taskLateCases(sql, storage, registry, rows) {
       if (named.length ? !named.some((n) => sameCustomer(n, who)) : !(mine && sameCustomer(mine, who))) {
         items.push({ what: 'customer', label: 'Заказчик', v: customer.v, was: named[0]?.value ?? null });
       }
+    }
+    // 2.311: срок составления отчёта (2.303) — строка «Срок»; пользователь результатов оценки при оценке для банка (2.310) —
+    // только банк из задания (Сбербанк из заявки от задания не зависит); в строке назван тот же банк — не в счёт.
+    const due = taskDueFor(registry, o, assignment);
+    if (due && taskDueFor(registry, o, before)?.day !== due.day && !cells.get('Срок')?.includes(due.v)) {
+      items.push({ what: 'due', label: 'Срок', v: due.v, was: cells.get('Срок') || null });
+    }
+    const user = taskUserFor(registry, o, assignment);
+    const userRow = 'Предполагаемый пользователь результатов оценки';
+    if (user?.name && taskUserFor(registry, o, before)?.id !== user.id && !banksIn(cells.get(userRow) ?? '').includes(user.id)) {
+      items.push({ what: 'user', label: userRow, v: user.v, was: cells.get(userRow) || null });
     }
     if (items.length) out.push({ order: o, items, docs: fresh.map((d) => d.name), at: late.at(-1).created_at });
   }

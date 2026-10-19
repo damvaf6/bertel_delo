@@ -2715,7 +2715,8 @@ const BANKS = [
   { id: 'uralsib', re: /уралсиб/iu },
 ];
 const ANY_BANK = /банк|(?<![А-ЯЁ])(?:ВТБ|ПСБ|МКБ)(?![А-ЯЁ])|кредитн\S*\s+организац|дом\.?\s*рф/iu;
-const banksIn = (text) => BANKS.filter((b) => b.re.test(text)).map((b) => b.id);
+// 2.311: какие банки названы в тексте (строка о пользователе в таблице задания черновика).
+export const banksIn = (text) => BANKS.filter((b) => b.re.test(text)).map((b) => b.id);
 export const usersIn = (docs) => labelled(docs, USER_AT, 160).filter((e) => !/^(?:результат|оценки|отч[её]т)/iu.test(e.value));
 export function assignmentBank(assignment) {
   const got = [];

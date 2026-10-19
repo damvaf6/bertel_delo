@@ -193,9 +193,9 @@ export function taskUserFor(registry, order, assignment) {
   if (!registry.checks(order.module, order.service).some((r) => (r.auto ?? []).includes('bank_user'))) return null;
   const f = order.fields ?? {};
   if (f.purpose !== 'bank' && !assignmentPurpose(assignment)?.kinds.includes('bank')) return null;
-  if (f.bank === 'sber') return { v: 'ПАО Сбербанк', by: 'по заявке', name: null, page: null };
+  if (f.bank === 'sber') return { id: 'sber', v: 'ПАО Сбербанк', by: 'по заявке', name: null, page: null };
   const b = assignmentBank(assignment);
-  return b && b.value.length < 120 ? { v: b.value, what: b.what, by: TASK_BY[b.what], name: b.name, page: b.page + 1 } : null;
+  return b && b.value.length < 120 ? { id: b.id, v: b.value, what: b.what, by: TASK_BY[b.what], name: b.name, page: b.page + 1 } : null;
 }
 const dayOf = (v) => (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10);
 // 2.308: руководителю у дела на подписи организации — срок по заданию на оценку (2.303) прошёл или сегодня (день — по Москве).
