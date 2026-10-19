@@ -11,6 +11,7 @@ import expertise from '../../src/modules/expertise.mjs';
 import { expertMorningAlerts } from '../../src/ops/today-ops.mjs';
 import { digestText, morningTitles, morningTo } from '../../src/notify/morning.mjs';
 import { fakeSign, testExternalSignature, testGoskeySignature } from '../../src/providers/sign.mjs';
+import { taskDateShort, egrnLinks, egrnLinkState } from '../../src/ai/ai.mjs';
 
 let S, owner, dispatcher, spec;
 const FIELDS = { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 15', area: '41' };
@@ -1214,4 +1215,22 @@ test('2.308: у дела на подписи организации срок п�
   assert.equal((await head.req('POST', `/api/org-documents/${d.id}/sign`, { confirm: true })).status, 201);
   assert.equal((await signing()).task_due, null);
   assert.equal(await toSign(), undefined);
+});
+
+// Прогон 2.320: дата составления позже срока из задания на оценку (2.302) или раньше даты задания (2.298) — находка без
+// замены, но руководителю пунктом «Вернуть эксперту»: коротко, со своим «что сделать»; при повторной подписи — «ушло».
+test('прогон 2.320: дата составления против задания на оценку — пункт возврата и «ушло»', () => {
+  const late = { file: 'Отчёт.pdf', text: 'Дата составления отчёта (20.10.2026) позже срока из задания на оценку «Задание банка.pdf» (не позднее 19.10.2026, стр. 2) — отчёт составлен после срока; проверьте дату составления, а если срок переносили — приложите к делу документ о переносе' };
+  const early = { file: 'Отчёт.pdf', text: 'Дата составления отчёта (01.10.2026) раньше даты определения суда «Определение.pdf» (05.10.2026, стр. 1) — отчёт не может быть составлен раньше, чем вынесено определение; исправьте дату составления или приложите к делу верный документ' };
+  assert.deepEqual(taskDateShort(late), { text: 'Дата составления отчёта (20.10.2026) позже срока из задания на оценку (не позднее 19.10.2026)',
+    from: 'в задании на оценку', todo: 'исправьте дату составления или приложите к делу документ о переносе срока' });
+  assert.deepEqual(taskDateShort(early), { text: 'Дата составления отчёта (01.10.2026) раньше даты определения суда (05.10.2026)',
+    from: 'в определении суда', todo: 'исправьте дату составления' });
+  // Другие находки о датах — не по заданию, не пункт.
+  assert.equal(taskDateShort({ text: 'Дата составления отчёта (01.10.2026) раньше даты оценки (03.10.2026) — так быть не может' }), null);
+  const review = (found) => ({ files: [{ id: 'd1', name: 'Отчёт.pdf' }], items: [{ id: 'report_dates', hint: 'attention', found }] });
+  const [link] = egrnLinks(review([late]), 'd1');
+  assert.deepEqual(link, { rule: 'report_dates', kind: 'order', short: 'Дата составления отчёта (20.10.2026) позже срока из задания на оценку (не позднее 19.10.2026)' });
+  assert.equal(egrnLinkState(link, review([late]), ['d1']), 'kept');
+  assert.equal(egrnLinkState(link, review([]), ['d1']), 'gone');
 });

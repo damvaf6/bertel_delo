@@ -364,6 +364,22 @@ export function fixShort(f) {
   return { text, from: String(f.fix?.from ?? '').replace(/\s*«[^»]*»\s*$/, '').trim() };
 }
 
+// Прогон 2.320: дата составления отчёта позже срока из задания на оценку (2.302) или раньше даты задания (2.298) — находка без
+// замены (fix), но сверена с заданием: руководителю тоже пунктом, коротко — без имени файла, страницы и совета; что сделать —
+// `todo` (не «исправьте, как в задании»: дату в задании не берут, её ставит эксперт).
+const TASK_DATE = /^Дата составления отчёта \([^)]*\) (позже срока из|раньше даты) (задания на оценку|письма заказчика|определения суда) /u;
+const TASK_FROM = { 'задания на оценку': 'в задании на оценку', 'письма заказчика': 'в письме заказчика', 'определения суда': 'в определении суда' };
+const isTaskDate = (f) => !f.egrn && !f.fix && TASK_DATE.test(String(f.text ?? ''));
+export function taskDateShort(f) {
+  const [, kind, what] = String(f.text ?? '').match(TASK_DATE) ?? [];
+  if (!kind) return null;
+  const text = String(f.text).replace(/\s«[^»]*»/u, '').replace(/,\s*стр\.\s*\d+\)/g, ')').replace(/\s—\s[^]*$/, '').trim().slice(0, 180);
+  return { text, from: TASK_FROM[what], todo: kind === 'позже срока из'
+    ? 'исправьте дату составления или приложите к делу документ о переносе срока' : 'исправьте дату составления' };
+}
+const orderShort = (f) => (f.fix?.from ? fixShort(f) : taskDateShort(f));
+const isOrder = (f) => !f.egrn && (f.fix?.from || isTaskDate(f));
+
 // Пункты возврата из расхождений с выпиской ЕГРН (2.247): находки последней проверки файла — правило, верное значение из
 // выписки и короткий текст (как в «Вернуть эксперту», 2.236). Пункт привязан, если начинается с этого текста.
 const egrnTrim = (t) => String(t ?? '').replace(/[.\s]+$/, '');
@@ -375,8 +391,8 @@ export function egrnLinks(review, docId) {
     .filter((f) => f.egrn && (!file || f.file === file))
     .map((f) => ({ rule: i.id, ...(f.egrn.right ? { right: f.egrn.right } : {}), short: egrnShort(f) }))
     // 2.271: и находки, сверенные с заявкой или заданием на оценку (2.269), — kind 'order', верное значение — fix.right.
-    .concat((i.found ?? []).filter((f) => !f.egrn && f.fix?.from && (!file || f.file === file))
-      .map((f) => ({ rule: i.id, kind: 'order', ...(f.fix.right ? { right: f.fix.right } : {}), short: fixShort(f).text }))));
+    .concat((i.found ?? []).filter((f) => isOrder(f) && (!file || f.file === file))
+      .map((f) => ({ rule: i.id, kind: 'order', ...(f.fix?.right ? { right: f.fix.right } : {}), short: orderShort(f).text }))));
 }
 export function egrnLinkOf(point, links) {
   return links.find((l) => l.short && point.startsWith(egrnTrim(l.short))) ?? null;
@@ -389,9 +405,9 @@ export function egrnLinkState(link, review, docIds) {
   if (!item) return 'none';
   const files = new Set((review.files ?? []).filter((f) => docIds.includes(f.id)).map((f) => f.name));
   const order = link.kind === 'order';
-  const same = (item.found ?? []).some((f) => (order ? !f.egrn && f.fix?.from : f.egrn) && (!files.size || files.has(f.file))
+  const same = (item.found ?? []).some((f) => (order ? isOrder(f) : f.egrn) && (!files.size || files.has(f.file))
     && (order
-      ? (link.right && f.fix.right && egrnNorm(f.fix.right) === egrnNorm(link.right)) || egrnTrim(fixShort(f).text) === egrnTrim(link.short)
+      ? (link.right && f.fix?.right && egrnNorm(f.fix.right) === egrnNorm(link.right)) || egrnTrim(orderShort(f).text) === egrnTrim(link.short)
       : (link.right && f.egrn.right && egrnNorm(f.egrn.right) === egrnNorm(link.right)) || egrnTrim(egrnShort(f)) === egrnTrim(link.short)));
   return same ? 'kept' : 'gone';
 }
@@ -422,8 +438,8 @@ export async function aiSignHints(sql, registry, order, docIds, { ok = false, dr
     // 2.269: находки, сверенные с заявкой или заданием на оценку, — для «Вернуть эксперту» пунктами, как расхождения с выпиской.
     // 2.279: и правило находки — эксперту в окне подписи «К находке» ведёт к нему в ИИ-проверке.
     const byOrder = [...new Map(att.flatMap((i) => (i.found ?? []).map((f) => ({ f, rule: i.id })))
-      .filter(({ f }) => !f.egrn && f.fix?.from && (!file || f.file === file))
-      .map(({ f, rule }) => ({ ...fixShort(f), rule })).filter((x) => x.text).map((x) => [x.text, x])).values()];
+      .filter(({ f }) => isOrder(f) && (!file || f.file === file))
+      .map(({ f, rule }) => ({ ...orderShort(f), rule })).filter((x) => x.text).map((x) => [x.text, x])).values()];
     const at = created?.get(id);
     const swapped = draft && at && new Date(draft.at) > new Date(at) ? can.filter((f) => swappedIn(draft.body, f)).map(egrnShort) : [];
     out.set(id, att.length ? { state: 'attention', at: r.at, count: att.length, titles: att.map((i) => (titles.get(i.id) ?? i.id).split(':')[0].trim()).slice(0, 3),
