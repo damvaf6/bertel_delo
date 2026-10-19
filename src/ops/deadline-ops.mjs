@@ -10,6 +10,8 @@ import { yearStats } from '../matching/stats.mjs';
 import { customersOf, dispatchers, notify, orgHeads } from '../notify/notify.mjs';
 import { audit, text } from './util.mjs';
 import { moveDeadlineNotes } from './note-ops.mjs';
+import { taskDueFor } from './draft-ops.mjs';
+import { assignmentDocs } from './ai-ops.mjs';
 
 const MAX_DAYS = 730; // как у срока заявки — не дальше двух лет
 const DECIDE_STATUSES = ['in_work', 'review'];
@@ -135,7 +137,19 @@ async function freshAnswer(sql, actor, order) {
   return r ? { ...r, id: String(r.id) } : null;
 }
 
-async function view(sql, actor, order, registry) {
+// Срок по заданию на оценку (2.319): исполнителю перед просьбой о переносе — к какому дню отчёт ждут по заданию на оценку,
+// письму заказчика или определению суда (как сверяет ИИ-проверка, 2.302, правило report_dates). Новый срок позже — страница
+// предупреждает до отправки: кто ждёт отчёт и к какому дню. Не запрещает: решают диспетчер и заказчик.
+const WAITS = { 'в определении суда': 'Суд', 'в письме заказчика': 'Заказчик' };
+async function taskDueOf(sql, storage, order, registry) {
+  if (!storage || !registry?.checks(order.module, order.service).some((r) => (r.auto ?? []).includes('report_dates'))) return null;
+  const d = taskDueFor(registry, order, await assignmentDocs(sql, storage, order));
+  if (!d) return null;
+  const who = WAITS[d.what] ?? (order.fields?.purpose === 'bank' ? 'Банк' : 'Заказчик');
+  return { day: d.day, by: d.by, who, name: d.name, page: d.page };
+}
+
+async function view(sql, actor, order, registry, storage) {
   const sides = orderSides(actor, order);
   const fresh = await freshAnswer(sql, actor, order);
   const rows = await sql`
@@ -162,6 +176,7 @@ async function view(sql, actor, order, registry) {
     // Самый ранний новый срок (2.166): день после нынешнего, у просроченного дела — не раньше сегодняшнего.
     min_new: canRequest ? [addDays(order.deadline, 1), todayMsk()].sort().at(-1) : null,
     reasons: canRequest ? await presetReasons(sql, order, registry) : [],
+    task_due: canRequest ? await taskDueOf(sql, storage, order, registry) : null,
     can_withdraw: !!open && sides.includes('executor'),
     can_decide: !!open && sides.includes('dispatcher') && DECIDE_STATUSES.includes(order.status),
     pace: sides.includes('executor') && order.status === 'in_work' && order.deadline ? await paceOf(sql, order, registry) : null,
@@ -213,13 +228,13 @@ export function deadlineOps() {
     {
       id: 'deadline_requests.list', method: 'GET', path: '/api/orders/:id/deadline-requests', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
-      async handler({ sql, actor, order, registry }) { return view(sql, actor, order, registry); },
+      async handler({ sql, actor, order, registry, providers }) { return view(sql, actor, order, registry, providers.storage); },
     },
     {
       // Исполнитель просит перенести срок: новая дата (позже нынешней) и причина. Диспетчерам — уведомление.
       id: 'deadline_requests.create', method: 'POST', path: '/api/orders/:id/deadline-requests', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
-      async handler({ sql, actor, order, body, res, registry }) {
+      async handler({ sql, actor, order, body, res, registry, providers }) {
         if (!orderSides(actor, order).includes('executor')) throw new HttpError(403, 'forbidden', 'Перенести срок просит исполнитель дела');
         if (order.status !== 'in_work') throw new HttpError(409, 'not_in_work', 'Перенос срока просят, пока дело в работе');
         if (!order.deadline) throw new HttpError(409, 'no_deadline', 'У заявки нет срока');
@@ -235,14 +250,14 @@ export function deadlineOps() {
           await notify(tx, 'deadline_ext_requested', { users: await dispatchers(tx), orderId: order.id, actor });
         });
         res.status(201);
-        return view(sql, actor, order, registry);
+        return view(sql, actor, order, registry, providers.storage);
       },
     },
     {
       // Исполнитель отзывает свою просьбу, пока нет ответа.
       id: 'deadline_requests.withdraw', method: 'DELETE', path: '/api/orders/:id/deadline-requests/:rid', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
-      async handler({ sql, actor, order, params, registry }) {
+      async handler({ sql, actor, order, params, registry, providers }) {
         if (!orderSides(actor, order).includes('executor')) throw new HttpError(403, 'forbidden', 'Отозвать просьбу может исполнитель дела');
         const r = await openOf(sql, order, params.rid);
         await sql.tx(async (tx) => {
@@ -250,14 +265,14 @@ export function deadlineOps() {
                    where id = ${r.id} and outcome is null`;
           await audit(tx, actor, 'deadline.withdraw', 'order', order.id, { to: r.new_deadline });
         });
-        return view(sql, actor, order, registry);
+        return view(sql, actor, order, registry, providers.storage);
       },
     },
     {
       // Диспетчер: согласиться (срок заявки меняется) или отказать. Пояснение — по желанию.
       id: 'deadline_requests.decide', method: 'POST', path: '/api/orders/:id/deadline-requests/:rid/decide', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
-      async handler({ sql, actor, order, params, body, registry }) {
+      async handler({ sql, actor, order, params, body, registry, providers }) {
         if (!orderSides(actor, order).includes('dispatcher')) throw new HttpError(403, 'forbidden', 'Решает диспетчер');
         if (!DECIDE_STATUSES.includes(order.status)) throw new HttpError(409, 'order_final', 'Дело уже не в работе — срок не переносится');
         const r = await openOf(sql, order, params.rid);
@@ -288,7 +303,7 @@ export function deadlineOps() {
           }
           if (approve) await notify(tx, 'deadline_moved', { users: await customersOf(tx, order), orderId: order.id, actor });
         });
-        return view(sql, actor, { ...order, deadline: approve ? newDeadline : order.deadline }, registry);
+        return view(sql, actor, { ...order, deadline: approve ? newDeadline : order.deadline }, registry, providers.storage);
       },
     },
   ];

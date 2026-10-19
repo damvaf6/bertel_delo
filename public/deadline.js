@@ -7,7 +7,7 @@ const $ = (id) => document.getElementById(id);
 const dayRu = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
 const whenRu = (s) => new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
 const OUTCOME = { approved: ['перенесён', 'ok'], declined: ['отказано', 'warn'], withdrawn: ['отозвана', ''] };
-let ctx = null; // { order, reload, open }
+let ctx = null; // { order, reload, open, task }
 
 export async function loadDeadline(current, reload) {
   const box = $('deadline-box');
@@ -40,6 +40,8 @@ function render(r) {
   // Попросил или отозвал перенос (2.140) — предупреждение «нет файла результата» в деле пересчитывает свои кнопки.
   document.dispatchEvent(new Event('deadline-changed'));
   if (r.can_request) $('deadline-new').min = r.min_new ?? r.deadline;
+  ctx.task = r.task_due ?? null;
+  renderTask();
   // Готовые причины (2.126): текст в поле причины, новый срок — если ещё не выбран и сервер его предложил.
   const reasons = r.reasons ?? [];
   $('deadline-reasons').classList.toggle('hidden', !reasons.length);
@@ -48,6 +50,7 @@ function render(r) {
     onclick: () => {
       $('deadline-reason').value = p.reason;
       if (p.new_deadline && !$('deadline-new').value) $('deadline-new').value = p.new_deadline;
+      renderTask();
       $('deadline-reason').focus();
       say($('deadline-msg'), p.new_deadline ? 'Причина и новый срок в полях — поправьте и отправьте' : 'Причина в поле — выберите новый срок и отправьте', 'ok');
     },
@@ -75,6 +78,22 @@ function renderFresh(a) {
   box.className = a.outcome === 'approved' ? 'msg ok' : 'msg warn';
   box.dataset.outcome = a.outcome;
 }
+
+// Срок по заданию на оценку (2.319): выбранный новый срок позже дня, к которому отчёт ждут по заданию (письму заказчика,
+// определению суда), — предупреждение до отправки: кто ждёт и к какому дню. Отправить можно: решают диспетчер и заказчик.
+function renderTask() {
+  const box = $('deadline-task');
+  const t = ctx?.task;
+  const v = $('deadline-new').value;
+  const late = !!t && !!v && v > t.day;
+  box.classList.toggle('hidden', !late);
+  if (!late) { box.textContent = ''; return; }
+  box.textContent = `${t.who} ждёт отчёт к ${dayRu(t.day)} (${t.by}${t.name ? `: «${t.name}», стр. ${t.page}` : ''}) — новый срок позже. `
+    + 'Выберите срок не позже или напишите в причине, что с заказчиком перенос согласован.';
+  box.dataset.taskDue = t.day;
+}
+$('deadline-new').addEventListener('input', renderTask);
+$('deadline-new').addEventListener('change', renderTask);
 
 const days = (n) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? 'день' : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? 'дня' : 'дней'}`;
 const daysRu = (x) => (Number.isInteger(x) ? days(x) : `${String(x).replace('.', ',')} дня`);
@@ -134,6 +153,7 @@ $('deadline-form').addEventListener('submit', async (e) => {
       { new_deadline: $('deadline-new').value, reason: $('deadline-reason').value, from: ctx.order.deadline }));
     $('deadline-new').value = '';
     $('deadline-reason').value = '';
+    renderTask();
     say($('deadline-msg'), 'Просьба отправлена диспетчеру. Пока нет ответа, действует прежний срок.', 'ok');
   } catch (err) { say($('deadline-msg'), err.message); }
 });

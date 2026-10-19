@@ -426,3 +426,33 @@ test('готовая фраза заказчику «срок перенесён
   assert.equal((await decide(dispatcher, o, rid, { approve: false })).status, 200);
   assert.equal(await phrase(spec), undefined);
 });
+
+test('2.319: срок по заданию на оценку — исполнителю перед просьбой о переносе: кто ждёт отчёт и к какому дню', async () => {
+  const o = await inWork('Квартира: перенос и срок по заданию', 6);
+  const ruD = (s) => s.split('-').reverse().join('.');
+  const put = (body, name) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': 'basis' } });
+  // Задания нет — ничего.
+  assert.equal((await list(spec, o)).body.task_due, null);
+  const early = addDays(today, 4);
+  assert.equal((await put(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(early)}`, 'Задание.txt')).status, 201);
+  assert.deepEqual((await list(spec, o)).body.task_due, { day: early, by: 'по заданию на оценку', who: 'Заказчик', name: 'Задание.txt', page: 1 });
+  // Для банка — «Банк ждёт».
+  await S.sql`update orders set fields = fields || '{"purpose":"bank"}'::jsonb where id = ${o.id}`;
+  assert.equal((await list(spec, o)).body.task_due.who, 'Банк');
+  // Заказчик, диспетчер и чужой — не видят.
+  assert.equal((await list(owner, o)).body.task_due, null);
+  assert.equal((await list(dispatcher, o)).body.task_due, null);
+  assert.equal((await list(stranger, o)).status, 404);
+  // Предупреждение не запрещает: просьба уходит; пока ждёт ответа — нового предупреждения нет.
+  const r = await ask(spec, o, { new_deadline: addDays(today, 12), reason: 'Перенос с заказчиком согласован' });
+  assert.equal(r.status, 201);
+  assert.equal(r.body.task_due, null);
+  assert.equal((await decide(dispatcher, o, r.body.open.id, { approve: false })).status, 200);
+  // Определение суда — «Суд ждёт».
+  const o2 = await inWork('Квартира: перенос и определение суда', 6);
+  assert.equal((await owner.req('POST', `/api/orders/${o2.id}/documents`, Buffer.from(`ОПРЕДЕЛЕНИЕ о назначении судебной экспертизы\nСрок проведения экспертизы: не позднее ${ruD(early)}`), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Определение.txt'), 'x-doc-kind': 'basis' } })).status, 201);
+  const t2 = (await list(spec, o2)).body.task_due;
+  assert.equal(t2?.who, 'Суд', JSON.stringify(t2));
+});
