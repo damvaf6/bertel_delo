@@ -12187,6 +12187,47 @@ test('2.275: сводка за месяц — расхождения с заяв
   for (const p of [ep, hp, cp]) await p.context().close();
 });
 
+// 2.309: сводка за месяц — сколько раз эксперт просил задание на оценку от банка, сколько пришло и через сколько дней.
+test('2.309: сводка за месяц — задание на оценку от банка: запрошено, пришло, через сколько дней', async ({ browser, baseURL }) => {
+  const ectx = await phoneContext(browser, baseURL);
+  const ep = await ectx.newPage();
+  const expert = await signIn(ep, '+79990003091');
+  const hctx = await phoneContext(browser, baseURL);
+  const hp = await hctx.newPage();
+  const head = await signIn(hp, '+79990003092');
+  const cctx = await phoneContext(browser, baseURL);
+  const cp = await cctx.newPage();
+  await signIn(cp, '+79990003093');
+  const ids = [];
+  for (const t of ['Квартира для ипотеки', 'Дом для залога']) {
+    ids.push((await (await cp.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: t }, headers: H })).json()).order.id);
+  }
+  const orgId = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name, created_at) values ('ООО «Бюро банков ${Date.now()}»', now() - interval '3 months') returning id`);
+    await c.query("update users set full_name = 'Эксперт Банкин' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now()), ($1, $3, 'member', now() - interval '40 days')", [org.id, head.id, expert.id]);
+    await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [expert.id, org.id]);
+    await c.query("update orders set status = 'in_work', executor_user_id = $2, deadline = current_date + 5 where id = any($1::uuid[])", [ids, expert.id]);
+    // Первое дело: задание пришло через 36 часов; второе — ещё ждём. Время — от начала месяца, чтобы попасть в текущий.
+    await c.query(`with m as (select date_trunc('month', now() at time zone 'Europe/Moscow') at time zone 'Europe/Moscow' as s)
+      insert into doc_requests (order_id, item_id, title, requested_by, requested_at, fulfilled_at)
+      select $1::uuid, 'bank_task', 'Задание на оценку от банка', $3::uuid, s + interval '1 minute', s + interval '36 hours 1 minute' from m
+      union all select $2::uuid, 'bank_task', 'Задание на оценку от банка', $3::uuid, s + interval '2 minutes', null from m`, [ids[0], ids[1], expert.id]);
+    return org.id;
+  });
+
+  await hp.goto(`/kabinet#org=${orgId}`);
+  await expect(hp.locator('#org-report-box')).toBeVisible();
+  const row = hp.locator('#org-report > li').filter({ hasText: 'Эксперт Банкин' });
+  await expect(row.locator('[data-expert-banktask]')).toHaveText('задание на оценку от банка запрошено: 2 · пришло: 1, в среднем через 1,5 дня'
+    + ' · ещё ждут: 1');
+  await expect(row.locator('[data-expert-banktask]')).toHaveClass(/warn/);
+  await expect(hp.locator('#org-report-total')).toContainText('Задание от банказадание на оценку от банка запрошено: 2');
+  await row.locator('[data-expert-banktask]').scrollIntoViewIfNeeded();
+  await shot(hp, 'd43-rukovoditel-svodka-zadanie-banka');
+  for (const p of [ep, hp, cp]) await p.context().close();
+});
+
 // 2.268: «Собрать Word заново» — рядом с «Заменить всё по выписке» и с заменой одной находки: черновик сразу собирается в
 // файл результата, без перехода к черновику; отменили замену — кнопка уходит.
 test('2.268: «Собрать Word заново» рядом с заменой по выписке ЕГРН', async ({ browser, baseURL }) => {
