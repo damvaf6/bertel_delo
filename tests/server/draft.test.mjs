@@ -12,6 +12,8 @@ import { buildReport, parseDraft, DOCX_MIME } from '../../src/docs/docx.mjs';
 import { makeDocx } from '../tools/make-docs.mjs';
 import { ANALOGS_MARK, COURT_WARNING, splitQuestions } from '../../src/docs/report.mjs';
 import { validateModule } from '../../src/modules/index.mjs';
+import { expertMorningAlerts } from '../../src/ops/today-ops.mjs';
+import { digestText, morningTo, sendMorning } from '../../src/notify/morning.mjs';
 
 let S, owner, other, dispatcher, admin, spec;
 const FIELDS = { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 9', area: '54.3' };
@@ -1450,6 +1452,43 @@ test('2.304: срок по заданию на оценку раньше сро�
   // Свой файл результата загружен — строки нет.
   assert.equal((await put(spec, o, 'Отчёт об оценке', 'Отчёт.txt', 'text/plain', 'results')).status, 201);
   assert.deepEqual(due(await today()), []);
+});
+
+test('2.315: утренняя сводка эксперта — срок по заданию на оценку сегодня, завтра или прошёл, а файла результата нет', async () => {
+  const o = await inWork('Квартира: срок по заданию в утренней сводке');
+  const putDoc = (body, name) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': 'basis' } });
+  const ruD = (s) => s.split('-').reverse().join('.');
+  const deps = { registry: S.app.locals.registry, storage: S.providers.storage };
+  const alerts = (day = todayMsk()) => expertMorningAlerts(S.sql, spec.user.id, day, new Date(), deps);
+  const base = (await alerts()).task_due;
+  // Срок по заданию через 2 дня — в «Сегодня» строка уже есть, а в утренней сводке ещё нет.
+  assert.equal((await putDoc(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(addDays(todayMsk(), 2))}`, 'Задание на оценку.txt')).status, 201);
+  assert.equal((await spec.req('GET', '/api/today')).body.expert.task_due.filter((x) => x.id === o.id).length, 1);
+  assert.equal((await alerts()).task_due, base);
+  // Завтра (срок через день), послезавтра (срок сегодня) и после срока — в сводке; в «нет файла результата» не повторяется.
+  for (const n of [1, 2, 3]) {
+    const a = await alerts(addDays(todayMsk(), n));
+    assert.equal(a.task_due, base + 1, `через ${n} дн.`);
+  }
+  // Сводка записывается с этой цифрой и ведёт к «Сегодня» (завтра в 8:30 по Москве).
+  const tomorrow = addDays(todayMsk(), 1);
+  assert.ok(await sendMorning(S.sql, { now: new Date(`${tomorrow}T08:30:00+03:00`), ...deps }) >= 1);
+  const [dg] = await S.sql`select task_due from morning_digests where user_id = ${spec.user.id} and day = ${tomorrow}::date`;
+  assert.equal(dg.task_due, base + 1);
+  // Без хранилища (старый вызов) — не считается и не падает.
+  assert.equal((await expertMorningAlerts(S.sql, spec.user.id, addDays(todayMsk(), 1))).task_due, 0);
+  // Срок дела не позже срока по заданию — это «срок близко», не «по заданию».
+  await S.sql`update orders set deadline = ${addDays(todayMsk(), 2)} where id = ${o.id}`;
+  assert.equal((await alerts(addDays(todayMsk(), 1))).task_due, base);
+  await S.sql`update orders set deadline = ${addDays(todayMsk(), 10)} where id = ${o.id}`;
+  // Чужой эксперт — не видит.
+  assert.equal((await expertMorningAlerts(S.sql, other.user.id, addDays(todayMsk(), 1), new Date(), deps)).task_due, 0);
+  // Свой файл результата загружен — в сводке нет.
+  assert.equal((await put(spec, o, 'Отчёт об оценке', 'Отчёт.txt', 'text/plain', 'results')).status, 201);
+  assert.equal((await alerts(addDays(todayMsk(), 1))).task_due, base);
+  assert.equal(digestText({ task_due: 2 }), 'На сегодня: срок по заданию на оценку сегодня, завтра или прошёл, а файла результата нет: 2 дела');
+  assert.equal(morningTo({ task_due: 1 }), 'today');
 });
 
 test('2.303: срок составления отчёта из задания на оценку — в строку «Срок» таблицы задания и модели; срок дела позже — рядом', async () => {

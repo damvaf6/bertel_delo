@@ -48,7 +48,7 @@ const sweep = setInterval(() => {
     .catch((e) => console.error('«Пока Вас не было»:', e?.message || e))
     .then(() => remindAck(sql))
     .catch((e) => console.error('«задерживаемся» заказчику:', e?.message || e))
-    .then(() => sendMorning(sql))
+    .then(() => sendMorning(sql, { registry: app.locals.registry, storage: providers.storage }))
     .catch((e) => console.error('утренняя сводка:', e?.message || e))
     .then(() => sendOrgMorning(sql, app.locals.registry))
     .catch((e) => console.error('утренняя сводка руководителю:', e?.message || e))
