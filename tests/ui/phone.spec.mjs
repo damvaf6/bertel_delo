@@ -13061,6 +13061,8 @@ test('2.308: руководитель — срок по заданию на оц
   await db(async (c) => {
     // Днём настоящая сводка за сегодня могла уже прийти — заменяем её своей записью.
     await c.query("delete from org_morning_digests where user_id = $1 and org_id = $2", [head.id, orgId]);
+    // У настоящей сводки могла уже появиться отправка СМС — сначала она (иначе удалить сводку нельзя).
+    await c.query("delete from notification_deliveries where notification_id in (select id from notifications where user_id = $1 and event = 'org_morning_today')", [head.id]);
     await c.query("delete from notifications where user_id = $1 and event = 'org_morning_today'", [head.id]);
     const { rows: [n] } = await c.query("insert into notifications (user_id, type, event, org_id) values ($1, 'org_morning', 'org_morning_today', $2) returning id", [head.id, orgId]);
     await c.query(`insert into org_morning_digests (user_id, org_id, day, sign, task_due, notification_id)
