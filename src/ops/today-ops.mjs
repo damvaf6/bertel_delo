@@ -30,7 +30,7 @@ import { orderSignatures, orgReturns, returnEgrn, signWait } from './sign-ops.mj
 import { executorSignOrg } from '../access/policy.mjs';
 import { dossierAlerts, loadDossier } from '../dossier/dossier.mjs';
 import { expiringLinks, incompleteInspections, reshotAll, silentLinks } from './inspect-ops.mjs';
-import { answeredExtends, openExtends, orgExtends } from './deadline-ops.mjs';
+import { answeredExtends, openExtends, orgExtends, taskMoved } from './deadline-ops.mjs';
 import { openHandovers } from './handover-ops.mjs';
 import { dueNotes } from './note-ops.mjs';
 import { caseMoves, caseRemind, transferTargets } from './org-ops.mjs';
@@ -171,6 +171,13 @@ async function expertPart(sql, actor, registry, today, storage) {
     const { order_id: _, ...a } = answers.get(o.id);
     return item(o, a);
   }).sort((a, b) => new Date(b.decided_at) - new Date(a.decided_at));
+  // Перенос согласован, а новый срок позже срока по заданию на оценку (2.326) — приложить письмо банка (определение суда)
+  // о переносе; попросили у заказчика и ждём — строки нет, письмо пришло, а срок по заданию прежний — снова есть.
+  const moved = [];
+  for (const o of rows.filter((x) => ['in_work', 'review'].includes(x.status))) {
+    const m = await taskMoved(sql, storage, registry, o);
+    if (m && !(m.asked && !m.asked.came)) moved.push(item(o, { task_moved: m, can_ask: o.status === 'in_work' }));
+  }
   const awayDeclined = await awayDeclinedCases(sql, actor, rows, ext, today, item);
   // Выписка ЕГРН в деле старше 30 дней на дату оценки, свежую ещё не просили (2.224) — запросить одной кнопкой.
   const egrnStale = [];
@@ -226,7 +233,9 @@ async function expertPart(sql, actor, registry, today, storage) {
     docs_wait: docsWait,
     // Отказ в переносе, а срок в дни «не принимаю дела» (2.215) — своей строкой с «Попросить руководителя передать дело».
     away_declined: awayDeclined,
-    extend_answer: extendAnswer.filter((x) => !awayDeclined.some((a) => a.id === x.id)),
+    task_moved: moved,
+    // Согласие на перенос со сроком позже срока по заданию (2.326) — в строке «Приложите письмо о переносе», здесь не повторяется.
+    extend_answer: extendAnswer.filter((x) => !awayDeclined.some((a) => a.id === x.id) && !moved.some((m) => m.id === x.id)),
     ready: readyLeft,
     no_result: noResult.filter((x) => !taskDue.some((t) => t.id === x.id)),
     reply_wait: replyWait,

@@ -11,7 +11,7 @@ import { customersOf, dispatchers, notify, orgHeads } from '../notify/notify.mjs
 import { audit, text } from './util.mjs';
 import { moveDeadlineNotes } from './note-ops.mjs';
 import { taskDueFor } from './draft-ops.mjs';
-import { assignmentDocs } from './ai-ops.mjs';
+import { assignmentDocs, TASK_MOVE } from './ai-ops.mjs';
 
 const MAX_DAYS = 730; // как у срока заявки — не дальше двух лет
 const DECIDE_STATUSES = ['in_work', 'review'];
@@ -149,6 +149,25 @@ async function taskDueOf(sql, storage, order, registry) {
   return { day: d.day, by: d.by, who, name: d.name, page: d.page };
 }
 
+// Перенос согласован, а новый срок позже срока по заданию на оценку (2.326): банк (суд, заказчик) по-прежнему ждёт отчёт
+// к прежнему дню — исполнителю напоминание приложить к делу письмо банка (определение суда) о переносе срока. Пришло письмо
+// с новым сроком — срок по заданию берётся из него (2.303, самый поздний), и напоминания нет. `asked` — просили у заказчика
+// одной кнопкой (пункт `task_move` запроса документов): когда и пришло ли.
+export const TASK_MOVE_DOC = { Банк: 'Письмо банка', Суд: 'Определение суда', Заказчик: 'Письмо заказчика' };
+export async function taskMoved(sql, storage, registry, order) {
+  if (!['in_work', 'review'].includes(order.status) || !order.deadline) return null;
+  const [r] = await sql`select outcome, to_char(old_deadline, 'YYYY-MM-DD') as old_deadline, to_char(new_deadline, 'YYYY-MM-DD') as new_deadline
+                        from deadline_requests where order_id = ${order.id} and outcome is not null and outcome <> 'withdrawn'
+                        order by decided_at desc, id desc limit 1`;
+  if (r?.outcome !== 'approved' || r.new_deadline !== order.deadline) return null;
+  const d = await taskDueOf(sql, storage, order, registry);
+  if (!d || d.day >= order.deadline) return null;
+  const [a] = await sql`select requested_at, fulfilled_at from doc_requests
+                        where order_id = ${order.id} and item_id = ${TASK_MOVE} and cancelled_at is null order by id desc limit 1`;
+  return { ...d, deadline: order.deadline, moved_from: r.old_deadline, doc: TASK_MOVE_DOC[d.who],
+    asked: a ? { at: a.requested_at, came: !!a.fulfilled_at } : null };
+}
+
 async function view(sql, actor, order, registry, storage) {
   const sides = orderSides(actor, order);
   const fresh = await freshAnswer(sql, actor, order);
@@ -177,6 +196,7 @@ async function view(sql, actor, order, registry, storage) {
     min_new: canRequest ? [addDays(order.deadline, 1), todayMsk()].sort().at(-1) : null,
     reasons: canRequest ? await presetReasons(sql, order, registry) : [],
     task_due: canRequest ? await taskDueOf(sql, storage, order, registry) : null,
+    task_moved: sides.includes('executor') ? await taskMoved(sql, storage, registry, order) : null,
     can_withdraw: !!open && sides.includes('executor'),
     can_decide: !!open && sides.includes('dispatcher') && DECIDE_STATUSES.includes(order.status),
     pace: sides.includes('executor') && order.status === 'in_work' && order.deadline ? await paceOf(sql, order, registry) : null,

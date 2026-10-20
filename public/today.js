@@ -125,6 +125,22 @@ function bankTaskAsk(x) {
   return [btn, msg];
 }
 
+// «Попросить письмо у заказчика» (2.326): запрос документов в деле — письмо банка (определение суда) о переносе срока.
+function taskMoveAsk(x) {
+  if (!x.can_ask) return [];
+  const msg = el('div', { class: 'muted', 'data-role': 'task-move-msg' });
+  const btn = el('button', { type: 'button', class: 'secondary', 'data-action': 'task-move-ask' }, 'Попросить письмо у заказчика');
+  btn.onclick = async () => {
+    btn.disabled = true;
+    try {
+      await api('POST', `/api/orders/${x.id}/doc-requests`, { task_move: true });
+      msg.textContent = 'Запрошено — заказчику отправлено уведомление';
+      btn.remove();
+    } catch (err) { msg.textContent = err.message; btn.disabled = false; }
+  };
+  return [btn, msg];
+}
+
 // Что пришло после ИИ-проверки (2.248): название документа и файл.
 const recheckDocs = (docs) => docs.map((d) => `${d.title} («${d.filename}»)`).join(', ');
 
@@ -246,6 +262,12 @@ export async function loadToday() {
       (x) => { location.hash = `order=${x.id}&to=deadline`; },
       (x) => [el('button', { type: 'button', class: 'secondary', 'data-action': 'away-handover',
         onclick: () => { location.hash = `order=${x.id}&to=handover`; } }, 'Попросить руководителя передать дело')]),
+      // Перенос согласован, а новый срок позже срока по заданию на оценку (2.326) — к блоку «Срок» в деле, кнопка — попросить
+      // письмо о переносе у заказчика сразу.
+      ...group('task-moved', 'Приложите письмо о переносе срока', e.task_moved ?? [], (x) => [x.title,
+        { class: 'overdue', role: 'task-moved-why', text: `Срок перенесён на ${dayRu(x.task_moved.deadline)}, а ${x.task_moved.by} отчёт ждут к ${dayRu(x.task_moved.day)}` },
+        x.task_moved.asked?.came ? 'документ от заказчика пришёл, но нового срока в нём не видно' : `нужно: ${x.task_moved.doc.toLowerCase()} о переносе срока`],
+      (x) => { location.hash = `order=${x.id}&to=deadline`; }, taskMoveAsk),
       // Диспетчер ответил на просьбу о переносе срока (2.155) — пока эксперт не открыл «Срок» в деле.
       ...group('extend-answer', 'Ответ на просьбу о переносе срока', e.extend_answer ?? [], (x) => [x.title,
         x.outcome === 'approved' ? `Диспетчер согласился: срок перенесён на ${dayRu(x.new_deadline)} (был ${dayRu(x.old_deadline)})`
