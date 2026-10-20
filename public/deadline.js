@@ -82,18 +82,26 @@ function renderFresh(a) {
 
 // Перенос согласован, а новый срок позже срока по заданию на оценку (2.326): банк (суд) ждёт отчёт к прежнему дню —
 // приложите к делу письмо о переносе; одной кнопкой — попросить его у заказчика. Пришло письмо с новым сроком — блока нет.
+const ASK_TEXT = 'Попросить письмо о переносе у заказчика';
 function renderTaskMoved(m) {
   const box = $('deadline-task-moved');
   box.classList.toggle('hidden', !m);
   if (!m) return;
-  $('deadline-task-moved-text').textContent = `Срок перенесён на ${dayRu(m.deadline)}, а ${m.by} ${m.who.toLowerCase()} ждёт отчёт к ${dayRu(m.day)}`
-    + `${m.name ? ` («${m.name}», стр. ${m.page})` : ''}. Приложите к делу ${m.doc.toLowerCase()} о переносе срока — `
-    + 'иначе отчёт с новой датой могут не принять.';
+  // 2.335: письмо о переносе пришло, а срок в нём раньше согласованного срока дела — сдать по письму или попросить другое.
+  $('deadline-task-moved-text').textContent = m.letter
+    ? `${m.doc} о переносе пришло${m.name ? ` («${m.name}», стр. ${m.page})` : ''}, но срок в нём — ${dayRu(m.day)}`
+      + `${m.letter.was ? ` (по заданию было — ${dayRu(m.letter.was)})` : ''}, а срок дела перенесён на ${dayRu(m.deadline)}. `
+      + `${m.who} ждёт отчёт к ${dayRu(m.day)}: сдайте к этому дню или попросите ${m.doc.toLowerCase()} с новым сроком — ${dayRu(m.deadline)}.`
+    : `Срок перенесён на ${dayRu(m.deadline)}, а ${m.by} ${m.who.toLowerCase()} ждёт отчёт к ${dayRu(m.day)}`
+      + `${m.name ? ` («${m.name}», стр. ${m.page})` : ''}. Приложите к делу ${m.doc.toLowerCase()} о переносе срока — `
+      + 'иначе отчёт с новой датой могут не принять.';
+  box.dataset.letter = m.letter ? 'short' : '';
   const ask = $('deadline-task-moved-ask');
   const msg = $('deadline-task-moved-msg');
   const waiting = !!m.asked && !m.asked.came;
   ask.classList.toggle('hidden', waiting || ctx.order.status !== 'in_work');
-  msg.classList.toggle('hidden', !m.asked);
+  ask.textContent = m.letter ? `Попросить ${m.doc.toLowerCase()} с новым сроком` : ASK_TEXT;
+  msg.classList.toggle('hidden', !m.asked || (!waiting && !!m.letter));
   msg.textContent = !m.asked ? '' : waiting ? `Попросили у заказчика ${whenRu(m.asked.at)} — ждём документ.`
     : 'Заказчик приложил документ, но нового срока в нём не видно — проверьте, что срок в нём не раньше нового срока дела.';
   box.dataset.taskDue = m.day;

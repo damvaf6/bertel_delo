@@ -10,7 +10,7 @@ import { yearStats } from '../matching/stats.mjs';
 import { customersOf, dispatchers, notify, orgHeads } from '../notify/notify.mjs';
 import { audit, text } from './util.mjs';
 import { moveDeadlineNotes } from './note-ops.mjs';
-import { taskDueFor } from './draft-ops.mjs';
+import { taskDueFor, taskMoveLetter } from './draft-ops.mjs';
 import { assignmentDocs, TASK_MOVE } from './ai-ops.mjs';
 
 const MAX_DAYS = 730; // как у срока заявки — не дальше двух лет
@@ -143,16 +143,21 @@ async function freshAnswer(sql, actor, order) {
 const WAITS = { 'в определении суда': 'Суд', 'в письме заказчика': 'Заказчик' };
 async function taskDueOf(sql, storage, order, registry) {
   if (!storage || !registry?.checks(order.module, order.service).some((r) => (r.auto ?? []).includes('report_dates'))) return null;
-  const d = taskDueFor(registry, order, await assignmentDocs(sql, storage, order));
+  const assignment = await assignmentDocs(sql, storage, order);
+  const d = taskDueFor(registry, order, assignment);
   if (!d) return null;
   const who = WAITS[d.what] ?? (order.fields?.purpose === 'bank' ? 'Банк' : 'Заказчик');
-  return { day: d.day, by: d.by, who, name: d.name, page: d.page };
+  // 2.335: срок по заданию взят из письма о переносе (2.333) — `letter`, прежний срок по заданию — `was`.
+  const l = taskMoveLetter(assignment, d);
+  return { day: d.day, by: d.by, who, name: d.name, page: d.page, letter: l ? { was: l.was } : null };
 }
 
 // Перенос согласован, а новый срок позже срока по заданию на оценку (2.326): банк (суд, заказчик) по-прежнему ждёт отчёт
 // к прежнему дню — исполнителю напоминание приложить к делу письмо банка (определение суда) о переносе срока. Пришло письмо
 // с новым сроком — срок по заданию берётся из него (2.303, самый поздний), и напоминания нет. `asked` — просили у заказчика
 // одной кнопкой (пункт `task_move` запроса документов): когда и пришло ли.
+// 2.335: письмо о переносе пришло, а срок в нём всё равно раньше согласованного срока дела — `letter` (`was` — срок по
+// заданию до письма): исполнителю «сдать по письму к … или попросить письмо с согласованным сроком», а не «письма нет».
 export const TASK_MOVE_DOC = { Банк: 'Письмо банка', Суд: 'Определение суда', Заказчик: 'Письмо заказчика' };
 export async function taskMoved(sql, storage, registry, order) {
   if (!['in_work', 'review'].includes(order.status) || !order.deadline) return null;
@@ -164,14 +169,15 @@ export async function taskMoved(sql, storage, registry, order) {
   if (!d || d.day >= order.deadline) return null;
   const [a] = await sql`select requested_at, fulfilled_at from doc_requests
                         where order_id = ${order.id} and item_id = ${TASK_MOVE} and cancelled_at is null order by id desc limit 1`;
-  return { ...d, deadline: order.deadline, moved_from: r.old_deadline, doc: TASK_MOVE_DOC[d.who],
+  return { ...d, deadline: order.deadline, moved_from: r.old_deadline, doc: TASK_MOVE_DOC[d.who], letter: d.letter ?? null,
     asked: a ? { at: a.requested_at, came: !!a.fulfilled_at } : null };
 }
 
 // Руководителю (2.332, 2.334): то же без названия файла задания; `asked` — когда эксперт попросил письмо у заказчика.
 export async function taskMovedOrg(sql, storage, registry, order) {
   const m = await taskMoved(sql, storage, registry, order);
-  return m ? { day: m.day, by: m.by, who: m.who, doc: m.doc, moved_from: m.moved_from, deadline: m.deadline, asked: m.asked?.at ?? null } : null;
+  return m ? { day: m.day, by: m.by, who: m.who, doc: m.doc, moved_from: m.moved_from, deadline: m.deadline, asked: m.asked?.at ?? null,
+    letter: m.letter } : null;
 }
 
 async function view(sql, actor, order, registry, storage) {
