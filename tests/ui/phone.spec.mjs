@@ -14762,3 +14762,58 @@ test('2.327: просьба передать дело — срок по зада
   await expect(late).toBeHidden();
   for (const p of [hp, cp, ep]) await p.context().close();
 });
+
+// 2.328: новому эксперту после передачи в «Что сделал прежний эксперт» — срок по заданию на оценку, если раньше срока дела, и
+// что из задания уже в черновике, а что там другое; «К черновику» открывает черновик.
+test('2.328: «Что сделал прежний эксперт» — срок по заданию и задание в черновике', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const hp = await ctx(), cp = await ctx(), ap = await ctx(), bp = await ctx();
+  const customer = await signIn(cp, '+79990032801');
+  const head = await signIn(hp, '+79990032802');
+  const first = await signIn(ap, '+79990032803');
+  const second = await signIn(bp, '+79990032804');
+  const ru = (iso) => iso.split('-').reverse().join('.');
+  const short = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+  const { orgId, A } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Передача с заданием ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Эксперт Прежняя' where id = $1", [first.id]);
+    await c.query("update users set full_name = 'Эксперт Новая' where id = $1", [second.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member'), ($1, $4, 'member')", [org.id, head.id, first.id, second.id]);
+    for (const u of [first.id, second.id]) {
+      await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [u, org.id]);
+      await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [u]);
+    }
+    await c.query("insert into morning_digests (user_id, day) values ($1, (now() at time zone 'Europe/Moscow')::date) on conflict do nothing", [second.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Передача с заданием: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Банковская ул., д. 7, кв. 3","area":"41"}') returning id`,
+    [customer.id, first.id, inDays(20)]);
+    return { orgId: org.id, A: o.id };
+  });
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nВид стоимости: рыночная\nДата оценки: 03.10.2026\nСрок составления отчёта: не позднее ${ru(inDays(2))}`),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание банка.txt'), 'x-doc-kind': 'basis' },
+  })).status()).toBe(201);
+  // Прежний эксперт подготовил черновик и сам переписал вид стоимости.
+  const d = await (await ap.request.post(`/api/orders/${A}/draft/ai`, { data: {}, headers: H })).json();
+  const body = d.draft.body.replace(/\| Вид стоимости \| [^\n]*\|/u, '| Вид стоимости | ликвидационная |');
+  expect((await ap.request.put(`/api/orders/${A}/draft`, { data: { body, from: d.draft.id }, headers: H })).status()).toBe(200);
+  expect((await hp.request.post(`/api/orgs/${orgId}/cases/${A}/transfer`, { data: { specialist_id: second.id, reason: 'Болезнь' }, headers: H })).status()).toBe(200);
+
+  await bp.goto(`/kabinet#order=${A}`);
+  await expect(bp.locator('#order-status')).toHaveText('В работе');
+  const task = bp.locator('#pred-task');
+  await expect(task).toBeVisible();
+  await expect(task.locator('#pred-task-lead')).toHaveText('Задание на оценку: «Задание банка.txt»');
+  await expect(task.locator('#pred-task-due')).toContainText(`Сдать по заданию на оценку — к ${short(inDays(2))} (срок дела позже`);
+  await expect(task.locator('#pred-task-due')).toHaveClass(/overdue/);
+  await expect(task.locator('#pred-task-list li').first()).toContainText(/Уже в черновике: .*Дата оценки/);
+  await expect(task.locator('#pred-task-list li.overdue')).toHaveText(['Вид стоимости: по заданию — «рыночная», в черновике — «ликвидационная»']);
+  const w = await bp.evaluate(() => document.documentElement.scrollWidth);
+  expect(w).toBeLessThanOrEqual(412);
+  await bp.locator('#pred-box').scrollIntoViewIfNeeded();
+  await shot(bp, 'd48-prezhnij-ekspert-zadanie-v-chernovike');
+  await task.getByRole('button', { name: 'К черновику' }).click();
+  await expect(bp.locator('#draft-box')).not.toHaveClass(/folded/);
+  for (const p of [hp, cp, ap, bp]) await p.context().close();
+});
