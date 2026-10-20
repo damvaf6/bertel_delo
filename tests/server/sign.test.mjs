@@ -1221,10 +1221,10 @@ test('2.308: у дела на подписи организации срок п�
 // (как в «Делах экспертов», 2.332) — руководителю в подписи и в «Сегодня» до подписи; пришло письмо с новым сроком — пометки нет.
 test('2.334: на подписи — перенос позже срока по заданию на оценку, а письма банка о переносе нет', async () => {
   const org = await makeOrg(S.sql, 'ООО «Перенос на подписи»');
-  const head = await login(S, '+79990001614');
+  const head = await login(S, '+79990001616');
   await addMember(S.sql, org.id, head.user.id, 'head');
   assert.equal((await head.req('PATCH', '/api/me', { full_name: 'Руководитель Переносова' })).status, 200);
-  const ex = await login(S, '+79990001615');
+  const ex = await login(S, '+79990001617');
   await makeSpecialist(S.sql, ex.user.id);
   await addMember(S.sql, org.id, ex.user.id, 'member');
   assert.equal((await ex.req('PATCH', '/api/me', { full_name: 'Эксперт Переносова' })).status, 200);
