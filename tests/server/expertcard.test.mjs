@@ -303,3 +303,37 @@ test('карточка эксперта: от возврата до новой �
   assert.deepEqual([r.n, r.resign_days, r.resign_n, r.resign_wait], [3, 1.5, 2, 1], '(60 + 12) / 2 = 36 ч = 1,5 дня');
   for (const c of [dispatcher, spec6]) assert.equal((await c.req('GET', `/api/specialists/${spec6.user.id}/card`)).body.returns_year, null);
 });
+
+// 2.342: «Сейчас в работе» — перенос срока согласован позже срока по заданию на оценку, а письма о переносе нет: у дела
+// `task_moved` (как в «Делах экспертов», 2.332), без названия файла задания; письмо пришло с новым сроком — пометки нет.
+test('2.342: карточка эксперта — перенос позже срока по заданию, а письма нет', async () => {
+  const spec6 = await login(S, '+79990003619');
+  await makeSpecialist(S.sql, spec6.user.id);
+  await addMember(S.sql, org.id, spec6.user.id, 'member');
+  assert.equal((await spec6.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  const today = todayMsk();
+  const ruD = (s) => s.split('-').reverse().join('.');
+  const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Дело с переносом' })).body.order;
+  await S.sql`update orders set executor_user_id = ${spec6.user.id}, status = 'in_work', deadline = ${addDays(today, 2)},
+    fields = fields || '{"purpose":"bank"}'::jsonb where id = ${o.id}`;
+  const put = (body, name, kind = 'basis') => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': kind } });
+  const due = addDays(today, 2);
+  assert.equal((await put(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(due)}`, 'Задание банка Карточной.txt')).status, 201);
+  const card = async () => (await head.req('GET', `/api/specialists/${spec6.user.id}/card`)).body.now.cases[0];
+  assert.equal((await card()).task_moved, null, 'переноса нет');
+  const late = addDays(today, 12);
+  const r = await spec6.req('POST', `/api/orders/${o.id}/deadline-requests`, { new_deadline: late, reason: 'Банк согласовал перенос устно' });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/deadline-requests/${r.body.open.id}/decide`, { approve: true })).status, 200);
+  const c = await card();
+  assert.deepEqual(c.task_moved, { day: due, by: 'по заданию на оценку', who: 'Банк', doc: 'Письмо банка', moved_from: due,
+    deadline: late, asked: null, letter: null });
+  assert.equal(c.hot, true, 'банк ждёт отчёт через 2 дня — срок горит не по сроку дела');
+  assert.ok(!JSON.stringify(c).includes('Карточной'), 'без названия файла задания');
+  // Диспетчеру — так же.
+  assert.ok((await dispatcher.req('GET', `/api/specialists/${spec6.user.id}/card`)).body.now.cases[0].task_moved);
+  // Письмо с новым сроком пришло — пометки нет.
+  assert.equal((await put(`Сообщаем, что срок составления отчёта продлён: не позднее ${ruD(late)}`, 'Письмо банка о переносе.txt')).status, 201);
+  assert.equal((await card()).task_moved, null);
+});
