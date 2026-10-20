@@ -5,6 +5,8 @@ import assert from 'node:assert/strict';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import { remindDeadlines } from '../../src/notify/reminders.mjs';
+import { digestText, morningTo, sendMorning } from '../../src/notify/morning.mjs';
+import { expertMorningAlerts } from '../../src/ops/today-ops.mjs';
 
 let S, owner, dispatcher, spec, stranger, other;
 const FIELDS = { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, Сроковая ул., 3' };
@@ -533,4 +535,43 @@ test('прогон 2.330: перенос согласован позже сро�
   t = (await spec.req('GET', '/api/today')).body.expert;
   assert.ok(!t.task_moved.some((x) => x.id === o.id));
   assert.ok(!t.task_due.some((x) => x.id === o.id));
+});
+
+test('2.331: утренняя сводка эксперта — «приложите письмо о переносе» своей строкой, срок по заданию не повторяется', async () => {
+  const o = await inWork('Квартира: письмо о переносе в утренней сводке', 1);
+  const ruD = (s) => s.split('-').reverse().join('.');
+  const deps = { registry: S.app.locals.registry, storage: S.providers.storage };
+  const alerts = (who = spec) => expertMorningAlerts(S.sql, who.user.id, today, new Date(), deps);
+  await S.sql`update orders set fields = fields || '{"purpose":"bank"}'::jsonb where id = ${o.id}`;
+  const base = await alerts();
+  const due = addDays(today, 1);
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(due)}`), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание банка.txt'), 'x-doc-kind': 'basis' } })).status, 201);
+  // Просьба о переносе ждёт ответа — срок дела позже срока по заданию: «срок по заданию» в сводке есть, письма просить рано.
+  const r = await ask(spec, o, { new_deadline: addDays(today, 9), reason: 'Банк согласовал перенос устно' });
+  assert.equal((await decide(dispatcher, o, r.body.open.id, { approve: false })).status, 200);
+  const r2 = await ask(spec, o, { new_deadline: addDays(today, 9), reason: 'Банк согласовал перенос устно' });
+  let a = await alerts();
+  assert.equal(a.task_moved, base.task_moved);
+  // Согласовано — одна строка «приложите письмо», срок по заданию у этого дела не считается.
+  assert.equal((await decide(dispatcher, o, r2.body.open.id, { approve: true })).status, 200);
+  a = await alerts();
+  assert.equal(a.task_moved, base.task_moved + 1);
+  assert.equal(a.task_due, base.task_due);
+  // Без хранилища (старый вызов) — не считается и не падает.
+  assert.equal((await expertMorningAlerts(S.sql, spec.user.id, today)).task_moved, 0);
+  // Чужой эксперт — не видит.
+  assert.equal((await alerts(other)).task_moved, 0);
+  // Сводка записывается с этой цифрой и ведёт к «Сегодня».
+  const tomorrow = addDays(today, 1);
+  assert.ok(await sendMorning(S.sql, { now: new Date(`${tomorrow}T08:30:00+03:00`), ...deps }) >= 1);
+  const [dg] = await S.sql`select task_moved, task_due from morning_digests where user_id = ${spec.user.id} and day = ${tomorrow}::date`;
+  assert.equal(dg.task_moved, base.task_moved + 1);
+  assert.equal(digestText({ task_moved: 1 }), 'На сегодня: перенос срока согласован позже срока по заданию на оценку — приложите письмо о переносе: 1 дело');
+  assert.equal(morningTo({ task_moved: 2 }), 'today');
+  // Попросили письмо — ждём: ни строки о письме, ни срока по заданию.
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { task_move: true })).status, 201);
+  a = await alerts();
+  assert.equal(a.task_moved, base.task_moved);
+  assert.equal(a.task_due, base.task_due);
 });
