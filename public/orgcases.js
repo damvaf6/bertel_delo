@@ -25,6 +25,7 @@ import { orgChat } from '/orgchat.js';
 import { matcher, wireSearch } from '/search.js';
 import { loadOrgSchedule } from '/orgschedule.js';
 import { pickSignFilter } from '/orgsign.js';
+import { taskMovedText } from '/today.js';
 
 const $ = (id) => document.getElementById(id);
 const MONTHS = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
@@ -217,13 +218,6 @@ function renderFilters(counts) {
   box.replaceChildren(...(used.length ? [chip(null, 'Все'), ...used.map((f) => chip(f.id, `${f.text} · ${counts.get(f.id)}`))] : []));
 }
 
-// 2.332: «Письма банка о переносе срока нет: срок дела перенесён на …, а по заданию на оценку отчёт ждут к …».
-function movedText(m) {
-  const doc = m.doc.replace(/^Письмо/, 'Письма').replace(/^Определение/, 'Определения');
-  return `${doc} о переносе срока нет: срок дела перенесён на ${dayRu(m.deadline)}, а ${m.by} отчёт ждут к `
-    + `${dayRu(m.day)}${m.asked ? ` · эксперт попросил письмо у заказчика ${timeRu(m.asked)}` : ' · эксперт письмо у заказчика ещё не просил'}`;
-}
-
 function caseItem(org, c) {
   const late = c.overdue_days ? ` на ${c.overdue_days} дн.` : '';
   const deadline = c.deadline ? `срок ${dayRu(c.deadline)}${c.overdue ? ` · ПРОСРОЧЕНО${late}` : ''}` : 'срок не указан';
@@ -235,7 +229,7 @@ function caseItem(org, c) {
       c.overdue ? null : deadline].filter(Boolean).join(' · ') }),
     // Срок по заданию на оценку раньше срока дела (2.325): прошёл или через 1–2 дня — красным.
     // Перенос согласован позже срока по заданию на оценку, а письма о переносе нет (2.332) — вместо строки «Сдать по заданию».
-    ...(c.task_moved ? [el('div', { class: c.task_moved.asked ? 'muted' : 'overdue', 'data-role': 'task-moved', text: movedText(c.task_moved) })] : []),
+    ...(c.task_moved ? [el('div', { class: c.task_moved.asked ? 'muted' : 'overdue', 'data-role': 'task-moved', text: taskMovedText(c.task_moved) })] : []),
     ...(c.task_due && !c.task_moved ? [el('div', { class: c.task_due.hot ? 'overdue' : 'muted', 'data-role': 'task-due',
       text: `Сдать ${c.task_due.by} — к ${dayRu(c.task_due.day)}${c.task_due.overdue ? ', срок прошёл' : ''} (срок дела позже)` })] : []),
     el('div', { class: 'muted', text: [c.fee_kop != null ? `вознаграждение ${rub(c.fee_kop)}` : 'цена ещё не назначена',

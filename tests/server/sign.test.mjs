@@ -1217,6 +1217,47 @@ test('2.308: у дела на подписи организации срок п�
   assert.equal(await toSign(), undefined);
 });
 
+// 2.334: у дела на подписи организации перенос срока согласован позже срока по заданию на оценку, а письма банка о переносе нет
+// (как в «Делах экспертов», 2.332) — руководителю в подписи и в «Сегодня» до подписи; пришло письмо с новым сроком — пометки нет.
+test('2.334: на подписи — перенос позже срока по заданию на оценку, а письма банка о переносе нет', async () => {
+  const org = await makeOrg(S.sql, 'ООО «Перенос на подписи»');
+  const head = await login(S, '+79990001614');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  assert.equal((await head.req('PATCH', '/api/me', { full_name: 'Руководитель Переносова' })).status, 200);
+  const ex = await login(S, '+79990001615');
+  await makeSpecialist(S.sql, ex.user.id);
+  await addMember(S.sql, org.id, ex.user.id, 'member');
+  assert.equal((await ex.req('PATCH', '/api/me', { full_name: 'Эксперт Переносова' })).status, 200);
+  assert.equal((await ex.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  const o = await inWork('Квартира: перенос на подписи', ex);
+  await S.sql`update orders set fields = fields || '{"purpose":"bank"}'::jsonb where id = ${o.id}`;
+  const putTxt = (who, url, body, name) => who.req('POST', url, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } });
+  const ruD = (s) => s.split('-').reverse().join('.');
+  const ref = (x) => x.order_ref.endsWith(o.id.slice(0, 8).toUpperCase());
+  const signing = async () => (await head.req('GET', `/api/orgs/${org.id}/signing`)).body.items.find(ref);
+  const toSign = async () => (await head.req('GET', '/api/today')).body.orgs.find((g) => g.id === org.id).to_sign.find(ref);
+  const today = todayMsk();
+  const due = addDays(today, 2), late = addDays(today, 12);
+  assert.equal((await putTxt(owner, `/api/orders/${o.id}/documents`, `ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(due)}`, 'Задание банка Переносовой.txt')).status, 201);
+  // Диспетчер согласовал перенос на день позже срока по заданию.
+  await S.sql`insert into deadline_requests (order_id, requested_by, old_deadline, new_deadline, reason, outcome, decided_at)
+              values (${o.id}, ${ex.user.id}, ${addDays(today, 10)}::date, ${late}::date, 'Банк согласовал устно', 'approved', now())`;
+  await S.sql`update orders set deadline = ${late}::date where id = ${o.id}`;
+  const d = (await putTxt(ex, `/api/orders/${o.id}/results`, 'ОТЧЁТ ОБ ОЦЕНКЕ\nКвартира', 'Отчёт.txt')).body.document;
+  // Эксперт ещё не подписал — не ждёт подписи организации, пометки нет.
+  assert.equal((await signing()).task_moved, null);
+  assert.equal((await sign(d, undefined, ex)).status, 201);
+  const want = { day: due, by: 'по заданию на оценку', who: 'Банк', doc: 'Письмо банка', moved_from: addDays(today, 10), deadline: late, asked: null };
+  assert.deepEqual((await signing()).task_moved, want);
+  assert.deepEqual((await toSign()).task_moved, want);
+  assert.ok(!JSON.stringify((await signing()).task_moved).includes('Переносовой'));
+  // Письмо банка с новым сроком пришло — срок по заданию из письма (2.303), пометки нет.
+  assert.equal((await putTxt(owner, `/api/orders/${o.id}/documents`, `Сообщаем, что срок составления отчёта продлён: не позднее ${ruD(late)}`, 'Письмо банка.txt')).status, 201);
+  assert.equal((await signing()).task_moved, null);
+  assert.equal((await toSign()).task_moved, null);
+});
+
 // Прогон 2.320: дата составления позже срока из задания на оценку (2.302) или раньше даты задания (2.298) — находка без
 // замены, но руководителю пунктом «Вернуть эксперту»: коротко, со своим «что сделать»; при повторной подписи — «ушло».
 test('прогон 2.320: дата составления против задания на оценку — пункт возврата и «ушло»', () => {

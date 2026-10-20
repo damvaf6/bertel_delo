@@ -168,6 +168,12 @@ export async function taskMoved(sql, storage, registry, order) {
     asked: a ? { at: a.requested_at, came: !!a.fulfilled_at } : null };
 }
 
+// Руководителю (2.332, 2.334): то же без названия файла задания; `asked` — когда эксперт попросил письмо у заказчика.
+export async function taskMovedOrg(sql, storage, registry, order) {
+  const m = await taskMoved(sql, storage, registry, order);
+  return m ? { day: m.day, by: m.by, who: m.who, doc: m.doc, moved_from: m.moved_from, deadline: m.deadline, asked: m.asked?.at ?? null } : null;
+}
+
 async function view(sql, actor, order, registry, storage) {
   const sides = orderSides(actor, order);
   const fresh = await freshAnswer(sql, actor, order);

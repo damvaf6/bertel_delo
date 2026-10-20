@@ -18,6 +18,7 @@ import { signatureFilename } from '../providers/sign.mjs';
 import { aiSignHints, egrnLinks, egrnLinkOf, egrnLinkState, taskDateOf } from '../ai/ai.mjs';
 import { audit, text } from './util.mjs';
 import { latest, taskDueSign } from './draft-ops.mjs';
+import { taskMovedOrg } from './deadline-ops.mjs';
 import { todayMsk } from '../orders/workflow.mjs';
 
 export const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
@@ -314,7 +315,7 @@ export function signOps() {
       access: { resource: 'org', param: 'id', need: 'manage' },
       async handler({ sql, org, registry, providers }) {
         const orders = await sql`
-          select o.id, o.module, o.service, o.deadline, o.executor_user_id, o.status, o.review_round, u.full_name as executor_name
+          select o.id, o.module, o.service, o.deadline, o.executor_user_id, o.status, o.review_round, o.fields, u.full_name as executor_name
           from orders o join specialists s on s.user_id = o.executor_user_id and s.org_id = ${org.id}
           join org_members m on m.org_id = s.org_id and m.user_id = s.user_id
           join users u on u.id = o.executor_user_id
@@ -345,6 +346,8 @@ export function signOps() {
             waiting_since: wait?.since ?? null,
             // 2.308: срок по заданию на оценку прошёл или сегодня — пока файлы ждут подписи организации.
             task_due: docs.some((d) => signs.get(d.id)?.expert && !signs.get(d.id)?.org) ? await taskDueSign(sql, providers.storage, registry, o, todayMsk()) : null,
+            // 2.334: перенос согласован позже срока по заданию на оценку, а письма банка о переносе нет (2.332) — до подписи.
+            task_moved: docs.some((d) => signs.get(d.id)?.expert && !signs.get(d.id)?.org) ? await taskMovedOrg(sql, providers.storage, registry, o) : null,
             // История возвратов эксперту (2.27) — только этой организации.
             // 2.247: у пункта из расхождения с выпиской — ушло ли оно в ИИ-проверке после возврата (egrn: gone / kept / none).
             returns: await Promise.all(returns.map(async (r) => {
