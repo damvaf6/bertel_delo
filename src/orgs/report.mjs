@@ -133,6 +133,7 @@ async function orgMonthDone(sql, orgId, ids, { start, end }) {
   if (!ids.length) return [];
   return sql`
       select distinct on (o.id) o.id, o.module, o.service, o.executor_user_id as user_id, o.deadline, o.price_kop, o.transit_kop,
+             o.fields->>'purpose' as purpose,
              p.amount_kop as payout_kop, h.at,
              greatest(
                (select max(f.outcome_at) from order_offers f
@@ -249,6 +250,20 @@ async function taskDueRows(done, taskDue) {
   }
   return out;
 }
+// 2.329: сданные за месяц дела для банка (цель оценки «банк») и из них те, где задание на оценку пришло уже после черновика
+// (черновик пришлось сверять заново, 2.295). Пришло ли позже — решает операция (`taskAfter`: дело → true/false), она читает
+// файлы задания; этот файл операции загружают.
+async function bankAfterRows(done, taskAfter) {
+  const out = [];
+  for (const o of done.filter((x) => x.purpose === 'bank')) out.push({ user_id: o.user_id, after: taskAfter ? !!(await taskAfter(o)) : false });
+  return out;
+}
+// { bank_cases, bank_after, bank_after_pct }: доля — целыми процентами.
+function bankAfter(rows) {
+  const after = rows.filter((r) => r.after).length;
+  return { bank_cases: rows.length, bank_after: after, bank_after_pct: rows.length ? Math.round((after / rows.length) * 100) : null };
+}
+
 // { task_due_cases, task_late, task_late_days, task_late_max }
 function taskLate(rows) {
   const late = rows.filter((r) => r.late > 0).map((r) => r.late);
@@ -430,7 +445,7 @@ function byService(done, registry) {
     .map(({ users, cases, ...g }) => ({ ...g, experts: users.size, avg_days: avgDays(pace(cases)) }));
 }
 
-export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), registry = null, taskDue = null } = {}) {
+export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), registry = null, taskDue = null, taskAfter = null } = {}) {
   const experts = await orgExperts(sql, orgId);
   const ids = experts.map((e) => e.user_id);
   const { start, end } = await monthBounds(sql, month);
@@ -470,6 +485,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
       where o.executor_user_id = any(${ids}::uuid[]) and o.status in ('awaiting_executor', 'in_work', 'review') and o.deadline is not null` : [],
   };
   const taskDues = await taskDueRows(q.done, taskDue);
+  const bankAfters = await bankAfterRows(q.done, taskAfter);
   const count = (rows) => new Map(rows.map((r) => [r.user_id, r.n]));
   const accepted = count(q.accepted);
   const headReturns = count(q.headReturns);
@@ -504,6 +520,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
       ...egrnFirst(q.firstSign.filter((x) => x.user_id === e.user_id), registry),
       ...bankTask(q.bankTask.filter((x) => x.user_id === e.user_id)),
       ...taskLate(taskDues.filter((x) => x.user_id === e.user_id)),
+      ...bankAfter(bankAfters.filter((x) => x.user_id === e.user_id)),
       remarks: topRemarks(q.remarkItems.filter((i) => i.user_id === e.user_id), TOP_REMARKS_EXPERT).map(({ text, n }) => ({ text, n })),
       prev: cmp ? cmp.experts.get(e.user_id) : null,
       services: byService(done, registry).map(({ name, done: n }) => ({ name, n })),
@@ -521,7 +538,8 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
     months: reportMonths(today).filter((m) => m >= since || m === month),
     experts: rows,
     total: { ...Object.fromEntries(keys.map((k) => [k, sum(k)])), avg_days: avgDays(all), ...resign(q.resign),
-      ...egrnFirst(q.firstSign, registry), ...bankTask(q.bankTask), ...taskLate(taskDues), prev: cmp ? cmp.total : null },
+      ...egrnFirst(q.firstSign, registry), ...bankTask(q.bankTask), ...taskLate(taskDues),
+      ...bankAfter(bankAfters), prev: cmp ? cmp.total : null },
     prev_month: cmp ? prevM : null,
     prev_month_name: cmp ? monthRu(prevM) : null,
     top_remarks: topRemarks(q.remarkItems, TOP_REMARKS),
@@ -642,6 +660,10 @@ export function reportCsv(orgName, r) {
     ...(r.total.task_due_cases ? [[], ['Срок по заданию на оценку', 'Сдано дел с таким сроком', 'Из них позже срока по заданию',
       'На сколько дней в среднем', 'Больше всего дней'], ...[...r.experts.filter((x) => x.task_due_cases).map((x) => [x.full_name, x]),
       ['Итого', r.total]].map(([name, x]) => [name, x.task_due_cases, x.task_late, daysCell(x.task_late_days), x.task_late_max])] : []),
+    // 2.329: только если за месяц сданы дела для банка.
+    ...(r.total.bank_cases ? [[], ['Дела для банка', 'Сдано', 'Задание на оценку пришло после черновика', 'Доля, %'],
+      ...[...r.experts.filter((x) => x.bank_cases).map((x) => [x.full_name, x]), ['Итого', r.total]]
+        .map(([name, x]) => [name, x.bank_cases, x.bank_after, x.bank_after_pct])] : []),
     ...(r.top_remarks?.length ? [[], ['Частые замечания при возврате', 'Сколько раз', 'У скольких экспертов'],
       ...r.top_remarks.map((x) => [x.text, x.n, x.experts])] : []),
   ];

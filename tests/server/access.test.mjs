@@ -1908,7 +1908,7 @@ test('сводка за месяц по экспертам (2.78): только 
     order_task_kinds: [], order_task_address: 0, order_task_date: 0, order_task_value_kind: 0, order_task_purpose: 0, order_task_customer: 0, order_task_user: 0, order_task_due: 0,
     swap_first: 0, swap_first_cases: 0, swap_first_egrn: 0, swap_first_task: 0,
     bank_task: 0, bank_task_cases: 0, bank_task_got: 0, bank_task_days: null, bank_task_wait: 0,
-    task_due_cases: 0, task_late: 0, task_late_days: null, task_late_max: null, prev: null });
+    task_due_cases: 0, task_late: 0, task_late_days: null, task_late_max: null, bank_cases: 0, bank_after: 0, bank_after_pct: null, prev: null });
   assert.equal(empty.prev_month, null, 'прошлый месяц раньше создания организации — сравнения нет (2.124)');
   for (const q of ['?month=2020-01', '?month=2099-01', '?month=13', '?month=2026-13']) assert.equal((await report(headC, q)).body.error, 'bad_month', q);
   // Дела: e1 принял 2 дела, одно сдал вовремя, другое позже срока; одно в работе просрочено; руководитель вернул раз,
@@ -1961,7 +1961,7 @@ test('сводка за месяц по экспертам (2.78): только 
     order_task_kinds: [], order_task_address: 0, order_task_date: 0, order_task_value_kind: 0, order_task_purpose: 0, order_task_customer: 0, order_task_user: 0, order_task_due: 0,
     swap_first: 0, swap_first_cases: 0, swap_first_egrn: 0, swap_first_task: 0,
     bank_task: 0, bank_task_cases: 0, bank_task_got: 0, bank_task_days: null, bank_task_wait: 0,
-    task_due_cases: 0, task_late: 0, task_late_days: null, task_late_max: null, remarks: [{ text: 'Нет даты осмотра.', n: 1 }],
+    task_due_cases: 0, task_late: 0, task_late_days: null, task_late_max: null, bank_cases: 0, bank_after: 0, bank_after_pct: null, remarks: [{ text: 'Нет даты осмотра.', n: 1 }],
     prev: { done: 0, on_time: 0, returned: 0 }, services: [{ name: 'Оценка недвижимости', n: 2 }] });
   assert.deepEqual(r.experts.find((e) => e.user_id === ex.e2.user.id).prev, { done: 0, on_time: 0, returned: 1 }, 'возврат прошлого месяца (2.124)');
   assert.deepEqual(r.top_remarks, [{ text: 'Нет даты осмотра.', n: 2, experts: 2 }, { text: 'Не указан этаж', n: 1, experts: 1 }]);
@@ -2710,6 +2710,52 @@ test('сводка за месяц (2.323): дела, сданные позже 
   // Прошлый месяц — сданных дел со сроком по заданию нет, раздела нет.
   const prev = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv&month=${r.prev_month ?? '2026-01'}`, undefined, { binary: true })).body.toString('utf8');
   assert.ok(!prev.includes('Срок по заданию на оценку;'), prev);
+});
+
+test('сводка за месяц (2.329): дела для банка и в скольких задание на оценку пришло после черновика', async () => {
+  const org = await makeOrg(S.sql, 'Тестовая организация 2.329');
+  const head = await login(S, '+79990003290');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  const ex = {};
+  for (const [k, phone, name] of [['a', '+79990003291', 'Эксперт Банковский'], ['b', '+79990003292', 'Эксперт Судебный']]) {
+    ex[k] = await login(S, phone);
+    await addMember(S.sql, org.id, ex[k].user.id, 'member');
+    await makeSpecialist(S.sql, ex[k].user.id);
+    await S.sql`update users set full_name = ${name} where id = ${ex[k].user.id}`;
+    assert.equal((await ex[k].req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  }
+  // task: 'before' — задание до черновика, 'after' — после, 'note' — после черновика пришёл не задание, null — задания нет.
+  const make = async (executor, purpose, task, status = 'done') => {
+    const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Сводка 2.329' })).body.order;
+    const upload = (name, body) => U.owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), { raw: true,
+      headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': 'other' } });
+    if (task === 'before') assert.equal((await upload('Задание банка.txt', 'ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира')).status, 201);
+    await S.sql`insert into result_drafts (order_id, author_id, source, body, at) values (${o.id}, ${executor}, 'edit', 'Черновик', now() - interval '1 hour')`;
+    if (task === 'after') assert.equal((await upload('Задание банка.txt', 'ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира')).status, 201);
+    if (task === 'note') assert.equal((await upload('Фото фасада.txt', 'фасад дома')).status, 201);
+    if (task === 'before') await S.sql`update documents set created_at = now() - interval '2 hours' where order_id = ${o.id}`;
+    await S.sql`update orders set status = ${status}, deadline = ${addDays(todayMsk(), 10)}, fields = fields || ${JSON.stringify({ purpose })}::jsonb, executor_user_id = ${executor} where id = ${o.id}`;
+    if (status === 'done') await S.sql`insert into order_status_history (order_id, from_status, to_status, side) values (${o.id}, 'review', 'done', 'dispatcher')`;
+  };
+  // a: для банка — после черновика, до черновика, без задания, не задание после черновика; в работе — не в счёт; для суда — не в счёт.
+  await make(ex.a.user.id, 'bank', 'after');
+  await make(ex.a.user.id, 'bank', 'before');
+  await make(ex.a.user.id, 'bank', null);
+  await make(ex.a.user.id, 'bank', 'note');
+  await make(ex.a.user.id, 'bank', 'after', 'in_work');
+  await make(ex.a.user.id, 'court', 'after');
+  // b: дел для банка нет.
+  await make(ex.b.user.id, 'court', 'after');
+  const r = (await head.req('GET', `/api/orgs/${org.id}/report`)).body.report;
+  const x = (e) => [e.bank_cases, e.bank_after, e.bank_after_pct];
+  assert.deepEqual(x(r.experts.find((y) => y.user_id === ex.a.user.id)), [4, 1, 25]);
+  assert.deepEqual(x(r.experts.find((y) => y.user_id === ex.b.user.id)), [0, 0, null]);
+  assert.deepEqual(x(r.total), [4, 1, 25]);
+  const csv = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv`, undefined, { binary: true })).body.toString('utf8');
+  assert.ok(csv.includes('\r\nДела для банка;Сдано;Задание на оценку пришло после черновика;Доля, %\r\n'
+    + 'Эксперт Банковский;4;1;25\r\nИтого;4;1;25\r\n'), csv);
+  const prev = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv&month=${r.prev_month ?? '2026-01'}`, undefined, { binary: true })).body.toString('utf8');
+  assert.ok(!prev.includes('Дела для банка;'), prev);
 });
 
 test('сводка за месяц (2.135, 2.144): сдано по услугам и средний срок — у организации, у эксперта и в таблице для Excel', async () => {
