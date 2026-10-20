@@ -108,7 +108,8 @@ export const TASK_ITEMS = ['bank_task'];
 export const TASK_MOVE = 'task_move';
 const ASSIGNMENT_TEXT = /задани\S*\s+на\s+(?:проведение\s+)?оценк/iu;
 export async function assignmentDocs(sql, storage, order) {
-  const docs = await sql`select d.*, exists (select 1 from doc_requests r where r.document_id = d.id and r.item_id = any(${[...TASK_ITEMS, TASK_MOVE]}::text[]) and r.cancelled_at is null) as asked
+  const docs = await sql`select d.*, exists (select 1 from doc_requests r where r.document_id = d.id and r.item_id = any(${[...TASK_ITEMS, TASK_MOVE]}::text[]) and r.cancelled_at is null) as asked,
+                                exists (select 1 from doc_requests r where r.document_id = d.id and r.item_id = ${TASK_MOVE} and r.cancelled_at is null) as moved
                          from documents d where d.order_id = ${order.id} and d.kind in ('basis', 'other') and d.deleted_at is null
                          order by d.created_at desc limit 20`;
   const out = [];
@@ -119,7 +120,7 @@ export async function assignmentDocs(sql, storage, order) {
     const got = buf ? await extractPages(buf, d.filename, d.mime) : null;
     if (!got) continue;
     const head = got.pages.slice(0, 2).join('\n');
-    if (d.kind === 'basis' || d.asked || ASSIGNMENT_TEXT.test(head) || /задани|письм/iu.test(d.filename)) out.push({ id: d.id, name: d.filename, pages: got.pages, asked: d.asked });
+    if (d.kind === 'basis' || d.asked || ASSIGNMENT_TEXT.test(head) || /задани|письм/iu.test(d.filename)) out.push({ id: d.id, name: d.filename, pages: got.pages, asked: d.asked, moved: d.moved });
   }
   return out;
 }

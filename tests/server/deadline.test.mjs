@@ -575,3 +575,48 @@ test('2.331: утренняя сводка эксперта — «приложи
   assert.equal(a.task_moved, base.task_moved);
   assert.equal(a.task_due, base.task_due);
 });
+
+test('2.333: «Что сказано в задании на оценку» — пришло письмо о переносе срока: строка с новым сроком, прежним и файлом', async () => {
+  const o = await inWork('Квартира: письмо о переносе в задании', 5);
+  const ruD = (s) => s.split('-').reverse().join('.');
+  const put = (body, name, kind = 'basis') => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': kind } });
+  const task = async (who = spec) => (await who.req('GET', `/api/orders/${o.id}/task`)).body;
+  await S.sql`update orders set fields = fields || '{"purpose":"bank"}'::jsonb where id = ${o.id}`;
+  const due = addDays(today, 5), late = addDays(today, 12);
+  assert.equal((await put(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(due)}`, 'Задание банка.txt')).status, 201);
+  // Одно задание — строки о переносе нет.
+  assert.ok(!(await task()).items.some((x) => x.id === 'moved'));
+  // Перенос согласован, письмо попросили и оно пришло к пункту — строка с новым сроком, прежним и файлом письма.
+  const r = await ask(spec, o, { new_deadline: late, reason: 'Банк согласовал перенос устно' });
+  assert.equal((await decide(dispatcher, o, r.body.open.id, { approve: true })).status, 200);
+  const q = await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { task_move: true });
+  const req = q.body.requests.find((x) => x.item_id === 'task_move');
+  const doc = await put(`Уважаемые коллеги! Сообщаем, что срок составления отчёта продлён: не позднее ${ruD(late)}`, 'Скан 001.txt', 'other');
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/doc-requests/${req.id}/attach`, { document_id: doc.body.document.id })).status, 200);
+  const t = await task();
+  const m = t.items.find((x) => x.id === 'moved');
+  assert.deepEqual({ label: m.label, v: m.v, was: m.was, name: m.name, page: m.page, doc_id: m.doc_id },
+    { label: 'Срок перенесён письмом', v: `на ${ruD(late)}`, was: ruD(due), name: 'Скан 001.txt', page: 1, doc_id: doc.body.document.id });
+  assert.equal(t.items.find((x) => x.id === 'due').v, `не позднее ${ruD(late)}`);
+  // Чужой — 404.
+  assert.equal((await stranger.req('GET', `/api/orders/${o.id}/task`)).status, 404);
+});
+
+test('2.333: письмо о переносе без просьбы — второй файл задания с более поздним сроком; письмо без срока — строки нет', async () => {
+  const o = await inWork('Квартира: второе письмо со сроком', 5);
+  const ruD = (s) => s.split('-').reverse().join('.');
+  const put = (body, name, kind = 'basis') => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': kind } });
+  const moved = async () => (await spec.req('GET', `/api/orders/${o.id}/task`)).body.items.find((x) => x.id === 'moved') ?? null;
+  await S.sql`update orders set fields = fields || '{"purpose":"bank"}'::jsonb where id = ${o.id}`;
+  const due = addDays(today, 5);
+  assert.equal((await put(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(due)}`, 'Задание банка.txt')).status, 201);
+  assert.equal((await put('Письмо банка: просим ускорить работу.', 'Письмо банка.txt', 'other')).status, 201);
+  assert.equal(await moved(), null);
+  assert.equal((await put(`Письмо банка. Срок составления отчёта: не позднее ${ruD(addDays(today, 9))}`, 'Письмо банка 2.txt', 'other')).status, 201);
+  const m = await moved();
+  assert.equal(m.v, `на ${ruD(addDays(today, 9))}`);
+  assert.equal(m.was, ruD(due));
+  assert.equal(m.name, 'Письмо банка 2.txt');
+});
