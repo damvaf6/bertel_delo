@@ -22,7 +22,7 @@ function render(r) {
   ctx.open = r.open;
   setNext({ deadline: { deadline: r.deadline, open: !!r.open } });
   const box = $('deadline-box');
-  box.classList.toggle('hidden', !(r.can_request || r.requests.length));
+  box.classList.toggle('hidden', !(r.can_request || r.requests.length || r.history));
   if (box.classList.contains('hidden')) return;
   const o = r.open;
   $('deadline-lead').textContent = o ? `Сейчас срок — ${dayRu(r.deadline)} Исполнитель просит перенести его; пока нет ответа, действует прежний.`
@@ -56,6 +56,7 @@ function render(r) {
       say($('deadline-msg'), p.new_deadline ? 'Причина и новый срок в полях — поправьте и отправьте' : 'Причина в поле — выберите новый срок и отправьте', 'ok');
     },
   }, p.label)));
+  renderHistory(r.history);
   const past = r.requests.filter((x) => x.outcome);
   $('deadline-history').replaceChildren(...past.map((x) => {
     const [word, kind] = OUTCOME[x.outcome];
@@ -63,6 +64,35 @@ function render(r) {
       el('div', {},
         el('div', { class: 'name' }, el('span', { text: `${dayRu(x.old_deadline)} → ${dayRu(x.new_deadline)} ` }), el('span', { class: `badge ${kind}`, text: word })),
         el('div', { class: 'muted', text: [`причина: ${x.reason}`, x.answer ? `ответ: ${x.answer}` : null, x.decided_at ? whenRu(x.decided_at) : null].filter(Boolean).join(' · ') })));
+  }));
+}
+
+// История сроков (2.337): исполнителю одним списком по времени — срок при заказе, срок по заданию на оценку, просьбы о
+// переносе с ответом, просьба письма о переносе и письма с новым сроком по заданию.
+const dayShort = (s) => new Date(s).toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long' });
+function historyLine(x) {
+  if (x.kind === 'start') return [`Срок дела при заказе — ${dayRu(x.day)}`, ''];
+  if (x.kind === 'task') return [`Срок ${x.by} — не позднее ${dayRu(x.day)}`, `файл «${x.name}»`];
+  if (x.kind === 'letter') return [`Письмо о переносе: срок ${x.day > x.was ? 'перенесён' : 'изменён'} с ${dayRu(x.was)} на ${dayRu(x.day)}`, `файл «${x.name}»`];
+  if (x.kind === 'ask') return ['Попросили у заказчика письмо о переносе срока', x.came_at ? `заказчик приложил документ ${whenRu(x.came_at)}` : 'документа пока нет'];
+  const who = x.org_name ? `Организация «${x.org_name}» попросила` : 'Попросили';
+  const [word] = OUTCOME[x.outcome] ?? ['ждёт ответа диспетчера'];
+  const res = x.outcome === 'approved' ? `диспетчер согласился ${whenRu(x.decided_at)}`
+    : x.outcome === 'declined' ? `диспетчер отказал ${whenRu(x.decided_at)}${x.answer ? `: ${x.answer}` : ''}`
+      : x.outcome ? `просьба ${word}` : word;
+  return [`${who} перенести срок с ${dayRu(x.old_deadline)} на ${dayRu(x.new_deadline)}`, [`причина: ${x.reason}`, res].join(' · ')];
+}
+function renderHistory(h) {
+  const box = $('deadline-timeline');
+  box.classList.toggle('hidden', !h);
+  $('deadline-timeline-list').replaceChildren(...(h ?? []).map((x) => {
+    const [main, sub] = historyLine(x);
+    const kind = x.kind === 'request' ? (OUTCOME[x.outcome]?.[1] ?? '') : '';
+    return el('li', { 'data-history': x.kind },
+      el('div', {},
+        el('div', { class: 'name' }, el('span', { class: 'muted', text: `${dayShort(x.at)} · ` }), el('span', { text: `${main} ` }),
+          ...(kind ? [el('span', { class: `badge ${kind}`, text: OUTCOME[x.outcome][0] })] : [])),
+        ...(sub ? [el('div', { class: 'muted', text: sub })] : [])));
   }));
 }
 
