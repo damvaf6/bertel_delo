@@ -31,7 +31,7 @@ import { orderSignatures, orgReturns, returnEgrn, signWait } from './sign-ops.mj
 import { executorSignOrg } from '../access/policy.mjs';
 import { dossierAlerts, loadDossier } from '../dossier/dossier.mjs';
 import { expiringLinks, incompleteInspections, reshotAll, silentLinks } from './inspect-ops.mjs';
-import { answeredExtends, openExtends, orgExtends, taskMoved } from './deadline-ops.mjs';
+import { answeredExtends, openExtends, orgExtends, taskMoved, taskMovedOrg } from './deadline-ops.mjs';
 import { openHandovers } from './handover-ops.mjs';
 import { dueNotes } from './note-ops.mjs';
 import { caseMoves, caseRemind, transferTargets } from './org-ops.mjs';
@@ -568,7 +568,9 @@ export async function orgPart(sql, org, registry, today, { actorId = null, stora
       toSign.push(view(o, { files: waiting, reminded_at: w?.reminded_at ?? null, since: w?.since ?? null,
         long: !!w?.since && Date.now() - new Date(w.since).getTime() >= SIGN_LONG_DAYS * 86400_000, egrn_kept: kept, order_diff: orderDiff,
         // Срок по заданию на оценку прошёл или сегодня (2.308) — красным.
-        task_due: await taskDueSign(sql, storage, registry, ord, today) }));
+        task_due: await taskDueSign(sql, storage, registry, ord, today),
+        // Перенос согласован позже срока по заданию на оценку, а письма о переносе нет (2.334, как в «Делах экспертов» 2.332).
+        task_moved: await taskMovedOrg(sql, storage, registry, ord) }));
     }
     const open = returns.filter((r) => r.open);
     // Сколько пунктов замечания эксперт уже отметил исправленными (2.160 — как в «Делах экспертов», 2.151).

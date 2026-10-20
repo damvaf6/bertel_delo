@@ -5,7 +5,7 @@ import { api, el, say, formatSize } from '/common.js';
 import { signatureLines, uploadSignatureButton, SIGN_CONFIRM, UPLOAD_HINT, SIGN_HOWTO, memo } from '/sign.js';
 import { dayRu } from '/order.js';
 import { loadOrgCases } from '/orgcases.js';
-import { taskDueSignText } from '/today.js';
+import { taskDueSignText, taskMovedText } from '/today.js';
 
 const $ = (id) => document.getElementById(id);
 let current = null;
@@ -68,7 +68,10 @@ function renderSign() {
     // Сколько файлы ждут подписи организации (2.148).
     ...(it.waiting_since && waiting(it) ? [el('div', { class: 'sig-state warn', 'data-sig': 'since', text: `Ждёт Вашей подписи ${waitedDays(it.waiting_since)} — эксперт подписал ${new Date(it.waiting_since).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}` })] : []),
     // Срок по заданию на оценку прошёл или сегодня (2.308) — красным, как в «Сегодня».
-    ...(it.task_due && waiting(it) ? [el('div', { class: 'overdue', 'data-sig': 'task-due', text: taskDueSignText(it.task_due) })] : []),
+    ...(it.task_due && !it.task_moved && waiting(it) ? [el('div', { class: 'overdue', 'data-sig': 'task-due', text: taskDueSignText(it.task_due) })] : []),
+    // 2.334: перенос согласован позже срока по заданию на оценку, а письма банка о переносе нет (как в «Делах экспертов», 2.332):
+    // до подписи — банк ждёт отчёт к прежнему дню. Подпись не держит.
+    ...(it.task_moved && waiting(it) ? [el('div', { class: 'overdue', 'data-sig': 'task-moved', text: `До подписи: ${taskMovedText(it.task_moved)}` })] : []),
     // Эксперт напоминал о подписи (2.99) — пока файлы ждут подписи организации.
     ...(it.reminded_at && waiting(it) ? [el('div', { class: 'sig-state', 'data-sig': 'reminded', text: `Эксперт напомнил о подписи ${new Date(it.reminded_at).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}` })] : [])];
   const readyOf = (it) => it.documents.filter((d) => d.signatures.expert && !d.signatures.org);

@@ -61,6 +61,15 @@ function taskDueWhen(d, today) {
 export const taskDueSignText = (d) => `${d.overdue ? `Срок ${d.by} прошёл — ${dayRu(d.day)}` : `Срок ${d.by} сегодня — подпишите сегодня`}`
   + ` («${d.name}», стр. ${d.page})`;
 
+// Руководителю (2.332 — «Дела экспертов», 2.334 — подпись и «Сегодня»): «Письма банка о переносе срока нет: срок дела
+// перенесён на …, а по заданию на оценку отчёт ждут к …» и просил ли эксперт письмо у заказчика.
+export function taskMovedText(m) {
+  const dayRu = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+  const doc = m.doc.replace(/^Письмо/, 'Письма').replace(/^Определение/, 'Определения');
+  return `${doc} о переносе срока нет: срок дела перенесён на ${dayRu(m.deadline)}, а ${m.by} отчёт ждут к `
+    + `${dayRu(m.day)}${m.asked ? ` · эксперт попросил письмо у заказчика ${since(m.asked)}` : ' · эксперт письмо у заказчика ещё не просил'}`;
+}
+
 // Группа строк: заголовок с числом и строки-кнопки. Строка может быть { text, class } — например, красная (2.161).
 // extra(x) — кнопки под строкой (2.166: «Попросить перенести срок» у просроченного дела).
 function group(id, title, items, line, go, extra = () => []) {
@@ -423,7 +432,9 @@ export async function loadToday() {
         // В ИИ-проверке эксперта остались расхождения с заявкой или заданием на оценку (2.286, как отбор 2.276).
         ...(x.order_diff ? [{ class: 'overdue', role: 'order-diff', text: `расхождения с заявкой или заданием на оценку: ${x.order_diff} ${x.order_diff === 1 ? 'пункт' : x.order_diff < 5 ? 'пункта' : 'пунктов'}` }] : []),
         // Срок по заданию на оценку прошёл или сегодня (2.308) — красным.
-        ...(x.task_due ? [{ class: 'overdue', role: 'task-due-sign', text: taskDueSignText(x.task_due) }] : [])], toOrg('sign')),
+        ...(x.task_due && !x.task_moved ? [{ class: 'overdue', role: 'task-due-sign', text: taskDueSignText(x.task_due) }] : []),
+        // Перенос согласован позже срока по заданию, а письма о переносе нет (2.334) — вместо строки срока по заданию.
+        ...(x.task_moved ? [{ class: 'overdue', role: 'task-moved-sign', text: `До подписи: ${taskMovedText(x.task_moved)}` }] : [])], toOrg('sign')),
       ...group(`org-pending-${g.id}`, 'Ждут назначения эксперта', g.pending, caseLine, toOrg('pending')),
       ...group(`org-hot-${g.id}`, 'Горит срок у экспертов', g.hot.filter((x) => !risky.has(x.order_ref)), caseLine, toOrg('case')),
       // Когда вернули и сколько пунктов эксперт уже отметил исправленными (2.160 — как в «Делах экспертов»);

@@ -12,7 +12,7 @@ import { orderSplit } from '../money/money.mjs';
 import { STATUS_NAME, addDays, isOverdue, todayMsk, weekEnd } from '../orders/workflow.mjs';
 import { monthRu, orgMonthDoneCases, orgMonthReport, reportCsv, reportMonth } from '../orgs/report.mjs';
 import { buildOrgMonthArchive } from './case-ops.mjs';
-import { openExtends, orgExtends, taskMoved } from './deadline-ops.mjs';
+import { openExtends, orgExtends, taskMovedOrg } from './deadline-ops.mjs';
 import { extendSuggest, openHandovers } from './handover-ops.mjs';
 import { orgSchedule, taskDues } from '../orders/schedule.mjs';
 import { expiringLinks, incompleteInspections } from './inspect-ops.mjs';
@@ -308,9 +308,8 @@ export function orgOps() {
         // ждёт отчёт к прежнему дню — руководителю пометка и отбор. Без названия файла задания; просили ли письмо у заказчика.
         const moved = new Map();
         for (const o of rows.filter((x) => ['in_work', 'review'].includes(x.status))) {
-          const m = await taskMoved(sql, providers.storage, registry, o);
-          if (m) moved.set(o.id, { day: m.day, by: m.by, who: m.who, doc: m.doc, moved_from: m.moved_from, deadline: m.deadline,
-            asked: m.asked?.at ?? null });
+          const m = await taskMovedOrg(sql, providers.storage, registry, o);
+          if (m) moved.set(o.id, m);
         }
         const cases = rows.map((o) => ({
           ...(waits.get(o.id) ?? { sign_wait: 0, sign_since: null, sign_reminded_at: null, returned_open: false, returned: null }),

@@ -14878,6 +14878,66 @@ test('2.332: дела экспертов — перенос позже срок�
   for (const p of [hp, cp]) await p.context().close();
 });
 
+// 2.334: дело на подписи организации — перенос срока согласован позже срока по заданию на оценку, а письма банка о переносе
+// нет: руководителю до подписи красным в «Сегодня» и в «Подписи организации» (как в «Делах экспертов», 2.332).
+test('2.334: руководитель — до подписи: перенос позже срока по заданию, а письма нет', async ({ browser, baseURL }) => {
+  test.setTimeout(120_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), ep = await ctx(), hp = await ctx();
+  const customer = await signIn(cp, '+79990033401');
+  const expert = await signIn(ep, '+79990033402'), head = await signIn(hp, '+79990033403');
+  const long = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+  const { orgId, id } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Подпись без письма ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Переносова Ирина' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Перенесли, письма нет', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Садовая ул., д. 14, кв. 2"}') returning id`,
+    [customer.id, expert.id, inDays(12)]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [o.id, expert.id]);
+    await c.query(`insert into deadline_requests (order_id, requested_by, old_deadline, new_deadline, reason, outcome, decided_at)
+      values ($1, $2, $3::date, $4::date, 'Банк согласовал перенос устно', 'approved', now())`, [o.id, expert.id, inDays(5), inDays(12)]);
+    return { orgId: org.id, id: o.id };
+  });
+  const ruD = (s) => s.split('-').reverse().join('.');
+  expect((await cp.request.post(`/api/orders/${id}/documents`, {
+    data: Buffer.from(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(inDays(2))}`),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание банка Переносовой.txt'), 'x-doc-kind': 'basis' },
+  })).status()).toBe(201);
+  const up = await ep.request.post(`/api/orders/${id}/results`, { data: Buffer.from('%PDF-1.4 moved'), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Отчёт.pdf') } });
+  expect(up.status()).toBe(201);
+  expect((await ep.request.post(`/api/documents/${(await up.json()).document.id}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  const text = `До подписи: Письма банка о переносе срока нет: срок дела перенесён на ${long(inDays(12))}, а по заданию на оценку `
+    + `отчёт ждут к ${long(inDays(2))} · эксперт письмо у заказчика ещё не просил`;
+  await hp.goto('/kabinet');
+  const line = hp.locator(`#today-box li[data-today-item="org-sign-${orgId}"] [data-role="task-moved-sign"]`);
+  await expect(line).toHaveText(text);
+  await expect(line).toHaveClass(/overdue/);
+  await line.scrollIntoViewIfNeeded();
+  await shot(hp, '54y5-rukovoditel-segodnya-perenos-bez-pisma');
+  await hp.goto(`/kabinet#org=${orgId}&to=sign`);
+  const item = hp.locator(`#org-sign > li[data-item="№ ${id.slice(0, 8).toUpperCase()}"]`);
+  await expect(item.locator('[data-sig="task-moved"]')).toHaveText(text);
+  await expect(item.locator('[data-sig="task-due"]')).toHaveCount(0);
+  await expect(hp.locator('#org-sign')).not.toContainText('Переносовой');
+  const w = await hp.evaluate(() => document.documentElement.scrollWidth);
+  expect(w).toBeLessThanOrEqual(412);
+  await item.scrollIntoViewIfNeeded();
+  await shot(hp, '54y6-rukovoditel-podpis-perenos-bez-pisma');
+  // Письмо банка с новым сроком пришло — пометки нет.
+  expect((await cp.request.post(`/api/orders/${id}/documents`, {
+    data: Buffer.from(`Сообщаем, что срок составления отчёта продлён: не позднее ${ruD(inDays(12))}`),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Письмо банка.txt'), 'x-doc-kind': 'basis' },
+  })).status()).toBe(201);
+  await hp.reload();
+  await expect(item).toBeVisible();
+  await expect(item.locator('[data-sig="task-moved"]')).toHaveCount(0);
+  for (const p of [ep, cp, hp]) await p.context().close();
+});
+
 // 2.327: эксперт просит передать дело, а срок по заданию на оценку раньше срока дела — в «Сегодня» руководителя у просьбы
 // «сдать по заданию на оценку — к …»; передать некому, а новый срок позже срока по заданию — предупреждение про письмо банка.
 test('2.327: просьба передать дело — срок по заданию на оценку', async ({ browser, baseURL }) => {
