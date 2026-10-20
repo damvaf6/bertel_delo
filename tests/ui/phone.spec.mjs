@@ -14771,6 +14771,64 @@ test('2.325: дела экспертов — отбор «Срок по зада
   for (const p of [hp, cp]) await p.context().close();
 });
 
+// 2.332: «Дела экспертов» — перенос срока согласован позже срока по заданию на оценку, а письма банка о переносе нет: у дела
+// красная строка вместо «Сдать по заданию», отбор «Перенос позже срока по заданию — нет письма»; без названия файла задания.
+test('2.332: дела экспертов — перенос позже срока по заданию, а письма нет', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const hp = await ctx(), cp = await ctx();
+  const customer = await signIn(cp, '+79990033201');
+  const head = await signIn(hp, '+79990033202');
+  const expert = await signIn(await ctx(), '+79990033203');
+  const ru = (iso) => iso.split('-').reverse().join('.');
+  const long = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+  const { orgId, ids } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Перенос без письма ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Переносова Ольга' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const out = [];
+    for (const t of ['Перенесли без письма', 'По заданию нескоро']) {
+      const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+        values ('expertise', 'realty', $1, $2, $3, 'in_work', $4::date, 1500000, now(),
+                '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Садовая ул., д. 12, кв. 4"}') returning id`,
+      [t, customer.id, expert.id, inDays(12)]);
+      out.push(o.id);
+    }
+    await c.query(`insert into deadline_requests (order_id, requested_by, old_deadline, new_deadline, reason, outcome, decided_at)
+      values ($1, $2, $3::date, $4::date, 'Банк согласовал перенос устно', 'approved', now())`, [out[0], expert.id, inDays(2), inDays(12)]);
+    return { orgId: org.id, ids: out };
+  });
+  for (const [id, due] of [[ids[0], inDays(2)], [ids[1], inDays(20)]]) {
+    expect((await cp.request.post(`/api/orders/${id}/documents`, {
+      data: Buffer.from(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ru(due)}`),
+      headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание банка Переносовой.txt'), 'x-doc-kind': 'basis' },
+    })).status()).toBe(201);
+  }
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const rows = hp.locator('#org-cases > li[data-case]');
+  await expect(rows).toHaveCount(2);
+  const ref = (id) => `№ ${id.slice(0, 8).toUpperCase()}`;
+  const moved = hp.locator(`#org-cases li[data-case="${ref(ids[0])}"] [data-role="task-moved"]`);
+  await expect(moved).toHaveText(`Письма банка о переносе срока нет: срок дела перенесён на ${long(inDays(12))}, а по заданию на оценку `
+    + `отчёт ждут к ${long(inDays(2))} · эксперт письмо у заказчика ещё не просил`);
+  await expect(moved).toHaveClass(/overdue/);
+  await expect(hp.locator(`#org-cases li[data-case="${ref(ids[0])}"] [data-role="task-due"]`)).toHaveCount(0);
+  await expect(hp.locator(`#org-cases li[data-case="${ref(ids[1])}"] [data-role="task-moved"]`)).toHaveCount(0);
+  const chip = hp.locator('[data-filter="task_moved"]');
+  await expect(chip).toHaveText('Перенос позже срока по заданию — нет письма · 1');
+  await expect(hp.locator('[data-filter="task_week"]')).toHaveCount(0);
+  await chip.click();
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first()).toHaveAttribute('data-case', ref(ids[0]));
+  await expect(hp.locator('#org-cases')).not.toContainText('Переносовой');
+  const w = await hp.evaluate(() => document.documentElement.scrollWidth);
+  expect(w).toBeLessThanOrEqual(412);
+  await hp.locator('#org-cases-filter').scrollIntoViewIfNeeded();
+  await shot(hp, 'd46-dela-ekspertov-perenos-bez-pisma');
+  for (const p of [hp, cp]) await p.context().close();
+});
+
 // 2.327: эксперт просит передать дело, а срок по заданию на оценку раньше срока дела — в «Сегодня» руководителя у просьбы
 // «сдать по заданию на оценку — к …»; передать некому, а новый срок позже срока по заданию — предупреждение про письмо банка.
 test('2.327: просьба передать дело — срок по заданию на оценку', async ({ browser, baseURL }) => {
