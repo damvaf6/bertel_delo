@@ -18,7 +18,7 @@ import { orgSchedule, taskDues } from '../orders/schedule.mjs';
 import { expiringLinks, incompleteInspections } from './inspect-ops.mjs';
 import { docsWaiting } from './docreq-ops.mjs';
 import { taskDueFor } from './draft-ops.mjs';
-import { assignmentDocs } from './ai-ops.mjs';
+import { assignmentDocs, TASK_MOVE } from './ai-ops.mjs';
 
 export const INVITE_TTL_DAYS = 14;
 export const LIMITS = {
@@ -431,12 +431,14 @@ export function orgOps() {
         // 2.323: срок по заданию на оценку — только у дел, где ИИ-проверка сверяет сроки (правило report_dates).
         const taskDue = async (o) => (providers.storage && registry.checks(o.module, o.service).some((r) => (r.auto ?? []).includes('report_dates'))
           ? taskDueFor(registry, o, await assignmentDocs(sql, providers.storage, o))?.day ?? null : null);
-        // 2.329: задание на оценку в деле для банка приложено позже первого черновика (как в «Сегодня», 2.295).
+        // 2.329: задание на оценку в деле для банка приложено позже первого черновика (как в «Сегодня», 2.295). Письмо банка
+        // о переносе срока, запрошенное после согласованного переноса (2.326, пункт task_move), — не задание (прогон 2.330).
         const taskAfter = async (o) => {
           const t = await sql.one`select min(at) as first from result_drafts where order_id = ${o.id}`;
           if (!t?.first || !providers.storage) return false;
-          const late = await sql`select id from documents where order_id = ${o.id} and kind in ('basis', 'other') and deleted_at is null
-                                 and created_at > ${t.first}`;
+          const late = await sql`select d.id from documents d where d.order_id = ${o.id} and d.kind in ('basis', 'other') and d.deleted_at is null
+                                 and d.created_at > ${t.first} and not exists (select 1 from doc_requests r where r.document_id = d.id
+                                 and r.item_id = ${TASK_MOVE} and r.cancelled_at is null)`;
           return late.length > 0 && (await assignmentDocs(sql, providers.storage, o)).some((d) => late.some((l) => l.id === d.id));
         };
         const report = await orgMonthReport(sql, org.id, reportMonth(query.month), { registry, taskDue, taskAfter });
