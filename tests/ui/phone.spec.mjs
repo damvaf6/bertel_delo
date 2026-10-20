@@ -15426,3 +15426,122 @@ test('прогон 2.330: эксперт и руководитель по пач
   await shot(hp, 'e16-progon18-svodka-za-mesyac');
   for (const p of [ap, bp, hp, cp, dp]) await p.context().close();
 });
+
+// Прогон 2.340: одно дело организации для банка по пачке 2.331–2.339 — перенос позже срока по заданию, письмо с коротким
+// сроком, затем с согласованным. Исправлено: прежний срок из первого письма — «по прежнему письму было», не «по заданию было».
+test('прогон 2.340: эксперт и руководитель по пачке 2.331–2.339 на одном деле', async ({ browser, baseURL }) => {
+  test.setTimeout(300_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), hp = await ctx(), cp = await ctx(), dp = await ctx();
+  const expert = await signIn(ep, '+79990033021'), head = await signIn(hp, '+79990033022');
+  const customer = await signIn(cp, '+79990033023'), disp = await signIn(dp, '+79990033024');
+  const ru = (iso) => iso.split('-').reverse().join('.');
+  const short = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+  const long = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+  const title = 'Девятнадцатая пачка: квартира';
+  const { orgId, A } = await db(async (c) => {
+    const { rows: [org] } = await c.query('insert into organizations (name) values ($1) returning id', [`ООО «Прогон-19 ${Date.now() % 100000}»`]);
+    await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    await c.query("update users set full_name = 'Девятнадцатова Ольга' where id = $1", [expert.id]);
+    await c.query(`insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now() - interval '1 year'),
+                   ($1, $3, 'member', now() - interval '1 year')`, [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    await c.query("insert into morning_digests (user_id, day) select unnest($1::uuid[]), (now() at time zone 'Europe/Moscow')::date on conflict do nothing",
+      [[expert.id, head.id]]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', $1, $2, $3, 'in_work', $4::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Семидесятая ул., д. 70, кв. 7","area":"52"}') returning id`,
+    [title, customer.id, expert.id, inDays(3)]);
+    await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now() - interval '3 days')", [o.id, expert.id]);
+    return { orgId: org.id, A: o.id };
+  });
+  const ref = `№ ${A.slice(0, 8).toUpperCase()}`;
+  const put = async (body, name, kind) => {
+    const r = await cp.request.post(`/api/orders/${A}/documents`, {
+      data: Buffer.from(body), headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': kind } });
+    expect(r.status()).toBe(201);
+    return (await r.json()).document.id;
+  };
+  const attach = async (doc) => {
+    const list = await (await cp.request.get(`/api/orders/${A}/doc-requests`, { headers: H })).json();
+    const req = list.requests.find((r) => r.item_id === 'task_move' && !r.fulfilled_at);
+    expect((await cp.request.post(`/api/orders/${A}/doc-requests/${req.id}/attach`, { data: { document_id: doc }, headers: H })).status()).toBe(200);
+  };
+  await put(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ru(inDays(3))}`, 'Задание банка.txt', 'basis');
+  // Эксперт просит перенести срок на 12 дней, диспетчер соглашается: новый срок позже срока по заданию (2.326).
+  const ext = await (await ep.request.post(`/api/orders/${A}/deadline-requests`, {
+    data: { new_deadline: inDays(12), reason: 'Банк согласовал перенос устно', from: inDays(3) }, headers: H })).json();
+  expect((await dp.request.post(`/api/orders/${A}/deadline-requests/${ext.open.id}/decide`, { data: { approve: true }, headers: H })).status()).toBe(200);
+
+  // Эксперт: «Сегодня» — «Приложите письмо о переносе», без строки «срок по заданию близко» (2.331).
+  await ep.goto('/kabinet');
+  const moved = ep.locator('#today-box li[data-today-item="task-moved"]').filter({ hasText: title });
+  await expect(moved.locator('[data-role="task-moved-why"]')).toHaveText(`Срок перенесён на ${short(inDays(12))}, а по заданию на оценку отчёт ждут к ${short(inDays(3))}`);
+  await expect(ep.locator('li[data-today-item="task-due"]').filter({ hasText: title })).toHaveCount(0);
+  expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await moved.scrollIntoViewIfNeeded();
+  await shot(ep, 'f10-progon19-ekspert-segodnya-pismo');
+
+  // Руководитель: «Дела экспертов» — «письма нет», отбор (2.332).
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const chip = hp.locator('[data-filter="task_moved"]');
+  await expect(chip).toHaveText('Перенос позже срока по заданию — нет письма · 1');
+  await chip.click();
+  const mark = hp.locator(`#org-cases li[data-case="${ref}"] [data-role="task-moved"]`);
+  await expect(mark).toContainText(`Письма банка о переносе срока нет: срок дела перенесён на ${long(inDays(12))}`);
+  await expect(mark).toContainText('эксперт письмо у заказчика ещё не просил');
+  await hp.locator('#org-cases-filter').scrollIntoViewIfNeeded();
+  await shot(hp, 'f11-progon19-dela-ekspertov-net-pisma');
+
+  // Эксперт просит письмо, банк присылает письмо с коротким сроком — «Срок» в деле (2.335).
+  await moved.locator('button.open').click();
+  await ep.locator('#deadline-task-moved-ask').click();
+  await expect(ep.locator('#deadline-msg')).toHaveText('Запрошено — заказчику отправлено уведомление');
+  await attach(await put(`Банк сообщает: срок составления отчёта продлён, не позднее ${ru(inDays(7))}`, 'Письмо банка о переносе.txt', 'other'));
+  await ep.reload();
+  await expect(ep.locator('#deadline-task-moved')).toHaveAttribute('data-letter', 'short');
+  await expect(ep.locator('#deadline-task-moved-text')).toContainText(`но срок в нём — ${long(inDays(7))} (по заданию было — ${long(inDays(3))})`);
+  await ep.locator('#deadline-task-moved').scrollIntoViewIfNeeded();
+  await shot(ep, 'f12-progon19-srok-pismo-korotkoe');
+  // Руководитель видит то же — «письмо пришло, но срок в нём …», дело остаётся в отборе.
+  await hp.reload();
+  await expect(chip).toHaveText('Перенос позже срока по заданию — нет письма · 1');
+  await expect(hp.locator(`#org-cases li[data-case="${ref}"] [data-role="task-moved"]`))
+    .toHaveText(`Письмо банка о переносе пришло, но срок в нём — ${long(inDays(7))}, а срок дела перенесён на ${long(inDays(12))}`);
+
+  // Эксперт просит письмо с новым сроком; пришло — блок «Что сказано в задании на оценку» (2.333): прежний срок — из
+  // первого письма (исправлено в прогоне 2.340).
+  await ep.locator('#deadline-task-moved-ask').click();
+  await expect(ep.locator('#deadline-msg')).toHaveText('Запрошено — заказчику отправлено уведомление');
+  await attach(await put(`Банк сообщает: срок составления отчёта продлён, не позднее ${ru(inDays(12))}`, 'Письмо банка о переносе 2.txt', 'other'));
+  await ep.reload();
+  await expect(ep.locator('#deadline-task-moved')).toBeHidden();
+  const row = ep.locator('#task-box li[data-task="moved"]');
+  await expect(row).toContainText(`Срок перенесён письмом: на ${ru(inDays(12))}`);
+  await expect(row).toContainText(`по прежнему письму было — ${ru(inDays(7))}`);
+  expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await row.scrollIntoViewIfNeeded();
+  await shot(ep, 'f13-progon19-zadanie-po-prezhnemu-pismu');
+  // «История сроков» (2.337): оба письма по порядку.
+  const hist = ep.locator('#deadline-timeline');
+  await hist.locator('summary').click();
+  const letters = hist.locator('li[data-history="letter"]');
+  await expect(letters).toHaveCount(2);
+  await expect(letters.nth(0)).toContainText(`срок перенесён с ${long(inDays(3))} на ${long(inDays(7))}`);
+  await expect(letters.nth(1)).toContainText(`срок перенесён с ${long(inDays(7))} на ${long(inDays(12))}`);
+  await hist.scrollIntoViewIfNeeded();
+  await shot(ep, 'f14-progon19-istoriya-srokov');
+  // «Мои сроки на две недели» (2.339): у срока дела — срок по письму о переносе тот же день.
+  await ep.goto('/kabinet#specialist');
+  const dl = ep.locator(`#schedule-days > li[data-day="${inDays(12)}"] li[data-schedule-item="deadline"]`).filter({ hasText: title });
+  await expect(dl).toContainText('срок по письму о переносе — тот же день');
+  await dl.scrollIntoViewIfNeeded();
+  await shot(ep, 'f15-progon19-moi-sroki');
+  // У руководителя пометки больше нет, отбора тоже.
+  await hp.reload();
+  await expect(hp.locator('#org-cases')).toBeVisible();
+  await expect(chip).toHaveCount(0);
+  await expect(hp.locator(`#org-cases li[data-case="${ref}"] [data-role="task-moved"]`)).toHaveCount(0);
+  for (const p of [ep, hp, cp, dp]) await p.context().close();
+});
