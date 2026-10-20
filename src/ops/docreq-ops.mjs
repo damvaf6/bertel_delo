@@ -181,7 +181,7 @@ export function docRequestOps() {
           const m = await taskMoved(sql, providers.storage, registry, order);
           if (!m) throw new HttpError(409, 'no_task_move', 'Срок дела не позже срока по заданию на оценку — письмо о переносе не нужно');
           items.push({ item_id: TASK_MOVE, title: `${m.doc} о переносе срока отчёта на ${ruDay(m.deadline)}` });
-          moveNote = `Срок отчёта перенесён на ${ruDay(m.deadline)}, а ${m.by} отчёт ждут к ${ruDay(m.day)}. `
+          moveNote = `${m.letter ? `В приложенном документе срок — ${ruDay(m.day)}, а нужен новый. ` : ''}Срок отчёта перенесён на ${ruDay(m.deadline)}, а ${m.by} отчёт ждут к ${ruDay(m.day)}. `
             + `${m.who === 'Суд' ? 'Нужно определение суда о продлении срока' : m.who === 'Банк' ? 'Попросите банк подтвердить новый срок письмом' : 'Подтвердите новый срок письмом'} — и загрузите сюда.`;
         }
         if (!items.length) throw new HttpError(400, 'nothing_selected', 'Отметьте документы или напишите, какой нужен');

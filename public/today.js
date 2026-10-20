@@ -65,6 +65,8 @@ export const taskDueSignText = (d) => `${d.overdue ? `Срок ${d.by} прош�
 // перенесён на …, а по заданию на оценку отчёт ждут к …» и просил ли эксперт письмо у заказчика.
 export function taskMovedText(m) {
   const dayRu = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+  // 2.335: письмо пришло, а срок в нём раньше согласованного срока дела — не «письма нет».
+  if (m.letter) return `${m.doc} о переносе пришло, но срок в нём — ${dayRu(m.day)}, а срок дела перенесён на ${dayRu(m.deadline)}`;
   const doc = m.doc.replace(/^Письмо/, 'Письма').replace(/^Определение/, 'Определения');
   return `${doc} о переносе срока нет: срок дела перенесён на ${dayRu(m.deadline)}, а ${m.by} отчёт ждут к `
     + `${dayRu(m.day)}${m.asked ? ` · эксперт попросил письмо у заказчика ${since(m.asked)}` : ' · эксперт письмо у заказчика ещё не просил'}`;
@@ -275,7 +277,8 @@ export async function loadToday() {
       // письмо о переносе у заказчика сразу.
       ...group('task-moved', 'Приложите письмо о переносе срока', e.task_moved ?? [], (x) => [x.title,
         { class: 'overdue', role: 'task-moved-why', text: `Срок перенесён на ${dayRu(x.task_moved.deadline)}, а ${x.task_moved.by} отчёт ждут к ${dayRu(x.task_moved.day)}` },
-        x.task_moved.asked?.came ? 'документ от заказчика пришёл, но нового срока в нём не видно' : `нужно: ${x.task_moved.doc.toLowerCase()} о переносе срока`],
+        x.task_moved.letter ? `${x.task_moved.doc.toLowerCase()} о переносе пришло, но срок в нём раньше — сдайте к ${dayRu(x.task_moved.day)} или попросите письмо с новым сроком`
+          : x.task_moved.asked?.came ? 'документ от заказчика пришёл, но нового срока в нём не видно' : `нужно: ${x.task_moved.doc.toLowerCase()} о переносе срока`],
       (x) => { location.hash = `order=${x.id}&to=deadline`; }, taskMoveAsk),
       // Диспетчер ответил на просьбу о переносе срока (2.155) — пока эксперт не открыл «Срок» в деле.
       ...group('extend-answer', 'Ответ на просьбу о переносе срока', e.extend_answer ?? [], (x) => [x.title,

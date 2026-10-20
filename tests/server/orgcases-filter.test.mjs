@@ -216,7 +216,7 @@ test('2.332: дела экспертов — перенос позже срок�
   assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/deadline-requests/${r.body.open.id}/decide`, { approve: true })).status, 200);
   let c = await caseOf(o);
   assert.deepEqual(c.task_moved, { day: due, by: 'по заданию на оценку', who: 'Банк', doc: 'Письмо банка', moved_from: addDays(today, 3),
-    deadline: late, asked: null });
+    deadline: late, asked: null, letter: null });
   // Без задания на оценку перенос — без пометки.
   const r2 = await ask(calm);
   assert.equal((await dispatcher.req('POST', `/api/orders/${calm.id}/deadline-requests/${r2.body.open.id}/decide`, { approve: true })).status, 200);

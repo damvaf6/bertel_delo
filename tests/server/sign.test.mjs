@@ -1248,7 +1248,7 @@ test('2.334: на подписи — перенос позже срока по �
   // Эксперт ещё не подписал — не ждёт подписи организации, пометки нет.
   assert.equal((await signing()).task_moved, null);
   assert.equal((await sign(d, undefined, ex)).status, 201);
-  const want = { day: due, by: 'по заданию на оценку', who: 'Банк', doc: 'Письмо банка', moved_from: addDays(today, 10), deadline: late, asked: null };
+  const want = { day: due, by: 'по заданию на оценку', who: 'Банк', doc: 'Письмо банка', moved_from: addDays(today, 10), deadline: late, asked: null, letter: null };
   assert.deepEqual((await signing()).task_moved, want);
   assert.deepEqual((await toSign()).task_moved, want);
   assert.ok(!JSON.stringify((await signing()).task_moved).includes('Переносовой'));
