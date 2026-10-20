@@ -57,6 +57,8 @@ const FILTERS = [
   { id: 'week', text: 'Срок на этой неделе', test: (c) => c.week },
   // 2.325: срок из задания на оценку (письма банка, определения суда) раньше срока дела и на этой неделе — ближайший первым.
   { id: 'task_week', text: 'Срок по заданию на этой неделе', test: (c) => c.task_week },
+  // 2.332: перенос срока согласован позже срока по заданию на оценку, а письма банка (определения суда) о переносе нет.
+  { id: 'task_moved', text: 'Перенос позже срока по заданию — нет письма', test: (c) => !!c.task_moved },
   // 2.209: срок в дни, когда эксперт не принимает дела; о которых эксперт уже просит передать — в «Просят передать».
   { id: 'away', text: 'Эксперт не принимает дела — срок в эти дни', test: (c) => !!c.away && !c.handover },
   // 2.249: эксперт вернулся после дней «не принимаю дела» за последнюю неделю — что изменилось по его делам, пока его не было.
@@ -162,6 +164,7 @@ function renderCases() {
   if (filter === 'docs') active.sort((a, b) => new Date(a.docs_wait.since) - new Date(b.docs_wait.since));
   if (filter === 'back') active.sort((a, b) => b.back.until.localeCompare(a.back.until) || String(a.deadline).localeCompare(String(b.deadline)));
   if (filter === 'task_week') active.sort((a, b) => a.task_due.day.localeCompare(b.task_due.day));
+  if (filter === 'task_moved') active.sort((a, b) => a.task_moved.day.localeCompare(b.task_moved.day));
   if (filter === 'away') active.sort((a, b) => String(a.deadline).localeCompare(String(b.deadline)));
   if (filter === 'inspect') active.sort((a, b) => (a.inspection.kind === b.inspection.kind
     ? new Date(a.inspection.at) - new Date(b.inspection.at) : a.inspection.kind === 'incomplete' ? -1 : 1));
@@ -214,6 +217,13 @@ function renderFilters(counts) {
   box.replaceChildren(...(used.length ? [chip(null, 'Все'), ...used.map((f) => chip(f.id, `${f.text} · ${counts.get(f.id)}`))] : []));
 }
 
+// 2.332: «Письма банка о переносе срока нет: срок дела перенесён на …, а по заданию на оценку отчёт ждут к …».
+function movedText(m) {
+  const doc = m.doc.replace(/^Письмо/, 'Письма').replace(/^Определение/, 'Определения');
+  return `${doc} о переносе срока нет: срок дела перенесён на ${dayRu(m.deadline)}, а ${m.by} отчёт ждут к `
+    + `${dayRu(m.day)}${m.asked ? ` · эксперт попросил письмо у заказчика ${timeRu(m.asked)}` : ' · эксперт письмо у заказчика ещё не просил'}`;
+}
+
 function caseItem(org, c) {
   const late = c.overdue_days ? ` на ${c.overdue_days} дн.` : '';
   const deadline = c.deadline ? `срок ${dayRu(c.deadline)}${c.overdue ? ` · ПРОСРОЧЕНО${late}` : ''}` : 'срок не указан';
@@ -224,7 +234,9 @@ function caseItem(org, c) {
     el('div', { class: 'muted', text: [c.status === 'awaiting_executor' ? 'Предложено эксперту' : c.status_name, `эксперт: ${c.expert}`,
       c.overdue ? null : deadline].filter(Boolean).join(' · ') }),
     // Срок по заданию на оценку раньше срока дела (2.325): прошёл или через 1–2 дня — красным.
-    ...(c.task_due ? [el('div', { class: c.task_due.hot ? 'overdue' : 'muted', 'data-role': 'task-due',
+    // Перенос согласован позже срока по заданию на оценку, а письма о переносе нет (2.332) — вместо строки «Сдать по заданию».
+    ...(c.task_moved ? [el('div', { class: c.task_moved.asked ? 'muted' : 'overdue', 'data-role': 'task-moved', text: movedText(c.task_moved) })] : []),
+    ...(c.task_due && !c.task_moved ? [el('div', { class: c.task_due.hot ? 'overdue' : 'muted', 'data-role': 'task-due',
       text: `Сдать ${c.task_due.by} — к ${dayRu(c.task_due.day)}${c.task_due.overdue ? ', срок прошёл' : ''} (срок дела позже)` })] : []),
     el('div', { class: 'muted', text: [c.fee_kop != null ? `вознаграждение ${rub(c.fee_kop)}` : 'цена ещё не назначена',
       c.payout ? PAYOUT_RU[c.payout] : null].filter(Boolean).join(' · ') }),

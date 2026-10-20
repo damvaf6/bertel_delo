@@ -193,3 +193,44 @@ test('2.325: дела экспертов — срок по заданию на �
   assert.equal(of(none).task_due, null);
   assert.ok(!JSON.stringify(r.body.cases).includes('Сидоровой'), 'без названия файла задания');
 });
+
+// 2.332: перенос срока согласован позже срока по заданию на оценку, а письма о переносе нет — у дела пометка `task_moved`
+// (без названия файла задания), просили ли письмо у заказчика; пришло письмо с новым сроком — пометки нет.
+test('2.332: дела экспертов — перенос позже срока по заданию, а письма о переносе нет', async () => {
+  const today = todayMsk();
+  const ruD = (s) => s.split('-').reverse().join('.');
+  const o = await taken('Перенос позже задания', 3, a);
+  const calm = await taken('Перенос не позже задания', 3, a);
+  const put = (body, name, kind = 'basis') => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': kind } });
+  await S.sql`update orders set fields = fields || '{"purpose":"bank"}'::jsonb where id = ${o.id}`;
+  const due = addDays(today, 3);
+  assert.equal((await put(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(due)}`, 'Задание банка Переносовой.txt')).status, 201);
+  const caseOf = async (x) => (await head.req('GET', `/api/orgs/${org.id}/cases`)).body.cases.find((c) => c.id === x.id);
+  assert.equal((await caseOf(o)).task_moved, null, 'переноса нет');
+  const late = addDays(today, 12);
+  const ask = (x) => a.req('POST', `/api/orders/${x.id}/deadline-requests`, { new_deadline: late, reason: 'Банк согласовал перенос устно' });
+  const r = await ask(o);
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.equal((await caseOf(o)).task_moved, null, 'просьба ждёт ответа');
+  assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/deadline-requests/${r.body.open.id}/decide`, { approve: true })).status, 200);
+  let c = await caseOf(o);
+  assert.deepEqual(c.task_moved, { day: due, by: 'по заданию на оценку', who: 'Банк', doc: 'Письмо банка', moved_from: addDays(today, 3),
+    deadline: late, asked: null });
+  // Без задания на оценку перенос — без пометки.
+  const r2 = await ask(calm);
+  assert.equal((await dispatcher.req('POST', `/api/orders/${calm.id}/deadline-requests/${r2.body.open.id}/decide`, { approve: true })).status, 200);
+  assert.equal((await caseOf(calm)).task_moved, null);
+  assert.equal(c.task_week, false, 'в отборе «Срок по заданию на этой неделе» не повторяется');
+  assert.ok(!JSON.stringify(c).includes('Переносовой'), 'без названия файла задания');
+  // Эксперт попросил письмо у заказчика — пометка остаётся, видно когда просили.
+  const q = await a.req('POST', `/api/orders/${o.id}/doc-requests`, { task_move: true });
+  assert.equal(q.status, 201, JSON.stringify(q.body));
+  c = await caseOf(o);
+  assert.ok(c.task_moved.asked);
+  // Письмо пришло с новым сроком — пометки нет.
+  const req = q.body.requests.find((x) => x.item_id === 'task_move');
+  const doc = await put(`Сообщаем, что срок составления отчёта продлён: не позднее ${ruD(late)}`, 'Письмо.txt', 'other');
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/doc-requests/${req.id}/attach`, { document_id: doc.body.document.id })).status, 200);
+  assert.equal((await caseOf(o)).task_moved, null);
+});

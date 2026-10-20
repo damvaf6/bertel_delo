@@ -12,7 +12,7 @@ import { orderSplit } from '../money/money.mjs';
 import { STATUS_NAME, addDays, isOverdue, todayMsk, weekEnd } from '../orders/workflow.mjs';
 import { monthRu, orgMonthDoneCases, orgMonthReport, reportCsv, reportMonth } from '../orgs/report.mjs';
 import { buildOrgMonthArchive } from './case-ops.mjs';
-import { openExtends, orgExtends } from './deadline-ops.mjs';
+import { openExtends, orgExtends, taskMoved } from './deadline-ops.mjs';
 import { extendSuggest, openHandovers } from './handover-ops.mjs';
 import { orgSchedule, taskDues } from '../orders/schedule.mjs';
 import { expiringLinks, incompleteInspections } from './inspect-ops.mjs';
@@ -233,7 +233,7 @@ export function orgOps() {
         const ids = experts.map((e) => e.user_id);
         const rows = ids.length ? await sql`
           select o.id, o.module, o.service, o.status, o.deadline, o.price_kop, o.transit_kop, o.paid_at, o.executor_user_id, o.updated_at,
-                 o.owner_user_id, o.org_id, o.offer_org_id,
+                 o.owner_user_id, o.org_id, o.offer_org_id, o.fields,
                  p.status as payout_status, p.amount_kop as payout_kop, p.paid_at as payout_paid_at
           from orders o left join payouts p on p.order_id = o.id
           where o.executor_user_id = any(${ids}::uuid[]) and (o.status = any(${CASES_ACTIVE}::text[])
@@ -304,6 +304,14 @@ export function orgOps() {
         const orgExt = await orgExtends(sql, org.id, rows.filter((o) => CASES_ACTIVE.includes(o.status)));
         // Срок по заданию на оценку раньше срока дела (2.325, как в карточке эксперта 2.324) — день и чьё задание, без файла.
         const task = await taskDues(sql, providers.storage, registry, rows.filter((o) => CASES_ACTIVE.includes(o.status) && o.deadline));
+        // Перенос согласован позже срока по заданию на оценку, а письма о переносе нет (2.332, как у эксперта 2.326): банк (суд)
+        // ждёт отчёт к прежнему дню — руководителю пометка и отбор. Без названия файла задания; просили ли письмо у заказчика.
+        const moved = new Map();
+        for (const o of rows.filter((x) => ['in_work', 'review'].includes(x.status))) {
+          const m = await taskMoved(sql, providers.storage, registry, o);
+          if (m) moved.set(o.id, { day: m.day, by: m.by, who: m.who, doc: m.doc, moved_from: m.moved_from, deadline: m.deadline,
+            asked: m.asked?.at ?? null });
+        }
         const cases = rows.map((o) => ({
           ...(waits.get(o.id) ?? { sign_wait: 0, sign_since: null, sign_reminded_at: null, returned_open: false, returned: null }),
           remind: reminds.get(o.id) ?? null,
@@ -340,7 +348,9 @@ export function orgOps() {
           // дела и до воскресенья включительно — прошедший тоже.
           task_due: task.get(o.id) ? { day: task.get(o.id).day, by: task.get(o.id).by, overdue: task.get(o.id).day < today,
             hot: task.get(o.id).day <= addDays(today, 2) } : null,
-          task_week: !!task.get(o.id) && task.get(o.id).day <= weekEnd(today),
+          // Перенос согласован позже срока по заданию (2.332) — дело в своём отборе «нет письма», здесь не повторяется.
+          task_week: !!task.get(o.id) && task.get(o.id).day <= weekEnd(today) && !moved.has(o.id),
+          task_moved: moved.get(o.id) ?? null,
           expert: name(byId.get(o.executor_user_id)),
           expert_id: o.executor_user_id,
           fee_kop: feeOf(o),
