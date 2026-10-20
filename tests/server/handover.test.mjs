@@ -411,3 +411,44 @@ test('2.327: просьба передать дело — срок по зада
     assert.equal((await spec.req('DELETE', `/api/orders/${o.id}/handover/${h.id}`)).status, 200);
   }
 });
+
+// 2.328: новому эксперту после передачи — срок по заданию на оценку, если раньше срока дела, и что из задания уже в таблице
+// задания черновика, а чего нет или там другое; черновика нет — `draft: false`; задания нет — `task: null`.
+test('2.328: «Что сделал прежний эксперт» — срок по заданию и что из задания уже в черновике', async () => {
+  const today = todayMsk();
+  const ru = (s) => s.split('-').reverse().join('.');
+  const putTask = (o, due) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nВид стоимости: рыночная\nДата оценки: 03.10.2026\nСрок составления отчёта: не позднее ${ru(due)}`), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание банка.txt'), 'x-doc-kind': 'basis' } });
+  const transfer = (o) => head.req('POST', `/api/orgs/${org.id}/cases/${o.id}/transfer`, { specialist_id: colleague.user.id, reason: 'Болезнь' });
+  const pred = async (o) => (await colleague.req('GET', `/api/orders/${o.id}/predecessor`)).body;
+
+  const o = await inWork('Передача: задание и черновик');
+  assert.equal((await putTask(o, addDays(today, 1))).status, 201);
+  let d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {})).body.draft;
+  assert.match(d.body, /\| Вид стоимости \| рыночная/);
+  // Прежний эксперт сам переписал вид стоимости — в черновике не то, что в задании.
+  const body = d.body.replace(/\| Вид стоимости \| [^\n]*\|/u, '| Вид стоимости | ликвидационная |');
+  d = (await spec.req('PUT', `/api/orders/${o.id}/draft`, { body, from: d.id })).body.draft;
+  assert.equal((await transfer(o)).status, 200);
+  const t = (await pred(o)).task;
+  assert.deepEqual(t.files.map((f) => f.name), ['Задание банка.txt']);
+  assert.equal(t.due.day, addDays(today, 1));
+  assert.match(t.due.by, /^по /);
+  assert.deepEqual([t.due.overdue, t.due.hot], [false, true]);
+  assert.equal(t.draft, true);
+  const of = (w) => t.items.find((i) => i.what === w);
+  assert.deepEqual(of('date'), { what: 'date', label: 'Дата оценки', v: '03.10.2026', ok: true, was: null });
+  assert.deepEqual(of('kind'), { what: 'kind', label: 'Вид стоимости', v: 'рыночная', ok: false, was: 'ликвидационная' });
+  assert.equal(of('due').ok, true);
+
+  // Черновика нет, срок по заданию позже срока дела — срока нет, сверять не с чем.
+  const n = await inWork('Передача: задание без черновика');
+  assert.equal((await putTask(n, addDays(today, 60))).status, 201);
+  assert.equal((await transfer(n)).status, 200);
+  const tn = (await pred(n)).task;
+  assert.deepEqual([tn.due, tn.draft, tn.items], [null, false, null]);
+  // Задания нет — нет и раздела.
+  const z = await inWork('Передача: без задания');
+  assert.equal((await transfer(z)).status, 200);
+  assert.equal((await pred(z)).task, null);
+});

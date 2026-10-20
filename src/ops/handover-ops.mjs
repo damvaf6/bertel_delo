@@ -10,6 +10,8 @@ import { addDays, todayMsk } from '../orders/workflow.mjs';
 import { orgExpertsFor } from './match-ops.mjs';
 import { newDateFrom } from './deadline-ops.mjs';
 import { audit, text, uuidFrom } from './util.mjs';
+import { latest, taskDraftItems, taskDueFor } from './draft-ops.mjs';
+import { assignmentDocs } from './ai-ops.mjs';
 
 const isExecutor = (actor, order) => order.executor_user_id === actor.id && orderSides(actor, order).includes('executor');
 
@@ -77,7 +79,7 @@ async function view(sql, actor, order) {
 // выезд помощника, аналоги — и его просьба о переносе срока, если ждёт ответа диспетчера: оставить или отозвать. Причину
 // передачи (болезнь) не показываем — её писал руководитель про прежнего эксперта. Только нынешнему исполнителю, только
 // пока дело в работе и последняя передача — ему.
-async function predecessorView(sql, actor, order) {
+async function predecessorView(sql, actor, order, registry, storage) {
   if (!isExecutor(actor, order) || order.status !== 'in_work') return { transferred: false };
   const t = await sql.one`select at, details from audit_log where subject_type = 'order' and subject_id = ${order.id}
                           and action = 'org.case.transfer' order by id desc limit 1`;
@@ -113,7 +115,32 @@ async function predecessorView(sql, actor, order) {
     analogs: analogs.n,
     analogs_confirmed: analogs.confirmed,
     extend: ext ? { ...ext, id: String(ext.id) } : null,
+    task: await predecessorTask(sql, registry, storage, order),
   };
+}
+
+// 2.328: задание на оценку (письмо банка, определение суда) в деле — новому эксперту сразу видно срок по заданию, если он
+// раньше срока дела (сдавать к нему, как у руководителя в просьбе передать, 2.327), и что из задания уже в таблице задания
+// черновика, а чего нет или там другое (те же правила, что «задание пришло после черновика», 2.295, только в счёт всё
+// задание). Черновика нет — `draft: false`: подготовит, и программа возьмёт из задания сама; таблицы задания в черновике
+// нет — `items: null`, сверять не с чем. Задания нет — null.
+async function predecessorTask(sql, registry, storage, order, today = todayMsk()) {
+  if (!storage || !registry) return null;
+  const assignment = await assignmentDocs(sql, storage, order);
+  if (!assignment.length) return null;
+  const deadline = order.deadline ? (order.deadline instanceof Date ? order.deadline.toISOString() : String(order.deadline)).slice(0, 10) : null;
+  const d = taskDueFor(registry, order, assignment);
+  const due = d && deadline && d.day < deadline
+    ? { day: d.day, by: d.by, name: d.name, page: d.page, overdue: d.day < today, hot: d.day <= addDays(today, 2) } : null;
+  const draft = await latest(sql, order.id);
+  let items = null;
+  if (draft) {
+    const ai = await sql.one`select inputs from result_drafts where order_id = ${order.id} and source = 'ai' order by id desc limit 1`;
+    const owner = await sql.one`select full_name from users where id = ${order.owner_user_id}`;
+    items = taskDraftItems(registry, order, assignment, [], draft.body, ai?.inputs?.egrn ?? null, owner?.full_name)
+      ?.map((x) => ({ what: x.what, label: x.label, v: x.v, ok: x.ok, was: x.ok ? null : x.was })) ?? null;
+  }
+  return { files: assignment.map((a) => ({ id: a.id, name: a.name })), due, draft: !!draft, items };
 }
 
 export function handoverOps() {
@@ -126,14 +153,14 @@ export function handoverOps() {
     {
       id: 'orders.predecessor', method: 'GET', path: '/api/orders/:id/predecessor', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
-      async handler({ sql, actor, order }) { return predecessorView(sql, actor, order); },
+      async handler({ sql, actor, order, registry, providers }) { return predecessorView(sql, actor, order, registry, providers.storage); },
     },
     {
       // Новый эксперт оставляет за собой просьбу прежнего о переносе срока (2.112): диспетчер ответит как обычно, отозвать
       // её новый эксперт может и потом (deadline_requests.withdraw). Отозвать сразу — тоже deadline_requests.withdraw.
       id: 'orders.predecessor.keep_extend', method: 'POST', path: '/api/orders/:id/predecessor/extend/:rid/keep', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
-      async handler({ sql, actor, order, params }) {
+      async handler({ sql, actor, order, params, registry, providers }) {
         if (!isExecutor(actor, order)) throw new HttpError(403, 'forbidden', 'Решает исполнитель дела');
         const rid = /^\d{1,18}$/.test(String(params.rid ?? '')) ? String(params.rid) : '0';
         const done = await sql`update deadline_requests set kept_by = ${actor.id}, kept_at = now()
@@ -141,7 +168,7 @@ export function handoverOps() {
                                  and requested_by <> ${actor.id} returning to_char(new_deadline, 'YYYY-MM-DD') as new_deadline`;
         if (!done.length) throw new HttpError(409, 'already_decided', 'Просьбы уже нет — обновите страницу');
         await audit(sql, actor, 'deadline.keep', 'order', order.id, { to: done[0].new_deadline });
-        return predecessorView(sql, actor, order);
+        return predecessorView(sql, actor, order, registry, providers.storage);
       },
     },
     {
