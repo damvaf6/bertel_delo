@@ -51,6 +51,8 @@ const REPLY_HOURS = 24;
 const SIGN_LONG_DAYS = 2;
 // Возврат руководителя не исправлен 2 дня и дольше (2.153) — в утренней сводке руководителю.
 const RETURN_LONG_DAYS = 2;
+// Письма о переносе срока нет 2 дня и дольше после согласия диспетчера (2.338) — в утренней сводке руководителя.
+const TASK_MOVED_LONG_DAYS = 2;
 // Исправленный файл после возврата руководителя загружен больше суток назад, а эксперт его не подписал (2.204).
 const FRESH_LATE_HOURS = 24;
 
@@ -595,6 +597,17 @@ export async function orgPart(sql, org, registry, today, { actorId = null, stora
   dossier.sort((a, b) => a.valid_until.localeCompare(b.valid_until));
   // «Ждут подписи организации» (2.161): дольше всех ждущие — первыми, без времени подписи — в конце.
   toSign.sort((a, b) => (a.since ? Date.parse(a.since) : Infinity) - (b.since ? Date.parse(b.since) : Infinity));
+  // Перенос согласован позже срока по заданию на оценку, а письма о переносе нет 2 дня и дольше после согласия диспетчера
+  // (2.338, как пометка в «Делах экспертов», 2.332) — только число, для утренней сводки. Письмо пришло, но срок в нём раньше
+  // (2.335), — не «письма нет».
+  const movable = cases.filter((o) => ['in_work', 'review'].includes(o.status) && o.deadline);
+  let movedLong = 0;
+  for (const o of movable.length ? await sql`select * from orders where id = any(${movable.map((x) => x.id)}::uuid[])` : []) {
+    const m = await taskMoved(sql, storage, registry, o);
+    if (!m || m.letter) continue;
+    const [r] = await sql`select decided_at from deadline_requests where order_id = ${o.id} and outcome = 'approved' order by decided_at desc, id desc limit 1`;
+    if (r && Date.now() - new Date(r.decided_at).getTime() >= TASK_MOVED_LONG_DAYS * 86400_000) movedLong += 1;
+  }
   // Сколько дел без движения 3 дня и больше (2.133) — только число, для утренней сводки руководителю (2.141).
   const moves = await caseMoves(sql, cases.filter((o) => ['in_work', 'review'].includes(o.status)));
   return {
@@ -607,6 +620,7 @@ export async function orgPart(sql, org, registry, today, { actorId = null, stora
     fresh_long: returned.filter((r) => r.fresh_file && Date.now() - new Date(r.fresh_file.at).getTime() >= SIGN_LONG_DAYS * 86400_000).length,
     // Отказы диспетчера в переносе срока по просьбе организации за сутки (2.238) — только число, для утренней сводки.
     ext_declined: extDeclined,
+    task_moved_long: movedLong,
     // Сколько экспертов сегодня вернулись после дней «не принимаю дела» (2.249) и у них есть дела — для утренней сводки.
     back_today: new Set(cases.filter((o) => o.away_until === today).map((o) => o.executor_user_id)).size,
     id: org.id,

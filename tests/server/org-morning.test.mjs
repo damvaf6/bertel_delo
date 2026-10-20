@@ -758,3 +758,57 @@ test('2.316: срок по заданию на оценку у дела на п�
   const [rx] = await S.sql`select task_due from org_morning_digests where user_id = ${other.user.id} and org_id = ${oX.id}`;
   assert.equal(rx?.task_due ?? 0, 0);
 });
+
+// 2.338: перенос срока согласован позже срока по заданию на оценку, а письма о переносе нет 2 дня и дольше после согласия
+// диспетчера (как пометка в «Делах экспертов», 2.332) — в утренней сводке руководителя своей строкой, ведёт к отбору
+// «Перенос позже срока по заданию — нет письма». Согласовано вчера — не в счёт; чужая организация — ничего.
+test('2.338: перенос позже срока по заданию, а письма о переносе нет 2 дня — в утренней сводке руководителя', async () => {
+  const z = { sign: 0, handover: 0, stuck: 0, due: 0, overdue: 0, idle: 0, returned: 0, fresh: 0, away: 0, ext_declined: 0, back: 0, egrn_kept: 0, order_diff: 0, task_due: 0 };
+  assert.equal(orgDigestText({ ...z, task_moved: 2 }),
+    'На сегодня по организации: перенос срока согласован позже срока по заданию на оценку, а письма о переносе нет 2 дня и дольше: 2 дела');
+  assert.equal(orgDigestTo({ ...z, sign: 1, task_moved: 1, ext_declined: 1, away: 1 }), 'task_moved');
+  assert.equal(orgDigestTo({ ...z, task_moved: 1, order_diff: 1 }), 'sign_order');
+  assert.equal(orgDigestTo({ ...z, task_moved: 1, due: 1 }), 'week');
+
+  const h = await login(S, '+79990003894');
+  const ex = await login(S, '+79990003895');
+  const other = await login(S, '+79990003896');
+  const oT = await makeOrg(S.sql, 'ООО «Перенос без письма утром»');
+  const oX = await makeOrg(S.sql, 'ООО «Чужой перенос без письма»');
+  await addMember(S.sql, oT.id, h.user.id, 'head');
+  await addMember(S.sql, oX.id, other.user.id, 'head');
+  await makeSpecialist(S.sql, ex.user.id);
+  await addMember(S.sql, oT.id, ex.user.id, 'member');
+  assert.equal((await ex.req('PATCH', '/api/me', { full_name: 'Эксперт Переносов' })).status, 200);
+  assert.equal((await ex.req('PATCH', '/api/specialist/me', { org_id: oT.id })).status, 200);
+  const putTxt = (who, url, body, name) => who.req('POST', url, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } });
+  const ruD = (s) => s.split('-').reverse().join('.');
+  const moved = async (title, agoDays) => {
+    const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
+    assert.equal((await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: addDays(today, 5), fields: { ...FIELDS, purpose: 'bank' } })).status, 200);
+    assert.equal((await owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
+    await ensurePaid(S.sql, o.id);
+    assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: ex.user.id, from: 'matching' })).status, 200);
+    assert.equal((await ex.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+    assert.equal((await putTxt(owner, `/api/orders/${o.id}/documents`, `ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(addDays(today, 5))}`, 'Задание банка Переносова.txt')).status, 201);
+    const r = await ex.req('POST', `/api/orders/${o.id}/deadline-requests`, { new_deadline: addDays(today, 14), reason: 'Банк согласовал устно' });
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/deadline-requests/${r.body.open.id}/decide`, { approve: true })).status, 200);
+    await S.sql`update deadline_requests set decided_at = now() - make_interval(days => ${agoDays}) where order_id = ${o.id}`;
+    return o;
+  };
+  await moved('Квартира: перенос без письма три дня', 3);
+  await moved('Квартира: перенос без письма вчера', 1);
+
+  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(today, '08:56'), storage: S.providers.storage }) >= 1);
+  const [d] = await S.sql`select task_moved from org_morning_digests where user_id = ${h.user.id} and org_id = ${oT.id}`;
+  assert.equal(d.task_moved, 1);
+  const feed = (await h.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня по организации'));
+  assert.equal(feed.length, 1);
+  assert.equal(feed[0].title, 'На сегодня по организации: перенос срока согласован позже срока по заданию на оценку, а письма о переносе нет 2 дня и дольше: 1 дело');
+  assert.equal(feed[0].section, `org=${oT.id}&to=task_moved`);
+  assert.doesNotMatch(JSON.stringify(feed), /Квартира|Переносов/);
+  const [rx] = await S.sql`select task_moved from org_morning_digests where user_id = ${other.user.id} and org_id = ${oX.id}`;
+  assert.equal(rx?.task_moved ?? 0, 0);
+});
