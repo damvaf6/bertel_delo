@@ -604,7 +604,9 @@ export async function orgPart(sql, org, registry, today, { actorId = null, stora
   let movedLong = 0;
   for (const o of movable.length ? await sql`select * from orders where id = any(${movable.map((x) => x.id)}::uuid[])` : []) {
     const m = await taskMoved(sql, storage, registry, o);
-    if (m && !m.letter && Date.now() - new Date(m.approved_at).getTime() >= TASK_MOVED_LONG_DAYS * 86400_000) movedLong += 1;
+    if (!m || m.letter) continue;
+    const [r] = await sql`select decided_at from deadline_requests where order_id = ${o.id} and outcome = 'approved' order by decided_at desc, id desc limit 1`;
+    if (r && Date.now() - new Date(r.decided_at).getTime() >= TASK_MOVED_LONG_DAYS * 86400_000) movedLong += 1;
   }
   // Сколько дел без движения 3 дня и больше (2.133) — только число, для утренней сводки руководителю (2.141).
   const moves = await caseMoves(sql, cases.filter((o) => ['in_work', 'review'].includes(o.status)));
