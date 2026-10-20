@@ -12395,6 +12395,57 @@ test('2.329: сводка за месяц — задание на оценку �
   for (const p of [ep, hp, cp]) await p.context().close();
 });
 
+// 2.336: сводка за месяц — переносы срока по просьбе эксперта и в скольких есть письмо о переносе.
+test('2.336: сводка за месяц — переносы срока и письма о переносе', async ({ browser, baseURL }) => {
+  const ectx = await phoneContext(browser, baseURL);
+  const ep = await ectx.newPage();
+  const expert = await signIn(ep, '+79990003365');
+  const hctx = await phoneContext(browser, baseURL);
+  const hp = await hctx.newPage();
+  const head = await signIn(hp, '+79990003366');
+  const cctx = await phoneContext(browser, baseURL);
+  const cp = await cctx.newPage();
+  await signIn(cp, '+79990003367');
+  const ruD = (d) => d.split('-').reverse().join('.');
+  const ids = [];
+  // Два дела для банка, срок перенесён позже срока по заданию: в первом письмо о переносе пришло, во втором нет.
+  for (const [t, letter] of [['Квартира для ипотеки', true], ['Дом для залога', false]]) {
+    const id = (await (await cp.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: t }, headers: H })).json()).order.id;
+    const put = async (name, body, kind) => (await (await cp.request.post(`/api/orders/${id}/documents`, {
+      data: Buffer.from(body), headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': kind },
+    })).json()).document;
+    await put('Задание банка.txt', `ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(inDays(5))}`, 'basis');
+    ids.push([id, letter ? (await put('Письмо банка о переносе.txt', `Письмо\nСрок составления отчёта: не позднее ${ruD(inDays(12))}`, 'other')).id : null]);
+  }
+  const orgId = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name, created_at) values ('ООО «Бюро сроков ${Date.now()}»', now() - interval '3 months') returning id`);
+    await c.query("update users set full_name = 'Эксперт Переносов' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now()), ($1, $3, 'member', now() - interval '40 days')", [org.id, head.id, expert.id]);
+    await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [expert.id, org.id]);
+    for (const [id, doc] of ids) {
+      if (doc) await c.query(`insert into doc_requests (order_id, item_id, title, requested_by, document_id, fulfilled_at)
+                              values ($1, 'task_move', 'Письмо банка о переносе срока', $2, $3, now())`, [id, expert.id, doc]);
+      await c.query(`insert into deadline_requests (order_id, requested_by, old_deadline, new_deadline, reason, outcome, decided_at)
+                     values ($1, $2, $3::date, $4::date, 'Жду документы', 'approved', now())`, [id, expert.id, inDays(5), inDays(12)]);
+    }
+    await c.query(`update orders set status = 'done', executor_user_id = $2, deadline = $3::date,
+                   fields = fields || '{"purpose":"bank"}'::jsonb where id = any($1::uuid[])`, [ids.map(([id]) => id), expert.id, inDays(12)]);
+    await c.query("insert into order_status_history (order_id, from_status, to_status, side) select unnest($1::uuid[]), 'review', 'done', 'dispatcher'", [ids.map(([id]) => id)]);
+    return org.id;
+  });
+
+  await hp.goto(`/kabinet#org=${orgId}`);
+  await expect(hp.locator('#org-report-box')).toBeVisible();
+  const row = hp.locator('#org-report > li').filter({ hasText: 'Эксперт Переносов' });
+  const text = 'срок переносили по просьбе эксперта в 2 делах · позже срока по заданию на оценку: 2, письмо о переносе есть: 1 из 2';
+  await expect(row.locator('[data-expert-ext]')).toHaveText(text);
+  await expect(row.locator('[data-expert-ext]')).toHaveClass(/warn/);
+  await expect(hp.locator('#org-report-total')).toContainText(`Переносы срока${text}`);
+  await row.locator('[data-expert-ext]').scrollIntoViewIfNeeded();
+  await shot(hp, 'd43c-rukovoditel-svodka-perenosy-pisma');
+  for (const p of [ep, hp, cp]) await p.context().close();
+});
+
 // 2.268: «Собрать Word заново» — рядом с «Заменить всё по выписке» и с заменой одной находки: черновик сразу собирается в
 // файл результата, без перехода к черновику; отменили замену — кнопка уходит.
 test('2.268: «Собрать Word заново» рядом с заменой по выписке ЕГРН', async ({ browser, baseURL }) => {

@@ -99,6 +99,15 @@ const bankAfter = (x) => {
   return `дела для банка: ${x.bank_cases} · задание на оценку пришло после черновика: ${x.bank_after
     ? `${x.bank_after} (${x.bank_after_pct}%)` : 'ни в одном'}`;
 };
+// 2.336: «срок переносили по просьбе эксперта в 3 делах (4 раза) · позже срока по заданию на оценку: 2, письмо о переносе
+// есть: 1 из 2»; переносов нет — пусто.
+const extMoves = (x) => {
+  if (!x.ext_cases) return '';
+  return [`срок переносили по просьбе эксперта в ${x.ext_cases} ${caseWord(x.ext_cases)}${x.ext_times !== x.ext_cases ? ` (${times(x.ext_times)})` : ''}`,
+    x.ext_need ? `позже срока по заданию на оценку: ${x.ext_need}, письмо о переносе есть: ${x.ext_letter
+      ? `${x.ext_letter} из ${x.ext_need}` : 'ни в одном'}` : null].filter(Boolean).join(' · ');
+};
+const extWarn = (x) => x.ext_letter < x.ext_need;
 // «сдано: 5 (было 3, +2) · в срок: 4 (было 4) · возвраты: 1 (было 2, −1)»; у эксперта без дел в обоих месяцах — пусто.
 const diff = (now, was) => `${now} (было ${was}${now > was ? `, +${now - was}` : now < was ? `, −${was - now}` : ''})`;
 const compare = (x) => {
@@ -156,6 +165,7 @@ async function load(month) {
     ...(bankTask(t) ? fact('Задание от банка', bankTask(t), t.bank_task_wait ? 'warn' : '') : []),
     ...(taskLate(t) ? fact('Срок по заданию на оценку', taskLate(t), t.task_late ? 'warn' : '') : []),
     ...(bankAfter(t) ? fact('Дела для банка', bankAfter(t), t.bank_after ? 'warn' : '') : []),
+    ...(extMoves(t) ? fact('Переносы срока', extMoves(t), extWarn(t) ? 'warn' : '') : []),
     ...(report.current && t.overdue_now ? fact('Просрочено сейчас', String(t.overdue_now), 'overdue') : []),
     ...fact('Вознаграждение за сданные', rub(t.fee_kop), 'money-sum'),
     ...fact('Выплачено экспертам', rub(t.paid_kop)));
@@ -191,6 +201,7 @@ async function load(month) {
     ...(bankTask(x) ? [el('div', { class: x.bank_task_wait ? 'warn' : 'muted', 'data-expert-banktask': '', text: bankTask(x) })] : []),
     ...(taskLate(x) ? [el('div', { class: x.task_late ? 'warn' : 'muted', 'data-expert-tasklate': '', text: taskLate(x) })] : []),
     ...(bankAfter(x) ? [el('div', { class: x.bank_after ? 'warn' : 'muted', 'data-expert-bankafter': '', text: bankAfter(x) })] : []),
+    ...(extMoves(x) ? [el('div', { class: extWarn(x) ? 'warn' : 'muted', 'data-expert-ext': '', text: extMoves(x) })] : []),
     ...(x.remarks?.length ? [el('div', { class: 'muted', 'data-expert-remarks': '', text: `частые замечания: ${
       x.remarks.map((m) => `«${m.text}»${m.n > 1 ? ` ×${m.n}` : ''}`).join(', ')}` })] : []),
     el('div', { class: 'muted', text: `вознаграждение за сданные: ${rub(x.fee_kop)} · выплачено: ${rub(x.paid_kop)}` }))));
