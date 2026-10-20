@@ -161,7 +161,7 @@ async function taskDueOf(sql, storage, order, registry) {
 export const TASK_MOVE_DOC = { Банк: 'Письмо банка', Суд: 'Определение суда', Заказчик: 'Письмо заказчика' };
 export async function taskMoved(sql, storage, registry, order) {
   if (!['in_work', 'review'].includes(order.status) || !order.deadline) return null;
-  const [r] = await sql`select outcome, to_char(old_deadline, 'YYYY-MM-DD') as old_deadline, to_char(new_deadline, 'YYYY-MM-DD') as new_deadline
+  const [r] = await sql`select outcome, decided_at, to_char(old_deadline, 'YYYY-MM-DD') as old_deadline, to_char(new_deadline, 'YYYY-MM-DD') as new_deadline
                         from deadline_requests where order_id = ${order.id} and outcome is not null and outcome <> 'withdrawn'
                         order by decided_at desc, id desc limit 1`;
   if (r?.outcome !== 'approved' || r.new_deadline !== order.deadline) return null;
@@ -170,7 +170,7 @@ export async function taskMoved(sql, storage, registry, order) {
   const [a] = await sql`select requested_at, fulfilled_at from doc_requests
                         where order_id = ${order.id} and item_id = ${TASK_MOVE} and cancelled_at is null order by id desc limit 1`;
   return { ...d, deadline: order.deadline, moved_from: r.old_deadline, doc: TASK_MOVE_DOC[d.who], letter: d.letter ?? null,
-    asked: a ? { at: a.requested_at, came: !!a.fulfilled_at } : null };
+    asked: a ? { at: a.requested_at, came: !!a.fulfilled_at } : null, approved_at: r.decided_at };
 }
 
 // Руководителю (2.332, 2.334): то же без названия файла задания; `asked` — когда эксперт попросил письмо у заказчика.

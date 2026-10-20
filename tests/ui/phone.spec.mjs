@@ -15043,6 +15043,23 @@ test('2.332: дела экспертов — перенос позже срок�
   expect(w).toBeLessThanOrEqual(412);
   await hp.locator('#org-cases-filter').scrollIntoViewIfNeeded();
   await shot(hp, 'd46-dela-ekspertov-perenos-bez-pisma');
+
+  // 2.338: письма нет 2 дня и дольше — строкой в утренней сводке (запись дня напрямую, как в 2.257), нажатие ведёт к отбору.
+  await db(async (c) => {
+    const { rows: [n] } = await c.query("insert into notifications (user_id, type, event, org_id) values ($1, 'org_morning', 'org_morning_today', $2) returning id", [head.id, orgId]);
+    await c.query(`insert into org_morning_digests (user_id, org_id, day, task_moved, notification_id)
+      values ($1, $2, (now() at time zone 'Europe/Moscow')::date, 1, $3)`, [head.id, orgId, n.id]);
+  });
+  await hp.goto('/kabinet#notifications');
+  const morning = hp.locator('#notifications li').first();
+  await expect(morning).toContainText('На сегодня по организации: перенос срока согласован позже срока по заданию на оценку, а письма о переносе нет 2 дня и дольше: 1 дело');
+  await shot(hp, 'd47-rukovoditel-svodka-perenos-bez-pisma');
+  await morning.getByRole('button').click();
+  await expect(hp).toHaveURL(new RegExp(`#org=${orgId}&to=task_moved$`));
+  await expect(hp.locator('[data-filter="task_moved"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first()).toHaveAttribute('data-case', ref(ids[0]));
+  await shot(hp, 'd48-rukovoditel-svodka-k-otboru-perenos');
   for (const p of [hp, cp]) await p.context().close();
 });
 
