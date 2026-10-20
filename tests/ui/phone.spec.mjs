@@ -14705,3 +14705,60 @@ test('2.325: дела экспертов — отбор «Срок по зада
   await shot(hp, 'd45-dela-ekspertov-srok-po-zadaniyu-nedelya');
   for (const p of [hp, cp]) await p.context().close();
 });
+
+// 2.327: эксперт просит передать дело, а срок по заданию на оценку раньше срока дела — в «Сегодня» руководителя у просьбы
+// «сдать по заданию на оценку — к …»; передать некому, а новый срок позже срока по заданию — предупреждение про письмо банка.
+test('2.327: просьба передать дело — срок по заданию на оценку', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const hp = await ctx(), cp = await ctx(), ep = await ctx();
+  const customer = await signIn(cp, '+79990032701');
+  const head = await signIn(hp, '+79990032702');
+  const expert = await signIn(ep, '+79990032703');
+  const ru = (iso) => iso.split('-').reverse().join('.');
+  const short = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+  const { orgId, A } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Передача по заданию ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Заданова Вера' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now() - interval '1 year'), ($1, $3, 'member', now() - interval '1 year')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    await c.query("insert into morning_digests (user_id, day) values ($1, (now() at time zone 'Europe/Moscow')::date), ($2, (now() at time zone 'Europe/Moscow')::date) on conflict do nothing", [expert.id, head.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Передать по заданию: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Банковская ул., д. 5, кв. 2","area":"40"}') returning id`,
+    [customer.id, expert.id, inDays(20)]);
+    return { orgId: org.id, A: o.id };
+  });
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ru(inDays(1))}`),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание банка Задановой.txt'), 'x-doc-kind': 'basis' },
+  })).status()).toBe(201);
+  expect((await ep.request.post(`/api/orders/${A}/handover`, { data: { reason: 'Заболела' }, headers: H })).status()).toBe(201);
+  const ref = `№ ${A.slice(0, 8).toUpperCase()}`;
+
+  await hp.goto('/kabinet');
+  const ask = hp.locator(`#today-box li[data-today-item="org-handover-${orgId}"]`).filter({ hasText: ref });
+  const due = ask.locator('[data-role="handover-task-due"]');
+  await expect(due).toHaveText(`сдать по заданию на оценку — к ${short(inDays(1))} (срок дела позже)`);
+  await expect(due).toHaveClass(/overdue/);
+  await expect(ask).not.toContainText('Задановой');
+  await ask.scrollIntoViewIfNeeded();
+  await shot(hp, 'd46-segodnya-peredat-delo-srok-po-zadaniyu');
+
+  await ask.click();
+  const block = hp.locator(`[data-handover="${ref}"]`);
+  await expect(block).toBeVisible();
+  const date = hp.locator(`[data-handover-extend-date="${ref}"]`);
+  const late = hp.locator(`[data-handover-task-late="${ref}"]`);
+  await expect(date).toHaveValue(/^\d{4}-\d{2}-\d{2}$/);
+  await expect(late).toBeVisible();
+  await expect(late).toContainText('Новый срок позже срока по заданию на оценку');
+  await expect(late).toContainText('письмо банка');
+  const w = await hp.evaluate(() => document.documentElement.scrollWidth);
+  expect(w).toBeLessThanOrEqual(412);
+  await block.scrollIntoViewIfNeeded();
+  await shot(hp, 'd47-peredat-nekomu-perenos-pozzhe-zadaniya');
+  await date.fill(inDays(1));
+  await expect(late).toBeHidden();
+  for (const p of [hp, cp, ep]) await p.context().close();
+});
