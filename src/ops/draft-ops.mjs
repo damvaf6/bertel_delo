@@ -16,7 +16,7 @@ import { pastValues, reuseSections, skeleton } from '../docs/reuse.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { orderSources, placeSources, sourcesLines } from '../docs/sources.mjs';
 import { draftDiff } from '../docs/diff.mjs';
-import { assignmentAddress, assignmentBank, assignmentCustomer, assignmentDue, assignmentKinds, assignmentPurpose, assignmentValue, customerOf, egrnFacts, egrnRightsFacts, egrnShares, egrnUses, kindList, parseFloorField, purposeFits, sameAddressText, sameCustomer, USE_NAME } from '../ai/report-checks.mjs';
+import { assignmentAddress, assignmentBank, assignmentCustomer, assignmentDue, assignmentKinds, assignmentPurpose, assignmentValue, banksIn, customerOf, customersInText, egrnFacts, egrnRightsFacts, egrnShares, egrnUses, kindList, parseFloorField, purposeFits, purposeKinds, sameAddressText, sameCustomer, USE_NAME } from '../ai/report-checks.mjs';
 import { assignmentDocs, egrnDocs } from './ai-ops.mjs';
 
 const PHOTOS_MAX = 40;
@@ -40,6 +40,63 @@ const pastCases = (sql, actor, order, pastId = null) => sql`
   where o.executor_user_id = ${actor.id} and o.module = ${order.module} and o.service = ${order.service} and o.id <> ${order.id}
     and (${pastId}::uuid is null or o.id = ${pastId}::uuid)
   order by d.at desc limit ${PAST_MAX}`;
+
+// Таблица задания черновика против задания на оценку (2.295, 2.301, 2.311; общее с 2.328): что черновик взял бы из задания —
+// дата оценки, вид стоимости, адрес, цель, заказчик, срок, пользователь результатов — и есть ли это в черновике (`ok`).
+// `before` — задания, что были в деле раньше: что из них не изменилось, не в счёт (2.295; новому эксперту — пусто, в счёт
+// всё). Таблицы задания в черновике нет — null: сверять не с чем.
+const TASK_ROW = /^\|\s*([^|\n]+?)\s*\|\s*([^|\n]*?)\s*\|\s*$/gmu;
+const bare = (cell) => cell.replace(/\s*\([^)]*\)\s*$/u, '').trim();
+export function taskDraftItems(registry, o, assignment, before, body, egrn, ownerName) {
+  const cells = new Map();
+  for (const m of String(body ?? '').matchAll(TASK_ROW)) if (!cells.has(m[1])) cells.set(m[1], bare(m[2]));
+  if (!cells.has('Сведение')) return null;
+  const items = [];
+  const day = valueDateFor(registry, o, assignment)?.day;
+  if (day && valueDateFor(registry, o, before)?.day !== day) {
+    items.push({ what: 'date', label: 'Дата оценки', v: day, was: cells.get('Дата оценки') || null, ok: !!cells.get('Дата оценки')?.includes(day) });
+  }
+  const kind = taskKindFor(registry, o, assignment);
+  const cell = (cells.get('Вид стоимости') ?? '').toLowerCase();
+  if (kind && taskKindFor(registry, o, before)?.v !== kind.v) {
+    items.push({ what: 'kind', label: 'Вид стоимости', v: kind.v, was: cells.get('Вид стоимости') || null, ok: kind.v.split(' и ').every((w) => cell.includes(w)) });
+  }
+  const addr = taskAddressFor(registry, o, assignment, egrn);
+  const label = registry.service(o.module, o.service)?.fields?.find((f) => f.id === 'address')?.label;
+  if (addr && label && taskAddressFor(registry, o, before, egrn)?.v !== addr.v) {
+    items.push({ what: 'address', label, v: addr.v, was: cells.get(label) || null, ok: !!(cells.get(label) && sameAddressText(assignmentAddress(assignment), cells.get(label))) });
+  }
+  // 2.301: цель оценки (2.291) — строка таблицы задания; совместимая цель (ипотека при покупке) не в счёт.
+  const purpose = taskPurposeFor(registry, o, assignment);
+  const aim = registry.service(o.module, o.service)?.fields?.find((f) => f.id === 'purpose')?.label;
+  const prevAim = taskPurposeFor(registry, o, before);
+  if (purpose && aim && prevAim?.kinds.join('+') !== purpose.kinds.join('+')) {
+    items.push({ what: 'purpose', label: aim, v: purpose.v, was: cells.get(aim) || null, ok: purposeKinds(cells.get(aim)).some((k) => purposeFits(purpose, k)) });
+  }
+  // 2.301: заказчик (2.292) — строкой в разделе о заказчике. В черновике назван другой — в счёт; не назван — только если в
+  // задании не владелец заявки (его черновик и так назвал бы заказчиком).
+  const customer = taskCustomerFor(registry, o, assignment, ownerName);
+  const prevCustomer = taskCustomerFor(registry, o, before, ownerName);
+  if (customer && !(prevCustomer && sameCustomer(customerOf(prevCustomer.v), customerOf(customer.v)))) {
+    const who = customerOf(customer.v);
+    const named = customersInText(body);
+    const mine = ownerName ? customerOf(ownerName) : null;
+    items.push({ what: 'customer', label: 'Заказчик', v: customer.v, was: named[0]?.value ?? null,
+      ok: named.length ? named.some((n) => sameCustomer(n, who)) : !!(mine && sameCustomer(mine, who)) });
+  }
+  // 2.311: срок составления отчёта (2.303) — строка «Срок»; пользователь результатов оценки при оценке для банка (2.310) —
+  // только банк из задания (Сбербанк из заявки от задания не зависит); в строке назван тот же банк — не в счёт.
+  const due = taskDueFor(registry, o, assignment);
+  if (due && taskDueFor(registry, o, before)?.day !== due.day) {
+    items.push({ what: 'due', label: 'Срок', v: due.v, was: cells.get('Срок') || null, ok: !!cells.get('Срок')?.includes(due.v) });
+  }
+  const user = taskUserFor(registry, o, assignment);
+  const userRow = 'Предполагаемый пользователь результатов оценки';
+  if (user?.name && taskUserFor(registry, o, before)?.id !== user.id) {
+    items.push({ what: 'user', label: userRow, v: user.v, was: cells.get(userRow) || null, ok: banksIn(cells.get(userRow) ?? '').includes(user.id) });
+  }
+  return items;
+}
 
 export async function latest(sql, orderId) {
   return sql.one`select d.*, (select count(*)::int from result_drafts x where x.order_id = d.order_id) as versions

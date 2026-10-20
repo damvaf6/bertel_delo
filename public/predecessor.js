@@ -2,7 +2,7 @@
 // что осталось в деле от прежнего: файлы результата (в сдачу не идут — нужен свой), другие файлы, черновик, фото осмотра,
 // выезд помощника, аналоги; нажатие на строку открывает нужный блок. Просьба прежнего о переносе срока, если ждёт ответа
 // диспетчера, — «Оставить просьбу» или «Отозвать». «Понятно, скрыть» помнится на этом телефоне для этого дела (пока нет
-// нерешённой просьбы). Текст — через textContent.
+// нерешённой просьбы). Задание на оценку в деле (2.328) — срок по нему и что из задания уже в черновике. Текст — через textContent.
 import { api, el, say } from '/common.js';
 import { reveal } from '/fold.js';
 
@@ -48,11 +48,42 @@ function render(v) {
   if (v.analogs) items.push(row(`Аналоги: ${v.analogs}`, `подтверждено ${v.analogs_confirmed} из ${v.analogs}`, 'analogs-box'));
   if (!items.length) items.push(el('li', { class: 'muted', text: 'Файлов, черновика, фото и аналогов прежний эксперт не оставил.' }));
   $('pred-list').replaceChildren(...items);
+  renderTask(v.task);
   const e = v.extend;
   $('pred-extend').classList.toggle('hidden', !e);
   if (e) $('pred-extend-text').textContent = `Прежний эксперт ${whenRu(e.requested_at)} попросил перенести срок на ${dayRu(e.new_deadline)} (причина: ${e.reason}). Диспетчер ещё не ответил. Оставить просьбу или отозвать?`;
   $('pred-hide').classList.toggle('hidden', !!e);
 }
+
+// 2.328: задание на оценку в деле — срок по нему, если раньше срока дела, и что из задания уже в таблице задания черновика.
+function renderTask(t) {
+  $('pred-task').classList.toggle('hidden', !t);
+  if (!t) return;
+  $('pred-task-lead').textContent = `Задание на оценку: ${t.files.map((f) => `«${f.name}»`).join(', ')}`;
+  const due = $('pred-task-due');
+  due.classList.toggle('hidden', !t.due);
+  if (t.due) {
+    due.className = t.due.hot ? 'overdue' : 'muted';
+    due.textContent = `Сдать ${t.due.by} — к ${dayRu(t.due.day)}${t.due.overdue ? ', срок прошёл' : ''} (срок дела позже; «${t.due.name}», стр. ${t.due.page})`;
+  }
+  const note = !t.draft ? 'Черновика нет — подготовьте его: дату оценки, вид стоимости и другое из задания программа возьмёт сама.'
+    : !t.items ? 'В черновике нет таблицы задания — сверить с заданием не с чем.'
+    : !t.items.length ? 'Из задания в черновик брать нечего.' : '';
+  $('pred-task-note').textContent = note;
+  $('pred-task-note').classList.toggle('hidden', !note);
+  const name = (i) => (i.what === 'due' ? 'Срок отчёта' : i.label);
+  const ok = (t.items ?? []).filter((i) => i.ok);
+  const bad = (t.items ?? []).filter((i) => !i.ok);
+  const rows = [];
+  if (ok.length) rows.push(el('li', { class: 'muted', text: `Уже в черновике: ${ok.map(name).join(', ')}` }));
+  for (const i of bad) {
+    rows.push(el('li', { class: 'overdue', text: `${name(i)}: по заданию — «${i.v}», в черновике — ${i.was ? `«${i.was}»` : 'нет'}` }));
+  }
+  $('pred-task-list').replaceChildren(...rows);
+  $('pred-task-draft').classList.toggle('hidden', !bad.length);
+}
+$('pred-task-draft').addEventListener('click', go('draft-box'));
+$('pred-task-open').addEventListener('click', go('task-box'));
 
 $('pred-keep').addEventListener('click', async () => {
   const e = ctx?.view?.extend;

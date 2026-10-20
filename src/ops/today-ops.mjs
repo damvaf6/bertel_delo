@@ -37,10 +37,10 @@ import { dueNotes } from './note-ops.mjs';
 import { caseMoves, caseRemind, transferTargets } from './org-ops.mjs';
 import { bankTaskMissing, docWait, egrnOld } from './docreq-ops.mjs';
 import { aiRecheck, aiSignHints, egrnRebuildLeft, egrnSwapLeft } from '../ai/ai.mjs';
-import { latest, taskAddressFor, taskDueFor, taskDueSign, taskCustomerFor, taskKindFor, taskPurposeFor, taskUserFor, valueDateFor } from './draft-ops.mjs';
+import { latest, taskDraftItems, taskDueFor, taskDueSign } from './draft-ops.mjs';
 import { assignmentDocs } from './ai-ops.mjs';
 import { READ_MAX_BYTES, extractPages, readableKind } from '../ai/extract.mjs';
-import { assignmentAddress, banksIn, customerOf, customersInText, purposeFits, purposeKinds, reportMade, sameAddressText, sameCustomer } from '../ai/report-checks.mjs';
+import { reportMade } from '../ai/report-checks.mjs';
 
 // «Горит» — просрочено или до срока не больше двух дней (как подсветка в списке дел).
 const HOT_DAYS = 2;
@@ -358,8 +358,6 @@ export async function egrnSwapCases(sql, userId, rows) {
 // в таблице задания черновика другие или их нет. Только то, что изменилось из-за нового задания: что было и до него — не в
 // счёт (эксперт мог поправить сам). Адрес — только если черновик не взял его из выписки ЕГРН (выписка важнее задания).
 // Таблицы задания в черновике нет — сверять не с чем. Подготовил черновик заново или поправил строку — строка уходит.
-const TASK_ROW = /^\|\s*([^|\n]+?)\s*\|\s*([^|\n]*?)\s*\|\s*$/gmu;
-const bare = (cell) => cell.replace(/\s*\([^)]*\)\s*$/u, '').trim();
 export async function taskLateCases(sql, storage, registry, rows) {
   const out = [];
   for (const o of rows.filter((x) => x.status === 'in_work')) {
@@ -373,57 +371,11 @@ export async function taskLateCases(sql, storage, registry, rows) {
     if (!fresh.length) continue;
     const before = assignment.filter((d) => !fresh.includes(d));
     const draft = await latest(sql, o.id);
-    const cells = new Map();
-    for (const m of String(draft?.body ?? '').matchAll(TASK_ROW)) if (!cells.has(m[1])) cells.set(m[1], bare(m[2]));
-    if (!cells.has('Сведение')) continue;
     const ai = await sql.one`select inputs from result_drafts where order_id = ${o.id} and source = 'ai' order by id desc limit 1`;
-    const egrn = ai?.inputs?.egrn ?? null;
-    const items = [];
-    const day = valueDateFor(registry, o, assignment)?.day;
-    if (day && valueDateFor(registry, o, before)?.day !== day && !cells.get('Дата оценки')?.includes(day)) {
-      items.push({ what: 'date', label: 'Дата оценки', v: day, was: cells.get('Дата оценки') || null });
-    }
-    const kind = taskKindFor(registry, o, assignment);
-    const cell = (cells.get('Вид стоимости') ?? '').toLowerCase();
-    if (kind && taskKindFor(registry, o, before)?.v !== kind.v && !kind.v.split(' и ').every((w) => cell.includes(w))) {
-      items.push({ what: 'kind', label: 'Вид стоимости', v: kind.v, was: cells.get('Вид стоимости') || null });
-    }
-    const addr = taskAddressFor(registry, o, assignment, egrn);
-    const label = registry.service(o.module, o.service)?.fields?.find((f) => f.id === 'address')?.label;
-    if (addr && label && taskAddressFor(registry, o, before, egrn)?.v !== addr.v && !(cells.get(label) && sameAddressText(assignmentAddress(assignment), cells.get(label)))) {
-      items.push({ what: 'address', label, v: addr.v, was: cells.get(label) || null });
-    }
-    // 2.301: цель оценки (2.291) — строка таблицы задания; совместимая цель (ипотека при покупке) не в счёт.
-    const purpose = taskPurposeFor(registry, o, assignment);
-    const aim = registry.service(o.module, o.service)?.fields?.find((f) => f.id === 'purpose')?.label;
-    const prevAim = taskPurposeFor(registry, o, before);
-    if (purpose && aim && prevAim?.kinds.join('+') !== purpose.kinds.join('+') && !purposeKinds(cells.get(aim)).some((k) => purposeFits(purpose, k))) {
-      items.push({ what: 'purpose', label: aim, v: purpose.v, was: cells.get(aim) || null });
-    }
-    // 2.301: заказчик (2.292) — строкой в разделе о заказчике. В черновике назван другой — в счёт; не назван — только если в
-    // задании не владелец заявки (его черновик и так назвал бы заказчиком).
     const [owner] = await sql`select full_name from users where id = ${o.owner_user_id}`;
-    const customer = taskCustomerFor(registry, o, assignment, owner?.full_name);
-    const prevCustomer = taskCustomerFor(registry, o, before, owner?.full_name);
-    if (customer && !(prevCustomer && sameCustomer(customerOf(prevCustomer.v), customerOf(customer.v)))) {
-      const who = customerOf(customer.v);
-      const named = customersInText(draft?.body);
-      const mine = owner?.full_name ? customerOf(owner.full_name) : null;
-      if (named.length ? !named.some((n) => sameCustomer(n, who)) : !(mine && sameCustomer(mine, who))) {
-        items.push({ what: 'customer', label: 'Заказчик', v: customer.v, was: named[0]?.value ?? null });
-      }
-    }
-    // 2.311: срок составления отчёта (2.303) — строка «Срок»; пользователь результатов оценки при оценке для банка (2.310) —
-    // только банк из задания (Сбербанк из заявки от задания не зависит); в строке назван тот же банк — не в счёт.
-    const due = taskDueFor(registry, o, assignment);
-    if (due && taskDueFor(registry, o, before)?.day !== due.day && !cells.get('Срок')?.includes(due.v)) {
-      items.push({ what: 'due', label: 'Срок', v: due.v, was: cells.get('Срок') || null });
-    }
-    const user = taskUserFor(registry, o, assignment);
-    const userRow = 'Предполагаемый пользователь результатов оценки';
-    if (user?.name && taskUserFor(registry, o, before)?.id !== user.id && !banksIn(cells.get(userRow) ?? '').includes(user.id)) {
-      items.push({ what: 'user', label: userRow, v: user.v, was: cells.get(userRow) || null });
-    }
+    const gaps = taskDraftItems(registry, o, assignment, before, draft?.body, ai?.inputs?.egrn ?? null, owner?.full_name);
+    if (!gaps) continue;
+    const items = gaps.filter((x) => !x.ok).map(({ ok, ...x }) => x);
     if (items.length) out.push({ order: o, items, docs: fresh.map((d) => d.name), at: late.at(-1).created_at });
   }
   return out;
