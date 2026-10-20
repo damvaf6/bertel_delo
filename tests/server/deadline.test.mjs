@@ -511,3 +511,26 @@ test('2.326: перенос согласован, а новый срок поз�
   const o2 = await inWork('Квартира: перенос не позже задания', 3);
   assert.equal((await spec.req('POST', `/api/orders/${o2.id}/doc-requests`, { task_move: true })).status, 409);
 });
+
+test('прогон 2.330: перенос согласован позже срока по заданию — строки «Срок по заданию на оценку близко» нет', async () => {
+  const o = await inWork('Квартира: срок по заданию завтра', 1);
+  const ruD = (s) => s.split('-').reverse().join('.');
+  await S.sql`update orders set fields = fields || '{"purpose":"bank"}'::jsonb where id = ${o.id}`;
+  const due = addDays(today, 1);
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(due)}`), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание банка.txt'), 'x-doc-kind': 'basis' } })).status, 201);
+  // Срок дела тот же, что по заданию, — «Срок по заданию близко» нет; перенесли — есть, пока перенос не согласован.
+  const r = await ask(spec, o, { new_deadline: addDays(today, 9), reason: 'Банк согласовал перенос устно' });
+  let t = (await spec.req('GET', '/api/today')).body.expert;
+  assert.ok(!t.task_due.some((x) => x.id === o.id));
+  assert.equal((await decide(dispatcher, o, r.body.open.id, { approve: true })).status, 200);
+  // Согласовано — одна строка: «Приложите письмо о переносе», срок по заданию отдельно не повторяется.
+  t = (await spec.req('GET', '/api/today')).body.expert;
+  assert.ok(t.task_moved.some((x) => x.id === o.id));
+  assert.ok(!t.task_due.some((x) => x.id === o.id));
+  // Попросили письмо и ждём — тоже нет.
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { task_move: true })).status, 201);
+  t = (await spec.req('GET', '/api/today')).body.expert;
+  assert.ok(!t.task_moved.some((x) => x.id === o.id));
+  assert.ok(!t.task_due.some((x) => x.id === o.id));
+});

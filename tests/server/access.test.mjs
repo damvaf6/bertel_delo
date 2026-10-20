@@ -2733,27 +2733,34 @@ test('сводка за месяц (2.329): дела для банка и в с�
     await S.sql`insert into result_drafts (order_id, author_id, source, body, at) values (${o.id}, ${executor}, 'edit', 'Черновик', now() - interval '1 hour')`;
     if (task === 'after') assert.equal((await upload('Задание банка.txt', 'ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира')).status, 201);
     if (task === 'note') assert.equal((await upload('Фото фасада.txt', 'фасад дома')).status, 201);
+    // Прогон 2.330: после черновика пришло только письмо банка о переносе срока по просьбе task_move — не задание после черновика.
+    if (task === 'move') {
+      const d = (await upload('Письмо банка о переносе.txt', 'Письмо\nСрок составления отчёта: не позднее 30.12.2026')).body.document;
+      await S.sql`insert into doc_requests (order_id, item_id, title, requested_by, document_id, fulfilled_at)
+                  values (${o.id}, 'task_move', 'Письмо банка о переносе срока', ${executor}, ${d.id}, now())`;
+    }
     if (task === 'before') await S.sql`update documents set created_at = now() - interval '2 hours' where order_id = ${o.id}`;
     await S.sql`update orders set status = ${status}, deadline = ${addDays(todayMsk(), 10)}, fields = fields || ${JSON.stringify({ purpose })}::jsonb, executor_user_id = ${executor} where id = ${o.id}`;
     if (status === 'done') await S.sql`insert into order_status_history (order_id, from_status, to_status, side) values (${o.id}, 'review', 'done', 'dispatcher')`;
   };
-  // a: для банка — после черновика, до черновика, без задания, не задание после черновика; в работе — не в счёт; для суда — не в счёт.
+  // a: для банка — после черновика, до черновика, без задания, не задание после черновика, письмо о переносе; в работе — не в счёт; для суда — не в счёт.
   await make(ex.a.user.id, 'bank', 'after');
   await make(ex.a.user.id, 'bank', 'before');
   await make(ex.a.user.id, 'bank', null);
   await make(ex.a.user.id, 'bank', 'note');
+  await make(ex.a.user.id, 'bank', 'move');
   await make(ex.a.user.id, 'bank', 'after', 'in_work');
   await make(ex.a.user.id, 'court', 'after');
   // b: дел для банка нет.
   await make(ex.b.user.id, 'court', 'after');
   const r = (await head.req('GET', `/api/orgs/${org.id}/report`)).body.report;
   const x = (e) => [e.bank_cases, e.bank_after, e.bank_after_pct];
-  assert.deepEqual(x(r.experts.find((y) => y.user_id === ex.a.user.id)), [4, 1, 25]);
+  assert.deepEqual(x(r.experts.find((y) => y.user_id === ex.a.user.id)), [5, 1, 20]);
   assert.deepEqual(x(r.experts.find((y) => y.user_id === ex.b.user.id)), [0, 0, null]);
-  assert.deepEqual(x(r.total), [4, 1, 25]);
+  assert.deepEqual(x(r.total), [5, 1, 20]);
   const csv = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv`, undefined, { binary: true })).body.toString('utf8');
   assert.ok(csv.includes('\r\nДела для банка;Сдано;Задание на оценку пришло после черновика;Доля, %\r\n'
-    + 'Эксперт Банковский;4;1;25\r\nИтого;4;1;25\r\n'), csv);
+    + 'Эксперт Банковский;5;1;20\r\nИтого;5;1;20\r\n'), csv);
   const prev = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv&month=${r.prev_month ?? '2026-01'}`, undefined, { binary: true })).body.toString('utf8');
   assert.ok(!prev.includes('Дела для банка;'), prev);
 });

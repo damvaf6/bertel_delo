@@ -174,9 +174,12 @@ async function expertPart(sql, actor, registry, today, storage) {
   }).sort((a, b) => new Date(b.decided_at) - new Date(a.decided_at));
   // Перенос согласован, а новый срок позже срока по заданию на оценку (2.326) — приложить письмо банка (определение суда)
   // о переносе; попросили у заказчика и ждём — строки нет, письмо пришло, а срок по заданию прежний — снова есть.
-  const moved = [];
+  // Срок по заданию прежний и перенос согласован — строки «Срок по заданию на оценку близко» нет (прогон 2.330): то же дело
+  // в «Приложите письмо о переносе», попросили письмо — ждём его, а не сдаём к прежнему сроку.
+  const moved = [], movedIds = new Set();
   for (const o of rows.filter((x) => ['in_work', 'review'].includes(x.status))) {
     const m = await taskMoved(sql, storage, registry, o);
+    if (m) movedIds.add(o.id);
     if (m && !(m.asked && !m.asked.came)) moved.push(item(o, { task_moved: m, can_ask: o.status === 'in_work' }));
   }
   const awayDeclined = await awayDeclinedCases(sql, actor, rows, ext, today, item);
@@ -225,7 +228,7 @@ async function expertPart(sql, actor, registry, today, storage) {
     ai_recheck: recheck,
     task_made: taskMade,
     task_late: taskLate,
-    task_due: taskDue,
+    task_due: taskDue.filter((x) => !movedIds.has(x.id)),
     egrn_swap: egrnSwap,
     task_swap: taskSwap,
     egrn_rebuild: egrnRebuild,
