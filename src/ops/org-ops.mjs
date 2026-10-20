@@ -431,7 +431,15 @@ export function orgOps() {
         // 2.323: срок по заданию на оценку — только у дел, где ИИ-проверка сверяет сроки (правило report_dates).
         const taskDue = async (o) => (providers.storage && registry.checks(o.module, o.service).some((r) => (r.auto ?? []).includes('report_dates'))
           ? taskDueFor(registry, o, await assignmentDocs(sql, providers.storage, o))?.day ?? null : null);
-        const report = await orgMonthReport(sql, org.id, reportMonth(query.month), { registry, taskDue });
+        // 2.329: задание на оценку в деле для банка приложено позже первого черновика (как в «Сегодня», 2.295).
+        const taskAfter = async (o) => {
+          const t = await sql.one`select min(at) as first from result_drafts where order_id = ${o.id}`;
+          if (!t?.first || !providers.storage) return false;
+          const late = await sql`select id from documents where order_id = ${o.id} and kind in ('basis', 'other') and deleted_at is null
+                                 and created_at > ${t.first}`;
+          return late.length > 0 && (await assignmentDocs(sql, providers.storage, o)).some((d) => late.some((l) => l.id === d.id));
+        };
+        const report = await orgMonthReport(sql, org.id, reportMonth(query.month), { registry, taskDue, taskAfter });
         if (query.format !== 'csv') return { report };
         res.set({
           'content-type': 'text/csv; charset=utf-8',

@@ -92,6 +92,13 @@ const taskLate = (x) => {
   return `из сданных дел со сроком по заданию на оценку позже него: ${x.task_late} из ${x.task_due_cases}, в среднем на ${
     daysRu(x.task_late_days)}${x.task_late > 1 && x.task_late_max !== x.task_late_days ? ` (больше всего — ${daysRu(x.task_late_max)})` : ''}`;
 };
+// 2.329: «дела для банка: 4 · задание на оценку пришло после черновика: 1 (25%)»; ни разу — «… ни в одном»; дел для банка
+// нет — пусто.
+const bankAfter = (x) => {
+  if (!x.bank_cases) return '';
+  return `дела для банка: ${x.bank_cases} · задание на оценку пришло после черновика: ${x.bank_after
+    ? `${x.bank_after} (${x.bank_after_pct}%)` : 'ни в одном'}`;
+};
 // «сдано: 5 (было 3, +2) · в срок: 4 (было 4) · возвраты: 1 (было 2, −1)»; у эксперта без дел в обоих месяцах — пусто.
 const diff = (now, was) => `${now} (было ${was}${now > was ? `, +${now - was}` : now < was ? `, −${was - now}` : ''})`;
 const compare = (x) => {
@@ -148,6 +155,7 @@ async function load(month) {
     ...(swapFirst(t) ? fact('Исправлено кнопкой', swapFirst(t)) : []),
     ...(bankTask(t) ? fact('Задание от банка', bankTask(t), t.bank_task_wait ? 'warn' : '') : []),
     ...(taskLate(t) ? fact('Срок по заданию на оценку', taskLate(t), t.task_late ? 'warn' : '') : []),
+    ...(bankAfter(t) ? fact('Дела для банка', bankAfter(t), t.bank_after ? 'warn' : '') : []),
     ...(report.current && t.overdue_now ? fact('Просрочено сейчас', String(t.overdue_now), 'overdue') : []),
     ...fact('Вознаграждение за сданные', rub(t.fee_kop), 'money-sum'),
     ...fact('Выплачено экспертам', rub(t.paid_kop)));
@@ -182,6 +190,7 @@ async function load(month) {
     ...(swapFirst(x) ? [el('div', { class: 'muted', 'data-expert-swap': '', text: swapFirst(x) })] : []),
     ...(bankTask(x) ? [el('div', { class: x.bank_task_wait ? 'warn' : 'muted', 'data-expert-banktask': '', text: bankTask(x) })] : []),
     ...(taskLate(x) ? [el('div', { class: x.task_late ? 'warn' : 'muted', 'data-expert-tasklate': '', text: taskLate(x) })] : []),
+    ...(bankAfter(x) ? [el('div', { class: x.bank_after ? 'warn' : 'muted', 'data-expert-bankafter': '', text: bankAfter(x) })] : []),
     ...(x.remarks?.length ? [el('div', { class: 'muted', 'data-expert-remarks': '', text: `частые замечания: ${
       x.remarks.map((m) => `«${m.text}»${m.n > 1 ? ` ×${m.n}` : ''}`).join(', ')}` })] : []),
     el('div', { class: 'muted', text: `вознаграждение за сданные: ${rub(x.fee_kop)} · выплачено: ${rub(x.paid_kop)}` }))));
