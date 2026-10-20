@@ -29,6 +29,7 @@ function render(r) {
     : r.can_request ? `Сейчас срок — ${dayRu(r.deadline)} Не успеваете — попросите перенести: диспетчер согласится или откажет, заказчик увидит.`
       : `Сейчас срок — ${dayRu(r.deadline)}`;
   renderFresh(r.fresh_answer);
+  renderTaskMoved(r.task_moved);
   renderMoved(r.moved);
   renderPace(r.pace);
   $('deadline-open').classList.toggle('hidden', !o);
@@ -78,6 +79,35 @@ function renderFresh(a) {
   box.className = a.outcome === 'approved' ? 'msg ok' : 'msg warn';
   box.dataset.outcome = a.outcome;
 }
+
+// Перенос согласован, а новый срок позже срока по заданию на оценку (2.326): банк (суд) ждёт отчёт к прежнему дню —
+// приложите к делу письмо о переносе; одной кнопкой — попросить его у заказчика. Пришло письмо с новым сроком — блока нет.
+function renderTaskMoved(m) {
+  const box = $('deadline-task-moved');
+  box.classList.toggle('hidden', !m);
+  if (!m) return;
+  $('deadline-task-moved-text').textContent = `Срок перенесён на ${dayRu(m.deadline)}, а ${m.by} ${m.who.toLowerCase()} ждёт отчёт к ${dayRu(m.day)}`
+    + `${m.name ? ` («${m.name}», стр. ${m.page})` : ''}. Приложите к делу ${m.doc.toLowerCase()} о переносе срока — `
+    + 'иначе отчёт с новой датой могут не принять.';
+  const ask = $('deadline-task-moved-ask');
+  const msg = $('deadline-task-moved-msg');
+  const waiting = !!m.asked && !m.asked.came;
+  ask.classList.toggle('hidden', waiting || ctx.order.status !== 'in_work');
+  msg.classList.toggle('hidden', !m.asked);
+  msg.textContent = !m.asked ? '' : waiting ? `Попросили у заказчика ${whenRu(m.asked.at)} — ждём документ.`
+    : 'Заказчик приложил документ, но нового срока в нём не видно — проверьте, что срок в нём не раньше нового срока дела.';
+  box.dataset.taskDue = m.day;
+}
+$('deadline-task-moved-ask').addEventListener('click', async () => {
+  const btn = $('deadline-task-moved-ask');
+  btn.disabled = true;
+  try {
+    await api('POST', `/api/orders/${ctx.order.id}/doc-requests`, { task_move: true });
+    await ctx.reload();
+    say($('deadline-msg'), 'Запрошено — заказчику отправлено уведомление', 'ok');
+  } catch (err) { say($('deadline-msg'), err.message); }
+  btn.disabled = false;
+});
 
 // Срок по заданию на оценку (2.319): выбранный новый срок позже дня, к которому отчёт ждут по заданию (письму заказчика,
 // определению суда), — предупреждение до отправки: кто ждёт и к какому дню. Отправить можно: решают диспетчер и заказчик.

@@ -9,7 +9,8 @@
 import { HttpError } from '../http/core.mjs';
 import { FINAL, addDays, todayMsk } from '../orders/workflow.mjs';
 import { assignmentValue, egrnIssued, egrnOnObject } from '../ai/report-checks.mjs';
-import { assignmentDocs, egrnDocs, TASK_ITEMS } from './ai-ops.mjs';
+import { assignmentDocs, egrnDocs, TASK_ITEMS, TASK_MOVE } from './ai-ops.mjs';
+import { taskMoved } from './deadline-ops.mjs';
 import { LEVEL, orderLevel, orderSides } from '../access/policy.mjs';
 import { customersOf, notify } from '../notify/notify.mjs';
 import { audit, text, uuidFrom } from './util.mjs';
@@ -117,6 +118,8 @@ export async function docsWaiting(sql, orders, now = new Date()) {
 // Пояснение заказчику к просьбе о свежей выписке — сразу видно, почему старая не годится.
 export const egrnOldNote = (o) => `Выписка ЕГРН в деле от ${o.day.split('-').reverse().join('.')} — старше ${EGRN_FRESH_DAYS} дней на ${o.on_value ? 'дату оценки' : 'сегодня'}. Нужна свежая выписка: закажите её на Госуслугах или в МФЦ и загрузите сюда.`;
 
+const ruDay = (iso) => iso.split('-').reverse().join('.');
+
 async function view(sql, actor, order, registry, storage) {
   const catalog = registry.requestDocs(order.module, order.service, order.basis_kind, order.fields);
   const hints = new Map(catalog.map((c) => [c.id, c.hint]));
@@ -172,8 +175,17 @@ export function docRequestOps() {
           return { item_id: c.id, title: c.title };
         });
         for (const t of custom) items.push({ item_id: null, title: text(t, 'Какой документ нужен', 200) });
+        // «Попросить письмо о переносе» (2.326): перенос согласован, а срок по заданию на оценку раньше нового срока.
+        let moveNote = null;
+        if (body?.task_move) {
+          const m = await taskMoved(sql, providers.storage, registry, order);
+          if (!m) throw new HttpError(409, 'no_task_move', 'Срок дела не позже срока по заданию на оценку — письмо о переносе не нужно');
+          items.push({ item_id: TASK_MOVE, title: `${m.doc} о переносе срока отчёта на ${ruDay(m.deadline)}` });
+          moveNote = `Срок отчёта перенесён на ${ruDay(m.deadline)}, а ${m.by} отчёт ждут к ${ruDay(m.day)}. `
+            + `${m.who === 'Суд' ? 'Нужно определение суда о продлении срока' : m.who === 'Банк' ? 'Попросите банк подтвердить новый срок письмом' : 'Подтвердите новый срок письмом'} — и загрузите сюда.`;
+        }
         if (!items.length) throw new HttpError(400, 'nothing_selected', 'Отметьте документы или напишите, какой нужен');
-        let note = body?.note && String(body.note).trim() ? text(body.note, 'Пояснение для заказчика', 1000) : null;
+        let note = body?.note && String(body.note).trim() ? text(body.note, 'Пояснение для заказчика', 1000) : moveNote;
         // «Запросить свежую выписку» (2.224): пояснение заказчику — от какого числа выписка в деле и почему нужна новая.
         if (body?.fresh_egrn && !note && ids.includes('egrn')) {
           const old = await egrnOld(sql, providers.storage, registry, order);

@@ -104,9 +104,11 @@ async function resultDocs(sql, storage, order) {
 const ASSIGNMENT_MAX = 5;
 // Файл, приложенный заказчиком к просьбе «Задание на оценку от банка» (2.299), — задание, как бы он ни назывался.
 export const TASK_ITEMS = ['bank_task'];
+// Письмо банка (определение суда) о переносе срока, запрошенное после согласованного переноса (2.326), — тоже задание.
+export const TASK_MOVE = 'task_move';
 const ASSIGNMENT_TEXT = /задани\S*\s+на\s+(?:проведение\s+)?оценк/iu;
 export async function assignmentDocs(sql, storage, order) {
-  const docs = await sql`select d.*, exists (select 1 from doc_requests r where r.document_id = d.id and r.item_id = any(${TASK_ITEMS}::text[]) and r.cancelled_at is null) as asked
+  const docs = await sql`select d.*, exists (select 1 from doc_requests r where r.document_id = d.id and r.item_id = any(${[...TASK_ITEMS, TASK_MOVE]}::text[]) and r.cancelled_at is null) as asked
                          from documents d where d.order_id = ${order.id} and d.kind in ('basis', 'other') and d.deleted_at is null
                          order by d.created_at desc limit 20`;
   const out = [];
