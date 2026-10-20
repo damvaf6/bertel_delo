@@ -13061,6 +13061,8 @@ test('2.308: руководитель — срок по заданию на оц
   await db(async (c) => {
     // Днём настоящая сводка за сегодня могла уже прийти — заменяем её своей записью.
     await c.query("delete from org_morning_digests where user_id = $1 and org_id = $2", [head.id, orgId]);
+    // У настоящей сводки могла уже появиться отправка СМС — сначала она (иначе удалить сводку нельзя).
+    await c.query("delete from notification_deliveries where notification_id in (select id from notifications where user_id = $1 and event = 'org_morning_today')", [head.id]);
     await c.query("delete from notifications where user_id = $1 and event = 'org_morning_today'", [head.id]);
     const { rows: [n] } = await c.query("insert into notifications (user_id, type, event, org_id) values ($1, 'org_morning', 'org_morning_today', $2) returning id", [head.id, orgId]);
     await c.query(`insert into org_morning_digests (user_id, org_id, day, sign, task_due, notification_id)
@@ -14191,6 +14193,53 @@ test('2.326: перенос позже срока по заданию — при
   await ep.goto('/kabinet');
   await expect(ep.locator('#today-box')).toBeVisible();
   await expect(ep.locator('#today-box li[data-today-item="task-moved"]')).toHaveCount(0);
+  for (const p of [ep, cp]) await p.context().close();
+});
+
+// 2.333: перенос согласован позже срока по заданию, эксперт попросил письмо, заказчик приложил его к пункту — в «Что сказано
+// в задании на оценку» строка «Срок перенесён письмом: на …», прежний срок по заданию и файл письма.
+test('2.333: «Что сказано в задании на оценку» — срок перенесён письмом', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990033311'), customer = await signIn(cp, '+79990033312');
+  const ru = (iso) => iso.split('-').reverse().join('.');
+  const A = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Письмо о переносе: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Садовая ул., д. 11, кв. 3"}') returning id`,
+    [customer.id, expert.id, inDays(12)]);
+    await c.query(`insert into deadline_requests (order_id, requested_by, old_deadline, new_deadline, reason, outcome, decided_at, seen_at)
+      values ($1, $2, $3, $4, 'Банк согласовал перенос устно', 'approved', now() - interval '1 hour', now())`, [o.id, expert.id, inDays(4), inDays(12)]);
+    return o.id;
+  });
+  const put = async (body, name, kind) => {
+    const r = await cp.request.post(`/api/orders/${A}/documents`, {
+      data: Buffer.from(body), headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': kind } });
+    expect(r.status()).toBe(201);
+    return (await r.json()).document.id;
+  };
+  await put(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ru(inDays(5))}`, 'Задание банка.txt', 'basis');
+  await ep.goto(`/kabinet#order=${A}&to=deadline`);
+  await ep.locator('#deadline-task-moved-ask').click();
+  await expect(ep.locator('#deadline-msg')).toHaveText('Запрошено — заказчику отправлено уведомление');
+  const list = await (await cp.request.get(`/api/orders/${A}/doc-requests`, { headers: H })).json();
+  const req = list.requests.find((r) => r.item_id === 'task_move');
+  const doc = await put(`Уважаемые коллеги! Сообщаем, что срок составления отчёта продлён: не позднее ${ru(inDays(12))}`, 'Письмо банка о переносе.txt', 'other');
+  expect((await cp.request.post(`/api/orders/${A}/doc-requests/${req.id}/attach`, { data: { document_id: doc }, headers: H })).status()).toBe(200);
+  await ep.reload();
+  const box = ep.locator('#task-box');
+  await expect(box).toBeVisible();
+  const row = box.locator('li[data-task="moved"]');
+  await expect(row).toContainText(`Срок перенесён письмом: на ${ru(inDays(12))}`);
+  await expect(row).toContainText(`по заданию было — ${ru(inDays(5))}`);
+  await expect(row.locator('[data-action="task-open"]')).toHaveText('«Письмо банка о переносе.txt», стр. 1');
+  await expect(box.locator('li[data-task="due"]')).toContainText(`не позднее ${ru(inDays(12))}`);
+  await expect(ep.locator('#deadline-task-moved')).toBeHidden();
+  expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await row.scrollIntoViewIfNeeded();
+  await shot(ep, '54v2-ekspert-zadanie-srok-perenesen-pismom');
   for (const p of [ep, cp]) await p.context().close();
 });
 

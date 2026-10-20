@@ -254,6 +254,15 @@ export function taskUserFor(registry, order, assignment) {
   const b = assignmentBank(assignment);
   return b && b.value.length < 120 ? { id: b.id, v: b.value, what: b.what, by: TASK_BY[b.what], name: b.name, page: b.page + 1 } : null;
 }
+// 2.333: срок по заданию взят из письма о переносе срока — файла, приложенного к просьбе «Письмо банка о переносе» (2.326,
+// пункт task_move), или файла задания с более поздним сроком, чем в другом файле задания. `was` — прежний срок по заданию
+// (самый поздний из остальных файлов, раньше нового); его нет — только новый срок.
+export function taskMoveLetter(assignment, due) {
+  if (!due) return null;
+  const letter = assignment.find((a) => a.name === due.name);
+  const was = assignment.filter((a) => a !== letter).map((a) => assignmentDue([a])?.day).filter((d) => d && d < due.day).sort().at(-1) ?? null;
+  return letter && (letter.moved || was) ? { day: due.day, was } : null;
+}
 const dayOf = (v) => (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10);
 // 2.308: руководителю у дела на подписи организации — срок по заданию на оценку (2.303) прошёл или сегодня (день — по Москве).
 // Задание читается только у дел с правилом report_dates; срок позже сегодняшнего — ничего.
@@ -417,6 +426,7 @@ export function draftOps() {
         const address = taskAddressFor(registry, order, assignment, null);
         const due = taskDueFor(registry, order, assignment);
         const user = taskUserFor(registry, order, assignment);
+        const moved = taskMoveLetter(assignment, due);
         const items = [
           vd?.day ? { id: 'value_date', label: 'Дата оценки', v: vd.day, ...at(vd) } : null,
           vd?.days ? { id: 'value_date', label: 'Дата оценки', v: vd.days.join(', '), many: true, by: null, name: null, page: null, doc_id: null } : null,
@@ -426,6 +436,7 @@ export function draftOps() {
           address ? { id: 'address', label: 'Адрес объекта', v: address.v, ...at(address), typed: address.typed } : null,
           user?.name ? { id: 'user', label: 'Предполагаемый пользователь результатов оценки', v: user.v, ...at(user) } : null,
           due ? { id: 'due', label: 'Срок составления отчёта', v: `не позднее ${due.v}`, ...at(due), later: due.later } : null,
+          moved ? { id: 'moved', label: 'Срок перенесён письмом', v: `на ${ruDay(moved.day)}`, ...at(due), was: moved.was && ruDay(moved.was) } : null,
         ].filter(Boolean);
         return { files: assignment.map((a) => ({ id: a.id, name: a.name })), items };
       },
