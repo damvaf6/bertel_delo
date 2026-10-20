@@ -297,8 +297,22 @@ export async function expertMorningAlerts(sql, userId, today, now = new Date(), 
   }
   // Срок по заданию на оценку сегодня, завтра или прошёл, а своего файла результата нет (2.315, строка «Срок по заданию на
   // оценку близко» в «Сегодня», 2.304); такие дела в «нет файла результата» не повторяются, как в «Сегодня».
-  const taskDue = registry && storage ? (await taskDueCases(sql, storage, registry, userId, rows, today)).filter((x) => x.due.days_left <= 1) : [];
+  // Перенос согласован позже срока по заданию на оценку (2.331, строка «Приложите письмо о переносе» в «Сегодня», 2.326):
+  // письмо ещё не просили — в сводке; такое дело (и пока письмо ждём) в «срок по заданию на оценку» не повторяется (прогон 2.330).
+  let taskMovedN = 0;
+  const movedIds = new Set();
+  if (registry && storage) {
+    for (const o of rows) {
+      const m = await taskMoved(sql, storage, registry, o);
+      if (!m) continue;
+      movedIds.add(o.id);
+      if (!(m.asked && !m.asked.came)) taskMovedN += 1;
+    }
+  }
+  const taskDue = registry && storage ? (await taskDueCases(sql, storage, registry, userId, rows, today))
+    .filter((x) => x.due.days_left <= 1 && !movedIds.has(x.order.id)) : [];
   return {
+    task_moved: taskMovedN,
     no_result: (await noResultOrders(sql, userId, hotRows, today)).filter((x) => !taskDue.some((t) => t.order.id === x.id)).length,
     task_due: taskDue.length,
     reply_wait: (await replyWaits(sql, rows.map((o) => o.id))).length,
