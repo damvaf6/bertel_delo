@@ -178,12 +178,22 @@ async function expertPart(sql, actor, registry, today, storage) {
   // о переносе; попросили у заказчика и ждём — строки нет, письмо пришло, а срок по заданию прежний — снова есть.
   // Срок по заданию прежний и перенос согласован — строки «Срок по заданию на оценку близко» нет (прогон 2.330): то же дело
   // в «Приложите письмо о переносе», попросили письмо — ждём его, а не сдаём к прежнему сроку.
-  const moved = [], movedIds = new Set();
+  // 2.341: письмо о переносе пришло, а срок в нём раньше согласованного (2.335), сегодня, завтра или прошёл, и своего файла
+  // результата нет — своей строкой «Сдать по письму о переносе» (к файлу результата); в «Приложите письмо» не повторяется.
+  // Письмо с новым сроком уже попросили — строка остаётся: пока нового письма нет, банк ждёт отчёт к сроку из прежнего.
+  const moved = [], movedIds = new Set(), letterDue = [];
+  const own = await ownResults(sql, actor.id, rows.filter((x) => x.status === 'in_work'));
   for (const o of rows.filter((x) => ['in_work', 'review'].includes(x.status))) {
     const m = await taskMoved(sql, storage, registry, o);
     if (m) movedIds.add(o.id);
-    if (m && !(m.asked && !m.asked.came)) moved.push(item(o, { task_moved: m, can_ask: o.status === 'in_work' }));
+    const left = m?.letter ? daysBetween(today, m.day) : null;
+    if (m?.letter && o.status === 'in_work' && left <= LETTER_DUE_DAYS && !own.has(o.id)) {
+      const draft = !!(await sql.one`select 1 as x from result_drafts where order_id = ${o.id} limit 1`);
+      letterDue.push(item(o, { task_moved: m, letter_due: { day: m.day, days_left: left, overdue: left < 0 }, has_draft: draft,
+        can_ask: !(m.asked && !m.asked.came) }));
+    } else if (m && !(m.asked && !m.asked.came)) moved.push(item(o, { task_moved: m, can_ask: o.status === 'in_work' }));
   }
+  letterDue.sort((a, b) => a.letter_due.day.localeCompare(b.letter_due.day));
   const awayDeclined = await awayDeclinedCases(sql, actor, rows, ext, today, item);
   // Выписка ЕГРН в деле старше 30 дней на дату оценки, свежую ещё не просили (2.224) — запросить одной кнопкой.
   const egrnStale = [];
@@ -240,8 +250,9 @@ async function expertPart(sql, actor, registry, today, storage) {
     // Отказ в переносе, а срок в дни «не принимаю дела» (2.215) — своей строкой с «Попросить руководителя передать дело».
     away_declined: awayDeclined,
     task_moved: moved,
+    letter_due: letterDue,
     // Согласие на перенос со сроком позже срока по заданию (2.326) — в строке «Приложите письмо о переносе», здесь не повторяется.
-    extend_answer: extendAnswer.filter((x) => !awayDeclined.some((a) => a.id === x.id) && !moved.some((m) => m.id === x.id)),
+    extend_answer: extendAnswer.filter((x) => !awayDeclined.some((a) => a.id === x.id) && !moved.some((m) => m.id === x.id) && !letterDue.some((m) => m.id === x.id)),
     ready: readyLeft,
     no_result: noResult.filter((x) => !taskDue.some((t) => t.id === x.id)),
     reply_wait: replyWait,
@@ -402,6 +413,18 @@ export async function taskLateCases(sql, storage, registry, rows) {
 
 // 2.304: срок составления отчёта из задания на оценку (2.302, 2.303 — taskDueFor) раньше срока дела, до него 2 дня или меньше
 // (или уже прошёл), а своего файла результата нет. Задание на оценку читается только у дел в работе без своего файла.
+// Срок по письму о переносе (2.341): сегодня или завтра — как «Срок по заданию сегодня, завтра или прошёл» в утренней сводке.
+const LETTER_DUE_DAYS = 1;
+const daysBetween = (from, to) => Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400_000);
+
+// Дела, где у исполнителя есть свой файл результата (не удалён).
+async function ownResults(sql, userId, work) {
+  if (!work.length) return new Set();
+  const r = await sql`select distinct order_id from documents where order_id = any(${work.map((o) => o.id)}::uuid[]) and kind = 'result'
+                      and deleted_at is null and uploaded_by = ${userId}`;
+  return new Set(r.map((x) => x.order_id));
+}
+
 export async function taskDueCases(sql, storage, registry, userId, rows, today = todayMsk()) {
   const work = rows.filter((o) => o.status === 'in_work');
   if (!work.length) return [];

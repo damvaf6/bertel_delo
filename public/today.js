@@ -57,6 +57,12 @@ function taskDueWhen(d, today) {
     : n === 1 ? `Срок по заданию завтра — ${dayRu(d.day)}` : `Срок по заданию ${dayRu(d.day)} · осталось ${n} дн.`;
 }
 
+// Срок по письму о переносе (2.341): сегодня, завтра или уже прошёл.
+function letterDueWhen(d, doc) {
+  const by = `Срок по ${doc.toLowerCase().replace(/^письмо/, 'письму').replace(/^определение/, 'определению')} о переносе`;
+  return d.days_left < 0 ? `${by} прошёл — ${dayRu(d.day)}` : `${by} ${d.days_left === 0 ? 'сегодня' : 'завтра'} — ${dayRu(d.day)}`;
+}
+
 // Руководителю у дела на подписи (2.308): срок по заданию на оценку прошёл или сегодня — с файлом и страницей задания.
 export const taskDueSignText = (d) => `${d.overdue ? `Срок ${d.by} прошёл — ${dayRu(d.day)}` : `Срок ${d.by} сегодня — подпишите сегодня`}`
   + ` («${d.name}», стр. ${d.page})`;
@@ -140,7 +146,9 @@ function bankTaskAsk(x) {
 function taskMoveAsk(x) {
   if (!x.can_ask) return [];
   const msg = el('div', { class: 'muted', 'data-role': 'task-move-msg' });
-  const btn = el('button', { type: 'button', class: 'secondary', 'data-action': 'task-move-ask' }, 'Попросить письмо у заказчика');
+  // Письмо уже пришло, но срок в нём раньше согласованного (2.335, 2.341) — просим письмо с новым сроком.
+  const btn = el('button', { type: 'button', class: 'secondary', 'data-action': 'task-move-ask' },
+    x.task_moved?.letter ? 'Попросить письмо с новым сроком' : 'Попросить письмо у заказчика');
   btn.onclick = async () => {
     btn.disabled = true;
     try {
@@ -256,6 +264,15 @@ export async function loadToday() {
       (x) => { location.hash = `order=${x.id}&to=result`; }),
       // В загруженном и ещё не подписанном файле дата составления позже срока по заданию на оценку (2.321) — до подписи:
       // исправить дату или приложить документ о переносе срока; нажатие ведёт к файлу результата.
+      // Письмо о переносе пришло, а срок в нём раньше согласованного (2.335) — сегодня, завтра или прошёл, файла результата нет
+      // (2.341): сдать по письму; нажатие — к файлу результата, кнопка — попросить письмо с новым сроком.
+      ...group('letter-due', 'Сдать по письму о переносе', e.letter_due ?? [], (x) => [x.title,
+        { class: 'overdue', role: 'letter-due-when', text: `${letterDueWhen(x.letter_due, x.task_moved.doc)} («${x.task_moved.name}», стр. ${x.task_moved.page})` },
+        `срок дела перенесён на ${dayRu(x.task_moved.deadline)}, а ${x.task_moved.who.toLowerCase()} ждёт отчёт по письму — к ${dayRu(x.letter_due.day)}`,
+        x.can_ask ? (x.has_draft ? 'черновик есть — соберите отчёт Word и загрузите файл или попросите письмо с новым сроком'
+          : 'загрузите файл результата или попросите письмо с новым сроком')
+          : `письмо с новым сроком попросили ${since(x.task_moved.asked.at)} — пока его нет, сдайте по прежнему письму`],
+      (x) => { location.hash = `order=${x.id}&to=result`; }, taskMoveAsk),
       ...group('task-made', 'Дата составления позже срока по заданию на оценку', e.task_made ?? [], (x) => [x.title,
         { class: 'overdue', role: 'task-made-why', text: `В «${x.file}» дата составления — ${dayRu(x.made.day)} (стр. ${x.made.page}), а срок ${x.task_due.by} — ${dayRu(x.task_due.day)} («${x.task_due.name}», стр. ${x.task_due.page})` },
         'до подписи исправьте дату составления или приложите к делу документ о переносе срока'],

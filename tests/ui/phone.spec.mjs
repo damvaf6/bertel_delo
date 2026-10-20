@@ -14395,6 +14395,59 @@ test('2.335: письмо о переносе со сроком раньше с�
   for (const p of [ep, cp]) await p.context().close();
 });
 
+// 2.341: письмо о переносе пришло со сроком раньше согласованного, срок по письму завтра, а файла результата нет — в «Сегодня»
+// строка «Сдать по письму о переносе»; нажатие — к файлу результата, кнопка — попросить письмо с новым сроком.
+test('2.341: «Сегодня» — сдать по письму о переносе', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990034111'), customer = await signIn(cp, '+79990034112');
+  const ru = (iso) => iso.split('-').reverse().join('.');
+  const short = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+  const A = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Сдать по письму: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Садовая ул., д. 19, кв. 4"}') returning id`,
+    [customer.id, expert.id, inDays(12)]);
+    await c.query(`insert into deadline_requests (order_id, requested_by, old_deadline, new_deadline, reason, outcome, decided_at, seen_at)
+      values ($1, $2, $3, $4, 'Банк согласовал перенос устно', 'approved', now() - interval '1 hour', now())`, [o.id, expert.id, inDays(1), inDays(12)]);
+    return o.id;
+  });
+  const put = async (body, name, kind) => {
+    const r = await cp.request.post(`/api/orders/${A}/documents`, {
+      data: Buffer.from(body), headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': kind } });
+    expect(r.status()).toBe(201);
+    return (await r.json()).document.id;
+  };
+  await put(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ru(inDays(0))}`, 'Задание банка.txt', 'basis');
+  // Эксперт попросил письмо о переносе, банк прислал — а срок в нём завтра.
+  expect((await ep.request.post(`/api/orders/${A}/doc-requests`, { data: { task_move: true }, headers: H })).status()).toBe(201);
+  const req = (await (await cp.request.get(`/api/orders/${A}/doc-requests`, { headers: H })).json()).requests.find((r) => r.item_id === 'task_move');
+  const doc = await put(`Банк сообщает: срок составления отчёта продлён, не позднее ${ru(inDays(1))}`, 'Письмо банка о переносе.txt', 'other');
+  expect((await cp.request.post(`/api/orders/${A}/doc-requests/${req.id}/attach`, { data: { document_id: doc }, headers: H })).status()).toBe(200);
+  await ep.goto('/kabinet');
+  const row = ep.locator(`#today-box li[data-today-item="letter-due"]:has-text("Сдать по письму: квартира")`);
+  await expect(row.locator('[data-role="letter-due-when"]')).toHaveText(`Срок по письму банка о переносе завтра — ${short(inDays(1))} («Письмо банка о переносе.txt», стр. 1)`);
+  await expect(row).toContainText(`срок дела перенесён на ${short(inDays(12))}, а банк ждёт отчёт по письму — к ${short(inDays(1))}`);
+  await expect(row).toContainText('загрузите файл результата или попросите письмо с новым сроком');
+  await expect(ep.locator(`#today-box li[data-today-item="task-moved"]:has-text("Сдать по письму: квартира")`)).toHaveCount(0);
+  const ask = row.locator('[data-action="task-move-ask"]');
+  await expect(ask).toHaveText('Попросить письмо с новым сроком');
+  expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await row.scrollIntoViewIfNeeded();
+  await shot(ep, '54w1-segodnya-sdat-po-pismu');
+  await ask.click();
+  await expect(row.locator('[data-role="task-move-msg"]')).toHaveText('Запрошено — заказчику отправлено уведомление');
+  await row.locator('button.open').click();
+  await expect(ep).toHaveURL(new RegExp(`#order=${A}&to=result$`));
+  // Снова «Сегодня»: письмо с новым сроком попросили — строка остаётся, без кнопки.
+  await ep.goto('/kabinet');
+  await expect(row).toContainText('письмо с новым сроком попросили');
+  await expect(row.locator('[data-action="task-move-ask"]')).toHaveCount(0);
+  for (const p of [ep, cp]) await p.context().close();
+});
+
 // 2.337: в «Сроке» дела у эксперта — «История сроков»: срок при заказе, перенос, срок по заданию, просьба письма и письмо
 // о переносе одним списком по времени.
 test('2.337: «История сроков» в деле', async ({ browser, baseURL }) => {
