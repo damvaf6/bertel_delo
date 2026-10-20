@@ -662,3 +662,47 @@ test('2.335: письмо о переносе пришло, а срок в нё�
   assert.equal((await list(owner, o)).body.task_moved, null);
   assert.equal((await list(dispatcher, o)).body.task_moved, null);
 });
+
+test('2.337: «История сроков» — срок при заказе, срок по заданию, перенос, просьба письма и письмо одним списком по времени', async () => {
+  const o = await inWork('Квартира: история сроков', 5);
+  const ruD = (s) => s.split('-').reverse().join('.');
+  const put = (body, name, kind = 'basis') => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': kind } });
+  const history = async (who = spec) => (await list(who, o)).body.history;
+  // Переносов и задания нет — списка нет: хватает «Сейчас срок».
+  assert.equal(await history(), null);
+  await S.sql`update orders set fields = fields || '{"purpose":"bank"}'::jsonb where id = ${o.id}`;
+  const due = addDays(today, 5), late = addDays(today, 12);
+  assert.equal((await put(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(due)}`, 'Задание банка.txt')).status, 201);
+  // Файл без срока в список не попадает.
+  assert.equal((await put('Письмо банка: просим ускорить работу.', 'Письмо банка.txt', 'other')).status, 201);
+  let h = await history();
+  assert.deepEqual(h.map((x) => x.kind), ['start', 'task']);
+  assert.equal(h[0].day, addDays(today, 5));
+  assert.deepEqual({ day: h[1].day, by: h[1].by, name: h[1].name }, { day: due, by: 'по заданию на оценку', name: 'Задание банка.txt' });
+  // Отказ, затем согласие — обе просьбы с ответом; первоначальный срок не меняется.
+  const r = await ask(spec, o, { new_deadline: addDays(today, 9), reason: 'Жду выписку' });
+  assert.equal((await decide(dispatcher, o, r.body.open.id, { approve: false, answer: 'Банк не продлит' })).status, 200);
+  const r2 = await ask(spec, o, { new_deadline: late, reason: 'Банк согласовал перенос устно' });
+  assert.equal((await decide(dispatcher, o, r2.body.open.id, { approve: true })).status, 200);
+  const q = await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { task_move: true });
+  const req = q.body.requests.find((x) => x.item_id === 'task_move');
+  h = await history();
+  assert.deepEqual(h.map((x) => x.kind), ['start', 'task', 'request', 'request', 'ask']);
+  assert.equal(h[0].day, addDays(today, 5));
+  assert.deepEqual([h[2].outcome, h[2].answer, h[2].new_deadline], ['declined', 'Банк не продлит', addDays(today, 9)]);
+  assert.deepEqual([h[3].outcome, h[3].old_deadline, h[3].new_deadline], ['approved', addDays(today, 5), late]);
+  assert.equal(h[4].came_at, null);
+  // Письмо пришло к просьбе — запись письма: прежний срок по заданию и новый; у просьбы — когда пришло.
+  const doc = await put(`Банк сообщает: срок составления отчёта продлён, не позднее ${ruD(late)}`, 'Скан 001.txt', 'other');
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/doc-requests/${req.id}/attach`, { document_id: doc.body.document.id })).status, 200);
+  h = await history();
+  assert.deepEqual(h.map((x) => x.kind), ['start', 'task', 'request', 'request', 'ask', 'letter']);
+  assert.ok(h[4].came_at);
+  assert.deepEqual({ day: h[5].day, was: h[5].was, name: h[5].name }, { day: late, was: due, name: 'Скан 001.txt' });
+  for (let i = 2; i < h.length; i++) assert.ok(new Date(h[i].at) >= new Date(h[i - 1].at), `по времени: ${i}`);
+  // Заказчик, диспетчер — без истории сроков; чужой — 404.
+  assert.equal(await history(owner), null);
+  assert.equal(await history(dispatcher), null);
+  assert.equal((await list(stranger, o)).status, 404);
+});

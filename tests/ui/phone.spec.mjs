@@ -14352,6 +14352,65 @@ test('2.335: письмо о переносе со сроком раньше с�
   for (const p of [ep, cp]) await p.context().close();
 });
 
+// 2.337: в «Сроке» дела у эксперта — «История сроков»: срок при заказе, перенос, срок по заданию, просьба письма и письмо
+// о переносе одним списком по времени.
+test('2.337: «История сроков» в деле', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990033711'), customer = await signIn(cp, '+79990033712');
+  const ru = (iso) => iso.split('-').reverse().join('.');
+  const long = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+  const A = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'История сроков: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Садовая ул., д. 17, кв. 4"}') returning id`,
+    [customer.id, expert.id, inDays(12)]);
+    await c.query(`insert into deadline_requests (order_id, requested_by, old_deadline, new_deadline, reason, outcome, decided_at, seen_at)
+      values ($1, $2, $3, $4, 'Банк согласовал перенос устно', 'approved', now(), now())`, [o.id, expert.id, inDays(4), inDays(12)]);
+    return o.id;
+  });
+  const put = async (body, name, kind) => {
+    const r = await cp.request.post(`/api/orders/${A}/documents`, {
+      data: Buffer.from(body), headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': kind } });
+    expect(r.status()).toBe(201);
+    return (await r.json()).document.id;
+  };
+  await put(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ru(inDays(5))}`, 'Задание банка.txt', 'basis');
+  await ep.goto(`/kabinet#order=${A}&to=deadline`);
+  await ep.locator('#deadline-task-moved-ask').click();
+  await expect(ep.locator('#deadline-msg')).toHaveText('Запрошено — заказчику отправлено уведомление');
+  const list = await (await cp.request.get(`/api/orders/${A}/doc-requests`, { headers: H })).json();
+  const req = list.requests.find((r) => r.item_id === 'task_move');
+  const doc = await put(`Банк сообщает: срок составления отчёта продлён, не позднее ${ru(inDays(12))}`, 'Письмо банка о переносе.txt', 'other');
+  expect((await cp.request.post(`/api/orders/${A}/doc-requests/${req.id}/attach`, { data: { document_id: doc }, headers: H })).status()).toBe(200);
+  await ep.reload();
+  const box = ep.locator('#deadline-timeline');
+  await expect(box).toBeVisible();
+  await box.locator('summary').click();
+  const items = box.locator('li');
+  await expect(items).toHaveCount(5);
+  await expect(items.nth(0)).toContainText(`Срок дела при заказе — ${long(inDays(4))}`);
+  await expect(items.nth(1)).toHaveAttribute('data-history', 'request');
+  await expect(items.nth(1)).toContainText(`Попросили перенести срок с ${long(inDays(4))} на ${long(inDays(12))}`);
+  await expect(items.nth(1).locator('.badge')).toHaveText('перенесён');
+  await expect(items.nth(2)).toContainText(`Срок по заданию на оценку — не позднее ${long(inDays(5))}`);
+  await expect(items.nth(2)).toContainText('файл «Задание банка.txt»');
+  await expect(items.nth(3)).toContainText('Попросили у заказчика письмо о переносе срока');
+  await expect(items.nth(3)).toContainText('заказчик приложил документ');
+  await expect(items.nth(4)).toContainText(`Письмо о переносе: срок перенесён с ${long(inDays(5))} на ${long(inDays(12))}`);
+  await expect(items.nth(4)).toContainText('файл «Письмо банка о переносе.txt»');
+  expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await box.scrollIntoViewIfNeeded();
+  await shot(ep, '54v4-ekspert-istoriya-srokov');
+  // Заказчику — без истории сроков.
+  await cp.goto(`/kabinet#order=${A}`);
+  await expect(cp.locator('#deadline-box')).toBeVisible();
+  await expect(cp.locator('#deadline-timeline')).toBeHidden();
+  for (const p of [ep, cp]) await p.context().close();
+});
+
 // 2.305: в деле у эксперта — «Что сказано в задании на оценку»: одним списком дата оценки, вид стоимости, цель, заказчик,
 // адрес, срок с файлом и страницей; в заявке другой адрес — видно рядом; задания нет — блока нет.
 test('2.305: «Что сказано в задании на оценку» в деле', async ({ browser, baseURL }) => {
