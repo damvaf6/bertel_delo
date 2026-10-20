@@ -17,7 +17,7 @@ import { extendSuggest, openHandovers } from './handover-ops.mjs';
 import { orgSchedule, taskDues } from '../orders/schedule.mjs';
 import { expiringLinks, incompleteInspections } from './inspect-ops.mjs';
 import { docsWaiting } from './docreq-ops.mjs';
-import { taskDueFor } from './draft-ops.mjs';
+import { taskDueFor, taskMoveLetter } from './draft-ops.mjs';
 import { assignmentDocs, TASK_MOVE } from './ai-ops.mjs';
 
 export const INVITE_TTL_DAYS = 14;
@@ -450,7 +450,18 @@ export function orgOps() {
                                  and r.item_id = ${TASK_MOVE} and r.cancelled_at is null)`;
           return late.length > 0 && (await assignmentDocs(sql, providers.storage, o)).some((d) => late.some((l) => l.id === d.id));
         };
-        const report = await orgMonthReport(sql, org.id, reportMonth(query.month), { registry, taskDue, taskAfter });
+        // 2.336: срок дела перенесён позже срока по заданию на оценку до письма о переносе (2.326) — `need`; пришло письмо с
+        // согласованным сроком (2.333, 2.335: срок в письме не раньше срока дела) — `letter`.
+        const taskMove = async (o) => {
+          if (!providers.storage || !o.deadline || !registry.checks(o.module, o.service).some((r) => (r.auto ?? []).includes('report_dates'))) return null;
+          const assignment = await assignmentDocs(sql, providers.storage, o);
+          const d = taskDueFor(registry, o, assignment);
+          if (!d) return null;
+          const l = taskMoveLetter(assignment, d);
+          const base = l ? l.was : d.day;
+          return { need: base ? o.deadline > base : !!l, letter: !!l && l.day >= o.deadline };
+        };
+        const report = await orgMonthReport(sql, org.id, reportMonth(query.month), { registry, taskDue, taskAfter, taskMove });
         if (query.format !== 'csv') return { report };
         res.set({
           'content-type': 'text/csv; charset=utf-8',

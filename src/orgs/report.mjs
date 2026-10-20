@@ -142,7 +142,9 @@ async function orgMonthDone(sql, orgId, ids, { start, end }) {
                 where a.subject_type = 'order' and a.subject_id = o.id::text and a.action = 'org.case.transfer'
                   and a.details->>'to' = o.executor_user_id::text)) as taken_at,
              (select to_char(d.old_deadline, 'YYYY-MM-DD') from deadline_requests d
-              where d.order_id = o.id and d.outcome = 'approved' order by d.decided_at, d.id limit 1) as moved_from
+              where d.order_id = o.id and d.outcome = 'approved' order by d.decided_at, d.id limit 1) as moved_from,
+             (select count(*)::int from deadline_requests d
+              where d.order_id = o.id and d.outcome = 'approved' and d.org_id is null) as ext_n
       from order_status_history h join orders o on o.id = h.order_id
       join org_members m on m.org_id = ${orgId} and m.user_id = o.executor_user_id
       left join payouts p on p.order_id = o.id
@@ -262,6 +264,28 @@ async function bankAfterRows(done, taskAfter) {
 function bankAfter(rows) {
   const after = rows.filter((r) => r.after).length;
   return { bank_cases: rows.length, bank_after: after, bank_after_pct: rows.length ? Math.round((after / rows.length) * 100) : null };
+}
+
+// 2.336: сданные за месяц дела, где срок переносили по просьбе эксперта (согласованные просьбы; от организации, 2.221, — не в
+// счёт), и из них те, где согласованный срок позже срока по заданию на оценку (банк ждёт отчёт раньше — нужно письмо о
+// переносе, 2.326), и в скольких письмо с согласованным сроком пришло. Это решает операция (`taskMove`: дело →
+// { need, letter }), она читает файлы задания; этот файл операции загружают.
+async function extRows(done, taskMove) {
+  const out = [];
+  for (const o of done.filter((x) => x.ext_n > 0)) {
+    const m = taskMove ? await taskMove(o) : null;
+    out.push({ user_id: o.user_id, n: o.ext_n, need: !!m?.need, letter: !!(m?.need && m.letter) });
+  }
+  return out;
+}
+// { ext_cases, ext_times, ext_need, ext_letter }
+function ext(rows) {
+  return {
+    ext_cases: rows.length,
+    ext_times: rows.reduce((s, r) => s + r.n, 0),
+    ext_need: rows.filter((r) => r.need).length,
+    ext_letter: rows.filter((r) => r.letter).length,
+  };
 }
 
 // { task_due_cases, task_late, task_late_days, task_late_max }
@@ -445,7 +469,7 @@ function byService(done, registry) {
     .map(({ users, cases, ...g }) => ({ ...g, experts: users.size, avg_days: avgDays(pace(cases)) }));
 }
 
-export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), registry = null, taskDue = null, taskAfter = null } = {}) {
+export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), registry = null, taskDue = null, taskAfter = null, taskMove = null } = {}) {
   const experts = await orgExperts(sql, orgId);
   const ids = experts.map((e) => e.user_id);
   const { start, end } = await monthBounds(sql, month);
@@ -486,6 +510,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
   };
   const taskDues = await taskDueRows(q.done, taskDue);
   const bankAfters = await bankAfterRows(q.done, taskAfter);
+  const exts = await extRows(q.done, taskMove);
   const count = (rows) => new Map(rows.map((r) => [r.user_id, r.n]));
   const accepted = count(q.accepted);
   const headReturns = count(q.headReturns);
@@ -521,6 +546,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
       ...bankTask(q.bankTask.filter((x) => x.user_id === e.user_id)),
       ...taskLate(taskDues.filter((x) => x.user_id === e.user_id)),
       ...bankAfter(bankAfters.filter((x) => x.user_id === e.user_id)),
+      ...ext(exts.filter((x) => x.user_id === e.user_id)),
       remarks: topRemarks(q.remarkItems.filter((i) => i.user_id === e.user_id), TOP_REMARKS_EXPERT).map(({ text, n }) => ({ text, n })),
       prev: cmp ? cmp.experts.get(e.user_id) : null,
       services: byService(done, registry).map(({ name, done: n }) => ({ name, n })),
@@ -539,7 +565,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
     experts: rows,
     total: { ...Object.fromEntries(keys.map((k) => [k, sum(k)])), avg_days: avgDays(all), ...resign(q.resign),
       ...egrnFirst(q.firstSign, registry), ...bankTask(q.bankTask), ...taskLate(taskDues),
-      ...bankAfter(bankAfters), prev: cmp ? cmp.total : null },
+      ...bankAfter(bankAfters), ...ext(exts), prev: cmp ? cmp.total : null },
     prev_month: cmp ? prevM : null,
     prev_month_name: cmp ? monthRu(prevM) : null,
     top_remarks: topRemarks(q.remarkItems, TOP_REMARKS),
@@ -664,6 +690,11 @@ export function reportCsv(orgName, r) {
     ...(r.total.bank_cases ? [[], ['Дела для банка', 'Сдано', 'Задание на оценку пришло после черновика', 'Доля, %'],
       ...[...r.experts.filter((x) => x.bank_cases).map((x) => [x.full_name, x]), ['Итого', r.total]]
         .map(([name, x]) => [name, x.bank_cases, x.bank_after, x.bank_after_pct])] : []),
+    // 2.336: только если за месяц сданы дела с переносом срока по просьбе эксперта.
+    ...(r.total.ext_cases ? [[], ['Переносы срока по просьбе эксперта', 'Сдано дел с переносом', 'Переносов',
+      'Срок перенесён позже срока по заданию на оценку', 'Из них с письмом о переносе'],
+      ...[...r.experts.filter((x) => x.ext_cases).map((x) => [x.full_name, x]), ['Итого', r.total]]
+        .map(([name, x]) => [name, x.ext_cases, x.ext_times, x.ext_need, x.ext_letter])] : []),
     ...(r.top_remarks?.length ? [[], ['Частые замечания при возврате', 'Сколько раз', 'У скольких экспертов'],
       ...r.top_remarks.map((x) => [x.text, x.n, x.experts])] : []),
   ];
