@@ -403,7 +403,10 @@ export async function loadToday() {
     const part = [
       // Эксперт просит передать дело коллеге (2.107) — к делу в «Делах экспертов»: «Передать» или «Отказать».
       ...group(`org-handover-${g.id}`, 'Эксперт просит передать дело коллеге', g.handover ?? [], (x) => [...caseLine(x),
-        `${since(x.requested_at)} · причина: ${x.reason}`, ...handoverWhy(x)], toOrg('handover')),
+        `${since(x.requested_at)} · причина: ${x.reason}`, ...handoverWhy(x),
+        // Срок по заданию на оценку раньше срока дела (2.327): к нему сдавать и новому эксперту — близко или прошёл — красным.
+        ...(x.task_due ? [{ class: x.task_due.hot ? 'overdue' : 'muted', role: 'handover-task-due',
+          text: `сдать ${x.task_due.by} — к ${dayRu(x.task_due.day)}${x.task_due.overdue ? ', срок прошёл' : ''} (срок дела позже)` }] : [])], toOrg('handover')),
       // Эксперт не принимает дела до … (2.113), а срок его дела — в эти дни: к делу, там «Передать другому эксперту» уже открыто.
       ...group(`org-away-${g.id}`, 'Эксперт не принимает дела — срок в эти дни', g.away ?? [], (x) => [...caseLine(x),
         // Перенос уже просит — строкой выше; передать некому — не «передайте коллеге» (прогон 2.210).

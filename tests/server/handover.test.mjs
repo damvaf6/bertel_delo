@@ -378,3 +378,36 @@ test('2.221: передать некому — руководитель прос
   assert.equal(hv.extend_asked.outcome, 'approved');
   for (const x of [spec, colleague]) await S.sql`update specialists set away_until = null, away_note = null where user_id = ${x.user.id}`;
 });
+
+// 2.327: в «Сегодня» руководителя у просьбы передать дело — срок по заданию на оценку, если он раньше срока дела (новому
+// эксперту сдавать к нему); позже срока дела или задания нет — ничего; без названия файла задания.
+test('2.327: просьба передать дело — срок по заданию на оценку, если раньше срока дела', async () => {
+  const today = todayMsk();
+  const ru = (s) => s.split('-').reverse().join('.');
+  const ask = async (title, due) => {
+    const o = await inWork(title);
+    if (due) {
+      assert.equal((await owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ru(due)}`), {
+        raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание Передаточной.txt'), 'x-doc-kind': 'basis' } })).status, 201);
+    }
+    assert.equal((await spec.req('POST', `/api/orders/${o.id}/handover`, { reason: 'Болею' })).status, 201);
+    return o;
+  };
+  const near = await ask('Задание раньше срока', addDays(today, 1));
+  const later = await ask('Задание позже срока', addDays(today, 30));
+  const none = await ask('Без задания', null);
+  const list = await todayOf();
+  const of = (o) => list.find((x) => x.order_ref === `№ ${o.id.slice(0, 8).toUpperCase()}`);
+  assert.equal(of(near).task_due.day, addDays(today, 1));
+  assert.match(of(near).task_due.by, /^по /);
+  assert.deepEqual([of(near).task_due.overdue, of(near).task_due.hot], [false, true]);
+  assert.equal(of(later).task_due, null);
+  assert.equal(of(none).task_due, null);
+  assert.ok(!JSON.stringify(list).includes('Передаточной'), 'без названия файла задания');
+  // В «Делах экспертов» тот же срок есть у дела (2.325) — по нему страница предупреждает при переносе от организации.
+  assert.equal((await caseOf(near)).task_due.day, addDays(today, 1));
+  for (const o of [near, later, none]) {
+    const h = (await spec.req('GET', `/api/orders/${o.id}/handover`)).body.open;
+    assert.equal((await spec.req('DELETE', `/api/orders/${o.id}/handover/${h.id}`)).status, 200);
+  }
+});

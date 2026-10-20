@@ -26,6 +26,7 @@
 import { orderRef } from '../notify/registry.mjs';
 import { orderSplit } from '../money/money.mjs';
 import { RESULT_DUE_DAYS, STATUS_NAME, addDays, isOverdue, resultDue, todayMsk } from '../orders/workflow.mjs';
+import { taskDues } from '../orders/schedule.mjs';
 import { orderSignatures, orgReturns, returnEgrn, signWait } from './sign-ops.mjs';
 import { executorSignOrg } from '../access/policy.mjs';
 import { dossierAlerts, loadDossier } from '../dossier/dossier.mjs';
@@ -539,11 +540,15 @@ export async function orgPart(sql, org, registry, today, { actorId = null, stora
     select distinct on (order_id) order_id, outcome from deadline_requests
     where order_id = any(${asking.map((o) => o.id)}::uuid[]) and outcome is not null
     order by order_id, decided_at desc, id desc`).filter((r) => r.outcome === 'declined').map((r) => r.order_id) : []);
+  // Срок по заданию на оценку раньше срока дела (2.327, как в «Делах экспертов» 2.325): новому эксперту сдавать к нему.
+  const askTask = await taskDues(sql, storage, registry, askFull.filter((o) => o.status === 'in_work' && o.deadline));
   const handover = asking.map((o) => view(o, {
     reason: handovers.get(o.id).reason, requested_at: handovers.get(o.id).requested_at,
     away_until: o.status === 'in_work' && awayDeadline(o, today) ? o.away_until : null,
     extend_declined: !ext.get(o.id) && declined.has(o.id), can_transfer: askMates.get(o.id) ?? false,
     extend_asked: !!ext.get(o.id),
+    task_due: askTask.get(o.id) ? { day: askTask.get(o.id).day, by: askTask.get(o.id).by, overdue: askTask.get(o.id).day < today,
+      hot: askTask.get(o.id).day <= addDays(today, 2) } : null,
   }));
   // Эксперт не принимает дела до … (2.113): его дела в работе со сроком раньше дня возвращения — в отпуске он их не сдаст.
   // Уже попросил передать сам — такие дела только в «просит передать».

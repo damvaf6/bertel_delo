@@ -427,11 +427,20 @@ function extendForm(org, c, run) {
   const reason = el('textarea', { maxlength: '1000', rows: '2', 'aria-label': `Причина переноса дела ${c.order_ref}`,
     'data-handover-extend-reason': c.order_ref });
   reason.value = s.reason;
+  // Новый срок позже срока по заданию на оценку (2.327): банк или суд ждёт отчёт раньше — понадобится их письмо о переносе.
+  const late = el('p', { class: 'overdue', 'data-handover-task-late': c.order_ref, hidden: '' });
+  const check = () => {
+    late.hidden = !(c.task_due && date.value > c.task_due.day);
+    if (!late.hidden) late.textContent = `Новый срок позже срока ${c.task_due.by} (к ${dayRu(c.task_due.day)}): кроме согласия диспетчера `
+      + 'понадобится письмо банка (определение суда) о переносе срока — эксперт попросит его у заказчика в деле.';
+  };
+  date.addEventListener('input', check);
+  check();
   const ask = () => run(() => api('POST', `/api/orgs/${org.id}/cases/${c.id}/handover/extend`,
     { new_deadline: date.value, reason: reason.value.trim(), from: c.deadline }),
   'Диспетчеру отправлена просьба перенести срок от организации — эксперт получил уведомление');
   return [el('p', { text: 'Можно попросить диспетчера перенести срок от организации. Причину увидит заказчик.' }),
-    el('label', { text: 'Новый срок' }), date, el('label', { text: 'Причина' }), reason,
+    el('label', { text: 'Новый срок' }), date, late, el('label', { text: 'Причина' }), reason,
     el('div', { class: 'row gap' }, el('button', { 'data-action': 'handover-extend', onclick: ask }, 'Попросить диспетчера перенести срок'))];
 }
 
