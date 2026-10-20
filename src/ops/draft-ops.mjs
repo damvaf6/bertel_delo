@@ -257,11 +257,16 @@ export function taskUserFor(registry, order, assignment) {
 // 2.333: срок по заданию взят из письма о переносе срока — файла, приложенного к просьбе «Письмо банка о переносе» (2.326,
 // пункт task_move), или файла задания с более поздним сроком, чем в другом файле задания. `was` — прежний срок по заданию
 // (самый поздний из остальных файлов, раньше нового); его нет — только новый срок.
+// Прогон 2.340: `was` сам из прежнего письма о переносе (писем два и больше) — `was_letter`: «по прежнему письму было», а не
+// «по заданию было».
 export function taskMoveLetter(assignment, due) {
   if (!due) return null;
   const letter = assignment.find((a) => a.name === due.name);
-  const was = assignment.filter((a) => a !== letter).map((a) => assignmentDue([a])?.day).filter((d) => d && d < due.day).sort().at(-1) ?? null;
-  return letter && (letter.moved || was) ? { day: due.day, was } : null;
+  const days = assignment.filter((a) => a !== letter).map((a) => ({ a, day: assignmentDue([a])?.day })).filter((x) => x.day && x.day < due.day);
+  const was = days.map((x) => x.day).sort().at(-1) ?? null;
+  if (!letter || !(letter.moved || was)) return null;
+  const wasLetter = !!was && (days.some((x) => x.day === was && x.a.moved) || days.some((x) => x.day < was));
+  return { day: due.day, was, ...(wasLetter ? { was_letter: true } : {}) };
 }
 const dayOf = (v) => (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10);
 // 2.308: руководителю у дела на подписи организации — срок по заданию на оценку (2.303) прошёл или сегодня (день — по Москве).
@@ -436,7 +441,7 @@ export function draftOps() {
           address ? { id: 'address', label: 'Адрес объекта', v: address.v, ...at(address), typed: address.typed } : null,
           user?.name ? { id: 'user', label: 'Предполагаемый пользователь результатов оценки', v: user.v, ...at(user) } : null,
           due ? { id: 'due', label: 'Срок составления отчёта', v: `не позднее ${due.v}`, ...at(due), later: due.later } : null,
-          moved ? { id: 'moved', label: 'Срок перенесён письмом', v: `на ${ruDay(moved.day)}`, ...at(due), was: moved.was && ruDay(moved.was) } : null,
+          moved ? { id: 'moved', label: 'Срок перенесён письмом', v: `на ${ruDay(moved.day)}`, ...at(due), was: moved.was && ruDay(moved.was), was_letter: !!moved.was_letter } : null,
         ].filter(Boolean);
         return { files: assignment.map((a) => ({ id: a.id, name: a.name })), items };
       },

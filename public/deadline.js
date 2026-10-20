@@ -120,7 +120,7 @@ function renderTaskMoved(m) {
   // 2.335: письмо о переносе пришло, а срок в нём раньше согласованного срока дела — сдать по письму или попросить другое.
   $('deadline-task-moved-text').textContent = m.letter
     ? `${m.doc} о переносе пришло${m.name ? ` («${m.name}», стр. ${m.page})` : ''}, но срок в нём — ${dayRu(m.day)}`
-      + `${m.letter.was ? ` (по заданию было — ${dayRu(m.letter.was)})` : ''}, а срок дела перенесён на ${dayRu(m.deadline)}. `
+      + `${m.letter.was ? ` (${m.letter.was_letter ? 'по прежнему письму' : 'по заданию'} было — ${dayRu(m.letter.was)})` : ''}, а срок дела перенесён на ${dayRu(m.deadline)}. `
       + `${m.who} ждёт отчёт к ${dayRu(m.day)}: сдайте к этому дню или попросите ${m.doc.toLowerCase()} с новым сроком — ${dayRu(m.deadline)}.`
     : `Срок перенесён на ${dayRu(m.deadline)}, а ${m.by} ${m.who.toLowerCase()} ждёт отчёт к ${dayRu(m.day)}`
       + `${m.name ? ` («${m.name}», стр. ${m.page})` : ''}. Приложите к делу ${m.doc.toLowerCase()} о переносе срока — `

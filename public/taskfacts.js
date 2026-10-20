@@ -27,7 +27,7 @@ export async function loadTaskFacts(current) {
     if (x.many) note.push('в файлах задания разные — выберите сами');
     if (x.typed) note.push(`в заявке — ${x.typed}`);
     if (x.later) note.push(`срок дела — ${x.later}, позже срока по заданию`);
-    if (x.was) note.push(`по заданию было — ${x.was}`);
+    if (x.was) note.push(`${x.was_letter ? 'по прежнему письму' : 'по заданию'} было — ${x.was}`);
     return el('li', { 'data-task': x.id },
       el('span', {}, el('span', { class: 'title', text: `${x.label}: ` }), el('span', { text: x.v })),
       note.length ? el('p', { class: 'muted', text: note.join('; ') }) : '',

@@ -149,7 +149,7 @@ async function taskDueOf(sql, storage, order, registry) {
   const who = WAITS[d.what] ?? (order.fields?.purpose === 'bank' ? 'Банк' : 'Заказчик');
   // 2.335: срок по заданию взят из письма о переносе (2.333) — `letter`, прежний срок по заданию — `was`.
   const l = taskMoveLetter(assignment, d);
-  return { day: d.day, by: d.by, who, name: d.name, page: d.page, letter: l ? { was: l.was } : null };
+  return { day: d.day, by: d.by, who, name: d.name, page: d.page, letter: l ? { was: l.was, ...(l.was_letter ? { was_letter: true } : {}) } : null };
 }
 
 // Перенос согласован, а новый срок позже срока по заданию на оценку (2.326): банк (суд, заказчик) по-прежнему ждёт отчёт
