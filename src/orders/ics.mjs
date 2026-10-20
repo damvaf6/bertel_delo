@@ -66,7 +66,8 @@ export function scheduleIcs(schedule, now = new Date()) {
           uid: `taskdue-${i.order_id}`, now,
           start: `DTSTART;VALUE=DATE:${dateOnly(d.date)}`, end: `DTEND;VALUE=DATE:${dateOnly(addDays(d.date, 1))}`,
           summary: `Срок по заданию на оценку: дело ${orderRef(i.order_id)}, ${i.service}`,
-          description: `Срок дела позже — ${i.deadline.split('-').reverse().join('.')}, а по заданию на оценку отчёт нужен к этому дню. ${about}`,
+          description: `Срок дела позже — ${i.deadline.split('-').reverse().join('.')}, а по заданию на оценку отчёт нужен к этому дню${i.task_due.letter
+            ? ` — по письму о переносе${i.task_due.letter.was ? ` (было ${i.task_due.letter.was.split('-').reverse().join('.')})` : ''}` : ''}. ${about}`,
           alarm: '-PT15H',
         });
       } else if (i.kind === 'visit' || i.kind === 'my_visit') {

@@ -1559,7 +1559,7 @@ test('2.317: «Мои сроки на две недели» и файл для �
   s = await items();
   const [t] = of(s, 'task_due');
   assert.equal(t.date, early);
-  assert.deepEqual(t.task_due, { day: early, by: 'по заданию на оценку', name: 'Задание банка.txt', page: 1 });
+  assert.deepEqual(t.task_due, { day: early, by: 'по заданию на оценку', name: 'Задание банка.txt', page: 1, letter: null });
   assert.equal(t.deadline, mine);
   assert.equal(of(s, 'deadline')[0].date, mine);
   assert.equal(of(s, 'deadline')[0].task_due, early);
@@ -1587,6 +1587,41 @@ test('2.317: «Мои сроки на две недели» и файл для �
   // Сдано на проверку — отметки нет.
   await S.sql`update orders set status = 'review' where id = ${o.id}`;
   assert.deepEqual(of(await items(), 'task_due'), []);
+});
+
+test('2.339: «Мои сроки на две недели» — срок по заданию из письма о переносе с пометкой', async () => {
+  const o = await inWork('Квартира: письмо о переносе в моих сроках');
+  const ruD = (s) => s.split('-').reverse().join('.');
+  const mine = (await S.sql`select to_char(deadline, 'YYYY-MM-DD') as d from orders where id = ${o.id}`)[0].d;
+  const items = async () => (await spec.req('GET', '/api/specialist/me/schedule')).body.schedule;
+  const of = (s, kind) => s.days.flatMap((d) => d.items.map((i) => ({ ...i, date: d.date }))).filter((i) => i.order_id === o.id && i.kind === kind);
+  const put = async (body, name) => assert.equal((await owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': 'basis' } })).status, 201);
+  const early = addDays(todayMsk(), 2), moved = addDays(todayMsk(), 5);
+  assert.ok(moved < mine);
+  await put(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(early)}`, 'Задание банка.txt');
+  let s = await items();
+  assert.equal(of(s, 'task_due')[0].task_due.letter, null);
+  assert.equal(of(s, 'deadline')[0].task_due_letter, undefined);
+  // Письмо с новым сроком, всё ещё раньше срока дела, — срок по заданию из письма с пометкой и прежним сроком.
+  await put(`Письмо банка\nСрок составления отчёта продлён: не позднее ${ruD(moved)}`, 'Письмо банка о переносе.txt');
+  s = await items();
+  const [t] = of(s, 'task_due');
+  assert.equal(t.date, moved);
+  assert.deepEqual(t.task_due, { day: moved, by: 'по письму заказчика', name: 'Письмо банка о переносе.txt', page: 1, letter: { was: early } });
+  assert.equal(of(s, 'deadline')[0].task_due_letter, true);
+  assert.equal(of(s, 'deadline')[0].task_letter, undefined);
+  const text = String((await spec.req('GET', '/api/specialist/me/schedule?format=ics', undefined, { binary: true })).body).replace(/\r\n /g, '');
+  assert.ok(text.includes(`по письму о переносе (было ${ruD(early)})`));
+  // Письмо переносит срок на день срока дела — отметки по заданию нет, у срока дела «по письму о переносе».
+  await put(`Письмо банка\nСрок составления отчёта продлён: не позднее ${ruD(mine)}`, 'Второе письмо банка.txt');
+  s = await items();
+  assert.deepEqual(of(s, 'task_due'), []);
+  assert.deepEqual(of(s, 'deadline')[0].task_letter, { day: mine, name: 'Второе письмо банка.txt', page: 1, was: moved });
+  // Чужой эксперт этого не видит.
+  const third = await login(S, '+79990000918');
+  await makeSpecialist(S.sql, third.user.id, { permits: [['expertise', 'realty']] });
+  assert.equal((await third.req('GET', '/api/specialist/me/schedule')).body.schedule.days.flatMap((d) => d.items).filter((i) => i.order_id === o.id).length, 0);
 });
 
 test('2.303: срок составления отчёта из задания на оценку — в строку «Срок» таблицы задания и модели; срок дела позже — рядом', async () => {

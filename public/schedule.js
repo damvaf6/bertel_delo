@@ -34,7 +34,9 @@ function item(i, index) {
     // 2.219: руководитель просил попросить перенос срока (2.201), а просьбы с тех пор нет.
     const asked = i.head_ask ? `напоминал руководитель${i.head_ask.by ? ` ${i.head_ask.by}` : ''} ${when(i.head_ask.at)} — попросите перенос срока` : null;
     // 2.317: по заданию на оценку отчёт нужен раньше — день сдачи по заданию отдельной строкой выше.
-    const task = i.task_due ? `по заданию на оценку — к ${short(i.task_due)}` : null;
+    // 2.339: срок по заданию из письма о переносе — так и сказано; письмо переносит срок на день срока дела или позже — тоже.
+    const task = i.task_due ? `${i.task_due_letter ? 'по письму о переносе' : 'по заданию на оценку'} — к ${short(i.task_due)}`
+      : i.task_letter ? (i.task_letter.day === i.deadline ? 'срок по письму о переносе — тот же день' : `по письму о переносе — к ${short(i.task_letter.day)}`) : null;
     const li = link(order('deadline'), `Сдать: ${i.title}`, [i.service, note, task, ext, away, asked].filter(Boolean).join(' · '), hot || away || asked ? 'hot' : '');
     if (asked) li.dataset.headAsk = '1';
     // Перегруженный день (2.134): рядом — «Попросить перенос», дело откроется с готовой причиной и новым сроком. Срок в отпуске
@@ -45,9 +47,13 @@ function item(i, index) {
   }
   // 2.317: срок по заданию на оценку (письмо банка, определение суда) раньше срока дела — в свой день; ведёт к файлу результата.
   if (i.kind === 'task_due') {
-    const li = link(order('result'), `Срок по заданию на оценку: ${i.title}`,
-      `${i.service} · ${i.task_due.by}: «${i.task_due.name}», стр. ${i.task_due.page} · срок дела позже — ${short(i.deadline)}`, 'hot');
+    // 2.339: срок взят из письма о переносе — «по письму о переносе», прежний срок по заданию рядом.
+    const l = i.task_due.letter;
+    const li = link(order('result'), `Срок по заданию на оценку${l ? ' (по письму о переносе)' : ''}: ${i.title}`,
+      [i.service, `${l ? 'письмо о переносе' : i.task_due.by}: «${i.task_due.name}», стр. ${i.task_due.page}`, l?.was ? `было — ${short(l.was)}` : null,
+        `срок дела позже — ${short(i.deadline)}`].filter(Boolean).join(' · '), 'hot');
     li.dataset.taskDue = i.order_id;
+    if (l) li.dataset.taskLetter = '1';
     return li;
   }
   if (i.kind === 'extend') {

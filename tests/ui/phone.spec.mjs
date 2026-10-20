@@ -14155,6 +14155,49 @@ test('2.317: срок по заданию на оценку в «Моих сро
   for (const p of [ep, cp]) await p.context().close();
 });
 
+// 2.339: «Мои сроки на две недели» — пришло письмо о переносе: срок по заданию из письма с пометкой «по письму о переносе»
+// и прежним сроком; у срока дела — «по письму о переносе — к …».
+test('2.339: срок по письму о переносе в «Моих сроках на две недели»', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990033911'), customer = await signIn(cp, '+79990033912');
+  const ru = (iso) => iso.split('-').reverse().join('.');
+  const long = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+  const A = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Письмо о переносе в сроках: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Садовая ул., д. 9, кв. 2"}') returning id`,
+    [customer.id, expert.id, inDays(10)]);
+    return o.id;
+  });
+  const put = async (body, name) => expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from(body), headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': 'basis' },
+  })).status()).toBe(201);
+  await put(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ru(inDays(2))}`, 'Задание банка.txt');
+  await put(`Письмо банка\nСрок составления отчёта продлён: не позднее ${ru(inDays(5))}`, 'Письмо банка о переносе.txt');
+  await ep.goto('/kabinet#specialist');
+  const box = ep.locator('#schedule-box');
+  const task = box.locator(`#schedule-days > li[data-day="${inDays(5)}"] li[data-schedule-item="task_due"]`);
+  await expect(task).toContainText('Срок по заданию на оценку (по письму о переносе): Письмо о переносе в сроках: квартира');
+  await expect(task).toContainText(`письмо о переносе: «Письмо банка о переносе.txt», стр. 1 · было — ${long(inDays(2))} · срок дела позже — ${long(inDays(10))}`);
+  await expect(box.locator(`#schedule-days > li[data-day="${inDays(2)}"] li[data-schedule-item="task_due"]`)).toHaveCount(0);
+  const dl = box.locator(`#schedule-days > li[data-day="${inDays(10)}"] li[data-schedule-item="deadline"]`);
+  await expect(dl).toContainText(`по письму о переносе — к ${long(inDays(5))}`);
+  expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await task.scrollIntoViewIfNeeded();
+  await shot(ep, '54v5-ekspert-sroki-po-pismu-o-perenose');
+  // Второе письмо переносит срок на день срока дела — у срока дела «срок по письму о переносе — тот же день».
+  await put(`Письмо банка\nСрок составления отчёта продлён: не позднее ${ru(inDays(10))}`, 'Второе письмо банка.txt');
+  await ep.reload();
+  await expect(dl).toContainText('срок по письму о переносе — тот же день');
+  await expect(box.locator('li[data-schedule-item="task_due"]')).toHaveCount(0);
+  await dl.scrollIntoViewIfNeeded();
+  await shot(ep, '54v6-ekspert-sroki-pismo-v-den-sroka');
+  for (const p of [ep, cp]) await p.context().close();
+});
+
 // 2.319: просьба о переносе срока — новый срок позже срока по заданию на оценку: до отправки «Банк ждёт отчёт к …».
 test('2.319: перенос срока позже срока по заданию на оценку — предупреждение', async ({ browser, baseURL }) => {
   const ctx = async () => (await phoneContext(browser, baseURL)).newPage();

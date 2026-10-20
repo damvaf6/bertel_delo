@@ -7,7 +7,7 @@
 // отметка «напоминал руководитель» (2.219), пока эксперт не попросил перенос. Срок по заданию на оценку (2.303) раньше срока
 // дела (2.317) — своей отметкой в его день, у срока дела — «по заданию раньше»; задание читается, только если передано хранилище.
 import { addDays, todayMsk } from './workflow.mjs';
-import { taskDueFor } from '../ops/draft-ops.mjs';
+import { taskDueFor, taskMoveLetter } from '../ops/draft-ops.mjs';
 import { assignmentDocs } from '../ops/ai-ops.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { executorSignOrg } from '../access/policy.mjs';
@@ -42,13 +42,20 @@ const mskTime = (t) => new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Mosc
 
 // 2.317: срок по заданию на оценку (письмо банка, определение суда) раньше срока дела — у дел в работе и предложенных, где
 // ИИ-проверка сверяет сроки (правило report_dates). Номер дела → { day, by, name, page }. Карточка эксперта — тоже (2.324).
-export async function taskDues(sql, storage, registry, orders) {
+// 2.339: срок взят из письма о переносе срока (2.333) — `letter: { was }` (прежний срок по заданию); `letters` (Map) — сюда
+// дела, где срок по письму не раньше срока дела: в «Моих сроках» у срока дела — «по письму о переносе».
+export async function taskDues(sql, storage, registry, orders, letters = null) {
   const out = new Map();
   if (!storage) return out;
   for (const o of orders) {
     if (o.status === 'review' || !registry.checks(o.module, o.service).some((r) => (r.auto ?? []).includes('report_dates'))) continue;
-    const d = taskDueFor(registry, o, await assignmentDocs(sql, storage, o));
-    if (d && d.day < o.deadline) out.set(o.id, { day: d.day, by: d.by, name: d.name, page: d.page });
+    const assignment = await assignmentDocs(sql, storage, o);
+    const d = taskDueFor(registry, o, assignment);
+    if (!d) continue;
+    const l = taskMoveLetter(assignment, d);
+    const letter = l ? { was: l.was } : null;
+    if (d.day < o.deadline) out.set(o.id, { day: d.day, by: d.by, name: d.name, page: d.page, letter });
+    else if (letter && letters) letters.set(o.id, { day: d.day, name: d.name, page: d.page, was: l.was });
   }
   return out;
 }
@@ -101,12 +108,16 @@ export async function expertSchedule(sql, userId, registry, today = todayMsk(), 
   const put = (date, item) => days.get(date)?.items.push(item);
   const base = (o, id = o.id) => ({ order_id: id, title: o.title || 'Дело', service: service(o) });
   const overdue = [];
-  const task = await taskDues(sql, storage, registry, orders);
+  const letters = new Map();
+  const task = await taskDues(sql, storage, registry, orders, letters);
   for (const o of orders) {
     const it = { kind: 'deadline', ...base(o), status: o.status, deadline: o.deadline, extend_to: o.extend_to ?? null };
     const t = task.get(o.id);
+    // 2.339: срок по заданию из письма о переносе не раньше срока дела — у срока дела «по письму о переносе».
+    if (letters.has(o.id)) it.task_letter = letters.get(o.id);
     if (t) {
       it.task_due = t.day;
+      if (t.letter) it.task_due_letter = true;
       // В день срока по заданию — своя отметка: сдать к нему, хотя срок дела позже.
       const ti = { kind: 'task_due', ...base(o), status: o.status, deadline: o.deadline, task_due: t };
       if (t.day < today) overdue.push(ti);
