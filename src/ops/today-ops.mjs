@@ -599,12 +599,13 @@ export async function orgPart(sql, org, registry, today, { actorId = null, stora
   toSign.sort((a, b) => (a.since ? Date.parse(a.since) : Infinity) - (b.since ? Date.parse(b.since) : Infinity));
   // Перенос согласован позже срока по заданию на оценку, а письма о переносе нет 2 дня и дольше после согласия диспетчера
   // (2.338, как пометка в «Делах экспертов», 2.332) — только число, для утренней сводки. Письмо пришло, но срок в нём раньше
-  // (2.335), — не «письма нет».
+  // согласованного (2.335), — тоже в счёте (прогон 2.340): письма с новым сроком нет, как в отборе «Перенос позже срока по
+  // заданию — нет письма» и в сводке за месяц («письмо о переносе есть», 2.336).
   const movable = cases.filter((o) => ['in_work', 'review'].includes(o.status) && o.deadline);
   let movedLong = 0;
   for (const o of movable.length ? await sql`select * from orders where id = any(${movable.map((x) => x.id)}::uuid[])` : []) {
     const m = await taskMoved(sql, storage, registry, o);
-    if (!m || m.letter) continue;
+    if (!m) continue;
     const [r] = await sql`select decided_at from deadline_requests where order_id = ${o.id} and outcome = 'approved' order by decided_at desc, id desc limit 1`;
     if (r && Date.now() - new Date(r.decided_at).getTime() >= TASK_MOVED_LONG_DAYS * 86400_000) movedLong += 1;
   }
