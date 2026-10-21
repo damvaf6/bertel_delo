@@ -76,6 +76,13 @@ async function letterAsk(sql, o) {
   return { asked_at, can_ask: o.status === 'in_work' && !asked_at };
 }
 
+// 2.354: у руководителя — просил ли эксперт письмо с новым сроком: в какой день (по Москве), пока его нет, и можно ли
+// попросить сейчас; срок дела не переносили — null.
+async function askedOn(sql, o) {
+  const a = await letterAsk(sql, o);
+  return a ? { asked_on: a.asked_at ? mskDay(a.asked_at) : null, can_ask: a.can_ask } : null;
+}
+
 export async function expertSchedule(sql, userId, registry, today = todayMsk(), { storage } = {}) {
   const last = addDays(today, SCHEDULE_DAYS - 1);
   const service = (o) => registry.service(o.module, o.service)?.service.name ?? o.service;
@@ -196,7 +203,8 @@ export async function expertSchedule(sql, userId, registry, today = todayMsk(), 
 // «Делах экспертов» (2.16), без заказчика и названий заявок: услуга и номер дела; выезд по чужому делу — без номера.
 // Срок по заданию на оценку раньше срока дела (2.318) — дело сдавать в день срока по заданию: там строка task_due, у срока
 // дела — отметка; в «сдать за две недели» и в полосе дело считается в день срока по заданию. Задание читается, только если
-// передано хранилище; без названия файла — руководитель не видит названий документов.
+// передано хранилище; без названия файла — руководитель не видит названий документов. Срок по письму о переносе (2.354) —
+// так и сказано: «по письму о переносе», прежний срок и просил ли эксперт письмо с новым сроком.
 // Что сдавать в этот день у руководителя (2.318): срок по заданию на оценку или срок дела, у которого срока по заданию
 // раньше нет, — чтобы дело не считалось дважды.
 export const dueItem = (i) => i.kind === 'task_due' || (i.kind === 'deadline' && !i.task_due);
@@ -242,16 +250,22 @@ export async function orgSchedule(sql, orgId, registry, today = todayMsk(), { st
     else x.days.find((d) => d.date === date)?.items.push(item);
   };
   // Срок дела после двух недель — дело нужно только ради срока по заданию в эти две недели (2.318).
-  const task = await taskDues(sql, storage, registry, orders);
+  // 2.354: срок из письма о переносе раньше срока дела — у строки письмо (прежний срок, просил ли эксперт письмо с новым
+  // сроком), у срока дела — «по письму о переносе»; письмо переносит срок на день срока дела или позже — у срока дела.
+  const letters = new Map();
+  const task = await taskDues(sql, storage, registry, orders, letters);
   for (const o of orders) {
     const t = task.get(o.id);
     if (t && t.day <= last) {
+      const letter = t.letter ? { was: t.letter.was, ask: await askedOn(sql, o) } : null;
       put(o.executor_user_id, t.day, { kind: 'task_due', order_ref: orderRef(o.id), service: service(o), status: o.status,
-        deadline: o.deadline, task_due: { day: t.day, by: t.by } });
+        deadline: o.deadline, task_due: { day: t.day, by: t.by, ...(letter ? { letter } : {}) } });
     }
     if (o.deadline > last) continue;
+    const l = letters.get(o.id);
     put(o.executor_user_id, o.deadline, { kind: 'deadline', order_ref: orderRef(o.id), service: service(o), status: o.status,
-      deadline: o.deadline, extend_to: o.extend_to ?? null, ...(t ? { task_due: t.day } : {}) });
+      deadline: o.deadline, extend_to: o.extend_to ?? null, ...(t ? { task_due: t.day } : {}), ...(t?.letter ? { task_due_letter: true } : {}),
+      ...(l ? { task_letter: { day: l.day, was: l.was } } : {}) });
   }
   for (const v of visits) {
     const d = todayMsk(new Date(v.planned_at));

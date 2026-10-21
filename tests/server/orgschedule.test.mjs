@@ -166,3 +166,56 @@ test('2.318: нагрузка — срок по заданию на оценку
   assert.ok(!bare.experts[0].days.some((d) => d.items.some((i) => i.kind === 'task_due')));
   assert.equal(bare.experts[0].due, 3);
 });
+
+test('2.354: нагрузка — срок по письму о переносе раньше срока дела в его день; прежний срок и просьба письма с новым сроком', async () => {
+  const org = await makeOrg(S.sql, 'ООО «Письмо о переносе в нагрузке»');
+  const head = await login(S, '+79990004981');
+  const ex = await login(S, '+79990004982');
+  const owner = await login(S, '+79990004983');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  await makeSpecialist(S.sql, ex.user.id);
+  await addMember(S.sql, org.id, ex.user.id, 'member');
+  assert.equal((await ex.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  const url = `/api/orgs/${org.id}/schedule`;
+  const today = (await head.req('GET', url)).body.schedule.from;
+  const plus = (n) => { const d = new Date(`${today}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  const ruD = (s) => s.split('-').reverse().join('.');
+  const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Письмо: квартира Петрова' })).body.order;
+  await S.sql`update orders set status = 'in_work', deadline = ${plus(10)}::date, executor_user_id = ${ex.user.id} where id = ${o.id}`;
+  const put = async (body, name) => assert.equal((await owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': 'basis' } })).status, 201);
+  const ref = `№ ${o.id.slice(0, 8).toUpperCase()}`;
+  const items = async () => (await head.req('GET', url)).body.schedule.experts[0].days
+    .flatMap((d) => d.items.map((i) => ({ ...i, date: d.date }))).filter((i) => i.order_ref === ref);
+  await put(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(plus(2))}`, 'Задание банка Петрова.txt');
+  let s = await items();
+  assert.deepEqual(s.find((i) => i.kind === 'task_due').task_due, { day: plus(2), by: 'по заданию на оценку' });
+  assert.equal(s.find((i) => i.kind === 'deadline').task_due_letter, undefined);
+  // Письмо переносит срок, но всё ещё раньше срока дела — в день письма, с прежним сроком; срок дела не переносили — о
+  // просьбе письма ничего.
+  await put(`Письмо банка\nСрок составления отчёта продлён: не позднее ${ruD(plus(5))}`, 'Письмо банка Петрова.txt');
+  s = await items();
+  const t = s.find((i) => i.kind === 'task_due');
+  assert.equal(t.date, plus(5));
+  assert.deepEqual(t.task_due, { day: plus(5), by: 'по письму заказчика', letter: { was: plus(2), ask: null } });
+  const d = s.find((i) => i.kind === 'deadline');
+  assert.equal(d.date, plus(10));
+  assert.equal(d.task_due, plus(5));
+  assert.equal(d.task_due_letter, true);
+  // Срок дела перенесён по согласованной просьбе — эксперт может попросить письмо; попросил — день просьбы.
+  await S.sql`insert into deadline_requests (order_id, requested_by, old_deadline, new_deadline, reason, outcome, decided_at)
+              values (${o.id}, ${ex.user.id}, ${plus(2)}, ${plus(10)}, 'Жду документы', 'approved', now())`;
+  assert.deepEqual((await items()).find((i) => i.kind === 'task_due').task_due.letter.ask, { asked_on: null, can_ask: true });
+  assert.equal((await ex.req('POST', `/api/orders/${o.id}/doc-requests`, { task_move: true })).status, 201);
+  assert.deepEqual((await items()).find((i) => i.kind === 'task_due').task_due.letter.ask, { asked_on: today, can_ask: false });
+  // Дело считается один раз — в день срока по письму.
+  assert.equal((await head.req('GET', url)).body.schedule.experts[0].due, 1);
+  // Новое письмо переносит срок на день срока дела — строки по письму нет, у срока дела «по письму о переносе».
+  await put(`Письмо банка\nСрок составления отчёта продлён: не позднее ${ruD(plus(10))}`, 'Второе письмо банка Петрова.txt');
+  s = await items();
+  assert.deepEqual(s.map((i) => i.kind), ['deadline']);
+  assert.deepEqual(s[0].task_letter, { day: plus(10), was: plus(5) });
+  // Без названий файлов и заявок.
+  const text = JSON.stringify((await head.req('GET', url)).body);
+  for (const w of ['Петрова', 'Письмо:', o.id]) assert.ok(!text.includes(w), `не раскрывает: ${w}`);
+});
