@@ -438,8 +438,13 @@ export function orgOps() {
       access: { resource: 'org', param: 'id', need: 'manage' },
       async handler({ sql, org, query, res, registry, providers }) {
         // 2.323: срок по заданию на оценку — только у дел, где ИИ-проверка сверяет сроки (правило report_dates).
-        const taskDue = async (o) => (providers.storage && registry.checks(o.module, o.service).some((r) => (r.auto ?? []).includes('report_dates'))
-          ? taskDueFor(registry, o, await assignmentDocs(sql, providers.storage, o))?.day ?? null : null);
+        // 2.346: срок из письма о переносе (2.333) — `letter`: в сводке отдельно от срока по заданию.
+        const taskDue = async (o) => {
+          if (!providers.storage || !registry.checks(o.module, o.service).some((r) => (r.auto ?? []).includes('report_dates'))) return null;
+          const assignment = await assignmentDocs(sql, providers.storage, o);
+          const d = taskDueFor(registry, o, assignment);
+          return d ? { day: d.day, letter: !!taskMoveLetter(assignment, d) } : null;
+        };
         // 2.329: задание на оценку в деле для банка приложено позже первого черновика (как в «Сегодня», 2.295). Письмо банка
         // о переносе срока, запрошенное после согласованного переноса (2.326, пункт task_move), — не задание (прогон 2.330).
         const taskAfter = async (o) => {
