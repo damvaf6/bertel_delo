@@ -1016,3 +1016,160 @@ test('прогон 2.350: письмо о переносе со сроком з�
   const row = rep.experts.find((x) => x.user_id === ex.user.id);
   assert.deepEqual([row.letter_cases, row.letter_late, row.task_cases ?? 0], [1, 0, 0]);
 });
+
+// Прогон 2.360: одно дело организации для банка по всей пачке 2.351–2.359 — перенос согласован позже срока по заданию, пришло
+// письмо банка о переносе со сроком завтра (раньше согласованного): «Мои сроки» и календарь эксперта, нагрузка у руководителя;
+// эксперт просит письмо с новым сроком; руководитель передаёт дело коллеге — «Что сделал прежний эксперт»; новый эксперт
+// загружает файл с датой составления позже срока по письму, потом исправленный, напоминает заказчику; подпись организации;
+// приходит письмо с согласованным сроком — пометок нет; сдано — сводка за месяц.
+test('прогон 2.360: письмо о переносе со сроком завтра — от «Моих сроков» до передачи, подписи и сводки за месяц', async () => {
+  const { expertMorningAlerts } = await import('../../src/ops/today-ops.mjs');
+  const h = await login(S, '+79990003921');
+  const a = await login(S, '+79990003922');
+  const b = await login(S, '+79990003923');
+  const oP = await makeOrg(S.sql, 'ООО «Прогон 2.360»');
+  await addMember(S.sql, oP.id, h.user.id, 'head');
+  assert.equal((await h.req('PATCH', '/api/me', { full_name: 'Руководитель Прогонова' })).status, 200);
+  for (const [x, name] of [[a, 'Эксперт Первый'], [b, 'Эксперт Второй']]) {
+    await makeSpecialist(S.sql, x.user.id);
+    await addMember(S.sql, oP.id, x.user.id, 'member');
+    assert.equal((await x.req('PATCH', '/api/me', { full_name: name })).status, 200);
+    assert.equal((await x.req('PATCH', '/api/specialist/me', { org_id: oP.id })).status, 200);
+  }
+  const ruD = (s) => s.split('-').reverse().join('.');
+  const due = addDays(today, -1), short = addDays(today, 1), late = addDays(today, 12);
+  const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Квартира: прогон 2.360' })).body.order;
+  const ref = `№ ${o.id.slice(0, 8).toUpperCase()}`;
+  const put = (body, name, kind = 'basis') => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': kind } });
+  assert.equal((await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: addDays(today, 3), fields: { ...FIELDS, purpose: 'bank' } })).status, 200);
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
+  await ensurePaid(S.sql, o.id);
+  assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: a.user.id, from: 'matching' })).status, 200);
+  assert.equal((await a.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  assert.equal((await put(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(due)}`, 'Задание банка.txt')).status, 201);
+  const r = await a.req('POST', `/api/orders/${o.id}/deadline-requests`, { new_deadline: late, reason: 'Банк согласовал устно' });
+  assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/deadline-requests/${r.body.open.id}/decide`, { approve: true })).status, 200);
+  const q = await a.req('POST', `/api/orders/${o.id}/doc-requests`, { task_move: true });
+  const req = q.body.requests.find((x) => x.item_id === 'task_move');
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/doc-requests/${req.id}/attach`, {
+    document_id: (await put(`Банк сообщает: срок составления отчёта продлён, не позднее ${ruD(short)}`, 'Письмо о переносе.txt', 'other')).body.document.id })).status, 200);
+  const opts = { registry: S.app.locals.registry, storage: S.providers.storage };
+  const mineOf = async (x) => (await x.req('GET', '/api/specialist/me/schedule')).body.schedule.days
+    .flatMap((d) => d.items.map((i) => ({ ...i, date: d.date }))).filter((i) => i.order_id === o.id);
+  const cal = async (x) => String((await x.req('GET', '/api/specialist/me/schedule?format=ics', undefined, { binary: true })).body)
+    .replace(/\r\n /g, '').split('BEGIN:VEVENT').slice(1).filter((e) => e.includes(`-${o.id}@bertel-delo`));
+  const orgOf = async () => (await h.req('GET', `/api/orgs/${oP.id}/schedule`)).body.schedule.experts
+    .flatMap((e) => e.days.flatMap((d) => d.items.map((i) => ({ ...i, date: d.date, expert: e.user_id ?? e.id })))).filter((i) => i.order_ref === ref);
+  const today2 = async (x) => (await x.req('GET', '/api/today')).body.expert;
+
+  // 1. Письмо со сроком завтра. «Мои сроки» эксперта — в день письма «срок раньше срока дела», можно попросить письмо (2.353);
+  // календарь — событие «Срок по письму о переносе» (2.359); нагрузка у руководителя — «Сдать по письму о переносе» (2.354).
+  let mine = await mineOf(a);
+  let t = mine.find((i) => i.kind === 'task_due');
+  assert.deepEqual([t?.date, t?.task_due.letter, t?.letter_ask], [short, { was: due }, { asked_at: null, can_ask: true }]);
+  assert.equal(mine.find((i) => i.kind === 'deadline').task_due_letter, true);
+  let evs = await cal(a);
+  let ev = evs.find((e) => e.includes(`UID:taskdue-${o.id}@`));
+  assert.ok(ev?.includes('SUMMARY:Срок по письму о переносе: дело'), ev);
+  assert.ok(ev.includes(`DTSTART;VALUE=DATE:${short.replace(/-/g, '')}`));
+  assert.ok(!ev.includes('Письмо с новым сроком попросили'));
+  let org = await orgOf();
+  let ot = org.find((i) => i.kind === 'task_due');
+  assert.deepEqual([ot?.date, ot?.task_due.letter], [short, { was: due, ask: { asked_on: null, can_ask: true } }]);
+
+  // 2. Эксперт попросил письмо с новым сроком — в «Моих сроках», календаре и нагрузке видно, что попросили; кнопки нет.
+  const q2 = await a.req('POST', `/api/orders/${o.id}/doc-requests`, { task_move: true });
+  const req2 = q2.body.requests.find((x) => x.item_id === 'task_move' && x.id !== req.id);
+  t = (await mineOf(a)).find((i) => i.kind === 'task_due');
+  assert.equal(t.letter_ask.can_ask, false);
+  assert.ok(t.letter_ask.asked_at);
+  assert.ok((await cal(a)).find((e) => e.includes(`UID:taskdue-${o.id}@`)).includes('Письмо с новым сроком попросили'));
+  assert.deepEqual((await orgOf()).find((i) => i.kind === 'task_due').task_due.letter.ask, { asked_on: today, can_ask: false });
+
+  // 3. Руководитель передаёт дело коллеге. Новому эксперту — «Что сделал прежний эксперт»: письмо о переносе раньше срока
+  // дела и просьба прежнего эксперта, просить снова нельзя (2.356); у прежнего — дело ушло из «Моих сроков» и календаря;
+  // «Мои сроки» и календарь нового — как были у прежнего; в нагрузке — у нового эксперта.
+  assert.equal((await h.req('POST', `/api/orgs/${oP.id}/cases/${o.id}/transfer`, { specialist_id: b.user.id, reason: 'Болезнь' })).status, 200);
+  const pred = (await b.req('GET', `/api/orders/${o.id}/predecessor`)).body.task;
+  assert.deepEqual([pred.letter?.day, pred.letter?.was, pred.letter?.short], [short, due, true]);
+  assert.deepEqual([pred.ask?.by_prev, pred.ask?.came_at, pred.can_ask], [true, null, false]);
+  assert.deepEqual(await mineOf(a), []);
+  assert.deepEqual(await cal(a), []);
+  t = (await mineOf(b)).find((i) => i.kind === 'task_due');
+  assert.deepEqual([t?.date, t?.letter_ask.can_ask, !!t?.letter_ask.asked_at], [short, false, true]);
+  assert.ok((await cal(b)).find((e) => e.includes(`UID:taskdue-${o.id}@`))?.includes('Письмо с новым сроком попросили'));
+  org = await orgOf();
+  assert.deepEqual([...new Set(org.map((i) => i.expert))], [b.user.id]);
+  // «Сегодня» нового эксперта — «Сдать по письму о переносе» без кнопки: письмо уже попросил прежний (2.341).
+  const ld = (await today2(b)).letter_due.find((x) => x.id === o.id);
+  assert.deepEqual([ld?.letter_due.day, ld?.can_ask], [short, false]);
+  assert.equal((await today2(a)).letter_due.find((x) => x.id === o.id), undefined);
+
+  // 4. Новый эксперт загрузил файл с датой составления позже срока по письму — у файла предупреждение до подписи (2.357),
+  // в «Сегодня» — строка о дате составления, «Подпишите до …» не повторяется (2.351); «Сдать по письму» ушло.
+  const result = async (day, name) => {
+    const x = await b.req('POST', `/api/orders/${o.id}/results`, Buffer.from(`ОТЧЁТ ОБ ОЦЕНКЕ № 60\nОбъект оценки: квартира\nДата оценки: ${ruD(today)}\nДата составления отчёта: ${ruD(day)}`), {
+      raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } });
+    assert.equal(x.status, 201);
+    return String(x.body.document.id);
+  };
+  const f1 = await result(addDays(today, 6), 'Отчёт.txt');
+  const made = async (id) => (await b.req('GET', `/api/orders/${o.id}/documents`)).body.documents.find((d) => d.id === id)?.task_made;
+  let m = await made(f1);
+  assert.deepEqual([m?.due.day, m?.letter?.was, m?.letter?.can_ask, !!m?.letter?.asked_at], [short, due, false, true]);
+  let tb = await today2(b);
+  assert.equal(tb.task_made.find((x) => x.id === o.id)?.letter?.was, due);
+  assert.equal(tb.letter_sign.find((x) => x.id === o.id), undefined);
+  assert.equal(tb.letter_due.find((x) => x.id === o.id), undefined);
+
+  // 5. Исправленный файл — дата составления не позже срока по письму: «Подпишите до …» с этим файлом (2.351).
+  const f2 = await result(today, 'Отчёт исправленный.txt');
+  assert.equal(await made(f2), undefined);
+  tb = await today2(b);
+  const ls = tb.letter_sign.find((x) => x.id === o.id);
+  assert.deepEqual([ls?.letter_due.day, ls?.file.id, ls?.can_ask], [short, f2, false]);
+
+  // 6. Письмо с новым сроком не пришло 4 дня — утренняя сводка нового эксперта «напомните заказчику» (2.355), у прежнего — нет.
+  await S.sql`update doc_requests set requested_at = now() - interval '4 days' where id = ${req2.id}`;
+  const mb = await expertMorningAlerts(S.sql, b.user.id, today, new Date(), opts);
+  const ma = await expertMorningAlerts(S.sql, a.user.id, today, new Date(), opts);
+  assert.deepEqual([mb.letter_due, mb.letter_wait, ma.letter_wait], [0, 1, 0]);
+  assert.equal((await today2(b)).letter_sign.find((x) => x.id === o.id)?.task_moved.asked.remind.can_remind, true);
+
+  // 7. Новый эксперт подписал исправленный файл — в подписи организации дело с пометкой «срок по письму завтра — подпишите
+  // до …» (2.352).
+  assert.equal((await b.req('POST', `/api/documents/${f2}/sign`, { confirm: true })).status, 201);
+  const signing = async () => (await h.req('GET', `/api/orgs/${oP.id}/signing`)).body.items.find((x) => x.order_ref.endsWith(o.id.slice(0, 8).toUpperCase()));
+  const sg = await signing();
+  assert.deepEqual([sg?.task_due?.day, sg?.task_due?.soon, sg?.task_due?.letter], [short, true, { was: due }]);
+  assert.equal((await today2(b)).letter_sign.find((x) => x.id === o.id), undefined);
+
+  // 8. Пришло письмо с согласованным сроком — пометок нет нигде.
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/doc-requests/${req2.id}/attach`, {
+    document_id: (await put(`Банк сообщает: срок составления отчёта продлён, не позднее ${ruD(late)}`, 'Письмо о переносе 2.txt', 'other')).body.document.id })).status, 200);
+  mine = await mineOf(b);
+  assert.deepEqual(mine.filter((i) => i.kind === 'task_due'), []);
+  assert.deepEqual(mine.find((i) => i.kind === 'deadline')?.task_letter?.day, late);
+  assert.equal((await cal(b)).find((e) => e.includes(`UID:taskdue-${o.id}@`)), undefined);
+  assert.deepEqual((await orgOf()).filter((i) => i.kind === 'task_due'), []);
+  assert.equal((await signing())?.task_due ?? null, null);
+  assert.equal((await made(f1)), undefined, 'дата составления не позже срока из нового письма');
+  const mb2 = await expertMorningAlerts(S.sql, b.user.id, today, new Date(), opts);
+  assert.deepEqual([mb2.letter_due, mb2.letter_wait, mb2.task_moved], [0, 0, 0]);
+  const pred2 = (await b.req('GET', `/api/orders/${o.id}/predecessor`)).body.task;
+  assert.equal(pred2.letter?.short ?? false, false);
+
+  // 9. Сдано: в сводке за месяц просьбы письма с новым сроком — у эксперта, который просил (2.358); срок по письму (2.346) —
+  // у того, кто сдал. Просьбу сдвигали на 4 дня только для напоминания — раньше дня вступления в организацию сводка её не
+  // считает, поэтому возвращаем её к сегодняшнему дню, а вступление — на сутки раньше.
+  await S.sql`update org_members set created_at = now() - interval '1 day' where org_id = ${oP.id}`;
+  await S.sql`update doc_requests set requested_at = fulfilled_at - interval '2 hours' where id = ${req2.id}`;
+  await S.sql`update orders set status = 'done' where id = ${o.id}`;
+  await S.sql`insert into order_status_history (order_id, from_status, to_status, side) values (${o.id}, 'review', 'done', 'dispatcher')`;
+  const rep = (await h.req('GET', `/api/orgs/${oP.id}/report`)).body.report;
+  const ra = rep.experts.find((x) => x.user_id === a.user.id), rb = rep.experts.find((x) => x.user_id === b.user.id);
+  assert.deepEqual([ra.letter_ask, ra.letter_ask_cases, ra.letter_ask_got, ra.letter_ask_wait], [2, 1, 2, 0]);
+  assert.ok(ra.letter_ask_max < 1);
+  assert.deepEqual([rb.letter_ask, rb.letter_cases, rb.letter_late], [0, 1, 0]);
+});
