@@ -1589,7 +1589,7 @@ test('2.317: «Мои сроки на две недели» и файл для �
   assert.deepEqual(of(await items(), 'task_due'), []);
 });
 
-test('2.339, 2.353: «Мои сроки на две недели» — срок по заданию из письма о переносе с пометкой и просьбой письма', async () => {
+test('2.339, 2.353, 2.359: «Мои сроки на две недели» — срок по заданию из письма о переносе с пометкой и просьбой письма', async () => {
   const o = await inWork('Квартира: письмо о переносе в моих сроках');
   const ruD = (s) => s.split('-').reverse().join('.');
   const mine = (await S.sql`select to_char(deadline, 'YYYY-MM-DD') as d from orders where id = ${o.id}`)[0].d;
@@ -1621,17 +1621,35 @@ test('2.339, 2.353: «Мои сроки на две недели» — срок 
   const ask = of(await items(), 'task_due')[0].letter_ask;
   assert.equal(ask.can_ask, false);
   assert.ok(ask.asked_at);
-  const text = String((await spec.req('GET', '/api/specialist/me/schedule?format=ics', undefined, { binary: true })).body).replace(/\r\n /g, '');
-  assert.ok(text.includes(`по письму о переносе (было ${ruD(early)})`));
+  // 2.359: в календаре — своё событие «Срок по письму о переносе» в день письма (UID прежний — событие передвинется),
+  // с прежним сроком, советом и отметкой, что письмо с новым сроком попросили; у срока дела — к какому дню по письму.
+  const cal = async () => String((await spec.req('GET', '/api/specialist/me/schedule?format=ics', undefined, { binary: true })).body)
+    .replace(/\r\n /g, '').split('BEGIN:VEVENT').slice(1);
+  const ev = (list, uid) => list.find((e) => e.includes(`UID:${uid}-${o.id}@bertel-delo`));
+  let evs = await cal();
+  const letterEv = ev(evs, 'taskdue');
+  assert.ok(letterEv.includes(`DTSTART;VALUE=DATE:${moved.replace(/-/g, '')}`));
+  assert.ok(letterEv.includes(`SUMMARY:Срок по письму о переносе: дело`));
+  assert.ok(letterEv.includes(`по письму о переносе (было ${ruD(early)})`));
+  assert.ok(letterEv.includes('попросите у заказчика письмо с новым сроком'));
+  assert.ok(letterEv.includes('Письмо с новым сроком попросили '));
+  assert.ok(letterEv.includes('TRIGGER:-PT15H'));
+  assert.equal(evs.filter((e) => e.includes(`UID:taskdue-${o.id}@`)).length, 1);
+  assert.ok(ev(evs, 'deadline').includes(`По письму о переносе отчёт нужен раньше — к ${ruD(moved)}.`));
   // Письмо переносит срок на день срока дела — отметки по заданию нет, у срока дела «по письму о переносе».
   await put(`Письмо банка\nСрок составления отчёта продлён: не позднее ${ruD(mine)}`, 'Второе письмо банка.txt');
   s = await items();
   assert.deepEqual(of(s, 'task_due'), []);
   assert.deepEqual(of(s, 'deadline')[0].task_letter, { day: mine, name: 'Второе письмо банка.txt', page: 1, was: moved });
+  // 2.359: события по письму больше нет, у срока дела — на какой день письмо перенесло срок.
+  evs = await cal();
+  assert.equal(ev(evs, 'taskdue'), undefined);
+  assert.ok(ev(evs, 'deadline').includes(`Срок по заданию перенесён письмом о переносе на ${ruD(mine)} (было ${ruD(moved)}).`));
   // Чужой эксперт этого не видит.
   const third = await login(S, '+79990000918');
   await makeSpecialist(S.sql, third.user.id, { permits: [['expertise', 'realty']] });
   assert.equal((await third.req('GET', '/api/specialist/me/schedule')).body.schedule.days.flatMap((d) => d.items).filter((i) => i.order_id === o.id).length, 0);
+  assert.ok(!String((await third.req('GET', '/api/specialist/me/schedule?format=ics', undefined, { binary: true })).body).includes(`-${o.id}@`));
 });
 
 test('2.303: срок составления отчёта из задания на оценку — в строку «Срок» таблицы задания и модели; срок дела позже — рядом', async () => {

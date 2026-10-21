@@ -14251,7 +14251,7 @@ test('2.317: срок по заданию на оценку в «Моих сро
 
 // 2.339: «Мои сроки на две недели» — пришло письмо о переносе: срок по заданию из письма с пометкой «по письму о переносе»
 // и прежним сроком; у срока дела — «по письму о переносе — к …».
-test('2.339, 2.353: срок по письму о переносе в «Моих сроках на две недели»', async ({ browser, baseURL }) => {
+test('2.339, 2.353, 2.359: срок по письму о переносе в «Моих сроках на две недели»', async ({ browser, baseURL }) => {
   const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
   const ep = await ctx(), cp = await ctx();
   const expert = await signIn(ep, '+79990033911'), customer = await signIn(cp, '+79990033912');
@@ -14299,6 +14299,17 @@ test('2.339, 2.353: срок по письму о переносе в «Моих
   expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
   await task.scrollIntoViewIfNeeded();
   await shot(ep, 'g18-ekspert-sroki-pismo-poprosili');
+  // 2.359: в файле для календаря — своё событие «Срок по письму о переносе» в день письма, с прежним сроком и отметкой, что
+  // письмо с новым сроком попросили.
+  await expect(box.locator('#schedule-ics-box')).toContainText('по письму о переносе');
+  const cal = (await (await ep.request.get('/api/specialist/me/schedule?format=ics', { headers: H })).text()).replace(/\r\n /g, '');
+  const ev = cal.split('BEGIN:VEVENT').find((e) => e.includes(`UID:taskdue-${A}@bertel-delo`));
+  expect(ev).toContain(`DTSTART;VALUE=DATE:${inDays(5).replace(/-/g, '')}`);
+  expect(ev).toContain('SUMMARY:Срок по письму о переносе: дело');
+  expect(ev).toContain(`(было ${ru(inDays(2))})`);
+  expect(ev).toContain('Письмо с новым сроком попросили');
+  await box.locator('#schedule-ics-box').scrollIntoViewIfNeeded();
+  await shot(ep, 'g28-ekspert-sroki-kalendar-pismo');
   // Второе письмо переносит срок на день срока дела — у срока дела «срок по письму о переносе — тот же день».
   await put(`Письмо банка\nСрок составления отчёта продлён: не позднее ${ru(inDays(10))}`, 'Второе письмо банка.txt');
   await ep.reload();
