@@ -4,6 +4,7 @@
 // Открывается по адресу #expert=<id> из подбора, списка специалистов и «Дел экспертов». Тексты — через textContent.
 import { api, el } from '/common.js';
 import { state, show, notFoundView } from '/shell.js';
+import { taskMovedText } from '/today.js';
 
 const $ = (id) => document.getElementById(id);
 const dayRu = (iso) => (iso ? new Date(`${String(iso).slice(0, 10)}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }) : '');
@@ -44,15 +45,19 @@ function showNow(now) {
   const n = now.cases.length;
   const idle = now.cases.filter((x) => x.idle).length;
   const hot = now.cases.filter((x) => x.hot).length;
+  const moved = now.cases.filter((x) => x.task_moved).length;
   $('expert-now-note').textContent = n
-    ? [`Дел: ${n}`, hot ? `срок горит: ${hot}` : null, idle ? `без движения 3 дня и больше: ${idle}` : null].filter(Boolean).join(' · ') + '. Без заказчика и данных заявки.'
+    ? [`Дел: ${n}`, hot ? `срок горит: ${hot}` : null, idle ? `без движения 3 дня и больше: ${idle}` : null,
+      moved ? `перенос позже срока по заданию без письма: ${moved}` : null].filter(Boolean).join(' · ') + '. Без заказчика и данных заявки.'
     : 'Дел в работе нет.';
   $('expert-now').replaceChildren(...now.cases.map((x) => el('li', { 'data-now': x.order_ref },
     el('div', { class: 'title', text: `${x.service} · ${x.order_ref}` }),
     el('div', { class: x.overdue || x.hot ? 'overdue' : 'muted', text: [x.status_name,
       x.deadline ? `срок ${dayRu(x.deadline)}` : 'без срока', x.overdue ? 'просрочено' : x.hot ? 'срок горит' : null].filter(Boolean).join(' · ') }),
+    // Перенос согласован позже срока по заданию на оценку, а письма нет (2.342, как в «Делах экспертов» 2.332).
+    ...(x.task_moved ? [el('div', { class: x.task_moved.asked ? 'muted' : 'overdue', 'data-task-moved': '', text: taskMovedText(x.task_moved) })] : []),
     // Срок по заданию на оценку раньше срока дела (2.324).
-    ...(x.task_due ? [el('div', { class: x.task_due.overdue || x.hot ? 'overdue' : 'muted', 'data-task-due': '',
+    ...(x.task_due && !x.task_moved ? [el('div', { class: x.task_due.overdue || x.hot ? 'overdue' : 'muted', 'data-task-due': '',
       text: `Сдать ${x.task_due.by} — к ${dayRu(x.task_due.day)}${x.task_due.overdue ? ', срок прошёл' : ''} (срок дела позже)` })] : []),
     ...(x.idle ? [el('div', { class: 'overdue', 'data-idle': '',text: `Без движения ${x.idle_days} дн.` })] : []),
     ...(x.extend ? [el('div', { class: 'muted', 'data-extend': '', text: `Просит перенести срок на ${dayRu(x.extend.new_deadline)} — ждёт решения диспетчера` })] : []),
