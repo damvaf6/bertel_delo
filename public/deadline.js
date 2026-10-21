@@ -56,7 +56,7 @@ function render(r) {
       say($('deadline-msg'), p.new_deadline ? 'Причина и новый срок в полях — поправьте и отправьте' : 'Причина в поле — выберите новый срок и отправьте', 'ok');
     },
   }, p.label)));
-  renderHistory(r.history);
+  renderHistory(r.history, r.task_moved);
   const past = r.requests.filter((x) => x.outcome);
   $('deadline-history').replaceChildren(...past.map((x) => {
     const [word, kind] = OUTCOME[x.outcome];
@@ -73,7 +73,8 @@ const dayShort = (s) => new Date(s).toLocaleDateString('ru-RU', { timeZone: 'Eur
 function historyLine(x) {
   if (x.kind === 'start') return [`Срок дела при заказе — ${dayRu(x.day)}`, ''];
   if (x.kind === 'task') return [`Срок ${x.by} — не позднее ${dayRu(x.day)}`, `файл «${x.name}»`];
-  if (x.kind === 'letter') return [`Письмо о переносе: срок ${x.day > x.was ? 'перенесён' : 'изменён'} с ${dayRu(x.was)} на ${dayRu(x.day)}`, `файл «${x.name}»`];
+  if (x.kind === 'letter') return [`Письмо о переносе: срок ${x.day > x.was ? 'перенесён' : 'изменён'} с ${dayRu(x.was)} на ${dayRu(x.day)}`,
+    [`файл «${x.name}»`, x.short ? `а срок дела перенесён на ${dayRu(x.short.deadline)} — сдайте к ${dayRu(x.day)} или попросите письмо с новым сроком` : null].filter(Boolean).join(' · ')];
   if (x.kind === 'ask') return ['Попросили у заказчика письмо о переносе срока', x.came_at ? `заказчик приложил документ ${whenRu(x.came_at)}` : 'документа пока нет'];
   const who = x.org_name ? `Организация «${x.org_name}» попросила` : 'Попросили';
   const [word] = OUTCOME[x.outcome] ?? ['ждёт ответа диспетчера'];
@@ -82,17 +83,24 @@ function historyLine(x) {
       : x.outcome ? `просьба ${word}` : word;
   return [`${who} перенести срок с ${dayRu(x.old_deadline)} на ${dayRu(x.new_deadline)}`, [`причина: ${x.reason}`, res].join(' · ')];
 }
-function renderHistory(h) {
+function renderHistory(h, moved) {
   const box = $('deadline-timeline');
   box.classList.toggle('hidden', !h);
   $('deadline-timeline-list').replaceChildren(...(h ?? []).map((x) => {
     const [main, sub] = historyLine(x);
     const kind = x.kind === 'request' ? (OUTCOME[x.outcome]?.[1] ?? '') : '';
-    return el('li', { 'data-history': x.kind },
+    // 2.349: письмо со сроком раньше согласованного — пометка и та же просьба письма с новым сроком, что в блоке выше.
+    const short = x.kind === 'letter' && x.short;
+    const ask = short?.can_ask ? el('button', { class: 'secondary', type: 'button', 'data-history-ask': '1',
+      text: `Попросить ${(moved?.doc ?? 'письмо').toLowerCase()} с новым сроком` }) : null;
+    ask?.addEventListener('click', () => askLetter(ask));
+    return el('li', { 'data-history': x.kind, ...(short ? { 'data-short': '1' } : {}) },
       el('div', {},
         el('div', { class: 'name' }, el('span', { class: 'muted', text: `${dayShort(x.at)} · ` }), el('span', { text: `${main} ` }),
-          ...(kind ? [el('span', { class: `badge ${kind}`, text: OUTCOME[x.outcome][0] })] : [])),
-        ...(sub ? [el('div', { class: 'muted', text: sub })] : [])));
+          ...(kind ? [el('span', { class: `badge ${kind}`, text: OUTCOME[x.outcome][0] })] : []),
+          ...(short ? [el('span', { class: 'badge warn', text: 'срок раньше согласованного' })] : [])),
+        ...(sub ? [el('div', { class: 'muted', text: sub })] : []),
+        ...(ask ? [ask] : [])));
   }));
 }
 
@@ -141,8 +149,7 @@ function renderTaskMoved(m) {
   $('deadline-task-moved-remind').classList.toggle('hidden', !r?.can_remind || ctx.order.status !== 'in_work');
   box.dataset.taskDue = m.day;
 }
-$('deadline-task-moved-ask').addEventListener('click', async () => {
-  const btn = $('deadline-task-moved-ask');
+async function askLetter(btn) {
   btn.disabled = true;
   try {
     await api('POST', `/api/orders/${ctx.order.id}/doc-requests`, { task_move: true });
@@ -150,7 +157,8 @@ $('deadline-task-moved-ask').addEventListener('click', async () => {
     say($('deadline-msg'), 'Запрошено — заказчику отправлено уведомление', 'ok');
   } catch (err) { say($('deadline-msg'), err.message); }
   btn.disabled = false;
-});
+}
+$('deadline-task-moved-ask').addEventListener('click', () => askLetter($('deadline-task-moved-ask')));
 
 $('deadline-task-moved-remind').addEventListener('click', async () => {
   const btn = $('deadline-task-moved-remind');

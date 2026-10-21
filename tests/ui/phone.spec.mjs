@@ -14613,6 +14613,59 @@ test('2.337: «История сроков» в деле', async ({ browser, bas
   for (const p of [ep, cp]) await p.context().close();
 });
 
+// 2.349: в «Истории сроков» у письма о переносе со сроком раньше согласованного — пометка «срок раньше согласованного»,
+// что делать и кнопка «Попросить письмо банка с новым сроком»; попросили — кнопки нет, пометка остаётся.
+test('2.349: «История сроков» — письмо о переносе с коротким сроком', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990034911'), customer = await signIn(cp, '+79990034912');
+  const ru = (iso) => iso.split('-').reverse().join('.');
+  const long = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+  const A = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'История: письмо с коротким сроком', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Садовая ул., д. 21, кв. 4"}') returning id`,
+    [customer.id, expert.id, inDays(12)]);
+    await c.query(`insert into deadline_requests (order_id, requested_by, old_deadline, new_deadline, reason, outcome, decided_at, seen_at)
+      values ($1, $2, $3, $4, 'Банк согласовал перенос устно', 'approved', now(), now())`, [o.id, expert.id, inDays(4), inDays(12)]);
+    return o.id;
+  });
+  const put = async (body, name, kind) => {
+    const r = await cp.request.post(`/api/orders/${A}/documents`, {
+      data: Buffer.from(body), headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': kind } });
+    expect(r.status()).toBe(201);
+    return (await r.json()).document.id;
+  };
+  await put(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ru(inDays(5))}`, 'Задание банка.txt', 'basis');
+  expect((await ep.request.post(`/api/orders/${A}/doc-requests`, { data: { task_move: true }, headers: H })).status()).toBe(201);
+  const req = (await (await cp.request.get(`/api/orders/${A}/doc-requests`, { headers: H })).json()).requests.find((r) => r.item_id === 'task_move');
+  const doc = await put(`Банк сообщает: срок составления отчёта продлён, не позднее ${ru(inDays(8))}`, 'Письмо банка о переносе.txt', 'other');
+  expect((await cp.request.post(`/api/orders/${A}/doc-requests/${req.id}/attach`, { data: { document_id: doc }, headers: H })).status()).toBe(200);
+  await ep.goto(`/kabinet#order=${A}&to=deadline`);
+  const box = ep.locator('#deadline-timeline');
+  await expect(box).toBeVisible();
+  await box.locator('summary').click();
+  const letter = box.locator('li[data-history="letter"]');
+  await expect(letter).toHaveAttribute('data-short', '1');
+  await expect(letter.locator('.badge.warn')).toHaveText('срок раньше согласованного');
+  await expect(letter).toContainText(`Письмо о переносе: срок перенесён с ${long(inDays(5))} на ${long(inDays(8))}`);
+  await expect(letter).toContainText(`а срок дела перенесён на ${long(inDays(12))} — сдайте к ${long(inDays(8))} или попросите письмо с новым сроком`);
+  const ask = letter.locator('[data-history-ask]');
+  await expect(ask).toHaveText('Попросить письмо банка с новым сроком');
+  expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await letter.scrollIntoViewIfNeeded();
+  await shot(ep, '54w3-istoriya-pismo-s-korotkim-srokom');
+  await ask.click();
+  await expect(ep.locator('#deadline-msg')).toHaveText('Запрошено — заказчику отправлено уведомление');
+  if (!(await box.evaluate((d) => d.open))) await box.locator('summary').click();
+  await expect(box.locator('li[data-history="letter"]')).toHaveAttribute('data-short', '1');
+  await expect(box.locator('li[data-history="letter"] [data-history-ask]')).toHaveCount(0);
+  await expect(ep.locator('#deadline-task-moved-msg')).toContainText('Попросили у заказчика');
+  for (const p of [ep, cp]) await p.context().close();
+});
+
 // 2.305: в деле у эксперта — «Что сказано в задании на оценку»: одним списком дата оценки, вид стоимости, цель, заказчик,
 // адрес, срок с файлом и страницей; в заявке другой адрес — видно рядом; задания нет — блока нет.
 test('2.305: «Что сказано в задании на оценку» в деле', async ({ browser, baseURL }) => {

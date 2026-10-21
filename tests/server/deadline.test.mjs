@@ -829,3 +829,38 @@ test('2.347: письмо о переносе попросили, а оно не
   assert.ok(t.task_moved.some((x) => x.id === o.id));
   assert.deepEqual(t.docs_wait.find((x) => x.id === o.id)?.wait.titles, [`Письмо банка о переносе срока отчёта на ${ruD(late)}`, 'Техпаспорт']);
 });
+
+test('2.349: «История сроков» — письмо о переносе с коротким сроком: пометка и «Попросить письмо с новым сроком»', async () => {
+  const o = await inWork('Квартира: история — письмо с коротким сроком', 5);
+  const ruD = (s) => s.split('-').reverse().join('.');
+  const put = (body, name, kind = 'basis') => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': kind } });
+  const history = async (who = spec) => (await list(who, o)).body.history;
+  await S.sql`update orders set fields = fields || '{"purpose":"bank"}'::jsonb where id = ${o.id}`;
+  const due = addDays(today, 5), short = addDays(today, 8), late = addDays(today, 12);
+  assert.equal((await put(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(due)}`, 'Задание банка.txt')).status, 201);
+  const r = await ask(spec, o, { new_deadline: late, reason: 'Банк согласовал перенос устно' });
+  assert.equal((await decide(dispatcher, o, r.body.open.id, { approve: true })).status, 200);
+  const q = await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { task_move: true });
+  const req = q.body.requests.find((x) => x.item_id === 'task_move');
+  const doc = await put(`Банк сообщает: срок составления отчёта продлён, не позднее ${ruD(short)}`, 'Письмо о переносе.txt', 'other');
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/doc-requests/${req.id}/attach`, { document_id: doc.body.document.id })).status, 200);
+  // Срок в письме раньше согласованного — у письма пометка: согласованный срок и можно попросить письмо с новым сроком.
+  let h = await history();
+  let l = h.filter((x) => x.kind === 'letter');
+  assert.equal(l.length, 1);
+  assert.deepEqual(l[0].short, { deadline: late, can_ask: true });
+  // Попросили письмо с новым сроком — пометка остаётся, кнопки нет, пока ждём.
+  const q2 = await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { task_move: true });
+  const req2 = q2.body.requests.find((x) => x.item_id === 'task_move' && x.id !== req.id);
+  h = await history();
+  assert.deepEqual(h.find((x) => x.kind === 'letter').short, { deadline: late, can_ask: false });
+  // Пришло письмо с согласованным сроком — пометки нет ни у прежнего письма, ни у нового.
+  const doc2 = await put(`Банк сообщает: срок составления отчёта продлён, не позднее ${ruD(late)}`, 'Письмо о переносе 2.txt', 'other');
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/doc-requests/${req2.id}/attach`, { document_id: doc2.body.document.id })).status, 200);
+  l = (await history()).filter((x) => x.kind === 'letter');
+  assert.deepEqual(l.map((x) => [x.day, x.short ?? null]), [[short, null], [late, null]]);
+  // Заказчик и диспетчер истории не видят.
+  assert.equal(await history(owner), null);
+  assert.equal(await history(dispatcher), null);
+});
