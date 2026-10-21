@@ -15725,6 +15725,84 @@ test('2.328: «Что сделал прежний эксперт» — срок 
   for (const p of [hp, cp, ap, bp]) await p.context().close();
 });
 
+// 2.356: новому эксперту после передачи — письмо о переносе срока (раньше срока дела — красным), просил ли прежний эксперт
+// письмо с новым сроком; никто не просил — «Попросить письмо с новым сроком».
+test('2.356: «Что сделал прежний эксперт» — письмо о переносе и просьба письма', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const hp = await ctx(), cp = await ctx(), ap = await ctx(), bp = await ctx();
+  const customer = await signIn(cp, '+79990035601');
+  const head = await signIn(hp, '+79990035602');
+  const first = await signIn(ap, '+79990035603');
+  const second = await signIn(bp, '+79990035604');
+  const ru = (iso) => iso.split('-').reverse().join('.');
+  const short = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+  const { orgId, A, B } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Передача с письмом ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Эксперт Прежний' where id = $1", [first.id]);
+    await c.query("update users set full_name = 'Эксперт Новый' where id = $1", [second.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member'), ($1, $4, 'member')", [org.id, head.id, first.id, second.id]);
+    for (const u of [first.id, second.id]) {
+      await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [u, org.id]);
+      await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [u]);
+    }
+    await c.query("insert into morning_digests (user_id, day) values ($1, (now() at time zone 'Europe/Moscow')::date) on conflict do nothing", [second.id]);
+    const ids = [];
+    for (const t of ['Передача с письмом: квартира', 'Передача с письмом: комната']) {
+      const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+        values ('expertise', 'realty', $3, $1, $2, 'in_work', $4::date, 1500000, now(),
+                '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Банковская ул., д. 9, кв. 4","area":"41"}') returning id`,
+      [customer.id, first.id, t, inDays(12)]);
+      await c.query(`insert into deadline_requests (order_id, requested_by, old_deadline, new_deadline, reason, outcome, decided_at)
+        values ($1, $2, $3::date, $4::date, 'Жду документы', 'approved', now())`, [o.id, first.id, inDays(8), inDays(12)]);
+      ids.push(o.id);
+    }
+    return { orgId: org.id, A: ids[0], B: ids[1] };
+  });
+  for (const o of [A, B]) {
+    for (const [body, name] of [[`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ru(inDays(2))}`, 'Задание банка.txt'],
+      [`Письмо банка\nСрок составления отчёта продлён: не позднее ${ru(inDays(5))}`, 'Письмо банка о переносе.txt']]) {
+      expect((await cp.request.post(`/api/orders/${o}/documents`, {
+        data: Buffer.from(body), headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': 'basis' },
+      })).status()).toBe(201);
+    }
+  }
+  // По делу A прежний эксперт уже попросил письмо с новым сроком.
+  expect((await ap.request.post(`/api/orders/${A}/doc-requests`, { data: { task_move: true }, headers: H })).status()).toBe(201);
+  for (const o of [A, B]) {
+    expect((await hp.request.post(`/api/orgs/${orgId}/cases/${o}/transfer`, { data: { specialist_id: second.id, reason: 'Болезнь' }, headers: H })).status()).toBe(200);
+  }
+
+  await bp.goto(`/kabinet#order=${A}`);
+  await expect(bp.locator('#order-status')).toHaveText('В работе');
+  const task = bp.locator('#pred-task');
+  await expect(task.locator('#pred-task-due')).toContainText(`Сдать по письму о переносе — к ${short(inDays(5))} (срок дела позже)`);
+  await expect(task.locator('#pred-task-letter')).toHaveText(`Письмо о переносе: «Письмо банка о переносе.txt», стр. 1 — срок перенесён с ${short(inDays(2))} на ${short(inDays(5))}. Срок в письме раньше срока дела: сдайте к нему или попросите письмо с новым сроком`);
+  await expect(task.locator('#pred-task-letter')).toHaveClass(/overdue/);
+  await expect(task.locator('#pred-task-ask-text')).toContainText('Прежний эксперт');
+  await expect(task.locator('#pred-task-ask-text')).toContainText('попросил у заказчика письмо о переносе срока — ещё не пришло');
+  await expect(task.locator('#pred-task-ask')).toBeHidden();
+  expect(await bp.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await task.scrollIntoViewIfNeeded();
+  await shot(bp, 'g22-prezhnij-ekspert-pismo-o-perenose-poprosil');
+
+  await bp.goto(`/kabinet#order=${B}`);
+  await expect(bp.locator('#order-status')).toHaveText('В работе');
+  await expect(task.locator('#pred-task-letter')).toBeVisible();
+  await expect(task.locator('#pred-task-ask-text')).toBeHidden();
+  const ask = task.getByRole('button', { name: 'Попросить письмо с новым сроком' });
+  await expect(ask).toBeVisible();
+  await task.scrollIntoViewIfNeeded();
+  await shot(bp, 'g23-prezhnij-ekspert-pismo-poprosit');
+  await ask.click();
+  await expect(bp.locator('#pred-msg')).toContainText('Письмо с новым сроком попросили у заказчика');
+  await expect(task.locator('#pred-task-ask-text')).toContainText(/^Вы .* попросили у заказчика письмо о переносе срока — ещё не пришло$/);
+  await expect(ask).toBeHidden();
+  expect(await bp.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await task.scrollIntoViewIfNeeded();
+  await shot(bp, 'g24-prezhnij-ekspert-pismo-poprosili');
+  for (const p of [hp, cp, ap, bp]) await p.context().close();
+});
+
 // Прогон 2.330: эксперт и руководитель по пачке 2.321–2.329 на одном деле организации для банка. Задание банка пришло после
 // черновика, срок по заданию сегодня: «Сегодня» эксперта — дата составления позже срока (2.321) → карточка эксперта (2.324) и
 // отбор «Срок по заданию на этой неделе» (2.325) у руководителя → эксперт просит передать дело, у просьбы срок по заданию
