@@ -743,6 +743,29 @@ test('2.302: дата составления отчёта сверяется с�
   assert.deepEqual(await found(), []);
 });
 
+// 2.345: письмо о переносе срока приложено к просьбе «Письмо банка о переносе» (2.326), а дата составления позже и нового
+// срока — находка называет письмо и прежний срок по заданию.
+test('2.345: дата составления позже срока из письма о переносе — находка называет письмо', async () => {
+  const o = await inWork('Квартира: срок по письму о переносе');
+  const put = (body, name, kind) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), ...(kind ? { 'x-doc-kind': kind } : {}) } });
+  assert.equal((await put('ЗАДАНИЕ НА ОЦЕНКУ № 4 от 01.10.2026\nОбъект оценки: квартира\nСрок составления отчёта: не позднее 08.10.2026', 'Задание на оценку.txt', 'basis')).status, 201);
+  assert.equal((await putResult(o, 'ОТЧЁТ ОБ ОЦЕНКЕ № 12/2026\nДата составления отчёта: 12.10.2026', 'отчёт.txt', 'text/plain')).status, 201);
+  const found = async () => {
+    const res = await spec.req('POST', `/api/orders/${o.id}/review/ai`);
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    return res.body.ai.items.flatMap((i) => i.found ?? []).map((f) => f.text).filter((t) => /позже срока из/.test(t));
+  };
+  assert.match((await found())[0], /позже срока из задания на оценку/);
+  const letter = await put('Сообщаем, что срок составления отчёта продлён: не позднее 10.10.2026', 'Письмо банка.txt');
+  assert.equal(letter.status, 201);
+  assert.deepEqual(await found(), ['Дата составления отчёта (12.10.2026) позже срока из письма о переносе срока «Письмо банка.txt» (не позднее 10.10.2026, стр. 1) — срок переносили письмом (по заданию было 08.10.2026), но отчёт составлен и после нового срока; проверьте дату составления или попросите у заказчика письмо с новым сроком']);
+  // По письму в срок — находки нет.
+  await S.sql`update documents set deleted_at = now() where order_id = ${o.id} and kind = 'result'`;
+  assert.equal((await putResult(o, 'ОТЧЁТ ОБ ОЦЕНКЕ № 12/2026\nДата составления отчёта: 10.10.2026', 'отчёт-2.txt', 'text/plain')).status, 201);
+  assert.deepEqual(await found(), []);
+});
+
 test('2.202: площадь в отчёте сверяется с выпиской ЕГРН, приложенной к просьбе о документах; текст выписки в модель не уходит', async () => {
   const o = await inWork('Квартира: площадь по выписке');
   assert.equal((await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { items: ['egrn'] })).status, 201);
