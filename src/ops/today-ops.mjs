@@ -181,7 +181,7 @@ async function expertPart(sql, actor, registry, today, storage) {
   // 2.341: письмо о переносе пришло, а срок в нём раньше согласованного (2.335), сегодня, завтра или прошёл, и своего файла
   // результата нет — своей строкой «Сдать по письму о переносе» (к файлу результата); в «Приложите письмо» не повторяется.
   // Письмо с новым сроком уже попросили — строка остаётся: пока нового письма нет, банк ждёт отчёт к сроку из прежнего.
-  const moved = [], movedIds = new Set(), letterDue = [];
+  const moved = [], movedIds = new Set(), letterDue = [], remindIds = new Set();
   const own = await ownResults(sql, actor.id, rows.filter((x) => x.status === 'in_work'));
   for (const o of rows.filter((x) => ['in_work', 'review'].includes(x.status))) {
     const m = await taskMoved(sql, storage, registry, o);
@@ -191,7 +191,13 @@ async function expertPart(sql, actor, registry, today, storage) {
       const draft = !!(await sql.one`select 1 as x from result_drafts where order_id = ${o.id} limit 1`);
       letterDue.push(item(o, { task_moved: m, letter_due: { day: m.day, days_left: left, overdue: left < 0 }, has_draft: draft,
         can_ask: !(m.asked && !m.asked.came) }));
+      if (m.asked?.remind?.can_remind) remindIds.add(o.id);
     } else if (m && !(m.asked && !m.asked.came)) moved.push(item(o, { task_moved: m, can_ask: o.status === 'in_work' }));
+    else if (m?.asked?.remind?.can_remind && o.status === 'in_work') {
+      // 2.347: письмо попросили, а оно не пришло 3 дня — строка снова, с «Напомнить заказчику»; напомнили — до завтра нет.
+      moved.push(item(o, { task_moved: m, can_ask: false }));
+      remindIds.add(o.id);
+    }
   }
   letterDue.sort((a, b) => a.letter_due.day.localeCompare(b.letter_due.day));
   const awayDeclined = await awayDeclinedCases(sql, actor, rows, ext, today, item);
@@ -211,7 +217,8 @@ async function expertPart(sql, actor, registry, today, storage) {
   const docsWait = [];
   for (const o of rows.filter((x) => x.status === 'in_work')) {
     const w = await docWait(sql, o);
-    if (w?.can_remind) docsWait.push(item(o, { wait: w }));
+    // Ждём только письмо о переносе, а напомнить можно у его строки (2.347) — второй строкой не повторяем.
+    if (w?.can_remind && !(w.only_letter && remindIds.has(o.id))) docsWait.push(item(o, { wait: w }));
   }
   docsWait.sort((a, b) => new Date(a.wait.since) - new Date(b.wait.since));
   // После ИИ-проверки пришли запрошенные документы (2.248) — «Проверьте заново»; новая ИИ-проверка — строка уходит.

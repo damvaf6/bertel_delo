@@ -132,8 +132,13 @@ function renderTaskMoved(m) {
   ask.classList.toggle('hidden', waiting || ctx.order.status !== 'in_work');
   ask.textContent = m.letter ? `Попросить ${m.doc.toLowerCase()} с новым сроком` : ASK_TEXT;
   msg.classList.toggle('hidden', !m.asked || (!waiting && !!m.letter));
-  msg.textContent = !m.asked ? '' : waiting ? `Попросили у заказчика ${whenRu(m.asked.at)} — ждём документ.`
+  // 2.347: не пришло 3 дня — сколько ждём, когда напоминали и «Напомнить заказчику» (раз в сутки по делу).
+  const r = waiting ? m.asked.remind : null;
+  msg.textContent = !m.asked ? '' : waiting ? `Попросили у заказчика ${whenRu(m.asked.at)} — ${r ? `не пришло ${days(r.days)}` : 'ждём документ'}.`
+      + (!r ? '' : r.can_remind ? (r.reminded_at ? ` Напоминали ${whenRu(r.reminded_at)} — можно напомнить снова.` : ' Заказчику ещё не напоминали.')
+        : ` Напомнили ${whenRu(r.reminded_at)} — снова можно завтра.`)
     : 'Заказчик приложил документ, но нового срока в нём не видно — проверьте, что срок в нём не раньше нового срока дела.';
+  $('deadline-task-moved-remind').classList.toggle('hidden', !r?.can_remind || ctx.order.status !== 'in_work');
   box.dataset.taskDue = m.day;
 }
 $('deadline-task-moved-ask').addEventListener('click', async () => {
@@ -143,6 +148,17 @@ $('deadline-task-moved-ask').addEventListener('click', async () => {
     await api('POST', `/api/orders/${ctx.order.id}/doc-requests`, { task_move: true });
     await ctx.reload();
     say($('deadline-msg'), 'Запрошено — заказчику отправлено уведомление', 'ok');
+  } catch (err) { say($('deadline-msg'), err.message); }
+  btn.disabled = false;
+});
+
+$('deadline-task-moved-remind').addEventListener('click', async () => {
+  const btn = $('deadline-task-moved-remind');
+  btn.disabled = true;
+  try {
+    await api('POST', `/api/orders/${ctx.order.id}/doc-requests/remind`);
+    await ctx.reload();
+    say($('deadline-msg'), 'Напомнили — заказчику отправлено уведомление; снова можно завтра', 'ok');
   } catch (err) { say($('deadline-msg'), err.message); }
   btn.disabled = false;
 });

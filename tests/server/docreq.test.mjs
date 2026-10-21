@@ -309,7 +309,7 @@ test('2.234: запрошенное не пришло 3 дня — «Напом�
   await age(4);
   let w = (await list()).body.wait;
   assert.deepEqual({ ...w, since: undefined }, { titles: ['Выписка из ЕГРН', 'Технический паспорт БТИ или поэтажный план'],
-    since: undefined, days: 4, reminded_at: null, reminders: 0, can_remind: true, next_remind_at: null });
+    only_letter: false, since: undefined, days: 4, reminded_at: null, reminders: 0, can_remind: true, next_remind_at: null });
   assert.equal((await list(owner)).body.wait, null);
   assert.equal((await remind(owner)).status, 403);
   assert.equal((await remind(dispatcher)).status, 403);

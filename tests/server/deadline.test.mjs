@@ -789,3 +789,43 @@ test('2.337: «История сроков» — срок при заказе, �
   assert.equal(await history(dispatcher), null);
   assert.equal((await list(stranger, o)).status, 404);
 });
+
+test('2.347: письмо о переносе попросили, а оно не пришло 3 дня — «Напомнить заказчику» в «Сроке» и у строки в «Сегодня»', async () => {
+  const o = await inWork('Квартира: письмо о переносе не пришло', 5);
+  const ruD = (s) => s.split('-').reverse().join('.');
+  await S.sql`update orders set fields = fields || '{"purpose":"bank"}'::jsonb where id = ${o.id}`;
+  const due = addDays(today, 5), late = addDays(today, 12);
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(due)}`), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание банка.txt'), 'x-doc-kind': 'basis' } })).status, 201);
+  const r = await ask(spec, o, { new_deadline: late, reason: 'Банк согласовал перенос устно' });
+  assert.equal((await decide(dispatcher, o, r.body.open.id, { approve: true })).status, 200);
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { task_move: true })).status, 201);
+  const todayOf = async () => (await spec.req('GET', '/api/today')).body.expert;
+  // Попросили только что — напоминать рано: в «Сроке» без напоминания, в «Сегодня» строки нет.
+  assert.equal((await list(spec, o)).body.task_moved.asked.remind, null);
+  assert.ok(!(await todayOf()).task_moved.some((x) => x.id === o.id));
+  // Ждём 4 дня — сколько ждём и можно напомнить; строка в «Сегодня» снова, без «Попросить», в «Документы не пришли» не повторяется.
+  await S.sql`update doc_requests set requested_at = now() - interval '4 days' where order_id = ${o.id}`;
+  assert.deepEqual((await list(spec, o)).body.task_moved.asked.remind, { days: 4, reminded_at: null, can_remind: true, next_remind_at: null });
+  let t = await todayOf();
+  const row = t.task_moved.find((x) => x.id === o.id);
+  assert.equal(row?.can_ask, false);
+  assert.equal(row.task_moved.asked.remind.can_remind, true);
+  assert.ok(!t.docs_wait.some((x) => x.id === o.id));
+  // Заказчик не видит; напомнил эксперт — снова можно завтра, строки в «Сегодня» до завтра нет.
+  assert.equal((await list(owner, o)).body.task_moved, null);
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/doc-requests/remind`)).status, 201);
+  const m = (await list(spec, o)).body.task_moved.asked.remind;
+  assert.equal(m.can_remind, false);
+  assert.ok(m.reminded_at && m.next_remind_at);
+  t = await todayOf();
+  assert.ok(!t.task_moved.some((x) => x.id === o.id));
+  assert.ok(!t.docs_wait.some((x) => x.id === o.id));
+  // Напоминание вчера, а ждём ещё и другой документ — строка письма с напоминанием и «Документы не пришли» с обоими.
+  await S.sql`update doc_reminders set created_at = now() - interval '25 hours' where order_id = ${o.id}`;
+  await S.sql`insert into doc_requests (order_id, item_id, title, requested_by, requested_at)
+              values (${o.id}, null, 'Техпаспорт', ${spec.user.id}, now() - interval '4 days')`;
+  t = await todayOf();
+  assert.ok(t.task_moved.some((x) => x.id === o.id));
+  assert.deepEqual(t.docs_wait.find((x) => x.id === o.id)?.wait.titles, [`Письмо банка о переносе срока отчёта на ${ruD(late)}`, 'Техпаспорт']);
+});

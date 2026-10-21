@@ -65,7 +65,7 @@ export async function egrnOld(sql, storage, registry, order, today = todayMsk())
 // { titles, since, days, reminded_at, reminders, can_remind, next_remind_at } или null.
 export async function docWait(sql, order, now = new Date()) {
   if (order.status !== 'in_work') return null;
-  const rows = await sql`select title, requested_at from doc_requests
+  const rows = await sql`select item_id, title, requested_at from doc_requests
                          where order_id = ${order.id} and cancelled_at is null and fulfilled_at is null
                            and requested_at <= ${new Date(now.getTime() - DOC_WAIT_DAYS * 86400_000)} order by requested_at, id`;
   if (!rows.length) return null;
@@ -76,6 +76,8 @@ export async function docWait(sql, order, now = new Date()) {
   const next = last?.at ? new Date(new Date(last.at).getTime() + DOC_REMIND_EVERY_HOURS * 3600_000) : null;
   return {
     titles: rows.map((r) => r.title),
+    // 2.347: только письмо о переносе — в «Сегодня» напоминание у строки письма, а не отдельной строкой.
+    only_letter: rows.every((r) => r.item_id === TASK_MOVE),
     since,
     days: Math.floor((now.getTime() - new Date(since).getTime()) / 86400_000),
     reminded_at: last?.at ?? null,
