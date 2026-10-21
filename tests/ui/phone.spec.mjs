@@ -16271,3 +16271,24 @@ test('2.347: письмо о переносе не пришло 3 дня — н�
   await expect(ep.locator('#today-box li[data-today-item="task-moved"]')).toHaveCount(0);
   for (const p of [ep, cp]) await p.context().close();
 });
+
+// 2.355: письмо о переносе попросили у заказчика, а оно не пришло 3 дня — в утренней сводке эксперта цифрой «напомните
+// заказчику»; сводка ведёт к «Сегодня», где у строки письма кнопка «Напомнить заказчику» (2.347).
+test('2.355: утренняя сводка эксперта — письмо о переносе не пришло 3 дня, напомните заказчику', async ({ browser, baseURL }) => {
+  const ep = await (await phoneContext(browser, baseURL)).newPage();
+  const expert = await signIn(ep, '+79990033551');
+  await db(async (c) => {
+    await c.query("insert into specialists (user_id, created_at) values ($1, now() - interval '1 year') on conflict do nothing", [expert.id]);
+    const { rows: [n] } = await c.query("insert into notifications (user_id, type, event) values ($1, 'morning', 'morning_today') returning id", [expert.id]);
+    await c.query(`insert into morning_digests (user_id, day, letter_wait, notification_id)
+      values ($1, (now() at time zone 'Europe/Moscow')::date - 1, 2, $2)`, [expert.id, n.id]);
+  });
+  await ep.goto('/kabinet#notifications');
+  const digest = ep.locator('#notifications li').first();
+  await expect(digest).toContainText('На сегодня: письмо о переносе попросили, а оно не пришло 3 дня и дольше — напомните заказчику: 2 дела');
+  expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await shot(ep, 'g21-ekspert-svodka-napomnite-pro-pismo');
+  await digest.getByRole('button').click();
+  await expect(ep).toHaveURL(/#today$/);
+  await ep.context().close();
+});
