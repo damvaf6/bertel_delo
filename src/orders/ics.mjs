@@ -3,7 +3,10 @@
 // без заказчика, названий заявок и адресов: услуга и номер дела (свой выезд по чужому делу — без номера). Просроченное,
 // ссылки на осмотр, просьбы о переносе и заметки в файл не идут — они в кабинете. UID у события постоянный: календарь,
 // который понимает обновление, при повторной загрузке файла заменит событие, а не добавит второе. Срок по заданию на оценку
-// раньше срока дела (2.317) — своим событием на весь день с напоминанием накануне.
+// раньше срока дела (2.317) — своим событием на весь день с напоминанием накануне. Срок из письма о переносе (2.359) — своим
+// названием «Срок по письму о переносе», в описании прежний срок, «сдайте к нему или попросите письмо с новым сроком» и
+// попросили ли его (2.353); UID тот же, что у срока по заданию, — календарь передвинет событие на день из письма, а не
+// оставит старое рядом. У срока дела в описании — к какому дню сдать по заданию или по письму о переносе.
 import { addDays } from './workflow.mjs';
 import { orderRef } from '../notify/registry.mjs';
 
@@ -40,6 +43,29 @@ function event(lines, { uid, now, start, end, summary, description, alarm, busy 
   lines.push('END:VEVENT');
 }
 
+const ru = (iso) => iso.split('-').reverse().join('.');
+const mskDate = (t) => new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(t));
+
+// Срок дела: срок по заданию или по письму о переносе раньше — к какому дню сдать; письмо перенесло срок не раньше срока дела —
+// на какой день.
+function deadlineNote(i) {
+  if (i.task_due) return `${i.task_due_letter ? 'По письму о переносе' : 'По заданию на оценку'} отчёт нужен раньше — к ${ru(i.task_due)}. `;
+  if (i.task_letter) return `Срок по заданию перенесён письмом о переносе на ${ru(i.task_letter.day)} (было ${ru(i.task_letter.was)}). `;
+  return '';
+}
+
+function taskDueEvent(i) {
+  const l = i.task_due.letter;
+  if (!l) {
+    return { summary: `Срок по заданию на оценку: дело ${orderRef(i.order_id)}, ${i.service}`,
+      description: `Срок дела позже — ${ru(i.deadline)}, а по заданию на оценку отчёт нужен к этому дню. ` };
+  }
+  const ask = i.letter_ask?.asked_at ? ` Письмо с новым сроком попросили ${mskDate(i.letter_ask.asked_at)}, пока не пришло.` : '';
+  return { summary: `Срок по письму о переносе: дело ${orderRef(i.order_id)}, ${i.service}`,
+    description: `Срок дела позже — ${ru(i.deadline)}, а по письму о переносе${l.was ? ` (было ${ru(l.was)})` : ''} отчёт нужен к этому дню: `
+      + `сдайте к нему или попросите у заказчика письмо с новым сроком.${ask} ` };
+}
+
 const DEADLINE_NOTE = {
   in_work: 'Срок сдачи',
   review: 'Срок сдачи (сдано, ждёт проверки)',
@@ -57,17 +83,16 @@ export function scheduleIcs(schedule, now = new Date()) {
           uid: `deadline-${i.order_id}`, now,
           start: `DTSTART;VALUE=DATE:${dateOnly(d.date)}`, end: `DTEND;VALUE=DATE:${dateOnly(addDays(d.date, 1))}`,
           summary: `${DEADLINE_NOTE[i.status] ?? 'Срок сдачи'}: дело ${orderRef(i.order_id)}, ${i.service}`,
-          description: about,
+          description: `${deadlineNote(i)}${about}`,
           // Накануне в 9:00 — от полуночи дня срока назад на 15 часов; дело уже на проверке — без напоминания.
           alarm: i.status === 'review' ? null : '-PT15H',
         });
       } else if (i.kind === 'task_due') {
+        const e = taskDueEvent(i);
         event(lines, {
           uid: `taskdue-${i.order_id}`, now,
           start: `DTSTART;VALUE=DATE:${dateOnly(d.date)}`, end: `DTEND;VALUE=DATE:${dateOnly(addDays(d.date, 1))}`,
-          summary: `Срок по заданию на оценку: дело ${orderRef(i.order_id)}, ${i.service}`,
-          description: `Срок дела позже — ${i.deadline.split('-').reverse().join('.')}, а по заданию на оценку отчёт нужен к этому дню${i.task_due.letter
-            ? ` — по письму о переносе${i.task_due.letter.was ? ` (было ${i.task_due.letter.was.split('-').reverse().join('.')})` : ''}` : ''}. ${about}`,
+          summary: e.summary, description: `${e.description}${about}`,
           alarm: '-PT15H',
         });
       } else if (i.kind === 'visit' || i.kind === 'my_visit') {
