@@ -181,15 +181,23 @@ async function expertPart(sql, actor, registry, today, storage) {
   // 2.341: письмо о переносе пришло, а срок в нём раньше согласованного (2.335), сегодня, завтра или прошёл, и своего файла
   // результата нет — своей строкой «Сдать по письму о переносе» (к файлу результата); в «Приложите письмо» не повторяется.
   // Письмо с новым сроком уже попросили — строка остаётся: пока нового письма нет, банк ждёт отчёт к сроку из прежнего.
-  const moved = [], movedIds = new Set(), letterDue = [], remindIds = new Set();
+  // 2.351: то же письмо, но свой файл результата загружен и не подписан — своей строкой «Подпишите до …» (к этому файлу);
+  // в «Приложите письмо» не повторяется. Подписал — строки нет: дальше подпись организации и сдача.
+  const moved = [], movedIds = new Set(), letterDue = [], letterSign = [], remindIds = new Set();
   const own = await ownResults(sql, actor.id, rows.filter((x) => x.status === 'in_work'));
   for (const o of rows.filter((x) => ['in_work', 'review'].includes(x.status))) {
     const m = await taskMoved(sql, storage, registry, o);
     if (m) movedIds.add(o.id);
     const left = m?.letter ? daysBetween(today, m.day) : null;
-    if (m?.letter && o.status === 'in_work' && left <= LETTER_DUE_DAYS && !own.has(o.id)) {
+    const near = m?.letter && o.status === 'in_work' && left <= LETTER_DUE_DAYS;
+    const file = near && own.has(o.id) ? await unsignedResult(sql, actor.id, o.id) : null;
+    if (near && !own.has(o.id)) {
       const draft = !!(await sql.one`select 1 as x from result_drafts where order_id = ${o.id} limit 1`);
       letterDue.push(item(o, { task_moved: m, letter_due: { day: m.day, days_left: left, overdue: left < 0 }, has_draft: draft,
+        can_ask: !(m.asked && !m.asked.came) }));
+      if (m.asked?.remind?.can_remind) remindIds.add(o.id);
+    } else if (file) {
+      letterSign.push(item(o, { task_moved: m, letter_due: { day: m.day, days_left: left, overdue: left < 0 }, file,
         can_ask: !(m.asked && !m.asked.came) }));
       if (m.asked?.remind?.can_remind) remindIds.add(o.id);
     } else if (m && !(m.asked && !m.asked.came)) moved.push(item(o, { task_moved: m, can_ask: o.status === 'in_work' }));
@@ -200,6 +208,7 @@ async function expertPart(sql, actor, registry, today, storage) {
     }
   }
   letterDue.sort((a, b) => a.letter_due.day.localeCompare(b.letter_due.day));
+  letterSign.sort((a, b) => a.letter_due.day.localeCompare(b.letter_due.day));
   const awayDeclined = await awayDeclinedCases(sql, actor, rows, ext, today, item);
   // Выписка ЕГРН в деле старше 30 дней на дату оценки, свежую ещё не просили (2.224) — запросить одной кнопкой.
   const egrnStale = [];
@@ -258,8 +267,10 @@ async function expertPart(sql, actor, registry, today, storage) {
     away_declined: awayDeclined,
     task_moved: moved,
     letter_due: letterDue,
+    // Дата составления в том же файле позже срока (2.321) — сначала исправить её: строка «Подпишите» не повторяется.
+    letter_sign: letterSign.filter((x) => !taskMade.some((t) => t.id === x.id)),
     // Согласие на перенос со сроком позже срока по заданию (2.326) — в строке «Приложите письмо о переносе», здесь не повторяется.
-    extend_answer: extendAnswer.filter((x) => !awayDeclined.some((a) => a.id === x.id) && !moved.some((m) => m.id === x.id) && !letterDue.some((m) => m.id === x.id)),
+    extend_answer: extendAnswer.filter((x) => !awayDeclined.some((a) => a.id === x.id) && !moved.some((m) => m.id === x.id) && !letterDue.some((m) => m.id === x.id) && !letterSign.some((m) => m.id === x.id)),
     ready: readyLeft,
     no_result: noResult.filter((x) => !taskDue.some((t) => t.id === x.id)),
     reply_wait: replyWait,
@@ -436,6 +447,14 @@ async function ownResults(sql, userId, work) {
   const r = await sql`select distinct order_id from documents where order_id = any(${work.map((o) => o.id)}::uuid[]) and kind = 'result'
                       and deleted_at is null and uploaded_by = ${userId}`;
   return new Set(r.map((x) => x.order_id));
+}
+
+// 2.351: свой последний загруженный файл результата, ещё не подписанный экспертом, — { id, filename, at } или null.
+async function unsignedResult(sql, userId, orderId) {
+  const [file] = await sql`select id, filename, created_at as at from documents where order_id = ${orderId} and kind = 'result'
+                           and deleted_at is null and uploaded_by = ${userId} order by created_at desc limit 1`;
+  if (!file || (await orderSignatures(sql, orderId)).get(file.id)?.expert) return null;
+  return { id: String(file.id), filename: file.filename, at: file.at };
 }
 
 export async function taskDueCases(sql, storage, registry, userId, rows, today = todayMsk()) {

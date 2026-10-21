@@ -297,6 +297,14 @@ export async function loadToday() {
           : 'загрузите файл результата или попросите письмо с новым сроком')
           : `письмо с новым сроком попросили ${since(x.task_moved.asked.at)} — пока его нет, сдайте по прежнему письму${askedRemind(x.task_moved.asked)}`],
       (x) => { location.hash = `order=${x.id}&to=result`; }, letterActions),
+      // То же письмо, а свой файл результата загружен и не подписан (2.351) — «Подпишите до …»; нажатие — к этому файлу.
+      ...group('letter-sign', 'Подпишите до срока по письму о переносе', e.letter_sign ?? [], (x) => [x.title,
+        { class: 'overdue', role: 'letter-sign-when', text: `${x.letter_due.overdue ? 'Подпишите сегодня' : `Подпишите до ${dayRu(x.letter_due.day)}`} · ${letterDueWhen(x.letter_due, x.task_moved.doc).toLowerCase()} («${x.task_moved.name}», стр. ${x.task_moved.page})` },
+        { class: 'muted', role: 'letter-sign-file', text: `«${x.file.filename}» загружен ${since(x.file.at)} — не подписан` },
+        `срок дела перенесён на ${dayRu(x.task_moved.deadline)}, а ${x.task_moved.who.toLowerCase()} ждёт отчёт по письму — к ${dayRu(x.letter_due.day)}`,
+        x.can_ask ? 'подпишите файл или попросите письмо с новым сроком'
+          : `письмо с новым сроком попросили ${since(x.task_moved.asked.at)} — пока его нет, подпишите к сроку по прежнему письму${askedRemind(x.task_moved.asked)}`],
+      (x) => { location.hash = `order=${x.id}&to=unsigned`; }, letterActions),
       ...group('task-made', 'Дата составления позже срока по заданию на оценку', e.task_made ?? [], (x) => [x.title,
         { class: 'overdue', role: 'task-made-why', text: `В «${x.file}» дата составления — ${dayRu(x.made.day)} (стр. ${x.made.page}), а срок ${x.task_due.by} — ${dayRu(x.task_due.day)} («${x.task_due.name}», стр. ${x.task_due.page})` },
         'до подписи исправьте дату составления или приложите к делу документ о переносе срока'],
