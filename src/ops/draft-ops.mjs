@@ -277,12 +277,14 @@ function dueSwap(draft, due) {
   if (cell === undefined || cell.includes(due.v)) return null;
   return { was: cell, now: `${due.v} (по письму о переносе срока${due.later ? `; срок дела — ${due.later}, позже срока по заданию` : ''})` };
 }
+const nextDay = (iso) => new Date(Date.parse(`${iso}T12:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
 const dayOf = (v) => (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10);
 // 2.308: руководителю у дела на подписи организации — срок по заданию на оценку (2.303) прошёл или сегодня (день — по Москве).
 // Задание читается только у дел с правилом report_dates; срок позже сегодняшнего — ничего.
 // 2.344: срок взят из письма о переносе (2.333) — `letter` (`was` — прежний срок): прошёл или сегодня — «срок по письму о
 // переносе»; срок по письму позже сегодняшнего, а прежний уже наступил — `moved`: «срок перенесён письмом на …», не красным.
-export async function taskDueSign(sql, storage, registry, order, today) {
+// 2.352: в подписи организации (`soon`) срок по письму о переносе завтра — `soon`: «подпишите до …», красным и первым.
+export async function taskDueSign(sql, storage, registry, order, today, { soon = false } = {}) {
   if (!storage || !registry.checks(order.module, order.service).some((r) => (r.auto ?? []).includes('report_dates'))) return null;
   const assignment = await assignmentDocs(sql, storage, order);
   const d = taskDueFor(registry, order, assignment);
@@ -290,6 +292,7 @@ export async function taskDueSign(sql, storage, registry, order, today) {
   const l = taskMoveLetter(assignment, d);
   const letter = l ? { was: l.was, ...(l.was_letter ? { was_letter: true } : {}) } : null;
   if (d.day > today) {
+    if (soon && letter && d.day === nextDay(today)) return { day: d.day, soon: true, name: d.name, page: d.page, by: d.by, letter };
     return letter?.was && letter.was <= today ? { day: d.day, moved: true, name: d.name, page: d.page, by: d.by, letter } : null;
   }
   return { day: d.day, overdue: d.day < today, name: d.name, page: d.page, by: d.by, ...(letter ? { letter } : {}) };

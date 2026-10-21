@@ -344,8 +344,9 @@ export function signOps() {
             reminded_at: wait?.reminded_at ?? null,
             // С какого времени файлы ждут подписи организации (2.148) — самая ранняя подпись эксперта среди них.
             waiting_since: wait?.since ?? null,
-            // 2.308: срок по заданию на оценку прошёл или сегодня — пока файлы ждут подписи организации.
-            task_due: docs.some((d) => signs.get(d.id)?.expert && !signs.get(d.id)?.org) ? await taskDueSign(sql, providers.storage, registry, o, todayMsk()) : null,
+            // 2.308: срок по заданию на оценку прошёл или сегодня — пока файлы ждут подписи организации (2.352: по письму о
+            // переносе — и завтра).
+            task_due: docs.some((d) => signs.get(d.id)?.expert && !signs.get(d.id)?.org) ? await taskDueSign(sql, providers.storage, registry, o, todayMsk(), { soon: true }) : null,
             // 2.334: перенос согласован позже срока по заданию на оценку, а письма банка о переносе нет (2.332) — до подписи.
             task_moved: docs.some((d) => signs.get(d.id)?.expert && !signs.get(d.id)?.org) ? await taskMovedOrg(sql, providers.storage, registry, o) : null,
             // История возвратов эксперту (2.27) — только этой организации.

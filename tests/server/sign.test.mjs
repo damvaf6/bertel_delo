@@ -1212,7 +1212,8 @@ test('2.308: у дела на подписи организации срок п�
   // 2.344: письмо о переносе — срок по заданию прошёл, письмо перенесло его на завтра: «перенесён письмом», не красным.
   assert.equal((await putTxt(owner, `/api/orders/${o.id}/documents`, `ЗАДАНИЕ НА ОЦЕНКУ\nСрок составления отчёта: не позднее ${ruD(past)}`, 'Задание 5.txt')).status, 201);
   const moved = { day: addDays(today, 1), moved: true, name: 'Задание 3.txt', page: 1, by: 'по заданию на оценку', letter: { was: past } };
-  assert.deepEqual((await signing()).task_due, moved);
+  // 2.352: в подписи организации срок по письму завтра — «подпишите до …», красным и первым; в «Сегодня» — как было.
+  assert.deepEqual((await signing()).task_due, { day: addDays(today, 1), soon: true, name: 'Задание 3.txt', page: 1, by: 'по заданию на оценку', letter: { was: past } });
   assert.deepEqual((await toSign()).task_due, moved);
   // Срок по письму сегодня — «по письму о переносе», с прежним сроком.
   await S.sql`update documents set deleted_at = now() where order_id = ${o.id} and filename = 'Задание 3.txt'`;

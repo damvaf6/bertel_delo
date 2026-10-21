@@ -74,6 +74,12 @@ function renderSign() {
     ...(it.task_moved && waiting(it) ? [el('div', { class: 'overdue', 'data-sig': 'task-moved', text: `До подписи: ${taskMovedText(it.task_moved)}` })] : []),
     // Эксперт напоминал о подписи (2.99) — пока файлы ждут подписи организации.
     ...(it.reminded_at && waiting(it) ? [el('div', { class: 'sig-state', 'data-sig': 'reminded', text: `Эксперт напомнил о подписи ${new Date(it.reminded_at).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}` })] : [])];
+  // 2.352: срок по письму о переносе прошёл, сегодня или завтра, а файлы ждут подписи — такие дела первыми, ближайший срок
+  // первым (строка срока — красным).
+  const letterDay = (it) => (!waiting(it) ? null
+    : it.task_due?.letter && !it.task_due.moved ? it.task_due.day
+    : it.task_moved?.letter_due && it.task_moved.letter_due.days_left <= 1 ? it.task_moved.day : null);
+  const hotFirst = (list) => [...list.filter(letterDay).sort((a, b) => letterDay(a).localeCompare(letterDay(b))), ...list.filter((it) => !letterDay(it))];
   const readyOf = (it) => it.documents.filter((d) => d.signatures.expert && !d.signatures.org);
   const fits = (f, it) => readyOf(it).some((d) => f.test(d, it));
   const counts = new Map(SIGN_FILTERS.map((f) => [f.id, all.filter((it) => fits(f, it)).length]));
@@ -82,13 +88,13 @@ function renderSign() {
   renderFilter(counts, all.filter((it) => readyOf(it).length).length);
   // В отборе — только дела, где такой файл ждёт подписи; подписанные скрыты.
   const items = chosen ? all.filter((it) => fits(chosen, it)) : all;
-  const open = items.filter((it) => !signedAll(it));
+  const open = hotFirst(items.filter((it) => !signedAll(it)));
   const done = chosen ? [] : items.filter(signedAll);
   renderMany(open.filter(waiting));
   $('org-sign').replaceChildren(
     ...open.map((it) => {
       const ready = it.documents.filter((d) => d.signatures.expert && !d.signatures.org);
-      return el('li', { 'data-item': it.order_ref }, ...head(it),
+      return el('li', { 'data-item': it.order_ref, ...(letterDay(it) ? { class: 'hot', 'data-hot': 'letter' } : {}) }, ...head(it),
         ...(!manualSign && waiting(it) && ready.length > 1 ? [el('button', { 'data-action': 'org-sign-all', onclick: () => signAll(ready) }, `Подписать все файлы дела (${ready.length})`)] : []),
         el('ul', { class: 'list' }, ...it.documents.map((d) => docItem(d, it))),
         ...returnsBlock(it.returns ?? []));
