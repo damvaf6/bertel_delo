@@ -452,3 +452,53 @@ test('2.328: «Что сделал прежний эксперт» — срок 
   assert.equal((await transfer(z)).status, 200);
   assert.equal((await pred(z)).task, null);
 });
+
+// 2.356: новому эксперту после передачи — письмо о переносе срока (срок по письму, каким был, раньше ли срока дела), просил ли
+// прежний эксперт у заказчика письмо с новым сроком и пришло ли; попросить самому можно, пока просьба не ждёт ответа.
+test('2.356: «Что сделал прежний эксперт» — письмо о переносе и просьба письма с новым сроком', async () => {
+  const today = todayMsk();
+  const ru = (s) => s.split('-').reverse().join('.');
+  const put = (o, body, name) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': 'basis' } });
+  const transfer = (o) => head.req('POST', `/api/orgs/${org.id}/cases/${o.id}/transfer`, { specialist_id: colleague.user.id, reason: 'Болезнь' });
+  const pred = async (o) => (await colleague.req('GET', `/api/orders/${o.id}/predecessor`)).body.task;
+  const late = addDays(today, 12);
+  const moved = async (title) => {
+    const o = await inWork(title);
+    assert.equal((await put(o, `ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ru(addDays(today, 2))}`, 'Задание банка.txt')).status, 201);
+    assert.equal((await put(o, `Письмо банка\nСрок составления отчёта продлён: не позднее ${ru(addDays(today, 5))}`, 'Письмо о переносе.txt')).status, 201);
+    // Перенос срока дела согласован позже срока в письме.
+    await S.sql`insert into deadline_requests (order_id, requested_by, old_deadline, new_deadline, reason, outcome, decided_at)
+                values (${o.id}, ${spec.user.id}, ${addDays(today, 9)}::date, ${late}::date, 'Жду документы', 'approved', now())`;
+    await S.sql`update orders set deadline = ${late}::date where id = ${o.id}`;
+    return o;
+  };
+
+  // Прежний эксперт попросил письмо с новым сроком — оно не пришло; просить ещё раз нельзя.
+  const o = await moved('Передача: письмо о переносе');
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { task_move: true })).status, 201);
+  assert.equal((await transfer(o)).status, 200);
+  let t = await pred(o);
+  assert.deepEqual(t.letter, { day: addDays(today, 5), was: addDays(today, 2), name: 'Письмо о переносе.txt', page: 1, short: true });
+  assert.equal(t.due.day, addDays(today, 5));
+  assert.equal(t.ask.by_prev, true);
+  assert.equal(t.ask.came_at, null);
+  assert.equal(t.can_ask, false);
+
+  // Никто не просил — новый эксперт просит сам, теперь просьба его.
+  const n = await moved('Передача: письмо о переносе без просьбы');
+  assert.equal((await transfer(n)).status, 200);
+  t = await pred(n);
+  assert.equal(t.letter.short, true);
+  assert.deepEqual([t.ask, t.can_ask], [null, true]);
+  assert.equal((await colleague.req('POST', `/api/orders/${n.id}/doc-requests`, { task_move: true })).status, 201);
+  t = await pred(n);
+  assert.deepEqual([t.ask.by_prev, t.ask.came_at, t.can_ask], [false, null, false]);
+
+  // Письма о переносе нет — ни письма, ни просьбы.
+  const z = await inWork('Передача: только задание');
+  assert.equal((await put(z, `ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ru(addDays(today, 2))}`, 'Задание банка.txt')).status, 201);
+  assert.equal((await transfer(z)).status, 200);
+  t = await pred(z);
+  assert.deepEqual([t.letter, t.ask, t.can_ask], [null, null, false]);
+});

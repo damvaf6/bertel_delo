@@ -8,10 +8,10 @@ import { executorSignOrg, orderSides } from '../access/policy.mjs';
 import { dispatchers, notify } from '../notify/notify.mjs';
 import { addDays, todayMsk } from '../orders/workflow.mjs';
 import { orgExpertsFor } from './match-ops.mjs';
-import { newDateFrom } from './deadline-ops.mjs';
 import { audit, text, uuidFrom } from './util.mjs';
-import { latest, taskDraftItems, taskDueFor } from './draft-ops.mjs';
-import { assignmentDocs } from './ai-ops.mjs';
+import { latest, taskDraftItems, taskDueFor, taskMoveLetter } from './draft-ops.mjs';
+import { assignmentDocs, TASK_MOVE } from './ai-ops.mjs';
+import { newDateFrom, taskMoved } from './deadline-ops.mjs';
 
 const isExecutor = (actor, order) => order.executor_user_id === actor.id && orderSides(actor, order).includes('executor');
 
@@ -115,7 +115,7 @@ async function predecessorView(sql, actor, order, registry, storage) {
     analogs: analogs.n,
     analogs_confirmed: analogs.confirmed,
     extend: ext ? { ...ext, id: String(ext.id) } : null,
-    task: await predecessorTask(sql, registry, storage, order),
+    task: await predecessorTask(sql, registry, storage, order, prev),
   };
 }
 
@@ -124,7 +124,11 @@ async function predecessorView(sql, actor, order, registry, storage) {
 // черновика, а чего нет или там другое (те же правила, что «задание пришло после черновика», 2.295, только в счёт всё
 // задание). Черновика нет — `draft: false`: подготовит, и программа возьмёт из задания сама; таблицы задания в черновике
 // нет — `items: null`, сверять не с чем. Задания нет — null.
-async function predecessorTask(sql, registry, storage, order, today = todayMsk()) {
+// 2.356: банк прислал письмо о переносе срока (2.333) — `letter`: срок по письму, каким был срок по заданию до него, из какого
+// файла и раньше ли он срока дела (`short`: сдавать к нему или просить письмо с новым сроком). Просили ли у заказчика письмо
+// о переносе (2.326) — `ask`: когда, кто (прежний эксперт — `by_prev`), пришло ли. `can_ask` — сейчас можно попросить письмо
+// с новым сроком одной кнопкой (как в «Сроке», 2.335): перенос согласован позже срока по заданию, а просьба не ждёт ответа.
+async function predecessorTask(sql, registry, storage, order, prev, today = todayMsk()) {
   if (!storage || !registry) return null;
   const assignment = await assignmentDocs(sql, storage, order);
   if (!assignment.length) return null;
@@ -140,7 +144,14 @@ async function predecessorTask(sql, registry, storage, order, today = todayMsk()
     items = taskDraftItems(registry, order, assignment, [], draft.body, ai?.inputs?.egrn ?? null, owner?.full_name)
       ?.map((x) => ({ what: x.what, label: x.label, v: x.v, ok: x.ok, was: x.ok ? null : x.was })) ?? null;
   }
-  return { files: assignment.map((a) => ({ id: a.id, name: a.name })), due, draft: !!draft, items };
+  const l = taskMoveLetter(assignment, d);
+  const letter = l ? { day: l.day, was: l.was, name: d.name, page: d.page, short: !!deadline && l.day < deadline } : null;
+  const [a] = await sql`select requested_by, requested_at, fulfilled_at from doc_requests
+                        where order_id = ${order.id} and item_id = ${TASK_MOVE} and cancelled_at is null order by id desc limit 1`;
+  const ask = a ? { at: a.requested_at, came_at: a.fulfilled_at ?? null, by_prev: a.requested_by === prev } : null;
+  const m = order.status === 'in_work' ? await taskMoved(sql, storage, registry, order) : null;
+  const canAsk = !!m && !(m.asked && !m.asked.came);
+  return { files: assignment.map((x) => ({ id: x.id, name: x.name })), due, draft: !!draft, items, letter, ask, can_ask: canAsk };
 }
 
 export function handoverOps() {
