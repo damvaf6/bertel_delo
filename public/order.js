@@ -80,7 +80,7 @@ export async function openOrder(id, { to } = {}) {
   renderResultDue(lastDocs?.result_due ?? null);
   // Черновик и ИИ-проверка показаны — у пунктов замечания руководителя видна «Заменить по выписке» (2.262).
   if (orgReturnsNow.length) renderOrgReturns(orgReturnsNow);
-  const box = { result: 'docs-box', inspect: 'inspect-box', chat: 'chat-box', orgchat: 'org-chat-box', docs: 'docreq-box', review: 'review-box', deadline: 'deadline-box', extend: 'deadline-box', away: 'deadline-box', late: 'deadline-box', sign: 'sign-wait-box', fix: 'org-returns-box', fresh: 'org-returns-box', handover: 'handover-box', rebuild: 'draft-box', task: 'draft-box', onsite: 'onsite-box', notes: 'notes-box', steps: 'steps-box' }[to];
+  const box = { result: 'docs-box', inspect: 'inspect-box', chat: 'chat-box', orgchat: 'org-chat-box', docs: 'docreq-box', review: 'review-box', deadline: 'deadline-box', extend: 'deadline-box', away: 'deadline-box', late: 'deadline-box', sign: 'sign-wait-box', fix: 'org-returns-box', fresh: 'org-returns-box', unsigned: 'docs-box', handover: 'handover-box', rebuild: 'draft-box', task: 'draft-box', onsite: 'onsite-box', notes: 'notes-box', steps: 'steps-box' }[to];
   if (box && !$(box).classList.contains('hidden')) { reveal(box); $(box).scrollIntoView({ block: 'start' }); }
   // «Попросить перенос» из «Моих сроков» (2.134): причина «много дел в этот день» и новый срок — сразу в полях.
   if (to === 'extend') document.querySelector('#deadline-reason-list [data-reason="busy"]')?.click();
@@ -89,6 +89,11 @@ export async function openOrder(id, { to } = {}) {
   // Исправленный файл больше суток не подписан (2.204): сразу к нему в «Документах»; файла уже нет — остаётся у замечаний.
   if (to === 'fresh') {
     const d = orgReturnsNow.filter((r) => r.open).map((r) => freshAfter(r).at(-1)).find(Boolean);
+    if (d) toDoc(d.id);
+  }
+  // Срок по письму о переносе близко, а свой файл результата не подписан (2.351): сразу к последнему такому файлу.
+  if (to === 'unsigned') {
+    const d = (lastDocs?.documents ?? []).filter((x) => x.kind === 'result' && x.own !== false && !x.signatures?.expert).at(-1);
     if (d) toDoc(d.id);
   }
   if (to === 'handover' && !$('handover-form').classList.contains('hidden')) $('handover-reason').focus();

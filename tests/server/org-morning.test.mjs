@@ -946,6 +946,7 @@ test('прогон 2.350: письмо о переносе со сроком з�
     const dl = (await ex.req('GET', `/api/orders/${o.id}/deadline-requests`)).body;
     return {
       letter_due: t.letter_due.find((x) => x.id === o.id) ?? null,
+      letter_sign: t.letter_sign.find((x) => x.id === o.id) ?? null,
       moved: t.task_moved.some((x) => x.id === o.id),
       morning: await expertMorningAlerts(S.sql, ex.user.id, today, new Date(), opts),
       org: (await h.req('GET', `/api/orgs/${oP.id}/cases`)).body.cases.find((x) => x.id === o.id)?.task_moved ?? null,
@@ -982,19 +983,22 @@ test('прогон 2.350: письмо о переносе со сроком з�
   v = await look();
   assert.equal(v.remind?.can_remind, true);
   assert.equal(v.letter_due?.task_moved.asked.remind.can_remind, true);
-  // 4. Файл результата загружен — «Сдать по письму» уходит и в «Сегодня», и в сводке; ждём письмо — напоминание остаётся.
+  // 4. Файл результата загружен — «Сдать по письму» уходит и в «Сегодня», и в сводке; файл не подписан — «Подпишите до …»
+  // (2.351), там же напоминание: письмо ждём; в «Приложите письмо» не повторяется.
   assert.equal((await ex.req('POST', `/api/orders/${o.id}/results`, Buffer.from('файл Отчёт.pdf'), {
     raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Отчёт.pdf') } })).status, 201);
   v = await look();
   assert.equal(v.letter_due, null);
-  assert.equal(v.moved, true, 'письмо с новым сроком не пришло 4 дня — «Напомнить заказчику»');
+  assert.deepEqual([v.letter_sign?.letter_due.day, v.letter_sign?.file.filename, v.letter_sign?.can_ask], [short, 'Отчёт.pdf', false]);
+  assert.equal(v.letter_sign.task_moved.asked.remind.can_remind, true, 'письмо с новым сроком не пришло 4 дня — «Напомнить заказчику»');
+  assert.equal(v.moved, false);
   assert.deepEqual([v.morning.letter_due, v.morning.task_moved], [0, 0]);
   // 5. Пришло письмо с согласованным сроком — пометок нет нигде.
   assert.equal((await owner.req('POST', `/api/orders/${o.id}/doc-requests/${req2.id}/attach`, {
     document_id: (await put(`Банк сообщает: срок составления отчёта продлён, не позднее ${ruD(late)}`, 'Письмо о переносе 2.txt', 'other')).body.document.id })).status, 200);
   v = await look();
-  assert.deepEqual([v.letter_due, v.moved, v.morning.letter_due, v.morning.task_moved, v.org, v.card, v.org_long, v.short, v.remind],
-    [null, false, 0, 0, null, null, 0, null, null]);
+  assert.deepEqual([v.letter_due, v.letter_sign, v.moved, v.morning.letter_due, v.morning.task_moved, v.org, v.card, v.org_long, v.short, v.remind],
+    [null, null, false, 0, 0, null, null, 0, null, null]);
   // 6. Сдано: в сводке за месяц — срок по письму о переносе (2.346), сдано не позже срока из последнего письма.
   await S.sql`update orders set status = 'done' where id = ${o.id}`;
   await S.sql`insert into order_status_history (order_id, from_status, to_status, side) values (${o.id}, 'review', 'done', 'dispatcher')`;

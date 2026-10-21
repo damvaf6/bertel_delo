@@ -46,7 +46,7 @@ async function route() {
   if (h === '#notifications') return showNotifications();
   refreshCounts();
   let m;
-  if ((m = h.match(/^#order=([0-9a-f-]{36})(?:&to=(inspect|chat|docs|deadline|extend|away|late|sign|handover|onsite|notes|steps|result|fix|fresh|review|rebuild|task))?$/i))) return openOrder(m[1], { to: m[2] });
+  if ((m = h.match(/^#order=([0-9a-f-]{36})(?:&to=(inspect|chat|docs|deadline|extend|away|late|sign|handover|onsite|notes|steps|result|fix|fresh|review|rebuild|task|unsigned))?$/i))) return openOrder(m[1], { to: m[2] });
   // #org=…&case=XXXXXXXX&to=pending|sign|chat|case|handover|transfer — сразу к делу организации (2.67: из уведомления или «Сегодня»).
   if ((m = h.match(/^#org=([0-9a-f-]{36})(?:&case=([0-9A-F]{8})(?:&to=(pending|sign|chat|case|handover|transfer))?)?$/i))) return showOrg(m[1], m[2] ? { ref: `№ ${m[2].toUpperCase()}`, to: m[3] } : null);
   // #org=…&to=week|overdue|stuck|task_moved|orgext|away|back|sign|sign_order|handover|returned|fresh|idle|docs — к блоку организации без дела (2.130, 2.141, 2.153, 2.158, 2.172, 2.209, 2.228, 2.238, 2.249, 2.286, 2.338: из утренней

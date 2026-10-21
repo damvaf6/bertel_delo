@@ -724,11 +724,41 @@ test('2.341: «Сегодня» — срок по письму о перенос
   // Чужой эксперт — не видит.
   assert.ok(!(await t(other)).letter_due.some((x) => x.id === o.id));
   // Свой файл результата загружен — строки нет, и в «Приложите письмо» дело не возвращается, пока письмо с новым сроком ждём.
-  assert.equal((await spec.req('POST', `/api/orders/${o.id}/results`, Buffer.from('файл Отчёт.pdf'), {
-    raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Отчёт.pdf') } })).status, 201);
+  const res = await spec.req('POST', `/api/orders/${o.id}/results`, Buffer.from('файл Отчёт.pdf'), {
+    raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Отчёт.pdf') } });
+  assert.equal(res.status, 201);
   e = await t();
   assert.ok(!e.letter_due.some((x) => x.id === o.id));
   assert.ok(!e.task_moved.some((x) => x.id === o.id));
+  // 2.351: файл не подписан — «Подпишите до …» с этим файлом; письмо с новым сроком уже попросили — без кнопки.
+  const sign = e.letter_sign.find((x) => x.id === o.id);
+  assert.deepEqual(sign?.letter_due, { day: short, days_left: 1, overdue: false });
+  assert.deepEqual([sign.file.id, sign.file.filename, sign.can_ask, sign.task_moved.deadline], [String(res.body.document.id), 'Отчёт.pdf', false, late]);
+  assert.ok(!e.extend_answer.some((x) => x.id === o.id));
+  assert.ok(!(await t(other)).letter_sign.some((x) => x.id === o.id));
+  // Подписал — строки нет.
+  assert.equal((await spec.req('PATCH', '/api/me', { full_name: 'Тестов Эксперт Экспертович' })).status, 200);
+  assert.equal((await spec.req('POST', `/api/documents/${res.body.document.id}/sign`, { confirm: true })).status, 201);
+  e = await t();
+  assert.ok(!e.letter_sign.some((x) => x.id === o.id));
+  assert.ok(!e.letter_due.some((x) => x.id === o.id));
+});
+
+test('2.351: срок по письму о переносе через 3 дня, файл не подписан — строки «Подпишите до …» нет', async () => {
+  const o = await inWork('Квартира: подписать по письму через 3 дня', 5);
+  const ruD = (s) => s.split('-').reverse().join('.');
+  const put = (body, name, kind = 'basis') => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': kind } });
+  await S.sql`update orders set fields = fields || '{"purpose":"bank"}'::jsonb where id = ${o.id}`;
+  assert.equal((await put(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(addDays(today, 2))}`, 'Задание банка.txt')).status, 201);
+  const r = await ask(spec, o, { new_deadline: addDays(today, 12), reason: 'Банк согласовал перенос устно' });
+  assert.equal((await decide(dispatcher, o, r.body.open.id, { approve: true })).status, 200);
+  assert.equal((await put(`Банк сообщает: срок составления отчёта продлён, не позднее ${ruD(addDays(today, 3))}`, 'Письмо о переносе.txt', 'other')).status, 201);
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/results`, Buffer.from('файл Отчёт.pdf'), {
+    raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Отчёт.pdf') } })).status, 201);
+  const e = (await spec.req('GET', '/api/today')).body.expert;
+  assert.ok(!e.letter_sign.some((x) => x.id === o.id));
+  assert.ok(e.task_moved.some((x) => x.id === o.id));
 });
 
 test('2.341: срок по письму о переносе через 3 дня — строки «Сдать по письму» нет, есть «Приложите письмо»', async () => {
