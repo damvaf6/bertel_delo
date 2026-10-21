@@ -67,8 +67,9 @@ function renderSign() {
     el('div', { class: 'muted', text: [`Эксперт: ${it.executor}`, it.deadline ? `срок ${dayRu(it.deadline)}` : null].filter(Boolean).join(' · ') }),
     // Сколько файлы ждут подписи организации (2.148).
     ...(it.waiting_since && waiting(it) ? [el('div', { class: 'sig-state warn', 'data-sig': 'since', text: `Ждёт Вашей подписи ${waitedDays(it.waiting_since)} — эксперт подписал ${new Date(it.waiting_since).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}` })] : []),
-    // Срок по заданию на оценку прошёл или сегодня (2.308) — красным, как в «Сегодня».
-    ...(it.task_due && !it.task_moved && waiting(it) ? [el('div', { class: taskDueSignClass(it.task_due), 'data-sig': 'task-due', text: taskDueSignText(it.task_due) })] : []),
+    // Срок по заданию на оценку прошёл или сегодня (2.308) — красным, как в «Сегодня». Прогон 2.360: перенос согласован, а
+    // письмо пришло со сроком раньше согласованного — строка срока по письму («завтра — подпишите до …») тоже, над «До подписи».
+    ...(it.task_due && (!it.task_moved || (it.task_moved.letter && !it.task_due.moved)) && waiting(it) ? [el('div', { class: taskDueSignClass(it.task_due), 'data-sig': 'task-due', text: taskDueSignText(it.task_due) })] : []),
     // 2.334: перенос согласован позже срока по заданию на оценку, а письма банка о переносе нет (как в «Делах экспертов», 2.332):
     // до подписи — банк ждёт отчёт к прежнему дню. Подпись не держит.
     ...(it.task_moved && waiting(it) ? [el('div', { class: 'overdue', 'data-sig': 'task-moved', text: `До подписи: ${taskMovedText(it.task_moved)}` })] : []),

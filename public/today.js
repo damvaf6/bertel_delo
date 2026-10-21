@@ -491,7 +491,7 @@ export async function loadToday() {
         // В ИИ-проверке эксперта остались расхождения с заявкой или заданием на оценку (2.286, как отбор 2.276).
         ...(x.order_diff ? [{ class: 'overdue', role: 'order-diff', text: `расхождения с заявкой или заданием на оценку: ${x.order_diff} ${x.order_diff === 1 ? 'пункт' : x.order_diff < 5 ? 'пункта' : 'пунктов'}` }] : []),
         // Срок по заданию на оценку прошёл или сегодня (2.308) — красным.
-        ...(x.task_due && !x.task_moved ? [{ class: taskDueSignClass(x.task_due), role: 'task-due-sign', text: taskDueSignText(x.task_due) }] : []),
+        ...(x.task_due && (!x.task_moved || (x.task_moved.letter && !x.task_due.moved)) ? [{ class: taskDueSignClass(x.task_due), role: 'task-due-sign', text: taskDueSignText(x.task_due) }] : []),
         // Перенос согласован позже срока по заданию, а письма о переносе нет (2.334) — вместо строки срока по заданию.
         ...(x.task_moved ? [{ class: 'overdue', role: 'task-moved-sign', text: `До подписи: ${taskMovedText(x.task_moved)}` }] : [])], toOrg('sign')),
       ...group(`org-pending-${g.id}`, 'Ждут назначения эксперта', g.pending, caseLine, toOrg('pending')),
