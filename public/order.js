@@ -658,17 +658,20 @@ const todayRu = () => new Date().toLocaleDateString('ru-RU', { timeZone: 'Europe
 const dayNum = (d) => d.split('.').reverse().join('');
 function pointMade(date) {
   if (!canFixInDraft()) return [];
-  const rule = date.late ? `срок по заданию на оценку — не позднее ${date.edge}` : `задание на оценку от ${date.edge}`;
+  // 2.345: срок из письма о переносе срока — так и назван; совет — попросить письмо с новым сроком (письмо уже в деле).
+  const rule = date.letter ? `срок по письму о переносе — не позднее ${date.edge}`
+    : date.late ? `срок по заданию на оценку — не позднее ${date.edge}` : `задание на оценку от ${date.edge}`;
+  const moveTip = date.letter ? 'попросите у заказчика письмо с новым сроком' : 'приложите к делу документ о переносе срока';
   const miss = el('div', { class: 'point-swap muted hidden', 'data-role': 'point-made-miss' });
   const btn = el('button', { class: 'secondary', type: 'button', 'data-action': 'point-made', onclick: () => {
-    const ok = madeInDraft(date, (v) => `Выделено «${v}» — ${rule}. Исправьте дату составления и сохраните черновик, затем соберите Word заново${date.late ? ' (или приложите к делу документ о переносе срока)' : ''}.`);
+    const ok = madeInDraft(date, (v) => `Выделено «${v}» — ${rule}. Исправьте дату составления и сохраните черновик, затем соберите Word заново${date.late ? ` (или ${moveTip})` : ''}.`);
     miss.classList.toggle('hidden', ok);
     if (ok) return;
     const today = todayRu();
     const fits = date.late ? dayNum(today) <= dayNum(date.edge) : dayNum(today) >= dayNum(date.edge);
     miss.textContent = `В тексте черновика строки «Дата составления» нет: в Word дата составления — день сборки. `
       + (fits ? `Соберите Word заново — дата составления будет ${today}, загрузите исправленный файл и отметьте пункт.`
-        : `Срок по заданию (${date.edge}) прошёл — приложите к делу документ о переносе срока или исправьте дату в файле отчёта.`);
+        : `Срок ${date.letter ? 'по письму о переносе' : 'по заданию'} (${date.edge}) прошёл — ${moveTip} или исправьте дату в файле отчёта.`);
   } }, 'К месту в черновике');
   return [el('div', { class: 'point-swap', 'data-role': 'point-made' },
     el('span', { class: 'muted', text: `В отчёте дата составления ${date.made} — ${rule}. ` }), btn), miss];

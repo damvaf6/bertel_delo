@@ -1853,9 +1853,14 @@ function reportDates(docs, ctx) {
     out.push({ ...pageWith(d, MADE_LABEL), text: `Дата составления отчёта (${ruDate(made)}) раньше даты ${ISSUED_OF[task.what]} «${task.name}» (${ruDate(task.day)}, стр. ${task.page + 1}) — отчёт не может быть составлен раньше, чем ${ISSUED_WHO[task.what]}; исправьте дату составления или приложите к делу верный документ` });
   }
   // 2.302: дата составления не позже срока отчёта из задания на оценку («не позднее …», «срок составления отчёта …»).
+  // 2.345: срок взят из письма о переносе срока (как taskMoveLetter, 2.333) — находка называет письмо и прежний срок; совет —
+  // не «приложите документ о переносе» (он уже в деле), а исправить дату или попросить письмо с новым сроком.
   const due = made && assignmentDue(ctx.assignment);
   if (due?.day && made > due.day) {
-    out.push({ ...pageWith(d, MADE_LABEL), text: `Дата составления отчёта (${ruDate(made)}) позже срока из ${ISSUED_OF[due.what]} «${due.name}» (не позднее ${ruDate(due.day)}, стр. ${due.page + 1}) — отчёт составлен после срока; проверьте дату составления, а если срок переносили — приложите к делу документ о переносе` });
+    const moved = dueMoved(ctx.assignment, due);
+    out.push({ ...pageWith(d, MADE_LABEL), text: moved
+      ? `Дата составления отчёта (${ruDate(made)}) позже срока из письма о переносе срока «${due.name}» (не позднее ${ruDate(due.day)}, стр. ${due.page + 1}) — срок переносили письмом${moved.was ? ` (${moved.wasLetter ? 'по прежнему письму' : 'по заданию'} было ${ruDate(moved.was)})` : ''}, но отчёт составлен и после нового срока; проверьте дату составления или попросите у заказчика письмо с новым сроком`
+      : `Дата составления отчёта (${ruDate(made)}) позже срока из ${ISSUED_OF[due.what]} «${due.name}» (не позднее ${ruDate(due.day)}, стр. ${due.page + 1}) — отчёт составлен после срока; проверьте дату составления, а если срок переносили — приложите к делу документ о переносе` });
   }
   const after = val && found.find((f) => f.day > val);
   if (after && !RETRO.test(text) && !NO_INSPECT.test(text)) {
@@ -2489,6 +2494,17 @@ export function assignmentDue(assignment) {
     });
   }
   return got;
+}
+
+// 2.345: срок по заданию (assignmentDue) взят из письма о переносе срока — файла к просьбе «Письмо банка о переносе» (`moved`,
+// 2.326) или файла с более поздним сроком, чем в другом файле задания (как taskMoveLetter в draft-ops.mjs, 2.333). `was` —
+// прежний срок, `wasLetter` — он сам из прежнего письма. Не письмо — null.
+function dueMoved(assignment, due) {
+  const letter = (assignment ?? []).find((a) => a.name === due.name);
+  const days = (assignment ?? []).filter((a) => a !== letter).map((a) => ({ a, day: assignmentDue([a])?.day })).filter((x) => x.day && x.day < due.day);
+  const was = days.map((x) => x.day).sort().at(-1) ?? null;
+  if (!letter || !(letter.moved || was)) return null;
+  return { was, wasLetter: !!was && (days.some((x) => x.day === was && x.a.moved) || days.some((x) => x.day < was)) };
 }
 
 // Как назвать приложенный документ в находке: задание на оценку, определение суда или письмо заказчика.
