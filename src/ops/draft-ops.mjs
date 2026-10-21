@@ -268,6 +268,15 @@ export function taskMoveLetter(assignment, due) {
   const wasLetter = !!was && (days.some((x) => x.day === was && x.a.moved) || days.some((x) => x.day < was));
   return { day: due.day, was, ...(wasLetter ? { was_letter: true } : {}) };
 }
+// 2.343: письмо о переносе срока пришло, а строка «Срок» таблицы задания черновика — без срока из письма (черновик готовили
+// до письма): что поставить в строку — срок из письма, как его поставил бы черновик заново (2.303), и что там сейчас. Строки
+// «Срок» в черновике нет или срок из письма в ней уже есть — null.
+const DUE_ROW = /^\|\s*Срок\s*\|\s*([^|\n]*?)\s*\|\s*$/mu;
+function dueSwap(draft, due) {
+  const cell = DUE_ROW.exec(String(draft?.body ?? ''))?.[1];
+  if (cell === undefined || cell.includes(due.v)) return null;
+  return { was: cell, now: `${due.v} (по письму о переносе срока${due.later ? `; срок дела — ${due.later}, позже срока по заданию` : ''})` };
+}
 const dayOf = (v) => (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10);
 // 2.308: руководителю у дела на подписи организации — срок по заданию на оценку (2.303) прошёл или сегодня (день — по Москве).
 // Задание читается только у дел с правилом report_dates; срок позже сегодняшнего — ничего.
@@ -441,7 +450,8 @@ export function draftOps() {
           address ? { id: 'address', label: 'Адрес объекта', v: address.v, ...at(address), typed: address.typed } : null,
           user?.name ? { id: 'user', label: 'Предполагаемый пользователь результатов оценки', v: user.v, ...at(user) } : null,
           due ? { id: 'due', label: 'Срок составления отчёта', v: `не позднее ${due.v}`, ...at(due), later: due.later } : null,
-          moved ? { id: 'moved', label: 'Срок перенесён письмом', v: `на ${ruDay(moved.day)}`, ...at(due), was: moved.was && ruDay(moved.was), was_letter: !!moved.was_letter } : null,
+          moved ? { id: 'moved', label: 'Срок перенесён письмом', v: `на ${ruDay(moved.day)}`, ...at(due), was: moved.was && ruDay(moved.was), was_letter: !!moved.was_letter,
+            swap: editsDraft(actor, order) ? dueSwap(await latest(sql, order.id), due) : null } : null,
         ].filter(Boolean);
         return { files: assignment.map((a) => ({ id: a.id, name: a.name })), items };
       },

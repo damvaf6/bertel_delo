@@ -603,6 +603,34 @@ test('2.333: «Что сказано в задании на оценку» — �
   assert.equal((await stranger.req('GET', `/api/orders/${o.id}/task`)).status, 404);
 });
 
+test('2.343: пришло письмо о переносе, а в строке «Срок» черновика старый срок — что поставить; заменили — больше нет', async () => {
+  const o = await inWork('Квартира: срок в черновике по письму', 5);
+  const ruD = (s) => s.split('-').reverse().join('.');
+  const put = (body, name, kind = 'basis') => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': kind } });
+  const moved = async (who = spec) => (await who.req('GET', `/api/orders/${o.id}/task`)).body.items.find((x) => x.id === 'moved') ?? null;
+  await S.sql`update orders set fields = fields || '{"purpose":"bank"}'::jsonb where id = ${o.id}`;
+  const due = addDays(today, 5), late = addDays(today, 12);
+  assert.equal((await put(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(due)}`, 'Задание банка.txt')).status, 201);
+  const table = (cell) => `## Задание на оценку\n\n| Сведение | Значение |\n|---|---|\n| Объект оценки | квартира |\n| Срок | ${cell} |\n\nТекст.`;
+  let d = (await spec.req('PUT', `/api/orders/${o.id}/draft`, { body: table(`${ruD(due)} (по заданию на оценку)`), from: null })).body.draft;
+  assert.equal((await put(`Письмо банка. Срок составления отчёта: не позднее ${ruD(late)}`, 'Письмо банка о переносе.txt', 'other')).status, 201);
+  // Строка «Срок» — со сроком из задания: что там сейчас и что поставить (срок дела позже — рядом, как в черновике заново).
+  let m = await moved();
+  assert.deepEqual(m.swap, { was: `${ruD(due)} (по заданию на оценку)`, now: `${ruD(late)} (по письму о переносе срока)` });
+  await S.sql`update orders set deadline = ${addDays(today, 14)}::date where id = ${o.id}`;
+  assert.equal((await moved()).swap.now, `${ruD(late)} (по письму о переносе срока; срок дела — ${ruD(addDays(today, 14))}, позже срока по заданию)`);
+  // Диспетчер черновик не правит — кнопки нет; строку о переносе видит.
+  m = await moved(dispatcher);
+  assert.equal(m?.swap ?? null, null);
+  // Заменили (отметка замены по заданию, 2.289) — больше не предлагается.
+  d = (await spec.req('PUT', `/api/orders/${o.id}/draft`, { body: table(`${ruD(late)} (по письму о переносе срока)`), from: d.id, swap: { kind: 'task', n: 1 } })).body.draft;
+  assert.equal((await moved()).swap, null);
+  // Строки «Срок» в черновике нет — нечего менять.
+  await spec.req('PUT', `/api/orders/${o.id}/draft`, { body: 'Черновик без таблицы задания', from: d.id });
+  assert.equal((await moved()).swap, null);
+});
+
 test('2.333: письмо о переносе без просьбы — второй файл задания с более поздним сроком; письмо без срока — строки нет', async () => {
   const o = await inWork('Квартира: второе письмо со сроком', 5);
   const ruD = (s) => s.split('-').reverse().join('.');

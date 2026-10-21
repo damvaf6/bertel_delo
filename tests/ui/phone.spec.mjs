@@ -14337,6 +14337,60 @@ test('2.333: «Что сказано в задании на оценку» — �
   for (const p of [ep, cp]) await p.context().close();
 });
 
+// 2.343: черновик готовили до письма о переносе — в строке «Срок» таблицы задания старый срок; в «Что сказано в задании на
+// оценку» у строки о переносе — «Заменить срок в черновике»: срок в черновике меняется, сохраняется; «Отменить» возвращает.
+test('2.343: письмо о переносе — заменить срок в черновике одной кнопкой', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990034311'), customer = await signIn(cp, '+79990034312');
+  const ru = (iso) => iso.split('-').reverse().join('.');
+  const A = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Срок в черновике по письму: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Садовая ул., д. 12, кв. 4"}') returning id`,
+    [customer.id, expert.id, inDays(12)]);
+    await c.query(`insert into result_drafts (order_id, author_id, source, body) values ($1, $2, 'edit', $3)`, [o.id, expert.id,
+      `## Задание на оценку\n\n| Сведение | Значение |\n|---|---|\n| Объект оценки | квартира |\n| Срок | ${ru(inDays(5))} (по заданию на оценку) |\n\nТекст отчёта.`]);
+    return o.id;
+  });
+  const put = async (body, name, kind) => {
+    const r = await cp.request.post(`/api/orders/${A}/documents`, {
+      data: Buffer.from(body), headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': kind } });
+    expect(r.status()).toBe(201);
+  };
+  await put(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ru(inDays(5))}`, 'Задание банка.txt', 'basis');
+  await put(`Письмо банка. Срок составления отчёта продлён: не позднее ${ru(inDays(12))}`, 'Письмо банка о переносе.txt', 'other');
+  await ep.goto(`/kabinet#order=${A}`);
+  const row = ep.locator('#task-box li[data-task="moved"]');
+  await expect(row).toContainText(`Срок перенесён письмом: на ${ru(inDays(12))}`);
+  await expect(row.locator('[data-task-due-draft]')).toHaveText(`В черновике в строке «Срок» — ${ru(inDays(5))} (по заданию на оценку), а по письму о переносе — ${ru(inDays(12))}`);
+  const btn = row.locator('[data-action="task-due-swap"]');
+  await expect(btn).toHaveText('Заменить срок в черновике');
+  expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await row.scrollIntoViewIfNeeded();
+  await shot(ep, '54v3-ekspert-zamenit-srok-v-chernovike');
+  await btn.click();
+  await expect(ep.locator('#task-msg')).toHaveText(`Срок в черновике заменён на ${ru(inDays(12))} — соберите Word заново`);
+  await expect(ep.locator('#draft-text')).toHaveValue(new RegExp(`\\| Срок \\| ${ru(inDays(12)).replace(/\./g, '\\.')} \\(по письму о переносе срока\\) \\|`));
+  const saved = await db(async (c) => (await c.query('select body from result_drafts where order_id = $1 order by id desc limit 1', [A])).rows[0].body);
+  expect(saved).toContain(`| Срок | ${ru(inDays(12))} (по письму о переносе срока) |`);
+  await expect(btn).toHaveText('Отменить');
+  await row.scrollIntoViewIfNeeded();
+  await shot(ep, '54v4-ekspert-srok-v-chernovike-zamenen');
+  await btn.click();
+  await expect(ep.locator('#task-msg')).toHaveText('Замена отменена — в строке «Срок» снова прежний срок');
+  await expect(ep.locator('#draft-text')).toHaveValue(new RegExp(`\\| Срок \\| ${ru(inDays(5)).replace(/\./g, '\\.')} \\(по заданию на оценку\\) \\|`));
+  // Заменили снова и открыли дело заново — кнопки больше нет: срок из письма в черновике уже стоит.
+  await btn.click();
+  await expect(btn).toHaveText('Отменить');
+  await ep.reload();
+  await expect(row).toContainText(`Срок перенесён письмом: на ${ru(inDays(12))}`);
+  await expect(row.locator('[data-action="task-due-swap"]')).toHaveCount(0);
+  for (const p of [ep, cp]) await p.context().close();
+});
+
 // 2.335: письмо о переносе пришло, а срок в нём раньше согласованного срока дела — в «Сроке» «письмо пришло, но срок в нём …»
 // и кнопка «Попросить письмо банка с новым сроком»; в «Сегодня» — та же подсказка.
 test('2.335: письмо о переносе со сроком раньше согласованного — подсказка в «Сроке»', async ({ browser, baseURL }) => {

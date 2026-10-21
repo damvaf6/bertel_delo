@@ -138,7 +138,7 @@ function toSection(title) {
 // 2.231 — и у находки, сверенной с заявкой или заданием на оценку.
 export const canFixInDraft = () => !!ctx?.draft && !$('draft-text').readOnly && !$('draft-box').classList.contains('hidden');
 function syncFixButtons() {
-  for (const b of document.querySelectorAll('[data-action="egrn-draft"], [data-action="fix-draft"], [data-action="egrn-swap"], [data-action="fix-swap"], [data-action="egrn-swap-all"], [data-action="sig-egrn-swap"]')) b.classList.toggle('hidden', !canFixInDraft());
+  for (const b of document.querySelectorAll('[data-action="egrn-draft"], [data-action="fix-draft"], [data-action="egrn-swap"], [data-action="fix-swap"], [data-action="egrn-swap-all"], [data-action="sig-egrn-swap"], [data-action="task-due-swap"]')) b.classList.toggle('hidden', !canFixInDraft());
 }
 // Выделяет в тексте черновика значение, которое разошлось с выпиской (заявкой, заданием); в черновике его нет — false
 // (правят в файле отчёта).
@@ -178,6 +178,18 @@ export async function swapInDraft(g, quote) {
   const kind = swapKind(g);
   await putText(t.value.slice(0, at.from) + now + t.value.slice(at.to), at.from, now.length, { kind, n: 1 });
   return { from: at.from, was, now, kind };
+}
+// 2.343: «Заменить срок в черновике» — пришло письмо о переносе срока: значение строки «Срок» таблицы задания меняется на
+// срок из письма (sw.now от сервера), черновик сохраняется отметкой замены по заданию (2.289); → { from, was, now, kind } для
+// «Отменить», 'same' (срок из письма в строке уже есть) или null (строки нет, черновик сейчас не правится).
+export async function swapDueInDraft(sw, day) {
+  const t = $('draft-text');
+  const m = canFixInDraft() ? /^\|\s*Срок\s*\|\s*([^|\n]*?)\s*\|\s*$/dmu.exec(t.value) : null;
+  if (!m) return null;
+  if (m[1].includes(day)) return 'same';
+  const [from, to] = m.indices[1];
+  await putText(t.value.slice(0, from) + sw.now + t.value.slice(to), from, sw.now.length, { kind: 'task', n: 1 });
+  return { from, was: m[1], now: sw.now, kind: 'task' };
 }
 // Отмена замены: на том же месте ещё стоит новое значение — возвращается прежнее; текст там уже правили — false.
 export async function undoSwap(s) {
