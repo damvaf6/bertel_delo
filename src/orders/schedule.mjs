@@ -6,9 +6,11 @@
 // до срока» (2.149) — с отметкой и сроком дела (2.157). Руководитель просил попросить перенос срока (2.201) — у дела
 // отметка «напоминал руководитель» (2.219), пока эксперт не попросил перенос. Срок по заданию на оценку (2.303) раньше срока
 // дела (2.317) — своей отметкой в его день, у срока дела — «по заданию раньше»; задание читается, только если передано хранилище.
+// Письмо о переносе со сроком раньше срока дела (2.353) — у отметки «срок раньше срока дела», просил ли эксперт письмо с новым
+// сроком (`letter_ask`) и кнопка «Попросить письмо с новым сроком», как в «Сегодня» (2.341) и «Истории сроков» (2.349).
 import { addDays, todayMsk } from './workflow.mjs';
 import { taskDueFor, taskMoveLetter } from '../ops/draft-ops.mjs';
-import { assignmentDocs } from '../ops/ai-ops.mjs';
+import { assignmentDocs, TASK_MOVE } from '../ops/ai-ops.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { executorSignOrg } from '../access/policy.mjs';
 
@@ -58,6 +60,20 @@ export async function taskDues(sql, storage, registry, orders, letters = null) {
     else if (letter && letters) letters.set(o.id, { day: d.day, name: d.name, page: d.page, was: l.was });
   }
   return out;
+}
+
+// 2.353: последняя просьба письма о переносе у заказчика (пункт task_move запроса документов): ждёт ли ответа и можно ли
+// попросить письмо с новым сроком сейчас — как `taskMoved` (2.326): срок дела перенесён по согласованной просьбе, дело в
+// работе, прежняя просьба не ждёт ответа. Срок дела не переносили — просить письмо не о чем (null).
+async function letterAsk(sql, o) {
+  const [r] = await sql`select outcome, to_char(new_deadline, 'YYYY-MM-DD') as new_deadline from deadline_requests
+                        where order_id = ${o.id} and outcome is not null and outcome <> 'withdrawn'
+                        order by decided_at desc, id desc limit 1`;
+  if (r?.outcome !== 'approved' || r.new_deadline !== o.deadline) return null;
+  const [a] = await sql`select requested_at, fulfilled_at from doc_requests
+                        where order_id = ${o.id} and item_id = ${TASK_MOVE} and cancelled_at is null order by id desc limit 1`;
+  const asked_at = a && !a.fulfilled_at ? new Date(a.requested_at).toISOString() : null;
+  return { asked_at, can_ask: o.status === 'in_work' && !asked_at };
 }
 
 export async function expertSchedule(sql, userId, registry, today = todayMsk(), { storage } = {}) {
@@ -120,6 +136,7 @@ export async function expertSchedule(sql, userId, registry, today = todayMsk(), 
       if (t.letter) it.task_due_letter = true;
       // В день срока по заданию — своя отметка: сдать к нему, хотя срок дела позже.
       const ti = { kind: 'task_due', ...base(o), status: o.status, deadline: o.deadline, task_due: t };
+      if (t.letter) ti.letter_ask = await letterAsk(sql, o);
       if (t.day < today) overdue.push(ti);
       else put(t.day, ti);
     }

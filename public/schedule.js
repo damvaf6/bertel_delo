@@ -49,11 +49,19 @@ function item(i, index) {
   if (i.kind === 'task_due') {
     // 2.339: срок взят из письма о переносе — «по письму о переносе», прежний срок по заданию рядом.
     const l = i.task_due.letter;
+    // 2.353: срок в письме раньше срока дела — просил ли эксперт письмо с новым сроком.
+    const a = l ? i.letter_ask : null;
     const li = link(order('result'), `Срок по заданию на оценку${l ? ' (по письму о переносе)' : ''}: ${i.title}`,
       [i.service, `${l ? 'письмо о переносе' : i.task_due.by}: «${i.task_due.name}», стр. ${i.task_due.page}`, l?.was ? `было — ${short(l.was)}` : null,
-        `срок дела позже — ${short(i.deadline)}`].filter(Boolean).join(' · '), 'hot');
+        l ? `срок в письме раньше срока дела (${short(i.deadline)}) — сдайте к ${short(i.task_due.day)} или попросите письмо с новым сроком`
+          : `срок дела позже — ${short(i.deadline)}`,
+        a?.asked_at ? `письмо с новым сроком попросили ${when(a.asked_at)} — пока его нет` : null].filter(Boolean).join(' · '), 'hot');
     li.dataset.taskDue = i.order_id;
     if (l) li.dataset.taskLetter = '1';
+    if (a?.can_ask) {
+      li.append(el('button', { type: 'button', class: 'ask', 'data-ask-letter': i.order_id, text: 'Попросить письмо с новым сроком',
+        onclick: (e) => askLetter(e.currentTarget, i) }));
+    }
     return li;
   }
   if (i.kind === 'extend') {
@@ -72,6 +80,16 @@ function item(i, index) {
   if (i.kind === 'my_visit') return link(`/osmotr?visit=${encodeURIComponent(i.visit_id)}`, `${i.time} · Мой выезд на объект`, i.service);
   return link(order('inspect'), `до ${i.time} · Ссылка на осмотр перестанет действовать: ${i.title}`,
     i.has_photos ? 'фото уже есть, владелец не нажал «Готово»' : 'фото ещё нет — напомните владельцу');
+}
+
+// 2.353: «Попросить письмо с новым сроком» — запрос документов в деле (пункт task_move), как в «Сегодня» (2.341).
+async function askLetter(btn, i) {
+  btn.disabled = true;
+  try {
+    await api('POST', `/api/orders/${encodeURIComponent(i.order_id)}/doc-requests`, { task_move: true });
+  } catch (err) { btn.disabled = false; say($('schedule-msg'), err.message); return; }
+  await loadSchedule();
+  say($('schedule-msg'), `Письмо с новым сроком попросили у заказчика: ${i.title}`, 'ok');
 }
 
 async function noteDone(btn, i) {
