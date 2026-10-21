@@ -1107,7 +1107,8 @@ test('прогон 2.360: письмо о переносе со сроком з�
   assert.equal((await today2(a)).letter_due.find((x) => x.id === o.id), undefined);
 
   // 4. Новый эксперт загрузил файл с датой составления позже срока по письму — у файла предупреждение до подписи (2.357),
-  // в «Сегодня» — строка о дате составления, «Подпишите до …» не повторяется (2.351); «Сдать по письму» ушло.
+  // в «Сегодня» — строка о дате составления, «Подпишите до …» не повторяется (2.351); «Сдать по письму» ушло. Письмо с
+  // новым сроком просил прежний эксперт — `by_prev` (исправлено: в окне подписи было «Вы попросили»).
   const result = async (day, name) => {
     const x = await b.req('POST', `/api/orders/${o.id}/results`, Buffer.from(`ОТЧЁТ ОБ ОЦЕНКЕ № 60\nОбъект оценки: квартира\nДата оценки: ${ruD(today)}\nДата составления отчёта: ${ruD(day)}`), {
       raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } });
@@ -1117,9 +1118,10 @@ test('прогон 2.360: письмо о переносе со сроком з�
   const f1 = await result(addDays(today, 6), 'Отчёт.txt');
   const made = async (id) => (await b.req('GET', `/api/orders/${o.id}/documents`)).body.documents.find((d) => d.id === id)?.task_made;
   let m = await made(f1);
-  assert.deepEqual([m?.due.day, m?.letter?.was, m?.letter?.can_ask, !!m?.letter?.asked_at], [short, due, false, true]);
+  assert.deepEqual([m?.due.day, m?.letter?.was, m?.letter?.can_ask, !!m?.letter?.asked_at, m?.letter?.by_prev], [short, due, false, true, true]);
   let tb = await today2(b);
-  assert.equal(tb.task_made.find((x) => x.id === o.id)?.letter?.was, due);
+  const tm = tb.task_made.find((x) => x.id === o.id);
+  assert.deepEqual([tm?.letter?.was, !!tm?.letter?.asked_at, tm?.letter?.by_prev], [due, true, true]);
   assert.equal(tb.letter_sign.find((x) => x.id === o.id), undefined);
   assert.equal(tb.letter_due.find((x) => x.id === o.id), undefined);
 
