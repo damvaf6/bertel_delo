@@ -894,3 +894,60 @@ test('2.349: «История сроков» — письмо о перенос�
   assert.equal(await history(owner), null);
   assert.equal(await history(dispatcher), null);
 });
+
+// 2.357: окно подписи эксперта — в неподписанном файле результата дата составления позже срока по заданию на оценку или по
+// письму о переносе: у файла в списке документов `task_made` (без ИИ-проверки); срок из письма — `letter` и можно ли
+// попросить письмо с новым сроком.
+test('2.357: окно подписи — дата составления в файле позже срока по письму о переносе', async () => {
+  const o = await inWork('Квартира: дата составления позже срока по письму', 5);
+  const ruD = (s) => s.split('-').reverse().join('.');
+  const put = (body, name, kind = 'basis') => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': kind } });
+  const result = async (day, name) => {
+    const r = await spec.req('POST', `/api/orders/${o.id}/results`, Buffer.from(`ОТЧЁТ ОБ ОЦЕНКЕ № 57\nОбъект оценки: квартира\nДата оценки: ${ruD(today)}\nДата составления отчёта: ${ruD(day)}`), {
+      raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } });
+    assert.equal(r.status, 201);
+    return String(r.body.document.id);
+  };
+  const docs = async (who = spec) => (await who.req('GET', `/api/orders/${o.id}/documents`)).body.documents ?? [];
+  const made = async (id, who = spec) => (await docs(who)).find((d) => d.id === id)?.task_made;
+  await S.sql`update orders set fields = fields || '{"purpose":"bank"}'::jsonb where id = ${o.id}`;
+  const due = addDays(today, 2), short = addDays(today, 4), made6 = addDays(today, 6), late = addDays(today, 12);
+  // Задания нет — сверять не с чем.
+  const f1 = await result(made6, 'Отчёт.txt');
+  assert.equal(await made(f1), undefined);
+  // Задание со сроком раньше даты составления — предупреждение по заданию, без письма.
+  assert.equal((await put(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(due)}`, 'Задание банка.txt')).status, 201);
+  let m = await made(f1);
+  assert.deepEqual(m, { made: { day: made6, page: 1 }, due: { day: due, name: 'Задание банка.txt', page: 1, by: 'по заданию на оценку' }, letter: null });
+  // Перенос согласован, письмо пришло со сроком раньше согласованного и раньше даты составления — `letter`, можно попросить
+  // письмо с новым сроком.
+  const r = await ask(spec, o, { new_deadline: late, reason: 'Банк согласовал перенос устно' });
+  assert.equal((await decide(dispatcher, o, r.body.open.id, { approve: true })).status, 200);
+  const q = await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { task_move: true });
+  const req = q.body.requests.find((x) => x.item_id === 'task_move');
+  const doc = await put(`Банк сообщает: срок составления отчёта продлён, не позднее ${ruD(short)}`, 'Письмо о переносе.txt', 'other');
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/doc-requests/${req.id}/attach`, { document_id: doc.body.document.id })).status, 200);
+  m = await made(f1);
+  assert.deepEqual([m.made.day, m.due.day, m.due.name], [made6, short, 'Письмо о переносе.txt']);
+  assert.deepEqual(m.letter, { was: due, can_ask: true, asked_at: null });
+  // В «Сегодня» та же строка знает про письмо.
+  const t = (await spec.req('GET', '/api/today')).body.expert.task_made.find((x) => x.id === o.id);
+  assert.equal(t?.letter?.was, due);
+  // Попросили письмо с новым сроком — кнопки нет, видно когда.
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { task_move: true })).status, 201);
+  m = await made(f1);
+  assert.equal(m.letter.can_ask, false);
+  assert.ok(m.letter.asked_at);
+  // Заказчик и чужой эксперт — не видят.
+  assert.equal(await made(f1, owner), undefined);
+  assert.equal((await other.req('GET', `/api/orders/${o.id}/documents`)).status, 404);
+  // Файл с датой не позже срока по письму — без предупреждения; прежний — с ним.
+  const f2 = await result(short, 'Отчёт исправленный.txt');
+  assert.equal(await made(f2), undefined);
+  assert.ok(await made(f1));
+  // Подписал — предупреждения нет.
+  assert.equal((await spec.req('PATCH', '/api/me', { full_name: 'Тестов Эксперт Экспертович' })).status, 200);
+  assert.equal((await spec.req('POST', `/api/documents/${f1}/sign`, { confirm: true })).status, 201);
+  assert.equal(await made(f1), undefined);
+});

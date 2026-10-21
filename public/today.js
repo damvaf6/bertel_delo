@@ -307,8 +307,10 @@ export async function loadToday() {
           : `письмо с новым сроком попросили ${since(x.task_moved.asked.at)} — пока его нет, подпишите к сроку по прежнему письму${askedRemind(x.task_moved.asked)}`],
       (x) => { location.hash = `order=${x.id}&to=unsigned`; }, letterActions),
       ...group('task-made', 'Дата составления позже срока по заданию на оценку', e.task_made ?? [], (x) => [x.title,
-        { class: 'overdue', role: 'task-made-why', text: `В «${x.file}» дата составления — ${dayRu(x.made.day)} (стр. ${x.made.page}), а срок ${x.task_due.by} — ${dayRu(x.task_due.day)} («${x.task_due.name}», стр. ${x.task_due.page})` },
-        'до подписи исправьте дату составления или приложите к делу документ о переносе срока'],
+        // 2.357: срок из письма о переносе — так и назван; совет — письмо с новым сроком (письмо о переносе уже в деле).
+        { class: 'overdue', role: 'task-made-why', text: `В «${x.file}» дата составления — ${dayRu(x.made.day)} (стр. ${x.made.page}), а срок ${x.letter ? 'по письму о переносе' : x.task_due.by} — ${dayRu(x.task_due.day)} («${x.task_due.name}», стр. ${x.task_due.page})` },
+        x.letter ? 'до подписи исправьте дату составления или попросите у заказчика письмо с новым сроком'
+          : 'до подписи исправьте дату составления или приложите к делу документ о переносе срока'],
       (x) => { location.hash = `order=${x.id}&to=result`; }),
       ...group('no-result', 'Срок близко — нет файла результата', noResult, (x) => [x.title, `${x.service} · ${deadline({ ...x, who: 'Вы попросили' }, t.today)}`,
         // Перенос уже попросили (2.140) — второй раз не предлагаем.
