@@ -234,6 +234,9 @@ test('показательное дело «Бентли»: отчёт об оц
   expect(wtext).toContain(BENTLEY.vin);
   expect(wtext).toContain('Фотоматериалы осмотра');
   expect(wtext).toContain(ADS[1].link);
+  // 2.361: у машины 11 столбцов не умещаются — две таблицы: признаки и цены после корректировок.
+  expect(wtext).toContain('Признаки аналогов:');
+  expect(wtext).toContain('Цены аналогов после корректировок:');
 
   // 9. Файл результата, ИИ-проверка, подпись, сдача.
   await sp.locator('#next-main button').click();
