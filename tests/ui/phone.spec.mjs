@@ -12462,6 +12462,48 @@ test('2.336: сводка за месяц — переносы срока и п�
   for (const p of [ep, hp, cp]) await p.context().close();
 });
 
+// 2.358: сводка за месяц — сколько раз эксперт просил письмо о переносе с новым сроком, сколько пришло и сколько дней ждали.
+test('2.358: сводка за месяц — письмо о переносе с новым сроком: попросили, пришло, сколько дней ждали', async ({ browser, baseURL }) => {
+  const ectx = await phoneContext(browser, baseURL);
+  const ep = await ectx.newPage();
+  const expert = await signIn(ep, '+79990003581');
+  const hctx = await phoneContext(browser, baseURL);
+  const hp = await hctx.newPage();
+  const head = await signIn(hp, '+79990003582');
+  const cctx = await phoneContext(browser, baseURL);
+  const cp = await cctx.newPage();
+  await signIn(cp, '+79990003583');
+  const ids = [];
+  for (const t of ['Квартира для ипотеки', 'Дом для залога', 'Офис для банка']) {
+    ids.push((await (await cp.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: t }, headers: H })).json()).order.id);
+  }
+  const orgId = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name, created_at) values ('ООО «Бюро писем ${Date.now()}»', now() - interval '3 months') returning id`);
+    await c.query("update users set full_name = 'Эксперт Письмов' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now()), ($1, $3, 'member', now() - interval '40 days')", [org.id, head.id, expert.id]);
+    await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [expert.id, org.id]);
+    await c.query("update orders set status = 'in_work', executor_user_id = $2, deadline = current_date + 5 where id = any($1::uuid[])", [ids, expert.id]);
+    // Письмо пришло через 1 и через 2 дня, третье — ещё ждём. Время — от начала месяца, чтобы попасть в текущий.
+    await c.query(`with m as (select date_trunc('month', now() at time zone 'Europe/Moscow') at time zone 'Europe/Moscow' as s)
+      insert into doc_requests (order_id, item_id, title, requested_by, requested_at, fulfilled_at)
+      select $1::uuid, 'task_move', 'Письмо банка о переносе срока', $4::uuid, s + interval '1 minute', s + interval '24 hours 1 minute' from m
+      union all select $2::uuid, 'task_move', 'Письмо банка о переносе срока', $4::uuid, s + interval '2 minutes', s + interval '48 hours 2 minutes' from m
+      union all select $3::uuid, 'task_move', 'Письмо банка о переносе срока', $4::uuid, s + interval '3 minutes', null from m`, [...ids, expert.id]);
+    return org.id;
+  });
+
+  await hp.goto(`/kabinet#org=${orgId}`);
+  await expect(hp.locator('#org-report-box')).toBeVisible();
+  const row = hp.locator('#org-report > li').filter({ hasText: 'Эксперт Письмов' });
+  const text = 'письмо о переносе с новым сроком попросили: 3 · пришло: 2, в среднем через 1,5 дня (дольше всего — 2 дня) · ещё ждут: 1';
+  await expect(row.locator('[data-expert-letterask]')).toHaveText(text);
+  await expect(row.locator('[data-expert-letterask]')).toHaveClass(/warn/);
+  await expect(hp.locator('#org-report-total')).toContainText(`Письмо с новым сроком${text}`);
+  await row.locator('[data-expert-letterask]').scrollIntoViewIfNeeded();
+  await shot(hp, 'g27-rukovoditel-svodka-pisma-novyj-srok');
+  for (const p of [ep, hp, cp]) await p.context().close();
+});
+
 // 2.268: «Собрать Word заново» — рядом с «Заменить всё по выписке» и с заменой одной находки: черновик сразу собирается в
 // файл результата, без перехода к черновику; отменили замену — кнопка уходит.
 test('2.268: «Собрать Word заново» рядом с заменой по выписке ЕГРН', async ({ browser, baseURL }) => {
