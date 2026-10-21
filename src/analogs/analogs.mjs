@@ -260,36 +260,57 @@ export function itemGroups(spec, order, list) {
 // корректировки (2.74) — ещё столбцы «всего» и «цена после корректировок», а под таблицей — таблица самих корректировок.
 // Перечень из нескольких позиций (2.83) — своя таблица у каждой позиции, под ней средняя цена её аналогов, в конце —
 // сводка по позициям; номера аналогов сквозные.
+// Сколько столбцов таблицы аналогов умещается на листе Word (2.361).
+export const SPLIT_COLS = 9;
+
 export function analogTable(spec, list, order = null) {
   const groups = order ? itemGroups(spec, order, list) : null;
   const sorted = groups ? groups.flatMap((g) => g.items.map((x) => x.a)) : list;
   const own = spec.fields.filter((f) => !(groups && f.id === ITEM_FIELD));
   const any = sorted.some((a) => a.adjustments?.length);
   const perSqm = any && own.some((f) => f.id === 'area') && sorted.some((a) => adjusted(a)?.per_sqm);
-  const head = ['№', 'Источник', 'Цена, руб.', ...own.map((f) => f.label), 'Регион',
-    ...(any ? ['Корректировки, всего', 'Цена после корректировок, руб.'] : []), ...(perSqm ? ['За кв. м после корректировок, руб.'] : [])];
+  const base = ['№', 'Источник', 'Цена, руб.', ...own.map((f) => f.label), 'Регион'];
+  const tail = [...(any ? ['Корректировки, всего', 'Цена после корректировок, руб.'] : []), ...(perSqm ? ['За кв. м после корректировок, руб.'] : [])];
+  // 2.361: больше SPLIT_COLS столбцов (у транспорта — 11, у квартиры — 12) в Word не умещается — слова переносятся по
+  // буквам. Тогда две таблицы: признаки аналогов и цены после корректировок (номер и цена — в обеих, чтобы сверка
+  // аналогов в отчёте читала каждую строку).
+  const split = base.length + tail.length > SPLIT_COLS;
   const cell = (s) => String(s ?? '').replace(/\s*\n\s*/g, '; ').replace(/\|/g, '/').trim() || '—';
   const line = (r) => `| ${r.map(cell).join(' | ')} |`;
   const rowOf = (a, n) => {
     const sum = adjusted(a);
+    return {
+      base: [
+        String(n),
+        [hostOf(a.url), a.fields.listed_on ? `от ${ruDate(a.fields.listed_on)}` : ''].filter(Boolean).join(', '),
+        valueText(CORE_FIELDS[0], a.fields.price_rub),
+        ...own.map((f) => valueText(f, a.fields[f.id])),
+        valueText(CORE_FIELDS[2], a.fields.region),
+      ],
+      tail: [
+        ...(any ? [sum ? pctText(sum.pct) : 'нет', sum ? fmtNum(sum.price) : valueText(CORE_FIELDS[0], a.fields.price_rub)] : []),
+        ...(perSqm ? [sum?.per_sqm ? fmtNum(sum.per_sqm) : ''] : []),
+      ],
+    };
+  };
+  const tableOf = (items) => {
+    const rows = items.map(({ a, n }) => rowOf(a, n));
+    if (!split) return [[...base, ...tail], ...rows.map((r) => [...r.base, ...r.tail])].map(line);
     return [
-      String(n),
-      [hostOf(a.url), a.fields.listed_on ? `от ${ruDate(a.fields.listed_on)}` : ''].filter(Boolean).join(', '),
-      valueText(CORE_FIELDS[0], a.fields.price_rub),
-      ...own.map((f) => valueText(f, a.fields[f.id])),
-      valueText(CORE_FIELDS[2], a.fields.region),
-      ...(any ? [sum ? pctText(sum.pct) : 'нет', sum ? fmtNum(sum.price) : valueText(CORE_FIELDS[0], a.fields.price_rub)] : []),
-      ...(perSqm ? [sum?.per_sqm ? fmtNum(sum.per_sqm) : ''] : []),
+      'Признаки аналогов:',
+      ...[base, ...rows.map((r) => r.base)].map(line),
+      'Цены аналогов после корректировок:',
+      ...[[base[0], base[2], ...tail], ...rows.map((r) => [r.base[0], r.base[2], ...r.tail])].map(line),
     ];
   };
   const after = any ? 'после корректировок ' : '';
   const out = groups
     ? groups.flatMap((g) => [
       g.no ? `Позиция ${g.no}. ${g.name}` : 'Аналоги без позиции перечня (укажите позицию в разделе «Аналоги» дела)',
-      ...(g.items.length ? [head, ...g.items.map(({ a, n }) => rowOf(a, n))].map(line) : ['Подтверждённых аналогов к этой позиции нет.']),
+      ...(g.items.length ? tableOf(g.items) : ['Подтверждённых аналогов к этой позиции нет.']),
       ...(g.no && g.mean !== null ? [`Средняя цена аналогов позиции ${g.no} ${after}— ${fmtNum(g.mean)} руб.`] : []),
     ])
-    : [head, ...sorted.map((a, i) => rowOf(a, i + 1))].map(line);
+    : tableOf(sorted.map((a, i) => ({ a, n: i + 1 })));
   const adj = any ? sorted.flatMap((a, i) => (a.adjustments ?? []).map((x) => [String(i + 1), adjustName(spec, x), pctText(x.pct), adjustSource(x)])) : [];
   const adjPart = any ? ['Корректировки к аналогам (применяются по порядку, одна за другой):',
     ...[['Аналог', 'Корректировка', 'Значение', 'Источник (справочник, год, таблица)'], ...adj].map(line)] : [];

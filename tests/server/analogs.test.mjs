@@ -8,8 +8,9 @@ import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid } from '..
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import { createRegistry, validateModule } from '../../src/modules/index.mjs';
 import expertise from '../../src/modules/expertise.mjs';
-import { cleanUrl, searchHints } from '../../src/analogs/analogs.mjs';
+import { analogTable, cleanUrl, searchHints } from '../../src/analogs/analogs.mjs';
 import { analogMessages } from '../../src/ai/ai.mjs';
+import { runAutoChecks } from '../../src/ai/report-checks.mjs';
 import { buildReport, imageSize } from '../../src/docs/docx.mjs';
 import { ANALOGS_MARK } from '../../src/docs/report.mjs';
 import { extractPages } from '../../src/ai/extract.mjs';
@@ -496,9 +497,42 @@ test('корректировки: по порядку одна за другой
   const res = await fetch(`${S.base}/api/orders/${o.id}/draft/docx`, { headers: { cookie: spec.cookie } });
   const text = (await extractPages(Buffer.from(await res.arrayBuffer()), 'r.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')).pages.join('\n');
   for (const s of ['Цена после корректировок, руб.', 'За кв. м после корректировок, руб.', '14 845 793', '185 572', '+6,04 %',
-    'Корректировки к аналогам (применяются по порядку, одна за другой):', 'Вид из окна', 'Индекс цен Росстата, 2026 г., табл. 3', '+40 %']) {
+    'Корректировки к аналогам (применяются по порядку, одна за другой):', 'Вид из окна', 'Индекс цен Росстата, 2026 г., табл. 3', '+40 %',
+    'Признаки аналогов:', 'Цены аналогов после корректировок:']) {
     assert.ok(text.includes(s), `в Word нет «${s}»`);
   }
+});
+
+test('2.361: широкая таблица аналогов (транспорт — 11 столбцов) — две таблицы: признаки и цены после корректировок; сверка читает обе', () => {
+  const registry = createRegistry([expertise]);
+  const car = { module: 'expertise', service: 'vehicle', fields: CAR };
+  const vspec = registry.analogs('expertise', 'vehicle');
+  const list = [
+    { url: 'https://auto.ru/cars/used/sale/bentley/1/', fields: { price_rub: 21000000, make_model: 'Bentley Continental GT', year: 2019, mileage_km: 41000, modification: '4.0 AT, Mulliner', condition: 'хорошее', region: 'moscow' }, adjustments: [{ kind: 'bargain', pct: -5, source: 'Справочник, 2025 г., табл. 1' }] },
+    { url: 'https://www.avito.ru/moskva/avtomobili/bentley_2', fields: { price_rub: 22500000, make_model: 'Bentley Continental GT', year: 2020, mileage_km: 30000, condition: 'отличное', region: 'moscow' }, adjustments: [] },
+    { url: 'https://auto.ru/cars/used/sale/bentley/3/', fields: { price_rub: 19800000, make_model: 'Bentley Continental GT', year: 2018, mileage_km: 60000, condition: 'хорошее', region: 'mo' }, adjustments: [] },
+  ];
+  const lines = analogTable(vspec, list, car);
+  const cols = (l) => l.split('|').length - 2;
+  const tables = lines.filter((l) => l.startsWith('| №'));
+  assert.equal(tables.length, 2, lines.join('\n'));
+  assert.ok(lines.includes('Признаки аналогов:') && lines.includes('Цены аналогов после корректировок:'));
+  assert.ok(lines.filter((l) => l.startsWith('|')).every((l) => cols(l) <= 9), 'в каждой таблице не больше 9 столбцов');
+  assert.deepEqual(tables[0].split('|').map((c) => c.trim()).filter(Boolean),
+    ['№', 'Источник', 'Цена, руб.', 'Марка и модель', 'Год выпуска', 'Пробег, км', 'Двигатель, коробка, комплектация', 'Состояние', 'Регион']);
+  assert.deepEqual(tables[1].split('|').map((c) => c.trim()).filter(Boolean), ['№', 'Цена, руб.', 'Корректировки, всего', 'Цена после корректировок, руб.']);
+  assert.ok(lines.includes('| 1 | 21 000 000 | −5 % | 19 950 000 |'), lines.join('\n'));
+  // Без корректировок столбцов 9 — одна таблица, как раньше.
+  const plain = analogTable(vspec, list.map((a) => ({ ...a, adjustments: [] })), car);
+  assert.equal(plain.filter((l) => l.startsWith('| №')).length, 1);
+  assert.ok(!plain.includes('Признаки аналогов:'));
+  // Сверка аналогов в отчёте (2.75, 2.184) читает обе таблицы: всё сходится — молчим, цены переставлены во второй — находка.
+  const links = list.flatMap((a, i) => [`Аналог ${i + 1} — auto.ru`, `Ссылка: ${a.url}`]);
+  const report = (ls) => ({ name: 'Отчёт.pdf', kind: 'pdf', pages: [['ОТЧЁТ ОБ ОЦЕНКЕ № 9/2026', 'Сравнительный подход', ...ls, ...links].join('\n')] });
+  const run = (ls) => (runAutoChecks(['analog_match'], [report(ls)], { analogs: list }).analog_match ?? []).map((f) => f.text);
+  assert.deepEqual(run(lines), []);
+  const swapped = lines.map((l) => (l === '| 2 | 22 500 000 | нет | 22 500 000 |' ? '| 2 | 19 800 000 | нет | 19 800 000 |' : l));
+  assert.ok(run(swapped).some((t) => t.startsWith('У аналога № 2 в таблице отчёта цена 19 800 000 руб. — это цена аналога 3')), run(swapped).join('\n'));
 });
 
 test('Перечень по позициям (2.83): в Word — таблица у каждой позиции и средняя цена, номера сквозные; в черновике — итог по позициям', async () => {
