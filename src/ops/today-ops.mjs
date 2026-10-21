@@ -319,20 +319,26 @@ export async function expertMorningAlerts(sql, userId, today, now = new Date(), 
   // оценку близко» в «Сегодня», 2.304); такие дела в «нет файла результата» не повторяются, как в «Сегодня».
   // Перенос согласован позже срока по заданию на оценку (2.331, строка «Приложите письмо о переносе» в «Сегодня», 2.326):
   // письмо ещё не просили — в сводке; такое дело (и пока письмо ждём) в «срок по заданию на оценку» не повторяется (прогон 2.330).
-  let taskMovedN = 0;
+  // Прогон 2.350: письмо о переносе пришло, а срок в нём раньше согласованного — сегодня, завтра или прошёл, своего файла
+  // результата нет (строка «Сдать по письму о переносе» в «Сегодня», 2.341) — своей цифрой, не «приложите письмо»; и когда
+  // письмо с новым сроком уже попросили: пока его нет, банк ждёт отчёт к сроку из прежнего письма.
+  let taskMovedN = 0, letterDueN = 0;
   const movedIds = new Set();
   if (registry && storage) {
+    const own = await ownResults(sql, userId, rows.filter((x) => x.status === 'in_work'));
     for (const o of rows) {
       const m = await taskMoved(sql, storage, registry, o);
       if (!m) continue;
       movedIds.add(o.id);
-      if (!(m.asked && !m.asked.came)) taskMovedN += 1;
+      if (m.letter && o.status === 'in_work' && daysBetween(today, m.day) <= LETTER_DUE_DAYS && !own.has(o.id)) letterDueN += 1;
+      else if (!(m.asked && !m.asked.came)) taskMovedN += 1;
     }
   }
   const taskDue = registry && storage ? (await taskDueCases(sql, storage, registry, userId, rows, today))
     .filter((x) => x.due.days_left <= 1 && !movedIds.has(x.order.id)) : [];
   return {
     task_moved: taskMovedN,
+    letter_due: letterDueN,
     no_result: (await noResultOrders(sql, userId, hotRows, today)).filter((x) => !taskDue.some((t) => t.order.id === x.id)).length,
     task_due: taskDue.length,
     reply_wait: (await replyWaits(sql, rows.map((o) => o.id))).length,

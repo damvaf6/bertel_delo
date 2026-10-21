@@ -185,11 +185,15 @@ async function letterRemind(sql, order, at, now = new Date()) {
 
 // Руководителю (2.332, 2.334): то же без названия файла задания; `asked` — когда эксперт попросил письмо у заказчика.
 // 2.348: письмо пришло со сроком раньше — `asked` только о новой просьбе (письмо с новым сроком ещё не пришло), не о прежней.
+// Там же (2.348) — `letter_due`: сколько дней до срока по письму, прошёл ли, близко ли (прошёл или через 1–2 дня); прогон 2.350 —
+// здесь, чтобы карточка эксперта (2.342) показывала то же, что «Дела экспертов».
 export async function taskMovedOrg(sql, storage, registry, order) {
   const m = await taskMoved(sql, storage, registry, order);
   const asked = m?.letter && m.asked?.came ? null : m?.asked?.at ?? null;
-  return m ? { day: m.day, by: m.by, who: m.who, doc: m.doc, moved_from: m.moved_from, deadline: m.deadline, asked,
-    letter: m.letter } : null;
+  if (!m) return null;
+  const left = m.letter ? Math.round((Date.parse(m.day) - Date.parse(todayMsk())) / 86_400_000) : null;
+  return { day: m.day, by: m.by, who: m.who, doc: m.doc, moved_from: m.moved_from, deadline: m.deadline, asked,
+    letter: m.letter, ...(m.letter ? { letter_due: { days_left: left, overdue: left < 0, hot: left <= 2 } } : {}) };
 }
 
 // История сроков (2.337): исполнителю одним списком по времени — срок дела при заказе, срок по заданию на оценку (из какого
