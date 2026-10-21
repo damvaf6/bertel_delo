@@ -37,7 +37,7 @@ import { dueNotes } from './note-ops.mjs';
 import { caseMoves, caseRemind, transferTargets } from './org-ops.mjs';
 import { bankTaskMissing, docWait, egrnOld } from './docreq-ops.mjs';
 import { aiRecheck, aiSignHints, egrnRebuildLeft, egrnSwapLeft } from '../ai/ai.mjs';
-import { latest, taskDraftItems, taskDueFor, taskDueSign } from './draft-ops.mjs';
+import { latest, taskDraftItems, taskDueFor, taskDueSign, taskMoveLetter } from './draft-ops.mjs';
 import { assignmentDocs } from './ai-ops.mjs';
 import { READ_MAX_BYTES, extractPages, readableKind } from '../ai/extract.mjs';
 import { reportMade } from '../ai/report-checks.mjs';
@@ -251,7 +251,7 @@ async function expertPart(sql, actor, registry, today, storage) {
     .map(({ order, items, docs, at }) => item(order, { items, docs, doc_at: at }));
   // В неподписанном файле дата составления позже срока по заданию на оценку (2.321) — до подписи, к файлу результата.
   const taskMade = (await taskMadeCases(sql, storage, registry, actor.id, rows))
-    .map(({ order, file, made, due: d }) => item(order, { file, made, task_due: d }));
+    .map(({ order, file, made, due: d, letter }) => item(order, { file, made, task_due: d, letter }));
   return {
     ai_recheck: recheck,
     task_made: taskMade,
@@ -482,6 +482,7 @@ export async function taskDueCases(sql, storage, registry, userId, rows, today =
 // 2.321: в своём последнем загруженном файле результата, ещё не подписанном экспертом, дата составления отчёта позже срока
 // по заданию на оценку (2.302 — правило report_dates, срок — taskDueFor, 2.303). ИИ-проверку запускать не нужно: видно
 // сразу после загрузки, до подписи. Файл читается, только если в задании есть срок; дата не позже срока — строки нет.
+// 2.357: срок из письма о переносе (2.333) — `letter`: так и сказано, и можно попросить письмо с новым сроком.
 export async function taskMadeCases(sql, storage, registry, userId, rows) {
   const out = [];
   if (!storage) return out;
@@ -489,15 +490,42 @@ export async function taskMadeCases(sql, storage, registry, userId, rows) {
     if (!registry.checks(o.module, o.service).some((r) => (r.auto ?? []).includes('report_dates'))) continue;
     const [file] = await sql`select id, filename, mime, size_bytes, storage_key from documents where order_id = ${o.id} and kind = 'result'
                              and deleted_at is null and uploaded_by = ${userId} order by created_at desc limit 1`;
-    if (!file || !readableKind(file.filename, file.mime) || file.size_bytes > READ_MAX_BYTES) continue;
+    if (!file) continue;
     if ((await orderSignatures(sql, o.id)).get(file.id)?.expert) continue;
-    const d = taskDueFor(registry, o, await assignmentDocs(sql, storage, o));
-    if (!d) continue;
-    const buf = await storage.get(file.storage_key);
-    const made = buf ? reportMade((await extractPages(buf, file.filename, file.mime))?.pages) : null;
-    if (made && made.day > d.day) out.push({ order: o, file: file.filename, made, due: { day: d.day, name: d.name, page: d.page, by: d.by } });
+    const m = (await taskMadeFiles(sql, storage, registry, o, [file])).get(file.id);
+    if (m) out.push({ order: o, file: file.filename, ...m });
   }
   return out.sort((a, b) => a.due.day.localeCompare(b.due.day));
+}
+
+// 2.357: окно подписи эксперта — в каких из этих файлов результата (свои, не подписанные) дата составления позже срока по
+// заданию на оценку или по письму о переносе срока: предупреждение до подписи, без ИИ-проверки (как 2.321 в «Сегодня»).
+// { made, due, letter } по номеру файла; `letter` — срок из письма о переносе (прежний срок `was`), `can_ask` — можно
+// попросить у заказчика письмо с новым сроком одной кнопкой (как в «Сроке», 2.335), `asked_at` — такая просьба ждёт ответа.
+export async function taskMadeFiles(sql, storage, registry, order, files) {
+  const out = new Map();
+  if (!storage || !files.length || order.status !== 'in_work') return out;
+  if (!registry.checks(order.module, order.service).some((r) => (r.auto ?? []).includes('report_dates'))) return out;
+  const assignment = await assignmentDocs(sql, storage, order);
+  const d = taskDueFor(registry, order, assignment);
+  if (!d) return out;
+  let letter;
+  for (const f of files) {
+    if (!readableKind(f.filename, f.mime) || f.size_bytes > READ_MAX_BYTES) continue;
+    const buf = await storage.get(f.storage_key);
+    const made = buf ? reportMade((await extractPages(buf, f.filename, f.mime))?.pages) : null;
+    if (!made || made.day <= d.day) continue;
+    if (letter === undefined) letter = await madeLetter(sql, storage, registry, order, assignment, d);
+    out.set(f.id, { made, due: { day: d.day, name: d.name, page: d.page, by: d.by }, letter });
+  }
+  return out;
+}
+async function madeLetter(sql, storage, registry, order, assignment, d) {
+  const l = taskMoveLetter(assignment, d);
+  if (!l) return null;
+  const m = await taskMoved(sql, storage, registry, order);
+  const waiting = m?.asked && !m.asked.came ? m.asked.at : null;
+  return { was: l.was, ...(l.was_letter ? { was_letter: true } : {}), can_ask: !!m && !waiting, asked_at: waiting };
 }
 
 // Срок дела приходится на дни, когда эксперт не принимает дела (2.113): отметка ещё действует, срок раньше дня возвращения.

@@ -12,6 +12,7 @@ export const HINTS = ['customer', 'expert', 'head', 'dispatcher'];
 import { orderSignatures, orgReturns, signaturesView, signWait } from './sign-ops.mjs';
 import { GOSUSLUGI_CHECK_URL } from '../providers/sign.mjs';
 import { aiSignHints } from '../ai/ai.mjs';
+import { taskMadeFiles } from './today-ops.mjs';
 import { orderCertificates, siteOrigin } from './certificate-ops.mjs';
 import { stepFiles } from './step-ops.mjs';
 import { caseCertificate } from '../translation/certificate.mjs';
@@ -157,6 +158,8 @@ export function coreOps(cfg) {
         const unsigned = mine && required && order.status === 'in_work'
           ? docs.filter((d) => d.kind === 'result' && d.uploaded_by === actor.id && !signs.get(d.id)?.expert).map((d) => d.id) : [];
         const aiHints = await aiSignHints(sql, registry, order, unsigned);
+        // 2.357: в каком из них дата составления позже срока по заданию на оценку или по письму о переносе — до подписи.
+        const made = await taskMadeFiles(sql, providers.storage, registry, order, docs.filter((d) => unsigned.includes(d.id)));
         // Сертификат платформы к переводу (2а.5): у файла — номер и ссылка проверки; свой файл в работе — можно выдать.
         const certRule = registry.certificate(order.module, order.service, order.fields);
         const certs = certRule && results ? await orderCertificates(sql, order.id) : new Map();
@@ -173,7 +176,7 @@ export function coreOps(cfg) {
           documents: docs.filter((d) => d.kind !== 'result' || results)
             .map((d) => (d.kind === 'result' ? { ...publicDoc(d), signatures: signaturesView(signs.get(d.id)),
               // Исполнителю — свой ли файл: после передачи дела файлы прежнего эксперта в сдачу не идут (2.110).
-              ...(mine ? { own: d.uploaded_by === actor.id } : {}), ...(aiHints.has(d.id) ? { ai_check: aiHints.get(d.id) } : {}), ...certOf(d), ...(marked.has(d.id) ? { step_file: marked.get(d.id) } : {}) } : publicDoc(d))),
+              ...(mine ? { own: d.uploaded_by === actor.id } : {}), ...(aiHints.has(d.id) ? { ai_check: aiHints.get(d.id) } : {}), ...(made.has(d.id) ? { task_made: made.get(d.id) } : {}), ...certOf(d), ...(marked.has(d.id) ? { step_file: marked.get(d.id) } : {}) } : publicDoc(d))),
           results_hidden: !results,
           signature_required: required,
           // От какой организации нужна вторая подпись (null — только эксперт).

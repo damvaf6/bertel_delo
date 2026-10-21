@@ -745,7 +745,7 @@ function unfixedText(returns) {
 }
 function signConfirmText(d) {
   const ai = aiCheckText(d.ai_check);
-  return unfixedText(returnsForDoc(d)) + (ai ? `${ai}\n\n` : '') + swapConfirmText(d) + orderConfirmText(d) + SIGN_CONFIRM(d.filename);
+  return unfixedText(returnsForDoc(d)) + (ai ? `${ai}\n\n` : '') + swapConfirmText(d) + orderConfirmText(d) + madeConfirmText(d) + SIGN_CONFIRM(d.filename);
 }
 
 // 2.258: в ИИ-проверке этого файла остались расхождения с выпиской ЕГРН, которые можно заменить в черновике одной кнопкой
@@ -804,6 +804,46 @@ function signOrderHint(d) {
     el('div', { class: 'muted', text: 'Исправьте в черновике или в файле отчёта, соберите Word заново и загрузите исправленный файл — тогда подписывайте. Подписать можно и так.' }),
     el('div', { class: 'row' }, go))];
 }
+// 2.357: в файле дата составления позже срока по заданию на оценку или по письму о переносе срока (task_made, taskMadeFiles):
+// предупреждение до подписи, без ИИ-проверки (как 2.321 в «Сегодня»): «К дате в черновике» и, если срок из письма, — «Попросить
+// письмо с новым сроком» (как в «Сроке», 2.335). Подписать можно и так.
+const ddmm = (iso) => iso.split('-').reverse().join('.');
+const madeEdge = (m) => (m.letter
+  ? `срок по письму о переносе — не позднее ${ddmm(m.due.day)}${m.letter.was ? ` (${m.letter.was_letter ? 'по прежнему письму' : 'по заданию'} было ${ddmm(m.letter.was)})` : ''}`
+  : `срок ${m.due.by} — не позднее ${ddmm(m.due.day)}`);
+function madeTip(m) {
+  if (!m.letter) return 'Исправьте дату составления в черновике, соберите Word заново и загрузите файл — или приложите к делу документ о переносе срока.';
+  if (m.letter.asked_at) return `Письмо с новым сроком Вы попросили ${atRu(m.letter.asked_at)} — пока его нет: исправьте дату составления или дождитесь письма.`;
+  return `Исправьте дату составления в черновике, соберите Word заново и загрузите файл${m.letter.can_ask ? ' — или попросите у заказчика письмо с новым сроком' : ''}.`;
+}
+function madeConfirmText(d) {
+  const m = d.task_made;
+  return m ? `В «${d.filename}» дата составления ${ddmm(m.made.day)} — позже: ${madeEdge(m)}.\n${madeTip(m)}\n\n` : '';
+}
+function signMadeHint(d) {
+  const m = d.task_made;
+  if (!m) return [];
+  const miss = el('div', { class: 'muted hidden', 'data-role': 'sig-made-miss' });
+  const find = canFixInDraft() ? [el('button', { class: 'secondary', type: 'button', 'data-action': 'sig-made-find', onclick: () => {
+    reveal('draft-box');
+    const ok = madeInDraft({ made: ddmm(m.made.day) }, (v) => `Выделено «${v}» — ${madeEdge(m)}. Исправьте дату составления и сохраните черновик, затем соберите Word заново.`);
+    miss.classList.toggle('hidden', ok);
+    if (!ok) miss.textContent = 'В тексте черновика строки «Дата составления» нет: в Word дата составления — день сборки. Соберите Word заново или исправьте дату в файле отчёта.';
+  } }, 'К дате в черновике')] : [];
+  const ask = m.letter?.can_ask ? [el('button', { class: 'secondary', type: 'button', 'data-action': 'sig-made-ask', onclick: (e) => askNewLetter(e.currentTarget) }, 'Попросить письмо с новым сроком')] : [];
+  return [el('div', { class: 'sig-swap warn', 'data-sig': m.letter ? 'made-letter' : 'made-task' },
+    el('div', { 'data-role': 'sig-made-why', text: `В «${d.filename}» дата составления — ${ddmm(m.made.day)} (стр. ${m.made.page}), а ${madeEdge(m)} («${m.due.name}», стр. ${m.due.page}).` }),
+    el('div', { class: 'muted', 'data-role': 'sig-made-tip', text: `${madeTip(m)} Подписать можно и так.` }),
+    ...(find.length || ask.length ? [el('div', { class: 'row' }, ...find, ...ask)] : []), miss)];
+}
+async function askNewLetter(btn) {
+  btn.disabled = true;
+  try {
+    await api('POST', `/api/orders/${current.order.id}/doc-requests`, { task_move: true });
+    await loadDocs();
+    say($('doc-msg'), 'Заказчику отправлена просьба прислать письмо с новым сроком', 'ok');
+  } catch (err) { btn.disabled = false; say($('doc-msg'), err.message); }
+}
 // Та же замена, что в ИИ-проверке: «Заменить всё по выписке», а если находка одна — её «Заменить на значение из выписки».
 function toSwapAll() {
   reveal('ai-review-box');
@@ -841,6 +881,7 @@ function signatureBlock(d, { canSign, signOrg, manual = false, canCheck = false,
       ...signReturnPoints(d),
       ...signSwapHint(d),
       ...signOrderHint(d),
+      ...signMadeHint(d),
       el('div', { class: 'row' }, ...uploadSignatureButton(d.filename, (file) => uploadSignature(d, file), 'Загрузить файл подписи (.sig)')),
       el('div', { class: 'muted', text: MANUAL_HINT }),
       memo('Как подписать файл КЭП', SIGN_HOWTO, 'sign-howto'));
@@ -851,6 +892,7 @@ function signatureBlock(d, { canSign, signOrg, manual = false, canCheck = false,
         el('button', { class: 'link', 'data-action': 'to-ai-review', onclick: toAiReview }, 'К ИИ-проверке'))] : []),
       ...signSwapHint(d),
       ...signOrderHint(d),
+      ...signMadeHint(d),
       el('div', { class: 'row' },
         el('button', { 'data-action': 'sign', onclick: () => signDoc(d) }, 'Подписать'),
         ...uploadSignatureButton(d.filename, (file) => uploadSignature(d, file))),
@@ -934,7 +976,7 @@ async function signAll() {
   const docs = (lastDocs?.documents ?? []).filter((d) => d.kind === 'result' && d.own !== false && !d.signatures?.expert);
   if (!docs.length) return;
   const ai = docs.filter((d) => d.ai_check).map((d) => `${d.filename}: ${aiCheckText(d.ai_check)}`);
-  if (!confirm(`${unfixedText(docs.flatMap(returnsForDoc))}${ai.length ? `${ai.join('\n')}\n\n` : ''}${docs.map(swapConfirmText).find(Boolean) ?? ''}${docs.map(orderConfirmText).find(Boolean) ?? ''}${SIGN_CONFIRM(docs.map((d) => d.filename).join(', '))}\n\nФайлов: ${docs.length}.`)) return;
+  if (!confirm(`${unfixedText(docs.flatMap(returnsForDoc))}${ai.length ? `${ai.join('\n')}\n\n` : ''}${docs.map(swapConfirmText).find(Boolean) ?? ''}${docs.map(orderConfirmText).find(Boolean) ?? ''}${docs.map(madeConfirmText).join('')}${SIGN_CONFIRM(docs.map((d) => d.filename).join(', '))}\n\nФайлов: ${docs.length}.`)) return;
   say($('doc-msg'), 'Подписываем…', 'ok');
   try {
     for (const d of docs) await api('POST', `/api/documents/${d.id}/sign`, { confirm: true });

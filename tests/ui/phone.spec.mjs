@@ -16370,3 +16370,57 @@ test('2.355: утренняя сводка эксперта — письмо о 
   await expect(ep).toHaveURL(/#today$/);
   await ep.context().close();
 });
+
+// 2.357: окно подписи эксперта — в загруженном файле дата составления позже срока по письму о переносе: предупреждение у
+// кнопки «Подписать» без ИИ-проверки, «Попросить письмо с новым сроком»; то же в подтверждении подписи.
+test('2.357: окно подписи — дата составления позже срока по письму о переносе', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990035711'), customer = await signIn(cp, '+79990035712');
+  const ru = (iso) => iso.split('-').reverse().join('.');
+  const A = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Дата позже письма: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Садовая ул., д. 22, кв. 5"}') returning id`,
+    [customer.id, expert.id, inDays(12)]);
+    await c.query(`insert into deadline_requests (order_id, requested_by, old_deadline, new_deadline, reason, outcome, decided_at, seen_at)
+      values ($1, $2, $3, $4, 'Банк согласовал перенос устно', 'approved', now() - interval '1 hour', now())`, [o.id, expert.id, inDays(1), inDays(12)]);
+    return o.id;
+  });
+  const put = async (body, name, kind) => {
+    const r = await cp.request.post(`/api/orders/${A}/documents`, {
+      data: Buffer.from(body), headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': kind } });
+    expect(r.status()).toBe(201);
+  };
+  await put(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ru(inDays(1))}`, 'Задание банка.txt', 'basis');
+  await put(`Банк сообщает: срок составления отчёта продлён, не позднее ${ru(inDays(2))}`, 'Письмо банка о переносе.txt', 'other');
+  const report = `ОТЧЁТ ОБ ОЦЕНКЕ № 57\nОбъект оценки: квартира\nДата оценки: ${ru(inDays(0))}\nДата составления отчёта: ${ru(inDays(4))}`;
+  const up = await ep.request.post(`/api/orders/${A}/results`, { data: Buffer.from(report), headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Отчёт по квартире.txt') } });
+  expect(up.status()).toBe(201);
+  const file = (await up.json()).document.id;
+  await ep.goto(`/kabinet#order=${A}&to=unsigned`);
+  const doc = ep.locator(`#docs li.doc[data-doc="${file}"]`);
+  const hint = doc.locator('[data-sig="made-letter"]');
+  await expect(hint.locator('[data-role="sig-made-why"]')).toHaveText(`В «Отчёт по квартире.txt» дата составления — ${ru(inDays(4))} (стр. 1), а срок по письму о переносе — не позднее ${ru(inDays(2))} (по заданию было ${ru(inDays(1))}) («Письмо банка о переносе.txt», стр. 1).`);
+  await expect(hint.locator('[data-role="sig-made-tip"]')).toContainText('или попросите у заказчика письмо с новым сроком');
+  const ask = hint.locator('[data-action="sig-made-ask"]');
+  await expect(ask).toHaveText('Попросить письмо с новым сроком');
+  expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await hint.scrollIntoViewIfNeeded();
+  await shot(ep, 'g25-podpis-data-pozzhe-pisma');
+  // Подтверждение подписи говорит о том же; отказались — не подписан.
+  let said = '';
+  ep.once('dialog', async (d) => { said = d.message(); await d.dismiss(); });
+  await doc.locator('[data-action="sign"]').click();
+  await expect.poll(() => said).toContain(`дата составления ${ru(inDays(4))} — позже: срок по письму о переносе`);
+  // Попросили письмо — кнопки нет, видно когда.
+  await ask.click();
+  await expect(ep.locator('#doc-msg')).toHaveText('Заказчику отправлена просьба прислать письмо с новым сроком');
+  await expect(hint.locator('[data-role="sig-made-tip"]')).toContainText('Письмо с новым сроком Вы попросили');
+  await expect(hint.locator('[data-action="sig-made-ask"]')).toHaveCount(0);
+  await hint.scrollIntoViewIfNeeded();
+  await shot(ep, 'g26-podpis-pismo-poprosili');
+  for (const p of [ep, cp]) await p.context().close();
+});
