@@ -59,7 +59,9 @@ const FILTERS = [
   // 2.325: срок из задания на оценку (письма банка, определения суда) раньше срока дела и на этой неделе — ближайший первым.
   { id: 'task_week', text: 'Срок по заданию на этой неделе', test: (c) => c.task_week },
   // 2.332: перенос срока согласован позже срока по заданию на оценку, а письма банка (определения суда) о переносе нет.
-  { id: 'task_moved', text: 'Перенос позже срока по заданию — нет письма', test: (c) => !!c.task_moved },
+  { id: 'task_moved', text: 'Перенос позже срока по заданию — нет письма', test: (c) => !!c.task_moved && !c.task_moved.letter },
+  // 2.348: письмо о переносе пришло, а срок в нём раньше срока дела — сдавать по письму; ближайший срок по письму первым.
+  { id: 'task_letter', text: 'Сдать по письму о переносе — раньше срока дела', test: (c) => !!c.task_moved?.letter },
   // 2.209: срок в дни, когда эксперт не принимает дела; о которых эксперт уже просит передать — в «Просят передать».
   { id: 'away', text: 'Эксперт не принимает дела — срок в эти дни', test: (c) => !!c.away && !c.handover },
   // 2.249: эксперт вернулся после дней «не принимаю дела» за последнюю неделю — что изменилось по его делам, пока его не было.
@@ -145,6 +147,8 @@ function renderCases() {
   const mine = expert ? cases.filter((c) => c.expert_id === expert) : cases;
   // Отбор, по которому дел не осталось (подписали, эксперт ответил), снимается сам.
   const counts = new Map(FILTERS.map((f) => [f.id, mine.filter((c) => c.active && f.test(c)).length]));
+  // Из утренней сводки «task_moved» (2.338): там и дела, где письмо пришло со сроком раньше (2.335), — к их отбору (2.348).
+  if (filter === 'task_moved' && !counts.get(filter) && counts.get('task_letter')) filter = 'task_letter';
   if (filter && !counts.get(filter)) filter = null;
   const chosen = FILTERS.find((f) => f.id === filter);
   renderFilters(counts);
@@ -165,7 +169,7 @@ function renderCases() {
   if (filter === 'docs') active.sort((a, b) => new Date(a.docs_wait.since) - new Date(b.docs_wait.since));
   if (filter === 'back') active.sort((a, b) => b.back.until.localeCompare(a.back.until) || String(a.deadline).localeCompare(String(b.deadline)));
   if (filter === 'task_week') active.sort((a, b) => a.task_due.day.localeCompare(b.task_due.day));
-  if (filter === 'task_moved') active.sort((a, b) => a.task_moved.day.localeCompare(b.task_moved.day));
+  if (filter === 'task_moved' || filter === 'task_letter') active.sort((a, b) => a.task_moved.day.localeCompare(b.task_moved.day));
   if (filter === 'away') active.sort((a, b) => String(a.deadline).localeCompare(String(b.deadline)));
   if (filter === 'inspect') active.sort((a, b) => (a.inspection.kind === b.inspection.kind
     ? new Date(a.inspection.at) - new Date(b.inspection.at) : a.inspection.kind === 'incomplete' ? -1 : 1));
@@ -218,6 +222,16 @@ function renderFilters(counts) {
   box.replaceChildren(...(used.length ? [chip(null, 'Все'), ...used.map((f) => chip(f.id, `${f.text} · ${counts.get(f.id)}`))] : []));
 }
 
+// Сдать по письму о переносе (2.348, как у эксперта в «Сегодня» 2.341): когда, срок дела и просил ли эксперт письмо с новым сроком.
+function taskLetterLines(m) {
+  const d = m.letter_due;
+  const when = !d ? '' : d.overdue ? ', срок прошёл' : d.days_left === 0 ? ', сегодня' : d.days_left === 1 ? ', завтра' : '';
+  const doc = m.doc.toLowerCase().replace(/^письмо/, 'письму').replace(/^определение/, 'определению');
+  return [el('div', { class: d?.hot ? 'overdue' : 'muted', 'data-role': 'task-letter', text: `Сдать по ${doc} о переносе — к ${dayRu(m.day)}${when}` }),
+    el('div', { class: 'muted', 'data-role': 'task-letter-why', text: `${taskMovedText(m)} · ${m.asked
+      ? `эксперт попросил письмо с новым сроком ${timeRu(m.asked)}` : 'эксперт письмо с новым сроком ещё не просил'}` })];
+}
+
 function caseItem(org, c) {
   const late = c.overdue_days ? ` на ${c.overdue_days} дн.` : '';
   const deadline = c.deadline ? `срок ${dayRu(c.deadline)}${c.overdue ? ` · ПРОСРОЧЕНО${late}` : ''}` : 'срок не указан';
@@ -229,7 +243,9 @@ function caseItem(org, c) {
       c.overdue ? null : deadline].filter(Boolean).join(' · ') }),
     // Срок по заданию на оценку раньше срока дела (2.325): прошёл или через 1–2 дня — красным.
     // Перенос согласован позже срока по заданию на оценку, а письма о переносе нет (2.332) — вместо строки «Сдать по заданию».
-    ...(c.task_moved ? [el('div', { class: c.task_moved.asked ? 'muted' : 'overdue', 'data-role': 'task-moved', text: taskMovedText(c.task_moved) })] : []),
+    // 2.348: письмо пришло, а срок в нём раньше — «Сдать по письму … к …», близко (прошёл или через 1–2 дня) — красным.
+    ...(c.task_moved?.letter ? taskLetterLines(c.task_moved) : []),
+    ...(c.task_moved && !c.task_moved.letter ? [el('div', { class: c.task_moved.asked ? 'muted' : 'overdue', 'data-role': 'task-moved', text: taskMovedText(c.task_moved) })] : []),
     ...(c.task_due && !c.task_moved ? [el('div', { class: c.task_due.hot ? 'overdue' : 'muted', 'data-role': 'task-due',
       text: `Сдать ${c.task_due.by} — к ${dayRu(c.task_due.day)}${c.task_due.overdue ? ', срок прошёл' : ''} (срок дела позже)` })] : []),
     el('div', { class: 'muted', text: [c.fee_kop != null ? `вознаграждение ${rub(c.fee_kop)}` : 'цена ещё не назначена',
@@ -483,7 +499,7 @@ function offerWait(org, c) {
 // дела — срок в эти дни»; «stuck» (2.228) — к отбору «Просят передать — передать некому» и кнопке «Попросить диспетчера
 // перенести срок» первого дела; «orgext» (2.238) — к отбору «Перенос от организации: ждём ответа / отказано»; «back» (2.249) —
 // к отбору «Эксперт вернулся после «не принимаю дела»»; «task_moved» (2.338) — к отбору «Перенос позже срока по заданию — нет
-// письма» (2.332); «week», «overdue», «handover», «returned»,
+// письма» (2.332), а таких нет — к «Сдать по письму о переносе — раньше срока дела» (2.348); «week», «overdue», «handover», «returned»,
 // «fresh», «idle», «docs» — к списку дел с отбором «Срок на этой неделе» (2.127; в нём и просроченные), «Срок прошёл» (2.158), «Просят
 // передать», «Вернул эксперту» (2.153), «Исправленный файл ждёт подписи эксперта» (2.172), «Без движения» (2.141) или «Ждём документы от заказчика» (2.235). Отбора уже
 // нет (дела сданы, эксперт ответил) — список целиком.
