@@ -15803,3 +15803,55 @@ test('2.344: руководитель — на подписи срок пере�
   await shot(hp, 'f17-rukovoditel-podpis-perenesen-pismom');
   for (const p of [ep, hp, cp]) await p.context().close();
 });
+
+// 2.347: письмо о переносе попросили у заказчика 4 дня назад — не пришло: в «Сегодня» строка «Приложите письмо о переносе»
+// снова, с «Напомнить заказчику»; в «Сроке» дела — сколько ждём и та же кнопка; напомнили — снова можно завтра.
+test('2.347: письмо о переносе не пришло 3 дня — напомнить заказчику', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990034711'), customer = await signIn(cp, '+79990034712');
+  const ru = (iso) => iso.split('-').reverse().join('.');
+  const A = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Письмо не пришло: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Садовая ул., д. 21, кв. 5"}') returning id`,
+    [customer.id, expert.id, inDays(12)]);
+    await c.query(`insert into deadline_requests (order_id, requested_by, old_deadline, new_deadline, reason, outcome, decided_at, seen_at)
+      values ($1, $2, $3, $4, 'Банк согласовал перенос устно', 'approved', now() - interval '5 days', now())`, [o.id, expert.id, inDays(4), inDays(12)]);
+    await c.query(`insert into doc_requests (order_id, item_id, title, requested_by, requested_at)
+      values ($1, 'task_move', $2, $3, now() - interval '4 days')`, [o.id, `Письмо банка о переносе срока отчёта на ${ru(inDays(12))}`, expert.id]);
+    return o.id;
+  });
+  expect((await cp.request.post(`/api/orders/${A}/documents`, {
+    data: Buffer.from(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ru(inDays(5))}`),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание банка.txt'), 'x-doc-kind': 'basis' },
+  })).status()).toBe(201);
+  await ep.goto('/kabinet');
+  const row = ep.locator('#today-box li[data-today-item="task-moved"]');
+  await expect(row).toContainText('письмо банка о переносе попросили');
+  await expect(row).toContainText('ждём 4 дн., заказчику ещё не напоминали');
+  await expect(row.locator('[data-action="task-move-ask"]')).toHaveCount(0);
+  await expect(ep.locator('#today-box li[data-today="docs-wait"]')).toHaveCount(0);
+  expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await row.scrollIntoViewIfNeeded();
+  await shot(ep, '54w1-segodnya-pismo-ne-prishlo');
+  // В деле — «не пришло 4 дня» и «Напомнить заказчику».
+  await row.locator('button.open').click();
+  await expect(ep.locator('#deadline-task-moved-msg')).toContainText('не пришло 4 дня. Заказчику ещё не напоминали.');
+  const remind = ep.locator('#deadline-task-moved-remind');
+  await expect(remind).toBeVisible();
+  await ep.locator('#deadline-task-moved').scrollIntoViewIfNeeded();
+  await shot(ep, '54w2-srok-napomnit-pismo');
+  await remind.click();
+  await expect(ep.locator('#deadline-msg')).toHaveText('Напомнили — заказчику отправлено уведомление; снова можно завтра');
+  await expect(remind).toBeHidden();
+  await expect(ep.locator('#deadline-task-moved-msg')).toContainText('снова можно завтра');
+  // Заказчику пришло напоминание; в «Сегодня» эксперта строки до завтра нет.
+  await expect.poll(async () => (await db((c) => c.query("select count(*)::int as n from notifications where user_id = $1 and event = 'docs_reminder'", [customer.id]))).rows[0].n).toBe(1);
+  await ep.goto('/kabinet');
+  await expect(ep.locator('#today-box')).toBeVisible();
+  await expect(ep.locator('#today-box li[data-today-item="task-moved"]')).toHaveCount(0);
+  for (const p of [ep, cp]) await p.context().close();
+});

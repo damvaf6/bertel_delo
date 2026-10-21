@@ -168,6 +168,10 @@ function taskMoveAsk(x) {
   return [btn, msg];
 }
 
+// Письмо о переносе попросили, а оно не пришло 3 дня (2.347): «Напомнить заказчику» у строки письма, раз в сутки по делу.
+const askedRemind = (a) => (a?.remind ? ` · ждём ${a.remind.days} дн.${a.remind.reminded_at ? `, напоминали ${since(a.remind.reminded_at)}` : ', заказчику ещё не напоминали'}` : '');
+const letterActions = (x) => [...taskMoveAsk(x), ...(x.task_moved.asked?.remind?.can_remind ? docsRemind(x) : [])];
+
 // Что пришло после ИИ-проверки (2.248): название документа и файл.
 const recheckDocs = (docs) => docs.map((d) => `${d.title} («${d.filename}»)`).join(', ');
 
@@ -279,8 +283,8 @@ export async function loadToday() {
         `срок дела перенесён на ${dayRu(x.task_moved.deadline)}, а ${x.task_moved.who.toLowerCase()} ждёт отчёт по письму — к ${dayRu(x.letter_due.day)}`,
         x.can_ask ? (x.has_draft ? 'черновик есть — соберите отчёт Word и загрузите файл или попросите письмо с новым сроком'
           : 'загрузите файл результата или попросите письмо с новым сроком')
-          : `письмо с новым сроком попросили ${since(x.task_moved.asked.at)} — пока его нет, сдайте по прежнему письму`],
-      (x) => { location.hash = `order=${x.id}&to=result`; }, taskMoveAsk),
+          : `письмо с новым сроком попросили ${since(x.task_moved.asked.at)} — пока его нет, сдайте по прежнему письму${askedRemind(x.task_moved.asked)}`],
+      (x) => { location.hash = `order=${x.id}&to=result`; }, letterActions),
       ...group('task-made', 'Дата составления позже срока по заданию на оценку', e.task_made ?? [], (x) => [x.title,
         { class: 'overdue', role: 'task-made-why', text: `В «${x.file}» дата составления — ${dayRu(x.made.day)} (стр. ${x.made.page}), а срок ${x.task_due.by} — ${dayRu(x.task_due.day)} («${x.task_due.name}», стр. ${x.task_due.page})` },
         'до подписи исправьте дату составления или приложите к делу документ о переносе срока'],
@@ -303,8 +307,10 @@ export async function loadToday() {
       ...group('task-moved', 'Приложите письмо о переносе срока', e.task_moved ?? [], (x) => [x.title,
         { class: 'overdue', role: 'task-moved-why', text: `Срок перенесён на ${dayRu(x.task_moved.deadline)}, а ${x.task_moved.by} отчёт ждут к ${dayRu(x.task_moved.day)}` },
         x.task_moved.letter ? `${x.task_moved.doc.toLowerCase()} о переносе пришло, но срок в нём раньше — сдайте к ${dayRu(x.task_moved.day)} или попросите письмо с новым сроком`
-          : x.task_moved.asked?.came ? 'документ от заказчика пришёл, но нового срока в нём не видно' : `нужно: ${x.task_moved.doc.toLowerCase()} о переносе срока`],
-      (x) => { location.hash = `order=${x.id}&to=deadline`; }, taskMoveAsk),
+          : x.task_moved.asked?.came ? 'документ от заказчика пришёл, но нового срока в нём не видно'
+            : x.task_moved.asked ? `${x.task_moved.doc.toLowerCase()} о переносе попросили ${since(x.task_moved.asked.at)} — не пришло${askedRemind(x.task_moved.asked)}`
+              : `нужно: ${x.task_moved.doc.toLowerCase()} о переносе срока`],
+      (x) => { location.hash = `order=${x.id}&to=deadline`; }, letterActions),
       // Диспетчер ответил на просьбу о переносе срока (2.155) — пока эксперт не открыл «Срок» в деле.
       ...group('extend-answer', 'Ответ на просьбу о переносе срока', e.extend_answer ?? [], (x) => [x.title,
         x.outcome === 'approved' ? `Диспетчер согласился: срок перенесён на ${dayRu(x.new_deadline)} (был ${dayRu(x.old_deadline)})`
