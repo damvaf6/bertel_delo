@@ -12323,6 +12323,16 @@ test('2.323: сводка за месяц — сданные позже срок
     })).status()).toBe(201);
     ids.push(id);
   }
+  // 2.346: срок перенесён письмом банка на вчера (по заданию — 4 дня назад) — позже срока по письму на 1 день, отдельной строкой.
+  {
+    const id = (await (await cp.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Склад для банка' }, headers: H })).json()).order.id;
+    for (const [name, text] of [['Задание банка.txt', `ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: склад\nСрок составления отчёта: не позднее ${day(-4)}`],
+      ['Письмо банка о переносе.txt', `Письмо\nСрок составления отчёта: не позднее ${day(-1)}`]]) {
+      expect((await cp.request.post(`/api/orders/${id}/documents`, { data: Buffer.from(text),
+        headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': 'basis' } })).status()).toBe(201);
+    }
+    ids.push(id);
+  }
   const orgId = await db(async (c) => {
     const { rows: [org] } = await c.query(`insert into organizations (name, created_at) values ('ООО «Бюро сроков ${Date.now()}»', now() - interval '3 months') returning id`);
     await c.query("update users set full_name = 'Эксперт Срочный' where id = $1", [expert.id]);
@@ -12342,6 +12352,12 @@ test('2.323: сводка за месяц — сданные позже срок
   await expect(hp.locator('#org-report-total')).toContainText('Срок по заданию на оценкуиз сданных дел со сроком по заданию на оценку позже него: 2 из 3');
   await row.locator('[data-expert-tasklate]').scrollIntoViewIfNeeded();
   await shot(hp, 'd43a-rukovoditel-svodka-pozzhe-sroka-zadaniya');
+  await expect(row.locator('[data-expert-letterlate]')).toHaveText('из сданных дел со сроком по письму о переносе позже него: 1 из 1, в среднем на 1 день');
+  await expect(row.locator('[data-expert-letterlate]')).toHaveClass(/warn/);
+  await expect(hp.locator('#org-report-total')).toContainText('Срок по письму о переносеиз сданных дел со сроком по письму о переносе позже него: 1 из 1');
+  expect(await hp.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await row.locator('[data-expert-letterlate]').scrollIntoViewIfNeeded();
+  await shot(hp, 'd43b-rukovoditel-svodka-pozzhe-sroka-pisma');
   for (const p of [ep, hp, cp]) await p.context().close();
 });
 
@@ -15592,8 +15608,8 @@ test('прогон 2.330: эксперт и руководитель по пач
   await expect(bp.locator('#today-box')).toBeVisible();
   await expect(bp.locator('#today-box li[data-today-item="task-moved"]')).toHaveCount(0);
 
-  // Дело сдано: в сводке за месяц — письмо о переносе не делает сдачу «позже срока по заданию» (2.323), и в делах для банка
-  // задание после черновика — только само задание, не письмо (2.329).
+  // Дело сдано: в сводке за месяц — письмо о переносе не делает сдачу «позже срока по заданию» (2.323; с 2.346 — дело со сроком
+  // по письму считается отдельно, в срок по письму), и в делах для банка задание после черновика — только само задание, не письмо (2.329).
   await db(async (c) => {
     await c.query("update orders set status = 'done' where id = $1", [A]);
     await c.query("insert into order_status_history (order_id, from_status, to_status, side) values ($1, 'review', 'done', 'dispatcher')", [A]);
@@ -15602,7 +15618,8 @@ test('прогон 2.330: эксперт и руководитель по пач
   await hp.goto(`/kabinet#org=${orgId}`);
   await expect(hp.locator('#org-report-box')).toBeVisible();
   const row = hp.locator('#org-report > li').filter({ hasText: 'Сменщикова Яна' });
-  await expect(row.locator('[data-expert-tasklate]')).toHaveText('из сданных дел со сроком по заданию на оценку позже него — ни одного (из 1)');
+  await expect(row.locator('[data-expert-tasklate]')).toHaveCount(0);
+  await expect(row.locator('[data-expert-letterlate]')).toHaveText('из сданных дел со сроком по письму о переносе позже него — ни одного (из 1)');
   await expect(row.locator('[data-expert-bankafter]')).toHaveText('дела для банка: 1 · задание на оценку пришло после черновика: 1 (100%)');
   expect(await hp.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
   await row.scrollIntoViewIfNeeded();

@@ -92,6 +92,14 @@ const taskLate = (x) => {
   return `из сданных дел со сроком по заданию на оценку позже него: ${x.task_late} из ${x.task_due_cases}, в среднем на ${
     daysRu(x.task_late_days)}${x.task_late > 1 && x.task_late_max !== x.task_late_days ? ` (больше всего — ${daysRu(x.task_late_max)})` : ''}`;
 };
+// 2.346: срок из письма о переносе срока — отдельно: «из сданных дел со сроком по письму о переносе позже него: 1 из 2, в
+// среднем на 2 дня»; все в срок — «… позже него — ни одного (из 2)»; таких дел нет — пусто.
+const letterLate = (x) => {
+  if (!x.letter_cases) return '';
+  if (!x.letter_late) return `из сданных дел со сроком по письму о переносе позже него — ни одного (из ${x.letter_cases})`;
+  return `из сданных дел со сроком по письму о переносе позже него: ${x.letter_late} из ${x.letter_cases}, в среднем на ${
+    daysRu(x.letter_late_days)}${x.letter_late > 1 && x.letter_late_max !== x.letter_late_days ? ` (больше всего — ${daysRu(x.letter_late_max)})` : ''}`;
+};
 // 2.329: «дела для банка: 4 · задание на оценку пришло после черновика: 1 (25%)»; ни разу — «… ни в одном»; дел для банка
 // нет — пусто.
 const bankAfter = (x) => {
@@ -164,6 +172,7 @@ async function load(month) {
     ...(swapFirst(t) ? fact('Исправлено кнопкой', swapFirst(t)) : []),
     ...(bankTask(t) ? fact('Задание от банка', bankTask(t), t.bank_task_wait ? 'warn' : '') : []),
     ...(taskLate(t) ? fact('Срок по заданию на оценку', taskLate(t), t.task_late ? 'warn' : '') : []),
+    ...(letterLate(t) ? fact('Срок по письму о переносе', letterLate(t), t.letter_late ? 'warn' : '') : []),
     ...(bankAfter(t) ? fact('Дела для банка', bankAfter(t), t.bank_after ? 'warn' : '') : []),
     ...(extMoves(t) ? fact('Переносы срока', extMoves(t), extWarn(t) ? 'warn' : '') : []),
     ...(report.current && t.overdue_now ? fact('Просрочено сейчас', String(t.overdue_now), 'overdue') : []),
@@ -200,6 +209,7 @@ async function load(month) {
     ...(swapFirst(x) ? [el('div', { class: 'muted', 'data-expert-swap': '', text: swapFirst(x) })] : []),
     ...(bankTask(x) ? [el('div', { class: x.bank_task_wait ? 'warn' : 'muted', 'data-expert-banktask': '', text: bankTask(x) })] : []),
     ...(taskLate(x) ? [el('div', { class: x.task_late ? 'warn' : 'muted', 'data-expert-tasklate': '', text: taskLate(x) })] : []),
+    ...(letterLate(x) ? [el('div', { class: x.letter_late ? 'warn' : 'muted', 'data-expert-letterlate': '', text: letterLate(x) })] : []),
     ...(bankAfter(x) ? [el('div', { class: x.bank_after ? 'warn' : 'muted', 'data-expert-bankafter': '', text: bankAfter(x) })] : []),
     ...(extMoves(x) ? [el('div', { class: extWarn(x) ? 'warn' : 'muted', 'data-expert-ext': '', text: extMoves(x) })] : []),
     ...(x.remarks?.length ? [el('div', { class: 'muted', 'data-expert-remarks': '', text: `частые замечания: ${

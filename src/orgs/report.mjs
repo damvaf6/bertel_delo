@@ -243,12 +243,15 @@ function bankTask(rows) {
 
 // 2.323: сданные за месяц дела с сроком по заданию на оценку (2.303) и из них сданные позже него — на сколько дней (в
 // среднем и больше всего). Срок задания читает операция (`taskDue`: дело → день или null) — этот файл операции загружают.
+// 2.346: срок взят из письма о переносе срока (2.333) — операция отдаёт `{ day, letter: true }`: такие дела считаются
+// отдельно (`letter`), не в «позже срока по заданию».
 async function taskDueRows(done, taskDue) {
   if (!taskDue) return [];
   const out = [];
   for (const o of done) {
-    const due = await taskDue(o);
-    if (due) out.push({ user_id: o.user_id, late: Math.max(0, daysBetween(due, dayMsk(o.at))) });
+    const got = await taskDue(o);
+    const due = typeof got === 'object' && got ? got.day : got;
+    if (due) out.push({ user_id: o.user_id, late: Math.max(0, daysBetween(due, dayMsk(o.at))), letter: !!got?.letter });
   }
   return out;
 }
@@ -288,15 +291,19 @@ function ext(rows) {
   };
 }
 
-// { task_due_cases, task_late, task_late_days, task_late_max }
-function taskLate(rows) {
+// { task_due_cases, task_late, task_late_days, task_late_max } — по сроку из задания; 2.346: { letter_cases, letter_late,
+// letter_late_days, letter_late_max } — по сроку из письма о переносе.
+function lateOf(rows, k, cases) {
   const late = rows.filter((r) => r.late > 0).map((r) => r.late);
   return {
-    task_due_cases: rows.length,
-    task_late: late.length,
-    task_late_days: late.length ? Math.round((late.reduce((s, d) => s + d, 0) / late.length) * 10) / 10 : null,
-    task_late_max: late.length ? Math.max(...late) : null,
+    [cases]: rows.length,
+    [k]: late.length,
+    [`${k}_days`]: late.length ? Math.round((late.reduce((s, d) => s + d, 0) / late.length) * 10) / 10 : null,
+    [`${k}_max`]: late.length ? Math.max(...late) : null,
   };
+}
+function taskLate(rows) {
+  return { ...lateOf(rows.filter((r) => !r.letter), 'task_late', 'task_due_cases'), ...lateOf(rows.filter((r) => r.letter), 'letter_late', 'letter_cases') };
 }
 
 export const TOP_EGRN_RULES = 3;
@@ -686,6 +693,10 @@ export function reportCsv(orgName, r) {
     ...(r.total.task_due_cases ? [[], ['Срок по заданию на оценку', 'Сдано дел с таким сроком', 'Из них позже срока по заданию',
       'На сколько дней в среднем', 'Больше всего дней'], ...[...r.experts.filter((x) => x.task_due_cases).map((x) => [x.full_name, x]),
       ['Итого', r.total]].map(([name, x]) => [name, x.task_due_cases, x.task_late, daysCell(x.task_late_days), x.task_late_max])] : []),
+    // 2.346: только если за месяц сданы дела со сроком из письма о переносе срока — отдельно от срока по заданию.
+    ...(r.total.letter_cases ? [[], ['Срок по письму о переносе', 'Сдано дел с таким сроком', 'Из них позже срока по письму',
+      'На сколько дней в среднем', 'Больше всего дней'], ...[...r.experts.filter((x) => x.letter_cases).map((x) => [x.full_name, x]),
+      ['Итого', r.total]].map(([name, x]) => [name, x.letter_cases, x.letter_late, daysCell(x.letter_late_days), x.letter_late_max])] : []),
     // 2.329: только если за месяц сданы дела для банка.
     ...(r.total.bank_cases ? [[], ['Дела для банка', 'Сдано', 'Задание на оценку пришло после черновика', 'Доля, %'],
       ...[...r.experts.filter((x) => x.bank_cases).map((x) => [x.full_name, x]), ['Итого', r.total]]
