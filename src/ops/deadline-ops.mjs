@@ -196,7 +196,9 @@ export async function taskMovedOrg(sql, storage, registry, order) {
 // файла), просьбы о переносе с ответом, просьба письма о переносе у заказчика и письма с новым сроком по заданию (`was` —
 // каким он был). Файлы задания — как их читает ИИ-проверка (только у услуг с правилом report_dates); файл без срока не в
 // списке, копия задания с тем же сроком — тоже. Меньше двух записей — списка нет: хватает строки «Сейчас срок».
-async function historyOf(sql, storage, registry, order, requests, first) {
+// 2.349: последнее письмо о переносе со сроком раньше согласованного срока дела (`taskMoved` с `letter`, 2.335) — `short`:
+// согласованный срок и можно ли сейчас попросить письмо с новым сроком (дело в работе, новая просьба не ждёт ответа).
+async function historyOf(sql, storage, registry, order, requests, first, moved) {
   const out = [{ kind: 'start', at: order.created_at, day: first }];
   if (storage && registry?.checks(order.module, order.service).some((r) => (r.auto ?? []).includes('report_dates'))) {
     const files = (await assignmentDocs(sql, storage, order)).slice().sort((a, b) => new Date(a.at) - new Date(b.at));
@@ -217,6 +219,10 @@ async function historyOf(sql, storage, registry, order, requests, first) {
                          where order_id = ${order.id} and item_id = ${TASK_MOVE} and cancelled_at is null order by id`;
   for (const a of asks) out.push({ kind: 'ask', at: a.requested_at, came_at: a.fulfilled_at ?? null });
   const rest = out.slice(1).sort((a, b) => new Date(a.at) - new Date(b.at));
+  const last = rest.findLast((x) => x.kind === 'letter');
+  if (moved?.letter && last?.day === moved.day) {
+    last.short = { deadline: moved.deadline, can_ask: order.status === 'in_work' && !(moved.asked && !moved.asked.came) };
+  }
   return rest.length ? [out[0], ...rest] : null;
 }
 
@@ -237,6 +243,7 @@ async function view(sql, actor, order, registry, storage) {
     first: ok.at(-1).old_deadline,
   } : null;
   const canRequest = sides.includes('executor') && order.status === 'in_work' && !!order.deadline && !open;
+  const taskMove = sides.includes('executor') ? await taskMoved(sql, storage, registry, order) : null;
   return {
     deadline: order.deadline,
     fresh_answer: fresh,
@@ -248,11 +255,11 @@ async function view(sql, actor, order, registry, storage) {
     min_new: canRequest ? [addDays(order.deadline, 1), todayMsk()].sort().at(-1) : null,
     reasons: canRequest ? await presetReasons(sql, order, registry) : [],
     task_due: canRequest ? await taskDueOf(sql, storage, order, registry) : null,
-    task_moved: sides.includes('executor') ? await taskMoved(sql, storage, registry, order) : null,
+    task_moved: taskMove,
     can_withdraw: !!open && sides.includes('executor'),
     can_decide: !!open && sides.includes('dispatcher') && DECIDE_STATUSES.includes(order.status),
     pace: sides.includes('executor') && order.status === 'in_work' && order.deadline ? await paceOf(sql, order, registry) : null,
-    history: sides.includes('executor') ? await historyOf(sql, storage, registry, order, [...requests].reverse(), moved?.first ?? order.deadline) : null,
+    history: sides.includes('executor') ? await historyOf(sql, storage, registry, order, [...requests].reverse(), moved?.first ?? order.deadline, taskMove) : null,
   };
 }
 
