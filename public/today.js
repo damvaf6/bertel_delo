@@ -64,8 +64,16 @@ function letterDueWhen(d, doc) {
 }
 
 // Руководителю у дела на подписи (2.308): срок по заданию на оценку прошёл или сегодня — с файлом и страницей задания.
-export const taskDueSignText = (d) => `${d.overdue ? `Срок ${d.by} прошёл — ${dayRu(d.day)}` : `Срок ${d.by} сегодня — подпишите сегодня`}`
-  + ` («${d.name}», стр. ${d.page})`;
+// 2.344: срок из письма о переносе — «срок по письму о переносе»; перенесён письмом на день позже сегодняшнего — «срок
+// перенесён письмом на …» и каким он был (не красным: `taskDueSignClass`).
+export const taskDueSignText = (d) => {
+  const was = d.letter?.was ? ` · ${d.letter.was_letter ? 'по прежнему письму' : d.by} было ${dayRu(d.letter.was)}` : '';
+  const by = d.letter ? 'по письму о переносе' : d.by;
+  const head = d.moved ? `Срок перенесён письмом на ${dayRu(d.day)}${was}`
+    : d.overdue ? `Срок ${by} прошёл — ${dayRu(d.day)}${was}` : `Срок ${by} сегодня — подпишите сегодня${was}`;
+  return `${head} («${d.name}», стр. ${d.page})`;
+};
+export const taskDueSignClass = (d) => (d.moved ? 'muted' : 'overdue');
 
 // Руководителю (2.332 — «Дела экспертов», 2.334 — подпись и «Сегодня»): «Письма банка о переносе срока нет: срок дела
 // перенесён на …, а по заданию на оценку отчёт ждут к …» и просил ли эксперт письмо у заказчика.
@@ -452,7 +460,7 @@ export async function loadToday() {
         // В ИИ-проверке эксперта остались расхождения с заявкой или заданием на оценку (2.286, как отбор 2.276).
         ...(x.order_diff ? [{ class: 'overdue', role: 'order-diff', text: `расхождения с заявкой или заданием на оценку: ${x.order_diff} ${x.order_diff === 1 ? 'пункт' : x.order_diff < 5 ? 'пункта' : 'пунктов'}` }] : []),
         // Срок по заданию на оценку прошёл или сегодня (2.308) — красным.
-        ...(x.task_due && !x.task_moved ? [{ class: 'overdue', role: 'task-due-sign', text: taskDueSignText(x.task_due) }] : []),
+        ...(x.task_due && !x.task_moved ? [{ class: taskDueSignClass(x.task_due), role: 'task-due-sign', text: taskDueSignText(x.task_due) }] : []),
         // Перенос согласован позже срока по заданию, а письма о переносе нет (2.334) — вместо строки срока по заданию.
         ...(x.task_moved ? [{ class: 'overdue', role: 'task-moved-sign', text: `До подписи: ${taskMovedText(x.task_moved)}` }] : [])], toOrg('sign')),
       ...group(`org-pending-${g.id}`, 'Ждут назначения эксперта', g.pending, caseLine, toOrg('pending')),

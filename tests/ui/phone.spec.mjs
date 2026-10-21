@@ -15692,3 +15692,61 @@ test('прогон 2.340: эксперт и руководитель по пач
   await expect(hp.locator(`#org-cases li[data-case="${ref}"] [data-role="task-moved"]`)).toHaveCount(0);
   for (const p of [ep, hp, cp, dp]) await p.context().close();
 });
+
+// 2.344: у дела на подписи организации срок по заданию на оценку прошёл, а письмо о переносе перенесло его — руководителю
+// «срок перенесён письмом на …» (не красным) вместо «срок по заданию прошёл»; срок по письму сегодня — «по письму о переносе».
+test('2.344: руководитель — на подписи срок перенесён письмом о переносе', async ({ browser, baseURL }) => {
+  test.setTimeout(120_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), ep = await ctx(), hp = await ctx();
+  const customer = await signIn(cp, '+79990034401');
+  const expert = await signIn(ep, '+79990034402'), head = await signIn(hp, '+79990034403');
+  const { orgId, ids } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Письмо о переносе ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Письмова Анна' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const add = async (title) => (await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', $1, $2, $3, 'in_work', $4::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Письменная ул., 4"}') returning id`,
+      [title, customer.id, expert.id, inDays(5)])).rows[0].id;
+    const ids = { moved: await add('Перенесён письмом'), today: await add('По письму сегодня') };
+    for (const k of Object.keys(ids)) await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [ids[k], expert.id]);
+    return { orgId: org.id, ids };
+  });
+  const ruD = (s) => s.split('-').reverse().join('.');
+  const put = async (id, day, name) => expect((await cp.request.post(`/api/orders/${id}/documents`, {
+    data: Buffer.from(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(day)}`),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': 'basis' },
+  })).status()).toBe(201);
+  for (const [k, day] of [['moved', inDays(2)], ['today', inDays(0)]]) {
+    await put(ids[k], inDays(-2), 'Задание банка.txt');
+    await put(ids[k], day, 'Письмо о переносе.txt');
+    const up = await ep.request.post(`/api/orders/${ids[k]}/results`, { data: Buffer.from(`%PDF-1.4 ${k}`), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent(`Отчёт ${k}.pdf`) } });
+    expect(up.status()).toBe(201);
+    expect((await ep.request.post(`/api/documents/${(await up.json()).document.id}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  }
+  const ref = (id) => `№ ${id.slice(0, 8).toUpperCase()}`;
+  await hp.goto('/kabinet');
+  const lines = hp.locator(`#today-box li[data-today-item="org-sign-${orgId}"] [data-role="task-due-sign"]`);
+  await expect(lines).toHaveCount(2);
+  const moved = lines.filter({ hasText: 'перенесён' });
+  await expect(moved).toHaveText(/^Срок перенесён письмом на \d+ \S+ · по заданию на оценку было \d+ \S+ \(«Письмо о переносе\.txt», стр\. 1\)$/);
+  await expect(moved).toHaveClass(/muted/);
+  await expect(moved).not.toHaveClass(/overdue/);
+  const today = lines.filter({ hasText: 'сегодня' });
+  await expect(today).toHaveText(/^Срок по письму о переносе сегодня — подпишите сегодня · по заданию на оценку было \d+ \S+ \(«Письмо о переносе\.txt», стр\. 1\)$/);
+  await expect(today).toHaveClass(/overdue/);
+  await expect(hp.locator('#today-box')).not.toContainText('Срок по заданию на оценку прошёл');
+  await moved.scrollIntoViewIfNeeded();
+  await shot(hp, 'f16-rukovoditel-segodnya-perenesen-pismom');
+  await hp.goto(`/kabinet#org=${orgId}&to=sign`);
+  const item = hp.locator(`#org-sign > li[data-item="${ref(ids.moved)}"] [data-sig="task-due"]`);
+  await expect(item).toHaveText(/^Срок перенесён письмом на \d+ \S+ · по заданию на оценку было/);
+  await expect(item).not.toHaveClass(/overdue/);
+  await expect(hp.locator(`#org-sign > li[data-item="${ref(ids.today)}"] [data-sig="task-due"]`)).toHaveText(/^Срок по письму о переносе сегодня — подпишите сегодня/);
+  await item.scrollIntoViewIfNeeded();
+  await shot(hp, 'f17-rukovoditel-podpis-perenesen-pismom');
+  for (const p of [ep, hp, cp]) await p.context().close();
+});

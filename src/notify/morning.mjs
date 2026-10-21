@@ -133,7 +133,7 @@ export function orgDigestCounts(part, today) {
     back: part.back_today ?? 0,
     egrn_kept: part.to_sign.filter((x) => x.egrn_kept).length,
     order_diff: part.to_sign.filter((x) => x.order_diff).length,
-    task_due: part.to_sign.filter((x) => x.task_due).length,
+    task_due: part.to_sign.filter((x) => x.task_due && !x.task_due.moved).length,
     task_moved: part.task_moved_long ?? 0,
   };
 }
