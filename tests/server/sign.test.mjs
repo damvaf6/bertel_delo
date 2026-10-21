@@ -1209,6 +1209,16 @@ test('2.308: у дела на подписи организации срок п�
   assert.equal((await putTxt(owner, `/api/orders/${o.id}/documents`, `ЗАДАНИЕ НА ОЦЕНКУ\nСрок составления отчёта: не позднее ${ruD(addDays(today, 1))}`, 'Задание 3.txt')).status, 201);
   assert.equal((await signing()).task_due, null);
   assert.equal((await toSign()).task_due, null);
+  // 2.344: письмо о переносе — срок по заданию прошёл, письмо перенесло его на завтра: «перенесён письмом», не красным.
+  assert.equal((await putTxt(owner, `/api/orders/${o.id}/documents`, `ЗАДАНИЕ НА ОЦЕНКУ\nСрок составления отчёта: не позднее ${ruD(past)}`, 'Задание 5.txt')).status, 201);
+  const moved = { day: addDays(today, 1), moved: true, name: 'Задание 3.txt', page: 1, by: 'по заданию на оценку', letter: { was: past } };
+  assert.deepEqual((await signing()).task_due, moved);
+  assert.deepEqual((await toSign()).task_due, moved);
+  // Срок по письму сегодня — «по письму о переносе», с прежним сроком.
+  await S.sql`update documents set deleted_at = now() where order_id = ${o.id} and filename = 'Задание 3.txt'`;
+  assert.equal((await putTxt(owner, `/api/orders/${o.id}/documents`, `ЗАДАНИЕ НА ОЦЕНКУ\nСрок составления отчёта: не позднее ${ruD(today)}`, 'Письмо о переносе.txt')).status, 201);
+  assert.deepEqual((await signing()).task_due, { ...want, name: 'Письмо о переносе.txt', letter: { was: past } });
+  await S.sql`update documents set deleted_at = now() where order_id = ${o.id} and filename in ('Задание 5.txt', 'Письмо о переносе.txt')`;
   // Подписано организацией — не ждёт, пометки нет.
   await S.sql`update documents set deleted_at = now() where order_id = ${o.id} and filename = 'Задание 3.txt'`;
   assert.equal((await putTxt(owner, `/api/orders/${o.id}/documents`, `ЗАДАНИЕ НА ОЦЕНКУ\nСрок составления отчёта: не позднее ${ruD(today)}`, 'Задание 4.txt')).status, 201);
