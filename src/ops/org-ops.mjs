@@ -309,6 +309,11 @@ export function orgOps() {
         const moved = new Map();
         for (const o of rows.filter((x) => ['in_work', 'review'].includes(x.status))) {
           const m = await taskMovedOrg(sql, providers.storage, registry, o);
+          // 2.348: письмо о переносе пришло, а срок в нём раньше срока дела — сдать по письму: сколько дней осталось, близко ли.
+          if (m?.letter) {
+            const left = Math.round((Date.parse(m.day) - Date.parse(today)) / 86_400_000);
+            m.letter_due = { days_left: left, overdue: left < 0, hot: left <= 2 };
+          }
           if (m) moved.set(o.id, m);
         }
         const cases = rows.map((o) => ({

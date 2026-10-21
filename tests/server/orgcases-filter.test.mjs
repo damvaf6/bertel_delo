@@ -234,3 +234,38 @@ test('2.332: дела экспертов — перенос позже срок�
   assert.equal((await owner.req('POST', `/api/orders/${o.id}/doc-requests/${req.id}/attach`, { document_id: doc.body.document.id })).status, 200);
   assert.equal((await caseOf(o)).task_moved, null);
 });
+
+// 2.348: письмо о переносе пришло, а срок в нём раньше срока дела — у дела `task_moved.letter` и `letter_due`: сколько дней
+// осталось и близко ли (прошёл или через 1–2 дня); дальше — не красным.
+test('2.348: дела экспертов — сдать по письму о переносе, срок в нём раньше срока дела', async () => {
+  const today = todayMsk();
+  const ruD = (s) => s.split('-').reverse().join('.');
+  const caseOf = async (x) => (await head.req('GET', `/api/orgs/${org.id}/cases`)).body.cases.find((c) => c.id === x.id);
+  const late = addDays(today, 12);
+  const letterCase = async (title, letterDay) => {
+    const o = await taken(title, 3, a);
+    const put = (body, name, kind = 'basis') => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+      raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': kind } });
+    await S.sql`update orders set fields = fields || '{"purpose":"bank"}'::jsonb where id = ${o.id}`;
+    assert.equal((await put(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(addDays(today, 1))}`, 'Задание.txt')).status, 201);
+    const r = await a.req('POST', `/api/orders/${o.id}/deadline-requests`, { new_deadline: late, reason: 'Банк согласовал перенос устно' });
+    assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/deadline-requests/${r.body.open.id}/decide`, { approve: true })).status, 200);
+    const q = await a.req('POST', `/api/orders/${o.id}/doc-requests`, { task_move: true });
+    const req = q.body.requests.find((x) => x.item_id === 'task_move');
+    const doc = await put(`Банк сообщает: срок составления отчёта продлён, не позднее ${ruD(letterDay)}`, 'Письмо о переносе.txt', 'other');
+    assert.equal((await owner.req('POST', `/api/orders/${o.id}/doc-requests/${req.id}/attach`, { document_id: doc.body.document.id })).status, 200);
+    return o;
+  };
+  const near = await letterCase('Письмо с коротким сроком', addDays(today, 2));
+  const far = await letterCase('Письмо со сроком позже', addDays(today, 6));
+  let c = await caseOf(near);
+  assert.equal(c.task_moved.day, addDays(today, 2));
+  assert.deepEqual(c.task_moved.letter, { was: addDays(today, 1) });
+  assert.deepEqual(c.task_moved.letter_due, { days_left: 2, overdue: false, hot: true });
+  c = await caseOf(far);
+  assert.deepEqual(c.task_moved.letter_due, { days_left: 6, overdue: false, hot: false });
+  assert.ok(!JSON.stringify(c).includes('Письмо о переносе.txt'), 'без названия файла');
+  // Без письма — `letter_due` нет (2.332 не меняется).
+  const none = await taken('Перенос без письма 2.348', 3, a);
+  assert.equal((await caseOf(none)).task_moved, null);
+});

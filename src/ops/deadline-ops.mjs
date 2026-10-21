@@ -184,9 +184,11 @@ async function letterRemind(sql, order, at, now = new Date()) {
 }
 
 // Руководителю (2.332, 2.334): то же без названия файла задания; `asked` — когда эксперт попросил письмо у заказчика.
+// 2.348: письмо пришло со сроком раньше — `asked` только о новой просьбе (письмо с новым сроком ещё не пришло), не о прежней.
 export async function taskMovedOrg(sql, storage, registry, order) {
   const m = await taskMoved(sql, storage, registry, order);
-  return m ? { day: m.day, by: m.by, who: m.who, doc: m.doc, moved_from: m.moved_from, deadline: m.deadline, asked: m.asked?.at ?? null,
+  const asked = m?.letter && m.asked?.came ? null : m?.asked?.at ?? null;
+  return m ? { day: m.day, by: m.by, who: m.who, doc: m.doc, moved_from: m.moved_from, deadline: m.deadline, asked,
     letter: m.letter } : null;
 }
 
