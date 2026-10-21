@@ -25,7 +25,7 @@ import { orgChat } from '/orgchat.js';
 import { matcher, wireSearch } from '/search.js';
 import { loadOrgSchedule } from '/orgschedule.js';
 import { pickSignFilter } from '/orgsign.js';
-import { taskMovedText } from '/today.js';
+import { taskLetterLines, taskMovedText } from '/today.js';
 
 const $ = (id) => document.getElementById(id);
 const MONTHS = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
@@ -220,16 +220,6 @@ function renderFilters(counts) {
   const chip = (id, text) => el('button', { type: 'button', class: 'secondary', 'data-filter': id ?? 'all',
     'aria-pressed': String(filter === id), onclick: () => { filter = id; renderCases(); } }, text);
   box.replaceChildren(...(used.length ? [chip(null, 'Все'), ...used.map((f) => chip(f.id, `${f.text} · ${counts.get(f.id)}`))] : []));
-}
-
-// Сдать по письму о переносе (2.348, как у эксперта в «Сегодня» 2.341): когда, срок дела и просил ли эксперт письмо с новым сроком.
-function taskLetterLines(m) {
-  const d = m.letter_due;
-  const when = !d ? '' : d.overdue ? ', срок прошёл' : d.days_left === 0 ? ', сегодня' : d.days_left === 1 ? ', завтра' : '';
-  const doc = m.doc.toLowerCase().replace(/^письмо/, 'письму').replace(/^определение/, 'определению');
-  return [el('div', { class: d?.hot ? 'overdue' : 'muted', 'data-role': 'task-letter', text: `Сдать по ${doc} о переносе — к ${dayRu(m.day)}${when}` }),
-    el('div', { class: 'muted', 'data-role': 'task-letter-why', text: `${taskMovedText(m)} · ${m.asked
-      ? `эксперт попросил письмо с новым сроком ${timeRu(m.asked)}` : 'эксперт письмо с новым сроком ещё не просил'}` })];
 }
 
 function caseItem(org, c) {

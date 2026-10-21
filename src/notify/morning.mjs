@@ -50,6 +50,7 @@ export function digestText(c) {
   if (c.visits) parts.push(`${c.visits} ${pl(c.visits, 'выезд', 'выезда', 'выездов')} на объект`);
   if (c.links) parts.push(`${c.links} ${pl(c.links, 'ссылка', 'ссылки', 'ссылок')} на осмотр ${c.links === 1 ? 'истекает' : 'истекают'} в ближайшие сутки`);
   if (c.task_due) parts.push(`срок по заданию на оценку сегодня, завтра или прошёл, а файла результата нет: ${c.task_due} ${pl(c.task_due, 'дело', 'дела', 'дел')}`);
+  if (c.letter_due) parts.push(`срок по письму о переносе сегодня, завтра или прошёл, а файла результата нет: ${c.letter_due} ${pl(c.letter_due, 'дело', 'дела', 'дел')}`);
   if (c.task_moved) parts.push(`перенос срока согласован позже срока по заданию на оценку — приложите письмо о переносе: ${c.task_moved} ${pl(c.task_moved, 'дело', 'дела', 'дел')}`);
   if (c.no_result) parts.push(`нет файла результата: ${c.no_result}`);
   if (c.reply_wait) parts.push(`заказчик ждёт ответа: ${c.reply_wait}`);
@@ -70,8 +71,8 @@ export async function sendMorning(sql, { now = new Date(), registry = null, stor
   for (const { user_id: userId } of people) {
     const c = { ...digestCounts(await expertSchedule(sql, userId, NO_NAMES, today), now), ...await expertMorningAlerts(sql, userId, today, now, { registry, storage }) };
     sent += await sql.tx(async (tx) => {
-      const fresh = await tx`insert into morning_digests (user_id, day, due, overdue, visits, links, no_result, reply_wait, lead_unsigned, egrn_swap, task_swap, egrn_rebuild, task_due, task_moved)
-                             values (${userId}, ${today}, ${c.due}, ${c.overdue}, ${c.visits}, ${c.links}, ${c.no_result}, ${c.reply_wait}, ${c.lead_unsigned}, ${c.egrn_swap}, ${c.task_swap}, ${c.egrn_rebuild}, ${c.task_due ?? 0}, ${c.task_moved ?? 0})
+      const fresh = await tx`insert into morning_digests (user_id, day, due, overdue, visits, links, no_result, reply_wait, lead_unsigned, egrn_swap, task_swap, egrn_rebuild, task_due, task_moved, letter_due)
+                             values (${userId}, ${today}, ${c.due}, ${c.overdue}, ${c.visits}, ${c.links}, ${c.no_result}, ${c.reply_wait}, ${c.lead_unsigned}, ${c.egrn_swap}, ${c.task_swap}, ${c.egrn_rebuild}, ${c.task_due ?? 0}, ${c.task_moved ?? 0}, ${c.letter_due ?? 0})
                              on conflict do nothing returning user_id`;
       const text = digestText(c);
       if (!fresh.length || !text) return 0;
@@ -88,7 +89,7 @@ export async function sendMorning(sql, { now = new Date(), registry = null, stor
 }
 
 // Куда ведёт сводка (2.142): есть сроки, выезды или ссылки — к «Моим срокам»; только «нет файла результата» и «заказчик ждёт
-// ответа» (и «руководитель не подписал», 2.164, «можно заменить по выписке», 2.266, «по заданию», 2.284, «соберите Word заново», 2.272, «срок по заданию на оценку», 2.315, «приложите письмо о переносе», 2.331) — к «Сегодня», где эти дела строками.
+// ответа» (и «руководитель не подписал», 2.164, «можно заменить по выписке», 2.266, «по заданию», 2.284, «соберите Word заново», 2.272, «срок по заданию на оценку», 2.315, «приложите письмо о переносе», 2.331, «срок по письму о переносе», прогон 2.350) — к «Сегодня», где эти дела строками.
 export function morningTo(c) {
   return c.due || c.overdue || c.visits || c.links ? 'schedule' : 'today';
 }
@@ -96,7 +97,7 @@ export function morningTo(c) {
 // Текст сводки в ленте по номеру уведомления (цифры — из morning_digests) и куда она ведёт.
 export async function morningTitles(sql, ids) {
   if (!ids.length) return new Map();
-  const rows = await sql`select notification_id, due, overdue, visits, links, no_result, reply_wait, lead_unsigned, egrn_swap, task_swap, egrn_rebuild, task_due, task_moved from morning_digests
+  const rows = await sql`select notification_id, due, overdue, visits, links, no_result, reply_wait, lead_unsigned, egrn_swap, task_swap, egrn_rebuild, task_due, task_moved, letter_due from morning_digests
                          where notification_id = any(${ids}::bigint[])`;
   return new Map(rows.map((r) => [String(r.notification_id), { title: digestText(r), to: morningTo(r) }]));
 }

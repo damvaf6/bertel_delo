@@ -6,7 +6,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, addMember } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
-import { orgDigestText, orgDigestTo, sendOrgMorning } from '../../src/notify/morning.mjs';
+import { digestText, orgDigestText, orgDigestTo, sendOrgMorning } from '../../src/notify/morning.mjs';
 
 let S, owner, dispatcher, spec, head, head2, idleHead, org, idleOrg;
 const FIELDS = { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, Руководящая ул., 21', area: '40' };
@@ -903,4 +903,102 @@ test('прогон 2.340: перенос позже срока по задани
   const rep = (await h.req('GET', `/api/orgs/${oP.id}/report`)).body.report;
   const row = rep.experts.find((x) => x.user_id === ex.user.id);
   assert.deepEqual([row.ext_cases, row.ext_times, row.ext_need, row.ext_letter], [1, 1, 1, 1]);
+});
+
+// Прогон 2.350: одно дело организации для банка по всей пачке 2.341–2.349 — перенос согласован позже срока по заданию, пришло
+// письмо банка о переносе со сроком завтра (раньше согласованного): «Сегодня», утренняя сводка и «История сроков» эксперта,
+// «Дела экспертов» и карточка эксперта у руководителя; эксперт просит письмо с новым сроком, напоминает заказчику, загружает
+// файл; приходит письмо с согласованным сроком — пометок нет; сдано — сводка за месяц. Исправлено: в утренней сводке эксперта
+// такое дело называлось «приложите письмо о переносе» (письмо уже пришло), а попросил письмо с новым сроком — в сводке не было
+// ничего, хотя банк ждёт отчёт завтра; в карточке эксперта не было «сдать по письму к …» и дело считалось «без письма».
+test('прогон 2.350: письмо о переносе со сроком завтра — эксперт и руководитель от письма до сданного дела', async () => {
+  const { expertMorningAlerts, orgPart } = await import('../../src/ops/today-ops.mjs');
+  const h = await login(S, '+79990003911');
+  const ex = await login(S, '+79990003912');
+  const oP = await makeOrg(S.sql, 'ООО «Прогон 2.350»');
+  await addMember(S.sql, oP.id, h.user.id, 'head');
+  await makeSpecialist(S.sql, ex.user.id);
+  await addMember(S.sql, oP.id, ex.user.id, 'member');
+  assert.equal((await ex.req('PATCH', '/api/me', { full_name: 'Эксперт Письмов' })).status, 200);
+  assert.equal((await ex.req('PATCH', '/api/specialist/me', { org_id: oP.id })).status, 200);
+  const ruD = (s) => s.split('-').reverse().join('.');
+  const due = addDays(today, -1), short = addDays(today, 1), late = addDays(today, 12);
+  const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Квартира: прогон 2.350' })).body.order;
+  const put = (body, name, kind = 'basis') => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': kind } });
+  assert.equal((await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: addDays(today, 3), fields: { ...FIELDS, purpose: 'bank' } })).status, 200);
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
+  await ensurePaid(S.sql, o.id);
+  assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: ex.user.id, from: 'matching' })).status, 200);
+  assert.equal((await ex.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  assert.equal((await put(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(due)}`, 'Задание банка.txt')).status, 201);
+  const r = await ex.req('POST', `/api/orders/${o.id}/deadline-requests`, { new_deadline: late, reason: 'Банк согласовал устно' });
+  assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/deadline-requests/${r.body.open.id}/decide`, { approve: true })).status, 200);
+  await S.sql`update deadline_requests set decided_at = now() - interval '3 days' where order_id = ${o.id}`;
+  const q = await ex.req('POST', `/api/orders/${o.id}/doc-requests`, { task_move: true });
+  const req = q.body.requests.find((x) => x.item_id === 'task_move');
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/doc-requests/${req.id}/attach`, {
+    document_id: (await put(`Банк сообщает: срок составления отчёта продлён, не позднее ${ruD(short)}`, 'Письмо о переносе.txt', 'other')).body.document.id })).status, 200);
+  const opts = { registry: S.app.locals.registry, storage: S.providers.storage };
+  const [org] = await S.sql`select * from organizations where id = ${oP.id}`;
+  const look = async () => {
+    const t = (await ex.req('GET', '/api/today')).body.expert;
+    const dl = (await ex.req('GET', `/api/orders/${o.id}/deadline-requests`)).body;
+    return {
+      letter_due: t.letter_due.find((x) => x.id === o.id) ?? null,
+      moved: t.task_moved.some((x) => x.id === o.id),
+      morning: await expertMorningAlerts(S.sql, ex.user.id, today, new Date(), opts),
+      org: (await h.req('GET', `/api/orgs/${oP.id}/cases`)).body.cases.find((x) => x.id === o.id)?.task_moved ?? null,
+      org_long: (await orgPart(S.sql, org, S.app.locals.registry, today, { storage: S.providers.storage })).task_moved_long,
+      card: (await h.req('GET', `/api/specialists/${ex.user.id}/card`)).body.now.cases[0].task_moved,
+      short: dl.history?.findLast((x) => x.kind === 'letter')?.short ?? null,
+      remind: dl.task_moved?.asked?.remind ?? null,
+    };
+  };
+  // 1. Письмо со сроком завтра: «Сдать по письму» (2.341), в «Приложите письмо» не повторяется; утренняя сводка — своей
+  // строкой «срок по письму», не «приложите письмо» (исправлено); руководитель — «сдать по письму к …, завтра» в «Делах
+  // экспертов» и в карточке эксперта (2.348, 2.342 — исправлено); «История сроков» — пометка и «Попросить» (2.349).
+  let v = await look();
+  assert.deepEqual([v.letter_due?.letter_due.day, v.letter_due?.can_ask, v.moved], [short, true, false]);
+  assert.deepEqual([v.morning.letter_due, v.morning.task_moved, v.morning.task_due], [1, 0, 0]);
+  assert.match(digestText({ ...v.morning, due: 0, overdue: 0, visits: 0, links: 0 }),
+    /срок по письму о переносе сегодня, завтра или прошёл, а файла результата нет: 1 дело/);
+  assert.deepEqual([v.org?.day, v.org?.letter, v.org?.letter_due, v.org?.asked], [short, { was: due }, { days_left: 1, overdue: false, hot: true }, null]);
+  assert.deepEqual(v.card, v.org, 'карточка эксперта — как «Дела экспертов»');
+  assert.equal(v.org_long, 1);
+  assert.deepEqual(v.short, { deadline: late, can_ask: true });
+  // 2. Попросил письмо с новым сроком: строка «Сдать по письму» остаётся без кнопки, в сводке — тоже (банк ждёт отчёт
+  // завтра, исправлено); у руководителя — «эксперт попросил»; в «Истории сроков» кнопки нет.
+  const q2 = await ex.req('POST', `/api/orders/${o.id}/doc-requests`, { task_move: true });
+  const req2 = q2.body.requests.find((x) => x.item_id === 'task_move' && x.id !== req.id);
+  v = await look();
+  assert.equal(v.letter_due?.can_ask, false);
+  assert.deepEqual([v.morning.letter_due, v.morning.task_moved], [1, 0]);
+  assert.ok(v.org.asked && v.card.asked);
+  assert.deepEqual(v.short, { deadline: late, can_ask: false });
+  assert.equal(v.remind, null);
+  // 3. Письмо не пришло 4 дня — «Напомнить заказчику» (2.347) у строки «Сдать по письму».
+  await S.sql`update doc_requests set requested_at = now() - interval '4 days' where id = ${req2.id}`;
+  v = await look();
+  assert.equal(v.remind?.can_remind, true);
+  assert.equal(v.letter_due?.task_moved.asked.remind.can_remind, true);
+  // 4. Файл результата загружен — «Сдать по письму» уходит и в «Сегодня», и в сводке; ждём письмо — напоминание остаётся.
+  assert.equal((await ex.req('POST', `/api/orders/${o.id}/results`, Buffer.from('файл Отчёт.pdf'), {
+    raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Отчёт.pdf') } })).status, 201);
+  v = await look();
+  assert.equal(v.letter_due, null);
+  assert.equal(v.moved, true, 'письмо с новым сроком не пришло 4 дня — «Напомнить заказчику»');
+  assert.deepEqual([v.morning.letter_due, v.morning.task_moved], [0, 0]);
+  // 5. Пришло письмо с согласованным сроком — пометок нет нигде.
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/doc-requests/${req2.id}/attach`, {
+    document_id: (await put(`Банк сообщает: срок составления отчёта продлён, не позднее ${ruD(late)}`, 'Письмо о переносе 2.txt', 'other')).body.document.id })).status, 200);
+  v = await look();
+  assert.deepEqual([v.letter_due, v.moved, v.morning.letter_due, v.morning.task_moved, v.org, v.card, v.org_long, v.short, v.remind],
+    [null, false, 0, 0, null, null, 0, null, null]);
+  // 6. Сдано: в сводке за месяц — срок по письму о переносе (2.346), сдано не позже срока из последнего письма.
+  await S.sql`update orders set status = 'done' where id = ${o.id}`;
+  await S.sql`insert into order_status_history (order_id, from_status, to_status, side) values (${o.id}, 'review', 'done', 'dispatcher')`;
+  const rep = (await h.req('GET', `/api/orgs/${oP.id}/report`)).body.report;
+  const row = rep.experts.find((x) => x.user_id === ex.user.id);
+  assert.deepEqual([row.letter_cases, row.letter_late, row.task_cases ?? 0], [1, 0, 0]);
 });

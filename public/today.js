@@ -86,6 +86,18 @@ export function taskMovedText(m) {
     + `${dayRu(m.day)}${m.asked ? ` · эксперт попросил письмо у заказчика ${since(m.asked)}` : ' · эксперт письмо у заказчика ещё не просил'}`;
 }
 
+// Сдать по письму о переносе (2.348, как у эксперта в «Сегодня» 2.341): когда, срок дела и просил ли эксперт письмо с новым
+// сроком. Руководителю в «Делах экспертов» и в карточке эксперта (прогон 2.350); близко (прошёл или через 1–2 дня) — красным.
+export function taskLetterLines(m) {
+  const dayRu = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+  const d = m.letter_due;
+  const when = !d ? '' : d.overdue ? ', срок прошёл' : d.days_left === 0 ? ', сегодня' : d.days_left === 1 ? ', завтра' : '';
+  const doc = m.doc.toLowerCase().replace(/^письмо/, 'письму').replace(/^определение/, 'определению');
+  return [el('div', { class: d?.hot ? 'overdue' : 'muted', 'data-role': 'task-letter', text: `Сдать по ${doc} о переносе — к ${dayRu(m.day)}${when}` }),
+    el('div', { class: 'muted', 'data-role': 'task-letter-why', text: `${taskMovedText(m)} · ${m.asked
+      ? `эксперт попросил письмо с новым сроком ${since(m.asked)}` : 'эксперт письмо с новым сроком ещё не просил'}` })];
+}
+
 // Группа строк: заголовок с числом и строки-кнопки. Строка может быть { text, class } — например, красная (2.161).
 // extra(x) — кнопки под строкой (2.166: «Попросить перенести срок» у просроченного дела).
 function group(id, title, items, line, go, extra = () => []) {
