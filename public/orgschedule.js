@@ -4,6 +4,7 @@
 // Раскрыл эксперта — его дни подробно; нажатие на дело открывает его в «Делах экспертов». Заказчика и названий заявок
 // руководитель не видит — услуга и номер дела. Срок по заданию на оценку раньше срока дела (2.318) — дело сдавать в его
 // день: своя строка, у срока дела — «по заданию на оценку — к …»; в полосе и «сдать» дело считается в день срока по заданию.
+// Срок из письма о переносе (2.354) — «Сдать по письму о переносе», прежний срок и просил ли эксперт письмо с новым сроком.
 import { api, el, say } from '/common.js';
 import { awaySpan, dayRu } from '/order.js';
 import { focusOrgCase } from '/orgcases.js';
@@ -18,10 +19,20 @@ const STATUS = { review: 'сдано, ждёт проверки', awaiting_execu
 function itemText(i) {
   const ref = i.order_ref ? `${i.service} · ${i.order_ref}` : i.service;
   if (i.kind === 'task_due') {
+    // 2.354: срок из письма о переносе раньше срока дела — так и сказано, прежний срок и просил ли эксперт письмо с новым сроком.
+    const l = i.task_due.letter;
+    if (l) {
+      return { title: `Сдать по письму о переносе: ${ref}`, what: [STATUS[i.status], l.was ? `было — ${short(l.was)}` : null,
+        `срок в письме раньше срока дела (${short(i.deadline)})`,
+        l.ask?.asked_on ? `эксперт попросил письмо с новым сроком ${short(l.ask.asked_on)} — пока его нет`
+          : l.ask?.can_ask ? 'письмо с новым сроком эксперт ещё не просил' : null]
+        .filter(Boolean).join(' · ') };
+    }
     return { title: `Сдать ${i.task_due.by}: ${ref}`, what: [STATUS[i.status], `срок дела позже — ${short(i.deadline)}`].filter(Boolean).join(' · ') };
   }
   if (i.kind === 'deadline') {
-    return { title: `Сдать: ${ref}`, what: [STATUS[i.status], i.task_due ? `по заданию на оценку — к ${short(i.task_due)}` : null,
+    const letter = i.task_letter ? (i.task_letter.day === i.deadline ? 'срок по письму о переносе — тот же день' : `по письму о переносе — к ${short(i.task_letter.day)}`) : null;
+    return { title: `Сдать: ${ref}`, what: [STATUS[i.status], i.task_due ? `${i.task_due_letter ? 'по письму о переносе' : 'по заданию на оценку'} — к ${short(i.task_due)}` : letter,
       i.extend_to ? `просит перенести на ${short(i.extend_to)}` : null].filter(Boolean).join(' · ') };
   }
   if (i.kind === 'visit') return { title: `${i.time} · Выезд помощника: ${ref}`, what: '' };
