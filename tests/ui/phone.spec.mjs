@@ -16093,6 +16093,55 @@ test('2.344: руководитель — на подписи срок пере�
   for (const p of [ep, hp, cp]) await p.context().close();
 });
 
+// 2.352: на подписи организации срок по письму о переносе завтра — дело первым, с красной полосой и «подпишите до …»,
+// даже если срок другого дела раньше.
+test('2.352: руководитель — подпись организации, срок по письму о переносе завтра — первым и красным', async ({ browser, baseURL }) => {
+  test.setTimeout(120_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), ep = await ctx(), hp = await ctx();
+  const customer = await signIn(cp, '+79990035231');
+  const expert = await signIn(ep, '+79990035232'), head = await signIn(hp, '+79990035233');
+  const { orgId, ids } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Подпишите до письма ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Досрокова Вера' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const add = async (title, days) => (await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', $1, $2, $3, 'in_work', $4::date, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Срочная ул., 7"}') returning id`,
+      [title, customer.id, expert.id, inDays(days)])).rows[0].id;
+    const ids = { plain: await add('Без письма', 3), soon: await add('Письмо — завтра', 6) };
+    for (const k of Object.keys(ids)) await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [ids[k], expert.id]);
+    return { orgId: org.id, ids };
+  });
+  const ruD = (s) => s.split('-').reverse().join('.');
+  const put = async (id, day, name) => expect((await cp.request.post(`/api/orders/${id}/documents`, {
+    data: Buffer.from(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(day)}`),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': 'basis' },
+  })).status()).toBe(201);
+  await put(ids.soon, inDays(-2), 'Задание банка.txt');
+  await put(ids.soon, inDays(1), 'Письмо о переносе.txt');
+  for (const k of ['plain', 'soon']) {
+    const up = await ep.request.post(`/api/orders/${ids[k]}/results`, { data: Buffer.from(`%PDF-1.4 ${k}`), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent(`Отчёт ${k}.pdf`) } });
+    expect(up.status()).toBe(201);
+    expect((await ep.request.post(`/api/documents/${(await up.json()).document.id}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  }
+  const ref = (id) => `№ ${id.slice(0, 8).toUpperCase()}`;
+  await hp.goto(`/kabinet#org=${orgId}&to=sign`);
+  const items = hp.locator('#org-sign > li[data-item]');
+  await expect(items).toHaveCount(2);
+  await expect(items.first()).toHaveAttribute('data-item', ref(ids.soon));
+  await expect(items.first()).toHaveClass(/hot/);
+  await expect(hp.locator(`#org-sign > li[data-item="${ref(ids.plain)}"]`)).not.toHaveClass(/hot/);
+  const line = items.first().locator('[data-sig="task-due"]');
+  await expect(line).toHaveText(/^Срок по письму о переносе завтра — подпишите до \d+ \S+ · по заданию на оценку было \d+ \S+ \(«Письмо о переносе\.txt», стр\. 1\)$/);
+  await expect(line).toHaveClass(/overdue/);
+  await items.first().scrollIntoViewIfNeeded();
+  await shot(hp, 'g16-rukovoditel-podpis-pismo-zavtra');
+  for (const p of [ep, hp, cp]) await p.context().close();
+});
+
 // 2.347: письмо о переносе попросили у заказчика 4 дня назад — не пришло: в «Сегодня» строка «Приложите письмо о переносе»
 // снова, с «Напомнить заказчику»; в «Сроке» дела — сколько ждём и та же кнопка; напомнили — снова можно завтра.
 test('2.347: письмо о переносе не пришло 3 дня — напомнить заказчику', async ({ browser, baseURL }) => {
