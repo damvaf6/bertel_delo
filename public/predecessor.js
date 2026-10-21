@@ -2,7 +2,8 @@
 // что осталось в деле от прежнего: файлы результата (в сдачу не идут — нужен свой), другие файлы, черновик, фото осмотра,
 // выезд помощника, аналоги; нажатие на строку открывает нужный блок. Просьба прежнего о переносе срока, если ждёт ответа
 // диспетчера, — «Оставить просьбу» или «Отозвать». «Понятно, скрыть» помнится на этом телефоне для этого дела (пока нет
-// нерешённой просьбы). Задание на оценку в деле (2.328) — срок по нему и что из задания уже в черновике. Текст — через textContent.
+// нерешённой просьбы). Задание на оценку в деле (2.328) — срок по нему и что из задания уже в черновике; письмо о переносе срока и просил ли
+// прежний эксперт письмо с новым сроком (2.356). Текст — через textContent.
 import { api, el, say } from '/common.js';
 import { reveal } from '/fold.js';
 
@@ -64,8 +65,25 @@ function renderTask(t) {
   due.classList.toggle('hidden', !t.due);
   if (t.due) {
     due.className = t.due.hot ? 'overdue' : 'muted';
-    due.textContent = `Сдать ${t.due.by} — к ${dayRu(t.due.day)}${t.due.overdue ? ', срок прошёл' : ''} (срок дела позже; «${t.due.name}», стр. ${t.due.page})`;
+    due.textContent = t.letter
+      ? `Сдать по письму о переносе — к ${dayRu(t.due.day)}${t.due.overdue ? ', срок прошёл' : ''} (срок дела позже)`
+      : `Сдать ${t.due.by} — к ${dayRu(t.due.day)}${t.due.overdue ? ', срок прошёл' : ''} (срок дела позже; «${t.due.name}», стр. ${t.due.page})`;
   }
+  // 2.356: письмо о переносе срока и просьба письма у заказчика.
+  const l = t.letter;
+  $('pred-task-letter').classList.toggle('hidden', !l);
+  if (l) {
+    $('pred-task-letter').className = l.short ? 'overdue' : 'muted';
+    $('pred-task-letter').textContent = `Письмо о переносе: «${l.name}», стр. ${l.page} — срок ${l.was ? `перенесён с ${dayRu(l.was)} ` : ''}на ${dayRu(l.day)}`
+      + (l.short ? '. Срок в письме раньше срока дела: сдайте к нему или попросите письмо с новым сроком' : '');
+  }
+  const a = t.ask;
+  $('pred-task-ask-text').classList.toggle('hidden', !a);
+  if (a) {
+    $('pred-task-ask-text').textContent = `${a.by_prev ? 'Прежний эксперт' : 'Вы'} ${whenRu(a.at)} попросил${a.by_prev ? '' : 'и'} у заказчика письмо о переносе срока — `
+      + (a.came_at ? `пришло ${whenRu(a.came_at)}` : 'ещё не пришло');
+  }
+  $('pred-task-ask').classList.toggle('hidden', !t.can_ask);
   const note = !t.draft ? 'Черновика нет — подготовьте его: дату оценки, вид стоимости и другое из задания программа возьмёт сама.'
     : !t.items ? 'В черновике нет таблицы задания — сверить с заданием не с чем.'
     : !t.items.length ? 'Из задания в черновик брать нечего.' : '';
@@ -83,6 +101,16 @@ function renderTask(t) {
   $('pred-task-draft').classList.toggle('hidden', !bad.length);
 }
 $('pred-task-draft').addEventListener('click', go('draft-box'));
+$('pred-task-ask').addEventListener('click', async () => {
+  const btn = $('pred-task-ask');
+  btn.disabled = true;
+  try {
+    await api('POST', `/api/orders/${ctx.order.id}/doc-requests`, { task_move: true });
+    await ctx.reload();
+    say($('pred-msg'), 'Письмо с новым сроком попросили у заказчика — ему отправлено уведомление', 'ok');
+  } catch (err) { say($('pred-msg'), err.message); }
+  btn.disabled = false;
+});
 $('pred-task-open').addEventListener('click', go('task-box'));
 
 $('pred-keep').addEventListener('click', async () => {
