@@ -221,25 +221,31 @@ const firstSignQ = (sql, orgId, ids, { start, end }) => sql`
 
 // Просьбы о задании на оценку от банка за месяц (2.309) — по эксперту, который просил. Пункты — как `TASK_ITEMS` в
 // `ai-ops.mjs` (оттуда не берём: операции загружают этот файл).
+// 2.358: то же для просьб письма о переносе срока с новым сроком (пункт `task_move`, 2.326) — `TASK_MOVE` в `ai-ops.mjs`.
 const TASK_ITEMS = ['bank_task'];
-const bankTaskQ = (sql, orgId, ids, { start, end }) => sql`
+const LETTER_ITEMS = ['task_move'];
+const bankTaskQ = (sql, orgId, ids, { start, end }, items = TASK_ITEMS) => sql`
   select r.requested_by as user_id, r.order_id, r.requested_at, r.fulfilled_at from doc_requests r
   join org_members m on m.org_id = ${orgId} and m.user_id = r.requested_by
-  where r.requested_by = any(${ids}::uuid[]) and r.item_id = any(${TASK_ITEMS}::text[]) and r.cancelled_at is null
+  where r.requested_by = any(${ids}::uuid[]) and r.item_id = any(${items}::text[]) and r.cancelled_at is null
     and r.requested_at >= ${start} and r.requested_at < ${end} and r.requested_at >= m.created_at`;
 
-// { bank_task, bank_task_cases, bank_task_got, bank_task_days, bank_task_wait }: среднее — по пришедшим.
-function bankTask(rows) {
+// { bank_task, bank_task_cases, bank_task_got, bank_task_days, bank_task_wait }: среднее — по пришедшим. 2.358: с `k` =
+// 'letter_ask' — просьбы письма с новым сроком, и ещё `letter_ask_max` — дольше всего ждали письмо (дней).
+function bankTask(rows, k = 'bank_task') {
   const got = rows.filter((r) => r.fulfilled_at);
   const days = got.map((r) => (Date.parse(r.fulfilled_at) - Date.parse(r.requested_at)) / 86_400_000);
+  const round = (d) => Math.round(d * 10) / 10;
   return {
-    bank_task: rows.length,
-    bank_task_cases: new Set(rows.map((r) => r.order_id)).size,
-    bank_task_got: got.length,
-    bank_task_days: days.length ? Math.round((days.reduce((s, d) => s + d, 0) / days.length) * 10) / 10 : null,
-    bank_task_wait: rows.length - got.length,
+    [k]: rows.length,
+    [`${k}_cases`]: new Set(rows.map((r) => r.order_id)).size,
+    [`${k}_got`]: got.length,
+    [`${k}_days`]: days.length ? round(days.reduce((s, d) => s + d, 0) / days.length) : null,
+    [`${k}_wait`]: rows.length - got.length,
+    ...(k === 'bank_task' ? {} : { [`${k}_max`]: days.length ? round(Math.max(...days)) : null }),
   };
 }
+const letterAsk = (rows) => bankTask(rows, 'letter_ask');
 
 // 2.323: сданные за месяц дела с сроком по заданию на оценку (2.303) и из них сданные позже него — на сколько дней (в
 // среднем и больше всего). Срок задания читает операция (`taskDue`: дело → день или null) — этот файл операции загружают.
@@ -483,7 +489,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
   const since = (await sql`select to_char(created_at at time zone 'Europe/Moscow', 'YYYY-MM') as m from organizations
                            where id = ${orgId}`)[0]?.m ?? '';
   const none = { accepted: [], done: [], headReturns: [], resign: [], signed: [], firstSign: [], remarkItems: [], dispReturns: [], paid: [], active: [],
-    bankTask: [] };
+    bankTask: [], letterAsk: [] };
   const q = !ids.length ? none : {
     accepted: await sql`
       select f.specialist_id as user_id, count(distinct f.order_id)::int as n from order_offers f
@@ -497,6 +503,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
     signed: await signedQ(sql, orgId, ids, { start, end }),
     firstSign: await firstSignQ(sql, orgId, ids, { start, end }),
     bankTask: await bankTaskQ(sql, orgId, ids, { start, end }),
+    letterAsk: await bankTaskQ(sql, orgId, ids, { start, end }, LETTER_ITEMS),
     remarkItems: await sql`
       select r.executor_user_id as user_id, i.text, r.created_at as at from org_returns r
       join org_return_items i on i.return_id = r.id
@@ -554,6 +561,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
       ...taskLate(taskDues.filter((x) => x.user_id === e.user_id)),
       ...bankAfter(bankAfters.filter((x) => x.user_id === e.user_id)),
       ...ext(exts.filter((x) => x.user_id === e.user_id)),
+      ...letterAsk(q.letterAsk.filter((x) => x.user_id === e.user_id)),
       remarks: topRemarks(q.remarkItems.filter((i) => i.user_id === e.user_id), TOP_REMARKS_EXPERT).map(({ text, n }) => ({ text, n })),
       prev: cmp ? cmp.experts.get(e.user_id) : null,
       services: byService(done, registry).map(({ name, done: n }) => ({ name, n })),
@@ -572,7 +580,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
     experts: rows,
     total: { ...Object.fromEntries(keys.map((k) => [k, sum(k)])), avg_days: avgDays(all), ...resign(q.resign),
       ...egrnFirst(q.firstSign, registry), ...bankTask(q.bankTask), ...taskLate(taskDues),
-      ...bankAfter(bankAfters), ...ext(exts), prev: cmp ? cmp.total : null },
+      ...bankAfter(bankAfters), ...ext(exts), ...letterAsk(q.letterAsk), prev: cmp ? cmp.total : null },
     prev_month: cmp ? prevM : null,
     prev_month_name: cmp ? monthRu(prevM) : null,
     top_remarks: topRemarks(q.remarkItems, TOP_REMARKS),
@@ -706,6 +714,12 @@ export function reportCsv(orgName, r) {
       'Срок перенесён позже срока по заданию на оценку', 'Из них с письмом о переносе'],
       ...[...r.experts.filter((x) => x.ext_cases).map((x) => [x.full_name, x]), ['Итого', r.total]]
         .map(([name, x]) => [name, x.ext_cases, x.ext_times, x.ext_need, x.ext_letter])] : []),
+    // 2.358: только если за месяц просили письмо о переносе с новым сроком.
+    ...(r.total.letter_ask ? [[], ['Письмо о переносе с новым сроком', 'Попросили', 'В скольких делах', 'Пришло',
+      'Дней в среднем до письма', 'Больше всего дней', 'Ещё ждут'],
+      ...[...r.experts.filter((x) => x.letter_ask).map((x) => [x.full_name, x]), ['Итого', r.total]]
+        .map(([name, x]) => [name, x.letter_ask, x.letter_ask_cases, x.letter_ask_got, daysCell(x.letter_ask_days),
+          daysCell(x.letter_ask_max), x.letter_ask_wait])] : []),
     ...(r.top_remarks?.length ? [[], ['Частые замечания при возврате', 'Сколько раз', 'У скольких экспертов'],
       ...r.top_remarks.map((x) => [x.text, x.n, x.experts])] : []),
   ];

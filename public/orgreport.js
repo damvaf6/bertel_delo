@@ -116,6 +116,16 @@ const extMoves = (x) => {
       ? `${x.ext_letter} из ${x.ext_need}` : 'ни в одном'}` : null].filter(Boolean).join(' · ');
 };
 const extWarn = (x) => x.ext_letter < x.ext_need;
+// 2.358: «письмо о переносе с новым сроком попросили: 3 в 2 делах · пришло: 2, в среднем через 2 дня (дольше всего — 3 дня) ·
+// ещё ждут: 1»; не просили — пусто.
+const waitRu = (d) => (d < 0.1 ? 'меньше 2 часов' : daysRu(d));
+const letterAsk = (x) => {
+  if (!x.letter_ask) return '';
+  return [`письмо о переносе с новым сроком попросили: ${x.letter_ask}${x.letter_ask_cases !== x.letter_ask ? ` в ${x.letter_ask_cases} ${caseWord(x.letter_ask_cases)}` : ''}`,
+    x.letter_ask_got ? `пришло: ${x.letter_ask_got}${x.letter_ask_days != null ? `, в среднем через ${waitRu(x.letter_ask_days)}${
+      x.letter_ask_got > 1 && x.letter_ask_max !== x.letter_ask_days ? ` (дольше всего — ${waitRu(x.letter_ask_max)})` : ''}` : ''}` : 'пока не пришло ни одного',
+    x.letter_ask_wait && x.letter_ask_got ? `ещё ждут: ${x.letter_ask_wait}` : null].filter(Boolean).join(' · ');
+};
 // «сдано: 5 (было 3, +2) · в срок: 4 (было 4) · возвраты: 1 (было 2, −1)»; у эксперта без дел в обоих месяцах — пусто.
 const diff = (now, was) => `${now} (было ${was}${now > was ? `, +${now - was}` : now < was ? `, −${was - now}` : ''})`;
 const compare = (x) => {
@@ -175,6 +185,7 @@ async function load(month) {
     ...(letterLate(t) ? fact('Срок по письму о переносе', letterLate(t), t.letter_late ? 'warn' : '') : []),
     ...(bankAfter(t) ? fact('Дела для банка', bankAfter(t), t.bank_after ? 'warn' : '') : []),
     ...(extMoves(t) ? fact('Переносы срока', extMoves(t), extWarn(t) ? 'warn' : '') : []),
+    ...(letterAsk(t) ? fact('Письмо с новым сроком', letterAsk(t), t.letter_ask_wait ? 'warn' : '') : []),
     ...(report.current && t.overdue_now ? fact('Просрочено сейчас', String(t.overdue_now), 'overdue') : []),
     ...fact('Вознаграждение за сданные', rub(t.fee_kop), 'money-sum'),
     ...fact('Выплачено экспертам', rub(t.paid_kop)));
@@ -212,6 +223,7 @@ async function load(month) {
     ...(letterLate(x) ? [el('div', { class: x.letter_late ? 'warn' : 'muted', 'data-expert-letterlate': '', text: letterLate(x) })] : []),
     ...(bankAfter(x) ? [el('div', { class: x.bank_after ? 'warn' : 'muted', 'data-expert-bankafter': '', text: bankAfter(x) })] : []),
     ...(extMoves(x) ? [el('div', { class: extWarn(x) ? 'warn' : 'muted', 'data-expert-ext': '', text: extMoves(x) })] : []),
+    ...(letterAsk(x) ? [el('div', { class: x.letter_ask_wait ? 'warn' : 'muted', 'data-expert-letterask': '', text: letterAsk(x) })] : []),
     ...(x.remarks?.length ? [el('div', { class: 'muted', 'data-expert-remarks': '', text: `частые замечания: ${
       x.remarks.map((m) => `«${m.text}»${m.n > 1 ? ` ×${m.n}` : ''}`).join(', ')}` })] : []),
     el('div', { class: 'muted', text: `вознаграждение за сданные: ${rub(x.fee_kop)} · выплачено: ${rub(x.paid_kop)}` }))));
