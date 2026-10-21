@@ -38,7 +38,7 @@ import { caseMoves, caseRemind, transferTargets } from './org-ops.mjs';
 import { bankTaskMissing, docWait, egrnOld } from './docreq-ops.mjs';
 import { aiRecheck, aiSignHints, egrnRebuildLeft, egrnSwapLeft } from '../ai/ai.mjs';
 import { latest, taskDraftItems, taskDueFor, taskDueSign, taskMoveLetter } from './draft-ops.mjs';
-import { assignmentDocs } from './ai-ops.mjs';
+import { assignmentDocs, TASK_MOVE } from './ai-ops.mjs';
 import { READ_MAX_BYTES, extractPages, readableKind } from '../ai/extract.mjs';
 import { reportMade } from '../ai/report-checks.mjs';
 
@@ -502,6 +502,7 @@ export async function taskMadeCases(sql, storage, registry, userId, rows) {
 // заданию на оценку или по письму о переносе срока: предупреждение до подписи, без ИИ-проверки (как 2.321 в «Сегодня»).
 // { made, due, letter } по номеру файла; `letter` — срок из письма о переносе (прежний срок `was`), `can_ask` — можно
 // попросить у заказчика письмо с новым сроком одной кнопкой (как в «Сроке», 2.335), `asked_at` — такая просьба ждёт ответа.
+// Прогон 2.360: просил прежний эксперт (дело передали) — `by_prev`, чтобы новому не писать «Вы попросили».
 export async function taskMadeFiles(sql, storage, registry, order, files) {
   const out = new Map();
   if (!storage || !files.length || order.status !== 'in_work') return out;
@@ -525,7 +526,10 @@ async function madeLetter(sql, storage, registry, order, assignment, d) {
   if (!l) return null;
   const m = await taskMoved(sql, storage, registry, order);
   const waiting = m?.asked && !m.asked.came ? m.asked.at : null;
-  return { was: l.was, ...(l.was_letter ? { was_letter: true } : {}), can_ask: !!m && !waiting, asked_at: waiting };
+  const [a] = waiting ? await sql`select requested_by from doc_requests where order_id = ${order.id} and item_id = ${TASK_MOVE}
+                                  and cancelled_at is null order by id desc limit 1` : [];
+  return { was: l.was, ...(l.was_letter ? { was_letter: true } : {}), can_ask: !!m && !waiting, asked_at: waiting,
+    ...(a && a.requested_by !== order.executor_user_id ? { by_prev: true } : {}) };
 }
 
 // Срок дела приходится на дни, когда эксперт не принимает дела (2.113): отметка ещё действует, срок раньше дня возвращения.
