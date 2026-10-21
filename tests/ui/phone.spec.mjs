@@ -14209,7 +14209,7 @@ test('2.317: срок по заданию на оценку в «Моих сро
 
 // 2.339: «Мои сроки на две недели» — пришло письмо о переносе: срок по заданию из письма с пометкой «по письму о переносе»
 // и прежним сроком; у срока дела — «по письму о переносе — к …».
-test('2.339: срок по письму о переносе в «Моих сроках на две недели»', async ({ browser, baseURL }) => {
+test('2.339, 2.353: срок по письму о переносе в «Моих сроках на две недели»', async ({ browser, baseURL }) => {
   const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
   const ep = await ctx(), cp = await ctx();
   const expert = await signIn(ep, '+79990033911'), customer = await signIn(cp, '+79990033912');
@@ -14233,13 +14233,30 @@ test('2.339: срок по письму о переносе в «Моих сро
   const box = ep.locator('#schedule-box');
   const task = box.locator(`#schedule-days > li[data-day="${inDays(5)}"] li[data-schedule-item="task_due"]`);
   await expect(task).toContainText('Срок по заданию на оценку (по письму о переносе): Письмо о переносе в сроках: квартира');
-  await expect(task).toContainText(`письмо о переносе: «Письмо банка о переносе.txt», стр. 1 · было — ${long(inDays(2))} · срок дела позже — ${long(inDays(10))}`);
+  await expect(task).toContainText(`письмо о переносе: «Письмо банка о переносе.txt», стр. 1 · было — ${long(inDays(2))} · срок в письме раньше срока дела (${long(inDays(10))}) — сдайте к ${long(inDays(5))} или попросите письмо с новым сроком`);
+  // Срок дела не переносили по просьбе — просить письмо с новым сроком не о чем (2.353).
+  await expect(task.locator('[data-ask-letter]')).toHaveCount(0);
   await expect(box.locator(`#schedule-days > li[data-day="${inDays(2)}"] li[data-schedule-item="task_due"]`)).toHaveCount(0);
   const dl = box.locator(`#schedule-days > li[data-day="${inDays(10)}"] li[data-schedule-item="deadline"]`);
   await expect(dl).toContainText(`по письму о переносе — к ${long(inDays(5))}`);
   expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
   await task.scrollIntoViewIfNeeded();
   await shot(ep, '54v5-ekspert-sroki-po-pismu-o-perenose');
+  // 2.353: срок дела перенесён по согласованной просьбе, а в письме срок раньше — «Попросить письмо с новым сроком».
+  await db((c) => c.query(`insert into deadline_requests (order_id, requested_by, old_deadline, new_deadline, reason, outcome, decided_at)
+    values ($1, $2, $3::date, $4::date, 'Жду документы', 'approved', now())`, [A, expert.id, inDays(2), inDays(10)]));
+  await ep.reload();
+  const ask = task.locator('button[data-ask-letter]');
+  await expect(ask).toHaveText('Попросить письмо с новым сроком');
+  await task.scrollIntoViewIfNeeded();
+  await shot(ep, 'g17-ekspert-sroki-pismo-ranshe-poprosit');
+  await ask.click();
+  await expect(ep.locator('#schedule-msg')).toContainText('Письмо с новым сроком попросили у заказчика');
+  await expect(task).toContainText('письмо с новым сроком попросили');
+  await expect(ask).toHaveCount(0);
+  expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await task.scrollIntoViewIfNeeded();
+  await shot(ep, 'g18-ekspert-sroki-pismo-poprosili');
   // Второе письмо переносит срок на день срока дела — у срока дела «срок по письму о переносе — тот же день».
   await put(`Письмо банка\nСрок составления отчёта продлён: не позднее ${ru(inDays(10))}`, 'Второе письмо банка.txt');
   await ep.reload();

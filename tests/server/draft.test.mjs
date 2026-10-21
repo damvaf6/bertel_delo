@@ -1589,7 +1589,7 @@ test('2.317: «Мои сроки на две недели» и файл для �
   assert.deepEqual(of(await items(), 'task_due'), []);
 });
 
-test('2.339: «Мои сроки на две недели» — срок по заданию из письма о переносе с пометкой', async () => {
+test('2.339, 2.353: «Мои сроки на две недели» — срок по заданию из письма о переносе с пометкой и просьбой письма', async () => {
   const o = await inWork('Квартира: письмо о переносе в моих сроках');
   const ruD = (s) => s.split('-').reverse().join('.');
   const mine = (await S.sql`select to_char(deadline, 'YYYY-MM-DD') as d from orders where id = ${o.id}`)[0].d;
@@ -1602,6 +1602,7 @@ test('2.339: «Мои сроки на две недели» — срок по з
   await put(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(early)}`, 'Задание банка.txt');
   let s = await items();
   assert.equal(of(s, 'task_due')[0].task_due.letter, null);
+  assert.equal(of(s, 'task_due')[0].letter_ask, undefined);
   assert.equal(of(s, 'deadline')[0].task_due_letter, undefined);
   // Письмо с новым сроком, всё ещё раньше срока дела, — срок по заданию из письма с пометкой и прежним сроком.
   await put(`Письмо банка\nСрок составления отчёта продлён: не позднее ${ruD(moved)}`, 'Письмо банка о переносе.txt');
@@ -1611,6 +1612,15 @@ test('2.339: «Мои сроки на две недели» — срок по з
   assert.deepEqual(t.task_due, { day: moved, by: 'по письму заказчика', name: 'Письмо банка о переносе.txt', page: 1, letter: { was: early } });
   assert.equal(of(s, 'deadline')[0].task_due_letter, true);
   assert.equal(of(s, 'deadline')[0].task_letter, undefined);
+  // 2.353: срок в письме раньше срока дела — можно попросить письмо с новым сроком; попросили — ждём, кнопки нет.
+  assert.equal(t.letter_ask, null);
+  await S.sql`insert into deadline_requests (order_id, requested_by, old_deadline, new_deadline, reason, outcome, decided_at)
+              values (${o.id}, ${spec.user.id}, ${early}, ${mine}, 'Жду документы', 'approved', now())`;
+  assert.deepEqual(of(await items(), 'task_due')[0].letter_ask, { asked_at: null, can_ask: true });
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { task_move: true })).status, 201);
+  const ask = of(await items(), 'task_due')[0].letter_ask;
+  assert.equal(ask.can_ask, false);
+  assert.ok(ask.asked_at);
   const text = String((await spec.req('GET', '/api/specialist/me/schedule?format=ics', undefined, { binary: true })).body).replace(/\r\n /g, '');
   assert.ok(text.includes(`по письму о переносе (было ${ruD(early)})`));
   // Письмо переносит срок на день срока дела — отметки по заданию нет, у срока дела «по письму о переносе».
