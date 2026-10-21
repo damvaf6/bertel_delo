@@ -6,7 +6,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, addMember } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
-import { digestText, orgDigestText, orgDigestTo, sendOrgMorning } from '../../src/notify/morning.mjs';
+import { digestText, morningTo, orgDigestText, orgDigestTo, sendOrgMorning } from '../../src/notify/morning.mjs';
 
 let S, owner, dispatcher, spec, head, head2, idleHead, org, idleOrg;
 const FIELDS = { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, Руководящая ул., 21', area: '40' };
@@ -983,6 +983,11 @@ test('прогон 2.350: письмо о переносе со сроком з�
   v = await look();
   assert.equal(v.remind?.can_remind, true);
   assert.equal(v.letter_due?.task_moved.asked.remind.can_remind, true);
+  // 2.355: в утренней сводке — цифрой «напомните заказчику», сводка ведёт к «Сегодня».
+  assert.deepEqual([v.morning.letter_due, v.morning.letter_wait], [1, 1]);
+  assert.match(digestText({ ...v.morning, due: 0, overdue: 0, visits: 0, links: 0 }),
+    /письмо о переносе попросили, а оно не пришло 3 дня и дольше — напомните заказчику: 1 дело/);
+  assert.equal(morningTo({ ...v.morning, due: 0, overdue: 0, visits: 0, links: 0 }), 'today');
   // 4. Файл результата загружен — «Сдать по письму» уходит и в «Сегодня», и в сводке; файл не подписан — «Подпишите до …»
   // (2.351), там же напоминание: письмо ждём; в «Приложите письмо» не повторяется.
   assert.equal((await ex.req('POST', `/api/orders/${o.id}/results`, Buffer.from('файл Отчёт.pdf'), {
@@ -992,13 +997,18 @@ test('прогон 2.350: письмо о переносе со сроком з�
   assert.deepEqual([v.letter_sign?.letter_due.day, v.letter_sign?.file.filename, v.letter_sign?.can_ask], [short, 'Отчёт.pdf', false]);
   assert.equal(v.letter_sign.task_moved.asked.remind.can_remind, true, 'письмо с новым сроком не пришло 4 дня — «Напомнить заказчику»');
   assert.equal(v.moved, false);
-  assert.deepEqual([v.morning.letter_due, v.morning.task_moved], [0, 0]);
+  assert.deepEqual([v.morning.letter_due, v.morning.task_moved, v.morning.letter_wait], [0, 0, 1]);
+  // 2.355: напомнил — до завтра цифры нет.
+  assert.equal((await ex.req('POST', `/api/orders/${o.id}/doc-requests/remind`)).status, 201);
+  assert.equal((await look()).morning.letter_wait, 0);
+  await S.sql`update doc_reminders set created_at = now() - interval '25 hours' where order_id = ${o.id}`;
+  assert.equal((await look()).morning.letter_wait, 1);
   // 5. Пришло письмо с согласованным сроком — пометок нет нигде.
   assert.equal((await owner.req('POST', `/api/orders/${o.id}/doc-requests/${req2.id}/attach`, {
     document_id: (await put(`Банк сообщает: срок составления отчёта продлён, не позднее ${ruD(late)}`, 'Письмо о переносе 2.txt', 'other')).body.document.id })).status, 200);
   v = await look();
-  assert.deepEqual([v.letter_due, v.letter_sign, v.moved, v.morning.letter_due, v.morning.task_moved, v.org, v.card, v.org_long, v.short, v.remind],
-    [null, null, false, 0, 0, null, null, 0, null, null]);
+  assert.deepEqual([v.letter_due, v.letter_sign, v.moved, v.morning.letter_due, v.morning.task_moved, v.morning.letter_wait, v.org, v.card, v.org_long, v.short, v.remind],
+    [null, null, false, 0, 0, 0, null, null, 0, null, null]);
   // 6. Сдано: в сводке за месяц — срок по письму о переносе (2.346), сдано не позже срока из последнего письма.
   await S.sql`update orders set status = 'done' where id = ${o.id}`;
   await S.sql`insert into order_status_history (order_id, from_status, to_status, side) values (${o.id}, 'review', 'done', 'dispatcher')`;

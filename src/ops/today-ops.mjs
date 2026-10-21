@@ -333,7 +333,9 @@ export async function expertMorningAlerts(sql, userId, today, now = new Date(), 
   // Прогон 2.350: письмо о переносе пришло, а срок в нём раньше согласованного — сегодня, завтра или прошёл, своего файла
   // результата нет (строка «Сдать по письму о переносе» в «Сегодня», 2.341) — своей цифрой, не «приложите письмо»; и когда
   // письмо с новым сроком уже попросили: пока его нет, банк ждёт отчёт к сроку из прежнего письма.
-  let taskMovedN = 0, letterDueN = 0;
+  // 2.355: письмо о переносе попросили, а оно не пришло 3 дня и сегодня ещё не напоминали (кнопка «Напомнить заказчику» у
+  // строки письма в «Сегодня», 2.347) — своей цифрой «напомните заказчику»; считается и при «Сдать по письму» и «Подпишите до …».
+  let taskMovedN = 0, letterDueN = 0, letterWaitN = 0;
   const movedIds = new Set();
   if (registry && storage) {
     const own = await ownResults(sql, userId, rows.filter((x) => x.status === 'in_work'));
@@ -341,6 +343,7 @@ export async function expertMorningAlerts(sql, userId, today, now = new Date(), 
       const m = await taskMoved(sql, storage, registry, o);
       if (!m) continue;
       movedIds.add(o.id);
+      if (o.status === 'in_work' && m.asked?.remind?.can_remind) letterWaitN += 1;
       if (m.letter && o.status === 'in_work' && daysBetween(today, m.day) <= LETTER_DUE_DAYS && !own.has(o.id)) letterDueN += 1;
       else if (!(m.asked && !m.asked.came)) taskMovedN += 1;
     }
@@ -350,6 +353,7 @@ export async function expertMorningAlerts(sql, userId, today, now = new Date(), 
   return {
     task_moved: taskMovedN,
     letter_due: letterDueN,
+    letter_wait: letterWaitN,
     no_result: (await noResultOrders(sql, userId, hotRows, today)).filter((x) => !taskDue.some((t) => t.order.id === x.id)).length,
     task_due: taskDue.length,
     reply_wait: (await replyWaits(sql, rows.map((o) => o.id))).length,
