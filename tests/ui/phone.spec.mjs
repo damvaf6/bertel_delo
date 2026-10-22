@@ -10,6 +10,7 @@ import { DB_URL, TEST_TOKEN, BRIDGE_SECRET, testEnv } from '../helpers.mjs';
 import { signBridge } from '../../src/bridge/signature.mjs';
 import { makePdf, makeDocx } from '../tools/make-docs.mjs';
 import { extractPages } from '../../src/ai/extract.mjs';
+import { holidayName } from '../../src/orders/holidays.mjs';
 import fs from 'node:fs';
 import { testExternalSignature, testGoskeySignature } from '../../src/providers/sign.mjs';
 import crypto from 'node:crypto';
@@ -6011,8 +6012,11 @@ test('мои сроки на две недели (2.109): по дням — ср
   await expect(box.locator('#schedule-overdue li')).toContainText('Сдать: Дача в Рузе: сроки');
   await expect(box.locator('#schedule-overdue li')).toContainText(`срок был ${ru(inDays(-1))}`);
   const day = (n) => box.locator(`#schedule-days > li[data-day="${inDays(n)}"]`);
+  // Пустой праздник в будни (2.371) — своей строкой «праздник: …», не «свободно»: проверка не зависит от даты прогона.
+  const isHoliday = (n) => !!holidayName(inDays(n)) && ![0, 6].includes(new Date(`${inDays(n)}T00:00:00Z`).getUTCDay());
+  const freeText = (n) => (isHoliday(n) ? 'праздник' : 'свободно');
   await expect(day(0)).toContainText('Сегодня');
-  await expect(day(0)).toContainText('свободно');
+  await expect(day(0)).toContainText(freeText(0));
   await expect(day(1).locator('[data-schedule-item]')).toHaveCount(2);
   await expect(day(1).locator('[data-schedule-item]').nth(0)).toContainText('11:00 · Выезд помощника: Квартира на Садовой: сроки');
   await expect(day(1).locator('[data-schedule-item]').nth(1)).toContainText(`просите перенести на ${ru(inDays(5))} — ждёт ответа`);
@@ -6022,11 +6026,13 @@ test('мои сроки на две недели (2.109): по дням — ср
   await expect(day(4)).toContainText('сдано, ждёт проверки');
   await expect(day(5).locator('a.wait')).toContainText(`Просите перенести сюда срок: Квартира на Садовой: сроки`);
   await expect(day(5)).toContainText(`сейчас срок ${ru(inDays(1))}`);
-  // Пустые дни после 5-го — одной строкой «свободно» до конца двух недель.
-  await expect(day(6)).toContainText('свободно');
-  await expect(day(6)).toContainText(ru(inDays(13)));
-  await expect(day(3)).toContainText('свободно');
-  await expect(box.locator('#schedule-days > li')).toHaveCount(7);
+  // Пустые дни после 5-го — одной строкой «свободно» до конца двух недель (праздник в будни — своей строкой, 2.371).
+  await expect(day(6)).toContainText(freeText(6));
+  let groups = 0;
+  for (let n = 6; n <= 13; n++) if (n === 6 || isHoliday(n) !== isHoliday(n - 1)) groups++;
+  if (groups === 1) await expect(day(6)).toContainText(ru(inDays(13)));
+  await expect(day(3)).toContainText(freeText(3));
+  await expect(box.locator('#schedule-days > li')).toHaveCount(6 + groups);
   await box.scrollIntoViewIfNeeded();
   await shot(page, 'a11-ekspert-sroki-dve-nedeli');
   // Файл для календаря телефона (2.122): сроки и выезд, без названий заявок.
@@ -16932,4 +16938,58 @@ test('прогон 2.370: эксперт и руководитель по пач
   expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
   await shot(ep, 'h10-progon22-ekspert-podpisal');
   for (const p of [ep, hp, cp]) await p.context().close();
+});
+
+// 2.371: нерабочий праздник в «Моих сроках» и нагрузке экспертов. Сервер считает праздники по календарю (тест —
+// `tests/server/holidays.test.mjs`); здесь праздник подставлен в ответ на день срока, чтобы проверка не зависела от даты прогона.
+test('2.371: праздник в «Моих сроках» и нагрузке — «нерабочий день», срок в праздник — последний рабочий день перед ним', async ({ browser, baseURL }) => {
+  test.setTimeout(120_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), hp = await ctx(), cp = await ctx();
+  const customer = await signIn(cp, '+79990003711'), expert = await signIn(ep, '+79990003712'), head = await signIn(hp, '+79990003713');
+  const due = inDays(3), before = inDays(2), empty = inDays(5);
+  const { orgId } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Праздник в сроках ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Праздникова Нина' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Срок в праздник: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"deal","region":"moscow","object_type":"flat","address":"г. Москва, Праздничная ул., 4"}')`, [customer.id, expert.id, due]);
+    return { orgId: org.id };
+  });
+  const holiday = (d) => (d.date === due ? { ...d, weekend: true, holiday: 'День народного единства', work_before: before }
+    : d.date === empty ? { ...d, weekend: true, holiday: 'День России', work_before: inDays(4) } : d);
+  await ep.route('**/api/specialist/me/schedule', async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    body.schedule.days = body.schedule.days.map(holiday);
+    await route.fulfill({ response: res, json: body });
+  });
+  await ep.goto('/kabinet#specialist&to=schedule');
+  const day = ep.locator(`#schedule-days li[data-day="${due}"]`);
+  await expect(day.locator('[data-role="holiday"]')).toHaveText(new RegExp(`^Праздник, нерабочий день: День народного единства — заказчик в этот день не работает; сдайте лучше до него, последний рабочий день — .., ${Number(before.slice(8))} `));
+  await expect(day.locator('li[data-schedule-item="deadline"]')).toContainText('Срок в праздник: квартира');
+  const free = ep.locator(`#schedule-days li.free.holiday[data-day="${empty}"]`);
+  await expect(free).toContainText('праздник: День России');
+  expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await day.scrollIntoViewIfNeeded();
+  await shot(ep, 'i01-moi-sroki-prazdnik');
+
+  await hp.route('**/api/orgs/*/schedule', async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    body.schedule.days = body.schedule.days.map(holiday);
+    await route.fulfill({ response: res, json: body });
+  });
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const x = hp.locator(`#org-schedule-box li[data-expert-schedule="${expert.id}"]`);
+  await expect(x.locator(`.strip .cell.weekend[data-day="${due}"]`)).toHaveAttribute('title', /праздник: День народного единства/);
+  await x.locator('details[data-days] summary').click();
+  await expect(x.locator(`details[data-days] li[data-day="${due}"] [data-role="holiday"]`)).toContainText('сдайте лучше до него');
+  expect(await hp.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await x.scrollIntoViewIfNeeded();
+  await shot(hp, 'i02-nagruzka-prazdnik');
+  await ep.context().close(); await hp.context().close(); await cp.context().close();
 });
