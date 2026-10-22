@@ -122,6 +122,21 @@ function renderEmpty() {
   }, s.title)));
 }
 
+// 2.363: «Приложить как файл результата» при пустых разделах — первое нажатие останавливает: сколько пустых и какие, список
+// с переходом — на виду; второе нажатие при том же тексте прикладывает как есть (лишний раздел эксперт может оставить сам).
+// Остались пометки «[заполнить…]» — не останавливает: сервер всё равно не приложит и скажет об этом сам.
+let emptyAsked = null;
+function emptyStop() {
+  const t = $('draft-text');
+  const list = emptySections(t.value);
+  if (!list.length || emptyAsked === t.value || new RegExp(GAP.source, 'i').test(t.value)) return false;
+  emptyAsked = t.value;
+  renderEmpty();
+  $('draft-empty').scrollIntoView({ block: 'center' });
+  say($('draft-msg'), `Пустые разделы: ${list.length} — ${list.map((s) => `«${s.title}»`).join(', ')}. Нажмите раздел выше, чтобы заполнить, или «Приложить как файл результата» ещё раз, чтобы приложить как есть.`);
+  return true;
+}
+
 function toSection(title) {
   const t = $('draft-text');
   const s = emptySections(t.value).find((x) => x.title === title);
@@ -365,6 +380,7 @@ $('draft-word').addEventListener('click', () => run($('draft-word'), async () =>
 
 $('draft-attach').addEventListener('click', () => run($('draft-attach'), async () => {
   if (!$('draft-confirm').checked) return say($('draft-msg'), 'Отметьте, что Вы проверили текст и отвечаете за него');
+  if (emptyStop()) return;
   if ($('draft-text').value.trim() !== ctx.draft.body) await save();
   const { document: doc } = await api('POST', `/api/orders/${ctx.order.id}/draft/result`, { from: ctx.draft.id, confirm: true });
   await ctx.reload();
