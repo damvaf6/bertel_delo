@@ -53,6 +53,19 @@ export async function loadDossier(sql, userId, { languages = false } = {}) {
     .sort((a, b) => KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind) || Number(a.id) - Number(b.id));
 }
 
+// Аттестат или полис кончаются раньше срока дела (2.365): отчёт по оценке, где ИИ-проверка сверяет его с досье, надо
+// составить и подписать, пока документы действуют. Только исполнителю, только дело в работе со сроком; истёкшие — тоже.
+export async function dossierTermView(sql, registry, order, userId, today = todayMsk()) {
+  if (!['in_work', 'awaiting_executor'].includes(order.status) || !order.deadline || !needsValidDossier(registry, order)) return null;
+  const items = (await loadDossier(sql, userId)).filter((i) => BLOCKING_KINDS.includes(i.kind) && i.valid_until && i.valid_until < order.deadline);
+  if (!items.length) return null;
+  return {
+    deadline: order.deadline,
+    items: items.map((i) => ({ kind: i.kind, kind_name: i.kind_name, valid_until: i.valid_until, expired: i.valid_until < today }))
+      .sort((a, b) => a.valid_until.localeCompare(b.valid_until)),
+  };
+}
+
 // Что не так с досье — для эксперта, диспетчера в подборе и списка специалистов: истёкшие и скоро истекающие документы.
 export function dossierAlerts(items) {
   return items.filter((i) => i.state === 'expired' || i.state === 'soon')

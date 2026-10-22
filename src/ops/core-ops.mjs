@@ -16,6 +16,7 @@ import { taskMadeFiles } from './today-ops.mjs';
 import { orderCertificates, siteOrigin } from './certificate-ops.mjs';
 import { stepFiles } from './step-ops.mjs';
 import { caseCertificate } from '../translation/certificate.mjs';
+import { dossierTermView } from '../dossier/dossier.mjs';
 
 // Облако принимает запрос не больше 3,5 МБ (Yandex Serverless Containers) — через ядро только до 3 МБ (2.49).
 const MAX_FILE_BYTES = 3 * 1024 * 1024;
@@ -188,6 +189,8 @@ export function coreOps(cfg) {
           ...(mine ? { org_returns: await orgReturns(sql, order.id) } : {}),
           // Срок через 1–2 дня или прошёл, а своего файла результата нет (2.138) — предупреждение исполнителю; есть ли черновик.
           ...(mine ? { result_due: await resultDueView(sql, order, docs, actor.id) } : {}),
+          // Аттестат или полис из досье кончаются раньше срока дела (2.365) — предупреждение исполнителю.
+          ...(mine ? { dossier_term: await dossierTermView(sql, registry, order, actor.id) } : {}),
           // Очередь подписи (2.99): подписал эксперт, организация ещё нет — сколько ждёт и можно ли напомнить. Только исполнителю.
           ...(mine && signOrg ? { sign_wait: order.status === 'in_work' ? await signWait(sql, order) : null } : {}),
         };

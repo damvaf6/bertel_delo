@@ -280,3 +280,37 @@ test('руководитель (2.63): напоминания о сроках д
   await S.sql`delete from org_members where org_id = ${org.id} and user_id = ${expert.user.id}`;
   assert.deepEqual((await head.req('GET', '/api/today')).body.orgs.find((x) => x.id === org.id).dossier, []);
 });
+
+test('2.365: аттестат или полис кончаются раньше срока дела — предупреждение в деле только исполнителю; истёкший — отдельно', async () => {
+  const exp = await login(S, '+79990001408');
+  await makeSpecialist(S.sql, exp.user.id, { permits: [['expertise', 'vehicle']] });
+  const add = (body) => exp.req('POST', '/api/specialist/me/dossier', body);
+  const cert = await add({ kind: 'certificate', title: 'Оценка движимого имущества', number: '000365-1', valid_until: addDays(todayMsk(), 100) });
+  const pol = await add({ kind: 'policy', title: 'Тестовое страхование', number: 'П-365', valid_until: addDays(todayMsk(), 5), amount_rub: 5_000_000 });
+  assert.equal(cert.status, 201, JSON.stringify(cert.body));
+  assert.equal(pol.status, 201, JSON.stringify(pol.body));
+  const { o, offer } = await vehicleOrder(exp);
+  const term = async (c = exp) => (await c.req('GET', `/api/orders/${o.id}/documents`)).body.dossier_term;
+  assert.equal((await offer()).status, 200);
+  assert.equal((await step(exp, o, 'in_work')).status, 200);
+
+  // Полис до срока дела (+10) не дотягивает — в деле; аттестат действует дольше — нет.
+  const t = await term();
+  assert.equal(t.deadline, addDays(todayMsk(), 10));
+  assert.deepEqual(t.items, [{ kind: 'policy', kind_name: 'Полис страхования оценщика', valid_until: addDays(todayMsk(), 5), expired: false }]);
+  // Заказчику и диспетчеру — ничего.
+  assert.equal(await term(owner), undefined);
+  assert.equal(await term(dispatcher), undefined);
+
+  // Истёк — с пометкой «истёк».
+  await S.sql`update dossier_items set valid_until = ${addDays(todayMsk(), -1)}::date where id = ${pol.body.id}`;
+  assert.deepEqual((await term()).items.map((i) => [i.kind, i.expired]), [['policy', true]]);
+  // Новый полис дольше срока дела — предупреждения нет.
+  await S.sql`update dossier_items set valid_until = ${addDays(todayMsk(), 30)}::date where id = ${pol.body.id}`;
+  assert.equal(await term(), null);
+  // Дело сдано — не показываем.
+  await S.sql`update dossier_items set valid_until = ${addDays(todayMsk(), 3)}::date where id = ${cert.body.id}`;
+  assert.deepEqual((await term()).items.map((i) => i.kind), ['certificate']);
+  await S.sql`update orders set status = 'done' where id = ${o.id}`;
+  assert.equal(await term(), null);
+});
