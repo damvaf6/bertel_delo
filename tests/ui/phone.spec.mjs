@@ -8611,7 +8611,7 @@ test('прогон 2.160: эксперт и руководитель по пач
 
   // Руководитель: «Сегодня» — сколько ждёт подпись и сколько пунктов эксперт отметил (как в «Делах экспертов»).
   await hp.goto('/kabinet');
-  await expect(hp.locator(`li[data-today-item="org-sign-${orgId}"]`)).toContainText(/файлов: 1 · эксперт подписал .+ — ждёт 3 дн\./);
+  await expect(hp.locator(`li[data-today-item="org-sign-long-${orgId}"]`)).toContainText(/файлов: 1 · эксперт подписал .+ — ждёт 3 дн\./);
   await expect(hp.locator(`li[data-today-item="org-returned-${orgId}"]`)).toContainText('3 дн. назад · эксперт отметил исправленными 1 из 2');
   await shot(hp, 'c13-progon-rukovoditel-segodnya');
   // «Дела экспертов»: отборы пачки, у каждого дела — своё.
@@ -8660,12 +8660,15 @@ test('«Ждут подписи организации» в «Сегодня» �
   await signed(A, 'Отчёт свежий.pdf', 2);
   await signed(B, 'Отчёт давний.pdf', 73);
   await hp.goto('/kabinet');
-  const items = hp.locator(`li[data-today-item="org-sign-${orgId}"]`);
+  // 2.374: долго ждущее — своей строкой «Ждут подписи организации 2 дня и дольше» выше общей.
+  const items = hp.locator(`li[data-today-item^="org-sign-"]`);
   await expect(items).toHaveCount(2);
   const ref = (id) => `№ ${id.slice(0, 8).toUpperCase()}`;
+  await expect(items.nth(0)).toHaveAttribute('data-today-item', `org-sign-long-${orgId}`);
   await expect(items.nth(0)).toContainText(ref(B));
   await expect(items.nth(0).locator('[data-role="sign-since"]')).toHaveClass(/overdue/);
   await expect(items.nth(0).locator('[data-role="sign-since"]')).toContainText('— ждёт 3 дн. 1 ч');
+  await expect(items.nth(1)).toHaveAttribute('data-today-item', `org-sign-${orgId}`);
   await expect(items.nth(1)).toContainText(ref(A));
   await expect(items.nth(1).locator('[data-role="sign-since"]')).toHaveClass(/muted/);
   await expect(items.nth(1).locator('[data-role="sign-since"]')).toContainText('— ждёт 2 ч');
