@@ -16994,3 +16994,34 @@ test('2.371: праздник в «Моих сроках» и нагрузке �
   await shot(hp, 'i02-nagruzka-prazdnik');
   await ep.context().close(); await hp.context().close(); await cp.context().close();
 });
+
+test('2.372: то же объявление другой ссылкой — предупреждение сразу при добавлении и в списке аналогов', async ({ browser, baseURL }) => {
+  const sp = await (await phoneContext(browser, baseURL)).newPage();
+  const cp = await (await phoneContext(browser, baseURL)).newPage();
+  const customer = await signIn(cp, '+79990003721'), expert = await signIn(sp, '+79990003722');
+  const id = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Квартира: повтор аналога', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"court","region":"moscow","object_type":"flat","address":"г. Москва, тестовая ул., 9","area":54.3}') returning id`, [customer.id, expert.id, inDays(9)]);
+    return o.id;
+  });
+  await sp.goto(`/kabinet#order=${id}`);
+  const box = sp.locator('#analogs-box');
+  await expect(box).toBeVisible();
+  await box.getByLabel('Ссылка на объявление').fill('https://www.avito.ru/moskva/kvartiry/2-k._kvartira_54m_4123456789');
+  await box.getByRole('button', { name: 'Добавить аналог' }).click();
+  await expect(sp.locator('#analogs-msg')).toHaveText('Аналог добавлен — заполните признаки и подтвердите');
+  // То же объявление в мобильной версии сайта — номер объявления тот же.
+  await box.getByLabel('Ссылка на объявление').fill('https://m.avito.ru/4123456789');
+  await box.getByRole('button', { name: 'Добавить аналог' }).click();
+  await expect(sp.locator('#analogs-msg')).toContainText('То же объявление, что аналог 1 (совпадает номер объявления)');
+  await expect(sp.locator('#analogs-msg')).toHaveClass(/error/);
+  const second = sp.locator('#analogs-list li.analog').nth(1);
+  await expect(second.locator('.analog-warn')).toContainText('То же объявление, что аналог 1');
+  await expect(sp.locator('#analogs-list li.analog').first().locator('.analog-warn')).not.toContainText('аналог 1');
+  await expect(sp.locator('#analogs-hints')).toContainText('Есть повторяющиеся аналоги: аналог 2');
+  await sp.locator('#analogs-msg').scrollIntoViewIfNeeded();
+  await shot(sp, 'i03-analog-povtor-obyavleniya');
+});

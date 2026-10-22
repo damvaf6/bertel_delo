@@ -195,7 +195,9 @@ $('analogs-form').addEventListener('submit', (e) => {
     $('analogs-form').reset();
     $('analogs-file-name').textContent = 'Файл не выбран';
     render(data);
-    say($('analogs-msg'), note, 'ok');
+    // Повтор ссылки, того же объявления или объекта (2.372) — сразу, а не только в списке.
+    const repeat = data.analogs?.find((a) => a.id === r.id)?.repeat;
+    say($('analogs-msg'), repeat ? `${note}. ${repeat}` : note, repeat ? 'error' : 'ok');
     document.querySelector(`[data-analog="${r.id}"]`)?.scrollIntoView({ block: 'start' });
   });
 });

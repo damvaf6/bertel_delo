@@ -9,7 +9,7 @@ import { editsDraft, seesDraft } from '../access/policy.mjs';
 import { ANALOG_TEXT_MAX, analogMessages, askAi, parseJsonAnswer } from '../ai/ai.mjs';
 import { extractPages } from '../ai/extract.mjs';
 import { OCR_MIME } from '../providers/ocr.mjs';
-import { adjusted, adjustKinds, analogFields, analogWarnings, cleanAdjustments, cleanAnalogValues, cleanUrl, hostOf, listPositions, missingAnalog, searchHints, suggestionValues } from '../analogs/analogs.mjs';
+import { adjusted, adjustKinds, analogFields, analogWarnings, cleanAdjustments, cleanAnalogValues, cleanUrl, hostOf, listPositions, missingAnalog, repeatText, searchHints, suggestionValues } from '../analogs/analogs.mjs';
 import { audit, text as textFrom } from './util.mjs';
 
 // Облако принимает запрос не больше 3,5 МБ (Yandex Serverless Containers) — через ядро только до 3 МБ (2.49).
@@ -53,7 +53,7 @@ async function ownAnalog(sql, order, id, { lock = false } = {}) {
 
 export const loadAnalogs = (sql, orderId) => sql`select * from order_analogs where order_id = ${orderId} and deleted_at is null order by id`;
 
-const publicAnalog = (a, warnings) => ({
+const publicAnalog = (a, warnings, repeat) => ({
   id: String(a.id),
   url: a.url,
   host: hostOf(a.url),
@@ -66,6 +66,8 @@ const publicAnalog = (a, warnings) => ({
   confirmed_at: a.confirmed_at,
   file: a.file_key ? { name: a.file_name, mime: a.file_mime, size: a.file_size, sha256: a.file_sha256, received_at: a.received_at } : null,
   warnings: warnings ?? [],
+  // Повторяет более ранний аналог (2.372): текст для сообщения сразу после добавления.
+  repeat: repeat ? repeatText(repeat) : null,
   // Взят из своего прошлого дела с тем же объектом (2.118): подтверждение снято — сверить объявление на новую дату.
   copied: !!a.copied_from,
 });
@@ -73,11 +75,11 @@ const publicAnalog = (a, warnings) => ({
 async function view({ sql, actor, order, registry, providers }) {
   const spec = registry.analogs(order.module, order.service);
   const list = await loadAnalogs(sql, order.id);
-  const { per, hints, confirmed, min } = analogWarnings(spec, order, list);
+  const { per, repeats, hints, confirmed, min } = analogWarnings(spec, order, list);
   // Исполнитель отметил, что сравнительный подход не применяется (2.33), — аналоги не нужны, не напоминаем о них.
   const needed = !(order.approaches?.length && !order.approaches.includes('comparative'));
   return {
-    analogs: list.map((a) => publicAnalog(a, per.get(a.id))),
+    analogs: list.map((a) => publicAnalog(a, per.get(a.id), repeats.get(String(a.id)))),
     fields: analogFields(spec),
     adjust_kinds: adjustKinds(spec).map(({ id, name }) => ({ id, name })),
     min: needed ? min : 0,
@@ -117,7 +119,7 @@ export function analogOps() {
       },
     },
     {
-      // Новый аналог — по ссылке. Повтор ссылки в деле не запрещён, но сразу виден предупреждением.
+      // Новый аналог — по ссылке. Повтор ссылки или того же объявления в деле не запрещён, но сразу виден: `repeat` (2.372).
       id: 'analogs.add', method: 'POST', path: '/api/orders/:id/analogs', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
       async handler(ctx) {
