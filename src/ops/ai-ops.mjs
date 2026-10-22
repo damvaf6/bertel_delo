@@ -267,10 +267,19 @@ export function aiOps() {
         // 2.146: день съёмки — по часам телефона, если он их передал; день получения тоже считается днём осмотра.
         const shots = names.includes('report_dates')
           ? await sql`select to_char(coalesce(p.shot_at, p.received_at) at time zone 'Europe/Moscow', 'YYYY-MM-DD') as day,
-              to_char(p.received_at at time zone 'Europe/Moscow', 'YYYY-MM-DD') as got from inspection_photos p
+              to_char(p.received_at at time zone 'Europe/Moscow', 'YYYY-MM-DD') as got, p.visit_id is not null as visit from inspection_photos p
               join documents d on d.id = p.document_id where d.order_id = ${order.id} and d.deleted_at is null`
           : [];
-        const inspectionDays = [...new Set(shots.map((r) => r.day))];
+        // 2.373: и день завершённого выезда помощника на объект — даже если фото с выезда нет (только данные с объекта).
+        const visits = names.includes('report_dates')
+          ? await sql`select to_char(finished_at at time zone 'Europe/Moscow', 'YYYY-MM-DD') as day from onsite_visits
+                      where order_id = ${order.id} and finished_at is not null and cancelled_at is null`
+          : [];
+        const inspectionBy = {
+          link: [...new Set(shots.filter((r) => !r.visit).map((r) => r.day))],
+          visit: [...new Set([...shots.filter((r) => r.visit).map((r) => r.day), ...visits.map((r) => r.day)])],
+        };
+        const inspectionDays = [...new Set([...inspectionBy.link, ...inspectionBy.visit])];
         const inspectionUploadDays = [...new Set(shots.map((r) => r.got))];
         // 2.154: день подписи эксперта по каждому файлу (по Москве); не подписан — сверка с сегодняшним днём.
         const signs = names.includes('report_dates') && files.length
@@ -286,7 +295,7 @@ export function aiOps() {
         const egrn = names.includes('area_match') || names.includes('cadastral_match') || names.includes('floor_match') || names.includes('building_match') || names.includes('use_match') || names.includes('room_kind_match') || names.includes('cad_value_match') || names.includes('rights_match') || names.includes('share_egrn_match') || names.includes('encumbrance_match') || names.includes('address_match') || names.includes('egrn_doc_match') ? await egrnDocs(sql, providers.storage, order) : [];
         // 2.288: заказчик в заявке — владелец заявки; имя сверяется здесь же, модели не передаётся.
         const [owner] = names.includes('customer_match') ? await sql`select full_name from users where id = ${order.owner_user_id}` : [];
-        const auto = runAutoChecks(names, files, { fields: order.fields ?? {}, dossier, basis, service: order.service, analogs, inspectionDays, inspectionUploadDays, signedOn, assignment, egrn, customer: owner?.full_name ?? null, today: dossier.today });
+        const auto = runAutoChecks(names, files, { fields: order.fields ?? {}, dossier, basis, service: order.service, analogs, inspectionDays, inspectionUploadDays, inspectionBy, signedOn, assignment, egrn, customer: owner?.full_name ?? null, today: dossier.today });
         const found = Object.fromEntries(rules.map((r) => [r.id, (r.auto ?? []).flatMap((a) => auto[a] ?? [])]));
         // Модель недоступна или лимит исчерпан, но автоматические находки есть — показываем их, а не ошибку.
         let out;

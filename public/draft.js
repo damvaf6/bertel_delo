@@ -243,7 +243,8 @@ export async function rebuildWord() {
   return doc;
 }
 // 2.289: замена по заданию на оценку (у находки есть «откуда» — g.from) или по выписке ЕГРН — для отметки в журнале.
-const swapKind = (g) => (g.from ? 'task' : 'egrn');
+// 2.373: замена даты осмотра по делу (kind 'shot') — без отметки: сервер берёт только 'egrn' и 'task'.
+const swapKind = (g) => (g.kind === 'shot' ? 'shot' : g.from ? 'task' : 'egrn');
 // Новый текст — на экран и в черновик; не сохранилось — на экране прежний текст. swap — отметка замены кнопкой (2.289).
 async function putText(body, from, len, swap) {
   const t = $('draft-text');

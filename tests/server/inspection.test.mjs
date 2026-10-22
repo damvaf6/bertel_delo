@@ -618,6 +618,55 @@ test('2.146: день осмотра — по часам телефона и п�
     [`В отчёте сказано «без осмотра», а в деле есть фото осмотра от ${ru(shotDay)} — проверьте, был ли осмотр`]);
 });
 
+// 2.373: дата осмотра в отчёте — и с днём выезда помощника (даже без фото с выезда); находка называет, откуда день, и
+// даёт «Заменить на дату осмотра из дела», если осмотр в деле был в один день; дней несколько — без замены.
+test('2.373: дата осмотра в отчёте сверяется и с выездом помощника; один день осмотра — замена в черновике', async () => {
+  const ru = (d) => d.split('-').reverse().join('.');
+  const today = todayMsk();
+  // Прежний файл результата удаляется: ИИ сверяет даты по самому длинному отчёту в деле.
+  const check = async (o, text) => {
+    await S.sql`update documents set deleted_at = now() where order_id = ${o.id} and kind = 'result' and deleted_at is null`;
+    assert.equal((await spec.req('POST', `/api/orders/${o.id}/results`, Buffer.from(text), {
+      raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('отчёт.txt') },
+    })).status, 201);
+    const r = await spec.req('POST', `/api/orders/${o.id}/review/ai`);
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    return r.body.ai.items.find((i) => i.id === 'requisites').found ?? [];
+  };
+  // Только фото по ссылке, один день — замена на него, запись даты — как в отчёте.
+  const a = await inWork('Осмотр — замена даты');
+  const { token } = await issue(a, { days: 1 });
+  assert.equal((await shoot(token, 'facade', { headers: GEO })).status, 201);
+  const [f1] = await check(a, `Отчёт об оценке\nДата осмотра: 01.02.2026\nДата составления отчёта: ${ru(today)}`);
+  assert.equal(f1.text, `Дата осмотра в отчёте — 01.02.2026, а фото осмотра в деле сделаны ${ru(today)} — проверьте дату осмотра`);
+  assert.deepEqual(f1.shot, { bad: '01.02.2026', right: ru(today) });
+  const [f2] = await check(a, `Отчёт об оценке\nДата осмотра объекта оценки — 1 февраля 2026 г.\nДата составления отчёта: ${ru(today)}`);
+  assert.deepEqual(f2.shot, { bad: '1 февраля 2026', right: ru(today) });
+
+  // Выезд помощника без фото, завершён 3 дня назад: его день — день осмотра; находка называет источник.
+  const b = await inWork('Осмотр — выезд без фото');
+  const visitDay = addDays(today, -3);
+  await S.sql`insert into onsite_visits (order_id, helper_id, assigned_by, planned_at, finished_at)
+              values (${b.id}, ${spec2.user.id}, ${spec.user.id}, now() - interval '4 days', (${visitDay}::date + time '12:00') at time zone 'Europe/Moscow')`;
+  assert.deepEqual(await check(b, `Отчёт об оценке\nДата осмотра: ${ru(visitDay)}\nДата составления отчёта: ${ru(today)}`), [], 'день выезда');
+  const [f3] = await check(b, `Отчёт об оценке\nДата осмотра: 01.02.2026\nДата составления отчёта: ${ru(today)}`);
+  assert.equal(f3.text, `Дата осмотра в отчёте — 01.02.2026, а в деле осмотр: выезд помощника на объект — ${ru(visitDay)} — проверьте дату осмотра`);
+  assert.deepEqual(f3.shot, { bad: '01.02.2026', right: ru(visitDay) });
+  // И фото по ссылке сегодня: дней осмотра два — оба в находке, замены нет (какой верный, решает эксперт).
+  const { token: t2 } = await issue(b, { days: 1 });
+  assert.equal((await shoot(t2, 'facade', { headers: GEO })).status, 201);
+  const [f4] = await check(b, `Отчёт об оценке\nДата осмотра: 01.02.2026\nДата составления отчёта: ${ru(today)}`);
+  assert.equal(f4.text, `Дата осмотра в отчёте — 01.02.2026, а в деле осмотр: фото по ссылке владельца — ${ru(today)}; выезд помощника на объект — ${ru(visitDay)} — проверьте дату осмотра`);
+  assert.equal(f4.shot, undefined);
+  const [f5] = await check(b, `Отчёт об оценке\nОценка проведена без осмотра.\nДата составления отчёта: ${ru(today)}`);
+  assert.match(f5.text, /^В отчёте сказано «без осмотра», а в деле осмотр: фото по ссылке владельца/);
+  // Отменённый выезд — не день осмотра.
+  const c = await inWork('Осмотр — выезд отменён');
+  await S.sql`insert into onsite_visits (order_id, helper_id, assigned_by, planned_at, finished_at, cancelled_at)
+              values (${c.id}, ${spec2.user.id}, ${spec.user.id}, now(), now(), now())`;
+  assert.deepEqual(await check(c, `Отчёт об оценке\nДата осмотра: 01.02.2026\nДата составления отчёта: ${ru(today)}`), []);
+});
+
 // 2.196: ссылка перестанет действовать в ближайшие сутки, а «Готово» не нажато — строка в «Сегодня» и в деле, «Продлить».
 const todayExpiring = async (c) => (await c.req('GET', '/api/today')).body.expert?.inspect_expiring ?? [];
 const expiresIn = (linkId, hours) => S.sql`update inspection_links set expires_at = now() + make_interval(hours => ${hours}) where id = ${linkId}`;

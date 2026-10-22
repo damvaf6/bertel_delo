@@ -1876,15 +1876,29 @@ function inspectDates(doc) {
     const hits = [];
     for (const l of INSPECT_LABELS) {
       for (const m of page.matchAll(new RegExp(l, 'giu'))) {
-        const day = dateAfter(page.slice(m.index, m.index + m[0].length + 60), l);
-        if (day) hits.push({ day, index: m.index });
+        const part = page.slice(m.index, m.index + m[0].length + 60);
+        const day = dateAfter(part, l);
+        if (day) hits.push({ day, index: m.index, raw: rawDateAfter(part, l) });
       }
     }
     for (const h of hits.sort((a, b) => a.index - b.index)) {
-      if (!seen.has(h.day)) seen.set(h.day, { day: h.day, page: i, quote: lineAround(page, h.index) });
+      if (!seen.has(h.day)) seen.set(h.day, { day: h.day, page: i, quote: lineAround(page, h.index), raw: h.raw });
     }
   });
   return [...seen.values()];
+}
+// 2.373: дата после подписи так, как она написана в тексте («15.10.2026», «15 октября 2026»), — для замены в черновике.
+function rawDateAfter(text, label) {
+  const m = text.match(new RegExp(`${label}[^\\d\\n]{0,40}(?:\\d{1,2}\\.\\d{1,2}\\.\\d{4}|\\d{1,2}\\s+[а-яё]+\\s+\\d{4})`, 'iu'));
+  return m ? m[0].slice(m[0].search(/\d/)) : null;
+}
+// 2.373: где в деле осмотр — по ссылке владельца и выезд помощника отдельно (ctx.inspectionBy); без разбивки — как раньше.
+function inspectionSeen(ctx, days) {
+  const by = ctx.inspectionBy;
+  if (!by?.visit?.length) return `фото осмотра в деле сделаны ${days.map(ruDate).join(', ')}`;
+  const parts = [...(by.link?.length ? [`фото по ссылке владельца — ${[...by.link].sort().map(ruDate).join(', ')}`] : []),
+    `выезд помощника на объект — ${[...by.visit].sort().map(ruDate).join(', ')}`];
+  return `в деле осмотр: ${parts.join('; ')}`;
 }
 function reportDates(docs, ctx) {
   const d = mainReport(docs) ?? docs[0];
@@ -1940,14 +1954,18 @@ function reportDates(docs, ctx) {
   const ok = new Set([...days, ...(ctx.inspectionUploadDays ?? [])]);
   const none = text.match(NO_INSPECT);
   if (days.length && !none) {
+    // 2.373: осмотр в деле в один день — «Заменить на дату осмотра из дела» в черновике (shot); дней несколько — только находка.
+    const [y, m, dd] = (days.length === 1 ? days[0] : '').split('-');
     for (const f of found.filter((x) => !ok.has(x.day))) {
-      out.push({ doc: d, page: f.page, quote: f.quote, text: `Дата осмотра в отчёте — ${ruDate(f.day)}, а фото осмотра в деле сделаны ${days.map(ruDate).join(', ')} — проверьте дату осмотра` });
+      out.push({ doc: d, page: f.page, quote: f.quote, ...(dd && f.raw ? { shot: { bad: f.raw, right: `${dd}.${m}.${y}` } } : {}),
+        text: `Дата осмотра в отчёте — ${ruDate(f.day)}, а ${inspectionSeen(ctx, days)} — проверьте дату осмотра` });
     }
   }
   if (days.length && none) {
     const i = Math.max(0, (d.pages ?? []).findIndex((p) => NO_INSPECT.test(p)));
+    const seen = ctx.inspectionBy?.visit?.length ? `${inspectionSeen(ctx, days)}` : `в деле есть фото осмотра от ${days.map(ruDate).join(', ')}`;
     out.push({ doc: d, page: i, quote: lineAround(d.pages[i], Math.max(0, d.pages[i].search(NO_INSPECT))),
-      text: `В отчёте сказано «${clean(none[0])}», а в деле есть фото осмотра от ${days.map(ruDate).join(', ')} — проверьте, был ли осмотр` });
+      text: `В отчёте сказано «${clean(none[0])}», а ${seen} — проверьте, был ли осмотр` });
   }
   if (!val) return out;
   const told = new Set();
@@ -3028,7 +3046,7 @@ export const AUTO_CHECKS = Object.freeze({
   court_order: 'по определению суда — номер определения и ст. 307 УК РФ',
   vin_match: 'VIN в отчёте — как в заявке',
   date_order: 'дата составления отчёта не раньше даты оценки',
-  report_dates: 'даты по всему отчёту: осмотр не позже составления, составление и дата оценки не позже подписи, составление не раньше задания на оценку и не позже срока из него, дата оценки не раньше осмотра, одна дата осмотра и в дни фото осмотра в деле, объявления аналогов не позже даты оценки',
+  report_dates: 'даты по всему отчёту: осмотр не позже составления, составление и дата оценки не позже подписи, составление не раньше задания на оценку и не позже срока из него, дата оценки не раньше осмотра, одна дата осмотра и в дни фото осмотра или выезда помощника в деле, объявления аналогов не позже даты оценки',
   reg_match: 'госномер в отчёте — как в заявке',
   mileage_match: 'пробег в отчёте — как в заявке (с запасом 10%)',
   approach_weights: 'веса подходов в согласовании в сумме 1',
@@ -3073,6 +3091,8 @@ export function runAutoChecks(names, docs, ctx = {}) {
       // 2.231: находка сверена с заявкой или заданием на оценку, а не с выпиской — то же «Исправить в черновике», без выписки.
       // 2.364: сумма прописью не та, что цифрами — «Исправить в черновике» выделяет слова и говорит, как верно.
       ...(f.words ? { words: { bad: clean(f.words.bad).slice(0, 200), right: clean(f.words.right).slice(0, 200) } } : {}),
+      // 2.373: дата осмотра не та, что у осмотра в деле, — «Заменить на дату осмотра из дела».
+      ...(f.shot ? { shot: { bad: clean(f.shot.bad).slice(0, 200), right: f.shot.right } } : {}),
       ...(f.fix?.from && !f.egrn ? { fix: { bad: clean(f.fix.bad).slice(0, 200), right: clean(f.fix.right).slice(0, 200), from: clean(f.fix.from).slice(0, 200), ...(f.fix.flip ? { flip: f.fix.flip } : {}) } } : {}),
     }));
   }
