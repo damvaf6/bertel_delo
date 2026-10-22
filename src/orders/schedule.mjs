@@ -9,6 +9,7 @@
 // Письмо о переносе со сроком раньше срока дела (2.353) — у отметки «срок раньше срока дела», просил ли эксперт письмо с новым
 // сроком (`letter_ask`) и кнопка «Попросить письмо с новым сроком», как в «Сегодня» (2.341) и «Истории сроков» (2.349).
 import { addDays, todayMsk } from './workflow.mjs';
+import { holidayName, isWorkday, workdayBefore } from './holidays.mjs';
 import { taskDueFor, taskMoveLetter } from '../ops/draft-ops.mjs';
 import { assignmentDocs, TASK_MOVE } from '../ops/ai-ops.mjs';
 import { orderRef } from '../notify/registry.mjs';
@@ -38,6 +39,13 @@ const day = (d) => (d instanceof Date ? d.toISOString().slice(0, 10) : String(d)
 // Дни «не принимаю дела» (2.77, 2.226): первый такой день, если он ещё впереди (иначе null), и попадает ли день в них.
 const awayStart = (sp, today) => (sp.away_from && day(sp.away_from) > today ? day(sp.away_from) : null);
 const inAway = (away, date) => !!away && date < away.until && (!away.from || date >= away.from);
+// День полосы: выходной — и суббота с воскресеньем, и нерабочий праздник (2.371: `holiday` — его название). Срок сдачи в
+// праздник — `work_before`: последний рабочий день перед ним (заказчик и банк в праздник не работают).
+const dayHead = (date, i) => {
+  const holiday = holidayName(date);
+  return { date, weekday: weekday(date), today: i === 0, weekend: !isWorkday(date),
+    ...(holiday && !['сб', 'вс'].includes(weekday(date)) ? { holiday, work_before: workdayBefore(date) } : {}) };
+};
 // Время по Москве для «выезд в 10:30» и «ссылка до 18:00».
 const mskDay = (t) => todayMsk(new Date(t));
 const mskTime = (t) => new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit' }).format(new Date(t));
@@ -125,8 +133,7 @@ export async function expertSchedule(sql, userId, registry, today = todayMsk(), 
   const days = new Map();
   for (let i = 0; i < SCHEDULE_DAYS; i++) {
     const date = addDays(today, i);
-    days.set(date, { date, weekday: weekday(date), today: i === 0, weekend: ['сб', 'вс'].includes(weekday(date)),
-      away: inAway(away, date), items: [] });
+    days.set(date, { ...dayHead(date, i), away: inAway(away, date), items: [] });
   }
   const put = (date, item) => days.get(date)?.items.push(item);
   const base = (o, id = o.id) => ({ order_id: id, title: o.title || 'Дело', service: service(o) });
@@ -219,7 +226,7 @@ export async function orgSchedule(sql, orgId, registry, today = todayMsk(), { st
   const header = [];
   for (let i = 0; i < SCHEDULE_DAYS; i++) {
     const date = addDays(today, i);
-    header.push({ date, weekday: weekday(date), today: i === 0, weekend: ['сб', 'вс'].includes(weekday(date)) });
+    header.push(dayHead(date, i));
   }
   if (!ids.length) return { from: today, to: last, days: header.map((h) => ({ ...h, accepting: 0 })), experts: [] };
   const orders = await sql`

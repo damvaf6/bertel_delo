@@ -7,6 +7,7 @@ import { HttpError } from '../http/core.mjs';
 import { executorSignOrg, orderSides } from '../access/policy.mjs';
 import { dispatchers, notify } from '../notify/notify.mjs';
 import { addDays, todayMsk } from '../orders/workflow.mjs';
+import { workdayFrom } from '../orders/holidays.mjs';
 import { orgExpertsFor } from './match-ops.mjs';
 import { audit, text, uuidFrom } from './util.mjs';
 import { latest, taskDraftItems, taskDueFor, taskMoveLetter } from './draft-ops.mjs';
@@ -37,7 +38,8 @@ export async function openHandovers(sql, orders) {
 // Передать некому (2.221): руководитель вместо передачи сам просит диспетчера перенести срок от организации. Готовые новый
 // срок и причина: эксперт не принимает дела до … — день возвращения (будний); иначе — неделя от срока (или от сегодня).
 // Причину видит заказчик — в ней нет того, что эксперт написал руководителю (болезнь и т. п.).
-const weekday = (d) => { let x = d; while ([0, 6].includes(new Date(`${x}T00:00:00Z`).getUTCDay())) x = addDays(x, 1); return x; };
+// Ближайший рабочий день — без суббот, воскресений и праздников (2.371).
+const weekday = workdayFrom;
 export function extendSuggest(order, awayUntil, today = todayMsk()) {
   if (!order.deadline) return null;
   const ru = (d) => d.split('-').reverse().join('.');

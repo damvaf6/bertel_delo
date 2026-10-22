@@ -43,6 +43,11 @@ export function dayRu(iso) {
 
 // Дни «не принимаю дела» (2.77, 2.226): «до 30 октября» или, если ещё не начались, «с 20 октября до 30 октября».
 export const awaySpan = (a) => `${a.from ? `с ${dayRu(a.from)} ` : ''}до ${dayRu(a.until)}`;
+// Нерабочий праздник в «Моих сроках» и нагрузке экспертов (2.371): название; срок сдачи в этот день — сдать до последнего
+// рабочего дня перед ним (`work_before`).
+const WD = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
+export const holidayText = (d, due) => `Праздник, нерабочий день: ${d.holiday}${due ? ` — заказчик в этот день не работает; сдайте лучше до него, последний рабочий день — ${
+  WD[new Date(`${d.work_before}T00:00:00Z`).getUTCDay()]}, ${dayRu(d.work_before)}` : ''}.`;
 
 export function serviceDef(moduleId, serviceId) {
   const m = state.catalog.modules.find((x) => x.id === moduleId);

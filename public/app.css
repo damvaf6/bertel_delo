@@ -360,6 +360,8 @@ h2.inline { display: inline; }
 .schedule li.away { border-left: 4px solid #9aa0a6; padding-left: 8px; background: repeating-linear-gradient(135deg, #f1f2f4 0 4px, #fff 4px 8px); }
 .schedule li.free.back .day > span:last-child, .schedule li.back .away-mark { color: #137333; }
 .schedule .away-mark { margin: 2px 0 0; font-size: 14px; color: var(--muted); }
+.schedule .holiday-mark { margin: 2px 0 0; font-size: 14px; color: #a50e0e; }
+.schedule li.free.holiday .day > span:last-child { color: #a50e0e; }
 .schedule ul { list-style: none; padding: 0; margin: 4px 0 0; }
 .schedule ul li { margin: 4px 0; }
 .schedule a.open { display: block; padding: 6px 8px; border-radius: 6px; background: #f2f5fa; color: var(--text); text-decoration: none; overflow-wrap: anywhere; }
