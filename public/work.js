@@ -290,6 +290,11 @@ function mineFix(g, quote, rule) {
   if (g.bad) fixes.push({ g, quote, rule, get li() { return row.closest('li') ?? row; } });
   return [row, miss, ...(swap ? [swap.done, swap.rebuild] : [])];
 }
+// 2.364: сумма прописью не совпадает с цифрами — выделить слова в черновике и сказать, как по цифрам.
+function wordsFix(w, quote) {
+  const { btn, miss } = draftFix({ ...w, from: 'цифрам соответствует' }, quote, 'fix-draft');
+  return [el('div', { class: 'row' }, btn), miss];
+}
 function assignmentSwap(g, quote, miss, rule) {
   const src = assignmentSource(g);
   if (!src) return null;
@@ -465,7 +470,8 @@ function checkItem(order, r, c, hint) {
       el('span', { text: f.text }),
       ...(f.quote ? [el('br'), el('q', { text: f.quote })] : []),
       ...(f.egrn ? egrnPlace(f.egrn, f.quote, c.id) : []),
-      ...(f.fix ? mineFix(f.fix, f.quote, c.id) : []))))] : []),
+      ...(f.fix ? mineFix(f.fix, f.quote, c.id) : []),
+      ...(f.words ? wordsFix(f.words, f.quote) : []))))] : []),
     // Отмеченные места: цитата из отчёта, файл и страница — сервер показывает только найденные в тексте цитаты.
     ...(hint?.marks?.length ? [el('ul', { class: 'ai-marks' }, ...hint.marks.map((m) => el('li', {},
       el('span', { class: 'ai-mark-where', text: `${m.file}, ${m.where}: ` }),
