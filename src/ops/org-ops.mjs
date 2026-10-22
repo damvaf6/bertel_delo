@@ -91,8 +91,11 @@ export async function caseMoves(sql, orders) {
     const last = at.get(o.id) ?? o.updated_at;
     const days = Math.max(0, Math.floor((now - new Date(last).getTime()) / 86_400_000));
     const waitsOrg = orgSign.has(o.id);
-    return [o.id, { at: last, days, org_sign: waitsOrg, idle: days >= CASE_IDLE_DAYS && !waitsOrg,
-      idle_long: days >= CASE_IDLE_LONG_DAYS && !waitsOrg }];
+    // Прогон 2.370: дело на проверке у диспетчера ждёт его ответа, а не эксперта (у эксперта — «Диспетчер проверяет дольше
+    // 2 дней», 2.369) — не «без движения» ни у руководителя, ни в утренней сводке, ни в карточке эксперта.
+    const stays = !waitsOrg && o.status !== 'review';
+    return [o.id, { at: last, days, org_sign: waitsOrg, review: o.status === 'review', idle: days >= CASE_IDLE_DAYS && stays,
+      idle_long: days >= CASE_IDLE_LONG_DAYS && stays }];
   }));
 }
 
