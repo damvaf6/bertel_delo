@@ -85,7 +85,7 @@ export async function openOrder(id, { to } = {}) {
   renderResultDue(lastDocs?.result_due ?? null);
   // Черновик и ИИ-проверка показаны — у пунктов замечания руководителя видна «Заменить по выписке» (2.262).
   if (orgReturnsNow.length) renderOrgReturns(orgReturnsNow);
-  const box = { result: 'docs-box', inspect: 'inspect-box', chat: 'chat-box', orgchat: 'org-chat-box', docs: 'docreq-box', review: 'review-box', deadline: 'deadline-box', extend: 'deadline-box', away: 'deadline-box', late: 'deadline-box', sign: 'sign-wait-box', fix: 'org-returns-box', fresh: 'org-returns-box', unsigned: 'docs-box', handover: 'handover-box', rebuild: 'draft-box', task: 'draft-box', onsite: 'onsite-box', notes: 'notes-box', steps: 'steps-box' }[to];
+  const box = { result: 'docs-box', inspect: 'inspect-box', chat: 'chat-box', remind: 'chat-box', orgchat: 'org-chat-box', docs: 'docreq-box', review: 'review-box', deadline: 'deadline-box', extend: 'deadline-box', away: 'deadline-box', late: 'deadline-box', sign: 'sign-wait-box', fix: 'org-returns-box', fresh: 'org-returns-box', unsigned: 'docs-box', handover: 'handover-box', rebuild: 'draft-box', task: 'draft-box', onsite: 'onsite-box', notes: 'notes-box', steps: 'steps-box' }[to];
   if (box && !$(box).classList.contains('hidden')) { reveal(box); $(box).scrollIntoView({ block: 'start' }); }
   // «Попросить перенос» из «Моих сроков» (2.134): причина «много дел в этот день» и новый срок — сразу в полях.
   if (to === 'extend') document.querySelector('#deadline-reason-list [data-reason="busy"]')?.click();
@@ -101,6 +101,8 @@ export async function openOrder(id, { to } = {}) {
     const d = (lastDocs?.documents ?? []).filter((x) => x.kind === 'result' && x.own !== false && !x.signatures?.expert).at(-1);
     if (d) toDoc(d.id);
   }
+  // Заказчик 2 дня не отвечает (2.375): готовая фраза-напоминание сразу в поле сообщения — отправляет эксперт сам.
+  if (to === 'remind') document.querySelector('#message-phrase-list [data-phrase="remind"]')?.click();
   if (to === 'handover' && !$('handover-form').classList.contains('hidden')) $('handover-reason').focus();
   // Заменил по выписке в черновике, а файл собран до замены (2.272): сразу к кнопке сборки Word из черновика.
   if (to === 'rebuild' && !$('draft-box').classList.contains('hidden')) {

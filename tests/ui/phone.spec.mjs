@@ -17143,3 +17143,43 @@ test('2.374: ждут подписи организации 2 дня и доль
   await expect(hp.locator('#org-sign > li[data-item]')).toHaveCount(2);
   for (const p of [cp, ep, hp]) await p.context().close();
 });
+
+test('2.375: заказчик не отвечает 2 дня — строка в «Сегодня», «Напомнить заказчику» подставляет готовую фразу', async ({ browser, baseURL }) => {
+  test.setTimeout(120_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990003751'), customer = await signIn(cp, '+79990003752');
+  const A = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const id = (await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Молчит заказчик: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"deal","region":"moscow","object_type":"flat","address":"г. Москва, тестовая ул., 75"}') returning id`,
+    [customer.id, expert.id, inDays(8)])).rows[0].id;
+    await c.query(`insert into order_messages (order_id, author_id, side, body, at)
+      values ($1, $2, 'executor', 'Здравствуйте! Подскажите, пожалуйста, кто откроет квартиру для осмотра?', now() - interval '2 days 5 hours')`, [id, expert.id]);
+    return id;
+  });
+  await ep.goto('/kabinet');
+  await expect(ep.locator('#today-box li[data-today="customer-silent"]')).toHaveText('Заказчик не отвечает · 1');
+  const row = ep.locator('#today-box li[data-today-item="customer-silent"]');
+  await expect(row.locator('.title')).toHaveText('Молчит заказчик: квартира');
+  await expect(row.locator('[data-role="customer-silent-what"]')).toHaveText(/^Вы написали .+: «Здравствуйте! Подскажите, пожалуйста, кто откроет квартиру для осмотра\?» — ответа нет 2 дн\. 5 ч$/);
+  expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await row.scrollIntoViewIfNeeded();
+  await shot(ep, 'i07-segodnya-zakazchik-ne-otvechaet');
+  await row.locator('[data-action="silent-remind"]').click();
+  await expect(ep).toHaveURL(new RegExp(`#order=${A}&to=remind$`));
+  await expect(ep.locator('#chat-box')).toBeInViewport();
+  await expect(ep.locator('#message-text')).toHaveValue(/^Здравствуйте! Напоминаю о своём сообщении от \d+ [а-я]+: «Подскажите, пожалуйста, кто откроет квартиру для осмотра\?»\. Ответьте, пожалуйста, здесь/);
+  await expect(ep.locator('#chat-msg')).toHaveText('Текст в поле сообщения — поправьте его и отправьте');
+  await shot(ep, 'i08-perepiska-napomnit-zakazchiku');
+  // Сам не отправляется — отправляет эксперт.
+  await expect(ep.locator('#messages li')).toHaveCount(1);
+  await ep.locator('#message-send').click();
+  await expect(ep.locator('#messages li')).toHaveCount(2);
+  await ep.goto('/kabinet');
+  await expect(ep.locator('#today-box')).toBeVisible();
+  await expect(ep.locator('#today-box li[data-today="customer-silent"]')).toHaveCount(0);
+  await ep.context().close(); await cp.context().close();
+});

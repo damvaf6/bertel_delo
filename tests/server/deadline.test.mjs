@@ -4,6 +4,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
+import { workdayFrom } from '../../src/orders/holidays.mjs';
 import { remindDeadlines } from '../../src/notify/reminders.mjs';
 import { digestText, morningTo, sendMorning } from '../../src/notify/morning.mjs';
 import { expertMorningAlerts } from '../../src/ops/today-ops.mjs';
@@ -197,7 +198,7 @@ test('перегруженный день (2.134): больше двух дел 
   assert.equal(r.label, 'Много дел в этот день (3)');
   assert.equal(r.reason, `Высокая загрузка: на ${dd}.${m}.${y} у меня к сдаче несколько дел — прошу перенести срок`);
   let next = addDays(busyDay, 1);
-  while ([0, 6].includes(new Date(`${next}T00:00:00Z`).getUTCDay())) next = addDays(next, 1);
+  next = workdayFrom(next); // выходные и нерабочие праздники (2.371)
   assert.equal(r.new_deadline, next);
   // Попросил перенос по одному делу — у него кнопки больше нет, у остальных есть, пока день перегружен.
   assert.equal((await ask(other, a, { new_deadline: r.new_deadline, reason: r.reason, from: busyDay })).status, 201);
@@ -245,14 +246,14 @@ test('перегруженный день (2.179): два дела к сдаче
   const r = (await list(me, b)).body.reasons.find((x) => x.id === 'busy');
   assert.equal(r.label, 'Много дел в этот день (2 и выезд)');
   let next = addDays(busyDay, 1);
-  while ([0, 6].includes(new Date(`${next}T00:00:00Z`).getUTCDay())) next = addDays(next, 1);
+  next = workdayFrom(next); // выходные и нерабочие праздники (2.371)
   assert.equal(r.new_deadline, next);
   // В ближайший будний день после срока — дело и выезд: новый срок — следующий свободный будний.
   const c = await inWorkFor(me, 'Квартира: сдача и выезд 3', 6);
   await S.sql`update orders set deadline = ${next} where id = ${c.id}`;
   await visit(c, next);
   let after = addDays(next, 1);
-  while ([0, 6].includes(new Date(`${after}T00:00:00Z`).getUTCDay())) after = addDays(after, 1);
+  after = workdayFrom(after); // выходные и нерабочие праздники (2.371)
   assert.equal((await list(me, b)).body.reasons.find((x) => x.id === 'busy').new_deadline, after);
   // У помощника в этот день только свой выезд, сдавать нечего — не перегружен.
   const h = await dayOf(helper);

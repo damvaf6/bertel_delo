@@ -22,12 +22,14 @@ const dayWords = (iso) => new Date(`${iso}T12:00:00Z`)
 
 // def — услуга из реестра (registry.service), fields — поля заявки, openDocs — названия запрошенных и ещё не присланных
 // документов (src/ops/docreq-ops.mjs), moved — последний согласованный перенос срока, пока он в силе (2.178):
-// { from, to } — даты 'YYYY-MM-DD'; заказчик и так видит перенос в своей заявке.
-export function messagePhrases({ def, fields = {}, openDocs = [], moved = null, now = new Date() }) {
+// { from, to } — даты 'YYYY-MM-DD'; заказчик и так видит перенос в своей заявке. silent — заказчик 2 дня и дольше не отвечает
+// на сообщение эксперта (2.375, src/orders/silence.mjs): { at, body } — тогда первой фразой «Напомнить о вопросе».
+export function messagePhrases({ def, fields = {}, openDocs = [], moved = null, silent = null, now = new Date() }) {
   const subject = def?.service.subject ?? 'object';
   const n = NOUN[subject] ?? NOUN.object;
   const due = dueDateRu(now);
   const out = [];
+  if (silent) out.push(remindPhrase(silent));
 
   if (subject === 'document') {
     out.push({
@@ -74,4 +76,16 @@ export function messagePhrases({ def, fields = {}, openDocs = [], moved = null, 
     });
   }
   return out;
+}
+
+// Напоминание о своём сообщении без ответа (2.375): когда писали и о чём — начало сообщения, без «Здравствуйте!».
+export function remindPhrase({ at, body }) {
+  const day = new Date(at).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'Europe/Moscow' });
+  const what = String(body).replace(/^Здравствуйте!\s*/, '').replace(/\s+/g, ' ').trim();
+  const short = what.length > 120 ? `${what.slice(0, 119)}…` : what;
+  return {
+    id: 'remind', title: 'Напомнить о вопросе',
+    text: `Здравствуйте! Напоминаю о своём сообщении от ${day}: «${short}». Ответьте, пожалуйста, здесь, когда будет `
+      + 'возможность, — без ответа работа по делу может задержаться.',
+  };
 }

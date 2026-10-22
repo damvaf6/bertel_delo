@@ -564,3 +564,51 @@ test('«Сегодня» у эксперта (2.369): дело на провер
   // Чужому эксперту и руководителю этого нет.
   assert.equal((await other.req('GET', '/api/today')).body.expert.review_long.length, 0);
 });
+
+test('заказчик не отвечает 2 дня (2.375): строка в «Сегодня» и первая готовая фраза — напоминание; ответил — пропало', async () => {
+  const o = await offered('Дело с вопросом эксперта', 12);
+  assert.equal((await step(spec, o, 'in_work')).status, 200);
+  const say = (c, body) => c.req('POST', `/api/orders/${o.id}/messages`, { body });
+  const silent = async (c = spec) => (await c.req('GET', '/api/today')).body.expert?.customer_silent ?? [];
+  const phrases = async (c = spec) => (await c.req('GET', `/api/orders/${o.id}/messages`)).body.phrases ?? [];
+  assert.equal((await say(spec, 'Здравствуйте! Подскажите, пожалуйста, удобные дату и время осмотра.')).status, 201);
+  assert.deepEqual(await silent(), [], 'меньше 2 дней — не горит');
+  assert.ok(!(await phrases()).some((p) => p.id === 'remind'));
+  await S.sql`update order_messages set at = now() - interval '49 hours' where order_id = ${o.id}`;
+  // Сообщение диспетчера — не ответ заказчика.
+  assert.equal((await say(dispatcher, 'Заказчик, ответьте эксперту')).status, 201);
+  let s = await silent();
+  assert.deepEqual(s.map((x) => [x.id, x.count]), [[o.id, 1]]);
+  assert.match(s[0].last, /^Здравствуйте! Подскажите/);
+  assert.ok(Date.now() - Date.parse(s[0].since) > 48 * 3600_000);
+  assert.deepEqual(await silent(other), [], 'чужой эксперт не видит');
+  const [p] = await phrases();
+  assert.equal(p.id, 'remind', 'напоминание — первой фразой');
+  assert.match(p.text, /^Здравствуйте! Напоминаю о своём сообщении от \d+ [а-я]+: «Подскажите, пожалуйста, удобные дату и время осмотра\.»/);
+  assert.equal((await phrases(owner)).length, 0, 'заказчику фраз нет');
+  // Заказчик ответил — строки и фразы нет.
+  assert.equal((await say(owner, 'Завтра в 10')).status, 201);
+  assert.deepEqual(await silent(), []);
+  assert.ok(!(await phrases()).some((p) => p.id === 'remind'));
+  // Эксперт снова спросил и ждёт 2 дня; отправил напоминание — отсчёт заново.
+  assert.equal((await say(spec, 'А кто откроет дверь?')).status, 201);
+  await S.sql`update order_messages set at = now() - interval '3 days' where order_id = ${o.id}`;
+  assert.deepEqual((await silent()).map((x) => [x.count, x.last]), [[1, 'А кто откроет дверь?']]);
+  assert.equal((await say(spec, p.text)).status, 201);
+  assert.deepEqual(await silent(), []);
+});
+
+test('заказчик не отвечает (2.375): запрошенные документы не пришли — только строка «Документы не пришли»', async () => {
+  const o = await offered('Дело с документами без ответа', 12);
+  assert.equal((await step(spec, o, 'in_work')).status, 200);
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/messages`, { body: 'Пришлите выписку' })).status, 201);
+  await S.sql`update order_messages set at = now() - interval '3 days' where order_id = ${o.id}`;
+  let t = (await spec.req('GET', '/api/today')).body.expert;
+  assert.ok(ids(t.customer_silent).includes(o.id));
+  const r = await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { custom: ['Выписка из ЕГРН'] });
+  assert.ok([200, 201].includes(r.status), JSON.stringify(r.body));
+  await S.sql`update doc_requests set requested_at = now() - interval '4 days' where order_id = ${o.id}`;
+  t = (await spec.req('GET', '/api/today')).body.expert;
+  assert.ok(ids(t.docs_wait).includes(o.id));
+  assert.ok(!ids(t.customer_silent).includes(o.id));
+});

@@ -11,6 +11,7 @@ import { PROOFREAD_CHECK, PROOFREAD_REASONS } from '../modules/index.mjs';
 import { audit, text } from './util.mjs';
 import { notifyMessage } from '../notify/notify.mjs';
 import { messagePhrases } from '../orders/phrases.mjs';
+import { customerSilent } from '../orders/silence.mjs';
 
 const MESSAGE_MAX = 4000;
 const NOTE_MAX = 1000;
@@ -82,6 +83,8 @@ export function workOps() {
                                  where r.order_id = ${order.id} and r.cancelled_at is null and d.id is null
                                  order by r.id`).map((d) => d.title),
             moved: await lastMove(sql, order),
+            // Заказчик 2 дня молчит после сообщения эксперта (2.375) — первой фразой напоминание.
+            silent: (await customerSilent(sql, [order.id])).get(order.id) ?? null,
           }) : [],
         };
       },
