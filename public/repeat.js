@@ -1,12 +1,26 @@
 // Повторная оценка того же объекта (задача 2.118). Исполнителю в деле — свои прошлые дела с тем же объектом (по кадастровому
 // номеру и адресу, VIN и госномеру): что совпало, что изменилось с прошлого раза, и что можно взять — описание объекта в
 // черновик, аналоги (подтвердить заново), запрос тех же документов у заказчика. «Взять из дела №…» — одной кнопкой, потом
-// дело перерисовывается. «Не нужно, скрыть» помнится на этом телефоне для этого дела. Текст — через textContent.
+// дело перерисовывается. Прошлому отчёту больше 6 месяцев — подсказка проверить, не изменился ли объект, и взять свежую выписку
+// ЕГРН (2.367). «Не нужно, скрыть» помнится на этом телефоне для этого дела. Текст — через textContent.
 import { api, el, say } from '/common.js';
 
 const $ = (id) => document.getElementById(id);
 const dayRu = (s) => new Date(s).toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', year: 'numeric' });
 const KEY = 'delo.repeat.hidden';
+const STALE = 6; // месяцев — как STALE_MONTHS в src/orders/repeat.mjs
+const monthsRu = (n) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? 'месяц' : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? 'месяца' : 'месяцев'}`;
+
+// Что проверить, если прошлый отчёт старый: у недвижимости — перепланировка, ремонт и свежая выписка ЕГРН, у машины — пробег,
+// повреждения и ремонт.
+function staleNote(s) {
+  const what = s.egrn
+    ? 'Проверьте, не изменился ли объект (перепланировка, ремонт, пристройки, площадь), и возьмите свежую выписку ЕГРН — прошлая для нового отчёта не годится.'
+    : 'Проверьте, не изменился ли объект (пробег, повреждения, ремонт, комплектация) — описание из прошлого дела сверьте с осмотром.';
+  return el('div', { class: 'notice-warn', 'data-stale': '' },
+    el('strong', { text: `Прошлому отчёту больше ${STALE} месяцев` }),
+    el('span', { text: ` (от ${dayRu(s.day)}, прошло ${monthsRu(s.months)}). ${what}` }));
+}
 let ctx = null; // { order, reload }
 
 function hiddenSet() {
@@ -33,19 +47,21 @@ const check = (name, label, note) => el('label', { class: 'row gap check-line' }
 
 function item(c) {
   const same = c.fields.filter((f) => f.same).map((f) => f.label.toLowerCase());
-  const form = el('form', { 'data-repeat-case': c.id, novalidate: '' },
+  const nothing = !c.sections.length && !c.analogs && !c.docs.length;
+  const form = nothing ? null : el('form', { 'data-repeat-case': c.id, novalidate: '' },
     ...(c.sections.length ? [check('sections', 'Описание объекта в черновик', c.sections.join(', '))] : []),
     ...(c.analogs ? [check('analogs', `Аналоги: ${c.analogs}`, 'без подтверждения — сверите на новую дату')] : []),
     ...(c.docs.length ? [check('docs', 'Запросить у заказчика те же документы', c.docs.join(', '))] : []),
     el('button', { type: 'submit', class: 'secondary' }, `Взять из дела ${c.ref}`));
-  form.addEventListener('submit', (e) => { e.preventDefault(); take(c, form); });
+  form?.addEventListener('submit', (e) => { e.preventDefault(); take(c, form); });
   return el('li', {},
     el('div', { class: 'title', text: `Ваше дело ${c.ref} от ${dayRu(c.created_at)}` }),
     el('div', { class: 'muted', text: `Тот же объект: совпадает ${same.join(' и ')}` }),
     ...(c.changed.length ? [el('div', { class: 'notice-warn', 'data-changed': '' },
       el('span', { text: 'Изменилось с прошлого раза: ' }),
       el('span', { text: c.changed.map((x) => `${x.label.toLowerCase()} — было ${x.past}, сейчас ${x.now ?? 'не указано'}`).join('; ') }))] : []),
-    form);
+    ...(c.stale ? [staleNote(c.stale)] : []),
+    ...(form ? [form] : []));
 }
 
 function render(r) {

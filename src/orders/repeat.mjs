@@ -33,3 +33,21 @@ export function compareObject(spec, past, cur) {
   }
   return { same: equal > 0 && differ === 0, fields };
 }
+
+// Прошлому отчёту больше 6 месяцев (2.367): объект мог измениться, выписка ЕГРН устарела. Дни — по Москве, 'ГГГГ-ММ-ДД'.
+// Полных месяцев между днями: с 15 марта по 14 сентября — 5, по 15 сентября — 6.
+export const STALE_MONTHS = 6;
+
+export function fullMonths(from, to) {
+  const [y1, m1, d1] = from.split('-').map(Number);
+  const [y2, m2, d2] = to.split('-').map(Number);
+  return Math.max(0, (y2 - y1) * 12 + (m2 - m1) - (d2 < d1 ? 1 : 0));
+}
+
+// { day, months, egrn } — если отчёт старше STALE_MONTHS; egrn — объект недвижимости (узнаётся по кадастровому номеру).
+export function staleReport(spec, day, today) {
+  if (!day) return null;
+  const months = fullMonths(day, today);
+  if (months < STALE_MONTHS) return null;
+  return { day, months, egrn: spec.match.some((f) => f.id === 'cadastral') };
+}

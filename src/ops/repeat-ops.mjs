@@ -15,7 +15,8 @@ import { editsDraft } from '../access/policy.mjs';
 import { DRAFT_MAX } from '../ai/ai.mjs';
 import { orderSections } from '../docs/report.mjs';
 import { pastValues, reuseSections } from '../docs/reuse.mjs';
-import { compareObject } from '../orders/repeat.mjs';
+import { compareObject, staleReport } from '../orders/repeat.mjs';
+import { todayMsk } from '../orders/workflow.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { customersOf, notify } from '../notify/notify.mjs';
 import { MAX_ANALOGS } from './analog-ops.mjs';
@@ -55,7 +56,7 @@ function changes(registry, spec, past, order) {
 }
 
 async function lastOwnDraft(sql, actor, orderId) {
-  return sql.one`select id, body from result_drafts where order_id = ${orderId} and author_id = ${actor.id} order by id desc limit 1`;
+  return sql.one`select id, body, at from result_drafts where order_id = ${orderId} and author_id = ${actor.id} order by id desc limit 1`;
 }
 
 // Документы из списка услуги, которые эксперт просил в прошлом деле и которых в этом ещё не просил и не получил.
@@ -74,8 +75,17 @@ async function analogsToCopy(sql, registry, past, order) {
   return rows.filter((a) => !here.has(a.url_key) && !seen.has(a.url_key) && seen.add(a.url_key));
 }
 
+// День прошлого отчёта по Москве: когда дело в последний раз стало «готово»; не сдано — последняя версия черновика эксперта
+// или день заказа.
+async function reportDay(sql, past, draft) {
+  const done = await sql.one`select max(at) as at from order_status_history where order_id = ${past.id} and to_status = 'done'`;
+  const at = done?.at ?? draft?.at ?? past.created_at;
+  return at ? todayMsk(new Date(at)) : null;
+}
+
 // Свои дела с тем же объектом и что из каждого можно взять.
 async function sameObjectCases(sql, actor, order, registry, spec, pastId = null) {
+  const today = todayMsk();
   const sections = orderSections(registry, order).filter((s) => spec.sections.includes(s.id));
   const out = [];
   for (const past of await ownCases(sql, actor, order, pastId)) {
@@ -90,6 +100,7 @@ async function sameObjectCases(sql, actor, order, registry, spec, pastId = null)
       docs: await docsToAsk(sql, registry, past, order),
       fields: cmp.fields,
       changed: changes(registry, spec, past, order),
+      stale: staleReport(spec, await reportDay(sql, past, draft), today),
     });
     if (out.length >= SHOW) break;
   }
@@ -98,7 +109,7 @@ async function sameObjectCases(sql, actor, order, registry, spec, pastId = null)
 
 const caseView = (c) => ({
   id: c.past.id, ref: orderRef(c.past.id), created_at: c.past.created_at, status: c.past.status,
-  fields: c.fields, changed: c.changed,
+  fields: c.fields, changed: c.changed, stale: c.stale,
   sections: c.sections, analogs: c.analogs.length, docs: c.docs.map((d) => d.title),
 });
 
@@ -113,7 +124,8 @@ export function repeatOps() {
         const spec = registry.repeat(order.module, order.service);
         if (!spec) return { cases: [] };
         const list = await sameObjectCases(sql, actor, order, registry, spec);
-        return { cases: list.map(caseView).filter((c) => c.sections.length || c.analogs || c.docs.length) };
+        // Прошлый отчёт старше 6 месяцев — дело видно и без того, что взять: подсказка проверить объект и выписку (2.367).
+        return { cases: list.map(caseView).filter((c) => c.sections.length || c.analogs || c.docs.length || c.stale) };
       },
     },
     {

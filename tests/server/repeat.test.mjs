@@ -5,7 +5,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
-import { compareObject, objectKey } from '../../src/orders/repeat.mjs';
+import { compareObject, fullMonths, objectKey, staleReport } from '../../src/orders/repeat.mjs';
 import { createRegistry } from '../../src/modules/index.mjs';
 import { PAST_MARK } from '../../src/docs/reuse.mjs';
 
@@ -99,6 +99,7 @@ test('эксперт берёт из своего прошлого дела оп
   assert.deepEqual(c.sections, ['7. Описание объекта оценки', '8. Местоположение и анализ рынка']);
   assert.equal(c.analogs, 1);
   assert.deepEqual(c.docs, ['Выписка из ЕГРН', 'Технический паспорт БТИ или поэтажный план']);
+  assert.equal(c.stale, null, 'прошлый отчёт свежий — подсказки нет');
   // Заказчик, диспетчер и другой эксперт прошлых дел эксперта не видят.
   for (const who of [owner2, dispatcher]) assert.deepEqual((await who.req('GET', base)).body, { cases: [] });
   assert.equal((await other.req('GET', base)).status, 404);
@@ -157,4 +158,46 @@ test('эксперт берёт из своего прошлого дела оп
 
   const audit = await S.sql`select count(*)::int as n from audit_log where action = 'order.repeat' and subject_id = ${o.id}`;
   assert.equal(audit[0].n, 3);
+});
+
+test('2.367: прошлому отчёту больше 6 месяцев — подсказка проверить объект и свежую выписку; дата — когда дело стало «готово»', async () => {
+  assert.equal(fullMonths('2026-03-15', '2026-09-14'), 5);
+  assert.equal(fullMonths('2026-03-15', '2026-09-15'), 6);
+  assert.equal(fullMonths('2025-11-30', '2026-05-31'), 6);
+  assert.equal(fullMonths('2026-10-01', '2026-09-01'), 0);
+  const realty = createRegistry().repeat('expertise', 'realty');
+  const vehicle = createRegistry().repeat('expertise', 'vehicle');
+  assert.equal(staleReport(realty, '2026-03-15', '2026-09-14'), null);
+  assert.deepEqual(staleReport(realty, '2026-03-15', '2026-09-15'), { day: '2026-03-15', months: 6, egrn: true });
+  assert.equal(staleReport(vehicle, '2025-01-10', '2026-09-15').egrn, false, 'у машины выписки ЕГРН нет');
+  assert.equal(staleReport(realty, null, '2026-09-15'), null);
+
+  const obj = { ...OBJ, address: 'Москва, ул. Старая, д. 3, кв. 4', cadastral: '77:01:0001001:3367' };
+  // Прошлое дело: сдано 8 месяцев назад, взять из него нечего (ни черновика, ни аналогов, ни запросов) — всё равно видно.
+  const past = await inWork(owner1, obj, { title: 'Квартира на Старой (прошлый раз)' });
+  await S.sql`update orders set status = 'done', created_at = now() - interval '9 months' where id = ${past.id}`;
+  await S.sql`insert into order_status_history (order_id, from_status, to_status, side, at)
+              values (${past.id}, 'in_work', 'done', 'dispatcher', now() - interval '8 months')`;
+  const o = await inWork(owner2, obj, { title: 'Квартира на Старой' });
+  let v = (await spec.req('GET', `/api/orders/${o.id}/repeat`)).body;
+  assert.equal(v.cases.length, 1, JSON.stringify(v));
+  const c = v.cases[0];
+  assert.deepEqual([c.sections, c.analogs, c.docs], [[], 0, []]);
+  assert.equal(c.stale.months, 8);
+  assert.equal(c.stale.egrn, true);
+  // Сдано вновь 2 месяца назад (повторно «готово» после доработки) — считается последний раз: подсказки нет и брать нечего.
+  await S.sql`insert into order_status_history (order_id, from_status, to_status, side, at)
+              values (${past.id}, 'in_work', 'done', 'dispatcher', now() - interval '2 months')`;
+  v = (await spec.req('GET', `/api/orders/${o.id}/repeat`)).body;
+  assert.deepEqual(v.cases, []);
+  // Не сдано: дата — последняя версия черновика эксперта (8 месяцев назад) — подсказка снова есть, а черновик можно взять.
+  await S.sql`delete from order_status_history where order_id = ${past.id} and to_status = 'done'`;
+  await S.sql`update orders set status = 'in_work' where id = ${past.id}`;
+  assert.equal((await spec.req('PUT', `/api/orders/${past.id}/draft`, { body: PAST_DRAFT, from: null })).status, 200);
+  await S.sql`update result_drafts set at = now() - interval '8 months' where order_id = ${past.id}`;
+  v = (await spec.req('GET', `/api/orders/${o.id}/repeat`)).body;
+  assert.equal(v.cases[0]?.stale?.months, 8, JSON.stringify(v));
+  assert.ok(v.cases[0].sections.length > 0);
+  // Заказчик подсказки не видит.
+  assert.deepEqual((await owner2.req('GET', `/api/orders/${o.id}/repeat`)).body, { cases: [] });
 });
