@@ -41,6 +41,50 @@ export function cleanUrl(raw) {
   return { url: u.toString(), key: `${host}${u.pathname.replace(/\/+$/, '')}${query}`.toLowerCase(), host };
 }
 
+// Номер объявления (2.372): то же объявление открывают разными ссылками — с городом и названием в адресе и без
+// («avito.ru/moskva/kvartiry/2-k_..._4123456789» и «avito.ru/4123456789»), с поддоменом города («spb.cian.ru»).
+// Ключ — сайт без поддоменов и самый длинный номер из 7 и больше цифр в пути; номера нет — ключа нет.
+export function listingKey(url) {
+  let u;
+  try { u = new URL(url); } catch { return null; }
+  const digits = u.pathname.match(/\d{7,}/g);
+  if (!digits) return null;
+  const site = u.hostname.toLowerCase().split('.').slice(-2).join('.');
+  return `${site}#${digits.reduce((a, b) => (b.length > a.length ? b : a))}`;
+}
+
+// Тот же объект на другом сайте (2.372): одинаковая цена и площадь (у машин — пробег; новые машины с пробегом 0 и
+// вещи по одной цене в разных магазинах — не повтор, их не сравниваем).
+const SAME_OBJECT = [['area', 'площадь'], ['mileage_km', 'пробег']];
+function sameObject(a, b) {
+  const p = a.fields?.price_rub;
+  if (!Number.isFinite(p) || p !== b.fields?.price_rub) return null;
+  const hit = SAME_OBJECT.find(([k]) => Number(a.fields[k]) > 0 && a.fields[k] === b.fields?.[k]);
+  return hit ? hit[1] : null;
+}
+
+// Повтор аналога (2.372): номер прежнего аналога («Аналог N») и чем совпал — ссылка, номер объявления или объект.
+export function analogRepeats(list) {
+  const out = new Map();
+  list.forEach((a, i) => {
+    const key = listingKey(a.url);
+    for (let j = 0; j < i; j += 1) {
+      const b = list[j];
+      if (b.url_key === a.url_key) { out.set(String(a.id), { no: j + 1, same: 'link' }); return; }
+      if (key && key === listingKey(b.url)) { out.set(String(a.id), { no: j + 1, same: 'listing' }); return; }
+      const what = sameObject(a, b);
+      if (what) { out.set(String(a.id), { no: j + 1, same: 'object', what }); return; }
+    }
+  });
+  return out;
+}
+
+export function repeatText(r) {
+  if (r.same === 'link') return `Эта ссылка уже есть в деле — аналог ${r.no}: аналоги не должны повторяться, лишний уберите`;
+  if (r.same === 'listing') return `То же объявление, что аналог ${r.no} (совпадает номер объявления), — аналоги не должны повторяться, лишний уберите`;
+  return `Похоже, тот же объект, что аналог ${r.no} (совпадают цена и ${r.what}): не одно ли это объявление на разных сайтах? Если да — лишний уберите`;
+}
+
 export const hostOf = (url) => { try { return new URL(url).hostname.replace(/^(www|m)\./, ''); } catch { return ''; } };
 
 // Числа из объявлений приходят с пробелами и «₽» («1 250 000 ₽», «85 000 км») — оставляем цифры и дробную часть.
@@ -152,15 +196,14 @@ export function analogWarnings(spec, order, list) {
   const today = todayMsk();
   const old = addDays(today, -OLD_DAYS);
   const priced = list.filter((a) => Number.isFinite(a.fields.price_rub));
-  const byKey = new Map();
-  for (const a of list) byKey.set(a.url_key, (byKey.get(a.url_key) ?? 0) + 1);
+  const repeats = analogRepeats(list);
   const per = new Map();
   const positions = listPositions(spec, order);
   for (const a of list) {
     const w = [];
     const adj = a.adjustments ?? [];
     const covered = new Set(adj.flatMap((x) => adjustKinds(spec).find((k) => k.id === x.kind)?.covers ?? []));
-    if (byKey.get(a.url_key) > 1) w.push('Эта ссылка уже есть в деле — аналоги не должны повторяться');
+    if (repeats.has(String(a.id))) w.push(repeatText(repeats.get(String(a.id))));
     if (!a.file_key) w.push('Нет скриншота объявления — приложите снимок экрана или PDF страницы');
     const miss = missingAnalog(spec, a.fields);
     if (miss.length) w.push(`Не заполнено: ${miss.join(', ')}`);
@@ -198,7 +241,7 @@ export function analogWarnings(spec, order, list) {
   const hints = [];
   if (!positions.length) {
     if (done.length < spec.min) hints.push(`Нужно не меньше ${spec.min} аналогов — подтверждено ${done.length}`);
-    return { per, hints: withCommon(hints), confirmed: done.length, min: spec.min };
+    return { per, repeats, hints: withCommon(hints), confirmed: done.length, min: spec.min };
   }
   // По позициям: в зачёт — не больше нужного числа к каждой, чтобы «6 из 6» не набиралось аналогами одной позиции.
   let counted = 0;
@@ -207,10 +250,10 @@ export function analogWarnings(spec, order, list) {
     counted += Math.min(n, spec.min);
     if (n < spec.min) hints.push(`Нужно не меньше ${spec.min} аналогов к позиции ${i + 1} «${name.length > 60 ? `${name.slice(0, 59)}…` : name}» — подтверждено ${n}`);
   });
-  return { per, hints: withCommon(hints), confirmed: counted, min: spec.min * positions.length };
+  return { per, repeats, hints: withCommon(hints), confirmed: counted, min: spec.min * positions.length };
 
   function withCommon(h) {
-    if ([...byKey.values()].some((n) => n > 1)) h.push('Есть повторяющиеся ссылки');
+    if (repeats.size) h.push(`Есть повторяющиеся аналоги: ${[...repeats.keys()].map((id) => `аналог ${list.findIndex((a) => String(a.id) === id) + 1}`).join(', ')}`);
     if (list.some((a) => !a.file_key)) h.push('Не у всех аналогов есть скриншот');
     return h;
   }

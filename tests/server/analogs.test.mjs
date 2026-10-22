@@ -8,7 +8,7 @@ import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid } from '..
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import { createRegistry, validateModule } from '../../src/modules/index.mjs';
 import expertise from '../../src/modules/expertise.mjs';
-import { analogTable, cleanUrl, searchHints } from '../../src/analogs/analogs.mjs';
+import { analogRepeats, analogTable, cleanUrl, listingKey, repeatText, searchHints } from '../../src/analogs/analogs.mjs';
 import { analogMessages } from '../../src/ai/ai.mjs';
 import { runAutoChecks } from '../../src/ai/report-checks.mjs';
 import { buildReport, imageSize } from '../../src/docs/docx.mjs';
@@ -191,7 +191,9 @@ test('предупреждения: повтор ссылки, старое об
   const a2 = await mk('https://www.auto.ru/cars/used/sale/toyota/camry/1?from=search', { price_rub: 2100000, year: 2019, region: 'moscow', listed_on: recent });
   const a3 = await mk('https://auto.drom.ru/moscow/toyota/camry/3.html', { price_rub: 2050000, year: 2014, region: 'mo', listed_on: addDays(todayMsk(), -200) });
   let r = await spec.req('GET', `/api/orders/${o.id}/analogs`);
-  assert.ok(byId(r, a1).warnings.some((w) => /уже есть в деле/.test(w)) && byId(r, a2).warnings.some((w) => /уже есть в деле/.test(w)));
+  // Повтор — у более позднего аналога, с номером первого (2.372); первый остаётся без предупреждения.
+  assert.ok(!byId(r, a1).warnings.some((w) => /уже есть в деле/.test(w)));
+  assert.ok(byId(r, a2).warnings.some((w) => /уже есть в деле — аналог 1/.test(w)));
   const w3 = byId(r, a3).warnings.join('\n');
   assert.match(w3, /старше полугода/);
   assert.match(w3, /Другой регион \(объект — Москва\)/);
@@ -608,4 +610,52 @@ test('Перечень по позициям (2.83): в Word — таблица 
   r = await spec.req('POST', `/api/orders/${o.id}/review/ai`);
   assert.equal(r.status, 201, JSON.stringify(r.body));
   assert.deepEqual((r.body.ai.items.find((i) => i.id === 'analogs').found ?? []).map((f) => f.text).filter((t) => /из дела|не из аналогов/.test(t)), []);
+});
+
+test('2.372: то же объявление другой ссылкой и тот же объект на другом сайте — предупреждение сразу и в списке', async () => {
+  // Номер объявления: город и название в адресе, поддомен — не важны; коротких номеров нет.
+  assert.equal(listingKey('https://www.avito.ru/moskva/kvartiry/2-k._kvartira_54m_5et._4123456789'), 'avito.ru#4123456789');
+  assert.equal(listingKey('https://m.avito.ru/4123456789?utm_source=x'), 'avito.ru#4123456789');
+  assert.equal(listingKey('https://spb.cian.ru/sale/flat/301234567/'), 'cian.ru#301234567');
+  assert.equal(listingKey('https://auto.ru/cars/used/sale/toyota/camry/1/'), null);
+  const L = (id, url, fields = {}) => ({ id, url, url_key: cleanUrl(url).key, fields });
+  const rep = analogRepeats([
+    L(1, 'https://www.cian.ru/sale/flat/301234567/', { price_rub: 12500000, area: 54.3 }),
+    L(2, 'https://domclick.ru/card/sale__flat__1987654321', { price_rub: 12500000, area: 54.3 }),
+    L(3, 'https://moscow.cian.ru/sale/flat/301234567/?from=map', { price_rub: 12400000, area: 54.3 }),
+    L(4, 'https://www.avito.ru/moskva/kvartiry/x_4123456789', { price_rub: 12500000, area: 60 }),
+    L(5, 'https://auto.ru/cars/new/1', { price_rub: 3000000, mileage_km: 0 }),
+    L(6, 'https://drom.ru/new/2.html', { price_rub: 3000000, mileage_km: 0 }),
+  ]);
+  assert.deepEqual(rep.get('2'), { no: 1, same: 'object', what: 'площадь' });
+  assert.deepEqual(rep.get('3'), { no: 1, same: 'listing' });
+  assert.ok(!rep.has('1') && !rep.has('4'), 'другая площадь — не повтор');
+  assert.ok(!rep.has('6'), 'новые машины с пробегом 0 по одной цене — не повтор');
+  assert.match(repeatText(rep.get('3')), /То же объявление, что аналог 1/);
+  assert.match(repeatText(rep.get('2')), /тот же объект, что аналог 1 \(совпадают цена и площадь\)/);
+
+  // Через операции: добавление той же квартиры с другой ссылкой — `repeat` у нового аналога сразу в ответе.
+  const o = await inWork('realty', FLAT, 'Квартира: повтор объявления');
+  const first = await add(o, 'https://www.avito.ru/moskva/kvartiry/2-k._kvartira_54m_4123456789');
+  assert.equal(first.status, 201);
+  assert.equal(byId(first, first.body.id).repeat, null);
+  const second = await add(o, 'https://m.avito.ru/4123456789');
+  assert.equal(second.status, 201, 'повтор не запрещён — решает эксперт');
+  assert.match(byId(second, second.body.id).repeat, /То же объявление, что аналог 1/);
+  assert.ok(byId(second, second.body.id).warnings.some((w) => /То же объявление, что аналог 1/.test(w)));
+  assert.ok(second.body.hints.some((h) => /Есть повторяющиеся аналоги: аналог 2/.test(h)));
+  // Тот же объект на ЦИАН: совпали цена и площадь — после заполнения признаков.
+  const third = await add(o, 'https://www.cian.ru/sale/flat/301234567/');
+  assert.equal(byId(third, third.body.id).repeat, null);
+  const fill = (id, price) => spec.req('PUT', `/api/orders/${o.id}/analogs/${id}`, { fields: { address: 'г. Москва, тестовая ул., 11', area: 54.3, price_rub: price } });
+  assert.equal((await fill(first.body.id, 12500000)).status, 200);
+  const r = await fill(third.body.id, 12500000);
+  assert.match(byId(r, third.body.id).repeat, /тот же объект, что аналог 1 \(совпадают цена и площадь\)/);
+  // Лишнее объявление убрано — у первого предупреждения нет, номера в тексте — по новому порядку.
+  assert.equal((await spec.req('DELETE', `/api/orders/${o.id}/analogs/${second.body.id}`)).status, 200);
+  const after = await spec.req('GET', `/api/orders/${o.id}/analogs`);
+  assert.equal(byId(after, first.body.id).repeat, null);
+  assert.ok(!byId(after, first.body.id).warnings.some((w) => /аналог \d/.test(w)));
+  assert.match(byId(after, third.body.id).repeat, /аналог 1/);
+  assert.ok(after.body.hints.some((h) => h === 'Есть повторяющиеся аналоги: аналог 2'));
 });
