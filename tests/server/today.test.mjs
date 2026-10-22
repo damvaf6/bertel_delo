@@ -547,3 +547,20 @@ test('«Мои заявки» (2.173): у дела, которое вернул 
   assert.equal((await spec.req('POST', `/api/documents/${n.id}/sign`, { confirm: true })).status, 201);
   assert.equal((await mine()).returned, undefined);
 });
+
+test('«Сегодня» у эксперта (2.369): дело на проверке у диспетчера 2 дня и дольше — отдельно, с временем сдачи', async () => {
+  const slow = await offered('Долго на проверке', 9);
+  assert.equal((await step(spec, slow, 'in_work')).status, 200);
+  const quick = await offered('Только что сдано', 9);
+  assert.equal((await step(spec, quick, 'in_work')).status, 200);
+  // Сдано на проверку: у долгого — 50 часов назад, у второго — сейчас (по истории статусов, не по времени дела).
+  await S.sql`update orders set status = 'review' where id in (${slow.id}, ${quick.id})`;
+  await S.sql`insert into order_status_history (order_id, from_status, to_status, side, at)
+    values (${slow.id}, 'in_work', 'review', 'customer', now() - interval '50 hours'), (${quick.id}, 'in_work', 'review', 'customer', now())`;
+  const e = (await spec.req('GET', '/api/today')).body.expert;
+  assert.deepEqual(ids(e.review_long), [slow.id]);
+  assert.ok(Date.now() - Date.parse(e.review_long[0].review_since) >= 49 * 3600_000, 'время — последний переход в проверку');
+  assert.ok(ids(e.review).includes(quick.id) && !ids(e.review).includes(slow.id), 'долгое дело не повторяется в «Ждут проверки»');
+  // Чужому эксперту и руководителю этого нет.
+  assert.equal((await other.req('GET', '/api/today')).body.expert.review_long.length, 0);
+});
