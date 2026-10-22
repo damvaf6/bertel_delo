@@ -2487,6 +2487,16 @@ test('черновик готовым файлом Word (2.29): руководи
   expect(word).toMatch(/Руководитель ____________\n?$/);
   await expect(sp.locator('#draft-state')).toContainText('Последняя правка');
 
+  // 2.363: «Приложить как файл результата» при пустом разделе — сначала остановка со списком; второе нажатие — как есть.
+  await text.fill(`${(await text.inputValue()).replace(/\[(?:заполнить|описать)[^\]]*\]/gi, 'заполнено экспертом')}\n## Приложение для проверки\n`);
+  await sp.getByLabel('Я проверил текст и отвечаю за него').check();
+  await sp.getByRole('button', { name: 'Приложить как файл результата' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Пустые разделы: 1 — «Приложение для проверки». Нажмите раздел выше, чтобы заполнить, или «Приложить как файл результата» ещё раз, чтобы приложить как есть.');
+  await expect(sp.locator('#draft-empty-list').getByRole('button', { name: 'Приложение для проверки', exact: true })).toBeInViewport();
+  await shot(sp, '99i3-specialist-pustoy-razdel-pered-prilozheniem');
+  await sp.getByRole('button', { name: 'Приложить как файл результата' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Файл «Отчёт об оценке.docx» добавлен в результат работы');
+
   // Заказчик кнопки не видит, файла не получает.
   await page.goto(`/kabinet#order=${id}`);
   await expect(page.locator('#draft-box')).toBeHidden();
