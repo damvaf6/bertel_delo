@@ -11,6 +11,8 @@
 // Отбор по эксперту и «Срок на этой неделе» (2.127) — вместе с отбором 2.102 и поиском.
 // Отбор «Срок по заданию на этой неделе» (2.325): срок из задания на оценку раньше срока дела — ближайший первым.
 // Сколько дней по делу ничего не происходило и отбор «Без движения» (2.133) — переписка с заказчиком не в счёт.
+// Отбор «Без движения 5 дней и дольше» (2.368): дело в работе стоит у эксперта (документы от заказчика не ждём) — дольше всех
+// стоящие первыми; «Напомнить всем» — одним нажатием по каждому делу, где сегодня ещё не напоминали.
 // Отбор «Срок прошёл» (2.158): только просроченные, дольше всех просроченные — первыми; на сколько дней — у дела.
 // Отбор «Исправленный файл ждёт подписи эксперта» (2.171): после возврата эксперт загрузил новый файл, но не подписал —
 // дольше всех ждущие первыми; 2 дня и дольше — строка красная.
@@ -68,6 +70,7 @@ const FILTERS = [
   { id: 'back', text: 'Эксперт вернулся после «не принимаю дела»', test: (c) => !!c.back },
   { id: 'inspect', text: 'Осмотр не закончен', test: (c) => !!c.inspection },
   { id: 'idle', text: 'Без движения', test: (c) => c.idle },
+  { id: 'idle_long', text: 'Без движения 5 дней и дольше', test: (c) => c.idle_long && c.status === 'in_work' && !c.docs_wait },
   // 2.235: эксперт запросил документы у заказчика, а их ещё нет — почему дело стоит.
   { id: 'docs', text: 'Ждём документы от заказчика', test: (c) => !!c.docs_wait },
   { id: 'sign', text: 'Ждёт моей подписи', test: (c) => c.sign_wait > 0 },
@@ -166,6 +169,7 @@ function renderCases() {
     active.sort((a, b) => (a.org_extend.state === b.org_extend.state ? new Date(b.org_extend.decided_at ?? b.org_extend.requested_at)
       - new Date(a.org_extend.decided_at ?? a.org_extend.requested_at) : a.org_extend.state === 'declined' ? -1 : 1));
   }
+  if (filter === 'idle_long') active.sort((a, b) => b.last_move.days - a.last_move.days);
   if (filter === 'docs') active.sort((a, b) => new Date(a.docs_wait.since) - new Date(b.docs_wait.since));
   if (filter === 'back') active.sort((a, b) => b.back.until.localeCompare(a.back.until) || String(a.deadline).localeCompare(String(b.deadline)));
   if (filter === 'task_week') active.sort((a, b) => a.task_due.day.localeCompare(b.task_due.day));
@@ -181,6 +185,7 @@ function renderCases() {
     ? `По отбору «${chosen.text}»${who} ничего не найдено${q.trim() ? ` по «${q.trim()}»` : ''}. Нажмите «Все»${expert ? ' или выберите «Все эксперты»' : ''}, чтобы искать по всем делам.`
     : expert ? `У эксперта «${mine[0]?.expert ?? ''}» ничего не найдено по «${q.trim()}». Выберите «Все эксперты», чтобы искать по всем делам.`
       : `Ничего не найдено по «${q.trim()}». Ищите по номеру дела, виду услуги или эксперту.`;
+  renderRemindAll(org, filter === 'idle_long' ? active : []);
   $('org-cases').replaceChildren(
     ...active.map((c) => caseItem(org, c)),
     ...(done.length ? [el('li', { class: 'group', text: `Завершённые · ${done.length}` })] : []),
@@ -370,6 +375,32 @@ function remindRow(org, c, kind = 'case') {
     } }, kind === 'extend' ? 'Напомнить эксперту попросить перенос срока' : 'Напомнить эксперту');
   // Под «Эксперт не принимает дела…» — только кнопка, когда напоминали — видно в общей строке «Напомнить эксперту».
   return kind === 'extend' ? el('div', { class: 'row', 'data-role': 'remind-extend' }, btn) : el('div', { class: 'row', 'data-role': 'remind' }, btn, note);
+}
+
+// «Напомнить всем» (2.368) в отборе «Без движения 5 дней и дольше»: то же напоминание, что у каждого дела (2.125), подряд по
+// делам, где сегодня ещё не напоминали; по остальным — когда снова можно. Предел прежний: одно напоминание по делу в сутки.
+function renderRemindAll(org, list) {
+  const box = $('org-cases-remind-all');
+  const can = list.filter((c) => c.remind?.can_remind);
+  box.classList.toggle('hidden', !list.length);
+  if (!list.length) return box.replaceChildren();
+  const experts = new Set(can.map((c) => c.expert_id)).size;
+  const btn = el('button', { type: 'button', 'data-action': 'remind-all', ...(can.length ? {} : { disabled: '' }),
+    onclick: async () => {
+      btn.disabled = true;
+      let sent = 0;
+      let fail = null;
+      for (const c of can) {
+        try { await api('POST', `/api/orgs/${org.id}/cases/${c.id}/remind`); sent += 1; } catch (err) { fail = err.message; }
+      }
+      await loadOrgCases(org);
+      say($('org-cases-msg'), fail && !sent ? fail : `Напоминания отправлены по делам: ${sent}${fail ? ` · не отправлено: ${can.length - sent} (${fail})` : ''}`,
+        fail ? undefined : 'ok');
+    } }, can.length ? `Напомнить всем · дел: ${can.length}` : 'Напомнить всем');
+  const note = can.length
+    ? `Каждому эксперту придёт уведомление по его делу${experts > 1 ? ` (экспертов: ${experts})` : ''}.`
+    : 'По всем этим делам сегодня уже напоминали — снова можно через сутки после напоминания.';
+  box.replaceChildren(btn, el('p', { class: 'muted', 'data-role': 'remind-all-note', text: note }));
 }
 
 // Передать дело в работе другому эксперту организации (2.62): заболел, ушёл. Файлы, черновик, осмотр и переписка

@@ -119,6 +119,36 @@ async function issueLink(who, o) {
 }
 const caseOf = async (o) => (await head.req('GET', `/api/orgs/${org.id}/cases`)).body.cases.find((c) => c.id === o.id);
 
+// Отбор «Без движения 5 дней и дольше» (2.368): с пятого дня без движения — отдельная отметка `idle_long`; три-четыре дня —
+// только «без движения»; файл эксперта — отметка уходит.
+test('дела экспертов (2.368): «без движения 5 дней и дольше» — с пятого дня', async () => {
+  const long = await taken('Стоит шесть дней', 10, a);
+  const four = await taken('Стоит четыре дня', 10, b);
+  const five = await taken('Стоит ровно пять дней', 10, b);
+  for (const [o, d] of [[long, 6], [four, 4], [five, 5]]) {
+    await S.sql`update order_status_history set at = now() - make_interval(days => ${d}, hours => 1) where order_id = ${o.id}`;
+  }
+  let [cl, cf, c5] = [await caseOf(long), await caseOf(four), await caseOf(five)];
+  assert.deepEqual([cl.last_move.days, cf.last_move.days, c5.last_move.days], [6, 4, 5]);
+  assert.deepEqual([cl.idle, cf.idle, c5.idle], [true, true, true]);
+  assert.deepEqual([cl.idle_long, cf.idle_long, c5.idle_long], [true, false, true]);
+  assert.equal(cl.last_move.idle_long, true);
+  // По каждому делу можно напомнить эксперту; напомнили — до завтра нельзя, отметка остаётся.
+  assert.equal(cl.remind.can_remind, true);
+  assert.equal((await head.req('POST', `/api/orgs/${org.id}/cases/${long.id}/remind`)).status, 201);
+  cl = await caseOf(long);
+  assert.equal(cl.remind.can_remind, false);
+  assert.equal(cl.idle_long, true, 'напоминание — не движение дела');
+  // Эксперт приложил файл — движение есть.
+  assert.equal((await put(a, long, 'расчёт-2.368.pdf')).status, 201);
+  cl = await caseOf(long);
+  assert.equal(cl.idle_long, false);
+  // Завершённые и ожидающие ответа — без отметки.
+  const rest = (await head.req('GET', `/api/orgs/${org.id}/cases`)).body.cases.filter((x) => !['in_work', 'review'].includes(x.status));
+  assert.ok(rest.every((x) => x.idle_long === false));
+});
+
+
 test('дела экспертов (2.216): «осмотр не закончен» — «Готово» без обязательных шагов или ссылка кончается в ближайшие сутки', async () => {
   const gap = await taken('Осмотр — снял не всё', 10, a);
   const soon = await taken('Осмотр — ссылка кончается', 10, b);

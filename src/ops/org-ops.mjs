@@ -58,6 +58,8 @@ export async function caseRemind(sql, order) {
 // снимается — без этого только что возвращённое дело выглядело давно стоящим). Переписка с заказчиком и внутренняя
 // переписка не в счёт. С какого дня — «без движения» в отборе руководителя.
 export const CASE_IDLE_DAYS = 3;
+// 2.368: пять дней и дольше — отдельный отбор руководителя «Без движения 5 дней и дольше» с напоминанием всем сразу.
+export const CASE_IDLE_LONG_DAYS = 5;
 export async function caseMoves(sql, orders) {
   const ids = orders.map((o) => o.id);
   if (!ids.length) return new Map();
@@ -89,7 +91,8 @@ export async function caseMoves(sql, orders) {
     const last = at.get(o.id) ?? o.updated_at;
     const days = Math.max(0, Math.floor((now - new Date(last).getTime()) / 86_400_000));
     const waitsOrg = orgSign.has(o.id);
-    return [o.id, { at: last, days, org_sign: waitsOrg, idle: days >= CASE_IDLE_DAYS && !waitsOrg }];
+    return [o.id, { at: last, days, org_sign: waitsOrg, idle: days >= CASE_IDLE_DAYS && !waitsOrg,
+      idle_long: days >= CASE_IDLE_LONG_DAYS && !waitsOrg }];
   }));
 }
 
@@ -319,6 +322,7 @@ export function orgOps() {
           inspection: inspections.get(o.id) ?? null,
           docs_wait: docs.get(o.id) ?? null,
           idle: !!moves.get(o.id)?.idle,
+          idle_long: !!moves.get(o.id)?.idle_long,
           extend: ext.get(o.id) ?? null,
           org_extend: orgExt.get(o.id) ?? null,
           // Передать некому и перенос ещё не просят (2.221): готовые новый срок и причина для просьбы к диспетчеру от организации.
