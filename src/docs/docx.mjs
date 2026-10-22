@@ -123,10 +123,12 @@ function titlePage(meta, st) {
 const EMU_PX = 9525;
 const MAX_W = 5900000;   // ≈ 16,4 см — ширина текста на A4 с нашими полями
 const MAX_H = 7900000;   // ≈ 22 см
+// Скриншот аналога (2.362) ниже: над ним на той же странице — заголовок «Аналог N» и строки (ссылка, время, отпечаток).
+const MAX_H_LISTED = 6480000;   // ≈ 18 см
 function drawing(img, n) {
   let w = img.w * EMU_PX;
   let h = img.h * EMU_PX;
-  const k = Math.min(1, MAX_W / w, MAX_H / h);
+  const k = Math.min(1, MAX_W / w, (img.maxH ?? MAX_H) / h);
   w = Math.round(w * k);
   h = Math.round(h * k);
   return '<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0">'
@@ -184,13 +186,15 @@ function appendixBlocks(appendix, media) {
   const out = [{ type: 'break' }, { type: 'head', level: 1, text: appendix.title, plain: true }];
   for (const it of appendix.items) {
     if (appendix.caption) { out.push(...captioned(it, media)); continue; }
-    out.push({ type: 'head', level: 2, text: it.title, plain: true });
-    for (const l of it.lines) out.push({ type: 'para', text: l });
+    // 2.362: заголовок «Аналог N» и строки не остаются внизу страницы без скриншота — держатся вместе с ним.
     const size = it.image ? imageSize(it.image) : null;
-    if (size && size.w > 0 && size.h > 0) {
-      const img = { ...size, buf: it.image, n: media.length + 1, rid: `rIdDeloImg${media.length + 1}` };
+    const pic = size && size.w > 0 && size.h > 0;
+    out.push({ type: 'head', level: 2, text: it.title, plain: true });
+    for (const l of it.lines) out.push({ type: 'para', text: l, next: pic });
+    if (pic) {
+      const img = { ...size, buf: it.image, n: media.length + 1, rid: `rIdDeloImg${media.length + 1}`, maxH: MAX_H_LISTED };
       media.push(img);
-      out.push({ type: 'image', img });
+      out.push({ type: 'image', img, last: true });
     }
   }
   return out;
@@ -203,8 +207,9 @@ function reportBody(text, meta, st, appendix = null, media = []) {
     if (b.type === 'head') return para(run(b.text), pStyle(b.level === 1 ? st.h1 : st.h2));
     if (b.type === 'table') return table(b.rows, st);
     if (b.type === 'break') return PAGE_BREAK;
-    if (b.type === 'image') return para(drawing(b.img, b.img.n), '<w:keepNext/><w:jc w:val="center"/>');
+    if (b.type === 'image') return para(drawing(b.img, b.img.n), `${b.last ? '' : '<w:keepNext/>'}<w:jc w:val="center"/>`);
     if (b.type === 'caption') return para(run(b.text, `${b.bold ? '<w:b/>' : ''}<w:sz w:val="20"/><w:szCs w:val="20"/>`), `${b.next ? '<w:keepNext/>' : ''}<w:spacing w:after="${b.next ? 0 : 240}"/><w:jc w:val="center"/>`);
+    if (b.next) return para(run(b.text), '<w:keepNext/>');
     return para(run(b.text));
   }).join('');
   return titlePage(meta, st) + para(run('Содержание'), `${pStyle(st.title)}<w:jc w:val="center"/>`) + toc(heads, st) + PAGE_BREAK + content;

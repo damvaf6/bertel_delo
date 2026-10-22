@@ -372,6 +372,25 @@ test('Word: картинки — PNG и JPEG по размеру из файла
   }
 });
 
+// 2.362: заголовок «Аналог N» и строки под ним держатся вместе со скриншотом; скриншот ниже — помещаются на одной странице.
+test('Word: в приложении заголовок «Аналог N» и ссылка — на одной странице со скриншотом', () => {
+  const appendix = { title: 'Приложение. Скриншоты объявлений (аналоги)', items: [
+    { title: 'Аналог 1 — cian.ru', lines: ['Ссылка: https://www.cian.ru/sale/flat/1/', 'Отпечаток файла (SHA-256): ab'], image: png(1080, 2400) },
+    { title: 'Аналог 2 — avito.ru', lines: ['Скриншот не приложен'], image: null },
+  ] };
+  const meta = { title: 'Отчёт об оценке', number: '№ Т-1', date: '04.10.2026' };
+  const doc = docPart(buildReport('## Раздел\nТекст', meta, null, { appendix }), 'word/document.xml');
+  const paras = doc.split('<w:p>').slice(1);
+  const at = (t) => paras.find((p) => p.includes(t));
+  assert.ok(at('Ссылка: https://www.cian.ru/sale/flat/1/').includes('<w:keepNext/>'), 'ссылка держится со скриншотом');
+  assert.ok(at('Отпечаток файла').includes('<w:keepNext/>'), 'последняя строка тоже');
+  assert.ok(!at('Скриншот не приложен').includes('<w:keepNext/>'), 'без скриншота — как обычный текст');
+  const pic = paras.find((p) => p.includes('<w:drawing>'));
+  assert.ok(!pic.includes('<w:keepNext/>'), 'скриншот не тянет за собой следующий аналог');
+  const cy = Number(pic.match(/<wp:extent cx="\d+" cy="(\d+)"/)[1]);
+  assert.ok(cy <= 6480000, `высота скриншота ${cy} — с заголовком и строками на одной странице`);
+});
+
 function docPart(buf, name) {
   let p = buf.length - 22;
   while (buf.readUInt32LE(p) !== 0x06054b50) p -= 1;
