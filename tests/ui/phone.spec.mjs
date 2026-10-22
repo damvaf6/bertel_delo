@@ -6761,6 +6761,72 @@ test('дела экспертов (2.133): руководитель видит �
   for (const p of [cp, ap, hp]) await p.context().close();
 });
 
+// Отбор «Без движения 5 дней и дольше» (2.368): дела в работе, что стоят у эксперта пять дней и дольше (документы от заказчика не
+// ждём), — дольше всех стоящие первыми; «Напомнить всем» — по каждому делу одним нажатием, потом кнопка ждёт сутки.
+test('дела экспертов (2.368): отбор «Без движения 5 дней и дольше» и «Напомнить всем»', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), ap = await ctx(), bp = await ctx(), hp = await ctx();
+  const customer = await signIn(cp, '+79990013681');
+  const a = await signIn(ap, '+79990013682'), b = await signIn(bp, '+79990013683'), head = await signIn(hp, '+79990013684');
+  const orgId = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Пять дней ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Стоянова Ирина' where id = $1", [a.id]);
+    await c.query("update users set full_name = 'Медлев Пётр' where id = $1", [b.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member'), ($1, $4, 'member')", [org.id, head.id, a.id, b.id]);
+    for (const u of [a, b]) {
+      await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [u.id, org.id]);
+      await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [u.id]);
+    }
+    const add = async (title, who, idle) => {
+      const id = (await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+        values ('expertise', 'realty', $1, $2, $3, 'in_work', current_date + 10, 1500000, now(),
+                '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Тихая ул., 5","area":"40"}') returning id`,
+        [title, customer.id, who.id])).rows[0].id;
+      await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [id, who.id]);
+      await c.query(`insert into order_status_history (order_id, actor_id, side, from_status, to_status, at)
+        values ($1, $2, 'executor', 'awaiting_executor', 'in_work', now() - make_interval(days => $3::int, hours => 1))`, [id, who.id, idle]);
+    };
+    await add('Пять: неделя', a, 7);
+    await add('Пять: пять дней', b, 5);
+    await add('Пять: три дня', a, 3);
+    await add('Пять: свежее', b, 0);
+    return org.id;
+  });
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const rows = hp.locator('#org-cases > li[data-case]');
+  await expect(rows).toHaveCount(4);
+  await expect(hp.locator('[data-filter="idle"]')).toHaveText('Без движения · 3');
+  const chip = hp.locator('[data-filter="idle_long"]');
+  await expect(chip).toHaveText('Без движения 5 дней и дольше · 2');
+  await expect(hp.locator('#org-cases-remind-all')).toBeHidden();
+  await chip.click();
+  await expect(rows).toHaveCount(2);
+  // Дольше всех стоящее — первым.
+  await expect(rows.nth(0).locator('[data-role="idle"]')).toContainText('Без движения 7 дн.');
+  await expect(rows.nth(0)).toContainText('Стоянова Ирина');
+  await expect(rows.nth(1).locator('[data-role="idle"]')).toContainText('Без движения 5 дн.');
+  const all = hp.locator('[data-action="remind-all"]');
+  await expect(all).toHaveText('Напомнить всем · дел: 2');
+  await expect(hp.locator('[data-role="remind-all-note"]')).toHaveText('Каждому эксперту придёт уведомление по его делу (экспертов: 2).');
+  const w = await hp.evaluate(() => document.documentElement.scrollWidth);
+  expect(w).toBeLessThanOrEqual(412);
+  await hp.locator('#org-cases-filter').scrollIntoViewIfNeeded();
+  await shot(hp, 'c9b-rukovoditel-bez-dvizheniya-5-dnej');
+  await all.click();
+  await expect(hp.locator('#org-cases-msg')).toHaveText('Напоминания отправлены по делам: 2');
+  await expect(all).toBeDisabled();
+  await expect(hp.locator('[data-role="remind-all-note"]')).toContainText('сегодня уже напоминали');
+  await expect(rows.nth(0).locator('[data-action="remind-expert"]')).toBeDisabled();
+  await shot(hp, 'c9c-rukovoditel-napomnit-vsem');
+  // Каждый эксперт получил напоминание по своему делу.
+  const n = await db(async (c) => (await c.query(`select count(distinct expert_id)::int as n from case_reminders where org_id = $1`, [orgId])).rows[0].n);
+  expect(n).toBe(2);
+  // Другой отбор — кнопки «Напомнить всем» нет.
+  await hp.locator('[data-filter="idle"]').click();
+  await expect(hp.locator('#org-cases-remind-all')).toBeHidden();
+  for (const p of [cp, ap, bp, hp]) await p.context().close();
+});
+
 test('заготовки замечаний руководителя (2.103): запомнить пункты один раз, вставить в следующее замечание одной кнопкой', async ({ browser, baseURL }) => {
   const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
   const cp = await ctx(), ep = await ctx(), hp = await ctx();
