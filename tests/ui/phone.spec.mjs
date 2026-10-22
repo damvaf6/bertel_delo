@@ -12645,6 +12645,43 @@ test('2.366: сводка за месяц — дни от принятия до 
   for (const p of [ep, hp, cp]) await p.context().close();
 });
 
+// 2.376: сводка за месяц — сколько раз диспетчер вернул дела на доработку, по скольким делам и с какими причинами.
+test('2.376: сводка за месяц — возвраты диспетчера на доработку и причины', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), hp = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990037601');
+  const head = await signIn(hp, '+79990037602');
+  await signIn(cp, '+79990037603');
+  const ids = [];
+  for (const t of ['Квартира на Садовой', 'Дом в Истре']) {
+    ids.push((await (await cp.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: t }, headers: H })).json()).order.id);
+  }
+  const orgId = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name, created_at) values ('ООО «Бюро доработок ${Date.now()}»', now() - interval '3 months') returning id`);
+    await c.query("update users set full_name = 'Эксперт Доработкин' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now()), ($1, $3, 'member', now() - interval '40 days')", [org.id, head.id, expert.id]);
+    await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [expert.id, org.id]);
+    await c.query("update orders set status = 'in_work', executor_user_id = $2, deadline = current_date + 5 where id = any($1::uuid[])", [ids, expert.id]);
+    for (const [id, reason] of [[ids[0], 'Нет фото фасада'], [ids[0], 'Нет фото фасада.'], [ids[1], 'Не тот вид стоимости']]) {
+      await c.query("insert into order_status_history (order_id, from_status, to_status, side, reason) values ($1, 'review', 'in_work', 'dispatcher', $2)", [id, reason]);
+    }
+    return org.id;
+  });
+
+  await hp.goto(`/kabinet#org=${orgId}`);
+  await expect(hp.locator('#org-report-box')).toBeVisible();
+  await expect(hp.locator('#org-report-disp-box')).toBeVisible();
+  await expect(hp.locator('#org-report-disp-total')).toHaveText('Возвращено на доработку: 3, в 2 делах.');
+  await expect(hp.locator('#org-report-disp > li')).toHaveText(['Нет фото фасада. — 2 раза', 'Не тот вид стоимости — 1 раз']);
+  const row = hp.locator('#org-report > li').filter({ hasText: 'Эксперт Доработкин' });
+  await expect(row.locator('[data-expert-disp]')).toHaveText('причины возврата на доработку: «Нет фото фасада.» ×2, «Не тот вид стоимости»');
+  await hp.locator('#org-report-disp-box').scrollIntoViewIfNeeded();
+  await shot(hp, 'i09-rukovoditel-svodka-vozvraty-dispetchera');
+  await row.locator('[data-expert-disp]').scrollIntoViewIfNeeded();
+  await shot(hp, 'i10-rukovoditel-svodka-prichiny-u-eksperta');
+  for (const p of [ep, hp, cp]) await p.context().close();
+});
+
 // 2.268: «Собрать Word заново» — рядом с «Заменить всё по выписке» и с заменой одной находки: черновик сразу собирается в
 // файл результата, без перехода к черновику; отменили замену — кнопка уходит.
 test('2.268: «Собрать Word заново» рядом с заменой по выписке ЕГРН', async ({ browser, baseURL }) => {

@@ -14,6 +14,8 @@
 // Подпись организации (2.366): сколько дней в среднем от принятия дела до подписи организации и сколько файл ждал её после
 // подписи эксперта.
 // Задание на оценку от банка (2.309): сколько раз эксперты просили его у заказчика, сколько пришло и через сколько дней.
+// Возвраты диспетчера на доработку (2.376): сколько раз, по скольким делам и с какими причинами — по организации и у
+// каждого эксперта.
 // Частые замечания (2.105) — пункты, с которыми руководитель чаще всего возвращал отчёты: по организации и у каждого эксперта.
 import { api, el, say } from '/common.js';
 import { rub } from '/money.js';
@@ -22,6 +24,8 @@ import { rub } from '/money.js';
 const times = (n) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? 'раз' : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? 'раза' : 'раз'}`;
 const experts = (n) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? 'эксперта' : 'экспертов'}`;
 
+// «в 1 деле», «в 3 делах».
+const casesRu = (n) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? 'деле' : 'делах'}`;
 const $ = (id) => document.getElementById(id);
 const MONTHS = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
 const monthRu = (m) => `${MONTHS[Number(m.slice(5, 7)) - 1]} ${m.slice(0, 4)}`;
@@ -213,6 +217,13 @@ async function load(month) {
   $('org-report-remarks').replaceChildren(...top.map((x) => el('li', { 'data-remark': '' },
     el('span', { text: x.text }),
     el('span', { class: 'muted', text: ` — ${times(x.n)}${x.experts > 1 ? `, у ${experts(x.experts)}` : ''}` }))));
+  const disp = report.disp_reasons ?? [];
+  $('org-report-disp-box').classList.toggle('hidden', !report.total.returned_dispatcher);
+  $('org-report-disp-total').textContent = report.total.returned_dispatcher
+    ? `Возвращено на доработку: ${report.total.returned_dispatcher}, в ${casesRu(report.total.returned_dispatcher_cases)}.` : '';
+  $('org-report-disp').replaceChildren(...disp.map((x) => el('li', { 'data-disp-reason': '' },
+    el('span', { text: x.text }),
+    el('span', { class: 'muted', text: ` — ${times(x.n)}${x.experts > 1 ? `, у ${experts(x.experts)}` : ''}` }))));
   $('org-report').replaceChildren(...report.experts.map((x) => el('li', { 'data-report-expert': x.user_id },
     el('div', { class: 'title', text: x.full_name }),
     el('div', { class: 'muted', text: `принял: ${x.accepted} · сдано: ${x.done}` }),
@@ -226,6 +237,8 @@ async function load(month) {
     ...(x.returned_head || x.returned_dispatcher ? [el('div', { class: 'muted', text: `возвращено: ${[
       x.returned_head ? `Вами — ${x.returned_head}` : null, x.returned_dispatcher ? `на доработку — ${x.returned_dispatcher}` : null,
     ].filter(Boolean).join(', ')}` })] : []),
+    ...(x.disp_reasons?.length ? [el('div', { class: 'muted', 'data-expert-disp': '', text: `причины возврата на доработку: ${
+      x.disp_reasons.map((m) => `«${m.text}»${m.n > 1 ? ` ×${m.n}` : ''}`).join(', ')}` })] : []),
     ...(resign(x) ? [el('div', { class: 'muted', 'data-expert-resign': '', text: `после Ваших возвратов: ${resign(x)}` })] : []),
     ...(signedAi(x) ? [el('div', { class: signedWarn(x) ? 'warn' : 'muted', 'data-expert-signed': '', text: signedAi(x) })] : []),
     ...(egrnFirst(x) ? [el('div', { class: x.egrn_first ? 'warn' : 'muted', 'data-expert-egrn': '', text: egrnFirst(x) })] : []),

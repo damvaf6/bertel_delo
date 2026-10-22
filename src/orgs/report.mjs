@@ -172,6 +172,15 @@ const dispReturnsQ = (sql, orgId, ids, { start, end }) => sql`
   where o.executor_user_id = any(${ids}::uuid[]) and h.from_status = 'review' and h.to_status = 'in_work'
     and h.at >= ${start} and h.at < ${end} and h.at >= m.created_at
   group by o.executor_user_id`;
+// Причины возвратов диспетчера за месяц (2.376): текст из шага «Вернуть на доработку», по эксперту и делу.
+const dispReasonsQ = (sql, orgId, ids, { start, end }) => sql`
+  select o.executor_user_id as user_id, h.order_id, h.reason as text, h.at
+  from order_status_history h join orders o on o.id = h.order_id
+  join org_members m on m.org_id = ${orgId} and m.user_id = o.executor_user_id
+  where o.executor_user_id = any(${ids}::uuid[]) and h.from_status = 'review' and h.to_status = 'in_work'
+    and h.at >= ${start} and h.at < ${end} and h.at >= m.created_at
+  order by h.at desc, h.id desc`;
+const casesOf = (rows) => new Set(rows.map((r) => r.order_id)).size;
 
 // Возвраты руководителя за месяц и первая подпись эксперта по тому же делу после каждого (2.168): из журнала, потому что
 // строку подписи следующий возврат снимает.
@@ -512,7 +521,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
   const { start, end } = await monthBounds(sql, month);
   const since = (await sql`select to_char(created_at at time zone 'Europe/Moscow', 'YYYY-MM') as m from organizations
                            where id = ${orgId}`)[0]?.m ?? '';
-  const none = { accepted: [], done: [], headReturns: [], resign: [], signed: [], firstSign: [], remarkItems: [], dispReturns: [], paid: [], active: [],
+  const none = { accepted: [], done: [], headReturns: [], resign: [], signed: [], firstSign: [], remarkItems: [], dispReturns: [], dispReasons: [], paid: [], active: [],
     bankTask: [], letterAsk: [] };
   const q = !ids.length ? none : {
     accepted: await sql`
@@ -534,6 +543,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
       where r.org_id = ${orgId} and r.executor_user_id = any(${ids}::uuid[]) and r.created_at >= ${start} and r.created_at < ${end}
       order by r.created_at desc, r.id desc, i.n`,
     dispReturns: await dispReturnsQ(sql, orgId, ids, { start, end }),
+    dispReasons: await dispReasonsQ(sql, orgId, ids, { start, end }),
     paid: await sql`
       select p.executor_user_id as user_id, coalesce(sum(p.amount_kop), 0)::bigint as kop from payouts p
       join org_members m on m.org_id = ${orgId} and m.user_id = p.executor_user_id
@@ -570,6 +580,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
       overdue_now: current ? q.active.filter((o) => o.user_id === e.user_id && isOverdue(o, today)).length : null,
       returned_head: headReturns.get(e.user_id) ?? 0,
       returned_dispatcher: dispReturns.get(e.user_id) ?? 0,
+      returned_dispatcher_cases: casesOf(q.dispReasons.filter((r) => r.user_id === e.user_id)),
       fee_kop: done.reduce((s, o) => s + feeOf(o), 0),
       paid_kop: paid.get(e.user_id) ?? 0,
       avg_days: avgDays(p),
@@ -588,12 +599,14 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
       ...letterAsk(q.letterAsk.filter((x) => x.user_id === e.user_id)),
       ...orgSign(done),
       remarks: topRemarks(q.remarkItems.filter((i) => i.user_id === e.user_id), TOP_REMARKS_EXPERT).map(({ text, n }) => ({ text, n })),
+      disp_reasons: topRemarks(q.dispReasons.filter((i) => i.user_id === e.user_id && i.text), TOP_REMARKS_EXPERT)
+        .map(({ text, n }) => ({ text, n })),
       prev: cmp ? cmp.experts.get(e.user_id) : null,
       services: byService(done, registry).map(({ name, done: n }) => ({ name, n })),
     };
   });
   const sum = (k) => (k === 'overdue_now' && !current ? null : rows.reduce((s, r) => s + r[k], 0));
-  const keys = ['accepted', 'done', 'done_late', 'overdue_now', 'returned_head', 'returned_dispatcher', 'fee_kop', 'paid_kop',
+  const keys = ['accepted', 'done', 'done_late', 'overdue_now', 'returned_head', 'returned_dispatcher', 'returned_dispatcher_cases', 'fee_kop', 'paid_kop',
     'late_first', 'late_first_moved', 'first_kept', 'signed', 'signed_no_ai', 'signed_points_left'];
   const all = pace(q.done);
   return {
@@ -609,6 +622,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
     prev_month: cmp ? prevM : null,
     prev_month_name: cmp ? monthRu(prevM) : null,
     top_remarks: topRemarks(q.remarkItems, TOP_REMARKS),
+    disp_reasons: topRemarks(q.dispReasons.filter((i) => i.text), TOP_REMARKS),
     by_service: byService(q.done, registry),
   };
 }
@@ -750,6 +764,13 @@ export function reportCsv(orgName, r) {
       ...[...r.experts.filter((x) => x.letter_ask).map((x) => [x.full_name, x]), ['Итого', r.total]]
         .map(([name, x]) => [name, x.letter_ask, x.letter_ask_cases, x.letter_ask_got, daysCell(x.letter_ask_days),
           daysCell(x.letter_ask_max), x.letter_ask_wait])] : []),
+    // 2.376: только если за месяц диспетчер возвращал дела на доработку.
+    ...(r.total.returned_dispatcher ? [[], ['Возвраты диспетчера на доработку', 'Возвращено', 'В скольких делах', 'Частые причины'],
+      ...[...r.experts.filter((x) => x.returned_dispatcher).map((x) => [x.full_name, x]), ['Итого', r.total]]
+        .map(([name, x]) => [name, x.returned_dispatcher, x.returned_dispatcher_cases,
+          (x.disp_reasons ?? r.disp_reasons ?? []).map((m) => `${m.text}${m.n > 1 ? ` ×${m.n}` : ''}`).join(' | ')])] : []),
+    ...(r.disp_reasons?.length ? [[], ['Причины возврата диспетчером', 'Сколько раз', 'У скольких экспертов'],
+      ...r.disp_reasons.map((x) => [x.text, x.n, x.experts])] : []),
     ...(r.top_remarks?.length ? [[], ['Частые замечания при возврате', 'Сколько раз', 'У скольких экспертов'],
       ...r.top_remarks.map((x) => [x.text, x.n, x.experts])] : []),
   ];
