@@ -16851,3 +16851,85 @@ test('2.369: «Сегодня» — дело на проверке у диспе
   await expect(ep).toHaveURL(new RegExp(`#order=${A}$`));
   await ep.context().close(); await cp.context().close();
 });
+
+// Прогон 2.370 по пачке 2.361–2.369: эксперт организации с полисом, который кончается раньше срока дела, одно дело стоит неделю,
+// другое — три дня на проверке у диспетчера.
+test('прогон 2.370: эксперт и руководитель по пачке 2.361–2.369', async ({ browser, baseURL }) => {
+  test.setTimeout(180_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), hp = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990037001'), head = await signIn(hp, '+79990037002'), customer = await signIn(cp, '+79990037003');
+  const { orgId, A, R } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Прогон-22 ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Пачкина Вера' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    await c.query("insert into morning_digests (user_id, day) select unnest($1::uuid[]), (now() at time zone 'Europe/Moscow')::date on conflict do nothing",
+      [[expert.id, head.id]]);
+    const add = async (title, status, days) => {
+      const id = (await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+        values ('expertise', 'realty', $1, $2, $3, $4, current_date + 10, 1500000, now(),
+                '{"purpose":"deal","region":"moscow","object_type":"flat","address":"г. Москва, Пачечная ул., 22","area":"40"}') returning id`,
+        [title, customer.id, expert.id, status])).rows[0].id;
+      await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now() - interval '8 days')", [id, expert.id]);
+      await c.query(`insert into order_status_history (order_id, actor_id, side, from_status, to_status, at)
+        values ($1, $2, 'executor', 'awaiting_executor', 'in_work', now() - interval '8 days')`, [id, expert.id]);
+      if (status === 'review') {
+        await c.query(`insert into order_status_history (order_id, actor_id, side, from_status, to_status, at)
+          values ($1, $2, 'executor', 'in_work', 'review', now() - make_interval(days => $3::int, hours => 1))`, [id, expert.id, days]);
+      }
+      return id;
+    };
+    const a = await add('Прогон-22: стоит неделю', 'in_work');
+    const r = await add('Прогон-22: у диспетчера', 'review', 6);
+    return { orgId: org.id, A: a, R: r };
+  });
+  expect((await ep.request.post('/api/specialist/me/dossier', { data: { kind: 'certificate', title: 'Оценка недвижимости', number: '037001-1', valid_until: inDays(300) }, headers: H })).status()).toBe(201);
+  expect((await ep.request.post('/api/specialist/me/dossier', { data: { kind: 'policy', title: 'Тестовое страхование', number: 'П-370', valid_until: inDays(4), amount_rub: 5000000 }, headers: H })).status()).toBe(201);
+
+  // Руководитель: «Без движения 5 дней и дольше» — только дело в работе (2.368); дело на проверке у диспетчера шесть дней —
+  // не «без движения» (исправлено: было «Без движения 6 дн.» с «Напомнить эксперту», хотя ждёт диспетчера).
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const rows = hp.locator('#org-cases > li[data-case]');
+  await expect(rows).toHaveCount(2);
+  await expect(hp.locator('[data-filter="idle_long"]')).toHaveText('Без движения 5 дней и дольше · 1');
+  await expect(hp.locator('[data-filter="idle"]')).toHaveText('Без движения · 1');
+  const rev = hp.locator(`#org-cases > li[data-case="№ ${R.slice(0, 8).toUpperCase()}"]`);
+  await expect(rev.locator('[data-role="last-move"]')).toHaveText('На проверке у диспетчера, последнее движение по делу: 6 дн. назад');
+  await expect(rev.locator('[data-role="idle"]')).toHaveCount(0);
+  expect(await hp.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await rev.scrollIntoViewIfNeeded();
+  await shot(hp, 'h08-progon22-rukovoditel-u-dispetchera');
+  await hp.locator('[data-filter="idle_long"]').click();
+  await expect(rows).toHaveCount(1);
+  await hp.locator('[data-action="remind-all"]').click();
+  await expect(hp.locator('#org-cases-msg')).toHaveText('Напоминания отправлены по делам: 1');
+
+  // Эксперт: «Сегодня» — дело у диспетчера дольше 2 дней строкой (2.369).
+  await ep.goto('/kabinet');
+  await expect(ep.locator('#today-box li[data-today-item="review-long"]').filter({ hasText: 'Прогон-22: у диспетчера' }))
+    .toContainText('ждёт 6 дн.');
+  // В деле — полис кончается раньше срока дела (2.365).
+  await ep.goto(`/kabinet#order=${A}&to=result`);
+  const term = ep.locator('#dossier-term-box');
+  await expect(term).toBeVisible();
+  await expect(term.locator('li')).toContainText(['Полис страхования оценщика']);
+  await term.scrollIntoViewIfNeeded();
+  await shot(ep, 'h09-progon22-ekspert-polis');
+  // Эксперт загрузил и подписал отчёт, пока полис действует, — предупреждение уходит (исправлено: оставалось «составьте и
+  // подпишите»).
+  const up = await ep.request.post(`/api/orders/${A}/results`, { data: Buffer.from('ОТЧЁТ ОБ ОЦЕНКЕ № 22\nОбъект оценки: квартира'),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Отчёт прогон.txt') } });
+  expect(up.status()).toBe(201);
+  const doc = (await up.json()).document.id;
+  await ep.reload();
+  await expect(term).toBeVisible();
+  expect((await ep.request.post(`/api/documents/${doc}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  await ep.reload();
+  await expect(ep.locator(`#docs li.doc[data-doc="${doc}"]`)).toBeVisible();
+  await expect(term).toBeHidden();
+  expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await shot(ep, 'h10-progon22-ekspert-podpisal');
+  for (const p of [ep, hp, cp]) await p.context().close();
+});

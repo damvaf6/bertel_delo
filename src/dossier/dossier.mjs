@@ -57,7 +57,14 @@ export async function loadDossier(sql, userId, { languages = false } = {}) {
 // составить и подписать, пока документы действуют. Только исполнителю, только дело в работе со сроком; истёкшие — тоже.
 export async function dossierTermView(sql, registry, order, userId, today = todayMsk()) {
   if (!['in_work', 'awaiting_executor'].includes(order.status) || !order.deadline || !needsValidDossier(registry, order)) return null;
-  const items = (await loadDossier(sql, userId)).filter((i) => BLOCKING_KINDS.includes(i.kind) && i.valid_until && i.valid_until < order.deadline);
+  // Прогон 2.370: эксперт уже подписал свой файл результата — отчёт составлен и подписан; документы должны были действовать
+  // в день подписи, а не до срока дела.
+  const [signed] = await sql`
+    select to_char(max(s.signed_at) at time zone 'Europe/Moscow', 'YYYY-MM-DD') as day from document_signatures s
+    join documents d on d.id = s.document_id and d.kind = 'result' and d.deleted_at is null and d.uploaded_by = ${userId}
+    where s.order_id = ${order.id} and s.role = 'expert' and s.signer_id = ${userId}`;
+  const until = signed?.day ?? order.deadline;
+  const items = (await loadDossier(sql, userId)).filter((i) => BLOCKING_KINDS.includes(i.kind) && i.valid_until && i.valid_until < until);
   if (!items.length) return null;
   return {
     deadline: order.deadline,

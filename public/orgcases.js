@@ -348,6 +348,10 @@ function orgExtendRow({ org_extend: x, transfer_to: mates, deadline }) {
 function moveRow(c) {
   const d = c.last_move.days;
   const ago = d === 0 ? 'сегодня' : d === 1 ? 'вчера' : `${d} дн. назад`;
+  // Прогон 2.370: на проверке у диспетчера ход за ним, не за экспертом — без «Без движения».
+  if (c.last_move.review) {
+    return el('div', { class: 'muted', 'data-role': 'last-move', text: `На проверке у диспетчера, последнее движение по делу: ${ago}` });
+  }
   return c.idle
     ? el('div', { class: 'row', 'data-role': 'idle' }, el('span', { class: 'badge warn', text: `Без движения ${d} дн.` }),
       el('span', { class: 'muted', text: `последнее — ${timeRu(c.last_move.at)}` }))

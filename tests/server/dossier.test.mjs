@@ -314,3 +314,33 @@ test('2.365: аттестат или полис кончаются раньше 
   await S.sql`update orders set status = 'done' where id = ${o.id}`;
   assert.equal(await term(), null);
 });
+
+// Прогон 2.370: эксперт подписал файл результата, пока полис действовал, — предупреждения «кончается раньше срока дела» нет;
+// подписал после конца полиса — предупреждение остаётся (с пометкой «истёк»).
+test('прогон 2.370: досье — после подписи результата предупреждение о сроке документа сверяется с днём подписи', async () => {
+  const exp = await login(S, '+79990001409');
+  await makeSpecialist(S.sql, exp.user.id, { permits: [['expertise', 'vehicle']] });
+  await S.sql`update users set full_name = 'Тестова Анна' where id = ${exp.user.id}`;
+  const add = (body) => exp.req('POST', '/api/specialist/me/dossier', body);
+  assert.equal((await add({ kind: 'certificate', title: 'Оценка движимого имущества', number: '000370-1', valid_until: addDays(todayMsk(), 100) })).status, 201);
+  const pol = await add({ kind: 'policy', title: 'Тестовое страхование', number: 'П-370', valid_until: addDays(todayMsk(), 5), amount_rub: 5_000_000 });
+  assert.equal(pol.status, 201, JSON.stringify(pol.body));
+  const { o, offer } = await vehicleOrder(exp);
+  const term = async () => (await exp.req('GET', `/api/orders/${o.id}/documents`)).body.dossier_term;
+  assert.equal((await offer()).status, 200);
+  assert.equal((await step(exp, o, 'in_work')).status, 200);
+  assert.deepEqual((await term()).items.map((i) => i.kind), ['policy']);
+
+  const up = await exp.req('POST', `/api/orders/${o.id}/results`, Buffer.from('ОТЧЁТ ОБ ОЦЕНКЕ\nАвтомобиль'), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Отчёт.txt') } });
+  assert.equal(up.status, 201, JSON.stringify(up.body));
+  // Загружен, но не подписан — предупреждение на месте.
+  assert.deepEqual((await term()).items.map((i) => i.kind), ['policy']);
+  const signed = await exp.req('POST', `/api/documents/${up.body.document.id}/sign`, { confirm: true });
+  assert.equal(signed.status, 201, JSON.stringify(signed.body));
+  assert.equal(await term(), null);
+  // Подписано уже после конца полиса — предупреждение остаётся.
+  await S.sql`update dossier_items set valid_until = ${addDays(todayMsk(), -2)}::date where id = ${pol.body.id}`;
+  await S.sql`update document_signatures set signed_at = now() - interval '1 day' where document_id = ${up.body.document.id}`;
+  assert.deepEqual((await term()).items.map((i) => [i.kind, i.expired]), [['policy', true]]);
+});

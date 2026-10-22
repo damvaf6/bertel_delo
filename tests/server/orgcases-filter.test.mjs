@@ -148,6 +148,17 @@ test('дела экспертов (2.368): «без движения 5 дней 
   assert.ok(rest.every((x) => x.idle_long === false));
 });
 
+// Прогон 2.370: дело на проверке у диспетчера шесть дней ждёт его, а не эксперта — не «без движения» и не в отборах.
+test('дела экспертов (прогон 2.370): дело на проверке у диспетчера — не «без движения»', async () => {
+  const o = await taken('На проверке шесть дней', 10, a);
+  await S.sql`update orders set status = 'review' where id = ${o.id}`;
+  await S.sql`update order_status_history set at = now() - interval '6 days 1 hour' where order_id = ${o.id}`;
+  const c = await caseOf(o);
+  assert.equal(c.last_move.days, 6);
+  assert.equal(c.last_move.review, true);
+  assert.deepEqual([c.idle, c.idle_long], [false, false]);
+});
+
 
 test('дела экспертов (2.216): «осмотр не закончен» — «Готово» без обязательных шагов или ссылка кончается в ближайшие сутки', async () => {
   const gap = await taken('Осмотр — снял не всё', 10, a);
