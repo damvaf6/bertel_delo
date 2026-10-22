@@ -4,6 +4,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, addMember } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
+import { workdayFrom } from '../../src/orders/holidays.mjs';
 
 let S, owner, dispatcher, spec, colleague, head, solo, org;
 const FIELDS = { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, Передаточная ул., 7', area: '40' };
@@ -246,7 +247,7 @@ test('2.195: срок в дни «не принимаю новые дела» �
   const r = (await spec.req('GET', `/api/orders/${o.id}/deadline-requests`)).body.reasons.find((x) => x.id === 'away');
   const [y, m, d] = until.split('-');
   let back = until;
-  while ([0, 6].includes(new Date(`${back}T00:00:00Z`).getUTCDay())) back = addDays(back, 1);
+  back = workdayFrom(back); // выходные и нерабочие праздники (2.371)
   assert.deepEqual([r.label, r.reason, r.new_deadline],
     [`Меня не будет до ${d}.${m}`, `В день срока меня не будет, работаю снова с ${d}.${m}.${y} — прошу перенести срок`, back]);
   assert.ok(!r.reason.includes('отпуск'));
@@ -335,7 +336,7 @@ test('2.221: передать некому — руководитель прос
   await S.sql`update specialists set away_until = ${until} where user_id = ${colleague.user.id}`;
   const c = await caseOf(o);
   let back = until;
-  while ([0, 6].includes(new Date(`${back}T00:00:00Z`).getUTCDay())) back = addDays(back, 1);
+  back = workdayFrom(back); // выходные и нерабочие праздники (2.371)
   assert.equal(c.handover.suggest.new_deadline, back, 'день возвращения эксперта (будний)');
   assert.match(c.handover.suggest.reason, /^Исполнитель не работает до \d\d\.\d\d\.\d{4}, передать дело другому эксперту организации некому/);
   assert.ok(!c.handover.suggest.reason.includes('болею'), 'что писал эксперт руководителю, заказчик не видит');

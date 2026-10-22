@@ -41,6 +41,7 @@ import { latest, taskDraftItems, taskDueFor, taskDueSign, taskMoveLetter } from 
 import { assignmentDocs, TASK_MOVE } from './ai-ops.mjs';
 import { READ_MAX_BYTES, extractPages, readableKind } from '../ai/extract.mjs';
 import { reportMade } from '../ai/report-checks.mjs';
+import { customerSilent } from '../orders/silence.mjs';
 
 // «Горит» — просрочено или до срока не больше двух дней (как подсветка в списке дел).
 const HOT_DAYS = 2;
@@ -155,6 +156,12 @@ async function expertPart(sql, actor, registry, today, storage) {
   const replyWait = waits.map((w) => item(rows.find((o) => o.id === w.order_id), {
     since: w.since, count: w.count, last: w.last_body.length > 80 ? `${w.last_body.slice(0, 80)}…` : w.last_body,
   }));
+  // Заказчик 2 дня и дольше не отвечает на сообщение эксперта (2.375) — строкой с «Напомнить заказчику»: готовая фраза в поле
+  // сообщения, отправляет эксперт сам. Ход за экспертом (заказчик написал позже) — это «Заказчик ждёт ответа», не здесь.
+  const silence = await customerSilent(sql, rows.filter((o) => ['in_work', 'review'].includes(o.status)).map((o) => o.id));
+  const customerQuiet = [...silence].map(([id, s]) => item(rows.find((o) => o.id === id), {
+    since: s.at, count: s.count, last: s.body.length > 80 ? `${s.body.slice(0, 80)}…` : s.body,
+  })).sort((a, b) => new Date(a.since) - new Date(b.since));
   // Дело уже в «Заказчик ждёт ответа» (2.140) — в «Можно продолжать» сообщения не повторяются: остаются документы и осмотр,
   // а если пришли только сообщения — строки там нет.
   const readyLeft = ready.flatMap(({ other, ...x }) => (!waits.some((w) => w.order_id === x.id) ? [x] : other ? [{ ...x, ...other }] : []));
@@ -285,6 +292,8 @@ async function expertPart(sql, actor, registry, today, storage) {
     ready: readyLeft,
     no_result: noResult.filter((x) => !taskDue.some((t) => t.id === x.id)),
     reply_wait: replyWait,
+    // Запрошенные документы не пришли (2.234) — там своё «Напомнить заказчику»; второй строкой дело не повторяется.
+    customer_silent: customerQuiet.filter((x) => !docsWait.some((d) => d.id === x.id)),
     notes,
     sign_wait: signWaits,
     inspect_silent: silent,

@@ -190,6 +190,12 @@ const letterActions = (x) => [...taskMoveAsk(x), ...(x.task_moved.asked?.remind?
 const recheckDocs = (docs) => docs.map((d) => `${d.title} («${d.filename}»)`).join(', ');
 
 // «Напомнить заказчику» (2.234): запрошенное не пришло 3 дня — напоминание заказчику одной кнопкой, снова — завтра.
+// Напомнить заказчику о своём сообщении (2.375): к переписке в деле с готовой фразой в поле — программа ничего не отправляет.
+function silentRemind(x) {
+  return [el('button', { type: 'button', class: 'secondary', 'data-action': 'silent-remind',
+    onclick: () => { location.hash = `order=${x.id}&to=remind`; } }, 'Напомнить заказчику')];
+}
+
 function docsRemind(x) {
   const msg = el('div', { class: 'muted', 'data-role': 'docs-remind-msg' });
   const btn = el('button', { type: 'button', class: 'secondary', 'data-action': 'docs-remind' }, 'Напомнить заказчику');
@@ -401,6 +407,12 @@ export async function loadToday() {
         `«${x.last}»${x.count > 1 ? ` · сообщений без ответа: ${x.count}` : ''}`,
         `написал ${since(x.since)} — ждёт ${waited(x.since)}`],
       (x) => { location.hash = `order=${x.id}&to=chat`; }),
+      // Заказчик 2 дня и дольше не отвечает на сообщение эксперта (2.375) — к переписке в деле, «Напомнить заказчику» сразу
+      // подставляет готовую фразу-напоминание в поле сообщения; отправляет эксперт сам.
+      ...group('customer-silent', 'Заказчик не отвечает', e.customer_silent ?? [], (x) => [x.title,
+        { class: 'warn-line', role: 'customer-silent-what', text: `Вы написали ${since(x.since)}: «${x.last}» — ответа нет ${waited(x.since)}` },
+        `${x.count > 1 ? `сообщений без ответа: ${x.count} · ` : ''}${deadline(x, t.today)}`],
+      (x) => { location.hash = `order=${x.id}&to=chat`; }, silentRemind),
       // Свои заметки к делу (2.115): настал день напоминания — к заметкам в деле, там «Сделано».
       ...group('notes', 'Напоминания по заметкам', e.notes ?? [], (x) => [x.title, x.note,
         x.remind_on < t.today ? `напомнить было ${dayRu(x.remind_on)}` : 'напомнить сегодня'],
