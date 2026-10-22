@@ -500,6 +500,7 @@ async function loadDocs(initial = false) {
   $('results-later').textContent = 'Результат работы появится здесь после проверки.';
   $('results-later').classList.toggle('hidden', !(resultsHidden && ['in_work', 'review'].includes(order.status)));
   renderResultDue(documentsBody.result_due ?? null);
+  renderDossierTerm(documentsBody.dossier_term ?? null);
   renderOrgReturns(documentsBody.org_returns ?? []);
   renderSignWait(documentsBody.sign_wait ?? null, documentsBody.signature_org);
   setNext({ docs: documentsBody });
@@ -524,6 +525,19 @@ function renderResultDue(due) {
   $('result-due-extend').classList.toggle('hidden', !canExtend);
 }
 document.addEventListener('deadline-changed', () => { if (!$('result-due-box').classList.contains('hidden')) renderResultDue(lastDocs?.result_due ?? null); });
+// Аттестат или полис из досье кончаются раньше срока дела (2.365): отчёт надо составить и подписать, пока они действуют.
+function renderDossierTerm(term) {
+  $('dossier-term-box').classList.toggle('hidden', !term);
+  if (!term) return $('dossier-term-items').replaceChildren();
+  const expired = term.items.some((i) => i.expired);
+  $('dossier-term-text').textContent = expired
+    ? `Срок документа в досье истёк, а дело — до ${dayRu(term.deadline)}. Обновите документ в досье до подписи отчёта: в отчёте должны быть действующие аттестат и полис.`
+    : `Документ из досье кончается раньше срока дела (${dayRu(term.deadline)}). Составьте и подпишите отчёт, пока он действует, или обновите его в досье.`;
+  $('dossier-term-items').replaceChildren(...term.items.map((i) => el('li', { 'data-kind': i.kind,
+    text: `${i.kind_name} — ${i.expired ? 'срок истёк' : 'действует до'} ${dayRu(i.valid_until)}` })));
+}
+$('dossier-term-open').addEventListener('click', () => { location.hash = 'specialist&to=dossier'; });
+
 const goTo = (id) => { reveal(id); $(id).scrollIntoView({ behavior: 'smooth', block: 'start' }); };
 $('result-due-upload').addEventListener('click', () => { reveal('result-upload-box'); $('result-file').click(); });
 $('result-due-draft').addEventListener('click', () => goTo('draft-box'));
