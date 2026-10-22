@@ -12514,6 +12514,50 @@ test('2.358: сводка за месяц — письмо о переносе �
   for (const p of [ep, hp, cp]) await p.context().close();
 });
 
+// 2.366: сводка за месяц — сколько дней от принятия дела до подписи организации и сколько файл ждал её после подписи эксперта.
+test('2.366: сводка за месяц — дни от принятия до подписи организации', async ({ browser, baseURL }) => {
+  const ectx = await phoneContext(browser, baseURL);
+  const ep = await ectx.newPage();
+  const expert = await signIn(ep, '+79990003661');
+  const hctx = await phoneContext(browser, baseURL);
+  const hp = await hctx.newPage();
+  const head = await signIn(hp, '+79990003662');
+  const cctx = await phoneContext(browser, baseURL);
+  const cp = await cctx.newPage();
+  await signIn(cp, '+79990003663');
+  const ids = [];
+  for (const t of ['Квартира для ипотеки', 'Склад для залога']) {
+    ids.push((await (await cp.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: t }, headers: H })).json()).order.id);
+  }
+  const orgId = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name, created_at) values ('ООО «Бюро подписей ${Date.now()}»', now() - interval '3 months') returning id`);
+    await c.query("update users set full_name = 'Эксперт Подписанов' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now()), ($1, $3, 'member', now() - interval '40 days')", [org.id, head.id, expert.id]);
+    await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [expert.id, org.id]);
+    await c.query("update orders set status = 'done', executor_user_id = $2, deadline = current_date + 5 where id = any($1::uuid[])", [ids, expert.id]);
+    // Принято 9 и 5 дней назад; эксперт подписал за 72 и 30 ч, организация — за 48 и 24 ч; сдано сейчас.
+    for (const [id, taken, signed, orgSigned] of [[ids[0], 9 * 24, 72, 48], [ids[1], 5 * 24, 30, 24]]) {
+      await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now() - make_interval(hours => $3))", [id, expert.id, taken]);
+      await c.query("insert into order_status_history (order_id, from_status, to_status, side) values ($1, 'review', 'done', 'dispatcher')", [id]);
+      await c.query(`insert into audit_log (actor_id, action, subject_type, subject_id, details, at)
+        values ($1, 'document.sign', 'document', gen_random_uuid()::text, jsonb_build_object('order_id', $3::text), now() - make_interval(hours => $4)),
+               ($2, 'document.sign_org', 'document', gen_random_uuid()::text, jsonb_build_object('order_id', $3::text, 'org_id', $6::text), now() - make_interval(hours => $5))`,
+      [expert.id, head.id, id, signed, orgSigned, org.id]);
+    }
+    return org.id;
+  });
+
+  await hp.goto(`/kabinet#org=${orgId}`);
+  await expect(hp.locator('#org-report-box')).toBeVisible();
+  const row = hp.locator('#org-report > li').filter({ hasText: 'Эксперт Подписанов' });
+  const text = 'до подписи организации в среднем 5,5 дня от принятия (больше всего — 7 дней; дел: 2) · после подписи эксперта файл ждал Вашей подписи в среднем 0,6 дня';
+  await expect(row.locator('[data-expert-orgsign]')).toHaveText(text);
+  await expect(hp.locator('#org-report-total')).toContainText(`Подпись организации${text}`);
+  await row.locator('[data-expert-orgsign]').scrollIntoViewIfNeeded();
+  await shot(hp, 'h05-rukovoditel-svodka-podpis-organizacii');
+  for (const p of [ep, hp, cp]) await p.context().close();
+});
+
 // 2.268: «Собрать Word заново» — рядом с «Заменить всё по выписке» и с заменой одной находки: черновик сразу собирается в
 // файл результата, без перехода к черновику; отменили замену — кнопка уходит.
 test('2.268: «Собрать Word заново» рядом с заменой по выписке ЕГРН', async ({ browser, baseURL }) => {

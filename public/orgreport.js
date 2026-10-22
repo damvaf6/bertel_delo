@@ -11,6 +11,8 @@
 // Подписано без ИИ-проверки (2.199): сколько файлов эксперт подписал за месяц и сколько из них без ИИ-проверки этой версии.
 // Расхождения с выпиской ЕГРН при первой подписи (2.265): по делам, впервые подписанным экспертом за месяц, — сколько находок,
 // сверенных с выпиской, было в ИИ-проверке файла перед подписью, в скольких делах и в каких пунктах проверки чаще.
+// Подпись организации (2.366): сколько дней в среднем от принятия дела до подписи организации и сколько файл ждал её после
+// подписи эксперта.
 // Задание на оценку от банка (2.309): сколько раз эксперты просили его у заказчика, сколько пришло и через сколько дней.
 // Частые замечания (2.105) — пункты, с которыми руководитель чаще всего возвращал отчёты: по организации и у каждого эксперта.
 import { api, el, say } from '/common.js';
@@ -126,6 +128,15 @@ const letterAsk = (x) => {
       x.letter_ask_got > 1 && x.letter_ask_max !== x.letter_ask_days ? ` (дольше всего — ${waitRu(x.letter_ask_max)})` : ''}` : ''}` : 'пока не пришло ни одного',
     x.letter_ask_wait && x.letter_ask_got ? `ещё ждут: ${x.letter_ask_wait}` : null].filter(Boolean).join(' · ');
 };
+// 2.366: «до подписи организации в среднем 6,5 дня от принятия (больше всего — 9 дней; дел: 2) · после подписи эксперта
+// файл ждал Вашей подписи в среднем 1,5 дня»; сданных дел с подписью организации нет — пусто.
+const orgSign = (x) => {
+  if (!x.org_sign_cases) return '';
+  return [`до подписи организации в среднем ${daysRu(x.org_sign_days)} от принятия${x.org_sign_cases > 1 && x.org_sign_max !== x.org_sign_days
+    ? ` (больше всего — ${daysRu(x.org_sign_max)}; дел: ${x.org_sign_cases})` : x.org_sign_cases > 1 ? ` (дел: ${x.org_sign_cases})` : ''}`,
+  x.org_sign_wait != null ? `после подписи эксперта файл ждал Вашей подписи в среднем ${waitRu(x.org_sign_wait)}` : null]
+    .filter(Boolean).join(' · ');
+};
 // «сдано: 5 (было 3, +2) · в срок: 4 (было 4) · возвраты: 1 (было 2, −1)»; у эксперта без дел в обоих месяцах — пусто.
 const diff = (now, was) => `${now} (было ${was}${now > was ? `, +${now - was}` : now < was ? `, −${was - now}` : ''})`;
 const compare = (x) => {
@@ -174,6 +185,7 @@ async function load(month) {
   $('org-report-total').replaceChildren(
     ...fact(`Итого · ${report.month_name}`, `принято дел: ${t.accepted} · сдано: ${t.done}${t.done_late ? ` (позже срока: ${t.done_late})` : ''}`),
     ...(pace(t) ? fact('Скорость и сроки', pace(t)) : []),
+    ...(orgSign(t) ? fact('Подпись организации', orgSign(t)) : []),
     ...(compare(t) ? fact(`К прошлому месяцу (${report.prev_month_name})`, compare(t)) : []),
     ...(resign(t) ? fact('После Ваших возвратов', resign(t)) : []),
     ...(signedAi(t) ? fact('Подпись экспертов', signedAi(t), signedWarn(t) ? 'warn' : '') : []),
@@ -209,6 +221,7 @@ async function load(month) {
     ...(x.services?.length ? [el('div', { class: 'muted', 'data-expert-services': '', text: `по услугам: ${
       x.services.map((s) => `${s.name} — ${s.n}`).join(', ')}` })] : []),
     ...(pace(x) ? [el('div', { class: 'muted', 'data-expert-pace': '', text: pace(x) })] : []),
+    ...(orgSign(x) ? [el('div', { class: 'muted', 'data-expert-orgsign': '', text: orgSign(x) })] : []),
     ...(compare(x) ? [el('div', { class: 'muted', 'data-expert-prev': '', text: `к прошлому месяцу: ${compare(x)}` })] : []),
     ...(x.returned_head || x.returned_dispatcher ? [el('div', { class: 'muted', text: `возвращено: ${[
       x.returned_head ? `Вами — ${x.returned_head}` : null, x.returned_dispatcher ? `на доработку — ${x.returned_dispatcher}` : null,

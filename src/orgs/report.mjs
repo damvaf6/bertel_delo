@@ -144,10 +144,17 @@ async function orgMonthDone(sql, orgId, ids, { start, end }) {
              (select to_char(d.old_deadline, 'YYYY-MM-DD') from deadline_requests d
               where d.order_id = o.id and d.outcome = 'approved' order by d.decided_at, d.id limit 1) as moved_from,
              (select count(*)::int from deadline_requests d
-              where d.order_id = o.id and d.outcome = 'approved' and d.org_id is null) as ext_n
+              where d.order_id = o.id and d.outcome = 'approved' and d.org_id is null) as ext_n,
+             g.org_signed_at,
+             (select max(a.at) from audit_log a
+              where a.action = 'document.sign' and a.actor_id = o.executor_user_id and a.details->>'order_id' = o.id::text
+                and a.at <= g.org_signed_at) as expert_signed_at
       from order_status_history h join orders o on o.id = h.order_id
       join org_members m on m.org_id = ${orgId} and m.user_id = o.executor_user_id
       left join payouts p on p.order_id = o.id
+      cross join lateral (select min(a.at) as org_signed_at from audit_log a
+                          where a.action = 'document.sign_org' and a.details->>'order_id' = o.id::text
+                            and a.details->>'org_id' = ${orgId}::text) g
       where o.executor_user_id = any(${ids}::uuid[]) and h.to_status = 'done'
         and h.at >= ${start} and h.at < ${end} and h.at >= m.created_at
       order by o.id, h.at`;
@@ -308,6 +315,23 @@ function lateOf(rows, k, cases) {
     [`${k}_max`]: late.length ? Math.max(...late) : null,
   };
 }
+// 2.366: от принятия дела до первой подписи организации по сданным за месяц делам — { org_sign_cases, org_sign_days,
+// org_sign_max } (дни по Москве, как «от принятия до сдачи»; дела без отметки о принятии или без подписи организации — не в
+// счёт) и сколько файл ждал подписи организации после последней подписи эксперта — org_sign_wait (до десятых, по часам).
+function orgSign(done) {
+  const rows = done.filter((o) => o.taken_at && o.org_signed_at);
+  const days = rows.map((o) => Math.max(0, daysBetween(dayMsk(o.taken_at), dayMsk(o.org_signed_at))));
+  const waits = rows.filter((o) => o.expert_signed_at)
+    .map((o) => Math.max(0, (Date.parse(o.org_signed_at) - Date.parse(o.expert_signed_at)) / 86_400_000));
+  const avg = (a) => (a.length ? Math.round((a.reduce((s, d) => s + d, 0) / a.length) * 10) / 10 : null);
+  return {
+    org_sign_cases: rows.length,
+    org_sign_days: avg(days),
+    org_sign_max: days.length ? Math.max(...days) : null,
+    org_sign_wait: avg(waits),
+  };
+}
+
 function taskLate(rows) {
   return { ...lateOf(rows.filter((r) => !r.letter), 'task_late', 'task_due_cases'), ...lateOf(rows.filter((r) => r.letter), 'letter_late', 'letter_cases') };
 }
@@ -562,6 +586,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
       ...bankAfter(bankAfters.filter((x) => x.user_id === e.user_id)),
       ...ext(exts.filter((x) => x.user_id === e.user_id)),
       ...letterAsk(q.letterAsk.filter((x) => x.user_id === e.user_id)),
+      ...orgSign(done),
       remarks: topRemarks(q.remarkItems.filter((i) => i.user_id === e.user_id), TOP_REMARKS_EXPERT).map(({ text, n }) => ({ text, n })),
       prev: cmp ? cmp.experts.get(e.user_id) : null,
       services: byService(done, registry).map(({ name, done: n }) => ({ name, n })),
@@ -580,7 +605,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
     experts: rows,
     total: { ...Object.fromEntries(keys.map((k) => [k, sum(k)])), avg_days: avgDays(all), ...resign(q.resign),
       ...egrnFirst(q.firstSign, registry), ...bankTask(q.bankTask), ...taskLate(taskDues),
-      ...bankAfter(bankAfters), ...ext(exts), ...letterAsk(q.letterAsk), prev: cmp ? cmp.total : null },
+      ...bankAfter(bankAfters), ...ext(exts), ...letterAsk(q.letterAsk), ...orgSign(q.done), prev: cmp ? cmp.total : null },
     prev_month: cmp ? prevM : null,
     prev_month_name: cmp ? monthRu(prevM) : null,
     top_remarks: topRemarks(q.remarkItems, TOP_REMARKS),
@@ -692,6 +717,11 @@ export function reportCsv(orgName, r) {
       ...r.total.order_rules.map((x) => [x.title, x.n])] : []),
     ...(r.total.order_task_kinds?.length ? [[], ['Расхождения с заданием на оценку при первой подписи — что', 'Сколько'],
       ...r.total.order_task_kinds.map((x) => [x.title, x.n])] : []),
+    // 2.366: только если среди сданных за месяц есть дела с подписью организации.
+    ...(r.total.org_sign_cases ? [[], ['Подпись организации', 'Сдано дел с подписью организации',
+      'Дней в среднем от принятия до подписи организации', 'Больше всего дней', 'Дней в среднем от подписи эксперта до подписи организации'],
+      ...[...r.experts.filter((x) => x.org_sign_cases).map((x) => [x.full_name, x]), ['Итого', r.total]]
+        .map(([name, x]) => [name, x.org_sign_cases, daysCell(x.org_sign_days), x.org_sign_max, daysCell(x.org_sign_wait)])] : []),
     // 2.309: отдельным разделом — только если за месяц просили задание от банка.
     ...(r.total.bank_task ? [[], ['Задание на оценку от банка', 'Запрошено', 'В скольких делах', 'Пришло',
       'Дней в среднем до задания', 'Ещё ждут'], ...[...r.experts.filter((x) => x.bank_task).map((x) => [x.full_name, x]),
