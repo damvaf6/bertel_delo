@@ -16818,3 +16818,36 @@ test('2.365: полис из досье кончается раньше срок
   await shot(sp, 'h04-specialist-dosie-iz-dela');
   await sctx.close();
 });
+
+test('2.369: «Сегодня» — дело на проверке у диспетчера дольше 2 дней строкой, без кнопок', async ({ browser, baseURL }) => {
+  test.setTimeout(120_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990003691'), customer = await signIn(cp, '+79990003692');
+  const A = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const add = async (title) => (await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', $3, $1, $2, 'review', $4::date, 1500000, now(),
+              '{"purpose":"deal","region":"moscow","object_type":"flat","address":"г. Москва, тестовая ул., 69"}') returning id`,
+    [customer.id, expert.id, title, inDays(6)])).rows[0].id;
+    const slow = await add('Долго на проверке: квартира'), fresh = await add('Только что сдано: квартира');
+    await c.query(`insert into order_status_history (order_id, from_status, to_status, side, at)
+      values ($1, 'in_work', 'review', 'customer', now() - interval '3 days 2 hours'), ($2, 'in_work', 'review', 'customer', now())`, [slow, fresh]);
+    return slow;
+  });
+  await ep.goto('/kabinet');
+  await expect(ep.locator('#today-box li[data-today="review-long"]')).toHaveText('Диспетчер проверяет дольше 2 дней · 1');
+  const row = ep.locator('#today-box li[data-today-item="review-long"]');
+  await expect(row.locator('.title')).toHaveText('Долго на проверке: квартира');
+  await expect(row.locator('[data-role="review-long-what"]')).toHaveText(/^Сдано на проверку .+ · ждёт 3 дн\. 2 ч — ответ диспетчера придёт в уведомления$/);
+  await expect(row.locator('button')).toHaveCount(1);
+  await expect(ep.locator('#today-box li[data-today="review"]')).toHaveText('Ждут проверки диспетчера · 1');
+  await expect(ep.locator('#today-box li[data-today-item="review"]')).toContainText('Только что сдано: квартира');
+  expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await row.scrollIntoViewIfNeeded();
+  await shot(ep, 'h07-segodnya-dolgo-na-proverke');
+  await row.locator('button.open').click();
+  await expect(ep).toHaveURL(new RegExp(`#order=${A}$`));
+  await ep.context().close(); await cp.context().close();
+});

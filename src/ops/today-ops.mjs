@@ -55,6 +55,8 @@ const RETURN_LONG_DAYS = 2;
 const TASK_MOVED_LONG_DAYS = 2;
 // Исправленный файл после возврата руководителя загружен больше суток назад, а эксперт его не подписал (2.204).
 const FRESH_LATE_HOURS = 24;
+// Дело на проверке у диспетчера столько дней и дольше (2.369) — эксперту строкой «Диспетчер проверяет дольше 2 дней», без кнопок.
+const REVIEW_LONG_DAYS = 2;
 
 async function expertPart(sql, actor, registry, today, storage) {
   const sp = await sql.one`select user_id from specialists where user_id = ${actor.id}`;
@@ -252,6 +254,15 @@ async function expertPart(sql, actor, registry, today, storage) {
   // В неподписанном файле дата составления позже срока по заданию на оценку (2.321) — до подписи, к файлу результата.
   const taskMade = (await taskMadeCases(sql, storage, registry, actor.id, rows))
     .map(({ order, file, made, due: d, letter }) => item(order, { file, made, task_due: d, letter }));
+  // На проверке у диспетчера (2.369): с какого времени — последний переход в «Проверку результата» (нет истории — время дела).
+  const reviewing = rows.filter((o) => o.status === 'review');
+  const sentAt = reviewing.length ? await sql`
+    select order_id, max(at) as at from order_status_history where order_id = any(${reviewing.map((o) => o.id)}::uuid[])
+      and to_status = 'review' group by order_id` : [];
+  const reviewRows = reviewing.map((o) => {
+    const at = new Date(sentAt.find((x) => x.order_id === o.id)?.at ?? o.updated_at);
+    return item(o, { review_since: at.toISOString(), long: Date.now() - at.getTime() >= REVIEW_LONG_DAYS * 86400_000 });
+  });
   return {
     ai_recheck: recheck,
     task_made: taskMade,
@@ -283,7 +294,8 @@ async function expertPart(sql, actor, registry, today, storage) {
     hot: hotRows.map((o) => item(o, { extend: ext.get(o.id) ?? null })),
     fresh_late: freshLate,
     returned: returned.filter((r) => !freshLate.includes(r)),
-    review: rows.filter((o) => o.status === 'review').map((o) => item(o)),
+    review: reviewRows.filter((x) => !x.long),
+    review_long: reviewRows.filter((x) => x.long).sort((a, b) => a.review_since.localeCompare(b.review_since)),
     offers: rows.filter((o) => o.status === 'awaiting_executor')
       .map((o) => item(o, { fee_kop: o.price_kop ? orderSplit(o).payoutKop : null })),
   };
