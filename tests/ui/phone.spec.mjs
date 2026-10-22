@@ -384,6 +384,11 @@ test('меню на телефоне (2.22): у администратора-с�
 
 // День по Москве (UTC+3, без перехода на летнее время): «сегодня» на сервере — московское, после 21:00 UTC уже завтра.
 const inDays = (n) => new Date(Date.now() + 3 * 3600_000 + n * 86400_000).toISOString().slice(0, 10);
+// Пустой праздник в будни (2.371) — в «Моих сроках» своей строкой «праздник: …», не «свободно»: проверки пустых дней не
+// зависят от даты прогона. `freeRows(a, b)` — сколько строк займут пустые дни с a-го по b-й.
+const isHoliday = (n) => !!holidayName(inDays(n)) && ![0, 6].includes(new Date(`${inDays(n)}T00:00:00Z`).getUTCDay());
+const freeText = (n) => (isHoliday(n) ? 'праздник' : 'свободно');
+const freeRows = (a, b) => { let k = 0; for (let n = a; n <= b; n++) if (n === a || isHoliday(n) !== isHoliday(n - 1)) k++; return k; };
 const H = { 'x-delo-request': '1' };
 
 test('заявка на оценку: поля услуги, срок, основание «определение суда» с файлом, отправка', async ({ page }) => {
@@ -6012,9 +6017,6 @@ test('мои сроки на две недели (2.109): по дням — ср
   await expect(box.locator('#schedule-overdue li')).toContainText('Сдать: Дача в Рузе: сроки');
   await expect(box.locator('#schedule-overdue li')).toContainText(`срок был ${ru(inDays(-1))}`);
   const day = (n) => box.locator(`#schedule-days > li[data-day="${inDays(n)}"]`);
-  // Пустой праздник в будни (2.371) — своей строкой «праздник: …», не «свободно»: проверка не зависит от даты прогона.
-  const isHoliday = (n) => !!holidayName(inDays(n)) && ![0, 6].includes(new Date(`${inDays(n)}T00:00:00Z`).getUTCDay());
-  const freeText = (n) => (isHoliday(n) ? 'праздник' : 'свободно');
   await expect(day(0)).toContainText('Сегодня');
   await expect(day(0)).toContainText(freeText(0));
   await expect(day(1).locator('[data-schedule-item]')).toHaveCount(2);
@@ -6028,8 +6030,7 @@ test('мои сроки на две недели (2.109): по дням — ср
   await expect(day(5)).toContainText(`сейчас срок ${ru(inDays(1))}`);
   // Пустые дни после 5-го — одной строкой «свободно» до конца двух недель (праздник в будни — своей строкой, 2.371).
   await expect(day(6)).toContainText(freeText(6));
-  let groups = 0;
-  for (let n = 6; n <= 13; n++) if (n === 6 || isHoliday(n) !== isHoliday(n - 1)) groups++;
+  const groups = freeRows(6, 13);
   if (groups === 1) await expect(day(6)).toContainText(ru(inDays(13)));
   await expect(day(3)).toContainText(freeText(3));
   await expect(box.locator('#schedule-days > li')).toHaveCount(6 + groups);
@@ -9259,9 +9260,9 @@ test('2.189: мои сроки — дни «не принимаю новые д�
   await expect(day(2)).toContainText('новые дела не предлагают');
   await expect(day(3)).toHaveClass(/back/);
   await expect(day(3)).toContainText('снова предлагают дела');
-  await expect(day(4)).toContainText('свободно');
+  await expect(day(4)).toContainText(freeText(4));
   await expect(day(4)).not.toHaveClass(/away/);
-  await expect(box.locator('#schedule-days > li')).toHaveCount(5);
+  await expect(box.locator('#schedule-days > li')).toHaveCount(4 + freeRows(4, 13));
   await box.locator('#schedule-days').scrollIntoViewIfNeeded();
   await shot(page, 'c36-ekspert-sroki-ne-prinimayu');
 });
