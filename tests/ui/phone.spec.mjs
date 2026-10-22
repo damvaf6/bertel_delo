@@ -16622,3 +16622,46 @@ test('прогон 2.360: эксперт, руководитель и новый
   await expect(item.locator('[data-sig="task-due"]')).toHaveCount(0);
   for (const p of [ap, bp, hp, cp]) await p.context().close();
 });
+
+test('2.364: ИИ-проверка — итоговая стоимость прописью не та, что цифрами; «Исправить в черновике»', async ({ page, browser, baseURL }) => {
+  test.setTimeout(120_000);
+  await signIn(page, '+79990003641');
+  const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира: сумма прописью' }, headers: H })).json();
+  const id = created.order.id;
+  expect((await page.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(9), fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 64' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  const sctx = await phoneContext(browser, baseURL);
+  const sp = await sctx.newPage();
+  const spec = await signIn(sp, '+79990003642');
+  await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [spec.id]);
+    await c.query('update orders set price_kop = 1500000, paid_at = now(), status = $2, executor_user_id = $3 where id = $1', [id, 'in_work', spec.id]);
+    await c.query("insert into payments (order_id, amount_kop, status, provider_id, created_by, paid_at) values ($1, 1500000, 'succeeded', $2, $3, now())", [id, `pay_ui_${id}`, spec.id]);
+  });
+  expect((await sp.request.post(`/api/orders/${id}/results`, {
+    data: makePdf([['Отчёт № 64/2026 об оценке квартиры', 'Итоговая рыночная стоимость объекта оценки составляет', '9 500 000 руб. (Девять миллионов семьсот тысяч рублей 00 копеек).']]),
+    headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('отчёт.pdf') },
+  })).status()).toBe(201);
+
+  await sp.goto(`/kabinet#order=${id}`);
+  await sp.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const draftText = sp.getByLabel('Текст заключения');
+  await draftText.fill(`${await draftText.inputValue()}\nИтоговая рыночная стоимость: 9 500 000 руб. (Девять миллионов семьсот тысяч рублей 00 копеек).`);
+  await sp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  const calc = sp.locator('#review-checks > li[data-check="calculation"]');
+  const find = calc.locator('.ai-found li').filter({ hasText: 'прописью' });
+  await expect(find).toContainText('Итоговая стоимость: сумма цифрами 9 500 000 не совпадает с суммой прописью (9 700 000) — цифрам соответствует «Девять миллионов пятьсот тысяч»');
+  await find.getByRole('button', { name: 'Исправить в черновике' }).click();
+  await expect(draftText).toBeFocused();
+  expect(await draftText.evaluate((t) => t.value.slice(t.selectionStart, t.selectionEnd))).toBe('Девять миллионов семьсот тысяч');
+  await expect(sp.locator('#draft-msg')).toHaveText('Выделено «Девять миллионов семьсот тысяч» — цифрам соответствует: Девять миллионов пятьсот тысяч. Исправьте и сохраните черновик, затем соберите Word заново.');
+  await shot(sp, 'h01-specialist-summa-propisyu-chernovik');
+  await find.scrollIntoViewIfNeeded();
+  await shot(sp, 'h02-specialist-summa-propisyu-nahodka');
+  await sctx.close();
+});

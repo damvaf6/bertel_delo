@@ -178,16 +178,83 @@ export function wordsToNumber(words) {
   return any ? total + group : null;
 }
 
-const SUM_WORDS = /(\d{1,3}(?:[  .]\d{3})+|\d{4,})(?:[,.]\d{1,2})?\s*(?:\(?\s*руб(?:\.|лей)?\s*\)?)?\s*=?\s*\(\s*([А-Яа-яЁё][А-Яа-яЁё\s-]{3,}?)\s*\)\s*(?:руб|рубл)/gu;
+// Число → слова (рубли): 3500000 → «три миллиона пятьсот тысяч» (2.364: верная сумма прописью для находки).
+const W_ONES = ['', 'один', 'два', 'три', 'четыре', 'пять', 'шесть', 'семь', 'восемь', 'девять', 'десять', 'одиннадцать', 'двенадцать', 'тринадцать', 'четырнадцать', 'пятнадцать', 'шестнадцать', 'семнадцать', 'восемнадцать', 'девятнадцать'];
+const W_TENS = ['', '', 'двадцать', 'тридцать', 'сорок', 'пятьдесят', 'шестьдесят', 'семьдесят', 'восемьдесят', 'девяносто'];
+const W_HUNDREDS = ['', 'сто', 'двести', 'триста', 'четыреста', 'пятьсот', 'шестьсот', 'семьсот', 'восемьсот', 'девятьсот'];
+const W_SCALES = [[1e9, ['миллиард', 'миллиарда', 'миллиардов']], [1e6, ['миллион', 'миллиона', 'миллионов']], [1e3, ['тысяча', 'тысячи', 'тысяч'], true]];
+const plural = (n, [one, few, many]) => (n % 100 >= 11 && n % 100 <= 19 ? many : n % 10 === 1 ? one : n % 10 >= 2 && n % 10 <= 4 ? few : many);
+function triad(n, feminine) {
+  const out = [W_HUNDREDS[Math.floor(n / 100)]];
+  const rest = n % 100;
+  if (rest < 20) out.push(W_ONES[rest]);
+  else out.push(W_TENS[Math.floor(rest / 10)], W_ONES[rest % 10]);
+  const last = out.length - 1;
+  if (feminine) out[last] = out[last] === 'один' ? 'одна' : out[last] === 'два' ? 'две' : out[last];
+  return out.filter(Boolean);
+}
+export function numberToWords(num) {
+  let n = Math.floor(Number(num));
+  if (!Number.isFinite(n) || n < 0 || n >= 1e12) return null;
+  if (n === 0) return 'ноль';
+  const out = [];
+  for (const [size, forms, feminine] of W_SCALES) {
+    const k = Math.floor(n / size);
+    n %= size;
+    if (k) out.push(...triad(k, feminine), plural(k, forms));
+  }
+  out.push(...triad(n, false));
+  return out.join(' ');
+}
+
+// «3 148 760,14 руб. (Три миллиона … шестьдесят рублей 14 копеек)», «4 100 000,00 = (Четыре миллиона сто тысяч) рублей»,
+// «(…) руб. 00 коп.». В скобках — рубли словами, за ними (в скобках или после) — копейки цифрами или словами.
+const SUM_WORDS = /(\d{1,3}(?:[  .]\d{3})+|\d{4,})(?:[,.](\d{2}))?\s*(\(?\s*руб(?:\.|лей|ля|ль)?\s*\)?)?\s*=?\s*\(\s*([А-Яа-яЁё][^()\d]{3,200}?(?:\s+\d{1,2}\s*коп[а-яё]*\.?)?)\s*\)\s*(руб|рубл)?/gu;
+const RUB_WORD = /(?:^|\s)руб(?:л[а-яё]*|\.)?(?=\s|$)/u;
+const KOP_TAIL = /^(.*?)\s*(\d{1,2})?\s*коп[а-яё]*\.?$/u;
+const sumFmt = (rub, kop) => `${fmt(rub)}${kop ? `,${String(kop).padStart(2, '0')}` : ''}`;
+// Перед суммой — итоговая (рыночная, ликвидационная) стоимость: находка называет её так (2.364).
+const FINAL_BEFORE = /(?:итогов\S*\s+(?:величин|стоимост|значени)|(?:рыночн|ликвидационн|справедлив|инвестиционн)\S*\s+стоимост)/iu;
 
 function sumWords(doc) {
   const out = [];
-  eachPage(doc, (page, i) => {
-    for (const m of page.replace(/\n/g, ' ').matchAll(SUM_WORDS)) {
+  eachPage(doc, (raw, i) => {
+    const page = raw.replace(/\n/g, ' ');
+    for (const m of page.matchAll(SUM_WORDS)) {
+      if (!m[3] && !m[5] && !RUB_WORD.test(` ${m[4].toLowerCase()} `)) continue;
       const num = Number(m[1].replace(/[  .]/g, ''));
-      const said = wordsToNumber(m[2]);
+      // Рубли словами — до слова «рублей» в скобках; копейки — после него, в скобках или сразу за ними.
+      const inner = m[4].replace(/\s+/g, ' ').trim();
+      const cut = RUB_WORD.exec(inner.toLowerCase());
+      let rubText = cut ? inner.slice(0, cut.index).trim() : inner;
+      let kopText = cut ? inner.slice(cut.index + cut[0].length).trim() : '';
+      if (!cut) {
+        const tail = KOP_TAIL.exec(rubText);
+        if (tail && /коп/iu.test(rubText)) {
+          rubText = tail[1];
+          kopText = tail[0].slice(tail[1].length).trim();
+        }
+      }
+      if (!kopText && m[5]) kopText = (/^[а-яё.]*\s*(\d{1,2}\s*коп[а-яё]*)/u.exec(page.slice(m.index + m[0].length, m.index + m[0].length + 30)) ?? [])[1] ?? '';
+      const said = wordsToNumber(rubText);
       if (said === null || !num) continue;
-      if (said !== num) out.push({ page: i, quote: clean(m[0]).slice(0, 160), text: `Сумма цифрами ${fmt(num)} не совпадает с суммой прописью (${fmt(said)})` });
+      const kopDigits = /(\d{1,2})\s*коп/u.exec(kopText)?.[1];
+      const kopWords = !kopDigits && /коп/u.test(kopText) ? wordsToNumber(kopText.replace(/коп[а-яё]*\.?/u, '')) : null;
+      const saidKop = kopDigits != null ? Number(kopDigits) : kopWords;
+      const kop = m[2] != null ? Number(m[2]) : null;
+      const kopOff = kop != null && saidKop != null && kop !== saidKop;
+      if (said === num && !kopOff) continue;
+      const showKop = kop != null && saidKop != null && (kop || saidKop);
+      const final = FINAL_BEFORE.test(page.slice(Math.max(0, m.index - 200), m.index));
+      const right = numberToWords(num);
+      const upper = /^\p{Lu}/u.test(rubText);
+      const rightText = right && (upper ? right[0].toUpperCase() + right.slice(1) : right);
+      out.push({
+        page: i, quote: clean(m[0]).slice(0, 160),
+        text: `${final ? 'Итоговая стоимость: сумма' : 'Сумма'} цифрами ${showKop ? sumFmt(num, kop) : fmt(num)} не совпадает с суммой прописью (${showKop ? sumFmt(said, saidKop) : fmt(said)})`
+          + (said !== num && rightText ? ` — цифрам соответствует «${rightText}»` : ''),
+        ...(said !== num && rightText ? { words: { bad: rubText, right: rightText } } : {}),
+      });
     }
   });
   return out;
@@ -3004,6 +3071,8 @@ export function runAutoChecks(names, docs, ctx = {}) {
         // 2.229: что в отчёте разошлось с выпиской и что в выписке — «Исправить в черновике» ищет это место в тексте черновика.
         ...(f.fix ? { bad: clean(f.fix.bad).slice(0, 200), right: clean(f.fix.right).slice(0, 200), ...(f.fix.flip ? { flip: f.fix.flip } : {}) } : {}) } } : {}),
       // 2.231: находка сверена с заявкой или заданием на оценку, а не с выпиской — то же «Исправить в черновике», без выписки.
+      // 2.364: сумма прописью не та, что цифрами — «Исправить в черновике» выделяет слова и говорит, как верно.
+      ...(f.words ? { words: { bad: clean(f.words.bad).slice(0, 200), right: clean(f.words.right).slice(0, 200) } } : {}),
       ...(f.fix?.from && !f.egrn ? { fix: { bad: clean(f.fix.bad).slice(0, 200), right: clean(f.fix.right).slice(0, 200), from: clean(f.fix.from).slice(0, 200), ...(f.fix.flip ? { flip: f.fix.flip } : {}) } } : {}),
     }));
   }

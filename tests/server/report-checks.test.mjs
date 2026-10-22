@@ -3,7 +3,7 @@
 // (10-й знак VIN сохранён там, где по нему сверяется год). Настоящие отчёты в репозиторий не попадают.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { runAutoChecks, vinYears, wordsToNumber, tocEntries, AUTO_CHECKS, purchaseOf, questionsOf, parseAddress, parseFloorField } from '../../src/ai/report-checks.mjs';
+import { runAutoChecks, vinYears, wordsToNumber, numberToWords, tocEntries, AUTO_CHECKS, purchaseOf, questionsOf, parseAddress, parseFloorField } from '../../src/ai/report-checks.mjs';
 import { pagesForModel } from '../../src/ops/ai-ops.mjs';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
@@ -331,6 +331,26 @@ test('отчёт как «241»: несколько машин — год све
   assert.deepEqual(res.sum_words, []);
 });
 
+test('2.364: итоговая стоимость прописью — «руб.» перед скобкой, рубли и копейки в скобках, копейки после скобки', () => {
+  assert.equal(numberToWords(0), 'ноль');
+  assert.equal(numberToWords(2001), 'две тысячи один');
+  assert.equal(numberToWords(101_001), 'сто одна тысяча один');
+  assert.equal(numberToWords(2_456_214), 'два миллиона четыреста пятьдесят шесть тысяч двести четырнадцать');
+  assert.equal(numberToWords(1_000_000_000), 'один миллиард');
+  const res = runAutoChecks(['sum_words'], [doc([
+    'Итоговая рыночная стоимость объекта составляет 2 500 000 руб. (два миллиона рублей 00 копеек).',
+    'составляет 3 148 760,14 руб. (Три миллиона сто сорок восемь тысяч семьсот шестьдесят рублей 41 копейка)',
+    'составляет 3 000 000 руб. (три миллиона рублей 00 копеек); 1 200 000,50 (Один миллион двести тысяч) руб. 50 коп.',
+    'составляет 7 000 000,00 (Семь миллионов) рублей 00 копеек; 5 000 000 руб. (Пять миллионов рублей ноль копеек)',
+  ])]);
+  assert.deepEqual(texts(res, 'sum_words'), [
+    'Итоговая стоимость: сумма цифрами 2 500 000 не совпадает с суммой прописью (2 000 000) — цифрам соответствует «два миллиона пятьсот тысяч»',
+    'Сумма цифрами 3 148 760,14 не совпадает с суммой прописью (3 148 760,41)',
+  ], 'совпадающие суммы (в том числе с копейками после скобки) — без находок');
+  assert.deepEqual(res.sum_words[0].words, { bad: 'два миллиона', right: 'два миллиона пятьсот тысяч' });
+  assert.equal(res.sum_words[1].words, undefined, 'рубли совпали — менять словами нечего');
+});
+
 test('сумма цифрами и прописью; числа прописью; год по VIN; оглавление с переносами', () => {
   assert.equal(wordsToNumber('Девять миллионов семьсот тысяч'), 9_700_000);
   assert.equal(wordsToNumber('Два миллиона четыреста пятьдесят шесть тысяч двести четырнадцать'), 2_456_214);
@@ -338,8 +358,9 @@ test('сумма цифрами и прописью; числа прописью
   assert.equal(wordsToNumber('сто рублей'), 100);
   assert.equal(wordsToNumber('много денег'), null);
   const res = runAutoChecks(['sum_words'], [doc(['Итог: 4 100 000,00 = (Четыре миллиона сто тысяч) рублей', 'составляет 3 500 000 (Три миллиона семьсот тысяч) рублей'])]);
-  assert.deepEqual(texts(res, 'sum_words'), ['Сумма цифрами 3 500 000 не совпадает с суммой прописью (3 700 000)']);
+  assert.deepEqual(texts(res, 'sum_words'), ['Сумма цифрами 3 500 000 не совпадает с суммой прописью (3 700 000) — цифрам соответствует «Три миллиона пятьсот тысяч»']);
   assert.equal(res.sum_words[0].where, 'стр. 2');
+  assert.deepEqual(res.sum_words[0].words, { bad: 'Три миллиона семьсот тысяч', right: 'Три миллиона пятьсот тысяч' });
   assert.ok(vinYears('XXX000000R0000000').includes(2024));
   assert.ok(vinYears('XXX000000K0000000').includes(2019));
   assert.ok(vinYears('XXX00000050000000').includes(2005));
