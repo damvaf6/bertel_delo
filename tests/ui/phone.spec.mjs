@@ -2931,8 +2931,10 @@ test('«Сегодня» (2.34, 2.63): эксперт — горит, верну
   await expect(dl.nth(1)).toContainText('Полис страхования оценщика');
   await expect(dl.nth(1)).toContainText(/осталось (9|10) дн\./);   // дата теста — по UTC, «Сегодня» — по Москве
   await expect(hb).not.toContainText('2063');   // номера документов руководителю не показываются
-  await expect(hb.locator(`li[data-today="org-sign-${orgId}"]`)).toHaveText('Ждут подписи организации · 1');
-  await expect(hb.locator(`li[data-today-item="org-sign-${orgId}"]`)).toContainText('эксперт напомнил');
+  // Эксперт подписал 3 дня назад — строкой «Ждут подписи организации 2 дня и дольше» (2.374).
+  await expect(hb.locator(`li[data-today="org-sign-long-${orgId}"]`)).toHaveText('Ждут подписи организации 2 дня и дольше · 1');
+  await expect(hb.locator(`li[data-today="org-sign-${orgId}"]`)).toHaveCount(0);
+  await expect(hb.locator(`li[data-today-item="org-sign-long-${orgId}"]`)).toContainText('эксперт напомнил');
   // «Горящее» (2.98): срок завтра, отчёт есть, а фото осмотра нет — отдельной строкой первой, в «Горит срок» не повторяется.
   await expect(hb.locator('li[data-today]').first()).toHaveText('Горит: нет черновика или фото осмотра · 1');
   await expect(hb.locator(`li[data-today-item="org-risk-${orgId}"]`)).toContainText('Эксперт Сегодня');
@@ -2943,7 +2945,7 @@ test('«Сегодня» (2.34, 2.63): эксперт — горит, верну
   await shot(hp, '98-segodnya-rukovoditel');
   await dl.first().scrollIntoViewIfNeeded();
   await shot(hp, '98a-segodnya-dosje-ekspertov');
-  await hb.locator(`li[data-today-item="org-sign-${orgId}"] button`).click();
+  await hb.locator(`li[data-today-item="org-sign-long-${orgId}"] button`).click();
   await expect(hp).toHaveURL(new RegExp(`#org=${orgId}&case=[0-9A-F]{8}&to=sign$`));
   await hp.goto('/kabinet');
   await hp.locator(`li[data-today-item="org-risk-${orgId}"] button`).click();
@@ -8772,12 +8774,15 @@ test('прогон 2.170: эксперт и руководитель по пач
 
   // Руководитель: «Сегодня» — давняя подпись первой и красной (2.161), у возврата — «Напомнить эксперту» (2.162).
   await hp.goto('/kabinet');
+  // 2.374: ждущее 2 дня и дольше — отдельной строкой «Ждут подписи организации 2 дня и дольше», в общей не повторяется.
+  const signLong = hp.locator(`li[data-today-item="org-sign-long-${orgId}"]`);
+  await expect(signLong).toHaveCount(1);
+  await expect(signLong).toContainText(`№ ${ref(A)}`);
+  await expect(signLong.locator('[data-role="sign-since"]')).toHaveClass(/overdue/);
   const toSign = hp.locator(`li[data-today-item="org-sign-${orgId}"]`);
-  await expect(toSign).toHaveCount(2);
-  await expect(toSign.nth(0)).toContainText(`№ ${ref(A)}`);
-  await expect(toSign.nth(0).locator('[data-role="sign-since"]')).toHaveClass(/overdue/);
-  await expect(toSign.nth(1)).toContainText(`№ ${ref(F)}`);
-  await expect(toSign.nth(1).locator('[data-role="sign-since"]')).toHaveClass(/muted/);
+  await expect(toSign).toHaveCount(1);
+  await expect(toSign).toContainText(`№ ${ref(F)}`);
+  await expect(toSign.locator('[data-role="sign-since"]')).toHaveClass(/muted/);
   const ret = hp.locator(`li[data-today-item="org-returned-${orgId}"]`);
   await expect(ret).toHaveCount(1);
   await expect(ret).toContainText('2 дн. назад · эксперт отметил исправленными 0 из 2');
@@ -8842,7 +8847,9 @@ test('прогон 2.170: эксперт и руководитель по пач
   // Руководитель: возврат закрыт, новый файл B — в очереди подписи; сводка за месяц — новая подпись через 2 дня.
   await hp.goto('/kabinet');
   await expect(hp.locator(`li[data-today-item="org-returned-${orgId}"]`)).toHaveCount(0);
-  await expect(hp.locator(`li[data-today-item="org-sign-${orgId}"]`)).toHaveCount(3);
+  // Давнее A — строкой «2 дня и дольше» (2.374), F и B — в общей.
+  await expect(hp.locator(`li[data-today-item="org-sign-long-${orgId}"]`)).toHaveCount(1);
+  await expect(hp.locator(`li[data-today-item="org-sign-${orgId}"]`)).toHaveCount(2);
   await hp.goto(`/kabinet#org=${orgId}`);
   await expect(hp.locator(`#org-sign li.doc[data-doc="${b2}"]`)).toBeVisible();
   const row = hp.locator('#org-report > li').filter({ hasText: 'Пачкина Вера' });
@@ -17076,4 +17083,60 @@ test('2.373: дата осмотра в отчёте не та, что у вые
   await expect(draftText).toHaveValue(/Дата осмотра объекта оценки: 01\.02\.2026\./);
   await expect(find.getByRole('button', { name: 'Заменить на дату осмотра из дела' })).toBeEnabled();
   await sctx.close();
+});
+
+// 2.374: у руководителя в «Сегодня» дела, которые ждут подписи организации 2 дня и дольше, — отдельной строкой (в общей
+// «Ждут подписи организации» не повторяются); из утренней сводки — сразу к подписи организации с отбором «Ждут Вашей
+// подписи 2 дня и дольше».
+test('2.374: ждут подписи организации 2 дня и дольше — отдельной строкой в «Сегодня» и отбор в подписи', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), ep = await ctx(), hp = await ctx();
+  const customer = await signIn(cp, '+79990037401');
+  const expert = await signIn(ep, '+79990037402'), head = await signIn(hp, '+79990037403');
+  const { orgId, A, F } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Долгая подпись ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Ждущая Нина' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const add = async (title, days) => (await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', $1, $2, $3, 'in_work', (now() at time zone 'Europe/Moscow')::date + $4::int, 1500000, now(),
+              '{"purpose":"court","region":"moscow","object_type":"flat","address":"г. Москва, Ждущая ул., 3","area":"40"}') returning id`,
+    [title, customer.id, expert.id, days])).rows[0].id;
+    return { orgId: org.id, A: await add('Подпись: давно', 8), F: await add('Подпись: свежая', 9) };
+  });
+  const ref = (id) => id.slice(0, 8).toUpperCase();
+  for (const id of [A, F]) {
+    const up = await ep.request.post(`/api/orders/${id}/results`, { data: Buffer.from('%PDF-1.4 отчёт'), headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Отчёт.pdf') } });
+    expect(up.status()).toBe(201);
+    expect((await ep.request.post(`/api/documents/${(await up.json()).document.id}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+  }
+  await db((c) => c.query("update document_signatures set signed_at = now() - interval '3 days 1 hour' where document_id in (select id from documents where order_id = $1)", [A]));
+
+  await hp.goto('/kabinet');
+  const hb = hp.locator('#today-box');
+  await expect(hb.locator(`li[data-today="org-sign-long-${orgId}"]`)).toHaveText('Ждут подписи организации 2 дня и дольше · 1');
+  const long = hb.locator(`li[data-today-item="org-sign-long-${orgId}"]`);
+  await expect(long).toContainText(`№ ${ref(A)}`);
+  await expect(long.locator('[data-role="sign-since"]')).toContainText('ждёт 3 дн.');
+  await expect(long.locator('[data-role="sign-since"]')).toHaveClass(/overdue/);
+  await expect(hb.locator(`li[data-today="org-sign-${orgId}"]`)).toHaveText('Ждут подписи организации · 1');
+  await expect(hb.locator(`li[data-today-item="org-sign-${orgId}"]`)).toContainText(`№ ${ref(F)}`);
+  await expect(hb.locator(`li[data-today-item="org-sign-${orgId}"]`)).not.toContainText(`№ ${ref(A)}`);
+  await long.scrollIntoViewIfNeeded();
+  await shot(hp, 'i05-rukovoditel-podpis-2-dnya');
+  await long.locator('button.open').click();
+  await expect(hp).toHaveURL(new RegExp(`#org=${orgId}&case=${ref(A)}&to=sign$`));
+
+  // Из утренней сводки — к подписи организации с отбором: только давнее дело.
+  await hp.goto(`/kabinet#org=${orgId}&to=sign_long`);
+  const chip = hp.locator('#org-sign-filter [data-sign-filter="long"]');
+  await expect(chip).toHaveText('Ждут Вашей подписи 2 дня и дольше · 1');
+  await expect(chip).toHaveAttribute('aria-pressed', 'true');
+  await expect(hp.locator('#org-sign > li[data-item]')).toHaveCount(1);
+  await expect(hp.locator(`#org-sign > li[data-item="№ ${ref(A)}"]`)).toBeVisible();
+  await shot(hp, 'i06-podpis-otbor-2-dnya');
+  await hp.locator('#org-sign-filter [data-sign-filter="all"]').click();
+  await expect(hp.locator('#org-sign > li[data-item]')).toHaveCount(2);
+  for (const p of [cp, ep, hp]) await p.context().close();
 });

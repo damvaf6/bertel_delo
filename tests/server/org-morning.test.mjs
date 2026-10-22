@@ -1175,3 +1175,47 @@ test('прогон 2.360: письмо о переносе со сроком з�
   assert.ok(ra.letter_ask_max < 1);
   assert.deepEqual([rb.letter_ask, rb.letter_cases, rb.letter_late], [0, 1, 0]);
 });
+
+test('2.374: ждут подписи организации 2 дня и дольше — отдельно в «Сегодня» и числом в утренней сводке', async () => {
+  // Отдельная организация: эксперт подписал два файла — «Давний» 3 дня назад, «Свежий» сейчас; руководитель не подписал.
+  const h = await login(S, '+79990003971');
+  const e = await login(S, '+79990003972');
+  const o5 = await makeOrg(S.sql, 'ООО «Долгая подпись»');
+  await addMember(S.sql, o5.id, h.user.id, 'head');
+  await makeSpecialist(S.sql, e.user.id);
+  await addMember(S.sql, o5.id, e.user.id, 'member');
+  await e.req('PATCH', '/api/me', { full_name: 'Эксперт Ждущий' });
+  assert.equal((await e.req('PATCH', '/api/specialist/me', { org_id: o5.id })).status, 200);
+  const make = async (title) => {
+    const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
+    assert.equal((await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: addDays(today, 12), fields: FIELDS })).status, 200);
+    assert.equal((await owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
+    await ensurePaid(S.sql, o.id);
+    assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: e.user.id, from: 'matching' })).status, 200);
+    assert.equal((await e.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+    const d = (await e.req('POST', `/api/orders/${o.id}/results`, Buffer.from(`отчёт ${title}`), {
+      raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('Отчёт.pdf') },
+    })).body.document;
+    assert.equal((await e.req('POST', `/api/documents/${d.id}/sign`, { confirm: true })).status, 201);
+    return { o, d };
+  };
+  const old = await make('Давний');
+  const fresh = await make('Свежий');
+  await S.sql`update document_signatures set signed_at = now() - interval '3 days' where document_id = ${old.d.id}`;
+  const ref = (o) => `№ ${o.id.slice(0, 8).toUpperCase()}`;
+
+  const part = (await h.req('GET', '/api/today')).body.orgs.find((g) => g.id === o5.id);
+  assert.deepEqual(part.to_sign.map((x) => [x.order_ref, x.long]), [[ref(old.o), true], [ref(fresh.o), false]]);
+
+  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(today, '08:30') }) >= 1);
+  const [r] = await S.sql`select sign, sign_long from org_morning_digests where user_id = ${h.user.id} and org_id = ${o5.id}`;
+  assert.deepEqual({ ...r }, { sign: 2, sign_long: 1 });
+  const feed = (await h.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня по организации'));
+  assert.equal(feed.length, 1);
+  assert.equal(feed[0].title, 'На сегодня по организации: 2 дела ждут подписи организации (2 дня и дольше: 1)');
+  assert.equal(feed[0].section, `org=${o5.id}&to=sign_long`);
+  // Срок сегодня у экспертов важнее; без долгих — просто к подписи организации.
+  assert.equal(orgDigestTo({ sign: 2, sign_long: 1, due: 1 }), 'week');
+  assert.equal(orgDigestTo({ sign: 2, sign_long: 0 }), 'sign');
+  assert.equal(orgDigestText({ sign: 1, sign_long: 0 }), 'На сегодня по организации: 1 дело ждёт подписи организации');
+});

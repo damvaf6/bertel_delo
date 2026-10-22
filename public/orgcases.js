@@ -532,6 +532,8 @@ export function focusOrgBlock(to) {
   if (to === 'sign') return goSign(null);
   // «sign_order» (2.286) — к подписи организации с отбором «Есть расхождения с заявкой или заданием на оценку» (2.276).
   if (to === 'sign_order') { pickSignFilter('order'); return goSign(null); }
+  // «sign_long» (2.374) — к подписи организации с отбором «Ждут Вашей подписи 2 дня и дольше».
+  if (to === 'sign_long') { pickSignFilter('long'); return goSign(null); }
   $('org-cases-search').value = '';
   expert = '';
   filter = to;

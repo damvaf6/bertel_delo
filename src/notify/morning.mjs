@@ -118,12 +118,14 @@ export async function morningTitles(sql, ids) {
 // заданием на оценку (2.286, как отбор в «Подписи организации», 2.276); в скольких делах на подписи организации срок по заданию
 // на оценку сегодня или прошёл (2.316, как красная строка в «Сегодня» и «Подписи организации», 2.308); в скольких делах
 // перенос срока согласован позже срока по заданию на оценку, а письма о переносе нет 2 дня и дольше (2.338, как пометка в
-// «Делах экспертов», 2.332). Ведёт в организацию.
+// «Делах экспертов», 2.332); сколько из ждущих подписи организации ждут её 2 дня и дольше после подписи эксперта (2.374, как
+// строка «Ждут подписи организации 2 дня и дольше» в «Сегодня»). Ведёт в организацию.
 // Только цифры.
 export function orgDigestCounts(part, today) {
   const inWork = (x) => x.status_name === STATUS_NAME.in_work;
   return {
     sign: part.to_sign.length,
+    sign_long: part.to_sign.filter((x) => x.long).length,
     handover: part.handover.length,
     stuck: part.handover.filter((x) => !x.can_transfer && !x.extend_asked).length,
     due: part.hot.filter((x) => inWork(x) && x.deadline === today).length,
@@ -143,7 +145,7 @@ export function orgDigestCounts(part, today) {
 
 export function orgDigestText(c) {
   const parts = [];
-  if (c.sign) parts.push(`${c.sign} ${pl(c.sign, 'дело ждёт', 'дела ждут', 'дел ждут')} подписи организации`);
+  if (c.sign) parts.push(`${c.sign} ${pl(c.sign, 'дело ждёт', 'дела ждут', 'дел ждут')} подписи организации${c.sign_long ? ` (2 дня и дольше: ${c.sign_long})` : ''}`);
   if (c.task_due) parts.push(`срок по заданию на оценку сегодня или прошёл — подпишите сегодня: ${c.task_due} ${pl(c.task_due, 'дело', 'дела', 'дел')}`);
   if (c.egrn_kept) parts.push(`после возврата расхождение с выпиской ЕГРН осталось: ${c.egrn_kept} ${pl(c.egrn_kept, 'дело', 'дела', 'дел')}`);
   if (c.order_diff) parts.push(`на подписи — расхождения с заявкой или заданием на оценку: ${c.order_diff} ${pl(c.order_diff, 'дело', 'дела', 'дел')}`);
@@ -180,8 +182,8 @@ export async function sendOrgMorning(sql, registry, { now = new Date(), storage 
     if (!counted.has(h.org_id)) counted.set(h.org_id, orgDigestCounts(await orgPart(sql, { id: h.org_id, name: h.name }, registry, today, { storage }), today));
     const c = counted.get(h.org_id);
     sent += await sql.tx(async (tx) => {
-      const fresh = await tx`insert into org_morning_digests (user_id, org_id, day, sign, handover, stuck, due, overdue, idle, returned, fresh, away, ext_declined, back, egrn_kept, order_diff, task_due, task_moved)
-                             values (${h.user_id}, ${h.org_id}, ${today}, ${c.sign}, ${c.handover}, ${c.stuck}, ${c.due}, ${c.overdue}, ${c.idle}, ${c.returned}, ${c.fresh}, ${c.away}, ${c.ext_declined}, ${c.back}, ${c.egrn_kept}, ${c.order_diff}, ${c.task_due}, ${c.task_moved})
+      const fresh = await tx`insert into org_morning_digests (user_id, org_id, day, sign, sign_long, handover, stuck, due, overdue, idle, returned, fresh, away, ext_declined, back, egrn_kept, order_diff, task_due, task_moved)
+                             values (${h.user_id}, ${h.org_id}, ${today}, ${c.sign}, ${c.sign_long}, ${c.handover}, ${c.stuck}, ${c.due}, ${c.overdue}, ${c.idle}, ${c.returned}, ${c.fresh}, ${c.away}, ${c.ext_declined}, ${c.back}, ${c.egrn_kept}, ${c.order_diff}, ${c.task_due}, ${c.task_moved})
                              on conflict do nothing returning user_id`;
       const text = orgDigestText(c);
       if (!fresh.length || !text) return 0;
@@ -202,7 +204,8 @@ export async function sendOrgMorning(sql, registry, { now = new Date(), storage 
 // (2.127: туда входят и просроченные); только прошедшие сроки — отбор «Срок прошёл» (2.158); иначе — отбор «Просят передать —
 // передать некому» (2.228); иначе — к подписи организации, если после возврата расхождение с выпиской осталось (2.257: подписывать
 // так нельзя); иначе — к подписи организации с отбором «Есть расхождения с заявкой или заданием на оценку» (2.286); иначе — отбор
-// «Перенос позже срока по заданию — нет письма» (2.338, 2.332: банк ждёт отчёт к прежнему дню); иначе — отбор «Перенос от организации» (2.238: диспетчер отказал); иначе — отбор «Срок в дни, когда
+// «Перенос позже срока по заданию — нет письма» (2.338, 2.332: банк ждёт отчёт к прежнему дню); иначе — к подписи организации
+// с отбором «Ждут Вашей подписи 2 дня и дольше» (2.374); иначе — отбор «Перенос от организации» (2.238: диспетчер отказал); иначе — отбор «Срок в дни, когда
 // эксперт не принимает дела» (2.209); иначе — отбор «Вернулись после «не принимаю дела»» (2.249); иначе — к подписи организации;
 // иначе — отбор «Просят передать»; иначе — отбор «Вернул эксперту» (2.153); иначе — отбор «Исправленный файл ждёт подписи
 // эксперта» (2.172); иначе — отбор «Без движения» (2.141).
@@ -214,6 +217,7 @@ export function orgDigestTo(c) {
   if (c.egrn_kept) return 'sign';
   if (c.order_diff) return 'sign_order';
   if (c.task_moved) return 'task_moved';
+  if (c.sign_long) return 'sign_long';
   if (c.ext_declined) return 'orgext';
   if (c.away) return 'away';
   if (c.back) return 'back';
@@ -227,6 +231,6 @@ export function orgDigestTo(c) {
 // Текст сводки руководителя в ленте по номеру уведомления (название организации лента пишет строкой ниже) и куда она ведёт.
 export async function orgMorningTitles(sql, ids) {
   if (!ids.length) return new Map();
-  const rows = await sql`select notification_id, sign, handover, stuck, due, overdue, idle, returned, fresh, away, ext_declined, back, egrn_kept, order_diff, task_due, task_moved from org_morning_digests where notification_id = any(${ids}::bigint[])`;
+  const rows = await sql`select notification_id, sign, sign_long, handover, stuck, due, overdue, idle, returned, fresh, away, ext_declined, back, egrn_kept, order_diff, task_due, task_moved from org_morning_digests where notification_id = any(${ids}::bigint[])`;
   return new Map(rows.map((r) => [String(r.notification_id), { title: orgDigestText(r), to: orgDigestTo(r) }]));
 }
