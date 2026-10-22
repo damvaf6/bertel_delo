@@ -17025,3 +17025,55 @@ test('2.372: то же объявление другой ссылкой — пр
   await sp.locator('#analogs-msg').scrollIntoViewIfNeeded();
   await shot(sp, 'i03-analog-povtor-obyavleniya');
 });
+
+test('2.373: дата осмотра в отчёте не та, что у выезда помощника в деле, — «Заменить на дату осмотра из дела»', async ({ page, browser, baseURL }) => {
+  test.setTimeout(120_000);
+  await signIn(page, '+79990003731');
+  const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира: дата осмотра' }, headers: H })).json();
+  const id = created.order.id;
+  expect((await page.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(9), fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 73' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  const sctx = await phoneContext(browser, baseURL);
+  const sp = await sctx.newPage();
+  const spec = await signIn(sp, '+79990003732');
+  const visitDay = inDays(-3);
+  await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [spec.id]);
+    await c.query('update orders set price_kop = 1500000, paid_at = now(), status = $2, executor_user_id = $3 where id = $1', [id, 'in_work', spec.id]);
+    await c.query("insert into payments (order_id, amount_kop, status, provider_id, created_by, paid_at) values ($1, 1500000, 'succeeded', $2, $3, now())", [id, `pay_ui_${id}`, spec.id]);
+    // Выезд помощника завершён 3 дня назад — фото с выезда нет, только данные с объекта.
+    await c.query(`insert into onsite_visits (order_id, helper_id, assigned_by, planned_at, finished_at)
+      values ($1, $2, $2, ($3::date + time '10:00') at time zone 'Europe/Moscow', ($3::date + time '12:00') at time zone 'Europe/Moscow')`, [id, spec.id, visitDay]);
+  });
+  const ru = (d) => d.split('-').reverse().join('.');
+  expect((await sp.request.post(`/api/orders/${id}/results`, {
+    data: makePdf([['Отчёт № 73/2026 об оценке квартиры', 'Дата осмотра объекта оценки: 01.02.2026', `Дата составления отчёта: ${ru(inDays(0))}`]]),
+    headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('отчёт.pdf') },
+  })).status()).toBe(201);
+
+  await sp.goto(`/kabinet#order=${id}`);
+  await sp.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const draftText = sp.getByLabel('Текст заключения');
+  await draftText.fill(`${await draftText.inputValue()}\nДата осмотра объекта оценки: 01.02.2026.`);
+  await sp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  const find = sp.locator('#review-checks .ai-found li').filter({ hasText: 'Дата осмотра в отчёте' });
+  await expect(find).toContainText(`Дата осмотра в отчёте — 01.02.2026, а в деле осмотр: выезд помощника на объект — ${ru(visitDay)} — проверьте дату осмотра`);
+  await find.getByRole('button', { name: 'Заменить на дату осмотра из дела' }).click();
+  await expect(find.locator('[data-role="shot-swap-what"]')).toHaveText(`Было «01.02.2026» — стало «${ru(visitDay)}», как у осмотра в деле. Черновик сохранён; соберите Word заново.`);
+  await expect(draftText).toHaveValue(new RegExp(`Дата осмотра объекта оценки: ${ru(visitDay).replace(/\./g, '\\.')}\\.`));
+  expect((await (await sp.request.get(`/api/orders/${id}/draft`, { headers: H })).json()).draft.body).toContain(`Дата осмотра объекта оценки: ${ru(visitDay)}.`);
+  await expect(find.locator('[data-role="egrn-rebuild"]')).toBeVisible();
+  expect(await sp.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await find.scrollIntoViewIfNeeded();
+  await shot(sp, 'i04-specialist-data-osmotra-zamenit');
+  await find.getByRole('button', { name: 'Отменить' }).click();
+  await expect(find.locator('[data-role="shot-swap-what"]')).toHaveText('Замена отменена: снова «01.02.2026». Черновик сохранён.');
+  await expect(draftText).toHaveValue(/Дата осмотра объекта оценки: 01\.02\.2026\./);
+  await expect(find.getByRole('button', { name: 'Заменить на дату осмотра из дела' })).toBeEnabled();
+  await sctx.close();
+});

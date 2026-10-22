@@ -295,6 +295,41 @@ function wordsFix(w, quote) {
   const { btn, miss } = draftFix({ ...w, from: 'цифрам соответствует' }, quote, 'fix-draft');
   return [el('div', { class: 'row' }, btn), miss];
 }
+// 2.373: дата осмотра в отчёте не та, что у осмотра в деле (фото, выезд помощника), — к месту в черновике и «Заменить на
+// дату осмотра из дела» с отменой; замена — обычная правка черновика (не по выписке и не по заданию).
+function shotFix(s, quote) {
+  const g = { ...s, from: 'осмотр в деле', kind: 'shot' };
+  const { btn, miss } = draftFix(g, quote, 'fix-draft');
+  const what = el('span', { 'data-role': 'shot-swap-what' });
+  const rebuild = rebuildBox();
+  let last = null;
+  const undo = el('button', { class: 'link', type: 'button', 'data-action': 'shot-unswap', onclick: async () => {
+    try {
+      const ok = last && await undoSwap(last);
+      if (!ok) { what.textContent = `Текст на этом месте уже правили — верните «${last?.was ?? g.bad}» сами, если нужно.`; undo.classList.add('hidden'); return; }
+      what.textContent = `Замена отменена: снова «${last.was}». Черновик сохранён.`;
+      undo.classList.add('hidden');
+      rebuild.hide();
+      swap.disabled = false;
+      last = null;
+    } catch (err) { say($('review-msg'), err.message); }
+  } }, 'Отменить');
+  const done = el('p', { class: 'egrn-swap hidden', 'data-role': 'shot-swap-done' }, what, ' ', undo);
+  const swap = el('button', { class: `secondary${canFixInDraft() ? '' : ' hidden'}`, type: 'button', 'data-action': 'shot-swap', onclick: async () => {
+    swap.disabled = true;
+    try {
+      last = await swapInDraft(g, quote);
+      miss.classList.toggle('hidden', !!last);
+      miss.textContent = last ? '' : `В тексте черновика «${g.bad}» нет — исправьте в файле отчёта (${g.from}: ${g.right}).`;
+      done.classList.toggle('hidden', !last);
+      if (!last) { swap.disabled = false; return; }
+      what.textContent = `Было «${last.was}» — стало «${last.now}», как у осмотра в деле. Черновик сохранён; соберите Word заново.`;
+      undo.classList.remove('hidden');
+      rebuild.show();
+    } catch (err) { swap.disabled = false; say($('review-msg'), err.message); }
+  } }, 'Заменить на дату осмотра из дела');
+  return [el('div', { class: 'row' }, btn, swap), miss, done, rebuild.box];
+}
 function assignmentSwap(g, quote, miss, rule) {
   const src = assignmentSource(g);
   if (!src) return null;
@@ -471,7 +506,8 @@ function checkItem(order, r, c, hint) {
       ...(f.quote ? [el('br'), el('q', { text: f.quote })] : []),
       ...(f.egrn ? egrnPlace(f.egrn, f.quote, c.id) : []),
       ...(f.fix ? mineFix(f.fix, f.quote, c.id) : []),
-      ...(f.words ? wordsFix(f.words, f.quote) : []))))] : []),
+      ...(f.words ? wordsFix(f.words, f.quote) : []),
+      ...(f.shot ? shotFix(f.shot, f.quote) : []))))] : []),
     // Отмеченные места: цитата из отчёта, файл и страница — сервер показывает только найденные в тексте цитаты.
     ...(hint?.marks?.length ? [el('ul', { class: 'ai-marks' }, ...hint.marks.map((m) => el('li', {},
       el('span', { class: 'ai-mark-where', text: `${m.file}, ${m.where}: ` }),
