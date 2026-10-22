@@ -472,6 +472,19 @@ export async function loadToday() {
     const caseLine = (x) => [`${x.service} · ${x.order_ref}`, [x.expert, deadline({ ...x, who: 'эксперт просит' }, t.today)].filter(Boolean).join(' · ')];
     // «Горящие» (2.98) — сразу после просьб передать дело; в «Горит срок у экспертов» они не повторяются.
     const risky = new Set((g.at_risk ?? []).map((x) => x.order_ref));
+    // Строка дела на подписи организации (2.160, 2.161): когда эксперт подписал, сколько ждёт, что осталось по ИИ-проверке.
+    const signLine = (x) => [...caseLine(x), {
+        class: x.long ? 'overdue' : 'muted', role: 'sign-since',
+        text: [`файлов: ${x.files}`, x.since ? `эксперт подписал ${since(x.since)} — ждёт ${waited(x.since)}` : null,
+          x.reminded_at ? `эксперт напомнил ${since(x.reminded_at)}` : null].filter(Boolean).join(' · ') },
+        // После возврата расхождение с выпиской осталось в новой ИИ-проверке эксперта (2.257) — красным.
+        ...(x.egrn_kept ? [{ class: 'overdue', role: 'egrn-kept', text: `после возврата расхождение с выпиской ЕГРН осталось: ${x.egrn_kept} ${x.egrn_kept === 1 ? 'пункт' : x.egrn_kept < 5 ? 'пункта' : 'пунктов'}` }] : []),
+        // В ИИ-проверке эксперта остались расхождения с заявкой или заданием на оценку (2.286, как отбор 2.276).
+        ...(x.order_diff ? [{ class: 'overdue', role: 'order-diff', text: `расхождения с заявкой или заданием на оценку: ${x.order_diff} ${x.order_diff === 1 ? 'пункт' : x.order_diff < 5 ? 'пункта' : 'пунктов'}` }] : []),
+        // Срок по заданию на оценку прошёл или сегодня (2.308) — красным.
+        ...(x.task_due && (!x.task_moved || (x.task_moved.letter && !x.task_due.moved)) ? [{ class: taskDueSignClass(x.task_due), role: 'task-due-sign', text: taskDueSignText(x.task_due) }] : []),
+        // Перенос согласован позже срока по заданию, а письма о переносе нет (2.334) — вместо строки срока по заданию.
+        ...(x.task_moved ? [{ class: 'overdue', role: 'task-moved-sign', text: `До подписи: ${taskMovedText(x.task_moved)}` }] : [])];
     const part = [
       // Эксперт просит передать дело коллеге (2.107) — к делу в «Делах экспертов»: «Передать» или «Отказать».
       ...group(`org-handover-${g.id}`, 'Эксперт просит передать дело коллеге', g.handover ?? [], (x) => [...caseLine(x),
@@ -485,19 +498,10 @@ export async function loadToday() {
         `не принимает дела до ${dayRu(x.away_until)}${x.away_note ? ` · ${x.away_note}` : ''}${x.extend ? ''
           : x.can_transfer ? ' · передайте коллеге' : ' · передать некому — попросите перенести срок'}`], toOrg('transfer')),
       ...group(`org-risk-${g.id}`, 'Горит: нет черновика или фото осмотра', g.at_risk ?? [], (x) => [...caseLine(x), x.missing.join(' · ')], toOrg('case')),
-      // Дольше всех ждущие — первыми (порядок с сервера), два дня и дольше — красным (2.161, как в «Делах экспертов»).
-      ...group(`org-sign-${g.id}`, 'Ждут подписи организации', g.to_sign, (x) => [...caseLine(x), {
-        class: x.long ? 'overdue' : 'muted', role: 'sign-since',
-        text: [`файлов: ${x.files}`, x.since ? `эксперт подписал ${since(x.since)} — ждёт ${waited(x.since)}` : null,
-          x.reminded_at ? `эксперт напомнил ${since(x.reminded_at)}` : null].filter(Boolean).join(' · ') },
-        // После возврата расхождение с выпиской осталось в новой ИИ-проверке эксперта (2.257) — красным.
-        ...(x.egrn_kept ? [{ class: 'overdue', role: 'egrn-kept', text: `после возврата расхождение с выпиской ЕГРН осталось: ${x.egrn_kept} ${x.egrn_kept === 1 ? 'пункт' : x.egrn_kept < 5 ? 'пункта' : 'пунктов'}` }] : []),
-        // В ИИ-проверке эксперта остались расхождения с заявкой или заданием на оценку (2.286, как отбор 2.276).
-        ...(x.order_diff ? [{ class: 'overdue', role: 'order-diff', text: `расхождения с заявкой или заданием на оценку: ${x.order_diff} ${x.order_diff === 1 ? 'пункт' : x.order_diff < 5 ? 'пункта' : 'пунктов'}` }] : []),
-        // Срок по заданию на оценку прошёл или сегодня (2.308) — красным.
-        ...(x.task_due && (!x.task_moved || (x.task_moved.letter && !x.task_due.moved)) ? [{ class: taskDueSignClass(x.task_due), role: 'task-due-sign', text: taskDueSignText(x.task_due) }] : []),
-        // Перенос согласован позже срока по заданию, а письма о переносе нет (2.334) — вместо строки срока по заданию.
-        ...(x.task_moved ? [{ class: 'overdue', role: 'task-moved-sign', text: `До подписи: ${taskMovedText(x.task_moved)}` }] : [])], toOrg('sign')),
+      // Ждут подписи организации 2 дня и дольше (2.374) — отдельной строкой выше, в «Ждут подписи организации» не повторяются.
+      ...group(`org-sign-long-${g.id}`, 'Ждут подписи организации 2 дня и дольше', g.to_sign.filter((x) => x.long), signLine, toOrg('sign')),
+      // Дольше всех ждущие — первыми (порядок с сервера, 2.161); ждущие 2 дня и дольше — строкой выше (2.374).
+      ...group(`org-sign-${g.id}`, 'Ждут подписи организации', g.to_sign.filter((x) => !x.long), signLine, toOrg('sign')),
       ...group(`org-pending-${g.id}`, 'Ждут назначения эксперта', g.pending, caseLine, toOrg('pending')),
       ...group(`org-hot-${g.id}`, 'Горит срок у экспертов', g.hot.filter((x) => !risky.has(x.order_ref)), caseLine, toOrg('case')),
       // Когда вернули и сколько пунктов эксперт уже отметил исправленными (2.160 — как в «Делах экспертов»);
