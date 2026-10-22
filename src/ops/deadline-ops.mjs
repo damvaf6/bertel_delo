@@ -5,6 +5,7 @@
 import { HttpError } from '../http/core.mjs';
 import { orderSides } from '../access/policy.mjs';
 import { addDays, todayMsk } from '../orders/workflow.mjs';
+import { isWorkday, workdayFrom } from '../orders/holidays.mjs';
 import { BUSY_DEADLINES, isBusy, tripsByDay } from '../orders/schedule.mjs';
 import { yearStats } from '../matching/stats.mjs';
 import { customersOf, dispatchers, notify, orgHeads } from '../notify/notify.mjs';
@@ -74,8 +75,7 @@ async function presetReasons(sql, order, registry) {
     let next = null;
     for (let i = 1; i <= 14 && !next; i++) {
       const d = addDays(order.deadline, i);
-      const wd = new Date(`${d}T00:00:00Z`).getUTCDay();
-      if (wd !== 0 && wd !== 6 && (per.get(d) ?? 0) + (trips.get(d) ?? 0) < BUSY_DEADLINES) next = d;
+      if (isWorkday(d) && (per.get(d) ?? 0) + (trips.get(d) ?? 0) < BUSY_DEADLINES) next = d;
     }
     const [y, m, d] = order.deadline.split('-');
     out.push({ id: 'busy', label: `Много дел в этот день (${n}${t ? ` и ${t === 1 ? 'выезд' : `выездов: ${t}`}` : ''})`, reason: `Высокая загрузка: на ${d}.${m}.${y} у меня к сдаче несколько дел — прошу перенести срок`,
@@ -87,8 +87,7 @@ async function presetReasons(sql, order, registry) {
                            where user_id = ${order.executor_user_id} and away_until > ${todayMsk()}::date
                              and (away_from is null or away_from <= ${order.deadline}::date)`;
   if (sp && order.deadline < sp.until) {
-    let back = sp.until;
-    while ([0, 6].includes(new Date(`${back}T00:00:00Z`).getUTCDay())) back = addDays(back, 1);
+    const back = workdayFrom(sp.until);
     const [y, m, d] = sp.until.split('-');
     out.push({ id: 'away', label: `Меня не будет до ${d}.${m}`, reason: `В день срока меня не будет, работаю снова с ${d}.${m}.${y} — прошу перенести срок`,
       new_deadline: back });
