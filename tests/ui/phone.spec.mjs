@@ -7869,7 +7869,8 @@ test('повторная оценка того же объекта (2.118): эк
     const obj = { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, ул. Повторная, д. 8, кв. 21', cadastral: '77:02:0003004:5678', area: '52.4', floor: '7 / 12' };
     const a = await order(past.id, 'Квартира на Повторной (прошлый раз)', obj, '200 days');
     const b = await order(customer.id, 'Квартира на Повторной: для банка', { ...obj, purpose: 'bank', address: 'Москва, Повторная 8, кв 21', area: '54.1' }, '1 hour');
-    await c.query(`insert into result_drafts (order_id, author_id, source, body) values ($1, $2, 'edit', $3)`, [a, expert.id,
+    // Черновик прошлого дела — 200 дней назад: прошлому отчёту больше 6 месяцев (2.367).
+    await c.query(`insert into result_drafts (order_id, author_id, source, body, at) values ($1, $2, 'edit', $3, now() - interval '200 days')`, [a, expert.id,
       '## 3. Общие сведения: основание, заказчик, номер и дата отчёта\nЗаказчик — Петров Пётр.\n\n## 7. Описание объекта оценки\nКвартира по адресу г. Москва, ул. Повторная, д. 8, кв. 21, кадастровый номер 77:02:0003004:5678, площадь 52.4 кв. м. Санузел совмещённый, окна во двор.\n\n## 8. Местоположение и анализ рынка\nДом у парка, до метро 10 минут пешком.']);
     await c.query(`insert into order_analogs (order_id, author_id, url, url_key, fields, confirmed_at)
       values ($1, $2, 'https://example.ru/povtornaya/1', 'example.ru/povtornaya/1', '{"price_rub":"18500000","region":"moscow","address":"Москва, Повторная 10","area":"51"}', now())`, [a, expert.id]);
@@ -7890,6 +7891,12 @@ test('повторная оценка того же объекта (2.118): эк
   await expect(item).toContainText('7. Описание объекта оценки, 8. Местоположение и анализ рынка');
   await expect(item).toContainText('Аналоги: 1');
   await expect(item).toContainText('Выписка из ЕГРН, Технический паспорт БТИ или поэтажный план');
+  // 2.367: прошлому отчёту больше 6 месяцев — проверить, не изменился ли объект, и взять свежую выписку ЕГРН.
+  await expect(item.locator('[data-stale]')).toContainText('Прошлому отчёту больше 6 месяцев');
+  await expect(item.locator('[data-stale]')).toContainText('прошло 6 месяцев');
+  await expect(item.locator('[data-stale]')).toContainText('возьмите свежую выписку ЕГРН');
+  await item.locator('[data-stale]').scrollIntoViewIfNeeded();
+  await shot(ep, 'h06-ekspert-povtornaya-staryj-otchet');
   await box.scrollIntoViewIfNeeded();
   await shot(ep, 'h7-ekspert-povtornaya-ocenka');
   await item.getByRole('button', { name: `Взять из дела ${ref(ids.a)}` }).click();
