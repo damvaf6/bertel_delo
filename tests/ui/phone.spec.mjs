@@ -10,7 +10,7 @@ import { DB_URL, TEST_TOKEN, BRIDGE_SECRET, testEnv } from '../helpers.mjs';
 import { signBridge } from '../../src/bridge/signature.mjs';
 import { makePdf, makeDocx } from '../tools/make-docs.mjs';
 import { extractPages } from '../../src/ai/extract.mjs';
-import { holidayName } from '../../src/orders/holidays.mjs';
+import { holidayName, workdayFrom } from '../../src/orders/holidays.mjs';
 import fs from 'node:fs';
 import { testExternalSignature, testGoskeySignature } from '../../src/providers/sign.mjs';
 import crypto from 'node:crypto';
@@ -9308,8 +9308,7 @@ test('2.195: мои сроки — срок в дни «не принимаю н
   await it.locator('[data-ask-extend]').click();
   await expect(page.locator('#deadline-box')).toBeVisible();
   await expect(page.locator('#deadline-reason')).toHaveValue(/^В день срока меня не будет, работаю снова с /);
-  let back = inDays(3);
-  while ([0, 6].includes(new Date(`${back}T00:00:00Z`).getUTCDay())) back = new Date(Date.parse(`${back}T00:00:00Z`) + 864e5).toISOString().slice(0, 10);
+  const back = workdayFrom(inDays(3)); // выходные и нерабочие праздники (2.371)
   await expect(page.locator('#deadline-new')).toHaveValue(back);
   await expect(page.locator('#deadline-reason')).not.toHaveValue(/отпуск/);
   await shot(page, 'c37b-ekspert-perenos-menya-ne-budet');
@@ -9797,9 +9796,7 @@ test('2.201: срок дела в отпуске эксперта, переда�
   await n.getByRole('button').click();
   await expect(ep.locator('#deadline-reason')).toHaveValue(/^В день срока меня не будет, работаю снова с /);
   // День возвращения или ближайший будний после него (2.195).
-  let back = 4;
-  while ([0, 6].includes(new Date(`${inDays(back)}T00:00:00Z`).getUTCDay())) back += 1;
-  await expect(ep.locator('#deadline-new')).toHaveValue(inDays(back));
+  await expect(ep.locator('#deadline-new')).toHaveValue(workdayFrom(inDays(4))); // выходные и праздники (2.371)
   await ep.locator('#deadline-box').scrollIntoViewIfNeeded();
   await shot(ep, 'c54-2201-ekspert-perenos');
   await ep.locator('#deadline-send').click();
