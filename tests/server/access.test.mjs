@@ -2066,6 +2066,71 @@ test('сводка за месяц (2.117): дни от принятия до с
   assert.ok(/Итого;[^\r\n]*;5,8;3;1;2;;0;0;0;0;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+;\d+\r\n/.test(csv), csv);
 });
 
+test('сводка за месяц (2.366): дни от принятия до подписи организации и сколько файл ждал её после подписи эксперта', async () => {
+  const org = await makeOrg(S.sql, 'Тестовая организация 2.366');
+  const other = await makeOrg(S.sql, 'Другая организация 2.366');
+  const head = await login(S, '+79990002366');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  const ex = {};
+  for (const [k, phone, name] of [['a', '+79990002376', 'Эксперт Подписанов'], ['b', '+79990002386', 'Эксперт Без подписи']]) {
+    ex[k] = await login(S, phone);
+    await addMember(S.sql, org.id, ex[k].user.id, 'member');
+    await makeSpecialist(S.sql, ex[k].user.id);
+    await S.sql`update users set full_name = ${name} where id = ${ex[k].user.id}`;
+    assert.equal((await ex[k].req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  }
+  await S.sql`update org_members set created_at = now() - interval '60 days' where org_id = ${org.id}`;
+  const ago = (h) => new Date(Date.now() - h * 3_600_000);
+  const log = (actor, action, orderId, at, orgId = null) => S.sql`
+    insert into audit_log (actor_id, action, subject_type, subject_id, details, at)
+    values (${actor}, ${action}, 'document', ${crypto.randomUUID()},
+            ${JSON.stringify({ order_id: orderId, ...(orgId ? { org_id: orgId } : {}) })}, ${at})`;
+  // Сдано сегодня; принято takenDaysAgo дней назад.
+  const make = async (executor, takenDaysAgo) => {
+    const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Сводка 2.366' })).body.order;
+    await S.sql`update orders set status = 'done', deadline = current_date + 5, executor_user_id = ${executor} where id = ${o.id}`;
+    if (takenDaysAgo != null) {
+      await S.sql`insert into order_offers (order_id, specialist_id, score, outcome, outcome_at)
+                  values (${o.id}, ${executor}, '{}', 'accepted', now() - make_interval(days => ${takenDaysAgo}::int))`;
+    }
+    await S.sql`insert into order_status_history (order_id, from_status, to_status, side) values (${o.id}, 'review', 'done', 'dispatcher')`;
+    return o;
+  };
+  // c1: принято 10 дней назад, эксперт подписал 4 дня назад, после возврата — 3 дня назад (72 ч), организация — 2 дня
+  // назад (48 ч): 8 дней, ждал 1 день. c2: принято 6 дней назад, эксперт — 30 ч назад, организация — 24 ч назад и ещё раз
+  // 1 ч назад (в счёт первая): 5 дней, ждал 0,25 дня. c3: подписано организацией, но нет отметки о принятии — не в счёт.
+  // c4: подпись другой организации — не в счёт. У b дело без подписи организации.
+  const c1 = await make(ex.a.user.id, 10);
+  await log(ex.a.user.id, 'document.sign', c1.id, ago(96));
+  await log(ex.a.user.id, 'document.sign', c1.id, ago(72));
+  await log(head.user.id, 'document.sign_org', c1.id, ago(48), org.id);
+  const c2 = await make(ex.a.user.id, 6);
+  await log(ex.a.user.id, 'document.sign', c2.id, ago(30));
+  await log(head.user.id, 'document.sign_org', c2.id, ago(24), org.id);
+  await log(head.user.id, 'document.sign_org', c2.id, ago(1), org.id);
+  const c3 = await make(ex.a.user.id, null);
+  await log(head.user.id, 'document.sign_org', c3.id, ago(5), org.id);
+  const c4 = await make(ex.a.user.id, 3);
+  await log(head.user.id, 'document.sign_org', c4.id, ago(5), other.id);
+  await make(ex.b.user.id, 4);
+  const r = (await head.req('GET', `/api/orgs/${org.id}/report`)).body.report;
+  const x = (e) => [e.org_sign_cases, e.org_sign_days, e.org_sign_max, e.org_sign_wait];
+  const msk = (t) => todayMsk(t);
+  const d1 = Math.round((Date.parse(msk(ago(48))) - Date.parse(msk(ago(240)))) / 86_400_000);
+  const d2 = Math.round((Date.parse(msk(ago(24))) - Date.parse(msk(ago(144)))) / 86_400_000);
+  assert.deepEqual(x(r.experts.find((y) => y.user_id === ex.a.user.id)),
+    [2, Math.round(((d1 + d2) / 2) * 10) / 10, Math.max(d1, d2), 0.6], '(1 + 0,25) / 2 = 0,625');
+  assert.deepEqual(x(r.experts.find((y) => y.user_id === ex.b.user.id)), [0, null, null, null]);
+  assert.deepEqual(x(r.total), x(r.experts.find((y) => y.user_id === ex.a.user.id)));
+  const csv = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv`, undefined, { binary: true })).body.toString('utf8');
+  const avg = String(Math.round(((d1 + d2) / 2) * 10) / 10).replace('.', ',');
+  assert.ok(csv.includes('\r\nПодпись организации;Сдано дел с подписью организации;Дней в среднем от принятия до подписи организации;'
+    + `Больше всего дней;Дней в среднем от подписи эксперта до подписи организации\r\nЭксперт Подписанов;2;${avg};${Math.max(d1, d2)};0,6\r\n`
+    + `Итого;2;${avg};${Math.max(d1, d2)};0,6\r\n`), csv);
+  const prev = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv&month=${r.prev_month ?? '2026-01'}`, undefined, { binary: true })).body.toString('utf8');
+  assert.ok(!prev.includes('Подпись организации;'), prev);
+});
+
 test('сводка за месяц (2.124): сравнение с прошлым месяцем — сдано, в срок, возвраты у эксперта и в итоге', async () => {
   const org = await makeOrg(S.sql, 'Тестовая организация 2.124');
   const head = await login(S, '+79990000124');
