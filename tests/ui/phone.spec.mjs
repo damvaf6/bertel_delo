@@ -16665,3 +16665,39 @@ test('2.364: ИИ-проверка — итоговая стоимость пр�
   await shot(sp, 'h02-specialist-summa-propisyu-nahodka');
   await sctx.close();
 });
+
+test('2.365: полис из досье кончается раньше срока дела — предупреждение в деле и переход к досье', async ({ page, browser, baseURL }) => {
+  test.setTimeout(120_000);
+  await signIn(page, '+79990003651');
+  const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира: полис кончается' }, headers: H })).json();
+  const id = created.order.id;
+  expect((await page.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(10), fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 65' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  const sctx = await phoneContext(browser, baseURL);
+  const sp = await sctx.newPage();
+  const spec = await signIn(sp, '+79990003652');
+  await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [spec.id]);
+    await c.query('update orders set price_kop = 1500000, paid_at = now(), status = $2, executor_user_id = $3 where id = $1', [id, 'in_work', spec.id]);
+    await c.query("insert into payments (order_id, amount_kop, status, provider_id, created_by, paid_at) values ($1, 1500000, 'succeeded', $2, $3, now())", [id, `pay_ui_${id}`, spec.id]);
+  });
+  expect((await sp.request.post('/api/specialist/me/dossier', { data: { kind: 'certificate', title: 'Оценка недвижимости', number: '036501-1', valid_until: inDays(300) }, headers: H })).status()).toBe(201);
+  expect((await sp.request.post('/api/specialist/me/dossier', { data: { kind: 'policy', title: 'Тестовое страхование', number: 'П-365', valid_until: inDays(4), amount_rub: 5000000 }, headers: H })).status()).toBe(201);
+
+  const ruDay = (iso) => { const [y, m, d] = iso.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }); };
+  await sp.goto(`/kabinet#order=${id}&to=result`);
+  const box = sp.locator('#dossier-term-box');
+  await expect(box).toBeVisible();
+  await expect(sp.locator('#dossier-term-text')).toHaveText(`Документ из досье кончается раньше срока дела (${ruDay(inDays(10))}). Составьте и подпишите отчёт, пока он действует, или обновите его в досье.`);
+  await expect(box.locator('li')).toHaveText([`Полис страхования оценщика — действует до ${ruDay(inDays(4))}`]);
+  await box.scrollIntoViewIfNeeded();
+  await shot(sp, 'h03-specialist-dosie-polis-ranshe-sroka');
+  await box.getByRole('button', { name: 'Открыть досье' }).click();
+  await expect(sp).toHaveURL(/#specialist&to=dossier$/);
+  await expect(sp.locator('#dossier-box')).toBeInViewport();
+  await shot(sp, 'h04-specialist-dosie-iz-dela');
+  await sctx.close();
+});
