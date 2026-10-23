@@ -6,6 +6,8 @@ import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid } from '..
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import { createRegistry, validateModule } from '../../src/modules/index.mjs';
 import expertise from '../../src/modules/expertise.mjs';
+import { extractPages } from '../../src/ai/extract.mjs';
+import { photoCaption } from '../../src/docs/report.mjs';
 
 let S, owner, dispatcher, admin, spec, spec2, helper, helperMo, helperOff;
 const FIELDS = { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, Экспрессная ул., 5', area: '52', comment: 'Ключи у соседки Тестовой' };
@@ -192,4 +194,27 @@ test('2.68: помощник при плохой связи — повтор т�
   const r = await shoot(vid, 'kitchen', { 'x-photo-id': 'kitchen-retry-01' });
   assert.deepEqual([r.status, r.body.photos, r.body.repeated], [201, 1, true]);
   assert.equal((await shoot(vid, 'kitchen', { 'x-photo-id': 'kitchen-retry-02' })).body.photos, 2);
+});
+
+// 2.379: в Word под каждым фото — шаг осмотра, время снимка и кто снимал: помощник на выезде или владелец по ссылке;
+// шаг, которого уже нет в описании, — «вне шагов осмотра», а не имя файла.
+test('2.379: Word — под фото с выезда помощника шаг осмотра, время снимка и «Снял помощник на выезде»', async () => {
+  const o = await inWork('Экспресс: фото выезда в Word');
+  const vid = (await assign(o)).body.visit.id;
+  assert.equal((await shoot(vid, 'facade')).status, 201);
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {})).status, 201);
+  const w = await fetch(`${S.base}/api/orders/${o.id}/draft/docx`, { headers: { cookie: spec.cookie } });
+  assert.equal(w.status, 200);
+  const text = (await extractPages(Buffer.from(await w.arrayBuffer()), 'r.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')).pages.join('\n');
+  const at = text.indexOf('Фото 1. ');
+  assert.ok(at >= 0, text.slice(-600));
+  const cap = text.slice(at, at + 400);
+  assert.match(cap, /Снято: \d\d\.\d\d\.\d{4}, \d\d:\d\d \(МСК, по часам телефона\)/);
+  assert.match(cap, /Снял помощник на выезде на объект/);
+  assert.doesNotMatch(cap, /Снял владелец/);
+  const steps = [{ id: 'facade', title: 'Фасад' }];
+  const base = { no: 3, filename: 'Осмотр · Старый шаг · 1.jpg', received_at: new Date(), shot_at: null, lat: null };
+  assert.deepEqual(photoCaption({ ...base, step: 'gone', link_id: 1, visit_id: null }, steps).slice(0, 3),
+    ['Фото 3. Снимок вне шагов осмотра', 'Время съёмки телефон не передал · Место съёмки не определено', 'Снял владелец по ссылке на осмотр']);
+  assert.equal(photoCaption({ ...base, step: 'facade', visit_id: 7 }, steps)[0], 'Фото 3. Фасад');
 });

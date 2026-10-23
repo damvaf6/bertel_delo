@@ -156,6 +156,8 @@ function photoLine(p) {
   const parts = [`получено ${timeRu(p.received_at)}`];
   if (p.shot_at) parts.push(`снято ${timeRu(p.shot_at)}`);
   if (p.geo) parts.push(`место ${p.geo.lat.toFixed(5)}, ${p.geo.lon.toFixed(5)}${p.geo.accuracy_m !== null ? ` (±${p.geo.accuracy_m} м)` : ''}`);
+  // 2.379: как в подписи под фото в Word — кто снимал.
+  parts.push(p.visit_id ? 'снял помощник на выезде' : 'снял владелец по ссылке');
   return parts.join(' · ');
 }
 

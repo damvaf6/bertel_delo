@@ -1502,6 +1502,7 @@ test('дистанционный осмотр: специалист выдаёт
   const facade = sp.locator('#inspect-steps li[data-step="facade"]');
   await expect(facade).toContainText('Осмотр · Дом снаружи · 1.jpg');
   await expect(facade.locator('.photo-meta').first()).toContainText('место 55.75120, 37.61840 (±12 м)');
+  await expect(facade.locator('.photo-meta').first()).toContainText('снял владелец по ссылке'); // 2.379
   await expect(sp.locator('#inspect-steps li[data-step="rooms"] .badge')).toHaveText('нет фото');
   await expect(sp.locator('#docs li').filter({ hasText: 'Осмотр · Кухня · 1.jpg' })).toContainText('Фото осмотра');
   // 2.71: у каждого фото — картинка сразу (уменьшенная копия со страницы владельца); нажал — фото целиком.
@@ -1668,6 +1669,10 @@ test('экспресс: заказчик выбирает выезд помощ�
   await expect(sp.locator('#onsite-visits li dl')).toContainText('43.8');
   await expect(sp.locator('#inspect-steps li[data-step="facade"] .photo-meta').first()).toContainText('место 55.76010, 37.62020 (±8 м)');
   await shot(sp, '91-specialist-express-dannye');
+  // 2.379: у фото с выезда — кто снимал, как в подписи под фото в Word.
+  await expect(sp.locator('#inspect-steps li[data-step="facade"] .photo-meta').first()).toContainText('снял помощник на выезде');
+  await sp.locator('#inspect-steps li[data-step="facade"]').scrollIntoViewIfNeeded();
+  await shot(sp, 'i15-specialist-foto-vyezd-kto-snyal');
 
   // Заказчик видит ход выезда и данные — без имени помощника.
   await page.reload();
@@ -2810,6 +2815,7 @@ test('как настоящий эксперт (2.33): автобус для с�
   expect(wtext).toContain('Место съёмки: 55.75000, 37.61000');
   expect(wtext).toContain('Фото 3. Пробег');
   expect(wtext).toMatch(/Снято: \d\d\.\d\d\.\d{4}, \d\d:\d\d \(МСК, по часам телефона\) · Место съёмки: 55\.75000/);
+  expect(wtext).toContain('Снял владелец по ссылке на осмотр'); // 2.379
   await text.fill(body.replace(/\[(?:заполнить|описать)[^\]]*\]/gi, 'заполнено экспертом'));
   await sp.getByRole('button', { name: 'Сохранить правку' }).click();
   await expect(sp.locator('#draft-msg')).toHaveText('Правка сохранена');
