@@ -17,7 +17,9 @@ env:
 jobs:
   server:
     name: Сервер · PostgreSQL 16 + MinIO
-    runs-on: ubuntu-latest
+    # ubuntu 26.04 (новый ubuntu-latest с 24.10.2026): pg_dump 18 не восстанавливается в PostgreSQL 16, Playwright 1.56 не
+    # ставит браузер — машины закреплены.
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:16
@@ -49,7 +51,7 @@ jobs:
 
   container:
     name: Контейнер · телефон 412×915
-    # Playwright 1.56 не ставит браузер на ubuntu 26.04 (новый ubuntu-latest с 24.10.2026) — машина закреплена.
+    # См. задание server: ubuntu 26.04 — машина закреплена.
     runs-on: ubuntu-24.04
     services:
       postgres:
@@ -147,7 +149,7 @@ jobs:
 
   backup:
     name: Выгрузка копий · образ + учебное восстановление
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:16
