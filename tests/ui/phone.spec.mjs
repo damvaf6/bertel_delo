@@ -7944,6 +7944,19 @@ test('заметки эксперта к делу (2.115): заметка с н�
   expect(linked).toBe(2);
   // 2.157: в «Моих сроках» напоминание «за день до срока» — с отметкой и сроком дела; «Сделано» прямо в строке убирает его.
   const dl = nv.before_deadline;
+  // 2.386: своя дата в выходной — подсказка «нерабочий день» и одной кнопкой — последний рабочий день перед ним.
+  const dayBefore = (d) => new Date(Date.parse(`${d}T00:00:00Z`) - 86400_000).toISOString().slice(0, 10);
+  const sat = Object.keys(nv.off_days).find((d) => dayBefore(d) > nv.today && nv.off_days[d] === 'суббота' && !nv.off_days[dayBefore(d)]);
+  await ep.fill('#notes-remind', sat);
+  await expect(ep.locator('#notes-off-hint')).toContainText('суббота, нерабочий день: лучше напомнить');
+  await expect(ep.locator('#notes-off-fix')).toBeVisible();
+  await ep.locator('#notes-off-hint').scrollIntoViewIfNeeded();
+  await shot(ep, 'h12c-ekspert-zametka-vyhodnoj');
+  await ep.click('#notes-off-fix');
+  const fri = await ep.inputValue('#notes-remind');
+  expect(fri < sat && !nv.off_days[fri]).toBe(true);
+  await expect(ep.locator('#notes-off-hint')).toBeHidden();
+  await ep.fill('#notes-remind', '');
   await ep.goto('/kabinet#specialist&to=schedule');
   const dayNotes = ep.locator(`#schedule-days li[data-day="${dl}"] li[data-schedule-item="note"]`);
   await expect(dayNotes).toHaveCount(2);
