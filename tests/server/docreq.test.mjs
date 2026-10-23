@@ -175,6 +175,12 @@ test('готовые фразы заказчику (2.84): только испо
   assert.ok(!p[2].text.includes(egrn.title) && p[2].text.includes(tech.title), p[2].text);
   // Фраза — только текст в поле: в переписке ничего не появилось, пока исполнитель не отправил сам.
   assert.equal((await msgs(spec)).body.messages.length, 0);
+  // 2.387: дата — по сроку этого дела (с запасом в рабочих днях), как считает сервер.
+  const { docsDueIso, dayWords } = await import('../../src/orders/phrases.mjs');
+  const near = addDays(todayMsk(), 3);
+  await S.sql`update orders set deadline = ${near} where id = ${o.id}`;
+  p = (await msgs(spec)).body.phrases;
+  assert.ok(p[2].text.includes(`до ${dayWords(docsDueIso(new Date(), near))} —`), p[2].text);
 });
 
 test('готовые фразы (2.84): у товара и документа — свои слова', async () => {
@@ -194,7 +200,32 @@ test('готовые фразы (2.84): у товара и документа �
   assert.match(doc[1].text, /где сейчас находится документ и у кого/);
   assert.ok(!doc.some((x) => /осмотр/.test(x.text)));
   const due = messagePhrases({ def: reg.service('expertise', 'realty'), now: new Date('2026-10-06T21:30:00Z') })[2].text;
-  assert.match(due, /до 10 октября/, 'через 3 дня по Москве');
+  // 7 октября по Москве (ср) + 3 рабочих дня — пн 12 октября, а не суббота 10-го (2.387).
+  assert.match(due, /до 12 октября/, 'через 3 рабочих дня по Москве');
+});
+
+test('2.387: «пришлите до …» — через 3 рабочих дня, не на выходной и праздник, с запасом 2 рабочих дня до срока дела', async () => {
+  const { messagePhrases, docsDueIso } = await import('../../src/orders/phrases.mjs');
+  const wed = new Date('2026-10-21T09:00:00Z');
+  assert.equal(docsDueIso(wed), '2026-10-26', 'чт, пт, пн');
+  // Пятница перед 4 ноября: пн 2, вт 3, праздник 4-го пропущен — чт 5 ноября.
+  assert.equal(docsDueIso(new Date('2026-10-30T09:00:00Z')), '2026-11-05');
+  // Новогодние каникулы — после них.
+  assert.equal(docsDueIso(new Date('2026-12-29T09:00:00Z')), '2027-01-12');
+  // Срок дела во вторник 27-го: за 2 рабочих дня — пт 23-го, раньше обычных трёх.
+  assert.equal(docsDueIso(wed, '2026-10-27'), '2026-10-23');
+  // Срок дела в понедельник 26-го: выходные не в счёт — пт 23 и чт 22: чт 22 октября.
+  assert.equal(docsDueIso(wed, '2026-10-26'), '2026-10-22');
+  // Срок далеко — обычные 3 рабочих дня; срок завтра или прошёл — не раньше следующего рабочего дня.
+  assert.equal(docsDueIso(wed, '2026-12-01'), '2026-10-26');
+  assert.equal(docsDueIso(wed, '2026-10-22'), '2026-10-22');
+  assert.equal(docsDueIso(wed, '2026-10-01'), '2026-10-22');
+  // Пятница вечером: следующий рабочий — понедельник, не суббота.
+  assert.equal(docsDueIso(new Date('2026-10-23T18:00:00Z'), '2026-10-24'), '2026-10-26');
+  const reg = createRegistry([expertise]);
+  const docs = messagePhrases({ def: reg.service('expertise', 'realty'), openDocs: ['Выписка из ЕГРН'], deadline: '2026-10-27', now: wed })
+    .find((x) => x.id === 'docs');
+  assert.match(docs.text, /Пришлите их, пожалуйста, до 23 октября —/);
 });
 
 test('2.224: выписка ЕГРН старше 30 дней на дату оценки — подсказка в деле и в «Сегодня», свежая запрашивается одной кнопкой', async () => {

@@ -83,6 +83,8 @@ export function workOps() {
                                  where r.order_id = ${order.id} and r.cancelled_at is null and d.id is null
                                  order by r.id`).map((d) => d.title),
             moved: await lastMove(sql, order),
+            // «Пришлите до …» — с запасом в рабочих днях до срока дела (2.387).
+            deadline: order.deadline ?? null,
             // Заказчик 2 дня молчит после сообщения эксперта (2.375) — первой фразой напоминание.
             silent: (await customerSilent(sql, [order.id])).get(order.id) ?? null,
           }) : [],
