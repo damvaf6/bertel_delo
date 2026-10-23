@@ -49,7 +49,8 @@ jobs:
 
   container:
     name: Контейнер · телефон 412×915
-    runs-on: ubuntu-latest
+    # Playwright 1.56 не ставит браузер на ubuntu 26.04 (новый ubuntu-latest с 24.10.2026) — машина закреплена.
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:16
