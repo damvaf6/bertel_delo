@@ -598,7 +598,7 @@ test('недвижимость и земля (2.59): новые правила �
   const { DEFAULT_MODULES } = await import('../../src/modules/index.mjs');
   const exp = DEFAULT_MODULES.find((m) => m.id === 'expertise');
   const rule = exp.checks.find((c) => c.id === 'realty_identity');
-  assert.deepEqual(rule.auto, ['cadastral_match', 'area_match', 'floor_match', 'building_match', 'use_match', 'room_kind_match', 'cad_value_match', 'share_match', 'egrn_doc_match', 'land_match']);
+  assert.deepEqual(rule.auto, ['cadastral_match', 'area_match', 'area_same', 'floor_match', 'building_match', 'use_match', 'room_kind_match', 'cad_value_match', 'share_match', 'egrn_doc_match', 'land_match']);
 });
 
 test('остальные виды оценки (2.43): правила проверки как у транспорта — сверка объекта, шаблон, обязательные сведения', async () => {
@@ -1821,4 +1821,38 @@ test('2.307: оценка для банка — пользователь рез�
   // Цель не «банк» — не сверяем; не оценка — не сверяем.
   assert.deepEqual(run(report('Заказчик'), { purpose: 'deal' }), []);
   assert.deepEqual(runAutoChecks(['bank_user'], [report('Заказчик')], { service: 'handwriting', fields: sber }).bank_user, []);
+});
+
+test('2.378: площадь объекта одна во всём отчёте — описание, расчёт, итог; с выпиской или заявкой — и площадь в расчёте', () => {
+  const run = (pages, ctx) => runAutoChecks(['area_same'], [doc(pages)], { service: 'realty', ...ctx }).area_same;
+  const same = [
+    'Объект оценки: квартира общей площадью 45,1 кв. м',
+    'Расчёт: 150 000 руб./кв. м × 45,1 кв. м = 6 765 000 руб.',
+    'Итог: рыночная стоимость квартиры общей площадью 45,1 кв. м составляет 6 765 000 рублей',
+    'Площадь кухни 8 кв. м. Аналог 1: 52 кв. м × 140 000 руб. = 7 280 000 руб.',
+  ].join('\n');
+  assert.deepEqual(run([same], { fields: {} }), [], 'везде одна площадь; кухня и аналог — не в счёт');
+  // Без выписки и площади в заявке — сверяем с описанием объекта.
+  const pages = ['Объект оценки: квартира общей площадью 45,1 кв. м', 'Расчёт: 150 000 руб./кв. м × 47,3 кв. м = 7 095 000 руб.\nИтоговая стоимость объекта общей площадью 54,1 кв. м — 6 765 000 руб.'];
+  const res = run(pages, { fields: {} });
+  assert.deepEqual(res.map((f) => f.text), [
+    'В расчёте площадь 47,3 кв. м, а в описании объекта — 45,1 кв. м (стр. 1) — площадь объекта должна быть одной во всём отчёте',
+    'Площадь 54,1 кв. м, а в описании объекта — 45,1 кв. м (стр. 1) — площадь объекта должна быть одной во всём отчёте',
+  ]);
+  assert.equal(res[0].where, 'стр. 2');
+  assert.deepEqual(res[0].fix, { bad: '47,3', right: '45,1', from: 'в описании объекта' });
+  // Площадь в заявке — описание и итог сверяет area_match, здесь — только расчёт.
+  const mine = run(pages, { fields: { area: '45.1' } });
+  assert.deepEqual(mine.map((f) => f.text), ['В расчёте площадь 47,3 кв. м, а площадь объекта в заявке — 45,1 кв. м — пересчитайте стоимость с верной площадью']);
+  assert.deepEqual(mine[0].fix, { bad: '47,3', right: '45,1', from: 'в заявке' });
+  // Выписка ЕГРН в деле — с ней.
+  const egrn = { ...doc(['Выписка из Единого государственного реестра недвижимости\nВид объекта недвижимости: Помещение\nПлощадь, м2: 45,1'], 'Выписка ЕГРН.pdf'), id: 'egrn-1' };
+  const by = run(pages, { fields: { area: '50' }, egrn: [egrn] });
+  assert.deepEqual(by.map((f) => f.text), ['В расчёте площадь 47,3 кв. м, а площадь объекта в выписке ЕГРН «Выписка ЕГРН.pdf» — 45,1 кв. м — пересчитайте стоимость с верной площадью']);
+  assert.equal(by[0].egrn.right, '45,1');
+  // Участок: дом в расчёте участка — не находка; сотки — в квадратные метры.
+  const land = ['Земельный участок площадью 12 соток', 'Расчёт: 1 000 руб./кв. м × 1 200 кв. м = 1 200 000 руб.\nЖилой дом 120 кв. м × 30 000 руб. = 3 600 000 руб.'];
+  assert.deepEqual(runAutoChecks(['area_same'], [doc(land)], { service: 'land', fields: {} }).area_same, []);
+  // В отчёте нет описания с площадью — не сверяем.
+  assert.deepEqual(run(['Расчёт: 150 000 руб./кв. м × 47,3 кв. м = 7 095 000 руб.'], { fields: {} }), []);
 });

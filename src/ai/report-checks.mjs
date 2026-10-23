@@ -594,13 +594,15 @@ function areaBefore(page, index) {
   return `${lineBefore(page, index - before.length - 1)} ${before}`;
 }
 // Площади объекта на страницах документа (без аналогов, частей квартиры и чужих объектов — дома при участке и т. п.).
+// Чужие объекты рядом с площадью: дом при участке, участок при доме или квартире, квартира при комнате.
+function otherObject(ctx) {
+  if (ctx.service === 'land') return /(?<![а-яё])дом|здани|строени|постройк|помещени/iu;
+  if (ctx.fields?.object_type === 'house') return /участ/iu;
+  return ctx.fields?.object_type === 'room' ? /участ|(?<![а-яё])дом(?:а|у|е)?(?![а-яё])|здани|квартир/iu : /участ|(?<![а-яё])дом(?:а|у|е)?(?![а-яё])|здани/iu;
+}
 function objectAreas(doc, ctx) {
-  const land = ctx.service === 'land';
-  const room = ctx.fields?.object_type === 'room';
-  const other = land ? /(?<![а-яё])дом|здани|строени|постройк|помещени/iu
-    : ctx.fields?.object_type === 'house' ? /участ/iu
-      : room ? /участ|(?<![а-яё])дом(?:а|у|е)?(?![а-яё])|здани|квартир/iu : /участ|(?<![а-яё])дом(?:а|у|е)?(?![а-яё])|здани/iu;
-  const skip = room ? ROOM_SKIP : AREA_SKIP;
+  const other = otherObject(ctx);
+  const skip = ctx.fields?.object_type === 'room' ? ROOM_SKIP : AREA_SKIP;
   const out = [];
   eachPage(doc, (page, i) => {
     const found = [];
@@ -837,6 +839,58 @@ function areaMatch(doc, ctx) {
     out.push({ page: a.page, quote: lineAround(page, a.index), egrn: egrnAt(egrn), fix: egrn ? { bad: a.raw, right: fmt(egrn.v) } : { bad: a.raw, right: fmt(mine), from: MINE }, text: egrn
       ? `Площадь ${fmt(a.v)} кв. м не совпадает с площадью в выписке ЕГРН «${egrn.name}» (${fmt(egrn.v)} кв. м, стр. ${egrn.page + 1})${differs ? `; в заявке — ${fmt(mine)} кв. м` : ''} — площадь берётся из выписки`
       : `Площадь ${fmt(a.v)} кв. м не совпадает с площадью из заявки (${fmt(mine)} кв. м) — проверьте, нет ли данных другого объекта` });
+  }
+  return out;
+}
+
+// 2.378: площадь объекта одна во всём отчёте — в описании, расчёте и итоге. Расчёт — строка с умножением и рублями
+// («150 000 руб./кв. м × 45,1 кв. м = 6 765 000 руб.»): «площади» рядом с числом там нет, area_match его не видит.
+// Есть выписка ЕГРН или площадь в заявке — сверяем с ней только площадь в расчёте (остальное — area_match); нет — все
+// площади объекта с первой, в описании объекта.
+const CALC_LINE = /[×*]|\s[xх]\s|умнож/iu;
+function calcAreas(doc, ctx) {
+  const other = otherObject(ctx);
+  const skip = ctx.fields?.object_type === 'room' ? ROOM_SKIP : AREA_SKIP;
+  const out = [];
+  eachPage(doc, (page, i) => {
+    for (const m of page.matchAll(AREA_NUM)) {
+      const line = lineAround(page, m.index);
+      if (!CALC_LINE.test(line) || !/руб/iu.test(line) || /аналог/iu.test(line) || skip.test(line) || other.test(line)) continue;
+      // Рядом «площадь» — это число уже видит objectAreas.
+      if (/площад/iu.test(lineBefore(page, m.index))) continue;
+      const unit = m[3].toLowerCase();
+      const mult = /^га|^гектар/.test(unit) ? 10000 : /^сот/.test(unit) ? 100 : 1;
+      out.push({ page: i, index: m.index, raw: `${m[1]}${m[2] ? `,${m[2]}` : ''}`, v: Math.round(Number(`${m[1].replace(/[  ]/g, '')}.${m[2] ?? 0}`) * mult * 100) / 100, calc: true });
+    }
+  });
+  return out;
+}
+function areaSame(doc, ctx) {
+  const mine = Number(String(ctx.fields?.area ?? '').replace(',', '.'));
+  const egrn = ctx.egrn?.length ? egrnArea(ctx.egrn, ctx) : null;
+  const ref = egrn ? egrn.v : mine > 0 ? mine : null;
+  const calc = calcAreas(doc, ctx);
+  const out = [];
+  const seen = new Set();
+  if (ref) {
+    for (const a of calc) {
+      if (Math.abs(a.v - ref) < 0.05 || seen.has(a.v)) continue;
+      seen.add(a.v);
+      out.push({ page: a.page, quote: lineAround(doc.pages[a.page], a.index), egrn: egrnAt(egrn), fix: egrn ? { bad: a.raw, right: fmt(egrn.v) } : { bad: a.raw, right: fmt(mine), from: MINE },
+        text: `В расчёте площадь ${fmt(a.v)} кв. м, а площадь объекта ${egrn ? `в выписке ЕГРН «${egrn.name}»` : 'в заявке'} — ${fmt(ref)} кв. м — пересчитайте стоимость с верной площадью` });
+    }
+    return out;
+  }
+  const described = objectAreas(doc, ctx);
+  const main = described[0];
+  if (!main) return [];
+  const all = [...described, ...calc.filter((c) => !described.some((d) => d.page === c.page && d.index === c.index))]
+    .sort((a, b) => a.page - b.page || a.index - b.index);
+  for (const a of all) {
+    if (Math.abs(a.v - main.v) < 0.05 || seen.has(a.v)) continue;
+    seen.add(a.v);
+    out.push({ page: a.page, quote: lineAround(doc.pages[a.page], a.index), fix: { bad: a.raw, right: fmt(main.v), from: 'в описании объекта' },
+      text: `${a.calc ? 'В расчёте площадь' : 'Площадь'} ${fmt(a.v)} кв. м, а в описании объекта — ${fmt(main.v)} кв. м (стр. ${main.page + 1}) — площадь объекта должна быть одной во всём отчёте` });
   }
   return out;
 }
@@ -2996,6 +3050,7 @@ const PER_DOC = {
   cadastral_match: cadastralMatch,
   address_match: addressMatch,
   area_match: areaMatch,
+  area_same: areaSame,
   floor_match: floorMatch,
   building_match: buildingMatch,
   use_match: useMatch,
@@ -3027,6 +3082,7 @@ export const AUTO_CHECKS = Object.freeze({
   cadastral_match: 'кадастровый номер в отчёте — как в выписке ЕГРН из дела, а без неё — как в заявке',
   address_match: 'адрес объекта одинаков по всему отчёту и как в выписке ЕГРН, задании на оценку и заявке: населённый пункт, улица, дом, корпус, квартира, участок',
   area_match: 'площадь объекта в отчёте — как в выписке ЕГРН из дела, а без неё — как в заявке',
+  area_same: 'площадь объекта одна во всём отчёте: в описании, расчёте и итоге',
   floor_match: 'этаж и этажность дома в отчёте — как в выписке ЕГРН из дела, а без неё — как в заявке',
   building_match: 'год постройки и материал стен дома в отчёте — как в выписке ЕГРН на здание из дела, а год без неё — как в заявке',
   use_match: 'назначение помещения или дома (жилое / нежилое) в отчёте — как в выписке ЕГРН на объект из дела, а без неё — как в заявке',
