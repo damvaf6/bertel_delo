@@ -381,7 +381,7 @@ export function matchOps() {
                 || (!!task.get(o.id) && task.get(o.id).day <= addDays(today, 2))),
               task_due: task.get(o.id) ? { day: task.get(o.id).day, by: task.get(o.id).by, overdue: task.get(o.id).day < today } : null,
               task_moved: moved.get(o.id) ?? null,
-              idle_days: moves.get(o.id)?.days ?? null,
+              idle_days: moves.get(o.id)?.work_days ?? null,
               idle: !!moves.get(o.id)?.idle,
               extend: ext.get(o.id) ? { new_deadline: ext.get(o.id).new_deadline } : null,
             })),

@@ -4,6 +4,8 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, login, client, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, addMember } from '../helpers.mjs';
 import { addDays, todayMsk, weekEnd } from '../../src/orders/workflow.mjs';
+import { workingAgo } from '../../src/orders/silence.mjs';
+import { idleDays } from '../../src/ops/org-ops.mjs';
 
 let S, owner, dispatcher, a, b, head, org;
 const FIELDS = { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 127', area: '41' };
@@ -120,16 +122,17 @@ async function issueLink(who, o) {
 const caseOf = async (o) => (await head.req('GET', `/api/orgs/${org.id}/cases`)).body.cases.find((c) => c.id === o.id);
 
 // Отбор «Без движения 5 дней и дольше» (2.368): с пятого дня без движения — отдельная отметка `idle_long`; три-четыре дня —
-// только «без движения»; файл эксперта — отметка уходит.
+// только «без движения»; файл эксперта — отметка уходит. 2.385: дни рабочие — тест не зависит от дня недели прогона.
 test('дела экспертов (2.368): «без движения 5 дней и дольше» — с пятого дня', async () => {
   const long = await taken('Стоит шесть дней', 10, a);
   const four = await taken('Стоит четыре дня', 10, b);
   const five = await taken('Стоит ровно пять дней', 10, b);
   for (const [o, d] of [[long, 6], [four, 4], [five, 5]]) {
-    await S.sql`update order_status_history set at = now() - make_interval(days => ${d}, hours => 1) where order_id = ${o.id}`;
+    await S.sql`update order_status_history set at = ${workingAgo(d * 86400_000 + 3600_000)} where order_id = ${o.id}`;
   }
   let [cl, cf, c5] = [await caseOf(long), await caseOf(four), await caseOf(five)];
-  assert.deepEqual([cl.last_move.days, cf.last_move.days, c5.last_move.days], [6, 4, 5]);
+  assert.deepEqual([cl.last_move.work_days, cf.last_move.work_days, c5.last_move.work_days], [6, 4, 5]);
+  assert.ok(cl.last_move.days >= 6, 'по календарю — не меньше рабочих');
   assert.deepEqual([cl.idle, cf.idle, c5.idle], [true, true, true]);
   assert.deepEqual([cl.idle_long, cf.idle_long, c5.idle_long], [true, false, true]);
   assert.equal(cl.last_move.idle_long, true);
@@ -146,6 +149,18 @@ test('дела экспертов (2.368): «без движения 5 дней 
   // Завершённые и ожидающие ответа — без отметки.
   const rest = (await head.req('GET', `/api/orgs/${org.id}/cases`)).body.cases.filter((x) => !['in_work', 'review'].includes(x.status));
   assert.ok(rest.every((x) => x.idle_long === false));
+});
+
+// 2.385: «без движения» — в рабочих днях по Москве: выходные и нерабочие праздники не в счёт.
+test('2.385: без движения — рабочие дни; после выходных и праздника не тревожит зря', () => {
+  // Пятница 18:00 → понедельник 12:00: по календарю 2 дня, рабочих — меньше суток.
+  assert.deepEqual(idleDays('2026-10-23T15:00:00Z', '2026-10-26T09:00:00Z'), { days: 2, work_days: 0, idle: false, idle_long: false });
+  // Среда 10:00 → понедельник 12:00: по календарю 5 дней («5 дней и дольше» раньше), рабочих — 3: только «без движения».
+  assert.deepEqual(idleDays('2026-10-21T07:00:00Z', '2026-10-26T09:00:00Z'), { days: 5, work_days: 3, idle: true, idle_long: false });
+  // Понедельник 10:00 → понедельник 10:00 через неделю: рабочих 5 — «5 дней и дольше».
+  assert.deepEqual(idleDays('2026-10-19T07:00:00Z', '2026-10-26T07:00:00Z'), { days: 7, work_days: 5, idle: true, idle_long: true });
+  // 4 ноября (среда) — праздник: понедельник 2 ноября 10:00 → четверг 5 ноября 10:00 — рабочих 2, не «без движения».
+  assert.deepEqual(idleDays('2026-11-02T07:00:00Z', '2026-11-05T07:00:00Z'), { days: 3, work_days: 2, idle: false, idle_long: false });
 });
 
 // Прогон 2.370: дело на проверке у диспетчера шесть дней ждёт его, а не эксперта — не «без движения» и не в отборах.

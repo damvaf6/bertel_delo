@@ -3031,17 +3031,18 @@ test('карточка эксперта (2.35): из подбора у дисп�
   // открывает его в «Делах экспертов».
   let busy;
   await db(async (c) => {
-    busy = (await c.query("insert into orders (owner_user_id, module, service, title, status, deadline, executor_user_id, updated_at) values ($1, 'expertise', 'realty', 'Квартира в работе', 'in_work', $2, $3, now() - interval '4 days') returning id", [customer.id, inDays(2), spec.id])).rows[0].id;
-    await c.query("insert into order_status_history (order_id, from_status, to_status, side, actor_id, at) values ($1, 'awaiting_executor', 'in_work', 'executor', $2, now() - interval '4 days')", [busy, spec.id]);
-    await c.query("insert into deadline_requests (order_id, requested_by, old_deadline, new_deadline, reason, requested_at) values ($1, $2, $3, $4, 'Жду выписку', now() - interval '5 days')", [busy, spec.id, inDays(2), inDays(9)]);
+    busy = (await c.query("insert into orders (owner_user_id, module, service, title, status, deadline, executor_user_id, updated_at) values ($1, 'expertise', 'realty', 'Квартира в работе', 'in_work', $2, $3, $4) returning id", [customer.id, inDays(2), spec.id, workingAgo(4 * 86400_000)])).rows[0].id;
+    // 2.385: «без движения» — в рабочих днях, движение — 4 рабочих дня назад в любой день недели прогона.
+    await c.query("insert into order_status_history (order_id, from_status, to_status, side, actor_id, at) values ($1, 'awaiting_executor', 'in_work', 'executor', $2, $3)", [busy, spec.id, workingAgo(4 * 86400_000)]);
+    await c.query("insert into deadline_requests (order_id, requested_by, old_deadline, new_deadline, reason, requested_at) values ($1, $2, $3, $4, 'Жду выписку', $5)", [busy, spec.id, inDays(2), inDays(9), workingAgo(5 * 86400_000)]);
   });
   const ref = busy.slice(0, 8).toUpperCase();
   await hp.reload();
-  await expect(hp.locator('#expert-now-note')).toContainText('Дел: 1 · срок горит: 1 · без движения 3 дня и больше: 1');
+  await expect(hp.locator('#expert-now-note')).toContainText('Дел: 1 · срок горит: 1 · без движения 3 рабочих дня и больше: 1');
   const now = hp.locator(`#expert-now li[data-now="№ ${ref}"]`);
   await expect(now).toContainText('Оценка недвижимости');
   await expect(now).toContainText('срок горит');
-  await expect(now.locator('[data-idle]')).toHaveText('Без движения 4 дн.');
+  await expect(now.locator('[data-idle]')).toHaveText('Без движения 4 раб. дн.');
   await expect(now.locator('[data-extend]')).toContainText('Просит перенести срок на');
   await expect(hp.locator('#expert-now')).not.toContainText('Квартира в работе');
   await expect(hp.locator('#expert-now')).not.toContainText('Жду выписку');
@@ -6770,7 +6771,7 @@ test('дела экспертов (2.133): руководитель видит �
         [title, customer.id, a.id])).rows[0].id;
       await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [id, a.id]);
       await c.query(`insert into order_status_history (order_id, actor_id, side, from_status, to_status, at)
-        values ($1, $2, 'executor', 'awaiting_executor', 'in_work', now() - make_interval(days => $3::int, hours => 1))`, [id, a.id, idle]);
+        values ($1, $2, 'executor', 'awaiting_executor', 'in_work', $3)`, [id, a.id, workingAgo(idle * 86400_000 + 3600_000)]);
       // Заказчик спрашивает в переписке — движением дела это не считается.
       if (idle) await c.query("insert into order_messages (order_id, author_id, side, body) values ($1, $2, 'customer', 'Как продвигается оценка?')", [id, customer.id]);
     };
@@ -6783,7 +6784,7 @@ test('дела экспертов (2.133): руководитель видит �
   await expect(rows).toHaveCount(2);
   await expect(hp.locator('[data-filter="idle"]')).toHaveText('Без движения · 1');
   await expect(hp.locator('#org-cases [data-role="idle"]')).toHaveCount(1);
-  await expect(hp.locator('#org-cases [data-role="idle"]')).toContainText('Без движения 6 дн.');
+  await expect(hp.locator('#org-cases [data-role="idle"]')).toContainText('Без движения 6 раб. дн.');
   await expect(hp.locator('#org-cases [data-role="last-move"]')).toHaveText('Последнее движение по делу: сегодня');
   await hp.locator('[data-filter="idle"]').click();
   await expect(rows).toHaveCount(1);
@@ -6798,7 +6799,7 @@ test('дела экспертов (2.133): руководитель видит �
   await hp.goto(`/kabinet#org=${orgId}&to=idle`);
   await expect(hp.locator('[data-filter="idle"]')).toHaveAttribute('aria-pressed', 'true');
   await expect(rows).toHaveCount(1);
-  await expect(rows.first().locator('[data-role="idle"]')).toContainText('Без движения 6 дн.');
+  await expect(rows.first().locator('[data-role="idle"]')).toContainText('Без движения 6 раб. дн.');
   await expect(hp.locator('#org-cases-list-title')).toBeInViewport();
   await shot(hp, 'c9a-rukovoditel-svodka-bez-dvizheniya');
   for (const p of [cp, ap, hp]) await p.context().close();
@@ -6827,7 +6828,7 @@ test('дела экспертов (2.368): отбор «Без движения 
         [title, customer.id, who.id])).rows[0].id;
       await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [id, who.id]);
       await c.query(`insert into order_status_history (order_id, actor_id, side, from_status, to_status, at)
-        values ($1, $2, 'executor', 'awaiting_executor', 'in_work', now() - make_interval(days => $3::int, hours => 1))`, [id, who.id, idle]);
+        values ($1, $2, 'executor', 'awaiting_executor', 'in_work', $3)`, [id, who.id, workingAgo(idle * 86400_000 + 3600_000)]);
     };
     await add('Пять: неделя', a, 7);
     await add('Пять: пять дней', b, 5);
@@ -6840,14 +6841,14 @@ test('дела экспертов (2.368): отбор «Без движения 
   await expect(rows).toHaveCount(4);
   await expect(hp.locator('[data-filter="idle"]')).toHaveText('Без движения · 3');
   const chip = hp.locator('[data-filter="idle_long"]');
-  await expect(chip).toHaveText('Без движения 5 дней и дольше · 2');
+  await expect(chip).toHaveText('Без движения 5 рабочих дней и дольше · 2');
   await expect(hp.locator('#org-cases-remind-all')).toBeHidden();
   await chip.click();
   await expect(rows).toHaveCount(2);
   // Дольше всех стоящее — первым.
-  await expect(rows.nth(0).locator('[data-role="idle"]')).toContainText('Без движения 7 дн.');
+  await expect(rows.nth(0).locator('[data-role="idle"]')).toContainText('Без движения 7 раб. дн.');
   await expect(rows.nth(0)).toContainText('Стоянова Ирина');
-  await expect(rows.nth(1).locator('[data-role="idle"]')).toContainText('Без движения 5 дн.');
+  await expect(rows.nth(1).locator('[data-role="idle"]')).toContainText('Без движения 5 раб. дн.');
   const all = hp.locator('[data-action="remind-all"]');
   await expect(all).toHaveText('Напомнить всем · дел: 2');
   await expect(hp.locator('[data-role="remind-all-note"]')).toHaveText('Каждому эксперту придёт уведомление по его делу (экспертов: 2).');
@@ -16961,7 +16962,7 @@ test('прогон 2.370: эксперт и руководитель по пач
         [title, customer.id, expert.id, status])).rows[0].id;
       await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now() - interval '8 days')", [id, expert.id]);
       await c.query(`insert into order_status_history (order_id, actor_id, side, from_status, to_status, at)
-        values ($1, $2, 'executor', 'awaiting_executor', 'in_work', now() - interval '8 days')`, [id, expert.id]);
+        values ($1, $2, 'executor', 'awaiting_executor', 'in_work', $3)`, [id, expert.id, workingAgo(8 * 86400_000)]);
       if (status === 'review') {
         await c.query(`insert into order_status_history (order_id, actor_id, side, from_status, to_status, at)
           values ($1, $2, 'executor', 'in_work', 'review', now() - make_interval(days => $3::int, hours => 1))`, [id, expert.id, days]);
@@ -16980,7 +16981,7 @@ test('прогон 2.370: эксперт и руководитель по пач
   await hp.goto(`/kabinet#org=${orgId}`);
   const rows = hp.locator('#org-cases > li[data-case]');
   await expect(rows).toHaveCount(2);
-  await expect(hp.locator('[data-filter="idle_long"]')).toHaveText('Без движения 5 дней и дольше · 1');
+  await expect(hp.locator('[data-filter="idle_long"]')).toHaveText('Без движения 5 рабочих дней и дольше · 1');
   await expect(hp.locator('[data-filter="idle"]')).toHaveText('Без движения · 1');
   const rev = hp.locator(`#org-cases > li[data-case="№ ${R.slice(0, 8).toUpperCase()}"]`);
   await expect(rev.locator('[data-role="last-move"]')).toHaveText('На проверке у диспетчера, последнее движение по делу: 6 дн. назад');

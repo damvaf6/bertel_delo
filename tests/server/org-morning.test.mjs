@@ -121,9 +121,9 @@ test('куда ведёт сводка (2.130): сроки — к отбору �
 });
 
 test('без движения (2.141): число дел без движения 3 дня и больше — в тексте; больше ничего нет — к отбору «Без движения»', async () => {
-  assert.equal(orgDigestText({ sign: 0, handover: 0, due: 0, overdue: 0, idle: 1 }), 'На сегодня по организации: 1 дело без движения 3 дня и больше');
+  assert.equal(orgDigestText({ sign: 0, handover: 0, due: 0, overdue: 0, idle: 1 }), 'На сегодня по организации: 1 дело без движения 3 рабочих дня и больше');
   assert.equal(orgDigestText({ sign: 1, handover: 0, due: 0, overdue: 2, idle: 5 }),
-    'На сегодня по организации: 1 дело ждёт подписи организации, 2 дела с прошедшим сроком, 5 дел без движения 3 дня и больше');
+    'На сегодня по организации: 1 дело ждёт подписи организации, 2 дела с прошедшим сроком, 5 дел без движения 3 рабочих дня и больше');
   assert.equal(orgDigestTo({ sign: 0, handover: 0, due: 0, overdue: 0, idle: 2 }), 'idle');
   assert.equal(orgDigestTo({ sign: 0, handover: 1, due: 0, overdue: 0, idle: 2 }), 'handover');
   assert.equal(orgDigestTo({ sign: 1, handover: 0, due: 0, overdue: 0, idle: 2 }), 'sign');
@@ -161,7 +161,7 @@ test('без движения (2.141): число дел без движения
   assert.deepEqual({ ...r }, { sign: 0, handover: 0, due: 0, overdue: 0, idle: 2 });
   const feed = (await h.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня по организации'));
   assert.equal(feed.length, 1);
-  assert.equal(feed[0].title, 'На сегодня по организации: 2 дела без движения 3 дня и больше');
+  assert.equal(feed[0].title, 'На сегодня по организации: 2 дела без движения 3 рабочих дня и больше');
   assert.equal(feed[0].section, `org=${o2.id}&to=idle`);
   assert.doesNotMatch(JSON.stringify(feed), /Неподвижное|Свежее|Как продвигается/);
 });
@@ -223,7 +223,7 @@ test('вернул эксперту (2.153): число дел, где возв�
   assert.equal(orgDigestText({ sign: 0, handover: 0, due: 0, overdue: 0, idle: 0, returned: 1 }),
     'На сегодня по организации: 1 дело после возврата эксперту не исправлено 2 дня и больше');
   assert.equal(orgDigestText({ sign: 1, handover: 0, due: 0, overdue: 0, idle: 3, returned: 2 }),
-    'На сегодня по организации: 1 дело ждёт подписи организации, 3 дела без движения 3 дня и больше, 2 дела после возврата эксперту не исправлены 2 дня и больше');
+    'На сегодня по организации: 1 дело ждёт подписи организации, 3 дела без движения 3 рабочих дня и больше, 2 дела после возврата эксперту не исправлены 2 дня и больше');
   assert.equal(orgDigestTo({ sign: 0, handover: 0, due: 0, overdue: 0, idle: 2, returned: 1 }), 'returned');
   assert.equal(orgDigestTo({ sign: 0, handover: 1, due: 0, overdue: 0, idle: 0, returned: 1 }), 'handover');
 

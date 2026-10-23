@@ -163,7 +163,7 @@ export function orgDigestText(c) {
   if (c.overdue) parts.push(`${c.overdue} ${pl(c.overdue, 'дело', 'дела', 'дел')} с прошедшим сроком`);
   if (c.away) parts.push(`у ${c.away} ${pl(c.away, 'дела', 'дел', 'дел')} срок в дни, когда эксперт не принимает дела`);
   if (c.back) parts.push(`вернулись после дней «не принимаю дела»: ${c.back} ${pl(c.back, 'эксперт', 'эксперта', 'экспертов')}`);
-  if (c.idle) parts.push(`${c.idle} ${pl(c.idle, 'дело', 'дела', 'дел')} без движения 3 дня и больше`);
+  if (c.idle) parts.push(`${c.idle} ${pl(c.idle, 'дело', 'дела', 'дел')} без движения 3 рабочих дня и больше`);
   if (c.returned) {
     parts.push(`${c.returned} ${pl(c.returned, 'дело', 'дела', 'дел')} после возврата эксперту ${pl(c.returned, 'не исправлено', 'не исправлены', 'не исправлено')} 2 дня и больше`);
   }
