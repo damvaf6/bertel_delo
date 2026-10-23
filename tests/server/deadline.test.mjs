@@ -565,7 +565,7 @@ test('2.331: утренняя сводка эксперта — «приложи
   assert.equal((await alerts(other)).task_moved, 0);
   // Сводка записывается с этой цифрой и ведёт к «Сегодня».
   const tomorrow = addDays(today, 1);
-  assert.ok(await sendMorning(S.sql, { now: new Date(`${tomorrow}T08:30:00+03:00`), ...deps }) >= 1);
+  assert.ok(await sendMorning(S.sql, { dayOff: false, now: new Date(`${tomorrow}T08:30:00+03:00`), ...deps }) >= 1);
   const [dg] = await S.sql`select task_moved, task_due from morning_digests where user_id = ${spec.user.id} and day = ${tomorrow}::date`;
   assert.equal(dg.task_moved, base.task_moved + 1);
   assert.equal(digestText({ task_moved: 1 }), 'На сегодня: перенос срока согласован позже срока по заданию на оценку — приложите письмо о переносе: 1 дело');

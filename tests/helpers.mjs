@@ -181,6 +181,9 @@ export async function signResults(stack, c, orderId) {
 // 2.381: запрос документов ждёт заказчика 4 рабочих дня (выходные и праздники не в счёт) — момент запроса и сколько это
 // дней по календарю; так проверки «не пришло 3 рабочих дня» не зависят от дня недели прогона.
 export function docsAskedAgo(workdays = 4) {
-  const at = workingAgo(workdays * 86400_000);
-  return { at, days: Math.floor((Date.now() - at.getTime()) / 86400_000) };
+  // Ровно целые сутки назад (не меньше нужных рабочих дней): в выходной ночью рабочее время кончилось в полночь, и «ждём N дн.»
+  // показал бы ещё и часы.
+  const now = Date.now();
+  const days = Math.ceil((now - workingAgo(workdays * 86400_000, new Date(now)).getTime()) / 86400_000);
+  return { at: new Date(now - days * 86400_000), days };
 }

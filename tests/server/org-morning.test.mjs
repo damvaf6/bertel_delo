@@ -69,10 +69,10 @@ test('после 8:00 — одна сводка каждому руководи�
   const away = await inWork('Отпускное дело', addDays(today, 5));
   assert.equal((await spec.req('POST', `/api/orders/${away.id}/handover`, { reason: 'Отпуск' })).status, 201);
 
-  assert.equal(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(today, '07:59') }), 0);
+  assert.equal(await sendOrgMorning(S.sql, S.app.locals.registry, { dayOff: false, now: at(today, '07:59') }), 0);
   assert.equal((await S.sql`select count(*)::int as n from org_morning_digests`)[0].n, 0);
 
-  assert.equal(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(today, '09:00') }), 2);
+  assert.equal(await sendOrgMorning(S.sql, S.app.locals.registry, { dayOff: false, now: at(today, '09:00') }), 2);
   const [r] = await S.sql`select sign, handover, due, overdue from org_morning_digests where user_id = ${head.user.id} and org_id = ${org.id}`;
   assert.deepEqual({ ...r }, { sign: 1, handover: 1, due: 1, overdue: 1 });
   assert.equal((await mine(head.user.id)).length, 1);
@@ -81,7 +81,7 @@ test('после 8:00 — одна сводка каждому руководи�
   assert.equal((await mine(spec.user.id)).length, 0);
   assert.equal((await mine(idleHead.user.id)).length, 0);
   assert.equal((await S.sql`select count(*)::int as n from org_morning_digests where user_id = ${idleHead.user.id} and notification_id is null`)[0].n, 1);
-  assert.equal(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(today, '09:05') }), 0);
+  assert.equal(await sendOrgMorning(S.sql, S.app.locals.registry, { dayOff: false, now: at(today, '09:05') }), 0);
 
   // В ленте — цифры (организация — отдельно), ведёт в организацию — сразу к делам со сроком (2.130); названия дел и адреса
   // нигде не звучат.
@@ -103,7 +103,7 @@ test('вид в настройках — только у руководител�
   assert.equal((await head.req('PUT', '/api/notifications/settings', { type: 'org_morning', sms: false })).status, 200);
   await S.sql`update org_members set role = 'member' where org_id = ${org.id} and user_id = ${head2.user.id}`;
   // Назавтра: «сдать сегодня» стало с прошедшим сроком — сводка снова, но без СМС; бывшему руководителю — нет.
-  assert.equal(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(tomorrow, '08:01') }), 1);
+  assert.equal(await sendOrgMorning(S.sql, S.app.locals.registry, { dayOff: false, now: at(tomorrow, '08:01') }), 1);
   const [d] = await S.sql`select due, overdue, notification_id from org_morning_digests where user_id = ${head.user.id} and day = ${tomorrow}::date`;
   assert.deepEqual([d.due, d.overdue], [0, 2]);
   assert.equal((await S.sql`select count(*)::int as n from notification_deliveries where notification_id = ${d.notification_id}`)[0].n, 0);
@@ -154,9 +154,11 @@ test('без движения (2.141): число дел без движения
   assert.equal((await owner.req('POST', `/api/orders/${still.id}/messages`, { body: 'Как продвигается?' })).status, 201);
 
   // Через три дня утром: «Неподвижное» без движения 8 дней, «Свежее» — 3 дня (тоже без движения); сроки не горят.
-  await S.sql`update order_status_history set at = at - interval '3 days' where order_id in
+  // Движение считается от настоящего «сейчас» в рабочих днях (2.385) — сдвиг рабочим временем, иначе в выходной «Свежее» не
+  // набирает 3 рабочих дня.
+  await S.sql`update order_status_history set at = least(at - interval '3 days', ${workingAgo(3 * 86_400_000 + 3_600_000)}) where order_id in
               (select id from orders where executor_user_id = ${e.user.id})`;
-  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(day3, '08:30') }) >= 1);
+  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { dayOff: false, now: at(day3, '08:30') }) >= 1);
   const [r] = await S.sql`select sign, handover, due, overdue, idle from org_morning_digests where user_id = ${h.user.id} and org_id = ${o2.id}`;
   assert.deepEqual({ ...r }, { sign: 0, handover: 0, due: 0, overdue: 0, idle: 2 });
   const feed = (await h.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня по организации'));
@@ -207,7 +209,7 @@ test('прогон 2.150: эксперт подписал, файл ждёт п�
   const card = (await h.req('GET', `/api/specialists/${e.user.id}/card`)).body;
   assert.deepEqual(card.now.cases.map((x) => x.idle).sort(), [false, true]);
 
-  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(today, '08:30') }) >= 1);
+  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { dayOff: false, now: at(today, '08:30') }) >= 1);
   const [r] = await S.sql`select sign, idle from org_morning_digests where user_id = ${h.user.id} and org_id = ${o3.id}`;
   assert.deepEqual({ ...r }, { sign: 1, idle: 1 });
 
@@ -257,7 +259,7 @@ test('вернул эксперту (2.153): число дел, где возв�
   await S.sql`update org_returns set created_at = now() - interval '3 days' where order_id = any(${[old.o.id, fixed.o.id]}::uuid[])`;
   assert.equal((await e.req('POST', `/api/documents/${fixed.d.id}/sign`, { confirm: true })).status, 201);
 
-  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(today, '08:30') }) >= 1);
+  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { dayOff: false, now: at(today, '08:30') }) >= 1);
   const [r] = await S.sql`select sign, handover, due, overdue, idle, returned from org_morning_digests where user_id = ${h.user.id} and org_id = ${o4.id}`;
   assert.deepEqual({ ...r }, { sign: 1, handover: 0, due: 0, overdue: 0, idle: 0, returned: 1 });
   const feed = (await h.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня по организации'));
@@ -312,7 +314,7 @@ test('исправленный файл не подписан (2.172): числ�
   await S.sql`update documents set created_at = now() - interval '3 days' where id = ${oldDoc.id}`;
   await upload(fresh, 'Исправленный.pdf');
 
-  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(today, '08:30') }) >= 1);
+  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { dayOff: false, now: at(today, '08:30') }) >= 1);
   const [r] = await S.sql`select sign, handover, due, overdue, idle, returned, fresh from org_morning_digests where user_id = ${h.user.id} and org_id = ${o5.id}`;
   assert.deepEqual({ ...r }, { sign: 0, handover: 0, due: 0, overdue: 0, idle: 0, returned: 1, fresh: 1 });
   const feed = (await h.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня по организации'));
@@ -335,8 +337,8 @@ test('срок в дни, когда эксперт не принимает де
 
   // Своя организация: эксперт не принимает дела 10 дней. «В отпуске» — срок через 5 дней (считается), «Позже отпуска» — срок
   // через 12 дней (не считается), «Просит передать» — срок через 4 дня, но эксперт уже просит передать (не повторяется).
-  const h = await login(S, '+79990003831');
-  const e = await login(S, '+79990003832');
+  const h = await login(S, '+79990003981');
+  const e = await login(S, '+79990003982');
   const o6 = await makeOrg(S.sql, 'ООО «Отпускная оценка»');
   await addMember(S.sql, o6.id, h.user.id, 'head');
   await makeSpecialist(S.sql, e.user.id);
@@ -362,7 +364,7 @@ test('срок в дни, когда эксперт не принимает де
   assert.equal((await e.req('POST', `/api/orders/${ext.id}/deadline-requests`, { new_deadline: addDays(today, 14), reason: 'В день срока меня не будет' })).status, 201);
   await S.sql`update specialists set away_until = ${addDays(today, 10)}::date, away_note = 'отпуск' where user_id = ${e.user.id}`;
 
-  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(today, '08:30') }) >= 1);
+  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { dayOff: false, now: at(today, '08:30') }) >= 1);
   const [r] = await S.sql`select sign, handover, due, overdue, idle, returned, fresh, away from org_morning_digests where user_id = ${h.user.id} and org_id = ${o6.id}`;
   assert.deepEqual({ ...r }, { sign: 0, handover: 1, due: 0, overdue: 0, idle: 0, returned: 0, fresh: 0, away: 1 });
   const feed = (await h.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня по организации'));
@@ -428,7 +430,7 @@ test('просят передать, а передать некому (2.228): �
   const mates = await make(a, 'Есть кому', 6);
   assert.equal((await a.req('POST', `/api/orders/${mates.id}/handover`, { reason: 'Заболел' })).status, 201);
 
-  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(today, '08:30') }) >= 2);
+  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { dayOff: false, now: at(today, '08:30') }) >= 2);
   const [r] = await S.sql`select handover, stuck from org_morning_digests where user_id = ${h.user.id} and org_id = ${o7.id}`;
   assert.deepEqual({ ...r }, { handover: 2, stuck: 1 });
   const [r2] = await S.sql`select handover, stuck from org_morning_digests where user_id = ${h2.user.id} and org_id = ${o8.id}`;
@@ -505,7 +507,7 @@ test('2.238: перенос от организации — ждём ответ�
   assert.equal((await other.req('GET', `/api/orgs/${o9.id}/cases`)).status, 404);
 
   // Сводка: отказ за сутки — один (второй отказ перекрыт просьбой эксперта); ведёт к отбору «Перенос от организации».
-  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(today, '08:30') }) >= 1);
+  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { dayOff: false, now: at(today, '08:30') }) >= 1);
   const [r] = await S.sql`select ext_declined, stuck from org_morning_digests where user_id = ${h.user.id} and org_id = ${o9.id}`;
   assert.deepEqual({ ...r }, { ext_declined: 1, stuck: 0 });
   const feed = (await h.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня по организации'));
@@ -562,7 +564,7 @@ test('2.249: вернулись после «не принимаю дела» �
   await S.sql`update specialists set away_until = ${addDays(today, 4)}::date, away_note = 'отпуск' where user_id = ${still.user.id}`;
   await S.sql`update specialists set away_since = ${addDays(today, -5)}::date, away_until = ${today}::date where user_id = ${idle.user.id}`;
 
-  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(today, '08:30') }) >= 1);
+  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { dayOff: false, now: at(today, '08:30') }) >= 1);
   const [r] = await S.sql`select back, away from org_morning_digests where user_id = ${h.user.id} and org_id = ${o10.id}`;
   assert.deepEqual({ ...r }, { back: 1, away: 0 });
   const feed = (await h.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня по организации'));
@@ -629,7 +631,7 @@ test('2.257: после возврата расхождение с выписк�
   assert.equal((await ex.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
   assert.equal((await signRow()).egrn_kept, 1);
 
-  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(today, '08:40') }) >= 1);
+  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { dayOff: false, now: at(today, '08:40') }) >= 1);
   const [d] = await S.sql`select sign, egrn_kept from org_morning_digests where user_id = ${h.user.id} and org_id = ${o11.id}`;
   assert.deepEqual({ ...d }, { sign: 1, egrn_kept: 1 });
   const feed = (await h.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня по организации'));
@@ -689,7 +691,7 @@ test('2.286: на подписи расхождения с заявкой или
   assert.equal((await ex.req('POST', `/api/orders/${o.id}/review/ai`)).status, 201);
   assert.equal((await signRow()).order_diff, 2);
 
-  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(today, '08:50') }) >= 1);
+  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { dayOff: false, now: at(today, '08:50') }) >= 1);
   const [d] = await S.sql`select sign, order_diff from org_morning_digests where user_id = ${h.user.id} and org_id = ${o12.id}`;
   assert.deepEqual({ ...d }, { sign: 1, order_diff: 1 });
   const feed = (await h.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня по организации'));
@@ -748,7 +750,7 @@ test('2.316: срок по заданию на оценку у дела на п�
   await signed('Квартира: срок по заданию прошёл', addDays(today, -1));
   await signed('Квартира: срок по заданию завтра', tomorrow);
 
-  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(today, '08:55'), storage: S.providers.storage }) >= 1);
+  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { dayOff: false, now: at(today, '08:55'), storage: S.providers.storage }) >= 1);
   const [d] = await S.sql`select sign, task_due from org_morning_digests where user_id = ${h.user.id} and org_id = ${oT.id}`;
   assert.deepEqual({ ...d }, { sign: 3, task_due: 2 });
   const feed = (await h.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня по организации'));
@@ -802,7 +804,7 @@ test('2.338: перенос позже срока по заданию, а пис
   await moved('Квартира: перенос без письма три дня', 3);
   await moved('Квартира: перенос без письма вчера', 1);
 
-  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(today, '08:56'), storage: S.providers.storage }) >= 1);
+  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { dayOff: false, now: at(today, '08:56'), storage: S.providers.storage }) >= 1);
   const [d] = await S.sql`select task_moved from org_morning_digests where user_id = ${h.user.id} and org_id = ${oT.id}`;
   assert.equal(d.task_moved, 1);
   const feed = (await h.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня по организации'));
@@ -1208,7 +1210,7 @@ test('2.374: ждут подписи организации 2 дня и доль
   const part = (await h.req('GET', '/api/today')).body.orgs.find((g) => g.id === o5.id);
   assert.deepEqual(part.to_sign.map((x) => [x.order_ref, x.long]), [[ref(old.o), true], [ref(fresh.o), false]]);
 
-  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(today, '08:30') }) >= 1);
+  assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { dayOff: false, now: at(today, '08:30') }) >= 1);
   const [r] = await S.sql`select sign, sign_long from org_morning_digests where user_id = ${h.user.id} and org_id = ${o5.id}`;
   assert.deepEqual({ ...r }, { sign: 2, sign_long: 1 });
   const feed = (await h.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня по организации'));
@@ -1219,4 +1221,38 @@ test('2.374: ждут подписи организации 2 дня и доль
   assert.equal(orgDigestTo({ sign: 2, sign_long: 1, due: 1 }), 'week');
   assert.equal(orgDigestTo({ sign: 2, sign_long: 0 }), 'sign');
   assert.equal(orgDigestText({ sign: 1, sign_long: 0 }), 'На сегодня по организации: 1 дело ждёт подписи организации');
+});
+
+test('2.389: руководителю в выходной или праздник — только при сроке сегодня, прошедшем сроке или подписи по заданию на оценку сегодня', async () => {
+  const { orgOffDayWorth } = await import('../../src/notify/morning.mjs');
+  assert.equal(orgOffDayWorth({ sign: 3, handover: 1, idle: 2, due: 0, overdue: 0, task_due: 0 }), false);
+  for (const c of [{ due: 1 }, { overdue: 1 }, { task_due: 1 }]) assert.equal(orgOffDayWorth(c), true);
+  const holiday = '2026-11-04', next = '2026-11-05';
+  const lead = await login(S, '+79990003991');
+  const expert = await login(S, '+79990003992');
+  const o2 = await makeOrg(S.sql, 'ООО «Праздничная оценка»');
+  await addMember(S.sql, o2.id, lead.user.id, 'head');
+  await makeSpecialist(S.sql, expert.user.id);
+  await addMember(S.sql, o2.id, expert.user.id, 'member');
+  assert.equal((await expert.req('PATCH', '/api/specialist/me', { org_id: o2.id })).status, 200);
+  // Эксперт просит передать дело со сроком 10 ноября — в сводке есть что сказать, но не к сегодняшнему дню.
+  const o = await inWork('Просит передать', '2026-11-10');
+  await S.sql`update orders set executor_user_id = ${expert.user.id} where id = ${o.id}`;
+  assert.equal((await expert.req('POST', `/api/orders/${o.id}/handover`, { reason: 'Болею' })).status, 201);
+  const row = async (day) => (await S.sql`select handover, due, notification_id from org_morning_digests where user_id = ${lead.user.id} and day = ${day}::date`)[0];
+  await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(holiday, '09:00') });
+  const h = await row(holiday);
+  assert.equal(h.handover, 1);
+  assert.equal(h.notification_id, null);
+  assert.equal((await mine(lead.user.id)).length, 0);
+  // В рабочий день — как обычно.
+  await sendOrgMorning(S.sql, S.app.locals.registry, { now: at(next, '08:30') });
+  assert.ok((await row(next)).notification_id);
+  // Суббота 7 ноября, а у эксперта срок сегодня — сводка приходит.
+  const due = await inWork('Срок в субботу', '2026-11-07');
+  await S.sql`update orders set executor_user_id = ${expert.user.id} where id = ${due.id}`;
+  await sendOrgMorning(S.sql, S.app.locals.registry, { now: at('2026-11-07', '09:00') });
+  const s = await row('2026-11-07');
+  assert.equal(s.due, 1);
+  assert.ok(s.notification_id);
 });

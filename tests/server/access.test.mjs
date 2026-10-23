@@ -3211,7 +3211,7 @@ test('мои итоги за месяц (2.92): только свои дела �
   // одно в работе просрочено; дело другого эксперта — не считается.
   const order = async (title, status, days, priceKop, executor = exp.user.id) => {
     const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
-    await S.sql`update orders set status = ${status}, deadline = current_date + ${days}::int, price_kop = ${priceKop}, executor_user_id = ${executor} where id = ${o.id}`;
+    await S.sql`update orders set status = ${status}, deadline = (now() at time zone 'Europe/Moscow')::date + ${days}::int, price_kop = ${priceKop}, executor_user_id = ${executor} where id = ${o.id}`;
     return o;
   };
   const onTime = await order('Итоги: частное в срок', 'done', 5, 1_000_000);
@@ -3257,7 +3257,7 @@ test('мои итоги за месяц (2.377): средний срок от п
   await makeSpecialist(S.sql, exp.user.id);
   const order = async (title, days) => {
     const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
-    await S.sql`update orders set status = 'done', deadline = current_date + ${days}::int, executor_user_id = ${exp.user.id} where id = ${o.id}`;
+    await S.sql`update orders set status = 'done', deadline = (now() at time zone 'Europe/Moscow')::date + ${days}::int, executor_user_id = ${exp.user.id} where id = ${o.id}`;
     await S.sql`insert into order_status_history (order_id, from_status, to_status, side) values (${o.id}, 'review', 'done', 'dispatcher')`;
     return o;
   };

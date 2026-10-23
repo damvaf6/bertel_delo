@@ -6010,7 +6010,7 @@ test('мои итоги за месяц (2.377): средний срок от п
   await db(async (c) => {
     await c.query("insert into specialists (user_id, created_at) values ($1, now() - interval '2 years')", [expert.id]);
     const mk = async (title, days) => (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, price_kop, paid_at, deadline)
-      values ($1, $2, 'expertise', 'realty', 'done', $1, 1500000, now(), current_date + $3::int) returning id`, [expert.id, title, days])).rows[0].id;
+      values ($1, $2, 'expertise', 'realty', 'done', $1, 1500000, now(), (now() at time zone 'Europe/Moscow')::date + $3::int) returning id`, [expert.id, title, days])).rows[0].id;
     const a = await mk('Квартира в Отрадном: средний срок', 2);
     const b = await mk('Склад в Подольске: средний срок', -3);
     await c.query(`insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $3, '{}', 'accepted', now() - interval '4 days'),
@@ -8261,7 +8261,7 @@ test('«Напомнить эксперту» (2.125): руководитель 
     await c.query("insert into morning_digests (user_id, day) values ($1, (now() at time zone 'Europe/Moscow')::date)", [expert.id]);
     await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
     const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
-      values ('expertise', 'realty', 'Напоминание: квартира', $1, $2, 'in_work', current_date + 2, 1500000, now(),
+      values ('expertise', 'realty', 'Напоминание: квартира', $1, $2, 'in_work', (now() at time zone 'Europe/Moscow')::date + 2, 1500000, now(),
               '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Напоминальная ул., 5","area":"40"}') returning id`,
       [customer.id, expert.id]);
     await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [o.id, expert.id]);
@@ -8722,11 +8722,11 @@ test('«Ждут подписи организации» в «Сегодня» �
   await expect(items.nth(0)).toHaveAttribute('data-today-item', `org-sign-long-${orgId}`);
   await expect(items.nth(0)).toContainText(ref(B));
   await expect(items.nth(0).locator('[data-role="sign-since"]')).toHaveClass(/overdue/);
-  await expect(items.nth(0).locator('[data-role="sign-since"]')).toContainText(/— ждёт \d+ дн\. 1 ч/);
+  await expect(items.nth(0).locator('[data-role="sign-since"]')).toContainText(/— ждёт \d+ дн\.( \d+ ч)?$/); // в выходной ночью — не ровно сутки и час календаря
   await expect(items.nth(1)).toHaveAttribute('data-today-item', `org-sign-${orgId}`);
   await expect(items.nth(1)).toContainText(ref(A));
   await expect(items.nth(1).locator('[data-role="sign-since"]')).toHaveClass(/muted/);
-  await expect(items.nth(1).locator('[data-role="sign-since"]')).toContainText('— ждёт 2 ч');
+  await expect(items.nth(1).locator('[data-role="sign-since"]')).toContainText(/— ждёт \d/); // 2 рабочих часа: в выходной — от конца пятницы
   await items.nth(0).scrollIntoViewIfNeeded();
   await shot(hp, 'c15-rukovoditel-segodnya-ochered-podpisi');
   // Нажатие — к подписи этого дела в разделе организации.
