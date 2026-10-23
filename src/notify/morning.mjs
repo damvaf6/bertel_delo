@@ -13,7 +13,9 @@
 // позже срока по заданию на оценку, а письмо о переносе не просили (строка «Приложите письмо о переносе» в «Сегодня», 2.326);
 // срок по заданию у такого дела не повторяется; тоже к «Сегодня». С 2.355 — ещё в скольких делах письмо о переносе попросили
 // у заказчика, а оно не пришло 3 дня и сегодня не напоминали (кнопка «Напомнить заказчику» у строки письма в «Сегодня», 2.347).
-import { workdayBefore } from '../orders/holidays.mjs';
+// С 2.389 в выходной или нерабочий праздник сводка приходит, только если есть что сделать именно сегодня: срок сегодня,
+// прошедший срок или выезд на объект (`offDayWorth`); остальное подождёт рабочего дня (день всё равно посчитан).
+import { isWorkday, workdayBefore } from '../orders/holidays.mjs';
 import { expertSchedule } from '../orders/schedule.mjs';
 import { STATUS_NAME, todayMsk } from '../orders/workflow.mjs';
 import { expertMorningAlerts, orgPart } from '../ops/today-ops.mjs';
@@ -66,8 +68,14 @@ export function digestText(c) {
   return parts.length ? `На сегодня: ${parts.join(', ')}` : null;
 }
 
-// Разослать сводки за сегодня тем, кому ещё не считали. Возвращает, сколько уведомлений записано.
-export async function sendMorning(sql, { now = new Date(), registry = null, storage = null } = {}) {
+// Стоит ли беспокоить в выходной или праздник (2.389): эксперта — срок сегодня, прошедший срок, выезд сегодня; руководителя —
+// сдать сегодня, прошедший срок, на подписи организации срок по заданию на оценку сегодня или прошёл.
+export const offDayWorth = (c) => !!(c.due || c.overdue || c.visits);
+export const orgOffDayWorth = (c) => !!(c.due || c.overdue || c.task_due);
+
+// Разослать сводки за сегодня тем, кому ещё не считали. Возвращает, сколько уведомлений записано. `dayOff` — сегодня
+// выходной или праздник (по календарю, src/orders/holidays.mjs).
+export async function sendMorning(sql, { now = new Date(), registry = null, storage = null, dayOff = !isWorkday(todayMsk(now)) } = {}) {
   if (mskHour(now) < MORNING_HOUR) return 0;
   const today = todayMsk(now);
   const people = await sql`select s.user_id from specialists s join users u on u.id = s.user_id
@@ -80,7 +88,7 @@ export async function sendMorning(sql, { now = new Date(), registry = null, stor
                              values (${userId}, ${today}, ${c.due}, ${c.overdue}, ${c.visits}, ${c.links}, ${c.no_result}, ${c.reply_wait}, ${c.lead_unsigned}, ${c.egrn_swap}, ${c.task_swap}, ${c.egrn_rebuild}, ${c.task_due ?? 0}, ${c.task_moved ?? 0}, ${c.letter_due ?? 0}, ${c.letter_wait ?? 0})
                              on conflict do nothing returning user_id`;
       const text = digestText(c);
-      if (!fresh.length || !text) return 0;
+      if (!fresh.length || !text || (dayOff && !offDayWorth(c))) return 0;
       const where = morningTo(c) === 'today' ? '«Сегодня»' : '«Мои сроки»';
       const n = await notify(tx, 'morning_today', { users: [userId], sms: `БЕРТЕЛ Дело: ${text}. Подробно — ${where} в кабинете.` });
       if (n) {
@@ -122,7 +130,8 @@ export async function morningTitles(sql, ids) {
 // на оценку сегодня или прошёл (2.316, как красная строка в «Сегодня» и «Подписи организации», 2.308); в скольких делах
 // перенос срока согласован позже срока по заданию на оценку, а письма о переносе нет 2 дня и дольше (2.338, как пометка в
 // «Делах экспертов», 2.332); сколько из ждущих подписи организации ждут её 2 дня и дольше после подписи эксперта (2.374, как
-// строка «Ждут подписи организации 2 дня и дольше» в «Сегодня»). Ведёт в организацию.
+// строка «Ждут подписи организации 2 дня и дольше» в «Сегодня»). Ведёт в организацию. В выходной или праздник — только
+// если у экспертов срок сегодня или прошёл, или подписать нужно сегодня по заданию на оценку (2.389, `orgOffDayWorth`).
 // Только цифры.
 export function orgDigestCounts(part, today) {
   const inWork = (x) => x.status_name === STATUS_NAME.in_work;
@@ -171,7 +180,7 @@ export function orgDigestText(c) {
   return parts.length ? `На сегодня по организации: ${parts.join(', ')}` : null;
 }
 
-export async function sendOrgMorning(sql, registry, { now = new Date(), storage = null } = {}) {
+export async function sendOrgMorning(sql, registry, { now = new Date(), storage = null, dayOff = !isWorkday(todayMsk(now)) } = {}) {
   if (mskHour(now) < MORNING_HOUR) return 0;
   const today = todayMsk(now);
   const heads = await sql`select m.user_id, o.id as org_id, o.name from org_members m join organizations o on o.id = m.org_id
@@ -189,7 +198,7 @@ export async function sendOrgMorning(sql, registry, { now = new Date(), storage 
                              values (${h.user_id}, ${h.org_id}, ${today}, ${c.sign}, ${c.sign_long}, ${c.handover}, ${c.stuck}, ${c.due}, ${c.overdue}, ${c.idle}, ${c.returned}, ${c.fresh}, ${c.away}, ${c.ext_declined}, ${c.back}, ${c.egrn_kept}, ${c.order_diff}, ${c.task_due}, ${c.task_moved})
                              on conflict do nothing returning user_id`;
       const text = orgDigestText(c);
-      if (!fresh.length || !text) return 0;
+      if (!fresh.length || !text || (dayOff && !orgOffDayWorth(c))) return 0;
       const n = await notify(tx, 'org_morning_today', { users: [h.user_id], orgId: h.org_id, sms: `БЕРТЕЛ Дело: ${text}. Подробно — «Дела экспертов» в кабинете.` });
       if (n) {
         await tx`update org_morning_digests set notification_id = (select max(id) from notifications

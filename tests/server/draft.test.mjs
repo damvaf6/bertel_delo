@@ -1524,7 +1524,7 @@ test('2.315: утренняя сводка эксперта — срок по з
   }
   // Сводка записывается с этой цифрой и ведёт к «Сегодня» (завтра в 8:30 по Москве).
   const tomorrow = addDays(todayMsk(), 1);
-  assert.ok(await sendMorning(S.sql, { now: new Date(`${tomorrow}T08:30:00+03:00`), ...deps }) >= 1);
+  assert.ok(await sendMorning(S.sql, { dayOff: false, now: new Date(`${tomorrow}T08:30:00+03:00`), ...deps }) >= 1);
   const [dg] = await S.sql`select task_due from morning_digests where user_id = ${spec.user.id} and day = ${tomorrow}::date`;
   assert.equal(dg.task_due, base + 1);
   // Без хранилища (старый вызов) — не считается и не падает.

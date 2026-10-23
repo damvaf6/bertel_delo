@@ -59,10 +59,10 @@ test('после 8:00 — одна сводка с цифрами дня; до 8
   await S.sql`insert into inspection_links (order_id, created_by, token_hash, expires_at) values (${due.id}, ${spec.user.id}, 'morning-1', ${at(tomorrow, '09:00')})`;
   await S.sql`insert into inspection_links (order_id, created_by, token_hash, expires_at) values (${later.id}, ${spec.user.id}, 'morning-2', ${at(tomorrow, '18:00')})`;
 
-  assert.equal(await sendMorning(S.sql, { now: at(today, '07:30') }), 0);
+  assert.equal(await sendMorning(S.sql, { dayOff: false, now: at(today, '07:30') }), 0);
   assert.equal((await S.sql`select count(*)::int as n from morning_digests`)[0].n, 0);
 
-  assert.equal(await sendMorning(S.sql, { now: at(today, '12:00') }), 2);
+  assert.equal(await sendMorning(S.sql, { dayOff: false, now: at(today, '12:00') }), 2);
   const [d] = await S.sql`select due, overdue, visits, links, no_result, reply_wait from morning_digests where user_id = ${spec.user.id}`;
   // Оба дела в работе со сроком сегодня и прошедшим без файла результата — «нет файла результата: 2» (2.142).
   assert.deepEqual({ ...d }, { due: 1, overdue: 1, visits: 1, links: 1, no_result: 2, reply_wait: 0 });
@@ -71,7 +71,7 @@ test('после 8:00 — одна сводка с цифрами дня; до 8
   // Без дел — сводки нет, но день посчитан (не считаем заново каждую минуту).
   assert.equal((await mine(idle.user.id)).length, 0);
   assert.equal((await S.sql`select count(*)::int as n from morning_digests where user_id = ${idle.user.id} and notification_id is null`)[0].n, 1);
-  assert.equal(await sendMorning(S.sql, { now: at(today, '12:05') }), 0);
+  assert.equal(await sendMorning(S.sql, { dayOff: false, now: at(today, '12:05') }), 0);
 
   // В ленте — цифры, ведёт к «Моим срокам»; название дела нигде не звучит.
   const feed = (await spec.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня'));
@@ -94,7 +94,7 @@ test('СМС сводки выключается отдельно; в настр
   assert.equal((await spec.req('PUT', '/api/notifications/settings', { type: 'morning', sms: false })).status, 200);
   await S.sql`update users set is_active = false where id = ${helper.user.id}`;
   // Назавтра: дело «сдать сегодня» стало с прошедшим сроком — сводка снова, но без СМС; помощнику (отключён) — нет.
-  assert.equal(await sendMorning(S.sql, { now: at(tomorrow, '08:01') }), 1);
+  assert.equal(await sendMorning(S.sql, { dayOff: false, now: at(tomorrow, '08:01') }), 1);
   const [d] = await S.sql`select due, overdue, visits, links, notification_id from morning_digests where user_id = ${spec.user.id} and day = ${tomorrow}::date`;
   assert.deepEqual([d.due, d.overdue], [0, 2]);
   assert.equal((await S.sql`select count(*)::int as n from notification_deliveries where notification_id = ${d.notification_id}`)[0].n, 0);
@@ -133,7 +133,7 @@ test('2.142: «нет файла результата» и «заказчик ж
               (${done.id}, ${owner.user.id}, 'customer', 'Вопрос', now() - interval '2 days'),
               (${done.id}, ${solo.user.id}, 'executor', 'Ответ', now() - interval '1 day')`;
   await S.sql`delete from morning_digests where day = ${day}::date`;
-  await sendMorning(S.sql, { now: at3('09:00') });
+  await sendMorning(S.sql, { dayOff: false, now: at3('09:00') });
   const [d] = await S.sql`select due, overdue, visits, links, no_result, reply_wait from morning_digests where user_id = ${solo.user.id} and day = ${day}::date`;
   assert.deepEqual({ ...d }, { due: 0, overdue: 0, visits: 0, links: 0, no_result: 1, reply_wait: 1 });
   const feed = (await solo.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня'));
@@ -174,7 +174,7 @@ test('2.164: «руководитель не подписал 2 дня и бол
   await signed('Ждёт руководителя сутки', 24);
   await signed('Подписано обоими', 96, true);
   await S.sql`delete from morning_digests where day = ${day}::date`;
-  await sendMorning(S.sql, { now });
+  await sendMorning(S.sql, { dayOff: false, now });
   const [d] = await S.sql`select due, overdue, no_result, reply_wait, lead_unsigned from morning_digests where user_id = ${lead.user.id} and day = ${day}::date`;
   assert.deepEqual({ ...d }, { due: 0, overdue: 0, no_result: 0, reply_wait: 0, lead_unsigned: 1 });
   const feed = (await lead.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня'));
@@ -188,4 +188,44 @@ test('2.164: «руководитель не подписал 2 дня и бол
   // Эксперт без организации — этой части нет (у других экспертов сводки тот же день — 0).
   const [solo] = await S.sql`select lead_unsigned from morning_digests where user_id = ${spec.user.id} and day = ${day}::date`;
   assert.equal(solo?.lead_unsigned ?? 0, 0);
+});
+
+test('2.389: в выходной или праздник — сводка, только если срок сегодня, прошедший срок или выезд; иначе день посчитан без уведомления', async () => {
+  const { offDayWorth } = await import('../../src/notify/morning.mjs');
+  assert.equal(offDayWorth({ due: 0, overdue: 0, visits: 0, no_result: 3, reply_wait: 2, links: 1 }), false);
+  assert.equal(offDayWorth({ due: 1 }), true);
+  assert.equal(offDayWorth({ overdue: 2 }), true);
+  assert.equal(offDayWorth({ visits: 1 }), true);
+  // 4 ноября 2026 г. — День народного единства (нерабочий), 5 ноября — четверг, рабочий.
+  const holiday = '2026-11-04', next = '2026-11-05';
+  const quiet = await login(S, '+79990003708');
+  const busy = await login(S, '+79990003709');
+  for (const c of [quiet, busy]) await makeSpecialist(S.sql, c.user.id);
+  const mk = async (who, title, deadline) => {
+    const o = await inWork(title, deadline);
+    await S.sql`update orders set executor_user_id = ${who.user.id} where id = ${o.id}`;
+  };
+  // У «тихого» — срок в пятницу 6 ноября без файла результата: «нет файла результата», но не сегодня; у «занятого» — срок 4 ноября.
+  await mk(quiet, 'Срок в пятницу после праздника', '2026-11-06');
+  await mk(busy, 'Срок в сам праздник', holiday);
+  await S.sql`delete from morning_digests where day in (${holiday}::date, ${next}::date)`;
+  await sendMorning(S.sql, { now: at(holiday, '09:00') });
+  const row = async (who, day) => (await S.sql`select due, overdue, no_result, notification_id from morning_digests where user_id = ${who.user.id} and day = ${day}::date`)[0];
+  const q = await row(quiet, holiday);
+  assert.equal(q.no_result, 1);
+  assert.equal(q.notification_id, null);
+  assert.equal((await mine(quiet.user.id)).length, 0);
+  const b = await row(busy, holiday);
+  assert.equal(b.due, 1);
+  assert.ok(b.notification_id);
+  // Назавтра, в рабочий день, «тихому» сводка приходит как обычно; «занятому» — с прошедшим сроком.
+  await sendMorning(S.sql, { now: at(next, '08:30') });
+  assert.ok((await row(quiet, next)).notification_id);
+  assert.equal((await row(busy, next)).overdue, 1);
+  const feed = (await quiet.req('GET', '/api/notifications')).body.notifications.filter((n) => n.title.startsWith('На сегодня'));
+  assert.equal(feed.length, 1);
+  // Суббота 7 ноября — тоже нерабочий день: у «тихого» срок прошёл — сводка есть.
+  await sendMorning(S.sql, { now: at('2026-11-07', '09:00') });
+  assert.equal((await row(quiet, '2026-11-07')).overdue, 1);
+  assert.equal((await mine(quiet.user.id)).length, 2);
 });
