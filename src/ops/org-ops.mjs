@@ -7,6 +7,7 @@ import { audit, oneOf, phoneFrom, sendFile, text, uuidFrom } from './util.mjs';
 import { dispatchers, notify, notifyPhone, orgHeads } from '../notify/notify.mjs';
 import { awayOf, awayOn, backOf, orgExpertsFor } from './match-ops.mjs';
 import { orgReturns, signWait } from './sign-ops.mjs';
+import { workingMs } from '../orders/silence.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { orderSplit } from '../money/money.mjs';
 import { STATUS_NAME, addDays, isOverdue, todayMsk, weekEnd } from '../orders/workflow.mjs';
@@ -60,6 +61,14 @@ export async function caseRemind(sql, order) {
 export const CASE_IDLE_DAYS = 3;
 // 2.368: пять дней и дольше — отдельный отбор руководителя «Без движения 5 дней и дольше» с напоминанием всем сразу.
 export const CASE_IDLE_LONG_DAYS = 5;
+// 2.385: оба порога — в рабочих днях по Москве (src/orders/silence.mjs): выходные и нерабочие праздники не в счёт, дело,
+// стоявшее с пятницы, в понедельник не «без движения 3 дня», и «Напомнить эксперту» после выходных не тревожит зря.
+// days — дни по календарю («вчера», «3 дн. назад»), work_days — рабочие, по ним отметки и отбор.
+export function idleDays(last, now = new Date()) {
+  const days = Math.max(0, Math.floor((new Date(now).getTime() - new Date(last).getTime()) / 86_400_000));
+  const work_days = Math.floor(workingMs(last, now) / 86_400_000);
+  return { days, work_days, idle: work_days >= CASE_IDLE_DAYS, idle_long: work_days >= CASE_IDLE_LONG_DAYS };
+}
 export async function caseMoves(sql, orders) {
   const ids = orders.map((o) => o.id);
   if (!ids.length) return new Map();
@@ -86,16 +95,16 @@ export async function caseMoves(sql, orders) {
     join document_signatures s on s.document_id = d.id and s.role = 'expert'
     where d.order_id = any(${ids}::uuid[]) and d.kind = 'result' and d.deleted_at is null and d.uploaded_by = o.executor_user_id
       and not exists (select 1 from document_signatures g where g.document_id = d.id and g.role = 'org')`).map((r) => r.order_id));
-  const now = Date.now();
+  const now = new Date();
   return new Map(orders.map((o) => {
     const last = at.get(o.id) ?? o.updated_at;
-    const days = Math.max(0, Math.floor((now - new Date(last).getTime()) / 86_400_000));
+    const { days, work_days: workDays, idle, idle_long: idleLong } = idleDays(last, now);
     const waitsOrg = orgSign.has(o.id);
     // Прогон 2.370: дело на проверке у диспетчера ждёт его ответа, а не эксперта (у эксперта — «Диспетчер проверяет дольше
     // 2 дней», 2.369) — не «без движения» ни у руководителя, ни в утренней сводке, ни в карточке эксперта.
     const stays = !waitsOrg && o.status !== 'review';
-    return [o.id, { at: last, days, org_sign: waitsOrg, review: o.status === 'review', idle: days >= CASE_IDLE_DAYS && stays,
-      idle_long: days >= CASE_IDLE_LONG_DAYS && stays }];
+    return [o.id, { at: last, days, work_days: workDays, org_sign: waitsOrg, review: o.status === 'review',
+      idle: idle && stays, idle_long: idleLong && stays }];
   }));
 }
 

@@ -70,7 +70,7 @@ const FILTERS = [
   { id: 'back', text: 'Эксперт вернулся после «не принимаю дела»', test: (c) => !!c.back },
   { id: 'inspect', text: 'Осмотр не закончен', test: (c) => !!c.inspection },
   { id: 'idle', text: 'Без движения', test: (c) => c.idle },
-  { id: 'idle_long', text: 'Без движения 5 дней и дольше', test: (c) => c.idle_long && c.status === 'in_work' && !c.docs_wait },
+  { id: 'idle_long', text: 'Без движения 5 рабочих дней и дольше', test: (c) => c.idle_long && c.status === 'in_work' && !c.docs_wait },
   // 2.235: эксперт запросил документы у заказчика, а их ещё нет — почему дело стоит.
   { id: 'docs', text: 'Ждём документы от заказчика', test: (c) => !!c.docs_wait },
   { id: 'sign', text: 'Ждёт моей подписи', test: (c) => c.sign_wait > 0 },
@@ -170,7 +170,7 @@ function renderCases() {
     active.sort((a, b) => (a.org_extend.state === b.org_extend.state ? new Date(b.org_extend.decided_at ?? b.org_extend.requested_at)
       - new Date(a.org_extend.decided_at ?? a.org_extend.requested_at) : a.org_extend.state === 'declined' ? -1 : 1));
   }
-  if (filter === 'idle_long') active.sort((a, b) => b.last_move.days - a.last_move.days);
+  if (filter === 'idle_long') active.sort((a, b) => b.last_move.work_days - a.last_move.work_days || b.last_move.days - a.last_move.days);
   if (filter === 'docs') active.sort((a, b) => new Date(a.docs_wait.since) - new Date(b.docs_wait.since));
   if (filter === 'back') active.sort((a, b) => b.back.until.localeCompare(a.back.until) || String(a.deadline).localeCompare(String(b.deadline)));
   if (filter === 'task_week') active.sort((a, b) => a.task_due.day.localeCompare(b.task_due.day));
@@ -354,7 +354,7 @@ function moveRow(c) {
     return el('div', { class: 'muted', 'data-role': 'last-move', text: `На проверке у диспетчера, последнее движение по делу: ${ago}` });
   }
   return c.idle
-    ? el('div', { class: 'row', 'data-role': 'idle' }, el('span', { class: 'badge warn', text: `Без движения ${d} дн.` }),
+    ? el('div', { class: 'row', 'data-role': 'idle' }, el('span', { class: 'badge warn', text: `Без движения ${c.last_move.work_days} раб. дн.` }),
       el('span', { class: 'muted', text: `последнее — ${timeRu(c.last_move.at)}` }))
     : el('div', { class: 'muted', 'data-role': 'last-move', text: `Последнее движение по делу: ${ago}` });
 }

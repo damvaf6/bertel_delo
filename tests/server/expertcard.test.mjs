@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, addMember } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import { scoreSpecialist } from '../../src/matching/score.mjs';
+import { workingAgo } from '../../src/orders/silence.mjs';
 
 let S, owner, dispatcher, spec, head, headOther, org;
 const FIELDS = { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, ул. Карточная, 3', area: '40' };
@@ -151,16 +152,17 @@ test('карточка эксперта: сейчас в работе — сро
     const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Дело сейчас' })).body.order;
     ids.push(o.id);
     await S.sql`update orders set executor_user_id = ${spec3.user.id}, status = ${status}, deadline = ${addDays(today, deadline)},
-                  updated_at = now() - make_interval(days => ${moved ?? 0}) where id = ${o.id}`;
+                  updated_at = ${workingAgo((moved ?? 0) * 86400_000 + 60_000)} where id = ${o.id}`;
+    // 2.385: «без движения» — в рабочих днях; движение — столько рабочих дней назад, в любой день недели прогона.
     if (moved != null) {
-      await S.sql`update order_status_history set at = now() - make_interval(days => ${moved + 1}) where order_id = ${o.id}`;
+      await S.sql`update order_status_history set at = ${workingAgo((moved + 1) * 86400_000)} where order_id = ${o.id}`;
       await S.sql`insert into order_status_history (order_id, from_status, to_status, side, actor_id, at)
-                  values (${o.id}, 'matching', ${status}, 'executor', ${spec3.user.id}, now() - make_interval(days => ${moved}))`;
+                  values (${o.id}, 'matching', ${status}, 'executor', ${spec3.user.id}, ${workingAgo(moved * 86400_000 + 60_000)})`;
     }
     if (extend) {
       await S.sql`insert into deadline_requests (order_id, requested_by, old_deadline, new_deadline, reason, requested_at)
                   values (${o.id}, ${spec3.user.id}, ${addDays(today, deadline)}, ${addDays(today, deadline + 7)}, 'Жду выписку из ЕГРН',
-                          now() - make_interval(days => 6))`;
+                          ${workingAgo(6 * 86400_000)})`;
     }
   }
   for (const [c, orgId] of [[dispatcher, null], [head, org.id], [spec3, null]]) {

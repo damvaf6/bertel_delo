@@ -48,7 +48,7 @@ function showNow(now) {
   const moved = now.cases.filter((x) => x.task_moved && !x.task_moved.letter).length;
   const letter = now.cases.filter((x) => x.task_moved?.letter).length;
   $('expert-now-note').textContent = n
-    ? [`Дел: ${n}`, hot ? `срок горит: ${hot}` : null, idle ? `без движения 3 дня и больше: ${idle}` : null,
+    ? [`Дел: ${n}`, hot ? `срок горит: ${hot}` : null, idle ? `без движения 3 рабочих дня и больше: ${idle}` : null,
       moved ? `перенос позже срока по заданию без письма: ${moved}` : null,
       letter ? `сдать по письму о переносе раньше срока дела: ${letter}` : null].filter(Boolean).join(' · ') + '. Без заказчика и данных заявки.'
     : 'Дел в работе нет.';
@@ -63,7 +63,7 @@ function showNow(now) {
     // Срок по заданию на оценку раньше срока дела (2.324).
     ...(x.task_due && !x.task_moved ? [el('div', { class: x.task_due.overdue || x.hot ? 'overdue' : 'muted', 'data-task-due': '',
       text: `Сдать ${x.task_due.by} — к ${dayRu(x.task_due.day)}${x.task_due.overdue ? ', срок прошёл' : ''} (срок дела позже)` })] : []),
-    ...(x.idle ? [el('div', { class: 'overdue', 'data-idle': '',text: `Без движения ${x.idle_days} дн.` })] : []),
+    ...(x.idle ? [el('div', { class: 'overdue', 'data-idle': '',text: `Без движения ${x.idle_days} раб. дн.` })] : []),
     ...(x.extend ? [el('div', { class: 'muted', 'data-extend': '', text: `Просит перенести срок на ${dayRu(x.extend.new_deadline)} — ждёт решения диспетчера` })] : []),
     ...(now.org_id ? [el('a', { class: 'link', href: `#org=${now.org_id}&case=${x.order_ref.slice(2)}&to=case`, 'data-action': 'now-open' }, 'Открыть в делах экспертов')] : []))));
 }
