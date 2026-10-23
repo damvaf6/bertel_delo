@@ -11,6 +11,7 @@ import { signBridge } from '../../src/bridge/signature.mjs';
 import { makePdf, makeDocx } from '../tools/make-docs.mjs';
 import { extractPages } from '../../src/ai/extract.mjs';
 import { holidayName, workdayFrom } from '../../src/orders/holidays.mjs';
+import { workingAgo } from '../../src/orders/silence.mjs';
 import fs from 'node:fs';
 import { testExternalSignature, testGoskeySignature } from '../../src/providers/sign.mjs';
 import crypto from 'node:crypto';
@@ -17224,14 +17225,15 @@ test('2.375: заказчик не отвечает 2 дня — строка в
               '{"purpose":"deal","region":"moscow","object_type":"flat","address":"г. Москва, тестовая ул., 75"}') returning id`,
     [customer.id, expert.id, inDays(8)])).rows[0].id;
     await c.query(`insert into order_messages (order_id, author_id, side, body, at)
-      values ($1, $2, 'executor', 'Здравствуйте! Подскажите, пожалуйста, кто откроет квартиру для осмотра?', now() - interval '2 days 5 hours')`, [id, expert.id]);
+      values ($1, $2, 'executor', 'Здравствуйте! Подскажите, пожалуйста, кто откроет квартиру для осмотра?', $3)`,
+    [id, expert.id, workingAgo(53 * 3600_000)]); // 2 рабочих дня и 5 часов: выходные и праздники не в счёт (прогон 2.380)
     return id;
   });
   await ep.goto('/kabinet');
   await expect(ep.locator('#today-box li[data-today="customer-silent"]')).toHaveText('Заказчик не отвечает · 1');
   const row = ep.locator('#today-box li[data-today-item="customer-silent"]');
   await expect(row.locator('.title')).toHaveText('Молчит заказчик: квартира');
-  await expect(row.locator('[data-role="customer-silent-what"]')).toHaveText(/^Вы написали .+: «Здравствуйте! Подскажите, пожалуйста, кто откроет квартиру для осмотра\?» — ответа нет 2 дн\. 5 ч$/);
+  await expect(row.locator('[data-role="customer-silent-what"]')).toHaveText(/^Вы написали .+: «Здравствуйте! Подскажите, пожалуйста, кто откроет квартиру для осмотра\?» — ответа нет \d+ дн\.( \d+ ч)?$/);
   expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
   await row.scrollIntoViewIfNeeded();
   await shot(ep, 'i07-segodnya-zakazchik-ne-otvechaet');

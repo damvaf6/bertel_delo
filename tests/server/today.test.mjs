@@ -5,6 +5,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, addMember } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
+import { customerSilent, workingAgo } from '../../src/orders/silence.mjs';
 
 let S, owner, dispatcher, spec, head, other, org;
 const FIELDS = { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 77', area: '41' };
@@ -574,7 +575,7 @@ test('заказчик не отвечает 2 дня (2.375): строка в �
   assert.equal((await say(spec, 'Здравствуйте! Подскажите, пожалуйста, удобные дату и время осмотра.')).status, 201);
   assert.deepEqual(await silent(), [], 'меньше 2 дней — не горит');
   assert.ok(!(await phrases()).some((p) => p.id === 'remind'));
-  await S.sql`update order_messages set at = now() - interval '49 hours' where order_id = ${o.id}`;
+  await S.sql`update order_messages set at = ${workingAgo(49 * 3600_000)} where order_id = ${o.id}`; // 2 рабочих дня (прогон 2.380)
   // Сообщение диспетчера — не ответ заказчика.
   assert.equal((await say(dispatcher, 'Заказчик, ответьте эксперту')).status, 201);
   let s = await silent();
@@ -592,7 +593,7 @@ test('заказчик не отвечает 2 дня (2.375): строка в �
   assert.ok(!(await phrases()).some((p) => p.id === 'remind'));
   // Эксперт снова спросил и ждёт 2 дня; отправил напоминание — отсчёт заново.
   assert.equal((await say(spec, 'А кто откроет дверь?')).status, 201);
-  await S.sql`update order_messages set at = now() - interval '3 days' where order_id = ${o.id}`;
+  await S.sql`update order_messages set at = ${workingAgo(3 * 86400_000)} where order_id = ${o.id}`;
   assert.deepEqual((await silent()).map((x) => [x.count, x.last]), [[1, 'А кто откроет дверь?']]);
   assert.equal((await say(spec, p.text)).status, 201);
   assert.deepEqual(await silent(), []);
@@ -602,7 +603,7 @@ test('заказчик не отвечает (2.375): запрошенные д�
   const o = await offered('Дело с документами без ответа', 12);
   assert.equal((await step(spec, o, 'in_work')).status, 200);
   assert.equal((await spec.req('POST', `/api/orders/${o.id}/messages`, { body: 'Пришлите выписку' })).status, 201);
-  await S.sql`update order_messages set at = now() - interval '3 days' where order_id = ${o.id}`;
+  await S.sql`update order_messages set at = ${workingAgo(3 * 86400_000)} where order_id = ${o.id}`;
   let t = (await spec.req('GET', '/api/today')).body.expert;
   assert.ok(ids(t.customer_silent).includes(o.id));
   const r = await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { custom: ['Выписка из ЕГРН'] });
@@ -611,4 +612,26 @@ test('заказчик не отвечает (2.375): запрошенные д�
   t = (await spec.req('GET', '/api/today')).body.expert;
   assert.ok(ids(t.docs_wait).includes(o.id));
   assert.ok(!ids(t.customer_silent).includes(o.id));
+});
+
+// Прогон 2.380: «2 дня» — рабочих: выходные и нерабочие праздники (2.371) не в счёт, заказчик в эти дни не работает.
+test('заказчик не отвечает (прогон 2.380): выходные и праздник 4 ноября не в счёт', async () => {
+  const o = await offered('Дело с вопросом перед праздником', 12);
+  assert.equal((await step(spec, o, 'in_work')).status, 200);
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/messages`, { body: 'Кто откроет дверь?' })).status, 201);
+  const at = async (iso) => S.sql`update order_messages set at = ${iso}::timestamptz where order_id = ${o.id}`;
+  const quiet = async (iso) => (await customerSilent(S.sql, [o.id], new Date(iso))).has(o.id);
+  // Вторник 3 ноября, полдень: 4 ноября — праздник; к четвергу 13:00 рабочих — 12 + 13 часов.
+  await at('2026-11-03T12:00:00+03:00');
+  assert.equal(await quiet('2026-11-05T13:00:00+03:00'), false, 'по календарю 49 часов, рабочих — 25');
+  assert.equal(await quiet('2026-11-06T12:00:00+03:00'), true, 'рабочих 48 часов — горит');
+  // Пятница, 10:00: суббота и воскресенье не в счёт — горит со вторника 10:00.
+  await at('2026-10-23T10:00:00+03:00');
+  assert.equal(await quiet('2026-10-26T09:00:00+03:00'), false);
+  assert.equal(await quiet('2026-10-27T09:59:00+03:00'), false);
+  assert.equal(await quiet('2026-10-27T10:00:00+03:00'), true);
+  // Будни подряд — как раньше, 48 часов.
+  await at('2026-10-20T10:00:00+03:00');
+  assert.equal(await quiet('2026-10-22T09:00:00+03:00'), false);
+  assert.equal(await quiet('2026-10-22T10:00:00+03:00'), true);
 });
