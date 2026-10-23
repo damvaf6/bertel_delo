@@ -36,6 +36,7 @@
   --shadow:0 24px 48px -24px rgba(0,0,0,.6); color-scheme:dark}
 
 *,*::before,*::after{box-sizing:border-box}
+[hidden]{display:none!important}
 body{background:var(--bg);color:var(--ink);font:400 16px/1.5 var(--f-body);-webkit-font-smoothing:antialiased}
 body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--surface)}
 a{color:var(--accent)}
@@ -200,8 +201,85 @@ section.alt .screen{background:var(--bg)}
 .recent .item .n{font:700 13px var(--f-body);color:var(--accent-ink);background:var(--accent-soft);border-radius:6px;padding:2px 8px;align-self:flex-start}
 
 footer{border-top:1px solid var(--line);background:var(--surface)}
-footer .wrap{padding-block:24px;display:flex;flex-wrap:wrap;justify-content:space-between;gap:12px;font-size:14px;color:var(--muted)}
-@media (prefers-reduced-motion: reduce){*{scroll-behavior:auto!important;transition:none!important}}
+footer .wrap{padding-block:24px 96px;display:flex;flex-wrap:wrap;justify-content:space-between;gap:12px;font-size:14px;color:var(--muted)}
+
+/* Окна проверки специалиста */
+.dirs{display:flex;gap:6px;flex-wrap:wrap}
+.facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+@media(max-width:560px){.facts{grid-template-columns:minmax(0,1fr)}}
+.fact{background:var(--sunk);border:1px solid var(--line);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.fact .d{font-size:13px;color:var(--faint)}
+.fact .t{font-weight:600}
+.fact .src{font-size:13px;color:var(--muted)}
+.fact.soon{background:transparent;border-style:dashed}
+.srcs{display:flex;flex-direction:column;gap:8px}
+.srcs div{display:grid;grid-template-columns:170px minmax(0,1fr) auto;gap:10px;align-items:center;font-size:14px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+.srcs b{font-weight:600}
+@media(max-width:560px){.srcs div{grid-template-columns:minmax(0,1fr) auto}.srcs div span:nth-child(2){grid-column:1/-1;grid-row:2;color:var(--muted)}}
+
+/* Переключатель темы сбоку */
+.theme-tab{position:fixed;right:0;top:50%;transform:translateY(-50%);z-index:20;width:44px;height:52px;border-radius:12px 0 0 12px;border:1px solid var(--line-2);border-right:0;background:var(--surface);color:var(--ink);display:grid;place-items:center;cursor:pointer;box-shadow:var(--shadow);transition:width .25s ease,background .25s ease}
+.theme-tab:hover{width:52px}
+.theme-tab svg{stroke:currentColor;transition:transform .5s cubic-bezier(.2,.8,.2,1)}
+.theme-tab:active svg{transform:rotate(180deg)}
+.theme-tab .sun{display:none}
+:root[data-theme="dark"] .theme-tab .sun{display:block}
+:root[data-theme="dark"] .theme-tab .moon{display:none}
+
+/* ИИ-консультант */
+.ai-fab{position:fixed;right:max(16px,env(safe-area-inset-right,0px));bottom:max(16px,env(safe-area-inset-bottom,0px));z-index:30;min-height:56px;padding:0 20px 0 16px;border-radius:999px;border:0;background:var(--accent);color:var(--on-accent);font-weight:700;font-size:15px;display:inline-flex;align-items:center;gap:10px;cursor:pointer;box-shadow:0 16px 32px -12px rgba(29,78,216,.55)}
+.ai-fab svg{stroke:currentColor}
+.ai-fab::before{content:"";position:absolute;inset:0;border-radius:inherit;box-shadow:0 0 0 0 var(--accent);animation:ring 2.6s ease-out infinite;pointer-events:none}
+@keyframes ring{0%{box-shadow:0 0 0 0 rgba(91,141,239,.55)}80%,100%{box-shadow:0 0 0 16px rgba(91,141,239,0)}}
+.ai-box{position:fixed;right:max(16px,env(safe-area-inset-right,0px));bottom:calc(max(16px,env(safe-area-inset-bottom,0px)) + 68px);z-index:31;width:min(400px,calc(100vw - 32px));max-height:min(620px,calc(100vh - 120px));background:var(--surface);border:1px solid var(--line);border-radius:20px;box-shadow:0 32px 64px -24px rgba(16,24,40,.35);display:flex;flex-direction:column;overflow:hidden;transform-origin:bottom right;animation:pop .28s cubic-bezier(.2,.8,.2,1)}
+.ai-box[hidden]{display:none}
+@keyframes pop{from{opacity:0;transform:translateY(12px) scale(.96)}to{opacity:1;transform:none}}
+.ai-head{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line);background:var(--sunk)}
+.ai-head i{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--accent),var(--ok));display:grid;place-items:center;flex:none}
+.ai-head i svg{stroke:#fff}
+.ai-head b{display:block;font:700 16px var(--f-display)}
+.ai-head small{color:var(--muted);font-size:12px}
+.ai-head button{margin-left:auto;width:36px;height:36px;border-radius:8px;border:1px solid var(--line);background:var(--surface);cursor:pointer;font-size:18px;line-height:1}
+.ai-log{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px}
+.msg{max-width:88%;padding:10px 12px;border-radius:14px;font-size:14px;line-height:1.5;animation:msgIn .3s ease both}
+.msg.bot{background:var(--sunk);border:1px solid var(--line);align-self:flex-start;border-bottom-left-radius:4px}
+.msg.me{background:var(--accent);color:var(--on-accent);align-self:flex-end;border-bottom-right-radius:4px}
+.msg ol{margin:6px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:4px}
+.msg .acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+@keyframes msgIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.typing{display:inline-flex;gap:4px;padding:12px}
+.typing span{width:7px;height:7px;border-radius:50%;background:var(--faint);animation:blink 1s infinite}
+.typing span:nth-child(2){animation-delay:.15s}.typing span:nth-child(3){animation-delay:.3s}
+@keyframes blink{0%,80%,100%{opacity:.25;transform:translateY(0)}40%{opacity:1;transform:translateY(-3px)}}
+.ai-chips{display:flex;gap:6px;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding:0 14px 10px}
+.ai-chips button{flex:none;min-height:34px;padding:0 10px;border-radius:999px;border:1px solid var(--line-2);background:var(--surface);font-size:13px;font-weight:600;color:var(--ink-2);cursor:pointer}
+.ai-form{display:flex;gap:8px;padding:10px 14px 14px;border-top:1px solid var(--line)}
+.ai-form input{flex:1;min-width:0;min-height:44px;border-radius:10px;border:1px solid var(--line-2);background:var(--surface);padding:0 12px;font-size:16px}
+.ai-note{font-size:12px;color:var(--faint);padding:0 14px 10px}
+
+/* Движение */
+.hero{position:relative;overflow:hidden;isolation:isolate}
+.hero .glow{position:absolute;z-index:-1;border-radius:50%;filter:blur(60px);opacity:.45;pointer-events:none}
+.hero .g1{width:420px;height:420px;background:var(--accent-soft);top:-120px;right:-80px;animation:drift 14s ease-in-out infinite alternate}
+.hero .g2{width:320px;height:320px;background:var(--ok-soft);bottom:-140px;left:-60px;animation:drift 18s ease-in-out infinite alternate-reverse}
+@keyframes drift{from{transform:translate(0,0) scale(1)}to{transform:translate(-60px,40px) scale(1.15)}}
+.hero .text>*{animation:up .7s cubic-bezier(.2,.8,.2,1) both}
+.hero .text>*:nth-child(2){animation-delay:.08s}.hero .text>*:nth-child(3){animation-delay:.16s}.hero .text>*:nth-child(4){animation-delay:.24s}
+.hero .ordercard{animation:up .8s .2s cubic-bezier(.2,.8,.2,1) both}
+@keyframes up{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}
+.steps li.now i{animation:pulse 1.8s ease-in-out infinite}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(91,141,239,.5)}50%{box-shadow:0 0 0 7px rgba(91,141,239,0)}}
+.js .reveal{opacity:0;transform:translateY(22px);transition:opacity .7s ease,transform .7s cubic-bezier(.2,.8,.2,1)}
+.js .reveal.in{opacity:1;transform:none}
+.panel:not([hidden]),[data-subpanel]:not([hidden]){animation:fade .35s ease both}
+@keyframes fade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.btn,.role,.sublinks button,.item,.stats div{transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease,background .2s ease}
+.btn:hover:not([disabled]){transform:translateY(-1px)}
+.btn.primary:hover:not([disabled]){box-shadow:0 10px 20px -10px var(--accent)}
+.stats div:hover,.recent .item:hover{transform:translateY(-3px);box-shadow:var(--shadow)}
+.done-line{animation:fade .35s ease both}
+body,header.top,.screen,.item,.fact{transition:background-color .3s ease,border-color .3s ease,color .3s ease}
+@media (prefers-reduced-motion: reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important;animation:none!important}.js .reveal{opacity:1;transform:none}}
 </style>
 
 <div class="note"><div class="wrap">
@@ -211,16 +289,16 @@ footer .wrap{padding-block:24px;display:flex;flex-wrap:wrap;justify-content:spac
 
 <header class="top"><div class="wrap">
   <a class="logo" href="#top"><i><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h10M4 17h7"/></svg></i><b style="font-weight:800">БЕРТЕЛ <span>Дело</span></b></a>
-  <nav aria-label="Разделы"><a href="#try">Попробовать</a><a href="#how">Как устроено</a><a href="#done">Что сделано</a></nav>
+  <nav aria-label="Разделы"><a href="#try">Кабинеты</a><a href="#check" data-go="check">Проверка специалиста</a><a href="#how">Как устроено</a><a href="#done">Что сделано</a></nav>
   <a class="btn primary" href="#try">Открыть кабинеты</a>
 </div></header>
 
 <main id="top">
-<section class="hero"><div class="wrap">
+<section class="hero"><span class="glow g1"></span><span class="glow g2"></span><div class="wrap">
   <div class="text">
-    <span class="pill info" style="align-self:flex-start">Экспертиза и оценка · Переводы · Проверка юриста</span>
+    <span class="pill info" style="align-self:flex-start">Экспертиза и оценка · Переводы · Юристы</span>
     <h1>Что уже умеет «Дело» — можно нажать и посмотреть</h1>
-    <p class="lead">Здесь собраны главные экраны платформы для заказчика, эксперта, руководителя экспертной организации и диспетчера. Каждая кнопка ведёт себя так же, как в настоящем «Деле», только на вымышленных делах.</p>
+    <p class="lead">Здесь собраны главные экраны платформы: кабинеты заказчика-человека и заказчика-компании, специалиста, руководителя экспертной организации и диспетчера, проверка специалиста по каждому направлению и ИИ-консультант. Каждая кнопка ведёт себя так же, как в настоящем «Деле», только на вымышленных делах.</p>
     <div class="stats">
       <div><b id="st-tasks">405</b><span>задач сделано и проверено</span></div>
       <div><b>8</b><span>услуг экспертизы и оценки</span></div>
@@ -242,22 +320,28 @@ footer .wrap{padding-block:24px;display:flex;flex-wrap:wrap;justify-content:spac
   </div>
 </div></section>
 
-<section class="sec alt" id="try"><div class="wrap">
+<section class="sec alt" id="try"><div class="wrap reveal">
   <h2>Попробовать кабинеты</h2>
-  <p class="sub">Выберите, за кого войти. Справа — что именно сделано на этом экране.</p>
+  <p class="sub">Выберите, за кого войти. Справа — что именно сделано на этом экране. Внизу справа — ИИ-консультант, сбоку — светлая или тёмная тема.</p>
   <div class="roles" role="tablist" aria-label="Кабинеты">
     <button class="role" role="tab" data-role="customer" id="r-customer"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>Заказчик</button>
-    <button class="role" role="tab" data-role="expert" id="r-expert"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9"/></svg>Эксперт</button>
+    <button class="role" role="tab" data-role="expert" id="r-expert"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9"/></svg>Специалист</button>
     <button class="role" role="tab" data-role="head" id="r-head"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>Руководитель</button>
     <button class="role" role="tab" data-role="disp" id="r-disp"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>Диспетчер</button>
     <button class="role" role="tab" data-role="transl" id="r-transl"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h8M8 3v2M5 9c1 3 4 6 7 7M11 5c-1 5-4 9-7 11"/><path d="M13 21l4-9 4 9M14.5 18h5"/></svg>Переводы</button>
-    <button class="role" role="tab" data-role="lawyer" id="r-lawyer"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/><path d="M9 12l2 2 4-4"/></svg>Проверка юриста</button>
+    <button class="role" role="tab" data-role="check" id="r-check"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/><path d="M9 12l2 2 4-4"/></svg>Проверка специалиста</button>
   </div>
 
   <!-- Заказчик -->
   <div class="panel" data-panel="customer" role="tabpanel" aria-labelledby="r-customer">
     <div class="screen">
-      <div class="screen-head"><h3>Новая заявка</h3><span class="pill plain">Кабинет заказчика</span></div>
+      <div class="screen-head"><h3 id="c-title">Новая заявка</h3>
+        <div class="sublinks" role="group" aria-label="Кто заказчик">
+          <button type="button" data-sub="c-person" aria-pressed="true">Человек</button>
+          <button type="button" data-sub="c-company" aria-pressed="false">Компания</button>
+        </div>
+      </div>
+      <div data-subpanel="c-person" class="list">
       <form class="form" id="c-form">
         <div class="field wide"><label for="c-service">Услуга</label>
           <select id="c-service">
@@ -280,6 +364,32 @@ footer .wrap{padding-block:24px;display:flex;flex-wrap:wrap;justify-content:spac
           <div class="acts"><button class="btn small" type="button" id="c-next">Показать следующий шаг</button><button class="btn small" type="button" id="c-reset">Новая заявка</button></div>
         </div>
       </div>
+      </div>
+
+      <div data-subpanel="c-company" class="list" hidden>
+        <div class="item">
+          <div class="head"><div><span class="d">Кабинет компании · вымышленный пример</span><div class="t" style="font:700 20px var(--f-display)">ООО «Ромашка-Пример»</div></div><span class="pill ok">Оплата по счёту</span></div>
+          <span class="d">Заявки подают сотрудники компании; бухгалтерия видит счета и закрывающие документы по всем делам.</span>
+        </div>
+        <div class="sublinks" role="group" aria-label="Отбор заявок компании" id="co-filters">
+          <button type="button" data-f="all" aria-pressed="true">Все заявки</button>
+          <button type="button" data-f="pay" aria-pressed="false">Ждут оплаты</button>
+          <button type="button" data-f="done" aria-pressed="false">Готовы</button>
+        </div>
+        <div class="tbl"><table>
+          <thead><tr><th>Дело</th><th>Услуга</th><th>Подал</th><th>Сумма</th><th>Статус</th><th></th></tr></thead>
+          <tbody id="co-rows"></tbody>
+        </table></div>
+        <div class="item">
+          <div class="head"><span class="t">Сотрудники компании</span><span class="pill plain" id="co-count">2</span></div>
+          <div class="list" id="co-staff"></div>
+          <form class="form" id="co-invite">
+            <div class="field"><label for="co-name">Имя сотрудника</label><input id="co-name" placeholder="Например, Анна"></div>
+            <div class="field"><label for="co-role">Что может</label><select id="co-role"><option>Подаёт заявки</option><option>Бухгалтерия: счета и акты</option><option>Видит все дела компании</option></select></div>
+            <div class="wide"><button class="btn small primary" type="submit">Пригласить по ссылке</button></div>
+          </form>
+        </div>
+      </div>
     </div>
     <div class="aside">
       <h4>Что здесь сделано</h4>
@@ -288,6 +398,7 @@ footer .wrap{padding-block:24px;display:flex;flex-wrap:wrap;justify-content:spac
         <li>Сразу после отправки — срок, к которому диспетчер назначит цену, и «задерживаемся», если не успели.</li>
         <li>Цель «для банка» сама добавляет чек-лист Сбербанка и задание на оценку в запрос документов.</li>
         <li>Оплата при заказе; эксперт получает 80% после «готово», при отмене — возврат.</li>
+        <li>Компании: счёт на оплату, акт и отчёт агента файлом Word для бухгалтерии.</li>
         <li>Заявку можно прислать письмом — она станет черновиком.</li>
       </ul>
     </div>
@@ -461,10 +572,28 @@ footer .wrap{padding-block:24px;display:flex;flex-wrap:wrap;justify-content:spac
     </div>
   </div>
 
-  <!-- Проверка юриста -->
-  <div class="panel" data-panel="lawyer" role="tabpanel" aria-labelledby="r-lawyer" hidden>
+  <!-- Проверка специалиста: у каждого направления своё окно -->
+  <div class="panel" data-panel="check" role="tabpanel" aria-labelledby="r-check" hidden id="check">
     <div class="screen">
-      <div class="screen-head"><h3>Проверить юриста перед соглашением</h3><span class="pill warn">Делается — решение Дамира 23.10</span></div>
+      <div class="screen-head"><h3>Проверить специалиста перед работой</h3>
+        <div class="sublinks" role="group" aria-label="Направление">
+          <button type="button" data-sub="k-exp" aria-pressed="true">Экспертиза и оценка</button>
+          <button type="button" data-sub="k-law" aria-pressed="false">Юристы</button>
+          <button type="button" data-sub="k-tr" aria-pressed="false">Переводы</button>
+        </div>
+      </div>
+
+      <div data-subpanel="k-exp" class="list">
+        <div class="field"><label for="x-who">Оценщик или эксперт · вымышленные примеры</label>
+          <select id="x-who"><option value="ok">Соколова Ольга — оценщик, всё в порядке</option><option value="bad">Морозов Илья — аттестат истёк</option></select></div>
+        <div class="item">
+          <div class="head"><div><span class="d">Карточка проверки</span><div class="t" style="font:700 22px var(--f-display)" id="x-nm"></div></div><span class="pill" id="x-sum"></span></div>
+          <div class="facts" id="x-facts"></div>
+          <div class="callout" id="x-note"></div>
+        </div>
+      </div>
+
+      <div data-subpanel="k-law" class="list" hidden>
       <form class="form" id="l-form">
         <div class="field"><label for="l-name">ФИО юриста или адвоката</label><input id="l-name" value="Петров Пётр Петрович"></div>
         <div class="field"><label for="l-cert">Номер в реестре (если есть)</label><input id="l-cert" value="77/00000"></div>
@@ -486,19 +615,35 @@ footer .wrap{padding-block:24px;display:flex;flex-wrap:wrap;justify-content:spac
         <div class="callout warn">Только факты со ссылками на источник: без рейтингов, «процента побед» и данных других участников дел.</div>
         <div class="acts"><button class="btn small" type="button" data-oneshot="Юрист отметил: «это не я» — строка уйдёт на проверку человеку">Это не я — оспорить</button><button class="btn small dark" type="button" data-oneshot="Юрист подтвердил карточку">Подтвердить карточку</button></div>
       </div>
+      </div>
+
+      <div data-subpanel="k-tr" class="list" hidden>
+        <div class="facts">
+          <div class="fact"><span class="d">Документ о знании языка</span><span class="t">Диплом или сертификат по каждому языку</span><span class="src">Проверяет администратор по копии — уже работает</span><span class="pill ok" style="align-self:flex-start">Работает</span></div>
+          <div class="fact"><span class="d">Вычитка первых работ</span><span class="t">Новых переводчиков вычитывают обязательно</span><span class="src">Остальных — выборочно</span><span class="pill ok" style="align-self:flex-start">Работает</span></div>
+          <div class="fact soon"><span class="d">Реестр НАРК (независимая оценка квалификации)</span><span class="t">Свидетельство переводчика из реестра</span><span class="src">Подключим после открытия центра оценки квалификаций</span><span class="pill plain" style="align-self:flex-start">Скоро</span></div>
+          <div class="fact"><span class="d">Карточка допуска платформы</span><span class="t">Номер, срок, QR и открытая страница проверки</span><span class="src">Отозванная — не в подборе</span><span class="pill ok" style="align-self:flex-start">Работает</span></div>
+        </div>
+      </div>
+
+      <div class="item" style="background:var(--sunk)">
+        <span class="t">Правило: у каждого направления — своё окно проверки</span>
+        <div class="srcs" id="k-srcs"></div>
+      </div>
     </div>
     <div class="aside">
-      <h4>Что здесь будет</h4>
+      <h4>Что здесь сделано и будет</h4>
       <ul>
-        <li>Общий модуль: страница на сайте Дела для людей и компаний, карточка при выборе юриста в Деле, команда «проверь юриста» в Бертеле.</li>
-        <li>Источники — реестр адвокатов Минюста и опубликованные решения судов.</li>
-        <li>Разбор текстов — российским ИИ. Не публикуется, пока Дамир не посмотрит.</li>
+        <li>Оценщики: досье с аттестатом, СРО и полисом; истёкший аттестат или полис снимает с подбора — уже работает.</li>
+        <li>Юристы — по решению Дамира 23.10: страница для людей и компаний, карточка при выборе юриста, команда «проверь юриста» в Бертеле.</li>
+        <li>Только факты со ссылкой на источник — без рейтингов и «процента побед».</li>
+        <li>Новое направление в «Деле» появляется сразу со своим окном проверки.</li>
       </ul>
     </div>
   </div>
 </div></section>
 
-<section class="band" id="how"><div class="wrap">
+<section class="band" id="how"><div class="wrap reveal">
   <h2>Как устроено «Дело»</h2>
   <div class="flow">
     <div><b>01</b><strong>Одно ядро</strong><span>Вход, организации, заявки, подбор, документы и подписи, оплата, уведомления, ИИ.</span></div>
@@ -508,7 +653,7 @@ footer .wrap{padding-block:24px;display:flex;flex-wrap:wrap;justify-content:spac
   </div>
 </div></section>
 
-<section class="sec" id="done"><div class="wrap">
+<section class="sec" id="done"><div class="wrap reveal">
   <h2>Что сделано</h2>
   <p class="sub">Последние правки — сверху. Каждая проверена автотестами сервера и на экране телефона 412×915.</p>
   <div class="recent" id="recent"></div>
@@ -516,6 +661,17 @@ footer .wrap{padding-block:24px;display:flex;flex-wrap:wrap;justify-content:spac
   <ol class="timeline" id="timeline"></ol>
 </div></section>
 </main>
+
+<button class="theme-tab" type="button" id="theme" aria-label="Светлая или тёмная тема" title="Светлая или тёмная тема"><svg class="moon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg><svg class="sun" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></button>
+
+<button class="ai-fab" type="button" id="ai-open" aria-expanded="false" aria-controls="ai-box"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 9h8M8 13h5"/></svg>ИИ-консультант</button>
+<div class="ai-box" id="ai-box" role="dialog" aria-label="ИИ-консультант" hidden>
+  <div class="ai-head"><i><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg></i><div><b>ИИ-консультант</b><small>Подскажет порядок действий и нужного специалиста</small></div><button type="button" id="ai-close" aria-label="Закрыть">×</button></div>
+  <div class="ai-log" id="ai-log" aria-live="polite"></div>
+  <div class="ai-chips" id="ai-chips"></div>
+  <form class="ai-form" id="ai-form"><input id="ai-q" placeholder="Опишите, что случилось" autocomplete="off" aria-label="Ваш вопрос"><button class="btn primary" type="submit">Спросить</button></form>
+  <div class="ai-note">Пример на заготовленных ответах. В «Деле» отвечает российская модель (YandexGPT); ИИ только подсказывает — решает человек.</div>
+</div>
 
 <footer><div class="wrap">
   <span>БЕРТЕЛ Дело · витрина на вымышленных данных</span>
@@ -526,6 +682,7 @@ footer .wrap{padding-block:24px;display:flex;flex-wrap:wrap;justify-content:spac
 // Обновляет «Работник Дело» после каждой слитой правки.
 var VERSION={task:'2.387',date:'23.10.2026',tasks:405};
 var RECENT=[
+  ['штаба 40217197','Витрина: требования Дамира 23.10','Своё окно проверки специалиста у каждого направления, кабинет заказчика-компании, ИИ-консультант, тёмная и светлая тема сбоку, плавное появление.'],
   ['2.387','«Пришлите до …» — рабочий день','В готовой фразе заказчику дата — через 3 рабочих дня и не позже чем за 2 рабочих дня до срока дела.'],
   ['2.386','Заметки «за день до срока»','Напоминание приходит в последний рабочий день перед сроком; на выходной — подсказка «напомнить в пятницу».'],
   ['2.385','«Без движения» — в рабочих днях','Дело, стоявшее с пятницы, в понедельник не тревожит руководителя.'],
@@ -552,18 +709,40 @@ function store(k,v){try{if(v===undefined)return localStorage.getItem(k);localSto
 $('ver').textContent='Версия '+VERSION.task+' · '+VERSION.date;
 $('foot-ver').textContent='Обновлено '+VERSION.date+', последняя правка '+VERSION.task;
 $('st-tasks').textContent=VERSION.tasks;
+document.querySelectorAll('.stats b').forEach(function(b){var n=+b.textContent;if(n)setTimeout(function(){countUp(b,n)},350)});
 
 // Кабинеты
 var roles=document.querySelectorAll('.role');
 function showRole(r){roles.forEach(function(b){b.setAttribute('aria-selected',b.dataset.role===r)});
   document.querySelectorAll('[data-panel]').forEach(function(p){p.hidden=p.dataset.panel!==r});store('vitrina-role',r)}
 roles.forEach(function(b){b.addEventListener('click',function(){showRole(b.dataset.role)})});
-var hashRole={customer:1,expert:1,head:1,disp:1,transl:1,lawyer:1}[location.hash.slice(1)]?location.hash.slice(1):null;
-showRole(hashRole||store('vitrina-role')||'expert');
+var ROLES={customer:1,expert:1,head:1,disp:1,transl:1,check:1};
+var hashRole=location.hash.slice(1)==='lawyer'?'check':ROLES[location.hash.slice(1)]?location.hash.slice(1):null;
+var savedRole=store('vitrina-role');
+showRole(hashRole||(ROLES[savedRole]?savedRole:'expert'));
 
+function pickSub(name){var b=document.querySelector('button[data-sub="'+name+'"]');if(b)b.click()}
 document.querySelectorAll('.sublinks[role=group]').forEach(function(g){
   var bs=g.querySelectorAll('button[data-sub]');if(!bs.length)return;
-  bs.forEach(function(b){b.addEventListener('click',function(){bs.forEach(function(x){x.setAttribute('aria-pressed',x===b);var p=document.querySelector('[data-subpanel="'+x.dataset.sub+'"]');if(p)p.hidden=x!==b})})})});
+  bs.forEach(function(b){b.addEventListener('click',function(){bs.forEach(function(x){x.setAttribute('aria-pressed',x===b);var p=document.querySelector('[data-subpanel="'+x.dataset.sub+'"]');if(p)p.hidden=x!==b});
+    if(b.dataset.sub==='c-person'||b.dataset.sub==='c-company')$('c-title').textContent=b.dataset.sub==='c-company'?'Кабинет компании':'Новая заявка'})})});
+function goTo(role,sub){showRole(role);if(sub)pickSub(sub);$('try').scrollIntoView({behavior:'smooth',block:'start'})}
+document.querySelectorAll('[data-go]').forEach(function(a){a.addEventListener('click',function(e){e.preventDefault();goTo(a.dataset.go)})});
+
+// Тема: кнопка сбоку; без выбора — как в телефоне
+var root=document.documentElement;root.classList.add('js');
+var savedTheme=store('vitrina-theme');if(savedTheme==='dark'||savedTheme==='light')root.dataset.theme=savedTheme;
+function curTheme(){return root.dataset.theme||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light')}
+function markTheme(){var t=curTheme();root.dataset.theme=t;$('theme').setAttribute('aria-pressed',t==='dark')}
+markTheme();
+$('theme').addEventListener('click',function(){root.dataset.theme=curTheme()==='dark'?'light':'dark';store('vitrina-theme',root.dataset.theme);markTheme()});
+
+// Плавное появление разделов и счёт цифр
+var revs=document.querySelectorAll('.reveal');
+if('IntersectionObserver' in window){var io=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}})},{threshold:.08});revs.forEach(function(r){io.observe(r)})}
+setTimeout(function(){revs.forEach(function(r){r.classList.add('in')})},2500);
+function countUp(node,to){if(matchMedia('(prefers-reduced-motion: reduce)').matches){node.textContent=to;return}
+  var t0=null;function step(ts){if(!t0)t0=ts;var k=Math.min(1,(ts-t0)/1100);node.textContent=Math.round(to*(1-Math.pow(1-k,3)));if(k<1)requestAnimationFrame(step)}requestAnimationFrame(step)}
 
 // Кнопка с одним действием: заменяется строкой итога
 document.addEventListener('click',function(e){var b=e.target.closest('[data-oneshot]');if(!b)return;
@@ -660,6 +839,92 @@ function tCalc(){var kind=$('t-kind').value,docs=Math.max(1,+$('t-docs').value||
 
 // Проверка юриста
 $('l-form').addEventListener('submit',function(e){e.preventDefault();$('l-nm').textContent=$('l-name').value.trim()||'Петров Пётр Петрович';$('l-reg').textContent='№ '+($('l-cert').value.trim()||'77/00000');$('l-card').hidden=false});
+
+// Заказчик-компания
+var CO_ROWS=[
+  {id:'Д-1061',svc:'Оценка нежилого помещения',who:'Анна',sum:42000,st:'pay'},
+  {id:'Д-1057',svc:'Строительно-техническая экспертиза',who:'Сергей',sum:68000,st:'work'},
+  {id:'Д-1049',svc:'Оценка транспортного средства',who:'Анна',sum:7500,st:'done'},
+  {id:'Д-1042',svc:'Перевод устава, нотариальный',who:'Сергей',sum:5150,st:'done'}
+];
+var CO_ST={pay:['Ждёт оплаты по счёту','warn'],work:['В работе','info'],done:['Готово','ok']};
+function coDraw(){var tb=$('co-rows');tb.textContent='';CO_ROWS.forEach(function(r){var tr=el('tr');tr.dataset.f=r.st;
+  tr.appendChild(el('td','num',r.id));tr.appendChild(el('td',null,r.svc));tr.appendChild(el('td',null,r.who));tr.appendChild(el('td','num',rub(r.sum)));
+  var s=el('td');s.appendChild(el('span','pill '+CO_ST[r.st][1],CO_ST[r.st][0]));tr.appendChild(s);
+  var td=el('td');var b=el('button','btn small',r.st==='pay'?'Счёт на оплату':r.st==='done'?'Акт и отчёт агента':'Открыть дело');b.type='button';
+  b.addEventListener('click',function(){if(r.st==='pay'){r.st='work';coDraw();coFilter();return}b.replaceWith(el('span','done-line',r.st==='done'?'✓ Акт и отчёт агента скачаны (Word)':'✓ Открыто'))});
+  td.appendChild(b);tr.appendChild(td);tb.appendChild(tr)})}
+var coF='all';function coFilter(){document.querySelectorAll('#co-rows tr').forEach(function(tr){tr.classList.toggle('gone',coF!=='all'&&tr.dataset.f!==coF)})}
+document.querySelectorAll('#co-filters button').forEach(function(b){b.addEventListener('click',function(){coF=b.dataset.f;
+  document.querySelectorAll('#co-filters button').forEach(function(x){x.setAttribute('aria-pressed',x===b)});coFilter()})});
+var CO_STAFF=[['Анна','Подаёт заявки'],['Ирина','Бухгалтерия: счета и акты']];
+function staffDraw(){var box=$('co-staff');box.textContent='';CO_STAFF.forEach(function(s){var d=el('div','head');d.appendChild(el('span',null,s[0]));d.appendChild(el('span','pill plain',s[1]));box.appendChild(d)});$('co-count').textContent=CO_STAFF.length}
+$('co-invite').addEventListener('submit',function(e){e.preventDefault();var n=$('co-name').value.trim();if(!n){$('co-name').focus();return}
+  CO_STAFF.push([n,$('co-role').value+' · приглашение отправлено']);$('co-name').value='';staffDraw()});
+coDraw();staffDraw();
+
+// Проверка специалиста: экспертиза и оценка
+var EXP={
+  ok:{nm:'Соколова Ольга Андреевна',sum:['Можно работать','ok'],note:['ok','Все сведения действуют дольше срока дела. Эксперт в подборе.'],facts:[
+    ['Членство в СРО оценщиков','Ассоциация «СРО оценщиков» (пример), № 0000','Реестр членов СРО','ok','Состоит'],
+    ['Квалификационный аттестат','«Оценка недвижимости», № 000000-1','Действует до 15.03.2027','ok','Действует'],
+    ['Страхование ответственности','Полис № 0000-00, 30 000 000 ₽','Действует до 31.12.2026','ok','Действует'],
+    ['Госреестр судебных экспертов','Место под будущий реестр','Подключим, когда реестр откроется','plain','Скоро']]},
+  bad:{nm:'Морозов Илья Сергеевич',sum:['Не в подборе','bad'],note:['warn','Аттестат истёк — эксперт снят с подбора по услугам оценки, пока не загрузит новый. Руководителю и диспетчеру ушло уведомление.'],facts:[
+    ['Членство в СРО оценщиков','Ассоциация «СРО оценщиков» (пример), № 0001','Реестр членов СРО','ok','Состоит'],
+    ['Квалификационный аттестат','«Оценка недвижимости», № 000000-2','Истёк 01.10.2026','bad','Истёк'],
+    ['Страхование ответственности','Полис № 0000-01, 30 000 000 ₽','Кончается 05.11.2026 — раньше срока дела','warn','Скоро кончится'],
+    ['Госреестр судебных экспертов','Место под будущий реестр','Подключим, когда реестр откроется','plain','Скоро']]}
+};
+function expDraw(){var x=EXP[$('x-who').value];$('x-nm').textContent=x.nm;$('x-sum').className='pill '+x.sum[1];$('x-sum').textContent=x.sum[0];
+  var box=$('x-facts');box.textContent='';x.facts.forEach(function(f){var d=el('div','fact'+(f[3]==='plain'?' soon':''));d.appendChild(el('span','d',f[0]));d.appendChild(el('span','t',f[1]));d.appendChild(el('span','src',f[2]));
+    var p=el('span','pill '+f[3],f[4]);p.style.alignSelf='flex-start';d.appendChild(p);box.appendChild(d)});
+  $('x-note').className='callout '+x.note[0];$('x-note').textContent=x.note[1]}
+$('x-who').addEventListener('change',expDraw);expDraw();
+var SRCS=[['Экспертиза и оценка','СРО оценщиков, квалификационный аттестат, страхование; госреестр судебных экспертов — когда откроется','ok','Работает'],
+  ['Юристы','Реестр адвокатов Минюста и опубликованные решения судов','warn','Делается'],
+  ['Переводы','Документ о знании языка, вычитка; реестр НАРК — после открытия центра оценки','info','Частично'],
+  ['Новое направление','Подключается только вместе со своим окном проверки','plain','Правило']];
+SRCS.forEach(function(s){var d=el('div');d.appendChild(el('b',null,s[0]));d.appendChild(el('span',null,s[1]));d.appendChild(el('span','pill '+s[2],s[3]));$('k-srcs').appendChild(d)});
+
+// ИИ-консультант (заготовленные ответы)
+var AI_TOPICS=[
+  {chip:'Оценка квартиры для ипотеки',keys:['ипотек','квартир','оцен','банк','сбер'],
+   say:'Для ипотеки банк попросит отчёт об оценке от оценщика, которого он принимает. Порядок:',
+   steps:['Возьмите выписку ЕГРН (не старше 30 дней), техпаспорт и задание на оценку от банка.','Оформите заявку «Оценка недвижимости», отметьте «для Сбербанка» — проверка по требованиям банка добавится сама.','Оценщик осмотрит квартиру — можно по ссылке с телефона.','Отчёт подписан УКЭП — отправьте его в банк.'],
+   go:['Оформить заявку на оценку','customer','c-person']},
+  {chip:'Ущерб после ДТП',keys:['дтп','авар','машин','авто','ущерб','страхов'],
+   say:'Если страховая занизила выплату, поможет независимая оценка ущерба. Порядок:',
+   steps:['Не ремонтируйте машину до осмотра.','Соберите: справку о ДТП или европротокол, полис, расчёт страховой.','Закажите «Ущерб автомобилю после ДТП» — эксперт осмотрит и сделает заключение.','С заключением — претензия в страховую, затем финансовый уполномоченный.'],
+   go:['Заказать оценку ущерба','customer','c-person']},
+  {chip:'Перевести документы',keys:['перев','язык','виза','нотари','диплом','паспорт'],
+   say:'Для госорганов обычно нужен нотариальный перевод; для многих организаций хватит перевода с сертификатом платформы. Порядок:',
+   steps:['Узнайте, где будет нужен документ и в каком виде: бумагой или файлом.','Посчитайте цену — она видна сразу.','Пришлите сканы; переводчик и нотариус сделают остальное.'],
+   go:['Посчитать перевод','transl']},
+  {chip:'Спор с застройщиком',keys:['застрой','суд','юрист','адвокат','спор','претенз','ремонт','трещ'],
+   say:'Сначала нужно доказательство — строительно-техническая экспертиза, потом юрист. Порядок:',
+   steps:['Снимите недостатки на фото с датой.','Закажите строительно-техническую экспертизу — она определит недостатки и стоимость их устранения.','Перед соглашением с юристом проверьте его: статус в реестре и опубликованные дела.','Направьте застройщику претензию с заключением.'],
+   go:['Проверить юриста','check','k-law']}
+];
+var aiOpened=false;
+function aiMsg(cls,text){var m=el('div','msg '+cls);if(text)m.appendChild(document.createTextNode(text));$('ai-log').appendChild(m);$('ai-log').scrollTop=1e6;return m}
+function aiAnswer(q){aiMsg('me',q);var low=q.toLowerCase();
+  var topic=null;AI_TOPICS.forEach(function(t){if(!topic&&t.keys.some(function(k){return low.indexOf(k)>=0}))topic=t});
+  var typing=el('div','msg bot typing');typing.appendChild(el('span'));typing.appendChild(el('span'));typing.appendChild(el('span'));$('ai-log').appendChild(typing);$('ai-log').scrollTop=1e6;
+  setTimeout(function(){typing.remove();
+    if(!topic){var m=aiMsg('bot','Расскажите чуть подробнее: что за объект или документ и для чего нужен результат? Если вопрос сложный — соединю с диспетчером, он подберёт специалиста.');
+      var a=el('div','acts');var b=el('button','btn small','Соединить с диспетчером');b.type='button';b.addEventListener('click',function(){a.replaceWith(el('span','done-line','✓ Диспетчер ответит в течение рабочего дня'))});a.appendChild(b);m.appendChild(a);return}
+    var m=aiMsg('bot',topic.say);var ol=el('ol');topic.steps.forEach(function(s){ol.appendChild(el('li',null,s))});m.appendChild(ol);
+    var a=el('div','acts');var g=el('button','btn small primary',topic.go[0]);g.type='button';g.addEventListener('click',function(){aiToggle(false);goTo(topic.go[1],topic.go[2])});a.appendChild(g);
+    var h=el('button','btn small','Нужен специалист');h.type='button';h.addEventListener('click',function(){a.replaceWith(el('span','done-line','✓ Передано диспетчеру — он подберёт специалиста и напишет Вам'))});a.appendChild(h);m.appendChild(a)},700)}
+function aiToggle(on){$('ai-box').hidden=!on;$('ai-open').setAttribute('aria-expanded',on);
+  if(on&&!aiOpened){aiOpened=true;aiMsg('bot','Здравствуйте! Я подскажу, с чего начать и какой специалист нужен. Выберите пример или опишите своими словами.');
+    AI_TOPICS.forEach(function(t){var c=el('button',null,t.chip);c.type='button';c.addEventListener('click',function(){aiAnswer(t.chip)});$('ai-chips').appendChild(c)})}
+  if(on)$('ai-q').focus({preventScroll:true})}
+$('ai-open').addEventListener('click',function(){aiToggle($('ai-box').hidden)});
+$('ai-close').addEventListener('click',function(){aiToggle(false)});
+document.addEventListener('keydown',function(e){if(e.key==='Escape'&&!$('ai-box').hidden)aiToggle(false)});
+$('ai-form').addEventListener('submit',function(e){e.preventDefault();var q=$('ai-q').value.trim();if(!q)return;$('ai-q').value='';aiAnswer(q)});
 
 // Что сделано
 RECENT.forEach(function(r){var it=el('div','item');it.appendChild(el('span','n','Задача '+r[0]));it.appendChild(el('span','t',r[1]));it.appendChild(el('span','d',r[2]));$('recent').appendChild(it)});
