@@ -1,0 +1,667 @@
+<title>Витрина Дела</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="robots" content="noindex">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<!--
+  Витрина Дела (задача штаба 40217197-…-8184). Только вымышленные данные, без запросов наружу.
+  Обновляет «Работник Дело» после каждой слитой правки: блок VERSION и список DONE внизу, затем публикация по той же ссылке.
+  Дизайн — по образцу главной из чата Claude (Manrope + Inter, тёмно-синий, синий акцент, зелёный «готово»).
+-->
+<style>
+/* Раскладка: узкая колонка 1120px; сверху — витринная полоса, ниже — «пульт» кабинетов вкладками, внизу — лента сделанного. */
+:root{
+  --ink:#101828; --ink-2:#344054; --muted:#475467; --faint:#667085;
+  --bg:#F4F5F7; --surface:#FFFFFF; --sunk:#F9FAFB; --line:#E4E7EC; --line-2:#D0D5DD;
+  --accent:#1D4ED8; --accent-ink:#1E3A8A; --accent-soft:#E8EEFD; --on-accent:#FFFFFF;
+  --ok:#0F766E; --ok-soft:#E6F4F1; --warn:#B54708; --warn-soft:#FEF0C7; --bad:#B42318; --bad-soft:#FEE4E2;
+  --band:#101828; --on-band:#FFFFFF; --band-muted:#CBD5E1; --band-num:#93B4FF;
+  --shadow:0 24px 48px -24px rgba(16,24,40,.18);
+  --f-display:Manrope,Inter,"Segoe UI",system-ui,sans-serif;
+  --f-body:Inter,"Segoe UI",system-ui,sans-serif;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --ink:#F2F4F7; --ink-2:#D0D5DD; --muted:#A9B1C2; --faint:#8A93A6;
+  --bg:#0B111D; --surface:#141C2B; --sunk:#101826; --line:#263042; --line-2:#344158;
+  --accent:#5B8DEF; --accent-ink:#B8CCF8; --accent-soft:#1A2A4D; --on-accent:#0B111D;
+  --ok:#3CC0AE; --ok-soft:#0F2E2B; --warn:#F5B454; --warn-soft:#3A2A10; --bad:#F97066; --bad-soft:#3B1715;
+  --band:#060A12; --on-band:#F2F4F7; --band-muted:#A9B1C2; --band-num:#93B4FF;
+  --shadow:0 24px 48px -24px rgba(0,0,0,.6); color-scheme:dark}}
+:root[data-theme="dark"]{
+  --ink:#F2F4F7; --ink-2:#D0D5DD; --muted:#A9B1C2; --faint:#8A93A6;
+  --bg:#0B111D; --surface:#141C2B; --sunk:#101826; --line:#263042; --line-2:#344158;
+  --accent:#5B8DEF; --accent-ink:#B8CCF8; --accent-soft:#1A2A4D; --on-accent:#0B111D;
+  --ok:#3CC0AE; --ok-soft:#0F2E2B; --warn:#F5B454; --warn-soft:#3A2A10; --bad:#F97066; --bad-soft:#3B1715;
+  --band:#060A12; --on-band:#F2F4F7; --band-muted:#A9B1C2; --band-num:#93B4FF;
+  --shadow:0 24px 48px -24px rgba(0,0,0,.6); color-scheme:dark}
+
+*,*::before,*::after{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font:400 16px/1.5 var(--f-body);-webkit-font-smoothing:antialiased}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--surface)}
+a{color:var(--accent)}
+h1,h2,h3{font-family:var(--f-display);letter-spacing:-.02em;text-wrap:balance;margin:0}
+p{margin:0}
+button,input,select,textarea{font:inherit;color:inherit}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.wrap{max-width:1120px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.num{font-variant-numeric:tabular-nums}
+
+.note{background:var(--band);color:var(--on-band);font-size:14px}
+.note .wrap{padding-block:9px;display:flex;flex-wrap:wrap;gap:6px 16px;justify-content:space-between}
+.note b{font-weight:600}
+
+header.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--surface);border-bottom:1px solid var(--line)}
+header.top .wrap{padding-block:14px;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.logo{display:flex;align-items:center;gap:10px;color:var(--ink);text-decoration:none;font:800 20px var(--f-display);letter-spacing:-.02em}
+.logo i{width:34px;height:34px;border-radius:10px;background:var(--ink);display:grid;place-items:center}
+.logo i svg{stroke:var(--surface)}
+.logo span{color:var(--accent)}
+header nav{display:flex;gap:22px;font-weight:500;font-size:15px}
+header nav a{color:var(--ink-2);text-decoration:none}
+header nav a:hover{color:var(--accent)}
+@media(max-width:640px){header nav{display:none}}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 18px;border-radius:10px;border:1px solid var(--line-2);background:var(--surface);color:var(--ink);font-weight:600;font-size:15px;cursor:pointer;text-decoration:none}
+.btn:hover{border-color:var(--faint)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.btn.dark{background:var(--ink);border-color:var(--ink);color:var(--surface)}
+.btn.small{min-height:36px;padding:0 12px;font-size:14px;border-radius:8px}
+.btn[disabled]{opacity:.55;cursor:default}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;font-size:13px;font-weight:600;white-space:nowrap}
+.pill.ok{background:var(--ok-soft);color:var(--ok)}
+.pill.warn{background:var(--warn-soft);color:var(--warn)}
+.pill.bad{background:var(--bad-soft);color:var(--bad)}
+.pill.info{background:var(--accent-soft);color:var(--accent-ink)}
+.pill.plain{background:var(--sunk);color:var(--muted);border:1px solid var(--line)}
+
+/* Первый экран */
+.hero .wrap{padding-block:56px 40px;display:flex;flex-wrap:wrap;gap:40px;align-items:center}
+.hero .text{flex:1 1 480px;min-width:0;display:flex;flex-direction:column;gap:20px}
+.hero h1{font-weight:800;font-size:clamp(32px,5.4vw,52px);line-height:1.06;letter-spacing:-.03em}
+.hero .lead{font-size:18px;color:var(--muted);max-width:58ch}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.stats div{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:2px}
+.stats b{font:800 26px var(--f-display);font-variant-numeric:tabular-nums}
+.stats span{font-size:13px;color:var(--muted);line-height:1.35}
+@media(max-width:560px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.ordercard{flex:1 1 360px;min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:24px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:16px}
+.ordercard .row{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.ordercard .ttl{font:700 21px/1.3 var(--f-display)}
+.who{display:flex;align-items:center;gap:12px;padding:12px;border-radius:14px;background:var(--bg)}
+.who i{width:42px;height:42px;border-radius:50%;background:var(--ink);color:var(--surface);display:grid;place-items:center;font-style:normal;font-weight:700;flex:none}
+.who small{display:block;color:var(--muted);font-size:13px}
+.steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px;font-size:15px}
+.steps li{display:flex;gap:12px;align-items:center}
+.steps li i{width:24px;height:24px;border-radius:50%;flex:none;display:grid;place-items:center;font-style:normal;font-size:12px;font-weight:700;border:2px solid var(--line-2);color:var(--faint)}
+.steps li.done i{background:var(--ok);border-color:var(--ok);color:var(--surface)}
+.steps li.now i{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.steps li.next{color:var(--faint)}
+
+/* Разделы */
+section{scroll-margin-top:72px}
+section.sec .wrap{padding-block:56px;display:flex;flex-direction:column;gap:24px}
+section.alt{background:var(--surface);border-block:1px solid var(--line)}
+.sec h2{font-weight:800;font-size:clamp(26px,4vw,38px)}
+.sec .sub{color:var(--muted);font-size:17px;max-width:68ch}
+
+/* Пульт кабинетов */
+.roles{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;scrollbar-width:thin}
+.role{flex:none;min-height:44px;padding:0 16px;border-radius:999px;border:1px solid var(--line-2);background:var(--surface);color:var(--ink-2);font-weight:600;font-size:15px;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
+.role svg{stroke:currentColor}
+.role[aria-selected="true"]{background:var(--ink);border-color:var(--ink);color:var(--surface)}
+.panel{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:24px;align-items:start}
+@media(max-width:900px){.panel{grid-template-columns:minmax(0,1fr)}}
+.screen{background:var(--bg);border:1px solid var(--line);border-radius:20px;padding:18px;display:flex;flex-direction:column;gap:14px;min-width:0}
+section.alt .screen{background:var(--bg)}
+.screen-head{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.screen-head h3{font-size:20px}
+.sublinks{display:flex;gap:6px;flex-wrap:wrap}
+.sublinks button{min-height:36px;padding:0 12px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--muted);font-weight:600;font-size:14px;cursor:pointer}
+.sublinks button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent-ink);background:var(--accent-soft)}
+.aside{display:flex;flex-direction:column;gap:12px;font-size:15px;color:var(--muted)}
+.aside h4{margin:0;color:var(--ink);font:700 16px var(--f-display)}
+.aside ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px}
+
+.item{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px 16px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.item.hot{border-color:var(--warn)}
+.item .t{font-weight:600;color:var(--ink)}
+.item .d{font-size:14px;color:var(--muted)}
+.item .acts{display:flex;gap:8px;flex-wrap:wrap}
+.item .head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap}
+.done-line{font-size:14px;color:var(--ok);font-weight:600}
+.list{display:flex;flex-direction:column;gap:10px}
+
+.field{display:flex;flex-direction:column;gap:6px}
+.field label,.field .lbl{font-size:14px;font-weight:600;color:var(--ink)}
+.field input,.field select,.field textarea{min-height:46px;border-radius:10px;border:1px solid var(--line-2);background:var(--surface);padding:10px 12px;font-size:16px;width:100%}
+.field textarea{min-height:96px;resize:vertical}
+.field .hint{font-size:13px;color:var(--faint)}
+.check{display:flex;gap:10px;align-items:flex-start;font-size:15px;cursor:pointer}
+.check input{width:20px;height:20px;margin-top:2px;accent-color:var(--accent);flex:none}
+.form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.form .wide{grid-column:1/-1}
+@media(max-width:560px){.form{grid-template-columns:minmax(0,1fr)}}
+
+.callout{border-radius:12px;padding:12px 14px;font-size:14px;line-height:1.5}
+.callout.ok{background:var(--ok-soft);color:var(--ok)}
+.callout.warn{background:var(--warn-soft);color:var(--warn)}
+.callout.info{background:var(--accent-soft);color:var(--accent-ink)}
+
+.excerpt{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px;font-size:15px;line-height:1.6}
+.excerpt mark{background:var(--warn-soft);color:var(--ink);border-radius:4px;padding:0 3px}
+.excerpt mark.fixed{background:var(--ok-soft)}
+
+/* Календарь «Мои сроки» */
+.cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px}
+.cal .dow{font-size:12px;color:var(--faint);text-align:center;font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+.day{min-height:64px;border-radius:10px;border:1px solid var(--line);background:var(--surface);padding:6px;display:flex;flex-direction:column;gap:4px;cursor:pointer;text-align:left}
+.day b{font-size:14px;font-variant-numeric:tabular-nums}
+.day.off{background:var(--sunk);color:var(--faint)}
+.day.hol{background:var(--bad-soft)}
+.day.hol b{color:var(--bad)}
+.day .dot{height:6px;border-radius:3px;background:var(--accent)}
+.day .dot.t{background:var(--warn)}
+.day[aria-pressed="true"]{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+.tbl table{width:100%;border-collapse:collapse;font-size:14px;min-width:560px}
+.tbl th{background:var(--sunk);color:var(--muted);text-align:left;font-weight:600;padding:10px 12px}
+.tbl td{padding:10px 12px;border-top:1px solid var(--line);vertical-align:top}
+.tbl tr.gone{display:none}
+
+.price{display:flex;flex-direction:column;gap:6px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.price div{display:flex;justify-content:space-between;gap:12px;font-size:15px}
+.price div span:last-child{font-variant-numeric:tabular-nums;white-space:nowrap}
+.price .total{border-top:1px solid var(--line);padding-top:8px;font-weight:700}
+.price .sm{font-size:13px;color:var(--faint)}
+
+/* Как это работает */
+.band{background:var(--band);color:var(--on-band)}
+.band .wrap{padding-block:56px;display:flex;flex-direction:column;gap:28px}
+.band h2{font-weight:800;font-size:clamp(26px,4vw,38px)}
+.flow{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:20px}
+.flow div{display:flex;flex-direction:column;gap:8px}
+.flow b{font:800 30px var(--f-display);color:var(--band-num)}
+.flow strong{font-size:18px}
+.flow span{color:var(--band-muted);font-size:15px}
+@media(max-width:860px){.flow{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:480px){.flow{grid-template-columns:minmax(0,1fr)}}
+
+/* Лента сделанного */
+.timeline{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.timeline li{display:grid;grid-template-columns:120px minmax(0,1fr);gap:16px;padding:16px 0;border-top:1px solid var(--line)}
+.timeline li:first-child{border-top:0}
+.timeline time{font-size:14px;color:var(--faint);font-variant-numeric:tabular-nums;padding-top:2px}
+.timeline h3{font-size:18px;margin-bottom:4px}
+.timeline p{color:var(--muted);font-size:15px}
+@media(max-width:560px){.timeline li{grid-template-columns:minmax(0,1fr);gap:4px}}
+.recent{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+@media(max-width:700px){.recent{grid-template-columns:minmax(0,1fr)}}
+.recent .item .n{font:700 13px var(--f-body);color:var(--accent-ink);background:var(--accent-soft);border-radius:6px;padding:2px 8px;align-self:flex-start}
+
+footer{border-top:1px solid var(--line);background:var(--surface)}
+footer .wrap{padding-block:24px;display:flex;flex-wrap:wrap;justify-content:space-between;gap:12px;font-size:14px;color:var(--muted)}
+@media (prefers-reduced-motion: reduce){*{scroll-behavior:auto!important;transition:none!important}}
+</style>
+
+<div class="note"><div class="wrap">
+  <span><b>Витрина Дела</b> — пробная копия для Дамира. Все люди, дела и суммы вымышленные. Кнопки работают.</span>
+  <span class="num" id="ver">Версия</span>
+</div></div>
+
+<header class="top"><div class="wrap">
+  <a class="logo" href="#top"><i><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h10M4 17h7"/></svg></i><b style="font-weight:800">БЕРТЕЛ <span>Дело</span></b></a>
+  <nav aria-label="Разделы"><a href="#try">Попробовать</a><a href="#how">Как устроено</a><a href="#done">Что сделано</a></nav>
+  <a class="btn primary" href="#try">Открыть кабинеты</a>
+</div></header>
+
+<main id="top">
+<section class="hero"><div class="wrap">
+  <div class="text">
+    <span class="pill info" style="align-self:flex-start">Экспертиза и оценка · Переводы · Проверка юриста</span>
+    <h1>Что уже умеет «Дело» — можно нажать и посмотреть</h1>
+    <p class="lead">Здесь собраны главные экраны платформы для заказчика, эксперта, руководителя экспертной организации и диспетчера. Каждая кнопка ведёт себя так же, как в настоящем «Деле», только на вымышленных делах.</p>
+    <div class="stats">
+      <div><b id="st-tasks">405</b><span>задач сделано и проверено</span></div>
+      <div><b>8</b><span>услуг экспертизы и оценки</span></div>
+      <div><b>3</b><span>услуги перевода</span></div>
+      <div><b>5</b><span>кабинетов по одному образцу</span></div>
+    </div>
+  </div>
+  <div class="ordercard" aria-label="Пример дела">
+    <div class="row"><span style="font-size:13px;color:var(--faint)">Дело № Д-1047 · пример</span><span class="pill ok">В работе</span></div>
+    <div class="ttl">Оценка квартиры для Сбербанка, ул. Вымышленная, 12</div>
+    <div class="who"><i>ОС</i><div><b>Ольга Соколова, оценщик</b><small>Карточка допуска № ДП-0042 · действует до 31.12.2026</small></div></div>
+    <ol class="steps">
+      <li class="done"><i>✓</i>Оплачено — деньги ждут на площадке</li>
+      <li class="done"><i>✓</i>Осмотр по ссылке: 14 фото со временем и местом</li>
+      <li class="now"><i>3</i>ИИ сверяет черновик с выпиской ЕГРН</li>
+      <li class="next"><i>4</i>Подпись эксперта и руководителя (УКЭП)</li>
+      <li class="next"><i>5</i>Диспетчер проверил — заказчик получил отчёт</li>
+    </ol>
+  </div>
+</div></section>
+
+<section class="sec alt" id="try"><div class="wrap">
+  <h2>Попробовать кабинеты</h2>
+  <p class="sub">Выберите, за кого войти. Справа — что именно сделано на этом экране.</p>
+  <div class="roles" role="tablist" aria-label="Кабинеты">
+    <button class="role" role="tab" data-role="customer" id="r-customer"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>Заказчик</button>
+    <button class="role" role="tab" data-role="expert" id="r-expert"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9"/></svg>Эксперт</button>
+    <button class="role" role="tab" data-role="head" id="r-head"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>Руководитель</button>
+    <button class="role" role="tab" data-role="disp" id="r-disp"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>Диспетчер</button>
+    <button class="role" role="tab" data-role="transl" id="r-transl"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h8M8 3v2M5 9c1 3 4 6 7 7M11 5c-1 5-4 9-7 11"/><path d="M13 21l4-9 4 9M14.5 18h5"/></svg>Переводы</button>
+    <button class="role" role="tab" data-role="lawyer" id="r-lawyer"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/><path d="M9 12l2 2 4-4"/></svg>Проверка юриста</button>
+  </div>
+
+  <!-- Заказчик -->
+  <div class="panel" data-panel="customer" role="tabpanel" aria-labelledby="r-customer">
+    <div class="screen">
+      <div class="screen-head"><h3>Новая заявка</h3><span class="pill plain">Кабинет заказчика</span></div>
+      <form class="form" id="c-form">
+        <div class="field wide"><label for="c-service">Услуга</label>
+          <select id="c-service">
+            <option>Оценка недвижимости</option><option>Оценка земельного участка</option><option>Оценка транспортного средства</option>
+            <option>Ущерб автомобилю после ДТП</option><option>Оценка движимого имущества</option><option>Товароведческая экспертиза</option>
+            <option>Строительно-техническая экспертиза</option><option>Почерковедческая экспертиза</option>
+          </select></div>
+        <div class="field"><label for="c-kind">Что оцениваем</label>
+          <select id="c-kind"><option>Квартира</option><option>Комната</option><option>Доля в квартире или доме</option><option>Жилой дом</option><option>Нежилое помещение</option></select></div>
+        <div class="field"><label for="c-area">Площадь, кв. м</label><input id="c-area" inputmode="decimal" value="52,4"></div>
+        <div class="field wide"><label for="c-addr">Адрес объекта</label><input id="c-addr" value="г. Москва, ул. Вымышленная, д. 12, кв. 34"></div>
+        <label class="check wide"><input type="checkbox" id="c-sber" checked><span>Отчёт нужен для Сбербанка<br><span style="font-size:13px;color:var(--faint)">К проверке перед сдачей добавятся 10 пунктов «Сбер: …», а в запрос документов — задание на оценку от банка.</span></span></label>
+        <div class="wide"><button class="btn primary" type="submit" id="c-send">Отправить заявку</button></div>
+      </form>
+      <div id="c-ack" hidden class="list">
+        <div class="callout ok" id="c-ack-text"></div>
+        <div class="item">
+          <div class="head"><span class="t">Ход заявки</span><span class="pill info" id="c-status">Отправлена</span></div>
+          <ol class="steps" id="c-steps"></ol>
+          <div class="acts"><button class="btn small" type="button" id="c-next">Показать следующий шаг</button><button class="btn small" type="button" id="c-reset">Новая заявка</button></div>
+        </div>
+      </div>
+    </div>
+    <div class="aside">
+      <h4>Что здесь сделано</h4>
+      <ul>
+        <li>Поля заявки свои у каждой услуги: этаж, год дома, доля, VIN, ПТС.</li>
+        <li>Сразу после отправки — срок, к которому диспетчер назначит цену, и «задерживаемся», если не успели.</li>
+        <li>Цель «для банка» сама добавляет чек-лист Сбербанка и задание на оценку в запрос документов.</li>
+        <li>Оплата при заказе; эксперт получает 80% после «готово», при отмене — возврат.</li>
+        <li>Заявку можно прислать письмом — она станет черновиком.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Эксперт -->
+  <div class="panel" data-panel="expert" role="tabpanel" aria-labelledby="r-expert" hidden>
+    <div class="screen">
+      <div class="screen-head"><h3>Ольга Соколова, оценщик</h3>
+        <div class="sublinks" role="group" aria-label="Экраны эксперта">
+          <button type="button" data-sub="e-today" aria-pressed="true">Сегодня</button>
+          <button type="button" data-sub="e-ai" aria-pressed="false">ИИ-проверка</button>
+          <button type="button" data-sub="e-cal" aria-pressed="false">Мои сроки</button>
+        </div>
+      </div>
+
+      <div data-subpanel="e-today" class="list">
+        <div class="item hot">
+          <div class="head"><span class="t">Д-1047 · Срок близко — нет файла результата</span><span class="pill warn">сдать до пт, 30.10</span></div>
+          <span class="d">Срок дела — суббота, 31 октября. Нерабочий день: сдайте лучше до него, последний рабочий день — пт, 30 октября.</span>
+        </div>
+        <div class="item" id="e-silent">
+          <div class="head"><span class="t">Д-1039 · Заказчик не отвечает</span><span class="pill plain">2 рабочих дня</span></div>
+          <span class="d">Вы спросили про ключи от подвала во вторник. Выходные не считаются.</span>
+          <div class="field" id="e-msg-box" hidden><label for="e-msg">Сообщение заказчику</label><textarea id="e-msg"></textarea></div>
+          <div class="acts"><button class="btn small" type="button" id="e-remind">Напомнить заказчику</button><button class="btn small primary" type="button" id="e-send" hidden>Отправить</button></div>
+        </div>
+        <div class="item" id="e-docs">
+          <div class="head"><span class="t">Д-1052 · Документы не пришли</span><span class="pill plain">3 рабочих дня</span></div>
+          <span class="d">Ждём от заказчика: техпаспорт БТИ, задание на оценку от банка.</span>
+          <div class="acts"><button class="btn small" type="button" id="e-docs-btn">Напомнить заказчику</button></div>
+        </div>
+        <div class="item">
+          <div class="head"><span class="t">Д-1044 · Выписка ЕГРН старше 30 дней на дату оценки</span><span class="pill bad">41 день</span></div>
+          <span class="d">Выписка от 12.09.2026, дата оценки — 23.10.2026. Банк такую не примет.</span>
+          <div class="acts"><button class="btn small" type="button" data-oneshot="Запрошена свежая выписка — заказчик получил уведомление">Запросить свежую выписку</button></div>
+        </div>
+        <div class="item">
+          <div class="head"><span class="t">Д-1031 · Письмо о переносе: сдать раньше срока дела</span><span class="pill warn">по письму — 28.10</span></div>
+          <span class="d">Банк прислал письмо: отчёт к 28 октября, а в деле срок — 2 ноября. Файл загружен, но не подписан.</span>
+          <div class="acts"><button class="btn small" type="button" data-oneshot="Открыта подпись файла результата">Подписать до 28.10</button><button class="btn small" type="button" data-oneshot="Заказчику ушла просьба прислать письмо с новым сроком">Попросить письмо с новым сроком</button></div>
+        </div>
+      </div>
+
+      <div data-subpanel="e-ai" class="list" hidden>
+        <div class="excerpt" id="ai-text">7. Описание объекта оценки. Квартира по адресу: г. Москва, ул. Вымышленная, д. 12, кв. 34, кадастровый номер <mark data-k="cad">77:01:0004012:1985</mark>, общая площадь <mark data-k="area">54,2</mark> кв. м, 5 этаж 9-этажного дома 1978 года постройки. Итоговая величина стоимости: 14 300 000 (<mark data-k="words">четырнадцать миллионов триста тысяч</mark>) рублей.</div>
+        <div class="list" id="ai-finds"></div>
+        <div class="acts"><button class="btn small dark" type="button" id="ai-all">Заменить всё по выписке</button><button class="btn small" type="button" id="ai-undo">Вернуть как было</button></div>
+        <span class="d" style="font-size:13px;color:var(--faint)">ИИ только подсказывает. Заменяет эксперт своим нажатием, подпись и ответственность — у него.</span>
+      </div>
+
+      <div data-subpanel="e-cal" class="list" hidden>
+        <div class="cal" id="cal"></div>
+        <div class="item" id="cal-day"><span class="t">Выберите день</span><span class="d">Синие полоски — сроки дел, жёлтые — срок по заданию на оценку раньше срока дела.</span></div>
+      </div>
+    </div>
+    <div class="aside">
+      <h4>Что здесь сделано</h4>
+      <ul>
+        <li>«Сегодня» собирает всё, что горит: сроки, молчащих заказчиков, недостающие документы, старые выписки.</li>
+        <li>Все «ждём 3 дня» считаются в рабочих днях; праздники РФ учтены.</li>
+        <li>ИИ-проверка сверяет отчёт с выпиской ЕГРН, заданием на оценку и заявкой; замена — одним нажатием с отменой.</li>
+        <li>Черновик заключения, отчёт Word с оглавлением, фото осмотра и таблицей аналогов.</li>
+        <li>«Мои сроки на две недели» и файл для календаря телефона.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Руководитель -->
+  <div class="panel" data-panel="head" role="tabpanel" aria-labelledby="r-head" hidden>
+    <div class="screen">
+      <div class="screen-head"><h3>ООО «Оценка-Пример» (демо)</h3>
+        <div class="sublinks" role="group" aria-label="Экраны руководителя">
+          <button type="button" data-sub="h-cases" aria-pressed="true">Дела экспертов</button>
+          <button type="button" data-sub="h-sign" aria-pressed="false">Подпись</button>
+        </div>
+      </div>
+      <div data-subpanel="h-cases" class="list">
+        <div class="sublinks" role="group" aria-label="Отбор дел" id="h-filters">
+          <button type="button" data-f="all" aria-pressed="true">Все</button>
+          <button type="button" data-f="idle" aria-pressed="false">Без движения 5 рабочих дней</button>
+          <button type="button" data-f="sign" aria-pressed="false">Ждут подписи 2 дня</button>
+          <button type="button" data-f="task" aria-pressed="false">Срок по заданию на неделе</button>
+        </div>
+        <div class="tbl"><table>
+          <thead><tr><th>Дело</th><th>Эксперт</th><th>Срок</th><th>Что с ним</th><th></th></tr></thead>
+          <tbody id="h-rows"></tbody>
+        </table></div>
+      </div>
+      <div data-subpanel="h-sign" class="list" hidden>
+        <div class="item">
+          <div class="head"><span class="t">Д-1040 · Отчёт об оценке квартиры — на подписи организации</span><span class="pill warn">ждёт 2 раб. дня</span></div>
+          <span class="d">Эксперт подписал 21.10. Перед подписью — что нашла ИИ-проверка:</span>
+          <label class="check"><input type="checkbox" class="h-pt" checked><span>Площадь в расчёте — 54,2 кв. м, в выписке ЕГРН — 52,4 кв. м</span></label>
+          <label class="check"><input type="checkbox" class="h-pt"><span>Дата составления отчёта позже срока из задания на оценку (27.10)</span></label>
+          <label class="check"><input type="checkbox" class="h-pt"><span>Пользователь результатов оценки — не банк из задания</span></label>
+          <div class="acts"><button class="btn small primary" type="button" id="h-sign-btn">Подписать УКЭП</button><button class="btn small" type="button" id="h-return">Вернуть эксперту с отмеченным</button></div>
+          <div id="h-sign-res" class="callout" hidden></div>
+        </div>
+      </div>
+    </div>
+    <div class="aside">
+      <h4>Что здесь сделано</h4>
+      <ul>
+        <li>Все дела экспертов организации с отборами и «Напомнить эксперту» раз в сутки.</li>
+        <li>Передача дела коллеге и перенос срока от организации, если передать некому.</li>
+        <li>Подпись организации с подсказками ИИ; возврат эксперту пунктами.</li>
+        <li>Нагрузка экспертов на две недели, сводка за месяц и таблица для Excel, архив сданных заключений.</li>
+        <li>Утренняя сводка ведёт сразу к нужному блоку.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Диспетчер -->
+  <div class="panel" data-panel="disp" role="tabpanel" aria-labelledby="r-disp" hidden>
+    <div class="screen">
+      <div class="screen-head"><h3>Очередь диспетчера</h3><span class="pill plain">3 задачи</span></div>
+      <div class="item" id="d-price">
+        <div class="head"><span class="t">Д-1047 · Назначить цену</span><span class="pill info">ждёт 5 ч</span></div>
+        <span class="d">Оценка квартиры для Сбербанка, Москва. Обещали заказчику — до пн, 26 октября.</span>
+        <div class="field"><label for="d-sum">Цена, ₽</label><input id="d-sum" inputmode="numeric" value="9 500"></div>
+        <div class="acts"><button class="btn small primary" type="button" id="d-price-btn">Назначить</button></div>
+        <div class="callout ok" id="d-price-res" hidden></div>
+      </div>
+      <div class="item" id="d-ext">
+        <div class="head"><span class="t">Д-1036 · Эксперт просит перенести срок</span><span class="pill warn">с 27.10 на 30.10</span></div>
+        <span class="d">Причина: «жду документы с 19.10» — подставлена из запроса документов. Срок по заданию на оценку — 29.10, нужно письмо банка о переносе.</span>
+        <div class="acts"><button class="btn small primary" type="button" data-ext="yes">Согласовать</button><button class="btn small" type="button" data-ext="no">Отказать</button></div>
+        <div class="callout" id="d-ext-res" hidden></div>
+      </div>
+      <div class="item">
+        <div class="head"><span class="t">Д-1029 · Результат на проверке</span><span class="pill plain">1 раб. день</span></div>
+        <span class="d">Отчёт подписан экспертом и организацией, подписи проверены. ИИ-проверка: замечаний нет.</span>
+        <div class="acts"><button class="btn small primary" type="button" data-oneshot="Готово — заказчик получил отчёт, эксперту ушла выплата 80%">Готово, выдать заказчику</button><button class="btn small" type="button" data-oneshot="Возвращено эксперту на доработку с причиной">Вернуть на доработку</button></div>
+      </div>
+    </div>
+    <div class="aside">
+      <h4>Что здесь сделано</h4>
+      <ul>
+        <li>Цена, проверка результата по правилам модуля и «готово» — только у диспетчера.</li>
+        <li>Перенос срока: просит эксперт, решает диспетчер, заказчик видит.</li>
+        <li>Отметка «подписано КЭП, проверено» после проверки на Госуслугах.</li>
+        <li>Повтор выплаты и возврата, раздел «Проблемы» от людей.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Переводы -->
+  <div class="panel" data-panel="transl" role="tabpanel" aria-labelledby="r-transl" hidden>
+    <div class="screen">
+      <div class="screen-head"><h3>Сколько стоит перевод</h3><span class="pill plain">Стартовые цены Дамира</span></div>
+      <div class="form">
+        <div class="field wide"><label for="t-kind">Как нужен перевод</label>
+          <select id="t-kind"><option value="paper">Нотариальный, бумагой</option><option value="file">Нотариальный, файлом</option><option value="cert">Без нотариуса, с сертификатом платформы</option></select></div>
+        <div class="field"><label for="t-docs">Документов</label><input id="t-docs" type="number" min="1" max="50" value="2"></div>
+        <div class="field"><label for="t-pages">Страниц всего</label><input id="t-pages" type="number" min="1" max="500" value="3"></div>
+        <label class="check"><input type="checkbox" id="t-east"><span>Восточный язык (китайский, арабский…)</span></label>
+        <label class="check"><input type="checkbox" id="t-urgent"><span>Срочно</span></label>
+        <label class="check wide"><input type="checkbox" id="t-courier"><span>Доставка курьером по Москве</span></label>
+      </div>
+      <div class="price" id="t-out"></div>
+    </div>
+    <div class="aside">
+      <h4>Что здесь сделано</h4>
+      <ul>
+        <li>Три услуги, цены и правила — настройками у администратора, с историей правок.</li>
+        <li>Платформа берёт 20% только с услуг; нотариус и доставка — без наценки.</li>
+        <li>Сертификат с QR и открытая страница проверки; вычитка новых переводчиков; бесплатная переделка.</li>
+        <li>Справочник нотариусов-партнёров, черновик оферты для юриста.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Проверка юриста -->
+  <div class="panel" data-panel="lawyer" role="tabpanel" aria-labelledby="r-lawyer" hidden>
+    <div class="screen">
+      <div class="screen-head"><h3>Проверить юриста перед соглашением</h3><span class="pill warn">Делается — решение Дамира 23.10</span></div>
+      <form class="form" id="l-form">
+        <div class="field"><label for="l-name">ФИО юриста или адвоката</label><input id="l-name" value="Петров Пётр Петрович"></div>
+        <div class="field"><label for="l-cert">Номер в реестре (если есть)</label><input id="l-cert" value="77/00000"></div>
+        <div class="wide"><button class="btn primary" type="submit">Проверить</button></div>
+      </form>
+      <div class="item" id="l-card" hidden>
+        <div class="head"><div><span class="d">Карточка юриста · вымышленный пример</span><div class="t" style="font:700 22px var(--f-display)" id="l-nm"></div></div><span class="pill ok">Действующий адвокат</span></div>
+        <div class="form">
+          <div class="item" style="background:var(--sunk)"><span class="d">Реестр Минюста</span><span class="t num" id="l-reg"></span></div>
+          <div class="item" style="background:var(--sunk)"><span class="d">Адвокатская палата</span><span class="t">г. Москвы (пример)</span></div>
+        </div>
+        <div class="tbl"><table>
+          <thead><tr><th>Дело</th><th>Суд</th><th>Роль юриста</th><th>Итог акта</th></tr></thead>
+          <tbody>
+            <tr><td class="num">2-0000/2025</td><td>Районный суд (пример)</td><td>Представитель истца</td><td>Иск удовлетворён частично</td></tr>
+            <tr><td class="num">А40-00000/2024</td><td>Арбитражный суд (пример)</td><td>Представитель ответчика</td><td>Отказ в иске</td></tr>
+          </tbody>
+        </table></div>
+        <div class="callout warn">Только факты со ссылками на источник: без рейтингов, «процента побед» и данных других участников дел.</div>
+        <div class="acts"><button class="btn small" type="button" data-oneshot="Юрист отметил: «это не я» — строка уйдёт на проверку человеку">Это не я — оспорить</button><button class="btn small dark" type="button" data-oneshot="Юрист подтвердил карточку">Подтвердить карточку</button></div>
+      </div>
+    </div>
+    <div class="aside">
+      <h4>Что здесь будет</h4>
+      <ul>
+        <li>Общий модуль: страница на сайте Дела для людей и компаний, карточка при выборе юриста в Деле, команда «проверь юриста» в Бертеле.</li>
+        <li>Источники — реестр адвокатов Минюста и опубликованные решения судов.</li>
+        <li>Разбор текстов — российским ИИ. Не публикуется, пока Дамир не посмотрит.</li>
+      </ul>
+    </div>
+  </div>
+</div></section>
+
+<section class="band" id="how"><div class="wrap">
+  <h2>Как устроено «Дело»</h2>
+  <div class="flow">
+    <div><b>01</b><strong>Одно ядро</strong><span>Вход, организации, заявки, подбор, документы и подписи, оплата, уведомления, ИИ.</span></div>
+    <div><b>02</b><strong>Направления — данными</strong><span>Новая профессия — это перечень услуг, поля заявки и список проверок, без переделки ядра.</span></div>
+    <div><b>03</b><strong>Данные в России</strong><span>База, файлы и ключи — в Яндекс Облаке; ИИ — YandexGPT, запасной — GigaChat.</span></div>
+    <div><b>04</b><strong>Чужого не видно</strong><span>Каждая операция проверяет, чьё это дело; на каждую — автотест под каждой ролью.</span></div>
+  </div>
+</div></section>
+
+<section class="sec" id="done"><div class="wrap">
+  <h2>Что сделано</h2>
+  <p class="sub">Последние правки — сверху. Каждая проверена автотестами сервера и на экране телефона 412×915.</p>
+  <div class="recent" id="recent"></div>
+  <h3 style="font-size:22px;margin-top:12px">По этапам</h3>
+  <ol class="timeline" id="timeline"></ol>
+</div></section>
+</main>
+
+<footer><div class="wrap">
+  <span>БЕРТЕЛ Дело · витрина на вымышленных данных</span>
+  <span id="foot-ver" class="num"></span>
+</div></footer>
+
+<script>
+// Обновляет «Работник Дело» после каждой слитой правки.
+var VERSION={task:'2.387',date:'23.10.2026',tasks:405};
+var RECENT=[
+  ['2.387','«Пришлите до …» — рабочий день','В готовой фразе заказчику дата — через 3 рабочих дня и не позже чем за 2 рабочих дня до срока дела.'],
+  ['2.386','Заметки «за день до срока»','Напоминание приходит в последний рабочий день перед сроком; на выходной — подсказка «напомнить в пятницу».'],
+  ['2.385','«Без движения» — в рабочих днях','Дело, стоявшее с пятницы, в понедельник не тревожит руководителя.'],
+  ['2.384','Диспетчер проверяет долго','Строка в «Сегодня» эксперта — через 2 рабочих дня, а не календарных.'],
+  ['2.383','Ждут подписи организации','«2 дня и дольше» у руководителя и эксперта считается по рабочим дням.'],
+  ['2.382','Срок в выходной или праздник','Дело «горит» по последнему рабочему дню перед сроком: «сдайте лучше до него».']
+];
+var STAGES=[
+  ['30.09–02.10','Ядро','Вход по СМС, организации и приглашения, заявки и статусы, подбор специалиста, документы, оплата 80/20, уведомления, ИИ-помощник, заявки письмом, мост из CRM без персональных данных.'],
+  ['02.10–05.10','Экспертиза и оценка','8 услуг, дистанционный осмотр по ссылке, выезд помощника, подпись УКЭП, аналоги со скриншотами, черновик заключения от ИИ, готовый отчёт Word.'],
+  ['05.10','Показ','Демо-площадка с вымышленными делами, экскурсия, подсказки «С чего начать», журнал действий и архив дела, ночной прогон.'],
+  ['06.10–11.10','Работа эксперта','Досье эксперта со сроками аттестата и полиса, шаблон отчёта организации, повторная оценка, похожие дела, заметки, передача дела коллеге, перенос срока.'],
+  ['11.10–12.10','Переводы','Три услуги, цены и правила настройками, сертификат с QR, нотариусы-партнёры, вычитка и переделка, черновик оферты.'],
+  ['13.10–14.10','Доверие','Карточка допуска исполнителя с QR, подписанный результат с проверкой на Госуслугах, приложение на экран «Домой», чек-лист Сбербанка.'],
+  ['15.10–19.10','Сверка с документами','ИИ сверяет отчёт с выпиской ЕГРН, заявкой и заданием на оценку; «Заменить на значение из выписки» и «Заменить всё» с отменой.'],
+  ['19.10–22.10','Сроки по заданию и письма о переносе','Срок из задания банка, письма о переносе, история сроков, нагрузка на две недели, сводки за месяц.'],
+  ['22.10–23.10','Праздники и рабочие дни','Календарь праздников РФ; все «ждём N дней» и «срок близко» — по рабочим дням.']
+];
+
+function el(tag,cls,text){var e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e}
+function $(id){return document.getElementById(id)}
+function store(k,v){try{if(v===undefined)return localStorage.getItem(k);localStorage.setItem(k,v)}catch(e){return null}}
+
+$('ver').textContent='Версия '+VERSION.task+' · '+VERSION.date;
+$('foot-ver').textContent='Обновлено '+VERSION.date+', последняя правка '+VERSION.task;
+$('st-tasks').textContent=VERSION.tasks;
+
+// Кабинеты
+var roles=document.querySelectorAll('.role');
+function showRole(r){roles.forEach(function(b){b.setAttribute('aria-selected',b.dataset.role===r)});
+  document.querySelectorAll('[data-panel]').forEach(function(p){p.hidden=p.dataset.panel!==r});store('vitrina-role',r)}
+roles.forEach(function(b){b.addEventListener('click',function(){showRole(b.dataset.role)})});
+var hashRole={customer:1,expert:1,head:1,disp:1,transl:1,lawyer:1}[location.hash.slice(1)]?location.hash.slice(1):null;
+showRole(hashRole||store('vitrina-role')||'expert');
+
+document.querySelectorAll('.sublinks[role=group]').forEach(function(g){
+  var bs=g.querySelectorAll('button[data-sub]');if(!bs.length)return;
+  bs.forEach(function(b){b.addEventListener('click',function(){bs.forEach(function(x){x.setAttribute('aria-pressed',x===b);var p=document.querySelector('[data-subpanel="'+x.dataset.sub+'"]');if(p)p.hidden=x!==b})})})});
+
+// Кнопка с одним действием: заменяется строкой итога
+document.addEventListener('click',function(e){var b=e.target.closest('[data-oneshot]');if(!b)return;
+  var acts=b.parentNode;var line=el('span','done-line','✓ '+b.dataset.oneshot);acts.replaceWith(line)});
+
+// Заказчик
+var C_STEPS=['Отправлена','Цена назначена','Оплачена','В работе','На проверке','Готово'];var cAt=0;
+function cDraw(){var ol=$('c-steps');ol.textContent='';C_STEPS.forEach(function(s,i){var li=el('li',i<cAt?'done':i===cAt?'now':'next');li.appendChild(el('i',null,i<cAt?'✓':String(i+1)));li.appendChild(document.createTextNode(s));ol.appendChild(li)});
+  $('c-status').textContent=C_STEPS[cAt];$('c-status').className='pill '+(cAt===C_STEPS.length-1?'ok':'info');$('c-next').disabled=cAt===C_STEPS.length-1}
+$('c-form').addEventListener('submit',function(e){e.preventDefault();
+  var sber=$('c-sber').checked;
+  $('c-ack-text').textContent='Заявка № Д-1048 принята. Обычно диспетчер назначает цену в течение 3 суток — как правило, до пн, 26 октября. Если не успеем — сообщим.'+(sber?' Для Сбербанка: пришлите задание на оценку от банка — пункт уже в списке документов.':'');
+  $('c-form').hidden=true;$('c-ack').hidden=false;cAt=0;cDraw()});
+$('c-next').addEventListener('click',function(){if(cAt<C_STEPS.length-1){cAt++;cDraw()}});
+$('c-reset').addEventListener('click',function(){$('c-form').hidden=false;$('c-ack').hidden=true});
+
+// Эксперт: «Сегодня»
+$('e-remind').addEventListener('click',function(){$('e-msg-box').hidden=false;$('e-msg').value='Здравствуйте! Напоминаю про мой вопрос о ключах от подвала: без него не смогу закончить осмотр. Ответьте, пожалуйста, когда будет удобно.';$('e-send').hidden=false;$('e-remind').hidden=true;$('e-msg').focus()});
+$('e-send').addEventListener('click',function(){var box=$('e-silent');var line=el('span','done-line','✓ Сообщение ушло заказчику в переписку дела');$('e-msg-box').hidden=true;box.querySelector('.acts').replaceWith(line)});
+$('e-docs-btn').addEventListener('click',function(){var b=$('e-docs-btn');b.disabled=true;b.textContent='Напомнили сегодня — следующее завтра'});
+
+// Эксперт: ИИ-проверка
+var AI=[
+  {k:'area',t:'Площадь не как в выписке ЕГРН',d:'В отчёте 54,2 кв. м, в выписке от 20.10.2026 — 52,4 кв. м.',from:'54,2',to:'52,4'},
+  {k:'cad',t:'Кадастровый номер не как в выписке',d:'В отчёте …:1985, в выписке …:1958.',from:'77:01:0004012:1985',to:'77:01:0004012:1958'},
+  {k:'words',t:'Сумма прописью не совпадает с цифрами',d:'14 300 000 — «четырнадцать миллионов триста тысяч» верно, но без «рублей 00 копеек» банк вернёт.',from:'четырнадцать миллионов триста тысяч',to:'четырнадцать миллионов триста тысяч рублей 00 копеек'}
+];
+function aiDraw(){var box=$('ai-finds');box.textContent='';AI.forEach(function(f){var m=document.querySelector('#ai-text mark[data-k="'+f.k+'"]');var fixed=m.textContent===f.to;
+  var it=el('div','item');var h=el('div','head');h.appendChild(el('span','t',f.t));h.appendChild(el('span','pill '+(fixed?'ok':'warn'),fixed?'исправлено':'расхождение'));it.appendChild(h);it.appendChild(el('span','d',f.d));
+  var a=el('div','acts');var b=el('button','btn small',fixed?'Отменить замену':'Заменить на значение из выписки');b.type='button';b.addEventListener('click',function(){aiSet(f,!fixed)});a.appendChild(b);it.appendChild(a);box.appendChild(it)})}
+function aiSet(f,on){var m=document.querySelector('#ai-text mark[data-k="'+f.k+'"]');m.textContent=on?f.to:f.from;m.classList.toggle('fixed',on);aiDraw()}
+$('ai-all').addEventListener('click',function(){AI.forEach(function(f){var m=document.querySelector('#ai-text mark[data-k="'+f.k+'"]');m.textContent=f.to;m.classList.add('fixed')});aiDraw()});
+$('ai-undo').addEventListener('click',function(){AI.forEach(function(f){var m=document.querySelector('#ai-text mark[data-k="'+f.k+'"]');m.textContent=f.from;m.classList.remove('fixed')});aiDraw()});
+aiDraw();
+
+// Эксперт: «Мои сроки на две недели» (пн 26.10 – вс 08.11.2026; 4 ноября — праздник)
+var CAL_CASES={'28':[['t','Д-1031 · по письму банка']],'29':[['','Д-1052 · оценка комнаты']],'30':[['','Д-1047 · сдать до субботы']],'2':[['','Д-1036 · оценка дома'],['','Д-1031 · срок дела']],'5':[['','Д-1055 · ущерб после ДТП']],'6':[['t','Д-1058 · по заданию на оценку']]};
+(function(){var cal=$('cal');['пн','вт','ср','чт','пт','сб','вс'].forEach(function(d){cal.appendChild(el('div','dow',d))});
+  var days=[26,27,28,29,30,31,1,2,3,4,5,6,7,8];days.forEach(function(n,i){var wd=i%7;var hol=n===4;var off=wd>4;
+    var b=el('button','day'+(off?' off':'')+(hol?' hol':''));b.type='button';b.setAttribute('aria-pressed','false');b.appendChild(el('b',null,String(n)));
+    (CAL_CASES[n]||[]).forEach(function(c){b.appendChild(el('span','dot'+(c[0]?' t':'')))});
+    b.addEventListener('click',function(){cal.querySelectorAll('.day').forEach(function(x){x.setAttribute('aria-pressed',x===b)});
+      var box=$('cal-day');box.textContent='';var mon=n>=26?' октября':' ноября';
+      box.appendChild(el('span','t',n+mon+(hol?' — праздник, нерабочий день':off?' — выходной':'')));
+      var list=CAL_CASES[n]||[];if(!list.length)box.appendChild(el('span','d',hol||off?'Дел нет. Если срок выпадает на такой день — сдайте лучше до него.':'Дел со сроком нет — можно брать новое.'));
+      list.forEach(function(c){box.appendChild(el('span','d',(c[0]?'Срок по заданию: ':'Срок: ')+c[1]))})});
+    cal.appendChild(b)})})();
+
+// Руководитель
+var H_ROWS=[
+  {id:'Д-1033',who:'И. Морозов',due:'05.11',st:'Без движения 6 раб. дн.',f:['idle']},
+  {id:'Д-1040',who:'О. Соколова',due:'30.10',st:'Ждёт подписи организации 2 раб. дня',f:['sign']},
+  {id:'Д-1031',who:'О. Соколова',due:'02.11',st:'Срок по письму банка — 28.10',f:['task']},
+  {id:'Д-1045',who:'А. Лебедев',due:'29.10',st:'Ждём документы от заказчика',f:[]},
+  {id:'Д-1058',who:'А. Лебедев',due:'12.11',st:'Срок по заданию на оценку — 06.11',f:['task']}
+];
+(function(){var tb=$('h-rows');H_ROWS.forEach(function(r){var tr=el('tr');tr.dataset.f=r.f.join(' ');
+  tr.appendChild(el('td','num',r.id));tr.appendChild(el('td',null,r.who));tr.appendChild(el('td','num',r.due));tr.appendChild(el('td',null,r.st));
+  var td=el('td');var b=el('button','btn small','Напомнить эксперту');b.type='button';b.addEventListener('click',function(){b.disabled=true;b.textContent='Напомнили · завтра снова'});td.appendChild(b);tr.appendChild(td);tb.appendChild(tr)})})();
+document.querySelectorAll('#h-filters button').forEach(function(b){b.addEventListener('click',function(){
+  document.querySelectorAll('#h-filters button').forEach(function(x){x.setAttribute('aria-pressed',x===b)});
+  document.querySelectorAll('#h-rows tr').forEach(function(tr){tr.classList.toggle('gone',b.dataset.f!=='all'&&tr.dataset.f.split(' ').indexOf(b.dataset.f)<0)})})});
+$('h-sign-btn').addEventListener('click',function(){var r=$('h-sign-res');r.hidden=false;r.className='callout ok';r.textContent='Подписано УКЭП организации. Файл ушёл диспетчеру на проверку.'});
+$('h-return').addEventListener('click',function(){var pts=[].filter.call(document.querySelectorAll('.h-pt'),function(c){return c.checked}).length;var r=$('h-sign-res');r.hidden=false;
+  if(!pts){r.className='callout warn';r.textContent='Отметьте хотя бы один пункт — эксперт увидит, что исправить.';return}
+  r.className='callout info';r.textContent='Возвращено эксперту: '+pts+' '+(pts===1?'пункт':'пункта')+'. У эксперта — «Исправить в черновике» у каждого.'});
+
+// Диспетчер
+$('d-price-btn').addEventListener('click',function(){var v=$('d-sum').value.replace(/\D/g,'');var r=$('d-price-res');r.hidden=false;
+  if(!v){r.className='callout warn';r.textContent='Впишите цену цифрами.';return}
+  var n=Number(v);r.className='callout ok';r.textContent='Цена '+n.toLocaleString('ru-RU')+' ₽ ушла заказчику. После оплаты эксперт получит '+Math.round(n*.8).toLocaleString('ru-RU')+' ₽ (80%) по «готово».'});
+document.querySelectorAll('[data-ext]').forEach(function(b){b.addEventListener('click',function(){var r=$('d-ext-res');r.hidden=false;
+  if(b.dataset.ext==='yes'){r.className='callout ok';r.textContent='Срок перенесён на 30.10. Заказчик видит новый срок; эксперту — «приложите письмо банка о переносе».'}
+  else{r.className='callout warn';r.textContent='Отказано. Срок 30 октября — в «не принимаю дела» у эксперта: ему предложено попросить руководителя передать дело.'}
+  b.parentNode.remove()})});
+
+// Переводы (стартовые цены из src/translation/prices.mjs)
+var TP={page:600,urgent:1000,org:400,orgBatch:250,batchFrom:5,cert:150,sign:400,copy:150,eq:250,courier:500};
+function rub(n){return n.toLocaleString('ru-RU')+' ₽'}
+function tCalc(){var kind=$('t-kind').value,docs=Math.max(1,+$('t-docs').value||1),pages=Math.max(1,+$('t-pages').value||1);
+  var tr=TP.page*pages*($('t-east').checked?2:1),urg=$('t-urgent').checked&&kind!=='file'?TP.urgent:0;
+  var svc=[['Перевод, '+pages+' стр.'+($('t-east').checked?' ×2':''),tr]];if(urg)svc.push(['Срочно',urg]);
+  var tran=[];
+  if(kind==='cert')svc.push(['Сертификат платформы, '+docs+' док.',TP.cert*docs]);
+  else{var o=docs>=TP.batchFrom?TP.orgBatch:TP.org;svc.push(['Организация заверения, '+docs+' док.',o*docs]);
+    tran.push(['Нотариус: подпись переводчика',TP.sign*docs]);
+    if(kind==='paper')tran.push(['Нотариус: копии оригинала',TP.copy*pages]);else tran.push(['Нотариус: равнозначность файла',TP.eq*pages*2])}
+  if($('t-courier').checked)tran.push(['Курьер по Москве',TP.courier]);
+  var s=svc.reduce(function(a,x){return a+x[1]},0),t=tran.reduce(function(a,x){return a+x[1]},0);
+  var out=$('t-out');out.textContent='';svc.concat(tran).forEach(function(x){var d=el('div');d.appendChild(el('span',null,x[0]));d.appendChild(el('span',null,rub(x[1])));out.appendChild(d)});
+  var tot=el('div','total');tot.appendChild(el('span',null,'Итого заказчику'));tot.appendChild(el('span',null,rub(s+t)));out.appendChild(tot);
+  out.appendChild(el('span','sm','Переводчику — '+rub(Math.round(s*.8))+' (80% от услуг), платформе — '+rub(Math.round(s*.2))+'. Нотариус и доставка — без наценки.'+(kind==='file'&&$('t-urgent').checked?' Срочности у перевода файлом нет.':'')))}
+['t-kind','t-docs','t-pages','t-east','t-urgent','t-courier'].forEach(function(id){$(id).addEventListener('input',tCalc);$(id).addEventListener('change',tCalc)});tCalc();
+
+// Проверка юриста
+$('l-form').addEventListener('submit',function(e){e.preventDefault();$('l-nm').textContent=$('l-name').value.trim()||'Петров Пётр Петрович';$('l-reg').textContent='№ '+($('l-cert').value.trim()||'77/00000');$('l-card').hidden=false});
+
+// Что сделано
+RECENT.forEach(function(r){var it=el('div','item');it.appendChild(el('span','n','Задача '+r[0]));it.appendChild(el('span','t',r[1]));it.appendChild(el('span','d',r[2]));$('recent').appendChild(it)});
+STAGES.slice().reverse().forEach(function(s){var li=el('li');li.appendChild(el('time',null,s[0]));var d=el('div');d.appendChild(el('h3',null,s[1]));d.appendChild(el('p',null,s[2]));li.appendChild(d);$('timeline').appendChild(li)});
+</script>
