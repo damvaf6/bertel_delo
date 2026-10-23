@@ -2,7 +2,7 @@
 // заказчик видит; новый срок — в заявке, «Сегодня» и напоминаниях; история переносов и журнал.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid } from '../helpers.mjs';
+import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid , docsAskedAgo } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import { workdayFrom } from '../../src/orders/holidays.mjs';
 import { remindDeadlines } from '../../src/notify/reminders.mjs';
@@ -836,8 +836,9 @@ test('2.347: письмо о переносе попросили, а оно не
   assert.equal((await list(spec, o)).body.task_moved.asked.remind, null);
   assert.ok(!(await todayOf()).task_moved.some((x) => x.id === o.id));
   // Ждём 4 дня — сколько ждём и можно напомнить; строка в «Сегодня» снова, без «Попросить», в «Документы не пришли» не повторяется.
-  await S.sql`update doc_requests set requested_at = now() - interval '4 days' where order_id = ${o.id}`;
-  assert.deepEqual((await list(spec, o)).body.task_moved.asked.remind, { days: 4, reminded_at: null, can_remind: true, next_remind_at: null });
+  const ago = docsAskedAgo();
+  await S.sql`update doc_requests set requested_at = ${ago.at} where order_id = ${o.id}`;
+  assert.deepEqual((await list(spec, o)).body.task_moved.asked.remind, { days: ago.days, reminded_at: null, can_remind: true, next_remind_at: null });
   let t = await todayOf();
   const row = t.task_moved.find((x) => x.id === o.id);
   assert.equal(row?.can_ask, false);
@@ -855,7 +856,7 @@ test('2.347: письмо о переносе попросили, а оно не
   // Напоминание вчера, а ждём ещё и другой документ — строка письма с напоминанием и «Документы не пришли» с обоими.
   await S.sql`update doc_reminders set created_at = now() - interval '25 hours' where order_id = ${o.id}`;
   await S.sql`insert into doc_requests (order_id, item_id, title, requested_by, requested_at)
-              values (${o.id}, null, 'Техпаспорт', ${spec.user.id}, now() - interval '4 days')`;
+              values (${o.id}, null, 'Техпаспорт', ${spec.user.id}, ${ago.at})`;
   t = await todayOf();
   assert.ok(t.task_moved.some((x) => x.id === o.id));
   assert.deepEqual(t.docs_wait.find((x) => x.id === o.id)?.wait.titles, [`Письмо банка о переносе срока отчёта на ${ruD(late)}`, 'Техпаспорт']);

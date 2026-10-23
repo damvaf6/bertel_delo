@@ -8,6 +8,7 @@ import { migrate } from '../src/migrate.mjs';
 import { createProviders } from '../src/providers/index.mjs';
 import { createApp } from '../src/app.mjs';
 import { signBridge } from '../src/bridge/signature.mjs';
+import { workingAgo } from '../src/orders/silence.mjs';
 
 export const DB_URL = process.env.TEST_DATABASE_URL || 'postgres://postgres:postgres@localhost:5432/delo_test';
 export const TEST_TOKEN = 'test-control-token-local';
@@ -175,4 +176,11 @@ export async function signResults(stack, c, orderId) {
     const r = await c.req('POST', `/api/documents/${d.id}/sign`, { confirm: true });
     if (r.status !== 201) throw new Error(`подпись не поставлена: ${r.status} ${JSON.stringify(r.body)}`);
   }
+}
+
+// 2.381: запрос документов ждёт заказчика 4 рабочих дня (выходные и праздники не в счёт) — момент запроса и сколько это
+// дней по календарю; так проверки «не пришло 3 рабочих дня» не зависят от дня недели прогона.
+export function docsAskedAgo(workdays = 4) {
+  const at = workingAgo(workdays * 86400_000);
+  return { at, days: Math.floor((Date.now() - at.getTime()) / 86400_000) };
 }

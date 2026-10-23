@@ -4,7 +4,7 @@
 // ведёт в организацию. Чужая организация и не руководитель — ничего.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, addMember } from '../helpers.mjs';
+import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, addMember , docsAskedAgo } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import { digestText, morningTo, orgDigestText, orgDigestTo, sendOrgMorning } from '../../src/notify/morning.mjs';
 
@@ -979,14 +979,14 @@ test('прогон 2.350: письмо о переносе со сроком з�
   assert.deepEqual(v.short, { deadline: late, can_ask: false });
   assert.equal(v.remind, null);
   // 3. Письмо не пришло 4 дня — «Напомнить заказчику» (2.347) у строки «Сдать по письму».
-  await S.sql`update doc_requests set requested_at = now() - interval '4 days' where id = ${req2.id}`;
+  await S.sql`update doc_requests set requested_at = ${docsAskedAgo().at} where id = ${req2.id}`;
   v = await look();
   assert.equal(v.remind?.can_remind, true);
   assert.equal(v.letter_due?.task_moved.asked.remind.can_remind, true);
   // 2.355: в утренней сводке — цифрой «напомните заказчику», сводка ведёт к «Сегодня».
   assert.deepEqual([v.morning.letter_due, v.morning.letter_wait], [1, 1]);
   assert.match(digestText({ ...v.morning, due: 0, overdue: 0, visits: 0, links: 0 }),
-    /письмо о переносе попросили, а оно не пришло 3 дня и дольше — напомните заказчику: 1 дело/);
+    /письмо о переносе попросили, а оно не пришло 3 рабочих дня и дольше — напомните заказчику: 1 дело/);
   assert.equal(morningTo({ ...v.morning, due: 0, overdue: 0, visits: 0, links: 0 }), 'today');
   // 4. Файл результата загружен — «Сдать по письму» уходит и в «Сегодня», и в сводке; файл не подписан — «Подпишите до …»
   // (2.351), там же напоминание: письмо ждём; в «Приложите письмо» не повторяется.
@@ -1133,7 +1133,7 @@ test('прогон 2.360: письмо о переносе со сроком з�
   assert.deepEqual([ls?.letter_due.day, ls?.file.id, ls?.can_ask], [short, f2, false]);
 
   // 6. Письмо с новым сроком не пришло 4 дня — утренняя сводка нового эксперта «напомните заказчику» (2.355), у прежнего — нет.
-  await S.sql`update doc_requests set requested_at = now() - interval '4 days' where id = ${req2.id}`;
+  await S.sql`update doc_requests set requested_at = ${docsAskedAgo().at} where id = ${req2.id}`;
   const mb = await expertMorningAlerts(S.sql, b.user.id, today, new Date(), opts);
   const ma = await expertMorningAlerts(S.sql, a.user.id, today, new Date(), opts);
   assert.deepEqual([mb.letter_due, mb.letter_wait, ma.letter_wait], [0, 1, 0]);

@@ -14,6 +14,7 @@ import { taskMoved } from './deadline-ops.mjs';
 import { LEVEL, orderLevel, orderSides } from '../access/policy.mjs';
 import { customersOf, notify } from '../notify/notify.mjs';
 import { audit, text, uuidFrom } from './util.mjs';
+import { workingMs } from '../orders/silence.mjs';
 
 const MAX_CUSTOM = 5;
 const MAX_OPEN = 30;
@@ -62,12 +63,16 @@ export async function egrnOld(sql, storage, registry, order, today = todayMsk())
 }
 
 // 2.234: какие запрошенные документы ждут заказчика 3 дня и дольше (пока дело в работе), когда напоминали и можно ли снова.
-// { titles, since, days, reminded_at, reminders, can_remind, next_remind_at } или null.
+// 2.381: 3 дня — рабочих, по Москве (как «Заказчик не отвечает», прогон 2.380): в выходные и праздники заказчик не работает.
+// `days` — сколько дней ждём по календарю (так и показываем). { titles, since, days, reminded_at, reminders, can_remind,
+// next_remind_at } или null.
+export const docLong = (at, now = new Date()) => workingMs(at, now) >= DOC_WAIT_DAYS * 86400_000;
 export async function docWait(sql, order, now = new Date()) {
   if (order.status !== 'in_work') return null;
-  const rows = await sql`select item_id, title, requested_at from doc_requests
-                         where order_id = ${order.id} and cancelled_at is null and fulfilled_at is null
-                           and requested_at <= ${new Date(now.getTime() - DOC_WAIT_DAYS * 86400_000)} order by requested_at, id`;
+  const rows = (await sql`select item_id, title, requested_at from doc_requests
+                          where order_id = ${order.id} and cancelled_at is null and fulfilled_at is null
+                            and requested_at <= ${new Date(now.getTime() - DOC_WAIT_DAYS * 86400_000)} order by requested_at, id`)
+    .filter((r) => docLong(r.requested_at, now));
   if (!rows.length) return null;
   const since = rows[0].requested_at;
   // Напоминания — только с тех пор, как ждём самый старый из неполученных: прежние по уже пришедшим не в счёт.
@@ -102,7 +107,7 @@ export async function bankTaskMissing(sql, storage, registry, order, today = tod
 }
 
 // Ждём документы от заказчика (2.235) — руководителю в «Делах экспертов»: по делам в работе неполученные запросы с любого
-// дня (что ждём, с какого дня самый старый, когда эксперт напоминал); `long` — ждём дольше ${DOC_WAIT_DAYS} дней.
+// дня (что ждём, с какого дня самый старый, когда эксперт напоминал); `long` — ждём ${DOC_WAIT_DAYS} рабочих дня и дольше (2.381).
 export async function docsWaiting(sql, orders, now = new Date()) {
   const ids = orders.filter((o) => o.status === 'in_work').map((o) => o.id);
   if (!ids.length) return new Map();
@@ -113,7 +118,7 @@ export async function docsWaiting(sql, orders, now = new Date()) {
     group by r.order_id`;
   return new Map(rows.map((r) => {
     const days = Math.max(0, Math.floor((now.getTime() - new Date(r.since).getTime()) / 86400_000));
-    return [r.order_id, { titles: r.titles, since: r.since, days, long: days >= DOC_WAIT_DAYS, reminded_at: r.reminded_at ?? null }];
+    return [r.order_id, { titles: r.titles, since: r.since, days, long: docLong(r.since, now), reminded_at: r.reminded_at ?? null }];
   }));
 }
 
@@ -240,7 +245,7 @@ export function docRequestOps() {
           // Два нажатия одновременно — одно напоминание: блокируем строку заявки до записи.
           await tx`select id from orders where id = ${order.id} for update`;
           const w = await docWait(tx, order);
-          if (!w) throw new HttpError(409, 'not_waiting', `Напомнить можно, когда запрошенный документ не пришёл ${DOC_WAIT_DAYS} дня`);
+          if (!w) throw new HttpError(409, 'not_waiting', `Напомнить можно, когда запрошенный документ не пришёл ${DOC_WAIT_DAYS} рабочих дня`);
           if (!w.can_remind) throw new HttpError(409, 'too_often', 'Напомнить можно раз в сутки — заказчик уже получил напоминание');
           const users = await customersOf(tx, order);
           if (!users.length) throw new HttpError(409, 'no_customer', 'У заявки нет заказчика в кабинете — напомнить некому');

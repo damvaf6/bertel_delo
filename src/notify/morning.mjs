@@ -53,7 +53,7 @@ export function digestText(c) {
   if (c.task_due) parts.push(`срок по заданию на оценку сегодня, завтра или прошёл, а файла результата нет: ${c.task_due} ${pl(c.task_due, 'дело', 'дела', 'дел')}`);
   if (c.letter_due) parts.push(`срок по письму о переносе сегодня, завтра или прошёл, а файла результата нет: ${c.letter_due} ${pl(c.letter_due, 'дело', 'дела', 'дел')}`);
   if (c.task_moved) parts.push(`перенос срока согласован позже срока по заданию на оценку — приложите письмо о переносе: ${c.task_moved} ${pl(c.task_moved, 'дело', 'дела', 'дел')}`);
-  if (c.letter_wait) parts.push(`письмо о переносе попросили, а оно не пришло 3 дня и дольше — напомните заказчику: ${c.letter_wait} ${pl(c.letter_wait, 'дело', 'дела', 'дел')}`);
+  if (c.letter_wait) parts.push(`письмо о переносе попросили, а оно не пришло 3 рабочих дня и дольше — напомните заказчику: ${c.letter_wait} ${pl(c.letter_wait, 'дело', 'дела', 'дел')}`);
   if (c.no_result) parts.push(`нет файла результата: ${c.no_result}`);
   if (c.reply_wait) parts.push(`заказчик ждёт ответа: ${c.reply_wait}`);
   if (c.lead_unsigned) parts.push(`руководитель не подписал 2 дня и больше: ${c.lead_unsigned}`);
