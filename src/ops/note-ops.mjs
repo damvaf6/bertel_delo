@@ -11,7 +11,7 @@ import { HttpError } from '../http/core.mjs';
 import { orderSides } from '../access/policy.mjs';
 import { notify } from '../notify/notify.mjs';
 import { addDays, todayMsk } from '../orders/workflow.mjs';
-import { holidayName, isWorkday, workdayBefore } from '../orders/holidays.mjs';
+import { offDayName, workdayBefore } from '../orders/holidays.mjs';
 import { text } from './util.mjs';
 
 const OPEN = ['awaiting_executor', 'in_work', 'review', 'done']; // писать и получать напоминание можно, пока дело не закрыто
@@ -29,12 +29,12 @@ export function beforeDeadline(deadline, today = todayMsk()) {
 }
 
 // Нерабочие дни с сегодня на год вперёд: { '2026-10-24': 'суббота', '2026-11-04': 'День народного единства' }.
-const WEEKEND = { 0: 'воскресенье', 6: 'суббота' };
 export function offDays(today = todayMsk()) {
   const out = {};
   for (let i = 0; i <= MAX_AHEAD; i += 1) {
     const d = addDays(today, i);
-    if (!isWorkday(d)) out[d] = holidayName(d) ?? WEEKEND[new Date(`${d}T00:00:00Z`).getUTCDay()] ?? 'нерабочий день';
+    const off = offDayName(d);
+    if (off) out[d] = off;
   }
   return out;
 }

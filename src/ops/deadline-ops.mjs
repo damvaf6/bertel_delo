@@ -5,7 +5,7 @@
 import { HttpError } from '../http/core.mjs';
 import { orderSides } from '../access/policy.mjs';
 import { addDays, todayMsk } from '../orders/workflow.mjs';
-import { isWorkday, workdayFrom } from '../orders/holidays.mjs';
+import { isWorkday, offDayName, workdayFrom } from '../orders/holidays.mjs';
 import { BUSY_DEADLINES, isBusy, tripsByDay } from '../orders/schedule.mjs';
 import { yearStats } from '../matching/stats.mjs';
 import { customersOf, dispatchers, notify, orgHeads } from '../notify/notify.mjs';
@@ -202,6 +202,8 @@ export async function taskMovedOrg(sql, storage, registry, order) {
 // списке, копия задания с тем же сроком — тоже. Меньше двух записей — списка нет: хватает строки «Сейчас срок».
 // 2.349: последнее письмо о переносе со сроком раньше согласованного срока дела (`taskMoved` с `letter`, 2.335) — `short`:
 // согласованный срок и можно ли сейчас попросить письмо с новым сроком (дело в работе, новая просьба не ждёт ответа).
+// 2.388: срок записи (при заказе, по заданию, по письму, новый срок просьбы) в выходной или праздник — `off`: чем день
+// нерабочий («суббота», «День народного единства»).
 async function historyOf(sql, storage, registry, order, requests, first, moved) {
   const out = [{ kind: 'start', at: order.created_at, day: first }];
   if (storage && registry?.checks(order.module, order.service).some((r) => (r.auto ?? []).includes('report_dates'))) {
@@ -226,6 +228,11 @@ async function historyOf(sql, storage, registry, order, requests, first, moved) 
   const last = rest.findLast((x) => x.kind === 'letter');
   if (moved?.letter && last?.day === moved.day) {
     last.short = { deadline: moved.deadline, can_ask: order.status === 'in_work' && !(moved.asked && !moved.asked.came) };
+  }
+  for (const x of out) {
+    const day = x.kind === 'request' ? x.new_deadline : x.day;
+    const off = day ? offDayName(day) : null;
+    if (off) x.off = off;
   }
   return rest.length ? [out[0], ...rest] : null;
 }

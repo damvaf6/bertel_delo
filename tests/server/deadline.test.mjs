@@ -4,7 +4,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid , docsAskedAgo } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
-import { workdayFrom } from '../../src/orders/holidays.mjs';
+import { holidayName, isWorkday, workdayFrom } from '../../src/orders/holidays.mjs';
 import { remindDeadlines } from '../../src/notify/reminders.mjs';
 import { digestText, morningTo, sendMorning } from '../../src/notify/morning.mjs';
 import { expertMorningAlerts } from '../../src/ops/today-ops.mjs';
@@ -819,6 +819,27 @@ test('2.337: «История сроков» — срок при заказе, �
   assert.equal(await history(owner), null);
   assert.equal(await history(dispatcher), null);
   assert.equal((await list(stranger, o)).status, 404);
+});
+
+test('2.388: «История сроков» — срок в выходной или праздник помечен «нерабочий день» и чем день нерабочий', async () => {
+  // Срок дела — ближайшая суббота через 3 дня и дальше; просим перенос на праздник, затем на рабочий день.
+  let sat = 3;
+  while (new Date(`${addDays(today, sat)}T00:00:00Z`).getUTCDay() !== 6) sat += 1;
+  let hol = sat + 1;
+  while (!holidayName(addDays(today, hol)) || [0, 6].includes(new Date(`${addDays(today, hol)}T00:00:00Z`).getUTCDay())) hol += 1;
+  const o = await inWork('Квартира: срок в субботу', sat);
+  const r = await ask(spec, o, { new_deadline: addDays(today, hol), reason: 'Жду выписку' });
+  assert.equal((await decide(dispatcher, o, r.body.open.id, { approve: false, answer: 'Праздник' })).status, 200);
+  const work = workdayFrom(addDays(today, hol + 1));
+  const r2 = await ask(spec, o, { new_deadline: work, reason: 'Жду выписку' });
+  assert.equal((await decide(dispatcher, o, r2.body.open.id, { approve: true })).status, 200);
+  const h = (await list(spec, o)).body.history;
+  assert.deepEqual(h.map((x) => x.kind), ['start', 'request', 'request']);
+  assert.equal(h[0].day, addDays(today, sat));
+  assert.equal(h[0].off, 'суббота');
+  assert.equal(h[1].off, holidayName(addDays(today, hol)));
+  assert.ok(isWorkday(work));
+  assert.equal(h[2].off, undefined);
 });
 
 test('2.347: письмо о переносе попросили, а оно не пришло 3 дня — «Напомнить заказчику» в «Сроке» и у строки в «Сегодня»', async () => {
