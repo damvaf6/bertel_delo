@@ -5,6 +5,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, addMember } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
+import { workingAgo } from '../../src/orders/silence.mjs';
 import { digestText, sendMorning } from '../../src/notify/morning.mjs';
 
 let S, owner, dispatcher, spec, helper, idle;
@@ -164,7 +165,7 @@ test('2.164: «руководитель не подписал 2 дня и бол
     for (const role of orgToo ? ['expert', 'org'] : ['expert']) {
       await S.sql`insert into document_signatures (document_id, order_id, signer_id, provider, digest, storage_key, size_bytes, certificate, test, checked_ok, role, org_id, signed_at)
                   values (${d.id}, ${o.id}, ${lead.user.id}, 'fake', ${'a'.repeat(64)}, ${`sig-${role}-${d.id}`}, 10, '{}', true, true, ${role}, ${role === 'org' ? org.id : null},
-                          ${new Date(now.getTime() - hoursAgo * 3600_000)})`;
+                          ${workingAgo(hoursAgo * 3600_000, now)})`;
     }
     return o;
   };

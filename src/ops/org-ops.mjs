@@ -261,6 +261,8 @@ export function orgOps() {
           waits.set(o.id, {
             sign_wait: w?.files ?? 0,
             sign_since: w?.since ?? null,
+            // 2 рабочих дня и дольше (2.383) — заметно красным.
+            sign_long: !!w?.long,
             sign_reminded_at: w?.reminded_at ?? null,
             returned_open: open.length > 0,
             // Исправленный файл загружен и ждёт подписи эксперта (2.171) — для отбора «Исправленный файл ждёт подписи эксперта».

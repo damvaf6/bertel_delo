@@ -2906,14 +2906,14 @@ test('«Сегодня» (2.34, 2.63): эксперт — горит, верну
   await sp.locator('#sign-wait-box').scrollIntoViewIfNeeded();
   await shot(sp, '99-ochered-podpisi-napomnit');
   // 2.152: ждёт подписи 3 дня — в «Сегодня» отдельной строкой «Руководитель ещё не подписал» с «Напомнить руководителю».
-  await db((c) => c.query(`update document_signatures set signed_at = now() - interval '3 days'
-    where document_id in (select id from documents where order_id = $1)`, [fire.id]));
+  await db((c) => c.query(`update document_signatures set signed_at = $2
+    where document_id in (select id from documents where order_id = $1)`, [fire.id, workingAgo(3 * 86400_000)])); // 2.383: 2 рабочих дня — выходные и праздники не в счёт
   await db((c) => c.query('delete from sign_reminders where order_id = $1', [fire.id]));
   await sp.goto('/kabinet');
   await expect(sp.locator('#today-box li[data-today="sign-late"]')).toHaveText('Руководитель ещё не подписал · 1');
   await expect(sp.locator('#today-box li[data-today="sign-wait"]')).toHaveCount(0);
   const late = sp.locator('#today-box li[data-today-item="sign-late"]');
-  await expect(late).toContainText('ждёт 3 дн.');
+  await expect(late).toContainText(/ждёт \d+ дн\./);
   await expect(late).toContainText('руководителю ещё не напоминали');
   await shot(sp, 'b5-rukovoditel-ne-podpisal');
   await late.locator('[data-action="sign-late-remind"]').click();
@@ -6574,7 +6574,7 @@ test('дела экспертов (2.102): руководитель отбира
   const docId = (await up.json()).document.id;
   expect((await ep.request.post(`/api/documents/${docId}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
   // 2.148: эксперт подписал три дня назад — подпись организации ждёт долго.
-  await db((c) => c.query("update document_signatures set signed_at = now() - interval '3 days 2 hours' where document_id = $1", [docId]));
+  await db((c) => c.query("update document_signatures set signed_at = $2 where document_id = $1", [docId, workingAgo(74 * 3600_000)])); // 2.383: 2 рабочих дня — выходные и праздники не в счёт
 
   await hp.goto(`/kabinet#org=${orgId}`);
   // «Срок на этой неделе» (2.127) зависит от дня недели — проверяется отдельно.
@@ -6600,12 +6600,12 @@ test('дела экспертов (2.102): руководитель отбира
   // 2.148: сколько ждёт подписи — два дня и дольше заметно.
   const since = rows.first().locator('[data-role="sign-since"]');
   await expect(since).toContainText('Эксперт подписал');
-  await expect(since).toContainText('ждёт 3 дн.');
+  await expect(since).toContainText(/ждёт \d+ дн\./);
   await expect(since).toHaveClass(/overdue/);
   await since.scrollIntoViewIfNeeded();
   await shot(hp, 'c2a-rukovoditel-zhdet-podpisi-3-dnya');
   // То же — в блоке «Подпись организации».
-  await expect(hp.locator('#org-sign > li').filter({ hasText: 'Отчёт.pdf' }).locator('[data-sig="since"]')).toContainText('Ждёт Вашей подписи 3 дн.');
+  await expect(hp.locator('#org-sign > li').filter({ hasText: 'Отчёт.pdf' }).locator('[data-sig="since"]')).toContainText(/Ждёт Вашей подписи \d+ дн\./);
   await hp.locator('[data-filter="silent"]').click();
   await expect(rows).toHaveCount(1);
   await expect(rows.first()).toContainText('Предложено эксперту');
@@ -8601,7 +8601,7 @@ test('прогон 2.160: эксперт и руководитель по пач
   // A: эксперт подписал 3 дня назад, руководитель не подписал.
   const a1 = await upload(A, 'Отчёт A.pdf');
   await sign(a1);
-  await db((c) => c.query("update document_signatures set signed_at = now() - interval '3 days' where document_id = $1", [a1]));
+  await db((c) => c.query("update document_signatures set signed_at = $2 where document_id = $1", [a1, workingAgo(3 * 86400_000)])); // 2.383: 2 рабочих дня — выходные и праздники не в счёт
   // B: руководитель вернул по пунктам 3 дня назад; эксперт удалил файл и положил исправленный, один пункт отметил.
   const b1 = await upload(B, 'Отчёт B.pdf');
   await sign(b1);
@@ -8624,7 +8624,7 @@ test('прогон 2.160: эксперт и руководитель по пач
   await ep.goto('/kabinet');
   const et = ep.locator('#today-box');
   await expect(et.locator('li[data-today-item="extend-answer"]')).toContainText('Диспетчер согласился: срок перенесён на');
-  await expect(et.locator('li[data-today-item="sign-late"]')).toContainText('ждёт 3 дн.');
+  await expect(et.locator('li[data-today-item="sign-late"]')).toContainText(/ждёт \d+ дн\./);
   await expect(et.locator('li[data-today-item="sign-wait"]')).toHaveCount(0);
   const er = et.locator('li[data-today-item="returned"]');
   await expect(er).toContainText('Руководитель (Главный Пётр)');
@@ -8689,7 +8689,7 @@ test('«Ждут подписи организации» в «Сегодня» �
     expect(up.status()).toBe(201);
     const doc = (await up.json()).document.id;
     expect((await ep.request.post(`/api/documents/${doc}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
-    await db((c) => c.query('update document_signatures set signed_at = now() - make_interval(hours => $2) where document_id = $1', [doc, hours]));
+    await db((c) => c.query('update document_signatures set signed_at = $2 where document_id = $1', [doc, workingAgo(hours * 3600_000)])); // 2.383: 2 рабочих дня — выходные и праздники не в счёт
   };
   await signed(A, 'Отчёт свежий.pdf', 2);
   await signed(B, 'Отчёт давний.pdf', 73);
@@ -8701,7 +8701,7 @@ test('«Ждут подписи организации» в «Сегодня» �
   await expect(items.nth(0)).toHaveAttribute('data-today-item', `org-sign-long-${orgId}`);
   await expect(items.nth(0)).toContainText(ref(B));
   await expect(items.nth(0).locator('[data-role="sign-since"]')).toHaveClass(/overdue/);
-  await expect(items.nth(0).locator('[data-role="sign-since"]')).toContainText('— ждёт 3 дн. 1 ч');
+  await expect(items.nth(0).locator('[data-role="sign-since"]')).toContainText(/— ждёт \d+ дн\. 1 ч/);
   await expect(items.nth(1)).toHaveAttribute('data-today-item', `org-sign-${orgId}`);
   await expect(items.nth(1)).toContainText(ref(A));
   await expect(items.nth(1).locator('[data-role="sign-since"]')).toHaveClass(/muted/);
@@ -8799,8 +8799,8 @@ test('прогон 2.170: эксперт и руководитель по пач
   await sign(a1);
   const f1 = await upload(F, 'Отчёт свежий.pdf');
   await sign(f1);
-  await db((c) => c.query(`update document_signatures set signed_at = now() - case when document_id = $1 then interval '73 hours' else interval '2 hours' end
-    where document_id in ($1, $2)`, [a1, f1]));
+  await db((c) => c.query(`update document_signatures set signed_at = case when document_id = $1 then $3::timestamptz else now() - interval '2 hours' end
+    where document_id in ($1, $2)`, [a1, f1, workingAgo(73 * 3600_000)])); // 2.383: 2 рабочих дня — выходные и праздники не в счёт
   // B — руководитель вернул по пунктам 2 дня назад; эксперт удалил файл и загрузил исправленный, но ещё не подписал.
   const b1 = await upload(B, 'Отчёт B.pdf');
   await sign(b1);
@@ -17184,14 +17184,14 @@ test('2.374: ждут подписи организации 2 дня и доль
     expect(up.status()).toBe(201);
     expect((await ep.request.post(`/api/documents/${(await up.json()).document.id}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
   }
-  await db((c) => c.query("update document_signatures set signed_at = now() - interval '3 days 1 hour' where document_id in (select id from documents where order_id = $1)", [A]));
+  await db((c) => c.query("update document_signatures set signed_at = $2 where document_id in (select id from documents where order_id = $1)", [A, workingAgo(73 * 3600_000)])); // 2.383: 2 рабочих дня — выходные и праздники не в счёт
 
   await hp.goto('/kabinet');
   const hb = hp.locator('#today-box');
   await expect(hb.locator(`li[data-today="org-sign-long-${orgId}"]`)).toHaveText('Ждут подписи организации 2 дня и дольше · 1');
   const long = hb.locator(`li[data-today-item="org-sign-long-${orgId}"]`);
   await expect(long).toContainText(`№ ${ref(A)}`);
-  await expect(long.locator('[data-role="sign-since"]')).toContainText('ждёт 3 дн.');
+  await expect(long.locator('[data-role="sign-since"]')).toContainText(/ждёт \d+ дн\./);
   await expect(long.locator('[data-role="sign-since"]')).toHaveClass(/overdue/);
   await expect(hb.locator(`li[data-today="org-sign-${orgId}"]`)).toHaveText('Ждут подписи организации · 1');
   await expect(hb.locator(`li[data-today-item="org-sign-${orgId}"]`)).toContainText(`№ ${ref(F)}`);

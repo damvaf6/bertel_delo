@@ -27,7 +27,7 @@ import { orderRef } from '../notify/registry.mjs';
 import { orderSplit } from '../money/money.mjs';
 import { RESULT_DUE_DAYS, STATUS_NAME, addDays, hotDay, isOverdue, resultDue, todayMsk, workBefore } from '../orders/workflow.mjs';
 import { taskDues } from '../orders/schedule.mjs';
-import { orderSignatures, orgReturns, returnEgrn, signWait } from './sign-ops.mjs';
+import { orderSignatures, orgReturns, returnEgrn, signLong, signWait } from './sign-ops.mjs';
 import { executorSignOrg } from '../access/policy.mjs';
 import { dossierAlerts, loadDossier } from '../dossier/dossier.mjs';
 import { expiringLinks, incompleteInspections, reshotAll, silentLinks } from './inspect-ops.mjs';
@@ -48,7 +48,8 @@ const HOT_DAYS = 2;
 const LIMIT = 50;
 // Заказчик ждёт ответа в переписке дольше суток (2.132).
 const REPLY_HOURS = 24;
-// Файл ждёт подписи организации столько дней и дольше (2.152) — эксперту строкой «Руководитель ещё не подписал».
+// Файл ждёт подписи организации 2 рабочих дня и дольше (2.152, 2.383) — `long` у signWait в sign-ops.mjs.
+// Исправленный файл ждёт подписи эксперта 2 дня и дольше (2.172) — по календарю.
 const SIGN_LONG_DAYS = 2;
 // Возврат руководителя не исправлен 2 дня и дольше (2.153) — в утренней сводке руководителю.
 const RETURN_LONG_DAYS = 2;
@@ -147,7 +148,7 @@ async function expertPart(sql, actor, registry, today, storage) {
     for (const o of rows.filter((x) => x.status === 'in_work')) {
       const w = await signWait(sql, o);
       // Ждёт 2 дня и дольше (2.152) — отдельной строкой «Руководитель ещё не подписал» с «Напомнить руководителю».
-      if (w) signWaits.push(item(o, { org: signOrg.name, ...w, long: Date.now() - new Date(w.since).getTime() >= SIGN_LONG_DAYS * 86400_000 }));
+      if (w) signWaits.push(item(o, { org: signOrg.name, ...w }));
     }
     signWaits.sort((a, b) => new Date(a.since) - new Date(b.since));
   }
@@ -347,7 +348,7 @@ export async function expertMorningAlerts(sql, userId, today, now = new Date(), 
   if (await executorSignOrg(sql, userId)) {
     for (const o of rows.filter((x) => x.status === 'in_work')) {
       const w = await signWait(sql, o);
-      if (w && now.getTime() - new Date(w.since).getTime() >= SIGN_LONG_DAYS * 86400_000) leadUnsigned += 1;
+      if (w && signLong(w.since, now)) leadUnsigned += 1;
     }
   }
   // Срок по заданию на оценку сегодня, завтра или прошёл, а своего файла результата нет (2.315, строка «Срок по заданию на
@@ -683,7 +684,7 @@ export async function orgPart(sql, org, registry, today, { actorId = null, stora
       const hints = await aiSignHints(sql, registry, ord, docs.filter((d) => signs.get(d.id)?.expert && !signs.get(d.id)?.org).map((d) => d.id));
       const orderDiff = new Set([...hints.values()].flatMap((h) => (h?.order ?? []).map((x) => x.text))).size;
       toSign.push(view(o, { files: waiting, reminded_at: w?.reminded_at ?? null, since: w?.since ?? null,
-        long: !!w?.since && Date.now() - new Date(w.since).getTime() >= SIGN_LONG_DAYS * 86400_000, egrn_kept: kept, order_diff: orderDiff,
+        long: !!w?.long, egrn_kept: kept, order_diff: orderDiff,
         // Срок по заданию на оценку прошёл или сегодня (2.308) — красным.
         task_due: await taskDueSign(sql, storage, registry, ord, today),
         // Перенос согласован позже срока по заданию на оценку, а письма о переносе нет (2.334, как в «Делах экспертов» 2.332).

@@ -6,6 +6,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, addMember , docsAskedAgo } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
+import { workingAgo } from '../../src/orders/silence.mjs';
 import { digestText, morningTo, orgDigestText, orgDigestTo, sendOrgMorning } from '../../src/notify/morning.mjs';
 
 let S, owner, dispatcher, spec, head, head2, idleHead, org, idleOrg;
@@ -1201,7 +1202,7 @@ test('2.374: ждут подписи организации 2 дня и доль
   };
   const old = await make('Давний');
   const fresh = await make('Свежий');
-  await S.sql`update document_signatures set signed_at = now() - interval '3 days' where document_id = ${old.d.id}`;
+  await S.sql`update document_signatures set signed_at = ${workingAgo(3 * 86400_000)} where document_id = ${old.d.id}`;
   const ref = (o) => `№ ${o.id.slice(0, 8).toUpperCase()}`;
 
   const part = (await h.req('GET', '/api/today')).body.orgs.find((g) => g.id === o5.id);

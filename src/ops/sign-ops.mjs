@@ -20,6 +20,7 @@ import { audit, text } from './util.mjs';
 import { latest, taskDueSign } from './draft-ops.mjs';
 import { taskMovedOrg } from './deadline-ops.mjs';
 import { todayMsk } from '../orders/workflow.mjs';
+import { workingMs } from '../orders/silence.mjs';
 
 export const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 const MAX_SIGNATURE_BYTES = 256 * 1024;
@@ -253,6 +254,10 @@ export function returnPoints(comment) {
 // ждут (самая ранняя подпись эксперта среди них) и когда эксперт последний раз напоминал руководителю. Напоминать — не чаще
 // раза в сутки по делу. null — ждать нечего.
 export const REMIND_EVERY_HOURS = 24;
+// Файл ждёт подписи организации столько дней и дольше (2.152, 2.374) — «Руководитель ещё не подписал», «Ждут подписи
+// организации 2 дня и дольше». 2.383: дни рабочие, по Москве — выходные и нерабочие праздники не в счёт (src/orders/silence.mjs).
+export const SIGN_LONG_DAYS = 2;
+export const signLong = (since, now = new Date()) => !!since && workingMs(since, now) >= SIGN_LONG_DAYS * 86400_000;
 export async function signWait(sql, order) {
   const r = await sql.one`
     select count(*)::int as files, min(s.signed_at) as since
@@ -267,6 +272,7 @@ export async function signWait(sql, order) {
   return {
     files: r.files,
     since: r.since,
+    long: signLong(r.since),
     reminded_at: last?.at ?? null,
     reminders: last?.n ?? 0,
     can_remind: !next || next <= new Date(),
@@ -344,6 +350,8 @@ export function signOps() {
             reminded_at: wait?.reminded_at ?? null,
             // С какого времени файлы ждут подписи организации (2.148) — самая ранняя подпись эксперта среди них.
             waiting_since: wait?.since ?? null,
+            // 2 рабочих дня и дольше (2.383) — для отбора «Ждут Вашей подписи 2 дня и дольше».
+            waiting_long: !!wait?.long,
             // 2.308: срок по заданию на оценку прошёл или сегодня — пока файлы ждут подписи организации (2.352: по письму о
             // переносе — и завтра).
             task_due: docs.some((d) => signs.get(d.id)?.expert && !signs.get(d.id)?.org) ? await taskDueSign(sql, providers.storage, registry, o, todayMsk(), { soon: true }) : null,

@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, addMember , docsAskedAgo } from '../helpers.mjs';
 import { addDays, todayMsk, workBefore } from '../../src/orders/workflow.mjs';
 import { customerSilent, workingAgo } from '../../src/orders/silence.mjs';
+import { signLong } from '../../src/ops/sign-ops.mjs';
 
 let S, owner, dispatcher, spec, head, other, org;
 const FIELDS = { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 77', area: '41' };
@@ -213,10 +214,10 @@ test('очередь подписи у эксперта (2.99): подписал
   assert.equal(w.can_remind, true);
   assert.ok(w.since);
   assert.equal(w.long, false, 'только что подписал — не «Руководитель ещё не подписал»');
-  // 2.152: ждёт 2 дня и дольше — отметка long (строка «Руководитель ещё не подписал»); чуть меньше — ещё нет.
-  await S.sql`update document_signatures set signed_at = now() - interval '47 hours' where document_id = ${d.id}`;
+  // 2.152: ждёт 2 дня и дольше (2.383 — рабочих) — отметка long (строка «Руководитель ещё не подписал»); чуть меньше — ещё нет.
+  await S.sql`update document_signatures set signed_at = ${workingAgo(47 * 3600_000)} where document_id = ${d.id}`;
   assert.equal((await wait()).long, false);
-  await S.sql`update document_signatures set signed_at = now() - interval '49 hours' where document_id = ${d.id}`;
+  await S.sql`update document_signatures set signed_at = ${workingAgo(49 * 3600_000)} where document_id = ${d.id}`;
   assert.equal((await wait()).long, true);
   assert.equal((await spec.req('GET', `/api/orders/${o.id}/documents`)).body.sign_wait.files, 1);
   // Напомнил — руководителю уведомление; второй раз в тот же день нельзя.
@@ -411,7 +412,7 @@ test('«Ждут подписи организации» у руководите
     assert.equal((await step(spec, o, 'in_work')).status, 200);
     const d = (await result(o, `${title}.pdf`)).body.document;
     assert.equal((await spec.req('POST', `/api/documents/${d.id}/sign`, { confirm: true })).status, 201);
-    await S.sql`update document_signatures set signed_at = now() - make_interval(hours => ${hours}) where document_id = ${d.id}`;
+    await S.sql`update document_signatures set signed_at = ${workingAgo(hours * 3600_000)} where document_id = ${d.id}`;
     return { o, d, ref: `№ ${o.id.slice(0, 8).toUpperCase()}` };
   };
   const fresh = await signed('Свежая подпись', 1);
@@ -635,6 +636,21 @@ test('заказчик не отвечает (прогон 2.380): выходн�
   await at('2026-10-20T10:00:00+03:00');
   assert.equal(await quiet('2026-10-22T09:00:00+03:00'), false);
   assert.equal(await quiet('2026-10-22T10:00:00+03:00'), true);
+});
+
+test('ждут подписи организации 2 дня и дольше (2.383): дни рабочие — выходные и праздник 4 ноября не в счёт', () => {
+  const long = (since, now) => signLong(new Date(since), new Date(now));
+  // Пятница 10:00 — «Руководитель ещё не подписал» со вторника 10:00, а не с воскресенья.
+  assert.equal(long('2026-10-23T10:00:00+03:00', '2026-10-25T10:00:00+03:00'), false, 'по календарю 2 дня, рабочих — 14 часов');
+  assert.equal(long('2026-10-23T10:00:00+03:00', '2026-10-27T09:59:00+03:00'), false);
+  assert.equal(long('2026-10-23T10:00:00+03:00', '2026-10-27T10:00:00+03:00'), true);
+  // Вторник 3 ноября, полдень: 4 ноября — праздник.
+  assert.equal(long('2026-11-03T12:00:00+03:00', '2026-11-05T13:00:00+03:00'), false, 'по календарю 49 часов, рабочих — 25');
+  assert.equal(long('2026-11-03T12:00:00+03:00', '2026-11-06T12:00:00+03:00'), true);
+  // Будни подряд — как раньше, 48 часов.
+  assert.equal(long('2026-10-20T10:00:00+03:00', '2026-10-22T09:59:00+03:00'), false);
+  assert.equal(long('2026-10-20T10:00:00+03:00', '2026-10-22T10:00:00+03:00'), true);
+  assert.equal(signLong(null), false);
 });
 
 // 2.382: срок дела в выходной или праздник — «срок близко» по последнему рабочему дню перед ним: заказчик и банк в
