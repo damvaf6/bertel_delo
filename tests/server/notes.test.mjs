@@ -4,11 +4,14 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, addMember } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
-import { beforeDeadline, moveDeadlineNotes, remindNotes } from '../../src/ops/note-ops.mjs';
+import { beforeDeadline, moveDeadlineNotes, offDays, remindNotes } from '../../src/ops/note-ops.mjs';
+import { workdayBefore } from '../../src/orders/holidays.mjs';
 
 let S, owner, dispatcher, spec, colleague, head, org;
 const FIELDS = { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, Заметочная ул., 3', area: '40' };
 const today = todayMsk();
+// «За день до срока» (2.386) — последний рабочий день перед сроком, не раньше сегодня: тесты не зависят от дня недели прогона.
+const wb = (d) => { const x = workdayBefore(d); return x < today ? today : x; };
 
 before(async () => {
   S = await startApp();
@@ -155,20 +158,20 @@ test('напоминание «за день до срока»: от срока 
   const base = `/api/orders/${o.id}/notes`;
   const deadline = addDays(today, 9);
   let v = (await spec.req('GET', base)).body;
-  assert.deepEqual([v.deadline, v.before_deadline], [deadline, addDays(today, 8)]);
+  assert.deepEqual([v.deadline, v.before_deadline], [deadline, wb(deadline)]);
   let r = await spec.req('POST', base, { body: 'Проверить подпись руководителя', remind_on: 'deadline' });
   assert.equal(r.status, 201, JSON.stringify(r.body));
   const a = r.body.notes[0];
-  assert.deepEqual([a.remind_on, a.remind_deadline], [addDays(today, 8), true]);
+  assert.deepEqual([a.remind_on, a.remind_deadline], [wb(deadline), true]);
   const b = (await spec.req('POST', base, { body: 'Своя дата', remind_on: addDays(today, 2) })).body.notes.find((n) => n.body === 'Своя дата');
   assert.equal(b.remind_deadline, false);
   // Уже записанная заметка — «за день до срока» одной кнопкой; потом своя дата — привязка снята.
   const c0 = (await spec.req('POST', base, { body: 'Без даты' })).body.notes.find((n) => n.body === 'Без даты');
   r = await spec.req('PATCH', `${base}/${c0.id}`, { remind_on: 'deadline' });
   let c = r.body.notes.find((n) => n.id === c0.id);
-  assert.deepEqual([c.remind_on, c.remind_deadline], [addDays(today, 8), true]);
+  assert.deepEqual([c.remind_on, c.remind_deadline], [wb(deadline), true]);
   // Правка текста с той же датой привязку не снимает.
-  r = await spec.req('PATCH', `${base}/${c0.id}`, { body: 'Без даты — уже с датой', remind_on: addDays(today, 8) });
+  r = await spec.req('PATCH', `${base}/${c0.id}`, { body: 'Без даты — уже с датой', remind_on: wb(deadline) });
   assert.equal(r.body.notes.find((n) => n.id === c0.id).remind_deadline, true);
   r = await spec.req('PATCH', `${base}/${c0.id}`, { remind_on: addDays(today, 5) });
   c = r.body.notes.find((n) => n.id === c0.id);
@@ -185,11 +188,11 @@ test('напоминание «за день до срока»: от срока 
   assert.equal(dec.status, 200, JSON.stringify(dec.body));
   v = (await spec.req('GET', base)).body;
   const by = Object.fromEntries(v.notes.map((n) => [n.body, [n.remind_on, n.remind_deadline, !!n.reminded_at]]));
-  assert.deepEqual(by['Проверить подпись руководителя'], [addDays(today, 13), true, false]);
+  assert.deepEqual(by['Проверить подпись руководителя'], [wb(addDays(deadline, 5)), true, false]);
   assert.deepEqual(by['Своя дата'], [addDays(today, 2), false, true]);
   assert.deepEqual(by['Без даты — уже с датой'], [addDays(today, 5), false, true]);
-  assert.deepEqual(by['Сделанная'], [addDays(today, 8), true, false]);
-  assert.equal(v.before_deadline, addDays(today, 13));
+  assert.deepEqual(by['Сделанная'], [wb(deadline), true, false]);
+  assert.equal(v.before_deadline, wb(addDays(deadline, 5)));
   assert.equal(await remindNotes(S.sql, { today: addDays(today, 13) }), 1);
 
   // Срок завтра или уже прошёл — напомнить сегодня; без срока — ошибка с подсказкой.
@@ -211,8 +214,42 @@ test('«Мои сроки»: напоминание «за день до сро�
   const notesOf = async () => (await spec.req('GET', '/api/specialist/me/schedule')).body.schedule.days
     .flatMap((d) => d.items.filter((i) => i.kind === 'note' && i.order_id === o.id)
       .map((i) => [d.date, i.note, i.by_deadline ?? false, i.deadline ?? null]));
-  assert.deepEqual(await notesOf(), [[addDays(today, 2), 'Позвонить', false, null], [addDays(today, 8), 'Проверить отчёт', true, deadline]]);
+  assert.deepEqual(await notesOf(), [[addDays(today, 2), 'Позвонить', false, null], [wb(deadline), 'Проверить отчёт', true, deadline]]);
   await S.sql`update orders set deadline = ${addDays(today, 12)}::date where id = ${o.id}`;
   await moveDeadlineNotes(S.sql, o.id, addDays(today, 12), today);
-  assert.deepEqual((await notesOf())[1], [addDays(today, 11), 'Проверить отчёт', true, addDays(today, 12)]);
+  assert.deepEqual((await notesOf())[1], [wb(addDays(today, 12)), 'Проверить отчёт', true, addDays(today, 12)]);
+});
+
+// 2.386: «за день до срока» — последний рабочий день перед сроком: срок в понедельник — пятница, после праздника — до него,
+// после новогодних — 30 декабря; переносе срока на понедельник — заметка переезжает на пятницу. Нерабочие дни — для подсказки.
+test('«за день до срока» — последний рабочий день перед сроком; нерабочие дни для подсказки', async () => {
+  assert.equal(beforeDeadline('2026-10-26', '2026-10-20'), '2026-10-23'); // понедельник → пятница
+  assert.equal(beforeDeadline('2026-10-28', '2026-10-20'), '2026-10-27'); // среда → вторник
+  assert.equal(beforeDeadline('2026-11-05', '2026-10-20'), '2026-11-03'); // после 4 ноября → 3 ноября
+  assert.equal(beforeDeadline('2027-01-11', '2026-12-01'), '2026-12-30'); // после новогодних (31.12 — перенесённый выходной)
+  assert.equal(beforeDeadline('2026-10-26', '2026-10-24'), '2026-10-24'); // пятница уже прошла — сегодня
+  const off = offDays('2026-10-23');
+  assert.equal(off['2026-10-24'], 'суббота');
+  assert.equal(off['2026-10-25'], 'воскресенье');
+  assert.equal(off['2026-11-04'], 'День народного единства');
+  assert.equal(off['2026-10-26'], undefined);
+  assert.equal(off['2026-12-31'], 'перенос выходного с 4 января');
+
+  const o = await inWork('Заметка: срок в понедельник');
+  const base = `/api/orders/${o.id}/notes`;
+  await spec.req('POST', base, { body: 'Сверить отчёт', remind_on: 'deadline' });
+  let monday = addDays(today, 14);
+  while (new Date(`${monday}T00:00:00Z`).getUTCDay() !== 1 || !offDays(today)[addDays(monday, -1)]) monday = addDays(monday, 1);
+  await S.sql`update orders set deadline = ${monday}::date where id = ${o.id}`;
+  assert.equal(await moveDeadlineNotes(S.sql, o.id, monday, today), 1);
+  const v = (await spec.req('GET', base)).body;
+  assert.equal(v.before_deadline, workdayBefore(monday));
+  assert.ok(v.before_deadline <= addDays(monday, -3), 'не в выходной перед понедельником');
+  assert.equal(v.notes.find((n) => n.body === 'Сверить отчёт').remind_on, v.before_deadline);
+  assert.ok(Object.keys(v.off_days).length > 100 && Object.keys(v.off_days).every((d) => d >= today));
+  // Своя дата в выходной сохраняется как есть — подсказку показывает страница.
+  const sat = Object.keys(v.off_days).find((d) => d > today && v.off_days[d] === 'суббота');
+  const r = await spec.req('POST', base, { body: 'В субботу', remind_on: sat });
+  assert.equal(r.status, 201);
+  assert.equal(r.body.notes.find((n) => n.body === 'В субботу').remind_on, sat);
 });

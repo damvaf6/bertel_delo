@@ -7936,11 +7936,27 @@ test('заметки эксперта к делу (2.115): заметка с н�
   await expect(plain).toContainText('— за день до срока');
   await nb.scrollIntoViewIfNeeded();
   await shot(ep, 'h12a-ekspert-zametka-za-den-do-sroka');
+  // 2.386: «за день до срока» — последний рабочий день перед сроком (срок в понедельник — пятница), как считает сервер.
+  const nv = await (await ep.request.get(`/api/orders/${id}/notes`)).json();
+  expect(nv.off_days[nv.before_deadline]).toBeUndefined();
   const linked = await db(async (c) => (await c.query(`select count(*)::int as n from order_notes where order_id = $1
-    and remind_deadline and remind_on = (select deadline - 1 from orders where id = $1)`, [id])).rows[0].n);
+    and remind_deadline and remind_on = $2::date`, [id, nv.before_deadline])).rows[0].n);
   expect(linked).toBe(2);
   // 2.157: в «Моих сроках» напоминание «за день до срока» — с отметкой и сроком дела; «Сделано» прямо в строке убирает его.
-  const dl = await db(async (c) => (await c.query(`select to_char(deadline - 1, 'YYYY-MM-DD') as d from orders where id = $1`, [id])).rows[0].d);
+  const dl = nv.before_deadline;
+  // 2.386: своя дата в выходной — подсказка «нерабочий день» и одной кнопкой — последний рабочий день перед ним.
+  const dayBefore = (d) => new Date(Date.parse(`${d}T00:00:00Z`) - 86400_000).toISOString().slice(0, 10);
+  const sat = Object.keys(nv.off_days).find((d) => dayBefore(d) > nv.today && nv.off_days[d] === 'суббота' && !nv.off_days[dayBefore(d)]);
+  await ep.fill('#notes-remind', sat);
+  await expect(ep.locator('#notes-off-hint')).toContainText('суббота, нерабочий день: лучше напомнить');
+  await expect(ep.locator('#notes-off-fix')).toBeVisible();
+  await ep.locator('#notes-off-hint').scrollIntoViewIfNeeded();
+  await shot(ep, 'h12c-ekspert-zametka-vyhodnoj');
+  await ep.click('#notes-off-fix');
+  const fri = await ep.inputValue('#notes-remind');
+  expect(fri < sat && !nv.off_days[fri]).toBe(true);
+  await expect(ep.locator('#notes-off-hint')).toBeHidden();
+  await ep.fill('#notes-remind', '');
   await ep.goto('/kabinet#specialist&to=schedule');
   const dayNotes = ep.locator(`#schedule-days li[data-day="${dl}"] li[data-schedule-item="note"]`);
   await expect(dayNotes).toHaveCount(2);
@@ -8639,7 +8655,8 @@ test('прогон 2.160: эксперт и руководитель по пач
   await expect(box.locator('[data-role="sig-points-state"]')).toContainText('к файлу «Отчёт B.pdf»: исправлено 1 из 2');
   // «Мои сроки»: напоминание «за день до срока» переехало вместе с перенесённым сроком; просроченное — отдельно.
   await ep.goto('/kabinet#specialist&to=schedule');
-  const moved = await db(async (c) => (await c.query(`select to_char(deadline - 1, 'YYYY-MM-DD') as d, to_char(deadline, 'YYYY-MM-DD') as dl from orders where id = $1`, [D])).rows[0]);
+  const moved = await db(async (c) => (await c.query(`select to_char(n.remind_on, 'YYYY-MM-DD') as d, to_char(o.deadline, 'YYYY-MM-DD') as dl
+    from orders o join order_notes n on n.order_id = o.id and n.body = 'Сверить площадь' where o.id = $1`, [D])).rows[0]);
   expect(moved.dl).toBe(want);
   await expect(ep.locator(`#schedule-days li[data-day="${moved.d}"] li[data-schedule-item="note"]`)).toContainText('Сверить площадь · за день до срока (срок ');
   await expect(ep.locator('#schedule-overdue')).toContainText('Прогон: просрочено');
@@ -15733,6 +15750,8 @@ test('2.332: дела экспертов — перенос позже срок�
 
   // 2.338: письма нет 2 дня и дольше — строкой в утренней сводке (запись дня напрямую, как в 2.257), нажатие ведёт к отбору.
   await db(async (c) => {
+    // Сервер мог уже прислать сводку дня сам (раз в минуту) — запись дня заменяем, иначе повтор ключа.
+    await c.query("delete from org_morning_digests where user_id = $1 and org_id = $2 and day = (now() at time zone 'Europe/Moscow')::date", [head.id, orgId]);
     const { rows: [n] } = await c.query("insert into notifications (user_id, type, event, org_id) values ($1, 'org_morning', 'org_morning_today', $2) returning id", [head.id, orgId]);
     await c.query(`insert into org_morning_digests (user_id, org_id, day, task_moved, notification_id)
       values ($1, $2, (now() at time zone 'Europe/Moscow')::date, 1, $3)`, [head.id, orgId, n.id]);
