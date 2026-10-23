@@ -42,13 +42,14 @@ import { permitCardOps } from './ops/permit-card-ops.mjs';
 import { stepOps } from './ops/step-ops.mjs';
 import { priceOps } from './ops/price-ops.mjs';
 import { uploadOps } from './ops/upload-ops.mjs';
+import { lawyerCheckOps } from './ops/lawyer-check-ops.mjs';
 import { createRegistry, DEFAULT_MODULES } from './modules/index.mjs';
 import { resetModuleSettings } from './modules/extras.mjs';
 
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
 export function listOps(cfg, providers) {
-  const ops = [...coreOps(cfg), ...orderOps(), ...orgOps(), ...adminOps(), ...matchOps(), ...workOps(), ...moneyOps(), ...notifyOps(), ...aiOps(), ...draftOps(), ...inspectOps(), ...onsiteOps(), ...signOps(), ...dossierOps(), ...snippetOps(), ...remarkOps(), ...analogOps(), ...templateOps(), ...mailOps(), ...todayOps(), ...problemOps(), ...caseOps(), ...uploadOps(), ...docRequestOps(), ...deadlineOps(), ...handoverOps(), ...noteOps(), ...repeatOps(), ...similarOps(), ...notaryOps(), ...certificateOps(), ...permitCardOps(), ...stepOps(), ...priceOps(), ...bridgeOps(cfg)];
+  const ops = [...coreOps(cfg), ...orderOps(), ...orgOps(), ...adminOps(), ...matchOps(), ...workOps(), ...moneyOps(), ...notifyOps(), ...aiOps(), ...draftOps(), ...inspectOps(), ...onsiteOps(), ...signOps(), ...dossierOps(), ...snippetOps(), ...remarkOps(), ...analogOps(), ...templateOps(), ...mailOps(), ...todayOps(), ...problemOps(), ...caseOps(), ...uploadOps(), ...docRequestOps(), ...deadlineOps(), ...handoverOps(), ...noteOps(), ...repeatOps(), ...similarOps(), ...notaryOps(), ...certificateOps(), ...permitCardOps(), ...stepOps(), ...priceOps(), ...lawyerCheckOps(), ...bridgeOps(cfg)];
   if (providers.storage.kind === 'memory') ops.push(...memoryFileOps());
   if (cfg.appEnv === 'test' && cfg.testControlToken) ops.push(...testControlOps(cfg));
   ops.push(...stageLoginOps(cfg));

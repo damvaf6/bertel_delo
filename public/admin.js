@@ -7,6 +7,7 @@ import { loadTranslationPrices } from '/tprices.js';
 import { loadOrderAck } from '/orderack.js';
 import { loadPayCheck } from '/paycheck.js';
 import { loadAdminCard } from '/permitcard.js';
+import '/lawyercheck.js';
 
 const $ = (id) => document.getElementById(id);
 let found = null;
