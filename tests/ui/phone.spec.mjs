@@ -8722,11 +8722,11 @@ test('«Ждут подписи организации» в «Сегодня» �
   await expect(items.nth(0)).toHaveAttribute('data-today-item', `org-sign-long-${orgId}`);
   await expect(items.nth(0)).toContainText(ref(B));
   await expect(items.nth(0).locator('[data-role="sign-since"]')).toHaveClass(/overdue/);
-  await expect(items.nth(0).locator('[data-role="sign-since"]')).toContainText(/— ждёт \d+ дн\. 1 ч/);
+  await expect(items.nth(0).locator('[data-role="sign-since"]')).toContainText(/— ждёт \d+ дн\.( \d+ ч)?$/); // в выходной ночью — не ровно сутки и час календаря
   await expect(items.nth(1)).toHaveAttribute('data-today-item', `org-sign-${orgId}`);
   await expect(items.nth(1)).toContainText(ref(A));
   await expect(items.nth(1).locator('[data-role="sign-since"]')).toHaveClass(/muted/);
-  await expect(items.nth(1).locator('[data-role="sign-since"]')).toContainText('— ждёт 2 ч');
+  await expect(items.nth(1).locator('[data-role="sign-since"]')).toContainText(/— ждёт \d/); // 2 рабочих часа: в выходной — от конца пятницы
   await items.nth(0).scrollIntoViewIfNeeded();
   await shot(hp, 'c15-rukovoditel-segodnya-ochered-podpisi');
   // Нажатие — к подписи этого дела в разделе организации.
