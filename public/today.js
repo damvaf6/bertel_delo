@@ -24,6 +24,7 @@ import { api, el } from '/common.js';
 
 const $ = (id) => document.getElementById(id);
 const dayRu = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+const WD = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
 const since = (iso) => new Date(iso).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
 // «Соберите Word заново» (2.272, 2.280): что заменено в черновике — по выписке ЕГРН, по заявке и заданию на оценку или и то и другое.
 function rebuildWhat(x) {
@@ -48,7 +49,9 @@ function deadline(x, today) {
   // Уже попросили перенести срок (2.100) — на какую дату, пока диспетчер не ответил.
   const ext = x.extend ? ` · ${x.who ?? 'просят'} перенести на ${dayRu(x.extend.new_deadline)}, ждёт ответа диспетчера` : '';
   if (x.overdue || n < 0) return `просрочено — срок был ${dayRu(x.deadline)}${ext}`;
-  return `${n === 0 ? 'срок сегодня' : n === 1 ? 'срок завтра' : `срок ${dayRu(x.deadline)} · осталось ${n} дн.`}${ext}`;
+  // Срок в выходной или праздник (2.382) — сдавать в последний рабочий день перед ним.
+  const wb = x.work_before ? ` · нерабочий день — сдайте лучше до него, последний рабочий день — ${WD[new Date(`${x.work_before}T00:00:00Z`).getUTCDay()]}, ${dayRu(x.work_before)}` : '';
+  return `${n === 0 ? 'срок сегодня' : n === 1 ? 'срок завтра' : `срок ${dayRu(x.deadline)} · осталось ${n} дн.`}${wb}${ext}`;
 }
 
 // Срок по заданию на оценку (2.304): сегодня, завтра, через N дн. или уже прошёл.
