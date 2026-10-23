@@ -154,7 +154,9 @@ test('без движения (2.141): число дел без движения
   assert.equal((await owner.req('POST', `/api/orders/${still.id}/messages`, { body: 'Как продвигается?' })).status, 201);
 
   // Через три дня утром: «Неподвижное» без движения 8 дней, «Свежее» — 3 дня (тоже без движения); сроки не горят.
-  await S.sql`update order_status_history set at = at - interval '3 days' where order_id in
+  // Движение считается от настоящего «сейчас» в рабочих днях (2.385) — сдвиг рабочим временем, иначе в выходной «Свежее» не
+  // набирает 3 рабочих дня.
+  await S.sql`update order_status_history set at = least(at - interval '3 days', ${workingAgo(3 * 86_400_000 + 3_600_000)}) where order_id in
               (select id from orders where executor_user_id = ${e.user.id})`;
   assert.ok(await sendOrgMorning(S.sql, S.app.locals.registry, { dayOff: false, now: at(day3, '08:30') }) >= 1);
   const [r] = await S.sql`select sign, handover, due, overdue, idle from org_morning_digests where user_id = ${h.user.id} and org_id = ${o2.id}`;
