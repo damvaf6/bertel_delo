@@ -8261,7 +8261,7 @@ test('«Напомнить эксперту» (2.125): руководитель 
     await c.query("insert into morning_digests (user_id, day) values ($1, (now() at time zone 'Europe/Moscow')::date)", [expert.id]);
     await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
     const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
-      values ('expertise', 'realty', 'Напоминание: квартира', $1, $2, 'in_work', current_date + 2, 1500000, now(),
+      values ('expertise', 'realty', 'Напоминание: квартира', $1, $2, 'in_work', (now() at time zone 'Europe/Moscow')::date + 2, 1500000, now(),
               '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Напоминальная ул., 5","area":"40"}') returning id`,
       [customer.id, expert.id]);
     await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [o.id, expert.id]);
