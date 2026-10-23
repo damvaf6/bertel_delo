@@ -282,7 +282,7 @@ export default {
     },
     {
       id: 'realty_identity', title: 'Недвижимость и земля: адрес, кадастровый номер, площадь одинаковы везде и совпадают с выпиской ЕГРН',
-      services: ['realty', 'land'], auto: ['cadastral_match', 'area_match', 'floor_match', 'building_match', 'use_match', 'room_kind_match', 'cad_value_match', 'share_match', 'egrn_doc_match', 'land_match'],
+      services: ['realty', 'land'], auto: ['cadastral_match', 'area_match', 'area_same', 'floor_match', 'building_match', 'use_match', 'room_kind_match', 'cad_value_match', 'share_match', 'egrn_doc_match', 'land_match'],
       ask: 'адрес, кадастровый номер и площадь одинаковы на титуле, в задании, описании, расчёте и выводах и совпадают с выпиской ЕГРН; этаж и этажность, год постройки и материал стен дома — одни и те же и как в выписке ЕГРН на здание; назначение (жилое или нежилое) — как в выписке ЕГРН на объект; кадастровая стоимость — как в выписке ЕГРН на объект; для доли — размер доли везде один; номер и дата выписки ЕГРН в перечне документов — как у выписки в деле; для участка — категория земель и вид разрешённого использования как в выписке',
     },
     {

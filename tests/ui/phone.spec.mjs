@@ -17244,3 +17244,44 @@ test('2.375: заказчик не отвечает 2 дня — строка в
   await expect(ep.locator('#today-box li[data-today="customer-silent"]')).toHaveCount(0);
   await ep.context().close(); await cp.context().close();
 });
+
+test('2.378: ИИ-проверка — в расчёте площадь не та, что в описании объекта; «Исправить в черновике»', async ({ page, browser, baseURL }) => {
+  test.setTimeout(120_000);
+  await signIn(page, '+79990003781');
+  const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира: площадь в расчёте' }, headers: H })).json();
+  const id = created.order.id;
+  expect((await page.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(9), fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 78' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  const sctx = await phoneContext(browser, baseURL);
+  const sp = await sctx.newPage();
+  const spec = await signIn(sp, '+79990003782');
+  await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [spec.id]);
+    await c.query('update orders set price_kop = 1500000, paid_at = now(), status = $2, executor_user_id = $3 where id = $1', [id, 'in_work', spec.id]);
+    await c.query("insert into payments (order_id, amount_kop, status, provider_id, created_by, paid_at) values ($1, 1500000, 'succeeded', $2, $3, now())", [id, `pay_ui_${id}`, spec.id]);
+  });
+  expect((await sp.request.post(`/api/orders/${id}/results`, {
+    data: makePdf([['Отчёт № 78/2026 об оценке квартиры', 'Объект оценки: квартира общей площадью 45,1 кв. м'], ['Расчёт: 150 000 руб./кв. м × 47,3 кв. м = 7 095 000 руб.']]),
+    headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('отчёт.pdf') },
+  })).status()).toBe(201);
+
+  await sp.goto(`/kabinet#order=${id}`);
+  await sp.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const draftText = sp.getByLabel('Текст заключения');
+  await draftText.fill(`${await draftText.inputValue()}\nРасчёт: 150 000 руб./кв. м × 47,3 кв. м = 7 095 000 руб.`);
+  await sp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  const find = sp.locator('#review-checks > li[data-check="realty_identity"] .ai-found li').filter({ hasText: 'В расчёте площадь' });
+  await expect(find).toContainText('В расчёте площадь 47,3 кв. м, а в описании объекта — 45,1 кв. м (стр. 1) — площадь объекта должна быть одной во всём отчёте');
+  await find.getByRole('button', { name: 'Исправить в черновике' }).click();
+  await expect(draftText).toBeFocused();
+  expect(await draftText.evaluate((t) => t.value.slice(t.selectionStart, t.selectionEnd))).toBe('47,3');
+  await shot(sp, 'i13-specialist-ploshchad-raschet-chernovik');
+  await find.scrollIntoViewIfNeeded();
+  await shot(sp, 'i14-specialist-ploshchad-raschet-nahodka');
+  await sctx.close();
+});
