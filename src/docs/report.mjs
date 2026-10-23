@@ -209,12 +209,15 @@ async function analogsPart({ sql, providers, registry }, order, text) {
 // JPEG/PNG вставляются картинкой, пока хватает места; остальные — подписью и строкой «хранится в деле».
 const PHOTOS_MAX = 60;
 const PHOTOS_BYTES = 25 * 1024 * 1024;
+// С 2.379 под каждым снимком — и кто снимал (владелец по ссылке или помощник на выезде); снимок шага, которого уже нет в
+// описании осмотра, — «вне шагов осмотра», а не имя файла.
 export const photoCaption = (r, steps) => [
-  `Фото ${r.no}. ${steps.find((x) => x.id === r.step)?.title ?? r.filename}`,
+  `Фото ${r.no}. ${steps.find((x) => x.id === r.step)?.title ?? 'Снимок вне шагов осмотра'}`,
   [
     r.shot_at ? `Снято: ${timeMsk(r.shot_at)} (МСК, по часам телефона)` : 'Время съёмки телефон не передал',
     r.lat != null ? `Место съёмки: ${Number(r.lat).toFixed(5)}, ${Number(r.lon).toFixed(5)}${r.accuracy_m != null ? ` (±${Math.round(r.accuracy_m)} м)` : ''}` : 'Место съёмки не определено',
   ].join(' · '),
+  r.visit_id != null ? 'Снял помощник на выезде на объект' : 'Снял владелец по ссылке на осмотр',
   `Получено платформой «БЕРТЕЛ Дело»: ${timeMsk(r.received_at)} (МСК)`,
 ];
 async function photosPart({ sql, providers, registry }, order) {

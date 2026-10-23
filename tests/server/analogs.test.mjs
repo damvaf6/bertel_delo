@@ -441,6 +441,8 @@ test('Word: фото осмотра — приложение «Фотомате�
   assert.ok(xml.lastIndexOf('<w:drawing>', at) > xml.lastIndexOf('Приложение. Фотоматериалы осмотра', at), 'картинка — над подписью');
   assert.match(xml.slice(at, xml.indexOf('Фото 2. Сзади')), /Снято: \d\d\.\d\d\.\d{4}, \d\d:\d\d \(МСК, по часам телефона\) · Место съёмки: 55\.75120/);
   assert.match(xml.slice(xml.indexOf('Фото 2. Сзади')), /Время съёмки телефон не передал · Место съёмки не определено/);
+  // 2.379: под каждым снимком — и кто снимал.
+  assert.match(xml.slice(at, xml.indexOf('Фото 2. Сзади')), /Снял владелец по ссылке на осмотр/);
   const s = buf.toString('latin1');
   assert.ok(s.includes('word/media/delo1.png') && s.includes('word/media/delo2.png'), 'обе картинки в файле');
 });
