@@ -84,7 +84,8 @@ const FILTERS = [
 let filter = null;
 // Подпись организации ждёт два дня и дольше (2.148) — строка красная, в отборе «Ждёт моей подписи» такие дела выше.
 const SIGN_LONG_DAYS = 2;
-const signLong = (c) => !!c.sign_since && Date.now() - new Date(c.sign_since).getTime() >= SIGN_LONG_DAYS * 86_400_000;
+// 2 рабочих дня и дольше (2.383) — считает сервер.
+const signLong = (c) => !!c.sign_long;
 const signSinceText = (c) => [`Эксперт подписал ${timeRu(c.sign_since)} — ждёт ${waited(c.sign_since)}`,
   c.sign_reminded_at ? `напомнил ${timeRu(c.sign_reminded_at)}` : null].filter(Boolean).join(' · ');
 // Возврат эксперту (2.151): когда вернул и сколько пунктов замечания эксперт уже отметил исправленными.
