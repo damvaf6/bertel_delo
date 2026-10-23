@@ -7936,11 +7936,14 @@ test('заметки эксперта к делу (2.115): заметка с н�
   await expect(plain).toContainText('— за день до срока');
   await nb.scrollIntoViewIfNeeded();
   await shot(ep, 'h12a-ekspert-zametka-za-den-do-sroka');
+  // 2.386: «за день до срока» — последний рабочий день перед сроком (срок в понедельник — пятница), как считает сервер.
+  const nv = await (await ep.request.get(`/api/orders/${id}/notes`)).json();
+  expect(nv.off_days[nv.before_deadline]).toBeUndefined();
   const linked = await db(async (c) => (await c.query(`select count(*)::int as n from order_notes where order_id = $1
-    and remind_deadline and remind_on = (select deadline - 1 from orders where id = $1)`, [id])).rows[0].n);
+    and remind_deadline and remind_on = $2::date`, [id, nv.before_deadline])).rows[0].n);
   expect(linked).toBe(2);
   // 2.157: в «Моих сроках» напоминание «за день до срока» — с отметкой и сроком дела; «Сделано» прямо в строке убирает его.
-  const dl = await db(async (c) => (await c.query(`select to_char(deadline - 1, 'YYYY-MM-DD') as d from orders where id = $1`, [id])).rows[0].d);
+  const dl = nv.before_deadline;
   await ep.goto('/kabinet#specialist&to=schedule');
   const dayNotes = ep.locator(`#schedule-days li[data-day="${dl}"] li[data-schedule-item="note"]`);
   await expect(dayNotes).toHaveCount(2);
@@ -8639,7 +8642,8 @@ test('прогон 2.160: эксперт и руководитель по пач
   await expect(box.locator('[data-role="sig-points-state"]')).toContainText('к файлу «Отчёт B.pdf»: исправлено 1 из 2');
   // «Мои сроки»: напоминание «за день до срока» переехало вместе с перенесённым сроком; просроченное — отдельно.
   await ep.goto('/kabinet#specialist&to=schedule');
-  const moved = await db(async (c) => (await c.query(`select to_char(deadline - 1, 'YYYY-MM-DD') as d, to_char(deadline, 'YYYY-MM-DD') as dl from orders where id = $1`, [D])).rows[0]);
+  const moved = await db(async (c) => (await c.query(`select to_char(n.remind_on, 'YYYY-MM-DD') as d, to_char(o.deadline, 'YYYY-MM-DD') as dl
+    from orders o join order_notes n on n.order_id = o.id and n.body = 'Сверить площадь' where o.id = $1`, [D])).rows[0]);
   expect(moved.dl).toBe(want);
   await expect(ep.locator(`#schedule-days li[data-day="${moved.d}"] li[data-schedule-item="note"]`)).toContainText('Сверить площадь · за день до срока (срок ');
   await expect(ep.locator('#schedule-overdue')).toContainText('Прогон: просрочено');

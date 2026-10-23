@@ -5,10 +5,13 @@
 // нет — только номер заявки. В журнал дела заметки не попадают (их не видят даже служебные).
 // 2.149: «За день до срока» — remind_on: 'deadline': дата = срок дела − 1 день (срок завтра или уже прошёл — сегодня);
 // диспетчер перенёс срок — напоминание переезжает следом (moveDeadlineNotes, вызов из deadline-ops).
+// 2.386: «за день до срока» — последний рабочий день перед сроком (срок в понедельник — напомним в пятницу, после праздника —
+// до него); своя дата в выходной или праздник — подсказка на странице (off_days: нерабочие дни на год вперёд).
 import { HttpError } from '../http/core.mjs';
 import { orderSides } from '../access/policy.mjs';
 import { notify } from '../notify/notify.mjs';
 import { addDays, todayMsk } from '../orders/workflow.mjs';
+import { holidayName, isWorkday, workdayBefore } from '../orders/holidays.mjs';
 import { text } from './util.mjs';
 
 const OPEN = ['awaiting_executor', 'in_work', 'review', 'done']; // писать и получать напоминание можно, пока дело не закрыто
@@ -18,11 +21,22 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 const isExecutor = (actor, order) => order.executor_user_id === actor.id && orderSides(actor, order).includes('executor');
 
-// Напоминание «за день до срока»: срок − 1 день, но не раньше сегодняшнего. Без срока — null.
+// Напоминание «за день до срока»: последний рабочий день перед сроком, но не раньше сегодняшнего. Без срока — null.
 export function beforeDeadline(deadline, today = todayMsk()) {
   if (!deadline) return null;
-  const d = addDays(String(deadline).slice(0, 10), -1);
+  const d = workdayBefore(String(deadline).slice(0, 10));
   return d < today ? today : d;
+}
+
+// Нерабочие дни с сегодня на год вперёд: { '2026-10-24': 'суббота', '2026-11-04': 'День народного единства' }.
+const WEEKEND = { 0: 'воскресенье', 6: 'суббота' };
+export function offDays(today = todayMsk()) {
+  const out = {};
+  for (let i = 0; i <= MAX_AHEAD; i += 1) {
+    const d = addDays(today, i);
+    if (!isWorkday(d)) out[d] = holidayName(d) ?? WEEKEND[new Date(`${d}T00:00:00Z`).getUTCDay()] ?? 'нерабочий день';
+  }
+  return out;
 }
 
 function remindFrom(value, today) {
@@ -57,7 +71,8 @@ async function view(sql, actor, order) {
   if (!isExecutor(actor, order)) return { available: false };
   const today = todayMsk();
   return { available: true, can_write: OPEN.includes(order.status), today, deadline: order.deadline ?? null,
-           before_deadline: beforeDeadline(order.deadline, today), notes: await ownNotes(sql, order.id, actor.id) };
+           before_deadline: beforeDeadline(order.deadline, today), off_days: offDays(today),
+           notes: await ownNotes(sql, order.id, actor.id) };
 }
 
 // Дата напоминания из запроса: 'deadline' — за день до срока дела (и отметка remind_deadline), иначе своя дата.
@@ -68,7 +83,7 @@ function remindOf(value, order, today) {
   return { on, byDeadline: true };
 }
 
-// Срок дела перенесён (2.149): заметки «за день до срока», ещё не сделанные, переезжают на новый срок − 1 день и
+// Срок дела перенесён (2.149): заметки «за день до срока», ещё не сделанные, переезжают на новый «за день до срока» и
 // напомнят снова. Вызывается в той же транзакции, что меняет срок.
 export async function moveDeadlineNotes(tx, orderId, deadline, today = todayMsk()) {
   const on = beforeDeadline(deadline, today);
