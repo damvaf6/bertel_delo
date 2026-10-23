@@ -25,7 +25,7 @@
 // Только свои дела и свои организации.
 import { orderRef } from '../notify/registry.mjs';
 import { orderSplit } from '../money/money.mjs';
-import { RESULT_DUE_DAYS, STATUS_NAME, addDays, isOverdue, resultDue, todayMsk } from '../orders/workflow.mjs';
+import { RESULT_DUE_DAYS, STATUS_NAME, addDays, hotDay, isOverdue, resultDue, todayMsk, workBefore } from '../orders/workflow.mjs';
 import { taskDues } from '../orders/schedule.mjs';
 import { orderSignatures, orgReturns, returnEgrn, signWait } from './sign-ops.mjs';
 import { executorSignOrg } from '../access/policy.mjs';
@@ -169,11 +169,13 @@ async function expertPart(sql, actor, registry, today, storage) {
   const notes = (await dueNotes(sql, actor.id, rows.map((o) => o.id), today))
     .map((n) => item(rows.find((o) => o.id === n.order_id), { note: n.body, remind_on: n.remind_on }));
   // Срок через 1–2 дня или прошёл, а своего файла результата нет (2.138) — на странице — выше «Горит срок» и там не повторяется.
-  const hotRows = rows.filter((o) => o.status === 'in_work' && o.deadline && o.deadline <= soon);
+  // Срок в выходной или праздник (2.382) — «близко» по последнему рабочему дню перед ним.
+  const hotRows = rows.filter((o) => o.status === 'in_work' && o.deadline && hotDay(o.deadline) <= soon);
   const due = await noResultOrders(sql, actor.id, hotRows, today);
   const drafts = due.length ? await sql`
     select distinct order_id from result_drafts where order_id = any(${due.map((o) => o.id)}::uuid[])` : [];
-  const noResult = due.map((o) => item(o, { has_draft: drafts.some((x) => x.order_id === o.id), extend: ext.get(o.id) ?? null }));
+  const noResult = due.map((o) => item(o, { has_draft: drafts.some((x) => x.order_id === o.id), extend: ext.get(o.id) ?? null,
+    ...workBefore(o.deadline, today) }));
   // Срок по заданию на оценку раньше срока дела и близко (2.304) — выше «Срок близко», там и в «Горит срок» не повторяется.
   const taskDue = (await taskDueCases(sql, storage, registry, actor.id, rows, today))
     .map(({ order, due: d, draft }) => item(order, { task_due: d, has_draft: draft }));
@@ -300,7 +302,7 @@ async function expertPart(sql, actor, registry, today, storage) {
     inspect_expiring: expiring,
     inspect_incomplete: incomplete,
     // Уже попросил перенести срок (2.100) — в строке видно, на какую дату и что ответа ещё нет.
-    hot: hotRows.map((o) => item(o, { extend: ext.get(o.id) ?? null })),
+    hot: hotRows.map((o) => item(o, { extend: ext.get(o.id) ?? null, ...workBefore(o.deadline, today) })),
     fresh_late: freshLate,
     returned: returned.filter((r) => !freshLate.includes(r)),
     review: reviewRows.filter((x) => !x.long),
@@ -338,7 +340,8 @@ export async function expertMorningAlerts(sql, userId, today, now = new Date(), 
     select id, module, service, fields, status, deadline, executor_user_id, review_round from orders where executor_user_id = ${userId} and status in ('in_work', 'review')
     order by deadline nulls last, updated_at limit ${LIMIT}`;
   const soon = addDays(today, HOT_DAYS);
-  const hotRows = rows.filter((o) => o.status === 'in_work' && o.deadline && o.deadline <= soon);
+  // Срок в выходной или праздник (2.382) — «близко» по последнему рабочему дню перед ним.
+  const hotRows = rows.filter((o) => o.status === 'in_work' && o.deadline && hotDay(o.deadline) <= soon);
   // Руководитель не подписал 2 дня и дольше (2.164) — как строка «Руководитель ещё не подписал» в «Сегодня» (2.152).
   let leadUnsigned = 0;
   if (await executorSignOrg(sql, userId)) {

@@ -4,7 +4,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, addMember , docsAskedAgo } from '../helpers.mjs';
-import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
+import { addDays, todayMsk, workBefore } from '../../src/orders/workflow.mjs';
 import { customerSilent, workingAgo } from '../../src/orders/silence.mjs';
 
 let S, owner, dispatcher, spec, head, other, org;
@@ -392,7 +392,8 @@ test('Срок близко, а файла результата нет (2.138): 
   assert.ok(ids(t.hot).includes(done.id), 'с файлом — остаётся в «Горит срок»');
 
   const due = (o, who = other) => who.req('GET', `/api/orders/${o.id}/documents`).then((r) => r.body.result_due);
-  assert.deepEqual(await due(bare), { deadline: addDays(todayMsk(), 1), days_left: 1, overdue: false, has_draft: false });
+  // Завтра выходной (2.382) — с последним рабочим днём перед ним.
+  assert.deepEqual(await due(bare), { deadline: addDays(todayMsk(), 1), days_left: 1, overdue: false, has_draft: false, ...workBefore(addDays(todayMsk(), 1)) });
   assert.deepEqual(await due(late), { deadline: addDays(todayMsk(), -1), days_left: -1, overdue: true, has_draft: true });
   assert.equal(await due(far), null, 'срок далеко — без предупреждения');
   assert.equal(await due(done), null, 'файл есть — без предупреждения');
@@ -634,4 +635,44 @@ test('заказчик не отвечает (прогон 2.380): выходн�
   await at('2026-10-20T10:00:00+03:00');
   assert.equal(await quiet('2026-10-22T09:00:00+03:00'), false);
   assert.equal(await quiet('2026-10-22T10:00:00+03:00'), true);
+});
+
+// 2.382: срок дела в выходной или праздник — «срок близко» по последнему рабочему дню перед ним: заказчик и банк в
+// нерабочий день не принимают. Дни — фиксированные (2026), «сегодня» передаётся в расчёт.
+test('срок в выходной или праздник (2.382): «срок близко» и утренняя сводка — по последнему рабочему дню перед ним', async () => {
+  const { hotDay, resultDue } = await import('../../src/orders/workflow.mjs');
+  const { expertMorningAlerts } = await import('../../src/ops/today-ops.mjs');
+  const { digestCounts } = await import('../../src/notify/morning.mjs');
+  assert.equal(hotDay('2026-11-01'), '2026-10-30', 'воскресенье — пятница');
+  assert.equal(hotDay('2026-11-04'), '2026-11-03', '4 ноября — 3 ноября');
+  assert.equal(hotDay('2026-10-29'), '2026-10-29', 'будний — сам срок');
+  const work = { status: 'in_work', deadline: '2026-11-01' };
+  assert.equal(resultDue(work, 0, '2026-10-27'), null, 'вторник: до пятницы три дня — ещё не близко');
+  assert.deepEqual(resultDue(work, 0, '2026-10-28'), { deadline: '2026-11-01', days_left: 4, overdue: false, work_before: '2026-10-30' },
+    'среда: по календарю 4 дня, до пятницы — 2');
+  assert.deepEqual(resultDue({ status: 'in_work', deadline: '2026-10-29' }, 0, '2026-10-28'), { deadline: '2026-10-29', days_left: 1, overdue: false },
+    'будний срок — без work_before');
+  assert.equal(resultDue(work, 1, '2026-10-29'), null, 'файл есть — без предупреждения');
+
+  const ex = await login(S, '+79990003406');
+  await makeSpecialist(S.sql, ex.user.id);
+  const sunday = await offered('Срок в воскресенье', 5, ex);
+  assert.equal((await step(ex, sunday, 'in_work')).status, 200);
+  const holiday = await offered('Срок 4 ноября', 5, ex);
+  assert.equal((await step(ex, holiday, 'in_work')).status, 200);
+  await S.sql`update orders set deadline = '2026-11-01' where id = ${sunday.id}`;
+  await S.sql`update orders set deadline = '2026-11-04' where id = ${holiday.id}`;
+  const noResult = async (day) => (await expertMorningAlerts(S.sql, ex.user.id, day)).no_result;
+  assert.equal(await noResult('2026-10-27'), 0, 'вторник: ни одно не близко');
+  assert.equal(await noResult('2026-10-28'), 1, 'среда: воскресное — сдавать в пятницу');
+  assert.equal(await noResult('2026-10-31'), 1, 'суббота: 4 ноября — сдавать 3 ноября, а это через 3 дня');
+  assert.equal(await noResult('2026-11-01'), 2, 'воскресенье: оба');
+
+  // Утренняя сводка: «сдать сегодня» в пятницу — и дело со сроком в воскресенье.
+  const day = (date, items = [], weekend = false) => ({ date, weekend, items });
+  const due = (d) => ({ kind: 'deadline', status: 'in_work', id: d });
+  const schedule = { overdue: [], days: [day('2026-10-30', [due('a')]), day('2026-10-31', [], true), day('2026-11-01', [due('b'), { kind: 'deadline', status: 'review' }], true),
+    day('2026-11-02', [due('c')])] };
+  assert.equal(digestCounts(schedule).due, 2, 'пятница: своё и воскресное, сданное на проверку не в счёт');
+  assert.equal(digestCounts({ overdue: [], days: schedule.days.slice(1) }).due, 0, 'в субботу воскресное — уже не «сегодня»');
 });

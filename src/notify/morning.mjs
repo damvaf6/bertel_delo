@@ -13,6 +13,7 @@
 // позже срока по заданию на оценку, а письмо о переносе не просили (строка «Приложите письмо о переносе» в «Сегодня», 2.326);
 // срок по заданию у такого дела не повторяется; тоже к «Сегодня». С 2.355 — ещё в скольких делах письмо о переносе попросили
 // у заказчика, а оно не пришло 3 дня и сегодня не напоминали (кнопка «Напомнить заказчику» у строки письма в «Сегодня», 2.347).
+import { workdayBefore } from '../orders/holidays.mjs';
 import { expertSchedule } from '../orders/schedule.mjs';
 import { STATUS_NAME, todayMsk } from '../orders/workflow.mjs';
 import { expertMorningAlerts, orgPart } from '../ops/today-ops.mjs';
@@ -36,7 +37,9 @@ export function digestCounts(schedule, now = new Date()) {
   const inWork = (i) => i.kind === 'deadline' && i.status === 'in_work';
   const time = mskTime(now);
   return {
-    due: d0.items.filter(inWork).length,
+    // Срок в выходной или праздник (2.382) — «сдать» в последний рабочий день перед ним.
+    due: d0.items.filter(inWork).length + schedule.days.slice(1)
+      .filter((d) => d.weekend && workdayBefore(d.date) === d0.date).reduce((n, d) => n + d.items.filter(inWork).length, 0),
     overdue: schedule.overdue.filter(inWork).length,
     visits: d0.items.filter((i) => i.kind === 'visit' || i.kind === 'my_visit').length,
     links: d0.items.filter((i) => i.kind === 'link').length + (d1?.items.filter((i) => i.kind === 'link' && i.time < time).length ?? 0),

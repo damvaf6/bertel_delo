@@ -7,6 +7,8 @@
 // Шаги исполнителя (принять, отказаться, сдать) делает сам специалист (1.4). Сдать — только с файлом результата;
 // «Проверено, готово» — только когда все правила проверки текущего круга отмечены «в порядке» (1.5, order-ops.mjs).
 
+import { isWorkday, workdayBefore } from './holidays.mjs';
+
 export const STATUSES = [
   { id: 'new', name: 'Новая' },
   { id: 'matching', name: 'Подбор исполнителя' },
@@ -104,9 +106,16 @@ export function weekEnd(isoDate) {
 
 // Срок близко, а файла результата нет (2.138): дело в работе, до срока не больше двух дней (или уже просрочено), а свой файл
 // результата исполнитель ещё не загрузил. Предупреждение в деле и строка в «Сегодня».
+// Срок в выходной или праздник (2.382) — «близко» считается по последнему рабочему дню перед ним (`work_before`):
+// заказчик и банк в нерабочий день не принимают, сдавать — до него.
 export const RESULT_DUE_DAYS = 2;
 export function resultDue(order, ownResults, today = todayMsk()) {
-  if (order.status !== 'in_work' || !order.deadline || ownResults > 0 || order.deadline > addDays(today, RESULT_DUE_DAYS)) return null;
+  if (order.status !== 'in_work' || !order.deadline || ownResults > 0 || hotDay(order.deadline) > addDays(today, RESULT_DUE_DAYS)) return null;
   const days = Math.round((Date.parse(`${order.deadline}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86400_000);
-  return { deadline: order.deadline, days_left: days, overdue: days < 0 };
+  return { deadline: order.deadline, days_left: days, overdue: days < 0, ...workBefore(order.deadline, today) };
 }
+// День, по которому срок «близко» (2.382): сам срок или, если он в выходной или праздник, последний рабочий день перед ним.
+export const hotDay = (deadline) => (isWorkday(deadline) ? deadline : workdayBefore(deadline));
+// `work_before` у дела со сроком в нерабочий день, пока срок не прошёл — «сдайте лучше до …».
+export const workBefore = (deadline, today = todayMsk()) =>
+  (deadline && deadline >= today && !isWorkday(deadline) ? { work_before: workdayBefore(deadline) } : {});
