@@ -6010,7 +6010,7 @@ test('мои итоги за месяц (2.377): средний срок от п
   await db(async (c) => {
     await c.query("insert into specialists (user_id, created_at) values ($1, now() - interval '2 years')", [expert.id]);
     const mk = async (title, days) => (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, price_kop, paid_at, deadline)
-      values ($1, $2, 'expertise', 'realty', 'done', $1, 1500000, now(), current_date + $3::int) returning id`, [expert.id, title, days])).rows[0].id;
+      values ($1, $2, 'expertise', 'realty', 'done', $1, 1500000, now(), (now() at time zone 'Europe/Moscow')::date + $3::int) returning id`, [expert.id, title, days])).rows[0].id;
     const a = await mk('Квартира в Отрадном: средний срок', 2);
     const b = await mk('Склад в Подольске: средний срок', -3);
     await c.query(`insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $3, '{}', 'accepted', now() - interval '4 days'),
