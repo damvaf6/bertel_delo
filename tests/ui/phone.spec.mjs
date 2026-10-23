@@ -15750,6 +15750,8 @@ test('2.332: дела экспертов — перенос позже срок�
 
   // 2.338: письма нет 2 дня и дольше — строкой в утренней сводке (запись дня напрямую, как в 2.257), нажатие ведёт к отбору.
   await db(async (c) => {
+    // Сервер мог уже прислать сводку дня сам (раз в минуту) — запись дня заменяем, иначе повтор ключа.
+    await c.query("delete from org_morning_digests where user_id = $1 and org_id = $2 and day = (now() at time zone 'Europe/Moscow')::date", [head.id, orgId]);
     const { rows: [n] } = await c.query("insert into notifications (user_id, type, event, org_id) values ($1, 'org_morning', 'org_morning_today', $2) returning id", [head.id, orgId]);
     await c.query(`insert into org_morning_digests (user_id, org_id, day, task_moved, notification_id)
       values ($1, $2, (now() at time zone 'Europe/Moscow')::date, 1, $3)`, [head.id, orgId, n.id]);
