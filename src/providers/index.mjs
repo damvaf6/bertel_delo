@@ -15,6 +15,8 @@
 //   mail.ack({ id })         — письмо сохранено у нас, у поставщика его можно убрать
 //   ocr.recognize({ buf, mime }) — текст со скриншота аналога (2.32), интерфейс — ocr.mjs; null — выключено
 //   sign.sign / sign.verify  — электронная подпись заключения (2.5), интерфейс — sign.mjs
+//   lawyers.find / lawyers.cases — реестр адвокатов и решения судов для проверки юриста (задача штаба 40217197-…-81f7),
+//                              интерфейс — src/lawyers/check.mjs; пока только вымышленные юристы
 import crypto from 'node:crypto';
 import { makeFake } from './fake.mjs';
 import { createAi } from './ai.mjs';
@@ -22,6 +24,7 @@ import { createOcr } from './ocr.mjs';
 import { fakeSign, manualSign } from './sign.mjs';
 import { yookassa } from './yookassa.mjs';
 import { memoryStorage, s3Storage } from './storage.mjs';
+import { fakeLawyerSource } from '../lawyers/check.mjs';
 
 const id = (prefix) => `${prefix}_${crypto.randomUUID()}`;
 
@@ -109,6 +112,7 @@ export function createProviders(cfg) {
   }
   out.ai = createAi(cfg);
   out.ocr = createOcr(cfg);
+  out.lawyers = fakeLawyerSource();
   // Подпись: поддельная (площадка, проверки) или ручная проверка на Госуслугах (manual — пока нет договора с УЦ).
   if (cfg.providers.sign === 'manual') out.sign = manualSign();
   else if (cfg.providers.sign !== 'fake') throw new Error(`Поставщик «sign: ${cfg.providers.sign}» ещё не подключён`);
