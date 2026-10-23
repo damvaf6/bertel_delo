@@ -2,11 +2,12 @@
 // словами; заказчик видит список с отметками и загружает файл к каждому; уведомления обеим сторонам; журнал дела.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid } from '../helpers.mjs';
+import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid , docsAskedAgo } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import { createRegistry, validateModule } from '../../src/modules/index.mjs';
 import expertise from '../../src/modules/expertise.mjs';
 import { assignmentDocs } from '../../src/ops/ai-ops.mjs';
+import { docLong, docWait, docsWaiting } from '../../src/ops/docreq-ops.mjs';
 
 let S, owner, dispatcher, spec, stranger;
 const FIELDS = { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, Документная ул., 7' };
@@ -306,10 +307,11 @@ test('2.234: запрошенное не пришло 3 дня — «Напом�
   assert.equal((await remind()).body.error, 'not_waiting');
   assert.equal(await todayRow(), undefined);
   // Три дня — строка в деле и в «Сегодня»: что ждём и сколько; заказчик её не видит, напомнить не может.
-  await age(4);
+  const ago = docsAskedAgo();
+  await S.sql`update doc_requests set requested_at = ${ago.at} where order_id = ${o.id} and fulfilled_at is null`;
   let w = (await list()).body.wait;
   assert.deepEqual({ ...w, since: undefined }, { titles: ['Выписка из ЕГРН', 'Технический паспорт БТИ или поэтажный план'],
-    only_letter: false, since: undefined, days: 4, reminded_at: null, reminders: 0, can_remind: true, next_remind_at: null });
+    only_letter: false, since: undefined, days: ago.days, reminded_at: null, reminders: 0, can_remind: true, next_remind_at: null });
   assert.equal((await list(owner)).body.wait, null);
   assert.equal((await remind(owner)).status, 403);
   assert.equal((await remind(dispatcher)).status, 403);
@@ -343,8 +345,9 @@ test('2.234: запрошенное не пришло 3 дня — «Напом�
   assert.equal((await remind()).body.error, 'not_waiting');
   // Новый запрос — прежние напоминания не в счёт: через 3 дня можно напомнить сразу.
   assert.equal((await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { custom: ['Справка о зарегистрированных'] })).status, 201);
-  await age(3);
-  await S.sql`update doc_reminders set created_at = now() - interval '3 days 2 hours' where order_id = ${o.id}`;
+  const ago3 = docsAskedAgo(3);
+  await S.sql`update doc_requests set requested_at = ${ago3.at} where order_id = ${o.id} and fulfilled_at is null`;
+  await S.sql`update doc_reminders set created_at = ${new Date(ago3.at.getTime() - 2 * 3600_000)} where order_id = ${o.id}`;
   w = (await list()).body.wait;
   assert.deepEqual(w.titles, ['Справка о зарегистрированных']);
   assert.equal(w.can_remind, true);
@@ -456,4 +459,30 @@ test('2.306: задания от банка нет и не запрошено, �
     raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Задание банка.txt') } });
   assert.equal(put.status, 201, JSON.stringify(put.body));
   assert.ok(!(await rows()).some((x) => x.id === o.id));
+});
+
+// 2.381: «не пришло 3 дня» — рабочих, по Москве: выходные и праздник 4 ноября не в счёт (как «Заказчик не отвечает», 2.380).
+test('2.381: запрошенное не пришло 3 рабочих дня — выходные и праздник 4 ноября не в счёт', async () => {
+  const msk = (s) => new Date(`${s}+03:00`);
+  const asked = msk('2026-10-30T18:00:00'); // пятница, вечер
+  // Понедельник: по календарю 3 дня, рабочих — меньше суток.
+  assert.equal(docLong(asked, msk('2026-11-02T18:30:00')), false);
+  // Четверг после праздника, полдень: по календарю почти 6 дней, рабочих — 2 дня и 18 часов.
+  assert.equal(docLong(asked, msk('2026-11-05T12:00:00')), false);
+  // Четверг вечером — 3 рабочих дня.
+  assert.equal(docLong(asked, msk('2026-11-05T19:00:00')), true);
+  // Будни подряд — как прежде, ровно 3 дня.
+  assert.equal(docLong(msk('2026-10-19T10:00:00'), msk('2026-10-22T09:00:00')), false);
+  assert.equal(docLong(msk('2026-10-19T10:00:00'), msk('2026-10-22T10:00:00')), true);
+  // В деле, в «Сегодня» и у руководителя — та же мерка; «ждём N дн.» — по календарю.
+  const o = await inWork('Квартира: запрос перед праздником');
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { items: ['egrn'] })).status, 201);
+  await S.sql`update doc_requests set requested_at = ${asked} where order_id = ${o.id}`;
+  const order = (await S.sql`select * from orders where id = ${o.id}`)[0];
+  assert.equal(await docWait(S.sql, order, msk('2026-11-05T12:00:00')), null);
+  const w = await docWait(S.sql, order, msk('2026-11-05T19:00:00'));
+  assert.deepEqual([w.titles, w.days, w.can_remind], [['Выписка из ЕГРН'], 6, true]);
+  assert.equal((await docsWaiting(S.sql, [order], msk('2026-11-05T12:00:00'))).get(o.id).long, false);
+  assert.equal((await docsWaiting(S.sql, [order], msk('2026-11-05T19:00:00'))).get(o.id).long, true);
 });

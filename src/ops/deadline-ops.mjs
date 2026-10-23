@@ -13,7 +13,7 @@ import { audit, text } from './util.mjs';
 import { moveDeadlineNotes } from './note-ops.mjs';
 import { taskDueFor, taskMoveLetter } from './draft-ops.mjs';
 import { assignmentDocs, TASK_MOVE } from './ai-ops.mjs';
-import { DOC_WAIT_DAYS, docWait } from './docreq-ops.mjs';
+import { docLong, docWait } from './docreq-ops.mjs';
 
 const MAX_DAYS = 730; // как у срока заявки — не дальше двух лет
 const DECIDE_STATUSES = ['in_work', 'review'];
@@ -174,10 +174,11 @@ export async function taskMoved(sql, storage, registry, order) {
 }
 
 // 2.347: письмо о переносе попросили у заказчика, а оно не пришло 3 дня — «Напомнить заказчику» (2.234,
-// `doc_requests.remind`, раз в сутки по делу). { days, reminded_at, can_remind, next_remind_at } или null.
+// `doc_requests.remind`, раз в сутки по делу). 3 дня — рабочих (2.381), `days` — по календарю.
+// { days, reminded_at, can_remind, next_remind_at } или null.
 async function letterRemind(sql, order, at, now = new Date()) {
   const days = Math.floor((now.getTime() - new Date(at).getTime()) / 86400_000);
-  if (days < DOC_WAIT_DAYS) return null;
+  if (!docLong(at, now)) return null;
   const w = await docWait(sql, order, now);
   return w ? { days, reminded_at: w.reminded_at, can_remind: w.can_remind, next_remind_at: w.next_remind_at } : null;
 }

@@ -3,7 +3,7 @@
 // возвраты и дела, предложенные организации. Чужие дела и чужие организации не видны.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, addMember } from '../helpers.mjs';
+import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, addMember , docsAskedAgo } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import { customerSilent, workingAgo } from '../../src/orders/silence.mjs';
 
@@ -608,7 +608,7 @@ test('заказчик не отвечает (2.375): запрошенные д�
   assert.ok(ids(t.customer_silent).includes(o.id));
   const r = await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { custom: ['Выписка из ЕГРН'] });
   assert.ok([200, 201].includes(r.status), JSON.stringify(r.body));
-  await S.sql`update doc_requests set requested_at = now() - interval '4 days' where order_id = ${o.id}`;
+  await S.sql`update doc_requests set requested_at = ${docsAskedAgo().at} where order_id = ${o.id}`;
   t = (await spec.req('GET', '/api/today')).body.expert;
   assert.ok(ids(t.docs_wait).includes(o.id));
   assert.ok(!ids(t.customer_silent).includes(o.id));

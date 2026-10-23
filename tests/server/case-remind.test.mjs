@@ -2,7 +2,7 @@
 // по делу; эксперту — уведомление, ведёт к делу. После передачи дела другому эксперту счёт начинается заново.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, addMember } from '../helpers.mjs';
+import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, addMember , docsAskedAgo } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 
 let S, owner, dispatcher, spec, colleague, head, org;
@@ -165,9 +165,10 @@ test('2.235: «Ждём документы от заказчика» в «Дел
   assert.deepEqual([w.titles, w.days, w.long, w.reminded_at], [['Выписка из ЕГРН'], 0, false, null]);
   // Позже — ещё один документ; самый старый ждём 4 дня — заметно; эксперт напомнил заказчику — видно когда.
   assert.equal((await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { custom: ['Справка БТИ'] })).status, 201);
-  await S.sql`update doc_requests set requested_at = now() - interval '4 days' where order_id = ${o.id} and title = 'Выписка из ЕГРН'`;
+  const ago = docsAskedAgo();
+  await S.sql`update doc_requests set requested_at = ${ago.at} where order_id = ${o.id} and title = 'Выписка из ЕГРН'`;
   w = (await caseOf(o)).docs_wait;
-  assert.deepEqual([w.titles, w.days, w.long, w.reminded_at], [['Выписка из ЕГРН', 'Справка БТИ'], 4, true, null]);
+  assert.deepEqual([w.titles, w.days, w.long, w.reminded_at], [['Выписка из ЕГРН', 'Справка БТИ'], ago.days, true, null]);
   assert.equal((await spec.req('POST', `/api/orders/${o.id}/doc-requests/remind`)).status, 201);
   assert.ok((await caseOf(o)).docs_wait.reminded_at);
   // Заказчик прислал всё — строки нет.
