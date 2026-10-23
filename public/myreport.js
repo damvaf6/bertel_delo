@@ -1,5 +1,6 @@
 // «Мои итоги за месяц» в профиле специалиста (2.92): по образцу сводки руководителя (2.78), но по своим делам — сдано, из
 // них в срок, позже срока, просрочено сейчас, возвраты, вознаграждение и выплачено; ниже — сданные дела месяца со ссылкой.
+// Средний срок от принятия до сдачи, у дела — на сколько позже срока, сколько дней шло и сколько раз возвращали (2.377).
 import { api, el, say } from '/common.js';
 import { rub } from '/money.js';
 import { dayRu } from '/order.js';
@@ -7,6 +8,11 @@ import { dayRu } from '/order.js';
 const $ = (id) => document.getElementById(id);
 const MONTHS = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
 const monthRu = (m) => `${MONTHS[Number(m.slice(5, 7)) - 1]} ${m.slice(0, 4)}`;
+const plural = (n, one, few, many) => {
+  const t = Math.abs(n) % 100; const u = t % 10;
+  return t > 10 && t < 20 ? many : u === 1 ? one : u >= 2 && u <= 4 ? few : many;
+};
+const daysRu = (d) => (Number.isInteger(d) ? `${d} ${plural(d, 'день', 'дня', 'дней')}` : `${String(d).replace('.', ',')} дня`);
 const fact = (dt, dd, cls) => [el('dt', { text: dt }), el('dd', { text: dd, ...(cls ? { class: cls } : {}) })];
 
 let seq = 0;
@@ -26,6 +32,8 @@ export async function loadMyReport(month = '') {
   const t = report.total;
   $('my-report-total').replaceChildren(
     ...fact(`Сдано · ${report.month_name}`, t.done ? `${t.done} (в срок — ${t.done_on_time}${t.done_late ? `, позже срока — ${t.done_late}` : ''})` : '0'),
+    // Средний срок (2.377): дней от принятия дела до сдачи — как в сводке руководителя.
+    ...(t.avg_days != null ? fact('В среднем от принятия до сдачи', daysRu(t.avg_days)) : []),
     ...fact('Принято новых дел', String(t.accepted)),
     ...(report.current && t.overdue_now ? fact('Просрочено сейчас', String(t.overdue_now), 'overdue') : []),
     ...(t.returned_head || t.returned_dispatcher ? fact('Возвращали', [
@@ -35,7 +43,11 @@ export async function loadMyReport(month = '') {
     ...fact('Выплачено за месяц', rub(t.paid_kop)));
   $('my-report-cases').replaceChildren(...report.cases.map((c) => el('li', { 'data-report-case': c.id },
     el('a', { class: 'title', href: `#order=${c.id}`, text: c.title || 'Дело' }),
-    el('div', { class: c.late ? 'overdue' : 'muted', text: `сдано ${dayRu(c.done_on)}${c.deadline ? ` · срок ${dayRu(c.deadline)}` : ''} · ${c.late ? 'позже срока' : 'в срок'}` }),
+    el('div', { class: c.late ? 'overdue' : 'muted', text: `сдано ${dayRu(c.done_on)}${c.deadline ? ` · срок ${dayRu(c.deadline)}` : ''} · ${c.late ? `позже срока на ${daysRu(c.late_days)}` : 'в срок'}` }),
+    ...(c.days != null || c.returns ? [el('div', { class: 'muted', 'data-report-pace': c.id, text: [
+      c.days != null ? `от принятия до сдачи — ${daysRu(c.days)}` : null,
+      c.returns ? `возвращали ${c.returns} ${plural(c.returns, 'раз', 'раза', 'раз')}` : null,
+    ].filter(Boolean).join(' · ') })] : []),
     el('div', { class: 'muted', text: `${rub(c.fee_kop)} · ${c.paid ? 'выплачено' : 'ждёт выплаты'}` }))));
   $('my-report-empty').classList.toggle('hidden', report.cases.length > 0);
 }

@@ -5994,6 +5994,33 @@ test('мои итоги за месяц (2.92): эксперт в профиле
   await expect(page).toHaveURL(new RegExp(`#order=${ids.late}`));
 });
 
+test('мои итоги за месяц (2.377): средний срок от принятия до сдачи, у дела — на сколько позже срока, дней и возвраты', async ({ page }) => {
+  const expert = await signIn(page, '+79990009377');
+  await db(async (c) => {
+    await c.query("insert into specialists (user_id, created_at) values ($1, now() - interval '2 years')", [expert.id]);
+    const mk = async (title, days) => (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, price_kop, paid_at, deadline)
+      values ($1, $2, 'expertise', 'realty', 'done', $1, 1500000, now(), current_date + $3::int) returning id`, [expert.id, title, days])).rows[0].id;
+    const a = await mk('Квартира в Отрадном: средний срок', 2);
+    const b = await mk('Склад в Подольске: средний срок', -3);
+    await c.query(`insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $3, '{}', 'accepted', now() - interval '4 days'),
+      ($2, $3, '{}', 'accepted', now() - interval '7 days')`, [a, b, expert.id]);
+    await c.query(`insert into order_status_history (order_id, from_status, to_status, side, at) values ($1, 'review', 'done', 'dispatcher', now() - interval '1 minute'),
+      ($2, 'review', 'in_work', 'dispatcher', now() - interval '2 days'), ($2, 'review', 'done', 'dispatcher', now())`, [a, b]);
+  });
+  await page.goto('/kabinet#specialist');
+  const total = page.locator('#my-report-total');
+  await expect(total).toContainText('В среднем от принятия до сдачи5,5 дня');
+  const rows = page.locator('#my-report-cases > li');
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0).locator('[data-report-pace]')).toHaveText('от принятия до сдачи — 4 дня');
+  await expect(rows.nth(1).locator('.overdue')).toContainText('позже срока на 3 дня');
+  await expect(rows.nth(1).locator('[data-report-pace]')).toHaveText('от принятия до сдачи — 7 дней · возвращали 1 раз');
+  await page.locator('#my-report-box').scrollIntoViewIfNeeded();
+  await shot(page, 'i11-ekspert-itogi-srednij-srok');
+  await rows.nth(1).scrollIntoViewIfNeeded();
+  await shot(page, 'i12-ekspert-itogi-delo-pozzhe-sroka');
+});
+
 test('мои сроки на две недели (2.109): по дням — сроки, выезд помощника, ссылка на осмотр, просьба о переносе; строка ведёт в дело', async ({ page }) => {
   const expert = await signIn(page, '+79990009352');
   const ru = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
