@@ -639,7 +639,15 @@ export async function expertMonthReport(sql, userId, month, today = todayMsk()) 
     select count(distinct order_id)::int as n from order_offers
     where specialist_id = ${userId} and outcome = 'accepted' and outcome_at >= ${start} and outcome_at < ${end}`;
   const done = await sql`
-    select distinct on (o.id) o.id, o.title, o.deadline, o.price_kop, o.transit_kop, p.amount_kop as payout_kop, p.status as payout_status, h.at
+    select distinct on (o.id) o.id, o.title, o.deadline, o.price_kop, o.transit_kop, p.amount_kop as payout_kop, p.status as payout_status, h.at,
+      greatest(
+        (select max(f.outcome_at) from order_offers f
+         where f.order_id = o.id and f.specialist_id = o.executor_user_id and f.outcome = 'accepted'),
+        (select max(a.at) from audit_log a
+         where a.subject_type = 'order' and a.subject_id = o.id::text and a.action = 'org.case.transfer'
+           and a.details->>'to' = o.executor_user_id::text)) as taken_at,
+      (select count(*)::int from order_status_history r where r.order_id = o.id and r.from_status = 'review' and r.to_status = 'in_work')
+        + (select count(*)::int from org_returns r where r.order_id = o.id and r.executor_user_id = o.executor_user_id) as returns
     from order_status_history h join orders o on o.id = h.order_id left join payouts p on p.order_id = o.id
     where o.executor_user_id = ${userId} and h.to_status = 'done' and h.at >= ${start} and h.at < ${end}
     order by o.id, h.at`;
@@ -660,6 +668,10 @@ export async function expertMonthReport(sql, userId, month, today = todayMsk()) 
     deadline: o.deadline,
     done_on: dayMsk(o.at),
     late: !!(o.deadline && dayMsk(o.at) > o.deadline),
+    // На сколько дней позже срока, дней от принятия до сдачи и сколько раз возвращали (2.377).
+    late_days: o.deadline && dayMsk(o.at) > o.deadline ? daysBetween(o.deadline, dayMsk(o.at)) : 0,
+    days: o.taken_at ? Math.max(0, daysBetween(dayMsk(o.taken_at), dayMsk(o.at))) : null,
+    returns: o.returns,
     fee_kop: feeOf(o),
     paid: o.payout_status === 'succeeded',
   }));
@@ -674,6 +686,8 @@ export async function expertMonthReport(sql, userId, month, today = todayMsk()) 
       done: cases.length,
       done_on_time: cases.length - late,
       done_late: late,
+      // В среднем дней от принятия до сдачи (2.377) — как в сводке руководителя (2.117); дела без отметки о принятии не в счёт.
+      avg_days: avgDays(pace(done)),
       overdue_now: current ? active.filter((o) => isOverdue(o, today)).length : null,
       returned_head: headReturns,
       returned_dispatcher: dispReturns,

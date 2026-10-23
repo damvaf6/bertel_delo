@@ -3191,7 +3191,7 @@ test('мои итоги за месяц (2.92): только свои дела �
   const month = new Date(Date.now() + 3 * 3_600_000).toISOString().slice(0, 7);
   assert.equal(empty.month, month);
   assert.deepEqual(empty.months, [month], 'только что стал специалистом — только текущий месяц');
-  assert.deepEqual(empty.total, { accepted: 0, done: 0, done_on_time: 0, done_late: 0, overdue_now: 0, returned_head: 0, returned_dispatcher: 0, fee_kop: 0, paid_kop: 0 });
+  assert.deepEqual(empty.total, { accepted: 0, done: 0, done_on_time: 0, done_late: 0, avg_days: null, overdue_now: 0, returned_head: 0, returned_dispatcher: 0, fee_kop: 0, paid_kop: 0 });
   assert.deepEqual(empty.cases, []);
   for (const q of ['?month=2020-01', '?month=2099-01', '?month=13']) assert.equal((await report(exp, q)).body.error, 'bad_month', q);
   await S.sql`update specialists set created_at = now() - interval '2 years' where user_id = ${exp.user.id}`;
@@ -3223,9 +3223,11 @@ test('мои итоги за месяц (2.92): только свои дела �
               values (${overdue.id}, ${doc.id}, ${orgA.id}, ${exp.user.id}, ${U.headA.user.id}, 'отчёт.pdf', 'Поправьте')`;
   const r = (await report(exp)).body.report;
   assert.equal(r.months.length, 13);
-  assert.deepEqual(r.total, { accepted: 2, done: 2, done_on_time: 1, done_late: 1, overdue_now: 1, returned_head: 1, returned_dispatcher: 1,
+  assert.deepEqual(r.total, { accepted: 2, done: 2, done_on_time: 1, done_late: 1, avg_days: 0, overdue_now: 1, returned_head: 1, returned_dispatcher: 1,
     fee_kop: 800_000 + 1_600_000, paid_kop: 800_000 });
   assert.deepEqual(r.cases.map((c) => [c.id, c.late, c.fee_kop, c.paid]), [[onTime.id, false, 800_000, true], [late.id, true, 1_600_000, false]]);
+  // 2.377: у дела — на сколько дней позже срока, дней от принятия до сдачи, сколько раз возвращали.
+  assert.deepEqual(r.cases.map((c) => [c.late_days, c.days, c.returns]), [[0, 0, 0], [1, 0, 1]]);
   assert.ok(!JSON.stringify(r).includes('Итоги: чужое'));
   assert.ok(!JSON.stringify(r).includes('Итоги: просрочено'), 'в списке — только сданные');
   // Другой эксперт видит только своё; прошлый месяц — пусто, «просрочено сейчас» не считается.
@@ -3236,6 +3238,30 @@ test('мои итоги за месяц (2.92): только свои дела �
   assert.equal(prev.current, false);
   assert.equal(prev.total.done, 0);
   assert.equal(prev.total.overdue_now, null);
+});
+
+test('мои итоги за месяц (2.377): средний срок от принятия до сдачи, на сколько позже срока, возвраты у дела; без принятия — не в среднем', async () => {
+  const exp = await login(S, '+79990001377');
+  await makeSpecialist(S.sql, exp.user.id);
+  const order = async (title, days) => {
+    const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
+    await S.sql`update orders set status = 'done', deadline = current_date + ${days}::int, executor_user_id = ${exp.user.id} where id = ${o.id}`;
+    await S.sql`insert into order_status_history (order_id, from_status, to_status, side) values (${o.id}, 'review', 'done', 'dispatcher')`;
+    return o;
+  };
+  const a = await order('Средний срок: принял 4 дня назад', 3);
+  const b = await order('Средний срок: передали 2 дня назад', -3);
+  const c = await order('Средний срок: без отметки о принятии', 1);
+  await S.sql`update order_status_history set at = at - interval '2 second' where order_id = ${a.id}`;
+  await S.sql`update order_status_history set at = at - interval '1 second' where order_id = ${b.id}`;
+  await S.sql`insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values (${a.id}, ${exp.user.id}, '{}', 'accepted', now() - interval '4 days')`;
+  await S.sql`insert into audit_log (actor_id, action, subject_type, subject_id, details, at)
+              values (${U.headA.user.id}, 'org.case.transfer', 'order', ${b.id}::text, ${JSON.stringify({ to: exp.user.id })}::jsonb, now() - interval '2 days')`;
+  await S.sql`insert into order_status_history (order_id, from_status, to_status, side, at) values (${b.id}, 'review', 'in_work', 'dispatcher', now() - interval '1 day'),
+              (${b.id}, 'review', 'in_work', 'dispatcher', now() - interval '1 day')`;
+  const r = (await exp.req('GET', '/api/specialist/me/report')).body.report;
+  assert.equal(r.total.avg_days, 3, '(4 + 2) / 2 — дело без отметки о принятии не в счёт');
+  assert.deepEqual(r.cases.map((x) => [x.id, x.days, x.late_days, x.returns]), [[a.id, 4, 0, 0], [b.id, 2, 3, 2], [c.id, null, 0, 0]]);
 });
 
 test('мои сроки на две недели (2.109): по дням — сроки своих дел, выезды, ссылка на осмотр, просьба о переносе; чужого нет', async () => {
