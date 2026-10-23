@@ -12,6 +12,7 @@ import { makePdf, makeDocx } from '../tools/make-docs.mjs';
 import { extractPages } from '../../src/ai/extract.mjs';
 import { holidayName, workdayFrom } from '../../src/orders/holidays.mjs';
 import { workingAgo } from '../../src/orders/silence.mjs';
+import { docsDueIso, dayWords as ruWords } from '../../src/orders/phrases.mjs';
 import fs from 'node:fs';
 import { testExternalSignature, testGoskeySignature } from '../../src/providers/sign.mjs';
 import crypto from 'node:crypto';
@@ -4248,6 +4249,8 @@ test('готовые фразы (2.84): эксперт одним нажатие
   await expect(chat.locator('#message-text')).toHaveValue(/в заявке указано: «г\. Москва, Фразовая ул\., 3»/);
   await chat.getByRole('button', { name: 'Срок документов' }).click();
   await expect(chat.locator('#message-text')).toHaveValue(/подъезд, этаж[\s\S]*\n\nДля работы ещё нужны документы: Выписка из ЕГРН\./);
+  // 2.387: «пришлите до …» — рабочий день, с запасом 2 рабочих дня до срока дела (срок через 7 дней).
+  await expect(chat.locator('#message-text')).toHaveValue(new RegExp(`Пришлите их, пожалуйста, до ${ruWords(docsDueIso(new Date(), inDays(7)))} —`));
   await expect(chat.locator('#messages li')).toHaveCount(0);
   await chat.locator('#message-form').scrollIntoViewIfNeeded();
   await shot(ep, '99m-ekspert-gotovye-frazy');

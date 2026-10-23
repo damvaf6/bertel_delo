@@ -3,6 +3,9 @@
 // отправляет за него. Подставляется только то, что заказчик и так видит в своей заявке (адрес, запрошенные документы).
 // Что исследуют — объект, товар или документ — по `subject` услуги (src/modules/), как на странице осмотра (2.81, 2.82).
 
+import { workdayBefore, workdayFrom } from './holidays.mjs';
+import { addDays, todayMsk } from './workflow.mjs';
+
 const NOUN = {
   object: { gen: 'объекта', where: 'объект' },
   goods: { gen: 'товара', where: 'товар' },
@@ -10,24 +13,37 @@ const NOUN = {
   document: { gen: 'документа', where: 'документ' },
 };
 
-// Срок для заказчика по умолчанию — через 3 дня, по Москве; исполнитель меняет его в тексте, если нужно.
-export function dueDateRu(now = new Date(), days = 3) {
-  return new Date(now.getTime() + days * 86400000)
-    .toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'Europe/Moscow' });
+// Срок для заказчика (2.387): через 3 рабочих дня по Москве — не на выходной и не на праздник; при сроке дела — не позже
+// чем за 2 рабочих дня до него (эксперту нужно время на документы), но не раньше следующего рабочего дня. Исполнитель
+// меняет дату в тексте, если нужно. 'YYYY-MM-DD'.
+export const DOCS_DUE_DAYS = 3;
+export const DOCS_DUE_RESERVE = 2;
+export function docsDueIso(now = new Date(), deadline = null) {
+  const today = todayMsk(now);
+  const first = workdayFrom(addDays(today, 1));
+  let due = first;
+  for (let i = 1; i < DOCS_DUE_DAYS; i++) due = workdayFrom(addDays(due, 1));
+  if (deadline) {
+    let limit = String(deadline).slice(0, 10);
+    for (let i = 0; i < DOCS_DUE_RESERVE; i++) limit = workdayBefore(limit);
+    if (limit < due) due = limit;
+  }
+  return due < first ? first : due;
 }
 
 // Дата 'YYYY-MM-DD' словами: «20 октября».
-const dayWords = (iso) => new Date(`${iso}T12:00:00Z`)
+export const dayWords = (iso) => new Date(`${iso}T12:00:00Z`)
   .toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'UTC' });
 
 // def — услуга из реестра (registry.service), fields — поля заявки, openDocs — названия запрошенных и ещё не присланных
 // документов (src/ops/docreq-ops.mjs), moved — последний согласованный перенос срока, пока он в силе (2.178):
 // { from, to } — даты 'YYYY-MM-DD'; заказчик и так видит перенос в своей заявке. silent — заказчик 2 дня и дольше не отвечает
 // на сообщение эксперта (2.375, src/orders/silence.mjs): { at, body } — тогда первой фразой «Напомнить о вопросе».
-export function messagePhrases({ def, fields = {}, openDocs = [], moved = null, silent = null, now = new Date() }) {
+// deadline — срок дела 'YYYY-MM-DD': «пришлите до …» с запасом до него (2.387).
+export function messagePhrases({ def, fields = {}, openDocs = [], moved = null, silent = null, deadline = null, now = new Date() }) {
   const subject = def?.service.subject ?? 'object';
   const n = NOUN[subject] ?? NOUN.object;
-  const due = dueDateRu(now);
+  const due = dayWords(docsDueIso(now, deadline));
   const out = [];
   if (silent) out.push(remindPhrase(silent));
 
