@@ -7,6 +7,7 @@ import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, 
 import { addDays, todayMsk, workBefore } from '../../src/orders/workflow.mjs';
 import { customerSilent, workingAgo } from '../../src/orders/silence.mjs';
 import { signLong } from '../../src/ops/sign-ops.mjs';
+import { reviewLong } from '../../src/ops/today-ops.mjs';
 
 let S, owner, dispatcher, spec, head, other, org;
 const FIELDS = { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 77', area: '41' };
@@ -556,10 +557,10 @@ test('«Сегодня» у эксперта (2.369): дело на провер
   assert.equal((await step(spec, slow, 'in_work')).status, 200);
   const quick = await offered('Только что сдано', 9);
   assert.equal((await step(spec, quick, 'in_work')).status, 200);
-  // Сдано на проверку: у долгого — 50 часов назад, у второго — сейчас (по истории статусов, не по времени дела).
+  // Сдано на проверку: у долгого — 50 рабочих часов назад (2.384), у второго — сейчас (по истории статусов, не по времени дела).
   await S.sql`update orders set status = 'review' where id in (${slow.id}, ${quick.id})`;
   await S.sql`insert into order_status_history (order_id, from_status, to_status, side, at)
-    values (${slow.id}, 'in_work', 'review', 'customer', now() - interval '50 hours'), (${quick.id}, 'in_work', 'review', 'customer', now())`;
+    values (${slow.id}, 'in_work', 'review', 'customer', ${workingAgo(50 * 3600_000)}), (${quick.id}, 'in_work', 'review', 'customer', now())`;
   const e = (await spec.req('GET', '/api/today')).body.expert;
   assert.deepEqual(ids(e.review_long), [slow.id]);
   assert.ok(Date.now() - Date.parse(e.review_long[0].review_since) >= 49 * 3600_000, 'время — последний переход в проверку');
@@ -636,6 +637,20 @@ test('заказчик не отвечает (прогон 2.380): выходн�
   await at('2026-10-20T10:00:00+03:00');
   assert.equal(await quiet('2026-10-22T09:00:00+03:00'), false);
   assert.equal(await quiet('2026-10-22T10:00:00+03:00'), true);
+});
+
+test('диспетчер проверяет дольше 2 дней (2.384): дни рабочие — выходные и праздник 4 ноября не в счёт', () => {
+  const long = (since, now) => reviewLong(new Date(since), new Date(now));
+  // Сдано в пятницу 18:00 — в понедельник утром ещё не «долго», «долго» — со вторника 18:00.
+  assert.equal(long('2026-10-23T18:00:00+03:00', '2026-10-26T09:00:00+03:00'), false, 'по календарю 63 часа, рабочих — 15');
+  assert.equal(long('2026-10-23T18:00:00+03:00', '2026-10-27T17:59:00+03:00'), false);
+  assert.equal(long('2026-10-23T18:00:00+03:00', '2026-10-27T18:00:00+03:00'), true);
+  // Вторник 3 ноября, полдень: 4 ноября — праздник.
+  assert.equal(long('2026-11-03T12:00:00+03:00', '2026-11-05T13:00:00+03:00'), false);
+  assert.equal(long('2026-11-03T12:00:00+03:00', '2026-11-06T12:00:00+03:00'), true);
+  // Будни подряд — как раньше, 48 часов.
+  assert.equal(long('2026-10-20T10:00:00+03:00', '2026-10-22T09:59:00+03:00'), false);
+  assert.equal(long('2026-10-20T10:00:00+03:00', '2026-10-22T10:00:00+03:00'), true);
 });
 
 test('ждут подписи организации 2 дня и дольше (2.383): дни рабочие — выходные и праздник 4 ноября не в счёт', () => {
