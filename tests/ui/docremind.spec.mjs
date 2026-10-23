@@ -4,7 +4,7 @@
 // Номера +7 999 000-87-xx — только здесь.
 import { test, expect } from '@playwright/test';
 import pg from 'pg';
-import { DB_URL, TEST_TOKEN } from '../helpers.mjs';
+import { DB_URL, TEST_TOKEN, docsAskedAgo } from '../helpers.mjs';
 
 const CONTROL = process.env.UI_TEST_CONTROL_TOKEN || TEST_TOKEN;
 const H = { 'x-delo-request': '1' };
@@ -68,15 +68,16 @@ test('2.234: документы не пришли 3 дня — «Напомни�
   }
   expect((await sp.request.post(`/api/orders/${ids[0]}/doc-requests`, { data: { items: ['egrn', 'tech_plan'] }, headers: H })).status()).toBe(201);
   expect((await sp.request.post(`/api/orders/${ids[1]}/doc-requests`, { data: { items: ['egrn'] }, headers: H })).status()).toBe(201);
-  // Запросили 4 дня назад.
-  await db((c) => c.query("update doc_requests set requested_at = now() - interval '4 days' where order_id = any($1::uuid[])", [ids]));
+  // Запросили 4 рабочих дня назад (2.381: выходные и праздники не в счёт); «ждём N дн.» — по календарю.
+  const asked = docsAskedAgo();
+  await db((c) => c.query('update doc_requests set requested_at = $2 where order_id = any($1::uuid[])', [ids, asked.at]));
 
   // «Сегодня»: «Документы не пришли» — что ждём и сколько; кнопка напоминает прямо здесь.
   await sp.goto('/kabinet');
   const rows = sp.locator('li[data-today-item="docs-wait"]');
   await expect(rows).toHaveCount(2);
   const first = rows.filter({ hasText: 'Квартира: документы не пришли' });
-  await expect(first.locator('[data-role="docs-wait-what"]')).toHaveText('Ждём 4 дн.: Выписка из ЕГРН, Технический паспорт БТИ или поэтажный план');
+  await expect(first.locator('[data-role="docs-wait-what"]')).toHaveText(`Ждём ${asked.days} дн.: Выписка из ЕГРН, Технический паспорт БТИ или поэтажный план`);
   await expect(first).toContainText('заказчику ещё не напоминали');
   await first.scrollIntoViewIfNeeded();
   await shot(sp, 'dr1-2234-segodnya-dokumenty-ne-prishli');
@@ -88,7 +89,7 @@ test('2.234: документы не пришли 3 дня — «Напомни�
   await sp.goto(`/kabinet#order=${ids[1]}&to=docs`);
   const box = sp.locator('#docreq-wait');
   await expect(box).toBeVisible();
-  await expect(sp.locator('#docreq-wait-text')).toHaveText('Заказчик не прислал «Выписка из ЕГРН» — ждём 4 дн. Напомните заказчику одной кнопкой.');
+  await expect(sp.locator('#docreq-wait-text')).toHaveText(`Заказчик не прислал «Выписка из ЕГРН» — ждём ${asked.days} дн. Напомните заказчику одной кнопкой.`);
   await box.scrollIntoViewIfNeeded();
   await shot(sp, 'dr3-2234-delo-dokumenty-ne-prishli');
   await sp.locator('#docreq-remind').click();
@@ -128,7 +129,7 @@ test('2.234: документы не пришли 3 дня — «Напомни�
   const cases = hp.locator('#org-cases > li');
   await expect(cases).toHaveCount(2);
   const old = cases.nth(0).locator('[data-role="docs-wait"]');
-  await expect(old).toHaveText(/^Ждём документы от заказчика 4 дн\.: Выписка из ЕГРН, Технический паспорт БТИ или поэтажный план · эксперт напоминал заказчику /);
+  await expect(old).toHaveText(new RegExp(`^Ждём документы от заказчика ${asked.days} дн\\.: Выписка из ЕГРН, Технический паспорт БТИ или поэтажный план · эксперт напоминал заказчику `));
   await expect(old).toHaveClass(/notice-warn/);
   await expect(cases.nth(1).locator('[data-role="docs-wait"]')).toHaveText(/^Ждём документы от заказчика с сегодняшнего дня: Выписка из ЕГРН · эксперт напоминал заказчику /);
   await expect(cases.nth(1).locator('[data-role="docs-wait"]')).toHaveClass(/muted/);

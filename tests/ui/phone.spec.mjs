@@ -6,7 +6,7 @@
 // На каждой странице: нет прокрутки вбок, нет ошибок JavaScript, нет запросов к чужим адресам.
 import { test as base, expect } from '@playwright/test';
 import pg from 'pg';
-import { DB_URL, TEST_TOKEN, BRIDGE_SECRET, testEnv } from '../helpers.mjs';
+import { DB_URL, TEST_TOKEN, BRIDGE_SECRET, testEnv, docsAskedAgo } from '../helpers.mjs';
 import { signBridge } from '../../src/bridge/signature.mjs';
 import { makePdf, makeDocx } from '../tools/make-docs.mjs';
 import { extractPages } from '../../src/ai/extract.mjs';
@@ -11148,10 +11148,11 @@ test('прогон 2.240: эксперт и руководитель по пач
 
   // Эксперт запросил техпаспорт 4 дня назад — не пришёл: «Сегодня» → «Напомнить заказчику» (2.234).
   expect((await ep.request.post(`/api/orders/${A}/doc-requests`, { data: { items: ['tech_plan'] }, headers: H })).status()).toBe(201);
-  await db((c) => c.query("update doc_requests set requested_at = now() - interval '4 days' where order_id = $1", [A]));
+  const asked = docsAskedAgo(); // 2.381: 4 рабочих дня, «ждём N дн.» — по календарю
+  await db((c) => c.query('update doc_requests set requested_at = $2 where order_id = $1', [A, asked.at]));
   await ep.goto('/kabinet');
   const wait = ep.locator('li[data-today-item="docs-wait"]').filter({ hasText: 'Девятая пачка: квартира' });
-  await expect(wait.locator('[data-role="docs-wait-what"]')).toHaveText('Ждём 4 дн.: Технический паспорт БТИ или поэтажный план');
+  await expect(wait.locator('[data-role="docs-wait-what"]')).toHaveText(`Ждём ${asked.days} дн.: Технический паспорт БТИ или поэтажный план`);
   await wait.getByRole('button', { name: 'Напомнить заказчику' }).click();
   await expect(wait.locator('[data-role="docs-remind-msg"]')).toHaveText('Напомнили — заказчику отправлено уведомление; снова можно завтра');
   await wait.scrollIntoViewIfNeeded();
@@ -11161,7 +11162,7 @@ test('прогон 2.240: эксперт и руководитель по пач
   await hp.goto(`/kabinet#org=${orgId}&to=docs`);
   await expect(hp.locator('#org-cases-filter [data-filter="docs"]')).toHaveText('Ждём документы от заказчика · 1');
   const dw = hp.locator(`#org-cases > li[data-case="${ref}"] [data-role="docs-wait"]`);
-  await expect(dw).toHaveText(/^Ждём документы от заказчика 4 дн\.: Технический паспорт БТИ или поэтажный план · эксперт напоминал заказчику /);
+  await expect(dw).toHaveText(new RegExp(`^Ждём документы от заказчика ${asked.days} дн\\.: Технический паспорт БТИ или поэтажный план · эксперт напоминал заказчику `));
   await expect(dw).toHaveClass(/notice-warn/);
   await dw.scrollIntoViewIfNeeded();
   await shot(hp, 'c98-progon9-rukovoditel-zhdyom-dokumenty');
@@ -16570,6 +16571,7 @@ test('2.347: письмо о переносе не пришло 3 дня — н�
   const ep = await ctx(), cp = await ctx();
   const expert = await signIn(ep, '+79990034711'), customer = await signIn(cp, '+79990034712');
   const ru = (iso) => iso.split('-').reverse().join('.');
+  const asked = docsAskedAgo(); // 2.381: 4 рабочих дня, «ждём N дн.» — по календарю
   const A = await db(async (c) => {
     await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
     await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
@@ -16580,7 +16582,7 @@ test('2.347: письмо о переносе не пришло 3 дня — н�
     await c.query(`insert into deadline_requests (order_id, requested_by, old_deadline, new_deadline, reason, outcome, decided_at, seen_at)
       values ($1, $2, $3, $4, 'Банк согласовал перенос устно', 'approved', now() - interval '5 days', now())`, [o.id, expert.id, inDays(4), inDays(12)]);
     await c.query(`insert into doc_requests (order_id, item_id, title, requested_by, requested_at)
-      values ($1, 'task_move', $2, $3, now() - interval '4 days')`, [o.id, `Письмо банка о переносе срока отчёта на ${ru(inDays(12))}`, expert.id]);
+      values ($1, 'task_move', $2, $3, $4)`, [o.id, `Письмо банка о переносе срока отчёта на ${ru(inDays(12))}`, expert.id, asked.at]);
     return o.id;
   });
   expect((await cp.request.post(`/api/orders/${A}/documents`, {
@@ -16590,7 +16592,7 @@ test('2.347: письмо о переносе не пришло 3 дня — н�
   await ep.goto('/kabinet');
   const row = ep.locator('#today-box li[data-today-item="task-moved"]');
   await expect(row).toContainText('письмо банка о переносе попросили');
-  await expect(row).toContainText('ждём 4 дн., заказчику ещё не напоминали');
+  await expect(row).toContainText(`ждём ${asked.days} дн., заказчику ещё не напоминали`);
   await expect(row.locator('[data-action="task-move-ask"]')).toHaveCount(0);
   await expect(ep.locator('#today-box li[data-today="docs-wait"]')).toHaveCount(0);
   expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
@@ -16598,7 +16600,7 @@ test('2.347: письмо о переносе не пришло 3 дня — н�
   await shot(ep, '54w1-segodnya-pismo-ne-prishlo');
   // В деле — «не пришло 4 дня» и «Напомнить заказчику».
   await row.locator('button.open').click();
-  await expect(ep.locator('#deadline-task-moved-msg')).toContainText('не пришло 4 дня. Заказчику ещё не напоминали.');
+  await expect(ep.locator('#deadline-task-moved-msg')).toContainText(`не пришло ${asked.days} ${asked.days % 10 === 1 && asked.days % 100 !== 11 ? 'день' : [2, 3, 4].includes(asked.days % 10) && ![12, 13, 14].includes(asked.days % 100) ? 'дня' : 'дней'}. Заказчику ещё не напоминали.`);
   const remind = ep.locator('#deadline-task-moved-remind');
   await expect(remind).toBeVisible();
   await ep.locator('#deadline-task-moved').scrollIntoViewIfNeeded();
@@ -16628,7 +16630,7 @@ test('2.355: утренняя сводка эксперта — письмо о 
   });
   await ep.goto('/kabinet#notifications');
   const digest = ep.locator('#notifications li').first();
-  await expect(digest).toContainText('На сегодня: письмо о переносе попросили, а оно не пришло 3 дня и дольше — напомните заказчику: 2 дела');
+  await expect(digest).toContainText('На сегодня: письмо о переносе попросили, а оно не пришло 3 рабочих дня и дольше — напомните заказчику: 2 дела');
   expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
   await shot(ep, 'g21-ekspert-svodka-napomnite-pro-pismo');
   await digest.getByRole('button').click();
