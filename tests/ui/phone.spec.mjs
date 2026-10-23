@@ -16920,14 +16920,14 @@ test('2.369: «Сегодня» — дело на проверке у диспе
     [customer.id, expert.id, title, inDays(6)])).rows[0].id;
     const slow = await add('Долго на проверке: квартира'), fresh = await add('Только что сдано: квартира');
     await c.query(`insert into order_status_history (order_id, from_status, to_status, side, at)
-      values ($1, 'in_work', 'review', 'customer', now() - interval '3 days 2 hours'), ($2, 'in_work', 'review', 'customer', now())`, [slow, fresh]);
+      values ($1, 'in_work', 'review', 'customer', $3), ($2, 'in_work', 'review', 'customer', now())`, [slow, fresh, workingAgo(74 * 3600_000)]); // 2.384: рабочие дни
     return slow;
   });
   await ep.goto('/kabinet');
-  await expect(ep.locator('#today-box li[data-today="review-long"]')).toHaveText('Диспетчер проверяет дольше 2 дней · 1');
+  await expect(ep.locator('#today-box li[data-today="review-long"]')).toHaveText('Диспетчер проверяет дольше 2 рабочих дней · 1');
   const row = ep.locator('#today-box li[data-today-item="review-long"]');
   await expect(row.locator('.title')).toHaveText('Долго на проверке: квартира');
-  await expect(row.locator('[data-role="review-long-what"]')).toHaveText(/^Сдано на проверку .+ · ждёт 3 дн\. 2 ч — ответ диспетчера придёт в уведомления$/);
+  await expect(row.locator('[data-role="review-long-what"]')).toHaveText(/^Сдано на проверку .+ · ждёт \d+ дн\.( \d+ ч)? — ответ диспетчера придёт в уведомления$/);
   await expect(row.locator('button')).toHaveCount(1);
   await expect(ep.locator('#today-box li[data-today="review"]')).toHaveText('Ждут проверки диспетчера · 1');
   await expect(ep.locator('#today-box li[data-today-item="review"]')).toContainText('Только что сдано: квартира');

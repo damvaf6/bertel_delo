@@ -41,7 +41,7 @@ import { latest, taskDraftItems, taskDueFor, taskDueSign, taskMoveLetter } from 
 import { assignmentDocs, TASK_MOVE } from './ai-ops.mjs';
 import { READ_MAX_BYTES, extractPages, readableKind } from '../ai/extract.mjs';
 import { reportMade } from '../ai/report-checks.mjs';
-import { customerSilent } from '../orders/silence.mjs';
+import { customerSilent, workingMs } from '../orders/silence.mjs';
 
 // «Горит» — просрочено или до срока не больше двух дней (как подсветка в списке дел).
 const HOT_DAYS = 2;
@@ -58,7 +58,9 @@ const TASK_MOVED_LONG_DAYS = 2;
 // Исправленный файл после возврата руководителя загружен больше суток назад, а эксперт его не подписал (2.204).
 const FRESH_LATE_HOURS = 24;
 // Дело на проверке у диспетчера столько дней и дольше (2.369) — эксперту строкой «Диспетчер проверяет дольше 2 дней», без кнопок.
+// 2.384: дни рабочие, по Москве — сданное в пятницу вечером в понедельник утром ещё не «долго» (src/orders/silence.mjs).
 const REVIEW_LONG_DAYS = 2;
+export const reviewLong = (since, now = new Date()) => workingMs(since, now) >= REVIEW_LONG_DAYS * 86400_000;
 
 async function expertPart(sql, actor, registry, today, storage) {
   const sp = await sql.one`select user_id from specialists where user_id = ${actor.id}`;
@@ -271,7 +273,7 @@ async function expertPart(sql, actor, registry, today, storage) {
       and to_status = 'review' group by order_id` : [];
   const reviewRows = reviewing.map((o) => {
     const at = new Date(sentAt.find((x) => x.order_id === o.id)?.at ?? o.updated_at);
-    return item(o, { review_since: at.toISOString(), long: Date.now() - at.getTime() >= REVIEW_LONG_DAYS * 86400_000 });
+    return item(o, { review_since: at.toISOString(), long: reviewLong(at) });
   });
   return {
     ai_recheck: recheck,

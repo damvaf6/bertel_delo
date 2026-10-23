@@ -451,8 +451,8 @@ export async function loadToday() {
       (x) => { location.hash = `order=${x.id}&to=inspect`; }),
       ...group('hot', 'Горит срок', e.hot.filter((x) => !noResult.some((n) => n.id === x.id) && !taskDue.some((n) => n.id === x.id)), (x) => [x.title, `${x.service} · ${deadline({ ...x, who: 'Вы попросили' }, t.today)}`], toOrder, askLate),
       ...group('offers', 'Новые предложения', e.offers, (x) => [x.title, [x.service, x.fee_kop ? `Вам ${rub(x.fee_kop)}` : null, deadline(x, t.today)].filter(Boolean).join(' · ')], toOrder),
-      // На проверке у диспетчера 2 дня и дольше (2.369) — строкой, без кнопок: делать ничего не нужно, ответ придёт в ленту.
-      ...group('review-long', 'Диспетчер проверяет дольше 2 дней', e.review_long ?? [], (x) => [x.title, `${x.service} · ${deadline(x, t.today)}`,
+      // На проверке у диспетчера 2 рабочих дня и дольше (2.369, 2.384) — строкой, без кнопок: делать ничего не нужно, ответ придёт в ленту.
+      ...group('review-long', 'Диспетчер проверяет дольше 2 рабочих дней', e.review_long ?? [], (x) => [x.title, `${x.service} · ${deadline(x, t.today)}`,
         { class: 'warn-line', role: 'review-long-what', text: `Сдано на проверку ${since(x.review_since)} · ждёт ${waited(x.review_since)} — ответ диспетчера придёт в уведомления` }], toOrder),
       ...group('review', 'Ждут проверки диспетчера', e.review, (x) => [x.title, `${x.service} · ${deadline(x, t.today)}`], toOrder),
     );
