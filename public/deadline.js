@@ -87,7 +87,9 @@ function renderHistory(h, moved) {
   const box = $('deadline-timeline');
   box.classList.toggle('hidden', !h);
   $('deadline-timeline-list').replaceChildren(...(h ?? []).map((x) => {
-    const [main, sub] = historyLine(x);
+    const [main, line] = historyLine(x);
+    // 2.388: срок записи в выходной или праздник — пометка и чем день нерабочий.
+    const sub = [x.off ? `${dayRu(x.kind === 'request' ? x.new_deadline : x.day)} — ${x.off}, нерабочий день` : null, line].filter(Boolean).join(' · ');
     const kind = x.kind === 'request' ? (OUTCOME[x.outcome]?.[1] ?? '') : '';
     // 2.349: письмо со сроком раньше согласованного — пометка и та же просьба письма с новым сроком, что в блоке выше.
     const short = x.kind === 'letter' && x.short;
@@ -98,7 +100,8 @@ function renderHistory(h, moved) {
       el('div', {},
         el('div', { class: 'name' }, el('span', { class: 'muted', text: `${dayShort(x.at)} · ` }), el('span', { text: `${main} ` }),
           ...(kind ? [el('span', { class: `badge ${kind}`, text: OUTCOME[x.outcome][0] })] : []),
-          ...(short ? [el('span', { class: 'badge warn', text: 'срок раньше согласованного' })] : [])),
+          ...(short ? [el('span', { class: 'badge warn', text: 'срок раньше согласованного' })] : []),
+          ...(x.off ? [el('span', { class: 'badge warn', 'data-off': '1', text: 'нерабочий день' })] : [])),
         ...(sub ? [el('div', { class: 'muted', text: sub })] : []),
         ...(ask ? [ask] : [])));
   }));

@@ -14947,7 +14947,7 @@ test('2.337: «История сроков» в деле', async ({ browser, bas
   await expect(items.nth(0)).toContainText(`Срок дела при заказе — ${long(inDays(4))}`);
   await expect(items.nth(1)).toHaveAttribute('data-history', 'request');
   await expect(items.nth(1)).toContainText(`Попросили перенести срок с ${long(inDays(4))} на ${long(inDays(12))}`);
-  await expect(items.nth(1).locator('.badge')).toHaveText('перенесён');
+  await expect(items.nth(1).locator('.badge:not([data-off])')).toHaveText('перенесён');
   await expect(items.nth(2)).toContainText(`Срок по заданию на оценку — не позднее ${long(inDays(5))}`);
   await expect(items.nth(2)).toContainText('файл «Задание банка.txt»');
   await expect(items.nth(3)).toContainText('Попросили у заказчика письмо о переносе срока');
@@ -14961,6 +14961,45 @@ test('2.337: «История сроков» в деле', async ({ browser, bas
   await cp.goto(`/kabinet#order=${A}`);
   await expect(cp.locator('#deadline-box')).toBeVisible();
   await expect(cp.locator('#deadline-timeline')).toBeHidden();
+  for (const p of [ep, cp]) await p.context().close();
+});
+
+// 2.388: в «Истории сроков» срок в выходной или праздник — пометка «нерабочий день» и чем день нерабочий.
+test('2.388: «История сроков» — срок в нерабочий день', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), cp = await ctx();
+  const expert = await signIn(ep, '+79990033881'), customer = await signIn(cp, '+79990033882');
+  const long = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+  const dow = (iso) => new Date(`${iso}T00:00:00Z`).getUTCDay();
+  let sat = 3;
+  while (dow(inDays(sat)) !== 6) sat += 1;
+  let hol = sat + 1;
+  while (!holidayName(inDays(hol)) || [0, 6].includes(dow(inDays(hol)))) hol += 1;
+  const A = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Срок в праздник: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"deal","region":"moscow","object_type":"flat","address":"г. Москва, Садовая ул., д. 19, кв. 2"}') returning id`,
+    [customer.id, expert.id, inDays(hol)]);
+    await c.query(`insert into deadline_requests (order_id, requested_by, old_deadline, new_deadline, reason, outcome, decided_at, seen_at)
+      values ($1, $2, $3, $4, 'Жду выписку', 'approved', now(), now())`, [o.id, expert.id, inDays(sat), inDays(hol)]);
+    return o.id;
+  });
+  await ep.goto(`/kabinet#order=${A}&to=deadline`);
+  const box = ep.locator('#deadline-timeline');
+  await expect(box).toBeVisible();
+  await box.locator('summary').click();
+  const items = box.locator('li');
+  await expect(items).toHaveCount(2);
+  await expect(items.nth(0)).toContainText(`Срок дела при заказе — ${long(inDays(sat))}`);
+  await expect(items.nth(0).locator('[data-off]')).toHaveText('нерабочий день');
+  await expect(items.nth(0)).toContainText(`${long(inDays(sat))} — суббота, нерабочий день`);
+  await expect(items.nth(1).locator('[data-off]')).toHaveText('нерабочий день');
+  await expect(items.nth(1)).toContainText(`${long(inDays(hol))} — ${holidayName(inDays(hol))}, нерабочий день`);
+  expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await box.scrollIntoViewIfNeeded();
+  await shot(ep, '54zo-istoriya-srokov-nerabochiy-den');
   for (const p of [ep, cp]) await p.context().close();
 });
 
@@ -15000,7 +15039,7 @@ test('2.349: «История сроков» — письмо о перенос�
   await box.locator('summary').click();
   const letter = box.locator('li[data-history="letter"]');
   await expect(letter).toHaveAttribute('data-short', '1');
-  await expect(letter.locator('.badge.warn')).toHaveText('срок раньше согласованного');
+  await expect(letter.locator('.badge.warn:not([data-off])')).toHaveText('срок раньше согласованного');
   await expect(letter).toContainText(`Письмо о переносе: срок перенесён с ${long(inDays(5))} на ${long(inDays(8))}`);
   await expect(letter).toContainText(`а срок дела перенесён на ${long(inDays(12))} — сдайте к ${long(inDays(8))} или попросите письмо с новым сроком`);
   const ask = letter.locator('[data-history-ask]');
@@ -16454,7 +16493,7 @@ test('прогон 2.350: эксперт и руководитель по пач
   const box = ep.locator('#deadline-timeline');
   await box.locator('summary').click();
   const letter = box.locator('li[data-history="letter"]');
-  await expect(letter.locator('.badge.warn')).toHaveText('срок раньше согласованного');
+  await expect(letter.locator('.badge.warn:not([data-off])')).toHaveText('срок раньше согласованного');
   await letter.scrollIntoViewIfNeeded();
   await shot(ep, 'g14-progon20-istoriya-srokov');
   await letter.locator('[data-history-ask]').click();

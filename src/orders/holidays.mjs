@@ -40,6 +40,12 @@ export function holidayName(iso) {
   return yearHolidays(Number(day.slice(0, 4))).get(day) ?? null;
 }
 export const isWorkday = (iso) => WORKING.has(iso) || (![0, 6].includes(dow(iso)) && !holidayName(iso));
+// Чем день нерабочий, или null: '2026-11-04' → 'День народного единства', '2026-10-24' → 'суббота'.
+const WEEKEND = { 0: 'воскресенье', 6: 'суббота' };
+export function offDayName(iso) {
+  const day = String(iso).slice(0, 10);
+  return isWorkday(day) ? null : (holidayName(day) ?? WEEKEND[dow(day)] ?? 'нерабочий день');
+}
 // Ближайший рабочий день с этого (включительно) вперёд и последний рабочий день перед этим днём.
 export function workdayFrom(iso) { let d = iso; while (!isWorkday(d)) d = plus(d, 1); return d; }
 export function workdayBefore(iso) { let d = plus(iso, -1); while (!isWorkday(d)) d = plus(d, -1); return d; }
