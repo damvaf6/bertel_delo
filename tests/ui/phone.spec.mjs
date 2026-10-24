@@ -6774,7 +6774,9 @@ test('дела экспертов (2.133): руководитель видит �
         [title, customer.id, a.id])).rows[0].id;
       await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [id, a.id]);
       await c.query(`insert into order_status_history (order_id, actor_id, side, from_status, to_status, at)
-        values ($1, $2, 'executor', 'awaiting_executor', 'in_work', $3)`, [id, a.id, workingAgo(idle * 86400_000 + 3600_000)]);
+        values ($1, $2, 'executor', 'awaiting_executor', 'in_work', $3)`,
+        // Свежее — минуту назад: «рабочий час назад» ночью и в выходные — уже прошлый рабочий день, не «сегодня».
+        [id, a.id, idle ? workingAgo(idle * 86400_000 + 3600_000) : new Date(Date.now() - 60_000)]);
       // Заказчик спрашивает в переписке — движением дела это не считается.
       if (idle) await c.query("insert into order_messages (order_id, author_id, side, body) values ($1, $2, 'customer', 'Как продвигается оценка?')", [id, customer.id]);
     };
@@ -8666,7 +8668,7 @@ test('прогон 2.160: эксперт и руководитель по пач
 
   // Руководитель: «Сегодня» — сколько ждёт подпись и сколько пунктов эксперт отметил (как в «Делах экспертов»).
   await hp.goto('/kabinet');
-  await expect(hp.locator(`li[data-today-item="org-sign-long-${orgId}"]`)).toContainText(/файлов: 1 · эксперт подписал .+ — ждёт 3 дн\./);
+  await expect(hp.locator(`li[data-today-item="org-sign-long-${orgId}"]`)).toContainText(/файлов: 1 · эксперт подписал .+ — ждёт [345] дн\./); // 3 рабочих дня — в выходные и понедельник по календарю больше
   await expect(hp.locator(`li[data-today-item="org-returned-${orgId}"]`)).toContainText('3 дн. назад · эксперт отметил исправленными 1 из 2');
   await shot(hp, 'c13-progon-rukovoditel-segodnya');
   // «Дела экспертов»: отборы пачки, у каждого дела — своё.
@@ -8677,7 +8679,7 @@ test('прогон 2.160: эксперт и руководитель по пач
   await expect(hp.locator('[data-filter="returned"]')).toHaveText('Вернул эксперту · 1');
   await expect(rows.nth(0).locator('.overdue.big')).toContainText('ПРОСРОЧЕНО на 2 дн.');
   await expect(hp.locator('#org-cases [data-role="returned"]')).toContainText('(3 дн. назад) — эксперт отметил исправленными 1 из 2');
-  await expect(hp.locator('#org-cases')).toContainText('— ждёт 3 дн.');
+  await expect(hp.locator('#org-cases')).toContainText(/— ждёт [345] дн\./);
   await shot(hp, 'c14-progon-rukovoditel-dela');
   // У новой версии в «Подписи организации» — что эксперт отметил.
   await expect(hp.locator(`#org-sign li.doc[data-doc="${b2}"]`)).toContainText('Эксперт ещё не подписал');
@@ -17560,4 +17562,47 @@ test('2.396: срок заявки в праздник — подсказка и
   await expect(page.locator('#d-deadline-off')).toBeHidden();
   await expect(page.locator('#d-deadline-workday')).toBeHidden();
   await page.context().close();
+});
+
+// 2.397: эксперт просит перенести срок на выходной или праздник — диспетчеру предупреждение «нерабочий день» и одной
+// кнопкой ближайший рабочий день перед ним; срок дела и просьба — на рабочий день, исполнителю — пояснение.
+test('2.397: перенос срока на нерабочий день — диспетчер согласует на рабочий', async ({ page, browser, baseURL }) => {
+  await signIn(page, '+79990003971');
+  const id = (await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира: перенос на праздник' }, headers: H })).json()).order.id;
+  expect((await page.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(2), fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, Сроковая ул., 7' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  let n = 4;
+  while (!offDayName(inDays(n)) || workdayBefore(inDays(n)) <= inDays(2)) n += 1;
+  const want = inDays(n), work = workdayBefore(want);
+  const ep = await (await phoneContext(browser, baseURL)).newPage();
+  const expert = await signIn(ep, '+79990003972');
+  const dp = await (await phoneContext(browser, baseURL)).newPage();
+  const disp = await signIn(dp, '+79990003973');
+  await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("update orders set price_kop = 1500000, paid_at = now(), status = 'in_work', executor_user_id = $2 where id = $1", [id, expert.id]);
+    await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    await c.query("insert into deadline_requests (order_id, requested_by, old_deadline, new_deadline, reason) values ($1, $2, $3, $4, 'Осмотр перенесён владельцем')", [id, expert.id, inDays(2), want]);
+  });
+  const ru = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+  await dp.goto(`/kabinet#order=${id}`);
+  const dbox = dp.locator('#deadline-box');
+  await expect(dbox.locator('#deadline-off')).toHaveText(`${ru(want)} — ${offDayName(want)}, нерабочий день. Ближайший рабочий день перед ним — ${ru(work)}`);
+  await expect(dbox.locator('#deadline-approve')).toHaveText(`Согласиться на ${ru(want)}`);
+  await expect(dbox.locator('#deadline-approve-work')).toHaveText(`Согласовать на ${ru(work)}`);
+  expect(await dp.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await dbox.locator('#deadline-open').scrollIntoViewIfNeeded();
+  await shot(dp, 'i11-perenos-na-vyhodnoj-dispetcher');
+  await dbox.locator('#deadline-approve-work').click();
+  await expect(dp.locator('#deadline-msg')).toHaveText(`Срок перенесён на ${ru(work)}. Исполнителю и заказчику пришло уведомление.`);
+  await expect(dp.locator('#order-deadline')).toHaveText(`Срок: ${ru(work)}`);
+  // Эксперт: свежий ответ — согласовано на рабочий день и почему.
+  await ep.goto(`/kabinet#order=${id}`);
+  await expect(ep.locator('#deadline-fresh')).toContainText(`срок перенесён с ${ru(inDays(2))} на ${ru(work)}`);
+  await expect(ep.locator('#deadline-fresh')).toContainText('нерабочий день');
+  await expect(ep.locator('#deadline-off')).toBeHidden();
+  await ep.context().close();
+  await dp.context().close();
 });

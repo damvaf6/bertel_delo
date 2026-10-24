@@ -5,7 +5,7 @@
 import { HttpError } from '../http/core.mjs';
 import { orderSides } from '../access/policy.mjs';
 import { addDays, todayMsk } from '../orders/workflow.mjs';
-import { isWorkday, offDayName, workdayFrom } from '../orders/holidays.mjs';
+import { isWorkday, offDayName, workdayBefore, workdayFrom } from '../orders/holidays.mjs';
 import { BUSY_DEADLINES, isBusy, tripsByDay } from '../orders/schedule.mjs';
 import { yearStats } from '../matching/stats.mjs';
 import { customersOf, dispatchers, notify, orgHeads } from '../notify/notify.mjs';
@@ -18,6 +18,8 @@ import { docLong, docWait } from './docreq-ops.mjs';
 const MAX_DAYS = 730; // как у срока заявки — не дальше двух лет
 const DECIDE_STATUSES = ['in_work', 'review'];
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+const ruDay = (iso) => `${Number(iso.slice(8, 10))} ${MONTHS[Number(iso.slice(5, 7)) - 1]} ${iso.slice(0, 4)}`;
 
 export function newDateFrom(value, order) {
   const v = String(value ?? '');
@@ -30,6 +32,17 @@ export function newDateFrom(value, order) {
   if (v < todayMsk()) throw new HttpError(400, 'in_past', 'Новый срок уже прошёл — выберите сегодня или позже');
   if (v > addDays(todayMsk(), MAX_DAYS)) throw new HttpError(400, 'deadline_far', 'Срок — не дальше двух лет');
   return v;
+}
+
+// 2.397: новый срок просьбы в выходной или праздник — диспетчеру ближайший рабочий день: последний рабочий перед ним, если он
+// всё ещё позже нынешнего срока и не в прошлом, иначе первый рабочий после. Рабочий день — null.
+export function workdayFor(newDeadline, oldDeadline, today = todayMsk()) {
+  const day = String(newDeadline).slice(0, 10);
+  const off = offDayName(day);
+  if (!off) return null;
+  const before = workdayBefore(day);
+  const ok = before > String(oldDeadline).slice(0, 10) && before >= today;
+  return { off, day: ok ? before : workdayFrom(day), before: ok };
 }
 
 async function openOf(sql, order, raw) {
@@ -246,6 +259,8 @@ async function view(sql, actor, order, registry, storage) {
   // От организации (2.221): руководитель попросил перенос, потому что передать дело некому, — видно, кто просит.
   const requests = rows.map((r) => ({ ...r, id: String(r.id) }));
   const open = requests.find((r) => !r.outcome) ?? null;
+  // 2.397: просят на нерабочий день — диспетчеру предупреждение и ближайший рабочий день (`work`).
+  if (open && sides.includes('dispatcher')) open.work = workdayFor(open.new_deadline, open.old_deadline);
   // Сколько раз уже переносили (2.169): только согласованные просьбы — число, всего дней и первоначальный срок.
   const ok = requests.filter((r) => r.outcome === 'approved');
   const moved = ok.length ? {
@@ -369,12 +384,23 @@ export function deadlineOps() {
         const r = await openOf(sql, order, params.rid);
         const approve = body?.approve === true;
         if (!approve && body?.approve !== false) throw new HttpError(400, 'bad_input', 'Согласиться или отказать?');
-        const answer = body?.answer && String(body.answer).trim() ? text(body.answer, 'Пояснение', 1000) : null;
-        const { old_deadline: oldDeadline, new_deadline: newDeadline } = r;
+        let answer = body?.answer && String(body.answer).trim() ? text(body.answer, 'Пояснение', 1000) : null;
+        const { old_deadline: oldDeadline, new_deadline: asked } = r;
+        // 2.397: согласовать на ближайший рабочий день вместо нерабочего — только тот день, что показан диспетчеру; просьба
+        // запоминает согласованный срок, без пояснения диспетчера — пояснение «просили на … — нерабочий день».
+        let newDeadline = asked;
+        if (body?.deadline != null) {
+          const work = workdayFor(asked, oldDeadline);
+          if (!approve || !work || String(body.deadline) !== work.day) {
+            throw new HttpError(400, 'bad_input', 'Этот срок не предлагался — обновите страницу');
+          }
+          newDeadline = work.day;
+          answer ??= `Просили перенести на ${ruDay(asked)} — нерабочий день (${work.off}); согласовано на ${ruDay(newDeadline)}.`;
+        }
         if (approve && oldDeadline !== order.deadline) throw new HttpError(409, 'status_changed', 'Срок заявки уже изменился — обновите страницу');
         await sql.tx(async (tx) => {
           const done = await tx`update deadline_requests set outcome = ${approve ? 'approved' : 'declined'}, decided_by = ${actor.id},
-                                       decided_at = now(), answer = ${answer}
+                                       decided_at = now(), answer = ${answer}, new_deadline = ${newDeadline}
                                 where id = ${r.id} and outcome is null returning id`;
           if (!done.length) throw new HttpError(409, 'already_decided', 'По этой просьбе уже есть ответ — обновите страницу');
           if (approve) {
@@ -384,7 +410,7 @@ export function deadlineOps() {
             await moveDeadlineNotes(tx, order.id, newDeadline);
           }
           await audit(tx, actor, approve ? 'deadline.approve' : 'deadline.decline', 'order', order.id,
-            { from: oldDeadline, to: newDeadline, answer });
+            { from: oldDeadline, to: newDeadline, answer, ...(newDeadline !== asked ? { asked } : {}) });
           const executor = order.executor_user_id ? [order.executor_user_id] : [];
           await notify(tx, approve ? 'deadline_ext_approved' : 'deadline_ext_declined', { users: executor, orderId: order.id, actor });
           // Просила организация (2.221) — ответ и руководителям: уведомление ведёт к делу в «Делах экспертов».

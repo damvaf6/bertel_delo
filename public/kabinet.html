@@ -331,11 +331,13 @@
         <p class="hidden" id="deadline-pace"></p>
         <div class="hidden" id="deadline-open">
           <p id="deadline-open-text"></p>
+          <p class="msg warn hidden" id="deadline-off"></p>
           <div class="field hidden" id="deadline-answer-field">
             <label for="deadline-answer">Пояснение исполнителю (необязательно)</label>
             <input id="deadline-answer" type="text" maxlength="1000" autocomplete="off">
           </div>
           <div class="row">
+            <button type="button" class="hidden" id="deadline-approve-work"></button>
             <button type="button" class="hidden" id="deadline-approve">Согласиться</button>
             <button type="button" class="danger hidden" id="deadline-decline">Отказать</button>
             <button type="button" class="secondary hidden" id="deadline-withdraw">Отозвать просьбу</button>
