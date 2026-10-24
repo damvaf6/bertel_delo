@@ -17,6 +17,7 @@ import { BLOCKING_KINDS, dossierAlerts, loadDossier, needsValidDossier } from '.
 import { expertMonthReport, orgReturnsYear, reportMonth } from '../orgs/report.mjs';
 import { expertSchedule, taskDues } from '../orders/schedule.mjs';
 import { scheduleIcs } from '../orders/ics.mjs';
+import { holidayRunFrom } from '../orders/holidays.mjs';
 import { AWAY_BACK_SHOW_DAYS, awayBackOf } from '../notify/away.mjs';
 import { TAX_STATUSES, taxStatusFrom } from '../matching/executors.mjs';
 
@@ -80,6 +81,9 @@ async function profileView(sql, userId, registry) {
     onsite: sp.onsite,
     // Не принимает новые дела до дня until (2.77) — отпуск, загрузка; null — отметки нет или она прошла.
     away: awayOf(sp),
+    // День возвращения — нерабочий праздник (2.395): эксперт «вернётся» в каникулы, когда заказчики не работают, — подсказка
+    // продлить до последнего нерабочего дня: { name, to, back } (holidayRunFrom); null — возвращается в рабочий день.
+    away_holiday: awayOf(sp) ? holidayRunFrom(awayOf(sp).until) : null,
     // Организация, от которой работает (2.5а): результат подписывает ещё и её руководитель. null — частная практика.
     org: sp.org_name ? { id: sp.org_id, name: sp.org_name } : null,
     permits: permits.map((p) => ({ ...p, valid_until: p.valid_until ?? null })),

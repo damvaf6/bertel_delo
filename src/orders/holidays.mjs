@@ -55,6 +55,18 @@ export function offDayName(iso) {
 // Ближайший рабочий день с этого (включительно) вперёд и последний рабочий день перед этим днём.
 export function workdayFrom(iso) { let d = iso; while (!isWorkday(d)) d = plus(d, 1); return d; }
 export function workdayBefore(iso) { let d = plus(iso, -1); while (!isWorkday(d)) d = plus(d, -1); return d; }
+// Дни отдыха подряд с этого дня (2.395): день нерабочий и среди подряд идущих нерабочих дней есть праздник —
+// { name: праздник (не «перенос …», если в эти дни есть сам праздник), to: последний нерабочий день, back: первый рабочий после них }; иначе null (рабочий день или
+// обычные выходные). '2026-12-31' → { name: 'Новогодние каникулы', to: '2027-01-10', back: '2027-01-11' }.
+export function holidayRunFrom(iso) {
+  const day = String(iso).slice(0, 10);
+  if (isWorkday(day)) return null;
+  let to = day;
+  const names = [];
+  for (let d = day; !isWorkday(d); d = plus(d, 1)) { to = d; if (holidayName(d)) names.push(holidayName(d)); }
+  const name = names.find((n) => !n.startsWith('перенос')) ?? names[0];
+  return name ? { name, to, back: plus(to, 1) } : null;
+}
 // Новогодние каникулы впереди (2.393): подряд идущие нерабочие дни вокруг 1 января следующего года, если до первого из них
 // от 1 до `days` дней: { from, to, work_before } — '2026-12-20' → { from: '2026-12-31', to: '2027-01-10',
 // work_before: '2026-12-30' }. Каникулы уже начались или ещё далеко — null.

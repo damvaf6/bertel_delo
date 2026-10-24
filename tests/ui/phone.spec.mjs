@@ -10,7 +10,7 @@ import { DB_URL, TEST_TOKEN, BRIDGE_SECRET, testEnv, docsAskedAgo } from '../hel
 import { signBridge } from '../../src/bridge/signature.mjs';
 import { makePdf, makeDocx } from '../tools/make-docs.mjs';
 import { extractPages } from '../../src/ai/extract.mjs';
-import { holidayName, workdayFrom } from '../../src/orders/holidays.mjs';
+import { holidayName, holidayRunFrom, workdayFrom } from '../../src/orders/holidays.mjs';
 import { workingAgo } from '../../src/orders/silence.mjs';
 import { docsDueIso, dayWords as ruWords } from '../../src/orders/phrases.mjs';
 import fs from 'node:fs';
@@ -17500,4 +17500,34 @@ test('2.394: дела экспертов — отбор «Срок в новог
   await expect(rows).toHaveCount(2);
   await expect(hp.locator(`#org-cases li[data-case="${ref(ids[1])}"] [data-role="new-year"]`)).toHaveCount(0);
   for (const p of [hp, cp]) await p.context().close();
+});
+
+// 2.395: «не принимаю дела до …» — день возвращения праздник: подсказка и «Продлить» до первого рабочего дня. Ближайший
+// праздник считается от дня прогона.
+test('2.395: отпуск кончается перед праздниками — «Продлить» до первого рабочего дня', async ({ browser, baseURL }) => {
+  const ep = await (await phoneContext(browser, baseURL)).newPage();
+  const expert = await signIn(ep, '+79990003952');
+  await db((c) => c.query('insert into specialists (user_id) values ($1)', [expert.id]));
+  let day = inDays(1), n = 1;
+  while (!holidayRunFrom(day)) day = inDays(++n);
+  const run = holidayRunFrom(day);
+  const ruDay = (iso) => { const [y, m, d] = iso.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }); };
+  await ep.goto('/kabinet#specialist');
+  await expect(ep.locator('#specialist-away-holiday')).toBeHidden();
+  await ep.locator('#specialist-away-until').fill(day);
+  await ep.locator('#specialist-away-note').fill('отпуск');
+  await ep.locator('#specialist-away-set').click();
+  const box = ep.locator('#specialist-away-holiday');
+  await expect(box).toBeVisible();
+  await expect(ep.locator('#specialist-away-holiday-text')).toContainText(`Вы возвращаетесь ${ruDay(day)} — ${run.name}`);
+  await expect(ep.locator('#specialist-away-holiday-text')).toContainText(`предлагать с ${ruDay(run.back)}, первого рабочего дня`);
+  await expect(ep.locator('#specialist-away-extend')).toHaveText(`Продлить — снова принимать дела с ${ruDay(run.back)}`);
+  expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await box.scrollIntoViewIfNeeded();
+  await shot(ep, 'i09-otpusk-do-prazdnikov');
+  await ep.locator('#specialist-away-extend').click();
+  await expect(ep.locator('#specialist-msg')).toHaveText(`Новые дела не будут предлагать до ${ruDay(run.back)}`);
+  await expect(box).toBeHidden();
+  await expect(ep.locator('#specialist-away-now')).toContainText(`до ${ruDay(run.back)} (отпуск)`);
+  await ep.context().close();
 });
