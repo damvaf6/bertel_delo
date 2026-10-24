@@ -4,7 +4,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, login, makeOrg, addMember, makeSpecialist } from '../helpers.mjs';
-import { holidayName, isWorkday, isWorkingWeekend, newYearAhead, offDayName, workdayFrom, workdayBefore } from '../../src/orders/holidays.mjs';
+import { holidayName, holidayRunFrom, isWorkday, isWorkingWeekend, newYearAhead, offDayName, workdayFrom, workdayBefore } from '../../src/orders/holidays.mjs';
 import { newYearCases } from '../../src/ops/today-ops.mjs';
 import { expertSchedule, orgSchedule } from '../../src/orders/schedule.mjs';
 import { extendSuggest } from '../../src/ops/handover-ops.mjs';
@@ -140,4 +140,30 @@ test('2.393: за две недели до новогодних каникул �
   const t = await exp.req('GET', '/api/today');
   assert.equal(t.status, 200);
   assert.equal(t.body.expert.new_year, newYearCases([], t.body.today));
+});
+
+// 2.395: день возвращения после «не принимаю дела» — праздник: подсказка продлить до последнего нерабочего дня.
+test('2.395: отпуск кончается перед праздниками — away_holiday с последним нерабочим днём', async () => {
+  assert.deepEqual(holidayRunFrom('2026-12-31'), { name: 'Новогодние каникулы', to: '2027-01-10', back: '2027-01-11' });
+  assert.deepEqual(holidayRunFrom('2026-11-04'), { name: 'День народного единства', to: '2026-11-04', back: '2026-11-05' });
+  assert.deepEqual(holidayRunFrom('2027-02-21'), { name: 'День защитника Отечества', to: '2027-02-23', back: '2027-02-24' });
+  assert.equal(holidayRunFrom('2026-10-24'), null, 'обычные выходные — без подсказки');
+  assert.equal(holidayRunFrom('2026-11-05'), null, 'рабочий день');
+  assert.equal(holidayRunFrom('2027-02-20'), null, 'рабочая суббота');
+  // Через операцию: ближайший праздник после завтра — в пределах года всегда есть.
+  const today = new Date(Date.now() + 3 * 3600_000).toISOString().slice(0, 10);
+  const plus = (iso, n) => { const d = new Date(`${iso}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  let day = plus(today, 1);
+  while (!holidayRunFrom(day)) day = plus(day, 1);
+  const run = holidayRunFrom(day);
+  const exp = await login(S, '+79990003951');
+  await makeSpecialist(S.sql, exp.user.id);
+  let r = await exp.req('PATCH', '/api/specialist/me', { away: { until: day, note: 'отпуск' } });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.specialist.away_holiday, run);
+  r = await exp.req('PATCH', '/api/specialist/me', { away: { until: run.back, note: 'отпуск' } });
+  assert.equal(r.body.specialist.away_holiday, null, 'продлил до первого рабочего дня — подсказки нет');
+  assert.equal(r.body.specialist.away.until, run.back);
+  r = await exp.req('PATCH', '/api/specialist/me', { away: null });
+  assert.equal(r.body.specialist.away_holiday, null);
 });

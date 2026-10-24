@@ -150,6 +150,15 @@ function showAway(sp) {
   $('specialist-away-now').classList.toggle('hidden', !a);
   $('specialist-away-form').classList.toggle('hidden', !!a);
   $('specialist-away-clear').classList.toggle('hidden', !a);
+  // Возвращается в праздник (2.395): заказчики в эти дни не работают — продлить до последнего нерабочего дня одним нажатием.
+  const h = a ? sp.away_holiday : null;
+  $('specialist-away-holiday').classList.toggle('hidden', !h);
+  if (h) {
+    $('specialist-away-holiday-text').textContent = `Вы возвращаетесь ${dayRu(a.until)} — ${h.name}: ${h.to === a.until ? 'нерабочий день' : `нерабочие дни по ${dayRu(h.to)}`}`
+      + `, заказчики и банки не работают. Можно продлить отметку до последнего нерабочего дня — тогда дела снова начнут `
+      + `предлагать с ${dayRu(h.back)}, первого рабочего дня.`;
+    $('specialist-away-extend').textContent = `Продлить — снова принимать дела с ${dayRu(h.back)}`;
+  }
   $('specialist-away-until').min = tomorrow();
   $('specialist-away-from').min = tomorrow();
   if (!a) { $('specialist-away-from').value = ''; $('specialist-away-until').value = ''; $('specialist-away-note').value = ''; }
@@ -172,6 +181,11 @@ $('specialist-away-set').addEventListener('click', () => {
   setAway({ from, until, note: $('specialist-away-note').value }, `Новые дела не будут предлагать ${awaySpan({ from, until })}`);
 });
 $('specialist-away-clear').addEventListener('click', () => setAway(null, 'Теперь Вам снова предлагают дела'));
+$('specialist-away-extend').addEventListener('click', () => {
+  const a = state.specialist.away, h = state.specialist.away_holiday;
+  if (!a || !h) return;
+  setAway({ from: a.from, until: h.back, note: a.note }, `Новые дела не будут предлагать ${awaySpan({ from: a.from, until: h.back })}`);
+});
 
 $('specialist-org').addEventListener('change', async (e) => {
   const before = state.specialist.org?.id ?? '';
