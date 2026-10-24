@@ -84,3 +84,21 @@ test('2.382: срок в воскресенье — «Срок близко» с
   await sctx.close();
   await dctx.close();
 });
+
+// 2.390: напоминание «срок завтра» приходит в последний рабочий день перед сроком (срок в понедельник — в пятницу).
+// Когда приходит — считает сервер (тесты «2.390» в tests/server/reminders.test.mjs, по фиксированным дням); здесь — как
+// это напоминание читается в ленте на телефоне. Номера +7 999 000-88-3x — только здесь.
+test('2.390: «Срок по делу — завтра или сразу после выходных» в ленте эксперта', async ({ browser, baseURL }) => {
+  const problems = [];
+  const sctx = await phoneContext(browser, baseURL);
+  const sp = await sctx.newPage();
+  sp.on('pageerror', (e) => problems.push(`ошибка JS: ${e.message}`));
+  const spec = await signIn(sp, '+79990008831');
+  await db((c) => c.query("insert into notifications (user_id, type, event) values ($1, 'executor_work', 'deadline_tomorrow')", [spec.id]));
+  await sp.goto('/kabinet#notifications');
+  await expect(sp.locator('#notifications li').first())
+    .toContainText('Срок по делу — завтра или сразу после выходных: сегодня последний рабочий день перед ним');
+  await shot(sp, 'wd2-2390-lenta-srok-posle-vyhodnyh');
+  expect(problems, problems.join('\n')).toEqual([]);
+  await sctx.close();
+});
