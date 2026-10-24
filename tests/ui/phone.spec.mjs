@@ -361,7 +361,7 @@ test('меню на телефоне (2.22): у администратора-с�
   // Число строк зависит от ширины шрифта на машине (в CI — 4, на машине с другим шрифтом — 3): проверяем, что все разделы
   // видны, ничего не за краем экрана (menuFits) и меню не выше 4 строк.
   const adminMenu = await menuFits(page);
-  expect(adminMenu.tabs).toBe(12); // с «Проверить юриста» (решение Дамира 24.10.2026)
+  expect(adminMenu.tabs).toBe(12); // с «Юристы» — проверка юриста (решение Дамира 24.10.2026)
   expect(adminMenu.rows).toBeLessThanOrEqual(4);
   await shot(page, '99j-menu-sluzhebnyi');
   await page.getByRole('link', { name: 'Деньги' }).click();
@@ -371,7 +371,7 @@ test('меню на телефоне (2.22): у администратора-с�
   await expect(page.getByRole('link', { name: 'Профиль', exact: true })).toHaveAttribute('aria-current', 'page');
   await shot(page, '99k-menu-profil');
 
-  // У заказчика семь разделов (с «Как работать», 2.52, и «Проверить юриста» — 24.10.2026) — не больше двух строк.
+  // У заказчика семь разделов (с «Как работать», 2.52, и «Юристы» — 24.10.2026) — не больше двух строк.
   const cctx = await phoneContext(browser, baseURL);
   const cp = await cctx.newPage();
   await signIn(cp, '+79990000598');
