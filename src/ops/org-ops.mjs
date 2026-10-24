@@ -8,6 +8,7 @@ import { dispatchers, notify, notifyPhone, orgHeads } from '../notify/notify.mjs
 import { awayOf, awayOn, backOf, orgExpertsFor } from './match-ops.mjs';
 import { orgReturns, signWait } from './sign-ops.mjs';
 import { workingMs } from '../orders/silence.mjs';
+import { newYearAhead } from '../orders/holidays.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { orderSplit } from '../money/money.mjs';
 import { STATUS_NAME, addDays, isOverdue, todayMsk, weekEnd } from '../orders/workflow.mjs';
@@ -329,6 +330,7 @@ export function orgOps() {
           const m = await taskMovedOrg(sql, providers.storage, registry, o);
           if (m) moved.set(o.id, m);
         }
+        const ny = newYearAhead(today);
         const cases = rows.map((o) => ({
           ...(waits.get(o.id) ?? { sign_wait: 0, sign_since: null, sign_reminded_at: null, returned_open: false, returned: null }),
           remind: reminds.get(o.id) ?? null,
@@ -369,6 +371,8 @@ export function orgOps() {
           // Перенос согласован позже срока по заданию (2.332) — дело в своём отборе «нет письма», здесь не повторяется.
           task_week: !!task.get(o.id) && task.get(o.id).day <= weekEnd(today) && !moved.has(o.id),
           task_moved: moved.get(o.id) ?? null,
+          // Срок в новогодние каникулы (2.394, как у эксперта 2.393): за 1–14 дней до них — с какого по какое и до какого дня сдать.
+          new_year: ny && o.status === 'in_work' && !!o.deadline && o.deadline >= ny.from && o.deadline <= ny.to ? { from: ny.from, to: ny.to, work_before: ny.work_before } : null,
           expert: name(byId.get(o.executor_user_id)),
           expert_id: o.executor_user_id,
           fee_kop: feeOf(o),

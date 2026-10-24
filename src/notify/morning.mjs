@@ -15,7 +15,7 @@
 // у заказчика, а оно не пришло 3 дня и сегодня не напоминали (кнопка «Напомнить заказчику» у строки письма в «Сегодня», 2.347).
 // С 2.389 в выходной или нерабочий праздник сводка приходит, только если есть что сделать именно сегодня: срок сегодня,
 // прошедший срок или выезд на объект (`offDayWorth`); остальное подождёт рабочего дня (день всё равно посчитан).
-import { isWorkday, workdayBefore } from '../orders/holidays.mjs';
+import { isWorkday, newYearAhead, workdayBefore } from '../orders/holidays.mjs';
 import { expertSchedule } from '../orders/schedule.mjs';
 import { STATUS_NAME, todayMsk } from '../orders/workflow.mjs';
 import { expertMorningAlerts, orgPart } from '../ops/today-ops.mjs';
@@ -25,6 +25,8 @@ export const MORNING_HOUR = 8;
 
 export const mskHour = (now) => Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Moscow', hour: '2-digit', hourCycle: 'h23' }).format(now));
 const mskTime = (now) => new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit' }).format(now);
+// '2026-12-30' → «30 декабря» (2.394).
+const dayShort = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'UTC' });
 const pl = (n, one, few, many) => {
   const m10 = n % 10, m100 = n % 100;
   return m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? few : many;
@@ -130,7 +132,8 @@ export async function morningTitles(sql, ids) {
 // на оценку сегодня или прошёл (2.316, как красная строка в «Сегодня» и «Подписи организации», 2.308); в скольких делах
 // перенос срока согласован позже срока по заданию на оценку, а письма о переносе нет 2 дня и дольше (2.338, как пометка в
 // «Делах экспертов», 2.332); сколько из ждущих подписи организации ждут её 2 дня и дольше после подписи эксперта (2.374, как
-// строка «Ждут подписи организации 2 дня и дольше» в «Сегодня»). Ведёт в организацию. В выходной или праздник — только
+// строка «Ждут подписи организации 2 дня и дольше» в «Сегодня»); за две недели до новогодних каникул — сколько дел экспертов в
+// работе со сроком в каникулы и до какого дня сдать (2.394, как у эксперта 2.393). Ведёт в организацию. В выходной или праздник — только
 // если у экспертов срок сегодня или прошёл, или подписать нужно сегодня по заданию на оценку (2.389, `orgOffDayWorth`).
 // Только цифры.
 export function orgDigestCounts(part, today) {
@@ -152,6 +155,7 @@ export function orgDigestCounts(part, today) {
     order_diff: part.to_sign.filter((x) => x.order_diff).length,
     task_due: part.to_sign.filter((x) => x.task_due && !x.task_due.moved).length,
     task_moved: part.task_moved_long ?? 0,
+    new_year: part.new_year?.count ?? 0,
   };
 }
 
@@ -177,6 +181,9 @@ export function orgDigestText(c) {
     parts.push(`${c.returned} ${pl(c.returned, 'дело', 'дела', 'дел')} после возврата эксперту ${pl(c.returned, 'не исправлено', 'не исправлены', 'не исправлено')} 2 дня и больше`);
   }
   if (c.fresh) parts.push(`${c.fresh} ${pl(c.fresh, 'дело', 'дела', 'дел')} — исправленный файл не подписан экспертом 2 дня и больше`);
+  // 2.394: день «сдать до» — по дню сводки (в ленте — по `day` записи).
+  const ny = c.new_year && c.day && newYearAhead(c.day);
+  if (ny) parts.push(`срок в новогодние каникулы — сдать до ${dayShort(ny.work_before)}: ${c.new_year} ${pl(c.new_year, 'дело', 'дела', 'дел')}`);
   return parts.length ? `На сегодня по организации: ${parts.join(', ')}` : null;
 }
 
@@ -194,10 +201,10 @@ export async function sendOrgMorning(sql, registry, { now = new Date(), storage 
     if (!counted.has(h.org_id)) counted.set(h.org_id, orgDigestCounts(await orgPart(sql, { id: h.org_id, name: h.name }, registry, today, { storage }), today));
     const c = counted.get(h.org_id);
     sent += await sql.tx(async (tx) => {
-      const fresh = await tx`insert into org_morning_digests (user_id, org_id, day, sign, sign_long, handover, stuck, due, overdue, idle, returned, fresh, away, ext_declined, back, egrn_kept, order_diff, task_due, task_moved)
-                             values (${h.user_id}, ${h.org_id}, ${today}, ${c.sign}, ${c.sign_long}, ${c.handover}, ${c.stuck}, ${c.due}, ${c.overdue}, ${c.idle}, ${c.returned}, ${c.fresh}, ${c.away}, ${c.ext_declined}, ${c.back}, ${c.egrn_kept}, ${c.order_diff}, ${c.task_due}, ${c.task_moved})
+      const fresh = await tx`insert into org_morning_digests (user_id, org_id, day, sign, sign_long, handover, stuck, due, overdue, idle, returned, fresh, away, ext_declined, back, egrn_kept, order_diff, task_due, task_moved, new_year)
+                             values (${h.user_id}, ${h.org_id}, ${today}, ${c.sign}, ${c.sign_long}, ${c.handover}, ${c.stuck}, ${c.due}, ${c.overdue}, ${c.idle}, ${c.returned}, ${c.fresh}, ${c.away}, ${c.ext_declined}, ${c.back}, ${c.egrn_kept}, ${c.order_diff}, ${c.task_due}, ${c.task_moved}, ${c.new_year})
                              on conflict do nothing returning user_id`;
-      const text = orgDigestText(c);
+      const text = orgDigestText({ ...c, day: today });
       if (!fresh.length || !text || (dayOff && !orgOffDayWorth(c))) return 0;
       const n = await notify(tx, 'org_morning_today', { users: [h.user_id], orgId: h.org_id, sms: `БЕРТЕЛ Дело: ${text}. Подробно — «Дела экспертов» в кабинете.` });
       if (n) {
@@ -220,7 +227,7 @@ export async function sendOrgMorning(sql, registry, { now = new Date(), storage 
 // с отбором «Ждут Вашей подписи 2 дня и дольше» (2.374); иначе — отбор «Перенос от организации» (2.238: диспетчер отказал); иначе — отбор «Срок в дни, когда
 // эксперт не принимает дела» (2.209); иначе — отбор «Вернулись после «не принимаю дела»» (2.249); иначе — к подписи организации;
 // иначе — отбор «Просят передать»; иначе — отбор «Вернул эксперту» (2.153); иначе — отбор «Исправленный файл ждёт подписи
-// эксперта» (2.172); иначе — отбор «Без движения» (2.141).
+// эксперта» (2.172); иначе — отбор «Срок в новогодние каникулы» (2.394); иначе — отбор «Без движения» (2.141).
 export function orgDigestTo(c) {
   if (c.task_due) return 'sign';
   if (c.due) return 'week';
@@ -237,12 +244,13 @@ export function orgDigestTo(c) {
   if (c.handover) return 'handover';
   if (c.returned) return 'returned';
   if (c.fresh) return 'fresh';
+  if (c.new_year) return 'new_year';
   return c.idle ? 'idle' : null;
 }
 
 // Текст сводки руководителя в ленте по номеру уведомления (название организации лента пишет строкой ниже) и куда она ведёт.
 export async function orgMorningTitles(sql, ids) {
   if (!ids.length) return new Map();
-  const rows = await sql`select notification_id, sign, sign_long, handover, stuck, due, overdue, idle, returned, fresh, away, ext_declined, back, egrn_kept, order_diff, task_due, task_moved from org_morning_digests where notification_id = any(${ids}::bigint[])`;
+  const rows = await sql`select notification_id, sign, sign_long, handover, stuck, due, overdue, idle, returned, fresh, away, ext_declined, back, egrn_kept, order_diff, task_due, task_moved, new_year, to_char(day, 'YYYY-MM-DD') as day from org_morning_digests where notification_id = any(${ids}::bigint[])`;
   return new Map(rows.map((r) => [String(r.notification_id), { title: orgDigestText(r), to: orgDigestTo(r) }]));
 }
