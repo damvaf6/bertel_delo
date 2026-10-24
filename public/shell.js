@@ -47,11 +47,11 @@ export async function refreshMe() {
   const staff = ['dispatcher', 'admin'].includes(me.user.platform_role);
   $('specialists-tab').classList.toggle('hidden', !staff);
   $('problems-tab').classList.toggle('hidden', !staff);
-  // «Проверить юриста» — заказчикам, когда источник открыт; пока юристы вымышленные — только администратору (24.10.2026).
+  // Карточка «Проверить юриста» на главной — заказчикам, когда источник открыт; пока юристы вымышленные — только администратору (24.10.2026).
   const [spec, lawyers] = await Promise.all([api('GET', '/api/specialist/me'), api('GET', '/api/lawyer-check/open')]);
   state.specialist = spec.specialist;
   state.lawyers = lawyers;
-  $('lawyers-tab').classList.toggle('hidden', !lawyers.open);
+  $('lawyers-card').classList.toggle('hidden', !lawyers.open);
   $('specialist-tab').classList.toggle('hidden', !state.specialist);
   $('money-tab').classList.toggle('hidden', !staff && !state.specialist);
   setCounts(me);

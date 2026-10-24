@@ -13,7 +13,7 @@ const STATUS_BADGE = { active: 'ok', suspended: 'warn', ended: 'warn' };
 let current = null; // { reg_no, full_name }
 
 export function showLawyers() {
-  show('lawyers-view', 'lawyers');
+  show('lawyers-view', null);
   $('lawyer-admin-only').classList.toggle('hidden', !state.lawyers?.admin_only);
 }
 
