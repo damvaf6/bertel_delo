@@ -2,8 +2,8 @@
 // Хранит на телефоне только сами страницы, стили и скрипты — чтобы кабинет и осмотр открывались при слабой связи.
 // Ответы ядра (/api/…) — заявки, документы, фото, данные людей — не хранит и не трогает: они всегда идут на сервер.
 // Страница и скрипт — сначала из сети (всегда свежая версия); сеть не ответила вовремя — из сохранённого на телефоне.
-const VERSION = 'delo-v1';
-const CORE = ['/offline.html', '/app.css', '/common.js', '/pwa.js', '/drafts.js', '/osmotr', '/osmotr.js', '/manifest.webmanifest', '/icon-192.png'];
+const VERSION = 'delo-v2';
+const CORE = ['/offline.html', '/app.css', '/theme.js', '/common.js', '/pwa.js', '/drafts.js', '/osmotr', '/osmotr.js', '/manifest.webmanifest', '/icon-192.png'];
 const PAGE_WAIT_MS = 5000;
 
 self.addEventListener('install', (e) => {

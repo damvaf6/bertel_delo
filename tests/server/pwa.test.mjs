@@ -42,7 +42,7 @@ test('страницы ссылаются на описание приложен
     const html = await (await fetch(S.base + p)).text();
     assert.match(html, /<link rel="manifest" href="\/manifest\.webmanifest">/, p);
     assert.match(html, /<link rel="apple-touch-icon" href="\/apple-touch-icon\.png">/, p);
-    assert.match(html, /<meta name="theme-color" content="#1f4e8c">/, p);
+    assert.match(html, /<meta name="theme-color" content="#1d4ed8">/, p);
   }
   const osmotr = await (await fetch(`${S.base}/osmotr`)).text();
   assert.doesNotMatch(osmotr, /rel="manifest"/);
@@ -65,4 +65,23 @@ test('служебный помощник: отдаётся с корня, не 
   for (const p of core) assert.equal((await fetch(S.base + p)).status, 200, p);
   // Ответы ядра по-прежнему запрещено хранить где-либо.
   assert.equal((await fetch(`${S.base}/api/health`)).headers.get('cache-control'), 'no-store');
+});
+
+test('дизайн-система v2: все страницы с темой, цвета только переменными, тёмная тема и «меньше движения» в стиле', async () => {
+  for (const p of ['/', '/kabinet', '/ekspertiza', '/osmotr', '/offline.html', '/proverka.html', '/dopusk.html']) {
+    const html = await (await fetch(S.base + p)).text();
+    assert.match(html, /<script src="\/theme\.js"><\/script>\n<\/head>|<script src="\/theme\.js"><\/script>/, `${p}: тема ставится в <head>`);
+    assert.ok(html.indexOf('/theme.js') < html.indexOf('</head>'), `${p}: до показа страницы`);
+  }
+  const css = await (await fetch(`${S.base}/app.css`)).text();
+  const themes = css.slice(0, css.indexOf('color-scheme: dark;\n}') + 21);
+  const rest = css.slice(themes.length);
+  assert.deepEqual(rest.match(/#[0-9a-fA-F]{3,8}\b/g) || [], [], 'цвета вне переменных');
+  assert.match(themes, /@media \(prefers-color-scheme: dark\) \{\n  :root:not\(\[data-theme="light"\]\)/, 'по настройке телефона');
+  assert.match(themes, /:root\[data-theme="dark"\] \{/, 'по кнопке');
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\)/);
+  const js = await (await fetch(`${S.base}/theme.js`)).text();
+  assert.match(js, /localStorage/);
+  const sw = await (await fetch(`${S.base}/sw.js`)).text();
+  assert.match(sw, /'\/theme\.js'/, 'тема есть и без связи');
 });
