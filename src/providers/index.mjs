@@ -16,7 +16,7 @@
 //   ocr.recognize({ buf, mime }) — текст со скриншота аналога (2.32), интерфейс — ocr.mjs; null — выключено
 //   sign.sign / sign.verify  — электронная подпись заключения (2.5), интерфейс — sign.mjs
 //   lawyers.find / lawyers.cases — реестр адвокатов и решения судов для проверки юриста (задача штаба 40217197-…-81f7),
-//                              интерфейс — src/lawyers/check.mjs; пока только вымышленные юристы
+//                              интерфейс — src/lawyers/check.mjs; пока только вымышленные юристы; open — видна ли заказчикам
 import crypto from 'node:crypto';
 import { makeFake } from './fake.mjs';
 import { createAi } from './ai.mjs';
@@ -112,7 +112,8 @@ export function createProviders(cfg) {
   }
   out.ai = createAi(cfg);
   out.ocr = createOcr(cfg);
-  out.lawyers = fakeLawyerSource();
+  // Вымышленные юристы на stage и prod — только администратору (решение Дамира 24.10.2026: заказчикам — с настоящими данными).
+  out.lawyers = fakeLawyerSource({ open: !['stage', 'prod'].includes(cfg.appEnv) });
   // Подпись: поддельная (площадка, проверки) или ручная проверка на Госуслугах (manual — пока нет договора с УЦ).
   if (cfg.providers.sign === 'manual') out.sign = manualSign();
   else if (cfg.providers.sign !== 'fake') throw new Error(`Поставщик «sign: ${cfg.providers.sign}» ещё не подключён`);

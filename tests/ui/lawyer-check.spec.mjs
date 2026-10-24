@@ -1,6 +1,7 @@
-// Проверка юриста перед соглашением (задача штаба 40217197-…-81f7) на телефоне 412×915: администратор в «Управлении» вводит
-// ФИО → однофамильцы списком → карточка (реестр, дела без исходов и участников) → «Подтвердить» у карточки, «Оспорить» у дела
-// с пояснением. Пока Дамир не посмотрел — у заказчика раздела нет. Юристы вымышленные.
+// Проверка юриста перед соглашением (задача штаба 40217197-…-81f7, решение Дамира 24.10.2026) на телефоне 412×915: заказчик
+// с главной («Проверить юриста») вводит ФИО → однофамильцы списком → карточка (реестр, дела — о чём и чем закончилось, без
+// участников) → «Подтвердить» у карточки, «Оспорить» у дела с пояснением; администратор видит его отметки. Юристы
+// вымышленные; на автотестах источник открыт (на stage и prod вымышленные — только администратору, сервер — lawyer-check.test.mjs).
 import { test, expect } from '@playwright/test';
 import pg from 'pg';
 import { DB_URL, TEST_TOKEN } from '../helpers.mjs';
@@ -22,18 +23,19 @@ async function shot(page, name) {
   await page.screenshot({ path: `test-results/screens/${name}.png`, fullPage: true });
 }
 
-test('проверка юриста: ФИО → карточка → подтвердить и оспорить; заказчику не видно', async ({ page, browser }) => {
+test('проверка юриста: заказчик — ФИО → карточка с исходами → подтвердить и оспорить; администратор видит отметки', async ({ page, browser }) => {
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  const adm = await signIn(page, '+79990000975');
+  const cust = await signIn(page, '+79990000976');
   const db = new pg.Client({ connectionString: DB_URL });
   await db.connect();
   try {
-    await db.query("update users set platform_role = 'admin' where id = $1", [adm.id]);
-    await page.goto('/kabinet#admin');
+    await page.goto('/kabinet');
+    await page.locator('#to-lawyers').click();
     const box = page.locator('#lawyer-box');
-    await box.scrollIntoViewIfNeeded();
-    await expect(box).toContainText('видно только администратору');
+    await expect(box).toBeVisible();
+    await expect(box).toContainText('чем закончилось');
+    await expect(page.locator('#lawyer-admin-only')).toBeHidden();
     await page.getByLabel('Фамилия, имя и отчество юриста').fill('Нет Такого');
     await page.getByRole('button', { name: 'Проверить', exact: true }).click();
     await expect(page.locator('#lawyer-msg')).toContainText('без статуса адвоката в реестр не входит');
@@ -51,7 +53,11 @@ test('проверка юриста: ФИО → карточка → подтв�
     await expect(page.locator('#lawyer-cases li')).toHaveCount(2);
     await expect(page.locator('[data-case="fake-1"]')).toContainText('О взыскании долга по договору займа');
     await expect(page.locator('[data-case="fake-2"]')).toContainText('(участник скрыт)');
+    await expect(page.locator('[data-case="fake-1"] [data-outcome]')).toHaveText('Иск удовлетворён частично · юрист — представитель истца');
+    await expect(page.locator('[data-case="fake-2"] [data-outcome]')).toHaveText('В иске отказано · юрист — представитель ответчика');
+    await expect(page.locator('#lawyer-outcome-note')).toContainText('Исход одного дела мало говорит о юристе');
     await expect(card).not.toContainText('Ромашка');
+    await expect(card).not.toContainText('процент');
     await shot(page, 'yurist-02-kartochka');
 
     await page.locator('[data-mark="card"]').getByRole('button', { name: 'Подтвердить' }).click();
@@ -70,15 +76,21 @@ test('проверка юриста: ФИО → карточка → подтв�
     await page.locator('#lawyer-marks').scrollIntoViewIfNeeded();
     await shot(page, 'yurist-03-otmetki');
 
-    // Заказчик: раздела «Управление» нет, операции отвечают «не найдено».
-    const ctx = await browser.newContext();
-    const cp = await ctx.newPage();
-    await signIn(cp, '+79990000976');
-    expect((await cp.request.get('/api/lawyer-check?name=%D0%9F%D1%80%D0%BE%D0%B1%D0%BD%D1%8B%D0%B9')).status()).toBe(404);
+    // Администратор видит отметки заказчика с именем и пояснением.
+    const ctx = await browser.newContext({ viewport: { width: 412, height: 915 } });
+    const ap = await ctx.newPage();
+    const adm = await signIn(ap, '+79990000975');
+    await db.query("update users set platform_role = 'admin' where id = $1", [adm.id]);
+    await ap.goto('/kabinet#lawyers');
+    await ap.getByLabel('Фамилия, имя и отчество юриста').fill('Пробный Адвокат Иванович');
+    await ap.getByRole('button', { name: 'Проверить', exact: true }).click();
+    await ap.locator('#lawyer-marks summary').click();
+    await expect(ap.locator('#lawyer-marks')).toContainText('Это дело однофамильца');
+    await expect(ap.locator('#lawyer-marks li .muted').first()).not.toBeEmpty();
     await ctx.close();
     expect(errors).toEqual([]);
   } finally {
-    await db.query("delete from lawyer_check_marks where user_id = $1", [adm.id]);
+    await db.query("delete from lawyer_check_marks where user_id = $1", [cust.id]);
     await db.end();
   }
 });

@@ -76,6 +76,11 @@
         <p class="muted">Опишите проблему своими словами — помощник объяснит, что можно сделать самому и к какому специалисту обратиться.</p>
         <a class="btn secondary" href="#assistant" id="to-assistant">Спросить помощника</a>
       </div>
+      <div class="card hidden" id="lawyers-card">
+        <h2>Проверить юриста перед соглашением</h2>
+        <p class="muted">Статус в реестре адвокатов и дела в судах — о чём и чем закончилось. Только факты.</p>
+        <a class="btn secondary" href="#lawyers" id="to-lawyers">Проверить юриста</a>
+      </div>
       <form class="card" id="new-order" novalidate>
         <h2>Новая заявка</h2>
         <div class="field">
@@ -1288,6 +1293,27 @@
       </div>
     </section>
 
+    <section id="lawyers-view" class="hidden">
+      <div class="card" id="lawyer-box">
+        <h2>Проверить юриста перед соглашением</h2>
+        <p class="muted">Прежде чем подписать соглашение с юристом, посмотрите факты о нём: запись в реестре адвокатов
+          Минюста и опубликованные решения судов, где он представлял сторону, — о чём дело и чем закончилось. Без оценок и
+          рейтингов; других участников дел не называем.</p>
+        <p class="muted hidden" id="lawyer-admin-only">Сейчас в поиске только вымышленные юристы, и страницу видит только
+          администратор. Заказчикам она откроется, когда подключатся настоящий реестр и суды.</p>
+        <form id="lawyer-find" novalidate>
+          <div class="field">
+            <label for="lawyer-name">Фамилия, имя и отчество юриста</label>
+            <input id="lawyer-name" type="text" autocomplete="off" placeholder="Например: Пробный Адвокат Иванович">
+          </div>
+          <button type="submit" class="wide" id="lawyer-search">Проверить</button>
+        </form>
+        <p class="msg" id="lawyer-msg" role="status" aria-live="polite"></p>
+        <ul class="list" id="lawyer-found"></ul>
+        <div class="hidden" id="lawyer-card"></div>
+      </div>
+    </section>
+
     <section id="admin-view" class="hidden">
       <form class="card" id="admin-find" novalidate>
         <h1>Управление</h1>
@@ -1448,22 +1474,6 @@
           <ul class="list" id="ack-history"></ul>
           <p class="muted" id="ack-history-empty">Сроки ещё не задавали — действуют осторожные: 3 суток и 2 суток.</p>
         </details>
-      </div>
-      <div class="card" id="lawyer-box">
-        <h2>Проверить юриста перед соглашением</h2>
-        <p class="muted">Черновик: видно только администратору, пока страницу не посмотрит Дамир. Сейчас в поиске только
-          вымышленные юристы. Только факты — реестр адвокатов Минюста и опубликованные решения судов; без оценок, рейтингов
-          и исходов дел, других участников дел не называем.</p>
-        <form id="lawyer-find" novalidate>
-          <div class="field">
-            <label for="lawyer-name">Фамилия, имя и отчество юриста</label>
-            <input id="lawyer-name" type="text" autocomplete="off" placeholder="Например: Пробный Адвокат Иванович">
-          </div>
-          <button type="submit" class="wide" id="lawyer-search">Проверить</button>
-        </form>
-        <p class="msg" id="lawyer-msg" role="status" aria-live="polite"></p>
-        <ul class="list" id="lawyer-found"></ul>
-        <div class="hidden" id="lawyer-card"></div>
       </div>
       <div class="card" id="tprices-box">
         <h2>Цены и правила перевода</h2>
