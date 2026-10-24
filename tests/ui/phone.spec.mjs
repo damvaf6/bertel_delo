@@ -8668,7 +8668,7 @@ test('прогон 2.160: эксперт и руководитель по пач
 
   // Руководитель: «Сегодня» — сколько ждёт подпись и сколько пунктов эксперт отметил (как в «Делах экспертов»).
   await hp.goto('/kabinet');
-  await expect(hp.locator(`li[data-today-item="org-sign-long-${orgId}"]`)).toContainText(/файлов: 1 · эксперт подписал .+ — ждёт 3 дн\./);
+  await expect(hp.locator(`li[data-today-item="org-sign-long-${orgId}"]`)).toContainText(/файлов: 1 · эксперт подписал .+ — ждёт [345] дн\./); // 3 рабочих дня — в выходные и понедельник по календарю больше
   await expect(hp.locator(`li[data-today-item="org-returned-${orgId}"]`)).toContainText('3 дн. назад · эксперт отметил исправленными 1 из 2');
   await shot(hp, 'c13-progon-rukovoditel-segodnya');
   // «Дела экспертов»: отборы пачки, у каждого дела — своё.
@@ -8679,7 +8679,7 @@ test('прогон 2.160: эксперт и руководитель по пач
   await expect(hp.locator('[data-filter="returned"]')).toHaveText('Вернул эксперту · 1');
   await expect(rows.nth(0).locator('.overdue.big')).toContainText('ПРОСРОЧЕНО на 2 дн.');
   await expect(hp.locator('#org-cases [data-role="returned"]')).toContainText('(3 дн. назад) — эксперт отметил исправленными 1 из 2');
-  await expect(hp.locator('#org-cases')).toContainText('— ждёт 3 дн.');
+  await expect(hp.locator('#org-cases')).toContainText(/— ждёт [345] дн\./);
   await shot(hp, 'c14-progon-rukovoditel-dela');
   // У новой версии в «Подписи организации» — что эксперт отметил.
   await expect(hp.locator(`#org-sign li.doc[data-doc="${b2}"]`)).toContainText('Эксперт ещё не подписал');
