@@ -456,16 +456,21 @@ test('нотариусы-партнёры (2а.4): справочник — то
   for (const c of [U.owner, U.spec, U.stranger]) assert.deepEqual((await c.req('GET', '/api/specialist/me/notary')).body.desk, { translator: false });
 });
 
-test('проверка юриста перед соглашением (задача штаба 40217197-…-81f7): пока Дамир не посмотрел — только администратор (подробно — lawyer-check.test.mjs)', async () => {
-  cover('lawyer_check.find'); cover('lawyer_check.card'); cover('lawyer_check.mark');
+test('проверка юриста перед соглашением (задача штаба 40217197-…-81f7): вымышленные на stage и prod — только администратор, открытый источник — любой вошедший (подробно — lawyer-check.test.mjs)', async () => {
+  cover('lawyer_check.open'); cover('lawyer_check.find'); cover('lawyer_check.card'); cover('lawyer_check.mark');
   const name = encodeURIComponent('Пробный Адвокат Иванович');
-  for (const c of [U.owner, U.headA, U.dispatcher, U.spec, U.stranger]) {
-    assert.equal((await c.req('GET', `/api/lawyer-check?name=${name}`)).status, 404);
-    assert.equal((await c.req('GET', `/api/lawyer-check/card?reg=77%2F99001&name=${name}`)).status, 404);
-    assert.equal((await c.req('POST', '/api/lawyer-check/marks', { reg: '77/99001', name: 'Пробный Адвокат Иванович', kind: 'confirm' })).status, 404);
-  }
-  assert.equal((await U.admin.req('GET', `/api/lawyer-check?name=${name}`)).status, 200);
-  assert.equal((await U.admin.req('GET', `/api/lawyer-check/card?reg=77%2F99001&name=${name}`)).status, 200);
+  S.providers.lawyers.open = false;
+  try {
+    for (const c of [U.owner, U.headA, U.dispatcher, U.spec, U.stranger]) {
+      assert.equal((await c.req('GET', '/api/lawyer-check/open')).body.open, false);
+      assert.equal((await c.req('GET', `/api/lawyer-check?name=${name}`)).status, 404);
+      assert.equal((await c.req('GET', `/api/lawyer-check/card?reg=77%2F99001&name=${name}`)).status, 404);
+      assert.equal((await c.req('POST', '/api/lawyer-check/marks', { reg: '77/99001', name: 'Пробный Адвокат Иванович', kind: 'confirm' })).status, 404);
+    }
+    assert.equal((await U.admin.req('GET', `/api/lawyer-check?name=${name}`)).status, 200);
+    assert.equal((await U.admin.req('GET', `/api/lawyer-check/card?reg=77%2F99001&name=${name}`)).status, 200);
+  } finally { S.providers.lawyers.open = true; }
+  for (const c of [U.owner, U.stranger]) assert.equal((await c.req('GET', `/api/lawyer-check/card?reg=77%2F99001&name=${name}`)).status, 200);
 });
 
 test('цены и правила перевода (2а.9): смотрит и правит только администратор (подробно — translation-settings.test.mjs)', async () => {

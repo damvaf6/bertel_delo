@@ -1,10 +1,12 @@
-// Проверка юриста перед соглашением (задача штаба 40217197-…-81f7, решение Дамира 23.10.2026): ФИО → совпадения в реестре
-// адвокатов → карточка (реестр, опубликованные решения судов) без исходов и без других участников дел; «о чём дело» —
-// от модели один раз, потом из сохранённого; «Подтвердить» / «Оспорить» у карточки и дела. Пока Дамир не посмотрел —
-// только администратор. Юристы вымышленные, учебные данные (+7999000xxxx).
+// Проверка юриста перед соглашением (задача штаба 40217197-…-81f7, решения Дамира 23.10 и 24.10.2026): ФИО → совпадения в
+// реестре адвокатов → карточка (реестр, опубликованные решения судов) с исходом у каждого дела, без других участников и
+// без подсчёта исходов; «о чём дело» — от модели один раз, потом из сохранённого; «Подтвердить» / «Оспорить» у карточки и
+// дела. Открыто вошедшим, когда источник открыт; вымышленные юристы на stage и prod — только администратору. Юристы
+// вымышленные, учебные данные (+7999000xxxx).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, login, setPlatformRole } from '../helpers.mjs';
+import { createProviders } from '../../src/providers/index.mjs';
 import { subjectFrom, withoutParties, searchName } from '../../src/lawyers/check.mjs';
 
 let S, admin, owner, dispatcher;
@@ -41,7 +43,7 @@ test('поиск по ФИО: однофамильцы списком, без с
   assert.equal((await admin.req('GET', '/api/lawyer-check?name=1')).status, 400);
 });
 
-test('карточка: реестр и дела без исходов и участников; «о чём» модель пишет один раз', async () => {
+test('карточка: реестр и дела с исходом и стороной, без участников и подсчёта; «о чём» модель пишет один раз', async () => {
   const r = await card(admin);
   assert.equal(r.status, 200);
   const c = r.body.card;
@@ -50,8 +52,11 @@ test('карточка: реестр и дела без исходов и уча
   assert.deepEqual(c.cases.map((x) => x.number), ['2-1001/2026', 'А40-2002/2025'], 'новые сверху');
   assert.equal(c.cases[0].subject, 'О взыскании долга по договору займа');
   assert.equal(c.cases[1].subject, 'О поставке некачественного товара для (участник скрыт)');
+  assert.deepEqual(c.cases.map((x) => [x.outcome, x.side]), [['Иск удовлетворён частично', 'истца'], ['В иске отказано', 'ответчика']]);
+  assert.match(c.outcome_note, /Исход одного дела мало говорит о юристе/);
   const all = JSON.stringify(r.body);
-  for (const word of ['Ромашка', 'Петров', 'Сидоров', 'Альфа', 'выигр', 'проигр', 'процент', 'outcome']) assert.ok(!all.includes(word), word);
+  for (const word of ['Ромашка', 'Петров', 'Сидоров', 'Альфа', 'выигр', 'проигр', 'процент', 'побед']) assert.ok(!all.includes(word), word);
+  assert.ok(!('outcomes' in c) && !('stats' in c), 'исходы не сводятся в итог');
   assert.ok(!c.cases.some((x) => 'text' in x), 'текст решения наружу не отдаётся');
   const used = async () => (await S.sql`select count(*)::int as n from ai_usage where user_id = ${admin.user.id} and purpose = 'lawyer'`)[0].n;
   assert.equal(await used(), 2);
@@ -60,9 +65,11 @@ test('карточка: реестр и дела без исходов и уча
 
   const ended = (await card(admin, '77/99003', 'Учебная Юристка Сергеевна')).body.card;
   assert.equal(ended.registry.status_name, 'Статус прекращён');
+  assert.deepEqual([ended.cases[0].outcome, ended.cases[0].side], [null, null], 'исхода в решении нет — не выдумываем');
   const empty = (await card(admin, '50/99002', 'Пробный Адвокат Петрович')).body.card;
   assert.equal(empty.cases.length, 0);
   assert.match(empty.cases_note, /не нашлось/);
+  assert.equal(empty.outcome_note, null);
 });
 
 test('подменённый номер реестра или ФИО — «не найдено»; модель недоступна — карточка без «о чём»', async () => {
@@ -92,10 +99,32 @@ test('«Подтвердить» и «Оспорить» — у карточки
   assert.deepEqual(a.map((x) => x.action), ['lawyer_check.confirm', 'lawyer_check.dispute']);
 });
 
-test('пока Дамир не посмотрел — только администратор', async () => {
-  for (const c of [owner, dispatcher]) {
-    assert.equal((await c.req('GET', `/api/lawyer-check?name=${encodeURIComponent('пробный')}`)).status, 404);
-    assert.equal((await card(c)).status, 404);
-    assert.equal((await c.req('POST', '/api/lawyer-check/marks', { reg: '77/99001', name: NAME, kind: 'confirm' })).status, 404);
-  }
+test('вымышленные юристы на stage и prod (источник закрыт) — только администратор', async () => {
+  S.providers.lawyers.open = false;
+  try {
+    for (const c of [owner, dispatcher]) {
+      assert.deepEqual((await c.req('GET', '/api/lawyer-check/open')).body, { open: false, admin_only: false });
+      assert.equal((await c.req('GET', `/api/lawyer-check?name=${encodeURIComponent('пробный')}`)).status, 404);
+      assert.equal((await card(c)).status, 404);
+      assert.equal((await c.req('POST', '/api/lawyer-check/marks', { reg: '77/99001', name: NAME, kind: 'confirm' })).status, 404);
+    }
+    assert.deepEqual((await admin.req('GET', '/api/lawyer-check/open')).body, { open: true, admin_only: true });
+    assert.equal((await card(admin)).status, 200);
+  } finally { S.providers.lawyers.open = true; }
+  assert.equal(createProviders({ ...S.cfg, appEnv: 'stage' }).lawyers.open, false, 'stage — закрыто');
+  assert.equal(createProviders({ ...S.cfg, appEnv: 'prod' }).lawyers.open, false, 'prod — закрыто');
+});
+
+test('источник открыт (решение Дамира 24.10) — проверяет любой вошедший; чужие отметки ему не видны', async () => {
+  assert.equal(S.providers.lawyers.open, true, 'вне stage и prod вымышленные открыты');
+  assert.deepEqual((await owner.req('GET', '/api/lawyer-check/open')).body, { open: true, admin_only: false });
+  assert.equal((await owner.req('GET', `/api/lawyer-check?name=${encodeURIComponent('пробный')}`)).status, 200);
+  const r = await card(owner);
+  assert.equal(r.status, 200);
+  assert.equal(r.body.card.cases[0].outcome, 'Иск удовлетворён частично');
+  assert.deepEqual(r.body.marks, [], 'отметки администратора с пояснением заказчику не видны');
+  const m = await owner.req('POST', '/api/lawyer-check/marks', { reg: '77/99001', name: NAME, kind: 'confirm' });
+  assert.equal(m.status, 201);
+  assert.deepEqual(m.body.marks.map((x) => [x.kind, x.mine]), [['confirm', true]]);
+  assert.ok((await card(admin)).body.marks.some((x) => !x.mine && x.kind === 'confirm'), 'администратор видит все');
 });

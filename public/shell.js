@@ -2,9 +2,9 @@
 import { api, el, formatPhone, quoted } from '/common.js';
 
 const $ = (id) => document.getElementById(id);
-const views = ['list-view', 'order-view', 'missing-view', 'orgs-view', 'org-view', 'profile-view', 'admin-view', 'specialist-view', 'specialists-view', 'money-view', 'notifications-view', 'assistant-view', 'expert-view', 'help-view', 'problems-view'];
+const views = ['list-view', 'order-view', 'missing-view', 'orgs-view', 'org-view', 'profile-view', 'admin-view', 'specialist-view', 'specialists-view', 'money-view', 'notifications-view', 'assistant-view', 'expert-view', 'help-view', 'problems-view', 'lawyers-view'];
 
-export const state = { me: null, catalog: null, specialist: null }; // catalog — услуги, поля и статусы из /api/catalog
+export const state = { me: null, catalog: null, specialist: null, lawyers: null }; // catalog — услуги, поля и статусы из /api/catalog
 
 // Какой раздел соответствует адресу (#order=…, #org=… и т. д.). Раздел, который догрузился, когда человек уже ушёл
 // по другому адресу, не показывается поверх нового (быстрые переходы на медленной связи).
@@ -13,6 +13,7 @@ const VIEW_OF = [
   [/^#profile$/, 'profile-view'], [/^#assistant(=|$)/, 'assistant-view'], [/^#specialist$/, 'specialist-view'],
   [/^#specialists$/, 'specialists-view'], [/^#admin$/, 'admin-view'], [/^#money$/, 'money-view'],
   [/^#notifications$/, 'notifications-view'], [/^#help$/, 'help-view'], [/^#problems$/, 'problems-view'],
+  [/^#lawyers$/, 'lawyers-view'],
 ];
 function stale(id) {
   if (id === 'list-view') return false;
@@ -46,7 +47,11 @@ export async function refreshMe() {
   const staff = ['dispatcher', 'admin'].includes(me.user.platform_role);
   $('specialists-tab').classList.toggle('hidden', !staff);
   $('problems-tab').classList.toggle('hidden', !staff);
-  state.specialist = (await api('GET', '/api/specialist/me')).specialist;
+  // «Проверить юриста» — заказчикам, когда источник открыт; пока юристы вымышленные — только администратору (24.10.2026).
+  const [spec, lawyers] = await Promise.all([api('GET', '/api/specialist/me'), api('GET', '/api/lawyer-check/open')]);
+  state.specialist = spec.specialist;
+  state.lawyers = lawyers;
+  $('lawyers-tab').classList.toggle('hidden', !lawyers.open);
   $('specialist-tab').classList.toggle('hidden', !state.specialist);
   $('money-tab').classList.toggle('hidden', !staff && !state.specialist);
   setCounts(me);

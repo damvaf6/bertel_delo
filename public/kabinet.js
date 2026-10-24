@@ -17,6 +17,7 @@ import { showFirstHint, showHelp } from '/help.js';
 import { showProblems } from '/problems.js';
 import { matcher, wireSearch } from '/search.js';
 import { wireInstall } from '/pwa.js';
+import { showLawyers } from '/lawyercheck.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -65,6 +66,7 @@ async function route() {
   if (h === '#specialist&to=back') return showSpecialist({ to: 'back' });
   if (h === '#specialists' && ['dispatcher', 'admin'].includes(state.me.user.platform_role)) return showSpecialists();
   if (h === '#admin' && state.me.user.platform_role === 'admin') return showAdmin();
+  if (h === '#lawyers' && state.lawyers?.open) return showLawyers();
   if (h === '#money') return showMoney();
   show('list-view', 'orders');
   showFirstHint();

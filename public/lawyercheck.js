@@ -1,7 +1,9 @@
-// Проверка юриста перед соглашением (задача штаба 40217197-…-81f7). Администратору в «Управлении», пока Дамир не посмотрел:
-// ФИО → совпадения из реестра адвокатов → карточка (реестр, дела в судах без исходов и участников) → «Подтвердить» /
-// «Оспорить» у карточки и у каждого дела; оспорить — с пояснением.
+// Проверка юриста перед соглашением (задача штаба 40217197-…-81f7) — раздел «Проверить юриста» (решение Дамира 24.10.2026:
+// заказчикам; пока юристы вымышленные — только администратору): ФИО → совпадения из реестра адвокатов → карточка (реестр,
+// дела в судах — о чём и чем закончилось, без участников) → «Подтвердить» / «Оспорить» у карточки и у каждого дела;
+// оспорить — с пояснением.
 import { api, el, say } from '/common.js';
+import { state, show } from '/shell.js';
 
 const $ = (id) => document.getElementById(id);
 const dateRu = (d) => new Date(`${String(d).slice(0, 10)}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
@@ -9,6 +11,11 @@ const timeRu = (s) => `${new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe
 const STATUS_BADGE = { active: 'ok', suspended: 'warn', ended: 'warn' };
 
 let current = null; // { reg_no, full_name }
+
+export function showLawyers() {
+  show('lawyers-view', 'lawyers');
+  $('lawyer-admin-only').classList.toggle('hidden', !state.lawyers?.admin_only);
+}
 
 $('lawyer-find').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -51,10 +58,13 @@ function render(c, marks) {
     markRow(null, marks),
     el('h4', { text: `Дела в судах${c.cases.length ? ` — ${c.cases.length}` : ''}` }),
     el('p', { class: 'muted', text: c.cases_note }),
+    ...(c.outcome_note ? [el('p', { class: 'muted', id: 'lawyer-outcome-note', text: c.outcome_note })] : []),
     el('ul', { class: 'list', id: 'lawyer-cases' }, ...c.cases.map((k) => el('li', { 'data-case': k.key },
       el('div', { class: 'title', text: `${k.kind_name} № ${k.number}` }),
       el('div', { class: 'muted', text: `${k.court} · ${dateRu(k.date)}` }),
       el('div', { text: k.subject ?? 'О чём дело — разобрать не удалось, откройте решение по ссылке.' }),
+      el('div', { 'data-outcome': '' }, el('b', { text: k.outcome ?? 'Исход в решении не указан' }),
+        ...(k.side ? [el('span', { class: 'muted', text: ` · юрист — представитель ${k.side}` })] : [])),
       el('a', { href: k.url, target: '_blank', rel: 'noopener noreferrer', text: 'Решение на сайте' }),
       markRow(k.key, marks)))),
     el('p', { class: 'muted', text: c.sources_note }),
