@@ -21,6 +21,7 @@
 // В ИИ-проверке неподписанного файла остались расхождения с выпиской ЕГРН, которые можно заменить в черновике (2.266).
 // Срок по заданию на оценку раньше срока дела и через 1–2 дня или прошёл, а своего файла результата нет (2.304).
 // Оценка для банка, задания на оценку нет и не запрошено, а до срока дела 3 дня или меньше (2.306) — запросить одной кнопкой.
+// За две недели до новогодних каникул (2.393) — дела со сроком в каникулы одной группой «сдайте до 30 декабря».
 // Руководителю — те же сведения, что в «Делах экспертов» (2.16): без заказчика, полей заявки, документов и переписки.
 // Только свои дела и свои организации.
 import { orderRef } from '../notify/registry.mjs';
@@ -42,6 +43,7 @@ import { assignmentDocs, TASK_MOVE } from './ai-ops.mjs';
 import { READ_MAX_BYTES, extractPages, readableKind } from '../ai/extract.mjs';
 import { reportMade } from '../ai/report-checks.mjs';
 import { customerSilent, workingMs } from '../orders/silence.mjs';
+import { newYearAhead } from '../orders/holidays.mjs';
 
 // «Горит» — просрочено или до срока не больше двух дней (как подсветка в списке дел).
 const HOT_DAYS = 2;
@@ -275,7 +277,12 @@ async function expertPart(sql, actor, registry, today, storage) {
     const at = new Date(sentAt.find((x) => x.order_id === o.id)?.at ?? o.updated_at);
     return item(o, { review_since: at.toISOString(), long: reviewLong(at) });
   });
+  // Новогодние каникулы через 1–14 дней (2.393): дела в работе со сроком в каникулы — одной группой «сдайте до …»; дело уже
+  // в «Горит срок» (там своё «нерабочий день — сдайте до …») здесь не повторяется.
+  const hotIds = new Set(hotRows.map((o) => o.id));
+  const ny = newYearCases(rows.filter((o) => !hotIds.has(o.id)), today);
   return {
+    new_year: ny && { from: ny.from, to: ny.to, work_before: ny.work_before, items: ny.rows.map((o) => item(o)) },
     ai_recheck: recheck,
     task_made: taskMade,
     task_late: taskLate,
@@ -313,6 +320,17 @@ async function expertPart(sql, actor, registry, today, storage) {
     offers: rows.filter((o) => o.status === 'awaiting_executor')
       .map((o) => item(o, { fee_kop: o.price_kop ? orderSplit(o).payoutKop : null })),
   };
+}
+
+// Новогодние каникулы впереди (2.393): { from, to, work_before, rows } — дела в работе со сроком с первого по последний
+// нерабочий день каникул, ближе срок — выше; каникулы ещё далеко, уже начались или таких дел нет — null.
+export function newYearCases(rows, today) {
+  const ny = newYearAhead(today);
+  if (!ny) return null;
+  const day = (o) => String(o.deadline ?? '').slice(0, 10);
+  const hit = rows.filter((o) => o.status === 'in_work' && o.deadline && day(o) >= ny.from && day(o) <= ny.to)
+    .sort((a, b) => day(a).localeCompare(day(b)));
+  return hit.length ? { ...ny, rows: hit } : null;
 }
 
 // Заказчик ждёт ответа больше суток (2.132): после последнего сообщения эксперта заказчик написал, и первому такому

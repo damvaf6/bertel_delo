@@ -55,3 +55,14 @@ export function offDayName(iso) {
 // Ближайший рабочий день с этого (включительно) вперёд и последний рабочий день перед этим днём.
 export function workdayFrom(iso) { let d = iso; while (!isWorkday(d)) d = plus(d, 1); return d; }
 export function workdayBefore(iso) { let d = plus(iso, -1); while (!isWorkday(d)) d = plus(d, -1); return d; }
+// Новогодние каникулы впереди (2.393): подряд идущие нерабочие дни вокруг 1 января следующего года, если до первого из них
+// от 1 до `days` дней: { from, to, work_before } — '2026-12-20' → { from: '2026-12-31', to: '2027-01-10',
+// work_before: '2026-12-30' }. Каникулы уже начались или ещё далеко — null.
+export function newYearAhead(today, days = 14) {
+  const ny = `${Number(String(today).slice(0, 4)) + 1}-01-01`;
+  let from = ny, to = ny;
+  while (!isWorkday(plus(from, -1))) from = plus(from, -1);
+  while (!isWorkday(plus(to, 1))) to = plus(to, 1);
+  const left = Math.round((Date.parse(`${from}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86400_000);
+  return left >= 1 && left <= days ? { from, to, work_before: workdayBefore(from) } : null;
+}

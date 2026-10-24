@@ -17412,3 +17412,39 @@ test('2.378: ИИ-проверка — в расчёте площадь не т�
   await shot(sp, 'i14-specialist-ploshchad-raschet-nahodka');
   await sctx.close();
 });
+
+// 2.393: за две недели до новогодних каникул — дела со сроком в каникулы одной группой «сдайте до 30 декабря». Календарь и
+// отбор дел проверяет `tests/server/holidays.test.mjs`; здесь декабрьский ответ подставлен, чтобы не зависеть от даты прогона.
+test('2.393: «Сегодня» — срок в новогодние каникулы, «сдайте до 30 декабря»', async ({ browser, baseURL }) => {
+  test.setTimeout(120_000);
+  const ep = await (await phoneContext(browser, baseURL)).newPage(), cp = await (await phoneContext(browser, baseURL)).newPage();
+  const expert = await signIn(ep, '+79990003932'), customer = await signIn(cp, '+79990003933');
+  const A = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    return (await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Срок в каникулы: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"deal","region":"moscow","object_type":"flat","address":"г. Москва, Январская ул., 5"}') returning id`,
+    [customer.id, expert.id, inDays(20)])).rows[0].id;
+  });
+  await ep.route('**/api/today', async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    body.today = '2026-12-20';
+    body.expert.new_year = { from: '2026-12-31', to: '2027-01-10', work_before: '2026-12-30',
+      items: [{ id: A, title: 'Срок в каникулы: квартира', service: 'Оценка недвижимости', deadline: '2027-01-05', overdue: false }] };
+    await route.fulfill({ response: res, json: body });
+  });
+  await ep.goto('/kabinet');
+  await expect(ep.locator('#today-box li[data-today="new-year"]')).toHaveText('Срок в новогодние каникулы — сдайте до 30 декабря · 1');
+  const row = ep.locator('#today-box li[data-today-item="new-year"]');
+  await expect(row.locator('.title')).toHaveText('Срок в каникулы: квартира');
+  await expect(row.locator('[data-role="new-year-what"]')).toHaveText('срок 5 января — в каникулы (31 декабря — 10 января): заказчик и банк не работают, последний рабочий день — ср, 30 декабря');
+  await expect(row).toContainText('осталось до 30 декабря: 10 дн.');
+  expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await row.scrollIntoViewIfNeeded();
+  await shot(ep, 'i06-segodnya-novogodnie-kanikuly');
+  await row.locator('button.open').click();
+  await expect(ep).toHaveURL(new RegExp(`#order=${A}$`));
+  await ep.context().close(); await cp.context().close();
+});
