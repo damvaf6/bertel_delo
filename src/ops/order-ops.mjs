@@ -14,6 +14,7 @@ import { orgReturns } from './sign-ops.mjs';
 import { missingSteps } from './step-ops.mjs';
 import { notify, notifyStatus, orgHeads } from '../notify/notify.mjs';
 import { ackLine, startAck } from '../orders/ack.mjs';
+import { offDays } from './note-ops.mjs';
 
 const LEVEL_NAME = ['none', 'read', 'write', 'manage'];
 
@@ -188,8 +189,9 @@ export function orderOps() {
     {
       // Перечень услуг, полей и ИИ-проверок всех модулей и список статусов. Общие данные, не чьи-то личные.
       id: 'catalog', method: 'GET', path: '/api/catalog', auth: 'user', access: 'self',
+      // off_days — нерабочие дни на весь допустимый срок заявки (2.396): подсказка к сроку в выходной или праздник.
       async handler({ registry }) {
-        return { modules: registry.catalog(), statuses: STATUSES };
+        return { modules: registry.catalog(), statuses: STATUSES, today: todayMsk(), off_days: offDays(todayMsk(), DEADLINE_MAX_DAYS) };
       },
     },
     {

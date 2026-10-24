@@ -10,7 +10,7 @@ import { DB_URL, TEST_TOKEN, BRIDGE_SECRET, testEnv, docsAskedAgo } from '../hel
 import { signBridge } from '../../src/bridge/signature.mjs';
 import { makePdf, makeDocx } from '../tools/make-docs.mjs';
 import { extractPages } from '../../src/ai/extract.mjs';
-import { holidayName, holidayRunFrom, workdayFrom } from '../../src/orders/holidays.mjs';
+import { holidayName, holidayRunFrom, offDayName, workdayBefore, workdayFrom } from '../../src/orders/holidays.mjs';
 import { workingAgo } from '../../src/orders/silence.mjs';
 import { docsDueIso, dayWords as ruWords } from '../../src/orders/phrases.mjs';
 import fs from 'node:fs';
@@ -17530,4 +17530,34 @@ test('2.395: отпуск кончается перед праздниками �
   await expect(box).toBeHidden();
   await expect(ep.locator('#specialist-away-now')).toContainText(`до ${ruDay(run.back)} (отпуск)`);
   await ep.context().close();
+});
+
+// 2.396: заказчик ставит срок в праздник — подсказка «нерабочий день, эксперт сдаст до …» и одной кнопкой на последний
+// рабочий день перед ним; в обычный рабочий день подсказки нет. Ближайший праздник — от дня прогона.
+test('2.396: срок заявки в праздник — подсказка и «Поставить срок» на рабочий день', async ({ browser, baseURL }) => {
+  const page = await (await phoneContext(browser, baseURL)).newPage();
+  await signIn(page, '+79990003961');
+  let n = 2;
+  while (!holidayName(inDays(n)) || workdayBefore(inDays(n)) < inDays(0)) n += 1;
+  const day = inDays(n), before = workdayBefore(day);
+  let w = 1;
+  while (offDayName(inDays(w))) w += 1;
+  const ruDay = (iso) => { const [y, m, d] = iso.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }); };
+  await page.goto('/kabinet');
+  await page.locator('#new-order').getByLabel('Услуга').selectOption({ label: 'Оценка недвижимости' });
+  await page.getByRole('button', { name: 'Создать заявку' }).click();
+  await expect(page.locator('#order-status')).toHaveText('Новая');
+  await page.locator('#d-deadline').fill(inDays(w));
+  await expect(page.locator('#d-deadline-off')).toBeHidden();
+  await page.locator('#d-deadline').fill(day);
+  await expect(page.locator('#d-deadline-off')).toHaveText(`${ruDay(day)} — ${offDayName(day)}, нерабочий день: эксперт сдаст до ${ruDay(before)}`);
+  await expect(page.locator('#d-deadline-workday')).toHaveText(`Поставить срок ${ruDay(before)}`);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await page.locator('#d-deadline').scrollIntoViewIfNeeded();
+  await shot(page, 'i10-srok-zayavki-v-prazdnik');
+  await page.locator('#d-deadline-workday').click();
+  await expect(page.locator('#d-deadline')).toHaveValue(before);
+  await expect(page.locator('#d-deadline-off')).toBeHidden();
+  await expect(page.locator('#d-deadline-workday')).toBeHidden();
+  await page.context().close();
 });
