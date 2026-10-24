@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid , docsAskedAgo } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import { holidayName, isWorkday, workdayFrom } from '../../src/orders/holidays.mjs';
-import { remindDeadlines } from '../../src/notify/reminders.mjs';
+import { remindDay, remindDeadlines } from '../../src/notify/reminders.mjs';
 import { digestText, morningTo, sendMorning } from '../../src/notify/morning.mjs';
 import { expertMorningAlerts } from '../../src/ops/today-ops.mjs';
 
@@ -90,11 +90,11 @@ test('исполнитель просит перенести срок — дис
   assert.equal(await events(spec, 'deadline_ext_approved'), 1);
   assert.equal(await events(owner, 'deadline_moved'), 1);
   assert.ok(!(await dispatcher.req('GET', '/api/today')).body.dispatcher.extend.some((x) => x.id === o.id));
-  // «Горит срок» у эксперта — уже нет (до нового срока 10 дней); напоминание «через 3 дня» — по новому сроку.
+  // «Горит срок» у эксперта — уже нет (до нового срока 10 дней); напоминание «через 3 рабочих дня» — по новому сроку.
   assert.ok(!(await spec.req('GET', '/api/today')).body.expert.hot.some((x) => x.id === o.id));
   await remindDeadlines(S.sql, { today });
   assert.equal(await events(spec, 'deadline_soon'), 0, 'по старому сроку напоминания нет');
-  await remindDeadlines(S.sql, { today: addDays(today, 7) });
+  await remindDeadlines(S.sql, { today: remindDay(want, 3) });
   assert.equal(await events(spec, 'deadline_soon'), 1, 'по новому — есть');
   // Журнал — заказчику видна история переносов.
   const journal = (await owner.req('GET', `/api/orders/${o.id}/journal`)).body.journal.map((j) => j.what);

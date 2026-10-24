@@ -80,8 +80,8 @@ export const EVENTS = {
   rework: { type: 'executor_work', title: 'Результат возвращён на доработку', order: true },
   redo: { type: 'executor_work', title: 'Заказчик нашёл ошибку в выданном результате — переделайте бесплатно (причина — в истории заявки)', order: true },
   // Напоминания о сроках (2.13): src/notify/reminders.mjs, раз в минуту вместе с повтором СМС.
-  deadline_soon: { type: 'executor_work', title: 'До срока по делу осталось 3 дня', order: true },
-  deadline_tomorrow: { type: 'executor_work', title: 'Срок по делу — завтра', order: true },
+  deadline_soon: { type: 'executor_work', title: 'До срока по делу осталось 3 рабочих дня', order: true },
+  deadline_tomorrow: { type: 'executor_work', title: 'Срок по делу — завтра или сразу после выходных: сегодня последний рабочий день перед ним', order: true },
   deadline_ext_approved: { type: 'executor_work', title: 'Диспетчер согласился перенести срок по делу', order: true },
   deadline_ext_declined: { type: 'executor_work', title: 'Диспетчер отказал в переносе срока по делу', order: true },
   deadline_overdue: { type: 'executor_work', title: 'Срок по делу прошёл — сдайте результат или напишите диспетчеру', order: true },
