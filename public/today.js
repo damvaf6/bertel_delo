@@ -115,6 +115,15 @@ function group(id, title, items, line, go, extra = () => []) {
       ...extra(x)))];
 }
 
+// Новогодние каникулы впереди (2.393): заголовок «Срок в новогодние каникулы — сдайте до 30 декабря» и дела под ним.
+function newYear(ny, today, go) {
+  if (!ny?.items?.length) return [];
+  const wb = `${WD[new Date(`${ny.work_before}T00:00:00Z`).getUTCDay()]}, ${dayRu(ny.work_before)}`;
+  return group('new-year', `Срок в новогодние каникулы — сдайте до ${dayRu(ny.work_before)}`, ny.items, (x) => [x.title,
+    { class: 'warn-line', role: 'new-year-what', text: `срок ${dayRu(x.deadline)} — в каникулы (${dayRu(ny.from)} — ${dayRu(ny.to)}): заказчик и банк не работают, последний рабочий день — ${wb}` },
+    `${x.service} · осталось до ${dayRu(ny.work_before)}: ${daysLeft(ny.work_before, today)} дн.`], go);
+}
+
 // Срок прошёл, а перенос ещё не просили (2.166) — кнопка сразу к форме «Попросить перенести срок» в деле.
 function askLate(x) {
   if (!x.overdue || x.extend) return [];
@@ -449,6 +458,9 @@ export async function loadToday() {
         `«Готово» ${since(x.finished_at)} · не снято: ${x.missing.join(', ')}`,
         x.asked === x.missing.length ? 'просьба доснять готова — отправьте владельцу новую ссылку' : 'попросите доснять — владельцу уйдёт новая ссылка'],
       (x) => { location.hash = `order=${x.id}&to=inspect`; }),
+      // За две недели до новогодних каникул (2.393) — дела со сроком в каникулы одной группой: заказчик и банк в каникулы не
+      // принимают, сдать — до последнего рабочего дня перед ними.
+      ...newYear(e.new_year, t.today, toOrder),
       ...group('hot', 'Горит срок', e.hot.filter((x) => !noResult.some((n) => n.id === x.id) && !taskDue.some((n) => n.id === x.id)), (x) => [x.title, `${x.service} · ${deadline({ ...x, who: 'Вы попросили' }, t.today)}`], toOrder, askLate),
       ...group('offers', 'Новые предложения', e.offers, (x) => [x.title, [x.service, x.fee_kop ? `Вам ${rub(x.fee_kop)}` : null, deadline(x, t.today)].filter(Boolean).join(' · ')], toOrder),
       // На проверке у диспетчера 2 рабочих дня и дольше (2.369, 2.384) — строкой, без кнопок: делать ничего не нужно, ответ придёт в ленту.

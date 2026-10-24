@@ -4,7 +4,8 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, login, makeOrg, addMember, makeSpecialist } from '../helpers.mjs';
-import { holidayName, isWorkday, isWorkingWeekend, offDayName, workdayFrom, workdayBefore } from '../../src/orders/holidays.mjs';
+import { holidayName, isWorkday, isWorkingWeekend, newYearAhead, offDayName, workdayFrom, workdayBefore } from '../../src/orders/holidays.mjs';
+import { newYearCases } from '../../src/ops/today-ops.mjs';
 import { expertSchedule, orgSchedule } from '../../src/orders/schedule.mjs';
 import { extendSuggest } from '../../src/ops/handover-ops.mjs';
 
@@ -114,4 +115,29 @@ test('2.371: «Мои сроки» и нагрузка — праздник вы
   // Неделя от срока выпадает на 12 июня — на понедельник 15-го.
   assert.equal(extendSuggest({ deadline: '2026-06-05' }, null, '2026-06-01').new_deadline, '2026-06-15');
   await S.sql`update orders set status = 'cancelled' where id = ${o.id}`;
+});
+
+test('2.393: за две недели до новогодних каникул — дела со сроком в каникулы, «сдайте до 30 декабря»', async () => {
+  const ny = { from: '2026-12-31', to: '2027-01-10', work_before: '2026-12-30' };
+  assert.equal(newYearAhead('2026-12-16'), null, 'больше двух недель — рано');
+  assert.deepEqual(newYearAhead('2026-12-17'), ny);
+  assert.deepEqual(newYearAhead('2026-12-30'), ny);
+  assert.equal(newYearAhead('2026-12-31'), null, 'каникулы уже начались');
+  assert.equal(newYearAhead('2026-10-24'), null);
+  // 2027: 31 декабря — перенос выходного, каникулы с него.
+  assert.equal(newYearAhead('2027-12-20').from, '2027-12-31');
+  const o = (id, deadline, status = 'in_work') => ({ id, deadline, status });
+  const rows = [o('a', '2027-01-11'), o('b', '2027-01-05'), o('c', '2026-12-31'), o('d', '2027-01-10'), o('e', '2026-12-30'),
+    o('f', '2027-01-04', 'review'), o('g', null)];
+  const got = newYearCases(rows, '2026-12-20');
+  assert.equal(got.work_before, '2026-12-30');
+  assert.deepEqual(got.rows.map((x) => x.id), ['c', 'b', 'd'], 'только в работе и срок в каникулы, ближе — выше');
+  assert.equal(newYearCases(rows, '2026-12-10'), null);
+  assert.equal(newYearCases([o('a', '2027-01-11')], '2026-12-20'), null, 'дел в каникулы нет — группы нет');
+  // Через «Сегодня» сейчас (не декабрь) группы нет — поле есть и пустое.
+  const exp = await login(S, '+79990003931');
+  await makeSpecialist(S.sql, exp.user.id);
+  const t = await exp.req('GET', '/api/today');
+  assert.equal(t.status, 200);
+  assert.equal(t.body.expert.new_year, newYearCases([], t.body.today));
 });
