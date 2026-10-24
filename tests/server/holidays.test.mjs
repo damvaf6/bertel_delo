@@ -8,6 +8,7 @@ import { holidayName, holidayRunFrom, isWorkday, isWorkingWeekend, newYearAhead,
 import { newYearCases } from '../../src/ops/today-ops.mjs';
 import { expertSchedule, orgSchedule } from '../../src/orders/schedule.mjs';
 import { extendSuggest } from '../../src/ops/handover-ops.mjs';
+import { scheduleIcs } from '../../src/orders/ics.mjs';
 
 let S;
 before(async () => { S = await startApp(); });
@@ -180,4 +181,38 @@ test('2.396: каталог — today и off_days на два года впер�
   const next = `${Number(today.slice(0, 4)) + 1}-11-04`;
   assert.equal(r.body.off_days[next], 'День народного единства', 'праздник через год с лишним — тоже в перечне');
   assert.ok(!(r.body.off_days['2027-02-20']), 'рабочая суббота — не нерабочий день');
+});
+
+test('2.398: файл календаря — срок в нерабочий день: «сдайте до …» и напоминание накануне рабочего дня перед ним', async () => {
+  const expert = await login(S, '+79990004981');
+  const owner = await login(S, '+79990004982');
+  await makeSpecialist(S.sql, expert.user.id);
+  const mk = async (title, deadline, status = 'in_work') => {
+    const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
+    await S.sql`update orders set status = ${status}, deadline = ${deadline}, executor_user_id = ${expert.user.id} where id = ${o.id}`;
+    return o;
+  };
+  const hol = await mk('В праздник', '2026-11-04');
+  const sun = await mk('В воскресенье', '2026-11-08');
+  const work = await mk('В будний', '2026-11-05');
+  const sent = await mk('Сдано, в субботу', '2026-11-07', 'review');
+  const s = await expertSchedule(S.sql, expert.user.id, S.app.locals.registry, '2026-11-02');
+  const cal = scheduleIcs(s, new Date('2026-11-02T06:00:00Z')).replace(/\r\n /g, '');
+  const ev = (id) => cal.split('BEGIN:VEVENT').find((e) => e.includes(`UID:deadline-${id}@`));
+
+  // Праздник 4 ноября — до вторника 3-го, напоминание 2-го в 9:00 (за сутки и 15 часов до полуночи 4-го).
+  assert.match(ev(hol.id), /SUMMARY:Срок сдачи: дело .*— нерабочий день\\, сдайте до 03\.11\.2026\r\n/);
+  assert.match(ev(hol.id), /DESCRIPTION:04\.11\.2026 — День народного единства\\, нерабочий день: .*к 03\.11\.2026\. /);
+  assert.match(ev(hol.id), /TRIGGER:-P1DT15H\r\n/);
+  // Воскресенье 8-го — до пятницы 6-го, напоминание в четверг 5-го.
+  assert.match(ev(sun.id), /сдайте до 06\.11\.2026\r\n/);
+  assert.match(ev(sun.id), /DESCRIPTION:08\.11\.2026 — воскресенье\\, нерабочий день/);
+  assert.match(ev(sun.id), /TRIGGER:-P2DT15H\r\n/);
+  // Будний день — как раньше: накануне в 9:00, без «нерабочий день».
+  assert.ok(!ev(work.id).includes('нерабочий'));
+  assert.match(ev(work.id), /TRIGGER:-PT15H\r\n/);
+  // Уже сдано — пометка есть, напоминания нет.
+  assert.match(ev(sent.id), /сдайте до 06\.11\.2026\r\n/);
+  assert.ok(!ev(sent.id).includes('VALARM'));
+  await S.sql`update orders set status = 'cancelled' where id in (${hol.id}, ${sun.id}, ${work.id}, ${sent.id})`;
 });
