@@ -8,6 +8,7 @@ import { holidayName, isWorkday, workdayFrom } from '../../src/orders/holidays.m
 import { remindDay, remindDeadlines } from '../../src/notify/reminders.mjs';
 import { digestText, morningTo, sendMorning } from '../../src/notify/morning.mjs';
 import { expertMorningAlerts } from '../../src/ops/today-ops.mjs';
+import { workdayFor } from '../../src/ops/deadline-ops.mjs';
 
 let S, owner, dispatcher, spec, stranger, other;
 const FIELDS = { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, Сроковая ул., 3' };
@@ -973,4 +974,34 @@ test('2.357: окно подписи — дата составления в фа
   assert.equal((await spec.req('PATCH', '/api/me', { full_name: 'Тестов Эксперт Экспертович' })).status, 200);
   assert.equal((await spec.req('POST', `/api/documents/${f1}/sign`, { confirm: true })).status, 201);
   assert.equal(await made(f1), undefined);
+});
+
+// 2.397: просят перенести срок на выходной или праздник — диспетчеру предупреждение и ближайший рабочий день одной кнопкой.
+test('2.397: новый срок в нерабочий день — диспетчер согласует на ближайший рабочий', async () => {
+  assert.deepEqual(workdayFor('2026-11-04', '2026-11-01', '2026-10-24'), { off: 'День народного единства', day: '2026-11-03', before: true });
+  assert.deepEqual(workdayFor('2026-11-07', '2026-11-06', '2026-10-24'), { off: 'суббота', day: '2026-11-09', before: false },
+    'рабочий день перед ним — нынешний срок: ближайший после');
+  assert.equal(workdayFor('2026-11-05', '2026-11-01', '2026-10-24'), null);
+  const o = await inWork('Квартира: перенос на выходной', 3);
+  const old = addDays(today, 3);
+  // Первый нерабочий день, перед которым есть рабочий позже нынешнего срока.
+  let want = addDays(today, 6);
+  while (isWorkday(want) || !(workdayFor(want, old)?.before)) want = addDays(want, 1);
+  const work = workdayFor(want, old);
+  assert.equal((await ask(spec, o, { new_deadline: want, reason: 'Осмотр перенесён владельцем', from: old })).status, 201);
+  const d = (await list(dispatcher, o)).body;
+  assert.deepEqual(d.open.work, work);
+  assert.equal((await list(spec, o)).body.open.work, undefined, 'исполнителю предупреждение диспетчера не нужно');
+  const rid = d.open.id;
+  assert.equal((await decide(dispatcher, o, rid, { approve: true, deadline: addDays(work.day, -1) })).body.error, 'bad_input');
+  assert.equal((await decide(dispatcher, o, rid, { approve: false, deadline: work.day })).body.error, 'bad_input');
+  const r = await decide(dispatcher, o, rid, { approve: true, deadline: work.day });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.deadline, work.day);
+  const done = r.body.requests.find((x) => x.id === rid);
+  assert.equal(done.new_deadline, work.day);
+  assert.match(done.answer, /нерабочий день/);
+  assert.equal((await owner.req('GET', `/api/orders/${o.id}`)).body.order.deadline, work.day);
+  const [a] = await S.sql`select details->>'asked' as asked from audit_log where action = 'deadline.approve' and subject_id = ${o.id}`;
+  assert.equal(a.asked, want);
 });

@@ -36,6 +36,7 @@ function render(r) {
   if (o) $('deadline-open-text').textContent = `Просьба${o.org_name ? ` организации «${o.org_name}» (передать дело некому)` : ''} от ${whenRu(o.requested_at)}: перенести на ${dayRu(o.new_deadline)}. Причина: ${o.reason}`;
   $('deadline-answer-field').classList.toggle('hidden', !r.can_decide);
   for (const id of ['deadline-approve', 'deadline-decline']) $(id).classList.toggle('hidden', !r.can_decide);
+  renderOff(r.can_decide ? o?.work : null, o);
   $('deadline-withdraw').classList.toggle('hidden', !r.can_withdraw);
   $('deadline-form').classList.toggle('hidden', !r.can_request);
   // Попросил или отозвал перенос (2.140) — предупреждение «нет файла результата» в деле пересчитывает свои кнопки.
@@ -222,17 +223,32 @@ function renderPace(p) {
   box.dataset.late = p.late ? '1' : '0';
 }
 
-async function decide(approve) {
+// Просят перенести на выходной или праздник (2.397): диспетчеру — чем день нерабочий и одной кнопкой ближайший рабочий
+// день; «Согласиться» как просят остаётся второй кнопкой.
+function renderOff(w, o) {
+  $('deadline-off').classList.toggle('hidden', !w);
+  $('deadline-approve-work').classList.toggle('hidden', !w);
+  $('deadline-approve').classList.toggle('secondary', !!w);
+  $('deadline-approve').textContent = w ? `Согласиться на ${dayRu(o.new_deadline)}` : 'Согласиться';
+  if (!w) return;
+  $('deadline-off').textContent = `${dayRu(o.new_deadline)} — ${w.off}, нерабочий день. `
+    + `Ближайший рабочий день ${w.before ? 'перед ним' : 'после него'} — ${dayRu(w.day)}`;
+  $('deadline-approve-work').textContent = `Согласовать на ${dayRu(w.day)}`;
+}
+
+async function decide(approve, day) {
   if (!ctx?.open) return;
   try {
-    await api('POST', `/api/orders/${ctx.order.id}/deadline-requests/${ctx.open.id}/decide`, { approve, answer: $('deadline-answer').value });
+    await api('POST', `/api/orders/${ctx.order.id}/deadline-requests/${ctx.open.id}/decide`,
+      { approve, answer: $('deadline-answer').value, ...(day ? { deadline: day } : {}) });
     $('deadline-answer').value = '';
     await ctx.reload();
-    say($('deadline-msg'), approve ? 'Срок перенесён. Исполнителю и заказчику пришло уведомление.' : 'Отказано. Исполнителю пришло уведомление.', 'ok');
+    say($('deadline-msg'), approve ? `Срок перенесён${day ? ` на ${dayRu(day)}` : ''}. Исполнителю и заказчику пришло уведомление.` : 'Отказано. Исполнителю пришло уведомление.', 'ok');
   } catch (err) { say($('deadline-msg'), err.message); }
 }
 
 $('deadline-approve').addEventListener('click', () => decide(true));
+$('deadline-approve-work').addEventListener('click', () => decide(true, ctx?.open?.work?.day));
 $('deadline-decline').addEventListener('click', () => decide(false));
 $('deadline-withdraw').addEventListener('click', async () => {
   if (!ctx?.open) return;
