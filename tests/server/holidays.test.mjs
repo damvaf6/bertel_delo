@@ -56,6 +56,28 @@ test('2.391: календарь 2027 — переносы по постанов�
   assert.equal(s.days.find((d) => d.date === '2027-02-22').holiday, 'перенос выходного с 20 февраля');
 });
 
+test('2.392: рабочая суббота по переносу — пометка `working` в «Моих сроках» и нагрузке, и она свободный будний день', async () => {
+  const org = await makeOrg(S.sql, 'ООО «Рабочая суббота»');
+  const head = await login(S, '+79990004992');
+  const expert = await login(S, '+79990004993');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  await makeSpecialist(S.sql, expert.user.id);
+  await S.sql`update specialists set org_id = ${org.id} where user_id = ${expert.user.id}`;
+  await addMember(S.sql, org.id, expert.user.id, 'member');
+  const registry = S.app.locals.registry;
+  const s = await expertSchedule(S.sql, expert.user.id, registry, '2027-02-15');
+  assert.equal(s.days.find((d) => d.date === '2027-02-20').working, true);
+  // Обычная суббота и выходной по переносу — без пометки.
+  assert.equal(s.days.find((d) => d.date === '2027-02-27').working, undefined);
+  assert.equal(s.days.find((d) => d.date === '2027-02-22').working, undefined);
+  const g = await orgSchedule(S.sql, org.id, registry, '2027-02-15');
+  const h = g.days.find((d) => d.date === '2027-02-20');
+  assert.equal(h.working, true);
+  assert.equal(h.weekend, false);
+  // С 15 по 28 февраля: 10 будней, без 22 и 23 февраля — 8, и рабочая суббота 20-го — 9.
+  assert.equal(g.experts.find((x) => x.user_id === expert.user.id).free_workdays, 9);
+});
+
 test('2.371: «Мои сроки» и нагрузка — праздник выходной, срок в праздник с последним рабочим днём; новый срок — не на праздник', async () => {
   const org = await makeOrg(S.sql, 'ООО «Праздники в сроках»');
   const head = await login(S, '+79990004971');

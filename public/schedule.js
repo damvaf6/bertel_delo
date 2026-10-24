@@ -3,7 +3,7 @@
 // «свободно». Нажатие на строку открывает дело на нужном блоке. Свои напоминания по заметкам (2.120) — открывают заметки;
 // «Сделано» у напоминания отмечает заметку, не открывая дело (2.157).
 import { api, el, say } from '/common.js';
-import { awaySpan, dayRu, holidayText } from '/order.js';
+import { WORKING_DAY, awaySpan, dayRu, holidayText } from '/order.js';
 
 const $ = (id) => document.getElementById(id);
 const short = (iso) => {
@@ -139,18 +139,20 @@ export async function loadSchedule() {
           el('span', { class: d.busy ? 'busy-mark' : 'muted', text: d.busy ? `много: к сдаче ${d.due}${d.trips ? ` + ${trips(d.trips)}` : ''}` : d.deadlines > 1 ? `сдать дел: ${d.deadlines}` : '' })),
         ...(kind(d) !== 'free' ? [el('p', { class: 'away-mark', text: FREE[kind(d)] })] : []),
         ...(d.holiday ? [el('p', { class: 'holiday-mark', 'data-role': 'holiday', text: holidayText(d, d.due) })] : []),
+        ...(d.working ? [el('p', { class: 'working-mark', 'data-role': 'working', text: WORKING_DAY })] : []),
         ...(d.busy ? [el('p', { class: 'muted', text: d.trips
           ? `В этот день к сдаче ${d.due} ${d.due === 1 ? 'дело' : d.due < 5 ? 'дела' : 'дел'} и ${trips(d.trips)} на объект — можно попросить перенести срок.`
           : 'В этот день больше двух дел к сдаче — можно попросить перенести срок одного из них.' })] : []),
         el('ul', {}, ...d.items.map((i) => item(i, k)))));
       continue;
     }
-    // Пустые праздники (2.371) — своей строкой, не «свободно».
-    const free = (x) => (kind(x) === 'free' && x.holiday ? 'holiday' : kind(x));
+    // Пустые праздники (2.371) и рабочая суббота по переносу (2.392) — своей строкой, не просто «свободно».
+    const free = (x) => (kind(x) === 'free' && x.holiday ? 'holiday' : kind(x) === 'free' && x.working ? 'working' : kind(x));
     let j = k;
     while (j + 1 < s.days.length && !s.days[j + 1].items.length && free(s.days[j + 1]) === free(d) && kind(d) !== 'back') j++;
     const span = j === k ? dayName(d) : `${dayName(d)} — ${dayName(s.days[j])}`;
-    const text = free(d) === 'holiday' ? (j === k ? `праздник: ${d.holiday}` : 'праздники, нерабочие дни') : FREE[kind(d)];
+    const text = free(d) === 'holiday' ? (j === k ? `праздник: ${d.holiday}` : 'праздники, нерабочие дни')
+      : free(d) === 'working' ? `${WORKING_DAY.toLowerCase()}, свободно` : FREE[kind(d)];
     rows.push(el('li', { 'data-day': d.date, class: free(d) === 'free' ? 'free' : `free ${free(d)}` },
       el('div', { class: 'day' }, el('span', { text: `${d.today ? 'Сегодня, ' : ''}${span}` }), el('span', { text }))));
     k = j;

@@ -17137,6 +17137,61 @@ test('2.371: праздник в «Моих сроках» и нагрузке �
   await ep.context().close(); await hp.context().close(); await cp.context().close();
 });
 
+// 2.392: рабочая суббота по переносу в «Моих сроках» и нагрузке — пометка, а не обычный выходной. Календарь проверяет
+// `tests/server/holidays.test.mjs`; здесь пометка подставлена в ответ, чтобы проверка не зависела от даты прогона.
+test('2.392: рабочая суббота по переносу — «Рабочая суббота (перенос)» в «Моих сроках» и нагрузке экспертов', async ({ browser, baseURL }) => {
+  test.setTimeout(120_000);
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const ep = await ctx(), hp = await ctx(), cp = await ctx();
+  const customer = await signIn(cp, '+79990003921'), expert = await signIn(ep, '+79990003922'), head = await signIn(hp, '+79990003923');
+  const due = inDays(3), empty = inDays(5);
+  const { orgId } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Рабочая суббота ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Субботина Вера' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', 'Срок в рабочую субботу: квартира', $1, $2, 'in_work', $3::date, 1500000, now(),
+              '{"purpose":"deal","region":"moscow","object_type":"flat","address":"г. Москва, Субботняя ул., 20"}')`, [customer.id, expert.id, due]);
+    return { orgId: org.id };
+  });
+  const working = (d) => ([due, empty].includes(d.date) ? { ...d, weekend: false, working: true, holiday: undefined, work_before: undefined } : d);
+  await ep.route('**/api/specialist/me/schedule', async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    body.schedule.days = body.schedule.days.map(working);
+    await route.fulfill({ response: res, json: body });
+  });
+  await ep.goto('/kabinet#specialist&to=schedule');
+  const day = ep.locator(`#schedule-days li[data-day="${due}"]`);
+  await expect(day).not.toHaveClass(/weekend/);
+  await expect(day.locator('[data-role="working"]')).toHaveText('Рабочая суббота (перенос)');
+  await expect(day.locator('li[data-schedule-item="deadline"]')).toContainText('Срок в рабочую субботу: квартира');
+  await expect(ep.locator(`#schedule-days li.free.working[data-day="${empty}"]`)).toContainText('рабочая суббота (перенос), свободно');
+  expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await day.scrollIntoViewIfNeeded();
+  await shot(ep, 'i04-moi-sroki-rabochaya-subbota');
+
+  await hp.route('**/api/orgs/*/schedule', async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    body.schedule.days = body.schedule.days.map(working);
+    await route.fulfill({ response: res, json: body });
+  });
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const x = hp.locator(`#org-schedule-box li[data-expert-schedule="${expert.id}"]`);
+  const cell = x.locator(`.strip .cell.working[data-day="${due}"]`);
+  await expect(cell).toHaveAttribute('title', /рабочая суббота \(перенос\)/);
+  await expect(cell).not.toHaveClass(/weekend/);
+  await x.locator('details[data-days] summary').click();
+  await expect(x.locator(`details[data-days] li[data-day="${due}"] [data-role="working"]`)).toHaveText('Рабочая суббота (перенос)');
+  expect(await hp.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await x.scrollIntoViewIfNeeded();
+  await shot(hp, 'i05-nagruzka-rabochaya-subbota');
+  await ep.context().close(); await hp.context().close(); await cp.context().close();
+});
+
 test('2.372: то же объявление другой ссылкой — предупреждение сразу при добавлении и в списке аналогов', async ({ browser, baseURL }) => {
   const sp = await (await phoneContext(browser, baseURL)).newPage();
   const cp = await (await phoneContext(browser, baseURL)).newPage();

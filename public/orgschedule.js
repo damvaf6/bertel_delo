@@ -6,7 +6,7 @@
 // день: своя строка, у срока дела — «по заданию на оценку — к …»; в полосе и «сдать» дело считается в день срока по заданию.
 // Срок из письма о переносе (2.354) — «Сдать по письму о переносе», прежний срок и просил ли эксперт письмо с новым сроком.
 import { api, el, say } from '/common.js';
-import { awaySpan, dayRu, holidayText } from '/order.js';
+import { WORKING_DAY, awaySpan, dayRu, holidayText } from '/order.js';
 import { focusOrgCase } from '/orgcases.js';
 
 const $ = (id) => document.getElementById(id);
@@ -62,9 +62,9 @@ function strip(x, days) {
     const d = x.days[k];
     const due = d.items.filter(isDue).length;
     const go = d.items.filter((i) => i.kind === 'visit' || i.kind === 'helper').length;
-    const cls = ['cell', h.today ? 'today' : '', h.weekend ? 'weekend' : '', kind(x, d) !== 'free' ? kind(x, d) : '',
+    const cls = ['cell', h.today ? 'today' : '', h.weekend ? 'weekend' : '', h.working ? 'working' : '', kind(x, d) !== 'free' ? kind(x, d) : '',
       vacation(x, d) && dueOn(d) ? 'clash' : '', due > 1 ? 'heavy' : due || go ? 'busy' : ''].filter(Boolean).join(' ');
-    return el('span', { class: cls, 'data-day': h.date, title: [`${h.weekday}, ${short(h.date)}`, h.holiday ? `праздник: ${h.holiday}` : null, kind(x, d) !== 'free' ? FREE[kind(x, d)] : null].filter(Boolean).join(' — ') },
+    return el('span', { class: cls, 'data-day': h.date, title: [`${h.weekday}, ${short(h.date)}`, h.holiday ? `праздник: ${h.holiday}` : null, h.working ? WORKING_DAY.toLowerCase() : null, kind(x, d) !== 'free' ? FREE[kind(x, d)] : null].filter(Boolean).join(' — ') },
       el('span', { class: 'num', text: String(Number(h.date.slice(8))) }),
       el('span', { class: 'cnt', text: due ? String(due) : go ? '•' : '' }));
   }));
@@ -102,6 +102,7 @@ function daysDetails(x, busy) {
     el('div', { class: 'day' }, el('span', { text: `${h.today ? 'Сегодня, ' : ''}${h.weekday}, ${short(h.date)}` })),
     ...(kind(x, d) !== 'free' ? [el('p', { class: 'away-mark', text: FREE[kind(x, d)] })] : []),
     ...(h.holiday ? [el('p', { class: 'holiday-mark', 'data-role': 'holiday', text: holidayText(h, d.items.some((i) => isDue(i) && i.status !== 'review')) })] : []),
+    ...(h.working ? [el('p', { class: 'working-mark', 'data-role': 'working', text: WORKING_DAY })] : []),
     ...(d.items.length ? [el('ul', {}, ...d.items.map((i) => item(i, i.kind === 'task_due' || (vacation(x, d) && isDue(i) && i.status !== 'review') ? 'hot' : '')))] : [])));
   return el('details', { 'data-days': x.user_id }, el('summary', { text: 'По дням' }), el('ol', { class: 'schedule' }, ...late, ...rows));
 }
@@ -143,8 +144,8 @@ function team(schedule) {
   return [
     el('div', { class: 'title', text: `Принимают новые дела (из ${total})` }),
     el('div', { class: 'strip', 'aria-hidden': 'true' }, ...schedule.days.map((h) => el('span', {
-      class: ['cell', h.today ? 'today' : '', h.weekend ? 'weekend' : '', h.accepting === 0 ? 'nobody' : h.accepting < total ? 'fewer' : ''].filter(Boolean).join(' '),
-      'data-day': h.date, title: `${h.weekday}, ${short(h.date)}${h.holiday ? ` (праздник: ${h.holiday})` : ''} — принимают: ${h.accepting} из ${total}` },
+      class: ['cell', h.today ? 'today' : '', h.weekend ? 'weekend' : '', h.working ? 'working' : '', h.accepting === 0 ? 'nobody' : h.accepting < total ? 'fewer' : ''].filter(Boolean).join(' '),
+      'data-day': h.date, title: `${h.weekday}, ${short(h.date)}${h.holiday ? ` (праздник: ${h.holiday})` : h.working ? ` (${WORKING_DAY.toLowerCase()})` : ''} — принимают: ${h.accepting} из ${total}` },
     el('span', { class: 'num', text: String(Number(h.date.slice(8))) }),
     el('span', { class: 'cnt', text: String(h.accepting) })))),
     note,
