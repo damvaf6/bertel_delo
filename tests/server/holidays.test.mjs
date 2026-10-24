@@ -167,3 +167,17 @@ test('2.395: отпуск кончается перед праздниками �
   r = await exp.req('PATCH', '/api/specialist/me', { away: null });
   assert.equal(r.body.specialist.away_holiday, null);
 });
+
+// 2.396: нерабочие дни в каталоге — подсказка к сроку заявки в выходной или праздник на весь допустимый срок (2 года).
+test('2.396: каталог — today и off_days на два года вперёд', async () => {
+  const c = await login(S, '+79990003962');
+  const r = await c.req('GET', '/api/catalog');
+  assert.equal(r.status, 200);
+  const today = new Date(Date.now() + 3 * 3600_000).toISOString().slice(0, 10);
+  assert.equal(r.body.today, today);
+  const days = Object.keys(r.body.off_days);
+  assert.ok(days.every((d) => d >= today && offDayName(d) === r.body.off_days[d]));
+  const next = `${Number(today.slice(0, 4)) + 1}-11-04`;
+  assert.equal(r.body.off_days[next], 'День народного единства', 'праздник через год с лишним — тоже в перечне');
+  assert.ok(!(r.body.off_days['2027-02-20']), 'рабочая суббота — не нерабочий день');
+});

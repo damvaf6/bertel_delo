@@ -210,6 +210,7 @@ function renderForm() {
   $('d-title').value = order.title;
   renderFields(order.fields);
   $('d-deadline').value = order.deadline || '';
+  showDeadlineOff();
   $('d-express').checked = !!order.express;
   toggleExpress();
   const def = selectedDef();
@@ -258,6 +259,33 @@ function formValues() {
   for (const node of $('d-fields').querySelectorAll('[data-field]')) out[node.dataset.field] = node.value;
   return out;
 }
+
+// Срок в выходной или праздник (2.396): «4 ноября — День народного единства, нерабочий день: эксперт сдаст до 3 ноября»
+// и одной кнопкой — на последний рабочий день перед ним (не раньше сегодня). Нерабочие дни и сегодня по Москве — из /api/catalog.
+const minusDay = (iso) => { const d = new Date(`${iso}T00:00:00Z`); d.setUTCDate(d.getUTCDate() - 1); return d.toISOString().slice(0, 10); };
+function showDeadlineOff() {
+  const off = state.catalog?.off_days ?? {};
+  const v = $('d-deadline').value;
+  const name = v ? off[v] : null;
+  let before = null;
+  if (name) {
+    let d = minusDay(v);
+    while (off[d]) d = minusDay(d);
+    before = d >= (state.catalog.today ?? '') ? d : null;
+  }
+  $('d-deadline-off').classList.toggle('hidden', !name);
+  $('d-deadline-off').textContent = name ? `${dayRu(v)} — ${name}, нерабочий день${before ? `: эксперт сдаст до ${dayRu(before)}` : ''}` : '';
+  $('d-deadline-workday').classList.toggle('hidden', !before);
+  $('d-deadline-workday').textContent = before ? `Поставить срок ${dayRu(before)}` : '';
+  $('d-deadline-workday').dataset.day = before ?? '';
+}
+$('d-deadline').addEventListener('input', showDeadlineOff);
+$('d-deadline').addEventListener('change', showDeadlineOff);
+$('d-deadline-workday').addEventListener('click', () => {
+  $('d-deadline').value = $('d-deadline-workday').dataset.day;
+  showDeadlineOff();
+  $('d-deadline').focus();
+});
 
 // Экспресс (2.4) — только для услуг, где он есть в описании модуля.
 function toggleExpress() {

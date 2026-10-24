@@ -28,10 +28,10 @@ export function beforeDeadline(deadline, today = todayMsk()) {
   return d < today ? today : d;
 }
 
-// Нерабочие дни с сегодня на год вперёд: { '2026-10-24': 'суббота', '2026-11-04': 'День народного единства' }.
-export function offDays(today = todayMsk()) {
+// Нерабочие дни с сегодня на год вперёд (или на `days`): { '2026-10-24': 'суббота', '2026-11-04': 'День народного единства' }.
+export function offDays(today = todayMsk(), days = MAX_AHEAD) {
   const out = {};
-  for (let i = 0; i <= MAX_AHEAD; i += 1) {
+  for (let i = 0; i <= days; i += 1) {
     const d = addDays(today, i);
     const off = offDayName(d);
     if (off) out[d] = off;
