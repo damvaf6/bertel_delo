@@ -49,6 +49,9 @@ const WD = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
 export const holidayText = (d, due) => `Праздник, нерабочий день: ${d.holiday}${due ? ` — заказчик в этот день не работает; сдайте лучше до него, последний рабочий день — ${
   WD[new Date(`${d.work_before}T00:00:00Z`).getUTCDay()]}, ${dayRu(d.work_before)}` : ''}.`;
 
+// Рабочая суббота по переносу выходного (2.392) — в «Моих сроках» и нагрузке экспертов, не обычный выходной.
+export const WORKING_DAY = 'Рабочая суббота (перенос)';
+
 export function serviceDef(moduleId, serviceId) {
   const m = state.catalog.modules.find((x) => x.id === moduleId);
   const s = m?.services.find((x) => x.id === serviceId);

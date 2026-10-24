@@ -9,7 +9,7 @@
 // Письмо о переносе со сроком раньше срока дела (2.353) — у отметки «срок раньше срока дела», просил ли эксперт письмо с новым
 // сроком (`letter_ask`) и кнопка «Попросить письмо с новым сроком», как в «Сегодня» (2.341) и «Истории сроков» (2.349).
 import { addDays, todayMsk } from './workflow.mjs';
-import { holidayName, isWorkday, workdayBefore } from './holidays.mjs';
+import { holidayName, isWorkday, isWorkingWeekend, workdayBefore } from './holidays.mjs';
 import { taskDueFor, taskMoveLetter } from '../ops/draft-ops.mjs';
 import { assignmentDocs, TASK_MOVE } from '../ops/ai-ops.mjs';
 import { orderRef } from '../notify/registry.mjs';
@@ -40,10 +40,12 @@ const day = (d) => (d instanceof Date ? d.toISOString().slice(0, 10) : String(d)
 const awayStart = (sp, today) => (sp.away_from && day(sp.away_from) > today ? day(sp.away_from) : null);
 const inAway = (away, date) => !!away && date < away.until && (!away.from || date >= away.from);
 // День полосы: выходной — и суббота с воскресеньем, и нерабочий праздник (2.371: `holiday` — его название). Срок сдачи в
-// праздник — `work_before`: последний рабочий день перед ним (заказчик и банк в праздник не работают).
+// праздник — `work_before`: последний рабочий день перед ним (заказчик и банк в праздник не работают). Рабочая суббота по
+// переносу — `working` (2.392): будний день, но с пометкой, чтобы не путали с обычным выходным.
 const dayHead = (date, i) => {
   const holiday = holidayName(date);
   return { date, weekday: weekday(date), today: i === 0, weekend: !isWorkday(date),
+    ...(isWorkingWeekend(date) ? { working: true } : {}),
     ...(holiday && !['сб', 'вс'].includes(weekday(date)) ? { holiday, work_before: workdayBefore(date) } : {}) };
 };
 // Время по Москве для «выезд в 10:30» и «ссылка до 18:00».
