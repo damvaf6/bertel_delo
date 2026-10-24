@@ -115,6 +115,9 @@ function group(id, title, items, line, go, extra = () => []) {
       ...extra(x)))];
 }
 
+// Строка у дела в «Делах экспертов» руководителя (2.394).
+export const newYearCaseText = (ny) => `Срок в новогодние каникулы (${dayRu(ny.from)} — ${dayRu(ny.to)}): заказчик и банк не работают — сдать до ${dayRu(ny.work_before)}`;
+
 // Новогодние каникулы впереди (2.393): заголовок «Срок в новогодние каникулы — сдайте до 30 декабря» и дела под ним.
 function newYear(ny, today, go) {
   if (!ny?.items?.length) return [];

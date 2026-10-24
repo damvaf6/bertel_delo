@@ -1256,3 +1256,35 @@ test('2.389: руководителю в выходной или праздни�
   assert.equal(s.due, 1);
   assert.ok(s.notification_id);
 });
+
+test('2.394: за две недели до новогодних каникул — сколько дел экспертов со сроком в каникулы, «сдать до 30 декабря»', async () => {
+  assert.equal(orgDigestText({ new_year: 2, day: '2026-12-21' }), 'На сегодня по организации: срок в новогодние каникулы — сдать до 30 декабря: 2 дела');
+  assert.equal(orgDigestText({ new_year: 2, day: '2026-11-21' }), null, 'до каникул больше двух недель — не пишем');
+  assert.equal(orgDigestTo({ new_year: 1 }), 'new_year');
+  assert.equal(orgDigestTo({ new_year: 1, fresh: 1 }), 'fresh');
+  assert.equal(orgDigestTo({ new_year: 1, idle: 1 }), 'new_year');
+  const lead = await login(S, '+79990003941');
+  const expert = await login(S, '+79990003942');
+  const o2 = await makeOrg(S.sql, 'ООО «Новогодняя оценка»');
+  await addMember(S.sql, o2.id, lead.user.id, 'head');
+  await makeSpecialist(S.sql, expert.user.id);
+  await addMember(S.sql, o2.id, expert.user.id, 'member');
+  assert.equal((await expert.req('PATCH', '/api/specialist/me', { org_id: o2.id })).status, 200);
+  for (const [title, deadline] of [['В каникулы', '2027-01-05'], ['После каникул', '2027-01-11']]) {
+    const o = await inWork(title, deadline);
+    await S.sql`update orders set executor_user_id = ${expert.user.id} where id = ${o.id}`;
+  }
+  // Понедельник 21 декабря 2026: до каникул 10 дней.
+  await sendOrgMorning(S.sql, S.app.locals.registry, { now: at('2026-12-21', '09:00') });
+  const [r] = await S.sql`select new_year, notification_id from org_morning_digests where user_id = ${lead.user.id} and day = '2026-12-21'::date`;
+  assert.equal(r.new_year, 1);
+  assert.ok(r.notification_id);
+  const feed = await lead.req('GET', '/api/notifications');
+  const n = feed.body.notifications.find((x) => x.id === String(r.notification_id));
+  assert.equal(n.title, 'На сегодня по организации: срок в новогодние каникулы — сдать до 30 декабря: 1 дело');
+  assert.equal(n.section, `org=${o2.id}&to=new_year`);
+  // «Дела экспертов» сейчас (не декабрь) — пометки нет.
+  const cases = await lead.req('GET', `/api/orgs/${o2.id}/cases`);
+  assert.equal(cases.status, 200);
+  assert.ok(cases.body.cases.every((c) => c.new_year === null));
+});

@@ -27,7 +27,7 @@ import { orgChat } from '/orgchat.js';
 import { matcher, wireSearch } from '/search.js';
 import { loadOrgSchedule } from '/orgschedule.js';
 import { pickSignFilter } from '/orgsign.js';
-import { taskLetterLines, taskMovedText } from '/today.js';
+import { newYearCaseText, taskLetterLines, taskMovedText } from '/today.js';
 
 const $ = (id) => document.getElementById(id);
 const MONTHS = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
@@ -65,6 +65,8 @@ const FILTERS = [
   // 2.348: письмо о переносе пришло, а срок в нём раньше срока дела — сдавать по письму; ближайший срок по письму первым.
   { id: 'task_letter', text: 'Сдать по письму о переносе — раньше срока дела', test: (c) => !!c.task_moved?.letter },
   // 2.209: срок в дни, когда эксперт не принимает дела; о которых эксперт уже просит передать — в «Просят передать».
+  // 2.394: за две недели до новогодних каникул — дела в работе со сроком в каникулы (как у эксперта 2.393); ближайший первым.
+  { id: 'new_year', text: 'Срок в новогодние каникулы', test: (c) => !!c.new_year },
   { id: 'away', text: 'Эксперт не принимает дела — срок в эти дни', test: (c) => !!c.away && !c.handover },
   // 2.249: эксперт вернулся после дней «не принимаю дела» за последнюю неделю — что изменилось по его делам, пока его не было.
   { id: 'back', text: 'Эксперт вернулся после «не принимаю дела»', test: (c) => !!c.back },
@@ -175,6 +177,7 @@ function renderCases() {
   if (filter === 'back') active.sort((a, b) => b.back.until.localeCompare(a.back.until) || String(a.deadline).localeCompare(String(b.deadline)));
   if (filter === 'task_week') active.sort((a, b) => a.task_due.day.localeCompare(b.task_due.day));
   if (filter === 'task_moved' || filter === 'task_letter') active.sort((a, b) => a.task_moved.day.localeCompare(b.task_moved.day));
+  if (filter === 'new_year') active.sort((a, b) => String(a.deadline).localeCompare(String(b.deadline)));
   if (filter === 'away') active.sort((a, b) => String(a.deadline).localeCompare(String(b.deadline)));
   if (filter === 'inspect') active.sort((a, b) => (a.inspection.kind === b.inspection.kind
     ? new Date(a.inspection.at) - new Date(b.inspection.at) : a.inspection.kind === 'incomplete' ? -1 : 1));
@@ -244,6 +247,8 @@ function caseItem(org, c) {
     ...(c.task_moved && !c.task_moved.letter ? [el('div', { class: c.task_moved.asked ? 'muted' : 'overdue', 'data-role': 'task-moved', text: taskMovedText(c.task_moved) })] : []),
     ...(c.task_due && !c.task_moved ? [el('div', { class: c.task_due.hot ? 'overdue' : 'muted', 'data-role': 'task-due',
       text: `Сдать ${c.task_due.by} — к ${dayRu(c.task_due.day)}${c.task_due.overdue ? ', срок прошёл' : ''} (срок дела позже)` })] : []),
+    // 2.394: срок в новогодние каникулы — сдать до последнего рабочего дня перед ними.
+    ...(c.new_year ? [el('div', { class: 'overdue', 'data-role': 'new-year', text: newYearCaseText(c.new_year) })] : []),
     el('div', { class: 'muted', text: [c.fee_kop != null ? `вознаграждение ${rub(c.fee_kop)}` : 'цена ещё не назначена',
       c.payout ? PAYOUT_RU[c.payout] : null].filter(Boolean).join(' · ') }),
     // Что ждёт руководителя по делу (2.36) — прямо в списке дел, с переходом к подписи.
@@ -525,7 +530,8 @@ function offerWait(org, c) {
 // дела — срок в эти дни»; «stuck» (2.228) — к отбору «Просят передать — передать некому» и кнопке «Попросить диспетчера
 // перенести срок» первого дела; «orgext» (2.238) — к отбору «Перенос от организации: ждём ответа / отказано»; «back» (2.249) —
 // к отбору «Эксперт вернулся после «не принимаю дела»»; «task_moved» (2.338) — к отбору «Перенос позже срока по заданию — нет
-// письма» (2.332), а таких нет — к «Сдать по письму о переносе — раньше срока дела» (2.348); «week», «overdue», «handover», «returned»,
+// письма» (2.332), а таких нет — к «Сдать по письму о переносе — раньше срока дела» (2.348); «new_year» (2.394) — к отбору «Срок
+// в новогодние каникулы»; «week», «overdue», «handover», «returned»,
 // «fresh», «idle», «docs» — к списку дел с отбором «Срок на этой неделе» (2.127; в нём и просроченные), «Срок прошёл» (2.158), «Просят
 // передать», «Вернул эксперту» (2.153), «Исправленный файл ждёт подписи эксперта» (2.172), «Без движения» (2.141) или «Ждём документы от заказчика» (2.235). Отбора уже
 // нет (дела сданы, эксперт ответил) — список целиком.

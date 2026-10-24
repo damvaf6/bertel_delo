@@ -17448,3 +17448,56 @@ test('2.393: «Сегодня» — срок в новогодние каник�
   await expect(ep).toHaveURL(new RegExp(`#order=${A}$`));
   await ep.context().close(); await cp.context().close();
 });
+
+// 2.394: «Дела экспертов» — за две недели до новогодних каникул отбор «Срок в новогодние каникулы» и строка у дела «сдать до
+// 30 декабря»; из утренней сводки (`to=new_year`) — сразу к отбору. Декабрьский ответ подставлен, чтобы не зависеть от даты прогона;
+// счёт и сводку проверяет `tests/server/org-morning.test.mjs`.
+test('2.394: дела экспертов — отбор «Срок в новогодние каникулы»', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const hp = await ctx(), cp = await ctx();
+  const customer = await signIn(cp, '+79990039401');
+  const head = await signIn(hp, '+79990039402');
+  const expert = await signIn(await ctx(), '+79990039403');
+  const { orgId, ids } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Каникулы ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Январская Ольга' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const out = [];
+    for (const t of ['Квартира в каникулы', 'Дом после каникул']) {
+      const { rows: [o] } = await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+        values ('expertise', 'realty', $1, $2, $3, 'in_work', $4::date, 1500000, now(),
+                '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Январская ул., 7"}') returning id`,
+      [t, customer.id, expert.id, inDays(30)]);
+      out.push(o.id);
+    }
+    return { orgId: org.id, ids: out };
+  });
+  await hp.route(`**/api/orgs/${orgId}/cases`, async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    for (const c of body.cases) {
+      c.new_year = c.id === ids[0] ? { from: '2026-12-31', to: '2027-01-10', work_before: '2026-12-30' } : null;
+      c.deadline = c.id === ids[0] ? '2027-01-05' : '2027-01-12';
+    }
+    await route.fulfill({ response: res, json: body });
+  });
+  await hp.goto(`/kabinet#org=${orgId}&to=new_year`);
+  const rows = hp.locator('#org-cases > li[data-case]');
+  await expect(rows).toHaveCount(1);
+  const ref = (id) => `№ ${id.slice(0, 8).toUpperCase()}`;
+  await expect(rows.first()).toHaveAttribute('data-case', ref(ids[0]));
+  await expect(hp.locator('[data-filter="new_year"]')).toHaveText('Срок в новогодние каникулы · 1');
+  await expect(hp.locator('[data-filter="new_year"]')).toHaveAttribute('aria-pressed', 'true');
+  const line = rows.first().locator('[data-role="new-year"]');
+  await expect(line).toHaveText('Срок в новогодние каникулы (31 декабря — 10 января): заказчик и банк не работают — сдать до 30 декабря');
+  await expect(line).toHaveClass(/overdue/);
+  expect(await hp.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await hp.locator('#org-cases-filter').scrollIntoViewIfNeeded();
+  await shot(hp, 'i07-dela-ekspertov-novogodnie-kanikuly');
+  await hp.locator('[data-filter="all"]').click();
+  await expect(rows).toHaveCount(2);
+  await expect(hp.locator(`#org-cases li[data-case="${ref(ids[1])}"] [data-role="new-year"]`)).toHaveCount(0);
+  for (const p of [hp, cp]) await p.context().close();
+});

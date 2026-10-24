@@ -747,8 +747,12 @@ export async function orgPart(sql, org, registry, today, { actorId = null, stora
   }
   // Сколько дел без движения 3 рабочих дня и больше (2.133, 2.385) — только число, для утренней сводки руководителю (2.141).
   const moves = await caseMoves(sql, cases.filter((o) => ['in_work', 'review'].includes(o.status)));
+  // Новогодние каникулы через 1–14 дней (2.394, как у эксперта 2.393): сколько дел экспертов в работе со сроком в каникулы и
+  // до какого дня сдать — только число и день, для утренней сводки.
+  const ny = newYearCases(cases, today);
   return {
     dossier,
+    new_year: ny ? { count: ny.rows.length, from: ny.from, to: ny.to, work_before: ny.work_before } : null,
     idle: [...moves.values()].filter((m) => m.idle).length,
     // Сколько возвращённых эксперту дел не исправлено 2 дня и больше (2.153) — только число, для утренней сводки.
     // Дела, где исправленный файл уже загружен (2.172), — не «не исправлено», а отдельным числом: файл ждёт подписи эксперта
