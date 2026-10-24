@@ -6774,7 +6774,9 @@ test('дела экспертов (2.133): руководитель видит �
         [title, customer.id, a.id])).rows[0].id;
       await c.query("insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $2, '{}', 'accepted', now())", [id, a.id]);
       await c.query(`insert into order_status_history (order_id, actor_id, side, from_status, to_status, at)
-        values ($1, $2, 'executor', 'awaiting_executor', 'in_work', $3)`, [id, a.id, workingAgo(idle * 86400_000 + 3600_000)]);
+        values ($1, $2, 'executor', 'awaiting_executor', 'in_work', $3)`,
+        // Свежее — минуту назад: «рабочий час назад» ночью и в выходные — уже прошлый рабочий день, не «сегодня».
+        [id, a.id, idle ? workingAgo(idle * 86400_000 + 3600_000) : new Date(Date.now() - 60_000)]);
       // Заказчик спрашивает в переписке — движением дела это не считается.
       if (idle) await c.query("insert into order_messages (order_id, author_id, side, body) values ($1, $2, 'customer', 'Как продвигается оценка?')", [id, customer.id]);
     };
