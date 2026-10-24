@@ -4,7 +4,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, login, makeOrg, addMember, makeSpecialist } from '../helpers.mjs';
-import { holidayName, isWorkday, workdayFrom, workdayBefore } from '../../src/orders/holidays.mjs';
+import { holidayName, isWorkday, isWorkingWeekend, offDayName, workdayFrom, workdayBefore } from '../../src/orders/holidays.mjs';
 import { expertSchedule, orgSchedule } from '../../src/orders/schedule.mjs';
 import { extendSuggest } from '../../src/ops/handover-ops.mjs';
 
@@ -30,6 +30,30 @@ test('2.371: календарь — праздники по ТК, перенос
   // Новогодние праздники в выходные не переносятся автоматически — только постановлением.
   assert.equal(holidayName('2027-01-11'), null);
   assert.match(holidayName('2027-06-14'), /День России/);
+});
+
+test('2.391: календарь 2027 — переносы по постановлению № 1187 и рабочая суббота 20 февраля', async () => {
+  for (const d of ['2027-01-01', '2027-01-08', '2027-02-22', '2027-02-23', '2027-03-08', '2027-05-03', '2027-05-10',
+    '2027-06-14', '2027-11-04', '2027-11-05', '2027-12-31']) assert.equal(isWorkday(d), false, d);
+  assert.match(holidayName('2027-11-05'), /2 января/);
+  assert.match(holidayName('2027-12-31'), /3 января/);
+  assert.match(holidayName('2027-02-22'), /20 февраля/);
+  // Суббота 20 февраля 2027 — рабочая; соседние субботы — выходные.
+  assert.equal(isWorkday('2027-02-20'), true);
+  assert.equal(isWorkingWeekend('2027-02-20'), true);
+  assert.equal(offDayName('2027-02-20'), null);
+  assert.equal(isWorkday('2027-02-27'), false);
+  assert.equal(isWorkingWeekend('2027-02-27'), false);
+  assert.equal(workdayFrom('2027-11-04'), '2027-11-08');
+  assert.equal(workdayBefore('2027-02-23'), '2027-02-20');
+  assert.equal(workdayBefore('2028-01-10'), '2027-12-30');
+  // «Мои сроки на две недели» с понедельника 15 февраля 2027: суббота 20-го — не выходной, 22-е — выходной.
+  const sp = await login(S, '+79990004991');
+  await makeSpecialist(S.sql, sp.user.id);
+  const s = await expertSchedule(S.sql, sp.user.id, S.app.locals.registry, '2027-02-15');
+  assert.equal(s.days.find((d) => d.date === '2027-02-20').weekend, false);
+  assert.equal(s.days.find((d) => d.date === '2027-02-22').weekend, true);
+  assert.equal(s.days.find((d) => d.date === '2027-02-22').holiday, 'перенос выходного с 20 февраля');
 });
 
 test('2.371: «Мои сроки» и нагрузка — праздник выходной, срок в праздник с последним рабочим днём; новый срок — не на праздник', async () => {

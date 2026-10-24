@@ -10,10 +10,14 @@ const FIXED = [
   ['05-09', 'День Победы'], ['06-12', 'День России'], ['11-04', 'День народного единства'],
 ];
 // 2026: выходные 3 и 4 января перенесены на 9 января и 31 декабря.
+// 2027 (постановление Правительства от 17.09.2026 № 1187, 2.391): выходные 2 и 3 января — на 5 ноября и 31 декабря,
+// суббота 20 февраля — на понедельник 22 февраля (20 февраля — рабочая суббота).
 const DECREE = {
   2026: { '2026-01-09': 'Новогодние каникулы', '2026-12-31': 'перенос выходного с 4 января' },
+  2027: { '2027-02-22': 'перенос выходного с 20 февраля', '2027-11-05': 'перенос выходного с 2 января',
+    '2027-12-31': 'перенос выходного с 3 января' },
 };
-const WORKING = new Set([]);
+const WORKING = new Set(['2027-02-20']);
 
 const dow = (iso) => new Date(`${iso}T00:00:00Z`).getUTCDay();
 const plus = (iso, n) => { const d = new Date(`${iso}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
@@ -39,7 +43,9 @@ export function holidayName(iso) {
   const day = String(iso).slice(0, 10);
   return yearHolidays(Number(day.slice(0, 4))).get(day) ?? null;
 }
-export const isWorkday = (iso) => WORKING.has(iso) || (![0, 6].includes(dow(iso)) && !holidayName(iso));
+export const isWorkday = (iso) => WORKING.has(String(iso).slice(0, 10)) || (![0, 6].includes(dow(iso)) && !holidayName(iso));
+// Рабочая суббота по переносу (2.391): '2027-02-20' → true.
+export const isWorkingWeekend = (iso) => WORKING.has(String(iso).slice(0, 10));
 // Чем день нерабочий, или null: '2026-11-04' → 'День народного единства', '2026-10-24' → 'суббота'.
 const WEEKEND = { 0: 'воскресенье', 6: 'суббота' };
 export function offDayName(iso) {
