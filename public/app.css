@@ -486,8 +486,6 @@ button, .btn, .card, .badge, input, select, textarea, .tabs a {
   transition: background-color .2s var(--ease), color .2s var(--ease), border-color .2s var(--ease), box-shadow .2s var(--ease), transform .15s var(--ease);
 }
 button:not(:disabled):active, .btn:active { transform: translateY(1px); }
-main > section:not(.hidden), main > .card { animation: delo-in .28s var(--ease) both; }
-@keyframes delo-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }

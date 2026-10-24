@@ -1,5 +1,5 @@
 // Задача штаба 40317197-…-8127: экраны «Дела» на дизайн-системе v2 — светлая и тёмная тема (по настройке телефона и
-// кнопкой в шапке, выбор запоминается), «меньше движения». Телефон 412×915. Номер +7 999 000-09-81 — только эта проверка.
+// кнопкой в шапке, выбор запоминается), «меньше движения». Телефон 412×915. Номер +7 999 000-09-99 — только эта проверка.
 import { test, expect } from '@playwright/test';
 import { TEST_TOKEN } from '../helpers.mjs';
 
@@ -29,9 +29,9 @@ test('тема: светлая по умолчанию, кнопка в шапк
   await page.screenshot({ path: 'test-results/screens/theme-02-vhod-temnaya.png', fullPage: true });
 
   // Выбор запомнился: после входа кабинет — тоже в тёмной теме, без горизонтальной прокрутки.
-  await page.getByLabel('Номер мобильного телефона').fill('+79990000981');
+  await page.getByLabel('Номер мобильного телефона').fill('+79990000999');
   await page.getByRole('button', { name: 'Получить код' }).click();
-  await page.getByLabel('Код из СМС').fill(await smsCode(page.request, '+79990000981'));
+  await page.getByLabel('Код из СМС').fill(await smsCode(page.request, '+79990000999'));
   await page.getByRole('button', { name: 'Войти' }).click();
   await expect(page).toHaveURL(/\/kabinet/);
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
@@ -54,8 +54,8 @@ test('тема: без выбора — как в настройке телеф�
   await expect(page.locator('html')).not.toHaveAttribute('data-theme', /./);
   expect(await bg(page)).toBe('rgb(11, 17, 29)');
   await expect(page.locator('#theme-toggle')).toHaveAttribute('aria-label', 'Светлая тема');
-  const anim = await page.evaluate(() => getComputedStyle(document.querySelector('main > section')).animationName);
-  expect(anim).toBe('none');
+  const move = await page.evaluate(() => getComputedStyle(document.querySelector('#theme-toggle')).transitionDuration);
+  expect(move.split(',').every((d) => parseFloat(d) === 0)).toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
   await page.screenshot({ path: 'test-results/screens/theme-05-vitrina-temnaya.png', fullPage: true });
 });
