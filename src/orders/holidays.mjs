@@ -78,3 +78,42 @@ export function newYearAhead(today, days = 14) {
   const left = Math.round((Date.parse(`${from}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86400_000);
   return left >= 1 && left <= days ? { from, to, work_before: workdayBefore(from) } : null;
 }
+// Каким постановлением записаны переносы года (2.399) — для страницы «Праздники и переносы» администратора.
+const DECREE_SOURCE = {
+  2026: 'постановление Правительства о переносе выходных в 2026 году',
+  2027: 'постановление Правительства от 17.09.2026 № 1187',
+};
+// Праздники и переносы года одной страницей (2.399): `runs` — дни отдыха подряд, где есть праздник (с прилегающими
+// выходными), `moves` — переносы выходных (по закону и постановлением), `working` — рабочие субботы, `decree` — записано ли
+// постановление на этот год.
+export function yearCalendar(year) {
+  const y = Number(year);
+  const runs = [];
+  const moves = [];
+  for (let d = `${y}-01-01`; d.startsWith(`${y}-`); d = plus(d, 1)) {
+    const name = holidayName(d);
+    if (name?.startsWith('перенос')) moves.push({ date: d, name });
+    if (!name || runs.some((r) => d >= r.from && d <= r.to)) continue;
+    let from = d, to = d;
+    while (!isWorkday(plus(from, -1))) from = plus(from, -1);
+    while (!isWorkday(plus(to, 1))) to = plus(to, 1);
+    const names = [];
+    for (let x = from; x <= to; x = plus(x, 1)) {
+      const n = holidayName(x);
+      if (n && !n.startsWith('перенос') && !names.includes(n)) names.push(n);
+    }
+    const days = Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400_000) + 1;
+    runs.push({ from, to, days, names: names.length ? names : [name], back: plus(to, 1) });
+  }
+  const working = [...WORKING].filter((d) => d.startsWith(`${y}-`)).sort();
+  return { year: y, decree: Boolean(DECREE[y]), source: DECREE_SOURCE[y] ?? null, runs, moves, working };
+}
+// Предупреждение администратору (2.399): в декабре, а переносы на следующий год не записаны, — «дописать постановление»;
+// не записаны на текущий год — в любой месяц. Всё записано — null.
+export function calendarWarning(today) {
+  const day = String(today).slice(0, 10);
+  const y = Number(day.slice(0, 4));
+  if (!DECREE[y]) return { year: y, text: `Переносы выходных на ${y} год не записаны: сроки считаются только по праздникам из Трудового кодекса. Дописать постановление Правительства в календарь «Дела».` };
+  if (day.slice(5, 7) === '12' && !DECREE[y + 1]) return { year: y + 1, text: `Скоро ${y + 1} год, а переносы выходных на него не записаны: сроки после 1 января посчитаются без них. Дописать постановление Правительства в календарь «Дела».` };
+  return null;
+}

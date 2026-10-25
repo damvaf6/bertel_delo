@@ -6,6 +6,7 @@
 import { test, expect } from '@playwright/test';
 import pg from 'pg';
 import { DB_URL, TEST_TOKEN } from '../helpers.mjs';
+import { calendarWarning, yearCalendar } from '../../src/orders/holidays.mjs';
 
 const CONTROL = process.env.UI_TEST_CONTROL_TOKEN || TEST_TOKEN;
 const H = { 'x-delo-request': '1' };
@@ -101,4 +102,44 @@ test('2.390: «Срок по делу — завтра или сразу пос�
   await shot(sp, 'wd2-2390-lenta-srok-posle-vyhodnyh');
   expect(problems, problems.join('\n')).toEqual([]);
   await sctx.close();
+});
+
+test('2.399: «Праздники и переносы» в «Управлении» — год одной страницей, в декабре — «дописать постановление»', async ({ browser, baseURL }) => {
+  const problems = [];
+  const ctx = await phoneContext(browser, baseURL);
+  const page = await ctx.newPage();
+  page.on('pageerror', (e) => problems.push(`ошибка JS: ${e.message}`));
+  const adm = await signIn(page, '+79990008839');
+  await db((c) => c.query("update users set platform_role = 'admin' where id = $1", [adm.id]));
+  await page.goto('/kabinet#admin');
+  const box = page.locator('#holidays-box');
+  const y = Number(inDays(0).slice(0, 4));
+  await expect(box.locator('#hd-years button')).toHaveCount(2);
+  await expect(box.locator(`#hd-years button[data-year="${y}"]`)).toHaveAttribute('aria-pressed', 'true');
+  await expect(box.locator('[data-hd-run]').first()).toBeVisible();
+  // Следующий год: 2027 — с переносами по постановлению № 1187 и рабочей субботой 20 февраля.
+  if (y === 2026) {
+    await expect(box.locator('#hd-warn')).toBeHidden();
+    await box.locator('#hd-years button[data-year="2027"]').click();
+    await expect(box.locator('#hd-source')).toContainText('№ 1187');
+    await expect(box.locator('[data-hd-run="2027-11-04"]')).toContainText('4 ноября, чт — 7 ноября, вс · 4 дня');
+    await expect(box.locator('[data-hd-move="2027-02-20"]')).toContainText('рабочая суббота (перенос)');
+    await expect(box.locator('[data-hd-move="2027-11-05"]')).toContainText('перенос выходного с 2 января');
+    await box.scrollIntoViewIfNeeded();
+    await shot(page, 'wd3-2399-prazdniki-2027');
+  }
+  // Декабрь 2027, а на 2028 переносов нет: ответ подменён на этот день.
+  await page.route('**/api/admin/holidays', (route) => route.fulfill({ json: { today: '2027-12-01',
+    warning: calendarWarning('2027-12-01'), years: [yearCalendar(2027), yearCalendar(2028)] } }));
+  await page.reload();
+  await expect(box.locator('#hd-warn')).toBeVisible();
+  await expect(box.locator('#hd-warn')).toContainText('Скоро 2028 год, а переносы выходных на него не записаны');
+  await expect(box.locator('#hd-years button[data-year="2028"]')).toHaveText('2028 · не записан');
+  await box.locator('#hd-years button[data-year="2028"]').click();
+  await expect(box.locator('#hd-source')).toHaveAttribute('data-decree', 'false');
+  await expect(box.locator('#hd-moves-empty')).toBeHidden();
+  await box.scrollIntoViewIfNeeded();
+  await shot(page, 'wd3-2399-prazdniki-dekabr');
+  expect(problems, problems.join('\n')).toEqual([]);
+  await ctx.close();
 });

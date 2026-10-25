@@ -4,7 +4,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, login, makeOrg, addMember, makeSpecialist } from '../helpers.mjs';
-import { holidayName, holidayRunFrom, isWorkday, isWorkingWeekend, newYearAhead, offDayName, workdayFrom, workdayBefore } from '../../src/orders/holidays.mjs';
+import { calendarWarning, holidayName, holidayRunFrom, isWorkday, isWorkingWeekend, newYearAhead, offDayName, workdayFrom, workdayBefore, yearCalendar } from '../../src/orders/holidays.mjs';
 import { newYearCases } from '../../src/ops/today-ops.mjs';
 import { expertSchedule, orgSchedule } from '../../src/orders/schedule.mjs';
 import { extendSuggest } from '../../src/ops/handover-ops.mjs';
@@ -215,4 +215,44 @@ test('2.398: файл календаря — срок в нерабочий де
   assert.match(ev(sent.id), /сдайте до 06\.11\.2026\r\n/);
   assert.ok(!ev(sent.id).includes('VALARM'));
   await S.sql`update orders set status = 'cancelled' where id in (${hol.id}, ${sun.id}, ${work.id}, ${sent.id})`;
+});
+
+test('2.399: «Праздники и переносы» — год одной страницей, в декабре без следующего года — «дописать постановление»', async () => {
+  const c = yearCalendar(2027);
+  assert.equal(c.decree, true);
+  assert.match(c.source, /№ 1187/);
+  // Новогодние каникулы начинаются 31 декабря прошлого года — так и показаны.
+  const ny = c.runs[0];
+  assert.deepEqual([ny.from, ny.to, ny.days, ny.back], ['2026-12-31', '2027-01-10', 11, '2027-01-11']);
+  assert.ok(ny.names.includes('Рождество Христово'));
+  // 4 и 5 ноября 2027 (четверг и пятница) с выходными — одни дни отдыха до 7-го.
+  const nov = c.runs.find((r) => r.from === '2027-11-04');
+  assert.deepEqual([nov.to, nov.days, nov.names], ['2027-11-07', 4, ['День народного единства']]);
+  const feb = c.runs.find((r) => r.names.includes('День защитника Отечества'));
+  assert.deepEqual([feb.from, feb.to], ['2027-02-21', '2027-02-23']);
+  assert.deepEqual(c.working, ['2027-02-20']);
+  assert.deepEqual(c.moves.map((m) => m.date), ['2027-02-22', '2027-05-03', '2027-05-10', '2027-06-14', '2027-11-05', '2027-12-31']);
+  // Последние дни отдыха года заходят в следующий.
+  assert.deepEqual([c.runs.at(-1).from, c.runs.at(-1).to], ['2027-12-31', '2028-01-09']);
+  const none = yearCalendar(2028);
+  assert.equal(none.decree, false);
+  assert.equal(none.source, null);
+  assert.deepEqual(none.working, []);
+  assert.ok(none.runs.some((r) => r.names.includes('День России')));
+
+  assert.equal(calendarWarning('2026-12-01'), null, '2027 записан');
+  assert.equal(calendarWarning('2027-11-30'), null, 'до декабря не тревожим');
+  const w = calendarWarning('2027-12-01');
+  assert.equal(w.year, 2028);
+  assert.match(w.text, /2028.*дописать постановление/i);
+  assert.equal(calendarWarning('2028-03-01').year, 2028, 'текущий год не записан — в любой месяц');
+
+  const admin = await login(S, '+79990004399');
+  await S.sql`update users set platform_role = 'admin' where id = ${admin.user.id}`;
+  const r = await admin.req('GET', '/api/admin/holidays');
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.years.map((y) => y.year), [Number(r.body.today.slice(0, 4)), Number(r.body.today.slice(0, 4)) + 1]);
+  assert.deepEqual(r.body.warning, calendarWarning(r.body.today));
+  const sp = await login(S, '+79990004398');
+  assert.equal((await sp.req('GET', '/api/admin/holidays')).status, 404);
 });

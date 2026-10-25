@@ -4,6 +4,8 @@
 import { HttpError } from '../http/core.mjs';
 import { PLATFORM_ROLES } from '../access/policy.mjs';
 import { audit, phoneFrom, uuidFrom } from './util.mjs';
+import { calendarWarning, yearCalendar } from '../orders/holidays.mjs';
+import { todayMsk } from '../orders/workflow.mjs';
 
 async function adminView(sql, user) {
   const orgs = await sql`
@@ -40,6 +42,16 @@ export function adminOps() {
       async handler({ sql }) {
         const rows = await sql`select * from users where platform_role is not null order by platform_role, full_name, phone`;
         return { users: await Promise.all(rows.map((u) => adminView(sql, u))) };
+      },
+    },
+    {
+      // «Праздники и переносы» на этот и следующий год (2.399): календарь, по которому считаются сроки; в декабре без
+      // переносов на следующий год — предупреждение «дописать постановление». Календарь меняется только правкой кода.
+      id: 'admin.holidays', method: 'GET', path: '/api/admin/holidays', auth: 'user', access: { platform: 'admin' },
+      async handler() {
+        const today = todayMsk();
+        const y = Number(today.slice(0, 4));
+        return { today, warning: calendarWarning(today), years: [yearCalendar(y), yearCalendar(y + 1)] };
       },
     },
     {
