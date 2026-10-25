@@ -307,12 +307,10 @@ export function caseOps() {
   ];
 }
 
-// Архив сданных за месяц заключений организации (2.89) — руководителю, по образцу выгрузки дела. Только дела экспертов,
-// которые сейчас работают от организации, сданные с тех пор, как они в ней (та же выборка, что в сводке 2.78). В архиве —
-// файлы результата эксперта с подписями УКЭП (эксперта и организации), разложенные по экспертам и делам, и «Опись» —
-// перечень дел с датой сдачи и сроком, файлы с SHA-256 и проверка подписей в момент выгрузки. Заказчик, название заявки,
-// её данные и переписка в архив не попадают: руководитель видит только работу своих экспертов.
-export async function buildOrgMonthArchive({ sql, actor, org, registry, providers }, cases, monthName) {
+// Файлы результата эксперта с подписями УКЭП — в папку дела архива (2.89, 2.407). На каждый файл — [имя (или почему не вошёл),
+// подпись эксперта, подпись организации]; подписи проверяются при выгрузке. Файлов результата нет — одна строка об этом.
+const SIGN_RU = (r) => (!r ? 'нет' : r.valid ? 'верна' : 'не прошла проверку');
+function resultPacker(sql, providers, tooBig) {
   const used = new Set();
   const place = (dir, name) => {
     let n = `${dir}/${safeName(name)}`;
@@ -320,45 +318,56 @@ export async function buildOrgMonthArchive({ sql, actor, org, registry, provider
     used.add(n);
     return n;
   };
-  const SIGN_RU = (r) => (!r ? 'нет' : r.valid ? 'верна' : 'не прошла проверку');
-  const files = [];
-  const listed = [];
-  const rows = [];
-  let total = 0;
-  let test = false;
-  for (const o of cases) {
-    const ref = orderRef(o.id).replace('№ ', '');
-    const dir = `${safeName(o.expert_name)}/Дело № ${ref}`;
-    const docs = await sql`select * from documents where order_id = ${o.id} and kind = 'result' and deleted_at is null
-                           and uploaded_by = ${o.user_id} order by created_at`;
-    const signs = await sql`select * from document_signatures where order_id = ${o.id} order by id`;
-    const service = registry.service(o.module, o.service)?.service.name ?? o.service;
-    if (!docs.length) rows.push([ref, service, o.expert_name, dt(o.at), day(o.deadline), 'файла результата нет', '—', '—']);
+  const pack = { files: [], listed: [], total: 0, test: false };
+  pack.add = async (orderId, expertId, dir) => {
+    const docs = await sql`select * from documents where order_id = ${orderId} and kind = 'result' and deleted_at is null
+                           and uploaded_by = ${expertId} order by created_at`;
+    if (!docs.length) return [['файла результата нет', '—', '—']];
+    const signs = await sql`select * from document_signatures where order_id = ${orderId} order by id`;
+    const out = [];
     for (const d of docs) {
       const size = Number(d.size_bytes);
-      const buf = total + size > EXPORT_MAX_BYTES ? null : await providers.storage.get(d.storage_key);
+      const buf = pack.total + size > EXPORT_MAX_BYTES ? null : await providers.storage.get(d.storage_key);
       if (!buf) {
-        const why = total + size > EXPORT_MAX_BYTES ? 'не вошёл в архив — скачайте в «Подписи организации»' : 'файл не найден в хранилище';
-        rows.push([ref, service, o.expert_name, dt(o.at), day(o.deadline), `${d.filename} (${why})`, '—', '—']);
+        out.push([`${d.filename} (${pack.total + size > EXPORT_MAX_BYTES ? tooBig : 'файл не найден в хранилище'})`, '—', '—']);
         continue;
       }
-      total += buf.length;
+      pack.total += buf.length;
       const name = place(dir, d.filename);
-      files.push([name, buf]);
-      listed.push([name, sizeRu(buf.length), sha256(buf)]);
+      pack.files.push([name, buf]);
+      pack.listed.push([name, sizeRu(buf.length), sha256(buf)]);
       const by = {};
       for (const s of signs.filter((x) => x.document_id === d.id)) {
         const sb = await providers.storage.get(s.storage_key);
         if (!sb) continue;
-        test ||= Boolean(s.test);
+        pack.test ||= Boolean(s.test);
         const sn = place(dir, signatureFilename(d.filename, s.role));
-        files.push([sn, sb]);
-        listed.push([sn, sizeRu(sb.length), sha256(sb)]);
+        pack.files.push([sn, sb]);
+        pack.listed.push([sn, sizeRu(sb.length), sha256(sb)]);
         by[s.role === 'org' ? 'org' : 'expert'] = await checkSignature(providers, buf, sb);
       }
-      rows.push([ref, service, o.expert_name, dt(o.at), day(o.deadline), d.filename, SIGN_RU(by.expert), SIGN_RU(by.org)]);
+      out.push([d.filename, SIGN_RU(by.expert), SIGN_RU(by.org)]);
     }
+    return out;
+  };
+  return pack;
+}
+
+// Архив сданных за месяц заключений организации (2.89) — руководителю, по образцу выгрузки дела. Только дела экспертов,
+// которые сейчас работают от организации, сданные с тех пор, как они в ней (та же выборка, что в сводке 2.78). В архиве —
+// файлы результата эксперта с подписями УКЭП (эксперта и организации), разложенные по экспертам и делам, и «Опись» —
+// перечень дел с датой сдачи и сроком, файлы с SHA-256 и проверка подписей в момент выгрузки. Заказчик, название заявки,
+// её данные и переписка в архив не попадают: руководитель видит только работу своих экспертов.
+export async function buildOrgMonthArchive({ sql, actor, org, registry, providers }, cases, monthName) {
+  const pack = resultPacker(sql, providers, 'не вошёл в архив — скачайте в «Подписи организации»');
+  const rows = [];
+  for (const o of cases) {
+    const ref = orderRef(o.id).replace('№ ', '');
+    const service = registry.service(o.module, o.service)?.service.name ?? o.service;
+    const head = [ref, service, o.expert_name, dt(o.at), day(o.deadline)];
+    for (const f of await pack.add(o.id, o.user_id, `${safeName(o.expert_name)}/Дело № ${ref}`)) rows.push([...head, ...f]);
   }
+  const { files, listed, test } = pack;
   const late = cases.filter((o) => o.deadline && todayMsk(new Date(o.at)) > o.deadline).length;
   const inventory = buildSimpleDoc([
     { type: 'title', text: `Сданные заключения · ${monthName}` },
@@ -373,4 +382,32 @@ export async function buildOrgMonthArchive({ sql, actor, org, registry, provider
   ]);
   const archive = zip([[`Опись · ${safeName(monthName)}.docx`, inventory], ...files], { store: true });
   return { buf: archive, filename: `Заключения за ${monthName}.zip`, files: files.length };
+}
+
+// Свои сданные заключения за год или квартал одним архивом (2.407) — эксперту, для СРО и плановой проверки. Те же дела, что
+// в «Перечне отчётов для СРО» (2.401): папки «Дело №» с файлами результата, которые загрузил сам эксперт, и подписями УКЭП;
+// «Опись» — номер и дата отчёта (из файла), объект, услуга, дата сдачи, файлы с SHA-256 и проверка подписей при выгрузке.
+// Заказчик, переписка и документы заказчика в архив не попадают.
+export async function buildExpertArchive({ sql, actor, providers }, list) {
+  const pack = resultPacker(sql, providers, 'не вошёл в архив — скачайте в деле');
+  const rows = [];
+  for (const [i, r] of list.rows.entries()) {
+    const ref = orderRef(r.id).replace('№ ', '');
+    const head = [String(i + 1), r.number ? `№ ${r.number}${r.made_on ? ` от ${day(r.made_on)}` : ''}` : 'номер не найден', r.object, r.service_name, day(r.done_on)];
+    for (const f of await pack.add(r.id, actor.id, `Дело № ${ref}`)) rows.push([...head, ...f]);
+  }
+  const { files, listed, test } = pack;
+  const inventory = buildSimpleDoc([
+    { type: 'title', text: `Сданные заключения · ${list.name}` },
+    { type: 'para', text: `${actor.full_name || actor.phone}. Выгрузка из «БЕРТЕЛ Дело» ${dt(new Date())} (время московское).` },
+    { type: 'bold', text: `Сдано отчётов: ${list.total}${list.total > list.shown ? `; в архиве — первые ${list.shown}, остальные — выгрузкой за квартал` : ''}.` },
+    { type: 'para', text: 'Те же отчёты, что в «Перечне отчётов для СРО». Номер и дата отчёта — из файла отчёта в деле. Файлы — в папках «Дело №»; подпись — открепленный файл рядом с подписанным. Подписи проверены при выгрузке.' },
+    ...(test ? [{ type: 'note', text: 'Тестовые подписи площадки — юридической силы не имеют.' }] : []),
+    { type: 'table', rows: [['№', 'Отчёт', 'Объект', 'Услуга', 'Сдано', 'Файл', 'Подпись эксперта', 'Подпись организации'], ...rows] },
+    { type: 'bold', text: 'Файлы в архиве' },
+    { type: 'para', text: 'Контрольная сумма SHA-256 подтверждает, что файл не менялся после выгрузки: её можно посчитать заново любой программой и сравнить.' },
+    { type: 'table', rows: [['Файл', 'Размер', 'SHA-256'], ...listed] },
+  ]);
+  const archive = zip([[`Опись · ${safeName(list.name)}.docx`, inventory], ...files], { store: true });
+  return { buf: archive, filename: `Мои заключения за ${list.name}.zip`, files: files.length };
 }

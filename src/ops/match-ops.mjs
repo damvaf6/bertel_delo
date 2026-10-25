@@ -11,7 +11,8 @@ import { STATUS_NAME, addDays, isOverdue, todayMsk } from '../orders/workflow.mj
 import { caseMoves } from './org-ops.mjs';
 import { openExtends, taskMovedOrg } from './deadline-ops.mjs';
 import { orderRef } from '../notify/registry.mjs';
-import { audit, text, uuidFrom } from './util.mjs';
+import { audit, sendFile, text, uuidFrom } from './util.mjs';
+import { buildExpertArchive } from './case-ops.mjs';
 import { notify, orgHeads } from '../notify/notify.mjs';
 import { BLOCKING_KINDS, dossierAlerts, loadDossier, needsValidDossier } from '../dossier/dossier.mjs';
 import { expertMonthReport, orgReturnsYear, reportMonth } from '../orgs/report.mjs';
@@ -294,6 +295,21 @@ export function matchOps() {
           'cache-control': 'no-store',
         });
         return res.send(registryCsv(me.full_name || 'Эксперт', list));
+      },
+    },
+    {
+      // Сданные заключения за год или квартал одним архивом (2.407): те же отчёты, что в перечне, — файлы результата с
+      // подписями и опись. Сданных нет — «нечего выгружать».
+      id: 'specialist.me.registry.archive', method: 'GET', path: '/api/specialist/me/registry/archive', auth: 'user', access: 'self',
+      async handler(ctx) {
+        const { sql, actor, query, res, registry, providers } = ctx;
+        if (!(await sql.one`select 1 from specialists where user_id = ${actor.id}`)) throw new HttpError(404, 'not_found', 'Вы не специалист');
+        const period = registryPeriod(query);
+        const list = await expertRegistry(sql, providers.storage, registry, actor.id, period);
+        if (!list.rows.length) throw new HttpError(409, 'no_cases', `За ${period.name} сданных отчётов об оценке нет`);
+        const a = await buildExpertArchive(ctx, list);
+        await audit(sql, actor, 'specialist.archive', 'user', actor.id, { year: period.year, quarter: period.quarter, cases: list.rows.length, files: a.files, bytes: a.buf.length });
+        await sendFile(res, providers, { buf: a.buf, filename: a.filename, mime: 'application/zip' });
       },
     },
     {

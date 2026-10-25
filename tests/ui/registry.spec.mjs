@@ -77,10 +77,21 @@ test('2.401: перечень отчётов для СРО — номер, да�
   const csv = await page.request.get(`/api/specialist/me/registry?format=csv&year=${await page.locator('#registry-year').inputValue()}`);
   expect(csv.status()).toBe(200);
   expect(await csv.text()).toContain('1;77/2026;12.10.2026;г. Москва, Тихая ул., д. 3, кв. 12;Оценка недвижимости;Ипотека, залог, банк');
-  // Прошлый год — пусто; строка ведёт в дело.
+  // 2.407: заключения за период одним архивом — кнопка со счётом; закрытое заказчиком дело из перечня не пропадает.
+  await db((c) => c.query("update orders set status = 'closed' where id = $1", [ids.car]));
+  await page.reload();
+  await expect(rows).toHaveCount(2);
+  const zipBtn = page.locator('#registry-archive');
+  await expect(zipBtn).toHaveText('Заключения архивом (2)');
+  await zipBtn.scrollIntoViewIfNeeded();
+  await shot(page, 'r07-2407-zaklyucheniya-arhivom');
+  const [download] = await Promise.all([page.waitForEvent('download'), zipBtn.click()]);
+  expect(download.suggestedFilename()).toMatch(/^Мои заключения за \d{4} год\.zip$/);
+  // Прошлый год — пусто, кнопки архива нет; строка ведёт в дело.
   await page.locator('#registry-year').selectOption({ index: 1 });
   await expect(page.locator('#registry-empty')).toBeVisible();
   await expect(rows).toHaveCount(0);
+  await expect(zipBtn).toBeHidden();
   await page.locator('#registry-year').selectOption({ index: 0 });
   await expect(rows).toHaveCount(2);
   await rows.nth(1).getByRole('link').click();

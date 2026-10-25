@@ -30,6 +30,8 @@ let seq = 0;
 $('registry-year').addEventListener('change', () => loadRegistry(true));
 $('registry-quarter').addEventListener('change', () => loadRegistry(true));
 $('registry-csv').addEventListener('click', () => location.assign(`/api/specialist/me/registry?format=csv&${period()}`));
+// 2.407: сданные за период заключения одним архивом — файлы с подписями и опись.
+$('registry-archive').addEventListener('click', () => location.assign(`/api/specialist/me/registry/archive?${period()}`));
 
 export async function loadRegistry(chosen = false) {
   const my = ++seq;
@@ -54,4 +56,6 @@ export async function loadRegistry(chosen = false) {
     el('div', { class: 'muted', text: `${r.value_rub != null ? `${r.value_name}: ${rub(r.value_rub * 100)}` : 'стоимость не найдена'} · сдано ${dayRu(r.done_on)}` }),
     ...(r.missing.length ? gapsOf(r) : []))));
   $('registry-empty').classList.toggle('hidden', registry.rows.length > 0);
+  $('registry-archive').textContent = `Заключения архивом (${registry.shown})`;
+  $('registry-archive').classList.toggle('hidden', registry.rows.length === 0);
 }

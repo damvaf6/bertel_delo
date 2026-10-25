@@ -2,6 +2,7 @@
 // отчёт с законом об оценке (правило `dossier_appraiser`). У каждого — дата сдачи, объект, цель оценки, заказчик; номер
 // отчёта, дата составления и итоговая стоимость — из файлов результата дела (`reportFacts`, те же правила, что сверка 2.116
 // и 2.108); чего не нашлось — пусто и пометка «дописать». Только свои дела эксперта (и частные, и от организации).
+// Сданные — в «готово» и закрытые заказчиком после него (2.407: закрытое дело из перечня не пропадает).
 // Годы — текущий и три прошлых (плановая проверка СРО — раз в три года). Выгрузка — CSV для Excel, как сводка за месяц.
 import { reportFacts } from '../ai/report-checks.mjs';
 import { resultDocs } from '../ops/ai-ops.mjs';
@@ -94,7 +95,7 @@ export async function expertRegistry(sql, storage, registry, userId, period) {
       coalesce(g.name, u.full_name) as customer
     from order_status_history h join orders o on o.id = h.order_id join users u on u.id = o.owner_user_id
     left join organizations g on g.id = o.org_id
-    where o.executor_user_id = ${userId} and o.status = 'done' and h.to_status = 'done'
+    where o.executor_user_id = ${userId} and o.status in ('done', 'closed') and h.to_status = 'done'
       and h.at >= (${period.from}::date)::timestamp at time zone 'Europe/Moscow'
       and h.at < (${period.to}::date)::timestamp at time zone 'Europe/Moscow'
     order by o.id, h.at desc`;
@@ -113,7 +114,7 @@ export async function orgRegistry(sql, storage, registry, orgId, period) {
     join org_members m on m.org_id = ${orgId} and m.user_id = o.executor_user_id
     join users e on e.id = o.executor_user_id
     left join organizations g on g.id = o.org_id
-    where o.status = 'done' and h.to_status = 'done' and h.at >= m.created_at
+    where o.status in ('done', 'closed') and h.to_status = 'done' and h.at >= m.created_at
       and h.at >= (${period.from}::date)::timestamp at time zone 'Europe/Moscow'
       and h.at < (${period.to}::date)::timestamp at time zone 'Europe/Moscow'
     order by o.id, h.at desc`;
