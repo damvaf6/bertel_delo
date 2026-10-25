@@ -702,7 +702,7 @@ export async function expertMonthReport(sql, userId, month, today = todayMsk()) 
 // с «= + - @», — с апострофом, чтобы Excel не принял имя за формулу.
 const daysCell = (d) => (d == null ? '' : String(d).replace('.', ','));
 const rubCell = (kop) => `${Math.floor(kop / 100)},${String(kop % 100).padStart(2, '0')}`;
-function cell(v) {
+export function cell(v) {
   let s = v == null ? '' : String(v);
   if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
   return /[;"\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;

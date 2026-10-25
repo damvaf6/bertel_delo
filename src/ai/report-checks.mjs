@@ -2427,7 +2427,7 @@ function valueKey(kind, said, after) {
   return 'market';
 }
 
-function finalValues(docs) {
+function valuesByKey(docs) {
   const main = mainReport(docs);
   const ordered = main ? [main, ...docs.filter((d) => d !== main)] : docs;
   const byKey = new Map();
@@ -2459,8 +2459,35 @@ function finalValues(docs) {
       });
     });
   }
+  return byKey;
+}
+
+function finalValues(docs) {
+  const byKey = valuesByKey(docs);
   return [...byKey].flatMap(([key, list]) => oddOnes(list, (e, ref, where) =>
     `${VALUE_NAMES[key]} ${fmt(e.value)} руб. не совпадает с ${fmt(ref)} руб. ${where} — сумма должна быть одна во всём отчёте и в письме`));
+}
+
+// 2.401: номер отчёта, дата составления и итоговая стоимость для перечня отчётов в СРО — то, что чаще всего встречается в
+// файлах результата (по тем же правилам, что сверка 2.116 и 2.108). Стоимость — рыночная (или ремонта, УТС, устранения
+// недостатков, доли — первая из найденных по порядку FACT_KEYS); не нашлось — null.
+const most = (list) => {
+  const n = new Map();
+  for (const e of list) n.set(e.value, (n.get(e.value) ?? 0) + 1);
+  return [...n].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+};
+const FACT_KEYS = ['market', 'repair:wear', 'repair:nowear', 'fix', 'uts', 'market:share', 'market:novat', 'market:vat'];
+export function reportFacts(docs) {
+  const { nums, dates } = numbersAndDates(docs);
+  const num = most(nums);
+  const byKey = valuesByKey(docs);
+  const key = FACT_KEYS.find((k) => byKey.has(k));
+  return {
+    number: num == null ? null : nums.find((e) => e.value === num).shown,
+    made_on: most(dates),
+    value_rub: key ? most(byKey.get(key)) : null,
+    value_name: key ? VALUE_NAMES[key] : null,
+  };
 }
 
 // Одно значение в разных местах ({ doc, page, value, quote }): ровно два разных — находка у того, что встречается реже
@@ -2494,7 +2521,7 @@ const NUMBER_AT = /(?<![А-ЯЁа-яё])(?:отч[её]т\S*|заключени\
 const NUMBER_DATE = '^\\s*,?\\s*от(?![а-яё])';
 const unquote = (s) => s.replace(/[«"“](\d{1,2})[»"”]/g, '$1');
 
-function reportNumbers(docs) {
+function numbersAndDates(docs) {
   const main = mainReport(docs);
   const ordered = main ? [main, ...docs.filter((d) => d !== main)] : docs;
   const nums = [];
@@ -2518,6 +2545,11 @@ function reportNumbers(docs) {
       }
     });
   }
+  return { nums, dates };
+}
+
+function reportNumbers(docs) {
+  const { nums, dates } = numbersAndDates(docs);
   const shownOf = new Map(nums.map((e) => [e.value, e.shown]));
   // Одна и та же дата на странице (у номера и «дата составления») — одно место.
   const once = (list) => list.filter((e, k) => list.findIndex((x) => x.doc === e.doc && x.page === e.page && x.value === e.value) === k);

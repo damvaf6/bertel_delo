@@ -80,7 +80,7 @@ export function pagesForModel(pages, limit) {
 // Отчёт для ИИ-проверки (задача 2.1): текст, PDF и Word читаются по страницам; что не прочитано — text: null.
 // Автоматические правила (report-checks.mjs) смотрят все страницы; модели уходит не больше READ_MAX_CHARS на файл и
 // TOTAL_MAX_CHARS на все файлы — сначала главные страницы.
-async function resultDocs(sql, storage, order) {
+export async function resultDocs(sql, storage, order) {
   const docs = await sql`select * from documents where order_id = ${order.id} and kind = 'result' and deleted_at is null
                          and uploaded_by = ${order.executor_user_id} order by created_at limit ${FILES_MAX}`;
   const out = [];

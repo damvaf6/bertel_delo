@@ -15,6 +15,7 @@ import { audit, text, uuidFrom } from './util.mjs';
 import { notify, orgHeads } from '../notify/notify.mjs';
 import { BLOCKING_KINDS, dossierAlerts, loadDossier, needsValidDossier } from '../dossier/dossier.mjs';
 import { expertMonthReport, orgReturnsYear, reportMonth } from '../orgs/report.mjs';
+import { expertRegistry, registryCsv, registryPeriod } from '../orgs/registry.mjs';
 import { expertSchedule, taskDues } from '../orders/schedule.mjs';
 import { scheduleIcs } from '../orders/ics.mjs';
 import { holidayRunFrom } from '../orders/holidays.mjs';
@@ -276,6 +277,23 @@ export function matchOps() {
       async handler({ sql, actor, query }) {
         if (!(await sql.one`select 1 from specialists where user_id = ${actor.id}`)) throw new HttpError(404, 'not_found', 'Вы не специалист');
         return { report: await expertMonthReport(sql, actor.id, reportMonth(query.month)) };
+      },
+    },
+    {
+      // Перечень отчётов для СРО (2.401): свои сданные отчёты об оценке за год или квартал — номер, дата составления, объект,
+      // цель, заказчик, итоговая стоимость. ?format=csv — таблицей для Excel.
+      id: 'specialist.me.registry', method: 'GET', path: '/api/specialist/me/registry', auth: 'user', access: 'self',
+      async handler({ sql, actor, query, res, registry, providers }) {
+        const me = await sql.one`select u.full_name from specialists s join users u on u.id = s.user_id where s.user_id = ${actor.id}`;
+        if (!me) throw new HttpError(404, 'not_found', 'Вы не специалист');
+        const list = await expertRegistry(sql, providers.storage, registry, actor.id, registryPeriod(query));
+        if (query.format !== 'csv') return { registry: list };
+        res.set({
+          'content-type': 'text/csv; charset=utf-8',
+          'content-disposition': `attachment; filename="registry.csv"; filename*=UTF-8''${encodeURIComponent(`Перечень отчётов ${list.year}${list.quarter ? `-${list.quarter}` : ''}.csv`)}`,
+          'cache-control': 'no-store',
+        });
+        return res.send(registryCsv(me.full_name || 'Эксперт', list));
       },
     },
     {
