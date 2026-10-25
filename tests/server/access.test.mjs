@@ -3349,6 +3349,61 @@ test('мои итоги за месяц (2.377): средний срок от п
   assert.deepEqual(r.cases.map((x) => [x.id, x.days, x.late_days, x.returns]), [[a.id, 4, 0, 0], [b.id, 2, 3, 2], [c.id, null, 0, 0]]);
 });
 
+test('мои итоги за год (2.409): весь год — сдано, в срок, возвраты, вознаграждение и выплачено по месяцам; прошлый год; чужое — нет', async () => {
+  const exp = await login(S, '+79990002409');
+  const other = await login(S, '+79990002410');
+  await makeSpecialist(S.sql, exp.user.id);
+  await makeSpecialist(S.sql, other.user.id);
+  const report = (c, q = '') => c.req('GET', `/api/specialist/me/report${q}`);
+  const year = String(new Date(Date.now() + 3 * 3_600_000).getUTCFullYear());
+  const month = new Date(Date.now() + 3 * 3_600_000).toISOString().slice(0, 7);
+  const fresh = (await report(exp, `?year=${year}`)).body.report;
+  assert.equal(fresh.year, true);
+  assert.equal(fresh.month_name, `${year} год`);
+  assert.deepEqual(fresh.years, [year], 'только что стал специалистом — только текущий год');
+  assert.deepEqual(fresh.by_month, []);
+  assert.equal((await report(exp)).body.report.by_month, undefined, 'за месяц — без «по месяцам»');
+  for (const q of ['?year=2020', `?year=${Number(year) + 1}`, '?year=26']) assert.equal((await report(exp, q)).body.error, 'bad_year', q);
+  await S.sql`update specialists set created_at = now() - interval '2 years' where user_id = ${exp.user.id}`;
+  assert.deepEqual((await report(exp)).body.report.years, [year, String(Number(year) - 1)]);
+  // Сдано: 11 января (в срок, выплачено в тот же день), сегодня (позже срока, возвращали), в прошлом году; чужое — не в счёт.
+  const order = async (title, at, deadline, executor = exp.user.id) => {
+    const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
+    await S.sql`update orders set status = 'done', deadline = ${deadline}::date, price_kop = 1_000_000, executor_user_id = ${executor} where id = ${o.id}`;
+    await S.sql`insert into order_status_history (order_id, from_status, to_status, side, at) values (${o.id}, 'review', 'done', 'dispatcher', ${at}::timestamptz)`;
+    return o;
+  };
+  const jan = await order('Год: январь в срок', `${year}-01-11T12:00:00+03:00`, `${year}-01-20`);
+  const now = await order('Год: сегодня позже срока', new Date().toISOString(), `${year}-01-01`);
+  await order('Год: прошлый год', `${Number(year) - 1}-06-15T12:00:00+03:00`, `${Number(year) - 1}-06-20`);
+  await order('Год: чужое', `${year}-01-11T12:00:00+03:00`, `${year}-01-20`, other.user.id);
+  await S.sql`insert into order_status_history (order_id, from_status, to_status, side) values (${now.id}, 'review', 'in_work', 'dispatcher')`;
+  await S.sql`insert into payouts (order_id, executor_user_id, amount_kop, commission_kop, status, paid_at)
+              values (${jan.id}, ${exp.user.id}, 800000, 200000, 'succeeded', ${`${year}-01-11T13:00:00+03:00`}::timestamptz)`;
+  const r = (await report(exp, `?year=${year}`)).body.report;
+  assert.equal(r.month, year);
+  assert.equal(r.current, true);
+  assert.equal(r.total.done, 2);
+  assert.equal(r.total.done_late, 1);
+  assert.equal(r.total.returned_dispatcher, 1);
+  assert.equal(r.total.fee_kop, 1_600_000);
+  assert.equal(r.total.paid_kop, 800_000);
+  assert.ok(r.total.overdue_now != null, 'текущий год — «просрочено сейчас» считается');
+  assert.deepEqual(r.cases.map((c) => c.id), [jan.id, now.id]);
+  assert.ok(!JSON.stringify(r).includes('Год: чужое'));
+  // По месяцам — только где что-то было; январь и текущий месяц (в январе — одной строкой).
+  const want = month.endsWith('-01')
+    ? [{ month, name: `январь ${year}`, done: 2, done_late: 1, returned_head: 0, returned_dispatcher: 1, fee_kop: 1_600_000, paid_kop: 800_000 }]
+    : [{ month: `${year}-01`, name: `январь ${year}`, done: 1, done_late: 0, returned_head: 0, returned_dispatcher: 0, fee_kop: 800_000, paid_kop: 800_000 },
+      { month, name: r.by_month.at(-1).name, done: 1, done_late: 1, returned_head: 0, returned_dispatcher: 1, fee_kop: 800_000, paid_kop: 0 }];
+  assert.deepEqual(r.by_month, want);
+  const last = (await report(exp, `?year=${Number(year) - 1}`)).body.report;
+  assert.equal(last.current, false);
+  assert.equal(last.total.overdue_now, null);
+  assert.deepEqual(last.cases.map((c) => c.title), ['Год: прошлый год']);
+  assert.deepEqual(last.by_month.map((m) => [m.month, m.done]), [[`${Number(year) - 1}-06`, 1]]);
+});
+
 test('перечень отчётов для СРО (2.401): свои сданные отчёты об оценке за год — номер, дата, стоимость из файла; не оценка и чужое — нет; CSV', async () => {
   cover('specialist.me.registry');
   const exp = await login(S, '+79990002401');
