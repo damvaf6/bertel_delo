@@ -30,6 +30,17 @@ export function registryPeriod(query = {}, today = todayMsk()) {
   return { year, quarter, from, to, name: quarter ? `${QUARTER_RU[quarter]} ${year} года` : `${year} год`, years };
 }
 
+// 2.404: чего не нашлось в файле отчёта — где это обычно пишут (так ищет и сверка 2.116, 2.108).
+export const REGISTRY_WHERE = {
+  number: 'номер — на титульном листе «Отчёт об оценке № …» и в колонтитуле',
+  made_on: 'дата составления — рядом с номером «от …» или строкой «Дата составления отчёта» в общих сведениях',
+  value_rub: 'итоговая стоимость — в разделе «Итоговая величина стоимости» и в сопроводительном письме: «… составляет … руб.»',
+};
+const MISSING = [['number', 'номер отчёта'], ['made_on', 'дата составления'], ['value_rub', 'итоговая стоимость']];
+
+// Файлы результата дела: none — нет ни одного, unread — есть, но текст не читается (скан, картинка), text — прочитаны.
+const filesState = (docs) => (!docs.length ? 'none' : docs.some((d) => d.pages) ? 'text' : 'unread');
+
 const isAppraisal = (registry, o) => registry.checks(o.module, o.service).some((c) => (c.auto ?? []).includes('dossier_appraiser'));
 
 function optionName(fields, field, value) {
@@ -50,7 +61,8 @@ async function registryRows(sql, storage, registry, done, period) {
   const rows = [];
   for (const o of list.slice(0, REGISTRY_MAX)) {
     const svc = registry.service(o.module, o.service);
-    const facts = storage ? reportFacts((await resultDocs(sql, storage, o)).filter((d) => d.pages)) : {};
+    const docs = storage ? await resultDocs(sql, storage, o) : [];
+    const facts = reportFacts(docs.filter((d) => d.pages));
     const row = {
       id: o.id,
       title: o.title,
@@ -65,8 +77,11 @@ async function registryRows(sql, storage, registry, done, period) {
       value_name: facts.value_name ?? null,
       ...(o.expert_id ? { expert_id: o.expert_id, expert_name: o.expert_name || 'Без имени' } : {}),
     };
-    row.missing = [['number', 'номер отчёта'], ['made_on', 'дата составления'], ['value_rub', 'итоговая стоимость']]
-      .filter(([k]) => row[k] == null).map(([, t]) => t);
+    const gaps = MISSING.filter(([k]) => row[k] == null);
+    row.missing = gaps.map(([, t]) => t);
+    row.files = filesState(docs);
+    // Подсказка, где искать, — только когда текст файла прочитан: без файла или со сканом искать нечего.
+    row.where = row.files === 'text' ? gaps.map(([k]) => REGISTRY_WHERE[k]) : [];
     rows.push(row);
   }
   return { year: period.year, quarter: period.quarter, name: period.name, years: period.years, total: list.length,

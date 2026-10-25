@@ -67,6 +67,10 @@ test('2.401: перечень отчётов для СРО — номер, да�
   await expect(rows.nth(0)).toContainText('Итоговая стоимость: 9 870 000');
   await expect(rows.nth(1)).toContainText('2. Отчёт без номера');
   await expect(rows.nth(1).locator('[data-registry-missing]')).toContainText('номер отчёта, дата составления, итоговая стоимость — допишите');
+  // 2.404: у дела без файла — почему не нашлось и переход к делу; подсказок по тексту нет — искать негде.
+  await expect(rows.nth(1).locator('[data-registry-missing]')).toContainText('Файла отчёта в деле нет');
+  await expect(rows.nth(1).locator('[data-registry-where]')).toHaveCount(0);
+  await expect(rows.nth(1).locator('[data-registry-open]')).toHaveText('Открыть дело');
   await box.scrollIntoViewIfNeeded();
   await shot(page, 'r01-2401-perechen-otchetov-sro');
   // Таблица для Excel — с сервера по той же учётке.
@@ -182,6 +186,58 @@ test('2.403: ИИ-проверка — номер отчёта уже был в 
   await expect(hit).toBeVisible();
   await hit.scrollIntoViewIfNeeded();
   await shot(page, 'r04-2403-nomer-uzhe-byl');
+  expect(problems).toEqual([]);
+  await ctx.close();
+});
+
+test('2.404: перечень — чего не нашлось: скан или нет в тексте, где это обычно пишут, переход к файлу в деле', async ({ browser, baseURL }) => {
+  const ctx = await browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true, locale: 'ru-RU',
+    storageState: { cookies: [], origins: [{ origin: new URL(baseURL).origin, localStorage: [{ name: 'delo.folds', value: 'open' }] }] } });
+  const page = await ctx.newPage();
+  const problems = [];
+  page.on('pageerror', (e) => problems.push(`ошибка JS: ${e.message}`));
+  const expert = await signIn(page, '+79990004492');
+  const ids = await db(async (c) => {
+    await c.query("update users set full_name = 'Подсказкина Вера' where id = $1", [expert.id]);
+    await c.query("insert into specialists (user_id, created_at) values ($1, now() - interval '2 years')", [expert.id]);
+    const mk = async (title, address) => {
+      const id = (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, deadline, fields)
+        values ($1, $2, 'expertise', 'realty', 'done', $1, current_date, $3) returning id`, [expert.id, title, { purpose: 'deal', address }])).rows[0].id;
+      await c.query("insert into order_status_history (order_id, from_status, to_status, side) values ($1, 'review', 'done', 'dispatcher')", [id]);
+      return id;
+    };
+    const part = await mk('Квартира на Ясной', 'г. Москва, Ясная ул., д. 5, кв. 9');
+    await c.query("update order_status_history set at = at - interval '1 minute' where order_id = $1", [part]);
+    const scan = await mk('Дом в Истре', 'Московская обл., г. Истра, ул. Лесная, д. 2');
+    return { part, scan };
+  });
+  const files = [[ids.part, 'отчёт.txt', 'ОТЧЁТ ОБ ОЦЕНКЕ № 52/2026 от 08.10.2026\nОтчёт № 52/2026'], [ids.scan, 'скан.txt', 'картинка']];
+  for (const [id, name, text] of files) {
+    const up = await page.request.post(`/api/orders/${id}/documents`, { data: Buffer.from(text), headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } });
+    expect(up.status()).toBe(201);
+  }
+  await db(async (c) => {
+    await c.query("update documents set kind = 'result' where order_id = any($1)", [[ids.part, ids.scan]]);
+    await c.query("update documents set mime = 'image/jpeg', filename = 'скан.jpg' where order_id = $1", [ids.scan]);
+  });
+
+  await page.goto('/kabinet#specialist');
+  const rows = page.locator('#registry-rows > li');
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0)).toContainText('1. Отчёт № 52/2026 от 8 октября 2026');
+  await expect(rows.nth(0).locator('[data-registry-missing]')).toHaveText('Не нашлось в файле отчёта: итоговая стоимость — допишите в таблице');
+  await expect(rows.nth(0).locator('[data-registry-where]')).toContainText('Обычно итоговая стоимость — в разделе «Итоговая величина стоимости» и в сопроводительном письме');
+  await expect(rows.nth(1).locator('[data-registry-missing]')).toContainText('Файл отчёта не читается (скан или картинка): номер отчёта, дата составления, итоговая стоимость');
+  await expect(rows.nth(1).locator('[data-registry-where]')).toHaveCount(0);
+  await expect(rows.nth(1).locator('[data-registry-open]')).toHaveText('Открыть файл отчёта в деле');
+  await rows.nth(0).scrollIntoViewIfNeeded();
+  await shot(page, 'r05-2404-gde-pishut');
+  // Переход — к файлам результата в деле.
+  await rows.nth(0).locator('[data-registry-open]').click();
+  await expect(page).toHaveURL(new RegExp(`#order=${ids.part}&to=result`));
+  await expect(page.locator('#docs-box')).toBeVisible();
+  await expect(page.locator('#docs-box')).toContainText('отчёт.txt');
+  await shot(page, 'r06-2404-delo-fajl');
   expect(problems).toEqual([]);
   await ctx.close();
 });

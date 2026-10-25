@@ -3343,6 +3343,34 @@ test('перечень отчётов для СРО (2.401): свои сданн
   assert.deepEqual((await reg(other)).body.registry.rows.map((x) => x.id), [foreign.id]);
 });
 
+test('перечень отчётов для СРО (2.404): чего не нашлось — почему (нет файла, скан, нет в тексте) и где это обычно пишут', async () => {
+  const exp = await login(S, '+79990004491');
+  await makeSpecialist(S.sql, exp.user.id);
+  const order = async (title) => {
+    const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
+    await S.sql`update orders set status = 'done', deadline = (now() at time zone 'Europe/Moscow')::date, executor_user_id = ${exp.user.id} where id = ${o.id}`;
+    await S.sql`insert into order_status_history (order_id, from_status, to_status, side) values (${o.id}, 'review', 'done', 'dispatcher')`;
+    return o;
+  };
+  const none = await order('2.404: без файла');
+  const scan = await order('2.404: скан');
+  const part = await order('2.404: без стоимости');
+  await S.sql`update order_status_history set at = at - interval '2 seconds' where order_id = ${none.id}`;
+  await S.sql`update order_status_history set at = at - interval '1 second' where order_id = ${scan.id}`;
+  const s1 = await upload(U.owner, scan.id, 'скан.jpg', 'картинка');
+  await S.sql`update documents set kind = 'result', uploaded_by = ${exp.user.id}, mime = 'image/jpeg' where id = ${s1.id}`;
+  const p1 = await upload(U.owner, part.id, 'отчёт.txt', 'ОТЧЁТ ОБ ОЦЕНКЕ № 15/2026 от 01.10.2026\nОтчёт № 15/2026');
+  await S.sql`update documents set kind = 'result', uploaded_by = ${exp.user.id} where id = ${p1.id}`;
+  const rows = (await exp.req('GET', '/api/specialist/me/registry')).body.registry.rows;
+  assert.deepEqual(rows.map((x) => [x.id, x.files]), [[none.id, 'none'], [scan.id, 'unread'], [part.id, 'text']]);
+  assert.deepEqual(rows[0].where, [], 'без файла искать негде');
+  assert.deepEqual(rows[1].where, [], 'скан не читается — подсказки по тексту не нужны');
+  assert.equal(rows[1].missing.length, 3);
+  assert.deepEqual([rows[2].number, rows[2].missing], ['15/2026', ['итоговая стоимость']]);
+  assert.equal(rows[2].where.length, 1);
+  assert.match(rows[2].where[0], /^итоговая стоимость — в разделе «Итоговая величина стоимости»/);
+});
+
 test('перечень отчётов для СРО по организации (2.402): все эксперты организации, с именем; до вступления и чужое — нет; только руководитель; CSV', async () => {
   cover('orgs.registry');
   const org = await makeOrg(S.sql, 'Тестовая организация СРО 2402');
