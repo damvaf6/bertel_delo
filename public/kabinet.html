@@ -864,6 +864,32 @@
         <button type="button" class="secondary hidden" id="org-report-zip">Заключения архивом</button>
         <p class="msg" id="org-report-msg" role="status" aria-live="polite"></p>
       </div>
+      <div class="card hidden" id="org-registry-box">
+        <h2>Перечень отчётов для СРО</h2>
+        <p class="muted">Сданные отчёты об оценке всех экспертов организации за год или квартал — для СРО и плановой проверки.
+          Номер, дата составления и итоговая стоимость взяты из файла отчёта в деле; чего там не нашлось — допишите в таблице.
+          Считается с того дня, как эксперт вступил в организацию.</p>
+        <div class="field">
+          <label for="org-registry-year">Год</label>
+          <select id="org-registry-year"></select>
+        </div>
+        <div class="field">
+          <label for="org-registry-quarter">Квартал</label>
+          <select id="org-registry-quarter">
+            <option value="">Весь год</option>
+            <option value="1">I квартал</option>
+            <option value="2">II квартал</option>
+            <option value="3">III квартал</option>
+            <option value="4">IV квартал</option>
+          </select>
+        </div>
+        <p class="muted" id="org-registry-total"></p>
+        <ul class="list" id="org-registry-experts"></ul>
+        <ul class="list" id="org-registry-rows"></ul>
+        <p class="muted hidden" id="org-registry-empty">За этот период сданных отчётов об оценке нет.</p>
+        <button type="button" class="secondary" id="org-registry-csv">Скачать таблицу (Excel)</button>
+        <p class="msg" id="org-registry-msg" role="status" aria-live="polite"></p>
+      </div>
       <div class="card hidden" id="org-sign-box">
         <h2>Подпись организации</h2>
         <p class="muted">Эксперты, которые работают от Вашей организации, подписали заключения — подпишите их от организации:

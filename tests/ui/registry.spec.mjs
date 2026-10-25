@@ -1,6 +1,7 @@
 // Перечень отчётов для СРО (задача 2.401) — телефон 412×915: в профиле специалиста свои сданные отчёты об оценке за год —
 // номер, дата и стоимость из файла отчёта; у дела без файла — «не нашлось, допишите». Что попадает в перечень — считает
 // сервер (тест «2.401» в tests/server/access.test.mjs); здесь — как это видно на экране. Номера +7 999 000-24-0x — только здесь.
+// 2.402 — тот же перечень у руководителя организации по всем её экспертам.
 import { test, expect } from '@playwright/test';
 import pg from 'pg';
 import { DB_URL, TEST_TOKEN } from '../helpers.mjs';
@@ -80,6 +81,74 @@ test('2.401: перечень отчётов для СРО — номер, да�
   await expect(rows).toHaveCount(2);
   await rows.nth(1).getByRole('link').click();
   await expect(page).toHaveURL(new RegExp(`#order=${ids.car}`));
+  expect(problems).toEqual([]);
+  await ctx.close();
+});
+
+test('2.402: перечень отчётов для СРО у руководителя — все эксперты организации с именем, итог по экспертам; Excel', async ({ browser, baseURL }) => {
+  const ctx = await browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true, locale: 'ru-RU',
+    storageState: { cookies: [], origins: [{ origin: new URL(baseURL).origin, localStorage: [{ name: 'delo.folds', value: 'open' }] }] } });
+  const page = await ctx.newPage();
+  const problems = [];
+  page.on('pageerror', (e) => problems.push(`ошибка JS: ${e.message}`));
+  const head = await signIn(page, '+79990002409');
+  const ids = await db(async (c) => {
+    const user = async (phone) => (await c.query('insert into users (phone) values ($1) on conflict (phone) do update set phone = excluded.phone returning id', [phone])).rows[0];
+    const ex1 = await user('+79990002407');
+    const ex2 = await user('+79990002408');
+    const org = (await c.query("insert into organizations (name) values ('ООО «Оценка-Перечень»') returning id")).rows[0].id;
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head')", [org, head.id]);
+    for (const [u, name] of [[ex1, 'Альфина Анна'], [ex2, 'Борисов Борис']]) {
+      await c.query('update users set full_name = $2 where id = $1', [u.id, name]);
+      await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'member', now() - interval '1 day')", [org, u.id]);
+      await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '2 years')", [u.id, org]);
+    }
+    const mk = async (executor, title, service, fields) => {
+      const id = (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, deadline, fields)
+        values ($1, $2, 'expertise', $3, 'done', $5, current_date, $4) returning id`, [head.id, title, service, fields, executor])).rows[0].id;
+      await c.query("insert into order_status_history (order_id, from_status, to_status, side) values ($1, 'review', 'done', 'dispatcher')", [id]);
+      return id;
+    };
+    const flat = await mk(ex1.id, 'Квартира на Липовой', 'realty', { purpose: 'bank', address: 'г. Москва, Липовая ул., д. 7, кв. 1' });
+    await c.query("update order_status_history set at = at - interval '1 minute' where order_id = $1", [flat]);
+    const car = await mk(ex2.id, 'Лада Гранта в суд', 'vehicle', { purpose: 'court', make_model: 'Лада Гранта', year: 2019 });
+    const text = 'ОТЧЁТ ОБ ОЦЕНКЕ № 24/2026-П от 14.10.2026\nИтоговая величина рыночной стоимости объекта оценки составляет 6 300 000 руб.\nОтчёт № 24/2026-П';
+    return { org, flat, car, text, ex1: ex1.id };
+  });
+  // Файл отчёта — через сервер (хранилище знает только сервер); заказчик в этих делах — сам руководитель.
+  const up = await page.request.post(`/api/orders/${ids.flat}/documents`, { data: Buffer.from(ids.text), headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('отчёт.txt') } });
+  expect(up.status()).toBe(201);
+  await db((c) => c.query("update documents set kind = 'result', uploaded_by = $2 where order_id = $1", [ids.flat, ids.ex1]));
+
+  await page.goto(`/kabinet#org=${ids.org}`);
+  const box = page.locator('#org-registry-box');
+  await expect(box.getByRole('heading', { name: 'Перечень отчётов для СРО' })).toBeVisible();
+  await expect(page.locator('#org-registry-total')).toContainText('2 отчёта · дописать — в 1');
+  const experts = page.locator('#org-registry-experts > li');
+  await expect(experts).toHaveCount(2);
+  await expect(experts.nth(0)).toContainText('Альфина Анна');
+  await expect(experts.nth(0)).toContainText('1 отчёт · всё нашлось в файлах');
+  await expect(experts.nth(1)).toContainText('Борисов Борис1 отчёт · дописать — в 1');
+  const rows = page.locator('#org-registry-rows > li');
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0)).toContainText('1. Отчёт № 24/2026-П от 14 октября 2026');
+  await expect(rows.nth(0)).toContainText('Альфина Анна · г. Москва, Липовая ул., д. 7, кв. 1');
+  await expect(rows.nth(0)).toContainText('Итоговая стоимость: 6 300 000');
+  await expect(rows.nth(1)).toContainText('2. Отчёт без номера');
+  await expect(rows.nth(1)).toContainText('Борисов Борис · Лада Гранта, 2019 г.');
+  await expect(rows.nth(1)).toContainText('допишите в таблице');
+  await box.scrollIntoViewIfNeeded();
+  await shot(page, 'r02-2402-perechen-otchetov-organizacii');
+  await box.screenshot({ path: 'test-results/screens/r03-2402-kartochka-perechnya.png' });
+  const csv = await page.request.get(`/api/orgs/${ids.org}/registry?format=csv`);
+  expect(csv.status()).toBe(200);
+  const body = await csv.text();
+  expect(body).toContain('Перечень отчётов об оценке — ООО «Оценка-Перечень»');
+  expect(body).toContain('1;24/2026-П;14.10.2026;Альфина Анна;г. Москва, Липовая ул., д. 7, кв. 1');
+  // Прошлый год — пусто.
+  await page.locator('#org-registry-year').selectOption({ index: 1 });
+  await expect(page.locator('#org-registry-empty')).toBeVisible();
+  await expect(rows).toHaveCount(0);
   expect(problems).toEqual([]);
   await ctx.close();
 });

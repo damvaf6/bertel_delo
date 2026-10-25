@@ -12,6 +12,7 @@ import { newYearAhead } from '../orders/holidays.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { orderSplit } from '../money/money.mjs';
 import { STATUS_NAME, addDays, isOverdue, todayMsk, weekEnd } from '../orders/workflow.mjs';
+import { orgRegistry, registryCsv, registryPeriod } from '../orgs/registry.mjs';
 import { monthRu, orgMonthDoneCases, orgMonthReport, reportCsv, reportMonth } from '../orgs/report.mjs';
 import { buildOrgMonthArchive } from './case-ops.mjs';
 import { openExtends, orgExtends, taskMovedOrg } from './deadline-ops.mjs';
@@ -512,6 +513,22 @@ export function orgOps() {
         const a = await buildOrgMonthArchive(ctx, cases, monthRu(month));
         await audit(sql, actor, 'org.archive', 'org', org.id, { month, cases: cases.length, files: a.files, bytes: a.buf.length });
         await sendFile(res, providers, { buf: a.buf, filename: a.filename, mime: 'application/zip' });
+      },
+    },
+    {
+      // Перечень отчётов для СРО по организации (2.402): сданные отчёты об оценке всех её экспертов за год или квартал — как
+      // перечень эксперта (2.401), с именем эксперта; только руководитель. ?format=csv — таблицей для Excel.
+      id: 'orgs.registry', method: 'GET', path: '/api/orgs/:id/registry', auth: 'user',
+      access: { resource: 'org', param: 'id', need: 'manage' },
+      async handler({ sql, org, query, res, registry, providers }) {
+        const list = await orgRegistry(sql, providers.storage, registry, org.id, registryPeriod(query));
+        if (query.format !== 'csv') return { registry: list };
+        res.set({
+          'content-type': 'text/csv; charset=utf-8',
+          'content-disposition': `attachment; filename="registry.csv"; filename*=UTF-8''${encodeURIComponent(`Перечень отчётов организации ${list.year}${list.quarter ? `-${list.quarter}` : ''}.csv`)}`,
+          'cache-control': 'no-store',
+        });
+        return res.send(registryCsv(org.name, list, { org: true }));
       },
     },
     {

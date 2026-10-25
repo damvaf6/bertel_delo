@@ -4,6 +4,7 @@ import { state, show, notFoundView, refreshMe } from '/shell.js';
 import { loadOrgSign } from '/orgsign.js';
 import { loadOrgCases, focusOrgCase, focusOrgBlock } from '/orgcases.js';
 import { loadOrgReport } from '/orgreport.js';
+import { loadOrgRegistry } from '/orgregistry.js';
 import { loadOrgTemplate } from '/orgtemplate.js';
 
 const $ = (id) => document.getElementById(id);
@@ -88,9 +89,10 @@ export async function showOrg(id, focus = null) {
   $('org-sign-box').classList.add('hidden');
   $('org-cases-box').classList.add('hidden');
   $('org-report-box').classList.add('hidden');
+  $('org-registry-box').classList.add('hidden');
   show('org-view', 'orgs');
   workBox();
-  await Promise.all([loadMembers(), org.manage ? loadOrgInvites() : null, org.manage ? loadOrgSign(org) : null, org.manage ? loadOrgCases(org) : null, org.manage ? loadOrgReport(org) : null, loadOrgTemplate(org)]);
+  await Promise.all([loadMembers(), org.manage ? loadOrgInvites() : null, org.manage ? loadOrgSign(org) : null, org.manage ? loadOrgCases(org) : null, org.manage ? loadOrgReport(org) : null, org.manage ? loadOrgRegistry(org) : null, loadOrgTemplate(org)]);
   if (focus && org.manage) (focus.block ? focusOrgBlock(focus.block) : focusOrgCase(focus));
 }
 
