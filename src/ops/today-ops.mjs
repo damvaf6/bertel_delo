@@ -405,6 +405,9 @@ export async function expertMorningAlerts(sql, userId, today, now = new Date(), 
     lead_unsigned: leadUnsigned,
     ...await swapCounts(sql, userId, rows),
     egrn_rebuild: (await egrnRebuildCases(sql, userId, rows)).length,
+    // Прогон 2.400: за две недели до новогодних каникул — сколько дел в работе со сроком в каникулы (как группа «Срок в
+    // новогодние каникулы» в «Сегодня», 2.393; дело в «Горит срок» не повторяется).
+    new_year: newYearCases(rows.filter((o) => !hotRows.includes(o)), today)?.rows.length ?? 0,
   };
 }
 

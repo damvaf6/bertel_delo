@@ -19,7 +19,7 @@ test('2.371: календарь — праздники по ТК, перенос
   assert.equal(holidayName('2026-11-04'), 'День народного единства');
   assert.match(holidayName('2026-03-09'), /Международный женский день/); // 8 марта 2026 — воскресенье
   assert.match(holidayName('2026-05-11'), /День Победы/); // 9 мая 2026 — суббота, 10-го воскресенье
-  assert.equal(holidayName('2026-01-09'), 'Новогодние каникулы');
+  assert.equal(holidayName('2026-01-09'), 'перенос выходного с 3 января');
   assert.ok(holidayName('2026-12-31'));
   assert.equal(holidayName('2026-10-22'), null);
   assert.equal(isWorkday('2026-11-04'), false);
@@ -255,4 +255,14 @@ test('2.399: «Праздники и переносы» — год одной с
   assert.deepEqual(r.body.warning, calendarWarning(r.body.today));
   const sp = await login(S, '+79990004398');
   assert.equal((await sp.req('GET', '/api/admin/holidays')).status, 404);
+});
+
+test('прогон 2.400: «Праздники и переносы» 2026 — оба переноса новогодних выходных (3 января — на 9-е, 4 января — на 31 декабря)', () => {
+  const c = yearCalendar(2026);
+  assert.deepEqual(c.moves.filter((m) => m.name.includes('января')).map((m) => [m.date, m.name]),
+    [['2026-01-09', 'перенос выходного с 3 января'], ['2026-12-31', 'перенос выходного с 4 января']]);
+  // В днях отдыха — сами праздники, а не «перенос»; в «не принимаю дела до …» — тоже праздник.
+  assert.deepEqual(c.runs[0].names, ['Новогодние каникулы', 'Рождество Христово']);
+  assert.equal(holidayRunFrom('2026-01-09').name, 'Новогодние каникулы');
+  assert.equal(offDayName('2026-01-09'), 'перенос выходного с 3 января');
 });
