@@ -3283,6 +3283,66 @@ test('мои итоги за месяц (2.377): средний срок от п
   assert.deepEqual(r.cases.map((x) => [x.id, x.days, x.late_days, x.returns]), [[a.id, 4, 0, 0], [b.id, 2, 3, 2], [c.id, null, 0, 0]]);
 });
 
+test('перечень отчётов для СРО (2.401): свои сданные отчёты об оценке за год — номер, дата, стоимость из файла; не оценка и чужое — нет; CSV', async () => {
+  cover('specialist.me.registry');
+  const exp = await login(S, '+79990002401');
+  const other = await login(S, '+79990002402');
+  await makeSpecialist(S.sql, exp.user.id);
+  await makeSpecialist(S.sql, other.user.id);
+  await S.sql`update users set full_name = 'Оценщикова Анна Петровна' where id = ${exp.user.id}`;
+  const reg = (c, q = '') => c.req('GET', `/api/specialist/me/registry${q}`);
+  assert.equal((await reg(U.owner)).status, 404, 'не специалист');
+  const year = new Date(Date.now() + 3 * 3_600_000).getUTCFullYear();
+  const empty = (await reg(exp)).body.registry;
+  assert.equal(empty.year, year);
+  assert.deepEqual(empty.years, [year, year - 1, year - 2, year - 3]);
+  assert.deepEqual(empty.rows, []);
+  const order = async (title, service, fields, executor = exp.user.id) => {
+    const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service, title })).body.order;
+    await S.sql`update orders set status = 'done', deadline = (now() at time zone 'Europe/Moscow')::date, fields = ${JSON.stringify(fields)}::jsonb, executor_user_id = ${executor} where id = ${o.id}`;
+    await S.sql`insert into order_status_history (order_id, from_status, to_status, side) values (${o.id}, 'review', 'done', 'dispatcher')`;
+    return o;
+  };
+  const flat = await order('СРО: квартира', 'realty', { purpose: 'bank', address: 'г. Москва, ул. Тестовая, д. 1, кв. 5' });
+  const car = await order('СРО: машина без файла', 'vehicle', { purpose: 'court', make_model: 'Лада Веста', year: 2020 });
+  const writing = await order('СРО: почерк — не оценка', 'handwriting', {});
+  const foreign = await order('СРО: чужое', 'realty', { purpose: 'deal', address: 'чужой адрес' }, other.user.id);
+  await S.sql`update order_status_history set at = at - interval '1 second' where order_id = ${flat.id}`;
+  const text = [
+    'ОТЧЁТ ОБ ОЦЕНКЕ № 108/2026-О от 05.10.2026',
+    'Дата составления отчёта: 05.10.2026',
+    'Итоговая величина рыночной стоимости объекта оценки составляет 8 450 000 руб.',
+    'Колонтитул: Отчёт № 108/2026-О',
+  ].join('\n');
+  const doc = await upload(U.owner, flat.id, 'отчёт.txt', text);
+  await S.sql`update documents set kind = 'result', uploaded_by = ${exp.user.id} where id = ${doc.id}`;
+  const r = (await reg(exp)).body.registry;
+  assert.deepEqual(r.rows.map((x) => x.id), [flat.id, car.id], 'почерковедческая — не отчёт об оценке, чужое — не видно');
+  const [a, b] = r.rows;
+  assert.deepEqual([a.number, a.made_on, a.value_rub, a.value_name, a.object, a.purpose, a.service_name],
+    ['108/2026-О', '2026-10-05', 8_450_000, 'Итоговая стоимость', 'г. Москва, ул. Тестовая, д. 1, кв. 5', 'Ипотека, залог, банк', 'Оценка недвижимости']);
+  assert.deepEqual(a.missing, []);
+  assert.deepEqual([b.object, b.purpose, b.number], ['Лада Веста, 2020 г.', 'Для суда', null]);
+  assert.deepEqual(b.missing, ['номер отчёта', 'дата составления', 'итоговая стоимость']);
+  assert.ok(!JSON.stringify(r).includes('чужой адрес'));
+  void writing; void foreign;
+  // Прошлый год — пусто; квартал без дел — пусто; неизвестный год — текущий.
+  assert.deepEqual((await reg(exp, `?year=${year - 1}`)).body.registry.rows, []);
+  assert.equal((await reg(exp, '?year=1999')).body.registry.year, year);
+  const q = Math.ceil(Number(new Date(Date.now() + 3 * 3_600_000).toISOString().slice(5, 7)) / 3);
+  const inQ = (await reg(exp, `?year=${year}&quarter=${q}`)).body.registry;
+  assert.equal(inQ.rows.length, 2);
+  assert.match(inQ.name, /квартал/);
+  assert.equal((await reg(exp, `?year=${year}&quarter=${q === 1 ? 2 : 1}`)).body.registry.rows.length, 0);
+  const csv = await exp.req('GET', '/api/specialist/me/registry?format=csv', undefined, { binary: true });
+  assert.equal(csv.status, 200);
+  const body = csv.body.toString('utf8');
+  assert.match(body, /Перечень отчётов об оценке — Оценщикова Анна Петровна/);
+  assert.match(body, /1;108\/2026-О;05\.10\.2026;г\. Москва, ул\. Тестовая, д\. 1, кв\. 5;Оценка недвижимости;Ипотека, залог, банк;[^;]*;8450000;Итоговая стоимость;/);
+  // Другой эксперт видит только своё.
+  assert.deepEqual((await reg(other)).body.registry.rows.map((x) => x.id), [foreign.id]);
+});
+
 test('мои сроки на две недели (2.109): по дням — сроки своих дел, выезды, ссылка на осмотр, просьба о переносе; чужого нет', async () => {
   cover('specialist.me.schedule');
   const exp = await login(S, '+79990001495');

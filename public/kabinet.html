@@ -1164,6 +1164,30 @@
         <p class="muted hidden" id="my-report-empty">За этот месяц сданных дел нет.</p>
         <p class="msg" id="my-report-msg" role="status" aria-live="polite"></p>
       </div>
+      <div class="card" id="registry-box">
+        <h2>Перечень отчётов для СРО</h2>
+        <p class="muted">Ваши сданные отчёты об оценке за год или квартал — для СРО и плановой проверки. Номер, дата составления
+          и итоговая стоимость взяты из файла отчёта в деле; чего там не нашлось — допишите в таблице сами.</p>
+        <div class="field">
+          <label for="registry-year">Год</label>
+          <select id="registry-year"></select>
+        </div>
+        <div class="field">
+          <label for="registry-quarter">Квартал</label>
+          <select id="registry-quarter">
+            <option value="">Весь год</option>
+            <option value="1">I квартал</option>
+            <option value="2">II квартал</option>
+            <option value="3">III квартал</option>
+            <option value="4">IV квартал</option>
+          </select>
+        </div>
+        <p class="muted" id="registry-total"></p>
+        <ul class="list" id="registry-rows"></ul>
+        <p class="muted hidden" id="registry-empty">За этот период сданных отчётов об оценке нет.</p>
+        <button type="button" class="secondary" id="registry-csv">Скачать таблицу (Excel)</button>
+        <p class="msg" id="registry-msg" role="status" aria-live="polite"></p>
+      </div>
       <div class="card">
         <h2>Мои допуски</h2>
         <ul class="list" id="specialist-permits"></ul>
