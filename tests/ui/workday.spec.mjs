@@ -143,3 +143,26 @@ test('2.399: «Праздники и переносы» в «Управлени�
   expect(problems, problems.join('\n')).toEqual([]);
   await ctx.close();
 });
+
+// Прогон 2.400: за две недели до новогодних каникул утренняя сводка эксперта называет, сколько дел со сроком в каникулы и до
+// какого дня сдать (как у руководителя, 2.394), и ведёт к «Сегодня». Считает сервер (тест «прогон 2.400» в
+// tests/server/morning.test.mjs, по фиксированному дню 21 декабря); здесь — как сводка читается в ленте на телефоне.
+// Номера +7 999 000-88-4x — только здесь.
+test('прогон 2.400: утренняя сводка эксперта — «срок в новогодние каникулы — сдайте до 30 декабря»', async ({ browser, baseURL }) => {
+  const problems = [];
+  const sctx = await phoneContext(browser, baseURL);
+  const sp = await sctx.newPage();
+  sp.on('pageerror', (e) => problems.push(`ошибка JS: ${e.message}`));
+  const spec = await signIn(sp, '+79990008841');
+  await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1) on conflict do nothing', [spec.id]);
+    const n = (await c.query("insert into notifications (user_id, type, event) values ($1, 'morning', 'morning_today') returning id", [spec.id])).rows[0].id;
+    await c.query("insert into morning_digests (user_id, day, new_year, notification_id) values ($1, '2026-12-21', 2, $2)", [spec.id, n]);
+  });
+  await sp.goto('/kabinet#notifications');
+  const li = sp.locator('#notifications li').first();
+  await expect(li).toContainText('На сегодня: срок в новогодние каникулы — сдайте до 30 декабря: 2 дела');
+  await shot(sp, 'wd4-2400-svodka-kanikuly');
+  expect(problems, problems.join('\n')).toEqual([]);
+  await sctx.close();
+});

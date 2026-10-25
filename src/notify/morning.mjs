@@ -15,6 +15,8 @@
 // у заказчика, а оно не пришло 3 дня и сегодня не напоминали (кнопка «Напомнить заказчику» у строки письма в «Сегодня», 2.347).
 // С 2.389 в выходной или нерабочий праздник сводка приходит, только если есть что сделать именно сегодня: срок сегодня,
 // прошедший срок или выезд на объект (`offDayWorth`); остальное подождёт рабочего дня (день всё равно посчитан).
+// Прогон 2.400: за две недели до новогодних каникул — ещё сколько дел в работе со сроком в каникулы и до какого дня сдать (как
+// группа «Срок в новогодние каникулы» в «Сегодня», 2.393, и сводка руководителя, 2.394); тоже к «Сегодня».
 import { isWorkday, newYearAhead, workdayBefore } from '../orders/holidays.mjs';
 import { expertSchedule } from '../orders/schedule.mjs';
 import { STATUS_NAME, todayMsk } from '../orders/workflow.mjs';
@@ -67,6 +69,9 @@ export function digestText(c) {
   if (c.egrn_swap) parts.push(`в ИИ-проверке остались расхождения с выпиской ЕГРН, которые можно заменить: ${c.egrn_swap} ${pl(c.egrn_swap, 'дело', 'дела', 'дел')}`);
   if (c.task_swap) parts.push(`в ИИ-проверке остались расхождения с заданием на оценку, которые можно заменить: ${c.task_swap} ${pl(c.task_swap, 'дело', 'дела', 'дел')}`);
   if (c.egrn_rebuild) parts.push(`исправили в черновике по выписке или заданию на оценку, а файл собран до исправления — соберите Word заново: ${c.egrn_rebuild} ${pl(c.egrn_rebuild, 'дело', 'дела', 'дел')}`);
+  // Прогон 2.400: день «сдайте до» — по дню сводки (в ленте — по `day` записи).
+  const ny = c.new_year && c.day && newYearAhead(c.day);
+  if (ny) parts.push(`срок в новогодние каникулы — сдайте до ${dayShort(ny.work_before)}: ${c.new_year} ${pl(c.new_year, 'дело', 'дела', 'дел')}`);
   return parts.length ? `На сегодня: ${parts.join(', ')}` : null;
 }
 
@@ -84,10 +89,10 @@ export async function sendMorning(sql, { now = new Date(), registry = null, stor
                            where u.is_active and not exists (select 1 from morning_digests d where d.user_id = s.user_id and d.day = ${today}::date)`;
   let sent = 0;
   for (const { user_id: userId } of people) {
-    const c = { ...digestCounts(await expertSchedule(sql, userId, NO_NAMES, today), now), ...await expertMorningAlerts(sql, userId, today, now, { registry, storage }) };
+    const c = { ...digestCounts(await expertSchedule(sql, userId, NO_NAMES, today), now), ...await expertMorningAlerts(sql, userId, today, now, { registry, storage }), day: today };
     sent += await sql.tx(async (tx) => {
-      const fresh = await tx`insert into morning_digests (user_id, day, due, overdue, visits, links, no_result, reply_wait, lead_unsigned, egrn_swap, task_swap, egrn_rebuild, task_due, task_moved, letter_due, letter_wait)
-                             values (${userId}, ${today}, ${c.due}, ${c.overdue}, ${c.visits}, ${c.links}, ${c.no_result}, ${c.reply_wait}, ${c.lead_unsigned}, ${c.egrn_swap}, ${c.task_swap}, ${c.egrn_rebuild}, ${c.task_due ?? 0}, ${c.task_moved ?? 0}, ${c.letter_due ?? 0}, ${c.letter_wait ?? 0})
+      const fresh = await tx`insert into morning_digests (user_id, day, due, overdue, visits, links, no_result, reply_wait, lead_unsigned, egrn_swap, task_swap, egrn_rebuild, task_due, task_moved, letter_due, letter_wait, new_year)
+                             values (${userId}, ${today}, ${c.due}, ${c.overdue}, ${c.visits}, ${c.links}, ${c.no_result}, ${c.reply_wait}, ${c.lead_unsigned}, ${c.egrn_swap}, ${c.task_swap}, ${c.egrn_rebuild}, ${c.task_due ?? 0}, ${c.task_moved ?? 0}, ${c.letter_due ?? 0}, ${c.letter_wait ?? 0}, ${c.new_year ?? 0})
                              on conflict do nothing returning user_id`;
       const text = digestText(c);
       if (!fresh.length || !text || (dayOff && !offDayWorth(c))) return 0;
@@ -104,7 +109,7 @@ export async function sendMorning(sql, { now = new Date(), registry = null, stor
 }
 
 // Куда ведёт сводка (2.142): есть сроки, выезды или ссылки — к «Моим срокам»; только «нет файла результата» и «заказчик ждёт
-// ответа» (и «руководитель не подписал», 2.164, «можно заменить по выписке», 2.266, «по заданию», 2.284, «соберите Word заново», 2.272, «срок по заданию на оценку», 2.315, «приложите письмо о переносе», 2.331, «срок по письму о переносе», прогон 2.350, «напомните заказчику», 2.355) — к «Сегодня», где эти дела строками.
+// ответа» (и «руководитель не подписал», 2.164, «можно заменить по выписке», 2.266, «по заданию», 2.284, «соберите Word заново», 2.272, «срок по заданию на оценку», 2.315, «приложите письмо о переносе», 2.331, «срок по письму о переносе», прогон 2.350, «напомните заказчику», 2.355, «срок в новогодние каникулы», прогон 2.400) — к «Сегодня», где эти дела строками.
 export function morningTo(c) {
   return c.due || c.overdue || c.visits || c.links ? 'schedule' : 'today';
 }
@@ -112,7 +117,8 @@ export function morningTo(c) {
 // Текст сводки в ленте по номеру уведомления (цифры — из morning_digests) и куда она ведёт.
 export async function morningTitles(sql, ids) {
   if (!ids.length) return new Map();
-  const rows = await sql`select notification_id, due, overdue, visits, links, no_result, reply_wait, lead_unsigned, egrn_swap, task_swap, egrn_rebuild, task_due, task_moved, letter_due, letter_wait from morning_digests
+  const rows = await sql`select notification_id, due, overdue, visits, links, no_result, reply_wait, lead_unsigned, egrn_swap, task_swap, egrn_rebuild, task_due, task_moved, letter_due, letter_wait, new_year,
+                         to_char(day, 'YYYY-MM-DD') as day from morning_digests
                          where notification_id = any(${ids}::bigint[])`;
   return new Map(rows.map((r) => [String(r.notification_id), { title: digestText(r), to: morningTo(r) }]));
 }

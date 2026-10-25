@@ -229,3 +229,24 @@ test('2.389: в выходной или праздник — сводка, то�
   assert.equal((await row(quiet, '2026-11-07')).overdue, 1);
   assert.equal((await mine(quiet.user.id)).length, 2);
 });
+
+test('прогон 2.400: за две недели до новогодних каникул — сколько дел со сроком в каникулы, «сдайте до 30 декабря»; к «Сегодня»', async () => {
+  const { morningTo } = await import('../../src/notify/morning.mjs');
+  assert.equal(digestText({ new_year: 2, day: '2026-12-21' }), 'На сегодня: срок в новогодние каникулы — сдайте до 30 декабря: 2 дела');
+  assert.equal(digestText({ new_year: 2, day: '2026-11-21' }), null, 'до каникул больше двух недель — не пишем');
+  assert.equal(morningTo({ new_year: 1 }), 'today');
+  const ny = await login(S, '+79990004001');
+  await makeSpecialist(S.sql, ny.user.id);
+  for (const [title, deadline] of [['В каникулы', '2027-01-05'], ['После каникул', '2027-01-11']]) {
+    const o = await inWork(title, deadline);
+    await S.sql`update orders set executor_user_id = ${ny.user.id} where id = ${o.id}`;
+  }
+  // Понедельник 21 декабря 2026: до каникул 10 дней; срок 5 января — не «срок близко», а в каникулы.
+  await sendMorning(S.sql, { now: at('2026-12-21', '09:00') });
+  const [r] = await S.sql`select new_year, due, overdue, notification_id from morning_digests where user_id = ${ny.user.id} and day = '2026-12-21'::date`;
+  assert.deepEqual([r.new_year, r.due, r.overdue], [1, 0, 0]);
+  assert.ok(r.notification_id);
+  const n = (await ny.req('GET', '/api/notifications')).body.notifications.find((x) => x.id === String(r.notification_id));
+  assert.equal(n.title, 'На сегодня: срок в новогодние каникулы — сдайте до 30 декабря: 1 дело');
+  assert.equal(n.section, 'today');
+});
