@@ -1,0 +1,85 @@
+// Перечень отчётов для СРО (задача 2.401) — телефон 412×915: в профиле специалиста свои сданные отчёты об оценке за год —
+// номер, дата и стоимость из файла отчёта; у дела без файла — «не нашлось, допишите». Что попадает в перечень — считает
+// сервер (тест «2.401» в tests/server/access.test.mjs); здесь — как это видно на экране. Номера +7 999 000-24-0x — только здесь.
+import { test, expect } from '@playwright/test';
+import pg from 'pg';
+import { DB_URL, TEST_TOKEN } from '../helpers.mjs';
+
+const CONTROL = process.env.UI_TEST_CONTROL_TOKEN || TEST_TOKEN;
+const H = { 'x-delo-request': '1' };
+
+async function signIn(page, phone) {
+  expect((await page.request.post('/api/auth/code', { data: { phone }, headers: H })).status()).toBe(200);
+  const calls = (await (await page.request.get('/__test/fakes/sms/calls', { headers: { 'x-test-control': CONTROL } })).json()).calls;
+  const code = calls.filter((c) => c.method === 'sendCode' && c.args.phone === phone).at(-1).args.code;
+  const r = await page.request.post('/api/auth/verify', { data: { phone, code }, headers: H });
+  expect(r.status()).toBe(200);
+  return (await r.json()).user;
+}
+async function db(fn) {
+  const c = new pg.Client({ connectionString: DB_URL });
+  await c.connect();
+  try { return await fn(c); } finally { await c.end(); }
+}
+async function shot(page, name) {
+  const width = await page.evaluate(() => document.documentElement.scrollWidth);
+  expect(width, `${name}: страница шире экрана`).toBeLessThanOrEqual(412);
+  await page.screenshot({ path: `test-results/screens/${name}.png`, fullPage: true });
+}
+
+test('2.401: перечень отчётов для СРО — номер, дата и стоимость из файла; без файла — «допишите»; таблица Excel', async ({ browser, baseURL }) => {
+  const ctx = await browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true, locale: 'ru-RU',
+    storageState: { cookies: [], origins: [{ origin: new URL(baseURL).origin, localStorage: [{ name: 'delo.folds', value: 'open' }] }] } });
+  const page = await ctx.newPage();
+  const problems = [];
+  page.on('pageerror', (e) => problems.push(`ошибка JS: ${e.message}`));
+  const expert = await signIn(page, '+79990002403');
+  const ids = await db(async (c) => {
+    await c.query("update users set full_name = 'Оценщикова Анна' where id = $1", [expert.id]);
+    await c.query("insert into specialists (user_id, created_at) values ($1, now() - interval '2 years')", [expert.id]);
+    const mk = async (title, service, fields) => {
+      const id = (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, deadline, fields)
+        values ($1, $2, 'expertise', $3, 'done', $1, current_date, $4) returning id`, [expert.id, title, service, fields])).rows[0].id;
+      await c.query("insert into order_status_history (order_id, from_status, to_status, side) values ($1, 'review', 'done', 'dispatcher')", [id]);
+      return id;
+    };
+    const flat = await mk('Квартира на Тихой', 'realty', { purpose: 'bank', address: 'г. Москва, Тихая ул., д. 3, кв. 12' });
+    await c.query("update order_status_history set at = at - interval '1 minute' where order_id = $1", [flat]);
+    const car = await mk('Лада в суд', 'vehicle', { purpose: 'court', make_model: 'Лада Веста', year: 2020 });
+    return { flat, car };
+  });
+  const text = 'ОТЧЁТ ОБ ОЦЕНКЕ № 77/2026 от 12.10.2026\nИтоговая величина рыночной стоимости объекта оценки составляет 9 870 000 руб.\nОтчёт № 77/2026';
+  const up = await page.request.post(`/api/orders/${ids.flat}/documents`, { data: Buffer.from(text), headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('отчёт.txt') } });
+  expect(up.status()).toBe(201);
+  await db((c) => c.query("update documents set kind = 'result' where order_id = $1", [ids.flat]));
+
+  await page.goto('/kabinet#specialist');
+  const box = page.locator('#registry-box');
+  await expect(box.getByRole('heading', { name: 'Перечень отчётов для СРО' })).toBeVisible();
+  await expect(page.locator('#registry-year option')).toHaveCount(4);
+  await expect(page.locator('#registry-total')).toContainText('2 отчёта · дописать — в 1');
+  const rows = page.locator('#registry-rows > li');
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0)).toContainText('1. Отчёт № 77/2026 от 12 октября 2026');
+  await expect(rows.nth(0)).toContainText('г. Москва, Тихая ул., д. 3, кв. 12');
+  await expect(rows.nth(0)).toContainText('Оценка недвижимости · Ипотека, залог, банк · заказчик — Оценщикова Анна');
+  await expect(rows.nth(0)).toContainText('Итоговая стоимость: 9 870 000');
+  await expect(rows.nth(1)).toContainText('2. Отчёт без номера');
+  await expect(rows.nth(1).locator('[data-registry-missing]')).toContainText('номер отчёта, дата составления, итоговая стоимость — допишите');
+  await box.scrollIntoViewIfNeeded();
+  await shot(page, 'r01-2401-perechen-otchetov-sro');
+  // Таблица для Excel — с сервера по той же учётке.
+  const csv = await page.request.get(`/api/specialist/me/registry?format=csv&year=${await page.locator('#registry-year').inputValue()}`);
+  expect(csv.status()).toBe(200);
+  expect(await csv.text()).toContain('1;77/2026;12.10.2026;г. Москва, Тихая ул., д. 3, кв. 12;Оценка недвижимости;Ипотека, залог, банк');
+  // Прошлый год — пусто; строка ведёт в дело.
+  await page.locator('#registry-year').selectOption({ index: 1 });
+  await expect(page.locator('#registry-empty')).toBeVisible();
+  await expect(rows).toHaveCount(0);
+  await page.locator('#registry-year').selectOption({ index: 0 });
+  await expect(rows).toHaveCount(2);
+  await rows.nth(1).getByRole('link').click();
+  await expect(page).toHaveURL(new RegExp(`#order=${ids.car}`));
+  expect(problems).toEqual([]);
+  await ctx.close();
+});

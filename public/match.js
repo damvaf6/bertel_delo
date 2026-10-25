@@ -5,6 +5,7 @@ import { awaySpan, dayRu } from '/order.js';
 import { showDossier } from '/dossier.js';
 import { expertLink } from '/expertcard.js';
 import { loadMyReport } from '/myreport.js';
+import { loadRegistry } from '/registry.js';
 import { loadSchedule } from '/schedule.js';
 import { loadAwayBack } from '/awayback.js';
 import { loadNotaryDesk } from '/notaries.js';
@@ -97,7 +98,7 @@ export async function showSpecialist({ to = null } = {}) {
   $('specialist-permits').replaceChildren(...sp.permits.map((p) => el('li', { text: permitText(p) })));
   $('specialist-permits-empty').classList.toggle('hidden', sp.permits.length > 0);
   show('specialist-view', 'specialist');
-  await Promise.all([showCrm(), showVisits(sp), showDossier(), loadSchedule(), loadAwayBack(), loadNotaryDesk(), loadMyReport(), loadMyCard()]);
+  await Promise.all([showCrm(), showVisits(sp), showDossier(), loadSchedule(), loadAwayBack(), loadNotaryDesk(), loadMyReport(), loadRegistry(), loadMyCard()]);
   if (to === 'dossier') $('dossier-box').scrollIntoView({ block: 'start' }); // из дела: документ кончается раньше срока (2.365)
   if (to === 'schedule') $('schedule-box').scrollIntoView({ block: 'start' });
   // «Пока Вас не было» (2.239) — из уведомления в первый день после дней «не принимаю дела».
