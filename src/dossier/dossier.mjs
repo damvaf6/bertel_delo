@@ -3,6 +3,7 @@
 // правила dossier_* в src/ai/report-checks.mjs.
 import { addDays, todayMsk } from '../orders/workflow.mjs';
 import { dispatchers, notify, orgHeads } from '../notify/notify.mjs';
+import { newYearRun } from '../orders/holidays.mjs';
 
 // has — какие поля у вида есть (остальные не принимаются); need — обязательные; term — у документа есть срок.
 export const KINDS = {
@@ -77,6 +78,22 @@ export async function dossierTermView(sql, registry, order, userId, today = toda
 export function dossierAlerts(items) {
   return items.filter((i) => i.state === 'expired' || i.state === 'soon')
     .map((i) => ({ kind: i.kind, kind_name: i.kind_name, valid_until: i.valid_until, state: i.state }));
+}
+
+// Аттестат или полис кончается до 15 января (2.405): в каникулы ни страховщик, ни центр аттестации не работают, а после них
+// без действующих документов эксперта не подбирают на оценку (BLOCKING_KINDS). В декабре, до последнего рабочего дня перед
+// каникулами, — { by: последний рабочий день, from, to: каникулы, items } (истёкшие — тоже, `expired`); иначе null.
+export const NEW_YEAR_TERM_DAY = '01-15';
+export function newYearTerms(items, today = todayMsk()) {
+  if (today.slice(5, 7) !== '12') return null;
+  const ny = newYearRun(Number(today.slice(0, 4)) + 1);
+  if (today > ny.work_before) return null;
+  const limit = `${Number(today.slice(0, 4)) + 1}-${NEW_YEAR_TERM_DAY}`;
+  const hit = items.filter((i) => BLOCKING_KINDS.includes(i.kind) && i.valid_until && i.valid_until <= limit)
+    .map((i) => ({ id: i.id, kind: i.kind, kind_name: i.kind_name, title: i.title, number: i.number, valid_until: i.valid_until,
+      expired: i.valid_until < today }))
+    .sort((a, b) => a.valid_until.localeCompare(b.valid_until));
+  return hit.length ? { by: ny.work_before, from: ny.from, to: ny.to, items: hit } : null;
 }
 
 // Одна строка о документе — для черновика заключения.

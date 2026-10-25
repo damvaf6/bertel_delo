@@ -4,8 +4,9 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, login, makeOrg, addMember, makeSpecialist } from '../helpers.mjs';
-import { calendarWarning, holidayName, holidayRunFrom, isWorkday, isWorkingWeekend, newYearAhead, offDayName, workdayFrom, workdayBefore, yearCalendar } from '../../src/orders/holidays.mjs';
+import { calendarWarning, holidayName, holidayRunFrom, isWorkday, isWorkingWeekend, newYearAhead, newYearRun, offDayName, workdayFrom, workdayBefore, yearCalendar } from '../../src/orders/holidays.mjs';
 import { newYearCases } from '../../src/ops/today-ops.mjs';
+import { newYearTerms } from '../../src/dossier/dossier.mjs';
 import { expertSchedule, orgSchedule } from '../../src/orders/schedule.mjs';
 import { extendSuggest } from '../../src/ops/handover-ops.mjs';
 import { scheduleIcs } from '../../src/orders/ics.mjs';
@@ -141,6 +142,39 @@ test('2.393: за две недели до новогодних каникул �
   const t = await exp.req('GET', '/api/today');
   assert.equal(t.status, 200);
   assert.equal(t.body.expert.new_year, newYearCases([], t.body.today));
+});
+
+// 2.405: в декабре аттестат или полис из досье кончается до 15 января — «продлите до каникул» в «Сегодня» эксперта.
+test('2.405: досье — аттестат или полис кончается до 15 января, в декабре «продлите до каникул»', async () => {
+  assert.deepEqual(newYearRun(2027), { from: '2026-12-31', to: '2027-01-10', work_before: '2026-12-30' });
+  assert.equal(newYearRun(2028).from, '2027-12-31');
+  const i = (id, kind, valid_until) => ({ id, kind, kind_name: kind, title: 't', number: id, valid_until });
+  const items = [i('1', 'policy', '2027-01-15'), i('2', 'certificate', '2027-01-09'), i('3', 'policy_org', '2027-01-16'),
+    i('4', 'sro', null), i('5', 'education', '2027-01-05'), i('6', 'policy', '2026-12-05'), i('7', 'certificate', null)];
+  const got = newYearTerms(items, '2026-12-10');
+  assert.deepEqual({ by: got.by, from: got.from, to: got.to }, { by: '2026-12-30', from: '2026-12-31', to: '2027-01-10' });
+  assert.deepEqual(got.items.map((x) => [x.id, x.expired]), [['6', true], ['2', false], ['1', false]],
+    'только аттестат и полисы, по 15 января включительно, истёкший — тоже, раньше срок — выше');
+  assert.equal(newYearTerms(items, '2026-12-01').items.length, 3, 'с 1 декабря');
+  assert.equal(newYearTerms(items, '2026-11-30'), null, 'в ноябре — рано');
+  assert.equal(newYearTerms(items, '2026-12-30').items.length, 3, 'последний рабочий день перед каникулами');
+  assert.equal(newYearTerms(items, '2026-12-31'), null, 'каникулы начались — продлить уже не успеть');
+  assert.equal(newYearTerms([i('3', 'policy_org', '2027-01-16')], '2026-12-10'), null, 'после 15 января — не пишем');
+  // Через «Сегодня»: поле у эксперта есть; не декабрь — пусто, даже при полисе до 15 января.
+  const exp = await login(S, '+79990004051');
+  await makeSpecialist(S.sql, exp.user.id);
+  const y = Number(new Date(Date.now() + 3 * 3600_000).toISOString().slice(0, 4)) + 1;
+  await S.sql`insert into dossier_items (user_id, kind, title, number, valid_until, amount_kop)
+              values (${exp.user.id}, 'policy', 'Страховщик', 'П-2405', ${`${y}-01-12`}::date, 30000000)`;
+  const t = await exp.req('GET', '/api/today');
+  assert.equal(t.status, 200);
+  assert.ok('dossier_new_year' in t.body.expert);
+  const want = newYearTerms([{ id: 'x', kind: 'policy', kind_name: 'Полис', valid_until: `${y}-01-12` }], t.body.today);
+  assert.equal(!!t.body.expert.dossier_new_year, !!want);
+  // Чужое досье не попадает: у другого эксперта поля нет.
+  const other = await login(S, '+79990004052');
+  await makeSpecialist(S.sql, other.user.id);
+  assert.equal((await other.req('GET', '/api/today')).body.expert.dossier_new_year, null);
 });
 
 // 2.395: день возвращения после «не принимаю дела» — праздник: подсказка продлить до последнего нерабочего дня.

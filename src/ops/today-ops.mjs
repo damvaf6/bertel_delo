@@ -22,6 +22,7 @@
 // Срок по заданию на оценку раньше срока дела и через 1–2 дня или прошёл, а своего файла результата нет (2.304).
 // Оценка для банка, задания на оценку нет и не запрошено, а до срока дела 3 дня или меньше (2.306) — запросить одной кнопкой.
 // За две недели до новогодних каникул (2.393) — дела со сроком в каникулы одной группой «сдайте до 30 декабря».
+// В декабре — аттестат или полис из своего досье, который кончается до 15 января (2.405): «продлите до каникул».
 // Руководителю — те же сведения, что в «Делах экспертов» (2.16): без заказчика, полей заявки, документов и переписки.
 // Только свои дела и свои организации.
 import { orderRef } from '../notify/registry.mjs';
@@ -30,7 +31,7 @@ import { RESULT_DUE_DAYS, STATUS_NAME, addDays, hotDay, isOverdue, resultDue, to
 import { taskDues } from '../orders/schedule.mjs';
 import { orderSignatures, orgReturns, returnEgrn, signLong, signWait } from './sign-ops.mjs';
 import { executorSignOrg } from '../access/policy.mjs';
-import { dossierAlerts, loadDossier } from '../dossier/dossier.mjs';
+import { dossierAlerts, loadDossier, newYearTerms } from '../dossier/dossier.mjs';
 import { expiringLinks, incompleteInspections, reshotAll, silentLinks } from './inspect-ops.mjs';
 import { answeredExtends, openExtends, orgExtends, taskMoved, taskMovedOrg } from './deadline-ops.mjs';
 import { openHandovers } from './handover-ops.mjs';
@@ -282,6 +283,7 @@ async function expertPart(sql, actor, registry, today, storage) {
   const hotIds = new Set(hotRows.map((o) => o.id));
   const ny = newYearCases(rows.filter((o) => !hotIds.has(o.id)), today);
   return {
+    dossier_new_year: newYearTerms(await loadDossier(sql, actor.id), today),
     new_year: ny && { from: ny.from, to: ny.to, work_before: ny.work_before, items: ny.rows.map((o) => item(o)) },
     ai_recheck: recheck,
     task_made: taskMade,
