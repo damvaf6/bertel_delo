@@ -11,6 +11,21 @@ const plural = (n, one, few, many) => {
   return t > 10 && t < 20 ? many : u === 1 ? one : u >= 2 && u <= 4 ? few : many;
 };
 
+// 2.404: чего не нашлось — почему (файла нет, скан или нет в тексте), где это обычно пишут и переход к файлу в деле.
+const GAP_SAY = {
+  none: (m) => `Файла отчёта в деле нет: ${m} — допишите в таблице`,
+  unread: (m) => `Файл отчёта не читается (скан или картинка): ${m} — допишите в таблице`,
+  text: (m) => `Не нашлось в файле отчёта: ${m} — допишите в таблице`,
+};
+function gapsOf(r) {
+  return [
+    el('div', { class: 'overdue', 'data-registry-missing': r.id, text: (GAP_SAY[r.files] ?? GAP_SAY.text)(r.missing.join(', ')) }),
+    ...(r.where.length ? [el('div', { class: 'muted', 'data-registry-where': r.id }, ...r.where.map((w) => el('div', { text: `Обычно ${w}` })))] : []),
+    el('button', { type: 'button', class: 'secondary', 'data-registry-open': r.id,
+      onclick: () => { location.hash = `order=${r.id}&to=result`; } }, r.files === 'none' ? 'Открыть дело' : 'Открыть файл отчёта в деле'),
+  ];
+}
+
 let seq = 0;
 $('registry-year').addEventListener('change', () => loadRegistry(true));
 $('registry-quarter').addEventListener('change', () => loadRegistry(true));
@@ -37,6 +52,6 @@ export async function loadRegistry(chosen = false) {
     el('div', { text: r.object }),
     el('div', { class: 'muted', text: [r.service_name, r.purpose, r.customer ? `заказчик — ${r.customer}` : null].filter(Boolean).join(' · ') }),
     el('div', { class: 'muted', text: `${r.value_rub != null ? `${r.value_name}: ${rub(r.value_rub * 100)}` : 'стоимость не найдена'} · сдано ${dayRu(r.done_on)}` }),
-    ...(r.missing.length ? [el('div', { class: 'overdue', 'data-registry-missing': r.id, text: `Не нашлось в файле отчёта: ${r.missing.join(', ')} — допишите в таблице` })] : []))));
+    ...(r.missing.length ? gapsOf(r) : []))));
   $('registry-empty').classList.toggle('hidden', registry.rows.length > 0);
 }
