@@ -730,12 +730,25 @@ export async function orgPart(sql, org, registry, today, { actorId = null, stora
     select s.user_id, u.full_name from specialists s join org_members m on m.org_id = s.org_id and m.user_id = s.user_id
     join users u on u.id = s.user_id and u.is_active where s.org_id = ${org.id} order by u.full_name nulls last, s.user_id`;
   const dossier = [];
+  // Аттестат или полис эксперта кончается до 15 января (2.406, как у эксперта 2.405): в декабре, до последнего рабочего дня
+  // перед каникулами, — своей группой «продлите до каникул» и числом экспертов в утренней сводке; в «Документы экспертов:
+  // срок» такие не повторяются.
+  let dossierNy = null;
   for (const x of experts) {
-    for (const a of dossierAlerts(await loadDossier(sql, x.user_id))) {
+    const items = await loadDossier(sql, x.user_id);
+    const ny = newYearTerms(items, today);
+    const nyIds = new Set((ny?.items ?? []).map((i) => i.id));
+    if (ny) {
+      dossierNy ??= { by: ny.by, from: ny.from, to: ny.to, experts: 0, items: [] };
+      dossierNy.experts += 1;
+      dossierNy.items.push(...ny.items.map((i) => ({ expert: x.full_name || 'Без имени', kind_name: i.kind_name, valid_until: i.valid_until, expired: i.expired })));
+    }
+    for (const a of dossierAlerts(items.filter((i) => !nyIds.has(i.id)))) {
       dossier.push({ expert: x.full_name || 'Без имени', kind_name: a.kind_name, valid_until: a.valid_until, state: a.state });
     }
   }
   dossier.sort((a, b) => a.valid_until.localeCompare(b.valid_until));
+  dossierNy?.items.sort((a, b) => a.valid_until.localeCompare(b.valid_until));
   // «Ждут подписи организации» (2.161): дольше всех ждущие — первыми, без времени подписи — в конце.
   toSign.sort((a, b) => (a.since ? Date.parse(a.since) : Infinity) - (b.since ? Date.parse(b.since) : Infinity));
   // Перенос согласован позже срока по заданию на оценку, а письма о переносе нет 2 дня и дольше после согласия диспетчера
@@ -757,6 +770,7 @@ export async function orgPart(sql, org, registry, today, { actorId = null, stora
   const ny = newYearCases(cases, today);
   return {
     dossier,
+    dossier_new_year: dossierNy,
     new_year: ny ? { count: ny.rows.length, from: ny.from, to: ny.to, work_before: ny.work_before } : null,
     idle: [...moves.values()].filter((m) => m.idle).length,
     // Сколько возвращённых эксперту дел не исправлено 2 дня и больше (2.153) — только число, для утренней сводки.

@@ -31,6 +31,8 @@ export async function unreadCount(sql, userId) {
 // block — к блоку организации без дела (2.130: утренняя сводка руководителю — к срокам, подписи или просьбам передать).
 function sectionOf(actor, r, block = null) {
   const sec = EVENTS[r.event]?.section ?? null;
+  // Сводка руководителя только о досье экспертов (2.406) — к «Сегодня» на главной: документы экспертов видны только там.
+  if (block === 'today' && r.event === 'org_morning_today') return 'today';
   if (sec === 'orgs' && r.org_id && actor.orgs.some((m) => m.org_id === r.org_id)) {
     if (block) return `org=${r.org_id}&to=${block}`;
     // По делу организации (2.67) — сразу к делу: номер дела (как в «Делах экспертов») и что сделать.
