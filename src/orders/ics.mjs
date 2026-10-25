@@ -6,8 +6,11 @@
 // раньше срока дела (2.317) — своим событием на весь день с напоминанием накануне. Срок из письма о переносе (2.359) — своим
 // названием «Срок по письму о переносе», в описании прежний срок, «сдайте к нему или попросите письмо с новым сроком» и
 // попросили ли его (2.353); UID тот же, что у срока по заданию, — календарь передвинет событие на день из письма, а не
-// оставит старое рядом. У срока дела в описании — к какому дню сдать по заданию или по письму о переносе.
+// оставит старое рядом. У срока дела в описании — к какому дню сдать по заданию или по письму о переносе. Срок в выходной или
+// праздник (2.398) — в названии «нерабочий день, сдайте до …» (последний рабочий день перед ним), в описании — чем день
+// нерабочий, а напоминание — накануне этого рабочего дня в 9:00, а не в выходной.
 import { addDays } from './workflow.mjs';
+import { offDayName, workdayBefore } from './holidays.mjs';
 import { orderRef } from '../notify/registry.mjs';
 
 const DOMAIN = 'bertel-delo';
@@ -66,6 +69,19 @@ function taskDueEvent(i) {
       + `сдайте к нему или попросите у заказчика письмо с новым сроком.${ask} ` };
 }
 
+// Срок в нерабочий день: к названию — «сдайте до …», в начало описания — почему, напоминание — накануне рабочего дня перед ним.
+function offDay(date, alarm) {
+  const name = offDayName(date);
+  if (!name) return { suffix: '', note: '', alarm };
+  const before = workdayBefore(date);
+  const days = Math.round((Date.parse(date) - Date.parse(before)) / 86_400_000);
+  return {
+    suffix: ` — нерабочий день, сдайте до ${ru(before)}`,
+    note: `${ru(date)} — ${name}, нерабочий день: заказчик и банк в этот день не работают, сдайте лучше до него — к ${ru(before)}. `,
+    alarm: alarm && `-P${days}DT15H`,
+  };
+}
+
 const DEADLINE_NOTE = {
   in_work: 'Срок сдачи',
   review: 'Срок сдачи (сдано, ждёт проверки)',
@@ -79,21 +95,23 @@ export function scheduleIcs(schedule, now = new Date()) {
   for (const d of schedule.days) {
     for (const i of d.items) {
       if (i.kind === 'deadline') {
+        // Накануне в 9:00 — от полуночи дня срока назад на 15 часов; дело уже на проверке — без напоминания.
+        const off = offDay(d.date, i.status === 'review' ? null : '-PT15H');
         event(lines, {
           uid: `deadline-${i.order_id}`, now,
           start: `DTSTART;VALUE=DATE:${dateOnly(d.date)}`, end: `DTEND;VALUE=DATE:${dateOnly(addDays(d.date, 1))}`,
-          summary: `${DEADLINE_NOTE[i.status] ?? 'Срок сдачи'}: дело ${orderRef(i.order_id)}, ${i.service}`,
-          description: `${deadlineNote(i)}${about}`,
-          // Накануне в 9:00 — от полуночи дня срока назад на 15 часов; дело уже на проверке — без напоминания.
-          alarm: i.status === 'review' ? null : '-PT15H',
+          summary: `${DEADLINE_NOTE[i.status] ?? 'Срок сдачи'}: дело ${orderRef(i.order_id)}, ${i.service}${off.suffix}`,
+          description: `${off.note}${deadlineNote(i)}${about}`,
+          alarm: off.alarm,
         });
       } else if (i.kind === 'task_due') {
         const e = taskDueEvent(i);
+        const off = offDay(d.date, '-PT15H');
         event(lines, {
           uid: `taskdue-${i.order_id}`, now,
           start: `DTSTART;VALUE=DATE:${dateOnly(d.date)}`, end: `DTEND;VALUE=DATE:${dateOnly(addDays(d.date, 1))}`,
-          summary: e.summary, description: `${e.description}${about}`,
-          alarm: '-PT15H',
+          summary: `${e.summary}${off.suffix}`, description: `${off.note}${e.description}${about}`,
+          alarm: off.alarm,
         });
       } else if (i.kind === 'visit' || i.kind === 'my_visit') {
         const start = new Date(i.at);
