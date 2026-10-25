@@ -1503,6 +1503,20 @@
           <p class="muted" id="tp-history-empty">Цены ещё не меняли — действуют стартовые.</p>
         </details>
       </div>
+      <div class="card" id="holidays-box">
+        <h2>Праздники и переносы</h2>
+        <p class="muted">По этому календарю «Дело» считает сроки, «срок близко», напоминания и «Мои сроки». Меняется правкой
+          календаря, когда выходит постановление Правительства о переносе выходных (обычно осенью на следующий год).</p>
+        <p class="msg warn hidden" id="hd-warn" role="alert"></p>
+        <div class="chips" id="hd-years"></div>
+        <p class="muted" id="hd-source"></p>
+        <h3>Дни отдыха с праздниками</h3>
+        <ul class="list" id="hd-runs"></ul>
+        <h3>Переносы</h3>
+        <ul class="list" id="hd-moves"></ul>
+        <p class="muted hidden" id="hd-moves-empty">Переносов в этом году нет.</p>
+        <p class="msg" id="hd-msg" role="status" aria-live="polite"></p>
+      </div>
       <div class="card" id="paycheck-box">
         <h2>Оплата ЮKassa: проверка перед подключением</h2>
         <p class="muted">Что указать в кабинете ЮKassa и что проверить до отправки магазина на модерацию. Ключ магазина здесь

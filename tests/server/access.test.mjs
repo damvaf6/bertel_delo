@@ -426,8 +426,9 @@ test('invites.revoke: только руководитель организаци
 });
 
 test('admin.*: только администратор; остальным — «не найдено»', async () => {
-  cover('admin.users.find'); cover('admin.staff'); cover('admin.users.update');
+  cover('admin.users.find'); cover('admin.staff'); cover('admin.users.update'); cover('admin.holidays');
   for (const c of [U.owner, U.headA, U.dispatcher]) {
+    assert.equal((await c.req('GET', '/api/admin/holidays')).status, 404);
     assert.equal((await c.req('GET', `/api/admin/users?phone=${encodeURIComponent('+79990000001')}`)).status, 404);
     assert.equal((await c.req('GET', '/api/admin/staff')).status, 404);
     assert.equal((await c.req('PATCH', `/api/admin/users/${c.user.id}`, { platform_role: 'admin' })).status, 404);
@@ -439,6 +440,7 @@ test('admin.*: только администратор; остальным — �
   assert.equal(found.body.user.id, U.memberA.user.id);
   const staff = (await U.admin.req('GET', '/api/admin/staff')).body.users.map((u) => u.id).sort();
   assert.deepEqual(staff, [U.dispatcher.user.id, U.admin.user.id].sort());
+  assert.equal((await U.admin.req('GET', '/api/admin/holidays')).body.years.length, 2);
 });
 
 test('нотариусы-партнёры (2а.4): справочник — только администратор; окна и пачка — только свои (подробно — notaries.test.mjs)', async () => {
