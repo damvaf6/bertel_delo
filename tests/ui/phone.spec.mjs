@@ -17483,6 +17483,44 @@ test('2.405: «Сегодня» — досье, продлите до каник
   await ep.context().close();
 });
 
+// 2.406: руководитель — в декабре аттестат или полис эксперта кончается до 15 января: группа «Документы экспертов: продлить
+// до каникул» в «Сегодня» (туда ведёт утренняя сводка), без номеров документов. Счёт и сводку проверяет
+// `tests/server/org-morning.test.mjs`; декабрьский ответ подставлен, чтобы не зависеть от даты прогона.
+test('2.406: «Сегодня» руководителя — документы экспертов, продлить до каникул', async ({ browser, baseURL }) => {
+  const hp = await (await phoneContext(browser, baseURL)).newPage();
+  const head = await signIn(hp, '+79990004066');
+  const orgId = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Досье ${Date.now() % 100000}»') returning id`);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head')", [org.id, head.id]);
+    return org.id;
+  });
+  await hp.route('**/api/today', async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    body.today = '2026-12-14';
+    const g = body.orgs.find((x) => x.id === orgId);
+    g.dossier_new_year = { by: '2026-12-30', from: '2026-12-31', to: '2027-01-10', experts: 2, items: [
+      { expert: 'Декабрьский Иван', kind_name: 'Полис страхования оценщика', valid_until: '2026-12-05', expired: true },
+      { expert: 'Январская Ольга', kind_name: 'Квалификационный аттестат', valid_until: '2027-01-12', expired: false }] };
+    await route.fulfill({ response: res, json: body });
+  });
+  await hp.goto('/kabinet');
+  const hb = hp.locator('#today-box');
+  await expect(hb.locator(`li[data-today="org-dossier-ny-${orgId}"]`)).toHaveText('Документы экспертов: продлить до каникул — до 30 декабря · 2');
+  const rows = hb.locator(`li[data-today-item="org-dossier-ny-${orgId}"]`);
+  await expect(rows.nth(0).locator('.title')).toHaveText('Декабрьский Иван · Полис страхования оценщика');
+  await expect(rows.nth(0).locator('[data-role="org-dossier-ny-what"]')).toHaveText('срок истёк 5 декабря — по оценке эксперт снят с подбора');
+  await expect(rows.nth(0).locator('[data-role="org-dossier-ny-what"]')).toHaveClass('overdue');
+  await expect(rows.nth(1).locator('[data-role="org-dossier-ny-what"]')).toHaveText('действует до 12 января — кончается в каникулы или сразу после них (31 декабря — 10 января)');
+  await expect(rows.nth(1)).toContainText('пусть эксперт продлит до 30 декабря (осталось 16 дн.)');
+  expect(await hp.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await rows.nth(1).scrollIntoViewIfNeeded();
+  await shot(hp, 'i09-segodnya-rukovoditel-dosie-do-kanikul');
+  await rows.nth(1).locator('button.open').click();
+  await expect(hp).toHaveURL(new RegExp(`#org=${orgId}$`));
+  await hp.context().close();
+});
+
 // 2.394: «Дела экспертов» — за две недели до новогодних каникул отбор «Срок в новогодние каникулы» и строка у дела «сдать до
 // 30 декабря»; из утренней сводки (`to=new_year`) — сразу к отбору. Декабрьский ответ подставлен, чтобы не зависеть от даты прогона;
 // счёт и сводку проверяет `tests/server/org-morning.test.mjs`.

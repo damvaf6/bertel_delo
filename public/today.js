@@ -127,6 +127,19 @@ function newYear(ny, today, go) {
     `${x.service} · осталось до ${dayRu(ny.work_before)}: ${daysLeft(ny.work_before, today)} дн.`], go);
 }
 
+// Аттестат или полис эксперта организации кончается до 15 января (2.406): только эксперт, вид документа и срок, как
+// «Документы экспертов: срок» (2.63); продлевает и вносит новый срок в досье сам эксперт.
+function orgDossierNewYear(g, today, go) {
+  const d = g.dossier_new_year;
+  if (!d?.items?.length) return [];
+  return group(`org-dossier-ny-${g.id}`, `Документы экспертов: продлить до каникул — до ${dayRu(d.by)}`, d.items, (x) => [
+    `${x.expert} · ${x.kind_name}`,
+    { class: x.expired ? 'overdue' : 'warn-line', role: 'org-dossier-ny-what', text: x.expired
+      ? `срок истёк ${dayRu(x.valid_until)} — по оценке эксперт снят с подбора`
+      : `действует до ${dayRu(x.valid_until)} — кончается в каникулы или сразу после них (${dayRu(d.from)} — ${dayRu(d.to)})` },
+    `в каникулы страховщики и центр аттестации не работают — пусть эксперт продлит до ${dayRu(d.by)} (осталось ${daysLeft(d.by, today)} дн.)`], go);
+}
+
 // Аттестат или полис из досье кончается до 15 января (2.405): в декабре — «продлите до каникул», к досье в профиле.
 function dossierNewYear(d, today) {
   if (!d?.items?.length) return [];
@@ -552,6 +565,8 @@ export async function loadToday() {
       // Когда вернули и сколько пунктов эксперт уже отметил исправленными (2.160 — как в «Делах экспертов»);
       // «Напомнить эксперту» прямо здесь (2.162).
       ...orgReturned(g, caseLine, toOrg('case')),
+      // Аттестат или полис эксперта кончается до 15 января (2.406, как у эксперта 2.405): в декабре — «продлите до каникул».
+      ...orgDossierNewYear(g, t.today, toOrg()),
       // Досье экспертов (2.63): только вид документа и срок; копии руководитель не видит.
       ...group(`org-dossier-${g.id}`, 'Документы экспертов: срок', g.dossier ?? [], (x) => [`${x.expert} · ${x.kind_name}`,
         x.state === 'expired' ? `срок истёк ${dayRu(x.valid_until)} — по оценке эксперт снят с подбора` : `действует до ${dayRu(x.valid_until)} · осталось ${daysLeft(x.valid_until, t.today)} дн.`], toOrg()),

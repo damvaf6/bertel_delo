@@ -8,6 +8,7 @@ import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, 
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import { workingAgo } from '../../src/orders/silence.mjs';
 import { digestText, morningTo, orgDigestText, orgDigestTo, sendOrgMorning } from '../../src/notify/morning.mjs';
+import { orgPart } from '../../src/ops/today-ops.mjs';
 
 let S, owner, dispatcher, spec, head, head2, idleHead, org, idleOrg;
 const FIELDS = { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, Руководящая ул., 21', area: '40' };
@@ -1287,4 +1288,59 @@ test('2.394: за две недели до новогодних каникул �
   const cases = await lead.req('GET', `/api/orgs/${o2.id}/cases`);
   assert.equal(cases.status, 200);
   assert.ok(cases.body.cases.every((c) => c.new_year === null));
+});
+
+// 2.406: в декабре аттестат или полис эксперта кончается до 15 января — строкой в утренней сводке руководителя, к «Сегодня».
+test('2.406: у скольких экспертов аттестат или полис кончается до 15 января — «продлить до 30 декабря»', async () => {
+  assert.equal(orgDigestText({ dossier_ny: 2, day: '2026-12-10' }),
+    'На сегодня по организации: у 2 экспертов аттестат или полис кончается до 15 января — продлить до 30 декабря');
+  assert.equal(orgDigestText({ dossier_ny: 1, day: '2026-12-01' }),
+    'На сегодня по организации: у 1 эксперта аттестат или полис кончается до 15 января — продлить до 30 декабря');
+  assert.equal(orgDigestText({ dossier_ny: 1, day: '2026-11-30' }), null, 'в ноябре — рано');
+  assert.equal(orgDigestText({ dossier_ny: 1, day: '2026-12-31' }), null, 'каникулы начались');
+  assert.equal(orgDigestTo({ dossier_ny: 1 }), 'today');
+  assert.equal(orgDigestTo({ dossier_ny: 1, idle: 1 }), 'idle');
+  const lead = await login(S, '+79990004061');
+  const e1 = await login(S, '+79990004062');
+  const e2 = await login(S, '+79990004063');
+  const e3 = await login(S, '+79990004064');
+  const o2 = await makeOrg(S.sql, 'ООО «Досье до каникул»');
+  await addMember(S.sql, o2.id, lead.user.id, 'head');
+  for (const [e, name] of [[e1, 'Эксперт Первый'], [e2, 'Эксперт Второй'], [e3, 'Эксперт Третий']]) {
+    await makeSpecialist(S.sql, e.user.id);
+    await addMember(S.sql, o2.id, e.user.id, 'member');
+    await e.req('PATCH', '/api/me', { full_name: name });
+    assert.equal((await e.req('PATCH', '/api/specialist/me', { org_id: o2.id })).status, 200);
+  }
+  const put = (u, kind, until) => S.sql`insert into dossier_items (user_id, kind, title, number, valid_until)
+                                         values (${u.user.id}, ${kind}, 'Документ', 'Д-2406', ${until}::date)`;
+  await put(e1, 'policy', '2027-01-12');
+  await put(e1, 'certificate', '2027-06-01');
+  await put(e2, 'certificate', '2026-12-05');
+  await put(e3, 'policy', '2027-01-16');
+  // Чужая организация: её эксперт не в счёте.
+  const stranger = await login(S, '+79990004065');
+  await makeSpecialist(S.sql, stranger.user.id);
+  await put(stranger, 'policy', '2027-01-02');
+  const part = await orgPart(S.sql, { id: o2.id, name: 'ООО «Досье до каникул»' }, S.app.locals.registry, '2026-12-10');
+  assert.equal(part.dossier_new_year.experts, 2);
+  assert.equal(part.dossier_new_year.by, '2026-12-30');
+  assert.deepEqual(part.dossier_new_year.items.map((x) => [x.expert, x.valid_until, x.expired]),
+    [['Эксперт Второй', '2026-12-05', true], ['Эксперт Первый', '2027-01-12', false]]);
+  assert.ok(part.dossier_new_year.items.every((x) => !('number' in x) && !('title' in x)), 'номер и название — не руководителю');
+  assert.ok(!part.dossier.some((x) => x.expert === 'Эксперт Второй' && x.valid_until === '2026-12-05'), 'в «Документы экспертов: срок» не повторяется');
+  assert.equal((await orgPart(S.sql, { id: o2.id, name: 'x' }, S.app.locals.registry, '2026-11-20')).dossier_new_year, null, 'в ноябре — нет');
+  // Четверг 10 декабря 2026, 9:00.
+  await sendOrgMorning(S.sql, S.app.locals.registry, { now: at('2026-12-10', '09:00') });
+  const [r] = await S.sql`select dossier_ny, notification_id from org_morning_digests where user_id = ${lead.user.id} and day = '2026-12-10'::date`;
+  assert.equal(r.dossier_ny, 2);
+  assert.ok(r.notification_id);
+  const n = (await lead.req('GET', '/api/notifications')).body.notifications.find((x) => x.id === String(r.notification_id));
+  assert.equal(n.title, 'На сегодня по организации: у 2 экспертов аттестат или полис кончается до 15 января — продлить до 30 декабря');
+  assert.equal(n.section, 'today');
+  // «Сегодня» руководителя: поле есть (сейчас не декабрь — пусто).
+  const t = await lead.req('GET', '/api/today');
+  assert.equal(t.status, 200);
+  const g = t.body.orgs.find((x) => x.id === o2.id);
+  assert.ok(g && 'dossier_new_year' in g);
 });
