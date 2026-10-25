@@ -8,7 +8,7 @@ import {
   DISCLAIMER, aiReviewView, askAi, assistantMessages, monthUsage, cleanProblemAnswer, cleanReviewAnswer, orderBrief, problemMessages, reviewMessages,
 } from '../ai/ai.mjs';
 import { READ_MAX_BYTES, extractPages, readableKind } from '../ai/extract.mjs';
-import { runAutoChecks } from '../ai/report-checks.mjs';
+import { reportFacts, runAutoChecks } from '../ai/report-checks.mjs';
 import { loadDossier } from '../dossier/dossier.mjs';
 import { todayMsk } from '../orders/workflow.mjs';
 import { insertOrder, listVisibleOrders } from './order-ops.mjs';
@@ -95,6 +95,25 @@ export async function resultDocs(sql, storage, order) {
     const { text, truncated } = pagesForModel(got.pages, Math.max(0, Math.min(READ_MAX_CHARS, left)));
     left -= text.length;
     out.push({ id: d.id, name: d.filename, kind: got.kind, pages: got.pages, text, truncated });
+  }
+  return out;
+}
+
+// 2.403: номера отчётов из других дел того же эксперта, где файл результата загружен в этом году (по Москве), — чтобы
+// заметить повтор номера. Отменённые дела не в счёт; читаем не больше USED_MAX последних дел. Название дела — только
+// самому эксперту (withTitle), диспетчер видит лишь дату.
+export const USED_MAX = 50;
+export async function usedNumbers(sql, storage, order, today, { withTitle = false } = {}) {
+  const list = await sql`
+    select o.id, o.title, o.executor_user_id, to_char(max(d.created_at) at time zone 'Europe/Moscow', 'YYYY-MM-DD') as day
+    from orders o join documents d on d.order_id = o.id and d.kind = 'result' and d.deleted_at is null and d.uploaded_by = o.executor_user_id
+    where o.executor_user_id = ${order.executor_user_id} and o.id <> ${order.id} and o.status <> 'cancelled'
+      and d.created_at >= (${`${today.slice(0, 4)}-01-01`}::date)::timestamp at time zone 'Europe/Moscow'
+    group by o.id order by max(d.created_at) desc limit ${USED_MAX}`;
+  const out = [];
+  for (const o of list) {
+    const { number } = reportFacts((await resultDocs(sql, storage, o)).filter((d) => d.pages));
+    if (number) out.push({ number, on: o.day, ...(withTitle ? { title: o.title } : {}) });
   }
   return out;
 }
@@ -295,7 +314,10 @@ export function aiOps() {
         const egrn = names.includes('area_match') || names.includes('area_same') || names.includes('cadastral_match') || names.includes('floor_match') || names.includes('building_match') || names.includes('use_match') || names.includes('room_kind_match') || names.includes('cad_value_match') || names.includes('rights_match') || names.includes('share_egrn_match') || names.includes('encumbrance_match') || names.includes('address_match') || names.includes('egrn_doc_match') ? await egrnDocs(sql, providers.storage, order) : [];
         // 2.288: заказчик в заявке — владелец заявки; имя сверяется здесь же, модели не передаётся.
         const [owner] = names.includes('customer_match') ? await sql`select full_name from users where id = ${order.owner_user_id}` : [];
-        const auto = runAutoChecks(names, files, { fields: order.fields ?? {}, dossier, basis, service: order.service, analogs, inspectionDays, inspectionUploadDays, inspectionBy, signedOn, assignment, egrn, customer: owner?.full_name ?? null, today: dossier.today });
+        // 2.403: номер отчёта уже был в другом деле эксперта этого года.
+        const used = names.includes('report_number') && order.executor_user_id
+          ? await usedNumbers(sql, providers.storage, order, dossier.today, { withTitle: side === 'executor' }) : [];
+        const auto = runAutoChecks(names, files, { fields: order.fields ?? {}, dossier, basis, service: order.service, analogs, inspectionDays, inspectionUploadDays, inspectionBy, signedOn, assignment, egrn, customer: owner?.full_name ?? null, today: dossier.today, usedNumbers: used });
         const found = Object.fromEntries(rules.map((r) => [r.id, (r.auto ?? []).flatMap((a) => auto[a] ?? [])]));
         // Модель недоступна или лимит исчерпан, но автоматические находки есть — показываем их, а не ошибку.
         let out;

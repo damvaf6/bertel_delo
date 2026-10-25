@@ -152,3 +152,36 @@ test('2.402: перечень отчётов для СРО у руководит
   expect(problems).toEqual([]);
   await ctx.close();
 });
+
+test('2.403: ИИ-проверка — номер отчёта уже был в другом деле эксперта этого года', async ({ browser, baseURL }) => {
+  const ctx = await browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true, locale: 'ru-RU',
+    storageState: { cookies: [], origins: [{ origin: new URL(baseURL).origin, localStorage: [{ name: 'delo.folds', value: 'open' }] }] } });
+  const page = await ctx.newPage();
+  const problems = [];
+  page.on('pageerror', (e) => problems.push(`ошибка JS: ${e.message}`));
+  const expert = await signIn(page, '+79990002407');
+  const ids = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const mk = async (title, status) => (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, deadline, fields)
+      values ($1, $2, 'expertise', 'realty', $3, $1, current_date + 7, '{}') returning id`, [expert.id, title, status])).rows[0].id;
+    return { past: await mk('Квартира на Садовой', 'done'), now: await mk('Квартира на Луговой', 'in_work') };
+  });
+  const put = async (id, num) => {
+    const text = `ОТЧЁТ ОБ ОЦЕНКЕ № ${num} от 20.10.2026\nДата составления отчёта: 20.10.2026\nОтчёт № ${num}`;
+    const up = await page.request.post(`/api/orders/${id}/documents`, { data: Buffer.from(text), headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('отчёт.txt') } });
+    expect(up.status()).toBe(201);
+    await db((c) => c.query("update documents set kind = 'result' where order_id = $1", [id]));
+  };
+  await put(ids.past, '41/2026');
+  await put(ids.now, '41/2026');
+  await page.goto(`/kabinet#order=${ids.now}`);
+  await page.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(page.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  const hit = page.locator('#review-checks').getByText(/Номер отчёта № 41\/2026 уже был в Вашем деле «Квартира на Садовой»/);
+  await expect(hit).toBeVisible();
+  await hit.scrollIntoViewIfNeeded();
+  await shot(page, 'r04-2403-nomer-uzhe-byl');
+  expect(problems).toEqual([]);
+  await ctx.close();
+});
