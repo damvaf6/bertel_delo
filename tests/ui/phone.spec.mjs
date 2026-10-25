@@ -17451,6 +17451,38 @@ test('2.393: «Сегодня» — срок в новогодние каник�
   await ep.context().close(); await cp.context().close();
 });
 
+// 2.405: в декабре аттестат или полис из досье кончается до 15 января — «продлите до каникул», к досье в профиле. Отбор
+// документов проверяет `tests/server/holidays.test.mjs`; здесь декабрьский ответ подставлен, чтобы не зависеть от даты прогона.
+test('2.405: «Сегодня» — досье, продлите до каникул', async ({ browser, baseURL }) => {
+  const ep = await (await phoneContext(browser, baseURL)).newPage();
+  const expert = await signIn(ep, '+79990004053');
+  await db(async (c) => { await c.query('insert into specialists (user_id) values ($1)', [expert.id]); });
+  await ep.route('**/api/today', async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    body.today = '2026-12-14';
+    body.expert.dossier_new_year = { by: '2026-12-30', from: '2026-12-31', to: '2027-01-10', items: [
+      { id: '1', kind: 'policy', kind_name: 'Полис страхования оценщика', title: 'Страховщик', number: 'П-2405', valid_until: '2026-12-10', expired: true },
+      { id: '2', kind: 'certificate', kind_name: 'Квалификационный аттестат', title: 'Недвижимость', number: '0405', valid_until: '2027-01-12', expired: false }] };
+    await route.fulfill({ response: res, json: body });
+  });
+  await ep.goto('/kabinet');
+  await expect(ep.locator('#today-box li[data-today="dossier-new-year"]')).toHaveText('Досье: продлите до каникул — до 30 декабря · 2');
+  const rows = ep.locator('#today-box li[data-today-item="dossier-new-year"]');
+  await expect(rows.nth(0).locator('.title')).toHaveText('Полис страхования оценщика № П-2405');
+  await expect(rows.nth(0).locator('[data-role="dossier-ny-what"]')).toHaveText('срок истёк 10 декабря — без него Вас не подбирают на оценку');
+  await expect(rows.nth(0).locator('[data-role="dossier-ny-what"]')).toHaveClass('overdue');
+  await expect(rows.nth(1).locator('[data-role="dossier-ny-what"]')).toHaveText('действует до 12 января — кончается в каникулы или сразу после них (31 декабря — 10 января)');
+  await expect(rows.nth(1)).toContainText('продлите до ср, 30 декабря (осталось 16 дн.) и внесите новый срок в досье');
+  expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await rows.nth(1).scrollIntoViewIfNeeded();
+  await shot(ep, 'i07-segodnya-dosie-do-kanikul');
+  await rows.nth(1).locator('button.open').click();
+  await expect(ep).toHaveURL(/#specialist&to=dossier$/);
+  await expect(ep.locator('#dossier-box')).toBeVisible();
+  await ep.context().close();
+});
+
 // 2.394: «Дела экспертов» — за две недели до новогодних каникул отбор «Срок в новогодние каникулы» и строка у дела «сдать до
 // 30 декабря»; из утренней сводки (`to=new_year`) — сразу к отбору. Декабрьский ответ подставлен, чтобы не зависеть от даты прогона;
 // счёт и сводку проверяет `tests/server/org-morning.test.mjs`.

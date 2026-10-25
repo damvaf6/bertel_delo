@@ -127,6 +127,19 @@ function newYear(ny, today, go) {
     `${x.service} · осталось до ${dayRu(ny.work_before)}: ${daysLeft(ny.work_before, today)} дн.`], go);
 }
 
+// Аттестат или полис из досье кончается до 15 января (2.405): в декабре — «продлите до каникул», к досье в профиле.
+function dossierNewYear(d, today) {
+  if (!d?.items?.length) return [];
+  const wb = `${WD[new Date(`${d.by}T00:00:00Z`).getUTCDay()]}, ${dayRu(d.by)}`;
+  return group('dossier-new-year', `Досье: продлите до каникул — до ${dayRu(d.by)}`, d.items, (x) => [
+    `${x.kind_name}${x.number ? ` № ${x.number}` : ''}`,
+    { class: x.expired ? 'overdue' : 'warn-line', role: 'dossier-ny-what', text: x.expired
+      ? `срок истёк ${dayRu(x.valid_until)} — без него Вас не подбирают на оценку`
+      : `действует до ${dayRu(x.valid_until)} — кончается в каникулы или сразу после них (${dayRu(d.from)} — ${dayRu(d.to)})` },
+    `в каникулы страховщики и центр аттестации не работают — продлите до ${wb} (осталось ${daysLeft(d.by, today)} дн.) и внесите новый срок в досье`],
+  () => { location.hash = 'specialist&to=dossier'; });
+}
+
 // Срок прошёл, а перенос ещё не просили (2.166) — кнопка сразу к форме «Попросить перенести срок» в деле.
 function askLate(x) {
   if (!x.overdue || x.extend) return [];
@@ -464,6 +477,8 @@ export async function loadToday() {
       // За две недели до новогодних каникул (2.393) — дела со сроком в каникулы одной группой: заказчик и банк в каникулы не
       // принимают, сдать — до последнего рабочего дня перед ними.
       ...newYear(e.new_year, t.today, toOrder),
+      // В декабре — аттестат или полис кончается до 15 января (2.405): продлить до каникул, иначе после них не подбирают на оценку.
+      ...dossierNewYear(e.dossier_new_year, t.today),
       ...group('hot', 'Горит срок', e.hot.filter((x) => !noResult.some((n) => n.id === x.id) && !taskDue.some((n) => n.id === x.id)), (x) => [x.title, `${x.service} · ${deadline({ ...x, who: 'Вы попросили' }, t.today)}`], toOrder, askLate),
       ...group('offers', 'Новые предложения', e.offers, (x) => [x.title, [x.service, x.fee_kop ? `Вам ${rub(x.fee_kop)}` : null, deadline(x, t.today)].filter(Boolean).join(' · ')], toOrder),
       // На проверке у диспетчера 2 рабочих дня и дольше (2.369, 2.384) — строкой, без кнопок: делать ничего не нужно, ответ придёт в ленту.

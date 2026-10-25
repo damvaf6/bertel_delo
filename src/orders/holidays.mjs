@@ -73,12 +73,17 @@ export function holidayRunFrom(iso) {
 // от 1 до `days` дней: { from, to, work_before } — '2026-12-20' → { from: '2026-12-31', to: '2027-01-10',
 // work_before: '2026-12-30' }. Каникулы уже начались или ещё далеко — null.
 export function newYearAhead(today, days = 14) {
-  const ny = `${Number(String(today).slice(0, 4)) + 1}-01-01`;
-  let from = ny, to = ny;
-  while (!isWorkday(plus(from, -1))) from = plus(from, -1);
-  while (!isWorkday(plus(to, 1))) to = plus(to, 1);
+  const { from, to } = newYearRun(Number(String(today).slice(0, 4)) + 1);
   const left = Math.round((Date.parse(`${from}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86400_000);
   return left >= 1 && left <= days ? { from, to, work_before: workdayBefore(from) } : null;
+}
+// Новогодние каникулы на стыке годов (2.405): подряд идущие нерабочие дни вокруг 1 января года `year` —
+// newYearRun(2027) → { from: '2026-12-31', to: '2027-01-10', work_before: '2026-12-30' }.
+export function newYearRun(year) {
+  let from = `${year}-01-01`, to = from;
+  while (!isWorkday(plus(from, -1))) from = plus(from, -1);
+  while (!isWorkday(plus(to, 1))) to = plus(to, 1);
+  return { from, to, work_before: workdayBefore(from) };
 }
 // Каким постановлением записаны переносы года (2.399) — для страницы «Праздники и переносы» администратора.
 const DECREE_SOURCE = {
