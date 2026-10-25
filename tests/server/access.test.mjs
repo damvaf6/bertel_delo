@@ -3363,7 +3363,7 @@ test('перечень отчётов для СРО по организации 
   for (const k of ['stranger', 'headA', 'owner']) assert.equal((await reg(U[k])).status, 404, k);
   const year = new Date(Date.now() + 3 * 3_600_000).getUTCFullYear();
   const empty = (await reg(head)).body.registry;
-  assert.deepEqual([empty.year, empty.rows, empty.experts], [year, [], []]);
+  assert.deepEqual([empty.year, empty.rows, empty.experts, empty.staff], [year, [], [], 2], 'эксперт не от организации — не в счёт');
   const order = async (title, service, fields, executor, ago = '1 minute') => {
     const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service, title })).body.order;
     await S.sql`update orders set status = 'done', deadline = (now() at time zone 'Europe/Moscow')::date, fields = ${JSON.stringify(fields)}::jsonb, executor_user_id = ${executor} where id = ${o.id}`;

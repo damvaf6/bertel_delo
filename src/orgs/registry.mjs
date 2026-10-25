@@ -87,7 +87,8 @@ export async function expertRegistry(sql, storage, registry, userId, period) {
 }
 
 // Перечень по организации (2.402): сданные отчёты об оценке всех экспертов, работающих от организации, — как сводка за
-// месяц (2.78): только сданное после вступления эксперта в организацию. У строки — эксперт; итог — по каждому эксперту.
+// месяц (2.78): только сданное после вступления эксперта в организацию. У строки — эксперт; итог — по каждому эксперту;
+// staff — сколько экспертов работает от организации сейчас.
 export async function orgRegistry(sql, storage, registry, orgId, period) {
   const done = await sql`
     select distinct on (o.id) o.id, o.title, o.module, o.service, o.fields, o.executor_user_id, o.executor_user_id as expert_id, h.at,
@@ -109,6 +110,8 @@ export async function orgRegistry(sql, storage, registry, orgId, period) {
     if (x.missing.length) e.gaps++;
   }
   r.experts = [...by.values()].sort((a, b) => b.n - a.n || a.name.localeCompare(b.name, 'ru'));
+  // Экспертов, работающих от организации, нет — карточку перечня не показываем (как сводку за месяц).
+  r.staff = (await sql.one`select count(*)::int as n from specialists where org_id = ${orgId}`).n;
   return r;
 }
 
