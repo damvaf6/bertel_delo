@@ -3343,6 +3343,16 @@ test('перечень отчётов для СРО (2.401): свои сданн
   assert.deepEqual((await reg(other)).body.registry.rows.map((x) => x.id), [foreign.id]);
 });
 
+test('заключения за год архивом (2.407): только своё; не специалист — 404, сданных нет — 409', async () => {
+  cover('specialist.me.registry.archive');
+  const exp = await login(S, '+79990002407');
+  await makeSpecialist(S.sql, exp.user.id);
+  const archive = (c, q = '') => c.req('GET', `/api/specialist/me/registry/archive${q}`, undefined, { binary: true });
+  assert.equal((await archive(U.owner)).status, 404, 'не специалист');
+  assert.equal((await archive(exp)).status, 409, 'сданных нет');
+  assert.equal((await archive(U.dispatcher)).status, 404, 'диспетчер — не специалист');
+});
+
 test('перечень отчётов для СРО (2.404): чего не нашлось — почему (нет файла, скан, нет в тексте) и где это обычно пишут', async () => {
   const exp = await login(S, '+79990004491');
   await makeSpecialist(S.sql, exp.user.id);

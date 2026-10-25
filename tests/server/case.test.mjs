@@ -150,3 +150,28 @@ test('архив сданных за месяц заключений (2.89): р�
   // Выгрузка записана в журнал платформы.
   assert.equal((await S.sql`select count(*)::int as n from audit_log where action = 'org.archive' and subject_id = ${org}`)[0].n, 1);
 });
+
+test('свои заключения за год архивом (2.407): эксперт — файлы результата с подписями и опись с номером отчёта, без заказчика', async () => {
+  const r = await withSession('orlov').req('GET', '/api/specialist/me/registry/archive');
+  assert.equal(r.status, 200);
+  assert.equal(r.headers.get('content-type'), 'application/zip');
+  assert.match(decodeURIComponent(r.headers.get('content-disposition')), /Мои заключения за \d{4} год\.zip/);
+  const files = unzip(Buffer.from(await r.arrayBuffer()));
+  const names = [...files.keys()];
+  const inv = names.find((n) => n.startsWith('Опись'));
+  assert.ok(inv, names.join(', '));
+  const report = names.find((n) => /^Дело № [0-9A-F]{8}\/Отчёт об оценке квартиры\.pdf$/.test(n));
+  assert.ok(report, names.join(', '));
+  const dir = report.slice(0, report.lastIndexOf('/'));
+  assert.ok(names.filter((n) => n.startsWith(`${dir}/Отчёт об оценке квартиры`) && n !== report).length >= 2, 'подписи эксперта и организации');
+  assert.ok(!names.some((n) => n.includes('Выписка ЕГРН')), 'документы заказчика — нет');
+  assert.ok(!names.some((n) => n.includes('Заключение об оценке автомобиля')), 'дело не сдано — нет');
+  const text = docText(files.get(inv));
+  assert.ok(text.includes(DEMO_PEOPLE.orlov.name));
+  assert.ok(text.includes('верна'), 'подписи проверены');
+  assert.ok(text.includes(crypto.createHash('sha256').update(files.get(report)).digest('hex')), 'SHA-256 файла в описи');
+  for (const secret of [DEMO_PEOPLE.petrov.name, 'Нотариус просит']) assert.ok(!text.includes(secret), secret);
+  // Другой эксперт: сданного нет — «нечего выгружать»; заказчик — не специалист.
+  assert.equal((await withSession('petrov').req('GET', '/api/specialist/me/registry/archive')).status, 404);
+  assert.equal((await S.sql`select count(*)::int as n from audit_log where action = 'specialist.archive'`)[0].n, 1);
+});
