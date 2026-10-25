@@ -4,6 +4,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, signResults } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
+import { workdayFrom } from '../../src/orders/holidays.mjs';
 import { createRegistry } from '../../src/modules/index.mjs';
 import expertise from '../../src/modules/expertise.mjs';
 import { cleanDraftAnswer } from '../../src/ai/ai.mjs';
@@ -1597,7 +1598,8 @@ test('2.339, 2.353, 2.359: «Мои сроки на две недели» — с
   const of = (s, kind) => s.days.flatMap((d) => d.items.map((i) => ({ ...i, date: d.date }))).filter((i) => i.order_id === o.id && i.kind === kind);
   const put = async (body, name) => assert.equal((await owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
     raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), 'x-doc-kind': 'basis' } })).status, 201);
-  const early = addDays(todayMsk(), 2), moved = addDays(todayMsk(), 5);
+  // Срок по письму — в рабочий день: напоминание накануне (в выходной оно переезжает, 2.398).
+  const early = addDays(todayMsk(), 2), moved = workdayFrom(addDays(todayMsk(), 5));
   assert.ok(moved < mine);
   await put(`ЗАДАНИЕ НА ОЦЕНКУ\nОбъект оценки: квартира\nСрок составления отчёта: не позднее ${ruD(early)}`, 'Задание банка.txt');
   let s = await items();
