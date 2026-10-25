@@ -79,6 +79,21 @@ test('отчёт как «221»: год в выводах не тот, закл�
   assert.deepEqual(res.rounding, []);
 });
 
+test('2.403: номер отчёта уже был в другом деле эксперта этого года — одна находка у первого места с номером', () => {
+  const report = doc(['ОТЧЁТ ОБ ОЦЕНКЕ № 116/2026-О от 05.10.2026', 'Колонтитул: Отчёт № 116/2026-О']);
+  const used = [{ number: '115/2026-О', on: '2026-09-30', title: 'Прошлая квартира' }, { number: '116 / 2026 - о', on: '2026-10-01', title: 'Тестовый склад' }];
+  const res = runAutoChecks(['report_number'], [report], { usedNumbers: used });
+  assert.deepEqual(texts(res, 'report_number'), [
+    'Номер отчёта № 116/2026-О уже был в Вашем деле «Тестовый склад» (файл загружен 01.10.2026) — у каждого отчёта за год свой номер, проверьте нумерацию',
+  ]);
+  assert.equal(res.report_number[0].where, 'стр. 1');
+  // Диспетчеру — без названия чужого дела; другие номера и пустой список — молчим.
+  assert.match(texts(runAutoChecks(['report_number'], [report], { usedNumbers: [{ number: '116/2026-О', on: '2026-10-01' }] }), 'report_number')[0], /уже был в другом деле эксперта \(файл загружен 01\.10\.2026\)/);
+  assert.deepEqual(runAutoChecks(['report_number'], [report], { usedNumbers: [used[0]] }).report_number, []);
+  assert.deepEqual(runAutoChecks(['report_number'], [report]).report_number, []);
+  assert.deepEqual(runAutoChecks(['report_number'], [doc(['Отчёт без номера'])], { usedNumbers: used }).report_number, []);
+});
+
 test('тот же отчёт без ошибок — находок нет', () => {
   const fixed = REPORT_221.map((p) => p
     .replace('2019 г.в.', '2024 г.в.')
@@ -1855,4 +1870,33 @@ test('2.378: площадь объекта одна во всём отчёте �
   assert.deepEqual(runAutoChecks(['area_same'], [doc(land)], { service: 'land', fields: {} }).area_same, []);
   // В отчёте нет описания с площадью — не сверяем.
   assert.deepEqual(run(['Расчёт: 150 000 руб./кв. м × 47,3 кв. м = 7 095 000 руб.'], { fields: {} }), []);
+});
+
+test('2.403: ИИ-проверка — номер отчёта уже был в другом деле эксперта этого года; прошлый год, отменённое и чужое — не в счёт', async () => {
+  const other = await login(S, '+79990004031');
+  await makeSpecialist(S.sql, other.user.id, { permits: [['expertise', 'vehicle']] });
+  const report = (num) => [`ОТЧЁТ ОБ ОЦЕНКЕ № ${num} от 05.10.2026`, 'Дата составления отчёта: 05.10.2026', `Колонтитул: Отчёт № ${num}`].join('\n');
+  const caseWith = async (title, num, executor = spec) => {
+    const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'vehicle', title })).body.order;
+    await S.sql`update orders set status = 'in_work', deadline = ${addDays(todayMsk(), 10)}::date, executor_user_id = ${executor.user.id} where id = ${o.id}`;
+    if (num) assert.equal((await executor.req('POST', `/api/orders/${o.id}/results`, Buffer.from(report(num)), { raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Отчёт.txt') } })).status, 201);
+    return o;
+  };
+  const found = async (o) => {
+    const r = await spec.req('POST', `/api/orders/${o.id}/review/ai`);
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    return (r.body.ai.items.find((i) => i.id === 'requisites').found ?? []).map((f) => f.text).filter((t) => /уже был/.test(t));
+  };
+  const done = await caseWith('2403: прошлая машина', '403/2026-А');
+  await S.sql`update orders set status = 'done' where id = ${done.id}`;
+  const old = await caseWith('2403: прошлогодняя', '404/2026-А');
+  await S.sql`update documents set created_at = date_trunc('year', now() at time zone 'Europe/Moscow') - interval '1 day' where order_id = ${old.id}`;
+  const cancelled = await caseWith('2403: отменённая', '405/2026-А');
+  await S.sql`update orders set status = 'cancelled' where id = ${cancelled.id}`;
+  await caseWith('2403: чужая', '406/2026-А', other);
+  S.providers.ai.reset();
+  assert.deepEqual(await found(await caseWith('2403: новая', '403/2026-А')), [
+    `Номер отчёта № 403/2026-А уже был в Вашем деле «2403: прошлая машина» (файл загружен ${todayMsk().split('-').reverse().join('.')}) — у каждого отчёта за год свой номер, проверьте нумерацию`,
+  ]);
+  for (const num of ['404/2026-А', '405/2026-А', '406/2026-А', '407/2026-А']) assert.deepEqual(await found(await caseWith(`2403: ${num}`, num)), [], num);
 });
