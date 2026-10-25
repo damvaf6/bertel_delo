@@ -4009,8 +4009,10 @@ test('сводка за месяц (2.78): руководитель видит �
   await hp.goto(`/kabinet#org=${orgId}`);
   const box = hp.locator('#org-report-box');
   await expect(box).toBeVisible();
-  await expect(hp.locator('#org-report-month option')).toHaveCount(13);
+  await expect(hp.locator('#org-report-month optgroup[label="Месяц"] option')).toHaveCount(13);
   await expect(hp.locator('#org-report-month option').first()).toContainText('(текущий)');
+  // 2.408: и годы — текущий и прошлый (организация создана 13 месяцев назад).
+  await expect(hp.locator('#org-report-month optgroup[label="Год"] option')).toHaveCount(2);
   await expect(hp.locator('#org-report-total')).toContainText('принято дел: 1 · сдано: 1 (позже срока: 1)');
   await expect(hp.locator('#org-report-total')).toContainText('12 000 ₽');
   const row = hp.locator('#org-report > li').filter({ hasText: 'Эксперт Сводкин' });
@@ -4078,6 +4080,21 @@ test('сводка за месяц (2.78): руководитель видит �
   await expect(hp.locator('#org-report-remarks-box')).toBeHidden();
   await expect(row.locator('[data-expert-remarks]')).toHaveCount(0);
   await shot(hp, 'a8-rukovoditel-svodka-proshlyj');
+  // Сводка за год (2.408): то же за весь год, сданные по месяцам, сравнение с прошлым годом; таблица — за год.
+  const year = new Date(Date.now() + 3 * 3_600_000).toISOString().slice(0, 4);
+  await hp.locator('#org-report-month').selectOption(year);
+  await expect(hp.locator('#org-report-total')).toContainText(`Итого · ${year} год`);
+  await expect(hp.locator('#org-report-total')).toContainText(/Сдано по месяцам\S+ — 1/);
+  await expect(hp.locator('#org-report-total')).toContainText(/К прошлому году \(\d{4} год\)сдано: \d/);
+  await expect(row.locator('[data-expert-months]')).toHaveText(/^по месяцам: \S+ — 1/);
+  await expect(row).toContainText('вознаграждение за сданные: 12 000 ₽ · выплачено: 12 000 ₽');
+  await row.scrollIntoViewIfNeeded();
+  await shot(hp, 'r08-2408-svodka-za-god');
+  const [yearCsv] = await Promise.all([hp.waitForEvent('download'), hp.locator('#org-report-csv').click()]);
+  expect(yearCsv.suggestedFilename()).toBe(`Сводка по экспертам ${year}.csv`);
+  const yearText = fs.readFileSync(await yearCsv.path()).toString('utf8');
+  expect(yearText).toContain(`Год: ${year} год`);
+  expect(yearText).toMatch(/\r\nСдано по месяцам;январь [^\r]+\r\nЭксперт Сводкин;/);
   // Эксперт сводку не открывает.
   expect((await ep.request.get(`/api/orgs/${orgId}/report`)).status()).toBe(403);
   await ectx.close();
@@ -4127,8 +4144,10 @@ test('как руководитель (2.90): нагрузка с ближайш
   await expect(hp.locator('#members li').filter({ hasText: 'Ожидаев Борис' })).toContainText('сейчас дел нет');
   await expect(hp.locator('#members')).not.toContainText('дел: ');
   // Сводка новой организации: в выборе месяца только текущий — прошлые заведомо пусты.
-  await expect(hp.locator('#org-report-month option')).toHaveCount(1);
-  await expect(hp.locator('#org-report-month option')).toContainText('(текущий)');
+  await expect(hp.locator('#org-report-month optgroup[label="Месяц"] option')).toHaveCount(1);
+  await expect(hp.locator('#org-report-month option').first()).toContainText('(текущий)');
+  // 2.408: годы — тоже только с года создания организации.
+  await expect(hp.locator('#org-report-month optgroup[label="Год"] option')).toHaveCount(1);
   for (const p of [ap, bp, cp]) await p.context().close();
   await hp.context().close();
 });

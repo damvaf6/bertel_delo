@@ -23,7 +23,8 @@
 // пункты проверки с такими находками — по названию правила. Подсказка, не оценка эксперта.
 // Задание на оценку от банка (2.309): просьбы «Задание на оценку от банка» (2.299), которые эксперт отправил заказчику за
 // месяц, — сколько, сколько пришло и через сколько дней в среднем (до десятых, по часам), сколько ещё ждут; снятые — не в счёт.
-// Месяц — по московскому времени. Выгрузка таблицей — CSV для Excel (точка с запятой, BOM, суммы с запятой).
+// Месяц — по московскому времени. Сводка за год (2.408) — то же за весь год, с прошлым годом и сданными по месяцам.
+// Выгрузка таблицей — CSV для Excel (точка с запятой, BOM, суммы с запятой).
 import { HttpError } from '../http/core.mjs';
 import { orderSplit } from '../money/money.mjs';
 import { addDays, isOverdue, todayMsk } from '../orders/workflow.mjs';
@@ -51,6 +52,22 @@ export function reportMonth(value, today = todayMsk()) {
     throw new HttpError(400, 'bad_month', `Сводка — за текущий месяц и ${REPORT_MONTHS_BACK} прошлых (ГГГГ-ММ)`);
   }
   return month;
+}
+
+// Сводка за год (2.408): годы, за которые можно взять сводку руководителя, — текущий и прошлый, новые — первыми.
+export const REPORT_YEARS_BACK = 1;
+export const isYear = (p) => /^\d{4}$/.test(String(p));
+export const periodRu = (p) => (isYear(p) ? `${p} год` : monthRu(p));
+export function reportYears(today = todayMsk()) {
+  const y = Number(today.slice(0, 4));
+  return Array.from({ length: REPORT_YEARS_BACK + 1 }, (_, i) => String(y - i));
+}
+// Период сводки руководителя: ?year=ГГГГ — год, иначе ?month=ГГГГ-ММ (как в 2.78).
+export function reportPeriod(query = {}, today = todayMsk()) {
+  if (query.year == null || query.year === '') return reportMonth(query.month, today);
+  const year = String(query.year);
+  if (!reportYears(today).includes(year)) throw new HttpError(400, 'bad_year', 'Сводка за год — за текущий и прошлый год (ГГГГ)');
+  return year;
 }
 
 export const TOP_REMARKS = 5;
@@ -119,11 +136,13 @@ const avgDays = (p) => (p.days_n ? Math.round((p.days_sum / p.days_n) * 10) / 10
 
 const feeOf = (o) => (o.payout_kop != null ? Number(o.payout_kop) : o.price_kop ? orderSplit(o).payoutKop : 0);
 
-// Границы месяца по Москве: [начало, начало следующего).
+// Границы месяца по Москве: [начало, начало следующего); период «ГГГГ» — весь год (2.408).
 async function monthBounds(sql, month) {
+  const first = isYear(month) ? `${month}-01-01` : `${month}-01`;
+  const step = isYear(month) ? '1 year' : '1 month';
   const [{ start, end }] = await sql`
-    select (${`${month}-01`}::date::timestamp at time zone 'Europe/Moscow') as start,
-           ((${`${month}-01`}::date + interval '1 month')::timestamp at time zone 'Europe/Moscow') as "end"`;
+    select (${first}::date::timestamp at time zone 'Europe/Moscow') as start,
+           ((${first}::date + ${step}::interval)::timestamp at time zone 'Europe/Moscow') as "end"`;
   return { start, end };
 }
 
@@ -455,6 +474,7 @@ function resign(rows) {
 }
 
 export const prevMonth = (month) => {
+  if (isYear(month)) return String(Number(month) - 1);
   const y = Number(month.slice(0, 4));
   const m = Number(month.slice(5, 7));
   return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
@@ -516,6 +536,8 @@ function byService(done, registry) {
 }
 
 export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), registry = null, taskDue = null, taskAfter = null, taskMove = null } = {}) {
+  const year = isYear(month);
+  const current = month === today.slice(0, year ? 4 : 7);
   const experts = await orgExperts(sql, orgId);
   const ids = experts.map((e) => e.user_id);
   const { start, end } = await monthBounds(sql, month);
@@ -550,8 +572,8 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
       where p.executor_user_id = any(${ids}::uuid[]) and p.status = 'succeeded'
         and p.paid_at >= ${start} and p.paid_at < ${end} and p.paid_at >= m.created_at
       group by p.executor_user_id`,
-    // Просрочено сейчас — только в сводке за текущий месяц: дела в работе, у которых срок уже прошёл.
-    active: month === today.slice(0, 7) ? await sql`
+    // Просрочено сейчас — только в сводке за текущий месяц (и текущий год, 2.408): дела в работе, у которых срок уже прошёл.
+    active: current ? await sql`
       select o.executor_user_id as user_id, o.status, o.deadline from orders o
       join org_members m on m.org_id = ${orgId} and m.user_id = o.executor_user_id
       where o.executor_user_id = any(${ids}::uuid[]) and o.status in ('awaiting_executor', 'in_work', 'review') and o.deadline is not null` : [],
@@ -565,9 +587,11 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
   const dispReturns = count(q.dispReturns);
   const signed = new Map(q.signed.map((r) => [r.user_id, r]));
   const paid = new Map(q.paid.map((r) => [r.user_id, Number(r.kop)]));
-  const current = month === today.slice(0, 7);
   const prevM = prevMonth(month);
-  const cmp = prevM >= since ? await monthCompare(sql, orgId, ids, prevM) : null;
+  const cmp = prevM >= since.slice(0, year ? 4 : 7) ? await monthCompare(sql, orgId, ids, prevM) : null;
+  // 2.408: в сводке за год — сданные по месяцам (текущий год — по текущий месяц).
+  const yearMonths = year ? Array.from({ length: current ? Number(today.slice(5, 7)) : 12 }, (_, i) => `${month}-${String(i + 1).padStart(2, '0')}`) : null;
+  const perMonth = (done) => yearMonths.map((m) => done.filter((o) => dayMsk(o.at).startsWith(m)).length);
   const rows = experts.map((e) => {
     const done = q.done.filter((o) => o.user_id === e.user_id);
     const p = pace(done);
@@ -603,6 +627,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
         .map(({ text, n }) => ({ text, n })),
       prev: cmp ? cmp.experts.get(e.user_id) : null,
       services: byService(done, registry).map(({ name, done: n }) => ({ name, n })),
+      ...(year ? { by_month: perMonth(done) } : {}),
     };
   });
   const sum = (k) => (k === 'overdue_now' && !current ? null : rows.reduce((s, r) => s + r[k], 0));
@@ -611,16 +636,24 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
   const all = pace(q.done);
   return {
     month,
-    month_name: monthRu(month),
+    month_name: periodRu(month),
+    year,
     current,
-    // Месяцы до создания организации — заведомо пустые (2.90): в выборе только с месяца создания.
+    // Месяцы до создания организации — заведомо пустые (2.90): в выборе только с месяца создания; годы — так же (2.408).
     months: reportMonths(today).filter((m) => m >= since || m === month),
+    years: reportYears(today).filter((y) => y >= since.slice(0, 4) || y === month),
     experts: rows,
     total: { ...Object.fromEntries(keys.map((k) => [k, sum(k)])), avg_days: avgDays(all), ...resign(q.resign),
       ...egrnFirst(q.firstSign, registry), ...bankTask(q.bankTask), ...taskLate(taskDues),
       ...bankAfter(bankAfters), ...ext(exts), ...letterAsk(q.letterAsk), ...orgSign(q.done), prev: cmp ? cmp.total : null },
     prev_month: cmp ? prevM : null,
-    prev_month_name: cmp ? monthRu(prevM) : null,
+    prev_month_name: cmp ? periodRu(prevM) : null,
+    // 2.408: [{ month, name, done, done_late, fee_kop }] — сданные за год по месяцам; у месячной сводки — null.
+    by_month: year ? yearMonths.map((m) => {
+      const done = q.done.filter((o) => dayMsk(o.at).startsWith(m));
+      return { month: m, name: monthRu(m), done: done.length, done_late: done.filter((o) => o.deadline && dayMsk(o.at) > o.deadline).length,
+        fee_kop: done.reduce((s, o) => s + feeOf(o), 0) };
+    }) : null,
     top_remarks: topRemarks(q.remarkItems, TOP_REMARKS),
     disp_reasons: topRemarks(q.dispReasons.filter((i) => i.text), TOP_REMARKS),
     by_service: byService(q.done, registry),
@@ -727,13 +760,18 @@ export function reportCsv(orgName, r) {
   const day = todayMsk();
   const lines = [
     [`Сводка по экспертам — ${orgName}`],
-    [`Месяц: ${r.month_name}${r.current ? ` (по ${Number(day.slice(8, 10))} ${MONTHS_GEN[Number(day.slice(5, 7)) - 1]})` : ''}`],
+    [`${r.year ? 'Год' : 'Месяц'}: ${r.month_name}${r.current ? ` (по ${Number(day.slice(8, 10))} ${MONTHS_GEN[Number(day.slice(5, 7)) - 1]})` : ''}`],
     [],
     head,
     ...r.experts.map((x) => line(x.full_name, x)),
     line('Итого', r.total),
-    ...(r.prev_month ? [[], [`Сравнение с прошлым месяцем (${r.prev_month_name})`, 'Сдано', 'Сдано в прошлом месяце',
-      'В срок', 'В срок в прошлом месяце', 'Возвраты', 'Возвраты в прошлом месяце'],
+    // 2.408: в сводке за год — сданные по месяцам у каждого эксперта и в итоге.
+    ...(r.by_month ? [[], ['Сдано по месяцам', ...r.by_month.map((m) => m.name)],
+      ...r.experts.map((x) => [x.full_name, ...x.by_month]), ['Итого', ...r.by_month.map((m) => m.done)],
+      ['Из них позже срока', ...r.by_month.map((m) => m.done_late)],
+      ['Вознаграждение за сданные, ₽', ...r.by_month.map((m) => rubCell(m.fee_kop))]] : []),
+    ...(r.prev_month ? [[], [`Сравнение с прошлым ${r.year ? 'годом' : 'месяцем'} (${r.prev_month_name})`, 'Сдано', `Сдано в прошлом ${r.year ? 'году' : 'месяце'}`,
+      'В срок', `В срок в прошлом ${r.year ? 'году' : 'месяце'}`, 'Возвраты', `Возвраты в прошлом ${r.year ? 'году' : 'месяце'}`],
     ...[...r.experts.map((x) => [x.full_name, x]), ['Итого', r.total]].map(([name, x]) => [name, x.done, x.prev.done,
       x.done - x.done_late, x.prev.on_time, x.returned_head + x.returned_dispatcher, x.prev.returned])] : []),
     ...(r.by_service?.length ? [[], ['По услугам', 'Сдано (готово)', 'Из них позже срока', 'Вознаграждение за сданные, ₽',

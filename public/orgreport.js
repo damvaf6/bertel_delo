@@ -17,6 +17,8 @@
 // Возвраты диспетчера на доработку (2.376): сколько раз, по скольким делам и с какими причинами — по организации и у
 // каждого эксперта.
 // Частые замечания (2.105) — пункты, с которыми руководитель чаще всего возвращал отчёты: по организации и у каждого эксперта.
+// Сводка за год (2.408): в выборе — и годы (текущий и прошлый); то же за весь год, сравнение с прошлым годом и сданные по
+// месяцам — в итоге и у каждого эксперта (только месяцы, где что-то сдано). Таблица и архив — за тот же год.
 import { api, el, say } from '/common.js';
 import { rub } from '/money.js';
 
@@ -149,20 +151,24 @@ const compare = (x) => {
   if (![now.done, now.returned, x.prev.done, x.prev.returned].some(Boolean)) return '';
   return `сдано: ${diff(now.done, x.prev.done)} · в срок: ${diff(now.on_time, x.prev.on_time)} · возвраты: ${diff(now.returned, x.prev.returned)}`;
 };
+// 2.408: «январь — 2 · март — 1 (позже срока: 1)»; ничего не сдано — пусто.
+const byMonth = (rows) => rows.filter((m) => m.done).map((m) => `${m.name.split(' ')[0]} — ${m.done}${m.done_late ? ` (позже срока: ${m.done_late})` : ''}`).join(' · ');
 const fact = (dt, dd, cls) => [el('dt', { text: dt }), el('dd', { text: dd, ...(cls ? { class: cls } : {}) })];
 
 let org = null;
+// Период из выбора: «2026» — год (2.408), «2026-10» — месяц.
+const periodQ = (p) => (/^\d{4}$/.test(p) ? `year=${p}` : `month=${encodeURIComponent(p)}`);
 
 $('org-report-month').addEventListener('change', () => load($('org-report-month').value));
 $('org-report-csv').addEventListener('click', () => {
   if (!org) return;
   // Файл отдаёт сервер по той же учётке (вход — по cookie); страница остаётся на месте.
-  location.assign(`/api/orgs/${org.id}/report?format=csv&month=${encodeURIComponent($('org-report-month').value)}`);
+  location.assign(`/api/orgs/${org.id}/report?format=csv&${periodQ($('org-report-month').value)}`);
 });
 
 $('org-report-zip').addEventListener('click', () => {
   if (!org) return;
-  location.assign(`/api/orgs/${org.id}/report/archive?month=${encodeURIComponent($('org-report-month').value)}`);
+  location.assign(`/api/orgs/${org.id}/report/archive?${periodQ($('org-report-month').value)}`);
 });
 
 export async function loadOrgReport(o) {
@@ -175,14 +181,19 @@ async function load(month) {
   const forOrg = org;
   let report;
   try {
-    ({ report } = await api('GET', `/api/orgs/${forOrg.id}/report${month ? `?month=${encodeURIComponent(month)}` : ''}`));
+    ({ report } = await api('GET', `/api/orgs/${forOrg.id}/report${month ? `?${periodQ(month)}` : ''}`));
   } catch (err) { say($('org-report-msg'), err.message); return; }
   if (org !== forOrg) return;
   // Экспертов, работающих от организации, нет — сводки не показываем (подсказка — в «Делах экспертов»).
   $('org-report-box').classList.toggle('hidden', report.experts.length === 0);
   const sel = $('org-report-month');
-  sel.replaceChildren(...report.months.map((m, i) => el('option', { value: m, text: i === 0 ? `${monthRu(m)} (текущий)` : monthRu(m) })));
+  sel.replaceChildren(
+    el('optgroup', { label: 'Месяц' }, ...report.months.map((m, i) => el('option', { value: m, text: i === 0 ? `${monthRu(m)} (текущий)` : monthRu(m) }))),
+    ...(report.years?.length ? [el('optgroup', { label: 'Год' }, ...report.years.map((y, i) => el('option', { value: y,
+      'data-year': '', text: i === 0 ? `${y} год (по сегодня)` : `${y} год` })))] : []));
   sel.value = report.month;
+  const prevWord = report.year ? 'году' : 'месяцу';
+  const expertMonths = (x) => (x.by_month ? byMonth(x.by_month.map((n, i) => ({ name: report.by_month[i].name, done: n }))) : '');
   const t = report.total;
   $('org-report-zip').classList.toggle('hidden', !t.done);
   $('org-report-zip').textContent = `Заключения архивом (${t.done})`;
@@ -190,7 +201,8 @@ async function load(month) {
     ...fact(`Итого · ${report.month_name}`, `принято дел: ${t.accepted} · сдано: ${t.done}${t.done_late ? ` (позже срока: ${t.done_late})` : ''}`),
     ...(pace(t) ? fact('Скорость и сроки', pace(t)) : []),
     ...(orgSign(t) ? fact('Подпись организации', orgSign(t)) : []),
-    ...(compare(t) ? fact(`К прошлому месяцу (${report.prev_month_name})`, compare(t)) : []),
+    ...(compare(t) ? fact(`К прошлому ${prevWord} (${report.prev_month_name})`, compare(t)) : []),
+    ...(report.by_month && byMonth(report.by_month) ? fact('Сдано по месяцам', byMonth(report.by_month)) : []),
     ...(resign(t) ? fact('После Ваших возвратов', resign(t)) : []),
     ...(signedAi(t) ? fact('Подпись экспертов', signedAi(t), signedWarn(t) ? 'warn' : '') : []),
     ...(egrnFirst(t) ? fact('Выписка ЕГРН', egrnFirst(t), t.egrn_first ? 'warn' : '') : []),
@@ -233,7 +245,8 @@ async function load(month) {
       x.services.map((s) => `${s.name} — ${s.n}`).join(', ')}` })] : []),
     ...(pace(x) ? [el('div', { class: 'muted', 'data-expert-pace': '', text: pace(x) })] : []),
     ...(orgSign(x) ? [el('div', { class: 'muted', 'data-expert-orgsign': '', text: orgSign(x) })] : []),
-    ...(compare(x) ? [el('div', { class: 'muted', 'data-expert-prev': '', text: `к прошлому месяцу: ${compare(x)}` })] : []),
+    ...(compare(x) ? [el('div', { class: 'muted', 'data-expert-prev': '', text: `к прошлому ${prevWord}: ${compare(x)}` })] : []),
+    ...(expertMonths(x) ? [el('div', { class: 'muted', 'data-expert-months': '', text: `по месяцам: ${expertMonths(x)}` })] : []),
     ...(x.returned_head || x.returned_dispatcher ? [el('div', { class: 'muted', text: `возвращено: ${[
       x.returned_head ? `Вами — ${x.returned_head}` : null, x.returned_dispatcher ? `на доработку — ${x.returned_dispatcher}` : null,
     ].filter(Boolean).join(', ')}` })] : []),

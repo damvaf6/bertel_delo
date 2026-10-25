@@ -13,7 +13,7 @@ import { orderRef } from '../notify/registry.mjs';
 import { orderSplit } from '../money/money.mjs';
 import { STATUS_NAME, addDays, isOverdue, todayMsk, weekEnd } from '../orders/workflow.mjs';
 import { orgRegistry, registryCsv, registryPeriod } from '../orgs/registry.mjs';
-import { monthRu, orgMonthDoneCases, orgMonthReport, reportCsv, reportMonth } from '../orgs/report.mjs';
+import { orgMonthDoneCases, orgMonthReport, periodRu, reportCsv, reportPeriod } from '../orgs/report.mjs';
 import { buildOrgMonthArchive } from './case-ops.mjs';
 import { openExtends, orgExtends, taskMovedOrg } from './deadline-ops.mjs';
 import { extendSuggest, openHandovers } from './handover-ops.mjs';
@@ -457,7 +457,7 @@ export function orgOps() {
     },
     {
       // Сводка за месяц по экспертам (2.78): принято, сдано, позже срока, возвращено, вознаграждение и выплачено; сдано по
-      // услугам (2.135); только руководитель. ?format=csv — та же сводка таблицей для Excel.
+      // услугам (2.135); только руководитель. ?format=csv — та же сводка таблицей для Excel. ?year=ГГГГ — за год (2.408).
       id: 'orgs.report', method: 'GET', path: '/api/orgs/:id/report', auth: 'user',
       access: { resource: 'org', param: 'id', need: 'manage' },
       async handler({ sql, org, query, res, registry, providers }) {
@@ -490,7 +490,7 @@ export function orgOps() {
           const base = l ? l.was : d.day;
           return { need: base ? o.deadline > base : !!l, letter: !!l && l.day >= o.deadline };
         };
-        const report = await orgMonthReport(sql, org.id, reportMonth(query.month), { registry, taskDue, taskAfter, taskMove });
+        const report = await orgMonthReport(sql, org.id, reportPeriod(query), { registry, taskDue, taskAfter, taskMove });
         if (query.format !== 'csv') return { report };
         res.set({
           'content-type': 'text/csv; charset=utf-8',
@@ -502,15 +502,15 @@ export function orgOps() {
     },
     {
       // Сданные за месяц заключения одним архивом (2.89): файлы результата экспертов организации с подписями и опись; только
-      // руководитель. Месяц — как в сводке (текущий и 12 прошлых).
+      // руководитель. Месяц — как в сводке (текущий и 12 прошлых); ?year=ГГГГ — за год (2.408).
       id: 'orgs.report.archive', method: 'GET', path: '/api/orgs/:id/report/archive', auth: 'user',
       access: { resource: 'org', param: 'id', need: 'manage' },
       async handler(ctx) {
         const { sql, actor, org, query, res, providers } = ctx;
-        const month = reportMonth(query.month);
+        const month = reportPeriod(query);
         const cases = await orgMonthDoneCases(sql, org.id, month);
-        if (!cases.length) throw new HttpError(409, 'no_cases', `За ${monthRu(month)} сданных заключений нет`);
-        const a = await buildOrgMonthArchive(ctx, cases, monthRu(month));
+        if (!cases.length) throw new HttpError(409, 'no_cases', `За ${periodRu(month)} сданных заключений нет`);
+        const a = await buildOrgMonthArchive(ctx, cases, periodRu(month));
         await audit(sql, actor, 'org.archive', 'org', org.id, { month, cases: cases.length, files: a.files, bytes: a.buf.length });
         await sendFile(res, providers, { buf: a.buf, filename: a.filename, mime: 'application/zip' });
       },

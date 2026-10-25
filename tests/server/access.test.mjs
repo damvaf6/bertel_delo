@@ -2262,6 +2262,72 @@ test('сводка за месяц (2.124): сравнение с прошлым
   assert.ok(/Итого;2;3;1;2;0;1\r\n/.test(csv), csv);
 });
 
+test('сводка за год (2.408): за весь год, сданные по месяцам, сравнение с прошлым годом, таблица и архив за год', async () => {
+  const org = await makeOrg(S.sql, 'Тестовая организация 2.408');
+  const head = await login(S, '+79990000408');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  const ex = await login(S, '+79990000418');
+  await addMember(S.sql, org.id, ex.user.id, 'member');
+  await makeSpecialist(S.sql, ex.user.id);
+  await S.sql`update users set full_name = 'Эксперт Годов' where id = ${ex.user.id}`;
+  assert.equal((await ex.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  await S.sql`update organizations set created_at = now() - interval '400 days' where id = ${org.id}`;
+  await S.sql`update org_members set created_at = now() - interval '400 days' where org_id = ${org.id}`;
+  // 11 января этого года (Москва), сейчас и 20 декабря прошлого года.
+  const [{ jan, dec, year, janDay }] = await S.sql`
+    select (date_trunc('year', now() at time zone 'Europe/Moscow') + interval '10 days 12 hours') at time zone 'Europe/Moscow' as jan,
+           (date_trunc('year', now() at time zone 'Europe/Moscow') - interval '11 days 12 hours') at time zone 'Europe/Moscow' as dec,
+           to_char(now() at time zone 'Europe/Moscow', 'YYYY') as year,
+           to_char(date_trunc('year', now() at time zone 'Europe/Moscow') + interval '5 days', 'YYYY-MM-DD') as "janDay"`;
+  const make = async (deadline, at) => {
+    const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Сводка 2.408' })).body.order;
+    await S.sql`update orders set status = 'done', deadline = ${deadline}, price_kop = 1000000, executor_user_id = ${ex.user.id} where id = ${o.id}`;
+    await S.sql`insert into order_status_history (order_id, from_status, to_status, side, at) values (${o.id}, 'review', 'done', 'dispatcher', ${at})`;
+    return o;
+  };
+  await make(janDay, jan); // позже срока
+  await make(`${year}-12-31`, new Date());
+  await make(`${Number(year) - 1}-12-31`, dec); // прошлый год
+  const r = (await head.req('GET', `/api/orgs/${org.id}/report?year=${year}`)).body.report;
+  assert.equal(r.month, year);
+  assert.equal(r.month_name, `${year} год`);
+  assert.equal(r.year, true);
+  assert.equal(r.current, true);
+  assert.deepEqual(r.years, [year, String(Number(year) - 1)]);
+  const x = r.experts.find((e) => e.user_id === ex.user.id);
+  assert.deepEqual([x.done, x.done_late, x.fee_kop], [2, 1, 1600000]);
+  const nowM = Number((await S.sql`select to_char(now() at time zone 'Europe/Moscow', 'MM') as m`)[0].m);
+  assert.equal(r.by_month.length, nowM, 'текущий год — по текущий месяц');
+  assert.equal(r.by_month[0].name, `январь ${year}`);
+  assert.equal(x.by_month.length, nowM);
+  assert.equal(x.by_month.reduce((s, n) => s + n, 0), 2);
+  assert.equal(r.by_month.reduce((s, m) => s + m.done, 0), 2);
+  assert.ok(x.by_month[0] >= 1 && r.by_month[0].done_late === 1);
+  assert.equal(r.prev_month, String(Number(year) - 1));
+  assert.equal(r.prev_month_name, `${Number(year) - 1} год`);
+  assert.deepEqual(x.prev, { done: 1, on_time: 1, returned: 0 });
+  // Прошлый год — все 12 месяцев, сдано одно — в декабре; сравнения нет (раньше создания организации).
+  const p = (await head.req('GET', `/api/orgs/${org.id}/report?year=${Number(year) - 1}`)).body.report;
+  assert.equal(p.current, false);
+  assert.equal(p.by_month.length, 12);
+  assert.deepEqual([p.total.done, p.by_month[11].done], [1, 1]);
+  assert.equal(p.prev_month, null);
+  // Месячная сводка — без разбивки по месяцам.
+  assert.equal((await head.req('GET', `/api/orgs/${org.id}/report`)).body.report.by_month, null);
+  // Год вне выбора — ошибка; эксперт сводку за год не открывает.
+  assert.equal((await head.req('GET', `/api/orgs/${org.id}/report?year=${Number(year) - 2}`)).status, 400);
+  assert.equal((await ex.req('GET', `/api/orgs/${org.id}/report?year=${year}`)).status, 403);
+  const csv = (await head.req('GET', `/api/orgs/${org.id}/report?format=csv&year=${year}`, undefined, { binary: true })).body.toString('utf8');
+  assert.ok(csv.includes(`Год: ${year} год (по `), csv);
+  assert.ok(csv.includes(`Сдано по месяцам;январь ${year};`), csv);
+  assert.ok(csv.includes(`Сравнение с прошлым годом (${Number(year) - 1} год);Сдано;Сдано в прошлом году;`), csv);
+  assert.ok(/\r\nЭксперт Годов;1;0;/.test(csv) || nowM === 1, csv);
+  // Архив за год: нет файлов результата — архив с описью всё равно собирается; без сданных за год — 409.
+  const zip = await head.req('GET', `/api/orgs/${org.id}/report/archive?year=${year}`, undefined, { binary: true });
+  assert.equal(zip.status, 200);
+  assert.match(decodeURIComponent(zip.headers.get('content-disposition')), new RegExp(`Заключения за ${year} год\\.zip`));
+});
+
 test('сводка за месяц (2.168): дни от возврата руководителем до новой подписи эксперта и сколько ещё ждут подписи', async () => {
   const org = await makeOrg(S.sql, 'Тестовая организация 2.168');
   const head = await login(S, '+79990000168');
