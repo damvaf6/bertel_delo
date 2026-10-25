@@ -44,16 +44,8 @@ function objectOf(o) {
   return o.title;
 }
 
-export async function expertRegistry(sql, storage, registry, userId, period) {
-  const done = await sql`
-    select distinct on (o.id) o.id, o.title, o.module, o.service, o.fields, o.executor_user_id, h.at,
-      coalesce(g.name, u.full_name) as customer
-    from order_status_history h join orders o on o.id = h.order_id join users u on u.id = o.owner_user_id
-    left join organizations g on g.id = o.org_id
-    where o.executor_user_id = ${userId} and o.status = 'done' and h.to_status = 'done'
-      and h.at >= (${period.from}::date)::timestamp at time zone 'Europe/Moscow'
-      and h.at < (${period.to}::date)::timestamp at time zone 'Europe/Moscow'
-    order by o.id, h.at desc`;
+// Сданные за период дела → строки перечня (номер, дата составления, стоимость — из файлов результата).
+async function registryRows(sql, storage, registry, done, period) {
   const list = done.filter((o) => isAppraisal(registry, o)).sort((a, b) => new Date(a.at) - new Date(b.at));
   const rows = [];
   for (const o of list.slice(0, REGISTRY_MAX)) {
@@ -71,6 +63,7 @@ export async function expertRegistry(sql, storage, registry, userId, period) {
       made_on: facts.made_on ?? null,
       value_rub: facts.value_rub ?? null,
       value_name: facts.value_name ?? null,
+      ...(o.expert_id ? { expert_id: o.expert_id, expert_name: o.expert_name || 'Без имени' } : {}),
     };
     row.missing = [['number', 'номер отчёта'], ['made_on', 'дата составления'], ['value_rub', 'итоговая стоимость']]
       .filter(([k]) => row[k] == null).map(([, t]) => t);
@@ -80,18 +73,58 @@ export async function expertRegistry(sql, storage, registry, userId, period) {
     shown: rows.length, rows };
 }
 
+export async function expertRegistry(sql, storage, registry, userId, period) {
+  const done = await sql`
+    select distinct on (o.id) o.id, o.title, o.module, o.service, o.fields, o.executor_user_id, h.at,
+      coalesce(g.name, u.full_name) as customer
+    from order_status_history h join orders o on o.id = h.order_id join users u on u.id = o.owner_user_id
+    left join organizations g on g.id = o.org_id
+    where o.executor_user_id = ${userId} and o.status = 'done' and h.to_status = 'done'
+      and h.at >= (${period.from}::date)::timestamp at time zone 'Europe/Moscow'
+      and h.at < (${period.to}::date)::timestamp at time zone 'Europe/Moscow'
+    order by o.id, h.at desc`;
+  return registryRows(sql, storage, registry, done, period);
+}
+
+// Перечень по организации (2.402): сданные отчёты об оценке всех экспертов, работающих от организации, — как сводка за
+// месяц (2.78): только сданное после вступления эксперта в организацию. У строки — эксперт; итог — по каждому эксперту.
+export async function orgRegistry(sql, storage, registry, orgId, period) {
+  const done = await sql`
+    select distinct on (o.id) o.id, o.title, o.module, o.service, o.fields, o.executor_user_id, o.executor_user_id as expert_id, h.at,
+      coalesce(g.name, u.full_name) as customer, e.full_name as expert_name
+    from order_status_history h join orders o on o.id = h.order_id join users u on u.id = o.owner_user_id
+    join specialists s on s.user_id = o.executor_user_id and s.org_id = ${orgId}
+    join org_members m on m.org_id = ${orgId} and m.user_id = o.executor_user_id
+    join users e on e.id = o.executor_user_id
+    left join organizations g on g.id = o.org_id
+    where o.status = 'done' and h.to_status = 'done' and h.at >= m.created_at
+      and h.at >= (${period.from}::date)::timestamp at time zone 'Europe/Moscow'
+      and h.at < (${period.to}::date)::timestamp at time zone 'Europe/Moscow'
+    order by o.id, h.at desc`;
+  const r = await registryRows(sql, storage, registry, done, period);
+  const by = new Map();
+  for (const x of r.rows) {
+    const e = by.get(x.expert_id) ?? by.set(x.expert_id, { id: x.expert_id, name: x.expert_name, n: 0, gaps: 0 }).get(x.expert_id);
+    e.n++;
+    if (x.missing.length) e.gaps++;
+  }
+  r.experts = [...by.values()].sort((a, b) => b.n - a.n || a.name.localeCompare(b.name, 'ru'));
+  return r;
+}
+
 const ruDay = (d) => (d ? `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(0, 4)}` : '');
 const rubCell = (r) => (r == null ? '' : String(r));
 
-export function registryCsv(expertName, r) {
+// org — перечень организации (2.402): заголовок с её названием и столбец «Оценщик».
+export function registryCsv(name, r, { org = false } = {}) {
   const lines = [
-    [`Перечень отчётов об оценке — ${expertName}`],
+    [`Перечень отчётов об оценке — ${name}`],
     [`Период: ${r.name}`],
     [],
-    ['№ п/п', 'Номер отчёта', 'Дата составления', 'Объект оценки', 'Услуга', 'Цель оценки', 'Заказчик',
+    ['№ п/п', 'Номер отчёта', 'Дата составления', ...(org ? ['Оценщик'] : []), 'Объект оценки', 'Услуга', 'Цель оценки', 'Заказчик',
       'Итоговая стоимость, ₽', 'Что за стоимость', 'Сдано'],
-    ...r.rows.map((x, i) => [i + 1, x.number ?? '', ruDay(x.made_on), x.object, x.service_name, x.purpose ?? '',
-      x.customer ?? '', rubCell(x.value_rub), x.value_name ?? '', ruDay(x.done_on)]),
+    ...r.rows.map((x, i) => [i + 1, x.number ?? '', ruDay(x.made_on), ...(org ? [x.expert_name] : []), x.object, x.service_name,
+      x.purpose ?? '', x.customer ?? '', rubCell(x.value_rub), x.value_name ?? '', ruDay(x.done_on)]),
     ...(r.total > r.shown ? [[], [`Показаны первые ${r.shown} из ${r.total} — выберите квартал`]] : []),
   ];
   return `﻿${lines.map((l) => l.map(cell).join(';')).join('\r\n')}\r\n`;

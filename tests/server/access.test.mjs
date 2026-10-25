@@ -3343,6 +3343,62 @@ test('перечень отчётов для СРО (2.401): свои сданн
   assert.deepEqual((await reg(other)).body.registry.rows.map((x) => x.id), [foreign.id]);
 });
 
+test('перечень отчётов для СРО по организации (2.402): все эксперты организации, с именем; до вступления и чужое — нет; только руководитель; CSV', async () => {
+  cover('orgs.registry');
+  const org = await makeOrg(S.sql, 'Тестовая организация СРО 2402');
+  const head = await login(S, '+79990002403');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  const ex = {};
+  for (const [k, phone, name] of [['a', '+79990002404', 'Альфина Анна'], ['b', '+79990002405', 'Борисов Борис'], ['c', '+79990002406', 'Чужов Чужой']]) {
+    ex[k] = await login(S, phone);
+    await makeSpecialist(S.sql, ex[k].user.id);
+    await S.sql`update users set full_name = ${name} where id = ${ex[k].user.id}`;
+    if (k === 'c') continue;
+    await addMember(S.sql, org.id, ex[k].user.id, 'member');
+    assert.equal((await ex[k].req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  }
+  await S.sql`update org_members set created_at = now() - interval '1 hour' where org_id = ${org.id}`;
+  const reg = (c, q = '') => c.req('GET', `/api/orgs/${org.id}/registry${q}`);
+  for (const c of [ex.a, U.dispatcher, U.admin]) assert.equal((await reg(c)).status, 403);
+  for (const k of ['stranger', 'headA', 'owner']) assert.equal((await reg(U[k])).status, 404, k);
+  const year = new Date(Date.now() + 3 * 3_600_000).getUTCFullYear();
+  const empty = (await reg(head)).body.registry;
+  assert.deepEqual([empty.year, empty.rows, empty.experts], [year, [], []]);
+  const order = async (title, service, fields, executor, ago = '1 minute') => {
+    const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service, title })).body.order;
+    await S.sql`update orders set status = 'done', deadline = (now() at time zone 'Europe/Moscow')::date, fields = ${JSON.stringify(fields)}::jsonb, executor_user_id = ${executor} where id = ${o.id}`;
+    await S.sql`insert into order_status_history (order_id, from_status, to_status, side, at) values (${o.id}, 'review', 'done', 'dispatcher', now() - ${ago}::interval)`;
+    return o;
+  };
+  const a1 = await order('СРО 2402: квартира А', 'realty', { purpose: 'bank', address: 'г. Москва, ул. Тестовая, д. 2' }, ex.a.user.id, '3 minutes');
+  const b1 = await order('СРО 2402: машина Б', 'vehicle', { purpose: 'court', make_model: 'Лада Гранта', year: 2019 }, ex.b.user.id);
+  const a2 = await order('СРО 2402: квартира А2', 'realty', { purpose: 'deal', address: 'г. Москва, ул. Тестовая, д. 3' }, ex.a.user.id, '2 minutes');
+  await order('СРО 2402: до вступления', 'realty', { purpose: 'deal', address: 'адрес до вступления' }, ex.a.user.id, '2 hours');
+  await order('СРО 2402: почерк', 'handwriting', {}, ex.b.user.id);
+  await order('СРО 2402: чужой эксперт', 'realty', { purpose: 'deal', address: 'чужой адрес' }, ex.c.user.id);
+  const doc = await upload(U.owner, a1.id, 'отчёт.txt', ['ОТЧЁТ ОБ ОЦЕНКЕ № 2402/1 от 06.10.2026', 'Дата составления отчёта: 06.10.2026',
+    'Итоговая величина рыночной стоимости объекта оценки составляет 7 100 000 руб.', 'Колонтитул: Отчёт № 2402/1'].join('\n'));
+  await S.sql`update documents set kind = 'result', uploaded_by = ${ex.a.user.id} where id = ${doc.id}`;
+  const r = (await reg(head)).body.registry;
+  assert.deepEqual(r.rows.map((x) => [x.id, x.expert_name]), [[a1.id, 'Альфина Анна'], [a2.id, 'Альфина Анна'], [b1.id, 'Борисов Борис']],
+    'по времени сдачи; до вступления, не оценка и эксперт не от организации — нет');
+  assert.deepEqual([r.rows[0].number, r.rows[0].made_on, r.rows[0].value_rub, r.rows[0].missing], ['2402/1', '2026-10-06', 7_100_000, []]);
+  assert.deepEqual(r.rows[2].missing, ['номер отчёта', 'дата составления', 'итоговая стоимость']);
+  assert.deepEqual(r.experts.map((e) => [e.name, e.n, e.gaps]), [['Альфина Анна', 2, 1], ['Борисов Борис', 1, 1]]);
+  const text = JSON.stringify(r);
+  for (const t of ['чужой адрес', 'адрес до вступления', 'Чужов']) assert.ok(!text.includes(t), t);
+  assert.deepEqual((await reg(head, `?year=${year - 1}`)).body.registry.rows, []);
+  const csv = await head.req('GET', `/api/orgs/${org.id}/registry?format=csv`, undefined, { binary: true });
+  assert.equal(csv.status, 200);
+  const body = csv.body.toString('utf8');
+  assert.match(body, /Перечень отчётов об оценке — Тестовая организация СРО 2402/);
+  assert.match(body, /№ п\/п;Номер отчёта;Дата составления;Оценщик;Объект оценки/);
+  assert.match(body, /1;2402\/1;06\.10\.2026;Альфина Анна;г\. Москва, ул\. Тестовая, д\. 2;Оценка недвижимости;Ипотека, залог, банк;[^;]*;7100000;/);
+  // Ушла из организации — её прошлые дела в перечне организации больше не видны (как в сводке за месяц).
+  await S.sql`delete from org_members where org_id = ${org.id} and user_id = ${ex.b.user.id}`;
+  assert.deepEqual((await reg(head)).body.registry.rows.map((x) => x.id), [a1.id, a2.id]);
+});
+
 test('мои сроки на две недели (2.109): по дням — сроки своих дел, выезды, ссылка на осмотр, просьба о переносе; чужого нет', async () => {
   cover('specialist.me.schedule');
   const exp = await login(S, '+79990001495');
