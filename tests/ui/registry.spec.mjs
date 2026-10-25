@@ -159,7 +159,7 @@ test('2.403: ИИ-проверка — номер отчёта уже был в 
   const page = await ctx.newPage();
   const problems = [];
   page.on('pageerror', (e) => problems.push(`ошибка JS: ${e.message}`));
-  const expert = await signIn(page, '+79990002407');
+  const expert = await signIn(page, '+79990024031');
   const ids = await db(async (c) => {
     await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
     await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
