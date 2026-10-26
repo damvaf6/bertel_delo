@@ -17,6 +17,7 @@
 // После ИИ-проверки пришёл запрошенный документ (2.248) — строка к ИИ-проверке в деле.
 // Задание на оценку пришло позже черновика (2.295) — строка к таблице задания в черновике.
 // Дело на проверке у диспетчера 2 дня и дольше (2.369) — отдельной строкой, без кнопок.
+// Номер отчёта выдан, а дело отменено (2.418) — «Отдать следующему делу» или «Оставить пропуском» прямо в строке.
 // «Можно продолжать» (2.86) — пришли документы, осмотр или сообщение. Диспетчеру (2.42) — деньги, проверка, цена, подбор, молчащие исполнители, горящие сроки. Нажатие — в дело или в раздел
 // организации.
 // Тексты — только через textContent.
@@ -138,6 +139,28 @@ function orgDossierNewYear(g, today, go) {
       ? `срок истёк ${dayRu(x.valid_until)} — по оценке эксперт снят с подбора`
       : `действует до ${dayRu(x.valid_until)} — кончается в каникулы или сразу после них (${dayRu(d.from)} — ${dayRu(d.to)})` },
     `в каникулы страховщики и центр аттестации не работают — пусть эксперт продлит до ${dayRu(d.by)} (осталось ${daysLeft(d.by, today)} дн.)`], go);
+}
+
+// Номер отчёта выдан, а дело отменено (2.418): выбор прямо в строке — «Отдать следующему делу» (номер получит следующий отчёт,
+// пропуска не будет) или «Оставить пропуском» (в перечне для СРО — «№ … нет — дело отменено, номер оставлен пропуском»).
+function numberCancelled(items) {
+  return group('number-cancelled', 'Дело отменено, а номер отчёта уже выдан', items ?? [], (x) => [x.title,
+    { class: 'warn-line', role: 'number-cancelled-what', text: `№ ${x.number} выдан ${dayRu(x.on)}${x.cancelled_at ? ` · дело отменено ${since(x.cancelled_at)}` : ''}${x.org_name ? ` · по счёту организации «${x.org_name}»` : ''}` },
+    'отдайте номер следующему делу — пропуска в нумерации не будет, или оставьте пропуском — номер больше никому не выдастся'],
+  (x) => { location.hash = `order=${x.id}`; }, (x) => {
+    const msg = el('div', { class: 'muted', 'data-role': 'number-cancelled-msg' });
+    const pick = (free) => async () => {
+      give.disabled = true; keep.disabled = true;
+      try {
+        await api('PUT', `/api/orders/${x.id}/report-number/cancelled`, { free });
+        msg.textContent = free ? `№ ${x.number} получит следующее дело при сборке Word` : `№ ${x.number} останется пропуском — в перечне для СРО будет видно, что дело отменено`;
+        give.remove(); keep.remove();
+      } catch (err) { msg.textContent = err.message; give.disabled = false; keep.disabled = false; }
+    };
+    const give = el('button', { type: 'button', class: 'secondary', 'data-action': 'number-free', onclick: pick(true) }, 'Отдать следующему делу');
+    const keep = el('button', { type: 'button', class: 'secondary', 'data-action': 'number-keep', onclick: pick(false) }, 'Оставить пропуском');
+    return [give, keep, msg];
+  });
 }
 
 // Аттестат или полис из досье кончается до 15 января (2.405): в декабре — «продлите до каникул», к досье в профиле.
@@ -492,6 +515,8 @@ export async function loadToday() {
       ...newYear(e.new_year, t.today, toOrder),
       // В декабре — аттестат или полис кончается до 15 января (2.405): продлить до каникул, иначе после них не подбирают на оценку.
       ...dossierNewYear(e.dossier_new_year, t.today),
+      // Номер отчёта выдан, а дело отменено (2.418) — отдать номер следующему делу или оставить пропуском.
+      ...numberCancelled(e.number_cancelled),
       ...group('hot', 'Горит срок', e.hot.filter((x) => !noResult.some((n) => n.id === x.id) && !taskDue.some((n) => n.id === x.id)), (x) => [x.title, `${x.service} · ${deadline({ ...x, who: 'Вы попросили' }, t.today)}`], toOrder, askLate),
       ...group('offers', 'Новые предложения', e.offers, (x) => [x.title, [x.service, x.fee_kop ? `Вам ${rub(x.fee_kop)}` : null, deadline(x, t.today)].filter(Boolean).join(' · ')], toOrder),
       // На проверке у диспетчера 2 рабочих дня и дольше (2.369, 2.384) — строкой, без кнопок: делать ничего не нужно, ответ придёт в ленту.

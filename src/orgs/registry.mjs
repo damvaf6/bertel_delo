@@ -105,8 +105,11 @@ async function registryRows(sql, storage, registry, done, period) {
 // Пропуски в нумерации за год (2.416): порядковые номера по образцу между наименьшим и наибольшим из номеров сданных отчётов
 // перечня, которых в перечне нет. У каждого — почему, если платформа знает: номер выдан делу, а дело отменено (cancelled), ещё
 // не сдано (open) или в файле сданного отчёта другой номер (file); не знает — unknown («дело отменено или номер пропущен?»).
+// Номер, выданный и отменённому делу, и делу в работе (освобождён, 2.418), — по делу в работе.
 // Номера до первого сданного в платформе не считаем: отчёты до неё в перечень не попадают. Показываем первые HOLES_MAX.
 export const HOLES_MAX = 30;
+// Отменённое дело (2.418): эксперт освободил номер — его получит следующее дело (freed), оставил пропуском (kept), не выбрал.
+const CANCELLED = { true: 'freed', false: 'kept', null: 'cancelled' };
 const OPEN_DONE = ['done', 'closed'];
 export function numberHoles(pattern, year, rows, issued) {
   const present = new Set(rows.map((x) => (x.number != null ? seqOf(pattern, x.number, year) : null)).filter((n) => n != null));
@@ -118,14 +121,14 @@ export function numberHoles(pattern, year, rows, issued) {
   const bySeq = new Map();
   for (const e of issued) {
     const n = seqOf(pattern, e.number, year);
-    if (n != null && !bySeq.has(n)) bySeq.set(n, e);
+    if (n != null && (!bySeq.has(n) || bySeq.get(n).status === 'cancelled')) bySeq.set(n, e);
   }
   for (let n = min + 1; n < max; n++) {
     if (present.has(n)) continue;
     out.total++;
     if (out.list.length >= HOLES_MAX) continue;
     const e = bySeq.get(n);
-    const reason = !e ? 'unknown' : e.status === 'cancelled' ? 'cancelled' : OPEN_DONE.includes(e.status) ? 'file' : 'open';
+    const reason = !e ? 'unknown' : e.status === 'cancelled' ? CANCELLED[String(e.free ?? null)] : OPEN_DONE.includes(e.status) ? 'file' : 'open';
     out.list.push({ seq: n, number: formatNumber(pattern, n, year), reason,
       ...(e ? { order_id: e.id, title: e.title, ...(e.expert_name ? { expert_name: e.expert_name } : {}) } : {}) });
   }
@@ -145,7 +148,7 @@ async function expertHoles(sql, userId, period, rows) {
   const last = rows.filter((x) => x.number != null).at(-1)?.number;
   const pattern = src.own ?? guessPattern(last, period.year);
   if (!pattern) return null;
-  const issued = await sql`select id, title, status, report_number as number from orders
+  const issued = await sql`select id, title, status, report_number as number, report_number_free as free from orders
     where report_number_by = ${userId} and report_number_org is null and report_number is not null
       and report_number_on >= ${yearFrom(period)}::date and report_number_on < ${yearTo(period)}::date order by report_number_on`;
   return { ...numberHoles(pattern, period.year, rows, issued), guessed: !src.own };
@@ -156,7 +159,7 @@ async function expertHoles(sql, userId, period, rows) {
 async function orgHoles(sql, orgId, period, rows) {
   const g = await sql.one`select report_pattern from organizations where id = ${orgId}`;
   if (!g?.report_pattern) return null;
-  const issued = await sql`select o.id, o.title, o.status, o.report_number as number, coalesce(e.full_name, 'Без имени') as expert_name
+  const issued = await sql`select o.id, o.title, o.status, o.report_number as number, o.report_number_free as free, coalesce(e.full_name, 'Без имени') as expert_name
     from orders o left join users e on e.id = o.report_number_by
     where o.report_number_org = ${orgId} and o.report_number is not null
       and o.report_number_on >= ${yearFrom(period)}::date and o.report_number_on < ${yearTo(period)}::date order by o.report_number_on`;

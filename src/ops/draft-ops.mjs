@@ -143,13 +143,55 @@ export async function setReportNumber(ctx, order, actor, raw) {
       return { number: null, was };
     }
     const today = todayMsk();
-    const taken = (await numberPool(tx, ctx.providers.storage, src, actor.id, today, order.id)).find((e) => sameNumber(e.number, number));
+    const taken = (await numberPool(tx, ctx.providers.storage, src, actor.id, today, order.id)).find((e) => !e.free && sameNumber(e.number, number));
     if (taken && !taken.title) throw new HttpError(409, 'number_taken', `Номер № ${number} уже у дела другого эксперта организации «${src.org.name}» — выберите другой`);
     if (taken) throw new HttpError(409, 'number_taken', `Номер № ${number} уже у дела «${taken.title}»${taken.on ? ` (${taken.on.split('-').reverse().join('.')})` : ''} — выберите другой`);
     await tx`update orders set report_number = ${number}, report_number_on = ${today}, report_number_by = ${actor.id},
              report_number_org = ${src.org?.id ?? null} where id = ${order.id}`;
     return { number, was };
   });
+}
+
+// Другое дело в работе с тем же номером по тому же счёту (свой образец эксперта или организации); номера — без пробелов и регистра.
+async function reusedBy(sql, o, id) {
+  const [x] = await sql`select x.title, x.report_number_by from orders x where x.id <> ${id} and x.status <> 'cancelled' and x.report_number is not null
+      and upper(regexp_replace(x.report_number, '[[:space:]]', '', 'g')) = upper(regexp_replace(${o.report_number}::text, '[[:space:]]', '', 'g'))
+      and (case when ${o.report_number_org}::uuid is null then x.report_number_by = ${o.report_number_by} and x.report_number_org is null
+                else x.report_number_org = ${o.report_number_org}::uuid end) limit 1`;
+  return x ?? null;
+}
+// Номер отчёта отменённого дела (2.418): эксперт, которому номер выдан, выбирает — освободить (его получит следующее дело при
+// сборке Word, пропуска не будет) или оставить пропуском (в счёте, повторно не выдаётся). Тот же номер уже у другого дела в
+// работе (выдан, пока эксперт не выбрал) — оставить пропуском нельзя. Строки блокируются, как при выдаче (reportNumber).
+export async function cancelledNumber(ctx, order, actor, free) {
+  return ctx.sql.tx(async (tx) => {
+    await numberSource(tx, actor.id, { lock: true });
+    const o = await tx.one`select status, report_number, report_number_by, report_number_org, report_number_free from orders where id = ${order.id} for update`;
+    if (!o.report_number || o.report_number_by !== actor.id) throw new HttpError(403, 'forbidden', 'Что делать с номером отчёта, выбирает эксперт, которому он выдан');
+    if (o.status !== 'cancelled') throw new HttpError(409, 'not_cancelled', 'Выбрать, что с номером, можно только у отменённого дела');
+    const reused = await reusedBy(tx, o, order.id);
+    if (reused && !free) {
+      throw new HttpError(409, 'number_reused', `Номер № ${o.report_number} уже получило ${reused.report_number_by === actor.id ? `дело «${reused.title}»` : 'дело другого эксперта организации'} — оставить пропуском нельзя`);
+    }
+    await tx`update orders set report_number_free = ${free} where id = ${order.id}`;
+    return { number: o.report_number, free, was: o.report_number_free, reused: !!reused };
+  });
+}
+
+// Номера отменённых дел эксперта этого года, о которых он ещё не выбрал (2.418), — в «Сегодня»; номер уже получило другое
+// дело в работе — выбирать нечего, не показываем.
+export async function cancelledNumbers(sql, userId, today) {
+  return sql`select o.id, o.title, o.report_number as number, to_char(o.report_number_on, 'YYYY-MM-DD') as on,
+      (select max(h.at) from order_status_history h where h.order_id = o.id and h.to_status = 'cancelled') as cancelled_at,
+      g.name as org_name
+    from orders o left join organizations g on g.id = o.report_number_org
+    where o.report_number_by = ${userId} and o.status = 'cancelled' and o.report_number is not null and o.report_number_free is null
+      and o.report_number_on >= ${`${today.slice(0, 4)}-01-01`}::date
+      and not exists (select 1 from orders x where x.id <> o.id and x.status <> 'cancelled' and x.report_number is not null
+        and upper(regexp_replace(x.report_number, '[[:space:]]', '', 'g')) = upper(regexp_replace(o.report_number, '[[:space:]]', '', 'g'))
+        and (case when o.report_number_org is null then x.report_number_by = o.report_number_by and x.report_number_org is null
+                  else x.report_number_org = o.report_number_org end))
+    order by o.report_number_on limit 20`;
 }
 
 export async function latest(sql, orderId) {
@@ -830,6 +872,19 @@ export function draftOps() {
         const r = await setReportNumber(ctx, order, actor, body?.number);
         await audit(sql, actor, 'draft.number', 'order', order.id, { number: r.number, was: r.was });
         return { report_number: await numberView(sql, actor, order) };
+      },
+    },
+    {
+      // Номер отчёта отменённого дела (2.418): { free: true } — отдать следующему делу, { free: false } — оставить пропуском.
+      // Только эксперт, которому номер выдан; выбор можно поменять, пока номер не получило другое дело.
+      id: 'draft.number.cancelled', method: 'PUT', path: '/api/orders/:id/report-number/cancelled', auth: 'user',
+      access: { resource: 'order', param: 'id', need: 'read' },
+      async handler(ctx) {
+        const { sql, actor, order, body } = ctx;
+        if (typeof body?.free !== 'boolean') throw new HttpError(400, 'bad_choice', 'Выберите: отдать номер следующему делу или оставить пропуском');
+        const r = await cancelledNumber(ctx, order, actor, body.free);
+        await audit(sql, actor, 'draft.number.cancelled', 'order', order.id, { number: r.number, free: r.free, was: r.was });
+        return { report_number: r };
       },
     },
   ];

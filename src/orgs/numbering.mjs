@@ -51,17 +51,29 @@ export function guessPattern(number, year) {
 }
 
 // Следующий номер: наибольший порядковый этого года среди номеров (из файлов отчётов, позже — выданных делам) + 1.
-// numbers — [{ number, on, title? }] (usedNumbers в ai-ops). last — тот, от которого считали.
+// numbers — [{ number, on, title?, free? }] (usedNumbers, numberPool в ai-ops). last — тот, от которого считали.
+// free — номер отменённого дела, который эксперт освободил (2.418): не в счёт наибольшего; меньший из освобождённых, которого
+// нет среди занятых, выдаётся раньше «наибольший + 1» — пропуска не будет (freed — чей это номер).
 export function nextNumber(pattern, numbers, year) {
   let last = null;
   let max = 0;
   let matched = 0;
+  const taken = new Set();
   for (const e of numbers) {
+    if (e.free) continue;
     const n = seqOf(pattern, e.number, year);
     if (n == null) continue;
     matched += 1;
+    taken.add(n);
     if (n > max) { max = n; last = e; }
   }
+  let freed = null;
+  for (const e of numbers) {
+    const n = e.free ? seqOf(pattern, e.number, year) : null;
+    if (n == null || n > max || taken.has(n)) continue;
+    if (!freed || n < freed.seq) freed = { seq: n, e };
+  }
+  if (freed) return { seq: freed.seq, number: formatNumber(pattern, freed.seq, year), last, matched, freed: freed.e };
   return { seq: max + 1, number: formatNumber(pattern, max + 1, year), last, matched };
 }
 

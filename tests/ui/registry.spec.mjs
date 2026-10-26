@@ -634,3 +634,70 @@ test('2.417: «Дела экспертов» — поиск по номеру о
   expect(problems).toEqual([]);
   await ctx.close();
 });
+
+test('2.418: дело отменено после выдачи номера — в «Сегодня» отдать номер следующему делу или оставить пропуском; в перечне — что выбрано', async ({ browser, baseURL }) => {
+  const ctx = await browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true, locale: 'ru-RU',
+    storageState: { cookies: [], origins: [{ origin: new URL(baseURL).origin, localStorage: [{ name: 'delo.folds', value: 'open' }] }] } });
+  const page = await ctx.newPage();
+  const problems = [];
+  page.on('pageerror', (e) => problems.push(`ошибка JS: ${e.message}`));
+  const expert = await signIn(page, '+79990004181');
+  const ids = await db(async (c) => {
+    await c.query("update users set full_name = 'Отменова Ирина' where id = $1", [expert.id]);
+    await c.query("insert into specialists (user_id, report_pattern) values ($1, 'К-{N}')", [expert.id]);
+    const mk = async (title, status, number) => (await c.query(`insert into orders (owner_user_id, title, module, service, status,
+      executor_user_id, deadline, fields, report_number, report_number_on, report_number_by) values ($1, $2, 'expertise', 'realty', $3, $1,
+      current_date, $4, $5, current_date, $1) returning id`, [expert.id, title, status, { purpose: 'deal', address: `г. Москва, ${title}` }, number])).rows[0].id;
+    const out = {};
+    for (const n of [1, 5]) {
+      out[n] = await mk(`Отмены, № ${n}`, 'done', `К-${n}`);
+      await c.query("insert into order_status_history (order_id, from_status, to_status, side) values ($1, 'review', 'done', 'dispatcher')", [out[n]]);
+    }
+    out.keep = await mk('Квартира на Садовой', 'cancelled', 'К-2');
+    out.free = await mk('Дача в Истре', 'cancelled', 'К-3');
+    for (const id of [out.keep, out.free]) {
+      await c.query("insert into order_status_history (order_id, from_status, to_status, side) values ($1, 'in_work', 'cancelled', 'customer')", [id]);
+    }
+    return out;
+  });
+  for (const n of [1, 5]) {
+    const up = await page.request.post(`/api/orders/${ids[n]}/documents`, { data: Buffer.from(`ОТЧЁТ ОБ ОЦЕНКЕ № К-${n} от 12.10.2026`),
+      headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('отчёт.txt') } });
+    expect(up.status()).toBe(201);
+  }
+  await db((c) => c.query("update documents set kind = 'result' where order_id = any($1)", [[ids[1], ids[5]]]));
+
+  await page.goto('/kabinet');
+  const box = page.locator('#today-box');
+  await expect(box.locator('li[data-today="number-cancelled"]')).toHaveText('Дело отменено, а номер отчёта уже выдан · 2');
+  const items = box.locator('li[data-today-item="number-cancelled"]');
+  await expect(items).toHaveCount(2);
+  const keep = items.filter({ hasText: 'Квартира на Садовой' });
+  await expect(keep.locator('[data-role="number-cancelled-what"]')).toContainText('№ К-2 выдан');
+  await expect(keep.locator('[data-role="number-cancelled-what"]')).toContainText('дело отменено');
+  await keep.scrollIntoViewIfNeeded();
+  await shot(page, 'r22-2418-nomer-otmenennogo');
+  await keep.locator('[data-action="number-keep"]').click();
+  await expect(keep.locator('[data-role="number-cancelled-msg"]')).toHaveText('№ К-2 останется пропуском — в перечне для СРО будет видно, что дело отменено');
+  const free = items.filter({ hasText: 'Дача в Истре' });
+  await free.locator('[data-action="number-free"]').click();
+  await expect(free.locator('[data-role="number-cancelled-msg"]')).toHaveText('№ К-3 получит следующее дело при сборке Word');
+  await expect(free.locator('[data-action="number-keep"]')).toHaveCount(0);
+  // Следующий номер в профиле — освобождённый К-3; в перечне для СРО — что выбрано у каждого пропуска.
+  await page.goto('/kabinet#specialist');
+  await expect(page.locator('[data-numbering-next]')).toHaveAttribute('data-numbering-next', 'К-3');
+  await expect(page.locator('#numbering-next')).toContainText('номер отменённого дела «Дача в Истре», Вы отдали его следующему делу');
+  const holes = page.locator('#registry-holes');
+  await expect(holes.locator('[data-hole]')).toHaveText([
+    '№ К-2 нет — дело «Квартира на Садовой» отменено, номер оставлен пропуском',
+    '№ К-3 нет — дело «Дача в Истре» отменено, номер освобождён: его получит следующее дело',
+    '№ К-4 нет — дело отменено или номер пропущен?',
+  ]);
+  await page.locator('#registry-box').scrollIntoViewIfNeeded();
+  await shot(page, 'r23-2418-propuski-vybor');
+  // Выбор сделан — в «Сегодня» строки больше нет.
+  await page.goto('/kabinet');
+  await expect(page.locator('#today-box li[data-today="number-cancelled"]')).toHaveCount(0);
+  expect(problems).toEqual([]);
+  await ctx.close();
+});

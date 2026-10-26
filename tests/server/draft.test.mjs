@@ -16,6 +16,7 @@ import { validateModule } from '../../src/modules/index.mjs';
 import { expertMorningAlerts } from '../../src/ops/today-ops.mjs';
 import { digestText, morningTo, sendMorning } from '../../src/notify/morning.mjs';
 import { expertSchedule } from '../../src/orders/schedule.mjs';
+import { numberHoles } from '../../src/orgs/registry.mjs';
 
 let S, owner, other, dispatcher, admin, spec;
 const FIELDS = { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 9', area: '54.3' };
@@ -399,6 +400,60 @@ test('нумерация организации (2.415): один образец
   assert.equal((await spec.req('PATCH', '/api/specialist/me', { report_pattern: '' })).status, 200);
   await S.sql`update specialists set org_id = null where user_id = ${spec.user.id}`;
   await S.sql`delete from org_members where org_id = ${org.id} and user_id = ${spec.user.id}`;
+});
+
+test('номер отчёта отменённого дела (2.418): эксперт отдаёт его следующему делу или оставляет пропуском; пока не выбрал — номер в счёте', async () => {
+  const year = todayMsk().slice(0, 4);
+  const title = async (o) => (await extractPages((await download(spec, `/api/orders/${o.id}/draft/docx`)).buf, 'Отчёт.docx')).pages.join('\n');
+  const ready = async (t) => { const o = await inWork(t); await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {}); return o; };
+  const choose = (o, free, c = spec) => c.req('PUT', `/api/orders/${o.id}/report-number/cancelled`, { free });
+  const today = async () => (await spec.req('GET', '/api/today')).body.expert.number_cancelled;
+  const next = async () => (await spec.req('GET', '/api/specialist/me/numbering')).body.numbering.next.number;
+  const cancel = (o) => S.sql`update orders set status = 'cancelled' where id = ${o.id}`;
+  assert.equal((await spec.req('PATCH', '/api/specialist/me', { report_pattern: 'ОТМ-{N}/{ГГГГ}' })).status, 200);
+  const [a, b, c] = [await ready('Квартира: отмена, первое'), await ready('Квартира: отмена, второе'), await ready('Квартира: отмена, третье')];
+  for (const [o, n] of [[a, 1], [b, 2], [c, 3]]) assert.match(await title(o), new RegExp(`№ ОТМ-${n}/${year}`));
+  // Дело в работе — выбирать нечего; чужой номер — нельзя; без выбора — понятный отказ.
+  assert.deepEqual([(await choose(a, true)).status, (await choose(a, true)).body.error], [409, 'not_cancelled']);
+  await cancel(b);
+  assert.equal((await choose(b, 'да')).status, 400);
+  for (const k of [owner, dispatcher]) assert.equal((await choose(b, true, k)).status, 403);
+  // Пока эксперт не выбрал — номер в «Сегодня» и в счёте: следующий — ОТМ-4, вручную ОТМ-2 занять нельзя.
+  assert.deepEqual((await today()).filter((x) => x.id === b.id).map((x) => x.number), [`ОТМ-2/${year}`]);
+  assert.equal(await next(), `ОТМ-4/${year}`);
+  const d = await ready('Квартира: после отмены');
+  assert.equal((await spec.req('PUT', `/api/orders/${d.id}/report-number`, { number: `ОТМ-2/${year}` })).status, 409);
+  // Оставить пропуском — из «Сегодня» уходит, номер не выдаётся.
+  assert.equal((await choose(b, false)).status, 200);
+  assert.equal((await today()).some((x) => x.id === b.id), false);
+  assert.equal(await next(), `ОТМ-4/${year}`);
+  // Передумал — отдать следующему делу: следующее дело получает ОТМ-2, дальше счёт продолжается с ОТМ-4.
+  const freed = await choose(b, true);
+  assert.deepEqual([freed.status, freed.body.report_number.number, freed.body.report_number.free], [200, `ОТМ-2/${year}`, true]);
+  assert.equal(await next(), `ОТМ-2/${year}`);
+  assert.match(await title(d), new RegExp(`№ ОТМ-2/${year}`));
+  assert.equal(await next(), `ОТМ-4/${year}`);
+  // Номер уже у другого дела — оставить пропуском нельзя, назвать то дело.
+  const late = await choose(b, false);
+  assert.deepEqual([late.status, late.body.error], [409, 'number_reused']);
+  assert.match(late.body.message, /Квартира: после отмены/);
+  // Отменённое последнее дело и освобождённый номер — следующее дело получает его же.
+  await cancel(c);
+  assert.equal((await choose(c, true)).status, 200);
+  const e = await ready('Квартира: вместо третьего');
+  assert.match(await title(e), new RegExp(`№ ОТМ-3/${year}`));
+  assert.equal((await spec.req('PATCH', '/api/specialist/me', { report_pattern: '' })).status, 200);
+});
+
+test('пропуски в нумерации (2.418): у отменённого дела — что выбрал эксперт', () => {
+  const rows = [{ number: '1' }, { number: '5' }];
+  const issued = [{ id: 'x2', title: 'Второе', status: 'cancelled', number: '2', free: false },
+    { id: 'x3', title: 'Третье', status: 'cancelled', number: '3', free: true },
+    { id: 'x4', title: 'Четвёртое', status: 'cancelled', number: '4', free: null },
+    { id: 'x3b', title: 'Вместо третьего', status: 'in_work', number: '3' }];
+  assert.deepEqual(numberHoles('{N}', 2026, rows, issued).list.map((h) => [h.number, h.reason, h.title]),
+    [['2', 'kept', 'Второе'], ['3', 'open', 'Вместо третьего'], ['4', 'cancelled', 'Четвёртое']]);
+  assert.deepEqual(numberHoles('{N}', 2026, rows, issued.slice(0, 3)).list.map((h) => h.reason), ['kept', 'freed', 'cancelled']);
 });
 
 test('черновик готовым файлом Word (2.29): скачивает исполнитель; заказчику и посторонним — нет; в шаблоне организации', async () => {
