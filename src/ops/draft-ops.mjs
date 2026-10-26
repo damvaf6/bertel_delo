@@ -18,7 +18,7 @@ import { orderSources, placeSources, sourcesLines } from '../docs/sources.mjs';
 import { draftDiff } from '../docs/diff.mjs';
 import { assignmentAddress, assignmentBank, assignmentCustomer, assignmentDue, assignmentKinds, assignmentPurpose, assignmentValue, banksIn, customerOf, customersInText, egrnFacts, egrnRightsFacts, egrnShares, egrnUses, kindList, parseFloorField, purposeFits, purposeKinds, sameAddressText, sameCustomer, USE_NAME } from '../ai/report-checks.mjs';
 import { assignmentDocs, egrnDocs, numberPool, numberSource } from './ai-ops.mjs';
-import { nextNumber, numberFrom, sameNumber } from '../orgs/numbering.mjs';
+import { nextNumber, numberFrom, sameNumber, seqOf, yearHint } from '../orgs/numbering.mjs';
 import { todayMsk } from '../orders/workflow.mjs';
 
 const PHOTOS_MAX = 40;
@@ -192,6 +192,32 @@ export async function cancelledNumbers(sql, userId, today) {
         and (case when o.report_number_org is null then x.report_number_by = o.report_number_by and x.report_number_org is null
                   else x.report_number_org = o.report_number_org end))
     order by o.report_number_on limit 20`;
+}
+
+// Новый год (2.419): образец, по которому эксперту выдаются номера, без года или с прошлым годом цифрами — в первые рабочие
+// дни января подсказка в «Сегодня» (yearHint). Образец организации (2.415) — org: поменять может только руководитель.
+export async function numberYear(sql, userId, today) {
+  const src = await numberSource(sql, userId);
+  const hint = yearHint(src.pattern, today);
+  if (!hint) return null;
+  return { ...hint, ...(src.org ? { org: { id: src.org.id, name: src.org.name } } : {}),
+    last: await lastYearNumber(sql, src.org ? { org: src.org.id } : { user: userId }, hint) };
+}
+
+// Наибольший по образцу номер, выданный делам в прошлом году (по своему счёту эксперта или общему счёту организации), —
+// с ним совпадут номера нового года, пока в образце нет года.
+export async function lastYearNumber(sql, { user = null, org = null }, hint) {
+  const prev = hint.year - 1;
+  const rows = await sql`select report_number as number, to_char(report_number_on, 'YYYY-MM-DD') as on from orders
+    where report_number is not null and (case when ${org}::uuid is not null then report_number_org = ${org}::uuid
+                                              else report_number_by = ${user}::uuid and report_number_org is null end)
+      and report_number_on >= ${`${prev}-01-01`}::date and report_number_on < ${`${hint.year}-01-01`}::date`;
+  let best = null;
+  for (const r of rows) {
+    const n = seqOf(hint.pattern, r.number, prev);
+    if (n != null && (!best || n > best.seq)) best = { seq: n, number: r.number, on: r.on };
+  }
+  return best && { number: best.number, on: best.on };
 }
 
 export async function latest(sql, orderId) {

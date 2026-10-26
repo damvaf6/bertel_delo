@@ -701,3 +701,83 @@ test('2.418: дело отменено после выдачи номера — 
   expect(problems).toEqual([]);
   await ctx.close();
 });
+
+// 2.419: в первые рабочие дни января «Сегодня» подсказывает, что в образце номера нет года. Правило окна и подсказки проверяет
+// `tests/server/draft.test.mjs`; здесь январский ответ подставлен, чтобы не зависеть от даты прогона, а «Взять образец»
+// сохраняет по-настоящему.
+test('2.419: новый год — в «Сегодня» образец номера без года, «Взять образец» у эксперта и руководителя', async ({ browser, baseURL }) => {
+  const opts = { baseURL, viewport: { width: 412, height: 915 }, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true, locale: 'ru-RU',
+    storageState: { cookies: [], origins: [{ origin: new URL(baseURL).origin, localStorage: [{ name: 'delo.folds', value: 'open' }] }] } };
+  const ctx = await browser.newContext(opts);
+  const page = await ctx.newPage();
+  const problems = [];
+  page.on('pageerror', (e) => problems.push(`ошибка JS: ${e.message}`));
+  const expert = await signIn(page, '+79990004191');
+  const hctx = await browser.newContext(opts);
+  const hpage = await hctx.newPage();
+  hpage.on('pageerror', (e) => problems.push(`ошибка JS: ${e.message}`));
+  const head = await signIn(hpage, '+79990004192');
+  const org = await db(async (c) => {
+    await c.query("insert into specialists (user_id, report_pattern) values ($1, 'Н-{N}')", [expert.id]);
+    const id = (await c.query("insert into organizations (name, report_pattern) values ('ООО «Оценка-Январь»', 'ОРГ-{N}/2026') returning id")).rows[0].id;
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head')", [id, head.id]);
+    return id;
+  });
+  const hint = { kind: 'no_year', pattern: 'Н-{N}', year: 2027, first: 'Н-1', suggest: 'Н-{N}/{ГГГГ}', suggest_first: 'Н-1/2027', last: { number: 'Н-146', on: '2026-12-29' } };
+  let mine = hint;
+  await page.route('**/api/today', async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    body.today = '2027-01-11';
+    body.expert.number_year = mine;
+    await route.fulfill({ response: res, json: body });
+  });
+  await page.goto('/kabinet');
+  const box = page.locator('#today-box');
+  await expect(box.locator('li[data-today="number-year"]')).toHaveText('Нумерация отчётов: 2027 год — счёт с 1 · 1');
+  const row = box.locator('li[data-today-item="number-year"]');
+  await expect(row.locator('[data-role="number-year-what"]')).toHaveText('в образце Н-{N} нет года — первым в 2027 году будет № Н-1, а в 2026 году последним был № Н-146 (29 декабря): номера повторят прошлогодние');
+  await expect(row).toContainText('возьмите образец Н-{N}/{ГГГГ} — первым будет № Н-1/2027');
+  await expect(row.locator('.title')).toHaveText('Образец номера отчёта');
+  await row.scrollIntoViewIfNeeded();
+  await shot(page, 'r24-2419-obrazec-bez-goda');
+  await row.locator('[data-action="number-year"]').click();
+  await expect(row.locator('[data-role="number-year-msg"]')).toHaveText('Образец Н-{N}/{ГГГГ} сохранён — первым в 2027 году будет № Н-1/2027');
+  await expect(row.locator('[data-action="number-year"]')).toHaveCount(0);
+  expect((await db((c) => c.query('select report_pattern from specialists where user_id = $1', [expert.id]))).rows[0].report_pattern).toBe('Н-{N}/{ГГГГ}');
+  // Строка — к «Нумерации отчётов» в профиле.
+  await row.locator('button.open').click();
+  await expect(page).toHaveURL(/#specialist&to=numbering$/);
+  await expect(page.locator('#numbering-box')).toBeInViewport();
+  await expect(page.locator('#numbering-pattern')).toHaveValue('Н-{N}/{ГГГГ}');
+  // Номера выдаёт организация — кнопки нет, сказать руководителю.
+  mine = { ...hint, org: { id: org, name: 'ООО «Оценка-Январь»' } };
+  await page.goto('/kabinet');
+  await expect(row.locator('[data-action="number-year"]')).toHaveCount(0);
+  await expect(row).toContainText('образец организации «ООО «Оценка-Январь»» — поменять может только руководитель, скажите ему');
+
+  // Руководитель: в образце организации вписан прошлый год — «Взять образец» сохраняет образец организации с {ГГГГ}.
+  await hpage.route('**/api/today', async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    body.today = '2027-01-11';
+    for (const g of body.orgs) g.number_year = { kind: 'fixed', pattern: 'ОРГ-{N}/2026', year: 2027, fixed: 2026, first: 'ОРГ-1/2026', suggest: 'ОРГ-{N}/{ГГГГ}', suggest_first: 'ОРГ-1/2027', last: null };
+    await route.fulfill({ response: res, json: body });
+  });
+  await hpage.goto('/kabinet');
+  const hrow = hpage.locator(`#today-box li[data-today-item="org-number-year-${org}"]`);
+  await expect(hrow.locator('[data-role="number-year-what"]')).toHaveText('в образце ОРГ-{N}/2026 вписан 2026 год — номера 2027 года выйдут как № ОРГ-1/2026');
+  await expect(hrow.locator('.title')).toHaveText('Образец номера организации');
+  await hrow.scrollIntoViewIfNeeded();
+  await shot(hpage, 'r25-2419-obrazec-organizacii');
+  await hrow.locator('[data-action="number-year"]').click();
+  await expect(hrow.locator('[data-role="number-year-msg"]')).toHaveText('Образец ОРГ-{N}/{ГГГГ} сохранён — первым в 2027 году будет № ОРГ-1/2027');
+  expect((await db((c) => c.query('select report_pattern from organizations where id = $1', [org]))).rows[0].report_pattern).toBe('ОРГ-{N}/{ГГГГ}');
+  await hrow.locator('button.open').click();
+  await expect(hpage).toHaveURL(new RegExp(`#org=${org}&to=numbering$`));
+  await expect(hpage.locator('#org-numbering-box')).toBeInViewport();
+  await expect(hpage.locator('#org-numbering-pattern')).toHaveValue('ОРГ-{N}/{ГГГГ}');
+  expect(problems).toEqual([]);
+  await ctx.close();
+  await hctx.close();
+});

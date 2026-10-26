@@ -40,12 +40,13 @@ import { dueNotes } from './note-ops.mjs';
 import { caseMoves, caseRemind, transferTargets } from './org-ops.mjs';
 import { bankTaskMissing, docWait, egrnOld } from './docreq-ops.mjs';
 import { aiRecheck, aiSignHints, egrnRebuildLeft, egrnSwapLeft } from '../ai/ai.mjs';
-import { cancelledNumbers, latest, taskDraftItems, taskDueFor, taskDueSign, taskMoveLetter } from './draft-ops.mjs';
+import { cancelledNumbers, lastYearNumber, latest, numberYear, taskDraftItems, taskDueFor, taskDueSign, taskMoveLetter } from './draft-ops.mjs';
 import { assignmentDocs, TASK_MOVE } from './ai-ops.mjs';
 import { READ_MAX_BYTES, extractPages, readableKind } from '../ai/extract.mjs';
 import { reportMade } from '../ai/report-checks.mjs';
 import { customerSilent, workingMs } from '../orders/silence.mjs';
 import { newYearAhead } from '../orders/holidays.mjs';
+import { yearHint } from '../orgs/numbering.mjs';
 
 // «Горит» — просрочено или до срока не больше двух дней (как подсветка в списке дел).
 const HOT_DAYS = 2;
@@ -287,6 +288,8 @@ async function expertPart(sql, actor, registry, today, storage) {
     // Номер отчёта выдан, а дело отменено (2.418): отдать номер следующему делу или оставить пропуском.
     number_cancelled: (await cancelledNumbers(sql, actor.id, today)).map((o) => ({ id: o.id, title: o.title, number: o.number, on: o.on,
       cancelled_at: o.cancelled_at, ...(o.org_name ? { org_name: o.org_name } : {}) })),
+    // Первые рабочие дни января (2.419): образец номера без года — номера нового года повторят прошлогодние.
+    number_year: await numberYear(sql, actor.id, today),
     dossier_new_year: newYearTerms(await loadDossier(sql, actor.id), today),
     new_year: ny && { from: ny.from, to: ny.to, work_before: ny.work_before, items: ny.rows.map((o) => item(o)) },
     ai_recheck: recheck,
@@ -772,7 +775,10 @@ export async function orgPart(sql, org, registry, today, { actorId = null, stora
   // Новогодние каникулы через 1–14 дней (2.394, как у эксперта 2.393): сколько дел экспертов в работе со сроком в каникулы и
   // до какого дня сдать — только число и день, для утренней сводки.
   const ny = newYearCases(cases, today);
+  // Образец номера организации без года (2.419) — в первые рабочие дни января подсказка руководителю, как у эксперта.
+  const yh = yearHint((await sql.one`select report_pattern from organizations where id = ${org.id}`)?.report_pattern, today);
   return {
+    number_year: yh && { ...yh, last: await lastYearNumber(sql, { org: org.id }, yh) },
     dossier,
     dossier_new_year: dossierNy,
     new_year: ny ? { count: ny.rows.length, from: ny.from, to: ny.to, work_before: ny.work_before } : null,

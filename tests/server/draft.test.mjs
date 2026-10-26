@@ -17,6 +17,9 @@ import { expertMorningAlerts } from '../../src/ops/today-ops.mjs';
 import { digestText, morningTo, sendMorning } from '../../src/notify/morning.mjs';
 import { expertSchedule } from '../../src/orders/schedule.mjs';
 import { numberHoles } from '../../src/orgs/registry.mjs';
+import { nextNumber, yearHint, yearStart } from '../../src/orgs/numbering.mjs';
+import { lastYearNumber, numberYear } from '../../src/ops/draft-ops.mjs';
+import { numberPool, numberSource } from '../../src/ops/ai-ops.mjs';
 
 let S, owner, other, dispatcher, admin, spec;
 const FIELDS = { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 9', area: '54.3' };
@@ -454,6 +457,42 @@ test('пропуски в нумерации (2.418): у отменённого 
   assert.deepEqual(numberHoles('{N}', 2026, rows, issued).list.map((h) => [h.number, h.reason, h.title]),
     [['2', 'kept', 'Второе'], ['3', 'open', 'Вместо третьего'], ['4', 'cancelled', 'Четвёртое']]);
   assert.deepEqual(numberHoles('{N}', 2026, rows, issued.slice(0, 3)).list.map((h) => h.reason), ['kept', 'freed', 'cancelled']);
+});
+
+test('новый год в нумерации (2.419): счёт с 1; в первые рабочие дни января — подсказка, если в образце нет года', async () => {
+  const Y = Number(todayMsk().slice(0, 4));
+  const jan = workdayFrom(`${Y + 1}-01-01`);
+  let fifth = jan;
+  for (let i = 1; i < 5; i += 1) fifth = workdayFrom(addDays(fifth, 1));
+  // Окно — январь до 5-го рабочего дня включительно (праздники не в счёт); в декабре и позже — нет.
+  assert.deepEqual([yearStart(`${Y + 1}-01-01`), yearStart(jan), yearStart(fifth), yearStart(workdayFrom(addDays(fifth, 1))), yearStart(`${Y}-12-30`)],
+    [true, true, true, false, false]);
+  // Год в образце — подсказки нет; прошлый год цифрами — «замените на {ГГГГ}»; этот год цифрами — не трогаем.
+  assert.equal(yearHint('{N}/{ГГГГ}', jan), null);
+  assert.equal(yearHint('О-{N}-{ГГ}', jan), null);
+  assert.equal(yearHint('{N}', `${Y}-12-28`), null);
+  const fixed = yearHint(`{N}/${Y}`, jan);
+  assert.deepEqual([fixed.kind, fixed.fixed, fixed.first, fixed.suggest, fixed.suggest_first], ['fixed', Y, `1/${Y}`, '{N}/{ГГГГ}', `1/${Y + 1}`]);
+  assert.equal(yearHint(`{N}/${Y + 1}`, jan), null);
+  assert.equal(yearHint('Отчёт об оценке квартиры в Москве {N}', jan).suggest, null, 'с годом длиннее 40 знаков — без готового образца');
+  // Своим счётом: в этом году выданы НГ-1 и НГ-2.
+  assert.equal((await spec.req('PATCH', '/api/specialist/me', { report_pattern: 'НГ-{N}' })).status, 200);
+  for (const t of ['Квартира: новый год, первое', 'Квартира: новый год, второе']) {
+    const o = await inWork(t);
+    await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {});
+    await download(spec, `/api/orders/${o.id}/draft/docx`);
+  }
+  const h = await numberYear(S.sql, spec.user.id, jan);
+  assert.deepEqual([h.kind, h.first, h.last.number, h.suggest, h.suggest_first, h.org], ['no_year', 'НГ-1', 'НГ-2', 'НГ-{N}/{ГГГГ}', `НГ-1/${Y + 1}`, undefined]);
+  assert.equal(await numberYear(S.sql, spec.user.id, workdayFrom(addDays(fifth, 1))), null);
+  // Счёт нового года — с 1: прошлогодние номера не в счёте.
+  const src = await numberSource(S.sql, spec.user.id);
+  assert.equal(nextNumber(src.pattern, await numberPool(S.sql, S.providers.storage, src, spec.user.id, jan), Y + 1).number, 'НГ-1');
+  assert.equal(nextNumber(src.pattern, await numberPool(S.sql, S.providers.storage, src, spec.user.id, todayMsk()), Y).number, 'НГ-3');
+  assert.equal(await lastYearNumber(S.sql, { org: spec.user.id }, h), null, 'по счёту чужой организации — ничего');
+  // Сейчас не январь — в «Сегодня» подсказки нет.
+  if (!yearStart(todayMsk())) assert.equal((await spec.req('GET', '/api/today')).body.expert.number_year, null);
+  assert.equal((await spec.req('PATCH', '/api/specialist/me', { report_pattern: '' })).status, 200);
 });
 
 test('черновик готовым файлом Word (2.29): скачивает исполнитель; заказчику и посторонним — нет; в шаблоне организации', async () => {
