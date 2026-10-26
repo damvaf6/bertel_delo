@@ -181,8 +181,9 @@ export async function expertRegistry(sql, storage, registry, userId, period) {
 // Перечень по организации (2.402): сданные отчёты об оценке всех экспертов, работающих от организации, — как сводка за
 // месяц (2.78): только сданное после вступления эксперта в организацию. У строки — эксперт; итог — по каждому эксперту;
 // staff — сколько экспертов работает от организации сейчас.
-export async function orgRegistry(sql, storage, registry, orgId, period) {
-  const done = await sql`
+// Сданные за период дела экспертов, работающих от организации (после вступления), — для перечня и поиска по номеру (2.417).
+async function orgDone(sql, orgId, period) {
+  return sql`
     select distinct on (o.id) o.id, o.title, o.module, o.service, o.fields, o.executor_user_id, o.executor_user_id as expert_id, h.at,
       o.updated_at > now() - ${CASES_DAYS}::int * interval '1 day' as in_cases,
       coalesce(g.name, u.full_name) as customer, e.full_name as expert_name
@@ -195,6 +196,10 @@ export async function orgRegistry(sql, storage, registry, orgId, period) {
       and h.at >= (${period.from}::date)::timestamp at time zone 'Europe/Moscow'
       and h.at < (${period.to}::date)::timestamp at time zone 'Europe/Moscow'
     order by o.id, h.at desc`;
+}
+
+export async function orgRegistry(sql, storage, registry, orgId, period) {
+  const done = await orgDone(sql, orgId, period);
   const r = await registryRows(sql, storage, registry, done, period);
   const by = new Map();
   for (const x of r.rows) {
@@ -208,6 +213,45 @@ export async function orgRegistry(sql, storage, registry, orgId, period) {
   r.staff = (await sql.one`select count(*)::int as n from specialists where org_id = ${orgId}`).n;
   r.holes = period.quarter ? null : await orgHoles(sql, orgId, period, r.rows);
   return r;
+}
+
+// Поиск дела по номеру отчёта (2.417): руководитель знает номер из письма банка или СРО, а в «Делах экспертов» — номера дел
+// платформы. Каждое слово (часть номера) запроса — целой частью номера: «14» найдёт «14/2026» и «В-14», но не «140/2026»;
+// регистр, «ё», знаки и похожие латинские буквы («B-14» вместо «В-14») не важны. Где искать: номера, выданные делам
+// экспертов организации (2.412, и дела в работе), и номера из файлов отчётов, сданных за этот и прошлый год (как в перечне).
+const LATIN = { a: 'а', b: 'в', c: 'с', e: 'е', h: 'н', k: 'к', m: 'м', o: 'о', p: 'р', t: 'т', x: 'х', y: 'у' };
+const numParts = (s) => String(s ?? '').toLowerCase().replace(/ё/g, 'е').replace(/[a-z]/g, (ch) => LATIN[ch] ?? ch)
+  .split(/[^0-9a-zа-я]+/).filter(Boolean);
+export function numberMatch(q, number) {
+  const w = numParts(q);
+  const parts = numParts(number);
+  return w.length > 0 && w.some((x) => /\d/.test(x)) && w.every((x) => parts.includes(x));
+}
+export const NUMBER_FIND_MAX = 20;
+export async function orgFindNumber(sql, storage, registry, orgId, q, today = todayMsk()) {
+  const year = Number(today.slice(0, 4));
+  const found = new Map();
+  const issued = await sql`
+    select o.id, o.module, o.service, o.status, o.updated_at, o.report_number as number, e.full_name as expert_name,
+      (select max(h.at) from order_status_history h where h.order_id = o.id and h.to_status = 'done') as done_at
+    from orders o join specialists s on s.user_id = o.executor_user_id and s.org_id = ${orgId}
+    join org_members m on m.org_id = ${orgId} and m.user_id = o.executor_user_id
+    join users e on e.id = o.executor_user_id
+    where o.report_number is not null and o.report_number_on >= ${`${year - 1}-01-01`}::date and o.updated_at >= m.created_at
+    order by o.report_number_on desc, o.updated_at desc`;
+  for (const o of issued.filter((x) => numberMatch(q, x.number))) found.set(o.id, { ...o, done_on: o.done_at ? dayMsk(o.done_at) : null });
+  for (const y of [year, year - 1]) {
+    const period = registryPeriod({ year: y }, today);
+    const done = (await orgDone(sql, orgId, period)).filter((o) => !found.has(o.id));
+    const status = new Map(done.map((o) => [o.id, o]));
+    const { rows } = await registryRows(sql, storage, registry, done, period);
+    for (const r of rows.filter((x) => numberMatch(q, x.number))) {
+      const o = status.get(r.id);
+      found.set(r.id, { id: r.id, module: o.module, service: o.service, status: 'done', updated_at: null, in_cases: o.in_cases,
+        number: r.number, expert_name: r.expert_name, done_on: r.done_on });
+    }
+  }
+  return [...found.values()].slice(0, NUMBER_FIND_MAX);
 }
 
 const ruDay = (d) => (d ? `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(0, 4)}` : '');

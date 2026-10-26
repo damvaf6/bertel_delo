@@ -18,6 +18,8 @@
 // дольше всех ждущие первыми; 2 дня и дольше — строка красная.
 // Отбор «Осмотр не закончен» (2.216): владелец нажал «Готово», сняв не всё, или ссылка перестанет действовать в ближайшие
 // сутки — «снял не всё» первыми, дольше всех ждущие первыми; затем ссылки, что кончаются раньше.
+// Поиск по номеру отчёта эксперта (2.417): в списке — по номеру, выданному делу; не нашлось — сервер ищет среди сданных за этот
+// и прошлый год (и по номеру из файла отчёта); дело старше 90 дней — без ссылки, с «Заключениями архивом» за тот месяц.
 // «Ждут назначения» (2.17): дела, предложенные диспетчером организации, — руководитель назначает эксперта или отказывается.
 import { api, el, say } from '/common.js';
 import { expertLink } from '/expertcard.js';
@@ -158,7 +160,7 @@ function renderCases() {
   if (filter && !counts.get(filter)) filter = null;
   const chosen = FILTERS.find((f) => f.id === filter);
   renderFilters(counts);
-  const found = mine.filter((c) => hit([c.order_ref, c.id, c.service, c.expert, c.status_name].join(' '))
+  const found = mine.filter((c) => hit([c.order_ref, c.id, c.service, c.expert, c.status_name, c.report_number ?? ''].join(' '))
     && (!chosen || (c.active && chosen.test(c))));
   const active = found.filter((c) => c.active);
   // «Ждёт моей подписи» (2.148): дольше всех ждущие — первыми.
@@ -188,12 +190,51 @@ function renderCases() {
   $('org-cases-none').textContent = !none ? '' : chosen
     ? `По отбору «${chosen.text}»${who} ничего не найдено${q.trim() ? ` по «${q.trim()}»` : ''}. Нажмите «Все»${expert ? ' или выберите «Все эксперты»' : ''}, чтобы искать по всем делам.`
     : expert ? `У эксперта «${mine[0]?.expert ?? ''}» ничего не найдено по «${q.trim()}». Выберите «Все эксперты», чтобы искать по всем делам.`
-      : `Ничего не найдено по «${q.trim()}». Ищите по номеру дела, виду услуги или эксперту.`;
+      : `Ничего не найдено по «${q.trim()}». Ищите по номеру дела или отчёта, виду услуги или эксперту.`;
+  findNumber(org, none && !chosen && !expert && /\d/.test(q) ? q.trim() : '');
   renderRemindAll(org, filter === 'idle_long' ? active : []);
   $('org-cases').replaceChildren(
     ...active.map((c) => caseItem(org, c)),
     ...(done.length ? [el('li', { class: 'group', text: `Завершённые · ${done.length}` })] : []),
     ...done.map((c) => caseItem(org, c)));
+}
+
+// Номер отчёта не нашёлся в списке (2.417): через полсекунды после набора — поиск на сервере; ответ на устаревший запрос не
+// показываем. Пустой запрос — блок прячется.
+let numberSeq = 0;
+let numberTimer = null;
+const OLD_CASE = 'Сдано больше 90 дней назад — в «Делах экспертов» его уже нет; файлы отчёта — в «Заключениях архивом» сводки за тот месяц';
+function findNumber(org, q) {
+  clearTimeout(numberTimer);
+  const box = $('org-cases-number');
+  const my = ++numberSeq;
+  if (!q) { box.classList.add('hidden'); box.replaceChildren(); return; }
+  numberTimer = setTimeout(async () => {
+    let r;
+    try { r = await api('GET', `/api/orgs/${org.id}/cases/number?q=${encodeURIComponent(q)}`); } catch { r = null; }
+    if (my !== numberSeq || !r) return;
+    box.classList.remove('hidden');
+    box.replaceChildren(
+      el('p', { class: 'muted', 'data-role': 'number-head', text: r.found.length
+        ? `Номер отчёта «${q}» — среди сданных за этот и прошлый год:`
+        : `Номер отчёта «${q}» не нашёлся и среди сданных экспертами организации за этот и прошлый год.` }),
+      ...(r.found.length ? [el('ul', { class: 'list' }, ...r.found.map((f) => numberItem(org, f)))] : []));
+  }, 500);
+}
+
+function numberItem(org, f) {
+  return el('li', { 'data-number-case': f.order_ref },
+    el('div', { class: 'title', text: `Отчёт № ${f.number} · ${f.service}` }),
+    el('div', { class: 'muted', text: [`дело ${f.order_ref}`, `эксперт: ${f.expert}`, f.status_name,
+      f.done_on ? `сдано ${dayRu(f.done_on)}` : null].filter(Boolean).join(' · ') }),
+    ...(f.in_cases
+      ? [el('button', { type: 'button', class: 'secondary', 'data-action': 'show-case', onclick: () => {
+        $('org-cases-search').value = f.order_ref; renderCases();
+      } }, 'Показать дело')]
+      : [el('div', { class: 'muted', 'data-role': 'old-case', text: OLD_CASE }),
+        ...(f.archive ? [el('button', { type: 'button', class: 'secondary', 'data-action': 'number-archive',
+          onclick: () => location.assign(`/api/orgs/${org.id}/report/archive?month=${encodeURIComponent(f.archive.month)}`) },
+        `Заключения архивом за ${f.archive.name}`)] : [])]));
 }
 
 // Выбор эксперта (2.127): когда дела ведут хотя бы двое — «Все эксперты» и каждый с числом его дел в работе и всего.
@@ -236,6 +277,7 @@ function caseItem(org, c) {
   const deadline = c.deadline ? `срок ${dayRu(c.deadline)}${c.overdue ? ` · ПРОСРОЧЕНО${late}` : ''}` : 'срок не указан';
   return el('li', { 'data-case': c.order_ref },
     el('div', { class: 'title', text: `${c.service} · ${c.order_ref}` }),
+    ...(c.report_number ? [el('div', { class: 'muted', 'data-role': 'report-number', text: `Отчёт № ${c.report_number}` })] : []),
     ...(c.overdue ? [el('div', { class: 'overdue big', text: deadline })] : []),
     // Дело предложено эксперту, он ещё не принял (2.90): «Ждёт исполнителя · эксперт: …» читалось как «уже назначен».
     el('div', { class: 'muted', text: [c.status === 'awaiting_executor' ? 'Предложено эксперту' : c.status_name, `эксперт: ${c.expert}`,

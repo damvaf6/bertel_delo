@@ -12,8 +12,8 @@ import { newYearAhead } from '../orders/holidays.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { orderSplit } from '../money/money.mjs';
 import { STATUS_NAME, addDays, isOverdue, todayMsk, weekEnd } from '../orders/workflow.mjs';
-import { orgRegistry, registryCsv, registryPeriod } from '../orgs/registry.mjs';
-import { orgMonthDoneCases, orgMonthReport, periodRu, reportCsv, reportPeriod } from '../orgs/report.mjs';
+import { orgFindNumber, orgRegistry, registryCsv, registryPeriod } from '../orgs/registry.mjs';
+import { monthRu, orgMonthDoneCases, orgMonthReport, periodRu, reportCsv, reportMonths, reportPeriod } from '../orgs/report.mjs';
 import { buildOrgMonthArchive } from './case-ops.mjs';
 import { openExtends, orgExtends, taskMovedOrg } from './deadline-ops.mjs';
 import { extendSuggest, openHandovers } from './handover-ops.mjs';
@@ -251,7 +251,7 @@ export function orgOps() {
         const ids = experts.map((e) => e.user_id);
         const rows = ids.length ? await sql`
           select o.id, o.module, o.service, o.status, o.deadline, o.price_kop, o.transit_kop, o.paid_at, o.executor_user_id, o.updated_at,
-                 o.owner_user_id, o.org_id, o.offer_org_id, o.fields,
+                 o.owner_user_id, o.org_id, o.offer_org_id, o.fields, o.report_number,
                  p.status as payout_status, p.amount_kop as payout_kop, p.paid_at as payout_paid_at
           from orders o left join payouts p on p.order_id = o.id
           where o.executor_user_id = any(${ids}::uuid[]) and (o.status = any(${CASES_ACTIVE}::text[])
@@ -353,6 +353,8 @@ export function orgOps() {
           // Номер дела — для внутренней переписки с экспертом (2.28); саму заявку руководитель по нему не откроет.
           id: o.id,
           order_ref: orderRef(o.id),
+          // Номер отчёта эксперта, выданный делу (2.412), — поиск по нему в списке (2.417).
+          report_number: o.report_number ?? null,
           service: registry.service(o.module, o.service)?.service.name ?? o.service,
           status: o.status,
           status_name: STATUS_NAME[o.status],
@@ -615,6 +617,39 @@ export function orgOps() {
         });
         res.status(201);
         return { message: { id: String(row.id), side, body: row.body, at: row.at, mine: true, author_name: actor.full_name ?? null } };
+      },
+    },
+    {
+      // Поиск дела по номеру отчёта (2.417): в списке «Дел экспертов» номер не нашёлся — дело сдано раньше 90 дней или номер
+      // есть только в файле отчёта. Номера, выданные делам экспертов организации, и номера из файлов сданных за этот и прошлый
+      // год (как в перечне для СРО 2.402). Без заказчика и адреса (2.16): услуга, эксперт, состояние, когда сдано; дело старше
+      // 90 дней — без ссылки, с месяцем «Заключений архивом» сводки (когда он ещё в сводке).
+      id: 'orgs.cases.number', method: 'GET', path: '/api/orgs/:id/cases/number', auth: 'user',
+      access: { resource: 'org', param: 'id', need: 'manage' },
+      async handler({ sql, org, query, registry, providers }) {
+        const q = String(query.q ?? '').trim();
+        if (!/\d/.test(q) || q.length > 40) throw new HttpError(400, 'bad_number', 'Наберите номер отчёта — с цифрами, до 40 знаков');
+        const months = reportMonths();
+        const found = await orgFindNumber(sql, providers.storage, registry, org.id, q);
+        return {
+          q,
+          found: found.map((o) => {
+            const month = o.done_on?.slice(0, 7) ?? null;
+            const inCases = o.in_cases ?? (CASES_ACTIVE.includes(o.status)
+              || (CASES_DONE.includes(o.status) && Date.now() - new Date(o.updated_at) < 90 * 86_400_000));
+            return {
+              id: o.id,
+              order_ref: orderRef(o.id),
+              number: o.number,
+              service: registry.service(o.module, o.service)?.service.name ?? o.service,
+              expert: o.expert_name || 'Без имени',
+              status_name: STATUS_NAME[o.status],
+              done_on: o.done_on,
+              in_cases: inCases,
+              archive: !inCases && month && months.includes(month) ? { month, name: monthRu(month) } : null,
+            };
+          }),
+        };
       },
     },
     {

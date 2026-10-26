@@ -828,7 +828,7 @@
         </div>
         <h2 class="gap" id="org-cases-list-title">Дела</h2>
         <div class="field hidden" id="org-cases-search-box">
-          <input type="search" id="org-cases-search" placeholder="Поиск: номер, услуга, эксперт" aria-label="Поиск по делам экспертов: номер, услуга, эксперт" autocomplete="off" enterkeyhint="search">
+          <input type="search" id="org-cases-search" placeholder="Поиск: номер дела или отчёта, услуга, эксперт" aria-label="Поиск по делам экспертов: номер дела или отчёта, услуга, эксперт" autocomplete="off" enterkeyhint="search">
         </div>
         <div class="field hidden" id="org-cases-expert-box">
           <select id="org-cases-expert" aria-label="Чьи дела в списке: эксперт"></select>
@@ -837,6 +837,7 @@
         <div class="field hidden" id="org-cases-remind-all"></div>
         <ul class="list" id="org-cases"></ul>
         <p class="muted hidden" id="org-cases-none" role="status"></p>
+        <div class="hidden" id="org-cases-number" aria-live="polite"></div>
         <p class="msg" id="org-cases-msg" role="status" aria-live="polite"></p>
         <p class="muted hidden" id="org-cases-empty">Пока дел нет.</p>
         <div class="hidden" id="org-no-experts">
