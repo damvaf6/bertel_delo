@@ -5,6 +5,7 @@
 import { test, expect } from '@playwright/test';
 import pg from 'pg';
 import { DB_URL, TEST_TOKEN } from '../helpers.mjs';
+import { extractPages } from '../../src/ai/extract.mjs';
 
 const CONTROL = process.env.UI_TEST_CONTROL_TOKEN || TEST_TOKEN;
 const H = { 'x-delo-request': '1' };
@@ -304,7 +305,7 @@ test('прогон 2.410: перечень — номер повторяется
 });
 
 // 2.411: «Нумерация отчётов» в профиле — образец по последнему отчёту одной кнопкой, следующий номер, сохранение.
-test('2.411: нумерация отчётов — подсказка образца, следующий номер, неверный образец, сохранение', async ({ browser, baseURL }) => {
+test('2.411, 2.412: нумерация отчётов — подсказка образца, следующий номер, неверный образец, сохранение, номер в Word', async ({ browser, baseURL }) => {
   const ctx = await browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true, locale: 'ru-RU',
     storageState: { cookies: [], origins: [{ origin: new URL(baseURL).origin, localStorage: [{ name: 'delo.folds', value: 'open' }] }] } });
   const page = await ctx.newPage();
@@ -343,6 +344,21 @@ test('2.411: нумерация отчётов — подсказка образ
   await expect(page.locator('#numbering-next')).toContainText(`Следующий номер: № 146/${year} — после № 145/${year}`);
   await box.scrollIntoViewIfNeeded();
   await shot(page, 'r12-2411-numeraciya-sohraneno');
+  // 2.412: с образцом — подсказка, что номер ставится в Word; сборка Word в деле — № 146 на титуле, следующий — 147.
+  await expect(page.locator('#numbering-word')).toBeVisible();
+  const work = await db(async (c) => {
+    const o = (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, deadline, fields)
+      values ($1, 'Квартира в Люберцах', 'expertise', 'realty', 'in_work', $1, current_date + 7, '{}') returning id`, [expert.id])).rows[0].id;
+    await c.query("insert into result_drafts (order_id, author_id, source, body) values ($1, $2, 'edit', '1. Общие сведения\nТекст.')", [o, expert.id]);
+    return o;
+  });
+  const w = await page.request.get(`/api/orders/${work}/draft/docx`);
+  expect(w.status()).toBe(200);
+  expect((await extractPages(Buffer.from(await w.body()), 'Отчёт.docx')).pages.join('\n')).toContain(`№ 146/${year}`);
+  await page.reload();
+  await expect(page.locator('#numbering-next')).toContainText(`Следующий номер: № 147/${year} — после № 146/${year}`);
+  await box.scrollIntoViewIfNeeded();
+  await shot(page, 'r13-2412-nomer-v-word');
   expect(problems).toEqual([]);
   await ctx.close();
 });

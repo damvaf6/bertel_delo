@@ -17,7 +17,9 @@ import { orderRef } from '../notify/registry.mjs';
 import { orderSources, placeSources, sourcesLines } from '../docs/sources.mjs';
 import { draftDiff } from '../docs/diff.mjs';
 import { assignmentAddress, assignmentBank, assignmentCustomer, assignmentDue, assignmentKinds, assignmentPurpose, assignmentValue, banksIn, customerOf, customersInText, egrnFacts, egrnRightsFacts, egrnShares, egrnUses, kindList, parseFloorField, purposeFits, purposeKinds, sameAddressText, sameCustomer, USE_NAME } from '../ai/report-checks.mjs';
-import { assignmentDocs, egrnDocs } from './ai-ops.mjs';
+import { assignmentDocs, egrnDocs, issuedNumbers, usedNumbers } from './ai-ops.mjs';
+import { nextNumber } from '../orgs/numbering.mjs';
+import { todayMsk } from '../orders/workflow.mjs';
 
 const PHOTOS_MAX = 40;
 const DOCS_MAX = 5;
@@ -96,6 +98,26 @@ export function taskDraftItems(registry, o, assignment, before, body, egrn, owne
     items.push({ what: 'user', label: userRow, v: user.v, was: cells.get(userRow) || null, ok: banksIn(cells.get(userRow) ?? '').includes(user.id) });
   }
   return items;
+}
+
+// Свой номер отчёта (2.412): выдаётся делу при первой сборке Word по образцу эксперта из профиля, повторная сборка — тот же
+// номер. Следующий — после наибольшего этого года из файлов отчётов эксперта и номеров, уже выданных его делам. Строки
+// специалиста и дела блокируются — две сборки сразу не получат один номер. Образца нет — null (номер дела платформы).
+export async function reportNumber(ctx, order, actor) {
+  return ctx.sql.tx(async (tx) => {
+    const sp = await tx.one`select report_pattern from specialists where user_id = ${actor.id} for update`;
+    const o = await tx.one`select report_number, report_number_by from orders where id = ${order.id} for update`;
+    if (o.report_number && o.report_number_by === actor.id) return o.report_number;
+    if (!sp?.report_pattern) return null;
+    const today = todayMsk();
+    const used = [
+      ...await usedNumbers(tx, ctx.providers.storage, { id: order.id, executor_user_id: actor.id }, today),
+      ...await issuedNumbers(tx, actor.id, today, order.id),
+    ];
+    const { number } = nextNumber(sp.report_pattern, used, Number(today.slice(0, 4)));
+    await tx`update orders set report_number = ${number}, report_number_on = ${today}, report_number_by = ${actor.id} where id = ${order.id}`;
+    return number;
+  });
 }
 
 export async function latest(sql, orderId) {
@@ -735,8 +757,9 @@ export function draftOps() {
         if (order.executor_user_id !== actor.id) throw new HttpError(403, 'forbidden', 'Файл Word черновика скачивает исполнитель');
         const cur = await latest(sql, order.id);
         if (!cur) throw new HttpError(404, 'no_draft', 'Черновика ещё нет');
-        const word = await reportFor(ctx, order, actor, cur.body);
-        await audit(sql, actor, 'draft.docx', 'order', order.id, { draft: String(cur.id), template: word.template });
+        const number = await reportNumber(ctx, order, actor);
+        const word = await reportFor(ctx, order, actor, cur.body, { number });
+        await audit(sql, actor, 'draft.docx', 'order', order.id, { draft: String(cur.id), template: word.template, ...(number ? { number } : {}) });
         // Word с фото осмотра и скриншотами бывает больше 3,5 МБ — тогда временной ссылкой из хранилища (2.49).
         await sendFile(res, ctx.providers, { buf: word.buf, filename: word.filename, mime: DOCX_MIME });
       },
@@ -755,9 +778,10 @@ export function draftOps() {
         const gap = cur.body.match(DRAFT_GAP);
         if (gap) throw new HttpError(409, 'draft_gaps', `В черновике остались незаполненные места, например: ${gap[0].slice(0, 120)}`);
         if (body?.confirm !== true) throw new HttpError(400, 'confirm_required', 'Подтвердите, что Вы проверили текст и отвечаете за него');
-        const word = await reportFor(ctx, order, actor, cur.body);
+        const number = await reportNumber(ctx, order, actor);
+        const word = await reportFor(ctx, order, actor, cur.body, { number });
         const doc = await saveDocument(ctx, { filename: word.filename, mime: DOCX_MIME, buf: word.buf, kind: 'result' });
-        await audit(sql, actor, 'draft.attach', 'order', order.id, { draft: String(cur.id), document: doc.id, template: word.template, analogs: word.analogs, photos: word.photos });
+        await audit(sql, actor, 'draft.attach', 'order', order.id, { draft: String(cur.id), document: doc.id, template: word.template, analogs: word.analogs, photos: word.photos, ...(number ? { number } : {}) });
         res.status(201);
         return { document: publicDoc(doc) };
       },

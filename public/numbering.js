@@ -31,6 +31,8 @@ export async function loadNumbering() {
   $('numbering-last').textContent = numbering.last ? lastLine(numbering.last) : `В файлах отчётов ${numbering.year} года номеров пока нет.`;
   $('numbering-guess').textContent = guess ? `Взять образец по последнему отчёту: ${guess}` : '';
   $('numbering-guess').classList.toggle('hidden', !guess);
+  // Номер выдаётся делу при сборке Word (2.412) — только когда образец сохранён.
+  $('numbering-word').classList.toggle('hidden', !numbering.pattern);
   const n = numbering.next;
   const box = $('numbering-next');
   if (!n) { box.replaceChildren(); return; }
