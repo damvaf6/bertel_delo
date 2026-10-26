@@ -48,7 +48,7 @@ const put = (c, o, body, name, type, path = 'documents') => c.req('POST', `/api/
   raw: true, headers: { 'content-type': type, 'x-file-name': encodeURIComponent(name) },
 });
 
-async function inWork(title) {
+async function inWork(title, ex = spec) {
   const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
   assert.equal((await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: addDays(todayMsk(), 10), fields: FIELDS })).status, 200);
   assert.equal((await put(owner, o, JPEG, 'фасад.jpg', 'image/jpeg')).status, 201);
@@ -57,8 +57,8 @@ async function inWork(title) {
   assert.equal((await put(owner, o, docx, 'Сведения.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')).status, 201);
   assert.equal((await step(owner, o, 'matching')).status, 200);
   await ensurePaid(S.sql, o.id);
-  assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: spec.user.id, from: 'matching' })).status, 200);
-  assert.equal((await step(spec, o, 'in_work')).status, 200);
+  assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: ex.user.id, from: 'matching' })).status, 200);
+  assert.equal((await step(ex, o, 'in_work')).status, 200);
   return o;
 }
 
@@ -300,7 +300,7 @@ test('номер отчёта в деле вручную (2.413): виден и�
   assert.equal((await spec.req('PATCH', '/api/specialist/me', { report_pattern: 'Р-{N}/{ГГГГ}' })).status, 200);
   const a = await inWork('Квартира: ручной номер, первое');
   await spec.req('POST', `/api/orders/${a.id}/draft/ai`, {});
-  assert.deepEqual(await view(a), { number: null, on: null, pattern: 'Р-{N}/{ГГГГ}', can_set: true });
+  assert.deepEqual(await view(a), { number: null, on: null, pattern: 'Р-{N}/{ГГГГ}', org: null, can_set: true });
   await title(a);
   const issued = await view(a);
   assert.deepEqual([issued.number, issued.on], [`Р-1/${year}`, todayMsk()]);
@@ -340,6 +340,65 @@ test('номер отчёта в деле вручную (2.413): виден и�
   assert.equal((await view(a)).can_set, false);
   assert.equal((await set(a, `Р-9/${year}`)).status, 403);
   assert.equal((await spec.req('PATCH', '/api/specialist/me', { report_pattern: '' })).status, 200);
+});
+
+test('нумерация организации (2.415): один образец и общий счёт для всех её экспертов; свой образец не действует; только руководитель', async () => {
+  const year = todayMsk().slice(0, 4);
+  const head = await login(S, '+79990000919');
+  const second = await login(S, '+79990000920');
+  await makeSpecialist(S.sql, second.user.id);
+  await S.sql`update users set full_name = 'Второва Эксперт' where id = ${second.user.id}`;
+  const org = (await head.req('POST', '/api/orgs', { name: 'ООО «Общий счёт»' })).body.org;
+  for (const ex of [spec, second]) {
+    await S.sql`insert into org_members (org_id, user_id, role) values (${org.id}, ${ex.user.id}, 'member')`;
+    await S.sql`update specialists set org_id = ${org.id} where user_id = ${ex.user.id}`;
+  }
+  const title = async (c, o) => (await extractPages((await download(c, `/api/orders/${o.id}/draft/docx`)).buf, 'Отчёт.docx')).pages.join('\n');
+  const ready = async (t, ex) => { const o = await inWork(t, ex); await ex.req('POST', `/api/orders/${o.id}/draft/ai`, {}); return o; };
+  const orgNum = async () => (await head.req('GET', `/api/orgs/${org.id}/numbering`)).body.numbering;
+  assert.equal((await spec.req('PATCH', '/api/specialist/me', { report_pattern: 'С-{N}' })).status, 200);
+  // Образца у организации нет — подсказка: свой образец эксперта; номера — по своим образцам.
+  let n = await orgNum();
+  assert.deepEqual([n.pattern, n.guess, n.staff, n.issued, n.next.number], [null, 'С-{N}', 2, 0, 'С-1']);
+  assert.deepEqual(n.experts.map((e) => e.pattern).sort(), ['С-{N}', null].sort());
+  // Только руководитель; неверный образец — понятный отказ.
+  assert.equal((await spec.req('GET', `/api/orgs/${org.id}/numbering`)).status, 403);
+  assert.equal((await spec.req('PUT', `/api/orgs/${org.id}/numbering`, { pattern: '{N}' })).status, 403);
+  assert.equal((await owner.req('GET', `/api/orgs/${org.id}/numbering`)).status, 404, 'не из организации');
+  const bad = await head.req('PUT', `/api/orgs/${org.id}/numbering`, { pattern: 'ОРГ/{ГГГГ}' });
+  assert.deepEqual([bad.status, bad.body.error], [400, 'bad_pattern']);
+  assert.equal((await head.req('PUT', `/api/orgs/${org.id}/numbering`, { pattern: 'ОРГ-{N}/{ГГГГ}' })).status, 200);
+  // Общий счёт: первое дело одного эксперта — 1, дело другого — 2; свой образец эксперта не действует.
+  const a = await ready('Квартира: счёт организации, первое', spec);
+  assert.equal((await spec.req('GET', `/api/orders/${a.id}/draft`)).body.report_number.org, 'ООО «Общий счёт»');
+  assert.match(await title(spec, a), new RegExp(`ОТЧЁТ ОБ ОЦЕНКЕ № ОРГ-1/${year}`));
+  const b = await ready('Квартира: счёт организации, второе', second);
+  assert.match(await title(second, b), new RegExp(`ОТЧЁТ ОБ ОЦЕНКЕ № ОРГ-2/${year}`));
+  assert.equal((await S.sql.one`select report_number_org from orders where id = ${b.id}`).report_number_org, org.id);
+  // Эксперту — что номера выдаёт организация и следующий из общего счёта; чужое дело — без названия.
+  const mine = (await spec.req('GET', '/api/specialist/me/numbering')).body.numbering;
+  assert.deepEqual(mine.org, { name: 'ООО «Общий счёт»', pattern: 'ОРГ-{N}/{ГГГГ}' });
+  assert.equal(mine.next.number, `ОРГ-3/${year}`);
+  assert.deepEqual([mine.next.after.mine, mine.next.after.title], [false, null]);
+  // Руководителю — следующий, после чьего и сколько выдано.
+  n = await orgNum();
+  assert.deepEqual([n.pattern, n.next.number, n.next.after.expert_name, n.issued], ['ОРГ-{N}/{ГГГГ}', `ОРГ-3/${year}`, 'Второва Эксперт', 2]);
+  // Вручную номер дела другого эксперта организации — нельзя, и название его дела не показываем.
+  const c = await ready('Квартира: счёт организации, третье', spec);
+  const taken = await spec.req('PUT', `/api/orders/${c.id}/report-number`, { number: `орг-2/${year}` });
+  assert.deepEqual([taken.status, taken.body.error], [409, 'number_taken']);
+  assert.match(taken.body.message, /другого эксперта организации «ООО «Общий счёт»»/);
+  assert.doesNotMatch(taken.body.message, /второе/);
+  assert.match(await title(spec, c), new RegExp(`№ ОРГ-3/${year}`));
+  // Образец организации убран — снова свой образец эксперта; выданные номера остаются у своих дел.
+  assert.equal((await head.req('PUT', `/api/orgs/${org.id}/numbering`, { pattern: '' })).status, 200);
+  const d = await ready('Квартира: счёт организации выключен', spec);
+  assert.match(await title(spec, d), /ОТЧЁТ ОБ ОЦЕНКЕ № С-1\n/);
+  assert.match(await title(spec, a), new RegExp(`№ ОРГ-1/${year}`));
+  assert.equal((await spec.req('GET', '/api/specialist/me/numbering')).body.numbering.org, null);
+  assert.equal((await spec.req('PATCH', '/api/specialist/me', { report_pattern: '' })).status, 200);
+  await S.sql`update specialists set org_id = null where user_id = ${spec.user.id}`;
+  await S.sql`delete from org_members where org_id = ${org.id} and user_id = ${spec.user.id}`;
 });
 
 test('черновик готовым файлом Word (2.29): скачивает исполнитель; заказчику и посторонним — нет; в шаблоне организации', async () => {

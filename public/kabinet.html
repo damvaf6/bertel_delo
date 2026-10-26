@@ -901,6 +901,21 @@
         <button type="button" class="secondary" id="org-registry-csv">Скачать таблицу (Excel)</button>
         <p class="msg" id="org-registry-msg" role="status" aria-live="polite"></p>
       </div>
+      <div class="card hidden" id="org-numbering-box">
+        <h2>Нумерация отчётов организации</h2>
+        <p class="muted">Один образец номера и общий счёт за год для всех экспертов, которые работают от организации: номер
+          выдаётся делу, когда эксперт впервые собирает Word, — следующий после наибольшего у организации. {N} — порядковый
+          номер за год, {ГГГГ} — год, {ГГ} — две последние цифры года. Пустой образец — эксперты нумеруют по своим.</p>
+        <p class="muted" id="org-numbering-experts"></p>
+        <div class="field">
+          <label for="org-numbering-pattern">Образец номера организации</label>
+          <input id="org-numbering-pattern" maxlength="40" autocomplete="off" placeholder="{N}/{ГГГГ}">
+        </div>
+        <button type="button" class="secondary hidden" id="org-numbering-guess"></button>
+        <p id="org-numbering-next"></p>
+        <button type="button" id="org-numbering-save">Сохранить образец</button>
+        <p class="msg" id="org-numbering-msg" role="status" aria-live="polite"></p>
+      </div>
       <div class="card hidden" id="org-sign-box">
         <h2>Подпись организации</h2>
         <p class="muted">Эксперты, которые работают от Вашей организации, подписали заключения — подпишите их от организации:
@@ -1235,7 +1250,8 @@
         <p class="muted">Образец Вашего номера отчёта: {N} — порядковый номер за год, {ГГГГ} — год, {ГГ} — две последние цифры
           года. Например: {N}/{ГГГГ} → 146/2026.</p>
         <p class="muted" id="numbering-last"></p>
-        <div class="field">
+        <p class="hidden" id="numbering-org"></p>
+        <div class="field" id="numbering-own">
           <label for="numbering-pattern">Образец номера</label>
           <input id="numbering-pattern" maxlength="40" autocomplete="off" placeholder="{N}/{ГГГГ}">
         </div>

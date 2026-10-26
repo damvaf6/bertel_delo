@@ -2,7 +2,7 @@
 // о модели для администратора. Модель — настройка (src/providers/ai.mjs); кто что видит — src/access/policy.mjs.
 // ИИ только отвечает и подсказывает: заявку создаёт человек кнопкой, отметки проверки ставит человек.
 import { HttpError } from '../http/core.mjs';
-import { aiReviewSide, assistantOrderAllowed, assistantScopeAllowed } from '../access/policy.mjs';
+import { aiReviewSide, assistantOrderAllowed, assistantScopeAllowed, executorSignOrg } from '../access/policy.mjs';
 import { AI_DRIVER_NAME } from '../providers/ai.mjs';
 import {
   DISCLAIMER, aiReviewView, askAi, assistantMessages, monthUsage, cleanProblemAnswer, cleanReviewAnswer, orderBrief, problemMessages, reviewMessages,
@@ -103,17 +103,18 @@ export async function resultDocs(sql, storage, order) {
 // заметить повтор номера. Отменённые дела не в счёт; читаем не больше USED_MAX последних дел. Название дела — только
 // самому эксперту (withTitle), диспетчер видит лишь дату. order.id = null — все дела эксперта (следующий номер, 2.411).
 export const USED_MAX = 50;
+// order.executors — несколько экспертов сразу (общий счёт организации, 2.415); by — чьё дело.
 export async function usedNumbers(sql, storage, order, today, { withTitle = false } = {}) {
   const list = await sql`
     select o.id, o.title, o.executor_user_id, to_char(max(d.created_at) at time zone 'Europe/Moscow', 'YYYY-MM-DD') as day
     from orders o join documents d on d.order_id = o.id and d.kind = 'result' and d.deleted_at is null and d.uploaded_by = o.executor_user_id
-    where o.executor_user_id = ${order.executor_user_id} and o.id is distinct from ${order.id}::uuid and o.status <> 'cancelled'
+    where o.executor_user_id = any(${order.executors ?? [order.executor_user_id]}::uuid[]) and o.id is distinct from ${order.id}::uuid and o.status <> 'cancelled'
       and d.created_at >= (${`${today.slice(0, 4)}-01-01`}::date)::timestamp at time zone 'Europe/Moscow'
     group by o.id order by max(d.created_at) desc limit ${USED_MAX}`;
   const out = [];
   for (const o of list) {
     const { number } = reportFacts((await resultDocs(sql, storage, o)).filter((d) => d.pages));
-    if (number) out.push({ number, on: o.day, ...(withTitle ? { title: o.title } : {}) });
+    if (number) out.push({ number, on: o.day, by: o.executor_user_id, ...(withTitle ? { title: o.title } : {}) });
   }
   return out;
 }
@@ -124,6 +125,45 @@ export async function issuedNumbers(sql, userId, today, exceptId = null) {
   return sql`select report_number as number, to_char(report_number_on, 'YYYY-MM-DD') as on, title from orders
              where report_number_by = ${userId} and report_number is not null and status <> 'cancelled'
                and id is distinct from ${exceptId}::uuid and report_number_on >= ${`${today.slice(0, 4)}-01-01`}::date`;
+}
+
+// Нумерация организации (2.415): эксперт работает от организации, и у неё задан образец — номер выдаётся по нему из общего
+// счёта организации; иначе — по образцу самого эксперта. lock — строки специалиста и организации блокируются (в этом
+// порядке), чтобы два эксперта организации не получили один номер.
+export async function numberSource(sql, userId, { lock = false } = {}) {
+  const sp = lock ? await sql.one`select report_pattern from specialists where user_id = ${userId} for update`
+    : await sql.one`select report_pattern from specialists where user_id = ${userId}`;
+  const org = await executorSignOrg(sql, userId);
+  if (org) {
+    const g = lock ? await sql.one`select report_pattern from organizations where id = ${org.id} for update`
+      : await sql.one`select report_pattern from organizations where id = ${org.id}`;
+    if (g?.report_pattern) return { pattern: g.report_pattern, org, own: sp?.report_pattern ?? null };
+  }
+  return { pattern: sp?.report_pattern ?? null, org: null, own: sp?.report_pattern ?? null };
+}
+
+// Эксперты, которые работают от организации сейчас (как в перечне для СРО, 2.402).
+export async function orgExperts(sql, orgId) {
+  return sql`select s.user_id, u.full_name, s.report_pattern from specialists s join org_members m on m.org_id = s.org_id and m.user_id = s.user_id
+             join users u on u.id = s.user_id where s.org_id = ${orgId} order by u.full_name`;
+}
+
+// Номера этого года, от которых считается следующий и с которыми сверяется ручной номер: по счёту организации — выданные
+// по нему делам и номера из файлов отчётов её экспертов; по своему образцу — выданные делам эксперта и из его файлов.
+// Название дела — только у своих дел эксперта (чужие дела не видны). by — чьё дело.
+export async function numberPool(sql, storage, src, userId, today, exceptId = null) {
+  if (!src.org) {
+    return [
+      ...(await issuedNumbers(sql, userId, today, exceptId)).map((e) => ({ ...e, by: userId })),
+      ...await usedNumbers(sql, storage, { id: exceptId, executor_user_id: userId }, today, { withTitle: true }),
+    ];
+  }
+  const issued = await sql`select report_number as number, to_char(report_number_on, 'YYYY-MM-DD') as on, title, report_number_by as by from orders
+             where report_number_org = ${src.org.id} and report_number is not null and status <> 'cancelled'
+               and id is distinct from ${exceptId}::uuid and report_number_on >= ${`${today.slice(0, 4)}-01-01`}::date`;
+  const experts = (await orgExperts(sql, src.org.id)).map((e) => e.user_id);
+  const files = await usedNumbers(sql, storage, { id: exceptId, executors: experts }, today, { withTitle: true });
+  return [...issued, ...files].map((e) => (e.by === userId ? e : { ...e, title: null }));
 }
 
 // 2.198: документы дела, с которыми сверяется дата оценки, — основание (задание на оценку, определение суда) и другие

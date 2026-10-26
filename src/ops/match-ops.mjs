@@ -22,7 +22,7 @@ import { scheduleIcs } from '../orders/ics.mjs';
 import { holidayRunFrom } from '../orders/holidays.mjs';
 import { AWAY_BACK_SHOW_DAYS, awayBackOf } from '../notify/away.mjs';
 import { TAX_STATUSES, taxStatusFrom } from '../matching/executors.mjs';
-import { issuedNumbers, usedNumbers } from './ai-ops.mjs';
+import { numberPool, numberSource, usedNumbers } from './ai-ops.mjs';
 import { guessPattern, nextNumber, patternFrom } from '../orgs/numbering.mjs';
 
 const REGIONS = { moscow: 'Москва', mo: 'Московская область' };
@@ -301,16 +301,19 @@ export function matchOps() {
         const year = Number(today.slice(0, 4));
         const used = await usedNumbers(sql, providers.storage, { id: null, executor_user_id: actor.id }, today, { withTitle: true });
         const pattern = sp.report_pattern ?? null;
-        const guess = pattern ? null : guessPattern(used[0]?.number, year);
-        const by = pattern ?? guess;
+        // Работает от организации с образцом (2.415) — номера выдаёт организация из общего счёта; свой образец не действует.
+        const src = await numberSource(sql, actor.id);
+        const guess = pattern || src.org ? null : guessPattern(used[0]?.number, year);
+        const by = src.org ? src.pattern : pattern ?? guess;
         // Номера, уже выданные делам при сборке Word (2.412), — тоже в счёт следующего.
-        const next = by ? nextNumber(by, [...used, ...await issuedNumbers(sql, actor.id, today)], year) : null;
+        const next = by ? nextNumber(by, await numberPool(sql, providers.storage, src.org ? src : { org: null }, actor.id, today), year) : null;
         return {
           numbering: {
             pattern, guess, year, read: used.length,
+            org: src.org ? { name: src.org.name, pattern: src.pattern } : null,
             last: used[0] ? { number: used[0].number, on: used[0].on, title: used[0].title } : null,
             next: next ? { number: next.number, seq: next.seq, matched: next.matched,
-              after: next.last ? { number: next.last.number, on: next.last.on, title: next.last.title } : null } : null,
+              after: next.last ? { number: next.last.number, on: next.last.on, title: next.last.title ?? null, mine: next.last.by === actor.id } : null } : null,
           },
         };
       },
