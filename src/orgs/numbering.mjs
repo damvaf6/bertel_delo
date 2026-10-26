@@ -64,3 +64,19 @@ export function nextNumber(pattern, numbers, year) {
   }
   return { seq: max + 1, number: formatNumber(pattern, max + 1, year), last, matched };
 }
+
+// Номер отчёта, введённый экспертом вручную в деле (2.413): «№» в начале убирается, пробелы сжимаются; те же знаки, что в
+// образце, и хотя бы одна цифра. Пустой — null (номер выдастся заново при сборке Word). Ошибка — 400 с понятным текстом.
+export const NUMBER_MAX = 40;
+export function numberFrom(raw) {
+  if (raw == null || String(raw).trim() === '') return null;
+  if (typeof raw !== 'string') throw new HttpError(400, 'bad_number', 'Номер отчёта — строка');
+  const n = raw.trim().replace(/^№\s*/u, '').replace(/\s+/g, ' ');
+  if (!n) return null;
+  if (n.length > NUMBER_MAX) throw new HttpError(400, 'bad_number', `Номер отчёта — не длиннее ${NUMBER_MAX} знаков`);
+  if (!LITERAL.test(n)) throw new HttpError(400, 'bad_number', 'В номере — только буквы, цифры, «/», «-», «.» и пробел');
+  if (!/\d/.test(n)) throw new HttpError(400, 'bad_number', 'В номере отчёта должна быть хотя бы одна цифра');
+  return n;
+}
+
+export const sameNumber = (a, b) => norm(a) === norm(b);
