@@ -592,7 +592,7 @@ test('2.417: «Дела экспертов» — поиск по номеру о
       values ($1, $2, 'expertise', 'realty', $3, $4, current_date + 7, $5, now() - $6::interval, $7, case when $7::text is null then null else current_date end,
         case when $7::text is null then null else $4::uuid end) returning id`,
     [head.id, title, status, ex, { purpose: 'deal', address: 'г. Москва, ул. Тестовая, д. 1' }, ago, number])).rows[0].id;
-    const work = await mk('Квартира на Лесной', 'in_work', `В-21/${year}`, '1 minute');
+    const work = await mk('Квартира на Лесной', 'in_work', `Ф-21/${year}`, '1 minute');
     await mk('Дача в Рузе', 'in_work', null, '1 minute');
     const old = await mk('Дом в Истре', 'done', null, '95 days');
     await c.query("insert into order_status_history (order_id, from_status, to_status, side, at) values ($1, 'review', 'done', 'dispatcher', now() - interval '95 days')", [old]);
@@ -606,10 +606,10 @@ test('2.417: «Дела экспертов» — поиск по номеру о
   await page.goto(`/kabinet#org=${ids.org}`);
   const search = page.locator('#org-cases-search');
   await expect(search).toHaveAttribute('placeholder', 'Поиск: номер дела или отчёта, услуга, эксперт');
-  await search.fill('в-21');
+  await search.fill('ф-21');
   const list = page.locator('#org-cases > li');
   await expect(list).toHaveCount(1);
-  await expect(list.nth(0).locator('[data-role="report-number"]')).toHaveText(`Отчёт № В-21/${year}`);
+  await expect(list.nth(0).locator('[data-role="report-number"]')).toHaveText(`Отчёт № Ф-21/${year}`);
   await expect(page.locator('#org-cases-number')).toBeHidden();
   await search.scrollIntoViewIfNeeded();
   await shot(page, 'r20-2417-poisk-po-nomeru');
