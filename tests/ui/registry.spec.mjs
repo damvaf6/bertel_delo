@@ -252,3 +252,53 @@ test('2.404: перечень — чего не нашлось: скан или 
   expect(problems).toEqual([]);
   await ctx.close();
 });
+
+test('прогон 2.410: перечень — номер повторяется у эксперта; дело старше 90 дней — без ссылки, где взять файлы', async ({ browser, baseURL }) => {
+  const ctx = await browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true, locale: 'ru-RU',
+    storageState: { cookies: [], origins: [{ origin: new URL(baseURL).origin, localStorage: [{ name: 'delo.folds', value: 'open' }] }] } });
+  const page = await ctx.newPage();
+  const problems = [];
+  page.on('pageerror', (e) => problems.push(`ошибка JS: ${e.message}`));
+  const head = await signIn(page, '+79990024101');
+  const ids = await db(async (c) => {
+    const ex = (await c.query("insert into users (phone, full_name) values ('+79990024102', 'Повторова Вера') on conflict (phone) do update set full_name = excluded.full_name returning id")).rows[0].id;
+    const org = (await c.query("insert into organizations (name) values ('ООО «Оценка-Повтор»') returning id")).rows[0].id;
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head')", [org, head.id]);
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'member', date_trunc('year', now()) - interval '1 day')", [org, ex]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '2 years')", [ex, org]);
+    const mk = async (title, address, ago) => {
+      const id = (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, deadline, fields, updated_at)
+        values ($1, $2, 'expertise', 'realty', 'done', $3, current_date, $4, now() - $5::interval) returning id`, [head.id, title, ex, { purpose: 'deal', address }, ago])).rows[0].id;
+      await c.query("insert into order_status_history (order_id, from_status, to_status, side, at) values ($1, 'review', 'done', 'dispatcher', now() - $2::interval)", [id, ago]);
+      return id;
+    };
+    // Самое раннее — в начале года: дальше 90 дней, если сейчас не январь — март; иначе дело просто свежее.
+    const old = await mk('Дом в Истре', 'Московская обл., г. Истра, ул. Луговая, д. 5', `${Math.min(95, Math.floor((Date.now() - Date.UTC(new Date().getUTCFullYear(), 0, 2)) / 86_400_000))} days`);
+    const fresh = await mk('Квартира на Садовой', 'г. Москва, Садовая ул., д. 9, кв. 4', '1 minute');
+    return { org, ex, old, fresh };
+  });
+  for (const [id, text] of [[ids.old, 'ОТЧЁТ ОБ ОЦЕНКЕ № 15/2026 от 10.07.2026'], [ids.fresh, 'ОТЧЁТ ОБ ОЦЕНКЕ № 15/2026 от 20.10.2026']]) {
+    const up = await page.request.post(`/api/orders/${id}/documents`, { data: Buffer.from(text), headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('отчёт.txt') } });
+    expect(up.status()).toBe(201);
+  }
+  await db((c) => c.query("update documents set kind = 'result', uploaded_by = $2 where order_id = any($1)", [[ids.old, ids.fresh], ids.ex]));
+  const oldDays = await db(async (c) => (await c.query("select now() - updated_at > interval '90 days' as old from orders where id = $1", [ids.old])).rows[0].old);
+
+  await page.goto(`/kabinet#org=${ids.org}`);
+  await expect(page.locator('#org-registry-total')).toContainText('2 отчёта · дописать — в 2 · номер повторяется — в 2');
+  await expect(page.locator('#org-registry-experts > li').nth(0)).toContainText('номер повторяется — в 2');
+  const rows = page.locator('#org-registry-rows > li');
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0).locator('[data-registry-dup]')).toHaveText('Номер № 15/2026 повторяется в отчётах эксперта Повторова Вера — у каждого отчёта оценщика свой номер');
+  await expect(rows.nth(1).locator('[data-registry-dup]')).toBeVisible();
+  if (oldDays) {
+    await expect(rows.nth(0).getByRole('link')).toHaveCount(0);
+    await expect(rows.nth(0).locator('[data-registry-old]')).toContainText('Сдано больше 90 дней назад');
+  }
+  await expect(rows.nth(1).getByRole('link')).toHaveCount(1);
+  await expect(rows.nth(1).locator('[data-registry-old]')).toHaveCount(0);
+  await page.locator('#org-registry-box').scrollIntoViewIfNeeded();
+  await shot(page, 'r10-2410-perechen-povtor-nomera');
+  expect(problems).toEqual([]);
+  await ctx.close();
+});

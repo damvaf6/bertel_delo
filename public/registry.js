@@ -26,6 +26,10 @@ function gapsOf(r) {
   ];
 }
 
+// Прогон 2.410: номер повторяется в перечне — у каждого отчёта свой (в ИИ-проверке дела — 2.403).
+const dupLine = (r) => el('div', { class: 'overdue', 'data-registry-dup': r.id,
+  text: `Номер № ${r.number} повторяется в перечне — у каждого отчёта свой номер, проверьте файл отчёта` });
+
 let seq = 0;
 $('registry-year').addEventListener('change', () => loadRegistry(true));
 $('registry-quarter').addEventListener('change', () => loadRegistry(true));
@@ -47,13 +51,16 @@ export async function loadRegistry(chosen = false) {
   $('registry-quarter').value = registry.quarter ? String(registry.quarter) : '';
   const n = registry.total;
   const gaps = registry.rows.filter((r) => r.missing.length).length;
+  const dups = registry.rows.filter((r) => r.dup).length;
   $('registry-total').textContent = n ? `${registry.name}: ${n} ${plural(n, 'отчёт', 'отчёта', 'отчётов')}${gaps ? ` · дописать — в ${gaps}` : ''}`
+    + (dups ? ` · номер повторяется — в ${dups}` : '')
     + (n > registry.shown ? ` · показаны первые ${registry.shown}, выберите квартал` : '') : '';
   $('registry-rows').replaceChildren(...registry.rows.map((r, i) => el('li', { 'data-registry': r.id },
     el('a', { class: 'title', href: `#order=${r.id}`, text: `${i + 1}. ${r.number ? `Отчёт № ${r.number}` : 'Отчёт без номера'}${r.made_on ? ` от ${dayRu(r.made_on)}` : ''}` }),
     el('div', { text: r.object }),
     el('div', { class: 'muted', text: [r.service_name, r.purpose, r.customer ? `заказчик — ${r.customer}` : null].filter(Boolean).join(' · ') }),
     el('div', { class: 'muted', text: `${r.value_rub != null ? `${r.value_name}: ${rub(r.value_rub * 100)}` : 'стоимость не найдена'} · сдано ${dayRu(r.done_on)}` }),
+    ...(r.dup ? [dupLine(r)] : []),
     ...(r.missing.length ? gapsOf(r) : []))));
   $('registry-empty').classList.toggle('hidden', registry.rows.length > 0);
   $('registry-archive').textContent = `Заключения архивом (${registry.shown})`;
