@@ -6,6 +6,7 @@ import { startApp, login, client, makeOrg, addMember, setPlatformRole, ensurePai
 import { testExternalSignature } from '../../src/providers/sign.mjs';
 import crypto from 'node:crypto';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
+import { guessPattern, nextNumber, patternFrom, seqOf } from '../../src/orgs/numbering.mjs';
 
 const covered = new Set();
 const cover = (id) => covered.add(id);
@@ -3402,6 +3403,63 @@ test('мои итоги за год (2.409): весь год — сдано, в 
   assert.equal(last.total.overdue_now, null);
   assert.deepEqual(last.cases.map((c) => c.title), ['Год: прошлый год']);
   assert.deepEqual(last.by_month.map((m) => [m.month, m.done]), [[`${Number(year) - 1}-06`, 1]]);
+});
+
+test('нумерация отчётов (2.411): образец, проверка, подсказка образца и следующий номер по файлам отчётов этого года; чужое — нет', async () => {
+  cover('specialist.me.numbering');
+  // Правила образца и счёта — без базы.
+  assert.equal(patternFrom('  {N}/{ГГГГ} '), '{N}/{ГГГГ}');
+  assert.equal(patternFrom(''), null);
+  for (const bad of ['{ГГГГ}', '{N}-{N}', '{X}/{N}', '{N}#', 'x'.repeat(41) + '{N}']) assert.throws(() => patternFrom(bad), /образц|Образец|вставка/, bad);
+  assert.equal(seqOf('{N}/{ГГГГ}', '0145 / 2026', 2026), 145);
+  assert.equal(seqOf('{N}/{ГГГГ}', '145/2025', 2026), null, 'прошлый год — не в счёт');
+  assert.equal(seqOf('О-{N}-{ГГ}', 'о-12-26', 2026), 12);
+  assert.equal(guessPattern('145/2026', 2026), '{N}/{ГГГГ}');
+  assert.equal(guessPattern('О-12-26', 2026), 'О-{N}-{ГГ}');
+  assert.equal(guessPattern('108/2026-О', 2026), '{N}/{ГГГГ}-О');
+  assert.equal(guessPattern('без цифр', 2026), null);
+  assert.deepEqual(nextNumber('{N}/{ГГГГ}', [{ number: '7/2026' }, { number: '12/2026' }, { number: '99/2025' }, { number: 'А-50' }], 2026),
+    { seq: 13, number: '13/2026', last: { number: '12/2026' }, matched: 2 });
+
+  const exp = await login(S, '+79990002411');
+  const other = await login(S, '+79990002412');
+  await makeSpecialist(S.sql, exp.user.id);
+  await makeSpecialist(S.sql, other.user.id);
+  const num = async (c) => (await c.req('GET', '/api/specialist/me/numbering')).body.numbering;
+  assert.equal((await U.owner.req('GET', '/api/specialist/me/numbering')).status, 404, 'не специалист');
+  const year = Number(todayMsk().slice(0, 4));
+  const empty = await num(exp);
+  assert.deepEqual([empty.pattern, empty.guess, empty.last, empty.next, empty.year], [null, null, null, null, year]);
+  // Два отчёта с номерами этого года (последний загружен позже) и отменённое дело с большим номером — не в счёт.
+  const withReport = async (title, number, executor = exp.user.id, status = 'done') => {
+    const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
+    await S.sql`update orders set status = ${status}, deadline = (now() at time zone 'Europe/Moscow')::date, executor_user_id = ${executor} where id = ${o.id}`;
+    const doc = await upload(U.owner, o.id, 'отчёт.txt', `ОТЧЁТ ОБ ОЦЕНКЕ № ${number} от 05.10.2026\nКолонтитул: Отчёт № ${number}`);
+    await S.sql`update documents set kind = 'result', uploaded_by = ${executor} where id = ${doc.id}`;
+    return doc;
+  };
+  const first = await withReport('Нумерация: первый', `41/${year}`);
+  await S.sql`update documents set created_at = now() - interval '1 hour' where id = ${first.id}`;
+  await withReport('Нумерация: второй', `40/${year}`);
+  await withReport('Нумерация: отменено', `90/${year}`, exp.user.id, 'cancelled');
+  await withReport('Нумерация: чужое', `500/${year}`, other.user.id);
+  const g = await num(exp);
+  assert.equal(g.pattern, null);
+  assert.equal(g.guess, '{N}/{ГГГГ}', 'образец — по последнему загруженному отчёту');
+  assert.deepEqual([g.last.number, g.last.title], [`40/${year}`, 'Нумерация: второй']);
+  assert.deepEqual([g.next.number, g.next.seq, g.next.matched, g.next.after.number], [`42/${year}`, 42, 2, `41/${year}`]);
+  assert.ok(!JSON.stringify(g).includes('чужое'));
+  // Сохранить образец; неверный — 400 с понятным текстом; пустой — выключить.
+  const bad = await exp.req('PATCH', '/api/specialist/me', { report_pattern: '{ГГГГ}/О' });
+  assert.deepEqual([bad.status, bad.body.error], [400, 'bad_pattern']);
+  const saved = await exp.req('PATCH', '/api/specialist/me', { report_pattern: 'О-{N}-{ГГ}' });
+  assert.equal(saved.body.specialist.report_pattern, 'О-{N}-{ГГ}');
+  const own = await num(exp);
+  assert.deepEqual([own.pattern, own.guess, own.next.number, own.next.matched, own.next.after], ['О-{N}-{ГГ}', null, `О-1-${String(year).slice(-2)}`, 0, null]);
+  assert.equal((await exp.req('PATCH', '/api/specialist/me', { report_pattern: '' })).body.specialist.report_pattern, null);
+  // Чужой образец не трогается.
+  assert.equal((await num(other)).pattern, null);
+  assert.equal((await num(other)).next.number, `501/${year}`);
 });
 
 test('перечень отчётов для СРО (2.401): свои сданные отчёты об оценке за год — номер, дата, стоимость из файла; не оценка и чужое — нет; CSV', async () => {
