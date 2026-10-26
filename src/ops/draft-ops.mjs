@@ -18,7 +18,7 @@ import { orderSources, placeSources, sourcesLines } from '../docs/sources.mjs';
 import { draftDiff } from '../docs/diff.mjs';
 import { assignmentAddress, assignmentBank, assignmentCustomer, assignmentDue, assignmentKinds, assignmentPurpose, assignmentValue, banksIn, customerOf, customersInText, egrnFacts, egrnRightsFacts, egrnShares, egrnUses, kindList, parseFloorField, purposeFits, purposeKinds, sameAddressText, sameCustomer, USE_NAME } from '../ai/report-checks.mjs';
 import { assignmentDocs, egrnDocs, issuedNumbers, usedNumbers } from './ai-ops.mjs';
-import { nextNumber } from '../orgs/numbering.mjs';
+import { nextNumber, numberFrom, sameNumber } from '../orgs/numbering.mjs';
 import { todayMsk } from '../orders/workflow.mjs';
 
 const PHOTOS_MAX = 40;
@@ -117,6 +117,39 @@ export async function reportNumber(ctx, order, actor) {
     const { number } = nextNumber(sp.report_pattern, used, Number(today.slice(0, 4)));
     await tx`update orders set report_number = ${number}, report_number_on = ${today}, report_number_by = ${actor.id} where id = ${order.id}`;
     return number;
+  });
+}
+
+// Номер отчёта в деле (2.413) — только самому исполнителю: выданный ему номер и дата, есть ли образец в профиле (тогда номер
+// выдастся при первой сборке Word), можно ли поменять вручную (дело в работе).
+async function numberView(sql, actor, order) {
+  if (order.executor_user_id !== actor.id) return null;
+  const sp = await sql.one`select report_pattern from specialists where user_id = ${actor.id}`;
+  const o = await sql.one`select report_number, to_char(report_number_on, 'YYYY-MM-DD') as on from orders
+                          where id = ${order.id} and report_number_by = ${actor.id}`;
+  return { number: o?.report_number ?? null, on: o?.report_number ? o.on : null, pattern: sp?.report_pattern ?? null, can_set: editsDraft(actor, order) };
+}
+
+// Ручной номер (2.413): занят другим делом эксперта этого года — выданным платформой или в файле отчёта — нельзя. Строки
+// специалиста и дела блокируются, как при выдаче (reportNumber), — ручной номер и сборка Word не разойдутся.
+export async function setReportNumber(ctx, order, actor, raw) {
+  const number = numberFrom(raw);
+  return ctx.sql.tx(async (tx) => {
+    await tx`select 1 from specialists where user_id = ${actor.id} for update`;
+    const o = await tx.one`select report_number, report_number_by from orders where id = ${order.id} for update`;
+    const was = o.report_number_by === actor.id ? o.report_number : null;
+    if (!number) {
+      await tx`update orders set report_number = null, report_number_on = null, report_number_by = null where id = ${order.id}`;
+      return { number: null, was };
+    }
+    const today = todayMsk();
+    const taken = [
+      ...await issuedNumbers(tx, actor.id, today, order.id),
+      ...await usedNumbers(tx, ctx.providers.storage, { id: order.id, executor_user_id: actor.id }, today, { withTitle: true }),
+    ].find((e) => sameNumber(e.number, number));
+    if (taken) throw new HttpError(409, 'number_taken', `Номер № ${number} уже у дела «${taken.title}»${taken.on ? ` (${taken.on.split('-').reverse().join('.')})` : ''} — выберите другой`);
+    await tx`update orders set report_number = ${number}, report_number_on = ${today}, report_number_by = ${actor.id} where id = ${order.id}`;
+    return { number, was };
   });
 }
 
@@ -500,6 +533,7 @@ export function draftOps() {
           sections,
           can_edit: editsDraft(actor, order),
           can_ai: editsDraft(actor, order) && sections.length > 0,
+          report_number: await numberView(sql, actor, order),
           // Подходы к оценке (2.33): список — если исполнитель их выбирает для этой услуги; chosen — что отмечено.
           approaches: registry.approachesFor(order.module, order.service)
             ? { list: Object.entries(APPROACHES).map(([id, name]) => ({ id, name })), chosen: order.approaches ?? null }
@@ -784,6 +818,19 @@ export function draftOps() {
         await audit(sql, actor, 'draft.attach', 'order', order.id, { draft: String(cur.id), document: doc.id, template: word.template, analogs: word.analogs, photos: word.photos, ...(number ? { number } : {}) });
         res.status(201);
         return { document: publicDoc(doc) };
+      },
+    },
+    {
+      // Номер отчёта в деле вручную (2.413): исполнитель, пока дело в работе. Пустой — номер выдастся заново при сборке Word.
+      id: 'draft.number', method: 'PUT', path: '/api/orders/:id/report-number', auth: 'user',
+      access: { resource: 'order', param: 'id', need: 'read' },
+      async handler(ctx) {
+        const { sql, actor, order, body } = ctx;
+        guard(actor, order);
+        if (!editsDraft(actor, order)) throw new HttpError(403, 'forbidden', 'Номер отчёта меняет исполнитель, пока дело в работе');
+        const r = await setReportNumber(ctx, order, actor, body?.number);
+        await audit(sql, actor, 'draft.number', 'order', order.id, { number: r.number, was: r.was });
+        return { report_number: await numberView(sql, actor, order) };
       },
     },
   ];

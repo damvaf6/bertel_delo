@@ -649,6 +649,17 @@
             <p class="muted" id="draft-empty-text"></p>
             <div class="row gap" id="draft-empty-list"></div>
           </div>
+          <div class="hidden" id="draft-number">
+            <p id="draft-number-line"></p>
+            <div class="hidden" id="draft-number-form">
+              <label for="draft-number-input">Номер отчёта</label>
+              <input id="draft-number-input" maxlength="40" autocomplete="off" inputmode="text">
+              <p class="muted">Номер не должен совпадать с номером другого Вашего дела этого года. Оставьте поле пустым — номер
+                выдастся заново по образцу при сборке Word.</p>
+              <button type="button" class="secondary" id="draft-number-save">Сохранить номер</button>
+            </div>
+            <button type="button" class="secondary" id="draft-number-edit">Изменить номер</button>
+          </div>
           <button type="button" class="secondary" id="draft-word">Скачать Word</button>
           <p class="muted">Готовый файл: титул, оглавление, нумерованные разделы, таблицы, номер отчёта внизу страницы; фото осмотра и
             скриншоты аналогов — приложениями, с датой и местом. В шаблоне Вашей организации, если руководитель его загрузил.

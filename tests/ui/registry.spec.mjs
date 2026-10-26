@@ -362,3 +362,42 @@ test('2.411, 2.412: нумерация отчётов — подсказка о�
   expect(problems).toEqual([]);
   await ctx.close();
 });
+
+// 2.413: номер отчёта в деле — виден у черновика, меняется вручную; номер другого своего дела — нельзя.
+test('2.413: номер отчёта в деле — виден, меняется вручную, занятый другим делом — нельзя', async ({ browser, baseURL }) => {
+  const ctx = await browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true, locale: 'ru-RU',
+    storageState: { cookies: [], origins: [{ origin: new URL(baseURL).origin, localStorage: [{ name: 'delo.folds', value: 'open' }] }] } });
+  const page = await ctx.newPage();
+  const problems = [];
+  page.on('pageerror', (e) => problems.push(`ошибка JS: ${e.message}`));
+  const expert = await signIn(page, '+79990002413');
+  const year = Number(new Date(Date.now() + 3 * 3_600_000).toISOString().slice(0, 4));
+  const ids = await db(async (c) => {
+    await c.query("insert into specialists (user_id, report_pattern) values ($1, '{N}/{ГГГГ}')", [expert.id]);
+    const mk = async (title, number) => {
+      const o = (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, deadline, fields, report_number, report_number_on, report_number_by)
+        values ($1, $2, 'expertise', 'realty', 'in_work', $1, current_date + 7, '{}', $3, current_date, $4) returning id`, [expert.id, title, number, number ? expert.id : null])).rows[0].id;
+      await c.query("insert into result_drafts (order_id, author_id, source, body) values ($1, $2, 'edit', '1. Общие сведения\nТекст.')", [o, expert.id]);
+      return o;
+    };
+    return { busy: await mk('Квартира в Химках', `12/${year}`), open: await mk('Гараж в Мытищах', null) };
+  });
+  await page.goto(`/kabinet#order=${ids.open}`);
+  const line = page.locator('#draft-number-line');
+  await expect(line).toContainText('выдастся по Вашему образцу при первой сборке Word');
+  await page.locator('#draft-number-edit').click();
+  await page.locator('#draft-number-input').fill(`12/${year}`);
+  await page.locator('#draft-number-save').click();
+  await expect(page.locator('#draft-msg')).toContainText(`Номер № 12/${year} уже у дела «Квартира в Химках»`);
+  await page.locator('#draft-number-input').fill(`№ 13/${year}`);
+  await page.locator('#draft-number-save').click();
+  await expect(line).toContainText(`Номер отчёта: № 13/${year}`);
+  await expect(page.locator('#draft-number-edit')).toHaveText('Изменить номер');
+  const w = await page.request.get(`/api/orders/${ids.open}/draft/docx`);
+  expect(w.status()).toBe(200);
+  expect((await extractPages(Buffer.from(await w.body()), 'Отчёт.docx')).pages.join('\n')).toContain(`№ 13/${year}`);
+  await page.locator('#draft-number').scrollIntoViewIfNeeded();
+  await shot(page, 'r14-2413-nomer-v-dele');
+  expect(problems).toEqual([]);
+  await ctx.close();
+});

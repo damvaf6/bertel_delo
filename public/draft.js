@@ -34,6 +34,7 @@ export async function loadDraft(current, reload) {
   $('draft-actions').classList.toggle('hidden', !(r.draft && r.can_edit));
   $('draft-sources-box').classList.toggle('hidden', !(r.draft && r.can_edit && r.sections.some((s) => s.sources)));
   $('draft-word-box').classList.toggle('hidden', !(r.draft && mine));
+  renderNumber(r.report_number);
   $('draft-text').readOnly = !r.can_edit;
   $('draft-text').value = r.draft?.body ?? '';
   // Несохранённая правка с этого телефона (ушли со страницы, не нажав «Сохранить») — восстанавливается (2.19).
@@ -386,4 +387,33 @@ $('draft-attach').addEventListener('click', () => run($('draft-attach'), async (
   const { document: doc } = await api('POST', `/api/orders/${ctx.order.id}/draft/result`, { from: ctx.draft.id, confirm: true });
   await ctx.reload();
   say($('draft-msg'), `Файл «${doc.filename}» добавлен в результат работы`, 'ok');
+}));
+
+// Номер отчёта в деле (2.413): выданный по образцу или введённый вручную — на титуле и в колонтитуле Word. Поменять можно,
+// пока дело в работе; номер другого своего дела этого года сервер не даст.
+const dayRu = (d) => new Date(`${d}T12:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+function renderNumber(n) {
+  $('draft-number').classList.toggle('hidden', !n);
+  if (!n) return;
+  $('draft-number-line').textContent = n.number
+    ? `Номер отчёта: № ${n.number} (с ${dayRu(n.on)}) — на титуле и в колонтитуле Word.`
+    : n.pattern
+      ? 'Номер отчёта выдастся по Вашему образцу при первой сборке Word. Можно задать его и вручную.'
+      : 'В Word стоит номер дела платформы. Свой номер можно задать вручную или образцом в профиле («Нумерация отчётов»).';
+  $('draft-number-edit').textContent = n.number ? 'Изменить номер' : 'Задать номер вручную';
+  $('draft-number-edit').classList.toggle('hidden', !n.can_set);
+  $('draft-number-form').classList.add('hidden');
+  $('draft-number-input').value = n.number ?? '';
+}
+
+$('draft-number-edit').addEventListener('click', () => {
+  $('draft-number-form').classList.remove('hidden');
+  $('draft-number-edit').classList.add('hidden');
+  $('draft-number-input').focus();
+});
+
+$('draft-number-save').addEventListener('click', () => run($('draft-number-save'), async () => {
+  const { report_number: n } = await api('PUT', `/api/orders/${ctx.order.id}/report-number`, { number: $('draft-number-input').value });
+  renderNumber(n);
+  say($('draft-msg'), n.number ? `Номер отчёта: № ${n.number}` : 'Номер убран — выдастся заново при сборке Word', 'ok');
 }));

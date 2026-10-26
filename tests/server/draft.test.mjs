@@ -292,6 +292,56 @@ test('свой номер отчёта на титуле и в колонтит�
   assert.match((await word(b)).text, /ОТЧЁТ ОБ ОЦЕНКЕ № [0-9A-F]{8}\n/);
 });
 
+test('номер отчёта в деле вручную (2.413): виден исполнителю, меняется, занятый другим делом — нельзя; пустой — выдаётся заново', async () => {
+  const year = todayMsk().slice(0, 4);
+  const view = async (o) => (await spec.req('GET', `/api/orders/${o.id}/draft`)).body.report_number;
+  const set = (o, number) => spec.req('PUT', `/api/orders/${o.id}/report-number`, { number });
+  const title = async (o) => (await extractPages((await download(spec, `/api/orders/${o.id}/draft/docx`)).buf, 'Отчёт.docx')).pages.join('\n');
+  assert.equal((await spec.req('PATCH', '/api/specialist/me', { report_pattern: 'Р-{N}/{ГГГГ}' })).status, 200);
+  const a = await inWork('Квартира: ручной номер, первое');
+  await spec.req('POST', `/api/orders/${a.id}/draft/ai`, {});
+  assert.deepEqual(await view(a), { number: null, on: null, pattern: 'Р-{N}/{ГГГГ}', can_set: true });
+  await title(a);
+  const issued = await view(a);
+  assert.deepEqual([issued.number, issued.on], [`Р-1/${year}`, todayMsk()]);
+  // Вручную: «№» и лишние пробелы убираются; в Word — новый номер.
+  const r = await set(a, '  №  Р-7 / ' + year);
+  assert.equal(r.status, 200);
+  assert.equal(r.body.report_number.number, `Р-7 / ${year}`);
+  assert.match(await title(a), new RegExp(`ОТЧЁТ ОБ ОЦЕНКЕ № Р-7 / ${year}`));
+  for (const bad of ['без цифр', 'Р#1', 'x'.repeat(41) + '1']) {
+    const b = await set(a, bad);
+    assert.deepEqual([b.status, b.body.error], [400, 'bad_number'], bad);
+  }
+  // Номер другого дела эксперта — выданный платформой или из файла отчёта — занят (без пробелов и регистра).
+  const b = await inWork('Квартира: ручной номер, второе');
+  await spec.req('POST', `/api/orders/${b.id}/draft/ai`, {});
+  const taken = await set(b, `р-7/${year}`);
+  assert.deepEqual([taken.status, taken.body.error], [409, 'number_taken']);
+  assert.match(taken.body.message, /Квартира: ручной номер, первое/);
+  const c = await inWork('Квартира: номер из файла');
+  const up = await put(owner, c, `ОТЧЁТ ОБ ОЦЕНКЕ № 300/${year} от 05.10.${year}`, 'отчёт.txt', 'text/plain');
+  assert.equal(up.status, 201);
+  await S.sql`update documents set kind = 'result', uploaded_by = ${spec.user.id} where id = ${up.body.document.id}`;
+  const fromFile = await set(b, `300/${year}`);
+  assert.deepEqual([fromFile.status, fromFile.body.error], [409, 'number_taken']);
+  assert.match(fromFile.body.message, /Квартира: номер из файла/);
+  // Следующий по образцу — после ручного: Р-8.
+  assert.match(await title(b), new RegExp(`№ Р-8/${year}`));
+  // Пустой — номер убран, при сборке выдаётся заново (свой же прежний номер свободен).
+  const cleared = await set(b, '');
+  assert.equal(cleared.body.report_number.number, null);
+  assert.match(await title(b), new RegExp(`№ Р-8/${year}`));
+  // Заказчику и диспетчеру — номера нет и менять нельзя; дело не в работе — тоже нельзя.
+  assert.equal((await dispatcher.req('GET', `/api/orders/${a.id}/draft`)).body.report_number, null);
+  assert.equal((await dispatcher.req('PUT', `/api/orders/${a.id}/report-number`, { number: '1' })).status, 403);
+  assert.equal((await owner.req('PUT', `/api/orders/${a.id}/report-number`, { number: '1' })).status, 403);
+  await S.sql`update orders set status = 'review' where id = ${a.id}`;
+  assert.equal((await view(a)).can_set, false);
+  assert.equal((await set(a, `Р-9/${year}`)).status, 403);
+  assert.equal((await spec.req('PATCH', '/api/specialist/me', { report_pattern: '' })).status, 200);
+});
+
 test('черновик готовым файлом Word (2.29): скачивает исполнитель; заказчику и посторонним — нет; в шаблоне организации', async () => {
   const o = await inWork('Квартира: Word черновика');
   assert.equal((await download(spec, `/api/orders/${o.id}/draft/docx`)).status, 404, 'черновика ещё нет');
