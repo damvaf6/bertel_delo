@@ -20,6 +20,17 @@ export function matcher(query) {
   return (hay) => { const h = norm(hay); return words.every((vs) => vs.some((w) => h.includes(w))); };
 }
 
+// Номер отчёта (2.417): каждая часть запроса — целой частью номера («14» найдёт «14/2026» и «В-14», но не «140/2026»);
+// похожие латинские буквы — как русские («B-14» — «В-14»). Так же ищет сервер — `numberMatch` в src/orgs/registry.mjs.
+const LATIN = { a: 'а', b: 'в', c: 'с', e: 'е', h: 'н', k: 'к', m: 'м', o: 'о', p: 'р', t: 'т', x: 'х', y: 'у' };
+const numParts = (s) => String(s ?? '').toLowerCase().replace(/ё/g, 'е').replace(/[a-z]/g, (ch) => LATIN[ch] ?? ch)
+  .split(/[^0-9a-zа-я]+/).filter(Boolean);
+export function numberMatch(q, number) {
+  const w = numParts(q);
+  const parts = numParts(number);
+  return w.length > 0 && w.some((x) => /\d/.test(x)) && w.every((x) => parts.includes(x));
+}
+
 // Строка поиска: на телефоне «Найти» на клавиатуре прячет клавиатуру — список виден целиком.
 export function wireSearch(input, onChange) {
   input.addEventListener('input', onChange);

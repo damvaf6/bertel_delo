@@ -572,3 +572,65 @@ test('2.416: перечень — пропуски в нумерации за г
   await ctx.close();
   await hctx.close();
 });
+
+test('2.417: «Дела экспертов» — поиск по номеру отчёта: в списке и среди сданных давно, с архивом за месяц', async ({ browser, baseURL }) => {
+  const ctx = await browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true, locale: 'ru-RU',
+    storageState: { cookies: [], origins: [{ origin: new URL(baseURL).origin, localStorage: [{ name: 'delo.folds', value: 'open' }] }] } });
+  const page = await ctx.newPage();
+  const problems = [];
+  page.on('pageerror', (e) => problems.push(`ошибка JS: ${e.message}`));
+  const head = await signIn(page, '+79990024171');
+  const year = new Date(Date.now() + 3 * 3_600_000).getUTCFullYear();
+  const ids = await db(async (c) => {
+    const ex = (await c.query("insert into users (phone, full_name) values ('+79990024172', 'Номерова Нина') on conflict (phone) do update set full_name = excluded.full_name returning id")).rows[0].id;
+    const org = (await c.query("insert into organizations (name) values ('ООО «Оценка-Номер»') returning id")).rows[0].id;
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head')", [org, head.id]);
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'member', now() - interval '2 years')", [org, ex]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '2 years')", [ex, org]);
+    const mk = async (title, status, number, ago) => (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id,
+        deadline, fields, updated_at, report_number, report_number_on, report_number_by)
+      values ($1, $2, 'expertise', 'realty', $3, $4, current_date + 7, $5, now() - $6::interval, $7, case when $7::text is null then null else current_date end,
+        case when $7::text is null then null else $4::uuid end) returning id`,
+    [head.id, title, status, ex, { purpose: 'deal', address: 'г. Москва, ул. Тестовая, д. 1' }, ago, number])).rows[0].id;
+    const work = await mk('Квартира на Лесной', 'in_work', `В-21/${year}`, '1 minute');
+    await mk('Дача в Рузе', 'in_work', null, '1 minute');
+    const old = await mk('Дом в Истре', 'done', null, '95 days');
+    await c.query("insert into order_status_history (order_id, from_status, to_status, side, at) values ($1, 'review', 'done', 'dispatcher', now() - interval '95 days')", [old]);
+    return { org, ex, work, old };
+  });
+  const up = await page.request.post(`/api/orders/${ids.old}/documents`, { data: Buffer.from(`ОТЧЁТ ОБ ОЦЕНКЕ № В-20/${year} от 10.07.${year}`),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('отчёт.txt') } });
+  expect(up.status()).toBe(201);
+  await db((c) => c.query("update documents set kind = 'result', uploaded_by = $2 where order_id = $1", [ids.old, ids.ex]));
+
+  await page.goto(`/kabinet#org=${ids.org}`);
+  const search = page.locator('#org-cases-search');
+  await expect(search).toHaveAttribute('placeholder', 'Поиск: номер дела или отчёта, услуга, эксперт');
+  await search.fill('в-21');
+  const list = page.locator('#org-cases > li');
+  await expect(list).toHaveCount(1);
+  await expect(list.nth(0).locator('[data-role="report-number"]')).toHaveText(`Отчёт № В-21/${year}`);
+  await expect(page.locator('#org-cases-number')).toBeHidden();
+  await search.scrollIntoViewIfNeeded();
+  await shot(page, 'r20-2417-poisk-po-nomeru');
+
+  // Латинская B вместо русской В — тот же номер; дела в списке нет (сдано 95 дней назад) — находится среди сданных.
+  await search.fill(`B-20/${year}`);
+  const found = page.locator('#org-cases-number li');
+  await expect(found).toHaveCount(1);
+  await expect(found.nth(0)).toContainText(`Отчёт № В-20/${year}`);
+  await expect(found.nth(0)).toContainText('эксперт: Номерова Нина');
+  await expect(found.nth(0).locator('[data-role="old-case"]')).toContainText('Сдано больше 90 дней назад');
+  await expect(found.nth(0).locator('[data-action="number-archive"]')).toContainText('Заключения архивом за');
+  await expect(found.nth(0)).not.toContainText('Истре');
+  await page.locator('#org-cases-number').scrollIntoViewIfNeeded();
+  await shot(page, 'r21-2417-nomer-sredi-sdannyh');
+
+  await search.fill('Ромашка 777');
+  await expect(page.locator('#org-cases-none')).toContainText('по номеру дела или отчёта');
+  await expect(page.locator('[data-role="number-head"]')).toContainText('не нашёлся и среди сданных');
+  await search.fill('');
+  await expect(page.locator('#org-cases-number')).toBeHidden();
+  expect(problems).toEqual([]);
+  await ctx.close();
+});

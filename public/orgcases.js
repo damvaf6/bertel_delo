@@ -26,7 +26,7 @@ import { expertLink } from '/expertcard.js';
 import { awaySpan, dayRu } from '/order.js';
 import { rub } from '/money.js';
 import { orgChat } from '/orgchat.js';
-import { matcher, wireSearch } from '/search.js';
+import { matcher, numberMatch, wireSearch } from '/search.js';
 import { loadOrgSchedule } from '/orgschedule.js';
 import { pickSignFilter } from '/orgsign.js';
 import { newYearCaseText, taskLetterLines, taskMovedText } from '/today.js';
@@ -191,7 +191,9 @@ function renderCases() {
     ? `По отбору «${chosen.text}»${who} ничего не найдено${q.trim() ? ` по «${q.trim()}»` : ''}. Нажмите «Все»${expert ? ' или выберите «Все эксперты»' : ''}, чтобы искать по всем делам.`
     : expert ? `У эксперта «${mine[0]?.expert ?? ''}» ничего не найдено по «${q.trim()}». Выберите «Все эксперты», чтобы искать по всем делам.`
       : `Ничего не найдено по «${q.trim()}». Ищите по номеру дела или отчёта, виду услуги или эксперту.`;
-  findNumber(org, none && !chosen && !expert && /\d/.test(q) ? q.trim() : '');
+  // Ни у одного дела в списке номер отчёта не совпал — ищем и среди сданных раньше (цифры запроса найдутся и в номере дела).
+  const byNumber = found.some((c) => c.report_number && numberMatch(q, c.report_number));
+  findNumber(org, !chosen && !expert && !byNumber && /\d/.test(q) ? q.trim() : '', new Set(found.map((c) => c.id)));
   renderRemindAll(org, filter === 'idle_long' ? active : []);
   $('org-cases').replaceChildren(
     ...active.map((c) => caseItem(org, c)),
@@ -204,7 +206,7 @@ function renderCases() {
 let numberSeq = 0;
 let numberTimer = null;
 const OLD_CASE = 'Сдано больше 90 дней назад — в «Делах экспертов» его уже нет; файлы отчёта — в «Заключениях архивом» сводки за тот месяц';
-function findNumber(org, q) {
+function findNumber(org, q, listed) {
   clearTimeout(numberTimer);
   const box = $('org-cases-number');
   const my = ++numberSeq;
@@ -213,6 +215,9 @@ function findNumber(org, q) {
     let r;
     try { r = await api('GET', `/api/orgs/${org.id}/cases/number?q=${encodeURIComponent(q)}`); } catch { r = null; }
     if (my !== numberSeq || !r) return;
+    // Что уже видно в списке выше — не повторяем; ничего не нашлось, а в списке что-то есть — блок не нужен.
+    r.found = r.found.filter((f) => !listed.has(f.id));
+    if (!r.found.length && listed.size) { box.classList.add('hidden'); box.replaceChildren(); return; }
     box.classList.remove('hidden');
     box.replaceChildren(
       el('p', { class: 'muted', 'data-role': 'number-head', text: r.found.length
