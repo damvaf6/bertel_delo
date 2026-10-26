@@ -3553,6 +3553,20 @@ test('перечень отчётов для СРО по организации 
   assert.match(body, /Перечень отчётов об оценке — Тестовая организация СРО 2402/);
   assert.match(body, /№ п\/п;Номер отчёта;Дата составления;Оценщик;Объект оценки/);
   assert.match(body, /1;2402\/1;06\.10\.2026;Альфина Анна;г\. Москва, ул\. Тестовая, д\. 2;Оценка недвижимости;Ипотека, залог, банк;[^;]*;7100000;/);
+  assert.deepEqual(r.rows.map((x) => [x.dup, x.in_cases]), [[false, true], [false, true], [false, true]]);
+  // Прогон 2.410: тот же номер у второго отчёта эксперта — повтор у обоих; у другого эксперта такой номер — не повтор.
+  // Дело сдано больше 90 дней назад — в «Делах экспертов» его нет, ссылки к нему нет (in_cases: false).
+  const doc2 = await upload(U.owner, a2.id, 'отчёт2.txt', 'ОТЧЁТ ОБ ОЦЕНКЕ № 2402/ 1 от 07.10.2026');
+  const doc3 = await upload(U.owner, b1.id, 'отчёт3.txt', 'ОТЧЁТ ОБ ОЦЕНКЕ № 2402/1 от 08.10.2026');
+  await S.sql`update documents set kind = 'result', uploaded_by = ${ex.a.user.id} where id = ${doc2.id}`;
+  await S.sql`update documents set kind = 'result', uploaded_by = ${ex.b.user.id} where id = ${doc3.id}`;
+  await S.sql`update orders set updated_at = now() - interval '91 days' where id = ${a2.id}`;
+  const d = (await reg(head)).body.registry;
+  assert.deepEqual(d.rows.map((x) => [x.number?.replace(/\s+/g, ''), x.dup, x.in_cases]), [['2402/1', true, true], ['2402/1', true, false], ['2402/1', false, true]]);
+  assert.deepEqual(d.experts.map((e) => [e.name, e.dups]), [['Альфина Анна', 2], ['Борисов Борис', 0]]);
+  const csv2 = (await head.req('GET', `/api/orgs/${org.id}/registry?format=csv`, undefined, { binary: true })).body.toString('utf8');
+  assert.match(csv2, /Номер отчёта повторяется — у каждого отчёта свой номер: № 2402\/1 \(Альфина Анна\)/);
+  assert.ok(!csv2.includes('Борисов Борис)'), 'у другого эксперта — не повтор');
   // Ушла из организации — её прошлые дела в перечне организации больше не видны (как в сводке за месяц).
   await S.sql`delete from org_members where org_id = ${org.id} and user_id = ${ex.b.user.id}`;
   assert.deepEqual((await reg(head)).body.registry.rows.map((x) => x.id), [a1.id, a2.id]);

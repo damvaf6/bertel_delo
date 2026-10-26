@@ -42,6 +42,11 @@ const MISSING = [['number', 'номер отчёта'], ['made_on', 'дата с
 // Файлы результата дела: none — нет ни одного, unread — есть, но текст не читается (скан, картинка), text — прочитаны.
 const filesState = (docs) => (!docs.length ? 'none' : docs.some((d) => d.pages) ? 'text' : 'unread');
 
+// Прогон 2.410: номер отчёта — у каждого отчёта оценщика свой (ФСО); повтор в перечне виден сразу (в ИИ-проверке — 2.403).
+const numberKey = (n) => String(n).replace(/\s+/g, '').toLowerCase();
+// Дела экспертов у руководителя показывают завершённые за 90 дней (2.16) — к более старому делу ссылки из перечня нет.
+export const CASES_DAYS = 90;
+
 const isAppraisal = (registry, o) => registry.checks(o.module, o.service).some((c) => (c.auto ?? []).includes('dossier_appraiser'));
 
 function optionName(fields, field, value) {
@@ -83,8 +88,15 @@ async function registryRows(sql, storage, registry, done, period) {
     row.files = filesState(docs);
     // Подсказка, где искать, — только когда текст файла прочитан: без файла или со сканом искать нечего.
     row.where = row.files === 'text' ? gaps.map(([k]) => REGISTRY_WHERE[k]) : [];
+    if (o.in_cases != null) row.in_cases = o.in_cases;
     rows.push(row);
   }
+  const seen = new Map();
+  for (const x of rows.filter((x) => x.number != null)) {
+    const k = `${x.expert_id ?? ''}|${numberKey(x.number)}`;
+    seen.set(k, (seen.get(k) ?? 0) + 1);
+  }
+  for (const x of rows) x.dup = x.number != null && seen.get(`${x.expert_id ?? ''}|${numberKey(x.number)}`) > 1;
   return { year: period.year, quarter: period.quarter, name: period.name, years: period.years, total: list.length,
     shown: rows.length, rows };
 }
@@ -108,6 +120,7 @@ export async function expertRegistry(sql, storage, registry, userId, period) {
 export async function orgRegistry(sql, storage, registry, orgId, period) {
   const done = await sql`
     select distinct on (o.id) o.id, o.title, o.module, o.service, o.fields, o.executor_user_id, o.executor_user_id as expert_id, h.at,
+      o.updated_at > now() - ${CASES_DAYS}::int * interval '1 day' as in_cases,
       coalesce(g.name, u.full_name) as customer, e.full_name as expert_name
     from order_status_history h join orders o on o.id = h.order_id join users u on u.id = o.owner_user_id
     join specialists s on s.user_id = o.executor_user_id and s.org_id = ${orgId}
@@ -121,9 +134,10 @@ export async function orgRegistry(sql, storage, registry, orgId, period) {
   const r = await registryRows(sql, storage, registry, done, period);
   const by = new Map();
   for (const x of r.rows) {
-    const e = by.get(x.expert_id) ?? by.set(x.expert_id, { id: x.expert_id, name: x.expert_name, n: 0, gaps: 0 }).get(x.expert_id);
+    const e = by.get(x.expert_id) ?? by.set(x.expert_id, { id: x.expert_id, name: x.expert_name, n: 0, gaps: 0, dups: 0 }).get(x.expert_id);
     e.n++;
     if (x.missing.length) e.gaps++;
+    if (x.dup) e.dups++;
   }
   r.experts = [...by.values()].sort((a, b) => b.n - a.n || a.name.localeCompare(b.name, 'ru'));
   // Экспертов, работающих от организации, нет — карточку перечня не показываем (как сводку за месяц).
@@ -144,6 +158,8 @@ export function registryCsv(name, r, { org = false } = {}) {
       'Итоговая стоимость, ₽', 'Что за стоимость', 'Сдано'],
     ...r.rows.map((x, i) => [i + 1, x.number ?? '', ruDay(x.made_on), ...(org ? [x.expert_name] : []), x.object, x.service_name,
       x.purpose ?? '', x.customer ?? '', rubCell(x.value_rub), x.value_name ?? '', ruDay(x.done_on)]),
+    ...(r.rows.some((x) => x.dup) ? [[], ['Номер отчёта повторяется — у каждого отчёта свой номер: '
+      + [...new Set(r.rows.filter((x) => x.dup).map((x) => `№ ${x.number}${org ? ` (${x.expert_name})` : ''}`))].join(', ')]] : []),
     ...(r.total > r.shown ? [[], [`Показаны первые ${r.shown} из ${r.total} — выберите квартал`]] : []),
   ];
   return `﻿${lines.map((l) => l.map(cell).join(';')).join('\r\n')}\r\n`;
