@@ -302,3 +302,47 @@ test('прогон 2.410: перечень — номер повторяется
   expect(problems).toEqual([]);
   await ctx.close();
 });
+
+// 2.411: «Нумерация отчётов» в профиле — образец по последнему отчёту одной кнопкой, следующий номер, сохранение.
+test('2.411: нумерация отчётов — подсказка образца, следующий номер, неверный образец, сохранение', async ({ browser, baseURL }) => {
+  const ctx = await browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true, locale: 'ru-RU',
+    storageState: { cookies: [], origins: [{ origin: new URL(baseURL).origin, localStorage: [{ name: 'delo.folds', value: 'open' }] }] } });
+  const page = await ctx.newPage();
+  const problems = [];
+  page.on('pageerror', (e) => problems.push(`ошибка JS: ${e.message}`));
+  const expert = await signIn(page, '+79990002411');
+  const year = Number(new Date(Date.now() + 3 * 3_600_000).toISOString().slice(0, 4));
+  const id = await db(async (c) => {
+    await c.query("insert into specialists (user_id) values ($1)", [expert.id]);
+    return (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, deadline, fields)
+      values ($1, 'Дом в Кратове', 'expertise', 'realty', 'done', $1, current_date, '{}') returning id`, [expert.id])).rows[0].id;
+  });
+  const text = `ОТЧЁТ ОБ ОЦЕНКЕ № 145/${year} от 12.10.${year}\nОтчёт № 145/${year}`;
+  const up = await page.request.post(`/api/orders/${id}/documents`, { data: Buffer.from(text), headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('отчёт.txt') } });
+  expect(up.status()).toBe(201);
+  await db((c) => c.query("update documents set kind = 'result' where order_id = $1", [id]));
+
+  await page.goto('/kabinet#specialist');
+  const box = page.locator('#numbering-box');
+  await expect(box.getByRole('heading', { name: 'Нумерация отчётов' })).toBeVisible();
+  await expect(page.locator('#numbering-last')).toContainText(`№ 145/${year}`);
+  await expect(page.locator('#numbering-last')).toContainText('«Дом в Кратове»');
+  await expect(page.locator('#numbering-guess')).toHaveText('Взять образец по последнему отчёту: {N}/{ГГГГ}');
+  await expect(page.locator('#numbering-next')).toContainText(`Следующий номер по этому образцу: № 146/${year}`);
+  await box.scrollIntoViewIfNeeded();
+  await shot(page, 'r11-2411-numeraciya-podskazka');
+  // Неверный образец — понятная причина; образец по подсказке — сохраняется.
+  await page.locator('#numbering-pattern').fill('{ГГГГ}-О');
+  await page.locator('#numbering-save').click();
+  await expect(page.locator('#numbering-msg')).toContainText('{N}');
+  await page.locator('#numbering-guess').click();
+  await expect(page.locator('#numbering-pattern')).toHaveValue('{N}/{ГГГГ}');
+  await page.locator('#numbering-save').click();
+  await expect(page.locator('#numbering-msg')).toHaveText('Образец сохранён');
+  await expect(page.locator('#numbering-guess')).toBeHidden();
+  await expect(page.locator('#numbering-next')).toContainText(`Следующий номер: № 146/${year} — после № 145/${year}`);
+  await box.scrollIntoViewIfNeeded();
+  await shot(page, 'r12-2411-numeraciya-sohraneno');
+  expect(problems).toEqual([]);
+  await ctx.close();
+});

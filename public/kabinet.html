@@ -1219,6 +1219,20 @@
         <button type="button" class="secondary hidden" id="registry-archive">Заключения архивом</button>
         <p class="msg" id="registry-msg" role="status" aria-live="polite"></p>
       </div>
+      <div class="card" id="numbering-box">
+        <h2>Нумерация отчётов</h2>
+        <p class="muted">Образец Вашего номера отчёта: {N} — порядковый номер за год, {ГГГГ} — год, {ГГ} — две последние цифры
+          года. Например: {N}/{ГГГГ} → 146/2026.</p>
+        <p class="muted" id="numbering-last"></p>
+        <div class="field">
+          <label for="numbering-pattern">Образец номера</label>
+          <input id="numbering-pattern" maxlength="40" autocomplete="off" placeholder="{N}/{ГГГГ}">
+        </div>
+        <button type="button" class="secondary hidden" id="numbering-guess"></button>
+        <p id="numbering-next"></p>
+        <button type="button" id="numbering-save">Сохранить образец</button>
+        <p class="msg" id="numbering-msg" role="status" aria-live="polite"></p>
+      </div>
       <div class="card">
         <h2>Мои допуски</h2>
         <ul class="list" id="specialist-permits"></ul>

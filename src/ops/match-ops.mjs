@@ -22,6 +22,8 @@ import { scheduleIcs } from '../orders/ics.mjs';
 import { holidayRunFrom } from '../orders/holidays.mjs';
 import { AWAY_BACK_SHOW_DAYS, awayBackOf } from '../notify/away.mjs';
 import { TAX_STATUSES, taxStatusFrom } from '../matching/executors.mjs';
+import { usedNumbers } from './ai-ops.mjs';
+import { guessPattern, nextNumber, patternFrom } from '../orgs/numbering.mjs';
 
 const REGIONS = { moscow: 'Москва', mo: 'Московская область' };
 const OPEN_STATUSES = ['awaiting_executor', 'in_work', 'review'];
@@ -91,6 +93,8 @@ async function profileView(sql, userId, registry) {
     permits: permits.map((p) => ({ ...p, valid_until: p.valid_until ?? null })),
     // Статус исполнителя (2а.3): самозанятый, ИП, ООО/бюро; null — не указан. Правила для статуса — в профиле.
     tax_status: sp.tax_status ?? null,
+    // Образец своего номера отчёта (2.411): «{N}/{ГГГГ}»; null — нумерации нет, в Word — номер дела платформы.
+    report_pattern: sp.report_pattern ?? null,
     tax_status_name: TAX_STATUSES[sp.tax_status]?.name ?? null,
     tax_rules: TAX_STATUSES[sp.tax_status]?.rules ?? [],
     // Документы о знании языка (2а.3): язык, есть ли копия, проверен ли администратором — без номеров.
@@ -239,15 +243,21 @@ export function matchOps() {
         const hasActive = body?.active !== undefined;
         const hasOrg = body?.org_id !== undefined;
         const hasAway = body?.away !== undefined;
-        if (!hasActive && !hasOrg && !hasAway) throw new HttpError(400, 'bad_input', 'Нечего менять');
+        const hasPattern = body?.report_pattern !== undefined;
+        if (!hasActive && !hasOrg && !hasAway && !hasPattern) throw new HttpError(400, 'bad_input', 'Нечего менять');
         if (hasActive && typeof body.active !== 'boolean') throw new HttpError(400, 'bad_input', 'Поле «Принимаю дела»: да или нет');
         const orgId = !hasOrg || body.org_id === null ? null : uuidFrom(body.org_id, 'Организация не найдена');
         if (orgId && !actor.orgs.some((m) => m.org_id === orgId)) throw new HttpError(404, 'not_found', 'Организация не найдена');
         const away = hasAway ? awayFrom(body.away) : null;
+        const pattern = hasPattern ? patternFrom(body.report_pattern) : null;
         await sql.tx(async (tx) => {
           const sp = await tx.one`select * from specialists where user_id = ${actor.id} for update`;
           if (!sp) throw new HttpError(404, 'not_found', 'Вы не специалист');
           if (hasActive) await tx`update specialists set active = ${body.active} where user_id = ${actor.id}`;
+          if (hasPattern && pattern !== (sp.report_pattern ?? null)) {
+            await tx`update specialists set report_pattern = ${pattern} where user_id = ${actor.id}`;
+            await audit(tx, actor, 'specialist.report_pattern', 'user', actor.id, { pattern });
+          }
           if (hasAway) {
             // С какого дня считать «Пока Вас не было» (2.239): первый день отметки; продлил уже идущие дни — прежний.
             const cur = awayOf(sp);
@@ -278,6 +288,30 @@ export function matchOps() {
       async handler({ sql, actor, query }) {
         if (!(await sql.one`select 1 from specialists where user_id = ${actor.id}`)) throw new HttpError(404, 'not_found', 'Вы не специалист');
         return { report: await expertMonthReport(sql, actor.id, reportPeriod(query)) };
+      },
+    },
+    {
+      // «Нумерация отчётов» (2.411): образец своего номера, подсказка образца по последнему отчёту и следующий свободный номер
+      // этого года — наибольший по образцу из файлов отчётов эксперта (не больше USED_MAX последних дел) + 1.
+      id: 'specialist.me.numbering', method: 'GET', path: '/api/specialist/me/numbering', auth: 'user', access: 'self',
+      async handler({ sql, actor, providers }) {
+        const sp = await sql.one`select report_pattern from specialists where user_id = ${actor.id}`;
+        if (!sp) throw new HttpError(404, 'not_found', 'Вы не специалист');
+        const today = todayMsk();
+        const year = Number(today.slice(0, 4));
+        const used = await usedNumbers(sql, providers.storage, { id: null, executor_user_id: actor.id }, today, { withTitle: true });
+        const pattern = sp.report_pattern ?? null;
+        const guess = pattern ? null : guessPattern(used[0]?.number, year);
+        const by = pattern ?? guess;
+        const next = by ? nextNumber(by, used, year) : null;
+        return {
+          numbering: {
+            pattern, guess, year, read: used.length,
+            last: used[0] ? { number: used[0].number, on: used[0].on, title: used[0].title } : null,
+            next: next ? { number: next.number, seq: next.seq, matched: next.matched,
+              after: next.last ? { number: next.last.number, on: next.last.on, title: next.last.title } : null } : null,
+          },
+        };
       },
     },
     {

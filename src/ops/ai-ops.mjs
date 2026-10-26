@@ -101,13 +101,13 @@ export async function resultDocs(sql, storage, order) {
 
 // 2.403: номера отчётов из других дел того же эксперта, где файл результата загружен в этом году (по Москве), — чтобы
 // заметить повтор номера. Отменённые дела не в счёт; читаем не больше USED_MAX последних дел. Название дела — только
-// самому эксперту (withTitle), диспетчер видит лишь дату.
+// самому эксперту (withTitle), диспетчер видит лишь дату. order.id = null — все дела эксперта (следующий номер, 2.411).
 export const USED_MAX = 50;
 export async function usedNumbers(sql, storage, order, today, { withTitle = false } = {}) {
   const list = await sql`
     select o.id, o.title, o.executor_user_id, to_char(max(d.created_at) at time zone 'Europe/Moscow', 'YYYY-MM-DD') as day
     from orders o join documents d on d.order_id = o.id and d.kind = 'result' and d.deleted_at is null and d.uploaded_by = o.executor_user_id
-    where o.executor_user_id = ${order.executor_user_id} and o.id <> ${order.id} and o.status <> 'cancelled'
+    where o.executor_user_id = ${order.executor_user_id} and o.id is distinct from ${order.id}::uuid and o.status <> 'cancelled'
       and d.created_at >= (${`${today.slice(0, 4)}-01-01`}::date)::timestamp at time zone 'Europe/Moscow'
     group by o.id order by max(d.created_at) desc limit ${USED_MAX}`;
   const out = [];
