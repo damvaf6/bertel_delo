@@ -663,11 +663,14 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
 // «Мои итоги за месяц» эксперта (2.92): то же, что строка эксперта в сводке руководителя, но по всем его делам — и частным,
 // и от организации; плюс список сданных за месяц дел (своих — с названием), в срок ли и выплачено ли. Месяцы — с того,
 // когда человек стал специалистом.
+// «Мои итоги за год» (2.409): период «ГГГГ» — весь год (текущий и прошлый, с года, когда стал специалистом); плюс по месяцам —
+// сдано, в срок, возвраты, вознаграждение за сданные и выплачено (только месяцы, где что-то было).
 export async function expertMonthReport(sql, userId, month, today = todayMsk()) {
+  const year = isYear(month);
   const { start, end } = await monthBounds(sql, month);
   const since = (await sql`select to_char(created_at at time zone 'Europe/Moscow', 'YYYY-MM') as m from specialists
                            where user_id = ${userId}`)[0]?.m ?? '';
-  const current = month === today.slice(0, 7);
+  const current = month === today.slice(0, year ? 4 : 7);
   const [{ n: accepted }] = await sql`
     select count(distinct order_id)::int as n from order_offers
     where specialist_id = ${userId} and outcome = 'accepted' and outcome_at >= ${start} and outcome_at < ${end}`;
@@ -684,14 +687,15 @@ export async function expertMonthReport(sql, userId, month, today = todayMsk()) 
     from order_status_history h join orders o on o.id = h.order_id left join payouts p on p.order_id = o.id
     where o.executor_user_id = ${userId} and h.to_status = 'done' and h.at >= ${start} and h.at < ${end}
     order by o.id, h.at`;
-  const [{ n: headReturns }] = await sql`
-    select count(*)::int as n from org_returns where executor_user_id = ${userId} and created_at >= ${start} and created_at < ${end}`;
-  const [{ n: dispReturns }] = await sql`
-    select count(*)::int as n from order_status_history h join orders o on o.id = h.order_id
+  const headReturns = await sql`
+    select created_at as at from org_returns where executor_user_id = ${userId} and created_at >= ${start} and created_at < ${end}`;
+  const dispReturns = await sql`
+    select h.at from order_status_history h join orders o on o.id = h.order_id
     where o.executor_user_id = ${userId} and h.from_status = 'review' and h.to_status = 'in_work' and h.at >= ${start} and h.at < ${end}`;
-  const [{ kop: paid }] = await sql`
-    select coalesce(sum(amount_kop), 0)::bigint as kop from payouts
+  const paid = await sql`
+    select amount_kop, paid_at as at from payouts
     where executor_user_id = ${userId} and status = 'succeeded' and paid_at >= ${start} and paid_at < ${end}`;
+  const paidKop = (rows) => rows.reduce((s, p) => s + Number(p.amount_kop), 0);
   const active = current ? await sql`
     select status, deadline from orders
     where executor_user_id = ${userId} and status in ('awaiting_executor', 'in_work', 'review') and deadline is not null` : [];
@@ -709,11 +713,29 @@ export async function expertMonthReport(sql, userId, month, today = todayMsk()) 
     paid: o.payout_status === 'succeeded',
   }));
   const late = cases.filter((c) => c.late).length;
+  // 2.409: по месяцам года — только где что-то сдано, возвращено или выплачено; месяц — по Москве.
+  const inMonth = (m) => (r) => dayMsk(r.at).slice(0, 7) === m;
+  const byMonth = year ? Array.from({ length: 12 }, (_, i) => `${month}-${String(i + 1).padStart(2, '0')}`).map((m) => {
+    const c = cases.filter((x) => x.done_on.slice(0, 7) === m);
+    return {
+      month: m,
+      name: monthRu(m),
+      done: c.length,
+      done_late: c.filter((x) => x.late).length,
+      returned_head: headReturns.filter(inMonth(m)).length,
+      returned_dispatcher: dispReturns.filter(inMonth(m)).length,
+      fee_kop: c.reduce((s, x) => s + x.fee_kop, 0),
+      paid_kop: paidKop(paid.filter(inMonth(m))),
+    };
+  }).filter((m) => m.done || m.returned_head || m.returned_dispatcher || m.paid_kop) : null;
   return {
     month,
-    month_name: monthRu(month),
+    month_name: year ? `${month} год` : monthRu(month),
     current,
+    year,
     months: reportMonths(today).filter((m) => m >= since || m === month),
+    years: reportYears(today).filter((y) => y >= since.slice(0, 4) || y === month),
+    ...(byMonth ? { by_month: byMonth } : {}),
     total: {
       accepted,
       done: cases.length,
@@ -722,10 +744,10 @@ export async function expertMonthReport(sql, userId, month, today = todayMsk()) 
       // В среднем дней от принятия до сдачи (2.377) — как в сводке руководителя (2.117); дела без отметки о принятии не в счёт.
       avg_days: avgDays(pace(done)),
       overdue_now: current ? active.filter((o) => isOverdue(o, today)).length : null,
-      returned_head: headReturns,
-      returned_dispatcher: dispReturns,
+      returned_head: headReturns.length,
+      returned_dispatcher: dispReturns.length,
       fee_kop: cases.reduce((s, c) => s + c.fee_kop, 0),
-      paid_kop: Number(paid),
+      paid_kop: paidKop(paid),
     },
     cases,
   };

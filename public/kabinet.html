@@ -1178,16 +1178,20 @@
         <p class="msg" id="desk-msg" role="status" aria-live="polite"></p>
       </div>
       <div class="card" id="my-report-box">
-        <h2>Мои итоги за месяц</h2>
+        <h2>Мои итоги</h2>
         <p class="muted">Сколько дел Вы сдали, из них в срок, сколько раз работу возвращали, сколько Вам причитается за сданные
-          и сколько уже выплачено. Считаются все Ваши дела — и частные, и от организации.</p>
+          и сколько уже выплачено. Считаются все Ваши дела — и частные, и от организации. За год — то же и по месяцам.</p>
         <div class="field">
-          <label for="my-report-month">Месяц</label>
+          <label for="my-report-month">Месяц или год</label>
           <select id="my-report-month"></select>
         </div>
         <dl class="facts" id="my-report-total"></dl>
+        <div class="hidden" id="my-report-months-box">
+          <h3>По месяцам</h3>
+          <ul class="list" id="my-report-months"></ul>
+        </div>
         <ul class="list" id="my-report-cases"></ul>
-        <p class="muted hidden" id="my-report-empty">За этот месяц сданных дел нет.</p>
+        <p class="muted hidden" id="my-report-empty">За этот период сданных дел нет.</p>
         <p class="msg" id="my-report-msg" role="status" aria-live="polite"></p>
       </div>
       <div class="card" id="registry-box">

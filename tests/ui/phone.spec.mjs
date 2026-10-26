@@ -5994,8 +5994,8 @@ test('мои итоги за месяц (2.92): эксперт в профиле
   });
   await page.goto('/kabinet#specialist');
   const box = page.locator('#my-report-box');
-  await expect(box.getByRole('heading', { name: 'Мои итоги за месяц' })).toBeVisible();
-  await expect(page.locator('#my-report-month option')).toHaveCount(13);
+  await expect(box.getByRole('heading', { name: 'Мои итоги', exact: true })).toBeVisible();
+  await expect(page.locator('#my-report-month optgroup[label="Месяц"] option')).toHaveCount(13);
   await expect(page.locator('#my-report-month option').first()).toContainText('(текущий)');
   const total = page.locator('#my-report-total');
   await expect(total).toContainText('2 (в срок — 1, позже срока — 1)');
@@ -6049,6 +6049,50 @@ test('мои итоги за месяц (2.377): средний срок от п
   await shot(page, 'i11-ekspert-itogi-srednij-srok');
   await rows.nth(1).scrollIntoViewIfNeeded();
   await shot(page, 'i12-ekspert-itogi-delo-pozzhe-sroka');
+});
+
+test('мои итоги за год (2.409): в выборе — год; за год — по месяцам сдано, в срок, возвраты, вознаграждение и выплачено', async ({ page }) => {
+  const expert = await signIn(page, '+79990009409');
+  const year = String(new Date(Date.now() + 3 * 3_600_000).getUTCFullYear());
+  await db(async (c) => {
+    await c.query("insert into specialists (user_id, created_at) values ($1, now() - interval '2 years')", [expert.id]);
+    const mk = async (title, at, deadline) => {
+      const id = (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, price_kop, paid_at, deadline)
+        values ($1, $2, 'expertise', 'realty', 'done', $1, 1500000, now(), $3::date) returning id`, [expert.id, title, deadline])).rows[0].id;
+      await c.query(`insert into order_status_history (order_id, from_status, to_status, side, at) values ($1, 'review', 'done', 'dispatcher', $2::timestamptz)`, [id, at]);
+      return id;
+    };
+    const jan = await mk('Квартира в Митино: итоги года', `${year}-01-11T12:00:00+03:00`, `${year}-01-20`);
+    await mk('Гараж в Бутово: итоги года', `${year}-01-14T12:00:00+03:00`, `${year}-01-12`);
+    const now = await mk('Дом в Истре: итоги года', new Date().toISOString(), `${year}-01-01`);
+    await c.query(`insert into order_status_history (order_id, from_status, to_status, side, at) values ($1, 'review', 'in_work', 'dispatcher', now() - interval '1 hour')`, [now]);
+    await c.query(`insert into payouts (order_id, executor_user_id, amount_kop, commission_kop, status, paid_at) values ($1, $2, 1200000, 300000, 'succeeded', $3::timestamptz)`,
+      [jan, expert.id, `${year}-01-12T12:00:00+03:00`]);
+  });
+  await page.goto('/kabinet#specialist');
+  const sel = page.locator('#my-report-month');
+  await expect(sel.locator('optgroup[label="Год"] option')).toHaveCount(2);
+  await expect(sel.locator('optgroup[label="Год"] option').first()).toHaveText(`${year} год (по сегодня)`);
+  await expect(page.locator('#my-report-months-box')).toBeHidden();
+  await sel.selectOption(year);
+  const total = page.locator('#my-report-total');
+  await expect(total).toContainText(`Сдано · ${year} год3 (в срок — 1, позже срока — 2)`);
+  await expect(total).toContainText('Выплачено за год12 000 ₽');
+  const months = page.locator('#my-report-months > li');
+  await expect(page.locator('#my-report-months-box')).toBeVisible();
+  const jan = months.first();
+  await expect(jan.locator('.title')).toHaveText('Январь');
+  await expect(jan).toContainText('сдано 2 · в срок — 1, позже срока — 1');
+  await expect(jan).toContainText('вознаграждение 24 000 ₽ · выплачено 12 000 ₽');
+  await expect(months.last()).toContainText('возвращали: на доработку — 1');
+  await expect(page.locator('#my-report-cases > li')).toHaveCount(3);
+  await page.locator('#my-report-months-box').scrollIntoViewIfNeeded();
+  await shot(page, 'r09-2409-moi-itogi-za-god');
+  // Прошлый год — пусто, по месяцам не показываются.
+  await sel.selectOption(String(Number(year) - 1));
+  await expect(page.locator('#my-report-empty')).toBeVisible();
+  await expect(page.locator('#my-report-months-box')).toBeHidden();
+  await expect(total).toContainText('Выплачено за год0 ₽');
 });
 
 test('мои сроки на две недели (2.109): по дням — сроки, выезд помощника, ссылка на осмотр, просьба о переносе; строка ведёт в дело', async ({ page }) => {

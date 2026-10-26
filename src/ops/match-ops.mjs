@@ -15,7 +15,7 @@ import { audit, sendFile, text, uuidFrom } from './util.mjs';
 import { buildExpertArchive } from './case-ops.mjs';
 import { notify, orgHeads } from '../notify/notify.mjs';
 import { BLOCKING_KINDS, dossierAlerts, loadDossier, needsValidDossier } from '../dossier/dossier.mjs';
-import { expertMonthReport, orgReturnsYear, reportMonth } from '../orgs/report.mjs';
+import { expertMonthReport, orgReturnsYear, reportPeriod } from '../orgs/report.mjs';
 import { expertRegistry, registryCsv, registryPeriod } from '../orgs/registry.mjs';
 import { expertSchedule, taskDues } from '../orders/schedule.mjs';
 import { scheduleIcs } from '../orders/ics.mjs';
@@ -273,11 +273,11 @@ export function matchOps() {
     },
     {
       // «Мои итоги за месяц» (2.92): сдано, из них в срок, возвраты, вознаграждение и выплачено — только свои дела.
-      // Месяц — как в сводке руководителя (текущий и 12 прошлых).
+      // Месяц — как в сводке руководителя (текущий и 12 прошлых); ?year=ГГГГ — за год (2.409).
       id: 'specialist.me.report', method: 'GET', path: '/api/specialist/me/report', auth: 'user', access: 'self',
       async handler({ sql, actor, query }) {
         if (!(await sql.one`select 1 from specialists where user_id = ${actor.id}`)) throw new HttpError(404, 'not_found', 'Вы не специалист');
-        return { report: await expertMonthReport(sql, actor.id, reportMonth(query.month)) };
+        return { report: await expertMonthReport(sql, actor.id, reportPeriod(query)) };
       },
     },
     {
