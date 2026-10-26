@@ -254,6 +254,44 @@ const download = async (c, path) => {
   return { status: r.status, type: r.headers.get('content-type'), disposition: r.headers.get('content-disposition'), buf: Buffer.from(await r.arrayBuffer()) };
 };
 
+test('свой номер отчёта на титуле и в колонтитуле (2.412): выдаётся при первой сборке Word, повторная — тот же; без образца — номер дела', async () => {
+  const year = todayMsk().slice(0, 4);
+  const word = async (o) => {
+    const w = await download(spec, `/api/orders/${o.id}/draft/docx`);
+    assert.equal(w.status, 200);
+    return { text: (await extractPages(w.buf, 'Отчёт.docx')).pages.join('\n'), footer: unzipPart(w.buf, 'word/footer1.xml') ?? '' };
+  };
+  const ready = async (title) => {
+    const o = await inWork(title);
+    await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {});
+    return o;
+  };
+  assert.equal((await spec.req('PATCH', '/api/specialist/me', { report_pattern: 'Т-{N}/{ГГГГ}' })).status, 200);
+  const a = await ready('Квартира: свой номер, первое');
+  const first = await word(a);
+  assert.match(first.text, new RegExp(`ОТЧЁТ ОБ ОЦЕНКЕ № Т-1/${year}\nОценка недвижимости`));
+  assert.ok(first.footer.includes(`№ Т-1/${year}`), 'в колонтитуле — тот же номер');
+  assert.doesNotMatch(first.text, /№ [0-9A-F]{8}\n/, 'номера дела платформы на титуле нет');
+  assert.match((await word(a)).text, new RegExp(`№ Т-1/${year}`), 'повторная сборка — тот же номер');
+  const row = await S.sql.one`select report_number, report_number_by from orders where id = ${a.id}`;
+  assert.deepEqual([row.report_number, row.report_number_by], [`Т-1/${year}`, spec.user.id]);
+  // Следующее дело — следующий номер; две сборки сразу — один номер на дело, без пропуска.
+  const b = await ready('Квартира: свой номер, второе');
+  await Promise.all([word(b), word(b)]);
+  assert.match((await word(b)).text, new RegExp(`№ Т-2/${year}`));
+  const num = (await spec.req('GET', '/api/specialist/me/numbering')).body.numbering;
+  assert.equal(num.next.number, `Т-3/${year}`, 'выданные номера — в счёт следующего');
+  // Без образца — новое дело с номером дела платформы, уже выданный номер остаётся у своего дела.
+  assert.equal((await spec.req('PATCH', '/api/specialist/me', { report_pattern: '' })).status, 200);
+  const c = await ready('Квартира: без образца');
+  assert.match((await word(c)).text, /ОТЧЁТ ОБ ОЦЕНКЕ № [0-9A-F]{8}\n/);
+  assert.equal((await S.sql.one`select report_number from orders where id = ${c.id}`).report_number, null);
+  assert.match((await word(a)).text, new RegExp(`№ Т-1/${year}`));
+  // Номер, выданный другому эксперту (дело передали), новому не достаётся.
+  await S.sql`update orders set report_number_by = ${owner.user.id} where id = ${b.id}`;
+  assert.match((await word(b)).text, /ОТЧЁТ ОБ ОЦЕНКЕ № [0-9A-F]{8}\n/);
+});
+
 test('черновик готовым файлом Word (2.29): скачивает исполнитель; заказчику и посторонним — нет; в шаблоне организации', async () => {
   const o = await inWork('Квартира: Word черновика');
   assert.equal((await download(spec, `/api/orders/${o.id}/draft/docx`)).status, 404, 'черновика ещё нет');

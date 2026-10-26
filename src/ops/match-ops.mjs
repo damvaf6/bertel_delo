@@ -22,7 +22,7 @@ import { scheduleIcs } from '../orders/ics.mjs';
 import { holidayRunFrom } from '../orders/holidays.mjs';
 import { AWAY_BACK_SHOW_DAYS, awayBackOf } from '../notify/away.mjs';
 import { TAX_STATUSES, taxStatusFrom } from '../matching/executors.mjs';
-import { usedNumbers } from './ai-ops.mjs';
+import { issuedNumbers, usedNumbers } from './ai-ops.mjs';
 import { guessPattern, nextNumber, patternFrom } from '../orgs/numbering.mjs';
 
 const REGIONS = { moscow: 'Москва', mo: 'Московская область' };
@@ -303,7 +303,8 @@ export function matchOps() {
         const pattern = sp.report_pattern ?? null;
         const guess = pattern ? null : guessPattern(used[0]?.number, year);
         const by = pattern ?? guess;
-        const next = by ? nextNumber(by, used, year) : null;
+        // Номера, уже выданные делам при сборке Word (2.412), — тоже в счёт следующего.
+        const next = by ? nextNumber(by, [...used, ...await issuedNumbers(sql, actor.id, today)], year) : null;
         return {
           numbering: {
             pattern, guess, year, read: used.length,

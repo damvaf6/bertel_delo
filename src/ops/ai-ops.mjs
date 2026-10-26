@@ -118,6 +118,14 @@ export async function usedNumbers(sql, storage, order, today, { withTitle = fals
   return out;
 }
 
+// 2.412: номера, уже выданные платформой другим делам эксперта в этом году (по образцу при сборке Word), — в счёт следующего
+// номера вместе с номерами из файлов. Отменённые дела не в счёт, как в usedNumbers.
+export async function issuedNumbers(sql, userId, today, exceptId = null) {
+  return sql`select report_number as number, to_char(report_number_on, 'YYYY-MM-DD') as on, title from orders
+             where report_number_by = ${userId} and report_number is not null and status <> 'cancelled'
+               and id is distinct from ${exceptId}::uuid and report_number_on >= ${`${today.slice(0, 4)}-01-01`}::date`;
+}
+
 // 2.198: документы дела, с которыми сверяется дата оценки, — основание (задание на оценку, определение суда) и другие
 // файлы, где сказано «задание на оценку» или «письмо». Только для автоматических правил; модели не уходят.
 const ASSIGNMENT_MAX = 5;

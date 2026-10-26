@@ -249,8 +249,9 @@ export const tablesBrief = (sections) => {
 };
 
 // Отчёт эксперта: титул и колонтитул — по заявке и услуге; шаблон — организации, от которой эксперт работает (профиль
-// специалиста, 2.5а). Шаблон пропал из хранилища — собирается стандартный.
-export async function reportFor(ctx, order, actor, draftText) {
+// специалиста, 2.5а). Шаблон пропал из хранилища — собирается стандартный. number — свой номер отчёта эксперта по образцу
+// (2.412); без него — номер дела платформы.
+export async function reportFor(ctx, order, actor, draftText, { number = null } = {}) {
   const { sql, providers, registry } = ctx;
   const { text, appendix } = await analogsPart(ctx, order, draftText);
   const photos = await photosPart(ctx, order);
@@ -261,7 +262,7 @@ export async function reportFor(ctx, order, actor, draftText) {
   const title = def?.service.paper ?? 'Заключение';
   const meta = {
     title,
-    number: orderRef(order.id),
+    number: number ? `№ ${number}` : orderRef(order.id),
     subtitle: def ? def.service.name : order.title,
     org: template ? null : org?.name ?? null,   // в шаблоне шапка своя
     executor: actor.full_name || null,
