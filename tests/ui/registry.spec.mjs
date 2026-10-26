@@ -528,7 +528,7 @@ test('2.416: перечень — пропуски в нумерации за г
 
   await page.goto('/kabinet#specialist');
   const holes = page.locator('#registry-holes');
-  const year = await page.locator('#registry-year').inputValue();
+  const year = new Date(Date.now() + 3 * 3_600_000).toISOString().slice(0, 4);
   await expect(holes.locator('[data-holes-total]')).toHaveText(`Пропуски в нумерации за ${year} год: 3 (с № В-1 по № В-5)`);
   const items = holes.locator('[data-hole]');
   await expect(items).toHaveText([
@@ -566,7 +566,7 @@ test('2.416: перечень — пропуски в нумерации за г
   await expect(oh.locator('[data-hole]').nth(0)).toContainText('эксперт Пропускова Вера');
   await hpage.locator('#org-registry-box').scrollIntoViewIfNeeded();
   await shot(hpage, 'r19-2416-propuski-organizacii');
-  await page.reload();
+  await page.goto('/kabinet#specialist');
   await expect(holes.locator('[data-holes-org]')).toHaveText('Номера выдаёт организация «ООО «Без пропусков»» — пропуски в общем счёте видит руководитель');
   expect(problems).toEqual([]);
   await ctx.close();
