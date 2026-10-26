@@ -94,6 +94,19 @@ test('2.403: номер отчёта уже был в другом деле эк
   assert.deepEqual(runAutoChecks(['report_number'], [doc(['Отчёт без номера'])], { usedNumbers: used }).report_number, []);
 });
 
+test('2.414: номер в файле отчёта не тот, что выдан делу, — находка «в деле выдан № …»', () => {
+  const report = doc(['ОТЧЁТ ОБ ОЦЕНКЕ № 116/2026-О от 05.10.2026', 'Колонтитул: Отчёт № 116/2026-О']);
+  const res = runAutoChecks(['report_number'], [report], { issuedNumber: { number: '117/2026-О', on: '2026-10-26' } });
+  assert.deepEqual(texts(res, 'report_number'), [
+    'Номер отчёта № 116/2026-О не тот, что выдан делу: в деле выдан № 117/2026-О (с 26.10.2026) — исправьте номер в отчёте или поменяйте номер в деле',
+  ]);
+  assert.equal(res.report_number[0].where, 'стр. 1');
+  // Тот же номер с пробелами и другим регистром, номер не выдан, в файле номера нет — молчим.
+  assert.deepEqual(runAutoChecks(['report_number'], [report], { issuedNumber: { number: '116 / 2026 - о', on: '2026-10-26' } }).report_number, []);
+  assert.deepEqual(runAutoChecks(['report_number'], [report], { issuedNumber: null }).report_number, []);
+  assert.deepEqual(runAutoChecks(['report_number'], [doc(['Отчёт без номера'])], { issuedNumber: { number: '117/2026-О' } }).report_number, []);
+});
+
 test('тот же отчёт без ошибок — находок нет', () => {
   const fixed = REPORT_221.map((p) => p
     .replace('2019 г.в.', '2024 г.в.')
@@ -1870,6 +1883,32 @@ test('2.378: площадь объекта одна во всём отчёте �
   assert.deepEqual(runAutoChecks(['area_same'], [doc(land)], { service: 'land', fields: {} }).area_same, []);
   // В отчёте нет описания с площадью — не сверяем.
   assert.deepEqual(run(['Расчёт: 150 000 руб./кв. м × 47,3 кв. м = 7 095 000 руб.'], { fields: {} }), []);
+});
+
+test('2.414: ИИ-проверка — номер в файле не тот, что выдан делу; выданный прежнему эксперту — не в счёт', async () => {
+  const other = await login(S, '+79990004141');
+  await makeSpecialist(S.sql, other.user.id, { permits: [['expertise', 'vehicle']] });
+  const report = (num) => [`ОТЧЁТ ОБ ОЦЕНКЕ № ${num} от 05.10.2026`, 'Дата составления отчёта: 05.10.2026', `Колонтитул: Отчёт № ${num}`].join('\n');
+  const caseWith = async (title, num, issued, by = spec) => {
+    const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'vehicle', title })).body.order;
+    await S.sql`update orders set status = 'in_work', deadline = ${addDays(todayMsk(), 10)}::date, executor_user_id = ${spec.user.id},
+                report_number = ${issued}, report_number_on = ${issued ? todayMsk() : null}::date, report_number_by = ${issued ? by.user.id : null}
+                where id = ${o.id}`;
+    assert.equal((await spec.req('POST', `/api/orders/${o.id}/results`, Buffer.from(report(num)), { raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Отчёт.txt') } })).status, 201);
+    return o;
+  };
+  const found = async (o) => {
+    const r = await spec.req('POST', `/api/orders/${o.id}/review/ai`);
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    return (r.body.ai.items.find((i) => i.id === 'requisites').found ?? []).map((f) => f.text).filter((t) => /выдан делу/.test(t));
+  };
+  S.providers.ai.reset();
+  assert.deepEqual(await found(await caseWith('2414: не тот номер', '414/2026-А', '415/2026-А')), [
+    `Номер отчёта № 414/2026-А не тот, что выдан делу: в деле выдан № 415/2026-А (с ${todayMsk().split('-').reverse().join('.')}) — исправьте номер в отчёте или поменяйте номер в деле`,
+  ]);
+  assert.deepEqual(await found(await caseWith('2414: тот же', '416/2026-А', '416/2026-А')), []);
+  assert.deepEqual(await found(await caseWith('2414: без номера', '417/2026-А', null)), []);
+  assert.deepEqual(await found(await caseWith('2414: выдан прежнему', '418/2026-А', '419/2026-А', other)), [], 'дело передали — номер прежнего эксперта не в счёт');
 });
 
 test('2.403: ИИ-проверка — номер отчёта уже был в другом деле эксперта этого года; прошлый год, отменённое и чужое — не в счёт', async () => {

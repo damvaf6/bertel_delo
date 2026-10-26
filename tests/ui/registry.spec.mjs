@@ -401,3 +401,31 @@ test('2.413: номер отчёта в деле — виден, меняетс�
   expect(problems).toEqual([]);
   await ctx.close();
 });
+
+test('2.414: ИИ-проверка — номер в файле отчёта не тот, что выдан делу', async ({ browser, baseURL }) => {
+  const ctx = await browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true, locale: 'ru-RU',
+    storageState: { cookies: [], origins: [{ origin: new URL(baseURL).origin, localStorage: [{ name: 'delo.folds', value: 'open' }] }] } });
+  const page = await ctx.newPage();
+  const problems = [];
+  page.on('pageerror', (e) => problems.push(`ошибка JS: ${e.message}`));
+  const expert = await signIn(page, '+79990002414');
+  const id = await db(async (c) => {
+    await c.query("insert into specialists (user_id, report_pattern) values ($1, '{N}/{ГГГГ}')", [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    return (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, deadline, fields, report_number, report_number_on, report_number_by)
+      values ($1, 'Дача в Звенигороде', 'expertise', 'realty', 'in_work', $1, current_date + 7, '{}', '15/2026', current_date, $1) returning id`, [expert.id])).rows[0].id;
+  });
+  const text = 'ОТЧЁТ ОБ ОЦЕНКЕ № 14/2026 от 20.10.2026\nДата составления отчёта: 20.10.2026\nОтчёт № 14/2026';
+  const up = await page.request.post(`/api/orders/${id}/documents`, { data: Buffer.from(text), headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('отчёт.txt') } });
+  expect(up.status()).toBe(201);
+  await db((c) => c.query("update documents set kind = 'result' where order_id = $1", [id]));
+  await page.goto(`/kabinet#order=${id}`);
+  await page.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(page.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  const hit = page.locator('#review-checks').getByText(/Номер отчёта № 14\/2026 не тот, что выдан делу: в деле выдан № 15\/2026/);
+  await expect(hit).toBeVisible();
+  await hit.scrollIntoViewIfNeeded();
+  await shot(page, 'r15-2414-nomer-ne-tot');
+  expect(problems).toEqual([]);
+  await ctx.close();
+});
