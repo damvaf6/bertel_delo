@@ -494,3 +494,81 @@ test('2.415: нумерация организации — образец рук
   await ctx.close();
   await ectx.close();
 });
+
+test('2.416: перечень — пропуски в нумерации за год у эксперта и руководителя: дело отменено, ещё не сдано, неизвестно', async ({ browser, baseURL }) => {
+  const opts = { baseURL, viewport: { width: 412, height: 915 }, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true, locale: 'ru-RU',
+    storageState: { cookies: [], origins: [{ origin: new URL(baseURL).origin, localStorage: [{ name: 'delo.folds', value: 'open' }] }] } };
+  const ctx = await browser.newContext(opts);
+  const page = await ctx.newPage();
+  const problems = [];
+  page.on('pageerror', (e) => problems.push(`ошибка JS: ${e.message}`));
+  const expert = await signIn(page, '+79990004164');
+  const ids = await db(async (c) => {
+    await c.query("update users set full_name = 'Пропускова Вера' where id = $1", [expert.id]);
+    await c.query("insert into specialists (user_id, report_pattern) values ($1, 'В-{N}')", [expert.id]);
+    const mk = async (title, status, number = null) => (await c.query(`insert into orders (owner_user_id, title, module, service, status,
+      executor_user_id, deadline, fields, report_number, report_number_on, report_number_by) values ($1, $2, 'expertise', 'realty', $3, $1,
+      current_date, $4, $5::text, case when $5::text is null then null else current_date end, case when $5::text is null then null else $1::uuid end) returning id`,
+    [expert.id, title, status, { purpose: 'deal', address: `г. Москва, ${title}` }, number])).rows[0].id;
+    const out = {};
+    for (const n of [1, 5]) {
+      out[n] = await mk(`Пропуски, № ${n}`, 'done', `В-${n}`);
+      await c.query("insert into order_status_history (order_id, from_status, to_status, side) values ($1, 'review', 'done', 'dispatcher')", [out[n]]);
+    }
+    out.cancelled = await mk('Квартира на Садовой', 'cancelled', 'В-2');
+    out.open = await mk('Дом в Химках', 'in_work', 'В-3');
+    return out;
+  });
+  for (const n of [1, 5]) {
+    const up = await page.request.post(`/api/orders/${ids[n]}/documents`, { data: Buffer.from(`ОТЧЁТ ОБ ОЦЕНКЕ № В-${n} от 12.10.2026`),
+      headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('отчёт.txt') } });
+    expect(up.status()).toBe(201);
+  }
+  await db((c) => c.query("update documents set kind = 'result' where order_id = any($1)", [[ids[1], ids[5]]]));
+
+  await page.goto('/kabinet#specialist');
+  const holes = page.locator('#registry-holes');
+  const year = new Date(Date.now() + 3 * 3_600_000).toISOString().slice(0, 4);
+  await expect(holes.locator('[data-holes-total]')).toHaveText(`Пропуски в нумерации за ${year} год: 3 (с № В-1 по № В-5)`);
+  const items = holes.locator('[data-hole]');
+  await expect(items).toHaveText([
+    '№ В-2 нет — дело «Квартира на Садовой» отменено после выдачи номера',
+    '№ В-3 выдан делу «Дом в Химках» — оно ещё не сдано',
+    '№ В-4 нет — дело отменено или номер пропущен?',
+  ]);
+  await page.locator('#registry-box').scrollIntoViewIfNeeded();
+  await shot(page, 'r18-2416-propuski-nomerov');
+  // За квартал — не считаем; весь год — снова видно; пропуск ведёт к делу.
+  await page.locator('#registry-quarter').selectOption('4');
+  await expect(holes).toBeHidden();
+  await page.locator('#registry-quarter').selectOption('');
+  await expect(items).toHaveCount(3);
+  await items.nth(0).getByRole('link').click();
+  await expect(page).toHaveURL(new RegExp(`#order=${ids.cancelled}`));
+
+  // Руководитель: общий счёт организации — пропуск с именем эксперта; у эксперта — «пропуски видит руководитель».
+  const hctx = await browser.newContext(opts);
+  const hpage = await hctx.newPage();
+  hpage.on('pageerror', (e) => problems.push(`ошибка JS: ${e.message}`));
+  const head = await signIn(hpage, '+79990004165');
+  const org = await db(async (c) => {
+    const id = (await c.query("insert into organizations (name, report_pattern) values ('ООО «Без пропусков»', 'В-{N}') returning id")).rows[0].id;
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head')", [id, head.id]);
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'member', now() - interval '1 hour')", [id, expert.id]);
+    await c.query('update specialists set org_id = $1 where user_id = $2', [id, expert.id]);
+    await c.query('update orders set report_number_org = $1 where report_number_by = $2', [id, expert.id]);
+    return id;
+  });
+  await hpage.goto(`/kabinet#org=${org}`);
+  const oh = hpage.locator('#org-registry-holes');
+  await expect(oh.locator('[data-holes-total]')).toContainText('3 (с № В-1 по № В-5)');
+  await expect(oh.locator('[data-hole]').nth(0)).toContainText('№ В-2 нет — дело «Квартира на Садовой» отменено после выдачи номера');
+  await expect(oh.locator('[data-hole]').nth(0)).toContainText('эксперт Пропускова Вера');
+  await hpage.locator('#org-registry-box').scrollIntoViewIfNeeded();
+  await shot(hpage, 'r19-2416-propuski-organizacii');
+  await page.goto('/kabinet#specialist');
+  await expect(holes.locator('[data-holes-org]')).toHaveText('Номера выдаёт организация «ООО «Без пропусков»» — пропуски в общем счёте видит руководитель');
+  expect(problems).toEqual([]);
+  await ctx.close();
+  await hctx.close();
+});
