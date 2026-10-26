@@ -325,7 +325,11 @@ export function aiOps() {
         // 2.403: номер отчёта уже был в другом деле эксперта этого года.
         const used = names.includes('report_number') && order.executor_user_id
           ? await usedNumbers(sql, providers.storage, order, dossier.today, { withTitle: side === 'executor' }) : [];
-        const auto = runAutoChecks(names, files, { fields: order.fields ?? {}, dossier, basis, service: order.service, analogs, inspectionDays, inspectionUploadDays, inspectionBy, signedOn, assignment, egrn, customer: owner?.full_name ?? null, today: dossier.today, usedNumbers: used });
+        // 2.414: номер, выданный делу нынешнему эксперту (по образцу или вручную), — с ним сверяется номер в файле отчёта.
+        const [issued] = names.includes('report_number') && order.executor_user_id
+          ? await sql`select report_number as number, to_char(report_number_on, 'YYYY-MM-DD') as on from orders
+                      where id = ${order.id} and report_number is not null and report_number_by = ${order.executor_user_id}` : [];
+        const auto = runAutoChecks(names, files, { fields: order.fields ?? {}, dossier, basis, service: order.service, analogs, inspectionDays, inspectionUploadDays, inspectionBy, signedOn, assignment, egrn, customer: owner?.full_name ?? null, today: dossier.today, usedNumbers: used, issuedNumber: issued ?? null });
         const found = Object.fromEntries(rules.map((r) => [r.id, (r.auto ?? []).flatMap((a) => auto[a] ?? [])]));
         // Модель недоступна или лимит исчерпан, но автоматические находки есть — показываем их, а не ошибку.
         let out;
