@@ -1291,7 +1291,7 @@ test('дела экспертов (2.16): видит только руковод
   assert.equal(r.body.cases.length, 1);
   const c = r.body.cases[0];
   // docs_wait (2.235) — только названия запрошенных документов и дни ожидания, без файлов заказчика.
-  assert.deepEqual(Object.keys(c).sort(), ['active', 'away', 'back', 'chat', 'deadline', 'docs_wait', 'expert', 'expert_id', 'extend', 'fee_kop', 'handover', 'hot', 'id', 'idle', 'idle_long', 'inspection', 'last_move', 'new_year', 'offer_wait', 'offered_at', 'order_ref', 'org_extend', 'overdue', 'overdue_days', 'payout', 'remind', 'returned', 'returned_open', 'service', 'sign_reminded_at', 'sign_since', 'sign_wait', 'status', 'status_name', 'task_due', 'task_moved', 'task_week', 'transfer_to', 'week']);
+  assert.deepEqual(Object.keys(c).sort(), ['active', 'away', 'back', 'chat', 'deadline', 'docs_wait', 'expert', 'expert_id', 'extend', 'fee_kop', 'handover', 'hot', 'id', 'idle', 'idle_long', 'inspection', 'last_move', 'new_year', 'offer_wait', 'offered_at', 'order_ref', 'org_extend', 'overdue', 'overdue_days', 'payout', 'remind', 'report_number', 'returned', 'returned_open', 'service', 'sign_reminded_at', 'sign_since', 'sign_wait', 'status', 'status_name', 'task_due', 'task_moved', 'task_week', 'transfer_to', 'week']);
   assert.deepEqual(Object.keys(c.chat).sort(), ['expert_last', 'messages']);   // переписка (2.67): только число и чьё последнее, без текста
   assert.equal(c.status, 'review');
   assert.equal(c.expert, 'Эксперт Б');
@@ -3744,6 +3744,60 @@ test('пропуски в нумерации за год (2.416): у экспе�
     await S.sql`update specialists set org_id = null, report_pattern = null where user_id = ${c.user.id}`;
     await S.sql`delete from org_members where org_id = ${org.id} and user_id = ${c.user.id}`;
   }
+});
+
+test('поиск дела по номеру отчёта (2.417): выданный делу и из файла сданного; старше 90 дней — с архивом за месяц; чужое — нет; только руководитель', async () => {
+  cover('orgs.cases.number');
+  const org = await makeOrg(S.sql, 'Тестовая организация 2417');
+  const head = await login(S, '+79990004171');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  const ex = {};
+  for (const [k, phone, name] of [['a', '+79990004172', 'Номерова Нина'], ['c', '+79990004173', 'Чужов Чужой']]) {
+    ex[k] = await login(S, phone);
+    await makeSpecialist(S.sql, ex[k].user.id);
+    await S.sql`update users set full_name = ${name} where id = ${ex[k].user.id}`;
+    if (k === 'c') continue;
+    await addMember(S.sql, org.id, ex[k].user.id, 'member');
+    assert.equal((await ex[k].req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  }
+  await S.sql`update org_members set created_at = now() - interval '200 days' where org_id = ${org.id}`;
+  const year = new Date(Date.now() + 3 * 3_600_000).getUTCFullYear();
+  const order = async (title, executor, status, number, ago = null) => {
+    const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
+    await S.sql`update orders set status = ${status}, deadline = (now() at time zone 'Europe/Moscow')::date + 5, executor_user_id = ${executor},
+      report_number = ${number}, report_number_on = case when ${number}::text is null then null else (now() at time zone 'Europe/Moscow')::date end,
+      report_number_by = case when ${number}::text is null then null else ${executor}::uuid end where id = ${o.id}`;
+    if (ago) {
+      await S.sql`insert into order_status_history (order_id, from_status, to_status, side, at) values (${o.id}, 'review', 'done', 'dispatcher', now() - ${ago}::interval)`;
+      await S.sql`update orders set updated_at = now() - ${ago}::interval where id = ${o.id}`;
+    }
+    return o;
+  };
+  const work = await order('2417: в работе', ex.a.user.id, 'in_work', `В-14/${year}`);
+  const old = await order('2417: сдано давно', ex.a.user.id, 'done', null, '100 days');
+  const doc = await upload(U.owner, old.id, 'отчёт.txt', `ОТЧЁТ ОБ ОЦЕНКЕ № В-15/${year} от 06.10.${year}`);
+  await S.sql`update documents set kind = 'result', uploaded_by = ${ex.a.user.id} where id = ${doc.id}`;
+  await order('2417: чужой эксперт', ex.c.user.id, 'in_work', `В-16/${year}`);
+  await order('2417: похожий номер', ex.a.user.id, 'in_work', `В-140/${year}`);
+  const find = (c, q) => c.req('GET', `/api/orgs/${org.id}/cases/number?q=${encodeURIComponent(q)}`);
+  for (const c of [ex.a, U.dispatcher]) assert.equal((await find(c, '14')).status, 403);
+  for (const k of ['stranger', 'headA', 'owner']) assert.equal((await find(U[k], '14')).status, 404, k);
+  assert.equal((await find(head, 'квартира')).status, 400, 'без цифр — не номер');
+  // В списке дел номер виден у дела; «14» — целой частью номера, «В-140» не находит; латинская B — как русская В.
+  const cases = (await head.req('GET', `/api/orgs/${org.id}/cases`)).body.cases;
+  assert.equal(cases.find((c) => c.id === work.id).report_number, `В-14/${year}`);
+  assert.equal(cases.some((c) => c.id === old.id), false, 'сдано 100 дней назад — не в списке');
+  const a = (await find(head, `b-14/${year}`)).body.found;
+  assert.deepEqual(a.map((f) => [f.id, f.number, f.expert, f.in_cases, f.archive]), [[work.id, `В-14/${year}`, 'Номерова Нина', true, null]]);
+  assert.deepEqual((await find(head, '14')).body.found.map((f) => f.id), [work.id]);
+  // Номер только в файле сданного отчёта — находится; старше 90 дней — без ссылки, архив за месяц сдачи.
+  const b = (await find(head, '№ В-15')).body.found;
+  assert.deepEqual(b.map((f) => [f.id, f.in_cases, f.status_name]), [[old.id, false, 'Готово']]);
+  const month = new Date(Date.now() + 3 * 3_600_000 - 100 * 86_400_000).toISOString().slice(0, 7);
+  assert.equal(b[0].archive.month, month);
+  assert.deepEqual((await find(head, '16')).body.found, [], 'эксперт не от организации — не находится');
+  const text = JSON.stringify(b);
+  for (const t of ['2417: сдано давно', 'ул.', 'owner']) assert.ok(!text.includes(t), t);
 });
 
 test('мои сроки на две недели (2.109): по дням — сроки своих дел, выезды, ссылка на осмотр, просьба о переносе; чужого нет', async () => {
