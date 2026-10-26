@@ -5,9 +5,16 @@ import { TEST_TOKEN } from '../helpers.mjs';
 
 const CONTROL = process.env.UI_TEST_CONTROL_TOKEN || TEST_TOKEN;
 
+// Код читается, когда сервер его уже отправил: после нажатия «Получить код» запрос может ещё идти (на большой базе
+// полного прогона — дольше), поэтому ждём, а не берём список сразу.
 async function smsCode(request, phone) {
-  const calls = (await (await request.get('/__test/fakes/sms/calls', { headers: { 'x-test-control': CONTROL } })).json()).calls;
-  return calls.filter((c) => c.method === 'sendCode' && c.args.phone === phone).at(-1).args.code;
+  let code;
+  await expect.poll(async () => {
+    const calls = (await (await request.get('/__test/fakes/sms/calls', { headers: { 'x-test-control': CONTROL } })).json()).calls;
+    code = calls.filter((c) => c.method === 'sendCode' && c.args.phone === phone).at(-1)?.args.code;
+    return code;
+  }, { message: 'код из СМС не пришёл' }).toBeTruthy();
+  return code;
 }
 const bg = (page) => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
 
