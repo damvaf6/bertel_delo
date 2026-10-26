@@ -47,7 +47,10 @@ async function load() {
   if (!n) { box.replaceChildren(); return; }
   box.replaceChildren(
     el('strong', { 'data-org-numbering-next': n.number, text: `${numbering.pattern ? 'Следующий номер' : 'Следующий номер по этому образцу'}: № ${n.number}` }),
-    el('span', { class: 'muted', text: n.after
+    el('span', { class: 'muted', text: n.freed
+      // 2.418: номер отменённого дела, который эксперт отдал следующему делу.
+      ? ` — номер отменённого дела${n.freed.expert_name ? ` эксперта ${n.freed.expert_name}` : ''}, его отдали следующему делу`
+      : n.after
       ? ` — после № ${n.after.number} (${dayRu(n.after.on)}${n.after.expert_name ? `, ${n.after.expert_name}` : ''})${numbering.issued ? `; выдано по счёту организации в ${numbering.year} году — ${numbering.issued}` : ''}`
       : ` — в ${numbering.year} году номеров по образцу ещё не было` }),
   );

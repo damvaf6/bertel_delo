@@ -23,6 +23,7 @@
 // Оценка для банка, задания на оценку нет и не запрошено, а до срока дела 3 дня или меньше (2.306) — запросить одной кнопкой.
 // За две недели до новогодних каникул (2.393) — дела со сроком в каникулы одной группой «сдайте до 30 декабря».
 // В декабре — аттестат или полис из своего досье, который кончается до 15 января (2.405): «продлите до каникул».
+// Номер отчёта выдан, а дело отменено (2.418) — отдать номер следующему делу или оставить пропуском.
 // Руководителю — те же сведения, что в «Делах экспертов» (2.16): без заказчика, полей заявки, документов и переписки.
 // Только свои дела и свои организации.
 import { orderRef } from '../notify/registry.mjs';
@@ -39,7 +40,7 @@ import { dueNotes } from './note-ops.mjs';
 import { caseMoves, caseRemind, transferTargets } from './org-ops.mjs';
 import { bankTaskMissing, docWait, egrnOld } from './docreq-ops.mjs';
 import { aiRecheck, aiSignHints, egrnRebuildLeft, egrnSwapLeft } from '../ai/ai.mjs';
-import { latest, taskDraftItems, taskDueFor, taskDueSign, taskMoveLetter } from './draft-ops.mjs';
+import { cancelledNumbers, latest, taskDraftItems, taskDueFor, taskDueSign, taskMoveLetter } from './draft-ops.mjs';
 import { assignmentDocs, TASK_MOVE } from './ai-ops.mjs';
 import { READ_MAX_BYTES, extractPages, readableKind } from '../ai/extract.mjs';
 import { reportMade } from '../ai/report-checks.mjs';
@@ -283,6 +284,9 @@ async function expertPart(sql, actor, registry, today, storage) {
   const hotIds = new Set(hotRows.map((o) => o.id));
   const ny = newYearCases(rows.filter((o) => !hotIds.has(o.id)), today);
   return {
+    // Номер отчёта выдан, а дело отменено (2.418): отдать номер следующему делу или оставить пропуском.
+    number_cancelled: (await cancelledNumbers(sql, actor.id, today)).map((o) => ({ id: o.id, title: o.title, number: o.number, on: o.on,
+      cancelled_at: o.cancelled_at, ...(o.org_name ? { org_name: o.org_name } : {}) })),
     dossier_new_year: newYearTerms(await loadDossier(sql, actor.id), today),
     new_year: ny && { from: ny.from, to: ny.to, work_before: ny.work_before, items: ny.rows.map((o) => item(o)) },
     ai_recheck: recheck,

@@ -120,10 +120,12 @@ export async function usedNumbers(sql, storage, order, today, { withTitle = fals
 }
 
 // 2.412: номера, уже выданные платформой другим делам эксперта в этом году (по образцу при сборке Word), — в счёт следующего
-// номера вместе с номерами из файлов. Отменённые дела не в счёт, как в usedNumbers.
+// номера вместе с номерами из файлов. Номер отменённого дела (2.418) — в счёте, пока эксперт не выбрал или оставил его
+// пропуском; освобождённый (report_number_free) — free: его получит следующее дело (nextNumber).
 export async function issuedNumbers(sql, userId, today, exceptId = null) {
-  return sql`select report_number as number, to_char(report_number_on, 'YYYY-MM-DD') as on, title from orders
-             where report_number_by = ${userId} and report_number is not null and status <> 'cancelled'
+  return sql`select report_number as number, to_char(report_number_on, 'YYYY-MM-DD') as on, title,
+               (status = 'cancelled' and report_number_free is true) as free from orders
+             where report_number_by = ${userId} and report_number is not null
                and id is distinct from ${exceptId}::uuid and report_number_on >= ${`${today.slice(0, 4)}-01-01`}::date`;
 }
 
@@ -150,7 +152,8 @@ export async function orgExperts(sql, orgId) {
 
 // Номера этого года, от которых считается следующий и с которыми сверяется ручной номер: по счёту организации — выданные
 // по нему делам и номера из файлов отчётов её экспертов; по своему образцу — выданные делам эксперта и из его файлов.
-// Название дела — только у своих дел эксперта (чужие дела не видны). by — чьё дело.
+// Название дела — только у своих дел эксперта (чужие дела не видны). by — чьё дело. free — номер отменённого дела,
+// освобождённый экспертом (2.418): не занят, его выдаст nextNumber следующему делу.
 export async function numberPool(sql, storage, src, userId, today, exceptId = null) {
   if (!src.org) {
     return [
@@ -158,8 +161,9 @@ export async function numberPool(sql, storage, src, userId, today, exceptId = nu
       ...await usedNumbers(sql, storage, { id: exceptId, executor_user_id: userId }, today, { withTitle: true }),
     ];
   }
-  const issued = await sql`select report_number as number, to_char(report_number_on, 'YYYY-MM-DD') as on, title, report_number_by as by from orders
-             where report_number_org = ${src.org.id} and report_number is not null and status <> 'cancelled'
+  const issued = await sql`select report_number as number, to_char(report_number_on, 'YYYY-MM-DD') as on, title, report_number_by as by,
+               (status = 'cancelled' and report_number_free is true) as free from orders
+             where report_number_org = ${src.org.id} and report_number is not null
                and id is distinct from ${exceptId}::uuid and report_number_on >= ${`${today.slice(0, 4)}-01-01`}::date`;
   const experts = (await orgExperts(sql, src.org.id)).map((e) => e.user_id);
   const files = await usedNumbers(sql, storage, { id: exceptId, executors: experts }, today, { withTitle: true });

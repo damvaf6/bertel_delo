@@ -312,7 +312,9 @@ export function matchOps() {
             pattern, guess, year, read: used.length,
             org: src.org ? { name: src.org.name, pattern: src.pattern } : null,
             last: used[0] ? { number: used[0].number, on: used[0].on, title: used[0].title } : null,
+            // 2.418: следующий — номер отменённого дела, который эксперт освободил.
             next: next ? { number: next.number, seq: next.seq, matched: next.matched,
+              ...(next.freed ? { freed: { title: next.freed.by === actor.id ? next.freed.title ?? null : null } } : {}),
               after: next.last ? { number: next.last.number, on: next.last.on, title: next.last.title ?? null, mine: next.last.by === actor.id } : null } : null,
           },
         };

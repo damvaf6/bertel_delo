@@ -558,7 +558,7 @@ export function orgOps() {
           numbering: {
             pattern, guess, year, issued, staff: experts.length,
             experts: experts.map((e) => ({ name: e.full_name, pattern: e.report_pattern ?? null })),
-            next: next ? { number: next.number, seq: next.seq,
+            next: next ? { number: next.number, seq: next.seq, ...(next.freed ? { freed: { expert_name: names.get(next.freed.by) ?? null } } : {}),
               after: next.last ? { number: next.last.number, on: next.last.on, expert_name: names.get(next.last.by) ?? null } : null } : null,
           },
         };
