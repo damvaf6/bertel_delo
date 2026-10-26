@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, makeOrg, addMember } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import { workingAgo } from '../../src/orders/silence.mjs';
+import { isWorkday } from '../../src/orders/holidays.mjs';
 import { digestText, sendMorning } from '../../src/notify/morning.mjs';
 
 let S, owner, dispatcher, spec, helper, idle;
@@ -111,7 +112,9 @@ test('реестр: anchor — только у раздела «Специали
 test('2.142: «нет файла результата» и «заказчик ждёт ответа» — цифрами; только они — сводка ведёт к «Сегодня»', async () => {
   assert.equal(digestText({ due: 0, overdue: 0, visits: 0, links: 0, no_result: 2, reply_wait: 1 }),
     'На сегодня: нет файла результата: 2, заказчик ждёт ответа: 1');
-  const day = addDays(today, 3);
+  // Сводка — в рабочий день, и сроки дел ниже — тоже в рабочие: срок в выходной «близко» по пятнице перед ним (2.382).
+  let day = addDays(today, 3);
+  while (![day, addDays(day, 1), addDays(day, 2)].every(isWorkday)) day = addDays(day, 1);
   const at3 = (time) => at(day, time);
   // Отдельный эксперт, чтобы прежние дела не мешали счёту.
   const solo = await login(S, '+79990003706');
