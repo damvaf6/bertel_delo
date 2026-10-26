@@ -3673,6 +3673,79 @@ test('перечень отчётов для СРО по организации 
   assert.deepEqual((await reg(head)).body.registry.rows.map((x) => x.id), [a1.id, a2.id]);
 });
 
+test('пропуски в нумерации за год (2.416): у эксперта — почему, если платформа знает; у руководителя — по счёту организации; за квартал — нет', async () => {
+  const exp = await login(S, '+79990004161');
+  const other = await login(S, '+79990004162');
+  await makeSpecialist(S.sql, exp.user.id);
+  await makeSpecialist(S.sql, other.user.id);
+  const reg = (c, q = '') => c.req('GET', `/api/specialist/me/registry${q}`);
+  const order = async (title, executor, status = 'done', number = null) => {
+    const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
+    await S.sql`update orders set status = ${status}, deadline = (now() at time zone 'Europe/Moscow')::date, fields = ${JSON.stringify({ purpose: 'deal', address: `адрес ${title}` })}::jsonb, executor_user_id = ${executor},
+      report_number = ${number}, report_number_by = ${number ? executor : null}, report_number_on = ${number ? todayMsk() : null} where id = ${o.id}`;
+    if (status === 'done') await S.sql`insert into order_status_history (order_id, from_status, to_status, side) values (${o.id}, 'review', 'done', 'dispatcher')`;
+    return o;
+  };
+  const report = async (o, number, by) => {
+    const doc = await upload(U.owner, o.id, 'отчёт.txt', `ОТЧЁТ ОБ ОЦЕНКЕ № ${number} от 05.10.2026`);
+    await S.sql`update documents set kind = 'result', uploaded_by = ${by} where id = ${doc.id}`;
+  };
+  // Образца нет и номеров нет — пропусков не считаем.
+  assert.equal((await reg(exp)).body.registry.holes, null);
+  const sixth = await order('Пропуски 2416: другой номер в файле', exp.user.id, 'done', 'П-6');
+  await report(sixth, 'Х-6', exp.user.id);
+  for (const n of [1, 4, 7]) await report(await order(`Пропуски 2416: № ${n}`, exp.user.id), `П-${n}`, exp.user.id);
+  await order('Пропуски 2416: отменено', exp.user.id, 'cancelled', 'П-2');
+  await order('Пропуски 2416: в работе', exp.user.id, 'in_work', 'П-3');
+  await report(await order('Пропуски 2416: чужое', other.user.id, 'done', 'П-5'), 'П-5', other.user.id);
+  // Образец не задан — по последнему номеру из перечня, с пометкой; задан — по нему.
+  let h = (await reg(exp)).body.registry.holes;
+  assert.deepEqual([h.pattern, h.guessed, h.from, h.to, h.total], ['П-{N}', true, 'П-1', 'П-7', 4]);
+  assert.equal((await exp.req('PATCH', '/api/specialist/me', { report_pattern: 'П-{N}' })).status, 200);
+  h = (await reg(exp)).body.registry.holes;
+  assert.deepEqual([h.pattern, h.guessed, h.from, h.to, h.total], ['П-{N}', false, 'П-1', 'П-7', 4]);
+  assert.deepEqual(h.list.map((x) => [x.number, x.reason, x.title ?? null]), [
+    ['П-2', 'cancelled', 'Пропуски 2416: отменено'],
+    ['П-3', 'open', 'Пропуски 2416: в работе'],
+    ['П-5', 'unknown', null],
+    ['П-6', 'file', 'Пропуски 2416: другой номер в файле'],
+  ]);
+  assert.ok(!JSON.stringify(h).includes('чужое'), 'номер чужого дела не объясняем его названием');
+  // За квартал — не считаем; в таблице для Excel — строкой.
+  const q = Math.ceil(Number(todayMsk().slice(5, 7)) / 3);
+  assert.equal((await reg(exp, `?year=${todayMsk().slice(0, 4)}&quarter=${q}`)).body.registry.holes, null);
+  const csv = (await exp.req('GET', '/api/specialist/me/registry?format=csv', undefined, { binary: true })).body.toString('utf8');
+  assert.match(csv, /Пропуски в нумерации \(с № П-1 по № П-7\): № П-2 — дело отменено; № П-3 — дело ещё не сдано; № П-5 — нет в перечне; № П-6 — в файле отчёта другой номер/);
+  // Номера выдаёт организация — у эксперта только об этом; у руководителя — пропуски общего счёта с именем эксперта.
+  const org = await makeOrg(S.sql, 'Организация пропусков 2416');
+  const head = await login(S, '+79990004163');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  await S.sql`update users set full_name = 'Пропускова Ольга' where id = ${other.user.id}`;
+  for (const c of [exp, other]) {
+    await addMember(S.sql, org.id, c.user.id, 'member');
+    await S.sql`update specialists set org_id = ${org.id} where user_id = ${c.user.id}`;
+  }
+  await S.sql`update org_members set created_at = now() - interval '1 hour' where org_id = ${org.id}`;
+  const oreg = async () => (await head.req('GET', `/api/orgs/${org.id}/registry`)).body.registry;
+  assert.equal((await oreg()).holes, null, 'у организации образца нет — свои образцы экспертов ведут и частные дела');
+  assert.equal((await head.req('PUT', `/api/orgs/${org.id}/numbering`, { pattern: 'ОП-{N}' })).status, 200);
+  assert.deepEqual((await reg(exp)).body.registry.holes, { org: 'Организация пропусков 2416' });
+  for (const [n, c] of [[1, exp], [4, other]]) {
+    const o = await order(`Пропуски 2416: ОП-${n}`, c.user.id);
+    await S.sql`update order_status_history set at = now() where order_id = ${o.id}`;
+    await report(o, `ОП-${n}`, c.user.id);
+  }
+  const cancelled = await order('Пропуски 2416: отменено в организации', other.user.id, 'cancelled', 'ОП-3');
+  await S.sql`update orders set report_number_org = ${org.id} where id = ${cancelled.id}`;
+  h = (await oreg()).holes;
+  assert.deepEqual([h.from, h.to, h.total], ['ОП-1', 'ОП-4', 2]);
+  assert.deepEqual(h.list.map((x) => [x.number, x.reason, x.expert_name ?? null]), [['ОП-2', 'unknown', null], ['ОП-3', 'cancelled', 'Пропускова Ольга']]);
+  for (const c of [exp, other]) {
+    await S.sql`update specialists set org_id = null, report_pattern = null where user_id = ${c.user.id}`;
+    await S.sql`delete from org_members where org_id = ${org.id} and user_id = ${c.user.id}`;
+  }
+});
+
 test('мои сроки на две недели (2.109): по дням — сроки своих дел, выезды, ссылка на осмотр, просьба о переносе; чужого нет', async () => {
   cover('specialist.me.schedule');
   const exp = await login(S, '+79990001495');

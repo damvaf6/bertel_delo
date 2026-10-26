@@ -5,8 +5,9 @@
 // Сданные — в «готово» и закрытые заказчиком после него (2.407: закрытое дело из перечня не пропадает).
 // Годы — текущий и три прошлых (плановая проверка СРО — раз в три года). Выгрузка — CSV для Excel, как сводка за месяц.
 import { reportFacts } from '../ai/report-checks.mjs';
-import { resultDocs } from '../ops/ai-ops.mjs';
+import { numberSource, resultDocs } from '../ops/ai-ops.mjs';
 import { todayMsk } from '../orders/workflow.mjs';
+import { formatNumber, guessPattern, seqOf } from './numbering.mjs';
 import { cell } from './report.mjs';
 
 export const REGISTRY_YEARS_BACK = 3;
@@ -101,6 +102,67 @@ async function registryRows(sql, storage, registry, done, period) {
     shown: rows.length, rows };
 }
 
+// Пропуски в нумерации за год (2.416): порядковые номера по образцу между наименьшим и наибольшим из номеров сданных отчётов
+// перечня, которых в перечне нет. У каждого — почему, если платформа знает: номер выдан делу, а дело отменено (cancelled), ещё
+// не сдано (open) или в файле сданного отчёта другой номер (file); не знает — unknown («дело отменено или номер пропущен?»).
+// Номера до первого сданного в платформе не считаем: отчёты до неё в перечень не попадают. Показываем первые HOLES_MAX.
+export const HOLES_MAX = 30;
+const OPEN_DONE = ['done', 'closed'];
+export function numberHoles(pattern, year, rows, issued) {
+  const present = new Set(rows.map((x) => (x.number != null ? seqOf(pattern, x.number, year) : null)).filter((n) => n != null));
+  const out = { pattern, total: 0, list: [] };
+  // Один номер — сравнивать не с чем.
+  if (present.size < 2) return out;
+  const min = Math.min(...present);
+  const max = Math.max(...present);
+  const bySeq = new Map();
+  for (const e of issued) {
+    const n = seqOf(pattern, e.number, year);
+    if (n != null && !bySeq.has(n)) bySeq.set(n, e);
+  }
+  for (let n = min + 1; n < max; n++) {
+    if (present.has(n)) continue;
+    out.total++;
+    if (out.list.length >= HOLES_MAX) continue;
+    const e = bySeq.get(n);
+    const reason = !e ? 'unknown' : e.status === 'cancelled' ? 'cancelled' : OPEN_DONE.includes(e.status) ? 'file' : 'open';
+    out.list.push({ seq: n, number: formatNumber(pattern, n, year), reason,
+      ...(e ? { order_id: e.id, title: e.title, ...(e.expert_name ? { expert_name: e.expert_name } : {}) } : {}) });
+  }
+  out.from = formatNumber(pattern, min, year);
+  out.to = formatNumber(pattern, max, year);
+  return out;
+}
+
+const yearFrom = (period) => `${period.year}-01-01`;
+const yearTo = (period) => `${period.year + 1}-01-01`;
+
+// Эксперт: по своему образцу (нет — по последнему номеру из перечня, guessed). Номера выдаёт организация (2.415) — общий
+// счёт с коллегами, пропуски в нём видит руководитель: { org }. Только за весь год, не за квартал.
+async function expertHoles(sql, userId, period, rows) {
+  const src = await numberSource(sql, userId);
+  if (src.org) return { org: src.org.name };
+  const last = rows.filter((x) => x.number != null).at(-1)?.number;
+  const pattern = src.own ?? guessPattern(last, period.year);
+  if (!pattern) return null;
+  const issued = await sql`select id, title, status, report_number as number from orders
+    where report_number_by = ${userId} and report_number_org is null and report_number is not null
+      and report_number_on >= ${yearFrom(period)}::date and report_number_on < ${yearTo(period)}::date order by report_number_on`;
+  return { ...numberHoles(pattern, period.year, rows, issued), guessed: !src.own };
+}
+
+// Руководитель: только по общему счёту организации (её образец задан) — свои образцы экспертов ведут и частные дела,
+// которых в перечне организации нет, пропуски там были бы ложными.
+async function orgHoles(sql, orgId, period, rows) {
+  const g = await sql.one`select report_pattern from organizations where id = ${orgId}`;
+  if (!g?.report_pattern) return null;
+  const issued = await sql`select o.id, o.title, o.status, o.report_number as number, coalesce(e.full_name, 'Без имени') as expert_name
+    from orders o left join users e on e.id = o.report_number_by
+    where o.report_number_org = ${orgId} and o.report_number is not null
+      and o.report_number_on >= ${yearFrom(period)}::date and o.report_number_on < ${yearTo(period)}::date order by o.report_number_on`;
+  return numberHoles(g.report_pattern, period.year, rows, issued);
+}
+
 export async function expertRegistry(sql, storage, registry, userId, period) {
   const done = await sql`
     select distinct on (o.id) o.id, o.title, o.module, o.service, o.fields, o.executor_user_id, h.at,
@@ -111,7 +173,9 @@ export async function expertRegistry(sql, storage, registry, userId, period) {
       and h.at >= (${period.from}::date)::timestamp at time zone 'Europe/Moscow'
       and h.at < (${period.to}::date)::timestamp at time zone 'Europe/Moscow'
     order by o.id, h.at desc`;
-  return registryRows(sql, storage, registry, done, period);
+  const r = await registryRows(sql, storage, registry, done, period);
+  r.holes = period.quarter ? null : await expertHoles(sql, userId, period, r.rows);
+  return r;
 }
 
 // Перечень по организации (2.402): сданные отчёты об оценке всех экспертов, работающих от организации, — как сводка за
@@ -142,11 +206,14 @@ export async function orgRegistry(sql, storage, registry, orgId, period) {
   r.experts = [...by.values()].sort((a, b) => b.n - a.n || a.name.localeCompare(b.name, 'ru'));
   // Экспертов, работающих от организации, нет — карточку перечня не показываем (как сводку за месяц).
   r.staff = (await sql.one`select count(*)::int as n from specialists where org_id = ${orgId}`).n;
+  r.holes = period.quarter ? null : await orgHoles(sql, orgId, period, r.rows);
   return r;
 }
 
 const ruDay = (d) => (d ? `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(0, 4)}` : '');
 const rubCell = (r) => (r == null ? '' : String(r));
+
+const HOLE_CSV = { cancelled: 'дело отменено', open: 'дело ещё не сдано', file: 'в файле отчёта другой номер', unknown: 'нет в перечне' };
 
 // org — перечень организации (2.402): заголовок с её названием и столбец «Оценщик».
 export function registryCsv(name, r, { org = false } = {}) {
@@ -160,6 +227,8 @@ export function registryCsv(name, r, { org = false } = {}) {
       x.purpose ?? '', x.customer ?? '', rubCell(x.value_rub), x.value_name ?? '', ruDay(x.done_on)]),
     ...(r.rows.some((x) => x.dup) ? [[], ['Номер отчёта повторяется — у каждого отчёта свой номер: '
       + [...new Set(r.rows.filter((x) => x.dup).map((x) => `№ ${x.number}${org ? ` (${x.expert_name})` : ''}`))].join(', ')]] : []),
+    ...(r.holes?.total ? [[], [`Пропуски в нумерации (с № ${r.holes.from} по № ${r.holes.to}): `
+      + r.holes.list.map((h) => `№ ${h.number} — ${HOLE_CSV[h.reason]}`).join('; ') + (r.holes.total > r.holes.list.length ? ` и ещё ${r.holes.total - r.holes.list.length}` : '')]] : []),
     ...(r.total > r.shown ? [[], [`Показаны первые ${r.shown} из ${r.total} — выберите квартал`]] : []),
   ];
   return `﻿${lines.map((l) => l.map(cell).join(';')).join('\r\n')}\r\n`;

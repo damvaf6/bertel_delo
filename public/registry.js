@@ -30,6 +30,30 @@ function gapsOf(r) {
 const dupLine = (r) => el('div', { class: 'overdue', 'data-registry-dup': r.id,
   text: `Номер № ${r.number} повторяется в перечне — у каждого отчёта свой номер, проверьте файл отчёта` });
 
+// 2.416: пропуски в нумерации за год — «№ 12 нет — дело отменено?»; что знает платформа — почему и к какому делу.
+export const HOLE_SAY = {
+  cancelled: (h) => `№ ${h.number} нет — дело «${h.title}» отменено после выдачи номера`,
+  open: (h) => `№ ${h.number} выдан делу «${h.title}» — оно ещё не сдано`,
+  file: (h) => `№ ${h.number} выдан делу «${h.title}», а в файле отчёта другой номер`,
+  unknown: (h) => `№ ${h.number} нет — дело отменено или номер пропущен?`,
+};
+export function holesBox(box, holes, { year, link }) {
+  const items = holes?.list ?? [];
+  const lines = [];
+  if (holes?.org) lines.push(el('p', { class: 'muted', 'data-holes-org': '1', text: `Номера выдаёт организация «${holes.org}» — пропуски в общем счёте видит руководитель` }));
+  else if (holes?.total) {
+    lines.push(el('p', { class: 'overdue', 'data-holes-total': String(holes.total),
+      text: `Пропуски в нумерации за ${year} год: ${holes.total} (с № ${holes.from} по № ${holes.to})` }));
+    lines.push(el('ul', { class: 'list' }, ...items.map((h) => el('li', { 'data-hole': String(h.seq) },
+      link && h.order_id ? el('a', { href: link(h), text: HOLE_SAY[h.reason](h) }) : el('span', { text: HOLE_SAY[h.reason](h) }),
+      ...(h.expert_name ? [el('div', { class: 'muted', text: `эксперт ${h.expert_name}` })] : [])))));
+    if (holes.total > items.length) lines.push(el('p', { class: 'muted', text: `и ещё ${holes.total - items.length}` }));
+  } else if (holes?.from) lines.push(el('p', { class: 'muted', 'data-holes-none': '1', text: `Пропусков в нумерации нет: с № ${holes.from} по № ${holes.to}` }));
+  if (holes?.guessed && holes.from) lines.push(el('p', { class: 'muted', text: `Образец номера не задан — считаем по образцу ${holes.pattern} из последнего отчёта; задайте свой в «Нумерации отчётов»` }));
+  box.replaceChildren(...lines);
+  box.classList.toggle('hidden', !lines.length);
+}
+
 let seq = 0;
 $('registry-year').addEventListener('change', () => loadRegistry(true));
 $('registry-quarter').addEventListener('change', () => loadRegistry(true));
@@ -55,6 +79,7 @@ export async function loadRegistry(chosen = false) {
   $('registry-total').textContent = n ? `${registry.name}: ${n} ${plural(n, 'отчёт', 'отчёта', 'отчётов')}${gaps ? ` · дописать — в ${gaps}` : ''}`
     + (dups ? ` · номер повторяется — в ${dups}` : '')
     + (n > registry.shown ? ` · показаны первые ${registry.shown}, выберите квартал` : '') : '';
+  holesBox($('registry-holes'), registry.holes, { year: registry.year, link: (h) => `#order=${h.order_id}` });
   $('registry-rows').replaceChildren(...registry.rows.map((r, i) => el('li', { 'data-registry': r.id },
     el('a', { class: 'title', href: `#order=${r.id}`, text: `${i + 1}. ${r.number ? `Отчёт № ${r.number}` : 'Отчёт без номера'}${r.made_on ? ` от ${dayRu(r.made_on)}` : ''}` }),
     el('div', { text: r.object }),

@@ -5,6 +5,7 @@
 import { api, el, say } from '/common.js';
 import { rub } from '/money.js';
 import { dayRu } from '/order.js';
+import { holesBox } from '/registry.js';
 
 const $ = (id) => document.getElementById(id);
 const period = () => `year=${encodeURIComponent($('org-registry-year').value)}&quarter=${encodeURIComponent($('org-registry-quarter').value)}`;
@@ -47,6 +48,8 @@ async function load(chosen) {
   $('org-registry-total').textContent = n ? `${registry.name}: ${reports(n)}${gaps ? ` · дописать — в ${gaps}` : ''}`
     + (dups ? ` · номер повторяется — в ${dups}` : '')
     + (n > registry.shown ? ` · показаны первые ${registry.shown}, выберите квартал` : '') : '';
+  // 2.416: пропуски в общем счёте организации за год (образец организации задан), у номера — эксперт.
+  holesBox($('org-registry-holes'), registry.holes, { year: registry.year });
   $('org-registry-experts').replaceChildren(...registry.experts.map((e) => el('li', { 'data-registry-expert': e.id },
     el('strong', { text: e.name }),
     el('div', { class: e.gaps || e.dups ? 'overdue' : 'muted', text: `${reports(e.n)}${e.gaps ? ` · дописать — в ${e.gaps}` : ' · всё нашлось в файлах'}`
