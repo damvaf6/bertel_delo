@@ -52,7 +52,7 @@ async function route() {
   if ((m = h.match(/^#org=([0-9a-f-]{36})(?:&case=([0-9A-F]{8})(?:&to=(pending|sign|chat|case|handover|transfer))?)?$/i))) return showOrg(m[1], m[2] ? { ref: `№ ${m[2].toUpperCase()}`, to: m[3] } : null);
   // #org=…&to=week|overdue|stuck|task_moved|orgext|away|back|sign|sign_order|sign_long|handover|returned|fresh|idle|docs — к блоку организации без дела (2.130, 2.141, 2.153, 2.158, 2.172, 2.209, 2.228, 2.238, 2.249, 2.286, 2.338, 2.374: из утренней
   // сводки руководителю).
-  if ((m = h.match(/^#org=([0-9a-f-]{36})&to=(week|overdue|stuck|task_moved|orgext|away|back|sign|sign_order|sign_long|handover|returned|fresh|idle|docs|new_year)$/i))) return showOrg(m[1], { block: m[2] });
+  if ((m = h.match(/^#org=([0-9a-f-]{36})&to=(week|overdue|stuck|task_moved|orgext|away|back|sign|sign_order|sign_long|handover|returned|fresh|idle|docs|new_year|numbering)$/i))) return showOrg(m[1], { block: m[2] });
   if (h === '#orgs') return showOrgs();
   if ((m = h.match(/^#expert=([0-9a-f-]{36})$/i))) return showExpertCard(m[1]);
   if (h === '#profile') return showProfile();
@@ -63,6 +63,7 @@ async function route() {
   if (h === '#specialist') return showSpecialist();
   if (h === '#specialist&to=schedule') return showSpecialist({ to: 'schedule' });
   if (h === '#specialist&to=dossier') return showSpecialist({ to: 'dossier' });
+  if (h === '#specialist&to=numbering') return showSpecialist({ to: 'numbering' }); // новый год, образец без года (2.419)
   if (h === '#specialist&to=back') return showSpecialist({ to: 'back' });
   if (h === '#specialists' && ['dispatcher', 'admin'].includes(state.me.user.platform_role)) return showSpecialists();
   if (h === '#admin' && state.me.user.platform_role === 'admin') return showAdmin();

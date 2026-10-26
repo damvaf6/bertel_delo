@@ -588,6 +588,8 @@ export function focusOrgBlock(to) {
   if (to === 'sign_order') { pickSignFilter('order'); return goSign(null); }
   // «sign_long» (2.374) — к подписи организации с отбором «Ждут Вашей подписи 2 дня и дольше».
   if (to === 'sign_long') { pickSignFilter('long'); return goSign(null); }
+  // «numbering» (2.419) — из «Сегодня»: в январе образец номера организации без года.
+  if (to === 'numbering') return $('org-numbering-box').scrollIntoView({ block: 'start' });
   $('org-cases-search').value = '';
   expert = '';
   filter = to;

@@ -163,6 +163,32 @@ function numberCancelled(items) {
   });
 }
 
+// Первые рабочие дни января (2.419): счёт номеров этого года — с 1, а в образце нет года (или вписан прошлый год цифрами) —
+// номера повторят прошлогодние. «Взять образец …» сохраняет образец с годом одним нажатием: свой — в профиле, организации —
+// только руководитель (у эксперта по счёту организации — без кнопки). Строка — к «Нумерации отчётов».
+function numberYear(h, id, { save = null, go, org = false }) {
+  if (!h) return [];
+  const what = h.kind === 'fixed'
+    ? `в образце ${h.pattern} вписан ${h.fixed} год — номера ${h.year} года выйдут как № ${h.first}`
+    : `в образце ${h.pattern} нет года — первым в ${h.year} году будет № ${h.first}${h.last ? `, а в ${h.year - 1} году последним был № ${h.last.number} (${dayRu(h.last.on)})` : ''}: номера повторят прошлогодние`;
+  const how = h.org && !save ? `образец организации «${h.org.name}» — поменять может только руководитель, скажите ему`
+    : h.suggest ? `возьмите образец ${h.suggest} — первым будет № ${h.suggest_first}` : 'добавьте в образец {ГГГГ} — год';
+  return group(id, `Нумерация отчётов: ${h.year} год — счёт с 1`, [h], () => [org ? 'Образец номера организации' : 'Образец номера отчёта',
+    { class: 'warn-line', role: 'number-year-what', text: what }, how], go, () => {
+    if (!save || !h.suggest) return [];
+    const msg = el('div', { class: 'muted', 'data-role': 'number-year-msg' });
+    const take = el('button', { type: 'button', class: 'secondary', 'data-action': 'number-year', onclick: async () => {
+      take.disabled = true;
+      try {
+        await save(h.suggest);
+        msg.textContent = `Образец ${h.suggest} сохранён — первым в ${h.year} году будет № ${h.suggest_first}`;
+        take.remove();
+      } catch (err) { msg.textContent = err.message; take.disabled = false; }
+    } }, `Взять образец ${h.suggest}`);
+    return [take, msg];
+  });
+}
+
 // Аттестат или полис из досье кончается до 15 января (2.405): в декабре — «продлите до каникул», к досье в профиле.
 function dossierNewYear(d, today) {
   if (!d?.items?.length) return [];
@@ -517,6 +543,9 @@ export async function loadToday() {
       ...dossierNewYear(e.dossier_new_year, t.today),
       // Номер отчёта выдан, а дело отменено (2.418) — отдать номер следующему делу или оставить пропуском.
       ...numberCancelled(e.number_cancelled),
+      // Первые рабочие дни января, а в образце номера нет года (2.419) — номера нового года повторят прошлогодние.
+      ...numberYear(e.number_year, 'number-year', { go: () => { location.hash = 'specialist&to=numbering'; },
+        save: e.number_year?.org ? null : (pattern) => api('PATCH', '/api/specialist/me', { report_pattern: pattern }) }),
       ...group('hot', 'Горит срок', e.hot.filter((x) => !noResult.some((n) => n.id === x.id) && !taskDue.some((n) => n.id === x.id)), (x) => [x.title, `${x.service} · ${deadline({ ...x, who: 'Вы попросили' }, t.today)}`], toOrder, askLate),
       ...group('offers', 'Новые предложения', e.offers, (x) => [x.title, [x.service, x.fee_kop ? `Вам ${rub(x.fee_kop)}` : null, deadline(x, t.today)].filter(Boolean).join(' · ')], toOrder),
       // На проверке у диспетчера 2 рабочих дня и дольше (2.369, 2.384) — строкой, без кнопок: делать ничего не нужно, ответ придёт в ленту.
@@ -591,6 +620,9 @@ export async function loadToday() {
       // «Напомнить эксперту» прямо здесь (2.162).
       ...orgReturned(g, caseLine, toOrg('case')),
       // Аттестат или полис эксперта кончается до 15 января (2.406, как у эксперта 2.405): в декабре — «продлите до каникул».
+      // Образец номера организации без года — в первые рабочие дни января (2.419), как у эксперта.
+      ...numberYear(g.number_year, `org-number-year-${g.id}`, { org: true, go: () => { location.hash = `org=${g.id}&to=numbering`; },
+        save: (pattern) => api('PUT', `/api/orgs/${g.id}/numbering`, { pattern }) }),
       ...orgDossierNewYear(g, t.today, toOrg()),
       // Досье экспертов (2.63): только вид документа и срок; копии руководитель не видит.
       ...group(`org-dossier-${g.id}`, 'Документы экспертов: срок', g.dossier ?? [], (x) => [`${x.expert} · ${x.kind_name}`,

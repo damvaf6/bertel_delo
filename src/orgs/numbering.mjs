@@ -2,6 +2,7 @@
 // (обязательно, один раз), {ГГГГ} — год, {ГГ} — две последние цифры года; остальное — буквы, цифры, «/», «-», «.», пробел.
 // Номера сравниваются без пробелов и регистра — как в сверке 2.116 и перечне для СРО (2.410).
 import { HttpError } from '../http/core.mjs';
+import { isWorkday } from '../orders/holidays.mjs';
 
 export const PATTERN_MAX = 40;
 const TOKEN = /\{(N|ГГГГ|ГГ)\}/gu;
@@ -92,3 +93,30 @@ export function numberFrom(raw) {
 }
 
 export const sameNumber = (a, b) => norm(a) === norm(b);
+
+// Новый год (2.419): счёт этого года — с 1 (в счёт идут только номера этого года). Образец без {ГГГГ}/{ГГ} — номер 1 нового
+// года совпадёт с № 1 прошлого; год вписан цифрами («{N}/2026») — номера нового года выйдут с прошлым годом. В январе до
+// YEAR_START_DAYS-го рабочего дня включительно (праздники и выходные — по календарю 2.371) — подсказка в «Сегодня»
+// эксперту и руководителю, чей это образец; suggest — образец с годом, сохраняется одним нажатием. Остальное время — null.
+export const YEAR_START_DAYS = 5;
+export function yearStart(today, days = YEAR_START_DAYS) {
+  if (!/^\d{4}-01-/.test(today)) return false;
+  let n = 0;
+  for (let d = 1; d <= Number(today.slice(8, 10)); d += 1) if (isWorkday(`${today.slice(0, 8)}${String(d).padStart(2, '0')}`)) n += 1;
+  return n <= days;
+}
+export function yearHint(pattern, today) {
+  if (!pattern || !yearStart(today)) return null;
+  const year = Number(today.slice(0, 4));
+  const literal = pattern.split(TOKEN).filter((_, i) => i % 2 === 0).join(' ');
+  const fixed = literal.match(/(?<!\d)20\d\d(?!\d)/u)?.[0];
+  if (fixed && Number(fixed) !== year) {
+    return withFirst({ kind: 'fixed', pattern, year, fixed: Number(fixed), first: formatNumber(pattern, 1, year),
+      suggest: patternFrom(pattern.replace(new RegExp(`(?<!\\d)${fixed}(?!\\d)`, 'u'), '{ГГГГ}')) });
+  }
+  if (/\{(ГГГГ|ГГ)\}/u.test(pattern) || fixed) return null;
+  const suggest = `${pattern}/{ГГГГ}`;
+  return withFirst({ kind: 'no_year', pattern, year, first: formatNumber(pattern, 1, year),
+    suggest: suggest.length <= PATTERN_MAX ? patternFrom(suggest) : null });
+}
+const withFirst = (h) => ({ ...h, suggest_first: h.suggest ? formatNumber(h.suggest, 1, h.year) : null });

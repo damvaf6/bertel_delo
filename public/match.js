@@ -102,6 +102,7 @@ export async function showSpecialist({ to = null } = {}) {
   await Promise.all([showCrm(), showVisits(sp), showDossier(), loadSchedule(), loadAwayBack(), loadNotaryDesk(), loadMyReport(), loadRegistry(), loadNumbering(), loadMyCard()]);
   if (to === 'dossier') $('dossier-box').scrollIntoView({ block: 'start' }); // из дела: документ кончается раньше срока (2.365)
   if (to === 'schedule') $('schedule-box').scrollIntoView({ block: 'start' });
+  if (to === 'numbering') $('numbering-box').scrollIntoView({ block: 'start' });
   // «Пока Вас не было» (2.239) — из уведомления в первый день после дней «не принимаю дела».
   if (to === 'back' && !$('back-box').classList.contains('hidden')) $('back-box').scrollIntoView({ block: 'start' });
 }
