@@ -1,3 +1,5 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Витрина Дела</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <meta name="robots" content="noindex">
@@ -61,6 +63,9 @@ header nav{display:flex;gap:22px;font-weight:500;font-size:15px}
 header nav a{color:var(--ink-2);text-decoration:none}
 header nav a:hover{color:var(--accent)}
 @media(max-width:640px){header nav{display:none}}
+.btn .short{display:none}
+/* Телефон: шапка в одну строку и низкая — знак и короткая кнопка «Кабинеты» */
+@media(max-width:640px){header.top .wrap{flex-wrap:nowrap;padding-block:8px;gap:12px}.logo{font-size:18px;white-space:nowrap}.logo i{width:30px;height:30px}header.top .btn{min-height:40px;padding:0 14px;white-space:nowrap}.btn .wide{display:none}.btn .short{display:inline}}
 
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 18px;border-radius:10px;border:1px solid var(--line-2);background:var(--surface);color:var(--ink);font-weight:600;font-size:15px;cursor:pointer;text-decoration:none}
 .btn:hover{border-color:var(--faint)}
@@ -225,6 +230,7 @@ footer .wrap{padding-block:24px 96px;display:flex;flex-wrap:wrap;justify-content
 .theme-tab .sun{display:none}
 :root[data-theme="dark"] .theme-tab .sun{display:block}
 :root[data-theme="dark"] .theme-tab .moon{display:none}
+@media(max-width:640px){.theme-tab{top:auto;transform:none;bottom:calc(max(16px,env(safe-area-inset-bottom,0px)) + 72px);right:max(16px,env(safe-area-inset-right,0px));width:36px;height:36px;border-radius:10px;border-right:1px solid var(--line-2)}.theme-tab:hover{width:36px}.theme-tab svg{width:18px;height:18px}}
 
 /* ИИ-консультант */
 .ai-fab{position:fixed;right:max(16px,env(safe-area-inset-right,0px));bottom:max(16px,env(safe-area-inset-bottom,0px));z-index:30;min-height:56px;padding:0 20px 0 16px;border-radius:999px;border:0;background:var(--accent);color:var(--on-accent);font-weight:700;font-size:15px;display:inline-flex;align-items:center;gap:10px;cursor:pointer;box-shadow:0 16px 32px -12px rgba(29,78,216,.55)}
@@ -290,7 +296,7 @@ body,header.top,.screen,.item,.fact{transition:background-color .3s ease,border-
 <header class="top"><div class="wrap">
   <a class="logo" href="#top"><i><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h10M4 17h7"/></svg></i><b style="font-weight:800">БЕРТЕЛ <span>Дело</span></b></a>
   <nav aria-label="Разделы"><a href="#try">Кабинеты</a><a href="#check" data-go="check">Проверка специалиста</a><a href="#how">Как устроено</a><a href="#done">Что сделано</a></nav>
-  <a class="btn primary" href="#try">Открыть кабинеты</a>
+  <a class="btn primary" href="#try"><span class="wide">Открыть кабинеты</span><span class="short">Кабинеты</span></a>
 </div></header>
 
 <main id="top">
@@ -689,7 +695,7 @@ body,header.top,.screen,.item,.fact{transition:background-color .3s ease,border-
   <div class="ai-head"><i><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg></i><div><b>ИИ-консультант</b><small>Подскажет порядок действий и нужного специалиста</small></div><button type="button" id="ai-close" aria-label="Закрыть">×</button></div>
   <div class="ai-log" id="ai-log" aria-live="polite"></div>
   <div class="ai-chips" id="ai-chips"></div>
-  <form class="ai-form" id="ai-form"><input id="ai-q" placeholder="Опишите, что случилось" autocomplete="off" aria-label="Ваш вопрос"><button class="btn primary" type="submit">Спросить</button></form>
+  <form class="ai-form" id="ai-form"><input id="ai-q" placeholder="Ваш вопрос" autocomplete="off" aria-label="Ваш вопрос"><button class="btn primary" type="submit">Спросить</button></form>
   <div class="ai-note">Пример на заготовленных ответах. В «Деле» отвечает российская модель (YandexGPT); ИИ только подсказывает — решает человек.</div>
 </div>
 
@@ -702,6 +708,7 @@ body,header.top,.screen,.item,.fact{transition:background-color .3s ease,border-
 // Обновляет «Работник Дело» после каждой слитой правки.
 var VERSION={task:'2.413',date:'26.10.2026',tasks:433};
 var RECENT=[
+  ['штаба 40517197','Витрина удобнее на телефоне','По проверке Лили 26.10: страница сразу открывается в ширину телефона, шапка — в одну строку с кнопкой «Кабинеты», кнопка темы маленькая и внизу над ИИ-консультантом, суммы не отрывают «₽» от числа, подсказка в поле консультанта — «Ваш вопрос».'],
   ['2.413','Номер отчёта в деле','В деле у черновика эксперт видит номер своего отчёта и может поменять его вручную, пока дело в работе. Номер другого его дела этого года «Дело» не даст и подскажет, у какого дела он уже стоит.'],
   ['2.412','Свой номер отчёта в Word','Когда эксперт впервые собирает отчёт Word в деле, «Дело» выдаёт делу следующий номер по его образцу, например «146/2026», и ставит его на титул и в колонтитул вместо номера дела. Повторная сборка — тот же номер, два дела одного номера не получат.'],
   ['2.411','Нумерация отчётов эксперта','В профиле эксперта — образец своего номера отчёта, например «146/2026»: «Дело» находит последний номер в файлах отчётов этого года, одной кнопкой берёт образец по нему и показывает следующий свободный номер. Дальше в пачке — этот номер сам встанет на титул отчёта Word.'],
@@ -863,7 +870,7 @@ $('h-return').addEventListener('click',function(){var pts=[].filter.call(documen
 // Диспетчер
 $('d-price-btn').addEventListener('click',function(){var v=$('d-sum').value.replace(/\D/g,'');var r=$('d-price-res');r.hidden=false;
   if(!v){r.className='callout warn';r.textContent='Впишите цену цифрами.';return}
-  var n=Number(v);r.className='callout ok';r.textContent='Цена '+n.toLocaleString('ru-RU')+' ₽ ушла заказчику. После оплаты эксперт получит '+Math.round(n*.8).toLocaleString('ru-RU')+' ₽ (80%) по «готово».'});
+  var n=Number(v);r.className='callout ok';r.textContent='Цена '+rub(n)+' ушла заказчику. После оплаты эксперт получит '+rub(Math.round(n*.8))+' (80%) по «готово».'});
 document.querySelectorAll('[data-ext]').forEach(function(b){b.addEventListener('click',function(){var r=$('d-ext-res');r.hidden=false;
   if(b.dataset.ext==='yes'){r.className='callout ok';r.textContent='Срок перенесён на 30.10. Заказчик видит новый срок; эксперту — «приложите письмо банка о переносе».'}
   else{r.className='callout warn';r.textContent='Отказано. Срок 30 октября — в «не принимаю дела» у эксперта: ему предложено попросить руководителя передать дело.'}
@@ -871,7 +878,7 @@ document.querySelectorAll('[data-ext]').forEach(function(b){b.addEventListener('
 
 // Переводы (стартовые цены из src/translation/prices.mjs)
 var TP={page:600,urgent:1000,org:400,orgBatch:250,batchFrom:5,cert:150,sign:400,copy:150,eq:250,courier:500};
-function rub(n){return n.toLocaleString('ru-RU')+' ₽'}
+function rub(n){return n.toLocaleString('ru-RU').replace(/\s/g,'\u00a0')+'\u00a0₽'}
 function tCalc(){var kind=$('t-kind').value,docs=Math.max(1,+$('t-docs').value||1),pages=Math.max(1,+$('t-pages').value||1);
   var tr=TP.page*pages*($('t-east').checked?2:1),urg=$('t-urgent').checked&&kind!=='file'?TP.urgent:0;
   var svc=[['Перевод, '+pages+' стр.'+($('t-east').checked?' ×2':''),tr]];if(urg)svc.push(['Срочно',urg]);
@@ -918,12 +925,12 @@ var EXP={
   ok:{nm:'Соколова Ольга Андреевна',sum:['Можно работать','ok'],note:['ok','Все сведения действуют дольше срока дела. Эксперт в подборе.'],facts:[
     ['Членство в СРО оценщиков','Ассоциация «СРО оценщиков» (пример), № 0000','Реестр членов СРО','ok','Состоит'],
     ['Квалификационный аттестат','«Оценка недвижимости», № 000000-1','Действует до 15.03.2027','ok','Действует'],
-    ['Страхование ответственности','Полис № 0000-00, 30 000 000 ₽','Действует до 31.12.2026','ok','Действует'],
+    ['Страхование ответственности','Полис № 0000-00, 30 000 000 ₽','Действует до 31.12.2026','ok','Действует'],
     ['Госреестр судебных экспертов','Место под будущий реестр','Подключим, когда реестр откроется','plain','Скоро']]},
   bad:{nm:'Морозов Илья Сергеевич',sum:['Не в подборе','bad'],note:['warn','Аттестат истёк — эксперт снят с подбора по услугам оценки, пока не загрузит новый. Руководителю и диспетчеру ушло уведомление.'],facts:[
     ['Членство в СРО оценщиков','Ассоциация «СРО оценщиков» (пример), № 0001','Реестр членов СРО','ok','Состоит'],
     ['Квалификационный аттестат','«Оценка недвижимости», № 000000-2','Истёк 01.10.2026','bad','Истёк'],
-    ['Страхование ответственности','Полис № 0000-01, 30 000 000 ₽','Кончается 05.11.2026 — раньше срока дела','warn','Скоро кончится'],
+    ['Страхование ответственности','Полис № 0000-01, 30 000 000 ₽','Кончается 05.11.2026 — раньше срока дела','warn','Скоро кончится'],
     ['Госреестр судебных экспертов','Место под будущий реестр','Подключим, когда реестр откроется','plain','Скоро']]}
 };
 function expDraw(){var x=EXP[$('x-who').value];$('x-nm').textContent=x.nm;$('x-sum').className='pill '+x.sum[1];$('x-sum').textContent=x.sum[0];
