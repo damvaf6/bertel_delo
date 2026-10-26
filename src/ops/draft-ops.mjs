@@ -17,7 +17,7 @@ import { orderRef } from '../notify/registry.mjs';
 import { orderSources, placeSources, sourcesLines } from '../docs/sources.mjs';
 import { draftDiff } from '../docs/diff.mjs';
 import { assignmentAddress, assignmentBank, assignmentCustomer, assignmentDue, assignmentKinds, assignmentPurpose, assignmentValue, banksIn, customerOf, customersInText, egrnFacts, egrnRightsFacts, egrnShares, egrnUses, kindList, parseFloorField, purposeFits, purposeKinds, sameAddressText, sameCustomer, USE_NAME } from '../ai/report-checks.mjs';
-import { assignmentDocs, egrnDocs, issuedNumbers, usedNumbers } from './ai-ops.mjs';
+import { assignmentDocs, egrnDocs, numberPool, numberSource } from './ai-ops.mjs';
 import { nextNumber, numberFrom, sameNumber } from '../orgs/numbering.mjs';
 import { todayMsk } from '../orders/workflow.mjs';
 
@@ -101,54 +101,53 @@ export function taskDraftItems(registry, o, assignment, before, body, egrn, owne
 }
 
 // Свой номер отчёта (2.412): выдаётся делу при первой сборке Word по образцу эксперта из профиля, повторная сборка — тот же
-// номер. Следующий — после наибольшего этого года из файлов отчётов эксперта и номеров, уже выданных его делам. Строки
-// специалиста и дела блокируются — две сборки сразу не получат один номер. Образца нет — null (номер дела платформы).
+// номер. Следующий — после наибольшего этого года из файлов отчётов эксперта и номеров, уже выданных его делам. Эксперт
+// работает от организации с образцом (2.415) — по образцу организации и из её общего счёта. Строки специалиста (и
+// организации) блокируются — две сборки сразу не получат один номер. Образца нет — null (номер дела платформы).
 export async function reportNumber(ctx, order, actor) {
   return ctx.sql.tx(async (tx) => {
-    const sp = await tx.one`select report_pattern from specialists where user_id = ${actor.id} for update`;
+    const src = await numberSource(tx, actor.id, { lock: true });
     const o = await tx.one`select report_number, report_number_by from orders where id = ${order.id} for update`;
     if (o.report_number && o.report_number_by === actor.id) return o.report_number;
-    if (!sp?.report_pattern) return null;
+    if (!src.pattern) return null;
     const today = todayMsk();
-    const used = [
-      ...await usedNumbers(tx, ctx.providers.storage, { id: order.id, executor_user_id: actor.id }, today),
-      ...await issuedNumbers(tx, actor.id, today, order.id),
-    ];
-    const { number } = nextNumber(sp.report_pattern, used, Number(today.slice(0, 4)));
-    await tx`update orders set report_number = ${number}, report_number_on = ${today}, report_number_by = ${actor.id} where id = ${order.id}`;
+    const used = await numberPool(tx, ctx.providers.storage, src, actor.id, today, order.id);
+    const { number } = nextNumber(src.pattern, used, Number(today.slice(0, 4)));
+    await tx`update orders set report_number = ${number}, report_number_on = ${today}, report_number_by = ${actor.id},
+             report_number_org = ${src.org?.id ?? null} where id = ${order.id}`;
     return number;
   });
 }
 
-// Номер отчёта в деле (2.413) — только самому исполнителю: выданный ему номер и дата, есть ли образец в профиле (тогда номер
-// выдастся при первой сборке Word), можно ли поменять вручную (дело в работе).
+// Номер отчёта в деле (2.413) — только самому исполнителю: выданный ему номер и дата, есть ли образец (свой в профиле или
+// организации, 2.415 — тогда номер выдастся при первой сборке Word), можно ли поменять вручную (дело в работе).
 async function numberView(sql, actor, order) {
   if (order.executor_user_id !== actor.id) return null;
-  const sp = await sql.one`select report_pattern from specialists where user_id = ${actor.id}`;
+  const src = await numberSource(sql, actor.id);
   const o = await sql.one`select report_number, to_char(report_number_on, 'YYYY-MM-DD') as on from orders
                           where id = ${order.id} and report_number_by = ${actor.id}`;
-  return { number: o?.report_number ?? null, on: o?.report_number ? o.on : null, pattern: sp?.report_pattern ?? null, can_set: editsDraft(actor, order) };
+  return { number: o?.report_number ?? null, on: o?.report_number ? o.on : null, pattern: src.pattern, org: src.org?.name ?? null, can_set: editsDraft(actor, order) };
 }
 
-// Ручной номер (2.413): занят другим делом эксперта этого года — выданным платформой или в файле отчёта — нельзя. Строки
-// специалиста и дела блокируются, как при выдаче (reportNumber), — ручной номер и сборка Word не разойдутся.
+// Ручной номер (2.413): занят другим делом эксперта этого года — выданным платформой или в файле отчёта — нельзя; при счёте
+// организации (2.415) — и делом другого её эксперта (название чужого дела не показываем). Строки блокируются, как при
+// выдаче (reportNumber), — ручной номер и сборка Word не разойдутся.
 export async function setReportNumber(ctx, order, actor, raw) {
   const number = numberFrom(raw);
   return ctx.sql.tx(async (tx) => {
-    await tx`select 1 from specialists where user_id = ${actor.id} for update`;
+    const src = await numberSource(tx, actor.id, { lock: true });
     const o = await tx.one`select report_number, report_number_by from orders where id = ${order.id} for update`;
     const was = o.report_number_by === actor.id ? o.report_number : null;
     if (!number) {
-      await tx`update orders set report_number = null, report_number_on = null, report_number_by = null where id = ${order.id}`;
+      await tx`update orders set report_number = null, report_number_on = null, report_number_by = null, report_number_org = null where id = ${order.id}`;
       return { number: null, was };
     }
     const today = todayMsk();
-    const taken = [
-      ...await issuedNumbers(tx, actor.id, today, order.id),
-      ...await usedNumbers(tx, ctx.providers.storage, { id: order.id, executor_user_id: actor.id }, today, { withTitle: true }),
-    ].find((e) => sameNumber(e.number, number));
+    const taken = (await numberPool(tx, ctx.providers.storage, src, actor.id, today, order.id)).find((e) => sameNumber(e.number, number));
+    if (taken && !taken.title) throw new HttpError(409, 'number_taken', `Номер № ${number} уже у дела другого эксперта организации «${src.org.name}» — выберите другой`);
     if (taken) throw new HttpError(409, 'number_taken', `Номер № ${number} уже у дела «${taken.title}»${taken.on ? ` (${taken.on.split('-').reverse().join('.')})` : ''} — выберите другой`);
-    await tx`update orders set report_number = ${number}, report_number_on = ${today}, report_number_by = ${actor.id} where id = ${order.id}`;
+    await tx`update orders set report_number = ${number}, report_number_on = ${today}, report_number_by = ${actor.id},
+             report_number_org = ${src.org?.id ?? null} where id = ${order.id}`;
     return { number, was };
   });
 }

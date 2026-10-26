@@ -27,19 +27,24 @@ export async function loadNumbering() {
   } catch (err) { say($('numbering-msg'), err.message); return; }
   say($('numbering-msg'), '');
   $('numbering-pattern').value = numbering.pattern ?? '';
+  // Работает от организации с образцом (2.415) — номера выдаёт организация из общего счёта; свой образец не действует.
+  const org = numbering.org;
+  $('numbering-org').classList.toggle('hidden', !org);
+  $('numbering-org').textContent = org ? `Номера отчётов выдаёт организация «${org.name}» по образцу ${org.pattern} — общий счёт для всех её экспертов. Свой образец не действует, пока Вы работаете от неё.` : '';
+  for (const id of ['numbering-own', 'numbering-save']) $(id).classList.toggle('hidden', !!org);
   guess = numbering.guess;
   $('numbering-last').textContent = numbering.last ? lastLine(numbering.last) : `В файлах отчётов ${numbering.year} года номеров пока нет.`;
   $('numbering-guess').textContent = guess ? `Взять образец по последнему отчёту: ${guess}` : '';
   $('numbering-guess').classList.toggle('hidden', !guess);
   // Номер выдаётся делу при сборке Word (2.412) — только когда образец сохранён.
-  $('numbering-word').classList.toggle('hidden', !numbering.pattern);
+  $('numbering-word').classList.toggle('hidden', !numbering.pattern && !org);
   const n = numbering.next;
   const box = $('numbering-next');
   if (!n) { box.replaceChildren(); return; }
   box.replaceChildren(
-    el('strong', { 'data-numbering-next': n.number, text: `${numbering.pattern ? 'Следующий номер' : 'Следующий номер по этому образцу'}: № ${n.number}` }),
+    el('strong', { 'data-numbering-next': n.number, text: `${numbering.pattern || org ? 'Следующий номер' : 'Следующий номер по этому образцу'}: № ${n.number}` }),
     el('span', { class: 'muted', text: n.after
-      ? ` — после № ${n.after.number}${n.matched > 1 ? `, по образцу в этом году — ${n.matched}` : ''}`
+      ? ` — после № ${n.after.number}${org && !n.after.mine ? ' (дело другого эксперта организации)' : ''}${n.matched > 1 ? `, по образцу в этом году — ${n.matched}` : ''}`
       : ' — в этом году отчётов с номером по образцу ещё не было' }),
   );
 }

@@ -21,7 +21,8 @@ import { orgSchedule, taskDues } from '../orders/schedule.mjs';
 import { expiringLinks, incompleteInspections } from './inspect-ops.mjs';
 import { docsWaiting } from './docreq-ops.mjs';
 import { taskDueFor, taskMoveLetter } from './draft-ops.mjs';
-import { assignmentDocs, TASK_MOVE } from './ai-ops.mjs';
+import { assignmentDocs, numberPool, orgExperts, TASK_MOVE } from './ai-ops.mjs';
+import { nextNumber, patternFrom } from '../orgs/numbering.mjs';
 
 export const INVITE_TTL_DAYS = 14;
 export const LIMITS = {
@@ -529,6 +530,52 @@ export function orgOps() {
           'cache-control': 'no-store',
         });
         return res.send(registryCsv(org.name, list, { org: true }));
+      },
+    },
+    {
+      // Нумерация отчётов организации (2.415): один образец и общий счёт за год для всех её экспертов — образец, следующий
+      // номер (после наибольшего из выданных делам по счёту организации и из файлов отчётов её экспертов) и после чьего,
+      // сколько выдано в этом году, свои образцы экспертов (подсказка — самый частый); только руководитель.
+      id: 'orgs.numbering', method: 'GET', path: '/api/orgs/:id/numbering', auth: 'user',
+      access: { resource: 'org', param: 'id', need: 'manage' },
+      async handler({ sql, org, providers }) {
+        const today = todayMsk();
+        const year = Number(today.slice(0, 4));
+        const pattern = org.report_pattern ?? null;
+        const experts = await orgExperts(sql, org.id);
+        const names = new Map(experts.map((e) => [e.user_id, e.full_name]));
+        const count = new Map();
+        for (const e of experts) if (e.report_pattern) count.set(e.report_pattern, (count.get(e.report_pattern) ?? 0) + 1);
+        const guess = pattern ? null : [...count].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+        const by = pattern ?? guess;
+        const pool = by ? await numberPool(sql, providers.storage, { org: { id: org.id, name: org.name } }, null, today) : [];
+        const next = by ? nextNumber(by, pool, year) : null;
+        const issued = (await sql.one`select count(*)::int as n from orders where report_number_org = ${org.id} and report_number is not null
+                                      and status <> 'cancelled' and report_number_on >= ${`${year}-01-01`}::date`).n;
+        return {
+          numbering: {
+            pattern, guess, year, issued, staff: experts.length,
+            experts: experts.map((e) => ({ name: e.full_name, pattern: e.report_pattern ?? null })),
+            next: next ? { number: next.number, seq: next.seq,
+              after: next.last ? { number: next.last.number, on: next.last.on, expert_name: names.get(next.last.by) ?? null } : null } : null,
+          },
+        };
+      },
+    },
+    {
+      // Образец номера организации (2.415): пустой — общего счёта нет, эксперты нумеруют по своим образцам. Уже выданные
+      // делам номера не меняются.
+      id: 'orgs.numbering.update', method: 'PUT', path: '/api/orgs/:id/numbering', auth: 'user',
+      access: { resource: 'org', param: 'id', need: 'manage' },
+      async handler({ sql, actor, org, body }) {
+        const pattern = patternFrom(body?.pattern);
+        if (pattern !== (org.report_pattern ?? null)) {
+          await sql.tx(async (tx) => {
+            await tx`update organizations set report_pattern = ${pattern} where id = ${org.id}`;
+            await audit(tx, actor, 'org.report_pattern', 'org', org.id, { pattern });
+          });
+        }
+        return { pattern };
       },
     },
     {

@@ -3560,6 +3560,49 @@ test('перечень отчётов для СРО (2.404): чего не на�
   assert.match(rows[2].where[0], /^итоговая стоимость — в разделе «Итоговая величина стоимости»/);
 });
 
+test('нумерация организации (2.415): только руководитель; номера из файлов отчётов её экспертов — в общем счёте, чужих — нет', async () => {
+  cover('orgs.numbering');
+  cover('orgs.numbering.update');
+  const org = await makeOrg(S.sql, 'Тестовая организация нумерации 2415');
+  const head = await login(S, '+79990002415');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  const ex = {};
+  for (const [k, phone] of [['a', '+79990002416'], ['c', '+79990002417']]) {
+    ex[k] = await login(S, phone);
+    await makeSpecialist(S.sql, ex[k].user.id);
+    if (k === 'c') continue;
+    await addMember(S.sql, org.id, ex.a.user.id, 'member');
+    assert.equal((await ex.a.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  }
+  const get = (c) => c.req('GET', `/api/orgs/${org.id}/numbering`);
+  const put = (c, pattern) => c.req('PUT', `/api/orgs/${org.id}/numbering`, { pattern });
+  for (const c of [ex.a, U.dispatcher, U.admin]) {
+    assert.equal((await get(c)).status, 403);
+    assert.equal((await put(c, '{N}')).status, 403);
+  }
+  for (const k of ['stranger', 'headA', 'owner']) {
+    assert.equal((await get(U[k])).status, 404, k);
+    assert.equal((await put(U[k], '{N}')).status, 404, k);
+  }
+  assert.equal((await put(head, 'Н-{N}/{ГГГГ}')).status, 200);
+  const [audited] = await S.sql`select details from audit_log where action = 'org.report_pattern' and subject_id = ${org.id}`;
+  assert.equal(audited.details.pattern, 'Н-{N}/{ГГГГ}');
+  const year = new Date(Date.now() + 3 * 3_600_000).getUTCFullYear();
+  const withFile = async (title, executor, number) => {
+    const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
+    await S.sql`update orders set status = 'in_work', deadline = (now() at time zone 'Europe/Moscow')::date + 10, executor_user_id = ${executor} where id = ${o.id}`;
+    const doc = await upload(U.owner, o.id, 'отчёт.txt', `ОТЧЁТ ОБ ОЦЕНКЕ № ${number} от 06.10.${year}`);
+    await S.sql`update documents set kind = 'result', uploaded_by = ${executor} where id = ${doc.id}`;
+  };
+  await withFile('Нумерация 2415: эксперт организации', ex.a.user.id, `Н-4/${year}`);
+  await withFile('Нумерация 2415: чужой эксперт', ex.c.user.id, `Н-9/${year}`);
+  const n = (await get(head)).body.numbering;
+  assert.deepEqual([n.pattern, n.next.number, n.staff], ['Н-{N}/{ГГГГ}', `Н-5/${year}`, 1], 'чужой эксперт — не в счёт');
+  assert.equal(JSON.stringify(n).includes('Нумерация 2415'), false, 'названий дел руководителю не показываем');
+  assert.equal((await ex.a.req('GET', '/api/specialist/me/numbering')).body.numbering.next.number, `Н-5/${year}`);
+  assert.equal((await ex.c.req('GET', '/api/specialist/me/numbering')).body.numbering.org, null);
+});
+
 test('перечень отчётов для СРО по организации (2.402): все эксперты организации, с именем; до вступления и чужое — нет; только руководитель; CSV', async () => {
   cover('orgs.registry');
   const org = await makeOrg(S.sql, 'Тестовая организация СРО 2402');

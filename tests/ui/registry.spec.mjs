@@ -429,3 +429,68 @@ test('2.414: ИИ-проверка — номер в файле отчёта н�
   expect(problems).toEqual([]);
   await ctx.close();
 });
+
+// 2.415: нумерация организации — руководитель задаёт один образец и видит общий счёт; эксперт от организации видит, что
+// номера выдаёт организация, и свой образец не действует.
+test('2.415: нумерация организации — образец руководителя, общий счёт, у эксперта — «номера выдаёт организация»', async ({ browser, baseURL }) => {
+  const opts = { baseURL, viewport: { width: 412, height: 915 }, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true, locale: 'ru-RU',
+    storageState: { cookies: [], origins: [{ origin: new URL(baseURL).origin, localStorage: [{ name: 'delo.folds', value: 'open' }] }] } };
+  const ctx = await browser.newContext(opts);
+  const page = await ctx.newPage();
+  const problems = [];
+  page.on('pageerror', (e) => problems.push(`ошибка JS: ${e.message}`));
+  const head = await signIn(page, '+79990002415');
+  const ectx = await browser.newContext(opts);
+  const epage = await ectx.newPage();
+  epage.on('pageerror', (e) => problems.push(`ошибка JS: ${e.message}`));
+  const expert = await signIn(epage, '+79990002416');
+  const year = Number(new Date(Date.now() + 3 * 3_600_000).toISOString().slice(0, 4));
+  const org = await db(async (c) => {
+    const id = (await c.query("insert into organizations (name) values ('ООО «Оценка-Счёт»') returning id")).rows[0].id;
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head')", [id, head.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'member')", [id, expert.id]);
+    await c.query("update users set full_name = 'Счётова Ева' where id = $1", [expert.id]);
+    await c.query("insert into specialists (user_id, org_id, report_pattern) values ($1, $2, '{N}/{ГГГГ}')", [expert.id, id]);
+    return id;
+  });
+
+  await page.goto(`/kabinet#org=${org}`);
+  const box = page.locator('#org-numbering-box');
+  await expect(box.getByRole('heading', { name: 'Нумерация отчётов организации' })).toBeVisible();
+  await expect(page.locator('#org-numbering-experts')).toHaveText('Свои образцы экспертов: Счётова Ева — {N}/{ГГГГ}.');
+  await expect(page.locator('#org-numbering-guess')).toHaveText('Взять образец экспертов: {N}/{ГГГГ}');
+  // Неверный образец — причина; свой образец организации — сохраняется.
+  await page.locator('#org-numbering-pattern').fill('ОРГ/{ГГГГ}');
+  await page.locator('#org-numbering-save').click();
+  await expect(page.locator('#org-numbering-msg')).toContainText('{N}');
+  await page.locator('#org-numbering-pattern').fill('ОРГ-{N}/{ГГГГ}');
+  await page.locator('#org-numbering-save').click();
+  await expect(page.locator('#org-numbering-msg')).toHaveText('Образец сохранён — номера всем экспертам организации выдаются по нему');
+  await expect(page.locator('#org-numbering-next')).toContainText(`Следующий номер: № ОРГ-1/${year} — в ${year} году номеров по образцу ещё не было`);
+  // Номер, выданный делу эксперта по счёту организации, — в счёт следующего, с именем эксперта.
+  await db(async (c) => {
+    await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, deadline, fields, report_number,
+      report_number_on, report_number_by, report_number_org) values ($1, 'Квартира в Мытищах', 'expertise', 'realty', 'in_work', $1,
+      current_date + 7, '{}', $3, current_date, $1, $2)`, [expert.id, org, `ОРГ-7/${year}`]);
+  });
+  await page.reload();
+  await expect(page.locator('#org-numbering-next')).toContainText(`Следующий номер: № ОРГ-8/${year} — после № ОРГ-7/${year}`);
+  await expect(page.locator('#org-numbering-next')).toContainText(`Счётова Ева); выдано по счёту организации в ${year} году — 1`);
+  await expect(page.locator('#org-numbering-experts')).toContainText('Пока у организации есть образец, они не действуют.');
+  await box.scrollIntoViewIfNeeded();
+  await shot(page, 'r16-2415-numeraciya-organizacii');
+
+  // Эксперт: номера выдаёт организация, свой образец не правится, следующий — из общего счёта.
+  await epage.goto('/kabinet#specialist');
+  const ebox = epage.locator('#numbering-box');
+  await expect(epage.locator('#numbering-org')).toHaveText('Номера отчётов выдаёт организация «ООО «Оценка-Счёт»» по образцу ОРГ-{N}/{ГГГГ} — общий счёт для всех её экспертов. Свой образец не действует, пока Вы работаете от неё.');
+  await expect(epage.locator('#numbering-own')).toBeHidden();
+  await expect(epage.locator('#numbering-save')).toBeHidden();
+  await expect(epage.locator('#numbering-next')).toContainText(`Следующий номер: № ОРГ-8/${year} — после № ОРГ-7/${year}`);
+  await expect(epage.locator('#numbering-word')).toBeVisible();
+  await ebox.scrollIntoViewIfNeeded();
+  await shot(epage, 'r17-2415-nomera-vydaet-organizaciya');
+  expect(problems).toEqual([]);
+  await ctx.close();
+  await ectx.close();
+});
