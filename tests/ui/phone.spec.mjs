@@ -11144,10 +11144,11 @@ test('прогон 2.230: эксперт и руководитель по пач
   await ep.locator('#specialist-away-note').fill('отпуск');
   await ep.locator('#specialist-away-set').click();
   await expect(ep.locator('#specialist-away-now')).toContainText('Вы не принимаете новые дела с ');
-  // Предупреждение рассылается раз в минуту на сервере; здесь — запись напрямую (как в 2.226).
+  // Предупреждение рассылается раз в минуту на сервере; здесь — запись напрямую (как в 2.226). Рассылка могла успеть
+  // прислать и своё такое же — строк тогда две, обе ведут в одно место: берём первую.
   await db((c) => c.query("insert into notifications (user_id, type, event) values ($1, 'executor_work', 'away_soon')", [expert.id]));
   await ep.goto('/kabinet#notifications');
-  await ep.locator('#notifications li').filter({ hasText: 'Скоро Ваши дни «не принимаю дела»' }).getByRole('button').click();
+  await ep.locator('#notifications li').filter({ hasText: 'Скоро Ваши дни «не принимаю дела»' }).first().getByRole('button').click();
   await expect(ep).toHaveURL(/#specialist&to=schedule$/);
   const it = ep.locator(`#schedule-days > li[data-day="${inDays(6)}"] li[data-schedule-item="deadline"]`);
   await expect(it).toContainText('срок в дни, когда Вы не принимаете новые дела');
