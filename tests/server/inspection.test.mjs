@@ -965,3 +965,57 @@ test('2.237: доснято по подсказке — у шага подска
   assert.equal(st.facade.reshot.before.document_id, fresh.document_id);
   assert.equal(st.facade.photos.length, 3);
 });
+
+test('2.421: акт осмотра Word — когда, адрес, эксперт, кто снимал, шаги с номерами фото и геометкой; не снятые шаги — «не снято»', async () => {
+  const { extractPages } = await import('../../src/ai/extract.mjs');
+  await spec.req('PATCH', '/api/me', { full_name: 'Актов Эксперт' });
+  await spec2.req('PATCH', '/api/me', { full_name: 'Выездной Помощник' });
+  const o = await inWork('Осмотр — акт');
+  const act = async (c) => {
+    const r = await fetch(`${S.base}/api/orders/${o.id}/inspection/act`, { headers: { cookie: c.cookie } });
+    if (r.status !== 200) return { status: r.status, body: await r.json() };
+    const buf = Buffer.from(await r.arrayBuffer());
+    return { status: 200, name: decodeURIComponent(r.headers.get('content-disposition').split("''")[1]),
+      text: (await extractPages(buf, 'a.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')).pages.join('\n') };
+  };
+  const none = await act(spec);
+  assert.equal(none.status, 409);
+  assert.match(none.body.message, /нет фото осмотра/);
+
+  const { token } = await issue(o, { days: 1 });
+  assert.equal((await shoot(token, 'facade', { headers: { ...GEO, 'x-shot-at': new Date(Date.now() - 3600_000).toISOString() } })).status, 201);
+  assert.equal((await shoot(token, 'rooms')).status, 201);
+  assert.equal((await finish(token)).status, 200);
+  // Выезд помощника с одним снимком кухни.
+  const [v] = await S.sql`insert into onsite_visits (order_id, helper_id, assigned_by, planned_at, finished_at)
+                          values (${o.id}, ${spec2.user.id}, ${spec.user.id}, now(), now()) returning id`;
+  const [d] = await S.sql`insert into documents (order_id, uploaded_by, filename, mime, size_bytes, storage_key, kind)
+                          values (${o.id}, ${spec.user.id}, 'Осмотр · Кухня · 1.jpg', 'image/jpeg', 10, ${`orders/${o.id}/act-kitchen`}, 'inspection') returning id`;
+  await S.sql`insert into inspection_photos (document_id, visit_id, step, lat, lon) values (${d.id}, ${v.id}, 'kitchen', 55.7, 37.6)`;
+
+  const nos = Object.fromEntries((await spec.req('GET', `/api/orders/${o.id}/inspection`)).body.steps
+    .flatMap((s) => s.photos.map((p) => [s.id, p.no])));
+  const a = await act(spec);
+  assert.equal(a.status, 200);
+  assert.match(a.name, /^Акт осмотра объекта [0-9A-F]{8}\.docx$/);
+  assert.match(a.text, /Акт осмотра объекта · дело № [0-9A-F]{8}/);
+  assert.match(a.text, /Адрес объекта[\s\S]*г\. Москва, Осмотровая ул\., 7/);
+  assert.match(a.text, /Эксперт[\s\S]*Актов Эксперт/);
+  assert.match(a.text, /Владелец снимал по ссылке \(выдана [^)]*«Готово» — [^)]*\): фото 2/);
+  assert.match(a.text, /Выезд на объект — помощник Выездной Помощник \(завершён [^)]*\): фото 1/);
+  assert.match(a.text, /3, с геометкой — 2/);
+  assert.match(a.text, new RegExp(`Фото ${nos.facade}[\\s\\S]*55\\.75120, 37\\.61840 \\(±15 м\\)[\\s\\S]*владелец по ссылке`));
+  assert.match(a.text, new RegExp(`Фото ${nos.kitchen}[\\s\\S]*помощник Выездной Помощник`));
+  assert.match(a.text, new RegExp(`Фото ${nos.rooms}[\\s\\S]*\\(получено\\)[\\s\\S]*не определено`), 'телефон не передал время и место');
+  assert.match(a.text, /Санузел[\s\S]*не снято/);
+  assert.match(a.text, /не снято \(шаг «если есть»\)/);
+  assert.match(a.text, /Эксперт _+ \/ Актов Эксперт \//);
+  // Заказчик видит акт, но без имени помощника.
+  const b = await act(owner);
+  assert.equal(b.status, 200);
+  assert.ok(!b.text.includes('Выездной Помощник'));
+  assert.match(b.text, /помощник на выезде/);
+  // Записано в журнал.
+  const [log] = await S.sql`select count(*)::int as n from audit_log where action = 'inspection.act' and subject_id = ${String(o.id)}`;
+  assert.equal(log.n, 2);
+});

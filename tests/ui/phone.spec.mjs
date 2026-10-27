@@ -1451,6 +1451,7 @@ test('дистанционный осмотр: специалист выдаёт
   // Специалист выдаёт ссылку на 1 день; видит её один раз.
   await sp.goto(`/kabinet#order=${id}`);
   await expect(sp.locator('#inspect-state')).toContainText('Владелец объекта снимает его сам по ссылке');
+  await expect(sp.locator('#inspect-act')).toBeHidden(); // 2.421: без фото акта нет
   await sp.getByLabel('Ссылка владельцу объекта действует').selectOption('1');
   await sp.getByRole('button', { name: 'Выдать ссылку владельцу' }).click();
   await expect(sp.locator('#inspect-msg')).toHaveText('Ссылка готова — отправьте её владельцу объекта');
@@ -1519,6 +1520,11 @@ test('дистанционный осмотр: специалист выдаёт
   expect(full.url()).toContain('/api/documents/');
   await sp.goto(`/kabinet#order=${id}`);
   await expect(sp.locator('#inspect-state')).toContainText('Фото осмотра: 2');
+  // 2.421: акт осмотра Word — одной кнопкой под числом фото.
+  await sp.locator('#inspect-act').scrollIntoViewIfNeeded();
+  await shot(sp, '84a-specialist-akt-osmotra');
+  const [act] = await Promise.all([sp.waitForEvent('download'), sp.getByRole('button', { name: 'Скачать акт осмотра' }).click()]);
+  expect(act.suggestedFilename()).toMatch(/^Акт осмотра объекта [0-9A-F]{8}\.docx$/);
   const notes = await (await sp.request.get('/api/notifications')).json();
   // Сняты не все обязательные шаги — уведомление «снял не всё» (2.208).
   expect(JSON.stringify(notes)).toContain('Владелец нажал «Готово», но снял не всё');

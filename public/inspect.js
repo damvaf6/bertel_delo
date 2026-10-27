@@ -39,6 +39,8 @@ export async function loadInspection(current) {
       : subject === 'car' ? 'Владелец снимает машину сам по ссылке — без входа, по шагам: с четырёх сторон, VIN, пробег, каждое повреждение крупно. Фото появятся здесь.'
       : 'Владелец объекта снимает его сам по ссылке — без входа, по шагам для этого вида объекта. Фото появятся здесь.')
       : 'Фото осмотра пока нет.';
+  // Акт осмотра Word (2.421): когда, где, кто снимал, шаги с номерами фото — как только в деле есть фото.
+  $('inspect-act-row').classList.toggle('hidden', !photos);
   renderSilent(r);
   renderExpiring(r);
   renderIncomplete(r);
@@ -294,3 +296,5 @@ $('inspect-copy').addEventListener('click', async () => {
     say($('inspect-msg'), 'Ссылка скопирована', 'ok');
   } catch { say($('inspect-msg'), 'Не удалось скопировать — выделите ссылку и скопируйте вручную'); }
 });
+
+$('inspect-act').addEventListener('click', () => { if (ctx) location.assign(`/api/orders/${ctx.order.id}/inspection/act`); });

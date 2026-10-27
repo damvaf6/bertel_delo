@@ -9,8 +9,10 @@ import crypto from 'node:crypto';
 import { HttpError, notFound, rateLimiter } from '../http/core.mjs';
 import { orderSides } from '../access/policy.mjs';
 import { notify } from '../notify/notify.mjs';
-import { audit, phoneFrom, text } from './util.mjs';
+import { audit, phoneFrom, sendFile, text } from './util.mjs';
 import { inspectionPhotos } from '../docs/photos.mjs';
+import { DOCX_MIME } from '../docs/docx.mjs';
+import { inspectionActData, inspectionActDoc } from '../docs/inspection-act.mjs';
 
 export const INSPECT = {
   days: [1, 3, 7],       // на сколько дней выдаётся ссылка (по умолчанию — 3)
@@ -358,6 +360,18 @@ export function inspectOps() {
         if (!p?.thumb) throw notFound();
         res.set({ 'content-type': 'image/jpeg', 'cache-control': 'private, max-age=86400' });
         res.send(p.thumb);
+      },
+    },
+    {
+      // Акт осмотра Word (2.421): когда, где, кто снимал, шаги с номерами фото, временем и геометкой. Видит каждый, кто видит
+      // заявку (как фото осмотра); фото в деле нет — акта нет.
+      id: 'inspection.act', method: 'GET', path: '/api/orders/:id/inspection/act', auth: 'user',
+      access: { resource: 'order', param: 'id', need: 'read' },
+      async handler({ sql, actor, order, registry, providers, res }) {
+        const data = await inspectionActData(sql, registry, order, actor);
+        if (!data) throw new HttpError(409, 'no_photos', 'В деле пока нет фото осмотра — акт составить не из чего');
+        await audit(sql, actor, 'inspection.act', 'order', order.id, { photos: data.total });
+        return sendFile(res, providers, { ...inspectionActDoc(data), mime: DOCX_MIME });
       },
     },
     {
