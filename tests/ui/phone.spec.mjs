@@ -3578,7 +3578,8 @@ test('уведомления (2.45): все события на экране и 
   const sendFrom = async (p, oid, body) => expect((await p.request.post(`/api/orders/${oid}/messages`, { data: { body }, headers: H })).status()).toBe(201);
   // Сообщение по заявке, где я — исполнитель: заявка заказчика C.
   const co = (await (await cp.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Заявка заказчика' }, headers: H })).json()).order;
-  await db((c) => c.query("update orders set status = 'in_work', deadline = current_date + 5, executor_user_id = $2, price_kop = 1000000, paid_at = now() where id = $1", [co.id, me.id]));
+  // Срок — через 30 дней: при «+5» в иные дни ежеминутная рассылка присылала «срок через 3 рабочих дня» — лишнее СМС.
+  await db((c) => c.query("update orders set status = 'in_work', deadline = current_date + 30, executor_user_id = $2, price_kop = 1000000, paid_at = now() where id = $1", [co.id, me.id]));
   const before = await smsCount();
   await sendFrom(cp, co.id, 'Первое сообщение');
   await page.waitForTimeout(300);

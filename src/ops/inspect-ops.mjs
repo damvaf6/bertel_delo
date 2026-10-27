@@ -368,7 +368,8 @@ export function inspectOps() {
       id: 'inspection.act', method: 'GET', path: '/api/orders/:id/inspection/act', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
       async handler({ sql, actor, order, registry, providers, res }) {
-        const data = await inspectionActData(sql, registry, order, actor);
+        const data = await inspectionActData(sql, registry, order, actor,
+          async (photos) => reshotSteps(sql, order.id, photos, await openRetakes(sql, order.id)));
         if (!data) throw new HttpError(409, 'no_photos', 'В деле пока нет фото осмотра — акт составить не из чего');
         await audit(sql, actor, 'inspection.act', 'order', order.id, { photos: data.total });
         return sendFile(res, providers, { ...inspectionActDoc(data), mime: DOCX_MIME });
