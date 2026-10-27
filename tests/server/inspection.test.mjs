@@ -1019,3 +1019,58 @@ test('2.421: акт осмотра Word — когда, адрес, экспер
   const [log] = await S.sql`select count(*)::int as n from audit_log where action = 'inspection.act' and subject_id = ${String(o.id)}`;
   assert.equal(log.n, 2);
 });
+
+test('2.422: в акте осмотра — данные с объекта от помощника и отметки «доснято по просьбе эксперта»', async () => {
+  const { extractPages } = await import('../../src/ai/extract.mjs');
+  await spec2.req('PATCH', '/api/me', { full_name: 'Выездной Помощник' });
+  const o = await inWork('Осмотр — акт с данными с объекта');
+  const act = async (c) => {
+    const r = await fetch(`${S.base}/api/orders/${o.id}/inspection/act`, { headers: { cookie: c.cookie } });
+    assert.equal(r.status, 200);
+    const buf = Buffer.from(await r.arrayBuffer());
+    return (await extractPages(buf, 'a.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')).pages.join('\n');
+  };
+  const l = await issue(o);
+  assert.equal((await shoot(l.token, 'facade', { headers: GEO })).status, 201);
+  assert.equal((await finish(l.token)).status, 200);
+  // Без просьб и выездов — разделов нет.
+  let t = await act(spec);
+  assert.ok(!t.includes('Доснято по просьбе эксперта'));
+  assert.ok(!t.includes('Данные с объекта'));
+
+  const ask = (stepId, note) => spec.req('POST', `/api/orders/${o.id}/inspection/retakes`, { step: stepId, note });
+  assert.equal((await ask('facade', 'Размыто — дом целиком, днём')).status, 201);
+  assert.equal((await ask('rooms', 'Каждую комнату из двух углов')).status, 201);
+  assert.equal((await ask('door', 'Дверь целиком')).status, 201);
+  const l2 = await issue(o);
+  assert.equal((await shoot(l2.token, 'facade')).status, 201);
+  assert.equal((await shoot(l2.token, 'rooms')).status, 201);
+  // Выезд помощника с данными с объекта; отменённый выезд с данными — не в акте.
+  const data = { condition: 'needs_repair', area_measured: 54.3, floor: '5 из 9', match_order: 'partly', notes: 'Перепланировка кухни' };
+  const [v] = await S.sql`insert into onsite_visits (order_id, helper_id, assigned_by, planned_at, finished_at, data)
+                          values (${o.id}, ${spec2.user.id}, ${spec.user.id}, now(), now(), ${JSON.stringify(data)}) returning id`;
+  await S.sql`insert into onsite_visits (order_id, helper_id, assigned_by, planned_at, cancelled_at, data)
+              values (${o.id}, ${spec2.user.id}, ${spec.user.id}, now(), now(), ${JSON.stringify({ notes: 'Отменённый выезд' })})`;
+  const [d] = await S.sql`insert into documents (order_id, uploaded_by, filename, mime, size_bytes, storage_key, kind)
+                          values (${o.id}, ${spec.user.id}, 'Осмотр · Кухня · 1.jpg', 'image/jpeg', 10, ${`orders/${o.id}/act2-kitchen`}, 'inspection') returning id`;
+  await S.sql`insert into inspection_photos (document_id, visit_id, step) values (${d.id}, ${v.id}, 'kitchen')`;
+
+  const st = Object.fromEntries((await spec.req('GET', `/api/orders/${o.id}/inspection`)).body.steps.map((s) => [s.id, s]));
+  t = await act(spec);
+  assert.match(t, /Доснято по просьбе эксперта/);
+  assert.match(t, new RegExp(`Доснято по просьбе эксперта\\n[\\s\\S]*Дом снаружи[\\s\\S]*«Размыто — дом целиком, днём» \\([^)]*\\)[\\s\\S]*Фото ${st.facade.reshot.after.no}[\\s\\S]*Фото ${st.facade.reshot.before.no}`));
+  assert.match(t, /«Каждую комнату из двух углов» \([^)]*\)[\s\S]*Фото \d+[\s\S]*не было/);
+  assert.match(t, new RegExp(`Фото ${st.facade.reshot.after.no}[\\s\\S]*\\(доснято по просьбе эксперта\\)`));
+  assert.ok(!t.includes('Дверь целиком'), 'не доснято — не в акте');
+  assert.match(t, /Данные с объекта — помощник Выездной Помощник/);
+  assert.match(t, /Общее состояние[\s\S]*Нужен ремонт/);
+  assert.match(t, /Площадь по замеру, кв\. м[\s\S]*54,3/);
+  assert.match(t, /Объект соответствует заявке[\s\S]*Частично — см\. замечания/);
+  assert.match(t, /Замечания помощника[\s\S]*Перепланировка кухни/);
+  assert.ok(!t.includes('Отменённый выезд'));
+  // Заказчик — те же данные, без имени помощника.
+  const b = await act(owner);
+  assert.match(b, /Данные с объекта — помощник на выезде/);
+  assert.match(b, /Нужен ремонт/);
+  assert.ok(!b.includes('Выездной Помощник'));
+});

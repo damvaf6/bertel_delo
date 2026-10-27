@@ -1,10 +1,11 @@
 // Акт осмотра (2.421): Word из осмотра дела — когда осматривали, где, кто снимал (владелец по ссылке, помощник на выезде),
 // шаги осмотра с номерами фото, временем и геометкой. Номера фото — те же, что в деле и в приложении «Фотоматериалы осмотра»
 // отчёта (2.96). Суд и банк просят именно акт — эксперт больше не переписывает его вручную.
+// В акте и данные с объекта от помощника (экспресс, 2.4), и какие шаги доснимали по просьбе эксперта (2.237) — 2.422.
 import { isStaff } from '../access/policy.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { todayMsk } from '../orders/workflow.mjs';
-import { timeMsk } from '../analogs/analogs.mjs';
+import { timeMsk, valueText } from '../analogs/analogs.mjs';
 import { buildSimpleDoc } from './docx.mjs';
 import { inspectionPhotos } from './photos.mjs';
 
@@ -16,15 +17,19 @@ const geo = (p) => (p.lat == null ? 'не определено'
 const shotTime = (p) => (p.shot_at ? timeMsk(p.shot_at) : `${timeMsk(p.received_at)} (получено)`);
 const when = (p) => new Date(p.shot_at ?? p.received_at).getTime();
 
+// Данные с объекта: подпись поля и значение (для выбора — название варианта), как в «Выездах» (onsite.get).
+const visitData = (fields, data) => fields.map((f) => [f.label, valueText(f, data?.[f.id])]).filter(([, v]) => v);
+
 // Сведения акта; null — фото осмотра в деле нет. Имя помощника — исполнителю и служебным (как в «Выездах», onsite.get).
-export async function inspectionActData(sql, registry, order, actor) {
+// reshot — доснятые по просьбе эксперта шаги (reshotSteps в inspect-ops.mjs, по тем же фото).
+export async function inspectionActData(sql, registry, order, actor, reshotOf = async () => ({})) {
   const steps = registry.inspectionSteps(order.module, order.service);
   const photos = await inspectionPhotos(sql, order, steps);
   if (!photos.length) return null;
   const def = registry.service(order.module, order.service);
   const names = isStaff(actor) || order.executor_user_id === actor.id;
   const links = await sql`select id, created_at, finished_at from inspection_links where order_id = ${order.id} order by id`;
-  const visits = await sql`select v.id, v.planned_at, v.finished_at, u.full_name from onsite_visits v join users u on u.id = v.helper_id
+  const visits = await sql`select v.id, v.planned_at, v.finished_at, v.cancelled_at, v.data, u.full_name from onsite_visits v join users u on u.id = v.helper_id
                            where v.order_id = ${order.id} order by v.id`;
   const [executor] = order.executor_user_id ? await sql`select full_name from users where id = ${order.executor_user_id}` : [];
   const helperOf = (id) => {
@@ -44,6 +49,15 @@ export async function inspectionActData(sql, registry, order, actor) {
       return n ? `Выезд на объект — ${names && v.full_name ? `помощник ${v.full_name}` : 'помощник'} (${v.finished_at ? `завершён ${timeMsk(v.finished_at)}` : `назначен на ${timeMsk(v.planned_at)}`}): фото ${n}` : null;
     }),
   ].filter(Boolean);
+  // Данные с объекта — по каждому выезду, который не отменён и где помощник что-то записал.
+  const fields = registry.express(order.module, order.service)?.fields ?? [];
+  const onsite = visits.filter((v) => !v.cancelled_at).map((v) => ({
+    who: names && v.full_name ? `помощник ${v.full_name}` : 'помощник на выезде',
+    when: v.finished_at ? timeMsk(v.finished_at) : null,
+    rows: visitData(fields, v.data),
+  })).filter((v) => v.rows.length);
+  const reshot = await reshotOf(photos);
+  const reshotNo = new Set(Object.values(reshot).map((r) => r.after.no));
   const from = Math.min(...times);
   const to = Math.max(...times);
   return {
@@ -54,12 +68,15 @@ export async function inspectionActData(sql, registry, order, actor) {
     period: from === to ? timeMsk(from) : `с ${timeMsk(from)} по ${timeMsk(to)}`,
     executor: executor?.full_name || null,
     ways,
+    onsite,
+    reshot: steps.filter((s) => reshot[s.id]).map((s) => ({ step: s.title, note: reshot[s.id].note,
+      asked: timeMsk(reshot[s.id].requested_at), after: reshot[s.id].after.no, before: reshot[s.id].before?.no ?? null })),
     total: photos.length,
     with_geo: photos.filter((p) => p.lat != null).length,
     rows: steps.flatMap((s) => {
       const mine = photos.filter((p) => p.step === s.id);
       if (!mine.length) return [{ no: null, step: s.title, missed: s.optional ? 'не снято (шаг «если есть»)' : 'не снято' }];
-      return mine.map((p) => ({ no: p.no, step: s.title, time: shotTime(p), geo: geo(p), who: who(p) }));
+      return mine.map((p) => ({ no: p.no, step: reshotNo.has(p.no) ? `${s.title} (доснято по просьбе эксперта)` : s.title, time: shotTime(p), geo: geo(p), who: who(p) }));
     }).concat(photos.filter((p) => !steps.some((s) => s.id === p.step))
       .map((p) => ({ no: p.no, step: 'Снимок вне шагов осмотра', time: shotTime(p), geo: geo(p), who: who(p) }))),
   };
@@ -80,6 +97,15 @@ export function inspectionActDoc(a) {
     ] },
     { type: 'bold', text: 'Шаги осмотра' },
     { type: 'table', rows: table },
+    ...a.reshot.length ? [
+      { type: 'bold', text: 'Доснято по просьбе эксперта' },
+      { type: 'table', rows: [['Шаг осмотра', 'Просьба эксперта', 'Новое фото', 'Прежнее фото'],
+        ...a.reshot.map((r) => [r.step, `«${r.note}» (${r.asked})`, `Фото ${r.after}`, r.before == null ? 'не было' : `Фото ${r.before}`])] },
+    ] : [],
+    ...a.onsite.flatMap((v) => [
+      { type: 'bold', text: `Данные с объекта — ${v.who}${v.when ? `, ${v.when}` : ''}` },
+      { type: 'table', rows: v.rows },
+    ]),
     { type: 'para', text: 'Время съёмки — по часам телефона, место — по геометке телефона. Номера фото — те же, что в деле на платформе «БЕРТЕЛ Дело» и в приложении «Фотоматериалы осмотра» к отчёту.' },
     { type: 'para', text: `Акт составлен ${ru(todayMsk())}.` },
     { type: 'sign', text: `Эксперт ____________________ / ${a.executor ?? '____________________'} /` },
