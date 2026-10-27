@@ -9,6 +9,7 @@
 // { dossier: { items, today } } исполнителя (2.14).
 
 import { adjusted, cleanUrl } from '../analogs/analogs.mjs';
+import { plainNumber } from '../orgs/numbering.mjs';
 
 const MAX_PER_RULE = 5;
 
@@ -2570,7 +2571,7 @@ function numberRepeats(docs, ctx) {
   const { nums } = numbersAndDates(docs);
   const num = most(nums);
   if (num == null) return [];
-  const twin = used.find((u) => squash(u.number) === num);
+  const twin = used.find((u) => plainNumber(u.number) === plainNumber(num));
   if (!twin) return [];
   const at = nums.find((e) => e.value === num);
   const where = twin.title ? `в Вашем деле «${twin.title}»` : 'в другом деле эксперта';
@@ -2587,7 +2588,7 @@ function numberIssued(docs, ctx) {
   if (!issued?.number) return [];
   const { nums } = numbersAndDates(docs);
   const num = most(nums);
-  if (num == null || num === squash(issued.number)) return [];
+  if (num == null || plainNumber(num) === plainNumber(issued.number)) return [];
   const at = nums.find((e) => e.value === num);
   return [{ doc: at.doc, page: at.page, quote: at.quote,
     text: `Номер отчёта № ${at.shown} не тот, что выдан делу: в деле выдан № ${issued.number}${issued.on ? ` (с ${ruDate(issued.on)})` : ''} — исправьте номер в отчёте или поменяйте номер в деле` }];
