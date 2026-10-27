@@ -104,6 +104,10 @@ test('2.414: номер в файле отчёта не тот, что выда�
   // Тот же номер с пробелами и другим регистром, номер не выдан, в файле номера нет — молчим.
   assert.deepEqual(runAutoChecks(['report_number'], [report], { issuedNumber: { number: '116 / 2026 - о', on: '2026-10-26' } }).report_number, []);
   assert.deepEqual(runAutoChecks(['report_number'], [report], { issuedNumber: null }).report_number, []);
+  // Прогон 2.420: в файле номер набран латинской «B», а выдан с русской «В» — тот же номер, молчим; и повтор (2.403) узнаётся.
+  const latin = doc(['ОТЧЁТ ОБ ОЦЕНКЕ № B-15/2026 от 05.10.2026', 'Колонтитул: Отчёт № B-15/2026']);
+  assert.deepEqual(runAutoChecks(['report_number'], [latin], { issuedNumber: { number: 'В-15/2026', on: '2026-10-26' } }).report_number, []);
+  assert.match(texts(runAutoChecks(['report_number'], [latin], { usedNumbers: [{ number: 'в-15/2026', on: '2026-10-01' }] }), 'report_number')[0], /уже был в другом деле эксперта/);
   assert.deepEqual(runAutoChecks(['report_number'], [doc(['Отчёт без номера'])], { issuedNumber: { number: '117/2026-О' } }).report_number, []);
 });
 

@@ -781,3 +781,43 @@ test('2.419: новый год — в «Сегодня» образец номе
   await ctx.close();
   await hctx.close();
 });
+
+// Прогон 2.420: номер отчёта набран латинской «B» вместо русской «В» — тот же номер: ИИ-проверка не пишет «не тот»,
+// вручную занять его другим делом нельзя.
+test('прогон 2.420: номер с латинской «B» — тот же, что «В»: ИИ-проверка молчит, занять другим делом нельзя', async ({ browser, baseURL }) => {
+  const ctx = await browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true, locale: 'ru-RU',
+    storageState: { cookies: [], origins: [{ origin: new URL(baseURL).origin, localStorage: [{ name: 'delo.folds', value: 'open' }] }] } });
+  const page = await ctx.newPage();
+  const problems = [];
+  page.on('pageerror', (e) => problems.push(`ошибка JS: ${e.message}`));
+  const expert = await signIn(page, '+79990002420');
+  const year = Number(new Date(Date.now() + 3 * 3_600_000).toISOString().slice(0, 4));
+  const ids = await db(async (c) => {
+    await c.query("insert into specialists (user_id, report_pattern) values ($1, 'В-{N}/{ГГГГ}')", [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const mk = async (title, number) => {
+      const o = (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, deadline, fields, report_number, report_number_on, report_number_by)
+        values ($1, $2, 'expertise', 'realty', 'in_work', $1, current_date + 7, '{}', $3, current_date, $4) returning id`, [expert.id, title, number, number ? expert.id : null])).rows[0].id;
+      await c.query("insert into result_drafts (order_id, author_id, source, body) values ($1, $2, 'edit', '1. Общие сведения\nТекст.')", [o, expert.id]);
+      return o;
+    };
+    return { issued: await mk('Склад в Подольске', `В-15/${year}`), open: await mk('Офис в Реутове', null) };
+  });
+  const text = `ОТЧЁТ ОБ ОЦЕНКЕ № B-15/${year} от 20.10.${year}\nДата составления отчёта: 20.10.${year}\nОтчёт № B-15/${year}`;
+  const up = await page.request.post(`/api/orders/${ids.issued}/documents`, { data: Buffer.from(text), headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('отчёт.txt') } });
+  expect(up.status()).toBe(201);
+  await db((c) => c.query("update documents set kind = 'result' where order_id = $1", [ids.issued]));
+  await page.goto(`/kabinet#order=${ids.issued}`);
+  await page.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(page.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  await expect(page.locator('#review-checks')).not.toContainText('не тот, что выдан делу');
+  await page.goto(`/kabinet#order=${ids.open}`);
+  await page.locator('#draft-number-edit').click();
+  await page.locator('#draft-number-input').fill(`B-15/${year}`);
+  await page.locator('#draft-number-save').click();
+  await expect(page.locator('#draft-msg')).toContainText('уже у дела «Склад в Подольске»');
+  await page.locator('#draft-number').scrollIntoViewIfNeeded();
+  await shot(page, 'r26-2420-nomer-latinica');
+  expect(problems).toEqual([]);
+  await ctx.close();
+});

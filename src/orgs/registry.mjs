@@ -7,7 +7,7 @@
 import { reportFacts } from '../ai/report-checks.mjs';
 import { numberSource, resultDocs } from '../ops/ai-ops.mjs';
 import { todayMsk } from '../orders/workflow.mjs';
-import { formatNumber, guessPattern, seqOf } from './numbering.mjs';
+import { formatNumber, guessPattern, numberKey, seqOf } from './numbering.mjs';
 import { cell } from './report.mjs';
 
 export const REGISTRY_YEARS_BACK = 3;
@@ -44,7 +44,6 @@ const MISSING = [['number', 'номер отчёта'], ['made_on', 'дата с
 const filesState = (docs) => (!docs.length ? 'none' : docs.some((d) => d.pages) ? 'text' : 'unread');
 
 // Прогон 2.410: номер отчёта — у каждого отчёта оценщика свой (ФСО); повтор в перечне виден сразу (в ИИ-проверке — 2.403).
-const numberKey = (n) => String(n).replace(/\s+/g, '').toLowerCase();
 // Дела экспертов у руководителя показывают завершённые за 90 дней (2.16) — к более старому делу ссылки из перечня нет.
 export const CASES_DAYS = 90;
 
