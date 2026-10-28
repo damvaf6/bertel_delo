@@ -1156,6 +1156,12 @@ test('2.423: владелец после «Готово» видит акт и �
   assert.ok(a.rows.some((r) => r.no == null && r.missed === 'не снято'));
   const txt = JSON.stringify(w.body);
   for (const hidden of ['Выездной Помощник', 'Актов Эксперт', 'Осмотровая', 'Перепланировка', o.id.slice(0, 8).toUpperCase()]) assert.ok(!txt.includes(hidden), hidden);
+  // Прогон 2.430: фото одной минуты (разные секунды) — одно время, а не «с 22:00 по 22:00».
+  await S.sql`update inspection_photos set shot_at = '2026-10-28T19:00:05Z' where document_id in (select id from documents where order_id = ${o.id}) and step = 'facade'`;
+  await S.sql`update inspection_photos set shot_at = '2026-10-28T19:00:40Z' where document_id = ${d.id}`;
+  assert.equal((await view(l.token)).body.act.period, '28.10.2026, 22:00');
+  await S.sql`update inspection_photos set shot_at = '2026-10-28T19:01:00Z' where document_id = ${d.id}`;
+  assert.equal((await view(l.token)).body.act.period, 'с 28.10.2026, 22:00 по 28.10.2026, 22:01');
   // В Word у эксперта — «отметки нет», пока владелец не отметил.
   assert.match(await act(), /Владелец ознакомлен с актом \(МСК\)[\s\S]*отметки нет/);
 
