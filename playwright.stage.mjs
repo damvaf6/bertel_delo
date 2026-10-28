@@ -22,6 +22,9 @@ export default defineConfig({
     hasTouch: true,
     locale: 'ru-RU',
     acceptDownloads: true,
+    // Площадка закрыта ключом облака (IAM), а запросы помощника страниц (sw.js) браузер шлёт мимо подстановки ключа —
+    // облако отвечает 403. Помощник на площадке не включаем: его проверяет tests/ui на локальном стенде (как и phone()).
+    serviceWorkers: 'block',
     // Без UTF-8 в окружении Chromium заменяет русские имена скачанных файлов на «download».
     launchOptions: { env: { ...process.env, LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8' } },
     screenshot: 'only-on-failure',
