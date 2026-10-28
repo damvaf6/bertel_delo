@@ -24,7 +24,7 @@ const test = base.extend({
 });
 
 async function phone(browser, baseURL, extra = {}) {
-  const ctx = await browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, locale: 'ru-RU', timezoneId: 'Europe/Moscow', acceptDownloads: true, ...extra });
+  const ctx = await browser.newContext({ baseURL, viewport: { width: 412, height: 915 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, locale: 'ru-RU', timezoneId: 'Europe/Moscow', acceptDownloads: true, serviceWorkers: 'block', ...extra });
   const origin = new URL(baseURL).origin;
   await ctx.route((u) => u.origin === origin, async (route) => route.continue({ headers: { ...(await route.request().allHeaders()), ...AUTH } }));
   return ctx.newPage();
