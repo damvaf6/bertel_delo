@@ -3943,7 +3943,7 @@ test('«Пока Вас не было» (2.239): только свои дела;
 
 test('реестр: открытые операции — только из утверждённого списка, остальные покрыты этой таблицей', () => {
   const PUBLIC = ['health', 'auth.code', 'auth.verify', 'files.memory', 'files.memory.upload', 'test.calls', 'test.script', 'test.reset', 'test.sign.mode', 'test.mail.inbound', 'stage.login', 'payments.notify',
-    'inspect.view', 'inspect.photo', 'inspect.finish', 'certificates.check', 'permit_cards.check'];
+    'inspect.view', 'inspect.photo', 'inspect.finish', 'inspect.ack', 'certificates.check', 'permit_cards.check'];
   const ops = S.app.locals.ops;
   const extraPublic = ops.filter((o) => o.auth === 'public' && !PUBLIC.includes(o.id)).map((o) => o.id);
   assert.deepEqual(extraPublic, [], `новые открытые операции: ${extraPublic.join(', ')}`);

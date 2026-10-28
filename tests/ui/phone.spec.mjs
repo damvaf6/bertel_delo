@@ -1491,17 +1491,32 @@ test('дистанционный осмотр: специалист выдаёт
   await shot(op, '82-vladelec-osmotr-shagi');
   op.once('dialog', (d) => d.accept());
   await op.getByRole('button', { name: 'Готово' }).click();
-  await expect(op.locator('#closed-text')).toHaveText('Спасибо! Эксперт получил 2 фото. Страницу можно закрыть.');
+  await expect(op.locator('#closed-text')).toHaveText('Спасибо! Эксперт получил 2 фото.');
+  // 2.423: сразу — акт осмотра: шаги с номерами фото, время и место; «С актом ознакомлен» — без подписи.
+  await expect(op.locator('#act-box')).toBeVisible();
+  await expect(op.locator('#act-title')).toHaveText('Акт осмотра объекта');
+  await expect(op.locator('#act-rows li').filter({ hasText: 'Дом снаружи' })).toContainText(/Фото \d+ · Дом снаружи/);
+  await expect(op.locator('#act-rows li').filter({ hasText: 'Дом снаружи' })).toContainText('55.75120, 37.61840');
+  await expect(op.locator('#act-rows li').filter({ hasText: 'Санузел' })).toContainText('не снято');
+  await expect(op.locator('#act-box')).not.toContainText('тестовая ул.');
   await shot(op, '83-vladelec-osmotr-gotovo');
-  // Повторно по той же ссылке — уже закрыто.
+  await op.getByRole('button', { name: 'С актом ознакомлен' }).click();
+  await expect(op.locator('#act-msg')).toContainText('Вы отметили «С актом ознакомлен»');
+  await expect(op.locator('#act-ack')).toBeHidden();
+  await shot(op, '83a-vladelec-akt-oznakomlen');
+  const noOverflow = await op.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
+  expect(noOverflow).toBe(true);
+  // Повторно по той же ссылке — осмотр закрыт, акт и отметка на месте.
   const again = await octx.newPage();
   await again.goto(url);
   await expect(again.locator('#closed-text')).toHaveText('Осмотр завершён — фото переданы эксперту');
+  await expect(again.locator('#act-msg')).toContainText('Вы отметили «С актом ознакомлен»');
 
   // У специалиста — фото по шагам с временем и местом; ссылка закрыта; уведомление.
   await sp.reload();
   await expect(sp.locator('#inspect-state')).toContainText('Фото осмотра: 2');
   await expect(sp.locator('#inspect-links li')).toContainText('владелец нажал «Готово»');
+  await expect(sp.locator('#inspect-links li [data-ack]')).toContainText('Владелец ознакомлен с актом осмотра'); // 2.423
   const facade = sp.locator('#inspect-steps li[data-step="facade"]');
   await expect(facade).toContainText('Осмотр · Дом снаружи · 1.jpg');
   await expect(facade.locator('.photo-meta').first()).toContainText('место 55.75120, 37.61840 (±12 м)');
@@ -5762,7 +5777,7 @@ test('осмотр при плохой связи (2.68): владелец по 
   let asked = '';
   op.once('dialog', (d) => { asked = d.message(); d.accept(); });
   await op.getByRole('button', { name: 'Готово' }).click();
-  await expect(op.locator('#closed-text')).toHaveText('Спасибо! Эксперт получил 1 фото. Страницу можно закрыть.');
+  await expect(op.locator('#closed-text')).toHaveText('Спасибо! Эксперт получил 1 фото.');
   expect(asked).toMatch(/^Не снято: .*Кухня.*Всё равно завершить\?$/);
 
   // Помощник: выезд, без связи данные не сохраняются — понятное сообщение по-русски; фото уходит после восстановления связи.
@@ -9361,6 +9376,8 @@ test('2.181: телефон не в московском поясе — врем
   await expect(ep.locator('#messages')).toContainText(`${day(yesterday)} в 23:30`);
   // Поле времени выезда — по Москве: по умолчанию завтра 10:00 по Москве, так и сохраняется.
   await expect(ep.getByLabel('Когда выезд (по Москве)')).toHaveValue(`${tomorrow}T10:00`);
+  // В общем прогоне в районе есть помощники из других тестов — выбираем своего (прогон 2.423: выезд уходил чужому).
+  await ep.locator('#onsite-helper').selectOption(String(helper.id));
   await ep.getByRole('button', { name: 'Назначить выезд' }).click();
   await expect(ep.locator('#onsite-msg')).toHaveText('Выезд назначен — помощник получил уведомление');
   await expect(ep.locator('#onsite-visits li')).toContainText(`Выезд ${day(tomorrow)} в 10:00`);
@@ -10391,7 +10408,7 @@ test('приложение с экрана «Домой»: «Установит�
   // «Готово» — черновик удалён: та же страница без ссылки больше ничего не продолжает.
   op2.once('dialog', (d) => d.accept());
   await op2.getByRole('button', { name: 'Готово' }).click();
-  await expect(op2.locator('#closed-text')).toHaveText('Спасибо! Эксперт получил 1 фото. Страницу можно закрыть.');
+  await expect(op2.locator('#closed-text')).toHaveText('Спасибо! Эксперт получил 1 фото.');
   await op2.goto('/osmotr');
   await expect(op2.locator('#closed-text')).toHaveText('Ссылка неверная или больше не действует. Попросите эксперта прислать новую.');
   await octx.close();

@@ -12,7 +12,7 @@ import { notify } from '../notify/notify.mjs';
 import { audit, phoneFrom, sendFile, text } from './util.mjs';
 import { inspectionPhotos } from '../docs/photos.mjs';
 import { DOCX_MIME } from '../docs/docx.mjs';
-import { inspectionActData, inspectionActDoc } from '../docs/inspection-act.mjs';
+import { inspectionActData, inspectionActDoc, ownerActView } from '../docs/inspection-act.mjs';
 
 export const INSPECT = {
   days: [1, 3, 7],       // на сколько дней выдаётся ссылка (по умолчанию — 3)
@@ -22,6 +22,7 @@ export const INSPECT = {
   thumbMax: 64 * 1024,   // уменьшенная копия снимка для дела (2.71) — впереди тела запроса, длина в x-thumb-bytes
   smsPerDay: 5,          // СМС со ссылкой по одной заявке за сутки — от рассылки по чужим номерам
   noteMax: 300,          // просьба переснять: что не так
+  actDays: 30,           // сколько дней после «Готово» владелец видит акт осмотра по той же ссылке (2.423)
 };
 const IMAGE_MIME = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
 const EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/heic': 'heic', 'image/heif': 'heif' };
@@ -301,8 +302,18 @@ const STATE_RU = {
   closed: 'Осмотр по этой ссылке закрыт',
 };
 
+// Владелец видит акт осмотра (2.423): «Готово» нажато не больше 30 дней назад, ссылку не отозвали.
+const actOpen = (link) => Boolean(link.finished_at && !link.revoked_at && Date.now() - new Date(link.finished_at).getTime() <= INSPECT.actDays * 86_400_000);
+// Акт для владельца: без имён (actor — не исполнитель и не служебный), сведения — как в Word у эксперта.
+async function ownerAct(sql, registry, link, order) {
+  const data = await inspectionActData(sql, registry, order, { id: '' },
+    async (photos) => reshotSteps(sql, order.id, photos, await openRetakes(sql, order.id)));
+  return data && { ...ownerActView(data), acked_at: link.acked_at ?? null };
+}
+
 const linkView = (l, order, photos) => ({
   id: String(l.id), created_at: l.created_at, expires_at: l.expires_at, revoked_at: l.revoked_at, finished_at: l.finished_at,
+  acked_at: l.acked_at ?? null, ack_photos: l.ack_photos ?? null,
   state: linkState(l, order), photos, sms_to: l.sms_to ?? null, sms_sent_at: l.sms_sent_at ?? null,
 });
 
@@ -506,7 +517,11 @@ export function inspectOps() {
       rateLimit: (ip) => ownerLimit(ip),
       async handler({ sql, req, registry }) {
         const { link, order, state } = await linkByToken(sql, req);
-        if (state !== 'active') return { active: false, message: STATE_RU[state] };
+        // После «Готово» владелец видит акт осмотра и может отметить «С актом ознакомлен» (2.423).
+        if (state !== 'active') {
+          const act = state === 'finished' && actOpen(link) ? await ownerAct(sql, registry, link, order) : null;
+          return { active: false, message: STATE_RU[state], ...(act ? { act } : {}) };
+        }
         const def = registry.service(order.module, order.service);
         const counts = await stepCounts(sql, { link: link.id });
         const retakes = await openRetakes(sql, order.id);
@@ -561,6 +576,25 @@ export function inspectOps() {
           const reshot = gap ? [] : await reshotAll(tx, registry, { ...link, finished_at: new Date() });
           await notify(tx, gap ? 'inspection_incomplete' : reshot.length ? 'inspection_reshot' : 'inspection_done', { users: [link.created_by], orderId: order.id });
           return { finished: true, photos: n };
+        });
+      },
+    },
+    {
+      // «С актом ознакомлен» (2.423): отметка владельца без подписи — время и сколько фото было в акте. Повторное нажатие
+      // первую отметку не меняет. Только после «Готово» и пока акт открыт владельцу.
+      id: 'inspect.ack', method: 'POST', path: '/api/inspect/ack', auth: 'public',
+      publicReason: 'владелец объекта отмечает «С актом осмотра ознакомлен» по секрету ссылки; только отметка времени',
+      rateLimit: (ip) => ownerLimit(ip),
+      async handler({ sql, req, registry }) {
+        return sql.tx(async (tx) => {
+          const { link, order, state } = await linkByToken(tx, req, { lock: true });
+          if (state !== 'finished' || !actOpen(link)) throw new HttpError(410, 'act_closed', 'Акт по этой ссылке больше не открыт — спросите эксперта');
+          if (link.acked_at) return { acked_at: link.acked_at, again: true };
+          const act = await ownerAct(tx, registry, link, order);
+          if (!act) throw new HttpError(409, 'no_photos', 'В акте нет фото');
+          const [r] = await tx`update inspection_links set acked_at = now(), ack_photos = ${act.total} where id = ${link.id} returning acked_at`;
+          await audit(tx, null, 'inspect.ack', 'order', order.id, { link: String(link.id), photos: act.total });
+          return { acked_at: r.acked_at };
         });
       },
     },

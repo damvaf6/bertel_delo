@@ -4,6 +4,7 @@
 // Та же страница — для выезда помощника по экспресс-заявке (задача 2.4): /osmotr?visit=номер, со входом в кабинет; помощник
 // ещё видит, где объект (поля из описания модуля), и заполняет данные с объекта.
 // Задача 2.20: если эксперт попросил переснять шаг — просьба видна у шага, новое фото этого шага её закрывает.
+// Задача 2.423: после «Готово» владелец видит акт осмотра (шаги, номера фото, время и место) и отмечает «С актом ознакомлен».
 // Черновик осмотра (задача штаба: приложение с экрана «Домой»): неотправленные фото, данные с объекта и сами шаги хранятся
 // на телефоне (drafts.js) — страницу можно закрыть или открыть без связи, ничего не пропадёт; отправлено — черновик удалён.
 import { api, el, say } from '/common.js';
@@ -60,7 +61,7 @@ async function load() {
     else if (visitId) return closed(err.status === 401 ? 'Войдите в кабинет и откройте выезд в разделе «Специалист».' : err.status === 404 ? 'Выезд не найден.' : err.message, { keep: err.status !== 404 });
     else return closed(err.status === 404 ? 'Ссылка неверная или больше не действует. Попросите эксперта прислать новую.' : err.message, { keep: err.status !== 404 });
   }
-  if (!info.active) return closed(info.message);
+  if (!info.active) { closed(info.message); return showAct(info.act); }
   if (!offline) saveDraft({ info });
   $('service').textContent = info.service || '';
   // Почерковедческая (2.81): снимают документ и образцы подписи, а не объект на месте.
@@ -409,11 +410,41 @@ $('finish').addEventListener('click', async () => {
       return closed(`Спасибо! Эксперт получил ${n} фото и данные с объекта. Страницу можно закрыть.`);
     }
     const r = await api('POST', API.finish, {}, headers);
-    closed(`Спасибо! Эксперт получил ${r.photos} фото. Страницу можно закрыть.`);
+    closed(`Спасибо! Эксперт получил ${r.photos} фото.`);
+    showAct((await api('GET', API.view, undefined, headers).catch(() => ({}))).act);
   } catch (err) {
     if (err.status === 410) return closed(err.message);
     say($('finish-msg'), err.message);
   } finally { $('finish').disabled = false; }
+});
+
+// Акт осмотра для владельца (2.423): нет акта (ссылка отозвана, прошло больше 30 дней) — блока нет.
+function showAct(act) {
+  if (!act) return;
+  $('act-box').classList.remove('hidden');
+  $('act-title').textContent = act.title;
+  const facts = [['Услуга', act.service], ['Когда снимали (МСК)', act.period], ['Как проведён осмотр', act.ways.join('; ')],
+    ['Фото', `${act.total}, с местом съёмки — ${act.with_geo}`]].filter(([, v]) => v);
+  $('act-facts').replaceChildren(...facts.flatMap(([k, v]) => [el('dt', { text: k }), el('dd', { text: v })]));
+  $('act-rows').replaceChildren(...act.rows.map((r) => el('li', {},
+    el('div', { class: 'title', text: r.no == null ? r.step : `Фото ${r.no} · ${r.step}` }),
+    el('div', { class: 'muted', text: r.no == null ? r.missed : `снято ${r.time} · место: ${r.geo} · ${r.who}` }))));
+  paintAck(act.acked_at);
+}
+
+function paintAck(at) {
+  $('act-ack').classList.toggle('hidden', Boolean(at));
+  $('act-hint').classList.toggle('hidden', Boolean(at));
+  if (at) say($('act-msg'), `Вы отметили «С актом ознакомлен» ${dateRu(at)}. Страницу можно закрыть.`, 'ok');
+}
+
+$('act-ack').addEventListener('click', async () => {
+  $('act-ack').disabled = true;
+  try {
+    paintAck((await api('POST', '/api/inspect/ack', {}, headers)).acked_at);
+  } catch (err) {
+    say($('act-msg'), err.message);
+  } finally { $('act-ack').disabled = false; }
 });
 
 load();
