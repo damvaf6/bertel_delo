@@ -5,4 +5,4 @@ pg_preset             = "b2.medium"   # 50% vCPU, 4 ГБ — экономичн�
 pg_disk_gb            = 20
 pg_backup_days        = 14
 files_noncurrent_days = 30
-reserve_zone          = "ru-central1-b" # запасная база вне Владимира (решение Дамира 28.10.2026)
+reserve_zone          = "ru-central1-d" # запасная база вне Владимира; в -b Яндекс новое не создаёт (решение Дамира 28.10.2026)
