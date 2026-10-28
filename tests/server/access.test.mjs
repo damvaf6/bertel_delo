@@ -7,6 +7,7 @@ import { testExternalSignature } from '../../src/providers/sign.mjs';
 import crypto from 'node:crypto';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import { guessPattern, nextNumber, patternFrom, seqOf } from '../../src/orgs/numbering.mjs';
+import { offDayName } from '../../src/orders/holidays.mjs';
 
 const covered = new Set();
 const cover = (id) => covered.add(id);
@@ -3889,7 +3890,8 @@ test('мои сроки на две недели (2.109): по дням — ср
   const ref = (o) => `№ ${o.id.slice(0, 8).toUpperCase()}`;
   const soonEv = ev.find((e) => e.includes(`UID:deadline-${soon.id}@`));
   assert.ok(soonEv.includes(`DTSTART;VALUE=DATE:${plus(2).replace(/-/g, '')}`) && soonEv.includes(`DTEND;VALUE=DATE:${plus(3).replace(/-/g, '')}`));
-  assert.ok(soonEv.includes(`SUMMARY:Срок сдачи: дело ${ref(soon)}\\, `) && soonEv.includes('TRIGGER:-PT15H'), soonEv);
+  // Срок в выходной или праздник (2.398) — напоминание накануне рабочего дня перед ним, а не накануне срока.
+  assert.ok(soonEv.includes(`SUMMARY:Срок сдачи: дело ${ref(soon)}\\, `) && soonEv.includes(offDayName(plus(2)) ? 'TRIGGER:-P' : 'TRIGGER:-PT15H'), soonEv);
   const reviewEv = ev.find((e) => e.includes(`UID:deadline-${review.id}@`));
   assert.ok(reviewEv.includes('ждёт проверки') && !reviewEv.includes('VALARM'));
   // Выезд 10:30 по Москве = 07:30 UTC, на час, напоминание за час.

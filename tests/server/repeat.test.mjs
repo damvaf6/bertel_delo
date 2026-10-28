@@ -177,7 +177,7 @@ test('2.367: прошлому отчёту больше 6 месяцев — п�
   const past = await inWork(owner1, obj, { title: 'Квартира на Старой (прошлый раз)' });
   await S.sql`update orders set status = 'done', created_at = now() - interval '9 months' where id = ${past.id}`;
   await S.sql`insert into order_status_history (order_id, from_status, to_status, side, at)
-              values (${past.id}, 'in_work', 'done', 'dispatcher', now() - interval '8 months')`;
+              values (${past.id}, 'in_work', 'done', 'dispatcher', now() - interval '8 months 10 days')`;
   const o = await inWork(owner2, obj, { title: 'Квартира на Старой' });
   let v = (await spec.req('GET', `/api/orders/${o.id}/repeat`)).body;
   assert.equal(v.cases.length, 1, JSON.stringify(v));
@@ -194,7 +194,7 @@ test('2.367: прошлому отчёту больше 6 месяцев — п�
   await S.sql`delete from order_status_history where order_id = ${past.id} and to_status = 'done'`;
   await S.sql`update orders set status = 'in_work' where id = ${past.id}`;
   assert.equal((await spec.req('PUT', `/api/orders/${past.id}/draft`, { body: PAST_DRAFT, from: null })).status, 200);
-  await S.sql`update result_drafts set at = now() - interval '8 months' where order_id = ${past.id}`;
+  await S.sql`update result_drafts set at = now() - interval '8 months 10 days' where order_id = ${past.id}`;
   v = (await spec.req('GET', `/api/orders/${o.id}/repeat`)).body;
   assert.equal(v.cases[0]?.stale?.months, 8, JSON.stringify(v));
   assert.ok(v.cases[0].sections.length > 0);
@@ -235,7 +235,7 @@ test('2.428: акт прошлого осмотра — образцом; про
   const act = await spec.req('GET', `/api/orders/${past.id}/inspection/act`);
   assert.equal(act.status, 200);
   // Осмотр 8 месяцев назад — нужен новый осмотр; день — последнего снимка.
-  await S.sql`update inspection_photos p set shot_at = now() - interval '8 months', received_at = now() - interval '8 months'
+  await S.sql`update inspection_photos p set shot_at = now() - interval '8 months 10 days', received_at = now() - interval '8 months 10 days'
               from documents d where d.id = p.document_id and d.order_id = ${past.id}`;
   v = (await spec.req('GET', `/api/orders/${o.id}/repeat`)).body;
   assert.equal(v.cases[0].act.stale, true);

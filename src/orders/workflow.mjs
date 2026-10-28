@@ -49,6 +49,9 @@ export const TRANSITIONS = [
   // Бесплатная переделка (2а.7): заказчик нашёл ошибку после выдачи — дело возвращается тому же исполнителю, без доплаты.
   // Только в модулях с вычиткой (proofread в описании модуля) — признак 'redo'.
   { from: 'done', to: 'in_work', by: 'customer', name: 'Нашли ошибку — переделать бесплатно', reason: true, feature: 'redo' },
+  // Замечания к сданному отчёту (2.431): банк или суд прислал замечания — дело снова у эксперта, срок ответа — по модулю.
+  // Только в модулях с remarks в описании — признак 'remarks' (у «Переводов» — своя переделка, 'redo').
+  { from: 'done', to: 'in_work', by: 'customer', name: 'Пришли замечания к отчёту', reason: true, feature: 'remarks', remarks: true },
   { from: 'done', to: 'closed', by: 'dispatcher', name: 'Закрыть заявку' },
   // Возврат после выдачи (решение Дамира 12.10.2026, 2а.11): диспетчер отменяет выданное дело с возвратом; удержание у
   // исполнителя — только если проверка признала результат плохим (src/money/money.mjs, settleAfterPayout).
@@ -79,7 +82,7 @@ export function availableActions(status, sides, features = []) {
     for (const t of TRANSITIONS) {
       if (t.from !== status || t.by !== side || seen.has(t.to) || !allowed(t, features)) continue;
       seen.add(t.to);
-      out.push({ to: t.to, name: t.name, reason: !!t.reason });
+      out.push({ to: t.to, name: t.name, reason: !!t.reason, ...(t.remarks ? { remarks: true } : {}) });
     }
   }
   return out;

@@ -24,6 +24,7 @@ import { loadPredecessor } from '/predecessor.js';
 import { loadTaskFacts } from '/taskfacts.js';
 import { loadRepeat } from '/repeat.js';
 import { loadSimilar } from '/similar.js';
+import { renderRemarks, openRemarks } from '/remarks.js';
 
 const $ = (id) => document.getElementById(id);
 // До 3 МБ — обычной загрузкой через ядро; больше — прямо в хранилище (облако: запрос не больше 3,5 МБ, 2.49).
@@ -391,7 +392,8 @@ function renderProgress() {
     ? [el('li', { class: 'current', text: 'Заявка отменена' })]
     : flow.map((s, i) => el('li', { class: i < at ? 'done' : i === at ? 'current' : '', text: s.name }))));
 
-  $('reason-box').classList.toggle('hidden', !actions.some((a) => a.reason));
+  // Замечания к сданному отчёту (2.431) — своей формой, не полем «Причина».
+  $('reason-box').classList.toggle('hidden', !actions.some((a) => a.reason && !a.remarks));
   // Отмена после начала работ (диспетчер): по чьей причине и какая часть работы сделана — от этого зависит возврат.
   // Исполнителю уже выплачено (переделка или выданный перевод, 2а.11) — вместо «по чьей причине» диспетчер указывает, чем
   // проверка признала результат: плохим (удержание у исполнителя) или нормальным (возврат за счёт платформы).
@@ -406,8 +408,11 @@ function renderProgress() {
   $('actions').replaceChildren(...actions.map((a) => el('button', {
     class: a.to === 'cancelled' ? 'danger' : a.to === 'matching' && order.status === 'new' ? 'wide' : 'secondary',
     'data-to': a.to,
-    onclick: () => doStep(a),
+    onclick: () => (a.remarks ? openRemarks() : doStep(a)),
   }, a.name)));
+  const remarksAction = actions.find((a) => a.remarks) ?? null;
+  if (remarksAction && current.remarks_days) $('remarks-lead').textContent = `Банк или суд прислал замечания — опишите их и приложите файл: дело снова у эксперта, ответ — за ${current.remarks_days} ${current.remarks_days === 1 ? 'рабочий день' : current.remarks_days < 5 ? 'рабочих дня' : 'рабочих дней'}.`;
+  renderRemarks(current, { action: remarksAction, upload: (file, msg) => uploadFile(file, 'other', msg), download, reload: () => openOrder(order.id) });
 
   const last = history[history.length - 1];
   $('history-details').classList.toggle('hidden', !last);

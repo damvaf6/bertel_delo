@@ -47,6 +47,19 @@ function watched(page, baseURL) {
     const u = new URL(r.url());
     if (!['data:', 'blob:'].includes(u.protocol) && u.origin !== origin && !isStorage(u)) page.problems.push(`внешний запрос: ${r.url()}`);
   });
+  // Медленный (дольше 5 с) или упавший ответ ядра — строкой в журнал прогона: по ней видно, что тормозит на площадке.
+  page.on('requestfinished', async (r) => {
+    const u = new URL(r.url());
+    if (u.origin !== origin || !u.pathname.startsWith('/api/')) return;
+    const ms = Math.round(r.timing().responseEnd);
+    const st = (await r.response().catch(() => null))?.status() ?? 0;
+    if (ms > 5000 || st >= 500) console.log(`площадка: ${r.method()} ${u.pathname} — ${st}, ${ms} мс`);
+  });
+  page.on('requestfailed', (r) => {
+    const u = new URL(r.url());
+    // Скачивание файла браузер прерывает сам (ERR_ABORTED) — это не сбой.
+    if (u.origin === origin && r.failure()?.errorText !== 'net::ERR_ABORTED') console.log(`площадка: ${r.method()} ${u.pathname} — не дошёл (${r.failure()?.errorText})`);
+  });
   return page;
 }
 
@@ -517,6 +530,8 @@ test('общий прогон: сквозной путь экспертизы �
   // Отчёт в PDF (задача 2.1): ИИ читает его из хранилища Яндекса и показывает отмеченное место со страницей.
   // На стр. 3 — служебная строка Word: её находит автоматическая проверка (2.8) при любой модели.
   await sp.locator('#result-file').setInputFiles({ name: 'Отчёт об оценке.pdf', mimeType: 'application/pdf', buffer: makePdf([[`Заключение № ${RUN}/2026`], ['Итоговая стоимость 12 000 000 руб.', 'В разделе 3 опечатка в адресе.'], ['См. таблицу Ошибка! Закладка не определена.']]) });
+  // Сначала — ответ на загрузку (не прошла — в отчёте её текст), потом — файл в списке документов.
+  await expect(sp.locator('#doc-msg')).toHaveText('Файл добавлен', { timeout: 60_000 });
   await expect(sp.locator('#docs li').filter({ hasText: 'Отчёт об оценке.pdf' })).toHaveCount(1);
   await sp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
   await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова', { timeout: AI_WAIT });

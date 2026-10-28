@@ -15,11 +15,25 @@ import { missingSteps } from './step-ops.mjs';
 import { notify, notifyStatus, orgHeads } from '../notify/notify.mjs';
 import { ackLine, startAck } from '../orders/ack.mjs';
 import { offDays } from './note-ops.mjs';
+import { workdaysAfter } from '../orders/holidays.mjs';
 
 const LEVEL_NAME = ['none', 'read', 'write', 'manage'];
 
-// Признаки модуля для шагов статуса: 'redo' — бесплатная переделка после выдачи (модуль с вычиткой, 2а.7).
-const features = (registry, order) => (registry.proofread(order.module) ? ['redo'] : []);
+// Признаки модуля для шагов статуса: 'redo' — бесплатная переделка после выдачи (модуль с вычиткой, 2а.7); 'remarks' —
+// замечания к сданному отчёту от банка или суда (2.431).
+const features = (registry, order) => [...(registry.proofread(order.module) ? ['redo'] : []), ...(registry.remarks(order.module) ? ['remarks'] : [])];
+
+// Замечания к сданному отчёту (2.431): когда пришли, срок ответа, текст (из истории статусов) и файл замечаний. Видят все, кто
+// видит дело; open — дело снова в работе или на проверке по этим замечаниям.
+async function remarksView(sql, order) {
+  if (!order.remarks_at) return null;
+  const h = await sql.one`select reason from order_status_history where order_id = ${order.id} and from_status = 'done'
+                          and to_status = 'in_work' order by id desc limit 1`;
+  const doc = order.remarks_doc_id
+    ? await sql.one`select id, filename from documents where id = ${order.remarks_doc_id} and deleted_at is null` : null;
+  return { at: order.remarks_at, due: order.remarks_due, round: order.remarks_round, text: h?.reason ?? '',
+    document: doc ? { id: doc.id, filename: doc.filename } : null, open: ['in_work', 'review'].includes(order.status) };
+}
 
 // Нужна ли вычитка (2а.7) при первой сдаче на проверку: новый исполнитель (сдал в модуле меньше new_orders дел) — 'new',
 // иначе выборочно — 'sample' или 'none'. rand — целое от 0 до 99.
@@ -279,6 +293,8 @@ export function orderOps() {
           terms: offerFor(registry.offer(order.module, order.service), isStaff(actor) || order.executor_user_id === actor.id),
           // Правило возврата (2а.7) — диспетчеру при отмене после начала работ.
           cancel_note: orderSides(actor, order).includes('dispatcher') ? registry.proofread(order.module)?.refund_note ?? null : null,
+          remarks: await remarksView(sql, order),
+          remarks_days: registry.remarks(order.module)?.reply_days ?? null,
           // Исполнителю уже выплачено (2а.11): отмена диспетчером — с выбором «результат плохой / нормальный».
           after_payout: orderSides(actor, order).includes('dispatcher') && ['in_work', 'review', 'done'].includes(order.status)
             && !!(await sql.one`select 1 from payouts where order_id = ${order.id}`),
@@ -426,10 +442,23 @@ export function orderOps() {
                                        and module = ${cur.module} and status in ('done', 'closed') and id <> ${cur.id}`;
             proofread = proofreadReason(pr, n, randomInt(100));
           }
+          // Замечания к сданному отчёту (2.431): файл замечаний — документ этого дела (заказчик загрузил его перед шагом).
+          let remarks = null;
           if (cur.status === 'done' && to === 'in_work') {
             if (!cur.executor_user_id) throw new HttpError(409, 'no_executor', 'У заявки нет исполнителя — напишите диспетчеру');
-            proofread = 'redo';
-            redoDeadline = addDays(todayMsk(), pr.redo_days);
+            if (t.remarks) {
+              let docId = null;
+              if (body?.document_id) {
+                docId = uuidFrom(body.document_id, 'Файл замечаний не найден');
+                const d = await tx.one`select 1 from documents where id = ${docId} and order_id = ${cur.id} and kind <> 'result' and deleted_at is null`;
+                if (!d) throw new HttpError(404, 'not_found', 'Файл замечаний не найден в этом деле');
+              }
+              remarks = { docId, due: workdaysAfter(todayMsk(), registry.remarks(cur.module).reply_days) };
+              redoDeadline = remarks.due;
+            } else {
+              proofread = 'redo';
+              redoDeadline = addDays(todayMsk(), pr.redo_days);
+            }
           }
           if (to === 'matching') proofread = null;
           // Закрыть можно только оплаченную заявку (оплата — при заказе, до предложения исполнителю; 1.6а).
@@ -482,12 +511,16 @@ export function orderOps() {
                    submitted_at = case when ${to} = 'matching' then coalesce(submitted_at, now()) else submitted_at end,
                    review_round = case when ${to} = 'review' then review_round + 1 else review_round end,
                    proofread = ${proofread},
+                   remarks_at = case when ${!!remarks} then now() else remarks_at end,
+                   remarks_due = case when ${!!remarks} then ${remarks?.due ?? null}::date else remarks_due end,
+                   remarks_doc_id = case when ${!!remarks} then ${remarks?.docId ?? null}::uuid else remarks_doc_id end,
+                   remarks_round = remarks_round + ${remarks ? 1 : 0},
                    deadline = case when ${redoDeadline}::date is null then deadline else greatest(deadline, ${redoDeadline}::date) end
             where id = ${cur.id} returning *`;
           await tx`insert into order_status_history (order_id, from_status, to_status, actor_id, side, reason)
                    values (${cur.id}, ${cur.status}, ${to}, ${actor.id}, ${t.by}, ${reason})`;
           await audit(tx, actor, 'order.status', 'order', cur.id, { from: cur.status, to, side: t.by });
-          await notifyStatus(tx, { actor, before: cur, to, by: t.by });
+          await notifyStatus(tx, { actor, before: cur, to, by: t.by, remarks: !!remarks });
           // Заявка отправлена — обещанное время первого ответа заказчику (задача штаба 3fd17197).
           if (cur.status === 'new' && to === 'matching') await startAck(tx, o);
           // Дело было у организации и снято (возврат в подбор, отмена) — её руководителю тоже сообщаем (2.17).

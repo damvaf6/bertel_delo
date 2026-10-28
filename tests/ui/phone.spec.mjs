@@ -17287,7 +17287,9 @@ test('2.371: праздник в «Моих сроках» и нагрузке �
   const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
   const ep = await ctx(), hp = await ctx(), cp = await ctx();
   const customer = await signIn(cp, '+79990003711'), expert = await signIn(ep, '+79990003712'), head = await signIn(hp, '+79990003713');
-  const due = inDays(3), before = inDays(2), empty = inDays(5);
+  // Свободный «праздник» — день, у которого соседи рабочие: рядом с настоящим праздником экран склеивает их в один ряд.
+  const freeAt = [5, 6, 7, 8, 9, 10, 11, 12].find((n) => !offDayName(inDays(n - 1)) && !offDayName(inDays(n)) && !offDayName(inDays(n + 1))) ?? 5;
+  const due = inDays(3), before = inDays(2), empty = inDays(freeAt);
   const { orgId } = await db(async (c) => {
     const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Праздник в сроках ${Date.now() % 100000}»') returning id`);
     await c.query("update users set full_name = 'Праздникова Нина' where id = $1", [expert.id]);
@@ -17300,7 +17302,7 @@ test('2.371: праздник в «Моих сроках» и нагрузке �
     return { orgId: org.id };
   });
   const holiday = (d) => (d.date === due ? { ...d, weekend: true, holiday: 'День народного единства', work_before: before }
-    : d.date === empty ? { ...d, weekend: true, holiday: 'День России', work_before: inDays(4) } : d);
+    : d.date === empty ? { ...d, weekend: true, holiday: 'День России', work_before: inDays(freeAt - 1) } : d);
   await ep.route('**/api/specialist/me/schedule', async (route) => {
     const res = await route.fetch();
     const body = await res.json();
