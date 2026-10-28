@@ -15,6 +15,16 @@ variable "zone" {
   default = "ru-central1-a"
 }
 
+variable "reserve_zone" {
+  description = "Зона запасной базы (только stage, решение Дамира 28.10.2026); пусто — запасной базы нет"
+  type        = string
+  default     = ""
+  validation {
+    condition     = var.reserve_zone == "" || var.reserve_zone != var.zone
+    error_message = "reserve_zone: другая зона, не та, что zone."
+  }
+}
+
 variable "name_suffix" {
   description = "Короткий суффикс для глобально уникальных имён бакетов"
   type        = string

@@ -1,7 +1,8 @@
 # Только идентификаторы — без паролей и ключей.
 output "network_id" { value = local.network_id }
 output "pg_cluster_id" { value = yandex_mdb_postgresql_cluster.main.id }
-output "pg_host_rw" { value = "c-${yandex_mdb_postgresql_cluster.main.id}.rw.mdb.yandexcloud.net" }
+output "pg_host_rw" { value = "c-${local.pg_cluster_id}.rw.mdb.yandexcloud.net" }
+output "pg_reserve_cluster_id" { value = local.reserve ? yandex_mdb_postgresql_cluster.reserve[0].id : "" }
 output "files_bucket" { value = yandex_storage_bucket.files.bucket }
 output "backups_bucket" { value = yandex_storage_bucket.backups.bucket }
 output "lockbox_secret_id" { value = yandex_lockbox_secret.app.id }

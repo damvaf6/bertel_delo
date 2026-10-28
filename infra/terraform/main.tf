@@ -134,6 +134,84 @@ resource "yandex_mdb_postgresql_database" "app" {
   extension { name = "citext" }
 }
 
+# ---------------------------------------------------------------- запасная база в другой зоне (только stage)
+# Решение Дамира 28.10.2026 (вопрос 31): площадка не отвечает с 11.10 — после атаки на дата-центр во Владимире
+# (ru-central1-a) база в этой зоне недоступна. Запасной кластер — в зоне reserve_zone, в той же сети, только тестовые
+# данные; старый кластер не удаляется (удаление — только с «да» Дамира). Пока reserve_zone задана, секреты ядра и демо
+# указывают на запасной кластер; пусто — снова на основной.
+resource "yandex_vpc_subnet" "reserve" {
+  count          = var.reserve_zone != "" ? 1 : 0
+  name           = "${local.name}-reserve"
+  zone           = var.reserve_zone
+  network_id     = local.network_id
+  v4_cidr_blocks = ["10.10.1.0/24"]
+}
+
+resource "yandex_mdb_postgresql_cluster" "reserve" {
+  count               = var.reserve_zone != "" ? 1 : 0
+  name                = "${local.name}-reserve"
+  environment         = "PRODUCTION"
+  network_id          = local.network_id
+  deletion_protection = false # только тестовые данные
+
+  config {
+    version = "16"
+    resources {
+      resource_preset_id = var.pg_preset
+      disk_type_id       = "network-ssd"
+      disk_size          = var.pg_disk_gb
+    }
+    backup_window_start {
+      hours   = 1
+      minutes = 0
+    }
+    backup_retain_period_days = var.pg_backup_days
+    access {
+      web_sql   = false
+      data_lens = false
+    }
+  }
+
+  host {
+    zone             = var.reserve_zone
+    subnet_id        = yandex_vpc_subnet.reserve[0].id
+    assign_public_ip = false
+  }
+
+  maintenance_window {
+    type = "WEEKLY"
+    day  = "SUN"
+    hour = 3
+  }
+}
+
+resource "yandex_mdb_postgresql_user" "reserve_app" {
+  count      = var.reserve_zone != "" ? 1 : 0
+  cluster_id = yandex_mdb_postgresql_cluster.reserve[0].id
+  name       = "delo_app"
+  password   = random_password.pg_app.result
+  conn_limit = 50
+}
+
+resource "yandex_mdb_postgresql_database" "reserve_app" {
+  count      = var.reserve_zone != "" ? 1 : 0
+  cluster_id = yandex_mdb_postgresql_cluster.reserve[0].id
+  name       = "delo"
+  owner      = yandex_mdb_postgresql_user.reserve_app[0].name
+  lc_collate = "C"
+  lc_type    = "C"
+
+  extension { name = "pgcrypto" }
+  extension { name = "citext" }
+}
+
+locals {
+  reserve = var.reserve_zone != ""
+  # Кластер, куда смотрят секреты ядра и демо.
+  pg_cluster_id = local.reserve ? yandex_mdb_postgresql_cluster.reserve[0].id : yandex_mdb_postgresql_cluster.main.id
+  pg_app_db     = local.reserve ? yandex_mdb_postgresql_database.reserve_app[0].name : yandex_mdb_postgresql_database.app.name
+}
+
 # ---------------------------------------------------------------- Object Storage
 # Файлы заявок: закрыто, шифрование KMS, версии (удалённое можно вернуть), выдача только временными ссылками.
 resource "yandex_storage_bucket" "files" {
@@ -264,7 +342,7 @@ resource "yandex_lockbox_secret_version" "app" {
   secret_id = yandex_lockbox_secret.app.id
   entries {
     key        = "DATABASE_URL"
-    text_value = "postgres://${yandex_mdb_postgresql_user.app.name}:${random_password.pg_app.result}@c-${yandex_mdb_postgresql_cluster.main.id}.rw.mdb.yandexcloud.net:6432/${yandex_mdb_postgresql_database.app.name}?sslmode=verify-full"
+    text_value = "postgres://${yandex_mdb_postgresql_user.app.name}:${random_password.pg_app.result}@c-${local.pg_cluster_id}.rw.mdb.yandexcloud.net:6432/${local.pg_app_db}?sslmode=verify-full"
   }
   entries {
     key        = "APP_SECRET"
@@ -428,6 +506,26 @@ resource "yandex_mdb_postgresql_database" "demo" {
   extension { name = "citext" }
 }
 
+resource "yandex_mdb_postgresql_user" "reserve_demo" {
+  count      = var.env == "stage" && var.reserve_zone != "" ? 1 : 0
+  cluster_id = yandex_mdb_postgresql_cluster.reserve[0].id
+  name       = "delo_demo"
+  password   = random_password.pg_demo[0].result
+  conn_limit = 20
+}
+
+resource "yandex_mdb_postgresql_database" "reserve_demo" {
+  count      = var.env == "stage" && var.reserve_zone != "" ? 1 : 0
+  cluster_id = yandex_mdb_postgresql_cluster.reserve[0].id
+  name       = "delo_demo"
+  owner      = yandex_mdb_postgresql_user.reserve_demo[0].name
+  lc_collate = "C"
+  lc_type    = "C"
+
+  extension { name = "pgcrypto" }
+  extension { name = "citext" }
+}
+
 resource "yandex_storage_bucket" "demo" {
   count      = var.env == "stage" ? 1 : 0
   bucket     = "${local.name}-demo-${var.name_suffix}"
@@ -488,7 +586,7 @@ resource "yandex_lockbox_secret_version" "demo" {
   secret_id = yandex_lockbox_secret.demo[0].id
   entries {
     key        = "DATABASE_URL"
-    text_value = "postgres://${yandex_mdb_postgresql_user.demo[0].name}:${random_password.pg_demo[0].result}@c-${yandex_mdb_postgresql_cluster.main.id}.rw.mdb.yandexcloud.net:6432/${yandex_mdb_postgresql_database.demo[0].name}?sslmode=verify-full"
+    text_value = "postgres://${yandex_mdb_postgresql_user.demo[0].name}:${random_password.pg_demo[0].result}@c-${local.pg_cluster_id}.rw.mdb.yandexcloud.net:6432/delo_demo?sslmode=verify-full"
   }
   entries {
     key        = "APP_SECRET"
