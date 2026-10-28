@@ -10516,6 +10516,57 @@ test('дела экспертов (2.216): отбор «Осмотр не зак
   for (const p of [cp, ep, hp]) await p.context().close();
 });
 
+// 2.427: «Дела экспертов» — у дела «Акт осмотра готов» и ознакомился ли владелец; отбор «Акт осмотра: владелец не ознакомлен».
+test('2.427: дела экспертов — акт осмотра готов, владелец не ознакомлен', async ({ browser, baseURL }) => {
+  const ctx = async () => (await phoneContext(browser, baseURL)).newPage();
+  const cp = await ctx(), hp = await ctx(), ep = await ctx();
+  const customer = await signIn(cp, '+79990042701');
+  const expert = await signIn(ep, '+79990042702'), head = await signIn(hp, '+79990042703');
+  const { orgId, A, B } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Акт ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Актова Анна' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '1 year')", [expert.id, org.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [expert.id]);
+    const add = async (title) => (await c.query(`insert into orders (module, service, title, owner_user_id, executor_user_id, status, deadline, price_kop, paid_at, fields)
+      values ('expertise', 'realty', $1, $2, $3, 'in_work', (now() at time zone 'Europe/Moscow')::date + 9, 1500000, now(),
+              '{"purpose":"bank","region":"moscow","object_type":"flat","address":"г. Москва, Актовая ул., 27","area":"40"}') returning id`,
+    [title, customer.id, expert.id])).rows[0].id;
+    return { orgId: org.id, A: await add('Акт: не ознакомлен'), B: await add('Акт: ознакомлен') };
+  });
+  const ref = (id) => id.slice(0, 8).toUpperCase();
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]), Buffer.from('JFIF-2427')]);
+  const owner = async (id, ack) => {
+    const r = await ep.request.post(`/api/orders/${id}/inspection`, { data: { days: 3 }, headers: H });
+    expect(r.status()).toBe(201);
+    const token = (await r.json()).path.split('#')[1];
+    const h = { ...H, 'x-inspect-token': token };
+    for (const st of ['facade', 'kitchen']) {
+      expect((await cp.request.post('/api/inspect/photos', { data: jpeg, headers: { ...h, 'content-type': 'image/jpeg', 'x-step': st } })).status()).toBe(201);
+    }
+    expect((await cp.request.post('/api/inspect/finish', { data: {}, headers: h })).status()).toBe(200);
+    if (ack) expect((await cp.request.post('/api/inspect/ack', { data: {}, headers: h })).status()).toBe(200);
+  };
+  await owner(A, false);
+  await owner(B, true);
+
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const chip = hp.locator('[data-filter="act"]');
+  await expect(chip).toHaveText('Акт осмотра: владелец не ознакомлен · 1');
+  await expect(hp.locator(`#org-cases li[data-case="№ ${ref(B)}"] [data-role="act"]`)).toContainText('Акт осмотра готов (фото: 2) · владелец ознакомлен');
+  await chip.click();
+  const rows = hp.locator('#org-cases > li[data-case]');
+  await expect(rows).toHaveCount(1);
+  await expect(rows.nth(0)).toHaveAttribute('data-case', `№ ${ref(A)}`);
+  const act = rows.nth(0).locator('[data-role="act"]');
+  await expect(act).toHaveText('Акт осмотра готов (фото: 2) · владелец ещё не ознакомлен');
+  await expect(act).toHaveClass(/notice-warn/);
+  await expect(rows.nth(0)).not.toContainText('Актовая');
+  await act.scrollIntoViewIfNeeded();
+  await shot(hp, 'i19-rukovoditel-akt-osmotra-ne-oznakomlen');
+  for (const p of [cp, ep, hp]) await p.context().close();
+});
+
 // 2.219: руководитель просил попросить перенос срока (2.201) — в «Моих сроках» у дела «напоминал руководитель …» и кнопка
 // «Попросить перенос», пока эксперт перенос не попросил; день не перегружен и не в отпуске — кнопка всё равно есть.
 test('2.219: мои сроки — отметка «напоминал руководитель» у дела, по которому пришло «попросите перенос»', async ({ browser, baseURL }) => {

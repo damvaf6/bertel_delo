@@ -315,6 +315,35 @@ async function ownerAct(sql, registry, link, order) {
   return data && { ...ownerActView(data), acked_at: link.acked_at ?? null };
 }
 
+// Акт осмотра у дел руководителя (2.427): готов ли акт и ознакомился ли владелец — без фото, адреса и имён. Акт готов, когда в
+// деле есть фото осмотра и съёмка закончена: владелец нажал «Готово» или помощник завершил выезд. Владелец — только если сам
+// снимал по ссылке: отметка «С актом ознакомлен» (2.423) или нет; прошло 30 дней после «Готово» — ознакомиться по ссылке уже нельзя.
+export async function actStates(sql, orderIds) {
+  if (!orderIds.length) return new Map();
+  const photos = await sql`select d.order_id, p.link_id, p.visit_id from inspection_photos p join documents d on d.id = p.document_id
+                           where d.order_id = any(${orderIds}::uuid[]) and d.deleted_at is null`;
+  const links = await sql`select id, order_id, finished_at, revoked_at, acked_at from inspection_links where order_id = any(${orderIds}::uuid[]) order by id`;
+  const visits = await sql`select id, order_id, finished_at from onsite_visits where order_id = any(${orderIds}::uuid[]) and cancelled_at is null`;
+  const out = new Map();
+  for (const id of orderIds) {
+    const mine = photos.filter((p) => p.order_id === id);
+    if (!mine.length) continue;
+    const owned = links.filter((l) => l.order_id === id && mine.some((p) => String(p.link_id) === String(l.id)));
+    const visited = visits.filter((v) => v.order_id === id && v.finished_at && mine.some((p) => String(p.visit_id) === String(v.id)));
+    const done = [...owned.map((l) => l.finished_at), ...visited.map((v) => v.finished_at)].filter(Boolean).map((t) => new Date(t).getTime());
+    if (!done.length) continue;
+    const finished = owned.filter((l) => l.finished_at);
+    const acked = finished.map((l) => l.acked_at).filter(Boolean).sort((x, y) => new Date(x) - new Date(y));
+    const last = finished.at(-1);
+    out.set(id, {
+      photos: mine.length,
+      at: new Date(Math.max(...done)).toISOString(),
+      owner: finished.length ? (acked.length ? { acked_at: acked.at(-1) } : { acked_at: null, finished_at: last.finished_at, open: actOpen(last) }) : null,
+    });
+  }
+  return out;
+}
+
 const linkView = (l, order, photos) => ({
   id: String(l.id), created_at: l.created_at, expires_at: l.expires_at, revoked_at: l.revoked_at, finished_at: l.finished_at,
   acked_at: l.acked_at ?? null, ack_photos: l.ack_photos ?? null,

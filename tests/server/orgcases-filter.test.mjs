@@ -218,6 +218,31 @@ test('дела экспертов (2.216): «осмотр не закончен�
   assert.equal((await b.req('GET', `/api/orgs/${org.id}/cases`)).status, 403);
 });
 
+// 2.427: акт осмотра у дела — готов, когда фото есть и владелец нажал «Готово»; ознакомился ли владелец; 30 дней прошло — по
+// ссылке уже нельзя. Без фото или пока съёмка идёт — ничего. Завершённое дело — без строки.
+test('2.427: дела экспертов — «акт осмотра готов / владелец не ознакомлен»', async () => {
+  const o = await taken('Акт осмотра 2.427', 10, a);
+  const none = await taken('Без осмотра 2.427', 10, a);
+  const l = await issueLink(a, o);
+  assert.equal((await shootStep(l.token, 'facade')).status, 201);
+  assert.equal((await caseOf(o)).act, null, 'съёмка идёт — акта ещё нет');
+  assert.equal((await inspectAnon(l.token, '/api/inspect/finish', {})).status, 200);
+  let c = await caseOf(o);
+  assert.equal(c.act.photos, 1);
+  assert.deepEqual([c.act.owner.acked_at, c.act.owner.open], [null, true]);
+  assert.equal((await caseOf(none)).act, null);
+  // 30 дней после «Готово» прошло — ознакомиться по прежней ссылке нельзя.
+  await S.sql`update inspection_links set finished_at = now() - interval '31 days' where id = ${l.id}`;
+  assert.equal((await caseOf(o)).act.owner.open, false);
+  await S.sql`update inspection_links set finished_at = now() where id = ${l.id}`;
+  assert.equal((await inspectAnon(l.token, '/api/inspect/ack', {})).status, 200);
+  c = await caseOf(o);
+  assert.ok(c.act.owner.acked_at);
+  // Фото удалено — акта нет; дело сдано — строки нет.
+  await S.sql`update orders set status = 'done' where id = ${o.id}`;
+  assert.equal((await caseOf(o)).act, null);
+});
+
 // 2.325: «Срок по заданию на этой неделе» — срок из задания на оценку раньше срока дела и до воскресенья включительно (прошедший
 // тоже); срок дела при этом может быть далеко. Срок по заданию после воскресенья — не в отборе; позже срока дела — ничего.
 test('2.325: дела экспертов — срок по заданию на оценку и отбор «на этой неделе»', async () => {
