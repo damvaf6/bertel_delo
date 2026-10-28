@@ -165,6 +165,7 @@ export function imageSize(buf) {
 // Приложение к отчёту (2.32): { title, items: [{ title, lines: [строки], image: Buffer | null }], caption? } → блоки для отчёта и
 // картинки, которые надо положить в файл (media). Картинка неизвестного вида не вставляется — остаётся подпись.
 // Можно передать список приложений (2.37: фото осмотра, затем скриншоты объявлений) — идут по порядку.
+// Или { title, blocks } — готовые блоки, как у buildSimpleDoc (таблицы, строки, подпись): акт осмотра, 2.424.
 // Снимок с подписью под ним (2.96, фото осмотра): картинка, затем «Фото N. Шаг» и строки — по центру, не отрываясь от
 // картинки; в оглавление не идёт.
 function captioned(it, media) {
@@ -182,8 +183,10 @@ function captioned(it, media) {
 
 function appendixBlocks(appendix, media) {
   if (Array.isArray(appendix)) return appendix.flatMap((a) => appendixBlocks(a, media));
-  if (!appendix?.items?.length) return [];
+  if (!appendix?.items?.length && !appendix?.blocks?.length) return [];
   const out = [{ type: 'break' }, { type: 'head', level: 1, text: appendix.title, plain: true }];
+  // Приложение готовыми блоками (2.424: акт осмотра — таблицы и строки, как в отдельном файле акта).
+  if (appendix.blocks) return [...out, ...appendix.blocks];
   for (const it of appendix.items) {
     if (appendix.caption) { out.push(...captioned(it, media)); continue; }
     // 2.362: заголовок «Аналог N» и строки не остаются внизу страницы без скриншота — держатся вместе с ним.
@@ -209,6 +212,8 @@ function reportBody(text, meta, st, appendix = null, media = []) {
     if (b.type === 'break') return PAGE_BREAK;
     if (b.type === 'image') return para(drawing(b.img, b.img.n), `${b.last ? '' : '<w:keepNext/>'}<w:jc w:val="center"/>`);
     if (b.type === 'caption') return para(run(b.text, `${b.bold ? '<w:b/>' : ''}<w:sz w:val="20"/><w:szCs w:val="20"/>`), `${b.next ? '<w:keepNext/>' : ''}<w:spacing w:after="${b.next ? 0 : 240}"/><w:jc w:val="center"/>`);
+    if (b.type === 'bold') return para(run(b.text, '<w:b/>'), '<w:keepNext/>');
+    if (b.type === 'sign') return para(run(b.text), '<w:spacing w:before="480"/>');
     if (b.next) return para(run(b.text), '<w:keepNext/>');
     return para(run(b.text));
   }).join('');

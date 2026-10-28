@@ -12,6 +12,8 @@ import { inspectionPhotos } from './photos.mjs';
 
 const ru = (d) => String(d).slice(0, 10).split('-').reverse().join('.');
 const TITLE = { document: 'Акт съёмки документа', goods: 'Акт осмотра товара', car: 'Акт осмотра автомобиля' };
+// Название акта по виду объекта услуги — и в самом акте, и в перечне использованных документов черновика (2.424).
+export const actTitle = (def) => TITLE[def?.service.subject] ?? 'Акт осмотра объекта';
 const geo = (p) => (p.lat == null ? 'не определено'
   : `${Number(p.lat).toFixed(5)}, ${Number(p.lon).toFixed(5)}${p.accuracy_m != null ? ` (±${Math.round(p.accuracy_m)} м)` : ''}`);
 // Время снимка — по часам телефона; телефон не передал — время получения платформой, с пометкой.
@@ -65,7 +67,7 @@ export async function inspectionActData(sql, registry, order, actor, reshotOf = 
   const from = Math.min(...times);
   const to = Math.max(...times);
   return {
-    title: TITLE[def?.service.subject] ?? 'Акт осмотра объекта',
+    title: actTitle(def),
     ref: orderRef(order.id),
     service: def?.service.name ?? order.title,
     address: addr && order.fields?.[addr.id] ? { label: addr.label, v: String(order.fields[addr.id]) } : null,
@@ -94,11 +96,12 @@ export const ownerActView = (a) => ({
   rows: a.rows, reshot: a.reshot.map(({ step, after, before }) => ({ step, after, before })),
 });
 
-export function inspectionActDoc(a) {
+// Сведения и таблицы акта — без заголовка: в отдельном файле над ними название акта, в отчёте Word — заголовок приложения
+// «Приложение. Акт осмотра» (2.424).
+export function inspectionActBlocks(a) {
   const table = [['Фото', 'Шаг осмотра', 'Снято (МСК)', 'Место съёмки', 'Кто снимал'],
     ...a.rows.map((r) => (r.no == null ? ['—', r.step, r.missed, '—', '—'] : [`Фото ${r.no}`, r.step, r.time, r.geo, r.who]))];
-  const blocks = [
-    { type: 'title', text: `${a.title} · дело ${a.ref}` },
+  return [
     { type: 'table', rows: [
       ['Услуга', a.service],
       ...(a.address ? [[a.address.label, a.address.v]] : []),
@@ -123,5 +126,9 @@ export function inspectionActDoc(a) {
     { type: 'para', text: `Акт составлен ${ru(todayMsk())}.` },
     { type: 'sign', text: `Эксперт ____________________ / ${a.executor ?? '____________________'} /` },
   ];
+}
+
+export function inspectionActDoc(a) {
+  const blocks = [{ type: 'title', text: `${a.title} · дело ${a.ref}` }, ...inspectionActBlocks(a)];
   return { buf: buildSimpleDoc(blocks), filename: `${a.title} ${a.ref.replace(/^№\s*/, '')}.docx` };
 }

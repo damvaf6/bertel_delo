@@ -6,6 +6,8 @@ import { orderRef } from '../notify/registry.mjs';
 import { todayMsk } from '../orders/workflow.mjs';
 import { buildReport } from './docx.mjs';
 import { inspectionPhotos } from './photos.mjs';
+import { inspectionActBlocks } from './inspection-act.mjs';
+import { orderAct } from '../ops/inspect-ops.mjs';
 import { analogTable, hostOf, inItemOrder, listPositions, timeMsk, valueText } from '../analogs/analogs.mjs';
 
 const GAP = '[заполнить]';
@@ -237,6 +239,13 @@ async function photosPart({ sql, providers, registry }, order) {
   return { title: 'Приложение. Фотоматериалы осмотра', items, caption: true };
 }
 
+// Акт осмотра (2.424) — приложением перед фотоматериалами: те же сведения, что в «Скачать акт осмотра» (2.421–2.423).
+// Фото осмотра нет — акта нет. Имена — как видит тот, кто собирает Word (исполнитель видит имя помощника).
+async function actPart({ sql, registry }, order, actor) {
+  const a = await orderAct(sql, registry, order, actor);
+  return a ? { title: `Приложение. ${a.title}`, blocks: inspectionActBlocks(a) } : null;
+}
+
 export const tablesBrief = (sections) => {
   const t = sections.filter((s) => s.table && s.table !== 'analogs' && s.table !== 'questions');
   const q = sections.filter((s) => s.table === 'questions');
@@ -244,7 +253,7 @@ export const tablesBrief = (sections) => {
   return [
     t.length ? `ТАБЛИЦЫ: программа сама вставит таблицы в разделы ${t.map((s) => `«${s.title}»`).join(', ')} — сам их не рисуй${t.some((s) => s.table === 'task') ? '; список документов заказчика под таблицей задания программа тоже вставит сама' : ''}.` : null,
     q.length ? `ВОПРОСЫ: программа сама вставит вопросы из заявки дословно в раздел ${q.map((s) => `«${s.title}»`).join(', ')} — не переписывай их.` : null,
-    src.length ? `ПЕРЕЧЕНЬ ДОКУМЕНТОВ: программа сама вставит в раздел ${src.map((s) => `«${s.title}»`).join(', ')} перечень использованных документов (документы заказчика, досье эксперта, фото осмотра, аналоги со ссылками) — сам их там не перечисляй.` : null,
+    src.length ? `ПЕРЕЧЕНЬ ДОКУМЕНТОВ: программа сама вставит в раздел ${src.map((s) => `«${s.title}»`).join(', ')} перечень использованных документов (документы заказчика, досье эксперта, акт и фото осмотра, аналоги со ссылками) — сам их там не перечисляй.` : null,
   ].filter(Boolean).join('\n') || null;
 };
 
@@ -254,6 +263,7 @@ export const tablesBrief = (sections) => {
 export async function reportFor(ctx, order, actor, draftText, { number = null } = {}) {
   const { sql, providers, registry } = ctx;
   const { text, appendix } = await analogsPart(ctx, order, draftText);
+  const act = await actPart(ctx, order, actor);
   const photos = await photosPart(ctx, order);
   const def = registry.service(order.module, order.service);
   const org = await executorSignOrg(sql, actor.id);
@@ -270,9 +280,9 @@ export async function reportFor(ctx, order, actor, draftText, { number = null } 
     executor_role: /^Заключение эксперта/.test(title) ? 'Эксперт' : 'Исполнитель',
     date: ru(todayMsk()),
   };
-  const appendices = [photos, appendix].filter(Boolean);
+  const appendices = [act, photos, appendix].filter(Boolean);
   return {
     buf: buildReport(text, meta, template, { appendix: appendices }), filename: `${title}.docx`, template: !!template,
-    analogs: appendix?.items.length ?? 0, photos: photos?.items.length ?? 0,
+    analogs: appendix?.items.length ?? 0, photos: photos?.items.length ?? 0, act: !!act,
   };
 }

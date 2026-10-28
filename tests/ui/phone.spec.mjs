@@ -6356,6 +6356,42 @@ test('перечень документов (2.273): у выписки ЕГРН 
   await shot(page, '114a-ekspert-perechen-nomer-vypiski');
 });
 
+test('акт осмотра (2.424): в перечне использованных документов черновика и приложением в Word отчёта', async ({ page }) => {
+  const expert = await signIn(page, '+79990042401');
+  const id = await db(async (c) => {
+    const owner = (await c.query("insert into users (phone, full_name) values ('+79990042402', 'Заказчик акта') on conflict (phone) do update set full_name = excluded.full_name returning id")).rows[0].id;
+    const o = (await c.query(
+      `insert into orders (owner_user_id, title, module, service, fields, status, executor_user_id, price_kop, paid_at, deadline)
+       values ($1, 'Квартира: акт осмотра в отчёте', 'expertise', 'realty', $3, 'in_work', $2, 1500000, now(), now() + interval '6 days') returning id`,
+      [owner, expert.id, { purpose: 'bank', region: 'moscow', object_type: 'flat', address: 'г. Москва, Актовая ул., 4', area: '51' }])).rows[0];
+    await c.query('insert into specialists (user_id) values ($1) on conflict do nothing', [expert.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty') on conflict do nothing", [expert.id]);
+    // Владелец снимал по ссылке, нажал «Готово» и отметил «С актом ознакомлен» (2.423).
+    const link = (await c.query(`insert into inspection_links (order_id, created_by, token_hash, expires_at, finished_at, acked_at, ack_photos)
+                                 values ($1, $2, $3, now() + interval '2 days', now(), now(), 2) returning id`, [o.id, expert.id, `ui-424-${o.id}`])).rows[0];
+    for (const step of ['facade', 'kitchen']) {
+      const d = (await c.query(`insert into documents (order_id, uploaded_by, filename, mime, size_bytes, storage_key, kind)
+                                values ($1, $2, $3, 'image/jpeg', 10, $4, 'inspection') returning id`, [o.id, owner, `Осмотр · ${step}.jpg`, `ui-424-${o.id}-${step}`])).rows[0];
+      await c.query('insert into inspection_photos (document_id, link_id, step, lat, lon) values ($1, $2, $3, 55.7512, 37.6184)', [d.id, link.id, step]);
+    }
+    return o.id;
+  });
+  await page.goto(`/kabinet#order=${id}`);
+  await page.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(page.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const text = page.getByLabel('Текст заключения');
+  await expect(text).toHaveValue(/Материалы осмотра:\n1\. Акт осмотра объекта — составлен платформой «БЕРТЕЛ Дело» по фото осмотра, владелец ознакомлен \d{2}\.\d{2}\.\d{4} \(приложение к отчёту\)\n2\. Фотоматериалы осмотра — 2 снимка/);
+  await text.evaluate((t) => { t.focus(); const at = t.value.indexOf('Материалы осмотра'); t.setSelectionRange(at, at); t.scrollTop = t.scrollHeight; });
+  await page.locator('#draft-sources-box').scrollIntoViewIfNeeded();
+  await shot(page, '114b-ekspert-perechen-akt-osmotra');
+  const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Скачать Word' }).click()]);
+  const word = (await extractPages(fs.readFileSync(await download.path()), 'Отчёт.docx')).pages.join('\n');
+  const at = word.lastIndexOf('Приложение. Акт осмотра объекта');
+  expect(at).toBeGreaterThan(0);
+  expect(at).toBeLessThan(word.lastIndexOf('Приложение. Фотоматериалы осмотра'));
+  expect(word.slice(at)).toMatch(/Владелец ознакомлен с актом \(МСК\)[\s\S]*Шаги осмотра[\s\S]*Фото 1[\s\S]*55\.75120/);
+});
+
 test('адрес в таблице задания (2.281): из задания на оценку, когда в выписках адреса нет', async ({ page, browser, baseURL }) => {
   const expert = await signIn(page, '+79990028101');
   const op = await (await phoneContext(browser, baseURL)).newPage();

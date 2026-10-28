@@ -7,6 +7,7 @@ import { hostOf, inItemOrder, timeMsk } from '../analogs/analogs.mjs';
 import { orderMaterials } from './report.mjs';
 import { egrnRefs } from '../ai/report-checks.mjs';
 import { egrnDocs } from '../ops/ai-ops.mjs';
+import { actTitle } from './inspection-act.mjs';
 
 export const SOURCES_HEAD = 'Перечень использованных документов (собран программой по делу — проверьте и поправьте):';
 const dayMsk = (t) => new Date(t).toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', year: 'numeric' });
@@ -31,7 +32,12 @@ export async function orderSources(sql, registry, order, storage) {
   const spec = registry.analogs(order.module, order.service);
   const analogs = spec ? inItemOrder(spec, order, await sql`select url, received_at, fields from order_analogs where order_id = ${order.id}
                                                             and deleted_at is null and confirmed_at is not null order by id`) : [];
-  return { materials, dossier, photos: ph, analogs };
+  // Акт осмотра (2.424) — есть, когда есть фото осмотра; отметка владельца «С актом ознакомлен» (2.423) — последняя.
+  const act = ph.n ? {
+    title: actTitle(registry.service(order.module, order.service)),
+    acked: (await sql`select max(acked_at) as t from inspection_links where order_id = ${order.id}`)[0].t,
+  } : null;
+  return { materials, dossier, photos: ph, analogs, act };
 }
 
 // Выписка ЕГРН: «Выписка из ЕГРН № КУВИ-001/2026-12345678 от 02.10.2026»; название из запроса эксперта, если в нём есть ЕГРН.
@@ -43,7 +49,7 @@ function egrnTitle(m) {
 }
 
 // Строки блока; в деле ничего нет — пусто (блок не вставляется). Нумерация сквозная, как в перечне настоящего отчёта.
-export function sourcesLines({ materials, dossier, photos, analogs }) {
+export function sourcesLines({ materials, dossier, photos, analogs, act = null }) {
   const out = [];
   let n = 0;
   const group = (title, lines) => { if (lines.length) out.push(title, ...lines.map((l) => `${++n}. ${l}`)); };
@@ -52,7 +58,9 @@ export function sourcesLines({ materials, dossier, photos, analogs }) {
   if (photos?.n) {
     const from = dayMsk(photos.first);
     const to = dayMsk(photos.last);
-    group('Материалы осмотра:', [`Фотоматериалы осмотра — ${photos.n} ${photosWord(photos.n)}, получены платформой «БЕРТЕЛ Дело» ${from === to ? from : `с ${from} по ${to}`}`]);
+    group('Материалы осмотра:', [
+      ...act ? [`${act.title} — составлен платформой «БЕРТЕЛ Дело» по фото осмотра${act.acked ? `, владелец ознакомлен ${dayMsk(act.acked)}` : ''} (приложение к отчёту)`] : [],
+      `Фотоматериалы осмотра — ${photos.n} ${photosWord(photos.n)}, получены платформой «БЕРТЕЛ Дело» ${from === to ? from : `с ${from} по ${to}`}`]);
   }
   group('Объявления-аналоги:', analogs.map((a, i) => `Аналог ${i + 1} — ${hostOf(a.url) || 'объявление'}: ${a.url}, ${a.received_at ? `скриншот получен ${timeMsk(a.received_at)} (МСК)` : 'скриншот не приложен'}`));
   return out.length ? [SOURCES_HEAD, ...out] : [];
