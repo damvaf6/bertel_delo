@@ -1491,17 +1491,32 @@ test('дистанционный осмотр: специалист выдаёт
   await shot(op, '82-vladelec-osmotr-shagi');
   op.once('dialog', (d) => d.accept());
   await op.getByRole('button', { name: 'Готово' }).click();
-  await expect(op.locator('#closed-text')).toHaveText('Спасибо! Эксперт получил 2 фото. Страницу можно закрыть.');
+  await expect(op.locator('#closed-text')).toHaveText('Спасибо! Эксперт получил 2 фото.');
+  // 2.423: сразу — акт осмотра: шаги с номерами фото, время и место; «С актом ознакомлен» — без подписи.
+  await expect(op.locator('#act-box')).toBeVisible();
+  await expect(op.locator('#act-title')).toHaveText('Акт осмотра объекта');
+  await expect(op.locator('#act-rows li').filter({ hasText: 'Дом снаружи' })).toContainText(/Фото \d+ · Дом снаружи/);
+  await expect(op.locator('#act-rows li').filter({ hasText: 'Дом снаружи' })).toContainText('55.75120, 37.61840');
+  await expect(op.locator('#act-rows li').filter({ hasText: 'Санузел' })).toContainText('не снято');
+  await expect(op.locator('#act-box')).not.toContainText('тестовая ул.');
   await shot(op, '83-vladelec-osmotr-gotovo');
-  // Повторно по той же ссылке — уже закрыто.
+  await op.getByRole('button', { name: 'С актом ознакомлен' }).click();
+  await expect(op.locator('#act-msg')).toContainText('Вы отметили «С актом ознакомлен»');
+  await expect(op.locator('#act-ack')).toBeHidden();
+  await shot(op, '83a-vladelec-akt-oznakomlen');
+  const noOverflow = await op.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
+  expect(noOverflow).toBe(true);
+  // Повторно по той же ссылке — осмотр закрыт, акт и отметка на месте.
   const again = await octx.newPage();
   await again.goto(url);
   await expect(again.locator('#closed-text')).toHaveText('Осмотр завершён — фото переданы эксперту');
+  await expect(again.locator('#act-msg')).toContainText('Вы отметили «С актом ознакомлен»');
 
   // У специалиста — фото по шагам с временем и местом; ссылка закрыта; уведомление.
   await sp.reload();
   await expect(sp.locator('#inspect-state')).toContainText('Фото осмотра: 2');
   await expect(sp.locator('#inspect-links li')).toContainText('владелец нажал «Готово»');
+  await expect(sp.locator('#inspect-links li [data-ack]')).toContainText('Владелец ознакомлен с актом осмотра'); // 2.423
   const facade = sp.locator('#inspect-steps li[data-step="facade"]');
   await expect(facade).toContainText('Осмотр · Дом снаружи · 1.jpg');
   await expect(facade.locator('.photo-meta').first()).toContainText('место 55.75120, 37.61840 (±12 м)');

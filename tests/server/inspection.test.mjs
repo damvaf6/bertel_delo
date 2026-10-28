@@ -1074,3 +1074,74 @@ test('2.422: в акте осмотра — данные с объекта от 
   assert.match(b, /Нужен ремонт/);
   assert.ok(!b.includes('Выездной Помощник'));
 });
+
+test('2.423: владелец после «Готово» видит акт и отмечает «С актом ознакомлен» — время в акте и в деле', async () => {
+  const { extractPages } = await import('../../src/ai/extract.mjs');
+  await spec2.req('PATCH', '/api/me', { full_name: 'Выездной Помощник' });
+  await spec.req('PATCH', '/api/me', { full_name: 'Актов Эксперт' });
+  const o = await inWork('Осмотр — ознакомление с актом');
+  const ack = (token) => anon().req('POST', '/api/inspect/ack', {}, { headers: { 'x-inspect-token': token } });
+  const act = async () => {
+    const r = await fetch(`${S.base}/api/orders/${o.id}/inspection/act`, { headers: { cookie: spec.cookie } });
+    return (await extractPages(Buffer.from(await r.arrayBuffer()), 'a.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')).pages.join('\n');
+  };
+  const l = await issue(o);
+  assert.equal((await shoot(l.token, 'facade', { headers: GEO })).status, 201);
+  // Пока «Готово» не нажато — акта у владельца нет, отметить нельзя.
+  assert.equal((await view(l.token)).body.act, undefined);
+  assert.equal((await ack(l.token)).status, 410);
+  assert.equal((await finish(l.token)).status, 200);
+  // Помощник снял кухню — в акте владельца «помощник на выезде», без имён, номера дела, адреса, эксперта и данных с объекта.
+  const [v] = await S.sql`insert into onsite_visits (order_id, helper_id, assigned_by, planned_at, finished_at, data)
+                          values (${o.id}, ${spec2.user.id}, ${spec.user.id}, now(), now(), ${JSON.stringify({ notes: 'Перепланировка кухни' })}) returning id`;
+  const [d] = await S.sql`insert into documents (order_id, uploaded_by, filename, mime, size_bytes, storage_key, kind)
+                          values (${o.id}, ${spec.user.id}, 'Осмотр · Кухня · 1.jpg', 'image/jpeg', 10, ${`orders/${o.id}/ack-kitchen`}, 'inspection') returning id`;
+  await S.sql`insert into inspection_photos (document_id, visit_id, step) values (${d.id}, ${v.id}, 'kitchen')`;
+  const w = await view(l.token);
+  assert.equal(w.status, 200);
+  assert.equal(w.body.active, false);
+  const a = w.body.act;
+  assert.equal(a.title, 'Акт осмотра объекта');
+  assert.equal(a.total, 2);
+  assert.equal(a.acked_at, null);
+  assert.ok(a.rows.some((r) => r.no != null && /Дом снаружи/.test(r.step) && /55\.75120/.test(r.geo) && r.who === 'владелец по ссылке'));
+  assert.ok(a.rows.some((r) => r.who === 'помощник на выезде'));
+  assert.ok(a.rows.some((r) => r.no == null && r.missed === 'не снято'));
+  const txt = JSON.stringify(w.body);
+  for (const hidden of ['Выездной Помощник', 'Актов Эксперт', 'Осмотровая', 'Перепланировка', o.id.slice(0, 8).toUpperCase()]) assert.ok(!txt.includes(hidden), hidden);
+  // В Word у эксперта — «отметки нет», пока владелец не отметил.
+  assert.match(await act(), /Владелец ознакомлен с актом \(МСК\)[\s\S]*отметки нет/);
+
+  const r1 = await ack(l.token);
+  assert.equal(r1.status, 200);
+  assert.ok(r1.body.acked_at);
+  // Повтор не меняет первую отметку.
+  const r2 = await ack(l.token);
+  assert.equal(r2.body.acked_at, r1.body.acked_at);
+  assert.equal(r2.body.again, true);
+  assert.ok((await view(l.token)).body.act.acked_at);
+  // В деле — у ссылки время отметки; в Word — время, без пометки о числе фото (в акте их столько же).
+  const link = (await spec.req('GET', `/api/orders/${o.id}/inspection`)).body.links.find((x) => x.id === String(l.link.id));
+  assert.ok(link.acked_at);
+  assert.equal(link.ack_photos, 2);
+  let t = await act();
+  assert.match(t, /Владелец ознакомлен с актом \(МСК\)[\s\S]*\d{2}:\d{2} \(без подписи\)/);
+  assert.ok(!t.includes('в акте тогда было'));
+  // После отметки добавили фото — в акте видно, что владелец видел меньше.
+  const [d2] = await S.sql`insert into documents (order_id, uploaded_by, filename, mime, size_bytes, storage_key, kind)
+                          values (${o.id}, ${spec.user.id}, 'Осмотр · Санузел · 1.jpg', 'image/jpeg', 10, ${`orders/${o.id}/ack-bath`}, 'inspection') returning id`;
+  await S.sql`insert into inspection_photos (document_id, visit_id, step) values (${d2.id}, ${v.id}, 'bathroom')`;
+  t = await act();
+  assert.match(t, /без подписи; в акте тогда было фото 2/);
+  const [log] = await S.sql`select count(*)::int as n from audit_log where action = 'inspect.ack' and subject_id = ${String(o.id)}`;
+  assert.equal(log.n, 1);
+  // Отозванная ссылка и «Готово» больше 30 дней назад — акта у владельца нет, отметить нельзя.
+  const l2 = await issue(o);
+  assert.equal((await shoot(l2.token, 'rooms')).status, 201);
+  assert.equal((await finish(l2.token)).status, 200);
+  await S.sql`update inspection_links set finished_at = now() - interval '31 days' where order_id = ${o.id} and acked_at is null`;
+  assert.equal((await view(l2.token)).body.act, undefined);
+  assert.equal((await ack(l2.token)).status, 410);
+  // Чужой или неверный секрет — «не найдено».
+  assert.equal((await ack('x'.repeat(43))).status, 404);
+});

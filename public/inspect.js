@@ -150,7 +150,9 @@ function renderLinks(r) {
   $('inspect-links').replaceChildren(...r.links.map((l) => el('li', { class: 'doc', 'data-link': l.id },
     el('div', {},
       el('div', { class: 'name', text: `Ссылка от ${timeRu(l.created_at)} — ${STATE_RU[l.state]}` }),
-      el('div', { class: 'muted', text: `${l.state === 'active' ? `действует до ${timeRu(l.expires_at)} · ` : ''}фото: ${l.photos}${l.sms_to ? ` · СМС на ${l.sms_to}` : ''}` })),
+      el('div', { class: 'muted', text: `${l.state === 'active' ? `действует до ${timeRu(l.expires_at)} · ` : ''}фото: ${l.photos}${l.sms_to ? ` · СМС на ${l.sms_to}` : ''}` }),
+      // 2.423: владелец отметил «С актом ознакомлен» на своей странице после «Готово».
+      ...(l.acked_at ? [el('div', { class: 'muted', 'data-ack': '1', text: `Владелец ознакомлен с актом осмотра ${timeRu(l.acked_at)} (без подписи)` })] : [])),
     ...(r.can_issue && l.state === 'active' ? [el('button', { class: 'danger', 'data-action': 'revoke', onclick: () => revoke(l) }, 'Отозвать')] : []))));
 }
 

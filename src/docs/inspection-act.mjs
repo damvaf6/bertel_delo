@@ -2,6 +2,7 @@
 // шаги осмотра с номерами фото, временем и геометкой. Номера фото — те же, что в деле и в приложении «Фотоматериалы осмотра»
 // отчёта (2.96). Суд и банк просят именно акт — эксперт больше не переписывает его вручную.
 // В акте и данные с объекта от помощника (экспресс, 2.4), и какие шаги доснимали по просьбе эксперта (2.237) — 2.422.
+// Владелец после «Готово» видит акт на своей странице и отмечает «С актом ознакомлен» (без подписи) — время в акте, 2.423.
 import { isStaff } from '../access/policy.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { todayMsk } from '../orders/workflow.mjs';
@@ -28,7 +29,7 @@ export async function inspectionActData(sql, registry, order, actor, reshotOf = 
   if (!photos.length) return null;
   const def = registry.service(order.module, order.service);
   const names = isStaff(actor) || order.executor_user_id === actor.id;
-  const links = await sql`select id, created_at, finished_at from inspection_links where order_id = ${order.id} order by id`;
+  const links = await sql`select id, created_at, finished_at, acked_at, ack_photos from inspection_links where order_id = ${order.id} order by id`;
   const visits = await sql`select v.id, v.planned_at, v.finished_at, v.cancelled_at, v.data, u.full_name from onsite_visits v join users u on u.id = v.helper_id
                            where v.order_id = ${order.id} order by v.id`;
   const [executor] = order.executor_user_id ? await sql`select full_name from users where id = ${order.executor_user_id}` : [];
@@ -56,6 +57,9 @@ export async function inspectionActData(sql, registry, order, actor, reshotOf = 
     when: v.finished_at ? timeMsk(v.finished_at) : null,
     rows: visitData(fields, v.data),
   })).filter((v) => v.rows.length);
+  // Отметки владельца «С актом ознакомлен» — по ссылкам, где он снимал; в ту минуту в акте было ack_photos фото.
+  const owned = links.filter((l) => photos.some((p) => String(p.link_id) === String(l.id)));
+  const acks = owned.filter((l) => l.acked_at).map((l) => `${timeMsk(l.acked_at)} (без подписи${l.ack_photos != null && l.ack_photos !== photos.length ? `; в акте тогда было фото ${l.ack_photos}` : ''})`);
   const reshot = await reshotOf(photos);
   const reshotNo = new Set(Object.values(reshot).map((r) => r.after.no));
   const from = Math.min(...times);
@@ -68,6 +72,7 @@ export async function inspectionActData(sql, registry, order, actor, reshotOf = 
     period: from === to ? timeMsk(from) : `с ${timeMsk(from)} по ${timeMsk(to)}`,
     executor: executor?.full_name || null,
     ways,
+    ack: owned.length ? (acks.join('; ') || 'отметки нет') : null,
     onsite,
     reshot: steps.filter((s) => reshot[s.id]).map((s) => ({ step: s.title, note: reshot[s.id].note,
       asked: timeMsk(reshot[s.id].requested_at), after: reshot[s.id].after.no, before: reshot[s.id].before?.no ?? null })),
@@ -82,6 +87,13 @@ export async function inspectionActData(sql, registry, order, actor, reshotOf = 
   };
 }
 
+// Акт для владельца на странице осмотра (2.423): без имён, номера дела, адреса и данных помощника — как и вся страница
+// владельца (он видит лишь услугу и шаги). Сведения — те же, что у эксперта в Word: шаги, номера фото, время и место.
+export const ownerActView = (a) => ({
+  title: a.title, service: a.service, period: a.period, ways: a.ways, total: a.total, with_geo: a.with_geo,
+  rows: a.rows, reshot: a.reshot.map(({ step, after, before }) => ({ step, after, before })),
+});
+
 export function inspectionActDoc(a) {
   const table = [['Фото', 'Шаг осмотра', 'Снято (МСК)', 'Место съёмки', 'Кто снимал'],
     ...a.rows.map((r) => (r.no == null ? ['—', r.step, r.missed, '—', '—'] : [`Фото ${r.no}`, r.step, r.time, r.geo, r.who]))];
@@ -94,6 +106,7 @@ export function inspectionActDoc(a) {
       ['Эксперт', a.executor ?? '—'],
       ['Как проведён осмотр', a.ways.join('; ') || '—'],
       ['Фото', `${a.total}, с геометкой — ${a.with_geo}`],
+      ...(a.ack ? [['Владелец ознакомлен с актом (МСК)', a.ack]] : []),
     ] },
     { type: 'bold', text: 'Шаги осмотра' },
     { type: 'table', rows: table },
