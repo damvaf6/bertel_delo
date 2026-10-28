@@ -5777,7 +5777,7 @@ test('осмотр при плохой связи (2.68): владелец по 
   let asked = '';
   op.once('dialog', (d) => { asked = d.message(); d.accept(); });
   await op.getByRole('button', { name: 'Готово' }).click();
-  await expect(op.locator('#closed-text')).toHaveText('Спасибо! Эксперт получил 1 фото. Страницу можно закрыть.');
+  await expect(op.locator('#closed-text')).toHaveText('Спасибо! Эксперт получил 1 фото.');
   expect(asked).toMatch(/^Не снято: .*Кухня.*Всё равно завершить\?$/);
 
   // Помощник: выезд, без связи данные не сохраняются — понятное сообщение по-русски; фото уходит после восстановления связи.
@@ -9376,6 +9376,8 @@ test('2.181: телефон не в московском поясе — врем
   await expect(ep.locator('#messages')).toContainText(`${day(yesterday)} в 23:30`);
   // Поле времени выезда — по Москве: по умолчанию завтра 10:00 по Москве, так и сохраняется.
   await expect(ep.getByLabel('Когда выезд (по Москве)')).toHaveValue(`${tomorrow}T10:00`);
+  // В общем прогоне в районе есть помощники из других тестов — выбираем своего (прогон 2.423: выезд уходил чужому).
+  await ep.locator('#onsite-helper').selectOption(String(helper.id));
   await ep.getByRole('button', { name: 'Назначить выезд' }).click();
   await expect(ep.locator('#onsite-msg')).toHaveText('Выезд назначен — помощник получил уведомление');
   await expect(ep.locator('#onsite-visits li')).toContainText(`Выезд ${day(tomorrow)} в 10:00`);
@@ -10406,7 +10408,7 @@ test('приложение с экрана «Домой»: «Установит�
   // «Готово» — черновик удалён: та же страница без ссылки больше ничего не продолжает.
   op2.once('dialog', (d) => d.accept());
   await op2.getByRole('button', { name: 'Готово' }).click();
-  await expect(op2.locator('#closed-text')).toHaveText('Спасибо! Эксперт получил 1 фото. Страницу можно закрыть.');
+  await expect(op2.locator('#closed-text')).toHaveText('Спасибо! Эксперт получил 1 фото.');
   await op2.goto('/osmotr');
   await expect(op2.locator('#closed-text')).toHaveText('Ссылка неверная или больше не действует. Попросите эксперта прислать новую.');
   await octx.close();
