@@ -62,7 +62,7 @@ export async function dispatchers(tx) {
 }
 
 // Уведомления о шаге статуса заявки: before — заявка до шага (с прежним исполнителем), to — новый статус, by — чья сторона.
-export async function notifyStatus(tx, { actor, before, to, by }) {
+export async function notifyStatus(tx, { actor, before, to, by, remarks = false }) {
   const from = before.status;
   const orderId = before.id;
   const executor = before.executor_user_id;
@@ -79,6 +79,11 @@ export async function notifyStatus(tx, { actor, before, to, by }) {
   }
   if (from === 'in_work' && to === 'review') return notify(tx, 'in_review', opts(await dispatchers(tx)));
   if (from === 'review' && to === 'in_work') return notify(tx, 'rework', opts([executor]));
+  // Замечания к сданному отчёту от банка или суда (2.431): исполнителю и диспетчерам.
+  if (from === 'done' && to === 'in_work' && remarks) {
+    await notify(tx, 'remarks_staff', opts(await dispatchers(tx)));
+    return notify(tx, 'remarks', opts([executor]));
+  }
   // Бесплатная переделка по просьбе заказчика (2а.7): исполнителю и диспетчерам.
   if (from === 'done' && to === 'in_work') {
     await notify(tx, 'redo_staff', opts(await dispatchers(tx)));

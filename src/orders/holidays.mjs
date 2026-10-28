@@ -55,6 +55,8 @@ export function offDayName(iso) {
 // Ближайший рабочий день с этого (включительно) вперёд и последний рабочий день перед этим днём.
 export function workdayFrom(iso) { let d = iso; while (!isWorkday(d)) d = plus(d, 1); return d; }
 export function workdayBefore(iso) { let d = plus(iso, -1); while (!isWorkday(d)) d = plus(d, -1); return d; }
+// N-й рабочий день после этого дня (2.431): срок ответа на замечания — '2026-10-30' (пятница), 3 → '2026-11-05' (4.11 — праздник).
+export function workdaysAfter(iso, n) { let d = iso; for (let i = 0; i < n; i += 1) { d = plus(d, 1); while (!isWorkday(d)) d = plus(d, 1); } return d; }
 // Дни отдыха подряд с этого дня (2.395): день нерабочий и среди подряд идущих нерабочих дней есть праздник —
 // { name: праздник (не «перенос …», если в эти дни есть сам праздник), to: последний нерабочий день, back: первый рабочий после них }; иначе null (рабочий день или
 // обычные выходные). '2026-12-31' → { name: 'Новогодние каникулы', to: '2027-01-10', back: '2027-01-11' }.
