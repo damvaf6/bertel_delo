@@ -93,4 +93,5 @@ export async function loadRegistry(chosen = false) {
   $('registry-empty').classList.toggle('hidden', registry.rows.length > 0);
   $('registry-archive').textContent = `Заключения архивом (${registry.shown})`;
   $('registry-archive').classList.toggle('hidden', registry.rows.length === 0);
+  $('registry-archive-note').classList.toggle('hidden', registry.rows.length === 0);
 }

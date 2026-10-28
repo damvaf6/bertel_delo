@@ -196,6 +196,7 @@ async function load(month) {
   const expertMonths = (x) => (x.by_month ? byMonth(x.by_month.map((n, i) => ({ name: report.by_month[i].name, done: n }))) : '');
   const t = report.total;
   $('org-report-zip').classList.toggle('hidden', !t.done);
+  $('org-report-zip-note').classList.toggle('hidden', !t.done);
   $('org-report-zip').textContent = `Заключения архивом (${t.done})`;
   $('org-report-total').replaceChildren(
     ...fact(`Итого · ${report.month_name}`, `принято дел: ${t.accepted} · сдано: ${t.done}${t.done_late ? ` (позже срока: ${t.done_late})` : ''}`),

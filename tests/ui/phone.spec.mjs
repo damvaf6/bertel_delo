@@ -4083,6 +4083,7 @@ test('сводка за месяц (2.78): руководитель видит �
   // Сданные заключения одним архивом (2.89): отчёт эксперта с подписью и опись.
   const zipBtn = hp.locator('#org-report-zip');
   await expect(zipBtn).toHaveText('Заключения архивом (1)');
+  await expect(hp.locator('#org-report-zip-note')).toContainText('акты осмотра'); // 2.429
   await zipBtn.scrollIntoViewIfNeeded();
   await shot(hp, 'a7b-rukovoditel-arhiv-zaklyuchenij');
   const [zipped] = await Promise.all([hp.waitForEvent('download'), zipBtn.click()]);

@@ -175,3 +175,40 @@ test('свои заключения за год архивом (2.407): эксп
   assert.equal((await withSession('petrov').req('GET', '/api/specialist/me/registry/archive')).status, 404);
   assert.equal((await S.sql`select count(*)::int as n from audit_log where action = 'specialist.archive'`)[0].n, 1);
 });
+
+test('2.429: акт осмотра — в архивах заключений эксперта и руководителя, рядом с заключением; руководителю — без адреса', async () => {
+  const id = R.cases.flat;
+  const [o] = await S.sql`select executor_user_id from orders where id = ${id}`;
+  const [v] = await S.sql`insert into onsite_visits (order_id, helper_id, assigned_by, planned_at, finished_at)
+                          values (${id}, ${o.executor_user_id}, ${o.executor_user_id}, now() - interval '3 days', now() - interval '3 days') returning id`;
+  for (const st of ['facade', 'rooms']) {
+    const [d] = await S.sql`insert into documents (order_id, uploaded_by, filename, mime, size_bytes, storage_key, kind)
+                            values (${id}, ${o.executor_user_id}, ${`Осмотр · ${st}.jpg`}, 'image/jpeg', 10, ${`orders/${id}/arch-${st}`}, 'inspection') returning id`;
+    await S.sql`insert into inspection_photos (document_id, visit_id, step, received_at, shot_at)
+                values (${d.id}, ${v.id}, ${st}, now() - interval '3 days', now() - interval '3 days')`;
+  }
+  const get = async (k, url) => unzip(Buffer.from(await (await withSession(k).req('GET', url)).arrayBuffer()));
+  // Эксперт: акт — в папке дела, в описи — «в архиве (фото: 2)» и его SHA-256; адрес в акте есть.
+  const mine = await get('orlov', '/api/specialist/me/registry/archive');
+  const act = [...mine.keys()].find((n) => /^Дело № [0-9A-F]{8}\/Акт осмотра объекта [0-9A-F]{8}\.docx$/.test(n));
+  assert.ok(act, [...mine.keys()].join(', '));
+  assert.ok(mine.has(`${act.slice(0, act.lastIndexOf('/'))}/Отчёт об оценке квартиры.pdf`), 'рядом с заключением');
+  const actText = docText(mine.get(act));
+  assert.ok(actText.includes('Дом снаружи') && actText.includes('Примерная'), actText.slice(0, 300));
+  const inv = docText(mine.get([...mine.keys()].find((n) => n.startsWith('Опись'))));
+  assert.ok(inv.includes('Акт осмотра') && inv.includes('в архиве (фото: 2)'), 'колонка описи');
+  assert.ok(inv.includes(crypto.createHash('sha256').update(mine.get(act)).digest('hex')), 'SHA-256 акта');
+  // Руководитель: акт в папке эксперта, без адреса объекта; заказчика нет ни в акте, ни в описи.
+  const org = await get('headA', `/api/orgs/${R.orgs.A}/report/archive`);
+  const oact = [...org.keys()].find((n) => n.startsWith(`${DEMO_PEOPLE.orlov.name}/Дело № `) && n.includes('/Акт осмотра объекта '));
+  assert.ok(oact, [...org.keys()].join(', '));
+  const otext = docText(org.get(oact));
+  assert.ok(otext.includes('Дом снаружи'));
+  for (const secret of ['Примерная', DEMO_PEOPLE.petrov.name]) assert.ok(!otext.includes(secret), secret);
+  assert.ok(docText(org.get([...org.keys()].find((n) => n.startsWith('Опись')))).includes('в архиве (фото: 2)'));
+  // Дела без осмотра — «осмотра в деле нет».
+  await S.sql`update documents set deleted_at = now() where order_id = ${id} and kind = 'inspection'`;
+  const none = await get('orlov', '/api/specialist/me/registry/archive');
+  assert.ok(![...none.keys()].some((n) => n.includes('Акт осмотра')));
+  assert.ok(docText(none.get([...none.keys()].find((n) => n.startsWith('Опись')))).includes('осмотра в деле нет'));
+});

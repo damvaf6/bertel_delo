@@ -16,6 +16,8 @@ import { signatureFilename } from '../providers/sign.mjs';
 import { sha256 } from './sign-ops.mjs';
 import { docView } from './money-ops.mjs';
 import { audit, sendFile } from './util.mjs';
+import { orderAct } from './inspect-ops.mjs';
+import { inspectionActDoc } from '../docs/inspection-act.mjs';
 
 // Что стороны дела видят в журнале (остальное — только служебным).
 const PARTY_ACTIONS = new Set(['order.create', 'order.update', 'order.status', 'order.price', 'payment.create', 'payment.succeeded',
@@ -350,6 +352,18 @@ function resultPacker(sql, providers, tooBig) {
     }
     return out;
   };
+  // Акт осмотра Word (2.421) — в папку дела рядом с заключением (2.429); фото осмотра нет — «осмотра в деле нет». Руководителю
+  // (bare) — без адреса объекта: опись организации не несёт данных заявки.
+  pack.act = async (ctx, orderId, dir, bare = false) => {
+    const [order] = await sql`select * from orders where id = ${orderId}`;
+    const data = order && await orderAct(sql, ctx.registry, order, ctx.actor);
+    if (!data) return 'осмотра в деле нет';
+    const doc = inspectionActDoc(bare ? { ...data, address: null } : data);
+    const name = place(dir, doc.filename);
+    pack.files.push([name, doc.buf]);
+    pack.listed.push([name, sizeRu(doc.buf.length), sha256(doc.buf)]);
+    return `в архиве (фото: ${data.total})`;
+  };
   return pack;
 }
 
@@ -358,14 +372,18 @@ function resultPacker(sql, providers, tooBig) {
 // файлы результата эксперта с подписями УКЭП (эксперта и организации), разложенные по экспертам и делам, и «Опись» —
 // перечень дел с датой сдачи и сроком, файлы с SHA-256 и проверка подписей в момент выгрузки. Заказчик, название заявки,
 // её данные и переписка в архив не попадают: руководитель видит только работу своих экспертов.
-export async function buildOrgMonthArchive({ sql, actor, org, registry, providers }, cases, monthName) {
+export async function buildOrgMonthArchive(ctx, cases, monthName) {
+  const { sql, actor, org, registry, providers } = ctx;
   const pack = resultPacker(sql, providers, 'не вошёл в архив — скачайте в «Подписи организации»');
   const rows = [];
   for (const o of cases) {
     const ref = orderRef(o.id).replace('№ ', '');
     const service = registry.service(o.module, o.service)?.service.name ?? o.service;
+    const dir = `${safeName(o.expert_name)}/Дело № ${ref}`;
     const head = [ref, service, o.expert_name, dt(o.at), day(o.deadline)];
-    for (const f of await pack.add(o.id, o.user_id, `${safeName(o.expert_name)}/Дело № ${ref}`)) rows.push([...head, ...f]);
+    const files = await pack.add(o.id, o.user_id, dir);
+    const act = await pack.act(ctx, o.id, dir, true);
+    for (const f of files) rows.push([...head, ...f, act]);
   }
   const { files, listed, test } = pack;
   const late = cases.filter((o) => o.deadline && todayMsk(new Date(o.at)) > o.deadline).length;
@@ -373,9 +391,9 @@ export async function buildOrgMonthArchive({ sql, actor, org, registry, provider
     { type: 'title', text: `Сданные заключения · ${monthName}` },
     { type: 'para', text: `${org.name}. Выгрузка из «БЕРТЕЛ Дело» ${dt(new Date())} (время московское). Сделал(а): ${actor.full_name || actor.phone}.` },
     { type: 'bold', text: `Сдано дел: ${cases.length}${late ? `; из них позже срока: ${late}` : ''}.` },
-    { type: 'para', text: 'Дела экспертов, которые работают от организации, сданные в этом месяце с тех пор, как эксперт вступил в организацию. Файлы — в папках «Эксперт / Дело №»; подпись — открепленный файл рядом с подписанным. Подписи проверены при выгрузке.' },
+    { type: 'para', text: 'Дела экспертов, которые работают от организации, сданные в этом месяце с тех пор, как эксперт вступил в организацию. Файлы — в папках «Эксперт / Дело №»; подпись — открепленный файл рядом с подписанным; акт осмотра — там же, если в деле был осмотр. Подписи проверены при выгрузке.' },
     ...(test ? [{ type: 'note', text: 'Тестовые подписи площадки — юридической силы не имеют.' }] : []),
-    { type: 'table', rows: [['Дело', 'Услуга', 'Эксперт', 'Сдано', 'Срок', 'Файл', 'Подпись эксперта', 'Подпись организации'], ...rows] },
+    { type: 'table', rows: [['Дело', 'Услуга', 'Эксперт', 'Сдано', 'Срок', 'Файл', 'Подпись эксперта', 'Подпись организации', 'Акт осмотра'], ...rows] },
     { type: 'bold', text: 'Файлы в архиве' },
     { type: 'para', text: 'Контрольная сумма SHA-256 подтверждает, что файл не менялся после выгрузки: её можно посчитать заново любой программой и сравнить.' },
     { type: 'table', rows: [['Файл', 'Размер', 'SHA-256'], ...listed] },
@@ -388,22 +406,25 @@ export async function buildOrgMonthArchive({ sql, actor, org, registry, provider
 // в «Перечне отчётов для СРО» (2.401): папки «Дело №» с файлами результата, которые загрузил сам эксперт, и подписями УКЭП;
 // «Опись» — номер и дата отчёта (из файла), объект, услуга, дата сдачи, файлы с SHA-256 и проверка подписей при выгрузке.
 // Заказчик, переписка и документы заказчика в архив не попадают.
-export async function buildExpertArchive({ sql, actor, providers }, list) {
+export async function buildExpertArchive(ctx, list) {
+  const { sql, actor, providers } = ctx;
   const pack = resultPacker(sql, providers, 'не вошёл в архив — скачайте в деле');
   const rows = [];
   for (const [i, r] of list.rows.entries()) {
     const ref = orderRef(r.id).replace('№ ', '');
     const head = [String(i + 1), r.number ? `№ ${r.number}${r.made_on ? ` от ${day(r.made_on)}` : ''}` : 'номер не найден', r.object, r.service_name, day(r.done_on)];
-    for (const f of await pack.add(r.id, actor.id, `Дело № ${ref}`)) rows.push([...head, ...f]);
+    const files = await pack.add(r.id, actor.id, `Дело № ${ref}`);
+    const act = await pack.act(ctx, r.id, `Дело № ${ref}`);
+    for (const f of files) rows.push([...head, ...f, act]);
   }
   const { files, listed, test } = pack;
   const inventory = buildSimpleDoc([
     { type: 'title', text: `Сданные заключения · ${list.name}` },
     { type: 'para', text: `${actor.full_name || actor.phone}. Выгрузка из «БЕРТЕЛ Дело» ${dt(new Date())} (время московское).` },
     { type: 'bold', text: `Сдано отчётов: ${list.total}${list.total > list.shown ? `; в архиве — первые ${list.shown}, остальные — выгрузкой за квартал` : ''}.` },
-    { type: 'para', text: 'Те же отчёты, что в «Перечне отчётов для СРО». Номер и дата отчёта — из файла отчёта в деле. Файлы — в папках «Дело №»; подпись — открепленный файл рядом с подписанным. Подписи проверены при выгрузке.' },
+    { type: 'para', text: 'Те же отчёты, что в «Перечне отчётов для СРО». Номер и дата отчёта — из файла отчёта в деле. Файлы — в папках «Дело №»; подпись — открепленный файл рядом с подписанным; акт осмотра — там же, если в деле был осмотр. Подписи проверены при выгрузке.' },
     ...(test ? [{ type: 'note', text: 'Тестовые подписи площадки — юридической силы не имеют.' }] : []),
-    { type: 'table', rows: [['№', 'Отчёт', 'Объект', 'Услуга', 'Сдано', 'Файл', 'Подпись эксперта', 'Подпись организации'], ...rows] },
+    { type: 'table', rows: [['№', 'Отчёт', 'Объект', 'Услуга', 'Сдано', 'Файл', 'Подпись эксперта', 'Подпись организации', 'Акт осмотра'], ...rows] },
     { type: 'bold', text: 'Файлы в архиве' },
     { type: 'para', text: 'Контрольная сумма SHA-256 подтверждает, что файл не менялся после выгрузки: её можно посчитать заново любой программой и сравнить.' },
     { type: 'table', rows: [['Файл', 'Размер', 'SHA-256'], ...listed] },
