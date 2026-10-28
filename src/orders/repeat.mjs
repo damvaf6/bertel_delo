@@ -51,3 +51,12 @@ export function staleReport(spec, day, today) {
   if (months < STALE_MONTHS) return null;
   return { day, months, egrn: spec.match.some((f) => f.id === 'cadastral') };
 }
+
+// Осмотр прошлого дела (2.428): акт прошлого осмотра — образец (что снимали, как описали), к новому отчёту прикладывается акт
+// осмотра этого дела. День — последнего снимка по Москве; старше STALE_MONTHS — нужен новый осмотр.
+// { day, photos, months, stale } или null — фото осмотра в прошлом деле нет.
+export function pastInspection(day, photos, today) {
+  if (!day || !photos) return null;
+  const months = fullMonths(day, today);
+  return { day, photos, months, stale: months >= STALE_MONTHS };
+}

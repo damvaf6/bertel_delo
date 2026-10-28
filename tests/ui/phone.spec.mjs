@@ -8127,6 +8127,15 @@ test('повторная оценка того же объекта (2.118): эк
     await c.query(`insert into order_analogs (order_id, author_id, url, url_key, fields, confirmed_at)
       values ($1, $2, 'https://example.ru/povtornaya/1', 'example.ru/povtornaya/1', '{"price_rub":"18500000","region":"moscow","address":"Москва, Повторная 10","area":"51"}', now())`, [a, expert.id]);
     await c.query("insert into doc_requests (order_id, item_id, title, requested_by) values ($1, 'egrn', 'Выписка из ЕГРН', $2), ($1, 'tech_plan', 'Технический паспорт БТИ или поэтажный план', $2)", [a, expert.id]);
+    // Осмотр прошлого дела — 200 дней назад, два фото с выезда (2.428).
+    const { rows: [v] } = await c.query(`insert into onsite_visits (order_id, helper_id, assigned_by, planned_at, finished_at)
+      values ($1, $2, $2, now() - interval '200 days', now() - interval '200 days') returning id`, [a, expert.id]);
+    for (const st of ['facade', 'rooms']) {
+      const { rows: [d] } = await c.query(`insert into documents (order_id, uploaded_by, filename, mime, size_bytes, storage_key, kind)
+        values ($1, $2, $3, 'image/jpeg', 10, $4, 'inspection') returning id`, [a, expert.id, `Осмотр · ${st}.jpg`, `orders/${a}/rep-${st}`]);
+      await c.query(`insert into inspection_photos (document_id, visit_id, step, received_at, shot_at)
+        values ($1, $2, $3, now() - interval '200 days', now() - interval '200 days')`, [d.id, v.id, st]);
+    }
     return { a, b };
   });
   const ref = (id) => `№ ${id.slice(0, 8).toUpperCase()}`;
@@ -8149,6 +8158,15 @@ test('повторная оценка того же объекта (2.118): эк
   await expect(item.locator('[data-stale]')).toContainText('возьмите свежую выписку ЕГРН');
   await item.locator('[data-stale]').scrollIntoViewIfNeeded();
   await shot(ep, 'h06-ekspert-povtornaya-staryj-otchet');
+  // 2.428: акт прошлого осмотра — образцом; прошлому осмотру больше 6 месяцев, а в этом деле осмотра нет — нужен новый.
+  await expect(item.locator('[data-past-act]')).toContainText('Акт прошлого осмотра от');
+  await expect(item.locator('[data-past-act]')).toContainText('(фото: 2) — образец');
+  await expect(item.locator('[data-past-act] a')).toHaveAttribute('href', `/api/orders/${ids.a}/inspection/act`);
+  const actFile = await ep.request.get(`/api/orders/${ids.a}/inspection/act`);
+  expect(actFile.status()).toBe(200);
+  await expect(item.locator('[data-new-inspection]')).toContainText('Нужен новый осмотр — прошлому осмотру больше 6 месяцев (прошло 6 месяцев)');
+  await item.locator('[data-new-inspection]').scrollIntoViewIfNeeded();
+  await shot(ep, 'i20-ekspert-povtornaya-akt-proshlogo-osmotra');
   await box.scrollIntoViewIfNeeded();
   await shot(ep, 'h7-ekspert-povtornaya-ocenka');
   await item.getByRole('button', { name: `Взять из дела ${ref(ids.a)}` }).click();
