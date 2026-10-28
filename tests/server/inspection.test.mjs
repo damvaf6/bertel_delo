@@ -664,7 +664,50 @@ test('2.373: дата осмотра в отчёте сверяется и с в
   const c = await inWork('Осмотр — выезд отменён');
   await S.sql`insert into onsite_visits (order_id, helper_id, assigned_by, planned_at, finished_at, cancelled_at)
               values (${c.id}, ${spec2.user.id}, ${spec.user.id}, now(), now(), now())`;
-  assert.deepEqual(await check(c, `Отчёт об оценке\nДата осмотра: 01.02.2026\nДата составления отчёта: ${ru(today)}`), []);
+  // 2.425: осмотра в деле нет совсем — находка не о дне, а о том, что осмотра нет.
+  assert.deepEqual((await check(c, `Отчёт об оценке\nДата осмотра: 01.02.2026\nДата составления отчёта: ${ru(today)}`)).map((f) => f.no_inspection), [true]);
+});
+
+// 2.425: в отчёте дата осмотра или «осмотр проведён», а в деле осмотра нет (ни фото, ни выезда помощника) — находка с
+// «Вставить в черновик: осмотр не проводился»; «осмотр не проводился» в отчёте — находки нет. В черновике — признак
+// no_inspection только исполнителю и только пока осмотра нет и не ждём (ссылка владельцу не действует).
+test('2.425: осмотра в деле нет — находка ИИ-проверки и фраза «осмотр не проводился» в черновик', async () => {
+  const ru = (d) => d.split('-').reverse().join('.');
+  const today = todayMsk();
+  const o = await inWork('Осмотр — в деле нет');
+  const check = async (text) => {
+    await S.sql`update documents set deleted_at = now() where order_id = ${o.id} and kind = 'result' and deleted_at is null`;
+    assert.equal((await spec.req('POST', `/api/orders/${o.id}/results`, Buffer.from(text), {
+      raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('отчёт.txt') },
+    })).status, 201);
+    const r = await spec.req('POST', `/api/orders/${o.id}/review/ai`);
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    return r.body.ai.items.flatMap((i) => i.found ?? []).filter((f) => /осмотр/.test(f.text));
+  };
+  const [f1] = await check(`Отчёт об оценке\nДата осмотра: 01.02.2026\nДата составления отчёта: ${ru(today)}`);
+  assert.equal(f1.text, 'В отчёте указана дата осмотра (01.02.2026), а в деле осмотра нет — ни фото по ссылке владельца, ни выезда помощника. Осматривали сами — приложите фото осмотра к делу; осмотра не было — напишите «осмотр не проводился, сведения об объекте — по документам заказчика» и уберите дату осмотра');
+  assert.equal(f1.no_inspection, true);
+  const [f2] = await check(`Отчёт об оценке\nОсмотр объекта оценки проведён экспертом лично.\nДата составления отчёта: ${ru(today)}`);
+  assert.match(f2.text, /^В отчёте сказано, что осмотр проведён, а в деле осмотра нет/);
+  assert.deepEqual(await check(`Отчёт об оценке\nОсмотр объекта не проводился, сведения об объекте — по документам, представленным заказчиком.\nДата составления отчёта: ${ru(today)}`), []);
+  // «Осмотр не проводился» и дата осмотра одновременно — прежнее правило (как «без осмотра»).
+  const both = await check(`Отчёт об оценке\nОсмотр объекта не проводился.\nДата осмотра: 01.02.2026\nДата составления отчёта: ${ru(today)}`);
+  assert.ok(both.some((f) => f.text === 'Указана дата осмотра, хотя в отчёте сказано «Осмотр объекта не проводился»'), JSON.stringify(both));
+  assert.ok(!both.some((f) => f.no_inspection));
+
+  // Черновик: признак — исполнителю; диспетчеру и чужому — нет.
+  const noInsp = async (c) => (await c.req('GET', `/api/orders/${o.id}/draft`)).body.no_inspection;
+  assert.equal(await noInsp(spec), true);
+  assert.equal(await noInsp(dispatcher), false);
+  assert.equal((await spec2.req('GET', `/api/orders/${o.id}/draft`)).status, 404);
+  // Ссылка владельцу выдана и действует — осмотра ждём, фразу не предлагаем; фото пришло — осмотр есть.
+  const { token } = await issue(o, { days: 1 });
+  assert.equal(await noInsp(spec), false);
+  assert.equal((await shoot(token, 'facade', { headers: GEO })).status, 201);
+  await S.sql`update inspection_links set revoked_at = now() where order_id = ${o.id}`;
+  assert.equal(await noInsp(spec), false);
+  const [f3] = await check(`Отчёт об оценке\nДата осмотра: ${ru(today)}\nДата составления отчёта: ${ru(today)}`) ;
+  assert.equal(f3, undefined);
 });
 
 // 2.196: ссылка перестанет действовать в ближайшие сутки, а «Готово» не нажато — строка в «Сегодня» и в деле, «Продлить».

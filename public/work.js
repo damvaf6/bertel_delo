@@ -1,7 +1,7 @@
 // Работа по делу (задача 1.5): проверка результата по правилам и переписка по заявке. Тексты — только через textContent.
 import { api, el, say } from '/common.js';
 import { setNext } from '/next.js';
-import { canFixInDraft, fixInDraft, rebuildWord, swapAllInDraft, swapInDraft, undoSwap, undoSwapAll } from '/draft.js';
+import { canFixInDraft, fixInDraft, insertNoInspection, rebuildWord, swapAllInDraft, swapInDraft, undoSwap, undoSwapAll } from '/draft.js';
 import { assignmentSource, findInDraft, swapValue } from '/draftfind.js';
 
 const $ = (id) => document.getElementById(id);
@@ -330,6 +330,24 @@ function shotFix(s, quote) {
   } }, 'Заменить на дату осмотра из дела');
   return [el('div', { class: 'row' }, btn, swap), miss, done, rebuild.box];
 }
+// 2.425: в отчёте осмотр, а в деле его нет — «Вставить в черновик: осмотр не проводился» (на выбор эксперта: осматривал сам
+// — приложит фото к делу); после вставки — собрать Word заново.
+function noInspectFix() {
+  const note = el('p', { class: 'muted hidden', 'data-role': 'noinsp-done' });
+  const rebuild = rebuildBox();
+  const btn = el('button', { class: `secondary${canFixInDraft() ? '' : ' hidden'}`, type: 'button', 'data-action': 'noinsp-draft', onclick: async () => {
+    btn.disabled = true;
+    try {
+      const done = await insertNoInspection();
+      note.textContent = done === 'same' ? 'В черновике уже сказано, что осмотр не проводился, — уберите дату осмотра и соберите Word заново.'
+        : done ? 'Фраза «осмотр не проводился» вставлена в черновик и сохранена — уберите дату осмотра и соберите Word заново.'
+          : 'Черновик сейчас не правится — исправьте в файле отчёта.';
+      note.classList.remove('hidden');
+      if (done) rebuild.show(); else btn.disabled = false;
+    } catch (err) { btn.disabled = false; say($('review-msg'), err.message); }
+  } }, 'Вставить в черновик: осмотр не проводился');
+  return [el('div', { class: 'row' }, btn), note, rebuild.box];
+}
 function assignmentSwap(g, quote, miss, rule) {
   const src = assignmentSource(g);
   if (!src) return null;
@@ -507,7 +525,8 @@ function checkItem(order, r, c, hint) {
       ...(f.egrn ? egrnPlace(f.egrn, f.quote, c.id) : []),
       ...(f.fix ? mineFix(f.fix, f.quote, c.id) : []),
       ...(f.words ? wordsFix(f.words, f.quote) : []),
-      ...(f.shot ? shotFix(f.shot, f.quote) : []))))] : []),
+      ...(f.shot ? shotFix(f.shot, f.quote) : []),
+      ...(f.no_inspection ? noInspectFix() : []))))] : []),
     // Отмеченные места: цитата из отчёта, файл и страница — сервер показывает только найденные в тексте цитаты.
     ...(hint?.marks?.length ? [el('ul', { class: 'ai-marks' }, ...hint.marks.map((m) => el('li', {},
       el('span', { class: 'ai-mark-where', text: `${m.file}, ${m.where}: ` }),

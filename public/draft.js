@@ -21,7 +21,7 @@ export async function loadDraft(current, reload) {
   if (!current.order.module || (!mine && !staff)) { box.classList.add('hidden'); return; }
   say($('draft-msg'), '');
   const r = await api('GET', `/api/orders/${current.order.id}/draft`);
-  ctx = { order: current.order, draft: r.draft, reload };
+  ctx = { order: current.order, draft: r.draft, reload, sections: r.sections, noInspection: !!(r.no_inspection && r.can_edit) };
   setNext({ draft: { exists: !!r.draft, approaches: r.approaches && r.can_edit ? r.approaches : null } });
   renderApproaches(r);
   // Исполнителю — пока дело в работе или черновик есть; служебным — только когда черновик есть.
@@ -108,6 +108,43 @@ function countGaps() {
   $('draft-gaps').textContent = n ? `Осталось пометок: ${n}` : 'Пометок не осталось';
   $('draft-next-gap').classList.toggle('hidden', !n || $('draft-text').readOnly);
   renderEmpty();
+  renderNoInspection();
+}
+
+// 2.425: осмотра в деле нет (ни фото, ни выезда помощника, ссылка владельцу не действует) — на выбор эксперта фраза
+// «осмотр не проводился» в черновик: в конец раздела с таблицей задания, без него — раздела об осмотре, иначе в конец текста.
+// Фраза (или «без осмотра») уже в тексте — подсказка не нужна.
+export const NO_INSPECT_TEXT = 'Осмотр объекта не проводился, сведения об объекте — по документам, представленным заказчиком.';
+const NO_INSPECT_RE = /без\s+(?:проведения\s+)?осмотра|осмотр\S*\s+(?:объекта\s+(?:оценки\s+|экспертизы\s+)?)?не\s+(?:проводил|производил)/iu;
+const norm = (x) => String(x).toLowerCase().replace(/[^a-zа-яё0-9]/g, '');
+function renderNoInspection() {
+  const t = $('draft-text');
+  const show = !!ctx?.noInspection && !!ctx.draft && !t.readOnly && !NO_INSPECT_RE.test(t.value);
+  $('draft-noinsp').classList.toggle('hidden', !show);
+  if (show) {
+    $('draft-noinsp-text').textContent = 'В деле нет осмотра: ни фото по ссылке владельца, ни выезда помощника. Если осмотр не '
+      + `проводился, вставьте в черновик: «${NO_INSPECT_TEXT}» — и уберите дату осмотра. Осматривали сами — приложите фото к делу.`;
+  }
+}
+function noInspectionAt(body) {
+  const heads = [...body.matchAll(/^#{1,3}\s*(.+)$/gm)];
+  const want = (ctx.sections ?? []).find((x) => x.table === 'task') ?? (ctx.sections ?? []).find((x) => /осмотр/i.test(x.title));
+  const h = want ? heads.find((m) => norm(m[1]) === norm(want.title)) : null;
+  if (!h) return body.length;
+  const next = heads.find((m) => m.index > h.index);
+  return next ? next.index : body.length;
+}
+// → 'same' (фраза уже в тексте), true (вставлена и сохранена) или null (черновик сейчас не правится).
+export async function insertNoInspection() {
+  const t = $('draft-text');
+  if (!canFixInDraft()) return null;
+  if (NO_INSPECT_RE.test(t.value)) return 'same';
+  const at = noInspectionAt(t.value);
+  const head = t.value.slice(0, at).replace(/\s*$/, '');
+  const tail = t.value.slice(at);
+  const from = head.length + 2;
+  await putText(`${head}\n\n${NO_INSPECT_TEXT}\n${tail ? `\n${tail}` : ''}`, from, NO_INSPECT_TEXT.length);
+  return true;
 }
 
 // Пустые разделы перед сборкой Word (2.177): список по тексту на экране; нажатие — к разделу в тексте (выделяется пометка
@@ -154,7 +191,7 @@ function toSection(title) {
 // 2.231 — и у находки, сверенной с заявкой или заданием на оценку.
 export const canFixInDraft = () => !!ctx?.draft && !$('draft-text').readOnly && !$('draft-box').classList.contains('hidden');
 function syncFixButtons() {
-  for (const b of document.querySelectorAll('[data-action="egrn-draft"], [data-action="fix-draft"], [data-action="egrn-swap"], [data-action="fix-swap"], [data-action="egrn-swap-all"], [data-action="sig-egrn-swap"], [data-action="task-due-swap"]')) b.classList.toggle('hidden', !canFixInDraft());
+  for (const b of document.querySelectorAll('[data-action="egrn-draft"], [data-action="fix-draft"], [data-action="egrn-swap"], [data-action="fix-swap"], [data-action="egrn-swap-all"], [data-action="sig-egrn-swap"], [data-action="task-due-swap"], [data-action="noinsp-draft"]')) b.classList.toggle('hidden', !canFixInDraft());
 }
 // Выделяет в тексте черновика значение, которое разошлось с выпиской (заявкой, заданием); в черновике его нет — false
 // (правят в файле отчёта).
@@ -262,6 +299,10 @@ $('draft-text').addEventListener('input', () => {
   countGaps();
   if (ctx?.draft) writeLocal(ctx.order.id, { from: ctx.draft.id, body: $('draft-text').value });
 });
+$('draft-noinsp-add').addEventListener('click', () => run($('draft-noinsp-add'), async () => {
+  const done = await insertNoInspection();
+  if (done) say($('draft-msg'), 'Фраза «осмотр не проводился» вставлена, черновик сохранён — уберите дату осмотра, если она есть.', 'ok');
+}));
 $('draft-next-gap').addEventListener('click', () => {
   const t = $('draft-text');
   const re = new RegExp(GAP.source, 'gi');

@@ -17800,3 +17800,60 @@ test('2.397: перенос срока на нерабочий день — ди
   await ep.context().close();
   await dp.context().close();
 });
+
+// 2.425: осмотра в деле нет — в черновике «Вставить фразу в черновик» (осмотр не проводился), а в ИИ-проверке отчёта с датой
+// осмотра — находка «в деле осмотра нет» с той же вставкой.
+test('2.425: осмотра в деле нет — фраза «осмотр не проводился» в черновик и находка ИИ-проверки', async ({ page, browser, baseURL }) => {
+  test.setTimeout(120_000);
+  await signIn(page, '+79990004251');
+  const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира: без осмотра' }, headers: H })).json();
+  const id = created.order.id;
+  expect((await page.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(9), fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 425' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  const sctx = await phoneContext(browser, baseURL);
+  const sp = await sctx.newPage();
+  const spec = await signIn(sp, '+79990004252');
+  await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [spec.id]);
+    await c.query('update orders set price_kop = 1500000, paid_at = now(), status = $2, executor_user_id = $3 where id = $1', [id, 'in_work', spec.id]);
+    await c.query("insert into payments (order_id, amount_kop, status, provider_id, created_by, paid_at) values ($1, 1500000, 'succeeded', $2, $3, now())", [id, `pay_ui_${id}`, spec.id]);
+  });
+  const ru = (d) => d.split('-').reverse().join('.');
+  expect((await sp.request.post(`/api/orders/${id}/results`, {
+    data: makePdf([['Отчёт № 425/2026 об оценке квартиры', 'Дата осмотра объекта оценки: 01.02.2026', `Дата составления отчёта: ${ru(inDays(0))}`]]),
+    headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('отчёт.pdf') },
+  })).status()).toBe(201);
+
+  await sp.goto(`/kabinet#order=${id}`);
+  await sp.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const box = sp.locator('#draft-noinsp');
+  await expect(box).toBeVisible();
+  await expect(box).toContainText('В деле нет осмотра: ни фото по ссылке владельца, ни выезда помощника.');
+  expect(await sp.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await box.scrollIntoViewIfNeeded();
+  await shot(sp, 'i16-specialist-osmotra-net-chernovik');
+
+  // ИИ-проверка: дата осмотра в отчёте, а осмотра в деле нет — та же вставка у находки.
+  await sp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  const find = sp.locator('#review-checks .ai-found li').filter({ hasText: 'в деле осмотра нет' }).first();
+  await expect(find).toContainText('В отчёте указана дата осмотра (01.02.2026), а в деле осмотра нет');
+  await find.getByRole('button', { name: 'Вставить в черновик: осмотр не проводился' }).click();
+  await expect(find.locator('[data-role="noinsp-done"]')).toHaveText('Фраза «осмотр не проводился» вставлена в черновик и сохранена — уберите дату осмотра и соберите Word заново.');
+  await expect(find.locator('[data-role="egrn-rebuild"]')).toBeVisible();
+  await expect(box).toBeHidden();
+  const body = (await (await sp.request.get(`/api/orders/${id}/draft`, { headers: H })).json()).draft.body;
+  expect(body).toContain('Осмотр объекта не проводился, сведения об объекте — по документам, представленным заказчиком.');
+  // Фраза — в разделе «Задание на оценку» (до следующего раздела), один раз.
+  const at = body.indexOf('Осмотр объекта не проводился');
+  expect(body.lastIndexOf('Задание на оценку', at)).toBeGreaterThan(-1);
+  expect(body.split('Осмотр объекта не проводился').length).toBe(2);
+  expect(await sp.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await find.scrollIntoViewIfNeeded();
+  await shot(sp, 'i17-specialist-osmotra-net-nahodka');
+  await sctx.close();
+});
