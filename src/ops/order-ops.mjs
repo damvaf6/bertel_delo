@@ -294,6 +294,7 @@ export function orderOps() {
           // Правило возврата (2а.7) — диспетчеру при отмене после начала работ.
           cancel_note: orderSides(actor, order).includes('dispatcher') ? registry.proofread(order.module)?.refund_note ?? null : null,
           remarks: await remarksView(sql, order),
+          remarks_days: registry.remarks(order.module)?.reply_days ?? null,
           // Исполнителю уже выплачено (2а.11): отмена диспетчером — с выбором «результат плохой / нормальный».
           after_payout: orderSides(actor, order).includes('dispatcher') && ['in_work', 'review', 'done'].includes(order.status)
             && !!(await sql.one`select 1 from payouts where order_id = ${order.id}`),

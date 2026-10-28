@@ -256,12 +256,33 @@
             <p class="muted">Исполнителю — 80% от стоимости сделанной части, остаток цены возвращается заказчику (у перевода тарифы нотариуса и доставка возвращаются полностью).</p>
           </div>
         </div>
+        <div class="notice-warn hidden" id="remarks-view">
+          <p><strong id="remarks-title">Замечания к отчёту</strong></p>
+          <p id="remarks-when"></p>
+          <p id="remarks-text-view"></p>
+          <div id="remarks-doc"></div>
+        </div>
         <div class="ready-box hidden" id="ready-box">
           <h3>Готово к сдаче?</h3>
           <p class="muted" id="ready-lead"></p>
           <ul class="ready-list" id="ready-list"></ul>
         </div>
         <div class="row" id="actions"></div>
+        <div class="ready-box hidden" id="remarks-form">
+          <h3>Пришли замечания к отчёту</h3>
+          <p class="muted" id="remarks-lead">Банк или суд прислал замечания — опишите их и приложите файл: дело снова у эксперта, ответ — за 3 рабочих дня.</p>
+          <div class="field">
+            <label for="remarks-text">Что пишут в замечаниях</label>
+            <textarea id="remarks-text" rows="3" maxlength="1000"></textarea>
+          </div>
+          <div class="field">
+            <p class="muted">Файл замечаний (если есть): <span id="remarks-file-name">не выбран</span></p>
+            <label class="btn secondary" for="remarks-file">Выбрать файл</label>
+            <input id="remarks-file" type="file" class="visually-hidden" aria-label="Файл замечаний (если есть)">
+          </div>
+          <button type="button" id="remarks-send">Передать замечания эксперту</button>
+          <p class="msg" id="remarks-msg" role="status" aria-live="polite"></p>
+        </div>
         <p class="msg" id="status-msg" role="status" aria-live="polite"></p>
         <details class="fold hidden" id="history-details">
           <summary id="history-summary"></summary>
