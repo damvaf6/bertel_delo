@@ -84,6 +84,8 @@ test('2.401: перечень отчётов для СРО — номер, да�
   await expect(rows).toHaveCount(2);
   const zipBtn = page.locator('#registry-archive');
   await expect(zipBtn).toHaveText('Заключения архивом (2)');
+  // 2.429: в архиве и акты осмотра — строкой под кнопкой.
+  await expect(page.locator('#registry-archive-note')).toContainText('акты осмотра');
   await zipBtn.scrollIntoViewIfNeeded();
   await shot(page, 'r07-2407-zaklyucheniya-arhivom');
   const [download] = await Promise.all([page.waitForEvent('download'), zipBtn.click()]);
@@ -93,6 +95,7 @@ test('2.401: перечень отчётов для СРО — номер, да�
   await expect(page.locator('#registry-empty')).toBeVisible();
   await expect(rows).toHaveCount(0);
   await expect(zipBtn).toBeHidden();
+  await expect(page.locator('#registry-archive-note')).toBeHidden();
   await page.locator('#registry-year').selectOption({ index: 0 });
   await expect(rows).toHaveCount(2);
   await rows.nth(1).getByRole('link').click();
