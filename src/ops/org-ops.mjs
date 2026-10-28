@@ -18,7 +18,7 @@ import { buildOrgMonthArchive } from './case-ops.mjs';
 import { openExtends, orgExtends, taskMovedOrg } from './deadline-ops.mjs';
 import { extendSuggest, openHandovers } from './handover-ops.mjs';
 import { orgSchedule, taskDues } from '../orders/schedule.mjs';
-import { expiringLinks, incompleteInspections } from './inspect-ops.mjs';
+import { actStates, expiringLinks, incompleteInspections } from './inspect-ops.mjs';
 import { docsWaiting } from './docreq-ops.mjs';
 import { taskDueFor, taskMoveLetter } from './draft-ops.mjs';
 import { assignmentDocs, numberPool, orgExperts, TASK_MOVE } from './ai-ops.mjs';
@@ -318,6 +318,8 @@ export function orgOps() {
           const [exp] = await expiringLinks(sql, { order: o.id });
           if (exp) inspections.set(o.id, { kind: 'expiring', at: exp.expires_at, photos: exp.photos });
         }
+        // Акт осмотра (2.427): готов ли и ознакомился ли владелец — по делам в работе и на проверке.
+        const acts = await actStates(sql, rows.filter((o) => ['in_work', 'review'].includes(o.status)).map((o) => o.id));
         // Ждём документы от заказчика (2.235): почему дело стоит — эксперт запросил документы, а заказчик ещё не прислал.
         const docs = await docsWaiting(sql, rows);
         // Перенос от организации (2.238): руководитель попросил диспетчера (2.221) — ждём ответа, отказано или согласовано.
@@ -338,6 +340,7 @@ export function orgOps() {
           remind: reminds.get(o.id) ?? null,
           last_move: moves.get(o.id) ?? null,
           inspection: inspections.get(o.id) ?? null,
+          act: acts.get(o.id) ?? null,
           docs_wait: docs.get(o.id) ?? null,
           idle: !!moves.get(o.id)?.idle,
           idle_long: !!moves.get(o.id)?.idle_long,

@@ -73,6 +73,8 @@ const FILTERS = [
   // 2.249: эксперт вернулся после дней «не принимаю дела» за последнюю неделю — что изменилось по его делам, пока его не было.
   { id: 'back', text: 'Эксперт вернулся после «не принимаю дела»', test: (c) => !!c.back },
   { id: 'inspect', text: 'Осмотр не закончен', test: (c) => !!c.inspection },
+  // 2.427: акт осмотра готов, а владелец, снимавший по ссылке, с ним не ознакомился — суд и банк спросят отметку.
+  { id: 'act', text: 'Акт осмотра: владелец не ознакомлен', test: (c) => !!c.act?.owner && !c.act.owner.acked_at },
   { id: 'idle', text: 'Без движения', test: (c) => c.idle },
   { id: 'idle_long', text: 'Без движения 5 рабочих дней и дольше', test: (c) => c.idle_long && c.status === 'in_work' && !c.docs_wait },
   // 2.235: эксперт запросил документы у заказчика, а их ещё нет — почему дело стоит.
@@ -319,6 +321,7 @@ function caseItem(org, c) {
     ...(c.away && !c.handover && !c.transfer_to?.length && !c.extend && c.remind ? [remindRow(org, c, 'extend')] : []),
     ...(c.back ? [backRow(c)] : []),
     ...(c.inspection ? [inspectRow(c)] : []),
+    ...(c.act ? [actRow(c)] : []),
     ...(c.docs_wait ? [docsRow(c)] : []),
     ...(c.last_move ? [moveRow(c)] : []),
     ...(c.remind ? [remindRow(org, c)] : []),
@@ -373,6 +376,16 @@ function inspectRow({ inspection: i }) {
     : `Осмотр не закончен: ссылка владельцу перестанет действовать ${timeRu(i.at)}, а «Готово» не нажато${i.photos
       ? ` (фото пришло: ${i.photos})` : ' — фото ещё нет'}.`;
   return el('div', { class: i.kind === 'incomplete' ? 'notice-warn' : 'muted', 'data-role': 'inspect', text });
+}
+
+// Акт осмотра (2.427): готов (фото осмотра есть, съёмка закончена) и ознакомился ли владелец. Не ознакомился — заметно;
+// 30 дней после «Готово» прошли — по старой ссылке уже нельзя, эксперт выдаёт новую.
+function actRow({ act: a }) {
+  const o = a.owner;
+  const owner = !o ? null : o.acked_at ? `владелец ознакомлен ${timeRu(o.acked_at)}`
+    : o.open ? 'владелец ещё не ознакомлен' : 'владелец не ознакомлен, а по прежней ссылке уже нельзя — эксперт может выдать новую';
+  return el('div', { class: o && !o.acked_at ? 'notice-warn' : 'muted', 'data-role': 'act',
+    text: [`Акт осмотра готов (фото: ${a.photos})`, owner].filter(Boolean).join(' · ') });
 }
 
 // Ждём документы от заказчика (2.235): что запросил эксперт, сколько дней ждём самый старый, напоминал ли заказчику (2.234).
