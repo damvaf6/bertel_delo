@@ -8,6 +8,8 @@
 //     эксперт сверяет, годится ли объявление на новую дату; повторы ссылок не копируются;
 //   — запрос у заказчика тех же документов из списка услуги, что он просил в прошлый раз (выписка ЕГРН, ПТС): сами файлы
 //     прошлого заказчика в новое дело не переходят.
+// Был в прошлом деле осмотр — «Акт прошлого осмотра» образцом (скачать), а старше 6 месяцев и в этом деле осмотра ещё нет —
+// «нужен новый осмотр» (2.428).
 // Видит и делает только исполнитель, пока дело в работе. Чужое дело, другая услуга или другой объект — «не найдено».
 import crypto from 'node:crypto';
 import { HttpError } from '../http/core.mjs';
@@ -15,7 +17,7 @@ import { editsDraft } from '../access/policy.mjs';
 import { DRAFT_MAX } from '../ai/ai.mjs';
 import { orderSections } from '../docs/report.mjs';
 import { pastValues, reuseSections } from '../docs/reuse.mjs';
-import { compareObject, staleReport } from '../orders/repeat.mjs';
+import { compareObject, pastInspection, staleReport } from '../orders/repeat.mjs';
 import { todayMsk } from '../orders/workflow.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { customersOf, notify } from '../notify/notify.mjs';
@@ -83,6 +85,14 @@ async function reportDay(sql, past, draft) {
   return at ? todayMsk(new Date(at)) : null;
 }
 
+// Фото осмотра в деле: сколько и день последнего снимка по Москве (время съёмки, нет — получения).
+async function inspectionOf(sql, orderId) {
+  const r = await sql.one`select count(*)::int as n, max(coalesce(p.shot_at, p.received_at)) as at
+                          from inspection_photos p join documents d on d.id = p.document_id
+                          where d.order_id = ${orderId} and d.deleted_at is null`;
+  return { photos: r?.n ?? 0, day: r?.at ? todayMsk(new Date(r.at)) : null };
+}
+
 // Свои дела с тем же объектом и что из каждого можно взять.
 async function sameObjectCases(sql, actor, order, registry, spec, pastId = null) {
   const today = todayMsk();
@@ -101,6 +111,7 @@ async function sameObjectCases(sql, actor, order, registry, spec, pastId = null)
       fields: cmp.fields,
       changed: changes(registry, spec, past, order),
       stale: staleReport(spec, await reportDay(sql, past, draft), today),
+      act: await inspectionOf(sql, past.id).then((x) => pastInspection(x.day, x.photos, today)),
     });
     if (out.length >= SHOW) break;
   }
@@ -109,7 +120,7 @@ async function sameObjectCases(sql, actor, order, registry, spec, pastId = null)
 
 const caseView = (c) => ({
   id: c.past.id, ref: orderRef(c.past.id), created_at: c.past.created_at, status: c.past.status,
-  fields: c.fields, changed: c.changed, stale: c.stale,
+  fields: c.fields, changed: c.changed, stale: c.stale, act: c.act,
   sections: c.sections, analogs: c.analogs.length, docs: c.docs.map((d) => d.title),
 });
 
@@ -125,7 +136,11 @@ export function repeatOps() {
         if (!spec) return { cases: [] };
         const list = await sameObjectCases(sql, actor, order, registry, spec);
         // Прошлый отчёт старше 6 месяцев — дело видно и без того, что взять: подсказка проверить объект и выписку (2.367).
-        return { cases: list.map(caseView).filter((c) => c.sections.length || c.analogs || c.docs.length || c.stale) };
+        // Акт прошлого осмотра — образец; в этом деле своего осмотра ещё нет, а прошлому больше 6 месяцев — «нужен новый
+        // осмотр» (2.428).
+        const cases = list.map(caseView).filter((c) => c.sections.length || c.analogs || c.docs.length || c.stale || c.act);
+        const here = cases.some((c) => c.act) ? (await inspectionOf(sql, order.id)).photos : 0;
+        return { cases, inspected: here > 0 };
       },
     },
     {

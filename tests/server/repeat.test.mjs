@@ -5,7 +5,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
-import { compareObject, fullMonths, objectKey, staleReport } from '../../src/orders/repeat.mjs';
+import { compareObject, fullMonths, objectKey, pastInspection, staleReport } from '../../src/orders/repeat.mjs';
 import { createRegistry } from '../../src/modules/index.mjs';
 import { PAST_MARK } from '../../src/docs/reuse.mjs';
 
@@ -199,5 +199,54 @@ test('2.367: прошлому отчёту больше 6 месяцев — п�
   assert.equal(v.cases[0]?.stale?.months, 8, JSON.stringify(v));
   assert.ok(v.cases[0].sections.length > 0);
   // Заказчик подсказки не видит.
+  assert.deepEqual((await owner2.req('GET', `/api/orders/${o.id}/repeat`)).body, { cases: [] });
+});
+
+// Фото осмотра в деле: выезд помощника (сам эксперт) и снимки шагов; ago — сколько назад снято.
+async function photos(order, steps, ago) {
+  const [v] = await S.sql`insert into onsite_visits (order_id, helper_id, assigned_by, planned_at, finished_at)
+                          values (${order.id}, ${spec.user.id}, ${spec.user.id}, now() - ${ago}::interval, now() - ${ago}::interval) returning id`;
+  for (const st of steps) {
+    const [d] = await S.sql`insert into documents (order_id, uploaded_by, filename, mime, size_bytes, storage_key, kind)
+                            values (${order.id}, ${spec.user.id}, ${`Осмотр · ${st}.jpg`}, 'image/jpeg', 10, ${`orders/${order.id}/rep-${st}`}, 'inspection') returning id`;
+    await S.sql`insert into inspection_photos (document_id, visit_id, step, received_at, shot_at)
+                values (${d.id}, ${v.id}, ${st}, now() - ${ago}::interval, now() - ${ago}::interval)`;
+  }
+}
+
+test('2.428: акт прошлого осмотра — образцом; прошлому осмотру больше 6 месяцев, а в новом деле осмотра нет — «нужен новый осмотр»', async () => {
+  assert.equal(pastInspection(null, 0, '2026-09-15'), null);
+  assert.deepEqual(pastInspection('2026-03-15', 3, '2026-09-14'), { day: '2026-03-15', photos: 3, months: 5, stale: false });
+  assert.equal(pastInspection('2026-03-15', 3, '2026-09-15').stale, true);
+
+  const obj = { ...OBJ, address: 'Москва, ул. Осенняя, д. 8, кв. 1', cadastral: '77:01:0001001:4280' };
+  const past = await inWork(owner1, obj, { title: 'Квартира на Осенней (прошлый раз)' });
+  const o = await inWork(owner2, obj, { title: 'Квартира на Осенней' });
+  // В прошлом деле осмотра нет, брать нечего — дела в списке нет.
+  assert.deepEqual((await spec.req('GET', `/api/orders/${o.id}/repeat`)).body.cases, []);
+  // Осмотр был 2 месяца назад — акт образцом, нового осмотра не требуется.
+  await photos(past, ['facade', 'rooms'], '2 months');
+  let v = (await spec.req('GET', `/api/orders/${o.id}/repeat`)).body;
+  assert.equal(v.cases.length, 1, JSON.stringify(v));
+  assert.equal(v.cases[0].act.photos, 2);
+  assert.equal(v.cases[0].act.stale, false);
+  assert.equal(v.inspected, false);
+  // Акт прошлого осмотра скачивается из прошлого дела (оно своё).
+  const act = await spec.req('GET', `/api/orders/${past.id}/inspection/act`);
+  assert.equal(act.status, 200);
+  // Осмотр 8 месяцев назад — нужен новый осмотр; день — последнего снимка.
+  await S.sql`update inspection_photos p set shot_at = now() - interval '8 months', received_at = now() - interval '8 months'
+              from documents d where d.id = p.document_id and d.order_id = ${past.id}`;
+  v = (await spec.req('GET', `/api/orders/${o.id}/repeat`)).body;
+  assert.equal(v.cases[0].act.stale, true);
+  assert.equal(v.cases[0].act.months, 8);
+  // В новом деле осмотр уже есть — inspected: страница предупреждения не показывает.
+  await photos(o, ['facade'], '1 hour');
+  v = (await spec.req('GET', `/api/orders/${o.id}/repeat`)).body;
+  assert.equal(v.inspected, true);
+  // Удалённые фото прошлого дела не считаются.
+  await S.sql`update documents set deleted_at = now() where order_id = ${past.id}`;
+  assert.deepEqual((await spec.req('GET', `/api/orders/${o.id}/repeat`)).body.cases, []);
+  // Заказчик не видит.
   assert.deepEqual((await owner2.req('GET', `/api/orders/${o.id}/repeat`)).body, { cases: [] });
 });
