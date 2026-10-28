@@ -13579,7 +13579,8 @@ test('2.312: пользователь результатов — замена п
   // Одной кнопкой у находки — то же место в таблице задания.
   await user.getByRole('button', { name: 'Заменить на значение из заявки' }).click();
   await expect(user.locator('[data-role="fix-swap-what"]')).toContainText('Было «Банк ВТБ (ПАО) (по заявке)» — стало «ПАО Сбербанк (по заявке)», как в заявке');
-  expect((await (await ep.request.get(`/api/orders/${A}/draft`, { headers: H })).json()).draft.body).toContain(`${row} ПАО Сбербанк (по заявке) |`);
+  // Сохранение черновика идёт после надписи у находки — ждём его.
+  await expect.poll(async () => (await (await ep.request.get(`/api/orders/${A}/draft`, { headers: H })).json()).draft.body).toContain(`${row} ПАО Сбербанк (по заявке) |`);
   for (const p of [ep, cp]) await p.context().close();
 });
 
