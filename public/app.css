@@ -446,6 +446,7 @@ h2.inline { display: inline; }
 
 /* Пустые разделы черновика перед «Скачать Word» (2.177). */
 #draft-empty { margin-bottom: .75rem; }
+#draft-noinsp { margin-bottom: .75rem; }
 /* Нотариусы-партнёры (2а.4): окно — день, с, до, «Убрать» в одну строку; галочка с текстом рядом. */
 #nt-windows li.row { flex-wrap: nowrap; gap: 6px; }
 #nt-windows select { flex: 0 0 64px; }

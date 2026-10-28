@@ -357,6 +357,19 @@ export function taskCustomerFor(registry, order, assignment, owner) {
 // 2.303: срок составления отчёта из задания на оценку (письма заказчика, определения суда), как его сверяет ИИ-проверка
 // (2.302, правило report_dates), — в строку «Срок» таблицы задания: задание важнее срока дела; срок дела позже срока по
 // заданию — видно рядом. В нескольких документах — самый поздний (перенос новым заданием).
+// 2.425: осмотра в деле нет — ни фото осмотра, ни выезда помощника (кроме отменённого), — и осмотра не ждём: нет
+// действующей ссылки владельцу. Только у услуг с шагами осмотра.
+async function noInspection(sql, registry, order) {
+  if (!registry.inspectionSteps(order.module, order.service).length) return false;
+  const [r] = await sql`select
+      exists(select 1 from inspection_photos p join documents d on d.id = p.document_id
+              where d.order_id = ${order.id} and d.deleted_at is null) as photos,
+      exists(select 1 from onsite_visits where order_id = ${order.id} and cancelled_at is null) as visit,
+      exists(select 1 from inspection_links where order_id = ${order.id} and revoked_at is null and finished_at is null
+                and expires_at > now()) as link`;
+  return !r.photos && !r.visit && !r.link;
+}
+
 export function taskDueFor(registry, order, assignment) {
   if (!registry.checks(order.module, order.service).some((r) => (r.auto ?? []).includes('report_dates'))) return null;
   const d = assignmentDue(assignment);
@@ -601,6 +614,8 @@ export function draftOps() {
           can_edit: editsDraft(actor, order),
           can_ai: editsDraft(actor, order) && sections.length > 0,
           report_number: await numberView(sql, actor, order),
+          // 2.425: осмотра в деле нет и не ждём — эксперту на выбор фраза «осмотр не проводился» в черновик.
+          no_inspection: editsDraft(actor, order) && await noInspection(sql, registry, order),
           // Подходы к оценке (2.33): список — если исполнитель их выбирает для этой услуги; chosen — что отмечено.
           approaches: registry.approachesFor(order.module, order.service)
             ? { list: Object.entries(APPROACHES).map(([id, name]) => ({ id, name })), chosen: order.approaches ?? null }

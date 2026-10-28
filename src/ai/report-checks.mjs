@@ -1714,14 +1714,16 @@ function landMatch(doc, ctx) {
 }
 
 // ——— Осмотр: «без осмотра», а дата осмотра указана ———
+// 2.425: и «осмотр (объекта) не проводился» — фраза, которую эксперт вставляет в черновик, когда осмотра в деле нет.
+const NO_INSPECT = /без\s+(?:проведения\s+)?осмотра|осмотр\S*\s+(?:объекта\s+(?:оценки\s+|экспертизы\s+)?)?не\s+(?:проводил|производил)[а-яё]*/iu;
 function inspection(doc) {
   const text = (doc.pages ?? []).join('\n');
-  const none = text.match(/без\s+(?:проведения\s+)?осмотра/iu);
+  const none = text.match(NO_INSPECT);
   if (!none) return [];
   const out = [];
   eachPage(doc, (page, i) => {
     const m = page.match(/дата\s+(?:проведения\s+)?осмотра[^:\n]{0,30}[:\s]+\s*\d{1,2}[\s.]/iu);
-    if (m) out.push({ page: i, quote: lineAround(page, m.index), text: 'Указана дата осмотра, хотя в отчёте сказано «без осмотра»' });
+    if (m) out.push({ page: i, quote: lineAround(page, m.index), text: `Указана дата осмотра, хотя в отчёте сказано «${clean(none[0])}»` });
   });
   return out;
 }
@@ -1923,7 +1925,6 @@ const pageWith = (doc, label) => {
   return { doc, page: i, quote: lineAround(page, Math.max(0, page.search(re))) };
 };
 const RETRO = /ретроспектив|состояни\S*[^.]{0,160}дат\S*\s+(?:оценки[^.]{0,160}дат\S*\s+осмотра|осмотра[^.]{0,160}дат\S*\s+оценки)/iu;
-const NO_INSPECT = /без\s+(?:проведения\s+)?осмотра/iu;
 // Все даты осмотра в отчёте: по одной на день, в порядке страниц, с местом первого упоминания.
 function inspectDates(doc) {
   const seen = new Map();
@@ -2014,6 +2015,15 @@ function reportDates(docs, ctx) {
     for (const f of found.filter((x) => !ok.has(x.day))) {
       out.push({ doc: d, page: f.page, quote: f.quote, ...(dd && f.raw ? { shot: { bad: f.raw, right: `${dd}.${m}.${y}` } } : {}),
         text: `Дата осмотра в отчёте — ${ruDate(f.day)}, а ${inspectionSeen(ctx, days)} — проверьте дату осмотра` });
+    }
+  }
+  // 2.425: осмотра в деле нет — ни фото по ссылке владельца, ни выезда помощника, — а в отчёте дата осмотра или «осмотр
+  // проведён». Осматривал сам, без платформы, — приложит фото к делу; осмотра не было — фраза «осмотр не проводился».
+  if (ctx.inspectionBy && !days.length && !none) {
+    const at = found[0] ?? (new RegExp(INSPECT_LABELS[1], 'iu').test(text) ? pageWith(d, INSPECT_LABELS[1]) : null);
+    if (at) {
+      out.push({ doc: d, page: at.page, quote: at.quote, no_inspection: true,
+        text: `В отчёте ${found[0] ? `указана дата осмотра (${ruDate(found[0].day)})` : 'сказано, что осмотр проведён'}, а в деле осмотра нет — ни фото по ссылке владельца, ни выезда помощника. Осматривали сами — приложите фото осмотра к делу; осмотра не было — напишите «осмотр не проводился, сведения об объекте — по документам заказчика» и уберите дату осмотра` });
     }
   }
   if (days.length && none) {
@@ -3169,7 +3179,7 @@ export const AUTO_CHECKS = Object.freeze({
   court_order: 'по определению суда — номер определения и ст. 307 УК РФ',
   vin_match: 'VIN в отчёте — как в заявке',
   date_order: 'дата составления отчёта не раньше даты оценки',
-  report_dates: 'даты по всему отчёту: осмотр не позже составления, составление и дата оценки не позже подписи, составление не раньше задания на оценку и не позже срока из него, дата оценки не раньше осмотра, одна дата осмотра и в дни фото осмотра или выезда помощника в деле, объявления аналогов не позже даты оценки',
+  report_dates: 'даты по всему отчёту: осмотр не позже составления, составление и дата оценки не позже подписи, составление не раньше задания на оценку и не позже срока из него, дата оценки не раньше осмотра, одна дата осмотра и в дни фото осмотра или выезда помощника в деле, осмотр в отчёте — только если он есть в деле, объявления аналогов не позже даты оценки',
   reg_match: 'госномер в отчёте — как в заявке',
   mileage_match: 'пробег в отчёте — как в заявке (с запасом 10%)',
   approach_weights: 'веса подходов в согласовании в сумме 1',
@@ -3216,6 +3226,8 @@ export function runAutoChecks(names, docs, ctx = {}) {
       ...(f.words ? { words: { bad: clean(f.words.bad).slice(0, 200), right: clean(f.words.right).slice(0, 200) } } : {}),
       // 2.373: дата осмотра не та, что у осмотра в деле, — «Заменить на дату осмотра из дела».
       ...(f.shot ? { shot: { bad: clean(f.shot.bad).slice(0, 200), right: f.shot.right } } : {}),
+      // 2.425: осмотр в отчёте, а в деле его нет — «Вставить в черновик: осмотр не проводился».
+      ...(f.no_inspection ? { no_inspection: true } : {}),
       ...(f.fix?.from && !f.egrn ? { fix: { bad: clean(f.fix.bad).slice(0, 200), right: clean(f.fix.right).slice(0, 200), from: clean(f.fix.from).slice(0, 200), ...(f.fix.flip ? { flip: f.fix.flip } : {}) } } : {}),
     }));
   }
