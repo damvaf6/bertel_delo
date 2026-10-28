@@ -352,6 +352,8 @@ export function aiOps() {
         };
         const inspectionDays = [...new Set([...inspectionBy.link, ...inspectionBy.visit])];
         const inspectionUploadDays = [...new Set(shots.map((r) => r.got))];
+        // 2.426: дни съёмки — как в акте осмотра (время фото — по часам телефона, иначе — когда получено).
+        const inspectionActDays = [...new Set(shots.map((r) => r.day))];
         // 2.154: день подписи эксперта по каждому файлу (по Москве); не подписан — сверка с сегодняшним днём.
         const signs = names.includes('report_dates') && files.length
           ? await sql`select document_id, to_char(signed_at at time zone 'Europe/Moscow', 'YYYY-MM-DD') as day from document_signatures
@@ -373,7 +375,7 @@ export function aiOps() {
         const [issued] = names.includes('report_number') && order.executor_user_id
           ? await sql`select report_number as number, to_char(report_number_on, 'YYYY-MM-DD') as on from orders
                       where id = ${order.id} and report_number is not null and report_number_by = ${order.executor_user_id}` : [];
-        const auto = runAutoChecks(names, files, { fields: order.fields ?? {}, dossier, basis, service: order.service, analogs, inspectionDays, inspectionUploadDays, inspectionBy, signedOn, assignment, egrn, customer: owner?.full_name ?? null, today: dossier.today, usedNumbers: used, issuedNumber: issued ?? null });
+        const auto = runAutoChecks(names, files, { fields: order.fields ?? {}, dossier, basis, service: order.service, analogs, inspectionDays, inspectionUploadDays, inspectionActDays, inspectionBy, signedOn, assignment, egrn, customer: owner?.full_name ?? null, today: dossier.today, usedNumbers: used, issuedNumber: issued ?? null });
         const found = Object.fromEntries(rules.map((r) => [r.id, (r.auto ?? []).flatMap((a) => auto[a] ?? [])]));
         // Модель недоступна или лимит исчерпан, но автоматические находки есть — показываем их, а не ошибку.
         let out;

@@ -592,7 +592,7 @@ test('2.88: ИИ-проверка сверяет дату осмотра в от
   const r = await spec.req('POST', `/api/orders/${o.id}/review/ai`);
   assert.equal(r.status, 201, JSON.stringify(r.body));
   const found = r.body.ai.items.find((i) => i.id === 'requisites').found ?? [];
-  assert.deepEqual(found.map((f) => f.text), [`Дата осмотра в отчёте — 01.02.2026, а фото осмотра в деле сделаны ${today.split('-').reverse().join('.')} — проверьте дату осмотра`]);
+  assert.deepEqual(found.map((f) => f.text), [`Дата осмотра в отчёте — 01.02.2026, а фото осмотра в деле сделаны ${today.split('-').reverse().join('.')}, так и в акте осмотра — проверьте дату осмотра`]);
 });
 
 test('2.146: день осмотра — по часам телефона и по дню получения; «без осмотра» при фото в деле — находка', async () => {
@@ -604,7 +604,9 @@ test('2.146: день осмотра — по часам телефона и п�
   const ru = (d) => d.split('-').reverse().join('.');
   const today = todayMsk();
   const shotDay = new Date(shotAt.getTime() + 3 * 3600_000).toISOString().slice(0, 10);
+  // Прежний файл результата удаляется: ИИ сверяет даты по одному отчёту в деле.
   const check = async (text) => {
+    await S.sql`update documents set deleted_at = now() where order_id = ${o.id} and kind = 'result' and deleted_at is null`;
     assert.equal((await spec.req('POST', `/api/orders/${o.id}/results`, Buffer.from(text), {
       raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('отчёт.txt') },
     })).status, 201);
@@ -613,7 +615,9 @@ test('2.146: день осмотра — по часам телефона и п�
     return (r.body.ai.items.find((i) => i.id === 'requisites').found ?? []).map((f) => f.text);
   };
   assert.deepEqual(await check(`Отчёт об оценке\nДата осмотра: ${ru(shotDay)}\nДата составления отчёта: ${ru(today)}`), [], 'день съёмки');
-  assert.deepEqual(await check(`Отчёт об оценке\nДата осмотра: ${ru(today)}\nДата составления отчёта: ${ru(today)}`), [], 'день получения');
+  // 2.426: день получения — не находка «не тот день», но в акте осмотра — день съёмки: поставить дату, как в акте.
+  assert.deepEqual(await check(`Отчёт об оценке\nДата осмотра: ${ru(today)}\nДата составления отчёта: ${ru(today)}`),
+    shotDay === today ? [] : [`Дата осмотра в отчёте — ${ru(today)}: в этот день фото осмотра дошли до платформы, а сняты они ${ru(shotDay)} — так и в акте осмотра, который прикладывается к отчёту; поставьте дату осмотра, как в акте`], 'день получения');
   assert.deepEqual(await check(`Отчёт об оценке\nОценка проведена без осмотра.\nДата составления отчёта: ${ru(today)}`),
     [`В отчёте сказано «без осмотра», а в деле есть фото осмотра от ${ru(shotDay)} — проверьте, был ли осмотр`]);
 });
@@ -638,7 +642,7 @@ test('2.373: дата осмотра в отчёте сверяется и с в
   const { token } = await issue(a, { days: 1 });
   assert.equal((await shoot(token, 'facade', { headers: GEO })).status, 201);
   const [f1] = await check(a, `Отчёт об оценке\nДата осмотра: 01.02.2026\nДата составления отчёта: ${ru(today)}`);
-  assert.equal(f1.text, `Дата осмотра в отчёте — 01.02.2026, а фото осмотра в деле сделаны ${ru(today)} — проверьте дату осмотра`);
+  assert.equal(f1.text, `Дата осмотра в отчёте — 01.02.2026, а фото осмотра в деле сделаны ${ru(today)}, так и в акте осмотра — проверьте дату осмотра`);
   assert.deepEqual(f1.shot, { bad: '01.02.2026', right: ru(today) });
   const [f2] = await check(a, `Отчёт об оценке\nДата осмотра объекта оценки — 1 февраля 2026 г.\nДата составления отчёта: ${ru(today)}`);
   assert.deepEqual(f2.shot, { bad: '1 февраля 2026', right: ru(today) });
@@ -656,7 +660,7 @@ test('2.373: дата осмотра в отчёте сверяется и с в
   const { token: t2 } = await issue(b, { days: 1 });
   assert.equal((await shoot(t2, 'facade', { headers: GEO })).status, 201);
   const [f4] = await check(b, `Отчёт об оценке\nДата осмотра: 01.02.2026\nДата составления отчёта: ${ru(today)}`);
-  assert.equal(f4.text, `Дата осмотра в отчёте — 01.02.2026, а в деле осмотр: фото по ссылке владельца — ${ru(today)}; выезд помощника на объект — ${ru(visitDay)} — проверьте дату осмотра`);
+  assert.equal(f4.text, `Дата осмотра в отчёте — 01.02.2026, а в деле осмотр: фото по ссылке владельца — ${ru(today)}; выезд помощника на объект — ${ru(visitDay)}; в акте осмотра — фото ${ru(today)} — проверьте дату осмотра`);
   assert.equal(f4.shot, undefined);
   const [f5] = await check(b, `Отчёт об оценке\nОценка проведена без осмотра.\nДата составления отчёта: ${ru(today)}`);
   assert.match(f5.text, /^В отчёте сказано «без осмотра», а в деле осмотр: фото по ссылке владельца/);

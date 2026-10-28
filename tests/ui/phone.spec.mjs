@@ -17401,6 +17401,59 @@ test('2.373: дата осмотра в отчёте не та, что у вые
   await sctx.close();
 });
 
+// 2.426: фото осмотра сняты вечером, а дошли до платформы на следующий день; в отчёте — день получения. В акте осмотра,
+// который прикладывается к отчёту, — день съёмки: находка и «Заменить на дату осмотра из дела».
+test('2.426: дата осмотра в отчёте — как в акте осмотра (день съёмки, а не день получения)', async ({ page, browser, baseURL }) => {
+  test.setTimeout(120_000);
+  await signIn(page, '+79990042601');
+  const created = await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира: дата как в акте' }, headers: H })).json();
+  const id = created.order.id;
+  expect((await page.request.patch(`/api/orders/${id}`, {
+    data: { deadline: inDays(9), fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 426' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await page.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  const sctx = await phoneContext(browser, baseURL);
+  const sp = await sctx.newPage();
+  const spec = await signIn(sp, '+79990042602');
+  await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [spec.id]);
+    await c.query('update orders set price_kop = 1500000, paid_at = now(), status = $2, executor_user_id = $3 where id = $1', [id, 'in_work', spec.id]);
+    await c.query("insert into payments (order_id, amount_kop, status, provider_id, created_by, paid_at) values ($1, 1500000, 'succeeded', $2, $3, now())", [id, `pay_ui_${id}`, spec.id]);
+  });
+  // Владелец снял фасад по ссылке; телефон снял вчера в 21:30 (МСК), платформа получила сегодня.
+  const issued = await sp.request.post(`/api/orders/${id}/inspection`, { data: { days: 3 }, headers: H });
+  expect(issued.status()).toBe(201);
+  const token = (await issued.json()).path.split('#')[1];
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]), Buffer.from('JFIF-2426')]);
+  expect((await page.request.post('/api/inspect/photos', { data: jpeg, headers: { ...H, 'x-inspect-token': token, 'content-type': 'image/jpeg', 'x-step': 'facade' } })).status()).toBe(201);
+  const shotDay = inDays(-1);
+  await db((c) => c.query(`update inspection_photos p set shot_at = ($2::date + time '21:30') at time zone 'Europe/Moscow'
+    from documents d where d.id = p.document_id and d.order_id = $1`, [id, shotDay]));
+  const ru = (d) => d.split('-').reverse().join('.');
+  const today = ru(inDays(0));
+  expect((await sp.request.post(`/api/orders/${id}/results`, {
+    data: makePdf([['Отчёт № 426/2026 об оценке квартиры', `Дата осмотра объекта оценки: ${today}`, `Дата составления отчёта: ${today}`]]),
+    headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('отчёт.pdf') },
+  })).status()).toBe(201);
+
+  await sp.goto(`/kabinet#order=${id}`);
+  await sp.getByRole('button', { name: 'Подготовить черновик с помощью ИИ' }).click();
+  await expect(sp.locator('#draft-msg')).toHaveText('Черновик готов — проверьте и поправьте');
+  const draftText = sp.getByLabel('Текст заключения');
+  await draftText.fill(`${await draftText.inputValue()}\nДата осмотра объекта оценки: ${today}.`);
+  await sp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  const find = sp.locator('#review-checks .ai-found li').filter({ hasText: 'Дата осмотра в отчёте' });
+  await expect(find).toContainText(`Дата осмотра в отчёте — ${today}: в этот день фото осмотра дошли до платформы, а сняты они ${ru(shotDay)} — так и в акте осмотра, который прикладывается к отчёту; поставьте дату осмотра, как в акте`);
+  expect(await sp.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await find.scrollIntoViewIfNeeded();
+  await shot(sp, 'i18-specialist-data-osmotra-kak-v-akte');
+  await find.getByRole('button', { name: 'Заменить на дату осмотра из дела' }).click();
+  await expect(find.locator('[data-role="shot-swap-what"]')).toHaveText(`Было «${today}» — стало «${ru(shotDay)}», как у осмотра в деле. Черновик сохранён; соберите Word заново.`);
+  await expect(draftText).toHaveValue(new RegExp(`Дата осмотра объекта оценки: ${ru(shotDay).replace(/\./g, '\\.')}\\.`));
+  await sctx.close();
+});
 // 2.374: у руководителя в «Сегодня» дела, которые ждут подписи организации 2 дня и дольше, — отдельной строкой (в общей
 // «Ждут подписи организации» не повторяются); из утренней сводки — сразу к подписи организации с отбором «Ждут Вашей
 // подписи 2 дня и дольше».

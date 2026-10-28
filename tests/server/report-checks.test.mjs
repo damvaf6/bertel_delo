@@ -222,6 +222,31 @@ test('дата осмотра (2.146): разные даты в отчёте, д
   assert.deepEqual(runAutoChecks(['report_dates'], [doc(none)], {}).report_dates, [], 'без фото в деле — «без осмотра» не находка');
 });
 
+// 2.426: дата осмотра в отчёте — одна с актом осмотра (дни съёмки фото): день получения фото — находка с заменой на день
+// из акта; чужая дата — прежняя находка с «так и в акте осмотра»; без акта (нет дней съёмки) — как раньше.
+test('дата осмотра (2.426): в отчёте и в акте осмотра — одна', () => {
+  const one = [...FULL, 'Дата осмотра: 14.09.2026.'];
+  const got = { inspectionDays: ['2026-09-13'], inspectionUploadDays: ['2026-09-14'], inspectionBy: { link: ['2026-09-13'], visit: [] } };
+  const [f] = runAutoChecks(['report_dates'], [doc(one)], { ...got, inspectionActDays: ['2026-09-13'] }).report_dates;
+  assert.equal(f.text, 'Дата осмотра в отчёте — 14.09.2026: в этот день фото осмотра дошли до платформы, а сняты они 13.09.2026 — так и в акте осмотра, который прикладывается к отчёту; поставьте дату осмотра, как в акте');
+  assert.deepEqual(f.shot, { bad: '14.09.2026', right: '13.09.2026' });
+  assert.equal(f.where, `стр. ${FULL.length + 1}`);
+  assert.deepEqual(runAutoChecks(['report_dates'], [doc(one)], got).report_dates, [], 'без акта — день получения, как раньше');
+  // Сняты в два дня — находка без замены (какой день верный, решает эксперт).
+  const two = runAutoChecks(['report_dates'], [doc(one)], { ...got, inspectionDays: ['2026-09-12', '2026-09-13'], inspectionActDays: ['2026-09-12', '2026-09-13'] }).report_dates;
+  assert.match(two[0].text, /сняты они 12\.09\.2026, 13\.09\.2026 — так и в акте осмотра/);
+  assert.equal(two[0].shot, undefined);
+  // В тот день был выезд помощника — день осмотра, находки нет.
+  assert.deepEqual(runAutoChecks(['report_dates'], [doc(one)], { ...got, inspectionDays: ['2026-09-13', '2026-09-14'], inspectionBy: { link: ['2026-09-13'], visit: ['2026-09-14'] }, inspectionActDays: ['2026-09-13'] }).report_dates, []);
+  // День съёмки — находки нет; чужой день — «так и в акте осмотра»; с выездом — дни акта отдельно.
+  assert.deepEqual(runAutoChecks(['report_dates'], [doc([...FULL, 'Дата осмотра: 13.09.2026.'])], { ...got, inspectionActDays: ['2026-09-13'] }).report_dates, []);
+  const other = [...FULL, 'Дата осмотра: 02.08.2026.'];
+  assert.equal(runAutoChecks(['report_dates'], [doc(other)], { ...got, inspectionActDays: ['2026-09-13'] }).report_dates[0].text,
+    'Дата осмотра в отчёте — 02.08.2026, а фото осмотра в деле сделаны 13.09.2026, так и в акте осмотра — проверьте дату осмотра');
+  assert.equal(runAutoChecks(['report_dates'], [doc(other)], { ...got, inspectionDays: ['2026-09-13', '2026-09-15'], inspectionBy: { link: ['2026-09-13'], visit: ['2026-09-15'] }, inspectionActDays: ['2026-09-13'] }).report_dates[0].text,
+    'Дата осмотра в отчёте — 02.08.2026, а в деле осмотр: фото по ссылке владельца — 13.09.2026; выезд помощника на объект — 15.09.2026; в акте осмотра — фото 13.09.2026 — проверьте дату осмотра');
+});
+
 // 2.298: дата составления отчёта не раньше даты самого задания на оценку (письма заказчика, определения суда) из дела.
 test('2.298: дата составления отчёта не раньше даты задания на оценку', () => {
   const run = (...assignment) => runAutoChecks(['report_dates'], [doc(FULL)], { assignment }).report_dates;
