@@ -17288,7 +17288,7 @@ test('2.371: праздник в «Моих сроках» и нагрузке �
   const ep = await ctx(), hp = await ctx(), cp = await ctx();
   const customer = await signIn(cp, '+79990003711'), expert = await signIn(ep, '+79990003712'), head = await signIn(hp, '+79990003713');
   // Свободный «праздник» — день, у которого соседи рабочие: рядом с настоящим праздником экран склеивает их в один ряд.
-  const freeAt = [5, 6, 7, 8, 9, 10, 11].find((n) => !offDayName(inDays(n - 1)) && !offDayName(inDays(n)) && !offDayName(inDays(n + 1)));
+  const freeAt = [5, 6, 7, 8, 9, 10, 11, 12].find((n) => !offDayName(inDays(n - 1)) && !offDayName(inDays(n)) && !offDayName(inDays(n + 1))) ?? 5;
   const due = inDays(3), before = inDays(2), empty = inDays(freeAt);
   const { orgId } = await db(async (c) => {
     const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Праздник в сроках ${Date.now() % 100000}»') returning id`);
