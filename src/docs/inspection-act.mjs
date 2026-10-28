@@ -64,14 +64,15 @@ export async function inspectionActData(sql, registry, order, actor, reshotOf = 
   const acks = owned.filter((l) => l.acked_at).map((l) => `${timeMsk(l.acked_at)} (без подписи${l.ack_photos != null && l.ack_photos !== photos.length ? `; в акте тогда было фото ${l.ack_photos}` : ''})`);
   const reshot = await reshotOf(photos);
   const reshotNo = new Set(Object.values(reshot).map((r) => r.after.no));
-  const from = Math.min(...times);
-  const to = Math.max(...times);
+  // Время в акте — до минуты: фото одной минуты — одно время, а не «с 22:00 по 22:00» (прогон 2.430).
+  const from = timeMsk(Math.min(...times));
+  const to = timeMsk(Math.max(...times));
   return {
     title: actTitle(def),
     ref: orderRef(order.id),
     service: def?.service.name ?? order.title,
     address: addr && order.fields?.[addr.id] ? { label: addr.label, v: String(order.fields[addr.id]) } : null,
-    period: from === to ? timeMsk(from) : `с ${timeMsk(from)} по ${timeMsk(to)}`,
+    period: from === to ? from : `с ${from} по ${to}`,
     executor: executor?.full_name || null,
     ways,
     ack: owned.length ? (acks.join('; ') || 'отметки нет') : null,
