@@ -895,26 +895,27 @@ test('перечень использованных документов (2.95):
   assert.ok(block.includes(`Документы, представленные заказчиком:\n1. Документ — файл «фасад.jpg», получен ${day}`), block);
   assert.ok(block.includes('3. Документ — файл «Сведения.docx»'), block);
   assert.ok(block.includes('Документы эксперта:\n4. Членство в СРО: СРО «Тестовые оценщики», номер в реестре 7777'), block);
-  assert.ok(block.includes('Материалы осмотра:\n5. Фотоматериалы осмотра — 2 снимка, получены платформой «БЕРТЕЛ Дело» 05.10.2026'), block);
-  assert.ok(block.includes('Объявления-аналоги:\n6. Аналог 1 — avito.ru: https://www.avito.ru/moskva/kvartiry/1, скриншот получен 01.10.2026, 12:30 (МСК)'), block);
-  assert.ok(block.includes('7. Аналог 2 — cian.ru: https://cian.ru/sale/2, скриншот не приложен'), block);
+  // Акт осмотра (2.424) — перед фото: он приложением к отчёту.
+  assert.ok(block.includes('Материалы осмотра:\n5. Акт осмотра объекта — составлен платформой «БЕРТЕЛ Дело» по фото осмотра (приложение к отчёту)\n6. Фотоматериалы осмотра — 2 снимка, получены платформой «БЕРТЕЛ Дело» 05.10.2026'), block);
+  assert.ok(block.includes('Объявления-аналоги:\n7. Аналог 1 — avito.ru: https://www.avito.ru/moskva/kvartiry/1, скриншот получен 01.10.2026, 12:30 (МСК)'), block);
+  assert.ok(block.includes('8. Аналог 2 — cian.ru: https://cian.ru/sale/2, скриншот не приложен'), block);
   assert.ok(!block.includes('neutverzhdyon'), 'неподтверждённый аналог — не в перечне');
   assert.equal(d.body.split('Перечень использованных документов').length, 2, 'перечень — один раз');
 
   // Эксперт правит перечень и текст раздела; потом заказчик присылает документ, аналог убран — «Обновить перечень».
-  const edited = d.body.replace('7. Аналог 2', '7. Аналог второй').replace(/(## 15\. Литература и приложения\n)/, '$1Мой абзац о литературе.\n');
+  const edited = d.body.replace('8. Аналог 2', '8. Аналог второй').replace(/(## 15\. Литература и приложения\n)/, '$1Мой абзац о литературе.\n');
   const saved = (await spec.req('PUT', `/api/orders/${o.id}/draft`, { body: edited, from: d.id })).body.draft;
   assert.equal((await put(owner, o, Buffer.from('%PDF-1.4 егрн'), 'ЕГРН.pdf', 'application/pdf')).status, 201);
   await S.sql`update order_analogs set deleted_at = now() where id = ${a1.id}`;
   assert.equal((await spec.req('POST', `/api/orders/${o.id}/draft/sources`, { from: d.id })).status, 409, 'уже изменился');
   const r = await spec.req('POST', `/api/orders/${o.id}/draft/sources`, { from: saved.id });
   assert.equal(r.status, 200, JSON.stringify(r.body));
-  assert.equal(r.body.items, 7);
+  assert.equal(r.body.items, 8);
   const b = r.body.draft.body;
   assert.equal(r.body.draft.versions, saved.versions + 1);
   assert.match(b, /Мой абзац о литературе\./, 'текст эксперта вне перечня не тронут');
   assert.match(b, /4\. Документ — файл «ЕГРН\.pdf»/);
-  assert.match(b, /7\. Аналог 1 — cian\.ru: https:\/\/cian\.ru\/sale\/2/);
+  assert.match(b, /8\. Аналог 1 — cian\.ru: https:\/\/cian\.ru\/sale\/2/);
   assert.ok(!b.includes('avito.ru'), 'убранный аналог ушёл из перечня');
   assert.ok(!b.includes('Аналог второй'), 'перечень собран заново');
   assert.equal(b.split('Перечень использованных документов').length, 2);

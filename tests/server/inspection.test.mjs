@@ -1145,3 +1145,37 @@ test('2.423: владелец после «Готово» видит акт и �
   // Чужой или неверный секрет — «не найдено».
   assert.equal((await ack('x'.repeat(43))).status, 404);
 });
+
+test('2.424: акт осмотра — в перечне использованных документов черновика и приложением в Word отчёта', async () => {
+  const { extractPages } = await import('../../src/ai/extract.mjs');
+  const o = await inWork('Осмотр — акт в отчёте');
+  const l = await issue(o);
+  assert.equal((await shoot(l.token, 'facade', { headers: GEO })).status, 201);
+  assert.equal((await finish(l.token)).status, 200);
+  assert.equal((await anon().req('POST', '/api/inspect/ack', {}, { headers: { 'x-inspect-token': l.token } })).status, 200);
+  const r = await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {});
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  const day = todayMsk().split('-').reverse().join('.');
+  const block = r.body.draft.body.split('Материалы осмотра:\n')[1];
+  assert.ok(block, r.body.draft.body);
+  const [actLine, photosLine] = block.split('\n');
+  assert.match(actLine, new RegExp(`^\\d+\\. Акт осмотра объекта — составлен платформой «БЕРТЕЛ Дело» по фото осмотра, владелец ознакомлен ${day.replace(/\./g, '\\.')} \\(приложение к отчёту\\)$`));
+  assert.match(photosLine, /^\d+\. Фотоматериалы осмотра — 1 снимок/);
+  // Word: приложение «Акт осмотра объекта» перед фотоматериалами — шаги с номером фото, отметка владельца, подпись эксперта.
+  const w = await fetch(`${S.base}/api/orders/${o.id}/draft/docx`, { headers: { cookie: spec.cookie } });
+  assert.equal(w.status, 200);
+  const text = (await extractPages(Buffer.from(await w.arrayBuffer()), 'r.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')).pages.join('\n');
+  const at = text.lastIndexOf('Приложение. Акт осмотра объекта');
+  assert.ok(at > 0, 'приложение с актом');
+  assert.ok(at < text.lastIndexOf('Приложение. Фотоматериалы осмотра'), 'акт — перед фотоматериалами');
+  const part = text.slice(at, text.lastIndexOf('Приложение. Фотоматериалы осмотра'));
+  for (const s of ['Шаги осмотра', 'Фото 1', '55.75120', 'Владелец ознакомлен с актом (МСК)', 'без подписи', 'Эксперт ____']) assert.ok(part.includes(s), s);
+  assert.ok(!part.includes('Акт осмотра объекта · дело'), 'заголовок файла акта — не повторяется в приложении');
+  // Без фото осмотра — ни строки в перечне, ни приложения.
+  const o2 = await inWork('Осмотр — без фото');
+  const r2 = await spec.req('POST', `/api/orders/${o2.id}/draft/ai`, {});
+  assert.ok(!r2.body.draft.body.includes('Акт осмотра'));
+  const w2 = await fetch(`${S.base}/api/orders/${o2.id}/draft/docx`, { headers: { cookie: spec.cookie } });
+  const t2 = (await extractPages(Buffer.from(await w2.arrayBuffer()), 'r.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')).pages.join('\n');
+  assert.ok(!t2.includes('Приложение. Акт осмотра'));
+});

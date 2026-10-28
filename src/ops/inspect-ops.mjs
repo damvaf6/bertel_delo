@@ -41,6 +41,10 @@ export async function openRetakes(sql, orderId) {
   return Object.fromEntries(rows.map((r) => [r.step, { id: String(r.id), note: r.note, requested_at: r.requested_at }]));
 }
 
+// Сведения акта осмотра дела (2.421) — для файла акта и приложения к отчёту Word (2.424); null — фото осмотра нет.
+export const orderAct = (sql, registry, order, actor) => inspectionActData(sql, registry, order, actor,
+  async (photos) => reshotSteps(sql, order.id, photos, await openRetakes(sql, order.id)));
+
 // Текст СМС владельцу: без имён, адреса и номера заявки — только ссылка.
 export const smsInspectText = (url, retakes) => (retakes
   ? `БЕРТЕЛ Дело: эксперт просит переснять фото объекта. Ссылка: ${url}`
@@ -379,8 +383,7 @@ export function inspectOps() {
       id: 'inspection.act', method: 'GET', path: '/api/orders/:id/inspection/act', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
       async handler({ sql, actor, order, registry, providers, res }) {
-        const data = await inspectionActData(sql, registry, order, actor,
-          async (photos) => reshotSteps(sql, order.id, photos, await openRetakes(sql, order.id)));
+        const data = await orderAct(sql, registry, order, actor);
         if (!data) throw new HttpError(409, 'no_photos', 'В деле пока нет фото осмотра — акт составить не из чего');
         await audit(sql, actor, 'inspection.act', 'order', order.id, { photos: data.total });
         return sendFile(res, providers, { ...inspectionActDoc(data), mime: DOCX_MIME });
