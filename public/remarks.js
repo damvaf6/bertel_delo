@@ -29,7 +29,7 @@ export function renderRemarks(current, { action, upload, download, reload }) {
 
 // ——— Замечания пунктами (2.432) ———
 const RES = [['fixed', 'Исправлено в отчёте'], ['explained', 'Пояснение без правки']];
-const NOTE_LABEL = { fixed: 'Что исправлено и где в отчёте', explained: 'Пояснение', '': 'Что сделано (по желанию)' };
+const NOTE_LABEL = { fixed: 'Что исправлено и где в отчёте', explained: 'Что пояснить банку или суду', '': 'Что сделано (по желанию)' };
 let items = null; // { orderId, can_write, list: [{ text, resolution, note, by_ai }] }
 
 async function loadItems(orderId) {

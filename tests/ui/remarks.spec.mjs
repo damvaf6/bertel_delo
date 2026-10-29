@@ -118,8 +118,8 @@ test('2.432: замечания пунктами — ИИ разбирает, э
   await expect(box).toContainText('ИИ разделит замечания');
   await box.getByRole('button', { name: 'Разобрать на пункты' }).click();
   await expect(sp.locator('#remarks-items-msg')).toContainText('Пунктов: 2. Это предложение ИИ');
-  await expect(sp.getByLabel('Пункт 1 (разобрал ИИ — проверьте)')).toHaveValue('Обоснуйте выбор аналогов');
-  await expect(sp.getByLabel('Пункт 2 (разобрал ИИ — проверьте)')).toHaveValue('Скидка на торг без источника');
+  await expect(sp.getByLabel('Пункт 1 (разобрал ИИ — проверьте)', { exact: true })).toHaveValue('Обоснуйте выбор аналогов');
+  await expect(sp.getByLabel('Пункт 2 (разобрал ИИ — проверьте)', { exact: true })).toHaveValue('Скидка на торг без источника');
   await expect(box.getByRole('button', { name: 'Разобрать заново' })).toBeVisible();
 
   // Отметки и пояснения; свой пункт; пустой — нельзя сохранить.
@@ -127,12 +127,12 @@ test('2.432: замечания пунктами — ИИ разбирает, э
   await items.nth(0).getByLabel('Исправлено в отчёте').check();
   await items.nth(0).getByLabel('Что исправлено и где в отчёте').fill('Аналог 3 заменён, раздел 8.2');
   await items.nth(1).getByLabel('Пояснение без правки').check();
-  await items.nth(1).getByLabel('Пояснение').fill('Скидка — по справочнику, ссылка в разделе 9');
+  await items.nth(1).getByLabel('Что пояснить банку или суду').fill('Скидка — по справочнику, ссылка в разделе 9');
   await box.getByRole('button', { name: 'Добавить пункт' }).click();
-  await expect(sp.getByLabel('Пункт 3')).toBeFocused();
+  await expect(sp.getByLabel('Пункт 3', { exact: true })).toBeFocused();
   await box.getByRole('button', { name: 'Сохранить пункты' }).click();
   await expect(sp.locator('#remarks-items-msg')).toHaveText('Пункт 3: впишите текст или удалите пункт');
-  await sp.getByLabel('Пункт 3').fill('Проверить дату оценки на титуле');
+  await sp.getByLabel('Пункт 3', { exact: true }).fill('Проверить дату оценки на титуле');
   await expect(sp.locator('#remarks-items-lead')).toHaveText('Пунктов: 3 · без отметки: 1');
   await box.getByRole('button', { name: 'Сохранить пункты' }).click();
   await expect(sp.locator('#remarks-items-msg')).toHaveText('Сохранено · без отметки: 1');
@@ -141,7 +141,7 @@ test('2.432: замечания пунктами — ИИ разбирает, э
 
   // После перезагрузки — то же; удалил пункт — сохранилось.
   await sp.reload();
-  await expect(sp.getByLabel('Пункт 3')).toHaveValue('Проверить дату оценки на титуле');
+  await expect(sp.getByLabel('Пункт 3', { exact: true })).toHaveValue('Проверить дату оценки на титуле');
   await expect(items.nth(0).getByLabel('Исправлено в отчёте')).toBeChecked();
   await items.nth(2).getByRole('button', { name: 'Удалить пункт' }).click();
   await box.getByRole('button', { name: 'Сохранить пункты' }).click();
