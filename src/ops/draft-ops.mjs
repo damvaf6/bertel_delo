@@ -128,7 +128,7 @@ async function numberView(sql, actor, order) {
                           where id = ${order.id} and report_number_by = ${actor.id}`;
   // Замечания к сданному отчёту (2.434): Word соберётся новой редакцией того же отчёта.
   const edition = await reportEdition(sql, order);
-  return { number: o?.report_number ?? null, on: o?.report_number ? o.on : null, pattern: src.pattern, org: src.org?.name ?? null, can_set: editsDraft(actor, order), edition };
+  return { number: o?.report_number ?? null, on: o?.report_number ? o.on : null, pattern: src.pattern, org: src.org?.name ?? null, can_set: editsDraft(actor, order), ...(edition ? { edition } : {}) };
 }
 
 // Ручной номер (2.413): занят другим делом эксперта этого года — выданным платформой или в файле отчёта — нельзя; при счёте
