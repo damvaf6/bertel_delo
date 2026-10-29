@@ -325,6 +325,8 @@ test('2.436: руководитель — отбор «Замечания к с�
   const expert = await signIn(sp, '+79990004325');
   const customer = await db(async (c) => (await c.query("insert into users (phone) values ('+79990004326') returning id")).rows[0]);
   const due = workdaysAfter(todayMsk(), 1);
+  // Замечания пришли час назад: в первый час после полуночи по Москве это вчерашний день.
+  const came = todayMsk(new Date(Date.now() - 3600e3));
   const { orgId, id } = await db(async (c) => {
     await c.query("update users set full_name = 'Руководителева Анна' where id = $1", [head.id]);
     await c.query("update users set full_name = 'Редакциев Пётр' where id = $1", [expert.id]);
@@ -358,14 +360,14 @@ test('2.436: руководитель — отбор «Замечания к с�
   await expect(chip).toHaveText('Замечания к сданному отчёту · 1');
   await chip.click();
   const line = hp.locator('#org-cases > li').first().locator('[data-role="remarks"]');
-  await expect(line).toHaveText(new RegExp(`^Замечания к отчёту от ${dayRu(todayMsk())}( \\d{4} г\\.)? · ответить до ${dayRu(due)}( \\d{4} г\\.)? · пунктов 2, без отметки 1$`));
+  await expect(line).toHaveText(new RegExp(`^Замечания к отчёту от ${dayRu(came)}( \\d{4} г\\.)? · ответить до ${dayRu(due)}( \\d{4} г\\.)? · пунктов 2, без отметки 1$`));
   await expect(line).toHaveClass(/overdue/);
   await hp.locator('#org-cases-list-title').scrollIntoViewIfNeeded();
   await shot(hp, 'rm10-2436-rukovoditel-zamechaniya');
 
   // Подпись организации: «Новая редакция отчёта № …», прежняя — с пометкой и без кнопок подписи.
   const item = hp.locator('#org-sign li[data-item]').first();
-  await expect(item.locator('[data-sig="edition"]')).toHaveText(`Новая редакция отчёта № 17/2026 — после замечаний от ${todayMsk().split('-').reverse().join('.')} · ответить до ${due.split('-').reverse().join('.')}`);
+  await expect(item.locator('[data-sig="edition"]')).toHaveText(`Новая редакция отчёта № 17/2026 — после замечаний от ${came.split('-').reverse().join('.')} · ответить до ${due.split('-').reverse().join('.')}`);
   const prior = item.locator(`li[data-doc="${first.id}"]`);
   await expect(prior.locator('[data-role="prior-edition"]')).toContainText('Прежняя редакция — сдана до замечаний');
   await expect(prior.locator('[data-action="org-sign"]')).toHaveCount(0);
