@@ -5,6 +5,8 @@
 // у каждого отмечает «исправлено в отчёте» или «пояснение без правки»; заказчик и диспетчер видят пункты без правки.
 // 2.433: у пункта — «Где в отчёте»; все отмечены — «Ответ на замечания» Word: скачать (все стороны) и «Приложить к
 // исправленному отчёту» (исполнитель, файлом результата; несохранённые правки сначала сохраняются).
+// 2.435: исполнителю и диспетчеру — у пункта «исправлено в отчёте» проверка по черновику: изменился ли раздел с прихода
+// замечаний; итог — строкой под заголовком. Проверка — по сохранённым пунктам.
 import { api, el, say } from '/common.js';
 
 const $ = (id) => document.getElementById(id);
@@ -32,14 +34,15 @@ export function renderRemarks(current, { action, upload, download, reload }) {
 // ——— Замечания пунктами (2.432) ———
 const RES = [['fixed', 'Исправлено в отчёте'], ['explained', 'Пояснение без правки']];
 const NOTE_LABEL = { fixed: 'Что исправлено', explained: 'Что пояснить банку или суду', '': 'Что сделано (по желанию)' };
-let items = null; // { orderId, can_write, answer, dirty, list: [{ text, resolution, note, place, by_ai }] }
-const pick = ({ text, resolution, note, place, by_ai }) => ({ text, resolution, note, place, by_ai });
+let items = null; // { orderId, can_write, answer, check, dirty, list: [{ text, resolution, note, place, by_ai, check }] }
+const pick = ({ text, resolution, note, place, by_ai, check }) => ({ text, resolution, note, place, by_ai, check });
+const abz = (n) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? 'абзац' : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? 'абзаца' : 'абзацев'}`;
 
 async function loadItems(orderId) {
   try {
     const v = await api('GET', `/api/orders/${orderId}/remarks/items`);
     if (!v.available || ctx?.order.id !== orderId) return;
-    items = { orderId, can_write: v.can_write, answer: v.answer, dirty: false, list: v.items.map(pick) };
+    items = { orderId, can_write: v.can_write, answer: v.answer, check: v.check ?? null, dirty: false, list: v.items.map(pick) };
     // Сдано и пунктов нет — блок не нужен.
     if (!v.can_write && !items.list.length) return;
     say($('remarks-items-msg'), '');
@@ -59,7 +62,34 @@ function drawItems() {
   $('remarks-parse').textContent = list.length ? 'Разобрать заново' : 'Разобрать на пункты';
   $('remarks-items-actions').classList.toggle('hidden', !w);
   $('remarks-items').replaceChildren(...list.map((it, i) => (w ? editItem(it, i) : showItem(it))));
+  drawCheck();
   drawAnswer();
+}
+
+// Проверка исправленного отчёта (2.435): итог по пунктам «исправлено в отчёте».
+function drawCheck() {
+  const box = $('remarks-check');
+  const c = items.check;
+  const fixed = items.list.filter((i) => i.check && i.resolution === 'fixed');
+  const doubt = fixed.filter((i) => i.check.state !== 'changed').length;
+  box.className = `${c?.available && !doubt ? 'muted' : 'warn-line'}${!c || (c.available && !fixed.length) ? ' hidden' : ''}`;
+  if (!c) return;
+  box.textContent = !c.available ? 'Черновика до замечаний нет — сравнить исправления не с чем.'
+    : !c.changed ? `Черновик с прихода замечаний не менялся, а исправлено отмечено у пунктов: ${fixed.length}.`
+      : `Проверка по черновику: изменения видны по ${fixed.length - doubt} из ${fixed.length} исправленных пунктов${doubt ? ` · проверьте: ${doubt}` : ''}.`;
+}
+
+// Строка проверки у пункта: только у «исправлено в отчёте» и по сохранённой отметке.
+function checkLine(it) {
+  const c = it.check;
+  if (!c || it.resolution !== 'fixed') return [];
+  if (c.state === 'changed') {
+    const what = [c.added && `добавлено ${abz(c.added)}`, c.removed && `убрано ${abz(c.removed)}`].filter(Boolean).join(', ');
+    return [el('div', { class: 'mark rm-check', text: `По черновику: раздел «${c.section}» изменён (${what})${c.by === 'text' ? ' — правка похожа на этот пункт' : ''}` })];
+  }
+  if (c.state === 'same') return [el('div', { class: 'warn-line rm-check', text: `По черновику: в разделе «${c.section}» с прихода замечаний ничего не изменилось — проверьте` })];
+  if (c.state === 'not_found') return [el('div', { class: 'warn-line rm-check', text: 'По черновику: правок по этому пункту не нашлось — проверьте или укажите раздел в «Где в отчёте»' })];
+  return [];
 }
 
 // «Ответ на замечания» (2.433): по сохранённым пунктам; без отметки хоть у одного — кнопок нет, только подсказка.
@@ -81,7 +111,8 @@ function showItem(it) {
     el('div', { text: it.text }),
     el('div', { class: it.resolution ? 'mark' : 'muted', text: it.resolution ? RES.find(([k]) => k === it.resolution)[1] : 'ещё без отметки' }),
     ...(it.note ? [el('div', { class: 'muted', text: it.note })] : []),
-    ...(it.place ? [el('div', { class: 'muted', text: `Где в отчёте: ${it.place}` })] : []));
+    ...(it.place ? [el('div', { class: 'muted', text: `Где в отчёте: ${it.place}` })] : []),
+    ...checkLine(it));
 }
 
 function editItem(it, i) {
@@ -106,6 +137,7 @@ function editItem(it, i) {
     choice,
     el('div', { class: 'field' }, noteLabel, note),
     el('div', { class: 'field' }, el('label', { for: placeId, text: 'Где в отчёте' }), place),
+    ...checkLine(it),
     el('button', { class: 'link', type: 'button', onclick: () => { items.list.splice(i, 1); items.dirty = true; drawItems(); } }, 'Удалить пункт'));
 }
 
@@ -123,6 +155,7 @@ async function parse() {
     const v = await api('POST', `/api/orders/${items.orderId}/remarks/items/parse`, { replace: items.list.length > 0 });
     items.list = v.items.map(pick);
     items.answer = v.answer;
+    items.check = v.check ?? null;
     items.dirty = false;
     drawItems();
     say(msg, `Пунктов: ${v.items.length}. Это предложение ИИ — проверьте текст каждого пункта${v.file_unread ? '; файл замечаний прочитать не удалось — пункты только по тексту заказчика' : ''}.`, 'ok');
@@ -139,6 +172,7 @@ async function save() {
     const v = await api('PUT', `/api/orders/${items.orderId}/remarks/items`, { items: items.list });
     items.list = v.items.map(pick);
     items.answer = v.answer;
+    items.check = v.check ?? null;
     items.dirty = false;
     drawItems();
     say(msg, v.left ? `Сохранено · без отметки: ${v.left}` : 'Сохранено · все пункты отмечены', 'ok');

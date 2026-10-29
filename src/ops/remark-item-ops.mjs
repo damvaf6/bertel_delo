@@ -4,11 +4,13 @@
 // замечаний: пришли замечания снова — новый список. Видят все стороны дела; пишет только исполнитель, пока дело снова у него.
 // 2.433: у пункта — где в отчёте (раздел, страница); все пункты отмечены — «Ответ на замечания» Word: скачать или приложить
 // к исправленному отчёту файлом результата (подписывается вместе с отчётом).
+// 2.435: исполнителю и диспетчеру (тем, кто видит черновик) — у каждого пункта проверка по черновику: изменился ли раздел,
+// где исправлено, с той версии, что была, когда пришли замечания (remarkChecks).
 import { HttpError } from '../http/core.mjs';
-import { orderSides } from '../access/policy.mjs';
+import { orderSides, seesDraft } from '../access/policy.mjs';
 import { askAi, parseJsonAnswer } from '../ai/ai.mjs';
 import { READ_MAX_BYTES, extractPages, readableKind } from '../ai/extract.mjs';
-import { ITEMS_MAX, ITEM_MAX, PLACE_MAX, RESOLUTIONS, SOURCE_MAX, cleanItems, remarkMessages, splitRemarks } from '../orders/remarks.mjs';
+import { ITEMS_MAX, ITEM_MAX, PLACE_MAX, RESOLUTIONS, SOURCE_MAX, cleanItems, remarkChecks, remarkMessages, splitRemarks } from '../orders/remarks.mjs';
 import { remarksAnswerData, remarksAnswerDoc } from '../docs/remarks-answer.mjs';
 import { DOCX_MIME } from '../docs/docx.mjs';
 import { publicDoc, saveDocument } from './core-ops.mjs';
@@ -27,9 +29,21 @@ async function view(sql, actor, order) {
   if (!order.remarks_at) return { available: false };
   const list = await items(sql, order);
   const answer = await answerDoc(sql, order);
+  const check = seesDraft(actor, order) ? await draftCheck(sql, order, list) : null;
+  if (check?.available) list.forEach((it, i) => { it.check = check.items[i]; });
   return { available: true, round: order.remarks_round, can_write: isExecutor(actor, order) && OPEN.includes(order.status),
            items: list, left: list.filter((i) => !i.resolution).length,
-           answer: answer ? { id: answer.id, filename: answer.filename, created_at: answer.created_at } : null };
+           answer: answer ? { id: answer.id, filename: answer.filename, created_at: answer.created_at } : null,
+           ...(check ? { check: { available: check.available, changed: check.changed ?? false, base_at: check.base_at ?? null } } : {}) };
+}
+
+// Черновик, каким он был, когда пришли замечания, против текущего. Черновика до замечаний нет — сравнить не с чем.
+async function draftCheck(sql, order, list) {
+  const base = await sql.one`select body, at from result_drafts where order_id = ${order.id} and at <= ${order.remarks_at}
+                             order by id desc limit 1`;
+  if (!base) return { available: false };
+  const cur = await sql.one`select body from result_drafts where order_id = ${order.id} order by id desc limit 1`;
+  return { available: true, base_at: base.at, ...remarkChecks(list, base.body, cur.body) };
 }
 
 // Ответ на замечания, приложенный в этом круге (после прихода замечаний) и не удалённый.

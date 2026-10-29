@@ -263,3 +263,57 @@ test('2.434: новая редакция отчёта — тот же номер
   expect(sp.problems).toEqual([]);
   await sp.context().close();
 });
+
+test('2.435: проверка исправленного отчёта по пунктам — изменился ли раздел с прихода замечаний', async ({ browser, baseURL }) => {
+  const cp = await phone(browser, baseURL);
+  const sp = await phone(browser, baseURL);
+  const customer = await signIn(cp, '+79990004322');
+  const expert = await signIn(sp, '+79990004323');
+  const before = '## 1. Задание на оценку\nОбъект — квартира\n## 8. Расчёт стоимости\n### 8.2 Сравнительный подход\nАналог 3 — ул. Дальняя\n## 9. Описание объекта\nПлощадь 52 кв. м';
+  const after = before.replace('Аналог 3 — ул. Дальняя', 'Аналог 3 — ул. Проверок, тот же район');
+  const id = await db(async (c) => {
+    await c.query("update users set full_name = 'Проверкин Пётр' where id = $1", [expert.id]);
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    const oid = (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, deadline, fields,
+        remarks_at, remarks_due, remarks_round)
+      values ($1, 'Квартира: проверка по пунктам', 'expertise', 'realty', 'in_work', $2, current_date + 5, $3, now() - interval '1 day', current_date + 3, 1) returning id`,
+    [customer.id, expert.id, { purpose: 'bank', region: 'moscow', object_type: 'flat', address: 'г. Москва, ул. Проверок, д. 5', area: '52' }])).rows[0].id;
+    await c.query(`insert into order_status_history (order_id, from_status, to_status, side, reason) values ($1, 'done', 'in_work', 'customer', $2)`,
+      [oid, 'Банк пишет:\n1. Обоснуйте выбор аналогов\n2. Уточните площадь\n3. Скидка на торг без источника']);
+    await c.query(`insert into result_drafts (order_id, author_id, source, body, at) values ($1, $2, 'edit', $3, now() - interval '2 days'),
+      ($1, $2, 'edit', $4, now())`, [oid, expert.id, before, after]);
+    await c.query(`insert into remark_items (order_id, round, pos, body, resolution, note, place, by_ai) values
+      ($1, 1, 0, 'Обоснуйте выбор аналогов', 'fixed', 'Аналог 3 заменён', 'раздел 8.2, стр. 31', true),
+      ($1, 1, 1, 'Уточните площадь', 'fixed', 'Площадь уточнена', 'раздел 9', true),
+      ($1, 1, 2, 'Скидка на торг без источника', 'explained', 'По справочнику', null, true)`, [oid]);
+    return oid;
+  });
+
+  await sp.goto(`/kabinet#order=${id}`);
+  const box = sp.locator('#remarks-items-box');
+  const items = box.locator('#remarks-items > li');
+  await expect(items.nth(0).locator('.rm-check')).toHaveText('По черновику: раздел «8.2 Сравнительный подход» изменён (добавлено 1 абзац, убрано 1 абзац)');
+  await expect(items.nth(1).locator('.rm-check')).toHaveText('По черновику: в разделе «9. Описание объекта» с прихода замечаний ничего не изменилось — проверьте');
+  await expect(items.nth(2).locator('.rm-check')).toHaveCount(0);
+  await expect(sp.locator('#remarks-check')).toHaveText('Проверка по черновику: изменения видны по 1 из 2 исправленных пунктов · проверьте: 1.');
+  await box.scrollIntoViewIfNeeded();
+  await shot(sp, 'rm09-2435-proverka-punktov');
+
+  // Эксперт исправил отметку: площадь — пояснение без правки; после сохранения сомнений нет.
+  await items.nth(1).getByLabel('Пояснение без правки').check();
+  await box.getByRole('button', { name: 'Сохранить пункты' }).click();
+  await expect(sp.locator('#remarks-items-msg')).toHaveText('Сохранено · все пункты отмечены');
+  await expect(sp.locator('#remarks-check')).toHaveText('Проверка по черновику: изменения видны по 1 из 1 исправленных пунктов.');
+  await expect(items.nth(1).locator('.rm-check')).toHaveCount(0);
+
+  // Заказчик черновика не видит — и проверки тоже.
+  await cp.goto(`/kabinet#order=${id}`);
+  const cbox = cp.locator('#remarks-items-box');
+  await expect(cbox).toContainText('Обоснуйте выбор аналогов');
+  await expect(cbox.locator('.rm-check')).toHaveCount(0);
+  await expect(cp.locator('#remarks-check')).toBeHidden();
+  expect(cp.problems).toEqual([]);
+  expect(sp.problems).toEqual([]);
+  await cp.context().close();
+  await sp.context().close();
+});

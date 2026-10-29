@@ -7,7 +7,7 @@ import { headKey } from '../dossier/dossier.mjs';
 const START = 'Начало текста';
 const LINES_MAX = 3000;   // больше строк в разделе не бывает (черновик — до 50 000 знаков); защита от лишней работы
 
-function sections(body) {
+export function sections(body) {
   const out = [];
   let cur = { key: '', title: START, lines: [] };
   for (const raw of String(body ?? '').split('\n')) {
