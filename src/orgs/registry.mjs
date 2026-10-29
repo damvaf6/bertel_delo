@@ -64,9 +64,16 @@ function objectOf(o) {
 // Новая редакция после замечаний к сданному отчёту (2.438, 2.434): файлы результата, загруженные после последних замечаний,
 // заменяют в перечне прежнюю редакцию — номер, дата составления и стоимость берутся из них; у строки — edition: когда пришли
 // замечания (remarks_on) и день новой редакции (on). Новой редакции ещё нет — перечень по прежним файлам, без edition.
+// Прогон 2.440: эксперт ещё отвечает на замечания (дело снова в работе или на проверке) — отчёт остаётся в перечне по прежней
+// редакции, файлы новой не сданы и в счёт не идут; у строки — edition.pending (когда пришли замечания и ответить до).
+export const ANSWERING = ['in_work', 'review'];
 export function editionDocs(o, docs) {
   if (!o.remarks_at) return { docs };
   const fresh = docs.filter((d) => new Date(d.created_at) >= new Date(o.remarks_at));
+  if (ANSWERING.includes(o.status)) {
+    const prior = docs.filter((d) => new Date(d.created_at) < new Date(o.remarks_at));
+    return { docs: prior, edition: { pending: true, remarks_on: dayMsk(o.remarks_at), due: o.remarks_due ?? null } };
+  }
   if (!fresh.length || fresh.length === docs.length) return { docs };
   return { docs: fresh, edition: { on: dayMsk(fresh[0].created_at), remarks_on: dayMsk(o.remarks_at), prior: docs.length - fresh.length } };
 }
@@ -176,13 +183,17 @@ async function orgHoles(sql, orgId, period, rows) {
   return numberHoles(g.report_pattern, period.year, rows, issued);
 }
 
+// Отчёт — в перечне за период первой сдачи (прогон 2.440): после замечаний дело снова в работе, потом снова «готово», но это та
+// же работа — новая редакция того же отчёта (2.434), а не новый отчёт другого периода. В работе по замечаниям — тоже в перечне
+// (условие not exists … h0 в запросах ниже).
 export async function expertRegistry(sql, storage, registry, userId, period) {
   const done = await sql`
-    select distinct on (o.id) o.id, o.title, o.module, o.service, o.fields, o.executor_user_id, o.remarks_at, h.at,
+    select distinct on (o.id) o.id, o.title, o.module, o.service, o.fields, o.status, o.executor_user_id, o.remarks_at, o.remarks_due, h.at,
       coalesce(g.name, u.full_name) as customer
     from order_status_history h join orders o on o.id = h.order_id join users u on u.id = o.owner_user_id
     left join organizations g on g.id = o.org_id
-    where o.executor_user_id = ${userId} and o.status in ('done', 'closed') and h.to_status = 'done'
+    where o.executor_user_id = ${userId} and o.status in ('done', 'closed', 'in_work', 'review') and h.to_status = 'done'
+      and not exists (select 1 from order_status_history h0 where h0.order_id = o.id and h0.to_status = 'done' and h0.at < h.at)
       and h.at >= (${period.from}::date)::timestamp at time zone 'Europe/Moscow'
       and h.at < (${period.to}::date)::timestamp at time zone 'Europe/Moscow'
     order by o.id, h.at desc`;
@@ -197,7 +208,7 @@ export async function expertRegistry(sql, storage, registry, userId, period) {
 // Сданные за период дела экспертов, работающих от организации (после вступления), — для перечня и поиска по номеру (2.417).
 async function orgDone(sql, orgId, period) {
   return sql`
-    select distinct on (o.id) o.id, o.title, o.module, o.service, o.fields, o.executor_user_id, o.executor_user_id as expert_id, o.remarks_at, h.at,
+    select distinct on (o.id) o.id, o.title, o.module, o.service, o.fields, o.status, o.executor_user_id, o.executor_user_id as expert_id, o.remarks_at, o.remarks_due, h.at,
       o.updated_at > now() - ${CASES_DAYS}::int * interval '1 day' as in_cases,
       coalesce(g.name, u.full_name) as customer, e.full_name as expert_name
     from order_status_history h join orders o on o.id = h.order_id join users u on u.id = o.owner_user_id
@@ -205,7 +216,8 @@ async function orgDone(sql, orgId, period) {
     join org_members m on m.org_id = ${orgId} and m.user_id = o.executor_user_id
     join users e on e.id = o.executor_user_id
     left join organizations g on g.id = o.org_id
-    where o.status in ('done', 'closed') and h.to_status = 'done' and h.at >= m.created_at
+    where o.status in ('done', 'closed', 'in_work', 'review') and h.to_status = 'done'
+      and not exists (select 1 from order_status_history h0 where h0.order_id = o.id and h0.to_status = 'done' and h0.at < h.at) and h.at >= m.created_at
       and h.at >= (${period.from}::date)::timestamp at time zone 'Europe/Moscow'
       and h.at < (${period.to}::date)::timestamp at time zone 'Europe/Moscow'
     order by o.id, h.at desc`;
@@ -260,7 +272,7 @@ export async function orgFindNumber(sql, storage, registry, orgId, q, today = to
     const { rows } = await registryRows(sql, storage, registry, done, period);
     for (const r of rows.filter((x) => numberMatch(q, x.number))) {
       const o = status.get(r.id);
-      found.set(r.id, { id: r.id, module: o.module, service: o.service, status: 'done', updated_at: null, in_cases: o.in_cases,
+      found.set(r.id, { id: r.id, module: o.module, service: o.service, status: o.status, updated_at: null, in_cases: o.in_cases,
         number: r.number, expert_name: r.expert_name, done_on: r.done_on });
     }
   }
@@ -282,7 +294,8 @@ export function registryCsv(name, r, { org = false } = {}) {
       'Итоговая стоимость, ₽', 'Что за стоимость', 'Сдано', 'Редакция'],
     ...r.rows.map((x, i) => [i + 1, x.number ?? '', ruDay(x.made_on), ...(org ? [x.expert_name] : []), x.object, x.service_name,
       x.purpose ?? '', x.customer ?? '', rubCell(x.value_rub), x.value_name ?? '', ruDay(x.done_on),
-      x.edition ? `новая от ${ruDay(x.edition.on)} (после замечаний от ${ruDay(x.edition.remarks_on)})` : '']),
+      x.edition?.pending ? `сданная; замечания от ${ruDay(x.edition.remarks_on)} — ответ готовится`
+        : x.edition ? `новая от ${ruDay(x.edition.on)} (после замечаний от ${ruDay(x.edition.remarks_on)})` : '']),
     ...(r.rows.some((x) => x.dup) ? [[], ['Номер отчёта повторяется — у каждого отчёта свой номер: '
       + [...new Set(r.rows.filter((x) => x.dup).map((x) => `№ ${x.number}${org ? ` (${x.expert_name})` : ''}`))].join(', ')]] : []),
     ...(r.holes?.total ? [[], [`Пропуски в нумерации (с № ${r.holes.from} по № ${r.holes.to}): `

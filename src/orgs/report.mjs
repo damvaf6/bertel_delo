@@ -146,7 +146,8 @@ async function monthBounds(sql, month) {
   return { start, end };
 }
 
-// Сданные за месяц (дело впервые перешло в «готово» в этом месяце) экспертами организации — с тех пор, как они в ней.
+// Сданные за месяц (дело впервые перешло в «готово» в этом месяце) экспертами организации — с тех пор, как они в ней. Снова
+// «готово» после замечаний к отчёту или переделки — не новое сданное дело (прогон 2.440, условие h0).
 // Та же выборка — в сводке (2.78) и в архиве заключений за месяц (2.89).
 async function orgMonthDone(sql, orgId, ids, { start, end }) {
   if (!ids.length) return [];
@@ -176,6 +177,7 @@ async function orgMonthDone(sql, orgId, ids, { start, end }) {
                             and a.details->>'org_id' = ${orgId}::text) g
       where o.executor_user_id = any(${ids}::uuid[]) and h.to_status = 'done'
         and h.at >= ${start} and h.at < ${end} and h.at >= m.created_at
+        and not exists (select 1 from order_status_history h0 where h0.order_id = o.id and h0.to_status = 'done' and h0.at < h.at)
       order by o.id, h.at`;
 }
 
@@ -731,6 +733,7 @@ export async function expertMonthReport(sql, userId, month, today = todayMsk()) 
         + (select count(*)::int from org_returns r where r.order_id = o.id and r.executor_user_id = o.executor_user_id) as returns
     from order_status_history h join orders o on o.id = h.order_id left join payouts p on p.order_id = o.id
     where o.executor_user_id = ${userId} and h.to_status = 'done' and h.at >= ${start} and h.at < ${end}
+      and not exists (select 1 from order_status_history h0 where h0.order_id = o.id and h0.to_status = 'done' and h0.at < h.at)
     order by o.id, h.at`;
   const headReturns = await sql`
     select created_at as at from org_returns where executor_user_id = ${userId} and created_at >= ${start} and created_at < ${end}`;
