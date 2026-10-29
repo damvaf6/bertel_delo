@@ -350,3 +350,65 @@ test('новая редакция отчёта (2.434): тот же номер, 
   assert.equal((await spec.req('GET', `/api/orders/${o.id}/documents`)).body.documents.find((d) => d.id === up.body.document.id).prior_edition, undefined);
   assert.equal((await spec.req('DELETE', `/api/documents/${up.body.document.id}`)).status, 204);
 });
+
+test('проверка исправленного отчёта по пунктам (2.435): раздел из «Где в отчёте» по номеру и словам, без места — по тексту пункта', async () => {
+  const { remarkChecks, placeSection } = await import('../../src/orders/remarks.mjs');
+  const before = '## 1. Задание на оценку\nОбъект — квартира\n## 8. Расчёт стоимости\n### 8.2 Сравнительный подход\nАналог 3 — ул. Дальняя\nСкидка на торг 5%\n## 9. Описание объекта\nПлощадь 44 кв. м';
+  const after = '## 1. Задание на оценку\nОбъект — квартира\n## 8. Расчёт стоимости\n### 8.2 Сравнительный подход\nАналог 3 — тестовая ул., тот же район\nСкидка на торг 5%\n## 9. Описание объекта\nПлощадь 44 кв. м';
+  const list = (titles) => titles.map((title) => ({ title, lines: [] }));
+  assert.equal(placeSection('раздел 8.2, стр. 31', list(['1. Задание', '8. Расчёт', '8.2 Сравнительный подход'])).title, '8.2 Сравнительный подход');
+  assert.equal(placeSection('п. 8.4, стр. 9', list(['1. Задание', '8. Расчёт'])).title, '8. Расчёт', 'нет 8.4 — раздел 8');
+  assert.equal(placeSection('Описание объекта, с. 7', list(['8. Расчёт', '9. Описание объекта'])).title, '9. Описание объекта');
+  assert.equal(placeSection('стр. 12', list(['1. Задание', '12. Итог'])), null, 'страница — не номер раздела');
+
+  const r = remarkChecks([
+    { text: 'Обоснуйте выбор аналогов', resolution: 'fixed', place: 'раздел 8.2, стр. 31' },
+    { text: 'Уточните площадь объекта', resolution: 'fixed', place: 'Описание объекта' },
+    { text: 'Аналог 3 из другого района', resolution: 'fixed', place: '' },
+    { text: 'Нет ссылки на справочник', resolution: 'fixed', place: '' },
+    { text: 'Скидка на торг без источника', resolution: 'explained', place: '' },
+    { text: 'Ещё пункт', resolution: null, place: '' },
+  ], before, after);
+  assert.equal(r.changed, true);
+  assert.deepEqual(r.items, [
+    { state: 'changed', section: '8.2 Сравнительный подход', added: 1, removed: 1, by: 'place' },
+    { state: 'same', section: '9. Описание объекта' },
+    { state: 'changed', section: '8.2 Сравнительный подход', added: 1, removed: 1, by: 'text' },
+    { state: 'not_found' },
+    { state: 'explained' },
+    { state: 'unmarked' },
+  ]);
+  assert.equal(remarkChecks([{ text: 'x', resolution: 'fixed', place: '' }], before, before).changed, false);
+
+  // В деле: проверка — исполнителю и диспетчеру, заказчику — нет; сравнение — с черновиком на момент замечаний.
+  const o = await doneOrder('Квартира: проверка по пунктам');
+  const base = `/api/orders/${o.id}/remarks/items`;
+  assert.equal((await step(owner, o, 'in_work', { reason: 'Банк:\n1. Обоснуйте выбор аналогов\n2. Уточните площадь' })).status, 200);
+  const items = [
+    { text: 'Обоснуйте выбор аналогов', resolution: 'fixed', place: 'раздел 8.2' },
+    { text: 'Уточните площадь', resolution: 'fixed', place: 'раздел 9' },
+  ];
+  let v = (await spec.req('PUT', base, { items })).body;
+  assert.deepEqual(v.check, { available: false, changed: false, base_at: null }, 'черновика до замечаний нет');
+  assert.equal(v.items[0].check, undefined);
+  await S.sql`insert into result_drafts (order_id, author_id, source, body, at)
+              values (${o.id}, ${spec.user.id}, 'edit', ${before}, now() - interval '2 days')`;
+  v = (await spec.req('GET', base)).body;
+  assert.equal(v.check.available, true);
+  assert.equal(v.check.changed, false);
+  assert.deepEqual(v.items.map((i) => i.check.state), ['same', 'same']);
+  const [cur] = await S.sql`select id from result_drafts where order_id = ${o.id} order by id desc limit 1`;
+  assert.equal((await spec.req('PUT', `/api/orders/${o.id}/draft`, { body: after, from: String(cur.id) })).status, 200);
+  v = (await spec.req('GET', base)).body;
+  assert.equal(v.check.changed, true);
+  assert.deepEqual(v.items.map((i) => i.check), [
+    { state: 'changed', section: '8.2 Сравнительный подход', added: 1, removed: 1, by: 'place' },
+    { state: 'same', section: '9. Описание объекта' },
+  ]);
+  const d = (await dispatcher.req('GET', base)).body;
+  assert.equal(d.items[0].check.state, 'changed', 'диспетчер видит проверку');
+  const c = (await owner.req('GET', base)).body;
+  assert.equal(c.check, undefined, 'заказчик черновика не видит — и проверки тоже');
+  assert.equal(c.items[0].check, undefined);
+  assert.equal((await other.req('GET', base)).status, 404);
+});
