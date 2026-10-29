@@ -40,7 +40,7 @@ async function doneOrder(title, ex = spec, head = null) {
   assert.equal((await step(ex, o, 'in_work')).status, 200);
   assert.equal((await upload(ex, o, 'results', 'Отчёт.pdf')).status, 201);
   await signResults(S, ex, o.id);
-  if (head) await signOrg(o);
+  if (head) await signOrg(o, head);
   assert.equal((await step(ex, o, 'review')).status, 200);
   const rv = (await dispatcher.req('GET', `/api/orders/${o.id}/review`)).body;
   for (const c of rv.checks) await dispatcher.req('PUT', `/api/orders/${o.id}/review/${c.id}`, { verdict: 'ok', round: rv.round });
@@ -415,11 +415,11 @@ test('проверка исправленного отчёта по пункта
 });
 
 // Подписи организации на всех файлах результата эксперта, подписанных им (2.436).
-async function signOrg(o) {
+async function signOrg(o, hd = head) {
   const docs = await S.sql`select d.id from documents d join document_signatures e on e.document_id = d.id and e.role = 'expert'
                            left join document_signatures g on g.document_id = d.id and g.role = 'org'
                            where d.order_id = ${o.id} and d.kind = 'result' and d.deleted_at is null and g.id is null`;
-  for (const d of docs) assert.equal((await head.req('POST', `/api/org-documents/${d.id}/sign`, { confirm: true })).status, 201);
+  for (const d of docs) assert.equal((await hd.req('POST', `/api/org-documents/${d.id}/sign`, { confirm: true })).status, 201);
 }
 
 test('руководитель (2.436): отбор «Замечания к сданному отчёту» со сроком ответа и пунктами; подпись организации новой редакции', async () => {
@@ -478,4 +478,59 @@ test('руководитель (2.436): отбор «Замечания к сд�
   for (const k of rv.checks) await dispatcher.req('PUT', `/api/orders/${o.id}/review/${k.id}`, { verdict: 'ok', round: rv.round });
   assert.equal((await step(dispatcher, o, 'done')).status, 200);
   assert.equal((await caseOf()).remarks, null);
+});
+
+test('сводка за месяц (2.437): замечания после сдачи по пользователям отчёта (суд, Сбербанк) и частые пункты', async () => {
+  const org = await makeOrg(S.sql, 'ООО «Тестовая оценка 2.437»');
+  const h = await login(S, '+79990004317');
+  await addMember(S.sql, org.id, h.user.id, 'head');
+  assert.equal((await h.req('PATCH', '/api/me', { full_name: 'Руководитель Оценки 2.437' })).status, 200);
+  const ex = await login(S, '+79990004318');
+  await makeSpecialist(S.sql, ex.user.id);
+  await addMember(S.sql, org.id, ex.user.id, 'member');
+  assert.equal((await ex.req('PATCH', '/api/me', { full_name: 'Тестов Эксперт 2.437' })).status, 200);
+  assert.equal((await ex.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  const month = todayMsk().slice(0, 7);
+  const report = async () => (await h.req('GET', `/api/orgs/${org.id}/report?month=${month}`)).body.report;
+  let r = await report();
+  assert.deepEqual([r.total.remarks_after, r.total.remarks_after_cases, r.after_by_user, r.after_remarks], [0, 0, [], []], 'замечаний не было');
+
+  // Суд — два круга замечаний по одному делу; Сбербанк — одно дело.
+  const court = await doneOrder('Квартира: замечания суда', ex, h);
+  const sber = await doneOrder('Квартира: замечания Сбербанка', ex, h);
+  await S.sql`update orders set fields = fields || '{"purpose":"bank","bank":"sber"}'::jsonb where id = ${sber.id}`;
+  const items = (o, list) => ex.req('PUT', `/api/orders/${o.id}/remarks/items`, { items: list.map((text) => ({ text })) });
+  assert.equal((await step(owner, court, 'in_work', { reason: 'Суд: пояснить аналоги' })).status, 200);
+  assert.equal((await items(court, ['Обоснуйте выбор аналогов', 'Уточните площадь'])).status, 200);
+  assert.equal((await step(owner, sber, 'in_work', { reason: 'Сбербанк: замечания' })).status, 200);
+  assert.equal((await items(sber, ['Обоснуйте выбор аналогов.', 'Приложите свежую выписку ЕГРН'])).status, 200);
+  // Второй круг суда: дело снова сдано и снова замечания (пункты нового круга).
+  assert.equal((await upload(ex, court, 'results', 'Отчёт (редакция 2).pdf')).status, 201);
+  await signResults(S, ex, court.id);
+  await signOrg(court, h);
+  assert.equal((await step(ex, court, 'review')).status, 200);
+  const rv = (await dispatcher.req('GET', `/api/orders/${court.id}/review`)).body;
+  for (const k of rv.checks) await dispatcher.req('PUT', `/api/orders/${court.id}/review/${k.id}`, { verdict: 'ok', round: rv.round });
+  assert.equal((await step(dispatcher, court, 'done')).status, 200);
+  assert.equal((await step(owner, court, 'in_work', { reason: 'Суд: ещё вопрос' })).status, 200);
+  assert.equal((await items(court, ['Обоснуйте выбор аналогов'])).status, 200);
+
+  r = await report();
+  assert.deepEqual([r.total.remarks_after, r.total.remarks_after_cases, r.total.remarks_after_items], [3, 2, 5]);
+  assert.deepEqual(r.after_by_user.map((g) => [g.id, g.name, g.n, g.cases, g.items]),
+    [['court', 'Суд', 2, 1, 3], ['sber', 'Сбербанк', 1, 1, 2]], 'пункты обоих кругов суда');
+  assert.deepEqual(r.after_remarks[0], { text: 'Обоснуйте выбор аналогов', n: 3, experts: 1 }, 'один и тот же пункт — вместе (точка в конце не в счёт), текст — последний');
+  const row = r.experts.find((x) => x.user_id === ex.user.id);
+  assert.deepEqual([row.remarks_after, row.remarks_after_cases, row.remarks_after_items], [3, 2, 5]);
+  assert.equal(row.after_remarks[0].n, 3);
+  // Таблица для Excel — тот же блок.
+  const text = (await h.req('GET', `/api/orgs/${org.id}/report?month=${month}&format=csv`, undefined, { binary: true })).body.toString('utf8');
+  assert.match(text, /Замечания после сдачи;Сколько раз пришли/);
+  assert.match(text, /Суд;2;1;3;Обоснуйте выбор аналогов ×2/);
+  assert.match(text, /Частые замечания банка и суда/);
+  // Чужой руководитель сводку не получает, в его сводке этих замечаний нет.
+  const org2 = await makeOrg(S.sql, 'ООО «Чужая оценка 2.437»');
+  await addMember(S.sql, org2.id, other.user.id, 'head');
+  assert.equal((await other.req('GET', `/api/orgs/${org.id}/report?month=${month}`)).status, 404);
+  assert.equal((await other.req('GET', `/api/orgs/${org2.id}/report?month=${month}`)).body.report.total.remarks_after, 0);
 });
