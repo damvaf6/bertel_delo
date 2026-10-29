@@ -24,6 +24,7 @@
 // За две недели до новогодних каникул (2.393) — дела со сроком в каникулы одной группой «сдайте до 30 декабря».
 // В декабре — аттестат или полис из своего досье, который кончается до 15 января (2.405): «продлите до каникул».
 // Номер отчёта выдан, а дело отменено (2.418) — отдать номер следующему делу или оставить пропуском.
+// Замечания банка или суда к сданному отчёту (2.439): ответить сегодня, в следующий рабочий день или срок ответа прошёл.
 // Руководителю — те же сведения, что в «Делах экспертов» (2.16): без заказчика, полей заявки, документов и переписки.
 // Только свои дела и свои организации.
 import { orderRef } from '../notify/registry.mjs';
@@ -37,7 +38,7 @@ import { expiringLinks, incompleteInspections, reshotAll, silentLinks } from './
 import { answeredExtends, openExtends, orgExtends, taskMoved, taskMovedOrg } from './deadline-ops.mjs';
 import { openHandovers } from './handover-ops.mjs';
 import { dueNotes } from './note-ops.mjs';
-import { caseMoves, caseRemind, transferTargets } from './org-ops.mjs';
+import { caseMoves, caseRemind, remarksOrg, transferTargets } from './org-ops.mjs';
 import { bankTaskMissing, docWait, egrnOld } from './docreq-ops.mjs';
 import { aiRecheck, aiSignHints, egrnRebuildLeft, egrnSwapLeft } from '../ai/ai.mjs';
 import { cancelledNumbers, lastYearNumber, latest, numberYear, taskDraftItems, taskDueFor, taskDueSign, taskMoveLetter } from './draft-ops.mjs';
@@ -179,13 +180,17 @@ async function expertPart(sql, actor, registry, today, storage) {
   // Срок через 1–2 дня или прошёл, а своего файла результата нет (2.138) — на странице — выше «Горит срок» и там не повторяется.
   // Срок в выходной или праздник (2.382) — «близко» по последнему рабочему дню перед ним.
   const hotRows = rows.filter((o) => o.status === 'in_work' && o.deadline && hotDay(o.deadline) <= soon);
-  const due = await noResultOrders(sql, actor.id, hotRows, today);
+  // Замечания к сданному отчёту, ответить сегодня или в следующий рабочий день (2.439) — своей строкой; срок дела после замечаний
+  // не раньше срока ответа (2.431), поэтому в «Горит срок», «нет файла результата» и «срок по заданию» такое дело не повторяется.
+  const remarks = (await remarksDue(sql, rows, today)).map(({ order, remarks: r }) => item(order, { remarks: r }));
+  const remarkIds = new Set(remarks.map((x) => x.id));
+  const due = (await noResultOrders(sql, actor.id, hotRows, today)).filter((o) => !remarkIds.has(o.id));
   const drafts = due.length ? await sql`
     select distinct order_id from result_drafts where order_id = any(${due.map((o) => o.id)}::uuid[])` : [];
   const noResult = due.map((o) => item(o, { has_draft: drafts.some((x) => x.order_id === o.id), extend: ext.get(o.id) ?? null,
     ...workBefore(o.deadline, today) }));
   // Срок по заданию на оценку раньше срока дела и близко (2.304) — выше «Срок близко», там и в «Горит срок» не повторяется.
-  const taskDue = (await taskDueCases(sql, storage, registry, actor.id, rows, today))
+  const taskDue = (await taskDueCases(sql, storage, registry, actor.id, rows, today)).filter((x) => !remarkIds.has(x.order.id))
     .map(({ order, due: d, draft }) => item(order, { task_due: d, has_draft: draft }));
   // Диспетчер ответил на просьбу о переносе срока (2.155), а эксперт ещё не открывал «Срок» в деле: согласился или отказал.
   const answers = await answeredExtends(sql, rows.filter((o) => ['in_work', 'review'].includes(o.status)).map((o) => o.id));
@@ -292,6 +297,7 @@ async function expertPart(sql, actor, registry, today, storage) {
     number_year: await numberYear(sql, actor.id, today),
     dossier_new_year: newYearTerms(await loadDossier(sql, actor.id), today),
     new_year: ny && { from: ny.from, to: ny.to, work_before: ny.work_before, items: ny.rows.map((o) => item(o)) },
+    remarks,
     ai_recheck: recheck,
     task_made: taskMade,
     task_late: taskLate,
@@ -321,7 +327,7 @@ async function expertPart(sql, actor, registry, today, storage) {
     inspect_expiring: expiring,
     inspect_incomplete: incomplete,
     // Уже попросил перенести срок (2.100) — в строке видно, на какую дату и что ответа ещё нет.
-    hot: hotRows.map((o) => item(o, { extend: ext.get(o.id) ?? null, ...workBefore(o.deadline, today) })),
+    hot: hotRows.filter((o) => !remarkIds.has(o.id)).map((o) => item(o, { extend: ext.get(o.id) ?? null, ...workBefore(o.deadline, today) })),
     fresh_late: freshLate,
     returned: returned.filter((r) => !freshLate.includes(r)),
     review: reviewRows.filter((x) => !x.long),
@@ -329,6 +335,15 @@ async function expertPart(sql, actor, registry, today, storage) {
     offers: rows.filter((o) => o.status === 'awaiting_executor')
       .map((o) => item(o, { fee_kop: o.price_kop ? orderSplit(o).payoutKop : null })),
   };
+}
+
+// Замечания к сданному отчёту (2.439): дело снова в работе после замечаний банка или суда, а ответить сегодня, в следующий
+// рабочий день или срок ответа прошёл — как пометка «hot» у дела руководителя (remarksOrg, 2.436). Раньше срок — выше.
+export async function remarksDue(sql, rows, today) {
+  const open = rows.filter((o) => o.status === 'in_work' && o.remarks_at && o.remarks_due);
+  const info = await remarksOrg(sql, open, today);
+  return open.filter((o) => info.get(o.id).hot).map((o) => ({ order: o, remarks: info.get(o.id) }))
+    .sort((a, b) => a.order.remarks_due.localeCompare(b.order.remarks_due));
 }
 
 // Новогодние каникулы впереди (2.393): { from, to, work_before, rows } — дела в работе со сроком с первого по последний
@@ -367,7 +382,8 @@ async function noResultOrders(sql, userId, hotRows, today) {
 // расчётом, что «Сегодня». Только цифры.
 export async function expertMorningAlerts(sql, userId, today, now = new Date(), { registry = null, storage = null } = {}) {
   const rows = await sql`
-    select id, module, service, fields, status, deadline, executor_user_id, review_round from orders where executor_user_id = ${userId} and status in ('in_work', 'review')
+    select id, module, service, fields, status, deadline, executor_user_id, review_round, remarks_at, remarks_due, remarks_round, remarks_answer_doc_id
+    from orders where executor_user_id = ${userId} and status in ('in_work', 'review')
     order by deadline nulls last, updated_at limit ${LIMIT}`;
   const soon = addDays(today, HOT_DAYS);
   // Срок в выходной или праздник (2.382) — «близко» по последнему рабочему дню перед ним.
@@ -402,13 +418,17 @@ export async function expertMorningAlerts(sql, userId, today, now = new Date(), 
       else if (!(m.asked && !m.asked.came)) taskMovedN += 1;
     }
   }
+  // 2.439: замечания к сданному отчёту — ответить сегодня, в следующий рабочий день или срок прошёл (строка «Замечания к отчёту»
+  // в «Сегодня»); такое дело, как там, в «нет файла результата» и «срок по заданию на оценку» не повторяется.
+  const remarkIds = new Set((await remarksDue(sql, rows, today)).map((x) => x.order.id));
   const taskDue = registry && storage ? (await taskDueCases(sql, storage, registry, userId, rows, today))
-    .filter((x) => x.due.days_left <= 1 && !movedIds.has(x.order.id)) : [];
+    .filter((x) => x.due.days_left <= 1 && !movedIds.has(x.order.id) && !remarkIds.has(x.order.id)) : [];
   return {
+    remarks: remarkIds.size,
     task_moved: taskMovedN,
     letter_due: letterDueN,
     letter_wait: letterWaitN,
-    no_result: (await noResultOrders(sql, userId, hotRows, today)).filter((x) => !taskDue.some((t) => t.order.id === x.id)).length,
+    no_result: (await noResultOrders(sql, userId, hotRows, today)).filter((x) => !taskDue.some((t) => t.order.id === x.id) && !remarkIds.has(x.id)).length,
     task_due: taskDue.length,
     reply_wait: (await replyWaits(sql, rows.map((o) => o.id))).length,
     lead_unsigned: leadUnsigned,

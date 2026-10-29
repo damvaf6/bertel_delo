@@ -585,3 +585,52 @@ test('архив и перечень для СРО (2.438): новая реда�
   assert.ok(text.includes(sha(files.get(`${folder}/Отчёт.pdf`))), 'SHA-256 прежней редакции');
   assert.ok(text.includes(sha(files.get(dir))), 'SHA-256 новой редакции');
 });
+
+test('«Сегодня» и утренняя сводка эксперта (2.439): замечания к сданному отчёту — ответить сегодня, завтра или срок прошёл', async () => {
+  const { expertMorningAlerts } = await import('../../src/ops/today-ops.mjs');
+  const { digestText, morningTo } = await import('../../src/notify/morning.mjs');
+  const today = todayMsk();
+  const mine = async (c = spec) => (await c.req('GET', '/api/today')).body.expert?.remarks ?? [];
+  const alerts = async () => (await expertMorningAlerts(S.sql, spec.user.id, today)).remarks;
+  const o = await doneOrder('Квартира: ответить на замечания');
+  const base = await alerts();
+  assert.equal((await step(owner, o, 'in_work', { reason: 'Банк:\n1. Обоснуйте аналоги\n2. Уточните площадь' })).status, 200);
+  // Срок ответа — через 3 рабочих дня: ещё не «ответить», строки нет.
+  assert.ok(!(await mine()).some((x) => x.id === o.id));
+  assert.equal(await alerts(), base);
+
+  // Ответить в следующий рабочий день — строка с пунктами; в «Горит срок» и «нет файла результата» дело не повторяется.
+  const next = workdaysAfter(today, 1);
+  await S.sql`update orders set remarks_due = ${next}, deadline = ${next} where id = ${o.id}`;
+  let x = (await mine()).find((r) => r.id === o.id);
+  assert.ok(x, 'строка «Замечания к отчёту — ответить»');
+  assert.deepEqual([x.remarks.due, x.remarks.round, x.remarks.items, x.remarks.left, x.remarks.answer, x.remarks.overdue, x.remarks.hot],
+    [next, 1, 0, 0, false, false, true]);
+  assert.equal(x.remarks.text, undefined, 'текст замечаний — в деле');
+  const e = (await spec.req('GET', '/api/today')).body.expert;
+  for (const g of ['hot', 'no_result', 'task_due']) assert.ok(!e[g].some((r) => r.id === o.id), g);
+  assert.equal(await alerts(), base + 1);
+
+  // Пункты отмечены не все — видно, сколько осталось; срок прошёл — overdue.
+  assert.equal((await spec.req('PUT', `/api/orders/${o.id}/remarks/items`, { items: [{ text: 'Обоснуйте аналоги', resolution: 'fixed', place: 'раздел 8' }, { text: 'Уточните площадь' }] })).status, 200);
+  await S.sql`update orders set remarks_due = ${addDays(today, -1)} where id = ${o.id}`;
+  x = (await mine()).find((r) => r.id === o.id);
+  assert.deepEqual([x.remarks.items, x.remarks.left, x.remarks.overdue], [2, 1, true]);
+  assert.equal(await alerts(), base + 1);
+
+  // Утренняя сводка: своей цифрой первой и к «Сегодня».
+  const text = digestText({ remarks: 1 });
+  assert.match(text, /^На сегодня: замечания к сданному отчёту — ответить сегодня или завтра: 1 дело/);
+  assert.match(digestText({ remarks: 2, due: 1 }), /^На сегодня: замечания[^,]+2 дела, сдать 1 дело/);
+  assert.equal(morningTo({ remarks: 1 }), 'today');
+  // Чужому эксперту — нет.
+  await makeSpecialist(S.sql, other.user.id);
+  assert.ok(!(await mine(other)).some((r) => r.id === o.id));
+
+  // Сдал на проверку — строки нет.
+  assert.equal((await upload(spec, o, 'results', 'Отчёт (исправленный).pdf')).status, 201);
+  await signResults(S, spec, o.id);
+  assert.equal((await step(spec, o, 'review')).status, 200);
+  assert.ok(!(await mine()).some((r) => r.id === o.id));
+  assert.equal(await alerts(), base);
+});
