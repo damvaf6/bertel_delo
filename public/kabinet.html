@@ -302,6 +302,43 @@
           <button type="button" id="remarks-send">Передать замечания эксперту</button>
           <p class="msg" id="remarks-msg" role="status" aria-live="polite"></p>
         </div>
+        <div class="ready-box hidden" id="hearing-box">
+          <h3>Вызов в суд</h3>
+          <p class="muted" id="hearing-lead"></p>
+          <ul class="list" id="hearing-list"></ul>
+          <button type="button" class="secondary" id="hearing-open">Эксперта вызывают в суд</button>
+          <div class="hidden" id="hearing-form">
+            <div class="field">
+              <label for="hearing-name">Суд</label>
+              <input id="hearing-name" type="text" maxlength="200" placeholder="например, Тверской районный суд г. Москвы">
+            </div>
+            <div class="field">
+              <label for="hearing-case">Номер дела в суде</label>
+              <input id="hearing-case" type="text" maxlength="60" placeholder="например, 2-1234/2026">
+            </div>
+            <div class="row">
+              <div class="field">
+                <label for="hearing-date">Дата заседания</label>
+                <input id="hearing-date" type="date">
+              </div>
+              <div class="field">
+                <label for="hearing-time">Время</label>
+                <input id="hearing-time" type="text" inputmode="numeric" maxlength="5" placeholder="10:30">
+              </div>
+            </div>
+            <div class="field">
+              <label for="hearing-address">Адрес суда, зал</label>
+              <input id="hearing-address" type="text" maxlength="300">
+            </div>
+            <div class="field">
+              <p class="muted">Повестка или определение суда (если есть): <span id="hearing-file-name">не выбран</span></p>
+              <label class="btn secondary" for="hearing-file">Выбрать файл</label>
+              <input id="hearing-file" type="file" class="visually-hidden" aria-label="Повестка или определение суда (если есть)">
+            </div>
+            <button type="button" id="hearing-send">Передать эксперту</button>
+          </div>
+          <p class="msg" id="hearing-msg" role="status" aria-live="polite"></p>
+        </div>
         <p class="msg" id="status-msg" role="status" aria-live="polite"></p>
         <details class="fold hidden" id="history-details">
           <summary id="history-summary"></summary>

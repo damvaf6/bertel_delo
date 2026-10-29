@@ -35,6 +35,7 @@ import { deadlineOps } from './ops/deadline-ops.mjs';
 import { handoverOps } from './ops/handover-ops.mjs';
 import { noteOps } from './ops/note-ops.mjs';
 import { remarkItemOps } from './ops/remark-item-ops.mjs';
+import { courtOps } from './ops/court-ops.mjs';
 import { repeatOps } from './ops/repeat-ops.mjs';
 import { similarOps } from './ops/similar-ops.mjs';
 import { notaryOps } from './ops/notary-ops.mjs';
@@ -50,7 +51,7 @@ import { resetModuleSettings } from './modules/extras.mjs';
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
 export function listOps(cfg, providers) {
-  const ops = [...coreOps(cfg), ...orderOps(), ...orgOps(), ...adminOps(), ...matchOps(), ...workOps(), ...moneyOps(), ...notifyOps(), ...aiOps(), ...draftOps(), ...inspectOps(), ...onsiteOps(), ...signOps(), ...dossierOps(), ...snippetOps(), ...remarkOps(), ...analogOps(), ...templateOps(), ...mailOps(), ...todayOps(), ...problemOps(), ...caseOps(), ...uploadOps(), ...docRequestOps(), ...deadlineOps(), ...handoverOps(), ...noteOps(), ...remarkItemOps(), ...repeatOps(), ...similarOps(), ...notaryOps(), ...certificateOps(), ...permitCardOps(), ...stepOps(), ...priceOps(), ...lawyerCheckOps(), ...bridgeOps(cfg)];
+  const ops = [...coreOps(cfg), ...orderOps(), ...orgOps(), ...adminOps(), ...matchOps(), ...workOps(), ...moneyOps(), ...notifyOps(), ...aiOps(), ...draftOps(), ...inspectOps(), ...onsiteOps(), ...signOps(), ...dossierOps(), ...snippetOps(), ...remarkOps(), ...analogOps(), ...templateOps(), ...mailOps(), ...todayOps(), ...problemOps(), ...caseOps(), ...uploadOps(), ...docRequestOps(), ...deadlineOps(), ...handoverOps(), ...noteOps(), ...remarkItemOps(), ...courtOps(), ...repeatOps(), ...similarOps(), ...notaryOps(), ...certificateOps(), ...permitCardOps(), ...stepOps(), ...priceOps(), ...lawyerCheckOps(), ...bridgeOps(cfg)];
   if (providers.storage.kind === 'memory') ops.push(...memoryFileOps());
   if (cfg.appEnv === 'test' && cfg.testControlToken) ops.push(...testControlOps(cfg));
   ops.push(...stageLoginOps(cfg));
