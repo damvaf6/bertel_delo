@@ -1295,7 +1295,8 @@ test('дела экспертов (2.16): видит только руковод
   assert.equal(r.body.cases.length, 1);
   const c = r.body.cases[0];
   // docs_wait (2.235) — только названия запрошенных документов и дни ожидания, без файлов заказчика.
-  assert.deepEqual(Object.keys(c).sort(), ['act', 'active', 'away', 'back', 'chat', 'deadline', 'docs_wait', 'expert', 'expert_id', 'extend', 'fee_kop', 'handover', 'hot', 'id', 'idle', 'idle_long', 'inspection', 'last_move', 'new_year', 'offer_wait', 'offered_at', 'order_ref', 'org_extend', 'overdue', 'overdue_days', 'payout', 'remind', 'report_number', 'returned', 'returned_open', 'service', 'sign_reminded_at', 'sign_since', 'sign_wait', 'status', 'status_name', 'task_due', 'task_moved', 'task_week', 'transfer_to', 'week']);
+  // remarks (2.436) — когда пришли замечания, срок ответа и число пунктов, без текста и файла замечаний.
+  assert.deepEqual(Object.keys(c).sort(), ['act', 'active', 'away', 'back', 'chat', 'deadline', 'docs_wait', 'expert', 'expert_id', 'extend', 'fee_kop', 'handover', 'hot', 'id', 'idle', 'idle_long', 'inspection', 'last_move', 'new_year', 'offer_wait', 'offered_at', 'order_ref', 'org_extend', 'overdue', 'overdue_days', 'payout', 'remarks', 'remind', 'report_number', 'returned', 'returned_open', 'service', 'sign_reminded_at', 'sign_since', 'sign_wait', 'status', 'status_name', 'task_due', 'task_moved', 'task_week', 'transfer_to', 'week']);
   assert.deepEqual(Object.keys(c.chat).sort(), ['expert_last', 'messages']);   // переписка (2.67): только число и чьё последнее, без текста
   assert.equal(c.status, 'review');
   assert.equal(c.expert, 'Эксперт Б');
