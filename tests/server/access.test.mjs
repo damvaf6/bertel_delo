@@ -1731,6 +1731,21 @@ test('заметки эксперта к делу (2.115): видит и пиш�
   }
 });
 
+test('замечания пунктами (2.432): смотрят стороны дела, делит и правит только исполнитель', async () => {
+  for (const id of ['remarks.items', 'remarks.items.parse', 'remarks.items.save']) cover(id);
+  // Подробно — tests/server/remarks.test.mjs; здесь — чужие и стороны заявки без исполнителя.
+  const base = `/api/orders/${ownOrder.id}/remarks/items`;
+  for (const who of ['stranger', 'headA', 'headB', 'spec']) {
+    assert.equal((await U[who].req('GET', base)).status, 404, `${who}: смотреть`);
+    assert.equal((await U[who].req('POST', `${base}/parse`, {})).status, 404, `${who}: разобрать`);
+    assert.equal((await U[who].req('PUT', base, { items: [] })).status, 404, `${who}: сохранить`);
+  }
+  for (const who of ['owner', 'dispatcher', 'admin']) {
+    assert.deepEqual((await U[who].req('GET', base)).body, { available: false }, who);
+    assert.equal((await U[who].req('POST', `${base}/parse`, {})).status, 409, `${who}: замечаний не было`);
+  }
+});
+
 test('повторная оценка того же объекта (2.118): брать из своего прошлого дела — только исполнитель дела', async () => {
   for (const id of ['orders.repeat', 'orders.repeat.take']) cover(id);
   // Подробно — tests/server/repeat.test.mjs; здесь — чужие и стороны заявки без исполнителя.

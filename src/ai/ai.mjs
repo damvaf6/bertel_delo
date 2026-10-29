@@ -11,7 +11,7 @@ export const DISCLAIMER = 'Это разъяснение искусственн�
   + 'за точной оценкой обращайтесь к специалисту.';
 
 // Длина ответа модели по назначению: черновик заключения длинный, проверка — список по правилам.
-const MAX_TOKENS = { draft: 6000, review: 3000, analog: 800, lawyer: 120 };
+const MAX_TOKENS = { draft: 6000, review: 3000, analog: 800, lawyer: 120, remarks: 3000 };
 
 export async function askAi({ sql, providers, cfg }, actor, purpose, messages) {
   const used = await sql.one`select count(*)::int as n from ai_usage where user_id = ${actor.id} and at > now() - interval '1 day'`;
