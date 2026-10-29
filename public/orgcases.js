@@ -79,6 +79,8 @@ const FILTERS = [
   { id: 'idle_long', text: 'Без движения 5 рабочих дней и дольше', test: (c) => c.idle_long && c.status === 'in_work' && !c.docs_wait },
   // 2.235: эксперт запросил документы у заказчика, а их ещё нет — почему дело стоит.
   { id: 'docs', text: 'Ждём документы от заказчика', test: (c) => !!c.docs_wait },
+  // 2.436: дело снова у эксперта по замечаниям банка или суда к сданному отчёту (2.431) — ближайший срок ответа первым.
+  { id: 'remarks', text: 'Замечания к сданному отчёту', test: (c) => !!c.remarks },
   { id: 'sign', text: 'Ждёт моей подписи', test: (c) => c.sign_wait > 0 },
   { id: 'returned', text: 'Вернул эксперту', test: (c) => c.returned_open },
   { id: 'fresh', text: 'Исправленный файл ждёт подписи эксперта', test: (c) => !!c.returned?.fresh_file },
@@ -177,6 +179,7 @@ function renderCases() {
       - new Date(a.org_extend.decided_at ?? a.org_extend.requested_at) : a.org_extend.state === 'declined' ? -1 : 1));
   }
   if (filter === 'idle_long') active.sort((a, b) => b.last_move.work_days - a.last_move.work_days || b.last_move.days - a.last_move.days);
+  if (filter === 'remarks') active.sort((a, b) => String(a.remarks.due).localeCompare(String(b.remarks.due)));
   if (filter === 'docs') active.sort((a, b) => new Date(a.docs_wait.since) - new Date(b.docs_wait.since));
   if (filter === 'back') active.sort((a, b) => b.back.until.localeCompare(a.back.until) || String(a.deadline).localeCompare(String(b.deadline)));
   if (filter === 'task_week') active.sort((a, b) => a.task_due.day.localeCompare(b.task_due.day));
@@ -279,6 +282,16 @@ function renderFilters(counts) {
   box.replaceChildren(...(used.length ? [chip(null, 'Все'), ...used.map((f) => chip(f.id, `${f.text} · ${counts.get(f.id)}`))] : []));
 }
 
+// Замечания к сданному отчёту (2.436): когда пришли, ответить до, что с пунктами и ответом.
+function remarksText(r) {
+  const when = new Date(r.at).toLocaleDateString('sv-SE', { timeZone: 'Europe/Moscow' });
+  const points = !r.items ? 'пункты ещё не разобраны'
+    : r.left ? `пунктов ${r.items}, без отметки ${r.left}` : `все ${r.items} пунктов отмечены`;
+  return [`Замечания к отчёту от ${dayRu(when)}${r.round > 1 ? ` (${r.round}-й раз)` : ''}`,
+    r.due ? `ответить до ${dayRu(r.due)}${r.overdue ? ' — срок прошёл' : ''}` : null, points,
+    r.answer ? 'ответ на замечания приложен' : null].filter(Boolean).join(' · ');
+}
+
 function caseItem(org, c) {
   const late = c.overdue_days ? ` на ${c.overdue_days} дн.` : '';
   const deadline = c.deadline ? `срок ${dayRu(c.deadline)}${c.overdue ? ` · ПРОСРОЧЕНО${late}` : ''}` : 'срок не указан';
@@ -296,6 +309,8 @@ function caseItem(org, c) {
     ...(c.task_moved && !c.task_moved.letter ? [el('div', { class: c.task_moved.asked ? 'muted' : 'overdue', 'data-role': 'task-moved', text: taskMovedText(c.task_moved) })] : []),
     ...(c.task_due && !c.task_moved ? [el('div', { class: c.task_due.hot ? 'overdue' : 'muted', 'data-role': 'task-due',
       text: `Сдать ${c.task_due.by} — к ${dayRu(c.task_due.day)}${c.task_due.overdue ? ', срок прошёл' : ''} (срок дела позже)` })] : []),
+    // 2.436: замечания к сданному отчёту — ответить до …; прошёл, сегодня или в следующий рабочий день — красным.
+    ...(c.remarks ? [el('div', { class: c.remarks.hot ? 'overdue' : 'muted', 'data-role': 'remarks', text: remarksText(c.remarks) })] : []),
     // 2.394: срок в новогодние каникулы — сдать до последнего рабочего дня перед ними.
     ...(c.new_year ? [el('div', { class: 'overdue', 'data-role': 'new-year', text: newYearCaseText(c.new_year) })] : []),
     el('div', { class: 'muted', text: [c.fee_kop != null ? `вознаграждение ${rub(c.fee_kop)}` : 'цена ещё не назначена',

@@ -62,11 +62,13 @@ function renderSign() {
   $('org-sign-empty').classList.toggle('hidden', all.length > 0);
   // Сначала — что ждёт подписи; подписанное — ниже, свёрнутым (разбор 03.10.2026, 2.23). «Подписать все файлы дела» — одной
   // кнопкой, если ждут несколько (2.15).
-  const waiting = (it) => it.documents.some((d) => d.signatures.expert && !d.signatures.org);
+  const waiting = (it) => it.documents.some((d) => !d.prior_edition && d.signatures.expert && !d.signatures.org);
   const signedAll = (it) => it.documents.every((d) => d.signatures.org);
   const head = (it) => [
     el('div', { class: 'title', text: `${it.service} · ${it.order_ref}` }),
     el('div', { class: 'muted', text: [`Эксперт: ${it.executor}`, it.deadline ? `срок ${dayRu(it.deadline)}` : null].filter(Boolean).join(' · ') }),
+    // Новая редакция отчёта после замечаний банка или суда (2.436): тот же номер, ответить до — красным, если прошёл.
+    ...(it.edition ? [el('div', { class: it.edition.due && it.edition.due < todayIso() ? 'sig-state warn' : 'sig-state', 'data-sig': 'edition', text: editionText(it.edition) })] : []),
     // Сколько файлы ждут подписи организации (2.148).
     ...(it.waiting_since && waiting(it) ? [el('div', { class: 'sig-state warn', 'data-sig': 'since', text: `Ждёт Вашей подписи ${waitedDays(it.waiting_since)} — эксперт подписал ${new Date(it.waiting_since).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}` })] : []),
     // Срок по заданию на оценку прошёл или сегодня (2.308) — красным, как в «Сегодня». Прогон 2.360: перенос согласован, а
@@ -83,7 +85,7 @@ function renderSign() {
     : it.task_due?.letter && !it.task_due.moved ? it.task_due.day
     : it.task_moved?.letter_due && it.task_moved.letter_due.days_left <= 1 ? it.task_moved.day : null);
   const hotFirst = (list) => [...list.filter(letterDay).sort((a, b) => letterDay(a).localeCompare(letterDay(b))), ...list.filter((it) => !letterDay(it))];
-  const readyOf = (it) => it.documents.filter((d) => d.signatures.expert && !d.signatures.org);
+  const readyOf = (it) => it.documents.filter((d) => !d.prior_edition && d.signatures.expert && !d.signatures.org);
   const fits = (f, it) => readyOf(it).some((d) => f.test(d, it));
   const counts = new Map(SIGN_FILTERS.map((f) => [f.id, all.filter((it) => fits(f, it)).length]));
   if (signFilter && !counts.get(signFilter)) signFilter = null;
@@ -96,7 +98,7 @@ function renderSign() {
   renderMany(open.filter(waiting));
   $('org-sign').replaceChildren(
     ...open.map((it) => {
-      const ready = it.documents.filter((d) => d.signatures.expert && !d.signatures.org);
+      const ready = readyOf(it);
       return el('li', { 'data-item': it.order_ref, ...(letterDay(it) ? { class: 'hot', 'data-hot': 'letter' } : {}) }, ...head(it),
         ...(!manualSign && waiting(it) && ready.length > 1 ? [el('button', { 'data-action': 'org-sign-all', onclick: () => signAll(ready) }, `Подписать все файлы дела (${ready.length})`)] : []),
         el('ul', { class: 'list' }, ...it.documents.map((d) => docItem(d, it))),
@@ -232,7 +234,7 @@ function renderMany(list) {
   box.classList.toggle('hidden', list.length < 2 || manualSign);
   if (list.length < 2 || manualSign) return box.replaceChildren();
   const rows = list.map((it) => {
-    const ready = it.documents.filter((d) => d.signatures.expert && !d.signatures.org);
+    const ready = it.documents.filter((d) => !d.prior_edition && d.signatures.expert && !d.signatures.org);
     const left = ready.reduce((n, d) => {
       const r = returnOf(d, it);
       return n + (r ? r.left : 0);
@@ -298,9 +300,24 @@ async function signAll(docs) {
   } catch (err) { await refresh(); say($('org-sign-msg'), err.message); }
 }
 
+// Новая редакция (2.436): что подписывается — исправленный отчёт с прежним номером; когда пришли замечания и до какого дня ответить.
+const dotted = (iso) => String(iso).slice(0, 10).split('-').reverse().join('.');
+const todayIso = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Moscow' });
+const editionText = (e) => [`Новая редакция отчёта${e.number ? ` № ${e.number}` : ''} — после замечаний от ${dotted(new Date(e.remarks_at).toLocaleDateString('sv-SE', { timeZone: 'Europe/Moscow' }))}`,
+  e.due ? `ответить до ${dotted(e.due)}${e.due < todayIso() ? ' — срок прошёл' : ''}` : null].filter(Boolean).join(' · ');
+
 function docItem(d, it) {
   const { expert, org } = d.signatures;
-  const lines = [...(it ? besideReturned(d, it) : [])];
+  // Прежняя редакция (2.434) остаётся в деле — подписывать её заново не нужно; «Ответ на замечания» (2.433) — подписывается с отчётом.
+  if (d.prior_edition) {
+    return el('li', { class: 'doc', 'data-doc': d.id, 'data-edition': 'prior' },
+      el('div', {}, el('div', { class: 'name', text: d.filename }), el('div', { class: 'muted', text: formatSize(d.size_bytes) })),
+      el('div', { class: 'row' }, el('button', { class: 'secondary', 'data-action': 'download', onclick: () => download(d) }, 'Скачать')),
+      el('div', { class: 'sig' }, el('div', { class: 'muted', 'data-role': 'prior-edition',
+        text: `Прежняя редакция — сдана до замечаний от ${dotted(d.prior_edition)}. Остаётся в деле, подписывать заново не нужно.` })));
+  }
+  const lines = [...(d.remarks_answer ? [el('div', { class: 'sig-state', 'data-role': 'remarks-answer', text: 'Ответ на замечания — подписывается вместе с новой редакцией отчёта' })] : []),
+    ...(it ? besideReturned(d, it) : [])];
   if (expert) lines.push(...signatureLines(expert));
   else lines.push(el('div', { class: 'sig-state', text: 'Эксперт ещё не подписал — подпись организации после него' }));
   if (org) lines.push(...signatureLines(org));

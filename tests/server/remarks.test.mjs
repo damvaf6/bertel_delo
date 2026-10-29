@@ -2,14 +2,14 @@
 // прикладывает файл замечаний; дело снова у того же эксперта, срок ответа — 3 рабочих дня (описание модуля), без второй выплаты.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, signResults } from '../helpers.mjs';
+import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, signResults, makeOrg, addMember } from '../helpers.mjs';
 import { createRegistry } from '../../src/modules/index.mjs';
 import { addDays, availableActions, findTransition, todayMsk } from '../../src/orders/workflow.mjs';
 import { workdaysAfter } from '../../src/orders/holidays.mjs';
 import expertise from '../../src/modules/expertise.mjs';
 import translation from '../../src/modules/translation.mjs';
 
-let S, owner, dispatcher, spec, other;
+let S, owner, dispatcher, spec, other, head;
 const FIELDS = { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 31', area: '44' };
 
 before(async () => {
@@ -31,16 +31,17 @@ const upload = (c, o, path, name, kind) => c.req('POST', `/api/orders/${o.id}/${
   raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent(name), ...(kind ? { 'x-doc-kind': kind } : {}) },
 });
 
-async function doneOrder(title) {
+async function doneOrder(title, ex = spec, head = null) {
   const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
   assert.equal((await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: addDays(todayMsk(), 10), fields: FIELDS })).status, 200);
   assert.equal((await step(owner, o, 'matching')).status, 200);
   await ensurePaid(S.sql, o.id);
-  assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: spec.user.id, from: 'matching' })).status, 200);
-  assert.equal((await step(spec, o, 'in_work')).status, 200);
-  assert.equal((await upload(spec, o, 'results', 'Отчёт.pdf')).status, 201);
-  await signResults(S, spec, o.id);
-  assert.equal((await step(spec, o, 'review')).status, 200);
+  assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: ex.user.id, from: 'matching' })).status, 200);
+  assert.equal((await step(ex, o, 'in_work')).status, 200);
+  assert.equal((await upload(ex, o, 'results', 'Отчёт.pdf')).status, 201);
+  await signResults(S, ex, o.id);
+  if (head) await signOrg(o);
+  assert.equal((await step(ex, o, 'review')).status, 200);
   const rv = (await dispatcher.req('GET', `/api/orders/${o.id}/review`)).body;
   for (const c of rv.checks) await dispatcher.req('PUT', `/api/orders/${o.id}/review/${c.id}`, { verdict: 'ok', round: rv.round });
   const r = await step(dispatcher, o, 'done');
@@ -411,4 +412,70 @@ test('проверка исправленного отчёта по пункта
   assert.equal(c.check, undefined, 'заказчик черновика не видит — и проверки тоже');
   assert.equal(c.items[0].check, undefined);
   assert.equal((await other.req('GET', base)).status, 404);
+});
+
+// Подписи организации на всех файлах результата эксперта, подписанных им (2.436).
+async function signOrg(o) {
+  const docs = await S.sql`select d.id from documents d join document_signatures e on e.document_id = d.id and e.role = 'expert'
+                           left join document_signatures g on g.document_id = d.id and g.role = 'org'
+                           where d.order_id = ${o.id} and d.kind = 'result' and d.deleted_at is null and g.id is null`;
+  for (const d of docs) assert.equal((await head.req('POST', `/api/org-documents/${d.id}/sign`, { confirm: true })).status, 201);
+}
+
+test('руководитель (2.436): отбор «Замечания к сданному отчёту» со сроком ответа и пунктами; подпись организации новой редакции', async () => {
+  const org = await makeOrg(S.sql, 'ООО «Тестовая оценка 2.436»');
+  head = await login(S, '+79990004315');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  assert.equal((await head.req('PATCH', '/api/me', { full_name: 'Руководитель Тестовой Оценки' })).status, 200);
+  const ex = await login(S, '+79990004316');
+  await makeSpecialist(S.sql, ex.user.id);
+  await addMember(S.sql, org.id, ex.user.id, 'member');
+  assert.equal((await ex.req('PATCH', '/api/me', { full_name: 'Тестов Эксперт 2.436' })).status, 200);
+  assert.equal((await ex.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  const o = await doneOrder('Квартира: замечания у руководителя', ex, head);
+  const caseOf = async () => (await head.req('GET', `/api/orgs/${org.id}/cases`)).body.cases.find((c) => c.id === o.id);
+  assert.equal((await caseOf()).remarks, null, 'замечаний не было');
+
+  assert.equal((await step(owner, o, 'in_work', { reason: 'Банк:\n1. Обоснуйте аналоги\n2. Уточните площадь' })).status, 200);
+  const due = workdaysAfter(todayMsk(), 3);
+  let c = await caseOf();
+  assert.equal(c.remarks.due, due);
+  assert.equal(c.remarks.round, 1);
+  assert.deepEqual([c.remarks.items, c.remarks.left, c.remarks.answer, c.remarks.overdue, c.remarks.hot], [0, 0, false, false, false]);
+  assert.equal(c.remarks.text, undefined, 'текст замечаний руководителю не нужен');
+  const base = `/api/orders/${o.id}/remarks/items`;
+  assert.equal((await ex.req('PUT', base, { items: [{ text: 'Обоснуйте аналоги', resolution: 'fixed', place: 'раздел 8' }, { text: 'Уточните площадь' }] })).status, 200);
+  c = await caseOf();
+  assert.deepEqual([c.remarks.items, c.remarks.left], [2, 1]);
+  // Срок ответа прошёл — красным (hot) и «срок прошёл».
+  await S.sql`update orders set remarks_due = ${addDays(todayMsk(), -1)} where id = ${o.id}`;
+  c = await caseOf();
+  assert.equal(c.remarks.overdue, true);
+  assert.equal(c.remarks.hot, true);
+
+  // Подпись организации: прежняя редакция — с пометкой, новая — ждёт подписи с «Новая редакция отчёта … после замечаний».
+  const [first] = await S.sql`select id from documents where order_id = ${o.id} and kind = 'result'`;
+  await S.sql`update documents set created_at = created_at - interval '1 day' where id = ${first.id}`;
+  await S.sql`update orders set remarks_at = now() where id = ${o.id}`;
+  const fresh = (await upload(ex, o, 'results', 'Отчёт (редакция 2).pdf')).body.document;
+  await signResults(S, ex, o.id);
+  const it = (await head.req('GET', `/api/orgs/${org.id}/signing`)).body.items.find((x) => x.documents.some((d) => d.id === fresh.id));
+  assert.equal(it.edition.round, 1);
+  assert.ok(it.edition.remarks_at);
+  assert.equal(it.documents.find((d) => d.id === first.id).prior_edition, todayMsk());
+  const nd = it.documents.find((d) => d.id === fresh.id);
+  assert.equal(nd.prior_edition, undefined);
+  assert.ok(nd.signatures.expert && !nd.signatures.org, 'новая редакция ждёт подписи организации');
+  assert.equal((await head.req('POST', `/api/org-documents/${fresh.id}/sign`, { confirm: true })).status, 201);
+  // Чужой руководитель дела не видит.
+  const org2 = await makeOrg(S.sql, 'ООО «Чужая оценка 2.436»');
+  await addMember(S.sql, org2.id, other.user.id, 'head');
+  assert.ok(!(await other.req('GET', `/api/orgs/${org2.id}/cases`)).body.cases.some((x) => x.id === o.id));
+  assert.equal((await other.req('GET', `/api/orgs/${org.id}/cases`)).status, 404);
+  // Дело снова сдано — отбора нет.
+  assert.equal((await step(ex, o, 'review')).status, 200);
+  const rv = (await dispatcher.req('GET', `/api/orders/${o.id}/review`)).body;
+  for (const k of rv.checks) await dispatcher.req('PUT', `/api/orders/${o.id}/review/${k.id}`, { verdict: 'ok', round: rv.round });
+  assert.equal((await step(dispatcher, o, 'done')).status, 200);
+  assert.equal((await caseOf()).remarks, null);
 });

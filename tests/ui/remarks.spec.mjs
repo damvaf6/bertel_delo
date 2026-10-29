@@ -317,3 +317,64 @@ test('2.435: проверка исправленного отчёта по пу�
   await cp.context().close();
   await sp.context().close();
 });
+
+test('2.436: руководитель — отбор «Замечания к сданному отчёту» со сроком ответа; подпись организации новой редакции', async ({ browser, baseURL }) => {
+  const hp = await phone(browser, baseURL);
+  const sp = await phone(browser, baseURL);
+  const head = await signIn(hp, '+79990004324');
+  const expert = await signIn(sp, '+79990004325');
+  const customer = await db(async (c) => (await c.query("insert into users (phone) values ('+79990004326') returning id")).rows[0]);
+  const due = workdaysAfter(todayMsk(), 1);
+  const { orgId, id } = await db(async (c) => {
+    await c.query("update users set full_name = 'Руководителева Анна' where id = $1", [head.id]);
+    await c.query("update users set full_name = 'Редакциев Пётр' where id = $1", [expert.id]);
+    const org = (await c.query("insert into organizations (name) values ('ООО «Замечания 2.436»') returning id")).rows[0].id;
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org, head.id, expert.id]);
+    await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [expert.id, org]);
+    const oid = (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, deadline, fields,
+        remarks_at, remarks_due, remarks_round, report_number)
+      values ($1, 'Квартира: замечания банка', 'expertise', 'realty', 'in_work', $2, current_date + 5, $3, now() - interval '1 hour', $4, 1, '17/2026') returning id`,
+    [customer.id, expert.id, { purpose: 'bank', region: 'moscow', object_type: 'flat', address: 'г. Москва, ул. Редакций, д. 3', area: '48' }, due])).rows[0].id;
+    await c.query(`insert into order_status_history (order_id, from_status, to_status, side, reason) values ($1, 'done', 'in_work', 'customer', 'Банк: 1. Обоснуйте аналоги 2. Уточните площадь')`, [oid]);
+    await c.query(`insert into remark_items (order_id, round, pos, body, resolution, note, by_ai) values
+      ($1, 1, 0, 'Обоснуйте аналоги', 'fixed', 'Аналоги заменены', true), ($1, 1, 1, 'Уточните площадь', null, null, true)`, [oid]);
+    return { orgId: org, id: oid };
+  });
+  // Две редакции файла результата: первая сдана до замечаний, вторая — исправленная; обе подписаны экспертом.
+  const put = async (name) => {
+    const r = await sp.request.post(`/api/orders/${id}/results`, { data: Buffer.from(`%PDF ${name}`),
+      headers: { ...H, 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent(name) } });
+    expect(r.status()).toBe(201);
+    const doc = (await r.json()).document;
+    expect((await sp.request.post(`/api/documents/${doc.id}/sign`, { data: { confirm: true }, headers: H })).status()).toBe(201);
+    return doc;
+  };
+  const first = await put('Отчёт 17-2026.pdf');
+  await db((c) => c.query("update documents set created_at = now() - interval '3 days' where id = $1", [first.id]));
+  await put('Отчёт 17-2026 (редакция 2).pdf');
+
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const chip = hp.locator('#org-cases-filter [data-filter="remarks"]');
+  await expect(chip).toHaveText('Замечания к сданному отчёту · 1');
+  await chip.click();
+  const line = hp.locator('#org-cases > li').first().locator('[data-role="remarks"]');
+  await expect(line).toHaveText(new RegExp(`^Замечания к отчёту от ${dayRu(todayMsk())}( \\d{4} г\\.)? · ответить до ${dayRu(due)}( \\d{4} г\\.)? · пунктов 2, без отметки 1$`));
+  await expect(line).toHaveClass(/overdue/);
+  await hp.locator('#org-cases-list-title').scrollIntoViewIfNeeded();
+  await shot(hp, 'rm10-2436-rukovoditel-zamechaniya');
+
+  // Подпись организации: «Новая редакция отчёта № …», прежняя — с пометкой и без кнопок подписи.
+  const item = hp.locator('#org-sign li[data-item]').first();
+  await expect(item.locator('[data-sig="edition"]')).toHaveText(`Новая редакция отчёта № 17/2026 — после замечаний от ${todayMsk().split('-').reverse().join('.')} · ответить до ${due.split('-').reverse().join('.')}`);
+  const prior = item.locator(`li[data-doc="${first.id}"]`);
+  await expect(prior.locator('[data-role="prior-edition"]')).toContainText('Прежняя редакция — сдана до замечаний');
+  await expect(prior.locator('[data-action="org-sign"]')).toHaveCount(0);
+  await expect(item.locator('[data-action="org-sign"]')).toHaveCount(1);
+  await expect(item.locator('[data-action="org-sign-all"]')).toHaveCount(0);
+  await item.scrollIntoViewIfNeeded();
+  await shot(hp, 'rm11-2436-podpis-novoy-redakcii');
+  expect(hp.problems).toEqual([]);
+  expect(sp.problems).toEqual([]);
+  await hp.context().close();
+  await sp.context().close();
+});

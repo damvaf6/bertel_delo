@@ -8,7 +8,7 @@ import { dispatchers, notify, notifyPhone, orgHeads } from '../notify/notify.mjs
 import { awayOf, awayOn, backOf, orgExpertsFor } from './match-ops.mjs';
 import { orgReturns, signWait } from './sign-ops.mjs';
 import { workingMs } from '../orders/silence.mjs';
-import { newYearAhead } from '../orders/holidays.mjs';
+import { newYearAhead, workdaysAfter } from '../orders/holidays.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { orderSplit } from '../money/money.mjs';
 import { STATUS_NAME, addDays, isOverdue, todayMsk, weekEnd } from '../orders/workflow.mjs';
@@ -72,6 +72,25 @@ export function idleDays(last, now = new Date()) {
   const work_days = Math.floor(workingMs(last, now) / 86_400_000);
   return { days, work_days, idle: work_days >= CASE_IDLE_DAYS, idle_long: work_days >= CASE_IDLE_LONG_DAYS };
 }
+// Замечания к сданному отчёту у дел руководителя (2.436): когда пришли, ответить до (рабочие дни, 2.431), сколько пунктов и
+// сколько из них эксперт ещё не отметил (2.432), приложен ли «Ответ на замечания» (2.433). Срок прошёл — overdue; сегодня или в
+// следующий рабочий день — hot.
+export async function remarksOrg(sql, orders, today) {
+  const out = new Map();
+  if (!orders.length) return out;
+  const counts = new Map((await sql`
+    select i.order_id, count(*)::int as n, count(*) filter (where i.resolution is null)::int as left
+    from remark_items i join orders o on o.id = i.order_id and i.round = o.remarks_round
+    where i.order_id = any(${orders.map((o) => o.id)}::uuid[]) group by i.order_id`).map((r) => [r.order_id, r]));
+  for (const o of orders) {
+    const c = counts.get(o.id);
+    out.set(o.id, { at: o.remarks_at, due: o.remarks_due, round: o.remarks_round, items: c?.n ?? 0, left: c?.left ?? 0,
+      answer: !!o.remarks_answer_doc_id, overdue: !!o.remarks_due && o.remarks_due < today,
+      hot: !!o.remarks_due && o.remarks_due <= workdaysAfter(today, 1) });
+  }
+  return out;
+}
+
 export async function caseMoves(sql, orders) {
   const ids = orders.map((o) => o.id);
   if (!ids.length) return new Map();
@@ -251,7 +270,8 @@ export function orgOps() {
         const ids = experts.map((e) => e.user_id);
         const rows = ids.length ? await sql`
           select o.id, o.module, o.service, o.status, o.deadline, o.price_kop, o.transit_kop, o.paid_at, o.executor_user_id, o.updated_at,
-                 o.owner_user_id, o.org_id, o.offer_org_id, o.fields, o.report_number,
+                 o.owner_user_id, o.org_id, o.offer_org_id, o.fields, o.report_number, o.remarks_at, o.remarks_due, o.remarks_round,
+                 o.remarks_answer_doc_id,
                  p.status as payout_status, p.amount_kop as payout_kop, p.paid_at as payout_paid_at
           from orders o left join payouts p on p.order_id = o.id
           where o.executor_user_id = any(${ids}::uuid[]) and (o.status = any(${CASES_ACTIVE}::text[])
@@ -334,6 +354,9 @@ export function orgOps() {
           const m = await taskMovedOrg(sql, providers.storage, registry, o);
           if (m) moved.set(o.id, m);
         }
+        // Замечания к сданному отчёту (2.436): дело снова у эксперта по замечаниям банка или суда (2.431) — когда пришли, срок
+        // ответа и сколько пунктов эксперт ещё не отметил (2.432). Текст и файл замечаний руководителю не нужны.
+        const remarks = await remarksOrg(sql, rows.filter((o) => o.remarks_at && ['in_work', 'review'].includes(o.status)), today);
         const ny = newYearAhead(today);
         const cases = rows.map((o) => ({
           ...(waits.get(o.id) ?? { sign_wait: 0, sign_since: null, sign_reminded_at: null, returned_open: false, returned: null }),
@@ -342,6 +365,7 @@ export function orgOps() {
           inspection: inspections.get(o.id) ?? null,
           act: acts.get(o.id) ?? null,
           docs_wait: docs.get(o.id) ?? null,
+          remarks: remarks.get(o.id) ?? null,
           idle: !!moves.get(o.id)?.idle,
           idle_long: !!moves.get(o.id)?.idle_long,
           extend: ext.get(o.id) ?? null,
