@@ -125,7 +125,7 @@ test('2.432: замечания пунктами — ИИ разбирает, э
   // Отметки и пояснения; свой пункт; пустой — нельзя сохранить.
   const items = box.locator('#remarks-items > li');
   await items.nth(0).getByLabel('Исправлено в отчёте').check();
-  await items.nth(0).getByLabel('Что исправлено и где в отчёте').fill('Аналог 3 заменён, раздел 8.2');
+  await items.nth(0).getByLabel('Что исправлено', { exact: true }).fill('Аналог 3 заменён, раздел 8.2');
   await items.nth(1).getByLabel('Пояснение без правки').check();
   await items.nth(1).getByLabel('Что пояснить банку или суду').fill('Скидка — по справочнику, ссылка в разделе 9');
   await box.getByRole('button', { name: 'Добавить пункт' }).click();
@@ -159,6 +159,70 @@ test('2.432: замечания пунктами — ИИ разбирает, э
   await expect(cbox.getByRole('button', { name: 'Сохранить пункты' })).toBeHidden();
   await cbox.scrollIntoViewIfNeeded();
   await shot(cp, 'rm04-2432-punkty-zakazchik');
+  expect(cp.problems).toEqual([]);
+  expect(sp.problems).toEqual([]);
+  await cp.context().close();
+  await sp.context().close();
+});
+
+test('2.433: «Ответ на замечания» Word — где в отчёте, скачать и приложить к исправленному отчёту', async ({ browser, baseURL }) => {
+  const cp = await phone(browser, baseURL);
+  const sp = await phone(browser, baseURL);
+  const customer = await signIn(cp, '+79990004319');
+  const expert = await signIn(sp, '+79990004320');
+  const id = await db(async (c) => {
+    await c.query("update users set full_name = 'Заказчикова Вера' where id = $1", [customer.id]);
+    await c.query("update users set full_name = 'Ответов Пётр' where id = $1", [expert.id]);
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    const oid = (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, deadline, fields,
+        remarks_at, remarks_due, remarks_round)
+      values ($1, 'Квартира: ответ на замечания', 'expertise', 'realty', 'in_work', $2, current_date + 5, $3, now(), current_date + 3, 1) returning id`,
+    [customer.id, expert.id, { purpose: 'bank', region: 'moscow', object_type: 'flat', address: 'г. Москва, ул. Ответов, д. 3', area: '52' }])).rows[0].id;
+    await c.query(`insert into order_status_history (order_id, from_status, to_status, side, reason) values ($1, 'done', 'in_work', 'customer', $2)`,
+      [oid, 'Банк пишет:\n1. Обоснуйте выбор аналогов\n2. Скидка на торг без источника']);
+    await c.query(`insert into remark_items (order_id, round, pos, body, resolution, note, by_ai) values
+      ($1, 1, 0, 'Обоснуйте выбор аналогов', 'fixed', 'Аналог 3 заменён', true), ($1, 1, 1, 'Скидка на торг без источника', null, null, true)`, [oid]);
+    return oid;
+  });
+
+  await sp.goto(`/kabinet#order=${id}`);
+  const box = sp.locator('#remarks-items-box');
+  await expect(box).toBeVisible();
+  // Пока не все отмечены — только подсказка, без кнопок.
+  await expect(sp.locator('#remarks-answer-lead')).toContainText('Когда у каждого пункта будет отметка');
+  await expect(box.getByRole('button', { name: 'Скачать «Ответ на замечания» Word' })).toBeHidden();
+
+  const items = box.locator('#remarks-items > li');
+  await items.nth(0).getByLabel('Где в отчёте', { exact: true }).fill('раздел 8.2, стр. 31');
+  await items.nth(1).getByLabel('Пояснение без правки').check();
+  await items.nth(1).getByLabel('Что пояснить банку или суду').fill('Скидка — по справочнику Лейфера');
+  await box.getByRole('button', { name: 'Сохранить пункты' }).click();
+  await expect(sp.locator('#remarks-items-msg')).toHaveText('Сохранено · все пункты отмечены');
+  await expect(sp.locator('#remarks-answer-lead')).toContainText('Приложите его к исправленному отчёту');
+
+  // Правка без сохранения — «Скачать» сначала сохраняет, потом отдаёт Word.
+  await items.nth(1).getByLabel('Где в отчёте', { exact: true }).fill('раздел 9');
+  const [dl] = await Promise.all([sp.waitForEvent('download'), box.getByRole('button', { name: 'Скачать «Ответ на замечания» Word' }).click()]);
+  expect(dl.suggestedFilename()).toMatch(/^Ответ на замечания [0-9A-F]{8}\.docx$/);
+  const place = await db(async (c) => (await c.query('select place from remark_items where order_id = $1 order by pos', [id])).rows.map((r) => r.place));
+  expect(place).toEqual(['раздел 8.2, стр. 31', 'раздел 9']);
+
+  await box.getByRole('button', { name: 'Приложить к исправленному отчёту' }).click();
+  await expect(sp.locator('#status-msg')).toContainText('Ответ на замечания приложен');
+  await expect(sp.locator('#remarks-answer-lead')).toContainText('Ответ приложен к делу файлом результата');
+  await expect(box.getByRole('button', { name: 'Заменить приложенный ответ' })).toBeVisible();
+  await expect(sp.locator('body')).toContainText(/Ответ на замечания [0-9A-F]{8}\.docx/);
+  await sp.locator('#remarks-answer-box').scrollIntoViewIfNeeded();
+  await shot(sp, 'rm05-2433-otvet-ekspert');
+
+  // Заказчик: где в отчёте и «Скачать», без «Приложить».
+  await cp.goto(`/kabinet#order=${id}`);
+  const cbox = cp.locator('#remarks-items-box');
+  await expect(cbox).toContainText('Где в отчёте: раздел 8.2, стр. 31');
+  await expect(cbox.getByRole('button', { name: 'Скачать «Ответ на замечания» Word' })).toBeVisible();
+  await expect(cbox.getByRole('button', { name: /Приложить|Заменить/ })).toHaveCount(0);
+  await cbox.scrollIntoViewIfNeeded();
+  await shot(cp, 'rm06-2433-otvet-zakazchik');
   expect(cp.problems).toEqual([]);
   expect(sp.problems).toEqual([]);
   await cp.context().close();

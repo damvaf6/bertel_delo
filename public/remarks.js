@@ -3,6 +3,8 @@
 // к отчёту»: когда пришли, срок ответа, текст и файл. Текст — через textContent.
 // 2.432: «Замечания пунктами» — эксперт нажимает «Разобрать на пункты» (ИИ делит текст и файл замечаний), правит пункты и
 // у каждого отмечает «исправлено в отчёте» или «пояснение без правки»; заказчик и диспетчер видят пункты без правки.
+// 2.433: у пункта — «Где в отчёте»; все отмечены — «Ответ на замечания» Word: скачать (все стороны) и «Приложить к
+// исправленному отчёту» (исполнитель, файлом результата; несохранённые правки сначала сохраняются).
 import { api, el, say } from '/common.js';
 
 const $ = (id) => document.getElementById(id);
@@ -29,14 +31,15 @@ export function renderRemarks(current, { action, upload, download, reload }) {
 
 // ——— Замечания пунктами (2.432) ———
 const RES = [['fixed', 'Исправлено в отчёте'], ['explained', 'Пояснение без правки']];
-const NOTE_LABEL = { fixed: 'Что исправлено и где в отчёте', explained: 'Что пояснить банку или суду', '': 'Что сделано (по желанию)' };
-let items = null; // { orderId, can_write, list: [{ text, resolution, note, by_ai }] }
+const NOTE_LABEL = { fixed: 'Что исправлено', explained: 'Что пояснить банку или суду', '': 'Что сделано (по желанию)' };
+let items = null; // { orderId, can_write, answer, dirty, list: [{ text, resolution, note, place, by_ai }] }
+const pick = ({ text, resolution, note, place, by_ai }) => ({ text, resolution, note, place, by_ai });
 
 async function loadItems(orderId) {
   try {
     const v = await api('GET', `/api/orders/${orderId}/remarks/items`);
     if (!v.available || ctx?.order.id !== orderId) return;
-    items = { orderId, can_write: v.can_write, list: v.items.map(({ text, resolution, note, by_ai }) => ({ text, resolution, note, by_ai })) };
+    items = { orderId, can_write: v.can_write, answer: v.answer, dirty: false, list: v.items.map(pick) };
     // Сдано и пунктов нет — блок не нужен.
     if (!v.can_write && !items.list.length) return;
     say($('remarks-items-msg'), '');
@@ -56,25 +59,45 @@ function drawItems() {
   $('remarks-parse').textContent = list.length ? 'Разобрать заново' : 'Разобрать на пункты';
   $('remarks-items-actions').classList.toggle('hidden', !w);
   $('remarks-items').replaceChildren(...list.map((it, i) => (w ? editItem(it, i) : showItem(it))));
+  drawAnswer();
+}
+
+// «Ответ на замечания» (2.433): по сохранённым пунктам; без отметки хоть у одного — кнопок нет, только подсказка.
+function drawAnswer() {
+  const { can_write: w, list, answer } = items;
+  const ready = list.length > 0 && list.every((i) => i.resolution);
+  $('remarks-answer-box').classList.toggle('hidden', !ready && !(w && list.length));
+  $('remarks-answer-get').classList.toggle('hidden', !ready);
+  $('remarks-answer-attach').classList.toggle('hidden', !ready || !w || ctx?.order.status !== 'in_work');
+  $('remarks-answer-attach').textContent = answer ? 'Заменить приложенный ответ' : 'Приложить к исправленному отчёту';
+  $('remarks-answer-lead').textContent = !ready
+    ? 'Когда у каждого пункта будет отметка, здесь появится «Ответ на замечания» Word: пункт, что сделано и где в отчёте.'
+    : answer ? `Ответ приложен к делу файлом результата: ${answer.filename}. Подпишите его вместе с исправленным отчётом.`
+      : 'Ответ на замечания Word — пункт, что сделано и где в отчёте. Приложите его к исправленному отчёту.';
 }
 
 function showItem(it) {
   return el('li', {},
     el('div', { text: it.text }),
     el('div', { class: it.resolution ? 'mark' : 'muted', text: it.resolution ? RES.find(([k]) => k === it.resolution)[1] : 'ещё без отметки' }),
-    ...(it.note ? [el('div', { class: 'muted', text: it.note })] : []));
+    ...(it.note ? [el('div', { class: 'muted', text: it.note })] : []),
+    ...(it.place ? [el('div', { class: 'muted', text: `Где в отчёте: ${it.place}` })] : []));
 }
 
 function editItem(it, i) {
   const textId = `rm-item-${i}`;
   const noteId = `rm-note-${i}`;
-  const area = el('textarea', { id: textId, rows: '2', maxlength: '1000', oninput: (e) => { it.text = e.target.value; } });
+  const placeId = `rm-place-${i}`;
+  const edit = (k) => (e) => { it[k] = e.target.value; items.dirty = true; };
+  const area = el('textarea', { id: textId, rows: '2', maxlength: '1000', oninput: edit('text') });
   area.value = it.text;
-  const note = el('textarea', { id: noteId, rows: '2', maxlength: '1000', oninput: (e) => { it.note = e.target.value; } });
+  const note = el('textarea', { id: noteId, rows: '2', maxlength: '1000', oninput: edit('note') });
   note.value = it.note ?? '';
+  const place = el('input', { id: placeId, type: 'text', maxlength: '200', placeholder: 'например, раздел 8.2, стр. 31', oninput: edit('place') });
+  place.value = it.place ?? '';
   const noteLabel = el('label', { for: noteId, text: NOTE_LABEL[it.resolution ?? ''] });
   const choice = el('div', { class: 'choice', role: 'radiogroup', 'aria-label': `Пункт ${i + 1}: что сделано` }, ...RES.map(([k, name]) => {
-    const r = el('input', { type: 'radio', name: `rm-res-${i}`, value: k, onchange: () => { it.resolution = k; noteLabel.textContent = NOTE_LABEL[k]; countLeft(); } });
+    const r = el('input', { type: 'radio', name: `rm-res-${i}`, value: k, onchange: () => { it.resolution = k; items.dirty = true; noteLabel.textContent = NOTE_LABEL[k]; countLeft(); } });
     r.checked = it.resolution === k;
     return el('label', {}, r, name);
   }));
@@ -82,7 +105,8 @@ function editItem(it, i) {
     el('div', { class: 'field' }, el('label', { for: textId, text: `Пункт ${i + 1}${it.by_ai ? ' (разобрал ИИ — проверьте)' : ''}` }), area),
     choice,
     el('div', { class: 'field' }, noteLabel, note),
-    el('button', { class: 'link', type: 'button', onclick: () => { items.list.splice(i, 1); drawItems(); } }, 'Удалить пункт'));
+    el('div', { class: 'field' }, el('label', { for: placeId, text: 'Где в отчёте' }), place),
+    el('button', { class: 'link', type: 'button', onclick: () => { items.list.splice(i, 1); items.dirty = true; drawItems(); } }, 'Удалить пункт'));
 }
 
 function countLeft() {
@@ -97,29 +121,57 @@ async function parse() {
   say(msg, 'ИИ разбирает замечания…', 'ok');
   try {
     const v = await api('POST', `/api/orders/${items.orderId}/remarks/items/parse`, { replace: items.list.length > 0 });
-    items.list = v.items.map(({ text, resolution, note, by_ai }) => ({ text, resolution, note, by_ai }));
+    items.list = v.items.map(pick);
+    items.answer = v.answer;
+    items.dirty = false;
     drawItems();
     say(msg, `Пунктов: ${v.items.length}. Это предложение ИИ — проверьте текст каждого пункта${v.file_unread ? '; файл замечаний прочитать не удалось — пункты только по тексту заказчика' : ''}.`, 'ok');
   } catch (err) { say(msg, err.message); } finally { $('remarks-parse').disabled = false; }
 }
 
+// true — сохранено.
 async function save() {
   const msg = $('remarks-items-msg');
   const empty = items.list.findIndex((i) => !i.text.trim());
-  if (empty >= 0) return say(msg, `Пункт ${empty + 1}: впишите текст или удалите пункт`);
+  if (empty >= 0) { say(msg, `Пункт ${empty + 1}: впишите текст или удалите пункт`); return false; }
   $('remarks-save').disabled = true;
   try {
     const v = await api('PUT', `/api/orders/${items.orderId}/remarks/items`, { items: items.list });
-    items.list = v.items.map(({ text, resolution, note, by_ai }) => ({ text, resolution, note, by_ai }));
+    items.list = v.items.map(pick);
+    items.answer = v.answer;
+    items.dirty = false;
     drawItems();
     say(msg, v.left ? `Сохранено · без отметки: ${v.left}` : 'Сохранено · все пункты отмечены', 'ok');
-  } catch (err) { say(msg, err.message); } finally { $('remarks-save').disabled = false; }
+    return true;
+  } catch (err) { say(msg, err.message); return false; } finally { $('remarks-save').disabled = false; }
+}
+
+// Несохранённые правки — сначала сохранить: Word собирается по сохранённым пунктам.
+const saved = async () => !items.dirty || save();
+
+async function getAnswer() {
+  if (await saved()) location.assign(`/api/orders/${items.orderId}/remarks/answer`);
+}
+
+async function attachAnswer() {
+  const msg = $('remarks-items-msg');
+  if (!(await saved())) return;
+  if (items.answer && !confirm(`Ответ уже приложен (${items.answer.filename}). Заменить новым? Прежний файл уберётся из дела.`)) return;
+  $('remarks-answer-attach').disabled = true;
+  try {
+    const v = await api('POST', `/api/orders/${items.orderId}/remarks/answer`, { replace: !!items.answer });
+    await ctx.reload();
+    say($('status-msg'), `Ответ на замечания приложен: ${v.document.filename}. Подпишите его вместе с исправленным отчётом и сдайте на проверку.`, 'ok');
+  } catch (err) { say(msg, err.message); } finally { $('remarks-answer-attach').disabled = false; }
 }
 
 $('remarks-parse').addEventListener('click', parse);
 $('remarks-save').addEventListener('click', save);
+$('remarks-answer-get').addEventListener('click', getAnswer);
+$('remarks-answer-attach').addEventListener('click', attachAnswer);
 $('remarks-add').addEventListener('click', () => {
-  items.list.push({ text: '', resolution: null, note: '', by_ai: false });
+  items.list.push({ text: '', resolution: null, note: '', place: '', by_ai: false });
+  items.dirty = true;
   drawItems();
   $(`rm-item-${items.list.length - 1}`).focus();
 });

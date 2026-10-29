@@ -5,6 +5,7 @@
 
 export const ITEM_MAX = 1000;
 export const ITEMS_MAX = 50;
+export const PLACE_MAX = 200; // где в отчёте: раздел, страница (2.433)
 export const SOURCE_MAX = 30_000; // столько знаков файла замечаний уходит модели
 export const RESOLUTIONS = ['fixed', 'explained'];
 export const RESOLUTION_NAME = { fixed: 'исправлено в отчёте', explained: 'пояснение без правки' };
