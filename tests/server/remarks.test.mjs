@@ -137,3 +137,95 @@ test('пришли замечания к отчёту: файл и текст, �
   assert.equal(rm2.document, null);
   assert.match(rm2.text, /Суд/);
 });
+
+test('замечания пунктами (2.432): ИИ делит файл замечаний на пункты, эксперт правит и отмечает каждый', async () => {
+  const o = await doneOrder('Квартира: замечания пунктами');
+  const items = `/api/orders/${o.id}/remarks/items`;
+  assert.deepEqual((await spec.req('GET', items)).body, { available: false }, 'замечаний ещё не было');
+  assert.equal((await spec.req('POST', `${items}/parse`, {})).status, 409);
+
+  const letter = 'ПАО Банк. Замечания к отчёту № 12/26\n1. Обоснуйте выбор аналогов:\nаналог 3 — другой район.\n'
+    + '2) Корректировка на торг не подтверждена источником.\n3. Приложите выписку ЕГРН не старше 30 дней.\n\nС уважением, отдел залогов';
+  const file = await owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(letter), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Замечания банка.txt') },
+  });
+  assert.equal(file.status, 201, JSON.stringify(file.body));
+  assert.equal((await step(owner, o, 'in_work', { reason: 'Банк прислал три замечания', document_id: file.body.document.id })).status, 200);
+
+  // Делит только исполнитель; заказчик и диспетчер — смотрят.
+  for (const c of [owner, dispatcher]) {
+    assert.equal((await c.req('POST', `${items}/parse`, {})).status, 403);
+    assert.equal((await c.req('PUT', items, { items: [{ text: 'x' }] })).status, 403);
+  }
+  assert.equal((await other.req('GET', items)).status, 404, 'чужому — нет');
+  const parsed = await spec.req('POST', `${items}/parse`, {});
+  assert.equal(parsed.status, 200, JSON.stringify(parsed.body));
+  assert.deepEqual(parsed.body.items.map((i) => i.text), [
+    'Обоснуйте выбор аналогов: аналог 3 — другой район.',
+    'Корректировка на торг не подтверждена источником.',
+    'Приложите выписку ЕГРН не старше 30 дней. С уважением, отдел залогов',
+  ]);
+  assert.ok(parsed.body.items.every((i) => i.by_ai && i.resolution === null));
+  assert.equal(parsed.body.left, 3);
+  assert.equal(parsed.body.can_write, true);
+  const call = S.providers.ai.calls.filter((c) => c.args?.purpose === 'remarks').at(-1);
+  assert.match(call.args.messages.at(-1).content, /Корректировка на торг/, 'модели — текст файла замечаний');
+
+  // Пункты уже есть — новый разбор только с «Заменить».
+  assert.equal((await spec.req('POST', `${items}/parse`, {})).body.error, 'items_exist');
+
+  // Эксперт правит: третий пункт — без подписи письма, отметки, свой пункт.
+  const list = parsed.body.items;
+  const saved = await spec.req('PUT', items, { items: [
+    { ...list[0], resolution: 'fixed', note: 'Аналог 3 заменён, раздел 8.2' },
+    { ...list[1], resolution: 'explained', note: 'Скидка на торг — по справочнику Лейфера' },
+    { text: 'Приложите выписку ЕГРН не старше 30 дней.', by_ai: true },
+    { text: 'Проверить дату оценки на титуле' },
+  ] });
+  assert.equal(saved.status, 200, JSON.stringify(saved.body));
+  assert.deepEqual(saved.body.items.map((i) => [i.resolution, i.by_ai]), [['fixed', true], ['explained', true], [null, true], [null, false]]);
+  assert.equal(saved.body.items[0].note, 'Аналог 3 заменён, раздел 8.2');
+  assert.equal(saved.body.left, 2);
+  for (const c of [owner, dispatcher]) {
+    const v = (await c.req('GET', items)).body;
+    assert.equal(v.items.length, 4);
+    assert.equal(v.can_write, false);
+  }
+  // Неверный ввод.
+  assert.equal((await spec.req('PUT', items, { items: [{ text: '' }] })).status, 400);
+  assert.equal((await spec.req('PUT', items, { items: [{ text: 'a', resolution: 'maybe' }] })).status, 400);
+  assert.equal((await spec.req('PUT', items, { items: 'x' })).status, 400);
+  assert.equal((await spec.req('PUT', items, { items: Array.from({ length: 51 }, (_, i) => ({ text: `п${i}` })) })).status, 400);
+
+  // Заменить разбором — список снова от ИИ.
+  const again = await spec.req('POST', `${items}/parse`, { replace: true });
+  assert.equal(again.body.items.length, 3);
+
+  // Сдано — только для чтения; новый круг замечаний — новый список.
+  assert.equal((await upload(spec, o, 'results', 'Отчёт (исправленный).pdf')).status, 201);
+  await signResults(S, spec, o.id);
+  assert.equal((await step(spec, o, 'review')).status, 200);
+  const rv = (await dispatcher.req('GET', `/api/orders/${o.id}/review`)).body;
+  for (const c of rv.checks) await dispatcher.req('PUT', `/api/orders/${o.id}/review/${c.id}`, { verdict: 'ok', round: rv.round });
+  assert.equal((await step(dispatcher, o, 'done')).status, 200);
+  const closed = (await spec.req('GET', items)).body;
+  assert.equal(closed.can_write, false);
+  assert.equal(closed.items.length, 3);
+  assert.equal((await spec.req('PUT', items, { items: [] })).body.error, 'status_changed');
+  assert.equal((await step(owner, o, 'in_work', { reason: 'Суд просит пояснить:\n1. Почему без осмотра\n2. Какой источник цен' })).status, 200);
+  const round2 = await spec.req('GET', items);
+  assert.equal(round2.body.round, 2);
+  assert.equal(round2.body.items.length, 0);
+  const p2 = await spec.req('POST', `${items}/parse`, {});
+  assert.deepEqual(p2.body.items.map((i) => i.text), ['Почему без осмотра', 'Какой источник цен'], 'без файла — по тексту заказчика');
+});
+
+test('пункты по нумерации: без номеров — абзацы, один абзац — один пункт, повторы и пустые — нет', async () => {
+  const { splitRemarks, cleanItems } = await import('../../src/orders/remarks.mjs');
+  assert.deepEqual(splitRemarks('Замечания:\n1. Первое\n2. Второе\n- Третье'), ['Первое', 'Второе', 'Третье']);
+  assert.deepEqual(splitRemarks('Пункт 1. Аналоги\nПункт 2: Торг'), ['Аналоги', 'Торг']);
+  assert.deepEqual(splitRemarks('Первый абзац\n\nВторой абзац'), ['Первый абзац', 'Второй абзац']);
+  assert.deepEqual(splitRemarks('Одно замечание без номера'), ['Одно замечание без номера']);
+  assert.deepEqual(cleanItems(['a', ' a ', '', 'A', { text: 'b' }, 5]), ['a', 'b']);
+  assert.equal(cleanItems(['x'.repeat(2000)])[0].length, 1000);
+});

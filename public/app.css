@@ -294,6 +294,11 @@ ul.ready-list { list-style: none; margin: 6px 0 0; padding: 0; }
 ul.ready-list li { border: none; padding: 0; }
 ul.ready-list button.link { display: flex; gap: 8px; align-items: flex-start; width: 100%; text-align: left; padding: 6px 0; font-size: 15px; color: inherit; text-decoration: none; overflow-wrap: anywhere; }
 ul.ready-list .title { font-weight: 600; }
+ol.remark-items { margin: 8px 0; padding-left: 20px; }
+ol.remark-items li { padding: 8px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+ol.remark-items .choice { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 6px 0; }
+ol.remark-items .choice label { display: flex; gap: 6px; align-items: center; font-weight: normal; }
+ol.remark-items .mark { font-weight: 600; }
 .ready-mark { flex: 0 0 22px; height: 22px; border-radius: 50%; text-align: center; line-height: 22px; font-weight: 700; color: var(--accent-text); }
 li.ready.ok .ready-mark { background: var(--ok); }
 li.ready.warn .ready-mark { background: var(--warn); }

@@ -262,6 +262,17 @@
           <p id="remarks-text-view"></p>
           <div id="remarks-doc"></div>
         </div>
+        <div class="ready-box hidden" id="remarks-items-box">
+          <h3>Замечания пунктами</h3>
+          <p class="muted" id="remarks-items-lead"></p>
+          <button type="button" class="secondary" id="remarks-parse">Разобрать на пункты</button>
+          <ol class="remark-items" id="remarks-items"></ol>
+          <div class="row" id="remarks-items-actions">
+            <button type="button" class="secondary" id="remarks-add">Добавить пункт</button>
+            <button type="button" id="remarks-save">Сохранить пункты</button>
+          </div>
+          <p class="msg" id="remarks-items-msg" role="status" aria-live="polite"></p>
+        </div>
         <div class="ready-box hidden" id="ready-box">
           <h3>Готово к сдаче?</h3>
           <p class="muted" id="ready-lead"></p>

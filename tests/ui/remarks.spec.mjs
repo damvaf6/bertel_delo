@@ -93,3 +93,74 @@ test('2.431: пришли замечания к отчёту — заказчи�
   await cp.context().close();
   await sp.context().close();
 });
+
+test('2.432: замечания пунктами — ИИ разбирает, эксперт правит и отмечает, заказчик видит пункты', async ({ browser, baseURL }) => {
+  const cp = await phone(browser, baseURL);
+  const sp = await phone(browser, baseURL);
+  const customer = await signIn(cp, '+79990004317');
+  const expert = await signIn(sp, '+79990004318');
+  const id = await db(async (c) => {
+    await c.query("update users set full_name = 'Заказчикова Нина' where id = $1", [customer.id]);
+    await c.query("update users set full_name = 'Оценщиков Иван' where id = $1", [expert.id]);
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    const oid = (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, deadline, fields,
+        remarks_at, remarks_due, remarks_round)
+      values ($1, 'Квартира: замечания пунктами', 'expertise', 'realty', 'in_work', $2, current_date + 5, $3, now(), current_date + 3, 1) returning id`,
+    [customer.id, expert.id, { purpose: 'bank', region: 'moscow', object_type: 'flat', address: 'г. Москва, ул. Пунктов, д. 2', area: '41' }])).rows[0].id;
+    await c.query(`insert into order_status_history (order_id, from_status, to_status, side, reason) values ($1, 'done', 'in_work', 'customer', $2)`,
+      [oid, 'Банк пишет:\n1. Обоснуйте выбор аналогов\n2. Скидка на торг без источника']);
+    return oid;
+  });
+
+  await sp.goto(`/kabinet#order=${id}`);
+  const box = sp.locator('#remarks-items-box');
+  await expect(box).toBeVisible();
+  await expect(box).toContainText('ИИ разделит замечания');
+  await box.getByRole('button', { name: 'Разобрать на пункты' }).click();
+  await expect(sp.locator('#remarks-items-msg')).toContainText('Пунктов: 2. Это предложение ИИ');
+  await expect(sp.getByLabel('Пункт 1 (разобрал ИИ — проверьте)')).toHaveValue('Обоснуйте выбор аналогов');
+  await expect(sp.getByLabel('Пункт 2 (разобрал ИИ — проверьте)')).toHaveValue('Скидка на торг без источника');
+  await expect(box.getByRole('button', { name: 'Разобрать заново' })).toBeVisible();
+
+  // Отметки и пояснения; свой пункт; пустой — нельзя сохранить.
+  const items = box.locator('#remarks-items > li');
+  await items.nth(0).getByLabel('Исправлено в отчёте').check();
+  await items.nth(0).getByLabel('Что исправлено и где в отчёте').fill('Аналог 3 заменён, раздел 8.2');
+  await items.nth(1).getByLabel('Пояснение без правки').check();
+  await items.nth(1).getByLabel('Пояснение').fill('Скидка — по справочнику, ссылка в разделе 9');
+  await box.getByRole('button', { name: 'Добавить пункт' }).click();
+  await expect(sp.getByLabel('Пункт 3')).toBeFocused();
+  await box.getByRole('button', { name: 'Сохранить пункты' }).click();
+  await expect(sp.locator('#remarks-items-msg')).toHaveText('Пункт 3: впишите текст или удалите пункт');
+  await sp.getByLabel('Пункт 3').fill('Проверить дату оценки на титуле');
+  await expect(sp.locator('#remarks-items-lead')).toHaveText('Пунктов: 3 · без отметки: 1');
+  await box.getByRole('button', { name: 'Сохранить пункты' }).click();
+  await expect(sp.locator('#remarks-items-msg')).toHaveText('Сохранено · без отметки: 1');
+  await box.scrollIntoViewIfNeeded();
+  await shot(sp, 'rm03-2432-punkty-ekspert');
+
+  // После перезагрузки — то же; удалил пункт — сохранилось.
+  await sp.reload();
+  await expect(sp.getByLabel('Пункт 3')).toHaveValue('Проверить дату оценки на титуле');
+  await expect(items.nth(0).getByLabel('Исправлено в отчёте')).toBeChecked();
+  await items.nth(2).getByRole('button', { name: 'Удалить пункт' }).click();
+  await box.getByRole('button', { name: 'Сохранить пункты' }).click();
+  await expect(sp.locator('#remarks-items-msg')).toHaveText('Сохранено · все пункты отмечены');
+
+  // Заказчик: пункты и отметки без правки.
+  await cp.goto(`/kabinet#order=${id}`);
+  const cbox = cp.locator('#remarks-items-box');
+  await expect(cbox).toBeVisible();
+  await expect(cbox.locator('#remarks-items > li')).toHaveCount(2);
+  await expect(cbox).toContainText('Исправлено в отчёте');
+  await expect(cbox).toContainText('Скидка — по справочнику, ссылка в разделе 9');
+  await expect(cbox.locator('textarea')).toHaveCount(0);
+  await expect(cbox.getByRole('button', { name: 'Разобрать заново' })).toBeHidden();
+  await expect(cbox.getByRole('button', { name: 'Сохранить пункты' })).toBeHidden();
+  await cbox.scrollIntoViewIfNeeded();
+  await shot(cp, 'rm04-2432-punkty-zakazchik');
+  expect(cp.problems).toEqual([]);
+  expect(sp.problems).toEqual([]);
+  await cp.context().close();
+  await sp.context().close();
+});
