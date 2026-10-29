@@ -61,13 +61,23 @@ function objectOf(o) {
   return o.title;
 }
 
+// Новая редакция после замечаний к сданному отчёту (2.438, 2.434): файлы результата, загруженные после последних замечаний,
+// заменяют в перечне прежнюю редакцию — номер, дата составления и стоимость берутся из них; у строки — edition: когда пришли
+// замечания (remarks_on) и день новой редакции (on). Новой редакции ещё нет — перечень по прежним файлам, без edition.
+export function editionDocs(o, docs) {
+  if (!o.remarks_at) return { docs };
+  const fresh = docs.filter((d) => new Date(d.created_at) >= new Date(o.remarks_at));
+  if (!fresh.length || fresh.length === docs.length) return { docs };
+  return { docs: fresh, edition: { on: dayMsk(fresh[0].created_at), remarks_on: dayMsk(o.remarks_at), prior: docs.length - fresh.length } };
+}
+
 // Сданные за период дела → строки перечня (номер, дата составления, стоимость — из файлов результата).
 async function registryRows(sql, storage, registry, done, period) {
   const list = done.filter((o) => isAppraisal(registry, o)).sort((a, b) => new Date(a.at) - new Date(b.at));
   const rows = [];
   for (const o of list.slice(0, REGISTRY_MAX)) {
     const svc = registry.service(o.module, o.service);
-    const docs = storage ? await resultDocs(sql, storage, o) : [];
+    const { docs, edition } = editionDocs(o, storage ? await resultDocs(sql, storage, o) : []);
     const facts = reportFacts(docs.filter((d) => d.pages));
     const row = {
       id: o.id,
@@ -81,6 +91,7 @@ async function registryRows(sql, storage, registry, done, period) {
       made_on: facts.made_on ?? null,
       value_rub: facts.value_rub ?? null,
       value_name: facts.value_name ?? null,
+      ...(edition ? { edition } : {}),
       ...(o.expert_id ? { expert_id: o.expert_id, expert_name: o.expert_name || 'Без имени' } : {}),
     };
     const gaps = MISSING.filter(([k]) => row[k] == null);
@@ -167,7 +178,7 @@ async function orgHoles(sql, orgId, period, rows) {
 
 export async function expertRegistry(sql, storage, registry, userId, period) {
   const done = await sql`
-    select distinct on (o.id) o.id, o.title, o.module, o.service, o.fields, o.executor_user_id, h.at,
+    select distinct on (o.id) o.id, o.title, o.module, o.service, o.fields, o.executor_user_id, o.remarks_at, h.at,
       coalesce(g.name, u.full_name) as customer
     from order_status_history h join orders o on o.id = h.order_id join users u on u.id = o.owner_user_id
     left join organizations g on g.id = o.org_id
@@ -186,7 +197,7 @@ export async function expertRegistry(sql, storage, registry, userId, period) {
 // Сданные за период дела экспертов, работающих от организации (после вступления), — для перечня и поиска по номеру (2.417).
 async function orgDone(sql, orgId, period) {
   return sql`
-    select distinct on (o.id) o.id, o.title, o.module, o.service, o.fields, o.executor_user_id, o.executor_user_id as expert_id, h.at,
+    select distinct on (o.id) o.id, o.title, o.module, o.service, o.fields, o.executor_user_id, o.executor_user_id as expert_id, o.remarks_at, h.at,
       o.updated_at > now() - ${CASES_DAYS}::int * interval '1 day' as in_cases,
       coalesce(g.name, u.full_name) as customer, e.full_name as expert_name
     from order_status_history h join orders o on o.id = h.order_id join users u on u.id = o.owner_user_id
@@ -268,9 +279,10 @@ export function registryCsv(name, r, { org = false } = {}) {
     [`Период: ${r.name}`],
     [],
     ['№ п/п', 'Номер отчёта', 'Дата составления', ...(org ? ['Оценщик'] : []), 'Объект оценки', 'Услуга', 'Цель оценки', 'Заказчик',
-      'Итоговая стоимость, ₽', 'Что за стоимость', 'Сдано'],
+      'Итоговая стоимость, ₽', 'Что за стоимость', 'Сдано', 'Редакция'],
     ...r.rows.map((x, i) => [i + 1, x.number ?? '', ruDay(x.made_on), ...(org ? [x.expert_name] : []), x.object, x.service_name,
-      x.purpose ?? '', x.customer ?? '', rubCell(x.value_rub), x.value_name ?? '', ruDay(x.done_on)]),
+      x.purpose ?? '', x.customer ?? '', rubCell(x.value_rub), x.value_name ?? '', ruDay(x.done_on),
+      x.edition ? `новая от ${ruDay(x.edition.on)} (после замечаний от ${ruDay(x.edition.remarks_on)})` : '']),
     ...(r.rows.some((x) => x.dup) ? [[], ['Номер отчёта повторяется — у каждого отчёта свой номер: '
       + [...new Set(r.rows.filter((x) => x.dup).map((x) => `№ ${x.number}${org ? ` (${x.expert_name})` : ''}`))].join(', ')]] : []),
     ...(r.holes?.total ? [[], [`Пропуски в нумерации (с № ${r.holes.from} по № ${r.holes.to}): `

@@ -309,8 +309,16 @@ export function caseOps() {
   ];
 }
 
+// Редакция файла результата (2.438): к сданному отчёту пришли замечания, а после них загружена новая редакция (2.434), — у
+// файлов до замечаний «прежняя — сдана до замечаний от …», после — «новая от …»; замечаний не было или новой ещё нет — пусто.
+function editionOf(order, docs) {
+  const at = order?.remarks_at && new Date(order.remarks_at);
+  if (!at || !docs.some((d) => new Date(d.created_at) >= at) || !docs.some((d) => new Date(d.created_at) < at)) return () => '';
+  return (d) => (new Date(d.created_at) < at ? `прежняя — сдана до замечаний от ${day(todayMsk(at))}` : `новая от ${day(todayMsk(new Date(d.created_at)))}`);
+}
+
 // Файлы результата эксперта с подписями УКЭП — в папку дела архива (2.89, 2.407). На каждый файл — [имя (или почему не вошёл),
-// подпись эксперта, подпись организации]; подписи проверяются при выгрузке. Файлов результата нет — одна строка об этом.
+// подпись эксперта, подпись организации, редакция]; подписи проверяются при выгрузке. Файлов результата нет — одна строка об этом.
 const SIGN_RU = (r) => (!r ? 'нет' : r.valid ? 'верна' : 'не прошла проверку');
 function resultPacker(sql, providers, tooBig) {
   const used = new Set();
@@ -324,20 +332,22 @@ function resultPacker(sql, providers, tooBig) {
   pack.add = async (orderId, expertId, dir) => {
     const docs = await sql`select * from documents where order_id = ${orderId} and kind = 'result' and deleted_at is null
                            and uploaded_by = ${expertId} order by created_at`;
-    if (!docs.length) return [['файла результата нет', '—', '—']];
+    if (!docs.length) return [['файла результата нет', '—', '—', '—']];
+    const [order] = await sql`select remarks_at from orders where id = ${orderId}`;
+    const ed = editionOf(order, docs);
     const signs = await sql`select * from document_signatures where order_id = ${orderId} order by id`;
     const out = [];
     for (const d of docs) {
       const size = Number(d.size_bytes);
       const buf = pack.total + size > EXPORT_MAX_BYTES ? null : await providers.storage.get(d.storage_key);
       if (!buf) {
-        out.push([`${d.filename} (${pack.total + size > EXPORT_MAX_BYTES ? tooBig : 'файл не найден в хранилище'})`, '—', '—']);
+        out.push([`${d.filename} (${pack.total + size > EXPORT_MAX_BYTES ? tooBig : 'файл не найден в хранилище'})`, '—', '—', ed(d)]);
         continue;
       }
       pack.total += buf.length;
       const name = place(dir, d.filename);
       pack.files.push([name, buf]);
-      pack.listed.push([name, sizeRu(buf.length), sha256(buf)]);
+      pack.listed.push([name, sizeRu(buf.length), sha256(buf), ed(d)]);
       const by = {};
       for (const s of signs.filter((x) => x.document_id === d.id)) {
         const sb = await providers.storage.get(s.storage_key);
@@ -345,10 +355,10 @@ function resultPacker(sql, providers, tooBig) {
         pack.test ||= Boolean(s.test);
         const sn = place(dir, signatureFilename(d.filename, s.role));
         pack.files.push([sn, sb]);
-        pack.listed.push([sn, sizeRu(sb.length), sha256(sb)]);
+        pack.listed.push([sn, sizeRu(sb.length), sha256(sb), ed(d) && `подпись — ${ed(d)}`]);
         by[s.role === 'org' ? 'org' : 'expert'] = await checkSignature(providers, buf, sb);
       }
-      out.push([d.filename, SIGN_RU(by.expert), SIGN_RU(by.org)]);
+      out.push([d.filename, SIGN_RU(by.expert), SIGN_RU(by.org), ed(d)]);
     }
     return out;
   };
@@ -361,7 +371,7 @@ function resultPacker(sql, providers, tooBig) {
     const doc = inspectionActDoc(bare ? { ...data, address: null } : data);
     const name = place(dir, doc.filename);
     pack.files.push([name, doc.buf]);
-    pack.listed.push([name, sizeRu(doc.buf.length), sha256(doc.buf)]);
+    pack.listed.push([name, sizeRu(doc.buf.length), sha256(doc.buf), '']);
     return `в архиве (фото: ${data.total})`;
   };
   return pack;
@@ -391,12 +401,12 @@ export async function buildOrgMonthArchive(ctx, cases, monthName) {
     { type: 'title', text: `Сданные заключения · ${monthName}` },
     { type: 'para', text: `${org.name}. Выгрузка из «БЕРТЕЛ Дело» ${dt(new Date())} (время московское). Сделал(а): ${actor.full_name || actor.phone}.` },
     { type: 'bold', text: `Сдано дел: ${cases.length}${late ? `; из них позже срока: ${late}` : ''}.` },
-    { type: 'para', text: 'Дела экспертов, которые работают от организации, сданные в этом месяце с тех пор, как эксперт вступил в организацию. Файлы — в папках «Эксперт / Дело №»; подпись — открепленный файл рядом с подписанным; акт осмотра — там же, если в деле был осмотр. Подписи проверены при выгрузке.' },
+    { type: 'para', text: 'Дела экспертов, которые работают от организации, сданные в этом месяце с тех пор, как эксперт вступил в организацию. Файлы — в папках «Эксперт / Дело №»; подпись — открепленный файл рядом с подписанным; акт осмотра — там же, если в деле был осмотр. К отчёту пришли замечания — в папке обе редакции: прежняя (сдана до замечаний) и новая, у каждой своя контрольная сумма. Подписи проверены при выгрузке.' },
     ...(test ? [{ type: 'note', text: 'Тестовые подписи площадки — юридической силы не имеют.' }] : []),
-    { type: 'table', rows: [['Дело', 'Услуга', 'Эксперт', 'Сдано', 'Срок', 'Файл', 'Подпись эксперта', 'Подпись организации', 'Акт осмотра'], ...rows] },
+    { type: 'table', rows: [['Дело', 'Услуга', 'Эксперт', 'Сдано', 'Срок', 'Файл', 'Подпись эксперта', 'Подпись организации', 'Редакция', 'Акт осмотра'], ...rows] },
     { type: 'bold', text: 'Файлы в архиве' },
     { type: 'para', text: 'Контрольная сумма SHA-256 подтверждает, что файл не менялся после выгрузки: её можно посчитать заново любой программой и сравнить.' },
-    { type: 'table', rows: [['Файл', 'Размер', 'SHA-256'], ...listed] },
+    { type: 'table', rows: [['Файл', 'Размер', 'SHA-256', 'Редакция'], ...listed] },
   ]);
   const archive = zip([[`Опись · ${safeName(monthName)}.docx`, inventory], ...files], { store: true });
   return { buf: archive, filename: `Заключения за ${monthName}.zip`, files: files.length };
@@ -422,12 +432,12 @@ export async function buildExpertArchive(ctx, list) {
     { type: 'title', text: `Сданные заключения · ${list.name}` },
     { type: 'para', text: `${actor.full_name || actor.phone}. Выгрузка из «БЕРТЕЛ Дело» ${dt(new Date())} (время московское).` },
     { type: 'bold', text: `Сдано отчётов: ${list.total}${list.total > list.shown ? `; в архиве — первые ${list.shown}, остальные — выгрузкой за квартал` : ''}.` },
-    { type: 'para', text: 'Те же отчёты, что в «Перечне отчётов для СРО». Номер и дата отчёта — из файла отчёта в деле. Файлы — в папках «Дело №»; подпись — открепленный файл рядом с подписанным; акт осмотра — там же, если в деле был осмотр. Подписи проверены при выгрузке.' },
+    { type: 'para', text: 'Те же отчёты, что в «Перечне отчётов для СРО». Номер и дата отчёта — из файла отчёта в деле. Файлы — в папках «Дело №»; подпись — открепленный файл рядом с подписанным; акт осмотра — там же, если в деле был осмотр. К отчёту пришли замечания — в папке обе редакции: прежняя (сдана до замечаний) и новая, у каждой своя контрольная сумма. Подписи проверены при выгрузке.' },
     ...(test ? [{ type: 'note', text: 'Тестовые подписи площадки — юридической силы не имеют.' }] : []),
-    { type: 'table', rows: [['№', 'Отчёт', 'Объект', 'Услуга', 'Сдано', 'Файл', 'Подпись эксперта', 'Подпись организации', 'Акт осмотра'], ...rows] },
+    { type: 'table', rows: [['№', 'Отчёт', 'Объект', 'Услуга', 'Сдано', 'Файл', 'Подпись эксперта', 'Подпись организации', 'Редакция', 'Акт осмотра'], ...rows] },
     { type: 'bold', text: 'Файлы в архиве' },
     { type: 'para', text: 'Контрольная сумма SHA-256 подтверждает, что файл не менялся после выгрузки: её можно посчитать заново любой программой и сравнить.' },
-    { type: 'table', rows: [['Файл', 'Размер', 'SHA-256'], ...listed] },
+    { type: 'table', rows: [['Файл', 'Размер', 'SHA-256', 'Редакция'], ...listed] },
   ]);
   const archive = zip([[`Опись · ${safeName(list.name)}.docx`, inventory], ...files], { store: true });
   return { buf: archive, filename: `Мои заключения за ${list.name}.zip`, files: files.length };

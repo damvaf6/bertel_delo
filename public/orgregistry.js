@@ -9,6 +9,9 @@ import { holesBox } from '/registry.js';
 
 const $ = (id) => document.getElementById(id);
 const period = () => `year=${encodeURIComponent($('org-registry-year').value)}&quarter=${encodeURIComponent($('org-registry-quarter').value)}`;
+// 2.438: к сданному отчёту пришли замечания — в перечне новая редакция (номер, дата, стоимость — из неё), прежняя — в деле.
+const editionLine = (r) => el('div', { class: 'muted', 'data-registry-edition': r.id,
+  text: `Новая редакция от ${dayRu(r.edition.on)} — после замечаний от ${dayRu(r.edition.remarks_on)}; прежняя остаётся в деле и в архиве` });
 const dupLine = (r) => el('div', { class: 'overdue', 'data-registry-dup': r.id,
   text: `Номер № ${r.number} повторяется в отчётах эксперта ${r.expert_name} — у каждого отчёта оценщика свой номер` });
 const OLD_CASE = 'Сдано больше 90 дней назад — в «Делах экспертов» его уже нет; файлы отчёта — в «Заключениях архивом» сводки за тот месяц';
@@ -61,6 +64,7 @@ async function load(chosen) {
     el('div', { class: 'muted', text: [r.service_name, r.purpose, r.customer ? `заказчик — ${r.customer}` : null].filter(Boolean).join(' · ') }),
     el('div', { class: 'muted', text: `${r.value_rub != null ? `${r.value_name}: ${rub(r.value_rub * 100)}` : 'стоимость не найдена'} · сдано ${dayRu(r.done_on)}` }),
     ...(r.in_cases === false ? [el('div', { class: 'muted', 'data-registry-old': r.id, text: OLD_CASE })] : []),
+    ...(r.edition ? [editionLine(r)] : []),
     ...(r.dup ? [dupLine(r)] : []),
     ...(r.missing.length ? [el('div', { class: 'overdue', text: `Не нашлось в файле отчёта: ${r.missing.join(', ')} — допишите в таблице` })] : []))));
   $('org-registry-empty').classList.toggle('hidden', registry.rows.length > 0);
