@@ -28,6 +28,11 @@ const experts = (n) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? 'эксперт�
 
 // «в 1 деле», «в 3 делах».
 const casesRu = (n) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? 'деле' : 'делах'}`;
+// 2.437: «2 дела», и строка о замечаниях к сданным отчётам — сколько дел, сколько раз, пунктов.
+const casesN = (n) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? 'дело' : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? 'дела' : 'дел'}`;
+const afterRemarks = (x) => [`замечания к сданному отчёту пришли по ${x.remarks_after_cases === 1 ? 'одному делу' : `${x.remarks_after_cases} делам`}`,
+  x.remarks_after > x.remarks_after_cases ? `всего ${times(x.remarks_after)}` : null,
+  x.remarks_after_items ? `пунктов: ${x.remarks_after_items}` : null].filter(Boolean).join(' · ');
 const $ = (id) => document.getElementById(id);
 const MONTHS = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
 const monthRu = (m) => `${MONTHS[Number(m.slice(5, 7)) - 1]} ${m.slice(0, 4)}`;
@@ -237,6 +242,20 @@ async function load(month) {
   $('org-report-disp').replaceChildren(...disp.map((x) => el('li', { 'data-disp-reason': '' },
     el('span', { text: x.text }),
     el('span', { class: 'muted', text: ` — ${times(x.n)}${x.experts > 1 ? `, у ${experts(x.experts)}` : ''}` }))));
+  // 2.437: замечания к сданным отчётам от банка и суда — по пользователям отчёта и частые пункты.
+  $('org-report-after-box').classList.toggle('hidden', !report.total.remarks_after);
+  $('org-report-after-total').textContent = report.total.remarks_after ? afterRemarks(report.total) : '';
+  $('org-report-after-users').replaceChildren(...(report.after_by_user ?? []).map((x) => el('li', { 'data-after-user': x.id },
+    el('div', { class: 'title', text: `${x.name} — ${casesN(x.cases)}` }),
+    el('div', { class: 'muted', text: [x.n > x.cases ? `замечания приходили ${times(x.n)}` : null,
+      x.items ? `пунктов: ${x.items}` : 'на пункты ещё не разобраны',
+      x.top.length ? `чаще всего: ${x.top.map((m) => `«${m.text}»${m.n > 1 ? ` ×${m.n}` : ''}`).join(', ')}` : null]
+      .filter(Boolean).join(' · ') }))));
+  const after = report.after_remarks ?? [];
+  $('org-report-after').previousElementSibling.classList.toggle('hidden', !after.length);
+  $('org-report-after').replaceChildren(...after.map((x) => el('li', { 'data-after-remark': '' },
+    el('span', { text: x.text }),
+    el('span', { class: 'muted', text: ` — ${times(x.n)}${x.experts > 1 ? `, у ${experts(x.experts)}` : ''}` }))));
   $('org-report').replaceChildren(...report.experts.map((x) => el('li', { 'data-report-expert': x.user_id },
     el('div', { class: 'title', text: x.full_name }),
     el('div', { class: 'muted', text: `принял: ${x.accepted} · сдано: ${x.done}` }),
@@ -264,6 +283,8 @@ async function load(month) {
     ...(bankAfter(x) ? [el('div', { class: x.bank_after ? 'warn' : 'muted', 'data-expert-bankafter': '', text: bankAfter(x) })] : []),
     ...(extMoves(x) ? [el('div', { class: extWarn(x) ? 'warn' : 'muted', 'data-expert-ext': '', text: extMoves(x) })] : []),
     ...(letterAsk(x) ? [el('div', { class: x.letter_ask_wait ? 'warn' : 'muted', 'data-expert-letterask': '', text: letterAsk(x) })] : []),
+    ...(x.remarks_after ? [el('div', { class: 'warn', 'data-expert-after': '', text: `${afterRemarks(x)}${
+      x.after_remarks?.length ? `; чаще всего: ${x.after_remarks.map((m) => `«${m.text}»${m.n > 1 ? ` ×${m.n}` : ''}`).join(', ')}` : ''}` })] : []),
     ...(x.remarks?.length ? [el('div', { class: 'muted', 'data-expert-remarks': '', text: `частые замечания: ${
       x.remarks.map((m) => `«${m.text}»${m.n > 1 ? ` ×${m.n}` : ''}`).join(', ')}` })] : []),
     el('div', { class: 'muted', text: `вознаграждение за сданные: ${rub(x.fee_kop)} · выплачено: ${rub(x.paid_kop)}` }))));

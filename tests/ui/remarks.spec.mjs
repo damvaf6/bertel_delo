@@ -378,3 +378,47 @@ test('2.436: руководитель — отбор «Замечания к с�
   await hp.context().close();
   await sp.context().close();
 });
+
+test('2.437: сводка за месяц — замечания после сдачи по пользователям отчёта и частые пункты', async ({ browser, baseURL }) => {
+  const hp = await phone(browser, baseURL);
+  const head = await signIn(hp, '+79990004327');
+  const { orgId } = await db(async (c) => {
+    const expert = (await c.query("insert into users (phone, full_name) values ('+79990004328', 'Сводкин-Замечаев Иван') returning id")).rows[0].id;
+    const customer = (await c.query("insert into users (phone) values ('+79990004329') returning id")).rows[0].id;
+    await c.query("update users set full_name = 'Руководителева Ольга' where id = $1", [head.id]);
+    const org = (await c.query("insert into organizations (name) values ('ООО «Замечания 2.437»') returning id")).rows[0].id;
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org, head.id, expert]);
+    await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [expert, org]);
+    const cases = [['Квартира: замечания суда', { purpose: 'court' }, ['Обоснуйте выбор аналогов', 'Уточните площадь'], 2],
+      ['Дом: замечания Сбербанка', { purpose: 'bank', bank: 'sber' }, ['Обоснуйте выбор аналогов.', 'Приложите свежую выписку ЕГРН'], 1]];
+    for (const [title, f, items, rounds] of cases) {
+      const oid = (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, deadline, fields,
+          remarks_at, remarks_due, remarks_round)
+        values ($1, $2, 'expertise', 'realty', 'in_work', $3, current_date + 5, $4, now(), current_date + 3, $5) returning id`,
+      [customer, title, expert, { region: 'moscow', object_type: 'flat', ...f }, rounds])).rows[0].id;
+      for (let r = 1; r <= rounds; r++) {
+        await c.query(`insert into order_status_history (order_id, from_status, to_status, side, reason) values ($1, 'done', 'in_work', 'customer', 'Замечания')`, [oid]);
+        for (const [i, body] of items.entries()) {
+          await c.query('insert into remark_items (order_id, round, pos, body) values ($1, $2, $3, $4)', [oid, r, i, body]);
+        }
+      }
+    }
+    return { orgId: org };
+  });
+
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const box = hp.locator('#org-report-after-box');
+  await expect(box).toBeVisible();
+  await expect(hp.locator('#org-report-after-total')).toHaveText('замечания к сданному отчёту пришли по 2 делам · всего 3 раза · пунктов: 6');
+  const users = hp.locator('#org-report-after-users > li');
+  await expect(users).toHaveCount(2);
+  await expect(users.nth(0).locator('.title')).toHaveText('Суд — 1 дело');
+  await expect(users.nth(0).locator('.muted')).toHaveText('замечания приходили 2 раза · пунктов: 4 · чаще всего: «Уточните площадь» ×2, «Обоснуйте выбор аналогов» ×2');
+  await expect(users.nth(1).locator('.title')).toHaveText('Сбербанк — 1 дело');
+  await expect(hp.locator('#org-report-after > li').first()).toHaveText('Обоснуйте выбор аналогов. — 3 раза');
+  await expect(hp.locator('#org-report [data-expert-after]')).toContainText('замечания к сданному отчёту пришли по 2 делам');
+  await box.scrollIntoViewIfNeeded();
+  await shot(hp, 'rm12-2437-svodka-zamechaniya');
+  expect(hp.problems).toEqual([]);
+  await hp.context().close();
+});

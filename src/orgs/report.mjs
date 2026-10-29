@@ -515,6 +515,40 @@ export async function orgMonthDoneCases(sql, orgId, month) {
   return rows.map((o) => ({ ...o, expert_name: names.get(o.user_id) })).sort((a, b) => new Date(a.at) - new Date(b.at));
 }
 
+// Замечания к сданному отчёту за месяц (2.437): шаг заказчика «Пришли замечания к отчёту» (`done → in_work`, 2.431) — по
+// эксперту дела; круг — какой раз по делу пришли замечания (к нему — пункты `remark_items`). У «Переводов» тот же шаг —
+// бесплатная переделка, поэтому только модули с замечаниями в описании.
+const afterRemarksQ = (sql, orgId, ids, { start, end }) => sql`
+  select o.executor_user_id as user_id, x.order_id, x.at, x.round, o.module, o.fields->>'purpose' as purpose,
+         o.fields->>'bank' as bank
+  from (select h.order_id, h.at, row_number() over (partition by h.order_id order by h.id)::int as round
+        from order_status_history h where h.from_status = 'done' and h.to_status = 'in_work' and h.side = 'customer') x
+  join orders o on o.id = x.order_id
+  join org_members m on m.org_id = ${orgId} and m.user_id = o.executor_user_id
+  where o.executor_user_id = any(${ids}::uuid[]) and x.at >= ${start} and x.at < ${end} and x.at >= m.created_at
+  order by x.at desc`;
+const remarkItemsQ = (sql, orderIds) => (orderIds.length ? sql`
+  select order_id, round, body as text, created_at as at from remark_items where order_id = any(${orderIds}::uuid[])
+  order by created_at desc, pos` : []);
+
+// Пользователь отчёта по заявке: суд, Сбербанк, другой банк, остальные (нотариус, сделка и т. п.).
+export const REPORT_USERS = [['court', 'Суд'], ['sber', 'Сбербанк'], ['bank', 'Другие банки'], ['other', 'Остальные']];
+export const reportUserOf = (r) => (r.purpose === 'court' ? 'court' : r.purpose === 'bank' ? (r.bank === 'sber' ? 'sber' : 'bank') : 'other');
+
+// { remarks_after, remarks_after_cases, remarks_after_items }: сколько раз приходили замечания, по скольким делам, пунктов.
+function afterRemarks(rows, items) {
+  return { remarks_after: rows.length, remarks_after_cases: casesOf(rows), remarks_after_items: items.length };
+}
+// По пользователям отчёта: [{ id, name, n, cases, items, top }] — только где были замечания, в порядке REPORT_USERS.
+function afterByUser(rows, items) {
+  return REPORT_USERS.map(([id, name]) => {
+    const own = rows.filter((r) => reportUserOf(r) === id);
+    const its = items.filter((i) => own.some((r) => r.order_id === i.order_id && r.round === i.round));
+    return { id, name, n: own.length, cases: casesOf(own), items: its.length,
+      top: topRemarks(its, TOP_REMARKS_EXPERT).map(({ text, n }) => ({ text, n })) };
+  }).filter((g) => g.n);
+}
+
 // Сданные по услугам (2.135): [{ module, service, name, done, done_late, fee_kop, experts, avg_days }] — по убыванию числа,
 // при равенстве — по названию; avg_days (2.144) — null, если ни у одного дела нет отметки о принятии.
 function byService(done, registry) {
@@ -544,7 +578,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
   const since = (await sql`select to_char(created_at at time zone 'Europe/Moscow', 'YYYY-MM') as m from organizations
                            where id = ${orgId}`)[0]?.m ?? '';
   const none = { accepted: [], done: [], headReturns: [], resign: [], signed: [], firstSign: [], remarkItems: [], dispReturns: [], dispReasons: [], paid: [], active: [],
-    bankTask: [], letterAsk: [] };
+    bankTask: [], letterAsk: [], afterRemarks: [] };
   const q = !ids.length ? none : {
     accepted: await sql`
       select f.specialist_id as user_id, count(distinct f.order_id)::int as n from order_offers f
@@ -566,6 +600,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
       order by r.created_at desc, r.id desc, i.n`,
     dispReturns: await dispReturnsQ(sql, orgId, ids, { start, end }),
     dispReasons: await dispReasonsQ(sql, orgId, ids, { start, end }),
+    afterRemarks: (await afterRemarksQ(sql, orgId, ids, { start, end })).filter((r) => !registry || registry.remarks(r.module)),
     paid: await sql`
       select p.executor_user_id as user_id, coalesce(sum(p.amount_kop), 0)::bigint as kop from payouts p
       join org_members m on m.org_id = ${orgId} and m.user_id = p.executor_user_id
@@ -578,6 +613,10 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
       join org_members m on m.org_id = ${orgId} and m.user_id = o.executor_user_id
       where o.executor_user_id = any(${ids}::uuid[]) and o.status in ('awaiting_executor', 'in_work', 'review') and o.deadline is not null` : [],
   };
+  // Пункты замечаний — того круга, что пришёл в этом месяце; с экспертом дела.
+  const afterItems = (await remarkItemsQ(sql, [...new Set(q.afterRemarks.map((r) => r.order_id))]))
+    .flatMap((i) => q.afterRemarks.filter((r) => r.order_id === i.order_id && r.round === i.round).slice(0, 1)
+      .map((r) => ({ ...i, user_id: r.user_id })));
   const taskDues = await taskDueRows(q.done, taskDue);
   const bankAfters = await bankAfterRows(q.done, taskAfter);
   const exts = await extRows(q.done, taskMove);
@@ -623,6 +662,8 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
       ...letterAsk(q.letterAsk.filter((x) => x.user_id === e.user_id)),
       ...orgSign(done),
       remarks: topRemarks(q.remarkItems.filter((i) => i.user_id === e.user_id), TOP_REMARKS_EXPERT).map(({ text, n }) => ({ text, n })),
+      ...afterRemarks(q.afterRemarks.filter((r) => r.user_id === e.user_id), afterItems.filter((i) => i.user_id === e.user_id)),
+      after_remarks: topRemarks(afterItems.filter((i) => i.user_id === e.user_id), TOP_REMARKS_EXPERT).map(({ text, n }) => ({ text, n })),
       disp_reasons: topRemarks(q.dispReasons.filter((i) => i.user_id === e.user_id && i.text), TOP_REMARKS_EXPERT)
         .map(({ text, n }) => ({ text, n })),
       prev: cmp ? cmp.experts.get(e.user_id) : null,
@@ -645,7 +686,8 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
     experts: rows,
     total: { ...Object.fromEntries(keys.map((k) => [k, sum(k)])), avg_days: avgDays(all), ...resign(q.resign),
       ...egrnFirst(q.firstSign, registry), ...bankTask(q.bankTask), ...taskLate(taskDues),
-      ...bankAfter(bankAfters), ...ext(exts), ...letterAsk(q.letterAsk), ...orgSign(q.done), prev: cmp ? cmp.total : null },
+      ...bankAfter(bankAfters), ...ext(exts), ...letterAsk(q.letterAsk), ...orgSign(q.done), ...afterRemarks(q.afterRemarks, afterItems),
+      prev: cmp ? cmp.total : null },
     prev_month: cmp ? prevM : null,
     prev_month_name: cmp ? periodRu(prevM) : null,
     // 2.408: [{ month, name, done, done_late, fee_kop }] — сданные за год по месяцам; у месячной сводки — null.
@@ -656,6 +698,9 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
     }) : null,
     top_remarks: topRemarks(q.remarkItems, TOP_REMARKS),
     disp_reasons: topRemarks(q.dispReasons.filter((i) => i.text), TOP_REMARKS),
+    // 2.437: замечания к сданному отчёту — по пользователям отчёта и самые частые пункты.
+    after_by_user: afterByUser(q.afterRemarks, afterItems),
+    after_remarks: topRemarks(afterItems, TOP_REMARKS),
     by_service: byService(q.done, registry),
   };
 }
@@ -847,6 +892,15 @@ export function reportCsv(orgName, r) {
       ...r.disp_reasons.map((x) => [x.text, x.n, x.experts])] : []),
     ...(r.top_remarks?.length ? [[], ['Частые замечания при возврате', 'Сколько раз', 'У скольких экспертов'],
       ...r.top_remarks.map((x) => [x.text, x.n, x.experts])] : []),
+    // 2.437: только если за месяц приходили замечания к сданным отчётам.
+    ...(r.total.remarks_after ? [[], ['Замечания после сдачи', 'Сколько раз пришли', 'В скольких делах', 'Пунктов', 'Частые пункты'],
+      ...[...(r.after_by_user ?? []).map((x) => [x.name, x.n, x.cases, x.items, x.top]),
+        ...r.experts.filter((x) => x.remarks_after).map((x) => [x.full_name, x.remarks_after, x.remarks_after_cases,
+          x.remarks_after_items, x.after_remarks]),
+        ['Итого', r.total.remarks_after, r.total.remarks_after_cases, r.total.remarks_after_items, []]]
+        .map(([name, n, cases, items, top]) => [name, n, cases, items, top.map((m) => `${m.text}${m.n > 1 ? ` ×${m.n}` : ''}`).join(' | ')])] : []),
+    ...(r.after_remarks?.length ? [[], ['Частые замечания банка и суда', 'Сколько раз', 'У скольких экспертов'],
+      ...r.after_remarks.map((x) => [x.text, x.n, x.experts])] : []),
   ];
   return `﻿${lines.map((l) => l.map(cell).join(';')).join('\r\n')}\r\n`;
 }
