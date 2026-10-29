@@ -20,6 +20,8 @@
 // Номер отчёта выдан, а дело отменено (2.418) — «Отдать следующему делу» или «Оставить пропуском» прямо в строке.
 // Замечания банка или суда к сданному отчёту (2.439): ответить сегодня, в следующий рабочий день или срок прошёл — первой
 // группой, сразу к пунктам замечаний в деле.
+// Заседание в суде сегодня или завтра (2.443) — что взять с собой: отчёт, ответ на замечания, повестку, аттестат и полис из
+// досье; срок кончился до дня заседания или документа нет в досье — красным.
 // «Можно продолжать» (2.86) — пришли документы, осмотр или сообщение. Диспетчеру (2.42) — деньги, проверка, цена, подбор, молчащие исполнители, горящие сроки. Нажатие — в дело или в раздел
 // организации.
 // Тексты — только через textContent.
@@ -117,6 +119,23 @@ function remarksLeft(r) {
   if (r.left) return `пунктов: ${r.items} · без отметки: ${r.left} — отметьте их`;
   return r.answer ? `пунктов: ${r.items} · все отмечены · ответ приложен — подпишите исправленный отчёт и сдайте на проверку`
     : `пунктов: ${r.items} · все отмечены — приложите «Ответ на замечания» к исправленному отчёту`;
+}
+
+// Заседание в суде (2.443): когда и где, затем что взять с собой.
+function courtWhen(x) {
+  return `${x.today ? 'Сегодня' : `${WD[new Date(`${x.day}T00:00:00Z`).getUTCDay()]}, ${dayRu(x.day)}`} в ${x.time} · ${x.court}, дело № ${x.case_no}`;
+}
+function courtTake(x) {
+  const take = [x.report ? `отчёт${x.report.number ? ` № ${x.report.number}` : ''}${x.report.edition ? ' (новая редакция)' : ''} — ${x.report.filename}` : 'отчёт по делу',
+    ...(x.answer ? ['«Ответ на замечания»'] : []), ...(x.summons ? [`повестку — ${x.summons.filename}`] : []),
+    ...x.dossier.filter((d) => !d.expired).map((d) => `${d.kind_name.toLowerCase()}${d.number ? ` № ${d.number}` : ''}`), 'паспорт'];
+  const lines = [{ class: 'muted', role: 'court-where', text: x.address },
+    { class: 'muted', role: 'court-take', text: `Взять с собой: ${take.join(', ')}` }];
+  for (const d of x.dossier.filter((y) => y.expired)) {
+    lines.push({ class: 'overdue', role: 'court-expired', text: `${d.kind_name}${d.number ? ` № ${d.number}` : ''}: срок истёк ${dayRu(d.valid_until)} — возьмите действующий и внесите его в досье` });
+  }
+  if (x.missing.length) lines.push({ class: 'overdue', role: 'court-missing', text: `Нет в досье: ${x.missing.join(', ').toLowerCase()} — внесите и возьмите с собой` });
+  return lines;
 }
 
 // Группа строк: заголовок с числом и строки-кнопки. Строка может быть { text, class } — например, красная (2.161).
@@ -397,6 +416,10 @@ export async function loadToday() {
         { class: 'overdue', role: 'remarks-when', text: remarksWhen(x.remarks, t.today) },
         { class: 'muted', role: 'remarks-left', text: remarksLeft(x.remarks) }],
       (x) => { location.hash = `order=${x.id}&to=remarks`; }),
+      // Заседание в суде сегодня или завтра (2.443) — что взять с собой; к вызову в деле.
+      ...group('court', 'Заседание в суде', e.court ?? [], (x) => [x.title,
+        { class: x.today ? 'overdue' : 'warn-line', role: 'court-when', text: courtWhen(x) }, ...courtTake(x)],
+      (x) => { location.hash = `order=${x.id}&to=court`; }),
       // Срок по заданию на оценку раньше срока дела и близко (2.304) — выше «Срок близко»; по сроку дела ещё можно успеть,
       // а по заданию (письму банка, определению суда) — нет. Перенос у диспетчера срок задания не двигает — кнопки нет.
       ...group('task-due', 'Срок по заданию на оценку близко', taskDue, (x) => [x.title,
