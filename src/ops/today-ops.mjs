@@ -240,9 +240,10 @@ async function expertPart(sql, actor, registry, today, storage) {
     const old = await egrnOld(sql, storage, registry, o, today);
     if (old && !old.asked) egrnStale.push(item(o, { egrn: old }));
   }
-  // Оценка для банка без задания на оценку, а срок близко (2.306) — запросить у заказчика одной кнопкой.
+  // Оценка для банка без задания на оценку, а срок близко (2.306) — запросить у заказчика одной кнопкой. После замечаний к
+  // сданному отчёту (2.439) — нет: отчёт уже сдан, банк ждёт ответ на замечания.
   const bankTask = [];
-  for (const o of rows.filter((x) => x.status === 'in_work')) {
+  for (const o of rows.filter((x) => x.status === 'in_work' && !x.remarks_at)) {
     const b = await bankTaskMissing(sql, storage, registry, o, today);
     if (b) bankTask.push(item(o, { bank_task: b }));
   }
