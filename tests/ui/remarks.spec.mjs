@@ -461,3 +461,37 @@ test('2.438: перечень для СРО — новая редакция по
   expect(sp.problems).toEqual([]);
   await sp.context().close();
 });
+
+test('2.439: «Сегодня» эксперта — замечания к сданному отчёту, ответить завтра; сразу к пунктам в деле', async ({ browser, baseURL }) => {
+  const sp = await phone(browser, baseURL);
+  const expert = await signIn(sp, '+79990004331');
+  const due = workdaysAfter(todayMsk(), 1);
+  const id = await db(async (c) => {
+    await c.query("update users set full_name = 'Ответова Нина' where id = $1", [expert.id]);
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    const oid = (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, deadline, fields, remarks_at, remarks_due, remarks_round)
+      values ($1, 'Квартира: ответ банку', 'expertise', 'realty', 'in_work', $1, $2, $3, now() - interval '2 hours', $2, 1) returning id`,
+    [expert.id, due, { purpose: 'bank', bank: 'sber', address: 'г. Москва, ул. Ответов, д. 3' }])).rows[0].id;
+    await c.query("insert into order_status_history (order_id, from_status, to_status, side, reason) values ($1, 'done', 'in_work', 'customer', 'Сбербанк: 1. Обоснуйте аналоги 2. Уточните площадь')", [oid]);
+    await c.query(`insert into remark_items (order_id, round, pos, body, resolution) values ($1, 1, 1, 'Обоснуйте аналоги', 'fixed'), ($1, 1, 2, 'Уточните площадь', null)`, [oid]);
+    return oid;
+  });
+
+  await sp.goto('/kabinet');
+  const box = sp.locator('#today-box');
+  await expect(box.locator('li[data-today="remarks"]')).toHaveText('Замечания к отчёту — ответить · 1');
+  const item = box.locator('li[data-today-item="remarks"]').first();
+  await expect(item).toContainText('Квартира: ответ банку');
+  const wd = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'][new Date(`${due}T00:00:00Z`).getUTCDay()];
+  await expect(item.locator('[data-role="remarks-when"]')).toHaveText(new RegExp(`^Ответить до ${wd}, ${dayRu(due)} · замечания пришли `));
+  await expect(item.locator('[data-role="remarks-left"]')).toHaveText('пунктов: 2 · без отметки: 1 — отметьте их');
+  await expect(box.locator('li[data-today-item="hot"]')).toHaveCount(0);
+  await item.scrollIntoViewIfNeeded();
+  await shot(sp, 'rm14-2439-segodnya-zamechaniya');
+  await item.locator('button.open').click();
+  await expect(sp).toHaveURL(new RegExp(`#order=${id}&to=remarks$`));
+  await expect(sp.locator('#remarks-items-box')).toBeVisible();
+  await expect(sp.locator('#remarks-items-lead')).toContainText('без отметки: 1');
+  expect(sp.problems).toEqual([]);
+  await sp.context().close();
+});
