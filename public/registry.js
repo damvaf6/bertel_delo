@@ -27,6 +27,9 @@ function gapsOf(r) {
 }
 
 // Прогон 2.410: номер повторяется в перечне — у каждого отчёта свой (в ИИ-проверке дела — 2.403).
+// 2.438: к сданному отчёту пришли замечания — в перечне новая редакция (номер, дата, стоимость — из неё), прежняя — в деле.
+const editionLine = (r) => el('div', { class: 'muted', 'data-registry-edition': r.id,
+  text: `Новая редакция от ${dayRu(r.edition.on)} — после замечаний от ${dayRu(r.edition.remarks_on)}; прежняя остаётся в деле и в архиве` });
 const dupLine = (r) => el('div', { class: 'overdue', 'data-registry-dup': r.id,
   text: `Номер № ${r.number} повторяется в перечне — у каждого отчёта свой номер, проверьте файл отчёта` });
 
@@ -88,6 +91,7 @@ export async function loadRegistry(chosen = false) {
     el('div', { text: r.object }),
     el('div', { class: 'muted', text: [r.service_name, r.purpose, r.customer ? `заказчик — ${r.customer}` : null].filter(Boolean).join(' · ') }),
     el('div', { class: 'muted', text: `${r.value_rub != null ? `${r.value_name}: ${rub(r.value_rub * 100)}` : 'стоимость не найдена'} · сдано ${dayRu(r.done_on)}` }),
+    ...(r.edition ? [editionLine(r)] : []),
     ...(r.dup ? [dupLine(r)] : []),
     ...(r.missing.length ? gapsOf(r) : []))));
   $('registry-empty').classList.toggle('hidden', registry.rows.length > 0);

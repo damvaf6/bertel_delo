@@ -91,10 +91,10 @@ export async function resultDocs(sql, storage, order) {
       const buf = await storage.get(d.storage_key);
       if (buf) got = await extractPages(buf, d.filename, d.mime);
     }
-    if (!got) { out.push({ id: d.id, name: d.filename, kind: null, pages: null, text: null, truncated: false }); continue; }
+    if (!got) { out.push({ id: d.id, name: d.filename, created_at: d.created_at, kind: null, pages: null, text: null, truncated: false }); continue; }
     const { text, truncated } = pagesForModel(got.pages, Math.max(0, Math.min(READ_MAX_CHARS, left)));
     left -= text.length;
-    out.push({ id: d.id, name: d.filename, kind: got.kind, pages: got.pages, text, truncated });
+    out.push({ id: d.id, name: d.filename, created_at: d.created_at, kind: got.kind, pages: got.pages, text, truncated });
   }
   return out;
 }

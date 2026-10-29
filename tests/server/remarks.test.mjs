@@ -2,6 +2,7 @@
 // прикладывает файл замечаний; дело снова у того же эксперта, срок ответа — 3 рабочих дня (описание модуля), без второй выплаты.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, signResults, makeOrg, addMember } from '../helpers.mjs';
 import { createRegistry } from '../../src/modules/index.mjs';
 import { addDays, availableActions, findTransition, todayMsk } from '../../src/orders/workflow.mjs';
@@ -533,4 +534,54 @@ test('сводка за месяц (2.437): замечания после сда
   await addMember(S.sql, org2.id, other.user.id, 'head');
   assert.equal((await other.req('GET', `/api/orgs/${org.id}/report?month=${month}`)).status, 404);
   assert.equal((await other.req('GET', `/api/orgs/${org2.id}/report?month=${month}`)).body.report.total.remarks_after, 0);
+});
+
+test('архив и перечень для СРО (2.438): новая редакция вместо прежней, в описи обе редакции и их контрольные суммы', async () => {
+  const { editionDocs } = await import('../../src/orgs/registry.mjs');
+  const { extractPages } = await import('../../src/ai/extract.mjs');
+  const { unzip } = await import('../../src/docs/docx.mjs');
+  // Перечень: факты — из файлов после последних замечаний; новой редакции нет — прежние файлы, без edition.
+  const t0 = '2026-10-20T09:00:00Z';
+  const docs = [{ id: 'a', created_at: '2026-10-19T09:00:00Z' }, { id: 'b', created_at: '2026-10-21T09:00:00Z' }];
+  assert.deepEqual(editionDocs({ remarks_at: null }, docs), { docs });
+  assert.deepEqual(editionDocs({ remarks_at: t0 }, docs.slice(0, 1)), { docs: docs.slice(0, 1) });
+  assert.deepEqual(editionDocs({ remarks_at: t0 }, docs), { docs: [docs[1]], edition: { on: '2026-10-21', remarks_on: '2026-10-20', prior: 1 } });
+
+  const o = await doneOrder('Квартира: архив двух редакций');
+  const [first] = await S.sql`select id from documents where order_id = ${o.id} and kind = 'result'`;
+  assert.equal((await step(owner, o, 'in_work', { reason: 'Суд: поясните корректировку на торг' })).status, 200);
+  await S.sql`update documents set created_at = created_at - interval '1 day' where id = ${first.id}`;
+  const before = (await spec.req('GET', '/api/specialist/me/registry')).body.registry;
+  assert.equal(before.rows.find((x) => x.id === o.id)?.edition, undefined, 'новой редакции ещё нет');
+  const up = await upload(spec, o, 'results', 'Отчёт (редакция 2).pdf');
+  assert.equal(up.status, 201);
+  await signResults(S, spec, o.id);
+  assert.equal((await step(spec, o, 'review')).status, 200);
+  const rv = (await dispatcher.req('GET', `/api/orders/${o.id}/review`)).body;
+  for (const c of rv.checks) await dispatcher.req('PUT', `/api/orders/${o.id}/review/${c.id}`, { verdict: 'ok', round: rv.round });
+  assert.equal((await step(dispatcher, o, 'done')).status, 200);
+
+  const reg = (await spec.req('GET', '/api/specialist/me/registry')).body.registry;
+  const row = reg.rows.find((x) => x.id === o.id);
+  assert.ok(row, 'дело в перечне');
+  assert.deepEqual(row.edition, { on: todayMsk(), remarks_on: todayMsk(), prior: 1 });
+  const csv = await fetch(`${S.base}/api/specialist/me/registry?format=csv`, { headers: { cookie: spec.cookie } });
+  if (csv.headers.get('content-type')?.includes('csv')) assert.match(await csv.text(), /новая от \d\d\.\d\d\.\d{4} \(после замечаний от/);
+
+  const r = await fetch(`${S.base}/api/specialist/me/registry/archive`, { headers: { cookie: spec.cookie } });
+  assert.equal(r.status, 200);
+  const files = new Map(unzip(Buffer.from(await r.arrayBuffer())).map((f) => [f.name, f.data]));
+  const names = [...files.keys()];
+  const dir = names.find((n) => n.endsWith('/Отчёт (редакция 2).pdf'));
+  assert.ok(dir, names.join(', '));
+  const folder = dir.slice(0, dir.lastIndexOf('/'));
+  assert.ok(files.has(`${folder}/Отчёт.pdf`), 'прежняя редакция — тоже в архиве');
+  const inv = names.find((n) => n.startsWith('Опись'));
+  const text = (await extractPages(files.get(inv), 'a.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')).pages.join('\n');
+  const day = todayMsk().split('-').reverse().join('.');
+  assert.ok(text.includes(`прежняя — сдана до замечаний от ${day}`), text.slice(0, 2000));
+  assert.ok(text.includes(`новая от ${day}`));
+  const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
+  assert.ok(text.includes(sha(files.get(`${folder}/Отчёт.pdf`))), 'SHA-256 прежней редакции');
+  assert.ok(text.includes(sha(files.get(dir))), 'SHA-256 новой редакции');
 });

@@ -422,3 +422,42 @@ test('2.437: сводка за месяц — замечания после сд
   expect(hp.problems).toEqual([]);
   await hp.context().close();
 });
+
+const full = (iso) => `${dayRu(iso)} ${iso.slice(0, 4)} г.`;
+test('2.438: перечень для СРО — новая редакция после замечаний вместо прежней', async ({ browser, baseURL }) => {
+  const sp = await phone(browser, baseURL);
+  const expert = await signIn(sp, '+79990004330');
+  const id = await db(async (c) => {
+    await c.query("update users set full_name = 'Редакциева Анна' where id = $1", [expert.id]);
+    await c.query("insert into specialists (user_id, created_at) values ($1, now() - interval '2 years')", [expert.id]);
+    const oid = (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, deadline, fields, remarks_at, remarks_round)
+      values ($1, 'Квартира: две редакции', 'expertise', 'realty', 'done', $1, current_date, $2, now() - interval '1 day', 1) returning id`,
+    [expert.id, { purpose: 'court', address: 'г. Москва, ул. Редакций, д. 2' }])).rows[0].id;
+    await c.query("insert into order_status_history (order_id, from_status, to_status, side) values ($1, 'review', 'done', 'dispatcher')", [oid]);
+    return oid;
+  });
+  const put = async (name, value) => {
+    const text = `ОТЧЁТ ОБ ОЦЕНКЕ № 88/2026 от 12.10.2026\nИтоговая величина рыночной стоимости объекта оценки составляет ${value} руб.\nОтчёт № 88/2026`;
+    const r = await sp.request.post(`/api/orders/${id}/documents`, { data: Buffer.from(text), headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } });
+    expect(r.status()).toBe(201);
+    return (await r.json()).document.id;
+  };
+  const old = await put('отчёт.txt', '9 870 000');
+  await put('отчёт (редакция 2).txt', '9 500 000');
+  await db(async (c) => {
+    await c.query("update documents set kind = 'result' where order_id = $1", [id]);
+    await c.query("update documents set created_at = now() - interval '2 days' where id = $1", [old]);
+  });
+
+  await sp.goto('/kabinet#specialist');
+  const row = sp.locator(`#registry-rows > li[data-registry="${id}"]`);
+  await expect(row).toBeVisible();
+  await expect(row.locator('.title')).toHaveText(/Отчёт № 88\/2026 от 12 октября|Отчёт № 88\/2026 от 12\.10\.2026/);
+  await expect(row).toContainText('9 500 000');
+  await expect(row).not.toContainText('9 870 000');
+  await expect(row.locator('[data-registry-edition]')).toHaveText(`Новая редакция от ${full(todayMsk())} — после замечаний от ${full(todayMsk(new Date(Date.now() - 864e5)))}; прежняя остаётся в деле и в архиве`);
+  await row.scrollIntoViewIfNeeded();
+  await shot(sp, 'rm13-2438-perechen-redakciya');
+  expect(sp.problems).toEqual([]);
+  await sp.context().close();
+});
