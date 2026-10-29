@@ -1,6 +1,6 @@
 // Вызов эксперта в суд (задача 2.441) — телефон 412×915: заказчик после «готово» нажимает «Эксперта вызывают в суд», пишет
 // суд, номер дела, дату и время заседания, адрес и прикладывает повестку; дело остаётся сданным, эксперт по уведомлению видит
-// заседание в деле. Что разрешено и кому — считает сервер (tests/server/court.test.mjs). Номера +7 999 000-44-2x — только здесь.
+// заседание в деле, а в «Моих сроках на две недели» — в его день (2.442). Что разрешено и кому — считает сервер (tests/server/court.test.mjs). Номера +7 999 000-44-2x — только здесь.
 import { test, expect } from '@playwright/test';
 import pg from 'pg';
 import { DB_URL, TEST_TOKEN } from '../helpers.mjs';
@@ -96,6 +96,29 @@ test('2.441: эксперта вызывают в суд — заказчик п
   await expect(sp.locator('#order-status')).toHaveText('Готово');
   await ebox.scrollIntoViewIfNeeded();
   await shot(sp, 'ct02-2441-vyzov-v-sud-ekspert');
+
+  // 2.442: заседание — в «Моих сроках на две недели» в свой день со временем, судом и адресом; в тот же день два дела к сдаче —
+  // день перегружен («+ суд»); нажатие ведёт к вызову в суд в деле; в календарь телефона заседание идёт.
+  await db(async (c) => {
+    for (const t of ['Дом в Химках', 'Склад в Подольске']) {
+      await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, price_kop, paid_at, deadline)
+        values ($1, $2, 'expertise', 'realty', 'in_work', $1, 1500000, now(), $3::date)`, [expert.id, t, date]);
+    }
+  });
+  await sp.goto('/kabinet#specialist');
+  const sday = sp.locator(`#schedule-days > li[data-day="${date}"]`);
+  await expect(sday).toBeVisible();
+  const hearing = sday.locator('li[data-schedule-item="court"]');
+  await expect(hearing).toContainText('10:30 · Заседание в суде: Квартира для суда');
+  await expect(hearing).toContainText('Тестовый районный суд г. Москвы · дело № 2-4421/2026 · г. Москва, тестовая ул., 1, зал 12');
+  await expect(sday.locator('.busy-mark')).toHaveText('много: к сдаче 2 + суд');
+  await expect(sday.locator('[data-role="busy-court"]')).toContainText('заседание в суде и к сдаче 2 дела');
+  await expect(sp.locator('#schedule-ics-box')).toBeVisible();
+  await sday.scrollIntoViewIfNeeded();
+  await shot(sp, 'ct03-2442-zasedanie-v-srokah');
+  await hearing.locator('a').click();
+  await expect(sp).toHaveURL(new RegExp(`#order=${id}&to=court$`));
+  await expect(sp.locator('#hearing-box li.hearing-next')).toBeVisible();
   expect(cp.problems).toEqual([]);
   expect(sp.problems).toEqual([]);
   await cp.context().close();

@@ -8,13 +8,16 @@
 // попросили ли его (2.353); UID тот же, что у срока по заданию, — календарь передвинет событие на день из письма, а не
 // оставит старое рядом. У срока дела в описании — к какому дню сдать по заданию или по письму о переносе. Срок в выходной или
 // праздник (2.398) — в названии «нерабочий день, сдайте до …» (последний рабочий день перед ним), в описании — чем день
-// нерабочий, а напоминание — накануне этого рабочего дня в 9:00, а не в выходной.
+// нерабочий, а напоминание — накануне этого рабочего дня в 9:00, а не в выходной. Заседание суда (2.442) — занятые два часа
+// с адресом суда в месте события (адрес суда открыт, это не адрес объекта), в описании — суд и номер дела; напоминания — накануне
+// в 18:00 по Москве и за два часа до начала.
 import { addDays } from './workflow.mjs';
 import { offDayName, workdayBefore } from './holidays.mjs';
 import { orderRef } from '../notify/registry.mjs';
 
 const DOMAIN = 'bertel-delo';
 const VISIT_MINUTES = 60;
+const HEARING_MINUTES = 120;
 
 // Текст по RFC 5545: обратная косая, точка с запятой, запятая и перевод строки — экранируются.
 export const icsText = (s) => String(s ?? '').replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
@@ -37,12 +40,15 @@ export function icsFold(line) {
 const stamp = (d) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
 const dateOnly = (iso) => iso.replace(/-/g, '');
 
-function event(lines, { uid, now, start, end, summary, description, alarm, busy = false }) {
+function event(lines, { uid, now, start, end, summary, description, location, alarm, busy = false }) {
   lines.push('BEGIN:VEVENT', `UID:${uid}@${DOMAIN}`, `DTSTAMP:${stamp(now)}`, start, end, `SUMMARY:${icsText(summary)}`);
   if (description) lines.push(`DESCRIPTION:${icsText(description)}`);
+  if (location) lines.push(`LOCATION:${icsText(location)}`);
   // Срок — пометка на весь день, время не занимает; выезд — занятый час.
   lines.push(`TRANSP:${busy ? 'OPAQUE' : 'TRANSPARENT'}`);
-  if (alarm) lines.push('BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${icsText(summary)}`, `TRIGGER:${alarm}`, 'END:VALARM');
+  for (const a of [alarm].flat().filter(Boolean)) {
+    lines.push('BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${icsText(summary)}`, `TRIGGER${a.startsWith(';') ? a : `:${a}`}`, 'END:VALARM');
+  }
   lines.push('END:VEVENT');
 }
 
@@ -82,6 +88,21 @@ function offDay(date, alarm) {
   };
 }
 
+// Заседание: накануне в 18:00 по Москве — точным моментом (15:00 UTC), чтобы не зависеть от времени начала.
+function hearingEvent(i) {
+  const start = new Date(i.at);
+  const eve = new Date(`${addDays(mskIso(start), -1)}T18:00:00+03:00`);
+  return {
+    uid: `court-${i.call_id}`,
+    start: `DTSTART:${stamp(start)}`, end: `DTEND:${stamp(new Date(start.getTime() + HEARING_MINUTES * 60_000))}`,
+    summary: `Заседание в суде: ${i.court}, дело № ${i.case_no}`,
+    description: `Вызывают как эксперта по делу ${orderRef(i.order_id)}, ${i.service}. Возьмите отчёт, аттестат и полис. `,
+    location: i.address, busy: true,
+    alarm: [`;VALUE=DATE-TIME:${stamp(eve)}`, '-PT2H'],
+  };
+}
+const mskIso = (t) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow', year: 'numeric', month: '2-digit', day: '2-digit' }).format(t);
+
 const DEADLINE_NOTE = {
   in_work: 'Срок сдачи',
   review: 'Срок сдачи (сдано, ждёт проверки)',
@@ -113,6 +134,9 @@ export function scheduleIcs(schedule, now = new Date()) {
           summary: `${e.summary}${off.suffix}`, description: `${off.note}${e.description}${about}`,
           alarm: off.alarm,
         });
+      } else if (i.kind === 'court') {
+        const e = hearingEvent(i);
+        event(lines, { ...e, now, description: `${e.description}${about}` });
       } else if (i.kind === 'visit' || i.kind === 'my_visit') {
         const start = new Date(i.at);
         const end = new Date(start.getTime() + VISIT_MINUTES * 60_000);
