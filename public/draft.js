@@ -441,6 +441,11 @@ function renderNumber(n) {
     : n.pattern
       ? `Номер отчёта выдастся ${n.org ? `по образцу организации «${n.org}» из её общего счёта` : 'по Вашему образцу'} при первой сборке Word. Можно задать его и вручную.`
       : 'В Word стоит номер дела платформы. Свой номер можно задать вручную или образцом в профиле («Нумерация отчётов»).';
+  // Исправленный отчёт после замечаний банка или суда (2.434): новая редакция того же отчёта.
+  $('draft-edition').classList.toggle('hidden', !n.edition);
+  $('draft-edition').textContent = n.edition
+    ? `Новая редакция отчёта после замечаний: номер тот же, дата составления — первой редакции (${n.edition.date}), на титуле и в колонтитуле — «${n.edition.edition}». Прежняя редакция остаётся в деле.`
+    : '';
   $('draft-number-edit').textContent = n.number ? 'Изменить номер' : 'Задать номер вручную';
   $('draft-number-edit').classList.toggle('hidden', !n.can_set);
   $('draft-number-form').classList.add('hidden');

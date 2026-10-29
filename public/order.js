@@ -518,13 +518,15 @@ async function loadDocs(initial = false) {
     // Результат убирает только исполнитель, пока не сдал; документы заказчика — заказчик (основание — до отправки).
     // Фото дистанционного осмотра не удаляются никем: это свидетельство осмотра со временем и местом (2.3).
     const removable = d.kind === 'inspection' ? false
-      : d.kind === 'result' ? mineResults : canChange && !(d.kind === 'basis' && order.status !== 'new');
+      : d.kind === 'result' ? mineResults && !d.prior_edition : canChange && !(d.kind === 'basis' && order.status !== 'new');
     return el('li', { class: 'doc', 'data-doc': String(d.id) },
       el('div', {},
         el('div', { class: 'name', text: d.filename }),
         el('div', { class: 'muted', text: [DOC_KIND_RU[d.kind], d.step_file, formatSize(d.size_bytes)].filter(Boolean).join(' · ') }),
         // После передачи дела (2.110): файл прежнего эксперта остаётся в деле, но в сдачу не идёт — подписывает и сдаёт свой.
-        ...(d.kind === 'result' && d.own === false ? [el('div', { class: 'muted', 'data-role': 'former', text: 'Файл прежнего эксперта — в сдачу не идёт. Загрузите свой файл результата.' })] : [])),
+        ...(d.kind === 'result' && d.own === false ? [el('div', { class: 'muted', 'data-role': 'former', text: 'Файл прежнего эксперта — в сдачу не идёт. Загрузите свой файл результата.' })] : []),
+        // Исправленный отчёт после замечаний (2.434): прежняя редакция остаётся в деле, новая — рядом, с тем же номером.
+        ...(d.prior_edition ? [el('div', { class: 'muted', 'data-role': 'prior-edition', text: `Прежняя редакция — сдана до замечаний от ${d.prior_edition.split('-').reverse().join('.')}. Остаётся в деле.` })] : [])),
       el('div', { class: 'row' },
         el('button', { class: 'secondary', 'data-action': 'download', onclick: () => download(d) }, 'Скачать'),
         ...(removable ? [el('button', { class: 'danger', 'data-action': 'delete', onclick: () => remove(d) }, 'Удалить')] : [])),

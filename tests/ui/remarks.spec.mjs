@@ -228,3 +228,38 @@ test('2.433: «Ответ на замечания» Word — где в отчё�
   await cp.context().close();
   await sp.context().close();
 });
+
+test('2.434: новая редакция отчёта — тот же номер, «Редакция от …», прежняя редакция остаётся в деле', async ({ browser, baseURL }) => {
+  const sp = await phone(browser, baseURL);
+  const expert = await signIn(sp, '+79990004321');
+  const id = await db(async (c) => {
+    await c.query("update users set full_name = 'Редакций Пётр' where id = $1", [expert.id]);
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    const oid = (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, deadline, fields,
+        remarks_at, remarks_due, remarks_round, report_number, report_number_on, report_number_by)
+      values ($1, 'Квартира: новая редакция', 'expertise', 'realty', 'in_work', $1, current_date + 5, $2, now(), current_date + 3, 1,
+        '7/2026', current_date - 3, $1) returning id`,
+    [expert.id, { purpose: 'bank', region: 'moscow', object_type: 'flat', address: 'г. Москва, ул. Редакций, д. 4', area: '48' }])).rows[0].id;
+    await c.query(`insert into documents (order_id, uploaded_by, filename, mime, size_bytes, storage_key, kind, created_at)
+      values ($1, $2, 'Отчёт об оценке 7-2026.pdf', 'application/pdf', 1, $3, 'result', now() - interval '3 days')`, [oid, expert.id, `ui/2434/${oid}`]);
+    await c.query("insert into result_drafts (order_id, author_id, source, body) values ($1, $2, 'edit', '1. Общие сведения\nТекст.')", [oid, expert.id]);
+    return oid;
+  });
+  const first = new Date(Date.now() + 3 * 3_600_000 - 3 * 86_400_000).toISOString().slice(0, 10).split('-').reverse().join('.');
+  const today = todayMsk().split('-').reverse().join('.');
+
+  await sp.goto(`/kabinet#order=${id}`);
+  await expect(sp.locator('#draft-number-line')).toContainText('Номер отчёта: № 7/2026');
+  const ed = sp.locator('#draft-edition');
+  await expect(ed).toContainText(`дата составления — первой редакции (${first})`);
+  await expect(ed).toContainText(`«Редакция от ${today}»`);
+  const doc = sp.locator('#docs li.doc', { hasText: 'Отчёт об оценке 7-2026.pdf' });
+  await expect(doc.locator('[data-role="prior-edition"]')).toHaveText(`Прежняя редакция — сдана до замечаний от ${today}. Остаётся в деле.`);
+  await expect(doc.getByRole('button', { name: 'Удалить' })).toHaveCount(0);
+  await doc.scrollIntoViewIfNeeded();
+  await shot(sp, 'rm07-2434-prezhnyaya-redakciya');
+  await ed.scrollIntoViewIfNeeded();
+  await shot(sp, 'rm08-2434-novaya-redakciya');
+  expect(sp.problems).toEqual([]);
+  await sp.context().close();
+});

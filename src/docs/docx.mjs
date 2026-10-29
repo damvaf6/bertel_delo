@@ -113,6 +113,8 @@ function titlePage(meta, st) {
     para('', '<w:spacing w:before="1200"/>'),
     meta.executor ? para(run(`${meta.executor_role ?? 'Исполнитель'}: ${meta.executor}`), '<w:jc w:val="right"/>') : '',
     para(run(`Дата составления: ${meta.date}`), '<w:jc w:val="right"/>'),
+    // Исправленный отчёт после замечаний банка или суда (2.434): номер прежний, дата составления — первой редакции.
+    meta.edition ? para(run(meta.edition), '<w:jc w:val="right"/>') : '',
     para('', '<w:spacing w:before="2400"/>'),
     para(run(`${meta.city}, ${meta.date.slice(-4)}`), center),
     PAGE_BREAK,
@@ -221,7 +223,7 @@ function reportBody(text, meta, st, appendix = null, media = []) {
 }
 
 const footerXml = (meta) => `${XML_HEAD}<w:ftr xmlns:w="${W}" xmlns:r="${R}"><w:p><w:pPr><w:jc w:val="center"/></w:pPr>`
-  + `${run(`${meta.title} ${meta.number} · стр. `, '<w:sz w:val="20"/>')}`
+  + `${run(`${meta.title} ${meta.number}${meta.edition ? ` · ${meta.edition.toLowerCase()}` : ''} · стр. `, '<w:sz w:val="20"/>')}`
   + '<w:fldSimple w:instr=" PAGE "><w:r><w:rPr><w:sz w:val="20"/></w:rPr><w:t>1</w:t></w:r></w:fldSimple></w:p></w:ftr>';
 
 // Стили, которые нужны отчёту: имя в Word → описание. В шаблоне ищутся по имени (у русского Word другие id: «1» и т. п.).
@@ -283,7 +285,8 @@ const FOOTER_CT = 'application/vnd.openxmlformats-officedocument.wordprocessingm
 const FOOTER_REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer';
 const STYLES_REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles';
 
-// meta: { title: 'Отчёт об оценке', number: '№ …', subtitle, org, executor, executor_role?, date: 'дд.мм.гггг', city }.
+// meta: { title: 'Отчёт об оценке', number: '№ …', subtitle, org, executor, executor_role?, date: 'дд.мм.гггг', city,
+//         edition?: 'Редакция от дд.мм.гггг' }.
 // template — Buffer шаблона организации (.docx, уже проверенный checkTemplate) или null.
 // appendix — приложение после разделов (скриншоты объявлений, 2.32; фото осмотра, 2.37) или список приложений: см. appendixBlocks.
 export function buildReport(text, meta, template = null, { appendix = null } = {}) {

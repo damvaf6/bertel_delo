@@ -304,3 +304,49 @@ test('ответ на замечания Word (2.433): пункт, что сде
   assert.ok(w2.text.includes('Отчёт не изменялся'), w2.text);
   assert.ok(w2.text.includes('2-й раз'), w2.text);
 });
+
+test('новая редакция отчёта (2.434): тот же номер, «Редакция от …» на титуле и в колонтитуле; прежняя редакция остаётся в деле', async () => {
+  const { extractPages } = await import('../../src/ai/extract.mjs');
+  const { unzip } = await import('../../src/docs/docx.mjs');
+  const o = await doneOrder('Квартира: новая редакция');
+  const day = todayMsk().split('-').reverse().join('.');
+  const docx = async () => {
+    const r = await fetch(`${S.base}/api/orders/${o.id}/draft/docx`, { headers: { cookie: spec.cookie } });
+    assert.equal(r.status, 200);
+    const buf = Buffer.from(await r.arrayBuffer());
+    return { text: (await extractPages(buf, 'a.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')).pages.join('\n'),
+      footer: unzip(buf).find((f) => f.name === 'word/footer1.xml').data.toString('utf8') };
+  };
+  const draft = async () => (await spec.req('GET', `/api/orders/${o.id}/draft`)).body.report_number;
+
+  // Замечаний не было — обычный отчёт, без редакции.
+  const [first] = await S.sql`select id from documents where order_id = ${o.id} and kind = 'result'`;
+  assert.equal((await spec.req('GET', `/api/orders/${o.id}/documents`)).body.documents.find((d) => d.id === first.id).prior_edition, undefined);
+
+  assert.equal((await step(owner, o, 'in_work', { reason: 'Банк: уточните площадь' })).status, 200);
+  // Первая редакция сдана «вчера» — дата составления новой редакции остаётся её днём.
+  await S.sql`update documents set created_at = created_at - interval '1 day' where id = ${first.id}`;
+  await S.sql`update orders set remarks_at = now() where id = ${o.id}`;
+  const firstDay = addDays(todayMsk(), -1).split('-').reverse().join('.');
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {})).status, 201);
+  const n = await draft();
+  assert.deepEqual(n.edition, { date: firstDay, edition: `Редакция от ${day}` });
+  const w = await docx();
+  const number = (await S.sql`select report_number from orders where id = ${o.id}`)[0].report_number;
+  const { orderRef } = await import('../../src/notify/registry.mjs');
+  const ref = number ? `№ ${number}` : orderRef(o.id);
+  assert.ok(w.text.includes(`Дата составления: ${firstDay}`), w.text.slice(0, 600));
+  assert.ok(w.text.includes(`Редакция от ${day}`), w.text.slice(0, 600));
+  assert.ok(w.footer.includes(`${ref} · редакция от ${day} · стр. `), w.footer);
+
+  // Прежняя редакция — пометка у файла, удалить нельзя; новая — рядом, её можно убрать, пока дело в работе.
+  const list = (await spec.req('GET', `/api/orders/${o.id}/documents`)).body.documents;
+  assert.equal(list.find((d) => d.id === first.id).prior_edition, todayMsk());
+  const del = await spec.req('DELETE', `/api/documents/${first.id}`);
+  assert.equal(del.status, 409);
+  assert.equal(del.body.error, 'edition_locked');
+  const up = await upload(spec, o, 'results', 'Отчёт (редакция 2).pdf');
+  assert.equal(up.status, 201);
+  assert.equal((await spec.req('GET', `/api/orders/${o.id}/documents`)).body.documents.find((d) => d.id === up.body.document.id).prior_edition, undefined);
+  assert.equal((await spec.req('DELETE', `/api/documents/${up.body.document.id}`)).status, 204);
+});
