@@ -321,7 +321,8 @@ export function signOps() {
       access: { resource: 'org', param: 'id', need: 'manage' },
       async handler({ sql, org, registry, providers }) {
         const orders = await sql`
-          select o.id, o.module, o.service, o.deadline, o.executor_user_id, o.status, o.review_round, o.fields, u.full_name as executor_name
+          select o.id, o.module, o.service, o.deadline, o.executor_user_id, o.status, o.review_round, o.fields, u.full_name as executor_name,
+                 o.report_number, o.remarks_at, o.remarks_due, o.remarks_round, o.remarks_answer_doc_id
           from orders o join specialists s on s.user_id = o.executor_user_id and s.org_id = ${org.id}
           join org_members m on m.org_id = s.org_id and m.user_id = s.user_id
           join users u on u.id = o.executor_user_id
@@ -345,7 +346,12 @@ export function signOps() {
             service: registry.service(o.module, o.service)?.service.name ?? o.service,
             executor: o.executor_name,
             deadline: o.deadline,
-            documents: docs.map((d) => ({ id: d.id, filename: d.filename, size_bytes: Number(d.size_bytes), created_at: d.created_at, signatures: signaturesView(signs.get(d.id)), ...(ai.has(d.id) ? { ai_check: ai.get(d.id) } : {}) })),
+            // 2.436: файл, сданный до замечаний (2.434), — прежняя редакция; «Ответ на замечания» (2.433) — своей пометкой.
+            documents: docs.map((d) => ({ id: d.id, filename: d.filename, size_bytes: Number(d.size_bytes), created_at: d.created_at, signatures: signaturesView(signs.get(d.id)), ...(ai.has(d.id) ? { ai_check: ai.get(d.id) } : {}),
+              ...(o.remarks_at && new Date(d.created_at) < new Date(o.remarks_at) ? { prior_edition: todayMsk(new Date(o.remarks_at)) } : {}),
+              ...(d.id === o.remarks_answer_doc_id ? { remarks_answer: true } : {}) })),
+            // Новая редакция отчёта после замечаний банка или суда (2.434, 2.436): номер отчёта, когда пришли замечания, ответить до.
+            edition: o.remarks_at ? { number: o.report_number ?? null, remarks_at: o.remarks_at, due: o.remarks_due, round: o.remarks_round } : null,
             // Эксперт напоминал о подписи (2.99) — когда последний раз, пока файл ждёт (после возврата прежнее не показывается).
             reminded_at: wait?.reminded_at ?? null,
             // С какого времени файлы ждут подписи организации (2.148) — самая ранняя подпись эксперта среди них.
