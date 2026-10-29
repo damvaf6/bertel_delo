@@ -552,7 +552,9 @@ test('архив и перечень для СРО (2.438): новая реда�
   assert.equal((await step(owner, o, 'in_work', { reason: 'Суд: поясните корректировку на торг' })).status, 200);
   await S.sql`update documents set created_at = created_at - interval '1 day' where id = ${first.id}`;
   const before = (await spec.req('GET', '/api/specialist/me/registry')).body.registry;
-  assert.equal(before.rows.find((x) => x.id === o.id)?.edition, undefined, 'новой редакции ещё нет');
+  // Прогон 2.440: ответ готовится — отчёт в перечне по сданной редакции, у строки — «ответ готовится».
+  assert.deepEqual(before.rows.find((x) => x.id === o.id)?.edition, { pending: true, remarks_on: todayMsk(), due: workdaysAfter(todayMsk(), 3) },
+    'новой редакции ещё нет');
   const up = await upload(spec, o, 'results', 'Отчёт (редакция 2).pdf');
   assert.equal(up.status, 201);
   await signResults(S, spec, o.id);
@@ -633,4 +635,51 @@ test('«Сегодня» и утренняя сводка эксперта (2.43
   assert.equal((await step(spec, o, 'review')).status, 200);
   assert.ok(!(await mine()).some((r) => r.id === o.id));
   assert.equal(await alerts(), base);
+});
+
+test('прогон 2.440: пока эксперт отвечает на замечания, отчёт в перечне для СРО; снова «готово» — не новый отчёт и не новое сданное дело', async () => {
+  const { editionDocs } = await import('../../src/orgs/registry.mjs');
+  const docs = [{ id: 'a', created_at: '2026-10-19T09:00:00Z' }, { id: 'b', created_at: '2026-10-21T09:00:00Z' }];
+  // Ответ готовится — в счёт только сданная редакция, хотя новый файл уже загружен.
+  assert.deepEqual(editionDocs({ remarks_at: '2026-10-20T09:00:00Z', remarks_due: '2026-10-23', status: 'in_work' }, docs),
+    { docs: [docs[0]], edition: { pending: true, remarks_on: '2026-10-20', due: '2026-10-23' } });
+
+  const ex = await login(S, '+79990004319');
+  await makeSpecialist(S.sql, ex.user.id);
+  const o = await doneOrder('Квартира: прогон 2.440', ex);
+  // Первая сдача — в прошлом квартале (последний день перед кварталом, полдень по Москве).
+  const today = todayMsk();
+  const q = Math.floor((Number(today.slice(5, 7)) - 1) / 3);
+  const qStart = `${today.slice(0, 4)}-${String(q * 3 + 1).padStart(2, '0')}-01`;
+  const prevDay = addDays(qStart, -1);
+  const prev = { year: Number(prevDay.slice(0, 4)), quarter: Math.floor((Number(prevDay.slice(5, 7)) - 1) / 3) + 1 };
+  const now = { year: Number(today.slice(0, 4)), quarter: q + 1 };
+  await S.sql`update order_status_history set at = ${`${prevDay}T09:00:00Z`} where order_id = ${o.id} and to_status = 'done'`;
+  await S.sql`update documents set created_at = ${`${prevDay}T08:00:00Z`} where order_id = ${o.id}`;
+  const reg = async (p) => (await ex.req('GET', `/api/specialist/me/registry?year=${p.year}&quarter=${p.quarter}`)).body.registry.rows.find((x) => x.id === o.id);
+  assert.ok(await reg(prev), 'сдан в прошлом квартале');
+
+  assert.equal((await step(owner, o, 'in_work', { reason: 'Банк: обоснуйте аналоги' })).status, 200);
+  const answering = await reg(prev);
+  assert.ok(answering, 'ответ на замечания готовится — отчёт не пропал из перечня');
+  assert.equal(answering.edition.pending, true);
+  assert.equal(answering.edition.due, workdaysAfter(today, 3));
+  assert.equal(await reg(now), undefined);
+
+  assert.equal((await upload(ex, o, 'results', 'Отчёт (редакция 2).pdf')).status, 201);
+  await signResults(S, ex, o.id);
+  assert.equal((await step(ex, o, 'review')).status, 200);
+  const rv = (await dispatcher.req('GET', `/api/orders/${o.id}/review`)).body;
+  for (const c of rv.checks) await dispatcher.req('PUT', `/api/orders/${o.id}/review/${c.id}`, { verdict: 'ok', round: rv.round });
+  assert.equal((await step(dispatcher, o, 'done')).status, 200);
+  const after = await reg(prev);
+  assert.ok(after, 'новая редакция — в перечне того квартала, где отчёт сдан впервые');
+  assert.deepEqual(after.edition, { on: today, remarks_on: today, prior: 1 });
+  assert.equal(await reg(now), undefined, 'не второй отчёт в этом квартале');
+
+  // «Мои итоги» за этот месяц: снова «готово» после замечаний — не новое сданное дело.
+  const rep = (await ex.req('GET', `/api/specialist/me/report?month=${today.slice(0, 7)}`)).body.report;
+  assert.equal(rep.cases.some((c) => c.id === o.id), false, JSON.stringify(rep.cases));
+  const was = (await ex.req('GET', `/api/specialist/me/report?month=${prevDay.slice(0, 7)}`)).body.report;
+  assert.equal(was.cases.some((c) => c.id === o.id), true, 'сдано — в месяце первой сдачи');
 });

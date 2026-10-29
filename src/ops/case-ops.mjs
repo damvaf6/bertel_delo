@@ -314,7 +314,10 @@ export function caseOps() {
 function editionOf(order, docs) {
   const at = order?.remarks_at && new Date(order.remarks_at);
   if (!at || !docs.some((d) => new Date(d.created_at) >= at) || !docs.some((d) => new Date(d.created_at) < at)) return () => '';
-  return (d) => (new Date(d.created_at) < at ? `прежняя — сдана до замечаний от ${day(todayMsk(at))}` : `новая от ${day(todayMsk(new Date(d.created_at)))}`);
+  // Прогон 2.440: ответ на замечания ещё готовится — новые файлы не сданы.
+  const open = ['in_work', 'review'].includes(order.status);
+  return (d) => (new Date(d.created_at) < at ? `прежняя — сдана до замечаний от ${day(todayMsk(at))}`
+    : `новая от ${day(todayMsk(new Date(d.created_at)))}${open ? ' — ещё не сдана' : ''}`);
 }
 
 // Файлы результата эксперта с подписями УКЭП — в папку дела архива (2.89, 2.407). На каждый файл — [имя (или почему не вошёл),
@@ -333,7 +336,7 @@ function resultPacker(sql, providers, tooBig) {
     const docs = await sql`select * from documents where order_id = ${orderId} and kind = 'result' and deleted_at is null
                            and uploaded_by = ${expertId} order by created_at`;
     if (!docs.length) return [['файла результата нет', '—', '—', '—']];
-    const [order] = await sql`select remarks_at from orders where id = ${orderId}`;
+    const [order] = await sql`select remarks_at, status from orders where id = ${orderId}`;
     const ed = editionOf(order, docs);
     const signs = await sql`select * from document_signatures where order_id = ${orderId} order by id`;
     const out = [];

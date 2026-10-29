@@ -11,7 +11,9 @@ const $ = (id) => document.getElementById(id);
 const period = () => `year=${encodeURIComponent($('org-registry-year').value)}&quarter=${encodeURIComponent($('org-registry-quarter').value)}`;
 // 2.438: к сданному отчёту пришли замечания — в перечне новая редакция (номер, дата, стоимость — из неё), прежняя — в деле.
 const editionLine = (r) => el('div', { class: 'muted', 'data-registry-edition': r.id,
-  text: `Новая редакция от ${dayRu(r.edition.on)} — после замечаний от ${dayRu(r.edition.remarks_on)}; прежняя остаётся в деле и в архиве` });
+  text: r.edition.pending
+    ? `Пришли замечания от ${dayRu(r.edition.remarks_on)} — ответ готовится${r.edition.due ? ` (ответить до ${dayRu(r.edition.due)})` : ''}; в перечне — сданная редакция`
+    : `Новая редакция от ${dayRu(r.edition.on)} — после замечаний от ${dayRu(r.edition.remarks_on)}; прежняя остаётся в деле и в архиве` });
 const dupLine = (r) => el('div', { class: 'overdue', 'data-registry-dup': r.id,
   text: `Номер № ${r.number} повторяется в отчётах эксперта ${r.expert_name} — у каждого отчёта оценщика свой номер` });
 const OLD_CASE = 'Сдано больше 90 дней назад — в «Делах экспертов» его уже нет; файлы отчёта — в «Заключениях архивом» сводки за тот месяц';

@@ -29,7 +29,9 @@ function gapsOf(r) {
 // Прогон 2.410: номер повторяется в перечне — у каждого отчёта свой (в ИИ-проверке дела — 2.403).
 // 2.438: к сданному отчёту пришли замечания — в перечне новая редакция (номер, дата, стоимость — из неё), прежняя — в деле.
 const editionLine = (r) => el('div', { class: 'muted', 'data-registry-edition': r.id,
-  text: `Новая редакция от ${dayRu(r.edition.on)} — после замечаний от ${dayRu(r.edition.remarks_on)}; прежняя остаётся в деле и в архиве` });
+  text: r.edition.pending
+    ? `Пришли замечания от ${dayRu(r.edition.remarks_on)} — ответ готовится${r.edition.due ? ` (ответить до ${dayRu(r.edition.due)})` : ''}; в перечне — сданная редакция`
+    : `Новая редакция от ${dayRu(r.edition.on)} — после замечаний от ${dayRu(r.edition.remarks_on)}; прежняя остаётся в деле и в архиве` });
 const dupLine = (r) => el('div', { class: 'overdue', 'data-registry-dup': r.id,
   text: `Номер № ${r.number} повторяется в перечне — у каждого отчёта свой номер, проверьте файл отчёта` });
 
