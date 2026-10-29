@@ -172,6 +172,7 @@ async function snapshotB() {
     S.sql`select id, deleted_at, title from snippets where user_id = any(${users}) order by id`,
     S.sql`select id, order_id from ai_consultations where id = ${B.consultation.id}`,
     S.sql`select count(*)::int as n from case_reminders where order_id = any(${orders})`,
+    S.sql`select count(*)::int as n from court_calls where order_id = any(${orders})`,
   ]);
   return JSON.stringify(parts);
 }

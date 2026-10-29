@@ -298,6 +298,8 @@ ol.remark-items { margin: 8px 0; padding-left: 20px; }
 ol.remark-items li { padding: 8px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 ol.remark-items .choice { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 6px 0; }
 ol.remark-items .choice label { display: flex; gap: 6px; align-items: center; font-weight: normal; }
+#hearing-list li { overflow-wrap: anywhere; }
+#hearing-list li.hearing-next { border-left: 3px solid var(--accent); padding-left: 10px; background: var(--accent-soft); }
 ol.remark-items .mark { font-weight: 600; }
 .ready-mark { flex: 0 0 22px; height: 22px; border-radius: 50%; text-align: center; line-height: 22px; font-weight: 700; color: var(--accent-text); }
 li.ready.ok .ready-mark { background: var(--ok); }

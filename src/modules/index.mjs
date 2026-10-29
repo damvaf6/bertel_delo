@@ -48,6 +48,8 @@
 //       тогда вычитка обязательна; refund_note — правило возврата, его видит диспетчер при отмене после начала работ
 //     remarks?: { reply_days }  — замечания к сданному отчёту (2.431): после «готово» заказчик пишет, что пришли замечания
 //       банка или суда (текст и файл), дело снова у исполнителя; срок ответа — reply_days рабочих дней
+//     court?: {}  — вызов эксперта в суд (2.441): после «готово» заказчик или диспетчер пишет, что исполнителя вызывают на
+//       заседание (суд, номер дела, дата и время, адрес, файл повестки); дело не переоткрывается
 //     offer?: { version: 'ГГГГ-ММ-ДД', draft: true?, doc: путь в docs/, points: [{ id, text, to: 'customer' | 'executor', services? }…] }  —
 //       главные условия оферты (2а.8) в карточке заявки: заказчику — свои пункты, исполнителю и служебным — все; draft — черновик,
 //       пока юрист не проверил (пометка «пока не действует»); полный текст — doc
@@ -145,7 +147,7 @@ function validateField(f, where) {
 }
 
 export function validateModule(m) {
-  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express', 'signature', 'analogs', 'approaches', 'request_docs', 'repeat', 'executors', 'certificate', 'steps', 'proofread', 'remarks', 'offer'], 'модуль');
+  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express', 'signature', 'analogs', 'approaches', 'request_docs', 'repeat', 'executors', 'certificate', 'steps', 'proofread', 'remarks', 'court', 'offer'], 'модуль');
   if (!ID_RE.test(m.id ?? '')) fail('модуль', `неверный id «${m.id}»`);
   const at = `модуль ${m.id}`;
   if (!nonEmpty(m.name)) fail(at, 'нет названия');
@@ -395,6 +397,8 @@ export function validateModule(m) {
     if (!Number.isInteger(m.remarks.reply_days) || m.remarks.reply_days < 1 || m.remarks.reply_days > 30) fail(where, 'reply_days — целое от 1 до 30');
     if (m.proofread !== undefined) fail(where, 'вместе с proofread нельзя: после выдачи — либо переделка, либо замечания');
   }
+  // Вызов эксперта в суд (2.441) — необязательно, без настроек.
+  if (m.court !== undefined) onlyKeys(m.court, [], `${at}, вызов в суд`);
   // Вычитка и переделка (2а.7) — необязательно.
   if (m.proofread !== undefined) {
     const where = `${at}, вычитка`;
@@ -631,6 +635,10 @@ export function createRegistry(modules = DEFAULT_MODULES) {
     remarks(moduleId) {
       const r = modulesList.find((x) => x.id === moduleId)?.remarks;
       return r ? { reply_days: r.reply_days } : null;
+    },
+    // Вызов эксперта в суд (2.441): есть ли у модуля.
+    court(moduleId) {
+      return !!modulesList.find((x) => x.id === moduleId)?.court;
     },
     // Условия оферты (2а.8) для услуги: пункты заказчику (customer) и исполнителю (executor); null — у модуля оферты нет.
     offer(moduleId, serviceId) {
