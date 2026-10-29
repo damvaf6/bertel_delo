@@ -5,6 +5,9 @@ import { HttpError } from '../http/core.mjs';
 import { orderSides } from '../access/policy.mjs';
 import { notify } from '../notify/notify.mjs';
 import { todayMsk, addDays } from '../orders/workflow.mjs';
+import { workdaysAfter } from '../orders/holidays.mjs';
+import { hearingsOf } from '../orders/schedule.mjs';
+import { BLOCKING_KINDS, KINDS, loadDossier } from '../dossier/dossier.mjs';
 import { publicDoc, saveDocument } from './core-ops.mjs';
 import { audit, text, uuidFrom } from './util.mjs';
 
@@ -64,6 +67,42 @@ async function view(sql, registry, actor, order) {
   const now = Date.now();
   return { available: true, can_add: canCall(registry, actor, order), calls: list,
            next: list.find((c) => new Date(c.hearing_at).getTime() >= now - 3 * 3600 * 1000)?.id ?? null };
+}
+
+// Заседание сегодня или завтра (2.443) — в «Сегодня» эксперта: что взять с собой. В пятницу «завтра» — и понедельник
+// (следующий рабочий день). Прошедшее больше трёх часов назад — уже нет. Отчёт — последний свой файл результата дела (после
+// замечаний — новая редакция), ответ на замечания, если приложен, повестка; аттестат и полисы — из досье: срок кончился до
+// дня заседания — предупреждение, нет в досье — тоже. Полис организации — только если он есть в досье.
+const MUST = ['certificate', 'policy'];
+export async function hearingsSoon(sql, userId, today = todayMsk(), now = new Date()) {
+  const last = [addDays(today, 1), workdaysAfter(today, 1)].sort().at(-1);
+  const list = (await hearingsOf(sql, userId, today, last)).filter((h) => new Date(h.hearing_at).getTime() >= now.getTime() - 3 * 3600 * 1000);
+  if (!list.length) return [];
+  const dossier = (await loadDossier(sql, userId)).filter((i) => BLOCKING_KINDS.includes(i.kind));
+  const out = [];
+  for (const h of list) {
+    const day = todayMsk(new Date(h.hearing_at));
+    const o = await sql.one`select id, report_number, remarks_at, remarks_answer_doc_id from orders where id = ${h.order_id}`;
+    const report = await sql.one`
+      select id, filename, created_at from documents where order_id = ${o.id} and kind = 'result' and deleted_at is null
+        and uploaded_by = ${userId} and id is distinct from ${o.remarks_answer_doc_id} order by created_at desc, id desc limit 1`;
+    const answer = o.remarks_answer_doc_id ? await sql.one`select id, filename from documents where id = ${o.remarks_answer_doc_id} and deleted_at is null` : null;
+    const summons = await sql.one`select d.id, d.filename from court_calls c join documents d on d.id = c.document_id and d.deleted_at is null where c.id = ${h.id}`;
+    const docs = dossier.map((i) => ({ kind: i.kind, kind_name: i.kind_name, number: i.number, valid_until: i.valid_until,
+      expired: !!i.valid_until && i.valid_until < day }));
+    out.push({
+      id: h.order_id, title: h.title, call_id: String(h.id), court: h.court, case_no: h.case_no, address: h.address,
+      hearing_at: h.hearing_at, day, today: day === today,
+      time: new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit' }).format(new Date(h.hearing_at)),
+      report: report ? { id: report.id, filename: report.filename, number: o.report_number ?? null,
+        edition: !!o.remarks_at && new Date(report.created_at) >= new Date(o.remarks_at) } : null,
+      answer: answer ? { id: answer.id, filename: answer.filename } : null,
+      summons: summons ? { id: summons.id, filename: summons.filename } : null,
+      dossier: docs,
+      missing: MUST.filter((k) => !docs.some((d) => d.kind === k)).map((k) => KINDS[k].name),
+    });
+  }
+  return out;
 }
 
 export function courtOps() {

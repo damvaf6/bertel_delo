@@ -192,3 +192,48 @@ test('2.442: заседание — в «Моих сроках на две не�
   assert.match(ev, /TRIGGER:-PT2H\r\n/);
   assert.ok(!cal.includes(`court-${far}`));
 });
+
+test('2.443: заседание сегодня или завтра — в «Сегодня» эксперта: что взять с собой, истёкший полис и пустое досье — предупредить', async () => {
+  const lonely = await login(S, '+79990004416');
+  await makeSpecialist(S.sql, lonely.user.id);
+  const o = await doneOrder('Квартира: заседание завтра');
+  const today = todayMsk();
+  const tomorrow = addDays(today, 1);
+  const file = await upload(owner, o, 'court/file', 'Повестка.pdf');
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/court`, { ...CALL(), date: tomorrow, time: '23:50', document_id: file.body.document.id })).status, 201);
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/court`, { ...CALL(), date: addDays(today, 6) })).status, 201, 'через 6 дней — не сегодня');
+  await S.sql`delete from dossier_items where user_id = ${spec.user.id}`;
+  let r = (await spec.req('GET', '/api/today')).body.expert.court.filter((x) => x.id === o.id);
+  assert.equal(r.length, 1, 'только ближайшее — завтра');
+  assert.deepEqual([r[0].day, r[0].time, r[0].today, r[0].court, r[0].case_no, r[0].address],
+    [tomorrow, '23:50', false, CALL().court, CALL().case_no, CALL().address]);
+  assert.equal(r[0].report.filename, 'Отчёт.pdf');
+  assert.equal(r[0].summons.filename, 'Повестка.pdf');
+  assert.deepEqual(r[0].missing, ['Квалификационный аттестат', 'Полис страхования оценщика'], 'досье пустое');
+
+  const cert = await spec.req('POST', '/api/specialist/me/dossier', { kind: 'certificate', title: 'Оценка недвижимости', number: 'А-4416', valid_until: addDays(today, 200) });
+  assert.equal(cert.status, 201);
+  // Полис кончается сегодня — к заседанию завтра уже истёк.
+  assert.equal((await spec.req('POST', '/api/specialist/me/dossier', { kind: 'policy', title: 'Тестовая страховая', number: 'П-1', valid_until: today, amount_rub: 300000 })).status, 201);
+  r = (await spec.req('GET', '/api/today')).body.expert.court.find((x) => x.id === o.id);
+  assert.deepEqual(r.missing, []);
+  assert.deepEqual(r.dossier.map((d) => [d.kind, d.expired]), [['certificate', false], ['policy', true]]);
+  // Чужим — нет.
+  if (!(await S.sql`select 1 from specialists where user_id = ${other.user.id}`).length) await makeSpecialist(S.sql, other.user.id);
+  assert.ok(!((await other.req('GET', '/api/today')).body.expert.court ?? []).some((x) => x.id === o.id));
+  assert.deepEqual((await lonely.req('GET', '/api/today')).body.expert.court, []);
+});
+
+test('2.443: заседание — в пятницу и понедельник «завтра», прошедшее три часа назад — нет', async () => {
+  const { hearingsSoon } = await import('../../src/ops/court-ops.mjs');
+  const o = await doneOrder('Квартира: заседание в понедельник');
+  // Пятница 06.11.2026, заседания — в понедельник 09.11 и во вторник 10.11 (дата вставлена напрямую — «сегодня» в прошлом).
+  await S.sql`insert into court_calls (order_id, court, case_no, hearing_at, address, created_by, side) values
+    (${o.id}, 'Суд', '2-1', '2026-11-09T07:00:00Z', 'Адрес', ${owner.user.id}, 'customer'),
+    (${o.id}, 'Суд', '2-2', '2026-11-10T07:00:00Z', 'Адрес', ${owner.user.id}, 'customer'),
+    (${o.id}, 'Суд', '2-3', '2026-11-06T06:00:00Z', 'Адрес', ${owner.user.id}, 'customer')`;
+  const fri = await hearingsSoon(S.sql, spec.user.id, '2026-11-06', new Date('2026-11-06T10:00:00Z'));
+  assert.deepEqual(fri.filter((x) => x.id === o.id).map((x) => x.case_no), ['2-1'], 'в пятницу — понедельник; прошедшее утром — нет');
+  const mon = await hearingsSoon(S.sql, spec.user.id, '2026-11-09', new Date('2026-11-09T05:00:00Z'));
+  assert.deepEqual(mon.filter((x) => x.id === o.id).map((x) => [x.case_no, x.today]), [['2-1', true], ['2-2', false]]);
+});

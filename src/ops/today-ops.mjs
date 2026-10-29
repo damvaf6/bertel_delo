@@ -48,6 +48,7 @@ import { reportMade } from '../ai/report-checks.mjs';
 import { customerSilent, workingMs } from '../orders/silence.mjs';
 import { newYearAhead } from '../orders/holidays.mjs';
 import { yearHint } from '../orgs/numbering.mjs';
+import { hearingsSoon } from './court-ops.mjs';
 
 // «Горит» — просрочено или до срока не больше двух дней (как подсветка в списке дел).
 const HOT_DAYS = 2;
@@ -299,6 +300,8 @@ async function expertPart(sql, actor, registry, today, storage) {
     dossier_new_year: newYearTerms(await loadDossier(sql, actor.id), today),
     new_year: ny && { from: ny.from, to: ny.to, work_before: ny.work_before, items: ny.rows.map((o) => item(o)) },
     remarks,
+    // Заседание в суде сегодня или завтра (2.443): что взять с собой, срок аттестата или полиса кончился — предупредить.
+    court: await hearingsSoon(sql, actor.id, today),
     ai_recheck: recheck,
     task_made: taskMade,
     task_late: taskLate,

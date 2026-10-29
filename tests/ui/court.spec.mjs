@@ -124,3 +124,44 @@ test('2.441: эксперта вызывают в суд — заказчик п
   await cp.context().close();
   await sp.context().close();
 });
+
+test('2.443: заседание завтра — в «Сегодня» эксперта: что взять с собой, истёкший полис — красным', async ({ browser, baseURL }) => {
+  const sp = await phone(browser, baseURL);
+  const cp = await phone(browser, baseURL);
+  const expert = await signIn(sp, '+79990004423');
+  const customer = await signIn(cp, '+79990004424');
+  await cp.context().close();
+  const tomorrow = plusDays(1);
+  const id = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    const oid = (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, deadline, fields, report_number)
+      values ($1, 'Дом в Одинцово для суда', 'expertise', 'realty', 'done', $2, current_date - 5, $3, '15/2026') returning id`,
+    [customer.id, expert.id, { purpose: 'court', region: 'moscow', object_type: 'house', address: 'Московская обл., г. Одинцово, ул. Тестовая, 3' }])).rows[0].id;
+    await c.query(`insert into documents (order_id, uploaded_by, filename, mime, size_bytes, storage_key, kind)
+      values ($1, $2, 'Отчёт 15-2026.pdf', 'application/pdf', 1, $3, 'result')`, [oid, expert.id, `ui/2443/${oid}`]);
+    await c.query(`insert into court_calls (order_id, court, case_no, hearing_at, address, created_by, side)
+      values ($1, 'Одинцовский городской суд', '2-4423/2026', ($2::date + time '11:00') at time zone 'Europe/Moscow', 'Московская обл., г. Одинцово, ул. Неделина, 17, зал 3', $3, 'customer')`,
+    [oid, tomorrow, customer.id]);
+    await c.query(`insert into dossier_items (user_id, kind, title, number, valid_until, amount_kop) values
+      ($1, 'certificate', 'Оценка недвижимости', 'А-4423', current_date + 300, null),
+      ($1, 'policy', 'Тестовая страховая', 'П-4423', current_date, 30000000)`, [expert.id]);
+    return oid;
+  });
+
+  await sp.goto('/kabinet');
+  const row = sp.locator('li[data-today-item="court"]');
+  await expect(row).toHaveCount(1);
+  await expect(sp.locator('li[data-today="court"]')).toHaveText('Заседание в суде · 1');
+  await expect(row.locator('[data-role="court-when"]')).toContainText('в 11:00 · Одинцовский городской суд, дело № 2-4423/2026');
+  await expect(row.locator('[data-role="court-where"]')).toHaveText('Московская обл., г. Одинцово, ул. Неделина, 17, зал 3');
+  await expect(row.locator('[data-role="court-take"]')).toHaveText('Взять с собой: отчёт № 15/2026 — Отчёт 15-2026.pdf, квалификационный аттестат № А-4423, паспорт');
+  await expect(row.locator('[data-role="court-expired"]')).toContainText('Полис страхования оценщика № П-4423: срок истёк');
+  await expect(row.locator('[data-role="court-missing"]')).toHaveCount(0);
+  await row.scrollIntoViewIfNeeded();
+  await shot(sp, 'ct04-2443-zasedanie-segodnya');
+  await row.locator('button.open').click();
+  await expect(sp).toHaveURL(new RegExp(`#order=${id}&to=court$`));
+  await expect(sp.locator('#hearing-box li.hearing-next')).toContainText('Одинцовский городской суд');
+  expect(sp.problems).toEqual([]);
+  await sp.context().close();
+});
