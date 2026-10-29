@@ -159,3 +159,36 @@ test('вызов в суд: до сдачи — нельзя, у перевод�
   const t = (await owner.req('POST', '/api/orders', { module: 'translation', service: 'notary_paper', title: 'Перевод' })).body.order;
   assert.deepEqual((await owner.req('GET', `/api/orders/${t.id}/court`)).body, { available: false });
 });
+
+test('2.442: заседание — в «Моих сроках на две недели» эксперта и в файле для календаря (адрес, напоминание накануне)', async () => {
+  const o = await doneOrder('Квартира: заседание в сроках');
+  const date = addDays(todayMsk(), 3);
+  const far = addDays(todayMsk(), 20);
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/court`, { ...CALL(), date, time: '14:15', address: 'г. Москва, ул. Судебная, 7, зал 12' })).status, 201);
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/court`, { ...CALL(), date: far })).status, 201, 'после двух недель');
+  const days = (await spec.req('GET', '/api/specialist/me/schedule')).body.schedule.days;
+  const items = days.flatMap((d) => d.items.map((i) => ({ ...i, date: d.date }))).filter((i) => i.kind === 'court' && i.order_id === o.id);
+  assert.equal(items.length, 1, 'заседание через 20 дней — не в двух неделях');
+  const [h] = items;
+  assert.deepEqual([h.date, h.time, h.court, h.case_no, h.address, h.title],
+    [date, '14:15', CALL().court, CALL().case_no, 'г. Москва, ул. Судебная, 7, зал 12', 'Квартира: заседание в сроках']);
+  assert.ok(days.find((d) => d.date === date).court >= 1, 'в дне заседания — счёт заседаний');
+  // Чужие заседания не видны: у другого специалиста их нет.
+  await makeSpecialist(S.sql, other.user.id);
+  const theirs = (await other.req('GET', '/api/specialist/me/schedule')).body.schedule.days.flatMap((d) => d.items);
+  assert.ok(!theirs.some((i) => i.kind === 'court'));
+
+  const cal = String((await spec.req('GET', '/api/specialist/me/schedule?format=ics', undefined, { binary: true })).body).replace(/\r\n /g, '');
+  const ev = cal.split('BEGIN:VEVENT').find((e) => e.includes(`UID:court-${h.call_id}@`));
+  assert.ok(ev, 'событие заседания в календаре');
+  const ymd = date.replace(/-/g, '');
+  assert.match(ev, new RegExp(`DTSTART:${ymd}T111500Z\\r\\n`), '14:15 по Москве');
+  assert.match(ev, new RegExp(`DTEND:${ymd}T131500Z\\r\\n`), 'два часа');
+  assert.match(ev, /SUMMARY:Заседание в суде: Тестовый районный суд г\. Москвы\\, дело № 2-4411\/2026\r\n/);
+  assert.match(ev, /LOCATION:г\. Москва\\, ул\. Судебная\\, 7\\, зал 12\r\n/);
+  assert.match(ev, /TRANSP:OPAQUE/);
+  const eve = addDays(date, -1).replace(/-/g, '');
+  assert.match(ev, new RegExp(`TRIGGER;VALUE=DATE-TIME:${eve}T150000Z\\r\\n`), 'накануне в 18:00 по Москве');
+  assert.match(ev, /TRIGGER:-PT2H\r\n/);
+  assert.ok(!cal.includes(`court-${far}`));
+});

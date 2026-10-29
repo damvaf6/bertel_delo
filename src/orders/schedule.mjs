@@ -8,6 +8,8 @@
 // дела (2.317) — своей отметкой в его день, у срока дела — «по заданию раньше»; задание читается, только если передано хранилище.
 // Письмо о переносе со сроком раньше срока дела (2.353) — у отметки «срок раньше срока дела», просил ли эксперт письмо с новым
 // сроком (`letter_ask`) и кнопка «Попросить письмо с новым сроком», как в «Сегодня» (2.341) и «Истории сроков» (2.349).
+// Заседание суда (2.442), куда вызвали эксперта по его сданному делу (2.441), — в свой день со временем, судом, номером дела
+// и адресом; день с заседанием считается, как с выездом: заседание и больше двух дел к сдаче — перегружен. Прошедшие дни — нет.
 import { addDays, todayMsk } from './workflow.mjs';
 import { holidayName, isWorkday, isWorkingWeekend, workdayBefore } from './holidays.mjs';
 import { taskDueFor, taskMoveLetter } from '../ops/draft-ops.mjs';
@@ -20,6 +22,15 @@ export const SCHEDULE_DAYS = 14;
 // объект в тот же день (2.179: помощника по своему делу или свой помощником) считается за дело — если в день есть что сдать.
 export const BUSY_DEADLINES = 2;
 export const isBusy = (due, trips = 0) => due > 0 && due + trips > BUSY_DEADLINES;
+// Заседания в суде (2.442), куда вызвали человека как эксперта его дела: с начала дня `from` до конца дня `to` по Москве.
+export async function hearingsOf(sql, userId, from, to) {
+  return sql`
+    select c.id, c.order_id, c.court, c.case_no, c.hearing_at, c.address, o.title, o.module, o.service
+    from court_calls c join orders o on o.id = c.order_id
+    where o.executor_user_id = ${userId} and o.status in ('done', 'closed')
+      and (c.hearing_at at time zone 'Europe/Moscow')::date between ${from}::date and ${to}::date
+    order by c.hearing_at, c.id`;
+}
 
 // Выезды на объект по дням (по Москве), как в «Моих сроках»: не завершённые и не отменённые, дело в работе; человек —
 // исполнитель дела или помощник на выезде.
@@ -128,6 +139,7 @@ export async function expertSchedule(sql, userId, registry, today = todayMsk(), 
     where n.author_id = ${userId} and o.executor_user_id = ${userId} and o.status in ('awaiting_executor', 'in_work', 'review', 'done')
       and n.deleted_at is null and n.done_at is null and n.remind_on is not null and n.remind_on <= ${last}::date
     order by n.remind_on, n.id`;
+  const hearings = await hearingsOf(sql, userId, today, last);
   const sp = await sql.one`select away_from, away_until, away_note from specialists where user_id = ${userId}`;
   // from (2.226) — первый день «не принимаю», если ещё не наступил; null — уже не принимает.
   const away = sp?.away_until && day(sp.away_until) > today ? { from: awayStart(sp, today), until: day(sp.away_until), note: sp.away_note ?? '' } : null;
@@ -175,18 +187,23 @@ export async function expertSchedule(sql, userId, registry, today = todayMsk(), 
   for (const l of links) {
     put(mskDay(l.expires_at), { kind: 'link', ...base(l, l.order_id), time: mskTime(l.expires_at), has_photos: l.has_photos });
   }
+  for (const h of hearings) {
+    put(mskDay(h.hearing_at), { kind: 'court', ...base(h, h.order_id), call_id: String(h.id), time: mskTime(h.hearing_at),
+      at: new Date(h.hearing_at).toISOString(), court: h.court, case_no: h.case_no, address: h.address });
+  }
   for (const n of notes) {
     put(n.remind_on < today ? today : n.remind_on, { kind: 'note', ...base(n, n.order_id), note_id: String(n.id), note: n.body, remind_on: n.remind_on,
       late: n.remind_on < today, ...(n.remind_deadline && n.deadline ? { by_deadline: true, deadline: n.deadline } : {}) });
   }
-  // В дне: сначала выезды по времени, потом сроки по заданию на оценку, сроки, просьбы о переносе, ссылки и заметки.
-  const ORDER = { my_visit: 0, visit: 0, task_due: 1, deadline: 1, extend: 2, link: 3, note: 4 };
+  // В дне: сначала выезды и заседания по времени, потом сроки по заданию на оценку, сроки, просьбы о переносе, ссылки и заметки.
+  const ORDER = { my_visit: 0, visit: 0, court: 0, task_due: 1, deadline: 1, extend: 2, link: 3, note: 4 };
   for (const d of days.values()) {
     d.items.sort((a, b) => ORDER[a.kind] - ORDER[b.kind] || String(a.time ?? '').localeCompare(String(b.time ?? '')));
     d.deadlines = d.items.filter((i) => i.kind === 'deadline').length;
     d.due = d.items.filter((i) => i.kind === 'deadline' && i.status !== 'review').length;
     d.trips = d.items.filter((i) => i.kind === 'visit' || i.kind === 'my_visit').length;
-    d.busy = isBusy(d.due, d.trips);
+    d.court = d.items.filter((i) => i.kind === 'court').length;
+    d.busy = isBusy(d.due, d.trips + d.court);
     // «Попросить перенос» — у дел в работе без открытой просьбы (просить можно только по делу в работе, 2.91).
     for (const i of d.items) {
       if (i.kind !== 'deadline') continue;

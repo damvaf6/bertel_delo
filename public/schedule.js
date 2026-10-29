@@ -1,7 +1,8 @@
 // «Мои сроки на две недели» в разделе «Специалист» (2.109): по дням — сроки своих дел, выезды помощника, до какого дня
 // действует ссылка на осмотр, на какой день эксперт просил перенести срок. Подряд идущие пустые дни — одной строкой
 // «свободно». Нажатие на строку открывает дело на нужном блоке. Свои напоминания по заметкам (2.120) — открывают заметки;
-// «Сделано» у напоминания отмечает заметку, не открывая дело (2.157).
+// «Сделано» у напоминания отмечает заметку, не открывая дело (2.157). Заседание суда (2.442) — со временем, судом, номером дела и
+// адресом; ведёт к вызову в суд в деле.
 import { api, el, say } from '/common.js';
 import { WORKING_DAY, awaySpan, dayRu, holidayText } from '/order.js';
 
@@ -18,7 +19,7 @@ const trips = (n) => (n === 1 ? 'выезд' : `${n} ${n < 5 ? 'выезда' : 
 // «Горит» — как в «Сегодня»: срок сегодня, завтра или послезавтра.
 const HOT_DAYS = 2;
 // Файл для календаря телефона (2.122): сроки дел и выезды — в файле только они.
-const IN_CALENDAR = new Set(['deadline', 'task_due', 'visit', 'my_visit']);
+const IN_CALENDAR = new Set(['deadline', 'task_due', 'visit', 'my_visit', 'court']);
 $('schedule-ics').addEventListener('click', () => location.assign('/api/specialist/me/schedule?format=ics'));
 
 function item(i, index) {
@@ -66,6 +67,11 @@ function item(i, index) {
   }
   if (i.kind === 'extend') {
     return link(order('deadline'), `Просите перенести сюда срок: ${i.title}`, `сейчас срок ${short(i.deadline)} · ждёт ответа диспетчера`, 'wait');
+  }
+  if (i.kind === 'court') {
+    const li = link(order('court'), `${i.time} · Заседание в суде: ${i.title}`, [i.court, `дело № ${i.case_no}`, i.address, i.service].join(' · '), 'hot');
+    li.dataset.court = i.call_id;
+    return li;
   }
   if (i.kind === 'visit') return link(order('onsite'), `${i.time} · Выезд помощника: ${i.title}`, i.service);
   if (i.kind === 'note') {
@@ -136,11 +142,12 @@ export async function loadSchedule() {
     if (d.items.length) {
       rows.push(el('li', { 'data-day': d.date, class: [d.today ? 'today' : '', d.weekend ? 'weekend' : '', d.busy ? 'busy' : '', kind(d) !== 'free' ? kind(d) : ''].filter(Boolean).join(' ') },
         el('div', { class: 'day' }, el('span', { text: `${d.today ? 'Сегодня, ' : ''}${dayName(d)}` }),
-          el('span', { class: d.busy ? 'busy-mark' : 'muted', text: d.busy ? `много: к сдаче ${d.due}${d.trips ? ` + ${trips(d.trips)}` : ''}` : d.deadlines > 1 ? `сдать дел: ${d.deadlines}` : '' })),
+          el('span', { class: d.busy ? 'busy-mark' : 'muted', text: d.busy ? `много: к сдаче ${d.due}${d.trips ? ` + ${trips(d.trips)}` : ''}${d.court ? ' + суд' : ''}` : d.deadlines > 1 ? `сдать дел: ${d.deadlines}` : '' })),
         ...(kind(d) !== 'free' ? [el('p', { class: 'away-mark', text: FREE[kind(d)] })] : []),
         ...(d.holiday ? [el('p', { class: 'holiday-mark', 'data-role': 'holiday', text: holidayText(d, d.due) })] : []),
         ...(d.working ? [el('p', { class: 'working-mark', 'data-role': 'working', text: WORKING_DAY })] : []),
-        ...(d.busy ? [el('p', { class: 'muted', text: d.trips
+        ...(d.busy && d.court ? [el('p', { class: 'muted', 'data-role': 'busy-court', text: `В этот день заседание в суде и к сдаче ${d.due} ${d.due === 1 ? 'дело' : d.due < 5 ? 'дела' : 'дел'} — можно попросить перенести срок.` })]
+          : d.busy ? [el('p', { class: 'muted', text: d.trips
           ? `В этот день к сдаче ${d.due} ${d.due === 1 ? 'дело' : d.due < 5 ? 'дела' : 'дел'} и ${trips(d.trips)} на объект — можно попросить перенести срок.`
           : 'В этот день больше двух дел к сдаче — можно попросить перенести срок одного из них.' })] : []),
         el('ul', {}, ...d.items.map((i) => item(i, k)))));
