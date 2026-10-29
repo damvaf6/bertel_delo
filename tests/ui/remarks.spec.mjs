@@ -495,3 +495,44 @@ test('2.439: «Сегодня» эксперта — замечания к сд�
   expect(sp.problems).toEqual([]);
   await sp.context().close();
 });
+
+test('прогон 2.440: ответ на замечания готовится — отчёт в перечне для СРО по сданной редакции', async ({ browser, baseURL }) => {
+  const sp = await phone(browser, baseURL);
+  const expert = await signIn(sp, '+79990004332');
+  const due = workdaysAfter(todayMsk(), 3);
+  const id = await db(async (c) => {
+    await c.query("update users set full_name = 'Ответова Нина' where id = $1", [expert.id]);
+    await c.query("insert into specialists (user_id, created_at) values ($1, now() - interval '2 years')", [expert.id]);
+    const oid = (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, deadline, fields, remarks_at, remarks_due, remarks_round)
+      values ($1, 'Квартира: ответ готовится', 'expertise', 'realty', 'in_work', $1, $3, $2, now(), $3, 1) returning id`,
+    [expert.id, { purpose: 'bank', address: 'г. Москва, ул. Ответов, д. 3' }, due])).rows[0].id;
+    await c.query("insert into order_status_history (order_id, from_status, to_status, side, at) values ($1, 'review', 'done', 'dispatcher', now() - interval '2 days')", [oid]);
+    await c.query("insert into order_status_history (order_id, from_status, to_status, side, reason) values ($1, 'done', 'in_work', 'customer', 'Банк: обоснуйте аналоги')", [oid]);
+    return oid;
+  });
+  const put = async (name, value) => {
+    const text = `ОТЧЁТ ОБ ОЦЕНКЕ № 91/2026 от 20.10.2026\nИтоговая величина рыночной стоимости объекта оценки составляет ${value} руб.\nОтчёт № 91/2026`;
+    const r = await sp.request.post(`/api/orders/${id}/documents`, { data: Buffer.from(text), headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } });
+    expect(r.status(), await r.text()).toBe(201);
+    return (await r.json()).document.id;
+  };
+  const old = await put('отчёт.txt', '7 400 000');
+  await put('отчёт (черновик новой редакции).txt', '7 100 000');
+  await db(async (c) => {
+    await c.query("update documents set kind = 'result' where order_id = $1", [id]);
+    await c.query("update documents set created_at = now() - interval '2 days' where id = $1", [old]);
+  });
+
+  await sp.goto('/kabinet#specialist');
+  const row = sp.locator(`#registry-rows > li[data-registry="${id}"]`);
+  await expect(row).toBeVisible();
+  await expect(row).toContainText('Отчёт № 91/2026');
+  await expect(row).toContainText('7 400 000');
+  await expect(row).not.toContainText('7 100 000');
+  await expect(row.locator('[data-registry-edition]')).toHaveText(`Пришли замечания от ${full(todayMsk())} — ответ готовится (ответить до ${full(due)}); в перечне — сданная редакция`);
+  await expect(sp.locator('#registry-holes')).not.toContainText('91/2026');
+  await row.scrollIntoViewIfNeeded();
+  await shot(sp, 'rm15-2440-perechen-otvet-gotovitsya');
+  expect(sp.problems).toEqual([]);
+  await sp.context().close();
+});
