@@ -229,3 +229,78 @@ test('пункты по нумерации: без номеров — абзац
   assert.deepEqual(cleanItems(['a', ' a ', '', 'A', { text: 'b' }, 5]), ['a', 'b']);
   assert.equal(cleanItems(['x'.repeat(2000)])[0].length, 1000);
 });
+
+test('ответ на замечания Word (2.433): пункт, что сделано и где в отчёте; приложить к исправленному отчёту', async () => {
+  const { extractPages } = await import('../../src/ai/extract.mjs');
+  await spec.req('PATCH', '/api/me', { full_name: 'Ответов Эксперт' });
+  const o = await doneOrder('Квартира: ответ на замечания');
+  const base = `/api/orders/${o.id}/remarks`;
+  const word = async (c) => {
+    const r = await fetch(`${S.base}${base}/answer`, { headers: { cookie: c.cookie } });
+    if (r.status !== 200) return { status: r.status, body: await r.json() };
+    const buf = Buffer.from(await r.arrayBuffer());
+    return { status: 200, name: decodeURIComponent(r.headers.get('content-disposition').split("''")[1]),
+      text: (await extractPages(buf, 'a.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')).pages.join('\n') };
+  };
+  assert.equal((await word(spec)).body.error, 'no_remarks');
+  assert.equal((await step(owner, o, 'in_work', { reason: 'Банк:\n1. Обоснуйте аналоги\n2. Скидка на торг без источника' })).status, 200);
+  assert.equal((await word(spec)).body.error, 'no_items');
+  assert.equal((await spec.req('POST', `${base}/items/parse`, {})).status, 200);
+  assert.equal((await word(spec)).body.error, 'items_unmarked', 'без отметок — нельзя');
+  assert.equal((await spec.req('POST', `${base}/answer`, {})).body.error, 'items_unmarked');
+
+  // Место в отчёте — по желанию, не длиннее 200 знаков.
+  assert.equal((await spec.req('PUT', `${base}/items`, { items: [{ text: 'a', place: 'x'.repeat(201) }] })).status, 400);
+  const saved = await spec.req('PUT', `${base}/items`, { items: [
+    { text: 'Обоснуйте аналоги', resolution: 'fixed', note: 'Аналог 3 заменён на аналог из того же района', place: 'раздел 8.2, стр. 31' },
+    { text: 'Скидка на торг без источника', resolution: 'explained', note: 'Скидка — по справочнику Лейфера, 2026' },
+  ] });
+  assert.equal(saved.status, 200, JSON.stringify(saved.body));
+  assert.deepEqual(saved.body.items.map((i) => i.place), ['раздел 8.2, стр. 31', '']);
+  assert.equal(saved.body.answer, null);
+
+  // Скачать — все стороны дела; чужому — нет.
+  for (const c of [spec, owner, dispatcher]) {
+    const w = await word(c);
+    assert.equal(w.status, 200, JSON.stringify(w.body));
+    assert.match(w.name, /^Ответ на замечания [0-9A-F]{8}\.docx$/);
+    for (const s of ['Ответ на замечания к отчёту', 'Обоснуйте аналоги', 'Исправлено в отчёте. Аналог 3 заменён', 'раздел 8.2, стр. 31',
+      'Пояснение без правки. Скидка — по справочнику Лейфера', 'исправлено в отчёте — 1, пояснений без правки — 1',
+      'Исправленный отчёт прилагается.', 'Ответов Эксперт']) assert.ok(w.text.includes(s), `${s}\n${w.text}`);
+  }
+  assert.equal((await word(other)).status, 404);
+
+  // Приложить — только исполнитель; файлом результата.
+  for (const c of [owner, dispatcher]) assert.equal((await c.req('POST', `${base}/answer`, {})).status, 403);
+  const att = await spec.req('POST', `${base}/answer`, {});
+  assert.equal(att.status, 201, JSON.stringify(att.body));
+  assert.equal(att.body.document.kind, 'result');
+  assert.equal(att.body.answer.id, att.body.document.id);
+  assert.equal((await spec.req('POST', `${base}/answer`, {})).body.error, 'answer_exists', 'второй раз — только «Заменить»');
+  const again = await spec.req('POST', `${base}/answer`, { replace: true });
+  assert.equal(again.status, 201);
+  const results = await S.sql`select id, deleted_at from documents where order_id = ${o.id} and filename like 'Ответ на замечания%'`;
+  assert.equal(results.length, 2);
+  assert.deepEqual(results.filter((d) => !d.deleted_at).map((d) => d.id), [again.body.document.id], 'прежний ответ убран из дела');
+  assert.equal((await owner.req('GET', `${base}/items`)).body.answer.filename, again.body.document.filename);
+  const audits = await S.sql`select action from audit_log where subject_id = ${String(o.id)} and action like 'remarks.answer%' order by id`;
+  assert.ok(audits.some((a) => a.action === 'remarks.answer.attach'));
+
+  // Сдал на проверку — приложить уже нельзя, скачать можно; новый круг замечаний — ответ ещё не приложен.
+  assert.equal((await upload(spec, o, 'results', 'Отчёт (исправленный).pdf')).status, 201);
+  await signResults(S, spec, o.id);
+  assert.equal((await step(spec, o, 'review')).status, 200);
+  assert.equal((await spec.req('POST', `${base}/answer`, { replace: true })).body.error, 'status_changed');
+  assert.equal((await word(spec)).status, 200);
+  const rv = (await dispatcher.req('GET', `/api/orders/${o.id}/review`)).body;
+  for (const c of rv.checks) await dispatcher.req('PUT', `/api/orders/${o.id}/review/${c.id}`, { verdict: 'ok', round: rv.round });
+  assert.equal((await step(dispatcher, o, 'done')).status, 200);
+  assert.equal((await step(owner, o, 'in_work', { reason: 'Суд: почему без осмотра' })).status, 200);
+  const r2 = (await spec.req('GET', `${base}/items`)).body;
+  assert.equal(r2.answer, null);
+  await spec.req('PUT', `${base}/items`, { items: [{ text: 'Почему без осмотра', resolution: 'explained', note: 'Объект снесён' }] });
+  const w2 = await word(spec);
+  assert.match(w2.name, /\(2\)\.docx$/);
+  assert.ok(w2.text.includes('Отчёт не изменялся'), w2.text);
+  assert.ok(w2.text.includes('2-й раз'), w2.text);
+});
