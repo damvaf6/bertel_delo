@@ -6,7 +6,7 @@ import { editsDraft, seesDraft } from '../access/policy.mjs';
 import { DRAFT_GAP, DRAFT_MAX, askAi, cleanDraftAnswer, draftMessages, orderBrief } from '../ai/ai.mjs';
 import { READ_MAX_BYTES, extractPages, readableKind } from '../ai/extract.mjs';
 import { DOCX_MIME } from '../docs/docx.mjs';
-import { fillTables, orderMaterials, orderSections, placeCustomer, reportFor, tablesBrief } from '../docs/report.mjs';
+import { fillTables, orderMaterials, orderSections, placeCustomer, reportEdition, reportFor, tablesBrief } from '../docs/report.mjs';
 import { APPROACHES } from '../modules/index.mjs';
 import { analogsBrief } from '../analogs/analogs.mjs';
 import { publicDoc, saveDocument } from './core-ops.mjs';
@@ -126,7 +126,9 @@ async function numberView(sql, actor, order) {
   const src = await numberSource(sql, actor.id);
   const o = await sql.one`select report_number, to_char(report_number_on, 'YYYY-MM-DD') as on from orders
                           where id = ${order.id} and report_number_by = ${actor.id}`;
-  return { number: o?.report_number ?? null, on: o?.report_number ? o.on : null, pattern: src.pattern, org: src.org?.name ?? null, can_set: editsDraft(actor, order) };
+  // Замечания к сданному отчёту (2.434): Word соберётся новой редакцией того же отчёта.
+  const edition = await reportEdition(sql, order);
+  return { number: o?.report_number ?? null, on: o?.report_number ? o.on : null, pattern: src.pattern, org: src.org?.name ?? null, can_set: editsDraft(actor, order), edition };
 }
 
 // Ручной номер (2.413): занят другим делом эксперта этого года — выданным платформой или в файле отчёта — нельзя; при счёте

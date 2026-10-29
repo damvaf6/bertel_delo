@@ -1,7 +1,7 @@
 // Операции каркаса: проверка работы, вход, профиль, документы заявки и результат работы (1.5). Сама заявка — order-ops.mjs.
 import crypto from 'node:crypto';
 import { HttpError, rateLimiter, sessionCookie } from '../http/core.mjs';
-import { FINAL, resultDue } from '../orders/workflow.mjs';
+import { FINAL, resultDue, todayMsk } from '../orders/workflow.mjs';
 import { executorSignOrg, isStaff, orderSides, seesResults } from '../access/policy.mjs';
 import { requestCode, verifyCode, endSession, SESSION_TTL_SEC } from '../auth/auth.mjs';
 import { audit, oneOf, phoneFrom, publicUser, text } from './util.mjs';
@@ -21,6 +21,8 @@ import { dossierTermView } from '../dossier/dossier.mjs';
 // Облако принимает запрос не больше 3,5 МБ (Yandex Serverless Containers) — через ядро только до 3 МБ (2.49).
 const MAX_FILE_BYTES = 3 * 1024 * 1024;
 const DOC_KINDS = ['basis', 'other'];
+// Файл результата сдан до последних замечаний к отчёту (2.434) — прежняя редакция.
+const priorEdition = (order, d) => d.kind === 'result' && !!order.remarks_at && new Date(d.created_at) < new Date(order.remarks_at);
 
 // Сохранить присланный файл в хранилище и записать документ заявки (вид — основание, прочее или результат).
 async function storeDocument(ctx, kind) {
@@ -173,11 +175,13 @@ export function coreOps(cfg) {
         };
         // Файл нотариуса (2а.6) — пометка у файла результата.
         const marked = results ? await stepFiles(sql, registry, order) : new Map();
+        // Прежняя редакция отчёта (2.434): файл результата, сданный до последних замечаний банка или суда, остаётся в деле.
+        const priorOf = (d) => (priorEdition(order, d) ? { prior_edition: todayMsk(new Date(order.remarks_at)) } : {});
         return {
           documents: docs.filter((d) => d.kind !== 'result' || results)
             .map((d) => (d.kind === 'result' ? { ...publicDoc(d), signatures: signaturesView(signs.get(d.id)),
               // Исполнителю — свой ли файл: после передачи дела файлы прежнего эксперта в сдачу не идут (2.110).
-              ...(mine ? { own: d.uploaded_by === actor.id } : {}), ...(aiHints.has(d.id) ? { ai_check: aiHints.get(d.id) } : {}), ...(made.has(d.id) ? { task_made: made.get(d.id) } : {}), ...certOf(d), ...(marked.has(d.id) ? { step_file: marked.get(d.id) } : {}) } : publicDoc(d))),
+              ...(mine ? { own: d.uploaded_by === actor.id } : {}), ...(aiHints.has(d.id) ? { ai_check: aiHints.get(d.id) } : {}), ...(made.has(d.id) ? { task_made: made.get(d.id) } : {}), ...certOf(d), ...(marked.has(d.id) ? { step_file: marked.get(d.id) } : {}), ...priorOf(d) } : publicDoc(d))),
           results_hidden: !results,
           signature_required: required,
           // От какой организации нужна вторая подпись (null — только эксперт).
@@ -238,6 +242,8 @@ export function coreOps(cfg) {
         if (doc.kind === 'inspection') throw new HttpError(409, 'inspection_locked', 'Фото осмотра удалить нельзя');
         // Сданный результат остаётся: по нему идёт проверка (убрать можно, пока дело в работе).
         if (doc.kind === 'result' && order.status !== 'in_work') throw new HttpError(409, 'result_locked', 'Сданный результат удалить нельзя');
+        // Прежняя редакция отчёта (2.434) — то, что уже получили банк или суд: остаётся в деле рядом с новой.
+        if (priorEdition(order, doc)) throw new HttpError(409, 'edition_locked', 'Прежняя редакция отчёта остаётся в деле — загрузите новую редакцию рядом');
         await sql.tx(async (tx) => {
           await tx`update documents set deleted_at = now() where id = ${doc.id}`;
           // Файл к запрошенному исполнителем документу (2.64) удалён — просьба снова ждёт заказчика.

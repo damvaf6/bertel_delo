@@ -257,6 +257,16 @@ export const tablesBrief = (sections) => {
   ].filter(Boolean).join('\n') || null;
 };
 
+// Исправленный отчёт после замечаний к сданному (2.434): в деле уже есть файл результата, сданный до последних замечаний, —
+// это новая редакция того же отчёта. Номер тот же (выдан делу, 2.412), дата составления — первой редакции (день первого
+// файла результата), на титуле и в колонтитуле — «Редакция от <сегодня>». Замечаний не было — null.
+export async function reportEdition(sql, order) {
+  if (!order.remarks_at) return null;
+  const r = await sql.one`select to_char(min(created_at) at time zone 'Europe/Moscow', 'YYYY-MM-DD') as first from documents
+                          where order_id = ${order.id} and kind = 'result' and deleted_at is null and created_at < ${order.remarks_at}`;
+  return r?.first ? { date: ru(r.first), edition: `Редакция от ${ru(todayMsk())}` } : null;
+}
+
 // Отчёт эксперта: титул и колонтитул — по заявке и услуге; шаблон — организации, от которой эксперт работает (профиль
 // специалиста, 2.5а). Шаблон пропал из хранилища — собирается стандартный. number — свой номер отчёта эксперта по образцу
 // (2.412); без него — номер дела платформы.
@@ -270,6 +280,7 @@ export async function reportFor(ctx, order, actor, draftText, { number = null } 
   const tpl = org ? await sql.one`select storage_key from org_templates where org_id = ${org.id}` : null;
   const template = tpl ? await providers.storage.get(tpl.storage_key) : null;
   const title = def?.service.paper ?? 'Заключение';
+  const edition = await reportEdition(sql, order);
   const meta = {
     title,
     number: number ? `№ ${number}` : orderRef(order.id),
@@ -278,11 +289,12 @@ export async function reportFor(ctx, order, actor, draftText, { number = null } 
     executor: actor.full_name || null,
     // На титуле заключения эксперта — «Эксперт» (2.79), у остальных документов — «Исполнитель».
     executor_role: /^Заключение эксперта/.test(title) ? 'Эксперт' : 'Исполнитель',
-    date: ru(todayMsk()),
+    date: edition?.date ?? ru(todayMsk()),
+    ...(edition ? { edition: edition.edition } : {}),
   };
   const appendices = [act, photos, appendix].filter(Boolean);
   return {
     buf: buildReport(text, meta, template, { appendix: appendices }), filename: `${title}.docx`, template: !!template,
-    analogs: appendix?.items.length ?? 0, photos: photos?.items.length ?? 0, act: !!act,
+    analogs: appendix?.items.length ?? 0, photos: photos?.items.length ?? 0, act: !!act, edition: edition?.edition ?? null,
   };
 }
