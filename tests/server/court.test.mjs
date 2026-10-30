@@ -352,3 +352,70 @@ test('2.444: «Пояснения к отчёту для суда» — ИИ д�
   const [a] = await S.sql`select count(*)::int as n from audit_log where subject_id = ${o.id} and action like 'court.questions%'`;
   assert.ok(a.n >= 4);
 });
+
+test('2.445: «Не смогу прийти» — эксперт подаёт ходатайство до заседания, Word видят стороны, заказчику — уведомление', async () => {
+  const { extractPages } = await import('../../src/ai/extract.mjs');
+  await spec.req('PATCH', '/api/me', { full_name: 'Неявкин Эксперт' });
+  const o = await doneOrder('Квартира: не смогу прийти');
+  await S.sql`update orders set report_number = 'ОЦ-78/2026' where id = ${o.id}`;
+  const base = `/api/orders/${o.id}/court`;
+  const call = (await dispatcher.req('POST', base, CALL())).body.id;
+  const url = `${base}/${call}/absence`;
+  const word = async (c) => {
+    const r = await fetch(`${S.base}${base}/${call}/petition`, { headers: { cookie: c.cookie } });
+    if (r.status !== 200) return { status: r.status, body: await r.json() };
+    const buf = Buffer.from(await r.arrayBuffer());
+    return { status: 200, name: decodeURIComponent(r.headers.get('content-disposition').split("''")[1]),
+      text: (await extractPages(buf, 'a.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')).pages.join('\n') };
+  };
+
+  // Подаёт только эксперт дела и только до заседания.
+  assert.equal((await spec.req('GET', base)).body.calls[0].can_absence, true);
+  for (const c of [owner, dispatcher, admin]) {
+    assert.equal((await c.req('GET', base)).body.calls[0].can_absence, false);
+    assert.equal((await c.req('PUT', url, { kind: 'without', reason: 'x' })).status, 403);
+  }
+  assert.equal((await other.req('PUT', url, { kind: 'without', reason: 'x' })).status, 404, 'чужой');
+  assert.equal((await spec.req('PUT', `${base}/999999999/absence`, { kind: 'without', reason: 'x' })).status, 404);
+  assert.equal((await word(owner)).body.error, 'no_petition');
+  assert.equal((await spec.req('PUT', url, { kind: 'later', reason: 'x' })).status, 400, 'неизвестный вид');
+  assert.equal((await spec.req('PUT', url, { kind: 'without', reason: ' ' })).status, 400, 'без причины');
+  assert.equal((await spec.req('PUT', url, { kind: 'without', reason: 'x'.repeat(501) })).status, 400);
+
+  const r1 = await spec.req('PUT', url, { kind: 'postpone', reason: 'в этот день осмотр объекта по другому делу' });
+  assert.equal(r1.status, 200, JSON.stringify(r1.body));
+  assert.deepEqual([r1.body.calls[0].absence.kind, r1.body.calls[0].absence.name], ['postpone', 'отложить заседание']);
+  const seen = (await owner.req('GET', base)).body.calls[0].absence;
+  assert.equal(seen.reason, 'в этот день осмотр объекта по другому делу');
+  const notes = await S.sql`select user_id from notifications where order_id = ${o.id} and event = 'court_absence'`;
+  assert.deepEqual(notes.map((n) => n.user_id).sort(), [owner.user.id, dispatcher.user.id].sort(), 'заказчику и диспетчеру, записавшему вызов');
+
+  for (const c of [spec, owner, dispatcher, admin]) {
+    const w = await word(c);
+    assert.equal(w.status, 200, JSON.stringify(w.body));
+    assert.equal(w.name, 'Ходатайство 2-4411-2026.docx');
+    for (const t of ['Ходатайство об отложении судебного заседания', 'Тестовый районный суд г. Москвы', 'по делу № 2-4411/2026',
+      'отчёта об оценке № ОЦ-78/2026', 'осмотр объекта по другому делу.', 'известить меня о новой дате', 'Неявкин Эксперт']) {
+      assert.ok(w.text.includes(t), `${t}\n${w.text}`);
+    }
+  }
+  assert.equal((await word(other)).status, 404);
+
+  // Подать заново — прежнее заменяется; пояснения готовы — в ходатайстве «прилагаю».
+  await spec.req('PUT', `${base}/${call}/questions`, { items: [{ text: 'Почему такая скидка?', answer: 'По справочнику' }] });
+  assert.equal((await spec.req('PUT', url, { kind: 'without', reason: 'Болен, лист нетрудоспособности' })).status, 200);
+  const w2 = await word(owner);
+  for (const t of ['Ходатайство о рассмотрении дела без участия эксперта', 'без моего участия', 'Письменные пояснения к отчёту об оценке № ОЦ-78/2026 по вопросам суда прилагаю']) {
+    assert.ok(w2.text.includes(t), `${t}\n${w2.text}`);
+  }
+  const [n2] = await S.sql`select count(*)::int as n from notifications where order_id = ${o.id} and event = 'court_absence' and user_id = ${owner.user.id}`;
+  assert.equal(n2.n, 2);
+
+  // Заседание прошло — подать нельзя, поданное видно.
+  await S.sql`update court_calls set hearing_at = now() - interval '1 hour' where id = ${call}`;
+  assert.equal((await spec.req('GET', base)).body.calls[0].can_absence, false);
+  assert.equal((await spec.req('PUT', url, { kind: 'postpone', reason: 'x' })).body.error, 'hearing_passed');
+  assert.equal((await owner.req('GET', base)).body.calls[0].absence.kind, 'without');
+  const [a] = await S.sql`select count(*)::int as n from audit_log where subject_id = ${o.id} and action = 'court.absence'`;
+  assert.equal(a.n, 2);
+});

@@ -142,6 +142,8 @@ export const EVENTS = {
   done: { type: 'order_progress', title: 'Результат проверен и доступен в кабинете', order: true, mail: true },
   // Обещанное после отправки время первого ответа прошло, а цены нет (задача штаба 3fd17197): src/orders/ack.mjs.
   ack_late: { type: 'order_progress', title: 'Задерживаемся с ценой по заявке — диспетчер уже видит её, ответим в ближайшее время', order: true, mail: true },
+  // Эксперт не сможет прийти на заседание (2.445): src/ops/court-ops.mjs — заказчику и диспетчеру, записавшему вызов.
+  court_absence: { type: 'order_progress', title: 'Эксперт не сможет прийти на заседание суда — ходатайство (без участия эксперта или отложить) в заявке', order: true, to: 'court', mail: true },
   cancelled_by_dispatcher: { type: 'order_progress', title: 'Диспетчер отменил заявку', order: true, mail: true },
 
   message: { type: 'messages', title: 'Новое сообщение по заявке', order: true },

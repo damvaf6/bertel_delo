@@ -65,7 +65,13 @@ jobs:
       - name: yc CLI
         if: env.ACTION != 'clean'
         run: |
-          curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -i /opt/yc -n
+          # Сеть до облака Яндекса иногда обрывается (ночной прогон 30.10) — до 4 попыток
+          for i in 1 2 3 4; do
+            curl -sSL --connect-timeout 30 --retry 3 https://storage.yandexcloud.net/yandexcloud-yc/install.sh -o "$RUNNER_TEMP/yc-install.sh" \
+              && bash "$RUNNER_TEMP/yc-install.sh" -i /opt/yc -n && break
+            [ "$i" = 4 ] && { echo "::error::yc не скачался за 4 попытки — облако Яндекса не отвечает"; exit 1; }
+            sleep $((i * 30))
+          done
           echo "/opt/yc/bin" >> $GITHUB_PATH
 
       - name: Вход в облако

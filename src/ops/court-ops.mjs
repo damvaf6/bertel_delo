@@ -4,14 +4,17 @@
 // 2.444: «Пояснения к отчёту для суда» — у вызова вопросы суда к эксперту: ИИ делит текст определения или повестки на
 // пункты (как замечания, 2.432), эксперт правит вопросы, пишет пояснение и где в отчёте; ответил на все — Word
 // «Пояснения эксперта к отчёту». Пишет только эксперт дела, видят все стороны.
+// 2.445: «Не смогу прийти» — эксперт до заседания подаёт ходатайство: рассмотреть без его участия или отложить, с причиной;
+// Word ходатайства видят все стороны, заказчику (и диспетчеру, если вызов записал он) — уведомление. В суд подаёт сам эксперт.
 import { HttpError } from '../http/core.mjs';
 import { orderSides } from '../access/policy.mjs';
 import { askAi, parseJsonAnswer } from '../ai/ai.mjs';
 import { READ_MAX_BYTES, extractPages, readableKind } from '../ai/extract.mjs';
 import { ANSWER_MAX, ITEMS_MAX, ITEM_MAX, PLACE_MAX, SOURCE_MAX, cleanItems, courtMessages, splitRemarks } from '../orders/court.mjs';
 import { courtExplainData, courtExplainDoc } from '../docs/court-explain.mjs';
+import { ABSENCE, courtPetitionData, courtPetitionDoc } from '../docs/court-petition.mjs';
 import { DOCX_MIME } from '../docs/docx.mjs';
-import { notify } from '../notify/notify.mjs';
+import { customersOf, notify } from '../notify/notify.mjs';
 import { todayMsk, addDays } from '../orders/workflow.mjs';
 import { workdaysAfter } from '../orders/holidays.mjs';
 import { hearingsOf } from '../orders/schedule.mjs';
@@ -27,6 +30,7 @@ const AHEAD_DAYS = 730;
 export const COURT_MAX = 200;
 export const CASE_NO_MAX = 60;
 export const ADDRESS_MAX = 300;
+export const REASON_MAX = 500;
 
 // Сторона, от которой пишут о вызове: заказчик или диспетчер; иначе — нельзя.
 function callSide(actor, order) {
@@ -61,6 +65,7 @@ export function hearingAt(date, time, today = todayMsk()) {
 async function calls(sql, order) {
   const rows = await sql`
     select c.id, c.court, c.case_no, c.hearing_at, c.address, c.side, c.created_at, d.id as doc_id, d.filename,
+           c.absence_kind, c.absence_reason, c.absence_at,
            (select count(*)::int from court_questions q where q.call_id = c.id) as questions,
            (select count(*)::int from court_questions q where q.call_id = c.id and q.answer is null) as unanswered
     from court_calls c left join documents d on d.id = c.document_id and d.deleted_at is null
@@ -69,6 +74,7 @@ async function calls(sql, order) {
     id: String(r.id), court: r.court, case_no: r.case_no, hearing_at: r.hearing_at, address: r.address, side: r.side,
     created_at: r.created_at, document: r.doc_id ? { id: r.doc_id, filename: r.filename } : null,
     questions: r.questions, unanswered: r.unanswered,
+    absence: r.absence_kind ? { kind: r.absence_kind, name: ABSENCE[r.absence_kind].name, reason: r.absence_reason, at: r.absence_at } : null,
   }));
 }
 
@@ -80,7 +86,8 @@ async function view(sql, registry, actor, order) {
   if (!registry.court(order.module)) return { available: false };
   const list = await calls(sql, order);
   const now = Date.now();
-  return { available: true, can_add: canCall(registry, actor, order), can_answer: canAnswer(registry, actor, order), calls: list,
+  return { available: true, can_add: canCall(registry, actor, order), can_answer: canAnswer(registry, actor, order),
+           reason_max: REASON_MAX, calls: list.map((c) => ({ ...c, can_absence: canAnswer(registry, actor, order) && new Date(c.hearing_at).getTime() > now })),
            next: list.find((c) => new Date(c.hearing_at).getTime() >= now - 3 * 3600 * 1000)?.id ?? null };
 }
 
@@ -298,6 +305,37 @@ export function courtOps() {
         const data = courtExplainData({ order, call, service: def?.service.name ?? order.title, executor: ex?.full_name, items: list });
         await audit(sql, actor, 'court.explain', 'order', order.id, { call: String(call.id), items: list.length });
         return sendFile(res, providers, { ...courtExplainDoc(data), mime: DOCX_MIME });
+      },
+    },
+    {
+      // «Не смогу прийти» (2.445): ходатайство к заседанию — без участия эксперта или отложить; подать заново — заменить.
+      id: 'court.absence', method: 'PUT', path: '/api/orders/:id/court/:call/absence', auth: 'user', access,
+      async handler({ sql, registry, actor, order, body, params }) {
+        const call = await callOf(sql, registry, order, params.call);
+        answerable(registry, actor, order);
+        if (new Date(call.hearing_at).getTime() <= Date.now()) throw new HttpError(409, 'hearing_passed', 'Заседание уже началось или прошло — ходатайство к нему не подать');
+        const kind = String(body?.kind ?? '');
+        if (!ABSENCE[kind]) throw new HttpError(400, 'bad_input', 'Выберите: рассмотреть без Вашего участия или отложить заседание');
+        const reason = text(body?.reason, 'Причина', REASON_MAX);
+        await sql.tx(async (tx) => {
+          await tx`update court_calls set absence_kind = ${kind}, absence_reason = ${reason}, absence_at = now() where id = ${call.id}`;
+          await audit(tx, actor, 'court.absence', 'order', order.id, { call: String(call.id), kind, again: !!call.absence_kind });
+          const users = [...(await customersOf(tx, order)), ...(call.side === 'dispatcher' ? [call.created_by] : [])];
+          await notify(tx, 'court_absence', { users, orderId: order.id, actor });
+        });
+        return view(sql, registry, actor, order);
+      },
+    },
+    {
+      id: 'court.petition', method: 'GET', path: '/api/orders/:id/court/:call/petition', auth: 'user', access,
+      async handler({ sql, registry, actor, order, params, providers, res }) {
+        const call = await callOf(sql, registry, order, params.call);
+        if (!call.absence_kind) throw new HttpError(409, 'no_petition', 'Эксперт не подавал ходатайство к этому заседанию');
+        const [ex] = order.executor_user_id ? await sql`select full_name from users where id = ${order.executor_user_id}` : [];
+        const list = await questions(sql, call);
+        const data = courtPetitionData({ order, call, executor: ex?.full_name, explained: list.length > 0 && list.every((q) => q.answer) });
+        await audit(sql, actor, 'court.petition', 'order', order.id, { call: String(call.id), kind: call.absence_kind });
+        return sendFile(res, providers, { ...courtPetitionDoc(data), mime: DOCX_MIME });
       },
     },
   ];
