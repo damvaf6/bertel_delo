@@ -306,6 +306,9 @@ ol.remark-items .choice label { display: flex; gap: 6px; align-items: center; fo
 #hearing-list .court-absence { margin-top: 8px; padding: 8px 10px; border-left: 3px solid var(--warn-line); background: var(--warn-soft); color: var(--text); }
 #hearing-list .court-absence-open { margin-top: 8px; }
 #hearing-list .court-absence-form { margin-top: 8px; color: var(--text); }
+#hearing-list .court-outcome { margin-top: 8px; padding: 8px 10px; border-left: 3px solid var(--ok); background: var(--ok-soft); color: var(--text); }
+#hearing-list .court-outcome-open { margin-top: 8px; }
+#hearing-list .court-outcome-form { margin-top: 8px; color: var(--text); }
 #hearing-list .choice { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 6px 0; }
 #hearing-list .choice label { display: flex; gap: 6px; align-items: center; font-weight: normal; }
 ol.remark-items .mark { font-weight: 600; }

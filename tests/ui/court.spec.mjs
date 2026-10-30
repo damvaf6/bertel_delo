@@ -315,3 +315,64 @@ test('2.446: руководитель — вызов эксперта в суд 
   expect(hp.problems).toEqual([]);
   for (const p of [hp, ep]) await p.context().close();
 });
+
+test('2.447: после заседания — «Как прошло» в «Сегодня», эксперт отмечает «отложено», новое заседание в деле', async ({ browser, baseURL }) => {
+  const cp = await phone(browser, baseURL);
+  const sp = await phone(browser, baseURL);
+  const customer = await signIn(cp, '+79990004471');
+  const expert = await signIn(sp, '+79990004472');
+  const id = await db(async (c) => {
+    await c.query("update users set full_name = 'Итогова Дина' where id = $1", [expert.id]);
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    const oid = (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, deadline, fields)
+      values ($1, 'Квартира: как прошло заседание', 'expertise', 'realty', 'done', $2, current_date - 9, $3) returning id`,
+    [customer.id, expert.id, { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, ул. Судебная, д. 47', area: '48' }])).rows[0].id;
+    await c.query(`insert into court_calls (order_id, court, case_no, hearing_at, address, created_by, side)
+      values ($1, 'Хамовнический районный суд г. Москвы', '2-4471/2026', ($2::date + time '10:00') at time zone 'Europe/Moscow',
+              'г. Москва, ул. Ефремова, 7, зал 12', $3, 'customer')`, [oid, plusDays(-1), customer.id]);
+    return oid;
+  });
+
+  await sp.goto('/kabinet');
+  const row = sp.locator('li[data-today-item="court-outcome"]');
+  await expect(sp.locator('li[data-today="court-outcome"]')).toHaveText('Как прошло заседание · 1');
+  await expect(row.locator('[data-role="court-past"]')).toContainText('в 10:00 · Хамовнический районный суд г. Москвы, дело № 2-4471/2026');
+  await row.scrollIntoViewIfNeeded();
+  await shot(sp, 'ct09-2447-kak-proshlo-segodnya');
+  await row.locator('button.open').click();
+  await expect(sp).toHaveURL(new RegExp(`#order=${id}&to=court$`));
+
+  const call = sp.locator('#hearing-list li[data-court]');
+  await call.getByRole('button', { name: 'Как прошло заседание' }).click();
+  const form = call.locator('.court-outcome-form');
+  await form.getByRole('button', { name: 'Сохранить' }).click();
+  await expect(form.locator('[role="status"]')).toHaveText('Выберите, как прошло заседание');
+  await form.getByLabel('Заседание отложено').check();
+  await expect(form.getByLabel('Время')).toHaveValue('10:00');
+  await form.getByLabel('Отложено на').fill(plusDays(8));
+  await form.getByLabel('Заметка (по желанию)').fill('Суд запросил подлинник выписки ЕГРН');
+  await form.getByRole('button', { name: 'Сохранить' }).click();
+  await expect(sp.locator('#status-msg')).toContainText('Новое заседание');
+  const calls = sp.locator('#hearing-list li[data-court]');
+  await expect(calls).toHaveCount(2);
+  const done = sp.locator('#hearing-list .court-outcome');
+  await expect(done).toContainText('Как прошло: заседание отложено — новое заседание');
+  await expect(done).toContainText('Суд запросил подлинник выписки ЕГРН');
+  await expect(sp.locator('#hearing-list li.hearing-next')).toContainText('Новая дата — со слов эксперта');
+  await expect(sp.locator('#hearing-list li.hearing-next')).toContainText('Хамовнический районный суд г. Москвы, дело № 2-4471/2026');
+  await done.scrollIntoViewIfNeeded();
+  await shot(sp, 'ct10-2447-zasedanie-otlozheno');
+
+  // Заказчик: уведомление и итог в деле, без кнопки «Как прошло заседание».
+  const n = await db(async (c) => (await c.query("select count(*)::int as n from notifications where user_id = $1 and event = 'court_outcome'", [customer.id])).rows[0].n);
+  expect(n).toBe(1);
+  await cp.goto(`/kabinet#order=${id}&to=court`);
+  await expect(cp.locator('#hearing-list .court-outcome')).toContainText('заседание отложено');
+  await expect(cp.locator('#hearing-list').getByRole('button', { name: 'Как прошло заседание' })).toHaveCount(0);
+  await sp.goto('/kabinet');
+  await expect(sp.locator('li[data-today="court-outcome"]')).toHaveCount(0);
+  expect(sp.problems).toEqual([]);
+  expect(cp.problems).toEqual([]);
+  await sp.context().close();
+  await cp.context().close();
+});

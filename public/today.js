@@ -420,6 +420,11 @@ export async function loadToday() {
       ...group('court', 'Заседание в суде', e.court ?? [], (x) => [x.title,
         { class: x.today ? 'overdue' : 'warn-line', role: 'court-when', text: courtWhen(x) }, ...courtTake(x)],
       (x) => { location.hash = `order=${x.id}&to=court`; }),
+      // Заседание прошло, а итог не отмечен (2.447) — «Как прошло»: пояснения даны, отложено, назначена повторная экспертиза.
+      ...group('court-outcome', 'Как прошло заседание', e.court_outcome ?? [], (x) => [x.title,
+        { class: 'muted', role: 'court-past', text: `${WD[new Date(`${x.day}T00:00:00Z`).getUTCDay()]}, ${dayRu(x.day)} в ${x.time} · ${x.court}, дело № ${x.case_no}` },
+        'Отметьте итог: пояснения даны, отложено или назначена повторная экспертиза'],
+      (x) => { location.hash = `order=${x.id}&to=court`; }),
       // Срок по заданию на оценку раньше срока дела и близко (2.304) — выше «Срок близко»; по сроку дела ещё можно успеть,
       // а по заданию (письму банка, определению суда) — нет. Перенос у диспетчера срок задания не двигает — кнопки нет.
       ...group('task-due', 'Срок по заданию на оценку близко', taskDue, (x) => [x.title,

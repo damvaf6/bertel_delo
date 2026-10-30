@@ -419,3 +419,71 @@ test('2.445: «Не смогу прийти» — эксперт подаёт х
   const [a] = await S.sql`select count(*)::int as n from audit_log where subject_id = ${o.id} and action = 'court.absence'`;
   assert.equal(a.n, 2);
 });
+
+test('2.447: «Как прошло» — после заседания эксперт отмечает итог; отложено — новое заседание; в «Сегодня» — неотмеченное', async () => {
+  const o = await doneOrder('Квартира: как прошло заседание');
+  const base = `/api/orders/${o.id}/court`;
+  const call = (await dispatcher.req('POST', base, CALL())).body.id;
+  const url = `${base}/${call}/outcome`;
+  const today = async () => (await spec.req('GET', '/api/today')).body.expert.court_outcome.filter((x) => x.id === o.id);
+
+  // До заседания — нельзя.
+  assert.equal((await spec.req('GET', base)).body.calls[0].can_outcome, false);
+  assert.equal((await spec.req('PUT', url, { kind: 'explained' })).body.error, 'hearing_ahead');
+  assert.equal((await today()).length, 0);
+
+  // Заседание прошло пять часов назад — в «Сегодня» «Как прошло заседание»; отмечает только эксперт дела.
+  await S.sql`update court_calls set hearing_at = now() - interval '5 hours' where id = ${call}`;
+  const [t] = await today();
+  assert.deepEqual([t.call_id, t.court, t.case_no], [call, 'Тестовый районный суд г. Москвы', '2-4411/2026']);
+  assert.equal((await spec.req('GET', base)).body.calls[0].can_outcome, true);
+  for (const c of [owner, dispatcher, admin]) {
+    assert.equal((await c.req('GET', base)).body.calls[0].can_outcome, false);
+    assert.equal((await c.req('PUT', url, { kind: 'explained' })).status, 403);
+  }
+  assert.equal((await other.req('PUT', url, { kind: 'explained' })).status, 404, 'чужой');
+  assert.equal((await spec.req('PUT', `${base}/999999999/outcome`, { kind: 'explained' })).status, 404);
+  assert.equal((await spec.req('PUT', url, { kind: 'won' })).status, 400, 'неизвестный итог');
+  assert.equal((await spec.req('PUT', url, { kind: 'explained', note: 'x'.repeat(501) })).status, 400);
+  assert.equal((await spec.req('PUT', url, { kind: 'postponed' })).status, 400, 'отложено — без новой даты');
+  assert.equal((await spec.req('PUT', url, { kind: 'postponed', date: addDays(todayMsk(), -1), time: '10:00' })).status, 400, 'новая дата в прошлом');
+
+  // Пояснения даны — видят все стороны, заказчику и диспетчеру — уведомление, «Сегодня» — пусто.
+  const r1 = await spec.req('PUT', url, { kind: 'explained', note: 'Суд принял пояснения' });
+  assert.equal(r1.status, 200, JSON.stringify(r1.body));
+  const seen = (await owner.req('GET', base)).body.calls[0].outcome;
+  assert.deepEqual([seen.kind, seen.name, seen.note, seen.next], ['explained', 'пояснения даны', 'Суд принял пояснения', null]);
+  assert.equal((await today()).length, 0);
+  const notes = await S.sql`select user_id from notifications where order_id = ${o.id} and event = 'court_outcome'`;
+  assert.deepEqual(notes.map((n) => n.user_id).sort(), [owner.user.id, dispatcher.user.id].sort());
+
+  // Поправил: отложено на новую дату — новое заседание с тем же судом, номером и адресом, кто сообщил — прежний.
+  const day = addDays(todayMsk(), 9);
+  const r2 = await spec.req('PUT', url, { kind: 'postponed', date: day, time: '14:00' });
+  assert.equal(r2.status, 200, JSON.stringify(r2.body));
+  const [old, fresh] = r2.body.calls;
+  assert.equal(old.outcome.kind, 'postponed');
+  assert.equal(old.outcome.next.id, fresh.id);
+  assert.deepEqual([fresh.court, fresh.case_no, fresh.address, fresh.side, fresh.from, fresh.outcome], ['Тестовый районный суд г. Москвы', '2-4411/2026', 'г. Москва, тестовая ул., 1, зал 5', 'dispatcher', call, null]);
+  assert.equal(new Date(fresh.hearing_at).toISOString(), new Date(`${day}T14:00:00+03:00`).toISOString());
+  assert.equal(r2.body.next, fresh.id, 'новое — ближайшее');
+  const sched = (await spec.req('GET', '/api/specialist/me/schedule')).body.schedule;
+  assert.ok(sched.days.some((d) => d.items.some((i) => i.kind === 'court' && i.call_id === fresh.id)), 'новое — в «Моих сроках»');
+
+  // Отложено снова — меняется дата того же нового заседания; другой итог при записанном новом — нельзя.
+  const day2 = addDays(todayMsk(), 10);
+  const r3 = await spec.req('PUT', url, { kind: 'postponed', date: day2, time: '11:00' });
+  assert.equal(r3.body.calls.length, 2);
+  assert.equal(new Date(r3.body.calls[1].hearing_at).toISOString(), new Date(`${day2}T11:00:00+03:00`).toISOString());
+  assert.equal((await spec.req('PUT', url, { kind: 'repeat' })).body.error, 'next_exists');
+  await spec.req('PUT', `${base}/${fresh.id}/absence`, { kind: 'without', reason: 'Болен' });
+  assert.equal((await spec.req('PUT', url, { kind: 'postponed', date: day, time: '11:00' })).body.error, 'next_started');
+
+  // Назначена дополнительная экспертиза — у нового заседания после него.
+  await S.sql`update court_calls set hearing_at = now() - interval '1 hour' where id = ${fresh.id}`;
+  const r4 = await spec.req('PUT', `${base}/${fresh.id}/outcome`, { kind: 'extra', note: 'Назначена другому эксперту' });
+  assert.equal(r4.status, 200, JSON.stringify(r4.body));
+  assert.equal(r4.body.calls.find((c) => c.id === fresh.id).outcome.name, 'назначена дополнительная экспертиза');
+  const [a] = await S.sql`select count(*)::int as n from audit_log where subject_id = ${o.id} and action = 'court.outcome'`;
+  assert.equal(a.n, 4);
+});
