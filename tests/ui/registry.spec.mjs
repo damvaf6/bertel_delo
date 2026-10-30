@@ -815,6 +815,8 @@ test('прогон 2.420: номер с латинской «B» — тот же
   await expect(page.locator('#review-msg')).toHaveText('ИИ-проверка готова');
   await expect(page.locator('#review-checks')).not.toContainText('не тот, что выдан делу');
   await page.goto(`/kabinet#order=${ids.open}`);
+  // Переход по адресу внутри кабинета: ждём, пока откроется именно это дело, — иначе кнопка нажмётся у прежнего.
+  await expect(page.locator('#order-title')).toHaveText('Офис в Реутове');
   await page.locator('#draft-number-edit').click();
   await page.locator('#draft-number-input').fill(`B-15/${year}`);
   await page.locator('#draft-number-save').click();
