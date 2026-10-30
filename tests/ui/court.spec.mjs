@@ -1,6 +1,6 @@
 // Вызов эксперта в суд (задача 2.441) — телефон 412×915: заказчик после «готово» нажимает «Эксперта вызывают в суд», пишет
 // суд, номер дела, дату и время заседания, адрес и прикладывает повестку; дело остаётся сданным, эксперт по уведомлению видит
-// заседание в деле, а в «Моих сроках на две недели» — в его день (2.442). Что разрешено и кому — считает сервер (tests/server/court.test.mjs). Номера +7 999 000-44-2x — только здесь.
+// заседание в деле, а в «Моих сроках на две недели» — в его день (2.442). Что разрешено и кому — считает сервер (tests/server/court.test.mjs). Номера +7 999 000-44-2x — только здесь. 2.445 — «Не смогу прийти».
 import { test, expect } from '@playwright/test';
 import pg from 'pg';
 import { DB_URL, TEST_TOKEN } from '../helpers.mjs';
@@ -215,6 +215,55 @@ test('2.444: «Пояснения к отчёту для суда» — ИИ д�
   await expect(ccall.locator('.court-qa')).toContainText('Скидка — по справочнику');
   await expect(ccall.locator('.court-qa textarea')).toHaveCount(0);
   await expect(ccall.getByRole('button', { name: 'Скачать «Пояснения эксперта» Word' })).toBeVisible();
+  expect(sp.problems).toEqual([]);
+  expect(cp.problems).toEqual([]);
+  await sp.context().close();
+  await cp.context().close();
+});
+
+test('2.445: «Не смогу прийти» — эксперт подаёт ходатайство об отложении, Word; заказчик видит ходатайство и уведомление', async ({ browser, baseURL }) => {
+  const sp = await phone(browser, baseURL);
+  const cp = await phone(browser, baseURL);
+  const expert = await signIn(sp, '+79990004427');
+  const customer = await signIn(cp, '+79990004428');
+  const id = await db(async (c) => {
+    await c.query("update users set full_name = 'Неявкина Ольга' where id = $1", [expert.id]);
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    const oid = (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, deadline, fields, report_number)
+      values ($1, 'Дом в Мытищах для суда', 'expertise', 'realty', 'done', $2, current_date - 5, $3, '22/2026') returning id`,
+    [customer.id, expert.id, { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'Московская обл., г. Мытищи, ул. Тестовая, 3' }])).rows[0].id;
+    await c.query(`insert into court_calls (order_id, court, case_no, hearing_at, address, created_by, side)
+      values ($1, 'Мытищинский городской суд', '2-4427/2026', ($2::date + time '11:00') at time zone 'Europe/Moscow', 'Московская обл., г. Мытищи, Новомытищинский пр-т, 23', $3, 'customer')`,
+    [oid, plusDays(5), customer.id]);
+    return oid;
+  });
+
+  await sp.goto(`/kabinet#order=${id}&to=court`);
+  const call = sp.locator('#hearing-list li[data-court]');
+  await call.getByRole('button', { name: 'Не смогу прийти' }).click();
+  const form = call.locator('.court-absence-form');
+  await form.getByRole('button', { name: 'Подать ходатайство' }).click();
+  await expect(form.locator('[role="status"]')).toHaveText('Выберите: без Вашего участия или отложить заседание');
+  await form.getByLabel('Отложить заседание').check();
+  await form.getByLabel('Почему не сможете прийти').fill('в этот день — осмотр объекта по другому делу в Твери');
+  await form.getByRole('button', { name: 'Подать ходатайство' }).click();
+  await expect(sp.locator('#status-msg')).toContainText('Ходатайство готово');
+  const filed = sp.locator('#hearing-list .court-absence');
+  await expect(filed).toContainText('ходатайство: отложить заседание');
+  await expect(filed).toContainText('осмотр объекта по другому делу в Твери');
+  await expect(sp.locator('#hearing-list').getByRole('button', { name: 'Изменить ходатайство' })).toBeVisible();
+  await filed.scrollIntoViewIfNeeded();
+  await shot(sp, 'ct06-2445-ne-smogu-prijti');
+  const [download] = await Promise.all([sp.waitForEvent('download'), filed.getByRole('button', { name: 'Скачать ходатайство Word' }).click()]);
+  expect(download.suggestedFilename()).toBe('Ходатайство 2-4427-2026.docx');
+
+  // Заказчик: уведомление и ходатайство в деле, без кнопки «Не смогу прийти».
+  const n = await db(async (c) => (await c.query("select count(*)::int as n from notifications where user_id = $1 and event = 'court_absence'", [customer.id])).rows[0].n);
+  expect(n).toBe(1);
+  await cp.goto(`/kabinet#order=${id}&to=court`);
+  await expect(cp.locator('#hearing-list .court-absence')).toContainText('Эксперт не сможет прийти');
+  await expect(cp.locator('#hearing-list').getByRole('button', { name: 'Не смогу прийти' })).toHaveCount(0);
+  await expect(cp.locator('#hearing-list').getByRole('button', { name: 'Скачать ходатайство Word' })).toBeVisible();
   expect(sp.problems).toEqual([]);
   expect(cp.problems).toEqual([]);
   await sp.context().close();
