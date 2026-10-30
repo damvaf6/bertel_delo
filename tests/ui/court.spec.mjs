@@ -376,3 +376,42 @@ test('2.447: после заседания — «Как прошло» в «Се
   await sp.context().close();
   await cp.context().close();
 });
+
+test('2.448: сводка за месяц — вызовы в суд по экспертам: заседания, пояснения, ходатайство, отложено', async ({ browser, baseURL }) => {
+  const hp = await phone(browser, baseURL);
+  const head = await signIn(hp, '+79990004481');
+  const { orgId, expert } = await db(async (c) => {
+    const expert = (await c.query("insert into users (phone, full_name) values ('+79990004482', 'Сводкина-Судебная Ирина') returning id")).rows[0].id;
+    const { rows: [org] } = await c.query("insert into organizations (name) values ('ООО «Суд в сводке 2.448»') returning id");
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now() - interval '1 day'), ($1, $3, 'member', now() - interval '1 day')", [org.id, head.id, expert]);
+    await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [expert, org.id]);
+    const order = async (title) => (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, deadline, fields)
+      values ($1, $2, 'expertise', 'realty', 'done', $1, current_date - 9, $3) returning id`,
+    [expert, title, { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, ул. Судебная, д. 48', area: '50' }])).rows[0].id;
+    // Заседания этого месяца — минуту назад: отложено; к новому — письменные пояснения готовы; по другому делу — ходатайство.
+    const call = async (oid, extra) => (await c.query(`insert into court_calls (order_id, court, case_no, hearing_at, address, created_by, side,
+        absence_kind, absence_reason, absence_at, outcome_kind, outcome_at)
+      values ($1, 'Тестовый районный суд г. Москвы', '2-4482/2026', now() - interval '1 minute', 'г. Москва, тестовая ул., 48', $2, 'customer',
+              $3, $4, $5, $6, $7) returning id`, [oid, expert, extra.absence ?? null, extra.absence ? 'болен' : null, extra.absence ? new Date() : null,
+      extra.outcome ?? null, extra.outcome ? new Date() : null])).rows[0].id;
+    const one = await order('Квартира: суд в сводке');
+    await call(one, { outcome: 'postponed' });
+    const ready = await call(one, { outcome: 'explained' });
+    await c.query("insert into court_questions (call_id, pos, body, answer) values ($1, 1, 'Вопрос суда', 'Пояснение')", [ready]);
+    await call(await order('Дом: ходатайство в сводке'), { absence: 'without' });
+    return { orgId: org.id, expert };
+  });
+
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const box = hp.locator('#org-report-court-box');
+  await expect(box).toBeVisible();
+  const line = 'вызывали в суд: 3 заседания по 2 делам · письменные пояснения: 1 · ходатайство «не смогу прийти»: 1 · отложено: 1';
+  await expect(hp.locator('#org-report-court-total')).toHaveText(`${line}.`);
+  await expect(hp.locator('#org-report-court-unmarked')).toBeHidden();
+  await expect(hp.locator(`#org-report li[data-report-expert="${expert}"] [data-expert-court]`)).toHaveText(line);
+  await expect(hp.locator('body')).not.toContainText('2-4482/2026');
+  await box.scrollIntoViewIfNeeded();
+  await shot(hp, 'ct11-2448-sud-v-svodke');
+  expect(hp.problems).toEqual([]);
+  await hp.context().close();
+});

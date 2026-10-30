@@ -33,6 +33,17 @@ const casesN = (n) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? 'дело' : [2, 
 const afterRemarks = (x) => [`замечания к сданному отчёту пришли по ${x.remarks_after_cases === 1 ? 'одному делу' : `${x.remarks_after_cases} делам`}`,
   x.remarks_after > x.remarks_after_cases ? `всего ${times(x.remarks_after)}` : null,
   x.remarks_after_items ? `пунктов: ${x.remarks_after_items}` : null].filter(Boolean).join(' · ');
+// 2.448: «заседаний в суде: 3 (по 2 делам) · письменные пояснения: 1 · ходатайство «не смогу прийти»: 1 · отложено: 1 ·
+// повторная или дополнительная экспертиза: 1 · ещё впереди: 1».
+const hearingsN = (n) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? 'заседание' : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? 'заседания' : 'заседаний'}`;
+const court = (x) => [`вызывали в суд: ${hearingsN(x.court_hearings)}${x.court_cases < x.court_hearings
+  ? ` по ${x.court_cases === 1 ? 'одному делу' : `${x.court_cases} делам`}` : ''}`,
+x.court_explain ? `письменные пояснения: ${x.court_explain}` : null,
+x.court_absence ? `ходатайство «не смогу прийти»: ${x.court_absence}` : null,
+x.court_postponed ? `отложено: ${x.court_postponed}` : null,
+x.court_repeat ? `назначена повторная или дополнительная экспертиза: ${x.court_repeat}` : null,
+x.court_unmarked ? `итог не отмечен: ${x.court_unmarked}` : null,
+x.court_ahead ? `ещё впереди: ${x.court_ahead}` : null].filter(Boolean).join(' · ');
 const $ = (id) => document.getElementById(id);
 const MONTHS = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
 const monthRu = (m) => `${MONTHS[Number(m.slice(5, 7)) - 1]} ${m.slice(0, 4)}`;
@@ -256,6 +267,12 @@ async function load(month) {
   $('org-report-after').replaceChildren(...after.map((x) => el('li', { 'data-after-remark': '' },
     el('span', { text: x.text }),
     el('span', { class: 'muted', text: ` — ${times(x.n)}${x.experts > 1 ? `, у ${experts(x.experts)}` : ''}` }))));
+  // 2.448: вызовы экспертов в суд за период — заседания, пояснения, отложено, итог не отмечен.
+  $('org-report-court-box').classList.toggle('hidden', !report.total.court_hearings);
+  $('org-report-court-total').textContent = report.total.court_hearings ? `${court(report.total)}.` : '';
+  $('org-report-court-unmarked').classList.toggle('hidden', !report.total.court_unmarked);
+  $('org-report-court-unmarked').textContent = report.total.court_unmarked
+    ? `Эксперт не отметил, как прошло заседание: ${report.total.court_unmarked}. Напомните ему — пункт «Как прошло заседание» в его «Сегодня».` : '';
   $('org-report').replaceChildren(...report.experts.map((x) => el('li', { 'data-report-expert': x.user_id },
     el('div', { class: 'title', text: x.full_name }),
     el('div', { class: 'muted', text: `принял: ${x.accepted} · сдано: ${x.done}` }),
@@ -285,6 +302,7 @@ async function load(month) {
     ...(letterAsk(x) ? [el('div', { class: x.letter_ask_wait ? 'warn' : 'muted', 'data-expert-letterask': '', text: letterAsk(x) })] : []),
     ...(x.remarks_after ? [el('div', { class: 'warn', 'data-expert-after': '', text: `${afterRemarks(x)}${
       x.after_remarks?.length ? `; чаще всего: ${x.after_remarks.map((m) => `«${m.text}»${m.n > 1 ? ` ×${m.n}` : ''}`).join(', ')}` : ''}` })] : []),
+    ...(x.court_hearings ? [el('div', { class: x.court_unmarked ? 'warn' : 'muted', 'data-expert-court': '', text: court(x) })] : []),
     ...(x.remarks?.length ? [el('div', { class: 'muted', 'data-expert-remarks': '', text: `частые замечания: ${
       x.remarks.map((m) => `«${m.text}»${m.n > 1 ? ` ×${m.n}` : ''}`).join(', ')}` })] : []),
     el('div', { class: 'muted', text: `вознаграждение за сданные: ${rub(x.fee_kop)} · выплачено: ${rub(x.paid_kop)}` }))));

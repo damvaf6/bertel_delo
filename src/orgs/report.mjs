@@ -551,6 +551,34 @@ function afterByUser(rows, items) {
   }).filter((g) => g.n);
 }
 
+// Вызовы в суд за месяц (2.448): заседания по делам эксперта (2.441) — по дню заседания; письменные пояснения готовы — к
+// заседанию есть вопросы суда и у всех пояснение (2.444); ходатайство «Не смогу прийти» (2.445); итог «Как прошло» (2.447) —
+// отложено, повторная или дополнительная экспертиза; прошло больше трёх часов назад, а итога нет — «не отмечено»; ещё
+// впереди — заседания месяца, которые не начались.
+export const HEARING_MARK_MS = 3 * 3600 * 1000;
+const courtCallsQ = (sql, orgId, ids, { start, end }) => sql`
+  select o.executor_user_id as user_id, c.order_id, c.hearing_at, c.absence_kind, c.outcome_kind,
+         (select count(*)::int from court_questions q where q.call_id = c.id) as questions,
+         (select count(*)::int from court_questions q where q.call_id = c.id and q.answer is null) as unanswered
+  from court_calls c join orders o on o.id = c.order_id
+  join org_members m on m.org_id = ${orgId} and m.user_id = o.executor_user_id
+  where o.executor_user_id = any(${ids}::uuid[]) and c.hearing_at >= ${start} and c.hearing_at < ${end}
+    and c.hearing_at >= m.created_at`;
+// { court_hearings, court_cases, court_explain, court_absence, court_postponed, court_repeat, court_unmarked, court_ahead }.
+function court(rows, now) {
+  const past = rows.filter((r) => new Date(r.hearing_at) <= now);
+  return {
+    court_hearings: rows.length,
+    court_cases: casesOf(rows),
+    court_explain: rows.filter((r) => r.questions && !r.unanswered).length,
+    court_absence: rows.filter((r) => r.absence_kind).length,
+    court_postponed: rows.filter((r) => r.outcome_kind === 'postponed').length,
+    court_repeat: rows.filter((r) => r.outcome_kind === 'repeat' || r.outcome_kind === 'extra').length,
+    court_unmarked: past.filter((r) => !r.outcome_kind && now - new Date(r.hearing_at) > HEARING_MARK_MS).length,
+    court_ahead: rows.length - past.length,
+  };
+}
+
 // Сданные по услугам (2.135): [{ module, service, name, done, done_late, fee_kop, experts, avg_days }] — по убыванию числа,
 // при равенстве — по названию; avg_days (2.144) — null, если ни у одного дела нет отметки о принятии.
 function byService(done, registry) {
@@ -571,7 +599,8 @@ function byService(done, registry) {
     .map(({ users, cases, ...g }) => ({ ...g, experts: users.size, avg_days: avgDays(pace(cases)) }));
 }
 
-export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), registry = null, taskDue = null, taskAfter = null, taskMove = null } = {}) {
+export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), now = new Date(), registry = null, taskDue = null, taskAfter = null,
+  taskMove = null } = {}) {
   const year = isYear(month);
   const current = month === today.slice(0, year ? 4 : 7);
   const experts = await orgExperts(sql, orgId);
@@ -580,7 +609,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
   const since = (await sql`select to_char(created_at at time zone 'Europe/Moscow', 'YYYY-MM') as m from organizations
                            where id = ${orgId}`)[0]?.m ?? '';
   const none = { accepted: [], done: [], headReturns: [], resign: [], signed: [], firstSign: [], remarkItems: [], dispReturns: [], dispReasons: [], paid: [], active: [],
-    bankTask: [], letterAsk: [], afterRemarks: [] };
+    bankTask: [], letterAsk: [], afterRemarks: [], court: [] };
   const q = !ids.length ? none : {
     accepted: await sql`
       select f.specialist_id as user_id, count(distinct f.order_id)::int as n from order_offers f
@@ -603,6 +632,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
     dispReturns: await dispReturnsQ(sql, orgId, ids, { start, end }),
     dispReasons: await dispReasonsQ(sql, orgId, ids, { start, end }),
     afterRemarks: (await afterRemarksQ(sql, orgId, ids, { start, end })).filter((r) => !registry || registry.remarks(r.module)),
+    court: await courtCallsQ(sql, orgId, ids, { start, end }),
     paid: await sql`
       select p.executor_user_id as user_id, coalesce(sum(p.amount_kop), 0)::bigint as kop from payouts p
       join org_members m on m.org_id = ${orgId} and m.user_id = p.executor_user_id
@@ -666,6 +696,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
       remarks: topRemarks(q.remarkItems.filter((i) => i.user_id === e.user_id), TOP_REMARKS_EXPERT).map(({ text, n }) => ({ text, n })),
       ...afterRemarks(q.afterRemarks.filter((r) => r.user_id === e.user_id), afterItems.filter((i) => i.user_id === e.user_id)),
       after_remarks: topRemarks(afterItems.filter((i) => i.user_id === e.user_id), TOP_REMARKS_EXPERT).map(({ text, n }) => ({ text, n })),
+      ...court(q.court.filter((r) => r.user_id === e.user_id), now),
       disp_reasons: topRemarks(q.dispReasons.filter((i) => i.user_id === e.user_id && i.text), TOP_REMARKS_EXPERT)
         .map(({ text, n }) => ({ text, n })),
       prev: cmp ? cmp.experts.get(e.user_id) : null,
@@ -689,6 +720,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), re
     total: { ...Object.fromEntries(keys.map((k) => [k, sum(k)])), avg_days: avgDays(all), ...resign(q.resign),
       ...egrnFirst(q.firstSign, registry), ...bankTask(q.bankTask), ...taskLate(taskDues),
       ...bankAfter(bankAfters), ...ext(exts), ...letterAsk(q.letterAsk), ...orgSign(q.done), ...afterRemarks(q.afterRemarks, afterItems),
+      ...court(q.court, now),
       prev: cmp ? cmp.total : null },
     prev_month: cmp ? prevM : null,
     prev_month_name: cmp ? periodRu(prevM) : null,
@@ -904,6 +936,12 @@ export function reportCsv(orgName, r) {
         .map(([name, n, cases, items, top]) => [name, n, cases, items, top.map((m) => `${m.text}${m.n > 1 ? ` ×${m.n}` : ''}`).join(' | ')])] : []),
     ...(r.after_remarks?.length ? [[], ['Частые замечания банка и суда', 'Сколько раз', 'У скольких экспертов'],
       ...r.after_remarks.map((x) => [x.text, x.n, x.experts])] : []),
+    // 2.448: только если за месяц были заседания суда, куда вызывали экспертов.
+    ...(r.total.court_hearings ? [[], ['Вызовы в суд', 'Заседаний', 'В скольких делах', 'Письменные пояснения готовы',
+      'Ходатайство «не смогу прийти»', 'Отложено', 'Повторная или дополнительная экспертиза', 'Итог не отмечен', 'Ещё впереди'],
+      ...[...r.experts.filter((x) => x.court_hearings).map((x) => [x.full_name, x]), ['Итого', r.total]]
+        .map(([name, x]) => [name, x.court_hearings, x.court_cases, x.court_explain, x.court_absence, x.court_postponed,
+          x.court_repeat, x.court_unmarked, x.court_ahead])] : []),
   ];
   return `﻿${lines.map((l) => l.map(cell).join(';')).join('\r\n')}\r\n`;
 }
