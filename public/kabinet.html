@@ -1040,6 +1040,41 @@
         </div>
         <p class="msg" id="org-template-msg" role="status" aria-live="polite"></p>
       </div>
+      <div class="card hidden" id="org-accr-box">
+        <h2>Аккредитации в банках</h2>
+        <p class="muted">Отчёт для ипотеки или залога банк принимает только от организации или оценщика, аккредитованных в нём.
+          Здесь — аккредитации организации; свои аккредитации эксперты вносят в досье. Видят только сотрудники организации.</p>
+        <ul class="list" id="org-accr-items"></ul>
+        <p class="muted hidden" id="org-accr-empty">Аккредитаций организации пока нет.</p>
+        <form class="hidden" id="org-accr-form" novalidate>
+          <h3 id="org-accr-form-title">Добавить аккредитацию</h3>
+          <div class="field">
+            <label for="org-accr-bank">Какой банк</label>
+            <select id="org-accr-bank"></select>
+          </div>
+          <div class="field hidden" id="org-accr-title-box">
+            <label for="org-accr-title">Название своего банка</label>
+            <input id="org-accr-title" type="text" maxlength="300">
+          </div>
+          <div class="field">
+            <label for="org-accr-number">Номер решения</label>
+            <input id="org-accr-number" type="text" maxlength="100">
+          </div>
+          <div class="field">
+            <label for="org-accr-issued">Дата решения</label>
+            <input id="org-accr-issued" type="date">
+          </div>
+          <div class="field">
+            <label for="org-accr-until">Аккредитация действует до</label>
+            <input id="org-accr-until" type="date">
+          </div>
+          <div class="row">
+            <button type="submit" id="org-accr-save">Добавить</button>
+            <button type="button" class="secondary hidden" id="org-accr-cancel">Отмена</button>
+          </div>
+        </form>
+        <p class="msg" id="org-accr-msg" role="status" aria-live="polite"></p>
+      </div>
       <form class="card hidden" id="org-edit" novalidate>
         <h2>Данные организации</h2>
         <div class="field">
@@ -1395,7 +1430,8 @@
       <div class="card" id="dossier-box">
         <h2>Моё досье</h2>
         <p class="muted">Диплом, квалификационный аттестат, СРО, полисы. Заполните один раз: сведения сами попадут в черновик
-          отчёта, копии — в приложения кнопкой в деле, а ИИ-проверка сверит отчёт с досье. О конце срока напомним за 30 и за 7 дней.
+          отчёта, копии — в приложения кнопкой в деле, а ИИ-проверка сверит отчёт с досье. Аккредитации в банках — тоже здесь:
+          отчёт для ипотеки или залога банк принимает только от аккредитованного оценщика. О конце срока напомним за 30 и за 7 дней.
           Досье видите только Вы.</p>
         <p class="msg hidden" id="dossier-alert" role="alert"></p>
         <ul class="list" id="dossier-items"></ul>
@@ -1406,7 +1442,11 @@
             <label for="dossier-kind">Документ</label>
             <select id="dossier-kind"></select>
           </div>
-          <div class="field">
+          <div class="field hidden" data-dossier-field="bank">
+            <label for="dossier-bank">Банк</label>
+            <select id="dossier-bank"></select>
+          </div>
+          <div class="field" id="dossier-title-box">
             <label for="dossier-title" id="dossier-title-label">Учебное заведение и специальность</label>
             <input id="dossier-title" type="text" maxlength="300">
           </div>
@@ -1419,7 +1459,7 @@
             <input id="dossier-number" type="text" maxlength="100">
           </div>
           <div class="field" data-dossier-field="issued_on">
-            <label for="dossier-issued">Дата выдачи</label>
+            <label for="dossier-issued" id="dossier-issued-label">Дата выдачи</label>
             <input id="dossier-issued" type="date">
           </div>
           <div class="field" data-dossier-field="valid_until">

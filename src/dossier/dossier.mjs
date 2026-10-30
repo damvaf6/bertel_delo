@@ -15,6 +15,9 @@ export const KINDS = {
   // Документ о знании языка (2а.3): у переводчика — по каждому языку; проверяет администратор по копии. В черновик заключения
   // и сверку отчёта оценки не идёт.
   language: { name: 'Документ о знании языка', title: 'Документ и кем выдан (диплом, сертификат)', number: 'Номер документа', has: ['number', 'issued_on', 'language'], need: ['language'], lang: true },
+  // Аккредитация в банке (2.451): банк из списка поля заявки bank или свой — название в title. В черновик заключения,
+  // копии к делу и сверку отчёта не идёт (loadDossier без banks).
+  bank: { name: 'Аккредитация в банке', title: 'Название банка', number: 'Номер решения банка', issued: 'Дата решения банка', has: ['number', 'issued_on', 'valid_until', 'bank'], need: [], bank: true },
 };
 export const KIND_ORDER = Object.keys(KINDS);
 
@@ -23,6 +26,19 @@ export const KIND_ORDER = Object.keys(KINDS);
 export const BLOCKING_KINDS = ['certificate', 'policy', 'policy_org'];
 export function needsValidDossier(registry, order) {
   return !!registry?.checks(order.module, order.service).some((c) => c.auto?.includes('dossier_appraiser'));
+}
+
+// Банки для аккредитации (2.451): варианты поля заявки bank во всех модулях (кроме «Другой банк») и в конце — свой банк.
+export const OTHER_BANK = { id: 'other', name: 'Другой банк' };
+export function bankList(registry) {
+  const out = [];
+  for (const m of registry?.modules ?? []) {
+    for (const f of [...(m.fields ?? []), ...m.services.flatMap((x) => x.fields ?? [])]) {
+      if (f.id !== 'bank') continue;
+      for (const o of f.options ?? []) if (o.id !== OTHER_BANK.id && !out.some((b) => b.id === o.id)) out.push({ id: o.id, name: o.name });
+    }
+  }
+  return [...out, OTHER_BANK];
 }
 
 export const headKey = (t) => t.toLowerCase().replace(/ё/g, 'е').split(/[:,(]/)[0].replace(/\s+/g, ' ').trim();
@@ -37,14 +53,16 @@ export function termState(validUntil, today = todayMsk()) {
   return 'ok';
 }
 
-// languages: true — вместе с документами о знании языка (2а.3); без него — только документы эксперта (черновик, сверка, сроки).
-export async function loadDossier(sql, userId, { languages = false } = {}) {
+// languages: true — вместе с документами о знании языка (2а.3), banks: true — с аккредитациями в банках (2.451); без них —
+// только документы эксперта (черновик, сверка, сроки, копии в дело).
+export async function loadDossier(sql, userId, { languages = false, banks = false } = {}) {
   const rows = await sql`select *, to_char(issued_on, 'YYYY-MM-DD') as issued, to_char(valid_until, 'YYYY-MM-DD') as until
                          from dossier_items where user_id = ${userId} and deleted_at is null order by id`;
   return rows
-    .filter((r) => languages || r.kind !== 'language')
+    .filter((r) => (languages || r.kind !== 'language') && (banks || r.kind !== 'bank'))
     .map((r) => ({
       ...(r.kind === 'language' ? { language: r.language, verified: !!r.verified_at } : {}),
+      ...(r.kind === 'bank' ? { bank: r.bank } : {}),
       id: String(r.id), kind: r.kind, kind_name: KINDS[r.kind].name, title: r.title, number: r.number ?? null,
       issued_on: r.issued ?? null, valid_until: r.until ?? null, amount_kop: r.amount_kop === null ? null : Number(r.amount_kop),
       file: r.file_key ? { name: r.file_name, mime: r.file_mime, size_bytes: r.file_size } : null,
@@ -137,7 +155,7 @@ export function fillDraft(body, sections, items, today = todayMsk()) {
 const HEAD_EVENT = { d30: 'dossier_month_head', d7: 'dossier_week_head', expired: 'dossier_expired_head' };
 export async function remindDossier(sql, { today = todayMsk() } = {}) {
   let sent = 0;
-  const rows = await sql`select d.id, d.user_id, to_char(d.valid_until, 'YYYY-MM-DD') as until, m.org_id from dossier_items d
+  const rows = await sql`select d.id, d.kind, d.user_id, to_char(d.valid_until, 'YYYY-MM-DD') as until, m.org_id from dossier_items d
                          join users u on u.id = d.user_id and u.is_active
                          left join specialists s on s.user_id = d.user_id
                          left join org_members m on m.org_id = s.org_id and m.user_id = d.user_id
@@ -151,7 +169,8 @@ export async function remindDossier(sql, { today = todayMsk() } = {}) {
       let n = await notify(tx, kind === 'd30' ? 'dossier_month' : kind === 'd7' ? 'dossier_week' : 'dossier_expired', { users: [r.user_id] });
       // Руководитель сам себе эксперт — ему хватит своего напоминания.
       if (r.org_id) n += await notify(tx, HEAD_EVENT[kind], { users: (await orgHeads(tx, r.org_id)).filter((id) => id !== r.user_id), orgId: r.org_id });
-      if (kind === 'expired') n += await notify(tx, 'dossier_expired_staff', { users: await dispatchers(tx) });
+      // Истёкшая аккредитация в банке с подбора не снимает — диспетчеру не о чем знать (2.451).
+      if (kind === 'expired' && r.kind !== 'bank') n += await notify(tx, 'dossier_expired_staff', { users: await dispatchers(tx) });
       return n;
     });
   }

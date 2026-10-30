@@ -7,7 +7,7 @@ import crypto from 'node:crypto';
 import { HttpError } from '../http/core.mjs';
 import { orderSides } from '../access/policy.mjs';
 import { addDays, todayMsk } from '../orders/workflow.mjs';
-import { KINDS, dossierAlerts, loadDossier } from '../dossier/dossier.mjs';
+import { KINDS, bankList, dossierAlerts, loadDossier } from '../dossier/dossier.mjs';
 import { publicDoc, saveDocument } from './core-ops.mjs';
 import { audit, text } from './util.mjs';
 
@@ -27,12 +27,19 @@ function dateFrom(value, field, { future = false } = {}) {
 }
 
 // Поля записи по виду: лишние для вида — отклоняются, обязательные — проверяются.
-// languages — языки для документа о знании языка (registry.languages(), 2а.3).
-function itemFrom(body, kind, languages = []) {
+// languages — языки для документа о знании языка (registry.languages(), 2а.3); banks — банки для аккредитации (bankList, 2.451).
+function itemFrom(body, kind, languages = [], banks = []) {
   const def = KINDS[kind];
   if (!def) throw new HttpError(400, 'bad_input', 'Выберите вид документа');
-  const out = { title: text(body?.title, def.title, 300), number: null, issued_on: null, valid_until: null, amount_kop: null, language: null };
   const given = (k) => body?.[k] !== undefined && body[k] !== null && body[k] !== '';
+  // Аккредитация: банк из списка — название берётся из списка; свой банк — название пишет человек.
+  let bank = null;
+  if (def.bank) {
+    bank = banks.find((b) => b.id === body?.bank);
+    if (!bank) throw new HttpError(400, 'bad_input', 'Выберите банк');
+  } else if (given('bank')) throw new HttpError(400, 'bad_input', `У документа «${def.name}» нет поля bank`);
+  const title = bank && bank.id !== 'other' ? bank.name : text(body?.title, def.title, 300);
+  const out = { title, number: null, issued_on: null, valid_until: null, amount_kop: null, language: null, bank: bank?.id ?? null };
   if (def.lang) {
     if (!languages.some((l) => l.id === body?.language)) throw new HttpError(400, 'bad_input', 'Выберите язык');
     out.language = body.language;
@@ -42,7 +49,7 @@ function itemFrom(body, kind, languages = []) {
     if (given(k) && !def.has.includes(field)) throw new HttpError(400, 'bad_input', `У документа «${def.name}» нет поля ${k}`);
   }
   if (given('number')) out.number = text(body.number, def.number, 100);
-  out.issued_on = dateFrom(body?.issued_on, 'Дата выдачи');
+  out.issued_on = dateFrom(body?.issued_on, def.issued ?? 'Дата выдачи');
   out.valid_until = dateFrom(body?.valid_until, 'Действует до', { future: true });
   if (out.issued_on && out.valid_until && out.valid_until < out.issued_on) throw new HttpError(400, 'bad_date', 'Срок действия раньше даты выдачи');
   if (given('amount_rub')) {
@@ -57,6 +64,9 @@ function itemFrom(body, kind, languages = []) {
   }
   return out;
 }
+
+// Аккредитация организации в банке (2.451) — те же поля и проверки, что у аккредитации в досье эксперта.
+export const accreditationFrom = (body, banks) => itemFrom(body, 'bank', [], banks);
 
 async function requireSpecialist(sql, actor) {
   const sp = await sql.one`select 1 from specialists where user_id = ${actor.id}`;
@@ -74,12 +84,14 @@ async function ownItem(sql, actor, id, { lock = false } = {}) {
 }
 
 async function view(sql, userId, registry) {
-  const items = await loadDossier(sql, userId, { languages: true });
+  const items = await loadDossier(sql, userId, { languages: true, banks: true });
   const languages = registry.languages();
   return {
     items: items.map((i) => (i.language ? { ...i, language_name: languages.find((l) => l.id === i.language)?.name ?? i.language } : i)),
     alerts: dossierAlerts(items),
-    kinds: Object.entries(KINDS).map(([id, k]) => ({ id, name: k.name, title: k.title, number: k.number, has: k.has, need: k.need })),
+    kinds: Object.entries(KINDS).map(([id, k]) => ({ id, name: k.name, title: k.title, number: k.number, issued: k.issued ?? 'Дата выдачи', has: k.has, need: k.need })),
+    // Банки для аккредитации (2.451): из списка поля заявки «для какого банка» и свой.
+    banks: bankList(registry),
     // Языки для документа о знании языка (2а.3); отметку «проверен» ставит администратор по копии.
     languages,
   };
@@ -101,13 +113,13 @@ export function dossierOps() {
       async handler({ sql, actor, body, res, registry }) {
         await requireSpecialist(sql, actor);
         const kind = String(body?.kind ?? '');
-        const f = itemFrom(body, kind, registry.languages());
+        const f = itemFrom(body, kind, registry.languages(), bankList(registry));
         const id = await sql.tx(async (tx) => {
           await tx`select 1 from specialists where user_id = ${actor.id} for update`;
           const n = await tx.one`select count(*)::int as n from dossier_items where user_id = ${actor.id} and deleted_at is null`;
           if (n.n >= MAX_ITEMS) throw new HttpError(409, 'too_many', `В досье — не больше ${MAX_ITEMS} документов`);
-          const row = await tx.one`insert into dossier_items (user_id, kind, title, number, issued_on, valid_until, amount_kop, language)
-                                   values (${actor.id}, ${kind}, ${f.title}, ${f.number}, ${f.issued_on}, ${f.valid_until}, ${f.amount_kop}, ${f.language}) returning id`;
+          const row = await tx.one`insert into dossier_items (user_id, kind, title, number, issued_on, valid_until, amount_kop, language, bank)
+                                   values (${actor.id}, ${kind}, ${f.title}, ${f.number}, ${f.issued_on}, ${f.valid_until}, ${f.amount_kop}, ${f.language}, ${f.bank}) returning id`;
           await audit(tx, actor, 'dossier.add', 'dossier', row.id, { kind });
           return String(row.id);
         });
@@ -122,12 +134,12 @@ export function dossierOps() {
       async handler({ sql, actor, params, body, registry }) {
         await sql.tx(async (tx) => {
           const cur = await ownItem(tx, actor, params.item, { lock: true });
-          const f = itemFrom(body, cur.kind, registry.languages());
+          const f = itemFrom(body, cur.kind, registry.languages(), bankList(registry));
           const same = await tx.one`select (title = ${f.title} and number is not distinct from ${f.number}::text
                      and issued_on is not distinct from ${f.issued_on}::date and language is not distinct from ${f.language}::text) as same
                      from dossier_items where id = ${cur.id}`;
           await tx`update dossier_items set title = ${f.title}, number = ${f.number}, issued_on = ${f.issued_on},
-                     valid_until = ${f.valid_until}, amount_kop = ${f.amount_kop}, language = ${f.language}, updated_at = now(),
+                     valid_until = ${f.valid_until}, amount_kop = ${f.amount_kop}, language = ${f.language}, bank = ${f.bank}, updated_at = now(),
                      verified_at = ${same.same ? cur.verified_at : null}, verified_by = ${same.same ? cur.verified_by : null} where id = ${cur.id}`;
           await audit(tx, actor, 'dossier.update', 'dossier', cur.id, { kind: cur.kind });
         });

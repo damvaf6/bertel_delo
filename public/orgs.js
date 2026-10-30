@@ -7,6 +7,7 @@ import { loadOrgReport } from '/orgreport.js';
 import { loadOrgRegistry } from '/orgregistry.js';
 import { loadOrgNumbering } from '/orgnumbering.js';
 import { loadOrgTemplate } from '/orgtemplate.js';
+import { loadOrgAccreditations } from '/orgaccr.js';
 
 const $ = (id) => document.getElementById(id);
 const dateRu = (s) => new Date(s).toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long' });
@@ -94,7 +95,7 @@ export async function showOrg(id, focus = null) {
   $('org-numbering-box').classList.add('hidden');
   show('org-view', 'orgs');
   workBox();
-  await Promise.all([loadMembers(), org.manage ? loadOrgInvites() : null, org.manage ? loadOrgSign(org) : null, org.manage ? loadOrgCases(org) : null, org.manage ? loadOrgReport(org) : null, org.manage ? loadOrgRegistry(org) : null, org.manage ? loadOrgNumbering(org) : null, loadOrgTemplate(org)]);
+  await Promise.all([loadMembers(), org.manage ? loadOrgInvites() : null, org.manage ? loadOrgSign(org) : null, org.manage ? loadOrgCases(org) : null, org.manage ? loadOrgReport(org) : null, org.manage ? loadOrgRegistry(org) : null, org.manage ? loadOrgNumbering(org) : null, loadOrgTemplate(org), loadOrgAccreditations(org)]);
   if (focus && org.manage) (focus.block ? focusOrgBlock(focus.block) : focusOrgCase(focus));
 }
 
