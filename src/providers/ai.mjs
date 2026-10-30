@@ -6,11 +6,12 @@
 // purpose: 'problem' — вход через проблему; 'assistant' — ассистент; 'review' — проверка результата по правилам;
 // 'mail' — разбор письма-заявки (1.9); 'draft' — черновик заключения (2.2); 'analog' — признаки аналога со скриншота (2.32);
 // 'lawyer' — «о чём дело» одной фразой для проверки юриста (задача штаба 40217197-…-81f7); 'remarks' — замечания к сданному
-// отчёту пунктами (2.432).
+// отчёту пунктами (2.432); 'court' — вопросы суда к эксперту пунктами (2.444).
 import crypto from 'node:crypto';
 import { makeFake, ProviderError } from './fake.mjs';
 import { fakeSubject } from '../lawyers/check.mjs';
 import { fakeRemarkItems } from '../orders/remarks.mjs';
+import { fakeCourtItems } from '../orders/court.mjs';
 
 export const AI_DRIVERS = ['fake', 'yandexgpt', 'gigachat'];
 export const AI_DRIVER_NAME = { fake: 'Поддельная модель (проверки)', yandexgpt: 'YandexGPT', gigachat: 'GigaChat' };
@@ -274,6 +275,7 @@ function fakeAi() {
       if (purpose === 'analog') return { text: fakeAnalog(text), model: 'fake' };
       if (purpose === 'lawyer') return { text: fakeSubject(text), model: 'fake' };
       if (purpose === 'remarks') return { text: fakeRemarkItems(text), model: 'fake' };
+      if (purpose === 'court') return { text: fakeCourtItems(text), model: 'fake' };
       return { text: `[поддельный ответ ИИ] Вы спросили: «${text.slice(0, 200)}». Это подсказка, решение — за Вами.`, model: 'fake' };
     },
   });
