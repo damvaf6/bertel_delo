@@ -1045,6 +1045,23 @@ test('черновик заключения (2.2): видят исполните
   for (const k of ['stranger', 'headB', 'spec']) assert.equal((await U[k].req('GET', `/api/orders/${ownOrder.id}/draft/docx`)).status, 404, k);
 });
 
+test('аккредитации организации в банках (2.451): меняет руководитель, видят сотрудники; служебные, посторонние, чужая организация — «не найдено»', async () => {
+  for (const id of ['orgs.accreditations.get', 'orgs.accreditations.add', 'orgs.accreditations.update', 'orgs.accreditations.remove',
+    'orgs.accreditations.file', 'orgs.accreditations.file.link']) cover(id);
+  const A = `/api/orgs/${orgA.id}/accreditations`;
+  for (const k of ['memberA', 'seniorA']) assert.equal((await U[k].req('POST', A, { bank: 'sber' })).status, 403, k);
+  for (const k of ['stranger', 'headB', 'dispatcher', 'admin', 'owner', 'invitee']) {
+    assert.equal((await U[k].req('POST', A, { bank: 'sber' })).status, 404, k);
+    assert.equal((await U[k].req('GET', A)).status, 404, k);
+  }
+  const add = await U.headA.req('POST', A, { bank: 'sber', number: 'Тест-1' });
+  assert.equal(add.status, 201);
+  for (const k of ['headA', 'seniorA', 'memberA']) assert.equal((await U[k].req('GET', A)).body.items[0].number, 'Тест-1', k);
+  for (const k of ['stranger', 'headB', 'dispatcher', 'admin']) assert.equal((await U[k].req('DELETE', `${A}/${add.body.id}`)).status, 404, k);
+  assert.equal((await U.headB.req('DELETE', `/api/orgs/${orgB.id}/accreditations/${add.body.id}`)).status, 404);
+  assert.equal((await U.headA.req('GET', A)).body.items.length, 1);
+});
+
 test('шаблон отчёта организации (2.29): меняет руководитель, видят сотрудники; служебные, посторонние, чужая организация — «не найдено»', async () => {
   for (const id of ['orgs.template.get', 'orgs.template.put', 'orgs.template.delete', 'orgs.template.file']) cover(id);
   const { makeDocx } = await import('../tools/make-docs.mjs');

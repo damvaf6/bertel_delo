@@ -1,0 +1,115 @@
+// Аккредитация в банке (2.451): у эксперта — в досье (банк из списка или свой, решение, срок, копия), у организации —
+// вносит руководитель, видят сотрудники. В черновик, копии к делу и сверку отчёта аккредитация не идёт.
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { startApp, login, setPlatformRole, makeSpecialist, makeOrg, addMember } from '../helpers.mjs';
+import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
+import { loadDossier, remindDossier } from '../../src/dossier/dossier.mjs';
+
+let S, exp, head, member, headB, dispatcher, stranger, org, orgB;
+const PDF = Buffer.from('%PDF-1.4 тестовая копия решения банка');
+const upload = (c, url) => c.req('POST', url, PDF, { raw: true, headers: { 'content-type': 'application/pdf', 'x-file-name': encodeURIComponent('решение.pdf') } });
+
+before(async () => {
+  S = await startApp();
+  exp = await login(S, '+79990004511');
+  head = await login(S, '+79990004512');
+  member = await login(S, '+79990004513');
+  headB = await login(S, '+79990004514');
+  dispatcher = await login(S, '+79990004515');
+  stranger = await login(S, '+79990004516');
+  await setPlatformRole(S.sql, dispatcher.user.id, 'dispatcher');
+  await makeSpecialist(S.sql, exp.user.id);
+  org = await makeOrg(S.sql, 'Тестовая оценочная организация 2.451');
+  orgB = await makeOrg(S.sql, 'Тестовая чужая организация 2.451');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  await addMember(S.sql, org.id, member.user.id, 'member');
+  await addMember(S.sql, orgB.id, headB.user.id, 'head');
+});
+after(async () => { await S?.close(); });
+
+test('досье: аккредитация в банке — банк из списка или свой, решение и срок; в черновик и сверку не идёт', async () => {
+  const D = '/api/specialist/me/dossier';
+  const view = (await exp.req('GET', D)).body;
+  assert.deepEqual(view.banks.map((b) => b.id), ['sber', 'other']);
+  const kind = view.kinds.find((k) => k.id === 'bank');
+  assert.equal(kind.name, 'Аккредитация в банке');
+  assert.equal(kind.issued, 'Дата решения банка');
+  // Банк из списка — название из списка, даже если написано другое.
+  const sber = await exp.req('POST', D, { kind: 'bank', bank: 'sber', title: 'что угодно', number: 'А-17', issued_on: addDays(todayMsk(), -100), valid_until: addDays(todayMsk(), 200) });
+  assert.equal(sber.status, 201, JSON.stringify(sber.body));
+  const it = sber.body.items.find((i) => i.id === sber.body.id);
+  assert.equal(it.title, 'Сбербанк');
+  assert.equal(it.bank, 'sber');
+  assert.equal(it.state, 'ok');
+  // Свой банк — без названия нельзя; неизвестный банк и банк у другого вида документа — нельзя.
+  assert.equal((await exp.req('POST', D, { kind: 'bank', bank: 'other' })).status, 400);
+  assert.equal((await exp.req('POST', D, { kind: 'bank', bank: 'vtb_x', title: 'Банк' })).status, 400);
+  assert.equal((await exp.req('POST', D, { kind: 'bank', title: 'Банк' })).status, 400);
+  assert.equal((await exp.req('POST', D, { kind: 'sro', title: 'СРО', number: '1', bank: 'sber' })).status, 400);
+  const own = await exp.req('POST', D, { kind: 'bank', bank: 'other', title: 'Тестовый банк «Пример»', valid_until: addDays(todayMsk(), 10) });
+  assert.equal(own.status, 201, JSON.stringify(own.body));
+  assert.equal(own.body.items.find((i) => i.id === own.body.id).state, 'soon');
+  // Продлили — новый срок; поменяли банк на свой — название обязательно.
+  const put = await exp.req('PUT', `${D}/${own.body.id}`, { bank: 'other', title: 'Тестовый банк «Пример»', valid_until: addDays(todayMsk(), 400) });
+  assert.equal(put.status, 200, JSON.stringify(put.body));
+  assert.equal(put.body.items.find((i) => i.id === own.body.id).state, 'ok');
+  assert.equal((await exp.req('PUT', `${D}/${sber.body.id}`, { bank: 'other' })).status, 400);
+  assert.equal((await upload(exp, `${D}/${sber.body.id}/file`)).status, 200);
+  // Черновик, копии к делу, сверка отчёта — без аккредитаций; досье эксперта — с ними.
+  assert.ok(!(await loadDossier(S.sql, exp.user.id)).some((i) => i.kind === 'bank'));
+  assert.equal((await loadDossier(S.sql, exp.user.id, { banks: true })).filter((i) => i.kind === 'bank').length, 2);
+});
+
+test('истёкшая аккредитация в банке: напоминание эксперту, диспетчеру — нет (с подбора не снимает)', async () => {
+  const sp = await login(S, '+79990004517');
+  await makeSpecialist(S.sql, sp.user.id);
+  await sp.req('POST', '/api/specialist/me/dossier', { kind: 'bank', bank: 'sber', valid_until: addDays(todayMsk(), 5) });
+  const before = (await S.sql`select count(*)::int as n from notifications where user_id = ${dispatcher.user.id}`)[0].n;
+  await remindDossier(S.sql, { today: addDays(todayMsk(), 6) });
+  const ev = (await S.sql`select event from notifications where user_id = ${sp.user.id} and event like 'dossier%'`).map((r) => r.event);
+  assert.deepEqual(ev, ['dossier_expired']);
+  assert.equal((await S.sql`select count(*)::int as n from notifications where user_id = ${dispatcher.user.id}`)[0].n, before);
+});
+
+test('организация: аккредитации вносит руководитель, видят сотрудники; чужие и служебные — «не найдено»', async () => {
+  const A = `/api/orgs/${org.id}/accreditations`;
+  const add = await head.req('POST', A, { bank: 'sber', number: 'Р-2026/5', issued_on: addDays(todayMsk(), -30), valid_until: addDays(todayMsk(), 335) });
+  assert.equal(add.status, 201, JSON.stringify(add.body));
+  assert.equal(add.body.manage, true);
+  const id = add.body.id;
+  assert.equal(add.body.items[0].title, 'Сбербанк');
+  assert.equal((await head.req('POST', A, { bank: 'other' })).status, 400);
+  assert.equal((await head.req('POST', A, { bank: 'other', title: 'Тестовый банк', valid_until: addDays(todayMsk(), -1), issued_on: addDays(todayMsk(), -2) })).status, 201);
+  assert.equal((await upload(head, `${A}/${id}/file`)).status, 200);
+  // Сотрудник видит и скачивает, но не меняет.
+  const seen = await member.req('GET', A);
+  assert.equal(seen.status, 200);
+  assert.equal(seen.body.manage, false);
+  assert.deepEqual(seen.body.items.map((i) => [i.title, i.state]), [['Сбербанк', 'ok'], ['Тестовый банк', 'expired']]);
+  assert.equal((await member.req('GET', `${A}/${id}/file`)).status, 200);
+  assert.equal((await member.req('POST', A, { bank: 'sber' })).status, 403);
+  assert.equal((await member.req('PUT', `${A}/${id}`, { bank: 'sber' })).status, 403);
+  assert.equal((await member.req('DELETE', `${A}/${id}`)).status, 403);
+  assert.equal((await upload(member, `${A}/${id}/file`)).status, 403);
+  // Чужой руководитель, диспетчер, посторонний — «не найдено»; запись чужой организации по своему адресу — тоже.
+  for (const c of [headB, dispatcher, stranger]) {
+    assert.equal((await c.req('GET', A)).status, 404);
+    assert.equal((await c.req('GET', `${A}/${id}/file`)).status, 404);
+    assert.equal((await c.req('PUT', `${A}/${id}`, { bank: 'sber' })).status, 404);
+  }
+  const B = `/api/orgs/${orgB.id}/accreditations`;
+  assert.equal((await headB.req('PUT', `${B}/${id}`, { bank: 'sber' })).status, 404);
+  assert.equal((await headB.req('DELETE', `${B}/${id}`)).status, 404);
+  assert.equal((await headB.req('GET', `${B}/${id}/file`)).status, 404);
+  assert.deepEqual((await headB.req('GET', B)).body.items, []);
+  // Продлили, убрали.
+  const put = await head.req('PUT', `${A}/${id}`, { bank: 'sber', number: 'Р-2027/1', valid_until: addDays(todayMsk(), 700) });
+  assert.equal(put.status, 200, JSON.stringify(put.body));
+  assert.equal(put.body.items.find((i) => i.id === id).number, 'Р-2027/1');
+  assert.equal(put.body.items.find((i) => i.id === id).file.name, 'решение.pdf');
+  const del = await head.req('DELETE', `${A}/${id}`);
+  assert.equal(del.status, 200);
+  assert.ok(!del.body.items.some((i) => i.id === id));
+  assert.equal((await head.req('GET', `${A}/${id}/file`)).status, 404);
+});

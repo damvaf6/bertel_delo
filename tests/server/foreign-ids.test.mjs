@@ -70,6 +70,7 @@ async function world(tag, prefix, mark) {
   await ok(await E.req('POST', '/api/specialist/me/snippets', { kind: 'assumption', title: `Заготовка ${mark}`, body: `Текст ${mark}` }), 201);
   await ok(await u.head.req('POST', `/api/orgs/${org.id}/remarks`, { text: `Замечание ${mark}` }), 201);
   await ok(await u.head.req('POST', `/api/orgs/${org.id}/phrases`, { text: `Фраза ${mark}` }), 201);
+  await ok(await u.head.req('POST', `/api/orgs/${org.id}/accreditations`, { bank: 'other', title: `Банк ${mark}` }), 201);
   const invite = (await ok(await u.head.req('POST', `/api/orgs/${org.id}/invites`, { phone: `${prefix}6`, role: 'member' }), 201)).invite;
   const consultation = (await ok(await u.client.req('POST', '/api/ai/problem', { text: `Нужна оценка квартиры ${mark}` }), 201)).consultation;
   const one = async (q) => (await q)[0]?.id ?? null;
@@ -86,6 +87,7 @@ async function world(tag, prefix, mark) {
     snippet: await one(S.sql`select id from snippets where user_id = ${u.expert.user.id}`),
     remark: await one(S.sql`select id from org_remarks where org_id = ${org.id} and kind = 'remark'`),
     phrase: await one(S.sql`select id from org_remarks where org_id = ${org.id} and kind <> 'remark'`),
+    acc: await one(S.sql`select id from org_accreditations where org_id = ${org.id}`),
   };
 }
 
@@ -102,7 +104,7 @@ function foreign(op, name) {
   const p = op.path;
   const byName = {
     orderId: B.kase.id, userId: B.u.expert.user.id, nid: B.note, analog: B.analog, link: B.link, retake: 1, visit: B.visit,
-    snippet: B.snippet, check: 'x', call: 1, doc: B.result.id, n: 1, module: 'expertise', service: 'realty', code: 'x', step: 'original',
+    snippet: B.snippet, acc: B.acc, check: 'x', call: 1, doc: B.result.id, n: 1, module: 'expertise', service: 'realty', code: 'x', step: 'original',
   };
   if (name === 'rid') {
     if (p.includes('/doc-requests/')) return B.docreq;
@@ -168,6 +170,7 @@ async function snapshotB() {
     S.sql`select name from organizations where id = ${B.org.id}`,
     S.sql`select id, revoked_at, accepted_at, declined_at from org_invites where org_id = ${B.org.id} order by id`,
     S.sql`select id, deleted_at from org_remarks where org_id = ${B.org.id} order by id`,
+    S.sql`select id, deleted_at, title, number, file_key from org_accreditations where org_id = ${B.org.id} order by id`,
     S.sql`select id, deleted_at, title from dossier_items where user_id = any(${users}) order by id`,
     S.sql`select id, deleted_at, title from snippets where user_id = any(${users}) order by id`,
     S.sql`select id, order_id from ai_consultations where id = ${B.consultation.id}`,
@@ -179,7 +182,7 @@ async function snapshotB() {
 
 test('чужой номер в адресе — под каждой ролью, в каждой операции: только «нет доступа» или «не найдено», у чужих ничего не меняется', async () => {
   // Номера мира Б действительно есть — иначе перебор проверял бы пустоту.
-  for (const k of ['note', 'analog', 'docreq', 'deadlineReq', 'handover', 'link', 'visit', 'dossier', 'snippet', 'remark', 'phrase']) {
+  for (const k of ['note', 'analog', 'docreq', 'deadlineReq', 'handover', 'link', 'visit', 'dossier', 'snippet', 'remark', 'phrase', 'acc']) {
     assert.ok(W.B[k], `в мире Б нет записи «${k}»`);
   }
   const ops = listOps(S.cfg, S.providers).filter((o) => o.auth === 'user' && /:[a-zA-Z]/.test(o.path));

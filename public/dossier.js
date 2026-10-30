@@ -13,7 +13,7 @@ const rub = (kop) => `${(kop / 100).toLocaleString('ru-RU')} руб.`;
 function details(i) {
   return [
     i.number ? (i.kind === 'sro' ? `номер в реестре ${i.number}` : `№ ${i.number}`) : null,
-    i.issued_on ? `от ${dayRu(i.issued_on)}` : null,
+    i.issued_on ? `${i.kind === 'bank' ? 'решение ' : ''}от ${dayRu(i.issued_on)}` : null,
     i.amount_kop ? `сумма ${rub(i.amount_kop)}` : null,
     i.valid_until ? `до ${dayRu(i.valid_until)}` : null,
   ].filter(Boolean).join(' · ');
@@ -23,6 +23,10 @@ function render(data) {
   kinds = data.kinds;
   if (!$('dossier-language').options.length) {
     $('dossier-language').replaceChildren(...data.languages.map((l) => el('option', { value: l.id, text: l.name })));
+  }
+  // Банки для аккредитации (2.451): из списка и «Другой банк» — тогда название пишется вручную.
+  if (!$('dossier-bank').options.length) {
+    $('dossier-bank').replaceChildren(...data.banks.map((b) => el('option', { value: b.id, text: b.name })));
   }
   if (!$('dossier-kind').options.length) {
     $('dossier-kind').replaceChildren(...kinds.map((k) => el('option', { value: k.id, text: k.name })));
@@ -40,11 +44,11 @@ function render(data) {
     const input = el('input', { id: fileId, type: 'file', class: 'visually-hidden', 'aria-label': `Копия: ${i.kind_name}`, onchange: (e) => upload(i, e) });
     return el('li', { 'data-dossier': i.id },
       el('div', { class: 'row' },
-        el('span', { class: 'title', text: i.language_name ? `${i.kind_name}: ${i.language_name}` : i.kind_name }),
+        el('span', { class: 'title', text: i.language_name ? `${i.kind_name}: ${i.language_name}` : i.kind === 'bank' ? `${i.kind_name}: ${i.title}` : i.kind_name }),
         ...(i.state && STATE[i.state] ? [el('span', { class: 'badge overdue', text: STATE[i.state] })] : []),
         // Документ о знании языка (2а.3): к нотариальным переводам — только проверенный администратором по копии.
         ...(i.kind === 'language' ? [el('span', { class: `badge${i.verified ? '' : ' overdue'}`, text: i.verified ? 'проверен' : 'ждёт проверки' })] : [])),
-      el('div', { text: i.title }),
+      ...(i.kind === 'bank' ? [] : [el('div', { text: i.title })]),
       el('div', { class: 'muted', text: details(i) }),
       el('div', { class: 'muted', text: i.file ? `Копия: ${i.file.name} (${formatSize(i.file.size_bytes)})` : 'Копия не загружена' }),
       el('div', { class: 'row' },
@@ -60,6 +64,9 @@ function applyKind() {
   if (!k) return;
   $('dossier-title-label').textContent = k.title;
   $('dossier-number-label').textContent = k.number;
+  $('dossier-issued-label').textContent = k.issued;
+  // Банк из списка — название не нужно; «Другой банк» — пишется вручную.
+  $('dossier-title-box').classList.toggle('hidden', k.has.includes('bank') && $('dossier-bank').value !== 'other');
   for (const box of document.querySelectorAll('[data-dossier-field]')) {
     const f = box.getAttribute('data-dossier-field');
     box.classList.toggle('hidden', !k.has.includes(f));
@@ -88,6 +95,7 @@ function edit(i) {
   $('dossier-until').value = i.valid_until ?? '';
   $('dossier-amount').value = i.amount_kop ? String(i.amount_kop / 100) : '';
   if (i.language) $('dossier-language').value = i.language;
+  if (i.bank) { $('dossier-bank').value = i.bank; applyKind(); }
   $('dossier-form-title').textContent = `Изменить: ${i.kind_name}`;
   $('dossier-save').textContent = 'Сохранить';
   $('dossier-cancel').classList.remove('hidden');
@@ -132,6 +140,7 @@ async function remove(i) {
 }
 
 $('dossier-kind').addEventListener('change', applyKind);
+$('dossier-bank').addEventListener('change', applyKind);
 $('dossier-cancel').addEventListener('click', () => { resetForm(); say($('dossier-msg'), ''); });
 
 $('dossier-form').addEventListener('submit', async (e) => {
@@ -145,6 +154,7 @@ $('dossier-form').addEventListener('submit', async (e) => {
     valid_until: val('dossier-until', 'valid_until'),
     amount_rub: val('dossier-amount', 'amount_kop'),
     ...(k.has.includes('language') ? { language: $('dossier-language').value } : {}),
+    ...(k.has.includes('bank') ? { bank: $('dossier-bank').value } : {}),
   };
   try {
     const data = editing
