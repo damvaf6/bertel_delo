@@ -16,6 +16,7 @@ import { taskDueFor, taskMoveLetter } from '../ops/draft-ops.mjs';
 import { assignmentDocs, TASK_MOVE } from '../ops/ai-ops.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { executorSignOrg } from '../access/policy.mjs';
+import { ABSENCE } from '../docs/court-petition.mjs';
 
 export const SCHEDULE_DAYS = 14;
 // Перегруженный день (2.134): сдать больше двух дел (в работе и предложенных; сданные на проверку не в счёт). Выезд на
@@ -25,7 +26,7 @@ export const isBusy = (due, trips = 0) => due > 0 && due + trips > BUSY_DEADLINE
 // Заседания в суде (2.442), куда вызвали человека как эксперта его дела: с начала дня `from` до конца дня `to` по Москве.
 export async function hearingsOf(sql, userId, from, to) {
   return sql`
-    select c.id, c.order_id, c.court, c.case_no, c.hearing_at, c.address, o.title, o.module, o.service
+    select c.id, c.order_id, c.court, c.case_no, c.hearing_at, c.address, c.absence_kind, o.title, o.module, o.service
     from court_calls c join orders o on o.id = c.order_id
     where o.executor_user_id = ${userId} and o.status in ('done', 'closed')
       and (c.hearing_at at time zone 'Europe/Moscow')::date between ${from}::date and ${to}::date
@@ -189,7 +190,9 @@ export async function expertSchedule(sql, userId, registry, today = todayMsk(), 
   }
   for (const h of hearings) {
     put(mskDay(h.hearing_at), { kind: 'court', ...base(h, h.order_id), call_id: String(h.id), time: mskTime(h.hearing_at),
-      at: new Date(h.hearing_at).toISOString(), court: h.court, case_no: h.case_no, address: h.address });
+      at: new Date(h.hearing_at).toISOString(), court: h.court, case_no: h.case_no, address: h.address,
+      // Прогон 2.450: эксперт подал «Не смогу прийти» (2.445) — заседание видно, но день из-за него не загружен.
+      absence: h.absence_kind ? ABSENCE[h.absence_kind].name : null });
   }
   for (const n of notes) {
     put(n.remind_on < today ? today : n.remind_on, { kind: 'note', ...base(n, n.order_id), note_id: String(n.id), note: n.body, remind_on: n.remind_on,
@@ -202,7 +205,7 @@ export async function expertSchedule(sql, userId, registry, today = todayMsk(), 
     d.deadlines = d.items.filter((i) => i.kind === 'deadline').length;
     d.due = d.items.filter((i) => i.kind === 'deadline' && i.status !== 'review').length;
     d.trips = d.items.filter((i) => i.kind === 'visit' || i.kind === 'my_visit').length;
-    d.court = d.items.filter((i) => i.kind === 'court').length;
+    d.court = d.items.filter((i) => i.kind === 'court' && !i.absence).length;
     d.busy = isBusy(d.due, d.trips + d.court);
     // «Попросить перенос» — у дел в работе без открытой просьбы (просить можно только по делу в работе, 2.91).
     for (const i of d.items) {

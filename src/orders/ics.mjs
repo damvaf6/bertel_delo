@@ -89,9 +89,20 @@ function offDay(date, alarm) {
 }
 
 // Заседание: накануне в 18:00 по Москве — точным моментом (15:00 UTC), чтобы не зависеть от времени начала.
+// Прогон 2.450: эксперт подал «Не смогу прийти» — событие остаётся (суд может отказать), но свободным временем и без
+// напоминаний «возьмите отчёт».
 function hearingEvent(i) {
   const start = new Date(i.at);
   const eve = new Date(`${addDays(mskIso(start), -1)}T18:00:00+03:00`);
+  if (i.absence) {
+    return {
+      uid: `court-${i.call_id}`,
+      start: `DTSTART:${stamp(start)}`, end: `DTEND:${stamp(new Date(start.getTime() + HEARING_MINUTES * 60_000))}`,
+      summary: `Заседание в суде (подано ходатайство): ${i.court}, дело № ${i.case_no}`,
+      description: `Вы подали ходатайство «${i.absence}» по делу ${orderRef(i.order_id)}, ${i.service}. Узнайте в суде, удовлетворено ли оно; если нет — нужно прийти. `,
+      location: i.address, busy: false,
+    };
+  }
   return {
     uid: `court-${i.call_id}`,
     start: `DTSTART:${stamp(start)}`, end: `DTEND:${stamp(new Date(start.getTime() + HEARING_MINUTES * 60_000))}`,

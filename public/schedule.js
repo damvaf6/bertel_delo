@@ -69,8 +69,11 @@ function item(i, index) {
     return link(order('deadline'), `Просите перенести сюда срок: ${i.title}`, `сейчас срок ${short(i.deadline)} · ждёт ответа диспетчера`, 'wait');
   }
   if (i.kind === 'court') {
-    const li = link(order('court'), `${i.time} · Заседание в суде: ${i.title}`, [i.court, `дело № ${i.case_no}`, i.address, i.service].join(' · '), 'hot');
+    const li = link(order('court'), `${i.time} · Заседание в суде: ${i.title}`,
+      [i.court, `дело № ${i.case_no}`, i.address, i.service, i.absence ? `Вы подали ходатайство: ${i.absence}` : null].filter(Boolean).join(' · '),
+      i.absence ? 'wait' : 'hot');
     li.dataset.court = i.call_id;
+    if (i.absence) li.dataset.courtAbsence = '1';
     return li;
   }
   if (i.kind === 'visit') return link(order('onsite'), `${i.time} · Выезд помощника: ${i.title}`, i.service);

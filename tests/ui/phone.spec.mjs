@@ -11015,8 +11015,16 @@ test('2.226: за 3 дня до дней «не принимаю дела» — 
   await expect(page.locator('#specialist-away-now')).toContainText('за 3 дня до него придёт напоминание');
   await shot(page, 'h4e-ekspert-otmetka-s-do');
 
-  // Предупреждение рассылается раз в минуту на сервере; здесь — запись напрямую.
-  await db((c) => c.query("insert into notifications (user_id, type, event) values ($1, 'executor_work', 'away_soon')", [expert.id]));
+  // Предупреждение рассылается раз в минуту на сервере; здесь — запись напрямую, если сервер ещё не успел (под той же
+  // блокировкой строки специалиста, что и рассылка, и с отметкой «предупреждён» — иначе изредка приходило два).
+  await db(async (c) => {
+    await c.query('begin');
+    await c.query('select 1 from specialists where user_id = $1 for update', [expert.id]);
+    await c.query(`insert into notifications (user_id, type, event) select $1, 'executor_work', 'away_soon'
+                   where not exists (select 1 from notifications where user_id = $1 and event = 'away_soon')`, [expert.id]);
+    await c.query('update specialists set away_warned_from = away_from where user_id = $1', [expert.id]);
+    await c.query('commit');
+  });
   await page.goto('/kabinet#notifications');
   const n = page.locator('#notifications li').filter({ hasText: 'Скоро Ваши дни «не принимаю дела»' });
   await expect(n).toHaveCount(1);
