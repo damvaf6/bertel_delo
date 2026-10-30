@@ -290,3 +290,73 @@ test('2.446: вызовы экспертов в суд — у руководит
   assert.ok(!JSON.stringify(s).includes('2-4461/2026'));
   assert.ok(!s.experts.some((e) => e.user_id === outsider.user.id));
 });
+
+test('2.448: сводка за месяц — вызовы в суд по экспертам: заседания, письменные пояснения, ходатайства, отложено, итог не отмечен', async () => {
+  const { orgMonthReport } = await import('../../src/orgs/report.mjs');
+  const { todayMsk } = await import('../../src/orders/workflow.mjs');
+  const org = await makeOrg(S.sql, 'ООО «Суд в сводке»');
+  const head = await login(S, '+79990004481');
+  const exp = await login(S, '+79990004482');
+  const owner = await login(S, '+79990004483');
+  const outsider = await login(S, '+79990004484');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  await makeSpecialist(S.sql, exp.user.id);
+  await makeSpecialist(S.sql, outsider.user.id);
+  await addMember(S.sql, org.id, exp.user.id, 'member');
+  await exp.req('PATCH', '/api/me', { full_name: 'Эксперт Суда 2.448' });
+  assert.equal((await exp.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  // Сводка за прошлый месяц: эксперт в организации давно, сама организация — тоже.
+  await S.sql`update org_members set created_at = now() - interval '120 days' where org_id = ${org.id}`;
+  await S.sql`update organizations set created_at = now() - interval '120 days' where id = ${org.id}`;
+  const d = new Date(`${todayMsk().slice(0, 7)}-01T00:00:00Z`); d.setUTCMonth(d.getUTCMonth() - 1);
+  const month = d.toISOString().slice(0, 7);
+  const order = async (title, executor = exp.user.id) => {
+    const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
+    await S.sql`update orders set status = 'done', deadline = ${`${month}-01`}::date, executor_user_id = ${executor} where id = ${o.id}`;
+    return o;
+  };
+  const call = async (o, day, extra = {}) => (await S.sql`
+    insert into court_calls (order_id, court, case_no, hearing_at, address, created_by, side, absence_kind, absence_reason, absence_at,
+                             outcome_kind, outcome_at)
+    values (${o.id}, 'Тестовый районный суд', '2-4481/2026', (${`${month}-${day}`}::date + '10:00'::time) at time zone 'Europe/Moscow',
+            'г. Москва, тестовая ул., 48', ${owner.user.id}, 'customer', ${extra.absence ?? null}, ${extra.absence ? 'болен' : null},
+            ${extra.absence ? new Date() : null}, ${extra.outcome ?? null}, ${extra.outcome ? new Date() : null})
+    returning id`)[0].id;
+  const report = async () => (await head.req('GET', `/api/orgs/${org.id}/report?month=${month}`)).body.report;
+  let r = await report();
+  assert.equal(r.total.court_hearings, 0, 'заседаний не было');
+
+  // Дело 1: заседание 05 отложено, новое 20 — пояснения даны, к нему письменные пояснения готовы.
+  // Дело 2: 12 — ходатайство «не смогу прийти», итог не отмечен; 25 — вопросы суда без пояснения (не готово), повторная экспертиза.
+  const one = await order('Суд 2.448: отложено');
+  const two = await order('Суд 2.448: ходатайство');
+  await call(one, '05', { outcome: 'postponed' });
+  const ready = await call(one, '20', { outcome: 'explained' });
+  await S.sql`insert into court_questions (call_id, pos, body, answer) values (${ready}, 1, 'Вопрос суда 2.448', 'Пояснение')`;
+  await call(two, '12', { absence: 'without' });
+  const draft = await call(two, '25', { outcome: 'repeat' });
+  await S.sql`insert into court_questions (call_id, pos, body, answer) values (${draft}, 1, 'Вопрос суда 2.448', null)`;
+  // Не в счёт: заседание прошлого-прошлого месяца и дело эксперта не из организации.
+  await S.sql`insert into court_calls (order_id, court, case_no, hearing_at, address, created_by, side)
+              values (${one.id}, 'Давний суд', '2-1/2026', ${`${month}-01`}::date - interval '3 days', 'адрес', ${owner.user.id}, 'customer')`;
+  await call(await order('Суд 2.448: чужой эксперт', outsider.user.id), '10');
+
+  r = await report();
+  const keys = ['court_hearings', 'court_cases', 'court_explain', 'court_absence', 'court_postponed', 'court_repeat', 'court_unmarked', 'court_ahead'];
+  const row = r.experts.find((x) => x.user_id === exp.user.id);
+  assert.deepEqual(keys.map((k) => row[k]), [4, 2, 1, 1, 1, 1, 1, 0]);
+  assert.deepEqual(keys.map((k) => r.total[k]), [4, 2, 1, 1, 1, 1, 1, 0], 'эксперт не из организации — не в итоге');
+  assert.ok(!JSON.stringify(r).includes('2-4481/2026'), 'номер судебного дела руководитель не видит');
+  // Середина месяца: заседания 20 и 25 — ещё впереди, «итог не отмечен» — только прошедшее больше трёх часов назад.
+  const mid = await orgMonthReport(S.sql, org.id, month, { now: new Date(`${month}-15T12:00:00+03:00`) });
+  assert.deepEqual(keys.map((k) => mid.total[k]), [4, 2, 1, 1, 1, 1, 1, 2]);
+  const fresh = await orgMonthReport(S.sql, org.id, month, { now: new Date(`${month}-12T12:00:00+03:00`) });
+  assert.equal(fresh.total.court_unmarked, 0, 'два часа после начала — ещё не напоминаем');
+  // Таблица для Excel — тот же блок.
+  const text = (await head.req('GET', `/api/orgs/${org.id}/report?month=${month}&format=csv`, undefined, { binary: true })).body.toString('utf8');
+  assert.match(text, /Вызовы в суд;Заседаний;В скольких делах;Письменные пояснения готовы/);
+  assert.match(text, /Эксперт Суда 2\.448;4;2;1;1;1;1;1;0/);
+  assert.match(text, /Итого;4;2;1;1;1;1;1;0/);
+  // Только руководитель своей организации.
+  assert.equal((await exp.req('GET', `/api/orgs/${org.id}/report?month=${month}`)).status, 403);
+});
