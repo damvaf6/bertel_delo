@@ -3,6 +3,7 @@
 // всех сторон — блок «Вызов в суд» со списком заседаний (ближайшее — заметно). Текст — через textContent.
 // 2.444: у заседания — «Пояснения к отчёту для суда» (вопросы суда и пояснения эксперта, Word) — `public/courtqa.js`.
 // 2.445: эксперт до заседания — «Не смогу прийти»: без его участия или отложить, причина → Word ходатайства (все стороны).
+// 2.447: после заседания эксперт — «Как прошло»: пояснения даны / отложено на … / назначена повторная или дополнительная.
 import { api, el, say } from '/common.js';
 import { openCourtQa } from '/courtqa.js';
 
@@ -30,6 +31,7 @@ function draw(v) {
     ? `Заседаний: ${v.calls.length}`
     : 'Суд вызывает эксперта дать пояснения к отчёту? Укажите заседание — эксперт получит уведомление, дело останется сданным.';
   ctx.reasonMax = v.reason_max;
+  ctx.noteMax = v.note_max;
   $('hearing-list').replaceChildren(...v.calls.map((c) => item(c, c.id === v.next, v.can_answer)));
   $('hearing-open').classList.toggle('hidden', !v.can_add);
   if (!v.can_add) $('hearing-form').classList.add('hidden');
@@ -67,8 +69,10 @@ function item(c, next, canAnswer) {
     el('div', { text: `${c.court}, дело № ${c.case_no}` }),
     el('div', { class: 'muted', text: `Адрес: ${c.address}` }),
     ...(c.document ? [el('button', { class: 'link', type: 'button', onclick: () => ctx.download(c.document) }, `Повестка: ${c.document.filename}`)] : []),
-    el('div', { class: 'muted', text: c.side === 'dispatcher' ? 'Сообщил диспетчер' : 'Сообщил заказчик' }),
+    el('div', { class: 'muted', text: c.from ? 'Новая дата — со слов эксперта: прежнее заседание отложено'
+      : c.side === 'dispatcher' ? 'Сообщил диспетчер' : 'Сообщил заказчик' }),
     ...absence(c),
+    ...outcome(c),
     ...qa(c, canAnswer));
 }
 
@@ -122,6 +126,78 @@ function absenceForm(c, box) {
     el('p', { class: 'muted', text: 'Платформа соберёт ходатайство Word для суда, заказчик получит уведомление. Подписываете и подаёте в суд Вы сами.' }),
     choice,
     el('div', { class: 'field' }, el('label', { for: reasonId, text: 'Почему не сможете прийти' }), reason),
+    send, msg);
+}
+
+// «Как прошло» (2.447). Итог видят все стороны; эксперт после начала заседания отмечает его и может поправить.
+const OUTCOMES = [['explained', 'Пояснения даны'], ['postponed', 'Заседание отложено'], ['repeat', 'Назначена повторная экспертиза'],
+  ['extra', 'Назначена дополнительная экспертиза']];
+const ru = (d) => d.split('-').reverse().join('.');
+
+function outcome(c) {
+  const out = [];
+  if (c.outcome) {
+    const o = c.outcome;
+    out.push(el('div', { class: 'court-outcome', 'data-outcome': c.id },
+      el('div', { class: 'title', text: `Как прошло: ${o.name}${o.next ? ` — новое заседание ${dayRu(o.next.hearing_at)}` : ''}` }),
+      ...(o.note ? [el('div', { text: o.note })] : []),
+      el('div', { class: 'muted', text: `Отметил эксперт ${dayRu(o.at)}` })));
+  }
+  if (!c.can_outcome) return out;
+  const box = el('div', { class: 'court-outcome-form hidden' });
+  const btn = el('button', { type: 'button', class: c.outcome ? 'link court-outcome-open' : 'court-outcome-open', 'aria-expanded': 'false' },
+    c.outcome ? 'Поправить итог' : 'Как прошло заседание');
+  btn.addEventListener('click', () => {
+    const open = box.classList.toggle('hidden') === false;
+    btn.setAttribute('aria-expanded', String(open));
+    if (open && !box.childElementCount) outcomeForm(c, box);
+  });
+  return [...out, btn, box];
+}
+
+function outcomeForm(c, box) {
+  let kind = c.outcome?.kind ?? '';
+  const dateId = `co-${c.id}-date`;
+  const timeId = `co-${c.id}-time`;
+  const noteId = `co-${c.id}-note`;
+  const date = el('input', { id: dateId, type: 'date', min: todayMsk() });
+  const time = el('input', { id: timeId, type: 'text', inputmode: 'numeric', maxlength: '5', placeholder: '10:30' });
+  const at = c.outcome?.next?.hearing_at ?? null;
+  const msk = (x) => new Date(new Date(x).getTime() + 3 * 3600 * 1000).toISOString();
+  date.value = at ? msk(at).slice(0, 10) : '';
+  time.value = msk(at ?? c.hearing_at).slice(11, 16);
+  const when = el('div', { class: 'row court-outcome-when' + (kind === 'postponed' ? '' : ' hidden') },
+    el('div', { class: 'field' }, el('label', { for: dateId, text: 'Отложено на' }), date),
+    el('div', { class: 'field' }, el('label', { for: timeId, text: 'Время' }), time));
+  const choice = el('div', { class: 'choice', role: 'radiogroup', 'aria-label': 'Как прошло заседание' }, ...OUTCOMES.map(([k, name]) => {
+    const r = el('input', { type: 'radio', name: `co-${c.id}-kind`, value: k, onchange: () => { kind = k; when.classList.toggle('hidden', k !== 'postponed'); } });
+    r.checked = kind === k;
+    return el('label', {}, r, name);
+  }));
+  const note = el('textarea', { id: noteId, rows: '2', maxlength: String(ctx.noteMax ?? 500), placeholder: 'например, суд принял пояснения, вопросов больше нет' });
+  note.value = c.outcome?.note ?? '';
+  const msg = el('p', { class: 'msg', role: 'status', 'aria-live': 'polite' });
+  const send = el('button', { type: 'button' }, 'Сохранить');
+  send.addEventListener('click', async () => {
+    if (!kind) return say(msg, 'Выберите, как прошло заседание');
+    const body = { kind, note: note.value.trim() };
+    if (kind === 'postponed') {
+      if (!date.value) return say(msg, 'Укажите, на какую дату отложено заседание');
+      if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time.value.trim())) return say(msg, 'Укажите время нового заседания, например 10:30');
+      Object.assign(body, { date: date.value, time: time.value.trim() });
+    }
+    send.disabled = true;
+    try {
+      await api('PUT', `/api/orders/${ctx.orderId}/court/${c.id}/outcome`, body);
+      await ctx.reload();
+      say($('status-msg'), kind === 'postponed' ? `Новое заседание ${ru(body.date)} в ${body.time} — в «Моих сроках»; заказчик получил уведомление`
+        : 'Итог заседания отмечен — заказчик получил уведомление', 'ok');
+    } catch (err) { say(msg, err.message); } finally { send.disabled = false; }
+  });
+  box.replaceChildren(
+    el('p', { class: 'muted', text: 'Заказчик увидит итог. Отложено — новое заседание появится в деле, в «Моих сроках» и в календаре.' }),
+    choice, when,
+    el('div', { class: 'field' }, el('label', { for: noteId, text: 'Заметка (по желанию)' }), note),
     send, msg);
 }
 

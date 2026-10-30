@@ -144,6 +144,8 @@ export const EVENTS = {
   ack_late: { type: 'order_progress', title: 'Задерживаемся с ценой по заявке — диспетчер уже видит её, ответим в ближайшее время', order: true, mail: true },
   // Эксперт не сможет прийти на заседание (2.445): src/ops/court-ops.mjs — заказчику и диспетчеру, записавшему вызов.
   court_absence: { type: 'order_progress', title: 'Эксперт не сможет прийти на заседание суда — ходатайство (без участия эксперта или отложить) в заявке', order: true, to: 'court', mail: true },
+  // Как прошло заседание (2.447): src/ops/court-ops.mjs — заказчику и диспетчеру, записавшему вызов.
+  court_outcome: { type: 'order_progress', title: 'Эксперт отметил, как прошло заседание суда: пояснения даны, отложено или назначена повторная экспертиза — в заявке', order: true, to: 'court', mail: true },
   cancelled_by_dispatcher: { type: 'order_progress', title: 'Диспетчер отменил заявку', order: true, mail: true },
 
   message: { type: 'messages', title: 'Новое сообщение по заявке', order: true },

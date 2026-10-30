@@ -6,6 +6,9 @@
 // «Пояснения эксперта к отчёту». Пишет только эксперт дела, видят все стороны.
 // 2.445: «Не смогу прийти» — эксперт до заседания подаёт ходатайство: рассмотреть без его участия или отложить, с причиной;
 // Word ходатайства видят все стороны, заказчику (и диспетчеру, если вызов записал он) — уведомление. В суд подаёт сам эксперт.
+// 2.447: «Как прошло» — после начала заседания эксперт отмечает итог: пояснения даны, отложено (новая дата — новым вызовом с
+// тем же судом, номером дела и адресом), назначена повторная или дополнительная экспертиза; заметка — по желанию. Итог видят
+// все стороны, заказчику (и диспетчеру, записавшему вызов) — уведомление. Неотмеченное прошедшее — в «Сегодня» эксперта.
 import { HttpError } from '../http/core.mjs';
 import { orderSides } from '../access/policy.mjs';
 import { askAi, parseJsonAnswer } from '../ai/ai.mjs';
@@ -31,6 +34,15 @@ export const COURT_MAX = 200;
 export const CASE_NO_MAX = 60;
 export const ADDRESS_MAX = 300;
 export const REASON_MAX = 500;
+export const NOTE_MAX = 500;
+export const OUTCOME = {
+  explained: { name: 'пояснения даны' },
+  postponed: { name: 'заседание отложено' },
+  repeat: { name: 'назначена повторная экспертиза' },
+  extra: { name: 'назначена дополнительная экспертиза' },
+};
+// Неотмеченное прошедшее заседание — в «Сегодня» эксперта две недели.
+const UNMARKED_DAYS = 14;
 
 // Сторона, от которой пишут о вызове: заказчик или диспетчер; иначе — нельзя.
 function callSide(actor, order) {
@@ -65,16 +77,21 @@ export function hearingAt(date, time, today = todayMsk()) {
 async function calls(sql, order) {
   const rows = await sql`
     select c.id, c.court, c.case_no, c.hearing_at, c.address, c.side, c.created_at, d.id as doc_id, d.filename,
-           c.absence_kind, c.absence_reason, c.absence_at,
+           c.absence_kind, c.absence_reason, c.absence_at, c.outcome_kind, c.outcome_note, c.outcome_at,
+           n.id as next_id, n.hearing_at as next_at, (select f.id from court_calls f where f.next_call_id = c.id limit 1) as from_id,
            (select count(*)::int from court_questions q where q.call_id = c.id) as questions,
            (select count(*)::int from court_questions q where q.call_id = c.id and q.answer is null) as unanswered
     from court_calls c left join documents d on d.id = c.document_id and d.deleted_at is null
+      left join court_calls n on n.id = c.next_call_id
     where c.order_id = ${order.id} order by c.hearing_at, c.id`;
   return rows.map((r) => ({
     id: String(r.id), court: r.court, case_no: r.case_no, hearing_at: r.hearing_at, address: r.address, side: r.side,
     created_at: r.created_at, document: r.doc_id ? { id: r.doc_id, filename: r.filename } : null,
     questions: r.questions, unanswered: r.unanswered,
     absence: r.absence_kind ? { kind: r.absence_kind, name: ABSENCE[r.absence_kind].name, reason: r.absence_reason, at: r.absence_at } : null,
+    outcome: r.outcome_kind ? { kind: r.outcome_kind, name: OUTCOME[r.outcome_kind].name, note: r.outcome_note ?? '', at: r.outcome_at,
+      next: r.next_id ? { id: String(r.next_id), hearing_at: r.next_at } : null } : null,
+    from: r.from_id ? String(r.from_id) : null,
   }));
 }
 
@@ -87,7 +104,9 @@ async function view(sql, registry, actor, order) {
   const list = await calls(sql, order);
   const now = Date.now();
   return { available: true, can_add: canCall(registry, actor, order), can_answer: canAnswer(registry, actor, order),
-           reason_max: REASON_MAX, calls: list.map((c) => ({ ...c, can_absence: canAnswer(registry, actor, order) && new Date(c.hearing_at).getTime() > now })),
+           reason_max: REASON_MAX, note_max: NOTE_MAX,
+           calls: list.map((c) => ({ ...c, can_absence: canAnswer(registry, actor, order) && new Date(c.hearing_at).getTime() > now,
+             can_outcome: canAnswer(registry, actor, order) && new Date(c.hearing_at).getTime() <= now })),
            next: list.find((c) => new Date(c.hearing_at).getTime() >= now - 3 * 3600 * 1000)?.id ?? null };
 }
 
@@ -192,6 +211,20 @@ export async function hearingsSoon(sql, userId, today = todayMsk(), now = new Da
     });
   }
   return out;
+}
+
+// Заседание прошло (больше трёх часов назад — после строки «Заседание в суде» 2.443), а итога нет (2.447) — в «Сегодня»
+// эксперта «Как прошло заседание» две недели.
+export async function hearingsUnmarked(sql, userId, now = new Date()) {
+  const rows = await sql`
+    select c.id, c.order_id, c.court, c.case_no, c.hearing_at, o.title
+    from court_calls c join orders o on o.id = c.order_id
+    where o.executor_user_id = ${userId} and o.status = any(${AFTER}::text[]) and c.outcome_kind is null
+      and c.hearing_at < ${new Date(now.getTime() - HEARING_PAST_MS)}
+      and c.hearing_at >= ${new Date(now.getTime() - UNMARKED_DAYS * 86400000)}
+    order by c.hearing_at, c.id`;
+  return rows.map((r) => ({ id: r.order_id, title: r.title, call_id: String(r.id), court: r.court, case_no: r.case_no,
+    hearing_at: r.hearing_at, day: todayMsk(new Date(r.hearing_at)), time: mskTime(r.hearing_at) }));
 }
 
 // Вызовы экспертов организации в суд (2.446) — руководителю в «Делах экспертов» (отбор «Вызов в суд»): по сданным делам
@@ -352,6 +385,49 @@ export function courtOps() {
           await audit(tx, actor, 'court.absence', 'order', order.id, { call: String(call.id), kind, again: !!call.absence_kind });
           const users = [...(await customersOf(tx, order)), ...(call.side === 'dispatcher' ? [call.created_by] : [])];
           await notify(tx, 'court_absence', { users, orderId: order.id, actor });
+        });
+        return view(sql, registry, actor, order);
+      },
+    },
+    {
+      // «Как прошло» (2.447): итог заседания — после его начала. Отложено — новая дата обязательна, заседание записывается
+      // новым вызовом (суд, номер дела, адрес, повестка — прежние; кто сообщил о вызове — тоже). Отметить заново можно; если
+      // новое заседание уже записано — только «отложено» со сменой его даты, пока по нему ничего не начато.
+      id: 'court.outcome', method: 'PUT', path: '/api/orders/:id/court/:call/outcome', auth: 'user', access,
+      async handler({ sql, registry, actor, order, body, params }) {
+        const call = await callOf(sql, registry, order, params.call);
+        answerable(registry, actor, order);
+        if (new Date(call.hearing_at).getTime() > Date.now()) throw new HttpError(409, 'hearing_ahead', 'Заседание ещё не началось — итог отмечают после него');
+        const kind = String(body?.kind ?? '');
+        if (!OUTCOME[kind]) throw new HttpError(400, 'bad_input', 'Выберите, как прошло заседание');
+        const note = String(body?.note ?? '').trim();
+        if (note.length > NOTE_MAX) throw new HttpError(400, 'bad_input', `Заметка — не больше ${NOTE_MAX} символов`);
+        const at = kind === 'postponed' ? hearingAt(body?.date, body?.time) : null;
+        if (at && at <= new Date(call.hearing_at)) throw new HttpError(400, 'bad_input', 'Новая дата заседания — позже прежней');
+        const next = call.next_call_id ? await sql.one`
+          select n.*, (select count(*)::int from court_questions q where q.call_id = n.id) as questions from court_calls n where n.id = ${call.next_call_id}` : null;
+        if (next && kind !== 'postponed') {
+          throw new HttpError(409, 'next_exists', 'Новое заседание уже записано — итог этого заседания: «отложено»; поменять можно дату нового');
+        }
+        if (next && at && (next.absence_kind || next.outcome_kind || next.questions)) {
+          throw new HttpError(409, 'next_started', 'По новому заседанию уже есть ходатайство, итог или вопросы суда — дату не поменять');
+        }
+        await sql.tx(async (tx) => {
+          let nextId = next?.id ?? null;
+          if (next) {
+            await tx`update court_calls set hearing_at = ${at} where id = ${next.id}`;
+          } else if (at) {
+            const n = await tx.one`insert into court_calls (order_id, court, case_no, hearing_at, address, document_id, created_by, side)
+                                    values (${order.id}, ${call.court}, ${call.case_no}, ${at}, ${call.address}, ${call.document_id}, ${call.created_by}, ${call.side})
+                                    returning id`;
+            nextId = n.id;
+          }
+          await tx`update court_calls set outcome_kind = ${kind}, outcome_note = ${note || null}, outcome_at = now(), outcome_by = ${actor.id},
+                     next_call_id = ${nextId} where id = ${call.id}`;
+          await audit(tx, actor, 'court.outcome', 'order', order.id, { call: String(call.id), kind, again: !!call.outcome_kind,
+            ...(at ? { next: String(nextId), hearing_at: at.toISOString() } : {}) });
+          const users = [...(await customersOf(tx, order)), ...(call.side === 'dispatcher' ? [call.created_by] : [])];
+          await notify(tx, 'court_outcome', { users, orderId: order.id, actor });
         });
         return view(sql, registry, actor, order);
       },
