@@ -419,8 +419,8 @@ test('2.448: сводка за месяц — вызовы в суд по экс
 test('2.449: заседание эксперта завтра, а он не принимает дела — у руководителя в «Сегодня» и у заседания в «Делах экспертов»', async ({ browser, baseURL }) => {
   const hp = await phone(browser, baseURL);
   const ep = await phone(browser, baseURL);
-  const head = await signIn(hp, '+79990004491');
-  const expert = await signIn(ep, '+79990004492');
+  const head = await signIn(hp, '+79990004581');
+  const expert = await signIn(ep, '+79990004582');
   const { orgId, oid } = await db(async (c) => {
     const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Суд в отпуске ${Date.now() % 100000}»') returning id`);
     await c.query("update users set full_name = 'Отпускова Анна' where id = $1", [expert.id]);
