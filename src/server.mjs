@@ -10,6 +10,7 @@ import { remindDossier } from './dossier/dossier.mjs';
 import { remindSilentInspections } from './ops/inspect-ops.mjs';
 import { remindNotes } from './ops/note-ops.mjs';
 import { sendAwayBack, warnAway } from './notify/away.mjs';
+import { warnCourtAway } from './ops/court-ops.mjs';
 import { sendMorning, sendOrgMorning } from './notify/morning.mjs';
 import { deliverMail } from './mail/outbox.mjs';
 import { processInbound, receiveMail } from './mail/inbound.mjs';
@@ -44,6 +45,8 @@ const sweep = setInterval(() => {
     .catch((e) => console.error('напоминания по заметкам:', e?.message || e))
     .then(() => warnAway(sql))
     .catch((e) => console.error('предупреждение перед днями «не принимаю дела»:', e?.message || e))
+    .then(() => warnCourtAway(sql))
+    .catch((e) => console.error('заседание в дни «не принимаю дела»:', e?.message || e))
     .then(() => sendAwayBack(sql))
     .catch((e) => console.error('«Пока Вас не было»:', e?.message || e))
     .then(() => remindAck(sql))

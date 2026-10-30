@@ -48,7 +48,7 @@ import { reportMade } from '../ai/report-checks.mjs';
 import { customerSilent, workingMs } from '../orders/silence.mjs';
 import { newYearAhead } from '../orders/holidays.mjs';
 import { yearHint } from '../orgs/numbering.mjs';
-import { hearingsSoon, hearingsUnmarked } from './court-ops.mjs';
+import { hearingsAwayOrg, hearingsSoon, hearingsUnmarked } from './court-ops.mjs';
 
 // «Горит» — просрочено или до срока не больше двух дней (как подсветка в списке дел).
 const HOT_DAYS = 2;
@@ -803,7 +803,10 @@ export async function orgPart(sql, org, registry, today, { actorId = null, stora
   const ny = newYearCases(cases, today);
   // Образец номера организации без года (2.419) — в первые рабочие дни января подсказка руководителю, как у эксперта.
   const yh = yearHint((await sql.one`select report_pattern from organizations where id = ${org.id}`)?.report_pattern, today);
+  // Заседание эксперта сегодня или завтра, а он в этот день не принимает дела (2.449) — своей группой и в утренней сводке.
+  const courtAway = (await hearingsAwayOrg(sql, org.id, today)).map(({ order_id: id, ...h }) => ({ order_ref: orderRef(id), ...h }));
   return {
+    court_away: courtAway,
     number_year: yh && { ...yh, last: await lastYearNumber(sql, { org: org.id }, yh) },
     dossier,
     dossier_new_year: dossierNy,
