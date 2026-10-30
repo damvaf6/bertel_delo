@@ -194,6 +194,36 @@ export async function hearingsSoon(sql, userId, today = todayMsk(), now = new Da
   return out;
 }
 
+// Вызовы экспертов организации в суд (2.446) — руководителю в «Делах экспертов» (отбор «Вызов в суд»): по сданным делам
+// ближайшее заседание (прошедшее больше трёх часов назад — уже нет, как в «Сегодня» эксперта 2.443) и сколько их впереди.
+// Суд, день и время, адрес; подал ли эксперт ходатайство «Не смогу прийти» (2.445, без причины) и готовы ли письменные
+// пояснения (2.444). Номер судебного дела, повестку и вопросы суда руководитель не видит.
+export const HEARING_PAST_MS = 3 * 3600 * 1000;
+export async function hearingsOrg(sql, orderIds, now = new Date()) {
+  if (!orderIds.length) return new Map();
+  const rows = await sql`
+    select c.id, c.order_id, c.court, c.hearing_at, c.address, c.absence_kind,
+           (select count(*)::int from court_questions q where q.call_id = c.id) as questions,
+           (select count(*)::int from court_questions q where q.call_id = c.id and q.answer is null) as unanswered
+    from court_calls c join orders o on o.id = c.order_id
+    where c.order_id = any(${orderIds}::uuid[]) and o.status = any(${AFTER}::text[])
+      and c.hearing_at >= ${new Date(now.getTime() - HEARING_PAST_MS)}
+    order by c.hearing_at, c.id`;
+  const out = new Map();
+  for (const r of rows) {
+    const x = out.get(r.order_id);
+    if (x) { x.count += 1; continue; }
+    const day = todayMsk(new Date(r.hearing_at));
+    out.set(r.order_id, { count: 1, next: {
+      call_id: String(r.id), court: r.court, address: r.address, hearing_at: r.hearing_at, day, time: mskTime(r.hearing_at),
+      absence: r.absence_kind ? ABSENCE[r.absence_kind].name : null,
+      explain: r.questions ? (r.unanswered ? 'draft' : 'ready') : null,
+      soon: day <= workdaysAfter(todayMsk(now), 1) } });
+  }
+  return out;
+}
+const mskTime = (at) => new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit' }).format(new Date(at));
+
 export function courtOps() {
   const access = { resource: 'order', param: 'id', need: 'read' };
   return [

@@ -81,6 +81,9 @@ const FILTERS = [
   { id: 'docs', text: 'Ждём документы от заказчика', test: (c) => !!c.docs_wait },
   // 2.436: дело снова у эксперта по замечаниям банка или суда к сданному отчёту (2.431) — ближайший срок ответа первым.
   { id: 'remarks', text: 'Замечания к сданному отчёту', test: (c) => !!c.remarks },
+  // 2.446: эксперта вызывают в суд по сданному делу (2.441) — дело сдано, поэтому отбор и среди завершённых (`done`);
+  // ближайшее заседание первым.
+  { id: 'court', text: 'Вызов в суд', test: (c) => !!c.court, done: true },
   { id: 'sign', text: 'Ждёт моей подписи', test: (c) => c.sign_wait > 0 },
   { id: 'returned', text: 'Вернул эксперту', test: (c) => c.returned_open },
   { id: 'fresh', text: 'Исправленный файл ждёт подписи эксперта', test: (c) => !!c.returned?.fresh_file },
@@ -158,14 +161,14 @@ function renderCases() {
   renderExperts(cases);
   const mine = expert ? cases.filter((c) => c.expert_id === expert) : cases;
   // Отбор, по которому дел не осталось (подписали, эксперт ответил), снимается сам.
-  const counts = new Map(FILTERS.map((f) => [f.id, mine.filter((c) => c.active && f.test(c)).length]));
+  const counts = new Map(FILTERS.map((f) => [f.id, mine.filter((c) => (c.active || f.done) && f.test(c)).length]));
   // Из утренней сводки «task_moved» (2.338): там и дела, где письмо пришло со сроком раньше (2.335), — к их отбору (2.348).
   if (filter === 'task_moved' && !counts.get(filter) && counts.get('task_letter')) filter = 'task_letter';
   if (filter && !counts.get(filter)) filter = null;
   const chosen = FILTERS.find((f) => f.id === filter);
   renderFilters(counts);
   const found = mine.filter((c) => hit([c.order_ref, c.id, c.service, c.expert, c.status_name, c.report_number ?? ''].join(' '))
-    && (!chosen || (c.active && chosen.test(c))));
+    && (!chosen || ((c.active || chosen.done) && chosen.test(c))));
   const active = found.filter((c) => c.active);
   // «Ждёт моей подписи» (2.148): дольше всех ждущие — первыми.
   if (filter === 'sign') active.sort((a, b) => new Date(a.sign_since) - new Date(b.sign_since));
@@ -189,6 +192,7 @@ function renderCases() {
   if (filter === 'inspect') active.sort((a, b) => (a.inspection.kind === b.inspection.kind
     ? new Date(a.inspection.at) - new Date(b.inspection.at) : a.inspection.kind === 'incomplete' ? -1 : 1));
   const done = found.filter((c) => !c.active);
+  if (filter === 'court') done.sort((a, b) => new Date(a.court.next.hearing_at) - new Date(b.court.next.hearing_at));
   const none = cases.length > 0 && !found.length;
   $('org-cases-none').classList.toggle('hidden', !none);
   const who = expert ? ` у эксперта «${mine[0]?.expert ?? ''}»` : '';
@@ -282,6 +286,18 @@ function renderFilters(counts) {
   box.replaceChildren(...(used.length ? [chip(null, 'Все'), ...used.map((f) => chip(f.id, `${f.text} · ${counts.get(f.id)}`))] : []));
 }
 
+// Вызов в суд (2.446): ближайшее заседание — день, время, суд, адрес; сегодня или в следующий рабочий день — заметно.
+// Подал ли эксперт ходатайство «Не смогу прийти» (2.445) и готовы ли письменные пояснения (2.444); заседаний больше — сколько.
+function courtLines(c) {
+  const h = c.court.next;
+  const more = c.court.count > 1 ? ` · ещё заседаний: ${c.court.count - 1}` : '';
+  const state = [h.absence ? `эксперт просит ${h.absence}` : null,
+    h.explain === 'ready' ? 'письменные пояснения готовы' : h.explain === 'draft' ? 'письменные пояснения готовятся' : null].filter(Boolean).join(' · ');
+  return [el('div', { class: h.soon && !h.absence ? 'overdue' : 'muted', 'data-role': 'court',
+    text: `Вызов в суд: ${dayRu(h.day)}, ${h.time} · ${h.court}${more}` }),
+  el('div', { class: 'muted', 'data-role': 'court-place', text: [h.address, state].filter(Boolean).join(' · ') })];
+}
+
 // Замечания к сданному отчёту (2.436): когда пришли, ответить до, что с пунктами и ответом.
 function remarksText(r) {
   const when = new Date(r.at).toLocaleDateString('sv-SE', { timeZone: 'Europe/Moscow' });
@@ -311,6 +327,8 @@ function caseItem(org, c) {
       text: `Сдать ${c.task_due.by} — к ${dayRu(c.task_due.day)}${c.task_due.overdue ? ', срок прошёл' : ''} (срок дела позже)` })] : []),
     // 2.436: замечания к сданному отчёту — ответить до …; прошёл, сегодня или в следующий рабочий день — красным.
     ...(c.remarks ? [el('div', { class: c.remarks.hot ? 'overdue' : 'muted', 'data-role': 'remarks', text: remarksText(c.remarks) })] : []),
+    // 2.446: эксперта вызывают в суд по сданному делу — ближайшее заседание.
+    ...(c.court ? courtLines(c) : []),
     // 2.394: срок в новогодние каникулы — сдать до последнего рабочего дня перед ними.
     ...(c.new_year ? [el('div', { class: 'overdue', 'data-role': 'new-year', text: newYearCaseText(c.new_year) })] : []),
     el('div', { class: 'muted', text: [c.fee_kop != null ? `вознаграждение ${rub(c.fee_kop)}` : 'цена ещё не назначена',

@@ -219,3 +219,74 @@ test('2.354: нагрузка — срок по письму о переносе
   const text = JSON.stringify((await head.req('GET', url)).body);
   for (const w of ['Петрова', 'Письмо:', o.id]) assert.ok(!text.includes(w), `не раскрывает: ${w}`);
 });
+
+test('2.446: вызовы экспертов в суд — у руководителя в «Делах экспертов» (отбор) и в нагрузке в день заседания; без номера судебного дела', async () => {
+  const org = await makeOrg(S.sql, 'ООО «Суд в нагрузке»');
+  const head = await login(S, '+79990004461');
+  const exp = await login(S, '+79990004462');
+  const owner = await login(S, '+79990004463');
+  const outsider = await login(S, '+79990004464');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  await makeSpecialist(S.sql, exp.user.id);
+  await makeSpecialist(S.sql, outsider.user.id);
+  await addMember(S.sql, org.id, exp.user.id, 'member');
+  await exp.req('PATCH', '/api/me', { full_name: 'Судебный Эксперт' });
+  assert.equal((await exp.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  const today = (await head.req('GET', `/api/orgs/${org.id}/schedule`)).body.schedule.from;
+  const plus = (n) => { const d = new Date(`${today}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  const order = async (title, executor = exp.user.id, old = false) => {
+    const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
+    await S.sql`update orders set status = 'done', deadline = ${plus(-20)}::date, executor_user_id = ${executor} where id = ${o.id}`;
+    // Сдано давно — в «Деле экспертов» по 90 дням его уже нет, но заседание впереди держит его в списке.
+    if (old) await S.sql`update orders set updated_at = now() - interval '200 days' where id = ${o.id}`;
+    return o;
+  };
+  const call = async (o, days, time, extra = {}) => (await S.sql`
+    insert into court_calls (order_id, court, case_no, hearing_at, address, created_by, side, absence_kind, absence_reason, absence_at)
+    values (${o.id}, ${extra.court ?? 'Тестовый районный суд'}, '2-4461/2026', (${plus(days)}::date + ${time}::time) at time zone 'Europe/Moscow',
+            'г. Москва, тестовая ул., 46, зал 2', ${owner.user.id}, 'customer', ${extra.kind ?? null}, ${extra.kind ? 'болен' : null},
+            ${extra.kind ? new Date() : null})
+    returning id`)[0].id;
+  const near = await order('Суд: ближайшее заседание');
+  const later = await order('Суд: давно сданное', exp.user.id, true);
+  const past = await order('Суд: заседание прошло');
+  const foreign = await order('Суд: чужой эксперт', outsider.user.id);
+  await call(near, 1, '10:30');
+  await call(near, 9, '11:00', { court: 'Отложенный суд' });
+  await call(later, 3, '14:00', { kind: 'postpone' });
+  await S.sql`insert into court_calls (order_id, court, case_no, hearing_at, address, created_by, side)
+              values (${past.id}, 'Прошедший суд', '2-1/2026', now() - interval '1 day', 'адрес', ${owner.user.id}, 'customer')`;
+  await call(foreign, 2, '09:00');
+  const q = await call(later, 20, '12:00');
+  await S.sql`insert into court_questions (call_id, pos, body, answer) values (${q}, 1, 'Вопрос суда', null)`;
+
+  const ref = (o) => `№ ${o.id.slice(0, 8).toUpperCase()}`;
+  const r = await head.req('GET', `/api/orgs/${org.id}/cases`);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const by = new Map(r.body.cases.map((c) => [c.order_ref, c]));
+  assert.ok(by.has(ref(later)), 'давно сданное с заседанием впереди — в списке');
+  const n = by.get(ref(near)).court;
+  assert.equal(n.count, 2);
+  assert.deepEqual([n.next.court, n.next.day, n.next.time, n.next.address, n.next.absence, n.next.explain],
+    ['Тестовый районный суд', plus(1), '10:30', 'г. Москва, тестовая ул., 46, зал 2', null, null]);
+  assert.equal(n.next.soon, true, 'завтра — заметно');
+  const l = by.get(ref(later)).court;
+  assert.deepEqual([l.count, l.next.day, l.next.absence], [2, plus(3), 'отложить заседание']);
+  assert.equal(by.get(ref(past)).court, null, 'прошедшее заседание — нет');
+  assert.ok(!by.has(ref(foreign)), 'эксперт не из организации — не видно');
+  const text = JSON.stringify(r.body);
+  for (const t of ['2-4461/2026', 'болен', 'Вопрос суда']) assert.ok(!text.includes(t), `не раскрывает: ${t}`);
+  // Только руководитель своей организации.
+  assert.equal((await exp.req('GET', `/api/orgs/${org.id}/cases`)).status, 403);
+
+  // Нагрузка: заседание в свой день, точкой; итог «заседаний»; день занят.
+  const s = (await head.req('GET', `/api/orgs/${org.id}/schedule`)).body.schedule;
+  const x = s.experts.find((e) => e.user_id === exp.user.id);
+  const courts = x.days.flatMap((d) => d.items.filter((i) => i.kind === 'court').map((i) => [d.date, i.order_ref, i.time, i.court, i.absence]));
+  assert.deepEqual(courts, [[plus(1), ref(near), '10:30', 'Тестовый районный суд', false], [plus(3), ref(later), '14:00', 'Тестовый районный суд', true],
+    [plus(9), ref(near), '11:00', 'Отложенный суд', false]]);
+  assert.equal(x.courts, 3);
+  assert.equal(x.due, 0, 'заседание — не срок сдачи');
+  assert.ok(!JSON.stringify(s).includes('2-4461/2026'));
+  assert.ok(!s.experts.some((e) => e.user_id === outsider.user.id));
+});

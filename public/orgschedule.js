@@ -5,6 +5,7 @@
 // руководитель не видит — услуга и номер дела. Срок по заданию на оценку раньше срока дела (2.318) — дело сдавать в его
 // день: своя строка, у срока дела — «по заданию на оценку — к …»; в полосе и «сдать» дело считается в день срока по заданию.
 // Срок из письма о переносе (2.354) — «Сдать по письму о переносе», прежний срок и просил ли эксперт письмо с новым сроком.
+// Заседание в суде по сданному делу (2.446) — в свой день строкой со временем, судом и адресом; в полосе — точкой, как выезд.
 import { api, el, say } from '/common.js';
 import { WORKING_DAY, awaySpan, dayRu, holidayText } from '/order.js';
 import { focusOrgCase } from '/orgcases.js';
@@ -35,6 +36,8 @@ function itemText(i) {
     return { title: `Сдать: ${ref}`, what: [STATUS[i.status], i.task_due ? `${i.task_due_letter ? 'по письму о переносе' : 'по заданию на оценку'} — к ${short(i.task_due)}` : letter,
       i.extend_to ? `просит перенести на ${short(i.extend_to)}` : null].filter(Boolean).join(' · ') };
   }
+  // 2.446: заседание в суде по сданному делу — суд и адрес; эксперт просит рассмотреть без него или отложить — так и сказано.
+  if (i.kind === 'court') return { title: `${i.time} · Заседание в суде: ${ref}`, what: [i.court, i.address, i.absence ? 'эксперт подал ходатайство «Не смогу прийти»' : null].filter(Boolean).join(' · ') };
   if (i.kind === 'visit') return { title: `${i.time} · Выезд помощника: ${ref}`, what: '' };
   return { title: `${i.time} · Едет помощником на объект`, what: i.order_ref ? ref : `${i.service} · дело другой организации` };
 }
@@ -61,7 +64,7 @@ function strip(x, days) {
   return el('div', { class: 'strip', 'aria-hidden': 'true' }, ...days.map((h, k) => {
     const d = x.days[k];
     const due = d.items.filter(isDue).length;
-    const go = d.items.filter((i) => i.kind === 'visit' || i.kind === 'helper').length;
+    const go = d.items.filter((i) => i.kind === 'visit' || i.kind === 'helper' || i.kind === 'court').length;
     const cls = ['cell', h.today ? 'today' : '', h.weekend ? 'weekend' : '', h.working ? 'working' : '', kind(x, d) !== 'free' ? kind(x, d) : '',
       vacation(x, d) && dueOn(d) ? 'clash' : '', due > 1 ? 'heavy' : due || go ? 'busy' : ''].filter(Boolean).join(' ');
     return el('span', { class: cls, 'data-day': h.date, title: [`${h.weekday}, ${short(h.date)}`, h.holiday ? `праздник: ${h.holiday}` : null, h.working ? WORKING_DAY.toLowerCase() : null, kind(x, d) !== 'free' ? FREE[kind(x, d)] : null].filter(Boolean).join(' — ') },
@@ -71,7 +74,7 @@ function strip(x, days) {
 }
 
 function expertItem(x, days, experts) {
-  const total = [`сдать за две недели: ${x.due}`, x.visits ? `выездов: ${x.visits}` : null,
+  const total = [`сдать за две недели: ${x.due}`, x.visits ? `выездов: ${x.visits}` : null, x.courts ? `заседаний в суде: ${x.courts}` : null,
     `свободных будней: ${x.free_workdays}`].filter(Boolean).join(' · ');
   const busy = x.days.map((d, k) => ({ d, h: days[k] })).filter(({ d }) => d.items.length);
   // «По дням» (2.245): кроме дней со сроками и выездами — первый день «не принимает новые дела» и день возвращения.
