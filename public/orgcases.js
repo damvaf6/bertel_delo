@@ -295,7 +295,10 @@ function courtLines(c) {
     h.explain === 'ready' ? 'письменные пояснения готовы' : h.explain === 'draft' ? 'письменные пояснения готовятся' : null].filter(Boolean).join(' · ');
   return [el('div', { class: h.soon && !h.absence ? 'overdue' : 'muted', 'data-role': 'court',
     text: `Вызов в суд: ${dayRu(h.day)}, ${h.time} · ${h.court}${more}` }),
-  el('div', { class: 'muted', 'data-role': 'court-place', text: [h.address, state].filter(Boolean).join(' · ') })];
+  el('div', { class: 'muted', 'data-role': 'court-place', text: [h.address, state].filter(Boolean).join(' · ') }),
+  // 2.449: в день заседания эксперт не принимает дела — красным, пока нет ходатайства.
+  ...(h.away_until ? [el('div', { class: h.absence ? 'muted' : 'overdue', 'data-role': 'court-away',
+    text: `в этот день эксперт не принимает дела (до ${dayRu(h.away_until)})${h.absence ? '' : ' — ходатайства нет, свяжитесь с экспертом'}` })] : [])];
 }
 
 // Замечания к сданному отчёту (2.436): когда пришли, ответить до, что с пунктами и ответом.

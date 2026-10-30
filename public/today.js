@@ -646,6 +646,13 @@ export async function loadToday() {
         // Перенос согласован позже срока по заданию, а письма о переносе нет (2.334) — вместо строки срока по заданию.
         ...(x.task_moved ? [{ class: 'overdue', role: 'task-moved-sign', text: `До подписи: ${taskMovedText(x.task_moved)}` }] : [])];
     const part = [
+      // Заседание суда эксперта сегодня или завтра, а эксперт в этот день не принимает дела (2.449) — первой строкой: без
+      // ходатайства «Не смогу прийти» — красным. Номер судебного дела руководитель не видит.
+      ...group(`org-court-away-${g.id}`, 'Заседание в суде, а эксперт не принимает дела', g.court_away ?? [], (x) => [`${x.expert} · ${x.order_ref}`,
+        `${dayRu(x.day)}, ${x.time} · ${x.court} · ${x.address}`,
+        { class: x.absence ? 'muted' : 'overdue', role: 'court-away-what',
+          text: `не принимает дела до ${dayRu(x.away_until)} · ${x.absence ? `ходатайство: ${x.absence}` : 'ходатайства «Не смогу прийти» нет — свяжитесь с экспертом'}` }],
+      toOrg('case')),
       // Эксперт просит передать дело коллеге (2.107) — к делу в «Делах экспертов»: «Передать» или «Отказать».
       ...group(`org-handover-${g.id}`, 'Эксперт просит передать дело коллеге', g.handover ?? [], (x) => [...caseLine(x),
         `${since(x.requested_at)} · причина: ${x.reason}`, ...handoverWhy(x),

@@ -236,9 +236,10 @@ export async function hearingsOrg(sql, orderIds, now = new Date()) {
   if (!orderIds.length) return new Map();
   const rows = await sql`
     select c.id, c.order_id, c.court, c.hearing_at, c.address, c.absence_kind,
+           to_char(s.away_from, 'YYYY-MM-DD') as away_from, to_char(s.away_until, 'YYYY-MM-DD') as away_until,
            (select count(*)::int from court_questions q where q.call_id = c.id) as questions,
            (select count(*)::int from court_questions q where q.call_id = c.id and q.answer is null) as unanswered
-    from court_calls c join orders o on o.id = c.order_id
+    from court_calls c join orders o on o.id = c.order_id left join specialists s on s.user_id = o.executor_user_id
     where c.order_id = any(${orderIds}::uuid[]) and o.status = any(${AFTER}::text[])
       and c.hearing_at >= ${new Date(now.getTime() - HEARING_PAST_MS)}
     order by c.hearing_at, c.id`;
@@ -251,10 +252,66 @@ export async function hearingsOrg(sql, orderIds, now = new Date()) {
       call_id: String(r.id), court: r.court, address: r.address, hearing_at: r.hearing_at, day, time: mskTime(r.hearing_at),
       absence: r.absence_kind ? ABSENCE[r.absence_kind].name : null,
       explain: r.questions ? (r.unanswered ? 'draft' : 'ready') : null,
+      // 2.449: эксперт в день заседания не принимает дела — до какого дня.
+      away_until: awayOn(r, day) ? r.away_until : null,
       soon: day <= workdaysAfter(todayMsk(now), 1) } });
   }
   return out;
 }
+// Заседание в днях «не принимаю дела» эксперта (2.449): день заседания не раньше первого такого дня и до дня возвращения.
+const awayOn = (sp, day) => !!sp.away_until && day < sp.away_until && (!sp.away_from || day >= sp.away_from);
+
+// Руководителю (2.449): заседания экспертов организации сегодня или завтра (в пятницу — и в понедельник, как «Сегодня»
+// эксперта 2.443), а эксперт в этот день не принимает дела. Без ходатайства «Не смогу прийти» — в утренней сводке числом:
+// эксперт может не знать о заседании или суд не предупреждён. Номер судебного дела руководитель не видит.
+export async function hearingsAwayOrg(sql, orgId, today = todayMsk(), now = new Date()) {
+  const last = [addDays(today, 1), workdaysAfter(today, 1)].sort().at(-1);
+  const rows = await sql`
+    select c.id, c.order_id, c.court, c.hearing_at, c.address, c.absence_kind, u.full_name as expert,
+           to_char(s.away_from, 'YYYY-MM-DD') as away_from, to_char(s.away_until, 'YYYY-MM-DD') as away_until
+    from court_calls c join orders o on o.id = c.order_id
+    join specialists s on s.user_id = o.executor_user_id and s.org_id = ${orgId}
+    join org_members m on m.org_id = s.org_id and m.user_id = s.user_id join users u on u.id = o.executor_user_id
+    where o.status = any(${AFTER}::text[]) and s.away_until is not null
+      and c.hearing_at >= ${new Date(now.getTime() - HEARING_PAST_MS)}
+      and (c.hearing_at at time zone 'Europe/Moscow')::date between ${today}::date and ${last}::date
+    order by c.hearing_at, c.id`;
+  return rows.map((r) => ({ ...r, day: todayMsk(new Date(r.hearing_at)) })).filter((r) => awayOn(r, r.day)).map((r) => ({
+    order_id: r.order_id, call_id: String(r.id), expert: r.expert || 'Без имени', court: r.court, address: r.address,
+    hearing_at: r.hearing_at, day: r.day, time: mskTime(r.hearing_at), away_until: r.away_until,
+    absence: r.absence_kind ? ABSENCE[r.absence_kind].name : null }));
+}
+
+// Эксперту (2.449): за 3 дня до заседания, которое попадает в его дни «не принимаю дела», — одно уведомление: подать «Не
+// смогу прийти» или убрать эти дни. Ходатайство уже подано — не беспокоим. Раз в минуту вместе с предупреждением перед днями
+// «не принимаю дела» (src/server.mjs); отметка — день заседания (away_warned_for): заседание перенесли — придёт по новому.
+export const COURT_AWAY_DAYS = 3;
+export async function warnCourtAway(sql, { now = new Date() } = {}) {
+  const today = todayMsk(now);
+  const rows = await sql`
+    select c.id, c.order_id, c.court, c.hearing_at, o.executor_user_id,
+           to_char(s.away_from, 'YYYY-MM-DD') as away_from, to_char(s.away_until, 'YYYY-MM-DD') as away_until
+    from court_calls c join orders o on o.id = c.order_id join specialists s on s.user_id = o.executor_user_id
+    where o.status = any(${AFTER}::text[]) and c.absence_kind is null and c.outcome_kind is null and s.away_until is not null
+      and c.hearing_at > ${now}
+      and (c.hearing_at at time zone 'Europe/Moscow')::date <= ${addDays(today, COURT_AWAY_DAYS)}::date
+      and c.away_warned_for is distinct from (c.hearing_at at time zone 'Europe/Moscow')::date`;
+  let sent = 0;
+  for (const r of rows) {
+    const day = todayMsk(new Date(r.hearing_at));
+    if (!awayOn(r, day)) continue;
+    sent += await sql.tx(async (tx) => {
+      const cur = await tx.one`update court_calls set away_warned_for = ${day}::date
+                               where id = ${r.id} and away_warned_for is distinct from ${day}::date and absence_kind is null returning id`;
+      if (!cur) return 0;
+      const [, m, d] = day.split('-');
+      return notify(tx, 'court_away', { users: [r.executor_user_id], orderId: r.order_id,
+        sms: `БЕРТЕЛ Дело: ${d}.${m} в ${mskTime(r.hearing_at)} заседание суда по Вашему отчёту, а Вы в этот день не принимаете дела. Подайте «Не смогу прийти» в деле или уберите эти дни.` });
+    });
+  }
+  return sent;
+}
+
 const mskTime = (at) => new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit' }).format(new Date(at));
 
 export function courtOps() {
