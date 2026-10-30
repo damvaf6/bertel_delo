@@ -126,3 +126,55 @@ test('2.451: руководитель вносит аккредитацию ор
   await shot(mp, 'ak03-2451-sotrudnik-vidit');
   expect([...hp.problems, ...mp.problems]).toEqual([]);
 });
+
+test('2.452: подбор для заявки Сбербанка — аккредитованные первыми с пометкой, никого — предупреждение', async ({ browser, baseURL }) => {
+  const cp = await phone(browser, baseURL);
+  const dp = await phone(browser, baseURL);
+  const owner = await signIn(cp, '+79990004541');
+  const disp = await signIn(dp, '+79990004542');
+  const mk = async (phoneNo, name) => {
+    const u = await signIn(await phone(browser, baseURL), phoneNo);
+    await db(async (c) => {
+      await c.query('update users set full_name = $2 where id = $1', [u.id, name]);
+      await c.query("insert into specialists (user_id, regions, capacity) values ($1, '{moscow,mo}', 5)", [u.id]);
+      await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty')", [u.id]);
+    });
+    return u;
+  };
+  await mk('+79990004543', 'Тестов Свободный 2452');
+  const acc = await mk('+79990004544', 'Тестов Аккредитованный 2452');
+  await db(async (c) => {
+    await c.query("update users set platform_role = 'dispatcher' where id = $1", [disp.id]);
+    await c.query('update specialists set external_load = 3 where user_id = $1', [acc.id]);
+    await c.query("insert into dossier_items (user_id, kind, title, bank, valid_until) values ($1, 'bank', 'Сбербанк', 'sber', current_date + 200)", [acc.id]);
+  });
+  const order = async () => {
+    const id = (await (await cp.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира для банка' }, headers: H })).json()).order.id;
+    expect((await cp.request.patch(`/api/orders/${id}`, {
+      data: { deadline: plusDays(20), fields: { purpose: 'bank', bank: 'sber', region: 'mo', object_type: 'flat', address: 'тестовый адрес, 1' } }, headers: H,
+    })).status()).toBe(200);
+    expect((await cp.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+    return id;
+  };
+  const id = await order();
+  await dp.goto(`/kabinet#order=${id}`);
+  await expect(dp.locator('#match-bank')).toHaveText(/Отчёт для банка «Сбербанк»: первыми — аккредитованные/);
+  await expect(dp.locator('#match-bank')).not.toHaveClass(/overdue/);
+  // Свободный выше по оценке, но первым — аккредитованный.
+  const first = dp.locator('#candidates > li').filter({ hasText: '2452' }).first();
+  await expect(first).toContainText('Тестов Аккредитованный 2452');
+  await expect(first.locator('[data-role=bank-accr]')).toHaveText(/^Аккредитован в банке «Сбербанк» · до /);
+  await expect(dp.locator('#candidates > li').filter({ hasText: 'Тестов Свободный 2452' }).locator('[data-role=bank-accr]')).toHaveCount(0);
+  await first.scrollIntoViewIfNeeded();
+  await shot(dp, 'ak04-podbor-bank');
+  // Аккредитация истекла — предупреждение диспетчеру.
+  await db((c) => c.query("update dossier_items set valid_until = current_date - 1 where user_id = $1 and kind = 'bank'", [acc.id]));
+  const id2 = await order();
+  await dp.goto(`/kabinet#order=${id2}`);
+  await expect(dp.locator('#match-bank')).toHaveText(/никто из подходящих не аккредитован в нём/);
+  await expect(dp.locator('#match-bank')).toHaveClass(/overdue/);
+  await expect(dp.locator('#candidates [data-role=bank-accr]')).toHaveCount(0);
+  await dp.locator('#match-bank').scrollIntoViewIfNeeded();
+  await shot(dp, 'ak05-podbor-bank-nikogo');
+  expect([...dp.problems, ...cp.problems]).toEqual([]);
+});
