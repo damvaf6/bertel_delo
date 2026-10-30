@@ -231,6 +231,7 @@ export async function expertSchedule(sql, userId, registry, today = todayMsk(), 
 // дела — отметка; в «сдать за две недели» и в полосе дело считается в день срока по заданию. Задание читается, только если
 // передано хранилище; без названия файла — руководитель не видит названий документов. Срок по письму о переносе (2.354) —
 // так и сказано: «по письму о переносе», прежний срок и просил ли эксперт письмо с новым сроком.
+// Заседание в суде по сданному делу эксперта (2.446) — строка `court` в его день (суд, время, адрес): день занят, как выездом.
 // Что сдавать в этот день у руководителя (2.318): срок по заданию на оценку или срок дела, у которого срока по заданию
 // раньше нет, — чтобы дело не считалось дважды.
 export const dueItem = (i) => i.kind === 'task_due' || (i.kind === 'deadline' && !i.task_due);
@@ -260,6 +261,13 @@ export async function orgSchedule(sql, orgId, registry, today = todayMsk(), { st
     where v.finished_at is null and v.cancelled_at is null and o.status = 'in_work'
       and (o.executor_user_id = any(${ids}::uuid[]) or v.helper_id = any(${ids}::uuid[]))
     order by v.planned_at`;
+  // Заседания в суде (2.446, как у эксперта 2.442): по сданным делам, куда вызвали эксперта, — в день заседания.
+  const hearings = await sql`
+    select c.id, c.order_id, c.court, c.hearing_at, c.address, c.absence_kind, o.module, o.service, o.executor_user_id
+    from court_calls c join orders o on o.id = c.order_id
+    where o.executor_user_id = any(${ids}::uuid[]) and o.status in ('done', 'closed')
+      and (c.hearing_at at time zone 'Europe/Moscow')::date between ${today}::date and ${last}::date
+    order by c.hearing_at, c.id`;
   const mine = new Set(ids);
   const per = new Map(experts.map((e) => {
     const away = e.away_until && day(e.away_until) > today ? { from: awayStart(e, today), until: day(e.away_until), note: e.away_note ?? null } : null;
@@ -304,7 +312,12 @@ export async function orgSchedule(sql, orgId, registry, today = todayMsk(), { st
       put(v.helper_id, d, { kind: 'helper', ...(mine.has(v.executor_user_id) ? { order_ref: orderRef(v.order_id) } : {}), service: service(v), time: mskTime(v.planned_at) });
     }
   }
-  const ORDER = { visit: 0, helper: 0, task_due: 1, deadline: 1 };
+  // Без номера судебного дела и повестки (2.446): суд, время, адрес и подал ли эксперт ходатайство «Не смогу прийти» (2.445).
+  for (const h of hearings) {
+    put(h.executor_user_id, todayMsk(new Date(h.hearing_at)), { kind: 'court', order_ref: orderRef(h.order_id), service: service(h),
+      time: mskTime(h.hearing_at), court: h.court, address: h.address, absence: !!h.absence_kind });
+  }
+  const ORDER = { visit: 0, helper: 0, court: 0, task_due: 1, deadline: 1 };
   const result = [...per.values()].map((x) => {
     for (const d of x.days) d.items.sort((a, b) => ORDER[a.kind] - ORDER[b.kind] || String(a.time ?? '').localeCompare(String(b.time ?? '')));
     const all = x.days.flatMap((d) => d.items);
@@ -312,6 +325,7 @@ export async function orgSchedule(sql, orgId, registry, today = todayMsk(), { st
       ...x,
       due: all.filter(dueItem).length,
       visits: all.filter((i) => i.kind === 'visit' || i.kind === 'helper').length,
+      courts: all.filter((i) => i.kind === 'court').length,
       // Свободные будни: не выходной, не «не принимаю дела», ни срока, ни выезда — куда можно поставить новое дело.
       free_workdays: x.days.filter((d, i) => !header[i].weekend && !d.away && !d.items.length).length,
     };

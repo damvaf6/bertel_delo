@@ -269,3 +269,49 @@ test('2.445: «Не смогу прийти» — эксперт подаёт х
   await sp.context().close();
   await cp.context().close();
 });
+
+test('2.446: руководитель — вызов эксперта в суд в «Делах экспертов» (отбор) и в нагрузке в день заседания', async ({ browser, baseURL }) => {
+  const hp = await phone(browser, baseURL);
+  const ep = await phone(browser, baseURL);
+  const head = await signIn(hp, '+79990004461');
+  const expert = await signIn(ep, '+79990004462');
+  const { orgId, oid } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Суд ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Судебнова Вера' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("insert into specialists (user_id, org_id) values ($1, $2) on conflict (user_id) do update set org_id = excluded.org_id", [expert.id, org.id]);
+    const id = (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, deadline, fields)
+      values ($1, 'Квартира: суд у руководителя', 'expertise', 'realty', 'done', $1, current_date - 5, $2) returning id`,
+    [expert.id, { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, ул. Судебная, д. 46', area: '50' }])).rows[0].id;
+    await c.query(`insert into court_calls (order_id, court, case_no, hearing_at, address, created_by, side)
+      values ($1, 'Тестовый районный суд г. Москвы', '2-4460/2026', ($2::date + time '10:30') at time zone 'Europe/Moscow',
+              'г. Москва, тестовая ул., 1, зал 5', $3, 'customer')`, [id, plusDays(3), expert.id]);
+    return { orgId: org.id, oid: id };
+  });
+  const ref = `№ ${oid.slice(0, 8).toUpperCase()}`;
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const chip = hp.locator('#org-cases-filter [data-filter="court"]');
+  await expect(chip).toHaveText('Вызов в суд · 1');
+  await chip.click();
+  const li = hp.locator(`#org-cases li[data-case="${ref}"]`);
+  await expect(li.locator('[data-role="court"]')).toContainText('Вызов в суд:');
+  await expect(li.locator('[data-role="court"]')).toContainText('10:30 · Тестовый районный суд г. Москвы');
+  await expect(li.locator('[data-role="court-place"]')).toContainText('г. Москва, тестовая ул., 1, зал 5');
+  await expect(hp.locator('#org-cases')).not.toContainText('2-4460/2026');
+  await li.scrollIntoViewIfNeeded();
+  await shot(hp, 'ct07-2446-vyzov-v-sud-otbor');
+
+  const x = hp.locator(`#org-schedule-box li[data-expert-schedule="${expert.id}"]`);
+  await expect(x.locator('[data-role="total"]')).toContainText('заседаний в суде: 1');
+  await expect(x.locator(`.strip .cell[data-day="${plusDays(3)}"] .cnt`)).toHaveText('•');
+  await x.locator('details[data-days] summary').click();
+  const row = x.locator('details[data-days] [data-schedule-item="court"]');
+  await expect(row).toContainText(`10:30 · Заседание в суде: Оценка недвижимости · ${ref}`);
+  await expect(row).toContainText('г. Москва, тестовая ул., 1, зал 5');
+  await x.scrollIntoViewIfNeeded();
+  await shot(hp, 'ct08-2446-zasedanie-v-nagruzke');
+  await row.locator('button').click();
+  await expect(li).toBeVisible();
+  expect(hp.problems).toEqual([]);
+  for (const p of [hp, ep]) await p.context().close();
+});

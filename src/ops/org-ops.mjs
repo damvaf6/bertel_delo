@@ -20,6 +20,7 @@ import { extendSuggest, openHandovers } from './handover-ops.mjs';
 import { orgSchedule, taskDues } from '../orders/schedule.mjs';
 import { actStates, expiringLinks, incompleteInspections } from './inspect-ops.mjs';
 import { docsWaiting } from './docreq-ops.mjs';
+import { hearingsOrg } from './court-ops.mjs';
 import { taskDueFor, taskMoveLetter } from './draft-ops.mjs';
 import { assignmentDocs, numberPool, orgExperts, TASK_MOVE } from './ai-ops.mjs';
 import { nextNumber, patternFrom } from '../orgs/numbering.mjs';
@@ -275,7 +276,10 @@ export function orgOps() {
                  p.status as payout_status, p.amount_kop as payout_kop, p.paid_at as payout_paid_at
           from orders o left join payouts p on p.order_id = o.id
           where o.executor_user_id = any(${ids}::uuid[]) and (o.status = any(${CASES_ACTIVE}::text[])
-            or (o.status = any(${CASES_DONE}::text[]) and o.updated_at > now() - interval '90 days'))
+            or (o.status = any(${CASES_DONE}::text[]) and o.updated_at > now() - interval '90 days')
+            -- 2.446: сдано давно, а эксперта вызывают в суд — дело в списке, пока заседание впереди.
+            or (o.status = any(${CASES_DONE}::text[]) and exists (select 1 from court_calls c where c.order_id = o.id
+                and c.hearing_at >= now() - interval '3 hours')))
           order by (o.status = any(${CASES_ACTIVE}::text[])) desc, o.deadline nulls last, o.updated_at desc
           limit ${CASES_LIMIT}` : [];
         const name = (e) => e?.full_name || 'Без имени';
@@ -357,6 +361,8 @@ export function orgOps() {
         // Замечания к сданному отчёту (2.436): дело снова у эксперта по замечаниям банка или суда (2.431) — когда пришли, срок
         // ответа и сколько пунктов эксперт ещё не отметил (2.432). Текст и файл замечаний руководителю не нужны.
         const remarks = await remarksOrg(sql, rows.filter((o) => o.remarks_at && ['in_work', 'review'].includes(o.status)), today);
+        // Вызов эксперта в суд по сданному делу (2.446): ближайшее заседание — суд, день и время, адрес, ходатайство и пояснения.
+        const court = await hearingsOrg(sql, rows.filter((o) => CASES_DONE.includes(o.status)).map((o) => o.id));
         const ny = newYearAhead(today);
         const cases = rows.map((o) => ({
           ...(waits.get(o.id) ?? { sign_wait: 0, sign_since: null, sign_reminded_at: null, returned_open: false, returned: null }),
@@ -366,6 +372,7 @@ export function orgOps() {
           act: acts.get(o.id) ?? null,
           docs_wait: docs.get(o.id) ?? null,
           remarks: remarks.get(o.id) ?? null,
+          court: court.get(o.id) ?? null,
           idle: !!moves.get(o.id)?.idle,
           idle_long: !!moves.get(o.id)?.idle_long,
           extend: ext.get(o.id) ?? null,
