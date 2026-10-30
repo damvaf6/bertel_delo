@@ -415,3 +415,45 @@ test('2.448: сводка за месяц — вызовы в суд по экс
   expect(hp.problems).toEqual([]);
   await hp.context().close();
 });
+
+test('2.449: заседание эксперта завтра, а он не принимает дела — у руководителя в «Сегодня» и у заседания в «Делах экспертов»', async ({ browser, baseURL }) => {
+  const hp = await phone(browser, baseURL);
+  const ep = await phone(browser, baseURL);
+  const head = await signIn(hp, '+79990004491');
+  const expert = await signIn(ep, '+79990004492');
+  const { orgId, oid } = await db(async (c) => {
+    const { rows: [org] } = await c.query(`insert into organizations (name) values ('ООО «Суд в отпуске ${Date.now() % 100000}»') returning id`);
+    await c.query("update users set full_name = 'Отпускова Анна' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query(`insert into specialists (user_id, org_id, away_from, away_until) values ($1, $2, current_date, $3::date)
+      on conflict (user_id) do update set org_id = excluded.org_id, away_from = excluded.away_from, away_until = excluded.away_until`,
+    [expert.id, org.id, plusDays(6)]);
+    const id = (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, deadline, fields)
+      values ($1, 'Квартира: суд в отпуске', 'expertise', 'realty', 'done', $1, current_date - 5, $2) returning id`,
+    [expert.id, { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, ул. Судебная, д. 49', area: '50' }])).rows[0].id;
+    await c.query(`insert into court_calls (order_id, court, case_no, hearing_at, address, created_by, side)
+      values ($1, 'Тестовый районный суд г. Москвы', '2-4490/2026', ($2::date + time '11:00') at time zone 'Europe/Moscow',
+              'г. Москва, тестовая ул., 9, зал 3', $3, 'customer')`, [id, plusDays(1), expert.id]);
+    return { orgId: org.id, oid: id };
+  });
+  const ref = `№ ${oid.slice(0, 8).toUpperCase()}`;
+  await hp.goto('/kabinet');
+  const g = hp.locator(`[data-today="org-court-away-${orgId}"]`);
+  await expect(g).toHaveText('Заседание в суде, а эксперт не принимает дела · 1');
+  const item = hp.locator(`[data-today-item="org-court-away-${orgId}"]`);
+  await expect(item).toContainText(`Отпускова Анна · ${ref}`);
+  await expect(item).toContainText('11:00 · Тестовый районный суд г. Москвы · г. Москва, тестовая ул., 9, зал 3');
+  await expect(item.locator('[data-role="court-away-what"]')).toContainText('ходатайства «Не смогу прийти» нет — свяжитесь с экспертом');
+  await expect(hp.locator('#today-box')).not.toContainText('2-4490/2026');
+  await g.scrollIntoViewIfNeeded();
+  await shot(hp, 'ct12-2449-sud-v-otpuske-segodnya');
+
+  // Из утренней сводки — к отбору «Вызов в суд»: у заседания пометка.
+  await hp.goto(`/kabinet#org=${orgId}&to=court`);
+  const li = hp.locator(`#org-cases li[data-case="${ref}"]`);
+  await expect(li.locator('[data-role="court-away"]')).toContainText(`в этот день эксперт не принимает дела (до`);
+  await li.scrollIntoViewIfNeeded();
+  await shot(hp, 'ct13-2449-sud-v-otpuske-dela');
+  expect(hp.problems).toEqual([]);
+  for (const p of [hp, ep]) await p.context().close();
+});
