@@ -6,6 +6,7 @@ import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid, signResul
 import { createRegistry } from '../../src/modules/index.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import { hearingAt } from '../../src/ops/court-ops.mjs';
+import { courtMessages, fakeCourtItems } from '../../src/orders/court.mjs';
 import expertise from '../../src/modules/expertise.mjs';
 
 let S, owner, dispatcher, spec, other, admin;
@@ -236,4 +237,118 @@ test('2.443: заседание — в пятницу и понедельник 
   assert.deepEqual(fri.filter((x) => x.id === o.id).map((x) => x.case_no), ['2-1'], 'в пятницу — понедельник; прошедшее утром — нет');
   const mon = await hearingsSoon(S.sql, spec.user.id, '2026-11-09', new Date('2026-11-09T05:00:00Z'));
   assert.deepEqual(mon.filter((x) => x.id === o.id).map((x) => [x.case_no, x.today]), [['2-1', true], ['2-2', false]]);
+});
+
+const SUMMONS = 'ОПРЕДЕЛЕНИЕ\nо вызове эксперта\nСуд определил вызвать эксперта и поставить перед ним вопросы:\n'
+  + '1. Почему в расчёте использованы аналоги из другого района?\n2. На каком основании применена скидка на торг 7%?\n'
+  + '3. Учтено ли состояние отделки квартиры?\nСудья ____ Тестовый';
+
+test('2.444: вопросы суда — подсказка модели и поддельная модель (вписанное экспертом первым, из файла — после «вопросы:»)', () => {
+  const m = courtMessages({ text: '', file: SUMMONS });
+  assert.match(m[0].content, /слово в слово/);
+  assert.match(m[0].content, /Не отвечай/);
+  assert.match(m[1].content, /ФАЙЛ ОПРЕДЕЛЕНИЯ ИЛИ ПОВЕСТКИ:\nОПРЕДЕЛЕНИЕ/);
+  const fromFile = JSON.parse(fakeCourtItems(m[1].content)).items;
+  assert.deepEqual(fromFile.map((q) => q.slice(0, 12)), ['Почему в рас', 'На каком осн', 'Учтено ли со']);
+  const said = JSON.parse(fakeCourtItems(courtMessages({ text: '1. Первый вопрос\n2. Второй вопрос', file: SUMMONS })[1].content)).items;
+  assert.deepEqual(said, ['Первый вопрос', 'Второй вопрос']);
+});
+
+test('2.444: «Пояснения к отчёту для суда» — ИИ делит вопросы из повестки, эксперт пишет пояснения, Word видят стороны дела', async () => {
+  const { extractPages } = await import('../../src/ai/extract.mjs');
+  await spec.req('PATCH', '/api/me', { full_name: 'Пояснов Эксперт' });
+  const o = await doneOrder('Квартира: пояснения для суда');
+  await S.sql`update orders set report_number = 'ОЦ-77/2026' where id = ${o.id}`;
+  const base = `/api/orders/${o.id}/court`;
+  const file = await owner.req('POST', `${base}/file`, Buffer.from(SUMMONS), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Определение.txt') } });
+  assert.equal(file.status, 201);
+  const call = (await owner.req('POST', base, { ...CALL(), document_id: file.body.document.id })).body.id;
+  const noFile = (await owner.req('POST', base, { ...CALL(), date: addDays(todayMsk(), 9) })).body.id;
+  const q = `${base}/${call}/questions`;
+  const word = async (c, id = call) => {
+    const r = await fetch(`${S.base}${base}/${id}/explain`, { headers: { cookie: c.cookie } });
+    if (r.status !== 200) return { status: r.status, body: await r.json() };
+    const buf = Buffer.from(await r.arrayBuffer());
+    return { status: 200, name: decodeURIComponent(r.headers.get('content-disposition').split("''")[1]),
+      text: (await extractPages(buf, 'a.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')).pages.join('\n') };
+  };
+
+  // Ведёт эксперт; заказчик, диспетчер и администратор только смотрят.
+  assert.equal((await spec.req('GET', base)).body.can_answer, true);
+  for (const c of [owner, dispatcher, admin]) {
+    assert.equal((await c.req('GET', base)).body.can_answer, false);
+    const v = (await c.req('GET', q)).body;
+    assert.equal(v.can_write, false);
+    assert.deepEqual(v.items, []);
+    assert.equal((await c.req('POST', `${q}/parse`, {})).status, 403);
+    assert.equal((await c.req('PUT', q, { items: [{ text: 'x' }] })).status, 403);
+  }
+  assert.equal((await other.req('GET', q)).status, 404, 'чужой');
+  assert.equal((await spec.req('GET', `${base}/999999999/questions`)).status, 404, 'нет такого вызова');
+  assert.equal((await spec.req('GET', `${base}/abc/questions`)).status, 404);
+  assert.equal((await word(spec)).body.error, 'no_items');
+
+  // Без файла и текста — разбирать нечего; с текстом — вопросы из текста.
+  assert.equal((await spec.req('POST', `${base}/${noFile}/questions/parse`, {})).body.error, 'nothing_to_parse');
+  const typed = await spec.req('POST', `${base}/${noFile}/questions/parse`, { text: '1. Как определена дата оценки?\n2. Почему не применён затратный подход?' });
+  assert.equal(typed.status, 200, JSON.stringify(typed.body));
+  assert.equal(typed.body.items.length, 2);
+
+  const p = await spec.req('POST', `${q}/parse`, {});
+  assert.equal(p.status, 200, JSON.stringify(p.body));
+  assert.equal(p.body.items.length, 3);
+  assert.ok(p.body.items.every((i) => i.by_ai && !i.answer));
+  assert.equal(p.body.left, 3);
+  assert.equal(p.body.ready, false);
+  assert.match(p.body.items[1].text, /скидка на торг 7%/);
+  assert.equal((await spec.req('POST', `${q}/parse`, {})).body.error, 'items_exist', 'без подтверждения не заменяет');
+  const [use] = await S.sql`select count(*)::int as n from ai_usage where user_id = ${spec.user.id} and purpose = 'court'`;
+  assert.equal(use.n, 2);
+  const counted = (await owner.req('GET', base)).body.calls.find((c) => c.id === call);
+  assert.deepEqual([counted.questions, counted.unanswered], [3, 3]);
+  assert.equal((await word(owner)).body.error, 'items_unanswered', 'без пояснений — Word не собрать');
+
+  // Проверка ввода.
+  assert.equal((await spec.req('PUT', q, { items: [{ text: '' }] })).status, 400);
+  assert.equal((await spec.req('PUT', q, { items: [{ text: 'a', answer: 'x'.repeat(3001) }] })).status, 400);
+  assert.equal((await spec.req('PUT', q, { items: [{ text: 'a', place: 'x'.repeat(201) }] })).status, 400);
+  assert.equal((await spec.req('PUT', q, {})).status, 400);
+
+  const items = p.body.items.map((i) => ({ ...i }));
+  items[0].answer = 'Аналогов в том же районе на дату оценки не было; взяты соседние районы с поправкой';
+  items[0].place = 'раздел 8.2, стр. 31';
+  items[1].answer = 'Скидка — по справочнику Лейфера, 2026, для квартир Москвы';
+  items.push({ text: 'Вопрос представителя ответчика: почему не учтён ремонт подъезда?', answer: 'Состояние подъезда учтено в описании дома' });
+  items.splice(2, 1);
+  const s1 = await spec.req('PUT', q, { items: items.map((i) => ({ ...i, answer: i.answer === '' ? '' : i.answer })) });
+  assert.equal(s1.status, 200, JSON.stringify(s1.body));
+  assert.equal(s1.body.items.length, 3);
+  assert.equal(s1.body.left, 0);
+  assert.equal(s1.body.ready, true);
+  assert.equal(s1.body.items[2].by_ai, false);
+
+  for (const c of [spec, owner, dispatcher, admin]) {
+    const w = await word(c);
+    assert.equal(w.status, 200, JSON.stringify(w.body));
+    assert.equal(w.name, 'Пояснения для суда 2-4411-2026.docx');
+    for (const t of ['Пояснения эксперта к отчёту № ОЦ-77/2026', 'Тестовый районный суд г. Москвы', 'по делу № 2-4411/2026',
+      'Почему в расчёте использованы аналоги', 'взяты соседние районы', 'раздел 8.2, стр. 31', 'ремонт подъезда', 'Пояснов Эксперт']) {
+      assert.ok(w.text.includes(t), `${t}\n${w.text}`);
+    }
+  }
+  assert.equal((await word(other)).status, 404);
+  // Чужой вызов в адресе своего дела — не найдено.
+  const o2 = await doneOrder('Квартира: другой вызов');
+  const call2 = (await owner.req('POST', `/api/orders/${o2.id}/court`, CALL())).body.id;
+  assert.equal((await spec.req('GET', `${base}/${call2}/questions`)).status, 404);
+  assert.equal((await spec.req('PUT', `${base}/${call2}/questions`, { items: [] })).status, 404);
+  assert.equal((await spec.req('GET', `/api/orders/${o2.id}/court/${call2}/questions`)).body.items.length, 0);
+
+  // Закрытое дело — эксперт по-прежнему пишет пояснения.
+  assert.equal((await step(dispatcher, o, 'closed')).status, 200);
+  assert.equal((await spec.req('GET', q)).body.can_write, true);
+  assert.equal((await spec.req('PUT', q, { items: s1.body.items.slice(0, 2) })).status, 200);
+  const [a] = await S.sql`select count(*)::int as n from audit_log where subject_id = ${o.id} and action like 'court.questions%'`;
+  assert.ok(a.n >= 4);
 });

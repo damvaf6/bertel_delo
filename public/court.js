@@ -1,7 +1,9 @@
 // Вызов эксперта в суд (задача 2.441). После «готово» заказчик или диспетчер — «Эксперта вызывают в суд»: суд, номер дела,
 // дата и время заседания, адрес, файл повестки или определения. Дело не переоткрывается; эксперту — уведомление. В деле у
 // всех сторон — блок «Вызов в суд» со списком заседаний (ближайшее — заметно). Текст — через textContent.
+// 2.444: у заседания — «Пояснения к отчёту для суда» (вопросы суда и пояснения эксперта, Word) — `public/courtqa.js`.
 import { api, el, say } from '/common.js';
+import { openCourtQa } from '/courtqa.js';
 
 const $ = (id) => document.getElementById(id);
 const MAX_FILE = 3 * 1024 * 1024;
@@ -26,20 +28,45 @@ function draw(v) {
   $('hearing-lead').textContent = v.calls.length
     ? `Заседаний: ${v.calls.length}`
     : 'Суд вызывает эксперта дать пояснения к отчёту? Укажите заседание — эксперт получит уведомление, дело останется сданным.';
-  $('hearing-list').replaceChildren(...v.calls.map((c) => item(c, c.id === v.next)));
+  $('hearing-list').replaceChildren(...v.calls.map((c) => item(c, c.id === v.next, v.can_answer)));
   $('hearing-open').classList.toggle('hidden', !v.can_add);
   if (!v.can_add) $('hearing-form').classList.add('hidden');
   $('hearing-date').min = todayMsk();
 }
 
-function item(c, next) {
+// Строка пояснений у заседания: эксперту — всегда, остальным — когда эксперт уже начал.
+const qaLabel = (c) => (!c.questions ? 'Пояснения к отчёту для суда'
+  : c.unanswered ? `Пояснения для суда · вопросов ${c.questions}, без пояснения ${c.unanswered}` : `Пояснения для суда · готовы (вопросов ${c.questions})`);
+
+function qa(c, canAnswer) {
+  if (!canAnswer && !c.questions) return [];
+  const box = el('div', { class: 'court-qa hidden', 'data-qa': c.id });
+  const btn = el('button', { type: 'button', class: 'secondary court-qa-open', 'aria-expanded': 'false' }, qaLabel(c));
+  btn.addEventListener('click', () => {
+    const open = box.classList.toggle('hidden') === false;
+    btn.setAttribute('aria-expanded', String(open));
+    if (open) openCourtQa(ctx.orderId, c.id, box, () => refreshLabel(c.id, btn));
+  });
+  return [btn, box];
+}
+
+async function refreshLabel(callId, btn) {
+  try {
+    const v = await api('GET', `/api/orders/${ctx.orderId}/court`);
+    const c = v.calls.find((x) => x.id === callId);
+    if (c) btn.textContent = qaLabel(c);
+  } catch { /* подпись кнопки — не главное */ }
+}
+
+function item(c, next, canAnswer) {
   const past = !next && new Date(c.hearing_at).getTime() < Date.now();
   return el('li', { class: next ? 'hearing-next' : past ? 'muted' : '', 'data-court': c.id },
     el('div', { class: 'title', text: `${whenRu(c.hearing_at)}${next ? ' — ближайшее' : past ? ' — прошло' : ''}` }),
     el('div', { text: `${c.court}, дело № ${c.case_no}` }),
     el('div', { class: 'muted', text: `Адрес: ${c.address}` }),
     ...(c.document ? [el('button', { class: 'link', type: 'button', onclick: () => ctx.download(c.document) }, `Повестка: ${c.document.filename}`)] : []),
-    el('div', { class: 'muted', text: c.side === 'dispatcher' ? 'Сообщил диспетчер' : 'Сообщил заказчик' }));
+    el('div', { class: 'muted', text: c.side === 'dispatcher' ? 'Сообщил диспетчер' : 'Сообщил заказчик' }),
+    ...qa(c, canAnswer));
 }
 
 $('hearing-open').addEventListener('click', () => {

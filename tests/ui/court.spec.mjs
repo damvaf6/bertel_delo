@@ -165,3 +165,58 @@ test('2.443: заседание завтра — в «Сегодня» эксп�
   expect(sp.problems).toEqual([]);
   await sp.context().close();
 });
+
+test('2.444: «Пояснения к отчёту для суда» — ИИ делит вопросы суда, эксперт пишет пояснения, Word; заказчик видит готовое', async ({ browser, baseURL }) => {
+  const sp = await phone(browser, baseURL);
+  const cp = await phone(browser, baseURL);
+  const expert = await signIn(sp, '+79990004425');
+  const customer = await signIn(cp, '+79990004426');
+  const id = await db(async (c) => {
+    await c.query("update users set full_name = 'Пояснова Вера' where id = $1", [expert.id]);
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    const oid = (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, deadline, fields, report_number)
+      values ($1, 'Квартира в Химках для суда', 'expertise', 'realty', 'done', $2, current_date - 5, $3, '21/2026') returning id`,
+    [customer.id, expert.id, { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'Московская обл., г. Химки, ул. Тестовая, 8' }])).rows[0].id;
+    await c.query(`insert into court_calls (order_id, court, case_no, hearing_at, address, created_by, side)
+      values ($1, 'Химкинский городской суд', '2-4425/2026', ($2::date + time '14:00') at time zone 'Europe/Moscow', 'Московская обл., г. Химки, ул. Ленинградская, 13', $3, 'customer')`,
+    [oid, plusDays(8), customer.id]);
+    return oid;
+  });
+
+  await sp.goto(`/kabinet#order=${id}&to=court`);
+  const call = sp.locator('#hearing-list li[data-court]');
+  await call.getByRole('button', { name: 'Пояснения к отчёту для суда' }).click();
+  const qa = call.locator('.court-qa');
+  await expect(qa).toContainText('разделит их на пункты');
+  await qa.getByLabel('Вопросы суда текстом — из определения или повестки').fill(
+    'Вопросы эксперту:\n1. Почему аналоги взяты из соседнего района?\n2. На чём основана скидка на торг 7%?');
+  await qa.getByRole('button', { name: 'Разобрать вопросы суда' }).click();
+  await expect(qa.locator('[role="status"]')).toContainText('Вопросов: 2');
+  await expect(qa.getByLabel('Вопрос 1 (нашёл ИИ — проверьте)')).toHaveValue('Почему аналоги взяты из соседнего района?');
+  await expect(qa).toContainText('без пояснения: 2');
+  await expect(qa.getByRole('button', { name: 'Скачать «Пояснения эксперта» Word' })).toBeHidden();
+  await qa.getByLabel('Пояснение эксперта').nth(0).fill('В районе объекта на дату оценки не было сопоставимых предложений; взяты соседние с поправкой на местоположение.');
+  await qa.getByLabel('Где в отчёте').nth(0).fill('раздел 8.2, стр. 31');
+  await qa.getByLabel('Пояснение эксперта').nth(1).fill('Скидка — по справочнику для квартир Москвы и области, 2026.');
+  await qa.getByRole('button', { name: 'Сохранить' }).click();
+  await expect(qa.locator('[role="status"]')).toHaveText('Сохранено · пояснения ко всем вопросам готовы');
+  await expect(call.locator('.court-qa-open')).toHaveText('Пояснения для суда · готовы (вопросов 2)');
+  const word = qa.getByRole('button', { name: 'Скачать «Пояснения эксперта» Word' });
+  await expect(word).toBeVisible();
+  await qa.scrollIntoViewIfNeeded();
+  await shot(sp, 'ct05-2444-poyasneniya-dlya-suda');
+  const [download] = await Promise.all([sp.waitForEvent('download'), word.click()]);
+  expect(download.suggestedFilename()).toBe('Пояснения для суда 2-4425-2026.docx');
+
+  // Заказчик видит готовые пояснения без правки и может скачать Word.
+  await cp.goto(`/kabinet#order=${id}&to=court`);
+  const ccall = cp.locator('#hearing-list li[data-court]');
+  await ccall.getByRole('button', { name: 'Пояснения для суда · готовы (вопросов 2)' }).click();
+  await expect(ccall.locator('.court-qa')).toContainText('Скидка — по справочнику');
+  await expect(ccall.locator('.court-qa textarea')).toHaveCount(0);
+  await expect(ccall.getByRole('button', { name: 'Скачать «Пояснения эксперта» Word' })).toBeVisible();
+  expect(sp.problems).toEqual([]);
+  expect(cp.problems).toEqual([]);
+  await sp.context().close();
+  await cp.context().close();
+});

@@ -1752,7 +1752,7 @@ test('замечания пунктами (2.432): смотрят стороны
 });
 
 test('вызов эксперта в суд (2.441): смотрят стороны дела, пишут заказчик и диспетчер после сдачи', async () => {
-  for (const id of ['court.calls', 'court.file', 'court.add']) cover(id);
+  for (const id of ['court.calls', 'court.file', 'court.add', 'court.questions', 'court.questions.parse', 'court.questions.save', 'court.explain']) cover(id);
   // Подробно — tests/server/court.test.mjs; здесь — чужие и стороны заявки до сдачи.
   const base = `/api/orders/${ownOrder.id}/court`;
   const call = { court: 'Суд', case_no: '2-1/2026', date: '2099-01-01', time: '10:00', address: 'Москва' };
@@ -1760,10 +1760,16 @@ test('вызов эксперта в суд (2.441): смотрят сторон
     assert.equal((await U[who].req('GET', base)).status, 404, `${who}: смотреть`);
     assert.equal((await U[who].req('POST', base, call)).status, 404, `${who}: записать вызов`);
     assert.equal((await U[who].req('POST', `${base}/file`, {})).status, 404, `${who}: файл повестки`);
+    // Пояснения для суда (2.444): чужим — «не найдено», как и само дело.
+    assert.equal((await U[who].req('GET', `${base}/1/questions`)).status, 404, `${who}: вопросы суда`);
+    assert.equal((await U[who].req('PUT', `${base}/1/questions`, { items: [] })).status, 404, `${who}: сохранить вопросы`);
+    assert.equal((await U[who].req('POST', `${base}/1/questions/parse`, {})).status, 404, `${who}: разобрать вопросы`);
+    assert.equal((await U[who].req('GET', `${base}/1/explain`)).status, 404, `${who}: пояснения Word`);
   }
   for (const who of ['owner', 'dispatcher']) {
     assert.equal((await U[who].req('GET', base)).status, 200, who);
     assert.equal((await U[who].req('POST', base, call)).status, 409, `${who}: отчёт ещё не сдан`);
+    assert.equal((await U[who].req('GET', `${base}/1/questions`)).status, 404, `${who}: вызова нет`);
   }
   assert.equal((await U.admin.req('POST', base, call)).status, 403, 'администратор только смотрит');
 });

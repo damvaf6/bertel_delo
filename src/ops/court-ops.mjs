@@ -1,15 +1,23 @@
 // Вызов эксперта в суд (задача 2.441). После «готово» заказчик или диспетчер пишет, что эксперта вызывают на заседание:
 // суд, номер дела, дата и время, адрес и файл повестки или определения. Дело не переоткрывается (статус прежний), эксперту —
 // уведомление. Вызовов может быть несколько (заседание отложили — новый вызов). Видят все, кто видит дело.
+// 2.444: «Пояснения к отчёту для суда» — у вызова вопросы суда к эксперту: ИИ делит текст определения или повестки на
+// пункты (как замечания, 2.432), эксперт правит вопросы, пишет пояснение и где в отчёте; ответил на все — Word
+// «Пояснения эксперта к отчёту». Пишет только эксперт дела, видят все стороны.
 import { HttpError } from '../http/core.mjs';
 import { orderSides } from '../access/policy.mjs';
+import { askAi, parseJsonAnswer } from '../ai/ai.mjs';
+import { READ_MAX_BYTES, extractPages, readableKind } from '../ai/extract.mjs';
+import { ANSWER_MAX, ITEMS_MAX, ITEM_MAX, PLACE_MAX, SOURCE_MAX, cleanItems, courtMessages, splitRemarks } from '../orders/court.mjs';
+import { courtExplainData, courtExplainDoc } from '../docs/court-explain.mjs';
+import { DOCX_MIME } from '../docs/docx.mjs';
 import { notify } from '../notify/notify.mjs';
 import { todayMsk, addDays } from '../orders/workflow.mjs';
 import { workdaysAfter } from '../orders/holidays.mjs';
 import { hearingsOf } from '../orders/schedule.mjs';
 import { BLOCKING_KINDS, KINDS, loadDossier } from '../dossier/dossier.mjs';
 import { publicDoc, saveDocument } from './core-ops.mjs';
-import { audit, text, uuidFrom } from './util.mjs';
+import { audit, sendFile, text, uuidFrom } from './util.mjs';
 
 // Вызывают после сдачи: дело готово или уже закрыто.
 const AFTER = ['done', 'closed'];
@@ -52,21 +60,95 @@ export function hearingAt(date, time, today = todayMsk()) {
 
 async function calls(sql, order) {
   const rows = await sql`
-    select c.id, c.court, c.case_no, c.hearing_at, c.address, c.side, c.created_at, d.id as doc_id, d.filename
+    select c.id, c.court, c.case_no, c.hearing_at, c.address, c.side, c.created_at, d.id as doc_id, d.filename,
+           (select count(*)::int from court_questions q where q.call_id = c.id) as questions,
+           (select count(*)::int from court_questions q where q.call_id = c.id and q.answer is null) as unanswered
     from court_calls c left join documents d on d.id = c.document_id and d.deleted_at is null
     where c.order_id = ${order.id} order by c.hearing_at, c.id`;
   return rows.map((r) => ({
     id: String(r.id), court: r.court, case_no: r.case_no, hearing_at: r.hearing_at, address: r.address, side: r.side,
     created_at: r.created_at, document: r.doc_id ? { id: r.doc_id, filename: r.filename } : null,
+    questions: r.questions, unanswered: r.unanswered,
   }));
 }
+
+// Пояснения к отчёту для суда (2.444) ведёт эксперт дела, пока дело сдано (готово или закрыто).
+const isExecutor = (actor, order) => order.executor_user_id === actor.id && orderSides(actor, order).includes('executor');
+const canAnswer = (registry, actor, order) => registry.court(order.module) && AFTER.includes(order.status) && isExecutor(actor, order);
 
 async function view(sql, registry, actor, order) {
   if (!registry.court(order.module)) return { available: false };
   const list = await calls(sql, order);
   const now = Date.now();
-  return { available: true, can_add: canCall(registry, actor, order), calls: list,
+  return { available: true, can_add: canCall(registry, actor, order), can_answer: canAnswer(registry, actor, order), calls: list,
            next: list.find((c) => new Date(c.hearing_at).getTime() >= now - 3 * 3600 * 1000)?.id ?? null };
+}
+
+// ——— Пояснения к отчёту для суда (2.444) ———
+// Вызов этого дела по номеру из адреса; чужой или несуществующий — «не найдено».
+async function callOf(sql, registry, order, raw) {
+  if (!registry.court(order.module)) throw new HttpError(409, 'not_supported', 'Вызов в суд — только для экспертизы');
+  const id = /^\d{1,15}$/.test(String(raw ?? '')) ? String(raw) : null;
+  const c = id ? await sql.one`select * from court_calls where id = ${id} and order_id = ${order.id}` : null;
+  if (!c) throw new HttpError(404, 'not_found', 'Вызов в суд не найден в этом деле');
+  return c;
+}
+
+async function questions(sql, call) {
+  const rows = await sql`select id, body, answer, place, by_ai from court_questions where call_id = ${call.id} order by pos, id`;
+  return rows.map((r) => ({ id: String(r.id), text: r.body, answer: r.answer ?? '', place: r.place ?? '', by_ai: r.by_ai }));
+}
+
+async function questionsView(sql, registry, actor, order, call) {
+  const list = await questions(sql, call);
+  const left = list.filter((q) => !q.answer).length;
+  return { call_id: String(call.id), can_write: canAnswer(registry, actor, order), has_file: !!call.document_id,
+           items: list, left, ready: list.length > 0 && !left };
+}
+
+function answerable(registry, actor, order) {
+  if (!isExecutor(actor, order)) throw new HttpError(403, 'forbidden', 'Пояснения для суда пишет эксперт дела');
+  if (!AFTER.includes(order.status)) throw new HttpError(409, 'status_changed', 'Пояснения для суда — после того, как отчёт сдан');
+}
+
+// Текст для разбора: что вписал эксперт и прочитанный файл повестки или определения.
+async function courtSource(sql, storage, call, said) {
+  let file = '';
+  let unread = false;
+  if (call.document_id) {
+    const d = await sql.one`select * from documents where id = ${call.document_id} and deleted_at is null`;
+    if (d) {
+      const buf = readableKind(d.filename, d.mime) && d.size_bytes <= READ_MAX_BYTES ? await storage.get(d.storage_key) : null;
+      const got = buf ? await extractPages(buf, d.filename, d.mime) : null;
+      if (got) file = got.pages.join('\n\n').slice(0, SOURCE_MAX);
+      else unread = true;
+    }
+  }
+  return { text: said, file, unread };
+}
+
+async function replaceQuestions(tx, actor, call, list, byAi) {
+  await tx`delete from court_questions where call_id = ${call.id}`;
+  for (const [pos, q] of list.entries()) {
+    await tx`insert into court_questions (call_id, pos, body, answer, place, by_ai, updated_by)
+             values (${call.id}, ${pos}, ${q.text}, ${q.answer || null}, ${q.place || null}, ${q.by_ai ?? byAi}, ${actor.id})`;
+  }
+}
+
+// Вопросы из запроса эксперта: текст обязателен, пояснение и место в отчёте — по желанию (без пояснения — Word не собрать).
+function questionsFrom(body) {
+  const raw = body?.items;
+  if (!Array.isArray(raw)) throw new HttpError(400, 'bad_input', 'Нужен список вопросов');
+  if (raw.length > ITEMS_MAX) throw new HttpError(400, 'bad_input', `Вопросов — не больше ${ITEMS_MAX}`);
+  return raw.map((q, i) => {
+    const t = String(q?.text ?? '').trim();
+    if (!t || t.length > ITEM_MAX) throw new HttpError(400, 'bad_input', `Вопрос ${i + 1}: текст от 1 до ${ITEM_MAX} символов`);
+    const answer = String(q?.answer ?? '').trim();
+    if (answer.length > ANSWER_MAX) throw new HttpError(400, 'bad_input', `Вопрос ${i + 1}: пояснение — не больше ${ANSWER_MAX} символов`);
+    const place = String(q?.place ?? '').trim();
+    if (place.length > PLACE_MAX) throw new HttpError(400, 'bad_input', `Вопрос ${i + 1}: место в отчёте — не больше ${PLACE_MAX} символов`);
+    return { text: t, answer, place, by_ai: q?.by_ai === true };
+  });
 }
 
 // Заседание сегодня или завтра (2.443) — в «Сегодня» эксперта: что взять с собой. В пятницу «завтра» — и понедельник
@@ -152,6 +234,70 @@ export function courtOps() {
         });
         res.status(201);
         return { id: String(row.id), ...(await view(sql, registry, actor, order)) };
+      },
+    },
+    {
+      id: 'court.questions', method: 'GET', path: '/api/orders/:id/court/:call/questions', auth: 'user', access,
+      async handler({ sql, registry, actor, order, params }) {
+        return questionsView(sql, registry, actor, order, await callOf(sql, registry, order, params.call));
+      },
+    },
+    {
+      // ИИ делит вопросы суда на пункты: из вписанного экспертом текста и файла повестки. Вопросы уже есть — только с
+      // replace: true (эксперт подтвердил «Заменить»).
+      id: 'court.questions.parse', method: 'POST', path: '/api/orders/:id/court/:call/questions/parse', auth: 'user', access,
+      async handler(ctx) {
+        const { sql, registry, actor, order, body, params, providers } = ctx;
+        const call = await callOf(sql, registry, order, params.call);
+        answerable(registry, actor, order);
+        if (body?.replace !== true && (await questions(sql, call)).length) {
+          throw new HttpError(409, 'items_exist', 'Вопросы уже есть — заменить их новым разбором?');
+        }
+        const said = String(body?.text ?? '').trim().slice(0, SOURCE_MAX);
+        const src = await courtSource(sql, providers.storage, call, said);
+        if (!src.text && !src.file) {
+          throw new HttpError(409, 'nothing_to_parse', src.unread
+            ? 'Файл повестки прочитать не удалось — впишите вопросы суда текстом или добавьте их сами'
+            : 'Впишите вопросы суда текстом или добавьте их сами — файла повестки с вопросами нет');
+        }
+        const out = await askAi(ctx, actor, 'court', courtMessages(src));
+        let list = cleanItems(parseJsonAnswer(out.text)?.items);
+        if (!list.length) list = splitRemarks([src.text, src.file].filter(Boolean).join('\n\n'));
+        if (!list.length) throw new HttpError(409, 'nothing_to_parse', 'Вопросов в тексте не нашлось — добавьте их сами');
+        await sql.tx(async (tx) => {
+          await replaceQuestions(tx, actor, call, list.map((t) => ({ text: t })), true);
+          await audit(tx, actor, 'court.questions.parse', 'order', order.id, { call: String(call.id), items: list.length, model: out.model });
+        });
+        return { ...(await questionsView(sql, registry, actor, order, call)), file_unread: src.unread };
+      },
+    },
+    {
+      id: 'court.questions.save', method: 'PUT', path: '/api/orders/:id/court/:call/questions', auth: 'user', access,
+      async handler({ sql, registry, actor, order, body, params }) {
+        const call = await callOf(sql, registry, order, params.call);
+        answerable(registry, actor, order);
+        const list = questionsFrom(body);
+        await sql.tx(async (tx) => {
+          await replaceQuestions(tx, actor, call, list, false);
+          await audit(tx, actor, 'court.questions.save', 'order', order.id, { call: String(call.id), items: list.length });
+        });
+        return questionsView(sql, registry, actor, order, call);
+      },
+    },
+    {
+      // Word «Пояснения эксперта к отчёту» — видят все стороны дела, когда у каждого вопроса есть пояснение.
+      id: 'court.explain', method: 'GET', path: '/api/orders/:id/court/:call/explain', auth: 'user', access,
+      async handler({ sql, registry, actor, order, params, providers, res }) {
+        const call = await callOf(sql, registry, order, params.call);
+        const list = await questions(sql, call);
+        if (!list.length) throw new HttpError(409, 'no_items', 'Вопросов суда ещё нет — сначала разберите их');
+        const left = list.findIndex((q) => !q.answer);
+        if (left >= 0) throw new HttpError(409, 'items_unanswered', `Вопрос ${left + 1}: напишите пояснение и сохраните`);
+        const [ex] = order.executor_user_id ? await sql`select full_name from users where id = ${order.executor_user_id}` : [];
+        const def = registry.service(order.module, order.service);
+        const data = courtExplainData({ order, call, service: def?.service.name ?? order.title, executor: ex?.full_name, items: list });
+        await audit(sql, actor, 'court.explain', 'order', order.id, { call: String(call.id), items: list.length });
+        return sendFile(res, providers, { ...courtExplainDoc(data), mime: DOCX_MIME });
       },
     },
   ];

@@ -300,6 +300,9 @@ ol.remark-items .choice { display: flex; flex-wrap: wrap; gap: 4px 14px; margin:
 ol.remark-items .choice label { display: flex; gap: 6px; align-items: center; font-weight: normal; }
 #hearing-list li { overflow-wrap: anywhere; }
 #hearing-list li.hearing-next { border-left: 3px solid var(--accent); padding-left: 10px; background: var(--accent-soft); }
+#hearing-list .court-qa { margin-top: 10px; color: var(--text); }
+#hearing-list .court-qa-open { margin-top: 8px; }
+#hearing-list .cq-list > li { border-left: 2px solid var(--line); padding-left: 8px; }
 ol.remark-items .mark { font-weight: 600; }
 .ready-mark { flex: 0 0 22px; height: 22px; border-radius: 50%; text-align: center; line-height: 22px; font-weight: 700; color: var(--accent-text); }
 li.ready.ok .ready-mark { background: var(--ok); }
