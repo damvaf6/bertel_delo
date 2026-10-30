@@ -3989,7 +3989,8 @@ test('сводка за месяц (2.78): руководитель видит �
   const orgId = await db(async (c) => {
     const { rows: [org] } = await c.query(`insert into organizations (name, created_at) values ('ООО «Бюро сводки ${Date.now()}»', now() - interval '13 months') returning id`);
     await c.query("update users set full_name = 'Эксперт Сводкин' where id = $1", [expert.id]);
-    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now()), ($1, $3, 'member', now() - interval '40 days')", [org.id, head.id, expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now()), ($1, $3, 'member', least(now() - interval '40 days', date_trunc('month', now()) - interval '45 days'))", [org.id, head.id, expert.id]);
+    // Эксперт в организации раньше дела прошлого месяца — и в последние дни месяца (CI запроса №616, 31.10).
     await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [expert.id, org.id]);
     // Дело принято и сдано позже срока; диспетчер раз возвращал на доработку; выплата прошла.
     await c.query("update orders set price_kop = 1500000, paid_at = now(), status = 'in_work', executor_user_id = $2, deadline = current_date - 3 where id = $1", [id, expert.id]);
