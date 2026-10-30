@@ -201,6 +201,8 @@ export async function hearingsSoon(sql, userId, today = todayMsk(), now = new Da
     out.push({
       id: h.order_id, title: h.title, call_id: String(h.id), court: h.court, case_no: h.case_no, address: h.address,
       hearing_at: h.hearing_at, day, today: day === today,
+      // Прогон 2.450: подано «Не смогу прийти» — вместо «что взять с собой» узнать, удовлетворено ли ходатайство.
+      absence: h.absence_kind ? ABSENCE[h.absence_kind].name : null,
       time: new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit' }).format(new Date(h.hearing_at)),
       report: report ? { id: report.id, filename: report.filename, number: o.report_number ?? null,
         edition: !!o.remarks_at && new Date(report.created_at) >= new Date(o.remarks_at) } : null,

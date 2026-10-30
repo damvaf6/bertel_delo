@@ -126,6 +126,11 @@ function courtWhen(x) {
   return `${x.today ? 'Сегодня' : `${WD[new Date(`${x.day}T00:00:00Z`).getUTCDay()]}, ${dayRu(x.day)}`} в ${x.time} · ${x.court}, дело № ${x.case_no}`;
 }
 function courtTake(x) {
+  // Прогон 2.450: эксперт подал «Не смогу прийти» — не «взять с собой», а узнать, удовлетворил ли суд ходатайство.
+  if (x.absence) {
+    return [{ class: 'muted', role: 'court-where', text: x.address },
+      { class: 'muted', role: 'court-absence', text: `Вы подали ходатайство «${x.absence}» — узнайте в суде, удовлетворено ли оно; если нет — нужно прийти` }];
+  }
   const take = [x.report ? `отчёт${x.report.number ? ` № ${x.report.number}` : ''}${x.report.edition ? ' (новая редакция)' : ''} — ${x.report.filename}` : 'отчёт по делу',
     ...(x.answer ? ['«Ответ на замечания»'] : []), ...(x.summons ? [`повестку — ${x.summons.filename}`] : []),
     ...x.dossier.filter((d) => !d.expired).map((d) => `${d.kind_name.toLowerCase()}${d.number ? ` № ${d.number}` : ''}`), 'паспорт'];
@@ -418,7 +423,7 @@ export async function loadToday() {
       (x) => { location.hash = `order=${x.id}&to=remarks`; }),
       // Заседание в суде сегодня или завтра (2.443) — что взять с собой; к вызову в деле.
       ...group('court', 'Заседание в суде', e.court ?? [], (x) => [x.title,
-        { class: x.today ? 'overdue' : 'warn-line', role: 'court-when', text: courtWhen(x) }, ...courtTake(x)],
+        { class: x.today && !x.absence ? 'overdue' : 'warn-line', role: 'court-when', text: courtWhen(x) }, ...courtTake(x)],
       (x) => { location.hash = `order=${x.id}&to=court`; }),
       // Заседание прошло, а итог не отмечен (2.447) — «Как прошло»: пояснения даны, отложено, назначена повторная экспертиза.
       ...group('court-outcome', 'Как прошло заседание', e.court_outcome ?? [], (x) => [x.title,

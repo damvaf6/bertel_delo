@@ -457,3 +457,50 @@ test('2.449: заседание эксперта завтра, а он не пр
   expect(hp.problems).toEqual([]);
   for (const p of [hp, ep]) await p.context().close();
 });
+
+test('прогон 2.450: подано «Не смогу прийти» — в «Сегодня» не «взять с собой», в «Моих сроках» день не перегружен судом', async ({ browser, baseURL }) => {
+  const sp = await phone(browser, baseURL);
+  const cp = await phone(browser, baseURL);
+  const expert = await signIn(sp, '+79990004501');
+  const customer = await signIn(cp, '+79990004502');
+  await cp.context().close();
+  const tomorrow = plusDays(1);
+  const id = await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    const oid = (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, deadline, fields, report_number)
+      values ($1, 'Гараж в Мытищах для суда', 'expertise', 'realty', 'done', $2, current_date - 5, $3, '45/2026') returning id`,
+    [customer.id, expert.id, { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'Московская обл., г. Мытищи, ул. Тестовая, 5' }])).rows[0].id;
+    await c.query(`insert into court_calls (order_id, court, case_no, hearing_at, address, created_by, side, absence_kind, absence_reason, absence_at)
+      values ($1, 'Мытищинский городской суд', '2-4501/2026', ($2::date + time '23:30') at time zone 'Europe/Moscow', 'Московская обл., г. Мытищи, ул. Колпакова, 1, зал 2', $3, 'customer',
+              'postpone', 'Нахожусь в командировке', now())`, [oid, tomorrow, customer.id]);
+    for (const t of ['Дом в Химках', 'Склад в Подольске']) {
+      await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, price_kop, paid_at, deadline)
+        values ($1, $2, 'expertise', 'realty', 'in_work', $1, 1500000, now(), $3::date)`, [expert.id, t, tomorrow]);
+    }
+    return oid;
+  });
+
+  await sp.goto('/kabinet');
+  const row = sp.locator(`li[data-today-item="court"]`);
+  await expect(row).toHaveCount(1);
+  await expect(row.locator('[data-role="court-absence"]')).toHaveText('Вы подали ходатайство «отложить заседание» — узнайте в суде, удовлетворено ли оно; если нет — нужно прийти');
+  await expect(row.locator('[data-role="court-take"]')).toHaveCount(0);
+  await expect(row.locator('[data-role="court-missing"]')).toHaveCount(0);
+  await row.scrollIntoViewIfNeeded();
+  await shot(sp, 'ct14-2450-hodataystvo-segodnya');
+
+  await sp.goto('/kabinet#specialist');
+  const sday = sp.locator(`#schedule-days > li[data-day="${tomorrow}"]`);
+  await expect(sday).toBeVisible();
+  const hearing = sday.locator('li[data-schedule-item="court"]');
+  await expect(hearing).toContainText('Вы подали ходатайство: отложить заседание');
+  await expect(hearing).toHaveAttribute('data-court-absence', '1');
+  await expect(sday.locator('[data-role="busy-court"]')).toHaveCount(0);
+  await expect(sday).not.toContainText('+ суд');
+  await sday.scrollIntoViewIfNeeded();
+  await shot(sp, 'ct15-2450-hodataystvo-v-srokah');
+  await hearing.locator('a').click();
+  await expect(sp).toHaveURL(new RegExp(`#order=${id}&to=court$`));
+  expect(sp.problems).toEqual([]);
+  await sp.context().close();
+});

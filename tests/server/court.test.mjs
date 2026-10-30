@@ -487,3 +487,30 @@ test('2.447: «Как прошло» — после заседания эксп�
   const [a] = await S.sql`select count(*)::int as n from audit_log where subject_id = ${o.id} and action = 'court.outcome'`;
   assert.equal(a.n, 4);
 });
+
+test('прогон 2.450: подано «Не смогу прийти» — в «Сегодня» не «взять с собой», в сроках день не загружен, в календаре без напоминаний', async () => {
+  const o = await doneOrder('Квартира: ходатайство подано');
+  const tomorrow = addDays(todayMsk(), 1);
+  const add = await owner.req('POST', `/api/orders/${o.id}/court`, { ...CALL(), date: tomorrow, time: '23:40' });
+  assert.equal(add.status, 201);
+  const call = add.body.calls.find((c) => c.hearing_at && todayMsk(new Date(c.hearing_at)) === tomorrow).id;
+  const today = async () => (await spec.req('GET', '/api/today')).body.expert.court.find((x) => x.id === o.id);
+  const sched = async () => (await spec.req('GET', '/api/specialist/me/schedule')).body.schedule.days
+    .flatMap((d) => d.items.map((i) => ({ ...i, day: d })) ).find((i) => i.kind === 'court' && i.call_id === call);
+  assert.equal((await today()).absence, null);
+  assert.equal((await sched()).absence, null);
+  const before = (await sched()).day.court;
+
+  assert.equal((await spec.req('PUT', `/api/orders/${o.id}/court/${call}/absence`, { kind: 'without', reason: 'В командировке' })).status, 200);
+  assert.equal((await today()).absence, 'рассмотреть без участия эксперта');
+  const it = await sched();
+  assert.equal(it.absence, 'рассмотреть без участия эксперта');
+  assert.equal(it.day.court, before - 1, 'заседание с ходатайством не загружает день');
+
+  const cal = String((await spec.req('GET', '/api/specialist/me/schedule?format=ics', undefined, { binary: true })).body).replace(/\r\n /g, '');
+  const ev = cal.split('BEGIN:VEVENT').find((e) => e.includes(`UID:court-${call}@`)).split('END:VEVENT')[0];
+  assert.match(ev, /SUMMARY:Заседание в суде \(подано ходатайство\): /);
+  assert.match(ev, /рассмотреть без участия эксперта/);
+  assert.match(ev, /TRANSP:TRANSPARENT/);
+  assert.ok(!ev.includes('TRIGGER'), 'без напоминаний');
+});
