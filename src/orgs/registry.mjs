@@ -198,7 +198,7 @@ export async function expertRegistry(sql, storage, registry, userId, period) {
       and h.at < (${period.to}::date)::timestamp at time zone 'Europe/Moscow'
     order by o.id, h.at desc`;
   const r = await registryRows(sql, storage, registry, done, period);
-  r.holes = period.quarter ? null : await expertHoles(sql, userId, period, r.rows);
+  r.holes = period.quarter || period.months ? null : await expertHoles(sql, userId, period, r.rows);
   return r;
 }
 

@@ -2,6 +2,7 @@
 // вносит руководитель, видят сотрудники. В черновик, копии к делу и сверку отчёта аккредитация не идёт.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import zlib from 'node:zlib';
 import { startApp, login, setPlatformRole, makeSpecialist, makeOrg, addMember } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import { loadDossier, remindDossier } from '../../src/dossier/dossier.mjs';
@@ -154,4 +155,53 @@ test('2.455: руководителю — организация и экспер
   await exp.req('POST', D, { kind: 'bank', bank: 'other', title: 'Тестовый банк «Север»' });
   assert.equal((await h.req('GET', A)).body.table.experts, 2);
   assert.ok(!(await h.req('GET', A)).body.table.banks.flatMap((b) => b.experts).some((x) => x.expert !== 'Тестова Анна' && x.expert !== 'Тестов Борис'));
+});
+
+// Распаковка ZIP — для проверки архива продления.
+function unzipStore(buf) {
+  const out = new Map();
+  let p = 0;
+  while (buf.readUInt32LE(p) === 0x04034b50) {
+    const csize = buf.readUInt32LE(p + 18);
+    const nlen = buf.readUInt16LE(p + 26);
+    const xlen = buf.readUInt16LE(p + 28);
+    const body = buf.subarray(p + 30 + nlen + xlen, p + 30 + nlen + xlen + csize);
+    out.set(buf.subarray(p + 30, p + 30 + nlen).toString('utf8'), buf.readUInt16LE(p + 8) === 8 ? zlib.inflateRawSync(body) : Buffer.from(body));
+    p += 30 + nlen + xlen + csize;
+  }
+  return out;
+}
+
+test('2.456: документы для продления аккредитации — досье с копиями, отметки «срок истёк» и «копии нет», перечень за 12 месяцев', async () => {
+  const D = '/api/specialist/me/dossier';
+  const e = await login(S, '+79990004561');
+  await makeSpecialist(S.sql, e.user.id);
+  const add = async (b) => { const r = await e.req('POST', D, b); assert.equal(r.status, 201, JSON.stringify(r.body)); return r.body.id; };
+  const cert = await add({ kind: 'certificate', title: 'Оценка недвижимости', number: '031234-1', issued_on: addDays(todayMsk(), -1200), valid_until: addDays(todayMsk(), -3) });
+  const sro = await add({ kind: 'sro', title: 'Тестовая СРО оценщиков', number: '4321' });
+  await add({ kind: 'policy', title: 'Тестовое страхование', number: 'П-1', valid_until: addDays(todayMsk(), 100), amount_rub: 300000 });
+  const bank = await add({ kind: 'bank', bank: 'sber', number: 'А-99', issued_on: addDays(todayMsk(), -340), valid_until: addDays(todayMsk(), 20) });
+  await add({ kind: 'bank', bank: 'other', title: 'Тестовый банк «Другой»' });
+  for (const id of [cert, sro, bank]) assert.equal((await upload(e, `${D}/${id}/file`)).status, 200);
+  const r = await e.req('GET', `${D}/${bank}/renewal`, undefined, { binary: true });
+  assert.equal(r.status, 200);
+  assert.equal(r.headers.get('content-type'), 'application/zip');
+  assert.match(decodeURIComponent(r.headers.get('content-disposition')), /Продление аккредитации · Сбербанк\.zip/);
+  const files = unzipStore(r.body);
+  const names = [...files.keys()];
+  assert.deepEqual(names.filter((n) => n.startsWith('Копии документов/')).sort(), [
+    'Копии документов/01 Квалификационный аттестат.pdf', 'Копии документов/02 Членство в СРО.pdf', 'Копии документов/03 Решение банка Сбербанк.pdf']);
+  assert.ok(files.get('Копии документов/02 Членство в СРО.pdf').equals(PDF));
+  assert.ok(!names.some((n) => n.includes('Другой')), 'другая аккредитация — не в архиве');
+  const csv = files.get('Перечень отчётов за 12 месяцев.csv').toString('utf8');
+  assert.match(csv, /Период: 12 месяцев: с \d\d\.\d\d\.\d{4} по \d\d\.\d\d\.\d{4}/);
+  assert.ok(!csv.includes('Заказчик'), 'без заказчиков');
+  const doc = names.find((n) => n.endsWith('.docx'));
+  assert.equal(doc, 'Продление аккредитации · Сбербанк.docx');
+  const text = unzipStore(files.get(doc)).get('word/document.xml').toString('utf8').replace(/<[^>]+>/g, ' ');
+  for (const s of ['решение № А-99', 'Квалификационный аттестат', '031234-1', 'срок истёк', 'Тестовая СРО оценщиков', 'в реестре 4321',
+    'Полис страхования оценщика', 'копии в досье нет', 'Копии не загружены: Полис страхования оценщика', 'сданных отчётов об оценке', 'сумма 300 000 руб.']) {
+    assert.ok(text.includes(s), s);
+  }
+  assert.equal((await S.sql`select count(*)::int as n from audit_log where action = 'dossier.renewal' and subject_id = ${e.user.id}`)[0].n, 1);
 });

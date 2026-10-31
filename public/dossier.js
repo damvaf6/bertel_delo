@@ -55,7 +55,12 @@ function render(data) {
         el('label', { class: 'btn secondary', for: fileId, text: i.file ? 'Заменить копию' : 'Загрузить копию' }), input,
         ...(i.file ? [el('button', { type: 'button', class: 'secondary', onclick: () => download(i) }, 'Скачать')] : []),
         el('button', { type: 'button', class: 'secondary', 'data-action': 'dossier-edit', onclick: () => edit(i) }, 'Изменить'),
-        el('button', { type: 'button', class: 'danger', onclick: () => remove(i) }, 'Убрать')));
+        el('button', { type: 'button', class: 'danger', onclick: () => remove(i) }, 'Убрать')),
+      // Продление аккредитации (2.456): документы досье и перечень отчётов за 12 месяцев одним архивом.
+      ...(i.kind === 'bank' ? [el('div', { class: 'row' },
+        el('button', { type: 'button', class: 'secondary', 'data-action': 'dossier-renewal',
+          onclick: () => location.assign(`/api/specialist/me/dossier/${encodeURIComponent(i.id)}/renewal`) }, 'Документы для продления')),
+      el('div', { class: 'muted', text: 'Одним архивом: диплом, аттестат, СРО, полисы с копиями и перечень отчётов за 12 месяцев.' })] : []));
   }));
 }
 
