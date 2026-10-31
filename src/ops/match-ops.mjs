@@ -14,7 +14,7 @@ import { orderRef } from '../notify/registry.mjs';
 import { audit, sendFile, text, uuidFrom } from './util.mjs';
 import { buildExpertArchive } from './case-ops.mjs';
 import { notify, orgHeads } from '../notify/notify.mjs';
-import { BLOCKING_KINDS, dossierAlerts, loadDossier, needsValidDossier } from '../dossier/dossier.mjs';
+import { BLOCKING_KINDS, OTHER_BANK, bankList, dossierAlerts, loadDossier, needsValidDossier } from '../dossier/dossier.mjs';
 import { expertMonthReport, orgReturnsYear, reportPeriod } from '../orgs/report.mjs';
 import { expertRegistry, registryCsv, registryPeriod } from '../orgs/registry.mjs';
 import { expertSchedule, taskDues } from '../orders/schedule.mjs';
@@ -142,14 +142,50 @@ export async function candidatesFor(sql, order, registry) {
   const work = await workStats(sql, rows.map((r) => r.user_id));
   const expired = new Map();
   for (const r of rows) expired.set(r.user_id, dossierAlerts(await loadDossier(sql, r.user_id)).filter((a) => a.state === 'expired'));
+  const bank = orderBank(order, registry);
+  const accr = bank ? await bankAccreditations(sql, bank.id, rows.map((r) => r.user_id), today) : new Map();
   return rows
     .filter((r) => !blocking || !expired.get(r.user_id).some((a) => BLOCKING_KINDS.includes(a.kind)))
     .map((r) => ({
       user_id: r.user_id, full_name: r.full_name,
       score: scoreSpecialist(r, { open: r.open, offers: r.offers, accepted: r.accepted, ...work.get(r.user_id) }, order, daysLeft),
       dossier_expired: expired.get(r.user_id).map((a) => a.kind_name),
+      ...(bank ? { bank: accr.get(r.user_id) ?? null } : {}),
     }))
-    .sort((a, b) => b.score.total - a.score.total || a.full_name.localeCompare(b.full_name));
+    // Заявка для банка (2.452): аккредитованные в нём — первыми, дальше по оценке.
+    .sort((a, b) => (bank ? !!b.bank - !!a.bank : 0) || b.score.total - a.score.total || a.full_name.localeCompare(b.full_name));
+}
+
+// Банк заявки (2.452): поле bank из списка; «Другой банк» без названия — не узнать, в каком искать аккредитацию.
+export function orderBank(order, registry) {
+  const id = order.fields?.bank;
+  if (!id || id === OTHER_BANK.id) return null;
+  const b = bankList(registry).find((x) => x.id === id);
+  return b ? { id: b.id, name: b.name } : null;
+}
+
+// Действующие аккредитации в банке (2.452): своя — из досье, через организацию — у той, от которой эксперт работает и где
+// состоит. Своя важнее; срок не указан — считается действующей.
+async function bankAccreditations(sql, bankId, userIds, today) {
+  const out = new Map();
+  if (!userIds.length) return out;
+  const own = await sql`
+    select user_id, to_char(max(valid_until), 'YYYY-MM-DD') as until, bool_or(valid_until is null) as open from dossier_items
+    where kind = 'bank' and bank = ${bankId} and deleted_at is null and user_id = any(${userIds}::uuid[])
+      and (valid_until is null or valid_until >= ${today})
+    group by user_id`;
+  for (const r of own) out.set(r.user_id, { via: 'self', valid_until: r.open ? null : r.until });
+  const viaOrg = await sql`
+    select s.user_id, o.id as org_id, o.name, to_char(max(a.valid_until), 'YYYY-MM-DD') as until, bool_or(a.valid_until is null) as open
+    from specialists s join org_members m on m.org_id = s.org_id and m.user_id = s.user_id join organizations o on o.id = s.org_id
+    join org_accreditations a on a.org_id = s.org_id and a.bank = ${bankId} and a.deleted_at is null
+         and (a.valid_until is null or a.valid_until >= ${today})
+    where s.user_id = any(${userIds}::uuid[])
+    group by s.user_id, o.id, o.name`;
+  for (const r of viaOrg) {
+    if (!out.has(r.user_id)) out.set(r.user_id, { via: 'org', org_name: r.name, valid_until: r.open ? null : r.until });
+  }
+  return out;
 }
 
 // Организации, где есть эксперты, которым можно отдать дело (2.17): эксперт выбрал организацию в профиле специалиста,
@@ -164,12 +200,13 @@ export async function orgCandidatesFor(sql, order, registry) {
   const byOrg = new Map();
   for (const r of rows) {
     const c = cands.find((x) => x.user_id === r.user_id);
-    const g = byOrg.get(r.org_id) ?? { org_id: r.org_id, name: r.name, experts: 0, best: 0 };
+    const g = byOrg.get(r.org_id) ?? { org_id: r.org_id, name: r.name, experts: 0, best: 0, ...(c.bank !== undefined ? { bank_experts: 0 } : {}) };
     g.experts += 1;
     g.best = Math.max(g.best, c.score.total);
+    if (c.bank) g.bank_experts += 1; // аккредитован сам или через эту организацию (2.452)
     byOrg.set(r.org_id, g);
   }
-  return [...byOrg.values()].sort((a, b) => b.best - a.best || a.name.localeCompare(b.name));
+  return [...byOrg.values()].sort((a, b) => (b.bank_experts > 0) - (a.bank_experts > 0) || b.best - a.best || a.name.localeCompare(b.name));
 }
 
 // Эксперты организации, которых её руководитель может назначить на дело (2.17), — из общего подбора по этой заявке.
@@ -597,10 +634,14 @@ export function matchOps() {
       async handler({ sql, actor, order, registry }) {
         requireDispatcher(actor, order);
         if (!['matching', 'awaiting_executor'].includes(order.status)) throw new HttpError(409, 'bad_transition', 'Подбор идёт только для заявок в подборе');
+        const candidates = await candidatesFor(sql, order, registry);
+        const bank = orderBank(order, registry);
         return {
-          candidates: await candidatesFor(sql, order, registry), current_executor_id: order.executor_user_id,
+          candidates, current_executor_id: order.executor_user_id,
           // Организации с подходящими экспертами (2.17): дело можно предложить организации — эксперта назначит руководитель.
           orgs: await orgCandidatesFor(sql, order, registry), current_org_id: order.offer_org_id,
+          // Заявка для банка (2.452): есть ли среди подходящих аккредитованные в нём; нет — предупреждение диспетчеру.
+          bank: bank ? { ...bank, accredited: candidates.filter((c) => c.bank).length } : null,
         };
       },
     },

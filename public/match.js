@@ -36,7 +36,14 @@ export async function loadMatch(current, reopen) {
   $('match-current').textContent = current.offer_org && !current.executor ? `Сейчас дело у организации ${quoted(current.offer_org.name)}: её руководитель назначает эксперта. Можно передать другому.`
     : current.executor ? `Сейчас предложено: ${current.executor.name || 'специалист без имени'}. Можно передать другому, пока он не ответил.`
     : order.paid ? 'Заявка оплачена — дело можно предложить специалисту.' : 'Дело можно предложить после оплаты заказчиком: назначьте цену и дождитесь оплаты.';
-  const { candidates, current_executor_id: cur, orgs, current_org_id: curOrg } = await api('GET', `/api/orders/${order.id}/candidates`);
+  const { candidates, current_executor_id: cur, orgs, current_org_id: curOrg, bank } = await api('GET', `/api/orders/${order.id}/candidates`);
+  // Заявка для банка (2.452): аккредитованные в нём — первыми; никого — предупреждение.
+  const bankBox = $('match-bank');
+  bankBox.classList.toggle('hidden', !bank);
+  bankBox.classList.toggle('overdue', !!bank && !bank.accredited);
+  if (bank) bankBox.textContent = bank.accredited
+    ? `Отчёт для банка ${quoted(bank.name)}: первыми — аккредитованные в нём (сами или через организацию).`
+    : `Отчёт для банка ${quoted(bank.name)}: никто из подходящих не аккредитован в нём — ни сам, ни через организацию. Банк может не принять отчёт: уточните у заказчика или у эксперта перед тем, как предложить дело.`;
   // Организации с экспертами, у которых есть допуск (2.17): эксперта назначит руководитель.
   $('org-candidates-empty').classList.toggle('hidden', orgs.length > 0);
   $('org-candidates').replaceChildren(...orgs.map((g) => el('li', { 'data-org': g.org_id },
@@ -44,6 +51,7 @@ export async function loadMatch(current, reopen) {
       el('span', { class: 'title', text: g.name }),
       el('span', { class: 'score', text: `до ${g.best} из 100` })),
     el('div', { class: 'muted', text: `Экспертов с допуском: ${g.experts}` }),
+    ...(g.bank_experts ? [el('span', { class: 'badge ok', 'data-role': 'bank-accr', text: `Аккредитованы в банке ${quoted(bank.name)}: ${g.bank_experts}` })] : []),
     g.org_id === curOrg && !cur ? el('span', { class: 'badge', text: 'Предложено сейчас' })
       : el('button', { class: 'secondary', 'data-action': 'offer-org', onclick: () => offerOrg(order, g, reopen) }, 'Предложить организации'))));
   $('candidates-empty').classList.toggle('hidden', candidates.length > 0);
@@ -51,6 +59,7 @@ export async function loadMatch(current, reopen) {
     el('div', { class: 'row' },
       el('span', { class: 'title', text: c.full_name || 'Без имени' }),
       el('span', { class: 'score', text: `${c.score.total} из 100` })),
+    ...(c.bank ? [el('span', { class: 'badge ok', 'data-role': 'bank-accr', text: bankText(c.bank, bank) })] : []),
     el('ul', { class: 'features' }, ...Object.values(c.score.features).map((f) => el('li', { text: `${f.name}: ${f.score} — ${f.note}` }))),
     // Досье (2.14): истёкший аттестат или полис — предупреждение; предложить дело всё равно можно.
     ...(c.dossier_expired?.length ? [el('div', { class: 'overdue', 'data-role': 'dossier-expired', text: `В досье истёк срок: ${c.dossier_expired.join(', ')}` })] : []),
@@ -58,6 +67,8 @@ export async function loadMatch(current, reopen) {
     c.user_id === cur ? el('span', { class: 'badge', text: 'Предложено сейчас' })
       : el('button', { class: 'secondary', 'data-action': 'offer', onclick: () => offer(order, c, reopen) }, 'Предложить дело'))));
 }
+
+const bankText = (a, bank) => `Аккредитован в банке ${quoted(bank.name)}${a.via === 'org' ? ` через организацию ${quoted(a.org_name)}` : ''}${a.valid_until ? ` · до ${dayRu(a.valid_until)}` : ''}`;
 
 async function offer(order, c, reopen) {
   if (!confirm(`Предложить дело специалисту «${c.full_name || 'без имени'}»?`)) return;
