@@ -153,6 +153,10 @@ export function fillDraft(body, sections, items, today = todayMsk()) {
 // срок — по новому придут снова. По услугам оценки истёкший аттестат или полис снимает эксперта с подбора (решение
 // Дамира 03.10.2026, match-ops.mjs).
 const HEAD_EVENT = { d30: 'dossier_month_head', d7: 'dossier_week_head', expired: 'dossier_expired_head' };
+// Аккредитация в банке (2.454) — своими словами: не «документ досье», а «аккредитация в банке», без снятия с подбора.
+const OWN_EVENT = { d30: 'dossier_month', d7: 'dossier_week', expired: 'dossier_expired' };
+const BANK_EVENT = { d30: 'bank_accr_month', d7: 'bank_accr_week', expired: 'bank_accr_expired' };
+const BANK_HEAD_EVENT = { d30: 'bank_accr_month_head', d7: 'bank_accr_week_head', expired: 'bank_accr_expired_head' };
 export async function remindDossier(sql, { today = todayMsk() } = {}) {
   let sent = 0;
   const rows = await sql`select d.id, d.kind, d.user_id, to_char(d.valid_until, 'YYYY-MM-DD') as until, m.org_id from dossier_items d
@@ -161,14 +165,20 @@ export async function remindDossier(sql, { today = todayMsk() } = {}) {
                          left join org_members m on m.org_id = s.org_id and m.user_id = d.user_id
                          where d.deleted_at is null and d.valid_until is not null and d.valid_until <= ${addDays(today, 30)}::date`;
   for (const r of rows) {
+    // Аккредитация в банке продлена — рядом новая запись в том же банке со сроком позже (2.454): не напоминать о прежней.
+    if (r.kind === 'bank' && (await sql`select 1 from dossier_items x join dossier_items d on d.id = ${r.id}
+      where x.user_id = d.user_id and x.id <> d.id and x.kind = 'bank' and x.deleted_at is null and x.bank = d.bank
+        and (d.bank <> 'other' or lower(trim(x.title)) = lower(trim(d.title)))
+        and (x.valid_until is null or x.valid_until > ${addDays(today, 30)}::date) limit 1`).length) continue;
     const kind = r.until < today ? 'expired' : r.until <= addDays(today, 7) ? 'd7' : 'd30';
     sent += await sql.tx(async (tx) => {
       const fresh = await tx`insert into dossier_reminders (item_id, kind, valid_until) values (${r.id}, ${kind}, ${r.until})
                              on conflict do nothing returning item_id`;
       if (!fresh.length) return 0;
-      let n = await notify(tx, kind === 'd30' ? 'dossier_month' : kind === 'd7' ? 'dossier_week' : 'dossier_expired', { users: [r.user_id] });
+      const bank = r.kind === 'bank';
+      let n = await notify(tx, (bank ? BANK_EVENT : OWN_EVENT)[kind], { users: [r.user_id] });
       // Руководитель сам себе эксперт — ему хватит своего напоминания.
-      if (r.org_id) n += await notify(tx, HEAD_EVENT[kind], { users: (await orgHeads(tx, r.org_id)).filter((id) => id !== r.user_id), orgId: r.org_id });
+      if (r.org_id) n += await notify(tx, (bank ? BANK_HEAD_EVENT : HEAD_EVENT)[kind], { users: (await orgHeads(tx, r.org_id)).filter((id) => id !== r.user_id), orgId: r.org_id });
       // Истёкшая аккредитация в банке с подбора не снимает — диспетчеру не о чем знать (2.451).
       if (kind === 'expired' && r.kind !== 'bank') n += await notify(tx, 'dossier_expired_staff', { users: await dispatchers(tx) });
       return n;

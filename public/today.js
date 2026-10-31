@@ -244,6 +244,22 @@ function dossierNewYear(d, today) {
   () => { location.hash = 'specialist&to=dossier'; });
 }
 
+// Срок аккредитации в банке кончается или истёк (2.454): своя — продлить и внести новый срок в досье; организации —
+// продлевает руководитель. В декабре те, что кончаются до 15 января, — «продлите до каникул».
+const bankTermWhat = (x, d, today) => (x.expired
+  ? `истекла ${dayRu(x.valid_until)} — банк может не принять отчёт`
+  : x.new_year && d.new_year
+    ? `действует до ${dayRu(x.valid_until)} — кончается в каникулы или сразу после них (${dayRu(d.new_year.from)} — ${dayRu(d.new_year.to)}): продлите до ${dayRu(d.new_year.by)}`
+    : `действует до ${dayRu(x.valid_until)} · осталось ${daysLeft(x.valid_until, today)} дн.`);
+function bankTerms(d, today) {
+  if (!d?.items?.length) return [];
+  return group('bank-terms', 'Аккредитация в банке: срок', d.items, (x) => [
+    x.source === 'org' ? `${x.title} · аккредитация организации «${x.org_name}»` : `${x.title} · Ваша аккредитация`,
+    { class: x.expired ? 'overdue' : 'warn-line', role: 'bank-term-what', text: bankTermWhat(x, d, today) },
+    x.source === 'org' ? 'продлевает руководитель организации — по делам для этого банка уточните у него' : 'продлите в банке и внесите новый срок в досье'],
+  (x) => { location.hash = x.source === 'org' ? `org=${x.org_id}&to=accr` : 'specialist&to=dossier'; });
+}
+
 // Срок прошёл, а перенос ещё не просили (2.166) — кнопка сразу к форме «Попросить перенести срок» в деле.
 function askLate(x) {
   if (!x.overdue || x.extend) return [];
@@ -597,6 +613,8 @@ export async function loadToday() {
       ...newYear(e.new_year, t.today, toOrder),
       // В декабре — аттестат или полис кончается до 15 января (2.405): продлить до каникул, иначе после них не подбирают на оценку.
       ...dossierNewYear(e.dossier_new_year, t.today),
+      // Срок аккредитации в банке кончается в 30 дней или истёк (2.454) — своя и организации.
+      ...bankTerms(e.bank_terms, t.today),
       // Номер отчёта выдан, а дело отменено (2.418) — отдать номер следующему делу или оставить пропуском.
       ...numberCancelled(e.number_cancelled),
       // Первые рабочие дни января, а в образце номера нет года (2.419) — номера нового года повторят прошлогодние.
@@ -692,6 +710,12 @@ export async function loadToday() {
       ...numberYear(g.number_year, `org-number-year-${g.id}`, { org: true, go: () => { location.hash = `org=${g.id}&to=numbering`; },
         save: (pattern) => api('PUT', `/api/orgs/${g.id}/numbering`, { pattern }) }),
       ...orgDossierNewYear(g, t.today, toOrg()),
+      // Аккредитации организации и экспертов в банках (2.454): кончаются в 30 дней или истекли — только банк и срок.
+      ...group(`org-bank-terms-${g.id}`, 'Аккредитации в банках: срок', g.bank_terms?.items ?? [], (x) => [
+        x.source === 'org' ? `${x.title} · аккредитация организации` : `${x.expert} · ${x.title}`,
+        { class: x.expired ? 'overdue' : 'warn-line', role: 'org-bank-term-what', text: bankTermWhat(x, g.bank_terms, t.today) },
+        x.source === 'org' ? 'продлите в банке и внесите новый срок в «Аккредитации в банках»' : 'продлевает эксперт и вносит новый срок в досье'],
+      (x) => { location.hash = x.source === 'org' ? `org=${g.id}&to=accr` : `org=${g.id}`; }),
       // Досье экспертов (2.63): только вид документа и срок; копии руководитель не видит.
       ...group(`org-dossier-${g.id}`, 'Документы экспертов: срок', g.dossier ?? [], (x) => [`${x.expert} · ${x.kind_name}`,
         x.state === 'expired' ? `срок истёк ${dayRu(x.valid_until)} — по оценке эксперт снят с подбора` : `действует до ${dayRu(x.valid_until)} · осталось ${daysLeft(x.valid_until, t.today)} дн.`], toOrg()),

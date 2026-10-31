@@ -639,6 +639,8 @@ export function focusOrgBlock(to) {
   if (to === 'sign_long') { pickSignFilter('long'); return goSign(null); }
   // «numbering» (2.419) — из «Сегодня»: в январе образец номера организации без года.
   if (to === 'numbering') return $('org-numbering-box').scrollIntoView({ block: 'start' });
+  // «accr» (2.454) — из «Сегодня»: срок аккредитации организации в банке кончается.
+  if (to === 'accr') return $('org-accr-box').scrollIntoView({ block: 'start' });
   $('org-cases-search').value = '';
   expert = '';
   filter = to;

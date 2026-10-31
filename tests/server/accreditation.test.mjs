@@ -67,8 +67,8 @@ test('истёкшая аккредитация в банке: напомина�
   await sp.req('POST', '/api/specialist/me/dossier', { kind: 'bank', bank: 'sber', valid_until: addDays(todayMsk(), 5) });
   const before = (await S.sql`select count(*)::int as n from notifications where user_id = ${dispatcher.user.id}`)[0].n;
   await remindDossier(S.sql, { today: addDays(todayMsk(), 6) });
-  const ev = (await S.sql`select event from notifications where user_id = ${sp.user.id} and event like 'dossier%'`).map((r) => r.event);
-  assert.deepEqual(ev, ['dossier_expired']);
+  const ev = (await S.sql`select event from notifications where user_id = ${sp.user.id} and (event like 'dossier%' or event like 'bank_accr%')`).map((r) => r.event);
+  assert.deepEqual(ev, ['bank_accr_expired'], 'своими словами — аккредитация, не «документ досье» (2.454)');
   assert.equal((await S.sql`select count(*)::int as n from notifications where user_id = ${dispatcher.user.id}`)[0].n, before);
 });
 

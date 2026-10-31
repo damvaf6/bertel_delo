@@ -6,7 +6,8 @@ import { LEVEL, orderLevel } from '../access/policy.mjs';
 import { EVENTS, TYPE, TYPES, orderRef } from '../notify/registry.mjs';
 import { morningTitles, orgMorningTitles } from '../notify/morning.mjs';
 
-const LIST_LIMIT = 100;
+// Лента — последние 200: в проверке 2.45 у одного человека все виды событий сразу (их больше 100 с 2.454).
+const LIST_LIMIT = 200;
 const READ_IDS_MAX = 200;
 
 // Какие виды уведомлений человеку показывать в настройках.

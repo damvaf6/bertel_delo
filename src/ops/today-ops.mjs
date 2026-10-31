@@ -35,6 +35,7 @@ import { taskDues } from '../orders/schedule.mjs';
 import { orderSignatures, orgReturns, returnEgrn, signLong, signWait } from './sign-ops.mjs';
 import { executorSignOrg } from '../access/policy.mjs';
 import { dossierAlerts, loadDossier, newYearTerms } from '../dossier/dossier.mjs';
+import { bankTermsOf, orgBankTerms } from '../dossier/bank-terms.mjs';
 import { expiringLinks, incompleteInspections, reshotAll, silentLinks } from './inspect-ops.mjs';
 import { answeredExtends, openExtends, orgExtends, taskMoved, taskMovedOrg } from './deadline-ops.mjs';
 import { openHandovers } from './handover-ops.mjs';
@@ -303,6 +304,8 @@ async function expertPart(sql, actor, registry, today, storage) {
     // Первые рабочие дни января (2.419): образец номера без года — номера нового года повторят прошлогодние.
     number_year: await numberYear(sql, actor.id, today),
     dossier_new_year: newYearTerms(await loadDossier(sql, actor.id), today),
+    // Срок аккредитации в банке кончается или истёк (2.454): своя и организации, от которой эксперт работает.
+    bank_terms: await bankTermsOf(sql, actor.id, today),
     new_year: ny && { from: ny.from, to: ny.to, work_before: ny.work_before, items: ny.rows.map((o) => item(o)) },
     remarks,
     // Заседание в суде сегодня или завтра (2.443): что взять с собой, срок аттестата или полиса кончился — предупредить.
@@ -815,6 +818,8 @@ export async function orgPart(sql, org, registry, today, { actorId = null, stora
     number_year: yh && { ...yh, last: await lastYearNumber(sql, { org: org.id }, yh) },
     dossier,
     dossier_new_year: dossierNy,
+    // Аккредитации организации и её экспертов в банках: кончаются в 30 дней или истекли (2.454).
+    bank_terms: await orgBankTerms(sql, org.id, experts, today),
     new_year: ny ? { count: ny.rows.length, from: ny.from, to: ny.to, work_before: ny.work_before } : null,
     idle: [...moves.values()].filter((m) => m.idle).length,
     // Сколько возвращённых эксперту дел не исправлено 2 дня и больше (2.153) — только число, для утренней сводки.

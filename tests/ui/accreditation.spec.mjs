@@ -228,3 +228,47 @@ test('2.453: дело для банка без аккредитации — пр
   await expect(sp.locator('#today-box li[data-today="bank-gap"]')).toHaveCount(0);
   expect([...sp.problems, ...cp.problems]).toEqual([]);
 });
+
+test('2.454: срок аккредитации кончается — строкой в «Сегодня» эксперта и руководителя', async ({ browser, baseURL }) => {
+  const hp = await phone(browser, baseURL);
+  const sp = await phone(browser, baseURL);
+  const head = await signIn(hp, '+79990004571');
+  const expert = await signIn(sp, '+79990004572');
+  const orgId = await db(async (c) => {
+    const org = (await c.query("insert into organizations (name) values ('Тестовая оценочная организация 4571') returning id")).rows[0];
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head'), ($1, $3, 'member')", [org.id, head.id, expert.id]);
+    await c.query("update users set full_name = 'Тестова Анна' where id = $1", [expert.id]);
+    await c.query("insert into specialists (user_id, regions, capacity, org_id) values ($1, '{moscow,mo}', 5, $2)", [expert.id, org.id]);
+    await c.query("insert into dossier_items (user_id, kind, title, bank, valid_until) values ($1, 'bank', 'Сбербанк', 'sber', $2)", [expert.id, plusDays(12)]);
+    await c.query("insert into org_accreditations (org_id, bank, title, valid_until, created_by) values ($1, 'other', 'Тестовый банк «Залог»', $2, $3)", [org.id, plusDays(-2), head.id]);
+    return org.id;
+  });
+
+  // Эксперт: своя — «продлите и внесите в досье», организации — истекла, продлевает руководитель.
+  await sp.goto('/kabinet');
+  await expect(sp.locator('#today-box li[data-today="bank-terms"]')).toHaveText('Аккредитация в банке: срок · 2');
+  const rows = sp.locator('#today-box li[data-today-item="bank-terms"]');
+  await expect(rows.nth(0)).toContainText('Тестовый банк «Залог» · аккредитация организации «Тестовая оценочная организация 4571»');
+  await expect(rows.nth(0).locator('[data-role=bank-term-what]')).toHaveText(/^истекла .* — банк может не принять отчёт$/);
+  await expect(rows.nth(1)).toContainText('Сбербанк · Ваша аккредитация');
+  await expect(rows.nth(1).locator('[data-role=bank-term-what]')).toContainText('осталось 12 дн.');
+  await rows.nth(0).scrollIntoViewIfNeeded();
+  await shot(sp, 'ak09-2454-segodnya-ekspert-srok-akkr');
+  await rows.nth(1).locator('button.open').click();
+  await expect(sp).toHaveURL(/#specialist&to=dossier$/);
+
+  // Руководитель: аккредитация организации и эксперта; нажатие — к «Аккредитациям в банках».
+  await hp.goto('/kabinet');
+  const g = hp.locator(`#today-box li[data-today="org-bank-terms-${orgId}"]`);
+  await expect(g).toHaveText('Аккредитации в банках: срок · 2');
+  const hr = hp.locator(`#today-box li[data-today-item="org-bank-terms-${orgId}"]`);
+  await expect(hr.nth(0)).toContainText('Тестовый банк «Залог» · аккредитация организации');
+  await expect(hr.nth(0)).toContainText('внесите новый срок в «Аккредитации в банках»');
+  await expect(hr.nth(1)).toContainText('Тестова Анна · Сбербанк');
+  await g.scrollIntoViewIfNeeded();
+  await shot(hp, 'ak10-2454-segodnya-rukovoditel-srok-akkr');
+  await hr.nth(0).locator('button.open').click();
+  await expect(hp).toHaveURL(new RegExp(`#org=${orgId}&to=accr$`));
+  await expect(hp.locator('#org-accr-box')).toBeInViewport();
+  expect([...hp.problems, ...sp.problems]).toEqual([]);
+});

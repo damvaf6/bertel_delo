@@ -7,6 +7,7 @@ import { deliverPending } from './notify/notify.mjs';
 import { remindDeadlines } from './notify/reminders.mjs';
 import { remindAck } from './orders/ack.mjs';
 import { remindDossier } from './dossier/dossier.mjs';
+import { remindOrgAccreditations } from './dossier/bank-terms.mjs';
 import { remindSilentInspections } from './ops/inspect-ops.mjs';
 import { remindNotes } from './ops/note-ops.mjs';
 import { sendAwayBack, warnAway } from './notify/away.mjs';
@@ -32,13 +33,15 @@ try {
 const server = app.listen(cfg.port, () => console.log(`БЕРТЕЛ Дело · ядро · ${cfg.appEnv} · порт ${cfg.port}`));
 
 // Повтор неотправленных СМС-уведомлений раз в минуту (первая попытка — сразу после операции, src/http/router.mjs);
-// там же — напоминания о сроках (2.13) и о сроках документов досье (2.14), о ссылке осмотра без фото (2.85), по заметкам эксперта к делу (2.115), за 3 дня до дней «не принимаю дела» (2.226), «Пока Вас не было» (2.239), «задерживаемся» заказчику, если обещанный срок цены прошёл (задача штаба 3fd17197), каждое один раз;
+// там же — напоминания о сроках (2.13) и о сроках документов досье (2.14) и аккредитаций организаций в банках (2.454), о ссылке осмотра без фото (2.85), по заметкам эксперта к делу (2.115), за 3 дня до дней «не принимаю дела» (2.226), «Пока Вас не было» (2.239), «задерживаемся» заказчику, если обещанный срок цены прошёл (задача штаба 3fd17197), каждое один раз;
 // утренняя сводка эксперту «На сегодня» (2.119) и руководителю «На сегодня по организации» (2.121) — раз в день после 8:00 по Москве.
 const sweep = setInterval(() => {
   remindDeadlines(sql)
     .catch((e) => console.error('напоминания о сроках:', e?.message || e))
     .then(() => remindDossier(sql))
     .catch((e) => console.error('напоминания по досье:', e?.message || e))
+    .then(() => remindOrgAccreditations(sql))
+    .catch((e) => console.error('напоминания об аккредитациях организаций:', e?.message || e))
     .then(() => remindSilentInspections(sql))
     .catch((e) => console.error('напоминания об осмотре:', e?.message || e))
     .then(() => remindNotes(sql))
