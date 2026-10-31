@@ -324,3 +324,24 @@ test('2.455: руководитель — организация и экспер
   await expect(box.locator('[data-cell]')).toHaveCount(2);
   expect(hp.problems).toEqual([]);
 });
+
+test('2.456: «Документы для продления» у аккредитации — архив с досье и перечнем отчётов', async ({ browser, baseURL }) => {
+  const sp = await phone(browser, baseURL);
+  const expert = await signIn(sp, '+79990004529');
+  await db(async (c) => {
+    await c.query('insert into specialists (user_id) values ($1)', [expert.id]);
+    await c.query(`insert into dossier_items (user_id, kind, title, number, valid_until, bank) values
+      ($1, 'certificate', 'Оценка недвижимости', '031234-1', $2, null), ($1, 'sro', 'Тестовая СРО оценщиков', '4529', null, null),
+      ($1, 'bank', 'Сбербанк', 'АК-4529', $3, 'sber')`, [expert.id, plusDays(-2), plusDays(25)]);
+  });
+  await sp.goto('/kabinet#specialist');
+  const sber = sp.locator('#dossier-items li').filter({ hasText: 'Аккредитация в банке: Сбербанк' });
+  await expect(sber).toContainText('диплом, аттестат, СРО, полисы с копиями и перечень отчётов за 12 месяцев');
+  // У других документов кнопки нет.
+  await expect(sp.locator('#dossier-items li').filter({ hasText: 'Членство в СРО' }).getByRole('button', { name: 'Документы для продления' })).toHaveCount(0);
+  await sber.scrollIntoViewIfNeeded();
+  await shot(sp, 'ak13-2456-dokumenty-dlya-prodleniya');
+  const [download] = await Promise.all([sp.waitForEvent('download'), sber.getByRole('button', { name: 'Документы для продления' }).click()]);
+  expect(download.suggestedFilename()).toBe('Продление аккредитации · Сбербанк.zip');
+  expect(sp.problems).toEqual([]);
+});
