@@ -164,6 +164,22 @@ export function orderBank(order, registry) {
   return b ? { id: b.id, name: b.name } : null;
 }
 
+// Дело для банка, а у эксперта нет аккредитации в нём — ни своей, ни через организацию (2.453): банк заявки или null.
+// Только дела с банком из списка («Другой банк» не проверить). Одним запросом на все дела одного эксперта.
+export async function bankGaps(sql, orders, registry, userId, today) {
+  const out = new Map();
+  const byBank = new Map();
+  for (const o of orders) {
+    const bank = orderBank(o, registry);
+    if (bank) byBank.set(bank.id, [...(byBank.get(bank.id) ?? []), { o, bank }]);
+  }
+  for (const [bankId, list] of byBank) {
+    if ((await bankAccreditations(sql, bankId, [userId], today)).has(userId)) continue;
+    for (const { o, bank } of list) out.set(o.id, bank);
+  }
+  return out;
+}
+
 // Действующие аккредитации в банке (2.452): своя — из досье, через организацию — у той, от которой эксперт работает и где
 // состоит. Своя важнее; срок не указан — считается действующей.
 async function bankAccreditations(sql, bankId, userIds, today) {

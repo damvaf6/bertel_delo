@@ -22,6 +22,10 @@ if ('IntersectionObserver' in window) {
   }).observe($('next-box'));
 }
 
+// Дело для банка, а у исполнителя и его организации нет аккредитации в нём (2.453): до принятия — отказаться или уточнить,
+// в работе — уточнить у заказчика или попросить передать дело.
+const bankGap = (b, offer = false) => b && `Отчёт для банка ${quoted(b.name)}: у Вас и Вашей организации нет аккредитации в нём — банк может не принять отчёт. ${offer
+  ? 'Уточните у заказчика или откажитесь от дела.' : 'Уточните у заказчика или попросите руководителя передать дело.'} Если аккредитация есть — внесите её в досье.`;
 const visible = (id) => !!$(id) && !$(id).classList.contains('hidden');
 // Файлы результата исполнителя: после передачи дела файлы прежнего эксперта в сдачу не идут (own: false, 2.110).
 const ownResults = (list) => list.filter((d) => d.kind === 'result' && d.own !== false);
@@ -32,7 +36,8 @@ function steps() {
   const { order, actions = [] } = current;
   const act = (to) => actions.find((a) => a.to === to);
   if (order.status === 'awaiting_executor') {
-    return { lead: 'Вам предложено дело: посмотрите данные, срок и вознаграждение.', items: [], main: act('in_work') && { label: 'Принять дело', run: () => ctx.step(act('in_work')) } };
+    return { lead: 'Вам предложено дело: посмотрите данные, срок и вознаграждение.', items: [], main: act('in_work') && { label: 'Принять дело', run: () => ctx.step(act('in_work')) },
+      warn: bankGap(current.bank_gap, true) };
   }
   if (order.status === 'review') return { lead: 'Работа сдана — диспетчер проверяет результат. Замечания придут уведомлением.', items: [] };
   if (order.status === 'done') return { lead: 'Результат выдан заказчику. Выплата — в разделе «Деньги».', items: [] };
@@ -171,6 +176,10 @@ function render() {
   bar.classList.toggle('hidden', !s?.main);
   if (!s) return;
   $('next-lead').textContent = s.lead;
+  // Предупреждение у шага (2.453: дело для банка без аккредитации в нём) — видно в деле, пока оно не сдано.
+  const warn = me ? s.warn ?? bankGap(ctx.current.bank_gap) : null;
+  $('next-warn').classList.toggle('hidden', !warn);
+  $('next-warn').textContent = warn ?? '';
   $('next-steps').replaceChildren(...s.items.map((i) => el('li', { class: i.done ? 'done' : '', 'data-step': i.id },
     el('button', { class: 'link', onclick: i.go }, `${i.done ? '✓' : '○'} ${i.title}`))));
   // Имя кнопки для чтения с экрана — «Следующий шаг: …» без повторения имени кнопки из «Хода заявки».

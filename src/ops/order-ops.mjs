@@ -6,6 +6,7 @@ import { HttpError } from '../http/core.mjs';
 import { LEVEL, executorSignOrg, isStaff, memberOf, orderLevel, orderSides, visibleOrdersFilter } from '../access/policy.mjs';
 import { BASIS_KINDS, cleanValues, missingRequired } from '../modules/index.mjs';
 import { moduleNotices, moduleQuote, moduleSubmitProblems } from '../modules/extras.mjs';
+import { bankGaps } from './match-ops.mjs';
 import { STATUSES, STATUS_NAME, TRANSITIONS, WORK_STARTED, addDays, availableActions, findTransition, isOverdue, todayMsk } from '../orders/workflow.mjs';
 import { runSettlement, settleAfterPayout, settleCancel, settleDone, orderSplit } from '../money/money.mjs';
 import { audit, oneOf, quoted, text, uuidFrom } from './util.mjs';
@@ -17,6 +18,8 @@ import { ackLine, startAck } from '../orders/ack.mjs';
 import { offDays } from './note-ops.mjs';
 import { workdaysAfter } from '../orders/holidays.mjs';
 
+// Пока дело не сдано, исполнитель может отказаться или попросить передать его (2.453).
+const BANK_GAP_STATUSES = ['awaiting_executor', 'in_work', 'review'];
 const LEVEL_NAME = ['none', 'read', 'write', 'manage'];
 
 // Признаки модуля для шагов статуса: 'redo' — бесплатная переделка после выдачи (модуль с вычиткой, 2а.7); 'remarks' —
@@ -236,6 +239,9 @@ export function orderOps() {
             back.set(r.id, { at: open[0].at, by: last.by, points: last.items.length, left: last.left, fresh_file: !!last.fresh_file });
           }
         }
+        // Дело для банка, а у исполнителя нет аккредитации в нём (2.453) — пометка у предложения и у дела в работе.
+        const gaps = await bankGaps(sql, rows.filter((x) => x.executor_user_id === actor.id && BANK_GAP_STATUSES.includes(x.status)),
+          registry, actor.id, today);
         // Исполнителю в списке — его вознаграждение (80% цены), чтобы не открывать каждое дело (разбор 03.10.2026, 2.12).
         return {
           orders: rows.map((r) => {
@@ -246,6 +252,7 @@ export function orderOps() {
               // Исполнителю — главное о деле одной строкой (2.33): решить по предложению, не открывая каждое.
               ...(mine ? { brief: fieldsBrief(registry, r) } : {}),
               ...(back.has(r.id) ? { returned: back.get(r.id) } : {}),
+              ...(gaps.has(r.id) ? { bank_gap: gaps.get(r.id) } : {}),
             };
           }),
         };
@@ -277,6 +284,9 @@ export function orderOps() {
             ? await sql.one`select id, name from organizations where id = ${order.offer_org_id}` : null,
           // Внутренняя переписка с руководителем организации (2.28): только самому исполнителю, если он работает от организации.
           org_chat: order.executor_user_id === actor.id ? (await executorSignOrg(sql, actor.id))?.name ?? null : null,
+          // Дело для банка, а у исполнителя нет аккредитации в нём (2.453) — предупреждение при принятии и в деле.
+          bank_gap: order.executor_user_id === actor.id && BANK_GAP_STATUSES.includes(order.status)
+            ? (await bankGaps(sql, [order], registry, actor.id, todayMsk())).get(order.id) ?? null : null,
           access: LEVEL_NAME[level],
           // Ответ сразу после отправки (задача штаба 3fd17197): стороне заказчика и служебным, пока цены нет.
           ack: orderSides(actor, order).some((x) => x === 'customer' || x === 'dispatcher') ? ackLine(order) : null,
