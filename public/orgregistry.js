@@ -5,10 +5,11 @@
 import { api, el, say } from '/common.js';
 import { rub } from '/money.js';
 import { dayRu } from '/order.js';
-import { holesBox } from '/registry.js';
+import { bankChoice, holesBox } from '/registry.js';
 
 const $ = (id) => document.getElementById(id);
-const period = () => `year=${encodeURIComponent($('org-registry-year').value)}&quarter=${encodeURIComponent($('org-registry-quarter').value)}`;
+const period = () => `year=${encodeURIComponent($('org-registry-year').value)}&quarter=${encodeURIComponent($('org-registry-quarter').value)}`
+  + ($('org-registry-bank').value ? `&bank=${encodeURIComponent($('org-registry-bank').value)}` : '');
 // 2.438: к сданному отчёту пришли замечания — в перечне новая редакция (номер, дата, стоимость — из неё), прежняя — в деле.
 const editionLine = (r) => el('div', { class: 'muted', 'data-registry-edition': r.id,
   text: r.edition.pending
@@ -27,6 +28,7 @@ let org = null;
 let seq = 0;
 $('org-registry-year').addEventListener('change', () => load(true));
 $('org-registry-quarter').addEventListener('change', () => load(true));
+$('org-registry-bank').addEventListener('change', () => load(true));
 $('org-registry-csv').addEventListener('click', () => location.assign(`/api/orgs/${org.id}/registry?format=csv&${period()}`));
 
 export async function loadOrgRegistry(o) {
@@ -47,10 +49,11 @@ async function load(chosen) {
   sel.replaceChildren(...registry.years.map((y) => el('option', { value: String(y), text: String(y) })));
   sel.value = String(registry.year);
   $('org-registry-quarter').value = registry.quarter ? String(registry.quarter) : '';
+  bankChoice($('org-registry-bank-field'), $('org-registry-bank'), registry);
   const n = registry.total;
   const gaps = registry.rows.filter((r) => r.missing.length).length;
   const dups = registry.rows.filter((r) => r.dup).length;
-  $('org-registry-total').textContent = n ? `${registry.name}: ${reports(n)}${gaps ? ` · дописать — в ${gaps}` : ''}`
+  $('org-registry-total').textContent = n ? `${registry.name}${registry.bank ? ` · для ${registry.bank.id === 'any' ? 'банков' : `банка «${registry.bank.name}»`}` : ''}: ${reports(n)}${gaps ? ` · дописать — в ${gaps}` : ''}`
     + (dups ? ` · номер повторяется — в ${dups}` : '')
     + (n > registry.shown ? ` · показаны первые ${registry.shown}, выберите квартал` : '') : '';
   // 2.416: пропуски в общем счёте организации за год (образец организации задан), у номера — эксперт.
@@ -63,7 +66,7 @@ async function load(chosen) {
     el(r.in_cases === false ? 'strong' : 'a', { class: 'title', ...(r.in_cases === false ? {} : { href: `#org=${org.id}&case=${r.id.slice(0, 8).toUpperCase()}&to=case` }),
       text: `${i + 1}. ${r.number ? `Отчёт № ${r.number}` : 'Отчёт без номера'}${r.made_on ? ` от ${dayRu(r.made_on)}` : ''}` }),
     el('div', { text: `${r.expert_name} · ${r.object}` }),
-    el('div', { class: 'muted', text: [r.service_name, r.purpose, r.customer ? `заказчик — ${r.customer}` : null].filter(Boolean).join(' · ') }),
+    el('div', { class: 'muted', text: [r.service_name, r.purpose, r.bank_name ? `для банка «${r.bank_name}»` : null, r.customer ? `заказчик — ${r.customer}` : null].filter(Boolean).join(' · ') }),
     el('div', { class: 'muted', text: `${r.value_rub != null ? `${r.value_name}: ${rub(r.value_rub * 100)}` : 'стоимость не найдена'} · сдано ${dayRu(r.done_on)}` }),
     ...(r.in_cases === false ? [el('div', { class: 'muted', 'data-registry-old': r.id, text: OLD_CASE })] : []),
     ...(r.edition ? [editionLine(r)] : []),

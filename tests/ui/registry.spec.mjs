@@ -826,3 +826,74 @@ test('прогон 2.420: номер с латинской «B» — тот же
   expect(problems).toEqual([]);
   await ctx.close();
 });
+
+test('2.457: перечень отчётов для банка — отбор «Для банка» у эксперта и руководителя, архив и Excel по отбору', async ({ browser, baseURL }) => {
+  const opts = { baseURL, viewport: { width: 412, height: 915 }, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true, locale: 'ru-RU',
+    storageState: { cookies: [], origins: [{ origin: new URL(baseURL).origin, localStorage: [{ name: 'delo.folds', value: 'open' }] }] } };
+  const ctx = await browser.newContext(opts);
+  const page = await ctx.newPage();
+  const problems = [];
+  page.on('pageerror', (e) => problems.push(`ошибка JS: ${e.message}`));
+  const expert = await signIn(page, '+79990024575');
+  const hctx = await browser.newContext(opts);
+  const hpage = await hctx.newPage();
+  hpage.on('pageerror', (e) => problems.push(`ошибка JS: ${e.message}`));
+  const head = await signIn(hpage, '+79990024576');
+  const org = await db(async (c) => {
+    const g = (await c.query("insert into organizations (name) values ('ООО «Оценка-Банк»') returning id")).rows[0].id;
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head')", [g, head.id]);
+    await c.query("update users set full_name = 'Банкова Вера' where id = $1", [expert.id]);
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'member', now() - interval '1 day')", [g, expert.id]);
+    await c.query("insert into specialists (user_id, org_id, created_at) values ($1, $2, now() - interval '2 years')", [expert.id, g]);
+    const mk = async (title, fields, ago) => {
+      const id = (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, deadline, fields)
+        values ($1, $2, 'expertise', 'realty', 'done', $1, current_date, $3) returning id`, [expert.id, title, fields])).rows[0].id;
+      await c.query("insert into order_status_history (order_id, from_status, to_status, side, at) values ($1, 'review', 'done', 'dispatcher', now() - $2::interval)", [id, ago]);
+    };
+    await mk('Квартира в залог Сбербанку', { purpose: 'bank', bank: 'sber', address: 'г. Москва, Банковский пер., д. 1, кв. 4' }, '3 minutes');
+    await mk('Квартира для другого банка', { purpose: 'bank', bank: 'other', address: 'г. Москва, Банковский пер., д. 2, кв. 8' }, '2 minutes');
+    await mk('Квартира для сделки', { purpose: 'deal', address: 'г. Москва, Банковский пер., д. 3, кв. 1' }, '1 minute');
+    return g;
+  });
+
+  await page.goto('/kabinet#specialist');
+  const rows = page.locator('#registry-rows > li');
+  await expect(rows).toHaveCount(3);
+  const sel = page.locator('#registry-bank');
+  await expect(page.locator('#registry-bank-field')).toBeVisible();
+  await expect(sel.locator('option')).toHaveText(['Все отчёты', 'Для всех банков (2)', 'Сбербанк (1)', 'Другой банк или не указан (1)']);
+  await expect(rows.nth(0)).toContainText('Ипотека, залог, банк · для банка «Сбербанк»');
+  await sel.selectOption('sber');
+  await expect(rows).toHaveCount(1);
+  await expect(page.locator('#registry-total')).toContainText('для банка «Сбербанк»: 1 отчёт');
+  await expect(rows.nth(0)).toContainText('г. Москва, Банковский пер., д. 1, кв. 4');
+  await expect(page.locator('#registry-archive')).toHaveText('Заключения архивом (1)');
+  await page.locator('#registry-box').scrollIntoViewIfNeeded();
+  await shot(page, 'r20-2457-perechen-dlya-banka');
+  const csv = await page.request.get(`/api/specialist/me/registry?format=csv&bank=sber`);
+  expect(await csv.text()).toContain('Перечень отчётов об оценке для банка «Сбербанк» — Банкова Вера');
+  await sel.selectOption('any');
+  await expect(rows).toHaveCount(2);
+  // Год, где отчётов для банка нет, — выбранный банк остаётся с нулём, перечень пустой.
+  await sel.selectOption('sber');
+  await page.locator('#registry-year').selectOption({ index: 1 });
+  await expect(page.locator('#registry-empty')).toBeVisible();
+  await expect(sel).toHaveValue('sber');
+  await expect(sel.locator('option:checked')).toHaveText('Сбербанк (0)');
+  await sel.selectOption('');
+  await expect(page.locator('#registry-bank-field')).toBeHidden();
+
+  // Руководитель — тот же отбор по всем экспертам организации.
+  await hpage.goto(`/kabinet#org=${org}`);
+  const hrows = hpage.locator('#org-registry-rows > li');
+  await expect(hrows).toHaveCount(3);
+  await hpage.locator('#org-registry-bank').selectOption('sber');
+  await expect(hrows).toHaveCount(1);
+  await expect(hrows.nth(0)).toContainText('Банкова Вера · г. Москва, Банковский пер., д. 1, кв. 4');
+  await expect(hpage.locator('#org-registry-total')).toContainText('для банка «Сбербанк»: 1 отчёт');
+  await hpage.locator('#org-registry-box').scrollIntoViewIfNeeded();
+  await shot(hpage, 'r21-2457-perechen-organizacii-dlya-banka');
+  expect(problems).toEqual([]);
+  await ctx.close();
+  await hctx.close();
+});

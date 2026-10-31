@@ -5,7 +5,8 @@ import { rub } from '/money.js';
 import { dayRu } from '/order.js';
 
 const $ = (id) => document.getElementById(id);
-const period = () => `year=${encodeURIComponent($('registry-year').value)}&quarter=${encodeURIComponent($('registry-quarter').value)}`;
+const period = () => `year=${encodeURIComponent($('registry-year').value)}&quarter=${encodeURIComponent($('registry-quarter').value)}`
+  + ($('registry-bank').value ? `&bank=${encodeURIComponent($('registry-bank').value)}` : '');
 const plural = (n, one, few, many) => {
   const t = Math.abs(n) % 100; const u = t % 10;
   return t > 10 && t < 20 ? many : u === 1 ? one : u >= 2 && u <= 4 ? few : many;
@@ -62,9 +63,26 @@ export function holesBox(box, holes, { year, link }) {
   box.classList.toggle('hidden', !lines.length);
 }
 
+// 2.457: «Для банка» — отчёты за период только для одного банка (поле заявки «для какого банка»), например к продлению
+// аккредитации. Выбор есть, когда за период были отчёты для банков.
+export function bankChoice(field, sel, registry) {
+  const banks = registry.banks ?? [];
+  const n = banks.reduce((s, b) => s + b.n, 0);
+  sel.replaceChildren(el('option', { value: '', text: 'Все отчёты' }),
+    ...(banks.length > 1 ? [el('option', { value: 'any', text: `Для всех банков (${n})` })] : []),
+    ...banks.map((b) => el('option', { value: b.id, text: `${b.name} (${b.n})` })));
+  // Выбранного банка в другом периоде нет — оставляем его выбранным с нулём, перечень пустой (а не «все отчёты» молча).
+  if (registry.bank && ![...sel.options].some((o) => o.value === registry.bank.id)) {
+    sel.append(el('option', { value: registry.bank.id, text: registry.bank.id === 'any' ? 'Для всех банков (0)' : `${registry.bank.name} (0)` }));
+  }
+  sel.value = registry.bank ? registry.bank.id : '';
+  field.classList.toggle('hidden', !banks.length && !registry.bank);
+}
+
 let seq = 0;
 $('registry-year').addEventListener('change', () => loadRegistry(true));
 $('registry-quarter').addEventListener('change', () => loadRegistry(true));
+$('registry-bank').addEventListener('change', () => loadRegistry(true));
 $('registry-csv').addEventListener('click', () => location.assign(`/api/specialist/me/registry?format=csv&${period()}`));
 // 2.407: сданные за период заключения одним архивом — файлы с подписями и опись.
 $('registry-archive').addEventListener('click', () => location.assign(`/api/specialist/me/registry/archive?${period()}`));
@@ -81,17 +99,18 @@ export async function loadRegistry(chosen = false) {
   sel.replaceChildren(...registry.years.map((y) => el('option', { value: String(y), text: String(y) })));
   sel.value = String(registry.year);
   $('registry-quarter').value = registry.quarter ? String(registry.quarter) : '';
+  bankChoice($('registry-bank-field'), $('registry-bank'), registry);
   const n = registry.total;
   const gaps = registry.rows.filter((r) => r.missing.length).length;
   const dups = registry.rows.filter((r) => r.dup).length;
-  $('registry-total').textContent = n ? `${registry.name}: ${n} ${plural(n, 'отчёт', 'отчёта', 'отчётов')}${gaps ? ` · дописать — в ${gaps}` : ''}`
+  $('registry-total').textContent = n ? `${registry.name}${registry.bank ? ` · для ${registry.bank.id === 'any' ? 'банков' : `банка «${registry.bank.name}»`}` : ''}: ${n} ${plural(n, 'отчёт', 'отчёта', 'отчётов')}${gaps ? ` · дописать — в ${gaps}` : ''}`
     + (dups ? ` · номер повторяется — в ${dups}` : '')
     + (n > registry.shown ? ` · показаны первые ${registry.shown}, выберите квартал` : '') : '';
   holesBox($('registry-holes'), registry.holes, { year: registry.year, link: (h) => `#order=${h.order_id}` });
   $('registry-rows').replaceChildren(...registry.rows.map((r, i) => el('li', { 'data-registry': r.id },
     el('a', { class: 'title', href: `#order=${r.id}`, text: `${i + 1}. ${r.number ? `Отчёт № ${r.number}` : 'Отчёт без номера'}${r.made_on ? ` от ${dayRu(r.made_on)}` : ''}` }),
     el('div', { text: r.object }),
-    el('div', { class: 'muted', text: [r.service_name, r.purpose, r.customer ? `заказчик — ${r.customer}` : null].filter(Boolean).join(' · ') }),
+    el('div', { class: 'muted', text: [r.service_name, r.purpose, r.bank_name ? `для банка «${r.bank_name}»` : null, r.customer ? `заказчик — ${r.customer}` : null].filter(Boolean).join(' · ') }),
     el('div', { class: 'muted', text: `${r.value_rub != null ? `${r.value_name}: ${rub(r.value_rub * 100)}` : 'стоимость не найдена'} · сдано ${dayRu(r.done_on)}` }),
     ...(r.edition ? [editionLine(r)] : []),
     ...(r.dup ? [dupLine(r)] : []),

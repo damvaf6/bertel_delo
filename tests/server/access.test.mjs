@@ -3756,6 +3756,53 @@ test('перечень отчётов для СРО по организации 
   assert.deepEqual((await reg(head)).body.registry.rows.map((x) => x.id), [a1.id, a2.id]);
 });
 
+test('перечень отчётов для банка (2.457): отбор по банку из заявки — у эксперта и руководителя; без банка — все; CSV со столбцом «Банк»', async () => {
+  const org = await makeOrg(S.sql, 'Тестовая организация банк 2457');
+  const head = await login(S, '+79990024571');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  const exp = await login(S, '+79990024572');
+  await makeSpecialist(S.sql, exp.user.id);
+  await S.sql`update users set full_name = 'Банкова Вера' where id = ${exp.user.id}`;
+  await addMember(S.sql, org.id, exp.user.id, 'member');
+  assert.equal((await exp.req('PATCH', '/api/specialist/me', { org_id: org.id })).status, 200);
+  await S.sql`update org_members set created_at = now() - interval '1 hour' where org_id = ${org.id}`;
+  const order = async (title, fields, ago) => {
+    const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
+    await S.sql`update orders set status = 'done', deadline = (now() at time zone 'Europe/Moscow')::date, fields = ${JSON.stringify(fields)}::jsonb, executor_user_id = ${exp.user.id} where id = ${o.id}`;
+    await S.sql`insert into order_status_history (order_id, from_status, to_status, side, at) values (${o.id}, 'review', 'done', 'dispatcher', now() - ${ago}::interval)`;
+    return o;
+  };
+  const sber = await order('2457: для Сбербанка', { purpose: 'bank', bank: 'sber', address: 'г. Москва, ул. Банковая, д. 1' }, '3 minutes');
+  const other = await order('2457: банк не указан', { purpose: 'bank', address: 'г. Москва, ул. Банковая, д. 2' }, '2 minutes');
+  const deal = await order('2457: для сделки', { purpose: 'deal', address: 'г. Москва, ул. Банковая, д. 3' }, '1 minute');
+  const reg = (c, q = '') => c.req('GET', `/api/specialist/me/registry${q}`);
+  const all = (await reg(exp)).body.registry;
+  assert.deepEqual(all.rows.map((x) => x.id), [sber.id, other.id, deal.id], 'без отбора — все');
+  assert.equal(all.bank, null);
+  assert.deepEqual(all.banks, [{ id: 'sber', name: 'Сбербанк', n: 1 }, { id: 'other', name: 'Другой банк или не указан', n: 1 }]);
+  assert.deepEqual(all.rows.map((x) => x.bank_name ?? null), ['Сбербанк', null, null], 'банк не указан — без пометки');
+  const s = (await reg(exp, '?bank=sber')).body.registry;
+  assert.deepEqual([s.rows.map((x) => x.id), s.total, s.bank, s.holes], [[sber.id], 1, { id: 'sber', name: 'Сбербанк' }, null]);
+  assert.deepEqual(s.banks.length, 2, 'выбор банков — по всему периоду');
+  assert.deepEqual((await reg(exp, '?bank=any')).body.registry.rows.map((x) => x.id), [sber.id, other.id]);
+  assert.deepEqual((await reg(exp, '?bank=other')).body.registry.rows.map((x) => x.id), [other.id]);
+  assert.deepEqual((await reg(exp, '?bank=vtb')).body.registry.rows, [], 'отчётов для банка нет — пусто');
+  assert.equal((await reg(exp, '?bank=%3Cb%3E')).body.registry.bank, null, 'непонятный банк — без отбора');
+  const csv = (await exp.req('GET', '/api/specialist/me/registry?format=csv&bank=sber', undefined, { binary: true })).body.toString('utf8');
+  assert.match(csv, /Перечень отчётов об оценке для банка «Сбербанк» — Банкова Вера/);
+  assert.match(csv, /Цель оценки;Банк;Заказчик/);
+  assert.match(csv, /1;;;г\. Москва, ул\. Банковая, д\. 1;Оценка недвижимости;Ипотека, залог, банк;Сбербанк;/);
+  assert.ok(!csv.includes('Банковая, д. 3'));
+  assert.ok(!(await exp.req('GET', '/api/specialist/me/registry?format=csv', undefined, { binary: true })).body.toString('utf8').includes(';Банк;'));
+  // Руководитель — тот же отбор по организации.
+  const o = (await head.req('GET', `/api/orgs/${org.id}/registry?bank=sber`)).body.registry;
+  assert.deepEqual([o.rows.map((x) => x.id), o.experts.map((e) => [e.name, e.n]), o.holes], [[sber.id], [['Банкова Вера', 1]], null]);
+  assert.deepEqual((await head.req('GET', `/api/orgs/${org.id}/registry`)).body.registry.banks.map((b) => b.id), ['sber', 'other']);
+  const ocsv = (await head.req('GET', `/api/orgs/${org.id}/registry?format=csv&bank=any`, undefined, { binary: true })).body.toString('utf8');
+  assert.match(ocsv, /Перечень отчётов об оценке для банков — Тестовая организация банк 2457/);
+  assert.match(ocsv, /Оценщик;Объект оценки;Услуга;Цель оценки;Банк;Заказчик/);
+});
+
 test('пропуски в нумерации за год (2.416): у эксперта — почему, если платформа знает; у руководителя — по счёту организации; за квартал — нет', async () => {
   const exp = await login(S, '+79990004161');
   const other = await login(S, '+79990004162');

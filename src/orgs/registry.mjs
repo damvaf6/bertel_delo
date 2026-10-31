@@ -5,6 +5,7 @@
 // Сданные — в «готово» и закрытые заказчиком после него (2.407: закрытое дело из перечня не пропадает).
 // Годы — текущий и три прошлых (плановая проверка СРО — раз в три года). Выгрузка — CSV для Excel, как сводка за месяц.
 import { reportFacts } from '../ai/report-checks.mjs';
+import { bankList, OTHER_BANK } from '../dossier/dossier.mjs';
 import { numberSource, resultDocs } from '../ops/ai-ops.mjs';
 import { todayMsk } from '../orders/workflow.mjs';
 import { formatNumber, guessPattern, numberKey, seqOf } from './numbering.mjs';
@@ -22,6 +23,15 @@ export function registryYears(today = todayMsk()) {
   return Array.from({ length: REGISTRY_YEARS_BACK + 1 }, (_, i) => y - i);
 }
 
+// Перечень для банка (2.457): ?bank=sber — только отчёты для этого банка (поле заявки bank), ?bank=any — все отчёты для
+// банков. Отчёт «для банка» без названия банка (цель — банк, поле пустое) — под «Другой банк».
+export const ANY_BANK = 'any';
+const bankParam = (v) => (v === ANY_BANK || /^[a-z0-9_]{1,32}$/.test(String(v ?? '')) ? String(v) : null);
+export function bankOf(o) {
+  const f = o.fields ?? {};
+  return f.bank || (f.purpose === 'bank' ? OTHER_BANK.id : null);
+}
+
 // Период из запроса: ?year=2026&quarter=4 (без квартала — весь год). Неизвестное — текущий год.
 export function registryPeriod(query = {}, today = todayMsk()) {
   const years = registryYears(today);
@@ -29,7 +39,8 @@ export function registryPeriod(query = {}, today = todayMsk()) {
   const quarter = /^[1-4]$/.test(String(query.quarter ?? '')) ? Number(query.quarter) : 0;
   const from = quarter ? `${year}-${String((quarter - 1) * 3 + 1).padStart(2, '0')}-01` : `${year}-01-01`;
   const to = quarter ? (quarter === 4 ? `${year + 1}-01-01` : `${year}-${String(quarter * 3 + 1).padStart(2, '0')}-01`) : `${year + 1}-01-01`;
-  return { year, quarter, from, to, name: quarter ? `${QUARTER_RU[quarter]} ${year} года` : `${year} год`, years };
+  const bank = bankParam(query.bank);
+  return { year, quarter, from, to, name: quarter ? `${QUARTER_RU[quarter]} ${year} года` : `${year} год`, years, ...(bank ? { bank } : {}) };
 }
 
 // 2.404: чего не нашлось в файле отчёта — где это обычно пишут (так ищет и сверка 2.116, 2.108).
@@ -79,8 +90,17 @@ export function editionDocs(o, docs) {
 }
 
 // Сданные за период дела → строки перечня (номер, дата составления, стоимость — из файлов результата).
+// banks — для каких банков отчёты за период и сколько (выбор «Для банка»); с period.bank — только отчёты для него.
 async function registryRows(sql, storage, registry, done, period) {
-  const list = done.filter((o) => isAppraisal(registry, o)).sort((a, b) => new Date(a.at) - new Date(b.at));
+  const all = done.filter((o) => isAppraisal(registry, o)).sort((a, b) => new Date(a.at) - new Date(b.at));
+  const names = new Map(bankList(registry).map((b) => [b.id, b.name]));
+  const choice = (id) => (id === OTHER_BANK.id ? 'Другой банк или не указан' : names.get(id) ?? id);
+  const count = new Map();
+  for (const o of all) { const b = bankOf(o); if (b) count.set(b, (count.get(b) ?? 0) + 1); }
+  const banks = [...names.keys(), ...[...count.keys()].filter((k) => !names.has(k))].filter((k) => count.has(k))
+    .map((id) => ({ id, name: choice(id), n: count.get(id) }));
+  const bank = period.bank ? { id: period.bank, name: period.bank === ANY_BANK ? 'всех банков' : choice(period.bank) } : null;
+  const list = !bank ? all : all.filter((o) => (bank.id === ANY_BANK ? !!bankOf(o) : bankOf(o) === bank.id));
   const rows = [];
   for (const o of list.slice(0, REGISTRY_MAX)) {
     const svc = registry.service(o.module, o.service);
@@ -92,6 +112,8 @@ async function registryRows(sql, storage, registry, done, period) {
       service_name: svc?.service.name ?? o.service,
       object: objectOf(o),
       purpose: optionName(svc?.fields, 'purpose', o.fields?.purpose),
+      // У строки — банк, только если он указан в заявке; «для банка» без названия — без пометки.
+      ...(o.fields?.bank ? { bank_name: names.get(o.fields.bank) ?? o.fields.bank } : {}),
       customer: o.customer || null,
       done_on: dayMsk(o.at),
       number: facts.number ?? null,
@@ -116,7 +138,7 @@ async function registryRows(sql, storage, registry, done, period) {
   }
   for (const x of rows) x.dup = x.number != null && seen.get(`${x.expert_id ?? ''}|${numberKey(x.number)}`) > 1;
   return { year: period.year, quarter: period.quarter, name: period.name, years: period.years, total: list.length,
-    shown: rows.length, rows };
+    shown: rows.length, rows, banks, bank };
 }
 
 // Пропуски в нумерации за год (2.416): порядковые номера по образцу между наименьшим и наибольшим из номеров сданных отчётов
@@ -198,7 +220,8 @@ export async function expertRegistry(sql, storage, registry, userId, period) {
       and h.at < (${period.to}::date)::timestamp at time zone 'Europe/Moscow'
     order by o.id, h.at desc`;
   const r = await registryRows(sql, storage, registry, done, period);
-  r.holes = period.quarter || period.months ? null : await expertHoles(sql, userId, period, r.rows);
+  // Пропуски в нумерации — только по всему перечню: в отобранном по банку номера других отчётов были бы «пропусками».
+  r.holes = period.quarter || period.months || period.bank ? null : await expertHoles(sql, userId, period, r.rows);
   return r;
 }
 
@@ -236,7 +259,7 @@ export async function orgRegistry(sql, storage, registry, orgId, period) {
   r.experts = [...by.values()].sort((a, b) => b.n - a.n || a.name.localeCompare(b.name, 'ru'));
   // Экспертов, работающих от организации, нет — карточку перечня не показываем (как сводку за месяц).
   r.staff = (await sql.one`select count(*)::int as n from specialists where org_id = ${orgId}`).n;
-  r.holes = period.quarter ? null : await orgHoles(sql, orgId, period, r.rows);
+  r.holes = period.quarter || period.bank ? null : await orgHoles(sql, orgId, period, r.rows);
   return r;
 }
 
@@ -287,13 +310,13 @@ const HOLE_CSV = { cancelled: 'дело отменено', open: 'дело ещ�
 // org — перечень организации (2.402): заголовок с её названием и столбец «Оценщик».
 export function registryCsv(name, r, { org = false } = {}) {
   const lines = [
-    [`Перечень отчётов об оценке — ${name}`],
+    [`Перечень отчётов об оценке${r.bank ? ` для ${r.bank.id === ANY_BANK ? 'банков' : `банка «${r.bank.name}»`}` : ''} — ${name}`],
     [`Период: ${r.name}`],
     [],
-    ['№ п/п', 'Номер отчёта', 'Дата составления', ...(org ? ['Оценщик'] : []), 'Объект оценки', 'Услуга', 'Цель оценки', 'Заказчик',
+    ['№ п/п', 'Номер отчёта', 'Дата составления', ...(org ? ['Оценщик'] : []), 'Объект оценки', 'Услуга', 'Цель оценки', ...(r.bank ? ['Банк'] : []), 'Заказчик',
       'Итоговая стоимость, ₽', 'Что за стоимость', 'Сдано', 'Редакция'],
     ...r.rows.map((x, i) => [i + 1, x.number ?? '', ruDay(x.made_on), ...(org ? [x.expert_name] : []), x.object, x.service_name,
-      x.purpose ?? '', x.customer ?? '', rubCell(x.value_rub), x.value_name ?? '', ruDay(x.done_on),
+      x.purpose ?? '', ...(r.bank ? [x.bank_name ?? ''] : []), x.customer ?? '', rubCell(x.value_rub), x.value_name ?? '', ruDay(x.done_on),
       x.edition?.pending ? `сданная; замечания от ${ruDay(x.edition.remarks_on)} — ответ готовится`
         : x.edition ? `новая от ${ruDay(x.edition.on)} (после замечаний от ${ruDay(x.edition.remarks_on)})` : '']),
     ...(r.rows.some((x) => x.dup) ? [[], ['Номер отчёта повторяется — у каждого отчёта свой номер: '
