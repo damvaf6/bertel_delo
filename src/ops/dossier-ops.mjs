@@ -9,7 +9,8 @@ import { orderSides } from '../access/policy.mjs';
 import { addDays, todayMsk } from '../orders/workflow.mjs';
 import { KINDS, bankList, dossierAlerts, loadDossier } from '../dossier/dossier.mjs';
 import { publicDoc, saveDocument } from './core-ops.mjs';
-import { audit, text } from './util.mjs';
+import { audit, sendFile, text } from './util.mjs';
+import { buildRenewalPack } from '../dossier/renewal.mjs';
 
 // Облако принимает запрос не больше 3,5 МБ (Yandex Serverless Containers) — через ядро только до 3 МБ (2.49).
 const MAX_FILE_BYTES = 3 * 1024 * 1024;
@@ -195,6 +196,21 @@ export function dossierOps() {
         const cur = await ownItem(sql, actor, params.item);
         if (!cur.file_key) throw new HttpError(404, 'not_found', 'Копия не загружена');
         return { url: await providers.storage.link(cur.file_key, { filename: cur.file_name }) };
+      },
+    },
+    {
+      // Документы для продления аккредитации в банке одним архивом (2.456): у своей записи «Аккредитация в банке» —
+      // сведения и копии документов досье, перечень отчётов за 12 месяцев. Чужая запись и другой вид — «не найдено».
+      id: 'dossier.renewal', method: 'GET', path: '/api/specialist/me/dossier/:item/renewal', auth: 'user', access: 'self',
+      async handler(ctx) {
+        const { sql, actor, params, res, providers } = ctx;
+        await requireSpecialist(sql, actor);
+        const cur = await ownItem(sql, actor, params.item);
+        if (cur.kind !== 'bank') throw new HttpError(404, 'not_found', 'Аккредитация в банке не найдена');
+        const item = (await loadDossier(sql, actor.id, { banks: true })).find((i) => i.id === String(cur.id));
+        const a = await buildRenewalPack(ctx, { ...item, file_key: cur.file_key, file_name: cur.file_name });
+        await audit(sql, actor, 'dossier.renewal', 'user', actor.id, { item: String(cur.id), files: a.files, reports: a.reports, bytes: a.buf.length });
+        await sendFile(res, providers, { buf: a.buf, filename: a.filename, mime: 'application/zip' });
       },
     },
     {

@@ -212,3 +212,28 @@ test('2.429: акт осмотра — в архивах заключений э
   assert.ok(![...none.keys()].some((n) => n.includes('Акт осмотра')));
   assert.ok(docText(none.get([...none.keys()].find((n) => n.startsWith('Опись')))).includes('осмотра в деле нет'));
 });
+
+test('2.456: документы для продления аккредитации — сданные отчёты эксперта в перечне за 12 месяцев, без заказчика', async () => {
+  const c = withSession('orlov');
+  const cookie = R.sessions.orlov;
+  const res = await fetch(`${S.base}/api/specialist/me/dossier`, { method: 'POST', headers: { cookie, 'x-delo-request': '1', 'content-type': 'application/json' },
+    body: JSON.stringify({ kind: 'bank', bank: 'sber', number: 'Б-1' }) });
+  const acc = { status: res.status, body: await res.json() };
+  assert.equal(acc.status, 201, JSON.stringify(acc.body));
+  const reg = (await (await c.req('GET', '/api/specialist/me/registry')).json()).registry;
+  assert.ok(reg.rows.length > 0);
+  const r = await c.req('GET', `/api/specialist/me/dossier/${acc.body.id}/renewal`);
+  assert.equal(r.status, 200);
+  const files = unzip(Buffer.from(await r.arrayBuffer()));
+  const csv = files.get('Перечень отчётов за 12 месяцев.csv').toString('utf8');
+  const text = docText(files.get('Продление аккредитации · Сбербанк.docx'));
+  assert.ok(text.includes(`Сдано отчётов: ${reg.total}`), text.slice(0, 400));
+  for (const x of reg.rows) {
+    assert.ok(text.includes(x.object) && csv.includes(x.object), x.object);
+    if (x.number) assert.ok(text.includes(x.number) && csv.includes(x.number), x.number);
+  }
+  for (const secret of [DEMO_PEOPLE.petrov.name, ...reg.rows.map((x) => x.customer).filter(Boolean)]) {
+    assert.ok(!text.includes(secret) && !csv.includes(secret), secret);
+  }
+  assert.ok(![...files.keys()].some((n) => n.startsWith('Дело №')), 'файлов дел в архиве нет');
+});

@@ -1490,7 +1490,7 @@ test('внутренняя переписка организации (2.28): т�
 });
 
 test('досье эксперта (2.14): только сам эксперт; копии в дело — только исполнитель своего дела в работе', async () => {
-  for (const id of ['dossier.get', 'dossier.add', 'dossier.update', 'dossier.remove', 'dossier.file', 'dossier.file.link', 'dossier.attach']) cover(id);
+  for (const id of ['dossier.get', 'dossier.add', 'dossier.update', 'dossier.remove', 'dossier.file', 'dossier.file.link', 'dossier.attach', 'dossier.renewal']) cover(id);
   const exp = await login(S, '+79990001491');
   await makeSpecialist(S.sql, exp.user.id);
   const it = await exp.req('POST', '/api/specialist/me/dossier', { kind: 'sro', title: 'Тестовая СРО', number: '777' });
@@ -1510,6 +1510,13 @@ test('досье эксперта (2.14): только сам эксперт; к
     assert.ok(!JSON.stringify(own ?? {}).includes('Тестовая СРО'), k);
   }
   assert.equal((await exp.req('GET', `/api/specialist/me/dossier/${it.body.id}/file`)).status, 200);
+  // Продление аккредитации (2.456): только у своей аккредитации в банке; у другого вида и у чужих — «не найдено».
+  const acc = await exp.req('POST', '/api/specialist/me/dossier', { kind: 'bank', bank: 'sber' });
+  assert.equal(acc.status, 201);
+  const ren = (c, id) => c.req('GET', `/api/specialist/me/dossier/${id}/renewal`, undefined, { binary: true });
+  assert.equal((await ren(exp, acc.body.id)).status, 200);
+  assert.equal((await ren(exp, it.body.id)).status, 404, 'не аккредитация');
+  for (const k of ['owner', 'spec', 'dispatcher', 'admin', 'headA', 'stranger']) assert.equal((await ren(U[k], acc.body.id)).status, 404, k);
   // Копии в дело: чужое дело — «не найдено»; заказчик и диспетчер — не исполнители.
   assert.equal((await exp.req('POST', `/api/orders/${ownOrder.id}/dossier`)).status, 404);
   assert.equal((await U.owner.req('POST', `/api/orders/${ownOrder.id}/dossier`)).status, 403);
