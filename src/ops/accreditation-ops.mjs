@@ -12,9 +12,47 @@ import { audit, text } from './util.mjs';
 const MAX_FILE_BYTES = 3 * 1024 * 1024; // как у копий досье (2.49)
 const MAX_ITEMS = 50;
 
+// Одна и та же аккредитация: банк из списка — по банку, свой банк — по названию (как sameBank в bank-terms.mjs).
+const bankKey = (r) => (r.bank === 'other' ? `other:${r.title.trim().toLowerCase()}` : r.bank);
+// Из записей одного владельца в одном банке — действующая дольше всех (без срока — бессрочная): прежняя после продления
+// уже не важна.
+const longest = (rows) => rows.reduce((best, r) => (!best ? r : !best.until ? best : !r.until || r.until > best.until ? r : best), null);
+const cell = (r) => ({ valid_until: r.until ?? null, state: termState(r.until ?? null) });
+
+// Руководителю (2.455): аккредитации организации и её экспертов одной таблицей — по банкам: у организации, у кого из
+// экспертов и до какого числа, у кого нет. Только банк и срок — без номеров решений и копий (копии своих аккредитаций
+// эксперт держит в досье). Банки — сначала из списка, потом свои по названию.
+async function bankTable(sql, org, orgRows, registry) {
+  const experts = await sql`
+    select s.user_id, u.full_name from specialists s join org_members m on m.org_id = s.org_id and m.user_id = s.user_id
+    join users u on u.id = s.user_id and u.is_active where s.org_id = ${org.id} order by u.full_name nulls last, s.user_id`;
+  const own = experts.length ? await sql`
+    select user_id, bank, title, to_char(valid_until, 'YYYY-MM-DD') as until from dossier_items
+    where kind = 'bank' and deleted_at is null and user_id = any(${experts.map((x) => x.user_id)}::uuid[]) order by id` : [];
+  const keys = new Map();
+  for (const r of [...orgRows, ...own]) if (!keys.has(bankKey(r))) keys.set(bankKey(r), { bank: r.bank, title: r.title });
+  const order = bankList(registry).map((b) => b.id);
+  const banks = [...keys.entries()].sort(([, a], [, b]) => (order.indexOf(a.bank) - order.indexOf(b.bank)) || a.title.localeCompare(b.title, 'ru'));
+  return {
+    experts: experts.length,
+    banks: banks.map(([key, b]) => {
+      const o = longest(orgRows.filter((r) => bankKey(r) === key));
+      const has = [];
+      const without = [];
+      for (const x of experts) {
+        const r = longest(own.filter((y) => y.user_id === x.user_id && bankKey(y) === key));
+        const name = x.full_name || 'Без имени';
+        if (r) has.push({ expert: name, ...cell(r) }); else without.push(name);
+      }
+      return { bank: b.bank, title: b.title, org: o ? cell(o) : null, experts: has, without };
+    }),
+  };
+}
+
 async function view(sql, actor, org, registry) {
   const rows = await sql`select *, to_char(issued_on, 'YYYY-MM-DD') as issued, to_char(valid_until, 'YYYY-MM-DD') as until
                          from org_accreditations where org_id = ${org.id} and deleted_at is null order by title, id`;
+  const manage = roleIn(actor, org.id) === 'head';
   return {
     items: rows.map((r) => ({
       id: String(r.id), bank: r.bank, title: r.title, number: r.number ?? null, issued_on: r.issued ?? null,
@@ -22,7 +60,8 @@ async function view(sql, actor, org, registry) {
       file: r.file_key ? { name: r.file_name, mime: r.file_mime, size_bytes: r.file_size } : null,
     })),
     banks: bankList(registry),
-    manage: roleIn(actor, org.id) === 'head',
+    manage,
+    ...(manage ? { table: await bankTable(sql, org, rows, registry) } : {}),
   };
 }
 

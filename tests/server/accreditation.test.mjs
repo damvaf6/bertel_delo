@@ -113,3 +113,45 @@ test('организация: аккредитации вносит руково
   assert.ok(!del.body.items.some((i) => i.id === id));
   assert.equal((await head.req('GET', `${A}/${id}/file`)).status, 404);
 });
+
+test('2.455: руководителю — организация и эксперты по банкам, у кого нет; сотруднику — нет; только банк и срок', async () => {
+  const o = await makeOrg(S.sql, 'Тестовая организация 2.455');
+  const h = await login(S, '+79990004551');
+  const e1 = await login(S, '+79990004552');
+  const e2 = await login(S, '+79990004553');
+  await addMember(S.sql, o.id, h.user.id, 'head');
+  for (const [c, name] of [[e1, 'Тестова Анна'], [e2, 'Тестов Борис']]) {
+    await addMember(S.sql, o.id, c.user.id, 'member');
+    await S.sql`update users set full_name = ${name} where id = ${c.user.id}`;
+    await S.sql`insert into specialists (user_id, org_id) values (${c.user.id}, ${o.id})`;
+  }
+  const A = `/api/orgs/${o.id}/accreditations`;
+  assert.equal((await h.req('GET', A)).body.table.banks.length, 0);
+  await h.req('POST', A, { bank: 'sber', number: 'Р-1', valid_until: addDays(todayMsk(), 200) });
+  await h.req('POST', A, { bank: 'other', title: 'Тестовый банк «Залог»', valid_until: addDays(todayMsk(), -3) });
+  // У Анны Сбербанк кончается, рядом прежняя истёкшая запись (продлила — берётся дольшая); у Бориса — свой банк без срока.
+  const D = '/api/specialist/me/dossier';
+  await e1.req('POST', D, { kind: 'bank', bank: 'sber', number: 'АК-1', valid_until: addDays(todayMsk(), -40) });
+  await e1.req('POST', D, { kind: 'bank', bank: 'sber', number: 'АК-2', valid_until: addDays(todayMsk(), 20) });
+  await e2.req('POST', D, { kind: 'bank', bank: 'other', title: 'Тестовый банк «Залог» ', number: 'Б-1' });
+  await e2.req('POST', D, { kind: 'bank', bank: 'other', title: 'Тестовый банк «Север»', valid_until: addDays(todayMsk(), 90) });
+  const t = (await h.req('GET', A)).body.table;
+  assert.equal(t.experts, 2);
+  assert.deepEqual(t.banks.map((b) => b.title), ['Сбербанк', 'Тестовый банк «Залог»', 'Тестовый банк «Север»'], 'сначала банки из списка');
+  const [sber, zalog, sever] = t.banks;
+  assert.deepEqual(sber.org, { valid_until: addDays(todayMsk(), 200), state: 'ok' });
+  assert.deepEqual(sber.experts, [{ expert: 'Тестова Анна', valid_until: addDays(todayMsk(), 20), state: 'soon' }]);
+  assert.deepEqual(sber.without, ['Тестов Борис']);
+  assert.equal(zalog.org.state, 'expired');
+  assert.deepEqual(zalog.experts, [{ expert: 'Тестов Борис', valid_until: null, state: null }], 'свой банк — по названию');
+  assert.equal(sever.org, null);
+  assert.deepEqual(sever.without, ['Тестова Анна']);
+  // Без номеров решений и копий экспертов.
+  assert.ok(!JSON.stringify(t).includes('АК-'));
+  assert.ok(!JSON.stringify(t).includes('Б-1'));
+  // Сотрудник таблицы не получает; чужой эксперт с той же записью в досье в таблицу не попадает.
+  assert.equal((await e1.req('GET', A)).body.table, undefined);
+  await exp.req('POST', D, { kind: 'bank', bank: 'other', title: 'Тестовый банк «Север»' });
+  assert.equal((await h.req('GET', A)).body.table.experts, 2);
+  assert.ok(!(await h.req('GET', A)).body.table.banks.flatMap((b) => b.experts).some((x) => x.expert !== 'Тестова Анна' && x.expert !== 'Тестов Борис'));
+});

@@ -29,6 +29,7 @@ import { orgChat } from '/orgchat.js';
 import { matcher, numberMatch, wireSearch } from '/search.js';
 import { loadOrgSchedule } from '/orgschedule.js';
 import { pickSignFilter } from '/orgsign.js';
+import { showSoonAccreditations } from '/orgaccr.js';
 import { newYearCaseText, taskLetterLines, taskMovedText } from '/today.js';
 
 const $ = (id) => document.getElementById(id);
@@ -639,8 +640,9 @@ export function focusOrgBlock(to) {
   if (to === 'sign_long') { pickSignFilter('long'); return goSign(null); }
   // «numbering» (2.419) — из «Сегодня»: в январе образец номера организации без года.
   if (to === 'numbering') return $('org-numbering-box').scrollIntoView({ block: 'start' });
-  // «accr» (2.454) — из «Сегодня»: срок аккредитации организации в банке кончается.
-  if (to === 'accr') return $('org-accr-box').scrollIntoView({ block: 'start' });
+  // «accr» (2.454) — из «Сегодня»: срок аккредитации организации или эксперта в банке кончается; руководителю — к таблице
+  // по банкам с отбором «кончается» (2.455).
+  if (to === 'accr') return showSoonAccreditations();
   $('org-cases-search').value = '';
   expert = '';
   filter = to;

@@ -272,3 +272,55 @@ test('2.454: срок аккредитации кончается — строк
   await expect(hp.locator('#org-accr-box')).toBeInViewport();
   expect([...hp.problems, ...sp.problems]).toEqual([]);
 });
+
+test('2.455: руководитель — организация и эксперты по банкам, отбор «кончается»', async ({ browser, baseURL }) => {
+  const hp = await phone(browser, baseURL);
+  const head = await signIn(hp, '+79990004581');
+  const orgId = await db(async (c) => {
+    const org = (await c.query("insert into organizations (name) values ('Тестовая оценочная организация 4581') returning id")).rows[0];
+    await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'head')", [org.id, head.id]);
+    for (const [phone, name, rows] of [
+      ['+79990004582', 'Тестова Анна', [['sber', 'Сбербанк', plusDays(12)]]],
+      ['+79990004583', 'Тестов Борис', [['other', 'Тестовый банк «Залог»', null], ['sber', 'Сбербанк', plusDays(300)]]],
+      ['+79990004584', 'Тестов Виктор', []],
+    ]) {
+      const u = (await c.query("insert into users (phone, full_name) values ($1, $2) returning id", [phone, name])).rows[0];
+      await c.query("insert into org_members (org_id, user_id, role) values ($1, $2, 'member')", [org.id, u.id]);
+      await c.query("insert into specialists (user_id, regions, capacity, org_id) values ($1, '{moscow,mo}', 5, $2)", [u.id, org.id]);
+      for (const [bank, title, until] of rows) {
+        await c.query("insert into dossier_items (user_id, kind, title, bank, valid_until) values ($1, 'bank', $2, $3, $4)", [u.id, title, bank, until]);
+      }
+    }
+    await c.query("insert into org_accreditations (org_id, bank, title, valid_until, created_by) values ($1, 'sber', 'Сбербанк', $2, $3), ($1, 'other', 'Тестовый банк «Залог»', $4, $3)",
+      [org.id, plusDays(200), head.id, plusDays(-2)]);
+    return org.id;
+  });
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const box = hp.locator('#org-accr-table-box');
+  await expect(box).toBeVisible();
+  const sber = box.locator('li[data-bank="Сбербанк"]');
+  await expect(sber.locator('[data-cell="Организация"]')).toContainText('Организация: до');
+  await expect(sber.locator('[data-cell="Тестова Анна"]')).toContainText('срок кончается');
+  await expect(sber.locator('[data-cell="Тестов Борис"]')).not.toContainText('срок');
+  await expect(sber).toContainText('Нет у экспертов: Тестов Виктор');
+  const zalog = box.locator('li[data-bank="Тестовый банк «Залог»"]');
+  await expect(zalog.locator('[data-cell="Организация"]')).toContainText('срок истёк');
+  await expect(zalog.locator('[data-cell="Тестов Борис"]')).toHaveText('Тестов Борис: без срока');
+  await expect(zalog).toContainText(/Нет у экспертов: (Тестов Виктор, Тестова Анна|Тестова Анна, Тестов Виктор)/);
+  await box.scrollIntoViewIfNeeded();
+  await shot(hp, 'ak11-2455-tablica-akkreditaciy');
+  // Отбор «кончается»: только Анна в Сбербанке и истёкшая аккредитация организации в своём банке.
+  await hp.getByLabel('Только кончается в 30 дней или истёк').check();
+  await expect(box.locator('[data-cell]')).toHaveCount(2);
+  await expect(sber.locator('[data-cell="Тестова Анна"]')).toBeVisible();
+  await expect(zalog.locator('[data-cell="Организация"]')).toBeVisible();
+  await expect(box).not.toContainText('Нет у экспертов');
+  await shot(hp, 'ak12-2455-tablica-konchaetsya');
+  // Из «Сегодня» — сразу к таблице с отбором.
+  await hp.goto('/kabinet');
+  await hp.locator(`#today-box li[data-today-item="org-bank-terms-${orgId}"]`).last().locator('button.open').click();
+  await expect(hp).toHaveURL(new RegExp(`#org=${orgId}&to=accr$`));
+  await expect(hp.getByLabel('Только кончается в 30 дней или истёк')).toBeChecked();
+  await expect(box.locator('[data-cell]')).toHaveCount(2);
+  expect(hp.problems).toEqual([]);
+});
