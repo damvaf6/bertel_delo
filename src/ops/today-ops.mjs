@@ -29,6 +29,7 @@
 // Только свои дела и свои организации.
 import { orderRef } from '../notify/registry.mjs';
 import { orderSplit } from '../money/money.mjs';
+import { bankGaps } from './match-ops.mjs';
 import { RESULT_DUE_DAYS, STATUS_NAME, addDays, hotDay, isOverdue, resultDue, todayMsk, workBefore } from '../orders/workflow.mjs';
 import { taskDues } from '../orders/schedule.mjs';
 import { orderSignatures, orgReturns, returnEgrn, signLong, signWait } from './sign-ops.mjs';
@@ -291,7 +292,11 @@ async function expertPart(sql, actor, registry, today, storage) {
   // в «Горит срок» (там своё «нерабочий день — сдайте до …») здесь не повторяется.
   const hotIds = new Set(hotRows.map((o) => o.id));
   const ny = newYearCases(rows.filter((o) => !hotIds.has(o.id)), today);
+  // Дело для банка, а у эксперта нет аккредитации в нём ни своей, ни через организацию (2.453): у предложения — пометкой,
+  // у дела в работе — своей строкой «уточните у заказчика или попросите передать дело».
+  const gaps = await bankGaps(sql, rows, registry, actor.id, today);
   return {
+    bank_gap: rows.filter((o) => o.status !== 'awaiting_executor' && gaps.has(o.id)).map((o) => item(o, { bank: gaps.get(o.id) })),
     // Номер отчёта выдан, а дело отменено (2.418): отдать номер следующему делу или оставить пропуском.
     number_cancelled: (await cancelledNumbers(sql, actor.id, today)).map((o) => ({ id: o.id, title: o.title, number: o.number, on: o.on,
       cancelled_at: o.cancelled_at, ...(o.org_name ? { org_name: o.org_name } : {}) })),
@@ -339,7 +344,7 @@ async function expertPart(sql, actor, registry, today, storage) {
     review: reviewRows.filter((x) => !x.long),
     review_long: reviewRows.filter((x) => x.long).sort((a, b) => a.review_since.localeCompare(b.review_since)),
     offers: rows.filter((o) => o.status === 'awaiting_executor')
-      .map((o) => item(o, { fee_kop: o.price_kop ? orderSplit(o).payoutKop : null })),
+      .map((o) => item(o, { fee_kop: o.price_kop ? orderSplit(o).payoutKop : null, bank_gap: gaps.get(o.id) ?? null })),
   };
 }
 

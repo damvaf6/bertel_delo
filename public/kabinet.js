@@ -158,7 +158,9 @@ function orderItem(o) {
       ...(back ? [el('div', { class: 'back-note', 'data-role': 'returned-note', text: returnedText(o.returned) })] : []),
       el('div', { class: 'muted', text: [o.service_name, orderRef(o), o.as_executor && o.fee_kop ? `Вам ${rubShort(o.fee_kop)}` : null, o.as_executor ? null : dateRu(o.created_at),
         o.org_name ? `${o.org_name} · ведёт ${o.responsible_name || 'сотрудник'}` : null].filter(Boolean).join(' · ') }),
-      ...(o.as_executor && o.brief ? [el('div', { class: 'brief', text: o.brief })] : [])));
+      ...(o.as_executor && o.brief ? [el('div', { class: 'brief', text: o.brief })] : []),
+      // Дело для банка, где у исполнителя и его организации нет аккредитации (2.453) — видно до «Принять дело».
+      ...(o.as_executor && o.bank_gap ? [el('div', { class: 'overdue', 'data-role': 'bank-gap', text: bankGapNote(o.bank_gap) })] : [])));
   if (o.as_executor && o.status === 'awaiting_executor') {
     li.append(el('div', { class: 'row offer-actions' },
       el('button', { 'data-action': 'accept', onclick: () => answerOffer(o, 'in_work') }, 'Принять дело'),
@@ -167,13 +169,15 @@ function orderItem(o) {
   return li;
 }
 
+const bankGapNote = (b) => `Отчёт для банка «${b.name}»: у Вас и Вашей организации нет аккредитации в нём — банк может не принять отчёт.`;
+
 async function answerOffer(o, to) {
   let reason;
   if (to === 'matching') {
     reason = prompt('Почему отказываетесь? Причину увидит тот, кто предложил дело, и предложит его другому.');
     if (reason === null) return;
     if (!reason.trim()) return say($('orders-msg'), 'Укажите причину отказа');
-  } else if (!confirm(`Принять дело «${o.title}»?`)) return;
+  } else if (!confirm(`Принять дело «${o.title}»?${o.bank_gap ? `\n\n${bankGapNote(o.bank_gap)}` : ''}`)) return;
   try {
     await api('POST', `/api/orders/${o.id}/status`, { from: 'awaiting_executor', to, reason: reason?.trim() || undefined });
     // Принял — сразу в дело (2.33): дальше работа там, «Что дальше» подскажет первый шаг.

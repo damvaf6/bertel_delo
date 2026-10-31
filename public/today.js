@@ -145,6 +145,9 @@ function courtTake(x) {
 
 // Группа строк: заголовок с числом и строки-кнопки. Строка может быть { text, class } — например, красная (2.161).
 // extra(x) — кнопки под строкой (2.166: «Попросить перенести срок» у просроченного дела).
+// Банк принимает отчёты только от аккредитованных в нём (2.453); аккредитация есть, но не внесена — внести в досье.
+const bankGapText = (b) => `Отчёт для банка «${b.name}»: у Вас и Вашей организации нет аккредитации в нём — банк может не принять отчёт. Если аккредитация есть — внесите её в досье.`;
+
 function group(id, title, items, line, go, extra = () => []) {
   if (!items.length) return [];
   return [el('li', { class: 'group', 'data-today': id, text: `${title} · ${items.length}` }),
@@ -600,7 +603,12 @@ export async function loadToday() {
       ...numberYear(e.number_year, 'number-year', { go: () => { location.hash = 'specialist&to=numbering'; },
         save: e.number_year?.org ? null : (pattern) => api('PATCH', '/api/specialist/me', { report_pattern: pattern }) }),
       ...group('hot', 'Горит срок', e.hot.filter((x) => !noResult.some((n) => n.id === x.id) && !taskDue.some((n) => n.id === x.id)), (x) => [x.title, `${x.service} · ${deadline({ ...x, who: 'Вы попросили' }, t.today)}`], toOrder, askLate),
-      ...group('offers', 'Новые предложения', e.offers, (x) => [x.title, [x.service, x.fee_kop ? `Вам ${rub(x.fee_kop)}` : null, deadline(x, t.today)].filter(Boolean).join(' · ')], toOrder),
+      // Предложение для банка, где у эксперта и его организации нет аккредитации (2.453) — предупредить до «Принять дело».
+      ...group('offers', 'Новые предложения', e.offers, (x) => [x.title, [x.service, x.fee_kop ? `Вам ${rub(x.fee_kop)}` : null, deadline(x, t.today)].filter(Boolean).join(' · '),
+        ...(x.bank_gap ? [{ class: 'warn-line', role: 'bank-gap', text: bankGapText(x.bank_gap) }] : [])], toOrder),
+      // Дело для банка в работе, а аккредитации в нём нет (2.453): уточнить у заказчика или попросить передать дело.
+      ...group('bank-gap', 'Дело для банка, а аккредитации в нём нет', e.bank_gap ?? [], (x) => [x.title, `${x.service} · ${deadline(x, t.today)}`,
+        { class: 'warn-line', role: 'bank-gap', text: `${bankGapText(x.bank)} Уточните у заказчика или попросите руководителя передать дело аккредитованному коллеге.` }], toOrder),
       // На проверке у диспетчера 2 рабочих дня и дольше (2.369, 2.384) — строкой, без кнопок: делать ничего не нужно, ответ придёт в ленту.
       ...group('review-long', 'Диспетчер проверяет дольше 2 рабочих дней', e.review_long ?? [], (x) => [x.title, `${x.service} · ${deadline(x, t.today)}`,
         { class: 'warn-line', role: 'review-long-what', text: `Сдано на проверку ${since(x.review_since)} · ждёт ${waited(x.review_since)} — ответ диспетчера придёт в уведомления` }], toOrder),
