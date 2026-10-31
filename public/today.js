@@ -715,7 +715,7 @@ export async function loadToday() {
         x.source === 'org' ? `${x.title} · аккредитация организации` : `${x.expert} · ${x.title}`,
         { class: x.expired ? 'overdue' : 'warn-line', role: 'org-bank-term-what', text: bankTermWhat(x, g.bank_terms, t.today) },
         x.source === 'org' ? 'продлите в банке и внесите новый срок в «Аккредитации в банках»' : 'продлевает эксперт и вносит новый срок в досье'],
-      (x) => { location.hash = x.source === 'org' ? `org=${g.id}&to=accr` : `org=${g.id}`; }),
+      () => { location.hash = `org=${g.id}&to=accr`; }),
       // Досье экспертов (2.63): только вид документа и срок; копии руководитель не видит.
       ...group(`org-dossier-${g.id}`, 'Документы экспертов: срок', g.dossier ?? [], (x) => [`${x.expert} · ${x.kind_name}`,
         x.state === 'expired' ? `срок истёк ${dayRu(x.valid_until)} — по оценке эксперт снят с подбора` : `действует до ${dayRu(x.valid_until)} · осталось ${daysLeft(x.valid_until, t.today)} дн.`], toOrg()),

@@ -8,6 +8,7 @@ const MAX_FILE = 3 * 1024 * 1024; // облако: запрос не больш�
 const STATE = { expired: 'срок истёк', soon: 'срок кончается' };
 let org = null;
 let editing = null;
+let table = null;
 
 export async function loadOrgAccreditations(current) {
   org = current;
@@ -34,6 +35,8 @@ function render(r) {
   }
   $('org-accr-form').classList.toggle('hidden', !r.manage);
   $('org-accr-empty').classList.toggle('hidden', r.items.length > 0);
+  table = r.table ?? null;
+  renderTable();
   $('org-accr-items').replaceChildren(...r.items.map((i) => {
     const fileId = `org-accr-file-${i.id}`;
     return el('li', { 'data-accr': i.id },
@@ -49,6 +52,45 @@ function render(r) {
         ...(r.manage ? [el('button', { type: 'button', class: 'secondary', onclick: () => edit(i) }, 'Изменить'),
           el('button', { type: 'button', class: 'danger', onclick: () => remove(i) }, 'Убрать')] : [])));
   }));
+}
+
+// Руководителю (2.455): организация и эксперты по банкам — до какого числа, у кого нет; отбор «кончается».
+const hot = (c) => c && (c.state === 'soon' || c.state === 'expired');
+const until = (c) => (c.valid_until ? `до ${dayRu(c.valid_until)}` : 'без срока');
+
+function line(who, c) {
+  // Пометка — в строке сразу за сроком, а не отдельной строкой под ним.
+  return el('div', { 'data-cell': who },
+    el('span', { text: `${who}: ${until(c)}` }),
+    ...(STATE[c.state] ? [' ', el('span', { class: 'badge overdue', text: STATE[c.state] })] : []));
+}
+
+// Из «Сегодня» руководителя (to=accr): сразу с отбором «кончается».
+export function showSoonAccreditations() {
+  $('org-accr-soon').checked = true;
+  renderTable();
+  ($('org-accr-table-box').classList.contains('hidden') ? $('org-accr-box') : $('org-accr-table-box')).scrollIntoView({ block: 'start' });
+}
+
+function renderTable() {
+  const box = $('org-accr-table-box');
+  box.classList.toggle('hidden', !table);
+  if (!table) return;
+  const soon = $('org-accr-soon').checked;
+  const rows = table.banks.map((b) => {
+    const org = b.org && (!soon || hot(b.org)) ? [line('Организация', b.org)] : [];
+    const people = b.experts.filter((x) => !soon || hot(x)).map((x) => line(x.expert, x));
+    if (soon && !org.length && !people.length) return null;
+    return el('li', { 'data-bank': b.title },
+      el('div', { class: 'title', text: b.title }),
+      ...(!b.org && !soon ? [el('div', { class: 'muted', text: 'Организация: нет' })] : []),
+      ...org, ...people,
+      ...(!soon && b.without.length ? [el('div', { class: 'muted', text: `Нет у экспертов: ${b.without.join(', ')}` })] : []));
+  }).filter(Boolean);
+  $('org-accr-table').replaceChildren(...rows);
+  const empty = $('org-accr-table-empty');
+  empty.textContent = soon ? 'Ни у организации, ни у экспертов срок не кончается в 30 дней.' : 'Аккредитаций пока нет ни у организации, ни у экспертов.';
+  empty.classList.toggle('hidden', rows.length > 0);
 }
 
 function applyBank() {
@@ -109,6 +151,7 @@ async function remove(i) {
 }
 
 $('org-accr-bank').addEventListener('change', applyBank);
+$('org-accr-soon').addEventListener('change', renderTable);
 $('org-accr-cancel').addEventListener('click', () => { resetForm(); say($('org-accr-msg'), ''); });
 
 $('org-accr-form').addEventListener('submit', async (e) => {
