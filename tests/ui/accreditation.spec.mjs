@@ -178,3 +178,53 @@ test('2.452: подбор для заявки Сбербанка — аккре�
   await shot(dp, 'ak05-podbor-bank-nikogo');
   expect([...dp.problems, ...cp.problems]).toEqual([]);
 });
+
+test('2.453: дело для банка без аккредитации — предупреждение эксперту при принятии и строкой в «Сегодня»', async ({ browser, baseURL }) => {
+  const cp = await phone(browser, baseURL);
+  const sp = await phone(browser, baseURL);
+  await signIn(cp, '+79990004551');
+  const expert = await signIn(sp, '+79990004553');
+  await db((c) => c.query("insert into specialists (user_id, regions, capacity) values ($1, '{moscow,mo}', 5)", [expert.id]));
+  const id = (await (await cp.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира для Сбербанка 2453' }, headers: H })).json()).order.id;
+  expect((await cp.request.patch(`/api/orders/${id}`, {
+    data: { deadline: plusDays(15), fields: { purpose: 'bank', bank: 'sber', region: 'mo', object_type: 'flat', address: 'тестовый адрес, 1' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await cp.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  await db((c) => c.query("update orders set status = 'awaiting_executor', executor_user_id = $2, price_kop = 1500000, paid_at = now() where id = $1", [id, expert.id]));
+
+  // «Сегодня»: у предложения — предупреждение.
+  await sp.goto('/kabinet');
+  const offer = sp.locator('#today-box li[data-today-item="offers"]').filter({ hasText: 'Квартира для Сбербанка 2453' });
+  await expect(offer.locator('[data-role=bank-gap]')).toHaveText(/^Отчёт для банка «Сбербанк»: у Вас и Вашей организации нет аккредитации в нём/);
+  await offer.scrollIntoViewIfNeeded();
+  await shot(sp, 'ak06-segodnya-predlozhenie-bez-akkr');
+  // В деле — рядом с «Принять дело».
+  await sp.goto(`/kabinet#order=${id}`);
+  await expect(sp.locator('#next-warn')).toHaveText(/нет аккредитации в нём — банк может не принять отчёт\. Уточните у заказчика или откажитесь от дела\./);
+  await expect(sp.locator('#next-main [data-next=main]')).toHaveText('Принять дело');
+  await shot(sp, 'ak07-delo-predlozhenie-bez-akkr');
+  // В списке дел — пометка и вопрос при «Принять дело» с тем же предупреждением.
+  await sp.goto('/kabinet');
+  const li = sp.locator('#orders > li').filter({ hasText: 'Квартира для Сбербанка 2453' });
+  await expect(li.locator('[data-role=bank-gap]')).toBeVisible();
+  let asked = '';
+  sp.once('dialog', (d) => { asked = d.message(); d.accept(); });
+  await li.locator('[data-action=accept]').click();
+  await expect(sp).toHaveURL(new RegExp(`#order=${id}$`));
+  expect(asked).toContain('нет аккредитации');
+  await expect(sp.locator('#next-warn')).toHaveText(/Уточните у заказчика или попросите руководителя передать дело\./);
+  // «Сегодня»: дело в работе — своей строкой.
+  await sp.goto('/kabinet');
+  await expect(sp.locator('#today-box li[data-today="bank-gap"]')).toHaveText('Дело для банка, а аккредитации в нём нет · 1');
+  const row = sp.locator('#today-box li[data-today-item="bank-gap"]');
+  await expect(row).toContainText('Квартира для Сбербанка 2453');
+  await expect(row.locator('[data-role=bank-gap]')).toContainText('попросите руководителя передать дело аккредитованному коллеге');
+  await row.scrollIntoViewIfNeeded();
+  await shot(sp, 'ak08-segodnya-delo-bez-akkr');
+  // Внёс аккредитацию в досье — строки нет.
+  await db((c) => c.query("insert into dossier_items (user_id, kind, title, bank, valid_until) values ($1, 'bank', 'Сбербанк', 'sber', current_date + 100)", [expert.id]));
+  await sp.reload();
+  await expect(sp.locator('#today-box')).toBeVisible();
+  await expect(sp.locator('#today-box li[data-today="bank-gap"]')).toHaveCount(0);
+  expect([...sp.problems, ...cp.problems]).toEqual([]);
+});
