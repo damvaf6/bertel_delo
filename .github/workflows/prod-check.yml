@@ -1,0 +1,69 @@
+name: Prod check (Yandex Cloud)
+
+# Только чтение: что видит ключ облака перед запуском bertel.online (задача штаба 40917197-6878-8140).
+# Ничего не создаёт, не меняет и не запускает: только get/list и запрос к https://bertel.online.
+# Ключ: YC_PROD_SA_KEY_JSON (если Дамир передал ключ для боевого сайта), иначе YC_SA_KEY_JSON (каталог stage).
+# Итог — в сводке прогона; ключ и пароли в вывод не попадают.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      OLD_FOLDER: b1ghui999c328vf1j841 # старый каталог default, где шлюз bertel.online
+    steps:
+      - name: yc CLI
+        run: |
+          for i in 1 2 3 4; do
+            curl -sSL --connect-timeout 30 --retry 3 https://storage.yandexcloud.net/yandexcloud-yc/install.sh -o "$RUNNER_TEMP/yc-install.sh" \
+              && bash "$RUNNER_TEMP/yc-install.sh" -i /opt/yc -n && break
+            [ "$i" = 4 ] && { echo "::error::yc не скачался за 4 попытки"; exit 1; }
+            sleep $((i * 30))
+          done
+          echo "/opt/yc/bin" >> $GITHUB_PATH
+
+      - name: Что видит ключ
+        env:
+          PROD_KEY: ${{ secrets.YC_PROD_SA_KEY_JSON }}
+          STAGE_KEY: ${{ secrets.YC_SA_KEY_JSON }}
+        run: |
+          S=$GITHUB_STEP_SUMMARY
+          umask 077
+          if [ -n "$PROD_KEY" ]; then printf '%s' "$PROD_KEY" > "$RUNNER_TEMP/sa.json"; WHICH="YC_PROD_SA_KEY_JSON (боевой)";
+          else printf '%s' "$STAGE_KEY" > "$RUNNER_TEMP/sa.json"; WHICH="YC_SA_KEY_JSON (stage)"; fi
+          echo "## Проверка перед запуском bertel.online" >> $S
+          echo "- Ключ: $WHICH" >> $S
+          yc config set service-account-key "$RUNNER_TEMP/sa.json"
+          SA_ID=$(jq -r .service_account_id "$RUNNER_TEMP/sa.json")
+          SA_FOLDER=$(yc iam service-account get --id "$SA_ID" --format json | jq -r .folder_id)
+          SA_FOLDER_NAME=$(yc resource-manager folder get --id "$SA_FOLDER" --format json | jq -r .name)
+          CLOUD_ID=$(yc resource-manager folder get --id "$SA_FOLDER" --format json | jq -r .cloud_id)
+          echo "- Ключ заведён в каталоге: $SA_FOLDER_NAME" >> $S
+          FOLDERS=$(yc resource-manager folder list --cloud-id "$CLOUD_ID" --format json 2>/dev/null | jq -r '[.[].name] | join(", ")' || true)
+          echo "- Каталоги облака, видимые ключу: ${FOLDERS:-нет прав на список}" >> $S
+          echo "### Старый каталог (шлюз bertel.online)" >> $S
+          if GW=$(yc serverless api-gateway list --folder-id "$OLD_FOLDER" --format json 2>&1); then
+            echo "$GW" | jq -r '.[] | "- шлюз \(.name): \(.status); адреса: \([.connectivity // empty, (.domains // [])[]?.domain] | map(tostring) | join(", "))"' >> $S
+            CERTS=$(yc certificate-manager certificate list --folder-id "$OLD_FOLDER" --format json 2>/dev/null \
+              | jq -r '.[] | "- сертификат \(.name // .id): \(.status); \((.domains // []) | join(", ")); до \(.not_after // "—")"' || true)
+            echo "${CERTS:-- сертификатов не видно}" >> $S
+            ZONES=$(yc dns zone list --folder-id "$OLD_FOLDER" --format json 2>/dev/null | jq -r '.[] | "- зона DNS \(.zone)"' || true)
+            echo "${ZONES:-- зон DNS не видно}" >> $S
+          else
+            echo "- **Нет доступа** к старому каталогу: $(echo "$GW" | tail -1 | cut -c1-160)" >> $S
+          fi
+          rm -f "$RUNNER_TEMP/sa.json"
+
+      - name: Адрес bertel.online снаружи
+        if: always()
+        run: |
+          S=$GITHUB_STEP_SUMMARY
+          echo "### bertel.online снаружи" >> $S
+          echo "- DNS: $(getent hosts bertel.online | awk '{print $1}' | tr '\n' ' ')" >> $S
+          OUT=$(curl -sS --max-time 30 -o "$RUNNER_TEMP/body" -w '%{http_code}' https://bertel.online/ 2>&1 || true)
+          echo "- https://bertel.online: $OUT $(head -c 160 "$RUNNER_TEMP/body" 2>/dev/null | tr -d '\n')" >> $S
+          echo "- сертификат: $(echo | openssl s_client -connect bertel.online:443 -servername bertel.online 2>/dev/null | openssl x509 -noout -subject -enddate 2>/dev/null | tr '\n' ' ')" >> $S
