@@ -23,6 +23,13 @@ test('витрина: что это, как заказать, юрфирмам �
     await expect(page.getByRole('heading', { name: h })).toBeVisible();
   }
   await expect(page.locator('#what li')).toHaveCount(8);
+  // Цены «от … ₽» — из одного места (public/site-prices.js, решение Дамира 02.11.2026); «₽» не отрывается от суммы.
+  const prices = { realty: 'от 4 000 ₽', land: 'от 8 000 ₽', vehicle: 'от 4 000 ₽', dtp: 'от 6 000 ₽', movable: 'от 3 500 ₽',
+    goods: 'от 6 000 ₽', building: 'от 9 000 ₽', handwriting: 'от 15 000 ₽' };
+  for (const [key, text] of Object.entries(prices)) {
+    expect((await page.locator(`#what li[data-price="${key}"] .price`).textContent()).replace(/\u00a0/g, ' ')).toBe(`— ${text}`);
+  }
+  await expect(page.locator('#price-note')).toContainText('Точную цену по Вашей заявке назначает диспетчер');
   // Порядок оплаты и возврата — открыто на странице (сайт проверяет ЮKassa, ответ Дамира 30.10.2026).
   await expect(page.locator('#pay')).toContainText('вся сумма возвращается автоматически');
   await expect(page.getByText('Проверочная версия · только тестовые данные')).toBeVisible();
