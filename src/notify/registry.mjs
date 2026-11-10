@@ -34,6 +34,8 @@ export const EVENTS = {
   remarks_staff: { type: 'dispatch', title: 'К выданному отчёту пришли замечания от банка или суда — дело снова у эксперта', order: true },
   cancelled_by_customer: { type: 'dispatch', title: 'Заказчик отменил заявку', order: true },
   payout_failed_staff: { type: 'dispatch', title: 'Выплата исполнителю не прошла — нужен повтор', order: true },
+  // Лента заказов (2.468): эксперт сам взял оплаченный заказ — подбирать не нужно.
+  feed_taken: { type: 'dispatch', title: 'Эксперт сам взял заказ из ленты — подбор не нужен', order: true },
   paid_staff: { type: 'dispatch', title: 'Заявка оплачена — можно предлагать исполнителю', order: true },
   // Досье эксперта (2.14): у эксперта истёк аттестат или полис — список специалистов показывает, у кого.
   dossier_expired_staff: { type: 'dispatch', title: 'У эксперта истёк документ в досье — он отмечен в подборе и в списке специалистов', order: false, section: 'specialists' },

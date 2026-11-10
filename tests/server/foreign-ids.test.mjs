@@ -230,7 +230,7 @@ test('чужой номер в адресе — под каждой ролью, 
 test('списки, «Сегодня», уведомления и профиль у людей мира А не содержат ничего из мира Б', async () => {
   for (const who of ATTACKERS) {
     const c = W.A.u[who];
-    for (const url of ['/api/orders', '/api/today', '/api/notifications', '/api/me', '/api/specialist/me', '/api/orgs']) {
+    for (const url of ['/api/orders', '/api/today', '/api/notifications', '/api/me', '/api/specialist/me', '/api/specialist/feed', '/api/orgs']) {
       const r = await c.req('GET', url);
       assert.ok(r.status < 500, `${who} ${url}: ${r.status}`);
       assert.ok(!JSON.stringify(r.body ?? '').includes(MARK), `${who} ${url}: чужое в ответе`);

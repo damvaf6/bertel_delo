@@ -633,7 +633,7 @@ test('orders.status: шаги заказчика — только его сто�
 test('специалисты и подбор: допуски — только администратор; подбор — только диспетчер; чужое дело исполнитель не видит', async () => {
   for (const id of ['specialist.me', 'specialist.me.update', 'specialists.list', 'specialists.upsert',
     'specialists.permit.add', 'specialists.permit.remove', 'orders.candidates', 'orders.offer',
-    'specialists.language.file', 'specialists.language.verify']) cover(id);
+    'specialists.language.file', 'specialists.language.verify', 'specialist.feed', 'specialist.feed.take']) cover(id);
   const target = U.memberA2.user.id;
   // Профиль и допуски выдаёт только администратор; диспетчер и обычный человек получают «не найдено».
   for (const who of ['owner', 'dispatcher', 'spec']) {
@@ -684,6 +684,12 @@ test('специалисты и подбор: допуски — только а
   // Дело не видно исполнителю, пока ему не предложили; после предложения — видно только оно, но не чужие.
   assert.equal((await U.spec.req('GET', `/api/orders/${o.id}`)).status, 404);
   await ensurePaid(S.sql, o.id);
+  // Лента заказов (2.468): оплаченный заказ видит допущенный специалист; взять может только он — остальным «не найдено».
+  assert.ok((await U.spec.req('GET', '/api/specialist/feed')).body.feed.some((x) => x.id === o.id), 'в ленте специалиста');
+  for (const who of ['owner', 'stranger', 'headB', 'memberA', 'dispatcher', 'admin']) {
+    assert.ok(!(await U[who].req('GET', '/api/specialist/feed')).body.feed.some((x) => x.id === o.id), `${who}: лента`);
+    assert.equal((await U[who].req('POST', `/api/specialist/feed/${o.id}/take`)).status, 404, `${who}: взять из ленты`);
+  }
   assert.equal((await offer(U.dispatcher)).status, 200);
   assert.equal((await U.spec.req('GET', `/api/orders/${o.id}`)).status, 200);
   assert.equal((await U.spec.req('GET', `/api/orders/${ownOrder.id}`)).status, 404);

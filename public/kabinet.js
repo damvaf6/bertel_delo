@@ -12,6 +12,7 @@ import { showNotifications } from '/notify.js';
 import { showAssistant } from '/assistant.js';
 import { showMail } from '/mail.js';
 import { loadToday } from '/today.js';
+import { loadFeed } from '/feed.js';
 import { showExpertCard } from '/expertcard.js';
 import { showFirstHint, showHelp } from '/help.js';
 import { showProblems } from '/problems.js';
@@ -71,7 +72,7 @@ async function route() {
   if (h === '#money') return showMoney();
   show('list-view', 'orders');
   showFirstHint();
-  await Promise.all([loadOrders(), loadToday()]);
+  await Promise.all([loadOrders(), loadToday(), loadFeed(!!state.specialist)]);
   // #today — к «Сегодня» на главной (2.142: утренняя сводка эксперта, где только дела из «Сегодня»).
   if (h === '#today') $('today-box').scrollIntoView({ block: 'start' });
 }
