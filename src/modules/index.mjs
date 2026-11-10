@@ -5,6 +5,8 @@
 //   { id, name, basis: ['contract' | 'court', …], fields: [поле…], services: [{ id, name, fields: [поле…], paper?, labels? }…],
 //       paper — как называется итоговый документ на титуле Word (2.29): «Отчёт об оценке», «Заключение эксперта»…;
 //       labels — своя подпись общего поля модуля у этой услуги (2.79): { purpose: 'Для чего нужна экспертиза' };
+//       later: true — в первом выпуске заказчику эту услугу не предлагают (2.462): в перечне новой заявки и у помощника «Не знаю,
+//       что нужно» её нет (диспетчер и администратор видят с пометкой «позже»); прежние и демо-заявки с ней работают как были;
 //       subject: 'document' — по ссылке осмотра снимают не объект, а документ (почерковедческая, 2.81): страница владельца так и
 //       называется — «Съёмка документа»; 'goods' — снимают товар (товароведческая, 2.82): «Осмотр товара»; 'car' — снимают
 //       повреждённую машину (ущерб после ДТП, 2.97): «Осмотр автомобиля», до осмотра не ремонтировать
@@ -160,7 +162,8 @@ export function validateModule(m) {
   checkIds(m.services, `${at}, услуги`);
   for (const s of m.services) {
     const where = `${at}, услуга ${s.id}`;
-    onlyKeys(s, ['id', 'name', 'fields', 'paper', 'labels', 'subject'], where);
+    onlyKeys(s, ['id', 'name', 'fields', 'paper', 'labels', 'subject', 'later'], where);
+    if (s.later !== undefined && s.later !== true) fail(where, 'later — true (заказчику услуга откроется позже) или не указано');
     if (s.subject !== undefined && !['document', 'goods', 'car'].includes(s.subject)) fail(where, "subject — 'document', 'goods' или 'car' (снимают документ, товар или машину, а не объект)");
     if (s.labels !== undefined) {
       if (!s.labels || typeof s.labels !== 'object' || Array.isArray(s.labels)) fail(where, 'labels — { id общего поля: подпись }');
@@ -665,12 +668,17 @@ export function createRegistry(modules = DEFAULT_MODULES) {
         adjustments: (m.analogs.adjustments ?? []).filter(own).map(({ services, ...k }) => ({ covers: [], ...k })),
       };
     },
+    // Услуга предлагается заказчику (2.462): `later: true` — в первом выпуске её нет в перечне новой заявки и у помощника.
+    offered(moduleId, serviceId) {
+      const s = modulesList.find((x) => x.id === moduleId)?.services.find((x) => x.id === serviceId);
+      return !!s && !s.later;
+    },
     catalog() {
       return modulesList.map((m) => ({
         id: m.id,
         name: m.name,
         basis: m.basis.map((id) => ({ id, name: BASIS_KINDS[id].name, details: BASIS_KINDS[id].details })),
-        services: m.services.map((s) => ({ id: s.id, name: s.name, fields: serviceFields(m, s), express: !!m.express?.services.includes(s.id) })),
+        services: m.services.map((s) => ({ id: s.id, name: s.name, fields: serviceFields(m, s), express: !!m.express?.services.includes(s.id), ...(s.later ? { later: true } : {}) })),
         checks: m.checks.map((c) => ({ id: c.id, title: c.title, services: c.services ?? m.services.map((s) => s.id), ...(c.when ? { when: c.when } : {}) })),
       }));
     },

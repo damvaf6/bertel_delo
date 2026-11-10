@@ -286,12 +286,15 @@ test('вход через проблему (2.41): 20 типичных вопр�
     assert.ok(c.explanation.length > 20 && c.explanation.length <= 3000, q.text);
     assert.ok(c.self_steps.length >= 1, `нет шагов «что сделать самому»: ${q.text}`);
     assert.ok(c.specialist, `нет «к кому обратиться»: ${q.text}`);
-    assert.equal(c.service?.service, q.service, q.text);
+    assert.equal(c.service?.service ?? null, q.service ?? null, q.text);
     assert.match(c.disclaimer, /не юридическая услуга/);
     for (const x of [c.explanation, ...c.self_steps, c.specialist]) assert.doesNotMatch(x, LEGAL_ADVICE_RE, q.text);
     assert.equal(c.legal_note, q.legal ? LEGAL_NOTE : null, q.text);
   }
   assert.match(lastPrompt(), /Юридических консультаций не давай/);
+  // Первый выпуск (2.462): в перечне услуг для модели — только 4 вида, открытые заказчику.
+  assert.match(lastPrompt(), /expertise\/realty/);
+  assert.doesNotMatch(lastPrompt(), /expertise\/(land|movable|construction|handwriting)/);
 });
 
 test('вход через проблему (2.41): модель дала юридический совет — он убирается, человеку — «это к юристу»; пустой ответ — всё равно с шагом', async () => {

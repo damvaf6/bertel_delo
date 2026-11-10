@@ -30,6 +30,9 @@ test('витрина: что это, как заказать, юрфирмам �
     expect((await page.locator(`#what li[data-price="${key}"] .price`).textContent()).replace(/\u00a0/g, ' ')).toBe(`— ${text}`);
   }
   await expect(page.locator('#price-note')).toContainText('Точную цену по Вашей заявке назначает диспетчер');
+  // Первый выпуск — 4 вида (2.462): остальные с пометкой «скоро».
+  for (const key of ['land', 'movable', 'building', 'handwriting']) await expect(page.locator(`#what li[data-price="${key}"] .later`)).toHaveText('скоро');
+  for (const key of ['realty', 'vehicle', 'dtp', 'goods']) await expect(page.locator(`#what li[data-price="${key}"] .later`)).toHaveCount(0);
   // Порядок оплаты и возврата — открыто на странице (сайт проверяет ЮKassa, ответ Дамира 30.10.2026).
   await expect(page.locator('#pay')).toContainText('вся сумма возвращается автоматически');
   await expect(page.getByText('Проверочная версия · только тестовые данные')).toBeVisible();
