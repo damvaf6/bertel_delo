@@ -16,3 +16,7 @@ export const SITE_PRICES = {
 export function priceText(rub) {
   return `от ${String(rub).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')} ₽`;
 }
+
+// Первый выпуск (2.462, решение Дамира 02.11.2026): заказать можно 4 вида; эти — с пометкой «скоро».
+// Тот же список — `later: true` у услуг в src/modules/expertise.mjs (тест витрины сверяет).
+export const SITE_LATER = ['land', 'movable', 'building', 'handwriting'];

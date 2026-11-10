@@ -60,10 +60,13 @@ export function serviceDef(moduleId, serviceId) {
   return s ? { module: m, service: s } : null;
 }
 
-// Список услуг для выбора: по модулям; значение — «модуль/услуга».
-export function serviceOptions(select) {
+// Список услуг для выбора: по модулям; значение — «модуль/услуга». Услуги «позже» (2.462) заказчик не видит — кроме
+// уже выбранной в его заявке (keep); диспетчер и администратор видят все с пометкой «позже».
+export function serviceOptions(select, keep = '') {
+  const staff = ['dispatcher', 'admin'].includes(state.me?.user?.platform_role);
   select.replaceChildren(...state.catalog.modules.map((m) => el('optgroup', { label: m.name },
-    ...m.services.map((s) => el('option', { value: `${m.id}/${s.id}`, text: s.name })))));
+    ...m.services.filter((s) => !s.later || staff || keep === `${m.id}/${s.id}`)
+      .map((s) => el('option', { value: `${m.id}/${s.id}`, text: s.later ? `${s.name} (позже)` : s.name })))));
 }
 
 // to — сразу к разделу дела (2.115: напоминание по заметке → заметки; 2.85: «Сегодня» → осмотр без фото; 2.86: «можно продолжать» → переписка, документы, осмотр).
@@ -206,7 +209,7 @@ function renderTerms() {
 
 function renderForm() {
   const { order } = current;
-  serviceOptions($('d-service'));
+  serviceOptions($('d-service'), order.module ? `${order.module}/${order.service}` : '');
   if (order.module) $('d-service').value = `${order.module}/${order.service}`;
   else $('d-service').value = '';
   $('d-title').value = order.title;

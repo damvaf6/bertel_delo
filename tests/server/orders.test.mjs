@@ -144,6 +144,22 @@ test('создание: услуга обязательна и только из
   assert.equal(o.basis_kind, 'contract', 'основание по умолчанию — договор');
 });
 
+test('первый выпуск (2.462): заказчику в перечне 4 вида, остальные помечены «позже»; прежние заявки с ними работают', async () => {
+  const cat = (await owner.req('GET', '/api/catalog')).body.modules.find((m) => m.id === 'expertise').services;
+  assert.deepEqual(cat.filter((s) => !s.later).map((s) => s.id), ['realty', 'vehicle', 'car_damage', 'goods']);
+  assert.deepEqual(cat.filter((s) => s.later).map((s) => s.id), ['land', 'movable', 'construction', 'handwriting']);
+  const reg = createRegistry(DEFAULT_MODULES);
+  assert.equal(reg.offered('expertise', 'land'), false);
+  assert.equal(reg.offered('expertise', 'goods'), true);
+  assert.equal(reg.offered('expertise', 'nope'), false);
+  // Пометка — только true; ошибка в описании — сервер не стартует.
+  assert.throws(() => validateModule({ ...expertise, services: expertise.services.map((x, k) => (k ? x : { ...x, later: 'да' })) }), /later — true/);
+  // Заявка с видом «позже» (заведена раньше или в демо) — открывается и правится как обычно.
+  const o = await create(owner, { service: 'land' });
+  assert.equal((await patch(owner, o, { title: 'Участок, Московская обл.' })).status, 200);
+  assert.equal((await owner.req('GET', `/api/orders/${o.id}`)).body.order.service, 'land');
+});
+
 test('поля заявки: только из описания, типы и ограничения соблюдаются', async () => {
   const o = await create(owner);
   const bad = async (fields, re) => {

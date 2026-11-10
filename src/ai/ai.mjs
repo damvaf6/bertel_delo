@@ -66,7 +66,8 @@ const clip = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 // ——— Вход через проблему ———
 
 export function problemMessages(registry, problem) {
-  const services = registry.catalog().flatMap((m) => m.services.map((s) => {
+  // Помощник предлагает только услуги, открытые заказчику (2.462).
+  const services = registry.catalog().flatMap((m) => m.services.filter((s) => !s.later).map((s) => {
     const fields = s.fields.filter((f) => f.type === 'select').map((f) => `${f.id} (${f.options.map((o) => o.id).join('|')})`).join('; ');
     return `- ${m.id}/${s.id}: ${m.name} — ${s.name}. Поля с выбором: ${fields}`;
   })).join('\n');
@@ -99,7 +100,7 @@ export function problemMessages(registry, problem) {
 // «expertise/realty», просто «realty» или название услуги. Только из перечня; иначе — null.
 function serviceFromAnswer(registry, v) {
   if (!v) return null;
-  const all = registry.catalog().flatMap((m) => m.services.map((s) => ({ m: m.id, s: s.id, name: s.name.toLowerCase() })));
+  const all = registry.catalog().flatMap((m) => m.services.filter((s) => !s.later).map((s) => ({ m: m.id, s: s.id, name: s.name.toLowerCase() })));
   let mod = '';
   let svc = '';
   if (typeof v === 'string') [mod, svc] = v.includes('/') ? v.split('/') : ['', v];

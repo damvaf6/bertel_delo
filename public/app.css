@@ -361,6 +361,7 @@ details.help-role h3 { font-size: 16px; margin: 16px 0 6px; }
 .vitrina .hero .row .btn { flex: 1 1 160px; text-align: center; }
 .vitrina ul.services li { margin: 8px 0; }
 .vitrina ul.services .price { font-weight: 600; white-space: nowrap; }
+.vitrina ul.services .later { font-size: .85em; color: var(--muted); white-space: nowrap; }
 .vitrina .card > .btn { margin-top: 8px; }
 .center { text-align: center; }
 
