@@ -117,6 +117,13 @@ export const DEMO_CASES = [
     report: 'Отчёт об оценке участка.pdf', value: '1 150 000',
   },
   {
+    // Лента заказов (2.468): оплачен, никому не предложен — эксперт берёт его сам и проходит весь путь до выдачи.
+    key: 'feed_flat', who: 'sidorova', service: 'realty', stage: 'paid', price: 7500, days: 9,
+    title: 'Оценка квартиры для продажи',
+    fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, ул. Учебная, д. 3, кв. 21', area: 46.2, floor: '7 / 12', rooms: 2, year_built: 1992 },
+    docs: [['Выписка ЕГРН на квартиру.pdf', ['Выписка из ЕГРН (образец)', 'Квартира, 46,2 кв. м, г. Москва, ул. Учебная, д. 3, кв. 21']]],
+  },
+  {
     key: 'crash', who: 'petrov', service: 'car_damage', stage: 'offered', expert: 'tikhonov', price: 7000, days: 5,
     title: 'Оценка ущерба автомобилю после ДТП',
     fields: { purpose: 'damage', region: 'moscow', vehicle_type: 'car', make_model: 'Демомобиль Хэтчбек (вымышленный)', year: 2019, mileage: 91000,

@@ -11,8 +11,12 @@ RUN npm ci --omit=dev && npm cache clean --force
 # Корневой сертификат Yandex Managed PostgreSQL: без него ядро к базе не подключается (Б-13).
 # Локально без доступа к storage.yandexcloud.net: --build-arg WITH_YC_CA=0.
 ARG WITH_YC_CA=1
+# Сеть до Яндекса иногда обрывается (выкладка демо 10.11.2026) — до 4 попыток с паузами.
 RUN mkdir -p /app/certs && if [ "$WITH_YC_CA" = "1" ]; then \
-      node -e "fetch('https://storage.yandexcloud.net/cloud-certs/CA.pem').then(r=>{if(!r.ok)throw new Error('CA '+r.status);return r.text()}).then(t=>require('fs').writeFileSync('/app/certs/yandex-ca.pem',t))"; \
+      for i in 1 2 3 4; do \
+        node -e "fetch('https://storage.yandexcloud.net/cloud-certs/CA.pem',{signal:AbortSignal.timeout(30000)}).then(r=>{if(!r.ok)throw new Error('CA '+r.status);return r.text()}).then(t=>require('fs').writeFileSync('/app/certs/yandex-ca.pem',t))" && break; \
+        [ "$i" = 4 ] && exit 1; sleep $((i * 15)); \
+      done; \
     fi
 ENV DB_CA_PATH=/app/certs/yandex-ca.pem
 
