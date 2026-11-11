@@ -3863,10 +3863,12 @@ test('передача дела (2.62): руководитель передаё�
   await ap.goto(`/kabinet#order=${id}`);
   await expect(ap.getByRole('heading', { name: 'Заявка не найдена' })).toBeVisible();
 
-  // Заказчик: имени эксперта и передачи не видит, дело в работе.
+  // Заказчик: причины передачи не видит, дело в работе. Имя эксперта у экспертизы теперь в карточке «Ваш эксперт» (2.465,
+  // схема 5 экранов) — новый эксперт, и его надо принять заново.
   await page.goto(`/kabinet#order=${id}`);
   await expect(page.locator('#order-status')).toHaveText('В работе');
-  await expect(page.locator('#order-view')).not.toContainText('Сменщик');
+  await expect(page.locator('#expert-box-name')).toHaveText('Эксперт Сменщик');
+  await expect(page.locator('#expert-box-accept')).toBeVisible();
   await expect(page.locator('#order-view')).not.toContainText('заболел');
   await hctx.close();
   await actx.close();
