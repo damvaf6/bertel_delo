@@ -384,7 +384,7 @@ test('2.459: сводка за месяц — дела по банкам и ск
   const { orgId, expert } = await db(async (c) => {
     const expert = (await c.query("insert into users (phone, full_name) values ('+79990004597', 'Тестова-Банковая Ольга') returning id")).rows[0].id;
     const { rows: [org] } = await c.query("insert into organizations (name) values ('ООО «Банки в сводке 2.459»') returning id");
-    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now() - interval '1 day'), ($1, $3, 'member', now() - interval '1 day')", [org.id, head.id, expert]);
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now() - interval '40 days'), ($1, $3, 'member', now() - interval '40 days')", [org.id, head.id, expert]);
     await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [expert, org.id]);
     // Своя аккредитация в Сбербанке кончилась позавчера: одно дело сдано неделю назад (с ней) — нет, сдано минуту назад.
     await c.query("insert into dossier_items (user_id, kind, title, bank, valid_until) values ($1, 'bank', 'Сбербанк', 'sber', $2)", [expert, plusDays(-2)]);
