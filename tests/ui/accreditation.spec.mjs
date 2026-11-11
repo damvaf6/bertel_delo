@@ -345,3 +345,35 @@ test('2.456: «Документы для продления» у аккреди�
   expect(download.suggestedFilename()).toBe('Продление аккредитации · Сбербанк.zip');
   expect(sp.problems).toEqual([]);
 });
+
+test('2.458: ИИ-проверка отчёта для Сбербанка — аккредитации на дату отчёта нет — находка эксперту', async ({ browser, baseURL }) => {
+  const cp = await phone(browser, baseURL);
+  const sp = await phone(browser, baseURL);
+  await signIn(cp, '+79990004591');
+  const expert = await signIn(sp, '+79990004593');
+  await db(async (c) => {
+    await c.query("insert into specialists (user_id, regions, capacity) values ($1, '{moscow,mo}', 5)", [expert.id]);
+    // Аккредитация была, но кончилась до даты отчёта.
+    await c.query("insert into dossier_items (user_id, kind, title, bank, valid_until) values ($1, 'bank', 'Сбербанк', 'sber', current_date - 5)", [expert.id]);
+  });
+  const id = (await (await cp.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира для Сбербанка 2458' }, headers: H })).json()).order.id;
+  expect((await cp.request.patch(`/api/orders/${id}`, {
+    data: { deadline: plusDays(15), fields: { purpose: 'bank', bank: 'sber', region: 'mo', object_type: 'flat', address: 'тестовый адрес, 2' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await cp.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  await db((c) => c.query("update orders set status = 'in_work', executor_user_id = $2, price_kop = 1500000, paid_at = now() where id = $1", [id, expert.id]));
+  const made = plusDays(0).split('-').reverse().join('.');
+  expect((await sp.request.post(`/api/orders/${id}/results`, {
+    data: Buffer.from(`Отчёт об оценке квартиры № 7\nДата составления отчёта: ${made}\nПредполагаемый пользователь результатов оценки: ПАО Сбербанк\nИтог 9 000 000 руб.`),
+    headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('отчёт-сбер.txt') },
+  })).status()).toBe(201);
+
+  await sp.goto(`/kabinet#order=${id}`);
+  await sp.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(sp.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  const item = sp.locator('#review-checks li').filter({ hasText: 'Аккредитация в банке «Сбербанк» в досье эксперта действует до' });
+  await expect(item.first()).toContainText('на дату отчёта срок истёк; банк может не принять отчёт');
+  await item.first().scrollIntoViewIfNeeded();
+  await shot(sp, 'ak14-2458-ii-proverka-akkreditaciya');
+  expect([...sp.problems, ...cp.problems]).toEqual([]);
+});
