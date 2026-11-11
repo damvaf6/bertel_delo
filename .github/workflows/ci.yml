@@ -118,7 +118,12 @@ jobs:
           for i in $(seq 30); do curl -sf "$UI_BASE_URL/api/health" && exit 0; sleep 1; done; docker logs delo-app; exit 1
 
       - name: Браузер
-        run: npx playwright install --with-deps chromium
+        # Зеркала Ubuntu у машин GitHub бывают недоступны (11.11.2026 — три прогона подряд не скачали шрифты): две попытки с
+        # системными пакетами, затем — только сам браузер (библиотеки для него на машине GitHub уже стоят).
+        run: |
+          for i in 1 2; do npx playwright install --with-deps chromium && exit 0; sleep 20; done
+          echo "::warning::системные пакеты для браузера не скачались — ставлю только браузер"
+          npx playwright install chromium
       - name: Телефон 412×915 против контейнера
         run: npm run test:ui
       - name: Демо-площадка на телефоне 412×915 (режим демо на локальном стенде)
