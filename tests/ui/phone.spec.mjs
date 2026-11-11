@@ -498,7 +498,8 @@ test('ход заявки: подбор диспетчером, принятие
   await expect(page.locator('#money-facts')).toContainText(/Цена\s*30\s000 ₽/);
   await expect(page.locator('#money-facts')).not.toContainText('Исполнителю');
   await expect(page.locator('#money-facts')).not.toContainText('25');
-  await expect(page.locator('#money-facts')).toContainText('после неё заявку передадут исполнителю');
+  // Экспертиза (2.464): картой (включена на проверках) или по счёту.
+  await expect(page.locator('#money-facts')).toContainText('нужна оплата картой или по счёту: после поступления денег заявку передадут эксперту');
   await shot(page, '36-zakazchik-oplata');
   await page.getByRole('button', { name: /Оплатить 30\s000 ₽/ }).click();
   await expect(page.locator('#money-facts')).toContainText('оплачено');
@@ -3670,7 +3671,8 @@ test('деньги для юрлица (2.46): реквизиты, счёт до
   expect((await page.request.post(`/api/orders/${o.id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
   const afterPay = await staffFinish({ ...staff, orderId: o.id });
   await page.goto(`/kabinet#order=${o.id}`);
-  const inv = page.getByRole('button', { name: 'Счёт для бухгалтерии (Word)' });
+  // Экспертиза (2.464): оплата и по счёту — кнопка «Скачать счёт на оплату (Word)».
+  const inv = page.getByRole('button', { name: 'Скачать счёт на оплату (Word)' });
   await expect(inv).toBeVisible();
   const [invoice] = await Promise.all([page.waitForEvent('download'), inv.click()]);
   expect(invoice.suggestedFilename()).toMatch(/^Счёт СЧ-[0-9A-F]{8}\.docx$/);
