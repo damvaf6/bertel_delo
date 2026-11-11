@@ -403,7 +403,7 @@ body,header.top,.screen,.item,.fact{transition:background-color .3s ease,border-
         <li>Поля заявки свои у каждой услуги: этаж, год дома, доля, VIN, ПТС.</li>
         <li>Сразу после отправки — срок, к которому диспетчер назначит цену, и «задерживаемся», если не успели.</li>
         <li>Цель «для банка» сама добавляет чек-лист Сбербанка и задание на оценку в запрос документов.</li>
-        <li>Оплата при заказе; эксперт получает 80% после «готово», при отмене — возврат. Порядок оплаты и возврата открыт на странице «Экспертизы».</li>
+        <li>Оплата при заказе: цена эксперта плюс 20% платформе; эксперт получает всю свою цену после «готово» (пока вручную, по списку), при отмене — возврат. Порядок оплаты и возврата открыт на странице «Экспертизы».</li>
         <li>Компании: счёт на оплату, акт и отчёт агента файлом Word для бухгалтерии.</li>
         <li>Заявку можно прислать письмом — она станет черновиком.</li>
         <li>После «готово» пришли замечания банка или суда — «Пришли замечания к отчёту» с файлом: дело снова у эксперта, ответ за 3 рабочих дня.</li>
@@ -611,7 +611,7 @@ body,header.top,.screen,.item,.fact{transition:background-color .3s ease,border-
       <div class="item" id="d-price">
         <div class="head"><span class="t">Д-1047 · Назначить цену</span><span class="pill info">ждёт 5 ч</span></div>
         <span class="d">Оценка квартиры для Сбербанка, Москва. Обещали заказчику — до пн, 26 октября.</span>
-        <div class="field"><label for="d-sum">Цена, ₽</label><input id="d-sum" inputmode="numeric" value="9 500"></div>
+        <div class="field"><label for="d-sum">Цена эксперта, ₽</label><input id="d-sum" inputmode="numeric" value="9 500"></div>
         <div class="acts"><button class="btn small primary" type="button" id="d-price-btn">Назначить</button></div>
         <div class="callout ok" id="d-price-res" hidden></div>
       </div>
@@ -624,7 +624,7 @@ body,header.top,.screen,.item,.fact{transition:background-color .3s ease,border-
       <div class="item">
         <div class="head"><span class="t">Д-1029 · Результат на проверке</span><span class="pill plain">1 раб. день</span></div>
         <span class="d">Отчёт подписан экспертом и организацией, подписи проверены. ИИ-проверка: замечаний нет.</span>
-        <div class="acts"><button class="btn small primary" type="button" data-oneshot="Готово — заказчик получил отчёт, эксперту ушла выплата 80%">Готово, выдать заказчику</button><button class="btn small" type="button" data-oneshot="Возвращено эксперту на доработку с причиной">Вернуть на доработку</button></div>
+        <div class="acts"><button class="btn small primary" type="button" data-oneshot="Готово — заказчик получил отчёт, выплата эксперту — в списке «Выплатить вручную»">Готово, выдать заказчику</button><button class="btn small" type="button" data-oneshot="Возвращено эксперту на доработку с причиной">Вернуть на доработку</button></div>
       </div>
     </div>
     <div class="aside">
@@ -773,8 +773,9 @@ body,header.top,.screen,.item,.fact{transition:background-color .3s ease,border-
 
 <script>
 // Обновляет «Работник Дело» после каждой слитой правки.
-var VERSION={task:'2.469',date:'11.11.2026',tasks:482};
+var VERSION={task:'2.463',date:'11.11.2026',tasks:483};
 var RECENT=[
+  ['2.463','Платформе — 20% сверх цены эксперта','Диспетчер ставит цену эксперта, заказчик платит её плюс 20% платформе (эксперт 4 000 ₽ — заказчик 4 800 ₽), эксперт получает всю свою цену. Выплату эксперту диспетчер делает сам по списку «Выплатить вручную» и отмечает «Выплачено» — эксперту приходит уведомление.'],
   ['2.469','Показ рабочего места пройден на площадке','Один учебный заказ прошёл весь путь на телефоне: эксперт взял его из ленты, провёл осмотр по ссылке, получил акт и черновик от ИИ, подписал и сдал; диспетчер проверил по 12 правилам и выдал. Тот же заказ теперь можно посмотреть и глазами заказчика; площадь в черновике пишется с запятой.'],
   ['2.468','Лента заказов — эксперт сам берёт заказ','На главной у эксперта — «Лента заказов»: оплаченные заказы по его услугам и регионам. Видно услугу, вид объекта, цель, срок и сколько получит эксперт; адреса и имён до того, как взять, нет. Кто первым нажал «Взять заказ» — у того дело в работе, заказчик эксперта не выбирает.'],
   ['2.462','Первый выпуск: заказчику 4 вида экспертизы','В новой заявке заказчик видит оценку недвижимости, оценку транспорта, ущерб после ДТП и товароведческую. Остальные виды на странице «Экспертиза» — «скоро»; прежние заявки с ними работают.'],
@@ -990,7 +991,7 @@ $('h-return').addEventListener('click',function(){var pts=[].filter.call(documen
 // Диспетчер
 $('d-price-btn').addEventListener('click',function(){var v=$('d-sum').value.replace(/\D/g,'');var r=$('d-price-res');r.hidden=false;
   if(!v){r.className='callout warn';r.textContent='Впишите цену цифрами.';return}
-  var n=Number(v);r.className='callout ok';r.textContent='Цена '+rub(n)+' ушла заказчику. После оплаты эксперт получит '+rub(Math.round(n*.8))+' (80%) по «готово».'});
+  var n=Number(v);r.className='callout ok';r.textContent='Заказчик заплатит '+rub(Math.round(n*1.2))+': цена эксперта '+rub(n)+' и платформе '+rub(Math.round(n*.2))+' (20% сверх). Эксперту — вся его цена после «готово», выплата вручную по списку.'});
 document.querySelectorAll('[data-ext]').forEach(function(b){b.addEventListener('click',function(){var r=$('d-ext-res');r.hidden=false;
   if(b.dataset.ext==='yes'){r.className='callout ok';r.textContent='Срок перенесён на 30.10. Заказчик видит новый срок; эксперту — «приложите письмо банка о переносе».'}
   else{r.className='callout warn';r.textContent='Отказано. Срок 30 октября — в «не принимаю дела» у эксперта: ему предложено попросить руководителя передать дело.'}
