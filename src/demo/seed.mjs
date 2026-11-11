@@ -201,6 +201,65 @@ async function locate(P) {
   }
   return { cases, orgs };
 }
+const orgIds = (ORG) => Object.fromEntries(Object.entries(ORG).map(([k, o]) => [k, o.id]));
+
+// Одно дело демо-площадки — до своего шага (k.stage); orgs — ключ организации → её номер.
+async function seedCase(P, orgs, k, log) {
+  const D = P.dispatcher;
+  log(`дело: ${k.title}`);
+  const C = P[k.who];
+  let o = (await C.must('POST', '/api/orders', { module: 'expertise', service: k.service, title: k.title, ...(k.org ? { org_id: orgs[k.org] } : {}) })).order;
+  await C.must('PATCH', `/api/orders/${o.id}`, { deadline: inDays(k.days), fields: k.fields });
+  for (const [name, lines] of k.docs || []) {
+    await C.must('POST', `/api/orders/${o.id}/documents`, undefined, { raw: pdf(lines), type: 'application/pdf', fileName: name });
+  }
+  const status = (to, who, from, extra = {}) => who.must('POST', `/api/orders/${o.id}/status`, { from, to, ...extra });
+  if (k.stage === 'new') return;
+  if (k.stage === 'cancelled') {
+    await status('matching', C, 'new');
+    await status('cancelled', C, 'matching');
+    return;
+  }
+  await status('matching', C, 'new');
+  await D.must('PUT', `/api/orders/${o.id}/price`, { price: String(k.price) });
+  if (k.stage === 'priced') return;
+  await C.must('POST', `/api/orders/${o.id}/payments`);
+  await C.must('POST', `/api/orders/${o.id}/payments/refresh`);
+  if (k.stage === 'paid') return;
+  if (k.orgExec) {
+    await D.must('POST', `/api/orders/${o.id}/offer`, { org_id: orgs[k.orgExec], from: 'matching' });
+    return;
+  }
+  const E = P[k.expert];
+  await D.must('POST', `/api/orders/${o.id}/offer`, { specialist_id: E.user.id, from: 'matching' });
+  if (k.stage === 'offered') return;
+  await status('in_work', E, 'awaiting_executor');
+  for (const [who, text] of k.chat || []) await P[who].must('POST', `/api/orders/${o.id}/messages`, { body: text });
+  if (k.stage === 'in_work') return;
+
+  // Результат: отчёт эксперта, подпись эксперта и (если он в организации) руководителя.
+  const lines = [k.report.replace(/\.pdf$/, '').toUpperCase(), `Объект: ${k.title}`, 'Документ демонстрационный, данные вымышленные.',
+    ...(k.value ? [`Итоговая величина рыночной стоимости: ${k.value} рублей.`] : ['Вывод: недостаток производственный (демонстрационный пример).'])];
+  const res = (await E.must('POST', `/api/orders/${o.id}/results`, undefined, { raw: pdf(lines), type: 'application/pdf', fileName: k.report })).document;
+  await E.must('POST', `/api/documents/${res.id}/sign`, { confirm: true });
+  const orgKey = DEMO_PEOPLE[k.expert].org;
+  if (orgKey) {
+    const head = P[DEMO_ORGS[orgKey].head];
+    const items = (await head.must('GET', `/api/orgs/${orgs[orgKey]}/signing`)).items;
+    const doc = items.flatMap((x) => x.documents).find((d) => d.id === res.id);
+    if (!doc) throw new Error(`руководитель не видит файл на подпись: ${k.title}`);
+    await head.must('POST', `/api/org-documents/${doc.id}/sign`, { confirm: true });
+  }
+  await E.must('POST', `/api/orders/${o.id}/messages`, { body: 'Результат приложен и подписан.' });
+  await status('review', E, 'in_work');
+  if (k.stage === 'review') return;
+  const rv = await D.must('GET', `/api/orders/${o.id}/review`);
+  for (const c of rv.checks) await D.must('PUT', `/api/orders/${o.id}/review/${c.id}`, { verdict: 'ok', round: rv.round });
+  await status('done', D, 'review');
+  if (k.stage === 'done') return;
+  await C.must('POST', `/api/orders/${o.id}/messages`, { body: 'Спасибо, отчёт получили.' });
+  await status('closed', C, 'done');
+}
 const sessions = (P) => Object.fromEntries(Object.entries(P).map(([k, c]) => [k, c.cookie]));
 
 // login — stageLogin(…) или codeLogin(…); adminPhone — уже назначенный администратор площадки (тестовый номер).
@@ -218,7 +277,11 @@ export async function seedDemo({ base, headers = {}, login, adminPhone, log = ()
   const already = (await P.petrov.must('GET', '/api/orders')).orders;
   if (already.length) {
     log(`демо уже наполнено: у демо-заказчика ${already.length} заявок`);
-    return { created: false, people: DEMO_PEOPLE, sessions: sessions(P), ...(await locate(P)) };
+    // Дела, добавленные в перечень после наполнения (например, заказ в ленте, 2.468), — досоздаются; прежние не трогаем.
+    const found = await locate(P);
+    const missing = DEMO_CASES.filter((k) => !found.cases[k.key]);
+    for (const k of missing) await seedCase(P, found.orgs, k, log);
+    return { created: false, added: missing.map((k) => k.key), people: DEMO_PEOPLE, sessions: sessions(P), ...(missing.length ? await locate(P) : found) };
   }
 
   const admin = await enter(adminPhone);
@@ -269,62 +332,7 @@ export async function seedDemo({ base, headers = {}, login, adminPhone, log = ()
     type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', fileName: 'Шаблон отчёта.docx',
   });
 
-  const D = P.dispatcher;
-  for (const k of DEMO_CASES) {
-    log(`дело: ${k.title}`);
-    const C = P[k.who];
-    let o = (await C.must('POST', '/api/orders', { module: 'expertise', service: k.service, title: k.title, ...(k.org ? { org_id: ORG[k.org].id } : {}) })).order;
-    await C.must('PATCH', `/api/orders/${o.id}`, { deadline: inDays(k.days), fields: k.fields });
-    for (const [name, lines] of k.docs || []) {
-      await C.must('POST', `/api/orders/${o.id}/documents`, undefined, { raw: pdf(lines), type: 'application/pdf', fileName: name });
-    }
-    const status = (to, who, from, extra = {}) => who.must('POST', `/api/orders/${o.id}/status`, { from, to, ...extra });
-    if (k.stage === 'new') continue;
-    if (k.stage === 'cancelled') {
-      await status('matching', C, 'new');
-      await status('cancelled', C, 'matching');
-      continue;
-    }
-    await status('matching', C, 'new');
-    await D.must('PUT', `/api/orders/${o.id}/price`, { price: String(k.price) });
-    if (k.stage === 'priced') continue;
-    await C.must('POST', `/api/orders/${o.id}/payments`);
-    await C.must('POST', `/api/orders/${o.id}/payments/refresh`);
-    if (k.stage === 'paid') continue;
-    if (k.orgExec) {
-      await D.must('POST', `/api/orders/${o.id}/offer`, { org_id: ORG[k.orgExec].id, from: 'matching' });
-      continue;
-    }
-    const E = P[k.expert];
-    await D.must('POST', `/api/orders/${o.id}/offer`, { specialist_id: E.user.id, from: 'matching' });
-    if (k.stage === 'offered') continue;
-    await status('in_work', E, 'awaiting_executor');
-    for (const [who, text] of k.chat || []) await P[who].must('POST', `/api/orders/${o.id}/messages`, { body: text });
-    if (k.stage === 'in_work') continue;
-
-    // Результат: отчёт эксперта, подпись эксперта и (если он в организации) руководителя.
-    const lines = [k.report.replace(/\.pdf$/, '').toUpperCase(), `Объект: ${k.title}`, 'Документ демонстрационный, данные вымышленные.',
-      ...(k.value ? [`Итоговая величина рыночной стоимости: ${k.value} рублей.`] : ['Вывод: недостаток производственный (демонстрационный пример).'])];
-    const res = (await E.must('POST', `/api/orders/${o.id}/results`, undefined, { raw: pdf(lines), type: 'application/pdf', fileName: k.report })).document;
-    await E.must('POST', `/api/documents/${res.id}/sign`, { confirm: true });
-    const orgKey = DEMO_PEOPLE[k.expert].org;
-    if (orgKey) {
-      const head = P[DEMO_ORGS[orgKey].head];
-      const items = (await head.must('GET', `/api/orgs/${ORG[orgKey].id}/signing`)).items;
-      const doc = items.flatMap((x) => x.documents).find((d) => d.id === res.id);
-      if (!doc) throw new Error(`руководитель не видит файл на подпись: ${k.title}`);
-      await head.must('POST', `/api/org-documents/${doc.id}/sign`, { confirm: true });
-    }
-    await E.must('POST', `/api/orders/${o.id}/messages`, { body: 'Результат приложен и подписан.' });
-    await status('review', E, 'in_work');
-    if (k.stage === 'review') continue;
-    const rv = await D.must('GET', `/api/orders/${o.id}/review`);
-    for (const c of rv.checks) await D.must('PUT', `/api/orders/${o.id}/review/${c.id}`, { verdict: 'ok', round: rv.round });
-    await status('done', D, 'review');
-    if (k.stage === 'done') continue;
-    await C.must('POST', `/api/orders/${o.id}/messages`, { body: 'Спасибо, отчёт получили.' });
-    await status('closed', C, 'done');
-  }
+  for (const k of DEMO_CASES) await seedCase(P, orgIds(ORG), k, log);
   log(`готово: ${DEMO_CASES.length} дел`);
   return { created: true, people: DEMO_PEOPLE, sessions: sessions(P), ...(await locate(P)) };
 }

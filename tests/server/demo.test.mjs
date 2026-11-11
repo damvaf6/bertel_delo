@@ -42,4 +42,21 @@ test('демо-площадка: все виды услуг и статусы, �
   assert.equal((await S.sql`select count(*)::int as n from orders`)[0].n, DEMO_CASES.length);
   assert.equal((await S.sql`select count(*)::int as n from organizations`)[0].n, 4);
   assert.ok(Object.keys(DEMO_PEOPLE).length >= 10);
+  assert.deepEqual(again.added, []);
+  assert.equal(Object.keys(again.cases).length, DEMO_CASES.length);
+
+  // Ночной прогон 11.11.2026: площадка наполнена до того, как в перечень добавили дело (заказ в ленте, 2.468), —
+  // повторный запуск досоздаёт только его, прежние дела не трогает.
+  const feed = DEMO_CASES.find((k) => k.key === 'feed_flat');
+  await S.sql`update orders set title = 'Старое дело (до 2.468)' where id = ${again.cases.feed_flat}`;
+  const third = await seedDemo({ base: S.base, login: stageLogin(S.base, {}, KEY), adminPhone: ADMIN });
+  assert.equal(third.created, false);
+  assert.deepEqual(third.added, ['feed_flat']);
+  assert.equal(Object.keys(third.cases).length, DEMO_CASES.length);
+  assert.notEqual(third.cases.feed_flat, again.cases.feed_flat);
+  assert.equal((await S.sql`select count(*)::int as n from orders`)[0].n, DEMO_CASES.length + 1);
+  const [fo] = await S.sql`select status, title, executor_user_id from orders where id = ${third.cases.feed_flat}`;
+  assert.equal(fo.title, feed.title);
+  assert.equal(fo.status, 'matching');
+  assert.equal(fo.executor_user_id, null);
 });
