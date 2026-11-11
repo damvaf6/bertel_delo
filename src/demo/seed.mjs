@@ -259,6 +259,8 @@ async function seedCase(P, orgs, k, log) {
   if (k.stage === 'done') return;
   await C.must('POST', `/api/orders/${o.id}/messages`, { body: 'Спасибо, отчёт получили.' });
   await status('closed', C, 'done');
+  // Выплата эксперту вручную (2.463): по закрытым делам диспетчер уже перечислил и отметил; по выданным — ждёт в списке.
+  await D.must('POST', `/api/orders/${o.id}/payout/paid`, { note: 'демо: платёжка вымышленная' });
 }
 const sessions = (P) => Object.fromEntries(Object.entries(P).map(([k, c]) => [k, c.cookie]));
 

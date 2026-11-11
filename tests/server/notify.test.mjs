@@ -108,10 +108,13 @@ test('путь заявки: каждый шаг уведомляет нужны
   assert.equal((await step(spec, o, 'review', 'in_work')).status, 200);
   const rv = (await dispatcher.req('GET', `/api/orders/${o.id}/review`)).body;
   for (const c of rv.checks) await dispatcher.req('PUT', `/api/orders/${o.id}/review/${c.id}`, { verdict: 'ok', round: rv.round });
-  // Результат проверен и выдан — заказчику «доступен», исполнителю «принят» и сразу «выплачено» (1.6а).
+  // Результат проверен и выдан — заказчику «доступен», исполнителю «принят»; выплата эксперту вручную (2.463) — «выплачено»,
+  // когда диспетчер отметил.
   assert.equal((await step(dispatcher, o, 'done', 'review')).status, 200);
   assert.deepEqual(await fresh(owner), ['Результат проверен и доступен в кабинете']);
-  assert.deepEqual(await fresh(spec), ['Результат принят проверкой', 'Вознаграждение выплачено']);
+  assert.deepEqual(await fresh(spec), ['Результат принят проверкой']);
+  assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/payout/paid`, {})).status, 200);
+  assert.deepEqual(await fresh(spec), ['Вознаграждение выплачено']);
   assert.equal((await step(owner, o, 'closed', 'done')).status, 200);
   assert.deepEqual(await fresh(spec), ['Заявка закрыта']);
 

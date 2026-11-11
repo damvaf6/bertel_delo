@@ -49,8 +49,13 @@ export async function loadMoney(current, reload) {
   // Перевод (2а.2): тарифы нотариуса и доставка — транзитом, 80/20 — только от услуг.
   const ofServices = money.transit_kop ? ' от услуг' : '';
   if (money.transit_kop) facts.push(...fact('Нотариус и доставка', `${rub(money.transit_kop)} — по тарифам, без вознаграждения платформы`));
-  if (money.fee_kop !== null) facts.push(...fact(executorOnly ? `Ваше вознаграждение (80% ${ofServices ? 'от услуг' : 'цены'})` : `Исполнителю (80%${ofServices})`, rub(money.fee_kop), executorOnly ? 'money-sum' : ''));
-  if (money.commission_kop !== null) facts.push(...fact(`Платформе (20%${ofServices})`, rub(money.commission_kop)));
+  // Экспертиза (2.463): эксперту — 100% его цены, платформе — 20% сверх неё.
+  const onTop = money.fee_on_top;
+  if (money.fee_kop !== null) {
+    facts.push(...fact(onTop ? (executorOnly ? 'Ваша цена (100%)' : 'Эксперту (его цена, 100%)')
+      : executorOnly ? `Ваше вознаграждение (80% ${ofServices ? 'от услуг' : 'цены'})` : `Исполнителю (80%${ofServices})`, rub(money.fee_kop), executorOnly ? 'money-sum' : ''));
+  }
+  if (money.commission_kop !== null) facts.push(...fact(onTop ? 'Платформе (20% сверх цены эксперта)' : `Платформе (20%${ofServices})`, rub(money.commission_kop)));
   if (!executorOnly) {
     const pay = money.paid ? `оплачено ${dayRu(money.paid_at)}`
       : money.payment?.status === 'pending' ? PAYMENT_RU.pending
@@ -73,7 +78,12 @@ export async function loadMoney(current, reload) {
   if (money.refund) {
     facts.push(...fact('Возврат заказчику', `${rub(money.refund.amount_kop)} — ${REFUND_RU[money.refund.status]}${money.refund.failure ? ` (${money.refund.failure})` : ''}`));
   }
-  if (money.payout) facts.push(...fact(executorOnly ? 'Выплата' : 'Выплата исполнителю', `${rub(money.payout.amount_kop)} — ${PAYOUT_RU[money.payout.status]}${money.payout.failure ? ` (${money.payout.failure})` : ''}`));
+  if (money.payout) {
+    // Выплата вручную (2.463): до отметки диспетчера — «ждёт выплаты вручную», после — с пометкой.
+    const st = money.payout.manual && money.payout.status !== 'succeeded' ? 'ждёт выплаты вручную' : PAYOUT_RU[money.payout.status];
+    const note = money.payout.manual && money.payout.manual_note && !executorOnly ? ` (${money.payout.manual_note})` : '';
+    facts.push(...fact(executorOnly ? 'Выплата' : 'Выплата исполнителю', `${rub(money.payout.amount_kop)} — ${st}${money.payout.failure && !money.payout.manual ? ` (${money.payout.failure})` : ''}${note}`));
+  }
   if (money.payout?.withheld_kop) facts.push(...fact('Удержано из выплаты', `${rub(money.payout.withheld_kop)} — в счёт возврата по плохому переводу`));
   if (money.clawback) {
     facts.push(...fact(executorOnly ? 'Удержание с Вас' : 'Удержание у исполнителя', money.clawback.closed
@@ -82,17 +92,29 @@ export async function loadMoney(current, reload) {
   }
   if (money.payout?.receipt_url) facts.push(...fact('Чек самозанятого', `приложен ${dayRu(money.payout.receipt_at)}`));
   else if (money.payout?.receipt_needed) facts.push(...fact('Чек самозанятого', 'нужен: выдайте чек в «Мой налог» и приложите ссылку', 'overdue'));
-  else if (executorOnly && order.status !== 'cancelled') facts.push(...fact('Выплата', 'автоматически, когда результат проверен и выдан заказчику'));
+  else if (executorOnly && order.status !== 'cancelled' && !money.payout) {
+    facts.push(...fact('Выплата', onTop ? 'когда результат проверен и выдан заказчику — платформа перечислит Вашу цену' : 'автоматически, когда результат проверен и выдан заказчику'));
+  }
   $('money-facts').replaceChildren(...facts);
 
   $('price-form').classList.toggle('hidden', !money.can_set_price);
   const quoted = !money.price_kop && ctx.quote ? ctx.quote.total_kop : null;
-  if (money.can_set_price) $('price').value = money.price_kop ? String(money.price_kop / 100).replace('.', ',') : quoted ? String(quoted / 100).replace('.', ',') : '';
+  // Экспертиза (2.463): диспетчер вводит цену эксперта, под полем — сколько заплатит заказчик.
+  ctx.onTop = !!money.price_on_top;
+  $('price-label').textContent = ctx.onTop ? 'Цена эксперта, рублей' : 'Цена, рублей';
+  $('price-rule').textContent = ctx.onTop
+    ? 'Эксперту — 100% его цены, платформе — 20% сверх неё: заказчик платит цену эксперта ×1,2. Цену можно менять, пока заказчик не оплатил заявку.'
+    : 'Исполнителю — 80%, платформе — 20% (у перевода — от услуг, тарифы нотариуса и доставка — без вознаграждения). Цену можно менять, пока заказчик не оплатил заявку.';
+  const setKop = money.expert_kop ?? money.price_kop;
+  if (money.can_set_price) $('price').value = setKop ? String(setKop / 100).replace('.', ',') : quoted ? String(quoted / 100).replace('.', ',') : '';
+  showOnTop();
   $('price-quoted').classList.toggle('hidden', !(money.can_set_price && quoted));
   $('price-quoted').textContent = quoted ? `Подставлена цена по таблице цен перевода — проверьте и назначьте.${ctx.quote.transit_kop ? ` Из неё ${rub(ctx.quote.transit_kop)} — тарифы нотариуса и доставка: без вознаграждения, 80/20 делится только остальное.` : ''}` : '';
   $('pay').classList.toggle('hidden', !money.can_pay);
   if (money.can_pay) $('pay').textContent = `Оплатить ${rub(money.price_kop)}`;
   $('payout-retry').classList.toggle('hidden', !money.can_retry_payout);
+  $('payout-mark-form').classList.toggle('hidden', !money.can_mark_payout);
+  if (money.can_mark_payout) $('payout-note').value = '';
   // Чек самозанятого на выплату (2а.3): приложить или заменить ссылку «Мой налог».
   $('receipt-form').classList.toggle('hidden', !money.can_add_receipt);
   if (money.can_add_receipt) $('receipt-url').value = money.payout.receipt_url ?? '';
@@ -136,7 +158,9 @@ function openDoc(d) {
       p(`Агент: ${x.platform}`),
       p(`Заказчик: ${x.customer}`),
       p(`Услуга: ${service}, заявка ${x.order_ref} («${x.order_title}»)`),
-      p(`Стоимость: ${rub(x.price_kop)}, в том числе вознаграждение агента (${x.commission_percent}%${x.transit_kop ? ' от услуг' : ''}): ${rub(x.commission_kop)}`),
+      p(x.fee_on_top
+        ? `Стоимость: ${rub(x.price_kop)}, в том числе цена эксперта ${rub(x.payout_kop)} и вознаграждение агента (${x.commission_percent}% сверх цены эксперта): ${rub(x.commission_kop)}`
+        : `Стоимость: ${rub(x.price_kop)}, в том числе вознаграждение агента (${x.commission_percent}%${x.transit_kop ? ' от услуг' : ''}): ${rub(x.commission_kop)}`),
       ...transitParas(x, p),
       p(partial
         ? `Заказчик отказался от услуги после начала работ; оказана часть услуги (${x.partial_percent}%). Оплачено ${rub(x.paid_kop)}, остаток возвращается заказчику.`
@@ -157,7 +181,7 @@ function openDoc(d) {
       p(`Поручение: ${service}, заявка ${x.order_ref}`),
       p(`Получено от заказчика: ${rub(x.price_kop)}`),
       ...transitParas(x, p),
-      p(`Вознаграждение агента (${x.commission_percent}%${x.transit_kop ? ' от услуг' : ''}): ${rub(x.commission_kop)}`),
+      p(`Вознаграждение агента (${x.commission_percent}%${x.fee_on_top ? ' сверх цены эксперта' : x.transit_kop ? ' от услуг' : ''}): ${rub(x.commission_kop)}`),
       ...(x.withheld_kop ? [
         p(`Удержано в счёт возврата заказчику по плохому переводу: ${rub(x.withheld_kop)} (${x.withheld.map((w) => `заявка ${w.order_ref} — ${rub(w.kop)}`).join('; ')})`),
         p(`К перечислению исполнителю: ${rub(x.payout_kop - x.withheld_kop)}`),
@@ -169,6 +193,31 @@ function openDoc(d) {
   $('closing-doc').classList.remove('hidden');
   $('closing-doc').scrollIntoView({ block: 'nearest' });
 }
+
+// Цена эксперта → цена для заказчика (2.463): та же формула, что на сервере (priceOnTop), — подсказка, считает сервер.
+function kopOf(text) {
+  const m = /^(\d{1,8})(?:[.,](\d{1,2}))?$/.exec(String(text).replace(/\s/g, ''));
+  return m ? Number(m[1]) * 100 + Number((m[2] ?? '').padEnd(2, '0')) : null;
+}
+function showOnTop() {
+  const kop = ctx?.onTop ? kopOf($('price').value) : null;
+  $('price-ontop').classList.toggle('hidden', !kop);
+  if (kop) {
+    const fee = Math.round(kop * 0.2);
+    $('price-ontop').textContent = `Заказчик заплатит ${rub(kop + fee)}: цена эксперта ${rub(kop)} и платформе ${rub(fee)}.`;
+  }
+}
+$('price').addEventListener('input', showOnTop);
+
+$('payout-mark-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  $('payout-mark').disabled = true;
+  try {
+    await api('POST', `/api/orders/${ctx.order.id}/payout/paid`, { note: $('payout-note').value.trim() });
+    await loadMoney({ order: ctx.order }, ctx.reload);
+    say($('money-msg'), 'Выплата отмечена', 'ok');
+  } catch (err) { say($('money-msg'), err.message); } finally { $('payout-mark').disabled = false; }
+});
 
 $('price-form').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -227,8 +276,10 @@ export async function showMoney() {
   const staff = ['dispatcher', 'admin'].includes(state.me.user.platform_role);
   show('money-view', 'money');
   $('money-payments-box').classList.toggle('hidden', !staff);
+  $('money-manual-box').classList.add('hidden');
   if (staff) {
-    const { totals, payments, payouts } = await api('GET', '/api/money');
+    const { totals, payments, payouts, manual, manual_kop: manualKop } = await api('GET', '/api/money');
+    renderManual(manual, manualKop);
     $('money-title').textContent = 'Деньги платформы';
     $('money-totals').replaceChildren(
       ...fact('Получено от заказчиков', rub(totals.received_kop), 'money-sum'),
@@ -241,7 +292,8 @@ export async function showMoney() {
       ...(totals.clawback_open_kop ? fact('Удержать у исполнителей (плохие переводы)', rub(totals.clawback_open_kop), 'overdue') : []),
       ...(totals.transit_kop ? fact('Нотариусу и за доставку (транзит)', rub(totals.transit_kop)) : []),
       ...(totals.receipts_missing ? fact('Выплаты самозанятым без чека', String(totals.receipts_missing), 'overdue') : []),
-      ...fact('Вознаграждение платформы (20%)', rub(totals.commission_kop)));
+      ...fact('Вознаграждение платформы (20%)', rub(totals.commission_kop)),
+      ...(manualKop ? fact('Выплатить вручную', rub(manualKop), 'overdue') : []));
     $('money-payments').replaceChildren(...payments.map((p) => el('li', {},
       el('button', { class: 'open', onclick: openOrder(p.order_id) },
         el('div', { class: 'title', text: p.title }),
@@ -260,10 +312,29 @@ export async function showMoney() {
   }
 }
 
+// Выплатить вручную (2.463): эксперт, телефон, заявка, сумма; «Выплачено» — отметка без пометки, с пометкой — в карточке заявки.
+function renderManual(rows, sumKop) {
+  say($('money-manual-msg'), '');
+  $('money-manual-box').classList.toggle('hidden', rows.length === 0);
+  $('money-manual-sum').textContent = `${rows.length} ${rows.length === 1 ? 'выплата' : rows.length < 5 ? 'выплаты' : 'выплат'} на ${rub(sumKop)} — перечислите экспертам и отметьте.`;
+  $('money-manual').replaceChildren(...rows.map((p) => el('li', { class: 'manual-payout' },
+    el('button', { class: 'open', onclick: openOrder(p.order_id) },
+      el('div', { class: 'title', text: `${p.executor_name || 'Эксперт'} — ${rub(p.amount_kop)}` }),
+      el('div', { class: 'muted', text: [p.executor_phone, `заявка ${p.order_ref}`, p.title, `с ${dayRu(p.created_at)}`].filter(Boolean).join(' · ') })),
+    el('button', { class: 'secondary', 'data-action': 'manual-paid', onclick: async (e) => {
+      e.target.disabled = true;
+      try {
+        await api('POST', `/api/orders/${p.order_id}/payout/paid`, {});
+        await showMoney();
+        say($('money-manual-msg'), 'Выплата отмечена', 'ok');
+      } catch (err) { say($('money-manual-msg'), err.message); e.target.disabled = false; }
+    } }, 'Выплачено')))));
+}
+
 function renderPayouts(payouts, staff) {
   $('money-payouts').replaceChildren(...payouts.map((p) => el('li', {},
     el('button', { class: 'open', onclick: openOrder(p.order_id) },
       el('div', { class: 'title', text: p.title }),
-      el('div', { class: `muted${p.status === 'failed' ? ' overdue' : ''}`, text: [rub(p.amount_kop), PAYOUT_RU[p.status], p.receipt_needed ? 'нет чека' : null, staff ? p.executor_name : null].filter(Boolean).join(' · ') })))));
+      el('div', { class: `muted${p.status === 'failed' ? ' overdue' : ''}`, text: [rub(p.amount_kop), p.manual && p.status !== 'succeeded' ? 'ждёт выплаты вручную' : PAYOUT_RU[p.status], p.receipt_needed ? 'нет чека' : null, staff ? p.executor_name : null].filter(Boolean).join(' · ') })))));
   $('money-payouts-empty').classList.toggle('hidden', payouts.length > 0);
 }

@@ -53,7 +53,10 @@ export function invoiceDoc({ order, customer, registry, op, test }) {
     { type: 'para', text: 'НДС — по системе налогообложения оператора (будет указан в договоре).' },
     { type: 'para', text: `Назначение платежа: оплата по заявке ${orderRef(order.id)} на платформе «БЕРТЕЛ Дело».` },
     { type: 'para', text: 'Оплатить можно картой или со счёта организации через ЮKassa — кнопкой «Оплатить» в кабинете заявки. '
-      + (transit
+      + (order.expert_kop
+        // Сверх цены эксперта (2.463).
+        ? `Платёж принимает агент; в сумме — цена эксперта ${rub(Number(order.expert_kop))} и вознаграждение агента ${COMMISSION_PERCENT}% сверх неё (${rub(price - Number(order.expert_kop))}); цена эксперта перечисляется эксперту после выдачи результата.`
+        : transit
         ? `Платёж принимает агент; вознаграждение агента — ${COMMISSION_PERCENT}% от услуг, остальное от услуг перечисляется исполнителю после выдачи результата; тарифы нотариуса и доставка — без вознаграждения.`
         : `Платёж принимает агент; вознаграждение агента — ${COMMISSION_PERCENT}%, остальное перечисляется исполнителю после выдачи результата.`) },
     { type: 'sign', text: 'Агент ______________________ (подпись)' },
@@ -88,7 +91,9 @@ export function closingDoc({ doc, number, registry, op }) {
       { type: 'table', rows: [['Услуга', 'Заявка', 'Стоимость'], ...(x.transit_kop
         ? [[`${service} — услуги`, `${x.order_ref} («${x.order_title}»)`, rub(x.services_kop)], ...transitRows(x, x.order_ref), ['Итого', '', rub(x.price_kop)]]
         : [[service, `${x.order_ref} («${x.order_title}»)`, rub(x.price_kop)]])] },
-      p(x.transit_kop
+      p(x.fee_on_top
+        ? `В том числе цена эксперта ${rub(x.payout_kop)} и вознаграждение агента (${x.commission_percent}% сверх цены эксперта): ${rub(x.commission_kop)}.`
+        : x.transit_kop
         ? `В том числе вознаграждение агента (${x.commission_percent}% от услуг): ${rub(x.commission_kop)}. Тарифы нотариуса и доставка оплачиваются агентом нотариусу и курьеру без вознаграждения.`
         : `В том числе вознаграждение агента (${x.commission_percent}%): ${rub(x.commission_kop)}.`),
       p(partial
@@ -119,7 +124,7 @@ export function closingDoc({ doc, number, registry, op }) {
         p('Тарифы нотариуса и доставка оплачиваются агентом нотариусу и курьеру, вознаграждение агента и выплата исполнителю на них не начисляются:'),
         ...transitRows(x, '').map(([title, , sum]) => p(`— ${title}: ${sum}`))]
         : [{ type: 'table', rows: [['Получено от заказчика', 'Вознаграждение агента', 'К перечислению исполнителю'],
-          [rub(x.price_kop), `${rub(x.commission_kop)} (${x.commission_percent}%)`, rub(x.payout_kop)]] }]),
+          [rub(x.price_kop), x.fee_on_top ? `${rub(x.commission_kop)} (${x.commission_percent}% сверх цены эксперта)` : `${rub(x.commission_kop)} (${x.commission_percent}%)`, rub(x.payout_kop)]] }]),
       ...(partial ? [p(`Заказ отменён заказчиком после начала работ; оплачена сделанная часть (${x.partial_percent}%).`)] : []),
       // Удержание в счёт возврата по плохому переводу (2а.11).
       ...(x.withheld_kop ? [

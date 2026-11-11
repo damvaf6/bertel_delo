@@ -267,7 +267,8 @@ test('ход заявки по письму: цена, оплата, приня�
 
   // Цена → письмо «оплатите».
   assert.equal((await dispatcher.req('PUT', `/api/orders/${id}/price`, { price: '15000' })).status, 200);
-  assert.match(lastSent().text, /Цена заявки — 15[\s ]000,00 ₽/);
+  // Экспертиза (2.463): назначена цена эксперта 15 000 — заказчику 18 000 (20% сверх).
+  assert.match(lastSent().text, /Цена заявки — 18[\s ]000,00 ₽/);
   // Оплата (поддельная ЮKassa) → письмо «оплата получена».
   const pay = await owner.req('POST', `/api/orders/${id}/payments`);
   assert.equal(pay.status, 201, JSON.stringify(pay.body));

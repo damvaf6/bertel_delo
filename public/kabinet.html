@@ -787,16 +787,25 @@
         <dl class="facts" id="money-facts"></dl>
         <form class="hidden" id="price-form" novalidate>
           <div class="field">
-            <label for="price">Цена, рублей</label>
+            <label for="price" id="price-label">Цена, рублей</label>
             <input id="price" type="text" inputmode="decimal" maxlength="14" placeholder="Например: 15 000">
           </div>
           <p class="muted hidden" id="price-quoted"></p>
-          <p class="muted">Исполнителю — 80%, платформе — 20% (у перевода — от услуг, тарифы нотариуса и доставка — без вознаграждения). Цену можно менять, пока заказчик не оплатил заявку.</p>
+          <p class="muted hidden" id="price-ontop"></p>
+          <p class="muted" id="price-rule">Исполнителю — 80%, платформе — 20% (у перевода — от услуг, тарифы нотариуса и доставка — без вознаграждения). Цену можно менять, пока заказчик не оплатил заявку.</p>
           <button type="submit" class="secondary" id="price-save">Назначить цену</button>
         </form>
         <button class="wide hidden" id="pay">Оплатить</button>
         <button class="secondary hidden" id="invoice">Счёт для бухгалтерии (Word)</button>
         <button class="secondary hidden" id="payout-retry">Повторить выплату</button>
+        <form class="hidden" id="payout-mark-form" novalidate>
+          <div class="field">
+            <label for="payout-note">Пометка к выплате (необязательно)</label>
+            <input id="payout-note" type="text" maxlength="200" placeholder="Например: платёжка № 15 от 12.11">
+            <p class="muted">Выплата эксперту — вручную: перечислите его цену и отметьте здесь. Эксперт получит уведомление.</p>
+          </div>
+          <button type="submit" class="secondary" id="payout-mark">Выплачено вручную</button>
+        </form>
         <form class="hidden" id="receipt-form" novalidate>
           <div class="field">
             <label for="receipt-url">Ссылка на чек «Мой налог» по этой выплате</label>
@@ -1154,6 +1163,12 @@
       <div class="card">
         <h1 id="money-title">Деньги</h1>
         <dl class="facts" id="money-totals"></dl>
+      </div>
+      <div class="card hidden" id="money-manual-box">
+        <h2>Выплатить вручную</h2>
+        <p class="muted" id="money-manual-sum"></p>
+        <ul class="list" id="money-manual"></ul>
+        <p class="msg" id="money-manual-msg" role="status" aria-live="polite"></p>
       </div>
       <div class="card" id="money-payments-box">
         <h2>Оплаты заказчиков</h2>

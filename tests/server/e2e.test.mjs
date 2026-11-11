@@ -123,9 +123,11 @@ test('сквозной путь заявки на оценку: от заявк�
   assert.equal(o.status, 'closed');
   await strangerBlocked(o, [egrn.body.document.id, res.body.document.id]);
 
-  // Выплата исполнителю: 80% от 18 000 ₽.
+  // Экспертиза (2.463): заказчик заплатил 18 000 ₽ ×1,2 = 21 600 ₽; эксперту — 100% его цены, вручную: отмечает диспетчер.
+  assert.equal(money.price_kop, 2_160_000);
+  assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/payout/paid`, {})).status, 200);
   const [payout] = await S.sql`select amount_kop, status, executor_user_id from payouts where order_id = ${o.id}`;
-  assert.equal(Number(payout.amount_kop), 1_440_000);
+  assert.equal(Number(payout.amount_kop), 1_800_000);
   assert.equal(payout.status, 'succeeded');
   assert.equal(payout.executor_user_id, spec.user.id);
 

@@ -3,6 +3,9 @@
 // результата («готово») платформа удерживает вознаграждение агента (20%, устав) и перечисляет остальное исполнителю.
 // При отмене — возврат заказчику: до начала работ и по вине исполнителя — полный; при отказе заказчика после начала
 // работ — за вычетом сделанной части, за которую платится исполнителю (решения Дамира 01.10.2026).
+// Экспертиза (2.463, схема 5 экранов — решение Дамира 31.10/02.11.2026): вознаграждение 20% СВЕРХ цены эксперта — диспетчер
+// назначает цену эксперта, заказчик платит её ×1,2, эксперт получает 100% своей цены (снимок — orders.expert_kop); выплата
+// эксперту — вручную, списком (orders.payout_manual → payouts.manual, отметку «выплачено» ставит диспетчер).
 // Одна функция расчёта, одна выплата и один возврат на заявку (Б-16), смена состояния — в транзакции.
 // Поставщик оплаты не трогается внутри транзакции базы: функции settle* возвращают id выплаты и возврата, а провести
 // их (runPayout, runRefund) вызывающий должен после транзакции.
@@ -16,17 +19,26 @@ export const COMMISSION_PERCENT = 20;
 // Заявка ещё не в работе: отмена — полный возврат.
 export const BEFORE_WORK = ['new', 'matching', 'awaiting_executor'];
 
+// Цена эксперта → цена для заказчика: плюс вознаграждение платформы сверх неё (2.463), округление — до копейки.
+export const priceOnTop = (expertKop) => expertKop + Math.round((expertKop * COMMISSION_PERCENT) / 100);
+
 // Цена → вознаграждение платформы и выплата исполнителю, в копейках. Округление вознаграждения — до копейки.
+// expertKop (2.463) — цена эксперта: ему — она целиком, платформе — остальное (транзита у экспертизы нет).
 // transitKop — часть цены транзитом (перевод: тарифы нотариуса и доставка, 2а.2): без вознаграждения, исполнителю не идёт —
 // остаётся у платформы для нотариуса и курьера. Больше цены не бывает.
-export function splitAmount(priceKop, transitKop = 0) {
+export function splitAmount(priceKop, transitKop = 0, expertKop = null) {
+  if (expertKop) {
+    const payoutKop = Math.min(expertKop, priceKop);
+    return { priceKop, transitKop: 0, commissionKop: priceKop - payoutKop, payoutKop, onTop: true };
+  }
   const t = Math.min(Math.max(transitKop, 0), priceKop);
   const commissionKop = Math.round(((priceKop - t) * COMMISSION_PERCENT) / 100);
   return { priceKop, transitKop: t, commissionKop, payoutKop: priceKop - t - commissionKop };
 }
 
 // Деление цены заявки (у заявки есть price_kop и transit_kop).
-export const orderSplit = (o) => splitAmount(Number(o.price_kop), Number(o.transit_kop ?? 0));
+export const orderSplit = (o) => splitAmount(Number(o.price_kop), Number(o.transit_kop ?? 0), expertOf(o));
+const expertOf = (o) => (o.expert_kop ? Number(o.expert_kop) : null);
 
 // Отмена оплаченной заявки: сколько оплачено за сделанную работу (из неё — 80/20) и сколько вернуть заказчику.
 // Доля работы — только от услуг; транзит (нотариус, доставка) до выдачи результата не потрачен и возвращается целиком.
@@ -75,7 +87,7 @@ export async function applyPaymentStatus(sql, { paymentId, status, test }) {
 export async function settleDone(tx, order, { test }) {
   const p = await paidPayment(tx, order.id);
   if (!p || !order.executor_user_id) return null;
-  const split = splitAmount(Number(p.amount_kop), Number(order.transit_kop ?? 0));
+  const split = splitAmount(Number(p.amount_kop), Number(order.transit_kop ?? 0), expertOf(order));
   const payout = await makePayout(tx, order, split);
   await makeClosingDocs(tx, order, split, { test, withheld: payout?.withheld });
   return payout?.id ?? null;
@@ -92,7 +104,8 @@ export async function settleCancel(tx, order, { fault, percent, reason, test }) 
   const { workKop, refundKop } = cancelSplit(paid, share, Number(order.transit_kop ?? 0));
   let payoutId = null;
   if (workKop > 0 && order.executor_user_id) {
-    const split = splitAmount(workKop);
+    // Сверх цены эксперта (2.463): эксперту — та же доля его цены, платформе — остальное от оплаченной части.
+    const split = splitAmount(workKop, 0, order.expert_kop ? Math.round((Number(order.expert_kop) * share) / 100) : null);
     const payout = await makePayout(tx, order, split);
     await makeClosingDocs(tx, order, split, { test, partial: { percent: share, paid_kop: paid }, withheld: payout?.withheld });
     payoutId = payout?.id ?? null;
@@ -142,8 +155,8 @@ async function makePayout(tx, order, split) {
   }
   const withheldKop = split.payoutKop - left;
   const payout = await tx.one`
-    insert into payouts (order_id, executor_user_id, amount_kop, commission_kop, transit_kop, withheld_kop)
-    values (${order.id}, ${order.executor_user_id}, ${left}, ${split.commissionKop}, ${split.transitKop}, ${withheldKop})
+    insert into payouts (order_id, executor_user_id, amount_kop, commission_kop, transit_kop, withheld_kop, manual)
+    values (${order.id}, ${order.executor_user_id}, ${left}, ${split.commissionKop}, ${split.transitKop}, ${withheldKop}, ${!!order.payout_manual})
     returning id`;
   if (withheldKop) await audit(tx, null, 'clawback.withhold', 'order', order.id, { payout: payout.id, withheld_kop: String(withheldKop) });
   return { id: payout.id, withheld };
@@ -188,6 +201,8 @@ async function runTransfer(sql, providers, kind, id) {
   const row0 = await sql.tx(async (tx) => {
     const row = await q.claim(tx, id);
     if (!row || row.status === 'succeeded') return null;
+    // Выплата вручную (2.463): поставщику не уходит — ждёт в списке «Выплатить вручную», «выплачено» отмечает диспетчер.
+    if (kind === 'payout' && row.manual && Number(row.amount_kop) > 0) return null;
     return q.start(tx, id);
   });
   if (!row0) return null;
@@ -252,6 +267,8 @@ async function makeClosingDocs(tx, order, split, { test, partial = null, withhel
     where u.id = ${order.owner_user_id}`;
   const base = {
     ...docBase(order, { test }), price_kop: split.priceKop, commission_kop: split.commissionKop, payout_kop: split.payoutKop,
+    // Сверх цены эксперта (2.463): в акте и отчёте агента — «20% сверх цены эксперта … ₽».
+    ...(split.onTop ? { fee_on_top: true } : {}),
     // Транзит (2а.2): тарифы нотариуса и доставка — отдельной строкой, без вознаграждения.
     ...(split.transitKop ? { transit_kop: split.transitKop, services_kop: split.priceKop - split.transitKop, transit_lines: transitLines(order) } : {}),
     ...(partial ? { partial_percent: partial.percent, paid_kop: partial.paid_kop } : {}),

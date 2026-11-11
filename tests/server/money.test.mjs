@@ -4,7 +4,7 @@
 // повторные уведомления ЮKassa — одна оплата, одна выплата и один возврат на заявку (Б-16).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, login, client, setPlatformRole, makeSpecialist, signResults } from '../helpers.mjs';
+import { startApp, login, client, setPlatformRole, makeSpecialist, signResults, legacyTerms } from '../helpers.mjs';
 import { cancelSplit, splitAmount } from '../../src/money/money.mjs';
 import { createProviders } from '../../src/providers/index.mjs';
 
@@ -32,6 +32,8 @@ async function priced(price = '10000') {
   await owner.req('PATCH', `/api/orders/${o.id}`, READY);
   assert.equal((await step(owner, o, 'matching', 'new')).status, 200);
   assert.equal((await dispatcher.req('PUT', `/api/orders/${o.id}/price`, { price })).status, 200);
+  // Общая агентская схема 80/20 (прежние условия); экспертиза сверх цены эксперта — fee-on-top.test.mjs.
+  await legacyTerms(S.sql, o.id);
   return o;
 }
 // Оплата заказчиком через поддельную ЮKassa (возврат со страницы оплаты — проверка у поставщика).
@@ -81,7 +83,9 @@ test('цена — диспетчер в подборе; оплата — при
   const r = await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: spec.user.id, from: 'matching' });
   assert.equal(r.body.error, 'no_price');
   assert.equal((await dispatcher.req('PUT', `/api/orders/${o.id}/price`, { price: '5000' })).status, 200);
-  assert.equal((await dispatcher.req('PUT', `/api/orders/${o.id}/price`, { price: '6000.5' })).body.money.price_kop, 600050, 'до оплаты цену можно поправить');
+  const fixed = (await dispatcher.req('PUT', `/api/orders/${o.id}/price`, { price: '6000.5' })).body.money;
+  assert.equal(fixed.expert_kop, 600050, 'до оплаты цену можно поправить');
+  assert.equal(fixed.price_kop, 720060, 'экспертиза (2.463): заказчик платит цену эксперта ×1,2');
   const r2 = await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: spec.user.id, from: 'matching' });
   assert.equal(r2.status, 409);
   assert.equal(r2.body.error, 'not_paid', 'неоплаченное дело исполнителю не предлагается');
@@ -366,6 +370,7 @@ test('деньги для юрлица (2.46): реквизиты организ
   };
   const text = async (d) => (await extractPages(d.buf, d.name)).pages.join('\n');
   assert.equal((await docx(lawyer, 'invoice')).status, 409, 'без цены счёта нет');
+  // Экспертиза (2.463): диспетчер назначает цену эксперта 25 000 — заказчику 30 000 (20% сверх), эксперту 25 000 вручную.
   assert.equal((await dispatcher.req('PUT', `/api/orders/${o.id}/price`, { price: '25000' })).status, 200);
 
   // Счёт — до оплаты: агент — оператор платформы, покупатель — организация с реквизитами, сумма, назначение платежа.
@@ -377,7 +382,8 @@ test('деньги для юрлица (2.46): реквизиты организ
   assert.match(it, /Проверочный документ/);
   assert.match(it, /Агент: ООО «АИС Переводчик»/);
   assert.match(it, /Заказчик: ООО «Тестовая юрфирма»\nИНН 7700000000, КПП 770001001\nАдрес: г\. Москва, ул\. Юридическая, 1/);
-  assert.match(it, /Итого к оплате: 25\s000,00 ₽/);
+  assert.match(it, /Итого к оплате: 30\s000,00 ₽/);
+  assert.match(it, /цена эксперта 25\s000,00 ₽ и вознаграждение агента 20% сверх неё \(5\s000,00 ₽\)/);
   assert.match(it, /Назначение платежа: оплата по заявке № [0-9A-F]{8}/);
 
   // Оплата через ЮKassa (поддельная), работа, выдача — выплата исполнителю, акт и отчёт агента.
@@ -400,17 +406,20 @@ test('деньги для юрлица (2.46): реквизиты организ
   const at = await text(a);
   assert.match(at, /Акт об оказании услуг № А-\d{6}/);
   assert.match(at, /Заказчик: Организация ООО «Тестовая юрфирма»\nИНН 7700000000, КПП 770001001/);
-  assert.match(at, /25\s000,00 ₽/);
-  assert.match(at, /вознаграждение агента \(20%\): 5\s000,00 ₽/);
+  assert.match(at, /30\s000,00 ₽/);
+  assert.match(at, /цена эксперта 25\s000,00 ₽ и вознаграждение агента \(20% сверх цены эксперта\): 5\s000,00 ₽/);
   assert.match(at, /Заказчик _+/);
 
+  // Выплата вручную (2.463): ждёт отметки диспетчера.
+  assert.equal((await money(spec, o)).payout.status, 'pending');
+  assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/payout/paid`, { note: 'платёжка № 1' })).status, 200);
   const sm = await money(spec, o);
   assert.equal(sm.payout.status, 'succeeded');
-  assert.equal(sm.payout.amount_kop, 2000000);
+  assert.equal(sm.payout.amount_kop, 2500000);
   const rep = await docx(spec, `closing/${sm.documents[0].id}`);
   const rt = await text(rep);
   assert.match(rt, /Отчёт агента № О-\d{6}/);
-  assert.match(rt, /25\s000,00 ₽[\s\S]*5\s000,00 ₽ \(20%\)[\s\S]*20\s000,00 ₽/);
+  assert.match(rt, /30\s000,00 ₽[\s\S]*5\s000,00 ₽ \(20% сверх цены эксперта\)[\s\S]*25\s000,00 ₽/);
   assert.doesNotMatch(rt, /Юрфирма/, 'имени заказчика в отчёте исполнителю нет');
   assert.equal((await docx(spec, `closing/${act.id}`)).status, 404, 'акт исполнителю не отдаётся');
 });

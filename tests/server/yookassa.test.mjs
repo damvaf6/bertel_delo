@@ -3,7 +3,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { startApp, login, setPlatformRole, makeSpecialist, signResults } from '../helpers.mjs';
+import { startApp, login, setPlatformRole, makeSpecialist, signResults, legacyTerms } from '../helpers.mjs';
 import { loadConfig, ConfigError } from '../../src/config.mjs';
 
 let S, owner, dispatcher, spec, mock;
@@ -65,6 +65,8 @@ test('оплата через ЮKassa: платёж с ключом идемпо
   await owner.req('PATCH', `/api/orders/${o.id}`, READY);
   assert.equal((await step(owner, o, 'matching', 'new')).status, 200);
   assert.equal((await dispatcher.req('PUT', `/api/orders/${o.id}/price`, { price: '15000,50' })).status, 200);
+  // Путь через ЮKassa — на общей агентской схеме с выплатой через поставщика (прежние условия, не «вручную» экспертизы 2.463).
+  await legacyTerms(S.sql, o.id);
   const r = await owner.req('POST', `/api/orders/${o.id}/payments`);
   assert.equal(r.status, 201, JSON.stringify(r.body));
   assert.match(r.body.confirmation_url, /^https:\/\/yoomoney\.test\/checkout/);
@@ -92,6 +94,7 @@ test('оплата через ЮKassa: платёж с ключом идемпо
   await owner.req('PATCH', `/api/orders/${o2.id}`, READY);
   await step(owner, o2, 'matching', 'new');
   await dispatcher.req('PUT', `/api/orders/${o2.id}/price`, { price: '10000' });
+  await legacyTerms(S.sql, o2.id);
   await owner.req('POST', `/api/orders/${o2.id}/payments`);
   assert.equal((await owner.req('POST', `/api/orders/${o2.id}/payments/refresh`)).body.money.paid, true);
   assert.equal((await dispatcher.req('POST', `/api/orders/${o2.id}/offer`, { specialist_id: spec.user.id, from: 'matching' })).status, 200);
