@@ -60,6 +60,7 @@ test('отзыв (2.467): после выдачи заказчик ставит 
   await page.locator('#rate-send').click();
   await expect(page.locator('#rate-msg')).toContainText('Поставьте оценку');
   await page.locator('#rate-stars button[data-n="4"]').click();
+  await expect(page.locator('#rate-msg')).toHaveText('');
   await expect(page.locator('#rate-stars button[aria-pressed="true"]')).toHaveCount(4);
   await expect(page.locator('#rate-stars-name')).toHaveText('4 из 5 — Хорошо');
   await page.locator('#rate-text').fill('Всё понятно объяснили, отчёт приняли в банке.');

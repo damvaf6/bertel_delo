@@ -16,7 +16,7 @@ function paintStars() {
 
 $('rate-stars').replaceChildren(...[1, 2, 3, 4, 5].map((n) => {
   const b = el('button', { type: 'button', 'data-n': String(n), 'aria-pressed': 'false', 'aria-label': `${n} из 5`, text: '★' });
-  b.addEventListener('click', () => { if (ctx) { ctx.rating = n; paintStars(); } });
+  b.addEventListener('click', () => { if (ctx) { ctx.rating = n; paintStars(); say($('rate-msg'), ''); } });
   return b;
 }));
 
