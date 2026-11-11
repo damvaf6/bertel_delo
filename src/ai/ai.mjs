@@ -183,7 +183,8 @@ export function orderBrief(registry, order, { omit = [] } = {}) {
   const def = order.module ? registry.service(order.module, order.service) : null;
   const fields = (def?.fields ?? []).filter((f) => order.fields?.[f.id] !== undefined && !omit.includes(f.id)).map((f) => {
     const v = order.fields[f.id];
-    const shown = f.type === 'select' ? f.options.find((o) => o.id === v)?.name ?? v : v;
+    // Дробное число — с запятой, как в отчёте (прогон 2.469: «Площадь, кв. м: 46.2» в черновике рядом с «46,2» в таблице).
+    const shown = f.type === 'select' ? f.options.find((o) => o.id === v)?.name ?? v : f.type === 'number' ? String(v).replace('.', ',') : v;
     return `${f.label}: ${shown}`;
   });
   return [

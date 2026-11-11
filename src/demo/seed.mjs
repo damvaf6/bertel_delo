@@ -118,7 +118,7 @@ export const DEMO_CASES = [
   },
   {
     // Лента заказов (2.468): оплачен, никому не предложен — эксперт берёт его сам и проходит весь путь до выдачи.
-    key: 'feed_flat', who: 'sidorova', service: 'realty', stage: 'paid', price: 7500, days: 9,
+    key: 'feed_flat', who: 'petrov', service: 'realty', stage: 'paid', price: 7500, days: 9,
     title: 'Оценка квартиры для продажи',
     fields: { purpose: 'deal', region: 'moscow', object_type: 'flat', address: 'г. Москва, ул. Учебная, д. 3, кв. 21', area: 46.2, floor: '7 / 12', rooms: 2, year_built: 1992 },
     docs: [['Выписка ЕГРН на квартиру.pdf', ['Выписка из ЕГРН (образец)', 'Квартира, 46,2 кв. м, г. Москва, ул. Учебная, д. 3, кв. 21']]],
