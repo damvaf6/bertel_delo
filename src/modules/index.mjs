@@ -60,6 +60,7 @@
 //     offer?: { version: 'ГГГГ-ММ-ДД', draft: true?, doc: путь в docs/, points: [{ id, text, to: 'customer' | 'executor', services? }…] }  —
 //       главные условия оферты (2а.8) в карточке заявки: заказчику — свои пункты, исполнителю и служебным — все; draft — черновик,
 //       пока юрист не проверил (пометка «пока не действует»); полный текст — doc
+//       accept: 'expert' (2.465) — заказчик видит карточку эксперта, взявшего дело, и нажимает «Принять» (согласие с офертой)
 //     analogs?: { services: [id услуги…], min, fields: [поле + services? + near?…] }  — раздел «Аналоги» в деле (2.32): признаки
 //       аналога по виду объекта (цена, дата объявления и регион — у всех, в ядре: src/analogs/analogs.mjs); min — сколько
 //       нужно подтверждённых; near: { field: id числового поля заявки, within?: разница, pct?: разница в % } — предупреждение;
@@ -431,7 +432,8 @@ export function validateModule(m) {
   if (m.offer !== undefined) {
     const where = `${at}, оферта`;
     const o = m.offer;
-    onlyKeys(o, ['version', 'draft', 'doc', 'points'], where);
+    onlyKeys(o, ['version', 'draft', 'doc', 'accept', 'points'], where);
+    if (o.accept !== undefined && o.accept !== 'expert') fail(where, "accept — 'expert' (заказчик принимает эксперта, взявшего дело) или не указано");
     if (typeof o.version !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(o.version)) fail(where, 'version — дата ГГГГ-ММ-ДД');
     if (o.draft !== undefined && o.draft !== true) fail(where, 'draft — только true');
     if (typeof o.doc !== 'string' || !/^docs\/[\w./-]+\.md$/.test(o.doc)) fail(where, 'doc — путь к тексту в docs/…md');
@@ -662,7 +664,7 @@ export function createRegistry(modules = DEFAULT_MODULES) {
       if (!o) return null;
       const own = o.points.filter((pt) => !pt.services || pt.services.includes(serviceId));
       const pick = (to) => own.filter((pt) => pt.to === to).map(({ id, text }) => ({ id, text }));
-      return { version: o.version, draft: !!o.draft, doc: o.doc, customer: pick('customer'), executor: pick('executor') };
+      return { version: o.version, draft: !!o.draft, doc: o.doc, accept: o.accept ?? null, customer: pick('customer'), executor: pick('executor') };
     },
     // Деньги модуля (2.463): { on_top, manual, invoice } — вознаграждение сверх цены исполнителя, выплата вручную, оплата
     // по счёту (2.464).

@@ -119,6 +119,7 @@
         <p class="hidden" id="order-ack" role="status"></p>
         <p class="muted" id="order-org-line"></p>
         <p class="muted hidden" id="order-mail-line"></p>
+        <p class="muted hidden" id="order-accept-line" data-accept></p>
         <a class="btn secondary" id="ask-assistant" href="#assistant">Спросить ассистента об этом деле</a>
         <button type="button" class="link hidden" id="fold-all" aria-pressed="false">Развернуть все блоки</button>
       </div>
@@ -162,6 +163,17 @@
         <p class="warn-line hidden" id="next-warn" data-role="bank-gap"></p>
         <ol class="next-steps" id="next-steps"></ol>
         <div id="next-main"></div>
+      </div>
+      <div class="card hidden" id="expert-box" data-my-expert>
+        <h2>Ваш эксперт</h2>
+        <p class="title" id="expert-box-name"></p>
+        <p class="muted hidden" id="expert-box-org"></p>
+        <ul class="list" id="expert-box-docs"></ul>
+        <p class="muted" id="expert-box-stats"></p>
+        <p class="muted" id="expert-box-lead"></p>
+        <button type="button" class="hidden" id="expert-box-accept">Принять</button>
+        <p class="ok-line hidden" id="expert-box-accepted" role="status"></p>
+        <p class="msg" id="expert-box-msg" role="status" aria-live="polite"></p>
       </div>
       <div class="card hidden" id="quote-box">
         <h2>Стоимость</h2>

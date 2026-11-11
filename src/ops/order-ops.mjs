@@ -17,6 +17,7 @@ import { notify, notifyStatus, orgHeads } from '../notify/notify.mjs';
 import { ackLine, startAck } from '../orders/ack.mjs';
 import { offDays } from './note-ops.mjs';
 import { workdaysAfter } from '../orders/holidays.mjs';
+import { myExpertView, customerAcceptView } from './expert-accept-ops.mjs';
 
 // Пока дело не сдано, исполнитель может отказаться или попросить передать его (2.453).
 const BANK_GAP_STATUSES = ['awaiting_executor', 'in_work', 'review'];
@@ -265,7 +266,7 @@ export function orderOps() {
         const history = await sql`
           select from_status, to_status, side, reason, at from order_status_history where order_id = ${order.id} order by id`;
         const level = orderLevel(actor, order);
-        // Кто исполнитель — служебным и самому исполнителю; заказчику имя исполнителя пока не показывается.
+        // Кто исполнитель — служебным и самому исполнителю; заказчику — карточкой эксперта, где модуль это предусматривает (2.465).
         const exec = order.executor_user_id && (isStaff(actor) || order.executor_user_id === actor.id)
           ? await sql.one`select full_name from users where id = ${order.executor_user_id}` : null;
         // Заявка по письму (1.9): ответы уходят в переписку на адрес заказчика; адрес — только стороне заказчика.
@@ -279,6 +280,9 @@ export function orderOps() {
           order: await orderView(sql, registry, order),
           mail: thread ? { email: level >= LEVEL.write ? thread.email : null } : null,
           executor: exec ? { user_id: order.executor_user_id, name: exec.full_name, is_me: order.executor_user_id === actor.id } : null,
+          // «Ваш эксперт» и «Принять» (2.465): карточка эксперта заказчику; принял ли — эксперту и служебным.
+          my_expert: await myExpertView(sql, registry, order, actor),
+          customer_accept: await customerAcceptView(sql, registry, order, actor),
           // Дело у организации (2.17): эксперта назначает её руководитель; видят только служебные.
           offer_org: order.offer_org_id && order.status === 'awaiting_executor' && isStaff(actor)
             ? await sql.one`select id, name from organizations where id = ${order.offer_org_id}` : null,

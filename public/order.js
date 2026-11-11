@@ -26,6 +26,7 @@ import { loadRepeat } from '/repeat.js';
 import { loadSimilar } from '/similar.js';
 import { renderRemarks, openRemarks } from '/remarks.js';
 import { loadCourt } from '/court.js';
+import { renderMyExpert } from '/myexpert.js';
 
 const $ = (id) => document.getElementById(id);
 // До 3 МБ — обычной загрузкой через ядро; больше — прямо в хранилище (облако: запрос не больше 3,5 МБ, 2.49).
@@ -155,6 +156,7 @@ function render() {
   $('details-form').classList.toggle('hidden', !current.editable);
   $('details-view').classList.toggle('hidden', current.editable);
   if (current.editable) renderForm(); else renderFacts();
+  renderMyExpert(current, () => openOrder(order.id));
   renderQuote();
   renderTerms();
   renderProgress();

@@ -128,6 +128,11 @@ function customerSteps() {
     return { lead: 'Платформа назначит цену — придёт уведомление, после этого заявку можно оплатить.', items: [] };
   }
   if (order.status === 'awaiting_executor') return { lead: 'Исполнитель подобран и смотрит заявку. Как только примет — придёт уведомление.', items: [] };
+  // «Ваш эксперт» (2.465): эксперт взял дело — посмотреть его карточку и нажать «Принять».
+  if (['in_work', 'review'].includes(order.status) && ctx.current?.my_expert?.can_accept) {
+    return { lead: 'Эксперт взял Ваше дело и уже работает. Посмотрите его карточку и нажмите «Принять» — это согласие с условиями заказа.', items: [],
+      main: { label: 'Посмотреть эксперта', run: go('expert-box') } };
+  }
   if (order.status === 'in_work') return { lead: `Исполнитель работает.${deadline} Вопросы и уточнения — в переписке ниже.`, items: [] };
   if (order.status === 'review') return { lead: 'Работа сдана — платформа проверяет результат, потом он появится здесь.', items: [] };
   if (order.status === 'done') {
