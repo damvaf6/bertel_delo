@@ -131,6 +131,14 @@ const bankAfter = (x) => {
   return `дела для банка: ${x.bank_cases} · задание на оценку пришло после черновика: ${x.bank_after
     ? `${x.bank_after} (${x.bank_after_pct}%)` : 'ни в одном'}`;
 };
+// 2.459: «для банков из списка: 4 · без аккредитации в банке на день сдачи: 1»; все с аккредитацией — «… ни одного»; дел для
+// банка из списка нет — пусто.
+const bankAccr = (x) => {
+  if (!x.bank_listed) return '';
+  return `сдано для банка: ${x.bank_listed} · без аккредитации в этом банке на день сдачи: ${x.bank_no_accr || 'ни одного'}`;
+};
+const bankLine = (x) => (x.no_accr === null ? 'банк не из списка — аккредитацию не сверяем'
+  : x.no_accr ? `без аккредитации в банке на день сдачи: ${x.no_accr}` : 'все — с аккредитацией в банке');
 // 2.336: «срок переносили по просьбе эксперта в 3 делах (4 раза) · позже срока по заданию на оценку: 2, письмо о переносе
 // есть: 1 из 2»; переносов нет — пусто.
 const extMoves = (x) => {
@@ -229,6 +237,7 @@ async function load(month) {
     ...(taskLate(t) ? fact('Срок по заданию на оценку', taskLate(t), t.task_late ? 'warn' : '') : []),
     ...(letterLate(t) ? fact('Срок по письму о переносе', letterLate(t), t.letter_late ? 'warn' : '') : []),
     ...(bankAfter(t) ? fact('Дела для банка', bankAfter(t), t.bank_after ? 'warn' : '') : []),
+    ...(bankAccr(t) ? fact('Аккредитация в банке', bankAccr(t), t.bank_no_accr ? 'warn' : '') : []),
     ...(extMoves(t) ? fact('Переносы срока', extMoves(t), extWarn(t) ? 'warn' : '') : []),
     ...(letterAsk(t) ? fact('Письмо с новым сроком', letterAsk(t), t.letter_ask_wait ? 'warn' : '') : []),
     ...(report.current && t.overdue_now ? fact('Просрочено сейчас', String(t.overdue_now), 'overdue') : []),
@@ -241,6 +250,11 @@ async function load(month) {
     el('div', { class: 'muted', text: [x.done_late ? `позже срока: ${x.done_late}` : null,
       x.avg_days != null ? `в среднем ${daysRu(x.avg_days)} от принятия до сдачи` : null, `вознаграждение: ${rub(x.fee_kop)}`,
       `${x.experts === 1 ? 'один эксперт' : `экспертов: ${x.experts}`}`].filter(Boolean).join(' · ') }))));
+  const banks = report.by_bank ?? [];
+  $('org-report-banks-box').classList.toggle('hidden', !banks.length);
+  $('org-report-banks').replaceChildren(...banks.map((x) => el('li', { 'data-report-bank': x.id },
+    el('div', { class: 'title', text: `${x.name} — ${casesN(x.done)}` }),
+    el('div', { class: x.no_accr ? 'warn' : 'muted', text: bankLine(x) }))));
   const top = report.top_remarks ?? [];
   $('org-report-remarks-box').classList.toggle('hidden', !top.length);
   $('org-report-remarks').replaceChildren(...top.map((x) => el('li', { 'data-remark': '' },
@@ -298,6 +312,7 @@ async function load(month) {
     ...(taskLate(x) ? [el('div', { class: x.task_late ? 'warn' : 'muted', 'data-expert-tasklate': '', text: taskLate(x) })] : []),
     ...(letterLate(x) ? [el('div', { class: x.letter_late ? 'warn' : 'muted', 'data-expert-letterlate': '', text: letterLate(x) })] : []),
     ...(bankAfter(x) ? [el('div', { class: x.bank_after ? 'warn' : 'muted', 'data-expert-bankafter': '', text: bankAfter(x) })] : []),
+    ...(bankAccr(x) ? [el('div', { class: x.bank_no_accr ? 'warn' : 'muted', 'data-expert-bankaccr': '', text: bankAccr(x) })] : []),
     ...(extMoves(x) ? [el('div', { class: extWarn(x) ? 'warn' : 'muted', 'data-expert-ext': '', text: extMoves(x) })] : []),
     ...(letterAsk(x) ? [el('div', { class: x.letter_ask_wait ? 'warn' : 'muted', 'data-expert-letterask': '', text: letterAsk(x) })] : []),
     ...(x.remarks_after ? [el('div', { class: 'warn', 'data-expert-after': '', text: `${afterRemarks(x)}${

@@ -25,6 +25,7 @@
 // месяц, — сколько, сколько пришло и через сколько дней в среднем (до десятых, по часам), сколько ещё ждут; снятые — не в счёт.
 // Месяц — по московскому времени. Сводка за год (2.408) — то же за весь год, с прошлым годом и сданными по месяцам.
 // Выгрузка таблицей — CSV для Excel (точка с запятой, BOM, суммы с запятой).
+import { OTHER_BANK, bankList } from '../dossier/dossier.mjs';
 import { HttpError } from '../http/core.mjs';
 import { orderSplit } from '../money/money.mjs';
 import { addDays, isOverdue, todayMsk } from '../orders/workflow.mjs';
@@ -153,7 +154,7 @@ async function orgMonthDone(sql, orgId, ids, { start, end }) {
   if (!ids.length) return [];
   return sql`
       select distinct on (o.id) o.id, o.module, o.service, o.executor_user_id as user_id, o.deadline, o.price_kop, o.transit_kop,
-             o.fields->>'purpose' as purpose,
+             o.fields->>'purpose' as purpose, o.fields->>'bank' as bank,
              p.amount_kop as payout_kop, h.at,
              greatest(
                (select max(f.outcome_at) from order_offers f
@@ -599,6 +600,42 @@ function byService(done, registry) {
     .map(({ users, cases, ...g }) => ({ ...g, experts: users.size, avg_days: avgDays(pace(cases)) }));
 }
 
+// Дела по банкам за месяц (2.459): сданные дела с целью «банк» — по банку заявки; без аккредитации — у эксперта на день сдачи
+// не было действующей аккредитации в этом банке ни своей (досье), ни у организации (как в подборе, 2.452, и в ИИ-проверке,
+// 2.458: решение банка не позже дня сдачи, срок не раньше). «Другой банк» — отдельной строкой: банк не из списка, по
+// аккредитации не сверяем (no_accr — null).
+const accrQ = async (sql, orgId, ids) => (!ids.length ? [] : [
+  ...(await sql`select user_id, bank, to_char(issued_on, 'YYYY-MM-DD') as issued_on, to_char(valid_until, 'YYYY-MM-DD') as valid_until
+                from dossier_items where kind = 'bank' and deleted_at is null and user_id = any(${ids}::uuid[])`),
+  ...(await sql`select null::uuid as user_id, bank, to_char(issued_on, 'YYYY-MM-DD') as issued_on, to_char(valid_until, 'YYYY-MM-DD') as valid_until
+                from org_accreditations where org_id = ${orgId} and deleted_at is null`),
+]);
+const accredited = (o, accr) => {
+  const day = dayMsk(o.at);
+  return accr.some((a) => (!a.user_id || a.user_id === o.user_id) && a.bank === o.bank
+    && (!a.issued_on || a.issued_on <= day) && (!a.valid_until || a.valid_until >= day));
+};
+const listedBank = (o) => !!o.bank && o.bank !== OTHER_BANK.id;
+// [{ id, name, done, no_accr }] — банки из списка по числу дел, «Другой банк» (и без банка) — последним.
+function byBank(done, accr, registry) {
+  const names = new Map(bankList(registry).map((b) => [b.id, b.name]));
+  const groups = new Map();
+  for (const o of done.filter((x) => x.purpose === 'bank')) {
+    const id = listedBank(o) ? o.bank : OTHER_BANK.id;
+    const g = groups.get(id) ?? groups.set(id, { id, name: names.get(id) ?? (id === OTHER_BANK.id ? OTHER_BANK.name : id), done: 0,
+      no_accr: id === OTHER_BANK.id ? null : 0 }).get(id);
+    g.done++;
+    if (g.no_accr !== null && !accredited(o, accr)) g.no_accr++;
+  }
+  return [...groups.values()].sort((a, b) => (a.id === OTHER_BANK.id) - (b.id === OTHER_BANK.id) || b.done - a.done
+    || a.name.localeCompare(b.name, 'ru'));
+}
+// { bank_listed, bank_no_accr }: сданные для банка из списка и из них без аккредитации на день сдачи.
+function bankAccr(done, accr) {
+  const listed = done.filter((o) => o.purpose === 'bank' && listedBank(o));
+  return { bank_listed: listed.length, bank_no_accr: listed.filter((o) => !accredited(o, accr)).length };
+}
+
 export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), now = new Date(), registry = null, taskDue = null, taskAfter = null,
   taskMove = null } = {}) {
   const year = isYear(month);
@@ -652,6 +689,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), no
   const taskDues = await taskDueRows(q.done, taskDue);
   const bankAfters = await bankAfterRows(q.done, taskAfter);
   const exts = await extRows(q.done, taskMove);
+  const accr = await accrQ(sql, orgId, ids);
   const count = (rows) => new Map(rows.map((r) => [r.user_id, r.n]));
   const accepted = count(q.accepted);
   const headReturns = count(q.headReturns);
@@ -690,6 +728,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), no
       ...bankTask(q.bankTask.filter((x) => x.user_id === e.user_id)),
       ...taskLate(taskDues.filter((x) => x.user_id === e.user_id)),
       ...bankAfter(bankAfters.filter((x) => x.user_id === e.user_id)),
+      ...bankAccr(done, accr),
       ...ext(exts.filter((x) => x.user_id === e.user_id)),
       ...letterAsk(q.letterAsk.filter((x) => x.user_id === e.user_id)),
       ...orgSign(done),
@@ -719,7 +758,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), no
     experts: rows,
     total: { ...Object.fromEntries(keys.map((k) => [k, sum(k)])), avg_days: avgDays(all), ...resign(q.resign),
       ...egrnFirst(q.firstSign, registry), ...bankTask(q.bankTask), ...taskLate(taskDues),
-      ...bankAfter(bankAfters), ...ext(exts), ...letterAsk(q.letterAsk), ...orgSign(q.done), ...afterRemarks(q.afterRemarks, afterItems),
+      ...bankAfter(bankAfters), ...bankAccr(q.done, accr), ...ext(exts), ...letterAsk(q.letterAsk), ...orgSign(q.done), ...afterRemarks(q.afterRemarks, afterItems),
       ...court(q.court, now),
       prev: cmp ? cmp.total : null },
     prev_month: cmp ? prevM : null,
@@ -736,6 +775,8 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), no
     after_by_user: afterByUser(q.afterRemarks, afterItems),
     after_remarks: topRemarks(afterItems, TOP_REMARKS),
     by_service: byService(q.done, registry),
+    // 2.459: сданные для банков — по банкам и сколько без аккредитации в этом банке.
+    by_bank: byBank(q.done, accr, registry),
   };
 }
 
@@ -907,6 +948,12 @@ export function reportCsv(orgName, r) {
     ...(r.total.bank_cases ? [[], ['Дела для банка', 'Сдано', 'Задание на оценку пришло после черновика', 'Доля, %'],
       ...[...r.experts.filter((x) => x.bank_cases).map((x) => [x.full_name, x]), ['Итого', r.total]]
         .map(([name, x]) => [name, x.bank_cases, x.bank_after, x.bank_after_pct])] : []),
+    // 2.459: только если за месяц сданы дела для банков — по банкам и по экспертам.
+    ...(r.by_bank?.length ? [[], ['Дела по банкам', 'Сдано', 'Без аккредитации в этом банке на день сдачи'],
+      ...r.by_bank.map((x) => [x.name, x.done, x.no_accr ?? 'не сверяется']),
+      ...(r.total.bank_listed ? [[], ['Без аккредитации в банке — по экспертам', 'Сдано для банка из списка', 'Без аккредитации'],
+        ...[...r.experts.filter((x) => x.bank_listed).map((x) => [x.full_name, x]), ['Итого', r.total]]
+          .map(([name, x]) => [name, x.bank_listed, x.bank_no_accr])] : [])] : []),
     // 2.336: только если за месяц сданы дела с переносом срока по просьбе эксперта.
     ...(r.total.ext_cases ? [[], ['Переносы срока по просьбе эксперта', 'Сдано дел с переносом', 'Переносов',
       'Срок перенесён позже срока по заданию на оценку', 'Из них с письмом о переносе'],

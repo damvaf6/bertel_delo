@@ -377,3 +377,42 @@ test('2.458: ИИ-проверка отчёта для Сбербанка — а
   await shot(sp, 'ak14-2458-ii-proverka-akkreditaciya');
   expect([...sp.problems, ...cp.problems]).toEqual([]);
 });
+
+test('2.459: сводка за месяц — дела по банкам и сколько сдано без аккредитации в этом банке', async ({ browser, baseURL }) => {
+  const hp = await phone(browser, baseURL);
+  const head = await signIn(hp, '+79990004596');
+  const { orgId, expert } = await db(async (c) => {
+    const expert = (await c.query("insert into users (phone, full_name) values ('+79990004597', 'Тестова-Банковая Ольга') returning id")).rows[0].id;
+    const { rows: [org] } = await c.query("insert into organizations (name) values ('ООО «Банки в сводке 2.459»') returning id");
+    await c.query("insert into org_members (org_id, user_id, role, created_at) values ($1, $2, 'head', now() - interval '1 day'), ($1, $3, 'member', now() - interval '1 day')", [org.id, head.id, expert]);
+    await c.query('insert into specialists (user_id, org_id) values ($1, $2)', [expert, org.id]);
+    // Своя аккредитация в Сбербанке кончилась позавчера: одно дело сдано неделю назад (с ней) — нет, сдано минуту назад.
+    await c.query("insert into dossier_items (user_id, kind, title, bank, valid_until) values ($1, 'bank', 'Сбербанк', 'sber', $2)", [expert, plusDays(-2)]);
+    const done = async (title, bank, ago) => {
+      const id = (await c.query(`insert into orders (owner_user_id, title, module, service, status, executor_user_id, deadline, fields)
+        values ($1, $2, 'expertise', 'realty', 'done', $1, current_date + 5, $3) returning id`,
+      [expert, title, { purpose: 'bank', bank, region: 'moscow', object_type: 'flat', address: 'г. Москва, ул. Банковая, д. 9', area: '50' }])).rows[0].id;
+      await c.query("insert into order_status_history (order_id, from_status, to_status, side, at) values ($1, 'review', 'done', 'dispatcher', now() - $2::interval)", [id, ago]);
+    };
+    // Чтобы оба дела попали в текущий месяц и в первые дни месяца: сданное «раньше» — не раньше 1-го числа.
+    const early = (await c.query("select least(interval '7 days', now() - date_trunc('month', now() at time zone 'Europe/Moscow') at time zone 'Europe/Moscow' - interval '1 minute') as i")).rows[0].i;
+    await done('Квартира для Сбербанка: с аккредитацией', 'sber', early);
+    await done('Дом для Сбербанка: без аккредитации', 'sber', '1 minute');
+    await done('Квартира для другого банка', 'other', '2 minutes');
+    return { orgId: org.id, expert };
+  });
+
+  await hp.goto(`/kabinet#org=${orgId}`);
+  const box = hp.locator('#org-report-banks-box');
+  await expect(box).toBeVisible();
+  const sber = box.locator('li[data-report-bank="sber"]');
+  await expect(sber.locator('.title')).toHaveText('Сбербанк — 2 дела');
+  await expect(box.locator('li[data-report-bank="other"]')).toContainText('банк не из списка — аккредитацию не сверяем');
+  await expect(hp.locator(`#org-report li[data-report-expert="${expert}"] [data-expert-bankaccr]`))
+    .toHaveText(/^сдано для банка: 2 · без аккредитации в этом банке на день сдачи: [12]$/);
+  await expect(hp.locator('#org-report-total')).toContainText('Аккредитация в банке');
+  await box.scrollIntoViewIfNeeded();
+  await shot(hp, 'ak15-2459-svodka-po-bankam');
+  expect(hp.problems).toEqual([]);
+  await hp.context().close();
+});
