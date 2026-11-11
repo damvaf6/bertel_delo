@@ -110,6 +110,9 @@ button:disabled { opacity: .6; cursor: default; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
 .chips button { min-height: 36px; padding: 6px 12px; border-radius: 99px; font-size: 14px; background: var(--field); color: var(--accent); }
 .chips button[aria-pressed=true] { background: var(--accent); color: var(--accent-text); }
+/* Отзыв 1–5 (2.467): звёзды — кнопки побольше, выбранные и до них залиты. */
+.chips.stars button { min-width: 44px; min-height: 44px; font-size: 22px; padding: 4px 8px; }
+.stars-line { font-size: 20px; letter-spacing: 2px; color: var(--accent); margin: 4px 0; }
 .chips.remarks button, .chips.phrases button { border-radius: 12px; text-align: left; white-space: normal; overflow-wrap: anywhere; max-width: 100%; }
 details.remarks-own, div.phrases-own { margin: 4px 0 10px; }
 div.phrases-own li > span { white-space: pre-wrap; }

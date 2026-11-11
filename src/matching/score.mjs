@@ -16,7 +16,8 @@ export const FEATURE_NAMES = {
 
 const clamp = (n) => Math.max(0, Math.min(100, Math.round(n)));
 
-// spec: { regions, capacity, external_load }; stats: { open (дел сейчас), offers, accepted, done?, on_time?, returned? };
+// spec: { regions, capacity, external_load }; stats: { open (дел сейчас), offers, accepted, done?, on_time?, returned?,
+// rating_n?, rating_avg? };
 // order: { fields, deadline };
 // daysLeft — дней до срока (null, если срока нет).
 export function scoreSpecialist(spec, stats, order, daysLeft) {
@@ -40,6 +41,11 @@ export function scoreSpecialist(spec, stats, order, daysLeft) {
     parts.push((100 * (stats.on_time ?? 0)) / done);
     parts.push(100 * (1 - Math.min(1, (stats.returned ?? 0) / done)));
     notes.push(`в срок ${stats.on_time ?? 0} из ${done}`, `возвратов на доработку: ${stats.returned ?? 0}`);
+  }
+  // Отзывы заказчиков (2.467): от трёх отзывов — средняя оценка 1–5 в долю (5 — 100, 1 — 0).
+  if ((stats.rating_n ?? 0) >= QUALITY_MIN_OFFERS) {
+    parts.push((100 * (stats.rating_avg - 1)) / 4);
+    notes.push(`оценка заказчиков ${String(stats.rating_avg).replace('.', ',')} из 5 (отзывов: ${stats.rating_n})`);
   }
   const enough = parts.length > 0;
   const qualityScore = enough ? clamp(parts.reduce((a, b) => a + b, 0) / parts.length) : 70;

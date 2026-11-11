@@ -4373,7 +4373,15 @@
       (`order-ops.mjs`), в деле — `org_check_missing` (`core-ops.mjs`), строки в «Что дальше» и «Готово к сдаче?» (`public/next.js`);
       без подписи организации не выдать — `org_check_missing` при `review → done`. Тесты — `tests/server/org-check.test.mjs`;
       `tests/ui/org-check.spec.mjs` (снимки oc01, oc02). Проверено без облака.
-- [ ] 2.467 Отзыв 1–5 и пара слов после выдачи; видят диспетчер и ЦНЭР, учёт в подборе.
+- [x] 2.467 Отзыв 1–5 и пара слов после выдачи; видят диспетчер и ЦНЭР, учёт в подборе.
+      Сделано 11.11.2026: у «Экспертизы» `review: {}` (`src/modules/expertise.mjs`, проверка — `src/modules/index.mjs`,
+      `registry.review`). Таблица `order_reviews` (миграция 115, один отзыв на заявку). Операция `orders.review` и блок `review`
+      в `orders.get` (заказчику — `mine`, `can_review`; служебным — отзыв) — `src/ops/review-ops.mjs`; в карточке эксперта —
+      `reviews` (`expertReviews`) только служебным и руководителю его организации, самому эксперту — нет. Подбор: `rating_n`,
+      `rating_avg` в `workStats` (`src/matching/stats.mjs`), от трёх отзывов — в «качество» (`scoreSpecialist`). Экран —
+      `public/review.js` (звёзды, «Ваш отзыв» / «Отзыв заказчика»), шаг «Оставить отзыв» в `public/next.js`, «Отзывы
+      заказчиков» в `public/expertcard.js`. Тесты — `tests/server/review.test.mjs`, `access`; `tests/ui/review.spec.mjs`
+      (снимки rv01–rv03). Проверено без облака.
 
 - [ ] 2.458 ИИ-проверка отчёта для банка — оценщик или организация аккредитованы в банке-пользователе на дату отчёта; нет —
       находка.

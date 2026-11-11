@@ -144,10 +144,16 @@ function customerSteps() {
     const items = [
       { id: 'result', title: results.length ? `Скачать результат (${results.length})` : 'Результат', done: false, go: go('docs') },
       ...(money?.documents?.length ? [{ id: 'act', title: 'Акт об оказании услуг', done: false, go: go('closing') }] : []),
+      // Отзыв 1–5 (2.467): пока не оставлен — шагом «Оставить отзыв».
+      ...(ctx.current?.review ? [{ id: 'review', title: 'Оставить отзыв об эксперте', done: !ctx.current.review.can_review, go: go('rate-box') }] : []),
     ];
     return { lead: 'Результат готов. Скачайте его и проверьте; если всё в порядке — примите работу.', items, main: close && { label: 'Принять и закрыть', run: () => ctx.step(close) } };
   }
-  if (order.status === 'closed') return { lead: 'Заявка закрыта. Результат и закрывающие документы остаются здесь — их можно скачать в любое время.', items: [] };
+  if (order.status === 'closed') {
+    const ask = ctx.current?.review?.can_review;
+    return { lead: `Заявка закрыта. Результат и закрывающие документы остаются здесь — их можно скачать в любое время.${ask ? ' Оцените, пожалуйста, работу эксперта.' : ''}`, items: [],
+      ...(ask ? { main: { label: 'Оставить отзыв', run: go('rate-box') } } : {}) };
+  }
   return null;
 }
 

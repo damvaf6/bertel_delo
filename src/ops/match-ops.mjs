@@ -4,9 +4,10 @@
 // Решения Claude (на подтверждение Дамиру, DECISIONS.md 01.10.2026): допуск выдаёт администратор; специалист не получает
 // собственные дела; отказ — с причиной, доля принятых предложений идёт в «качество прошлых работ».
 import { HttpError } from '../http/core.mjs';
-import { orderSides, roleIn } from '../access/policy.mjs';
+import { isStaff, orderSides, roleIn } from '../access/policy.mjs';
 import { scoreSpecialist } from '../matching/score.mjs';
 import { workStats, yearStats } from '../matching/stats.mjs';
+import { expertReviews } from './review-ops.mjs';
 import { STATUS_NAME, addDays, isOverdue, todayMsk } from '../orders/workflow.mjs';
 import { caseMoves } from './org-ops.mjs';
 import { openExtends, taskMovedOrg } from './deadline-ops.mjs';
@@ -466,6 +467,10 @@ export function matchOps() {
           select count(*) filter (where outcome in ('accepted', 'declined'))::int as offers, count(*) filter (where outcome = 'accepted')::int as accepted
           from order_offers where specialist_id = ${id}`;
         const work = (await workStats(sql, [id])).get(id);
+        // Отзывы заказчиков (2.467) видят служебные и руководитель организации эксперта; самому эксперту — позже (схема 5
+        // экранов), поэтому в его карточке оценки нет ни строкой, ни в «качестве».
+        const seesReviews = isStaff(actor) || (!!signOrg && roleIn(actor, signOrg.id) === 'head');
+        if (!seesReviews) { delete work.rating_n; delete work.rating_avg; }
         const stats = { ...offers, ...work };
         const quality = scoreSpecialist({ ...profile, external_load: profile.external_load ?? 0 }, { open: 0, ...stats }, { fields: {} }, null).features.quality;
         const rows = await sql`
@@ -499,6 +504,7 @@ export function matchOps() {
           dossier,
           stats,
           quality: { score: quality.score, note: quality.note },
+          reviews: seesReviews ? await expertReviews(sql, id, orderRef) : null,
           year: await yearStats(sql, id, { registry }),
           now: {
             org_id: headOrg,

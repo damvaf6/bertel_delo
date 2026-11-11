@@ -54,6 +54,8 @@
 //       банка или суда (текст и файл), дело снова у исполнителя; срок ответа — reply_days рабочих дней
 //     court?: {}  — вызов эксперта в суд (2.441): после «готово» заказчик или диспетчер пишет, что исполнителя вызывают на
 //       заседание (суд, номер дела, дата и время, адрес, файл повестки); дело не переоткрывается
+//     review?: {}  — отзыв заказчика после выдачи (2.467): оценка 1–5 и пара слов; видят служебные и руководитель организации
+//       исполнителя, учитывается в подборе («качество»); исполнителю и на витрине — позже
 //     money?: { fee?: 'on_top', payout?: 'manual' }  — деньги модуля (2.463): fee 'on_top' — диспетчер назначает цену
 //       исполнителя, заказчик платит её плюс вознаграждение платформы (20% сверх, ×1,2), исполнитель получает 100% своей цены;
 //       без него — прежнее 80/20 из цены заказчика; payout 'manual' — выплата исполнителю вручную, списком: отметку
@@ -157,7 +159,7 @@ function validateField(f, where) {
 }
 
 export function validateModule(m) {
-  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express', 'signature', 'analogs', 'approaches', 'request_docs', 'repeat', 'executors', 'certificate', 'steps', 'proofread', 'remarks', 'court', 'offer', 'money'], 'модуль');
+  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express', 'signature', 'analogs', 'approaches', 'request_docs', 'repeat', 'executors', 'certificate', 'steps', 'proofread', 'remarks', 'court', 'offer', 'money', 'review'], 'модуль');
   if (!ID_RE.test(m.id ?? '')) fail('модуль', `неверный id «${m.id}»`);
   const at = `модуль ${m.id}`;
   if (!nonEmpty(m.name)) fail(at, 'нет названия');
@@ -411,6 +413,8 @@ export function validateModule(m) {
   }
   // Вызов эксперта в суд (2.441) — необязательно, без настроек.
   if (m.court !== undefined) onlyKeys(m.court, [], `${at}, вызов в суд`);
+  // Отзыв заказчика после выдачи (2.467) — необязательно, без настроек.
+  if (m.review !== undefined) onlyKeys(m.review, [], `${at}, отзыв заказчика`);
   // Вычитка и переделка (2а.7) — необязательно.
   if (m.proofread !== undefined) {
     const where = `${at}, вычитка`;
@@ -660,6 +664,10 @@ export function createRegistry(modules = DEFAULT_MODULES, { orgCheck = false } =
     // Вызов эксперта в суд (2.441): есть ли у модуля.
     court(moduleId) {
       return !!modulesList.find((x) => x.id === moduleId)?.court;
+    },
+    // Отзыв заказчика 1–5 после выдачи (2.467): есть ли у модуля.
+    review(moduleId) {
+      return !!modulesList.find((x) => x.id === moduleId)?.review;
     },
     // Условия оферты (2а.8) для услуги: пункты заказчику (customer) и исполнителю (executor); null — у модуля оферты нет.
     offer(moduleId, serviceId) {
