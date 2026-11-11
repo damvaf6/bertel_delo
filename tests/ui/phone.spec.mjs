@@ -707,6 +707,7 @@ test('ход заявки: подбор диспетчером, принятие
   // Выплата эксперту вручную (2.463): до отметки — «ждёт выплаты вручную»; диспетчер в «Деньгах» → «Выплатить вручную»
   // видит эксперта, телефон и сумму, перечисляет и нажимает «Выплачено».
   await sp.goto(`/kabinet#order=${id}`);
+  await sp.reload();
   await expect(sp.locator('#money-facts')).toContainText(/Выплата\s*25\s000 ₽ — ждёт выплаты вручную/);
   await dp.goto('/kabinet#money');
   const manualRow = dp.locator('#money-manual li').filter({ hasText: 'Оценка автомобиля после ДТП' });
