@@ -4344,7 +4344,17 @@
       отчёт агента — «цена эксперта … и вознаграждение 20% сверх неё» (`src/money/papers.mjs`, `public/money.js`). Демо: по закрытым
       делам выплата отмечена, по выданному — ждёт в списке. Переводы и заявки до 2.463 — прежние 80/20. Тесты —
       `tests/server/fee-on-top.test.mjs`, `money`, `access`, `e2e`, `notify`, `mail`, `demo`; `tests/ui/phone.spec.mjs` (снимок 39a). Проверено без облака.
-- [ ] 2.464 Оплата по счёту ООО «АИС Переводчик» (реквизиты — от Дамира) и отметка диспетчера «оплачено».
+- [x] 2.464 Оплата по счёту ООО «АИС Переводчик» (реквизиты — от Дамира) и отметка диспетчера «оплачено».
+      Сделано 11.11.2026: у «Экспертизы» `money.pay: 'invoice'` (`src/modules/expertise.mjs`, проверка — `src/modules/index.mjs`,
+      `registry.money(...).invoice`). Заказчик — «Оплата по счёту», «Скачать счёт на оплату (Word)» (номер счёта в назначении
+      платежа, `invoiceDoc(..., byInvoice)` в `src/money/papers.mjs`), «Я оплатил(а) по счёту» с пометкой — `payments.invoice_claim`,
+      `orders.invoice_claimed_at`, диспетчерам `invoice_claimed_staff`. Диспетчер — «Оплата поступила» в заявке (с пометкой) и в
+      «Деньгах» → «Ждут оплаты по счёту» — `payments.invoice_paid`, `payments.method = 'invoice'`, `orderPaid` в `src/money/money.mjs`.
+      Отмена после оплаты по счёту — возврат вручную: `refunds.manual`, «Вернуть вручную» и «Возвращено» — `refunds.manual_paid`,
+      диспетчерам `refund_manual_staff`. Миграция 113. Картой у экспертизы — `CARD_PAY` (`cfg.cardPay`: выключена на prod и демо,
+      на проверках включена). Демо: оплата дел — по счёту (`src/demo/seed.mjs`). Экран — `public/money.js`, `public/next.js`,
+      `public/kabinet.html`. Тесты — `tests/server/invoice-pay.test.mjs`, `access`, `demo` (с `CARD_PAY=0`), `fee-on-top`,
+      `money`; `tests/ui/invoice.spec.mjs` (снимки iv01–iv04). Проверено без облака.
 - [ ] 2.465 Заказчик видит карточку эксперта и «Принять» = согласие с договором.
 - [ ] 2.466 Проверка ЦНЭР (организации эксперта) — обязательный шаг перед выдачей в первом выпуске.
 - [ ] 2.467 Отзыв 1–5 и пара слов после выдачи; видят диспетчер и ЦНЭР, учёт в подборе.

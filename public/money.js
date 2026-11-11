@@ -66,7 +66,7 @@ export async function loadMoney(current, reload) {
     const pay = money.paid ? `оплачено${byInvoice ? ' по счёту' : ''} ${dayRu(money.paid_at)}${byInvoice && money.sees.staff && money.payment.note ? ` (${money.payment.note})` : ''}`
       : money.payment?.status === 'pending' ? PAYMENT_RU.pending
       : money.pay_invoice && claimed ? claimed
-      : money.pay_invoice ? 'нужна оплата по счёту: после поступления денег заявку передадут эксперту'
+      : money.pay_invoice ? `нужна оплата ${money.can_pay ? 'картой или по счёту' : 'по счёту'}: после поступления денег заявку передадут эксперту`
       : order.status === 'cancelled' ? 'не оплачено'
       : money.payment ? `${PAYMENT_RU[money.payment.status]} — можно оплатить снова`
       : money.price_kop ? 'нужна оплата: после неё заявку передадут исполнителю' : 'после назначения цены';
