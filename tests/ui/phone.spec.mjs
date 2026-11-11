@@ -479,11 +479,13 @@ test('ход заявки: подбор диспетчером, принятие
   dp.once('dialog', (d) => d.accept());
   await cand.getByRole('button', { name: 'Предложить дело' }).click();
   await expect(dp.locator('#match-msg')).toHaveText('Сначала назначьте цену');
-  await dp.getByLabel('Цена, рублей').fill('25000');
+  // Экспертиза (2.463): диспетчер назначает цену эксперта — заказчик платит её ×1,2, эксперту 100%.
+  await dp.getByLabel('Цена эксперта, рублей').fill('25000');
+  await expect(dp.locator('#price-ontop')).toHaveText(/Заказчик заплатит 30\s000 ₽: цена эксперта 25\s000 ₽ и платформе 5\s000 ₽/);
   await dp.getByRole('button', { name: 'Назначить цену' }).click();
   await expect(dp.locator('#money-msg')).toHaveText('Цена назначена');
-  await expect(dp.locator('#money-facts')).toContainText(/Исполнителю \(80%\)\s*20\s000 ₽/);
-  await expect(dp.locator('#money-facts')).toContainText(/Платформе \(20%\)\s*5\s000 ₽/);
+  await expect(dp.locator('#money-facts')).toContainText(/Эксперту \(его цена, 100%\)\s*25\s000 ₽/);
+  await expect(dp.locator('#money-facts')).toContainText(/Платформе \(20% сверх цены эксперта\)\s*5\s000 ₽/);
   await shot(dp, '35-dispetcher-cena');
   // Заказчик платит при заказе (1.6а): пока не оплачено, дело не предложить.
   await expect(dp.locator('#match-current')).toContainText('после оплаты заказчиком');
@@ -493,11 +495,12 @@ test('ход заявки: подбор диспетчером, принятие
 
   // Заказчик видит цену и оплачивает (поддельная ЮKassa); деньги ждут у платформы до выдачи результата.
   await page.goto(`/kabinet#order=${id}`);
-  await expect(page.locator('#money-facts')).toContainText(/Цена\s*25\s000 ₽/);
+  await expect(page.locator('#money-facts')).toContainText(/Цена\s*30\s000 ₽/);
   await expect(page.locator('#money-facts')).not.toContainText('Исполнителю');
+  await expect(page.locator('#money-facts')).not.toContainText('25');
   await expect(page.locator('#money-facts')).toContainText('после неё заявку передадут исполнителю');
   await shot(page, '36-zakazchik-oplata');
-  await page.getByRole('button', { name: /Оплатить 25\s000 ₽/ }).click();
+  await page.getByRole('button', { name: /Оплатить 30\s000 ₽/ }).click();
   await expect(page.locator('#money-facts')).toContainText('оплачено');
   await expect(page.locator('#money-facts')).toContainText('уйдут исполнителю, только когда результат проверен');
   await expect(page.getByRole('button', { name: /Оплатить/ })).toBeHidden();
@@ -505,7 +508,7 @@ test('ход заявки: подбор диспетчером, принятие
 
   await dp.reload();
   await expect(dp.locator('#match-current')).toContainText('Заявка оплачена');
-  await expect(dp.getByLabel('Цена, рублей')).toBeHidden();
+  await expect(dp.getByLabel('Цена эксперта, рублей')).toBeHidden();
   dp.once('dialog', (d) => d.accept());
   await dp.locator('#candidates li').filter({ hasText: 'Тестовый оценщик' }).getByRole('button', { name: 'Предложить дело' }).click();
   await expect(dp.locator('#order-status')).toHaveText('Ждёт исполнителя');
@@ -527,8 +530,8 @@ test('ход заявки: подбор диспетчером, принятие
   await expect(sp.getByRole('button', { name: 'Принять дело' })).toBeVisible();
   await expect(sp.locator('#match-box')).toBeHidden();
   // Исполнитель видит своё вознаграждение, но не цену заказчика.
-  await expect(sp.locator('#money-facts')).toContainText(/Ваше вознаграждение \(80% цены\)\s*20\s000 ₽/);
-  await expect(sp.locator('#money-facts')).not.toContainText('25');
+  await expect(sp.locator('#money-facts')).toContainText(/Ваша цена \(100%\)\s*25\s000 ₽/);
+  await expect(sp.locator('#money-facts')).not.toContainText('30');
   await shot(sp, '27-specialist-predlozhenie');
   await sp.getByRole('button', { name: 'Отказаться' }).click();
   await expect(sp.getByText('Укажите причину')).toBeVisible();
@@ -683,7 +686,7 @@ test('ход заявки: подбор диспетчером, принятие
   await page.locator('#closing li').getByRole('button', { name: 'Открыть' }).click();
   await expect(page.locator('#closing-doc')).toContainText('Акт об оказании услуг');
   await expect(page.locator('#closing-doc')).toContainText('Проверочный документ');
-  await expect(page.locator('#closing-doc')).toContainText(/вознаграждение агента \(20%\): 5\s000 ₽/);
+  await expect(page.locator('#closing-doc')).toContainText(/Стоимость: 30\s000 ₽, в том числе цена эксперта 25\s000 ₽ и вознаграждение агента \(20% сверх цены эксперта\): 5\s000 ₽/);
   await shot(page, '37-zakazchik-akt');
   // После проверки заказчик видит оба файла результата и итог проверки; удалить их не может; отвечает в переписке.
   await expect(page.locator('#docs li').filter({ hasText: 'Результат работы' })).toHaveCount(2);
@@ -701,17 +704,31 @@ test('ход заявки: подбор диспетчером, принятие
   await expect(page.locator('#upload-box')).toBeHidden();
   await expect(page.locator('#message-form')).toBeHidden();
 
-  // Выплата исполнителю прошла автоматически: специалист видит её в «Деньгах» и отчёт агента в деле.
+  // Выплата эксперту вручную (2.463): до отметки — «ждёт выплаты вручную»; диспетчер в «Деньгах» → «Выплатить вручную»
+  // видит эксперта, телефон и сумму, перечисляет и нажимает «Выплачено».
+  await sp.goto(`/kabinet#order=${id}`);
+  await expect(sp.locator('#money-facts')).toContainText(/Выплата\s*25\s000 ₽ — ждёт выплаты вручную/);
+  await dp.goto('/kabinet#money');
+  const manualRow = dp.locator('#money-manual li').filter({ hasText: 'Оценка автомобиля после ДТП' });
+  await expect(manualRow).toContainText(/Тестовый оценщик — 25\s000 ₽/);
+  await expect(dp.locator('#money-totals')).toContainText(/Выплатить вручную\s*\d/);
+  expect(await dp.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await shot(dp, '39a-vyplatit-vruchnuyu');
+  await manualRow.getByRole('button', { name: 'Выплачено' }).click();
+  await expect(dp.locator('#money-manual-msg')).toHaveText('Выплата отмечена');
+  await expect(dp.locator('#money-manual li').filter({ hasText: 'Оценка автомобиля после ДТП' })).toHaveCount(0);
+
+  // Выплата отмечена: специалист видит её в «Деньгах» и отчёт агента в деле.
   const sp2 = sp;
   await sp2.goto('/kabinet#money');
   await expect(sp2.getByRole('heading', { name: 'Мои выплаты' })).toBeVisible();
-  await expect(sp2.locator('#money-totals')).toContainText(/Выплачено\s*20\s000 ₽/);
+  await expect(sp2.locator('#money-totals')).toContainText(/Выплачено\s*25\s000 ₽/);
   await expect(sp2.locator('#money-payouts li').filter({ hasText: 'Оценка автомобиля после ДТП' })).toContainText('выплачено');
   await expect(sp2.locator('#money-payments-box')).toBeHidden();
   await shot(sp2, '38-specialist-vyplaty');
   await sp2.locator('#money-payouts li').filter({ hasText: 'Оценка автомобиля после ДТП' }).click();
   await sp2.locator('#closing li').getByRole('button', { name: 'Открыть' }).click();
-  await expect(sp2.locator('#closing-doc')).toContainText(/К перечислению исполнителю: 20\s000 ₽/);
+  await expect(sp2.locator('#closing-doc')).toContainText(/К перечислению исполнителю: 25\s000 ₽/);
   await expect(sp2.locator('#closing-doc')).not.toContainText('Заказчик:');
   await sctx.close();
 
@@ -719,7 +736,7 @@ test('ход заявки: подбор диспетчером, принятие
   const dp2 = dp;
   await dp2.goto('/kabinet#money');
   await expect(dp2.getByRole('heading', { name: 'Деньги платформы' })).toBeVisible();
-  await expect(dp2.locator('#money-payments li').filter({ hasText: 'Оценка автомобиля после ДТП' })).toContainText(/25\s000 ₽/);
+  await expect(dp2.locator('#money-payments li').filter({ hasText: 'Оценка автомобиля после ДТП' })).toContainText(/30\s000 ₽/);
   await shot(dp2, '39-dispetcher-dengi');
   await dctx.close();
 });
@@ -875,9 +892,10 @@ test('деньги при отмене: передача другому испо
     await c.query('insert into specialists (user_id) values ($1)', [spec.id]);
     await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'goods')", [spec.id]);
   });
+  // Экспертиза (2.463): цена эксперта 10 000 ₽ — заказчик платит 12 000 ₽.
   expect((await dp.request.put(`/api/orders/${id}/price`, { data: { price: '10000' }, headers: H })).status()).toBe(200);
   await page.goto(`/kabinet#order=${id}`);
-  await page.getByRole('button', { name: /Оплатить 10\s000 ₽/ }).click();
+  await page.getByRole('button', { name: /Оплатить 12\s000 ₽/ }).click();
   await expect(page.locator('#money-facts')).toContainText('оплачено');
   const offerAndAccept = async () => {
     expect((await dp.request.post(`/api/orders/${id}/offer`, { data: { specialist_id: spec.id, from: 'matching' }, headers: H })).status()).toBe(200);
@@ -912,26 +930,33 @@ test('деньги при отмене: передача другому испо
   await dp.getByRole('button', { name: 'Отменить заявку' }).click();
   await expect(dp.locator('#order-status')).toHaveText('Отменена');
   await expect(dp.locator('#money-facts')).toContainText('заказчик отказался, сделано 40% работы');
-  await expect(dp.locator('#money-facts')).toContainText(/Возврат заказчику\s*6\s000 ₽ — возвращено/);
-  await expect(dp.locator('#money-facts')).toContainText(/Выплата исполнителю\s*3\s200 ₽ — выплачено/);
+  // 40% от 12 000 ₽ = 4 800 ₽ за сделанную часть: эксперту 40% его цены (4 000 ₽, вручную), заказчику — 7 200 ₽.
+  await expect(dp.locator('#money-facts')).toContainText(/Возврат заказчику\s*7\s200 ₽ — возвращено/);
+  await expect(dp.locator('#money-facts')).toContainText(/Выплата исполнителю\s*4\s000 ₽ — ждёт выплаты вручную/);
+  await expect(dp.getByRole('button', { name: 'Выплачено вручную' })).toBeVisible();
 
-  // Заказчик: возврат 6 000 ₽ и документ о возврате; акт — на сделанную часть.
+  // Заказчик: возврат 7 200 ₽ и документ о возврате; акт — на сделанную часть.
   await page.reload();
   await expect(page.locator('#order-status')).toHaveText('Отменена');
-  await expect(page.locator('#money-facts')).toContainText(/Возврат заказчику\s*6\s000 ₽ — возвращено/);
+  await expect(page.locator('#money-facts')).toContainText(/Возврат заказчику\s*7\s200 ₽ — возвращено/);
   await expect(page.locator('#money-facts')).not.toContainText('Выплата исполнителю');
   await page.locator('#closing li').filter({ hasText: 'Возврат' }).getByRole('button', { name: 'Открыть' }).click();
   await expect(page.locator('#closing-doc')).toContainText('Документ о возврате');
-  await expect(page.locator('#closing-doc')).toContainText(/Возвращается заказчику: 6\s000 ₽/);
+  await expect(page.locator('#closing-doc')).toContainText(/Возвращается заказчику: 7\s200 ₽/);
   await expect(page.locator('#closing-doc')).toContainText('Причина: Заказчик отказался от оценки');
   await shot(page, '46-zakazchik-vozvrat');
   await page.locator('#closing li').filter({ hasText: 'Акт' }).getByRole('button', { name: 'Открыть' }).click();
   await expect(page.locator('#closing-doc')).toContainText('оказана часть услуги (40%)');
 
-  // Исполнитель видит выплату за сделанную часть в своём отменённом деле.
+  // Диспетчер перечислил вручную и отметил с пометкой; исполнитель видит выплату за сделанную часть в отменённом деле.
+  await dp.getByLabel('Пометка к выплате (необязательно)').fill('платёжка № 5');
+  await dp.getByRole('button', { name: 'Выплачено вручную' }).click();
+  await expect(dp.locator('#money-msg')).toHaveText('Выплата отмечена');
+  await expect(dp.locator('#money-facts')).toContainText(/Выплата исполнителю\s*4\s000 ₽ — выплачено \(платёжка № 5\)/);
   await sp.reload();
   await expect(sp.locator('#order-status')).toHaveText('Отменена');
-  await expect(sp.locator('#money-facts')).toContainText(/Выплата\s*3\s200 ₽ — выплачено/);
+  await expect(sp.locator('#money-facts')).toContainText(/Выплата\s*4\s000 ₽ — выплачено/);
+  await expect(sp.locator('#money-facts')).not.toContainText('платёжка');
   await expect(sp.locator('#money-facts')).not.toContainText('Возврат');
   await shot(sp, '47-specialist-vyplata-chast');
 
@@ -2341,15 +2366,16 @@ test('сквозной путь: заявка на оценку квартиры
   await dp.locator('#notifications li').filter({ hasText: title }).getByRole('button').click();
   await expect(dp.locator('#order-title')).toHaveText(title);
   await expect(dp.locator('#facts')).toContainText('г. Москва, ул. Тестовая, д. 11, кв. 4');
-  await dp.getByLabel('Цена, рублей').fill('18000');
+  // Экспертиза (2.463): цена эксперта 18 000 ₽ — заказчику 21 600 ₽.
+  await dp.getByLabel('Цена эксперта, рублей').fill('18000');
   await dp.getByRole('button', { name: 'Назначить цену' }).click();
   await expect(dp.locator('#money-msg')).toHaveText('Цена назначена');
-  await expect(dp.locator('#money-facts')).toContainText(/Исполнителю \(80%\)\s*14\s400 ₽/);
+  await expect(dp.locator('#money-facts')).toContainText(/Эксперту \(его цена, 100%\)\s*18\s000 ₽/);
 
   // 4. Заказчик оплачивает (поддельная ЮKassa).
   await page.reload();
-  await expect(page.locator('#money-facts')).toContainText(/Цена\s*18\s000 ₽/);
-  await page.getByRole('button', { name: /Оплатить 18\s000 ₽/ }).click();
+  await expect(page.locator('#money-facts')).toContainText(/Цена\s*21\s600 ₽/);
+  await page.getByRole('button', { name: /Оплатить 21\s600 ₽/ }).click();
   await expect(page.locator('#money-facts')).toContainText('оплачено');
   await shot(page, '72-skvoznoy-oplata');
 
@@ -2369,7 +2395,7 @@ test('сквозной путь: заявка на оценку квартиры
   await sp.getByRole('link', { name: /Уведомления/ }).click();
   await sp.locator('#notifications li').filter({ hasText: 'Вам предложено новое дело' }).getByRole('button').click();
   await expect(sp.locator('#order-title')).toHaveText(title);
-  await expect(sp.locator('#money-facts')).toContainText(/Ваше вознаграждение \(80% цены\)\s*14\s400 ₽/);
+  await expect(sp.locator('#money-facts')).toContainText(/Ваша цена \(100%\)\s*18\s000 ₽/);
   await sp.getByRole('button', { name: 'Принять дело' }).click();
   await expect(sp.locator('#order-status')).toHaveText('В работе');
   await sp.locator('#result-file').setInputFiles({ name: 'Отчёт об оценке.txt', mimeType: 'text/plain', buffer: Buffer.from('Отчёт об оценке квартиры. Итоговая стоимость 12 000 000 руб.') });
@@ -2426,13 +2452,16 @@ test('сквозной путь: заявка на оценку квартиры
   await expect(page.locator('#order-status')).toHaveText('Закрыта');
   await shot(page, '77-skvoznoy-zakryta');
 
-  // 9. Исполнитель получил выплату; диспетчер видит оплату в сводке; посторонний по-прежнему ничего не видит.
+  // 9. Диспетчер выплатил эксперту вручную (2.463) и отметил; исполнитель видит выплату; диспетчер — оплату в сводке;
+  // посторонний по-прежнему ничего не видит.
+  await dp.goto('/kabinet#money');
+  await expect(dp.locator('#money-payments li').filter({ hasText: title })).toContainText(/21\s600 ₽/);
+  await dp.locator('#money-manual li').filter({ hasText: title }).getByRole('button', { name: 'Выплачено' }).click();
+  await expect(dp.locator('#money-manual-msg')).toHaveText('Выплата отмечена');
   await sp.goto('/kabinet#money');
   await expect(sp.locator('#money-payouts li').filter({ hasText: title })).toContainText('выплачено');
-  await expect(sp.locator('#money-totals')).toContainText(/Выплачено\s*14\s400 ₽/);
+  await expect(sp.locator('#money-totals')).toContainText(/Выплачено\s*18\s000 ₽/);
   await shot(sp, '78-skvoznoy-vyplata');
-  await dp.goto('/kabinet#money');
-  await expect(dp.locator('#money-payments li').filter({ hasText: title })).toContainText(/18\s000 ₽/);
   await xp.goto(`/kabinet#order=${id}`);
   await expect(xp.getByRole('heading', { name: 'Заявка не найдена' })).toBeVisible();
   for (const p of [ap, dp, sp, xp]) await p.context().close();
@@ -2751,7 +2780,7 @@ test('как настоящий эксперт (2.33): автобус для с�
 
   // 2. Диспетчер: цена; заказчик платит; диспетчер предлагает дело эксперту.
   await dp.goto(`/kabinet#order=${id}`);
-  await dp.getByLabel('Цена, рублей').fill('15000');
+  await dp.getByLabel('Цена эксперта, рублей').fill('15000');
   await dp.getByRole('button', { name: 'Назначить цену' }).click();
   await expect(dp.locator('#money-msg')).toHaveText('Цена назначена');
   await page.reload();
@@ -3320,10 +3349,13 @@ test('как диспетчер (2.42): «Сегодня», цена, подбо
   const mainBtn = page.locator('#next-main button');
   await expect(next).toContainText('Назначьте цену');
   await mainBtn.click();
-  await expect(page.getByLabel('Цена, рублей')).toBeFocused();
-  await page.getByLabel('Цена, рублей').fill('15000');
+  await expect(page.getByLabel('Цена эксперта, рублей')).toBeFocused();
+  await page.getByLabel('Цена эксперта, рублей').fill('15000');
   await page.getByRole('button', { name: 'Назначить цену' }).click();
   await expect(page.locator('#money-msg')).toHaveText('Цена назначена');
+  // Неудавшаяся выплата и её повтор (шаг 5) — у выплаты через поставщика: заявка на прежних условиях 80/20 (до 2.463);
+  // выплата вручную экспертизы — «сквозной путь» и «деньги при отмене» выше.
+  await db((c) => c.query('update orders set price_kop = expert_kop, expert_kop = null, payout_manual = false where id = $1', [main.id]));
   await expect(next).toContainText('ждём оплаты заказчика');
 
   // 2. Заказчик оплатил — «К подбору»; первый эксперт отказался — дело снова в «Сегодня» с причиной.

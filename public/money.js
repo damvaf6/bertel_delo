@@ -328,7 +328,7 @@ function renderManual(rows, sumKop) {
         await showMoney();
         say($('money-manual-msg'), 'Выплата отмечена', 'ok');
       } catch (err) { say($('money-manual-msg'), err.message); e.target.disabled = false; }
-    } }, 'Выплачено')))));
+    } }, 'Выплачено'))));
 }
 
 function renderPayouts(payouts, staff) {
