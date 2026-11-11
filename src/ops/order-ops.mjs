@@ -420,6 +420,10 @@ export function orderOps() {
                                           and d.uploaded_by = ${cur.executor_user_id} and s.id is null order by d.created_at`;
               if (unsigned.length) throw new HttpError(400, 'not_signed', `Подпишите УКЭП файлы результата: ${unsigned.map((d) => d.filename).join(', ')}`);
               const signOrg = await executorSignOrg(tx, cur.executor_user_id);
+              // Проверка организации эксперта (2.466, схема 5 экранов): заключение проверяет и подписывает организация.
+              if (!signOrg && registry.orgCheckRequired(cur.module, cur.service)) {
+                throw new HttpError(400, 'org_check', 'Заключение проверяет и подписывает организация эксперта: укажите в профиле организацию, от которой Вы работаете, или попросите диспетчера передать дело');
+              }
               if (signOrg) {
                 const noOrg = await tx`select d.filename from documents d
                                        left join document_signatures s on s.document_id = d.id and s.role = 'org' and s.org_id = ${signOrg.id}
@@ -445,6 +449,15 @@ export function orderOps() {
                                        where d.order_id = ${cur.id} and d.kind = 'result' and d.deleted_at is null
                                          and s.manual_check in ('pending', 'bad') order by d.filename`;
             if (unchecked.length) throw new HttpError(409, 'signature_unchecked', `Проверьте подпись на Госуслугах и отметьте итог: ${unchecked.map((d) => d.filename).join(', ')}`);
+            // Проверка организации эксперта (2.466): без подписи организации выдать нельзя — и если эксперт с тех пор ушёл из неё.
+            if (registry.orgCheckRequired(cur.module, cur.service)) {
+              const noOrg = await tx`select d.filename from documents d
+                                     where d.order_id = ${cur.id} and d.kind = 'result' and d.deleted_at is null
+                                       and d.uploaded_by = ${cur.executor_user_id}
+                                       and not exists (select 1 from document_signatures s where s.document_id = d.id and s.role = 'org')
+                                     order by d.created_at`;
+              if (noOrg.length) throw new HttpError(409, 'org_check_missing', `Нет проверки организации эксперта — верните на доработку: ${noOrg.map((d) => d.filename).join(', ')}`);
+            }
           }
           // Вычитка (2а.7): решается при первой сдаче на проверку; переделка по просьбе заказчика — всегда с вычиткой и сроком
           // не раньше чем через redo_days дней; передача другому исполнителю — решается заново при его сдаче.

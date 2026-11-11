@@ -118,6 +118,8 @@ export async function candidatesFor(sql, order, registry) {
   const today = todayMsk();
   const rules = registry?.executorRules(order.module, order.service) ?? { tax_status: false, language_field: null };
   const lang = rules.language_field ? String(order.fields?.[rules.language_field] ?? '') : null;
+  // Проверка организации эксперта (2.466): эксперт без организации такие дела не получает — ни в подборе, ни в ленте.
+  const orgOnly = !!registry?.orgCheckRequired(order.module, order.service);
   const rows = await sql`
     select s.user_id, s.regions, s.capacity, s.external_load, u.full_name,
       (select count(*)::int from orders o where o.executor_user_id = s.user_id and o.status = any(${OPEN_STATUSES}::text[])) as open,
@@ -134,7 +136,8 @@ export async function candidatesFor(sql, order, registry) {
       and not (exists (select 1 from permit_cards c where c.user_id = s.user_id and c.revoked_at is not null)
                and not exists (select 1 from permit_cards c where c.user_id = s.user_id and c.revoked_at is null))
       and (${lang === null} or exists (select 1 from dossier_items d where d.user_id = s.user_id and d.kind = 'language'
-           and d.language = ${lang ?? ''} and d.verified_at is not null and d.deleted_at is null))`;
+           and d.language = ${lang ?? ''} and d.verified_at is not null and d.deleted_at is null))
+      and (${!orgOnly} or exists (select 1 from org_members m where m.user_id = s.user_id and m.org_id = s.org_id))`;
   const daysLeft = order.deadline ? Math.round((new Date(order.deadline) - new Date(today)) / 86400000) : null;
   // Истёкшие документы досье (2.14): по услугам оценки аттестат и полисы снимают с подбора, остальное — предупреждение.
   const blocking = needsValidDossier(registry, order);

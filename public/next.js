@@ -79,6 +79,8 @@ function steps() {
   if (signNeed) {
     items.push({ id: 'sign', title: 'Подпись УКЭП', done: results.length > 0 && !unsigned.length, go: go('docs') });
     if (orgNeed) items.push({ id: 'org', title: `Подпись организации ${quoted(docs.signature_org)}`, done: results.length > 0 && !unsigned.length && !orgWait.length, go: go('docs'), wait: true });
+    // Проверка организации эксперта (2.466): эксперт без организации — сдать нельзя, пока не укажет организацию в профиле.
+    if (docs?.org_check_missing) items.push({ id: 'org_none', title: 'Проверка организации эксперта: укажите в профиле организацию, от которой работаете', done: false, go: go('docs'), wait: true });
   }
   const submit = act('review');
   items.push({ id: 'submit', title: 'Сдача на проверку', done: false, go: go('actions') });
@@ -94,6 +96,7 @@ function steps() {
   else if (firstOpen?.id === 'steps') main = { label: 'Отметить шаги заказа', run: go('steps-box') };
   else if (firstOpen?.id === 'sign') main = { label: unsigned.length > 1 ? `Подписать все файлы (${unsigned.length})` : 'Подписать файл', run: () => { reveal('docs'); ctx.signAll?.(); } };
   else if (firstOpen?.id === 'org') main = { label: 'Ждём подпись руководителя', disabled: true };
+  else if (firstOpen?.id === 'org_none') main = { label: 'Нужна организация эксперта', disabled: true };
   const done = items.filter((i) => i.done).length;
   return { lead: `Сделано ${done} из ${items.length - 1} шагов до сдачи. Нажмите на шаг — откроется его раздел.`, items, main };
 }
@@ -241,6 +244,7 @@ export function readyRows() {
       row('org', results.length && !wait ? 'ok' : 'no', `Подпись организации ${quoted(docs.signature_org)}`,
         !results.length || unsigned ? 'после Вашей подписи' : wait ? 'ждём подпись руководителя' : 'подписано', 'docs-box');
     }
+    if (docs.org_check_missing) row('org_none', 'no', 'Проверка организации эксперта', 'заключение проверяет и подписывает организация — укажите её в профиле', 'docs-box');
   }
   const returns = (docs?.org_returns ?? []).filter((r) => r.open);
   if (returns.length) {

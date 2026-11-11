@@ -70,7 +70,7 @@ export function listOps(cfg, providers) {
 
 // modules — описания модулей-профессий (по умолчанию — все модули ядра); ошибка в описании — приложение не собирается.
 export function createApp({ cfg, sql, providers, modules = DEFAULT_MODULES }) {
-  const registry = createRegistry(modules);
+  const registry = createRegistry(modules, { orgCheck: cfg.orgCheck });
   validateRegistry();
   resetModuleSettings(); // настройки модулей (2а.9) — прочитать из базы при первой операции
   const app = express();

@@ -70,6 +70,9 @@ export function loadConfig(env = process.env) {
     // Оплата картой у модулей с оплатой по счёту (2.464, «Экспертиза»): в первом выпуске — только по счёту; картой/СБП — после
     // подключения ЮKassa (CARD_PAY=1). По умолчанию выключена на prod и демо-площадке, на остальных — включена (проверки).
     cardPay: env.CARD_PAY ? env.CARD_PAY === '1' : !['prod', 'demo'].includes(appEnv),
+    // Проверка организации эксперта перед выдачей (2.466, схема 5 экранов): у модулей с signature.org эксперт только от
+    // организации, подпись её руководителя обязательна. ORG_CHECK=1 — включена; по умолчанию — только на боевом сайте.
+    orgCheck: env.ORG_CHECK ? env.ORG_CHECK === '1' : appEnv === 'prod',
     // ЮKassa (2.46): PAYMENTS_PROVIDER=yookassa. Ключ — из Lockbox. Чеки 54-ФЗ — только по решению Дамира (YOOKASSA_RECEIPTS=1).
     yookassa: {
       url: (env.YOOKASSA_URL || 'https://api.yookassa.ru/v3').replace(/\/+$/, ''),
@@ -148,6 +151,7 @@ export function loadConfig(env = process.env) {
   if (cfg.stageLoginKey && cfg.stageLoginKey.length < 32) throw new ConfigError('STAGE_LOGIN_KEY: не короче 32 символов');
   if (cfg.providers.storage === 's3' && !cfg.s3.bucket) throw new ConfigError('S3_BUCKET не задан');
   if (env.CARD_PAY && !['0', '1'].includes(env.CARD_PAY)) throw new ConfigError('CARD_PAY: 1 — оплата картой включена, 0 — выключена');
+  if (env.ORG_CHECK && !['0', '1'].includes(env.ORG_CHECK)) throw new ConfigError('ORG_CHECK: 1 — проверка организации эксперта включена, 0 — выключена');
   if (cfg.demoResetKey && appEnv !== 'demo') throw new ConfigError('DEMO_RESET_KEY допустим только на демо-площадке (APP_ENV=demo)');
   if (appEnv === 'demo') {
     if (cfg.demoResetKey.length < 32) throw new ConfigError('DEMO_RESET_KEY: не короче 32 символов');

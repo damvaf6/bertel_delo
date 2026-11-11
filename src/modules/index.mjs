@@ -33,7 +33,9 @@
 //       when: { field: id поля-списка, in: [значение…] } — только для заявок с таким значением поля (задание банка — 2.299)
 //     express?: { services: [id услуги…], show: [id поля заявки…], fields: [поле + services?…] } }  — экспресс-услуга (2.4):
 //       для каких услуг, какие поля заявки видит помощник на объекте и какие данные он заполняет (нужны шаги осмотра)
-//     signature?: { services?: [id услуги…] }  — результат подписывается УКЭП исполнителя до сдачи (2.5); без services — все услуги
+//     signature?: { services?: [id услуги…], org?: true }  — результат подписывается УКЭП исполнителя до сдачи (2.5); без services —
+//       все услуги; org — проверка организации эксперта перед выдачей (2.466): эксперт только от организации, подпись её
+//       руководителя обязательна; действует при включённой проверке организации (cfg.orgCheck, ORG_CHECK)
 //     executors?: { tax_status?: true, language_doc?: { field: id поля-списка модуля, services: [id услуги…] } }  — кого
 //       допускать (2а.3): tax_status — только с указанным статусом (самозанятый, ИП, ООО/бюро), без него допуск не выдаётся и
 //       в подбор не попадает; language_doc — к этим услугам только с проверенным документом о знании языка из поля field
@@ -330,7 +332,8 @@ export function validateModule(m) {
   // Подпись результата УКЭП (2.5) — необязательно: без неё результат сдаётся без подписи.
   if (m.signature !== undefined) {
     const where = `${at}, подпись`;
-    onlyKeys(m.signature, ['services'], where);
+    onlyKeys(m.signature, ['services', 'org'], where);
+    if (m.signature.org !== undefined && m.signature.org !== true) fail(where, 'org — true или нет');
     const sv = m.signature.services;
     if (sv !== undefined && (!Array.isArray(sv) || sv.length === 0 || sv.some((id) => !serviceIds.includes(id)) || new Set(sv).size !== sv.length)) {
       fail(where, 'services — непустой список услуг этого модуля');
@@ -516,7 +519,7 @@ export function validateModule(m) {
 export const ANALOG_CORE = ['price_rub', 'listed_on', 'region'];
 
 // Реестр модулей: проверяет описания и отвечает, какие поля у услуги и как её назвать.
-export function createRegistry(modules = DEFAULT_MODULES) {
+export function createRegistry(modules = DEFAULT_MODULES, { orgCheck = false } = {}) {
   const byId = new Map();
   for (const m of modules) {
     validateModule(m);
@@ -676,6 +679,13 @@ export function createRegistry(modules = DEFAULT_MODULES) {
     signatureRequired(moduleId, serviceId) {
       const m = modulesList.find((x) => x.id === moduleId);
       if (!m?.signature || !m.services.some((x) => x.id === serviceId)) return false;
+      return !m.signature.services || m.signature.services.includes(serviceId);
+    },
+    // Проверка организации эксперта перед выдачей (2.466, схема 5 экранов): эксперт — только от организации, файл результата
+    // подписывает и её руководитель. Только при включённой проверке (cfg.orgCheck).
+    orgCheckRequired(moduleId, serviceId) {
+      const m = modulesList.find((x) => x.id === moduleId);
+      if (!orgCheck || m?.signature?.org !== true || !m.services.some((x) => x.id === serviceId)) return false;
       return !m.signature.services || m.signature.services.includes(serviceId);
     },
     // Раздел «Аналоги» для услуги (2.32): сколько нужно и признаки этой услуги (без ядра); null — раздела нет.
