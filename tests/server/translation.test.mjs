@@ -308,11 +308,14 @@ test('условия заказа: заказчику — его пункты п
   assert.ok(!plain.customer.some((p) => p.id === 'notary'), 'без нотариуса — без пункта о нотариусе');
   const paper = reg.offer('translation', 'notary_paper');
   assert.ok(paper.customer.some((p) => p.id === 'notary') && !paper.customer.some((p) => p.id === 'guarantee'));
-  assert.equal(createRegistry().offer('expertise', 'any'), null, 'у экспертизы оферты в карточке пока нет');
+  // У экспертизы (2.465) — свои условия и «Принять» эксперта; у переводов «Принять» нет.
+  assert.equal(createRegistry().offer('expertise', 'realty').accept, 'expert');
+  assert.equal(plain.accept, null);
 
   // Ошибки в описании — сервер не стартует.
   const bad = (offer) => assert.throws(() => validateModule({ ...translation, offer }), /оферта/);
   bad({ ...translation.offer, version: '12.10.2026' });
+  bad({ ...translation.offer, accept: 'customer' });
   bad({ ...translation.offer, doc: 'https://example.ru/oferta' });
   bad({ ...translation.offer, points: translation.offer.points.filter((p) => p.to === 'executor') });
   bad({ ...translation.offer, points: [{ id: 'x', to: 'all', text: 'т' }] });

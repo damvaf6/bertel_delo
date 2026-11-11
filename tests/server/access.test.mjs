@@ -633,7 +633,7 @@ test('orders.status: шаги заказчика — только его сто�
 test('специалисты и подбор: допуски — только администратор; подбор — только диспетчер; чужое дело исполнитель не видит', async () => {
   for (const id of ['specialist.me', 'specialist.me.update', 'specialists.list', 'specialists.upsert',
     'specialists.permit.add', 'specialists.permit.remove', 'orders.candidates', 'orders.offer',
-    'specialists.language.file', 'specialists.language.verify', 'specialist.feed', 'specialist.feed.take']) cover(id);
+    'specialists.language.file', 'specialists.language.verify', 'specialist.feed', 'specialist.feed.take', 'orders.expert.accept']) cover(id);
   const target = U.memberA2.user.id;
   // Профиль и допуски выдаёт только администратор; диспетчер и обычный человек получают «не найдено».
   for (const who of ['owner', 'dispatcher', 'spec']) {
@@ -691,6 +691,13 @@ test('специалисты и подбор: допуски — только а
     assert.equal((await U[who].req('POST', `/api/specialist/feed/${o.id}/take`)).status, 404, `${who}: взять из ленты`);
   }
   assert.equal((await offer(U.dispatcher)).status, 200);
+  // «Принять» эксперта (2.465) — только заказчик: чужим заявки не видно, исполнитель и служебные — нельзя.
+  for (const who of ['stranger', 'headB']) {
+    assert.equal((await U[who].req('POST', `/api/orders/${o.id}/expert/accept`, { executor_user_id: U.spec.user.id })).status, 404, `${who}: принять эксперта`);
+  }
+  for (const who of ['dispatcher', 'admin']) {
+    assert.equal((await U[who].req('POST', `/api/orders/${o.id}/expert/accept`, { executor_user_id: U.spec.user.id })).status, 403, `${who}: принять эксперта`);
+  }
   assert.equal((await U.spec.req('GET', `/api/orders/${o.id}`)).status, 200);
   assert.equal((await U.spec.req('GET', `/api/orders/${ownOrder.id}`)).status, 404);
   assert.ok((await U.spec.req('GET', '/api/orders')).body.orders.some((x) => x.id === o.id));

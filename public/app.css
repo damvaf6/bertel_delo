@@ -514,3 +514,6 @@ button:not(:disabled):active, .btn:active { transform: translateY(1px); }
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
 .invoice-wait .muted.ok { color: var(--ok); }
+/* «Ваш эксперт» (2.465): заказчик принял эксперта — строкой зелёного цвета. */
+.ok-line { color: var(--ok); font-weight: 600; }
+#expert-box-docs li .state-bad { color: var(--danger); }
