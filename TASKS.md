@@ -4366,7 +4366,13 @@
       `customerAcceptView`, `orders.expert.accept` в `src/ops/expert-accept-ops.mjs`; экран — `public/myexpert.js`. Оферта — п. 2.4а
       `docs/legal/oferta-ekspertiza.md`. Тесты — `tests/server/expert-accept.test.mjs`, `access`, `translation`;
       `tests/ui/expert-accept.spec.mjs` (снимки ea01–ea03). Проверено без облака.
-- [ ] 2.466 Проверка ЦНЭР (организации эксперта) — обязательный шаг перед выдачей в первом выпуске.
+- [x] 2.466 Проверка ЦНЭР (организации эксперта) — обязательный шаг перед выдачей в первом выпуске.
+      Сделано 11.11.2026: у «Экспертизы» `signature: { org: true }` (`src/modules/expertise.mjs`, проверка — `src/modules/index.mjs`,
+      `registry.orgCheckRequired`), включается `ORG_CHECK=1` (`cfg.orgCheck`, по умолчанию — только prod; `createRegistry(…, { orgCheck })`).
+      Эксперт без организации не в подборе и не в ленте (`candidatesFor` в `match-ops.mjs`), не сдаёт на проверку — `org_check`
+      (`order-ops.mjs`), в деле — `org_check_missing` (`core-ops.mjs`), строки в «Что дальше» и «Готово к сдаче?» (`public/next.js`);
+      без подписи организации не выдать — `org_check_missing` при `review → done`. Тесты — `tests/server/org-check.test.mjs`;
+      `tests/ui/org-check.spec.mjs` (снимки oc01, oc02). Проверено без облака.
 - [ ] 2.467 Отзыв 1–5 и пара слов после выдачи; видят диспетчер и ЦНЭР, учёт в подборе.
 
 - [ ] 2.458 ИИ-проверка отчёта для банка — оценщик или организация аккредитованы в банке-пользователе на дату отчёта; нет —
