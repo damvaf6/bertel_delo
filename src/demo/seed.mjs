@@ -223,8 +223,15 @@ async function seedCase(P, orgs, k, log) {
   await status('matching', C, 'new');
   await D.must('PUT', `/api/orders/${o.id}/price`, { price: String(k.price) });
   if (k.stage === 'priced') return;
-  await C.must('POST', `/api/orders/${o.id}/payments`);
-  await C.must('POST', `/api/orders/${o.id}/payments/refresh`);
+  // Оплата (2.464): у «Экспертизы» на демо-площадке — по счёту: заказчик сообщает «оплатил», диспетчер отмечает поступление;
+  // где оплата картой включена — как прежде, картой.
+  if ((await C.must('GET', `/api/orders/${o.id}/money`)).money.can_pay) {
+    await C.must('POST', `/api/orders/${o.id}/payments`);
+    await C.must('POST', `/api/orders/${o.id}/payments/refresh`);
+  } else {
+    await C.must('POST', `/api/orders/${o.id}/payments/claim`, { note: 'демо: оплачено по счёту' });
+    await D.must('POST', `/api/orders/${o.id}/payments/invoice`, { note: 'демо: платёжка вымышленная' });
+  }
   if (k.stage === 'paid') return;
   if (k.orgExec) {
     await D.must('POST', `/api/orders/${o.id}/offer`, { org_id: orgs[k.orgExec], from: 'matching' });

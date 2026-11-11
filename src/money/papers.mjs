@@ -31,7 +31,8 @@ const serviceName = (registry, module, service) => registry.service(module, serv
 const fileSafe = (s) => s.replace(/[^\p{L}\p{N} ._-]/gu, '').trim();
 
 // Счёт на оплату: номер — короткий номер заявки (не меняется), дата — сегодня, сумма — цена заявки.
-export function invoiceDoc({ order, customer, registry, op, test }) {
+// byInvoice (2.464) — модуль с оплатой по счёту: card — можно ли ещё и картой в кабинете (после подключения ЮKassa).
+export function invoiceDoc({ order, customer, registry, op, test, byInvoice = false, card = true }) {
   const ref = orderRef(order.id).replace('№ ', '');
   const service = serviceName(registry, order.module, order.service);
   const price = Number(order.price_kop);
@@ -51,8 +52,13 @@ export function invoiceDoc({ order, customer, registry, op, test }) {
     { type: 'table', rows: [['№', 'Услуга', 'Кол-во', 'Цена', 'Сумма'], ...rows] },
     { type: 'bold', text: `Итого к оплате: ${rub(price)}` },
     { type: 'para', text: 'НДС — по системе налогообложения оператора (будет указан в договоре).' },
-    { type: 'para', text: `Назначение платежа: оплата по заявке ${orderRef(order.id)} на платформе «БЕРТЕЛ Дело».` },
-    { type: 'para', text: 'Оплатить можно картой или со счёта организации через ЮKassa — кнопкой «Оплатить» в кабинете заявки. '
+    { type: 'para', text: `Назначение платежа: оплата по счёту СЧ-${ref}, заявка ${orderRef(order.id)} на платформе «БЕРТЕЛ Дело».` },
+    { type: 'para', text: (byInvoice
+      // Оплата по счёту (2.464): по реквизитам выше; поступление отмечает диспетчер, заказчику — уведомление.
+      ? `Оплата — по банковским реквизитам агента выше, в назначении платежа укажите номер счёта СЧ-${ref}. Когда деньги поступят, `
+        + 'диспетчер отметит оплату в кабинете заявки, Вам придёт уведомление. Сообщить об оплате можно кнопкой «Я оплатил(а) по счёту» в кабинете заявки. '
+        + (card ? 'Можно оплатить и картой — кнопкой «Оплатить» в кабинете заявки. ' : '')
+      : 'Оплатить можно картой или со счёта организации через ЮKassa — кнопкой «Оплатить» в кабинете заявки. ')
       + (order.expert_kop
         // Сверх цены эксперта (2.463).
         ? `Платёж принимает агент; в сумме — цена эксперта ${rub(Number(order.expert_kop))} и вознаграждение агента ${COMMISSION_PERCENT}% сверх неё (${rub(price - Number(order.expert_kop))}); цена эксперта перечисляется эксперту после выдачи результата.`

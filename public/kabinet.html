@@ -796,7 +796,25 @@
           <button type="submit" class="secondary" id="price-save">Назначить цену</button>
         </form>
         <button class="wide hidden" id="pay">Оплатить</button>
+        <div class="hidden" id="invoice-pay">
+          <p class="muted" id="invoice-pay-text">Оплата — по счёту ООО «АИС Переводчик»: скачайте счёт и оплатите по реквизитам, в назначении платежа укажите номер счёта. Когда деньги поступят, диспетчер отметит оплату — придёт уведомление, и заявку передадут эксперту.</p>
+        </div>
         <button class="secondary hidden" id="invoice">Счёт для бухгалтерии (Word)</button>
+        <form class="hidden" id="invoice-claim-form" novalidate>
+          <div class="field">
+            <label for="invoice-claim-note">Когда и как оплатили (необязательно)</label>
+            <input id="invoice-claim-note" type="text" maxlength="200" placeholder="Например: 12.11, платёжка № 15">
+          </div>
+          <button type="submit" class="secondary" id="invoice-claim">Я оплатил(а) по счёту</button>
+        </form>
+        <form class="hidden" id="invoice-mark-form" novalidate>
+          <div class="field">
+            <label for="invoice-mark-note">Пометка к оплате (необязательно)</label>
+            <input id="invoice-mark-note" type="text" maxlength="200" placeholder="Например: платёжка № 15 от 12.11">
+            <p class="muted">Оплата по счёту: проверьте поступление на счёт ООО «АИС Переводчик» и отметьте — заказчик получит уведомление, заявку можно будет предложить эксперту.</p>
+          </div>
+          <button type="submit" class="secondary" id="invoice-mark">Оплата поступила</button>
+        </form>
         <button class="secondary hidden" id="payout-retry">Повторить выплату</button>
         <form class="hidden" id="payout-mark-form" novalidate>
           <div class="field">
@@ -815,6 +833,14 @@
           <button type="submit" class="secondary" id="receipt-save">Приложить чек</button>
         </form>
         <button class="secondary hidden" id="refund-retry">Повторить возврат</button>
+        <form class="hidden" id="refund-mark-form" novalidate>
+          <div class="field">
+            <label for="refund-note">Пометка к возврату (необязательно)</label>
+            <input id="refund-note" type="text" maxlength="200" placeholder="Например: платёжка № 20 от 13.11">
+            <p class="muted">Заявка была оплачена по счёту — верните деньги заказчику сами и отметьте здесь. Заказчик получит уведомление.</p>
+          </div>
+          <button type="submit" class="secondary" id="refund-mark">Возвращено вручную</button>
+        </form>
         <h2 class="gap hidden" id="closing-title">Закрывающие документы</h2>
         <ul class="list" id="closing"></ul>
         <div class="closing-doc hidden" id="closing-doc" aria-live="polite"></div>
@@ -1163,6 +1189,18 @@
       <div class="card">
         <h1 id="money-title">Деньги</h1>
         <dl class="facts" id="money-totals"></dl>
+      </div>
+      <div class="card hidden" id="money-invoices-box">
+        <h2>Ждут оплаты по счёту</h2>
+        <p class="muted" id="money-invoices-sum"></p>
+        <ul class="list" id="money-invoices"></ul>
+        <p class="msg" id="money-invoices-msg" role="status" aria-live="polite"></p>
+      </div>
+      <div class="card hidden" id="money-refunds-box">
+        <h2>Вернуть вручную</h2>
+        <p class="muted" id="money-refunds-sum"></p>
+        <ul class="list" id="money-refunds"></ul>
+        <p class="msg" id="money-refunds-msg" role="status" aria-live="polite"></p>
       </div>
       <div class="card hidden" id="money-manual-box">
         <h2>Выплатить вручную</h2>

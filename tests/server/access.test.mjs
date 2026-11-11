@@ -976,6 +976,33 @@ test('деньги: цену — диспетчер; платит заказчи
   assert.equal((await U.owner.req('POST', `/api/orders/${o.id}/status`, { to: 'closed', from: 'done' })).status, 200);
 });
 
+test('оплата по счёту (2.464): «оплатил» — заказчик, «оплачено» и возврат вручную — диспетчер; чужим — не найдено', async () => {
+  for (const id of ['payments.invoice_claim', 'payments.invoice_paid', 'refunds.manual_paid']) cover(id);
+  const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'По счёту' })).body.order;
+  assert.equal((await U.owner.req('PATCH', `/api/orders/${o.id}`, { ...READY, deadline: soon() })).status, 200);
+  assert.equal((await U.owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
+  const claim = (c) => c.req('POST', `/api/orders/${o.id}/payments/claim`, { note: 'платёжка 1' });
+  const mark = (c) => c.req('POST', `/api/orders/${o.id}/payments/invoice`, { note: 'п/п 1' });
+  const back = (c) => c.req('POST', `/api/orders/${o.id}/refund/paid`, { note: 'вернули' });
+  assert.equal((await claim(U.owner)).status, 409, 'без цены — нечего оплачивать');
+  assert.equal((await mark(U.dispatcher)).status, 409);
+  assert.equal((await U.dispatcher.req('PUT', `/api/orders/${o.id}/price`, { price: '10000' })).status, 200);
+  for (const who of ['dispatcher', 'admin']) assert.equal((await claim(U[who])).status, 403, `${who}: оплатил`);
+  for (const who of ['stranger', 'headB', 'headA', 'spec']) assert.equal((await claim(U[who])).status, 404, `${who}: оплатил`);
+  for (const who of ['owner', 'admin']) assert.equal((await mark(U[who])).status, 403, `${who}: оплачено`);
+  for (const who of ['stranger', 'headB', 'headA', 'spec']) assert.equal((await mark(U[who])).status, 404, `${who}: оплачено`);
+  assert.equal((await claim(U.owner)).status, 200);
+  assert.equal((await claim(U.owner)).status, 409, 'сообщить — один раз');
+  assert.equal((await mark(U.dispatcher)).status, 201);
+  assert.equal((await mark(U.dispatcher)).status, 409, 'уже оплачена');
+  // Отмена до начала работ — возврат вручную; отмечает только диспетчер.
+  assert.equal((await U.owner.req('POST', `/api/orders/${o.id}/status`, { to: 'cancelled', from: 'matching' })).status, 200);
+  for (const who of ['owner', 'admin']) assert.equal((await back(U[who])).status, 403, `${who}: возвращено`);
+  for (const who of ['stranger', 'headB', 'headA', 'spec']) assert.equal((await back(U[who])).status, 404, `${who}: возвращено`);
+  assert.equal((await back(U.dispatcher)).status, 200);
+  assert.equal((await back(U.dispatcher)).status, 409, 'уже отмечен');
+});
+
 test('уведомления: каждый видит и меняет только свои; название заявки — только пока заявка ему доступна', async () => {
   for (const id of ['notifications.list', 'notifications.read', 'notifications.settings', 'notifications.settings.update']) cover(id);
   // Приглашение в организацию A (в before) — уведомление приглашённому.

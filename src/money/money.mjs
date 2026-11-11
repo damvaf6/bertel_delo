@@ -6,6 +6,7 @@
 // Экспертиза (2.463, схема 5 экранов — решение Дамира 31.10/02.11.2026): вознаграждение 20% СВЕРХ цены эксперта — диспетчер
 // назначает цену эксперта, заказчик платит её ×1,2, эксперт получает 100% своей цены (снимок — orders.expert_kop); выплата
 // эксперту — вручную, списком (orders.payout_manual → payouts.manual, отметку «выплачено» ставит диспетчер).
+// Оплата по счёту (2.464): поступление отмечает диспетчер (payments.method = 'invoice'); возврат по такой оплате — тоже вручную.
 // Одна функция расчёта, одна выплата и один возврат на заявку (Б-16), смена состояния — в транзакции.
 // Поставщик оплаты не трогается внутри транзакции базы: функции settle* возвращают id выплаты и возврата, а провести
 // их (runPayout, runRefund) вызывающий должен после транзакции.
@@ -75,11 +76,16 @@ export async function applyPaymentStatus(sql, { paymentId, status, test }) {
       const refundId = await makeRefund(tx, order, { ...p, status: 'succeeded' }, Number(p.amount_kop), 'Заявка отменена до поступления оплаты', test);
       return { refundId };
     }
-    await tx`update orders set paid_at = now(), updated_at = now() where id = ${order.id}`;
-    await notify(tx, 'paid', { users: await customersOf(tx, order), orderId: order.id });
-    await notify(tx, 'paid_staff', { users: await dispatchers(tx), orderId: order.id });
+    await orderPaid(tx, order);
     return {};
   });
+}
+
+// Заявка оплачена (картой или по счёту): отметка в заявке, уведомления заказчику и диспетчерам (кроме отметившего).
+export async function orderPaid(tx, order, actor = null) {
+  await tx`update orders set paid_at = now(), updated_at = now() where id = ${order.id}`;
+  await notify(tx, 'paid', { users: await customersOf(tx, order), orderId: order.id, actor });
+  await notify(tx, 'paid_staff', { users: await dispatchers(tx), orderId: order.id, actor });
 }
 
 // Результат проверен и выдан («готово»): выплата исполнителю 80% оплаты услуг, акт заказчику, отчёт агента исполнителю.
@@ -163,12 +169,15 @@ async function makePayout(tx, order, split) {
 }
 
 async function makeRefund(tx, order, payment, amountKop, reason, test, { afterPayout = false } = {}) {
+  // Оплачено по счёту (2.464) — возврат вручную: поставщику не уходит, диспетчер перечисляет сам и отмечает «возвращено».
+  const manual = payment.method === 'invoice';
   const r = await tx.one`
-    insert into refunds (order_id, payment_id, amount_kop, reason, after_payout)
-    values (${order.id}, ${payment.id}, ${amountKop}, ${reason}, ${afterPayout})
+    insert into refunds (order_id, payment_id, amount_kop, reason, after_payout, manual)
+    values (${order.id}, ${payment.id}, ${amountKop}, ${reason}, ${afterPayout}, ${manual})
     on conflict (order_id) do nothing returning id`;
   if (!r) return null;
-  await audit(tx, null, 'refund.create', 'order', order.id, { refund: r.id, amount_kop: String(amountKop) });
+  await audit(tx, null, 'refund.create', 'order', order.id, { refund: r.id, amount_kop: String(amountKop), ...(manual ? { manual: true } : {}) });
+  if (manual) await notify(tx, 'refund_manual_staff', { users: await dispatchers(tx), orderId: order.id });
   await tx`insert into closing_documents (order_id, kind, data) values (${order.id}, 'refund', ${JSON.stringify({
     ...docBase(order, { test }), paid_kop: Number(payment.amount_kop), refund_kop: amountKop, reason: reason ?? null,
   })}) on conflict (order_id, kind) do nothing`;
@@ -203,6 +212,8 @@ async function runTransfer(sql, providers, kind, id) {
     if (!row || row.status === 'succeeded') return null;
     // Выплата вручную (2.463): поставщику не уходит — ждёт в списке «Выплатить вручную», «выплачено» отмечает диспетчер.
     if (kind === 'payout' && row.manual && Number(row.amount_kop) > 0) return null;
+    // Возврат по оплате по счёту (2.464) — так же вручную: «Вернуть вручную» в «Деньгах», отметка диспетчера.
+    if (kind === 'refund' && row.manual) return null;
     return q.start(tx, id);
   });
   if (!row0) return null;
