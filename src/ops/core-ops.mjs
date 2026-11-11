@@ -186,6 +186,8 @@ export function coreOps(cfg) {
           signature_required: required,
           // От какой организации нужна вторая подпись (null — только эксперт).
           signature_org: signOrg?.name ?? null,
+          // Проверка организации эксперта (2.466): нужна, а эксперт ни от какой организации не работает — сдать нельзя.
+          ...(required && results && !signOrg && order.executor_user_id && registry.orgCheckRequired(order.module, order.service) ? { org_check_missing: true } : {}),
           // Как подписывают (задача штаба 3f817197-…-81ac): 'manual' — только загрузкой файла подписи, подпись проверяет
           // диспетчер на Госуслугах (can_check_signature); 'cabinet' — ещё и в кабинете.
           ...(required ? { sign_mode: providers.sign.manual ? 'manual' : 'cabinet' } : {}),
