@@ -3137,7 +3137,8 @@ test('карточка эксперта (2.35): из подбора у дисп�
 
 // Как настоящий заказчик (2.41): исполнитель и диспетчер — через API (их путь проверен в других проверках); заказчик —
 // только на экране телефона: от проблемы своими словами до результата и акта.
-async function staffFinish({ dp, sp, orderId, specId, price = '15000' }) {
+async function staffFinish({ dp, sp, orderId, specId, price = '12500' }) {
+  // Экспертиза (2.463): цена эксперта 12 500 ₽ — заказчику 15 000 ₽ (20% сверх).
   expect((await dp.request.put(`/api/orders/${orderId}/price`, { data: { price }, headers: H })).status()).toBe(200);
   return async function afterPay() {
     expect((await dp.request.post(`/api/orders/${orderId}/offer`, { data: { specialist_id: specId, from: 'matching' }, headers: H })).status()).toBe(200);
