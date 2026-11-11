@@ -3020,6 +3020,40 @@ function bankUser(docs, ctx) {
   return out;
 }
 
+// ——— 2.458: при оценке для банка эксперт или его организация аккредитованы в этом банке на дату отчёта ———
+// ctx.bankAccr — { order_bank: { id, name } | null, items: [{ bank, title, issued_on, valid_until, via: 'self'|'org', org_name }] }
+// (своя аккредитация из досье и аккредитации организации, от которой эксперт работает; ai-ops.mjs). Банк — из заявки
+// (Сбербанк), а при «другом банке» или без него — из строки о пользователе в задании на оценку. Аккредитация подходит, если
+// банк тот же по списку или назван в её названии («Банк ВТБ» при своём банке). Дата отчёта — «дата составления», иначе
+// сегодня. Нет ни одной — находка «банк может не принять отчёт»; есть, но не на дату отчёта — какой срок и почему.
+function bankAccredited(docs, ctx) {
+  if (!ctx.bankAccr || !docs.length) return [];
+  if (ctx.service && !VALUATION.includes(ctx.service)) return [];
+  const fields = ctx.fields ?? {};
+  if (fields.purpose !== 'bank' && !assignmentPurpose(ctx.assignment)?.kinds.includes('bank')) return [];
+  const listed = ctx.bankAccr.order_bank;
+  const task = listed ? null : assignmentBank(ctx.assignment);
+  const bank = listed ? { id: listed.id, name: `«${listed.name}»` } : task ? { id: task.id, name: `«${task.value.slice(0, 80)}» (${task.what} «${task.name}»)` } : null;
+  if (!bank) return [];
+  const mine = (ctx.bankAccr.items ?? []).filter((a) => a.bank === bank.id || banksIn(a.title ?? '').includes(bank.id));
+  const { date, stated } = reportDate(docs, ctx.today ?? ctx.dossier?.today ?? new Date().toISOString().slice(0, 10));
+  const when = stated ? `отчёт составлен ${ruDate(date)}` : `сегодня ${ruDate(date)}`;
+  if (mine.some((a) => (!a.issued_on || a.issued_on <= date) && (!a.valid_until || a.valid_until >= date))) return [];
+  const main = mainReport(docs) ?? docs[0];
+  const at = usersIn([main, ...docs.filter((d) => d !== main)]).find((e) => banksIn(e.value).includes(bank.id));
+  const where = at ? { doc: at.doc, page: at.page, quote: at.quote } : { doc: main, page: 0, quote: '' };
+  if (!mine.length) {
+    return [{ ...where, text: `Отчёт для банка ${bank.name}, а аккредитации в этом банке нет ни в досье эксперта, ни у его организации — банк может не принять отчёт; если аккредитация есть, внесите её в досье` }];
+  }
+  const who = (a) => (a.via === 'org' ? `организации${a.org_name ? ` «${a.org_name}»` : ''}` : 'в досье эксперта');
+  const ended = mine.filter((a) => a.valid_until && a.valid_until < date).sort((a, b) => (a.valid_until < b.valid_until ? 1 : -1))[0];
+  const first = mine.filter((a) => a.issued_on && a.issued_on > date).sort((a, b) => (a.issued_on < b.issued_on ? -1 : 1))[0];
+  const text = ended
+    ? `Аккредитация в банке ${bank.name} ${who(ended)} действует до ${ruDate(ended.valid_until)}, а ${when} — на дату отчёта срок истёк; банк может не принять отчёт`
+    : `Аккредитация в банке ${bank.name} ${who(first)} — по решению от ${ruDate(first.issued_on)}, а ${when} — на дату отчёта аккредитации ещё не было`;
+  return [{ ...where, text }];
+}
+
 // ——— 2.278: вид стоимости — как в задании на оценку, письме заказчика или определении суда, приложенных к делу ———
 // В задании вид стоимости — после «вид стоимости», а без такой строки — «определить рыночную стоимость» (кадастровая в
 // тексте письма — не вид стоимости). Приложенные документы с разными видами — молчим: какой верный, решает эксперт. В отчёте
@@ -3127,6 +3161,7 @@ const WHOLE = {
   purpose_value: purposeValue,
   customer_match: customerMatch,
   bank_user: bankUser,
+  bank_accredited: bankAccredited,
   encumbrance_match: encumbranceMatch,
 };
 
@@ -3209,6 +3244,7 @@ export const AUTO_CHECKS = Object.freeze({
   purpose_value: 'цель оценки — как в задании на оценку, если оно приложено к делу, иначе как в заявке; вид стоимости один по всему отчёту и в письме и как в задании на оценку, если оно приложено к делу; для суда, нотариуса, банка, сделки и раздела — рыночная',
   customer_match: 'заказчик оценки в отчёте и в письме — как в задании на оценку (письме заказчика), если оно приложено к делу, иначе как в заявке',
   bank_user: 'при оценке для банка предполагаемый пользователь результатов оценки в отчёте — банк из заявки (Сбербанк) или из задания на оценку',
+  bank_accredited: 'при оценке для банка эксперт или его организация аккредитованы в этом банке на дату отчёта',
 });
 
 export function runAutoChecks(names, docs, ctx = {}) {
