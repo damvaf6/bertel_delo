@@ -5,6 +5,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp } from '../helpers.mjs';
 import { grantRole } from '../../src/tools/grant-role.mjs';
+import { DEMO_ROLES } from '../../src/demo/demo.mjs';
 import { seedDemo, stageLogin, DEMO_PEOPLE, DEMO_CASES } from '../tools/demo-seed.mjs';
 
 const KEY = 'demo-stage-login-key-0123456789abcdef';
@@ -59,4 +60,6 @@ test('демо-площадка: все виды услуг и статусы, �
   assert.equal(fo.title, feed.title);
   assert.equal(fo.status, 'matching');
   assert.equal(fo.executor_user_id, null);
+  // Показ 2.469: тот же заказ Дамир смотрит и глазами заказчика — у заказчика есть кнопка «Войти как …».
+  assert.ok(DEMO_ROLES.some((x) => x.as === feed.who), `заказчик учебного заказа ${feed.who} — без кнопки входа`);
 });
