@@ -175,6 +175,22 @@
         <p class="ok-line hidden" id="expert-box-accepted" role="status"></p>
         <p class="msg" id="expert-box-msg" role="status" aria-live="polite"></p>
       </div>
+      <div class="card hidden" id="rate-box" data-review>
+        <h2>Ваш отзыв</h2>
+        <form id="rate-form" class="hidden">
+          <p class="muted">Оцените работу эксперта от 1 до 5 и напишите пару слов. Отзыв видят платформа и организация эксперта — он помогает подбирать экспертов.</p>
+          <div class="chips stars" id="rate-stars" role="group" aria-label="Оценка от 1 до 5"></div>
+          <p class="muted" id="rate-stars-name"></p>
+          <label for="rate-text">Пара слов (необязательно)</label>
+          <textarea id="rate-text" rows="3" maxlength="500"></textarea>
+          <button type="submit" id="rate-send">Оставить отзыв</button>
+        </form>
+        <div id="rate-done" class="hidden">
+          <p class="stars-line" id="rate-done-stars"></p>
+          <p class="muted" id="rate-done-text"></p>
+        </div>
+        <p class="msg" id="rate-msg" role="status" aria-live="polite"></p>
+      </div>
       <div class="card hidden" id="quote-box">
         <h2>Стоимость</h2>
         <div id="quote-notices"></div>
@@ -1609,6 +1625,11 @@
         <h2>Сдано за год</h2>
         <p class="muted" id="expert-year-note"></p>
         <ul class="list" id="expert-year"></ul>
+      </div>
+      <div class="card" id="expert-reviews-box" hidden>
+        <h2>Отзывы заказчиков</h2>
+        <p class="muted" id="expert-reviews-note"></p>
+        <ul class="list" id="expert-reviews"></ul>
       </div>
       <div class="card" id="expert-returns-box" hidden>
         <h2>Возвраты за год</h2>

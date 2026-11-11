@@ -18,6 +18,7 @@ import { ackLine, startAck } from '../orders/ack.mjs';
 import { offDays } from './note-ops.mjs';
 import { workdaysAfter } from '../orders/holidays.mjs';
 import { myExpertView, customerAcceptView } from './expert-accept-ops.mjs';
+import { reviewView } from './review-ops.mjs';
 
 // Пока дело не сдано, исполнитель может отказаться или попросить передать его (2.453).
 const BANK_GAP_STATUSES = ['awaiting_executor', 'in_work', 'review'];
@@ -283,6 +284,8 @@ export function orderOps() {
           // «Ваш эксперт» и «Принять» (2.465): карточка эксперта заказчику; принял ли — эксперту и служебным.
           my_expert: await myExpertView(sql, registry, order, actor),
           customer_accept: await customerAcceptView(sql, registry, order, actor),
+          // Отзыв 1–5 после выдачи (2.467): заказчику — оставить или свой отзыв; служебным — отзыв.
+          review: await reviewView(sql, registry, order, actor),
           // Дело у организации (2.17): эксперта назначает её руководитель; видят только служебные.
           offer_org: order.offer_org_id && order.status === 'awaiting_executor' && isStaff(actor)
             ? await sql.one`select id, name from organizations where id = ${order.offer_org_id}` : null,

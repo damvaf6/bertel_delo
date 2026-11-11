@@ -87,6 +87,18 @@ function showReturns(r) {
     el('div', { class: 'muted', text: timesRu(x.n) }))));
 }
 
+// Отзывы заказчиков (2.467): средняя и последние — диспетчеру и руководителю организации эксперта; самому эксперту — позже.
+function showReviews(r) {
+  $('expert-reviews-box').hidden = !r;
+  if (!r) return;
+  $('expert-reviews-note').textContent = r.n
+    ? `Средняя оценка ${String(r.avg).replace('.', ',')} из 5, отзывов: ${r.n}.${r.n < 3 ? ' В подборе учитывается от трёх отзывов.' : ''}`
+    : 'Отзывов пока нет.';
+  $('expert-reviews').replaceChildren(...r.last.map((x) => el('li', { 'data-review': x.order_ref },
+    el('div', { class: 'title', text: `${'★'.repeat(x.rating)}${'☆'.repeat(5 - x.rating)} ${x.rating} из 5 · ${x.order_ref}` }),
+    el('div', { class: 'muted', text: [x.text ? `«${x.text}»` : 'Без текста', dayRu(x.at.slice(0, 10))].join(' · ') }))));
+}
+
 export async function showExpertCard(id) {
   let c;
   try { c = await api('GET', `/api/specialists/${id}/card`); } catch (err) {
@@ -107,6 +119,7 @@ export async function showExpertCard(id) {
   showNow(c.now);
   showYear(c.year);
   showReturns(c.returns_year);
+  showReviews(c.reviews);
   $('expert-permits').replaceChildren(...(s.permits.length ? s.permits.map((p) => el('li', { text: `${serviceName(p.module, p.service)}${p.valid_until ? ` · до ${dayRu(p.valid_until)}` : ''}` }))
     : [el('li', { class: 'muted', text: 'Допусков нет' })]));
   $('expert-dossier').replaceChildren(...(c.dossier.length ? c.dossier.map((d) => el('li', { 'data-kind': d.kind },

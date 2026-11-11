@@ -2,9 +2,9 @@ import { addDays, todayMsk } from '../orders/workflow.mjs';
 
 // Итоги работы специалиста (2.35) — для карточки эксперта и оценки «качество» в подборе: сданных дел (готово или закрыто),
 // из них в срок (последняя сдача на проверку — не позже срока по Москве; без срока — в срок) и возвратов на доработку
-// (диспетчер вернул с проверки или руководитель организации вернул файл).
+// (диспетчер вернул с проверки или руководитель организации вернул файл). Отзывы заказчиков (2.467): сколько и средняя оценка.
 export async function workStats(sql, userIds) {
-  const out = new Map(userIds.map((id) => [id, { done: 0, on_time: 0, returned: 0 }]));
+  const out = new Map(userIds.map((id) => [id, { done: 0, on_time: 0, returned: 0, rating_n: 0, rating_avg: null }]));
   if (!userIds.length) return out;
   const done = await sql`
     select o.executor_user_id as id, count(*)::int as done,
@@ -20,6 +20,10 @@ export async function workStats(sql, userIds) {
       select executor_user_id as id, count(*) as n from org_returns where executor_user_id = any(${userIds}::uuid[]) group by executor_user_id
     ) x group by id`;
   for (const r of back) out.get(r.id).returned = r.n;
+  const stars = await sql`
+    select executor_user_id as id, count(*)::int as n, round(avg(rating), 1)::float8 as avg from order_reviews
+    where executor_user_id = any(${userIds}::uuid[]) group by executor_user_id`;
+  for (const r of stars) Object.assign(out.get(r.id), { rating_n: r.n, rating_avg: r.avg });
   return out;
 }
 

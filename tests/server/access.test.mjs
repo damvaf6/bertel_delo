@@ -633,7 +633,7 @@ test('orders.status: шаги заказчика — только его сто�
 test('специалисты и подбор: допуски — только администратор; подбор — только диспетчер; чужое дело исполнитель не видит', async () => {
   for (const id of ['specialist.me', 'specialist.me.update', 'specialists.list', 'specialists.upsert',
     'specialists.permit.add', 'specialists.permit.remove', 'orders.candidates', 'orders.offer',
-    'specialists.language.file', 'specialists.language.verify', 'specialist.feed', 'specialist.feed.take', 'orders.expert.accept']) cover(id);
+    'specialists.language.file', 'specialists.language.verify', 'specialist.feed', 'specialist.feed.take', 'orders.expert.accept', 'orders.review']) cover(id);
   const target = U.memberA2.user.id;
   // Профиль и допуски выдаёт только администратор; диспетчер и обычный человек получают «не найдено».
   for (const who of ['owner', 'dispatcher', 'spec']) {
