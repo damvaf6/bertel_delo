@@ -52,6 +52,10 @@
 //       банка или суда (текст и файл), дело снова у исполнителя; срок ответа — reply_days рабочих дней
 //     court?: {}  — вызов эксперта в суд (2.441): после «готово» заказчик или диспетчер пишет, что исполнителя вызывают на
 //       заседание (суд, номер дела, дата и время, адрес, файл повестки); дело не переоткрывается
+//     money?: { fee?: 'on_top', payout?: 'manual' }  — деньги модуля (2.463): fee 'on_top' — диспетчер назначает цену
+//       исполнителя, заказчик платит её плюс вознаграждение платформы (20% сверх, ×1,2), исполнитель получает 100% своей цены;
+//       без него — прежнее 80/20 из цены заказчика; payout 'manual' — выплата исполнителю вручную, списком: отметку
+//       «выплачено» ставит диспетчер, поставщик оплаты выплату не проводит
 //     offer?: { version: 'ГГГГ-ММ-ДД', draft: true?, doc: путь в docs/, points: [{ id, text, to: 'customer' | 'executor', services? }…] }  —
 //       главные условия оферты (2а.8) в карточке заявки: заказчику — свои пункты, исполнителю и служебным — все; draft — черновик,
 //       пока юрист не проверил (пометка «пока не действует»); полный текст — doc
@@ -149,7 +153,7 @@ function validateField(f, where) {
 }
 
 export function validateModule(m) {
-  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express', 'signature', 'analogs', 'approaches', 'request_docs', 'repeat', 'executors', 'certificate', 'steps', 'proofread', 'remarks', 'court', 'offer'], 'модуль');
+  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express', 'signature', 'analogs', 'approaches', 'request_docs', 'repeat', 'executors', 'certificate', 'steps', 'proofread', 'remarks', 'court', 'offer', 'money'], 'модуль');
   if (!ID_RE.test(m.id ?? '')) fail('модуль', `неверный id «${m.id}»`);
   const at = `модуль ${m.id}`;
   if (!nonEmpty(m.name)) fail(at, 'нет названия');
@@ -414,6 +418,13 @@ export function validateModule(m) {
     if (p.refund_note !== undefined && (typeof p.refund_note !== 'string' || !p.refund_note.trim())) fail(where, 'refund_note — строка');
     if ((m.checks ?? []).some((c) => c.id === PROOFREAD_CHECK.id)) fail(where, `id «${PROOFREAD_CHECK.id}» занят правилом проверки модуля`);
   }
+  // Деньги модуля (2.463) — необязательно.
+  if (m.money !== undefined) {
+    const where = `${at}, деньги`;
+    onlyKeys(m.money, ['fee', 'payout'], where);
+    if (m.money.fee !== undefined && m.money.fee !== 'on_top') fail(where, "fee — 'on_top' (вознаграждение сверх цены исполнителя) или не указано");
+    if (m.money.payout !== undefined && m.money.payout !== 'manual') fail(where, "payout — 'manual' (выплата вручную) или не указано");
+  }
   // Условия оферты (2а.8) — необязательно.
   if (m.offer !== undefined) {
     const where = `${at}, оферта`;
@@ -650,6 +661,11 @@ export function createRegistry(modules = DEFAULT_MODULES) {
       const own = o.points.filter((pt) => !pt.services || pt.services.includes(serviceId));
       const pick = (to) => own.filter((pt) => pt.to === to).map(({ id, text }) => ({ id, text }));
       return { version: o.version, draft: !!o.draft, doc: o.doc, customer: pick('customer'), executor: pick('executor') };
+    },
+    // Деньги модуля (2.463): { on_top, manual } — вознаграждение сверх цены исполнителя, выплата вручную.
+    money(moduleId) {
+      const m = modulesList.find((x) => x.id === moduleId)?.money;
+      return { on_top: m?.fee === 'on_top', manual: m?.payout === 'manual' };
     },
     // Нужна ли подпись результата УКЭП исполнителя до сдачи на проверку (2.5).
     signatureRequired(moduleId, serviceId) {

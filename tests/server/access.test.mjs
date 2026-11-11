@@ -826,7 +826,7 @@ test('работа по делу: результат — только испол
 });
 
 test('деньги: цену — диспетчер; платит заказчик при заказе; суммы и документы — каждому свои; возвраты; сводка — служебным', async () => {
-  for (const id of ['orders.money', 'orders.price', 'payments.create', 'payments.refresh', 'payouts.retry', 'refunds.retry', 'money.summary', 'payouts.mine', 'orders.invoice', 'orders.closing.docx', 'payouts.receipt']) cover(id);
+  for (const id of ['orders.money', 'orders.price', 'payments.create', 'payments.refresh', 'payouts.retry', 'refunds.retry', 'money.summary', 'payouts.mine', 'orders.invoice', 'orders.closing.docx', 'payouts.receipt', 'payouts.manual_paid']) cover(id);
   const o = (await U.owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Деньги' })).body.order;
   assert.equal((await U.owner.req('PATCH', `/api/orders/${o.id}`, { ...READY, deadline: soon() })).status, 200);
   assert.equal((await U.owner.req('POST', `/api/orders/${o.id}/status`, { to: 'matching', from: 'new' })).status, 200);
@@ -848,9 +848,11 @@ test('деньги: цену — диспетчер; платит заказчи
   assert.equal((await price(U.dispatcher, '15000,555')).status, 400);
   const priced = await price(U.dispatcher, '15 000,50');
   assert.equal(priced.status, 200, JSON.stringify(priced.body));
-  assert.equal(priced.body.money.price_kop, 1500050);
-  assert.equal(priced.body.money.commission_kop, 300010, '20% платформе');
-  assert.equal(priced.body.money.fee_kop, 1200040, '80% исполнителю');
+  // Экспертиза (2.463): назначена цена эксперта — заказчику ×1,2, эксперту 100%, платформе 20% сверх.
+  assert.equal(priced.body.money.expert_kop, 1500050);
+  assert.equal(priced.body.money.price_kop, 1800060);
+  assert.equal(priced.body.money.commission_kop, 300010, '20% сверх цены эксперта — платформе');
+  assert.equal(priced.body.money.fee_kop, 1500050, '100% цены эксперта — эксперту');
 
   // Платит только сторона заказчика — при заказе, до предложения исполнителю.
   for (const who of ['dispatcher', 'admin']) assert.equal((await pay(U[who])).status, 403, `${who}: оплата`);
@@ -875,9 +877,9 @@ test('деньги: цену — диспетчер; платит заказчи
   assert.equal((await price(U.dispatcher, '1')).status, 409, 'после предложения цена не меняется');
   // Что видит каждый: заказчик — цену и оплату, исполнитель — своё вознаграждение, но не цену, не оплату и не вознаграждение платформы.
   const mo = (await money(U.owner)).body.money;
-  assert.deepEqual([mo.price_kop, mo.fee_kop, mo.commission_kop, mo.payout], [1500050, null, null, null]);
+  assert.deepEqual([mo.price_kop, mo.fee_kop, mo.commission_kop, mo.payout, mo.expert_kop], [1800060, null, null, null, null]);
   const ms = (await money(U.spec)).body.money;
-  assert.deepEqual([ms.price_kop, ms.fee_kop, ms.commission_kop, ms.payment, ms.refund], [null, 1200040, null, null, null]);
+  assert.deepEqual([ms.price_kop, ms.fee_kop, ms.commission_kop, ms.payment, ms.refund, ms.expert_kop], [null, 1500050, null, null, null, null]);
   assert.equal((await refresh(U.spec)).status, 403);
   assert.equal((await money(U.admin)).body.money.commission_kop, 300010);
 
@@ -898,8 +900,21 @@ test('деньги: цену — диспетчер; платит заказчи
   const sp = (await money(U.spec)).body.money;
   assert.deepEqual(sp.documents.map((d) => d.kind), ['agent_report'], 'исполнителю — отчёт агента');
   assert.equal(sp.documents[0].data.customer, undefined, 'имени заказчика в отчёте исполнителю нет');
+  // Выплата вручную (2.463): ждёт отметки; отмечает только диспетчер, второй раз — «уже отмечена».
+  assert.equal(sp.payout.status, 'pending');
+  assert.equal(sp.payout.amount_kop, 1500050);
+  assert.equal(sp.can_mark_payout, false);
+  assert.equal((await money(U.dispatcher)).body.money.can_mark_payout, true);
+  const mark = (c) => c.req('POST', `/api/orders/${o.id}/payout/paid`, { note: 'платёжка № 7' });
+  for (const who of ['owner', 'spec', 'admin']) assert.equal((await mark(U[who])).status, 403, `${who}: выплачено`);
+  for (const who of ['stranger', 'headB', 'headA']) assert.equal((await mark(U[who])).status, 404, `${who}: выплачено`);
+  assert.ok((await U.dispatcher.req('GET', '/api/money')).body.manual.some((p) => p.order_id === o.id), 'в списке «Выплатить вручную»');
+  assert.equal((await U.dispatcher.req('POST', `/api/orders/${o.id}/payout/paid`, { note: 'x'.repeat(201) })).status, 400);
+  assert.equal((await mark(U.dispatcher)).status, 200);
+  assert.equal((await mark(U.dispatcher)).status, 409, 'уже отмечена');
+  assert.ok(!(await U.dispatcher.req('GET', '/api/money')).body.manual.some((p) => p.order_id === o.id), 'из списка ушла');
+  sp.payout = (await money(U.spec)).body.money.payout;
   assert.equal(sp.payout.status, 'succeeded');
-  assert.equal(sp.payout.amount_kop, 1200040);
   assert.deepEqual((await money(U.admin)).body.money.documents.map((d) => d.kind), ['act', 'agent_report']);
   // Файлы Word (2.46): акт — заказчику и служебным, отчёт агента — исполнителю и служебным; счёт — стороне заказчика.
   const word = (c, path) => c.req('GET', `/api/orders/${o.id}/${path}`);

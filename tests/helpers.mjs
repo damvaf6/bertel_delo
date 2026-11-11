@@ -155,6 +155,13 @@ export async function ensurePaid(sql, orderId, kop = 1_500_000) {
 
 // Сделать человека специалистом с допусками (напрямую в базе — для проверок, не через кабинет администратора).
 // taxStatus и languages — переводчик (2а.3): статус исполнителя и проверенные документы о знании языка.
+// Заявка на прежних условиях (до 2.463): цена — то, что платит заказчик, 80/20 из неё, выплата — через поставщика оплаты.
+// Так в тестах денег проверяется общая агентская схема ядра (её же держат переводы и заявки, оценённые до 2.463);
+// условия экспертизы «20% сверх цены эксперта, выплата вручную» — tests/server/fee-on-top.test.mjs.
+export async function legacyTerms(sql, orderId) {
+  await sql`update orders set price_kop = coalesce(expert_kop, price_kop), expert_kop = null, payout_manual = false where id = ${orderId}`;
+}
+
 export async function makeSpecialist(sql, userId, { permits = [['expertise', 'realty']], regions = ['moscow', 'mo'], capacity = 5, validUntil = null, taxStatus = null, languages = [] } = {}) {
   await sql`insert into specialists (user_id, regions, capacity, tax_status) values (${userId}, ${regions}, ${capacity}, ${taxStatus})`;
   for (const [module, service] of permits) {

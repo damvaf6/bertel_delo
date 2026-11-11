@@ -33,8 +33,11 @@ test('демо-площадка: все виды услуг и статусы, �
   const phones = await S.sql`select phone from users`;
   for (const p of phones) assert.match(p.phone, /^\+7999000\d{4}$/);
   // Выплаты по закрытым и готовым делам, подписи организаций на делах экспертов организаций.
-  const payouts = await S.sql`select count(*)::int as n from payouts where status = 'succeeded'`;
-  assert.ok(payouts[0].n >= 3);
+  // Экспертиза (2.463): выплата вручную — по закрытым делам отмечена диспетчером, по выданному — ждёт в списке «Выплатить вручную».
+  const payouts = await S.sql`select count(*)::int as n from payouts where status = 'succeeded' and manual`;
+  assert.ok(payouts[0].n >= 2);
+  const waiting = await S.sql`select count(*)::int as n from payouts where status = 'pending' and manual`;
+  assert.ok(waiting[0].n >= 1);
   const orgSigns = await S.sql`select count(*)::int as n from document_signatures where role = 'org'`;
   assert.ok(orgSigns[0].n >= 3);
 
