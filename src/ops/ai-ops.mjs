@@ -9,7 +9,7 @@ import {
 } from '../ai/ai.mjs';
 import { READ_MAX_BYTES, extractPages, readableKind } from '../ai/extract.mjs';
 import { reportFacts, runAutoChecks } from '../ai/report-checks.mjs';
-import { loadDossier } from '../dossier/dossier.mjs';
+import { OTHER_BANK, bankList, loadDossier } from '../dossier/dossier.mjs';
 import { todayMsk } from '../orders/workflow.mjs';
 import { insertOrder, listVisibleOrders } from './order-ops.mjs';
 import { audit, quoted, text, uuidFrom } from './util.mjs';
@@ -363,7 +363,7 @@ export function aiOps() {
         // 2.198: дата оценки в отчёте — как в задании на оценку, письме или определении суда, приложенных к делу.
         // 2.277: и адрес объекта — как в задании на оценку; 2.278 — и вид стоимости; 2.288 — и заказчик; 2.298 — дата составления
         // отчёта не раньше даты самого задания.
-        const assignment = names.includes('value_date') || names.includes('report_dates') || names.includes('address_match') || names.includes('purpose_value') || names.includes('customer_match') || names.includes('bank_user') ? await assignmentDocs(sql, providers.storage, order) : [];
+        const assignment = names.includes('value_date') || names.includes('report_dates') || names.includes('address_match') || names.includes('purpose_value') || names.includes('customer_match') || names.includes('bank_user') || names.includes('bank_accredited') ? await assignmentDocs(sql, providers.storage, order) : [];
         // 2.202, 2.203: площадь и кадастровый номер объекта в отчёте — как в выписке ЕГРН из дела; 2.223 — год постройки и стены; 2.233 — кадастровая стоимость; 2.241 — права; 2.242 — обременения; 2.253 — доля; 2.264 — номер и дата выписки.
         const egrn = names.includes('area_match') || names.includes('area_same') || names.includes('cadastral_match') || names.includes('floor_match') || names.includes('building_match') || names.includes('use_match') || names.includes('room_kind_match') || names.includes('cad_value_match') || names.includes('rights_match') || names.includes('share_egrn_match') || names.includes('encumbrance_match') || names.includes('address_match') || names.includes('egrn_doc_match') ? await egrnDocs(sql, providers.storage, order) : [];
         // 2.288: заказчик в заявке — владелец заявки; имя сверяется здесь же, модели не передаётся.
@@ -375,7 +375,21 @@ export function aiOps() {
         const [issued] = names.includes('report_number') && order.executor_user_id
           ? await sql`select report_number as number, to_char(report_number_on, 'YYYY-MM-DD') as on from orders
                       where id = ${order.id} and report_number is not null and report_number_by = ${order.executor_user_id}` : [];
-        const auto = runAutoChecks(names, files, { fields: order.fields ?? {}, dossier, basis, service: order.service, analogs, inspectionDays, inspectionUploadDays, inspectionActDays, inspectionBy, signedOn, assignment, egrn, customer: owner?.full_name ?? null, today: dossier.today, usedNumbers: used, issuedNumber: issued ?? null });
+        // 2.458: аккредитации эксперта в банках — своя (досье) и организации, от которой он работает и где состоит; на дату
+        // отчёта сверяет правило bank_accredited. Без исполнителя — не сверяем.
+        const bankAccr = names.includes('bank_accredited') && order.executor_user_id ? {
+          order_bank: (order.fields?.bank && order.fields.bank !== OTHER_BANK.id && bankList(registry).find((b) => b.id === order.fields.bank)) || null,
+          items: [
+            ...(await sql`select bank, title, to_char(issued_on, 'YYYY-MM-DD') as issued_on, to_char(valid_until, 'YYYY-MM-DD') as valid_until, 'self' as via
+                          from dossier_items where user_id = ${order.executor_user_id} and kind = 'bank' and deleted_at is null`),
+            ...(await sql`select a.bank, a.title, to_char(a.issued_on, 'YYYY-MM-DD') as issued_on, to_char(a.valid_until, 'YYYY-MM-DD') as valid_until,
+                            'org' as via, o.name as org_name
+                          from specialists s join org_members m on m.org_id = s.org_id and m.user_id = s.user_id
+                          join organizations o on o.id = s.org_id join org_accreditations a on a.org_id = s.org_id and a.deleted_at is null
+                          where s.user_id = ${order.executor_user_id}`),
+          ],
+        } : null;
+        const auto = runAutoChecks(names, files, { fields: order.fields ?? {}, dossier, basis, service: order.service, analogs, inspectionDays, inspectionUploadDays, inspectionActDays, inspectionBy, signedOn, assignment, egrn, customer: owner?.full_name ?? null, today: dossier.today, usedNumbers: used, issuedNumber: issued ?? null, bankAccr });
         const found = Object.fromEntries(rules.map((r) => [r.id, (r.auto ?? []).flatMap((a) => auto[a] ?? [])]));
         // Модель недоступна или лимит исчерпан, но автоматические находки есть — показываем их, а не ошибку.
         let out;
