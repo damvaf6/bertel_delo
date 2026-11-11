@@ -51,8 +51,8 @@ test('расчёт сверх цены эксперта: ×1,2 с округле
 
 test('описание модуля: экспертиза — сверх цены и вручную, переводы — как прежде; ошибка в money — сервер не стартует', () => {
   const reg = createRegistry();
-  assert.deepEqual(reg.money('expertise'), { on_top: true, manual: true });
-  assert.deepEqual(reg.money('translation'), { on_top: false, manual: false });
+  assert.deepEqual(reg.money('expertise'), { on_top: true, manual: true, invoice: true });
+  assert.deepEqual(reg.money('translation'), { on_top: false, manual: false, invoice: false });
   assert.throws(() => validateModule({ ...expertise, money: { fee: 'inside' } }), /fee/);
   assert.throws(() => validateModule({ ...expertise, money: { payout: 'auto' } }), /payout/);
   assert.throws(() => validateModule({ ...expertise, money: { fee: 'on_top', extra: 1 } }));

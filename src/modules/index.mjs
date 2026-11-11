@@ -55,7 +55,8 @@
 //     money?: { fee?: 'on_top', payout?: 'manual' }  — деньги модуля (2.463): fee 'on_top' — диспетчер назначает цену
 //       исполнителя, заказчик платит её плюс вознаграждение платформы (20% сверх, ×1,2), исполнитель получает 100% своей цены;
 //       без него — прежнее 80/20 из цены заказчика; payout 'manual' — выплата исполнителю вручную, списком: отметку
-//       «выплачено» ставит диспетчер, поставщик оплаты выплату не проводит
+//       «выплачено» ставит диспетчер, поставщик оплаты выплату не проводит; pay 'invoice' (2.464) — заказчик платит по счёту
+//       оператора, поступление отмечает диспетчер; картой — только при включённой оплате картой (cfg.cardPay)
 //     offer?: { version: 'ГГГГ-ММ-ДД', draft: true?, doc: путь в docs/, points: [{ id, text, to: 'customer' | 'executor', services? }…] }  —
 //       главные условия оферты (2а.8) в карточке заявки: заказчику — свои пункты, исполнителю и служебным — все; draft — черновик,
 //       пока юрист не проверил (пометка «пока не действует»); полный текст — doc
@@ -421,9 +422,10 @@ export function validateModule(m) {
   // Деньги модуля (2.463) — необязательно.
   if (m.money !== undefined) {
     const where = `${at}, деньги`;
-    onlyKeys(m.money, ['fee', 'payout'], where);
+    onlyKeys(m.money, ['fee', 'payout', 'pay'], where);
     if (m.money.fee !== undefined && m.money.fee !== 'on_top') fail(where, "fee — 'on_top' (вознаграждение сверх цены исполнителя) или не указано");
     if (m.money.payout !== undefined && m.money.payout !== 'manual') fail(where, "payout — 'manual' (выплата вручную) или не указано");
+    if (m.money.pay !== undefined && m.money.pay !== 'invoice') fail(where, "pay — 'invoice' (оплата по счёту) или не указано");
   }
   // Условия оферты (2а.8) — необязательно.
   if (m.offer !== undefined) {
@@ -662,10 +664,11 @@ export function createRegistry(modules = DEFAULT_MODULES) {
       const pick = (to) => own.filter((pt) => pt.to === to).map(({ id, text }) => ({ id, text }));
       return { version: o.version, draft: !!o.draft, doc: o.doc, customer: pick('customer'), executor: pick('executor') };
     },
-    // Деньги модуля (2.463): { on_top, manual } — вознаграждение сверх цены исполнителя, выплата вручную.
+    // Деньги модуля (2.463): { on_top, manual, invoice } — вознаграждение сверх цены исполнителя, выплата вручную, оплата
+    // по счёту (2.464).
     money(moduleId) {
       const m = modulesList.find((x) => x.id === moduleId)?.money;
-      return { on_top: m?.fee === 'on_top', manual: m?.payout === 'manual' };
+      return { on_top: m?.fee === 'on_top', manual: m?.payout === 'manual', invoice: m?.pay === 'invoice' };
     },
     // Нужна ли подпись результата УКЭП исполнителя до сдачи на проверку (2.5).
     signatureRequired(moduleId, serviceId) {

@@ -4,12 +4,15 @@
 // Агентская схема ЮKassa, вознаграждение платформы 20% — src/money/money.mjs. Пока поставщик оплаты поддельный.
 // Экспертиза (2.463): диспетчер назначает цену эксперта, заказчик платит её ×1,2; выплата эксперту — вручную, списком
 // («Выплатить вручную» в разделе «Деньги», отметка диспетчера «выплачено» — payouts.manual_paid).
+// Оплата по счёту (2.464): заказчик скачивает счёт и платит по реквизитам, может сообщить «оплатил» (payments.invoice_claim);
+// поступление отмечает диспетчер (payments.invoice_paid); возврат по такой оплате — вручную (refunds.manual_paid).
+// Картой у таких модулей — только при cfg.cardPay (после подключения ЮKassa).
 import { HttpError } from '../http/core.mjs';
 import { moneyView, orderSides } from '../access/policy.mjs';
 import { ProviderError } from '../providers/fake.mjs';
-import { applyPaymentStatus, orderSplit, priceOnTop, runPayout, runRefund, runSettlement, shortRef } from '../money/money.mjs';
+import { applyPaymentStatus, orderPaid, orderSplit, priceOnTop, runPayout, runRefund, runSettlement, shortRef } from '../money/money.mjs';
 import { moduleQuote } from '../modules/extras.mjs';
-import { customersOf, notify } from '../notify/notify.mjs';
+import { customersOf, dispatchers, notify } from '../notify/notify.mjs';
 import { audit, sendFile } from './util.mjs';
 import { closingDoc, invoiceDoc } from '../money/papers.mjs';
 import { DOCX_MIME } from '../docs/docx.mjs';
@@ -29,7 +32,14 @@ function priceFrom(value) {
   return kop;
 }
 
-const payView = (p) => p && ({ id: p.id, status: p.status, amount_kop: num(p.amount_kop), created_at: p.created_at, paid_at: p.paid_at });
+const payView = (p) => p && ({ id: p.id, status: p.status, amount_kop: num(p.amount_kop), created_at: p.created_at, paid_at: p.paid_at,
+  // Как оплачено (2.464): 'card' — через поставщика, 'invoice' — по счёту, отметка диспетчера с пометкой.
+  method: p.method ?? 'card', note: p.note ?? null });
+const noteFrom = (v) => {
+  const note = String(v ?? '').trim().replace(/\s+/g, ' ');
+  if (note.length > 200) throw new HttpError(400, 'bad_note', 'Пометка — до 200 знаков');
+  return note || null;
+};
 const payoutView = (p) => p && ({
   status: p.status, amount_kop: num(p.amount_kop), commission_kop: num(p.commission_kop), failure: p.failure,
   attempts: p.attempts, paid_at: p.paid_at, created_at: p.created_at,
@@ -44,6 +54,8 @@ const payoutView = (p) => p && ({
 const refundView = (r) => r && ({
   status: r.status, amount_kop: num(r.amount_kop), reason: r.reason, failure: r.failure, attempts: r.attempts,
   refunded_at: r.refunded_at, created_at: r.created_at,
+  // Возврат по оплате по счёту (2.464) — вручную: перечисляет диспетчер и отмечает «возвращено» с пометкой.
+  manual: !!r.manual, manual_note: r.manual_note ?? null,
 });
 const DOC_PREFIX = { act: 'А', agent_report: 'О', refund: 'В' };
 export const docView = (d) => ({ id: d.id, kind: d.kind, number: `${DOC_PREFIX[d.kind]}-${String(d.number).padStart(6, '0')}`, created_at: d.created_at, data: d.data });
@@ -71,7 +83,7 @@ async function receiptContact(sql, actor) {
   return u?.phone ? { phone: u.phone.replace(/^\+/, '') } : null;
 }
 
-export function moneyOps() {
+export function moneyOps(cfg = {}) {
   // Деньги по заявке глазами вошедшего: заказчик — цена, оплата, акт; исполнитель — своё вознаграждение, выплата,
   // отчёт агента; служебные — всё (правила — policy.mjs, moneyView).
   async function view(sql, actor, orderId, registry) {
@@ -81,6 +93,9 @@ export function moneyOps() {
     const price = num(order.price_kop);
     const split = price ? orderSplit(order) : null;
     const pending = await sql.one`select 1 from payments where order_id = ${order.id} and status = 'pending'`;
+    // Оплата по счёту (2.464): у модуля с pay 'invoice' — счёт по реквизитам; картой — только при включённой оплате картой.
+    const invoice = registry.money(order.module).invoice;
+    const payable = order.status === 'matching' && !!price && !order.paid_at;
     const out = {
       sees: { customer: see.customer, executor: see.executor, staff: see.staff },
       price_kop: see.customer ? price : null,
@@ -89,8 +104,15 @@ export function moneyOps() {
       // Цена меняется только в подборе и только пока заказчик не начал платить.
       can_set_price: sides.includes('dispatcher') && order.status === 'matching' && !order.paid_at && !pending,
       // Заказчик платит при заказе: цена назначена, заявка в подборе (решение Дамира 01.10.2026).
-      can_pay: sides.includes('customer') && order.status === 'matching' && !!price && !order.paid_at,
+      can_pay: sides.includes('customer') && payable && (!invoice || !!cfg.cardPay),
       payment: null,
+      // Оплата по счёту (2.464): pay_invoice — заказчик платит по счёту; заказчик сообщает «оплатил» (один раз), диспетчер
+      // отмечает поступление, пока заказчик не начал оплату картой.
+      pay_invoice: invoice && payable,
+      invoice_claimed_at: see.customer || see.staff ? order.invoice_claimed_at : null,
+      invoice_claim_note: see.customer || see.staff ? order.invoice_claim_note : null,
+      can_claim_invoice: invoice && payable && sides.includes('customer') && !order.invoice_claimed_at,
+      can_mark_paid: invoice && payable && sides.includes('dispatcher') && !pending,
       fee_kop: see.executor && split ? split.payoutKop : null,
       commission_kop: see.staff && split ? split.commissionKop : null,
       // Вознаграждение сверх цены эксперта (2.463): цену назначают как цену эксперта, заказчик платит ×1,2. fee_on_top — у
@@ -105,6 +127,7 @@ export function moneyOps() {
       can_mark_payout: false,
       refund: null,
       can_retry_refund: false,
+      can_mark_refund: false,
       // Отмена после начала работ: по чьей причине и какая доля работы сделана.
       cancel_fault: order.cancel_fault,
       done_percent: order.done_percent,
@@ -118,7 +141,8 @@ export function moneyOps() {
       out.payment = payView(await sql.one`select * from payments where order_id = ${order.id} order by created_at desc limit 1`);
       const r = await sql.one`select * from refunds where order_id = ${order.id}`;
       out.refund = refundView(r);
-      out.can_retry_refund = !!r && r.status === 'failed' && sides.includes('dispatcher');
+      out.can_retry_refund = !!r && !r.manual && r.status === 'failed' && sides.includes('dispatcher');
+      out.can_mark_refund = !!r && r.manual && r.status !== 'succeeded' && sides.includes('dispatcher');
     }
     if (see.executor) {
       const p = await sql.one`select p.*, s.tax_status from payouts p left join specialists s on s.user_id = p.executor_user_id
@@ -157,7 +181,8 @@ export function moneyOps() {
         const org = order.org_id ? await sql.one`select name, inn, kpp, legal_address from organizations where id = ${order.org_id}` : null;
         const owner = await sql.one`select full_name from users where id = ${order.owner_user_id}`;
         const customer = org ? { name: org.name, inn: org.inn, kpp: org.kpp, address: org.legal_address } : { name: owner?.full_name || 'Заказчик' };
-        const doc = invoiceDoc({ order, customer, registry, op: cfg.operator, test: cfg.testMoney });
+        const doc = invoiceDoc({ order, customer, registry, op: cfg.operator, test: cfg.testMoney,
+          byInvoice: registry.money(order.module).invoice, card: !!cfg.cardPay });
         await audit(sql, actor, 'invoice.download', 'order', order.id, {});
         await sendFile(res, providers, { ...doc, mime: DOCX_MIME });
       },
@@ -215,6 +240,7 @@ export function moneyOps() {
       access: { resource: 'order', param: 'id', need: 'write' },
       async handler({ sql, actor, order, cfg, providers, registry, res }) {
         if (!orderSides(actor, order).includes('customer')) throw new HttpError(403, 'forbidden', 'Недостаточно прав');
+        if (registry.money(order.module).invoice && !cfg.cardPay) throw new HttpError(409, 'pay_by_invoice', 'Оплата — по счёту: скачайте счёт и оплатите по реквизитам');
         const created = await sql.tx(async (tx) => {
           const cur = await tx.one`select * from orders where id = ${order.id} for update`;
           if (cur.paid_at) throw new HttpError(409, 'already_paid', 'Заявка уже оплачена');
@@ -337,13 +363,77 @@ export function moneyOps() {
       },
     },
     {
+      // Оплата по счёту (2.464): заказчик сообщает «оплатил по счёту» (пометка — дата, номер платёжки) — диспетчеру уведомление.
+      id: 'payments.invoice_claim', method: 'POST', path: '/api/orders/:id/payments/claim', auth: 'user',
+      access: { resource: 'order', param: 'id', need: 'write' },
+      async handler({ sql, actor, order, body, registry }) {
+        if (!orderSides(actor, order).includes('customer')) throw new HttpError(403, 'forbidden', 'Недостаточно прав');
+        if (!registry.money(order.module).invoice) throw new HttpError(409, 'no_invoice_pay', 'По этой заявке оплата — в кабинете, не по счёту');
+        const note = noteFrom(body?.note);
+        await sql.tx(async (tx) => {
+          const cur = await tx.one`select * from orders where id = ${order.id} for update`;
+          if (cur.paid_at) throw new HttpError(409, 'already_paid', 'Заявка уже оплачена');
+          if (cur.status !== 'matching' || !cur.price_kop) throw new HttpError(409, 'not_payable', 'Оплатить можно, когда диспетчер назначил цену, до передачи исполнителю');
+          if (cur.invoice_claimed_at) throw new HttpError(409, 'already_claimed', 'Вы уже сообщили об оплате — диспетчер проверит поступление');
+          await tx`update orders set invoice_claimed_at = now(), invoice_claim_note = ${note}, updated_at = now() where id = ${cur.id}`;
+          await audit(tx, actor, 'payment.invoice_claim', 'order', cur.id, {});
+          await notify(tx, 'invoice_claimed_staff', { users: await dispatchers(tx), orderId: cur.id, actor });
+        });
+        return { money: await view(sql, actor, order.id, registry) };
+      },
+    },
+    {
+      // Оплата по счёту (2.464): деньги поступили на счёт оператора — диспетчер отмечает «оплачено» (пометка — номер платёжки,
+      // дата). Сумма — цена заявки; повторная отметка — «уже оплачена»; во время оплаты картой — нельзя.
+      id: 'payments.invoice_paid', method: 'POST', path: '/api/orders/:id/payments/invoice', auth: 'user',
+      access: { resource: 'order', param: 'id', need: 'read' },
+      async handler({ sql, actor, order, body, registry, res }) {
+        if (!orderSides(actor, order).includes('dispatcher')) throw new HttpError(403, 'forbidden', 'Недостаточно прав');
+        if (!registry.money(order.module).invoice) throw new HttpError(409, 'no_invoice_pay', 'По этой заявке оплата — в кабинете, не по счёту');
+        const note = noteFrom(body?.note);
+        await sql.tx(async (tx) => {
+          const cur = await tx.one`select * from orders where id = ${order.id} for update`;
+          if (cur.paid_at) throw new HttpError(409, 'already_paid', 'Заявка уже оплачена');
+          if (cur.status !== 'matching' || !cur.price_kop) throw new HttpError(409, 'not_payable', 'Отметить оплату можно, когда цена назначена, до передачи исполнителю');
+          const open = await tx.one`select 1 from payments where order_id = ${cur.id} and status = 'pending'`;
+          if (open) throw new HttpError(409, 'payment_pending', 'Заказчик сейчас платит картой — дождитесь окончания');
+          const p = await tx.one`
+            insert into payments (order_id, amount_kop, status, method, note, marked_by, created_by, paid_at)
+            values (${cur.id}, ${cur.price_kop}, 'succeeded', 'invoice', ${note}, ${actor.id}, ${actor.id}, now()) returning *`;
+          await audit(tx, actor, 'payment.invoice_paid', 'order', cur.id, { payment: p.id, amount_kop: String(p.amount_kop) });
+          await orderPaid(tx, cur, actor);
+        });
+        res.status(201);
+        return { money: await view(sql, actor, order.id, registry) };
+      },
+    },
+    {
+      // Возврат по оплате по счёту (2.464): диспетчер вернул деньги заказчику сам и отмечает «возвращено» с пометкой.
+      id: 'refunds.manual_paid', method: 'POST', path: '/api/orders/:id/refund/paid', auth: 'user',
+      access: { resource: 'order', param: 'id', need: 'read' },
+      async handler({ sql, actor, order, body, registry }) {
+        if (!orderSides(actor, order).includes('dispatcher')) throw new HttpError(403, 'forbidden', 'Недостаточно прав');
+        const note = noteFrom(body?.note);
+        await sql.tx(async (tx) => {
+          const r = await tx.one`select * from refunds where order_id = ${order.id} for update`;
+          if (!r || !r.manual) throw new HttpError(404, 'not_found', 'Возврата вручную по заявке нет');
+          if (r.status === 'succeeded') throw new HttpError(409, 'refund_done', 'Возврат уже отмечен');
+          await tx`update refunds set status = 'succeeded', refunded_at = now(), failure = null, manual_note = ${note},
+                   marked_by = ${actor.id}, updated_at = now() where id = ${r.id}`;
+          await audit(tx, actor, 'refund.manual_paid', 'order', order.id, { refund: r.id, amount_kop: String(r.amount_kop) });
+          await notify(tx, 'refund_succeeded', { users: await customersOf(tx, order), orderId: order.id, actor });
+        });
+        return { money: await view(sql, actor, order.id, registry) };
+      },
+    },
+    {
       // Повтор неудавшегося возврата заказчику — диспетчер. Успешный возврат повторить нельзя.
       id: 'refunds.retry', method: 'POST', path: '/api/orders/:id/refund/retry', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
       async handler({ sql, actor, order, providers, registry }) {
         if (!orderSides(actor, order).includes('dispatcher')) throw new HttpError(403, 'forbidden', 'Недостаточно прав');
         const r = await sql.one`select * from refunds where order_id = ${order.id}`;
-        if (!r || r.status !== 'failed') throw new HttpError(409, 'refund_not_failed', 'Повторять нечего: возврат не числится неудавшимся');
+        if (!r || r.manual || r.status !== 'failed') throw new HttpError(409, 'refund_not_failed', 'Повторять нечего: возврат не числится неудавшимся');
         await audit(sql, actor, 'refund.retry', 'order', order.id, { refund: r.id });
         await runRefund(sql, providers, r.id);
         return { money: await view(sql, actor, order.id, registry) };
@@ -353,7 +443,7 @@ export function moneyOps() {
       // Сводка для диспетчера и администратора: получено / на счёте до выдачи результата / к выплате / выплачено /
       // возвраты / вознаграждение платформы.
       id: 'money.summary', method: 'GET', path: '/api/money', auth: 'user', access: { platform: 'staff' },
-      async handler({ sql }) {
+      async handler({ sql, registry }) {
         const t = await sql.one`
           select (select coalesce(sum(amount_kop), 0) from payments where status = 'succeeded') as received,
                  (select coalesce(sum(amount_kop), 0) from payouts where status <> 'succeeded') as to_pay,
@@ -379,7 +469,21 @@ export function moneyOps() {
         const manual = await sql`
           select p.*, o.title, u.full_name, u.phone from payouts p join orders o on o.id = p.order_id join users u on u.id = p.executor_user_id
           where p.manual and p.status <> 'succeeded' and p.amount_kop > 0 order by p.created_at`;
+        // Оплата по счёту (2.464): заявки с назначенной ценой ждут поступления (сообщившие «оплатил» — первыми); возвраты
+        // по такой оплате — вручную.
+        const waiting = (await sql`
+          select o.id, o.title, o.module, o.price_kop, o.invoice_claimed_at, o.invoice_claim_note, o.updated_at from orders o
+          where o.status = 'matching' and o.price_kop is not null and o.paid_at is null
+            and not exists (select 1 from payments p where p.order_id = o.id and p.status = 'pending')
+          order by o.invoice_claimed_at nulls last, o.updated_at limit 200`).filter((o) => registry.money(o.module).invoice);
+        const refundsManual = await sql`
+          select r.*, o.title, u.full_name, u.phone from refunds r join orders o on o.id = r.order_id join users u on u.id = o.owner_user_id
+          where r.manual and r.status <> 'succeeded' order by r.created_at`;
         return {
+          invoices: waiting.map((o) => ({ order_id: o.id, order_ref: shortRef(o.id), title: o.title, amount_kop: num(o.price_kop),
+            claimed_at: o.invoice_claimed_at, claim_note: o.invoice_claim_note })),
+          refunds_manual: refundsManual.map((r) => ({ ...refundView(r), order_id: r.order_id, order_ref: shortRef(r.order_id), title: r.title,
+            customer_name: r.full_name, customer_phone: r.phone })),
           totals: {
             received_kop: num(t.received), to_pay_kop: num(t.to_pay), paid_out_kop: num(t.paid_out), commission_kop: num(t.commission),
             refunded_kop: num(t.refunded), to_refund_kop: num(t.to_refund),

@@ -1,3 +1,4 @@
+// Оплата по счёту (2.464): заказчику — счёт и «Я оплатил(а)», диспетчеру — «Оплата поступила» и возврат вручную.
 // Деньги (задачи 1.6 и 1.6а): цена (диспетчер, в подборе), оплата заказчиком при заказе — до передачи исполнителю,
 // выплата исполнителю (80%) при выдаче результата, возврат при отмене, закрывающие документы; раздел «Деньги» — сводка
 // служебным и выплаты специалисту. Тексты — только через textContent.
@@ -57,8 +58,15 @@ export async function loadMoney(current, reload) {
   }
   if (money.commission_kop !== null) facts.push(...fact(onTop ? 'Платформе (20% сверх цены эксперта)' : `Платформе (20%${ofServices})`, rub(money.commission_kop)));
   if (!executorOnly) {
-    const pay = money.paid ? `оплачено ${dayRu(money.paid_at)}`
+    // Оплата по счёту (2.464): «оплачено по счёту», служебным — с пометкой; до поступления — сообщил ли заказчик об оплате.
+    const byInvoice = money.payment?.method === 'invoice';
+    const claimed = money.invoice_claimed_at
+      ? (money.sees.staff ? `заказчик сообщил об оплате ${dayRu(money.invoice_claimed_at)}${money.invoice_claim_note ? ` (${money.invoice_claim_note})` : ''} — проверьте поступление`
+        : `Вы сообщили об оплате ${dayRu(money.invoice_claimed_at)} — диспетчер проверит поступление`) : null;
+    const pay = money.paid ? `оплачено${byInvoice ? ' по счёту' : ''} ${dayRu(money.paid_at)}${byInvoice && money.sees.staff && money.payment.note ? ` (${money.payment.note})` : ''}`
       : money.payment?.status === 'pending' ? PAYMENT_RU.pending
+      : money.pay_invoice && claimed ? claimed
+      : money.pay_invoice ? `нужна оплата ${money.can_pay ? 'картой или по счёту' : 'по счёту'}: после поступления денег заявку передадут эксперту`
       : order.status === 'cancelled' ? 'не оплачено'
       : money.payment ? `${PAYMENT_RU[money.payment.status]} — можно оплатить снова`
       : money.price_kop ? 'нужна оплата: после неё заявку передадут исполнителю' : 'после назначения цены';
@@ -76,7 +84,10 @@ export async function loadMoney(current, reload) {
     facts.push(...fact('Отмена', money.cancel_fault === 'executor' ? 'по вине исполнителя' : `заказчик отказался, сделано ${money.done_percent}% работы`));
   }
   if (money.refund) {
-    facts.push(...fact('Возврат заказчику', `${rub(money.refund.amount_kop)} — ${REFUND_RU[money.refund.status]}${money.refund.failure ? ` (${money.refund.failure})` : ''}`));
+    // Возврат по оплате по счёту (2.464) — вручную: до отметки диспетчера — «ждёт возврата вручную».
+    const rst = money.refund.manual && money.refund.status !== 'succeeded' ? 'ждёт возврата вручную' : REFUND_RU[money.refund.status];
+    const rnote = money.refund.manual && money.refund.manual_note && money.sees.staff ? ` (${money.refund.manual_note})` : '';
+    facts.push(...fact('Возврат заказчику', `${rub(money.refund.amount_kop)} — ${rst}${money.refund.failure && !money.refund.manual ? ` (${money.refund.failure})` : ''}${rnote}`));
   }
   if (money.payout) {
     // Выплата вручную (2.463): до отметки диспетчера — «ждёт выплаты вручную», после — с пометкой.
@@ -119,6 +130,14 @@ export async function loadMoney(current, reload) {
   $('receipt-form').classList.toggle('hidden', !money.can_add_receipt);
   if (money.can_add_receipt) $('receipt-url').value = money.payout.receipt_url ?? '';
   $('refund-retry').classList.toggle('hidden', !money.can_retry_refund);
+  $('refund-mark-form').classList.toggle('hidden', !money.can_mark_refund);
+  if (money.can_mark_refund) $('refund-note').value = '';
+  // Оплата по счёту (2.464): заказчику — как платить и «Я оплатил(а)», диспетчеру — «Оплата поступила».
+  $('invoice-pay').classList.toggle('hidden', !(money.pay_invoice && money.sees.customer));
+  $('invoice-claim-form').classList.toggle('hidden', !money.can_claim_invoice);
+  if (money.can_claim_invoice) $('invoice-claim-note').value = '';
+  $('invoice-mark-form').classList.toggle('hidden', !money.can_mark_paid);
+  if (money.can_mark_paid) $('invoice-mark-note').value = '';
 
   $('closing-title').classList.toggle('hidden', money.documents.length === 0);
   $('closing').replaceChildren(...money.documents.map((d) => el('li', { class: 'doc' },
@@ -129,9 +148,12 @@ export async function loadMoney(current, reload) {
       el('button', { class: 'secondary', 'data-action': 'open-doc', onclick: () => openDoc(d) }, 'Открыть'),
       // Файлом Word (2.46) — для бухгалтерии и архива.
       el('button', { class: 'secondary', 'data-action': 'doc-word', onclick: () => { location.href = `/api/orders/${order.id}/closing/${d.id}`; } }, 'Word')))));
-  // Счёт для бухгалтерии (2.46) — заявке организации, когда цена назначена.
-  const invoice = money.sees.customer && !!money.price_kop && !!order.org_id && order.status !== 'cancelled';
+  // Счёт для бухгалтерии (2.46) — заявке организации, когда цена назначена; при оплате по счёту (2.464) — всем заказчикам.
+  const invoice = money.sees.customer && !!money.price_kop && (!!order.org_id || money.pay_invoice) && order.status !== 'cancelled';
   $('invoice').classList.toggle('hidden', !invoice);
+  $('invoice').textContent = money.pay_invoice ? 'Скачать счёт на оплату (Word)' : 'Счёт для бухгалтерии (Word)';
+  $('invoice').classList.toggle('wide', !!money.pay_invoice && !money.can_pay);
+  $('invoice').classList.toggle('secondary', !(money.pay_invoice && !money.can_pay));
   $('invoice').onclick = () => { location.href = `/api/orders/${order.id}/invoice`; };
   setNext({ money }); // «Что дальше» заказчику: оплатить, акт (2.41)
 }
@@ -219,6 +241,25 @@ $('payout-mark-form').addEventListener('submit', async (e) => {
   } catch (err) { say($('money-msg'), err.message); } finally { $('payout-mark').disabled = false; }
 });
 
+// Оплата по счёту (2.464): отправка формы — одна операция, после неё карточка перечитывается.
+function moneyForm(form, button, run, done) {
+  $(form).addEventListener('submit', async (e) => {
+    e.preventDefault();
+    $(button).disabled = true;
+    try {
+      await run();
+      await loadMoney({ order: ctx.order }, ctx.reload);
+      say($('money-msg'), done, 'ok');
+    } catch (err) { say($('money-msg'), err.message); } finally { $(button).disabled = false; }
+  });
+}
+moneyForm('invoice-claim-form', 'invoice-claim', () => api('POST', `/api/orders/${ctx.order.id}/payments/claim`, { note: $('invoice-claim-note').value.trim() }),
+  'Спасибо — диспетчер проверит поступление и отметит оплату');
+moneyForm('invoice-mark-form', 'invoice-mark', () => api('POST', `/api/orders/${ctx.order.id}/payments/invoice`, { note: $('invoice-mark-note').value.trim() }),
+  'Оплата отмечена');
+moneyForm('refund-mark-form', 'refund-mark', () => api('POST', `/api/orders/${ctx.order.id}/refund/paid`, { note: $('refund-note').value.trim() }),
+  'Возврат отмечен');
+
 $('price-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   $('price-save').disabled = true;
@@ -277,9 +318,13 @@ export async function showMoney() {
   show('money-view', 'money');
   $('money-payments-box').classList.toggle('hidden', !staff);
   $('money-manual-box').classList.add('hidden');
+  $('money-invoices-box').classList.add('hidden');
+  $('money-refunds-box').classList.add('hidden');
   if (staff) {
-    const { totals, payments, payouts, manual, manual_kop: manualKop } = await api('GET', '/api/money');
+    const { totals, payments, payouts, manual, manual_kop: manualKop, invoices, refunds_manual: refundsManual } = await api('GET', '/api/money');
     renderManual(manual, manualKop);
+    renderInvoices(invoices ?? []);
+    renderRefunds(refundsManual ?? []);
     $('money-title').textContent = 'Деньги платформы';
     $('money-totals').replaceChildren(
       ...fact('Получено от заказчиков', rub(totals.received_kop), 'money-sum'),
@@ -297,7 +342,7 @@ export async function showMoney() {
     $('money-payments').replaceChildren(...payments.map((p) => el('li', {},
       el('button', { class: 'open', onclick: openOrder(p.order_id) },
         el('div', { class: 'title', text: p.title }),
-        el('div', { class: 'muted', text: `${rub(p.amount_kop)} · ${dayRu(p.paid_at)}` })))));
+        el('div', { class: 'muted', text: [rub(p.amount_kop), dayRu(p.paid_at), p.method === 'invoice' ? 'по счёту' : null, p.note].filter(Boolean).join(' · ') })))));
     $('money-payments-empty').classList.toggle('hidden', payments.length > 0);
     $('money-payouts-title').textContent = 'Выплаты исполнителям';
     renderPayouts(payouts, true);
@@ -329,6 +374,50 @@ function renderManual(rows, sumKop) {
         say($('money-manual-msg'), 'Выплата отмечена', 'ok');
       } catch (err) { say($('money-manual-msg'), err.message); e.target.disabled = false; }
     } }, 'Выплачено'))));
+}
+
+const plural = (n, one, few, many) => (n % 10 === 1 && n % 100 !== 11 ? one : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? few : many);
+
+// Ждут оплаты по счёту (2.464): заявки с назначенной ценой; сообщившие «оплатил» — первыми. «Оплата поступила» — отметка без
+// пометки; с пометкой — в карточке заявки.
+function renderInvoices(rows) {
+  say($('money-invoices-msg'), '');
+  $('money-invoices-box').classList.toggle('hidden', rows.length === 0);
+  const claimed = rows.filter((r) => r.claimed_at).length;
+  $('money-invoices-sum').textContent = `${rows.length} ${plural(rows.length, 'заявка', 'заявки', 'заявок')}${claimed ? `, ${claimed} — заказчик сообщил об оплате` : ''}. Проверьте поступление на счёт и отметьте.`;
+  $('money-invoices').replaceChildren(...rows.map((r) => el('li', { class: `invoice-wait${r.claimed_at ? ' claimed' : ''}` },
+    el('button', { class: 'open', onclick: openOrder(r.order_id) },
+      el('div', { class: 'title', text: `${r.title} — ${rub(r.amount_kop)}` }),
+      el('div', { class: `muted${r.claimed_at ? ' ok' : ''}`, text: [`заявка ${r.order_ref}`, `счёт СЧ-${r.order_ref.replace('№ ', '')}`,
+        r.claimed_at ? `заказчик: «оплатил» ${dayRu(r.claimed_at)}` : 'заказчик об оплате не сообщал', r.claim_note].filter(Boolean).join(' · ') })),
+    el('button', { class: 'secondary', 'data-action': 'invoice-paid', onclick: async (e) => {
+      e.target.disabled = true;
+      try {
+        await api('POST', `/api/orders/${r.order_id}/payments/invoice`, {});
+        await showMoney();
+        say($('money-invoices-msg'), 'Оплата отмечена', 'ok');
+      } catch (err) { say($('money-invoices-msg'), err.message); e.target.disabled = false; }
+    } }, 'Оплата поступила'))));
+}
+
+// Вернуть вручную (2.464): возвраты по заявкам, оплаченным по счёту, — заказчик, телефон, сумма.
+function renderRefunds(rows) {
+  say($('money-refunds-msg'), '');
+  $('money-refunds-box').classList.toggle('hidden', rows.length === 0);
+  const sum = rows.reduce((a, r) => a + r.amount_kop, 0);
+  $('money-refunds-sum').textContent = `${rows.length} ${plural(rows.length, 'возврат', 'возврата', 'возвратов')} на ${rub(sum)} — верните заказчикам и отметьте.`;
+  $('money-refunds').replaceChildren(...rows.map((r) => el('li', { class: 'manual-refund' },
+    el('button', { class: 'open', onclick: openOrder(r.order_id) },
+      el('div', { class: 'title', text: `${r.customer_name || 'Заказчик'} — ${rub(r.amount_kop)}` }),
+      el('div', { class: 'muted', text: [r.customer_phone, `заявка ${r.order_ref}`, r.title, `с ${dayRu(r.created_at)}`].filter(Boolean).join(' · ') })),
+    el('button', { class: 'secondary', 'data-action': 'refund-paid', onclick: async (e) => {
+      e.target.disabled = true;
+      try {
+        await api('POST', `/api/orders/${r.order_id}/refund/paid`, {});
+        await showMoney();
+        say($('money-refunds-msg'), 'Возврат отмечен', 'ok');
+      } catch (err) { say($('money-refunds-msg'), err.message); e.target.disabled = false; }
+    } }, 'Возвращено'))));
 }
 
 function renderPayouts(payouts, staff) {

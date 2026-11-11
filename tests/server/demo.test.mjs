@@ -12,7 +12,7 @@ const KEY = 'demo-stage-login-key-0123456789abcdef';
 const ADMIN = '+79990009500';
 let S;
 before(async () => {
-  S = await startApp({ STAGE_LOGIN_KEY: KEY, AUTH_RATE_MAX: '500' });
+  S = await startApp({ STAGE_LOGIN_KEY: KEY, AUTH_RATE_MAX: '500', CARD_PAY: '0' });
   await grantRole(S.sql, ADMIN, 'admin');
 });
 after(async () => { await S?.close(); });
