@@ -1858,6 +1858,24 @@ test('вызов эксперта в суд (2.441): смотрят сторон
   assert.equal((await U.admin.req('POST', base, call)).status, 403, 'администратор только смотрит');
 });
 
+test('извещение об осмотре (2.470): чужим — «не найдено», сторонам заявки не по ДТП — блока нет', async () => {
+  for (const id of ['notices.list', 'notices.add', 'notices.mark', 'notices.delete', 'notices.doc']) cover(id);
+  // Подробно — tests/server/notice.test.mjs; здесь — чужие и стороны заявки другой услуги.
+  const base = `/api/orders/${ownOrder.id}/notices`;
+  const body = { party: 'insurer', name: 'Страховая', date: '2099-01-01', time: '10:00', place: 'Москва' };
+  for (const who of ['stranger', 'headA', 'headB', 'spec']) {
+    assert.equal((await U[who].req('GET', base)).status, 404, `${who}: смотреть`);
+    assert.equal((await U[who].req('POST', base, body)).status, 404, `${who}: записать`);
+    assert.equal((await U[who].req('PUT', `${base}/1/mark`, { how: 'telegram', sent_on: '2026-01-01' })).status, 404, `${who}: отметить`);
+    assert.equal((await U[who].req('DELETE', `${base}/1`)).status, 404, `${who}: удалить`);
+    assert.equal((await U[who].req('GET', `${base}/1/doc`)).status, 404, `${who}: Word`);
+  }
+  for (const who of ['owner', 'dispatcher', 'admin']) {
+    assert.deepEqual((await U[who].req('GET', base)).body, { available: false }, who);
+    assert.equal((await U[who].req('POST', base, body)).status, 409, `${who}: не ДТП`);
+  }
+});
+
 test('повторная оценка того же объекта (2.118): брать из своего прошлого дела — только исполнитель дела', async () => {
   for (const id of ['orders.repeat', 'orders.repeat.take']) cover(id);
   // Подробно — tests/server/repeat.test.mjs; здесь — чужие и стороны заявки без исполнителя.
