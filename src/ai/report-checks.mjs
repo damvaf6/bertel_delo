@@ -3242,8 +3242,113 @@ function partsMatch(docs, ctx) {
   return out;
 }
 
+// ——— 2.473: ущерб после ДТП — цены на дату ДТП из заявки и методика по цели («Как считать ремонт» в заявке) ———
+// Дата ДТП в отчёте («дата ДТП», «ДТП от …», «ДТП, произошедшего …») — как в заявке; даты цен («цены на …», «по состоянию
+// на …», «на дату ДТП …») — тоже дата ДТП; в отчёте нет ни даты ДТП из заявки, ни «на дату ДТП» — находка. Методика: ОСАГО —
+// Единая методика (755-П; прежняя 432-П — для ДТП до 20.09.2021), суд и к виновнику — рекомендации РФЦСЭ 2018; методика
+// не названа — находка. «Не знаю» — только «не названа». Находки — в пункте «Стоимость ремонта».
+const ACC_AT = /(?<![а-яё])(?:дат\S*\s+(?:ДТП|дорожно-транспортного\s+происшестви\S*)|ДТП,?\s+(?:от|произошедш\S*|случивш\S*|имевш\S*\s+место))(?![^\n]{0,15}стоимост)/giu;
+const PRICE_AT = /(?<![а-яё])(?:цен\S*|стоимост\S*\s+(?:запасн\S*\s+част\S*|нормо-?час\S*|материал\S*))[^\d\n]{0,120}?(?:на\s+дату(?:\s+ДТП)?|по\s+состоянию\s+на|(?<![а-яё])на)(?=\s*[«"]?\d)/giu;
+const PRICE_SKIP = /курс|индекс|инфляц|кадастров|аналог|объявлени|договор\S*\s+купли/iu;
+const AT_ACC_DATE = /на\s+дату\s+(?:ДТП|дорожно-транспортного\s+происшестви)/iu;
+const UNIFIED = /единой\s+методик|единая\s+методик|755-П|432-П/iu;
+const OLD_UNIFIED = /432-П/iu;
+const NEW_UNIFIED = /755-П/iu;
+const RFCSE = /РФЦСЭ|методическ\S*\s+рекомендаци[^\n]{0,200}?2018|Минюст[^\n]{0,60}?2018/iu;
+const UNIFIED_NEW_FROM = '2021-09-20';
+const METHOD_NAMES = {
+  osago: 'Единая методика (Положение Банка России № 755-П)',
+  market: 'Методические рекомендации ФБУ РФЦСЭ при Минюсте России (2018)',
+};
+const METHOD_BY = {
+  osago: 'по Единой методике (Положение Банка России № 755-П)',
+  market: 'по Методическим рекомендациям ФБУ РФЦСЭ при Минюсте России (2018)',
+};
+function accidentDay(v) {
+  const m = String(v ?? '').trim().match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  return m ? ymd(m[3], m[2], m[1]) : null;
+}
+function datesAt(docs, re, skip) {
+  const out = [];
+  for (const doc of docs) eachPage(doc, (raw, i) => {
+    const page = unquote(raw);
+    for (const m of page.matchAll(re)) {
+      const line = lineAround(page, m.index);
+      if (skip && skip.test(line)) continue;
+      const on = dateAfter(page.slice(m.index + m[0].length), '^');
+      if (on && !out.some((x) => x.page === i && x.doc === doc && x.value === on)) out.push({ doc, page: i, value: on, quote: lineAround(raw, m.index) });
+    }
+  });
+  return out;
+}
+function hasDay(text, day) {
+  const [y, mo, d] = day.split('-');
+  const num = new RegExp(`(?<!\\d)0?${Number(d)}\\.0?${Number(mo)}\\.${y}(?!\\d)`);
+  const word = new RegExp(`(?<!\\d)0?${Number(d)}\\s+${MONTHS_OF[Number(mo) - 1]}\\s+${y}`, 'iu');
+  return num.test(text) || word.test(text);
+}
+function firstLine(docs, re) {
+  for (const doc of docs) for (const [i, page] of (doc.pages ?? []).entries()) {
+    const m = page.match(re);
+    if (m) return { doc, page: i, quote: lineAround(page, m.index) };
+  }
+  return null;
+}
+function repairBasis(docs, ctx) {
+  if (!docs.length || ctx.service !== 'car_damage') return [];
+  const out = [];
+  const main = mainReport(docs) ?? docs[0];
+  const first = { doc: main, page: 0, quote: '' };
+  const text = docs.map((d) => (d.pages ?? []).join('\n')).join('\n');
+  const acc = accidentDay(ctx.fields?.accident_date);
+  if (acc) {
+    const named = datesAt(docs, ACC_AT);
+    for (const e of named) {
+      if (e.value === acc) continue;
+      out.push({ doc: e.doc, page: e.page, quote: e.quote, fix: { bad: ruDate(e.value), right: ruDate(acc), from: 'в заявке' },
+        text: `Дата ДТП в отчёте ${ruDate(e.value)}, а в заявке — ${ruDate(acc)}: исправьте отчёт или попросите заказчика уточнить дату по документам ГИБДД` });
+    }
+    const prices = datesAt(docs, PRICE_AT, PRICE_SKIP);
+    for (const e of prices) {
+      if (e.value === acc || out.some((x) => x.doc === e.doc && x.page === e.page && x.quote === e.quote)) continue;
+      out.push({ doc: e.doc, page: e.page, quote: e.quote, fix: { bad: ruDate(e.value), right: ruDate(acc), from: 'в заявке' },
+        text: `Цены в расчёте взяты на ${ruDate(e.value)}, а ДТП было ${ruDate(acc)} (дата из заявки) — по обеим методикам стоимость ремонта считается в ценах на дату ДТП` });
+    }
+    if (!hasDay(text, acc) && !named.length) {
+      out.push({ ...first, text: `Дата ДТП из заявки (${ruDate(acc)}) в отчёте не найдена — укажите её в разделе об объекте и обстоятельствах ДТП и напишите, что цены взяты на эту дату` });
+    } else if (!prices.length && !AT_ACC_DATE.test(text)) {
+      out.push({ ...(firstLine(docs, /методик|калькуляци|расч[её]т\S*\s+стоимост/iu) ?? first),
+        text: 'В отчёте не сказано, на какую дату взяты цены на запчасти, работы и материалы — напишите «цены на дату ДТП» с датой' });
+    }
+  }
+  const method = ctx.fields?.method;
+  const unified = UNIFIED.test(text);
+  const rfcse = RFCSE.test(text);
+  if (method === 'osago') {
+    if (!unified) {
+      out.push({ ...(firstLine(docs, RFCSE) ?? firstLine(docs, /методик/iu) ?? first),
+        text: `В заявке — спор со страховой по ОСАГО, а Единая методика в отчёте не названа${rfcse ? ' (названы рекомендации РФЦСЭ 2018 — по ним считают для суда и к виновнику)' : ''}: для ОСАГО расчёт — ${METHOD_BY.osago}, с номером эксперта-техника в госреестре` });
+    } else if (OLD_UNIFIED.test(text) && !NEW_UNIFIED.test(text) && acc && acc >= UNIFIED_NEW_FROM) {
+      out.push({ ...firstLine(docs, OLD_UNIFIED),
+        text: `В отчёте — Положение № 432-П, а ДТП было ${ruDate(acc)}: для ДТП с 20.09.2021 действует Единая методика по Положению Банка России № 755-П` });
+    }
+  } else if (method === 'market') {
+    if (!rfcse) {
+      out.push({ ...(unified ? firstLine(docs, UNIFIED) : (firstLine(docs, /методик/iu) ?? first)),
+        text: unified
+          ? 'В заявке — расчёт по рыночным ценам (для суда или к виновнику), а в отчёте названа Единая методика ОСАГО: для суда и к виновнику расчёт — по Методическим рекомендациям ФБУ РФЦСЭ (2018), по рыночным ценам без справочников РСА'
+          : `Методика расчёта в отчёте не названа: для суда и к виновнику расчёт — ${METHOD_BY.market}` });
+    }
+  } else if (!unified && !rfcse) {
+    out.push({ ...(firstLine(docs, /методик/iu) ?? first),
+      text: `Методика расчёта в отчёте не названа — для суда и к виновнику: ${METHOD_NAMES.market}; для спора по ОСАГО: ${METHOD_NAMES.osago}` });
+  }
+  return out;
+}
+
 const WHOLE = {
   parts_match: partsMatch,
+  repair_basis: repairBasis,
   questions_answered: questionsAnswered,
   dossier_appraiser: dossierFindings(['certificate', 'sro', 'policy', 'policy_org']),
   dossier_education: dossierFindings(['education']),
@@ -3342,6 +3447,7 @@ export const AUTO_CHECKS = Object.freeze({
   bank_user: 'при оценке для банка предполагаемый пользователь результатов оценки в отчёте — банк из заявки (Сбербанк) или из задания на оценку',
   bank_accredited: 'при оценке для банка эксперт или его организация аккредитованы в этом банке на дату отчёта',
   parts_match: 'ущерб после ДТП: у каждой детали из таблицы повреждённых деталей дела есть фото осмотра и строка в калькуляции ремонта; каждая деталь из заявки «Что повреждено» есть в исследовании повреждений',
+  repair_basis: 'ущерб после ДТП: дата ДТП и цены в расчёте — на дату ДТП из заявки; методика по цели из заявки: ОСАГО — Единая методика (755-П), суд и к виновнику — Методические рекомендации РФЦСЭ (2018)',
 });
 
 export function runAutoChecks(names, docs, ctx = {}) {
