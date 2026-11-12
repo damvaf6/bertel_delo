@@ -40,7 +40,7 @@ function draw(v) {
     : (v.our_parts ? '' : 'В таблице повреждённых деталей пока пусто — все детали страховой считаются исключёнными, пока Вы их не запишете.');
   $('insurer-lead').classList.toggle('hidden', !$('insurer-lead').textContent);
   $('insurer-line').classList.toggle('hidden', !v.line);
-  $('insurer-line').textContent = v.line ?? '';
+  $('insurer-line').textContent = (v.line ?? '').replace(/(\d) (?=\d)/g, '$1\u00a0').replace(/ руб\./g, '\u00a0руб.'); // число не рвётся на строки
   const rows = v.compare?.rows ?? [];
   $('insurer-list').replaceChildren(...rows.map((r) => el('li', { 'data-kind': r.kind },
     el('strong', {}, r.part),
