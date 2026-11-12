@@ -39,8 +39,9 @@ export const dayWords = (iso) => new Date(`${iso}T12:00:00Z`)
 // документов (src/ops/docreq-ops.mjs), moved — последний согласованный перенос срока, пока он в силе (2.178):
 // { from, to } — даты 'YYYY-MM-DD'; заказчик и так видит перенос в своей заявке. silent — заказчик 2 дня и дольше не отвечает
 // на сообщение эксперта (2.375, src/orders/silence.mjs): { at, body } — тогда первой фразой «Напомнить о вопросе».
-// deadline — срок дела 'YYYY-MM-DD': «пришлите до …» с запасом до него (2.387).
-export function messagePhrases({ def, fields = {}, openDocs = [], moved = null, silent = null, deadline = null, now = new Date() }) {
+// deadline — срок дела 'YYYY-MM-DD': «пришлите до …» с запасом до него (2.387). docItems — пункты запроса документов по
+// списку услуги (2.477): { id пункта: 'open' | 'got' } — для готовых фраз модуля (phrases): получено — фразы нет.
+export function messagePhrases({ def, fields = {}, openDocs = [], moved = null, silent = null, deadline = null, docItems = {}, now = new Date() }) {
   const subject = def?.service.subject ?? 'object';
   const n = NOUN[subject] ?? NOUN.object;
   const due = dayWords(docsDueIso(now, deadline));
@@ -84,6 +85,8 @@ export function messagePhrases({ def, fields = {}, openDocs = [], moved = null, 
         + 'Если какого-то документа нет — напишите.',
   });
 
+  out.push(...servicePhrases({ def, fields, docItems, due }));
+
   if (moved) {
     out.push({
       id: 'deadline', title: 'Срок перенесён',
@@ -104,4 +107,27 @@ export function remindPhrase({ at, body }) {
     text: `Здравствуйте! Напоминаю о своём сообщении от ${day}: «${short}». Ответьте, пожалуйста, здесь, когда будет `
       + 'возможность, — без ответа работа по делу может задержаться.',
   };
+}
+
+// Готовые фразы модуля для этой услуги (2.477, phrases в описании модуля): по ДТП — документы ГИБДД, европротокол, акт и
+// расчёт страховой, заказ-наряд. Документ уже получен по запросу — фразы нет; запрошен — «к пункту … в деле»;
+// поле заявки заполнено — «В заявке указано: …» (только то, что заказчик сам написал в заявке).
+export function servicePhrases({ def, fields = {}, docItems = {}, due }) {
+  const sid = def?.service.id;
+  const list = (def?.module.phrases ?? []).filter((p) => p.services.includes(sid));
+  const out = [];
+  for (const p of list) {
+    if (p.doc && docItems[p.doc] === 'got') continue;
+    let text = p.text.replaceAll('{due}', due);
+    const value = p.field ? String(fields[p.field] ?? '').replace(/\s+/g, ' ').trim() : '';
+    if (value) text += ` В заявке указано: «${value.length > 150 ? `${value.slice(0, 149)}…` : value}».`;
+    if (p.doc && docItems[p.doc] === 'open') {
+      const title = def.module.request_docs?.find((d) => d.id === p.doc)?.title;
+      if (title) text += ` Приложить можно в деле, к пункту «${title}» списка «Запрошенные документы».`;
+    } else {
+      text += ' Приложить можно в деле или ответом здесь.';
+    }
+    out.push({ id: p.id, title: p.title, text });
+  }
+  return out;
 }

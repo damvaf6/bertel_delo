@@ -166,7 +166,7 @@ function validateField(f, where) {
 }
 
 export function validateModule(m) {
-  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express', 'signature', 'analogs', 'approaches', 'request_docs', 'repeat', 'executors', 'certificate', 'steps', 'proofread', 'remarks', 'court', 'offer', 'money', 'review', 'notice', 'parts'], 'модуль');
+  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express', 'signature', 'analogs', 'approaches', 'request_docs', 'repeat', 'executors', 'certificate', 'steps', 'proofread', 'remarks', 'court', 'offer', 'money', 'review', 'notice', 'parts', 'phrases'], 'модуль');
   if (!ID_RE.test(m.id ?? '')) fail('модуль', `неверный id «${m.id}»`);
   const at = `модуль ${m.id}`;
   if (!nonEmpty(m.name)) fail(at, 'нет названия');
@@ -467,6 +467,26 @@ export function validateModule(m) {
       if (!/^[a-z_]{1,20}$/.test(a.id ?? '') || ids.has(a.id)) fail(where, `ремонтное воздействие: id ${a.id} — латиницей и без повторов`);
       if (typeof a.name !== 'string' || !a.name) fail(where, `ремонтное воздействие ${a.id}: нет name`);
       ids.add(a.id);
+    }
+  }
+  // Готовые фразы исполнителя заказчику по услуге (2.477) — необязательно.
+  if (m.phrases !== undefined) {
+    const where = `${at}, готовые фразы`;
+    if (!Array.isArray(m.phrases) || !m.phrases.length) fail(where, 'непустой список');
+    const ids = new Set();
+    for (const p of m.phrases) {
+      onlyKeys(p, ['id', 'title', 'services', 'doc', 'field', 'text'], where);
+      if (!/^[a-z_]{1,30}$/.test(p.id ?? '') || ids.has(p.id)) fail(where, `id ${p.id} — латиницей и без повторов`);
+      ids.add(p.id);
+      if (typeof p.title !== 'string' || !p.title || p.title.length > 40) fail(where, `${p.id}: title — до 40 знаков`);
+      if (typeof p.text !== 'string' || !p.text || p.text.length > 1000) fail(where, `${p.id}: text — до 1000 знаков`);
+      if (!Array.isArray(p.services) || !p.services.length) fail(where, `${p.id}: services — непустой список услуг`);
+      for (const sid of p.services) {
+        const s = m.services.find((x) => x.id === sid);
+        if (!s) fail(where, `${p.id}: нет услуги ${sid}`);
+        if (p.field && ![...common, ...(s.fields ?? [])].some((f) => f.id === p.field)) fail(where, `${p.id}: у услуги ${sid} нет поля ${p.field}`);
+      }
+      if (p.doc && !(m.request_docs ?? []).some((d) => d.id === p.doc)) fail(where, `${p.id}: нет документа ${p.doc} в request_docs`);
     }
   }
   // Вычитка и переделка (2а.7) — необязательно.
