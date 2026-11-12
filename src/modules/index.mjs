@@ -25,6 +25,7 @@
 //       reuse: true — методический раздел (стандарты, допущения, выбор подходов, методика): эксперт может взять его текст
 //       из своего прошлого дела той же услуги (2.65), данные прошлого заказчика и объекта программа вычищает;
 //       notice: true — сюда программа вставляет строку об извещении об осмотре (2.470, src/orders/notices.mjs)
+//       parts: true — сюда программа вставляет таблицу повреждённых деталей (2.471, src/orders/parts.mjs)
 //       sources: true — сюда программа вставляет перечень использованных документов дела (2.95, src/docs/sources.mjs)
 //     approaches?: { services: [id услуги…] }  — исполнитель отмечает, какие подходы к оценке применяет (2.33)
 //     inspection?: [{ id, title, hint?, services?: [id услуги…], optional? }…],  — шаги дистанционного осмотра (2.3)
@@ -59,6 +60,8 @@
 //       исполнителя, учитывается в подборе («качество»); исполнителю и на витрине — позже
 //     notice?: { services, parties: [{ id, name }…], fields, purpose }  — извещение об осмотре (2.470): исполнитель сообщает
 //       сторонам (parties) дату, время и место осмотра — образец Word с полями заявки fields, отметка «извещены, как и когда»
+//     parts?: { services, actions: [{ id, name }…] }  — повреждённые детали таблицей (2.471): деталь, повреждение, ремонтное
+//       воздействие (actions) и фото осмотра; таблица — в раздел черновика с parts: true и в Word
 //     money?: { fee?: 'on_top', payout?: 'manual' }  — деньги модуля (2.463): fee 'on_top' — диспетчер назначает цену
 //       исполнителя, заказчик платит её плюс вознаграждение платформы (20% сверх, ×1,2), исполнитель получает 100% своей цены;
 //       без него — прежнее 80/20 из цены заказчика; payout 'manual' — выплата исполнителю вручную, списком: отметку
@@ -162,7 +165,7 @@ function validateField(f, where) {
 }
 
 export function validateModule(m) {
-  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express', 'signature', 'analogs', 'approaches', 'request_docs', 'repeat', 'executors', 'certificate', 'steps', 'proofread', 'remarks', 'court', 'offer', 'money', 'review', 'notice'], 'модуль');
+  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express', 'signature', 'analogs', 'approaches', 'request_docs', 'repeat', 'executors', 'certificate', 'steps', 'proofread', 'remarks', 'court', 'offer', 'money', 'review', 'notice', 'parts'], 'модуль');
   if (!ID_RE.test(m.id ?? '')) fail('модуль', `неверный id «${m.id}»`);
   const at = `модуль ${m.id}`;
   if (!nonEmpty(m.name)) fail(at, 'нет названия');
@@ -223,8 +226,9 @@ export function validateModule(m) {
     checkIds(m.draft, `${at}, разделы черновика`);
     for (const d of m.draft) {
       const where = `${at}, раздел черновика ${d.id}`;
-      onlyKeys(d, ['id', 'title', 'services', 'ask', 'dossier', 'table', 'approach', 'reuse', 'sources', 'notice'], where);
+      onlyKeys(d, ['id', 'title', 'services', 'ask', 'dossier', 'table', 'approach', 'reuse', 'sources', 'notice', 'parts'], where);
       if (d.notice !== undefined && d.notice !== true) fail(where, 'notice — только true');
+      if (d.parts !== undefined && d.parts !== true) fail(where, 'parts — только true');
       if (d.reuse !== undefined && d.reuse !== true) fail(where, 'reuse — только true (методический раздел)');
       if (d.sources !== undefined && d.sources !== true) fail(where, 'sources — только true (перечень использованных документов)');
       if (d.reuse && (d.table || d.dossier || d.sources)) fail(where, 'reuse — не у раздела с таблицей, досье или перечнем: их программа заполняет сама');
@@ -442,6 +446,21 @@ export function validateModule(m) {
     }
     if (typeof n.purpose !== 'string' || !n.purpose) fail(where, 'purpose — для чего осмотр');
   }
+  // Повреждённые детали таблицей (2.471) — необязательно: для каких услуг и какие ремонтные воздействия.
+  if (m.parts !== undefined) {
+    const where = `${at}, повреждённые детали`;
+    onlyKeys(m.parts, ['services', 'actions'], where);
+    if (!Array.isArray(m.parts.services) || !m.parts.services.length) fail(where, 'services — непустой список услуг');
+    for (const id of m.parts.services) if (!m.services.some((s) => s.id === id)) fail(where, `нет услуги ${id}`);
+    if (!Array.isArray(m.parts.actions) || !m.parts.actions.length || m.parts.actions.length > 5) fail(where, 'actions — от 1 до 5 ремонтных воздействий');
+    const ids = new Set();
+    for (const a of m.parts.actions) {
+      onlyKeys(a, ['id', 'name'], where);
+      if (!/^[a-z_]{1,20}$/.test(a.id ?? '') || ids.has(a.id)) fail(where, `ремонтное воздействие: id ${a.id} — латиницей и без повторов`);
+      if (typeof a.name !== 'string' || !a.name) fail(where, `ремонтное воздействие ${a.id}: нет name`);
+      ids.add(a.id);
+    }
+  }
   // Вычитка и переделка (2а.7) — необязательно.
   if (m.proofread !== undefined) {
     const where = `${at}, вычитка`;
@@ -588,7 +607,7 @@ export function createRegistry(modules = DEFAULT_MODULES, { orgCheck = false } =
       return m.draft.filter((d) => (!d.services || d.services.includes(serviceId)) && (!chosen || !d.approach || chosen.includes(d.approach)))
         .map((d) => {
           const title = chosen && /^\d+\.\s/.test(d.title) ? d.title.replace(/^\d+/, String(++n)) : d.title;
-          return { id: d.id, title, ...(d.ask ? { ask: d.ask } : {}), ...(d.dossier ? { dossier: d.dossier } : {}), ...(d.table ? { table: d.table } : {}), ...(d.approach ? { approach: d.approach } : {}), ...(d.reuse ? { reuse: true } : {}), ...(d.sources ? { sources: true } : {}), ...(d.notice ? { notice: true } : {}) };
+          return { id: d.id, title, ...(d.ask ? { ask: d.ask } : {}), ...(d.dossier ? { dossier: d.dossier } : {}), ...(d.table ? { table: d.table } : {}), ...(d.approach ? { approach: d.approach } : {}), ...(d.reuse ? { reuse: true } : {}), ...(d.sources ? { sources: true } : {}), ...(d.notice ? { notice: true } : {}), ...(d.parts ? { parts: true } : {}) };
         });
     },
     // Выбирает ли исполнитель подходы к оценке для услуги (2.33).
@@ -696,6 +715,11 @@ export function createRegistry(modules = DEFAULT_MODULES, { orgCheck = false } =
     notice(moduleId, serviceId) {
       const n = modulesList.find((x) => x.id === moduleId)?.notice;
       return n && n.services.includes(serviceId) ? { parties: n.parties, fields: n.fields, purpose: n.purpose } : null;
+    },
+    // Повреждённые детали таблицей (2.471) для услуги: { actions } или null.
+    parts(moduleId, serviceId) {
+      const p = modulesList.find((x) => x.id === moduleId)?.parts;
+      return p && p.services.includes(serviceId) ? { actions: p.actions } : null;
     },
     // Отзыв заказчика 1–5 после выдачи (2.467): есть ли у модуля.
     review(moduleId) {
