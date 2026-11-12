@@ -3,7 +3,7 @@
 // списком «Выплатить вручную», отметку «выплачено» ставит диспетчер. Переводы — по-прежнему 80/20 из цены заказчика.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, login, setPlatformRole, makeSpecialist, signResults } from '../helpers.mjs';
+import { startApp, login, setPlatformRole, makeSpecialist, signResults, makeOrg, addMember } from '../helpers.mjs';
 import { priceOnTop, splitAmount } from '../../src/money/money.mjs';
 import { createRegistry, validateModule } from '../../src/modules/index.mjs';
 import expertise from '../../src/modules/expertise.mjs';
@@ -107,4 +107,25 @@ test('отказ заказчика после начала работ: эксп
   assert.deepEqual([Number(p.amount_kop), Number(p.commission_kop), p.status, p.manual], [400_000, 80_000, 'pending', true]);
   const [r] = await S.sql`select amount_kop from refunds where order_id = ${o.id}`;
   assert.equal(Number(r.amount_kop), 720_000, 'из 12 000 ₽ — 4 800 ₽ за сделанную часть, 7 200 ₽ заказчику');
+});
+
+// Ночной прогон 12.11.2026: у руководителя организации в «Делах экспертов» вознаграждение считалось как 80% цены заказчика
+// (19 200 ₽ → 15 360 ₽), потому что выборка дел не брала цену эксперта. Теперь — цена эксперта целиком, и в «Ждёт выдачи».
+test('дела экспертов у руководителя: вознаграждение и «ждёт выдачи» — цена эксперта, а не 80% цены заказчика', async () => {
+  const head = await login(S, '+79990000654');
+  const org = await makeOrg(S.sql, 'Бюро сверх цены');
+  await addMember(S.sql, org.id, head.user.id, 'head');
+  await addMember(S.sql, org.id, spec.user.id, 'member');
+  await S.sql`update specialists set org_id = ${org.id} where user_id = ${spec.user.id}`;
+  try {
+    const before = (await head.req('GET', `/api/orgs/${org.id}/cases`)).body.money.waiting_kop;
+    const o = await paidInWork('16000');
+    const r = await head.req('GET', `/api/orgs/${org.id}/cases`);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    const c = r.body.cases.find((x) => x.id === o.id);
+    assert.equal(c.fee_kop, 1_600_000, 'вознаграждение — вся цена эксперта');
+    assert.equal(r.body.money.waiting_kop - before, 1_600_000, '«Ждёт выдачи» выросло на цену эксперта, а не на 80% цены заказчика');
+  } finally {
+    await S.sql`update specialists set org_id = null where user_id = ${spec.user.id}`;
+  }
 });

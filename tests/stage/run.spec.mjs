@@ -384,14 +384,17 @@ test('общий прогон: сквозной путь экспертизы �
   await note.getByRole('button').click();
   await expect(dp.locator('#order-title')).toHaveText(title);
   await expect(dp.locator('#facts')).toContainText('г. Москва, ул. Тестовая, д. 11, кв. 4');
-  await dp.getByLabel('Цена, рублей').fill('18000');
+  await dp.getByLabel('Цена эксперта, рублей').fill('18000');
   await dp.getByRole('button', { name: 'Назначить цену' }).click();
   await expect(dp.locator('#money-msg')).toHaveText('Цена назначена');
-  await expect(dp.locator('#money-facts')).toContainText(/Исполнителю \(80%\)\s*14\s400 ₽/);
+  // Экспертиза (2.463): диспетчер ставит цену эксперта, заказчик платит её и 20% платформе сверх неё.
+  await expect(dp.locator('#money-facts')).toContainText(/Эксперту \(его цена, 100%\)\s*18\s000 ₽/);
+  await expect(dp.locator('#money-facts')).toContainText(/Цена\s*21\s600 ₽/);
 
-  // 4. Заказчик оплачивает (поддельная ЮKassa — на площадке только тестовые данные).
+  // 4. Заказчик оплачивает картой (поддельная ЮKassa — на площадке оплата картой включена и только тестовые данные;
+  // на боевом сайте «Экспертиза» — по счёту до подключения ЮKassa, 2.464).
   await page.reload();
-  await page.getByRole('button', { name: /Оплатить 18\s000 ₽/ }).click();
+  await page.getByRole('button', { name: /Оплатить 21\s600 ₽/ }).click();
   await expect(page.locator('#money-facts')).toContainText('оплачено');
   await shot(page, '11-oplata');
 
@@ -409,7 +412,7 @@ test('общий прогон: сквозной путь экспертизы �
   await sp.goto('/kabinet#notifications');
   await sp.locator('#notifications li').filter({ hasText: 'Вам предложено новое дело' }).getByRole('button').click();
   await expect(sp.locator('#order-title')).toHaveText(title);
-  await expect(sp.locator('#money-facts')).toContainText(/Ваше вознаграждение \(80% цены\)\s*14\s400 ₽/);
+  await expect(sp.locator('#money-facts')).toContainText(/Ваша цена \(100%\)\s*18\s000 ₽/);
   await sp.getByRole('button', { name: 'Принять дело' }).click();
   await expect(sp.locator('#order-status')).toHaveText('В работе');
   // Дистанционный осмотр (задача 2.3): ссылка владельцу; владелец без входа снимает фасад с геометкой и нажимает «Готово».
@@ -616,13 +619,18 @@ test('общий прогон: сквозной путь экспертизы �
   await page.getByRole('button', { name: 'Принять и закрыть' }).click();
   await expect(page.locator('#order-status')).toHaveText('Закрыта');
 
-  // 9. Исполнитель получил выплату; диспетчер видит оплату; посторонний по-прежнему ничего не видит.
+  // 9. Выплата эксперту вручную (2.463): диспетчер в «Деньгах» → «Выплатить вручную» отмечает «Выплачено»; эксперт
+  // видит выплату всей своей цены; диспетчер видит оплату; посторонний по-прежнему ничего не видит.
+  await dp.goto('/kabinet#money');
+  await expect(dp.locator('#money-payments li').filter({ hasText: title })).toContainText(/21\s600 ₽/);
+  const manualRow = dp.locator('#money-manual li').filter({ hasText: specName });
+  await expect(manualRow).toContainText(/18\s000 ₽/);
+  await manualRow.getByRole('button', { name: 'Выплачено' }).click();
+  await expect(dp.locator('#money-manual-msg')).toHaveText('Выплата отмечена');
   await sp.goto('/kabinet#money');
   await expect(sp.locator('#money-payouts li').filter({ hasText: title })).toContainText('выплачено');
-  await expect(sp.locator('#money-totals')).toContainText(/Выплачено\s*14\s400 ₽/);
+  await expect(sp.locator('#money-totals')).toContainText(/Выплачено\s*18\s000 ₽/);
   await shot(sp, '16-vyplata');
-  await dp.goto('/kabinet#money');
-  await expect(dp.locator('#money-payments li').filter({ hasText: title })).toContainText(/18\s000 ₽/);
   await xp.goto(`/kabinet#order=${id}`);
   await expect(xp.getByRole('heading', { name: 'Заявка не найдена' })).toBeVisible();
   expect((await xp.request.get(`/api/orders/${id}/documents`, { headers: AUTH })).status()).toBe(404);
@@ -658,7 +666,7 @@ test('общий прогон: деньги при отмене — переда
   expect((await page.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: hp })).status()).toBe(200);
   expect((await dp.request.put(`/api/orders/${id}/price`, { data: { price: '10000' }, headers: hp })).status()).toBe(200);
   await page.goto(`/kabinet#order=${id}`);
-  await page.getByRole('button', { name: /Оплатить 10\s000 ₽/ }).click();
+  await page.getByRole('button', { name: /Оплатить 12\s000 ₽/ }).click(); // цена эксперта 10 000 ₽ и 20% сверх неё
   await expect(page.locator('#money-facts')).toContainText('оплачено');
   const offerAndAccept = async () => {
     expect((await dp.request.post(`/api/orders/${id}/offer`, { data: { specialist_id: spec.id, from: 'matching' }, headers: hp })).status()).toBe(200);
@@ -676,7 +684,8 @@ test('общий прогон: деньги при отмене — переда
   await sp.goto(`/kabinet#order=${id}`);
   await expect(sp.getByRole('heading', { name: 'Заявка не найдена' })).toBeVisible();
 
-  // Снова в работе; заказчик отказался — сделано 40%: исполнителю 3 200 ₽, заказчику возврат 6 000 ₽.
+  // Снова в работе; заказчик отказался — сделано 40% из оплаченных 12 000 ₽: эксперту 40% его цены — 4 000 ₽ (вручную,
+  // 2.463), заказчику возврат 7 200 ₽ (оплата картой — возврат сам).
   await offerAndAccept();
   await dp.reload();
   await expect(dp.locator('#order-status')).toHaveText('В работе');
@@ -686,21 +695,21 @@ test('общий прогон: деньги при отмене — переда
   await dp.getByLabel('Сделано работы, %').fill('40');
   await dp.getByRole('button', { name: 'Отменить заявку' }).click();
   await expect(dp.locator('#order-status')).toHaveText('Отменена');
-  await expect(dp.locator('#money-facts')).toContainText(/Возврат заказчику\s*6\s000 ₽ — возвращено/);
-  await expect(dp.locator('#money-facts')).toContainText(/Выплата исполнителю\s*3\s200 ₽ — выплачено/);
+  await expect(dp.locator('#money-facts')).toContainText(/Возврат заказчику\s*7\s200 ₽ — возвращено/);
+  await expect(dp.locator('#money-facts')).toContainText(/Выплата исполнителю\s*4\s000 ₽ — ждёт выплаты вручную/);
   await shot(dp, '17-otmena-chast');
 
   await page.reload();
   await expect(page.locator('#order-status')).toHaveText('Отменена');
-  await expect(page.locator('#money-facts')).toContainText(/Возврат заказчику\s*6\s000 ₽ — возвращено/);
+  await expect(page.locator('#money-facts')).toContainText(/Возврат заказчику\s*7\s200 ₽ — возвращено/);
   await expect(page.locator('#money-facts')).not.toContainText('Выплата исполнителю');
   await page.locator('#closing li').filter({ hasText: 'Возврат' }).getByRole('button', { name: 'Открыть' }).click();
-  await expect(page.locator('#closing-doc')).toContainText(/Возвращается заказчику: 6\s000 ₽/);
+  await expect(page.locator('#closing-doc')).toContainText(/Возвращается заказчику: 7\s200 ₽/);
   await shot(page, '18-vozvrat');
 
   await sp.reload();
   await expect(sp.locator('#order-status')).toHaveText('Отменена');
-  await expect(sp.locator('#money-facts')).toContainText(/Выплата\s*3\s200 ₽ — выплачено/);
+  await expect(sp.locator('#money-facts')).toContainText(/Выплата\s*4\s000 ₽ — ждёт выплаты вручную/);
   await close(dp);
   await close(sp);
 });
@@ -741,7 +750,7 @@ test('общий прогон: экспресс — выезд помощник�
   await expect(page.locator('#order-status')).toHaveText('Подбор исполнителя');
   expect((await dp.request.put(`/api/orders/${id}/price`, { data: { price: '15000' }, headers: h })).status()).toBe(200);
   await page.reload();
-  await page.getByRole('button', { name: /Оплатить 15\s000 ₽/ }).click();
+  await page.getByRole('button', { name: /Оплатить 18\s000 ₽/ }).click(); // цена эксперта 15 000 ₽ и 20% сверх неё
   await expect(page.locator('#money-facts')).toContainText('оплачено');
   expect((await dp.request.post(`/api/orders/${id}/offer`, { data: { specialist_id: spec.id, from: 'matching' }, headers: h })).status()).toBe(200);
   expect((await sp.request.post(`/api/orders/${id}/status`, { data: { from: 'awaiting_executor', to: 'in_work' }, headers: h })).status()).toBe(200);
@@ -838,7 +847,7 @@ test('общий прогон: две подписи — эксперт от о�
   expect((await page.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: h })).status()).toBe(200);
   expect((await dp.request.put(`/api/orders/${id}/price`, { data: { price: '16000' }, headers: h })).status()).toBe(200);
   await page.goto(`/kabinet#order=${id}`);
-  await page.getByRole('button', { name: /Оплатить 16\s000 ₽/ }).click();
+  await page.getByRole('button', { name: /Оплатить 19\s200 ₽/ }).click(); // цена эксперта 16 000 ₽ и 20% сверх неё
   await expect(page.locator('#money-facts')).toContainText('оплачено');
   expect((await dp.request.post(`/api/orders/${id}/offer`, { data: { specialist_id: spec.id, from: 'matching' }, headers: h })).status()).toBe(200);
   expect((await sp.request.post(`/api/orders/${id}/status`, { data: { from: 'awaiting_executor', to: 'in_work' }, headers: h })).status()).toBe(200);
@@ -880,13 +889,13 @@ test('общий прогон: две подписи — эксперт от о�
   expect((await hp.request.get(`/api/orders/${id}`, { headers: h })).status()).toBe(404);
   await shot(hp, '32-rukovoditel-podpis');
 
-  // Дела экспертов (2.16): дело эксперта — без названия заявки и адреса; вознаграждение и «ждёт выдачи» — 80% цены.
+  // Дела экспертов (2.16): дело эксперта — без названия заявки и адреса; вознаграждение и «ждёт выдачи» — цена эксперта (2.463).
   const cases = hp.locator('#org-cases-box');
   await expect(hp.locator('#org-cases > li').first()).toContainText(`В работе · эксперт: ${specName}`);
-  await expect(hp.locator('#org-cases > li').first()).toContainText('вознаграждение 12 800 ₽');
+  await expect(hp.locator('#org-cases > li').first()).toContainText('вознаграждение 16 000 ₽');
   await expect(cases).not.toContainText(title);
   await expect(cases).not.toContainText('Подписная');
-  await expect(hp.locator('#org-cases-money')).toContainText('Ждёт выдачи результата12 800 ₽');
+  await expect(hp.locator('#org-cases-money')).toContainText('Ждёт выдачи результата16 000 ₽');
   await shot(hp, '32a-rukovoditel-dela-ekspertov');
 
   // Эксперт сдаёт; диспетчер проверяет по всем правилам; заказчик видит обе подписи и проверяет их.
@@ -914,9 +923,15 @@ test('общий прогон: две подписи — эксперт от о�
   const [orgSig] = await Promise.all([page.waitForEvent('download'), got.getByRole('button', { name: 'Подпись организации' }).click()]);
   expect(orgSig.suggestedFilename()).toBe('Отчёт компании.pdf.org.sig');
   await shot(page, '33-zakazchik-dve-podpisi');
+  // Выплата эксперту вручную (2.463): диспетчер отмечает «Выплачено» — у руководителя «Выплачено экспертам» — цена эксперта.
+  await dp.goto('/kabinet#money');
+  const paidRow = dp.locator('#money-manual li').filter({ hasText: specName });
+  await expect(paidRow).toContainText(/16\s000 ₽/);
+  await paidRow.getByRole('button', { name: 'Выплачено' }).click();
+  await expect(dp.locator('#money-manual-msg')).toHaveText('Выплата отмечена');
   await hp.reload();
   await expect(hp.locator('#org-cases li.group')).toHaveText('Завершённые · 1');
-  await expect(hp.locator('#org-cases-money')).toContainText('12 800 ₽');
+  await expect(hp.locator('#org-cases-money')).toContainText('16 000 ₽');
   await shot(hp, '33a-rukovoditel-vyplacheno');
   for (const p of [dp, sp, hp]) await close(p);
 });

@@ -270,7 +270,7 @@ export function orgOps() {
           where s.org_id = ${org.id} order by u.full_name nulls last, s.user_id`;
         const ids = experts.map((e) => e.user_id);
         const rows = ids.length ? await sql`
-          select o.id, o.module, o.service, o.status, o.deadline, o.price_kop, o.transit_kop, o.paid_at, o.executor_user_id, o.updated_at,
+          select o.id, o.module, o.service, o.status, o.deadline, o.price_kop, o.transit_kop, o.expert_kop, o.paid_at, o.executor_user_id, o.updated_at,
                  o.owner_user_id, o.org_id, o.offer_org_id, o.fields, o.report_number, o.remarks_at, o.remarks_due, o.remarks_round,
                  o.remarks_answer_doc_id,
                  p.status as payout_status, p.amount_kop as payout_kop, p.paid_at as payout_paid_at
@@ -447,7 +447,7 @@ export function orgOps() {
                  coalesce(sum(amount_kop) filter (where status <> 'succeeded'), 0)::bigint as pending
           from payouts where executor_user_id = any(${ids}::uuid[])` : { paid: 0, pending: 0 };
         const working = ids.length ? await sql`
-          select price_kop, transit_kop from orders where executor_user_id = any(${ids}::uuid[]) and status in ('in_work', 'review')
+          select price_kop, transit_kop, expert_kop from orders where executor_user_id = any(${ids}::uuid[]) and status in ('in_work', 'review')
             and price_kop is not null and paid_at is not null` : [];
         const waiting = Number(month.pending) + working.reduce((s, o) => s + orderSplit(o).payoutKop, 0);
         // Ждут назначения (2.17): дела, которые диспетчер предложил организации, — те же сведения, что в «Делах экспертов»,
