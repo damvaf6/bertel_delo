@@ -48,6 +48,16 @@ export async function reviewState(sql, registry, order) {
 
 // Последний решённый перенос срока (2.178), если диспетчер согласился и срок с тех пор не меняли — для готовой фразы
 // заказчику «срок перенесён на …». После отказа или другого срока фразы нет.
+// Пункты запроса документов из списка услуги (2.477): 'got' — файл получен и не удалён, иначе 'open' (запрошен, ждём);
+// отменённые не в счёт. Для готовых фраз модуля — src/orders/phrases.mjs.
+async function docItemsOf(sql, orderId) {
+  const rows = await sql`select r.item_id, bool_or(d.id is not null) as got
+                         from doc_requests r left join documents d on d.id = r.document_id and d.deleted_at is null
+                         where r.order_id = ${orderId} and r.cancelled_at is null and r.item_id is not null
+                         group by r.item_id`;
+  return Object.fromEntries(rows.map((r) => [r.item_id, r.got ? 'got' : 'open']));
+}
+
 async function lastMove(sql, order) {
   const [r] = await sql`select outcome, old_deadline, new_deadline from deadline_requests
                         where order_id = ${order.id} and outcome in ('approved', 'declined')
@@ -87,6 +97,8 @@ export function workOps() {
             deadline: order.deadline ?? null,
             // Заказчик 2 дня молчит после сообщения эксперта (2.375) — первой фразой напоминание.
             silent: (await customerSilent(sql, [order.id])).get(order.id) ?? null,
+            // Пункты запроса документов по списку услуги (2.477): получено — готовой фразы о нём нет.
+            docItems: await docItemsOf(sql, order.id),
           }) : [],
         };
       },
