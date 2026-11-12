@@ -1,6 +1,6 @@
 // Извещение об осмотре (2.470) — телефон 412×915: эксперт по делу «Ущерб после ДТП» записывает страховую, дату, время и
 // место осмотра, скачивает образец Word, отмечает «Извещены» и вставляет строку в раздел «Осмотр» черновика; заказчик видит
-// список и Word, но не пишет. Номера +7 999 000-47-01…02 — только здесь.
+// список и Word, но не пишет. Номера +7 999 000-47-91…92 — только здесь.
 import { test, expect } from '@playwright/test';
 import pg from 'pg';
 import { DB_URL, TEST_TOKEN } from '../helpers.mjs';
@@ -27,7 +27,7 @@ test('извещение об осмотре (2.470): записать стра�
   page.on('pageerror', (e) => problems.push(`ошибка JS: ${e.message}`));
   const ctx = { baseURL, viewport: { width: 412, height: 915 }, isMobile: true, hasTouch: true, locale: 'ru-RU' };
 
-  await signIn(page, '+79990004701');
+  await signIn(page, '+79990004791');
   const o = (await (await page.request.post('/api/orders', { data: { module: 'expertise', service: 'car_damage', title: 'Ущерб после ДТП' }, headers: H })).json()).order;
   const deadline = new Date(Date.now() + 9 * 86400_000).toISOString().slice(0, 10);
   const fields = { purpose: 'damage', region: 'moscow', vehicle_type: 'car', make_model: 'Тестовая Модель', year: 2021, reg_number: 'А001АА777',
@@ -45,7 +45,7 @@ test('извещение об осмотре (2.470): записать стра�
   const ectx = await browser.newContext(ctx);
   const ep = await ectx.newPage();
   ep.on('pageerror', (e) => problems.push(`ошибка JS: ${e.message}`));
-  const expert = await signIn(ep, '+79990004702');
+  const expert = await signIn(ep, '+79990004792');
   await db(async (c) => {
     await c.query("update users set full_name = 'Извещалов Пётр Сергеевич' where id = $1", [expert.id]);
     await c.query("insert into specialists (user_id, regions, capacity) values ($1, '{moscow,mo}', 5) on conflict do nothing", [expert.id]);
