@@ -193,11 +193,11 @@ test('экскурсия по кабинетам: эксперт, руковод
   await dp.getByLabel('Цена, рублей').fill('20000');
   await dp.getByRole('button', { name: 'Назначить цену' }).click();
   await expect(dp.locator('#money-msg')).toHaveText('Цена назначена');
-  await snap(dp, 'Диспетчер', 'Цена заявки', 'Диспетчер назначает цену; сразу видно, сколько получит исполнитель (80%) и платформа (20%).', '#money-box');
+  await snap(dp, 'Диспетчер', 'Цена заявки', 'Диспетчер назначает цену эксперта; заказчик платит её и 20% платформе сверх неё — эксперт получает всю свою цену.', '#money-box');
 
   // ——— Заказчик: оплата ———
   await page.reload();
-  await page.getByRole('button', { name: /Оплатить 20\s000 ₽/ }).click();
+  await page.getByRole('button', { name: /Оплатить 24\s000 ₽/ }).click();
   await expect(page.locator('#money-facts')).toContainText('оплачено');
   await snap(page, 'Заказчик', 'Оплата', 'Заказчик платит при заказе (на площадке — тестовая оплата). Деньги исполнителю — после выдачи результата.', '#money-box');
 
@@ -217,8 +217,8 @@ test('экскурсия по кабинетам: эксперт, руковод
   await sp.goto('/kabinet');
   await snap(sp, 'Эксперт', 'Мои дела', 'Все дела эксперта одним списком: предложенные, в работе, на проверке, готовые.', '#list-view .card >> nth=0');
   await sp.goto(`/kabinet#order=${id}`);
-  await expect(sp.locator('#money-facts')).toContainText(/Ваше вознаграждение \(80% цены\)\s*16\s000 ₽/);
-  await snap(sp, 'Эксперт', 'Предложенное дело', 'Эксперт видит данные заявки, срок и своё вознаграждение и решает: принять или отказаться.');
+  await expect(sp.locator('#money-facts')).toContainText(/Ваша цена \(100%\)\s*20\s000 ₽/);
+  await snap(sp, 'Эксперт', 'Предложенное дело', 'Эксперт видит данные заявки, срок и свою цену и решает: принять или отказаться.');
   await sp.getByRole('button', { name: 'Принять дело' }).click();
   await expect(sp.locator('#order-status')).toHaveText('В работе');
   await snap(sp, 'Эксперт', 'Дело в работе: данные и документы', 'Данные заявки, документы заказчика (ПТС), ход заявки и история.', ['#details-view', card(sp, '#order-view', 'Документы')]);
@@ -353,9 +353,16 @@ test('экскурсия по кабинетам: эксперт, руковод
   await expect(page.locator('#order-status')).toHaveText('Закрыта');
 
   // ——— Эксперт: выплата, ассистент ———
+  // Выплата эксперту вручную (2.463): диспетчер в «Деньгах» → «Выплатить вручную» отмечает «Выплачено».
+  await dp.goto('/kabinet#money');
+  const manualRow = dp.locator('#money-manual li').filter({ hasText: specName });
+  await expect(manualRow).toContainText(/20\s000 ₽/);
+  await snap(dp, 'Диспетчер', 'Выплатить вручную', 'Пока нет ЮKassa, выплату эксперту делает диспетчер: кто, телефон, заявка, сумма и кнопка «Выплачено».', '#money-manual-box');
+  await manualRow.getByRole('button', { name: 'Выплачено' }).click();
+  await expect(dp.locator('#money-manual-msg')).toHaveText('Выплата отмечена');
   await sp.goto('/kabinet#money');
   await expect(sp.locator('#money-payouts li').filter({ hasText: title })).toContainText('выплачено');
-  await snap(sp, 'Эксперт', 'Выплаты', 'Сколько выплачено и за какие дела. Выплата — после выдачи результата заказчику.');
+  await snap(sp, 'Эксперт', 'Выплаты', 'Сколько выплачено и за какие дела. Выплата — после выдачи результата заказчику, пока вручную.');
   await sp.goto('/kabinet#assistant');
   await sp.getByLabel('О какой заявке (можно не выбирать)').selectOption({ index: 1 });
   await sp.getByLabel('Вопрос').fill('Какие фото ещё нужны для оценки фургона?');
@@ -367,7 +374,7 @@ test('экскурсия по кабинетам: эксперт, руковод
 
   // ——— Диспетчер: деньги ———
   await dp.goto('/kabinet#money');
-  await expect(dp.locator('#money-payments li').filter({ hasText: title })).toContainText(/20\s000 ₽/);
+  await expect(dp.locator('#money-payments li').filter({ hasText: title })).toContainText(/24\s000 ₽/);
   await snap(dp, 'Диспетчер', 'Деньги платформы', 'Оплаты заказчиков, выплаты исполнителям и возвраты; при сбое — повтор выплаты.');
   await ap.goto('/kabinet#admin');
   await snap(ap, 'Администратор', 'Управление', 'Администратор назначает служебные роли, допуски специалистам и видит, какая модель ИИ работает.');
