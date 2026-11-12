@@ -583,11 +583,15 @@ function renderDossierTerm(term) {
   $('dossier-term-box').classList.toggle('hidden', !term);
   if (!term) return $('dossier-term-items').replaceChildren();
   const expired = term.items.some((i) => i.expired);
-  $('dossier-term-text').textContent = expired
-    ? `Срок документа в досье истёк, а дело — до ${dayRu(term.deadline)}. Обновите документ в досье до подписи отчёта: в отчёте должны быть действующие аттестат и полис.`
-    : `Документ из досье кончается раньше срока дела (${dayRu(term.deadline)}). Составьте и подпишите отчёт, пока он действует, или обновите его в досье.`;
+  const onlyBank = term.items.every((i) => i.kind === 'bank');
+  $('dossier-term-text').textContent = onlyBank
+    // Прогон 2.460: аккредитация в банке дела кончается раньше срока дела.
+    ? `Аккредитация в банке кончается раньше срока дела (${dayRu(term.deadline)}). Составьте и подпишите отчёт, пока она действует, или продлите её — иначе банк может не принять отчёт.`
+    : expired
+      ? `Срок документа в досье истёк, а дело — до ${dayRu(term.deadline)}. Обновите документ в досье до подписи отчёта: в отчёте должны быть действующие аттестат и полис.`
+      : `Документ из досье кончается раньше срока дела (${dayRu(term.deadline)}). Составьте и подпишите отчёт, пока он действует, или обновите его в досье.`;
   $('dossier-term-items').replaceChildren(...term.items.map((i) => el('li', { 'data-kind': i.kind,
-    text: `${i.kind_name} — ${i.expired ? 'срок истёк' : 'действует до'} ${dayRu(i.valid_until)}` })));
+    text: `${i.kind_name} — ${i.expired ? 'срок истёк' : 'действует до'} ${dayRu(i.valid_until)}${i.org_name ? ` (у организации «${i.org_name}» — продлевает руководитель)` : ''}` })));
 }
 $('dossier-term-open').addEventListener('click', () => { location.hash = 'specialist&to=dossier'; });
 
