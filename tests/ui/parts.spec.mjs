@@ -1,6 +1,6 @@
 // Повреждённые детали таблицей (2.471) — телефон 412×915: эксперт по делу «Ущерб после ДТП» записывает детали
 // (деталь, повреждение, замена/ремонт/окраска, номера фото осмотра), правит, вставляет таблицу в раздел «Исследование
-// повреждений» черновика; заказчик видит список, но не пишет. Номера +7 999 000-47-93…94 — только здесь.
+// повреждений» черновика; заказчик видит список, но не пишет; ИИ-проверка заключения сверяет детали (2.472). Номера +7 999 000-47-93…94 — только здесь.
 import { test, expect } from '@playwright/test';
 import pg from 'pg';
 import { DB_URL, TEST_TOKEN } from '../helpers.mjs';
@@ -142,6 +142,22 @@ test('повреждённые детали (2.471): записать, изме�
   await expect(page.locator('#parts-open')).toBeHidden();
   await expect(page.locator('#parts-list').getByRole('button', { name: 'Изменить' })).toHaveCount(0);
   await expect(page.locator('#parts-draft-row')).toBeHidden();
+
+  // 2.472: ИИ-проверка заключения — деталь из таблицы без строки в калькуляции и деталь из заявки без исследования.
+  const report = '5. Исследование повреждений\nКрышка багажника — вмятина.\n7. Расчёт стоимости восстановительного ремонта\nОкраска 3 000 руб.\n9. Выводы\n';
+  expect((await ep.request.post(`/api/orders/${o.id}/results`, {
+    data: Buffer.from(report), headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('заключение.txt') },
+  })).status()).toBe(201);
+  await ep.goto(`/kabinet#order=${o.id}`);
+  await ep.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(ep.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  const dmg = ep.locator('#review-checks > li[data-check="cd_damage"]');
+  await expect(dmg.locator('.ai-found li')).toHaveCount(2);
+  await expect(dmg).toContainText('Деталь «Крышка багажника» есть в таблице повреждённых деталей, а в калькуляции ремонта её не нашлось');
+  await expect(dmg).toContainText('В заявке «Что повреждено» указано «задний бампер», а в исследовании повреждений этой детали нет');
+  await dmg.scrollIntoViewIfNeeded();
+  expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await ep.screenshot({ path: 'test-results/screens/dp03-detali-ii-proverka.png', fullPage: false });
   expect(problems).toEqual([]);
   await ectx.close();
 });
