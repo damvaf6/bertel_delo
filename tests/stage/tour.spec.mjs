@@ -177,7 +177,7 @@ test('экскурсия по кабинетам: эксперт, руковод
   await page.getByLabel('Вид транспорта').selectOption({ label: 'Грузовой автомобиль' });
   await page.getByLabel('Марка и модель').fill('Тестмаш 3000 (вымышленная)');
   await page.getByLabel('Год выпуска').fill('2024');
-  await page.getByLabel('VIN').fill('XTA000000R0000001');
+  await page.getByLabel('VIN', { exact: true }).fill('XTA000000R0000001');
   await page.getByLabel(/^Срок/).fill(inDays(10));
   await page.getByLabel('Добавить файл (до 100 МБ)').setInputFiles({ name: 'ПТС (тест).pdf', mimeType: 'application/pdf', buffer: makePdf([['Тестовый ПТС: Тестмаш 3000, 2024 г.в.']]) });
   await expect(page.getByText('Файл добавлен')).toBeVisible();
@@ -187,17 +187,17 @@ test('экскурсия по кабинетам: эксперт, руковод
 
   // ——— Диспетчер: цена ———
   await dp.goto('/kabinet');
-  await snap(dp, 'Диспетчер', 'Все заявки', 'Диспетчер видит все заявки и может отобрать их по состоянию.', '#list-view .card >> nth=0');
+  await snap(dp, 'Диспетчер', 'Все заявки', 'Диспетчер видит все заявки и может отобрать их по состоянию.', '#list-view .card:visible >> nth=0');
   await dp.goto(`/kabinet#order=${id}`);
   await expect(dp.locator('#order-title')).toHaveText(title);
-  await dp.getByLabel('Цена, рублей').fill('20000');
+  await dp.getByLabel('Цена эксперта, рублей').fill('20000');
   await dp.getByRole('button', { name: 'Назначить цену' }).click();
   await expect(dp.locator('#money-msg')).toHaveText('Цена назначена');
-  await snap(dp, 'Диспетчер', 'Цена заявки', 'Диспетчер назначает цену; сразу видно, сколько получит исполнитель (80%) и платформа (20%).', '#money-box');
+  await snap(dp, 'Диспетчер', 'Цена заявки', 'Диспетчер назначает цену эксперта; заказчик платит её и 20% платформе сверх неё — эксперт получает всю свою цену.', '#money-box');
 
   // ——— Заказчик: оплата ———
   await page.reload();
-  await page.getByRole('button', { name: /Оплатить 20\s000 ₽/ }).click();
+  await page.getByRole('button', { name: /Оплатить 24\s000 ₽/ }).click();
   await expect(page.locator('#money-facts')).toContainText('оплачено');
   await snap(page, 'Заказчик', 'Оплата', 'Заказчик платит при заказе (на площадке — тестовая оплата). Деньги исполнителю — после выдачи результата.', '#money-box');
 
@@ -215,10 +215,10 @@ test('экскурсия по кабинетам: эксперт, руковод
   await expect(sp.locator('#notifications li').filter({ hasText: 'Вам предложено новое дело' }).first()).toBeVisible();
   await snap(sp, 'Эксперт', 'Уведомления: предложение дела', 'Предложения дел приходят уведомлением (и СМС, если включено). Отдельной ленты предложений пока нет.');
   await sp.goto('/kabinet');
-  await snap(sp, 'Эксперт', 'Мои дела', 'Все дела эксперта одним списком: предложенные, в работе, на проверке, готовые.', '#list-view .card >> nth=0');
+  await snap(sp, 'Эксперт', 'Мои дела', 'Все дела эксперта одним списком: предложенные, в работе, на проверке, готовые.', '#list-view .card:visible >> nth=0');
   await sp.goto(`/kabinet#order=${id}`);
-  await expect(sp.locator('#money-facts')).toContainText(/Ваше вознаграждение \(80% цены\)\s*16\s000 ₽/);
-  await snap(sp, 'Эксперт', 'Предложенное дело', 'Эксперт видит данные заявки, срок и своё вознаграждение и решает: принять или отказаться.');
+  await expect(sp.locator('#money-facts')).toContainText(/Ваша цена \(100%\)\s*20\s000 ₽/);
+  await snap(sp, 'Эксперт', 'Предложенное дело', 'Эксперт видит данные заявки, срок и свою цену и решает: принять или отказаться.');
   await sp.getByRole('button', { name: 'Принять дело' }).click();
   await expect(sp.locator('#order-status')).toHaveText('В работе');
   await snap(sp, 'Эксперт', 'Дело в работе: данные и документы', 'Данные заявки, документы заказчика (ПТС), ход заявки и история.', ['#details-view', card(sp, '#order-view', 'Документы')]);
@@ -309,7 +309,7 @@ test('экскурсия по кабинетам: эксперт, руковод
   await snap(hp, 'Руководитель организации', 'Подпись от организации', 'Руководитель подписывает файлы от организации после эксперта. Саму заявку и заказчика он не видит — только файлы, эксперта и срок.', '#org-sign-box');
   await hp.goto('/kabinet');
   await expect(hp.locator('#orders li').filter({ hasText: `Оценка служебного автомобиля — тест ${RUN}-${STAMP}` })).toHaveCount(1);
-  await snap(hp, 'Руководитель организации', 'Дела сотрудников', 'Руководитель видит заявки, которые сотрудники заказали от организации. Дела, которые эксперты организации выполняют для заказчиков, здесь не видны.', '#list-view .card >> nth=0');
+  await snap(hp, 'Руководитель организации', 'Дела сотрудников', 'Руководитель видит заявки, которые сотрудники заказали от организации. Дела, которые эксперты организации выполняют для заказчиков, здесь не видны.', '#list-view .card:visible >> nth=0');
   await hp.locator('#orders li').filter({ hasText: `Оценка служебного автомобиля — тест ${RUN}-${STAMP}` }).getByRole('button').first().click();
   await expect(hp.getByRole('heading', { name: 'Кто ведёт дело' })).toBeVisible();
   await snap(hp, 'Руководитель организации', 'Распределение: кто ведёт дело', 'Руководитель передаёт заявку организации другому сотруднику. Сроков и нагрузки по сотрудникам одним экраном пока нет.', '#transfer-box');
@@ -353,9 +353,16 @@ test('экскурсия по кабинетам: эксперт, руковод
   await expect(page.locator('#order-status')).toHaveText('Закрыта');
 
   // ——— Эксперт: выплата, ассистент ———
+  // Выплата эксперту вручную (2.463): диспетчер в «Деньгах» → «Выплатить вручную» отмечает «Выплачено».
+  await dp.goto('/kabinet#money');
+  const manualRow = dp.locator('#money-manual li').filter({ hasText: specName });
+  await expect(manualRow).toContainText(/20\s000 ₽/);
+  await snap(dp, 'Диспетчер', 'Выплатить вручную', 'Пока нет ЮKassa, выплату эксперту делает диспетчер: кто, телефон, заявка, сумма и кнопка «Выплачено».', '#money-manual-box');
+  await manualRow.getByRole('button', { name: 'Выплачено' }).click();
+  await expect(dp.locator('#money-manual-msg')).toHaveText('Выплата отмечена');
   await sp.goto('/kabinet#money');
   await expect(sp.locator('#money-payouts li').filter({ hasText: title })).toContainText('выплачено');
-  await snap(sp, 'Эксперт', 'Выплаты', 'Сколько выплачено и за какие дела. Выплата — после выдачи результата заказчику.');
+  await snap(sp, 'Эксперт', 'Выплаты', 'Сколько выплачено и за какие дела. Выплата — после выдачи результата заказчику, пока вручную.');
   await sp.goto('/kabinet#assistant');
   await sp.getByLabel('О какой заявке (можно не выбирать)').selectOption({ index: 1 });
   await sp.getByLabel('Вопрос').fill('Какие фото ещё нужны для оценки фургона?');
@@ -367,7 +374,7 @@ test('экскурсия по кабинетам: эксперт, руковод
 
   // ——— Диспетчер: деньги ———
   await dp.goto('/kabinet#money');
-  await expect(dp.locator('#money-payments li').filter({ hasText: title })).toContainText(/20\s000 ₽/);
+  await expect(dp.locator('#money-payments li').filter({ hasText: title })).toContainText(/24\s000 ₽/);
   await snap(dp, 'Диспетчер', 'Деньги платформы', 'Оплаты заказчиков, выплаты исполнителям и возвраты; при сбое — повтор выплаты.');
   await ap.goto('/kabinet#admin');
   await snap(ap, 'Администратор', 'Управление', 'Администратор назначает служебные роли, допуски специалистам и видит, какая модель ИИ работает.');
