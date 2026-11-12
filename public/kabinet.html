@@ -635,6 +635,41 @@
         </form>
         <p class="msg" id="inspect-msg" role="status" aria-live="polite"></p>
       </div>
+      <div class="card hidden" id="inspnotice-box">
+        <h2>Извещение об осмотре</h2>
+        <p class="muted" id="inspnotice-lead"></p>
+        <ul class="list" id="inspnotice-list"></ul>
+        <div class="row hidden" id="inspnotice-draft-row">
+          <button type="button" class="secondary" data-action="notice-draft" id="inspnotice-draft">Вставить в черновик раздела «Осмотр»</button>
+        </div>
+        <button type="button" class="secondary hidden" id="inspnotice-open">Известить об осмотре</button>
+        <form class="hidden" id="inspnotice-form" novalidate>
+          <div class="field">
+            <label for="inspnotice-party">Кого извещаете</label>
+            <select id="inspnotice-party"></select>
+          </div>
+          <div class="field">
+            <label for="inspnotice-name">Кому — название страховой или ФИО</label>
+            <input id="inspnotice-name" type="text" maxlength="200" placeholder="например, АО «Страховая компания»">
+          </div>
+          <div class="row">
+            <div class="field">
+              <label for="inspnotice-date">Дата осмотра</label>
+              <input id="inspnotice-date" type="date">
+            </div>
+            <div class="field">
+              <label for="inspnotice-time">Время осмотра</label>
+              <input id="inspnotice-time" type="text" inputmode="numeric" maxlength="5" placeholder="10:30">
+            </div>
+          </div>
+          <div class="field">
+            <label for="inspnotice-place">Место осмотра — адрес</label>
+            <input id="inspnotice-place" type="text" maxlength="300">
+          </div>
+          <button type="submit" id="inspnotice-save">Записать и получить образец Word</button>
+        </form>
+        <p class="msg" id="inspnotice-msg" role="status" aria-live="polite"></p>
+      </div>
       <div class="card hidden" id="onsite-box">
         <h2>Выезд помощника</h2>
         <p class="muted" id="onsite-state"></p>

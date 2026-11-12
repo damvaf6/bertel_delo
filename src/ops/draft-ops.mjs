@@ -1,6 +1,7 @@
 // Черновик заключения от ИИ (задача 2.2): исполнитель получает черновик по данным заявки, документам и списку фото, правит
 // его в кабинете и сам прикладывает итоговый файл результата (Word). Заказчик черновика не видит; ИИ ничего не выдаёт
 // заказчику сам — результат по-прежнему проходит проверку диспетчера (1.5). Разделы черновика — в описании модуля.
+import { loadNotices, noticeLine, placeNotice } from '../orders/notices.mjs';
 import { HttpError } from '../http/core.mjs';
 import { editsDraft, seesDraft } from '../access/policy.mjs';
 import { DRAFT_GAP, DRAFT_MAX, askAi, cleanDraftAnswer, draftMessages, orderBrief } from '../ai/ai.mjs';
@@ -663,7 +664,11 @@ export function draftOps() {
           task.kind ? `Вид стоимости ${task.kind.what} «${task.kind.name}» (стр. ${task.kind.page}): ${task.kind.v} — пиши его везде, где нужен вид стоимости, без пометок` : null,
         ].filter(Boolean).join('\n') || null;
         const taken = ['address', 'area', 'cadastral', 'purpose'].filter((k) => egrn?.[k]?.v || task[k]?.v);
-        const brief = [orderBrief(registry, order, { omit: taken }), valueBrief, egrnBrief(egrn), taskBrief, onsite, dossierBrief, spec ? analogsBrief(spec, analogs, order) : null, tablesBrief(sections)].filter(Boolean).join('\n');
+        // Извещение об осмотре (2.470): отмеченные извещения — строкой в раздел «Осмотр»; модели — чтобы не ставила пометку.
+        const noticeSpec = registry.notice(order.module, order.service);
+        const nLine = noticeSpec && sections.some((x) => x.notice) ? noticeLine(await loadNotices(sql, order.id), noticeSpec.parties) : null;
+        const noticeBrief = nLine ? `${nLine} — программа сама вставит эту строку в раздел об осмотре; кто и как извещён, не повторяй и пометку про извещение не ставь` : null;
+        const brief = [orderBrief(registry, order, { omit: taken }), valueBrief, egrnBrief(egrn), taskBrief, onsite, noticeBrief, dossierBrief, spec ? analogsBrief(spec, analogs, order) : null, tablesBrief(sections)].filter(Boolean).join('\n');
         const out = await askAi(ctx, actor, 'draft', draftMessages({ brief, sections, ...inputs }));
         // Таблицы (2.29) и сведения из досье (2.14) программа вставляет сама, под заголовками разделов.
         const materials = await orderMaterials(sql, order);
@@ -675,7 +680,7 @@ export function draftOps() {
         const kinded = task.kind ? aimed.replace(VALUE_KIND_GAP, task.kind.v) : aimed;
         const dated = fillEgrn(valueDate?.day ? kinded.replace(VALUE_GAP, valueDate.day) : kinded, task.address ? { ...egrn, address: task.address } : egrn);
         const filled = placeCustomer(fillDraft(fillTables(dated, sections, registry, order, { materials, valueDate: valueDate?.day, egrn, task }), sections, dossier), sections, task.customer);
-        const text = placeSources(filled, sections, sources).body.slice(0, DRAFT_MAX);
+        const text = placeNotice(placeSources(filled, sections, sources).body, sections, nLine).slice(0, DRAFT_MAX);
         const seen = {
           photos: inputs.photos.map((p) => p.name),
           docs: inputs.docs.map((d) => ({ name: d.name, read: d.text !== null, truncated: d.truncated })),
@@ -690,6 +695,7 @@ export function draftOps() {
           task_customer: task.customer,
           task_due: task.due,
           task_user: task.user,
+          notice: !!nLine,
         };
         const d = await sql.tx(async (tx) => {
           await tx`select id from orders where id = ${order.id} for update`;
