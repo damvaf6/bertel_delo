@@ -3168,7 +3168,7 @@ function partToken(w) {
 const partWords = (text) => String(text ?? '').toLowerCase().replace(/ё/g, 'е').match(/[а-яa-z0-9]+/g) ?? [];
 const partTokens = (text) => partWords(text).map(partToken).filter((t) => !PART_STOP.has(t));
 // Все слова названия есть в строке (порядок и падежи не важны).
-function partIn(name, line) {
+export function partIn(name, line) {
   const need = partTokens(name);
   if (!need.length) return false;
   const have = new Set(partTokens(line));

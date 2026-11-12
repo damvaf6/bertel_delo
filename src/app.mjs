@@ -39,6 +39,7 @@ import { remarkItemOps } from './ops/remark-item-ops.mjs';
 import { courtOps } from './ops/court-ops.mjs';
 import { noticeOps } from './ops/notice-ops.mjs';
 import { partsOps } from './ops/parts-ops.mjs';
+import { insurerOps } from './ops/insurer-ops.mjs';
 import { feedOps } from './ops/feed-ops.mjs';
 import { expertAcceptOps } from './ops/expert-accept-ops.mjs';
 import { reviewOps } from './ops/review-ops.mjs';
@@ -57,7 +58,7 @@ import { resetModuleSettings } from './modules/extras.mjs';
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
 export function listOps(cfg, providers) {
-  const ops = [...coreOps(cfg), ...orderOps(), ...orgOps(), ...adminOps(), ...matchOps(), ...feedOps(), ...expertAcceptOps(), ...reviewOps(), ...workOps(), ...moneyOps(cfg), ...notifyOps(), ...aiOps(), ...draftOps(), ...inspectOps(), ...onsiteOps(), ...signOps(), ...dossierOps(), ...snippetOps(), ...remarkOps(), ...analogOps(), ...templateOps(), ...accreditationOps(), ...mailOps(), ...todayOps(), ...problemOps(), ...caseOps(), ...uploadOps(), ...docRequestOps(), ...deadlineOps(), ...handoverOps(), ...noteOps(), ...remarkItemOps(), ...courtOps(), ...noticeOps(), ...partsOps(), ...repeatOps(), ...similarOps(), ...notaryOps(), ...certificateOps(), ...permitCardOps(), ...stepOps(), ...priceOps(), ...lawyerCheckOps(), ...bridgeOps(cfg)];
+  const ops = [...coreOps(cfg), ...orderOps(), ...orgOps(), ...adminOps(), ...matchOps(), ...feedOps(), ...expertAcceptOps(), ...reviewOps(), ...workOps(), ...moneyOps(cfg), ...notifyOps(), ...aiOps(), ...draftOps(), ...inspectOps(), ...onsiteOps(), ...signOps(), ...dossierOps(), ...snippetOps(), ...remarkOps(), ...analogOps(), ...templateOps(), ...accreditationOps(), ...mailOps(), ...todayOps(), ...problemOps(), ...caseOps(), ...uploadOps(), ...docRequestOps(), ...deadlineOps(), ...handoverOps(), ...noteOps(), ...remarkItemOps(), ...courtOps(), ...noticeOps(), ...partsOps(), ...insurerOps(), ...repeatOps(), ...similarOps(), ...notaryOps(), ...certificateOps(), ...permitCardOps(), ...stepOps(), ...priceOps(), ...lawyerCheckOps(), ...bridgeOps(cfg)];
   if (providers.storage.kind === 'memory') ops.push(...memoryFileOps());
   if (cfg.appEnv === 'test' && cfg.testControlToken) ops.push(...testControlOps(cfg));
   ops.push(...stageLoginOps(cfg));
