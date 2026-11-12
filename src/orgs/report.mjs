@@ -153,7 +153,7 @@ async function monthBounds(sql, month) {
 async function orgMonthDone(sql, orgId, ids, { start, end }) {
   if (!ids.length) return [];
   return sql`
-      select distinct on (o.id) o.id, o.module, o.service, o.executor_user_id as user_id, o.deadline, o.price_kop, o.transit_kop,
+      select distinct on (o.id) o.id, o.module, o.service, o.executor_user_id as user_id, o.deadline, o.price_kop, o.transit_kop, o.expert_kop,
              o.fields->>'purpose' as purpose, o.fields->>'bank' as bank,
              p.amount_kop as payout_kop, h.at,
              greatest(
@@ -795,7 +795,7 @@ export async function expertMonthReport(sql, userId, month, today = todayMsk()) 
     select count(distinct order_id)::int as n from order_offers
     where specialist_id = ${userId} and outcome = 'accepted' and outcome_at >= ${start} and outcome_at < ${end}`;
   const done = await sql`
-    select distinct on (o.id) o.id, o.title, o.deadline, o.price_kop, o.transit_kop, p.amount_kop as payout_kop, p.status as payout_status, h.at,
+    select distinct on (o.id) o.id, o.title, o.deadline, o.price_kop, o.transit_kop, o.expert_kop, p.amount_kop as payout_kop, p.status as payout_status, h.at,
       greatest(
         (select max(f.outcome_at) from order_offers f
          where f.order_id = o.id and f.specialist_id = o.executor_user_id and f.outcome = 'accepted'),

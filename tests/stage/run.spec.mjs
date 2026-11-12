@@ -384,7 +384,7 @@ test('общий прогон: сквозной путь экспертизы �
   await note.getByRole('button').click();
   await expect(dp.locator('#order-title')).toHaveText(title);
   await expect(dp.locator('#facts')).toContainText('г. Москва, ул. Тестовая, д. 11, кв. 4');
-  await dp.getByLabel('Цена, рублей').fill('18000');
+  await dp.getByLabel('Цена эксперта, рублей').fill('18000');
   await dp.getByRole('button', { name: 'Назначить цену' }).click();
   await expect(dp.locator('#money-msg')).toHaveText('Цена назначена');
   // Экспертиза (2.463): диспетчер ставит цену эксперта, заказчик платит её и 20% платформе сверх неё.

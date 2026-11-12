@@ -190,7 +190,7 @@ test('экскурсия по кабинетам: эксперт, руковод
   await snap(dp, 'Диспетчер', 'Все заявки', 'Диспетчер видит все заявки и может отобрать их по состоянию.', '#list-view .card >> nth=0');
   await dp.goto(`/kabinet#order=${id}`);
   await expect(dp.locator('#order-title')).toHaveText(title);
-  await dp.getByLabel('Цена, рублей').fill('20000');
+  await dp.getByLabel('Цена эксперта, рублей').fill('20000');
   await dp.getByRole('button', { name: 'Назначить цену' }).click();
   await expect(dp.locator('#money-msg')).toHaveText('Цена назначена');
   await snap(dp, 'Диспетчер', 'Цена заявки', 'Диспетчер назначает цену эксперта; заказчик платит её и 20% платформе сверх неё — эксперт получает всю свою цену.', '#money-box');
