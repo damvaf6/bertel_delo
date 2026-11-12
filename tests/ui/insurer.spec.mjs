@@ -128,6 +128,21 @@ test('сверка со страховой (2.475): внести, сравнен
   expect(text2).toContain('у страховой — 90 000 руб.');
   expect(text2.match(/^\| № \| Деталь \| У страховой/gm)).toHaveLength(1);
 
+  // Прогон 2.479: в отчёте итог с учётом износа не тот, что эксперт записал в сверке, — находка ИИ-проверки в «Стоимости ремонта».
+  const report = '7. Расчёт стоимости восстановительного ремонта\nСтоимость восстановительного ремонта без учёта износа 140 000 руб.\nСтоимость восстановительного ремонта с учётом износа 110 000 руб.\n9. Выводы\n';
+  expect((await ep.request.post(`/api/orders/${o.id}/results`, {
+    data: Buffer.from(report), headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('заключение.txt') },
+  })).status()).toBe(201);
+  await ep.goto(`/kabinet#order=${o.id}`);
+  await ep.getByRole('button', { name: 'Проверить с помощью ИИ' }).click();
+  await expect(ep.locator('#review-msg')).toHaveText('ИИ-проверка готова');
+  const cost = ep.locator('#review-checks > li[data-check="cd_cost"]');
+  const hit = cost.locator('.ai-found li', { hasText: '«Сверке с расчётом страховой»' });
+  await expect(hit).toContainText('Ваша сумма ремонта с учётом износа — 112 300 руб., а в отчёте — 110 000 руб.');
+  await hit.scrollIntoViewIfNeeded();
+  expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await ep.screenshot({ path: 'test-results/screens/di03-strahovaya-summa-otchet.png', fullPage: false });
+
   // Заказчик видит итог, но не правит.
   await page.goto(`/kabinet#order=${o.id}`);
   await expect(page.locator('#insurer-box')).toBeVisible();

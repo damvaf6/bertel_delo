@@ -7,6 +7,7 @@ import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid } from '..
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import { parseDraft } from '../../src/docs/docx.mjs';
 import { PARTS_HEAD } from '../../src/orders/parts.mjs';
+import { runAutoChecks } from '../../src/ai/report-checks.mjs';
 import { INS_HEAD, compareInsurer, insurerBlock, insurerParts, parseRub, placeInsurer, rubText } from '../../src/orders/insurer.mjs';
 
 let S, owner, dispatcher, spec, other;
@@ -138,4 +139,49 @@ test('не ДТП — блока нет', async () => {
   const r = await inWork('realty', { purpose: 'court', region: 'moscow', object_type: 'flat', address: 'г. Москва, тестовая ул., 47', area: '44' });
   assert.deepEqual((await spec.req('GET', `/api/orders/${r.id}/insurer`)).body, { available: false });
   assert.equal((await spec.req('PUT', `/api/orders/${r.id}/insurer`, {})).status, 409);
+});
+
+// Прогон 2.479: своя сумма в сверке со страховой и итог ремонта в отчёте — одна сумма, иначе находка в «Стоимости ремонта».
+const SUMS = ['7. Расчёт стоимости восстановительного ремонта',
+  'Стоимость восстановительного ремонта без учёта износа: 245 300,00 руб.',
+  'Стоимость восстановительного ремонта с учётом износа: 180 150,00 руб.',
+  'УТС не рассчитывается.', '9. Выводы',
+  'Стоимость восстановительного ремонта без учёта износа составляет 245 300 (Двести сорок пять тысяч триста) рублей, с учётом износа — 180 150 (Сто восемьдесят тысяч сто пятьдесят) рублей.'].join('\n');
+const sums = (insurer) => runAutoChecks(['repair_sums'], [{ name: 'Заключение.docx', pages: [SUMS] }],
+  { service: 'car_damage', fields: { vehicle_type: 'car', year: 2022, accident_date: '14.09.2026' }, insurer }).repair_sums.map((x) => x.text);
+
+test('прогон 2.479: своя сумма в сверке со страховой — как итог в отчёте', () => {
+  assert.deepEqual(sums(null), []);
+  assert.deepEqual(sums({ wear: 'with', insurer_kop: 9000000, own_kop: 18015000 }), []);
+  assert.deepEqual(sums({ wear: 'without', insurer_kop: 9000000, own_kop: 24530000 }), []);
+  assert.deepEqual(sums({ wear: 'with', insurer_kop: 9000000, own_kop: null }), [], 'своей суммы нет — сверять нечего');
+  assert.deepEqual(sums({ wear: 'with', insurer_kop: 9000000, own_kop: 17500000 }),
+    ['В деле, в «Сверке с расчётом страховой», Ваша сумма ремонта с учётом износа — 175 000 руб., а в отчёте — 180 150 руб. (стр. 1): исправьте сумму в сверке или в отчёте — иначе в отчёте и в сводке руководителя разные цифры']);
+  // Блок сверки в отчёте (сумма страховой) — не второй итог ремонта.
+  const calc = { basis: 'акт № 1', wear: 'with', insurer_kop: 9000000, own_kop: 18015000, parts: ['бампер задний'] };
+  const withBlock = SUMS.replace('УТС не', `${insurerBlock(calc, ['Задний бампер']).join('\n')}\nУТС не`);
+  assert.match(withBlock, /у страховой — 90 000 руб\./);
+  assert.deepEqual(runAutoChecks(['repair_sums'], [{ name: 'a', pages: [withBlock] }],
+    { service: 'car_damage', fields: { vehicle_type: 'car', year: 2022 }, insurer: calc }).repair_sums, []);
+  // В отчёте нет суммы на этой основе — не с чем сравнить (об этом скажут другие находки).
+  assert.deepEqual(runAutoChecks(['repair_sums'], [{ name: 'a', pages: [SUMS.replace(/^.*с учётом износа.*$/gmu, '')] }],
+    { service: 'car_damage', fields: { vehicle_type: 'car', year: 2022 }, insurer: { wear: 'with', insurer_kop: 1, own_kop: 2 } }).repair_sums
+    .filter((t) => /Сверке/.test(t.text)), []);
+});
+
+test('прогон 2.479: ИИ-проверка дела берёт свою сумму из сверки дела', async () => {
+  const o = await inWork();
+  assert.equal((await spec.req('PUT', `/api/orders/${o.id}/insurer`, { basis: 'акт № 1', parts: 'бампер задний', wear: 'with', insurer: '90 000', own: '175 000' })).status, 200);
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/results`, Buffer.from(SUMS), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('заключение.txt') },
+  })).status, 201);
+  const cost = async () => {
+    S.providers.ai.reset();
+    const ai = await spec.req('POST', `/api/orders/${o.id}/review/ai`);
+    assert.equal(ai.status, 201, JSON.stringify(ai.body));
+    return (ai.body.ai.items.find((i) => i.id === 'cd_cost').found ?? []).map((f) => f.text).filter((t) => /Сверке/.test(t));
+  };
+  assert.equal((await cost()).length, 1);
+  assert.equal((await spec.req('PUT', `/api/orders/${o.id}/insurer`, { basis: 'акт № 1', parts: 'бампер задний', wear: 'with', insurer: '90 000', own: '180 150' })).status, 200);
+  assert.deepEqual(await cost(), []);
 });
