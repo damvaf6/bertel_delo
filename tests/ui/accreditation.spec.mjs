@@ -416,3 +416,34 @@ test('2.459: сводка за месяц — дела по банкам и ск
   expect(hp.problems).toEqual([]);
   await hp.context().close();
 });
+
+// Прогон 2.460: аккредитация в банке дела сегодня действует, но кончается раньше срока дела — в деле предупреждение рядом с
+// «Аттестат или полис кончаются раньше срока дела»; у организации — «продлевает руководитель».
+test('прогон 2.460: аккредитация кончается раньше срока дела — предупреждение в деле', async ({ browser, baseURL }) => {
+  const cp = await phone(browser, baseURL);
+  const sp = await phone(browser, baseURL);
+  await signIn(cp, '+79990004611');
+  const expert = await signIn(sp, '+79990004612');
+  await db(async (c) => {
+    await c.query("insert into specialists (user_id, regions, capacity) values ($1, '{moscow,mo}', 5)", [expert.id]);
+    await c.query("insert into dossier_items (user_id, kind, title, bank, valid_until) values ($1, 'bank', 'Сбербанк', 'sber', $2)", [expert.id, plusDays(5)]);
+  });
+  const id = (await (await cp.request.post('/api/orders', { data: { module: 'expertise', service: 'realty', title: 'Квартира для Сбербанка 2460' }, headers: H })).json()).order.id;
+  expect((await cp.request.patch(`/api/orders/${id}`, {
+    data: { deadline: plusDays(15), fields: { purpose: 'bank', bank: 'sber', region: 'mo', object_type: 'flat', address: 'тестовый адрес, 1' } }, headers: H,
+  })).status()).toBe(200);
+  expect((await cp.request.post(`/api/orders/${id}/status`, { data: { from: 'new', to: 'matching' }, headers: H })).status()).toBe(200);
+  await db((c) => c.query("update orders set status = 'in_work', executor_user_id = $2, price_kop = 1500000, paid_at = now() where id = $1", [id, expert.id]));
+
+  await sp.goto(`/kabinet#order=${id}`);
+  const box = sp.locator('#dossier-term-box');
+  await expect(box).toBeVisible();
+  await expect(sp.locator('#dossier-term-text')).toHaveText(/^Аккредитация в банке кончается раньше срока дела .*банк может не принять отчёт\.$/);
+  await expect(sp.locator('#dossier-term-items li[data-kind=bank]')).toHaveText(/^Аккредитация в банке «Сбербанк» — действует до /);
+  await expect(sp.locator('#next-warn')).not.toHaveText(/нет аккредитации/);
+  await box.scrollIntoViewIfNeeded();
+  await shot(sp, 'ak16-2460-akkr-konchaetsya-do-sroka');
+  expect([...sp.problems, ...cp.problems]).toEqual([]);
+  await sp.context().close();
+  await cp.context().close();
+});

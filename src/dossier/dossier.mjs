@@ -83,13 +83,36 @@ export async function dossierTermView(sql, registry, order, userId, today = toda
     join documents d on d.id = s.document_id and d.kind = 'result' and d.deleted_at is null and d.uploaded_by = ${userId}
     where s.order_id = ${order.id} and s.role = 'expert' and s.signer_id = ${userId}`;
   const until = signed?.day ?? order.deadline;
-  const items = (await loadDossier(sql, userId)).filter((i) => BLOCKING_KINDS.includes(i.kind) && i.valid_until && i.valid_until < until);
+  const items = (await loadDossier(sql, userId)).filter((i) => BLOCKING_KINDS.includes(i.kind) && i.valid_until && i.valid_until < until)
+    .map((i) => ({ kind: i.kind, kind_name: i.kind_name, valid_until: i.valid_until, expired: i.valid_until < today }));
+  const bank = await bankTermBefore(sql, registry, order, userId, until, today);
+  if (bank) items.push(bank);
   if (!items.length) return null;
-  return {
-    deadline: order.deadline,
-    items: items.map((i) => ({ kind: i.kind, kind_name: i.kind_name, valid_until: i.valid_until, expired: i.valid_until < today }))
-      .sort((a, b) => a.valid_until.localeCompare(b.valid_until)),
-  };
+  return { deadline: order.deadline, items: items.sort((a, b) => a.valid_until.localeCompare(b.valid_until)) };
+}
+
+// Прогон 2.460: дело для банка из списка, аккредитация в нём сегодня действует (своя или организации, от которой эксперт
+// работает), но кончается раньше срока дела — отчёт с датой после неё банк может не принять (находка ИИ-проверки 2.458).
+// Нет действующей сегодня совсем — это «аккредитации в нём нет» (2.453), здесь не повторяется. Срок не указан — действует.
+async function bankTermBefore(sql, registry, order, userId, until, today) {
+  const bankId = order.fields?.bank;
+  const bank = bankId && bankId !== OTHER_BANK.id ? bankList(registry).find((b) => b.id === bankId) : null;
+  if (!bank) return null;
+  const [own] = await sql`
+    select to_char(max(valid_until), 'YYYY-MM-DD') as until, bool_or(valid_until is null) as open, count(*)::int as n from dossier_items
+    where kind = 'bank' and bank = ${bank.id} and deleted_at is null and user_id = ${userId} and (valid_until is null or valid_until >= ${today})`;
+  const [org] = await sql`
+    select o.name, to_char(max(a.valid_until), 'YYYY-MM-DD') as until, bool_or(a.valid_until is null) as open, count(a.id)::int as n
+    from specialists s join org_members m on m.org_id = s.org_id and m.user_id = s.user_id join organizations o on o.id = s.org_id
+    left join org_accreditations a on a.org_id = s.org_id and a.bank = ${bank.id} and a.deleted_at is null
+         and (a.valid_until is null or a.valid_until >= ${today})
+    where s.user_id = ${userId} group by o.name`;
+  const all = [own, org].filter((x) => x?.n);
+  if (!all.length || all.some((x) => x.open)) return null;
+  const best = all.reduce((a, b) => (b.until > a.until ? b : a));
+  if (best.until >= until) return null;
+  return { kind: 'bank', kind_name: `Аккредитация в банке «${bank.name}»`, valid_until: best.until, expired: false,
+    ...(best === own ? {} : { org_name: org.name }) };
 }
 
 // Что не так с досье — для эксперта, диспетчера в подборе и списка специалистов: истёкшие и скоро истекающие документы.

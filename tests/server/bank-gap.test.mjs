@@ -79,3 +79,44 @@ test('аккредитован сам — без пометки; «Другой 
     assert.equal((await today_(plain)).offers.find((x) => x.id === o.id).bank_gap, null);
   }
 });
+
+// Прогон 2.460: аккредитация в банке дела сегодня действует, но кончается раньше срока дела — в деле, рядом с «Аттестат или
+// полис кончаются раньше срока дела» (2.365): отчёт после её конца банк может не принять (ИИ-проверка 2.458). Сама решает
+// своя или организации — у той, что действует дольше; у организации — «продлевает руководитель».
+test('прогон 2.460: аккредитация кончается раньше срока дела — предупреждение в деле', async () => {
+  const late = await login(S, '+79990004545');
+  await makeSpecialist(S.sql, late.user.id);
+  await S.sql`insert into dossier_items (user_id, kind, title, bank, valid_until)
+              values (${late.user.id}, 'bank', 'Сбербанк', 'sber', ${addDays(today, 10)})`;
+  const o = await offered(late, { purpose: 'bank', bank: 'sber' });
+  assert.equal((await late.req('POST', `/api/orders/${o.id}/status`, { from: 'awaiting_executor', to: 'in_work' })).status, 200);
+  const term = async (u = late) => (await u.req('GET', `/api/orders/${o.id}/documents`)).body.dossier_term;
+  assert.equal((await card(late, o)).bank_gap, null, 'сегодня действует — это не «аккредитации нет»');
+  let t = await term();
+  assert.equal(t.deadline, addDays(today, 20));
+  assert.deepEqual(t.items, [{ kind: 'bank', kind_name: 'Аккредитация в банке «Сбербанк»', valid_until: addDays(today, 10), expired: false }]);
+  assert.equal((await term(owner)) ?? null, null, 'заказчику — нет');
+  // Организация эксперта аккредитована дольше срока дела — предупреждения нет.
+  const o2 = await makeOrg(S.sql, 'Тестовая организация 2.460');
+  await addMember(S.sql, o2.id, late.user.id, 'member');
+  await S.sql`update specialists set org_id = ${o2.id} where user_id = ${late.user.id}`;
+  await S.sql`insert into org_accreditations (org_id, bank, title, valid_until, created_by)
+              values (${o2.id}, 'sber', 'Сбербанк', ${addDays(today, 40)}, ${late.user.id})`;
+  assert.equal(await term(), null);
+  // У организации тоже раньше срока, но позже своей — предупреждение по организации.
+  await S.sql`update org_accreditations set valid_until = ${addDays(today, 15)} where org_id = ${o2.id}`;
+  t = await term();
+  assert.deepEqual(t.items, [{ kind: 'bank', kind_name: 'Аккредитация в банке «Сбербанк»', valid_until: addDays(today, 15), expired: false,
+    org_name: 'Тестовая организация 2.460' }]);
+  // Срок не указан — действует.
+  await S.sql`update dossier_items set valid_until = null where user_id = ${late.user.id} and kind = 'bank'`;
+  assert.equal(await term(), null);
+  // «Другой банк» и заявка не для банка — без предупреждения.
+  await S.sql`update dossier_items set valid_until = ${addDays(today, 10)} where user_id = ${late.user.id} and kind = 'bank'`;
+  await S.sql`update org_accreditations set valid_until = ${addDays(today, 10)} where org_id = ${o2.id}`;
+  for (const fields of [{ purpose: 'bank', bank: 'other' }, { purpose: 'deal' }]) {
+    const x = await offered(late, fields);
+    assert.equal((await late.req('POST', `/api/orders/${x.id}/status`, { from: 'awaiting_executor', to: 'in_work' })).status, 200);
+    assert.equal((await late.req('GET', `/api/orders/${x.id}/documents`)).body.dossier_term, null);
+  }
+});
