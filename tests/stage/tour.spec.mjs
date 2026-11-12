@@ -177,7 +177,7 @@ test('экскурсия по кабинетам: эксперт, руковод
   await page.getByLabel('Вид транспорта').selectOption({ label: 'Грузовой автомобиль' });
   await page.getByLabel('Марка и модель').fill('Тестмаш 3000 (вымышленная)');
   await page.getByLabel('Год выпуска').fill('2024');
-  await page.getByLabel('VIN').fill('XTA000000R0000001');
+  await page.getByLabel('VIN', { exact: true }).fill('XTA000000R0000001');
   await page.getByLabel(/^Срок/).fill(inDays(10));
   await page.getByLabel('Добавить файл (до 100 МБ)').setInputFiles({ name: 'ПТС (тест).pdf', mimeType: 'application/pdf', buffer: makePdf([['Тестовый ПТС: Тестмаш 3000, 2024 г.в.']]) });
   await expect(page.getByText('Файл добавлен')).toBeVisible();
@@ -187,7 +187,7 @@ test('экскурсия по кабинетам: эксперт, руковод
 
   // ——— Диспетчер: цена ———
   await dp.goto('/kabinet');
-  await snap(dp, 'Диспетчер', 'Все заявки', 'Диспетчер видит все заявки и может отобрать их по состоянию.', '#list-view .card >> nth=0');
+  await snap(dp, 'Диспетчер', 'Все заявки', 'Диспетчер видит все заявки и может отобрать их по состоянию.', '#list-view .card:visible >> nth=0');
   await dp.goto(`/kabinet#order=${id}`);
   await expect(dp.locator('#order-title')).toHaveText(title);
   await dp.getByLabel('Цена эксперта, рублей').fill('20000');
@@ -215,7 +215,7 @@ test('экскурсия по кабинетам: эксперт, руковод
   await expect(sp.locator('#notifications li').filter({ hasText: 'Вам предложено новое дело' }).first()).toBeVisible();
   await snap(sp, 'Эксперт', 'Уведомления: предложение дела', 'Предложения дел приходят уведомлением (и СМС, если включено). Отдельной ленты предложений пока нет.');
   await sp.goto('/kabinet');
-  await snap(sp, 'Эксперт', 'Мои дела', 'Все дела эксперта одним списком: предложенные, в работе, на проверке, готовые.', '#list-view .card >> nth=0');
+  await snap(sp, 'Эксперт', 'Мои дела', 'Все дела эксперта одним списком: предложенные, в работе, на проверке, готовые.', '#list-view .card:visible >> nth=0');
   await sp.goto(`/kabinet#order=${id}`);
   await expect(sp.locator('#money-facts')).toContainText(/Ваша цена \(100%\)\s*20\s000 ₽/);
   await snap(sp, 'Эксперт', 'Предложенное дело', 'Эксперт видит данные заявки, срок и свою цену и решает: принять или отказаться.');
@@ -309,7 +309,7 @@ test('экскурсия по кабинетам: эксперт, руковод
   await snap(hp, 'Руководитель организации', 'Подпись от организации', 'Руководитель подписывает файлы от организации после эксперта. Саму заявку и заказчика он не видит — только файлы, эксперта и срок.', '#org-sign-box');
   await hp.goto('/kabinet');
   await expect(hp.locator('#orders li').filter({ hasText: `Оценка служебного автомобиля — тест ${RUN}-${STAMP}` })).toHaveCount(1);
-  await snap(hp, 'Руководитель организации', 'Дела сотрудников', 'Руководитель видит заявки, которые сотрудники заказали от организации. Дела, которые эксперты организации выполняют для заказчиков, здесь не видны.', '#list-view .card >> nth=0');
+  await snap(hp, 'Руководитель организации', 'Дела сотрудников', 'Руководитель видит заявки, которые сотрудники заказали от организации. Дела, которые эксперты организации выполняют для заказчиков, здесь не видны.', '#list-view .card:visible >> nth=0');
   await hp.locator('#orders li').filter({ hasText: `Оценка служебного автомобиля — тест ${RUN}-${STAMP}` }).getByRole('button').first().click();
   await expect(hp.getByRole('heading', { name: 'Кто ведёт дело' })).toBeVisible();
   await snap(hp, 'Руководитель организации', 'Распределение: кто ведёт дело', 'Руководитель передаёт заявку организации другому сотруднику. Сроков и нагрузки по сотрудникам одним экраном пока нет.', '#transfer-box');
