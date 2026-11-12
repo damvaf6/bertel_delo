@@ -3346,9 +3346,118 @@ function repairBasis(docs, ctx) {
   return out;
 }
 
+// ——— 2.474: ущерб после ДТП — суммы ремонта с износом и без, УТС по возрасту и пробегу, суммы в выводах прописью ———
+// Суммы — только итогов ремонта («стоимость (восстановительного) ремонта … без/с учётом износа … N руб.»), не запчастей и
+// работ. С износом больше, чем без него, — находка; разные итоги без износа (или с износом) в расчёте и выводах — находка.
+// УТС легкового автомобиля старше 5 лет или с пробегом больше 100 000 км по рекомендациям РФЦСЭ 2018 не считают —
+// посчитана — находка; об УТС ни слова — находка. В выводах сумма ремонта и УТС без прописи — находка (сверку прописи
+// с цифрами делает `sum_words`). Находки — в пункте «Стоимость ремонта».
+const WEAR_AT = /(?<![а-яё])(без|с)\s+уч[её]т\S*\s+износа/giu;
+const WEAR_PART = /запасн|запчаст|детал|материал|работ|нормо|окраск/iu;
+const UTS_AT = /утрат\S*\s+товарн\S*\s+стоимост\S*|(?<![А-ЯЁа-яё])УТС(?![А-ЯЁа-яё])/giu;
+const UTS_NO = /не\s+(?:рассчитыва|определя|счита|подлеж|производ|расч[её]т|начисля)|отсутству|не\s+требует|не\s+возникает/iu;
+const SUM_IN = /(?<![\d.,])(\d{1,3}(?:[  ]\d{3})+|\d{4,})(?:[,.](\d{2}))?(?![\d.])\s*(руб|₽|р\.)?/u;
+const CONCL_HEAD = /^\s*(?:\d+\.?\s*)?(?:выводы|заключение\s+эксперта\s*:|ответы\s+на\s+вопросы)/iu;
+const CONCL_END = /^\s*(?:\d+\.?\s*)?(?:приложени|подпись\s+эксперта)/iu;
+const UTS_AGE = 5;
+const UTS_KM = 100000;
+function sumAfter(text) {
+  const m = SUM_IN.exec(text);
+  if (!m || (!m[3] && !/[  ]/.test(m[1]))) return null;
+  return { kop: Number(m[1].replace(/[  ]/g, '')) * 100 + Number(m[2] ?? 0), index: m.index, end: m.index + m[0].length };
+}
+const kopFmt = (k) => `${fmt(Math.floor(k / 100))}${k % 100 ? `,${String(k % 100).padStart(2, '0')}` : ''} руб.`;
+function repairSumsIn(docs) {
+  const out = [];
+  for (const doc of docs) eachPage(doc, (page, i) => {
+    for (const m of page.matchAll(WEAR_AT)) {
+      const before = page.slice(lineStart(page, m.index), m.index);
+      if (!/ремонт/iu.test(before) || WEAR_PART.test(before.replace(/ремонтн\S*\s+работ\S*/giu, ' работ '))) continue;
+      const rest = page.slice(m.index + m[0].length);
+      const stop = rest.search(/износ|\n/u);
+      const s = sumAfter(stop < 0 ? rest.slice(0, 160) : rest.slice(0, Math.min(stop, 160)));
+      if (!s) continue;
+      out.push({ doc, page: i, kind: m[1].toLowerCase() === 'без' ? 'off' : 'on', kop: s.kop, at: m.index + m[0].length + s.end, quote: lineAround(page, m.index) });
+    }
+  });
+  return out;
+}
+function utsIn(docs) {
+  const out = [];
+  for (const doc of docs) eachPage(doc, (page, i) => {
+    for (const m of page.matchAll(UTS_AT)) {
+      const line = page.slice(lineStart(page, m.index), (page.indexOf('\n', m.index) + 1 || page.length + 1) - 1);
+      const rest = page.slice(m.index + m[0].length, m.index + m[0].length + 160).split('\n')[0];
+      const s = UTS_NO.test(line) ? null : sumAfter(rest.split(/износ/u)[0]);
+      out.push({ doc, page: i, kop: s?.kop ?? 0, at: s ? m.index + m[0].length + s.end : -1, no: UTS_NO.test(line), quote: lineAround(page, m.index) });
+    }
+  });
+  return out;
+}
+function repairSums(docs, ctx) {
+  if (!docs.length || ctx.service !== 'car_damage') return [];
+  const out = [];
+  const main = mainReport(docs) ?? docs[0];
+  const first = { doc: main, page: 0, quote: '' };
+  const sums = repairSumsIn(docs);
+  const where = (x) => (docs.length > 1 ? `«${x.doc.name}», стр. ${x.page + 1}` : `стр. ${x.page + 1}`);
+  // С износом больше, чем без него: пара — ближайшая сумма без износа на той же странице, иначе первая в отчёте.
+  const offs = sums.filter((x) => x.kind === 'off');
+  const seen = new Set();
+  for (const on of sums.filter((x) => x.kind === 'on')) {
+    const near = offs.filter((x) => x.doc === on.doc && x.page === on.page).sort((a, b) => Math.abs(a.at - on.at) - Math.abs(b.at - on.at))[0] ?? offs[0];
+    if (!near || on.kop <= near.kop || seen.has(`${on.kop}/${near.kop}`)) continue;
+    seen.add(`${on.kop}/${near.kop}`);
+    out.push({ doc: on.doc, page: on.page, quote: on.quote,
+      text: `Стоимость ремонта с учётом износа (${kopFmt(on.kop)}) больше, чем без учёта износа (${kopFmt(near.kop)}): износ только уменьшает сумму — проверьте расчёт и не перепутаны ли суммы местами` });
+  }
+  for (const [kind, name] of [['off', 'без учёта износа'], ['on', 'с учётом износа']]) {
+    const list = sums.filter((x) => x.kind === kind);
+    const other = list.find((x) => x.kop !== list[0]?.kop);
+    if (!other) continue;
+    out.push({ doc: other.doc, page: other.page, quote: other.quote,
+      text: `Стоимость ремонта ${name} в отчёте разная: ${kopFmt(list[0].kop)} (${where(list[0])}) и ${kopFmt(other.kop)} (${where(other)}) — итог в расчёте и выводах должен быть один` });
+  }
+  // УТС: возраст и пробег по заявке — только легковой автомобиль; год выпуска только годом, поэтому «старше 5 лет» — с 6-го года.
+  const f = ctx.fields ?? {};
+  const uts = utsIn(docs);
+  const accYear = Number(String(f.accident_date ?? '').slice(6, 10)) || null;
+  const why = [];
+  if (f.vehicle_type === 'car' || !f.vehicle_type) {
+    if (accYear && Number(f.year) && accYear - Number(f.year) > UTS_AGE) why.push(`автомобиль ${f.year} года выпуска — на дату ДТП ему больше ${UTS_AGE} лет`);
+    if (Number(f.mileage) > UTS_KM) why.push(`пробег по заявке ${fmt(Number(f.mileage))} км — больше ${fmt(UTS_KM)} км`);
+  }
+  const counted = uts.find((x) => x.kop > 0);
+  if (!uts.length) {
+    out.push({ ...(firstLine(docs, /выводы/iu) ?? first),
+      text: why.length
+        ? `Об утрате товарной стоимости в отчёте ничего нет: ${why.join(', ')} — напишите одной строкой, что УТС по рекомендациям РФЦСЭ (2018) не рассчитывается, и почему`
+        : 'Об утрате товарной стоимости в отчёте ничего нет — посчитайте УТС или напишите одной строкой, почему она не рассчитывается (возраст, пробег, прежний ремонт или окраска деталей)' });
+  } else if (why.length && counted) {
+    out.push({ doc: counted.doc, page: counted.page, quote: counted.quote,
+      text: `Утрата товарной стоимости посчитана (${kopFmt(counted.kop)}), а ${why.join(', ')}: по Методическим рекомендациям ФБУ РФЦСЭ (2018) УТС легкового автомобиля старше ${UTS_AGE} лет или с пробегом больше ${fmt(UTS_KM)} км не рассчитывается — уберите УТС или объясните в разделе, почему считаете` });
+  }
+  // В выводах суммы ремонта и УТС — цифрами и прописью.
+  const concl = regionLines(docs, CONCL_HEAD, CONCL_END).filter((x) => !x.head);
+  const told = new Set();
+  for (const x of concl) {
+    const page = x.line;
+    const hits = [...repairSumsIn([{ name: '', pages: [page] }]).map((s) => ({ ...s, what: `стоимость ремонта ${s.kind === 'off' ? 'без учёта износа' : 'с учётом износа'}` })),
+      ...utsIn([{ name: '', pages: [page] }]).filter((s) => s.kop > 0).map((s) => ({ ...s, what: 'утрата товарной стоимости' }))];
+    for (const h of hits) {
+      if (/^\s*[=—–-]?\s*\(?\s*\(\s*[А-Яа-яЁё]|^[^\n(]{0,12}\(\s*[А-Яа-яЁё]/u.test(page.slice(h.at)) || told.has(h.what)) continue;
+      told.add(h.what);
+      out.push({ doc: x.doc, page: x.page, quote: clean(x.line).slice(0, 200),
+        text: `В выводах ${h.what} (${kopFmt(h.kop)}) — только цифрами: напишите сумму и прописью, например «(${numberToWords(Math.floor(h.kop / 100))} рублей)»` });
+    }
+  }
+  return out;
+}
+
 const WHOLE = {
   parts_match: partsMatch,
   repair_basis: repairBasis,
+  repair_sums: repairSums,
   questions_answered: questionsAnswered,
   dossier_appraiser: dossierFindings(['certificate', 'sro', 'policy', 'policy_org']),
   dossier_education: dossierFindings(['education']),
@@ -3447,6 +3556,7 @@ export const AUTO_CHECKS = Object.freeze({
   bank_user: 'при оценке для банка предполагаемый пользователь результатов оценки в отчёте — банк из заявки (Сбербанк) или из задания на оценку',
   bank_accredited: 'при оценке для банка эксперт или его организация аккредитованы в этом банке на дату отчёта',
   parts_match: 'ущерб после ДТП: у каждой детали из таблицы повреждённых деталей дела есть фото осмотра и строка в калькуляции ремонта; каждая деталь из заявки «Что повреждено» есть в исследовании повреждений',
+  repair_sums: 'ущерб после ДТП: стоимость ремонта с учётом износа не больше, чем без износа, и одна в расчёте и выводах; УТС легкового автомобиля старше 5 лет или с пробегом больше 100 000 км не посчитана (рекомендации РФЦСЭ 2018), об УТС сказано; в выводах суммы ремонта и УТС — и прописью',
   repair_basis: 'ущерб после ДТП: дата ДТП и цены в расчёте — на дату ДТП из заявки; методика по цели из заявки: ОСАГО — Единая методика (755-П), суд и к виновнику — Методические рекомендации РФЦСЭ (2018)',
 });
 
