@@ -147,6 +147,32 @@ export async function insertNoInspection() {
   return true;
 }
 
+// Извещение об осмотре (2.470): строка «Извещение об осмотре: …» из дела — заменяет прежнюю такую строку целиком, иначе
+// встаёт сразу под заголовком раздела с notice (у ДТП — «4. Осмотр»), а нет его — в конец. → 'same', true или null.
+export async function insertNoticeLine(line) {
+  const t = $('draft-text');
+  if (!canFixInDraft() || !line) return null;
+  const lines = t.value.split('\n');
+  const old = lines.findIndex((l) => l.startsWith('Извещение об осмотре:'));
+  if (old >= 0) {
+    if (lines[old] === line) return 'same';
+    const from = old ? lines.slice(0, old).join('\n').length + 1 : 0;
+    lines[old] = line;
+    await putText(lines.join('\n'), from, line.length);
+    return true;
+  }
+  const want = (ctx.sections ?? []).find((x) => x.notice);
+  const h = want ? [...t.value.matchAll(/^#{1,3}\s*(.+)$/gm)].find((m) => norm(m[1]) === norm(want.title)) : null;
+  if (h) {
+    const at = h.index + h[0].length;
+    await putText(`${t.value.slice(0, at)}\n${line}${t.value.slice(at)}`, at + 1, line.length);
+    return true;
+  }
+  const head = t.value.replace(/\s*$/, '');
+  await putText(`${head}\n\n${line}\n`, head.length + 2, line.length);
+  return true;
+}
+
 // Пустые разделы перед сборкой Word (2.177): список по тексту на экране; нажатие — к разделу в тексте (выделяется пометка
 // «[заполнить…]», если она там есть, иначе курсор встаёт под заголовок). Служебным, которые только читают, список не нужен.
 function renderEmpty() {
@@ -191,7 +217,7 @@ function toSection(title) {
 // 2.231 — и у находки, сверенной с заявкой или заданием на оценку.
 export const canFixInDraft = () => !!ctx?.draft && !$('draft-text').readOnly && !$('draft-box').classList.contains('hidden');
 function syncFixButtons() {
-  for (const b of document.querySelectorAll('[data-action="egrn-draft"], [data-action="fix-draft"], [data-action="egrn-swap"], [data-action="fix-swap"], [data-action="egrn-swap-all"], [data-action="sig-egrn-swap"], [data-action="task-due-swap"], [data-action="noinsp-draft"]')) b.classList.toggle('hidden', !canFixInDraft());
+  for (const b of document.querySelectorAll('[data-action="egrn-draft"], [data-action="fix-draft"], [data-action="egrn-swap"], [data-action="fix-swap"], [data-action="egrn-swap-all"], [data-action="sig-egrn-swap"], [data-action="task-due-swap"], [data-action="noinsp-draft"], [data-action="notice-draft"]')) b.classList.toggle('hidden', !canFixInDraft());
 }
 // Выделяет в тексте черновика значение, которое разошлось с выпиской (заявкой, заданием); в черновике его нет — false
 // (правят в файле отчёта).

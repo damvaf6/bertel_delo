@@ -152,6 +152,8 @@ textarea.draft-text { min-height: 360px; font-size: 15px; line-height: 1.45; }
 .overdue.big { font-size: 18px; font-weight: 700; margin: 4px 0; }
 /* Пришли документы после ИИ-проверки (2.248) — не беда, но посмотреть. */
 .warn-line { color: var(--warn); font-weight: 600; }
+.notice-state.ok { color: var(--ok); }
+.notice-state.late { color: var(--warn); font-weight: 600; }
 .steps { list-style: none; padding: 0; margin: 0 0 12px; }
 /* Страница дела короче (2.72): шаги, история и журнал — одной строкой, раскрываются по нажатию */
 details.fold { margin: 0 0 12px; }
