@@ -48,6 +48,14 @@ const $ = (id) => document.getElementById(id);
 const MONTHS = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
 const monthRu = (m) => `${MONTHS[Number(m.slice(5, 7)) - 1]} ${m.slice(0, 4)}`;
 // Дробное — «4,5 дня».
+// 2.478: разница эксперта со страховой — «+15 000 ₽» / «−5 000 ₽»; дела по ДТП одной строкой.
+const signedRub = (kop) => (kop > 0 ? `+${rub(kop)}` : kop < 0 ? `−${rub(-kop)}` : 'столько же');
+const carDiff = (n, kop) => (n ? `со сверкой со страховой: ${n}, у эксперта в среднем ${kop === 0 ? 'столько же' : signedRub(kop)}`
+  : 'сверки со страховой нет');
+const carTotal = (x) => [`сдано по ДТП: ${casesN(x.car_cases)}`, carDiff(x.car_compared, x.car_diff_kop),
+  x.car_compared ? [x.car_more ? `больше страховой: ${x.car_more}` : null, x.car_less ? `меньше: ${x.car_less}` : null,
+    x.car_same ? `столько же: ${x.car_same}` : null].filter(Boolean).join(', ') : null,
+  x.car_compared && x.car_no_calc ? `без сверки: ${x.car_no_calc}` : null].filter(Boolean).join(' · ');
 const daysRu = (d) => `${String(d).replace('.', ',')} ${!Number.isInteger(d) ? 'дня' : d % 10 === 1 && d % 100 !== 11 ? 'день'
   : [2, 3, 4].includes(d % 10) && ![12, 13, 14].includes(d % 100) ? 'дня' : 'дней'}`;
 // «в первоначальный срок, без переносов: 3 из 5 · в среднем 4,5 дня от принятия до сдачи · позже первоначального срока: 2
@@ -255,6 +263,16 @@ async function load(month) {
   $('org-report-banks').replaceChildren(...banks.map((x) => el('li', { 'data-report-bank': x.id },
     el('div', { class: 'title', text: `${x.name} — ${casesN(x.done)}` }),
     el('div', { class: x.no_accr ? 'warn' : 'muted', text: bankLine(x) }))));
+  // 2.478: сданные дела по ДТП — по «Как считать ремонт» и разница с суммой страховой; по экспертам.
+  const t2 = report.total;
+  $('org-report-car-box').classList.toggle('hidden', !t2.car_cases);
+  $('org-report-car-total').textContent = t2.car_cases ? `${carTotal(t2)}.` : '';
+  $('org-report-car').replaceChildren(...(report.by_method ?? []).map((x) => el('li', { 'data-report-method': x.id },
+    el('div', { class: 'title', text: `${x.name} — ${casesN(x.done)}` }),
+    el('div', { class: 'muted', text: carDiff(x.compared, x.diff_kop) }))));
+  $('org-report-car-experts').replaceChildren(...report.experts.filter((x) => x.car_cases).map((x) => el('li', { 'data-report-car-expert': x.user_id },
+    el('div', { class: 'title', text: `${x.full_name} — ${casesN(x.car_cases)}` }),
+    el('div', { class: 'muted', text: carDiff(x.car_compared, x.car_diff_kop) }))));
   const top = report.top_remarks ?? [];
   $('org-report-remarks-box').classList.toggle('hidden', !top.length);
   $('org-report-remarks').replaceChildren(...top.map((x) => el('li', { 'data-remark': '' },

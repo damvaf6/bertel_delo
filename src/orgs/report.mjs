@@ -154,7 +154,7 @@ async function orgMonthDone(sql, orgId, ids, { start, end }) {
   if (!ids.length) return [];
   return sql`
       select distinct on (o.id) o.id, o.module, o.service, o.executor_user_id as user_id, o.deadline, o.price_kop, o.transit_kop, o.expert_kop,
-             o.fields->>'purpose' as purpose, o.fields->>'bank' as bank,
+             o.fields->>'purpose' as purpose, o.fields->>'bank' as bank, o.fields->>'method' as method,
              p.amount_kop as payout_kop, h.at,
              greatest(
                (select max(f.outcome_at) from order_offers f
@@ -636,6 +636,43 @@ function bankAccr(done, accr) {
   return { bank_listed: listed.length, bank_no_accr: listed.filter((o) => !accredited(o, accr)).length };
 }
 
+// Дела по ДТП за месяц (2.478): сданные дела услуг с таблицей повреждённых деталей (parts в модуле, «Ущерб автомобилю после
+// ДТП») — сколько, по «Как считать ремонт» из заявки (поле method; название — из описания услуги) и сверка с расчётом
+// страховой (2.475): по делам, где эксперт внёс и сумму страховой, и свою, — средняя разница «эксперт минус страховая»
+// (копейки, до целых), сколько у эксперта больше, меньше, столько же; дела без своей суммы в сверке — «без сверки».
+const carOf = (done, registry) => (registry ? done.filter((o) => o.module && registry.parts(o.module, o.service)) : []);
+const insurerQ = async (sql, ids) => (!ids.length ? [] : sql`
+  select order_id, insurer_kop, own_kop from insurer_calcs where order_id = any(${ids}::uuid[]) and own_kop is not null`);
+const avgKop = (xs) => (xs.length ? Math.round(xs.reduce((s, x) => s + x, 0) / xs.length) : null);
+// { car_cases, car_compared, car_diff_kop, car_more, car_less, car_same, car_no_calc } — по сданным делам о ДТП.
+function carCalc(car, calcs) {
+  const diffs = car.map((o) => calcs.get(o.id)).filter(Boolean).map((c) => Number(c.own_kop) - Number(c.insurer_kop));
+  return {
+    car_cases: car.length,
+    car_compared: diffs.length,
+    car_diff_kop: avgKop(diffs),
+    car_more: diffs.filter((d) => d > 0).length,
+    car_less: diffs.filter((d) => d < 0).length,
+    car_same: diffs.filter((d) => d === 0).length,
+    car_no_calc: car.length - diffs.length,
+  };
+}
+// [{ id, name, done, compared, diff_kop }] — по «Как считать ремонт»: варианты в порядке описания, без ответа — последним.
+function byMethod(car, calcs, registry) {
+  const groups = new Map();
+  for (const o of car) {
+    const opts = registry.service(o.module, o.service)?.fields.find((f) => f.id === 'method')?.options ?? [];
+    const i = opts.findIndex((x) => x.id === o.method);
+    const id = i >= 0 ? o.method : '';
+    const g = groups.get(id) ?? groups.set(id, { id, name: i >= 0 ? opts[i].name : 'Не указано в заявке', pos: i >= 0 ? i : 99, cases: [] }).get(id);
+    g.cases.push(o);
+  }
+  return [...groups.values()].sort((a, b) => a.pos - b.pos).map(({ id, name, cases }) => {
+    const c = carCalc(cases, calcs);
+    return { id, name, done: c.car_cases, compared: c.car_compared, diff_kop: c.car_diff_kop };
+  });
+}
+
 export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), now = new Date(), registry = null, taskDue = null, taskAfter = null,
   taskMove = null } = {}) {
   const year = isYear(month);
@@ -690,6 +727,8 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), no
   const bankAfters = await bankAfterRows(q.done, taskAfter);
   const exts = await extRows(q.done, taskMove);
   const accr = await accrQ(sql, orgId, ids);
+  const car = carOf(q.done, registry);
+  const calcs = new Map((await insurerQ(sql, car.map((o) => o.id))).map((c) => [c.order_id, c]));
   const count = (rows) => new Map(rows.map((r) => [r.user_id, r.n]));
   const accepted = count(q.accepted);
   const headReturns = count(q.headReturns);
@@ -736,6 +775,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), no
       ...afterRemarks(q.afterRemarks.filter((r) => r.user_id === e.user_id), afterItems.filter((i) => i.user_id === e.user_id)),
       after_remarks: topRemarks(afterItems.filter((i) => i.user_id === e.user_id), TOP_REMARKS_EXPERT).map(({ text, n }) => ({ text, n })),
       ...court(q.court.filter((r) => r.user_id === e.user_id), now),
+      ...carCalc(car.filter((o) => o.user_id === e.user_id), calcs),
       disp_reasons: topRemarks(q.dispReasons.filter((i) => i.user_id === e.user_id && i.text), TOP_REMARKS_EXPERT)
         .map(({ text, n }) => ({ text, n })),
       prev: cmp ? cmp.experts.get(e.user_id) : null,
@@ -759,7 +799,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), no
     total: { ...Object.fromEntries(keys.map((k) => [k, sum(k)])), avg_days: avgDays(all), ...resign(q.resign),
       ...egrnFirst(q.firstSign, registry), ...bankTask(q.bankTask), ...taskLate(taskDues),
       ...bankAfter(bankAfters), ...bankAccr(q.done, accr), ...ext(exts), ...letterAsk(q.letterAsk), ...orgSign(q.done), ...afterRemarks(q.afterRemarks, afterItems),
-      ...court(q.court, now),
+      ...court(q.court, now), ...carCalc(car, calcs),
       prev: cmp ? cmp.total : null },
     prev_month: cmp ? prevM : null,
     prev_month_name: cmp ? periodRu(prevM) : null,
@@ -777,6 +817,8 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), no
     by_service: byService(q.done, registry),
     // 2.459: сданные для банков — по банкам и сколько без аккредитации в этом банке.
     by_bank: byBank(q.done, accr, registry),
+    // 2.478: сданные дела по ДТП — по «Как считать ремонт» и разница с суммой страховой.
+    by_method: car.length ? byMethod(car, calcs, registry) : [],
   };
 }
 
@@ -875,12 +917,13 @@ export async function expertMonthReport(sql, userId, month, today = todayMsk()) 
 }
 
 // Таблица для Excel: точка с запятой, BOM (иначе Excel путает кодировку), суммы — рубли с запятой. Ячейка, начинающаяся
-// с «= + - @», — с апострофом, чтобы Excel не принял имя за формулу.
+// с «= + - @», — с апострофом, чтобы Excel не принял имя за формулу; отрицательное число вида «-5000,00» (2.478) — как есть.
 const daysCell = (d) => (d == null ? '' : String(d).replace('.', ','));
 const rubCell = (kop) => `${Math.floor(kop / 100)},${String(kop % 100).padStart(2, '0')}`;
+const signedRub = (kop) => `${kop < 0 ? '-' : ''}${rubCell(Math.abs(kop))}`;
 export function cell(v) {
   let s = v == null ? '' : String(v);
-  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  if (/^[=+\-@\t\r]/.test(s) && !/^-\d+(,\d+)?$/.test(s)) s = `'${s}`;
   return /[;"\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
@@ -989,6 +1032,15 @@ export function reportCsv(orgName, r) {
       ...[...r.experts.filter((x) => x.court_hearings).map((x) => [x.full_name, x]), ['Итого', r.total]]
         .map(([name, x]) => [name, x.court_hearings, x.court_cases, x.court_explain, x.court_absence, x.court_postponed,
           x.court_repeat, x.court_unmarked, x.court_ahead])] : []),
+    // 2.478: только если за месяц сданы дела по ДТП — по методике и по экспертам, разница с суммой страховой.
+    ...(r.total.car_cases ? [[], ['Дела по ДТП — как считали ремонт', 'Сдано', 'Со сверкой с расчётом страховой',
+      'Разница со страховой в среднем, ₽ (эксперт минус страховая)'],
+      ...(r.by_method ?? []).map((x) => [x.name, x.done, x.compared, x.diff_kop == null ? '' : signedRub(x.diff_kop)]),
+      [], ['Дела по ДТП — по экспертам', 'Сдано', 'Со сверкой с расчётом страховой', 'Разница со страховой в среднем, ₽',
+        'У эксперта больше', 'Меньше', 'Столько же', 'Без сверки'],
+      ...[...r.experts.filter((x) => x.car_cases).map((x) => [x.full_name, x]), ['Итого', r.total]]
+        .map(([name, x]) => [name, x.car_cases, x.car_compared, x.car_diff_kop == null ? '' : signedRub(x.car_diff_kop),
+          x.car_more, x.car_less, x.car_same, x.car_no_calc])] : []),
   ];
   return `﻿${lines.map((l) => l.map(cell).join(';')).join('\r\n')}\r\n`;
 }
