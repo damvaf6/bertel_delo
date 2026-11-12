@@ -670,6 +670,38 @@
         </form>
         <p class="msg" id="inspnotice-msg" role="status" aria-live="polite"></p>
       </div>
+      <div class="card hidden" id="parts-box">
+        <h2>Повреждённые детали</h2>
+        <p class="muted" id="parts-lead"></p>
+        <ul class="list" id="parts-list"></ul>
+        <div class="row hidden" id="parts-draft-row">
+          <button type="button" class="secondary" data-action="parts-draft" id="parts-draft">Вставить таблицу в черновик раздела «Исследование повреждений»</button>
+        </div>
+        <button type="button" class="secondary hidden" id="parts-open">Добавить деталь</button>
+        <form class="hidden" id="parts-form" novalidate>
+          <div class="field">
+            <label for="parts-part">Деталь</label>
+            <input id="parts-part" type="text" maxlength="120" placeholder="например, бампер задний">
+          </div>
+          <div class="field">
+            <label for="parts-damage">Повреждение — характер и площадь</label>
+            <input id="parts-damage" type="text" maxlength="300" placeholder="например, разрыв пластика в правой части, 10 см">
+          </div>
+          <fieldset class="field" id="parts-actions">
+            <legend>Ремонтное воздействие</legend>
+          </fieldset>
+          <div class="field">
+            <label for="parts-photos">Номера фото осмотра — через запятую</label>
+            <input id="parts-photos" type="text" inputmode="numeric" maxlength="120" placeholder="например, 3, 5">
+            <p class="muted" id="parts-photos-hint"></p>
+          </div>
+          <div class="row">
+            <button type="submit" id="parts-save">Записать деталь</button>
+            <button type="button" class="link" id="parts-cancel">Отмена</button>
+          </div>
+        </form>
+        <p class="msg" id="parts-msg" role="status" aria-live="polite"></p>
+      </div>
       <div class="card hidden" id="onsite-box">
         <h2>Выезд помощника</h2>
         <p class="muted" id="onsite-state"></p>
