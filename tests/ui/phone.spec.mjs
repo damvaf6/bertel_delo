@@ -5497,7 +5497,7 @@ test('как эксперт (2.97): ущерб автомобилю после �
   await expect(sp.locator('#draft-approaches')).toBeHidden();
   await expect(sp.locator('#next-steps li[data-step="inspect"]')).toContainText('Осмотр автомобиля (по желанию)');
   await expect(sp.locator('#inspect-head')).toHaveText('Осмотр автомобиля по ссылке');
-  await expect(sp.locator('#inspect-state')).toContainText('крупно с линейкой каждую деталь из заявки (задний бампер, крышка багажника)');
+  await expect(sp.locator('#inspect-state')).toContainText('крупно с линейкой каждую деталь из заявки (задний бампер, крышка багажника, левый задний фонарь)');
   await shot(sp, 'd2-dtp-delo');
 
   // 2. Документы: извещение о ДТП, расчёт страховой, СТС; акта о заливе и залога нет.
@@ -5537,11 +5537,12 @@ test('как эксперт (2.97): ущерб автомобилю после �
   await expect(op.locator('#intro-text')).toContainText('каждую повреждённую деталь отдельно, с линейкой или рулеткой рядом');
   await expect(op.locator('#steps li[data-step="car_damage_close-1"]')).toContainText('Крупно с линейкой: задний бампер');
   await expect(op.locator('#steps li[data-step="car_damage_close-2"]')).toContainText('Крупно с линейкой: крышка багажника');
+  await expect(op.locator('#steps li[data-step="car_damage_close-3"]')).toContainText('Крупно с линейкой: левый задний фонарь');
   await expect(op.locator('#steps li[data-step="car_damage_close"]')).toContainText('Другие повреждения крупно');
   await expect(op.locator('#steps li[data-step="car_damage_close"] .badge')).toHaveText('если есть');
   await op.locator('#steps li[data-step="car_damage_close-1"]').scrollIntoViewIfNeeded();
   await shot(op, 'd4b-dtp-osmotr-detali');
-  const steps = ['car_front', 'car_rear', 'car_left', 'car_right', 'car_vin', 'car_odometer', 'car_interior', 'car_damage_whole', 'car_damage_close-1', 'car_damage_close-2', 'car_damage_close'];
+  const steps = ['car_front', 'car_rear', 'car_left', 'car_right', 'car_vin', 'car_odometer', 'car_interior', 'car_damage_whole', 'car_damage_close-1', 'car_damage_close-2', 'car_damage_close-3', 'car_damage_close'];
   for (const st of steps) {
     await op.locator(`#steps li[data-step="${st}"] input[type=file]`).setInputFiles({ name: `${st}.jpg`, mimeType: 'image/jpeg', buffer: jpeg });
     await expect(op.locator(`#steps li[data-step="${st}"] .badge`)).toHaveText('Фото: 1');
