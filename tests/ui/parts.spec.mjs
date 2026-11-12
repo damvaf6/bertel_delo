@@ -144,7 +144,7 @@ test('повреждённые детали (2.471): записать, изме�
   await expect(page.locator('#parts-draft-row')).toBeHidden();
 
   // 2.472: ИИ-проверка заключения — деталь из таблицы без строки в калькуляции и деталь из заявки без исследования.
-  const report = '5. Исследование повреждений\nКрышка багажника — вмятина.\n7. Расчёт стоимости восстановительного ремонта\nОкраска 3 000 руб.\n9. Выводы\n';
+  const report = '5. Исследование повреждений\nКрышка багажника — вмятина.\n7. Расчёт стоимости восстановительного ремонта\nОкраска 3 000 руб.\nСтоимость восстановительного ремонта без учёта износа 2 000 руб.\nСтоимость восстановительного ремонта с учётом износа 3 000 руб.\n9. Выводы\n';
   expect((await ep.request.post(`/api/orders/${o.id}/results`, {
     data: Buffer.from(report), headers: { ...H, 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('заключение.txt') },
   })).status()).toBe(201);
@@ -160,12 +160,18 @@ test('повреждённые детали (2.471): записать, изме�
   await ep.screenshot({ path: 'test-results/screens/dp03-detali-ii-proverka.png', fullPage: false });
   // 2.473: пункт «Стоимость ремонта» — дата ДТП из заявки не найдена, для ОСАГО не названа Единая методика.
   const cost = ep.locator('#review-checks > li[data-check="cd_cost"]');
-  await expect(cost.locator('.ai-found li')).toHaveCount(2);
+  // 2.474: там же — с износом больше, чем без износа, и об УТС ничего нет.
+  await expect(cost.locator('.ai-found li')).toHaveCount(4);
   await expect(cost).toContainText('Дата ДТП из заявки (14.09.2026) в отчёте не найдена');
   await expect(cost).toContainText('В заявке — спор со страховой по ОСАГО, а Единая методика в отчёте не названа');
   await cost.scrollIntoViewIfNeeded();
   expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
   await ep.screenshot({ path: 'test-results/screens/dp04-tseny-metodika.png', fullPage: false });
+  await expect(cost).toContainText('Стоимость ремонта с учётом износа (3 000 руб.) больше, чем без учёта износа (2 000 руб.)');
+  await expect(cost).toContainText('Об утрате товарной стоимости в отчёте ничего нет');
+  await cost.locator('.ai-found li', { hasText: 'больше, чем без учёта износа' }).scrollIntoViewIfNeeded();
+  expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await ep.screenshot({ path: 'test-results/screens/dp05-iznos-uts.png', fullPage: false });
   expect(problems).toEqual([]);
   await ectx.close();
 });
