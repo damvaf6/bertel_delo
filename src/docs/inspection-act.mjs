@@ -26,7 +26,7 @@ const visitData = (fields, data) => fields.map((f) => [f.label, valueText(f, dat
 // Сведения акта; null — фото осмотра в деле нет. Имя помощника — исполнителю и служебным (как в «Выездах», onsite.get).
 // reshot — доснятые по просьбе эксперта шаги (reshotSteps в inspect-ops.mjs, по тем же фото).
 export async function inspectionActData(sql, registry, order, actor, reshotOf = async () => ({})) {
-  const steps = registry.inspectionSteps(order.module, order.service);
+  const steps = registry.inspectionSteps(order.module, order.service, order.fields);
   const photos = await inspectionPhotos(sql, order, steps);
   if (!photos.length) return null;
   const def = registry.service(order.module, order.service);

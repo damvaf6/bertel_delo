@@ -20,7 +20,7 @@ function writable(spec, actor, order) {
 
 // Фото осмотра дела: номер → id документа и обратно (номер — как в деле и в Word, src/docs/photos.mjs).
 async function photoMaps(sql, registry, order) {
-  const steps = registry.inspectionSteps(order.module, order.service);
+  const steps = registry.inspectionSteps(order.module, order.service, order.fields);
   const rows = await inspectionPhotos(sql, order, steps);
   return {
     list: rows.map((r) => ({ no: r.no, step: steps.find((s) => s.id === r.step)?.title ?? 'Снимок вне шагов осмотра' })),

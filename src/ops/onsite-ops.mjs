@@ -77,7 +77,7 @@ export function onsiteOps() {
       planned_at: visit.planned_at,
       finished_at: visit.finished_at,
       object: dataView(ex?.show ?? [], order.fields),
-      steps: registry.inspectionSteps(order.module, order.service)
+      steps: registry.inspectionSteps(order.module, order.service, order.fields)
         .map((s) => ({ ...s, photos: counts[s.id] ?? 0, retake: retakes[s.id]?.note ?? null })),
       fields: ex?.fields ?? [],
       data: visit.data,
@@ -195,7 +195,7 @@ export function onsiteOps() {
       async handler(ctx) {
         const { actor, registry, visit, order, res } = ctx;
         requireActive(visit, order);
-        const out = await storePhoto(ctx, { order, steps: registry.inspectionSteps(order.module, order.service),
+        const out = await storePhoto(ctx, { order, steps: registry.inspectionSteps(order.module, order.service, order.fields),
           uploadedBy: actor.id, source: { visit: visit.id }, actor });
         res.status(201);
         return out;
