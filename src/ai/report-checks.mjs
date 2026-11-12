@@ -3147,7 +3147,103 @@ function questionsAnswered(docs, ctx) {
   return out;
 }
 
+// ——— 2.472: повреждённые детали по ДТП — у каждой детали из таблицы дела есть фото осмотра и строка в калькуляции; деталь
+// из заявки «Что повреждено» исследована. ctx.parts — [{ part, photos: [номер фото] }] из таблицы дела (null — не загружали),
+// ctx.fields.damage — «Что повреждено» из заявки. Названия сверяются по основам слов: «Бампер передний» = «переднего бампера»,
+// «пер.», «лев.», «пр.» — сокращения сторон.
+const PART_STOP = new Set(['в', 'во', 'на', 'с', 'со', 'и', 'к', 'по', 'от', 'для', 'сбор', 'шт']);
+const PART_NOUNS = new Set(['бампер', 'фар', 'фонар', 'двер', 'капот', 'крыл', 'крышк', 'багажник', 'решетк', 'радиатор', 'стекл',
+  'зеркал', 'порог', 'стойк', 'крыш', 'диск', 'колес', 'шин', 'подкрылок', 'подкрылк', 'молдинг', 'накладк', 'ручк', 'панел',
+  'лонжерон', 'усилител', 'знак', 'подушк', 'датчик', 'спойлер', 'глушител', 'рычаг', 'амортизатор', 'кронштейн', 'обивк', 'борт',
+  'облицовк', 'абсорбер', 'эмблем', 'бачок', 'бачк', 'птф', 'кузов', 'брызговик', 'дверц', 'люк', 'арк', 'щиток', 'щитк']);
+const ENDING = /(?:ами|ями|ого|его|ому|ему|ыми|ими|ой|ей|ий|ый|ая|яя|ое|ее|ые|ие|ую|юю|ов|ев|ам|ям|ах|ях|ом|ем|а|я|о|е|ы|и|у|ю|ь)$/u;
+function partToken(w) {
+  if (/^перед|^пер$/.test(w)) return '<перед>';
+  if (/^зад/.test(w)) return '<зад>';
+  if (/^лев|^л$/.test(w)) return '<лев>';
+  if (/^прав|^пр$/.test(w)) return '<прав>';
+  const s = w.replace(ENDING, '');
+  return s.length >= 3 ? s : w;
+}
+const partWords = (text) => String(text ?? '').toLowerCase().replace(/ё/g, 'е').match(/[а-яa-z0-9]+/g) ?? [];
+const partTokens = (text) => partWords(text).map(partToken).filter((t) => !PART_STOP.has(t));
+// Все слова названия есть в строке (порядок и падежи не важны).
+function partIn(name, line) {
+  const need = partTokens(name);
+  if (!need.length) return false;
+  const have = new Set(partTokens(line));
+  return need.every((t) => have.has(t));
+}
+// «Что повреждено» своими словами → детали: «Помят задний бампер, разбита левая фара и крышка багажника» →
+// «задний бампер», «левая фара», «крышка багажника». Без знакомой детали кусок не считается.
+export function damageItems(text) {
+  const out = [];
+  for (const chunk of String(text ?? '').split(/[,;\n]+|\s+и\s+|\.\s+(?=[А-ЯЁ])/u)) {
+    const words = chunk.trim().split(/\s+/).filter(Boolean);
+    const kept = words.filter((w) => { const t = partTokens(w)[0]; return t && (PART_NOUNS.has(t) || t.startsWith('<')); });
+    if (!kept.some((w) => PART_NOUNS.has(partTokens(w)[0]))) continue;
+    const name = kept.join(' ').replace(/[.,:;!?«»"()]/g, '').toLowerCase();
+    if (!out.includes(name)) out.push(name);
+  }
+  return out;
+}
+
+const RESEARCH_HEAD = /исследовани[а-яё]*\s+повреждени/iu;
+const RESEARCH_END = /методик|расч[её]т[а-яё]*\s+стоимост|калькуляци|утрат[а-яё]*\s+товарн|^\W*\d{0,2}\.?\s*выводы/iu;
+const CALC_HEAD = /калькуляци|расч[её]т[а-яё]*\s+стоимост[а-яё]*\s+восстановительного\s+ремонт|стоимост[а-яё]*\s+запасн[а-яё]*\s+част/iu;
+const CALC_END = /утрат[а-яё]*\s+товарн|^\W*\d{0,2}\.?\s*выводы|фототаблиц|исследовани[а-яё]*\s+повреждени|^\W*\d{0,2}\.?\s*методик/iu;
+// Строки отчёта внутри разделов: от строки-начала до строки-конца; строки оглавления (с отточием) — не начало раздела.
+const TOC_LINE = /(?:\.{4,}|…{2,})\s*\d{0,3}\s*$/u;
+function regionLines(docs, start, end) {
+  const out = [];
+  for (const doc of docs) {
+    let on = false;
+    eachPage(doc, (page, i) => {
+      for (const line of page.split('\n')) {
+        if (start.test(line) && !TOC_LINE.test(line)) { on = true; out.push({ doc, page: i, line, head: true }); continue; }
+        if (on && end.test(line)) on = false;
+        if (on) out.push({ doc, page: i, line });
+      }
+    });
+  }
+  return out;
+}
+
+function partsMatch(docs, ctx) {
+  if (!docs.length || (ctx.service && ctx.service !== 'car_damage')) return [];
+  const parts = ctx.parts ?? null;
+  const out = [];
+  const first = { doc: docs[0], page: 0, quote: '' };
+  const at = (x) => (x ? { doc: x.doc, page: x.page, quote: clean(x.line).slice(0, 200) } : first);
+  const research = regionLines(docs, RESEARCH_HEAD, RESEARCH_END);
+  const all = research.length ? research : docs.flatMap((doc) => (doc.pages ?? []).flatMap((p, i) => p.split('\n').map((line) => ({ doc, page: i, line }))));
+  const body = research.filter((x) => !x.head);
+  if (parts) {
+    for (const p of parts) {
+      if (p.photos.length) continue;
+      out.push({ ...at(body.find((x) => partIn(p.part, x.line))), text: `Деталь «${p.part}» из таблицы повреждённых деталей — без фото осмотра: укажите в таблице номер фото или попросите доснять` });
+    }
+    if (parts.length) {
+      const calc = regionLines(docs, CALC_HEAD, CALC_END);
+      if (!calc.length) {
+        out.push({ ...first, text: 'Калькуляции ремонта в отчёте не нашлось (раздела «Расчёт стоимости восстановительного ремонта» или «Калькуляция») — детали из таблицы повреждённых деталей не с чем сверить; если калькуляция отдельным файлом — приложите её к результату' });
+      } else {
+        for (const p of parts) {
+          if (calc.some((x) => partIn(p.part, x.line))) continue;
+          out.push({ ...at(calc[0]), text: `Деталь «${p.part}» есть в таблице повреждённых деталей, а в калькуляции ремонта её не нашлось — добавьте строку в калькуляцию или уберите деталь из таблицы` });
+        }
+      }
+    }
+  }
+  for (const item of damageItems(ctx.fields?.damage)) {
+    if ((parts ?? []).some((p) => partIn(item, p.part)) || all.some((x) => partIn(item, x.line))) continue;
+    out.push({ ...at(research[0]), text: `В заявке «Что повреждено» указано «${item}», а в исследовании повреждений этой детали нет — исследуйте её или напишите, почему повреждение не от этого ДТП` });
+  }
+  return out;
+}
+
 const WHOLE = {
+  parts_match: partsMatch,
   questions_answered: questionsAnswered,
   dossier_appraiser: dossierFindings(['certificate', 'sro', 'policy', 'policy_org']),
   dossier_education: dossierFindings(['education']),
@@ -3245,6 +3341,7 @@ export const AUTO_CHECKS = Object.freeze({
   customer_match: 'заказчик оценки в отчёте и в письме — как в задании на оценку (письме заказчика), если оно приложено к делу, иначе как в заявке',
   bank_user: 'при оценке для банка предполагаемый пользователь результатов оценки в отчёте — банк из заявки (Сбербанк) или из задания на оценку',
   bank_accredited: 'при оценке для банка эксперт или его организация аккредитованы в этом банке на дату отчёта',
+  parts_match: 'ущерб после ДТП: у каждой детали из таблицы повреждённых деталей дела есть фото осмотра и строка в калькуляции ремонта; каждая деталь из заявки «Что повреждено» есть в исследовании повреждений',
 });
 
 export function runAutoChecks(names, docs, ctx = {}) {
