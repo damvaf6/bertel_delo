@@ -158,6 +158,14 @@ test('повреждённые детали (2.471): записать, изме�
   await dmg.scrollIntoViewIfNeeded();
   expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
   await ep.screenshot({ path: 'test-results/screens/dp03-detali-ii-proverka.png', fullPage: false });
+  // 2.473: пункт «Стоимость ремонта» — дата ДТП из заявки не найдена, для ОСАГО не названа Единая методика.
+  const cost = ep.locator('#review-checks > li[data-check="cd_cost"]');
+  await expect(cost.locator('.ai-found li')).toHaveCount(2);
+  await expect(cost).toContainText('Дата ДТП из заявки (14.09.2026) в отчёте не найдена');
+  await expect(cost).toContainText('В заявке — спор со страховой по ОСАГО, а Единая методика в отчёте не названа');
+  await cost.scrollIntoViewIfNeeded();
+  expect(await ep.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await ep.screenshot({ path: 'test-results/screens/dp04-tseny-metodika.png', fullPage: false });
   expect(problems).toEqual([]);
   await ectx.close();
 });
