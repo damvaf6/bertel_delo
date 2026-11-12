@@ -173,6 +173,36 @@ export async function insertNoticeLine(line) {
   return true;
 }
 
+// Повреждённые детали (2.471): таблица из дела — заменяет прежнюю такую таблицу (строка-заголовок и строки «| … |» под ней),
+// иначе встаёт сразу под заголовком раздела с parts (у ДТП — «5. Исследование повреждений»), а нет его — в конец.
+// → 'same', true или null.
+export async function insertPartsTable(table) {
+  const t = $('draft-text');
+  if (!canFixInDraft() || !table?.length) return null;
+  const text = table.join('\n');
+  const lines = t.value.split('\n');
+  const old = lines.findIndex((l) => l.trim() === table[0]);
+  if (old >= 0) {
+    let end = old + 1;
+    while (end < lines.length && lines[end].trim().startsWith('|')) end += 1;
+    if (lines.slice(old, end).join('\n') === text) return 'same';
+    const from = old ? lines.slice(0, old).join('\n').length + 1 : 0;
+    lines.splice(old, end - old, ...table);
+    await putText(lines.join('\n'), from, text.length);
+    return true;
+  }
+  const want = (ctx.sections ?? []).find((x) => x.parts);
+  const h = want ? [...t.value.matchAll(/^#{1,3}\s*(.+)$/gm)].find((m) => norm(m[1]) === norm(want.title)) : null;
+  if (h) {
+    const at = h.index + h[0].length;
+    await putText(`${t.value.slice(0, at)}\n${text}${t.value.slice(at)}`, at + 1, text.length);
+    return true;
+  }
+  const head = t.value.replace(/\s*$/, '');
+  await putText(`${head}\n\n${text}\n`, head.length + 2, text.length);
+  return true;
+}
+
 // Пустые разделы перед сборкой Word (2.177): список по тексту на экране; нажатие — к разделу в тексте (выделяется пометка
 // «[заполнить…]», если она там есть, иначе курсор встаёт под заголовок). Служебным, которые только читают, список не нужен.
 function renderEmpty() {
@@ -217,7 +247,7 @@ function toSection(title) {
 // 2.231 — и у находки, сверенной с заявкой или заданием на оценку.
 export const canFixInDraft = () => !!ctx?.draft && !$('draft-text').readOnly && !$('draft-box').classList.contains('hidden');
 function syncFixButtons() {
-  for (const b of document.querySelectorAll('[data-action="egrn-draft"], [data-action="fix-draft"], [data-action="egrn-swap"], [data-action="fix-swap"], [data-action="egrn-swap-all"], [data-action="sig-egrn-swap"], [data-action="task-due-swap"], [data-action="noinsp-draft"], [data-action="notice-draft"]')) b.classList.toggle('hidden', !canFixInDraft());
+  for (const b of document.querySelectorAll('[data-action="egrn-draft"], [data-action="fix-draft"], [data-action="egrn-swap"], [data-action="fix-swap"], [data-action="egrn-swap-all"], [data-action="sig-egrn-swap"], [data-action="task-due-swap"], [data-action="noinsp-draft"], [data-action="notice-draft"], [data-action="parts-draft"]')) b.classList.toggle('hidden', !canFixInDraft());
 }
 // Выделяет в тексте черновика значение, которое разошлось с выпиской (заявкой, заданием); в черновике его нет — false
 // (правят в файле отчёта).
