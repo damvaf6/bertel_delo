@@ -702,6 +702,47 @@
         </form>
         <p class="msg" id="parts-msg" role="status" aria-live="polite"></p>
       </div>
+      <div class="card hidden" id="insurer-box">
+        <h2>Сверка с расчётом страховой</h2>
+        <p class="muted" id="insurer-lead"></p>
+        <p id="insurer-line" class="hidden"></p>
+        <ul class="list" id="insurer-list"></ul>
+        <div class="row hidden" id="insurer-draft-row">
+          <button type="button" class="secondary" data-action="insurer-draft" id="insurer-draft">Вставить сверку в черновик раздела «Исследование повреждений»</button>
+        </div>
+        <div class="row">
+          <button type="button" class="secondary hidden" id="insurer-open">Внести акт и расчёт страховой</button>
+          <button type="button" class="link hidden" id="insurer-delete">Убрать сверку</button>
+        </div>
+        <form class="hidden" id="insurer-form" novalidate>
+          <div class="field">
+            <label for="insurer-basis">Акт и расчёт страховой — чей, номер и дата</label>
+            <input id="insurer-basis" type="text" maxlength="200" placeholder="например, акт осмотра и калькуляция страховой № 123 от 20.09.2026">
+          </div>
+          <div class="field">
+            <label for="insurer-parts">Детали из акта страховой — каждая с новой строки</label>
+            <textarea id="insurer-parts" rows="5" placeholder="бампер задний&#10;крышка багажника"></textarea>
+          </div>
+          <fieldset class="field" id="insurer-wear">
+            <legend>Сумма страховой</legend>
+            <label class="row check-line"><input type="radio" name="insurer-wear" value="with" checked><span>с учётом износа</span></label>
+            <label class="row check-line"><input type="radio" name="insurer-wear" value="without"><span>без учёта износа</span></label>
+          </fieldset>
+          <div class="field">
+            <label for="insurer-sum">Сумма страховой, рублей</label>
+            <input id="insurer-sum" type="text" inputmode="decimal" maxlength="20" placeholder="например, 84 500">
+          </div>
+          <div class="field">
+            <label for="insurer-own">Ваша сумма на той же основе, рублей — можно позже</label>
+            <input id="insurer-own" type="text" inputmode="decimal" maxlength="20" placeholder="например, 112 300">
+          </div>
+          <div class="row">
+            <button type="submit" id="insurer-save">Сравнить</button>
+            <button type="button" class="link" id="insurer-cancel">Отмена</button>
+          </div>
+        </form>
+        <p class="msg" id="insurer-msg" role="status" aria-live="polite"></p>
+      </div>
       <div class="card hidden" id="onsite-box">
         <h2>Выезд помощника</h2>
         <p class="muted" id="onsite-state"></p>

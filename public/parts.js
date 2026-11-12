@@ -4,6 +4,7 @@
 // список. Текст — через textContent.
 import { api, el, say } from '/common.js';
 import { insertPartsTable } from '/draft.js';
+import { refreshInsurer } from '/insurer.js';
 
 const $ = (id) => document.getElementById(id);
 let ctx = null; // { orderId, v, editing }
@@ -74,6 +75,7 @@ async function send(method, path, body, ok) {
   try {
     draw(await api(method, `/api/orders/${ctx.orderId}${path}`, body));
     say($('parts-msg'), ok, 'ok');
+    refreshInsurer(); // сверка со страховой сравнивает с этой таблицей
     return true;
   } catch (err) { say($('parts-msg'), err.message); return false; }
 }
