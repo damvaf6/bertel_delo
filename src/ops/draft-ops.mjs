@@ -366,7 +366,7 @@ export function taskCustomerFor(registry, order, assignment, owner) {
 // 2.425: осмотра в деле нет — ни фото осмотра, ни выезда помощника (кроме отменённого), — и осмотра не ждём: нет
 // действующей ссылки владельцу. Только у услуг с шагами осмотра.
 async function noInspection(sql, registry, order) {
-  if (!registry.inspectionSteps(order.module, order.service).length) return false;
+  if (!registry.inspectionSteps(order.module, order.service, order.fields).length) return false;
   const [r] = await sql`select
       exists(select 1 from inspection_photos p join documents d on d.id = p.document_id
               where d.order_id = ${order.id} and d.deleted_at is null) as photos,
@@ -680,7 +680,7 @@ export function draftOps() {
           // Сверка с расчётом страховой (2.475): строка-итог и таблица — под таблицей повреждённых деталей.
           iBlock = insurerBlock(await loadInsurer(sql, order.id), plist.map((p) => p.part));
           if (plist.length) {
-            const photoRows = await inspectionPhotos(sql, order, registry.inspectionSteps(order.module, order.service));
+            const photoRows = await inspectionPhotos(sql, order, registry.inspectionSteps(order.module, order.service, order.fields));
             pTable = partsTable(plist, partsSpec.actions, new Map(photoRows.map((r) => [String(r.document_id), r.no])));
           }
         }

@@ -114,7 +114,7 @@ export async function expiringLinks(sql, { executor = null, order = null } = {})
 // ссылке). Только своё: { executor } — дела исполнителя, { order } — одно дело.
 export async function incompleteInspections(sql, registry, { executor = null, order = null } = {}) {
   const links = await sql`
-    select l.id, l.order_id, l.finished_at, o.module, o.service,
+    select l.id, l.order_id, l.finished_at, o.module, o.service, o.fields,
            (select count(*)::int from inspection_photos p where p.link_id = l.id) as photos
     from inspection_links l join orders o on o.id = l.order_id
     where o.status = 'in_work' and o.executor_user_id = l.created_by
@@ -125,7 +125,7 @@ export async function incompleteInspections(sql, registry, { executor = null, or
     order by l.finished_at, l.id`;
   const out = [];
   for (const l of links) {
-    const need = registry.inspectionSteps(l.module, l.service).filter((s) => !s.optional);
+    const need = registry.inspectionSteps(l.module, l.service, l.fields).filter((s) => !s.optional);
     if (!need.length) continue;
     const have = new Set((await sql`select distinct p.step from inspection_photos p join documents d on d.id = p.document_id
                                     where d.order_id = ${l.order_id} and d.deleted_at is null`).map((r) => r.step));
@@ -142,8 +142,8 @@ export async function incompleteInspections(sql, registry, { executor = null, or
 // названия, только если ссылка закрыта «Готово», обязательные шаги все в деле и открытых просьб не осталось; иначе — [].
 export async function reshotAll(sql, registry, link) {
   if (!link?.finished_at) return [];
-  const order = await sql.one`select id, module, service from orders where id = ${link.order_id}`;
-  const steps = registry.inspectionSteps(order.module, order.service);
+  const order = await sql.one`select id, module, service, fields from orders where id = ${link.order_id}`;
+  const steps = registry.inspectionSteps(order.module, order.service, order.fields);
   if (Object.keys(await openRetakes(sql, order.id)).length) return [];
   const need = steps.filter((s) => !s.optional);
   const have = new Set((await sql`select distinct p.step from inspection_photos p join documents d on d.id = p.document_id
@@ -360,7 +360,7 @@ export function inspectOps() {
       id: 'inspection.get', method: 'GET', path: '/api/orders/:id/inspection', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
       async handler({ sql, actor, order, registry }) {
-        const steps = registry.inspectionSteps(order.module, order.service);
+        const steps = registry.inspectionSteps(order.module, order.service, order.fields);
         const links = await sql`select l.*, (select count(*)::int from inspection_photos p where p.link_id = l.id) as photos
                                 from inspection_links l where l.order_id = ${order.id} order by l.id desc`;
         const photos = await inspectionPhotos(sql, order, steps);
@@ -425,7 +425,7 @@ export function inspectOps() {
       access: { resource: 'order', param: 'id', need: 'read' },
       async handler({ sql, actor, order, registry, body, res, req, cfg, providers }) {
         if (!canIssue(actor, order)) throw new HttpError(403, 'forbidden', 'Ссылку на осмотр выдаёт исполнитель, пока дело в работе');
-        if (!registry.inspectionSteps(order.module, order.service).length) throw new HttpError(400, 'no_inspection', 'Для этой услуги дистанционный осмотр не предусмотрен');
+        if (!registry.inspectionSteps(order.module, order.service, order.fields).length) throw new HttpError(400, 'no_inspection', 'Для этой услуги дистанционный осмотр не предусмотрен');
         const days = body?.days === undefined ? 3 : body.days;
         if (!INSPECT.days.includes(days)) throw new HttpError(400, 'bad_input', `Срок ссылки — ${INSPECT.days.join(', ')} дн.`);
         const phone = body?.phone === undefined || body.phone === null || body.phone === '' ? null : phoneFrom(body.phone);
@@ -510,7 +510,7 @@ export function inspectOps() {
       access: { resource: 'order', param: 'id', need: 'read' },
       async handler({ sql, actor, order, registry, body, res }) {
         if (!canIssue(actor, order)) throw new HttpError(403, 'forbidden', 'Попросить переснять может исполнитель, пока дело в работе');
-        const step = registry.inspectionSteps(order.module, order.service).find((s) => s.id === body?.step);
+        const step = registry.inspectionSteps(order.module, order.service, order.fields).find((s) => s.id === body?.step);
         if (!step) throw new HttpError(400, 'bad_step', 'Неизвестный шаг осмотра');
         const note = text(body?.note, 'Что переснять', INSPECT.noteMax);
         const r = await sql.tx(async (tx) => {
@@ -566,7 +566,7 @@ export function inspectOps() {
           service: def?.service.name ?? null,
           subject: def?.service.subject ?? 'object',
           expires_at: link.expires_at,
-          steps: registry.inspectionSteps(order.module, order.service)
+          steps: registry.inspectionSteps(order.module, order.service, order.fields)
             .map((s) => ({ ...s, photos: counts[s.id] ?? 0, retake: retakes[s.id]?.note ?? null, shot_before: shot.has(s.id) })),
           limits: { photos: INSPECT.photosMax, per_step: INSPECT.perStepMax, file_bytes: INSPECT.fileMax },
         };
@@ -582,7 +582,7 @@ export function inspectOps() {
         const { link, order, state } = await linkByToken(sql, req);
         if (state !== 'active') throw new HttpError(410, 'link_inactive', STATE_RU[state]);
         // Документ — от имени выдавшего ссылку исполнителя (в деле он его).
-        const out = await storePhoto(ctx, { order, steps: registry.inspectionSteps(order.module, order.service),
+        const out = await storePhoto(ctx, { order, steps: registry.inspectionSteps(order.module, order.service, order.fields),
           uploadedBy: link.created_by, source: { link: link.id }, actor: null });
         res.status(201);
         return out;

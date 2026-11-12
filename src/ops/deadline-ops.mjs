@@ -105,7 +105,7 @@ async function presetReasons(sql, order, registry) {
     out.push({ id: 'away', label: `Меня не будет до ${d}.${m}`, reason: `В день срока меня не будет, работаю снова с ${d}.${m}.${y} — прошу перенести срок`,
       new_deadline: back });
   }
-  const steps = registry?.inspectionSteps(order.module, order.service) ?? [];
+  const steps = registry?.inspectionSteps(order.module, order.service, order.fields) ?? [];
   const [had] = await sql`select (exists (select 1 from inspection_links where order_id = ${order.id})
                                   or exists (select 1 from onsite_visits where order_id = ${order.id})) as yes`;
   if (steps.length || had.yes) out.push({ id: 'inspection', label: 'Осмотр перенесён владельцем', reason: 'Осмотр объекта перенесён владельцем' });

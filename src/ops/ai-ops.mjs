@@ -394,7 +394,7 @@ export function aiOps() {
         // 2.472: таблица повреждённых деталей дела (ДТП) — номера фото осмотра текущие, как в деле и в Word.
         const parts = names.includes('parts_match') && registry.parts(order.module, order.service)
           ? await (async () => {
-            const noOf = new Map((await inspectionPhotos(sql, order, registry.inspectionSteps(order.module, order.service))).map((r) => [String(r.document_id), r.no]));
+            const noOf = new Map((await inspectionPhotos(sql, order, registry.inspectionSteps(order.module, order.service, order.fields))).map((r) => [String(r.document_id), r.no]));
             return (await loadParts(sql, order.id)).map((p) => ({ part: p.part, photos: photoNos(p, noOf) }));
           })() : null;
         const auto = runAutoChecks(names, files, { fields: order.fields ?? {}, dossier, basis, service: order.service, analogs, inspectionDays, inspectionUploadDays, inspectionActDays, inspectionBy, signedOn, assignment, egrn, customer: owner?.full_name ?? null, today: dossier.today, usedNumbers: used, issuedNumber: issued ?? null, bankAccr, parts });

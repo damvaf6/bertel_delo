@@ -726,7 +726,7 @@ export async function orgPart(sql, org, registry, today, { actorId = null, stora
                (select count(*)::int from documents where order_id = ${o.id} and kind = 'inspection' and deleted_at is null) as photos`;
       const missing = [];
       if (!n.drafts && !n.results) missing.push('нет черновика');
-      if (!n.photos && registry.inspectionSteps(o.module, o.service).length) missing.push('нет фото осмотра');
+      if (!n.photos && registry.inspectionSteps(o.module, o.service, o.fields).length) missing.push('нет фото осмотра');
       if (missing.length) atRisk.push(view(o, { missing, extend: ext.get(o.id) ?? null }));
     }
     const signs = await orderSignatures(sql, o.id);

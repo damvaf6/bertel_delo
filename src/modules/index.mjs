@@ -28,7 +28,8 @@
 //       parts: true — сюда программа вставляет таблицу повреждённых деталей (2.471, src/orders/parts.mjs)
 //       sources: true — сюда программа вставляет перечень использованных документов дела (2.95, src/docs/sources.mjs)
 //     approaches?: { services: [id услуги…] }  — исполнитель отмечает, какие подходы к оценке применяет (2.33)
-//     inspection?: [{ id, title, hint?, services?: [id услуги…], optional? }…],  — шаги дистанционного осмотра (2.3)
+//     inspection?: [{ id, title, hint?, services?: [id услуги…], optional?, each?: { field, title, hint?, rest } }…],  — шаги
+//       дистанционного осмотра (2.3); each — шаг на каждую деталь из поля заявки (2.476, «{item}» в title), сам шаг — rest
 //     request_docs?: [{ id, title, hint?, services?: [id услуги…], basis?: [вид основания…], when? }…],  — документы, которые
 //       исполнитель может одной кнопкой запросить у заказчика (2.64): выписка ЕГРН, ПТС, чек…; заказчик загружает файл к
 //       каждому; basis — только для заявок с таким основанием (определение суда — когда экспертизу назначил суд, 2.66);
@@ -85,7 +86,7 @@
 //   Общие поля модуля идут в заявке перед полями услуги; id не должны совпадать.
 // Описание проверяется при запуске: ошибка в описании — сервер не стартует.
 import { HttpError } from '../http/core.mjs';
-import { AUTO_CHECKS } from '../ai/report-checks.mjs';
+import { AUTO_CHECKS, damageItems } from '../ai/report-checks.mjs';
 import { moduleProofread } from './extras.mjs';
 import expertise from './expertise.mjs';
 import translation from './translation.mjs';
@@ -251,7 +252,14 @@ export function validateModule(m) {
     checkIds(m.inspection, `${at}, шаги осмотра`);
     for (const st of m.inspection) {
       const where = `${at}, шаг осмотра ${st.id}`;
-      onlyKeys(st, ['id', 'title', 'hint', 'services', 'optional'], where);
+      onlyKeys(st, ['id', 'title', 'hint', 'services', 'optional', 'each'], where);
+      if (st.each !== undefined) {
+        onlyKeys(st.each, ['field', 'title', 'hint', 'rest'], `${where}, each`);
+        if (!nonEmpty(st.each.field)) fail(where, 'each.field — поле заявки');
+        if (!nonEmpty(st.each.title) || !st.each.title.includes('{item}') || st.each.title.length > 60) fail(where, 'each.title — с {item}, до 60 знаков');
+        if (st.each.hint !== undefined && !nonEmpty(st.each.hint)) fail(where, 'each.hint — пустая подсказка');
+        if (!nonEmpty(st.each.rest) || st.each.rest.length > 80) fail(where, 'each.rest — название шага «остальное», до 80 знаков');
+      }
       if (!nonEmpty(st.title) || st.title.length > 80) fail(where, 'нет названия или оно длиннее 80 знаков');
       if (st.hint !== undefined && !nonEmpty(st.hint)) fail(where, 'пустая подсказка');
       if (st.optional !== undefined && typeof st.optional !== 'boolean') fail(where, 'optional — да/нет');
@@ -616,11 +624,21 @@ export function createRegistry(modules = DEFAULT_MODULES, { orgCheck = false } =
       return !!m?.approaches?.services.includes(serviceId);
     },
     // Шаги дистанционного осмотра для услуги (2.3); пустой список — ссылка владельцу для услуги не выдаётся.
-    inspectionSteps(moduleId, serviceId) {
+    // fields — поля заявки (2.476): шаг с each даёт по шагу на каждую деталь из поля (id «шаг-1», «шаг-2»… по порядку
+    // в заявке), сам — необязательным «остальное» после них. Номера фото зависят от порядка шагов — звать везде с полями.
+    inspectionSteps(moduleId, serviceId, fields = null) {
       const m = modulesList.find((x) => x.id === moduleId);
       if (!m?.inspection || !m.services.some((x) => x.id === serviceId)) return [];
-      return m.inspection.filter((st) => !st.services || st.services.includes(serviceId))
-        .map((st) => ({ id: st.id, title: st.title, hint: st.hint ?? null, optional: !!st.optional }));
+      return m.inspection.filter((st) => !st.services || st.services.includes(serviceId)).flatMap((st) => {
+        const plain = { id: st.id, title: st.title, hint: st.hint ?? null, optional: !!st.optional };
+        const items = st.each ? damageItems(fields?.[st.each.field]).slice(0, 12) : [];
+        if (!items.length) return [plain];
+        return [
+          ...items.map((item, i) => ({ id: `${st.id}-${i + 1}`, title: st.each.title.replace('{item}', item).slice(0, 80),
+            hint: st.each.hint ?? st.hint ?? null, optional: !!st.optional, item })),
+          { ...plain, title: st.each.rest, optional: true },
+        ];
+      });
     },
     // Документы, которые исполнитель может запросить у заказчика по этой услуге (2.64); с when — только если поле заявки
     // подходит (2.299), без полей заявки таких пунктов нет.

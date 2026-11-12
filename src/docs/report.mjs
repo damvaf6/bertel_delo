@@ -223,7 +223,7 @@ export const photoCaption = (r, steps) => [
   `Получено платформой «БЕРТЕЛ Дело»: ${timeMsk(r.received_at)} (МСК)`,
 ];
 async function photosPart({ sql, providers, registry }, order) {
-  const steps = registry.inspectionSteps(order.module, order.service);
+  const steps = registry.inspectionSteps(order.module, order.service, order.fields);
   const rows = await inspectionPhotos(sql, order, steps);
   if (!rows.length) return null;
   let left = PHOTOS_BYTES;
