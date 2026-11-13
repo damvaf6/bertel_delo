@@ -185,6 +185,32 @@ export default {
       subject: 'goods',
       fields: [
         { id: 'subject', label: 'Какой товар и что случилось', type: 'longtext', required: true, max: 2000 },
+        // Сведения о товаре и недостатках отдельными полями (2.480): гарантия на дату обнаружения — подсказкой в деле
+        // (`src/orders/warranty.mjs`), недостатки построчно — для таблицы и шагов осмотра следующих задач.
+        {
+          id: 'goods_kind', label: 'Что за товар', type: 'select',
+          options: [
+            { id: 'gadget', name: 'Телефон, планшет, ноутбук, компьютер' },
+            { id: 'appliance', name: 'Бытовая техника' },
+            { id: 'clothes', name: 'Одежда, обувь, сумки' },
+            { id: 'furniture', name: 'Мебель' },
+            { id: 'jewelry', name: 'Ювелирные изделия, часы' },
+            { id: 'other', name: 'Другое' },
+          ],
+        },
+        { id: 'model', label: 'Модель, артикул, серийный номер или IMEI', type: 'text', max: 200, hint: 'Как на этикетке или в чеке' },
+        { id: 'defects', label: 'Какие недостатки', type: 'longtext', max: 2000, hint: 'Каждый с новой строки: не включается; трещина на экране' },
+        { id: 'found_date', label: 'Когда обнаружен недостаток', type: 'text', max: 10, pattern: '^\\d{2}\\.\\d{2}\\.\\d{4}$', hint: 'Например: 14.09.2026' },
+        { id: 'warranty_months', label: 'Гарантийный срок, месяцев', type: 'number', integer: true, min: 0, max: 240, hint: 'Из гарантийного талона или чека; нет гарантии — 0' },
+        {
+          id: 'seller_check', label: 'Проверял ли товар продавец или сервис', type: 'select',
+          options: [
+            { id: 'no', name: 'Нет' },
+            { id: 'confirmed', name: 'Да — недостаток подтвердили' },
+            { id: 'denied', name: 'Да — сказали, что виноват покупатель' },
+            { id: 'waiting', name: 'Сдан на проверку, ответа ещё нет' },
+          ],
+        },
         { id: 'questions', label: 'Какие вопросы поставить эксперту', type: 'longtext', required: true, max: 2000 },
         { id: 'location', label: 'Адрес или у кого находится товар', type: 'text', max: 300, hint: 'Например: у истца, г. Москва; у продавца' },
         { id: 'purchase', label: 'Когда и где куплен, цена по чеку', type: 'text', max: 300, hint: 'Например: 12.03.2026, М.Видео, 54 990 ₽' },

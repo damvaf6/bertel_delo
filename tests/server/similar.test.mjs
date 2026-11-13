@@ -53,7 +53,7 @@ test('вид объекта — первое поле выбора самой у
   const reg = createRegistry();
   assert.equal(kindField(reg.service('expertise', 'realty')).id, 'object_type');
   assert.equal(kindField(reg.service('expertise', 'vehicle')).id, 'vehicle_type');
-  assert.equal(kindField(reg.service('expertise', 'goods')), null);
+  assert.equal(kindField(reg.service('expertise', 'goods')).id, 'goods_kind'); // «Что за товар» (2.480)
 });
 
 test('эксперт видит свои сданные дела того же вида объекта за год и открывает заключение; данных прошлого заказчика в списке нет', async () => {

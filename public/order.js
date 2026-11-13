@@ -190,11 +190,16 @@ function renderQuote() {
   const quote = current.quote ?? null;
   const notices = current.notices ?? [];
   $('quote-box').classList.toggle('hidden', !quote && notices.length === 0);
+  // Без таблицы цен (экспертиза, 2.480) — только подсказки: «Обратите внимание», без строки о стоимости.
+  const priced = !!quote || current.module === 'translation';
+  $('quote-title').textContent = priced ? 'Стоимость' : 'Обратите внимание';
+  $('quote-note').classList.toggle('hidden', !priced);
+  $('quote-total').classList.toggle('hidden', !quote);
   $('quote-notices').replaceChildren(...notices.map((n) => el('div', { class: 'notice-warn', 'data-notice': n.id }, el('p', { text: n.text }))));
   $('quote-lines').replaceChildren(...(quote?.lines ?? []).map((l) => el('li', { class: 'row' },
     el('span', { text: l.title }), el('b', { text: rubKop(l.kop) }))));
   $('quote-total').textContent = quote ? `Итого по таблице цен: ${rubKop(quote.total_kop)}` : '';
-  $('quote-note').textContent = !quote ? 'Стоимость появится, когда будут указаны документы и страницы.'
+  $('quote-note').textContent = !priced ? '' : !quote ? 'Стоимость появится, когда будут указаны документы и страницы.'
     : `Предварительно. Окончательную цену назначит диспетчер.${quote.transit_kop ? ` Тарифы нотариуса и доставка (${rubKop(quote.transit_kop)}) — без наценки платформы.` : ''}`;
 }
 
