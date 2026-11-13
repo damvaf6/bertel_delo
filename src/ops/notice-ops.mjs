@@ -19,7 +19,7 @@ const isExecutor = (actor, order) => order.executor_user_id === actor.id && orde
 const canWrite = (spec, actor, order) => !!spec && order.status === 'in_work' && isExecutor(actor, order);
 
 function writable(spec, actor, order) {
-  if (!spec) throw new HttpError(409, 'not_supported', 'Извещение об осмотре — только для ущерба автомобилю после ДТП');
+  if (!spec) throw new HttpError(409, 'not_supported', 'Извещение об осмотре — только для ущерба после ДТП и экспертизы товара');
   if (!isExecutor(actor, order)) throw new HttpError(403, 'forbidden', 'Извещение об осмотре ведёт эксперт дела');
   if (order.status !== 'in_work') throw new HttpError(409, 'status_changed', 'Извещение об осмотре — пока дело в работе');
 }
@@ -54,7 +54,7 @@ export async function noticesView(sql, registry, actor, order) {
   const list = await loadNotices(sql, order.id);
   return {
     available: true, can_write: canWrite(spec, actor, order),
-    parties: spec.parties, how: Object.entries(HOW).map(([id, h]) => ({ id, name: h.name })),
+    parties: spec.parties, lead: spec.lead, name_label: spec.name_label, how: Object.entries(HOW).map(([id, h]) => ({ id, name: h.name })),
     name_max: NAME_MAX, place_max: PLACE_MAX, max: NOTICES_MAX,
     notices: list.map((n) => item(n, spec)),
     line: noticeLine(list, spec.parties),
@@ -141,7 +141,7 @@ export function noticeOps() {
       id: 'notices.doc', method: 'GET', path: '/api/orders/:id/notices/:n/doc', auth: 'user', access,
       async handler({ sql, registry, actor, order, params, providers, res }) {
         const spec = specOf(registry, order);
-        if (!spec) throw new HttpError(409, 'not_supported', 'Извещение об осмотре — только для ущерба автомобилю после ДТП');
+        if (!spec) throw new HttpError(409, 'not_supported', 'Извещение об осмотре — только для ущерба после ДТП и экспертизы товара');
         const n = await noticeOf(sql, order, params.n);
         const [ex] = order.executor_user_id ? await sql`select full_name from users where id = ${order.executor_user_id}` : [];
         const def = registry.service(order.module, order.service);

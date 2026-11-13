@@ -60,7 +60,8 @@
 //       заседание (суд, номер дела, дата и время, адрес, файл повестки); дело не переоткрывается
 //     review?: {}  — отзыв заказчика после выдачи (2.467): оценка 1–5 и пара слов; видят служебные и руководитель организации
 //       исполнителя, учитывается в подборе («качество»); исполнителю и на витрине — позже
-//     notice?: { services, parties: [{ id, name }…], fields, purpose }  — извещение об осмотре (2.470): исполнитель сообщает
+//     notice?: { services, parties: [{ id, name }…], fields, purpose, lead?, name_label? } или список таких по услугам (2.485) —
+//       извещение об осмотре (2.470): исполнитель сообщает
 //       сторонам (parties) дату, время и место осмотра — образец Word с полями заявки fields, отметка «извещены, как и когда»
 //     parts?: { services, actions: [{ id, name }…] }  — повреждённые детали таблицей (2.471): деталь, повреждение, ремонтное
 //       воздействие (actions) и фото осмотра; таблица — в раздел черновика с parts: true и в Word
@@ -438,12 +439,15 @@ export function validateModule(m) {
   // Отзыв заказчика после выдачи (2.467) — необязательно, без настроек.
   if (m.review !== undefined) onlyKeys(m.review, [], `${at}, отзыв заказчика`);
   // Извещение об осмотре (2.470) — необязательно: для каких услуг, кого извещают, какие поля заявки — в образец Word.
-  if (m.notice !== undefined) {
-    const where = `${at}, извещение об осмотре`;
-    const n = m.notice;
-    onlyKeys(n, ['services', 'parties', 'fields', 'purpose'], where);
+  // Один образец или список — по услугам (2.485: ДТП — страховая и второй участник; товар — продавец, изготовитель).
+  if (m.notice !== undefined) for (const [i, n] of (Array.isArray(m.notice) ? m.notice : [m.notice]).entries()) {
+    const where = `${at}, извещение об осмотре${Array.isArray(m.notice) ? ` №${i + 1}` : ''}`;
+    if (!n || typeof n !== 'object') fail(where, 'описание — объект');
+    onlyKeys(n, ['services', 'parties', 'fields', 'purpose', 'lead', 'name_label'], where);
     if (!Array.isArray(n.services) || !n.services.length) fail(where, 'services — непустой список услуг');
     for (const id of n.services) if (!m.services.some((s) => s.id === id)) fail(where, `нет услуги ${id}`);
+    const before = (Array.isArray(m.notice) ? m.notice.slice(0, i) : []).flatMap((x) => x?.services ?? []);
+    for (const id of n.services) if (before.includes(id)) fail(where, `услуга ${id} — уже в другом извещении`);
     if (!Array.isArray(n.parties) || !n.parties.length) fail(where, 'parties — непустой список');
     const ids = new Set();
     for (const p of n.parties) {
@@ -459,6 +463,7 @@ export function validateModule(m) {
       for (const f of n.fields) if (!known.includes(f)) fail(where, `у услуги ${sid} нет поля ${f}`);
     }
     if (typeof n.purpose !== 'string' || !n.purpose) fail(where, 'purpose — для чего осмотр');
+    for (const k of ['lead', 'name_label']) if (n[k] !== undefined && (typeof n[k] !== 'string' || !n[k])) fail(where, `${k} — строка`);
   }
   // Повреждённые детали таблицей (2.471) — необязательно: для каких услуг и какие ремонтные воздействия.
   if (m.parts !== undefined) {
@@ -775,8 +780,9 @@ export function createRegistry(modules = DEFAULT_MODULES, { orgCheck = false } =
     },
     // Извещение об осмотре (2.470) для услуги: { parties, fields, purpose } или null.
     notice(moduleId, serviceId) {
-      const n = modulesList.find((x) => x.id === moduleId)?.notice;
-      return n && n.services.includes(serviceId) ? { parties: n.parties, fields: n.fields, purpose: n.purpose } : null;
+      const all = modulesList.find((x) => x.id === moduleId)?.notice;
+      const n = (Array.isArray(all) ? all : all ? [all] : []).find((x) => x.services.includes(serviceId));
+      return n ? { parties: n.parties, fields: n.fields, purpose: n.purpose, lead: n.lead ?? null, name_label: n.name_label ?? null } : null;
     },
     // Повреждённые детали таблицей (2.471) для услуги: { actions } или null.
     parts(moduleId, serviceId) {
