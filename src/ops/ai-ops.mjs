@@ -11,6 +11,7 @@ import { READ_MAX_BYTES, extractPages, readableKind } from '../ai/extract.mjs';
 import { reportFacts, runAutoChecks } from '../ai/report-checks.mjs';
 import { inspectionPhotos } from '../docs/photos.mjs';
 import { loadParts, photoNos } from '../orders/parts.mjs';
+import { loadDefects } from '../orders/defects.mjs';
 import { loadInsurer } from '../orders/insurer.mjs';
 import { OTHER_BANK, bankList, loadDossier } from '../dossier/dossier.mjs';
 import { todayMsk } from '../orders/workflow.mjs';
@@ -398,9 +399,12 @@ export function aiOps() {
             const noOf = new Map((await inspectionPhotos(sql, order, registry.inspectionSteps(order.module, order.service, order.fields))).map((r) => [String(r.document_id), r.no]));
             return (await loadParts(sql, order.id)).map((p) => ({ part: p.part, photos: photoNos(p, noOf) }));
           })() : null;
+        // 2.484: таблица недостатков товара дела — недостаток, характер, признаки.
+        const defects = names.includes('defects_match') && registry.defects(order.module, order.service)
+          ? (await loadDefects(sql, order.id)).map((d) => ({ defect: d.defect, nature: d.nature, signs: d.signs })) : null;
         // Прогон 2.479: своя сумма из сверки со страховой (2.475) — против итога ремонта в отчёте.
         const insurer = names.includes('repair_sums') && registry.parts(order.module, order.service) ? await loadInsurer(sql, order.id) : null;
-        const auto = runAutoChecks(names, files, { fields: order.fields ?? {}, dossier, basis, service: order.service, analogs, inspectionDays, inspectionUploadDays, inspectionActDays, inspectionBy, signedOn, assignment, egrn, customer: owner?.full_name ?? null, today: dossier.today, usedNumbers: used, issuedNumber: issued ?? null, bankAccr, parts, insurer });
+        const auto = runAutoChecks(names, files, { fields: order.fields ?? {}, dossier, basis, service: order.service, analogs, inspectionDays, inspectionUploadDays, inspectionActDays, inspectionBy, signedOn, assignment, egrn, customer: owner?.full_name ?? null, today: dossier.today, usedNumbers: used, issuedNumber: issued ?? null, bankAccr, parts, insurer, defects });
         const found = Object.fromEntries(rules.map((r) => [r.id, (r.auto ?? []).flatMap((a) => auto[a] ?? [])]));
         // Модель недоступна или лимит исчерпан, но автоматические находки есть — показываем их, а не ошибку.
         let out;
