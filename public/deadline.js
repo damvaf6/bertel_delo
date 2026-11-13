@@ -11,7 +11,9 @@ let ctx = null; // { order, reload, open, task }
 
 export async function loadDeadline(current, reload) {
   const box = $('deadline-box');
-  say($('deadline-msg'), '');
+  // Надпись стираем только при переходе к другому делу: повторная загрузка того же дела (уведомление, обновление
+  // в фоне) не должна гасить подсказку, которую человек только что получил (CI 13.11.2026, сценарий 2.126).
+  if (ctx?.order?.id !== current.order.id) say($('deadline-msg'), '');
   $('deadline-fresh').classList.add('hidden');
   if (!current.order.module || !current.order.deadline) { box.classList.add('hidden'); setNext({ deadline: null }); return; }
   ctx = { order: current.order, reload };
