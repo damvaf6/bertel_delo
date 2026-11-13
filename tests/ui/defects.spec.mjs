@@ -53,12 +53,30 @@ test('недостатки товара (2.482): из заявки, записа
     await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'goods') on conflict do nothing", [expert.id]);
   });
   expect((await ep.request.post(`/api/specialist/feed/${o.id}/take`, { headers: H })).status()).toBe(200);
-  // Фото осмотра в деле: Фото 1 — товар целиком, Фото 2 и 3 — недостаток крупно.
+  // 2.483: владелец по ссылке видит шаг на каждый недостаток из заявки, «другие» — если есть.
   const link = await ep.request.post(`/api/orders/${o.id}/inspection`, { data: {}, headers: H });
   expect(link.status()).toBe(201);
-  const linkId = (await link.json()).link.id;
+  const lj = await link.json();
+  const linkId = lj.link.id;
+  const octx = await browser.newContext({ ...ctx, permissions: ['geolocation'], geolocation: { latitude: 55.75, longitude: 37.61, accuracy: 10 } });
+  const op = await octx.newPage();
+  op.on('pageerror', (e) => problems.push(`ошибка JS: ${e.message}`));
+  await op.goto(lj.path);
+  await expect(op.locator('#page-title')).toHaveText('Осмотр товара');
+  await expect(op.locator('#intro-text')).toContainText('сфотографировать товар и каждый недостаток отдельным шагом');
+  await op.getByRole('button', { name: 'Начать: разрешить определение места' }).click();
+  await expect(op.locator('#steps li[data-step="goods_defect-1"]')).toContainText('Недостаток крупно: не включается');
+  await expect(op.locator('#steps li[data-step="goods_defect-2"]')).toContainText('Недостаток крупно: трещина на крышке');
+  await expect(op.locator('#steps li[data-step="goods_defect-2"]')).toContainText('линейка или монета');
+  await expect(op.locator('#steps li[data-step="goods_defect"]')).toContainText('Другие недостатки крупно');
+  await expect(op.locator('#steps li[data-step="goods_defect"] .badge')).toHaveText('если есть');
+  expect(await op.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412);
+  await op.locator('#steps li[data-step="goods_defect-1"]').scrollIntoViewIfNeeded();
+  await op.screenshot({ path: 'test-results/screens/gw05-osmotr-nedostatki.png', fullPage: false });
+  await octx.close();
+  // Фото осмотра в деле: Фото 1 — товар целиком, Фото 2 и 3 — трещина на крышке крупно.
   await db(async (c) => {
-    for (const st of ['goods_overview', 'goods_defect', 'goods_defect']) {
+    for (const st of ['goods_overview', 'goods_defect-2', 'goods_defect-2']) {
       const d = await c.query(`insert into documents (order_id, uploaded_by, kind, filename, mime, size_bytes, storage_key)
         values ($1, $2, 'inspection', $3, 'image/jpeg', 10, $4) returning id`, [o.id, expert.id, `${st}.jpg`, `ui-defects/${o.id}/${Math.random()}`]);
       await c.query('insert into inspection_photos (document_id, link_id, step) values ($1, $2, $3)', [d.rows[0].id, linkId, st]);
@@ -75,8 +93,9 @@ test('недостатки товара (2.482): из заявки, записа
   // Недостаток из заявки — одним нажатием в форму.
   await ep.locator('#defects-claimed button', { hasText: 'трещина на крышке' }).click();
   await expect(ep.locator('#defects-defect')).toHaveValue('Трещина на крышке');
+  await expect(ep.locator('#defects-photos')).toHaveValue('2, 3'); // 2.483: фото шага этого недостатка — сразу
   await expect(ep.locator('#defects-natures label')).toHaveText(['производственный', 'эксплуатационный', 'не установлен', 'не подтвердился']);
-  await expect(ep.locator('#defects-photos-hint')).toHaveText('В деле 3 фото осмотра: 1 — Товар целиком; 2 — Недостаток крупно; 3 — Недостаток крупно.');
+  await expect(ep.locator('#defects-photos-hint')).toHaveText('В деле 3 фото осмотра: 1 — Товар целиком; 2 — Недостаток крупно: трещина на крышке; 3 — Недостаток крупно: трещина на крышке.');
   await ep.locator('#defects-place').fill('Левый верхний угол крышки, 4 см');
   await ep.locator('#defects-save').click();
   await expect(ep.locator('#defects-msg')).toContainText('Выберите характер недостатка');
