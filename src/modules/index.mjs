@@ -91,6 +91,7 @@
 import { HttpError } from '../http/core.mjs';
 import { AUTO_CHECKS, damageItems } from '../ai/report-checks.mjs';
 import { moduleProofread } from './extras.mjs';
+import { defectLines } from '../orders/defects.mjs';
 import expertise from './expertise.mjs';
 import translation from './translation.mjs';
 
@@ -258,7 +259,8 @@ export function validateModule(m) {
       const where = `${at}, шаг осмотра ${st.id}`;
       onlyKeys(st, ['id', 'title', 'hint', 'services', 'optional', 'each'], where);
       if (st.each !== undefined) {
-        onlyKeys(st.each, ['field', 'title', 'hint', 'rest'], `${where}, each`);
+        onlyKeys(st.each, ['field', 'title', 'hint', 'rest', 'split'], `${where}, each`);
+        if (st.each.split !== undefined && !['parts', 'lines'].includes(st.each.split)) fail(where, 'each.split — parts или lines');
         if (!nonEmpty(st.each.field)) fail(where, 'each.field — поле заявки');
         if (!nonEmpty(st.each.title) || !st.each.title.includes('{item}') || st.each.title.length > 60) fail(where, 'each.title — с {item}, до 60 знаков');
         if (st.each.hint !== undefined && !nonEmpty(st.each.hint)) fail(where, 'each.hint — пустая подсказка');
@@ -663,17 +665,20 @@ export function createRegistry(modules = DEFAULT_MODULES, { orgCheck = false } =
       return !!m?.approaches?.services.includes(serviceId);
     },
     // Шаги дистанционного осмотра для услуги (2.3); пустой список — ссылка владельцу для услуги не выдаётся.
-    // fields — поля заявки (2.476): шаг с each даёт по шагу на каждую деталь из поля (id «шаг-1», «шаг-2»… по порядку
+    // fields — поля заявки (2.476): шаг с each даёт по шагу на каждую деталь из поля (split: 'lines' — на каждую строку,
+    // недостатки товара, 2.483) (id «шаг-1», «шаг-2»… по порядку
     // в заявке), сам — необязательным «остальное» после них. Номера фото зависят от порядка шагов — звать везде с полями.
     inspectionSteps(moduleId, serviceId, fields = null) {
       const m = modulesList.find((x) => x.id === moduleId);
       if (!m?.inspection || !m.services.some((x) => x.id === serviceId)) return [];
       return m.inspection.filter((st) => !st.services || st.services.includes(serviceId)).flatMap((st) => {
         const plain = { id: st.id, title: st.title, hint: st.hint ?? null, optional: !!st.optional };
-        const items = st.each ? damageItems(fields?.[st.each.field]).slice(0, 12) : [];
+        const items = !st.each ? [] : (st.each.split === 'lines' ? defectLines : damageItems)(fields?.[st.each.field]).slice(0, 12);
         if (!items.length) return [plain];
+        // В названии шага — до 50 знаков недостатка (строка заявки бывает длинной); item — целиком, для сверки с таблицей.
+        const short = (t) => { const s = /^\p{Lu}\p{Ll}/u.test(t) ? t[0].toLowerCase() + t.slice(1) : t; return s.length > 50 ? `${s.slice(0, 49).trimEnd()}…` : s; };
         return [
-          ...items.map((item, i) => ({ id: `${st.id}-${i + 1}`, title: st.each.title.replace('{item}', item).slice(0, 80),
+          ...items.map((item, i) => ({ id: `${st.id}-${i + 1}`, title: st.each.title.replace('{item}', short(item)).slice(0, 80),
             hint: st.each.hint ?? st.hint ?? null, optional: !!st.optional, item })),
           { ...plain, title: st.each.rest, optional: true },
         ];

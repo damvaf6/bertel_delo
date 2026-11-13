@@ -93,14 +93,15 @@ test('таблица: номера фото — текущие, пустые п�
 
 test('недостатки из заявки, которых нет в таблице: регистр, «ё», знаки и маркеры не важны', () => {
   const text = '- Не включается\n2) трещина на крышке.\n\nне включается\nЦарапины на корпусе';
-  assert.deepEqual(claimedLeft(text, []), ['Не включается', 'трещина на крышке.', 'Царапины на корпусе']);
+  assert.deepEqual(claimedLeft(text, []), ['Не включается', 'трещина на крышке', 'Царапины на корпусе']);
   assert.deepEqual(claimedLeft(text, [{ defect: 'Трещина на крышке' }, { defect: 'Ноутбук не включается' }]), ['Царапины на корпусе']);
   assert.deepEqual(claimedLeft('', []), []);
 });
 
 test('эксперт дела: добавить, изменить, удалить; фото — по номерам дела; стороны видят и только читают; таблица — в черновик от ИИ', async () => {
   const o = await inWork();
-  await photos(o, ['goods_defect', 'goods_overview', 'goods_defect']); // в деле: Фото 1 — товар целиком, Фото 2 и 3 — недостаток
+  // 2.483: шаг на каждый недостаток из заявки. В деле: Фото 1 — товар целиком, Фото 2 — «не включается», Фото 3 и 4 — трещина.
+  await photos(o, ['goods_defect-2', 'goods_overview', 'goods_defect-1', 'goods_defect-2']);
   const base = `/api/orders/${o.id}/defects`;
   const v0 = (await spec.req('GET', base)).body;
   assert.equal(v0.available, true);
@@ -108,7 +109,9 @@ test('эксперт дела: добавить, изменить, удалит�
   assert.deepEqual(v0.defects, []);
   assert.equal(v0.table, null);
   assert.deepEqual(v0.claimed, ['не включается', 'трещина на крышке']);
-  assert.deepEqual(v0.photos.map((p) => `${p.no} ${p.step}`), ['1 Товар целиком', '2 Недостаток крупно', '3 Недостаток крупно']);
+  assert.deepEqual(v0.photos.map((p) => `${p.no} ${p.step}`), ['1 Товар целиком', '2 Недостаток крупно: не включается',
+    '3 Недостаток крупно: трещина на крышке', '4 Недостаток крупно: трещина на крышке']);
+  assert.deepEqual(v0.claimed_photos, { 'не включается': [2], 'трещина на крышке': [3, 4] }, 'номера фото шага — к недостатку из заявки');
   const crack = { defect: 'Трещина на крышке', place: 'Левый верхний угол, 4 см', nature: 'production', signs: 'Трещина от литника, следов удара нет', photos: [3, 2] };
   assert.equal((await spec.req('POST', base, { ...crack, defect: '' })).status, 400);
   assert.equal((await spec.req('POST', base, { ...crack, place: '' })).status, 400, 'где и размер — обязательно');

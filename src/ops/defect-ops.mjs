@@ -6,7 +6,7 @@ import { HttpError } from '../http/core.mjs';
 import { orderSides } from '../access/policy.mjs';
 import { inspectionPhotos } from '../docs/photos.mjs';
 import { photoNos } from '../orders/parts.mjs';
-import { DEFECTS_MAX, DEFECT_MAX, PLACE_MAX, SIGNS_MAX, claimedLeft, defectsTable, loadDefects } from '../orders/defects.mjs';
+import { DEFECTS_MAX, DEFECT_MAX, PLACE_MAX, SIGNS_MAX, claimedLeft, defectsTable, loadDefects, sameDefect } from '../orders/defects.mjs';
 import { audit, text } from './util.mjs';
 
 const isExecutor = (actor, order) => order.executor_user_id === actor.id && orderSides(actor, order).includes('executor');
@@ -27,6 +27,11 @@ async function photoMaps(sql, registry, order) {
     list: rows.map((r) => ({ no: r.no, step: steps.find((s) => s.id === r.step)?.title ?? 'Снимок вне шагов осмотра' })),
     byNo: new Map(rows.map((r) => [r.no, String(r.document_id)])),
     noOf: new Map(rows.map((r) => [String(r.document_id), r.no])),
+    // 2.483: номера фото шага «Недостаток крупно: …» по недостатку из заявки — подставляются, когда эксперт его записывает.
+    ofItem: (text) => {
+      const ids = new Set(steps.filter((s) => s.item && sameDefect(s.item, text)).map((s) => s.id));
+      return ids.size ? rows.filter((r) => ids.has(r.step)).map((r) => r.no) : [];
+    },
   };
 }
 
@@ -40,6 +45,7 @@ export async function defectsView(sql, registry, actor, order) {
     natures: spec.natures, defect_max: DEFECT_MAX, place_max: PLACE_MAX, signs_max: SIGNS_MAX, max: DEFECTS_MAX,
     photos: photos.list,
     claimed: claimedLeft(order.fields?.defects, list),
+    claimed_photos: Object.fromEntries(claimedLeft(order.fields?.defects, list).map((c) => [c, photos.ofItem(c)]).filter(([, n]) => n.length)),
     defects: list.map((d, i) => ({ id: String(d.id), no: i + 1, defect: d.defect, place: d.place, nature: d.nature, nature_name: name(d.nature),
       signs: d.signs, photos: photoNos(d, photos.noOf) })),
     table: defectsTable(list, spec.natures, photos.noOf),

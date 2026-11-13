@@ -34,7 +34,7 @@ function draw(v) {
   claimed.replaceChildren(...(v.claimed.length ? [
     el('span', {}, 'Из заявки ещё не записаны: '),
     ...v.claimed.flatMap((c, i) => [...(i ? [el('span', {}, ', ')] : []),
-      el('button', { type: 'button', class: 'link', 'data-claimed': c, onclick: () => openForm(null, c) }, c)]),
+      el('button', { type: 'button', class: 'link', 'data-claimed': c, onclick: () => openForm(null, c, v.claimed_photos?.[c]) }, c)]),
   ] : []));
   $('defects-list').replaceChildren(...v.defects.map((d) => item(d, v)));
   $('defects-draft-row').classList.toggle('hidden', !v.can_write || !v.table);
@@ -62,13 +62,14 @@ function item(d, v) {
 }
 const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
-function openForm(d = null, name = '') {
+function openForm(d = null, name = '', shots = null) {
   ctx.editing = d?.id ?? null;
   $('defects-defect').value = d?.defect ?? (name ? cap(name) : '');
   $('defects-place').value = d?.place ?? '';
   for (const c of $('defects-natures').querySelectorAll('input')) c.checked = d?.nature === c.value;
   $('defects-signs').value = d?.signs ?? '';
-  $('defects-photos').value = d?.photos.join(', ') ?? '';
+  // 2.483: недостаток из заявки — номера фото его шага осмотра «Недостаток крупно: …» сразу в поле.
+  $('defects-photos').value = d?.photos.join(', ') ?? (shots?.length ? shots.join(', ') : '');
   $('defects-save').textContent = d ? 'Сохранить недостаток' : 'Записать недостаток';
   $('defects-form').classList.remove('hidden');
   $('defects-open').classList.add('hidden');

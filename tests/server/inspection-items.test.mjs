@@ -103,3 +103,52 @@ test('владелец видит детали списком и снимает 
   const nos = Object.fromEntries(ins.steps.flatMap((s) => s.photos.map((p) => [s.id, p.no])));
   assert.equal(nos['car_damage_close-2'], nos['car_damage_close-1'] + 1);
 });
+
+// Задача 2.483: товароведческая — шаг «Недостаток крупно: …» на каждый недостаток из заявки (строка поля «Какие недостатки»).
+const GOODS = { purpose: 'court', region: 'moscow', subject: 'Ноутбук перестал включаться', goods_kind: 'gadget', model: 'Тестовый ноутбук X1',
+  defects: '1. Не включается\n- трещина на крышке.\nНе включается\n\nЦарапина на корпусе длиной около пяти сантиметров возле разъёма зарядки справа',
+  questions: 'Есть ли недостатки и какой их характер?' };
+
+test('2.483 реестр: по шагу на каждый недостаток из заявки, повторы и маркеры не в счёт; длинный — сокращён; без недостатков — шаг как был', () => {
+  const reg = createRegistry();
+  const d = reg.inspectionSteps('expertise', 'goods', GOODS).filter((s) => s.id.startsWith('goods_defect'));
+  assert.deepEqual(d.map((s) => [s.id, s.title, s.optional]), [
+    ['goods_defect-1', 'Недостаток крупно: не включается', false],
+    ['goods_defect-2', 'Недостаток крупно: трещина на крышке', false],
+    ['goods_defect-3', 'Недостаток крупно: царапина на корпусе длиной около пяти сантиметров…', false],
+    ['goods_defect', 'Другие недостатки крупно', true],
+  ]);
+  assert.equal(d[2].item, 'Царапина на корпусе длиной около пяти сантиметров возле разъёма зарядки справа', 'для сверки — целиком');
+  assert.match(d[0].hint, /линейка или монета/);
+  for (const f of [null, { defects: '' }, { defects: '\n - \n' }]) {
+    const one = reg.inspectionSteps('expertise', 'goods', f).filter((s) => s.id.startsWith('goods_defect'));
+    assert.deepEqual(one.map((s) => [s.id, s.title, s.optional]), [['goods_defect', 'Недостаток крупно', false]]);
+  }
+  // Детали ДТП по-прежнему — по названиям деталей, а не по строкам.
+  assert.equal(reg.inspectionSteps('expertise', 'car_damage', FIELDS).filter((s) => s.item).length, 3);
+  // Неверный split — модуль не принимается.
+  const bad = { ...expertise, inspection: expertise.inspection.map((s) => (s.id === 'goods_defect' ? { ...s, each: { ...s.each, split: 'words' } } : s)) };
+  assert.throws(() => validateModule(bad), /each\.split/);
+});
+
+test('2.483 владелец снимает каждый недостаток; «Готово» без одного — эксперту «не снято» с его названием', async () => {
+  await S.sql`insert into specialist_permits (user_id, module, service) values (${spec.user.id}, 'expertise', 'goods')`;
+  const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'goods', title: 'Товар: осмотр по недостаткам' })).body.order;
+  const p = await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: addDays(todayMsk(), 10), fields: GOODS });
+  assert.equal(p.status, 200, JSON.stringify(p.body));
+  assert.equal((await step(owner, o, 'matching')).status, 200);
+  await ensurePaid(S.sql, o.id);
+  assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: spec.user.id, from: 'matching' })).status, 200);
+  assert.equal((await step(spec, o, 'in_work')).status, 200);
+  const token = (await spec.req('POST', `/api/orders/${o.id}/inspection`, {})).body.path.split('#')[1];
+  const titles = (await view(token)).body.steps.map((s) => s.title);
+  assert.ok(titles.includes('Недостаток крупно: не включается') && titles.includes('Недостаток крупно: трещина на крышке'));
+  for (const st of ['goods_overview', 'goods_label', 'goods_defect-1', 'goods_defect-3']) assert.equal((await shoot(token, st)).status, 201, st);
+  assert.equal((await finish(token)).status, 200);
+  const ins = (await spec.req('GET', `/api/orders/${o.id}/inspection`)).body;
+  assert.deepEqual(ins.incomplete.missing.map((s) => s.title), ['Недостаток крупно: трещина на крышке']);
+  // В таблице недостатков — номера фото шага подставляются к недостатку из заявки.
+  const dv = (await spec.req('GET', `/api/orders/${o.id}/defects`)).body;
+  assert.deepEqual(dv.claimed.slice(0, 2), ['Не включается', 'трещина на крышке']);
+  assert.deepEqual(dv.claimed_photos, { 'Не включается': [3], 'Царапина на корпусе длиной около пяти сантиметров возле разъёма зарядки справа': [4] });
+});
