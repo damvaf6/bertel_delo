@@ -4,6 +4,7 @@
 // действующие числа вычитки поверх описания модуля.
 import { currentRules, quoteTranslation, translationNotices, translationSubmitProblems } from '../translation/prices.mjs';
 import { refreshTranslationSettings, resetTranslationSettings } from '../translation/settings.mjs';
+import { warrantyNotices } from '../orders/warranty.mjs';
 
 const EXTRAS = {
   translation: {
@@ -11,14 +12,16 @@ const EXTRAS = {
     refresh: refreshTranslationSettings, reset: resetTranslationSettings,
     proofread: () => { const r = currentRules(); return { new_orders: r.proofread_new_orders, sample_percent: r.proofread_sample_percent, redo_days: r.redo_days }; },
   },
+  // Экспертиза (2.480): у товароведческой — гарантия на дату обнаружения недостатка; цены по таблице нет.
+  expertise: { notices: warrantyNotices },
 };
 
 // Предварительная цена по таблице цен модуля: { lines, total_kop, … } или null.
-export const moduleQuote = (order) => EXTRAS[order.module]?.quote(order.service, order.fields ?? {}) ?? null;
+export const moduleQuote = (order) => EXTRAS[order.module]?.quote?.(order.service, order.fields ?? {}) ?? null;
 // Предупреждения к заявке: [{ id, text }].
-export const moduleNotices = (order) => EXTRAS[order.module]?.notices(order.service, order.fields ?? {}) ?? [];
+export const moduleNotices = (order) => EXTRAS[order.module]?.notices?.(order.service, order.fields ?? {}) ?? [];
 // Что в заявке нельзя заказать (не хватает для отправки).
-export const moduleSubmitProblems = (order) => EXTRAS[order.module]?.submitProblems(order.service, order.fields ?? {}) ?? [];
+export const moduleSubmitProblems = (order) => EXTRAS[order.module]?.submitProblems?.(order.service, order.fields ?? {}) ?? [];
 // Настройки модулей: перечитать из базы, если пора (перед каждой операцией), и сбросить при сборке приложения.
 export const refreshModuleSettings = (sql) => Promise.all(Object.values(EXTRAS).map((x) => x.refresh?.(sql)));
 export const resetModuleSettings = () => Object.values(EXTRAS).forEach((x) => x.reset?.());
