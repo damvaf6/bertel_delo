@@ -3693,10 +3693,93 @@ function repairSums(docs, ctx) {
   return out;
 }
 
+// ——— 2.487: товароведческая — «Стоимость устранения недостатков» ———
+// Вопрос о стоимости (устранения, ремонта, снижения стоимости, затрат) — по полю заявки «Какие вопросы поставить эксперту».
+// Вопроса нет, а в заключении посчитана сумма — находка (эксперт отвечает только на поставленные вопросы; одна строка
+// «вопрос не ставился» — не в счёт). Вопрос есть: раздела со стоимостью и суммы нет — находка; в разделе «не ставился» —
+// находка; в разделе не сказано, на какую дату цены, или дата цен позже даты составления — находка; источника цен нет
+// (ссылка, сайт, прайс, сервисный центр, коммерческое предложение, справочник) — находка; итог раздела и сумма в выводах
+// разные — находка (если обе строки называют «стоимость устранения недостатков», их уже сверяет `final_value`).
+const G_COST_HEAD = /^\s*(?:\d+\.?\s*)?(?:стоимост\S*\s+(?:\S+\s+){0,2}?(?:устранени|ремонт|восстановлени)|снижени\S*\s+(?:\S+\s+)?стоимост|расч[её]т\S*\s+стоимост)/iu;
+const G_COST_END = /^\s*(?:\d+\.?\s*)?(?:выводы|заключение\s+эксперта\s*:|ответы\s+на\s+вопросы|приложени)/iu;
+const COST_Q = /стоимост|сколько\s+стоит|затрат|расход\S*\s+на|цен\S*\s+(?:ремонт|устранени)|уценк|снижени\S*\s+(?:цен|стоимост)/iu;
+const COST_NONE = /не\s+(?:ставил|поставлен|ставит|требуетс|определял|рассчитывал|производил)|вопрос\S*\s+о\s+стоимост\S*\s+(?:нет|не\s)/iu;
+const COST_WORD = /стоимост|устранени|ремонт|сниж|затрат|расход/iu;
+const COST_TOTAL = /итог|всего|составля/iu;
+const PRICE_DAY = /(?:на\s+дату|по\s+состоянию\s+на|цен\S*\s+на)(?=\s+[«"]?(?:\d|проведени|осмотр|экспертиз|исследовани|составлени))/iu;
+const PRICE_DAY_ALL = new RegExp(PRICE_DAY.source, 'giu');
+const PRICE_SRC = /https?:\/\/|www\.|[a-z0-9-]+\.(?:ru|рф|com|net)(?![a-z])|источник|прайс|по\s+данным|сайт|интернет-магазин|сервисн\S*\s+центр|мастерск|авторизованн|коммерческ\S*\s+предложени|справочник|сметн|заказ-наряд|сч[её]т\s+№|ответ\S*\s+(?:на\s+запрос|сервис)/iu;
+const FIX_SAID = /стоимост\S*\s+(?:\S+\s+){0,4}?устранени\S*\s+(?:\S+\s+){0,2}?(?:недостатк|дефект)/iu;
+function rubIn(line) {
+  const m = String(line ?? '').match(MONEY_AFTER);
+  if (!m) return null;
+  const mult = m[3] ? (/^млн/iu.test(m[3]) ? 1e6 : 1e3) : 1;
+  const value = Math.round((Number(m[1].replace(/[   ]/g, '')) + (m[2] ? Number(m[2].padEnd(2, '0')) / 100 : 0)) * mult);
+  return value > 0 ? value : null;
+}
+function fixCost(docs, ctx) {
+  if (!docs.length || ctx.service !== 'goods') return [];
+  const out = [];
+  const main = mainReport(docs) ?? docs[0];
+  const first = { doc: main, page: 0, quote: '' };
+  const at = (x) => (x ? { doc: x.doc, page: x.page, quote: clean(x.line).slice(0, 200) } : first);
+  const qText = String(ctx.fields?.questions ?? '').trim();
+  const qLine = qText.split('\n').map(clean).find((l) => COST_Q.test(l));
+  const section = regionLines(docs, G_COST_HEAD, G_COST_END);
+  const body = section.filter((x) => !x.head && clean(x.line));
+  const concl = regionLines(docs, CONCL_HEAD, CONCL_END).filter((x) => !x.head);
+  const sums = body.filter((x) => rubIn(x.line) != null);
+  const conclSums = concl.filter((x) => COST_WORD.test(x.line) && !COST_NONE.test(x.line) && rubIn(x.line) != null);
+  const none = body.find((x) => COST_NONE.test(x.line));
+  if (!qLine) {
+    // Вопросов в заявке нет — не знаем, о чём спрашивали: молчим.
+    if (!qText) return out;
+    const x = sums[0] ?? conclSums[0];
+    if (x) out.push({ ...at(x), text: `В вопросах эксперту (в заявке) о стоимости ничего нет, а в заключении посчитана сумма (${fmt(rubIn(x.line))} руб.) — эксперт отвечает только на поставленные вопросы: уберите расчёт и оставьте в разделе одну строку «Вопрос о стоимости не ставился»` });
+    return out;
+  }
+  if (!sums.length) {
+    if (none) out.push({ ...at(none), text: `В разделе о стоимости сказано, что вопрос не ставился, а в заявке он есть: «${qLine.slice(0, 160)}» — посчитайте стоимость или напишите, почему её определить нельзя` });
+    else if (!conclSums.length) out.push({ ...at(section[0]), text: `В заявке есть вопрос о стоимости («${qLine.slice(0, 160)}»), а расчёта стоимости устранения недостатков в заключении нет — посчитайте её в разделе «Стоимость устранения» или напишите, почему её определить нельзя` });
+    return out;
+  }
+  // Дата цен.
+  const text = body.map((x) => x.line).join('\n');
+  if (!PRICE_DAY.test(text)) {
+    out.push({ ...at(sums[0]), text: 'В разделе о стоимости не сказано, на какую дату взяты цены — напишите «цены на дату …» с датой (обычно на дату экспертизы или осмотра)' });
+  } else {
+    const made = reportMade(docs.flatMap((d) => d.pages ?? []))?.day;
+    for (const x of body) {
+      for (const m of x.line.matchAll(PRICE_DAY_ALL)) {
+        const day = dateAfter(x.line.slice(m.index + m[0].length), '^');
+        if (!day || !made || day <= made) continue;
+        out.push({ ...at(x), text: `Цены взяты на ${ruDate(day)} — позже даты составления заключения (${ruDate(made)}): цены берут на дату экспертизы или осмотра, не позже` });
+      }
+    }
+  }
+  // Источник цен.
+  if (!PRICE_SRC.test(text)) {
+    out.push({ ...at(sums[0]), text: 'У цен в разделе о стоимости не указан источник — напишите, откуда цены: сайт или прайс сервисного центра (со ссылкой и датой), коммерческое предложение, справочник' });
+  }
+  // Сумма в выводах — как итог расчёта.
+  const total = [...sums].reverse().find((x) => COST_TOTAL.test(x.line)) ?? sums[sums.length - 1];
+  const value = rubIn(total.line);
+  if (!conclSums.length) {
+    out.push({ ...at(concl[0] ?? total), text: `В выводах нет суммы стоимости — в расчёте ${fmt(value)} руб.: ответьте на вопрос о стоимости в выводах той же суммой` });
+  } else if (!conclSums.some((x) => rubIn(x.line) === value)) {
+    const x = conclSums[0];
+    if (!(FIX_SAID.test(x.line) && FIX_SAID.test(total.line))) {
+      out.push({ ...at(x), text: `В выводах стоимость ${fmt(rubIn(x.line))} руб., а в расчёте итог — ${fmt(value)} руб. — сумма в выводах должна быть такой же, как в расчёте` });
+    }
+  }
+  return out;
+}
+
 const WHOLE = {
   parts_match: partsMatch,
   goods_match: goodsMatch,
   defects_match: defectsMatch,
+  fix_cost: fixCost,
   repair_basis: repairBasis,
   repair_sums: repairSums,
   questions_answered: questionsAnswered,
@@ -3790,6 +3873,7 @@ export const AUTO_CHECKS = Object.freeze({
   purchase_match: 'дата и цена покупки товара — как в заявке',
   goods_match: 'товароведческая: модель, артикул, серийный номер или IMEI товара в заключении — как в заявке; дата обнаружения недостатка и гарантийный срок (и его конец) — как в заявке',
   defects_match: 'товароведческая: каждый недостаток из заявки исследован; у характера недостатка — признаки и ссылка на ГОСТ или техническую документацию; характер в выводах — как в исследовании и таблице недостатков; нет выводов о праве («подлежит возврату», «требования обоснованы»)',
+  fix_cost: 'товароведческая: стоимость устранения недостатков — посчитана, только если о ней спрашивали в заявке; цены на дату (не позже даты составления) и с источником; сумма в выводах — как итог расчёта',
   questions_answered: 'каждый вопрос заявки найден в выводах',
   final_value: 'итоговая стоимость одна на титуле, в задании, выводах, итоговой таблице и в сопроводительном письме',
   report_number: 'номер отчёта и дата составления одни на титуле, в колонтитулах и в сопроводительном письме; такого номера не было в другом деле эксперта этого года; номер тот, что выдан делу',
