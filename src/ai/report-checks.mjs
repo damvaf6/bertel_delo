@@ -11,6 +11,7 @@
 import { adjusted, cleanUrl } from '../analogs/analogs.mjs';
 import { plainNumber } from '../orgs/numbering.mjs';
 import { warrantyEnd } from '../orders/warranty.mjs';
+import { defectLines, sameDefect } from '../orders/defects.mjs';
 
 const MAX_PER_RULE = 5;
 
@@ -2520,6 +2521,117 @@ function goodsMatch(docs, ctx) {
   return out;
 }
 
+// ——— 2.484: товароведческая — недостатки: каждый заявленный исследован, характер с признаками и ссылкой на ГОСТ или
+// документацию, в выводах — как в исследовании, без выводов о праве ———
+// Раздел «Исследование» — от строки «5. Исследование» до «Стоимость …», «Выводы» или «Приложения»; нет его — весь текст.
+// Недостаток из заявки (поле «Какие недостатки», строка — недостаток) узнаётся по словам: основы слов (первые 5 букв) от
+// 3 букв, служебные не в счёт; в разделе найдены почти все — исследован. Есть в таблице недостатков дела — тоже исследован
+// (таблица идёт в раздел программой). Характер назван (производственный, эксплуатационный), а в разделе нет ссылки на ГОСТ,
+// ТР ТС, ТУ, СанПиН, руководство (инструкцию) по эксплуатации или техническую документацию — находка. В таблице дела
+// характер назван, а признаков нет — находка. В выводах строка с недостатком из таблицы (или из исследования) и другим
+// характером — находка. В исследовании и выводах «подлежит возврату», «вправе требовать», «требования обоснованы»,
+// «продавец обязан», «нарушены права потребителя» — находка: это вопрос права, решает суд; строки, где эксперт сам пишет,
+// что это не его компетенция, не в счёт.
+const G_RESEARCH_HEAD = /^\s*(?:\d+\.?\s*)?исследовани/iu;
+const G_RESEARCH_END = /^\s*(?:\d+\.?\s*)?(?:стоимост|выводы|заключение\s+эксперта\s*:|ответы\s+на\s+вопросы|приложени)/iu;
+const NORM_REF = /ГОСТ|ТР\s*ТС|ТР\s*ЕАЭС|(?<![А-ЯЁа-яё])ТУ(?![А-ЯЁа-яё])|СанПиН|СНиП|(?<![А-ЯЁа-яё])СП\s+\d|руководств\S*\s+(?:по\s+)?(?:эксплуатац|пользовател)|инструкци\S*\s+(?:по\s+)?(?:эксплуатац|применени|пользовател)|техническ\S*\s+(?:документац|паспорт|услови)|паспорт\S*\s+изделия|сервисн\S*\s+(?:документац|руководств|инструкци|бюллетен)|требовани\S*\s+изготовител/iu;
+const NATURE_WORDS = [
+  ['production', /производствен/iu, 'производственный'],
+  ['operation', /эксплуатацион/iu, 'эксплуатационный'],
+  ['not_confirmed', /не\s+подтвер/iu, 'не подтвердился'],
+  ['unknown', /(?:характер|причин)\S*[^.\n]{0,40}?не\s+(?:установ|определ)|не\s+(?:установ|определ)\S*\s+(?:характер|причин)/iu, 'не установлен'],
+];
+const LEGAL = /подлеж\S*\s+(?:возврат|замен|обмен|возмещени|удовлетворени)|(?:вправе|имеет\s+право|имеют\s+право)\s+(?:требовать|на\s+(?:возврат|замен|обмен|возмещени|расторжени))|требовани\S*\s+(?:потребител\S*\s+|истц\S*\s+|покупател\S*\s+)?(?:обоснован|правомерн|законн|подлежат)|(?:продав\S*|изготовител\S*|импорт\S*|ответчик\S*)\s+(?:обязан|должен|долж[нк]\S*)\s+(?:вернуть|возвратить|заменить|возместить|выплатить|принять)|нарушен\S*\s+прав\S*\s+потребител|прав\S*\s+потребител\S*\s+нарушен|(?:вин[аеуы]|виновн\S*)\s+(?:продав|изготовител|импорт)|расторжени\S*\s+договор/iu;
+const LEGAL_ALL = new RegExp(LEGAL.source, 'giu');
+const LEGAL_SKIP = /компетенц|правов\S*\s+(?:вопрос|оценк)|не\s+(?:входит|относ)|решает\s+суд|вопрос\S*\s+права/iu;
+const DEF_STOP = new Set(['при', 'для', 'без', 'под', 'над', 'нет', 'был', 'была', 'было', 'есть', 'его', 'она', 'они', 'это', 'как', 'что', 'или', 'так', 'уже', 'еще', 'все', 'всё', 'сам', 'раз', 'очень', 'после', 'перед', 'время']);
+const defStems = (text) => (String(text ?? '').toLowerCase().replace(/ё/g, 'е').match(/[а-яa-z0-9]+/g) ?? [])
+  .filter((w) => w.length >= 3 && !DEF_STOP.has(w)).map((w) => (/^\d+$/.test(w) ? w : w.slice(0, 5)));
+// Недостаток назван в тексте: найдены все основы (до двух слов) или не меньше двух третей.
+function defectIn(defect, text) {
+  const need = [...new Set(defStems(defect))];
+  if (!need.length) return false;
+  const have = new Set((String(text ?? '').toLowerCase().replace(/ё/g, 'е').match(/[а-яa-z0-9]+/g) ?? []).map((w) => (/^\d+$/.test(w) ? w : w.slice(0, 5))));
+  const hit = need.filter((t) => have.has(t)).length;
+  return need.length <= 2 ? hit === need.length : hit >= Math.ceil((need.length * 2) / 3);
+}
+function natureOf(line) {
+  const hits = NATURE_WORDS.filter(([, re]) => re.test(line));
+  // «не подтвердился» и «не установлен» сильнее слова «производственный» рядом («производственный недостаток не подтвердился»).
+  const strong = hits.filter(([id]) => id === 'not_confirmed' || id === 'unknown');
+  const pick = strong.length ? strong : hits;
+  return pick.length === 1 ? pick[0] : null;
+}
+function defectsMatch(docs, ctx) {
+  if (!docs.length || ctx.service !== 'goods') return [];
+  const table = Array.isArray(ctx.defects) ? ctx.defects : [];
+  const claimed = defectLines(ctx.fields?.defects);
+  const out = [];
+  const main = mainReport(docs) ?? docs[0];
+  const first = { doc: main, page: 0, quote: '' };
+  const at = (x) => (x ? { doc: x.doc, page: x.page, quote: clean(x.line).slice(0, 200) } : first);
+  const research = regionLines(docs, G_RESEARCH_HEAD, G_RESEARCH_END);
+  const all = docs.flatMap((doc) => (doc.pages ?? []).flatMap((p, i) => p.split('\n').map((line) => ({ doc, page: i, line }))));
+  const body = research.length ? research.filter((x) => !x.head) : all;
+  const bodyText = body.map((x) => x.line).join('\n');
+  const concl = regionLines(docs, CONCL_HEAD, CONCL_END).filter((x) => !x.head);
+  // 1. Каждый заявленный недостаток исследован.
+  for (const d of claimed) {
+    if (table.some((t) => sameDefect(t.defect, d) || defectIn(d, t.defect)) || defectIn(d, bodyText)) continue;
+    out.push({ ...at(research[0]), text: `В заявке указан недостаток «${d}», а в исследовании его нет — исследуйте его или напишите, почему он не подтвердился` });
+  }
+  // 2. У характера — признаки (в таблице дела) и ссылка на ГОСТ или техническую документацию (в исследовании).
+  for (const t of table) {
+    if ((t.nature === 'production' || t.nature === 'operation') && !String(t.signs ?? '').trim()) {
+      const name = NATURE_WORDS.find(([id]) => id === t.nature)[2];
+      out.push({ ...at(body.find((x) => defectIn(t.defect, x.line))), text: `У недостатка «${t.defect}» в таблице недостатков характер «${name}», а признаков нет — напишите, по каким признакам он определён` });
+    }
+  }
+  const named = body.find((x) => /производствен|эксплуатацион/iu.test(x.line));
+  if (named && !NORM_REF.test(bodyText)) {
+    out.push({ ...at(named), text: 'Характер недостатка назван, а ссылки на ГОСТ, технический регламент, ТУ или техническую документацию (руководство по эксплуатации) в исследовании нет — укажите, с какими требованиями сравнивали' });
+  }
+  // 3. Характер в выводах — как в исследовании (таблица дела, иначе строки исследования с недостатком из заявки).
+  const known = table.length
+    ? table.filter((t) => t.nature).map((t) => ({ defect: t.defect, nature: t.nature, from: 'в таблице недостатков' }))
+    : claimed.flatMap((d) => {
+      // Кусок исследования о недостатке — от строки с ним до строки с другим недостатком из заявки.
+      const n = new Set();
+      let on = false;
+      for (const x of body) {
+        const mine = defectIn(d, x.line);
+        if (mine) on = true;
+        else if (claimed.some((o) => o !== d && defectIn(o, x.line))) on = false;
+        const k = on && natureOf(x.line);
+        if (k) n.add(k[0]);
+      }
+      return n.size === 1 ? [{ defect: d, nature: [...n][0], from: 'в исследовании' }] : [];
+    });
+  const told = new Set();
+  for (const k of known) {
+    for (const x of concl) {
+      if (!defectIn(k.defect, x.line)) continue;
+      const n = natureOf(x.line);
+      if (!n || n[0] === k.nature || told.has(k.defect)) continue;
+      told.add(k.defect);
+      const was = NATURE_WORDS.find(([id]) => id === k.nature)[2];
+      out.push({ ...at(x), text: `В выводах у недостатка «${k.defect}» характер «${n[2]}», а ${k.from} — «${was}» — сделайте одинаково` });
+    }
+  }
+  // 4. Выводы о праве.
+  const legal = new Set();
+  for (const x of [...body, ...concl]) {
+    if (LEGAL_SKIP.test(x.line) || /вопрос\S*\s*(?:№|\d|:)|^\s*\d+[.)]\s*(?:подлеж|явля|имеет|вправе)[^?\n]*\?\s*$/iu.test(x.line)) continue;
+    for (const m of x.line.matchAll(LEGAL_ALL)) {
+      const said = clean(m[0] + (x.line.slice(m.index + m[0].length).match(/^[а-яё]*/iu)?.[0] ?? ''));
+      if (legal.has(said.toLowerCase())) continue;
+      legal.add(said.toLowerCase());
+      out.push({ ...at(x), text: `«${said}» — это вывод о праве, его делает суд, а не эксперт: оставьте только факты — какой недостаток, его характер и причина` });
+    }
+  }
+  return out;
+}
+
 // ——— 2.108: итоговая стоимость одна во всём отчёте и в сопроводительном письме ———
 // После фразы «итоговая величина рыночной стоимости», «рыночная стоимость объекта …», «стоимость ремонта без учёта
 // износа / с учётом износа», «утрата товарной стоимости», «стоимость устранения недостатков» берётся первая сумма в
@@ -3582,6 +3694,7 @@ function repairSums(docs, ctx) {
 const WHOLE = {
   parts_match: partsMatch,
   goods_match: goodsMatch,
+  defects_match: defectsMatch,
   repair_basis: repairBasis,
   repair_sums: repairSums,
   questions_answered: questionsAnswered,
@@ -3674,6 +3787,7 @@ export const AUTO_CHECKS = Object.freeze({
   analog_match: 'аналоги в отчёте — как подтверждённые в деле: ссылка, цена, площадь, число аналогов; у каждого номера — своя ссылка и своя цена',
   purchase_match: 'дата и цена покупки товара — как в заявке',
   goods_match: 'товароведческая: модель, артикул, серийный номер или IMEI товара в заключении — как в заявке; дата обнаружения недостатка и гарантийный срок (и его конец) — как в заявке',
+  defects_match: 'товароведческая: каждый недостаток из заявки исследован; у характера недостатка — признаки и ссылка на ГОСТ или техническую документацию; характер в выводах — как в исследовании и таблице недостатков; нет выводов о праве («подлежит возврату», «требования обоснованы»)',
   questions_answered: 'каждый вопрос заявки найден в выводах',
   final_value: 'итоговая стоимость одна на титуле, в задании, выводах, итоговой таблице и в сопроводительном письме',
   report_number: 'номер отчёта и дата составления одни на титуле, в колонтитулах и в сопроводительном письме; такого номера не было в другом деле эксперта этого года; номер тот, что выдан делу',
