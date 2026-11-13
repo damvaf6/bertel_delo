@@ -23,7 +23,7 @@ before(async () => {
   spec = await login(S, '+79990004703');
   other = await login(S, '+79990004704');
   await setPlatformRole(S.sql, dispatcher.user.id, 'dispatcher');
-  await makeSpecialist(S.sql, spec.user.id, { permits: [['expertise', 'car_damage'], ['expertise', 'realty']] });
+  await makeSpecialist(S.sql, spec.user.id, { permits: [['expertise', 'car_damage'], ['expertise', 'realty'], ['expertise', 'goods']] });
   await makeSpecialist(S.sql, other.user.id, { permits: [['expertise', 'car_damage']] });
   await spec.req('PATCH', '/api/me', { full_name: 'Тестов Эксперт Иванович' });
 });
@@ -53,9 +53,20 @@ test('описание модуля: извещение только у ущер
   assert.deepEqual(reg.notice('expertise', 'car_damage').parties.map((p) => p.id), ['insurer', 'other']);
   assert.equal(reg.notice('expertise', 'realty'), null);
   assert.equal(reg.draftSections('expertise', 'car_damage').find((s) => s.notice).title, '4. Осмотр');
-  assert.throws(() => validateModule({ ...expertise, notice: { ...expertise.notice, fields: ['nope'] } }), /нет поля nope/);
-  assert.throws(() => validateModule({ ...expertise, notice: { ...expertise.notice, services: ['nope'] } }), /нет услуги nope/);
-  assert.throws(() => validateModule({ ...expertise, notice: { ...expertise.notice, parties: [{ id: 'a', name: 'A' }, { id: 'a', name: 'B' }] } }), /без повторов/);
+  const [car, goods] = expertise.notice;
+  assert.throws(() => validateModule({ ...expertise, notice: { ...car, fields: ['nope'] } }), /нет поля nope/);
+  assert.throws(() => validateModule({ ...expertise, notice: { ...car, services: ['nope'] } }), /нет услуги nope/);
+  assert.throws(() => validateModule({ ...expertise, notice: { ...car, parties: [{ id: 'a', name: 'A' }, { id: 'a', name: 'B' }] } }), /без повторов/);
+  // Товар (2.485): свой образец — продавец, изготовитель, импортёр; раздел «4. Осмотр» товароведческой — с notice.
+  const g = reg.notice('expertise', 'goods');
+  assert.deepEqual(g.parties.map((p) => p.name), ['Продавец', 'Изготовитель', 'Импортёр']);
+  assert.match(g.lead, /продавцу \(изготовителю, импортёру\)/);
+  assert.equal(reg.notice('expertise', 'car_damage').name_label, 'Кому — название страховой или ФИО');
+  assert.equal(reg.draftSections('expertise', 'goods').find((s) => s.notice).title, '4. Осмотр');
+  validateModule({ ...expertise, notice: car });
+  assert.throws(() => validateModule({ ...expertise, notice: [car, { ...goods, services: ['goods', 'car_damage'] }] }), /уже в другом извещении/);
+  assert.throws(() => validateModule({ ...expertise, notice: [car, { ...goods, fields: ['vin'] }] }), /у услуги goods нет поля vin/);
+  assert.throws(() => validateModule({ ...expertise, notice: [car, { ...goods, lead: '' }] }), /lead — строка/);
 });
 
 test('дата и время осмотра: по Москве, не раньше 60 дней назад и не дальше года', () => {
@@ -165,4 +176,43 @@ test('не ДТП — блока нет; известили позже осмо�
   const v = (await spec.req('POST', `/api/orders/${o.id}/notices`, { party: 'other', name: 'Петров П. П.', date: past, time: '09:00', place: 'г. Москва' })).body;
   const m = (await spec.req('PUT', `/api/orders/${o.id}/notices/${v.notices[0].id}/mark`, { how: 'phone', sent_on: todayMsk() })).body;
   assert.equal(m.notices[0].late, true);
+});
+
+// 2.485: извещение продавца (изготовителя, импортёра) об осмотре товара — тем же образцом, что по ДТП.
+test('товар: извещение продавцу — Word с товаром и недостатками из заявки, строка — в «4. Осмотр» черновика', async () => {
+  const GOODS = { purpose: 'court', region: 'moscow', subject: 'Ноутбук перестал включаться', questions: 'Есть ли недостатки?',
+    purchase: '12.03.2026, магазин, 54 990 ₽', goods_kind: 'gadget', model: 'Тестовый ноутбук X1, s/n TEST0001',
+    defects: 'не включается\nтрещина на крышке', found_date: '01.09.2026', location: 'у истца, г. Москва' };
+  const o = await inWork('goods', GOODS);
+  const base = `/api/orders/${o.id}/notices`;
+  const v0 = (await spec.req('GET', base)).body;
+  assert.equal(v0.available, true);
+  assert.equal(v0.can_write, true);
+  assert.deepEqual(v0.parties.map((p) => p.id), ['seller', 'maker', 'importer']);
+  assert.match(v0.lead, /осмотра товара/);
+  assert.equal(v0.name_label, 'Кому — название продавца, изготовителя или импортёра');
+  const day = addDays(todayMsk(), 2);
+  assert.equal((await spec.req('POST', base, { party: 'insurer', name: 'АО «Тест»', date: day, time: '11:00', place: 'г. Москва' })).status, 400,
+    'страховая — не у товара');
+  const v1 = await spec.req('POST', base, { party: 'seller', name: 'ООО «Тест-Магазин»', date: day, time: '11:00', place: 'г. Москва, ул. Тестовая, 5' });
+  assert.equal(v1.status, 201, JSON.stringify(v1.body));
+  const n = v1.body.notices[0];
+  assert.equal(n.party_name, 'Продавец');
+
+  const w = await download(spec, `${base}/${n.id}/doc`);
+  assert.equal(w.status, 200);
+  assert.match(decodeURIComponent(w.disposition), /Извещение об осмотре — ООО Тест-Магазин\.docx/);
+  const text = (await extractPages(w.buf, 'x.docx')).pages.join('\n');
+  for (const re of [/Кому: ООО «Тест-Магазин» \(продавец\)/, /осмотр товара для проверки заявленных недостатков/, /Тестовый ноутбук X1, s\/n TEST0001/,
+    /Телефон, планшет, ноутбук, компьютер/, /54 990/, /не включается/, /трещина на крышке/, /01\.09\.2026/, /у истца, г\. Москва/, /Тестов Эксперт Иванович/]) {
+    assert.match(text, re);
+  }
+  assert.doesNotMatch(text, /восстановительного ремонта|Есть ли недостатки/, 'не ДТП и не вопросы эксперту');
+
+  const m = (await spec.req('PUT', `${base}/${n.id}/mark`, { how: 'letter', sent_on: todayMsk() })).body;
+  assert.match(m.line, /извещены: ООО «Тест-Магазин» \(продавец\) — заказным письмом с уведомлением /);
+  const d = (await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {})).body.draft;
+  const at = d.body.indexOf('## 4. Осмотр');
+  assert.ok(at >= 0, d.body.slice(0, 300));
+  assert.equal(d.body.slice(at).split('\n')[1], m.line);
 });

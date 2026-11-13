@@ -27,12 +27,13 @@ function draw(v) {
   $('inspnotice-box').classList.remove('hidden');
   const marked = v.notices.filter((n) => n.how).length;
   $('inspnotice-lead').textContent = !v.notices.length
-    ? 'Сообщите страховой и второму участнику ДТП дату, время и место осмотра: запишите здесь — получите образец извещения Word, отправьте его сами и отметьте, как и когда известили. Отметка попадёт в раздел «Осмотр» черновика.'
+    ? `${v.lead ?? 'Сообщите сторонам дату, время и место осмотра'}: запишите здесь — получите образец извещения Word, отправьте его сами и отметьте, как и когда известили. Отметка попадёт в раздел «Осмотр» черновика.`
     : `Извещений: ${v.notices.length}, отмечено «извещены»: ${marked}.`;
   $('inspnotice-list').replaceChildren(...v.notices.map((n) => item(n, v)));
   $('inspnotice-draft-row').classList.toggle('hidden', !v.can_write || !v.line);
   $('inspnotice-open').classList.toggle('hidden', !v.can_write || v.notices.length >= v.max);
   if (!v.can_write) $('inspnotice-form').classList.add('hidden');
+  if (v.name_label) $('inspnotice-name-label').textContent = v.name_label;
   if (!$('inspnotice-party').options.length) {
     $('inspnotice-party').replaceChildren(...v.parties.map((p) => el('option', { value: p.id }, p.name)));
   }
