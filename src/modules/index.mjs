@@ -501,7 +501,7 @@ export function validateModule(m) {
     if (!Array.isArray(m.phrases) || !m.phrases.length) fail(where, 'непустой список');
     const ids = new Set();
     for (const p of m.phrases) {
-      onlyKeys(p, ['id', 'title', 'services', 'doc', 'field', 'text'], where);
+      onlyKeys(p, ['id', 'title', 'services', 'doc', 'field', 'skip', 'text'], where);
       if (!/^[a-z_]{1,30}$/.test(p.id ?? '') || ids.has(p.id)) fail(where, `id ${p.id} — латиницей и без повторов`);
       ids.add(p.id);
       if (typeof p.title !== 'string' || !p.title || p.title.length > 40) fail(where, `${p.id}: title — до 40 знаков`);
@@ -510,7 +510,10 @@ export function validateModule(m) {
       for (const sid of p.services) {
         const s = m.services.find((x) => x.id === sid);
         if (!s) fail(where, `${p.id}: нет услуги ${sid}`);
-        if (p.field && ![...common, ...(s.fields ?? [])].some((f) => f.id === p.field)) fail(where, `${p.id}: у услуги ${sid} нет поля ${p.field}`);
+        const f = p.field && [...common, ...(s.fields ?? [])].find((x) => x.id === p.field);
+        if (p.field && !f) fail(where, `${p.id}: у услуги ${sid} нет поля ${p.field}`);
+        if (p.skip !== undefined && (!f?.options || !Array.isArray(p.skip) || !p.skip.length
+          || p.skip.some((v) => !f.options.some((o) => o.id === v)))) fail(where, `${p.id}: skip — варианты поля выбора ${p.field ?? ''}`);
       }
       if (p.doc && !(m.request_docs ?? []).some((d) => d.id === p.doc)) fail(where, `${p.id}: нет документа ${p.doc} в request_docs`);
     }
