@@ -216,3 +216,53 @@ test('товар: извещение продавцу — Word с товаром
   assert.ok(at >= 0, d.body.slice(0, 300));
   assert.equal(d.body.slice(at).split('\n')[1], m.line);
 });
+
+// Прогон 2.489: дата осмотра в заключении — та, на которую извещали стороны (ДТП, товар); извещение после осмотра — находка.
+const ru = (d) => d.split('-').reverse().join('.');
+test('прогон 2.489: правило дат — осмотр в отчёте в день из отмеченного извещения', async () => {
+  const { runAutoChecks } = await import('../../src/ai/report-checks.mjs');
+  const doc = (lines) => [{ name: 'заключение.txt', pages: [lines.join('\n')] }];
+  const told = (t) => (runAutoChecks(['report_dates'], doc(t), { notices: [{ name: 'ООО «Тест-Магазин»', day: '2026-09-14', sent_on: '2026-09-10' }] })
+    .report_dates).map((f) => f.text).filter((x) => /извещ/.test(x));
+  assert.deepEqual(told(['ЗАКЛЮЧЕНИЕ ЭКСПЕРТА', 'Дата осмотра: 14.09.2026']), []);
+  assert.deepEqual(told(['ЗАКЛЮЧЕНИЕ ЭКСПЕРТА', 'Дата осмотра: 15.09.2026']), [
+    'Дата осмотра в отчёте — 15.09.2026, а извещали об осмотре на другой день (ООО «Тест-Магазин» — на 14.09.2026) — извещённые скажут, что осмотр прошёл без них. Осмотр перенесли — отправьте новое извещение и отметьте его в деле; иначе исправьте дату осмотра',
+  ]);
+  assert.deepEqual(told(['ЗАКЛЮЧЕНИЕ ЭКСПЕРТА', 'Осмотр не проводился, дата осмотра: 15.09.2026']), [], '«осмотр не проводился» — не сверяем');
+  assert.deepEqual(told(['ЗАКЛЮЧЕНИЕ ЭКСПЕРТА', 'Выводы']), [], 'даты осмотра в отчёте нет — молчим');
+  // Перенесли и известили заново — подходит любой день из отмеченных извещений.
+  assert.deepEqual(runAutoChecks(['report_dates'], doc(['ЗАКЛЮЧЕНИЕ ЭКСПЕРТА', 'Дата осмотра: 15.09.2026']),
+    { notices: [{ name: 'А', day: '2026-09-14', sent_on: '2026-09-10' }, { name: 'А', day: '2026-09-15', sent_on: '2026-09-12' }] }).report_dates, []);
+  const late = runAutoChecks(['report_dates'], doc(['ЗАКЛЮЧЕНИЕ ЭКСПЕРТА', 'Дата осмотра: 14.09.2026']),
+    { notices: [{ name: 'Петров П. П.', day: '2026-09-14', sent_on: '2026-09-16' }] }).report_dates.map((f) => f.text);
+  assert.deepEqual(late, ['Петров П. П. извещён(а) об осмотре 14.09.2026 только 16.09.2026 — после самого осмотра; такое извещение не даёт стороне прийти. Проверьте дату отправки в деле или проведите осмотр заново с извещением заранее']);
+  assert.deepEqual(runAutoChecks(['report_dates'], doc(['ЗАКЛЮЧЕНИЕ ЭКСПЕРТА', 'Дата осмотра: 15.09.2026']), {}).report_dates, [], 'без извещений — как раньше');
+});
+
+test('прогон 2.489: ИИ-проверка товара берёт отмеченные извещения дела', async () => {
+  const GOODS = { purpose: 'court', region: 'moscow', subject: 'Ноутбук перестал включаться', questions: 'Есть ли недостатки?',
+    purchase: '12.03.2026, магазин, 54 990 ₽', goods_kind: 'gadget', model: 'Тестовый ноутбук X1', defects: 'не включается',
+    found_date: '01.09.2026', location: 'г. Москва' };
+  const o = await inWork('goods', GOODS);
+  const day = addDays(todayMsk(), -1);
+  const n = (await spec.req('POST', `/api/orders/${o.id}/notices`, { party: 'seller', name: 'ООО «Тест-Магазин»', date: day, time: '11:00', place: 'г. Москва' })).body.notices[0];
+  const upload = async (d) => {
+    const r = await spec.req('POST', `/api/orders/${o.id}/results`, Buffer.from(`ЗАКЛЮЧЕНИЕ ЭКСПЕРТА\nДата осмотра: ${ru(d)}\n`), {
+      raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('заключение.txt') },
+    });
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    return r.body.document?.id ?? r.body.id;
+  };
+  const told = async () => {
+    S.providers.ai.reset();
+    const ai = await spec.req('POST', `/api/orders/${o.id}/review/ai`);
+    assert.equal(ai.status, 201, JSON.stringify(ai.body));
+    return ai.body.ai.items.flatMap((i) => i.found ?? []).map((f) => f.text).filter((t) => /извещ/.test(t));
+  };
+  await upload(addDays(todayMsk(), -2));
+  assert.deepEqual(await told(), [], 'извещение не отмечено — не сверяем');
+  assert.equal((await spec.req('PUT', `/api/orders/${o.id}/notices/${n.id}/mark`, { how: 'letter', sent_on: addDays(todayMsk(), -3) })).status, 200);
+  const t = await told();
+  assert.equal(t.length, 1, JSON.stringify(t));
+  assert.match(t[0], new RegExp(`извещали об осмотре на другой день \\(ООО «Тест-Магазин» — на ${ru(day).replace(/\./g, '\\.')}\\)`));
+});
