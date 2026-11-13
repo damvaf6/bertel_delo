@@ -847,6 +847,61 @@ test('товароведческая (2.61): дата и цена покупки
   assert.deepEqual(runAutoChecks(['purchase_match'], [doc([bad])], { fields: {} }).purchase_match, [], 'в заявке нет — не сверяем');
 });
 
+test('товароведческая (2.481): модель, серийный номер, дата обнаружения и гарантия — как в заявке', async () => {
+  const { goodsIds } = await import('../../src/ai/report-checks.mjs');
+  assert.deepEqual(goodsIds('Смартфон SM-A556, IMEI 350000000000001, дата 12.03.2026'), ['SM-A556', '350000000000001']);
+  const fields = { model: 'Смартфон SM-A556, IMEI 350000000000001', found_date: '14.09.2026', warranty_months: 12,
+    purchase: '12.03.2026, Магазин-1, 54 990 ₽' };
+  const ctx = { service: 'goods', fields };
+  const page = [
+    'ЗАКЛЮЧЕНИЕ ЭКСПЕРТА № 5/2026',
+    'Объект исследования: смартфон «Модель-1», модель SM-A556, IMEI: 350000000000001.',
+    'Со слов истца, недостаток обнаружен 14.09.2026: телефон не включается.',
+    'Гарантийный срок — 12 (двенадцать) месяцев, гарантия до 12.03.2027.',
+    // Прибор эксперта со своим заводским номером, дата осмотра и срок службы — не находки.
+    'Приборы: микроскоп цифровой, заводской номер 000777, поверка до 01.01.2027.',
+    'При осмотре 01.10.2026 экспертом выявлен дефект разъёма. Срок службы — 3 года.',
+  ].join('\n');
+  assert.deepEqual(runAutoChecks(['goods_match'], [doc([page])], ctx).goods_match, []);
+  const bad = page.replace('модель SM-A556, IMEI: 350000000000001', 'модель SM-A325, IMEI: 350000000000002')
+    .replace('обнаружен 14.09.2026', 'обнаружен 04.09.2026')
+    .replace('12 (двенадцать) месяцев, гарантия до 12.03.2027', '24 месяца, гарантия до 12.03.2028');
+  const res = runAutoChecks(['goods_match'], [doc([bad])], ctx).goods_match;
+  assert.deepEqual(res.map((f) => f.text), [
+    'Модель SM-A325 не совпадает с заявкой («Смартфон SM-A556, IMEI 350000000000001») — проверьте, нет ли данных другого товара',
+    'IMEI 350000000000002 не совпадает с заявкой («Смартфон SM-A556, IMEI 350000000000001») — проверьте, нет ли данных другого товара',
+    'Дата обнаружения недостатка 04.09.2026 не совпадает с заявкой (14.09.2026) — проверьте по претензии и заявке',
+    'Гарантийный срок 24 месяца не совпадает с заявкой (12 месяцев) — проверьте гарантийный талон',
+    'Конец гарантии 12.03.2028 не сходится с заявкой: куплен 12.03.2026, гарантия 12 месяцев — до 12.03.2027',
+  ]);
+  // «Исправить в черновике»: дата и срок — значением из заявки; номер — только когда в заявке он один.
+  assert.deepEqual(res[2].fix, { bad: '04.09.2026', right: '14.09.2026', from: 'в заявке' });
+  assert.deepEqual(res[3].fix, { bad: '24 месяца', right: '12 месяцев', from: 'в заявке' });
+  assert.equal(res[0].fix, undefined);
+  // Номера товара в заключении нет совсем — «укажите».
+  const noId = page.replace('модель SM-A556, IMEI: 350000000000001', 'без маркировки');
+  assert.deepEqual(runAutoChecks(['goods_match'], [doc([noId])], ctx).goods_match.map((f) => f.text), [
+    'В заключении нет модели, артикула или серийного номера товара из заявки («Смартфон SM-A556, IMEI 350000000000001») — укажите их в разделе об объекте, чтобы было видно, какой товар исследован',
+  ]);
+  const one = runAutoChecks(['goods_match'], [doc([bad])], { service: 'goods', fields: { model: 'SM-A556' } }).goods_match;
+  assert.deepEqual(one.find((f) => f.text.startsWith('Модель')).fix, { bad: 'SM-A325', right: 'SM-A556', from: 'в заявке' });
+  // Годы — в месяцах; «гарантии нет» при сроке в заявке; в заявке гарантии нет.
+  const years = page.replace('12 (двенадцать) месяцев', '1 (один) год');
+  assert.deepEqual(runAutoChecks(['goods_match'], [doc([years])], ctx).goods_match, [], '1 год = 12 месяцев');
+  const none = page.replace('Гарантийный срок — 12 (двенадцать) месяцев, гарантия до 12.03.2027.', 'Гарантия на товар отсутствует.');
+  assert.deepEqual(runAutoChecks(['goods_match'], [doc([none])], ctx).goods_match.map((f) => f.text),
+    ['В заключении сказано, что гарантии нет, а в заявке гарантийный срок 12 месяцев — проверьте гарантийный талон']);
+  assert.deepEqual(runAutoChecks(['goods_match'], [doc([page])], { service: 'goods', fields: { ...fields, warranty_months: 0 } }).goods_match.map((f) => f.text),
+    ['Гарантийный срок 12 (двенадцать) месяцев — а в заявке гарантии нет (0 месяцев) — проверьте гарантийный талон']);
+  // Без полей заявки и не товароведческая — молчим.
+  assert.deepEqual(runAutoChecks(['goods_match'], [doc([bad])], { service: 'goods', fields: {} }).goods_match, []);
+  assert.deepEqual(runAutoChecks(['goods_match'], [doc([bad])], { service: 'vehicle', fields }).goods_match, []);
+  const { createRegistry } = await import('../../src/modules/index.mjs');
+  const reg = createRegistry();
+  assert.ok(reg.checks('expertise', 'goods').find((c) => c.id === 'goods_identity')?.auto.includes('goods_match'));
+  assert.ok(!reg.checks('expertise', 'vehicle').some((c) => c.id === 'goods_identity'));
+});
+
 test('адрес объекта (2.94): как в заявке и одинаков по всему отчёту; адреса оценщика, организации и аналогов — не находка', () => {
   assert.deepEqual(parseAddress('г. Москва, ул. Долевая, 3, кв. 8'), { flat: '8', settlement: ['москв'], house: '3', street: ['долев'] });
   assert.deepEqual(parseAddress('Московская обл., г. Одинцово, Можайское шоссе, д. 12, корп. 2, кв. 45'),
