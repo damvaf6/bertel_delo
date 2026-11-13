@@ -702,6 +702,43 @@
         </form>
         <p class="msg" id="parts-msg" role="status" aria-live="polite"></p>
       </div>
+      <div class="card hidden" id="defects-box">
+        <h2>Недостатки товара</h2>
+        <p class="muted" id="defects-lead"></p>
+        <p class="muted hidden" id="defects-claimed"></p>
+        <ul class="list" id="defects-list"></ul>
+        <div class="row hidden" id="defects-draft-row">
+          <button type="button" class="secondary" data-action="defects-draft" id="defects-draft">Вставить таблицу в черновик раздела «Исследование»</button>
+        </div>
+        <button type="button" class="secondary hidden" id="defects-open">Добавить недостаток</button>
+        <form class="hidden" id="defects-form" novalidate>
+          <div class="field">
+            <label for="defects-defect">Недостаток</label>
+            <input id="defects-defect" type="text" maxlength="200" placeholder="например, трещина на крышке">
+          </div>
+          <div class="field">
+            <label for="defects-place">Где и какой размер</label>
+            <input id="defects-place" type="text" maxlength="300" placeholder="например, левый верхний угол крышки, 4 см">
+          </div>
+          <fieldset class="field" id="defects-natures">
+            <legend>Характер</legend>
+          </fieldset>
+          <div class="field">
+            <label for="defects-signs">Признаки — почему такой характер</label>
+            <textarea id="defects-signs" rows="3" maxlength="600" placeholder="например, трещина идёт от места литья, следов удара и вмятин нет"></textarea>
+          </div>
+          <div class="field">
+            <label for="defects-photos">Номера фото осмотра — через запятую</label>
+            <input id="defects-photos" type="text" inputmode="numeric" maxlength="120" placeholder="например, 3, 5">
+            <p class="muted" id="defects-photos-hint"></p>
+          </div>
+          <div class="row">
+            <button type="submit" id="defects-save">Записать недостаток</button>
+            <button type="button" class="link" id="defects-cancel">Отмена</button>
+          </div>
+        </form>
+        <p class="msg" id="defects-msg" role="status" aria-live="polite"></p>
+      </div>
       <div class="card hidden" id="insurer-box">
         <h2>Сверка с расчётом страховой</h2>
         <p class="muted" id="insurer-lead"></p>

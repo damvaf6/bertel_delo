@@ -104,7 +104,7 @@ function foreign(op, name) {
   const p = op.path;
   const byName = {
     orderId: B.kase.id, userId: B.u.expert.user.id, nid: B.note, analog: B.analog, link: B.link, retake: 1, visit: B.visit,
-    snippet: B.snippet, acc: B.acc, check: 'x', call: 1, doc: B.result.id, n: 1, module: 'expertise', service: 'realty', code: 'x', step: 'original', part: 1,
+    snippet: B.snippet, acc: B.acc, check: 'x', call: 1, doc: B.result.id, n: 1, module: 'expertise', service: 'realty', code: 'x', step: 'original', part: 1, defect: 1,
   };
   if (name === 'rid') {
     if (p.includes('/doc-requests/')) return B.docreq;

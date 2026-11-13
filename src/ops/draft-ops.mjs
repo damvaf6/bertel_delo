@@ -4,6 +4,7 @@
 import { loadNotices, noticeLine, placeNotice } from '../orders/notices.mjs';
 import { loadParts, partsTable, placeParts } from '../orders/parts.mjs';
 import { insurerBlock, loadInsurer, placeInsurer } from '../orders/insurer.mjs';
+import { defectsTable, loadDefects, placeDefects } from '../orders/defects.mjs';
 import { inspectionPhotos } from '../docs/photos.mjs';
 import { HttpError } from '../http/core.mjs';
 import { editsDraft, seesDraft } from '../access/policy.mjs';
@@ -686,7 +687,18 @@ export function draftOps() {
         }
         const partsBrief = pTable ? `ПОВРЕЖДЁННЫЕ ДЕТАЛИ (таблица эксперта из дела, программа сама вставит её в раздел об исследовании повреждений — не рисуй её и не пересказывай построчно; опирайся на неё, когда пишешь о соответствии повреждений обстоятельствам ДТП и о ремонте):\n${pTable.slice(1).join('\n')}` : null;
         const insurerBrief = iBlock ? `СВЕРКА С РАСЧЁТОМ СТРАХОВОЙ (из дела, программа сама вставит её под таблицей повреждённых деталей — не повторяй; можно сослаться на неё в выводах, суммы — только эти): ${iBlock[0]}` : null;
-        const brief = [orderBrief(registry, order, { omit: taken }), valueBrief, egrnBrief(egrn), taskBrief, onsite, noticeBrief, partsBrief, insurerBrief, dossierBrief, spec ? analogsBrief(spec, analogs, order) : null, tablesBrief(sections)].filter(Boolean).join('\n');
+        // Недостатки товара (2.482): таблица из дела — в раздел «Исследование»; модели — чтобы не рисовала свою.
+        const defectsSpec = registry.defects(order.module, order.service);
+        let dTable = null;
+        if (defectsSpec && sections.some((x) => x.defects)) {
+          const dlist = await loadDefects(sql, order.id);
+          if (dlist.length) {
+            const photoRows = await inspectionPhotos(sql, order, registry.inspectionSteps(order.module, order.service, order.fields));
+            dTable = defectsTable(dlist, defectsSpec.natures, new Map(photoRows.map((r) => [String(r.document_id), r.no])));
+          }
+        }
+        const defectsBrief = dTable ? `НЕДОСТАТКИ ТОВАРА (таблица эксперта из дела, программа сама вставит её в раздел об исследовании — не рисуй её и не пересказывай построчно; характер недостатка в исследовании и выводах — только как в ней, без выводов о праве):\n${dTable.slice(1).join('\n')}` : null;
+        const brief = [orderBrief(registry, order, { omit: taken }), valueBrief, egrnBrief(egrn), taskBrief, onsite, noticeBrief, partsBrief, insurerBrief, defectsBrief, dossierBrief, spec ? analogsBrief(spec, analogs, order) : null, tablesBrief(sections)].filter(Boolean).join('\n');
         const out = await askAi(ctx, actor, 'draft', draftMessages({ brief, sections, ...inputs }));
         // Таблицы (2.29) и сведения из досье (2.14) программа вставляет сама, под заголовками разделов.
         const materials = await orderMaterials(sql, order);
@@ -698,7 +710,7 @@ export function draftOps() {
         const kinded = task.kind ? aimed.replace(VALUE_KIND_GAP, task.kind.v) : aimed;
         const dated = fillEgrn(valueDate?.day ? kinded.replace(VALUE_GAP, valueDate.day) : kinded, task.address ? { ...egrn, address: task.address } : egrn);
         const filled = placeCustomer(fillDraft(fillTables(dated, sections, registry, order, { materials, valueDate: valueDate?.day, egrn, task }), sections, dossier), sections, task.customer);
-        const text = placeInsurer(placeParts(placeNotice(placeSources(filled, sections, sources).body, sections, nLine), sections, pTable), sections, iBlock).slice(0, DRAFT_MAX);
+        const text = placeDefects(placeInsurer(placeParts(placeNotice(placeSources(filled, sections, sources).body, sections, nLine), sections, pTable), sections, iBlock), sections, dTable).slice(0, DRAFT_MAX);
         const seen = {
           photos: inputs.photos.map((p) => p.name),
           docs: inputs.docs.map((d) => ({ name: d.name, read: d.text !== null, truncated: d.truncated })),
@@ -716,6 +728,7 @@ export function draftOps() {
           notice: !!nLine,
           parts: pTable ? pTable.length - 1 : 0,
           insurer: !!iBlock,
+          defects: dTable ? dTable.length - 1 : 0,
         };
         const d = await sql.tx(async (tx) => {
           await tx`select id from orders where id = ${order.id} for update`;
