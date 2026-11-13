@@ -56,6 +56,14 @@ const carTotal = (x) => [`сдано по ДТП: ${casesN(x.car_cases)}`, carDi
   x.car_compared ? [x.car_more ? `больше страховой: ${x.car_more}` : null, x.car_less ? `меньше: ${x.car_less}` : null,
     x.car_same ? `столько же: ${x.car_same}` : null].filter(Boolean).join(', ') : null,
   x.car_compared && x.car_no_calc ? `без сверки: ${x.car_no_calc}` : null].filter(Boolean).join(' · ');
+// 2.488: недостатки товара по характеру одной строкой; дела — «сдано: N дел».
+const defectsN = (n) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? 'недостаток' : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? 'недостатка' : 'недостатков'}`;
+const goodsDefects = (n, prod, oper) => (n ? `в таблицах ${defectsN(n)}: производственных — ${prod}, эксплуатационных — ${oper}`
+  : 'таблиц недостатков нет');
+const goodsTotal = (x) => [`сдано товароведческих: ${casesN(x.goods_cases)}`, goodsDefects(x.goods_defects, x.goods_production, x.goods_operation),
+  x.goods_unknown ? `характер не установлен: ${x.goods_unknown}` : null, x.goods_not_confirmed ? `не подтвердились: ${x.goods_not_confirmed}` : null,
+  x.goods_prod_cases ? `дел с производственным недостатком: ${x.goods_prod_cases}` : null,
+  x.goods_defects && x.goods_no_table ? `без таблицы недостатков: ${x.goods_no_table}` : null].filter(Boolean).join(' · ');
 const daysRu = (d) => `${String(d).replace('.', ',')} ${!Number.isInteger(d) ? 'дня' : d % 10 === 1 && d % 100 !== 11 ? 'день'
   : [2, 3, 4].includes(d % 10) && ![12, 13, 14].includes(d % 100) ? 'дня' : 'дней'}`;
 // «в первоначальный срок, без переносов: 3 из 5 · в среднем 4,5 дня от принятия до сдачи · позже первоначального срока: 2
@@ -273,6 +281,15 @@ async function load(month) {
   $('org-report-car-experts').replaceChildren(...report.experts.filter((x) => x.car_cases).map((x) => el('li', { 'data-report-car-expert': x.user_id },
     el('div', { class: 'title', text: `${x.full_name} — ${casesN(x.car_cases)}` }),
     el('div', { class: 'muted', text: carDiff(x.car_compared, x.car_diff_kop) }))));
+  // 2.488: сданные товароведческие дела — по «Что за товар» и недостатки по характеру; по экспертам.
+  $('org-report-goods-box').classList.toggle('hidden', !t2.goods_cases);
+  $('org-report-goods-total').textContent = t2.goods_cases ? `${goodsTotal(t2)}.` : '';
+  $('org-report-goods').replaceChildren(...(report.by_goods ?? []).map((x) => el('li', { 'data-report-goods': x.id },
+    el('div', { class: 'title', text: `${x.name} — ${casesN(x.done)}` }),
+    el('div', { class: 'muted', text: goodsDefects(x.defects, x.production, x.operation) }))));
+  $('org-report-goods-experts').replaceChildren(...report.experts.filter((x) => x.goods_cases).map((x) => el('li', { 'data-report-goods-expert': x.user_id },
+    el('div', { class: 'title', text: `${x.full_name} — ${casesN(x.goods_cases)}` }),
+    el('div', { class: 'muted', text: goodsDefects(x.goods_defects, x.goods_production, x.goods_operation) }))));
   const top = report.top_remarks ?? [];
   $('org-report-remarks-box').classList.toggle('hidden', !top.length);
   $('org-report-remarks').replaceChildren(...top.map((x) => el('li', { 'data-remark': '' },

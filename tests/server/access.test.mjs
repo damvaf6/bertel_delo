@@ -2132,7 +2132,8 @@ test('сводка за месяц по экспертам (2.78): только 
     letter_ask: 0, letter_ask_cases: 0, letter_ask_got: 0, letter_ask_days: null, letter_ask_wait: 0, letter_ask_max: null, org_sign_cases: 0, org_sign_days: null, org_sign_max: null, org_sign_wait: null,
     remarks_after: 0, remarks_after_cases: 0, remarks_after_items: 0,
     court_hearings: 0, court_cases: 0, court_explain: 0, court_absence: 0, court_postponed: 0, court_repeat: 0, court_unmarked: 0, court_ahead: 0,
-    car_cases: 0, car_compared: 0, car_diff_kop: null, car_more: 0, car_less: 0, car_same: 0, car_no_calc: 0, prev: null });
+    car_cases: 0, car_compared: 0, car_diff_kop: null, car_more: 0, car_less: 0, car_same: 0, car_no_calc: 0,
+    goods_cases: 0, goods_defects: 0, goods_production: 0, goods_operation: 0, goods_unknown: 0, goods_not_confirmed: 0, goods_prod_cases: 0, goods_no_table: 0, prev: null });
   assert.equal(empty.prev_month, null, 'прошлый месяц раньше создания организации — сравнения нет (2.124)');
   for (const q of ['?month=2020-01', '?month=2099-01', '?month=13', '?month=2026-13']) assert.equal((await report(headC, q)).body.error, 'bad_month', q);
   // Дела: e1 принял 2 дела, одно сдал вовремя, другое позже срока; одно в работе просрочено; руководитель вернул раз,
@@ -2191,6 +2192,7 @@ test('сводка за месяц по экспертам (2.78): только 
     remarks_after: 0, remarks_after_cases: 0, remarks_after_items: 0, after_remarks: [],
     court_hearings: 0, court_cases: 0, court_explain: 0, court_absence: 0, court_postponed: 0, court_repeat: 0, court_unmarked: 0, court_ahead: 0,
     car_cases: 0, car_compared: 0, car_diff_kop: null, car_more: 0, car_less: 0, car_same: 0, car_no_calc: 0,
+    goods_cases: 0, goods_defects: 0, goods_production: 0, goods_operation: 0, goods_unknown: 0, goods_not_confirmed: 0, goods_prod_cases: 0, goods_no_table: 0,
     prev: { done: 0, on_time: 0, returned: 0 }, services: [{ name: 'Оценка недвижимости', n: 2 }] });
   assert.deepEqual(r.experts.find((e) => e.user_id === ex.e2.user.id).prev, { done: 0, on_time: 0, returned: 1 }, 'возврат прошлого месяца (2.124)');
   assert.deepEqual(r.top_remarks, [{ text: 'Нет даты осмотра.', n: 2, experts: 2 }, { text: 'Не указан этаж', n: 1, experts: 1 }]);
