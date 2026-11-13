@@ -13,6 +13,7 @@ import { inspectionPhotos } from '../docs/photos.mjs';
 import { loadParts, photoNos } from '../orders/parts.mjs';
 import { loadDefects } from '../orders/defects.mjs';
 import { loadInsurer } from '../orders/insurer.mjs';
+import { loadNotices, mskParts } from '../orders/notices.mjs';
 import { OTHER_BANK, bankList, loadDossier } from '../dossier/dossier.mjs';
 import { todayMsk } from '../orders/workflow.mjs';
 import { insertOrder, listVisibleOrders } from './order-ops.mjs';
@@ -404,7 +405,11 @@ export function aiOps() {
           ? (await loadDefects(sql, order.id)).map((d) => ({ defect: d.defect, nature: d.nature, signs: d.signs })) : null;
         // Прогон 2.479: своя сумма из сверки со страховой (2.475) — против итога ремонта в отчёте.
         const insurer = names.includes('repair_sums') && registry.parts(order.module, order.service) ? await loadInsurer(sql, order.id) : null;
-        const auto = runAutoChecks(names, files, { fields: order.fields ?? {}, dossier, basis, service: order.service, analogs, inspectionDays, inspectionUploadDays, inspectionActDays, inspectionBy, signedOn, assignment, egrn, customer: owner?.full_name ?? null, today: dossier.today, usedNumbers: used, issuedNumber: issued ?? null, bankAccr, parts, insurer, defects });
+        // Прогон 2.489: отмеченные извещения об осмотре (ДТП, товар) — день осмотра по Москве, кому и когда отправлено.
+        const notices = names.includes('report_dates') && registry.notice(order.module, order.service)
+          ? (await loadNotices(sql, order.id)).filter((n) => n.how && n.sent_on).map((n) => ({ name: n.name, day: mskParts(n.inspect_at).date, sent_on: n.sent_on }))
+          : [];
+        const auto = runAutoChecks(names, files, { fields: order.fields ?? {}, dossier, basis, service: order.service, analogs, inspectionDays, inspectionUploadDays, inspectionActDays, inspectionBy, signedOn, assignment, egrn, customer: owner?.full_name ?? null, today: dossier.today, usedNumbers: used, issuedNumber: issued ?? null, bankAccr, parts, insurer, defects, notices });
         const found = Object.fromEntries(rules.map((r) => [r.id, (r.auto ?? []).flatMap((a) => auto[a] ?? [])]));
         // Модель недоступна или лимит исчерпан, но автоматические находки есть — показываем их, а не ошибку.
         let out;
