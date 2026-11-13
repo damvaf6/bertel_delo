@@ -10,6 +10,7 @@
 
 import { adjusted, cleanUrl } from '../analogs/analogs.mjs';
 import { plainNumber } from '../orgs/numbering.mjs';
+import { warrantyEnd } from '../orders/warranty.mjs';
 
 const MAX_PER_RULE = 5;
 
@@ -2408,6 +2409,117 @@ function purchaseMatch(doc, ctx) {
   return out;
 }
 
+// ——— 2.481: товароведческая — товар, дата обнаружения недостатка и гарантийный срок как в заявке ———
+// Из поля «Модель, артикул, серийный номер или IMEI» берутся номера — слова с цифрой от 4 знаков («SM-A556», «R58M12AB»,
+// IMEI из 15 цифр). В заключении сверяется номер сразу после слов «серийный (заводской) номер», «S/N», «IMEI», «артикул»,
+// «модель»: другой — находка (товар из старого заключения). Строки о приборах эксперта (у них свои заводские номера) и
+// об аналогах не сверяются. Ни одного номера из заявки во всём заключении — находка «укажите». Дата обнаружения
+// недостатка — дата после «обнаружен / выявлен / проявился … недостаток» (кроме строк об осмотре экспертом), гарантийный
+// срок — месяцы или годы после «гарантийный срок», «гарантия» и конец гарантии «до …» — как по заявке (`warrantyEnd`).
+const GOODS_ID_LABEL = /(?:серийн\S*|заводск\S*|идентификацион\S*)\s+(?:номер\S*|№)|(?<![A-Za-zА-Яа-яЁё])(?:S\/N|SN|IMEI\d?|артикул\S*|арт\.|модел\S*)(?![A-Za-zА-Яа-яЁё])/giu;
+const GOODS_SKIP = /прибор|инструмент|линейк|рулетк|штангенциркул|микрометр|микроскоп|фотоаппарат|камер[аы]\s|поверк|мультиметр|тестер|аналог/iu;
+const GOODS_TOKEN = /[A-Za-zА-Яа-яЁё0-9][A-Za-zА-Яа-яЁё0-9\-\/.]{2,}[A-Za-zА-Яа-яЁё0-9]/gu;
+const idKey = (s) => String(s).toUpperCase().replace(/[-\/.\s]/g, '').replace(/[АВЕКМНОРСТХ]/gu, (c) => 'ABEKMHOPCTX'['АВЕКМНОРСТХ'.indexOf(c)]);
+const isId = (s) => /\d/.test(s) && idKey(s).length >= 4 && !/^\d{1,2}\.\d{1,2}\.\d{2,4}$/.test(s);
+export function goodsIds(text) {
+  return [...String(text ?? '').matchAll(GOODS_TOKEN)].map((m) => m[0]).filter(isId);
+}
+const FOUND_WORD = /(?:обнаруж|выявл|проявил|появил|возник)\S*/giu;
+const DEFECT_WORD = /недостат|дефект|неисправн|поломк|брак/iu;
+const WARRANTY_WORD = /гарантийн\S*\s+(?:срок|период)\S*|срок\S*\s+гаранти\S*|гаранти[яиюей]\S*/giu;
+const TERM_RE = /(?<![\d.,])(\d{1,3})\s*(?:\([А-Яа-яЁё\s]{2,40}\)\s*)?(мес(?:яц[а-яё]*|\.)?|год[а-яё]*|лет)(?![А-Яа-яЁё])/u;
+const NO_WARRANTY = /гаранти\S*\s+(?:на\s+\S+\s+)?(?:нет|отсутству|не\s+установлен|не\s+предусмотрен)|без\s+гаранти/iu;
+const monthsWord = (n) => { const a = n % 10; const b = n % 100; return a === 1 && b !== 11 ? 'месяц' : a >= 2 && a <= 4 && (b < 12 || b > 14) ? 'месяца' : 'месяцев'; };
+function datesIn(text) {
+  const out = [];
+  for (const m of text.matchAll(DATE_RE)) {
+    if (Number(m[1]) > 31 || Number(m[2]) > 12) continue;
+    out.push({ v: isoDate(m[1], m[2], m[3]), raw: m[0], index: m.index });
+  }
+  for (const m of text.matchAll(/(?<!\d)(\d{1,2})\s+([а-яё]+)\s+(\d{4})/giu)) {
+    const mi = MONTHS.findIndex((x, i) => (i === 4 ? /^ма[яй]$/iu.test(m[2]) : m[2].toLowerCase().startsWith(x)));
+    const v = mi >= 0 && ymd(m[3], mi + 1, m[1]);
+    if (v) out.push({ v, raw: m[0], index: m.index });
+  }
+  return out.sort((a, b) => a.index - b.index);
+}
+function goodsMatch(docs, ctx) {
+  if (!docs.length || ctx.service !== 'goods') return [];
+  const f = ctx.fields ?? {};
+  const ids = goodsIds(f.model);
+  const known = new Set(ids.map(idKey));
+  const foundMine = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(String(f.found_date ?? '').trim());
+  const found = foundMine ? ymd(foundMine[3], foundMine[2], foundMine[1]) : null;
+  const months = f.warranty_months === undefined || f.warranty_months === null || f.warranty_months === '' ? null : Number(f.warranty_months);
+  const bought = purchaseOf(f.purchase).date;
+  const end = Number.isInteger(months) && months > 0 && bought ? warrantyEnd(bought, months) : null;
+  if (!known.size && !found && !Number.isInteger(months)) return [];
+  const out = [];
+  const seen = new Set();
+  const add = (key, x) => { if (!seen.has(key)) { seen.add(key); out.push(x); } };
+  let anyId = false;
+  for (const doc of docs) eachPage(doc, (page, i) => {
+    if (known.size && goodsIds(page).some((t) => known.has(idKey(t)))) anyId = true;
+    for (const line of page.split('\n')) {
+      // Номер товара после «серийный номер», «IMEI», «артикул», «модель».
+      if (known.size && !GOODS_SKIP.test(line)) {
+        for (const m of line.matchAll(GOODS_ID_LABEL)) {
+          const tail = line.slice(m.index + m[0].length, m.index + m[0].length + 40).replace(/^[\s:№—–-]+/u, '');
+          const t = (tail.match(GOODS_TOKEN) ?? [])[0];
+          if (!t || !isId(t) || !tail.startsWith(t)) continue;
+          const k = idKey(t);
+          if (known.has(k) || [...known].some((x) => x.includes(k) || k.includes(x))) continue;
+          add(`id${k}`, { doc, page: i, quote: line, ...(ids.length === 1 ? { fix: { bad: t, right: ids[0], from: MINE } } : {}),
+            text: `${clean(m[0]).replace(/^./u, (c) => c.toUpperCase())} ${t} не совпадает с заявкой («${clean(f.model)}») — проверьте, нет ли данных другого товара` });
+        }
+      }
+      // Дата обнаружения недостатка.
+      if (found && DEFECT_WORD.test(line) && !/осмотр|эксперт\S*\s+(?:выявл|обнаруж)|исследовани|(?:выявл|обнаруж)\S*\s+эксперт/iu.test(line)) {
+        for (const m of line.matchAll(FOUND_WORD)) {
+          const d = datesIn(line.slice(m.index, m.index + 70))[0];
+          if (!d || d.v === found) continue;
+          add(`f${d.v}`, { doc, page: i, quote: line, fix: { bad: d.raw, right: ruDate(found), from: MINE },
+            text: `Дата обнаружения недостатка ${ruDate(d.v)} не совпадает с заявкой (${ruDate(found)}) — проверьте по претензии и заявке` });
+        }
+      }
+      // Гарантийный срок и его конец.
+      if (Number.isInteger(months) && /гарант/iu.test(line) && !/аналог/iu.test(line)) {
+        if (months > 0 && NO_WARRANTY.test(line)) {
+          add('w0', { doc, page: i, quote: line, text: `В заключении сказано, что гарантии нет, а в заявке гарантийный срок ${months} ${monthsWord(months)} — проверьте гарантийный талон` });
+        }
+        for (const m of line.matchAll(WARRANTY_WORD)) {
+          const seg = line.slice(m.index + m[0].length, m.index + m[0].length + 50).split(/срок\S*\s+(?:службы|годности|эксплуатац)|;/iu)[0];
+          const t = seg.match(TERM_RE);
+          if (t) {
+            const n = Number(t[1]) * (/^мес/iu.test(t[2]) ? 1 : 12);
+            if (n !== months) {
+              const plain = !/\(/.test(t[0]);
+              add(`w${n}`, { doc, page: i, quote: line, ...(plain && months > 0 ? { fix: { bad: t[0], right: `${months} ${monthsWord(months)}`, from: MINE } } : {}),
+                text: months === 0
+                  ? `Гарантийный срок ${t[0]} — а в заявке гарантии нет (0 месяцев) — проверьте гарантийный талон`
+                  : `Гарантийный срок ${t[0]} не совпадает с заявкой (${months} ${monthsWord(months)}) — проверьте гарантийный талон` });
+            }
+          }
+          if (end) {
+            const d = datesIn(seg).find((x) => /(?:до|по|истека\S*|ист[её]к\S*|оканчива\S*|заканчива\S*|оконч\S*)\s*$/iu.test(seg.slice(0, x.index)));
+            if (d && d.v !== end) {
+              add(`e${d.v}`, { doc, page: i, quote: line, fix: { bad: d.raw, right: ruDate(end), from: MINE },
+                text: `Конец гарантии ${ruDate(d.v)} не сходится с заявкой: куплен ${ruDate(bought)}, гарантия ${months} ${monthsWord(months)} — до ${ruDate(end)}` });
+            }
+          }
+        }
+      }
+    }
+  });
+  // Номер из старого заключения уже назван находкой выше — «укажите» не повторяем.
+  if (known.size && !anyId && ![...seen].some((k) => k.startsWith('id'))) {
+    const main = mainReport(docs) ?? docs[0];
+    const at = firstLine([main], /объект\S*\s+(?:исследования|экспертизы)|товар/iu) ?? { doc: main, page: 0, quote: (main.pages?.[0] ?? '').split('\n')[0] };
+    out.unshift({ ...at, text: `В заключении нет модели, артикула или серийного номера товара из заявки («${clean(f.model)}») — укажите их в разделе об объекте, чтобы было видно, какой товар исследован` });
+  }
+  return out;
+}
+
 // ——— 2.108: итоговая стоимость одна во всём отчёте и в сопроводительном письме ———
 // После фразы «итоговая величина рыночной стоимости», «рыночная стоимость объекта …», «стоимость ремонта без учёта
 // износа / с учётом износа», «утрата товарной стоимости», «стоимость устранения недостатков» берётся первая сумма в
@@ -3469,6 +3581,7 @@ function repairSums(docs, ctx) {
 
 const WHOLE = {
   parts_match: partsMatch,
+  goods_match: goodsMatch,
   repair_basis: repairBasis,
   repair_sums: repairSums,
   questions_answered: questionsAnswered,
@@ -3560,6 +3673,7 @@ export const AUTO_CHECKS = Object.freeze({
   analog_list: 'аналогов не меньше трёх, ссылки у разных аналогов не повторяются',
   analog_match: 'аналоги в отчёте — как подтверждённые в деле: ссылка, цена, площадь, число аналогов; у каждого номера — своя ссылка и своя цена',
   purchase_match: 'дата и цена покупки товара — как в заявке',
+  goods_match: 'товароведческая: модель, артикул, серийный номер или IMEI товара в заключении — как в заявке; дата обнаружения недостатка и гарантийный срок (и его конец) — как в заявке',
   questions_answered: 'каждый вопрос заявки найден в выводах',
   final_value: 'итоговая стоимость одна на титуле, в задании, выводах, итоговой таблице и в сопроводительном письме',
   report_number: 'номер отчёта и дата составления одни на титуле, в колонтитулах и в сопроводительном письме; такого номера не было в другом деле эксперта этого года; номер тот, что выдан делу',
