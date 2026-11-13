@@ -1893,6 +1893,23 @@ test('повреждённые детали (2.471): чужим — «не на�
   }
 });
 
+test('недостатки товара (2.482): чужим — «не найдено», сторонам заявки не товароведческой — блока нет', async () => {
+  for (const id of ['defects.list', 'defects.add', 'defects.edit', 'defects.delete']) cover(id);
+  // Подробно — tests/server/defects.test.mjs; здесь — чужие и стороны заявки другой услуги.
+  const base = `/api/orders/${ownOrder.id}/defects`;
+  const body = { defect: 'Трещина', place: 'Крышка, 4 см', nature: 'production', photos: [] };
+  for (const who of ['stranger', 'headA', 'headB', 'spec']) {
+    assert.equal((await U[who].req('GET', base)).status, 404, `${who}: смотреть`);
+    assert.equal((await U[who].req('POST', base, body)).status, 404, `${who}: записать`);
+    assert.equal((await U[who].req('PUT', `${base}/1`, body)).status, 404, `${who}: изменить`);
+    assert.equal((await U[who].req('DELETE', `${base}/1`)).status, 404, `${who}: удалить`);
+  }
+  for (const who of ['owner', 'dispatcher', 'admin']) {
+    assert.deepEqual((await U[who].req('GET', base)).body, { available: false }, who);
+    assert.equal((await U[who].req('POST', base, body)).status, 409, `${who}: не товароведческая`);
+  }
+});
+
 test('сверка с расчётом страховой (2.475): чужим — «не найдено», сторонам заявки не по ДТП — блока нет', async () => {
   for (const id of ['insurer.get', 'insurer.save', 'insurer.delete']) cover(id);
   // Подробно — tests/server/insurer.test.mjs; здесь — чужие и стороны заявки другой услуги.

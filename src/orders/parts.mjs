@@ -29,17 +29,21 @@ export const photoNos = (p, photoNo) => (p.photo_ids ?? []).map((id) => photoNo.
 
 // Таблицу — в раздел с parts: прежняя таблица (строка-заголовок и строки «| … |» под ней) заменяется, иначе встаёт сразу
 // под заголовком раздела.
-export function placeParts(body, sections, lines) {
+export const placeParts = (body, sections, lines) => placeTableIn(body, sections, lines, PARTS_HEAD, 'parts');
+
+// Общая вставка таблицы из дела в раздел черновика с пометкой flag (parts — детали ДТП, defects — недостатки товара, 2.482):
+// прежняя таблица с той же строкой-заголовком заменяется целиком, иначе встаёт сразу под заголовком раздела.
+export function placeTableIn(body, sections, lines, head, flag) {
   if (!lines) return body;
   const all = body.split('\n');
-  const old = all.findIndex((l) => l.trim() === PARTS_HEAD);
+  const old = all.findIndex((l) => l.trim() === head);
   if (old >= 0) {
     let end = old + 1;
     while (end < all.length && all[end].trim().startsWith('|')) end += 1;
     all.splice(old, end - old, ...lines);
     return all.join('\n');
   }
-  const s = sections.find((x) => x.parts);
+  const s = sections.find((x) => x[flag]);
   if (!s) return body;
   const m = [...body.matchAll(/^#{1,3}\s*(.+)$/gm)].find((h) => headKey(h[1]) === headKey(s.title));
   if (!m) return body;
