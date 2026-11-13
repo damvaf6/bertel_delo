@@ -12,6 +12,8 @@ const TOKEN = process.env.STAGE_INVOKE_TOKEN;
 const LOGIN_KEY = process.env.STAGE_LOGIN_KEY;
 const ADMIN = process.env.STAGE_ADMIN_PHONE;
 const AUTH = TOKEN ? { authorization: `Bearer ${TOKEN}` } : {};
+// Фото на площадке: страница ждёт ответа до 90 с, облако иногда отвечает дольше 15 с (ночной прогон 13.11).
+const PHOTO_MS = 60_000;
 const H = { 'x-delo-request': '1' };
 const AI_WAIT = 150_000; // настоящая модель отвечает дольше
 
@@ -242,7 +244,7 @@ test('экскурсия по кабинетам: эксперт, руковод
   await expect(op.locator('#geo-state')).toContainText('Место определено');
   for (const step of ['car_front', 'car_vin', 'car_odometer']) {
     await op.locator(`#steps li[data-step="${step}"] input[type=file]`).setInputFiles({ name: `${step}.jpg`, mimeType: 'image/jpeg', buffer: jpeg });
-    await expect(op.locator(`#steps li[data-step="${step}"] .msg`)).toHaveText('Фото отправлено');
+    await expect(op.locator(`#steps li[data-step="${step}"] .msg`)).toHaveText('Фото отправлено', { timeout: PHOTO_MS });
   }
   await snap(op, 'Владелец объекта', 'Осмотр с телефона владельца', 'Владелец по ссылке снимает машину по шагам: спереди, сзади, VIN, пробег, салон. У каждого фото — время и место.');
   op.once('dialog', (d) => d.accept());

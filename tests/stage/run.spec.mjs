@@ -20,6 +20,8 @@ if (!/^\+7999000\d{4}$/.test(ADMIN || '')) throw new Error('STAGE_ADMIN_PHONE �
 const AUTH = { authorization: `Bearer ${TOKEN}` };
 // Настоящая модель (YandexGPT) отвечает до минуты-двух — ждём её ответа дольше, чем обычного экрана.
 const AI_WAIT = 150_000;
+// Фото на площадке: сама страница ждёт ответа до 90 с, облако иногда отвечает дольше 15 с (ночной прогон 13.11).
+const PHOTO_MS = 60_000;
 const H = { 'x-delo-request': '1' };
 
 // Хранилище файлов Яндекса — единственный «чужой» адрес (временные ссылки на скачивание).
@@ -431,7 +433,7 @@ test('общий прогон: сквозной путь экспертизы �
   await op.getByRole('button', { name: 'Начать: разрешить определение места' }).click();
   await expect(op.locator('#geo-state')).toContainText('Место определено');
   await op.locator('#steps li[data-step="facade"] input[type=file]').setInputFiles({ name: 'facade.jpg', mimeType: 'image/jpeg', buffer: jpeg });
-  await expect(op.locator('#steps li[data-step="facade"] .msg')).toHaveText('Фото отправлено');
+  await expect(op.locator('#steps li[data-step="facade"] .msg')).toHaveText('Фото отправлено', { timeout: PHOTO_MS });
   await shot(op, '12o-osmotr-vladelec');
   op.once('dialog', (d) => d.accept());
   await op.getByRole('button', { name: 'Готово' }).click();
@@ -777,7 +779,7 @@ test('общий прогон: экспресс — выезд помощник�
     return c.toDataURL('image/jpeg', 0.8);
   })).split(',')[1], 'base64');
   await hp.locator('#steps li[data-step="facade"] input[type=file]').setInputFiles({ name: 'facade.jpg', mimeType: 'image/jpeg', buffer: jpeg });
-  await expect(hp.locator('#steps li[data-step="facade"] .msg')).toHaveText('Фото отправлено');
+  await expect(hp.locator('#steps li[data-step="facade"] .msg')).toHaveText('Фото отправлено', { timeout: PHOTO_MS });
   await hp.getByLabel('Общее состояние *').selectOption('normal');
   await hp.getByLabel('Объект соответствует заявке *').selectOption('yes');
   await hp.getByLabel('Площадь по замеру, кв. м').fill('38,7');
