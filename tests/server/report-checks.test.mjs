@@ -951,6 +951,9 @@ test('товароведческая (2.484): недостатки — кажд�
   assert.deepEqual(flipped.map((f) => f.text), [
     'В выводах у недостатка «Не включается» характер «производственный», а в таблице недостатков — «не подтвердился» — сделайте одинаково',
   ]);
+  // Таблица неполная: недостаток из заявки не в таблице — характер в выводах сверяется с исследованием.
+  const partial = runAutoChecks(['defects_match'], [doc([bad])], { ...ctx, defects: [{ ...table[1], signs: 'скол' }] }).defects_match;
+  assert.ok(partial.some((f) => f.text.startsWith('В выводах у недостатка «Не включается» характер «эксплуатационный», а в исследовании — «производственный»')));
   // Не товароведческая и заявки без недостатков — молчим о незаявленном.
   assert.deepEqual(runAutoChecks(['defects_match'], [doc([bad])], { service: 'vehicle', fields }).defects_match, []);
   assert.deepEqual(runAutoChecks(['defects_match'], [doc([good])], { service: 'goods', fields: {} }).defects_match, []);

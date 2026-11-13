@@ -2592,9 +2592,10 @@ function defectsMatch(docs, ctx) {
     out.push({ ...at(named), text: 'Характер недостатка назван, а ссылки на ГОСТ, технический регламент, ТУ или техническую документацию (руководство по эксплуатации) в исследовании нет — укажите, с какими требованиями сравнивали' });
   }
   // 3. Характер в выводах — как в исследовании (таблица дела, иначе строки исследования с недостатком из заявки).
-  const known = table.length
-    ? table.filter((t) => t.nature).map((t) => ({ defect: t.defect, nature: t.nature, from: 'в таблице недостатков' }))
-    : claimed.flatMap((d) => {
+  // Недостаток из заявки, которого нет в таблице, — по исследованию.
+  const known = [
+    ...table.filter((t) => t.nature).map((t) => ({ defect: t.defect, nature: t.nature, from: 'в таблице недостатков' })),
+    ...claimed.filter((d) => !table.some((t) => sameDefect(t.defect, d) || defectIn(d, t.defect))).flatMap((d) => {
       // Кусок исследования о недостатке — от строки с ним до строки с другим недостатком из заявки.
       const n = new Set();
       let on = false;
@@ -2606,7 +2607,8 @@ function defectsMatch(docs, ctx) {
         if (k) n.add(k[0]);
       }
       return n.size === 1 ? [{ defect: d, nature: [...n][0], from: 'в исследовании' }] : [];
-    });
+    }),
+  ];
   const told = new Set();
   for (const k of known) {
     for (const x of concl) {
