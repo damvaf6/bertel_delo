@@ -154,7 +154,7 @@ async function orgMonthDone(sql, orgId, ids, { start, end }) {
   if (!ids.length) return [];
   return sql`
       select distinct on (o.id) o.id, o.module, o.service, o.executor_user_id as user_id, o.deadline, o.price_kop, o.transit_kop, o.expert_kop,
-             o.fields->>'purpose' as purpose, o.fields->>'bank' as bank, o.fields->>'method' as method,
+             o.fields->>'purpose' as purpose, o.fields->>'bank' as bank, o.fields->>'method' as method, o.fields->>'goods_kind' as goods_kind,
              p.amount_kop as payout_kop, h.at,
              greatest(
                (select max(f.outcome_at) from order_offers f
@@ -673,6 +673,44 @@ function byMethod(car, calcs, registry) {
   });
 }
 
+// Товароведческие дела за месяц (2.488): сданные дела услуг с таблицей недостатков товара (defects в модуле, 2.482) — сколько,
+// по «Что за товар» из заявки (поле goods_kind; название — из описания услуги) и недостатки из таблицы дела по характеру:
+// производственные, эксплуатационные, не установлен, не подтвердился; дела без таблицы недостатков — «без таблицы».
+const goodsOf = (done, registry) => (registry ? done.filter((o) => o.module && registry.defects(o.module, o.service)) : []);
+const defectsQ = async (sql, ids) => (!ids.length ? [] : sql`
+  select order_id, nature, count(*)::int as n from goods_defects where order_id = any(${ids}::uuid[]) group by order_id, nature`);
+const NATURES = { production: 'goods_production', operation: 'goods_operation', unknown: 'goods_unknown', not_confirmed: 'goods_not_confirmed' };
+// { goods_cases, goods_defects, goods_production, goods_operation, goods_unknown, goods_not_confirmed, goods_prod_cases, goods_no_table }.
+function goodsCalc(goods, defs) {
+  const r = { goods_cases: goods.length, goods_defects: 0, goods_production: 0, goods_operation: 0, goods_unknown: 0, goods_not_confirmed: 0,
+    goods_prod_cases: 0, goods_no_table: 0 };
+  for (const o of goods) {
+    const rows = defs.get(o.id) ?? [];
+    if (!rows.length) r.goods_no_table++;
+    if (rows.some((x) => x.nature === 'production')) r.goods_prod_cases++;
+    for (const x of rows) {
+      r.goods_defects += x.n;
+      if (NATURES[x.nature]) r[NATURES[x.nature]] += x.n;
+    }
+  }
+  return r;
+}
+// [{ id, name, done, defects, production, operation }] — по «Что за товар»: варианты в порядке описания, без ответа — последним.
+function byGoods(goods, defs, registry) {
+  const groups = new Map();
+  for (const o of goods) {
+    const opts = registry.service(o.module, o.service)?.fields.find((f) => f.id === 'goods_kind')?.options ?? [];
+    const i = opts.findIndex((x) => x.id === o.goods_kind);
+    const id = i >= 0 ? o.goods_kind : '';
+    const g = groups.get(id) ?? groups.set(id, { id, name: i >= 0 ? opts[i].name : 'Не указано в заявке', pos: i >= 0 ? i : 99, cases: [] }).get(id);
+    g.cases.push(o);
+  }
+  return [...groups.values()].sort((a, b) => a.pos - b.pos).map(({ id, name, cases }) => {
+    const c = goodsCalc(cases, defs);
+    return { id, name, done: c.goods_cases, defects: c.goods_defects, production: c.goods_production, operation: c.goods_operation };
+  });
+}
+
 export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), now = new Date(), registry = null, taskDue = null, taskAfter = null,
   taskMove = null } = {}) {
   const year = isYear(month);
@@ -729,6 +767,9 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), no
   const accr = await accrQ(sql, orgId, ids);
   const car = carOf(q.done, registry);
   const calcs = new Map((await insurerQ(sql, car.map((o) => o.id))).map((c) => [c.order_id, c]));
+  const goods = goodsOf(q.done, registry);
+  const defs = new Map();
+  for (const d of await defectsQ(sql, goods.map((o) => o.id))) (defs.get(d.order_id) ?? defs.set(d.order_id, []).get(d.order_id)).push(d);
   const count = (rows) => new Map(rows.map((r) => [r.user_id, r.n]));
   const accepted = count(q.accepted);
   const headReturns = count(q.headReturns);
@@ -776,6 +817,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), no
       after_remarks: topRemarks(afterItems.filter((i) => i.user_id === e.user_id), TOP_REMARKS_EXPERT).map(({ text, n }) => ({ text, n })),
       ...court(q.court.filter((r) => r.user_id === e.user_id), now),
       ...carCalc(car.filter((o) => o.user_id === e.user_id), calcs),
+      ...goodsCalc(goods.filter((o) => o.user_id === e.user_id), defs),
       disp_reasons: topRemarks(q.dispReasons.filter((i) => i.user_id === e.user_id && i.text), TOP_REMARKS_EXPERT)
         .map(({ text, n }) => ({ text, n })),
       prev: cmp ? cmp.experts.get(e.user_id) : null,
@@ -799,7 +841,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), no
     total: { ...Object.fromEntries(keys.map((k) => [k, sum(k)])), avg_days: avgDays(all), ...resign(q.resign),
       ...egrnFirst(q.firstSign, registry), ...bankTask(q.bankTask), ...taskLate(taskDues),
       ...bankAfter(bankAfters), ...bankAccr(q.done, accr), ...ext(exts), ...letterAsk(q.letterAsk), ...orgSign(q.done), ...afterRemarks(q.afterRemarks, afterItems),
-      ...court(q.court, now), ...carCalc(car, calcs),
+      ...court(q.court, now), ...carCalc(car, calcs), ...goodsCalc(goods, defs),
       prev: cmp ? cmp.total : null },
     prev_month: cmp ? prevM : null,
     prev_month_name: cmp ? periodRu(prevM) : null,
@@ -819,6 +861,8 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), no
     by_bank: byBank(q.done, accr, registry),
     // 2.478: сданные дела по ДТП — по «Как считать ремонт» и разница с суммой страховой.
     by_method: car.length ? byMethod(car, calcs, registry) : [],
+    // 2.488: сданные товароведческие дела — по «Что за товар» и недостатки по характеру.
+    by_goods: goods.length ? byGoods(goods, defs, registry) : [],
   };
 }
 
@@ -1041,6 +1085,15 @@ export function reportCsv(orgName, r) {
       ...[...r.experts.filter((x) => x.car_cases).map((x) => [x.full_name, x]), ['Итого', r.total]]
         .map(([name, x]) => [name, x.car_cases, x.car_compared, x.car_diff_kop == null ? '' : signedRub(x.car_diff_kop),
           x.car_more, x.car_less, x.car_same, x.car_no_calc])] : []),
+    // 2.488: только если за месяц сданы товароведческие дела — по виду товара и по экспертам, недостатки по характеру.
+    ...(r.total.goods_cases ? [[], ['Товароведческие дела — что за товар', 'Сдано', 'Недостатков в таблицах', 'Производственных',
+      'Эксплуатационных'],
+      ...(r.by_goods ?? []).map((x) => [x.name, x.done, x.defects, x.production, x.operation]),
+      [], ['Товароведческие дела — по экспертам', 'Сдано', 'Недостатков в таблицах', 'Производственных', 'Эксплуатационных',
+        'Характер не установлен', 'Не подтвердились', 'Дел с производственным недостатком', 'Без таблицы недостатков'],
+      ...[...r.experts.filter((x) => x.goods_cases).map((x) => [x.full_name, x]), ['Итого', r.total]]
+        .map(([name, x]) => [name, x.goods_cases, x.goods_defects, x.goods_production, x.goods_operation, x.goods_unknown,
+          x.goods_not_confirmed, x.goods_prod_cases, x.goods_no_table])] : []),
   ];
   return `﻿${lines.map((l) => l.map(cell).join(';')).join('\r\n')}\r\n`;
 }
