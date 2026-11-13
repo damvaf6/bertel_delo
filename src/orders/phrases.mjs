@@ -111,20 +111,25 @@ export function remindPhrase({ at, body }) {
 
 // Готовые фразы модуля для этой услуги (2.477, phrases в описании модуля): по ДТП — документы ГИБДД, европротокол, акт и
 // расчёт страховой, заказ-наряд. Документ уже получен по запросу — фразы нет; запрошен — «к пункту … в деле»;
-// поле заявки заполнено — «В заявке указано: …» (только то, что заказчик сам написал в заявке).
+// поле заявки заполнено — «В заявке указано: …» (только то, что заказчик сам написал в заявке; выбор — названием варианта).
+// По товару (2.486): чек, гарантийный талон, претензия, акт проверки качества, «не ремонтируйте товар». skip — значения поля,
+// при которых фразы нет (продавец товар не проверял — нет и акта проверки); фраза без doc — без «Приложить можно …».
 export function servicePhrases({ def, fields = {}, docItems = {}, due }) {
   const sid = def?.service.id;
   const list = (def?.module.phrases ?? []).filter((p) => p.services.includes(sid));
   const out = [];
   for (const p of list) {
     if (p.doc && docItems[p.doc] === 'got') continue;
+    const raw = p.field ? String(fields[p.field] ?? '').trim() : '';
+    if (raw && p.skip?.includes(raw)) continue;
     let text = p.text.replaceAll('{due}', due);
-    const value = p.field ? String(fields[p.field] ?? '').replace(/\s+/g, ' ').trim() : '';
+    const opt = def.fields?.find((f) => f.id === p.field)?.options?.find((o) => o.id === raw);
+    const value = (opt ? opt.name : raw).replace(/\s+/g, ' ');
     if (value) text += ` В заявке указано: «${value.length > 150 ? `${value.slice(0, 149)}…` : value}».`;
     if (p.doc && docItems[p.doc] === 'open') {
       const title = def.module.request_docs?.find((d) => d.id === p.doc)?.title;
       if (title) text += ` Приложить можно в деле, к пункту «${title}» списка «Запрошенные документы».`;
-    } else {
+    } else if (p.doc) {
       text += ' Приложить можно в деле или ответом здесь.';
     }
     out.push({ id: p.id, title: p.title, text });
