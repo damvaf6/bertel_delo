@@ -29,12 +29,18 @@ export const placeDefects = (body, sections, lines) => placeTableIn(body, sectio
 const norm = (s) => String(s ?? '').toLowerCase().replace(/ё/g, 'е').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 export const sameDefect = (a, b) => { const x = norm(a), y = norm(b); return !!x && !!y && (x === y || x.includes(y) || y.includes(x)); };
 
-// Недостатки из заявки (поле defects, каждый с новой строки), которых ещё нет в таблице.
-export function claimedLeft(fieldText, list) {
-  const lines = String(fieldText ?? '').split('\n').map((l) => l.replace(/^[\s\-–—•*\d.)]+/, '').trim()).filter(Boolean);
+// Недостатки из заявки (поле defects, каждый с новой строки): без номеров и маркеров, без повторов — по порядку в заявке.
+// Тот же список даёт шаги осмотра «Недостаток крупно: …» (2.483, each.split: 'lines' в модуле).
+export function defectLines(fieldText) {
+  const lines = String(fieldText ?? '').split('\n').map((l) => l.replace(/^[\s\-–—•*\d.)]+/, '').replace(/[\s.;,]+$/, '').trim()).filter(Boolean);
   const out = [];
-  for (const l of lines) if (!list.some((d) => sameDefect(d.defect, l)) && !out.some((x) => sameDefect(x, l))) out.push(l.slice(0, DEFECT_MAX));
+  for (const l of lines) if (!out.some((x) => sameDefect(x, l))) out.push(l.slice(0, DEFECT_MAX));
   return out;
+}
+
+// Недостатки из заявки, которых ещё нет в таблице.
+export function claimedLeft(fieldText, list) {
+  return defectLines(fieldText).filter((l) => !list.some((d) => sameDefect(d.defect, l)));
 }
 
 export async function loadDefects(sql, orderId) {
