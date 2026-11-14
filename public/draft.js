@@ -491,7 +491,8 @@ function stateText(r) {
       : d.source === 'past' ? `Методические разделы взяты из Вашего прошлого дела ${timeRu(d.at)} — проверьте, что они подходят к этому делу.`
         : `Последняя правка — ${timeRu(d.at)}.`,
     // Дата оценки из приложенного задания (2.207): откуда взята; в документах разные даты — выбрать эксперту.
-    d.inputs?.value_date?.day ? `Дата оценки ${d.inputs.value_date.day} — как ${d.inputs.value_date.what} «${d.inputs.value_date.name}» (стр. ${d.inputs.value_date.page}) — сверьте.` : null,
+    d.inputs?.value_date?.inherit ? `Дата оценки ${d.inputs.value_date.day} — день открытия наследства из заявки (оценка для нотариуса) — сверьте со справкой нотариуса.` : null,
+    !d.inputs?.value_date?.inherit && d.inputs?.value_date?.day ? `Дата оценки ${d.inputs.value_date.day} — как ${d.inputs.value_date.what} «${d.inputs.value_date.name}» (стр. ${d.inputs.value_date.page}) — сверьте.` : null,
     d.inputs?.value_date?.days ? `В приложенных документах разные даты оценки (${d.inputs.value_date.days.join(', ')}) — впишите верную сами.` : null,
     // Площадь и кадастровый номер (2.211), этаж и адрес (2.222) из выписки ЕГРН: откуда взяты; в выписках разные — выбрать эксперту.
     ...['area', 'cadastral', 'floor', 'address', 'share_size', 'use'].map((k) => egrnLine(k, d.inputs?.egrn?.[k])),

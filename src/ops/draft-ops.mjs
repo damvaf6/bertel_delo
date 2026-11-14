@@ -2,6 +2,7 @@
 // его в кабинете и сам прикладывает итоговый файл результата (Word). Заказчик черновика не видит; ИИ ничего не выдаёт
 // заказчику сам — результат по-прежнему проходит проверку диспетчера (1.5). Разделы черновика — в описании модуля.
 import { loadNotices, noticeLine, placeNotice } from '../orders/notices.mjs';
+import { inheritanceValueDay } from '../orders/inheritance.mjs';
 import { loadParts, partsTable, placeParts } from '../orders/parts.mjs';
 import { insurerBlock, loadInsurer, placeInsurer } from '../orders/insurer.mjs';
 import { loadPledge, placePledge, pledgeLine } from '../orders/pledge.mjs';
@@ -328,6 +329,13 @@ export function valueDateFor(registry, order, assignment) {
   const got = assignmentValue(assignment);
   if (got.days) return { days: got.days.map(ruDay) };
   return got.day ? { day: ruDay(got.day), name: got.name, page: got.page + 1, what: got.what } : null;
+}
+// 2.500: оценка для наследства — дата оценки = дата открытия наследства из заявки, если в деле нет задания на оценку с одной
+// датой оценки (задание важнее). Только для услуг с правилом value_date, как valueDateFor.
+export function inheritValueDate(registry, order) {
+  if (!registry.checks(order.module, order.service).some((r) => (r.auto ?? []).includes('value_date'))) return null;
+  const day = inheritanceValueDay(order.service, order.fields ?? {});
+  return day ? { day, inherit: true, what: 'в заявке', name: 'Дата открытия наследства', page: null } : null;
 }
 // 2.281: адрес объекта из задания на оценку (письма заказчика, определения суда), как его сверяет ИИ-проверка (2.277,
 // правило address_match), — в таблицу задания, модели и вместо пометки «заполнить: адрес», когда в выписках ЕГРН адреса
@@ -664,8 +672,10 @@ export function draftOps() {
         const spec = registry.analogs(order.module, order.service);
         const analogs = spec ? await sql`select * from order_analogs where order_id = ${order.id} and deleted_at is null and confirmed_at is not null order by id` : [];
         const assignment = await assignmentDocs(sql, providers.storage, order);
-        const valueDate = valueDateFor(registry, order, assignment);
-        const valueBrief = valueDate?.day ? `Дата оценки: ${valueDate.day} (${valueDate.what} «${valueDate.name}», стр. ${valueDate.page}) — пиши её везде, где нужна дата оценки, без пометок` : null;
+        // Оценка для наследства (2.500): задания с датой оценки нет — дата открытия наследства из заявки.
+        const valueDate = valueDateFor(registry, order, assignment) ?? inheritValueDate(registry, order);
+        const valueBrief = valueDate?.inherit ? `Дата оценки: ${valueDate.day} — день открытия наследства (по заявке, оценка для нотариуса); пиши её везде, где нужна дата оценки, без пометок; осмотр и составление отчёта — позже неё`
+          : valueDate?.day ? `Дата оценки: ${valueDate.day} (${valueDate.what} «${valueDate.name}», стр. ${valueDate.page}) — пиши её везде, где нужна дата оценки, без пометок` : null;
         const egrn = await egrnFor(sql, providers.storage, registry, order);
         const task = { address: taskAddressFor(registry, order, assignment, egrn), kind: taskKindFor(registry, order, assignment),
           purpose: taskPurposeFor(registry, order, assignment), due: taskDueFor(registry, order, assignment),
@@ -732,7 +742,7 @@ export function draftOps() {
         const aimed = task.purpose ? named.replace(PURPOSE_GAP, task.purpose.v) : named;
         const kinded = task.kind ? aimed.replace(VALUE_KIND_GAP, task.kind.v) : aimed;
         const dated = fillEgrn(valueDate?.day ? kinded.replace(VALUE_GAP, valueDate.day) : kinded, task.address ? { ...egrn, address: task.address } : egrn);
-        const filled = placeCustomer(fillDraft(fillTables(dated, sections, registry, order, { materials, valueDate: valueDate?.day, egrn, task }), sections, dossier), sections, task.customer);
+        const filled = placeCustomer(fillDraft(fillTables(dated, sections, registry, order, { materials, valueDate: valueDate?.inherit ? `${valueDate.day} (день открытия наследства, по заявке)` : valueDate?.day, egrn, task }), sections, dossier), sections, task.customer);
         const text = placeFacts(placePledge(placeSpecs(placeDefects(placeInsurer(placeParts(placeNotice(placeSources(filled, sections, sources).body, sections, nLine), sections, pTable), sections, iBlock), sections, dTable), sections, sTable), sections, plLine), sections, fLine).slice(0, DRAFT_MAX);
         const seen = {
           photos: inputs.photos.map((p) => p.name),
