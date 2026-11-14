@@ -3863,6 +3863,75 @@ function fixCost(docs, ctx) {
   return out;
 }
 
+// ——— 2.497: оценка транспорта — затратный подход ———
+// Раздел «Затратный подход» (заголовок — строка целиком; в оглавлении — нет). Не применяется и сумм нет — молчим.
+// Остаточная стоимость (итог подхода) больше цены нового — находка: износ только уменьшает стоимость. Цена нового
+// названа, а источника в разделе нет (сайт или прайс дилера, каталог, справочник) — находка. Срок службы и возраст
+// записаны в разных единицах (годы, месяцы, км, моточасы) — находка: коэффициент износа тогда неверный.
+const V_COST_HEAD = /^\s*(?:\d+(?:\.\d+)*\.?\s*)?затратн\S*\s+подход\S*(?:\s*\([^()]*\))?\s*[:.]?\s*$/iu;
+const V_COST_END = /^\s*(?:\d+(?:\.\d+)*\.?\s*)?(?:согласовани|сравнительн\S*\s+подход|доходн\S*\s+подход|выводы|итогов|литератур|приложени|основные\s+факты)/iu;
+const V_COST_OFF = /не\s+применя|не\s+использ|отказ\S*\s+от/iu;
+const NEW_PRICE = /(?:цен|стоимост)\S*\s+(?:\S+\s+){0,3}?нов(?:ого|ой|ых|ый|ая|ое)(?![а-яё])/iu;
+const RESIDUAL = /остаточн\S*\s+стоимост|стоимост\S*\s+(?:\S+\s+){0,3}?(?:по\s+|в\s+рамках\s+)?затратн\S*\s+подход|(?:итог|результат)\S*\s+(?:\S+\s+){0,2}?затратн/iu;
+const NEW_SRC = /дилер|официальн\S*\s+(?:сайт|представител)|автосалон|каталог|прайс|конфигуратор|производител/iu;
+const LIFE = /срок\S*\s+(?:полезного\s+использования|службы|эксплуатации)/iu;
+const AGE = /возраст|фактическ\S*\s+срок/iu;
+const UNIT = /(\d+(?:[,.]\d+)?)\s*(лет|года?|г\.|мес\S*|тыс\.?\s*км|км|моточас\S*|м\.\s*ч)/giu;
+const UNIT_NAME = { years: 'в годах', months: 'в месяцах', km: 'в километрах', hours: 'в моточасах' };
+function rubLast(line) {
+  const all = [...String(line ?? '').matchAll(new RegExp(MONEY_AFTER.source, 'gu'))];
+  return all.length ? rubIn(all[all.length - 1][0]) : null;
+}
+function unitOf(line, at) {
+  for (const m of line.slice(at).matchAll(UNIT)) {
+    const u = m[2].toLowerCase();
+    if (/^(?:лет|год|г\.)/u.test(u)) { if (Number(m[1].replace(',', '.')) >= 100) continue; return 'years'; }
+    if (u.startsWith('мес')) return 'months';
+    if (u.endsWith('км')) return 'km';
+    return 'hours';
+  }
+  return null;
+}
+function vehicleCost(docs, ctx) {
+  if (!docs.length || ctx.service !== 'vehicle') return [];
+  const out = [];
+  const at = (x) => ({ doc: x.doc, page: x.page, quote: clean(x.line).slice(0, 200) });
+  const groups = [];
+  for (const x of regionLines(docs, V_COST_HEAD, V_COST_END)) {
+    if (x.head || !groups.length) groups.push([]);
+    if (!x.head && clean(x.line)) groups[groups.length - 1].push(x);
+  }
+  const body = groups.filter((g) => g.some((x) => rubIn(x.line) != null)).flat();
+  if (!body.length) return out;
+  const news = body.filter((x) => NEW_PRICE.test(x.line) && !RESIDUAL.test(x.line) && rubIn(x.line.slice(x.line.search(NEW_PRICE))) != null);
+  const rests = body.filter((x) => RESIDUAL.test(x.line) && rubIn(x.line.slice(x.line.search(RESIDUAL))) != null);
+  const nw = news[0];
+  const newRub = nw ? rubIn(nw.line.slice(nw.line.search(NEW_PRICE))) : null;
+  const rest = rests[rests.length - 1];
+  // Итог — последняя сумма строки: «3 200 000 руб. × 0,62 = 1 984 000 руб.».
+  const restRub = rest ? rubLast(rest.line.slice(rest.line.search(RESIDUAL))) : null;
+  if (newRub != null && restRub != null && restRub > newRub) {
+    out.push({ ...at(rest), text: `Остаточная стоимость по затратному подходу (${fmt(restRub)} руб.) больше цены нового (${fmt(newRub)} руб.): износ и скидка на вторичный рынок только уменьшают стоимость — проверьте коэффициенты и не перепутаны ли суммы` });
+  }
+  // Источник — рядом с ценой нового (строка до, сама строка и две после): «справочник» у коэффициентов — не источник цены.
+  const ni = nw ? body.indexOf(nw) : -1;
+  const near = body.slice(Math.max(0, ni - 1), ni + 3).map((x) => x.line).join('\n');
+  if (nw && !PRICE_SRC.test(near.replace(/справочник\S*/giu, ' ')) && !NEW_SRC.test(near)) {
+    out.push({ ...at(nw), text: 'У цены нового в затратном подходе не назван источник — напишите, откуда цена: сайт или прайс официального дилера (со ссылкой и датой), каталог производителя, справочник' });
+  }
+  let life = null; let age = null;
+  for (const x of body) {
+    const l = x.line.search(LIFE);
+    const a = x.line.search(AGE);
+    if (!life && l >= 0 && !/фактическ/iu.test(x.line.slice(Math.max(0, l - 15), l))) { const u = unitOf(x.line, l); if (u) life = { ...x, u }; }
+    if (!age && a >= 0) { const u = unitOf(x.line, a); if (u) age = { ...x, u }; }
+  }
+  if (life && age && life.u !== age.u) {
+    out.push({ ...at(age), text: `Срок службы в затратном подходе — ${UNIT_NAME[life.u]}, а возраст (срок эксплуатации) — ${UNIT_NAME[age.u]}: запишите оба в одних единицах, как в справочнике, — иначе коэффициент износа посчитан неверно` });
+  }
+  return out;
+}
+
 const WHOLE = {
   parts_match: partsMatch,
   goods_match: goodsMatch,
@@ -3886,6 +3955,7 @@ const WHOLE = {
   bank_accredited: bankAccredited,
   encumbrance_match: encumbranceMatch,
   pledge_match: pledgeMatch,
+  vehicle_cost: vehicleCost,
 };
 
 const PER_DOC = {
@@ -3963,6 +4033,7 @@ export const AUTO_CHECKS = Object.freeze({
   purchase_match: 'дата и цена покупки товара — как в заявке',
   goods_match: 'товароведческая: модель, артикул, серийный номер или IMEI товара в заключении — как в заявке; дата обнаружения недостатка и гарантийный срок (и его конец) — как в заявке',
   defects_match: 'товароведческая: каждый недостаток из заявки исследован; у характера недостатка — признаки и ссылка на ГОСТ или техническую документацию; характер в выводах — как в исследовании и таблице недостатков; нет выводов о праве («подлежит возврату», «требования обоснованы»)',
+  vehicle_cost: 'оценка транспорта: в затратном подходе остаточная стоимость не больше цены нового, у цены нового назван источник, срок службы и возраст — в одних единицах',
   fix_cost: 'товароведческая: стоимость устранения недостатков — посчитана, только если о ней спрашивали в заявке; цены на дату (не позже даты составления) и с источником; сумма в выводах — как итог расчёта',
   questions_answered: 'каждый вопрос заявки найден в выводах',
   final_value: 'итоговая стоимость одна на титуле, в задании, выводах, итоговой таблице и в сопроводительном письме',
