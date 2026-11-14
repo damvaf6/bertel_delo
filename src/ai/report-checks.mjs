@@ -1853,9 +1853,20 @@ function courtOrder(docs, ctx) {
 
 // VIN в отчёте — как в заявке (машины из «остальных машин» заявки тоже свои).
 const VIN_RE = /\b[A-HJ-NPR-Z0-9]{17}\b/g;
+// 2.490: помощник на выезде отметил «VIN на кузове не совпадает с документами» — в отчёте об этом должно быть сказано.
+const VIN_DIFF = /(?:VIN|идентификацион)[^\n]{0,120}(?:не\s+совпада|расхожд|отлича|не\s+соответств)|(?:не\s+совпада|расхожд|отлича|не\s+соответств)[^\n]{0,120}(?:VIN|идентификацион)/iu;
+function vinOnsite(doc, ctx) {
+  if (ctx.onsite?.vin_match !== 'no') return [];
+  const pages = doc.pages ?? [];
+  if (pages.some((p) => VIN_DIFF.test(p))) return [];
+  // Файл без VIN (приложение, письмо) — не отчёт о машине, молчим.
+  const i = pages.findIndex((p) => /VIN|идентификацион/iu.test(p));
+  if (i < 0) return [];
+  return [{ page: i, quote: lineAround(pages[i], pages[i].search(/VIN|идентификацион/iu)), text: 'Помощник на выезде отметил: VIN на кузове не совпадает с документами, а в отчёте об этом ни слова — опишите расхождение в описании объекта или проверьте отметку с выезда' }];
+}
 function vinMatch(doc, ctx) {
   const mine = String(ctx.fields?.vin ?? '').toUpperCase();
-  if (mine.length !== 17) return [];
+  if (mine.length !== 17) return vinOnsite(doc, ctx);
   const known = new Set([mine, ...(String(ctx.fields?.more_vehicles ?? '').toUpperCase().match(VIN_RE) ?? [])]);
   const out = [];
   const seen = new Set();
@@ -1869,7 +1880,7 @@ function vinMatch(doc, ctx) {
       out.push({ page: i, quote: lineAround(page, m.index), text: `VIN ${v} не совпадает с VIN из заявки (${mine}) — проверьте, нет ли данных другой машины` });
     }
   });
-  return out;
+  return [...out, ...vinOnsite(doc, ctx)];
 }
 
 // Дата составления отчёта не раньше даты оценки.
@@ -2115,23 +2126,41 @@ function regMatch(doc, ctx) {
 }
 
 // Пробег по прибору мог вырасти между заявкой и осмотром — находка, только если разница больше 10% и больше 1000 км.
+// 2.490: помощник записал пробег по прибору на выезде — сверяем с ним (запас 2% и 1000 км на «тыс. км»), а не с заявкой;
+// по прибору намного меньше, чем в заявке, — отдельная находка: возможно, пробег скручен.
 const MILEAGE_RE = /пробег\S*(?:[^\n\d]{0,40}?)(\d{1,3}(?:[  ]\d{3})+|\d{1,7})\s*(тыс\.?\s*)?км/giu;
+const BY_INSTRUMENT = 'по прибору при осмотре';
 function mileageMatch(doc, ctx) {
-  const mine = Number(ctx.fields?.mileage);
-  if (!Number.isFinite(mine) || mine <= 0 || ctx.fields?.more_vehicles) return [];
+  if (ctx.fields?.more_vehicles) return [];
+  const asked = Number(ctx.fields?.mileage);
+  const seenKm = Number(ctx.onsite?.mileage);
+  const byInstr = Number.isFinite(seenKm) && seenKm > 0;
+  const mine = byInstr ? seenKm : asked;
+  if (!Number.isFinite(mine) || mine <= 0) return [];
+  const room = byInstr ? Math.max(1000, mine * 0.02) : Math.max(1000, mine * 0.1);
   const out = [];
   const seen = new Set();
+  let first = null;
   eachPage(doc, (page, i) => {
     for (const m of page.matchAll(MILEAGE_RE)) {
       const line = lineAround(page, m.index);
       // Аналоги, среднегодовой пробег и нормы — не пробег объекта.
       if (/аналог|средн|годов|в\s+год|норматив|коэффициент|корректировк/iu.test(line)) continue;
       const km = Number(m[1].replace(/[  ]/g, '')) * (m[2] ? 1000 : 1);
-      if (!km || seen.has(km) || Math.abs(km - mine) <= Math.max(1000, mine * 0.1)) continue;
+      if (!km) continue;
+      first ??= { page: i, quote: line };
+      if (seen.has(km) || Math.abs(km - mine) <= room) continue;
       seen.add(km);
-      out.push({ page: i, quote: line, text: `Пробег ${fmt(km)} км не совпадает с пробегом из заявки (${fmt(mine)} км) — проверьте, нет ли данных другой машины` });
+      const bad = m[0].slice(m[0].indexOf(m[1])).trim();
+      out.push(byInstr
+        ? { page: i, quote: line, fix: { bad, right: `${fmt(mine)} км`, from: BY_INSTRUMENT },
+          text: `Пробег ${fmt(km)} км не совпадает с пробегом по прибору при осмотре (${fmt(mine)} км) — в отчёте пробег пишется по прибору, как его снял помощник на выезде` }
+        : { page: i, quote: line, text: `Пробег ${fmt(km)} км не совпадает с пробегом из заявки (${fmt(mine)} км) — проверьте, нет ли данных другой машины` });
     }
   });
+  if (byInstr && first && Number.isFinite(asked) && asked > 0 && asked - seenKm > Math.max(1000, asked * 0.1)) {
+    out.push({ ...first, text: `Пробег по прибору при осмотре (${fmt(seenKm)} км) намного меньше, чем в заявке (${fmt(asked)} км) — уточните у заказчика; если пробег скручен, скажите об этом в описании объекта и учтите в расчёте` });
+  }
   return out;
 }
 
@@ -3879,11 +3908,11 @@ export const AUTO_CHECKS = Object.freeze({
   dossier_education: 'диплом эксперта сходится с досье',
   required_items: 'обязательные сведения отчёта по ст. 11 закона об оценке и ФСО',
   court_order: 'по определению суда — номер определения и ст. 307 УК РФ',
-  vin_match: 'VIN в отчёте — как в заявке',
+  vin_match: 'VIN в отчёте — как в заявке; помощник на выезде отметил, что VIN на кузове не совпадает с документами, — в отчёте это сказано',
   date_order: 'дата составления отчёта не раньше даты оценки',
   report_dates: 'даты по всему отчёту: осмотр не позже составления, составление и дата оценки не позже подписи, составление не раньше задания на оценку и не позже срока из него, дата оценки не раньше осмотра, одна дата осмотра и в дни фото осмотра или выезда помощника в деле, и в день, на который извещали стороны, осмотр в отчёте — только если он есть в деле, объявления аналогов не позже даты оценки',
   reg_match: 'госномер в отчёте — как в заявке',
-  mileage_match: 'пробег в отчёте — как в заявке (с запасом 10%)',
+  mileage_match: 'пробег в отчёте — как по прибору при осмотре помощника, без выезда — как в заявке (с запасом 10%); по прибору намного меньше заявки — уточнить',
   approach_weights: 'веса подходов в согласовании в сумме 1',
   analog_list: 'аналогов не меньше трёх, ссылки у разных аналогов не повторяются',
   analog_match: 'аналоги в отчёте — как подтверждённые в деле: ссылка, цена, площадь, число аналогов; у каждого номера — своя ссылка и своя цена',
