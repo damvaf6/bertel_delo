@@ -149,11 +149,15 @@ export async function insertNoInspection() {
 
 // Извещение об осмотре (2.470): строка «Извещение об осмотре: …» из дела — заменяет прежнюю такую строку целиком, иначе
 // встаёт сразу под заголовком раздела с notice (у ДТП — «4. Осмотр»), а нет его — в конец. → 'same', true или null.
-export async function insertNoticeLine(line) {
+export const insertNoticeLine = (line) => insertHeadLine(line, 'Извещение об осмотре:', 'notice');
+
+// Строка из дела, узнаваемая по началу head: заменяет прежнюю такую строку целиком, иначе встаёт сразу под заголовком
+// раздела с пометкой flag, а нет его — в конец (извещение об осмотре — 2.470, проверка в реестре залогов — 2.491).
+export async function insertHeadLine(line, head, flag) {
   const t = $('draft-text');
   if (!canFixInDraft() || !line) return null;
   const lines = t.value.split('\n');
-  const old = lines.findIndex((l) => l.startsWith('Извещение об осмотре:'));
+  const old = lines.findIndex((l) => l.startsWith(head));
   if (old >= 0) {
     if (lines[old] === line) return 'same';
     const from = old ? lines.slice(0, old).join('\n').length + 1 : 0;
@@ -161,15 +165,15 @@ export async function insertNoticeLine(line) {
     await putText(lines.join('\n'), from, line.length);
     return true;
   }
-  const want = (ctx.sections ?? []).find((x) => x.notice);
+  const want = (ctx.sections ?? []).find((x) => x[flag]);
   const h = want ? [...t.value.matchAll(/^#{1,3}\s*(.+)$/gm)].find((m) => norm(m[1]) === norm(want.title)) : null;
   if (h) {
     const at = h.index + h[0].length;
     await putText(`${t.value.slice(0, at)}\n${line}${t.value.slice(at)}`, at + 1, line.length);
     return true;
   }
-  const head = t.value.replace(/\s*$/, '');
-  await putText(`${head}\n\n${line}\n`, head.length + 2, line.length);
+  const end = t.value.replace(/\s*$/, '');
+  await putText(`${end}\n\n${line}\n`, end.length + 2, line.length);
   return true;
 }
 

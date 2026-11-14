@@ -14,6 +14,7 @@ import { loadParts, photoNos } from '../orders/parts.mjs';
 import { loadDefects } from '../orders/defects.mjs';
 import { loadInsurer } from '../orders/insurer.mjs';
 import { loadNotices, mskParts } from '../orders/notices.mjs';
+import { loadPledge } from '../orders/pledge.mjs';
 import { OTHER_BANK, bankList, loadDossier } from '../dossier/dossier.mjs';
 import { todayMsk } from '../orders/workflow.mjs';
 import { insertOrder, listVisibleOrders } from './order-ops.mjs';
@@ -414,7 +415,9 @@ export function aiOps() {
           ? await sql`select data from onsite_visits where order_id = ${order.id} and finished_at is not null and cancelled_at is null
                       order by finished_at desc limit 1` : [];
         const onsite = visit?.data ?? null;
-        const auto = runAutoChecks(names, files, { onsite, fields: order.fields ?? {}, dossier, basis, service: order.service, analogs, inspectionDays, inspectionUploadDays, inspectionActDays, inspectionBy, signedOn, assignment, egrn, customer: owner?.full_name ?? null, today: dossier.today, usedNumbers: used, issuedNumber: issued ?? null, bankAccr, parts, insurer, defects, notices });
+        // 2.491: отметка эксперта о проверке в реестре залогов — против того, что сказано о залоге в отчёте.
+        const pledge = names.includes('pledge_match') && registry.pledge(order.module, order.service) ? await loadPledge(sql, order.id) : null;
+        const auto = runAutoChecks(names, files, { onsite, fields: order.fields ?? {}, dossier, basis, service: order.service, analogs, inspectionDays, inspectionUploadDays, inspectionActDays, inspectionBy, signedOn, assignment, egrn, customer: owner?.full_name ?? null, today: dossier.today, usedNumbers: used, issuedNumber: issued ?? null, bankAccr, parts, insurer, defects, notices, pledge });
         const found = Object.fromEntries(rules.map((r) => [r.id, (r.auto ?? []).flatMap((a) => auto[a] ?? [])]));
         // Модель недоступна или лимит исчерпан, но автоматические находки есть — показываем их, а не ошибку.
         let out;

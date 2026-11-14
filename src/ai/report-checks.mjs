@@ -1802,6 +1802,48 @@ function dossierFindings(kinds) {
 }
 
 
+// ——— 2.491: залог машины в отчёте — как по отметке эксперта о проверке в реестре залогов ———
+const PLEDGE_SKIP = /аналог/iu;
+const PLEDGE_FOUND = /(?<!не\s)(?:находит[сь]я|является\s+предметом|состоит)\s+(?:в\s+)?залог|залогодержател|уведомлени[а-яё]*\s+о\s+(?:возникновении\s+)?залог[^\n]{0,40}№/iu;
+const PLEDGE_NONE = /залог[^\n]{0,80}(?:не\s+зарегистрирован|отсутству|не\s+выявлен|не\s+установлен|не\s+имеется|не\s+обнаружен|нет(?![а-яё]))|не\s+(?:находит[сь]я|является\s+предметом|состоит)\s+(?:в\s+)?залог|(?:обременени|ограничени)[^\n]{0,40}(?:не\s+зарегистрирован|отсутству|не\s+выявлен|не\s+установлен|не\s+имеется|нет(?![а-яё]))/iu;
+const ruDay = (d) => String(d).slice(0, 10).split('-').reverse().join('.');
+function pledgeMatch(docs, ctx) {
+  const p = ctx.pledge;
+  if (!p || !docs.length) return [];
+  const main = mainReport(docs);
+  if (!main) return [];
+  const found = [];
+  const none = [];
+  let enc = null;
+  main.pages.forEach((page, i) => {
+    for (const raw of page.split('\n')) {
+      const line = clean(raw);
+      if (!line || PLEDGE_SKIP.test(line)) continue;
+      if (!enc && /обременени|ограничени\S*\s+прав/iu.test(line)) enc = { page: i, quote: line };
+      if (/залог/iu.test(line) && PLEDGE_FOUND.test(line)) found.push({ doc: main, page: i, quote: line });
+      else if (PLEDGE_NONE.test(line)) none.push({ doc: main, page: i, quote: line });
+    }
+  });
+  const when = `в реестре залогов на ${ruDay(p.checked_on)}`;
+  if (p.result === 'found') {
+    const what = `уведомление № ${p.notice_no}, залогодержатель — ${p.pledgee}`;
+    if (found.length) {
+      const text = main.pages.join('\n').replace(/\s+/g, ' ');
+      if (p.notice_no && !text.includes(p.notice_no)) {
+        return [{ ...found[0], text: `В деле отмечено ${when}: ${what}, а номера уведомления в отчёте нет — укажите его в описании объекта или обременениях` }];
+      }
+      return [];
+    }
+    const at = none.find((x) => /залог/iu.test(x.quote)) ?? none[0];
+    if (at) return [{ ...at, text: `В деле отмечено: ${when} машина в залоге (${what}), а в отчёте сказано, что обременений или залога нет — исправьте` }];
+    const where = enc ? { doc: main, ...enc } : { doc: main, page: 0, quote: (main.pages[0] ?? '').split('\n').find((l) => l.trim()) ?? '' };
+    return [{ ...where, text: `В деле отмечено: ${when} машина в залоге (${what}), а в отчёте о залоге ни слова — укажите залог в описании объекта и обременениях` }];
+  }
+  // Залога нет, а в отчёте — залогодержатель или «находится в залоге»: скорее всего, текст из старого отчёта о другой машине.
+  if (found.length) return [{ ...found[0], text: `По Вашей проверке ${when} залога нет, а в отчёте сказано о залоге — проверьте, нет ли текста из старого отчёта` }];
+  return [];
+}
+
 // ——— 2.38: обязательные сведения отчёта, требования суда, VIN из заявки, порядок дат ———
 // Основной отчёт среди файлов результата — самый длинный текст, где в начале есть «отчёт» или «заключение» (подписи,
 // копии документов и приложения отдельными файлами не проверяются на «обязательное»).
@@ -3843,6 +3885,7 @@ const WHOLE = {
   bank_user: bankUser,
   bank_accredited: bankAccredited,
   encumbrance_match: encumbranceMatch,
+  pledge_match: pledgeMatch,
 };
 
 const PER_DOC = {
@@ -3898,6 +3941,7 @@ export const AUTO_CHECKS = Object.freeze({
   cad_value_match: 'кадастровая стоимость объекта в отчёте — как в выписке ЕГРН из дела (если в отчёте своя дата «по состоянию на» — с той же датой)',
   rights_match: 'правообладатель и вид права (собственность, общая долевая, общая совместная) в отчёте — как в выписке ЕГРН на объект из дела',
   encumbrance_match: 'ограничения и обременения из выписки ЕГРН на объект (ипотека, арест, запрещение регистрации, аренда, сервитут, доверительное управление) упомянуты в отчёте',
+  pledge_match: 'транспорт: залог в отчёте — как по отметке эксперта о проверке в реестре залогов: есть залог — сказано, с номером уведомления; нет — в отчёте нет залогодержателя',
   share_match: 'размер доли в отчёте — как в заявке',
   share_egrn_match: 'размер доли в отчёте — одна из долей в выписке ЕГРН на объект из дела',
   egrn_doc_match: 'номер и дата выписки ЕГРН в отчёте (перечень документов, задание, приложения) — как у выписки в деле',

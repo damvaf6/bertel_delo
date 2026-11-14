@@ -739,6 +739,44 @@
         </form>
         <p class="msg" id="defects-msg" role="status" aria-live="polite"></p>
       </div>
+      <div class="card hidden" id="pledge-box">
+        <h2>Проверка в реестре залогов</h2>
+        <p class="muted" id="pledge-lead"></p>
+        <p id="pledge-line" class="hidden"></p>
+        <div class="row hidden" id="pledge-draft-row">
+          <button type="button" class="secondary" data-action="pledge-draft" id="pledge-draft">Вставить в черновик раздела «Описание объекта»</button>
+        </div>
+        <div class="row">
+          <button type="button" class="secondary hidden" id="pledge-open">Отметить проверку</button>
+          <button type="button" class="link hidden" id="pledge-delete">Убрать отметку</button>
+        </div>
+        <form class="hidden" id="pledge-form" novalidate>
+          <div class="field">
+            <label for="pledge-date">Дата проверки</label>
+            <input id="pledge-date" type="date">
+          </div>
+          <fieldset class="field" id="pledge-result">
+            <legend>Итог проверки</legend>
+            <label class="row check-line"><input type="radio" name="pledge-result" value="none" checked><span>залога нет</span></label>
+            <label class="row check-line"><input type="radio" name="pledge-result" value="found"><span>залог есть</span></label>
+          </fieldset>
+          <div class="hidden" id="pledge-found">
+            <div class="field">
+              <label for="pledge-notice">Номер уведомления о возникновении залога</label>
+              <input id="pledge-notice" type="text" maxlength="60" placeholder="например, 2026-001-123456-789">
+            </div>
+            <div class="field">
+              <label for="pledge-pledgee">Залогодержатель</label>
+              <input id="pledge-pledgee" type="text" maxlength="300" placeholder="название банка или ФИО">
+            </div>
+          </div>
+          <div class="row">
+            <button type="submit" id="pledge-save">Записать</button>
+            <button type="button" class="link" id="pledge-cancel">Отмена</button>
+          </div>
+        </form>
+        <p class="msg" id="pledge-msg" role="status" aria-live="polite"></p>
+      </div>
       <div class="card hidden" id="insurer-box">
         <h2>Сверка с расчётом страховой</h2>
         <p class="muted" id="insurer-lead"></p>
