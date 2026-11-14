@@ -28,6 +28,8 @@
 //       parts: true — сюда программа вставляет таблицу повреждённых деталей (2.471, src/orders/parts.mjs)
 //       defects: true — сюда программа вставляет таблицу недостатков товара (2.482, src/orders/defects.mjs)
 //       pledge: true — сюда программа вставляет строку о проверке в реестре залогов (2.491, src/orders/pledge.mjs)
+//       facts: [id поля заявки…] — сюда программа вставляет строку «Из заявки: …» с заполненными полями (2.492,
+//         src/orders/facts.mjs); поля должны быть у каждой услуги раздела
 //       sources: true — сюда программа вставляет перечень использованных документов дела (2.95, src/docs/sources.mjs)
 //     approaches?: { services: [id услуги…] }  — исполнитель отмечает, какие подходы к оценке применяет (2.33)
 //     inspection?: [{ id, title, hint?, services?: [id услуги…], optional?, each?: { field, title, hint?, rest } }…],  — шаги
@@ -235,11 +237,17 @@ export function validateModule(m) {
     checkIds(m.draft, `${at}, разделы черновика`);
     for (const d of m.draft) {
       const where = `${at}, раздел черновика ${d.id}`;
-      onlyKeys(d, ['id', 'title', 'services', 'ask', 'dossier', 'table', 'approach', 'reuse', 'sources', 'notice', 'parts', 'defects', 'pledge'], where);
+      onlyKeys(d, ['id', 'title', 'services', 'ask', 'dossier', 'table', 'approach', 'reuse', 'sources', 'notice', 'parts', 'defects', 'pledge', 'facts'], where);
       if (d.notice !== undefined && d.notice !== true) fail(where, 'notice — только true');
       if (d.parts !== undefined && d.parts !== true) fail(where, 'parts — только true');
       if (d.defects !== undefined && d.defects !== true) fail(where, 'defects — только true');
       if (d.pledge !== undefined && d.pledge !== true) fail(where, 'pledge — только true');
+      if (d.facts !== undefined) {
+        if (!Array.isArray(d.facts) || !d.facts.length || new Set(d.facts).size !== d.facts.length) fail(where, 'facts — непустой список полей заявки без повторов');
+        const users = m.services.filter((x) => !d.services || d.services.includes(x.id));
+        const lost = d.facts.find((id) => users.some((x) => !serviceFields(m, x).some((f) => f.id === id)));
+        if (lost) fail(where, `facts — поля ${lost} нет у услуги раздела`);
+      }
       if (d.reuse !== undefined && d.reuse !== true) fail(where, 'reuse — только true (методический раздел)');
       if (d.sources !== undefined && d.sources !== true) fail(where, 'sources — только true (перечень использованных документов)');
       if (d.reuse && (d.table || d.dossier || d.sources)) fail(where, 'reuse — не у раздела с таблицей, досье или перечнем: их программа заполняет сама');
@@ -675,7 +683,7 @@ export function createRegistry(modules = DEFAULT_MODULES, { orgCheck = false } =
       return m.draft.filter((d) => (!d.services || d.services.includes(serviceId)) && (!chosen || !d.approach || chosen.includes(d.approach)))
         .map((d) => {
           const title = chosen && /^\d+\.\s/.test(d.title) ? d.title.replace(/^\d+/, String(++n)) : d.title;
-          return { id: d.id, title, ...(d.ask ? { ask: d.ask } : {}), ...(d.dossier ? { dossier: d.dossier } : {}), ...(d.table ? { table: d.table } : {}), ...(d.approach ? { approach: d.approach } : {}), ...(d.reuse ? { reuse: true } : {}), ...(d.sources ? { sources: true } : {}), ...(d.notice ? { notice: true } : {}), ...(d.parts ? { parts: true } : {}), ...(d.defects ? { defects: true } : {}), ...(d.pledge ? { pledge: true } : {}) };
+          return { id: d.id, title, ...(d.ask ? { ask: d.ask } : {}), ...(d.dossier ? { dossier: d.dossier } : {}), ...(d.table ? { table: d.table } : {}), ...(d.approach ? { approach: d.approach } : {}), ...(d.reuse ? { reuse: true } : {}), ...(d.sources ? { sources: true } : {}), ...(d.notice ? { notice: true } : {}), ...(d.parts ? { parts: true } : {}), ...(d.defects ? { defects: true } : {}), ...(d.pledge ? { pledge: true } : {}), ...(d.facts ? { facts: d.facts } : {}) };
         });
     },
     // Выбирает ли исполнитель подходы к оценке для услуги (2.33).

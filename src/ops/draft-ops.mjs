@@ -5,6 +5,7 @@ import { loadNotices, noticeLine, placeNotice } from '../orders/notices.mjs';
 import { loadParts, partsTable, placeParts } from '../orders/parts.mjs';
 import { insurerBlock, loadInsurer, placeInsurer } from '../orders/insurer.mjs';
 import { loadPledge, placePledge, pledgeLine } from '../orders/pledge.mjs';
+import { factsLine, placeFacts } from '../orders/facts.mjs';
 import { defectsTable, loadDefects, placeDefects } from '../orders/defects.mjs';
 import { inspectionPhotos } from '../docs/photos.mjs';
 import { HttpError } from '../http/core.mjs';
@@ -702,7 +703,11 @@ export function draftOps() {
         // Проверка в реестре залогов (2.491): строка из дела — в раздел «Описание объекта»; модели — чтобы не противоречила.
         const plLine = registry.pledge(order.module, order.service) && sections.some((x) => x.pledge) ? pledgeLine(await loadPledge(sql, order.id)) : null;
         const pledgeBrief = plLine ? `${plLine} — программа сама вставит эту строку в описание объекта; о залоге в обременениях и выводах пиши только так, без пометок` : null;
-        const brief = [orderBrief(registry, order, { omit: taken }), valueBrief, egrnBrief(egrn), taskBrief, onsite, noticeBrief, partsBrief, insurerBrief, defectsBrief, pledgeBrief, dossierBrief, spec ? analogsBrief(spec, analogs, order) : null, tablesBrief(sections)].filter(Boolean).join('\n');
+        // Сведения из заявки (2.492): строка «Из заявки: …» — в раздел с facts (у транспорта — «7. Описание объекта»).
+        const factsSec = sections.find((x) => x.facts);
+        const fLine = factsSec ? factsLine(registry.service(order.module, order.service)?.fields ?? [], factsSec.facts, order.fields) : null;
+        const factsBrief = fLine ? `${fLine} — программа сама вставит эту строку в описание объекта; не повторяй её и не пиши этим сведениям других значений` : null;
+        const brief = [orderBrief(registry, order, { omit: taken }), valueBrief, egrnBrief(egrn), taskBrief, onsite, noticeBrief, partsBrief, insurerBrief, defectsBrief, pledgeBrief, factsBrief, dossierBrief, spec ? analogsBrief(spec, analogs, order) : null, tablesBrief(sections)].filter(Boolean).join('\n');
         const out = await askAi(ctx, actor, 'draft', draftMessages({ brief, sections, ...inputs }));
         // Таблицы (2.29) и сведения из досье (2.14) программа вставляет сама, под заголовками разделов.
         const materials = await orderMaterials(sql, order);
@@ -714,7 +719,7 @@ export function draftOps() {
         const kinded = task.kind ? aimed.replace(VALUE_KIND_GAP, task.kind.v) : aimed;
         const dated = fillEgrn(valueDate?.day ? kinded.replace(VALUE_GAP, valueDate.day) : kinded, task.address ? { ...egrn, address: task.address } : egrn);
         const filled = placeCustomer(fillDraft(fillTables(dated, sections, registry, order, { materials, valueDate: valueDate?.day, egrn, task }), sections, dossier), sections, task.customer);
-        const text = placePledge(placeDefects(placeInsurer(placeParts(placeNotice(placeSources(filled, sections, sources).body, sections, nLine), sections, pTable), sections, iBlock), sections, dTable), sections, plLine).slice(0, DRAFT_MAX);
+        const text = placeFacts(placePledge(placeDefects(placeInsurer(placeParts(placeNotice(placeSources(filled, sections, sources).body, sections, nLine), sections, pTable), sections, iBlock), sections, dTable), sections, plLine), sections, fLine).slice(0, DRAFT_MAX);
         const seen = {
           photos: inputs.photos.map((p) => p.name),
           docs: inputs.docs.map((d) => ({ name: d.name, read: d.text !== null, truncated: d.truncated })),
@@ -734,6 +739,7 @@ export function draftOps() {
           insurer: !!iBlock,
           defects: dTable ? dTable.length - 1 : 0,
           pledge: !!plLine,
+          facts: !!fLine,
         };
         const d = await sql.tx(async (tx) => {
           await tx`select id from orders where id = ${order.id} for update`;
