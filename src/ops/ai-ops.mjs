@@ -409,7 +409,12 @@ export function aiOps() {
         const notices = names.includes('report_dates') && registry.notice(order.module, order.service)
           ? (await loadNotices(sql, order.id)).filter((n) => n.how && n.sent_on).map((n) => ({ name: n.name, day: mskParts(n.inspect_at).date, sent_on: n.sent_on }))
           : [];
-        const auto = runAutoChecks(names, files, { fields: order.fields ?? {}, dossier, basis, service: order.service, analogs, inspectionDays, inspectionUploadDays, inspectionActDays, inspectionBy, signedOn, assignment, egrn, customer: owner?.full_name ?? null, today: dossier.today, usedNumbers: used, issuedNumber: issued ?? null, bankAccr, parts, insurer, defects, notices });
+        // 2.490: данные с объекта последнего завершённого выезда помощника — пробег по прибору и VIN на кузове.
+        const [visit] = names.includes('mileage_match') || names.includes('vin_match')
+          ? await sql`select data from onsite_visits where order_id = ${order.id} and finished_at is not null and cancelled_at is null
+                      order by finished_at desc limit 1` : [];
+        const onsite = visit?.data ?? null;
+        const auto = runAutoChecks(names, files, { onsite, fields: order.fields ?? {}, dossier, basis, service: order.service, analogs, inspectionDays, inspectionUploadDays, inspectionActDays, inspectionBy, signedOn, assignment, egrn, customer: owner?.full_name ?? null, today: dossier.today, usedNumbers: used, issuedNumber: issued ?? null, bankAccr, parts, insurer, defects, notices });
         const found = Object.fromEntries(rules.map((r) => [r.id, (r.auto ?? []).flatMap((a) => auto[a] ?? [])]));
         // Модель недоступна или лимит исчерпан, но автоматические находки есть — показываем их, а не ошибку.
         let out;
