@@ -114,24 +114,26 @@ export function remindPhrase({ at, body }) {
 // поле заявки заполнено — «В заявке указано: …» (только то, что заказчик сам написал в заявке; выбор — названием варианта).
 // По товару (2.486): чек, гарантийный талон, претензия, акт проверки качества, «не ремонтируйте товар». skip — значения поля,
 // при которых фразы нет (продавец товар не проверял — нет и акта проверки); фраза без doc — без «Приложить можно …».
+// По транспорту (2.495): ПТС и СТС, машина на осмотр, сервисная книжка, договор лизинга или залога. doc — пункт или список
+// пунктов (ПТС и СТС): фразы нет, только когда получены все; запрошенные — «к пунктам «…» и «…»».
 export function servicePhrases({ def, fields = {}, docItems = {}, due }) {
   const sid = def?.service.id;
   const list = (def?.module.phrases ?? []).filter((p) => p.services.includes(sid));
   const out = [];
   for (const p of list) {
-    if (p.doc && docItems[p.doc] === 'got') continue;
+    const docs = [].concat(p.doc ?? []);
+    if (docs.length && docs.every((d) => docItems[d] === 'got')) continue;
     const raw = p.field ? String(fields[p.field] ?? '').trim() : '';
     if (raw && p.skip?.includes(raw)) continue;
     let text = p.text.replaceAll('{due}', due);
     const opt = def.fields?.find((f) => f.id === p.field)?.options?.find((o) => o.id === raw);
     const value = (opt ? opt.name : raw).replace(/\s+/g, ' ');
     if (value) text += ` В заявке указано: «${value.length > 150 ? `${value.slice(0, 149)}…` : value}».`;
-    if (p.doc && docItems[p.doc] === 'open') {
-      const title = def.module.request_docs?.find((d) => d.id === p.doc)?.title;
-      if (title) text += ` Приложить можно в деле, к пункту «${title}» списка «Запрошенные документы».`;
-    } else if (p.doc) {
-      text += ' Приложить можно в деле или ответом здесь.';
-    }
+    const open = docs.filter((d) => docItems[d] === 'open')
+      .map((d) => def.module.request_docs?.find((x) => x.id === d)?.title).filter(Boolean);
+    if (open.length === 1) text += ` Приложить можно в деле, к пункту «${open[0]}» списка «Запрошенные документы».`;
+    else if (open.length) text += ` Приложить можно в деле, к пунктам ${open.map((t) => `«${t}»`).join(' и ')} списка «Запрошенные документы».`;
+    else if (docs.length) text += ' Приложить можно в деле или ответом здесь.';
     out.push({ id: p.id, title: p.title, text });
   }
   return out;
