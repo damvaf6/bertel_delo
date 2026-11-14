@@ -6,6 +6,7 @@ import { loadParts, partsTable, placeParts } from '../orders/parts.mjs';
 import { insurerBlock, loadInsurer, placeInsurer } from '../orders/insurer.mjs';
 import { loadPledge, placePledge, pledgeLine } from '../orders/pledge.mjs';
 import { factsLine, placeFacts } from '../orders/facts.mjs';
+import { specsTable, placeSpecs, lastVisit } from '../orders/specs.mjs';
 import { defectsTable, loadDefects, placeDefects } from '../orders/defects.mjs';
 import { inspectionPhotos } from '../docs/photos.mjs';
 import { HttpError } from '../http/core.mjs';
@@ -309,6 +310,14 @@ async function onsiteBrief(sql, registry, order) {
     return `${f.label}: ${f.type === 'select' ? f.options.find((o) => o.id === x)?.name ?? x : x}`;
   });
   return [`ДАННЫЕ С ОБЪЕКТА (выезд помощника ${dayRu(v.finished_at)}):`, ...lines].join('\n');
+}
+
+// Таблица «Характеристики объекта оценки» (2.494) для раздела с specs: из заявки и последнего выезда помощника.
+async function orderSpecs(sql, registry, order, sections) {
+  const sec = sections.find((x) => x.specs);
+  if (!sec) return null;
+  const ex = registry.express(order.module, order.service);
+  return specsTable(sec.specs, registry.service(order.module, order.service)?.fields ?? [], order.fields, ex?.fields ?? [], ex ? await lastVisit(sql, order.id) : null);
 }
 
 // Дата оценки (2.207) — из приложенного к делу задания на оценку, письма заказчика или определения суда, как её ищет
@@ -625,6 +634,8 @@ export function draftOps() {
           report_number: await numberView(sql, actor, order),
           // 2.425: осмотра в деле нет и не ждём — эксперту на выбор фраза «осмотр не проводился» в черновик.
           no_inspection: editsDraft(actor, order) && await noInspection(sql, registry, order),
+          // 2.494: таблица «Характеристики объекта оценки» сейчас — для кнопки «Вставить» в деле.
+          specs: editsDraft(actor, order) ? await orderSpecs(sql, registry, order, sections) : null,
           // Подходы к оценке (2.33): список — если исполнитель их выбирает для этой услуги; chosen — что отмечено.
           approaches: registry.approachesFor(order.module, order.service)
             ? { list: Object.entries(APPROACHES).map(([id, name]) => ({ id, name })), chosen: order.approaches ?? null }
@@ -707,7 +718,10 @@ export function draftOps() {
         const factsSec = sections.find((x) => x.facts);
         const fLine = factsSec ? factsLine(registry.service(order.module, order.service)?.fields ?? [], factsSec.facts, order.fields) : null;
         const factsBrief = fLine ? `${fLine} — программа сама вставит эту строку в описание объекта; не повторяй её и не пиши этим сведениям других значений` : null;
-        const brief = [orderBrief(registry, order, { omit: taken }), valueBrief, egrnBrief(egrn), taskBrief, onsite, noticeBrief, partsBrief, insurerBrief, defectsBrief, pledgeBrief, factsBrief, dossierBrief, spec ? analogsBrief(spec, analogs, order) : null, tablesBrief(sections)].filter(Boolean).join('\n');
+        // Характеристики объекта оценки (2.494): таблица из заявки и выезда помощника — в раздел с specs.
+        const sTable = await orderSpecs(sql, registry, order, sections);
+        const specsBrief = sTable ? `ХАРАКТЕРИСТИКИ ОБЪЕКТА ОЦЕНКИ (программа сама вставит эту таблицу в описание объекта — не рисуй её; значения в тексте — только такие):\n${sTable.slice(1).join('\n')}` : null;
+        const brief = [orderBrief(registry, order, { omit: taken }), valueBrief, egrnBrief(egrn), taskBrief, onsite, noticeBrief, partsBrief, insurerBrief, defectsBrief, pledgeBrief, factsBrief, specsBrief, dossierBrief, spec ? analogsBrief(spec, analogs, order) : null, tablesBrief(sections)].filter(Boolean).join('\n');
         const out = await askAi(ctx, actor, 'draft', draftMessages({ brief, sections, ...inputs }));
         // Таблицы (2.29) и сведения из досье (2.14) программа вставляет сама, под заголовками разделов.
         const materials = await orderMaterials(sql, order);
@@ -719,7 +733,7 @@ export function draftOps() {
         const kinded = task.kind ? aimed.replace(VALUE_KIND_GAP, task.kind.v) : aimed;
         const dated = fillEgrn(valueDate?.day ? kinded.replace(VALUE_GAP, valueDate.day) : kinded, task.address ? { ...egrn, address: task.address } : egrn);
         const filled = placeCustomer(fillDraft(fillTables(dated, sections, registry, order, { materials, valueDate: valueDate?.day, egrn, task }), sections, dossier), sections, task.customer);
-        const text = placeFacts(placePledge(placeDefects(placeInsurer(placeParts(placeNotice(placeSources(filled, sections, sources).body, sections, nLine), sections, pTable), sections, iBlock), sections, dTable), sections, plLine), sections, fLine).slice(0, DRAFT_MAX);
+        const text = placeFacts(placePledge(placeSpecs(placeDefects(placeInsurer(placeParts(placeNotice(placeSources(filled, sections, sources).body, sections, nLine), sections, pTable), sections, iBlock), sections, dTable), sections, sTable), sections, plLine), sections, fLine).slice(0, DRAFT_MAX);
         const seen = {
           photos: inputs.photos.map((p) => p.name),
           docs: inputs.docs.map((d) => ({ name: d.name, read: d.text !== null, truncated: d.truncated })),
@@ -738,6 +752,7 @@ export function draftOps() {
           parts: pTable ? pTable.length - 1 : 0,
           insurer: !!iBlock,
           defects: dTable ? dTable.length - 1 : 0,
+          specs: sTable ? sTable.length - 1 : 0,
           pledge: !!plLine,
           facts: !!fLine,
         };
