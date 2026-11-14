@@ -12,6 +12,7 @@ import { adjusted, cleanUrl } from '../analogs/analogs.mjs';
 import { plainNumber } from '../orgs/numbering.mjs';
 import { warrantyEnd } from '../orders/warranty.mjs';
 import { defectLines, sameDefect } from '../orders/defects.mjs';
+import { inheritanceOf } from '../orders/inheritance.mjs';
 
 const MAX_PER_RULE = 5;
 
@@ -3370,6 +3371,52 @@ function bankUser(docs, ctx) {
   return out;
 }
 
+// ——— 2.501: оценка для наследства — дата оценки как день открытия наследства из заявки, пользователь — нотариус ———
+// Цель заявки «Наследство, нотариус» и настоящая прошедшая дата открытия наследства (2.500, `inheritanceOf`). Дата оценки
+// в отчёте одна и другая — находка с «Заменить на значение из заявки» (`flip: 'date'`). Задание на оценку с одной датой
+// важнее заявки (сверяет value_date); его дата не та, что день открытия наследства в заявке, — «сверьте со справкой
+// нотариуса». Пользователь результатов оценки — нотариус или наследники (суд — тоже: наследство делят и через суд); не
+// указан или другой — находка. Вид стоимости (рыночная) сверяет purpose_value.
+const HEIR_USER = /нотари|наследни|наследств|(?<![а-яё])суд/iu;
+function inheritBasis(docs, ctx) {
+  if (ctx.service && !VALUATION.includes(ctx.service)) return [];
+  const fields = ctx.fields ?? {};
+  if (fields.purpose !== 'inheritance') return [];
+  const main = mainReport(docs);
+  if (!main) return [];
+  const ordered = [main, ...docs.filter((d) => d !== main)];
+  const out = [];
+  const h = inheritanceOf(fields, ctx.today ?? undefined);
+  if (h?.state === 'ok') {
+    const dates = ordered.flatMap(valueDatesIn);
+    const values = [...new Set(dates.map((e) => e.value))];
+    const given = assignmentValue(ctx.assignment);
+    if (values.length === 1 && !given.day && !given.days && values[0] !== h.day) {
+      const first = dates[0];
+      out.push({ doc: first.doc, page: first.page, quote: first.quote,
+        fix: { bad: ruDate(values[0]), right: ruDate(h.day), from: MINE, flip: 'date' },
+        text: `Дата оценки в отчёте ${ruDate(values[0])}, а день открытия наследства в заявке — ${ruDate(h.day)}: для нотариуса стоимость определяется на день открытия наследства (ст. 1114 ГК РФ) — исправьте дату оценки, цены и аналоги возьмите на эту дату` });
+    } else if (values.length === 1 && given.day && given.day === values[0] && given.day !== h.day) {
+      const first = dates[0];
+      out.push({ doc: first.doc, page: first.page, quote: first.quote,
+        text: `Дата оценки ${ruDate(given.day)} — как ${given.what} «${given.name}», а день открытия наследства в заявке — ${ruDate(h.day)}: сверьте со справкой нотариуса, какая дата верная` });
+    }
+  }
+  const users = usersIn(ordered);
+  if (!users.length) {
+    out.push({ doc: main, page: 0, quote: '', text: 'В отчёте не указан предполагаемый пользователь результатов оценки — оценка для наследства: укажите пользователем нотариуса (наследников)' });
+  } else {
+    const seen = new Set();
+    for (const e of users) {
+      if (HEIR_USER.test(e.value) || seen.has(`${e.doc.name}|${e.page}`)) continue;
+      seen.add(`${e.doc.name}|${e.page}`);
+      out.push({ doc: e.doc, page: e.page, quote: e.quote,
+        text: `Предполагаемый пользователь в отчёте — «${e.value.slice(0, 80)}», а оценка для наследства: пользователь результатов — нотариус (наследники); исправьте отчёт` });
+    }
+  }
+  return out;
+}
+
 // ——— 2.458: при оценке для банка эксперт или его организация аккредитованы в этом банке на дату отчёта ———
 // ctx.bankAccr — { order_bank: { id, name } | null, items: [{ bank, title, issued_on, valid_until, via: 'self'|'org', org_name }] }
 // (своя аккредитация из досье и аккредитации организации, от которой эксперт работает; ai-ops.mjs). Банк — из заявки
@@ -3993,6 +4040,7 @@ const WHOLE = {
   pledge_match: pledgeMatch,
   vehicle_cost: vehicleCost,
   accident_match: accidentMatch,
+  inherit_basis: inheritBasis,
 };
 
 const PER_DOC = {
@@ -4081,6 +4129,7 @@ export const AUTO_CHECKS = Object.freeze({
   customer_match: 'заказчик оценки в отчёте и в письме — как в задании на оценку (письме заказчика), если оно приложено к делу, иначе как в заявке',
   bank_user: 'при оценке для банка предполагаемый пользователь результатов оценки в отчёте — банк из заявки (Сбербанк) или из задания на оценку',
   bank_accredited: 'при оценке для банка эксперт или его организация аккредитованы в этом банке на дату отчёта',
+  inherit_basis: 'при оценке для наследства дата оценки в отчёте — день открытия наследства из заявки (если нет задания на оценку с датой), предполагаемый пользователь результатов — нотариус (наследники)',
   parts_match: 'ущерб после ДТП: у каждой детали из таблицы повреждённых деталей дела есть фото осмотра и строка в калькуляции ремонта; каждая деталь из заявки «Что повреждено» есть в исследовании повреждений',
   repair_sums: 'ущерб после ДТП: стоимость ремонта с учётом износа не больше, чем без износа, и одна в расчёте и выводах; УТС легкового автомобиля старше 5 лет или с пробегом больше 100 000 км не посчитана (рекомендации РФЦСЭ 2018), об УТС сказано; в выводах суммы ремонта и УТС — и прописью; своя сумма в сверке со страховой — как в отчёте',
   repair_basis: 'ущерб после ДТП: дата ДТП и цены в расчёте — на дату ДТП из заявки; методика по цели из заявки: ОСАГО — Единая методика (755-П), суд и к виновнику — Методические рекомендации РФЦСЭ (2018)',
