@@ -75,7 +75,11 @@ const publicAnalog = (a, warnings, repeat) => ({
 async function view({ sql, actor, order, registry, providers }) {
   const spec = registry.analogs(order.module, order.service);
   const list = await loadAnalogs(sql, order.id);
-  const { per, repeats, hints, confirmed, min } = analogWarnings(spec, order, list);
+  // 2.493: пробег по прибору с последнего завершённого выезда помощника важнее пробега из заявки.
+  const [visit] = spec.fields.some((f) => f.near?.onsite)
+    ? await sql`select data from onsite_visits where order_id = ${order.id} and finished_at is not null and cancelled_at is null
+                order by finished_at desc limit 1` : [];
+  const { per, repeats, hints, confirmed, min } = analogWarnings(spec, order, list, visit?.data ?? null);
   // Исполнитель отметил, что сравнительный подход не применяется (2.33), — аналоги не нужны, не напоминаем о них.
   const needed = !(order.approaches?.length && !order.approaches.includes('comparative'));
   return {

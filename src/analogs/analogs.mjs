@@ -192,13 +192,23 @@ const median = (xs) => {
 };
 
 // Предупреждения по каждому аналогу и подсказки по разделу целиком. Ничего не запрещают: решает эксперт.
-export function analogWarnings(spec, order, list) {
+// onsite — данные с объекта последнего завершённого выезда помощника (2.493): у признака с near.onsite значение оттуда
+// важнее заявки (пробег по прибору, а не со слов заказчика).
+export function analogWarnings(spec, order, list, onsite = null) {
   const today = todayMsk();
   const old = addDays(today, -OLD_DAYS);
   const priced = list.filter((a) => Number.isFinite(a.fields.price_rub));
   const repeats = analogRepeats(list);
   const per = new Map();
   const positions = listPositions(spec, order);
+  // Признак с near → номера аналогов, где он далёк от объекта, а корректировки нет (2.493: строкой в подсказках раздела).
+  const far_ = new Map();
+  const objectValue = (f) => {
+    const site = f.near.onsite ? Number(onsite?.[f.near.onsite]) : NaN;
+    if (onsite?.[f.near.onsite] != null && Number.isFinite(site)) return { mine: site, from: ' (по прибору при осмотре)' };
+    const ord = order.fields?.[f.near.field];
+    return { mine: ord == null || ord === '' ? NaN : Number(ord), from: f.near.onsite ? ' (по заявке)' : '' };
+  };
   for (const a of list) {
     const w = [];
     const adj = a.adjustments ?? [];
@@ -214,11 +224,14 @@ export function analogWarnings(spec, order, list) {
       w.push(`Другой регион (объект — ${REGIONS.find((r) => r.id === region)?.name ?? region}) — нужна корректировка`);
     }
     for (const f of spec.fields.filter((x) => x.near)) {
-      const mine = Number(order.fields?.[f.near.field]);
+      const { mine, from } = objectValue(f);
       const v = a.fields[f.id];
       if (!Number.isFinite(mine) || !Number.isFinite(v) || covered.has(f.id)) continue;
       const far = f.near.within !== undefined ? Math.abs(v - mine) > f.near.within : Math.abs(v - mine) > (mine * f.near.pct) / 100;
-      if (far) w.push(`${f.label}: ${v} у аналога, ${mine} у объекта — нужна корректировка`);
+      if (!far) continue;
+      const kind = adjustKinds(spec).find((k) => k.covers?.includes(f.id));
+      w.push(`${f.label}: ${fmtNum(v)} у аналога, ${fmtNum(mine)} у объекта${from} — нужна корректировка${kind ? ` «${kind.name}»` : ''}`);
+      (far_.get(f.id) ?? far_.set(f.id, []).get(f.id)).push(list.indexOf(a) + 1);
     }
     if (priced.length >= 3 && Number.isFinite(a.fields.price_rub)) {
       const others = priced.filter((x) => x !== a).map((x) => x.fields.price_rub);
@@ -253,6 +266,12 @@ export function analogWarnings(spec, order, list) {
   return { per, repeats, hints: withCommon(hints), confirmed: counted, min: spec.min * positions.length };
 
   function withCommon(h) {
+    for (const f of spec.fields.filter((x) => far_.has(x.id))) {
+      const nums = far_.get(f.id);
+      const kind = adjustKinds(spec).find((k) => k.covers?.includes(f.id));
+      const { from } = objectValue(f);
+      h.push(`${f.label.replace(/,.*$/, '')} далеко от объекта${from} у ${nums.length > 1 ? 'аналогов' : 'аналога'} ${nums.join(', ')} — нет корректировки${kind ? ` «${kind.name}»` : ''}`);
+    }
     if (repeats.size) h.push(`Есть повторяющиеся аналоги: ${[...repeats.keys()].map((id) => `аналог ${list.findIndex((a) => String(a.id) === id) + 1}`).join(', ')}`);
     if (list.some((a) => !a.file_key)) h.push('Не у всех аналогов есть скриншот');
     return h;

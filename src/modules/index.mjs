@@ -83,7 +83,8 @@
 //       accept: 'expert' (2.465) — заказчик видит карточку эксперта, взявшего дело, и нажимает «Принять» (согласие с офертой)
 //     analogs?: { services: [id услуги…], min, fields: [поле + services? + near?…] }  — раздел «Аналоги» в деле (2.32): признаки
 //       аналога по виду объекта (цена, дата объявления и регион — у всех, в ядре: src/analogs/analogs.mjs); min — сколько
-//       нужно подтверждённых; near: { field: id числового поля заявки, within?: разница, pct?: разница в % } — предупреждение;
+//       нужно подтверждённых; near: { field: id числового поля заявки, within?: разница, pct?: разница в %, onsite?: id числового
+//       поля данных с объекта — его значение важнее заявки (2.493) } — предупреждение;
 //       adjustments?: [{ id, name, services?, covers?: ['date' | 'region' | id признака с near…] }…] — виды корректировок (2.74),
 //       covers — какие предупреждения «нужна корректировка» снимает такая корректировка; «Другая» (other) — в ядре, у всех
 //     repeat?: [{ services: [id услуги…], match: [id поля заявки…], sections: [id раздела черновика…] }…]  — повторная оценка
@@ -607,7 +608,7 @@ export function validateModule(m) {
         fail(fw, 'services — непустой список услуг раздела «Аналоги»');
       }
       if (near !== undefined) {
-        onlyKeys(near, ['field', 'within', 'pct'], `${fw}, near`);
+        onlyKeys(near, ['field', 'within', 'pct', 'onsite'], `${fw}, near`);
         if (field.type !== 'number') fail(fw, 'near — только у числового признака');
         if ((near.within === undefined) === (near.pct === undefined)) fail(fw, 'near — within или pct (одно из двух)');
         if (near.within !== undefined && !(Number.isFinite(near.within) && near.within >= 0)) fail(fw, 'near.within — число от 0');
@@ -616,6 +617,11 @@ export function validateModule(m) {
           const s = m.services.find((x) => x.id === sid);
           const of = [...common, ...(s.fields ?? [])].find((x) => x.id === near.field);
           if (!of || of.type !== 'number') fail(fw, `near.field — числовое поле заявки услуги ${sid}`);
+        }
+        // 2.493: near.onsite — числовое поле данных с объекта (выезд помощника): есть значение — сверка с ним, а не с заявкой.
+        if (near.onsite !== undefined) {
+          const ex = (m.express?.fields ?? []).find((x) => x.id === near.onsite);
+          if (!ex || ex.type !== 'number') fail(fw, 'near.onsite — числовое поле данных с объекта (express)');
         }
       }
     }
