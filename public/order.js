@@ -30,6 +30,7 @@ import { loadNotices } from '/notice.js';
 import { loadParts } from '/parts.js';
 import { loadDefects } from '/defects.js';
 import { loadInsurer } from '/insurer.js';
+import { loadPledge } from '/pledge.js';
 import { renderMyExpert } from '/myexpert.js';
 import { renderReview } from '/review.js';
 
@@ -93,7 +94,7 @@ export async function openOrder(id, { to } = {}) {
   setNext({ reset: true, current, step: doStep, signAll });
   loadOrgChat();
   loadJournal(current.order, current.access);
-  await Promise.all([loadDocs(true), loadTransfer(), loadMatch(current, () => openOrder(id)), loadDraft(current, () => openOrder(id)), loadAnalogs(current), loadInspection(current), loadNotices(current), loadParts(current), loadDefects(current), loadInsurer(current), loadOnsite(current), loadDocRequests(current, (file, msg) => uploadFile(file, 'other', msg)), loadDeadline(current, () => openOrder(id)), loadHandover(current), loadNotes(current), loadSteps(current), loadPredecessor(current, () => openOrder(id)), loadTaskFacts(current), loadRepeat(current, () => openOrder(id)), loadSimilar(current), loadReview(current), loadCourt(current, { download, reload: () => openOrder(id) }), loadChat(current), loadMoney(current, () => openOrder(id))]);
+  await Promise.all([loadDocs(true), loadTransfer(), loadMatch(current, () => openOrder(id)), loadDraft(current, () => openOrder(id)), loadAnalogs(current), loadInspection(current), loadNotices(current), loadParts(current), loadDefects(current), loadInsurer(current), loadPledge(current), loadOnsite(current), loadDocRequests(current, (file, msg) => uploadFile(file, 'other', msg)), loadDeadline(current, () => openOrder(id)), loadHandover(current), loadNotes(current), loadSteps(current), loadPredecessor(current, () => openOrder(id)), loadTaskFacts(current), loadRepeat(current, () => openOrder(id)), loadSimilar(current), loadReview(current), loadCourt(current, { download, reload: () => openOrder(id) }), loadChat(current), loadMoney(current, () => openOrder(id))]);
   setNext({ loaded: true }); // разделы осмотра и черновика показаны — шаги пересчитываются, нужный сейчас блок раскрыт
   // Черновик и «Срок» уже показаны — у предупреждения «нет файла результата» (2.138) видны нужные кнопки.
   renderResultDue(lastDocs?.result_due ?? null);

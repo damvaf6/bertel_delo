@@ -1926,6 +1926,22 @@ test('сверка с расчётом страховой (2.475): чужим �
   }
 });
 
+test('проверка в реестре залогов (2.491): чужим — «не найдено», сторонам заявки не по транспорту — блока нет', async () => {
+  for (const id of ['pledge.get', 'pledge.save', 'pledge.delete']) cover(id);
+  // Подробно — tests/server/pledge.test.mjs; здесь — чужие и стороны заявки другой услуги.
+  const base = `/api/orders/${ownOrder.id}/pledge`;
+  const body = { checked_on: '2026-11-10', result: 'none' };
+  for (const who of ['stranger', 'headA', 'headB', 'spec']) {
+    assert.equal((await U[who].req('GET', base)).status, 404, `${who}: смотреть`);
+    assert.equal((await U[who].req('PUT', base, body)).status, 404, `${who}: записать`);
+    assert.equal((await U[who].req('DELETE', base)).status, 404, `${who}: убрать`);
+  }
+  for (const who of ['owner', 'dispatcher', 'admin']) {
+    assert.deepEqual((await U[who].req('GET', base)).body, { available: false }, who);
+    assert.equal((await U[who].req('PUT', base, body)).status, 409, `${who}: не транспорт`);
+  }
+});
+
 test('повторная оценка того же объекта (2.118): брать из своего прошлого дела — только исполнитель дела', async () => {
   for (const id of ['orders.repeat', 'orders.repeat.take']) cover(id);
   // Подробно — tests/server/repeat.test.mjs; здесь — чужие и стороны заявки без исполнителя.

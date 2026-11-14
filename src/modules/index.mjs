@@ -27,6 +27,7 @@
 //       notice: true — сюда программа вставляет строку об извещении об осмотре (2.470, src/orders/notices.mjs)
 //       parts: true — сюда программа вставляет таблицу повреждённых деталей (2.471, src/orders/parts.mjs)
 //       defects: true — сюда программа вставляет таблицу недостатков товара (2.482, src/orders/defects.mjs)
+//       pledge: true — сюда программа вставляет строку о проверке в реестре залогов (2.491, src/orders/pledge.mjs)
 //       sources: true — сюда программа вставляет перечень использованных документов дела (2.95, src/docs/sources.mjs)
 //     approaches?: { services: [id услуги…] }  — исполнитель отмечает, какие подходы к оценке применяет (2.33)
 //     inspection?: [{ id, title, hint?, services?: [id услуги…], optional?, each?: { field, title, hint?, rest } }…],  — шаги
@@ -67,6 +68,8 @@
 //       воздействие (actions) и фото осмотра; таблица — в раздел черновика с parts: true и в Word
 //     defects?: { services, natures: [{ id, name }…] }  — недостатки товара таблицей (2.482): недостаток, где и какой размер,
 //       характер (natures), признаки и фото осмотра; таблица — в раздел черновика с defects: true и в Word
+//     pledge?: { services }  — проверка в реестре уведомлений о залоге движимого имущества (2.491): дата проверки и итог
+//       (залога нет / есть — номер уведомления и залогодержатель); строкой — в раздел черновика с pledge: true
 //     money?: { fee?: 'on_top', payout?: 'manual' }  — деньги модуля (2.463): fee 'on_top' — диспетчер назначает цену
 //       исполнителя, заказчик платит её плюс вознаграждение платформы (20% сверх, ×1,2), исполнитель получает 100% своей цены;
 //       без него — прежнее 80/20 из цены заказчика; payout 'manual' — выплата исполнителю вручную, списком: отметку
@@ -171,7 +174,7 @@ function validateField(f, where) {
 }
 
 export function validateModule(m) {
-  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express', 'signature', 'analogs', 'approaches', 'request_docs', 'repeat', 'executors', 'certificate', 'steps', 'proofread', 'remarks', 'court', 'offer', 'money', 'review', 'notice', 'parts', 'defects', 'phrases'], 'модуль');
+  onlyKeys(m, ['id', 'name', 'basis', 'fields', 'services', 'checks', 'draft', 'inspection', 'express', 'signature', 'analogs', 'approaches', 'request_docs', 'repeat', 'executors', 'certificate', 'steps', 'proofread', 'remarks', 'court', 'offer', 'money', 'review', 'notice', 'parts', 'defects', 'pledge', 'phrases'], 'модуль');
   if (!ID_RE.test(m.id ?? '')) fail('модуль', `неверный id «${m.id}»`);
   const at = `модуль ${m.id}`;
   if (!nonEmpty(m.name)) fail(at, 'нет названия');
@@ -232,10 +235,11 @@ export function validateModule(m) {
     checkIds(m.draft, `${at}, разделы черновика`);
     for (const d of m.draft) {
       const where = `${at}, раздел черновика ${d.id}`;
-      onlyKeys(d, ['id', 'title', 'services', 'ask', 'dossier', 'table', 'approach', 'reuse', 'sources', 'notice', 'parts', 'defects'], where);
+      onlyKeys(d, ['id', 'title', 'services', 'ask', 'dossier', 'table', 'approach', 'reuse', 'sources', 'notice', 'parts', 'defects', 'pledge'], where);
       if (d.notice !== undefined && d.notice !== true) fail(where, 'notice — только true');
       if (d.parts !== undefined && d.parts !== true) fail(where, 'parts — только true');
       if (d.defects !== undefined && d.defects !== true) fail(where, 'defects — только true');
+      if (d.pledge !== undefined && d.pledge !== true) fail(where, 'pledge — только true');
       if (d.reuse !== undefined && d.reuse !== true) fail(where, 'reuse — только true (методический раздел)');
       if (d.sources !== undefined && d.sources !== true) fail(where, 'sources — только true (перечень использованных документов)');
       if (d.reuse && (d.table || d.dossier || d.sources)) fail(where, 'reuse — не у раздела с таблицей, досье или перечнем: их программа заполняет сама');
@@ -495,6 +499,13 @@ export function validateModule(m) {
       ids.add(a.id);
     }
   }
+  // Проверка в реестре залогов (2.491) — необязательно: для каких услуг.
+  if (m.pledge !== undefined) {
+    const where = `${at}, проверка в реестре залогов`;
+    onlyKeys(m.pledge, ['services'], where);
+    if (!Array.isArray(m.pledge.services) || !m.pledge.services.length) fail(where, 'services — непустой список услуг');
+    for (const id of m.pledge.services) if (!m.services.some((s) => s.id === id)) fail(where, `нет услуги ${id}`);
+  }
   // Готовые фразы исполнителя заказчику по услуге (2.477) — необязательно.
   if (m.phrases !== undefined) {
     const where = `${at}, готовые фразы`;
@@ -664,7 +675,7 @@ export function createRegistry(modules = DEFAULT_MODULES, { orgCheck = false } =
       return m.draft.filter((d) => (!d.services || d.services.includes(serviceId)) && (!chosen || !d.approach || chosen.includes(d.approach)))
         .map((d) => {
           const title = chosen && /^\d+\.\s/.test(d.title) ? d.title.replace(/^\d+/, String(++n)) : d.title;
-          return { id: d.id, title, ...(d.ask ? { ask: d.ask } : {}), ...(d.dossier ? { dossier: d.dossier } : {}), ...(d.table ? { table: d.table } : {}), ...(d.approach ? { approach: d.approach } : {}), ...(d.reuse ? { reuse: true } : {}), ...(d.sources ? { sources: true } : {}), ...(d.notice ? { notice: true } : {}), ...(d.parts ? { parts: true } : {}), ...(d.defects ? { defects: true } : {}) };
+          return { id: d.id, title, ...(d.ask ? { ask: d.ask } : {}), ...(d.dossier ? { dossier: d.dossier } : {}), ...(d.table ? { table: d.table } : {}), ...(d.approach ? { approach: d.approach } : {}), ...(d.reuse ? { reuse: true } : {}), ...(d.sources ? { sources: true } : {}), ...(d.notice ? { notice: true } : {}), ...(d.parts ? { parts: true } : {}), ...(d.defects ? { defects: true } : {}), ...(d.pledge ? { pledge: true } : {}) };
         });
     },
     // Выбирает ли исполнитель подходы к оценке для услуги (2.33).
@@ -791,6 +802,11 @@ export function createRegistry(modules = DEFAULT_MODULES, { orgCheck = false } =
     parts(moduleId, serviceId) {
       const p = modulesList.find((x) => x.id === moduleId)?.parts;
       return p && p.services.includes(serviceId) ? { actions: p.actions } : null;
+    },
+    // Проверка в реестре залогов (2.491): есть ли у услуги.
+    pledge(moduleId, serviceId) {
+      const p = modulesList.find((x) => x.id === moduleId)?.pledge;
+      return !!p && p.services.includes(serviceId);
     },
     // Недостатки товара таблицей (2.482) для услуги: { natures } или null.
     defects(moduleId, serviceId) {
