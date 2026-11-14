@@ -73,7 +73,7 @@ test('реестр: по шагу на каждую деталь из заявк
 
 test('описание модуля: ошибки в each ловятся при старте', () => {
   const withEach = (each) => ({ ...expertise, inspection: expertise.inspection.map((s) => (s.each ? { ...s, each } : s)) });
-  const each = expertise.inspection.find((s) => s.each).each;
+  const each = expertise.inspection.find((s) => s.each && !s.each.keep).each;
   assert.throws(() => validateModule(withEach({ ...each, title: 'Крупно' })), /\{item\}/);
   assert.throws(() => validateModule(withEach({ ...each, rest: '' })), /each\.rest/);
   assert.throws(() => validateModule(withEach({ ...each, field: '' })), /each\.field/);

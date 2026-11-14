@@ -285,12 +285,16 @@ export function validateModule(m) {
       const where = `${at}, шаг осмотра ${st.id}`;
       onlyKeys(st, ['id', 'title', 'hint', 'services', 'optional', 'each'], where);
       if (st.each !== undefined) {
-        onlyKeys(st.each, ['field', 'title', 'hint', 'rest', 'split'], `${where}, each`);
+        onlyKeys(st.each, ['field', 'title', 'hint', 'rest', 'split', 'keep', 'main'], `${where}, each`);
+        if (st.each.keep !== undefined && st.each.keep !== true) fail(where, 'each.keep — только true');
+        if (st.each.main !== undefined && (!st.each.keep || !nonEmpty(st.each.main))) fail(where, 'each.main — поле заявки, только при keep');
         if (st.each.split !== undefined && !['parts', 'lines'].includes(st.each.split)) fail(where, 'each.split — parts или lines');
         if (!nonEmpty(st.each.field)) fail(where, 'each.field — поле заявки');
         if (!nonEmpty(st.each.title) || !st.each.title.includes('{item}') || st.each.title.length > 60) fail(where, 'each.title — с {item}, до 60 знаков');
         if (st.each.hint !== undefined && !nonEmpty(st.each.hint)) fail(where, 'each.hint — пустая подсказка');
-        if (!nonEmpty(st.each.rest) || st.each.rest.length > 80) fail(where, 'each.rest — название шага «остальное», до 80 знаков');
+        if (st.each.keep ? st.each.rest !== undefined : (!nonEmpty(st.each.rest) || st.each.rest.length > 80)) {
+          fail(where, st.each.keep ? 'each.rest — не нужен при keep' : 'each.rest — название шага «остальное», до 80 знаков');
+        }
       }
       if (!nonEmpty(st.title) || st.title.length > 80) fail(where, 'нет названия или оно длиннее 80 знаков');
       if (st.hint !== undefined && !nonEmpty(st.hint)) fail(where, 'пустая подсказка');
@@ -733,21 +737,29 @@ export function createRegistry(modules = DEFAULT_MODULES, { orgCheck = false } =
     // Шаги дистанционного осмотра для услуги (2.3); пустой список — ссылка владельцу для услуги не выдаётся.
     // fields — поля заявки (2.476): шаг с each даёт по шагу на каждую деталь из поля (split: 'lines' — на каждую строку,
     // недостатки товара, 2.483) (id «шаг-1», «шаг-2»… по порядку
-    // в заявке), сам — необязательным «остальное» после них. Номера фото зависят от порядка шагов — звать везде с полями.
+    // в заявке), сам — необязательным «остальное» после них; each.keep (2.496) — сам шаг первым, затем по шагу на строку. Номера фото зависят от порядка шагов — звать везде с полями.
     inspectionSteps(moduleId, serviceId, fields = null) {
       const m = modulesList.find((x) => x.id === moduleId);
       if (!m?.inspection || !m.services.some((x) => x.id === serviceId)) return [];
+      // Поле each — только своё у услуги (у ДТП нет «Если машин несколько», 2.496).
+      const own = new Set(serviceFields(m, m.services.find((x) => x.id === serviceId)).map((f) => f.id));
       return m.inspection.filter((st) => !st.services || st.services.includes(serviceId)).flatMap((st) => {
         const plain = { id: st.id, title: st.title, hint: st.hint ?? null, optional: !!st.optional };
-        const items = !st.each ? [] : (st.each.split === 'lines' ? defectLines : damageItems)(fields?.[st.each.field]).slice(0, 12);
+        const items = !st.each || !own.has(st.each.field) ? [] : (st.each.split === 'lines' ? defectLines : damageItems)(fields?.[st.each.field]).slice(0, 12);
         if (!items.length) return [plain];
         // В названии шага — до 50 знаков недостатка (строка заявки бывает длинной); item — целиком, для сверки с таблицей.
-        const short = (t) => { const s = /^\p{Lu}\p{Ll}/u.test(t) ? t[0].toLowerCase() + t.slice(1) : t; return s.length > 50 ? `${s.slice(0, 49).trimEnd()}…` : s; };
-        return [
-          ...items.map((item, i) => ({ id: `${st.id}-${i + 1}`, title: st.each.title.replace('{item}', short(item)).slice(0, 80),
-            hint: st.each.hint ?? st.hint ?? null, optional: !!st.optional, item })),
-          { ...plain, title: st.each.rest, optional: true },
-        ];
+        // keep (2.496, машины из «Если машин несколько»): марку не переводим в строчные.
+        const cut = (s) => (s.length > 50 ? `${s.slice(0, 49).trimEnd()}…` : s);
+        const short = (t) => cut(!st.each.keep && /^\p{Lu}\p{Ll}/u.test(t) ? t[0].toLowerCase() + t.slice(1) : t);
+        const each = items.map((item, i) => ({ id: `${st.id}-${i + 1}`, title: st.each.title.replace('{item}', short(item)).slice(0, 80),
+          hint: st.each.hint ?? st.hint ?? null, optional: !!st.optional, item }));
+        // keep: сам шаг остаётся первым и обязательным (у него прежний id — снятые фото на месте) — для основной машины,
+        // с её маркой из поля main; затем по шагу на каждую строку поля.
+        if (st.each.keep) {
+          const main = String(fields?.[st.each.main] ?? '').trim();
+          return [{ ...plain, ...(main ? { title: st.each.title.replace('{item}', short(main)).slice(0, 80) } : {}) }, ...each];
+        }
+        return [...each, { ...plain, title: st.each.rest, optional: true }];
       });
     },
     // Документы, которые исполнитель может запросить у заказчика по этой услуге (2.64); с when — только если поле заявки
