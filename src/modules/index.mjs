@@ -619,8 +619,9 @@ export function validateModule(m) {
           if (!of || of.type !== 'number') fail(fw, `near.field — числовое поле заявки услуги ${sid}`);
         }
         // 2.493: near.onsite — числовое поле данных с объекта (выезд помощника): есть значение — сверка с ним, а не с заявкой.
-        if (near.onsite !== undefined) {
-          const ex = (m.express?.fields ?? []).find((x) => x.id === near.onsite);
+        // Экспресса в модуле нет — выездов не бывает, сверка всегда по заявке.
+        if (near.onsite !== undefined && m.express !== undefined) {
+          const ex = m.express.fields.find((x) => x.id === near.onsite);
           if (!ex || ex.type !== 'number') fail(fw, 'near.onsite — числовое поле данных с объекта (express)');
         }
       }
