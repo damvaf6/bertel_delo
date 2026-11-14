@@ -770,7 +770,8 @@ export default {
     fields: [
       { id: 'make_model', label: 'Марка и модель', type: 'text', required: true, max: 100, services: ['vehicle'] },
       { id: 'year', label: 'Год выпуска', type: 'number', integer: true, min: 1950, max: 2100, services: ['vehicle'], near: { field: 'year', within: 3 } },
-      { id: 'mileage_km', label: 'Пробег, км', type: 'number', integer: true, min: 0, max: 5000000, services: ['vehicle'] },
+      // 2.493: пробег аналога дальше 30% от объекта (по прибору при осмотре, иначе по заявке) — нужна корректировка на пробег.
+      { id: 'mileage_km', label: 'Пробег, км', type: 'number', integer: true, min: 0, max: 5000000, services: ['vehicle'], near: { field: 'mileage', pct: 30, onsite: 'mileage' } },
       { id: 'modification', label: 'Двигатель, коробка, комплектация', type: 'text', max: 200, services: ['vehicle'] },
       { id: 'name', label: 'Что продаётся', type: 'text', required: true, max: 300, services: ['movable'] },
       // Прогон 2.80: в перечне несколько позиций — аналоги нужны к каждой; год выпуска — для корректировки на возраст.
@@ -797,7 +798,7 @@ export default {
       { id: 'utilities', name: 'Коммуникации', services: ['land'] },
       { id: 'access', name: 'Подъезд, удалённость', services: ['land'] },
       { id: 'age', name: 'Год выпуска (возраст)', services: ['vehicle', 'movable'], covers: ['year'] },
-      { id: 'mileage', name: 'Пробег', services: ['vehicle'] },
+      { id: 'mileage', name: 'Пробег', services: ['vehicle'], covers: ['mileage_km'] },
       { id: 'condition', name: 'Техническое состояние', services: ['vehicle', 'movable'] },
       { id: 'equipment', name: 'Комплектация', services: ['vehicle', 'movable'] },
       { id: 'region', name: 'Регион', services: ['vehicle', 'movable'], covers: ['region'] },
