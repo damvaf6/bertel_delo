@@ -170,7 +170,7 @@ export default {
           ],
         },
         { id: 'book_value', label: 'Балансовая стоимость, руб.', type: 'number', min: 0, max: 100000000000, hint: 'Если владелец — организация: по данным её бухгалтерского учёта' },
-        { id: 'more_vehicles', label: 'Если машин несколько — остальные (марка, год, VIN)', type: 'longtext', max: 2000 },
+        { id: 'more_vehicles', label: 'Если машин несколько — остальные (марка, год, VIN)', type: 'longtext', max: 2000, hint: 'Каждая машина — с новой строки: при осмотре VIN и пробег снимаются на каждую' },
         BANK,
       ],
     },
@@ -704,8 +704,12 @@ export default {
     { id: 'car_rear', title: 'Сзади', hint: 'Целиком, с номерным знаком', services: ['vehicle', 'car_damage'] },
     { id: 'car_left', title: 'Слева', services: ['vehicle', 'car_damage'] },
     { id: 'car_right', title: 'Справа', services: ['vehicle', 'car_damage'] },
-    { id: 'car_vin', title: 'VIN', hint: 'Номер на кузове или табличке, чтобы читались все знаки', services: ['vehicle', 'car_damage'] },
-    { id: 'car_odometer', title: 'Пробег', hint: 'Приборная панель с включённым зажиганием', services: ['vehicle', 'car_damage'] },
+    // 2.496: машин в деле несколько (поле «Если машин несколько», каждая с новой строки) — VIN и пробег снимаются на каждую:
+    // сначала основная машина (её марка — в названии шага), затем по шагу на каждую строку (each.keep).
+    { id: 'car_vin', title: 'VIN', hint: 'Номер на кузове или табличке, чтобы читались все знаки', services: ['vehicle', 'car_damage'],
+      each: { field: 'more_vehicles', split: 'lines', keep: true, main: 'make_model', title: 'VIN: {item}' } },
+    { id: 'car_odometer', title: 'Пробег', hint: 'Приборная панель с включённым зажиганием', services: ['vehicle', 'car_damage'],
+      each: { field: 'more_vehicles', split: 'lines', keep: true, main: 'make_model', title: 'Пробег: {item}' } },
     { id: 'car_interior', title: 'Салон', services: ['vehicle', 'car_damage'] },
     { id: 'car_damage_whole', title: 'Повреждённая сторона целиком', hint: 'Отойдите на 3–4 шага, чтобы было видно, где удар', services: ['car_damage'] },
     // 2.476: по каждой детали из «Что повреждено» заявки — свой шаг «Крупно с линейкой: …» (each); сам шаг тогда —
@@ -740,7 +744,7 @@ export default {
   // найти объект; имён, телефонов, цели оценки и комментария заказчика он не видит.
   express: {
     services: ['realty', 'land', 'vehicle', 'movable', 'goods', 'car_damage'],
-    show: ['object_type', 'address', 'cadastral', 'area', 'floor', 'rooms', 'land_use', 'land_category', 'buildings', 'vehicle_type', 'make_model', 'year', 'vin', 'damage', 'items', 'location', 'subject'],
+    show: ['object_type', 'address', 'cadastral', 'area', 'floor', 'rooms', 'land_use', 'land_category', 'buildings', 'vehicle_type', 'make_model', 'year', 'vin', 'more_vehicles', 'damage', 'items', 'location', 'subject'],
     fields: [
       {
         id: 'condition', label: 'Общее состояние', type: 'select', required: true,
