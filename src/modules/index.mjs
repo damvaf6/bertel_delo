@@ -259,10 +259,6 @@ export function validateModule(m) {
           if (!r.field && !r.onsite) fail(where, 'specs — у строки field или onsite');
           if (r.label !== undefined && (typeof r.label !== 'string' || !r.label || r.label.length > 60)) fail(where, 'specs — label до 60 знаков');
           if (r.field && users.some((x) => !serviceFields(m, x).some((f) => f.id === r.field))) fail(where, `specs — поля ${r.field} нет у услуги раздела`);
-          if (r.onsite) {
-            const e = m.express?.fields?.find((f) => f.id === r.onsite);
-            if (!e || users.some((x) => !(m.express.services ?? []).includes(x.id) || (e.services && !e.services.includes(x.id)))) fail(where, `specs — поля ${r.onsite} нет в данных с объекта услуги раздела`);
-          }
         }
       }
       if (d.reuse !== undefined && d.reuse !== true) fail(where, 'reuse — только true (методический раздел)');
@@ -380,6 +376,18 @@ export function validateModule(m) {
       validateField(field, fw);
       if (services !== undefined && (!Array.isArray(services) || services.length === 0 || services.some((id) => !ex.services.includes(id)))) {
         fail(fw, 'services — непустой список услуг экспресса');
+      }
+    }
+  }
+  // Таблица «Характеристики объекта оценки» (2.494): поле с выезда — из данных с объекта и у каждой услуги раздела.
+  // Без выезда помощника в модуле строка с onsite берёт значение из заявки или не выводится.
+  if (m.express !== undefined) {
+    for (const d of m.draft ?? []) {
+      for (const r of d.specs ?? []) {
+        if (!r.onsite) continue;
+        const e = m.express.fields.find((f) => f.id === r.onsite);
+        const users = m.services.filter((x) => !d.services || d.services.includes(x.id));
+        if (!e || users.some((x) => e.services && !e.services.includes(x.id))) fail(`${at}, раздел черновика ${d.id}`, `specs — поля ${r.onsite} нет в данных с объекта услуги раздела`);
       }
     }
   }

@@ -421,6 +421,8 @@ async function putText(body, from, len, swap) {
   t.scrollIntoView({ block: 'center' });
   t.focus();
   t.setSelectionRange(from, from + len);
+  // Вставленное место — в окне поля (2.494): прокрутка по доле текста до него, сама textarea к выделению не прокручивает.
+  if (body.length) t.scrollTop = Math.max(0, t.scrollHeight * (from / body.length) - t.clientHeight / 4);
 }
 
 $('draft-text').addEventListener('input', () => {
