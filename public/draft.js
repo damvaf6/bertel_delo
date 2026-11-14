@@ -21,7 +21,7 @@ export async function loadDraft(current, reload) {
   if (!current.order.module || (!mine && !staff)) { box.classList.add('hidden'); return; }
   say($('draft-msg'), '');
   const r = await api('GET', `/api/orders/${current.order.id}/draft`);
-  ctx = { order: current.order, draft: r.draft, reload, sections: r.sections, noInspection: !!(r.no_inspection && r.can_edit) };
+  ctx = { order: current.order, draft: r.draft, reload, sections: r.sections, noInspection: !!(r.no_inspection && r.can_edit), specs: r.can_edit ? r.specs ?? null : null };
   setNext({ draft: { exists: !!r.draft, approaches: r.approaches && r.can_edit ? r.approaches : null } });
   renderApproaches(r);
   // Исполнителю — пока дело в работе или черновик есть; служебным — только когда черновик есть.
@@ -109,6 +109,30 @@ function countGaps() {
   $('draft-next-gap').classList.toggle('hidden', !n || $('draft-text').readOnly);
   renderEmpty();
   renderNoInspection();
+  renderSpecs();
+}
+
+// 2.494: таблица «Характеристики объекта оценки» из заявки и выезда помощника. В черновике её нет или она другая (выезд
+// был после черновика, заявку поправили) — подсказка и кнопка; такая же — ничего не показываем.
+function specsState() {
+  const table = ctx?.specs;
+  const t = $('draft-text');
+  if (!table?.length || !ctx.draft || t.readOnly) return null;
+  const lines = t.value.split('\n');
+  const at = lines.findIndex((l) => l.trim() === table[0]);
+  if (at < 0) return 'none';
+  let end = at + 1;
+  while (end < lines.length && lines[end].trim().startsWith('|')) end += 1;
+  return lines.slice(at, end).join('\n') === table.join('\n') ? null : 'old';
+}
+function renderSpecs() {
+  const st = specsState();
+  $('draft-specs').classList.toggle('hidden', !st);
+  if (!st) return;
+  $('draft-specs-text').textContent = st === 'none'
+    ? 'Таблицы «Характеристики объекта оценки» в черновике нет. Программа соберёт её из заявки и выезда помощника — марка, модель, год, VIN, госномер, пробег по прибору, состояние по осмотру — и вставит в описание объекта.'
+    : 'Таблица «Характеристики объекта оценки» в черновике устарела: после неё изменились заявка или данные с выезда помощника. Обновите её — прежняя заменится целиком.';
+  $('draft-specs-add').textContent = st === 'none' ? 'Вставить таблицу в черновик' : 'Обновить таблицу в черновике';
 }
 
 // 2.425: осмотра в деле нет (ни фото, ни выезда помощника, ссылка владельцу не действует) — на выбор эксперта фраза
@@ -397,12 +421,18 @@ async function putText(body, from, len, swap) {
   t.scrollIntoView({ block: 'center' });
   t.focus();
   t.setSelectionRange(from, from + len);
+  // Вставленное место — в окне поля (2.494): прокрутка по доле текста до него, сама textarea к выделению не прокручивает.
+  if (body.length) t.scrollTop = Math.max(0, t.scrollHeight * (from / body.length) - t.clientHeight / 4);
 }
 
 $('draft-text').addEventListener('input', () => {
   countGaps();
   if (ctx?.draft) writeLocal(ctx.order.id, { from: ctx.draft.id, body: $('draft-text').value });
 });
+$('draft-specs-add').addEventListener('click', () => run($('draft-specs-add'), async () => {
+  const done = await insertPartsTable(ctx?.specs, 'specs');
+  if (done) say($('draft-msg'), `Таблица «Характеристики объекта оценки» в черновике, черновик сохранён.${ctx.specs.some((l) => l.includes('[заполнить]')) ? ' Где «[заполнить]» — впишите сами.' : ''}`, 'ok');
+}));
 $('draft-noinsp-add').addEventListener('click', () => run($('draft-noinsp-add'), async () => {
   const done = await insertNoInspection();
   if (done) say($('draft-msg'), 'Фраза «осмотр не проводился» вставлена, черновик сохранён — уберите дату осмотра, если она есть.', 'ok');

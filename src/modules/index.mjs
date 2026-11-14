@@ -30,6 +30,8 @@
 //       pledge: true — сюда программа вставляет строку о проверке в реестре залогов (2.491, src/orders/pledge.mjs)
 //       facts: [id поля заявки…] — сюда программа вставляет строку «Из заявки: …» с заполненными полями (2.492,
 //         src/orders/facts.mjs); поля должны быть у каждой услуги раздела
+//       specs: [{ field?, onsite?, label? }…] — сюда программа вставляет таблицу «Характеристики объекта оценки» (2.494,
+//         src/orders/specs.mjs): field — поле заявки (у каждой услуги раздела), onsite — поле данных с объекта (express)
 //       sources: true — сюда программа вставляет перечень использованных документов дела (2.95, src/docs/sources.mjs)
 //     approaches?: { services: [id услуги…] }  — исполнитель отмечает, какие подходы к оценке применяет (2.33)
 //     inspection?: [{ id, title, hint?, services?: [id услуги…], optional?, each?: { field, title, hint?, rest } }…],  — шаги
@@ -238,7 +240,7 @@ export function validateModule(m) {
     checkIds(m.draft, `${at}, разделы черновика`);
     for (const d of m.draft) {
       const where = `${at}, раздел черновика ${d.id}`;
-      onlyKeys(d, ['id', 'title', 'services', 'ask', 'dossier', 'table', 'approach', 'reuse', 'sources', 'notice', 'parts', 'defects', 'pledge', 'facts'], where);
+      onlyKeys(d, ['id', 'title', 'services', 'ask', 'dossier', 'table', 'approach', 'reuse', 'sources', 'notice', 'parts', 'defects', 'pledge', 'facts', 'specs'], where);
       if (d.notice !== undefined && d.notice !== true) fail(where, 'notice — только true');
       if (d.parts !== undefined && d.parts !== true) fail(where, 'parts — только true');
       if (d.defects !== undefined && d.defects !== true) fail(where, 'defects — только true');
@@ -248,6 +250,16 @@ export function validateModule(m) {
         const users = m.services.filter((x) => !d.services || d.services.includes(x.id));
         const lost = d.facts.find((id) => users.some((x) => !serviceFields(m, x).some((f) => f.id === id)));
         if (lost) fail(where, `facts — поля ${lost} нет у услуги раздела`);
+      }
+      if (d.specs !== undefined) {
+        if (!Array.isArray(d.specs) || !d.specs.length) fail(where, 'specs — непустой список строк');
+        const users = m.services.filter((x) => !d.services || d.services.includes(x.id));
+        for (const r of d.specs) {
+          onlyKeys(r, ['field', 'onsite', 'label'], `${where}, строка specs`);
+          if (!r.field && !r.onsite) fail(where, 'specs — у строки field или onsite');
+          if (r.label !== undefined && (typeof r.label !== 'string' || !r.label || r.label.length > 60)) fail(where, 'specs — label до 60 знаков');
+          if (r.field && users.some((x) => !serviceFields(m, x).some((f) => f.id === r.field))) fail(where, `specs — поля ${r.field} нет у услуги раздела`);
+        }
       }
       if (d.reuse !== undefined && d.reuse !== true) fail(where, 'reuse — только true (методический раздел)');
       if (d.sources !== undefined && d.sources !== true) fail(where, 'sources — только true (перечень использованных документов)');
@@ -364,6 +376,18 @@ export function validateModule(m) {
       validateField(field, fw);
       if (services !== undefined && (!Array.isArray(services) || services.length === 0 || services.some((id) => !ex.services.includes(id)))) {
         fail(fw, 'services — непустой список услуг экспресса');
+      }
+    }
+  }
+  // Таблица «Характеристики объекта оценки» (2.494): поле с выезда — из данных с объекта и у каждой услуги раздела.
+  // Без выезда помощника в модуле строка с onsite берёт значение из заявки или не выводится.
+  if (m.express !== undefined) {
+    for (const d of m.draft ?? []) {
+      for (const r of d.specs ?? []) {
+        if (!r.onsite) continue;
+        const e = m.express.fields.find((f) => f.id === r.onsite);
+        const users = m.services.filter((x) => !d.services || d.services.includes(x.id));
+        if (!e || users.some((x) => e.services && !e.services.includes(x.id))) fail(`${at}, раздел черновика ${d.id}`, `specs — поля ${r.onsite} нет в данных с объекта услуги раздела`);
       }
     }
   }
@@ -690,7 +714,7 @@ export function createRegistry(modules = DEFAULT_MODULES, { orgCheck = false } =
       return m.draft.filter((d) => (!d.services || d.services.includes(serviceId)) && (!chosen || !d.approach || chosen.includes(d.approach)))
         .map((d) => {
           const title = chosen && /^\d+\.\s/.test(d.title) ? d.title.replace(/^\d+/, String(++n)) : d.title;
-          return { id: d.id, title, ...(d.ask ? { ask: d.ask } : {}), ...(d.dossier ? { dossier: d.dossier } : {}), ...(d.table ? { table: d.table } : {}), ...(d.approach ? { approach: d.approach } : {}), ...(d.reuse ? { reuse: true } : {}), ...(d.sources ? { sources: true } : {}), ...(d.notice ? { notice: true } : {}), ...(d.parts ? { parts: true } : {}), ...(d.defects ? { defects: true } : {}), ...(d.pledge ? { pledge: true } : {}), ...(d.facts ? { facts: d.facts } : {}) };
+          return { id: d.id, title, ...(d.ask ? { ask: d.ask } : {}), ...(d.dossier ? { dossier: d.dossier } : {}), ...(d.table ? { table: d.table } : {}), ...(d.approach ? { approach: d.approach } : {}), ...(d.reuse ? { reuse: true } : {}), ...(d.sources ? { sources: true } : {}), ...(d.notice ? { notice: true } : {}), ...(d.parts ? { parts: true } : {}), ...(d.defects ? { defects: true } : {}), ...(d.pledge ? { pledge: true } : {}), ...(d.facts ? { facts: d.facts } : {}), ...(d.specs ? { specs: d.specs } : {}) };
         });
     },
     // Выбирает ли исполнитель подходы к оценке для услуги (2.33).
