@@ -559,7 +559,15 @@ export function validateModule(m) {
         if (p.skip !== undefined && (!f?.options || !Array.isArray(p.skip) || !p.skip.length
           || p.skip.some((v) => !f.options.some((o) => o.id === v)))) fail(where, `${p.id}: skip — варианты поля выбора ${p.field ?? ''}`);
       }
-      if (p.doc && !(m.request_docs ?? []).some((d) => d.id === p.doc)) fail(where, `${p.id}: нет документа ${p.doc} в request_docs`);
+      if (p.doc !== undefined) {
+        const docs = [].concat(p.doc);
+        if (!docs.length || new Set(docs).size !== docs.length) fail(where, `${p.id}: doc — пункт или список пунктов без повторов`);
+        for (const d of docs) {
+          const rd = (m.request_docs ?? []).find((x) => x.id === d);
+          if (!rd) fail(where, `${p.id}: нет документа ${d} в request_docs`);
+          if (rd.services && p.services.some((sid) => !rd.services.includes(sid))) fail(where, `${p.id}: документ ${d} не для всех услуг фразы`);
+        }
+      }
     }
   }
   // Вычитка и переделка (2а.7) — необязательно.
