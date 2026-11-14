@@ -74,6 +74,7 @@ export function findMadeInDraft(body, made) {
 // 2.274, 2.277, 2.278: находку по заданию на оценку (письму, определению суда) можно заменить одной кнопкой «Заменить на
 // значение из задания» — откуда верное значение (null — нельзя). 2.284: та же проверка — для «Сегодня» и утренней сводки.
 // 2.312: пользователь результатов оценки (`flip: 'name'`, правило bank_user) — и Сбербанк из заявки: «из заявки».
+// 2.501: дата открытия наследства из заявки (`flip: 'date'`, правило inherit_basis) — тоже «из заявки».
 const SOURCE_FROM = [[/^в задании/u, 'из задания'], [/^в письме/u, 'из письма'], [/^в определении/u, 'из определения'], [/^в заявке$/u, 'из заявки']];
 const MARK = /^ \((?:по заявке|по заданию на оценку|по письму заказчика|по определению суда)\)/u;
 const MARK_END = new RegExp(`${MARK.source.slice(1)}$`, 'u');
@@ -81,7 +82,7 @@ const MARK_BY = [[/^в заявке/u, 'по заявке'], [/^в задани�
 export function assignmentSource(g) {
   const dated = /^\d{2}\.\d{2}\.\d{4}$/;
   const src = SOURCE_FROM.find(([re]) => re.test(g?.from ?? ''))?.[1];
-  if (!src || (src === 'из заявки' && g.flip !== 'name') || dated.test(g.bad ?? '') !== dated.test(g.right ?? '') || !swapValue(g)) return null;
+  if (!src || (src === 'из заявки' && g.flip !== 'name' && g.flip !== 'date') || dated.test(g.bad ?? '') !== dated.test(g.right ?? '') || !swapValue(g)) return null;
   return src;
 }
 
