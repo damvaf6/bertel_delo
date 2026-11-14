@@ -2193,3 +2193,30 @@ test('2.497: затратный подход у транспорта — ост�
   assert.ok(reg.checks('expertise', 'vehicle').find((c) => c.id === 'vehicle_cost')?.auto.includes('vehicle_cost'));
   assert.ok(!reg.checks('expertise', 'car_damage').some((c) => c.id === 'vehicle_cost'));
 });
+
+test('прогон 2.499: ДТП в отчёте об оценке машины — как в заявке («Был ли в ДТП»)', async () => {
+  const report = (line) => ['ОТЧЕТ ОБ ОЦЕНКЕ № 9/2026', '7. Описание объекта оценки', 'Легковой автомобиль Тест-Мобиль, 2019 г.в.', line,
+    'Аналог 2 — после ДТП, скидка учтена.', 'Расчёт по методическим рекомендациям для ДТП не применялся.'].join('\n');
+  const run = (accidents, line, more) => texts(runAutoChecks(['accident_match'], [doc([report(line)])], { fields: { accidents, ...(more ? { more_vehicles: more } : {}) } }), 'accident_match');
+  // Был в ДТП — сказано, молчим; сказано «не участвовал» — находка; ни слова (строки аналога и методики не в счёт) — находка.
+  assert.deepEqual(run('repaired', 'Автомобиль участвовал в ДТП в 2024 г., повреждения устранены.'), []);
+  assert.deepEqual(run('damaged', 'По данным заказчика, в ДТП не участвовал.'), [
+    'По заявке машина была в ДТП (был, не отремонтирован), а в отчёте сказано, что не была, — исправьте или уточните у заказчика',
+  ]);
+  assert.deepEqual(run('repaired', 'Состояние хорошее.'), [
+    'По заявке машина была в ДТП (был, отремонтирован), а в отчёте о ДТП ни слова — скажите об этом в описании объекта и учтите в расчёте (состояние, корректировки)',
+  ]);
+  // Не был — «после ДТП» об объекте — находка; «сведений о ДТП нет» — молчим.
+  assert.deepEqual(run('no', 'Повреждения кузова после ДТП: правая дверь.'), [
+    'По заявке машина в ДТП не была, а в отчёте сказано о ДТП — проверьте, нет ли текста из старого отчёта о другой машине, или уточните у заказчика',
+  ]);
+  assert.deepEqual(run('no', 'Сведений о ДТП нет.'), []);
+  assert.deepEqual(run('no', 'Состояние хорошее.'), []);
+  // «Неизвестно», пусто, несколько машин в деле — молчим.
+  assert.deepEqual(run('unknown', 'Состояние хорошее.'), []);
+  assert.deepEqual(run(undefined, 'Состояние хорошее.'), []);
+  assert.deepEqual(run('repaired', 'Состояние хорошее.', 'Тест-Грузовик, 2018'), []);
+  const { createRegistry } = await import('../../src/modules/index.mjs');
+  const reg = createRegistry();
+  assert.ok(reg.checks('expertise', 'vehicle').find((c) => c.id === 'vehicle_identity')?.auto.includes('accident_match'));
+});
