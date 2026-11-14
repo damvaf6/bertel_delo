@@ -155,6 +155,7 @@ async function orgMonthDone(sql, orgId, ids, { start, end }) {
   return sql`
       select distinct on (o.id) o.id, o.module, o.service, o.executor_user_id as user_id, o.deadline, o.price_kop, o.transit_kop, o.expert_kop,
              o.fields->>'purpose' as purpose, o.fields->>'bank' as bank, o.fields->>'method' as method, o.fields->>'goods_kind' as goods_kind,
+             o.fields->>'vehicle_type' as vehicle_type,
              p.amount_kop as payout_kop, h.at,
              greatest(
                (select max(f.outcome_at) from order_offers f
@@ -711,6 +712,27 @@ function byGoods(goods, defs, registry) {
   });
 }
 
+// Оценка транспорта за месяц (2.498): сданные дела услуг, где в заявке «Вид транспорта» (vehicle_type), кроме дел о ДТП
+// (у них таблица деталей — свой блок, 2.478), — сколько, средний срок от принятия до сдачи (как у услуг, pace), по виду
+// транспорта и по цели оценки (purpose: банк, суд, наследство…). Варианты — в порядке описания, без ответа — последним.
+const vehicleOf = (done, registry) => (registry ? done.filter((o) => o.module && !registry.parts(o.module, o.service)
+  && registry.service(o.module, o.service)?.fields.some((f) => f.id === 'vehicle_type')) : []);
+// { veh_cases, veh_avg_days }.
+const vehCalc = (veh) => ({ veh_cases: veh.length, veh_avg_days: avgDays(pace(veh)) });
+// [{ id, name, done, avg_days }] — по полю заявки field (vehicle_type или purpose).
+function byVehicle(veh, field, registry) {
+  const groups = new Map();
+  for (const o of veh) {
+    const opts = registry.service(o.module, o.service)?.fields.find((f) => f.id === field)?.options ?? [];
+    const i = opts.findIndex((x) => x.id === o[field]);
+    const id = i >= 0 ? o[field] : '';
+    const g = groups.get(id) ?? groups.set(id, { id, name: i >= 0 ? opts[i].name : 'Не указано в заявке', pos: i >= 0 ? i : 99, cases: [] }).get(id);
+    g.cases.push(o);
+  }
+  return [...groups.values()].sort((a, b) => a.pos - b.pos)
+    .map(({ id, name, cases }) => ({ id, name, done: cases.length, avg_days: avgDays(pace(cases)) }));
+}
+
 export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), now = new Date(), registry = null, taskDue = null, taskAfter = null,
   taskMove = null } = {}) {
   const year = isYear(month);
@@ -768,6 +790,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), no
   const car = carOf(q.done, registry);
   const calcs = new Map((await insurerQ(sql, car.map((o) => o.id))).map((c) => [c.order_id, c]));
   const goods = goodsOf(q.done, registry);
+  const veh = vehicleOf(q.done, registry);
   const defs = new Map();
   for (const d of await defectsQ(sql, goods.map((o) => o.id))) (defs.get(d.order_id) ?? defs.set(d.order_id, []).get(d.order_id)).push(d);
   const count = (rows) => new Map(rows.map((r) => [r.user_id, r.n]));
@@ -818,6 +841,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), no
       ...court(q.court.filter((r) => r.user_id === e.user_id), now),
       ...carCalc(car.filter((o) => o.user_id === e.user_id), calcs),
       ...goodsCalc(goods.filter((o) => o.user_id === e.user_id), defs),
+      ...vehCalc(veh.filter((o) => o.user_id === e.user_id)),
       disp_reasons: topRemarks(q.dispReasons.filter((i) => i.user_id === e.user_id && i.text), TOP_REMARKS_EXPERT)
         .map(({ text, n }) => ({ text, n })),
       prev: cmp ? cmp.experts.get(e.user_id) : null,
@@ -841,7 +865,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), no
     total: { ...Object.fromEntries(keys.map((k) => [k, sum(k)])), avg_days: avgDays(all), ...resign(q.resign),
       ...egrnFirst(q.firstSign, registry), ...bankTask(q.bankTask), ...taskLate(taskDues),
       ...bankAfter(bankAfters), ...bankAccr(q.done, accr), ...ext(exts), ...letterAsk(q.letterAsk), ...orgSign(q.done), ...afterRemarks(q.afterRemarks, afterItems),
-      ...court(q.court, now), ...carCalc(car, calcs), ...goodsCalc(goods, defs),
+      ...court(q.court, now), ...carCalc(car, calcs), ...goodsCalc(goods, defs), ...vehCalc(veh),
       prev: cmp ? cmp.total : null },
     prev_month: cmp ? prevM : null,
     prev_month_name: cmp ? periodRu(prevM) : null,
@@ -863,6 +887,9 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), no
     by_method: car.length ? byMethod(car, calcs, registry) : [],
     // 2.488: сданные товароведческие дела — по «Что за товар» и недостатки по характеру.
     by_goods: goods.length ? byGoods(goods, defs, registry) : [],
+    // 2.498: сданные дела оценки транспорта — по виду транспорта и по цели оценки, средний срок.
+    by_vehicle: veh.length ? byVehicle(veh, 'vehicle_type', registry) : [],
+    by_vehicle_purpose: veh.length ? byVehicle(veh, 'purpose', registry) : [],
   };
 }
 
@@ -1094,6 +1121,14 @@ export function reportCsv(orgName, r) {
       ...[...r.experts.filter((x) => x.goods_cases).map((x) => [x.full_name, x]), ['Итого', r.total]]
         .map(([name, x]) => [name, x.goods_cases, x.goods_defects, x.goods_production, x.goods_operation, x.goods_unknown,
           x.goods_not_confirmed, x.goods_prod_cases, x.goods_no_table])] : []),
+    // 2.498: только если за месяц сданы дела оценки транспорта — по виду, по цели и по экспертам, средний срок в днях.
+    ...(r.total.veh_cases ? [[], ['Оценка транспорта — вид транспорта', 'Сдано', 'Средний срок, дней'],
+      ...(r.by_vehicle ?? []).map((x) => [x.name, x.done, daysCell(x.avg_days)]),
+      [], ['Оценка транспорта — для чего оценка', 'Сдано', 'Средний срок, дней'],
+      ...(r.by_vehicle_purpose ?? []).map((x) => [x.name, x.done, daysCell(x.avg_days)]),
+      [], ['Оценка транспорта — по экспертам', 'Сдано', 'Средний срок, дней'],
+      ...[...r.experts.filter((x) => x.veh_cases).map((x) => [x.full_name, x]), ['Итого', r.total]]
+        .map(([name, x]) => [name, x.veh_cases, daysCell(x.veh_avg_days)])] : []),
   ];
   return `﻿${lines.map((l) => l.map(cell).join(';')).join('\r\n')}\r\n`;
 }

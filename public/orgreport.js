@@ -64,6 +64,8 @@ const goodsTotal = (x) => [`сдано товароведческих: ${casesN(
   x.goods_unknown ? `характер не установлен: ${x.goods_unknown}` : null, x.goods_not_confirmed ? `не подтвердились: ${x.goods_not_confirmed}` : null,
   x.goods_prod_cases ? `дел с производственным недостатком: ${x.goods_prod_cases}` : null,
   x.goods_defects && x.goods_no_table ? `без таблицы недостатков: ${x.goods_no_table}` : null].filter(Boolean).join(' · ');
+// 2.498: «сдано: N дел · в среднем 4,5 дня от принятия до сдачи».
+const vehLine = (n, d) => [casesN(n), d == null ? null : `в среднем ${daysRu(d)} от принятия до сдачи`].filter(Boolean).join(' · ');
 const daysRu = (d) => `${String(d).replace('.', ',')} ${!Number.isInteger(d) ? 'дня' : d % 10 === 1 && d % 100 !== 11 ? 'день'
   : [2, 3, 4].includes(d % 10) && ![12, 13, 14].includes(d % 100) ? 'дня' : 'дней'}`;
 // «в первоначальный срок, без переносов: 3 из 5 · в среднем 4,5 дня от принятия до сдачи · позже первоначального срока: 2
@@ -290,6 +292,15 @@ async function load(month) {
   $('org-report-goods-experts').replaceChildren(...report.experts.filter((x) => x.goods_cases).map((x) => el('li', { 'data-report-goods-expert': x.user_id },
     el('div', { class: 'title', text: `${x.full_name} — ${casesN(x.goods_cases)}` }),
     el('div', { class: 'muted', text: goodsDefects(x.goods_defects, x.goods_production, x.goods_operation) }))));
+  // 2.498: сданная оценка транспорта — по виду транспорта, по цели оценки и по экспертам, средний срок.
+  $('org-report-veh-box').classList.toggle('hidden', !t2.veh_cases);
+  $('org-report-veh-total').textContent = t2.veh_cases ? `Сдано отчётов: ${vehLine(t2.veh_cases, t2.veh_avg_days)}.` : '';
+  const vehLi = (attr, title) => (x) => el('li', { [attr]: x.id }, el('div', { class: 'title', text: title(x) }),
+    el('div', { class: 'muted', text: vehLine(x.done, x.avg_days) }));
+  $('org-report-veh').replaceChildren(...(report.by_vehicle ?? []).map(vehLi('data-report-veh', (x) => x.name)));
+  $('org-report-veh-purpose').replaceChildren(...(report.by_vehicle_purpose ?? []).map(vehLi('data-report-veh-purpose', (x) => `Для чего: ${x.name}`)));
+  $('org-report-veh-experts').replaceChildren(...report.experts.filter((x) => x.veh_cases).map((x) => el('li', { 'data-report-veh-expert': x.user_id },
+    el('div', { class: 'title', text: x.full_name }), el('div', { class: 'muted', text: vehLine(x.veh_cases, x.veh_avg_days) }))));
   const top = report.top_remarks ?? [];
   $('org-report-remarks-box').classList.toggle('hidden', !top.length);
   $('org-report-remarks').replaceChildren(...top.map((x) => el('li', { 'data-remark': '' },
