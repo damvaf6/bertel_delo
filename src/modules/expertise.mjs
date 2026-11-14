@@ -11,6 +11,12 @@ const BANK = {
   hint: 'Для Сбербанка отчёт проверим ещё и по требованиям банка',
 };
 const SBER = { field: 'bank', in: ['sber'] };
+// Оценка для наследства (2.500): у нотариуса дата оценки — день открытия наследства (день смерти), а не день осмотра.
+// Оба поля необязательны; дата идёт в «Дату оценки» таблицы задания черновика и подсказкой в деле (src/orders/inheritance.mjs).
+const INHERIT = [
+  { id: 'death_date', label: 'Если наследство — дата открытия наследства (день смерти)', type: 'text', max: 10, pattern: '^\\d{2}\\.\\d{2}\\.\\d{4}$', hint: 'Для нотариуса это дата оценки. Например: 03.06.2026' },
+  { id: 'notary', label: 'Если наследство — нотариус или номер наследственного дела', type: 'text', max: 200, hint: 'Например: нотариус г. Москвы Иванова И. И., дело № 12/2026' },
+];
 const VALUATION = ['realty', 'land', 'vehicle', 'movable'];
 // Сведения заявки об оценке транспорта, которые программа строкой «Из заявки: …» ставит в описание объекта (2.492).
 const VEHICLE_FACTS = ['engine_cc', 'engine_hp', 'gearbox', 'drive', 'color', 'accidents', 'owner_kind', 'book_value'];
@@ -73,6 +79,7 @@ export default {
         { id: 'year_built', label: 'Год постройки дома', type: 'number', integer: true, min: 1700, max: 2100 },
         { id: 'share_size', label: 'Размер доли (если оценивается доля)', type: 'text', max: 20, hint: 'Например: 1/3' },
         BANK,
+        ...INHERIT,
       ],
     },
     {
@@ -105,6 +112,7 @@ export default {
         },
         { id: 'buildings', label: 'Постройки на участке (если есть)', type: 'text', max: 300 },
         BANK,
+        ...INHERIT,
       ],
     },
     {
@@ -172,6 +180,7 @@ export default {
         { id: 'book_value', label: 'Балансовая стоимость, руб.', type: 'number', min: 0, max: 100000000000, hint: 'Если владелец — организация: по данным её бухгалтерского учёта' },
         { id: 'more_vehicles', label: 'Если машин несколько — остальные (марка, год, VIN)', type: 'longtext', max: 2000, hint: 'Каждая машина — с новой строки: при осмотре VIN и пробег снимаются на каждую' },
         BANK,
+        ...INHERIT,
       ],
     },
     {
@@ -222,6 +231,7 @@ export default {
         { id: 'items', label: 'Что оценить (перечень)', type: 'longtext', required: true, max: 2000 },
         { id: 'location', label: 'Где находится имущество', type: 'text', max: 300 },
         BANK,
+        ...INHERIT,
       ],
     },
     {

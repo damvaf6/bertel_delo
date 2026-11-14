@@ -5,6 +5,7 @@
 import { currentRules, quoteTranslation, translationNotices, translationSubmitProblems } from '../translation/prices.mjs';
 import { refreshTranslationSettings, resetTranslationSettings } from '../translation/settings.mjs';
 import { warrantyNotices } from '../orders/warranty.mjs';
+import { inheritanceNotices } from '../orders/inheritance.mjs';
 
 const EXTRAS = {
   translation: {
@@ -12,8 +13,9 @@ const EXTRAS = {
     refresh: refreshTranslationSettings, reset: resetTranslationSettings,
     proofread: () => { const r = currentRules(); return { new_orders: r.proofread_new_orders, sample_percent: r.proofread_sample_percent, redo_days: r.redo_days }; },
   },
-  // Экспертиза (2.480): у товароведческой — гарантия на дату обнаружения недостатка; цены по таблице нет.
-  expertise: { notices: warrantyNotices },
+  // Экспертиза (2.480): у товароведческой — гарантия на дату обнаружения недостатка; у оценки для наследства (2.500) —
+  // дата открытия наследства как дата оценки; цены по таблице нет.
+  expertise: { notices: (service, fields) => [...warrantyNotices(service, fields), ...inheritanceNotices(service, fields)] },
 };
 
 // Предварительная цена по таблице цен модуля: { lines, total_kop, … } или null.
