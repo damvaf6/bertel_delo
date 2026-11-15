@@ -11,6 +11,8 @@ import { extractPages } from '../ai/extract.mjs';
 import { OCR_MIME } from '../providers/ocr.mjs';
 import { adjusted, adjustKinds, analogFields, analogWarnings, cleanAdjustments, cleanAnalogValues, cleanUrl, hostOf, listPositions, missingAnalog, repeatText, searchHints, suggestionValues } from '../analogs/analogs.mjs';
 import { audit, text as textFrom } from './util.mjs';
+import { assignmentDocs } from './ai-ops.mjs';
+import { inheritValueDate, valueDateFor } from './draft-ops.mjs';
 
 // Облако принимает запрос не больше 3,5 МБ (Yandex Serverless Containers) — через ядро только до 3 МБ (2.49).
 export const ANALOG_FILE_MAX = 3 * 1024 * 1024;
@@ -79,7 +81,10 @@ async function view({ sql, actor, order, registry, providers }) {
   const [visit] = spec.fields.some((f) => f.near?.onsite)
     ? await sql`select data from onsite_visits where order_id = ${order.id} and finished_at is not null and cancelled_at is null
                 order by finished_at desc limit 1` : [];
-  const { per, repeats, hints, confirmed, min } = analogWarnings(spec, order, list, visit?.data ?? null);
+  // 2.503: дата оценки — из задания на оценку (одна дата) или день открытия наследства, как в черновике.
+  const vd = list.length ? valueDateFor(registry, order, await assignmentDocs(sql, providers.storage, order)) ?? inheritValueDate(registry, order) : null;
+  const valueDay = vd?.day ? vd.day.split('.').reverse().join('-') : null;
+  const { per, repeats, hints, confirmed, min } = analogWarnings(spec, order, list, visit?.data ?? null, valueDay);
   // Исполнитель отметил, что сравнительный подход не применяется (2.33), — аналоги не нужны, не напоминаем о них.
   const needed = !(order.approaches?.length && !order.approaches.includes('comparative'));
   return {

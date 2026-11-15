@@ -13,6 +13,9 @@ export const CORE_FIELDS = [
 ];
 // Объявление старше полугода на дату оценки — предупреждение (план, п. 4).
 export const OLD_DAYS = 183;
+// Оценка на прошлую дату (2.503): объявление позже даты оценки больше чем на 3 месяца — сегодняшний рынок, а не рынок на дату
+// оценки: нужен архив объявлений на дату оценки или корректировка на дату.
+export const LATE_DAYS = 92;
 // Цена дальше этой доли от середины (медианы) остальных — «проверьте или поясните».
 const PRICE_SPREAD = 0.35;
 
@@ -194,9 +197,14 @@ const median = (xs) => {
 // Предупреждения по каждому аналогу и подсказки по разделу целиком. Ничего не запрещают: решает эксперт.
 // onsite — данные с объекта последнего завершённого выезда помощника (2.493): у признака с near.onsite значение оттуда
 // важнее заявки (пробег по прибору, а не со слов заказчика).
-export function analogWarnings(spec, order, list, onsite = null) {
+// valueDay — дата оценки (ГГГГ-ММ-ДД) из задания на оценку или день открытия наследства (2.503): «старше полугода» считается
+// от неё, а объявление позже неё больше чем на 3 месяца — «нужен архив объявлений или корректировка на дату».
+export function analogWarnings(spec, order, list, onsite = null, valueDay = null) {
   const today = todayMsk();
-  const old = addDays(today, -OLD_DAYS);
+  const vd = /^\d{4}-\d{2}-\d{2}$/.test(String(valueDay ?? '')) && valueDay < today ? valueDay : null;
+  const old = addDays(vd ?? today, -OLD_DAYS);
+  const lateFrom = vd ? addDays(vd, LATE_DAYS) : null;
+  const late = [];
   const priced = list.filter((a) => Number.isFinite(a.fields.price_rub));
   const repeats = analogRepeats(list);
   const per = new Map();
@@ -218,7 +226,11 @@ export function analogWarnings(spec, order, list, onsite = null) {
     const miss = missingAnalog(spec, a.fields);
     if (miss.length) w.push(`Не заполнено: ${miss.join(', ')}`);
     if (!a.fields.listed_on) w.push('Нет даты объявления');
-    else if (a.fields.listed_on < old && !covered.has('date')) w.push('Объявление старше полугода — нужна корректировка на дату или другой аналог');
+    else if (a.fields.listed_on < old && !covered.has('date')) w.push(`Объявление старше полугода${vd ? ` на дату оценки (${ruDate(vd)})` : ''} — нужна корректировка на дату или другой аналог`);
+    else if (lateFrom && a.fields.listed_on > lateFrom && !covered.has('date')) {
+      w.push(`Объявление позже даты оценки (${ruDate(vd)}) на ${monthsText(vd, a.fields.listed_on)} — нужен архив объявлений на дату оценки или корректировка на дату`);
+      late.push(list.indexOf(a) + 1);
+    }
     const region = order.fields?.region;
     if (a.fields.region && region && a.fields.region !== region && !covered.has('region')) {
       w.push(`Другой регион (объект — ${REGIONS.find((r) => r.id === region)?.name ?? region}) — нужна корректировка`);
@@ -266,6 +278,7 @@ export function analogWarnings(spec, order, list, onsite = null) {
   return { per, repeats, hints: withCommon(hints), confirmed: counted, min: spec.min * positions.length };
 
   function withCommon(h) {
+    if (late.length) h.unshift(`Оценка на прошлую дату (${ruDate(vd)}): ${late.length > 1 ? 'объявления аналогов' : 'объявление аналога'} ${late.join(', ')} позже неё больше чем на 3 месяца — нужен архив объявлений на дату оценки или корректировка на дату`);
     for (const f of spec.fields.filter((x) => far_.has(x.id))) {
       const nums = far_.get(f.id);
       const kind = adjustKinds(spec).find((k) => k.covers?.includes(f.id));
@@ -281,6 +294,13 @@ export function analogWarnings(spec, order, list, onsite = null) {
 // Четырёхзначные числа — без пробела (2.66): год «1975», а не «1 975»; с 10 000 — по разрядам.
 const fmtNum = (n) => Number(n).toLocaleString('ru-RU', { useGrouping: Math.abs(Number(n)) >= 10000 }).replace(/ /g, ' ');
 const ruDate = (iso) => (iso ? String(iso).slice(0, 10).split('-').reverse().join('.') : '');
+// Сколько месяцев от даты оценки до даты объявления (2.503): «4 мес.», меньше месяца не бывает (порог — 3 месяца).
+function monthsText(from, to) {
+  const [y1, m1, d1] = from.split('-').map(Number);
+  const [y2, m2, d2] = to.split('-').map(Number);
+  const n = (y2 - y1) * 12 + (m2 - m1) - (d2 < d1 ? 1 : 0);
+  return `${Math.max(n, 3)} мес.`;
+}
 export const timeMsk = (t) => new Date(t).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 
 export function valueText(f, v) {
