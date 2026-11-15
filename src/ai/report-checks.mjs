@@ -12,7 +12,7 @@ import { adjusted, cleanUrl } from '../analogs/analogs.mjs';
 import { plainNumber } from '../orgs/numbering.mjs';
 import { warrantyEnd } from '../orders/warranty.mjs';
 import { defectLines, sameDefect } from '../orders/defects.mjs';
-import { inheritanceOf } from '../orders/inheritance.mjs';
+import { heirSet, inheritanceOf } from '../orders/inheritance.mjs';
 import { retroInspection, retroLine } from '../orders/retro.mjs';
 
 const MAX_PER_RULE = 5;
@@ -3418,6 +3418,69 @@ function inheritBasis(docs, ctx) {
   return out;
 }
 
+// ——— 2.506: несколько объектов в составе наследства ———
+// Цель «наследство», в заявке другие объекты (`heirSet`): каждый назван в отчёте (больше половины его значимых слов — корни
+// по 5 букв, номера от 3 знаков), и в строке с ним (или следующей, если строка кончается «:» или тире) есть сумма; не назван — находка, назван без суммы —
+// находка. Просили общую стоимость (heir_total = total) — строка «общая (суммарная) стоимость», «итого», «всего» с суммой;
+// нет — находка; есть, а сумма по объектам (основной — единственная другая рыночная стоимость в отчёте) не сходится — находка.
+const HEIR_STOP = new Set(['москва', 'москвы', 'московская', 'московской', 'область', 'области', 'город', 'улица', 'дом', 'дома',
+  'квартира', 'года', 'год', 'район', 'района', 'адрес', 'объект', 'наследства']);
+function heirKeys(text) {
+  return [...new Set([...String(text).toLowerCase().replace(/ё/g, 'е').matchAll(/[\p{L}\d]+/gu)].map((m) => m[0])
+    .filter((w) => !HEIR_STOP.has(w) && (/\d/.test(w) ? w.length >= 3 : w.length >= 3))
+    .map((w) => (/\d/.test(w) ? w : w.slice(0, 5))))];
+}
+const heirNorm = (t) => String(t).toLowerCase().replace(/ё/g, 'е');
+const heirHit = (keys, line) => { const l = heirNorm(line); const n = keys.filter((k) => l.includes(k)).length; return keys.length && n * 2 > keys.length; };
+const HEIR_TOTAL = /(?:общ(?:ая|ей|ую)|суммарн\S*|совокупн\S*)\s+(?:итогов\S*\s+)?(?:рыночн\S*\s+)?стоимост\S*|(?<![а-яё])(?:итого|всего)(?![а-яё])/iu;
+function heirObjectsCheck(docs, ctx) {
+  const set = heirSet(ctx.service, ctx.fields ?? {});
+  if (!set) return [];
+  const main = mainReport(docs);
+  if (!main) return [];
+  const lines = [];
+  eachPage(main, (raw, i) => raw.split('\n').forEach((l, n, all) => lines.push({ page: i, line: l, next: all[n + 1] ?? '' })));
+  const out = [];
+  const found = [];
+  for (const obj of set.others) {
+    const keys = heirKeys(obj);
+    if (!keys.length) continue;
+    const hits = lines.filter((x) => heirHit(keys, x.line));
+    if (!hits.length) {
+      out.push({ doc: main, page: 0, quote: '',
+        text: `Объект из заявки «${obj}» в отчёте не найден: в составе наследства оценивается каждый объект — опишите его и укажите его рыночную стоимость` });
+      continue;
+    }
+    const priced = hits.map((x) => ({ ...x, money: moneyIn(x.line) ?? (/[:—–-]\s*$/u.test(x.line) && !HEIR_TOTAL.test(x.next) ? moneyIn(x.next) : null) })).find((x) => x.money && !HEIR_TOTAL.test(x.line));
+    if (!priced) {
+      out.push({ doc: main, page: hits[0].page, quote: hits[0].line.trim().slice(0, 200),
+        text: `У объекта «${obj}» в отчёте нет своей стоимости: для нотариуса нужна рыночная стоимость каждого объекта наследства отдельной строкой` });
+      continue;
+    }
+    found.push(priced.money.value);
+  }
+  if (set.total) {
+    const totals = lines.map((x) => ({ ...x, money: HEIR_TOTAL.test(x.line) ? moneyIn(x.line.slice(x.line.search(HEIR_TOTAL))) ?? (/[:—–-]\s*$/u.test(x.line) ? moneyIn(x.next) : null) : null })).filter((x) => x.money);
+    if (!totals.length) {
+      out.push({ doc: main, page: 0, quote: '',
+        text: `Заказчик просил общую стоимость всех объектов наследства (${set.others.length + 1}), а в отчёте её нет — добавьте строку «Общая рыночная стоимость …» с суммой по объектам` });
+    } else if (found.length === set.others.length) {
+      const total = totals.at(-1).money.value;
+      const market = [...new Set((valuesByKey([main]).get('market') ?? []).concat(valuesByKey([main]).get('market:share') ?? []).map((e) => e.value))]
+        .filter((v) => v !== total && !found.includes(v));
+      if (market.length === 1) {
+        const sum = market[0] + found.reduce((a, b) => a + b, 0);
+        if (Math.abs(sum - total) > 1) {
+          const t = totals.at(-1);
+          out.push({ doc: main, page: t.page, quote: t.line.trim().slice(0, 200),
+            text: `Общая стоимость ${fmt(total)} руб. не равна сумме по объектам ${fmt(sum)} руб. (${[market[0], ...found].map(fmt).join(' + ')}) — пересчитайте` });
+        }
+      }
+    }
+  }
+  return out;
+}
+
 // ——— 2.502: оценка задним числом ———
 // Дата оценки в отчёте одна и раньше осмотра в деле (фото по ссылке, выезд помощника — ctx.inspectionDays), а в отчёте ни
 // слова о ретроспективной оценке и допущения о состоянии на дату оценки (RETRO) — находка с «Вставить в черновик допущение»
@@ -4089,6 +4152,7 @@ const WHOLE = {
   vehicle_cost: vehicleCost,
   accident_match: accidentMatch,
   inherit_basis: inheritBasis,
+  heir_objects: heirObjectsCheck,
   retro_basis: retroBasis,
 };
 
@@ -4179,6 +4243,7 @@ export const AUTO_CHECKS = Object.freeze({
   bank_user: 'при оценке для банка предполагаемый пользователь результатов оценки в отчёте — банк из заявки (Сбербанк) или из задания на оценку',
   bank_accredited: 'при оценке для банка эксперт или его организация аккредитованы в этом банке на дату отчёта',
   inherit_basis: 'при оценке для наследства дата оценки в отчёте — день открытия наследства из заявки (если нет задания на оценку с датой), предполагаемый пользователь результатов — нотариус (наследники)',
+  heir_objects: 'оценка для наследства, в составе наследства несколько объектов: каждый объект из заявки описан в отчёте и у него своя рыночная стоимость; общая стоимость — если просили, и она равна сумме по объектам',
   retro_basis: 'оценка задним числом: дата оценки раньше осмотра в деле — в отчёте сказано, что оценка ретроспективная, и допущение о состоянии объекта на дату оценки; цены, курсы валют, индексы и ставки — на дату оценки, а не позже',
   parts_match: 'ущерб после ДТП: у каждой детали из таблицы повреждённых деталей дела есть фото осмотра и строка в калькуляции ремонта; каждая деталь из заявки «Что повреждено» есть в исследовании повреждений',
   repair_sums: 'ущерб после ДТП: стоимость ремонта с учётом износа не больше, чем без износа, и одна в расчёте и выводах; УТС легкового автомобиля старше 5 лет или с пробегом больше 100 000 км не посчитана (рекомендации РФЦСЭ 2018), об УТС сказано; в выводах суммы ремонта и УТС — и прописью; своя сумма в сверке со страховой — как в отчёте',
