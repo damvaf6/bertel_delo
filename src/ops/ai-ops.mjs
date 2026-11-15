@@ -342,13 +342,13 @@ export function aiOps() {
           ? inItemOrder(registry.analogs(order.module, order.service), order, await sql`select url, fields, adjustments from order_analogs where order_id = ${order.id} and deleted_at is null and confirmed_at is not null order by id`)
           : [];
         // 2.146: день съёмки — по часам телефона, если он их передал; день получения тоже считается днём осмотра.
-        const shots = names.includes('report_dates')
+        const shots = names.includes('report_dates') || names.includes('retro_basis')
           ? await sql`select to_char(coalesce(p.shot_at, p.received_at) at time zone 'Europe/Moscow', 'YYYY-MM-DD') as day,
               to_char(p.received_at at time zone 'Europe/Moscow', 'YYYY-MM-DD') as got, p.visit_id is not null as visit from inspection_photos p
               join documents d on d.id = p.document_id where d.order_id = ${order.id} and d.deleted_at is null`
           : [];
         // 2.373: и день завершённого выезда помощника на объект — даже если фото с выезда нет (только данные с объекта).
-        const visits = names.includes('report_dates')
+        const visits = names.includes('report_dates') || names.includes('retro_basis')
           ? await sql`select to_char(finished_at at time zone 'Europe/Moscow', 'YYYY-MM-DD') as day from onsite_visits
                       where order_id = ${order.id} and finished_at is not null and cancelled_at is null`
           : [];

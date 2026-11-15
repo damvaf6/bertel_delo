@@ -175,6 +175,9 @@ export async function insertNoInspection() {
 // встаёт сразу под заголовком раздела с notice (у ДТП — «4. Осмотр»), а нет его — в конец. → 'same', true или null.
 export const insertNoticeLine = (line) => insertHeadLine(line, 'Извещение об осмотре:', 'notice');
 
+// Оценка задним числом (2.502): допущение «Оценка ретроспективная: …» — в раздел «Допущения и ограничительные условия».
+export const insertRetroLine = (line) => insertHeadLine(line, 'Оценка ретроспективная:', (x) => /допущени/iu.test(x.title ?? ''));
+
 // Строка из дела, узнаваемая по началу head: заменяет прежнюю такую строку целиком, иначе встаёт сразу под заголовком
 // раздела с пометкой flag, а нет его — в конец (извещение об осмотре — 2.470, проверка в реестре залогов — 2.491).
 export async function insertHeadLine(line, head, flag) {
@@ -189,7 +192,7 @@ export async function insertHeadLine(line, head, flag) {
     await putText(lines.join('\n'), from, line.length);
     return true;
   }
-  const want = (ctx.sections ?? []).find((x) => x[flag]);
+  const want = (ctx.sections ?? []).find((x) => (typeof flag === 'function' ? flag(x) : x[flag]));
   const h = want ? [...t.value.matchAll(/^#{1,3}\s*(.+)$/gm)].find((m) => norm(m[1]) === norm(want.title)) : null;
   if (h) {
     const at = h.index + h[0].length;

@@ -6,6 +6,7 @@ import { inheritanceValueDay } from '../orders/inheritance.mjs';
 import { loadParts, partsTable, placeParts } from '../orders/parts.mjs';
 import { insurerBlock, loadInsurer, placeInsurer } from '../orders/insurer.mjs';
 import { loadPledge, placePledge, pledgeLine } from '../orders/pledge.mjs';
+import { inspectionDaysOf, isAssumptions, placeRetro, retroInspection, retroLine } from '../orders/retro.mjs';
 import { factsLine, placeFacts } from '../orders/facts.mjs';
 import { specsTable, placeSpecs, lastVisit } from '../orders/specs.mjs';
 import { defectsTable, loadDefects, placeDefects } from '../orders/defects.mjs';
@@ -731,7 +732,11 @@ export function draftOps() {
         // Характеристики объекта оценки (2.494): таблица из заявки и выезда помощника — в раздел с specs.
         const sTable = await orderSpecs(sql, registry, order, sections);
         const specsBrief = sTable ? `ХАРАКТЕРИСТИКИ ОБЪЕКТА ОЦЕНКИ (программа сама вставит эту таблицу в описание объекта — не рисуй её; значения в тексте — только такие):\n${sTable.slice(1).join('\n')}` : null;
-        const brief = [orderBrief(registry, order, { omit: taken }), valueBrief, egrnBrief(egrn), taskBrief, onsite, noticeBrief, partsBrief, insurerBrief, defectsBrief, pledgeBrief, factsBrief, specsBrief, dossierBrief, spec ? analogsBrief(spec, analogs, order) : null, tablesBrief(sections)].filter(Boolean).join('\n');
+        // Оценка задним числом (2.502): дата оценки раньше осмотра в деле — допущение строкой в раздел допущений.
+        const retroDay = valueDate?.day && sections.some((x) => isAssumptions(x.title)) ? retroInspection(valueDate.day, await inspectionDaysOf(sql, order.id)) : null;
+        const rLine = retroDay ? retroLine(valueDate.day, retroDay) : null;
+        const retroBrief = rLine ? `${rLine} — программа сама вставит это допущение в раздел допущений; цены, курсы и аналоги бери на дату оценки, не на дату осмотра или составления` : null;
+        const brief = [orderBrief(registry, order, { omit: taken }), valueBrief, retroBrief, egrnBrief(egrn), taskBrief, onsite, noticeBrief, partsBrief, insurerBrief, defectsBrief, pledgeBrief, factsBrief, specsBrief, dossierBrief, spec ? analogsBrief(spec, analogs, order) : null, tablesBrief(sections)].filter(Boolean).join('\n');
         const out = await askAi(ctx, actor, 'draft', draftMessages({ brief, sections, ...inputs }));
         // Таблицы (2.29) и сведения из досье (2.14) программа вставляет сама, под заголовками разделов.
         const materials = await orderMaterials(sql, order);
@@ -743,7 +748,7 @@ export function draftOps() {
         const kinded = task.kind ? aimed.replace(VALUE_KIND_GAP, task.kind.v) : aimed;
         const dated = fillEgrn(valueDate?.day ? kinded.replace(VALUE_GAP, valueDate.day) : kinded, task.address ? { ...egrn, address: task.address } : egrn);
         const filled = placeCustomer(fillDraft(fillTables(dated, sections, registry, order, { materials, valueDate: valueDate?.inherit ? `${valueDate.day} (день открытия наследства, по заявке)` : valueDate?.day, egrn, task }), sections, dossier), sections, task.customer);
-        const text = placeFacts(placePledge(placeSpecs(placeDefects(placeInsurer(placeParts(placeNotice(placeSources(filled, sections, sources).body, sections, nLine), sections, pTable), sections, iBlock), sections, dTable), sections, sTable), sections, plLine), sections, fLine).slice(0, DRAFT_MAX);
+        const text = placeRetro(placeFacts(placePledge(placeSpecs(placeDefects(placeInsurer(placeParts(placeNotice(placeSources(filled, sections, sources).body, sections, nLine), sections, pTable), sections, iBlock), sections, dTable), sections, sTable), sections, plLine), sections, fLine), sections, rLine).slice(0, DRAFT_MAX);
         const seen = {
           photos: inputs.photos.map((p) => p.name),
           docs: inputs.docs.map((d) => ({ name: d.name, read: d.text !== null, truncated: d.truncated })),
@@ -765,6 +770,7 @@ export function draftOps() {
           specs: sTable ? sTable.length - 1 : 0,
           pledge: !!plLine,
           facts: !!fLine,
+          retro: retroDay,
         };
         const d = await sql.tx(async (tx) => {
           await tx`select id from orders where id = ${order.id} for update`;

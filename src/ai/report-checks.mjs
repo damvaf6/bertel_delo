@@ -13,6 +13,7 @@ import { plainNumber } from '../orgs/numbering.mjs';
 import { warrantyEnd } from '../orders/warranty.mjs';
 import { defectLines, sameDefect } from '../orders/defects.mjs';
 import { inheritanceOf } from '../orders/inheritance.mjs';
+import { retroInspection, retroLine } from '../orders/retro.mjs';
 
 const MAX_PER_RULE = 5;
 
@@ -2065,7 +2066,7 @@ function reportDates(docs, ctx) {
   }
   const after = val && found.find((f) => f.day > val);
   if (after && !RETRO.test(text) && !NO_INSPECT.test(text)) {
-    out.push({ ...pageWith(d, VALUE_LABEL), text: `Дата оценки (${ruDate(val)}) раньше даты осмотра (${ruDate(after.day)}) — если оценка ретроспективная, напишите это и допущение, что состояние объекта на дату оценки такое же, как на дату осмотра; иначе исправьте дату` });
+    out.push({ ...pageWith(d, VALUE_LABEL), retro: retroLine(val, after.day), text: `Дата оценки (${ruDate(val)}) раньше даты осмотра (${ruDate(after.day)}) — если оценка ретроспективная, напишите это и допущение, что состояние объекта на дату оценки такое же, как на дату осмотра; иначе исправьте дату` });
   }
   if (found.length > 1) {
     out.push({ doc: d, page: found[1].page, quote: found[1].quote, text: `В отчёте разные даты осмотра: ${found.map((f) => `${ruDate(f.day)} (стр. ${f.page + 1})`).join(', ')} — оставьте одну, верную` });
@@ -3417,6 +3418,53 @@ function inheritBasis(docs, ctx) {
   return out;
 }
 
+// ——— 2.502: оценка задним числом ———
+// Дата оценки в отчёте одна и раньше осмотра в деле (фото по ссылке, выезд помощника — ctx.inspectionDays), а в отчёте ни
+// слова о ретроспективной оценке и допущения о состоянии на дату оценки (RETRO) — находка с «Вставить в черновик допущение»
+// (retro). Дата осмотра в самом отчёте позже даты оценки — это уже находка report_dates (2.175), здесь не повторяем.
+// Цены, курсы валют, индексы и ставки в отчёте — на дату оценки: строка о них с датой позже даты оценки (обычно — дата
+// составления или осмотра) — находка. Аналоги (их сверяет report_dates), справочники, законы и реквизиты — не в счёт.
+const RATE_AT = /(?<![а-яё])курс\S*|(?<![а-яё])цен[аыуе]?(?![а-яё])|(?<![а-яё])цены\s|прайс|индекс\S*\s+(?:цен|потребит|инфляц)|ставк\S*\s+(?:рефинанс|ключев|дисконт|капитал)/iu;
+const RATE_SKIP = /аналог|объявлен|публикац|размещ|справочник|сборник|составлен|подписан|осмотр|выписк|срок|договор|задани|определени|свидетельств|справк|закон|приказ|постановлен|ФСО|ГОСТ|аттестат|полис|(?<![а-яё])№|нового/iu;
+const DATE_ANY = /(\d{1,2})\.(\d{1,2})\.(\d{4})|[«"]?(\d{1,2})[»"]?\s+([а-яё]+)\s+(\d{4})/giu;
+function rateDates(line) {
+  const out = [];
+  for (const m of line.matchAll(DATE_ANY)) {
+    const day = m[1] ? ymd(m[3], m[2], m[1]) : dateAfter(m[0].replace(/[«»"]/gu, ''), '^');
+    if (day) out.push(day);
+  }
+  return out;
+}
+function retroBasis(docs, ctx) {
+  if (ctx.service && !VALUATION.includes(ctx.service)) return [];
+  const main = mainReport(docs);
+  if (!main) return [];
+  const dates = valueDatesIn(main);
+  const values = [...new Set(dates.map((e) => e.value))];
+  if (values.length !== 1) return [];
+  const val = values[0];
+  const text = (main.pages ?? []).join('\n');
+  const out = [];
+  const seen = retroInspection(val, ctx.inspectionDays);
+  if (seen && !RETRO.test(text) && !NO_INSPECT.test(text) && !inspectDates(main).some((f) => f.day > val)) {
+    out.push({ doc: main, page: dates[0].page, quote: dates[0].quote, retro: retroLine(val, seen),
+      text: `Дата оценки в отчёте ${ruDate(val)}, а осмотр в деле — ${ruDate(seen)}: оценка задним числом, а допущения нет — напишите, что оценка ретроспективная и состояние объекта на дату оценки принято таким же, как на дату осмотра (ФСО); цены и аналоги — на дату оценки` });
+  }
+  const told = new Set();
+  eachPage(main, (page, i) => {
+    for (const line of page.split('\n')) {
+      if (!RATE_AT.test(line) || RATE_SKIP.test(line)) continue;
+      const late = rateDates(line).filter((x) => x > val).sort().pop();
+      if (!late || told.has(late) || out.length >= 4) continue;
+      told.add(late);
+      const what = /курс/iu.test(line) ? 'Курс валют' : /индекс/iu.test(line) ? 'Индекс' : /ставк/iu.test(line) ? 'Ставка' : 'Цены';
+      out.push({ doc: main, page: i, quote: clean(line).slice(0, 200),
+        text: `${what} в отчёте — на ${ruDate(late)}, позже даты оценки ${ruDate(val)}: стоимость определяется на дату оценки — цены, курсы валют, индексы и ставки берутся на неё, а не на дату осмотра или составления отчёта` });
+    }
+  });
+  return out;
+}
+
 // ——— 2.458: при оценке для банка эксперт или его организация аккредитованы в этом банке на дату отчёта ———
 // ctx.bankAccr — { order_bank: { id, name } | null, items: [{ bank, title, issued_on, valid_until, via: 'self'|'org', org_name }] }
 // (своя аккредитация из досье и аккредитации организации, от которой эксперт работает; ai-ops.mjs). Банк — из заявки
@@ -4041,6 +4089,7 @@ const WHOLE = {
   vehicle_cost: vehicleCost,
   accident_match: accidentMatch,
   inherit_basis: inheritBasis,
+  retro_basis: retroBasis,
 };
 
 const PER_DOC = {
@@ -4130,6 +4179,7 @@ export const AUTO_CHECKS = Object.freeze({
   bank_user: 'при оценке для банка предполагаемый пользователь результатов оценки в отчёте — банк из заявки (Сбербанк) или из задания на оценку',
   bank_accredited: 'при оценке для банка эксперт или его организация аккредитованы в этом банке на дату отчёта',
   inherit_basis: 'при оценке для наследства дата оценки в отчёте — день открытия наследства из заявки (если нет задания на оценку с датой), предполагаемый пользователь результатов — нотариус (наследники)',
+  retro_basis: 'оценка задним числом: дата оценки раньше осмотра в деле — в отчёте сказано, что оценка ретроспективная, и допущение о состоянии объекта на дату оценки; цены, курсы валют, индексы и ставки — на дату оценки, а не позже',
   parts_match: 'ущерб после ДТП: у каждой детали из таблицы повреждённых деталей дела есть фото осмотра и строка в калькуляции ремонта; каждая деталь из заявки «Что повреждено» есть в исследовании повреждений',
   repair_sums: 'ущерб после ДТП: стоимость ремонта с учётом износа не больше, чем без износа, и одна в расчёте и выводах; УТС легкового автомобиля старше 5 лет или с пробегом больше 100 000 км не посчитана (рекомендации РФЦСЭ 2018), об УТС сказано; в выводах суммы ремонта и УТС — и прописью; своя сумма в сверке со страховой — как в отчёте',
   repair_basis: 'ущерб после ДТП: дата ДТП и цены в расчёте — на дату ДТП из заявки; методика по цели из заявки: ОСАГО — Единая методика (755-П), суд и к виновнику — Методические рекомендации РФЦСЭ (2018)',
@@ -4168,6 +4218,8 @@ export function runAutoChecks(names, docs, ctx = {}) {
       ...(f.shot ? { shot: { bad: clean(f.shot.bad).slice(0, 200), right: f.shot.right } } : {}),
       // 2.425: осмотр в отчёте, а в деле его нет — «Вставить в черновик: осмотр не проводился».
       ...(f.no_inspection ? { no_inspection: true } : {}),
+      // 2.502: оценка задним числом без допущения — «Вставить в черновик допущение» с этой строкой.
+      ...(f.retro ? { retro: clean(f.retro).slice(0, 600) } : {}),
       ...(f.fix?.from && !f.egrn ? { fix: { bad: clean(f.fix.bad).slice(0, 200), right: clean(f.fix.right).slice(0, 200), from: clean(f.fix.from).slice(0, 200), ...(f.fix.flip ? { flip: f.fix.flip } : {}) } } : {}),
     }));
   }

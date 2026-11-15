@@ -1,7 +1,7 @@
 // Работа по делу (задача 1.5): проверка результата по правилам и переписка по заявке. Тексты — только через textContent.
 import { api, el, say } from '/common.js';
 import { setNext } from '/next.js';
-import { canFixInDraft, fixInDraft, insertNoInspection, rebuildWord, swapAllInDraft, swapInDraft, undoSwap, undoSwapAll } from '/draft.js';
+import { canFixInDraft, fixInDraft, insertNoInspection, insertRetroLine, rebuildWord, swapAllInDraft, swapInDraft, undoSwap, undoSwapAll } from '/draft.js';
 import { assignmentSource, findInDraft, swapValue } from '/draftfind.js';
 
 const $ = (id) => document.getElementById(id);
@@ -348,6 +348,24 @@ function noInspectFix() {
   } }, 'Вставить в черновик: осмотр не проводился');
   return [el('div', { class: 'row' }, btn), note, rebuild.box];
 }
+// 2.502: оценка задним числом без допущения — «Вставить в черновик допущение» (строка в раздел допущений); после вставки —
+// собрать Word заново.
+function retroFix(line) {
+  const note = el('p', { class: 'muted hidden', 'data-role': 'retro-done' });
+  const rebuild = rebuildBox();
+  const btn = el('button', { class: `secondary${canFixInDraft() ? '' : ' hidden'}`, type: 'button', 'data-action': 'retro-draft', onclick: async () => {
+    btn.disabled = true;
+    try {
+      const done = await insertRetroLine(line);
+      note.textContent = done === 'same' ? 'Это допущение уже есть в черновике — соберите Word заново.'
+        : done ? 'Допущение об оценке задним числом вставлено в раздел допущений черновика и сохранено — соберите Word заново.'
+          : 'Черновик сейчас не правится — допишите допущение в файле отчёта.';
+      note.classList.remove('hidden');
+      if (done) rebuild.show(); else btn.disabled = false;
+    } catch (err) { btn.disabled = false; say($('review-msg'), err.message); }
+  } }, 'Вставить в черновик допущение');
+  return [el('div', { class: 'row' }, btn), note, rebuild.box];
+}
 function assignmentSwap(g, quote, miss, rule) {
   const src = assignmentSource(g);
   if (!src) return null;
@@ -526,7 +544,8 @@ function checkItem(order, r, c, hint) {
       ...(f.fix ? mineFix(f.fix, f.quote, c.id) : []),
       ...(f.words ? wordsFix(f.words, f.quote) : []),
       ...(f.shot ? shotFix(f.shot, f.quote) : []),
-      ...(f.no_inspection ? noInspectFix() : []))))] : []),
+      ...(f.no_inspection ? noInspectFix() : []),
+      ...(f.retro ? retroFix(f.retro) : []))))] : []),
     // Отмеченные места: цитата из отчёта, файл и страница — сервер показывает только найденные в тексте цитаты.
     ...(hint?.marks?.length ? [el('ul', { class: 'ai-marks' }, ...hint.marks.map((m) => el('li', {},
       el('span', { class: 'ai-mark-where', text: `${m.file}, ${m.where}: ` }),
