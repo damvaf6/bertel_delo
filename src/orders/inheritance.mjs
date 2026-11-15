@@ -115,3 +115,6 @@ export function placeHeir(body, sections, line) {
   const at = m.index + m[0].length;
   return `${body.slice(0, at)}\n${line}${body.slice(at)}`;
 }
+
+// 2.507: к делу оценки для наследства — «Справка для нотариуса» из отчёта (тем, кому виден результат дела).
+export const heirNoteCase = (order) => order.module === 'expertise' && SERVICES.includes(order.service) && order.fields?.purpose === 'inheritance';
