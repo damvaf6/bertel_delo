@@ -531,6 +531,8 @@ async function loadDocs(initial = false) {
   // «Подписать все» (2.15): несколько неподписанных файлов результата — одним подтверждением.
   const unsigned = mineResults && signRequired && documentsBody.sign_mode !== 'manual' ? documents.filter((d) => d.kind === 'result' && d.own !== false && !d.signatures?.expert) : [];
   $('sign-all').classList.toggle('hidden', unsigned.length < 2);
+  // Справка для нотариуса (2.507): дело оценки для наследства, файл отчёта виден — Word из отчёта.
+  $('heir-note-box').classList.toggle('hidden', !documentsBody.heir_note);
   $('sign-all').textContent = `Подписать все файлы результата (${unsigned.length})`;
   const docLi = (d) => {
     // Результат убирает только исполнитель, пока не сдал; документы заказчика — заказчик (основание — до отправки).
@@ -604,6 +606,22 @@ function renderDossierTerm(term) {
     text: `${i.kind_name} — ${i.expired ? 'срок истёк' : 'действует до'} ${dayRu(i.valid_until)}${i.org_name ? ` (у организации «${i.org_name}» — продлевает руководитель)` : ''}` })));
 }
 $('dossier-term-open').addEventListener('click', () => { location.hash = 'specialist&to=dossier'; });
+// Справка для нотариуса (2.507): собрать не из чего (нет стоимости в файле) — пояснение здесь, а не пустая страница.
+$('heir-note-get').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  $('heir-note-msg').textContent = '';
+  try {
+    const r = await fetch(`/api/orders/${current.order.id}/heir-note`, { credentials: 'same-origin' });
+    if (!r.ok) { $('heir-note-msg').textContent = (await r.json().catch(() => ({})))?.message ?? 'Справку собрать не удалось'; return; }
+    const name = decodeURIComponent((/filename\*=UTF-8''([^;]+)/i.exec(r.headers.get('content-disposition') ?? '') ?? [])[1] ?? 'Справка для нотариуса.docx');
+    const a = el('a', { href: URL.createObjectURL(await r.blob()), download: name });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    $('heir-note-msg').textContent = 'Справка скачана';
+  } finally { btn.disabled = false; }
+});
 
 const goTo = (id) => { reveal(id); $(id).scrollIntoView({ behavior: 'smooth', block: 'start' }); };
 $('result-due-upload').addEventListener('click', () => { reveal('result-upload-box'); $('result-file').click(); });

@@ -1830,6 +1830,17 @@ test('замечания пунктами (2.432): смотрят стороны
   }
 });
 
+test('справка для нотариуса (2.507): только стороны дела, только оценка для наследства', async () => {
+  cover('heir.note');
+  // Подробно — tests/server/heir-note.test.mjs; здесь — чужие и дело не для наследства.
+  for (const who of ['stranger', 'headA', 'headB', 'spec']) {
+    assert.equal((await U[who].req('GET', `/api/orders/${ownOrder.id}/heir-note`)).status, 404, who);
+  }
+  for (const who of ['owner', 'dispatcher', 'admin']) {
+    assert.equal((await U[who].req('GET', `/api/orders/${ownOrder.id}/heir-note`)).status, 409, `${who}: не наследство`);
+  }
+});
+
 test('вызов эксперта в суд (2.441): смотрят стороны дела, пишут заказчик и диспетчер после сдачи', async () => {
   for (const id of ['court.calls', 'court.file', 'court.add', 'court.questions', 'court.questions.parse', 'court.questions.save', 'court.explain', 'court.absence', 'court.petition', 'court.outcome']) cover(id);
   // Подробно — tests/server/court.test.mjs; здесь — чужие и стороны заявки до сдачи.

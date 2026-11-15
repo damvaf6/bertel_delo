@@ -17,6 +17,7 @@ import { orderCertificates, siteOrigin } from './certificate-ops.mjs';
 import { stepFiles } from './step-ops.mjs';
 import { caseCertificate } from '../translation/certificate.mjs';
 import { dossierTermView } from '../dossier/dossier.mjs';
+import { heirNoteCase } from '../orders/inheritance.mjs';
 
 // Облако принимает запрос не больше 3,5 МБ (Yandex Serverless Containers) — через ядро только до 3 МБ (2.49).
 const MAX_FILE_BYTES = 3 * 1024 * 1024;
@@ -183,6 +184,8 @@ export function coreOps(cfg) {
               // Исполнителю — свой ли файл: после передачи дела файлы прежнего эксперта в сдачу не идут (2.110).
               ...(mine ? { own: d.uploaded_by === actor.id } : {}), ...(aiHints.has(d.id) ? { ai_check: aiHints.get(d.id) } : {}), ...(made.has(d.id) ? { task_made: made.get(d.id) } : {}), ...certOf(d), ...(marked.has(d.id) ? { step_file: marked.get(d.id) } : {}), ...priorOf(d) } : publicDoc(d))),
           results_hidden: !results,
+          // Справка для нотариуса (2.507): дело оценки для наследства и файл отчёта виден — Word из отчёта.
+          ...(results && heirNoteCase(order) && docs.some((d) => d.kind === 'result' && d.uploaded_by === order.executor_user_id) ? { heir_note: true } : {}),
           signature_required: required,
           // От какой организации нужна вторая подпись (null — только эксперт).
           signature_org: signOrg?.name ?? null,

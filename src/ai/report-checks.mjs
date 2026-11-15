@@ -3481,6 +3481,30 @@ function heirObjectsCheck(docs, ctx) {
   return out;
 }
 
+// 2.507: для справки нотариусу — стоимость каждого объекта наследства из отчёта (как её ищет heir_objects) и общая.
+// Основной объект — единственная другая рыночная стоимость в отчёте; не нашлось — null у объекта. Без других объектов — null.
+export function heirValues(docs, service, fields = {}) {
+  const set = heirSet(service, fields);
+  const main = set && mainReport(docs);
+  if (!main) return null;
+  const lines = [];
+  eachPage(main, (raw) => raw.split('\n').forEach((l, n, all) => lines.push({ line: l, next: all[n + 1] ?? '' })));
+  const others = set.others.map((name) => {
+    const keys = heirKeys(name);
+    const hit = keys.length ? lines.filter((x) => heirHit(keys, x.line) && !HEIR_TOTAL.test(x.line))
+      .map((x) => moneyIn(x.line) ?? (/[:—–-]\s*$/u.test(x.line) && !HEIR_TOTAL.test(x.next) ? moneyIn(x.next) : null))
+      .find(Boolean) : null;
+    return { name, value_rub: hit?.value ?? null };
+  });
+  const totals = lines.map((x) => (HEIR_TOTAL.test(x.line) ? moneyIn(x.line.slice(x.line.search(HEIR_TOTAL))) ?? (/[:—–-]\s*$/u.test(x.line) ? moneyIn(x.next) : null) : null)).filter(Boolean);
+  const total = set.total && totals.length ? totals.at(-1).value : null;
+  const byKey = valuesByKey([main]);
+  const found = others.map((o) => o.value_rub).filter((v) => v != null);
+  const market = [...new Set((byKey.get('market') ?? []).concat(byKey.get('market:share') ?? []).map((e) => e.value))]
+    .filter((v) => v !== total && !found.includes(v));
+  return { rows: [{ name: set.main, value_rub: market.length === 1 ? market[0] : null }, ...others], total, want_total: set.total };
+}
+
 // ——— 2.502: оценка задним числом ———
 // Дата оценки в отчёте одна и раньше осмотра в деле (фото по ссылке, выезд помощника — ctx.inspectionDays), а в отчёте ни
 // слова о ретроспективной оценке и допущения о состоянии на дату оценки (RETRO) — находка с «Вставить в черновик допущение»
