@@ -244,7 +244,7 @@ test('2.224: выписка ЕГРН старше 30 дней на дату оц
   const old = addDays(today, -40);
   assert.equal((await putDoc(o, egrnText(old), 'Выписка ЕГРН.txt')).status, 201);
   let r = (await list(o)).body;
-  assert.deepEqual({ ...r.egrn_old, id: undefined }, { id: undefined, name: 'Выписка ЕГРН.txt', page: 0, day: old, on: today, on_value: false, age: 40, asked: false });
+  assert.deepEqual({ ...r.egrn_old, id: undefined }, { id: undefined, name: 'Выписка ЕГРН.txt', page: 0, day: old, on: today, on_value: false, inherit: false, age: 40, asked: false });
   assert.ok((await todayRows()).some((x) => x.id === o.id && x.egrn.day === old));
   // Заказчик подсказки не видит.
   assert.equal((await list(o, owner)).body.egrn_old, null);
@@ -516,4 +516,70 @@ test('2.381: запрошенное не пришло 3 рабочих дня �
   assert.deepEqual([w.titles, w.days, w.can_remind], [['Выписка из ЕГРН'], 6, true]);
   assert.equal((await docsWaiting(S.sql, [order], msk('2026-11-05T12:00:00'))).get(o.id).long, false);
   assert.equal((await docsWaiting(S.sql, [order], msk('2026-11-05T19:00:00'))).get(o.id).long, true);
+});
+
+test('2.504: оценка для наследства — справка нотариуса и запрос нотариуса в списке, выписка ЕГРН — на день открытия наследства', async () => {
+  const ru = (iso) => iso.split('-').reverse().join('.');
+  const today = todayMsk();
+  const reg = createRegistry([expertise]);
+  // Пункты по наследству — только при такой цели, у всех услуг оценки.
+  for (const s of ['realty', 'land', 'vehicle', 'movable']) {
+    const ids = reg.requestDocs('expertise', s, null, { purpose: 'inheritance' }).map((d) => d.id);
+    assert.ok(ids.includes('heir_opening') && ids.includes('notary_request'), `${s}: ${ids.join()}`);
+    assert.ok(!reg.requestDocs('expertise', s, null, { purpose: 'deal' }).some((d) => d.id === 'heir_opening'), s);
+  }
+  assert.ok(!reg.requestDocs('expertise', 'goods', null, { purpose: 'inheritance' }).some((d) => d.id === 'heir_opening'));
+
+  const putDoc = (o, body, name, kind) => owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name), ...(kind ? { 'x-doc-kind': kind } : {}) } });
+  const egrnText = (day) => `Выписка из Единого государственного реестра недвижимости об объекте недвижимости\n${ru(day)} № КУВИ-001/2026-22345678\nВид объекта недвижимости: Помещение`;
+  const list = (o) => spec.req('GET', `/api/orders/${o.id}/doc-requests`);
+  const todayRows = async () => (await spec.req('GET', '/api/today')).body.expert.egrn_old;
+  const death = addDays(today, -200);
+  const heir = { ...FIELDS, purpose: 'inheritance', death_date: ru(death), notary: 'Нотариус Тестова Т. Т., дело № 1/2026' };
+
+  // Выписка выдана после дня открытия наследства (даже 60 дней назад) — годится: «старше 30 дней на сегодня» не судим.
+  const o = await inWork('Квартира: наследство, выписка после смерти', 'realty', heir);
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  assert.equal((await putDoc(o, egrnText(addDays(today, -60)), 'Выписка ЕГРН.txt')).status, 201);
+  let r = (await list(o)).body;
+  assert.equal(r.egrn_old, null);
+  assert.ok(!(await todayRows()).some((x) => x.id === o.id));
+  // В списке исполнителя — пункты по наследству, у выписки — подсказка о правах на день открытия наследства.
+  const ids = r.catalog.map((c) => c.id);
+  assert.ok(ids.includes('heir_opening') && ids.includes('notary_request'), ids.join());
+  assert.match(r.catalog.find((c) => c.id === 'egrn').hint, /на день открытия наследства/);
+  r = await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { items: ['heir_opening', 'notary_request'] });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.equal(r.body.requests.find((x) => x.item_id === 'heir_opening').hint, 'По ней сверяется дата оценки — день открытия наследства');
+
+  // Выписка намного раньше дня открытия наследства — подсказка в деле и в «Сегодня», просьба с пояснением заказчику.
+  const o2 = await inWork('Квартира: наследство, выписка до смерти', 'realty', heir);
+  assert.equal((await spec.req('POST', `/api/orders/${o2.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  const early = addDays(death, -90);
+  assert.equal((await putDoc(o2, egrnText(early), 'ЕГРН.txt')).status, 201);
+  r = (await list(o2)).body;
+  assert.equal(r.egrn_old.inherit, true);
+  assert.equal(r.egrn_old.on, death);
+  assert.equal(r.egrn_old.age, 90);
+  assert.ok((await todayRows()).some((x) => x.id === o2.id && x.egrn.inherit));
+  r = await spec.req('POST', `/api/orders/${o2.id}/doc-requests`, { items: ['egrn'], fresh_egrn: true });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.match(r.body.requests.find((x) => x.item_id === 'egrn').note,
+    new RegExp(`от ${ru(early).replace(/\./g, '\\.')} — раньше дня открытия наследства \\(${ru(death).replace(/\./g, '\\.')}\\).*о переходе прав`));
+
+  // Задание на оценку с датой важнее заявки (как в 2.500): судим на его дату, не на день открытия наследства.
+  const o3 = await inWork('Квартира: наследство и задание', 'realty', heir);
+  assert.equal((await spec.req('POST', `/api/orders/${o3.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  assert.equal((await putDoc(o3, egrnText(early), 'ЕГРН.txt')).status, 201);
+  assert.equal((await putDoc(o3, `ЗАДАНИЕ НА ОЦЕНКУ\nДата оценки: ${ru(addDays(early, 10))}`, 'Задание на оценку.txt', 'basis')).status, 201);
+  assert.equal((await list(o3)).body.egrn_old, null);
+
+  // Дата открытия наследства без цели «наследство» — как раньше, на сегодня.
+  const o4 = await inWork('Квартира: дата есть, цель другая', 'realty', { ...heir, purpose: 'deal' });
+  assert.equal((await spec.req('POST', `/api/orders/${o4.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  assert.equal((await putDoc(o4, egrnText(addDays(today, -60)), 'Выписка ЕГРН.txt')).status, 201);
+  r = (await list(o4)).body;
+  assert.equal(r.egrn_old.inherit, false);
+  assert.equal(r.egrn_old.on, today);
 });

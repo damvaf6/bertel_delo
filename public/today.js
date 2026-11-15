@@ -285,7 +285,7 @@ function extendLink(x) {
 // «Запросить свежую выписку» (2.224): запрос документов в деле — заказчику уведомление с пояснением, от какого числа старая.
 function egrnFresh(x) {
   const msg = el('div', { class: 'muted', 'data-role': 'egrn-fresh-msg' });
-  const btn = el('button', { type: 'button', class: 'secondary', 'data-action': 'egrn-fresh' }, 'Запросить свежую выписку');
+  const btn = el('button', { type: 'button', class: 'secondary', 'data-action': 'egrn-fresh' }, x.egrn?.inherit ? 'Запросить выписку о переходе прав' : 'Запросить свежую выписку');
   btn.onclick = async () => {
     btn.disabled = true;
     try {
@@ -520,7 +520,8 @@ export async function loadToday() {
       (x) => { location.hash = `order=${x.id}&to=fresh`; }),
       // Выписка ЕГРН старше 30 дней на дату оценки (2.224) — строка к запросу документов в деле, кнопка — запросить сразу.
       ...group('egrn-old', 'Выписка ЕГРН устарела', e.egrn_old ?? [], (x) => [x.title,
-        { class: 'overdue', role: 'egrn-old-why', text: `«${x.egrn.name}» от ${dayRu(x.egrn.day)} — старше 30 дней на ${x.egrn.on_value ? `дату оценки ${dayRu(x.egrn.on)}` : 'сегодня'}` },
+        { class: 'overdue', role: 'egrn-old-why', text: x.egrn.inherit ? `«${x.egrn.name}» от ${dayRu(x.egrn.day)} — раньше дня открытия наследства ${dayRu(x.egrn.on)} больше чем на 30 дней`
+          : `«${x.egrn.name}» от ${dayRu(x.egrn.day)} — старше 30 дней на ${x.egrn.on_value ? `дату оценки ${dayRu(x.egrn.on)}` : 'сегодня'}` },
         deadline(x, t.today)],
       (x) => { location.hash = `order=${x.id}&to=docs`; }, egrnFresh),
       // Оценка для банка, задания на оценку нет и не запрошено, а срок через 3 дня или меньше (2.306) — без задания банк

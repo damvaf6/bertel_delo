@@ -15,6 +15,7 @@ import { LEVEL, orderLevel, orderSides } from '../access/policy.mjs';
 import { customersOf, notify } from '../notify/notify.mjs';
 import { audit, text, uuidFrom } from './util.mjs';
 import { workingMs } from '../orders/silence.mjs';
+import { inheritanceOf } from '../orders/inheritance.mjs';
 
 const MAX_CUSTOM = 5;
 const MAX_OPEN = 30;
@@ -44,6 +45,8 @@ async function requestOf(sql, order, raw) {
 // 2.224: самая свежая выписка ЕГРН дела старше 30 дней на дату оценки (из задания на оценку, письма или определения суда —
 // 2.207; без неё — на сегодня). Только для услуг, где выписку можно запросить (request_docs: egrn), и пока дело в работе.
 // { id, name, page, day, on, on_value, age, asked } — asked: свежая выписка уже запрошена и ещё не получена; иначе null.
+// 2.504: оценка для наследства без задания с датой — судим на день открытия наследства из заявки (inherit: true): нотариусу
+// нужны сведения о правах на этот день, а не выписка «не старше месяца на сегодня». Выписка после этого дня — годится.
 export async function egrnOld(sql, storage, registry, order, today = todayMsk()) {
   if (order.status !== 'in_work' || !storage) return null;
   if (!registry.requestDocs(order.module, order.service, order.basis_kind, order.fields).some((c) => c.id === 'egrn')) return null;
@@ -54,13 +57,22 @@ export async function egrnOld(sql, storage, registry, order, today = todayMsk())
   if (!issued.length || !issued.some((x) => x.id === docs[0].id)) return null;
   const last = issued.reduce((a, b) => (b.day > a.day ? b : a));
   const value = assignmentValue(await assignmentDocs(sql, storage, order)).day ?? null;
-  const on = value ?? today;
+  const heir = value ? null : inheritDay(order, today);
+  const on = value ?? heir ?? today;
   const age = Math.round((Date.parse(`${on}T00:00:00Z`) - Date.parse(`${last.day}T00:00:00Z`)) / 86400_000);
   if (age <= EGRN_FRESH_DAYS) return null;
   const asked = !!(await sql`select 1 from doc_requests where order_id = ${order.id} and item_id = 'egrn'
                              and cancelled_at is null and fulfilled_at is null limit 1`).length;
-  return { id: last.id, name: last.name, page: last.page, day: last.day, on, on_value: !!value, age, asked };
+  return { id: last.id, name: last.name, page: last.page, day: last.day, on, on_value: !!(value ?? heir), inherit: !!heir, age, asked };
 }
+
+// День открытия наследства (ГГГГ-ММ-ДД) — при цели «наследство» и настоящей прошедшей дате в заявке; иначе null.
+function inheritDay(order, today) {
+  const h = inheritanceOf(order.fields ?? {}, today);
+  return h?.state === 'ok' ? h.day : null;
+}
+// Подсказка к выписке в списке документов при оценке для наследства — вместо «свежая, не старше месяца».
+const EGRN_HEIR_HINT = 'Сведения о правах на день открытия наследства: выписка о переходе прав на объект — заказывается на Госуслугах или в МФЦ';
 
 // 2.234: какие запрошенные документы ждут заказчика 3 дня и дольше (пока дело в работе), когда напоминали и можно ли снова.
 // 2.381: 3 дня — рабочих, по Москве (как «Заказчик не отвечает», прогон 2.380): в выходные и праздники заказчик не работает.
@@ -123,12 +135,16 @@ export async function docsWaiting(sql, orders, now = new Date()) {
 }
 
 // Пояснение заказчику к просьбе о свежей выписке — сразу видно, почему старая не годится.
-export const egrnOldNote = (o) => `Выписка ЕГРН в деле от ${o.day.split('-').reverse().join('.')} — старше ${EGRN_FRESH_DAYS} дней на ${o.on_value ? 'дату оценки' : 'сегодня'}. Нужна свежая выписка: закажите её на Госуслугах или в МФЦ и загрузите сюда.`;
+export const egrnOldNote = (o) => o.inherit
+  ? `Выписка ЕГРН в деле от ${o.day.split('-').reverse().join('.')} — раньше дня открытия наследства (${o.on.split('-').reverse().join('.')}) больше чем на ${EGRN_FRESH_DAYS} дней: по ней не видно, кому принадлежал объект на этот день. Нужна выписка о переходе прав на объект — закажите её на Госуслугах или в МФЦ и загрузите сюда.`
+  : `Выписка ЕГРН в деле от ${o.day.split('-').reverse().join('.')} — старше ${EGRN_FRESH_DAYS} дней на ${o.on_value ? 'дату оценки' : 'сегодня'}. Нужна свежая выписка: закажите её на Госуслугах или в МФЦ и загрузите сюда.`;
 
 const ruDay = (iso) => iso.split('-').reverse().join('.');
 
 async function view(sql, actor, order, registry, storage) {
-  const catalog = registry.requestDocs(order.module, order.service, order.basis_kind, order.fields);
+  const heir = inheritDay(order, todayMsk());
+  const catalog = registry.requestDocs(order.module, order.service, order.basis_kind, order.fields)
+    .map((c) => (heir && c.id === 'egrn' ? { ...c, hint: EGRN_HEIR_HINT } : c));
   const hints = new Map(catalog.map((c) => [c.id, c.hint]));
   const rows = await sql`
     select r.*, d.filename from doc_requests r left join documents d on d.id = r.document_id and d.deleted_at is null
