@@ -9,8 +9,12 @@ const NUM = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 });
 // «Мощность двигателя, л. с.» → название «мощность двигателя» и единица «л. с.»; «ДТП» остаётся заглавными.
 const lower = (s) => (/^\p{Lu}\p{Ll}/u.test(s) ? s[0].toLowerCase() + s.slice(1) : s);
 
-function factOf(f, v) {
+// «Если доля — порядок пользования» → «порядок пользования»; «Размер доли (если оценивается доля)» → «Размер доли» (2.510).
+const bare = (label) => label.replace(/^Если [^—]+—\s*/u, '').replace(/\s*\([^)]*\)\s*$/u, '');
+
+function factOf(field, v) {
   if (v === undefined || v === null || v === '') return null;
+  const f = { ...field, label: bare(field.label) };
   const [name, unit] = f.label.split(/,\s*(?=[^,]*$)/);
   if (f.type === 'select') {
     const o = f.options.find((x) => x.id === v);

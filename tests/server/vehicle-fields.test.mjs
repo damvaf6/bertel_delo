@@ -22,7 +22,7 @@ test('строка «Из заявки» и место в разделе; опи
   assert.equal(factsLine(fields, sec.facts, {}), null, 'ничего не заполнено — строки нет');
   assert.equal(factsLine(fields, sec.facts, { gearbox: 'нет-такого' }), null);
   // У других услуг раздела с facts нет.
-  assert.equal(registry.draftSections('expertise', 'realty').some((s) => s.facts), false);
+  assert.equal(registry.draftSections('expertise', 'goods').some((s) => s.facts), false);
 
   const sections = [{ title: '6. Сведения об оценщике' }, { title: '7. Описание объекта оценки', pledge: true, facts: sec.facts }];
   const body = '## 6. Сведения об оценщике\nТекст.\n## 7. Описание объекта оценки\nЛегковой автомобиль.';

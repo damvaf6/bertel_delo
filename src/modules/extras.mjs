@@ -6,6 +6,7 @@ import { currentRules, quoteTranslation, translationNotices, translationSubmitPr
 import { refreshTranslationSettings, resetTranslationSettings } from '../translation/settings.mjs';
 import { warrantyNotices } from '../orders/warranty.mjs';
 import { inheritanceNotices } from '../orders/inheritance.mjs';
+import { shareNotices } from '../orders/share.mjs';
 
 const EXTRAS = {
   translation: {
@@ -15,7 +16,7 @@ const EXTRAS = {
   },
   // Экспертиза (2.480): у товароведческой — гарантия на дату обнаружения недостатка; у оценки для наследства (2.500) —
   // дата открытия наследства как дата оценки; цены по таблице нет.
-  expertise: { notices: (service, fields) => [...warrantyNotices(service, fields), ...inheritanceNotices(service, fields)] },
+  expertise: { notices: (service, fields) => [...warrantyNotices(service, fields), ...inheritanceNotices(service, fields), ...shareNotices(service, fields)] },
 };
 
 // Предварительная цена по таблице цен модуля: { lines, total_kop, … } или null.
