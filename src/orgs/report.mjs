@@ -155,7 +155,7 @@ async function orgMonthDone(sql, orgId, ids, { start, end }) {
   return sql`
       select distinct on (o.id) o.id, o.module, o.service, o.executor_user_id as user_id, o.deadline, o.price_kop, o.transit_kop, o.expert_kop,
              o.fields->>'purpose' as purpose, o.fields->>'bank' as bank, o.fields->>'method' as method, o.fields->>'goods_kind' as goods_kind,
-             o.fields->>'vehicle_type' as vehicle_type,
+             o.fields->>'vehicle_type' as vehicle_type, o.fields->>'death_date' as death_date, o.fields->>'heir_objects' as heir_objects,
              p.amount_kop as payout_kop, h.at,
              greatest(
                (select max(f.outcome_at) from order_offers f
@@ -733,6 +733,49 @@ function byVehicle(veh, field, registry) {
     .map(({ id, name, cases }) => ({ id, name, done: cases.length, avg_days: avgDays(pace(cases)) }));
 }
 
+// Оценка для наследства за месяц (2.508): сданные дела с целью «Наследство, нотариус» услуг, где в заявке есть «дата открытия
+// наследства» (death_date), — сколько, по виду объекта (услуга), сколько с несколькими объектами наследства (heir_objects), и
+// насколько дата оценки (день открытия наследства) раньше сдачи отчёта — в среднем, в месяцах (до десятых). Дела без
+// настоящей даты или с датой позже сдачи — в среднее не идут, считаются «без даты».
+const heirOf = (done, registry) => (registry ? done.filter((o) => o.module && o.purpose === 'inheritance'
+  && registry.service(o.module, o.service)?.fields.some((f) => f.id === 'death_date')) : []);
+const MONTH_DAYS = 365.25 / 12;
+// Дней от открытия наследства до сдачи или null (даты нет, она не настоящая или позже сдачи).
+function heirLag(o) {
+  const m = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(String(o.death_date ?? '').trim());
+  if (!m) return null;
+  const day = `${m[3]}-${m[2]}-${m[1]}`;
+  const t = new Date(`${day}T00:00:00Z`);
+  if (Number.isNaN(t.getTime()) || t.toISOString().slice(0, 10) !== day) return null;
+  const d = daysBetween(day, dayMsk(o.at));
+  return d >= 0 ? d : null;
+}
+const avgMonths = (lags) => (lags.length ? Math.round((lags.reduce((s, d) => s + d, 0) / lags.length / MONTH_DAYS) * 10) / 10 : null);
+// { heir_cases, heir_multi, heir_no_date, heir_lag_months }.
+function heirCalc(heir) {
+  const lags = heir.map(heirLag);
+  return {
+    heir_cases: heir.length,
+    heir_multi: heir.filter((o) => String(o.heir_objects ?? '').trim()).length,
+    heir_no_date: lags.filter((d) => d == null).length,
+    heir_lag_months: avgMonths(lags.filter((d) => d != null)),
+  };
+}
+// [{ id, name, done, multi, lag_months }] — по виду объекта (услуге), в порядке описания модуля.
+function byHeir(heir, registry) {
+  const groups = new Map();
+  for (const o of heir) {
+    const key = `${o.module}:${o.service}`;
+    const svc = registry.service(o.module, o.service);
+    const pos = svc ? svc.module.services.findIndex((x) => x.id === o.service) : 99;
+    (groups.get(key) ?? groups.set(key, { id: o.service, name: svc?.service.name ?? o.service, pos, cases: [] }).get(key)).cases.push(o);
+  }
+  return [...groups.values()].sort((a, b) => a.pos - b.pos).map(({ id, name, cases }) => {
+    const c = heirCalc(cases);
+    return { id, name, done: c.heir_cases, multi: c.heir_multi, lag_months: c.heir_lag_months };
+  });
+}
+
 export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), now = new Date(), registry = null, taskDue = null, taskAfter = null,
   taskMove = null } = {}) {
   const year = isYear(month);
@@ -791,6 +834,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), no
   const calcs = new Map((await insurerQ(sql, car.map((o) => o.id))).map((c) => [c.order_id, c]));
   const goods = goodsOf(q.done, registry);
   const veh = vehicleOf(q.done, registry);
+  const heir = heirOf(q.done, registry);
   const defs = new Map();
   for (const d of await defectsQ(sql, goods.map((o) => o.id))) (defs.get(d.order_id) ?? defs.set(d.order_id, []).get(d.order_id)).push(d);
   const count = (rows) => new Map(rows.map((r) => [r.user_id, r.n]));
@@ -842,6 +886,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), no
       ...carCalc(car.filter((o) => o.user_id === e.user_id), calcs),
       ...goodsCalc(goods.filter((o) => o.user_id === e.user_id), defs),
       ...vehCalc(veh.filter((o) => o.user_id === e.user_id)),
+      ...heirCalc(heir.filter((o) => o.user_id === e.user_id)),
       disp_reasons: topRemarks(q.dispReasons.filter((i) => i.user_id === e.user_id && i.text), TOP_REMARKS_EXPERT)
         .map(({ text, n }) => ({ text, n })),
       prev: cmp ? cmp.experts.get(e.user_id) : null,
@@ -865,7 +910,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), no
     total: { ...Object.fromEntries(keys.map((k) => [k, sum(k)])), avg_days: avgDays(all), ...resign(q.resign),
       ...egrnFirst(q.firstSign, registry), ...bankTask(q.bankTask), ...taskLate(taskDues),
       ...bankAfter(bankAfters), ...bankAccr(q.done, accr), ...ext(exts), ...letterAsk(q.letterAsk), ...orgSign(q.done), ...afterRemarks(q.afterRemarks, afterItems),
-      ...court(q.court, now), ...carCalc(car, calcs), ...goodsCalc(goods, defs), ...vehCalc(veh),
+      ...court(q.court, now), ...carCalc(car, calcs), ...goodsCalc(goods, defs), ...vehCalc(veh), ...heirCalc(heir),
       prev: cmp ? cmp.total : null },
     prev_month: cmp ? prevM : null,
     prev_month_name: cmp ? periodRu(prevM) : null,
@@ -890,6 +935,8 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), no
     // 2.498: сданные дела оценки транспорта — по виду транспорта и по цели оценки, средний срок.
     by_vehicle: veh.length ? byVehicle(veh, 'vehicle_type', registry) : [],
     by_vehicle_purpose: veh.length ? byVehicle(veh, 'purpose', registry) : [],
+    // 2.508: сданные дела оценки для наследства — по виду объекта, несколько объектов, дата оценки раньше сдачи (месяцев).
+    by_heir: heir.length ? byHeir(heir, registry) : [],
   };
 }
 
@@ -1129,6 +1176,12 @@ export function reportCsv(orgName, r) {
       [], ['Оценка транспорта — по экспертам', 'Сдано', 'Средний срок, дней'],
       ...[...r.experts.filter((x) => x.veh_cases).map((x) => [x.full_name, x]), ['Итого', r.total]]
         .map(([name, x]) => [name, x.veh_cases, daysCell(x.veh_avg_days)])] : []),
+    // 2.508: только если за месяц сданы дела для наследства — по виду объекта и по экспертам.
+    ...(r.total.heir_cases ? [[], ['Оценка для наследства — вид объекта', 'Сдано', 'Несколько объектов', 'Дата оценки раньше сдачи, месяцев'],
+      ...(r.by_heir ?? []).map((x) => [x.name, x.done, x.multi, daysCell(x.lag_months)]),
+      [], ['Оценка для наследства — по экспертам', 'Сдано', 'Несколько объектов', 'Без даты открытия наследства', 'Дата оценки раньше сдачи, месяцев'],
+      ...[...r.experts.filter((x) => x.heir_cases).map((x) => [x.full_name, x]), ['Итого', r.total]]
+        .map(([name, x]) => [name, x.heir_cases, x.heir_multi, x.heir_no_date, daysCell(x.heir_lag_months)])] : []),
   ];
   return `﻿${lines.map((l) => l.map(cell).join(';')).join('\r\n')}\r\n`;
 }
