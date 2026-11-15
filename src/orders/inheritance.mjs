@@ -94,12 +94,15 @@ export function heirLine(serviceId, fields = {}) {
   return `${HEIR_HEAD} ${list}. Рыночная стоимость определяется по каждому объекту отдельно${h.total ? ' и общая — сумма стоимостей всех объектов' : ''}.`;
 }
 
+// «2 объекта», «5 объектов», «21 объект» (прогон 2.509: было «21 объектов»).
+const objWord = (n) => { const a = n % 100; const b = n % 10; return a >= 11 && a <= 14 ? 'объектов' : b === 1 ? 'объект' : b >= 2 && b <= 4 ? 'объекта' : 'объектов'; };
+
 export function heirNotices(serviceId, fields = {}) {
   const h = heirSet(serviceId, fields);
   if (!h) return [];
   const n = h.others.length + 1;
   return [{ id: 'inheritance_objects',
-    text: `В составе наследства ${n} ${n < 5 ? 'объекта' : 'объектов'}: ${[h.main, ...h.others].join('; ')}. В отчёте — стоимость каждого${h.total ? ' и общая стоимость всех' : ''}.` }];
+    text: `В составе наследства ${n} ${objWord(n)}: ${[h.main, ...h.others].join('; ')}. В отчёте — стоимость каждого${h.total ? ' и общая стоимость всех' : ''}.` }];
 }
 
 // Строку — в раздел «Задание на оценку» (таблица задания): прежняя заменяется, иначе встаёт сразу под заголовком.
