@@ -14,6 +14,8 @@ const ADMIN = process.env.STAGE_ADMIN_PHONE;
 const AUTH = TOKEN ? { authorization: `Bearer ${TOKEN}` } : {};
 // Фото на площадке: страница ждёт ответа до 90 с, облако иногда отвечает дольше 15 с (ночной прогон 13.11).
 const PHOTO_MS = 60_000;
+// Файлы в хранилище Яндекса так же (ночной прогон 15.11).
+const FILE_MS = 60_000;
 const H = { 'x-delo-request': '1' };
 const AI_WAIT = 150_000; // настоящая модель отвечает дольше
 
@@ -182,7 +184,7 @@ test('экскурсия по кабинетам: эксперт, руковод
   await page.getByLabel('VIN', { exact: true }).fill('XTA000000R0000001');
   await page.getByLabel(/^Срок/).fill(inDays(10));
   await page.getByLabel('Добавить файл (до 100 МБ)').setInputFiles({ name: 'ПТС (тест).pdf', mimeType: 'application/pdf', buffer: makePdf([['Тестовый ПТС: Тестмаш 3000, 2024 г.в.']]) });
-  await expect(page.getByText('Файл добавлен')).toBeVisible();
+  await expect(page.getByText('Файл добавлен')).toBeVisible({ timeout: FILE_MS });
   await snap(page, 'Заказчик', 'Заявка: данные', 'Поля заявки на оценку транспорта: вид, марка, год, VIN, срок, основание. Помощник уже заполнил цель и регион.', '#details-form');
   await page.getByRole('button', { name: 'Отправить заявку' }).click();
   await expect(page.locator('#order-status')).toHaveText('Подбор исполнителя');

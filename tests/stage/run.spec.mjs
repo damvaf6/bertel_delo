@@ -22,6 +22,8 @@ const AUTH = { authorization: `Bearer ${TOKEN}` };
 const AI_WAIT = 150_000;
 // Фото на площадке: сама страница ждёт ответа до 90 с, облако иногда отвечает дольше 15 с (ночной прогон 13.11).
 const PHOTO_MS = 60_000;
+// Файлы в хранилище Яндекса так же: определение суда грузилось дольше 15 с (ночной прогон 15.11).
+const FILE_MS = 60_000;
 const H = { 'x-delo-request': '1' };
 
 // Хранилище файлов Яндекса — единственный «чужой» адрес (временные ссылки на скачивание).
@@ -176,12 +178,12 @@ test('общий прогон: заявка на оценку с файлами 
   await page.getByLabel(/^Номер определения/).fill('2-1234/2026');
   await page.getByLabel(/^Дата определения/).fill(inDays(-10));
   await page.getByLabel('Приложить определение суда').setInputFiles({ name: 'Определение суда.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 тестовое определение') });
-  await expect(page.getByText('Приложено: Определение суда.pdf')).toBeVisible();
+  await expect(page.getByText('Приложено: Определение суда.pdf')).toBeVisible({ timeout: FILE_MS });
 
   // Файл в хранилище Яндекса: загрузка, скачивание по временной ссылке, содержимое совпадает.
   const body = `%PDF-1.4 тестовая выписка ${TAG}`;
   await page.getByLabel('Добавить файл (до 100 МБ)').setInputFiles({ name: 'Выписка ЕГРН.pdf', mimeType: 'application/pdf', buffer: Buffer.from(body) });
-  await expect(page.getByText('Файл добавлен')).toBeVisible();
+  await expect(page.getByText('Файл добавлен')).toBeVisible({ timeout: FILE_MS });
   const doc = page.locator('#docs li').filter({ hasText: 'Выписка ЕГРН.pdf' });
   const [download] = await Promise.all([page.waitForEvent('download'), doc.getByRole('button', { name: 'Скачать' }).click()]);
   expect(download.suggestedFilename()).toBe('Выписка ЕГРН.pdf');
@@ -374,7 +376,7 @@ test('общий прогон: сквозной путь экспертизы �
   await page.getByLabel('Площадь, кв. м').fill('42');
   await page.getByLabel(/^Срок/).fill(inDays(10));
   await page.getByLabel('Добавить файл (до 100 МБ)').setInputFiles({ name: 'Выписка ЕГРН.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 тестовая выписка') });
-  await expect(page.getByText('Файл добавлен')).toBeVisible();
+  await expect(page.getByText('Файл добавлен')).toBeVisible({ timeout: FILE_MS });
   await page.getByRole('button', { name: 'Отправить заявку' }).click();
   await expect(page.getByText('Заявка отправлена')).toBeVisible();
   await expect(page.locator('#order-status')).toHaveText('Подбор исполнителя');
