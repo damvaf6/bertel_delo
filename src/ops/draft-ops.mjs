@@ -2,7 +2,7 @@
 // его в кабинете и сам прикладывает итоговый файл результата (Word). Заказчик черновика не видит; ИИ ничего не выдаёт
 // заказчику сам — результат по-прежнему проходит проверку диспетчера (1.5). Разделы черновика — в описании модуля.
 import { loadNotices, noticeLine, placeNotice } from '../orders/notices.mjs';
-import { inheritanceValueDay } from '../orders/inheritance.mjs';
+import { heirLine, inheritanceValueDay, placeHeir } from '../orders/inheritance.mjs';
 import { loadParts, partsTable, placeParts } from '../orders/parts.mjs';
 import { insurerBlock, loadInsurer, placeInsurer } from '../orders/insurer.mjs';
 import { loadPledge, placePledge, pledgeLine } from '../orders/pledge.mjs';
@@ -243,7 +243,8 @@ export async function emptyDraft(sql, actor, order, registry, sections, storage)
   const dossier = sections.some((s) => s.dossier) ? await loadDossier(sql, actor.id) : [];
   const materials = await orderMaterials(sql, order);
   const sources = sourcesLines(await orderSources(sql, registry, order, storage));
-  return placeSources(fillDraft(fillTables(skeleton(sections), sections, registry, order, { materials }), sections, dossier), sections, sources).body;
+  const body = placeSources(fillDraft(fillTables(skeleton(sections), sections, registry, order, { materials }), sections, dossier), sections, sources).body;
+  return placeHeir(body, sections, heirLine(order.service, order.fields ?? {}));
 }
 
 const VERSIONS_MAX = 100;
@@ -736,7 +737,10 @@ export function draftOps() {
         const retroDay = valueDate?.day && sections.some((x) => isAssumptions(x.title)) ? retroInspection(valueDate.day, await inspectionDaysOf(sql, order.id)) : null;
         const rLine = retroDay ? retroLine(valueDate.day, retroDay) : null;
         const retroBrief = rLine ? `${rLine} — программа сама вставит это допущение в раздел допущений; цены, курсы и аналоги бери на дату оценки, не на дату осмотра или составления` : null;
-        const brief = [orderBrief(registry, order, { omit: taken }), valueBrief, retroBrief, egrnBrief(egrn), taskBrief, onsite, noticeBrief, partsBrief, insurerBrief, defectsBrief, pledgeBrief, factsBrief, specsBrief, dossierBrief, spec ? analogsBrief(spec, analogs, order) : null, tablesBrief(sections)].filter(Boolean).join('\n');
+        // Несколько объектов наследства (2.506): строка — в раздел «Задание на оценку»; модели — стоимость по каждому.
+        const hLine = heirLine(order.service, order.fields ?? {});
+        const heirBrief = hLine ? `${hLine} — программа сама вставит эту строку в задание на оценку; опиши каждый объект и в выводах дай рыночную стоимость каждого отдельной строкой${order.fields?.heir_total === 'total' ? ' и общую (сумму)' : ''} — суммы [заполнить: после расчёта]` : null;
+        const brief = [orderBrief(registry, order, { omit: taken }), valueBrief, heirBrief, retroBrief, egrnBrief(egrn), taskBrief, onsite, noticeBrief, partsBrief, insurerBrief, defectsBrief, pledgeBrief, factsBrief, specsBrief, dossierBrief, spec ? analogsBrief(spec, analogs, order) : null, tablesBrief(sections)].filter(Boolean).join('\n');
         const out = await askAi(ctx, actor, 'draft', draftMessages({ brief, sections, ...inputs }));
         // Таблицы (2.29) и сведения из досье (2.14) программа вставляет сама, под заголовками разделов.
         const materials = await orderMaterials(sql, order);
@@ -748,7 +752,7 @@ export function draftOps() {
         const kinded = task.kind ? aimed.replace(VALUE_KIND_GAP, task.kind.v) : aimed;
         const dated = fillEgrn(valueDate?.day ? kinded.replace(VALUE_GAP, valueDate.day) : kinded, task.address ? { ...egrn, address: task.address } : egrn);
         const filled = placeCustomer(fillDraft(fillTables(dated, sections, registry, order, { materials, valueDate: valueDate?.inherit ? `${valueDate.day} (день открытия наследства, по заявке)` : valueDate?.day, egrn, task }), sections, dossier), sections, task.customer);
-        const text = placeRetro(placeFacts(placePledge(placeSpecs(placeDefects(placeInsurer(placeParts(placeNotice(placeSources(filled, sections, sources).body, sections, nLine), sections, pTable), sections, iBlock), sections, dTable), sections, sTable), sections, plLine), sections, fLine), sections, rLine).slice(0, DRAFT_MAX);
+        const text = placeHeir(placeRetro(placeFacts(placePledge(placeSpecs(placeDefects(placeInsurer(placeParts(placeNotice(placeSources(filled, sections, sources).body, sections, nLine), sections, pTable), sections, iBlock), sections, dTable), sections, sTable), sections, plLine), sections, fLine), sections, rLine), sections, hLine).slice(0, DRAFT_MAX);
         const seen = {
           photos: inputs.photos.map((p) => p.name),
           docs: inputs.docs.map((d) => ({ name: d.name, read: d.text !== null, truncated: d.truncated })),
