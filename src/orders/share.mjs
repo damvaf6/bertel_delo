@@ -2,6 +2,7 @@
 // квартиры — скидка на долю) или часть стоимости всего объекта (целое × доля, без скидки; так часто ставит вопрос суд при
 // разделе имущества). Заказчик выбирает способ в заявке («Если доля — как оценивать»); здесь — разбор размера доли и
 // подсказка в деле всем, кто видит заявку. О правах сторон и о том, как делить, не пишем — это решает суд.
+import { headKey } from '../dossier/dossier.mjs';
 
 // «1/3», «1 / 3» → { a: 1, b: 3 }; иначе null. Доля больше целого или нулевая — не доля.
 export function shareOf(raw) {
@@ -35,4 +36,58 @@ export function shareNotices(serviceId, fields = {}) {
       : 'Не указано, как оценивать долю: рыночная стоимость доли (со скидкой) или часть стоимости всего объекта (без скидки). Уточните у заказчика.' });
   }
   return out;
+}
+
+// Таблица «Расчёт стоимости доли» (2.511) — в конец раздела черновика с share: true (у оценки недвижимости — «14. Согласование
+// результатов»), после весов подходов и итога: стоимость объекта целиком, размер доли, часть стоимости (целое × доля), скидка
+// на долю и стоимость доли. Суммы считает эксперт — «[заполнить]»; программа знает размер доли и способ из заявки: при
+// «рыночной» скидка с источником, при «части стоимости целого» скидки нет, способ не указан — пропуск «как по заданию или
+// определению суда». Прежняя таблица узнаётся по строке заголовка и заменяется целиком; из черновика — в Word.
+export const SHARE_HEAD = '| Расчёт стоимости доли | Значение |';
+const GAP = '[заполнить]';
+
+export function shareTable(serviceId, fields = {}) {
+  if (serviceId !== 'realty' || fields.object_type !== 'share') return null;
+  const s = shareOf(fields.share_size);
+  const part = s ? `${s.a}/${s.b}` : 'доля';
+  const rows = [
+    SHARE_HEAD,
+    `| Стоимость объекта целиком, руб. | ${GAP} |`,
+    `| Размер доли | ${s ? part : GAP} |`,
+    `| Часть стоимости объекта (целое × ${part}), руб. | ${GAP} |`,
+  ];
+  if (fields.share_method === 'market') {
+    rows.push(`| Скидка на долю, % | ${GAP} (источник — ${GAP}) |`,
+      `| Рыночная стоимость доли (часть × (1 − скидка)), руб. | ${GAP} |`);
+  } else if (fields.share_method === 'pro_rata') {
+    rows.push('| Скидка на долю | не применяется — оценивается часть стоимости всего объекта |',
+      `| Стоимость доли (равна части стоимости объекта), руб. | ${GAP} |`);
+  } else {
+    rows.push(`| Скидка на долю | ${GAP}: со скидкой или без — по заданию на оценку или определению суда |`,
+      `| Стоимость доли, руб. | ${GAP} |`);
+  }
+  return rows;
+}
+
+// Прежняя такая таблица — заменяется; иначе — в конец раздела с share (перед следующим заголовком) через пустую строку,
+// чтобы не слиться с таблицей весов подходов; раздела нет — текст как есть.
+export function placeShare(body, sections, lines) {
+  if (!lines) return body;
+  const all = body.split('\n');
+  const old = all.findIndex((l) => l.trim() === SHARE_HEAD);
+  if (old >= 0) {
+    let end = old + 1;
+    while (end < all.length && all[end].trim().startsWith('|')) end += 1;
+    all.splice(old, end - old, ...lines);
+    return all.join('\n');
+  }
+  const s = sections.find((x) => x.share);
+  if (!s) return body;
+  const m = [...body.matchAll(/^#{1,3}\s*(.+)$/gm)].find((h) => headKey(h[1]) === headKey(s.title));
+  if (!m) return body;
+  const next = body.slice(m.index + m[0].length).search(/\n#{1,3}\s/);
+  const at = next < 0 ? body.length : m.index + m[0].length + next;
+  const head = body.slice(0, at).replace(/\s*$/, '');
+  const tail = body.slice(at);
+  return `${head}\n\n${lines.join('\n')}${tail ? `\n${tail}` : '\n'}`;
 }

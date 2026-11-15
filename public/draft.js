@@ -21,7 +21,7 @@ export async function loadDraft(current, reload) {
   if (!current.order.module || (!mine && !staff)) { box.classList.add('hidden'); return; }
   say($('draft-msg'), '');
   const r = await api('GET', `/api/orders/${current.order.id}/draft`);
-  ctx = { order: current.order, draft: r.draft, reload, sections: r.sections, noInspection: !!(r.no_inspection && r.can_edit), specs: r.can_edit ? r.specs ?? null : null };
+  ctx = { order: current.order, draft: r.draft, reload, sections: r.sections, noInspection: !!(r.no_inspection && r.can_edit), specs: r.can_edit ? r.specs ?? null : null, share: r.can_edit ? r.share ?? null : null };
   setNext({ draft: { exists: !!r.draft, approaches: r.approaches && r.can_edit ? r.approaches : null } });
   renderApproaches(r);
   // Исполнителю — пока дело в работе или черновик есть; служебным — только когда черновик есть.
@@ -110,12 +110,12 @@ function countGaps() {
   renderEmpty();
   renderNoInspection();
   renderSpecs();
+  renderShare();
 }
 
 // 2.494: таблица «Характеристики объекта оценки» из заявки и выезда помощника. В черновике её нет или она другая (выезд
 // был после черновика, заявку поправили) — подсказка и кнопка; такая же — ничего не показываем.
-function specsState() {
-  const table = ctx?.specs;
+function specsState(table = ctx?.specs) {
   const t = $('draft-text');
   if (!table?.length || !ctx.draft || t.readOnly) return null;
   const lines = t.value.split('\n');
@@ -133,6 +133,38 @@ function renderSpecs() {
     ? 'Таблицы «Характеристики объекта оценки» в черновике нет. Программа соберёт её из заявки и выезда помощника — марка, модель, год, VIN, госномер, пробег по прибору, состояние по осмотру — и вставит в описание объекта.'
     : 'Таблица «Характеристики объекта оценки» в черновике устарела: после неё изменились заявка или данные с выезда помощника. Обновите её — прежняя заменится целиком.';
   $('draft-specs-add').textContent = st === 'none' ? 'Вставить таблицу в черновик' : 'Обновить таблицу в черновике';
+}
+
+// 2.511: таблица «Расчёт стоимости доли» (размер доли и способ — из заявки). Нет в черновике или другая (заявку поправили) —
+// подсказка и кнопка; такая же — ничего не показываем.
+function renderShare() {
+  const st = specsState(ctx?.share);
+  $('draft-share').classList.toggle('hidden', !st);
+  if (!st) return;
+  $('draft-share-text').textContent = st === 'none'
+    ? 'Таблицы «Расчёт стоимости доли» в черновике нет. Программа вставит её в конец раздела «Согласование результатов»: стоимость объекта целиком, размер доли, часть стоимости, скидка на долю и стоимость доли — суммы впишете сами.'
+    : 'Таблица «Расчёт стоимости доли» в черновике устарела: после неё в заявке изменились размер доли или способ оценки. Обновите её — прежняя заменится целиком, суммы впишите заново.';
+  $('draft-share-add').textContent = st === 'none' ? 'Вставить таблицу в черновик' : 'Обновить таблицу в черновике';
+}
+
+// Расчёт стоимости доли (2.511): заменяет прежнюю такую таблицу, иначе — в конец раздела с share (после весов подходов,
+// через пустую строку), нет его — в конец текста. → 'same', true или null.
+async function insertShareTable(table) {
+  const t = $('draft-text');
+  if (!canFixInDraft() || !table?.length) return null;
+  if (t.value.split('\n').some((l) => l.trim() === table[0])) return insertPartsTable(table, 'share');
+  const text = table.join('\n');
+  const want = (ctx.sections ?? []).find((x) => x.share);
+  const h = want ? [...t.value.matchAll(/^#{1,3}\s*(.+)$/gm)].find((m) => norm(m[1]) === norm(want.title)) : null;
+  let at = t.value.length;
+  if (h) {
+    const next = t.value.slice(h.index + h[0].length).search(/\n#{1,3}\s/);
+    if (next >= 0) at = h.index + h[0].length + next;
+  }
+  const head = t.value.slice(0, at).replace(/\s*$/, '');
+  const tail = t.value.slice(at);
+  await putText(`${head}\n\n${text}${tail ? `\n${tail}` : '\n'}`, head.length + 2, text.length);
+  return true;
 }
 
 // 2.425: осмотра в деле нет (ни фото, ни выезда помощника, ссылка владельцу не действует) — на выбор эксперта фраза
@@ -435,6 +467,10 @@ $('draft-text').addEventListener('input', () => {
 $('draft-specs-add').addEventListener('click', () => run($('draft-specs-add'), async () => {
   const done = await insertPartsTable(ctx?.specs, 'specs');
   if (done) say($('draft-msg'), `Таблица «Характеристики объекта оценки» в черновике, черновик сохранён.${ctx.specs.some((l) => l.includes('[заполнить]')) ? ' Где «[заполнить]» — впишите сами.' : ''}`, 'ok');
+}));
+$('draft-share-add').addEventListener('click', () => run($('draft-share-add'), async () => {
+  const done = await insertShareTable(ctx?.share);
+  if (done) say($('draft-msg'), 'Таблица «Расчёт стоимости доли» в черновике, черновик сохранён. Где «[заполнить]» — впишите суммы сами.', 'ok');
 }));
 $('draft-noinsp-add').addEventListener('click', () => run($('draft-noinsp-add'), async () => {
   const done = await insertNoInspection();
