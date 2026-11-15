@@ -549,7 +549,7 @@ export function validateModule(m) {
     if (!Array.isArray(m.phrases) || !m.phrases.length) fail(where, 'непустой список');
     const ids = new Set();
     for (const p of m.phrases) {
-      onlyKeys(p, ['id', 'title', 'services', 'doc', 'field', 'skip', 'text'], where);
+      onlyKeys(p, ['id', 'title', 'services', 'doc', 'field', 'skip', 'when', 'text'], where);
       if (!/^[a-z_]{1,30}$/.test(p.id ?? '') || ids.has(p.id)) fail(where, `id ${p.id} — латиницей и без повторов`);
       ids.add(p.id);
       if (typeof p.title !== 'string' || !p.title || p.title.length > 40) fail(where, `${p.id}: title — до 40 знаков`);
@@ -562,6 +562,18 @@ export function validateModule(m) {
         if (p.field && !f) fail(where, `${p.id}: у услуги ${sid} нет поля ${p.field}`);
         if (p.skip !== undefined && (!f?.options || !Array.isArray(p.skip) || !p.skip.length
           || p.skip.some((v) => !f.options.some((o) => o.id === v)))) fail(where, `${p.id}: skip — варианты поля выбора ${p.field ?? ''}`);
+      }
+      // when (2.505): фраза только для заявок с таким значением поля-списка — по наследству при цели «наследство».
+      if (p.when !== undefined) {
+        onlyKeys(p.when, ['field', 'in'], `${where}, ${p.id}, when`);
+        for (const sid of p.services) {
+          const s = m.services.find((x) => x.id === sid);
+          const f = s ? serviceFields(m, s).find((x) => x.id === p.when.field) : null;
+          if (!f || f.type !== 'select') fail(where, `${p.id}: when.field — поле-список, которое есть у каждой услуги фразы`);
+          if (!Array.isArray(p.when.in) || !p.when.in.length || p.when.in.some((v) => !f.options.some((o) => o.id === v))) {
+            fail(where, `${p.id}: when.in — непустой список значений поля ${p.when.field}`);
+          }
+        }
       }
       if (p.doc !== undefined) {
         const docs = [].concat(p.doc);
