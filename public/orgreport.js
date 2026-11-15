@@ -66,6 +66,10 @@ const goodsTotal = (x) => [`сдано товароведческих: ${casesN(
   x.goods_defects && x.goods_no_table ? `без таблицы недостатков: ${x.goods_no_table}` : null].filter(Boolean).join(' · ');
 // 2.498: «сдано: N дел · в среднем 4,5 дня от принятия до сдачи».
 const vehLine = (n, d) => [casesN(n), d == null ? null : `в среднем ${daysRu(d)} от принятия до сдачи`].filter(Boolean).join(' · ');
+// 2.508: «сдано: 3 дела · несколько объектов: 1 · дата оценки раньше сдачи в среднем на 4,5 мес. · без даты открытия наследства: 1».
+const heirLine = (n, multi, lag, noDate) => [casesN(n), multi ? `несколько объектов: ${multi}` : null,
+  lag == null ? null : `дата оценки раньше сдачи в среднем на ${String(lag).replace('.', ',')} мес.`,
+  noDate ? `без даты открытия наследства: ${noDate}` : null].filter(Boolean).join(' · ');
 const daysRu = (d) => `${String(d).replace('.', ',')} ${!Number.isInteger(d) ? 'дня' : d % 10 === 1 && d % 100 !== 11 ? 'день'
   : [2, 3, 4].includes(d % 10) && ![12, 13, 14].includes(d % 100) ? 'дня' : 'дней'}`;
 // «в первоначальный срок, без переносов: 3 из 5 · в среднем 4,5 дня от принятия до сдачи · позже первоначального срока: 2
@@ -301,6 +305,15 @@ async function load(month) {
   $('org-report-veh-purpose').replaceChildren(...(report.by_vehicle_purpose ?? []).map(vehLi('data-report-veh-purpose', (x) => `Для чего: ${x.name}`)));
   $('org-report-veh-experts').replaceChildren(...report.experts.filter((x) => x.veh_cases).map((x) => el('li', { 'data-report-veh-expert': x.user_id },
     el('div', { class: 'title', text: x.full_name }), el('div', { class: 'muted', text: vehLine(x.veh_cases, x.veh_avg_days) }))));
+  // 2.508: сданная оценка для наследства — по виду объекта и по экспертам.
+  $('org-report-heir-box').classList.toggle('hidden', !t2.heir_cases);
+  $('org-report-heir-total').textContent = t2.heir_cases
+    ? `Сдано отчётов: ${heirLine(t2.heir_cases, t2.heir_multi, t2.heir_lag_months, t2.heir_no_date)}`.replace(/\.?$/, '.') : '';
+  $('org-report-heir').replaceChildren(...(report.by_heir ?? []).map((x) => el('li', { 'data-report-heir': x.id },
+    el('div', { class: 'title', text: x.name }), el('div', { class: 'muted', text: heirLine(x.done, x.multi, x.lag_months) }))));
+  $('org-report-heir-experts').replaceChildren(...report.experts.filter((x) => x.heir_cases).map((x) => el('li', { 'data-report-heir-expert': x.user_id },
+    el('div', { class: 'title', text: x.full_name }),
+    el('div', { class: 'muted', text: heirLine(x.heir_cases, x.heir_multi, x.heir_lag_months, x.heir_no_date) }))));
   const top = report.top_remarks ?? [];
   $('org-report-remarks-box').classList.toggle('hidden', !top.length);
   $('org-report-remarks').replaceChildren(...top.map((x) => el('li', { 'data-remark': '' },
