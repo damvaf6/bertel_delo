@@ -308,7 +308,7 @@ async function load(month) {
   // 2.508: сданная оценка для наследства — по виду объекта и по экспертам.
   $('org-report-heir-box').classList.toggle('hidden', !t2.heir_cases);
   $('org-report-heir-total').textContent = t2.heir_cases
-    ? `Сдано отчётов: ${heirLine(t2.heir_cases, t2.heir_multi, t2.heir_lag_months, t2.heir_no_date)}.` : '';
+    ? `Сдано отчётов: ${heirLine(t2.heir_cases, t2.heir_multi, t2.heir_lag_months, t2.heir_no_date)}`.replace(/\.?$/, '.') : '';
   $('org-report-heir').replaceChildren(...(report.by_heir ?? []).map((x) => el('li', { 'data-report-heir': x.id },
     el('div', { class: 'title', text: x.name }), el('div', { class: 'muted', text: heirLine(x.done, x.multi, x.lag_months) }))));
   $('org-report-heir-experts').replaceChildren(...report.experts.filter((x) => x.heir_cases).map((x) => el('li', { 'data-report-heir-expert': x.user_id },
