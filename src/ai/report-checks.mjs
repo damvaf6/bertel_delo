@@ -14,6 +14,7 @@ import { warrantyEnd } from '../orders/warranty.mjs';
 import { defectLines, sameDefect } from '../orders/defects.mjs';
 import { heirSet, inheritanceOf } from '../orders/inheritance.mjs';
 import { retroInspection, retroLine } from '../orders/retro.mjs';
+import { shareOf } from '../orders/share.mjs';
 
 const MAX_PER_RULE = 5;
 
@@ -4150,6 +4151,126 @@ function vehicleCost(docs, ctx) {
   return out;
 }
 
+// ——— 2.512: стоимость доли ———
+// Оценка доли (оценка недвижимости, «Доля в квартире или доме», размер дробью в заявке): в отчёте — стоимость объекта
+// целиком, часть стоимости (целое × доля), скидка на долю и стоимость доли (таблица 2.511 или текст). В Word ячейки таблицы —
+// своими строками: значение ищется после названия в той же строке, иначе в следующей. Часть ≠ целое × доля или стоимость
+// доли ≠ часть × (1 − скидка) дальше 1% — находка с «Исправить в черновике». По способу из заявки: «рыночная» — скидка есть
+// и у неё назван источник; «часть стоимости целого» — скидки нет. Пропуски «[заполнить]» в расчёте — находка.
+const SH_VALUE = /стоимост\S*\s+(?:\S+\s+){0,2}?дол(?:и|ей)(?![а-яё])/iu;
+const SH_HEAD = /расч[её]т\S*\s+стоимост\S*\s+дол/iu;
+const SH_WHOLE = /стоимост\S*\s+(?:всего\s+|всей\s+|целого\s+)?(?:объекта|квартир\S*|жил\S*\s+дом\S*|дом\S*|помещени\S*)\s+(?:оценки\s+)?(?:целиком|в\s+целом)|стоимост\S*\s+(?:всего|всей|целого)\s+(?:объекта|квартир\S*|дом\S*|помещени\S*)/iu;
+const SH_PART = /част\S*\s+стоимост\S*\s+(?:всего\s+|всей\s+|целого\s+)?(?:объекта|квартир\S*|дом\S*|помещени\S*)/iu;
+const SH_DISC = /скидк\S*\s+(?:на|за)\s+(?:долю|долев\S*)|долев\S*\s+скидк\S*|корректировк\S*\s+на\s+(?:долю|долев\S*)/iu;
+const SH_GAP = /\[заполнить/iu;
+const SH_NONE = /не\s+применя|не\s+учитыва|без\s+скидк|отсутству/iu;
+const SH_SOURCE = /справочник|Лейфер|сборник|исследовани|статистик|https?:\/\/|по\s+данным|публикаци|методическ|\[\d+\]|источник\S*\s*[—:–-]?\s*[^\s[()—:–-]/iu;
+const SH_NUM = /(\d{1,3}(?:[   ]\d{3})+|\d{4,})(?:[,.](\d{1,2}))?(?![\d/])/u;
+const shKind = (l) => (SH_HEAD.test(l) ? 'head' : SH_DISC.test(l) ? 'disc' : SH_VALUE.test(l) ? 'value' : SH_PART.test(l) ? 'part' : SH_WHOLE.test(l) ? 'whole' : null);
+const shRe = { disc: SH_DISC, value: SH_VALUE, part: SH_PART, whole: SH_WHOLE };
+// Значение у названия: остаток строки после названия (без «, руб.», «, %», «(целое × 1/3)» и черт таблицы), а пустой — следующая
+// непустая строка, если она не другое название.
+function shCell(lines, n, kind) {
+  const line = lines[n].line;
+  const m = shRe[kind].exec(line);
+  const rest = line.slice(m.index + m[0].length).replace(/^\s*(?:\((?:[^()]|\([^()]*\))*\)\s*)?(?:[,:]\s*(?:руб\S*|%)\s*)?[|:—–\s-]*/u, '').replace(/[|\s]+$/u, '');
+  if (rest) return { text: rest, at: lines[n] };
+  for (let k = n + 1; k < Math.min(lines.length, n + 3); k += 1) {
+    const t = lines[k].line.replace(/^[|\s]+|[|\s]+$/gu, '');
+    if (!t) continue;
+    return shKind(t) ? null : { text: t, at: lines[k] };
+  }
+  return null;
+}
+// Сумма — с «руб.» где угодно в значении или голым числом в начале ячейки («6 000 000»); дата «01.10.2025» — не сумма.
+const shMoney = (text) => {
+  const r = moneyIn(text);
+  const m = r ? SH_NUM.exec(text.slice(r.index)) : /^[^\d[]{0,3}?(\d{1,3}(?:[   ]\d{3})+|\d{4,})(?:[,.](\d{1,2}))?(?![\d/.])/u.exec(text);
+  if (!m) return null;
+  const value = Number(m[1].replace(/[   ]/g, '')) + (m[2] ? Number(m[2].padEnd(2, '0')) / 100 : 0);
+  return value >= 1000 ? { value, raw: (r ? m[0] : m[0].replace(/^\D+/u, '')).trim() } : null;
+};
+const shPct = (text, label) => {
+  const m = /(\d{1,2}(?:[,.]\d{1,2})?)\s*%/u.exec(text) ?? (/%/.test(label) ? /^\D{0,3}?(\d{1,2}(?:[,.]\d{1,2})?)(?![\d.,]*\d{3})(?!\s*\/)/u.exec(text) : null);
+  return m ? Number(m[1].replace(',', '.')) : null;
+};
+const rub = (n) => Math.round(n).toLocaleString('ru-RU').replace(/\s/g, ' ');
+const shOff = (got, want) => Math.abs(got - want) > Math.max(1000, want * 0.01);
+function shareValue(docs, ctx) {
+  const fields = ctx.fields ?? {};
+  if ((ctx.service && ctx.service !== 'realty') || fields.object_type !== 'share') return [];
+  const s = shareOf(fields.share_size);
+  const main = mainReport(docs);
+  if (!s || !main) return [];
+  const lines = [];
+  eachPage(main, (raw, i) => raw.split('\n').forEach((l) => lines.push({ page: i, line: l })));
+  const got = { whole: [], part: [], value: [], disc: [] };
+  lines.forEach((x, n) => {
+    const kind = shKind(x.line);
+    if (!kind || kind === 'head') return;
+    const cell = shCell(lines, n, kind);
+    if (cell) got[kind].push({ ...cell, label: x.line, quote: x.line.trim().slice(0, 200) });
+  });
+  const out = [];
+  const part = `${s.a}/${s.b}`;
+  const gaps = [...got.whole, ...got.part, ...got.value, ...got.disc].filter((c) => SH_GAP.test(c.text));
+  if (gaps.length) {
+    out.push({ doc: main, page: gaps[0].at.page, quote: gaps[0].quote,
+      text: `В расчёте стоимости доли остались пропуски «[заполнить]» (${gaps.length}) — впишите суммы, скидку и её источник` });
+  }
+  const money = (list) => list.map((c) => ({ ...c, money: shMoney(c.text) })).filter((c) => c.money);
+  const whole = money(got.whole).at(-1);
+  const parts = money(got.part);
+  const values = money(got.value);
+  if (!whole && !values.length && !gaps.length) {
+    out.push({ doc: main, page: 0, quote: '',
+      text: `В отчёте не найден расчёт стоимости доли ${part}: нужны стоимость объекта целиком, часть стоимости (целое × ${part}), скидка на долю (или почему её нет) и стоимость доли — таблица «Расчёт стоимости доли» в черновике` });
+    return out;
+  }
+  // Скидка: процент, «не применяется» или ничего.
+  const disc = got.disc.map((c) => ({ ...c, pct: SH_NONE.test(c.text) ? 0 : shPct(c.text, c.label) }));
+  const pct = disc.find((c) => c.pct > 0) ?? disc.find((c) => c.pct === 0) ?? null;
+  const method = fields.share_method;
+  if (method === 'market') {
+    if (!pct || pct.pct === 0) {
+      out.push({ doc: main, page: pct?.at.page ?? 0, quote: pct?.quote ?? '',
+        text: `По заявке оценивается рыночная стоимость доли ${part}, а скидки на долю в отчёте ${pct ? 'нет («не применяется»)' : 'не найдено'}: доля продаётся дешевле части целого — укажите скидку на долю и её источник (справочник, таблица) или поясните, почему её нет` });
+    } else {
+      const i = lines.indexOf(pct.at);
+      const near = [pct.label, pct.text, ...lines.slice(i + 1, i + 3).map((x) => x.line)].join(' ');
+      if (!SH_SOURCE.test(near.replace(/\[заполнить[^\]]*\]/giu, ''))) {
+        out.push({ doc: main, page: pct.at.page, quote: pct.quote,
+          text: `У скидки на долю ${String(pct.pct).replace('.', ',')}% не назван источник — укажите справочник (с номером таблицы) или исследование рынка, откуда она взята` });
+      }
+    }
+  } else if (method === 'pro_rata' && pct?.pct > 0) {
+    out.push({ doc: main, page: pct.at.page, quote: pct.quote,
+      text: `По заявке оценивается часть стоимости всего объекта (целое × ${part}) без скидки, а в отчёте скидка на долю ${String(pct.pct).replace('.', ',')}% — уберите скидку или сверьте способ с определением суда (заданием на оценку)` });
+  }
+  if (!whole) return out;
+  const share = whole.money.value * s.a / s.b;
+  const wrongPart = parts.find((c) => shOff(c.money.value, share));
+  if (wrongPart) {
+    out.push({ doc: main, page: wrongPart.at.page, quote: wrongPart.quote,
+      fix: { bad: wrongPart.money.raw, right: rub(share), from: `по расчёту ${rub(whole.money.value)} × ${part}` },
+      text: `Часть стоимости объекта ${rub(wrongPart.money.value)} руб. не равна стоимости целого × ${part}: ${rub(whole.money.value)} × ${part} = ${rub(share)} руб. — пересчитайте` });
+  }
+  const base = parts.length && !wrongPart ? parts.at(-1).money.value : share;
+  const d = method === 'pro_rata' ? 0 : (pct?.pct ?? 0);
+  if (method === 'market' && !pct?.pct) return out;
+  const want = base * (1 - d / 100);
+  const seen = new Set();
+  for (const c of values) {
+    if (seen.has(c.money.value) || !shOff(c.money.value, want)) continue;
+    seen.add(c.money.value);
+    const how = d ? `${rub(base)} × (1 − ${String(d).replace('.', ',')}%)` : `${rub(whole.money.value)} × ${part}`;
+    out.push({ doc: main, page: c.at.page, quote: c.quote,
+      fix: { bad: c.money.raw, right: rub(want), from: `по расчёту ${how}` },
+      text: `Стоимость доли ${rub(c.money.value)} руб. не сходится с расчётом: ${how} = ${rub(want)} руб. — пересчитайте или исправьте ${d ? 'скидку' : 'стоимость целого'}` });
+  }
+  return out;
+}
+
 const WHOLE = {
   parts_match: partsMatch,
   goods_match: goodsMatch,
@@ -4178,6 +4299,7 @@ const WHOLE = {
   inherit_basis: inheritBasis,
   heir_objects: heirObjectsCheck,
   retro_basis: retroBasis,
+  share_value: shareValue,
 };
 
 const PER_DOC = {
@@ -4269,6 +4391,7 @@ export const AUTO_CHECKS = Object.freeze({
   inherit_basis: 'при оценке для наследства дата оценки в отчёте — день открытия наследства из заявки (если нет задания на оценку с датой), предполагаемый пользователь результатов — нотариус (наследники)',
   heir_objects: 'оценка для наследства, в составе наследства несколько объектов: каждый объект из заявки описан в отчёте и у него своя рыночная стоимость; общая стоимость — если просили, и она равна сумме по объектам',
   retro_basis: 'оценка задним числом: дата оценки раньше осмотра в деле — в отчёте сказано, что оценка ретроспективная, и допущение о состоянии объекта на дату оценки; цены, курсы валют, индексы и ставки — на дату оценки, а не позже',
+  share_value: 'оценка доли: часть стоимости — целое × доля, стоимость доли — часть × (1 − скидка); по способу из заявки: «рыночная» — скидка на долю с источником, «часть стоимости целого» — без скидки; в расчёте нет пропусков «[заполнить]»',
   parts_match: 'ущерб после ДТП: у каждой детали из таблицы повреждённых деталей дела есть фото осмотра и строка в калькуляции ремонта; каждая деталь из заявки «Что повреждено» есть в исследовании повреждений',
   repair_sums: 'ущерб после ДТП: стоимость ремонта с учётом износа не больше, чем без износа, и одна в расчёте и выводах; УТС легкового автомобиля старше 5 лет или с пробегом больше 100 000 км не посчитана (рекомендации РФЦСЭ 2018), об УТС сказано; в выводах суммы ремонта и УТС — и прописью; своя сумма в сверке со страховой — как в отчёте',
   repair_basis: 'ущерб после ДТП: дата ДТП и цены в расчёте — на дату ДТП из заявки; методика по цели из заявки: ОСАГО — Единая методика (755-П), суд и к виновнику — Методические рекомендации РФЦСЭ (2018)',
