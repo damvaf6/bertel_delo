@@ -14,6 +14,16 @@ function dueText(x) {
   return `срок ${dayRu(x.deadline)}${n === 0 ? ' — сегодня' : n === 1 ? ' — завтра' : n > 1 ? ` · ${n} дн.` : ''}`;
 }
 
+// Прогон 2.509: оценка для наследства — на прошлую дату и сколько объектов.
+const plural = (n, one, few, many) => { const a = n % 100; const b = n % 10; return a >= 11 && a <= 14 ? many : b === 1 ? one : b >= 2 && b <= 4 ? few : many; };
+function heirText(h) {
+  const when = h.months == null ? 'дата открытия наследства в заявке не указана'
+    : h.months < 1 ? 'дата оценки — день открытия наследства в этом месяце'
+    : `оценка на прошлую дату — ${h.months} ${plural(h.months, 'месяц', 'месяца', 'месяцев')} назад, нужны цены и объявления на ту дату`;
+  const objs = h.objects > 1 ? ` · в составе наследства ${h.objects} ${plural(h.objects, 'объект', 'объекта', 'объектов')} — стоимость каждого` : '';
+  return `Для нотариуса: ${when}${objs}`;
+}
+
 function item(x, onTake) {
   const take = el('button', { type: 'button', 'data-role': 'feed-take', text: 'Взять заказ' });
   const li = el('li', { 'data-order': x.id },
@@ -23,6 +33,7 @@ function item(x, onTake) {
   if (x.bank && !x.bank.accredited) {
     li.append(el('div', { class: 'overdue', 'data-role': 'feed-bank', text: 'Заказ для банка, а у Вас нет аккредитации в нём — банк может не принять отчёт' }));
   }
+  if (x.heir) li.append(el('div', { class: 'muted', 'data-role': 'feed-heir', text: heirText(x.heir) }));
   const msg = el('p', { class: 'msg', role: 'status', 'aria-live': 'polite' });
   take.addEventListener('click', async () => {
     take.disabled = true;

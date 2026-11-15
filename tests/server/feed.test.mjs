@@ -5,6 +5,8 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
+import { heirFeed } from '../../src/ops/feed-ops.mjs';
+import { heirNotices } from '../../src/orders/inheritance.mjs';
 
 let S, owner, dispatcher, a, b, mo, noPermit, plain;
 const ADDRESS = 'г. Москва, Лентовая ул., 7, кв. 12';
@@ -26,9 +28,9 @@ before(async () => {
 });
 after(async () => { await S?.close(); });
 
-async function order(title, { paid = true, submit = true } = {}) {
+async function order(title, { paid = true, submit = true, extra = {} } = {}) {
   const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title })).body.order;
-  const fields = { purpose: 'deal', region: 'moscow', object_type: 'flat', address: ADDRESS };
+  const fields = { purpose: 'deal', region: 'moscow', object_type: 'flat', address: ADDRESS, ...extra };
   assert.equal((await owner.req('PATCH', `/api/orders/${o.id}`, { fields, deadline: addDays(todayMsk(), 10) })).status, 200);
   if (submit) assert.equal((await owner.req('POST', `/api/orders/${o.id}/status`, { from: 'new', to: 'matching' })).status, 200);
   if (paid) await ensurePaid(S.sql, o.id, 1_000_000);
@@ -98,4 +100,26 @@ test('взять нельзя: чужой регион, без допуска, �
   assert.equal((await a.req('POST', '/api/specialist/feed/00000000-0000-4000-8000-000000000000/take')).status, 404);
   const [cur] = await S.sql`select status, executor_user_id from orders where id = ${o.id}`;
   assert.deepEqual(cur, { status: 'matching', executor_user_id: null }, 'заказ остался в подборе');
+});
+
+// Прогон 2.509: оценка для наследства в ленте — сколько месяцев назад дата оценки и сколько объектов, без даты и названий.
+test('прогон 2.509: в ленте — оценка для наследства на прошлую дату и число объектов, без даты смерти и названий', async () => {
+  const o = await order('Лента: наследство', { extra: { purpose: 'inheritance', death_date: '03.02.2025', notary: 'Нотариус Лентова',
+    heir_objects: 'Гараж в ГСК «Лентовый»\nАвтомобиль Лада' } });
+  const item = (await feed(a)).feed.find((x) => x.id === o.id);
+  assert.ok(item, 'заказ в ленте');
+  assert.equal(item.heir.objects, 3, 'основной и два других объекта');
+  assert.ok(item.heir.months >= 21, 'дата оценки больше 20 месяцев назад');
+  const raw = JSON.stringify(item);
+  assert.ok(!raw.includes('2025') && !raw.includes('Лентов') && !raw.includes('Гараж'), 'ни даты смерти, ни нотариуса, ни объектов');
+});
+
+test('прогон 2.509: месяцы до даты оценки и слова «объект/объекта/объектов»', () => {
+  assert.deepEqual(heirFeed({ fields: { purpose: 'inheritance', death_date: '15.03.2026' } }, '2026-11-14'), { months: 7, objects: 1 });
+  assert.deepEqual(heirFeed({ fields: { purpose: 'inheritance', death_date: '15.03.2026' } }, '2026-11-15'), { months: 8, objects: 1 });
+  assert.deepEqual(heirFeed({ fields: { purpose: 'inheritance' } }, '2026-11-15'), { months: null, objects: 1 });
+  assert.equal(heirFeed({ fields: { purpose: 'deal', death_date: '15.03.2026' } }), null);
+  const many = Array.from({ length: 20 }, (_, i) => `Объект ${i + 1}`).join('\n');
+  assert.match(heirNotices('realty', { purpose: 'inheritance', address: 'А', heir_objects: many })[0].text, /В составе наследства 21 объект:/);
+  assert.match(heirNotices('realty', { purpose: 'inheritance', address: 'А', heir_objects: 'Б\nВ\nГ\nД' })[0].text, /5 объектов:/);
 });

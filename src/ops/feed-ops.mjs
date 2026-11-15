@@ -12,6 +12,7 @@ import { notify, customersOf, dispatchers } from '../notify/notify.mjs';
 import { orderRef } from '../notify/registry.mjs';
 import { orderSplit } from '../money/money.mjs';
 import { todayMsk } from '../orders/workflow.mjs';
+import { heirObjects, inheritanceOf } from '../orders/inheritance.mjs';
 
 const FEED_LIMIT = 50;
 
@@ -56,8 +57,25 @@ function feedItem(order, registry, cand) {
     payout_kop: orderSplit(order).payoutKop,
     // Заказ для банка (2.453): нет аккредитации в этом банке — предупредить до того, как взять.
     bank: cand?.bank === undefined ? null : { accredited: !!cand.bank },
+    heir: heirFeed(order),
     since: order.paid_at,
   };
+}
+
+// Прогон 2.509: оценка для наследства — до того как взять, эксперт видит, что оценка на прошлую дату (сколько месяцев
+// назад — без самой даты: это день смерти человека) и сколько объектов в составе наследства. Это меняет работу: нужен
+// архив объявлений на ту дату, а объектов может быть несколько за одну цену.
+export function heirFeed(order, today = todayMsk()) {
+  const f = order.fields ?? {};
+  if (f.purpose !== 'inheritance') return null;
+  const h = inheritanceOf(f, today);
+  let months = null;
+  if (h?.state === 'ok') {
+    const [y1, m1, d1] = h.day.split('-').map(Number);
+    const [y2, m2, d2] = today.split('-').map(Number);
+    months = Math.max(0, (y2 - y1) * 12 + (m2 - m1) - (d2 < d1 ? 1 : 0));
+  }
+  return { months, objects: heirObjects(f).length + 1 };
 }
 
 export function feedOps() {
