@@ -116,9 +116,12 @@ export function remindPhrase({ at, body }) {
 // при которых фразы нет (продавец товар не проверял — нет и акта проверки); фраза без doc — без «Приложить можно …».
 // По транспорту (2.495): ПТС и СТС, машина на осмотр, сервисная книжка, договор лизинга или залога. doc — пункт или список
 // пунктов (ПТС и СТС): фразы нет, только когда получены все; запрошенные — «к пунктам «…» и «…»».
+// По наследству (2.505): дата смерти, справка нотариуса, документы на объект, кто покажет объект — when: только при цели
+// «наследство» в заявке.
 export function servicePhrases({ def, fields = {}, docItems = {}, due }) {
   const sid = def?.service.id;
-  const list = (def?.module.phrases ?? []).filter((p) => p.services.includes(sid));
+  const list = (def?.module.phrases ?? []).filter((p) => p.services.includes(sid)
+    && (!p.when || p.when.in.includes(String(fields[p.when.field] ?? ''))));
   const out = [];
   for (const p of list) {
     const docs = [].concat(p.doc ?? []);
