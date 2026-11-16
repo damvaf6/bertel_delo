@@ -91,3 +91,18 @@ export function placeShare(body, sections, lines) {
   const tail = body.slice(at);
   return `${head}\n\n${lines.join('\n')}${tail ? `\n${tail}` : '\n'}`;
 }
+
+// Скидка на долю из черновика (2.517, сводка руководителя): строка «Скидка на долю» таблицы «Расчёт стоимости доли» (или текста) —
+// процент числом; «не применяется» — 0; пропуск «[заполнить]» или строки нет — null.
+const DISC_LINE = /скидк\S*\s+(?:на|за)\s+(?:долю|долев\S*)|долев\S*\s+скидк\S*/iu;
+export function shareDiscount(body) {
+  for (const line of String(body ?? '').split('\n')) {
+    const m = DISC_LINE.exec(line);
+    if (!m) continue;
+    const rest = line.slice(m.index + m[0].length).replace(/^\s*,?\s*%/u, '');
+    if (/не\s+применя|без\s+скидк/iu.test(rest)) return 0;
+    const n = /(?<![\d\[])(\d{1,2}(?:[,.]\d{1,2})?)\s*%?(?![\d/])/u.exec(rest.split('[')[0]);
+    if (n) return Number(n[1].replace(',', '.'));
+  }
+  return null;
+}
