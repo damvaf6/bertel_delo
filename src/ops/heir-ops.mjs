@@ -2,7 +2,7 @@
 // после выдачи (оплата и «готово»), эксперт и служебные — как только есть файл отчёта. Стоимость, номер и дата — из файла.
 import { HttpError } from '../http/core.mjs';
 import { executorSignOrg, seesResults } from '../access/policy.mjs';
-import { heirValues, reportFacts } from '../ai/report-checks.mjs';
+import { heirValues, reportFacts, shareCase } from '../ai/report-checks.mjs';
 import { DOCX_MIME } from '../docs/docx.mjs';
 import { heirNoteData, heirNoteDoc } from '../docs/heir-note.mjs';
 import { heirMain, heirNoteCase } from '../orders/inheritance.mjs';
@@ -24,7 +24,7 @@ export function heirOps() {
         const { docs } = editionDocs(order, await resultDocs(sql, providers.storage, order));
         if (!docs.length) throw new HttpError(409, 'no_result', 'Файла отчёта в деле ещё нет');
         const readable = docs.filter((d) => d.pages);
-        const facts = reportFacts(readable);
+        const facts = reportFacts(readable, { share: shareCase(order.service, order.fields ?? {}) });
         if (facts.value_rub == null) throw new HttpError(409, 'no_value', 'В файле отчёта не нашлась рыночная стоимость — справку не собрать. Нотариусу подойдёт сам отчёт.');
         const svc = registry.service(order.module, order.service);
         const vd = valueDateFor(registry, order, await assignmentDocs(sql, providers.storage, order)) ?? inheritValueDate(registry, order);

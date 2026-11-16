@@ -2857,11 +2857,14 @@ const most = (list) => {
   return [...n].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
 };
 const FACT_KEYS = ['market', 'repair:wear', 'repair:nowear', 'fix', 'uts', 'market:share', 'market:novat', 'market:vat'];
-export function reportFacts(docs) {
+// Прогон 2.518: в отчёте об оценке доли рыночная стоимость целой квартиры тоже есть («стоимость объекта целиком»), а объект
+// оценки — доля: в перечень для СРО и справку нотариусу идёт стоимость доли (share — оценка доли по заявке, `shareCase`).
+export const shareCase = (service, fields = {}) => service === 'realty' && fields?.object_type === 'share';
+export function reportFacts(docs, { share = false } = {}) {
   const { nums, dates } = numbersAndDates(docs);
   const num = most(nums);
   const byKey = valuesByKey(docs);
-  const key = FACT_KEYS.find((k) => byKey.has(k));
+  const key = share && byKey.has('market:share') ? 'market:share' : FACT_KEYS.find((k) => byKey.has(k));
   return {
     number: num == null ? null : nums.find((e) => e.value === num).shown,
     made_on: most(dates),
@@ -3434,6 +3437,12 @@ function heirKeys(text) {
 const heirNorm = (t) => String(t).toLowerCase().replace(/ё/g, 'е');
 const heirHit = (keys, line) => { const l = heirNorm(line); const n = keys.filter((k) => l.includes(k)).length; return keys.length && n * 2 > keys.length; };
 const HEIR_TOTAL = /(?:общ(?:ая|ей|ую)|суммарн\S*|совокупн\S*)\s+(?:итогов\S*\s+)?(?:рыночн\S*\s+)?стоимост\S*|(?<![а-яё])(?:итого|всего)(?![а-яё])/iu;
+// Стоимость основного объекта наследства. Основной объект — доля (прогон 2.518): стоимость целой квартиры в отчёте тоже есть
+// («стоимость объекта целиком») — берётся только стоимость доли.
+function mainValues(byKey, service, fields) {
+  if (shareCase(service, fields ?? {}) && byKey.has('market:share')) return byKey.get('market:share');
+  return (byKey.get('market') ?? []).concat(byKey.get('market:share') ?? []);
+}
 function heirObjectsCheck(docs, ctx) {
   const set = heirSet(ctx.service, ctx.fields ?? {});
   if (!set) return [];
@@ -3467,7 +3476,7 @@ function heirObjectsCheck(docs, ctx) {
         text: `Заказчик просил общую стоимость всех объектов наследства (${set.others.length + 1}), а в отчёте её нет — добавьте строку «Общая рыночная стоимость …» с суммой по объектам` });
     } else if (found.length === set.others.length) {
       const total = totals.at(-1).money.value;
-      const market = [...new Set((valuesByKey([main]).get('market') ?? []).concat(valuesByKey([main]).get('market:share') ?? []).map((e) => e.value))]
+      const market = [...new Set(mainValues(valuesByKey([main]), ctx.service, ctx.fields).map((e) => e.value))]
         .filter((v) => v !== total && !found.includes(v));
       if (market.length === 1) {
         const sum = market[0] + found.reduce((a, b) => a + b, 0);
@@ -3501,7 +3510,7 @@ export function heirValues(docs, service, fields = {}) {
   const total = set.total && totals.length ? totals.at(-1).value : null;
   const byKey = valuesByKey([main]);
   const found = others.map((o) => o.value_rub).filter((v) => v != null);
-  const market = [...new Set((byKey.get('market') ?? []).concat(byKey.get('market:share') ?? []).map((e) => e.value))]
+  const market = [...new Set(mainValues(byKey, service, fields).map((e) => e.value))]
     .filter((v) => v !== total && !found.includes(v));
   return { rows: [{ name: set.main, value_rub: market.length === 1 ? market[0] : null }, ...others], total, want_total: set.total };
 }
