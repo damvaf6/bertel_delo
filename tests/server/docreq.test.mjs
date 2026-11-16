@@ -583,3 +583,46 @@ test('2.504: оценка для наследства — справка нот�
   assert.equal(r.egrn_old.inherit, false);
   assert.equal(r.egrn_old.on, today);
 });
+
+test('2.514: доля и раздел имущества — порядок пользования, свидетельство о браке, иск или соглашение о разделе', async () => {
+  const reg = createRegistry([expertise]);
+  const ids = (s, fields) => reg.requestDocs('expertise', s, null, fields).map((d) => d.id);
+  // Доля — порядок пользования; не определён — документа нет; брак и раздел — только при цели «раздел».
+  let got = ids('realty', { purpose: 'deal', object_type: 'share' });
+  assert.ok(got.includes('share_use_doc') && !got.includes('marriage_doc') && !got.includes('division_claim'), got.join());
+  assert.ok(!ids('realty', { purpose: 'deal', object_type: 'share', share_use: 'none' }).includes('share_use_doc'));
+  assert.ok(ids('realty', { purpose: 'deal', object_type: 'share', share_use: 'court' }).includes('share_use_doc'));
+  assert.ok(!ids('realty', { purpose: 'deal', object_type: 'flat' }).includes('share_use_doc'));
+  got = ids('realty', { purpose: 'division', object_type: 'flat' });
+  assert.ok(got.includes('share_use_doc') && got.includes('marriage_doc') && got.includes('division_claim'), got.join());
+  for (const s of ['land', 'vehicle', 'movable']) {
+    got = ids(s, { purpose: 'division' });
+    assert.ok(got.includes('marriage_doc') && got.includes('division_claim') && !got.includes('share_use_doc'), `${s}: ${got.join()}`);
+    assert.ok(!ids(s, { purpose: 'deal' }).includes('marriage_doc'), s);
+  }
+  assert.ok(!ids('goods', { purpose: 'division' }).includes('marriage_doc'));
+  // Ошибки описания: пустой список условий, поле не у всех услуг, skip не по полю-списку.
+  const bad = (d) => assert.throws(() => validateModule({ ...expertise, request_docs: [{ id: 'x', title: 'Документ', ...d }] }));
+  bad({ when: [] });
+  bad({ when: [{ field: 'purpose', in: ['division'] }, { field: 'object_type', in: ['share'] }] });
+  bad({ services: ['realty'], when: [{ field: 'purpose', in: ['нет'] }] });
+  bad({ services: ['realty'], skip: { field: 'address', in: ['x'] } });
+  bad({ services: ['realty'], skip: { field: 'share_use', in: [] } });
+  assert.doesNotThrow(() => validateModule({ ...expertise, request_docs: [...expertise.request_docs, { id: 'share_x', title: 'Документ', services: ['realty'], when: [{ field: 'purpose', in: ['division'] }], skip: { field: 'share_use', in: ['none'] } }] }));
+
+  // Дело о разделе: в списке исполнителя все три пункта, запрос — заказчик видит подсказки.
+  const o = await inWork('Квартира: раздел имущества', 'realty', { ...FIELDS, purpose: 'division', object_type: 'share', share_size: '1/2' });
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  const r = (await spec.req('GET', `/api/orders/${o.id}/doc-requests`)).body;
+  const cat = r.catalog.map((c) => c.id);
+  assert.ok(['share_use_doc', 'marriage_doc', 'division_claim'].every((x) => cat.includes(x)), cat.join());
+  const sent = await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { items: ['share_use_doc', 'marriage_doc'] });
+  assert.equal(sent.status, 201, JSON.stringify(sent.body));
+  const mine = (await owner.req('GET', `/api/orders/${o.id}/doc-requests`)).body.requests;
+  assert.match(mine.find((x) => x.item_id === 'share_use_doc').hint, /скидка на долю/);
+  assert.match(mine.find((x) => x.item_id === 'marriage_doc').hint, /с какого дня имущество общее/);
+  // Пункт не из списка этой заявки не принимается.
+  const o2 = await inWork('Квартира: купля-продажа', 'realty', FIELDS);
+  assert.equal((await spec.req('POST', `/api/orders/${o2.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  assert.equal((await spec.req('POST', `/api/orders/${o2.id}/doc-requests`, { items: ['marriage_doc'] })).status, 400);
+});
