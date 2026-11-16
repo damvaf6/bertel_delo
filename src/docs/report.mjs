@@ -154,7 +154,7 @@ export function placeCustomer(body, sections, customer) {
 }
 
 function itemsTableFor(registry, order) {
-  const positions = listPositions(registry.analogs(order.module, order.service), order);
+  const positions = listPositions(registry.analogs(order.module, order.service, order.fields), order);
   return positions.length ? itemsTable(positions) : [];
 }
 
@@ -178,7 +178,7 @@ function placeAnalogs(text, sections, table) {
 
 // Подтверждённые аналоги дела → таблица под разделом и приложение со скриншотами (дата получения платформой, ссылка, отпечаток).
 async function analogsPart({ sql, providers, registry }, order, text) {
-  const spec = registry.analogs(order.module, order.service);
+  const spec = registry.analogs(order.module, order.service, order.fields);
   if (!spec) return { text, appendix: null };
   const sections = orderSections(registry, order);
   // Перечень (2.83) — по позициям: приложение со скриншотами в том же порядке и с теми же номерами, что таблица.

@@ -75,7 +75,7 @@ const publicAnalog = (a, warnings, repeat) => ({
 });
 
 async function view({ sql, actor, order, registry, providers }) {
-  const spec = registry.analogs(order.module, order.service);
+  const spec = registry.analogs(order.module, order.service, order.fields);
   const list = await loadAnalogs(sql, order.id);
   // 2.493: пробег по прибору с последнего завершённого выезда помощника важнее пробега из заявки.
   const [visit] = spec.fields.some((f) => f.near?.onsite)
@@ -123,7 +123,7 @@ export function analogOps() {
       id: 'analogs.list', method: 'GET', path: '/api/orders/:id/analogs', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
       async handler(ctx) {
-        guard(ctx.actor, ctx.order, ctx.registry.analogs(ctx.order.module, ctx.order.service));
+        guard(ctx.actor, ctx.order, ctx.registry.analogs(ctx.order.module, ctx.order.service, ctx.order.fields));
         return view(ctx);
       },
     },
@@ -133,7 +133,7 @@ export function analogOps() {
       access: { resource: 'order', param: 'id', need: 'read' },
       async handler(ctx) {
         const { sql, actor, order, registry, body, res } = ctx;
-        const spec = registry.analogs(order.module, order.service);
+        const spec = registry.analogs(order.module, order.service, order.fields);
         guardEdit(actor, order, spec);
         const u = cleanUrl(body?.url);
         const id = await sql.tx(async (tx) => {
@@ -155,7 +155,7 @@ export function analogOps() {
       access: { resource: 'order', param: 'id', need: 'read' }, body: 'raw', limit: ANALOG_FILE_MAX,
       async handler(ctx) {
         const { sql, actor, order, registry, providers, params, req, body } = ctx;
-        guardEdit(actor, order, registry.analogs(order.module, order.service));
+        guardEdit(actor, order, registry.analogs(order.module, order.service, order.fields));
         const cur = await ownAnalog(sql, order, params.analog);
         if (!Buffer.isBuffer(body) || body.length === 0) throw new HttpError(400, 'empty_file', 'Файл пустой');
         const kind = fileKind(body);
@@ -188,7 +188,7 @@ export function analogOps() {
       id: 'analogs.file.link', method: 'GET', path: '/api/orders/:id/analogs/:analog/file', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
       async handler({ sql, actor, order, registry, providers, params }) {
-        guard(actor, order, registry.analogs(order.module, order.service));
+        guard(actor, order, registry.analogs(order.module, order.service, order.fields));
         const a = await ownAnalog(sql, order, params.analog);
         if (!a.file_key) throw new HttpError(404, 'not_found', 'Скриншот не загружен');
         return { url: await providers.storage.link(a.file_key, { filename: a.file_name }) };
@@ -201,7 +201,7 @@ export function analogOps() {
       access: { resource: 'order', param: 'id', need: 'read' },
       async handler(ctx) {
         const { sql, actor, order, registry, providers, params, body } = ctx;
-        const spec = registry.analogs(order.module, order.service);
+        const spec = registry.analogs(order.module, order.service, order.fields);
         guardEdit(actor, order, spec);
         const a = await ownAnalog(sql, order, params.analog);
         const pasted = typeof body?.text === 'string' ? body.text.slice(0, ANALOG_TEXT_MAX).trim() : '';
@@ -231,7 +231,7 @@ export function analogOps() {
       access: { resource: 'order', param: 'id', need: 'read' },
       async handler(ctx) {
         const { sql, actor, order, registry, params, body } = ctx;
-        const spec = registry.analogs(order.module, order.service);
+        const spec = registry.analogs(order.module, order.service, order.fields);
         guardEdit(actor, order, spec);
         const fields = cleanAnalogValues(spec, body?.fields);
         const adjustments = body?.adjustments === undefined ? null : cleanAdjustments(spec, body.adjustments);
@@ -256,7 +256,7 @@ export function analogOps() {
       access: { resource: 'order', param: 'id', need: 'read' },
       async handler(ctx) {
         const { sql, actor, order, registry, params } = ctx;
-        guardEdit(actor, order, registry.analogs(order.module, order.service));
+        guardEdit(actor, order, registry.analogs(order.module, order.service, order.fields));
         await sql.tx(async (tx) => {
           const row = await ownAnalog(tx, order, params.analog, { lock: true });
           await tx`update order_analogs set deleted_at = now() where id = ${row.id}`;
