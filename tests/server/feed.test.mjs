@@ -5,7 +5,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
-import { heirFeed } from '../../src/ops/feed-ops.mjs';
+import { heirFeed, shareFeed } from '../../src/ops/feed-ops.mjs';
 import { heirNotices } from '../../src/orders/inheritance.mjs';
 
 let S, owner, dispatcher, a, b, mo, noPermit, plain;
@@ -122,4 +122,27 @@ test('прогон 2.509: месяцы до даты оценки и слова 
   const many = Array.from({ length: 20 }, (_, i) => `Объект ${i + 1}`).join('\n');
   assert.match(heirNotices('realty', { purpose: 'inheritance', address: 'А', heir_objects: many })[0].text, /В составе наследства 21 объект:/);
   assert.match(heirNotices('realty', { purpose: 'inheritance', address: 'А', heir_objects: 'Б\nВ\nГ\nД' })[0].text, /5 объектов:/);
+});
+
+// 2.516: оценка доли в ленте — размер доли и способ до «Взять заказ»; способ и порядок пользования — в этой строке, а не
+// фактами; сведений о собственниках — нет.
+test('2.516: в ленте у доли — размер и способ оценки, без сведений о собственниках', async () => {
+  const o = await order('Лента: доля', { extra: { object_type: 'share', share_size: '1/3', share_method: 'pro_rata',
+    share_use: 'none', share_owners: 'Брат Лентов — 2/3, живёт там' } });
+  const item = (await feed(a)).feed.find((x) => x.id === o.id);
+  assert.ok(item, 'заказ в ленте');
+  assert.deepEqual(item.share, { size: '1/3', method: 'pro_rata', use: 'none', court: false });
+  assert.ok(!item.facts.some((f) => /как оценивать/.test(f.label)), 'способ — не отдельным фактом');
+  assert.ok(!item.facts.some((f) => /порядок/.test(f.label)), 'порядок пользования — не отдельным фактом');
+  assert.ok(!JSON.stringify(item).includes('Лентов'), 'о собственниках — ничего');
+  const flat = await order('Лента: не доля', { extra: { object_type: 'flat', share_size: '1/3' } });
+  assert.equal((await feed(a)).feed.find((x) => x.id === flat.id).share, null);
+});
+
+test('2.516: размер доли только дробью, способ и суд', () => {
+  const sh = (fields, service = 'realty') => shareFeed({ service, fields: { object_type: 'share', ...fields } });
+  assert.deepEqual(sh({ share_size: ' 1 / 2 ', share_method: 'market' }), { size: '1/2', method: 'market', use: null, court: false });
+  assert.deepEqual(sh({ share_size: 'половина', purpose: 'division', share_use: 'court' }), { size: null, method: null, use: 'court', court: true });
+  assert.deepEqual(sh({ share_size: '3/2', share_method: 'xx', purpose: 'court' }), { size: null, method: null, use: null, court: true });
+  assert.equal(sh({ share_size: '1/3' }, 'vehicle'), null);
 });

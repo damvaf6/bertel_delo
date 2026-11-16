@@ -13,6 +13,7 @@ import { orderRef } from '../notify/registry.mjs';
 import { orderSplit } from '../money/money.mjs';
 import { todayMsk } from '../orders/workflow.mjs';
 import { heirObjects, inheritanceOf } from '../orders/inheritance.mjs';
+import { shareOf } from '../orders/share.mjs';
 
 const FEED_LIMIT = 50;
 
@@ -41,9 +42,11 @@ async function eligible(sql, order, userId, regions, registry) {
 // Строка ленты: без адреса, имён, телефонов и свободного текста — только выбранное из списков.
 function feedItem(order, registry, cand) {
   const svc = registry.service(order.module, order.service);
+  const share = shareFeed(order);
   const facts = [];
   for (const f of svc?.fields ?? []) {
     if (f.type !== 'select') continue;
+    if (share && ['share_method', 'share_use'].includes(f.id)) continue; // способ и порядок — в строке о доле (2.516)
     const v = order.fields?.[f.id];
     const opt = f.options?.find((o) => o.id === v);
     if (opt) facts.push({ label: f.label, value: opt.name });
@@ -58,6 +61,7 @@ function feedItem(order, registry, cand) {
     // Заказ для банка (2.453): нет аккредитации в этом банке — предупредить до того, как взять.
     bank: cand?.bank === undefined ? null : { accredited: !!cand.bank },
     heir: heirFeed(order),
+    share,
     since: order.paid_at,
   };
 }
@@ -76,6 +80,18 @@ export function heirFeed(order, today = todayMsk()) {
     months = Math.max(0, (y2 - y1) * 12 + (m2 - m1) - (d2 < d1 ? 1 : 0));
   }
   return { months, objects: heirObjects(f).length + 1 };
+}
+
+// 2.516: оценка доли — до того как взять, эксперт видит размер доли и способ: рыночная стоимость доли (скидка на долю с
+// источником) или часть стоимости целого (без скидки); способ не указан — уточнять (для суда — по определению); порядок
+// пользования — из списка. Размер — только дробью (это не личные сведения); иначе — «не указан».
+export function shareFeed(order) {
+  const f = order.fields ?? {};
+  if (order.service !== 'realty' || f.object_type !== 'share') return null;
+  const s = shareOf(f.share_size);
+  const method = ['market', 'pro_rata'].includes(f.share_method) ? f.share_method : null;
+  const use = ['agreement', 'court', 'none'].includes(f.share_use) ? f.share_use : null;
+  return { size: s ? `${s.a}/${s.b}` : null, method, use, court: ['court', 'division'].includes(f.purpose) };
 }
 
 export function feedOps() {

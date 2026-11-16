@@ -24,6 +24,16 @@ function heirText(h) {
   return `Для нотариуса: ${when}${objs}`;
 }
 
+// 2.516: оценка доли — размер и способ.
+function shareText(s) {
+  const size = s.size ? `доля ${s.size}` : 'доля — размер в заявке не указан';
+  const how = s.method === 'market' ? 'рыночная стоимость со скидкой на долю — нужна скидка с источником'
+    : s.method === 'pro_rata' ? 'часть стоимости целого — целое × доля, без скидки'
+    : s.court ? 'способ не указан — уточнить по определению суда' : 'способ не указан — уточнить у заказчика';
+  const use = { agreement: 'порядок пользования — по соглашению', court: 'порядок пользования — по решению суда', none: 'порядок пользования не определён' }[s.use];
+  return `Оценка доли: ${size} · ${how}${use ? ` · ${use}` : ''}`;
+}
+
 function item(x, onTake) {
   const take = el('button', { type: 'button', 'data-role': 'feed-take', text: 'Взять заказ' });
   const li = el('li', { 'data-order': x.id },
@@ -33,6 +43,7 @@ function item(x, onTake) {
   if (x.bank && !x.bank.accredited) {
     li.append(el('div', { class: 'overdue', 'data-role': 'feed-bank', text: 'Заказ для банка, а у Вас нет аккредитации в нём — банк может не принять отчёт' }));
   }
+  if (x.share) li.append(el('div', { class: 'muted', 'data-role': 'feed-share', text: shareText(x.share) }));
   if (x.heir) li.append(el('div', { class: 'muted', 'data-role': 'feed-heir', text: heirText(x.heir) }));
   const msg = el('p', { class: 'msg', role: 'status', 'aria-live': 'polite' });
   take.addEventListener('click', async () => {
