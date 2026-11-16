@@ -60,7 +60,7 @@ test('2.513: аналоги для доли — доли и целые объе�
     ids.push(a);
   }
 
-  await db((c) => c.query("update order_analogs set file_key = 'analogs/test/' || id, file_name = 'Скриншот.png', file_mime = 'image/png', file_size = 1 where order_id = $1", [o.id]));
+  await db((c) => c.query("update order_analogs set file_key = 'analogs/test/' || id, file_name = 'Скриншот.png', file_mime = 'image/png', file_size = 1, file_sha256 = repeat('a', 64), received_at = now() where order_id = $1", [o.id]));
   await ep.goto(`/kabinet#order=${o.id}`);
   await expect(ep.locator('#analogs-box')).toBeVisible();
   const third = ep.locator(`[data-analog="${ids[2]}"]`);
