@@ -28,6 +28,7 @@
 import { OTHER_BANK, bankList } from '../dossier/dossier.mjs';
 import { HttpError } from '../http/core.mjs';
 import { orderSplit } from '../money/money.mjs';
+import { shareDiscount } from '../orders/share.mjs';
 import { addDays, isOverdue, todayMsk } from '../orders/workflow.mjs';
 
 export const REPORT_MONTHS_BACK = 12;
@@ -156,6 +157,7 @@ async function orgMonthDone(sql, orgId, ids, { start, end }) {
       select distinct on (o.id) o.id, o.module, o.service, o.executor_user_id as user_id, o.deadline, o.price_kop, o.transit_kop, o.expert_kop,
              o.fields->>'purpose' as purpose, o.fields->>'bank' as bank, o.fields->>'method' as method, o.fields->>'goods_kind' as goods_kind,
              o.fields->>'vehicle_type' as vehicle_type, o.fields->>'death_date' as death_date, o.fields->>'heir_objects' as heir_objects,
+             o.fields->>'object_type' as object_type, o.fields->>'share_method' as share_method,
              p.amount_kop as payout_kop, h.at,
              greatest(
                (select max(f.outcome_at) from order_offers f
@@ -776,6 +778,30 @@ function byHeir(heir, registry) {
   });
 }
 
+// Доли и раздел имущества за месяц (2.517): сданные дела оценки доли (у услуги есть «Размер доли» — share_size, вид объекта
+// «Доля в квартире или доме») — сколько, каким способом по заявке (рыночная со скидкой / часть стоимости целого / не указан) и
+// средняя скидка на долю у «рыночной» — из таблицы «Расчёт стоимости доли» последней версии черновика (`shareDiscount`);
+// скидка не вписана — «без скидки в черновике». Раздел имущества — сданные дела с целью «Раздел имущества», из них — доли.
+const shareOfDone = (done, registry) => (registry ? done.filter((o) => o.module && o.object_type === 'share'
+  && registry.service(o.module, o.service)?.fields.some((f) => f.id === 'share_size')) : []);
+const shareDraftsQ = async (sql, ids) => (!ids.length ? [] : sql`
+  select distinct on (order_id) order_id, body from result_drafts where order_id = any(${ids}::uuid[]) order by order_id, id desc`);
+// { share_cases, share_market, share_pro_rata, share_no_method, share_disc_avg, share_no_disc, division_cases, division_share }.
+function shareCalc(shares, division, discs) {
+  const market = shares.filter((o) => o.share_method === 'market');
+  const pcts = market.map((o) => discs.get(o.id)).filter((d) => d > 0);
+  return {
+    share_cases: shares.length,
+    share_market: market.length,
+    share_pro_rata: shares.filter((o) => o.share_method === 'pro_rata').length,
+    share_no_method: shares.filter((o) => !['market', 'pro_rata'].includes(o.share_method)).length,
+    share_disc_avg: pcts.length ? Math.round((pcts.reduce((s, d) => s + d, 0) / pcts.length) * 10) / 10 : null,
+    share_no_disc: market.length - pcts.length,
+    division_cases: division.length,
+    division_share: division.filter((o) => o.object_type === 'share').length,
+  };
+}
+
 export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), now = new Date(), registry = null, taskDue = null, taskAfter = null,
   taskMove = null } = {}) {
   const year = isYear(month);
@@ -835,6 +861,10 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), no
   const goods = goodsOf(q.done, registry);
   const veh = vehicleOf(q.done, registry);
   const heir = heirOf(q.done, registry);
+  const shares = shareOfDone(q.done, registry);
+  const division = registry ? q.done.filter((o) => o.module && o.purpose === 'division') : [];
+  const discs = new Map((await shareDraftsQ(sql, shares.filter((o) => o.share_method === 'market').map((o) => o.id)))
+    .map((d) => [d.order_id, shareDiscount(d.body)]));
   const defs = new Map();
   for (const d of await defectsQ(sql, goods.map((o) => o.id))) (defs.get(d.order_id) ?? defs.set(d.order_id, []).get(d.order_id)).push(d);
   const count = (rows) => new Map(rows.map((r) => [r.user_id, r.n]));
@@ -887,6 +917,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), no
       ...goodsCalc(goods.filter((o) => o.user_id === e.user_id), defs),
       ...vehCalc(veh.filter((o) => o.user_id === e.user_id)),
       ...heirCalc(heir.filter((o) => o.user_id === e.user_id)),
+      ...shareCalc(shares.filter((o) => o.user_id === e.user_id), division.filter((o) => o.user_id === e.user_id), discs),
       disp_reasons: topRemarks(q.dispReasons.filter((i) => i.user_id === e.user_id && i.text), TOP_REMARKS_EXPERT)
         .map(({ text, n }) => ({ text, n })),
       prev: cmp ? cmp.experts.get(e.user_id) : null,
@@ -911,6 +942,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), no
       ...egrnFirst(q.firstSign, registry), ...bankTask(q.bankTask), ...taskLate(taskDues),
       ...bankAfter(bankAfters), ...bankAccr(q.done, accr), ...ext(exts), ...letterAsk(q.letterAsk), ...orgSign(q.done), ...afterRemarks(q.afterRemarks, afterItems),
       ...court(q.court, now), ...carCalc(car, calcs), ...goodsCalc(goods, defs), ...vehCalc(veh), ...heirCalc(heir),
+      ...shareCalc(shares, division, discs),
       prev: cmp ? cmp.total : null },
     prev_month: cmp ? prevM : null,
     prev_month_name: cmp ? periodRu(prevM) : null,
@@ -1182,6 +1214,12 @@ export function reportCsv(orgName, r) {
       [], ['Оценка для наследства — по экспертам', 'Сдано', 'Несколько объектов', 'Без даты открытия наследства', 'Дата оценки раньше сдачи, месяцев'],
       ...[...r.experts.filter((x) => x.heir_cases).map((x) => [x.full_name, x]), ['Итого', r.total]]
         .map(([name, x]) => [name, x.heir_cases, x.heir_multi, x.heir_no_date, daysCell(x.heir_lag_months)])] : []),
+    // 2.517: только если за месяц сданы доли или дела для раздела имущества — по экспертам.
+    ...(r.total.share_cases || r.total.division_cases ? [[], ['Доли и раздел имущества — по экспертам', 'Доли: сдано', 'Рыночная со скидкой',
+      'Часть стоимости целого', 'Способ не указан', 'Средняя скидка на долю, %', 'Без скидки в черновике', 'Раздел имущества: сдано', 'Из них доли'],
+    ...[...r.experts.filter((x) => x.share_cases || x.division_cases).map((x) => [x.full_name, x]), ['Итого', r.total]]
+      .map(([name, x]) => [name, x.share_cases, x.share_market, x.share_pro_rata, x.share_no_method, daysCell(x.share_disc_avg),
+        x.share_no_disc, x.division_cases, x.division_share])] : []),
   ];
   return `﻿${lines.map((l) => l.map(cell).join(';')).join('\r\n')}\r\n`;
 }

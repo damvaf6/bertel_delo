@@ -70,6 +70,15 @@ const vehLine = (n, d) => [casesN(n), d == null ? null : `в среднем ${da
 const heirLine = (n, multi, lag, noDate) => [casesN(n), multi ? `несколько объектов: ${multi}` : null,
   lag == null ? null : `дата оценки раньше сдачи в среднем на ${String(lag).replace('.', ',')} мес.`,
   noDate ? `без даты открытия наследства: ${noDate}` : null].filter(Boolean).join(' · ');
+// 2.517: «доли: 3 дела (рыночная со скидкой: 2, часть стоимости целого: 1) · средняя скидка на долю 15% · без скидки в черновике: 1
+// · раздел имущества: 2 дела, из них доли: 1».
+const shareLine = (x) => [x.share_cases ? `доли: ${casesN(x.share_cases)} (${[x.share_market ? `рыночная со скидкой: ${x.share_market}` : null,
+  x.share_pro_rata ? `часть стоимости целого: ${x.share_pro_rata}` : null, x.share_no_method ? `способ не указан: ${x.share_no_method}` : null]
+  .filter(Boolean).join(', ')})` : null,
+x.share_disc_avg == null ? null : `средняя скидка на долю ${String(x.share_disc_avg).replace('.', ',')}%`,
+x.share_no_disc ? `без скидки в черновике: ${x.share_no_disc}` : null,
+x.division_cases ? `раздел имущества: ${casesN(x.division_cases)}${x.division_share ? `, из них доли: ${x.division_share}` : ''}` : null]
+  .filter(Boolean).join(' · ');
 const daysRu = (d) => `${String(d).replace('.', ',')} ${!Number.isInteger(d) ? 'дня' : d % 10 === 1 && d % 100 !== 11 ? 'день'
   : [2, 3, 4].includes(d % 10) && ![12, 13, 14].includes(d % 100) ? 'дня' : 'дней'}`;
 // «в первоначальный срок, без переносов: 3 из 5 · в среднем 4,5 дня от принятия до сдачи · позже первоначального срока: 2
@@ -314,6 +323,12 @@ async function load(month) {
   $('org-report-heir-experts').replaceChildren(...report.experts.filter((x) => x.heir_cases).map((x) => el('li', { 'data-report-heir-expert': x.user_id },
     el('div', { class: 'title', text: x.full_name }),
     el('div', { class: 'muted', text: heirLine(x.heir_cases, x.heir_multi, x.heir_lag_months, x.heir_no_date) }))));
+  // 2.517: доли и раздел имущества — всего и по экспертам.
+  $('org-report-share-box').classList.toggle('hidden', !t2.share_cases && !t2.division_cases);
+  $('org-report-share-total').textContent = t2.share_cases || t2.division_cases ? `Сдано: ${shareLine(t2)}.` : '';
+  $('org-report-share-experts').replaceChildren(...report.experts.filter((x) => x.share_cases || x.division_cases)
+    .map((x) => el('li', { 'data-report-share-expert': x.user_id },
+      el('div', { class: 'title', text: x.full_name }), el('div', { class: 'muted', text: shareLine(x) }))));
   const top = report.top_remarks ?? [];
   $('org-report-remarks-box').classList.toggle('hidden', !top.length);
   $('org-report-remarks').replaceChildren(...top.map((x) => el('li', { 'data-remark': '' },
