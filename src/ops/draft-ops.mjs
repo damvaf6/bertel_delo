@@ -20,7 +20,7 @@ import { READ_MAX_BYTES, extractPages, readableKind } from '../ai/extract.mjs';
 import { DOCX_MIME } from '../docs/docx.mjs';
 import { fillTables, orderMaterials, orderSections, placeCustomer, reportEdition, reportFor, tablesBrief } from '../docs/report.mjs';
 import { APPROACHES } from '../modules/index.mjs';
-import { analogsBrief } from '../analogs/analogs.mjs';
+import { analogsBrief, rentSummary } from '../analogs/analogs.mjs';
 import { publicDoc, saveDocument } from './core-ops.mjs';
 import { audit, sendFile } from './util.mjs';
 import { fillDraft, itemLine, loadDossier } from '../dossier/dossier.mjs';
@@ -129,6 +129,14 @@ export async function reportNumber(ctx, order, actor) {
              report_number_org = ${src.org?.id ?? null} where id = ${order.id}`;
     return number;
   });
+}
+
+// Аналоги аренды у нежилого (2.523): средняя ставка за кв. м в месяц по подтверждённым — к строке «Рыночная ставка аренды»
+// таблицы доходного подхода. Номера — по всему списку раздела «Аналоги» (как видит эксперт). Нет таких — null.
+async function incomeRent(sql, registry, order) {
+  const spec = registry.analogs(order.module, order.service, order.fields);
+  if (!spec) return null;
+  return rentSummary(spec, await sql`select * from order_analogs where order_id = ${order.id} and deleted_at is null order by id`);
 }
 
 // Номер отчёта в деле (2.413) — только самому исполнителю: выданный ему номер и дата, есть ли образец (свой в профиле или
@@ -652,6 +660,8 @@ export function draftOps() {
           share: editsDraft(actor, order) && sections.some((x) => x.share) ? shareTable(order.service, order.fields ?? {}) : null,
           // 2.521: таблица «Расчёт доходным подходом» у нежилого (площадь и плата по договору — из заявки) — для кнопки «Вставить».
           income: editsDraft(actor, order) && sections.some((x) => x.income) ? incomeTable(order.service, order.fields ?? {}) : null,
+          // 2.523: средняя ставка подтверждённых аналогов аренды (номера — как в разделе «Аналоги») — подсказкой к таблице.
+          income_rent: editsDraft(actor, order) && sections.some((x) => x.income) ? await incomeRent(sql, registry, order) : null,
           // Подходы к оценке (2.33): список — если исполнитель их выбирает для этой услуги; chosen — что отмечено.
           approaches: registry.approachesFor(order.module, order.service)
             ? { list: Object.entries(APPROACHES).map(([id, name]) => ({ id, name })), chosen: order.approaches ?? null }

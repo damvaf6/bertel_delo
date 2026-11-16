@@ -146,6 +146,8 @@ function card(a, i, data) {
     el('div', { class: 'photo-meta', text: meta }),
     ...(a.copied && !a.confirmed ? [el('p', { class: 'muted', 'data-copied': '', text: 'Взят из Вашего прошлого дела с тем же объектом — проверьте, годится ли объявление на новую дату оценки, и подтвердите.' })] : []),
     ...(a.file ? [el('button', { type: 'button', class: 'link', onclick: () => openFile(a) }, 'Открыть скриншот')] : []),
+    // 2.523: аналог аренды у нежилого — ставка за кв. м в месяц; в сравнительный подход не идёт.
+    ...(a.rent_rate ? [el('p', { class: 'muted', 'data-rent': '', text: `Аренда: ${a.rent_rate.toLocaleString('ru-RU')} руб. за кв. м в месяц — для доходного подхода, в сравнительный не идёт` })] : []),
     ...(a.warnings.length ? [el('ul', { class: 'analog-warn' }, ...a.warnings.map((w) => el('li', { text: w })))] : []),
     fieldsBox,
     adjBox,

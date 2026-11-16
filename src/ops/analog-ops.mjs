@@ -9,7 +9,7 @@ import { editsDraft, seesDraft } from '../access/policy.mjs';
 import { ANALOG_TEXT_MAX, analogMessages, askAi, parseJsonAnswer } from '../ai/ai.mjs';
 import { extractPages } from '../ai/extract.mjs';
 import { OCR_MIME } from '../providers/ocr.mjs';
-import { adjusted, adjustKinds, analogFields, analogWarnings, cleanAdjustments, cleanAnalogValues, cleanUrl, hostOf, listPositions, missingAnalog, repeatText, searchHints, suggestionValues } from '../analogs/analogs.mjs';
+import { adjusted, adjustKinds, analogFields, analogWarnings, cleanAdjustments, cleanAnalogValues, cleanUrl, hostOf, listPositions, missingAnalog, rentRate, repeatText, searchHints, suggestionValues } from '../analogs/analogs.mjs';
 import { audit, text as textFrom } from './util.mjs';
 import { assignmentDocs } from './ai-ops.mjs';
 import { inheritValueDate, valueDateFor } from './draft-ops.mjs';
@@ -62,6 +62,8 @@ const publicAnalog = (a, warnings, repeat) => ({
   fields: a.fields,
   adjustments: a.adjustments ?? [],
   adjusted: adjusted(a),
+  // 2.523: аналог аренды у нежилого — ставка за кв. м в месяц (плата / площадь).
+  rent_rate: rentRate(a),
   suggested: a.suggested,
   ai_model: a.ai_model,
   confirmed: !!a.confirmed_at,
