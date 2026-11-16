@@ -69,19 +69,20 @@ export function shareTable(serviceId, fields = {}) {
   return rows;
 }
 
-// Прежняя такая таблица — заменяется; иначе — в конец раздела с share (перед следующим заголовком) через пустую строку,
+// Прежняя такая таблица (по строке заголовка) — заменяется; иначе — в конец раздела с флагом (share; доходный подход — income, 2.521)
+// перед следующим заголовком через пустую строку,
 // чтобы не слиться с таблицей весов подходов; раздела нет — текст как есть.
-export function placeShare(body, sections, lines) {
+export function placeShare(body, sections, lines, flag = 'share') {
   if (!lines) return body;
   const all = body.split('\n');
-  const old = all.findIndex((l) => l.trim() === SHARE_HEAD);
+  const old = all.findIndex((l) => l.trim() === lines[0]);
   if (old >= 0) {
     let end = old + 1;
     while (end < all.length && all[end].trim().startsWith('|')) end += 1;
     all.splice(old, end - old, ...lines);
     return all.join('\n');
   }
-  const s = sections.find((x) => x.share);
+  const s = sections.find((x) => x[flag]);
   if (!s) return body;
   const m = [...body.matchAll(/^#{1,3}\s*(.+)$/gm)].find((h) => headKey(h[1]) === headKey(s.title));
   if (!m) return body;
