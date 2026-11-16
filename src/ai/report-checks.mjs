@@ -4280,6 +4280,122 @@ function shareValue(docs, ctx) {
   return out;
 }
 
+// ——— 2.522: доходный подход у нежилого помещения ———
+// Нежилое помещение (оценка недвижимости, object_type: commercial): в отчёте — расчёт доходным подходом (таблица 2.521 или
+// текст): площадь × ставка аренды = ПВД, ПВД × (1 − недозагрузка) = ДВД, ДВД − расходы = ЧОД, ЧОД / ставка капитализации =
+// стоимость. Каждый шаг сверяется по суммам самого отчёта (расхождение больше 1% — находка с «Исправить в черновике» и верной
+// суммой); у ставки капитализации и недозагрузки — источник; пропуски «[заполнить]» — находка. Расчёт ищется от заголовка
+// «Доходный подход» (или таблицы «Расчёт доходным подходом») до следующего подхода, согласования или выводов. Подхода в
+// отчёте нет (обоснованный отказ) — молчим.
+const IN_START = /расч[её]т\S*\s+(?:стоимости\s+)?доходн\S*\s+подход|^\s*(?:\d+(?:\.\d+)*\.?\s*)?доходн\S*\s+подход\S*\s*$/imu;
+const IN_STOP = /^\s*(?:\d+(?:\.\d+)*\.?\s*)?(?:согласовани|сравнительн\S*\s+подход|затратн\S*\s+подход|вывод|заключени|итогов)/iu;
+const IN_KINDS = [
+  ['value', /стоимост\S*\s+(?:объекта\s+(?:оценки\s+)?)?(?:доходн\S*\s+подход\S*|по\s+доходному\s+подходу|методом\s+прямой\s+капитализаци\S*)/iu],
+  ['egi', /действительн\S*\s+валов\S*\s+доход\S*|(?<![А-ЯЁа-яё])ДВД(?![А-ЯЁа-яё])\s*[,:=|—–-]/iu],
+  ['pgi', /потенциальн\S*\s+валов\S*\s+доход\S*|(?<![А-ЯЁа-яё])ПВД(?![А-ЯЁа-яё])\s*[,:=|—–-]/iu],
+  ['noi', /чист\S*\s+операционн\S*\s+доход\S*|(?<![А-ЯЁа-яё])ЧОД(?![А-ЯЁа-яё])\s*[,:=|—–-]/iu],
+  ['exp', /операционн\S*\s+расход\S*|эксплуатационн\S*\s+расход\S*/iu],
+  ['vac', /недозагрузк\S*(?:\s+и\s+потер\S*(?:\s+при\s+сбор\S*\s+платеж\S*)?)?|потер\S*\s+от\s+недоиспольз\S*/iu],
+  ['cap', /(?:ставк\S*|коэффициент\S*)\s+капитализаци\S*/iu],
+  ['rate', /(?:рыночн\S*\s+)?ставк\S*\s+(?:арендн\S*\s+платы|аренды)|(?:рыночн\S*\s+)?арендн\S*\s+ставк\S*/iu],
+  ['area', /площад\S*(?:\s+помещени\S*|\s+объекта(?:\s+оценки)?)?/iu],
+];
+const IN_NAMES = { pgi: 'Потенциальный валовой доход', egi: 'Действительный валовой доход', noi: 'Чистый операционный доход', value: 'Стоимость доходным подходом' };
+const IN_SOURCE = /справочник|Лейфер|сборник|исследовани|статистик|https?:\/\/|по\s+данным|публикаци|методическ|аналог|экстракци|кумулятивн|Гордон|рынк\S*\s+аренд|\[\d+\]|источник\S*\s*[—:–-]?\s*[^\s[()—:–-]/iu;
+const inKind = (l) => IN_KINDS.find(([, re]) => re.test(l))?.[0] ?? null;
+// Значение у названия: остаток строки (без «(площадь × ставка)», «, руб. в год», «, %», «, кв. м» и черт таблицы), пустой —
+// следующая непустая строка, если она не другое название.
+function inCell(lines, n, kind) {
+  const line = lines[n].line;
+  const m = IN_KINDS.find(([k]) => k === kind)[1].exec(line);
+  const rest = line.slice(m.index + m[0].length)
+    .replace(/^\s*(?:\((?:[^()]|\([^()]*\))*\)\s*)?(?:[,:]?\s*(?:руб\.?(?:\s+за\s+кв\.?\s*м)?(?:\s+в\s+(?:год|месяц))?|%|кв\.?\s*м)\.?\s*)?[|:=—–\s-]*/u, '')
+    .replace(/[|\s]+$/u, '');
+  if (rest) return { text: rest, at: lines[n] };
+  for (let k = n + 1; k < Math.min(lines.length, n + 3); k += 1) {
+    const t = lines[k].line.replace(/^[|\s]+|[|\s]+$/gu, '');
+    if (!t) continue;
+    return inKind(t) ? null : { text: t, at: lines[k] };
+  }
+  return null;
+}
+// Число в начале значения: «2 160 000», «120,5», «8 %», «10,5». Сумма с «руб.» дальше в тексте — тоже.
+function inNum(text) {
+  const m = /^[^\d[]{0,3}?(\d{1,3}(?:[   ]\d{3})+|\d+)(?:[,.](\d+))?(?![\d/])/u.exec(text);
+  if (!m) return null;
+  return { value: Number(m[1].replace(/[   ]/g, '')) + (m[2] ? Number(`0.${m[2]}`) : 0), raw: m[0].replace(/^\D+/u, '').trim() };
+}
+const inOff = (got, want) => Math.abs(got - want) > Math.max(1, Math.abs(want) * 0.01);
+const pctShow = (n) => String(n).replace('.', ',');
+const inRub = (n) => rub(n);
+function incomeValue(docs, ctx) {
+  const fields = ctx.fields ?? {};
+  if ((ctx.service && ctx.service !== 'realty') || fields.object_type !== 'commercial') return [];
+  const main = mainReport(docs);
+  if (!main) return [];
+  const all = [];
+  eachPage(main, (raw, i) => raw.split('\n').forEach((l) => all.push({ page: i, line: l })));
+  // Таблица «Расчёт доходным подходом» — последняя (в оглавлении заголовок раздела тоже есть); иначе заголовок раздела.
+  let start = -1;
+  all.forEach((x, n) => { if (/расч[её]т\S*\s+(?:стоимости\s+)?доходн\S*\s+подход/iu.test(x.line)) start = n; });
+  if (start < 0) {
+    const heads = all.map((x, n) => (IN_START.test(x.line) ? n : -1)).filter((n) => n >= 0);
+    start = heads.find((n) => all.slice(n + 1, n + 40).some((x) => inKind(x.line) && inKind(x.line) !== 'area')) ?? -1;
+  }
+  if (start < 0) return [];
+  const lines = [];
+  for (let n = start + 1; n < all.length && n < start + 120; n += 1) {
+    if (IN_STOP.test(all[n].line.replace(/^[|\s]+/u, ''))) break;
+    lines.push(all[n]);
+  }
+  const got = {};
+  lines.forEach((x, n) => {
+    const kind = inKind(x.line);
+    if (!kind || got[kind]?.num || got[kind]?.gap) return; // в пояснении без числа — берём следующее место с числом
+    const cell = inCell(lines, n, kind);
+    if (!cell) return;
+    const gap = SH_GAP.test(cell.text);
+    got[kind] = { ...cell, gap, label: x.line, quote: x.line.trim().slice(0, 200), num: inNum(cell.text) };
+  });
+  if (!Object.entries(got).some(([k, c]) => k !== 'area' && (c.num || c.gap))) return [];
+  const out = [];
+  const gaps = Object.values(got).filter((c) => c.gap);
+  if (gaps.length) {
+    out.push({ doc: main, page: gaps[0].at.page, quote: gaps[0].quote,
+      text: `В расчёте доходным подходом остались пропуски «[заполнить]» (${gaps.length}) — впишите ставку аренды, доходы, расходы, ставку капитализации и их источники` });
+  }
+  const v = (k) => got[k]?.num?.value ?? null;
+  const step = (k, want, how) => {
+    const c = got[k];
+    if (!c?.num || want == null || !Number.isFinite(want) || !inOff(c.num.value, want)) return;
+    out.push({ doc: main, page: c.at.page, quote: c.quote,
+      fix: { bad: c.num.raw, right: inRub(want), from: `по расчёту ${how}` },
+      text: `${IN_NAMES[k]} ${inRub(c.num.value)} руб. не сходится с расчётом: ${how} = ${inRub(want)} руб. — пересчитайте` });
+  };
+  const monthly = got.rate && /в\s+месяц|\/\s*мес/iu.test(`${got.rate.label} ${got.rate.text}`);
+  if (v('area') && v('rate')) {
+    step('pgi', v('area') * v('rate') * (monthly ? 12 : 1), `${pctShow(v('area'))} кв. м × ${inRub(v('rate'))}${monthly ? ' × 12 мес.' : ''}`);
+  }
+  if (v('pgi') != null && v('vac') != null && v('vac') < 100) step('egi', v('pgi') * (1 - v('vac') / 100), `${inRub(v('pgi'))} × (1 − ${pctShow(v('vac'))}%)`);
+  if (v('egi') != null && v('exp') != null) step('noi', v('egi') - v('exp'), `${inRub(v('egi'))} − ${inRub(v('exp'))}`);
+  if (v('noi') != null && v('cap') > 0 && v('cap') < 100) step('value', v('noi') / (v('cap') / 100), `${inRub(v('noi'))} / ${pctShow(v('cap'))}%`);
+  // Источник у ставки капитализации и недозагрузки — в той же ячейке, в строке названия или в двух строках после.
+  for (const [k, what, hint] of [
+    ['cap', 'ставки капитализации', 'метод рыночной экстракции по аналогам, кумулятивное построение или справочник с номером таблицы'],
+    ['vac', 'недозагрузки', 'справочник с номером таблицы, данные о рынке аренды или фактическая загрузка по договорам'],
+  ]) {
+    const c = got[k];
+    if (!c?.num || c.gap) continue; // источник «[заполнить]» — уже в находке о пропусках
+    const i = lines.indexOf(c.at);
+    const near = [c.label, c.text, ...lines.slice(i + 1, i + 3).map((x) => x.line)].join(' ').replace(/\[заполнить[^\]]*\]/giu, '');
+    if (!IN_SOURCE.test(near)) {
+      out.push({ doc: main, page: c.at.page, quote: c.quote,
+        text: `У ${what} ${pctShow(c.num.value)}% не назван источник — укажите, откуда она: ${hint}` });
+    }
+  }
+  return out;
+}
+
 const WHOLE = {
   parts_match: partsMatch,
   goods_match: goodsMatch,
@@ -4309,6 +4425,7 @@ const WHOLE = {
   heir_objects: heirObjectsCheck,
   retro_basis: retroBasis,
   share_value: shareValue,
+  income_value: incomeValue,
 };
 
 const PER_DOC = {
@@ -4401,6 +4518,7 @@ export const AUTO_CHECKS = Object.freeze({
   heir_objects: 'оценка для наследства, в составе наследства несколько объектов: каждый объект из заявки описан в отчёте и у него своя рыночная стоимость; общая стоимость — если просили, и она равна сумме по объектам',
   retro_basis: 'оценка задним числом: дата оценки раньше осмотра в деле — в отчёте сказано, что оценка ретроспективная, и допущение о состоянии объекта на дату оценки; цены, курсы валют, индексы и ставки — на дату оценки, а не позже',
   share_value: 'оценка доли: часть стоимости — целое × доля, стоимость доли — часть × (1 − скидка); по способу из заявки: «рыночная» — скидка на долю с источником, «часть стоимости целого» — без скидки; в расчёте нет пропусков «[заполнить]»',
+  income_value: 'нежилое помещение, доходный подход: ПВД = площадь × ставка аренды, ДВД = ПВД × (1 − недозагрузка), ЧОД = ДВД − расходы, стоимость = ЧОД / ставка капитализации; у ставки капитализации и недозагрузки — источник; в расчёте нет пропусков «[заполнить]»',
   parts_match: 'ущерб после ДТП: у каждой детали из таблицы повреждённых деталей дела есть фото осмотра и строка в калькуляции ремонта; каждая деталь из заявки «Что повреждено» есть в исследовании повреждений',
   repair_sums: 'ущерб после ДТП: стоимость ремонта с учётом износа не больше, чем без износа, и одна в расчёте и выводах; УТС легкового автомобиля старше 5 лет или с пробегом больше 100 000 км не посчитана (рекомендации РФЦСЭ 2018), об УТС сказано; в выводах суммы ремонта и УТС — и прописью; своя сумма в сверке со страховой — как в отчёте',
   repair_basis: 'ущерб после ДТП: дата ДТП и цены в расчёте — на дату ДТП из заявки; методика по цели из заявки: ОСАГО — Единая методика (755-П), суд и к виновнику — Методические рекомендации РФЦСЭ (2018)',
