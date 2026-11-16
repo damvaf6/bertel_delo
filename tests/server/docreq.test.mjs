@@ -626,3 +626,41 @@ test('2.514: доля и раздел имущества — порядок по
   assert.equal((await spec.req('POST', `/api/orders/${o2.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
   assert.equal((await spec.req('POST', `/api/orders/${o2.id}/doc-requests`, { items: ['marriage_doc'] })).status, 400);
 });
+
+test('2.520: нежилое помещение — поэтажный план с экспликацией и договор аренды, если сдаётся', async () => {
+  const reg = createRegistry([expertise]);
+  const ids = (fields) => reg.requestDocs('expertise', 'realty', null, fields).map((d) => d.id);
+  // Нежилое: план с экспликацией вместо общего техпаспорта; договор аренды — только при «сдаётся» (целиком или частично).
+  let got = ids({ purpose: 'deal', object_type: 'commercial' });
+  assert.ok(got.includes('premises_plan') && !got.includes('tech_plan') && !got.includes('lease_contract'), got.join());
+  for (const lease of ['full', 'part']) assert.ok(ids({ purpose: 'deal', object_type: 'commercial', lease }).includes('lease_contract'), lease);
+  assert.ok(!ids({ purpose: 'deal', object_type: 'commercial', lease: 'no' }).includes('lease_contract'));
+  // Квартира — как раньше, даже если «сдаётся» заполнено по ошибке.
+  got = ids({ purpose: 'deal', object_type: 'flat', lease: 'full' });
+  assert.ok(got.includes('tech_plan') && !got.includes('premises_plan') && !got.includes('lease_contract'), got.join());
+  for (const s of ['land', 'vehicle', 'movable']) {
+    got = reg.requestDocs('expertise', s, null, { purpose: 'deal', lease: 'full' }).map((d) => d.id);
+    assert.ok(!got.includes('premises_plan') && !got.includes('lease_contract'), s);
+  }
+  // Ошибки описания all: пустой список, поле не у всех услуг, значение не из списка.
+  const bad = (d) => assert.throws(() => validateModule({ ...expertise, request_docs: [{ id: 'x', title: 'Документ', ...d }] }));
+  bad({ services: ['realty'], all: [] });
+  bad({ all: [{ field: 'lease', in: ['full'] }] });
+  bad({ services: ['realty'], all: [{ field: 'lease', in: ['нет'] }] });
+
+  // Дело: в списке эксперта оба пункта, заказчик видит подсказки; без «сдаётся» договор не принимается.
+  const comm = { purpose: 'bank', region: 'moscow', object_type: 'commercial', address: 'г. Москва, Документная ул., 9, пом. 2', premises_use: 'office', lease: 'full', lease_rent: 150000 };
+  const o = await inWork('Нежилое: офис сдаётся', 'realty', comm);
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  const cat = (await spec.req('GET', `/api/orders/${o.id}/doc-requests`)).body.catalog.map((c) => c.id);
+  assert.ok(cat.includes('premises_plan') && cat.includes('lease_contract') && !cat.includes('tech_plan'), cat.join());
+  const sent = await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { items: ['premises_plan', 'lease_contract'] });
+  assert.equal(sent.status, 201, JSON.stringify(sent.body));
+  const mine = (await owner.req('GET', `/api/orders/${o.id}/doc-requests`)).body.requests;
+  assert.match(mine.find((x) => x.item_id === 'lease_contract').hint, /кто платит расходы/);
+  assert.match(mine.find((x) => x.item_id === 'premises_plan').hint, /назначение каждой части/);
+  const o2 = await inWork('Нежилое: не сдаётся', 'realty', { ...comm, lease: 'no', lease_rent: undefined });
+  assert.equal((await spec.req('POST', `/api/orders/${o2.id}/status`, { to: 'in_work', from: 'awaiting_executor' })).status, 200);
+  assert.equal((await spec.req('POST', `/api/orders/${o2.id}/doc-requests`, { items: ['lease_contract'] })).status, 400);
+  assert.equal((await spec.req('POST', `/api/orders/${o2.id}/doc-requests`, { items: ['premises_plan'] })).status, 201);
+});

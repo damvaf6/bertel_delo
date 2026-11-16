@@ -41,7 +41,8 @@
 //       исполнитель может одной кнопкой запросить у заказчика (2.64): выписка ЕГРН, ПТС, чек…; заказчик загружает файл к
 //       каждому; basis — только для заявок с таким основанием (определение суда — когда экспертизу назначил суд, 2.66);
 //       when: { field: id поля-списка, in: [значение…] } — только для заявок с таким значением поля (задание банка — 2.299);
-//       списком условий — при любом из них (2.514); skip: { field, in } — не предлагать при таком значении поля
+//       списком условий — при любом из них (2.514); skip: { field, in } — не предлагать при таком значении поля;
+//       all: [{ field, in }…] — только когда выполнены все условия сразу (нежилое и «сдаётся» — 2.520)
 //     express?: { services: [id услуги…], show: [id поля заявки…], fields: [поле + services?…] } }  — экспресс-услуга (2.4):
 //       для каких услуг, какие поля заявки видит помощник на объекте и какие данные он заполняет (нужны шаги осмотра)
 //     signature?: { services?: [id услуги…], org?: true }  — результат подписывается УКЭП исполнителя до сдачи (2.5); без services —
@@ -314,7 +315,7 @@ export function validateModule(m) {
     checkIds(m.request_docs, `${at}, запрашиваемые документы`);
     for (const d of m.request_docs) {
       const where = `${at}, документ ${d.id}`;
-      onlyKeys(d, ['id', 'title', 'hint', 'services', 'basis', 'when', 'skip'], where);
+      onlyKeys(d, ['id', 'title', 'hint', 'services', 'basis', 'when', 'skip', 'all'], where);
       // when — условие или список условий «любое из» (2.514: порядок пользования — при доле или цели «раздел»);
       // skip — не предлагать при таком значении поля (порядок пользования «не определён» — документа нет).
       const users = d.services ? m.services.filter((x) => d.services.includes(x.id)) : m.services;
@@ -335,6 +336,10 @@ export function validateModule(m) {
         } else cond(d.when, 'when');
       }
       if (d.skip !== undefined) cond(d.skip, 'skip');
+      if (d.all !== undefined) {
+        if (!Array.isArray(d.all) || !d.all.length) fail(where, 'all — непустой список условий');
+        d.all.forEach((c) => cond(c, 'all'));
+      }
       if (d.basis !== undefined && (!Array.isArray(d.basis) || d.basis.length === 0 || d.basis.some((b) => !m.basis.includes(b)))) {
         fail(where, 'basis — непустой список оснований этого модуля');
       }
@@ -811,7 +816,8 @@ export function createRegistry(modules = DEFAULT_MODULES, { orgCheck = false } =
       if (!m?.request_docs || !m.services.some((x) => x.id === serviceId)) return [];
       return m.request_docs.filter((d) => (!d.services || d.services.includes(serviceId)) && (!d.basis || d.basis.includes(basisKind))
         && (!d.when || [d.when].flat().some((c) => c.in.includes(fields?.[c.field])))
-        && (!d.skip || !d.skip.in.includes(fields?.[d.skip.field])))
+        && (!d.skip || !d.skip.in.includes(fields?.[d.skip.field]))
+        && (!d.all || d.all.every((c) => c.in.includes(fields?.[c.field]))))
         .map((d) => ({ id: d.id, title: d.title, hint: d.hint ?? null, ...(d.basis ? { basis: true } : {}) }));
     },
     // Повторная оценка того же объекта для услуги (2.118): поля, по которым узнаётся объект, и разделы описания объекта;
