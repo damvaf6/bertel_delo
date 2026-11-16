@@ -6102,8 +6102,9 @@ test('мои итоги за месяц (2.377): средний срок от п
       values ($1, $2, 'expertise', 'realty', 'done', $1, 1500000, now(), (now() at time zone 'Europe/Moscow')::date + $3::int) returning id`, [expert.id, title, days])).rows[0].id;
     const a = await mk('Квартира в Отрадном: средний срок', 2);
     const b = await mk('Склад в Подольске: средний срок', -3);
-    await c.query(`insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $3, '{}', 'accepted', now() - interval '4 days'),
+    await c.query(`insert into order_offers (order_id, specialist_id, score, outcome, outcome_at) values ($1, $3, '{}', 'accepted', now() - interval '1 minute' - interval '4 days'),
       ($2, $3, '{}', 'accepted', now() - interval '7 days')`, [a, b, expert.id]);
+    // «Принято» и «сдано» — от одного момента: в первую минуту после полуночи по Москве «минуту назад» — уже вчера (CI 17.11 00:01).
     await c.query(`insert into order_status_history (order_id, from_status, to_status, side, at) values ($1, 'review', 'done', 'dispatcher', now() - interval '1 minute'),
       ($2, 'review', 'in_work', 'dispatcher', now() - interval '2 days'), ($2, 'review', 'done', 'dispatcher', now())`, [a, b]);
   });
