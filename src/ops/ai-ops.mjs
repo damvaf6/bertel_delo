@@ -339,7 +339,7 @@ export function aiOps() {
         // Перечень из нескольких позиций (2.83) — в порядке позиций, как в таблице Word.
         // Даты по всему отчёту (2.88): даты объявлений аналогов дела и дни, когда получены фото осмотра.
         const analogs = names.includes('analog_match') || names.includes('report_dates')
-          ? inItemOrder(registry.analogs(order.module, order.service), order, await sql`select url, fields, adjustments from order_analogs where order_id = ${order.id} and deleted_at is null and confirmed_at is not null order by id`)
+          ? inItemOrder(registry.analogs(order.module, order.service, order.fields), order, await sql`select url, fields, adjustments from order_analogs where order_id = ${order.id} and deleted_at is null and confirmed_at is not null order by id`)
           : [];
         // 2.146: день съёмки — по часам телефона, если он их передал; день получения тоже считается днём осмотра.
         const shots = names.includes('report_dates') || names.includes('retro_basis')

@@ -853,6 +853,11 @@ export default {
       { id: 'area', label: 'Площадь, кв. м', type: 'number', min: 1, max: 100000000, services: ['realty', 'land'], near: { field: 'area', pct: 30 } },
       { id: 'floor', label: 'Этаж / этажей в доме', type: 'text', max: 20, services: ['realty'] },
       { id: 'house_type', label: 'Тип дома', type: 'text', max: 100, services: ['realty'] },
+      // 2.513: при оценке доли — продаётся доля или целый объект; смешаны без корректировки — предупреждение (src/analogs/analogs.mjs).
+      {
+        id: 'share_kind', label: 'Продаётся доля или целый объект', type: 'select', services: ['realty'], when: { field: 'object_type', in: ['share'] },
+        options: [{ id: 'whole', name: 'Целый объект' }, { id: 'share', name: 'Доля в праве' }],
+      },
       { id: 'land_use', label: 'Назначение участка', type: 'text', max: 200, services: ['land'] },
       { id: 'condition', label: 'Состояние', type: 'text', max: 200 },
     ],
@@ -866,6 +871,7 @@ export default {
       { id: 'floor', name: 'Этаж', services: ['realty'] },
       { id: 'house_type', name: 'Тип дома, материал стен', services: ['realty'] },
       { id: 'finish', name: 'Состояние и отделка', services: ['realty'] },
+      { id: 'share_kind', name: 'Доля / целый объект', services: ['realty'], when: { field: 'object_type', in: ['share'] }, covers: ['share_kind'] },
       { id: 'land_use', name: 'Назначение участка (ВРИ)', services: ['land'] },
       { id: 'utilities', name: 'Коммуникации', services: ['land'] },
       { id: 'access', name: 'Подъезд, удалённость', services: ['land'] },

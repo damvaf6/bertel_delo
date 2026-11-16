@@ -29,7 +29,7 @@ export async function orderSources(sql, registry, order, storage) {
   const dossier = order.executor_user_id ? await loadDossier(sql, order.executor_user_id) : [];
   const [ph] = await sql`select count(*)::int as n, min(created_at) as first, max(created_at) as last from documents
                          where order_id = ${order.id} and kind = 'inspection' and deleted_at is null`;
-  const spec = registry.analogs(order.module, order.service);
+  const spec = registry.analogs(order.module, order.service, order.fields);
   const analogs = spec ? inItemOrder(spec, order, await sql`select url, received_at, fields from order_analogs where order_id = ${order.id}
                                                             and deleted_at is null and confirmed_at is not null order by id`) : [];
   // Акт осмотра (2.424) — есть, когда есть фото осмотра; отметка владельца «С актом ознакомлен» (2.423) — последняя.

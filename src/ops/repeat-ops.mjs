@@ -70,7 +70,7 @@ async function docsToAsk(sql, registry, past, order) {
 }
 
 async function analogsToCopy(sql, registry, past, order) {
-  if (!registry.analogs(order.module, order.service)) return [];
+  if (!registry.analogs(order.module, order.service, order.fields)) return [];
   const here = new Set((await sql`select url_key from order_analogs where order_id = ${order.id} and deleted_at is null`).map((r) => r.url_key));
   const rows = await sql`select * from order_analogs where order_id = ${past.id} and deleted_at is null order by id`;
   const seen = new Set();

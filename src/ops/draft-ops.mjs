@@ -674,7 +674,7 @@ export function draftOps() {
           ? ['СВЕДЕНИЯ ОБ ЭКСПЕРТЕ (из досье; программа сама вставит их в нужные разделы — не повторяй и не ставь про них пометки):', ...dossier.map((i) => `- ${itemLine(i)}`)].join('\n')
           : null;
         // Подтверждённые аналоги (2.32) — модели для текста о корректировках; таблицу программа вставит в Word сама.
-        const spec = registry.analogs(order.module, order.service);
+        const spec = registry.analogs(order.module, order.service, order.fields);
         const analogs = spec ? await sql`select * from order_analogs where order_id = ${order.id} and deleted_at is null and confirmed_at is not null order by id` : [];
         const assignment = await assignmentDocs(sql, providers.storage, order);
         // Оценка для наследства (2.500): задания с датой оценки нет — дата открытия наследства из заявки.

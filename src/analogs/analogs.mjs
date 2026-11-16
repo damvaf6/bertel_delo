@@ -30,6 +30,36 @@ export function listPositions(spec, order) {
   return items.length > 1 ? items.slice(0, 100) : [];
 }
 
+// Оценка доли (2.513): у аналога признак «Продаётся доля или целый объект» (только у заявок на долю — when в модуле).
+// Цены долей и целых объектов несравнимы: смешаны без корректировки «Доля / целый объект» — предупреждение у аналога и
+// строка над списком; оценивается часть стоимости целого (share_method = pro_rata) — аналоги-доли не годятся вовсе.
+export const SHARE_FIELD = 'share_kind';
+const SHARE_NAMES = { whole: 'целый объект', share: 'доля' };
+function shareMix(spec, order, list, covers) {
+  const out = { per: new Map(), hints: [] };
+  if (!spec.fields.some((f) => f.id === SHARE_FIELD)) return out;
+  const nums = (xs) => xs.map((a) => list.indexOf(a) + 1).join(', ');
+  const unmarked = list.filter((a) => !a.fields[SHARE_FIELD]);
+  for (const a of unmarked) out.per.set(a.id, 'Отметьте, что продаётся — доля или целый объект: оценивается доля, цены долей и целых объектов несравнимы');
+  const shares = list.filter((a) => a.fields[SHARE_FIELD] === 'share');
+  const wholes = list.filter((a) => a.fields[SHARE_FIELD] === 'whole');
+  const fix = 'нужна корректировка «Доля / целый объект»';
+  if (order.fields?.share_method === 'pro_rata') {
+    const bad = shares.filter((a) => !covers(a));
+    for (const a of bad) out.per.set(a.id, `Аналог — доля, а оценивается часть стоимости всего объекта (без скидки): возьмите аналог — целый объект или сделайте корректировку «Доля / целый объект»`);
+    if (bad.length) out.hints.push(`Оценивается часть стоимости всего объекта: ${bad.length > 1 ? 'аналоги' : 'аналог'} ${nums(bad)} — ${bad.length > 1 ? 'доли' : 'доля'}, нужны целые объекты или корректировка «Доля / целый объект»`);
+    return out;
+  }
+  if (!shares.length || !wholes.length) return out;
+  // Меньшинство — «не такие, как остальные»; поровну — доли (стоимость доли обычно считают от целого со скидкой).
+  const [few, many] = shares.length <= wholes.length ? [shares, wholes] : [wholes, shares];
+  const kind = few[0].fields[SHARE_FIELD];
+  const bad = few.filter((a) => !covers(a));
+  for (const a of bad) out.per.set(a.id, `Аналог — ${SHARE_NAMES[kind]}, а ${many.length > 1 ? 'аналоги' : 'аналог'} ${nums(many)} — ${kind === 'share' ? 'целые объекты' : 'доли'}: цены несравнимы, ${fix}`);
+  if (bad.length) out.hints.push(`Аналоги смешаны: доли — ${nums(shares)}, целые объекты — ${nums(wholes)}; без корректировки «Доля / целый объект» — ${bad.length > 1 ? 'аналоги' : 'аналог'} ${nums(bad)}`);
+  return out;
+}
+
 // Ссылка на объявление: только http(s), без пробелов; ключ для поиска повторов — без меток рекламы и якоря.
 export function cleanUrl(raw) {
   const s = typeof raw === 'string' ? raw.trim() : '';
@@ -217,10 +247,12 @@ export function analogWarnings(spec, order, list, onsite = null, valueDay = null
     const ord = order.fields?.[f.near.field];
     return { mine: ord == null || ord === '' ? NaN : Number(ord), from: f.near.onsite ? ' (по заявке)' : '' };
   };
+  const coveredOf = (a) => new Set((a.adjustments ?? []).flatMap((x) => adjustKinds(spec).find((k) => k.id === x.kind)?.covers ?? []));
+  const mix = shareMix(spec, order, list, (a) => coveredOf(a).has(SHARE_FIELD));
   for (const a of list) {
     const w = [];
     const adj = a.adjustments ?? [];
-    const covered = new Set(adj.flatMap((x) => adjustKinds(spec).find((k) => k.id === x.kind)?.covers ?? []));
+    const covered = coveredOf(a);
     if (repeats.has(String(a.id))) w.push(repeatText(repeats.get(String(a.id))));
     if (!a.file_key) w.push('Нет скриншота объявления — приложите снимок экрана или PDF страницы');
     const miss = missingAnalog(spec, a.fields);
@@ -259,6 +291,7 @@ export function analogWarnings(spec, order, list, onsite = null, valueDay = null
     const no = a.fields[ITEM_FIELD];
     if (positions.length && no === undefined) w.push(`Укажите позицию перечня (1–${positions.length}): аналоги нужны к каждой позиции`);
     else if (positions.length && no > positions.length) w.push(`Позиций в перечне: ${positions.length} — проверьте номер позиции`);
+    if (mix.per.has(a.id)) w.push(mix.per.get(a.id));
     if (!a.confirmed_at) w.push(a.suggested ? 'Признаки предложил ИИ — проверьте и подтвердите' : 'Не подтверждён экспертом');
     per.set(a.id, w);
   }
@@ -278,6 +311,7 @@ export function analogWarnings(spec, order, list, onsite = null, valueDay = null
   return { per, repeats, hints: withCommon(hints), confirmed: counted, min: spec.min * positions.length };
 
   function withCommon(h) {
+    h.unshift(...mix.hints);
     if (late.length) h.unshift(`Оценка на прошлую дату (${ruDate(vd)}): ${late.length > 1 ? 'объявления аналогов' : 'объявление аналога'} ${late.join(', ')} позже неё больше чем на 3 месяца — нужен архив объявлений на дату оценки или корректировка на дату`);
     for (const f of spec.fields.filter((x) => far_.has(x.id))) {
       const nums = far_.get(f.id);

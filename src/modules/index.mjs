@@ -88,7 +88,8 @@
 //       аналога по виду объекта (цена, дата объявления и регион — у всех, в ядре: src/analogs/analogs.mjs); min — сколько
 //       нужно подтверждённых; near: { field: id числового поля заявки, within?: разница, pct?: разница в %, onsite?: id числового
 //       поля данных с объекта — его значение важнее заявки (2.493) } — предупреждение;
-//       adjustments?: [{ id, name, services?, covers?: ['date' | 'region' | id признака с near…] }…] — виды корректировок (2.74),
+//       признак с when: { field: id поля-списка заявки, in: [значение…] } — только у таких заявок (2.513: доля или целый объект);
+//       adjustments?: [{ id, name, services?, when?, covers?: ['date' | 'region' | id признака с near или признака-списка…] }…] — виды корректировок (2.74),
 //       covers — какие предупреждения «нужна корректировка» снимает такая корректировка; «Другая» (other) — в ядре, у всех
 //     repeat?: [{ services: [id услуги…], match: [id поля заявки…], sections: [id раздела черновика…] }…]  — повторная оценка
 //       того же объекта (2.118): по полям match (кадастровый номер, адрес, VIN) программа узнаёт своё прошлое дело с тем же
@@ -651,9 +652,11 @@ export function validateModule(m) {
     checkIds(an.fields, `${where}, признаки`);
     for (const f of an.fields) {
       const fw = `${where}, признак ${f.id}`;
-      const { services, near, ...field } = f;
+      const { services, near, when, ...field } = f;
       if (ANALOG_CORE.includes(f.id)) fail(fw, `id «${f.id}» занят признаком ядра`);
       validateField(field, fw);
+      // 2.513: when — признак только у заявок с таким значением поля-списка (доля или целый объект — только при оценке доли).
+      if (when !== undefined) analogWhen(when, services ?? an.services, fw);
       if (field.type === 'longtext') fail(fw, 'признак — одной строкой (text), не longtext');
       if (services !== undefined && (!Array.isArray(services) || services.length === 0 || services.some((id) => !an.services.includes(id)))) {
         fail(fw, 'services — непустой список услуг раздела «Аналоги»');
@@ -681,22 +684,36 @@ export function validateModule(m) {
       const aw = `${where}, корректировки`;
       if (!Array.isArray(an.adjustments) || an.adjustments.length === 0) fail(aw, 'adjustments — непустой список');
       checkIds(an.adjustments, aw);
-      const nearIds = an.fields.filter((f) => f.near).map((f) => f.id);
+      // 2.513: корректировка снимает и предупреждение «смешаны» по признаку-списку (доля или целый объект).
+      const nearIds = an.fields.filter((f) => f.near || f.type === 'select').map((f) => f.id);
       for (const k of an.adjustments) {
         const kw = `${aw}, ${k.id}`;
-        onlyKeys(k, ['id', 'name', 'services', 'covers'], kw);
+        onlyKeys(k, ['id', 'name', 'services', 'covers', 'when'], kw);
+        if (k.when !== undefined) analogWhen(k.when, k.services ?? an.services, kw);
         if (k.id === 'other') fail(kw, 'id «other» занят корректировкой ядра «Другая»');
         if (typeof k.name !== 'string' || !k.name.trim() || k.name.length > 60) fail(kw, 'name — название до 60 знаков');
         if (k.services !== undefined && (!Array.isArray(k.services) || k.services.length === 0 || k.services.some((id) => !an.services.includes(id)))) {
           fail(kw, 'services — непустой список услуг раздела «Аналоги»');
         }
         if (k.covers !== undefined && (!Array.isArray(k.covers) || k.covers.some((c) => !['date', 'region', ...nearIds].includes(c)))) {
-          fail(kw, "covers — 'date', 'region' или id признака с near");
+          fail(kw, "covers — 'date', 'region', id признака с near или признака-списка");
         }
       }
     }
   }
   return m;
+
+  function analogWhen(when, sids, w) {
+    onlyKeys(when, ['field', 'in'], `${w}, when`);
+    for (const sid of sids) {
+      const s = m.services.find((x) => x.id === sid);
+      const f = serviceFields(m, s).find((x) => x.id === when.field);
+      if (!f || f.type !== 'select') fail(w, `when.field — поле-список заявки услуги ${sid}`);
+      if (!Array.isArray(when.in) || when.in.length === 0 || when.in.some((v) => !f.options.some((o) => o.id === v))) {
+        fail(w, 'when.in — непустой список значений этого поля');
+      }
+    }
+  }
 }
 
 // Признаки аналога, которые есть у всех (ядро, src/analogs/analogs.mjs): модуль не может объявить их сам.
@@ -919,14 +936,15 @@ export function createRegistry(modules = DEFAULT_MODULES, { orgCheck = false } =
       return !m.signature.services || m.signature.services.includes(serviceId);
     },
     // Раздел «Аналоги» для услуги (2.32): сколько нужно и признаки этой услуги (без ядра); null — раздела нет.
-    analogs(moduleId, serviceId) {
+    // fields — поля заявки (2.513): признак и корректировка с when — только у заявок с таким значением поля.
+    analogs(moduleId, serviceId, fields = null) {
       const m = modulesList.find((x) => x.id === moduleId);
       if (!m?.analogs?.services.includes(serviceId)) return null;
-      const own = (x) => !x.services || x.services.includes(serviceId);
+      const own = (x) => (!x.services || x.services.includes(serviceId)) && (!x.when || x.when.in.includes(String(fields?.[x.when.field] ?? '')));
       return {
         min: m.analogs.min,
-        fields: m.analogs.fields.filter(own).map(({ services, ...f }) => f),
-        adjustments: (m.analogs.adjustments ?? []).filter(own).map(({ services, ...k }) => ({ covers: [], ...k })),
+        fields: m.analogs.fields.filter(own).map(({ services, when, ...f }) => f),
+        adjustments: (m.analogs.adjustments ?? []).filter(own).map(({ services, when, ...k }) => ({ covers: [], ...k })),
       };
     },
     // Услуга предлагается заказчику (2.462): `later: true` — в первом выпуске её нет в перечне новой заявки и у помощника.
