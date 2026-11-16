@@ -60,6 +60,34 @@ function shareMix(spec, order, list, covers) {
   return out;
 }
 
+// Нежилое помещение (2.523): у аналога «Продажа или аренда» (только у нежилого — when в модуле). У аналога аренды цена —
+// плата в месяц; ставка за кв. м в месяц = плата / площадь. Аналоги аренды в сравнительный подход не идут (не в счёт
+// «не меньше трёх», не в таблицу сравнительного подхода в Word); их средняя ставка — подсказкой к таблице доходного подхода.
+export const DEAL_FIELD = 'deal';
+export const isRent = (a) => a.fields?.[DEAL_FIELD] === 'rent';
+export function rentRate(a) {
+  if (!isRent(a)) return null;
+  const price = a.fields.price_rub;
+  const area = a.fields.area;
+  return Number.isFinite(price) && Number.isFinite(area) && area > 0 ? Math.round(price / area) : null;
+}
+// Подтверждённые аналоги аренды со ставкой: номера (по порядку в списке) и средняя ставка; нет таких — null.
+export function rentSummary(spec, list) {
+  if (!spec?.fields.some((f) => f.id === DEAL_FIELD)) return null;
+  const nums = [];
+  const rates = [];
+  list.forEach((a, i) => {
+    const r = a.confirmed_at ? rentRate(a) : null;
+    if (r) { nums.push(i + 1); rates.push(r); }
+  });
+  if (!rates.length) return null;
+  const month = Math.round(rates.reduce((m, x) => m + x, 0) / rates.length);
+  return { nums, month, year: month * 12 };
+}
+// Рубли — всегда по разрядам («1 750»), как на экране, в отличие от fmtNum (год «1975» — без пробела).
+const rubText = (n) => Number(n).toLocaleString('ru-RU').replace(/\s/g, ' ');
+export const rentText = (r) => `Средняя ставка аренды ${r.nums.length > 1 ? 'аналогов' : 'аналога'} ${r.nums.join(', ')} — ${rubText(r.month)} руб. за кв. м в месяц (${rubText(r.year)} руб. за кв. м в год)`;
+
 // Ссылка на объявление: только http(s), без пробелов; ключ для поиска повторов — без меток рекламы и якоря.
 export function cleanUrl(raw) {
   const s = typeof raw === 'string' ? raw.trim() : '';
@@ -249,6 +277,7 @@ export function analogWarnings(spec, order, list, onsite = null, valueDay = null
   };
   const coveredOf = (a) => new Set((a.adjustments ?? []).flatMap((x) => adjustKinds(spec).find((k) => k.id === x.kind)?.covers ?? []));
   const mix = shareMix(spec, order, list, (a) => coveredOf(a).has(SHARE_FIELD));
+  const deals = spec.fields.some((f) => f.id === DEAL_FIELD);
   for (const a of list) {
     const w = [];
     const adj = a.adjustments ?? [];
@@ -277,8 +306,10 @@ export function analogWarnings(spec, order, list, onsite = null, valueDay = null
       w.push(`${f.label}: ${fmtNum(v)} у аналога, ${fmtNum(mine)} у объекта${from} — нужна корректировка${kind ? ` «${kind.name}»` : ''}`);
       (far_.get(f.id) ?? far_.set(f.id, []).get(f.id)).push(list.indexOf(a) + 1);
     }
-    if (priced.length >= 3 && Number.isFinite(a.fields.price_rub)) {
-      const others = priced.filter((x) => x !== a).map((x) => x.fields.price_rub);
+    // 2.523: плата за месяц аренды и цена продажи несравнимы — сравниваются только с аналогами того же вида.
+    const peers = priced.filter((x) => isRent(x) === isRent(a));
+    if (peers.length >= 3 && Number.isFinite(a.fields.price_rub)) {
+      const others = peers.filter((x) => x !== a).map((x) => x.fields.price_rub);
       const mid = median(others);
       if (mid > 0 && Math.abs(a.fields.price_rub - mid) / mid > PRICE_SPREAD) w.push('Цена сильно отличается от остальных аналогов — проверьте или поясните в отчёте');
     }
@@ -292,13 +323,16 @@ export function analogWarnings(spec, order, list, onsite = null, valueDay = null
     if (positions.length && no === undefined) w.push(`Укажите позицию перечня (1–${positions.length}): аналоги нужны к каждой позиции`);
     else if (positions.length && no > positions.length) w.push(`Позиций в перечне: ${positions.length} — проверьте номер позиции`);
     if (mix.per.has(a.id)) w.push(mix.per.get(a.id));
+    if (deals && !a.fields[DEAL_FIELD]) w.push('Отметьте: продажа или аренда — аналоги аренды в сравнительный подход не идут');
+    else if (isRent(a) && !(a.fields.area > 0)) w.push('Аналог аренды: укажите площадь — ставка считается за кв. м в месяц');
     if (!a.confirmed_at) w.push(a.suggested ? 'Признаки предложил ИИ — проверьте и подтвердите' : 'Не подтверждён экспертом');
     per.set(a.id, w);
   }
-  const done = list.filter((a) => a.confirmed_at);
+  const rents = list.filter((a) => a.confirmed_at && isRent(a));
+  const done = list.filter((a) => a.confirmed_at && !isRent(a));
   const hints = [];
   if (!positions.length) {
-    if (done.length < spec.min) hints.push(`Нужно не меньше ${spec.min} аналогов — подтверждено ${done.length}`);
+    if (done.length < spec.min) hints.push(`Нужно не меньше ${spec.min} аналогов${rents.length ? ' продажи' : ''} — подтверждено ${done.length}${rents.length ? ' (аналоги аренды не в счёт)' : ''}`);
     return { per, repeats, hints: withCommon(hints), confirmed: done.length, min: spec.min };
   }
   // По позициям: в зачёт — не больше нужного числа к каждой, чтобы «6 из 6» не набиралось аналогами одной позиции.
@@ -312,6 +346,8 @@ export function analogWarnings(spec, order, list, onsite = null, valueDay = null
 
   function withCommon(h) {
     h.unshift(...mix.hints);
+    const rent = rentSummary(spec, list);
+    if (rents.length) h.push(`Аналоги аренды ${rents.map((a) => list.indexOf(a) + 1).join(', ')} — в сравнительный подход не идут${rent ? `. ${rentText(rent)} — для строки «Рыночная ставка аренды» в таблице доходного подхода (× 12 — за год)` : ''}`);
     if (late.length) h.unshift(`Оценка на прошлую дату (${ruDate(vd)}): ${late.length > 1 ? 'объявления аналогов' : 'объявление аналога'} ${late.join(', ')} позже неё больше чем на 3 месяца — нужен архив объявлений на дату оценки или корректировка на дату`);
     for (const f of spec.fields.filter((x) => far_.has(x.id))) {
       const nums = far_.get(f.id);
@@ -382,9 +418,13 @@ export const SPLIT_COLS = 9;
 export function analogTable(spec, list, order = null) {
   const groups = order ? itemGroups(spec, order, list) : null;
   const sorted = groups ? groups.flatMap((g) => g.items.map((x) => x.a)) : list;
-  const own = spec.fields.filter((f) => !(groups && f.id === ITEM_FIELD));
-  const any = sorted.some((a) => a.adjustments?.length);
-  const perSqm = any && own.some((f) => f.id === 'area') && sorted.some((a) => adjusted(a)?.per_sqm);
+  // 2.523: аналоги аренды — отдельной таблицей после сравнительного подхода; номера — общие, как в приложении со скриншотами.
+  const numbered = sorted.map((a, i) => ({ a, n: i + 1 }));
+  const sales = numbered.filter((x) => !isRent(x.a));
+  const rents = numbered.filter((x) => isRent(x.a));
+  const own = spec.fields.filter((f) => !(groups && f.id === ITEM_FIELD) && f.id !== DEAL_FIELD);
+  const any = sales.some(({ a }) => a.adjustments?.length);
+  const perSqm = any && own.some((f) => f.id === 'area') && sales.some(({ a }) => adjusted(a)?.per_sqm);
   const base = ['№', 'Источник', 'Цена, руб.', ...own.map((f) => f.label), 'Регион'];
   const tail = [...(any ? ['Корректировки, всего', 'Цена после корректировок, руб.'] : []), ...(perSqm ? ['За кв. м после корректировок, руб.'] : [])];
   // 2.361: больше SPLIT_COLS столбцов (у транспорта — 11, у квартиры — 12) в Word не умещается — слова переносятся по
@@ -426,14 +466,20 @@ export function analogTable(spec, list, order = null) {
       ...(g.items.length ? tableOf(g.items) : ['Подтверждённых аналогов к этой позиции нет.']),
       ...(g.no && g.mean !== null ? [`Средняя цена аналогов позиции ${g.no} ${after}— ${fmtNum(g.mean)} руб.`] : []),
     ])
-    : tableOf(sorted.map((a, i) => ({ a, n: i + 1 })));
-  const adj = any ? sorted.flatMap((a, i) => (a.adjustments ?? []).map((x) => [String(i + 1), adjustName(spec, x), pctText(x.pct), adjustSource(x)])) : [];
+    : sales.length ? tableOf(sales) : ['Подтверждённых аналогов продажи нет.'];
+  const adj = any ? sales.flatMap(({ a, n }) => (a.adjustments ?? []).map((x) => [String(n), adjustName(spec, x), pctText(x.pct), adjustSource(x)])) : [];
   const adjPart = any ? ['Корректировки к аналогам (применяются по порядку, одна за другой):',
     ...[['Аналог', 'Корректировка', 'Значение', 'Источник (справочник, год, таблица)'], ...adj].map(line)] : [];
   const summary = groups ? [`Цены аналогов по позициям перечня (средняя ${after}— справочно, стоимость позиции определяет оценщик):`,
     ...[['Позиция', 'Наименование', 'Аналоги', `Средняя цена ${after}, руб.`.replace(' ,', ',')],
       ...groups.filter((g) => g.no).map((g) => [String(g.no), g.name, g.items.length ? g.items.map((x) => x.n).join(', ') : 'нет', g.mean !== null ? fmtNum(g.mean) : '—'])].map(line)] : [];
-  return [...out, ...adjPart, ...summary];
+  const rent = rentSummary(spec, sorted);
+  const rentPart = rents.length ? ['Аналоги аренды (для доходного подхода; в сравнительный подход не идут):',
+    ...[['№', 'Источник', 'Плата в месяц, руб.', 'Площадь, кв. м', 'Ставка, руб. за кв. м в месяц', 'Регион'],
+      ...rents.map(({ a, n }) => [String(n), [hostOf(a.url), a.fields.listed_on ? `от ${ruDate(a.fields.listed_on)}` : ''].filter(Boolean).join(', '),
+        valueText(CORE_FIELDS[0], a.fields.price_rub), a.fields.area > 0 ? fmtNum(a.fields.area) : '', rentRate(a) ? rubText(rentRate(a)) : '', valueText(CORE_FIELDS[2], a.fields.region)])].map(line),
+    ...(rent ? [`${rentText(rent)}.`] : [])] : [];
+  return [...out, ...adjPart, ...summary, ...rentPart];
 }
 
 // Для черновика от ИИ: подтверждённые аналоги строками (без ссылок — модели они не нужны). Перечень (2.83) — по позициям,
@@ -446,7 +492,8 @@ export function analogsBrief(spec, list, order = null) {
     const sum = adjusted(a);
     const adj = sum ? [`корректировки — ${a.adjustments.map((x) => `${adjustName(spec, x)} ${pctText(x.pct)}${adjustSource(x) ? ` (${adjustSource(x)})` : ''}`).join(', ')}`,
       `цена после корректировок — ${fmtNum(sum.price)} руб.`] : [];
-    return `- Аналог ${n}: ${[...own, ...adj].join('; ')}`;
+    const rent = isRent(a) ? [`аренда — в сравнительный подход не идёт, только для доходного подхода${rentRate(a) ? `; ставка — ${rubText(rentRate(a))} руб. за кв. м в месяц` : ''}`] : [];
+    return `- Аналог ${n}: ${[...own, ...adj, ...rent].join('; ')}`;
   };
   const groups = order ? itemGroups(spec, order, list) : null;
   if (!groups) return ['АНАЛОГИ (подтверждены экспертом; таблицу программа вставит сама — не рисуй её):', ...list.map((a, i) => lineOf(a, i + 1))].join('\n');

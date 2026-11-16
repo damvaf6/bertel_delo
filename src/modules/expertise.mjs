@@ -907,6 +907,12 @@ export default {
         id: 'share_kind', label: 'Продаётся доля или целый объект', type: 'select', services: ['realty'], when: { field: 'object_type', in: ['share'] },
         options: [{ id: 'whole', name: 'Целый объект' }, { id: 'share', name: 'Доля в праве' }],
       },
+      // 2.523: у нежилого — продажа или аренда; аналоги аренды (цена — плата в месяц) в сравнительный подход не идут, их
+      // ставка за кв. м в месяц — подсказкой к таблице доходного подхода (src/analogs/analogs.mjs, rentSummary).
+      {
+        id: 'deal', label: 'Продажа или аренда', type: 'select', services: ['realty'], when: { field: 'object_type', in: ['commercial'] },
+        options: [{ id: 'sale', name: 'Продажа' }, { id: 'rent', name: 'Аренда (цена — плата в месяц)' }],
+      },
       { id: 'land_use', label: 'Назначение участка', type: 'text', max: 200, services: ['land'] },
       { id: 'condition', label: 'Состояние', type: 'text', max: 200 },
     ],

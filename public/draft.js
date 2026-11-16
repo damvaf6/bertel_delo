@@ -21,7 +21,7 @@ export async function loadDraft(current, reload) {
   if (!current.order.module || (!mine && !staff)) { box.classList.add('hidden'); return; }
   say($('draft-msg'), '');
   const r = await api('GET', `/api/orders/${current.order.id}/draft`);
-  ctx = { order: current.order, draft: r.draft, reload, sections: r.sections, noInspection: !!(r.no_inspection && r.can_edit), specs: r.can_edit ? r.specs ?? null : null, share: r.can_edit ? r.share ?? null : null, income: r.can_edit ? r.income ?? null : null };
+  ctx = { order: current.order, draft: r.draft, reload, sections: r.sections, noInspection: !!(r.no_inspection && r.can_edit), specs: r.can_edit ? r.specs ?? null : null, share: r.can_edit ? r.share ?? null : null, income: r.can_edit ? r.income ?? null : null, incomeRent: r.can_edit ? r.income_rent ?? null : null };
   setNext({ draft: { exists: !!r.draft, approaches: r.approaches && r.can_edit ? r.approaches : null } });
   renderApproaches(r);
   // Исполнителю — пока дело в работе или черновик есть; служебным — только когда черновик есть.
@@ -112,6 +112,7 @@ function countGaps() {
   renderSpecs();
   renderShare();
   renderIncome();
+  renderIncomeRent();
 }
 
 // 2.494: таблица «Характеристики объекта оценки» из заявки и выезда помощника. В черновике её нет или она другая (выезд
@@ -173,6 +174,16 @@ function renderIncome() {
     ? 'Таблицы «Расчёт доходным подходом» в черновике нет. Программа вставит её в конец раздела «Доходный подход»: площадь, ставка аренды, валовой доход, недозагрузка, расходы, чистый доход, ставка капитализации и стоимость — суммы впишете сами.'
     : 'Таблица «Расчёт доходным подходом» в черновике устарела: после неё в заявке изменились площадь или арендная плата. Обновите её — прежняя заменится целиком, суммы впишите заново.';
   $('draft-income-add').textContent = st === 'none' ? 'Вставить таблицу в черновик' : 'Обновить таблицу в черновике';
+}
+
+// 2.523: средняя ставка подтверждённых аналогов аренды (раздел «Аналоги») — к строке «Рыночная ставка аренды» таблицы.
+function renderIncomeRent() {
+  const r = ctx?.incomeRent;
+  const show = !!(r && ctx.draft && !$('draft-text').readOnly);
+  $('draft-income-rent').classList.toggle('hidden', !show);
+  if (!show) return;
+  const n = (x) => Number(x).toLocaleString('ru-RU');
+  $('draft-income-rent').textContent = `Средняя ставка аренды ${r.nums.length > 1 ? 'аналогов' : 'аналога'} ${r.nums.join(', ')} из раздела «Аналоги» — ${n(r.month)} руб. за кв. м в месяц (${n(r.year)} руб. за кв. м в год): впишите её в строку «Рыночная ставка аренды» таблицы доходного подхода или укажите другой источник.`;
 }
 
 // Расчёт стоимости доли (2.511): заменяет прежнюю такую таблицу, иначе — в конец раздела с share (после весов подходов,
