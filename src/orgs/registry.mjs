@@ -4,7 +4,7 @@
 // и 2.108); чего не нашлось — пусто и пометка «дописать». Только свои дела эксперта (и частные, и от организации).
 // Сданные — в «готово» и закрытые заказчиком после него (2.407: закрытое дело из перечня не пропадает).
 // Годы — текущий и три прошлых (плановая проверка СРО — раз в три года). Выгрузка — CSV для Excel, как сводка за месяц.
-import { reportFacts } from '../ai/report-checks.mjs';
+import { reportFacts, shareCase } from '../ai/report-checks.mjs';
 import { bankList, OTHER_BANK } from '../dossier/dossier.mjs';
 import { numberSource, resultDocs } from '../ops/ai-ops.mjs';
 import { todayMsk } from '../orders/workflow.mjs';
@@ -105,7 +105,7 @@ async function registryRows(sql, storage, registry, done, period) {
   for (const o of list.slice(0, REGISTRY_MAX)) {
     const svc = registry.service(o.module, o.service);
     const { docs, edition } = editionDocs(o, storage ? await resultDocs(sql, storage, o) : []);
-    const facts = reportFacts(docs.filter((d) => d.pages));
+    const facts = reportFacts(docs.filter((d) => d.pages), { share: shareCase(o.service, o.fields ?? {}) });
     const row = {
       id: o.id,
       title: o.title,
