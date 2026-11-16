@@ -10,6 +10,7 @@ import { inspectionDaysOf, isAssumptions, placeRetro, retroInspection, retroLine
 import { factsLine, placeFacts } from '../orders/facts.mjs';
 import { specsTable, placeSpecs, lastVisit } from '../orders/specs.mjs';
 import { shareTable, placeShare } from '../orders/share.mjs';
+import { incomeTable, placeIncome } from '../orders/income.mjs';
 import { defectsTable, loadDefects, placeDefects } from '../orders/defects.mjs';
 import { inspectionPhotos } from '../docs/photos.mjs';
 import { HttpError } from '../http/core.mjs';
@@ -649,6 +650,8 @@ export function draftOps() {
           specs: editsDraft(actor, order) ? await orderSpecs(sql, registry, order, sections) : null,
           // 2.511: таблица «Расчёт стоимости доли» сейчас (размер доли и способ — из заявки) — для кнопки «Вставить» в деле.
           share: editsDraft(actor, order) && sections.some((x) => x.share) ? shareTable(order.service, order.fields ?? {}) : null,
+          // 2.521: таблица «Расчёт доходным подходом» у нежилого (площадь и плата по договору — из заявки) — для кнопки «Вставить».
+          income: editsDraft(actor, order) && sections.some((x) => x.income) ? incomeTable(order.service, order.fields ?? {}) : null,
           // Подходы к оценке (2.33): список — если исполнитель их выбирает для этой услуги; chosen — что отмечено.
           approaches: registry.approachesFor(order.module, order.service)
             ? { list: Object.entries(APPROACHES).map(([id, name]) => ({ id, name })), chosen: order.approaches ?? null }
@@ -739,6 +742,9 @@ export function draftOps() {
         // Расчёт стоимости доли (2.511): таблица — в конец раздела с share (у недвижимости — «14. Согласование результатов»).
         const shTable = sections.some((x) => x.share) ? shareTable(order.service, order.fields ?? {}) : null;
         const shareBrief = shTable ? `РАСЧЁТ СТОИМОСТИ ДОЛИ (программа сама вставит эту таблицу в конец раздела согласования результатов — не рисуй её; итог доли в выводах и в разделе 1 — [заполнить], такой же, как в ней):\n${shTable.slice(1).join('\n')}` : null;
+        // Расчёт доходным подходом (2.521): таблица — в конец раздела с income (у нежилого — «13. Доходный подход»).
+        const inTable = sections.some((x) => x.income) ? incomeTable(order.service, order.fields ?? {}) : null;
+        const incomeBrief = inTable ? `РАСЧЁТ ДОХОДНЫМ ПОДХОДОМ (программа сама вставит эту таблицу в конец раздела доходного подхода — не рисуй её; итог подхода в тексте и в согласовании результатов — [заполнить], такой же, как в ней):\n${inTable.slice(1).join('\n')}` : null;
         // Оценка задним числом (2.502): дата оценки раньше осмотра в деле — допущение строкой в раздел допущений.
         const retroDay = valueDate?.day && sections.some((x) => isAssumptions(x.title)) ? retroInspection(valueDate.day, await inspectionDaysOf(sql, order.id)) : null;
         const rLine = retroDay ? retroLine(valueDate.day, retroDay) : null;
@@ -746,7 +752,7 @@ export function draftOps() {
         // Несколько объектов наследства (2.506): строка — в раздел «Задание на оценку»; модели — стоимость по каждому.
         const hLine = heirLine(order.service, order.fields ?? {});
         const heirBrief = hLine ? `${hLine} — программа сама вставит эту строку в задание на оценку; опиши каждый объект и в выводах дай рыночную стоимость каждого отдельной строкой${order.fields?.heir_total === 'total' ? ' и общую (сумму)' : ''} — суммы [заполнить: после расчёта]` : null;
-        const brief = [orderBrief(registry, order, { omit: taken }), valueBrief, heirBrief, retroBrief, egrnBrief(egrn), taskBrief, onsite, noticeBrief, partsBrief, insurerBrief, defectsBrief, pledgeBrief, factsBrief, specsBrief, shareBrief, dossierBrief, spec ? analogsBrief(spec, analogs, order) : null, tablesBrief(sections)].filter(Boolean).join('\n');
+        const brief = [orderBrief(registry, order, { omit: taken }), valueBrief, heirBrief, retroBrief, egrnBrief(egrn), taskBrief, onsite, noticeBrief, partsBrief, insurerBrief, defectsBrief, pledgeBrief, factsBrief, specsBrief, shareBrief, incomeBrief, dossierBrief, spec ? analogsBrief(spec, analogs, order) : null, tablesBrief(sections)].filter(Boolean).join('\n');
         const out = await askAi(ctx, actor, 'draft', draftMessages({ brief, sections, ...inputs }));
         // Таблицы (2.29) и сведения из досье (2.14) программа вставляет сама, под заголовками разделов.
         const materials = await orderMaterials(sql, order);
@@ -758,7 +764,7 @@ export function draftOps() {
         const kinded = task.kind ? aimed.replace(VALUE_KIND_GAP, task.kind.v) : aimed;
         const dated = fillEgrn(valueDate?.day ? kinded.replace(VALUE_GAP, valueDate.day) : kinded, task.address ? { ...egrn, address: task.address } : egrn);
         const filled = placeCustomer(fillDraft(fillTables(dated, sections, registry, order, { materials, valueDate: valueDate?.inherit ? `${valueDate.day} (день открытия наследства, по заявке)` : valueDate?.day, egrn, task }), sections, dossier), sections, task.customer);
-        const text = placeShare(placeHeir(placeRetro(placeFacts(placePledge(placeSpecs(placeDefects(placeInsurer(placeParts(placeNotice(placeSources(filled, sections, sources).body, sections, nLine), sections, pTable), sections, iBlock), sections, dTable), sections, sTable), sections, plLine), sections, fLine), sections, rLine), sections, hLine), sections, shTable).slice(0, DRAFT_MAX);
+        const text = placeIncome(placeShare(placeHeir(placeRetro(placeFacts(placePledge(placeSpecs(placeDefects(placeInsurer(placeParts(placeNotice(placeSources(filled, sections, sources).body, sections, nLine), sections, pTable), sections, iBlock), sections, dTable), sections, sTable), sections, plLine), sections, fLine), sections, rLine), sections, hLine), sections, shTable), sections, inTable).slice(0, DRAFT_MAX);
         const seen = {
           photos: inputs.photos.map((p) => p.name),
           docs: inputs.docs.map((d) => ({ name: d.name, read: d.text !== null, truncated: d.truncated })),
@@ -779,6 +785,7 @@ export function draftOps() {
           defects: dTable ? dTable.length - 1 : 0,
           specs: sTable ? sTable.length - 1 : 0,
           share: !!shTable,
+          income: !!inTable,
           pledge: !!plLine,
           facts: !!fLine,
           retro: retroDay,

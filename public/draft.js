@@ -21,7 +21,7 @@ export async function loadDraft(current, reload) {
   if (!current.order.module || (!mine && !staff)) { box.classList.add('hidden'); return; }
   say($('draft-msg'), '');
   const r = await api('GET', `/api/orders/${current.order.id}/draft`);
-  ctx = { order: current.order, draft: r.draft, reload, sections: r.sections, noInspection: !!(r.no_inspection && r.can_edit), specs: r.can_edit ? r.specs ?? null : null, share: r.can_edit ? r.share ?? null : null };
+  ctx = { order: current.order, draft: r.draft, reload, sections: r.sections, noInspection: !!(r.no_inspection && r.can_edit), specs: r.can_edit ? r.specs ?? null : null, share: r.can_edit ? r.share ?? null : null, income: r.can_edit ? r.income ?? null : null };
   setNext({ draft: { exists: !!r.draft, approaches: r.approaches && r.can_edit ? r.approaches : null } });
   renderApproaches(r);
   // Исполнителю — пока дело в работе или черновик есть; служебным — только когда черновик есть.
@@ -111,6 +111,7 @@ function countGaps() {
   renderNoInspection();
   renderSpecs();
   renderShare();
+  renderIncome();
 }
 
 // 2.494: таблица «Характеристики объекта оценки» из заявки и выезда помощника. В черновике её нет или она другая (выезд
@@ -137,8 +138,24 @@ function renderSpecs() {
 
 // 2.511: таблица «Расчёт стоимости доли» (размер доли и способ — из заявки). Нет в черновике или другая (заявку поправили) —
 // подсказка и кнопка; такая же — ничего не показываем.
+// Таблицы расчёта с суммами эксперта (доля — 2.511, доходный подход — 2.521): строки с «[заполнить]» сверяются только по
+// названию слева — вписанные суммы таблицу не «старят»; строки без пропуска (размер доли, площадь из заявки) — целиком.
+function calcState(table) {
+  const t = $('draft-text');
+  if (!table?.length || !ctx.draft || t.readOnly) return null;
+  const lines = t.value.split('\n');
+  const at = lines.findIndex((l) => l.trim() === table[0]);
+  if (at < 0) return 'none';
+  let end = at + 1;
+  while (end < lines.length && lines[end].trim().startsWith('|')) end += 1;
+  const have = lines.slice(at + 1, end).map((l) => l.trim());
+  const left = (l) => l.split('|')[1]?.trim() ?? '';
+  const want = table.slice(1);
+  if (have.length !== want.length) return 'old';
+  return want.every((w, i) => (w.includes('[заполнить]') ? left(w) === left(have[i]) : w === have[i])) ? null : 'old';
+}
 function renderShare() {
-  const st = specsState(ctx?.share);
+  const st = calcState(ctx?.share);
   $('draft-share').classList.toggle('hidden', !st);
   if (!st) return;
   $('draft-share-text').textContent = st === 'none'
@@ -147,14 +164,25 @@ function renderShare() {
   $('draft-share-add').textContent = st === 'none' ? 'Вставить таблицу в черновик' : 'Обновить таблицу в черновике';
 }
 
+// 2.521: таблица «Расчёт доходным подходом» у нежилого (площадь и плата по договору — из заявки).
+function renderIncome() {
+  const st = calcState(ctx?.income);
+  $('draft-income').classList.toggle('hidden', !st);
+  if (!st) return;
+  $('draft-income-text').textContent = st === 'none'
+    ? 'Таблицы «Расчёт доходным подходом» в черновике нет. Программа вставит её в конец раздела «Доходный подход»: площадь, ставка аренды, валовой доход, недозагрузка, расходы, чистый доход, ставка капитализации и стоимость — суммы впишете сами.'
+    : 'Таблица «Расчёт доходным подходом» в черновике устарела: после неё в заявке изменились площадь или арендная плата. Обновите её — прежняя заменится целиком, суммы впишите заново.';
+  $('draft-income-add').textContent = st === 'none' ? 'Вставить таблицу в черновик' : 'Обновить таблицу в черновике';
+}
+
 // Расчёт стоимости доли (2.511): заменяет прежнюю такую таблицу, иначе — в конец раздела с share (после весов подходов,
 // через пустую строку), нет его — в конец текста. → 'same', true или null.
-async function insertShareTable(table) {
+async function insertShareTable(table, flag = 'share') {
   const t = $('draft-text');
   if (!canFixInDraft() || !table?.length) return null;
-  if (t.value.split('\n').some((l) => l.trim() === table[0])) return insertPartsTable(table, 'share');
+  if (t.value.split('\n').some((l) => l.trim() === table[0])) return insertPartsTable(table, flag);
   const text = table.join('\n');
-  const want = (ctx.sections ?? []).find((x) => x.share);
+  const want = (ctx.sections ?? []).find((x) => x[flag]);
   const h = want ? [...t.value.matchAll(/^#{1,3}\s*(.+)$/gm)].find((m) => norm(m[1]) === norm(want.title)) : null;
   let at = t.value.length;
   if (h) {
@@ -471,6 +499,10 @@ $('draft-specs-add').addEventListener('click', () => run($('draft-specs-add'), a
 $('draft-share-add').addEventListener('click', () => run($('draft-share-add'), async () => {
   const done = await insertShareTable(ctx?.share);
   if (done) say($('draft-msg'), 'Таблица «Расчёт стоимости доли» в черновике, черновик сохранён. Где «[заполнить]» — впишите суммы сами.', 'ok');
+}));
+$('draft-income-add').addEventListener('click', () => run($('draft-income-add'), async () => {
+  const done = await insertShareTable(ctx?.income, 'income');
+  if (done) say($('draft-msg'), 'Таблица «Расчёт доходным подходом» в черновике, черновик сохранён. Где «[заполнить]» — впишите суммы и источники сами.', 'ok');
 }));
 $('draft-noinsp-add').addEventListener('click', () => run($('draft-noinsp-add'), async () => {
   const done = await insertNoInspection();
