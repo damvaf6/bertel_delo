@@ -3594,6 +3594,12 @@ test('уведомления (2.45): все события на экране и 
       await c.query('insert into notifications (user_id, type, event, order_id, org_id) values ($1, $2, $3, $4, $5)',
         [me.id, e.type, id, e.order ? orderId : null, e.section === 'orgs' ? orgId : null]);
     }
+    // Пока шли шаги выше, другие проверки могли создать дела со сроком в прошлом (в полночь по Москве «вчера» — уже
+    // просрочено, CI 17.11 00:30): защита ещё раз и без чужих «срок прошёл» в ленте.
+    await c.query(`insert into deadline_reminders (order_id, kind, deadline)
+      select id, 'overdue', deadline from orders where deadline < (now() at time zone 'Europe/Moscow')::date
+      on conflict do nothing`);
+    await c.query("delete from notifications where user_id = $1 and event = 'deadline_overdue_staff' and order_id is distinct from $2", [me.id, orderId]);
   });
   await page.goto('/kabinet#notifications');
   const items = page.locator('#notifications li');
