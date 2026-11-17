@@ -28,6 +28,7 @@
 import { OTHER_BANK, bankList } from '../dossier/dossier.mjs';
 import { HttpError } from '../http/core.mjs';
 import { orderSplit } from '../money/money.mjs';
+import { incomeFacts } from '../orders/income.mjs';
 import { shareDiscount } from '../orders/share.mjs';
 import { addDays, isOverdue, todayMsk } from '../orders/workflow.mjs';
 
@@ -158,6 +159,7 @@ async function orgMonthDone(sql, orgId, ids, { start, end }) {
              o.fields->>'purpose' as purpose, o.fields->>'bank' as bank, o.fields->>'method' as method, o.fields->>'goods_kind' as goods_kind,
              o.fields->>'vehicle_type' as vehicle_type, o.fields->>'death_date' as death_date, o.fields->>'heir_objects' as heir_objects,
              o.fields->>'object_type' as object_type, o.fields->>'share_method' as share_method,
+             o.fields->>'premises_use' as premises_use, o.fields->>'lease' as lease,
              p.amount_kop as payout_kop, h.at,
              greatest(
                (select max(f.outcome_at) from order_offers f
@@ -802,6 +804,29 @@ function shareCalc(shares, division, discs) {
   };
 }
 
+// Нежилые помещения за месяц (2.527): сданные дела оценки нежилого (у услуги есть «Назначение» — premises_use, вид объекта
+// «Нежилое помещение») — сколько, по назначению из заявки, сколько сдаётся в аренду, у скольких в последней версии черновика
+// посчитан доходный подход (есть стоимость доходным подходом, `incomeFacts`) и средняя ставка капитализации по ним; сдаётся,
+// а доходного подхода в черновике нет — «сдаётся, без доходного подхода».
+const PREM_USES = ['office', 'retail', 'warehouse', 'free'];
+const premisesOfDone = (done, registry) => (registry ? done.filter((o) => o.module && o.object_type === 'commercial'
+  && registry.service(o.module, o.service)?.fields.some((f) => f.id === 'premises_use')) : []);
+// { prem_cases, prem_office, prem_retail, prem_warehouse, prem_free, prem_no_use, prem_leased, prem_income, prem_cap_avg, prem_leased_no_income }.
+function premisesCalc(prem, incomes) {
+  const withIncome = prem.filter((o) => incomes.get(o.id)?.value);
+  const caps = withIncome.map((o) => incomes.get(o.id).cap).filter((c) => c != null);
+  const leased = prem.filter((o) => ['full', 'part'].includes(o.lease));
+  return {
+    prem_cases: prem.length,
+    ...Object.fromEntries(PREM_USES.map((u) => [`prem_${u}`, prem.filter((o) => o.premises_use === u).length])),
+    prem_no_use: prem.filter((o) => !PREM_USES.includes(o.premises_use)).length,
+    prem_leased: leased.length,
+    prem_income: withIncome.length,
+    prem_cap_avg: caps.length ? Math.round((caps.reduce((s, c) => s + c, 0) / caps.length) * 10) / 10 : null,
+    prem_leased_no_income: leased.filter((o) => !incomes.get(o.id)?.value).length,
+  };
+}
+
 export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), now = new Date(), registry = null, taskDue = null, taskAfter = null,
   taskMove = null } = {}) {
   const year = isYear(month);
@@ -865,6 +890,8 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), no
   const division = registry ? q.done.filter((o) => o.module && o.purpose === 'division') : [];
   const discs = new Map((await shareDraftsQ(sql, shares.filter((o) => o.share_method === 'market').map((o) => o.id)))
     .map((d) => [d.order_id, shareDiscount(d.body)]));
+  const prem = premisesOfDone(q.done, registry);
+  const incomes = new Map((await shareDraftsQ(sql, prem.map((o) => o.id))).map((d) => [d.order_id, incomeFacts(d.body)]));
   const defs = new Map();
   for (const d of await defectsQ(sql, goods.map((o) => o.id))) (defs.get(d.order_id) ?? defs.set(d.order_id, []).get(d.order_id)).push(d);
   const count = (rows) => new Map(rows.map((r) => [r.user_id, r.n]));
@@ -918,6 +945,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), no
       ...vehCalc(veh.filter((o) => o.user_id === e.user_id)),
       ...heirCalc(heir.filter((o) => o.user_id === e.user_id)),
       ...shareCalc(shares.filter((o) => o.user_id === e.user_id), division.filter((o) => o.user_id === e.user_id), discs),
+      ...premisesCalc(prem.filter((o) => o.user_id === e.user_id), incomes),
       disp_reasons: topRemarks(q.dispReasons.filter((i) => i.user_id === e.user_id && i.text), TOP_REMARKS_EXPERT)
         .map(({ text, n }) => ({ text, n })),
       prev: cmp ? cmp.experts.get(e.user_id) : null,
@@ -942,7 +970,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), no
       ...egrnFirst(q.firstSign, registry), ...bankTask(q.bankTask), ...taskLate(taskDues),
       ...bankAfter(bankAfters), ...bankAccr(q.done, accr), ...ext(exts), ...letterAsk(q.letterAsk), ...orgSign(q.done), ...afterRemarks(q.afterRemarks, afterItems),
       ...court(q.court, now), ...carCalc(car, calcs), ...goodsCalc(goods, defs), ...vehCalc(veh), ...heirCalc(heir),
-      ...shareCalc(shares, division, discs),
+      ...shareCalc(shares, division, discs), ...premisesCalc(prem, incomes),
       prev: cmp ? cmp.total : null },
     prev_month: cmp ? prevM : null,
     prev_month_name: cmp ? periodRu(prevM) : null,
@@ -1220,6 +1248,13 @@ export function reportCsv(orgName, r) {
     ...[...r.experts.filter((x) => x.share_cases || x.division_cases).map((x) => [x.full_name, x]), ['Итого', r.total]]
       .map(([name, x]) => [name, x.share_cases, x.share_market, x.share_pro_rata, x.share_no_method, daysCell(x.share_disc_avg),
         x.share_no_disc, x.division_cases, x.division_share])] : []),
+    // 2.527: только если за месяц сданы нежилые помещения — по экспертам.
+    ...(r.total.prem_cases ? [[], ['Нежилые помещения — по экспертам', 'Сдано', 'Офис', 'Магазин, общепит, услуги', 'Склад, производство',
+      'Свободное назначение', 'Назначение не указано', 'Сдаётся в аренду', 'С доходным подходом', 'Средняя ставка капитализации, %',
+      'Сдаётся, без доходного подхода'],
+    ...[...r.experts.filter((x) => x.prem_cases).map((x) => [x.full_name, x]), ['Итого', r.total]]
+      .map(([name, x]) => [name, x.prem_cases, x.prem_office, x.prem_retail, x.prem_warehouse, x.prem_free, x.prem_no_use, x.prem_leased,
+        x.prem_income, daysCell(x.prem_cap_avg), x.prem_leased_no_income])] : []),
   ];
   return `﻿${lines.map((l) => l.map(cell).join(';')).join('\r\n')}\r\n`;
 }

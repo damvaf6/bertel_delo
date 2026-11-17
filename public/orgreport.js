@@ -79,6 +79,15 @@ x.share_disc_avg == null ? null : `средняя скидка на долю ${S
 x.share_no_disc ? `без скидки в черновике: ${x.share_no_disc}` : null,
 x.division_cases ? `раздел имущества: ${casesN(x.division_cases)}${x.division_share ? `, из них доли: ${x.division_share}` : ''}` : null]
   .filter(Boolean).join(' · ');
+// 2.527: «нежилые: 3 дела (офис: 2, склад, производство: 1) · сдаётся в аренду: 2 · доходный подход: 2, средняя ставка
+// капитализации 10,5% · сдаётся, а доходного подхода в черновике нет: 1».
+const PREM_USE = [['prem_office', 'офис'], ['prem_retail', 'магазин, общепит, услуги'], ['prem_warehouse', 'склад, производство'],
+  ['prem_free', 'свободное назначение'], ['prem_no_use', 'назначение не указано']];
+const premLine = (x) => [`нежилые: ${casesN(x.prem_cases)} (${PREM_USE.filter(([k]) => x[k]).map(([k, name]) => `${name}: ${x[k]}`).join(', ')})`,
+  x.prem_leased ? `сдаётся в аренду: ${x.prem_leased}` : null,
+  x.prem_income ? `доходный подход: ${x.prem_income}${x.prem_cap_avg == null ? '' : `, средняя ставка капитализации ${String(x.prem_cap_avg).replace('.', ',')}%`}` : null,
+  x.prem_leased_no_income ? `сдаётся, а доходного подхода в черновике нет: ${x.prem_leased_no_income}` : null]
+  .filter(Boolean).join(' · ');
 const daysRu = (d) => `${String(d).replace('.', ',')} ${!Number.isInteger(d) ? 'дня' : d % 10 === 1 && d % 100 !== 11 ? 'день'
   : [2, 3, 4].includes(d % 10) && ![12, 13, 14].includes(d % 100) ? 'дня' : 'дней'}`;
 // «в первоначальный срок, без переносов: 3 из 5 · в среднем 4,5 дня от принятия до сдачи · позже первоначального срока: 2
@@ -329,6 +338,12 @@ async function load(month) {
   $('org-report-share-experts').replaceChildren(...report.experts.filter((x) => x.share_cases || x.division_cases)
     .map((x) => el('li', { 'data-report-share-expert': x.user_id },
       el('div', { class: 'title', text: x.full_name }), el('div', { class: 'muted', text: shareLine(x) }))));
+  // 2.527: нежилые помещения — всего и по экспертам.
+  $('org-report-prem-box').classList.toggle('hidden', !t2.prem_cases);
+  $('org-report-prem-total').textContent = t2.prem_cases ? `Сдано: ${premLine(t2)}.` : '';
+  $('org-report-prem-experts').replaceChildren(...report.experts.filter((x) => x.prem_cases)
+    .map((x) => el('li', { 'data-report-prem-expert': x.user_id },
+      el('div', { class: 'title', text: x.full_name }), el('div', { class: 'muted', text: premLine(x) }))));
   const top = report.top_remarks ?? [];
   $('org-report-remarks-box').classList.toggle('hidden', !top.length);
   $('org-report-remarks').replaceChildren(...top.map((x) => el('li', { 'data-remark': '' },
