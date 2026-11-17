@@ -353,12 +353,13 @@ test('общий прогон: сквозной путь экспертизы �
   await ap.getByRole('button', { name: 'Сохранить роль' }).click();
   await expect(ap.getByText('Роль сохранена')).toBeVisible();
   await findUser(ap, S);
-  await expect(ap.locator('#admin-specialist-state')).toContainText('Пока не специалист');
+  // Номера повторяются между прогонами (база площадки не чистится): специалист мог остаться с прошлого прогона (ночной прогон 17.11).
+  await expect(ap.locator('#admin-specialist-state')).toContainText(/Пока не специалист|Этот человек — специалист/);
   await ap.getByRole('button', { name: 'Сохранить профиль специалиста' }).click();
   await expect(ap.getByText('Профиль специалиста сохранён')).toBeVisible();
   await ap.getByLabel('Дать допуск на услугу').selectOption('expertise/realty');
   await ap.getByRole('button', { name: 'Дать допуск' }).click();
-  await expect(ap.locator('#sp-permits li')).toContainText('недвижимости');
+  await expect(ap.locator('#sp-permits li').filter({ hasText: 'недвижимости' })).toHaveCount(1); // у повторного номера допусков может быть больше
   await shot(ap, '10-admin');
 
   // 2. Заказчик заполняет заявку, прикладывает документ (хранилище Яндекса) и отправляет.
