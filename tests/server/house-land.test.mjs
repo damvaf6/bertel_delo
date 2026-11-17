@@ -79,3 +79,11 @@ test('пункт проверки — только у жилого дома', ()
   assert.ok(reg.checks('expertise', 'realty', HOUSE).some((c) => (c.auto ?? []).includes('house_land')));
   assert.equal(reg.checks('expertise', 'realty', { object_type: 'flat' }).some((c) => (c.auto ?? []).includes('house_land')), false);
 });
+
+test('площадь участка в строке про участок — не площадь дома (сверка площади с заявкой)', () => {
+  const lines = ['Жилой дом площадью 120 кв. м', 'Земельный участок: кадастровый номер 50:20:0010203:45, площадь 1500 кв. м'];
+  const res = runAutoChecks(['area_match'], [doc(lines)], { service: 'realty', fields: HOUSE }).area_match ?? [];
+  assert.deepEqual(res.filter((f) => /1 500/.test(f.text)), [], JSON.stringify(res));
+  const bad = runAutoChecks(['area_match'], [doc(['Жилой дом площадью 140 кв. м'])], { service: 'realty', fields: HOUSE }).area_match ?? [];
+  assert.equal(bad.length, 1, 'площадь дома по-прежнему сверяется');
+});

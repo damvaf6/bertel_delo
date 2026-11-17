@@ -625,6 +625,8 @@ function objectAreas(doc, ctx) {
       if (cut >= 0) pre = pre.slice(cut + 1);
       const near = at < 0 ? '' : pre + before.slice(at);
       if (!near || other.test(near) || skip.test(near) || /аналог/iu.test(lineAround(page, f.index))) continue;
+      // 2.532: у дома площадь участка («Земельный участок: кадастровый номер …, площадь 1500 кв. м») — не площадь дома.
+      if (ctx.fields?.object_type === 'house' && ctx.service !== 'land' && aboutLand(before)) continue;
       const unit = f.unit.toLowerCase();
       const mult = /^га|^гектар/.test(unit) ? 10000 : /^сот/.test(unit) ? 100 : 1;
       out.push({ page: i, index: f.index, raw: `${f.int}${f.frac ? `,${f.frac}` : ''}`, v: Math.round(Number(`${f.int.replace(/[  ]/g, '')}.${f.frac ?? 0}`) * mult * 100) / 100 });
