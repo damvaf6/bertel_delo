@@ -409,7 +409,7 @@ test('заявка на оценку: поля услуги, срок, осно�
   await page.getByLabel('Где находится объект').selectOption({ label: 'Московская область' });
   await page.getByLabel('Что оцениваем').selectOption({ label: 'Квартира' });
   await page.getByLabel('Адрес объекта').fill('Московская обл., г. Тестовск, ул. Проверочная, д. 1, кв. 2');
-  await page.getByLabel('Кадастровый номер').fill('50:01:0001001:123');
+  await page.getByLabel('Кадастровый номер', { exact: true }).fill('50:01:0001001:123');
   await page.getByLabel('Площадь, кв. м').fill('54,3');
   await page.getByLabel(/^Срок/).fill(inDays(14));
   await page.getByLabel('Основание').selectOption({ label: 'Определение суда' });
