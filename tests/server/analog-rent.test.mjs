@@ -9,6 +9,7 @@ import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import { createRegistry } from '../../src/modules/index.mjs';
 import { analogWarnings, analogTable, analogsBrief, rentSummary, rentRate } from '../../src/analogs/analogs.mjs';
 import { extractPages } from '../../src/ai/extract.mjs';
+import { runAutoChecks } from '../../src/ai/report-checks.mjs';
 
 const reg = createRegistry();
 const COMM = { region: 'moscow', object_type: 'commercial', area: 120 };
@@ -133,6 +134,11 @@ test('в деле: ставка у аналога, строка над спис�
   const text = (await extractPages(Buffer.from(await w.arrayBuffer()), 'r.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')).pages.join('\n');
   assert.ok(text.includes('Аналоги аренды (для доходного подхода; в сравнительный подход не идут)'), text.slice(-1500));
   assert.ok(text.includes('Средняя ставка аренды аналогов 2, 3'));
+  // Прогон 2.528: в приложении аналог аренды подписан «(аренда)»; сверка отчёта считает только аналоги продажи.
+  assert.match(text, /Аналог 2 — \S+ \(аренда\)/u);
+  assert.doesNotMatch(text, /Аналог 1 — \S+ \(аренда\)/u);
+  const found = runAutoChecks(['analog_list'], [{ name: 'Отчёт.docx', kind: 'docx', pages: [`${text}\nСравнительный подход применён.`] }]).analog_list.map((x) => x.text);
+  assert.deepEqual(found, ['В сравнительном подходе один аналог продажи — нужно не меньше трёх (аналоги аренды не в счёт)']);
 
   // Доходный подход не применяется — подсказки к нему нет.
   assert.equal((await expert.req('PUT', `/api/orders/${o.id}/approaches`, { approaches: ['comparative'] })).status, 200);

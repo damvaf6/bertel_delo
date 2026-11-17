@@ -8,7 +8,7 @@ import { buildReport } from './docx.mjs';
 import { inspectionPhotos } from './photos.mjs';
 import { inspectionActBlocks } from './inspection-act.mjs';
 import { orderAct } from '../ops/inspect-ops.mjs';
-import { analogTable, hostOf, inItemOrder, listPositions, timeMsk, valueText } from '../analogs/analogs.mjs';
+import { analogTable, hostOf, inItemOrder, isRent, listPositions, timeMsk, valueText } from '../analogs/analogs.mjs';
 
 const GAP = '[заполнить]';
 const ru = (d) => {
@@ -190,7 +190,8 @@ async function analogsPart({ sql, providers, registry }, order, text) {
   for (const [i, a] of list.entries()) {
     const image = a.file_key && /^image\/(png|jpeg)$/.test(a.file_mime) ? await providers.storage.get(a.file_key) : null;
     items.push({
-      title: `Аналог ${i + 1} — ${hostOf(a.url)}`,
+      // Прогон 2.528: аналог аренды подписан и в приложении — сверка отчёта (analog_list) не считает его в «не меньше трёх».
+      title: `Аналог ${i + 1} — ${hostOf(a.url)}${isRent(a) ? ' (аренда)' : ''}`,
       lines: [
         `Ссылка: ${a.url}`,
         a.received_at ? `Скриншот получен платформой «БЕРТЕЛ Дело»: ${timeMsk(a.received_at)} (МСК)` : 'Скриншот не приложен',
