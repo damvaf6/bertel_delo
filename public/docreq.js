@@ -61,16 +61,21 @@ function item(x, r) {
 }
 
 // 2.224: от какого числа выписка, на какую дату судим и сколько дней прошло; уже запросили — ждём заказчика.
+let egrnItem = 'egrn';
 function egrnOld(o) {
   $('docreq-egrn').classList.toggle('hidden', !o);
   if (!o) return;
+  // 2.530: у жилого дома выписка на участок судится отдельно — «на участок под домом», запрос — её пунктом.
+  egrnItem = o.item ?? 'egrn';
+  const what = o.land ? `Выписка ЕГРН на участок под домом «${o.name}»` : `Выписка ЕГРН «${o.name}»`;
+  const sub = o.land ? ' на участок' : '';
   // 2.504: оценка для наследства — выписка намного раньше дня открытия наследства, нужны права на этот день.
   $('docreq-egrn-text').textContent = o.inherit
-    ? `Выписка ЕГРН «${o.name}» от ${ruDay(o.day)} — раньше дня открытия наследства ${ruDay(o.on)} на ${o.age} дн.: не видно, кому принадлежал объект на этот день. `
-      + (o.asked ? 'Выписка о переходе прав запрошена — ждём заказчика.' : 'Нужна выписка о переходе прав — запросите её у заказчика.')
-    : `Выписка ЕГРН «${o.name}» от ${ruDay(o.day)} — старше 30 дней на ${o.on_value ? `дату оценки ${ruDay(o.on)}` : 'сегодня'} (${o.age} дн.). `
-      + (o.asked ? 'Свежая выписка запрошена — ждём заказчика.' : 'Для отчёта нужна свежая — запросите её у заказчика.');
-  $('docreq-egrn-ask').textContent = o.inherit ? 'Запросить выписку о переходе прав' : 'Запросить свежую выписку';
+    ? `${what} от ${ruDay(o.day)} — раньше дня открытия наследства ${ruDay(o.on)} на ${o.age} дн.: не видно, кому принадлежал${o.land ? ' участок' : ' объект'} на этот день. `
+      + (o.asked ? `Выписка о переходе прав${sub} запрошена — ждём заказчика.` : `Нужна выписка о переходе прав${sub} — запросите её у заказчика.`)
+    : `${what} от ${ruDay(o.day)} — старше 30 дней на ${o.on_value ? `дату оценки ${ruDay(o.on)}` : 'сегодня'} (${o.age} дн.). `
+      + (o.asked ? `Свежая выписка${sub} запрошена — ждём заказчика.` : `Для отчёта нужна свежая${o.land ? ' и на участок' : ''} — запросите её у заказчика.`);
+  $('docreq-egrn-ask').textContent = o.inherit ? `Запросить выписку о переходе прав${sub}` : `Запросить свежую выписку${sub}`;
   $('docreq-egrn-ask').classList.toggle('hidden', o.asked);
 }
 
@@ -93,9 +98,9 @@ $('docreq-remind').addEventListener('click', async () => {
 
 $('docreq-egrn-ask').addEventListener('click', async () => {
   try {
-    const r = await api('POST', `/api/orders/${ctx.order.id}/doc-requests`, { items: ['egrn'], fresh_egrn: true });
+    const r = await api('POST', `/api/orders/${ctx.order.id}/doc-requests`, { items: [egrnItem], fresh_egrn: true });
     render(r);
-    say($('docreq-msg'), 'Свежая выписка ЕГРН запрошена. Заказчику отправлено уведомление.', 'ok');
+    say($('docreq-msg'), `Свежая выписка ЕГРН${egrnItem === 'land_egrn' ? ' на участок' : ''} запрошена. Заказчику отправлено уведомление.`, 'ok');
   } catch (err) { say($('docreq-msg'), err.message); }
 });
 

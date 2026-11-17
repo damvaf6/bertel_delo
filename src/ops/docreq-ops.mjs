@@ -8,7 +8,7 @@
 // Оценка для банка, задания на оценку нет и его не запрашивали, а до срока дела 3 дня или меньше (2.306) — строка в «Сегодня».
 import { HttpError } from '../http/core.mjs';
 import { FINAL, addDays, todayMsk } from '../orders/workflow.mjs';
-import { assignmentValue, egrnIssued, egrnOnObject } from '../ai/report-checks.mjs';
+import { assignmentValue, egrnIssued, egrnKind, egrnOnObject } from '../ai/report-checks.mjs';
 import { assignmentDocs, egrnDocs, TASK_ITEMS, TASK_MOVE } from './ai-ops.mjs';
 import { taskMoved } from './deadline-ops.mjs';
 import { LEVEL, orderLevel, orderSides } from '../access/policy.mjs';
@@ -49,21 +49,35 @@ async function requestOf(sql, order, raw) {
 // нужны сведения о правах на этот день, а не выписка «не старше месяца на сегодня». Выписка после этого дня — годится.
 export async function egrnOld(sql, storage, registry, order, today = todayMsk()) {
   if (order.status !== 'in_work' || !storage) return null;
-  if (!registry.requestDocs(order.module, order.service, order.basis_kind, order.fields).some((c) => c.id === 'egrn')) return null;
+  const items = registry.requestDocs(order.module, order.service, order.basis_kind, order.fields).map((c) => c.id);
+  if (!items.includes('egrn')) return null;
   // Выписка на дом при оценке квартиры (и наоборот) свежесть не решает (2.230).
   const docs = egrnOnObject(await egrnDocs(sql, storage, order), order);
+  const value = assignmentValue(await assignmentDocs(sql, storage, order)).day ?? null;
+  const heir = value ? null : inheritDay(order, today);
+  const on = value ?? heir ?? today;
+  // 2.530: жилой дом с участком — выписки на участок судятся отдельно от выписок на дом: свежая на участок не прикрывает
+  // старую на дом, и наоборот. Сначала дом (пункт `egrn`), потом участок (`land_egrn`).
+  const land = items.includes('land_egrn') ? docs.filter((d) => egrnKind(d) === 'land') : [];
+  const house = land.length ? docs.filter((d) => egrnKind(d) !== 'land') : docs;
+  for (const [item, group] of [['egrn', house], ['land_egrn', land]]) {
+    const old = await staleOf(sql, order, group, item, on, !!(value ?? heir), !!heir);
+    if (old) return old;
+  }
+  return null;
+}
+async function staleOf(sql, order, docs, item, on, onValue, inherit) {
+  if (!docs.length) return null;
   const issued = egrnIssued(docs);
   // Последняя загруженная выписка без распознанной даты (заказчик прислал свежую не тем видом) — не судим.
   if (!issued.length || !issued.some((x) => x.id === docs[0].id)) return null;
   const last = issued.reduce((a, b) => (b.day > a.day ? b : a));
-  const value = assignmentValue(await assignmentDocs(sql, storage, order)).day ?? null;
-  const heir = value ? null : inheritDay(order, today);
-  const on = value ?? heir ?? today;
   const age = Math.round((Date.parse(`${on}T00:00:00Z`) - Date.parse(`${last.day}T00:00:00Z`)) / 86400_000);
   if (age <= EGRN_FRESH_DAYS) return null;
-  const asked = !!(await sql`select 1 from doc_requests where order_id = ${order.id} and item_id = 'egrn'
+  const asked = !!(await sql`select 1 from doc_requests where order_id = ${order.id} and item_id = ${item}
                              and cancelled_at is null and fulfilled_at is null limit 1`).length;
-  return { id: last.id, name: last.name, page: last.page, day: last.day, on, on_value: !!(value ?? heir), inherit: !!heir, age, asked };
+  return { id: last.id, name: last.name, page: last.page, day: last.day, on, on_value: onValue, inherit, age, asked,
+    item, land: item === 'land_egrn' };
 }
 
 // День открытия наследства (ГГГГ-ММ-ДД) — при цели «наследство» и настоящей прошедшей дате в заявке; иначе null.
@@ -135,7 +149,11 @@ export async function docsWaiting(sql, orders, now = new Date()) {
 }
 
 // Пояснение заказчику к просьбе о свежей выписке — сразу видно, почему старая не годится.
-export const egrnOldNote = (o) => o.inherit
+export const egrnOldNote = (o) => o.land
+  ? (o.inherit
+    ? `Выписка ЕГРН на участок под домом в деле от ${o.day.split('-').reverse().join('.')} — раньше дня открытия наследства (${o.on.split('-').reverse().join('.')}) больше чем на ${EGRN_FRESH_DAYS} дней. Нужна выписка о переходе прав на участок — закажите её на Госуслугах или в МФЦ и загрузите сюда.`
+    : `Выписка ЕГРН на участок под домом в деле от ${o.day.split('-').reverse().join('.')} — старше ${EGRN_FRESH_DAYS} дней на ${o.on_value ? 'дату оценки' : 'сегодня'}. Дом и участок оцениваются вместе — нужна свежая выписка и на участок: закажите её на Госуслугах или в МФЦ и загрузите сюда.`)
+  : o.inherit
   ? `Выписка ЕГРН в деле от ${o.day.split('-').reverse().join('.')} — раньше дня открытия наследства (${o.on.split('-').reverse().join('.')}) больше чем на ${EGRN_FRESH_DAYS} дней: по ней не видно, кому принадлежал объект на этот день. Нужна выписка о переходе прав на объект — закажите её на Госуслугах или в МФЦ и загрузите сюда.`
   : `Выписка ЕГРН в деле от ${o.day.split('-').reverse().join('.')} — старше ${EGRN_FRESH_DAYS} дней на ${o.on_value ? 'дату оценки' : 'сегодня'}. Нужна свежая выписка: закажите её на Госуслугах или в МФЦ и загрузите сюда.`;
 
@@ -210,9 +228,9 @@ export function docRequestOps() {
         if (!items.length) throw new HttpError(400, 'nothing_selected', 'Отметьте документы или напишите, какой нужен');
         let note = body?.note && String(body.note).trim() ? text(body.note, 'Пояснение для заказчика', 1000) : moveNote;
         // «Запросить свежую выписку» (2.224): пояснение заказчику — от какого числа выписка в деле и почему нужна новая.
-        if (body?.fresh_egrn && !note && ids.includes('egrn')) {
+        if (body?.fresh_egrn && !note && (ids.includes('egrn') || ids.includes('land_egrn'))) {
           const old = await egrnOld(sql, providers.storage, registry, order);
-          if (old) note = egrnOldNote(old);
+          if (old && ids.includes(old.item)) note = egrnOldNote(old);
         }
         const made = await sql.tx(async (tx) => {
           const open = await tx`select item_id, title from doc_requests

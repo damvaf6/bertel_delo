@@ -207,7 +207,9 @@ export async function assignmentDocs(sql, storage, order) {
 const EGRN_MAX = 3;
 const EGRN_HEAD = /выписк\S*\s+из\s+(?:единого\s+государственного\s+реестра\s+недвижимости|ЕГРН)/iu;
 export async function egrnDocs(sql, storage, order) {
-  const docs = await sql`select d.*, exists (select 1 from doc_requests r where r.document_id = d.id and r.item_id = 'egrn' and r.cancelled_at is null) as asked
+  // 2.530: приложенное к пункту «Выписка на участок под домом» — тоже выписка, вид — участок (`land`).
+  const docs = await sql`select d.*, exists (select 1 from doc_requests r where r.document_id = d.id and r.item_id in ('egrn', 'land_egrn') and r.cancelled_at is null) as asked,
+                                exists (select 1 from doc_requests r where r.document_id = d.id and r.item_id = 'land_egrn' and r.cancelled_at is null) as land_asked
                          from documents d where d.order_id = ${order.id} and d.kind in ('basis', 'other') and d.deleted_at is null
                          order by d.created_at desc limit 20`;
   const out = [];
@@ -217,7 +219,7 @@ export async function egrnDocs(sql, storage, order) {
     const buf = await storage.get(d.storage_key);
     const got = buf ? await extractPages(buf, d.filename, d.mime) : null;
     if (!got) continue;
-    if (d.asked || /егрн|egrn|выписк/iu.test(d.filename) || EGRN_HEAD.test(String(got.pages[0] ?? '').slice(0, 1000))) out.push({ id: d.id, name: d.filename, pages: got.pages });
+    if (d.asked || /егрн|egrn|выписк/iu.test(d.filename) || EGRN_HEAD.test(String(got.pages[0] ?? '').slice(0, 1000))) out.push({ id: d.id, name: d.filename, pages: got.pages, ...(d.land_asked ? { land: true } : {}) });
   }
   return out;
 }

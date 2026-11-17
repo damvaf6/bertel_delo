@@ -698,7 +698,9 @@ function egrnDayIn(text) {
 // нет — судим по всем, как раньше.
 const EGRN_KIND_AT = /вид\s+объекта(?:\s+недвижимости)?\s*[:\-–—]?\s*([а-яё-]+)/iu;
 const PREMISES = ['flat', 'room', 'share', 'commercial'];
-function egrnKind(d) {
+// 2.530: выписка приложена к пункту «Выписка из ЕГРН на земельный участок под домом» — это участок, даже если вид не прочитан.
+export function egrnKind(d) {
+  if (d.land) return 'land';
   const m = (d.pages ?? []).slice(0, 2).join('\n').match(EGRN_KIND_AT);
   if (!m) return null;
   if (/^(?:помещени|машино)/iu.test(m[1])) return 'premises';

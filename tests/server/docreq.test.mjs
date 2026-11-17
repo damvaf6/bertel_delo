@@ -244,7 +244,7 @@ test('2.224: выписка ЕГРН старше 30 дней на дату оц
   const old = addDays(today, -40);
   assert.equal((await putDoc(o, egrnText(old), 'Выписка ЕГРН.txt')).status, 201);
   let r = (await list(o)).body;
-  assert.deepEqual({ ...r.egrn_old, id: undefined }, { id: undefined, name: 'Выписка ЕГРН.txt', page: 0, day: old, on: today, on_value: false, inherit: false, age: 40, asked: false });
+  assert.deepEqual({ ...r.egrn_old, id: undefined }, { id: undefined, name: 'Выписка ЕГРН.txt', page: 0, day: old, on: today, on_value: false, inherit: false, age: 40, asked: false, item: 'egrn', land: false });
   assert.ok((await todayRows()).some((x) => x.id === o.id && x.egrn.day === old));
   // Заказчик подсказки не видит.
   assert.equal((await list(o, owner)).body.egrn_old, null);
