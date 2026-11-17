@@ -10,7 +10,7 @@ export const state = { me: null, catalog: null, specialist: null, lawyers: null 
 // по другому адресу, не показывается поверх нового (быстрые переходы на медленной связи).
 const VIEW_OF = [
   [/^#order=/, 'order-view'], [/^#org=/, 'org-view'], [/^#orgs$/, 'orgs-view'], [/^#expert=/, 'expert-view'],
-  [/^#profile$/, 'profile-view'], [/^#assistant(=|$)/, 'assistant-view'], [/^#specialist$/, 'specialist-view'],
+  [/^#profile$/, 'profile-view'], [/^#assistant(=|$)/, 'assistant-view'], [/^#specialist(&to=\w+)?$/, 'specialist-view'],
   [/^#specialists$/, 'specialists-view'], [/^#admin$/, 'admin-view'], [/^#money$/, 'money-view'],
   [/^#notifications$/, 'notifications-view'], [/^#help$/, 'help-view'], [/^#problems$/, 'problems-view'],
   [/^#lawyers$/, 'lawyers-view'],
