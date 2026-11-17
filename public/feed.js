@@ -34,6 +34,18 @@ function shareText(s) {
   return `Оценка доли: ${size} · ${how}${use ? ` · ${use}` : ''}`;
 }
 
+// 2.526: нежилое — назначение, аренда и вход.
+function premisesText(p) {
+  const use = { office: 'офис', retail: 'магазин, общепит, услуги', warehouse: 'склад, производство', free: 'свободное назначение' }[p.use]
+    ?? 'назначение не указано';
+  const lease = p.lease === 'full' || p.lease === 'part'
+    ? `${p.lease === 'full' ? 'сдаётся целиком' : 'сдаётся частично'} — доходный подход, договор аренды в дело${p.rent ? '' : ', плата по договору не указана'}`
+    : p.lease === 'no' ? 'не сдаётся — ставка аренды по похожим помещениям'
+    : 'сдаётся ли — не указано, уточнить у заказчика';
+  const entrance = { street: 'вход с улицы', common: 'вход через общий подъезд' }[p.entrance];
+  return `Нежилое: ${use} · ${lease}${entrance ? ` · ${entrance}` : ''}`;
+}
+
 function item(x, onTake) {
   const take = el('button', { type: 'button', 'data-role': 'feed-take', text: 'Взять заказ' });
   const li = el('li', { 'data-order': x.id },
@@ -43,6 +55,7 @@ function item(x, onTake) {
   if (x.bank && !x.bank.accredited) {
     li.append(el('div', { class: 'overdue', 'data-role': 'feed-bank', text: 'Заказ для банка, а у Вас нет аккредитации в нём — банк может не принять отчёт' }));
   }
+  if (x.premises) li.append(el('div', { class: 'muted', 'data-role': 'feed-premises', text: premisesText(x.premises) }));
   if (x.share) li.append(el('div', { class: 'muted', 'data-role': 'feed-share', text: shareText(x.share) }));
   if (x.heir) li.append(el('div', { class: 'muted', 'data-role': 'feed-heir', text: heirText(x.heir) }));
   const msg = el('p', { class: 'msg', role: 'status', 'aria-live': 'polite' });

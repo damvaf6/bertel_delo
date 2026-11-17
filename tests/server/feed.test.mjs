@@ -5,7 +5,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
-import { heirFeed, shareFeed } from '../../src/ops/feed-ops.mjs';
+import { heirFeed, shareFeed, premisesFeed } from '../../src/ops/feed-ops.mjs';
 import { heirNotices } from '../../src/orders/inheritance.mjs';
 
 let S, owner, dispatcher, a, b, mo, noPermit, plain;
@@ -145,4 +145,28 @@ test('2.516: размер доли только дробью, способ и с
   assert.deepEqual(sh({ share_size: 'половина', purpose: 'division', share_use: 'court' }), { size: null, method: null, use: 'court', court: true });
   assert.deepEqual(sh({ share_size: '3/2', share_method: 'xx', purpose: 'court' }), { size: null, method: null, use: null, court: true });
   assert.equal(sh({ share_size: '1/3' }, 'vehicle'), null);
+});
+
+// 2.526: нежилое в ленте — назначение, сдаётся ли и вход до «Взять заказ»; суммы аренды и адреса нет, поля — не фактами.
+test('2.526: в ленте у нежилого — назначение, аренда и вход, без суммы аренды', async () => {
+  const o = await order('Лента: нежилое', { extra: { object_type: 'commercial', premises_use: 'retail', lease: 'part',
+    lease_rent: 154321, entrance: 'common' } });
+  const item = (await feed(a)).feed.find((x) => x.id === o.id);
+  assert.ok(item, 'заказ в ленте');
+  assert.deepEqual(item.premises, { use: 'retail', lease: 'part', rent: true, entrance: 'common' });
+  assert.ok(!item.facts.some((f) => /нежилое/i.test(f.label)), 'назначение, аренда и вход — не отдельными фактами');
+  assert.ok(!JSON.stringify(item).includes('154321') && !JSON.stringify(item).includes('Лентовая'), 'ни суммы аренды, ни адреса');
+  const flat = await order('Лента: квартира с полями нежилого', { extra: { object_type: 'flat', lease: 'full' } });
+  const fi = (await feed(a)).feed.find((x) => x.id === flat.id);
+  assert.equal(fi.premises, null);
+  assert.ok(!fi.facts.some((f) => /нежилое/i.test(f.label)), 'случайно заполненное поле нежилого — не в ленте');
+});
+
+test('2.526: строка о нежилом — только из списков, плата — указана ли', () => {
+  const p = (fields, service = 'realty') => premisesFeed({ service, fields: { object_type: 'commercial', ...fields } });
+  assert.deepEqual(p({}), { use: null, lease: null, rent: null, entrance: null });
+  assert.deepEqual(p({ premises_use: 'warehouse', lease: 'full' }), { use: 'warehouse', lease: 'full', rent: false, entrance: null });
+  assert.deepEqual(p({ premises_use: 'xx', lease: 'no', lease_rent: 5000, entrance: 'yard' }), { use: null, lease: 'no', rent: null, entrance: null });
+  assert.equal(p({ lease: 'full' }, 'land'), null);
+  assert.equal(premisesFeed({ service: 'realty', fields: { object_type: 'flat', lease: 'full' } }), null);
 });

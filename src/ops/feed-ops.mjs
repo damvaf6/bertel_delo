@@ -43,10 +43,12 @@ async function eligible(sql, order, userId, regions, registry) {
 function feedItem(order, registry, cand) {
   const svc = registry.service(order.module, order.service);
   const share = shareFeed(order);
+  const premises = premisesFeed(order);
   const facts = [];
   for (const f of svc?.fields ?? []) {
     if (f.type !== 'select') continue;
     if (share && ['share_method', 'share_use'].includes(f.id)) continue; // способ и порядок — в строке о доле (2.516)
+    if (PREMISES_SELECTS.includes(f.id)) continue; // назначение, аренда и вход — в строке о нежилом (2.526)
     const v = order.fields?.[f.id];
     const opt = f.options?.find((o) => o.id === v);
     if (opt) facts.push({ label: f.label, value: opt.name });
@@ -62,6 +64,7 @@ function feedItem(order, registry, cand) {
     bank: cand?.bank === undefined ? null : { accredited: !!cand.bank },
     heir: heirFeed(order),
     share,
+    premises,
     since: order.paid_at,
   };
 }
@@ -92,6 +95,24 @@ export function shareFeed(order) {
   const method = ['market', 'pro_rata'].includes(f.share_method) ? f.share_method : null;
   const use = ['agreement', 'court', 'none'].includes(f.share_use) ? f.share_use : null;
   return { size: s ? `${s.a}/${s.b}` : null, method, use, court: ['court', 'division'].includes(f.purpose) };
+}
+
+// 2.526: нежилое помещение — до того как взять, эксперт видит назначение, сдаётся ли помещение (от этого зависит доходный
+// подход и нужен ли договор аренды) и вход. Только выбранное из списков; сумму аренды лента не показывает — лишь указана
+// ли она. У не нежилого (или не оценки недвижимости) — ничего: случайно заполненные поля нежилого в ленту не идут.
+const PREMISES_SELECTS = ['premises_use', 'lease', 'entrance'];
+export function premisesFeed(order) {
+  const f = order.fields ?? {};
+  if (order.service !== 'realty' || f.object_type !== 'commercial') return null;
+  const pick = (v, ids) => (ids.includes(v) ? v : null);
+  const lease = pick(f.lease, ['full', 'part', 'no']);
+  const rent = Number(f.lease_rent);
+  return {
+    use: pick(f.premises_use, ['office', 'retail', 'warehouse', 'free']),
+    lease,
+    rent: lease === 'full' || lease === 'part' ? Number.isFinite(rent) && rent > 0 : null,
+    entrance: pick(f.entrance, ['street', 'common']),
+  };
 }
 
 export function feedOps() {
