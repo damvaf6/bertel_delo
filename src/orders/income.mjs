@@ -39,3 +39,27 @@ export function incomeTable(serviceId, fields = {}) {
 export function placeIncome(body, sections, lines) {
   return placeShare(body, sections, lines, 'income');
 }
+
+// Ставка капитализации и стоимость доходным подходом из черновика (2.527, сводка руководителя): строки таблицы «Расчёт доходным
+// подходом» (или текста) — число в ячейке значения; пропуск «[заполнить]» или строки нет — null. Строка без числа — ищем дальше.
+const CAP_LINE = /(?:ставк\S*|коэффициент\S*)\s+капитализаци\S*/iu;
+const VALUE_LINE = /стоимост\S*\s+(?:объекта\s+(?:оценки\s+)?)?(?:доходн\S*\s+подход\S*|по\s+доходному\s+подходу)/iu;
+function cellNum(body, re) {
+  for (const line of String(body ?? '').split('\n')) {
+    const m = re.exec(line);
+    if (!m) continue;
+    const rest = line.slice(m.index + m[0].length)
+      .replace(/^\s*\((?:[^()]|\([^()]*\))*\)/u, '')
+      .replace(/^\s*,?\s*(?:руб\.?|%)/u, '')
+      .split('[')[0];
+    const n = /(?<![\d])(\d{1,3}(?:[\s  ]\d{3})+|\d+)(?:[,.](\d+))?(?![\d/])/u.exec(rest);
+    if (n) return Number(n[1].replace(/[\s  ]/gu, '')) + (n[2] ? Number(`0.${n[2]}`) : 0);
+  }
+  return null;
+}
+// { cap: ставка капитализации, % (0 < x < 100, иначе null), value: стоимость доходным подходом, руб. (> 0, иначе null) }.
+export function incomeFacts(body) {
+  const cap = cellNum(body, CAP_LINE);
+  const value = cellNum(body, VALUE_LINE);
+  return { cap: cap > 0 && cap < 100 ? cap : null, value: value > 0 ? value : null };
+}
