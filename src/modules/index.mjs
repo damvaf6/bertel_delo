@@ -31,6 +31,8 @@
 //       facts: [id поля заявки…] — сюда программа вставляет строку «Из заявки: …» с заполненными полями (2.492,
 //         src/orders/facts.mjs); поля должны быть у каждой услуги раздела
 //       share: true — сюда, в конец раздела, программа вставляет таблицу «Расчёт стоимости доли» (2.511, src/orders/share.mjs)
+//       house: true — сюда, в конец раздела, программа вставляет таблицу «Стоимость дома и участка» (2.531,
+//         src/orders/house.mjs); у услуги раздела должно быть поле house_land
 //       income: true — сюда, в конец раздела, программа вставляет таблицу «Расчёт доходным подходом» у нежилого (2.521,
 //         src/orders/income.mjs); у услуги раздела должно быть поле lease
 //       specs: [{ field?, onsite?, label? }…] — сюда программа вставляет таблицу «Характеристики объекта оценки» (2.494,
@@ -246,7 +248,9 @@ export function validateModule(m) {
     checkIds(m.draft, `${at}, разделы черновика`);
     for (const d of m.draft) {
       const where = `${at}, раздел черновика ${d.id}`;
-      onlyKeys(d, ['id', 'title', 'services', 'ask', 'dossier', 'table', 'approach', 'reuse', 'sources', 'notice', 'parts', 'defects', 'pledge', 'facts', 'specs', 'share', 'income'], where);
+      onlyKeys(d, ['id', 'title', 'services', 'ask', 'dossier', 'table', 'approach', 'reuse', 'sources', 'notice', 'parts', 'defects', 'pledge', 'facts', 'specs', 'share', 'income', 'house'], where);
+      if (d.house !== undefined && d.house !== true) fail(where, 'house — только true');
+      if (d.house && m.services.filter((x) => !d.services || d.services.includes(x.id)).some((x) => !serviceFields(m, x).some((f) => f.id === 'house_land'))) fail(where, 'house — у услуги раздела нет поля house_land');
       if (d.income !== undefined && d.income !== true) fail(where, 'income — только true');
       if (d.income && m.services.filter((x) => !d.services || d.services.includes(x.id)).some((x) => !serviceFields(m, x).some((f) => f.id === 'lease'))) fail(where, 'income — у услуги раздела нет поля lease');
       if (d.share !== undefined && d.share !== true) fail(where, 'share — только true');
@@ -777,7 +781,7 @@ export function createRegistry(modules = DEFAULT_MODULES, { orgCheck = false } =
       return m.draft.filter((d) => (!d.services || d.services.includes(serviceId)) && (!chosen || !d.approach || chosen.includes(d.approach)))
         .map((d) => {
           const title = chosen && /^\d+\.\s/.test(d.title) ? d.title.replace(/^\d+/, String(++n)) : d.title;
-          return { id: d.id, title, ...(d.ask ? { ask: d.ask } : {}), ...(d.dossier ? { dossier: d.dossier } : {}), ...(d.table ? { table: d.table } : {}), ...(d.approach ? { approach: d.approach } : {}), ...(d.reuse ? { reuse: true } : {}), ...(d.sources ? { sources: true } : {}), ...(d.notice ? { notice: true } : {}), ...(d.parts ? { parts: true } : {}), ...(d.defects ? { defects: true } : {}), ...(d.pledge ? { pledge: true } : {}), ...(d.facts ? { facts: d.facts } : {}), ...(d.specs ? { specs: d.specs } : {}), ...(d.share ? { share: true } : {}), ...(d.income ? { income: true } : {}) };
+          return { id: d.id, title, ...(d.ask ? { ask: d.ask } : {}), ...(d.dossier ? { dossier: d.dossier } : {}), ...(d.table ? { table: d.table } : {}), ...(d.approach ? { approach: d.approach } : {}), ...(d.reuse ? { reuse: true } : {}), ...(d.sources ? { sources: true } : {}), ...(d.notice ? { notice: true } : {}), ...(d.parts ? { parts: true } : {}), ...(d.defects ? { defects: true } : {}), ...(d.pledge ? { pledge: true } : {}), ...(d.facts ? { facts: d.facts } : {}), ...(d.specs ? { specs: d.specs } : {}), ...(d.share ? { share: true } : {}), ...(d.income ? { income: true } : {}), ...(d.house ? { house: true } : {}) };
         });
     },
     // Выбирает ли исполнитель подходы к оценке для услуги (2.33).

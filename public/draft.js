@@ -21,7 +21,7 @@ export async function loadDraft(current, reload) {
   if (!current.order.module || (!mine && !staff)) { box.classList.add('hidden'); return; }
   say($('draft-msg'), '');
   const r = await api('GET', `/api/orders/${current.order.id}/draft`);
-  ctx = { order: current.order, draft: r.draft, reload, sections: r.sections, noInspection: !!(r.no_inspection && r.can_edit), specs: r.can_edit ? r.specs ?? null : null, share: r.can_edit ? r.share ?? null : null, income: r.can_edit ? r.income ?? null : null, incomeRent: r.can_edit ? r.income_rent ?? null : null };
+  ctx = { order: current.order, draft: r.draft, reload, sections: r.sections, noInspection: !!(r.no_inspection && r.can_edit), specs: r.can_edit ? r.specs ?? null : null, share: r.can_edit ? r.share ?? null : null, income: r.can_edit ? r.income ?? null : null, house: r.can_edit ? r.house ?? null : null, incomeRent: r.can_edit ? r.income_rent ?? null : null };
   setNext({ draft: { exists: !!r.draft, approaches: r.approaches && r.can_edit ? r.approaches : null } });
   renderApproaches(r);
   // Исполнителю — пока дело в работе или черновик есть; служебным — только когда черновик есть.
@@ -111,6 +111,7 @@ function countGaps() {
   renderNoInspection();
   renderSpecs();
   renderShare();
+  renderHouse();
   renderIncome();
   renderIncomeRent();
 }
@@ -163,6 +164,17 @@ function renderShare() {
     ? 'Таблицы «Расчёт стоимости доли» в черновике нет. Программа вставит её в конец раздела «Согласование результатов»: стоимость объекта целиком, размер доли, часть стоимости, скидка на долю и стоимость доли — суммы впишете сами.'
     : 'Таблица «Расчёт стоимости доли» в черновике устарела: после неё в заявке изменились размер доли или способ оценки. Обновите её — прежняя заменится целиком, суммы впишите заново.';
   $('draft-share-add').textContent = st === 'none' ? 'Вставить таблицу в черновик' : 'Обновить таблицу в черновике';
+}
+
+// 2.531: таблица «Стоимость дома и участка» у жилого дома (участок, его номер и площадь — из заявки).
+function renderHouse() {
+  const st = calcState(ctx?.house);
+  $('draft-house').classList.toggle('hidden', !st);
+  if (!st) return;
+  $('draft-house-text').textContent = st === 'none'
+    ? 'Таблицы «Стоимость дома и участка» в черновике нет. Программа вставит её в конец раздела «Согласование результатов»: стоимость дома, участка под ним и итог — суммы впишете сами.'
+    : 'Таблица «Стоимость дома и участка» в черновике устарела: после неё в заявке изменились сведения об участке под домом. Обновите её — прежняя заменится целиком, суммы впишите заново.';
+  $('draft-house-add').textContent = st === 'none' ? 'Вставить таблицу в черновик' : 'Обновить таблицу в черновике';
 }
 
 // 2.521: таблица «Расчёт доходным подходом» у нежилого (площадь и плата по договору — из заявки).
@@ -510,6 +522,10 @@ $('draft-specs-add').addEventListener('click', () => run($('draft-specs-add'), a
 $('draft-share-add').addEventListener('click', () => run($('draft-share-add'), async () => {
   const done = await insertShareTable(ctx?.share);
   if (done) say($('draft-msg'), 'Таблица «Расчёт стоимости доли» в черновике, черновик сохранён. Где «[заполнить]» — впишите суммы сами.', 'ok');
+}));
+$('draft-house-add').addEventListener('click', () => run($('draft-house-add'), async () => {
+  const done = await insertShareTable(ctx?.house, 'house');
+  if (done) say($('draft-msg'), 'Таблица «Стоимость дома и участка» в черновике, черновик сохранён. Где «[заполнить]» — впишите суммы сами.', 'ok');
 }));
 $('draft-income-add').addEventListener('click', () => run($('draft-income-add'), async () => {
   const done = await insertShareTable(ctx?.income, 'income');

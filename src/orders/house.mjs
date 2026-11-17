@@ -2,6 +2,7 @@
 // единый объект (ст. 35 Земельного кодекса РФ), их оценивают вместе и показывают стоимость каждого. Заказчик в заявке пишет
 // материал стен, оформлен ли участок, его кадастровый номер и площадь, газ и пригоден ли дом для зимы; здесь — подсказка в
 // деле всем, кто видит заявку. О самовольной постройке и законности прав не пишем — это вопрос юриста, не оценщика.
+import { placeShare } from './share.mjs';
 
 const FILLED = ['house_walls', 'house_land', 'land_cadastral', 'land_area', 'house_gas', 'house_winter'];
 
@@ -26,4 +27,46 @@ export function houseNotices(serviceId, fields = {}) {
     out.push({ id: 'house_bank', text: 'Дом летний, а оценка для банка: многие банки берут в залог только дом для круглогодичного проживания — уточните требования банка.' });
   }
   return out;
+}
+
+// Таблица «Стоимость дома и участка» (2.531) — в конец раздела черновика с house: true (у оценки недвижимости — «14. Согласование
+// результатов»), после весов подходов и итога. Участок в собственности — дом, участок и итог (дом + участок) и доля участка в
+// итоге; в аренде — дом и право аренды участка (если переходит вместе с домом); не оформлен — только дом, итог равен ему; не
+// указано — строка участка с пропуском «уточните». Кадастровый номер и площадь участка — из заявки, суммы — эксперт
+// («[заполнить]»). Прежняя таблица узнаётся по строке заголовка и заменяется целиком (`placeShare`); из черновика — в Word.
+export const HOUSE_HEAD = '| Стоимость дома и участка | Значение |';
+const GAP = '[заполнить]';
+const NUM = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 });
+
+function landNote(fields) {
+  const cad = String(fields.land_cadastral ?? '').trim();
+  const area = Number(fields.land_area);
+  const bits = [cad ? `кадастровый номер ${cad}` : null,
+    Number.isFinite(area) && area > 0 ? `${NUM.format(area).replace(/\s/g, ' ')} сот.` : null].filter(Boolean);
+  return bits.length ? ` (${bits.join(', ')} — по заявке, сверьте с выпиской ЕГРН на участок)` : '';
+}
+
+export function houseTable(serviceId, fields = {}) {
+  if (serviceId !== 'realty' || fields.object_type !== 'house') return null;
+  const rows = [HOUSE_HEAD, `| Жилой дом, руб. | ${GAP} |`];
+  const land = fields.house_land;
+  if (land === 'own') {
+    rows.push(`| Земельный участок под домом${landNote(fields)}, руб. | ${GAP} |`,
+      `| Итого: дом и участок (единый объект, ст. 35 ЗК РФ), руб. | ${GAP} |`,
+      `| Доля участка в итоговой стоимости, % | ${GAP} |`);
+  } else if (land === 'lease') {
+    rows.push(`| Право аренды участка под домом${landNote(fields)}, руб. | ${GAP} (если переходит вместе с домом; иначе — «не оценивается») |`,
+      `| Итого: дом и право аренды участка, руб. | ${GAP} |`);
+  } else if (land === 'none') {
+    rows.push('| Земельный участок | не оценивается — участок под домом не оформлен |',
+      `| Итого (равно стоимости дома), руб. | ${GAP} |`);
+  } else {
+    rows.push(`| Земельный участок под домом${landNote(fields)}, руб. | ${GAP}: оформлен ли участок — уточните у заказчика; не оформлен — «не оценивается» |`,
+      `| Итого, руб. | ${GAP} |`);
+  }
+  return rows;
+}
+
+export function placeHouse(body, sections, lines) {
+  return placeShare(body, sections, lines, 'house');
 }
