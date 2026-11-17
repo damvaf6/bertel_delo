@@ -625,6 +625,8 @@ function objectAreas(doc, ctx) {
       if (cut >= 0) pre = pre.slice(cut + 1);
       const near = at < 0 ? '' : pre + before.slice(at);
       if (!near || other.test(near) || skip.test(near) || /аналог/iu.test(lineAround(page, f.index))) continue;
+      // 2.532: у дома площадь участка («Земельный участок: кадастровый номер …, площадь 1500 кв. м») — не площадь дома.
+      if (ctx.fields?.object_type === 'house' && ctx.service !== 'land' && aboutLand(before)) continue;
       const unit = f.unit.toLowerCase();
       const mult = /^га|^гектар/.test(unit) ? 10000 : /^сот/.test(unit) ? 100 : 1;
       out.push({ page: i, index: f.index, raw: `${f.int}${f.frac ? `,${f.frac}` : ''}`, v: Math.round(Number(`${f.int.replace(/[  ]/g, '')}.${f.frac ?? 0}`) * mult * 100) / 100 });
@@ -4475,6 +4477,140 @@ function premisesBasis(docs, ctx) {
   return out;
 }
 
+// ——— 2.532: дом с участком ———
+// Жилой дом (оценка недвижимости, object_type: house), участок под домом по заявке в собственности (house_land: own): дом и
+// участок — единый объект (ст. 35 ЗК РФ). В отчёте — стоимость участка (таблица 2.531 «Стоимость дома и участка» или текст),
+// дом + участок = итог (расхождение больше 1% — находка с «Исправить в черновике»), пропусков «[заполнить]» нет. Кадастровый
+// номер и площадь участка в отчёте — как в выписке ЕГРН на участок из дела (`egrnKind` — 'land'; без выписки — молчим).
+// Площадь в отчёте ищется рядом со словом «участок» (а не «дом»: «участок под домом» — участок), в кв. м, сотках или гектарах.
+const HL_HEAD = /стоимост\S*\s+(?:жил\S*\s+)?дома\s+и\s+(?:земельн\S*\s+)?участка/iu;
+const HL_KINDS = [
+  ['total', /итого[а-яё]*\s*[:\-–—]?\s*(?:жил[а-яё]*\s+)?дом[а-яё]*\s+(?:и|с)\s+(?:земельн[а-яё]*\s+)?участ[а-яё]*|(?:итогов|общ|совокупн)[а-яё]*\s+(?:рыночн[а-яё]*\s+)?стоимост[а-яё]*\s+(?:объекта\s+оценки\s*[(:—–-]?\s*)?(?:жил[а-яё]*\s+)?дом[а-яё]*\s+(?:и|с|вместе\s+с)\s+(?:земельн[а-яё]*\s+)?участк[а-яё]*/iu],
+  ['land', /^[|\s\d.]*(?:рыночн[а-яё]*\s+)?(?:стоимост[а-яё]*\s+)?земельн[а-яё]*\s+участ[а-яё]*(?:\s+под\s+(?:жил[а-яё]*\s+)?дом[а-яё]*)?|стоимост[а-яё]*\s+(?:права\s+собственности\s+на\s+)?земельн[а-яё]*\s+участ[а-яё]*(?:\s+под\s+(?:жил[а-яё]*\s+)?дом[а-яё]*)?/iu],
+  ['house', /^[|\s\d.]*(?:рыночн[а-яё]*\s+)?(?:стоимост[а-яё]*\s+)?жил[а-яё]*\s+дом[а-яё]*(?!\s+(?:и|с)\s+(?:земельн[а-яё]*\s+)?участ)|стоимост[а-яё]*\s+(?:жил[а-яё]*\s+)?дом(?:а|у)?(?![а-яё])(?!\s+(?:и|с)\s+(?:земельн[а-яё]*\s+)?участ)/iu],
+];
+const hlKind = (l) => (HL_HEAD.test(l) && !/\d/.test(l.replace(HL_HEAD, '')) ? 'head' : HL_KINDS.find(([, re]) => re.test(l))?.[0] ?? null);
+function hlCell(lines, n, kind) {
+  const line = lines[n].line;
+  const m = HL_KINDS.find(([k]) => k === kind)[1].exec(line);
+  const rest = line.slice(m.index + m[0].length).replace(/^\s*(?:\((?:[^()]|\([^()]*\))*\)\s*)?(?:[,:]\s*(?:руб\S*)\s*)?[|:=—–\s-]*/u, '').replace(/[|\s]+$/u, '');
+  if (rest) return { text: rest, at: lines[n] };
+  for (let k = n + 1; k < Math.min(lines.length, n + 3); k += 1) {
+    const t = lines[k].line.replace(/^[|\s]+|[|\s]+$/gu, '');
+    if (!t) continue;
+    return hlKind(t) ? null : { text: t, at: lines[k] };
+  }
+  return null;
+}
+// Участок, а не дом: в куске перед значением последнее «участок» стоит позже последнего «дом» («участок под домом» — участок).
+const HL_LAND_WORD = /участ/giu;
+const HL_HOUSE_WORD = /(?<!под\s+)(?<![а-яё])(?:жил\S*\s+)?дом|здани|строени/giu;
+function aboutLand(seg) {
+  const last = (re) => { let i = -1; for (const m of seg.matchAll(re)) i = m.index; return i; };
+  const land = last(HL_LAND_WORD);
+  return land >= 0 && land > last(HL_HOUSE_WORD);
+}
+function houseLand(docs, ctx) {
+  const fields = ctx.fields ?? {};
+  if ((ctx.service && ctx.service !== 'realty') || fields.object_type !== 'house' || fields.house_land !== 'own') return [];
+  const main = mainReport(docs);
+  if (!main) return [];
+  const all = [];
+  eachPage(main, (raw, i) => raw.split('\n').forEach((l) => all.push({ page: i, line: l })));
+  // Таблица «Стоимость дома и участка» есть — суммы берём из неё (12 строк после заголовка), иначе по всему отчёту без аналогов.
+  const hi = all.findIndex((x) => hlKind(x.line) === 'head');
+  const lines = hi >= 0 ? all.slice(hi + 1, hi + 13) : all.filter((x) => !/аналог/iu.test(x.line));
+  const got = { house: [], land: [], total: [] };
+  lines.forEach((x, n) => {
+    const kind = hlKind(x.line);
+    if (!kind || kind === 'head') return;
+    const cell = hlCell(lines, n, kind);
+    if (cell) got[kind].push({ ...cell, quote: clean(x.line).slice(0, 200) });
+  });
+  const out = [];
+  const gaps = [...got.house, ...got.land, ...got.total].filter((c) => SH_GAP.test(c.text) && !shMoney(c.text));
+  if (gaps.length) {
+    out.push({ doc: main, page: gaps[0].at.page, quote: gaps[0].quote,
+      text: `В таблице «Стоимость дома и участка» остались пропуски «[заполнить]» (${gaps.length}) — впишите стоимость дома, участка и итог` });
+  }
+  const money = (list) => list.map((c) => ({ ...c, money: shMoney(c.text) })).filter((c) => c.money);
+  const house = money(got.house).at(-1);
+  const land = money(got.land).at(-1);
+  const totals = money(got.total);
+  if (!land && !got.land.some((c) => SH_GAP.test(c.text))) {
+    const near = house ?? totals[0];
+    out.push({ doc: main, page: near?.at.page ?? 0, quote: near?.quote ?? '',
+      text: 'Участок под домом по заявке в собственности, а стоимости участка в отчёте не найдено: дом и участок — единый объект (ст. 35 ЗК РФ) — оцените участок и покажите стоимость дома, участка и итог (таблица «Стоимость дома и участка» в черновике)' });
+  }
+  if (house && land) {
+    const sum = house.money.value + land.money.value;
+    const seen = new Set();
+    for (const c of totals) {
+      if (seen.has(c.money.value) || !shOff(c.money.value, sum)) continue;
+      seen.add(c.money.value);
+      out.push({ doc: main, page: c.at.page, quote: c.quote,
+        fix: { bad: c.money.raw, right: rub(sum), from: `по расчёту дом ${rub(house.money.value)} + участок ${rub(land.money.value)}` },
+        text: `Итог «дом и участок» ${rub(c.money.value)} руб. не равен сумме: дом ${rub(house.money.value)} + участок ${rub(land.money.value)} = ${rub(sum)} руб. — пересчитайте итог или исправьте стоимость дома или участка` });
+    }
+  }
+  // Кадастровый номер и площадь участка — как в выписке ЕГРН на участок.
+  const landEgrn = (ctx.egrn ?? []).filter((d) => egrnKind(d) === 'land');
+  if (!landEgrn.length) return out;
+  const lctx = { service: 'land' };
+  const cad = oneValue(egrnCadastralValues(landEgrn, lctx));
+  const area = oneValue(egrnAreaValues(landEgrn, lctx));
+  const from = (x) => `по выписке ЕГРН на участок${x.name ? ` «${x.name}»` : ''}`;
+  if (cad) {
+    const seen = [];
+    eachPage(main, (page, i) => {
+      let prev = 0;
+      for (const m of page.matchAll(CADASTRAL_RE)) {
+        const start = page.lastIndexOf('\n', m.index - 1) + 1;
+        let seg = page.slice(Math.max(start, prev), m.index);
+        if (!/[а-яё]/iu.test(seg)) seg = `${lineBefore(page, start - 1)} ${seg}`;
+        prev = m.index + m[0].length;
+        if (/аналог/iu.test(lineAround(page, m.index)) || !aboutLand(seg)) continue;
+        seen.push({ v: m[0], page: i, quote: lineAround(page, m.index) });
+      }
+    });
+    const wrong = seen.find((x) => x.v !== cad.v);
+    if (seen.length && wrong && !seen.some((x) => x.v === cad.v)) {
+      out.push({ doc: main, page: wrong.page, quote: wrong.quote, fix: { bad: wrong.v, right: cad.v, from: from(cad) },
+        text: `Кадастровый номер участка под домом в отчёте ${wrong.v}, а в выписке ЕГРН на участок — ${cad.v}: проверьте, не номер ли это другого участка` });
+    } else if (wrong) {
+      out.push({ doc: main, page: wrong.page, quote: wrong.quote, fix: { bad: wrong.v, right: cad.v, from: from(cad) },
+        text: `В отчёте у участка под домом встречается и другой кадастровый номер — ${wrong.v}; по выписке ЕГРН на участок — ${cad.v}` });
+    } else if (!seen.length) {
+      out.push({ doc: main, page: 0, quote: '',
+        text: `В отчёте не указан кадастровый номер участка под домом — по выписке ЕГРН на участок ${cad.v}; впишите его в описание объекта` });
+    }
+  }
+  if (area && area.v > 0) {
+    const seen = [];
+    eachPage(main, (page, i) => {
+      for (const m of page.matchAll(AREA_NUM)) {
+        const line = lineAround(page, m.index);
+        const before = areaBefore(page, m.index);
+        const seg = before.slice(Math.max(0, before.length - 90)).split(/[;.](?=\s)|,\s(?=[а-яё]+\s+дом)/iu).at(-1);
+        if (/аналог|застройк/iu.test(line) || !aboutLand(seg)) continue;
+        const unit = m[3].toLowerCase();
+        const mult = /^га|^гектар/.test(unit) ? 10000 : /^сот/.test(unit) ? 100 : 1;
+        const v = Math.round(Number(`${m[1].replace(/[  ]/g, '')}.${m[2] ?? 0}`) * mult * 100) / 100;
+        if (v > 0) seen.push({ v, raw: `${m[1]}${m[2] ? `,${m[2]}` : ''}`, unit: m[3], page: i, quote: line });
+      }
+    });
+    const same = (v) => Math.abs(v - area.v) <= 0.5;
+    const wrong = seen.find((x) => !same(x.v));
+    if (wrong) {
+      const sot = /^сот/iu.test(wrong.unit);
+      out.push({ doc: main, page: wrong.page, quote: wrong.quote,
+        fix: { bad: wrong.raw, right: fmt(sot ? Math.round(area.v) / 100 : area.v).replace(' ', ' '), from: from(area) },
+        text: `Площадь участка под домом в отчёте ${wrong.raw} ${clean(wrong.unit)}${sot ? ` (${fmt(wrong.v)} кв. м)` : ''}, а в выписке ЕГРН на участок — ${fmt(area.v)} кв. м${sot ? ` (${fmt(area.v / 100)} сот.)` : ''}` });
+    }
+  }
+  return out;
+}
+
 const WHOLE = {
   parts_match: partsMatch,
   goods_match: goodsMatch,
@@ -4506,6 +4642,7 @@ const WHOLE = {
   share_value: shareValue,
   income_value: incomeValue,
   premises_basis: premisesBasis,
+  house_land: houseLand,
 };
 
 const PER_DOC = {
@@ -4600,6 +4737,7 @@ export const AUTO_CHECKS = Object.freeze({
   share_value: 'оценка доли: часть стоимости — целое × доля, стоимость доли — часть × (1 − скидка); по способу из заявки: «рыночная» — скидка на долю с источником, «часть стоимости целого» — без скидки; в расчёте нет пропусков «[заполнить]»',
   income_value: 'нежилое помещение, доходный подход: ПВД = площадь × ставка аренды, ДВД = ПВД × (1 − недозагрузка), ЧОД = ДВД − расходы, стоимость = ЧОД / ставка капитализации; у ставки капитализации и недозагрузки — источник; в расчёте нет пропусков «[заполнить]»',
   premises_basis: 'нежилое помещение: у итоговой стоимости сказано, с НДС или без; аренда — как в заявке: сдаётся — в отчёте названа (договор, арендатор, обременение), не сдаётся — в отчёте нет «сдано в аренду» и договора аренды',
+  house_land: 'жилой дом, участок под домом в собственности: стоимость участка в отчёте есть, дом + участок = итог, пропусков «[заполнить]» нет; кадастровый номер и площадь участка — как в выписке ЕГРН на участок из дела',
   parts_match: 'ущерб после ДТП: у каждой детали из таблицы повреждённых деталей дела есть фото осмотра и строка в калькуляции ремонта; каждая деталь из заявки «Что повреждено» есть в исследовании повреждений',
   repair_sums: 'ущерб после ДТП: стоимость ремонта с учётом износа не больше, чем без износа, и одна в расчёте и выводах; УТС легкового автомобиля старше 5 лет или с пробегом больше 100 000 км не посчитана (рекомендации РФЦСЭ 2018), об УТС сказано; в выводах суммы ремонта и УТС — и прописью; своя сумма в сверке со страховой — как в отчёте',
   repair_basis: 'ущерб после ДТП: дата ДТП и цены в расчёте — на дату ДТП из заявки; методика по цели из заявки: ОСАГО — Единая методика (755-П), суд и к виновнику — Методические рекомендации РФЦСЭ (2018)',
