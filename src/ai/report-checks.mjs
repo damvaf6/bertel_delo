@@ -2316,14 +2316,37 @@ function analogFindings(doc) {
       urls.get(u).set.add(before.n);
     }
   });
-  if (!refusedCompare && nums.size >= 1 && nums.size < 3 && /сравнительн\S*\s+подход/iu.test(text)) {
+  // Прогон 2.528: аналоги аренды у нежилого (2.523) в сравнительный подход не идут — номера из таблицы «Аналоги аренды …»
+  // и «Аналог N … (аренда)» в приложении не в счёт «не меньше трёх».
+  const rents = rentAnalogNos(doc);
+  const sales = [...nums].filter((n) => !rents.has(n));
+  if (!refusedCompare && sales.length >= 1 && sales.length < 3 && /сравнительн\S*\s+подход/iu.test(text)) {
     const at = (doc.pages ?? []).findIndex((p) => /аналог\S*\s*(?:№\s*)?\d/iu.test(p));
-    out.push({ page: Math.max(0, at), quote: '', text: `В сравнительном подходе ${nums.size === 1 ? 'один аналог' : 'два аналога'} — нужно не меньше трёх` });
+    out.push({ page: Math.max(0, at), quote: '', text: `В сравнительном подходе ${sales.length === 1 ? 'один аналог' : 'два аналога'}${rents.size ? ' продажи' : ''} — нужно не меньше трёх${rents.size ? ' (аналоги аренды не в счёт)' : ''}` });
   }
   for (const v of urls.values()) {
     if (v.set.size < 2) continue;
     out.push({ page: v.page, quote: v.quote, text: `Одна и та же ссылка у аналогов № ${[...v.set].sort((a, b) => a - b).join(' и № ')} — у каждого аналога должно быть своё объявление` });
   }
+  return out;
+}
+
+const RENT_HEAD = /^\s*аналог\S*\s+аренд/iu;
+function rentAnalogNos(doc) {
+  const out = new Set();
+  eachPage(doc, (page) => {
+    let inRent = false;
+    for (const line of page.split('\n')) {
+      if (RENT_HEAD.test(line)) { inRent = true; continue; }
+      if (inRent) {
+        const row = line.match(TABLE_ROW_NO);
+        if (row) { out.add(Number(row[1])); continue; }
+        if (/^\s*\|/u.test(line)) continue; // шапка таблицы
+        inRent = false;
+      }
+      if (/аренд/iu.test(line) && !/продаж/iu.test(line)) for (const m of line.matchAll(ANALOG_NO)) out.add(Number(m[1]));
+    }
+  });
   return out;
 }
 
