@@ -127,3 +127,26 @@ test('быстрый переход: догрузившийся раздел н�
   await expect(page.locator('#help-view')).toBeVisible();
   await expect(page.locator('#missing-view')).toBeHidden();
 });
+
+// Прогон CI 17.11.2026: из дела (догружается медленно) — сразу в «Мои сроки» (#specialist&to=schedule, из утренней сводки
+// и «Моих сроков»). Догрузившееся дело не закрывает раздел специалиста.
+test('быстрый переход: догрузившееся дело не закрывает «Мои сроки» (#specialist&to=schedule)', async ({ page }) => {
+  const u = await signIn(page, '+79990000707');
+  const orderId = await db(async (c) => {
+    await c.query("insert into specialists (user_id, regions, capacity) values ($1, '{moscow}', 5) on conflict do nothing", [u.id]);
+    await c.query("insert into specialist_permits (user_id, module, service) values ($1, 'expertise', 'realty') on conflict do nothing", [u.id]);
+    return (await c.query(`insert into orders (module, service, title, owner_user_id, status, fields)
+      values ('expertise', 'realty', 'Медленное дело', $1, 'new', '{}') returning id`, [u.id])).rows[0].id;
+  });
+  await page.goto('/kabinet');
+  await gotIt(page);
+  await gotIt(page);
+  await page.route(`**/api/orders/${orderId}`, async (route) => { await new Promise((r) => setTimeout(r, 2000)); await route.continue(); });
+  await page.evaluate((id) => { location.hash = `order=${id}&to=notes`; }, orderId);
+  await page.evaluate(() => { location.hash = 'specialist&to=schedule'; });
+  await expect(page.locator('#specialist-view')).toBeVisible();
+  await page.waitForTimeout(2500);
+  await expect(page.locator('#specialist-view')).toBeVisible();
+  await expect(page.locator('#order-view')).toBeHidden();
+  await expect(page.locator('#schedule-box')).toBeVisible();
+});
