@@ -39,7 +39,7 @@
 //         src/orders/specs.mjs): field — поле заявки (у каждой услуги раздела), onsite — поле данных с объекта (express)
 //       sources: true — сюда программа вставляет перечень использованных документов дела (2.95, src/docs/sources.mjs)
 //     approaches?: { services: [id услуги…] }  — исполнитель отмечает, какие подходы к оценке применяет (2.33)
-//     inspection?: [{ id, title, hint?, services?: [id услуги…], optional?, each?: { field, title, hint?, rest } }…],  — шаги
+//     inspection?: [{ id, title, hint?, services?: [id услуги…], optional?, each?: { field, title, hint?, rest }, when?, skip? }…],  — шаги
 //       дистанционного осмотра (2.3); each — шаг на каждую деталь из поля заявки (2.476, «{item}» в title), сам шаг — rest
 //     request_docs?: [{ id, title, hint?, services?: [id услуги…], basis?: [вид основания…], when? }…],  — документы, которые
 //       исполнитель может одной кнопкой запросить у заказчика (2.64): выписка ЕГРН, ПТС, чек…; заказчик загружает файл к
@@ -297,7 +297,18 @@ export function validateModule(m) {
     checkIds(m.inspection, `${at}, шаги осмотра`);
     for (const st of m.inspection) {
       const where = `${at}, шаг осмотра ${st.id}`;
-      onlyKeys(st, ['id', 'title', 'hint', 'services', 'optional', 'each'], where);
+      onlyKeys(st, ['id', 'title', 'hint', 'services', 'optional', 'each', 'when', 'skip'], where);
+      // when — шаг только при таком значении поля заявки (2.533: фасады и кровля — у жилого дома); skip — не при таком
+      // (подъезд и дверь квартиры у дома не снимают).
+      for (const k of ['when', 'skip']) {
+        const c = st[k];
+        if (c === undefined) continue;
+        onlyKeys(c, ['field', 'in'], `${where}, ${k}`);
+        const users = st.services ? m.services.filter((x) => st.services.includes(x.id)) : m.services;
+        const f = users.map((x) => serviceFields(m, x).find((y) => y.id === c.field)).find(Boolean);
+        if (!f || f.type !== 'select') fail(where, `${k}.field — поле-список заявки у этих услуг`);
+        if (!Array.isArray(c.in) || !c.in.length || c.in.some((v) => !f.options.some((o) => o.id === v))) fail(where, `${k}.in — значения этого поля`);
+      }
       if (st.each !== undefined) {
         onlyKeys(st.each, ['field', 'title', 'hint', 'rest', 'split', 'keep', 'main'], `${where}, each`);
         if (st.each.keep !== undefined && st.each.keep !== true) fail(where, 'each.keep — только true');
@@ -798,7 +809,9 @@ export function createRegistry(modules = DEFAULT_MODULES, { orgCheck = false } =
       if (!m?.inspection || !m.services.some((x) => x.id === serviceId)) return [];
       // Поле each — только своё у услуги (у ДТП нет «Если машин несколько», 2.496).
       const own = new Set(serviceFields(m, m.services.find((x) => x.id === serviceId)).map((f) => f.id));
-      return m.inspection.filter((st) => !st.services || st.services.includes(serviceId)).flatMap((st) => {
+      // when / skip (2.533) — по полю заявки: у жилого дома свои шаги вместо подъезда и двери квартиры.
+      return m.inspection.filter((st) => (!st.services || st.services.includes(serviceId))
+        && (!st.when || st.when.in.includes(fields?.[st.when.field])) && (!st.skip || !st.skip.in.includes(fields?.[st.skip.field]))).flatMap((st) => {
         const plain = { id: st.id, title: st.title, hint: st.hint ?? null, optional: !!st.optional };
         const items = !st.each || !own.has(st.each.field) ? [] : (st.each.split === 'lines' ? defectLines : damageItems)(fields?.[st.each.field]).slice(0, 12);
         if (!items.length) return [plain];
