@@ -11,7 +11,7 @@ import { factsLine, placeFacts } from '../orders/facts.mjs';
 import { specsTable, placeSpecs, lastVisit } from '../orders/specs.mjs';
 import { shareTable, placeShare } from '../orders/share.mjs';
 import { incomeTable, placeIncome } from '../orders/income.mjs';
-import { houseTable, placeHouse } from '../orders/house.mjs';
+import { houseTable, landEgrnFacts, placeHouse } from '../orders/house.mjs';
 import { defectsTable, loadDefects, placeDefects } from '../orders/defects.mjs';
 import { inspectionPhotos } from '../docs/photos.mjs';
 import { HttpError } from '../http/core.mjs';
@@ -489,6 +489,14 @@ const VALUE_GAP = /\[(?:заполнить|указать)\s*:?\s*дат[аыу]
 // она (другая в заявке — рядом); у собственников разные доли — та, что в заявке, если она среди них, иначе эксперт выбирает сам.
 // 2.261: назначение помещения или дома (use_match, 2.259) — отдельной строкой «Назначение помещения»; в заявке оно —
 // из «Что оцениваем» (нежилое помещение — нежилое, остальное — жилое): другое — рядом; в выписках разные — эксперт выбирает сам.
+// 2.538: таблица «Стоимость дома и участка» сейчас — номер и площадь участка из выписки ЕГРН на участок в деле, иначе по заявке.
+// Выписки читаются только у дома с участком в собственности или в аренде.
+async function houseNow(sql, storage, order) {
+  const fields = order.fields ?? {};
+  const land = order.service === 'realty' && fields.object_type === 'house' && ['own', 'lease'].includes(fields.house_land)
+    ? landEgrnFacts(await egrnDocs(sql, storage, order)) : null;
+  return houseTable(order.service, fields, land);
+}
 async function egrnFor(sql, storage, registry, order) {
   const auto = registry.checks(order.module, order.service).flatMap((r) => r.auto ?? []);
   if (!['area_match', 'cadastral_match', 'floor_match', 'address_match', 'rights_match', 'encumbrance_match', 'share_egrn_match', 'use_match'].some((k) => auto.includes(k))) return null;
@@ -644,7 +652,7 @@ export function draftOps() {
     {
       id: 'draft.get', method: 'GET', path: '/api/orders/:id/draft', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
-      async handler({ sql, actor, order, registry }) {
+      async handler({ sql, actor, order, registry, providers }) {
         guard(actor, order);
         const sections = orderSections(registry, order);
         return {
@@ -660,7 +668,8 @@ export function draftOps() {
           // 2.511: таблица «Расчёт стоимости доли» сейчас (размер доли и способ — из заявки) — для кнопки «Вставить» в деле.
           share: editsDraft(actor, order) && sections.some((x) => x.share) ? shareTable(order.service, order.fields ?? {}) : null,
           // 2.531: таблица «Стоимость дома и участка» у жилого дома (участок, его номер и площадь — из заявки) — для кнопки «Вставить».
-          house: editsDraft(actor, order) && sections.some((x) => x.house) ? houseTable(order.service, order.fields ?? {}) : null,
+          // 2.538: выписка на участок в деле — номер и площадь участка из неё.
+          house: editsDraft(actor, order) && sections.some((x) => x.house) ? await houseNow(sql, providers.storage, order) : null,
           // 2.521: таблица «Расчёт доходным подходом» у нежилого (площадь и плата по договору — из заявки) — для кнопки «Вставить».
           income: editsDraft(actor, order) && sections.some((x) => x.income) ? incomeTable(order.service, order.fields ?? {}) : null,
           // 2.523: средняя ставка подтверждённых аналогов аренды (номера — как в разделе «Аналоги») — подсказкой к таблице.
@@ -759,7 +768,7 @@ export function draftOps() {
         const inTable = sections.some((x) => x.income) ? incomeTable(order.service, order.fields ?? {}) : null;
         const incomeBrief = inTable ? `РАСЧЁТ ДОХОДНЫМ ПОДХОДОМ (программа сама вставит эту таблицу в конец раздела доходного подхода — не рисуй её; итог подхода в тексте и в согласовании результатов — [заполнить], такой же, как в ней):\n${inTable.slice(1).join('\n')}` : null;
         // Стоимость дома и участка (2.531): таблица — в конец раздела с house (у недвижимости — «14. Согласование результатов»).
-        const hoTable = sections.some((x) => x.house) ? houseTable(order.service, order.fields ?? {}) : null;
+        const hoTable = sections.some((x) => x.house) ? await houseNow(sql, providers.storage, order) : null;
         const houseBrief = hoTable ? `СТОИМОСТЬ ДОМА И УЧАСТКА (программа сама вставит эту таблицу в конец раздела согласования результатов — не рисуй её; стоимость дома, участка и итог в выводах и в разделе 1 — [заполнить], такие же, как в ней):\n${hoTable.slice(1).join('\n')}` : null;
         // Оценка задним числом (2.502): дата оценки раньше осмотра в деле — допущение строкой в раздел допущений.
         const retroDay = valueDate?.day && sections.some((x) => isAssumptions(x.title)) ? retroInspection(valueDate.day, await inspectionDaysOf(sql, order.id)) : null;
