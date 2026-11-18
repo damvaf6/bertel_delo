@@ -3,6 +3,7 @@
 // заказчику сам — результат по-прежнему проходит проверку диспетчера (1.5). Разделы черновика — в описании модуля.
 import { loadNotices, noticeLine, placeNotice } from '../orders/notices.mjs';
 import { heirLine, inheritanceValueDay, placeHeir } from '../orders/inheritance.mjs';
+import { dduAssumption, dduTaskLine, placeDduAssumption, placeDduTask } from '../orders/ddu.mjs';
 import { loadParts, partsTable, placeParts } from '../orders/parts.mjs';
 import { insurerBlock, loadInsurer, placeInsurer } from '../orders/insurer.mjs';
 import { loadPledge, placePledge, pledgeLine } from '../orders/pledge.mjs';
@@ -255,7 +256,9 @@ export async function emptyDraft(sql, actor, order, registry, sections, storage)
   const materials = await orderMaterials(sql, order);
   const sources = sourcesLines(await orderSources(sql, registry, order, storage));
   const body = placeSources(fillDraft(fillTables(skeleton(sections), sections, registry, order, { materials }), sections, dossier), sections, sources).body;
-  return placeHeir(body, sections, heirLine(order.service, order.fields ?? {}));
+  const f = order.fields ?? {};
+  // Права по ДДУ (2.541): объект — право требования в «Задание на оценку», допущение — в раздел допущений.
+  return placeDduAssumption(placeDduTask(placeHeir(body, sections, heirLine(order.service, f)), sections, dduTaskLine(order.service, f)), sections, dduAssumption(order.service, f));
 }
 
 const VERSIONS_MAX = 100;
@@ -777,7 +780,11 @@ export function draftOps() {
         // Несколько объектов наследства (2.506): строка — в раздел «Задание на оценку»; модели — стоимость по каждому.
         const hLine = heirLine(order.service, order.fields ?? {});
         const heirBrief = hLine ? `${hLine} — программа сама вставит эту строку в задание на оценку; опиши каждый объект и в выводах дай рыночную стоимость каждого отдельной строкой${order.fields?.heir_total === 'total' ? ' и общую (сумму)' : ''} — суммы [заполнить: после расчёта]` : null;
-        const brief = [orderBrief(registry, order, { omit: taken }), valueBrief, heirBrief, retroBrief, egrnBrief(egrn), taskBrief, onsite, noticeBrief, partsBrief, insurerBrief, defectsBrief, pledgeBrief, factsBrief, specsBrief, shareBrief, houseBrief, incomeBrief, dossierBrief, spec ? analogsBrief(spec, analogs, order) : null, tablesBrief(sections)].filter(Boolean).join('\n');
+        // Права по ДДУ (2.541): объект — право требования; строка — в задание на оценку, допущение — в раздел допущений.
+        const dTask = dduTaskLine(order.service, order.fields ?? {}, task.kind?.v);
+        const dAssume = dduAssumption(order.service, order.fields ?? {});
+        const dduBrief = dTask ? `${dTask} ${dAssume} — программа сама вставит эти строки в задание на оценку и в допущения; объект во всём отчёте — право требования по договору, а не квартира; кадастрового номера квартиры и выписки ЕГРН на неё не пиши; площадь — проектная` : null;
+        const brief = [orderBrief(registry, order, { omit: taken }), valueBrief, heirBrief, dduBrief, retroBrief, egrnBrief(egrn), taskBrief, onsite, noticeBrief, partsBrief, insurerBrief, defectsBrief, pledgeBrief, factsBrief, specsBrief, shareBrief, houseBrief, incomeBrief, dossierBrief, spec ? analogsBrief(spec, analogs, order) : null, tablesBrief(sections)].filter(Boolean).join('\n');
         const out = await askAi(ctx, actor, 'draft', draftMessages({ brief, sections, ...inputs }));
         // Таблицы (2.29) и сведения из досье (2.14) программа вставляет сама, под заголовками разделов.
         const materials = await orderMaterials(sql, order);
@@ -789,7 +796,7 @@ export function draftOps() {
         const kinded = task.kind ? aimed.replace(VALUE_KIND_GAP, task.kind.v) : aimed;
         const dated = fillEgrn(valueDate?.day ? kinded.replace(VALUE_GAP, valueDate.day) : kinded, task.address ? { ...egrn, address: task.address } : egrn);
         const filled = placeCustomer(fillDraft(fillTables(dated, sections, registry, order, { materials, valueDate: valueDate?.inherit ? `${valueDate.day} (день открытия наследства, по заявке)` : valueDate?.day, egrn, task }), sections, dossier), sections, task.customer);
-        const text = placeHouse(placeIncome(placeShare(placeHeir(placeRetro(placeFacts(placePledge(placeSpecs(placeDefects(placeInsurer(placeParts(placeNotice(placeSources(filled, sections, sources).body, sections, nLine), sections, pTable), sections, iBlock), sections, dTable), sections, sTable), sections, plLine), sections, fLine), sections, rLine), sections, hLine), sections, shTable), sections, inTable), sections, hoTable).slice(0, DRAFT_MAX);
+        const text = placeDduAssumption(placeDduTask(placeHouse(placeIncome(placeShare(placeHeir(placeRetro(placeFacts(placePledge(placeSpecs(placeDefects(placeInsurer(placeParts(placeNotice(placeSources(filled, sections, sources).body, sections, nLine), sections, pTable), sections, iBlock), sections, dTable), sections, sTable), sections, plLine), sections, fLine), sections, rLine), sections, hLine), sections, shTable), sections, inTable), sections, hoTable), sections, dTask), sections, dAssume).slice(0, DRAFT_MAX);
         const seen = {
           photos: inputs.photos.map((p) => p.name),
           docs: inputs.docs.map((d) => ({ name: d.name, read: d.text !== null, truncated: d.truncated })),
@@ -814,6 +821,7 @@ export function draftOps() {
           pledge: !!plLine,
           facts: !!fLine,
           retro: retroDay,
+          ddu: !!dTask,
         };
         const d = await sql.tx(async (tx) => {
           await tx`select id from orders where id = ${order.id} for update`;
