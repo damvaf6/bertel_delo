@@ -379,10 +379,19 @@ function cadastralMatch(doc, ctx) {
   const differs = egrn && mine && mine !== egrn.v;
   const out = [];
   const seen = new Set();
+  // 2.538: у дома номер участка под домом («Земельный участок под домом (кадастровый номер …)», «расположен на участке с
+  // кадастровым номером …») — не номер дома; его сверяет правило house_land с выпиской на участок.
+  const house = ctx.fields?.object_type === 'house' && ctx.service !== 'land';
+  const landNo = String(ctx.fields?.land_cadastral ?? '').trim();
   eachPage(doc, (page, i) => {
+    let prev = 0;
     for (const m of page.matchAll(CADASTRAL_RE)) {
       const v = m[0];
+      const start = page.lastIndexOf('\n', m.index - 1) + 1;
+      const seg = page.slice(Math.max(start, prev), m.index);
+      prev = m.index + v.length;
       if (v === ref || seen.has(v)) continue;
+      if (house && (v === landNo || aboutLand(/[а-яё]/iu.test(seg) ? seg : `${lineBefore(page, start - 1)} ${seg}`))) continue;
       // Номера аналогов и кадастрового квартала стоят без слов «кадастровый номер объекта» — их не трогаем.
       if (!/кадастров\S*\s+(?:номер|№)/iu.test(page.slice(Math.max(0, m.index - 60), m.index))) continue;
       if (/аналог/iu.test(lineAround(page, m.index))) continue;
