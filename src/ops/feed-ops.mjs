@@ -44,11 +44,13 @@ function feedItem(order, registry, cand) {
   const svc = registry.service(order.module, order.service);
   const share = shareFeed(order);
   const premises = premisesFeed(order);
+  const house = houseFeed(order);
   const facts = [];
   for (const f of svc?.fields ?? []) {
     if (f.type !== 'select') continue;
     if (share && ['share_method', 'share_use'].includes(f.id)) continue; // способ и порядок — в строке о доле (2.516)
     if (PREMISES_SELECTS.includes(f.id)) continue; // назначение, аренда и вход — в строке о нежилом (2.526)
+    if (HOUSE_SELECTS.includes(f.id)) continue; // участок, газ, стены, зима — в строке о доме (2.536)
     const v = order.fields?.[f.id];
     const opt = f.options?.find((o) => o.id === v);
     if (opt) facts.push({ label: f.label, value: opt.name });
@@ -65,6 +67,7 @@ function feedItem(order, registry, cand) {
     heir: heirFeed(order),
     share,
     premises,
+    house,
     since: order.paid_at,
   };
 }
@@ -112,6 +115,25 @@ export function premisesFeed(order) {
     lease,
     rent: lease === 'full' || lease === 'part' ? Number.isFinite(rent) && rent > 0 : null,
     entrance: pick(f.entrance, ['street', 'common']),
+  };
+}
+
+// 2.536: жилой дом — до того как взять, эксперт видит, что оценивать (дом с участком, с правом аренды участка или только
+// дом), площадь участка в сотках, газ, материал стен и летний ли дом. Только выбранное из списков и площадь числом;
+// кадастрового номера участка лента не показывает — по нему находится адрес. У не дома — ничего.
+const HOUSE_SELECTS = ['house_walls', 'house_land', 'house_gas', 'house_winter'];
+export function houseFeed(order) {
+  const f = order.fields ?? {};
+  if (order.service !== 'realty' || f.object_type !== 'house') return null;
+  const pick = (v, ids) => (ids.includes(v) ? v : null);
+  const area = Number(f.land_area);
+  const land = pick(f.house_land, ['own', 'lease', 'none']);
+  return {
+    land,
+    area: land !== 'none' && Number.isFinite(area) && area > 0 ? Math.round(area * 100) / 100 : null,
+    gas: pick(f.house_gas, ['main', 'tank', 'none']),
+    walls: pick(f.house_walls, ['brick', 'wood', 'frame', 'other']),
+    winter: pick(f.house_winter, ['yes', 'no']),
   };
 }
 

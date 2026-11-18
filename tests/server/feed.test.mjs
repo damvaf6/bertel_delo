@@ -5,7 +5,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
-import { heirFeed, shareFeed, premisesFeed } from '../../src/ops/feed-ops.mjs';
+import { heirFeed, shareFeed, premisesFeed, houseFeed } from '../../src/ops/feed-ops.mjs';
 import { heirNotices } from '../../src/orders/inheritance.mjs';
 
 let S, owner, dispatcher, a, b, mo, noPermit, plain;
@@ -169,4 +169,27 @@ test('2.526: строка о нежилом — только из списков
   assert.deepEqual(p({ premises_use: 'xx', lease: 'no', lease_rent: 5000, entrance: 'yard' }), { use: null, lease: 'no', rent: null, entrance: null });
   assert.equal(p({ lease: 'full' }, 'land'), null);
   assert.equal(premisesFeed({ service: 'realty', fields: { object_type: 'flat', lease: 'full' } }), null);
+});
+
+// 2.536: жилой дом в ленте — участок, площадь, газ, стены, летний ли до «Взять заказ»; кадастрового номера и адреса нет.
+test('2.536: в ленте у дома — участок, площадь, газ и стены, без кадастрового номера', async () => {
+  const o = await order('Лента: дом', { extra: { object_type: 'house', house_land: 'own', land_area: 12.5,
+    land_cadastral: '50:20:0010101:777', house_gas: 'tank', house_walls: 'wood', house_winter: 'yes' } });
+  const item = (await feed(a)).feed.find((x) => x.id === o.id);
+  assert.ok(item, 'заказ в ленте');
+  assert.deepEqual(item.house, { land: 'own', area: 12.5, gas: 'tank', walls: 'wood', winter: 'yes' });
+  assert.ok(!item.facts.some((f) => /жилой дом/i.test(f.label)), 'поля дома — не отдельными фактами');
+  assert.ok(!JSON.stringify(item).includes('0010101'), 'кадастрового номера участка нет');
+  const flat = await order('Лента: квартира с полями дома', { extra: { object_type: 'flat', house_gas: 'main' } });
+  const fi = (await feed(a)).feed.find((x) => x.id === flat.id);
+  assert.equal(fi.house, null);
+  assert.ok(!fi.facts.some((f) => /жилой дом/i.test(f.label)), 'случайно заполненное поле дома — не в ленте');
+});
+
+test('2.536: строка о доме — только из списков, площадь участка не при «не оформлен»', () => {
+  const h = (fields, service = 'realty') => houseFeed({ service, fields: { object_type: 'house', ...fields } });
+  assert.deepEqual(h({}), { land: null, area: null, gas: null, walls: null, winter: null });
+  assert.deepEqual(h({ house_land: 'lease', land_area: '8.333', house_winter: 'no' }), { land: 'lease', area: 8.33, gas: null, walls: null, winter: 'no' });
+  assert.deepEqual(h({ house_land: 'none', land_area: 10, house_gas: 'xx', house_walls: 'frame' }), { land: 'none', area: null, gas: null, walls: 'frame', winter: null });
+  assert.equal(h({ house_land: 'own' }, 'land'), null);
 });
