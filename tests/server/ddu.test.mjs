@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import { FACTS_HEAD, factsLine } from '../../src/orders/facts.mjs';
-import { dduNotices, dduDay } from '../../src/orders/ddu.mjs';
+import { dduNotices, dduDay, dduTaskLine, dduAssumption, placeDduTask, placeDduAssumption, DDU_TASK_HEAD, DDU_ASSUME_HEAD } from '../../src/orders/ddu.mjs';
 import { createRegistry, validateModule } from '../../src/modules/index.mjs';
 import expertise from '../../src/modules/expertise.mjs';
 
@@ -76,6 +76,40 @@ test('поля необязательны и проверяются; подск�
   assert.ok(h >= 0, r.body.draft.body.slice(0, 400));
   assert.equal(lines[h + 1], LINE);
   assert.equal(lines.filter((l) => l.startsWith(FACTS_HEAD)).length, 1);
+  // 2.541: объект — право требования в «Задание на оценку», допущение — в раздел допущений; по одной строке.
+  const t = lines.findIndex((l) => /^#{1,3}\s*2\. Задание на оценку/.test(l));
+  assert.equal(lines[t + 1], dduTaskLine('realty', { object_type: 'ddu', ...DDU }));
+  const a = lines.findIndex((l) => /^#{1,3}\s*5\. Допущения/.test(l));
+  assert.equal(lines[a + 1], dduAssumption('realty', { object_type: 'ddu' }));
+  assert.equal(lines.filter((l) => l.startsWith(DDU_TASK_HEAD)).length, 1);
+  assert.equal(lines.filter((l) => l.startsWith(DDU_ASSUME_HEAD)).length, 1);
+  const [{ inputs }] = await S.sql`select inputs from result_drafts where order_id = ${o.id} order by id desc limit 1`;
+  assert.equal(inputs.ddu, true);
+});
+
+test('2.541: строка «право требования по ДДУ» и допущение — только у ДДУ, заменяются, без пропусков — [заполнить]', () => {
+  const full = dduTaskLine('realty', { object_type: 'ddu', ...DDU });
+  assert.equal(full, `${DDU_TASK_HEAD} договор участия в долевом строительстве № ЖК-12/3-145 от 14.03.2025 (214-ФЗ); застройщик — ООО «СЗ Тестовый»; объект строительства — ЖК «Тестовый», корп. 3, секция 2; квартира с условным номером 145; проектная площадь — 41,3 кв. м; срок передачи по договору — IV квартал 2027. Оцениваемые права — право требования передачи квартиры после ввода дома в эксплуатацию, не право собственности на квартиру. Вид стоимости — рыночная стоимость права требования.`);
+  const bare = dduTaskLine('realty', { object_type: 'ddu' });
+  assert.match(bare, /№ \[заполнить\] от \[заполнить\]/);
+  assert.match(bare, /застройщик — \[заполнить\]; квартира с условным номером \[заполнить\]; проектная площадь — \[заполнить\]\./);
+  assert.match(dduTaskLine('realty', { object_type: 'ddu' }, 'ликвидационная стоимость'), /Вид стоимости — ликвидационная стоимость \(по заданию на оценку\)\.$/);
+  for (const [s, f] of [['realty', { object_type: 'flat', ...DDU }], ['land', { object_type: 'ddu' }], ['realty', {}]]) {
+    assert.equal(dduTaskLine(s, f), null);
+    assert.equal(dduAssumption(s, f), null);
+  }
+  assert.match(dduAssumption('realty', { object_type: 'ddu' }), /Площадь — проектная, по договору/);
+
+  const sections = [{ title: '2. Задание на оценку', table: 'task' }, { title: '5. Допущения и ограничительные условия' }];
+  const body = '## 2. Задание на оценку\nтекст\n## 5. Допущения и ограничительные условия\nабзац';
+  const once = placeDduAssumption(placeDduTask(body, sections, full), sections, dduAssumption('realty', { object_type: 'ddu' }));
+  assert.equal(once.split('\n')[1], full);
+  assert.equal(once.split('\n')[4], dduAssumption('realty', { object_type: 'ddu' }));
+  const twice = placeDduTask(once, sections, bare);
+  assert.equal(twice.split('\n').filter((l) => l.startsWith(DDU_TASK_HEAD)).length, 1, 'прежняя строка заменяется');
+  assert.equal(twice.split('\n')[1], bare);
+  assert.equal(placeDduTask(body, sections, null), body);
+  assert.equal(placeDduTask('без заголовков', sections, full), 'без заголовков');
 });
 
 // 2.540: запрос документов по ДДУ — договор с отметкой о регистрации, справка об оплате, план из договора, разрешение на ввод;
