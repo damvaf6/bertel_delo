@@ -95,6 +95,8 @@
 //       нужно подтверждённых; near: { field: id числового поля заявки, within?: разница, pct?: разница в %, onsite?: id числового
 //       поля данных с объекта — его значение важнее заявки (2.493) } — предупреждение;
 //       признак с when: { field: id поля-списка заявки, in: [значение…] } — только у таких заявок (2.513: доля или целый объект);
+//       skip: { field, in } — у таких заявок признака нет (2.534: у дома нет «Этаж» и «Тип дома»); near у признака-списка —
+//       { field: id поля-списка заявки, same: true } — значение аналога не как у объекта — «нужна корректировка» (2.534: стены, газ);
 //       adjustments?: [{ id, name, services?, when?, covers?: ['date' | 'region' | id признака с near или признака-списка…] }…] — виды корректировок (2.74),
 //       covers — какие предупреждения «нужна корректировка» снимает такая корректировка; «Другая» (other) — в ядре, у всех
 //     repeat?: [{ services: [id услуги…], match: [id поля заявки…], sections: [id раздела черновика…] }…]  — повторная оценка
@@ -686,16 +688,29 @@ export function validateModule(m) {
     checkIds(an.fields, `${where}, признаки`);
     for (const f of an.fields) {
       const fw = `${where}, признак ${f.id}`;
-      const { services, near, when, ...field } = f;
+      const { services, near, when, skip, ...field } = f;
       if (ANALOG_CORE.includes(f.id)) fail(fw, `id «${f.id}» занят признаком ядра`);
       validateField(field, fw);
       // 2.513: when — признак только у заявок с таким значением поля-списка (доля или целый объект — только при оценке доли).
       if (when !== undefined) analogWhen(when, services ?? an.services, fw);
+      // 2.534: skip — у таких заявок признака нет (у дома — этажа и типа дома).
+      if (skip !== undefined) analogWhen(skip, services ?? an.services, `${fw}, skip`);
       if (field.type === 'longtext') fail(fw, 'признак — одной строкой (text), не longtext');
       if (services !== undefined && (!Array.isArray(services) || services.length === 0 || services.some((id) => !an.services.includes(id)))) {
         fail(fw, 'services — непустой список услуг раздела «Аналоги»');
       }
-      if (near !== undefined) {
+      if (near !== undefined && near.same !== undefined) {
+        // 2.534: признак-список сверяется с полем-списком заявки — варианты аналога из вариантов поля заявки.
+        onlyKeys(near, ['field', 'same'], `${fw}, near`);
+        if (near.same !== true) fail(fw, 'near.same — true');
+        if (field.type !== 'select') fail(fw, 'near.same — только у признака-списка');
+        for (const sid of services ?? an.services) {
+          const s = m.services.find((x) => x.id === sid);
+          const of = serviceFields(m, s).find((x) => x.id === near.field);
+          if (!of || of.type !== 'select') fail(fw, `near.field — поле-список заявки услуги ${sid}`);
+          if (field.options.some((o) => !of.options.some((x) => x.id === o.id))) fail(fw, `near.same — варианты признака из вариантов поля заявки ${near.field}`);
+        }
+      } else if (near !== undefined) {
         onlyKeys(near, ['field', 'within', 'pct', 'onsite'], `${fw}, near`);
         if (field.type !== 'number') fail(fw, 'near — только у числового признака');
         if ((near.within === undefined) === (near.pct === undefined)) fail(fw, 'near — within или pct (одно из двух)');
@@ -978,10 +993,11 @@ export function createRegistry(modules = DEFAULT_MODULES, { orgCheck = false } =
     analogs(moduleId, serviceId, fields = null) {
       const m = modulesList.find((x) => x.id === moduleId);
       if (!m?.analogs?.services.includes(serviceId)) return null;
-      const own = (x) => (!x.services || x.services.includes(serviceId)) && (!x.when || x.when.in.includes(String(fields?.[x.when.field] ?? '')));
+      const own = (x) => (!x.services || x.services.includes(serviceId)) && (!x.when || x.when.in.includes(String(fields?.[x.when.field] ?? '')))
+        && (!x.skip || !x.skip.in.includes(String(fields?.[x.skip.field] ?? '')));
       return {
         min: m.analogs.min,
-        fields: m.analogs.fields.filter(own).map(({ services, when, ...f }) => f),
+        fields: m.analogs.fields.filter(own).map(({ services, when, skip, ...f }) => f),
         adjustments: (m.analogs.adjustments ?? []).filter(own).map(({ services, when, ...k }) => ({ covers: [], ...k })),
       };
     },

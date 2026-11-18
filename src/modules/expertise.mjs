@@ -970,8 +970,13 @@ export default {
       { id: 'made_year', label: 'Год выпуска', type: 'number', integer: true, min: 1900, max: 2100, services: ['movable'] },
       { id: 'address', label: 'Адрес или район', type: 'text', required: true, max: 300, services: ['realty', 'land'] },
       { id: 'area', label: 'Площадь, кв. м', type: 'number', min: 1, max: 100000000, services: ['realty', 'land'], near: { field: 'area', pct: 30 } },
-      { id: 'floor', label: 'Этаж / этажей в доме', type: 'text', max: 20, services: ['realty'] },
-      { id: 'house_type', label: 'Тип дома', type: 'text', max: 100, services: ['realty'] },
+      { id: 'floor', label: 'Этаж / этажей в доме', type: 'text', max: 20, services: ['realty'], skip: HOUSE_ONLY },
+      { id: 'house_type', label: 'Тип дома', type: 'text', max: 100, services: ['realty'], skip: HOUSE_ONLY },
+      // 2.534: у жилого дома — площадь участка, материал стен и газ; далеко от объекта или не как у него по заявке — «нужна
+      // корректировка» (src/analogs/analogs.mjs). Варианты — как в заявке (HOUSE).
+      { id: 'land_area', label: 'Площадь участка, сот.', type: 'number', min: 0.01, max: 100000, services: ['realty'], when: HOUSE_ONLY, near: { field: 'land_area', pct: 30 } },
+      { id: 'walls', label: 'Материал стен', type: 'select', services: ['realty'], when: HOUSE_ONLY, options: HOUSE.find((f) => f.id === 'house_walls').options, near: { field: 'house_walls', same: true } },
+      { id: 'gas', label: 'Газ', type: 'select', services: ['realty'], when: HOUSE_ONLY, options: HOUSE.find((f) => f.id === 'house_gas').options, near: { field: 'house_gas', same: true } },
       // 2.513: при оценке доли — продаётся доля или целый объект; смешаны без корректировки — предупреждение (src/analogs/analogs.mjs).
       {
         id: 'share_kind', label: 'Продаётся доля или целый объект', type: 'select', services: ['realty'], when: { field: 'object_type', in: ['share'] },
@@ -994,7 +999,9 @@ export default {
       { id: 'location', name: 'Местоположение', covers: ['region'] },
       { id: 'area', name: 'Площадь (масштаб)', services: ['realty', 'land'], covers: ['area'] },
       { id: 'floor', name: 'Этаж', services: ['realty'] },
-      { id: 'house_type', name: 'Тип дома, материал стен', services: ['realty'] },
+      { id: 'house_type', name: 'Тип дома, материал стен', services: ['realty'], covers: ['walls'] },
+      { id: 'land_area', name: 'Площадь участка', services: ['realty'], when: HOUSE_ONLY, covers: ['land_area'] },
+      { id: 'gas', name: 'Газ, коммуникации', services: ['realty'], when: HOUSE_ONLY, covers: ['gas'] },
       { id: 'finish', name: 'Состояние и отделка', services: ['realty'] },
       { id: 'share_kind', name: 'Доля / целый объект', services: ['realty'], when: { field: 'object_type', in: ['share'] }, covers: ['share_kind'] },
       { id: 'land_use', name: 'Назначение участка (ВРИ)', services: ['land'] },
