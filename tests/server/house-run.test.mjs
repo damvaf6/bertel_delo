@@ -20,9 +20,9 @@ const LAND_EGRN = { id: 'e1', name: 'Выписка на участок.pdf', la
 ].join('\n')] };
 before(async () => {
   S = await startApp({ AUTH_RATE_MAX: '60' });
-  owner = await login(S, '+79990005940');
-  dispatcher = await login(S, '+79990005941');
-  spec = await login(S, '+79990005942');
+  owner = await login(S, '+79990005980');
+  dispatcher = await login(S, '+79990005981');
+  spec = await login(S, '+79990005982');
   await setPlatformRole(S.sql, dispatcher.user.id, 'dispatcher');
   await makeSpecialist(S.sql, spec.user.id, { permits: [['expertise', 'realty']] });
 });
