@@ -296,7 +296,16 @@ export function analogWarnings(spec, order, list, onsite = null, valueDay = null
     if (a.fields.region && region && a.fields.region !== region && !covered.has('region')) {
       w.push(`Другой регион (объект — ${REGIONS.find((r) => r.id === region)?.name ?? region}) — нужна корректировка`);
     }
-    for (const f of spec.fields.filter((x) => x.near)) {
+    // 2.534: признак-список (материал стен, газ у дома) не как у объекта по заявке — нужна корректировка.
+    for (const f of spec.fields.filter((x) => x.near?.same)) {
+      const mine = order.fields?.[f.near.field];
+      const v = a.fields[f.id];
+      if (!mine || !v || v === mine || covered.has(f.id)) continue;
+      const kind = adjustKinds(spec).find((k) => k.covers?.includes(f.id));
+      w.push(`${f.label}: ${valueText(f, v)} у аналога, ${valueText(f, mine)} у объекта — нужна корректировка${kind ? ` «${kind.name}»` : ''}`);
+      (far_.get(f.id) ?? far_.set(f.id, []).get(f.id)).push(list.indexOf(a) + 1);
+    }
+    for (const f of spec.fields.filter((x) => x.near && !x.near.same)) {
       const { mine, from } = objectValue(f);
       const v = a.fields[f.id];
       if (!Number.isFinite(mine) || !Number.isFinite(v) || covered.has(f.id)) continue;
@@ -352,8 +361,13 @@ export function analogWarnings(spec, order, list, onsite = null, valueDay = null
     for (const f of spec.fields.filter((x) => far_.has(x.id))) {
       const nums = far_.get(f.id);
       const kind = adjustKinds(spec).find((k) => k.covers?.includes(f.id));
+      const many = nums.length > 1 ? 'аналогов' : 'аналога';
+      if (f.near.same) {
+        h.push(`${f.label} не как у объекта (${valueText(f, order.fields?.[f.near.field])}) у ${many} ${nums.join(', ')} — нет корректировки${kind ? ` «${kind.name}»` : ''}`);
+        continue;
+      }
       const { from } = objectValue(f);
-      h.push(`${f.label.replace(/,.*$/, '')} далеко от объекта${from} у ${nums.length > 1 ? 'аналогов' : 'аналога'} ${nums.join(', ')} — нет корректировки${kind ? ` «${kind.name}»` : ''}`);
+      h.push(`${f.label.replace(/,.*$/, '')} далеко от объекта${from} у ${many} ${nums.join(', ')} — нет корректировки${kind ? ` «${kind.name}»` : ''}`);
     }
     if (repeats.size) h.push(`Есть повторяющиеся аналоги: ${[...repeats.keys()].map((id) => `аналог ${list.findIndex((a) => String(a.id) === id) + 1}`).join(', ')}`);
     if (list.some((a) => !a.file_key)) h.push('Не у всех аналогов есть скриншот');
