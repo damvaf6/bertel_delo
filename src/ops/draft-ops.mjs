@@ -988,11 +988,11 @@ export function draftOps() {
         const { sql, actor, order, res } = ctx;
         guard(actor, order);
         if (order.executor_user_id !== actor.id) throw new HttpError(403, 'forbidden', 'Файл Word черновика скачивает исполнитель');
+        const pdf = wantPdf(ctx.query, ctx.providers);
         const cur = await latest(sql, order.id);
         if (!cur) throw new HttpError(404, 'no_draft', 'Черновика ещё нет');
         const number = await reportNumber(ctx, order, actor);
         const word = await reportFor(ctx, order, actor, cur.body, { number });
-        const pdf = wantPdf(ctx.query);
         await audit(sql, actor, 'draft.docx', 'order', order.id, { draft: String(cur.id), template: word.template, ...(number ? { number } : {}), ...(pdf ? { format: 'pdf' } : {}) });
         // Word с фото осмотра и скриншотами бывает больше 3,5 МБ — тогда временной ссылкой из хранилища (2.49).
         // ?format=pdf — тот же файл в PDF для заказчика (задача штаба 41c17197).

@@ -412,7 +412,7 @@ export function inspectOps() {
       id: 'inspection.act', method: 'GET', path: '/api/orders/:id/inspection/act', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
       async handler({ sql, actor, order, registry, providers, res, query }) {
-        const pdf = wantPdf(query);
+        const pdf = wantPdf(query, providers);
         const data = await orderAct(sql, registry, order, actor);
         if (!data) throw new HttpError(409, 'no_photos', 'В деле пока нет фото осмотра — акт составить не из чего');
         await audit(sql, actor, 'inspection.act', 'order', order.id, { photos: data.total, ...(pdf ? { format: 'pdf' } : {}) });

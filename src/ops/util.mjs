@@ -56,15 +56,17 @@ export async function sendFile(res, providers, { buf, filename, mime }) {
 
 // Word или PDF (задача штаба 41c17197): ?format=pdf — тот же файл Word, переведённый LibreOffice в PDF, имя то же с .pdf.
 // PDF выключен или не собрался — понятным текстом, Word остаётся доступен.
-export const wantPdf = (query) => {
+const PDF_OFF = 'PDF пока не собрать — скачайте файл Word';
+export const wantPdf = (query, providers = null) => {
   const f = String(query?.format ?? 'docx');
   if (!['docx', 'pdf'].includes(f)) throw new HttpError(400, 'bad_format', 'Формат файла: docx или pdf');
+  if (f === 'pdf' && providers && !providers.pdf?.ready) throw new HttpError(503, 'no_pdf', PDF_OFF);
   return f === 'pdf';
 };
 
 export async function sendDoc(res, providers, { buf, filename, mime }, pdf = false) {
   if (!pdf) return sendFile(res, providers, { buf, filename, mime });
-  if (!providers.pdf?.ready) throw new HttpError(503, 'no_pdf', 'PDF пока не собрать — скачайте файл Word');
+  if (!providers.pdf?.ready) throw new HttpError(503, 'no_pdf', PDF_OFF);
   let out;
   try {
     out = await providers.pdf.convert({ buf, name: filename });

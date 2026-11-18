@@ -1953,3 +1953,35 @@ test('2.310: оценка для банка — предполагаемый п�
   assert.ok(d.body.includes(`${row} ПАО Сбербанк (по заявке) |`));
   assert.equal((await spec.req('GET', `/api/orders/${o.id}/task`)).body.items.find((x) => x.id === 'user'), undefined);
 });
+
+test('41c17197: отчёт в PDF — тот же Word через LibreOffice; место под подпись и печать; формат только docx или pdf', async () => {
+  await spec.req('PATCH', '/api/me', { full_name: 'Пдфов Эксперт' });
+  const o = await inWork('Квартира: отчёт в PDF');
+  await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {});
+  // В Word после разделов — подпись эксперта (своё имя) и место под печать; подписывает эксперт сам.
+  const w = await download(spec, `/api/orders/${o.id}/draft/docx`);
+  const text = (await extractPages(w.buf, 'Отчёт.docx')).pages.join('\n');
+  assert.match(text, /Исполнитель _+ \/ Пдфов Эксперт \//);
+  assert.match(text, /М\.П\./);
+  S.providers.pdf.reset();
+  const p = await download(spec, `/api/orders/${o.id}/draft/docx?format=pdf`);
+  assert.equal(p.status, 200);
+  assert.equal(p.type, 'application/pdf');
+  assert.match(decodeURIComponent(p.disposition.split("''")[1]), /^Отчёт об оценке\.pdf$/);
+  assert.equal(p.buf.subarray(0, 5).toString('latin1'), '%PDF-');
+  assert.equal(S.providers.pdf.calls.length, 1, 'в PDF переводится собранный Word');
+  assert.ok(Math.abs(S.providers.pdf.calls[0].bytes - w.buf.length) < 200, 'тот же Word, что скачивается кнопкой «Скачать Word»');
+  assert.equal((await download(spec, `/api/orders/${o.id}/draft/docx?format=xls`)).status, 400);
+  // Только исполнитель — как Word.
+  assert.equal((await download(owner, `/api/orders/${o.id}/draft/docx?format=pdf`)).status, 403);
+  // PDF выключен — понятный ответ, Word доступен.
+  S.providers.pdf.ready = false;
+  try {
+    const off = await fetch(`${S.base}/api/orders/${o.id}/draft/docx?format=pdf`, { headers: { cookie: spec.cookie } });
+    assert.equal(off.status, 503);
+    assert.match((await off.json()).message, /скачайте файл Word/);
+    assert.equal((await download(spec, `/api/orders/${o.id}/draft/docx`)).status, 200);
+  } finally { S.providers.pdf.ready = true; }
+  const [log] = await S.sql`select count(*)::int as n from audit_log where action = 'draft.docx' and subject_id = ${String(o.id)} and details->>'format' = 'pdf'`;
+  assert.equal(log.n, 1);
+});

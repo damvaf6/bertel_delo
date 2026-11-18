@@ -84,6 +84,8 @@ jobs:
         run: |
           test "$(docker run --rm "$IMAGE" id -u)" != "0"
           docker run --rm "$IMAGE" sh -c 'grep -q "BEGIN CERTIFICATE" "$DB_CA_PATH"'
+          # PDF акта и заключения (задача штаба 41c17197): LibreOffice в контейнере.
+          docker run --rm "$IMAGE" soffice --version
 
       - name: MinIO и бакет
         run: |
@@ -96,6 +98,7 @@ jobs:
           cat > "$RUNNER_TEMP/ci.env" <<'EOF'
           APP_ENV=test
           PORT=8080
+          PDF_PROVIDER=soffice
           DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/delo_ci
           DB_SSL=disable
           COOKIE_SECURE=0
