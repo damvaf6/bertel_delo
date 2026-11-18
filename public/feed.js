@@ -46,6 +46,19 @@ function premisesText(p) {
   return `Нежилое: ${use} · ${lease}${entrance ? ` · ${entrance}` : ''}`;
 }
 
+// 2.536: жилой дом — участок, площадь, газ, стены, летний ли.
+function houseText(h) {
+  const sot = h.area == null ? '' : ` ${String(h.area).replace('.', ',')} сот.`;
+  const land = h.land === 'own' ? `дом с участком${sot} — оценить оба, выписка на участок в дело`
+    : h.land === 'lease' ? `участок${sot} в аренде — дом и право аренды, договор аренды в дело`
+    : h.land === 'none' ? 'участок не оформлен — оценивается только дом'
+    : `участок${sot} — оформлен ли, не указано, уточнить у заказчика`;
+  const gas = { main: 'газ магистральный', tank: 'газгольдер или баллоны', none: 'без газа' }[h.gas];
+  const walls = { brick: 'стены — кирпич, блоки', wood: 'стены — дерево', frame: 'каркасный', other: 'стены — другое' }[h.walls];
+  const parts = [land, gas, walls, h.winter === 'no' ? 'летний' : null].filter(Boolean);
+  return `Жилой дом: ${parts.join(' · ')}`;
+}
+
 function item(x, onTake) {
   const take = el('button', { type: 'button', 'data-role': 'feed-take', text: 'Взять заказ' });
   const li = el('li', { 'data-order': x.id },
@@ -55,6 +68,7 @@ function item(x, onTake) {
   if (x.bank && !x.bank.accredited) {
     li.append(el('div', { class: 'overdue', 'data-role': 'feed-bank', text: 'Заказ для банка, а у Вас нет аккредитации в нём — банк может не принять отчёт' }));
   }
+  if (x.house) li.append(el('div', { class: 'muted', 'data-role': 'feed-house', text: houseText(x.house) }));
   if (x.premises) li.append(el('div', { class: 'muted', 'data-role': 'feed-premises', text: premisesText(x.premises) }));
   if (x.share) li.append(el('div', { class: 'muted', 'data-role': 'feed-share', text: shareText(x.share) }));
   if (x.heir) li.append(el('div', { class: 'muted', 'data-role': 'feed-heir', text: heirText(x.heir) }));
