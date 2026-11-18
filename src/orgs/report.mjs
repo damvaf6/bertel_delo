@@ -28,6 +28,7 @@
 import { OTHER_BANK, bankList } from '../dossier/dossier.mjs';
 import { HttpError } from '../http/core.mjs';
 import { orderSplit } from '../money/money.mjs';
+import { houseFacts } from '../orders/house.mjs';
 import { incomeFacts } from '../orders/income.mjs';
 import { shareDiscount } from '../orders/share.mjs';
 import { addDays, isOverdue, todayMsk } from '../orders/workflow.mjs';
@@ -159,7 +160,7 @@ async function orgMonthDone(sql, orgId, ids, { start, end }) {
              o.fields->>'purpose' as purpose, o.fields->>'bank' as bank, o.fields->>'method' as method, o.fields->>'goods_kind' as goods_kind,
              o.fields->>'vehicle_type' as vehicle_type, o.fields->>'death_date' as death_date, o.fields->>'heir_objects' as heir_objects,
              o.fields->>'object_type' as object_type, o.fields->>'share_method' as share_method,
-             o.fields->>'premises_use' as premises_use, o.fields->>'lease' as lease,
+             o.fields->>'premises_use' as premises_use, o.fields->>'lease' as lease, o.fields->>'house_land' as house_land,
              p.amount_kop as payout_kop, h.at,
              greatest(
                (select max(f.outcome_at) from order_offers f
@@ -827,6 +828,27 @@ function premisesCalc(prem, incomes) {
   };
 }
 
+// Жилые дома за месяц (2.537): сданные дела оценки жилого дома (у услуги есть «Участок под домом» — house_land, вид объекта
+// «Жилой дом») — сколько, участок по заявке (в собственности / в аренде / не оформлен / не указано) и средняя доля участка в
+// итоговой стоимости — из таблицы «Стоимость дома и участка» последней версии черновика (`houseFacts`) у домов с участком в
+// собственности; участок в собственности, а стоимости участка в черновике нет — «без стоимости участка».
+const houseOfDone = (done, registry) => (registry ? done.filter((o) => o.module && o.object_type === 'house'
+  && registry.service(o.module, o.service)?.fields.some((f) => f.id === 'house_land')) : []);
+// { house_cases, house_land_own, house_land_lease, house_land_none, house_land_unknown, house_share_avg, house_no_land_value }.
+function houseCalc(houses, facts) {
+  const own = houses.filter((o) => o.house_land === 'own');
+  const shares = own.map((o) => facts.get(o.id)?.share).filter((x) => x != null);
+  return {
+    house_cases: houses.length,
+    house_land_own: own.length,
+    house_land_lease: houses.filter((o) => o.house_land === 'lease').length,
+    house_land_none: houses.filter((o) => o.house_land === 'none').length,
+    house_land_unknown: houses.filter((o) => !['own', 'lease', 'none'].includes(o.house_land)).length,
+    house_share_avg: shares.length ? Math.round((shares.reduce((s, x) => s + x, 0) / shares.length) * 10) / 10 : null,
+    house_no_land_value: own.filter((o) => !facts.get(o.id)?.land && facts.get(o.id)?.share == null).length,
+  };
+}
+
 export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), now = new Date(), registry = null, taskDue = null, taskAfter = null,
   taskMove = null } = {}) {
   const year = isYear(month);
@@ -892,6 +914,9 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), no
     .map((d) => [d.order_id, shareDiscount(d.body)]));
   const prem = premisesOfDone(q.done, registry);
   const incomes = new Map((await shareDraftsQ(sql, prem.map((o) => o.id))).map((d) => [d.order_id, incomeFacts(d.body)]));
+  const houses = houseOfDone(q.done, registry);
+  const hfacts = new Map((await shareDraftsQ(sql, houses.filter((o) => o.house_land === 'own').map((o) => o.id)))
+    .map((d) => [d.order_id, houseFacts(d.body)]));
   const defs = new Map();
   for (const d of await defectsQ(sql, goods.map((o) => o.id))) (defs.get(d.order_id) ?? defs.set(d.order_id, []).get(d.order_id)).push(d);
   const count = (rows) => new Map(rows.map((r) => [r.user_id, r.n]));
@@ -946,6 +971,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), no
       ...heirCalc(heir.filter((o) => o.user_id === e.user_id)),
       ...shareCalc(shares.filter((o) => o.user_id === e.user_id), division.filter((o) => o.user_id === e.user_id), discs),
       ...premisesCalc(prem.filter((o) => o.user_id === e.user_id), incomes),
+      ...houseCalc(houses.filter((o) => o.user_id === e.user_id), hfacts),
       disp_reasons: topRemarks(q.dispReasons.filter((i) => i.user_id === e.user_id && i.text), TOP_REMARKS_EXPERT)
         .map(({ text, n }) => ({ text, n })),
       prev: cmp ? cmp.experts.get(e.user_id) : null,
@@ -970,7 +996,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), no
       ...egrnFirst(q.firstSign, registry), ...bankTask(q.bankTask), ...taskLate(taskDues),
       ...bankAfter(bankAfters), ...bankAccr(q.done, accr), ...ext(exts), ...letterAsk(q.letterAsk), ...orgSign(q.done), ...afterRemarks(q.afterRemarks, afterItems),
       ...court(q.court, now), ...carCalc(car, calcs), ...goodsCalc(goods, defs), ...vehCalc(veh), ...heirCalc(heir),
-      ...shareCalc(shares, division, discs), ...premisesCalc(prem, incomes),
+      ...shareCalc(shares, division, discs), ...premisesCalc(prem, incomes), ...houseCalc(houses, hfacts),
       prev: cmp ? cmp.total : null },
     prev_month: cmp ? prevM : null,
     prev_month_name: cmp ? periodRu(prevM) : null,
@@ -1255,6 +1281,12 @@ export function reportCsv(orgName, r) {
     ...[...r.experts.filter((x) => x.prem_cases).map((x) => [x.full_name, x]), ['Итого', r.total]]
       .map(([name, x]) => [name, x.prem_cases, x.prem_office, x.prem_retail, x.prem_warehouse, x.prem_free, x.prem_no_use, x.prem_leased,
         x.prem_income, daysCell(x.prem_cap_avg), x.prem_leased_no_income])] : []),
+    // 2.537: только если за месяц сданы жилые дома — по экспертам.
+    ...(r.total.house_cases ? [[], ['Жилые дома — по экспертам', 'Сдано', 'Участок в собственности', 'Участок в аренде', 'Участок не оформлен',
+      'Участок не указан', 'Средняя доля участка в итоге, %', 'Участок в собственности, без его стоимости в черновике'],
+    ...[...r.experts.filter((x) => x.house_cases).map((x) => [x.full_name, x]), ['Итого', r.total]]
+      .map(([name, x]) => [name, x.house_cases, x.house_land_own, x.house_land_lease, x.house_land_none, x.house_land_unknown,
+        daysCell(x.house_share_avg), x.house_no_land_value])] : []),
   ];
   return `﻿${lines.map((l) => l.map(cell).join(';')).join('\r\n')}\r\n`;
 }

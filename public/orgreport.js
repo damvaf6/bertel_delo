@@ -88,6 +88,14 @@ const premLine = (x) => [`нежилые: ${casesN(x.prem_cases)} (${PREM_USE.fi
   x.prem_income ? `доходный подход: ${x.prem_income}${x.prem_cap_avg == null ? '' : `, средняя ставка капитализации ${String(x.prem_cap_avg).replace('.', ',')}%`}` : null,
   x.prem_leased_no_income ? `сдаётся, а доходного подхода в черновике нет: ${x.prem_leased_no_income}` : null]
   .filter(Boolean).join(' · ');
+// 2.537: «дома: 3 дела (участок в собственности: 2, в аренде: 1) · средняя доля участка в итоге 22,5% · участок в
+// собственности, а его стоимости в черновике нет: 1».
+const HOUSE_LAND = [['house_land_own', 'участок в собственности'], ['house_land_lease', 'в аренде'], ['house_land_none', 'не оформлен'],
+  ['house_land_unknown', 'не указан']];
+const houseLine = (x) => [`дома: ${casesN(x.house_cases)} (${HOUSE_LAND.filter(([k]) => x[k]).map(([k, name]) => `${name}: ${x[k]}`).join(', ')})`,
+  x.house_share_avg == null ? null : `средняя доля участка в итоге ${String(x.house_share_avg).replace('.', ',')}%`,
+  x.house_no_land_value ? `участок в собственности, а его стоимости в черновике нет: ${x.house_no_land_value}` : null]
+  .filter(Boolean).join(' · ');
 const daysRu = (d) => `${String(d).replace('.', ',')} ${!Number.isInteger(d) ? 'дня' : d % 10 === 1 && d % 100 !== 11 ? 'день'
   : [2, 3, 4].includes(d % 10) && ![12, 13, 14].includes(d % 100) ? 'дня' : 'дней'}`;
 // «в первоначальный срок, без переносов: 3 из 5 · в среднем 4,5 дня от принятия до сдачи · позже первоначального срока: 2
@@ -344,6 +352,12 @@ async function load(month) {
   $('org-report-prem-experts').replaceChildren(...report.experts.filter((x) => x.prem_cases)
     .map((x) => el('li', { 'data-report-prem-expert': x.user_id },
       el('div', { class: 'title', text: x.full_name }), el('div', { class: 'muted', text: premLine(x) }))));
+  // 2.537: жилые дома — всего и по экспертам.
+  $('org-report-house-box').classList.toggle('hidden', !t2.house_cases);
+  $('org-report-house-total').textContent = t2.house_cases ? `Сдано: ${houseLine(t2)}.` : '';
+  $('org-report-house-experts').replaceChildren(...report.experts.filter((x) => x.house_cases)
+    .map((x) => el('li', { 'data-report-house-expert': x.user_id },
+      el('div', { class: 'title', text: x.full_name }), el('div', { class: 'muted', text: houseLine(x) }))));
   const top = report.top_remarks ?? [];
   $('org-report-remarks-box').classList.toggle('hidden', !top.length);
   $('org-report-remarks').replaceChildren(...top.map((x) => el('li', { 'data-remark': '' },
