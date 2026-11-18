@@ -9,6 +9,7 @@ import { inheritanceNotices } from '../orders/inheritance.mjs';
 import { shareNotices } from '../orders/share.mjs';
 import { premisesNotices } from '../orders/premises.mjs';
 import { houseNotices } from '../orders/house.mjs';
+import { dduNotices } from '../orders/ddu.mjs';
 
 const EXTRAS = {
   translation: {
@@ -18,7 +19,7 @@ const EXTRAS = {
   },
   // Экспертиза (2.480): у товароведческой — гарантия на дату обнаружения недостатка; у оценки для наследства (2.500) —
   // дата открытия наследства как дата оценки; цены по таблице нет.
-  expertise: { notices: (service, fields) => [...warrantyNotices(service, fields), ...inheritanceNotices(service, fields), ...shareNotices(service, fields), ...premisesNotices(service, fields), ...houseNotices(service, fields)] },
+  expertise: { notices: (service, fields) => [...warrantyNotices(service, fields), ...inheritanceNotices(service, fields), ...shareNotices(service, fields), ...premisesNotices(service, fields), ...houseNotices(service, fields), ...dduNotices(service, fields)] },
 };
 
 // Предварительная цена по таблице цен модуля: { lines, total_kop, … } или null.
