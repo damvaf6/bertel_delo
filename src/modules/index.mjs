@@ -356,7 +356,22 @@ export function validateModule(m) {
           d.when.forEach((c) => cond(c, 'when'));
         } else cond(d.when, 'when');
       }
-      if (d.skip !== undefined) cond(d.skip, 'skip');
+      // skip (2.540): поле может быть не у всех услуг документа — у услуги без поля пункт остаётся (выписка ЕГРН: у участка
+      // нет «Что оцениваем», а у недвижимости при «квартира в новостройке» её нет). Нужна хотя бы одна услуга с полем.
+      if (d.skip !== undefined) {
+        const own = users.filter((x) => serviceFields(m, x).some((y) => y.id === d.skip?.field));
+        if (!own.length) fail(where, 'skip.field — поле-список хотя бы у одной услуги документа');
+        else {
+          onlyKeys(d.skip, ['field', 'in'], `${where}, skip`);
+          for (const x of own) {
+            const f = serviceFields(m, x).find((y) => y.id === d.skip.field);
+            if (f.type !== 'select') fail(where, 'skip.field — поле-список');
+            if (!Array.isArray(d.skip.in) || d.skip.in.length === 0 || d.skip.in.some((v) => !f.options.some((o) => o.id === v))) {
+              fail(where, 'skip.in — непустой список значений этого поля');
+            }
+          }
+        }
+      }
       if (d.all !== undefined) {
         if (!Array.isArray(d.all) || !d.all.length) fail(where, 'all — непустой список условий');
         d.all.forEach((c) => cond(c, 'all'));
