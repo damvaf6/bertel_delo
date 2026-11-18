@@ -3,6 +3,7 @@
 // материал стен, оформлен ли участок, его кадастровый номер и площадь, газ и пригоден ли дом для зимы; здесь — подсказка в
 // деле всем, кто видит заявку. О самовольной постройке и законности прав не пишем — это вопрос юриста, не оценщика.
 import { placeShare } from './share.mjs';
+import { egrnArea, egrnCadastral, egrnKind } from '../ai/report-checks.mjs';
 
 const FILLED = ['house_walls', 'house_land', 'land_cadastral', 'land_area', 'house_gas', 'house_winter'];
 
@@ -38,30 +39,47 @@ export const HOUSE_HEAD = '| Стоимость дома и участка | З�
 const GAP = '[заполнить]';
 const NUM = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 });
 
-function landNote(fields) {
+// 2.538: выписка ЕГРН на участок в деле — номер и площадь участка в таблицу из неё (другие в заявке сверит ИИ-проверка
+// house_land по строке «Из заявки: …»), иначе — по заявке.
+// { cadastral, area } — номер и площадь в кв. м из выписки на участок (одно значение), иначе null.
+export function landEgrnFacts(egrn) {
+  const land = (egrn ?? []).filter((d) => egrnKind(d) === 'land');
+  if (!land.length) return null;
+  const ctx = { service: 'land' };
+  const cad = egrnCadastral(land, ctx);
+  const area = egrnArea(land, ctx);
+  return cad || area ? { cadastral: cad?.v ?? null, area: area?.v > 0 ? area.v : null } : null;
+}
+const sot = (sq) => `${NUM.format(Math.round(sq) / 100).replace(/\s/g, ' ')} сот.`;
+function landNote(fields, egrn) {
   const cad = String(fields.land_cadastral ?? '').trim();
   const area = Number(fields.land_area);
-  const bits = [cad ? `кадастровый номер ${cad}` : null,
-    Number.isFinite(area) && area > 0 ? `${NUM.format(area).replace(/\s/g, ' ')} сот.` : null].filter(Boolean);
+  const typed = Number.isFinite(area) && area > 0 ? area * 100 : null;
+  if (egrn?.cadastral || egrn?.area) {
+    const bits = [egrn.cadastral ? `кадастровый номер ${egrn.cadastral}` : cad ? `кадастровый номер ${cad} (по заявке)` : null,
+      egrn.area ? `${NUM.format(egrn.area).replace(/\s/g, ' ')} кв. м` : typed ? `${sot(typed)} (по заявке)` : null].filter(Boolean);
+    return ` (${bits.join(', ')} — по выписке ЕГРН на участок)`;
+  }
+  const bits = [cad ? `кадастровый номер ${cad}` : null, typed ? sot(typed) : null].filter(Boolean);
   return bits.length ? ` (${bits.join(', ')} — по заявке, сверьте с выпиской ЕГРН на участок)` : '';
 }
 
-export function houseTable(serviceId, fields = {}) {
+export function houseTable(serviceId, fields = {}, egrn = null) {
   if (serviceId !== 'realty' || fields.object_type !== 'house') return null;
   const rows = [HOUSE_HEAD, `| Жилой дом, руб. | ${GAP} |`];
   const land = fields.house_land;
   if (land === 'own') {
-    rows.push(`| Земельный участок под домом${landNote(fields)}, руб. | ${GAP} |`,
+    rows.push(`| Земельный участок под домом${landNote(fields, egrn)}, руб. | ${GAP} |`,
       `| Итого: дом и участок (единый объект, ст. 35 ЗК РФ), руб. | ${GAP} |`,
       `| Доля участка в итоговой стоимости, % | ${GAP} |`);
   } else if (land === 'lease') {
-    rows.push(`| Право аренды участка под домом${landNote(fields)}, руб. | ${GAP} (если переходит вместе с домом; иначе — «не оценивается») |`,
+    rows.push(`| Право аренды участка под домом${landNote(fields, egrn)}, руб. | ${GAP} (если переходит вместе с домом; иначе — «не оценивается») |`,
       `| Итого: дом и право аренды участка, руб. | ${GAP} |`);
   } else if (land === 'none') {
     rows.push('| Земельный участок | не оценивается — участок под домом не оформлен |',
       `| Итого (равно стоимости дома), руб. | ${GAP} |`);
   } else {
-    rows.push(`| Земельный участок под домом${landNote(fields)}, руб. | ${GAP}: оформлен ли участок — уточните у заказчика; не оформлен — «не оценивается» |`,
+    rows.push(`| Земельный участок под домом${landNote(fields, egrn)}, руб. | ${GAP}: оформлен ли участок — уточните у заказчика; не оформлен — «не оценивается» |`,
       `| Итого, руб. | ${GAP} |`);
   }
   return rows;

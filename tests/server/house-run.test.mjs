@@ -5,7 +5,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
-import { HOUSE_HEAD, houseFacts } from '../../src/orders/house.mjs';
+import { HOUSE_HEAD, houseFacts, houseTable, landEgrnFacts } from '../../src/orders/house.mjs';
 import { extractPages } from '../../src/ai/extract.mjs';
 import { runAutoChecks } from '../../src/ai/report-checks.mjs';
 
@@ -28,7 +28,7 @@ before(async () => {
 });
 after(async () => { await S?.close(); });
 
-async function houseCase(fields) {
+async function houseCase(fields, ready = async () => {}) {
   const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Дом: прогон' })).body.order;
   assert.equal((await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: addDays(todayMsk(), 10), fields })).status, 200);
   assert.equal((await owner.req('POST', `/api/orders/${o.id}/status`, { from: 'new', to: 'matching' })).status, 200);
@@ -36,6 +36,7 @@ async function houseCase(fields) {
   assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: spec.user.id, from: 'matching' })).status, 200);
   const [cur] = await S.sql`select status from orders where id = ${o.id}`;
   assert.equal((await spec.req('POST', `/api/orders/${o.id}/status`, { from: cur.status, to: 'in_work' })).status, 200);
+  await ready(o);
   const r = await spec.req('POST', `/api/orders/${o.id}/draft/ai`, {});
   assert.equal(r.status, 201, JSON.stringify(r.body));
   return { o, d: r.body.draft };
@@ -58,7 +59,7 @@ test('участок в собственности: суммы вписаны �
   assert.deepEqual(houseFacts(body), { house: 8000000, land: 2000000, total: 10000000, share: 20 });
   const pages = await wordText(o.id);
   const res = runAutoChecks(['house_land'], [{ name: 'Отчёт.docx', kind: 'docx', pages }], { service: 'realty', fields: BASE, egrn: [LAND_EGRN] }).house_land;
-  console.log(JSON.stringify(res, null, 1));
+  assert.deepEqual(res, []);
 });
 
 test('полная ИИ-проверка отчёта о доме из Word: выписки на дом и на участок — без ложных находок', async () => {
@@ -100,3 +101,47 @@ test('номер участка у дома — не номер дома; чуж
   // Не дом (квартира) — номер рядом с «участком» сверяется, как раньше.
   assert.equal(run(land, { ...BASE, object_type: 'flat' }).length, 1);
 });
+
+test('выписки на дом и на участок до черновика: в таблицу задания и перечень документов — по дому, участок своим', async () => {
+  const day = todayMsk().split('-').reverse().join('.');
+  const fields = { ...BASE, land_area: 15 };
+  const { o, d } = await houseCase(fields, async (o) => {
+    const put = async (text, name) => (await owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(text), {
+      raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent(name) } })).body.document;
+    await put(['Выписка из Единого государственного реестра недвижимости об объекте недвижимости', `${day} № КУВИ-001/2026-77001`,
+      'Вид объекта недвижимости: Здание', 'Назначение: жилой дом', 'Кадастровый номер: 50:20:0010101:301', 'Площадь: 120 кв. м',
+      'Правообладатель: Тестов Тест Тестович', 'Вид права: Собственность'].join('\n'), 'Выписка на дом.txt');
+    await put(['Выписка из Единого государственного реестра недвижимости об объекте недвижимости', `${day} № КУВИ-001/2026-77002`,
+      'Вид объекта недвижимости: Земельный участок', 'Кадастровый номер: 50:20:0010101:15', 'Площадь: 1200 +/- 12 кв. м',
+      'Правообладатель: Тестов Тест Тестович', 'Вид права: Собственность'].join('\n'), 'Выписка на участок.txt');
+  });
+  const lines = d.body.split('\n');
+  // Дом — по выписке на дом, а не на участок.
+  assert.ok(lines.includes('| Кадастровый номер | 50:20:0010101:301 (по выписке ЕГРН) |'), d.body);
+  assert.ok(lines.includes('| Площадь, кв. м | 120 (по выписке ЕГРН) |'));
+  assert.ok(lines.some((l) => l.startsWith('2. Выписка из ЕГРН № КУВИ-001/2026-77002 от')), 'выписка на участок — в перечне документов');
+  // 2.538: номер и площадь участка в таблице «Стоимость дома и участка» — из выписки на участок, а не из заявки (15 сот.).
+  const row = '| Земельный участок под домом (кадастровый номер 50:20:0010101:15, 1 200 кв. м — по выписке ЕГРН на участок), руб. | [заполнить] |';
+  assert.ok(lines.includes(row), lines.filter((l) => /участок под домом/u.test(l)).join('\n'));
+  const g = await spec.req('GET', `/api/orders/${o.id}/draft`);
+  assert.ok(g.body.house.includes(row), JSON.stringify(g.body.house));
+  // Суммы вписаны — проверка «Дом с участком» по таблице молчит.
+  const t = lines.indexOf(HOUSE_HEAD);
+  const sums = ['8 000 000', '2 000 000', '10 000 000', '20'];
+  for (let k = 0; k < 4; k += 1) lines[t + 1 + k] = lines[t + 1 + k].replace('[заполнить]', sums[k]);
+  const table = lines.slice(t, t + 5);
+  const res = runAutoChecks(['house_land'], [{ name: 'Отчёт.docx', kind: 'docx', pages: [table.join('\n')] }], { service: 'realty', fields, egrn: [LAND_EGRN] }).house_land;
+  assert.deepEqual(res.filter((f) => !/не указан кадастровый/u.test(f.text)), []);
+});
+
+test('таблица дома: из выписки на участок — номер и площадь; нет выписки — по заявке', () => {
+  const f = { object_type: 'house', house_land: 'own', land_cadastral: '50:20:0010101:15', land_area: 12.5 };
+  assert.equal(houseTable('realty', f)[2], '| Земельный участок под домом (кадастровый номер 50:20:0010101:15, 12,5 сот. — по заявке, сверьте с выпиской ЕГРН на участок), руб. | [заполнить] |');
+  const land = landEgrnFacts([LAND_EGRN]);
+  assert.deepEqual(land, { cadastral: '50:20:0010101:15', area: 1200 });
+  assert.equal(houseTable('realty', f, land)[2], '| Земельный участок под домом (кадастровый номер 50:20:0010101:15, 1 200 кв. м — по выписке ЕГРН на участок), руб. | [заполнить] |');
+  assert.equal(houseTable('realty', { ...f, house_land: 'lease' }, { cadastral: null, area: 600 })[2],
+    '| Право аренды участка под домом (кадастровый номер 50:20:0010101:15 (по заявке), 600 кв. м — по выписке ЕГРН на участок), руб. | [заполнить] (если переходит вместе с домом; иначе — «не оценивается») |');
+  assert.equal(landEgrnFacts([{ id: 'h', name: 'дом', pages: ['Вид объекта недвижимости: Здание\nКадастровый номер: 50:20:0010101:301'] }]), null);
+});
+
