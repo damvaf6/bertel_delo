@@ -205,8 +205,20 @@ function appendixBlocks(appendix, media) {
   return out;
 }
 
+// Место под подпись и печать (задача штаба 41c17197) — после разделов, до приложений. Подпись и печать ставит эксперт сам:
+// платформа от его имени ничего не подписывает. Своё место в тексте черновика уже есть («М.П.») — второй раз не ставится.
+export function signBlocks(meta, text = '') {
+  if (meta.sign === false || /М\.\s?П\./.test(String(text))) return [];
+  const role = meta.executor_role ?? 'Исполнитель';
+  return [
+    { type: 'sign', text: `${role} ____________________ / ${meta.executor ?? '____________________'} /` },
+    ...(meta.org ? [{ type: 'para', text: `Руководитель организации ____________________ / ____________________ /` }] : []),
+    { type: 'para', text: `${meta.date ?? '«___» ____________ 20__ г.'}${' '.repeat(8)}М.П.` },
+  ];
+}
+
 function reportBody(text, meta, st, appendix = null, media = []) {
-  const blocks = [...numbered(parseDraft(text)), ...appendixBlocks(appendix, media)];
+  const blocks = [...numbered(parseDraft(text)), ...signBlocks(meta, text), ...appendixBlocks(appendix, media)];
   const heads = blocks.filter((b) => b.type === 'head');
   const content = blocks.map((b) => {
     if (b.type === 'head') return para(run(b.text), pStyle(b.level === 1 ? st.h1 : st.h2));

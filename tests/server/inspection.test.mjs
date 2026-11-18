@@ -1056,7 +1056,18 @@ test('2.421: акт осмотра Word — когда, адрес, экспер
   assert.match(a.text, new RegExp(`Фото ${nos.rooms}[\\s\\S]*\\(получено\\)[\\s\\S]*не определено`), 'телефон не передал время и место');
   assert.match(a.text, /Санузел[\s\S]*не снято/);
   assert.match(a.text, /не снято \(шаг «если есть»\)/);
-  assert.match(a.text, /Эксперт _+ \/ Актов Эксперт \//);
+  assert.match(a.text, /Эксперт _+ \/ Актов Эксперт \/\nМ\.П\./, 'место под подпись и печать (41c17197)');
+  // Акт в PDF (41c17197): тот же акт, видит каждый, кто видит акт; неверный формат — отказ.
+  const pdf = async (c, f = 'pdf') => fetch(`${S.base}/api/orders/${o.id}/inspection/act?format=${f}`, { headers: { cookie: c.cookie } });
+  for (const c of [spec, owner]) {
+    const r = await pdf(c);
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.get('content-type'), 'application/pdf');
+    assert.match(decodeURIComponent(r.headers.get('content-disposition').split("''")[1]), /^Акт осмотра объекта [0-9A-F]{8}\.pdf$/);
+    assert.equal(Buffer.from(await r.arrayBuffer()).subarray(0, 5).toString('latin1'), '%PDF-');
+  }
+  assert.equal((await pdf(spec, 'doc')).status, 400);
+  assert.equal((await pdf(spec2)).status, 404, 'чужой — не видит');
   // Заказчик видит акт, но без имени помощника.
   const b = await act(owner);
   assert.equal(b.status, 200);
@@ -1064,7 +1075,7 @@ test('2.421: акт осмотра Word — когда, адрес, экспер
   assert.match(b.text, /помощник на выезде/);
   // Записано в журнал.
   const [log] = await S.sql`select count(*)::int as n from audit_log where action = 'inspection.act' and subject_id = ${String(o.id)}`;
-  assert.equal(log.n, 2);
+  assert.equal(log.n, 4);
 });
 
 test('2.422: в акте осмотра — данные с объекта от помощника и отметки «доснято по просьбе эксперта»', async () => {

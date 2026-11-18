@@ -23,7 +23,7 @@ import { fillTables, orderMaterials, orderSections, placeCustomer, reportEdition
 import { APPROACHES } from '../modules/index.mjs';
 import { analogsBrief, rentSummary } from '../analogs/analogs.mjs';
 import { publicDoc, saveDocument } from './core-ops.mjs';
-import { audit, sendFile } from './util.mjs';
+import { audit, sendDoc, sendFile, wantPdf } from './util.mjs';
 import { fillDraft, itemLine, loadDossier } from '../dossier/dossier.mjs';
 import { pastValues, reuseSections, skeleton } from '../docs/reuse.mjs';
 import { orderRef } from '../notify/registry.mjs';
@@ -988,13 +988,15 @@ export function draftOps() {
         const { sql, actor, order, res } = ctx;
         guard(actor, order);
         if (order.executor_user_id !== actor.id) throw new HttpError(403, 'forbidden', 'Файл Word черновика скачивает исполнитель');
+        const pdf = wantPdf(ctx.query, ctx.providers);
         const cur = await latest(sql, order.id);
         if (!cur) throw new HttpError(404, 'no_draft', 'Черновика ещё нет');
         const number = await reportNumber(ctx, order, actor);
         const word = await reportFor(ctx, order, actor, cur.body, { number });
-        await audit(sql, actor, 'draft.docx', 'order', order.id, { draft: String(cur.id), template: word.template, ...(number ? { number } : {}) });
+        await audit(sql, actor, 'draft.docx', 'order', order.id, { draft: String(cur.id), template: word.template, ...(number ? { number } : {}), ...(pdf ? { format: 'pdf' } : {}) });
         // Word с фото осмотра и скриншотами бывает больше 3,5 МБ — тогда временной ссылкой из хранилища (2.49).
-        await sendFile(res, ctx.providers, { buf: word.buf, filename: word.filename, mime: DOCX_MIME });
+        // ?format=pdf — тот же файл в PDF для заказчика (задача штаба 41c17197).
+        await sendDoc(res, ctx.providers, { buf: word.buf, filename: word.filename, mime: DOCX_MIME }, pdf);
       },
     },
     {

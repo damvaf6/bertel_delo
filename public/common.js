@@ -62,3 +62,22 @@ export const quoted = (name) => (/[«"]/.test(String(name)) ? String(name) : `«
 
 export const ROLE_RU = { head: 'Руководитель', senior: 'Старший', member: 'Сотрудник' };
 export const PLATFORM_ROLE_RU = { dispatcher: 'Диспетчер', admin: 'Администратор' };
+
+// Скачать файл (задача штаба 41c17197: PDF акта и заключения): ошибка сервера — текстом в ответе, а не страницей с ответом
+// сервера. Большой файл сервер отдаёт ссылкой в хранилище — если браузер не дал её прочитать, открываем адрес напрямую.
+export async function downloadFile(url, fallbackName) {
+  let r;
+  try {
+    r = await fetch(url, { credentials: 'same-origin' });
+  } catch {
+    location.assign(url);
+    return { ok: true };
+  }
+  if (!r.ok) return { ok: false, message: (await r.json().catch(() => ({})))?.message ?? 'Файл скачать не удалось' };
+  const name = decodeURIComponent((/filename\*=UTF-8''([^;]+)/i.exec(r.headers.get('content-disposition') ?? '') ?? [])[1] ?? fallbackName);
+  const a = el('a', { href: URL.createObjectURL(await r.blob()), download: name });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  return { ok: true };
+}
