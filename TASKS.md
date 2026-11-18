@@ -5054,5 +5054,5 @@
       (вписана экспертом, а нет — участок / итог по суммам); участок в собственности, а его стоимости в черновике нет — отдельной
       цифрой. По экспертам и в таблице для Excel. `house_*`, `houseCalc` в `src/orgs/report.mjs`, `houseFacts` в
       `src/orders/house.mjs`, `houseLine` в `public/orgreport.js`. Тесты — `tests/server/house-report.test.mjs`,
-      `tests/ui/house-report.spec.mjs` (снимки hs13, hs13b).
+      `tests/ui/house-report.spec.mjs` (снимки hs13, hs13b). Сервер 1032/1035 + 3 пропущенных, телефон — все сводки 7/7.
 - [ ] 2.538 Прогон «как эксперт и руководитель» по всей пачке 2.529–2.537 на телефоне — по ходу исправить найденное.
