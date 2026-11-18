@@ -53,3 +53,23 @@ export async function sendFile(res, providers, { buf, filename, mime }) {
   });
   return res.send(buf);
 }
+
+// Word или PDF (задача штаба 41c17197): ?format=pdf — тот же файл Word, переведённый LibreOffice в PDF, имя то же с .pdf.
+// PDF выключен или не собрался — понятным текстом, Word остаётся доступен.
+export const wantPdf = (query) => {
+  const f = String(query?.format ?? 'docx');
+  if (!['docx', 'pdf'].includes(f)) throw new HttpError(400, 'bad_format', 'Формат файла: docx или pdf');
+  return f === 'pdf';
+};
+
+export async function sendDoc(res, providers, { buf, filename, mime }, pdf = false) {
+  if (!pdf) return sendFile(res, providers, { buf, filename, mime });
+  if (!providers.pdf?.ready) throw new HttpError(503, 'no_pdf', 'PDF пока не собрать — скачайте файл Word');
+  let out;
+  try {
+    out = await providers.pdf.convert({ buf, name: filename });
+  } catch {
+    throw new HttpError(502, 'pdf_failed', 'PDF не собрался — скачайте файл Word или попробуйте ещё раз');
+  }
+  return sendFile(res, providers, { buf: out, filename: filename.replace(/\.docx$/i, '') + '.pdf', mime: 'application/pdf' });
+}

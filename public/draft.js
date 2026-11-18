@@ -1,6 +1,6 @@
 // Черновик заключения от ИИ (задача 2.2): исполнитель готовит черновик, правит его и прикладывает файлом результата;
 // диспетчер только читает; заказчику блок не показывается (и сервер ему черновик не отдаёт). Тексты — через textContent.
-import { api, el, say } from '/common.js';
+import { api, downloadFile, el, say } from '/common.js';
 import { state } from '/shell.js';
 import { setNext } from '/next.js';
 import { loadAnalogs } from '/analogs.js';
@@ -652,6 +652,14 @@ $('draft-word').addEventListener('click', () => run($('draft-word'), async () =>
   if (!$('draft-text').readOnly && $('draft-text').value.trim() !== ctx.draft.body) await save();
   location.href = `/api/orders/${ctx.order.id}/draft/docx`;
   say($('draft-msg'), 'Файл Word скачивается', 'ok');
+}));
+
+// Тот же отчёт в PDF (задача штаба 41c17197): LibreOffice переводит собранный Word; подпись и печать эксперт ставит сам.
+$('draft-pdf').addEventListener('click', () => run($('draft-pdf'), async () => {
+  if (!$('draft-text').readOnly && $('draft-text').value.trim() !== ctx.draft.body) await save();
+  say($('draft-msg'), 'PDF собирается — это до минуты', 'ok');
+  const r = await downloadFile(`/api/orders/${ctx.order.id}/draft/docx?format=pdf`, 'Отчёт.pdf');
+  say($('draft-msg'), r.ok ? 'Файл PDF скачан' : r.message, r.ok ? 'ok' : undefined);
 }));
 
 $('draft-attach').addEventListener('click', () => run($('draft-attach'), async () => {

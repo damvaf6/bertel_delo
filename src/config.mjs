@@ -3,6 +3,7 @@
 
 import { AI_DRIVERS } from './providers/ai.mjs';
 import { OCR_DRIVERS } from './providers/ocr.mjs';
+import { PDF_DRIVERS } from './providers/pdf.mjs';
 
 // demo — открытая демо-площадка для показа (решение Дамира 05.10.2026, вопрос 21, вариант Б): только вымышленные данные,
 // вход кнопками «Войти как …», без входа по телефону и без настоящих поставщиков (оплата, СМС, почта, подпись, ИИ —
@@ -45,7 +46,11 @@ export function loadConfig(env = process.env) {
       // Распознавание текста на скриншотах аналогов (2.32): '' — выключено (на stage и prod по умолчанию), 'fake' (проверки),
       // 'yandex' (Yandex Vision OCR). Выключено — ИИ читает PDF страницы или вставленный экспертом текст объявления.
       ocr: env.OCR_PROVIDER ?? (live ? '' : 'fake'),
+      // PDF из Word (задача штаба 41c17197): 'soffice' — LibreOffice без экрана (на площадках, в контейнере), 'fake' — проверки,
+      // '' — выключено.
+      pdf: env.PDF_PROVIDER ?? (live ? 'soffice' : 'fake'),
     },
+    pdf: { bin: env.PDF_SOFFICE || 'soffice' },
     ocr: {
       yandex: {
         url: env.OCR_YANDEX_URL || 'https://ocr.api.cloud.yandex.net/ocr/v1/recognizeText',
@@ -172,6 +177,8 @@ export function loadConfig(env = process.env) {
     if (driver === 'gigachat' && !cfg.ai.gigachat.authKey) throw new ConfigError('GigaChat: нужен GIGACHAT_AUTH_KEY');
   }
   if (!OCR_DRIVERS.includes(cfg.providers.ocr)) throw new ConfigError(`OCR_PROVIDER: одно из ${OCR_DRIVERS.filter(Boolean).join(', ')} или пусто`);
+  if (!PDF_DRIVERS.includes(cfg.providers.pdf)) throw new ConfigError(`PDF_PROVIDER: одно из ${PDF_DRIVERS.filter(Boolean).join(', ')} или пусто`);
+  if (live && cfg.providers.pdf === 'fake') throw new ConfigError('PDF_PROVIDER=fake — только для проверок');
   if (!['api-key', 'metadata'].includes(cfg.ocr.yandex.auth)) throw new ConfigError('OCR_YANDEX_AUTH: api-key или metadata');
   if (cfg.providers.ocr === 'yandex' && !cfg.ocr.yandex.folder) throw new ConfigError('Распознавание Yandex: нужен AI_YANDEX_FOLDER');
   if (cfg.providers.ocr === 'yandex' && cfg.ocr.yandex.auth === 'api-key' && !cfg.ocr.yandex.apiKey) throw new ConfigError('Распознавание Yandex: нужен ключ (OCR_YANDEX_API_KEY или AI_YANDEX_API_KEY) или OCR_YANDEX_AUTH=metadata');

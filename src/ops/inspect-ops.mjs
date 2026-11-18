@@ -9,7 +9,7 @@ import crypto from 'node:crypto';
 import { HttpError, notFound, rateLimiter } from '../http/core.mjs';
 import { orderSides } from '../access/policy.mjs';
 import { notify } from '../notify/notify.mjs';
-import { audit, phoneFrom, sendFile, text } from './util.mjs';
+import { audit, phoneFrom, sendDoc, sendFile, text, wantPdf } from './util.mjs';
 import { inspectionPhotos } from '../docs/photos.mjs';
 import { DOCX_MIME } from '../docs/docx.mjs';
 import { inspectionActData, inspectionActDoc, ownerActView } from '../docs/inspection-act.mjs';
@@ -411,11 +411,13 @@ export function inspectOps() {
       // заявку (как фото осмотра); фото в деле нет — акта нет.
       id: 'inspection.act', method: 'GET', path: '/api/orders/:id/inspection/act', auth: 'user',
       access: { resource: 'order', param: 'id', need: 'read' },
-      async handler({ sql, actor, order, registry, providers, res }) {
+      async handler({ sql, actor, order, registry, providers, res, query }) {
+        const pdf = wantPdf(query);
         const data = await orderAct(sql, registry, order, actor);
         if (!data) throw new HttpError(409, 'no_photos', 'В деле пока нет фото осмотра — акт составить не из чего');
-        await audit(sql, actor, 'inspection.act', 'order', order.id, { photos: data.total });
-        return sendFile(res, providers, { ...inspectionActDoc(data), mime: DOCX_MIME });
+        await audit(sql, actor, 'inspection.act', 'order', order.id, { photos: data.total, ...(pdf ? { format: 'pdf' } : {}) });
+        // ?format=pdf — тот же акт в PDF (задача штаба 41c17197).
+        return sendDoc(res, providers, { ...inspectionActDoc(data), mime: DOCX_MIME }, pdf);
       },
     },
     {

@@ -5,6 +5,16 @@ FROM ${BASE_IMAGE}
 ENV NODE_ENV=production
 WORKDIR /app
 
+# PDF из Word (задача штаба 41c17197): LibreOffice без экрана и шрифты, совместимые с Times New Roman и Arial по размерам
+# букв — вид PDF совпадает с Word. Без PDF (быстрая сборка для проверок): --build-arg WITH_PDF=0.
+ARG WITH_PDF=1
+RUN if [ "$WITH_PDF" = "1" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends libreoffice-writer-nogui fonts-liberation fonts-dejavu-core \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
+# Профиль LibreOffice — во временной папке каждого запроса (src/providers/pdf.mjs); HOME нужен ему для служебных файлов.
+ENV HOME=/tmp
+
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 

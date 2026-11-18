@@ -1,7 +1,7 @@
 // Дистанционный осмотр в деле (задача 2.3): исполнитель выдаёт владельцу объекта ссылку и видит присланные фото по шагам —
 // со временем и геометкой; остальные, кто видит заявку, — только фото. Тексты — через textContent.
 // Задача 2.20: ссылку платформа может отправить владельцу СМС; эксперт просит переснять шаг — владелец видит просьбу у шага.
-import { api, el, say } from '/common.js';
+import { api, downloadFile, el, say } from '/common.js';
 import { setNext } from '/next.js';
 
 const $ = (id) => document.getElementById(id);
@@ -302,3 +302,14 @@ $('inspect-copy').addEventListener('click', async () => {
 });
 
 $('inspect-act').addEventListener('click', () => { if (ctx) location.assign(`/api/orders/${ctx.order.id}/inspection/act`); });
+// Тот же акт в PDF (задача штаба 41c17197) — для заказчика и для печати; Word остаётся для правки.
+$('inspect-act-pdf').addEventListener('click', async (e) => {
+  if (!ctx) return;
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  say($('inspect-msg'), 'PDF собирается — это до минуты', 'ok');
+  try {
+    const r = await downloadFile(`/api/orders/${ctx.order.id}/inspection/act?format=pdf`, 'Акт осмотра.pdf');
+    say($('inspect-msg'), r.ok ? 'Акт в PDF скачан' : r.message, r.ok ? 'ok' : undefined);
+  } finally { btn.disabled = false; }
+});
