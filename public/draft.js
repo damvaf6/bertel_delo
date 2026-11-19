@@ -21,7 +21,7 @@ export async function loadDraft(current, reload) {
   if (!current.order.module || (!mine && !staff)) { box.classList.add('hidden'); return; }
   say($('draft-msg'), '');
   const r = await api('GET', `/api/orders/${current.order.id}/draft`);
-  ctx = { order: current.order, draft: r.draft, reload, sections: r.sections, noInspection: !!(r.no_inspection && r.can_edit), specs: r.can_edit ? r.specs ?? null : null, share: r.can_edit ? r.share ?? null : null, income: r.can_edit ? r.income ?? null : null, house: r.can_edit ? r.house ?? null : null, incomeRent: r.can_edit ? r.income_rent ?? null : null };
+  ctx = { order: current.order, draft: r.draft, reload, sections: r.sections, noInspection: !!(r.no_inspection && r.can_edit), noInspectText: r.no_inspection_text || NO_INSPECT_TEXT, specs: r.can_edit ? r.specs ?? null : null, share: r.can_edit ? r.share ?? null : null, income: r.can_edit ? r.income ?? null : null, house: r.can_edit ? r.house ?? null : null, incomeRent: r.can_edit ? r.income_rent ?? null : null };
   setNext({ draft: { exists: !!r.draft, approaches: r.approaches && r.can_edit ? r.approaches : null } });
   renderApproaches(r);
   // Исполнителю — пока дело в работе или черновик есть; служебным — только когда черновик есть.
@@ -222,7 +222,7 @@ async function insertShareTable(table, flag = 'share') {
 // «осмотр не проводился» в черновик: в конец раздела с таблицей задания, без него — раздела об осмотре, иначе в конец текста.
 // Фраза (или «без осмотра») уже в тексте — подсказка не нужна.
 export const NO_INSPECT_TEXT = 'Осмотр объекта не проводился, сведения об объекте — по документам, представленным заказчиком.';
-const NO_INSPECT_RE = /без\s+(?:проведения\s+)?осмотра|осмотр\S*\s+(?:объекта\s+(?:оценки\s+|экспертизы\s+)?)?не\s+(?:проводил|производил)/iu;
+const NO_INSPECT_RE = /без\s+(?:проведения\s+)?осмотра|осмотр\S*\s+(?:(?:объекта|квартиры)\s+(?:оценки\s+|экспертизы\s+)?)?не\s+(?:проводил|производил)/iu;
 const norm = (x) => String(x).toLowerCase().replace(/[^a-zа-яё0-9]/g, '');
 function renderNoInspection() {
   const t = $('draft-text');
@@ -230,7 +230,7 @@ function renderNoInspection() {
   $('draft-noinsp').classList.toggle('hidden', !show);
   if (show) {
     $('draft-noinsp-text').textContent = 'В деле нет осмотра: ни фото по ссылке владельца, ни выезда помощника. Если осмотр не '
-      + `проводился, вставьте в черновик: «${NO_INSPECT_TEXT}» — и уберите дату осмотра. Осматривали сами — приложите фото к делу.`;
+      + `проводился, вставьте в черновик: «${ctx.noInspectText}» — и уберите дату осмотра. Осматривали сами — приложите фото к делу.`;
   }
 }
 function noInspectionAt(body) {
@@ -250,7 +250,8 @@ export async function insertNoInspection() {
   const head = t.value.slice(0, at).replace(/\s*$/, '');
   const tail = t.value.slice(at);
   const from = head.length + 2;
-  await putText(`${head}\n\n${NO_INSPECT_TEXT}\n${tail ? `\n${tail}` : ''}`, from, NO_INSPECT_TEXT.length);
+  const text = ctx.noInspectText ?? NO_INSPECT_TEXT;
+  await putText(`${head}\n\n${text}\n${tail ? `\n${tail}` : ''}`, from, text.length);
   return true;
 }
 

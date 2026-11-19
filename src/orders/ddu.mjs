@@ -77,3 +77,8 @@ function placeUnder(body, sections, line, head, pick) {
 
 export const placeDduTask = (body, sections, line) => placeUnder(body, sections, line, DDU_TASK_HEAD, (x) => x.table === 'task');
 export const placeDduAssumption = (body, sections, line) => placeUnder(body, sections, line, DDU_ASSUME_HEAD, (x) => isAssumptions(x.title));
+
+// Осмотр (2.544): дом строится — в квартиру не попасть, осмотра квартиры нет. Своя фраза «осмотр не проводился» в черновик
+// вместо общей: что осматривать нечего и откуда сведения о квартире. Стройплощадку осмотрели — фраза не нужна.
+export const DDU_NO_INSPECT = 'Осмотр квартиры не проводился: дом не введён в эксплуатацию, квартира участнику долевого строительства не передана; сведения о квартире — по договору участия в долевом строительстве и плану квартиры из договора.';
+export const dduNoInspect = (serviceId, fields) => (ddu(serviceId, fields) ? DDU_NO_INSPECT : null);
