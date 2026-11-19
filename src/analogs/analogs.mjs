@@ -60,6 +60,68 @@ function shareMix(spec, order, list, covers) {
   return out;
 }
 
+// Квартира по ДДУ (2.543): у аналога стадия строительства, срок сдачи дома, кто продаёт и отделка (только у заявок на права по
+// ДДУ — when в модуле). Цена права требования зависит от срока сдачи: срок у аналога дальше квартала от срока передачи по
+// договору (поле заявки ddu_handover) или аналог — готовая квартира в сданном доме — нужна корректировка «Срок сдачи дома»
+// (снимает и то, и другое: covers ddu_stage). Отделка не как у большинства аналогов — «Состояние и отделка». Застройщик и
+// переуступка вместе — строка над списком: цены могут различаться, пояснить в отчёте. Ничего не запрещается.
+export const DDU_STAGE = 'ddu_stage';
+const ROMAN = { I: 1, II: 2, III: 3, IV: 4 };
+// «31.12.2027» → 2027·4 + 3; «IV кв. 2027», «4 квартал 2027 г.» → то же; иначе (год без квартала, текст) — null.
+export function dduQuarter(v) {
+  const t = String(v ?? '').trim();
+  let m = t.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  if (m && +m[2] >= 1 && +m[2] <= 12) return +m[3] * 4 + Math.floor((+m[2] - 1) / 3);
+  m = t.match(/^(IV|III|II|I|[1-4])\s*-?\s*(?:й\s*)?кв(?:\.|артал)?\s*(\d{4})/i);
+  if (m) return +m[2] * 4 + (ROMAN[m[1].toUpperCase()] ?? +m[1]) - 1;
+  return null;
+}
+const quarterText = (q) => `${['I', 'II', 'III', 'IV'][q % 4]} кв. ${Math.floor(q / 4)}`;
+const quartersText = (n) => `${n} ${n === 1 ? 'квартал' : n < 5 ? 'квартала' : 'кварталов'}`;
+function dduMix(spec, order, list, covers) {
+  const out = { per: new Map(), hints: [] };
+  if (!spec.fields.some((f) => f.id === DDU_STAGE)) return out;
+  const nums = (xs) => xs.map((a) => list.indexOf(a) + 1).join(', ');
+  const many = (xs, one, few) => (xs.length > 1 ? few : one);
+  const add = (a, text) => out.per.set(a.id, [...(out.per.get(a.id) ?? []), text]);
+  const fix = 'нужна корректировка «Срок сдачи дома»';
+  const mine = dduQuarter(order.fields?.ddu_handover);
+  const ready = [];
+  const far = [];
+  for (const a of list) {
+    if (a.fields[DDU_STAGE] === 'ready') {
+      if (!covers(a, DDU_STAGE)) { add(a, `Аналог — готовая квартира в сданном доме, а оценивается право требования по ДДУ — ${fix} или аналог-новостройка`); ready.push(a); }
+      continue;
+    }
+    if (!a.fields.ddu_due) { add(a, 'Укажите срок сдачи дома — цена права требования зависит от срока'); continue; }
+    const q = dduQuarter(a.fields.ddu_due);
+    if (q === null || mine === null || Math.abs(q - mine) <= 1 || covers(a, DDU_STAGE)) continue;
+    const d = Math.abs(q - mine);
+    add(a, `Срок сдачи: ${quarterText(q)} у аналога, ${quarterText(mine)} по договору — ${q > mine ? 'позже' : 'раньше'} на ${quartersText(d)}, ${fix}`);
+    far.push(a);
+  }
+  if (ready.length) out.hints.push(`${many(ready, 'Аналог', 'Аналоги')} ${nums(ready)} — ${many(ready, 'готовая квартира', 'готовые квартиры')}, а оценивается право требования: без корректировки «Срок сдачи дома»`);
+  if (far.length) out.hints.push(`Срок сдачи далеко от срока передачи по договору (${quarterText(mine)}) у ${many(far, 'аналога', 'аналогов')} ${nums(far)} — нет корректировки «Срок сдачи дома»`);
+  // Отделка: меньшинство (не как у большинства) без корректировки «Состояние и отделка»; поровну — только строка над списком.
+  const by = new Map();
+  for (const a of list.filter((x) => x.fields.ddu_finish)) (by.get(a.fields.ddu_finish) ?? by.set(a.fields.ddu_finish, []).get(a.fields.ddu_finish)).push(a);
+  if (by.size > 1) {
+    const f = spec.fields.find((x) => x.id === 'ddu_finish');
+    const name = (id) => valueText(f, id).toLowerCase();
+    const groups = [...by.entries()].sort((x, y) => y[1].length - x[1].length);
+    const [top, rest] = [groups[0], groups.slice(1)];
+    const bad = top[1].length > rest[0][1].length ? rest.flatMap(([, xs]) => xs).filter((a) => !covers(a, 'ddu_finish')) : [];
+    for (const a of bad) add(a, `Отделка: ${name(a.fields.ddu_finish)} у аналога, у ${many(top[1], 'аналога', 'аналогов')} ${nums(top[1])} — ${name(top[0])}: нужна корректировка «Состояние и отделка»`);
+    if (bad.length || top[1].length === rest[0][1].length) {
+      out.hints.push(`Отделка у аналогов разная: ${groups.map(([id, xs]) => `${name(id)} — ${nums(xs)}`).join('; ')}${bad.length ? `; без корректировки «Состояние и отделка» — ${many(bad, 'аналог', 'аналоги')} ${nums(bad)}` : ' — сделайте корректировку «Состояние и отделка» к отделке объекта'}`);
+    }
+  }
+  const dev = list.filter((a) => a.fields.ddu_seller === 'developer');
+  const asg = list.filter((a) => a.fields.ddu_seller === 'assignment');
+  if (dev.length && asg.length) out.hints.push(`Продают: застройщик — ${many(dev, 'аналог', 'аналоги')} ${nums(dev)}, переуступка — ${many(asg, 'аналог', 'аналоги')} ${nums(asg)}; цены застройщика и переуступки могут различаться — поясните в отчёте`);
+  return out;
+}
+
 // Нежилое помещение (2.523): у аналога «Продажа или аренда» (только у нежилого — when в модуле). У аналога аренды цена —
 // плата в месяц; ставка за кв. м в месяц = плата / площадь. Аналоги аренды в сравнительный подход не идут (не в счёт
 // «не меньше трёх», не в таблицу сравнительного подхода в Word); их средняя ставка — подсказкой к таблице доходного подхода.
@@ -277,6 +339,7 @@ export function analogWarnings(spec, order, list, onsite = null, valueDay = null
   };
   const coveredOf = (a) => new Set((a.adjustments ?? []).flatMap((x) => adjustKinds(spec).find((k) => k.id === x.kind)?.covers ?? []));
   const mix = shareMix(spec, order, list, (a) => coveredOf(a).has(SHARE_FIELD));
+  const ddu = dduMix(spec, order, list, (a, id) => coveredOf(a).has(id));
   const deals = spec.fields.some((f) => f.id === DEAL_FIELD);
   for (const a of list) {
     const w = [];
@@ -332,6 +395,7 @@ export function analogWarnings(spec, order, list, onsite = null, valueDay = null
     if (positions.length && no === undefined) w.push(`Укажите позицию перечня (1–${positions.length}): аналоги нужны к каждой позиции`);
     else if (positions.length && no > positions.length) w.push(`Позиций в перечне: ${positions.length} — проверьте номер позиции`);
     if (mix.per.has(a.id)) w.push(mix.per.get(a.id));
+    if (ddu.per.has(a.id)) w.push(...ddu.per.get(a.id));
     if (deals && !a.fields[DEAL_FIELD]) w.push('Отметьте: продажа или аренда — аналоги аренды в сравнительный подход не идут');
     else if (isRent(a) && !(a.fields.area > 0)) w.push('Аналог аренды: укажите площадь — ставка считается за кв. м в месяц');
     if (!a.confirmed_at) w.push(a.suggested ? 'Признаки предложил ИИ — проверьте и подтвердите' : 'Не подтверждён экспертом');
@@ -355,6 +419,7 @@ export function analogWarnings(spec, order, list, onsite = null, valueDay = null
 
   function withCommon(h) {
     h.unshift(...mix.hints);
+    h.push(...ddu.hints);
     const rent = rentSummary(spec, list);
     if (rents.length) h.push(`Аналоги аренды ${rents.map((a) => list.indexOf(a) + 1).join(', ')} — в сравнительный подход не идут${rent ? `. ${rentText(rent)} — для строки «Рыночная ставка аренды» в таблице доходного подхода (× 12 — за год)` : ''}`);
     if (late.length) h.unshift(`Оценка на прошлую дату (${ruDate(vd)}): ${late.length > 1 ? 'объявления аналогов' : 'объявление аналога'} ${late.join(', ')} позже неё больше чем на 3 месяца — нужен архив объявлений на дату оценки или корректировка на дату`);
@@ -536,6 +601,24 @@ export function searchHints(registry, order) {
         { name: 'Авито', url: `https://www.avito.ru/${avitoCity}/avtomobili?q=${enc(q)}` },
         { name: 'Авто.ру', url: `https://auto.ru/${f.region === 'mo' ? 'moskovskaya_oblast' : 'moskva'}/cars/all/` },
         { name: 'Дром', url: 'https://auto.drom.ru/' },
+      ],
+    };
+  }
+  if (order.service === 'realty' && f.object_type === 'ddu') {
+    // 2.543: права по ДДУ — новостройки той же стадии и с близким сроком сдачи, площадь — проектная.
+    const area = Number(f.ddu_area ?? f.area);
+    const q = dduQuarter(f.ddu_handover);
+    return {
+      criteria: [
+        `Квартиры в новостройках (права по ДДУ)${Number.isFinite(area) && area > 0 ? `, ${Math.round(area * 0.7)}–${Math.round(area * 1.3)} кв. м` : ''}`,
+        f.ddu_complex ? `тот же ЖК или рядом (${f.ddu_complex})` : `рядом с «${f.address || where}»`,
+        q !== null ? `срок сдачи около ${quarterText(q)}` : 'та же стадия строительства',
+        'застройщик и переуступка — отметьте у аналога', 'объявления не старше полугода',
+      ].join('; '),
+      links: [
+        { name: 'ЦИАН: новостройки', url: `https://www.cian.ru/cat.php?deal_type=sale&engine_version=2&offer_type=flat&object_type%5B0%5D=2&region=${f.region === 'mo' ? 4593 : 1}` },
+        { name: 'Авито: новостройки', url: `https://www.avito.ru/${avitoCity}/kvartiry/prodam/novostroyka` },
+        { name: 'Домклик', url: 'https://domclick.ru/' },
       ],
     };
   }

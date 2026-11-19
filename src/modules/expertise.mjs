@@ -1013,6 +1013,22 @@ export default {
       { id: 'land_area', label: 'Площадь участка, сот.', type: 'number', min: 0.01, max: 100000, services: ['realty'], when: HOUSE_ONLY, near: { field: 'land_area', pct: 30 } },
       { id: 'walls', label: 'Материал стен', type: 'select', services: ['realty'], when: HOUSE_ONLY, options: HOUSE.find((f) => f.id === 'house_walls').options, near: { field: 'house_walls', same: true } },
       { id: 'gas', label: 'Газ', type: 'select', services: ['realty'], when: HOUSE_ONLY, options: HOUSE.find((f) => f.id === 'house_gas').options, near: { field: 'house_gas', same: true } },
+      // 2.543: у квартиры по ДДУ — стадия строительства и срок сдачи дома, кто продаёт (застройщик или переуступка), отделка.
+      // Срок сдачи дальше квартала от срока передачи по договору или аналог — готовая квартира — «нужна корректировка «Срок
+      // сдачи дома»»; отделка не как у большинства аналогов — «Состояние и отделка» (src/analogs/analogs.mjs, dduMix).
+      {
+        id: 'ddu_stage', label: 'Стадия строительства', type: 'select', services: ['realty'], when: DDU_ONLY,
+        options: [{ id: 'pit', name: 'Котлован' }, { id: 'frame', name: 'Каркас' }, { id: 'facade', name: 'Фасад, отделка' }, { id: 'ready', name: 'Дом сдан' }],
+      },
+      { id: 'ddu_due', label: 'Срок сдачи дома', type: 'text', max: 40, services: ['realty'], when: DDU_ONLY, hint: 'Как в объявлении, например: IV кв. 2027 или 31.12.2027' },
+      {
+        id: 'ddu_seller', label: 'Кто продаёт', type: 'select', services: ['realty'], when: DDU_ONLY,
+        options: [{ id: 'developer', name: 'Застройщик' }, { id: 'assignment', name: 'Переуступка' }],
+      },
+      {
+        id: 'ddu_finish', label: 'Отделка', type: 'select', services: ['realty'], when: DDU_ONLY,
+        options: [{ id: 'none', name: 'Без отделки' }, { id: 'white', name: 'Предчистовая (white box)' }, { id: 'full', name: 'Чистовая' }],
+      },
       // 2.513: при оценке доли — продаётся доля или целый объект; смешаны без корректировки — предупреждение (src/analogs/analogs.mjs).
       {
         id: 'share_kind', label: 'Продаётся доля или целый объект', type: 'select', services: ['realty'], when: { field: 'object_type', in: ['share'] },
@@ -1038,7 +1054,8 @@ export default {
       { id: 'house_type', name: 'Тип дома, материал стен', services: ['realty'], covers: ['walls'] },
       { id: 'land_area', name: 'Площадь участка', services: ['realty'], when: HOUSE_ONLY, covers: ['land_area'] },
       { id: 'gas', name: 'Газ, коммуникации', services: ['realty'], when: HOUSE_ONLY, covers: ['gas'] },
-      { id: 'finish', name: 'Состояние и отделка', services: ['realty'] },
+      { id: 'finish', name: 'Состояние и отделка', services: ['realty'], covers: ['ddu_finish'] },
+      { id: 'ddu_due', name: 'Срок сдачи дома', services: ['realty'], when: DDU_ONLY, covers: ['ddu_stage'] },
       { id: 'share_kind', name: 'Доля / целый объект', services: ['realty'], when: { field: 'object_type', in: ['share'] }, covers: ['share_kind'] },
       { id: 'land_use', name: 'Назначение участка (ВРИ)', services: ['land'] },
       { id: 'utilities', name: 'Коммуникации', services: ['land'] },
