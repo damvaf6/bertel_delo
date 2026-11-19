@@ -14,6 +14,7 @@ import { orderSplit } from '../money/money.mjs';
 import { todayMsk } from '../orders/workflow.mjs';
 import { heirObjects, inheritanceOf } from '../orders/inheritance.mjs';
 import { shareOf } from '../orders/share.mjs';
+import { dduQuarter } from '../analogs/analogs.mjs';
 
 const FEED_LIMIT = 50;
 
@@ -45,12 +46,14 @@ function feedItem(order, registry, cand) {
   const share = shareFeed(order);
   const premises = premisesFeed(order);
   const house = houseFeed(order);
+  const ddu = dduFeed(order);
   const facts = [];
   for (const f of svc?.fields ?? []) {
     if (f.type !== 'select') continue;
     if (share && ['share_method', 'share_use'].includes(f.id)) continue; // способ и порядок — в строке о доле (2.516)
     if (PREMISES_SELECTS.includes(f.id)) continue; // назначение, аренда и вход — в строке о нежилом (2.526)
     if (HOUSE_SELECTS.includes(f.id)) continue; // участок, газ, стены, зима — в строке о доме (2.536)
+    if (f.id === 'ddu_finish') continue; // отделка по договору — в строке о ДДУ (2.546)
     const v = order.fields?.[f.id];
     const opt = f.options?.find((o) => o.id === v);
     if (opt) facts.push({ label: f.label, value: opt.name });
@@ -68,6 +71,7 @@ function feedItem(order, registry, cand) {
     share,
     premises,
     house,
+    ddu,
     since: order.paid_at,
   };
 }
@@ -134,6 +138,25 @@ export function houseFeed(order) {
     gas: pick(f.house_gas, ['main', 'tank', 'none']),
     walls: pick(f.house_walls, ['brick', 'wood', 'frame', 'other']),
     winter: pick(f.house_winter, ['yes', 'no']),
+  };
+}
+
+// 2.546: квартира в новостройке (права по ДДУ) — до того как взять, эксперт видит срок сдачи (квартал и год; из даты —
+// её квартал: сама дата договора не нужна), прошёл ли он (тогда, возможно, дом уже введён и оценивается квартира),
+// проектную площадь и отделку по договору. Номер ДДУ, застройщика, ЖК и условный номер лента не показывает — по ним
+// находится адрес. Срок, записанный не датой и не кварталом, — «не указан». У не ДДУ — ничего.
+export function dduFeed(order, today = todayMsk()) {
+  const f = order.fields ?? {};
+  if (order.service !== 'realty' || f.object_type !== 'ddu') return null;
+  const q = dduQuarter(f.ddu_handover);
+  const [y, m] = today.split('-').map(Number);
+  const now = y * 4 + Math.floor((m - 1) / 3);
+  const area = Number(f.ddu_area);
+  return {
+    due: q === null ? null : `${['I', 'II', 'III', 'IV'][q % 4]} кв. ${Math.floor(q / 4)}`,
+    past: q === null ? null : q < now,
+    area: Number.isFinite(area) && area > 0 ? Math.round(area * 10) / 10 : null,
+    finish: ['none', 'white', 'full'].includes(f.ddu_finish) ? f.ddu_finish : null,
   };
 }
 

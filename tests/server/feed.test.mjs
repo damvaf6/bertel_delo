@@ -5,7 +5,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
-import { heirFeed, shareFeed, premisesFeed, houseFeed } from '../../src/ops/feed-ops.mjs';
+import { heirFeed, shareFeed, premisesFeed, houseFeed, dduFeed } from '../../src/ops/feed-ops.mjs';
 import { heirNotices } from '../../src/orders/inheritance.mjs';
 
 let S, owner, dispatcher, a, b, mo, noPermit, plain;
@@ -192,4 +192,30 @@ test('2.536: строка о доме — только из списков, пл
   assert.deepEqual(h({ house_land: 'lease', land_area: '8.333', house_winter: 'no' }), { land: 'lease', area: 8.33, gas: null, walls: null, winter: 'no' });
   assert.deepEqual(h({ house_land: 'none', land_area: 10, house_gas: 'xx', house_walls: 'frame' }), { land: 'none', area: null, gas: null, walls: 'frame', winter: null });
   assert.equal(h({ house_land: 'own' }, 'land'), null);
+});
+
+test('2.546: в ленте у ДДУ — срок сдачи, проектная площадь и отделка, без номера ДДУ, застройщика и ЖК', async () => {
+  const o = await order('Лента: ДДУ', { extra: { object_type: 'ddu', ddu_number: 'ЖК-77/3-145', ddu_date: '14.03.2025',
+    ddu_developer: 'ООО «СЗ Лентовый»', ddu_complex: 'ЖК «Лентовый», корп. 3', ddu_unit: '145', ddu_area: 54.27,
+    ddu_handover: '31.12.2030', ddu_price: 9800000, ddu_finish: 'white' } });
+  const item = (await feed(a)).feed.find((x) => x.id === o.id);
+  assert.ok(item, 'заказ в ленте');
+  assert.deepEqual(item.ddu, { due: 'IV кв. 2030', past: false, area: 54.3, finish: 'white' });
+  assert.ok(!item.facts.some((f) => /отделка/i.test(f.label)), 'отделка — не отдельным фактом');
+  assert.ok(item.facts.some((f) => /права по ДДУ/.test(f.value)), 'вид объекта — в фактах');
+  for (const s of ['ЖК-77', 'Лентовый', 'СЗ ', '9800000', '14.03.2025']) assert.ok(!JSON.stringify(item).includes(s), `в ленте нет «${s}»`);
+  const flat = await order('Лента: квартира с отделкой ДДУ', { extra: { object_type: 'flat', ddu_finish: 'full' } });
+  const fi = (await feed(a)).feed.find((x) => x.id === flat.id);
+  assert.equal(fi.ddu, null);
+  assert.ok(!fi.facts.some((f) => /отделка/i.test(f.label)), 'случайно заполненная отделка ДДУ — не в ленте');
+});
+
+test('2.546: строка о ДДУ — квартал из даты или квартала, прошёл ли, «не указан» при другом тексте', () => {
+  const d = (fields, service = 'realty') => dduFeed({ service, fields: { object_type: 'ddu', ...fields } }, '2026-11-19');
+  assert.deepEqual(d({}), { due: null, past: null, area: null, finish: null });
+  assert.deepEqual(d({ ddu_handover: 'IV квартал 2026', ddu_area: '38', ddu_finish: 'full' }), { due: 'IV кв. 2026', past: false, area: 38, finish: 'full' });
+  assert.deepEqual(d({ ddu_handover: '30.06.2026', ddu_finish: 'xx' }), { due: 'II кв. 2026', past: true, area: null, finish: null });
+  assert.deepEqual(d({ ddu_handover: 'после ввода дома' }), { due: null, past: null, area: null, finish: null });
+  assert.equal(d({ ddu_handover: '31.12.2027' }, 'land'), null);
+  assert.equal(dduFeed({ service: 'realty', fields: { object_type: 'flat', ddu_area: 40 } }), null);
 });
