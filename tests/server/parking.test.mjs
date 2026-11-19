@@ -76,3 +76,45 @@ test('поля необязательны и проверяются; подск�
   assert.equal(lines[h + 1], LINE);
   assert.equal(lines.filter((l) => l.startsWith(FACTS_HEAD)).length, 1);
 });
+
+// 2.550: запрос документов — выписка ЕГРН на машино-место (или на долю в паркинге) и документ о праве остаются; техпаспорта
+// квартиры нет; план паркинга с местом; при доле — порядок пользования местами; вместе с квартирой — выписка и на квартиру.
+test('2.550: перечень документов по машино-месту', () => {
+  const registry = createRegistry();
+  const ids = (f) => registry.requestDocs('expertise', 'realty', null, f).map((c) => c.id);
+  assert.deepEqual(ids({ object_type: 'parking' }), ['egrn', 'title_deed', 'parking_plan', 'encumbrance']);
+  assert.deepEqual(ids({ object_type: 'parking', parking_right: 'share' }), ['egrn', 'title_deed', 'parking_plan', 'parking_use', 'encumbrance']);
+  assert.deepEqual(ids({ object_type: 'parking', parking_with_flat: 'yes' }), ['egrn', 'title_deed', 'parking_plan', 'parking_flat_egrn', 'encumbrance']);
+  assert.ok(!ids({ object_type: 'parking', parking_with_flat: 'no' }).includes('parking_flat_egrn'));
+  const flat = ids({ object_type: 'flat', parking_right: 'share', parking_with_flat: 'yes' });
+  assert.ok(flat.includes('tech_plan'), 'у квартиры техпаспорт остаётся');
+  for (const id of ['parking_plan', 'parking_use', 'parking_flat_egrn']) assert.ok(!flat.includes(id), `${id} — не у квартиры`);
+  const plan = registry.requestDocs('expertise', 'realty', null, { object_type: 'parking' }).find((c) => c.id === 'parking_plan');
+  assert.match(plan.hint, /номер, уровень и границы места/);
+});
+
+test('2.550: в деле эксперт запрашивает план паркинга и порядок пользования; старая выписка на место — «запросите свежую»', async () => {
+  const o = (await owner.req('POST', '/api/orders', { module: 'expertise', service: 'realty', title: 'Машино-место: документы' })).body.order;
+  const F = { ...BASE, ...P, parking_right: 'share', parking_share: '1/120' };
+  assert.equal((await owner.req('PATCH', `/api/orders/${o.id}`, { deadline: addDays(todayMsk(), 10), fields: F })).status, 200);
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/status`, { from: 'new', to: 'matching' })).status, 200);
+  await ensurePaid(S.sql, o.id);
+  assert.equal((await dispatcher.req('POST', `/api/orders/${o.id}/offer`, { specialist_id: spec.user.id, from: 'matching' })).status, 200);
+  const [cur] = await S.sql`select status from orders where id = ${o.id}`;
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/status`, { from: cur.status, to: 'in_work' })).status, 200);
+
+  const list = async (c = spec) => (await c.req('GET', `/api/orders/${o.id}/doc-requests`)).body;
+  const cat = (await list()).catalog.map((c) => c.id);
+  assert.deepEqual(cat.filter((x) => x !== 'bank_task'), ['egrn', 'title_deed', 'parking_plan', 'parking_use', 'parking_flat_egrn', 'encumbrance']);
+  assert.equal((await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { items: ['tech_plan'] })).status, 400, 'техпаспорта квартиры нет');
+  const res = await spec.req('POST', `/api/orders/${o.id}/doc-requests`, { items: ['egrn', 'parking_plan', 'parking_use'] });
+  assert.equal(res.status, 201, JSON.stringify(res.body));
+  const mine = await list(owner);
+  assert.ok(mine.requests.some((x) => x.item_id === 'parking_use' && /закреплено/.test(x.hint ?? '')), JSON.stringify(mine.requests));
+
+  const ru = (iso) => iso.split('-').reverse().join('.');
+  const body = `Выписка из Единого государственного реестра недвижимости\n${ru(addDays(todayMsk(), -60))} № КУВИ-001/2026-6011001\nМашино-место № 17`;
+  assert.equal((await owner.req('POST', `/api/orders/${o.id}/documents`, Buffer.from(body), {
+    raw: true, headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('Выписка на машино-место.txt') } })).status, 201);
+  assert.ok((await list()).egrn_old, 'выписка на само место старше 30 дней — запросить свежую');
+});
