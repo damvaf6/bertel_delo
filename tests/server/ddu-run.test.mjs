@@ -12,9 +12,9 @@ const BASE = { purpose: 'bank', bank: 'sber', region: 'moscow', object_type: 'dd
   ddu_unit: '145', ddu_area: 41.5, ddu_handover: '31.12.2027', ddu_price: 9000000, ddu_finish: 'white' };
 before(async () => {
   S = await startApp({ AUTH_RATE_MAX: '60' });
-  owner = await login(S, '+79990005990');
-  dispatcher = await login(S, '+79990005991');
-  spec = await login(S, '+79990005992');
+  owner = await login(S, '+79990005481');
+  dispatcher = await login(S, '+79990005482');
+  spec = await login(S, '+79990005483');
   await setPlatformRole(S.sql, dispatcher.user.id, 'dispatcher');
   await makeSpecialist(S.sql, spec.user.id, { permits: [['expertise', 'realty']] });
 });
