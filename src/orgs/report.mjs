@@ -26,6 +26,7 @@
 // Месяц — по московскому времени. Сводка за год (2.408) — то же за весь год, с прошлым годом и сданными по месяцам.
 // Выгрузка таблицей — CSV для Excel (точка с запятой, BOM, суммы с запятой).
 import { OTHER_BANK, bankList } from '../dossier/dossier.mjs';
+import { reportFacts } from '../ai/report-checks.mjs';
 import { HttpError } from '../http/core.mjs';
 import { orderSplit } from '../money/money.mjs';
 import { houseFacts } from '../orders/house.mjs';
@@ -161,6 +162,7 @@ async function orgMonthDone(sql, orgId, ids, { start, end }) {
              o.fields->>'vehicle_type' as vehicle_type, o.fields->>'death_date' as death_date, o.fields->>'heir_objects' as heir_objects,
              o.fields->>'object_type' as object_type, o.fields->>'share_method' as share_method,
              o.fields->>'premises_use' as premises_use, o.fields->>'lease' as lease, o.fields->>'house_land' as house_land,
+             o.fields->>'ddu_price' as ddu_price,
              p.amount_kop as payout_kop, h.at,
              greatest(
                (select max(f.outcome_at) from order_offers f
@@ -849,6 +851,33 @@ function houseCalc(houses, facts) {
   };
 }
 
+// Квартиры в новостройке (права по ДДУ) за месяц (2.547): сданные дела оценки прав по ДДУ (у услуги есть «Цена по договору» —
+// ddu_price, вид объекта «Квартира в новостройке») — сколько, из них для банка и доля среди всех сданных дел для банка, средняя
+// разница итоговой стоимости с ценой по договору — итоговая стоимость из последней версии черновика (по тем же правилам, что
+// стоимость для перечня СРО, `reportFacts`), цена — из заявки; цена есть, а итоговой стоимости в черновике нет — отдельной цифрой.
+const dduOfDone = (done, registry) => (registry ? done.filter((o) => o.module && o.object_type === 'ddu'
+  && registry.service(o.module, o.service)?.fields.some((f) => f.id === 'ddu_price')) : []);
+export const dduDraftValue = (body) => reportFacts([{ name: 'Черновик', pages: [String(body ?? '')] }]).value_rub;
+// { ddu_cases, ddu_bank, ddu_bank_pct, ddu_priced, ddu_diff_n, ddu_diff_pct, ddu_diff_rub, ddu_no_value }: доля — целыми
+// процентами от сданных для банка; разница — со знаком (больше цены — плюс), в процентах до десятых и в рублях.
+function dduCalc(ddus, done, values) {
+  const bank = ddus.filter((o) => o.purpose === 'bank').length;
+  const bankAll = done.filter((o) => o.purpose === 'bank').length;
+  const priced = ddus.filter((o) => Number(o.ddu_price) > 0);
+  const pairs = priced.map((o) => [values.get(o.id), Number(o.ddu_price)]).filter(([v]) => v > 0);
+  const avg = (list) => list.reduce((s, x) => s + x, 0) / list.length;
+  return {
+    ddu_cases: ddus.length,
+    ddu_bank: bank,
+    ddu_bank_pct: bankAll ? Math.round((bank / bankAll) * 100) : null,
+    ddu_priced: priced.length,
+    ddu_diff_n: pairs.length,
+    ddu_diff_pct: pairs.length ? Math.round(avg(pairs.map(([v, p]) => ((v - p) / p) * 100)) * 10) / 10 : null,
+    ddu_diff_rub: pairs.length ? Math.round(avg(pairs.map(([v, p]) => v - p))) : null,
+    ddu_no_value: priced.length - pairs.length,
+  };
+}
+
 export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), now = new Date(), registry = null, taskDue = null, taskAfter = null,
   taskMove = null } = {}) {
   const year = isYear(month);
@@ -917,6 +946,9 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), no
   const houses = houseOfDone(q.done, registry);
   const hfacts = new Map((await shareDraftsQ(sql, houses.filter((o) => o.house_land === 'own').map((o) => o.id)))
     .map((d) => [d.order_id, houseFacts(d.body)]));
+  const ddus = dduOfDone(q.done, registry);
+  const dvalues = new Map((await shareDraftsQ(sql, ddus.filter((o) => Number(o.ddu_price) > 0).map((o) => o.id)))
+    .map((d) => [d.order_id, dduDraftValue(d.body)]));
   const defs = new Map();
   for (const d of await defectsQ(sql, goods.map((o) => o.id))) (defs.get(d.order_id) ?? defs.set(d.order_id, []).get(d.order_id)).push(d);
   const count = (rows) => new Map(rows.map((r) => [r.user_id, r.n]));
@@ -972,6 +1004,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), no
       ...shareCalc(shares.filter((o) => o.user_id === e.user_id), division.filter((o) => o.user_id === e.user_id), discs),
       ...premisesCalc(prem.filter((o) => o.user_id === e.user_id), incomes),
       ...houseCalc(houses.filter((o) => o.user_id === e.user_id), hfacts),
+      ...dduCalc(ddus.filter((o) => o.user_id === e.user_id), done, dvalues),
       disp_reasons: topRemarks(q.dispReasons.filter((i) => i.user_id === e.user_id && i.text), TOP_REMARKS_EXPERT)
         .map(({ text, n }) => ({ text, n })),
       prev: cmp ? cmp.experts.get(e.user_id) : null,
@@ -997,6 +1030,7 @@ export async function orgMonthReport(sql, orgId, month, { today = todayMsk(), no
       ...bankAfter(bankAfters), ...bankAccr(q.done, accr), ...ext(exts), ...letterAsk(q.letterAsk), ...orgSign(q.done), ...afterRemarks(q.afterRemarks, afterItems),
       ...court(q.court, now), ...carCalc(car, calcs), ...goodsCalc(goods, defs), ...vehCalc(veh), ...heirCalc(heir),
       ...shareCalc(shares, division, discs), ...premisesCalc(prem, incomes), ...houseCalc(houses, hfacts),
+      ...dduCalc(ddus, q.done, dvalues),
       prev: cmp ? cmp.total : null },
     prev_month: cmp ? prevM : null,
     prev_month_name: cmp ? periodRu(prevM) : null,
@@ -1287,6 +1321,13 @@ export function reportCsv(orgName, r) {
     ...[...r.experts.filter((x) => x.house_cases).map((x) => [x.full_name, x]), ['Итого', r.total]]
       .map(([name, x]) => [name, x.house_cases, x.house_land_own, x.house_land_lease, x.house_land_none, x.house_land_unknown,
         daysCell(x.house_share_avg), x.house_no_land_value])] : []),
+    // 2.547: только если за месяц сданы отчёты о правах по ДДУ — по экспертам.
+    ...(r.total.ddu_cases ? [[], ['Квартиры в новостройке (права по ДДУ) — по экспертам', 'Сдано', 'Для банка', 'Доля от дел для банка, %',
+      'Сравнено с ценой по договору', 'Средняя разница с ценой по договору, %', 'Средняя разница с ценой по договору, руб.',
+      'Цена есть, итоговой стоимости в черновике нет'],
+    ...[...r.experts.filter((x) => x.ddu_cases).map((x) => [x.full_name, x]), ['Итого', r.total]]
+      .map(([name, x]) => [name, x.ddu_cases, x.ddu_bank, x.ddu_bank_pct ?? '', x.ddu_diff_n, daysCell(x.ddu_diff_pct),
+        x.ddu_diff_rub ?? '', x.ddu_no_value])] : []),
   ];
   return `﻿${lines.map((l) => l.map(cell).join(';')).join('\r\n')}\r\n`;
 }

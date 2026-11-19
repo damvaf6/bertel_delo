@@ -96,6 +96,14 @@ const houseLine = (x) => [`дома: ${casesN(x.house_cases)} (${HOUSE_LAND.filt
   x.house_share_avg == null ? null : `средняя доля участка в итоге ${String(x.house_share_avg).replace('.', ',')}%`,
   x.house_no_land_value ? `участок в собственности, а его стоимости в черновике нет: ${x.house_no_land_value}` : null]
   .filter(Boolean).join(' · ');
+// 2.547: «права по ДДУ: 3 дела · для банка: 2 (40% дел для банка) · итог против цены по договору: в среднем +8,5%
+// (+552 500 ₽), сравнено 2 · цена есть, а итоговой стоимости в черновике нет: 1».
+const pctSigned = (p) => `${p > 0 ? '+' : p < 0 ? '−' : ''}${String(Math.abs(p)).replace('.', ',')}%`;
+const dduLine = (x) => [`права по ДДУ: ${casesN(x.ddu_cases)}`,
+  x.ddu_bank ? `для банка: ${x.ddu_bank}${x.ddu_bank_pct == null ? '' : ` (${x.ddu_bank_pct}% дел для банка)`}` : null,
+  x.ddu_diff_pct == null ? null : `итог против цены по договору: в среднем ${pctSigned(x.ddu_diff_pct)} (${signedRub(x.ddu_diff_rub * 100)}), сравнено ${x.ddu_diff_n}`,
+  x.ddu_no_value ? `цена есть, а итоговой стоимости в черновике нет: ${x.ddu_no_value}` : null]
+  .filter(Boolean).join(' · ');
 const daysRu = (d) => `${String(d).replace('.', ',')} ${!Number.isInteger(d) ? 'дня' : d % 10 === 1 && d % 100 !== 11 ? 'день'
   : [2, 3, 4].includes(d % 10) && ![12, 13, 14].includes(d % 100) ? 'дня' : 'дней'}`;
 // «в первоначальный срок, без переносов: 3 из 5 · в среднем 4,5 дня от принятия до сдачи · позже первоначального срока: 2
@@ -358,6 +366,11 @@ async function load(month) {
   $('org-report-house-experts').replaceChildren(...report.experts.filter((x) => x.house_cases)
     .map((x) => el('li', { 'data-report-house-expert': x.user_id },
       el('div', { class: 'title', text: x.full_name }), el('div', { class: 'muted', text: houseLine(x) }))));
+  $('org-report-ddu-box').classList.toggle('hidden', !t2.ddu_cases);
+  $('org-report-ddu-total').textContent = t2.ddu_cases ? `Сдано: ${dduLine(t2)}.` : '';
+  $('org-report-ddu-experts').replaceChildren(...report.experts.filter((x) => x.ddu_cases)
+    .map((x) => el('li', { 'data-report-ddu-expert': x.user_id },
+      el('div', { class: 'title', text: x.full_name }), el('div', { class: 'muted', text: dduLine(x) }))));
   const top = report.top_remarks ?? [];
   $('org-report-remarks-box').classList.toggle('hidden', !top.length);
   $('org-report-remarks').replaceChildren(...top.map((x) => el('li', { 'data-remark': '' },
