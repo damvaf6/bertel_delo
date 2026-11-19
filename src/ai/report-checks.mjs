@@ -15,6 +15,7 @@ import { defectLines, sameDefect } from '../orders/defects.mjs';
 import { heirSet, inheritanceOf } from '../orders/inheritance.mjs';
 import { retroInspection, retroLine } from '../orders/retro.mjs';
 import { shareOf } from '../orders/share.mjs';
+import { dduDay } from '../orders/ddu.mjs';
 
 const MAX_PER_RULE = 5;
 
@@ -4486,6 +4487,134 @@ function premisesBasis(docs, ctx) {
   return out;
 }
 
+// ——— 2.542: права по ДДУ ———
+// Квартира в новостройке (оценка недвижимости, object_type: ddu): оценивается право требования по договору участия в долевом
+// строительстве, а не квартира. В отчёте: «право требования» названо, вид права — не «собственность»; номер и дата ДДУ и
+// проектная площадь — как в договоре, приложенном к делу (пункт запроса «Договор участия…» или файл с ДДУ в названии; без него —
+// как в заявке); площадь названа проектной; срок передачи по договору указан и тот же; кадастрового номера квартиры нет.
+// Аналоги не трогаем. О надёжности застройщика и действительности договора — не наше (это юрист).
+const DDU_REF = /(?:договор\S*\s+участия\s+в\s+долев\S*\s+строительств\S*|(?<![А-ЯЁа-яё])ДДУ(?![А-ЯЁа-яё]))\s*(?:\([^)\n]{0,20}\)\s*)?№\s*(\[заполнить\]|[^\s,;()«»]+)(?:\s+от\s+(\[заполнить\]|\d{1,2}\.\d{1,2}\.\d{4}|«?\d{1,2}»?\s+[а-яё]+\s+\d{4}))?/giu;
+const DDU_MONTHS = ['январ', 'феврал', 'март', 'апрел', 'ма', 'июн', 'июл', 'август', 'сентябр', 'октябр', 'ноябр', 'декабр'];
+function dduDate(v) {
+  const s = String(v ?? '').trim();
+  let m = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  if (m) return `${m[1].padStart(2, '0')}.${m[2].padStart(2, '0')}.${m[3]}`;
+  m = s.match(/^«?(\d{1,2})»?\s+([а-яё]+)\s+(\d{4})$/iu);
+  if (!m) return null;
+  const w = m[2].toLowerCase();
+  const i = DDU_MONTHS.findIndex((x) => (x === 'ма' ? /^ма[яй]$/.test(w) : w.startsWith(x)));
+  return i < 0 ? null : `${m[1].padStart(2, '0')}.${String(i + 1).padStart(2, '0')}.${m[3]}`;
+}
+const dduNum = (v) => String(v ?? '').trim().replace(/[.]+$/u, '');
+const sameNum = (a, b) => dduNum(a).replace(/\s+/g, '').toLowerCase() === dduNum(b).replace(/\s+/g, '').toLowerCase();
+function dduRefs(text) {
+  return [...String(text).matchAll(DDU_REF)].map((m) => ({ num: dduNum(m[1]), date: m[2] ?? null, index: m.index }));
+}
+const DDU_AREA = /проектн\S*\s+(?:\S+\s+){0,3}?площад\S*[^\d\n]{0,40}?(\d+(?:[,.]\d{1,2})?)\s*(?:кв\.?\s*м|м2|м²|квадратн)|площад\S*\s+(?:\S+\s+){0,2}?\(?проектн\S*\)?[^\d\n]{0,30}?(\d+(?:[,.]\d{1,2})?)\s*(?:кв\.?\s*м|м2|м²|квадратн)/iu;
+const areaOf = (m) => (m ? Number(String(m[1] ?? m[2]).replace(',', '.')) : null);
+// Что сказано в договоре из дела: номер и дата (первое упоминание ДДУ с номером), проектная площадь.
+export function dduContractFacts(docs = []) {
+  for (const d of docs) {
+    const text = (d.pages ?? []).join('\n');
+    const ref = dduRefs(text).find((r) => !r.num.startsWith('['));
+    const area = areaOf(DDU_AREA.exec(text));
+    if (ref || area) return { name: d.name, num: ref?.num ?? null, date: dduDate(ref?.date), area };
+  }
+  return null;
+}
+const DDU_RIGHT = /прав\S*\s+(?:\S+\s+){0,2}?требовани/iu;
+const DDU_OWN = /(?:оцениваем\S*\s+прав\S*|вид\s+(?:оцениваем\S*\s+)?прав\S*|объект\S*\s+оценки)[^.\n]{0,40}?(?<!не\s)(?:прав\S*\s+)?собственност/iu;
+const DDU_HAND = /срок\S*\s+(?:\S+\s+){0,2}?(?:передач|ввод)|(?:передач\S*|передать)\s+(?:\S+\s+){0,3}?не\s+позднее|ввод\S*\s+(?:дома\s+|объекта\s+)?в\s+эксплуатаци\S*\s+(?:—|–|-|:)?\s*(?:до|не\s+позднее)/iu;
+const DDU_CAD_LINE = /квартир|помещени|объект\S*\s+оценки|кадастров\S*\s+номер\S*\s*[:—–-]/iu;
+const DDU_CAD_SKIP = /участ|земельн|аналог|многоквартирн|здани|строительн\S*\s+площадк/iu;
+const DDU_DATES = /(?<![\d.])(\d{2}\.\d{2}\.\d{4})(?!\d|\.\d)/g;
+function dduRight(docs, ctx) {
+  const fields = ctx.fields ?? {};
+  if ((ctx.service && ctx.service !== 'realty') || fields.object_type !== 'ddu') return [];
+  const main = mainReport(docs);
+  if (!main) return [];
+  const lines = [];
+  eachPage(main, (raw, i) => raw.split('\n').forEach((l) => { const line = clean(l); if (line && !/аналог/iu.test(line)) lines.push({ page: i, line }); }));
+  const first = lines.find((x) => /объект\S*\s+оценки/iu.test(x.line)) ?? lines[0] ?? { page: 0, line: '' };
+  const at = (x) => ({ doc: main, page: x.page, quote: x.line });
+  const out = [];
+  // Право требования, а не собственность.
+  const own = lines.find((x) => DDU_OWN.test(x.line) && !DDU_RIGHT.test(x.line));
+  if (!lines.some((x) => DDU_RIGHT.test(x.line))) {
+    out.push({ ...at(own ?? first), text: 'Квартира в новостройке, а в отчёте не сказано «право требования»: дом не введён — оценивается право требования передачи квартиры по ДДУ (214-ФЗ), а не квартира; поправьте объект оценки и вид права (строка «Объект оценки — право требования по ДДУ» в черновике)' });
+  } else if (own) {
+    out.push({ ...at(own), text: 'В отчёте оцениваемое право — собственность, а у квартиры в новостройке права собственности ещё нет: оценивается право требования по ДДУ — проверьте, не текст ли это из отчёта о готовой квартире' });
+  }
+  // Номер и дата ДДУ — как в договоре из дела, иначе как в заявке.
+  const contract = dduContractFacts(ctx.ddu ?? []);
+  const src = (x) => (x === 'contract' ? `по договору из дела «${contract.name}»` : MINE);
+  const wantNum = contract?.num ? { v: contract.num, from: 'contract' } : fields.ddu_number ? { v: dduNum(fields.ddu_number), from: 'order' } : null;
+  const wantDate = contract?.date ? { v: contract.date, from: 'contract' } : dduDate(fields.ddu_date) ? { v: dduDate(fields.ddu_date), from: 'order' } : null;
+  const refs = lines.flatMap((x) => dduRefs(x.line).map((r) => ({ ...r, x })));
+  const gaps = refs.filter((r) => r.num.startsWith('[') || r.date?.startsWith('['));
+  if (gaps.length) {
+    out.push({ ...at(gaps[0].x), text: 'В отчёте у договора участия в долевом строительстве остались пропуски «[заполнить]» — впишите номер и дату ДДУ по договору' });
+  }
+  const real = refs.filter((r) => !r.num.startsWith('['));
+  if (wantNum) {
+    const wrong = real.find((r) => !sameNum(r.num, wantNum.v));
+    if (!real.length && !gaps.length) {
+      out.push({ ...at(first), text: `В отчёте не указаны номер и дата договора участия в долевом строительстве — ${wantNum.from === 'contract' ? `по договору из дела` : 'в заявке'}: № ${wantNum.v}${wantDate ? ` от ${wantDate.v}` : ''}; объект по ДДУ описывается по договору` });
+    } else if (wrong && !real.some((r) => sameNum(r.num, wantNum.v))) {
+      out.push({ ...at(wrong.x), fix: { bad: wrong.num, right: wantNum.v, from: src(wantNum.from) },
+        text: `Номер ДДУ в отчёте ${wrong.num}, а ${wantNum.from === 'contract' ? 'в договоре из дела' : 'в заявке'} — ${wantNum.v}: проверьте, не номер ли это другого договора` });
+    }
+  }
+  if (wantDate) {
+    const wrong = real.find((r) => r.date && !r.date.startsWith('[') && dduDate(r.date) && dduDate(r.date) !== wantDate.v);
+    if (wrong && !real.some((r) => r.date && dduDate(r.date) === wantDate.v)) {
+      out.push({ ...at(wrong.x), fix: { bad: wrong.date, right: wantDate.v, from: src(wantDate.from) },
+        text: `Дата ДДУ в отчёте ${wrong.date}, а ${wantDate.from === 'contract' ? 'в договоре из дела' : 'в заявке'} — ${wantDate.v}` });
+    }
+  }
+  // Площадь — проектная и как в договоре.
+  const wantArea = contract?.area ? { v: contract.area, from: 'contract' } : Number(fields.ddu_area) > 0 ? { v: Number(fields.ddu_area), from: 'order' } : null;
+  const areas = lines.map((x) => { const m = DDU_AREA.exec(x.line); return m ? { x, v: areaOf(m), raw: m[1] ?? m[2] } : null; }).filter(Boolean);
+  if (!areas.length && !lines.some((x) => /проектн\S*\s+(?:\S+\s+){0,3}?площад|площад\S*\s+(?:\S+\s+){0,2}?\(?проектн/iu.test(x.line))) {
+    const area = lines.find((x) => /площад/iu.test(x.line)) ?? first;
+    out.push({ ...at(area), text: `В отчёте площадь квартиры не названа проектной: у квартиры по ДДУ площадь — по договору${wantArea ? ` (${String(wantArea.v).replace('.', ',')} кв. м)` : ''}, фактическая после обмеров может отличаться — напишите «проектная площадь» и оговорите это в допущениях` });
+  } else if (wantArea) {
+    const wrong = areas.find((a) => Math.abs(a.v - wantArea.v) > 0.05);
+    if (wrong && !areas.some((a) => Math.abs(a.v - wantArea.v) <= 0.05)) {
+      const right = String(wantArea.v).replace('.', ',');
+      out.push({ ...at(wrong.x), fix: { bad: wrong.raw, right, from: src(wantArea.from) },
+        text: `Проектная площадь в отчёте ${wrong.raw} кв. м, а ${wantArea.from === 'contract' ? 'в договоре из дела' : 'в заявке'} — ${right} кв. м` });
+    }
+  }
+  // Срок передачи по договору.
+  const hand = lines.filter((x) => DDU_HAND.test(x.line));
+  const wantHand = String(fields.ddu_handover ?? '').trim();
+  if (!hand.length) {
+    out.push({ ...at(first), text: `В отчёте не указан срок передачи квартиры по договору${wantHand ? ` (в заявке — ${wantHand})` : ''}: от него зависит стоимость права требования — впишите его в описание объекта` });
+  } else if (dduDay(wantHand)) {
+    // Даты после слов о сроке (до них в строке — дата договора).
+    const dates = hand.flatMap((x) => { const m = DDU_HAND.exec(x.line); return [...x.line.slice(m.index).matchAll(DDU_DATES)].map((d) => ({ x, v: d[1] })); });
+    const wrong = dates.find((d) => d.v !== wantHand);
+    if (wrong && !dates.some((d) => d.v === wantHand)) {
+      out.push({ ...at(wrong.x), fix: { bad: wrong.v, right: wantHand, from: MINE },
+        text: `Срок передачи квартиры в отчёте ${wrong.v}, а в заявке — ${wantHand}: проверьте по договору` });
+    }
+  }
+  // Кадастрового номера у квартиры по ДДУ ещё нет.
+  const cad = [];
+  eachPage(main, (page, i) => {
+    for (const m of page.matchAll(CADASTRAL_RE)) {
+      const line = lineAround(page, m.index);
+      if (DDU_CAD_LINE.test(line) && !DDU_CAD_SKIP.test(line)) cad.push({ page: i, line, v: m[0] });
+    }
+  });
+  if (cad.length) {
+    out.push({ doc: main, page: cad[0].page, quote: cad[0].line,
+      text: `В отчёте у квартиры кадастровый номер ${cad[0].v}, а у квартиры по ДДУ его ещё нет — дом не введён: проверьте, не номер ли это участка или другой квартиры; если квартира уже в собственности — оценивается квартира, а не право требования` });
+  }
+  return out;
+}
+
 // ——— 2.532: дом с участком ———
 // Жилой дом (оценка недвижимости, object_type: house), участок под домом по заявке в собственности (house_land: own): дом и
 // участок — единый объект (ст. 35 ЗК РФ). В отчёте — стоимость участка (таблица 2.531 «Стоимость дома и участка» или текст),
@@ -4652,6 +4781,7 @@ const WHOLE = {
   income_value: incomeValue,
   premises_basis: premisesBasis,
   house_land: houseLand,
+  ddu_right: dduRight,
 };
 
 const PER_DOC = {
@@ -4747,6 +4877,7 @@ export const AUTO_CHECKS = Object.freeze({
   income_value: 'нежилое помещение, доходный подход: ПВД = площадь × ставка аренды, ДВД = ПВД × (1 − недозагрузка), ЧОД = ДВД − расходы, стоимость = ЧОД / ставка капитализации; у ставки капитализации и недозагрузки — источник; в расчёте нет пропусков «[заполнить]»',
   premises_basis: 'нежилое помещение: у итоговой стоимости сказано, с НДС или без; аренда — как в заявке: сдаётся — в отчёте названа (договор, арендатор, обременение), не сдаётся — в отчёте нет «сдано в аренду» и договора аренды',
   house_land: 'жилой дом, участок под домом в собственности: стоимость участка в отчёте есть, дом + участок = итог, пропусков «[заполнить]» нет; кадастровый номер и площадь участка — как в выписке ЕГРН на участок из дела',
+  ddu_right: 'квартира в новостройке: объект — право требования по ДДУ, а не собственность; номер и дата ДДУ, проектная площадь — как в договоре из дела (без него — как в заявке), площадь названа проектной; срок передачи указан и тот же; кадастрового номера квартиры нет',
   parts_match: 'ущерб после ДТП: у каждой детали из таблицы повреждённых деталей дела есть фото осмотра и строка в калькуляции ремонта; каждая деталь из заявки «Что повреждено» есть в исследовании повреждений',
   repair_sums: 'ущерб после ДТП: стоимость ремонта с учётом износа не больше, чем без износа, и одна в расчёте и выводах; УТС легкового автомобиля старше 5 лет или с пробегом больше 100 000 км не посчитана (рекомендации РФЦСЭ 2018), об УТС сказано; в выводах суммы ремонта и УТС — и прописью; своя сумма в сверке со страховой — как в отчёте',
   repair_basis: 'ущерб после ДТП: дата ДТП и цены в расчёте — на дату ДТП из заявки; методика по цели из заявки: ОСАГО — Единая методика (755-П), суд и к виновнику — Методические рекомендации РФЦСЭ (2018)',
