@@ -141,6 +141,8 @@ const HOUSE_ONLY = { field: 'object_type', in: ['house'] };
 // Квартира в новостройке (2.540): права по ДДУ — квартиры ещё нет, нет выписки на неё и документа о собственности.
 const DDU_ONLY = { field: 'object_type', in: ['ddu'] };
 const NOT_BUILT = DDU_ONLY;
+// Осмотр (2.544): у дома и у квартиры по ДДУ свои шаги вместо подъезда, двери и комнат квартиры.
+const NOT_FLAT = { field: 'object_type', in: ['house', 'ddu'] };
 // Сведения заявки об оценке транспорта, которые программа строкой «Из заявки: …» ставит в описание объекта (2.492).
 const VEHICLE_FACTS = ['engine_cc', 'engine_hp', 'gearbox', 'drive', 'color', 'accidents', 'owner_kind', 'book_value'];
 // Таблица «Характеристики объекта оценки» (2.494): из заявки и с выезда помощника, пробег — по прибору, нет выезда — по заявке.
@@ -888,9 +890,9 @@ export default {
   ],
 
   inspection: [
-    { id: 'facade', title: 'Дом снаружи', hint: 'Фасад целиком; чтобы был виден номер дома или табличка с адресом', services: ['realty'], skip: HOUSE_ONLY },
-    { id: 'entrance', title: 'Подъезд и лестничная площадка', hint: 'Вход в подъезд, площадка у квартиры', services: ['realty'], skip: HOUSE_ONLY },
-    { id: 'door', title: 'Входная дверь', hint: 'Дверь с номером квартиры или помещения', services: ['realty'], skip: HOUSE_ONLY },
+    { id: 'facade', title: 'Дом снаружи', hint: 'Фасад целиком; чтобы был виден номер дома или табличка с адресом', services: ['realty'], skip: NOT_FLAT },
+    { id: 'entrance', title: 'Подъезд и лестничная площадка', hint: 'Вход в подъезд, площадка у квартиры', services: ['realty'], skip: NOT_FLAT },
+    { id: 'door', title: 'Входная дверь', hint: 'Дверь с номером квартиры или помещения', services: ['realty'], skip: NOT_FLAT },
     // 2.533: жилой дом — фасады со всех четырёх сторон, кровля и фундамент вместо подъезда и двери квартиры; отопление и
     // счётчики, участок и подъезд к дому — ниже, после комнат.
     { id: 'house_front', title: 'Дом спереди', hint: 'Фасад целиком, отойдите подальше; чтобы был виден номер дома или табличка с адресом', services: ['realty'], when: HOUSE_ONLY },
@@ -899,11 +901,17 @@ export default {
     { id: 'house_right', title: 'Дом справа', hint: 'Боковой фасад целиком', services: ['realty'], when: HOUSE_ONLY },
     { id: 'house_roof', title: 'Кровля', hint: 'С земли, отойдя подальше, чтобы была видна вся крыша; следы протечек на чердаке или потолке — крупно', services: ['realty'], when: HOUSE_ONLY },
     { id: 'house_foundation', title: 'Фундамент и цоколь', hint: 'По углам дома, вплотную; трещины и сколы — крупно, рядом рулетка', services: ['realty'], when: HOUSE_ONLY },
-    { id: 'rooms', title: 'Каждая комната', hint: 'Общий вид из угла, затем с противоположной стороны', services: ['realty'] },
-    { id: 'kitchen', title: 'Кухня', services: ['realty'] },
-    { id: 'bathroom', title: 'Санузел и ванная', services: ['realty'] },
-    { id: 'window_view', title: 'Вид из окна', services: ['realty'] },
-    { id: 'meters', title: 'Счётчики и электрощит', services: ['realty'], optional: true, skip: HOUSE_ONLY },
+    // 2.544: квартира по ДДУ — дом строится, квартиры ещё нет и внутрь не пустят: стройплощадка, щит застройщика, корпус
+    // снаружи и сколько этажей построено; шагов квартиры нет.
+    { id: 'ddu_site', title: 'Стройплощадка целиком', hint: 'С улицы, отойдите подальше: ограждение, въезд, краны; чтобы было видно, где корпус', services: ['realty'], when: DDU_ONLY },
+    { id: 'ddu_board', title: 'Щит застройщика (паспорт объекта)', hint: 'Вплотную, чтобы читались застройщик, название ЖК, номер разрешения на строительство и сроки', services: ['realty'], when: DDU_ONLY },
+    { id: 'ddu_building', title: 'Корпус снаружи', hint: 'Корпус целиком, чтобы можно было посчитать построенные этажи; остеклены ли окна и начат ли фасад', services: ['realty'], when: DDU_ONLY },
+    { id: 'ddu_section', title: 'Секция и этаж квартиры снаружи', hint: 'Если понятно, где будет квартира: секция и этаж с улицы', services: ['realty'], optional: true, when: DDU_ONLY },
+    { id: 'rooms', title: 'Каждая комната', hint: 'Общий вид из угла, затем с противоположной стороны', services: ['realty'], skip: DDU_ONLY },
+    { id: 'kitchen', title: 'Кухня', services: ['realty'], skip: DDU_ONLY },
+    { id: 'bathroom', title: 'Санузел и ванная', services: ['realty'], skip: DDU_ONLY },
+    { id: 'window_view', title: 'Вид из окна', services: ['realty'], skip: DDU_ONLY },
+    { id: 'meters', title: 'Счётчики и электрощит', services: ['realty'], optional: true, skip: NOT_FLAT },
     { id: 'house_heating', title: 'Котёл, отопление и счётчики', hint: 'Котёл или печь с табличкой; газовый и электрический счётчики, чтобы читались показания; электрощит', services: ['realty'], when: HOUSE_ONLY },
     { id: 'house_land', title: 'Участок целиком', hint: 'С нескольких точек, чтобы был виден весь участок; забор и границы', services: ['realty'], when: HOUSE_ONLY },
     { id: 'house_access', title: 'Подъезд к дому', hint: 'Дорога, въезд и ворота', services: ['realty'], when: HOUSE_ONLY },
@@ -940,7 +948,7 @@ export default {
     { id: 'goods_defect', title: 'Недостаток крупно', hint: '2–3 снимка с разных сторон, рядом — линейка или монета для масштаба', services: ['goods'],
       each: { field: 'defects', split: 'lines', title: 'Недостаток крупно: {item}', hint: '2–3 снимка с разных сторон и вплотную; рядом линейка или монета для масштаба; не виден снаружи (не включается) — снимите экран с ошибкой или место поломки', rest: 'Другие недостатки крупно' } },
     { id: 'goods_package', title: 'Упаковка', services: ['goods'], optional: true },
-    { id: 'defects', title: 'Повреждения и недостатки крупно', services: ['realty', 'vehicle', 'movable'], optional: true },
+    { id: 'defects', title: 'Повреждения и недостатки крупно', services: ['realty', 'vehicle', 'movable'], optional: true, skip: DDU_ONLY },
     { id: 'papers', title: 'Документы и чеки', hint: 'Паспорт изделия, чек, гарантийный талон', services: ['movable', 'goods'], optional: true },
     { id: 'st_overview', title: 'Объект целиком', hint: 'Снаружи или вход в помещение; чтобы был виден адрес', services: ['construction'] },
     { id: 'st_rooms', title: 'Каждое помещение', hint: 'Общий вид из угла, затем с противоположной стороны', services: ['construction'] },

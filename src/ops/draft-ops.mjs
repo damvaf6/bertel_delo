@@ -3,7 +3,7 @@
 // заказчику сам — результат по-прежнему проходит проверку диспетчера (1.5). Разделы черновика — в описании модуля.
 import { loadNotices, noticeLine, placeNotice } from '../orders/notices.mjs';
 import { heirLine, inheritanceValueDay, placeHeir } from '../orders/inheritance.mjs';
-import { dduAssumption, dduTaskLine, placeDduAssumption, placeDduTask } from '../orders/ddu.mjs';
+import { dduAssumption, dduNoInspect, dduTaskLine, placeDduAssumption, placeDduTask } from '../orders/ddu.mjs';
 import { loadParts, partsTable, placeParts } from '../orders/parts.mjs';
 import { insurerBlock, loadInsurer, placeInsurer } from '../orders/insurer.mjs';
 import { loadPledge, placePledge, pledgeLine } from '../orders/pledge.mjs';
@@ -666,6 +666,8 @@ export function draftOps() {
           report_number: await numberView(sql, actor, order),
           // 2.425: осмотра в деле нет и не ждём — эксперту на выбор фраза «осмотр не проводился» в черновик.
           no_inspection: editsDraft(actor, order) && await noInspection(sql, registry, order),
+          // 2.544: у квартиры по ДДУ своя фраза «осмотр квартиры не проводился» — дом строится.
+          no_inspection_text: dduNoInspect(order.service, order.fields),
           // 2.494: таблица «Характеристики объекта оценки» сейчас — для кнопки «Вставить» в деле.
           specs: editsDraft(actor, order) ? await orderSpecs(sql, registry, order, sections) : null,
           // 2.511: таблица «Расчёт стоимости доли» сейчас (размер доли и способ — из заявки) — для кнопки «Вставить» в деле.
