@@ -130,8 +130,13 @@ const DDU = [
   { id: 'ddu_area', label: 'Если новостройка — проектная площадь, кв. м', type: 'number', min: 1, max: 10000, hint: 'Как в договоре' },
   { id: 'ddu_handover', label: 'Если новостройка — срок передачи квартиры по договору', type: 'text', max: 60, hint: 'Например: 31.12.2027 или IV квартал 2027' },
   { id: 'ddu_price', label: 'Если новостройка — цена по договору, руб.', type: 'number', min: 1, max: 100000000000 },
+  // 2.546: отделка по договору — из списка: видна эксперту в ленте заказов до «Взять заказ» и в строке «Из заявки: …».
+  {
+    id: 'ddu_finish', label: 'Если новостройка — отделка по договору', type: 'select',
+    options: [{ id: 'none', name: 'Без отделки' }, { id: 'white', name: 'Предчистовая (white box)' }, { id: 'full', name: 'Чистовая' }],
+  },
 ];
-const DDU_FACTS = ['ddu_number', 'ddu_date', 'ddu_developer', 'ddu_complex', 'ddu_unit', 'ddu_area', 'ddu_handover', 'ddu_price'];
+const DDU_FACTS = ['ddu_number', 'ddu_date', 'ddu_developer', 'ddu_complex', 'ddu_unit', 'ddu_area', 'ddu_handover', 'ddu_price', 'ddu_finish'];
 const VALUATION = ['realty', 'land', 'vehicle', 'movable'];
 // Готовые фразы по наследству (2.505) — только при цели «наследство».
 const HEIR = { field: 'purpose', in: ['inheritance'] };

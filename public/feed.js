@@ -59,6 +59,15 @@ function houseText(h) {
   return `Жилой дом: ${parts.join(' · ')}`;
 }
 
+// 2.546: квартира в новостройке — срок сдачи, проектная площадь, отделка по договору.
+function dduText(d) {
+  const due = d.due == null ? 'срок сдачи не указан — уточнить у заказчика'
+    : d.past ? `срок сдачи ${d.due} прошёл — уточнить, введён ли дом` : `срок сдачи ${d.due}`;
+  const area = d.area == null ? null : `проектная ${String(d.area).replace('.', ',')} кв. м`;
+  const finish = { none: 'без отделки', white: 'предчистовая отделка', full: 'чистовая отделка' }[d.finish];
+  return `Новостройка, права по ДДУ: ${[due, area, finish].filter(Boolean).join(' · ')}`;
+}
+
 function item(x, onTake) {
   const take = el('button', { type: 'button', 'data-role': 'feed-take', text: 'Взять заказ' });
   const li = el('li', { 'data-order': x.id },
@@ -68,6 +77,7 @@ function item(x, onTake) {
   if (x.bank && !x.bank.accredited) {
     li.append(el('div', { class: 'overdue', 'data-role': 'feed-bank', text: 'Заказ для банка, а у Вас нет аккредитации в нём — банк может не принять отчёт' }));
   }
+  if (x.ddu) li.append(el('div', { class: 'muted', 'data-role': 'feed-ddu', text: dduText(x.ddu) }));
   if (x.house) li.append(el('div', { class: 'muted', 'data-role': 'feed-house', text: houseText(x.house) }));
   if (x.premises) li.append(el('div', { class: 'muted', 'data-role': 'feed-premises', text: premisesText(x.premises) }));
   if (x.share) li.append(el('div', { class: 'muted', 'data-role': 'feed-share', text: shareText(x.share) }));

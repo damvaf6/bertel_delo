@@ -7,7 +7,7 @@ import { todayMsk } from './workflow.mjs';
 import { headKey } from '../dossier/dossier.mjs';
 import { isAssumptions } from './retro.mjs';
 
-const FILLED = ['ddu_number', 'ddu_date', 'ddu_developer', 'ddu_complex', 'ddu_unit', 'ddu_area', 'ddu_handover', 'ddu_price'];
+const FILLED = ['ddu_number', 'ddu_date', 'ddu_developer', 'ddu_complex', 'ddu_unit', 'ddu_area', 'ddu_handover', 'ddu_price', 'ddu_finish'];
 
 // «31.12.2027» → «2027-12-31»; квартал и прочий текст — null (срок не сравниваем).
 export function dduDay(v) {
