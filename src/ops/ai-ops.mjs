@@ -224,6 +224,28 @@ export async function egrnDocs(sql, storage, order) {
   return out;
 }
 
+// 2.542: договор участия в долевом строительстве — приложенный к пункту «Договор участия…» запроса документов, с «ДДУ» или
+// «долев» в названии файла или со словами «Договор участия в долевом строительстве» в начале. Номер, дату и проектную площадь
+// из него сверяет правило ddu_right.
+const DDU_MAX = 2;
+const DDU_HEAD = /договор\S*\s+участия\s+в\s+долев\S*\s+строительств/iu;
+export async function dduDocs(sql, storage, order) {
+  const docs = await sql`select d.*, exists (select 1 from doc_requests r where r.document_id = d.id and r.item_id = 'ddu_contract' and r.cancelled_at is null) as asked
+                         from documents d where d.order_id = ${order.id} and d.kind in ('basis', 'other') and d.deleted_at is null
+                         order by d.created_at desc limit 20`;
+  const out = [];
+  for (const d of docs) {
+    if (out.length >= DDU_MAX) break;
+    if (!readableKind(d.filename, d.mime) || d.size_bytes > READ_MAX_BYTES) continue;
+    const buf = await storage.get(d.storage_key);
+    const got = buf ? await extractPages(buf, d.filename, d.mime) : null;
+    if (!got) continue;
+    if (d.asked || /дду|ddu|долев/iu.test(d.filename) || DDU_HEAD.test(String(got.pages[0] ?? '').slice(0, 1500))) out.push({ id: d.id, name: d.filename, pages: got.pages, asked: d.asked });
+  }
+  // Приложенные к пункту запроса — первыми.
+  return out.sort((a, b) => Number(b.asked) - Number(a.asked));
+}
+
 export function aiOps() {
   return [
     {
@@ -419,7 +441,9 @@ export function aiOps() {
         const onsite = visit?.data ?? null;
         // 2.491: отметка эксперта о проверке в реестре залогов — против того, что сказано о залоге в отчёте.
         const pledge = names.includes('pledge_match') && registry.pledge(order.module, order.service) ? await loadPledge(sql, order.id) : null;
-        const auto = runAutoChecks(names, files, { onsite, fields: order.fields ?? {}, dossier, basis, service: order.service, analogs, inspectionDays, inspectionUploadDays, inspectionActDays, inspectionBy, signedOn, assignment, egrn, customer: owner?.full_name ?? null, today: dossier.today, usedNumbers: used, issuedNumber: issued ?? null, bankAccr, parts, insurer, defects, notices, pledge });
+        // 2.542: договор участия в долевом строительстве из дела — для сверки номера, даты и проектной площади.
+        const ddu = names.includes('ddu_right') ? await dduDocs(sql, providers.storage, order) : [];
+        const auto = runAutoChecks(names, files, { ddu, onsite, fields: order.fields ?? {}, dossier, basis, service: order.service, analogs, inspectionDays, inspectionUploadDays, inspectionActDays, inspectionBy, signedOn, assignment, egrn, customer: owner?.full_name ?? null, today: dossier.today, usedNumbers: used, issuedNumber: issued ?? null, bankAccr, parts, insurer, defects, notices, pledge });
         const found = Object.fromEntries(rules.map((r) => [r.id, (r.auto ?? []).flatMap((a) => auto[a] ?? [])]));
         // Модель недоступна или лимит исчерпан, но автоматические находки есть — показываем их, а не ошибку.
         let out;
