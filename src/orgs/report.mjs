@@ -857,7 +857,15 @@ function houseCalc(houses, facts) {
 // стоимость для перечня СРО, `reportFacts`), цена — из заявки; цена есть, а итоговой стоимости в черновике нет — отдельной цифрой.
 const dduOfDone = (done, registry) => (registry ? done.filter((o) => o.module && o.object_type === 'ddu'
   && registry.service(o.module, o.service)?.fields.some((f) => f.id === 'ddu_price')) : []);
-export const dduDraftValue = (body) => reportFacts([{ name: 'Черновик', pages: [String(body ?? '')] }]).value_rub;
+// Прогон 2.548: эксперт вписал итог только в таблицу подходов черновика («| Итоговая величина | 9 500 000 | 1 |»), а словами —
+// ещё нет: итог — из этой строки (последней заполненной).
+const TOTAL_ROW = /^\|\s*Итоговая величина\s*\|\s*([\d\s\u00a0]+(?:[,.]\d{1,2})?)\s*(?:руб\.?\s*)?\|/u;
+function totalRow(body) {
+  const rows = String(body ?? '').split('\n').map((l) => TOTAL_ROW.exec(l.trim())).filter(Boolean);
+  const v = rows.length ? Number(rows.at(-1)[1].replace(/[\s\u00a0]/g, '').replace(',', '.')) : NaN;
+  return v > 0 ? Math.round(v) : null;
+}
+export const dduDraftValue = (body) => reportFacts([{ name: 'Черновик', pages: [String(body ?? '')] }]).value_rub ?? totalRow(body);
 // { ddu_cases, ddu_bank, ddu_bank_pct, ddu_priced, ddu_diff_n, ddu_diff_pct, ddu_diff_rub, ddu_no_value }: доля — целыми
 // процентами от сданных для банка; разница — со знаком (больше цены — плюс), в процентах до десятых и в рублях.
 function dduCalc(ddus, done, values) {
