@@ -62,7 +62,7 @@ export function dduAssumption(serviceId, fields = {}) {
   return `${DDU_ASSUME_HEAD} квартира как объект недвижимости ещё не образована — кадастрового номера и выписки ЕГРН на неё нет; объект описан по договору участия в долевом строительстве. Площадь — проектная, по договору; фактическая площадь после обмеров может отличаться. Принято, что договор исполняется застройщиком и дольщиком в установленный срок; надёжность застройщика и действительность договора оценщик не проверяет.`;
 }
 
-function placeUnder(body, sections, line, head, pick) {
+export function placeUnder(body, sections, line, head, pick) {
   if (!line) return body;
   const lines = body.split('\n');
   const old = lines.findIndex((l) => l.startsWith(head));

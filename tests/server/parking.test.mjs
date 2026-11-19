@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { startApp, login, setPlatformRole, makeSpecialist, ensurePaid } from '../helpers.mjs';
 import { addDays, todayMsk } from '../../src/orders/workflow.mjs';
 import { FACTS_HEAD, factsLine } from '../../src/orders/facts.mjs';
-import { parkingNotices } from '../../src/orders/parking.mjs';
+import { PARKING_ASSUME_HEAD, PARKING_TASK_HEAD, parkingAssumption, parkingNotices, parkingTaskLine, placeParkingAssumption, placeParkingTask } from '../../src/orders/parking.mjs';
 import { createRegistry } from '../../src/modules/index.mjs';
 
 const P = { parking_kind: 'space', parking_type: 'underground', parking_level: '−2', parking_number: '17', parking_right: 'own', parking_with_flat: 'yes' };
@@ -75,6 +75,44 @@ test('поля необязательны и проверяются; подск�
   assert.ok(h >= 0, r.body.draft.body.slice(0, 400));
   assert.equal(lines[h + 1], LINE);
   assert.equal(lines.filter((l) => l.startsWith(FACTS_HEAD)).length, 1);
+  // 2.551: объект и права — в «Задание на оценку», границы места — в раздел допущений; по одной строке.
+  const t = lines.findIndex((l) => /^#{1,3}\s*2\. Задание на оценку/.test(l));
+  assert.equal(lines[t + 1], parkingTaskLine('realty', { ...BASE, ...P }));
+  const a = lines.findIndex((l) => /^#{1,3}\s*5\. Допущения/.test(l));
+  assert.equal(lines[a + 1], parkingAssumption('realty', { ...BASE, ...P }));
+  assert.equal(lines.filter((l) => l.startsWith(PARKING_TASK_HEAD)).length, 1);
+  assert.equal(lines.filter((l) => l.startsWith(PARKING_ASSUME_HEAD)).length, 1);
+  const [{ inputs }] = await S.sql`select inputs from result_drafts where order_id = ${o.id} order by id desc limit 1`;
+  assert.equal(inputs.parking, true);
+});
+
+test('2.551: строка «Объект оценки в паркинге» и допущение о границах — только у машино-места, заменяются, пропуски — [заполнить]', () => {
+  const own = parkingTaskLine('realty', { object_type: 'parking', ...P });
+  assert.equal(own, `${PARKING_TASK_HEAD} машино-место № 17 (подземный паркинг, уровень −2) — отдельный объект недвижимости (ст. 130 ГК РФ). Оцениваемые права — право собственности на машино-место; номер, уровень и площадь — по выписке ЕГРН. Вид стоимости — рыночная стоимость. Оценивается вместе с квартирой в этом доме: стоимость каждого объекта определяется отдельно, общая — суммой.`);
+  const share = parkingTaskLine('realty', { object_type: 'parking', ...P, parking_right: 'share', parking_share: '1/120', parking_with_flat: 'no' });
+  assert.equal(share, `${PARKING_TASK_HEAD} доля 1/120 в праве общей долевой собственности на нежилое помещение (паркинг) (подземный паркинг, уровень −2); по порядку пользования за долей закреплено машино-место № 17. Оцениваемые права — право общей долевой собственности (доля в праве), не право собственности на машино-место как отдельный объект. Вид стоимости — рыночная стоимость.`);
+  assert.match(parkingTaskLine('realty', { object_type: 'parking', parking_right: 'share' }), /доля \[заполнить\] в праве .*закреплено машино-место № \[заполнить\]\./);
+  assert.match(parkingTaskLine('realty', { object_type: 'parking', parking_kind: 'storage', parking_number: '4' }), /нежилое помещение — кладовая № 4\. Оцениваемые права — право собственности на нежилое помещение;/);
+  assert.match(parkingTaskLine('realty', { object_type: 'parking', parking_kind: 'storage', parking_right: 'share' }), /закреплена кладовая № \[заполнить\]/);
+  assert.match(parkingTaskLine('realty', { object_type: 'parking' }, 'ликвидационная стоимость'), /Вид стоимости — ликвидационная стоимость \(по заданию на оценку\)\.$/);
+  for (const [s, f] of [['realty', { object_type: 'flat', ...P }], ['land', { object_type: 'parking' }], ['realty', {}]]) {
+    assert.equal(parkingTaskLine(s, f), null);
+    assert.equal(parkingAssumption(s, f), null);
+  }
+  assert.match(parkingAssumption('realty', { object_type: 'parking' }), /границы машино-места приняты по разметке на полу паркинга/);
+  assert.match(parkingAssumption('realty', { object_type: 'parking', parking_kind: 'storage' }), /границы кладовой приняты по поэтажному плану/);
+  assert.match(parkingAssumption('realty', { object_type: 'parking', parking_right: 'share' }), /доля в праве на паркинг в натуре не выделена; место определено по порядку пользования/);
+
+  const sections = [{ title: '2. Задание на оценку', table: 'task' }, { title: '5. Допущения и ограничительные условия' }];
+  const body = '## 2. Задание на оценку\nтекст\n## 5. Допущения и ограничительные условия\nабзац';
+  const assume = parkingAssumption('realty', { object_type: 'parking' });
+  const once = placeParkingAssumption(placeParkingTask(body, sections, own), sections, assume);
+  assert.equal(once.split('\n')[1], own);
+  assert.equal(once.split('\n')[4], assume);
+  const twice = placeParkingTask(once, sections, share);
+  assert.equal(twice.split('\n').filter((l) => l.startsWith(PARKING_TASK_HEAD)).length, 1, 'прежняя строка заменяется');
+  assert.equal(twice.split('\n')[1], share);
+  assert.equal(placeParkingTask(body, sections, null), body);
 });
 
 // 2.550: запрос документов — выписка ЕГРН на машино-место (или на долю в паркинге) и документ о праве остаются; техпаспорта
