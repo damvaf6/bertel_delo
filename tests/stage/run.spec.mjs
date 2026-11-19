@@ -172,7 +172,7 @@ test('общий прогон: заявка на оценку с файлами 
   await page.getByLabel('Где находится объект').selectOption({ label: 'Московская область' });
   await page.getByLabel('Что оцениваем').selectOption({ label: 'Квартира' });
   await page.getByLabel('Адрес объекта').fill('Московская обл., г. Тестовск, ул. Проверочная, д. 1, кв. 2');
-  await page.getByLabel('Площадь, кв. м').fill('54,3');
+  await page.getByLabel('Площадь, кв. м', { exact: true }).fill('54,3');
   await page.getByLabel(/^Срок/).fill(inDays(14));
   await page.getByLabel('Основание').selectOption({ label: 'Определение суда' });
   await page.getByLabel(/^Номер определения/).fill('2-1234/2026');
@@ -374,7 +374,7 @@ test('общий прогон: сквозной путь экспертизы �
   await page.getByLabel('Где находится объект').selectOption({ label: 'Москва' });
   await page.getByLabel('Что оцениваем').selectOption({ label: 'Квартира' });
   await page.getByLabel('Адрес объекта').fill('г. Москва, ул. Тестовая, д. 11, кв. 4');
-  await page.getByLabel('Площадь, кв. м').fill('42');
+  await page.getByLabel('Площадь, кв. м', { exact: true }).fill('42');
   await page.getByLabel(/^Срок/).fill(inDays(10));
   await page.getByLabel('Добавить файл (до 100 МБ)').setInputFiles({ name: 'Выписка ЕГРН.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 тестовая выписка') });
   await expect(page.getByText('Файл добавлен')).toBeVisible({ timeout: FILE_MS });
@@ -477,7 +477,7 @@ test('общий прогон: сквозной путь экспертизы �
   await shot(sp, '12q-analog-ot-ii');
   // Эксперт проверяет: адрес и площадь — как в объявлении, и подтверждает.
   await acard.getByLabel('Адрес или район').fill('Москва, ул. Тестовая, д. 15');
-  await acard.getByLabel('Площадь, кв. м').fill('40');
+  await acard.getByLabel('Площадь, кв. м', { exact: true }).fill('40');
   await acard.getByRole('button', { name: 'Подтвердить' }).click();
   await expect(sp.locator('#analogs-msg')).toHaveText('Аналог подтверждён');
   await expect(sp.locator('#analogs-list li.analog').first().locator('.badge')).toHaveText('подтверждён');
