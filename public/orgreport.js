@@ -97,7 +97,7 @@ const houseLine = (x) => [`дома: ${casesN(x.house_cases)} (${HOUSE_LAND.filt
   x.house_no_land_value ? `участок в собственности, а его стоимости в черновике нет: ${x.house_no_land_value}` : null]
   .filter(Boolean).join(' · ');
 // 2.547: «права по ДДУ: 3 дела · для банка: 2 (40% дел для банка) · итог против цены по договору: в среднем +8,5%
-// (+552 500 руб.), сравнено 2 · цена есть, а итоговой стоимости в черновике нет: 1».
+// (+552 500 ₽), сравнено 2 · цена есть, а итоговой стоимости в черновике нет: 1».
 const pctSigned = (p) => `${p > 0 ? '+' : p < 0 ? '−' : ''}${String(Math.abs(p)).replace('.', ',')}%`;
 const dduLine = (x) => [`права по ДДУ: ${casesN(x.ddu_cases)}`,
   x.ddu_bank ? `для банка: ${x.ddu_bank}${x.ddu_bank_pct == null ? '' : ` (${x.ddu_bank_pct}% дел для банка)`}` : null,
