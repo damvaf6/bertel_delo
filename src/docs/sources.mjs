@@ -5,8 +5,8 @@
 import { headKey, itemLine, loadDossier } from '../dossier/dossier.mjs';
 import { hostOf, inItemOrder, timeMsk } from '../analogs/analogs.mjs';
 import { orderMaterials } from './report.mjs';
-import { egrnRefs } from '../ai/report-checks.mjs';
-import { egrnDocs } from '../ops/ai-ops.mjs';
+import { egrnRefs, dduContractFacts } from '../ai/report-checks.mjs';
+import { dduDocs, egrnDocs } from '../ops/ai-ops.mjs';
 import { actTitle } from './inspection-act.mjs';
 
 export const SOURCES_HEAD = 'Перечень использованных документов (собран программой по делу — проверьте и поправьте):';
@@ -26,6 +26,18 @@ export async function orderSources(sql, registry, order, storage) {
       if (r) m.egrn = { num: r.num, day: r.day };
     }
   }
+  // Прогон 2.548: у квартиры в новостройке договор участия в долевом строительстве — с номером и датой из самого договора
+  // (как их читает ИИ-проверка «Права по ДДУ», `dduContractFacts`), а не «Документ — файл …».
+  if (storage && materials.length && order.service === 'realty' && order.fields?.object_type === 'ddu') {
+    // Сам договор: приложен к пункту «Договор участия…» запроса или так начинается (справка об оплате «по ДДУ» — не он).
+    const own = (d) => d.asked || CONTRACT_HEAD.test(String(d.pages?.[0] ?? '').slice(0, 300));
+    const facts = new Map((await dduDocs(sql, storage, order)).filter(own).map((d) => [String(d.id), dduContractFacts([d])]));
+    for (const m of materials) {
+      if (!facts.has(String(m.id))) continue;
+      const f = facts.get(String(m.id));
+      m.ddu = { num: f?.num ?? null, day: f?.date ?? null };
+    }
+  }
   const dossier = order.executor_user_id ? await loadDossier(sql, order.executor_user_id) : [];
   const [ph] = await sql`select count(*)::int as n, min(created_at) as first, max(created_at) as last from documents
                          where order_id = ${order.id} and kind = 'inspection' and deleted_at is null`;
@@ -42,7 +54,10 @@ export async function orderSources(sql, registry, order, storage) {
 
 // Выписка ЕГРН: «Выписка из ЕГРН № КУВИ-001/2026-12345678 от 02.10.2026»; название из запроса эксперта, если в нём есть ЕГРН.
 const ruDay = (d) => d.split('-').reverse().join('.');
+const CONTRACT_HEAD = /^\s*договор\S*\s+участия\s+в\s+долев\S*\s+строительств/iu;
+export const DDU_TITLE = 'Договор участия в долевом строительстве';
 function egrnTitle(m) {
+  if (m.ddu) return [DDU_TITLE, m.ddu.num ? `№ ${m.ddu.num}` : null, m.ddu.day ? `от ${m.ddu.day}` : null].filter(Boolean).join(' ');
   if (!m.egrn) return m.title;
   const title = /ЕГРН|ЕГРП/u.test(m.title) ? m.title : 'Выписка из ЕГРН';
   return [title, m.egrn.num ? `№ ${m.egrn.num}` : null, m.egrn.day ? `от ${ruDay(m.egrn.day)}` : null].filter(Boolean).join(' ');
